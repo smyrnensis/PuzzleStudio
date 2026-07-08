@@ -117,9 +117,7 @@ impl CoreRuntimeBridge {
             None
         };
         self.current_state = Some(outcome.next_state.clone());
-        let mut out = String::new();
-        push_transition_current_outcome_json(
-            &mut out,
+        runtime_transition_current_outcome_json(
             &self.loaded,
             &outcome.next_state,
             Some(&before),
@@ -129,35 +127,19 @@ impl CoreRuntimeBridge {
             &outcome.fired_rules,
             &outcome.patches,
             include_state,
-        );
-        Ok(out)
+        )
+        .map_err(|error| error.to_string())
     }
 }
 
 pub struct Puzzle3RuntimeBridge {
-    parsed: ParsedPuzzle3,
-    animation: AnimationDef,
-    current_state: Option<State3>,
-    saved_states: SavedStateStore<State3>,
+    inner: puzzle_game_runtime::Puzzle3RuntimeBridge,
 }
 
 impl Puzzle3RuntimeBridge {
     pub fn from_source(source: &str) -> Result<Self, String> {
-        let document = puzzle_lang::parse_game(source).map_err(|error| error.to_string())?;
-        let animation = document.animation.clone();
-        let parsed = document
-            .models
-            .iter()
-            .find_map(|model| match model {
-                LoadedDocumentModel::Puzzle3d { puzzle, .. } => Some(puzzle.clone()),
-                LoadedDocumentModel::Puzzle2d { .. } => None,
-            })
-            .ok_or_else(|| "3D runtime source does not contain a puzzle3 model".to_string())?;
         Ok(Self {
-            parsed,
-            animation,
-            current_state: None,
-            saved_states: SavedStateStore::new(),
+            inner: puzzle_game_runtime::Puzzle3RuntimeBridge::from_source(source)?,
         })
     }
 
@@ -167,63 +149,32 @@ impl Puzzle3RuntimeBridge {
         state_json: &str,
         input: u16,
     ) -> Result<String, String> {
-        transition_program3_outcome_json_inner(
-            &self.parsed,
-            program_key,
-            state_json,
-            InputId(input),
-        )
-        .map_err(|error| error.to_string())
+        self.inner
+            .transition_program_outcome_json(program_key, state_json, input)
     }
 
     pub fn is_complete_json(&self, state_json: &str) -> Result<bool, String> {
-        let state =
-            state3_from_json(&self.parsed.game, state_json).map_err(|error| error.to_string())?;
-        Ok(self
-            .parsed
-            .win_condition
-            .as_ref()
-            .is_some_and(|condition| condition.is_met(&self.parsed.game, &state)))
+        self.inner.is_complete_json(state_json)
     }
 
     pub fn set_state_json(&mut self, state_json: &str) -> Result<(), String> {
-        let state =
-            state3_from_json(&self.parsed.game, state_json).map_err(|error| error.to_string())?;
-        self.current_state = Some(state);
-        Ok(())
+        self.inner.set_state_json(state_json)
     }
 
     pub fn current_state_json(&self) -> Result<String, String> {
-        let state = self
-            .current_state
-            .as_ref()
-            .ok_or_else(|| "3D runtime current state has not been initialized".to_string())?;
-        let mut out = String::new();
-        push_state3_data(&mut out, state);
-        Ok(out)
+        self.inner.current_state_json()
     }
 
     pub fn current_cells_json(&self) -> Result<String, String> {
-        let state = self
-            .current_state
-            .as_ref()
-            .ok_or_else(|| "3D runtime current state has not been initialized".to_string())?;
-        let mut out = String::new();
-        push_state3_cells(&mut out, state, None);
-        Ok(out)
+        self.inner.current_cells_json()
     }
 
     pub fn save_current_state(&mut self) -> Result<u32, String> {
-        let state = self
-            .current_state
-            .as_ref()
-            .ok_or_else(|| "3D runtime current state has not been initialized".to_string())?;
-        Ok(self.saved_states.save(state.clone()))
+        self.inner.save_current_state()
     }
 
     pub fn restore_saved_state(&mut self, handle: u32) -> Result<(), String> {
-        self.current_state = Some(self.saved_states.restore(handle)?.clone());
-        Ok(())
+        self.inner.restore_saved_state(handle)
     }
 
     pub fn transition_current_outcome_json(
@@ -231,45 +182,11 @@ impl Puzzle3RuntimeBridge {
         program_key: &str,
         input: u16,
     ) -> Result<String, String> {
-        let state = self
-            .current_state
-            .as_ref()
-            .ok_or_else(|| "3D runtime current state has not been initialized".to_string())?;
-        let before = state.clone();
-        let next_state =
-            transition_selected_program3(&self.parsed, program_key, state, InputId(input))
-                .map_err(|error| error.to_string())?;
-        let completed = self
-            .parsed
-            .win_condition
-            .as_ref()
-            .is_some_and(|condition| condition.is_met(&self.parsed.game, &next_state));
-        self.current_state = Some(next_state.clone());
-        let mut out = String::new();
-        out.push('{');
-        push_json_bool(&mut out, "changed", before != next_state);
-        out.push(',');
-        push_json_bool(&mut out, "completed", completed);
-        out.push_str(",\"stateHash\":");
-        out.push_str(&next_state.hash().to_string());
-        out.push_str(",\"changedCells\":");
-        push_state3_cells(&mut out, &next_state, Some(&before));
-        out.push_str(",\"animationEvents\":");
-        push_animation_events3(&mut out, &self.animation, &before, &next_state);
-        out.push_str(",\"commands\":[]}");
-        Ok(out)
+        self.inner.transition_current_outcome_json(program_key, input)
     }
 
     pub fn is_current_complete(&self) -> Result<bool, String> {
-        let state = self
-            .current_state
-            .as_ref()
-            .ok_or_else(|| "3D runtime current state has not been initialized".to_string())?;
-        Ok(self
-            .parsed
-            .win_condition
-            .as_ref()
-            .is_some_and(|condition| condition.is_met(&self.parsed.game, state)))
+        self.inner.is_current_complete()
     }
 }
 
@@ -317,57 +234,6 @@ pub fn transition_program_outcome_json_from_source(
     .map_err(|error| error.to_string())
 }
 
-fn transition_program3_outcome_json_inner(
-    parsed: &ParsedPuzzle3,
-    program_key: &str,
-    state_json: &str,
-    input: InputId,
-) -> Result<String, AppError> {
-    let state = state3_from_json(&parsed.game, state_json)?;
-    let next_state = transition_selected_program3(parsed, program_key, &state, input)?;
-    let completed = parsed
-        .win_condition
-        .as_ref()
-        .is_some_and(|condition| condition.is_met(&parsed.game, &next_state));
-    let mut out = String::new();
-    out.push('{');
-    out.push_str("\"state\":");
-    push_state3_data(&mut out, &next_state);
-    out.push(',');
-    push_json_bool(&mut out, "completed", completed);
-    out.push_str(",\"commands\":[]}");
-    Ok(out)
-}
-
-fn transition_selected_program3(
-    parsed: &ParsedPuzzle3,
-    program_key: &str,
-    state: &State3,
-    input: InputId,
-) -> Result<State3, AppError> {
-    match program_key {
-        "main" => transition_program_with_local_frame3(
-            &parsed.game,
-            state,
-            &parsed.rules,
-            input,
-            parsed.local_frame.as_ref(),
-        ),
-        "level_start" => transition_program_without_input_with_local_frame(
-            &parsed.game,
-            state,
-            &parsed.lifecycle.on_level_start,
-            parsed.lifecycle.on_level_start_local_frame.as_ref(),
-        ),
-        other => {
-            return Err(AppError::Config(format!(
-                "unknown 3D transition program selector: {other}"
-            )));
-        }
-    }
-    .map_err(|error| AppError::Config(format!("{error:?}")))
-}
-
 fn transition_program_outcome_json_inner(
     loaded: &LoadedGame,
     program_key: &str,
@@ -378,17 +244,14 @@ fn transition_program_outcome_json_inner(
     let state = state_from_json(loaded, state_json)?;
     let program = selected_rule_program(loaded, program_key, level_index)?;
     let outcome = transition_program_trace(&loaded.game, program, &state, input)?;
-    let mut out = String::new();
-    push_transition_outcome_json(
-        &mut out,
+    runtime_transition_program_outcome_json(
         loaded,
         &outcome.next_state,
         outcome.cancelled,
         &outcome.commands,
         &outcome.fired_rules,
         &outcome.patches,
-    );
-    Ok(out)
+    )
 }
 
 fn selected_rule_program<'a>(
@@ -429,61 +292,29 @@ fn selected_rule_program<'a>(
     }
 }
 
-fn push_transition_outcome_json(
-    out: &mut String,
+fn runtime_transition_program_outcome_json(
     loaded: &LoadedGame,
     state: &State,
     cancelled: bool,
     commands: &[TransitionCommand],
     fired_rules: &[RuleId],
     patches: &[Patch],
-) {
+) -> Result<String, AppError> {
     let animation_events = animation_events_for_trace(loaded, fired_rules, patches, state);
-    out.push('{');
-    out.push_str("\"state\":");
-    push_state_data(out, state);
-    out.push(',');
-    push_json_bool(out, "cancelled", cancelled);
-    out.push(',');
-    out.push_str("\"commands\":[");
-    for (index, command) in commands.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        out.push('{');
-        push_json_pair(
-            out,
-            "kind",
-            match command {
-                TransitionCommand::Win => "win",
-                TransitionCommand::Restart => "restart",
-                TransitionCommand::NextLevel => "next_level",
-                TransitionCommand::Again => "again",
-                TransitionCommand::Checkpoint => "checkpoint",
-                TransitionCommand::ClearCheckpoint => "clear_checkpoint",
-            },
-        );
-        out.push('}');
+    RuntimeTransitionProgramOutcome {
+        state: state_contract_2d(state),
+        cancelled,
+        completed: loaded.is_goal_complete(state),
+        commands: transition_commands_contract(commands),
+        fired_rules: fired_rules.iter().map(|rule| rule.0).collect(),
+        patches: patches_contract_2d(patches),
+        animation_events: animation_events_contract_2d(&animation_events),
     }
-    out.push(']');
-    out.push(',');
-    out.push_str("\"firedRules\":[");
-    for (index, rule) in fired_rules.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        out.push_str(&rule.0.to_string());
-    }
-    out.push(']');
-    out.push_str(",\"patches\":");
-    push_transition_patches(out, patches);
-    out.push(',');
-    push_animation_events(out, &animation_events);
-    out.push('}');
+    .to_json_string()
+    .map_err(|error| AppError::Config(error.to_string()))
 }
 
-fn push_transition_current_outcome_json(
-    out: &mut String,
+fn runtime_transition_current_outcome_json(
     loaded: &LoadedGame,
     state: &State,
     before: Option<&State>,
@@ -493,185 +324,212 @@ fn push_transition_current_outcome_json(
     fired_rules: &[RuleId],
     patches: &[Patch],
     include_state: bool,
-) {
+) -> Result<String, AppError> {
     let animation_events = animation_events_for_trace(loaded, fired_rules, patches, state);
-    out.push('{');
-    push_json_bool(out, "cancelled", cancelled);
-    out.push(',');
-    push_json_bool(out, "changed", before.is_some_and(|before| before != state));
-    if include_state {
-        out.push_str(",\"state\":");
-        push_state_data(out, state);
+    RuntimeTransitionCurrentOutcome {
+        cancelled,
+        changed: before.is_some_and(|before| before != state),
+        completed: loaded.is_goal_complete(state),
+        state: if include_state {
+            Some(state_contract_2d(state))
+        } else {
+            None
+        },
+        commands: transition_commands_contract(commands),
+        fired_rules: fired_rules.iter().map(|rule| rule.0).collect(),
+        patches: patches_contract_2d(patches),
+        animation_events: animation_events_contract_2d(&animation_events),
+        state_hash: state.hash(),
+        state_hash_key: state.hash().to_string(),
+        previous_state_handle,
+        changed_cells: changed_cells_contract_2d(state, before),
+        variables: state.visible_variables().to_vec(),
+        level_fired_rules: state.level_fired_rules().iter().map(|rule| rule.0).collect(),
     }
-    out.push(',');
-    out.push_str("\"commands\":[");
-    for (index, command) in commands.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        out.push('{');
-        push_json_pair(
-            out,
-            "kind",
-            match command {
-                TransitionCommand::Win => "win",
-                TransitionCommand::Restart => "restart",
-                TransitionCommand::NextLevel => "next_level",
-                TransitionCommand::Again => "again",
-                TransitionCommand::Checkpoint => "checkpoint",
-                TransitionCommand::ClearCheckpoint => "clear_checkpoint",
-            },
-        );
-        out.push('}');
-    }
-    out.push(']');
-    out.push(',');
-    out.push_str("\"firedRules\":[");
-    for (index, rule) in fired_rules.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        out.push_str(&rule.0.to_string());
-    }
-    out.push(']');
-    out.push_str(",\"patches\":");
-    push_transition_patches(out, patches);
-    out.push(',');
-    push_animation_events(out, &animation_events);
-    out.push_str(",\"stateHash\":");
-    out.push_str(&state.hash().to_string());
-    out.push_str(",\"stateHashKey\":\"");
-    out.push_str(&state.hash().to_string());
-    out.push('"');
-    if let Some(handle) = previous_state_handle {
-        out.push_str(",\"previousStateHandle\":");
-        out.push_str(&handle.to_string());
-    }
-    out.push_str(",\"changedCells\":");
-    push_state2_cells(out, state, before);
-    out.push_str(",\"variables\":[");
-    for (index, value) in state.visible_variables().iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        out.push_str(&value.to_string());
-    }
-    out.push_str("],\"levelFiredRules\":[");
-    for (index, rule) in state.level_fired_rules().iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        out.push_str(&rule.0.to_string());
-    }
-    out.push_str("]}");
+    .to_json_string()
+    .map_err(|error| AppError::Config(error.to_string()))
 }
 
-fn push_transition_patches(out: &mut String, patches: &[Patch]) {
-    out.push('[');
-    for (patch_index, patch) in patches.iter().enumerate() {
-        if patch_index > 0 {
-            out.push(',');
-        }
-        out.push('[');
-        for (op_index, op) in patch.ops().iter().enumerate() {
-            if op_index > 0 {
-                out.push(',');
+fn transition_commands_contract(commands: &[TransitionCommand]) -> Vec<RuntimeTransitionCommand> {
+    commands
+        .iter()
+        .map(|command| match command {
+            TransitionCommand::Win => RuntimeTransitionCommand::Win,
+            TransitionCommand::Restart => RuntimeTransitionCommand::Restart,
+            TransitionCommand::NextLevel => RuntimeTransitionCommand::NextLevel,
+            TransitionCommand::Again => RuntimeTransitionCommand::Again,
+            TransitionCommand::Checkpoint => RuntimeTransitionCommand::Checkpoint,
+            TransitionCommand::ClearCheckpoint => RuntimeTransitionCommand::ClearCheckpoint,
+        })
+        .collect()
+}
+
+fn state_contract_2d(state: &State) -> RuntimeStateSnapshot {
+    RuntimeStateSnapshot::TwoD(RuntimeStateSnapshot2d {
+        kind: RuntimeModelKind::TwoD,
+        width: state.width,
+        height: state.height,
+        layer_count: state.layer_count,
+        slots: state.slots().iter().map(|object| object.0).collect(),
+        slot_marks: (0..state.slots().len())
+            .map(|index| {
+                state
+                    .slot_mark_at(index)
+                    .map(|mark| RuntimeMarkValue {
+                        mark: mark.mark.0,
+                        value: mark.value,
+                    })
+                    .collect()
+            })
+            .collect(),
+        variables: state.visible_variables().to_vec(),
+        level_fired_rules: state.level_fired_rules().iter().map(|rule| rule.0).collect(),
+    })
+}
+
+fn changed_cells_contract_2d(state: &State, before: Option<&State>) -> Vec<RuntimeChangedCell> {
+    let mut cells = Vec::new();
+    for y in 0..state.height {
+        for x in 0..state.width {
+            let cell = usize::from(y) * usize::from(state.width) + usize::from(x);
+            if before.is_some_and(|before| state2_cell_slots_equal(before, state, cell)) {
+                continue;
             }
-            out.push('{');
-            match op {
-                PatchOp::Move {
-                    from_x,
-                    from_y,
-                    to_x,
-                    to_y,
-                    object,
-                } => {
-                    push_json_pair(out, "kind", "move");
-                    out.push(',');
-                    push_json_number(out, "fromX", *from_x as u64);
-                    out.push(',');
-                    push_json_number(out, "fromY", *from_y as u64);
-                    out.push(',');
-                    push_json_number(out, "toX", *to_x as u64);
-                    out.push(',');
-                    push_json_number(out, "toY", *to_y as u64);
-                    out.push(',');
-                    push_json_number(out, "objectId", object.0 as u64);
-                }
-                PatchOp::RemoveMark {
-                    x,
-                    y,
-                    object,
-                    mark,
-                    ..
-                } => {
-                    push_json_pair(out, "kind", "remove_mark");
-                    out.push(',');
-                    push_json_number(out, "x", *x as u64);
-                    out.push(',');
-                    push_json_number(out, "y", *y as u64);
-                    out.push(',');
-                    push_json_number(out, "objectId", object.0 as u64);
-                    out.push(',');
-                    push_json_number(out, "mark", mark.0 as u64);
-                }
-                PatchOp::Add { x, y, object } => {
-                    push_json_pair(out, "kind", "add");
-                    out.push(',');
-                    push_json_number(out, "x", *x as u64);
-                    out.push(',');
-                    push_json_number(out, "y", *y as u64);
-                    out.push(',');
-                    push_json_number(out, "objectId", object.0 as u64);
-                }
-                PatchOp::Remove { x, y, object } => {
-                    push_json_pair(out, "kind", "remove");
-                    out.push(',');
-                    push_json_number(out, "x", *x as u64);
-                    out.push(',');
-                    push_json_number(out, "y", *y as u64);
-                    out.push(',');
-                    push_json_number(out, "objectId", object.0 as u64);
-                }
-                PatchOp::Replace { x, y, remove, add } => {
-                    push_json_pair(out, "kind", "replace");
-                    out.push(',');
-                    push_json_number(out, "x", *x as u64);
-                    out.push(',');
-                    push_json_number(out, "y", *y as u64);
-                    out.push(',');
-                    push_json_number(out, "remove", remove.0 as u64);
-                    out.push(',');
-                    push_json_number(out, "add", add.0 as u64);
-                }
-                PatchOp::SetMark {
-                    x,
-                    y,
-                    object,
-                    mark,
-                    ..
-                } => {
-                    push_json_pair(out, "kind", "set_mark");
-                    out.push(',');
-                    push_json_number(out, "x", *x as u64);
-                    out.push(',');
-                    push_json_number(out, "y", *y as u64);
-                    out.push(',');
-                    push_json_number(out, "objectId", object.0 as u64);
-                    out.push(',');
-                    push_json_number(out, "mark", mark.0 as u64);
-                }
-                PatchOp::UpdateVariable { variable, .. } => {
-                    push_json_pair(out, "kind", "update_variable");
-                    out.push(',');
-                    push_json_number(out, "variable", variable.0 as u64);
+            let mut objects = Vec::new();
+            for layer in 0..state.layer_count {
+                let slot = (cell * usize::from(state.layer_count)) + usize::from(layer);
+                let object = state.slots()[slot];
+                if !object.is_empty() {
+                    objects.push(object.0);
                 }
             }
-            out.push('}');
+            if before.is_none() && objects.is_empty() {
+                continue;
+            }
+            cells.push(RuntimeChangedCell {
+                position: RuntimeCoord { x, y, z: None },
+                objects,
+            });
         }
-        out.push(']');
     }
-    out.push(']');
+    cells
+}
+
+fn patches_contract_2d(patches: &[Patch]) -> Vec<Vec<RuntimePatchOp>> {
+    patches
+        .iter()
+        .map(|patch| patch.ops().iter().map(patch_op_contract_2d).collect())
+        .collect()
+}
+
+fn patch_op_contract_2d(op: &PatchOp) -> RuntimePatchOp {
+    match *op {
+        PatchOp::Add { x, y, object } => RuntimePatchOp::Add {
+            position: RuntimeCoord { x, y, z: None },
+            object_id: object.0,
+        },
+        PatchOp::Remove { x, y, object } => RuntimePatchOp::Remove {
+            position: RuntimeCoord { x, y, z: None },
+            object_id: object.0,
+        },
+        PatchOp::Move {
+            from_x,
+            from_y,
+            to_x,
+            to_y,
+            object,
+        } => RuntimePatchOp::Move {
+            from: RuntimeCoord {
+                x: from_x,
+                y: from_y,
+                z: None,
+            },
+            to: RuntimeCoord {
+                x: to_x,
+                y: to_y,
+                z: None,
+            },
+            object_id: object.0,
+        },
+        PatchOp::Replace { x, y, remove, add } => RuntimePatchOp::Replace {
+            position: RuntimeCoord { x, y, z: None },
+            remove: remove.0,
+            add: add.0,
+        },
+        PatchOp::UpdateVariable { variable, .. } => RuntimePatchOp::UpdateVariable {
+            variable: variable.0,
+        },
+        PatchOp::SetMark {
+            x,
+            y,
+            object,
+            mark,
+            ..
+        } => RuntimePatchOp::SetMark {
+            position: RuntimeCoord { x, y, z: None },
+            object_id: object.0,
+            mark: mark.0,
+        },
+        PatchOp::RemoveMark {
+            x,
+            y,
+            object,
+            mark,
+            match_value,
+            ..
+        } => RuntimePatchOp::RemoveMark {
+            position: RuntimeCoord { x, y, z: None },
+            object_id: object.0,
+            mark: mark.0,
+            match_value: runtime_mark_value_match(match_value),
+        },
+    }
+}
+
+fn animation_events_contract_2d(events: &[AnimationEvent]) -> Vec<RuntimeAnimationEvent> {
+    events
+        .iter()
+        .map(|event| match event {
+            AnimationEvent::Move {
+                name,
+                object,
+                from_x,
+                from_y,
+                to_x,
+                to_y,
+                ..
+            } => RuntimeAnimationEvent::Move {
+                name: name.clone(),
+                object_id: object.0,
+                from: RuntimeCoord {
+                    x: *from_x,
+                    y: *from_y,
+                    z: None,
+                },
+                to: RuntimeCoord {
+                    x: *to_x,
+                    y: *to_y,
+                    z: None,
+                },
+            },
+            AnimationEvent::CantMove { name, object, x, y } => RuntimeAnimationEvent::CantMove {
+                name: name.clone(),
+                object_id: object.0,
+                position: RuntimeCoord {
+                    x: *x,
+                    y: *y,
+                    z: None,
+                },
+            },
+        })
+        .collect()
+}
+
+fn runtime_mark_value_match(match_value: MarkValueMatch) -> RuntimeMarkValueMatch {
+    match match_value {
+        MarkValueMatch::Any => RuntimeMarkValueMatch::Any,
+        MarkValueMatch::Exact => RuntimeMarkValueMatch::Exact,
+    }
 }
 
 fn source_looks_puzzle3d(source: &str) -> bool {
@@ -708,8 +566,59 @@ where
 }
 
 #[cfg(feature = "solver")]
+pub fn solver_task_initial_display_state_json(request_json: &str) -> Result<String, String> {
+    solver_task_initial_display_state_json_inner(request_json).map_err(|error| error.to_string())
+}
+
+#[cfg(feature = "solver")]
 fn solve_solver_task_json_inner(request_json: &str) -> Result<String, AppError> {
     solve_solver_task_json_inner_with_progress(request_json, None::<fn(&str)>)
+}
+
+#[cfg(feature = "solver")]
+fn solver_task_initial_display_state_json_inner(request_json: &str) -> Result<String, AppError> {
+    let request: serde_json::Value = serde_json::from_str(request_json)
+        .map_err(|error| AppError::Config(format!("solver task JSON is invalid: {error}")))?;
+    let request = json_object(&request, "solver task")?;
+    let rules = required_json_object(request, "rules")?;
+    let model_kind = required_json_string(rules, "modelKind")?;
+    let target = required_json_object(request, "target")?;
+    validate_solver_target_origin(target)?;
+    required_json_object(target, "level")?;
+    let target_state = required_json_object(target, "state")?;
+    let state_data = required_json_value(target_state, "data")?.to_string();
+
+    match model_kind {
+        "2d" => {
+            let compiled_play = required_json_value(rules, "compiledPlay")?;
+            let engine =
+                puzzle_core_wasm::decode_compiled_play(compiled_play).map_err(AppError::Config)?;
+            let mut state = puzzle_core_wasm::decode_state(engine.game(), &state_data)
+                .map_err(AppError::Config)?;
+            if solver_request_materializes_level_start(target_state)? {
+                let level_index = solver_task_level_index(target)?;
+                state = materialize_compiled_level_start_state(
+                    &engine,
+                    state,
+                    level_index,
+                    rules
+                        .get("runRulesOnLevelStart")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false),
+                )?;
+            }
+            state = materialize_compiled_display_state(&engine, &state)?;
+            let mut out = String::new();
+            push_state_data(&mut out, &state);
+            Ok(out)
+        }
+        "3d" => Err(AppError::Config(
+            "compiled 3D solver task display materialization is not implemented".to_string(),
+        )),
+        other => Err(AppError::Config(format!(
+            "unsupported solver task modelKind {other:?}"
+        ))),
+    }
 }
 
 #[cfg(feature = "solver")]

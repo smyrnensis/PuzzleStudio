@@ -1,5 +1,5 @@
-title "Move Collision Test"
-author "PuzzleStudio"
+title = "Move Collision Test"
+author = "PuzzleStudio"
 
 default_wait_time = 100ms
 
@@ -111,7 +111,7 @@ L#.C.
 }
 
 scene title {
-title
+title = title
 choice "Play" -> goto playing
 choice "Level Select" -> goto level_select
 }
@@ -119,8 +119,8 @@ choice "Level Select" -> goto level_select
 scene playing {
 layout {
 row {
-title
-subtitle level.label
+title = title
+subtitle = level.label
 }
 move_collision
 }

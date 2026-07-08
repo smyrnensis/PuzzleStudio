@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 puzzle-core = { path = "../core" }
 puzzle-core-wasm = { package = "puzzle-wasm-core", path = "../wasm_core" }
+puzzle-game-runtime = { path = "../game_runtime" }
 puzzle-grid3d = { path = "../grid3d" }
 puzzle-lang = { path = "../lang" }
 puzzle-runtime-contract = { path = "../runtime_contract" }

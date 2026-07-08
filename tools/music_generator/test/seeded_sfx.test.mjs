@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { createSfxPlayer, generateSoundEffect, randomSfxPreset, SFX_TYPE_OPTIONS, SFX_TYPES } from "../seeded_sfx.mjs";
+import {
+  createPuzzleScriptSfxPlayer,
+  createSfxPlayer,
+  generatePuzzleScriptSoundEffect,
+  generateSoundEffect,
+  randomSfxPreset,
+  SFX_TYPE_OPTIONS,
+  SFX_TYPES,
+} from "../seeded_sfx.mjs";
 
 const first = generateSoundEffect("123456", { type: "pickup", mood: 0.62, intensity: 0.7, length: 0.5 });
 const second = generateSoundEffect("123456", { type: "pickup", mood: 0.62, intensity: 0.7, length: 0.5 });
@@ -200,7 +208,8 @@ const wildVariants = Array.from({ length: 40 }, (_, index) => generateSoundEffec
 assert.ok(new Set(wildVariants.map((effect) => effect.profile.pattern)).size >= 5, "Wild should expose many category-less patterns");
 assert.ok(new Set(wildVariants.map((effect) => effect.layers.map((layer) => layer.kind).join(","))).size >= 8, "Wild should produce structurally loose layer combinations");
 
-const timingVariants = SFX_TYPE_OPTIONS.flatMap((type) =>
+const genericSfxTypeOptions = SFX_TYPE_OPTIONS.filter((type) => type !== "puzzlescript");
+const timingVariants = genericSfxTypeOptions.flatMap((type) =>
   Array.from({ length: 64 }, (_, index) => generateSoundEffect(`${200000 + index}`, { type })),
 );
 assert.ok(
@@ -214,6 +223,9 @@ assert.ok(SFX_TYPE_OPTIONS.includes(randomPreset.type), "random SFX presets shou
 assert.deepEqual(Object.keys(randomPreset).sort(), ["seed", "type"], "random presets should expose only author-facing controls");
 assert.equal(generateSoundEffect(randomSfxPreset("target-check", "pickup").seed, { type: "pickup" }).type, "pickup", "targeted randomize should pair seed with an explicit type override");
 assert.equal(generateSoundEffect(randomSfxPreset("target-wild", "wild").seed, { type: "wild" }).type, "wild", "targeted Wild randomize should pair seed with an explicit type override");
+const targetedPuzzleScript = randomSfxPreset("target-puzzlescript", "puzzlescript");
+assert.equal(targetedPuzzleScript.type, "puzzlescript", "targeted PuzzleScript randomize should preserve the dedicated type");
+assert.equal(generatePuzzleScriptSoundEffect(targetedPuzzleScript.seed).type, "puzzlescript");
 const targetedRandom = randomSfxPreset("target-random", "random");
 assert.ok(/^\d+$/.test(targetedRandom.seed), "targeted Random should return a plain numeric seed");
 assert.ok(SFX_TYPES.includes(generateSoundEffect(targetedRandom.seed).type), "targeted Random should resolve to a concrete effect type");
@@ -225,8 +237,12 @@ assert.throws(
   /unsupported SFX type: puzzlescript/,
   "unsupported explicit SFX types should fail visibly instead of falling back to another type",
 );
+const puzzleScriptEffect = generatePuzzleScriptSoundEffect("17551700");
+assert.equal(puzzleScriptEffect.type, "puzzlescript", "PuzzleScript SFX should use its explicit generator API");
+assert.equal(puzzleScriptEffect.numericSeed, 17551700);
 assert.equal(SFX_TYPE_OPTIONS[0], "random", "Random should be the first type option");
-assert.equal(SFX_TYPE_OPTIONS.at(-1), "wild", "Wild should be the final type option");
+assert.ok(SFX_TYPE_OPTIONS.includes("puzzlescript"), "PuzzleScript should be an author-facing SFX type option");
+assert.ok(SFX_TYPE_OPTIONS.indexOf("puzzlescript") > SFX_TYPE_OPTIONS.indexOf("wild"), "PuzzleScript should remain visually separate from generated SFX types");
 
 function totalGain(effect) {
   return effect.layers.reduce((sum, layer) => sum + layer.gain, 0);
@@ -533,6 +549,16 @@ assert.throws(
   () => negativeVolumePlayer.start(12.5),
   /SFX volume must be zero or greater/,
   "negative SFX volume should fail visibly",
+);
+
+const puzzleScriptAudio = new FakeAudioContext();
+const puzzleScriptPlayer = createPuzzleScriptSfxPlayer(puzzleScriptAudio, puzzleScriptEffect, { volume: 0.35 });
+puzzleScriptPlayer.start(12.5);
+assert.ok(puzzleScriptAudio.bufferCreateCount > 0, "PuzzleScript SFX playback should render an audio buffer");
+assert.equal(puzzleScriptAudio.gainNodes[0].gain.value, 0.35, "PuzzleScript SFX playback should use requested volume");
+assert.ok(
+  puzzleScriptAudio.sourceStartTimes.every((time) => time >= 12.5),
+  "PuzzleScript SFX playback should schedule relative to the adapter-provided start time",
 );
 
 const cachedBufferEffect = {

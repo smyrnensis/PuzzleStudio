@@ -825,6 +825,28 @@ function confirmRemoveWorkspaceWithUnsavedChanges(node, unsavedDocuments) {
   );
 }
 
+function unsavedWorkspaceDocuments() {
+  persistCurrentDocument();
+  return collectTextDocumentsInNode(fileTree).filter((document) => isDocumentUnsaved(document));
+}
+
+function confirmDesktopExitWithUnsavedChanges(actionLabel) {
+  const unsavedDocuments = unsavedWorkspaceDocuments();
+  if (!unsavedDocuments.length) {
+    return true;
+  }
+  const fileList = unsavedDocuments
+    .slice(0, 4)
+    .map((document) => `- ${document.puzzlePath || document.name || "Untitled"}`)
+    .join("\n");
+  const more = unsavedDocuments.length > 4
+    ? `\n- and ${unsavedDocuments.length - 4} more`
+    : "";
+  return window.confirm(
+    `${actionLabel} without saving?\n\nUnsaved changes will be lost:\n${fileList}${more}`,
+  );
+}
+
 function confirmDesktopDeleteWorkspaceEntry(node) {
   const name = node?.name || fileName(node?.puzzlePath) || "this entry";
   const kind = node?.kind === "folder" ? "folder" : "file";
@@ -2764,7 +2786,7 @@ function startDraftEntry(kind) {
   draftEntry = {
     kind,
     parentId: folder.id,
-    name: kind === "folder" ? "folder" : "untitled.puzzle",
+    name: kind === "folder" ? "folder" : "untitled",
   };
   renderDocumentSelect();
 }
@@ -2774,9 +2796,7 @@ async function commitDraftEntry(rawName) {
     return;
   }
   const parent = findNode(fileTree, draftEntry.parentId) || fileTree;
-  const name = draftEntry.kind === "folder"
-    ? sanitizeFileName(rawName)
-    : ensurePuzzleExtension(rawName);
+  const name = sanitizeFileName(rawName);
   const kind = draftEntry.kind;
   draftEntry = null;
   if (!name) {
@@ -3309,14 +3329,6 @@ function folderPathVisit(node, targetId, path) {
   return false;
 }
 
-function ensurePuzzleExtension(name) {
-  const cleaned = sanitizeFileName(name);
-  if (!cleaned) {
-    return "";
-  }
-  return /\.(?:puzzle|puzzle3)$/i.test(cleaned) ? cleaned : `${cleaned}.puzzle`;
-}
-
 function sanitizeFileName(name) {
   return String(name || "").trim().replace(/[\\/]+/g, "-");
 }
@@ -3382,3 +3394,57 @@ function setFileActionsMenuOpen(open) {
   fileActionsMenu.hidden = !open;
   fileActionsButton.setAttribute("aria-expanded", open ? "true" : "false");
 }
+
+let desktopExitConfirmationOpen = false;
+
+function installDesktopExitGuards() {
+  if (!isDesktopHost()) {
+    return;
+  }
+  window.PuzzleStudioHost.listenDesktopCloseRequested(async (event) => {
+    if (desktopExitConfirmationOpen) {
+      event.preventDefault();
+      return;
+    }
+    desktopExitConfirmationOpen = true;
+    try {
+      if (!confirmDesktopExitWithUnsavedChanges("Close this window")) {
+        event.preventDefault();
+        setEditorStatus("Close canceled: unsaved changes", "is-error");
+      }
+    } catch (error) {
+      event.preventDefault();
+      console.error(error);
+      setEditorStatus("Close blocked: unsaved state unavailable", "is-error");
+    } finally {
+      desktopExitConfirmationOpen = false;
+    }
+  }).catch((error) => {
+    console.error(error);
+    setEditorStatus("Close guard unavailable", "is-error");
+  });
+
+  window.PuzzleStudioHost.listenAppExitRequested(async () => {
+    if (desktopExitConfirmationOpen) {
+      return;
+    }
+    desktopExitConfirmationOpen = true;
+    try {
+      if (!confirmDesktopExitWithUnsavedChanges("Quit PuzzleStudio")) {
+        setEditorStatus("Quit canceled: unsaved changes", "is-error");
+        return;
+      }
+      await window.PuzzleStudioHost.confirmAppExit();
+    } catch (error) {
+      console.error(error);
+      setEditorStatus("Quit blocked: unsaved state unavailable", "is-error");
+    } finally {
+      desktopExitConfirmationOpen = false;
+    }
+  }).catch((error) => {
+    console.error(error);
+    setEditorStatus("Quit guard unavailable", "is-error");
+  });
+}
+
+installDesktopExitGuards();

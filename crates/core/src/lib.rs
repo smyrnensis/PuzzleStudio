@@ -7,8 +7,8 @@ pub mod transition;
 pub use compiled_game::{
     ComparisonOp, CompiledGame, ConditionDef, ConditionValueKind, Effect, GapTerm, Guard,
     LocalFrame, LocalFrameExtent, MarkDef, MarkKind, MarkPattern, MarkValueMatch, MatchCell,
-    ObjectDef, ObjectSetMarkPattern, ObjectSetMatcher, Offset, Pattern, PatternComponent, Rule,
-    RuleApplication, RuleCondition, RuleStep, VariableUpdateOp, WriteOp,
+    ObjectDef, ObjectSetMarkPattern, ObjectSetMatcher, Offset, Pattern, Pattern2, PatternComponent,
+    Rule, RuleApplication, RuleCondition, RuleStep, VariableUpdateOp, WriteOp,
 };
 pub use ids::{ConditionId, InputId, LayerId, MarkId, ObjectId, RuleId, VariableId};
 pub use patch::{Patch, PatchError, PatchOp};

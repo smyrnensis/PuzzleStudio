@@ -144,6 +144,12 @@ pub fn solve_solver_task_json(request_json: &str) -> Result<String, JsValue> {
 }
 
 #[wasm_bindgen]
+pub fn solver_task_initial_display_state_json(request_json: &str) -> Result<String, JsValue> {
+    html_play::solver_task_initial_display_state_json(request_json)
+        .map_err(|error| JsValue::from_str(&error))
+}
+
+#[wasm_bindgen]
 pub fn solve_solver_task_json_with_progress(
     request_json: &str,
     on_observation: &js_sys::Function,

@@ -21,73 +21,66 @@ fn scene_entry_is_component(tokens: &[&str]) -> bool {
     }
 }
 
+#[derive(Clone, Copy)]
+enum AuthoringEntryOwner {
+    GenericBlock,
+    PuzzleGroups,
+    PuzzleVisuals,
+    SceneLayoutCondition,
+    SceneCondition,
+    SceneLifecycle,
+    SceneRoutine,
+    DocumentVisuals,
+}
+
+impl AuthoringEntryOwner {
+    fn missing_close_message(self) -> &'static str {
+        match self {
+            AuthoringEntryOwner::GenericBlock => "block missing closing brace",
+            AuthoringEntryOwner::PuzzleGroups => "groups block missing closing brace",
+            AuthoringEntryOwner::PuzzleVisuals => "sprites block missing closing brace",
+            AuthoringEntryOwner::SceneLayoutCondition => {
+                "layout condition block missing closing brace"
+            }
+            AuthoringEntryOwner::SceneCondition => "condition block missing closing brace",
+            AuthoringEntryOwner::SceneLifecycle => "scene lifecycle block missing closing brace",
+            AuthoringEntryOwner::SceneRoutine => "scene routine block missing closing brace",
+            AuthoringEntryOwner::DocumentVisuals => "document sprites block missing closing brace",
+        }
+    }
+}
+
 fn collect_authoring_entry(
     lines: &[String],
     start: usize,
+    owner: AuthoringEntryOwner,
 ) -> Result<(Vec<String>, usize), DiagnosticReport> {
     let first = &lines[start];
-    let tokens = split_header_tokens(first);
-    if matches!(tokens.as_slice(), ["levels", ..]) {
-        return collect_levels_authoring_entry(lines, start);
-    }
-    if !starts_authoring_block(&tokens, first) {
+    let mut depth = authoring_line_brace_delta(first);
+    if depth <= 0 {
         return Ok((vec![first.clone()], start + 1));
     }
 
-    let mut entry = Vec::new();
-    let mut block_stack = vec![authoring_block_kind(&tokens)];
-    let mut i = start;
+    let mut entry = vec![first.clone()];
+    let mut i = start + 1;
     while i < lines.len() {
         let line = &lines[i];
-        if i != start {
-            let tokens = split_header_tokens(line);
-            if tokens.first().copied() == Some(BLOCK_CLOSE) {
-                let closed = block_stack
-                    .pop()
-                    .ok_or_else(|| parse_error(line, "closing brace without block"))?;
-                entry.push(line.clone());
-                i += 1;
-                if block_stack.is_empty() {
-                    return Ok((entry, i));
-                }
-                if closed == AuthoringBlockKind::If && next_line_is_else(lines, i) {
-                    entry.push(lines[i].clone());
-                    i += 1;
-                    block_stack.push(AuthoringBlockKind::Other);
-                }
-                continue;
-            }
-            if let Some(kind) = authoring_nested_block_kind(&tokens, line) {
-                block_stack.push(kind);
-            }
+        let next_depth = depth + authoring_line_brace_delta(line);
+        if next_depth < 0 {
+            return Err(parse_error(line, "closing brace without block"));
         }
         entry.push(line.clone());
         i += 1;
+        if next_depth == 0 {
+            return Ok((entry, i));
+        }
+        depth = next_depth;
     }
-    Err(parse_error(first, "block missing closing brace"))
+    Err(parse_error(first, owner.missing_close_message()))
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum AuthoringBlockKind {
-    If,
-    Other,
-}
-
-fn authoring_block_kind(tokens: &[&str]) -> AuthoringBlockKind {
-    if tokens.first().copied() == Some("if") {
-        AuthoringBlockKind::If
-    } else {
-        AuthoringBlockKind::Other
-    }
-}
-
-fn authoring_nested_block_kind(tokens: &[&str], line: &str) -> Option<AuthoringBlockKind> {
-    let trimmed = line.trim_end();
-    if starts_authoring_block(tokens, line) || trimmed.ends_with('{') || trimmed.ends_with("->") {
-        Some(authoring_block_kind(tokens))
-    } else {
-        None
-    }
+fn authoring_line_brace_delta(line: &str) -> i32 {
+    raw_brace_delta(strip_line_comment(line))
 }
 
 fn next_line_is_else(lines: &[String], index: usize) -> bool {
@@ -96,80 +89,57 @@ fn next_line_is_else(lines: &[String], index: usize) -> bool {
         .is_some_and(|line| matches!(split_header_tokens(line).as_slice(), ["else"]))
 }
 
+fn collect_braced_body_until_close(
+    lines: &[String],
+    start: usize,
+    header_line: &str,
+    missing_close_message: &str,
+) -> Result<(Vec<String>, usize), DiagnosticReport> {
+    let mut body = Vec::new();
+    let mut depth = 1i32;
+    let mut i = start;
+    while i < lines.len() {
+        let line = &lines[i];
+        let next_depth = depth + authoring_line_brace_delta(line);
+        if next_depth < 0 {
+            return Err(parse_error(line, "closing brace without block"));
+        }
+        if next_depth == 0 {
+            return Ok((body, i + 1));
+        }
+        body.push(line.clone());
+        depth = next_depth;
+        i += 1;
+    }
+    Err(parse_error(header_line, missing_close_message))
+}
+
 fn collect_levels_authoring_entry(
     lines: &[String],
     start: usize,
 ) -> Result<(Vec<String>, usize), DiagnosticReport> {
     let first = &lines[start];
     let mut entry = vec![first.clone()];
-    let mut depth = 1usize;
+    let mut depth = authoring_line_brace_delta(first);
+    if depth <= 0 {
+        depth = 1;
+    }
 
     let mut i = start + 1;
     while i < lines.len() {
         let line = &lines[i];
-        let tokens = split_header_tokens(line);
-        if tokens.first().copied() == Some(BLOCK_CLOSE) {
-            depth -= 1;
-            entry.push(line.clone());
-            if depth == 0 {
-                return Ok((entry, i + 1));
-            }
-            i += 1;
-            continue;
-        }
-        if depth == 1
-            && (puzzle_authoring::is_braced_level_header(line)
-                || matches!(tokens.as_slice(), ["{"]))
-        {
-            depth += 1;
-        } else if !matches!(tokens.as_slice(), ["level", ..])
-            && starts_authoring_block(&tokens, line)
-        {
-            depth += 1;
+        let next_depth = depth + authoring_line_brace_delta(line);
+        if next_depth < 0 {
+            return Err(parse_error(line, "closing brace without block"));
         }
         entry.push(line.clone());
         i += 1;
+        if next_depth == 0 {
+            return Ok((entry, i));
+        }
+        depth = next_depth;
     }
     Err(parse_error(first, "levels block missing closing brace"))
-}
-
-fn starts_authoring_block(tokens: &[&str], line: &str) -> bool {
-    match tokens {
-        ["map", ..]
-        | ["on_level_start"]
-        | ["on_level_clear"]
-        | ["on_last_level_clear"]
-        | ["on_display"]
-        | ["marks"]
-        | ["groups"]
-        | ["layers"]
-        | ["win_conditions", ..]
-        | ["lose_conditions", ..]
-        | ["sprites"]
-        | ["sounds"]
-        | ["screen"]
-        | ["layout", ..]
-        | ["routine", ..]
-        | ["rules"]
-        | ["levels", ..]
-        | ["resources"]
-        | ["level", ..]
-        | ["state"]
-        | ["keys"]
-        | ["on_scene_start"]
-        | ["input", ..]
-        | ["action", ..]
-        | ["if", ..]
-        | ["row", ..]
-        | ["column", ..]
-        | ["box", ..]
-        | ["for", ..]
-        | ["level_menu"] => true,
-        ["legend"] => true,
-        ["button", ..] if line.trim_end().ends_with(" with") => true,
-        ["choice", ..] if line.trim_end().ends_with(" with") => true,
-        _ => false,
-    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -181,6 +151,8 @@ fn parse_puzzle_definition(
     empty_char: &mut Option<char>,
     named_layers: &mut HashMap<String, u16>,
     catalog: &mut Catalog,
+    query_definitions: &mut Vec<QueryDefinitionAst>,
+    query_names: &mut HashSet<String>,
     condition_definitions: &mut Vec<ConditionDefinitionAst>,
     controls: &mut Controls,
     directions: &mut Vec<Direction>,
@@ -197,6 +169,7 @@ fn parse_puzzle_definition(
     render_overlays: &mut OverlayDefs,
     model_sound_triggers: &mut Vec<ModelSoundTriggerSpec>,
     model_operation_sounds: &mut Vec<ModelOperationSoundSpec>,
+    solver_strategy: &mut Option<SolverStrategyAst>,
     named_conditions: &mut HashMap<String, (String, ConditionAst)>,
     run_rules_on_level_start: &mut bool,
     visuals: &mut VisualsDef,
@@ -218,6 +191,8 @@ fn parse_puzzle_definition(
     validate_qualified_identifier(name, &lines[start], "puzzle name")?;
 
     collect_puzzle_tag_declarations(lines, start + 1, catalog)?;
+    let pending_groups = collect_puzzle_group_declarations(lines, start + 1)?;
+    let mut resolved_groups = HashSet::<String>::new();
 
     let mut i = start + 1;
     let mut diagnostics = Vec::new();
@@ -232,6 +207,12 @@ fn parse_puzzle_definition(
 
         match tokens[0] {
             assignment_name if tokens.get(1).copied() == Some("=") => {
+                resolve_groups_after_layers(
+                    *layer_count,
+                    &pending_groups,
+                    &mut resolved_groups,
+                    catalog,
+                )?;
                 parse_assignment_directive(assignment_name, line, catalog, named_conditions)?;
                 i += 1;
             }
@@ -260,6 +241,12 @@ fn parse_puzzle_definition(
                 i += 1;
             }
             lifecycle_block if puzzle_lifecycle_event(lifecycle_block).is_some() => {
+                resolve_groups_after_layers(
+                    *layer_count,
+                    &pending_groups,
+                    &mut resolved_groups,
+                    catalog,
+                )?;
                 let local_frame = parse_program_local_frame_modifier(&tokens[1..], line, catalog)?;
                 let lifecycle = puzzle_lifecycle_event(lifecycle_block).unwrap();
                 let (event, statements, next_i) =
@@ -316,7 +303,15 @@ fn parse_puzzle_definition(
                 i = next_i;
             }
             "layers" if tokens.len() == 1 => {
-                i = parse_layers_block(lines, i + 1, named_layers, layer_count, catalog)?;
+                i = parse_layers_block(
+                    lines,
+                    i + 1,
+                    named_layers,
+                    layer_count,
+                    catalog,
+                    &pending_groups,
+                    &mut resolved_groups,
+                )?;
                 refresh_layer_tags_and_value_sets(named_layers, catalog);
             }
             "layers" => {
@@ -377,7 +372,20 @@ fn parse_puzzle_definition(
                 i += 1;
             }
             "condition" => {
-                let definition = parse_condition_directive(
+                diagnostics.extend(
+                    parse_error(line, "`condition` declarations were removed; use `query`")
+                        .into_diagnostics(),
+                );
+                i += 1;
+            }
+            "query" => {
+                resolve_groups_after_layers(
+                    *layer_count,
+                    &pending_groups,
+                    &mut resolved_groups,
+                    catalog,
+                )?;
+                let (query, core_definition) = parse_query_directive(
                     &tokens,
                     line,
                     &catalog.object_names,
@@ -385,11 +393,30 @@ fn parse_puzzle_definition(
                     &catalog_value_sets(&catalog),
                     &catalog.maps,
                     &catalog.object_groups,
+                    &catalog.variable_names,
+                    query_names,
                     &mut catalog.condition_names,
                     &mut catalog.condition_labels,
                 )?;
-                condition_definitions.push(definition);
+                query_definitions.push(query);
+                if let Some(definition) = core_definition {
+                    condition_definitions.push(definition);
+                }
                 i += 1;
+            }
+            "solver" => {
+                resolve_groups_after_layers(
+                    *layer_count,
+                    &pending_groups,
+                    &mut resolved_groups,
+                    catalog,
+                )?;
+                if solver_strategy.is_some() {
+                    return Err(parse_error(line, "duplicate solver block"));
+                }
+                let (next_i, parsed_strategy) = parse_solver_block(lines, i)?;
+                *solver_strategy = Some(parsed_strategy);
+                i = next_i;
             }
             "effect" => {
                 diagnostics.extend(
@@ -400,7 +427,15 @@ fn parse_puzzle_definition(
             }
             "groups" => {
                 if tokens.len() == 1 {
-                    i = parse_group_block(lines, i, catalog)?;
+                    let (_, next_i) =
+                        collect_authoring_entry(lines, i, AuthoringEntryOwner::PuzzleGroups)?;
+                    i = next_i;
+                    resolve_groups_after_layers(
+                        *layer_count,
+                        &pending_groups,
+                        &mut resolved_groups,
+                        catalog,
+                    )?;
                 } else {
                     return Err(parse_error(line, "groups block must be: groups { ... }"));
                 }
@@ -428,6 +463,12 @@ fn parse_puzzle_definition(
                 i = recover_after_directive_error(lines, i);
             }
             "render_overlay" => {
+                resolve_groups_after_layers(
+                    *layer_count,
+                    &pending_groups,
+                    &mut resolved_groups,
+                    catalog,
+                )?;
                 let (overlays, level_objects, ch) = parse_render_overlay(
                     &tokens,
                     line,
@@ -444,11 +485,18 @@ fn parse_puzzle_definition(
                 i += 1;
             }
             "win_conditions" | "lose_conditions" => {
+                resolve_groups_after_layers(
+                    *layer_count,
+                    &pending_groups,
+                    &mut resolved_groups,
+                    catalog,
+                )?;
                 i = parse_conditions_block(lines, i, catalog, named_conditions)?;
             }
             "sprites" => {
                 pending_visual_blocks.push(i);
-                let (_, next_i) = collect_authoring_entry(lines, i)?;
+                let (_, next_i) =
+                    collect_authoring_entry(lines, i, AuthoringEntryOwner::PuzzleVisuals)?;
                 i = next_i;
             }
             "render" => {
@@ -481,6 +529,12 @@ fn parse_puzzle_definition(
                 i += 1;
             }
             "routine" => {
+                resolve_groups_after_layers(
+                    *layer_count,
+                    &pending_groups,
+                    &mut resolved_groups,
+                    catalog,
+                )?;
                 match parse_rule_definition(
                     lines,
                     Some(line_numbers),
@@ -513,6 +567,12 @@ fn parse_puzzle_definition(
                 i = recover_after_directive_error(lines, i);
             }
             "rules" => {
+                resolve_groups_after_layers(
+                    *layer_count,
+                    &pending_groups,
+                    &mut resolved_groups,
+                    catalog,
+                )?;
                 let local_frame = parse_program_local_frame_modifier(&tokens[1..], line, catalog)?;
                 if main_statements.is_some() {
                     diagnostics.extend(
@@ -552,12 +612,17 @@ fn parse_puzzle_definition(
             }
             "main" => {
                 diagnostics.extend(
-                    parse_error(line, "`main` was removed; use `rules`")
-                        .into_diagnostics(),
+                    parse_error(line, "`main` was removed; use `rules`").into_diagnostics(),
                 );
                 i = recover_after_directive_error(lines, i);
             }
             "on_display" => {
+                resolve_groups_after_layers(
+                    *layer_count,
+                    &pending_groups,
+                    &mut resolved_groups,
+                    catalog,
+                )?;
                 if tokens.len() != 1 {
                     return Err(parse_error(line, "display hook header must be: on_display"));
                 }
@@ -626,6 +691,11 @@ fn parse_puzzle_definition(
     if i >= lines.len() {
         return Err(parse_error(&lines[start], "puzzle missing closing brace"));
     }
+    if let Err(report) =
+        resolve_pending_group_definitions(&pending_groups, None, &mut resolved_groups, catalog)
+    {
+        diagnostics.extend(report.into_diagnostics());
+    }
     for visual_start in pending_visual_blocks {
         if let Err(report) = parse_visuals_block(lines, visual_start, catalog, visuals) {
             diagnostics.extend(report.into_diagnostics());
@@ -637,6 +707,18 @@ fn parse_puzzle_definition(
     validate_puzzle_screen(puzzle_screen, &lines[start])?;
 
     Ok((i + 1, name.to_string()))
+}
+
+fn resolve_groups_after_layers(
+    layer_count: Option<u16>,
+    pending_groups: &[PendingGroupDefinition],
+    resolved_groups: &mut HashSet<String>,
+    catalog: &mut Catalog,
+) -> Result<(), DiagnosticReport> {
+    if layer_count.is_some() {
+        resolve_pending_group_definitions(pending_groups, None, resolved_groups, catalog)?;
+    }
+    Ok(())
 }
 
 fn parse_program_local_frame_modifier(

@@ -1,4 +1,4 @@
-title "Microban Basic 3D"
+title = "Microban Basic 3D"
 
 puzzle3 sokoban_literally_in_3d {
   render {

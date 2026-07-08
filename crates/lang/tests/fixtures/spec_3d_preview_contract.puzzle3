@@ -1,4 +1,4 @@
-title "Microban 3D Preview Contract"
+title = "Microban 3D Preview Contract"
 
 puzzle3 sokoban {
 render {

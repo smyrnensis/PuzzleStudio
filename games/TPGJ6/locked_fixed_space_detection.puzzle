@@ -1,13 +1,13 @@
-title "Locked Room"
+title = "Locked Room"
 
 theme puzzlescript
 
 default_wait_time = 100ms
 
 theme clean {
-accent_color #2f7d62
-background_color #f7f5ef
-text_color #1d2522
+accent_color = #2f7d62
+background_color = #f7f5ef
+text_color = #1d2522
 }
 
 sounds {
@@ -204,8 +204,8 @@ import "locked_sprite.puzzle"
 
 
 scene title {
-	title
-	subtitle
+	title = title
+	subtitle = subtitle
 	choice "Continue" -> goto playing
 	choice "New Game" -> {
 			clear_game_progress
@@ -220,8 +220,8 @@ scene title {
 scene playing(level) {
 	layout {
 		row {
-			title
-			subtitle level.label
+			title = title
+			subtitle = level.label
 		}
 			puzzle board = sokoban
 	}

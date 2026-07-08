@@ -1,4 +1,4 @@
-title "Parallel Sokoban 2D"
+title = "Parallel Sokoban 2D"
 
 puzzle sokoban_2d {
   layers {

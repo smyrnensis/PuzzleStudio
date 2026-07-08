@@ -1,5 +1,819 @@
 export const SFX_TYPES = ["jump", "step", "pickup", "hit", "drag", "water", "lock", "explosion", "laser", "powerup", "select", "error"];
-export const SFX_TYPE_OPTIONS = ["random", ...SFX_TYPES, "wild"];
+export const SFX_TYPE_OPTIONS = ["random", ...SFX_TYPES, "wild", "puzzlescript"];
+
+// PuzzleScript-compatible SFX support is adapted from PuzzleScript's sfxr.js.
+//
+// MIT License
+// Copyright (c) 2013 Stephen Lavelle
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+const PS_SFX_SOUND_VOL = 0.25;
+const PS_SFX_SAMPLE_RATE = 5512;
+const PS_SFX_MIN_SAMPLE_RATE = 22050;
+const PS_SQUARE = 0;
+const PS_SAWTOOTH = 1;
+const PS_SINE = 2;
+const PS_NOISE = 3;
+const PS_TRIANGLE = 4;
+const PS_BREAKER = 5;
+const PS_SHAPE_COUNT = 6;
+
+let psSfxRng = null;
+
+export function generatePuzzleScriptSoundEffect(seed) {
+  const numericSeed = Math.max(0, Math.trunc(Number(seed) || 0));
+  const params = psGenerateFromSeed(numericSeed);
+  params.sound_vol = PS_SFX_SOUND_VOL;
+  params.sample_rate = PS_SFX_SAMPLE_RATE;
+  return {
+    seed: String(seed),
+    numericSeed,
+    type: "puzzlescript",
+    params,
+  };
+}
+
+export function createPuzzleScriptSfxPlayer(audioContext, effect, options = {}) {
+  let source = null;
+  let output = null;
+
+  function stop() {
+    if (source) {
+      try {
+        source.stop();
+      } catch {
+        // Already-ended one-shot sources can be ignored.
+      }
+      source.disconnect();
+      source = null;
+    }
+    if (output) {
+      output.disconnect();
+      output = null;
+    }
+  }
+
+  function start(startsAt) {
+    if (!Number.isFinite(startsAt)) {
+      throw new Error("PuzzleScript SFX player start requires an explicit AudioContext time");
+    }
+    stop();
+    const buffer = psRenderBuffer(audioContext, effect.params);
+    source = audioContext.createBufferSource();
+    const gain = audioContext.createGain();
+    const filter1 = audioContext.createBiquadFilter();
+    const filter2 = audioContext.createBiquadFilter();
+    const filter3 = audioContext.createBiquadFilter();
+    gain.gain.value = normalizePlaybackVolume(options.volume ?? 1, "PuzzleScript SFX volume");
+    filter1.frequency.value = 1600;
+    filter2.frequency.value = 1600;
+    filter3.frequency.value = 1600;
+    source.buffer = buffer;
+    source.connect(filter1);
+    filter1.connect(filter2);
+    filter2.connect(filter3);
+    filter3.connect(gain);
+    gain.connect(audioContext.destination);
+    output = gain;
+    source.addEventListener("ended", stop, { once: true });
+    source.start(Math.max(startsAt, audioContext.currentTime + SFX_START_LOOKAHEAD_SECONDS));
+  }
+
+  return { start, stop };
+}
+
+function psParams() {
+  return {
+    wave_type: PS_SQUARE,
+    p_env_attack: 0.0,
+    p_env_sustain: 0.3,
+    p_env_punch: 0.0,
+    p_env_decay: 0.4,
+    p_base_freq: 0.3,
+    p_freq_limit: 0.0,
+    p_freq_ramp: 0.0,
+    p_freq_dramp: 0.0,
+    p_vib_strength: 0.0,
+    p_vib_speed: 0.0,
+    p_arp_mod: 0.0,
+    p_arp_speed: 0.0,
+    p_duty: 0.0,
+    p_duty_ramp: 0.0,
+    p_repeat_speed: 0.0,
+    p_pha_offset: 0.0,
+    p_pha_ramp: 0.0,
+    p_lpf_freq: 1.0,
+    p_lpf_ramp: 0.0,
+    p_lpf_resonance: 0.0,
+    p_hpf_freq: 0.0,
+    p_hpf_ramp: 0.0,
+    sound_vol: 0.5,
+    sample_rate: 44100,
+  };
+}
+
+function psFrnd(range) {
+  return (psSfxRng ? psSfxRng.uniform() : Math.random()) * range;
+}
+
+function psRnd(max) {
+  return Math.floor((psSfxRng ? psSfxRng.uniform() : Math.random()) * (max + 1));
+}
+
+function psGenerateFromSeed(seed) {
+  psSfxRng = new PsRng((seed / 100) | 0);
+  const generatorIndex = seed % 100;
+  const generator = PS_GENERATORS[generatorIndex % PS_GENERATORS.length];
+  const params = generator();
+  params.seed = seed;
+  psSfxRng = null;
+  return params;
+}
+
+function psPickupCoin() {
+  const p = psParams();
+  p.wave_type = Math.floor(psFrnd(PS_SHAPE_COUNT));
+  if (p.wave_type === PS_NOISE) {
+    p.wave_type = PS_SQUARE;
+  }
+  p.p_base_freq = 0.4 + psFrnd(0.5);
+  p.p_env_attack = 0.0;
+  p.p_env_sustain = psFrnd(0.1);
+  p.p_env_decay = 0.1 + psFrnd(0.4);
+  p.p_env_punch = 0.3 + psFrnd(0.3);
+  if (psRnd(1)) {
+    p.p_arp_speed = 0.5 + psFrnd(0.2);
+    const num = (psFrnd(7) | 1) + 1;
+    const den = num + (psFrnd(7) | 1) + 2;
+    p.p_arp_mod = num / den;
+  }
+  return p;
+}
+
+function psLaserShoot() {
+  const p = psParams();
+  p.wave_type = Math.floor(psFrnd(PS_SHAPE_COUNT));
+  if (p.wave_type === PS_NOISE) {
+    p.wave_type = PS_SQUARE;
+  }
+  p.p_base_freq = 0.5 + psFrnd(0.5);
+  p.p_freq_limit = Math.max(0.2, p.p_base_freq - 0.2 - psFrnd(0.6));
+  p.p_freq_ramp = -0.15 - psFrnd(0.2);
+  if (psRnd(2) === 0) {
+    p.p_base_freq = 0.3 + psFrnd(0.6);
+    p.p_freq_limit = psFrnd(0.1);
+    p.p_freq_ramp = -0.35 - psFrnd(0.3);
+  }
+  if (psRnd(1)) {
+    p.p_duty = psFrnd(0.5);
+    p.p_duty_ramp = psFrnd(0.2);
+  } else {
+    p.p_duty = 0.4 + psFrnd(0.5);
+    p.p_duty_ramp = -psFrnd(0.7);
+  }
+  p.p_env_attack = 0.0;
+  p.p_env_sustain = 0.1 + psFrnd(0.2);
+  p.p_env_decay = psFrnd(0.4);
+  if (psRnd(1)) {
+    p.p_env_punch = psFrnd(0.3);
+  }
+  if (psRnd(2) === 0) {
+    p.p_pha_offset = psFrnd(0.2);
+    p.p_pha_ramp = -psFrnd(0.2);
+  }
+  if (psRnd(1)) {
+    p.p_hpf_freq = psFrnd(0.3);
+  }
+  return p;
+}
+
+function psExplosion() {
+  const p = psParams();
+  if (psRnd(1)) {
+    p.p_base_freq = 0.1 + psFrnd(0.4);
+    p.p_freq_ramp = -0.1 + psFrnd(0.4);
+  } else {
+    p.p_base_freq = 0.2 + psFrnd(0.7);
+    p.p_freq_ramp = -0.2 - psFrnd(0.2);
+  }
+  p.p_base_freq *= p.p_base_freq;
+  if (psRnd(4) === 0) {
+    p.p_freq_ramp = 0.0;
+  }
+  if (psRnd(2) === 0) {
+    p.p_repeat_speed = 0.3 + psFrnd(0.5);
+  }
+  p.p_env_attack = 0.0;
+  p.p_env_sustain = 0.1 + psFrnd(0.3);
+  p.p_env_decay = psFrnd(0.5);
+  if (psRnd(1) === 0) {
+    p.p_pha_offset = -0.3 + psFrnd(0.9);
+    p.p_pha_ramp = -psFrnd(0.3);
+  }
+  p.p_env_punch = 0.2 + psFrnd(0.6);
+  if (psRnd(1)) {
+    p.p_vib_strength = psFrnd(0.7);
+    p.p_vib_speed = psFrnd(0.6);
+  }
+  if (psRnd(2) === 0) {
+    p.p_arp_speed = 0.6 + psFrnd(0.3);
+    p.p_arp_mod = 0.8 - psFrnd(1.6);
+  }
+  return p;
+}
+
+function psBirdSound() {
+  const p = psParams();
+  if (psFrnd(10) < 1) {
+    p.wave_type = Math.floor(psFrnd(PS_SHAPE_COUNT));
+    if (p.wave_type === PS_NOISE) {
+      p.wave_type = PS_SQUARE;
+    }
+    p.p_env_attack = 0.4304400932967592 + psFrnd(0.2) - 0.1;
+    p.p_env_sustain = 0.15739346034252394 + psFrnd(0.2) - 0.1;
+    p.p_env_punch = 0.004488201744871758 + psFrnd(0.2) - 0.1;
+    p.p_env_decay = 0.07478075528212291 + psFrnd(0.2) - 0.1;
+    p.p_base_freq = 0.9865265720147687 + psFrnd(0.2) - 0.1;
+    p.p_freq_limit = psFrnd(0.2) - 0.1;
+    p.p_freq_ramp = -0.2995018224359539 + psFrnd(0.2) - 0.1;
+    if (psFrnd(1.0) < 0.5) {
+      p.p_freq_ramp = 0.1 + psFrnd(0.15);
+    }
+    p.p_freq_dramp = 0.004598608156964473 + psFrnd(0.1) - 0.05;
+    p.p_vib_strength = -0.2202799497929496 + psFrnd(0.2) - 0.1;
+    p.p_vib_speed = 0.8084998703158364 + psFrnd(0.2) - 0.1;
+    p.p_arp_mod = 0;
+    p.p_arp_speed = 0;
+    p.p_duty = -0.9031808754347107 + psFrnd(0.2) - 0.1;
+    p.p_duty_ramp = -0.8128699999808343 + psFrnd(0.2) - 0.1;
+    p.p_repeat_speed = 0.6014860189319991 + psFrnd(0.2) - 0.1;
+    p.p_pha_offset = -0.9424902314367765 + psFrnd(0.2) - 0.1;
+    p.p_pha_ramp = -0.1055482222272056 + psFrnd(0.2) - 0.1;
+    p.p_lpf_freq = 0.9989765717851521 + psFrnd(0.2) - 0.1;
+    p.p_lpf_ramp = -0.25051720626043017 + psFrnd(0.2) - 0.1;
+    p.p_lpf_resonance = 0.32777871505494693 + psFrnd(0.2) - 0.1;
+    p.p_hpf_freq = 0.0023548750981756753 + psFrnd(0.2) - 0.1;
+    p.p_hpf_ramp = -0.002375673204842568 + psFrnd(0.2) - 0.1;
+    return p;
+  }
+  if (psFrnd(10) < 1) {
+    p.wave_type = Math.floor(psFrnd(PS_SHAPE_COUNT));
+    if (p.wave_type === PS_NOISE) {
+      p.wave_type = PS_SQUARE;
+    }
+    p.p_env_attack = 0.5277795946672003 + psFrnd(0.2) - 0.1;
+    p.p_env_sustain = 0.18243733568468432 + psFrnd(0.2) - 0.1;
+    p.p_env_punch = -0.020159754546840117 + psFrnd(0.2) - 0.1;
+    p.p_env_decay = 0.1561353422051903 + psFrnd(0.2) - 0.1;
+    p.p_base_freq = 0.9028855606533718 + psFrnd(0.2) - 0.1;
+    p.p_freq_limit = -0.008842787837148716;
+    p.p_freq_ramp = -0.1;
+    p.p_freq_dramp = -0.012891241489551925;
+    p.p_vib_strength = -0.17923136138403065 + psFrnd(0.2) - 0.1;
+    p.p_vib_speed = 0.908263385610142 + psFrnd(0.2) - 0.1;
+    p.p_arp_mod = 0.41690153355414894 + psFrnd(0.2) - 0.1;
+    p.p_arp_speed = 0.0010766233195860703 + psFrnd(0.2) - 0.1;
+    p.p_duty = -0.8735363011184684 + psFrnd(0.2) - 0.1;
+    p.p_duty_ramp = -0.7397985366747507 + psFrnd(0.2) - 0.1;
+    p.p_repeat_speed = 0.0591789344172107 + psFrnd(0.2) - 0.1;
+    p.p_pha_offset = -0.9961184222777699 + psFrnd(0.2) - 0.1;
+    p.p_pha_ramp = -0.08234769395850523 + psFrnd(0.2) - 0.1;
+    p.p_lpf_freq = 0.9412475115697335 + psFrnd(0.2) - 0.1;
+    p.p_lpf_ramp = -0.18261358925834958 + psFrnd(0.2) - 0.1;
+    p.p_lpf_resonance = 0.24541438107389477 + psFrnd(0.2) - 0.1;
+    p.p_hpf_freq = -0.01831940280978611 + psFrnd(0.2) - 0.1;
+    p.p_hpf_ramp = -0.03857383633171346 + psFrnd(0.2) - 0.1;
+    return p;
+  }
+  if (psFrnd(10) < 1) {
+    p.wave_type = Math.floor(psFrnd(PS_SHAPE_COUNT));
+    if (p.wave_type === PS_NOISE) {
+      p.wave_type = PS_SQUARE;
+    }
+    p.p_env_attack = 0.4304400932967592 + psFrnd(0.2) - 0.1;
+    p.p_env_sustain = 0.15739346034252394 + psFrnd(0.2) - 0.1;
+    p.p_env_punch = 0.004488201744871758 + psFrnd(0.2) - 0.1;
+    p.p_env_decay = 0.07478075528212291 + psFrnd(0.2) - 0.1;
+    p.p_base_freq = 0.9865265720147687 + psFrnd(0.2) - 0.1;
+    p.p_freq_limit = psFrnd(0.2) - 0.1;
+    p.p_freq_ramp = -0.2995018224359539 + psFrnd(0.2) - 0.1;
+    p.p_freq_dramp = 0.004598608156964473 + psFrnd(0.2) - 0.1;
+    p.p_vib_strength = -0.2202799497929496 + psFrnd(0.2) - 0.1;
+    p.p_vib_speed = 0.8084998703158364 + psFrnd(0.2) - 0.1;
+    p.p_arp_mod = -0.46410459213693644 + psFrnd(0.2) - 0.1;
+    p.p_arp_speed = -0.10955361249587248 + psFrnd(0.2) - 0.1;
+    p.p_duty = -0.9031808754347107 + psFrnd(0.2) - 0.1;
+    p.p_duty_ramp = -0.8128699999808343 + psFrnd(0.2) - 0.1;
+    p.p_repeat_speed = 0.7014860189319991 + psFrnd(0.2) - 0.1;
+    p.p_pha_offset = -0.9424902314367765 + psFrnd(0.2) - 0.1;
+    p.p_pha_ramp = -0.1055482222272056 + psFrnd(0.2) - 0.1;
+    p.p_lpf_freq = 0.9989765717851521 + psFrnd(0.2) - 0.1;
+    p.p_lpf_ramp = -0.25051720626043017 + psFrnd(0.2) - 0.1;
+    p.p_lpf_resonance = 0.32777871505494693 + psFrnd(0.2) - 0.1;
+    p.p_hpf_freq = 0.0023548750981756753 + psFrnd(0.2) - 0.1;
+    p.p_hpf_ramp = -0.002375673204842568 + psFrnd(0.2) - 0.1;
+    return p;
+  }
+  if (psFrnd(5) > 1) {
+    p.wave_type = Math.floor(psFrnd(PS_SHAPE_COUNT));
+    if (p.wave_type === PS_NOISE) {
+      p.wave_type = PS_SQUARE;
+    }
+    if (psRnd(1)) {
+      p.p_arp_mod = 0.2697849293151393 + psFrnd(0.2) - 0.1;
+      p.p_arp_speed = -0.3131172257760948 + psFrnd(0.2) - 0.1;
+      p.p_base_freq = 0.8090588299313949 + psFrnd(0.2) - 0.1;
+      p.p_duty = -0.6210022920964955 + psFrnd(0.2) - 0.1;
+      p.p_duty_ramp = -0.00043441813553182567 + psFrnd(0.2) - 0.1;
+      p.p_env_attack = 0.004321877246874195 + psFrnd(0.2) - 0.1;
+      p.p_env_decay = 0.1 + psFrnd(0.2) - 0.1;
+      p.p_env_punch = 0.061737781504416146 + psFrnd(0.2) - 0.1;
+      p.p_env_sustain = 0.4987252564798832 + psFrnd(0.2) - 0.1;
+      p.p_freq_dramp = 0.31700340314222614 + psFrnd(0.2) - 0.1;
+      p.p_freq_limit = psFrnd(0.2) - 0.1;
+      p.p_freq_ramp = -0.163380391341416 + psFrnd(0.2) - 0.1;
+      p.p_hpf_freq = 0.4709005021145149 + psFrnd(0.2) - 0.1;
+      p.p_hpf_ramp = 0.6924667290539194 + psFrnd(0.2) - 0.1;
+      p.p_lpf_freq = 0.8351398631384511 + psFrnd(0.2) - 0.1;
+      p.p_lpf_ramp = 0.36616557192873134 + psFrnd(0.2) - 0.1;
+      p.p_lpf_resonance = -0.08685777111664439 + psFrnd(0.2) - 0.1;
+      p.p_pha_offset = -0.036084571580025544 + psFrnd(0.2) - 0.1;
+      p.p_pha_ramp = -0.014806445085568108 + psFrnd(0.2) - 0.1;
+      p.p_repeat_speed = -0.8094368475518489 + psFrnd(0.2) - 0.1;
+      p.p_vib_speed = 0.4496665457171294 + psFrnd(0.2) - 0.1;
+      p.p_vib_strength = 0.23413762515532424 + psFrnd(0.2) - 0.1;
+    } else {
+      p.p_arp_mod = -0.35697118026766184 + psFrnd(0.2) - 0.1;
+      p.p_arp_speed = 0.3581140690559588 + psFrnd(0.2) - 0.1;
+      p.p_base_freq = 1.3260897696157528 + psFrnd(0.2) - 0.1;
+      p.p_duty = -0.30984900436710694 + psFrnd(0.2) - 0.1;
+      p.p_duty_ramp = -0.0014374759133411626 + psFrnd(0.2) - 0.1;
+      p.p_env_attack = 0.3160357835682254 + psFrnd(0.2) - 0.1;
+      p.p_env_decay = 0.1 + psFrnd(0.2) - 0.1;
+      p.p_env_punch = 0.24323114016870148 + psFrnd(0.2) - 0.1;
+      p.p_env_sustain = 0.4 + psFrnd(0.2) - 0.1;
+      p.p_freq_dramp = 0.2866475886237244 + psFrnd(0.2) - 0.1;
+      p.p_freq_limit = psFrnd(0.2) - 0.1;
+      p.p_freq_ramp = -0.10956352368742976 + psFrnd(0.2) - 0.1;
+      p.p_hpf_freq = 0.20772718017889846 + psFrnd(0.2) - 0.1;
+      p.p_hpf_ramp = 0.1564090637378835 + psFrnd(0.2) - 0.1;
+      p.p_lpf_freq = 0.6021372770637031 + psFrnd(0.2) - 0.1;
+      p.p_lpf_ramp = 0.24016227139979027 + psFrnd(0.2) - 0.1;
+      p.p_lpf_resonance = -0.08787383821160144 + psFrnd(0.2) - 0.1;
+      p.p_pha_offset = -0.381597686151701 + psFrnd(0.2) - 0.1;
+      p.p_pha_ramp = -0.0002481687661373495 + psFrnd(0.2) - 0.1;
+      p.p_repeat_speed = 0.07812112809425686 + psFrnd(0.2) - 0.1;
+      p.p_vib_speed = -0.13648848579133943 + psFrnd(0.2) - 0.1;
+      p.p_vib_strength = 0.0018874158972302657 + psFrnd(0.2) - 0.1;
+    }
+    return p;
+  }
+  p.wave_type = Math.floor(psFrnd(PS_SHAPE_COUNT));
+  if (p.wave_type === PS_SAWTOOTH || p.wave_type === PS_NOISE) {
+    p.wave_type = PS_SINE;
+  }
+  p.p_base_freq = 0.85 + psFrnd(0.15);
+  p.p_freq_ramp = 0.3 + psFrnd(0.15);
+  p.p_env_attack = psFrnd(0.09);
+  p.p_env_sustain = 0.2 + psFrnd(0.3);
+  p.p_env_decay = psFrnd(0.1);
+  p.p_duty = psFrnd(2.0) - 1.0;
+  p.p_duty_ramp = Math.pow(psFrnd(2.0) - 1.0, 3.0);
+  p.p_repeat_speed = 0.5 + psFrnd(0.1);
+  p.p_pha_offset = -0.3 + psFrnd(0.9);
+  p.p_pha_ramp = -psFrnd(0.3);
+  p.p_arp_speed = 0.4 + psFrnd(0.6);
+  p.p_arp_mod = 0.8 + psFrnd(0.1);
+  p.p_lpf_resonance = psFrnd(2.0) - 1.0;
+  p.p_lpf_freq = 1.0 - Math.pow(psFrnd(1.0), 3.0);
+  p.p_lpf_ramp = Math.pow(psFrnd(2.0) - 1.0, 3.0);
+  if (p.p_lpf_freq < 0.1 && p.p_lpf_ramp < -0.05) {
+    p.p_lpf_ramp = -p.p_lpf_ramp;
+  }
+  p.p_hpf_freq = Math.pow(psFrnd(1.0), 5.0);
+  p.p_hpf_ramp = Math.pow(psFrnd(2.0) - 1.0, 5.0);
+  return p;
+}
+
+function psPowerUp() {
+  const p = psParams();
+  p.wave_type = Math.floor(psFrnd(PS_SHAPE_COUNT));
+  if (p.wave_type === PS_NOISE) {
+    p.wave_type = PS_SQUARE;
+  }
+  if (psRnd(1)) {
+    p.p_base_freq = 0.2 + psFrnd(0.3);
+    p.p_freq_ramp = 0.1 + psFrnd(0.4);
+    p.p_repeat_speed = 0.4 + psFrnd(0.4);
+  } else {
+    p.p_base_freq = 0.2 + psFrnd(0.3);
+    p.p_freq_ramp = 0.05 + psFrnd(0.2);
+    if (psRnd(1)) {
+      p.p_vib_strength = psFrnd(0.7);
+      p.p_vib_speed = psFrnd(0.6);
+    }
+  }
+  p.p_env_attack = 0.0;
+  p.p_env_sustain = psFrnd(0.4);
+  p.p_env_decay = 0.1 + psFrnd(0.4);
+  return p;
+}
+
+function psHitHurt() {
+  const p = psParams();
+  p.wave_type = Math.floor(psFrnd(PS_SHAPE_COUNT));
+  p.p_base_freq = 0.2 + psFrnd(0.6);
+  p.p_freq_ramp = -0.3 - psFrnd(0.4);
+  p.p_env_attack = 0.0;
+  p.p_env_sustain = psFrnd(0.1);
+  p.p_env_decay = 0.1 + psFrnd(0.2);
+  if (psRnd(1)) {
+    p.p_hpf_freq = psFrnd(0.3);
+  }
+  return p;
+}
+
+function psJump() {
+  const p = psParams();
+  p.wave_type = Math.floor(psFrnd(PS_SHAPE_COUNT));
+  if (p.wave_type === PS_NOISE) {
+    p.wave_type = PS_SQUARE;
+  }
+  p.p_duty = psFrnd(0.6);
+  p.p_base_freq = 0.3 + psFrnd(0.3);
+  p.p_freq_ramp = 0.1 + psFrnd(0.2);
+  p.p_env_attack = 0.0;
+  p.p_env_sustain = 0.1 + psFrnd(0.3);
+  p.p_env_decay = 0.1 + psFrnd(0.2);
+  if (psRnd(1)) {
+    p.p_hpf_freq = psFrnd(0.3);
+  }
+  if (psRnd(1)) {
+    p.p_lpf_freq = 1.0 - psFrnd(0.6);
+  }
+  return p;
+}
+
+function psBlipSelect() {
+  const p = psParams();
+  p.wave_type = Math.floor(psFrnd(PS_SHAPE_COUNT));
+  if (p.wave_type === PS_NOISE) {
+    p.wave_type = psRnd(1);
+  }
+  if (p.wave_type === PS_SQUARE) {
+    p.p_duty = psFrnd(0.6);
+  }
+  p.p_base_freq = 0.2 + psFrnd(0.4);
+  p.p_env_attack = 0.0;
+  p.p_env_sustain = 0.1 + psFrnd(0.1);
+  p.p_env_decay = psFrnd(0.2);
+  p.p_hpf_freq = 0.1;
+  return p;
+}
+
+function psPushSound() {
+  const p = psParams();
+  p.wave_type = Math.floor(psFrnd(PS_SHAPE_COUNT));
+  if (p.wave_type === PS_SINE) {
+    p.wave_type += 1;
+  }
+  if (p.wave_type === PS_SQUARE) {
+    p.wave_type = PS_NOISE;
+  }
+  p.p_base_freq = 0.1 + psFrnd(0.4);
+  p.p_freq_ramp = 0.05 + psFrnd(0.2);
+  p.p_env_attack = 0.01 + psFrnd(0.09);
+  p.p_env_sustain = 0.01 + psFrnd(0.09);
+  p.p_env_decay = 0.01 + psFrnd(0.09);
+  p.p_repeat_speed = 0.3 + psFrnd(0.5);
+  p.p_pha_offset = -0.3 + psFrnd(0.9);
+  p.p_pha_ramp = -psFrnd(0.3);
+  p.p_arp_speed = 0.6 + psFrnd(0.3);
+  p.p_arp_mod = 0.8 - psFrnd(1.6);
+  return p;
+}
+
+function psRandomSound() {
+  const p = psParams();
+  p.wave_type = Math.floor(psFrnd(PS_SHAPE_COUNT));
+  p.p_base_freq = Math.pow(psFrnd(2.0) - 1.0, 2.0);
+  if (psRnd(1)) {
+    p.p_base_freq = Math.pow(psFrnd(2.0) - 1.0, 3.0) + 0.5;
+  }
+  p.p_freq_limit = 0.0;
+  p.p_freq_ramp = Math.pow(psFrnd(2.0) - 1.0, 5.0);
+  if (p.p_base_freq > 0.7 && p.p_freq_ramp > 0.2) {
+    p.p_freq_ramp = -p.p_freq_ramp;
+  }
+  if (p.p_base_freq < 0.2 && p.p_freq_ramp < -0.05) {
+    p.p_freq_ramp = -p.p_freq_ramp;
+  }
+  p.p_freq_dramp = Math.pow(psFrnd(2.0) - 1.0, 3.0);
+  p.p_duty = psFrnd(2.0) - 1.0;
+  p.p_duty_ramp = Math.pow(psFrnd(2.0) - 1.0, 3.0);
+  p.p_vib_strength = Math.pow(psFrnd(2.0) - 1.0, 3.0);
+  p.p_vib_speed = psFrnd(2.0) - 1.0;
+  p.p_env_attack = Math.pow(psFrnd(2.0) - 1.0, 3.0);
+  p.p_env_sustain = Math.pow(psFrnd(2.0) - 1.0, 2.0);
+  p.p_env_decay = psFrnd(2.0) - 1.0;
+  p.p_env_punch = Math.pow(psFrnd(0.8), 2.0);
+  if (p.p_env_attack + p.p_env_sustain + p.p_env_decay < 0.2) {
+    p.p_env_sustain += 0.2 + psFrnd(0.3);
+    p.p_env_decay += 0.2 + psFrnd(0.3);
+  }
+  p.p_lpf_resonance = psFrnd(2.0) - 1.0;
+  p.p_lpf_freq = 1.0 - Math.pow(psFrnd(1.0), 3.0);
+  p.p_lpf_ramp = Math.pow(psFrnd(2.0) - 1.0, 3.0);
+  if (p.p_lpf_freq < 0.1 && p.p_lpf_ramp < -0.05) {
+    p.p_lpf_ramp = -p.p_lpf_ramp;
+  }
+  p.p_hpf_freq = Math.pow(psFrnd(1.0), 5.0);
+  p.p_hpf_ramp = Math.pow(psFrnd(2.0) - 1.0, 5.0);
+  p.p_pha_offset = Math.pow(psFrnd(2.0) - 1.0, 3.0);
+  p.p_pha_ramp = Math.pow(psFrnd(2.0) - 1.0, 3.0);
+  p.p_repeat_speed = psFrnd(2.0) - 1.0;
+  p.p_arp_speed = psFrnd(2.0) - 1.0;
+  p.p_arp_mod = psFrnd(2.0) - 1.0;
+  return p;
+}
+
+const PS_GENERATORS = [
+  psPickupCoin,
+  psLaserShoot,
+  psExplosion,
+  psPowerUp,
+  psHitHurt,
+  psJump,
+  psBlipSelect,
+  psPushSound,
+  psRandomSound,
+  psBirdSound,
+];
+
+function psRenderBuffer(audioContext, ps) {
+  let repTime;
+  let fperiod;
+  let period;
+  let fmaxperiod;
+  let fslide;
+  let fdslide;
+  let squareDuty;
+  let squareSlide;
+  let arpMod;
+  let arpLimit;
+
+  function repeat() {
+    repTime = 0;
+    fperiod = 100.0 / (ps.p_base_freq * ps.p_base_freq + 0.001);
+    period = Math.floor(fperiod);
+    fmaxperiod = 100.0 / (ps.p_freq_limit * ps.p_freq_limit + 0.001);
+    fslide = 1.0 - Math.pow(ps.p_freq_ramp, 3.0) * 0.01;
+    fdslide = -Math.pow(ps.p_freq_dramp, 3.0) * 0.000001;
+    squareDuty = 0.5 - ps.p_duty * 0.5;
+    squareSlide = -ps.p_duty_ramp * 0.00005;
+    arpMod = ps.p_arp_mod >= 0.0
+      ? 1.0 - Math.pow(ps.p_arp_mod, 2.0) * 0.9
+      : 1.0 + Math.pow(ps.p_arp_mod, 2.0) * 10.0;
+    arpLimit = Math.floor(Math.pow(1.0 - ps.p_arp_speed, 2.0) * 20000 + 32);
+    if (ps.p_arp_speed === 1.0) {
+      arpLimit = 0;
+    }
+  }
+
+  repeat();
+
+  let fltp = 0.0;
+  let fltdp = 0.0;
+  let fltw = Math.pow(ps.p_lpf_freq, 3.0) * 0.1;
+  const fltwD = 1.0 + ps.p_lpf_ramp * 0.0001;
+  let fltdmp = 5.0 / (1.0 + Math.pow(ps.p_lpf_resonance, 2.0) * 20.0) * (0.01 + fltw);
+  if (fltdmp > 0.8) {
+    fltdmp = 0.8;
+  }
+  let fltphp = 0.0;
+  let flthp = Math.pow(ps.p_hpf_freq, 2.0) * 0.1;
+  const flthpD = 1.0 + ps.p_hpf_ramp * 0.0003;
+  let vibPhase = 0.0;
+  const vibSpeed = Math.pow(ps.p_vib_speed, 2.0) * 0.01;
+  const vibAmp = ps.p_vib_strength * 0.5;
+  let envStage = 0;
+  let envTime = 0;
+  const envLength = [
+    Math.floor(ps.p_env_attack * ps.p_env_attack * 100000.0),
+    Math.floor(ps.p_env_sustain * ps.p_env_sustain * 100000.0),
+    Math.floor(ps.p_env_decay * ps.p_env_decay * 100000.0),
+  ];
+  const envTotalLength = Math.max(1, envLength[0] + envLength[1] + envLength[2]);
+  let fphase = Math.pow(ps.p_pha_offset, 2.0) * 1020.0;
+  if (ps.p_pha_offset < 0.0) {
+    fphase = -fphase;
+  }
+  let fdphase = Math.pow(ps.p_pha_ramp, 2.0);
+  if (ps.p_pha_ramp < 0.0) {
+    fdphase = -fdphase;
+  }
+  let iphase = Math.abs(Math.floor(fphase));
+  let ipp = 0;
+  const phaserBuffer = new Array(1024).fill(0.0);
+  const noiseBuffer = Array.from({ length: 32 }, () => Math.random() * 2.0 - 1.0);
+  let repLimit = Math.floor(Math.pow(1.0 - ps.p_repeat_speed, 2.0) * 20000 + 32);
+  if (ps.p_repeat_speed === 0.0) {
+    repLimit = 0;
+  }
+  const gain = Math.exp(ps.sound_vol) - 1;
+  let sampleSum = 0;
+  let numSummed = 0;
+  const summands = Math.max(1, Math.floor(44100 / ps.sample_rate));
+  const outputRate = ps.sample_rate < PS_SFX_MIN_SAMPLE_RATE ? PS_SFX_MIN_SAMPLE_RATE : ps.sample_rate;
+  const expansion = ps.sample_rate < PS_SFX_MIN_SAMPLE_RATE ? Math.ceil(outputRate / ps.sample_rate) : 1;
+  const bufferLength = Math.ceil(envTotalLength / summands) * expansion + expansion + 8;
+  const audioBuffer = audioContext.createBuffer(1, bufferLength, outputRate);
+  const buffer = audioBuffer.getChannelData(0);
+  let bufferIndex = 0;
+  let phase = 0;
+
+  for (let t = 0; bufferIndex < buffer.length; t += 1) {
+    if (repLimit !== 0 && ++repTime >= repLimit) {
+      repeat();
+    }
+    if (arpLimit !== 0 && t >= arpLimit) {
+      arpLimit = 0;
+      fperiod *= arpMod;
+    }
+    fslide += fdslide;
+    fperiod *= fslide;
+    if (fperiod > fmaxperiod) {
+      fperiod = fmaxperiod;
+      if (ps.p_freq_limit > 0.0) {
+        break;
+      }
+    }
+    let rfperiod = fperiod;
+    if (vibAmp > 0.0) {
+      vibPhase += vibSpeed;
+      rfperiod = fperiod * (1.0 + Math.sin(vibPhase) * vibAmp);
+    }
+    period = Math.max(8, Math.floor(rfperiod));
+    squareDuty = Math.max(0.0, Math.min(0.5, squareDuty + squareSlide));
+    envTime += 1;
+    if (envTime > envLength[envStage]) {
+      envTime = 1;
+      envStage += 1;
+      while (envStage < 3 && envLength[envStage] === 0) {
+        envStage += 1;
+      }
+      if (envStage === 3) {
+        break;
+      }
+    }
+    const envVol = envStage === 0
+      ? envTime / Math.max(1, envLength[0])
+      : envStage === 1
+        ? 1.0 + Math.pow(1.0 - envTime / Math.max(1, envLength[1]), 1.0) * 2.0 * ps.p_env_punch
+        : 1.0 - envTime / Math.max(1, envLength[2]);
+    fphase += fdphase;
+    iphase = Math.min(1023, Math.abs(Math.floor(fphase)));
+    if (flthpD !== 0.0) {
+      flthp = Math.max(0.00001, Math.min(0.1, flthp * flthpD));
+    }
+
+    let sample = 0.0;
+    for (let si = 0; si < 8; si += 1) {
+      let subSample = 0.0;
+      phase += 1;
+      if (phase >= period) {
+        phase %= period;
+        if (ps.wave_type === PS_NOISE) {
+          for (let i = 0; i < 32; i += 1) {
+            noiseBuffer[i] = Math.random() * 2.0 - 1.0;
+          }
+        }
+      }
+      const fp = phase / period;
+      if (ps.wave_type === PS_SQUARE) {
+        subSample = fp < squareDuty ? 0.5 : -0.5;
+      } else if (ps.wave_type === PS_SAWTOOTH) {
+        subSample = 1.0 - fp * 2;
+      } else if (ps.wave_type === PS_SINE) {
+        subSample = Math.sin(fp * 2 * Math.PI);
+      } else if (ps.wave_type === PS_NOISE) {
+        subSample = noiseBuffer[Math.floor(phase * 32 / period)];
+      } else if (ps.wave_type === PS_TRIANGLE) {
+        subSample = Math.abs(1 - fp * 2) - 1;
+      } else if (ps.wave_type === PS_BREAKER) {
+        subSample = Math.abs(1 - fp * fp * 2) - 1;
+      }
+      const previousFltp = fltp;
+      fltw = Math.max(0.0, Math.min(0.1, fltw * fltwD));
+      if (ps.p_lpf_freq !== 1.0) {
+        fltdp += (subSample - fltp) * fltw;
+        fltdp -= fltdp * fltdmp;
+      } else {
+        fltp = subSample;
+        fltdp = 0.0;
+      }
+      fltp += fltdp;
+      fltphp += fltp - previousFltp;
+      fltphp -= fltphp * flthp;
+      subSample = fltphp;
+      phaserBuffer[ipp & 1023] = subSample;
+      subSample += phaserBuffer[(ipp - iphase + 1024) & 1023];
+      ipp = (ipp + 1) & 1023;
+      sample += subSample * envVol;
+    }
+    sampleSum += sample;
+    if (++numSummed < summands) {
+      continue;
+    }
+    numSummed = 0;
+    const value = (sampleSum / summands / 8) * gain;
+    sampleSum = 0;
+    for (let i = 0; i < expansion && bufferIndex < buffer.length; i += 1) {
+      buffer[bufferIndex] = value;
+      bufferIndex += 1;
+    }
+  }
+
+  return audioBuffer;
+}
+
+class PsRng {
+  constructor(seed) {
+    this.state = new PsRc4(JSON.stringify(seed));
+  }
+
+  uniform() {
+    const bytes = 7;
+    let output = 0;
+    for (let i = 0; i < bytes; i += 1) {
+      output *= 256;
+      output += this.state.next();
+    }
+    return output / (Math.pow(2, bytes * 8) - 1);
+  }
+}
+
+class PsRc4 {
+  constructor(seed) {
+    this.s = Array.from({ length: 256 }, (_, index) => index);
+    this.i = 0;
+    this.j = 0;
+    this.mix(seed);
+  }
+
+  mix(seed) {
+    const input = psStringBytes(seed);
+    let j = 0;
+    for (let i = 0; i < this.s.length; i += 1) {
+      j = (j + this.s[i] + input[i % input.length]) % 256;
+      this.swap(i, j);
+    }
+  }
+
+  next() {
+    this.i = (this.i + 1) % 256;
+    this.j = (this.j + this.s[this.i]) % 256;
+    this.swap(this.i, this.j);
+    return this.s[(this.s[this.i] + this.s[this.j]) % 256];
+  }
+
+  swap(i, j) {
+    const tmp = this.s[i];
+    this.s[i] = this.s[j];
+    this.s[j] = tmp;
+  }
+}
+
+function psStringBytes(value) {
+  const output = [];
+  for (let i = 0; i < value.length; i += 1) {
+    let code = value.charCodeAt(i);
+    const bytes = [];
+    do {
+      bytes.push(code & 0xff);
+      code >>= 8;
+    } while (code > 0);
+    output.push(...bytes.reverse());
+  }
+  return output.length ? output : [0];
+}
+
 
 const TYPE_CONFIG = {
   wild: { duration: 0.5, label: "Wild", baseFrequency: [60, 1400], shape: "freeform" },

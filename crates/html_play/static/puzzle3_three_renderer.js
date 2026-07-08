@@ -631,9 +631,9 @@ function animationForObjectAtPosition(frame, object, position) {
   return (frame.animationEvents || []).find((event) =>
     event.kind === "move"
     && Number(event.objectId) === objectId
-    && Number(event.toX) === Number(position?.x)
-    && Number(event.toY) === Number(position?.y)
-    && Number(event.toZ ?? 0) === Number(position?.z ?? 0)
+    && Number(event.to?.x) === Number(position?.x)
+    && Number(event.to?.y) === Number(position?.y)
+    && Number(event.to?.z) === Number(position?.z)
   ) || null;
 }
 
@@ -644,9 +644,9 @@ function animationOffset3(frame, animation) {
   const progress = Math.min(1, Math.max(0, Number(frame.animationProgress) || 0));
   const remaining = 1 - progress;
   return {
-    x: (Number(animation.fromX) - Number(animation.toX)) * remaining,
-    y: (Number(animation.fromZ ?? 0) - Number(animation.toZ ?? 0)) * remaining,
-    z: -(Number(animation.fromY) - Number(animation.toY)) * remaining,
+    x: (Number(animation.from?.x) - Number(animation.to?.x)) * remaining,
+    y: (Number(animation.from?.z) - Number(animation.to?.z)) * remaining,
+    z: -(Number(animation.from?.y) - Number(animation.to?.y)) * remaining,
   };
 }
 

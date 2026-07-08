@@ -1008,6 +1008,11 @@ pub enum SceneExpr {
     Int(i64),
     Text(String),
     Path(Vec<String>),
+    LevelSelector {
+        collection: String,
+        key: SceneLevelKey,
+        property: Option<String>,
+    },
     Call {
         name: String,
         args: Vec<SceneExpr>,
@@ -1024,10 +1029,18 @@ pub enum SceneExpr {
     },
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum SceneLevelKey {
+    Index(i64),
+    Id(String),
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SceneBinaryOp {
     And,
     Eq,
+    In,
     NotEq,
 }
 
@@ -1396,6 +1409,32 @@ pub fn write_scene_expr_json(out: &mut String, expr: &SceneExpr) {
             write_json_string(out, &path.join("."));
             out.push_str(" }");
         }
+        SceneExpr::LevelSelector {
+            collection,
+            key,
+            property,
+        } => {
+            out.push_str("{ \"kind\": \"level_selector\", \"collection\": ");
+            write_json_string(out, collection);
+            out.push_str(", \"key\": ");
+            match key {
+                SceneLevelKey::Index(index) => {
+                    out.push_str("{ \"kind\": \"index\", \"value\": ");
+                    out.push_str(&index.to_string());
+                    out.push_str(" }");
+                }
+                SceneLevelKey::Id(id) => {
+                    out.push_str("{ \"kind\": \"id\", \"value\": ");
+                    write_json_string(out, id);
+                    out.push_str(" }");
+                }
+            }
+            if let Some(property) = property {
+                out.push_str(", \"property\": ");
+                write_json_string(out, property);
+            }
+            out.push_str(" }");
+        }
         SceneExpr::Call { name, args } => {
             out.push_str("{ \"kind\": \"call\", \"name\": ");
             write_json_string(out, name);
@@ -1412,6 +1451,7 @@ pub fn write_scene_expr_json(out: &mut String, expr: &SceneExpr) {
             let op = match op {
                 SceneBinaryOp::And => "and",
                 SceneBinaryOp::Eq => "eq",
+                SceneBinaryOp::In => "in",
                 SceneBinaryOp::NotEq => "neq",
             };
             out.push_str("{ \"kind\": \"binary\", \"op\": ");

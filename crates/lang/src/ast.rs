@@ -189,6 +189,8 @@ pub(crate) struct ConditionDefinitionAst {
     pub(crate) kind: ConditionValueAst,
 }
 
+pub(crate) type QueryDefinitionAst = crate::solver_surface::SolverSurfaceQueryDefinition;
+
 #[derive(Clone, Debug)]
 pub(crate) enum ConditionValueAst {
     CountObjects(Vec<ObjectId>),
@@ -204,6 +206,8 @@ pub(crate) struct ConditionPatternAst {
     pub(crate) orientation: OrientationExpr,
     pub(crate) pattern: PatternBlock,
 }
+
+pub(crate) type SolverStrategyAst = crate::solver_surface::SolverSurfaceStrategy;
 
 #[derive(Clone, Debug)]
 pub(crate) struct OrientedRewriteAst {

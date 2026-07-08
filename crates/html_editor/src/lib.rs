@@ -149,8 +149,8 @@ const EDITOR_STATIC_RENDERER_JS: &str = include_str!("../static/renderer.js");
 #[cfg(feature = "embedded-assets")]
 const PAGES_EXAMPLE_PUZZLE_PATH: &str = "examples/puzzlestudio-example.puzzle";
 #[cfg(feature = "embedded-assets")]
-const PAGES_EXAMPLE_PUZZLE_SOURCE: &str = r#"title "PuzzleStudio Example"
-subtitle "Push the box onto the goal"
+const PAGES_EXAMPLE_PUZZLE_SOURCE: &str = r#"title = "PuzzleStudio Example"
+subtitle = "Push the box onto the goal"
 
 puzzle sokoban {
 layers {
@@ -2479,7 +2479,9 @@ fn sound_tools_js() -> String {
             &[
                 "SFX_TYPE_OPTIONS",
                 "createSfxPlayer",
+                "createPuzzleScriptSfxPlayer",
                 "generateSoundEffect",
+                "generatePuzzleScriptSoundEffect",
                 "randomSfxPreset",
             ]
         ),
@@ -3019,7 +3021,7 @@ mod tests {
 
     fn editor_fixture_source(title: &str) -> String {
         format!(
-            r#"title "{title}"
+            r#"title = "{title}"
 
 puzzle default {{
 layers {{
@@ -3226,7 +3228,7 @@ step board
     #[test]
     fn open_defers_editor_visuals_generation_failure_until_compile() {
         let workspace = TestWorkspace::new();
-        let game_path = workspace.write("games/broken_visuals/game.puzzle", "title \"Broken\"\n");
+        let game_path = workspace.write("games/broken_visuals/game.puzzle", "title = \"Broken\"\n");
 
         let service =
             EditorService::open(&game_path).expect("open editor with invalid preview source");
@@ -3240,7 +3242,7 @@ step board
         assert!(
             service
                 .compile_preview(&PreviewRequest::new(
-                    "title \"Broken\"\n",
+                    "title = \"Broken\"\n",
                     game_path.display().to_string(),
                     String::new(),
                 ))
@@ -3350,8 +3352,8 @@ step board
         let loaded_source = json_string_field(&loaded_json, "source").expect("loaded source field");
 
         assert!(source.is_empty());
-        assert!(loaded_source.contains("title \"Changed Title\""));
-        assert!(!loaded_source.contains("title \"Original Title\""));
+        assert!(loaded_source.contains("title = \"Changed Title\""));
+        assert!(!loaded_source.contains("title = \"Original Title\""));
     }
 
     #[test]
@@ -3491,7 +3493,7 @@ step board
         let workspace = TestWorkspace::new();
         let game_path = workspace.write(
             "games/broken/game.puzzle",
-            "title \"Broken\"\n\npuzzle main {\n",
+            "title = \"Broken\"\n\npuzzle main {\n",
         );
 
         let service = EditorService::open(&game_path).expect("open broken editor fixture");
@@ -3628,7 +3630,7 @@ step board
         let workspace = TestWorkspace::new();
         let themed_source = editor_fixture_source("Themed Preview").replace(
             "puzzle default {",
-            "theme puzzlescript {\nbackground_color #ffffff\ntext_color #000000\n}\n\npuzzle default {",
+            "theme puzzlescript {\nbackground_color = #ffffff\ntext_color = #000000\n}\n\npuzzle default {",
         );
         let game_path = workspace.write("games/themed_preview/game.puzzle", &themed_source);
         let service = EditorService::open(&game_path).expect("open themed editor fixture");
@@ -3650,7 +3652,7 @@ step board
     fn compile_preview_accepts_display_object_single_color_sprite() {
         let workspace = TestWorkspace::new();
         let source = r##"
-title display_object_single_color_preview
+title = display_object_single_color_preview
 
 puzzle default {
 layers {
@@ -3691,7 +3693,7 @@ level "start"
     fn compile_preview_accepts_line_style_tagged_sprite_after_pattern() {
         let workspace = TestWorkspace::new();
         let source = r##"
-title line_style_tagged_preview
+title = line_style_tagged_preview
 
 puzzle default {
 tags {
@@ -3740,7 +3742,7 @@ B
     fn compile_preview_preserves_language_diagnostics() {
         let workspace = TestWorkspace::new();
         let source = r#"
-title "Multi Error Probe"
+title = "Multi Error Probe"
 
 puzzle main {
 layers {
@@ -3807,7 +3809,7 @@ level "first"
     fn compile_preview_reports_independent_lifecycle_diagnostics_together() {
         let workspace = TestWorkspace::new();
         let source = r#"
-title "Multi Lifecycle Error Probe"
+title = "Multi Lifecycle Error Probe"
 
 puzzle main {
 layers {
@@ -3894,7 +3896,7 @@ P.
     fn compile_preview_reports_independent_statement_parse_errors_together() {
         let workspace = TestWorkspace::new();
         let source = r#"
-title "Multi Statement Parse Error Probe"
+title = "Multi Statement Parse Error Probe"
 
 puzzle main {
 layers {
@@ -3955,7 +3957,7 @@ P
     fn compile_preview_reports_sibling_statement_block_errors_together() {
         let workspace = TestWorkspace::new();
         let source = r#"
-title "Sibling Statement Block Error Probe"
+title = "Sibling Statement Block Error Probe"
 
 puzzle main {
 layers {
@@ -4045,7 +4047,7 @@ P
     fn compile_preview_accepts_3d_input_rule_without_orientation_set() {
         let workspace = TestWorkspace::new();
         let source = r#"
-title "Bare 3D Input"
+title = "Bare 3D Input"
 
 puzzle3 push3 {
   layers {
@@ -4446,6 +4448,10 @@ levels3 demo of push3 {
         assert!(
             EDITOR_IMPORT_EXPORT_JS.contains("function schedulePuzzleScriptImportConversion()")
         );
+        assert!(EDITOR_IMPORT_EXPORT_JS.contains("function puzzleScriptSourceTitle(source)"));
+        assert!(EDITOR_IMPORT_EXPORT_JS.contains("function puzzleStudioMetadataTitle(canonical)"));
+        assert!(EDITOR_IMPORT_EXPORT_JS.contains(r#"/^title\s*=\s*(.+)$/"#));
+        assert!(!EDITOR_IMPORT_EXPORT_JS.contains(r#".replace(/^title\s*/, "")"#));
         assert!(EDITOR_IMPORT_EXPORT_JS.contains("convertPuzzleScriptImport(generation)"));
         assert!(EDITOR_IMPORT_EXPORT_JS.contains("window.PuzzleStudioImportExport = {"));
         assert!(EDITOR_IMPORT_EXPORT_JS.contains("schedulePuzzleScriptImportConversion,"));
@@ -4585,6 +4591,11 @@ levels3 demo of push3 {
 
     #[test]
     fn level_editor_controls_are_ordered_before_palette_and_preview() {
+        assert!(!EDITOR_HTML.contains("<span>Levels</span>"));
+        assert!(EDITOR_HTML.contains(r#"id="levelNamespaceInput" type="hidden""#));
+        assert!(EDITOR_HTML.contains(r#"id="level3dBundleInput" type="hidden""#));
+        assert!(EDITOR_CSS.contains("grid-template-columns: minmax(120px, 1fr);"));
+
         let level_name = EDITOR_HTML.find(r#"id="levelNameInput""#).unwrap();
         let play = EDITOR_HTML.find(r#"id="levelPlaytestButton""#).unwrap();
         let expand = EDITOR_HTML.find(r#"id="levelExpandButton""#).unwrap();
@@ -4635,6 +4646,12 @@ levels3 demo of push3 {
         assert!(EDITOR_JS.contains(r#"return "undo";"#));
         assert!(EDITOR_JS.contains(r#"return "redo";"#));
         assert!(EDITOR_JS.contains(r#"return "restart";"#));
+        assert!(EDITOR_JS.contains("function levelPlaytestInputForKey(event"));
+        assert!(EDITOR_JS.contains("const inputs = latestPreviewState?.inputs?.length"));
+        assert!(EDITOR_JS.contains(": exportData?.inputs || [];"));
+        assert!(EDITOR_JS.contains(
+            "const command = levelPlaytestCommandForKey(event) || levelPlaytestInputForKey(event);"
+        ));
         assert!(EDITOR_JS.contains(r#"postMessage({ type: "PuzzleStudioCommand", command }"#));
         assert!(EDITOR_JS.contains(r#"type: "PuzzleStudioKey","#));
         assert!(EDITOR_JS.contains("code: event.code"));
@@ -4818,14 +4835,14 @@ levels3 demo of push3 {
             "if (!loadLevelFromSourceEntry(source, sourceEntry, { levelIndex, levelName }))"
         ));
         assert!(EDITOR_JS.contains(
-            "function levelSourceData(source = levelReferenceSource(currentLevelExportData()), exportData = currentLevelExportData())"
+            "function levelSourceData(source = currentLevelAuthoringSource(), exportData = currentLevelExportData())"
         ));
     }
 
     #[test]
     fn level_source_previews_do_not_indent_map_rows() {
         assert!(EDITOR_JS.contains(
-            "levelDefinitionSource(levelName, levelSourceData(), \"\", { leadingBlank: false, bodyIndent: \"\" })"
+            "levelDefinitionSource(levelName, levelSourceData(currentLevelAuthoringSource()), \"\", { leadingBlank: false, bodyIndent: \"\" })"
         ));
         assert!(EDITOR_SOURCE_JS.contains("function sourcePuzzleLevelHeaderSource("));
         assert!(EDITOR_JS.contains("sourcePuzzleLevelHeaderSource(levelName, levelIndent"));
@@ -4954,6 +4971,24 @@ levels3 demo of push3 {
     }
 
     #[test]
+    fn level_editor_palette_can_add_common_legend_entries() {
+        assert!(EDITOR_JS.contains("addPaletteOpen: false"));
+        assert!(EDITOR_JS.contains("function renderLevelAddLegendButton()"));
+        assert!(EDITOR_JS.contains("function levelPaletteAddCandidates("));
+        assert!(EDITOR_JS.contains("function addLevelPaletteObjectToLegend(object)"));
+        assert!(EDITOR_JS.contains("function insertCommonLegendEntry(source, entry)"));
+        assert!(EDITOR_JS.contains("levelPalette.append(renderLevelAddLegendButton());"));
+        assert!(EDITOR_JS.contains("sourcePlaceableObjectNames(source, exportData)"));
+        assert!(EDITOR_JS.contains("!String(object.name || \"\").startsWith(\"@\")"));
+        assert!(EDITOR_JS.contains("function legendBlockInsertionIndent("));
+        assert!(EDITOR_JS.contains("return lineIndent(lines[index].raw);"));
+        assert!(EDITOR_JS.contains("schedulePreview();"));
+        assert!(EDITOR_JS.contains("No editable puzzle source for tile legend"));
+        assert!(EDITOR_CSS.contains(".level-palette-add-menu"));
+        assert!(EDITOR_CSS.contains(".level-palette-add-menu-item"));
+    }
+
+    #[test]
     fn editor_compile_log_splits_plain_multiline_errors() {
         assert!(EDITOR_JS.contains("function appendPlainCompileError("));
         assert!(EDITOR_JS.contains("function plainCompileErrorMessages("));
@@ -4999,10 +5034,23 @@ levels3 demo of push3 {
         assert!(EDITOR_HTML.contains(r#"id="solverTaskSummary""#));
         assert!(EDITOR_DOM_JS.contains("const solverTaskSummary = document.querySelector"));
         assert!(EDITOR_HTML.contains(r#"id="solverLevelSelect""#));
+        assert!(
+            EDITOR_HTML
+                .contains(r#"class="solver-target-readout" aria-label="Current solve target""#)
+        );
+        assert!(EDITOR_HTML.contains(r#"id="solverTargetName""#));
+        assert!(EDITOR_HTML.contains(r#"id="solverTargetContext""#));
+        assert!(EDITOR_HTML.contains(r#"<span>Load level</span>"#));
+        assert!(EDITOR_HTML.contains(r#"aria-label="Load level""#));
         assert!(EDITOR_DOM_JS.contains("const solverLevelSelect = document.querySelector"));
+        assert!(EDITOR_DOM_JS.contains("const solverTargetName = document.querySelector"));
+        assert!(EDITOR_DOM_JS.contains("const solverTargetContext = document.querySelector"));
         assert!(EDITOR_CSS.contains(".solver-level-select"));
+        assert!(EDITOR_CSS.contains(".solver-target-readout"));
+        assert!(EDITOR_CSS.contains(".solver-load-control"));
         assert!(EDITOR_JS.contains("let activeSolverTask = null;"));
         assert!(EDITOR_JS.contains("let solverSelectedLevelIndex = null;"));
+        assert!(EDITOR_JS.contains("let activeSolverDisplaySceneRequestKey = \"\";"));
         assert!(EDITOR_JS.contains("let completedSolverTaskKey = \"\";"));
         assert!(!EDITOR_JS.contains("let solverLevelIndex = 0;"));
         assert!(!EDITOR_JS.contains("solverStateOverride"));
@@ -5017,7 +5065,37 @@ levels3 demo of push3 {
         assert!(EDITOR_JS.contains("function isSolverTaskComplete("));
         assert!(EDITOR_JS.contains("function markActiveSolverTaskComplete("));
         assert!(EDITOR_JS.contains("function refreshVisiblePreviewSolverTask("));
-        assert!(EDITOR_JS.contains("producer === \"preview-level\") {\n    return \"Level\";"));
+        assert!(EDITOR_JS.contains("const solverObservationLiveIntervalMs = 500;"));
+        assert!(EDITOR_JS.contains("progressIntervalMs: solverObservationLiveIntervalMs,"));
+        assert!(EDITOR_JS.contains("throw new Error(\"Solver progress interval is invalid\");"));
+        assert!(EDITOR_JS.contains("function previewStateMatchesSolverTask("));
+        assert!(EDITOR_JS.contains("function applyPreviewSceneToActiveSolverTask("));
+        assert!(EDITOR_JS.contains("activeSolverTask.scene = cloneJson(previewState.scene);"));
+        assert!(EDITOR_JS.contains("function refreshActiveSolverTaskDisplayScene("));
+        assert!(EDITOR_JS.contains("solverTaskInitialDisplayState(JSON.stringify(request))"));
+        assert!(EDITOR_JS.contains("Solver display failed:"));
+        assert!(EDITOR_JS.contains("return null;"));
+        assert!(!EDITOR_JS.contains("scene: previewSceneForLevel(targetIndex, exportData)"));
+        assert!(EDITOR_JS.contains("requestFocusedPreviewState();"));
+        assert!(EDITOR_JS.contains("return \"Loaded level\";"));
+        assert!(EDITOR_JS.contains("return \"Current board\";"));
+        assert!(EDITOR_JS.contains("function solverTaskLevelLabel("));
+        assert!(EDITOR_JS.contains("solverTargetName.textContent = solverTaskLevelLabel();"));
+        assert!(EDITOR_JS.contains(
+            "solverTargetContext.textContent = activeSolverTask ? solverTaskProducerLabel(activeSolverTask.producer) : \"\";"
+        ));
+        assert!(EDITOR_JS.contains("return level?.name || `Level ${index + 1}`;"));
+        assert!(EDITOR_JS.contains(
+            "placeholder.textContent = levels.length ? \"Load...\" : \"No level to solve\";"
+        ));
+        assert!(EDITOR_JS.contains("solverLevelSelect.value = \"\";"));
+        assert!(
+            !EDITOR_JS.contains("solverLevelSelect.value = levels.length ? selectedValue : \"\";")
+        );
+        assert!(EDITOR_JS.contains("solverTaskSummary.hidden = true;"));
+        assert!(!EDITOR_JS.contains("Edited level"));
+        assert!(!EDITOR_JS.contains("active-task"));
+        assert!(EDITOR_CSS.contains(".solver-task-summary[hidden]"));
         assert!(!EDITOR_JS.contains("return \"Preview state\";"));
         assert!(!EDITOR_JS.contains("const state = task.state?.kind || \"state\";"));
         assert!(!EDITOR_JS.contains("return `${producer}: ${level} (${state})`;"));
@@ -5026,7 +5104,11 @@ levels3 demo of push3 {
         assert!(EDITOR_JS.contains("function syncSolverLevelSelector("));
         assert!(EDITOR_JS.contains("function selectSolverLevel("));
         assert!(EDITOR_JS.contains("solverSelectedLevelIndex = levelIndex;"));
-        assert!(EDITOR_JS.contains("const task = createPreviewSolverTask(exportData, levelIndex);"));
+        assert!(!EDITOR_JS.contains("const levelIndex = setActiveLevelIndex(index, exportData);"));
+        assert!(
+            EDITOR_JS.contains("const task = createPreviewSolverTask(exportData, levelIndex);")
+        );
+        assert!(EDITOR_JS.contains("if (solverLevelSelect.value === \"\")"));
         assert!(EDITOR_JS.contains("solverLevelSelect?.addEventListener(\"change\""));
         assert!(!EDITOR_JS.contains("function createPreviewSolverTarget("));
         assert!(!EDITOR_JS.contains("function createEditorSolverTarget("));
@@ -5076,11 +5158,9 @@ levels3 demo of push3 {
         assert!(EDITOR_JS.contains("const solutionJson = solve(JSON.stringify(data.request),"));
         assert!(EDITOR_JS.contains("function solverRequestForTask(task)"));
         assert!(EDITOR_JS.contains("if (isSolverTaskComplete(task))"));
-        assert!(
-            EDITOR_JS.contains(
-                "setLevelSolveStatus(\"This level has already been solved\", \"is-error\");"
-            )
-        );
+        assert!(EDITOR_JS.contains(
+            "setLevelSolveStatus(\"This level has already been solved\", \"is-error\");"
+        ));
         assert!(EDITOR_JS.contains("markActiveSolverTaskComplete();"));
         assert!(EDITOR_JS.contains("button.disabled = taskComplete;"));
         assert!(!EDITOR_JS.contains("function solverRequestForTarget(target)"));
@@ -5095,7 +5175,7 @@ levels3 demo of push3 {
         assert!(
             EDITOR_JS.contains("return currentPreviewMode === \"edit\" && levelPlaytestActive;")
         );
-        assert!(!EDITOR_JS.contains("requestFocusedPreviewState();"));
+        assert!(EDITOR_JS.contains("requestFocusedPreviewState();"));
         assert!(
             !EDITOR_JS.contains("syncPreviewStateFromLevel();\n  try {\n    worker.postMessage")
         );
@@ -5110,31 +5190,92 @@ levels3 demo of push3 {
     #[test]
     fn preview_solve_uses_runtime_current_level() {
         assert!(EDITOR_JS.contains("function previewSolverTaskLevelIndex("));
-        assert!(
-            EDITOR_JS.contains(
-                "return normalizedLevelIndex(solverSelectedLevelIndex, exportData);"
-            )
-        );
-        assert!(
-            EDITOR_JS.contains(
-                "const levelIndex = previewSolverTaskLevelIndex(exportData);"
-            )
-        );
-        assert!(
-            EDITOR_JS.contains("latestPreviewState?.screenHasPuzzle !== false")
-        );
-        assert!(
-            EDITOR_JS.contains("Number.isInteger(Number(latestPreviewState?.levelIndex))")
-        );
+        assert!(EDITOR_JS.contains("const levelIndex = previewSolverTaskLevelIndex(exportData);"));
+        assert!(EDITOR_JS.contains("latestPreviewState?.screenHasPuzzle !== false"));
+        assert!(EDITOR_JS.contains("Number.isInteger(Number(latestPreviewState?.levelIndex))"));
         assert!(
             EDITOR_JS.contains(
                 "return normalizedLevelIndex(Math.trunc(Number(latestPreviewState.levelIndex)), exportData);"
             )
         );
         assert!(
-            EDITOR_JS.contains("setLevelSolveStatus(\"No current preview level\", \"is-error\");")
+            EDITOR_JS
+                .contains("return normalizedLevelIndex(solverSelectedLevelIndex, exportData);")
         );
-        assert!(!EDITOR_JS.contains("return currentEditableLevelIndex(exportData);"));
+        assert!(EDITOR_JS.contains("return currentEditableLevelIndex(exportData);"));
+        let resolver = EDITOR_JS
+            .split("function previewSolverTaskLevelIndex(")
+            .nth(1)
+            .expect("preview solver level resolver");
+        let runtime_level = resolver
+            .find("latestPreviewState?.levelIndex")
+            .expect("runtime level branch");
+        let selected_level = resolver
+            .find("solverSelectedLevelIndex")
+            .expect("selected level branch");
+        let active_level = resolver
+            .find("currentEditableLevelIndex")
+            .expect("editor active level branch");
+        assert!(runtime_level < selected_level);
+        assert!(selected_level < active_level);
+    }
+
+    #[test]
+    fn preview_edit_opens_runtime_current_level() {
+        assert!(EDITOR_HTML.contains(r#"id="previewEditButton""#));
+        assert!(EDITOR_HTML.contains("lucide-pencil"));
+        assert!(EDITOR_DOM_JS.contains("const previewEditButton = document.querySelector"));
+        assert!(EDITOR_JS.contains("function currentPreviewRuntimeLevelIndex("));
+        assert!(EDITOR_JS.contains("function currentLevel3dSourceLocationForIndex("));
+        assert!(EDITOR_JS.contains("function openLevelPaneForCurrentPreviewLevel("));
+        assert!(
+            EDITOR_JS.contains("const levelIndex = currentPreviewRuntimeLevelIndex(exportData);")
+        );
+        assert!(EDITOR_JS.contains("setActiveLevelIndex(levelIndex, exportData);"));
+        assert!(EDITOR_JS.contains("currentLevel3dSourceLocationForIndex(levelIndex, exportData)"));
+        assert!(EDITOR_JS.contains("currentLevelSourceLocation();"));
+        assert!(EDITOR_JS.contains("kind: targetMode === \"level3d\" ? \"level3d\" : \"level\","));
+        assert!(EDITOR_JS.contains("previewEditButton?.addEventListener(\"click\""));
+        assert!(EDITOR_JS.contains("openLevelPaneForCurrentPreviewLevel();"));
+        assert!(EDITOR_JS.contains("requestFocusedPreviewState();"));
+    }
+
+    #[test]
+    fn preview_debug_mode_uses_lucide_icon_and_runtime_trace_contract() {
+        assert!(!EDITOR_HTML.contains(r#"id="previewDebugToolbar""#));
+        assert!(EDITOR_HTML.contains(r#"id="previewDebugToggleButton""#));
+        assert!(EDITOR_HTML.contains(r#"aria-label="Toggle debug mode""#));
+        assert!(
+            EDITOR_HTML.contains(r#"class="pane-header-icon-button preview-debug-toggle-button""#)
+        );
+        assert!(EDITOR_HTML.contains("lucide lucide-bug-icon lucide-bug"));
+        assert!(
+            EDITOR_HTML
+                .contains(r#"id="previewDebugControls" class="preview-debug-controls" hidden"#)
+        );
+        assert!(EDITOR_HTML.contains(r#"id="previewDebugPrevButton""#));
+        assert!(EDITOR_HTML.contains(r#"id="previewDebugNextButton""#));
+        assert!(EDITOR_HTML.contains(r#"id="previewDebugLatestButton""#));
+        assert!(EDITOR_HTML.contains(r#"id="previewLogTitle""#));
+        assert!(EDITOR_DOM_JS.contains("const previewDebugToggleButton = document.querySelector"));
+        assert!(EDITOR_DOM_JS.contains("const previewDebugControls = document.querySelector"));
+        assert!(EDITOR_JS.contains("let previewDebugEnabled = false;"));
+        assert!(EDITOR_JS.contains("function setPreviewDebugEnabled(enabled)"));
+        assert!(EDITOR_JS.contains("function handlePreviewDebugTrace(debug)"));
+        assert!(EDITOR_JS.contains("type: \"PuzzleStudioSetPreviewDebugMode\""));
+        assert!(EDITOR_JS.contains("event.data?.type === \"PuzzleStudioPreviewDebugTrace\""));
+        assert!(EDITOR_JS.contains("previewDebugToggleButton?.addEventListener(\"click\""));
+        assert!(EDITOR_JS.contains("previewDebugControls.hidden = !previewDebugEnabled;"));
+        assert!(
+            !EDITOR_JS.contains("previewDebugEnabled && previewFrameHasCurrentCompiledPreview")
+        );
+        assert!(EDITOR_JS.contains(
+            "previewLogTitle.textContent = previewDebugEnabled ? \"Debug log\" : \"Log\";"
+        ));
+        assert!(!EDITOR_JS.contains("function previewDebugReservedBlockSize()"));
+        assert!(EDITOR_CSS.contains(".preview-debug-toggle-button[aria-pressed=\"true\"]"));
+        assert!(EDITOR_CSS.contains(".preview-debug-controls[hidden]"));
+        assert!(EDITOR_CSS.contains(".preview-debug-control-button"));
     }
 
     #[test]
@@ -6623,6 +6764,12 @@ levels3 demo of push3 {
     }
 
     #[test]
+    fn source_highlight_has_no_tag_slot_color_surface() {
+        assert!(!EDITOR_CSS.contains("--syntax-tag-"));
+        assert!(!EDITOR_CSS.contains(".syntax-tag-"));
+    }
+
+    #[test]
     fn sprite_source_loader_consumes_lang_sprite_contract_instead_of_source_parsing() {
         assert!(!EDITOR_SPRITE_JS.contains("`${tableName}:*`"));
         assert!(!EDITOR_SPRITE_JS.contains(":*"));
@@ -6716,6 +6863,25 @@ levels3 demo of push3 {
     }
 
     #[test]
+    fn sprite_shape_sync_stages_missing_plain_shape_names() {
+        assert!(EDITOR_SPRITE_JS.contains("status = `Tagged shape ${name}`;"));
+        assert!(EDITOR_SPRITE_JS.contains("function sanitizeSpriteShapeRef(value)"));
+        assert!(
+            EDITOR_SPRITE_JS
+                .contains("return isSpriteShapeTableRef(parts[0], parts[1]) ? raw : \"\";")
+        );
+        assert!(EDITOR_SPRITE_JS.contains("function isSpritePlainShapeName(value)"));
+        assert!(EDITOR_SPRITE_JS.contains("shape:tag"));
+        assert!(EDITOR_SPRITE_JS.contains("const tableSeparator = name.indexOf(\":\");"));
+        assert!(EDITOR_SPRITE_JS.contains(
+            "const withShape = ensureSpriteShapeDefinition(nextSource, shape.name, spriteAscii().split(\"\\n\"));"
+        ));
+        assert!(EDITOR_SPRITE_JS.contains(
+            "if (shape.linked && shape.name && !findSpriteShapeDefinitionRange(nextSource, shape.name))"
+        ));
+    }
+
+    #[test]
     fn sprite_shape_registration_uses_unbraced_plain_shapes() {
         assert!(
             EDITOR_SPRITE_JS
@@ -6756,6 +6922,20 @@ levels3 demo of push3 {
             EDITOR_SPRITE_JS
                 .contains("paletteEntry.bind = { type: \"color\", name: source, linked: true };")
         );
+    }
+
+    #[test]
+    fn sprite_color_tag_picker_shows_color_values() {
+        assert!(EDITOR_SPRITE_JS.contains("const colorAssets = spriteSourceColorAssets();"));
+        assert!(
+            EDITOR_SPRITE_JS.contains("optionMeta: (name) => ({ color: colorAssets.get(name) })")
+        );
+        assert!(EDITOR_SPRITE_JS.contains("className = \"sprite-tag-option-swatch\""));
+        assert!(EDITOR_SPRITE_JS.contains("className = \"sprite-tag-option-value\""));
+        assert!(EDITOR_CSS.contains(".sprite-tag-option.has-color"));
+        assert!(EDITOR_CSS.contains(".sprite-tag-option.has-invalid-color"));
+        assert!(EDITOR_CSS.contains(".sprite-tag-option-swatch"));
+        assert!(EDITOR_CSS.contains(".sprite-tag-option-value"));
     }
 
     #[test]
@@ -6910,11 +7090,12 @@ levels3 demo of push3 {
         assert!(EDITOR_BOOT_JS.contains("New puzzle source is browser-runtime owned"));
         assert!(!EDITOR_BOOT_JS.contains(r#"invoke("new_puzzle_source", { request: payload })"#));
         assert!(EDITOR_WORKSPACE_JS.contains("async function newPuzzleSourceForFile(_name)"));
-        assert!(EDITOR_WORKSPACE_JS.contains("/\\.(?:puzzle|puzzle3)$/i.test(cleaned)"));
+        assert!(EDITOR_WORKSPACE_JS.contains("const name = sanitizeFileName(rawName);"));
+        assert!(!EDITOR_WORKSPACE_JS.contains("function ensurePuzzleExtension(name)"));
+        assert!(!EDITOR_WORKSPACE_JS.contains("`${cleaned}.puzzle`"));
         assert!(!EDITOR_WORKSPACE_JS.contains("window.PuzzleStudioHost.newPuzzleSource"));
         assert!(
-            EDITOR_WORKSPACE_JS
-                .contains("name: kind === \"folder\" ? \"folder\" : \"untitled.puzzle\",")
+            EDITOR_WORKSPACE_JS.contains("name: kind === \"folder\" ? \"folder\" : \"untitled\",")
         );
         assert!(EDITOR_WORKSPACE_JS.contains("const STARTER_PUZZLE_SOURCE = \"\";"));
         assert!(EDITOR_WORKSPACE_JS.contains("return STARTER_PUZZLE_SOURCE;"));
@@ -7321,6 +7502,7 @@ levels3 demo of push3 {
         assert!(EDITOR_RUNTIME_JS.contains("compile_preview"));
         assert!(EDITOR_RUNTIME_JS.contains("export_html"));
         assert!(EDITOR_RUNTIME_JS.contains("highlight_source_html"));
+        assert!(EDITOR_RUNTIME_JS.contains("solver_task_initial_display_state_json"));
         assert!(EDITOR_HTML.contains("editor_runtime.js"));
         assert!(
             EDITOR_HTML.find("editor_runtime.js").unwrap()
@@ -7332,6 +7514,7 @@ levels3 demo of push3 {
         assert!(EDITOR_RUNTIME_JS.contains("gameRuntimeAssets()"));
         assert!(EDITOR_RUNTIME_JS.contains("./wasm_game/puzzle_wasm_game.js"));
         assert!(EDITOR_RUNTIME_JS.contains("./wasm_game/puzzle_wasm_game_bg.wasm"));
+        assert!(EDITOR_RUNTIME_JS.contains("gameRuntimeAssetsPromise"));
         assert!(EDITOR_IMPORT_EXPORT_JS.contains("exportStandaloneHtml({"));
         assert!(!EDITOR_IMPORT_EXPORT_JS.contains("html: latestHtml"));
         assert!(EDITOR_JS.contains("PuzzleStudioRuntimeAssetRequest"));
@@ -7372,6 +7555,7 @@ levels3 demo of push3 {
         assert!(PUZZLE_WASM_JS.contains("export function compile_preview"));
         assert!(PUZZLE_WASM_JS.contains("export function export_html"));
         assert!(PUZZLE_WASM_JS.contains("export function solve_state"));
+        assert!(PUZZLE_WASM_JS.contains("export function solver_task_initial_display_state_json"));
         assert!(!PUZZLE_WASM_JS.contains("export function solve_state_with_progress"));
         assert!(!PUZZLE_WASM_JS.contains("WasmCoreRuntime"));
         assert!(!PUZZLE_WASM_JS.contains("WasmPuzzle3Runtime"));
@@ -7388,6 +7572,8 @@ levels3 demo of push3 {
         let script = sound_tools_script();
         assert!(script.contains("window.PuzzleSoundGenerator"));
         assert!(script.contains("generateSoundEffect"));
+        assert!(script.contains("generatePuzzleScriptSoundEffect"));
+        assert!(script.contains("createPuzzleScriptSfxPlayer"));
         assert!(script.contains("generateSong"));
         assert!(script.contains("exportSoundEffect"));
         assert!(script.contains("PuzzleSoundToolsReady"));
@@ -7400,6 +7586,13 @@ levels3 demo of push3 {
         assert!(EDITOR_HTML.contains(r#"id="soundsSfxVolumeInput""#));
         assert!(EDITOR_SOUNDS_JS.contains("function soundSfxVolume()"));
         assert!(EDITOR_SOUNDS_JS.contains("volume=${soundSfxVolume().toFixed(2)}"));
+        assert!(EDITOR_SOUNDS_JS.contains("function soundSfxType()"));
+        assert!(
+            EDITOR_SOUNDS_JS.contains("generatePuzzleScriptSoundEffect(soundsSfxSeedInput.value)")
+        );
+        assert!(EDITOR_SOUNDS_JS.contains(
+            "createPuzzleScriptSfxPlayer(sounds.context, soundSfxEffect(), { volume: soundSfxVolume() })"
+        ));
         assert!(EDITOR_SOUNDS_JS.contains(
             "createSfxPlayer(sounds.context, soundSfxEffect(), { volume: soundSfxVolume() })"
         ));

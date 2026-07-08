@@ -611,29 +611,41 @@ async function convertPuzzleScriptImport(generation = ++puzzleScriptImportConver
 }
 
 function puzzleScriptImportTitle(source, canonical) {
-  const explicitTitle = String(source || "")
+  const explicitTitle = puzzleScriptSourceTitle(source);
+  if (explicitTitle) {
+    return explicitTitle;
+  }
+  const canonicalTitle = puzzleStudioMetadataTitle(canonical);
+  if (canonicalTitle) {
+    return canonicalTitle;
+  }
+  return "PuzzleScript import";
+}
+
+function puzzleScriptSourceTitle(source) {
+  const title = String(source || "")
     .split("\n")
     .map((line) => line.split("//", 1)[0].trim())
     .find((line) => /^title(?:\s+|$)/i.test(line))
     ?.replace(/^title\s*/i, "")
-    .trim();
-  if (explicitTitle) {
-    return explicitTitle;
-  }
-  const canonicalTitle = String(canonical || "")
+    .trim()
+    .replace(/^"|"$/g, "") || "";
+  return title.startsWith("=") ? "" : title;
+}
+
+function puzzleStudioMetadataTitle(canonical) {
+  const value = String(canonical || "")
     .split("\n")
-    .find((line) => /^title(?:\s+|$)/.test(line.trim()))
-    ?.trim()
-    .replace(/^title\s*/, "")
-    .trim();
-  if (canonicalTitle) {
+    .map((line) => line.trim().match(/^title\s*=\s*(.+)$/)?.[1]?.trim())
+    .find((value) => value);
+  if (value) {
     try {
-      return JSON.parse(canonicalTitle);
+      return JSON.parse(value);
     } catch {
-      return canonicalTitle.replace(/^"|"$/g, "");
+      return value.replace(/^"|"$/g, "");
     }
   }
-  return "PuzzleScript import";
+  return "";
 }
 
 async function copyPuzzleScriptImportOutput() {

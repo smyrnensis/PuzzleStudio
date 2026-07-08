@@ -36,10 +36,6 @@ pub(crate) fn scene_effect_command_syntax(token: &str) -> Option<SceneEffectComm
     }
 }
 
-pub(crate) fn scene_effect_semantic_tokens(tokens: &[SourceToken]) -> Vec<semantic::SemanticToken> {
-    project_surface_semantic_tokens(&scene_effect_surface_document(tokens).semantic_tokens)
-}
-
 fn project_surface_semantic_tokens(
     tokens: &[SurfaceSemanticToken],
 ) -> Vec<semantic::SemanticToken> {
@@ -48,23 +44,32 @@ fn project_surface_semantic_tokens(
         .map(|token| semantic::SemanticToken {
             start: token.span.start,
             end: token.span.end,
-            kind: match token.kind {
-                SurfaceSemanticKind::Keyword => semantic::SemanticKind::Keyword,
-                SurfaceSemanticKind::Literal => semantic::SemanticKind::Literal,
-                SurfaceSemanticKind::Binding => semantic::SemanticKind::Binding,
-                SurfaceSemanticKind::Effect => semantic::SemanticKind::Effect,
-                SurfaceSemanticKind::Emission => semantic::SemanticKind::Emission,
-                SurfaceSemanticKind::Input => semantic::SemanticKind::Input,
-                SurfaceSemanticKind::State => semantic::SemanticKind::State,
-                SurfaceSemanticKind::Condition => semantic::SemanticKind::Condition,
-                SurfaceSemanticKind::Scene => semantic::SemanticKind::Scene,
-                SurfaceSemanticKind::Asset => semantic::SemanticKind::Asset,
-                SurfaceSemanticKind::Setting => semantic::SemanticKind::Setting,
-                SurfaceSemanticKind::Number => semantic::SemanticKind::Number,
-                SurfaceSemanticKind::String => semantic::SemanticKind::String,
-            },
+            kind: project_surface_semantic_kind(token.kind),
         })
         .collect()
+}
+
+fn project_surface_semantic_kind(kind: SurfaceSemanticKind) -> semantic::SemanticKind {
+    match kind {
+        SurfaceSemanticKind::Keyword => semantic::SemanticKind::Keyword,
+        SurfaceSemanticKind::Literal => semantic::SemanticKind::Literal,
+        SurfaceSemanticKind::Binding => semantic::SemanticKind::Binding,
+        SurfaceSemanticKind::Effect => semantic::SemanticKind::Effect,
+        SurfaceSemanticKind::Emission => semantic::SemanticKind::Emission,
+        SurfaceSemanticKind::Object => semantic::SemanticKind::Object,
+        SurfaceSemanticKind::Input => semantic::SemanticKind::Input,
+        SurfaceSemanticKind::State => semantic::SemanticKind::State,
+        SurfaceSemanticKind::Group => semantic::SemanticKind::Group,
+        SurfaceSemanticKind::Mark => semantic::SemanticKind::Mark,
+        SurfaceSemanticKind::Variant => semantic::SemanticKind::Variant,
+        SurfaceSemanticKind::Condition => semantic::SemanticKind::Condition,
+        SurfaceSemanticKind::Scene => semantic::SemanticKind::Scene,
+        SurfaceSemanticKind::Theme => semantic::SemanticKind::Theme,
+        SurfaceSemanticKind::Asset => semantic::SemanticKind::Asset,
+        SurfaceSemanticKind::Setting => semantic::SemanticKind::Setting,
+        SurfaceSemanticKind::Number => semantic::SemanticKind::Number,
+        SurfaceSemanticKind::String => semantic::SemanticKind::String,
+    }
 }
 
 fn scene_effect_surface_document(tokens: &[SourceToken]) -> SurfaceDocument {
@@ -436,20 +441,14 @@ pub(crate) fn is_level_event_sugar(trimmed: &str, tokens: &[&str]) -> bool {
     }
 }
 
-pub(crate) fn rewrite_effect_semantic_tokens(
-    tokens: &[SourceToken],
-) -> Vec<semantic::SemanticToken> {
-    project_surface_semantic_tokens(&rewrite_effect_surface_document(tokens).semantic_tokens)
-}
-
 fn rewrite_effect_surface_document(tokens: &[SourceToken]) -> SurfaceDocument {
     let mut sink = SurfaceSink::default();
     let effect_span = source_tokens_span(tokens);
-    add_rewrite_effect_semantic_tokens(tokens, &mut sink);
+    add_rewrite_effect_surface_tokens(tokens, &mut sink);
     surface_document_with_node(sink, SurfaceNodeKind::RewriteEffect, effect_span)
 }
 
-fn add_rewrite_effect_semantic_tokens(tokens: &[SourceToken], sink: &mut SurfaceSink) -> bool {
+fn add_rewrite_effect_surface_tokens(tokens: &[SourceToken], sink: &mut SurfaceSink) -> bool {
     let Some(first) = tokens.first() else {
         return false;
     };
@@ -477,7 +476,7 @@ fn add_rewrite_effect_semantic_tokens(tokens: &[SourceToken], sink: &mut Surface
             .iter()
             .any(|token| is_rewrite_effect_command_token(&token.text))
     {
-        return add_simple_rewrite_effect_semantic_tokens(tokens, sink);
+        return add_simple_rewrite_effect_surface_tokens(tokens, sink);
     }
 
     match tokens {
@@ -522,7 +521,7 @@ fn add_rewrite_effect_semantic_tokens(tokens: &[SourceToken], sink: &mut Surface
     }
 }
 
-fn add_simple_rewrite_effect_semantic_tokens(
+fn add_simple_rewrite_effect_surface_tokens(
     tokens: &[SourceToken],
     sink: &mut SurfaceSink,
 ) -> bool {
@@ -964,10 +963,6 @@ fn resolve_default_wait_in_effect(effect: &mut SceneEffect, default_wait_ms: u64
 
 fn parse_wait_duration_ms(value: &str, line: &str) -> Result<u64, DiagnosticReport> {
     puzzle_scene::parse_wait_duration_ms_at(value, line).map_err(scene_parse_error)
-}
-
-fn parse_seconds_duration_ms(value: &str, line: &str) -> Result<u64, DiagnosticReport> {
-    puzzle_scene::parse_seconds_duration_ms_at(value, line).map_err(scene_parse_error)
 }
 
 pub fn parse_scene_expression(value: &str) -> Result<SceneExpr, DiagnosticReport> {

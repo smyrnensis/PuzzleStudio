@@ -300,8 +300,9 @@ class PuzzleRenderer {
         if (!Number.isFinite(event.objectId) || event.objectId <= 0) {
           return false;
         }
-        const x = Number(event.toX ?? event.x);
-        const y = Number(event.toY ?? event.y);
+        const target = event.kind === "move" ? event.to : event.position;
+        const x = Number(target?.x);
+        const y = Number(target?.y);
         return x >= frame.x && y >= frame.y && x < frame.x + frame.width && y < frame.y + frame.height;
       });
   }
@@ -331,9 +332,9 @@ class PuzzleRenderer {
         return false;
       }
       if (event.kind === "move") {
-        return Number(event.toX) === cell.x && Number(event.toY) === cell.y;
+        return Number(event.to?.x) === cell.x && Number(event.to?.y) === cell.y;
       }
-      return Number(event.x) === cell.x && Number(event.y) === cell.y;
+      return Number(event.position?.x) === cell.x && Number(event.position?.y) === cell.y;
     }) || null;
   }
 
@@ -406,8 +407,8 @@ class PuzzleRenderer {
     const transform = { x: 0, y: 0, scale: 1, alpha: 1, angle: 0 };
     if (names.has("slide") || names.has("tween") || parts.length === 0) {
       if (animation.kind === "move") {
-        transform.x += (Number(animation.fromX) - Number(animation.toX)) * unit * (1 - eased);
-        transform.y += (Number(animation.fromY) - Number(animation.toY)) * unit * (1 - eased);
+        transform.x += (Number(animation.from?.x) - Number(animation.to?.x)) * unit * (1 - eased);
+        transform.y += (Number(animation.from?.y) - Number(animation.to?.y)) * unit * (1 - eased);
       } else {
         transform.x += Math.sin(eased * Math.PI * 2) * unit * 0.12;
       }

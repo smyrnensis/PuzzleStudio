@@ -1,5 +1,4 @@
-// Parser-owned authoring vocabulary shared by parsing, completion, and
-// highlighting so new surface syntax is registered in one place.
+// Parser-owned authoring vocabulary shared by parsing and completion.
 
 pub(crate) const PUZZLE_LIFECYCLE_BLOCKS: &[&str] =
     &["on_level_start", "on_level_clear", "on_last_level_clear"];
@@ -11,18 +10,6 @@ pub(crate) fn puzzle_lifecycle_event(block: &str) -> Option<&'static str> {
         "on_last_level_clear" => Some("last_level_clear"),
         _ => None,
     }
-}
-
-pub(crate) fn is_puzzle_lifecycle_block(token: &str) -> bool {
-    PUZZLE_LIFECYCLE_BLOCKS.contains(&token)
-}
-
-pub(crate) fn is_puzzle_line_head_keyword(token: &str) -> bool {
-    PUZZLE_LINE_HEAD_KEYWORDS.contains(&token)
-}
-
-pub(crate) fn is_parser_keyword(token: &str) -> bool {
-    PARSER_KEYWORDS.contains(&token)
 }
 
 pub(crate) fn is_visual_named_color(token: &str) -> bool {
@@ -66,42 +53,8 @@ pub(crate) const VISUAL_COLOR_NAMES: &[&str] = &[
     "pink",
 ];
 
-pub(crate) const PUZZLE_LINE_HEAD_KEYWORDS: &[&str] = &[
-    "collision_layers",
-    "condition",
-    "const",
-    "direction",
-    "for",
-    "groups",
-    "if",
-    "input",
-    "keys",
-    "layers",
-    "legend",
-    "levels",
-    "levels3",
-    "map",
-    "on_display",
-    PUZZLE_LIFECYCLE_BLOCKS[0],
-    PUZZLE_LIFECYCLE_BLOCKS[1],
-    PUZZLE_LIFECYCLE_BLOCKS[2],
-    "persistent",
-    "render",
-    "resources",
-    "routine",
-    "rule",
-    "rules",
-    "marks",
-    "sounds",
-    "sprites",
-    "sprites3",
-    "tags",
-    "var",
-];
-
 pub(crate) const PUZZLE_COMPLETION_KEYWORDS: &[&str] = &[
     "collision_layers",
-    "condition",
     "const",
     "direction",
     "for",
@@ -124,12 +77,14 @@ pub(crate) const PUZZLE_COMPLETION_KEYWORDS: &[&str] = &[
     "once_all",
     "once_per_level",
     "persistent",
+    "query",
     "repeat",
     "resources",
     "render",
     "routine",
     "rule",
     "rules",
+    "solver",
     "marks",
     "sounds",
     "sprites",
@@ -138,103 +93,6 @@ pub(crate) const PUZZLE_COMPLETION_KEYWORDS: &[&str] = &[
     "tags",
     "var",
     "win_conditions",
-];
-
-pub(crate) const PARSER_KEYWORDS: &[&str] = &[
-    "again_interval",
-    "assets",
-    "align",
-    "author",
-    "sounds",
-    "button",
-    "camera",
-    "column",
-    "component_effect",
-    "const",
-    "colors",
-    "collision_layers",
-    "css",
-    "direction",
-    "default_wait_time",
-    "effect",
-    "each",
-    "else",
-    "file",
-    "flickscreen",
-    "for",
-    "gap",
-    "screen_focus",
-    "from",
-    "grid",
-    "homepage",
-    "puzzle",
-    "groups",
-    "if",
-    "in",
-    "import",
-    "input",
-    "input_buffer",
-    "interactive_look",
-    "interactive_zoom",
-    "keys",
-    "layers",
-    "legend",
-    "level",
-    "level_menu",
-    "levels",
-    "levels3",
-    "lose_conditions",
-    "map",
-    "music",
-    "name",
-    "occupied_cells",
-    "on",
-    "on_display",
-    "on_scene_start",
-    "of",
-    "once",
-    "once_all",
-    "once_per_level",
-    "box",
-    "persistent",
-    "pitch",
-    "puzzle3",
-    "condition",
-    "region",
-    "repeat",
-    "resources",
-    "render",
-    "row",
-    "routine",
-    "rule",
-    "rules",
-    "scene",
-    "script",
-    "marks",
-    "sfx",
-    "shape",
-    "show_index",
-    "show_solved",
-    "size",
-    "sprite",
-    "sprites",
-    "sprites3",
-    "state",
-    "tags",
-    "subtitle",
-    "text",
-    "theme",
-    "title",
-    "var",
-    "layout",
-    "win_conditions",
-    "with",
-    "yaw",
-    "zoom",
-    "zoomscreen",
-    PUZZLE_LIFECYCLE_BLOCKS[0],
-    PUZZLE_LIFECYCLE_BLOCKS[1],
-    PUZZLE_LIFECYCLE_BLOCKS[2],
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

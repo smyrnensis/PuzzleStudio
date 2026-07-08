@@ -70,7 +70,11 @@
       const next = JSON.parse(raw);
       if (method === "POST") {
         this.writeSessionProgressSave();
-        next.has_progress_save = true;
+        if (next && typeof next.snapshot === "object") {
+          next.snapshot.has_progress_save = true;
+        } else {
+          next.has_progress_save = true;
+        }
       }
       return next;
     }

@@ -4,195 +4,17 @@ use puzzle_grid3d::{
     RuleId3, WriteOp3,
 };
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SelectorCatalog3 {
-    pub objects: Vec<ConcreteObject3>,
-    pub families: Vec<ObjectFamily3>,
-    pub groups: Vec<SelectorGroup3>,
-    object_layers: Vec<(ObjectId, LayerId)>,
-}
-
-impl SelectorCatalog3 {
-    pub fn new(
-        objects: Vec<ConcreteObject3>,
-        families: Vec<ObjectFamily3>,
-        groups: Vec<SelectorGroup3>,
-    ) -> Self {
-        let object_layers = default_object_layers(&objects, &families);
-        Self::new_with_object_layers(objects, families, groups, object_layers)
-    }
-
-    pub fn new_with_object_layers(
-        objects: Vec<ConcreteObject3>,
-        families: Vec<ObjectFamily3>,
-        groups: Vec<SelectorGroup3>,
-        object_layers: Vec<(ObjectId, LayerId)>,
-    ) -> Self {
-        Self {
-            objects,
-            families,
-            groups,
-            object_layers,
-        }
-    }
-
-    pub fn checked_new(
-        objects: Vec<ConcreteObject3>,
-        families: Vec<ObjectFamily3>,
-        groups: Vec<SelectorGroup3>,
-    ) -> Result<Self, SelectorCatalogError3> {
-        let object_layers = default_object_layers(&objects, &families);
-        Self::checked_new_with_object_layers(objects, families, groups, object_layers)
-    }
-
-    pub fn checked_new_with_object_layers(
-        objects: Vec<ConcreteObject3>,
-        families: Vec<ObjectFamily3>,
-        groups: Vec<SelectorGroup3>,
-        object_layers: Vec<(ObjectId, LayerId)>,
-    ) -> Result<Self, SelectorCatalogError3> {
-        validate_catalog_names(&objects, &families, &groups)?;
-        Ok(Self::new_with_object_layers(
-            objects,
-            families,
-            groups,
-            object_layers,
-        ))
-    }
-
-    pub fn object_layer(&self, object: ObjectId) -> Option<LayerId> {
-        self.object_layers
-            .iter()
-            .find(|(candidate, _)| *candidate == object)
-            .map(|(_, layer)| *layer)
-    }
-
-    pub fn resolve(&self, selector: &ObjectSelector3) -> Result<ResolvedSelector3, SelectorError3> {
-        let (alternatives, mark) = match selector {
-            ObjectSelector3::Object(name) => (self.resolve_object(name)?, Vec::new()),
-            ObjectSelector3::Group(name) => {
-                (self.resolve_group(name, &mut Vec::new())?, Vec::new())
-            }
-            ObjectSelector3::Labeled { selector, .. } => {
-                let resolved = self.resolve(selector)?;
-                (resolved.alternatives, resolved.mark)
-            }
-            ObjectSelector3::Variant { family, tags } => {
-                (self.resolve_variant(family, tags)?, Vec::new())
-            }
-            ObjectSelector3::WithMark { selector, mark } => {
-                let resolved = self.resolve(selector)?;
-                let mut combined = resolved.mark;
-                combined.extend(mark.iter().cloned());
-                (resolved.alternatives, combined)
-            }
-        };
-        let token = selector.token();
-        if alternatives.is_empty() {
-            return Err(SelectorError3::SelectorMatchedNoObjects { token });
-        }
-        Ok(ResolvedSelector3 {
-            token,
-            alternatives,
-            transform: None,
-            mark,
-        })
-    }
-
-    fn resolve_object(&self, name: &str) -> Result<Vec<ObjectId>, SelectorError3> {
-        if let Some(object) = self.objects.iter().find(|object| object.name == name) {
-            return Ok(vec![object.id]);
-        }
-        if self.families.iter().any(|family| family.name == name) {
-            return Err(SelectorError3::BareVariantFamily {
-                family: name.to_string(),
-            });
-        }
-        Err(SelectorError3::UnknownObject {
-            name: name.to_string(),
-        })
-    }
-
-    fn resolve_group(
-        &self,
-        name: &str,
-        stack: &mut Vec<String>,
-    ) -> Result<Vec<ObjectId>, SelectorError3> {
-        if stack.iter().any(|entry| entry == name) {
-            return Err(SelectorError3::RecursiveGroup {
-                name: name.to_string(),
-            });
-        }
-        let Some(group) = self.groups.iter().find(|group| group.name == name) else {
-            return Err(SelectorError3::UnknownGroup {
-                name: name.to_string(),
-            });
-        };
-
-        stack.push(name.to_string());
-        let mut objects = Vec::new();
-        for selector in &group.selectors {
-            let alternatives = match selector {
-                ObjectSelector3::Object(name) => self.resolve_object(name)?,
-                ObjectSelector3::Group(name) => self.resolve_group(name, stack)?,
-                ObjectSelector3::Labeled { selector, .. } => self.resolve(selector)?.alternatives,
-                ObjectSelector3::Variant { family, tags } => self.resolve_variant(family, tags)?,
-                ObjectSelector3::WithMark { selector, .. } => self.resolve(selector)?.alternatives,
-            };
-            for object in alternatives {
-                push_unique_object(&mut objects, object);
-            }
-        }
-        stack.pop();
-        Ok(objects)
-    }
-
-    fn resolve_variant(
-        &self,
-        family_name: &str,
-        tags: &[SelectorTag3],
-    ) -> Result<Vec<ObjectId>, SelectorError3> {
-        let Some(family) = self
-            .families
-            .iter()
-            .find(|family| family.name == family_name)
-        else {
-            return Err(SelectorError3::UnknownFamily {
-                family: family_name.to_string(),
-            });
-        };
-        let tags = expanded_tags(family, tags)?;
-
-        for (axis, tag) in family.axes.iter().zip(&tags) {
-            if let SelectorTag3::Value(value) = tag {
-                if axis.allowed_values(value).is_none() {
-                    return Err(SelectorError3::UnknownVariantTag {
-                        family: family.name.clone(),
-                        axis: axis.name.clone(),
-                        tag: value.clone(),
-                    });
-                }
-            }
-        }
-
-        let mut objects = Vec::new();
-        for variant in &family.variants {
-            if variant.values.len() != family.axes.len() {
-                continue;
-            }
-            if family
-                .axes
-                .iter()
-                .zip(&tags)
-                .zip(&variant.values)
-                .all(|((axis, tag), variant_value)| axis.tag_accepts_value(tag, variant_value))
-            {
-                push_unique_object(&mut objects, variant.id);
-            }
-        }
-        Ok(objects)
-    }
-}
+pub type SelectorCatalog3 =
+    puzzle_authoring::SelectorCatalog<ObjectId, LayerId, VariantAxis3, SelectorMark3>;
+pub type SelectorMark3 = puzzle_authoring::SelectorMark;
+pub type ConcreteObject3 = puzzle_authoring::ConcreteObject<ObjectId>;
+pub type SelectorGroup3 = puzzle_authoring::SelectorGroup<ObjectSelector3>;
+pub type ObjectFamily3 = puzzle_authoring::ObjectFamily<ObjectId, VariantAxis3>;
+pub type ObjectVariant3 = puzzle_authoring::ObjectVariant<ObjectId>;
+pub type ObjectSelector3 = puzzle_authoring::ObjectSelector<SelectorMark3>;
+pub type SelectorTag3 = puzzle_authoring::SelectorTag;
+pub type SelectorCatalogError3 = puzzle_authoring::SelectorCatalogError;
+pub type SelectorError3 = puzzle_authoring::SelectorError;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PatternTemplate3 {
@@ -581,12 +403,16 @@ pub fn lower_line_rule_template(
                     require: cell
                         .require
                         .iter()
-                        .map(|selector| selector.resolve_directional_mark(direction))
+                        .map(|selector| {
+                            resolve_directional_object_selector3_mark(selector, direction)
+                        })
                         .collect(),
                     forbid: cell
                         .forbid
                         .iter()
-                        .map(|selector| selector.resolve_directional_mark(direction))
+                        .map(|selector| {
+                            resolve_directional_object_selector3_mark(selector, direction)
+                        })
                         .collect(),
                 })
                 .collect(),
@@ -1265,27 +1091,6 @@ fn write_object(
     })
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ResolvedSelector3 {
-    pub token: String,
-    pub alternatives: Vec<ObjectId>,
-    pub transform: Option<SelectorTransform3>,
-    pub mark: Vec<SelectorMark3>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SelectorTransform3 {
-    pub source_token: String,
-    pub mapped_objects: Vec<(ObjectId, ObjectId)>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SelectorMark3 {
-    pub name: String,
-    pub value: Option<String>,
-    pub negated: bool,
-}
-
 const ANONYMOUS_MOVEMENT_MARK3: MarkId3 = MarkId3(puzzle_authoring::ANONYMOUS_MOVEMENT_MARK_INDEX);
 
 fn lower_selector_mark(
@@ -1340,54 +1145,24 @@ fn resolve_directional_selector_mark(mark: &SelectorMark3, direction: Direction3
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ConcreteObject3 {
-    pub id: ObjectId,
-    pub name: String,
-}
-
-impl ConcreteObject3 {
-    pub fn new(id: ObjectId, name: impl Into<String>) -> Self {
-        Self {
-            id,
-            name: name.into(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SelectorGroup3 {
-    pub name: String,
-    pub selectors: Vec<ObjectSelector3>,
-}
-
-impl SelectorGroup3 {
-    pub fn new(name: impl Into<String>, selectors: Vec<ObjectSelector3>) -> Self {
-        Self {
-            name: name.into(),
-            selectors,
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ObjectFamily3 {
-    pub name: String,
-    pub axes: Vec<VariantAxis3>,
-    pub variants: Vec<ObjectVariant3>,
-}
-
-impl ObjectFamily3 {
-    pub fn new(
-        name: impl Into<String>,
-        axes: Vec<VariantAxis3>,
-        variants: Vec<ObjectVariant3>,
-    ) -> Self {
-        Self {
-            name: name.into(),
-            axes,
-            variants,
-        }
+fn resolve_directional_object_selector3_mark(
+    selector: &ObjectSelector3,
+    direction: Direction3,
+) -> ObjectSelector3 {
+    match selector {
+        ObjectSelector3::WithMark { selector, mark } => ObjectSelector3::with_mark(
+            resolve_directional_object_selector3_mark(selector, direction),
+            mark.iter()
+                .map(|mark| resolve_directional_selector_mark(mark, direction))
+                .collect(),
+        ),
+        ObjectSelector3::Labeled { token, selector } => ObjectSelector3::Labeled {
+            token: token.clone(),
+            selector: Box::new(resolve_directional_object_selector3_mark(
+                selector, direction,
+            )),
+        },
+        _ => selector.clone(),
     }
 }
 
@@ -1411,19 +1186,11 @@ impl VariantAxis3 {
             values: VariantValueSet3::Directions(set),
         }
     }
+}
 
-    fn tag_accepts_value(&self, tag: &SelectorTag3, value: &str) -> bool {
-        match tag {
-            SelectorTag3::Any => self.contains_value(value),
-            SelectorTag3::Value(tag) => self
-                .allowed_values(tag)
-                .is_some_and(|values| values.iter().any(|allowed| allowed == value)),
-        }
-    }
-
-    fn contains_value(&self, value: &str) -> bool {
-        self.allowed_values(value)
-            .is_some_and(|values| values.iter().any(|allowed| allowed == value))
+impl puzzle_authoring::VariantAxisSpec for VariantAxis3 {
+    fn name(&self) -> &str {
+        &self.name
     }
 
     fn allowed_values(&self, tag: &str) -> Option<Vec<String>> {
@@ -1449,192 +1216,6 @@ impl VariantAxis3 {
 pub enum VariantValueSet3 {
     Named(Vec<String>),
     Directions(DirectionSet3),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ObjectVariant3 {
-    pub id: ObjectId,
-    pub values: Vec<String>,
-}
-
-impl ObjectVariant3 {
-    pub fn new(id: ObjectId, values: Vec<impl Into<String>>) -> Self {
-        Self {
-            id,
-            values: values.into_iter().map(Into::into).collect(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ObjectSelector3 {
-    Object(String),
-    Group(String),
-    Labeled {
-        token: String,
-        selector: Box<ObjectSelector3>,
-    },
-    Variant {
-        family: String,
-        tags: Vec<SelectorTag3>,
-    },
-    WithMark {
-        selector: Box<ObjectSelector3>,
-        mark: Vec<SelectorMark3>,
-    },
-}
-
-impl ObjectSelector3 {
-    pub fn object(name: impl Into<String>) -> Self {
-        Self::Object(name.into())
-    }
-
-    pub fn group(name: impl Into<String>) -> Self {
-        Self::Group(name.into())
-    }
-
-    pub fn labeled(token: impl Into<String>, selector: ObjectSelector3) -> Self {
-        Self::Labeled {
-            token: token.into(),
-            selector: Box::new(selector),
-        }
-    }
-
-    pub fn variant(family: impl Into<String>, tags: Vec<SelectorTag3>) -> Self {
-        Self::Variant {
-            family: family.into(),
-            tags,
-        }
-    }
-
-    pub fn with_mark(selector: ObjectSelector3, mark: Vec<SelectorMark3>) -> Self {
-        if mark.is_empty() {
-            selector
-        } else {
-            Self::WithMark {
-                selector: Box::new(selector),
-                mark,
-            }
-        }
-    }
-
-    pub fn token(&self) -> String {
-        match self {
-            Self::Object(name) | Self::Group(name) => name.clone(),
-            Self::Labeled { token, .. } => token.clone(),
-            Self::WithMark { selector, .. } => selector.token(),
-            Self::Variant { family, tags } => {
-                let mut token = family.clone();
-                for tag in tags {
-                    token.push(':');
-                    token.push_str(&tag.token());
-                }
-                token
-            }
-        }
-    }
-
-    pub fn has_occurrence_label(&self) -> bool {
-        matches!(self, Self::Labeled { .. })
-            || matches!(self, Self::WithMark { selector, .. } if selector.has_occurrence_label())
-    }
-
-    pub fn mark(&self) -> &[SelectorMark3] {
-        match self {
-            Self::WithMark { mark, .. } => mark,
-            _ => &[],
-        }
-    }
-
-    fn resolve_directional_mark(&self, direction: Direction3) -> Self {
-        match self {
-            Self::WithMark { selector, mark } => Self::with_mark(
-                selector.resolve_directional_mark(direction),
-                mark.iter()
-                    .map(|mark| resolve_directional_selector_mark(mark, direction))
-                    .collect(),
-            ),
-            Self::Labeled { token, selector } => Self::Labeled {
-                token: token.clone(),
-                selector: Box::new(selector.resolve_directional_mark(direction)),
-            },
-            _ => self.clone(),
-        }
-    }
-
-    fn can_use_runtime_object_set(&self) -> bool {
-        matches!(self, Self::Group(_))
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum SelectorTag3 {
-    Value(String),
-    Any,
-}
-
-impl SelectorTag3 {
-    pub fn value(value: impl Into<String>) -> Self {
-        Self::Value(value.into())
-    }
-
-    pub const fn any() -> Self {
-        Self::Any
-    }
-
-    pub fn token(&self) -> String {
-        match self {
-            Self::Value(value) => value.clone(),
-            Self::Any => "*".to_string(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum SelectorCatalogError3 {
-    DuplicateObjectName { name: String },
-    DuplicateFamilyName { name: String },
-    DuplicateGroupName { name: String },
-    ObjectNameShadowsFamily { name: String },
-    FamilyNameShadowsObject { name: String },
-    GroupNameShadowsSelector { name: String },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum SelectorError3 {
-    UnknownObject {
-        name: String,
-    },
-    UnknownGroup {
-        name: String,
-    },
-    UnknownFamily {
-        family: String,
-    },
-    BareVariantFamily {
-        family: String,
-    },
-    WrongVariantArity {
-        family: String,
-        expected: usize,
-        actual: usize,
-    },
-    PartialVariantSelector {
-        family: String,
-        expected: usize,
-        actual: usize,
-    },
-    UnknownVariantTag {
-        family: String,
-        axis: String,
-        tag: String,
-    },
-    RecursiveGroup {
-        name: String,
-    },
-    SelectorMatchedNoObjects {
-        token: String,
-    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1676,110 +1257,6 @@ impl From<SelectorError3> for RuleLoweringError3 {
     fn from(value: SelectorError3) -> Self {
         Self::Selector(value)
     }
-}
-
-fn default_object_layers(
-    objects: &[ConcreteObject3],
-    families: &[ObjectFamily3],
-) -> Vec<(ObjectId, LayerId)> {
-    objects
-        .iter()
-        .map(|object| object.id)
-        .chain(
-            families
-                .iter()
-                .flat_map(|family| family.variants.iter().map(|variant| variant.id)),
-        )
-        .map(|object| (object, LayerId(0)))
-        .collect()
-}
-
-fn validate_catalog_names(
-    objects: &[ConcreteObject3],
-    families: &[ObjectFamily3],
-    groups: &[SelectorGroup3],
-) -> Result<(), SelectorCatalogError3> {
-    let mut object_names = Vec::<String>::new();
-    for object in objects {
-        if object_names.contains(&object.name) {
-            return Err(SelectorCatalogError3::DuplicateObjectName {
-                name: object.name.clone(),
-            });
-        }
-        object_names.push(object.name.clone());
-    }
-
-    let mut family_names = Vec::<String>::new();
-    for family in families {
-        if family_names.contains(&family.name) {
-            return Err(SelectorCatalogError3::DuplicateFamilyName {
-                name: family.name.clone(),
-            });
-        }
-        if object_names.contains(&family.name) {
-            return Err(SelectorCatalogError3::FamilyNameShadowsObject {
-                name: family.name.clone(),
-            });
-        }
-        family_names.push(family.name.clone());
-    }
-
-    for object_name in &object_names {
-        if family_names.contains(object_name) {
-            return Err(SelectorCatalogError3::ObjectNameShadowsFamily {
-                name: object_name.clone(),
-            });
-        }
-    }
-
-    let mut group_names = Vec::<String>::new();
-    for group in groups {
-        if group_names.contains(&group.name) {
-            return Err(SelectorCatalogError3::DuplicateGroupName {
-                name: group.name.clone(),
-            });
-        }
-        if object_names.contains(&group.name)
-            || family_names.contains(&group.name)
-            || group_names.contains(&group.name)
-        {
-            return Err(SelectorCatalogError3::GroupNameShadowsSelector {
-                name: group.name.clone(),
-            });
-        }
-        group_names.push(group.name.clone());
-    }
-
-    Ok(())
-}
-
-fn expanded_tags(
-    family: &ObjectFamily3,
-    tags: &[SelectorTag3],
-) -> Result<Vec<SelectorTag3>, SelectorError3> {
-    if tags.is_empty() {
-        return Err(SelectorError3::BareVariantFamily {
-            family: family.name.clone(),
-        });
-    }
-    if tags.len() > family.axes.len() {
-        return Err(SelectorError3::WrongVariantArity {
-            family: family.name.clone(),
-            expected: family.axes.len(),
-            actual: tags.len(),
-        });
-    }
-    if tags.len() == 1 && tags[0] == SelectorTag3::Any {
-        return Ok(vec![SelectorTag3::Any; family.axes.len()]);
-    }
-    if tags.len() < family.axes.len() {
-        return Err(SelectorError3::PartialVariantSelector {
-            family: family.name.clone(),
-            expected: family.axes.len(),
-            actual: tags.len(),
-        });
-    }
-    Ok(tags.to_vec())
 }
 
 fn push_unique_object(objects: &mut Vec<ObjectId>, object: ObjectId) {
@@ -1854,32 +1331,6 @@ mod tests {
                 ],
             )],
         )
-    }
-
-    #[test]
-    fn object_selector_resolves_concrete_object_names() {
-        let catalog = selector_catalog();
-        let resolved = catalog.resolve(&ObjectSelector3::object("Player")).unwrap();
-
-        assert_eq!(resolved.token, "Player");
-        assert_eq!(resolved.alternatives, vec![PLAYER]);
-        assert_eq!(resolved.transform, None);
-        assert_eq!(resolved.mark, Vec::<SelectorMark3>::new());
-    }
-
-    #[test]
-    fn group_selector_expands_members_and_deduplicates_in_order() {
-        let catalog = selector_catalog();
-
-        assert_eq!(
-            catalog.resolve(&ObjectSelector3::group("solid")).unwrap(),
-            ResolvedSelector3 {
-                token: "solid".to_string(),
-                alternatives: vec![PLAYER, BOX, WALL],
-                transform: None,
-                mark: Vec::new(),
-            }
-        );
     }
 
     #[test]
@@ -2159,6 +1610,7 @@ mod tests {
                     vec![ObjectVariant3::new(MARKER_LEFT, vec!["left"])],
                 )],
                 Vec::new(),
+                Vec::new(),
             )
             .unwrap_err(),
             SelectorCatalogError3::FamilyNameShadowsObject {
@@ -2174,6 +1626,7 @@ mod tests {
                     "Player",
                     vec![ObjectSelector3::object("Player")]
                 )],
+                Vec::new(),
             )
             .unwrap_err(),
             SelectorCatalogError3::GroupNameShadowsSelector {

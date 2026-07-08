@@ -1,12 +1,12 @@
-title "Basic PS Sokoban"
+title = "Basic PS Sokoban"
 
 theme puzzlescript
 
 puzzle main {
 layers {
-layer_1 = Background
-layer_2 = Target
-layer_3 = Player Wall Crate
+Background
+Target
+Player Wall Crate
 }
 
 sprites {
@@ -52,7 +52,7 @@ Player
 }
 
 win_conditions {
-all Target on Crate
+no [ Target no Crate ]
 }
 
 on_level_start {
@@ -88,9 +88,9 @@ _ = empty
 }
 }
 
-scene title {
+scene = title {
 layout {
-title "Basic PS Sokoban"
+title = "Basic PS Sokoban"
 if has_progress_save {
 choice "Continue" -> continue_game
 }
@@ -105,18 +105,18 @@ goto playing(0)
 }
 }
 
-scene playing {
+scene = playing {
 layout {
 row {
-title "Basic PS Sokoban"
+title = "Basic PS Sokoban"
 }
-main
+puzzle board = main
 }
 keys {
 Escape q -> back
 }
 rules {
-step main
+step board
 }
 routine back {
 goto title

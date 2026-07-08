@@ -1,5 +1,5 @@
-title "Microban 3D"
-author "Levels by David Skinner"
+title = "Microban 3D"
+author = "Levels by David Skinner"
 
 theme puzzlescript
 
@@ -44,7 +44,7 @@ goto title
 
 scene title {
 layout {
-  title "Microban 3D"
+  title = "Microban 3D"
   choice "New Game" -> goto playing
   choice "Level Select" -> goto level_select
 }
@@ -55,7 +55,7 @@ keys {
 q Escape -> goto level_select	
 }
 layout {
-title "Microban 3D"
+title = "Microban 3D"
 sokoban
 }
 rules {
@@ -65,7 +65,7 @@ step sokoban
 
 scene level_select {
 layout {
-  title "Select Level"
+  title = "Select Level"
   column scroll=true {
     for level in microban {
       choice join("microban ", level.num) -> goto sokoban(level)

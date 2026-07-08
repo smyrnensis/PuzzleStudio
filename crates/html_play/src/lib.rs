@@ -38,24 +38,27 @@ use puzzle_core::{
 use puzzle_core::{ConditionId, MarkId, MatchCell, PatternComponent, VariableId};
 use puzzle_grid3d::{
     Coord3, Game3, ObjectId as ObjectId3, RuleId3, Size3, State3,
-    transition_program_with_local_frame as transition_program_with_local_frame3,
     transition_program_without_input_with_local_frame,
 };
 #[cfg(feature = "solver")]
-use puzzle_grid3d::{Rule3, WinCondition3, transition_program as transition_program3};
+use puzzle_grid3d::{
+    Rule3, WinCondition3, eval_condition_kind, transition_program as transition_program3,
+};
 #[cfg(not(target_arch = "wasm32"))]
 use puzzle_lang::AssetsDef;
 #[cfg(feature = "solver")]
 use puzzle_lang::GoalClause;
 use puzzle_lang::ParsedPuzzle3;
 use puzzle_lang::{
-    AnimationDef, ArrowKey, GoalCondition, GoalExpr, GoalValue, KeyTrigger, Level,
-    LoadedDocumentModel, LoadedGame, ResourceSelection, RuleAnimation, RuleAnimationTrigger,
-    RuleEffect, SceneComponent, SceneEffect, SceneExpr, SceneLayoutDef, ScenePuzzleInitializer,
-    SceneTextContent, SceneTransitionTrigger, SceneValue, SoundsDef, ThemeDef, VisualSpriteDef,
-    VisualSpriteKind, parse_game2d as parse_game,
+    ArrowKey, GoalCondition, GoalExpr, GoalValue, KeyTrigger, Level, LoadedDocumentModel,
+    LoadedGame, ResourceSelection, RuleAnimation, RuleAnimationTrigger, RuleEffect, SceneComponent,
+    SceneEffect, SceneExpr, SceneLayoutDef, ScenePuzzleInitializer, SceneTextContent,
+    SceneTransitionTrigger, SceneValue, SoundsDef, ThemeDef, VisualSpriteDef, VisualSpriteKind,
+    parse_game2d as parse_game,
 };
 use puzzle_lang::{AssetKind, DiagnosticReport};
+#[cfg(feature = "solver")]
+use puzzle_lang::{QueryExpr, QueryExpr3, QueryExprOf, SolverStrategy3, SolverStrategyDirection};
 #[cfg(not(target_arch = "wasm32"))]
 use puzzle_lang::{discover_game_entries, expand_game_imports_for_file, resolve_game_entry};
 use puzzle_play::{
@@ -63,7 +66,12 @@ use puzzle_play::{
     ProgressSaveData, SoundEvent, WaitEvent, animation_events_for_trace,
     loaded_document_scene_host_loaded_game, runtime_sounds_def,
 };
-use puzzle_runtime_contract::LifecycleCommand;
+use puzzle_runtime_contract::{
+    LifecycleCommand, RuntimeAnimationEvent, RuntimeChangedCell, RuntimeCoord, RuntimeMarkValue,
+    RuntimeMarkValueMatch, RuntimeModelKind, RuntimePatchOp, RuntimeStateSnapshot,
+    RuntimeStateSnapshot2d, RuntimeTransitionCommand, RuntimeTransitionCurrentOutcome,
+    RuntimeTransitionProgramOutcome,
+};
 #[cfg(feature = "solver")]
 use puzzle_solver::{
     Puzzle3Domain, PuzzleDomain, PuzzleSearchState, SearchBudget, SearchOutcome, SearchProgress,
@@ -82,11 +90,6 @@ const STANDALONE_JS: &str = include_str!("../static/standalone.js");
 const PUZZLE_GAME_WASM_JS: &str = include_str!("../static/wasm_game/puzzle_wasm_game.js");
 #[cfg(not(target_arch = "wasm32"))]
 const PUZZLE_GAME_WASM_BG: &[u8] = include_bytes!("../static/wasm_game/puzzle_wasm_game_bg.wasm");
-#[cfg(not(target_arch = "wasm32"))]
-const PUZZLE_PLAYER_WASM_JS: &str = include_str!("../static/wasm_player/puzzle_wasm_player.js");
-#[cfg(not(target_arch = "wasm32"))]
-const PUZZLE_PLAYER_WASM_BG: &[u8] =
-    include_bytes!("../static/wasm_player/puzzle_wasm_player_bg.wasm");
 const PUZZLE3_STYLE_CSS: &str = include_str!("../static/puzzle3.css");
 const PUZZLE3_VISUAL_CORE_JS: &str = include_str!("../static/puzzle3_visual_core.js");
 const PUZZLE3_THREE_RENDERER_JS: &str = include_str!("../static/puzzle3_three_renderer.js");
@@ -113,8 +116,31 @@ mod tests {
     use super::*;
     use serde_json::{Value, json};
 
+    const RUNTIME_CURRENT_OUTCOME_COMMON_KEYS: &[&str] = &[
+        "cancelled",
+        "changed",
+        "completed",
+        "commands",
+        "firedRules",
+        "patches",
+        "stateHash",
+        "stateHashKey",
+        "changedCells",
+        "animationEvents",
+        "variables",
+        "levelFiredRules",
+        "previousStateHandle",
+    ];
+
     fn parse_json_object(source: &str) -> Value {
         serde_json::from_str(source).expect("runtime outcome should be valid JSON")
+    }
+
+    fn assert_has_object_keys(value: &Value, keys: &[&str]) {
+        let object = value.as_object().expect("value should be a JSON object");
+        for key in keys {
+            assert!(object.contains_key(*key), "missing JSON key {key}");
+        }
     }
 
     fn cell_has_object(cell: &Value, object: &str) -> bool {
@@ -125,6 +151,54 @@ mod tests {
                     .iter()
                     .any(|layer| layer.get("object").and_then(Value::as_str) == Some(object))
             })
+    }
+
+    #[cfg(feature = "solver")]
+    #[test]
+    fn solver_strategy_score_reads_queries_variables_and_distance() {
+        let source = r#"
+title = solver_strategy_score
+
+puzzle default {
+layers {
+floor = Goal
+actor = Player Box
+}
+
+var pressure = 2
+query boxes_on_goal = count([ Box Goal ])
+query player_to_goal = distance(Player, Goal)
+query near = distance(Player, Goal) <= 3
+
+solver {
+strategy {
+maximize boxes_on_goal weight 50
+minimize pressure weight 2
+prefer near weight 10
+minimize player_to_goal weight 3
+}
+}
+
+rules {
+}
+
+levels tiny of default {
+legend {
+. = empty
+P = Player
+* = Box Goal
+}
+
+level "start" {
+P*
+}
+}
+}
+"#;
+        let loaded = parse_game(source).unwrap();
+        let state = &loaded.levels[0].initial_state;
+
+        assert_eq!(solver_strategy_score(&loaded, state), -43);
     }
 
     fn embedded_puzzle_runtime_export_json(html: &str) -> Value {
@@ -200,7 +274,7 @@ mod tests {
         std::fs::write(dir.join("secret.pdf"), b"not declared").expect("write undeclared asset");
 
         let source = r#"
-title Manifest Assets
+title = Manifest Assets
 
 assets {
 file "sprites/player.svg"
@@ -279,12 +353,16 @@ levels default of board {
             .transition_current_outcome_json("main", -1, 4)
             .expect("transition current state");
         let outcome_json = parse_json_object(&outcome);
+        let outcome_contract: RuntimeTransitionCurrentOutcome =
+            serde_json::from_str(&outcome).expect("2D current outcome should match contract");
 
+        assert_has_object_keys(&outcome_json, RUNTIME_CURRENT_OUTCOME_COMMON_KEYS);
+        assert!(!outcome_contract.completed);
         assert_eq!(
             outcome_json["changedCells"],
             json!([
-                { "x": 0, "y": 0, "objects": [] },
-                { "x": 1, "y": 0, "objects": [1] }
+                { "position": { "x": 0, "y": 0 }, "objects": [] },
+                { "position": { "x": 1, "y": 0 }, "objects": [1] }
             ])
         );
         assert_eq!(
@@ -294,12 +372,8 @@ levels default of board {
                     "kind": "move",
                     "name": "tween",
                     "objectId": 1,
-                    "fromX": 0,
-                    "fromY": 0,
-                    "fromZ": 0,
-                    "toX": 1,
-                    "toY": 0,
-                    "toZ": 0
+                    "from": { "x": 0, "y": 0 },
+                    "to": { "x": 1, "y": 0 }
                 }
             ])
         );
@@ -351,28 +425,55 @@ levels3 default of board {
 }
 "#;
         let mut runtime = Puzzle3RuntimeBridge::from_source(source).expect("load 3D runtime");
-        let state = runtime
-            .parsed
-            .level_bundle
-            .as_ref()
-            .expect("level bundle")
-            .levels[0]
-            .level
-            .build_state(&runtime.parsed.game)
-            .expect("build state");
-        let mut state_json = String::new();
-        push_state3_data(&mut state_json, &state);
+        let mut owner_runtime = puzzle_game_runtime::Puzzle3RuntimeBridge::from_source(source)
+            .expect("load owner 3D runtime");
+        let state_json = r#"{"kind":"puzzle3d","width":2,"depth":1,"height":1,"layerCount":1,"slots":[1,0],"levelFiredRules":[]}"#;
         runtime
-            .set_state_json(&state_json)
+            .set_state_json(state_json)
             .expect("set current state");
+        owner_runtime
+            .set_state_json(state_json)
+            .expect("set owner current state");
 
         let outcome = runtime
             .transition_current_outcome_json("main", 4)
             .expect("transition current state");
+        let owner_outcome = owner_runtime
+            .transition_current_outcome_json("main", 4)
+            .expect("transition owner current state");
+        assert_eq!(
+            parse_json_object(&outcome),
+            parse_json_object(&owner_outcome)
+        );
         let outcome_json = parse_json_object(&outcome);
+        let outcome_contract: RuntimeTransitionCurrentOutcome =
+            serde_json::from_str(&outcome).expect("3D current outcome should match contract");
 
+        assert_has_object_keys(&outcome_json, RUNTIME_CURRENT_OUTCOME_COMMON_KEYS);
         assert_eq!(outcome_json["changed"], true);
+        assert!(!outcome_contract.completed);
         assert!(outcome_json.get("state").is_none());
+        assert_eq!(outcome_json["cancelled"], false);
+        assert_eq!(outcome_json["commands"], json!([]));
+        assert_eq!(outcome_json["firedRules"], json!([0]));
+        assert_eq!(
+            outcome_json["patches"],
+            json!([
+                [
+                    {
+                        "kind": "move",
+                        "from": { "x": 0, "y": 0, "z": 0 },
+                        "to": { "x": 1, "y": 0, "z": 0 },
+                        "objectId": 1
+                    }
+                ]
+            ])
+        );
+        assert!(outcome_json["stateHash"].is_u64());
+        assert!(outcome_json["stateHashKey"].is_string());
+        assert!(outcome_json["previousStateHandle"].is_u64());
+        assert_eq!(outcome_json["variables"], json!([]));
+        assert_eq!(outcome_json["levelFiredRules"], json!([]));
         assert_eq!(
             outcome_json["changedCells"],
             json!([
@@ -380,7 +481,9 @@ levels3 default of board {
                 { "position": { "x": 1, "y": 0, "z": 0 }, "objects": [1] }
             ])
         );
-        assert!(PUZZLE3_APP_JS.contains("this.applyRuntimeCells(outcome.changedCells || []);"));
+        assert!(PUZZLE3_APP_JS.contains("\"runtime current outcome.changedCells\""));
+        assert!(PUZZLE3_APP_JS.contains("\"runtime current outcome.animationEvents\""));
+        assert!(!PUZZLE3_APP_JS.contains("this.applyRuntimeCells(outcome.changedCells || []);"));
     }
 
     #[test]
@@ -439,7 +542,7 @@ levels3 default of board {
     #[test]
     fn generated_visuals_include_sprite_translate_offset() {
         let source = r#"
-title sprite_translate
+title = sprite_translate
 puzzle default {
 layers {
 actor = Player
@@ -502,7 +605,7 @@ P
     #[test]
     fn renderer_consumes_2d_render_grid_settings() {
         let source = r#"
-title grid_render
+title = grid_render
 puzzle default {
 layers {
 actor = Player
@@ -654,6 +757,13 @@ P
         assert!(!APP_JS.contains("window.addEventListener(\"focus\", focusShell);"));
         assert!(!APP_JS.contains("requestAnimationFrame(focusShell);"));
         assert!(!APP_JS.contains("setTimeout(focusShell, 0);"));
+    }
+
+    #[test]
+    fn wait_continuation_timer_does_not_depend_on_animation_frame() {
+        assert!(APP_JS.contains("function applyWaitEvents(events)"));
+        assert!(APP_JS.contains("window.setTimeout(() => {\n      if (waitTimer.done)"));
+        assert!(!APP_JS.contains("requestAnimationFrame(() => {\n      if (waitTimer.done)"));
     }
 
     #[test]
@@ -905,12 +1015,14 @@ P
     }
 
     #[test]
-    fn html_play_message_popup_uses_explicit_default_dismiss_keys() {
+    fn html_play_message_popup_accepts_default_and_game_input_dismiss_keys() {
         assert!(APP_JS.contains("function isMessageDismissKey(event)"));
         assert!(APP_JS.contains("rawKey === \"Enter\""));
         assert!(APP_JS.contains("rawKey === \" \""));
         assert!(APP_JS.contains("key === \"x\""));
+        assert!(APP_JS.contains("return effectsForKey(event).length > 0;"));
         assert!(APP_JS.contains("if (messagePopup) {\n    event.preventDefault();\n    if (isMessageDismissKey(event)) {\n      closeMessagePopup();\n    }\n    return;\n  }"));
+        assert!(APP_JS.contains("if (messagePopup) {\n      if (isMessageDismissKey(keyEvent)) {\n        closeMessagePopup();\n      }\n      return;\n    }"));
         assert!(!APP_JS.contains("backdrop.addEventListener(\"click\", closeMessagePopup);"));
         assert!(!APP_JS.contains("ShowMessage"));
         assert!(!APP_JS.contains("CloseMessage"));
@@ -943,8 +1055,11 @@ P
         assert!(APP_JS.contains("const volume = Number(def.volume ?? 1);"));
         assert!(APP_JS.contains("createSfxPlayer(context, effect, { volume })"));
         assert!(APP_JS.contains("player.start(context.currentTime);"));
-        assert!(!APP_JS.contains("createPuzzleScriptSfxPlayer"));
-        assert!(!APP_JS.contains("generatePuzzleScriptSoundEffect"));
+        assert!(APP_JS.contains("def.type === \"puzzlescript\""));
+        assert!(APP_JS.contains("createPuzzleScriptSfxPlayer(context, effect, { volume })"));
+        assert!(APP_JS.contains("generatePuzzleScriptSoundEffect(def.seed)"));
+        assert!(APP_JS.contains("puzzleScriptSfxEffect(api, def)"));
+        assert!(APP_JS.contains("PuzzleScript sound generator is unavailable"));
     }
 
     #[test]
@@ -969,7 +1084,7 @@ P
     #[test]
     fn standalone_export_includes_sfx_volume() {
         let source = r#"
-title Sfx Volume
+title = Sfx Volume
 
 sounds {
   sfx click seed=click type=select volume=1.25
@@ -1416,7 +1531,7 @@ scene playing {
     #[test]
     fn mixed_export_hosts_puzzle3_as_scene_component() {
         let source = r#"
-title Mixed Game
+title = Mixed Game
 
 puzzle flat {
 layers {
@@ -1493,7 +1608,7 @@ scene mixed_play {
             StandaloneRuntimeWasm::HostDefault,
         )
         .unwrap();
-        assert!(html.contains("puzzle_wasm_player_bg.wasm"));
+        assert!(html.contains("puzzle_wasm_game_bg.wasm"));
         assert!(html.contains("WasmPuzzle3Runtime"));
         assert!(html.contains("fromFixture"));
 
@@ -1526,7 +1641,7 @@ scene mixed_play {
     #[test]
     fn mixed_microban_scene_metadata_stays_model_agnostic() {
         let source = r#"
-title Mixed Microban
+title = Mixed Microban
 
 puzzle microban2d {
 layers {
@@ -1578,7 +1693,7 @@ level "microban_04" {
 
 scene level_select {
 layout {
-title "Microban"
+title = "Microban"
 column {
 for level in levels {
 choice join(level.num, ". ", level.title) -> goto playing(level)
@@ -1868,7 +1983,7 @@ text level.title
     #[test]
     fn solver_task_request_solves_compiled_2d_without_source_fallback() {
         let source = r#"
-title solver_task_compiled
+title = solver_task_compiled
 
 puzzle board {
   layers {
@@ -1952,7 +2067,7 @@ levels default of board {
     #[test]
     fn solver_task_request_treats_win_command_as_goal_without_win_conditions() {
         let source = r#"
-title solver_task_win_command
+title = solver_task_win_command
 
 puzzle board {
   layers {
@@ -2073,10 +2188,11 @@ levels default of board {
     #[test]
     fn solver_solution_steps_materialize_display_objects_for_display() {
         let source = r#"
-title display_solver
+title = "display_solver"
 
 puzzle board {
   layers {
+    @floor = @Floor
     actor = Player
     @cursor = @Cursor
   }
@@ -2087,6 +2203,9 @@ puzzle board {
   }
   routine @paint once {
     [ Player no @Cursor ] -> [ Player @Cursor ]
+  }
+  on_level_start {
+    once_all [ no @Floor ] -> [ @Floor ]
   }
   on_display {
     @paint
@@ -2128,10 +2247,11 @@ scene playing {
     #[test]
     fn compiled_solver_observations_materialize_display_objects_for_display() {
         let source = r#"
-title compiled_display_solver
+title = "compiled_display_solver"
 
 puzzle board {
   layers {
+    @floor = @Floor
     actor = Player
     @cursor = @Cursor
   }
@@ -2143,6 +2263,9 @@ puzzle board {
   }
   routine @paint once {
     [ Player no @Cursor ] -> [ Player @Cursor ]
+  }
+  on_level_start {
+    once_all [ no @Floor ] -> [ @Floor ]
   }
   on_display {
     @paint
@@ -2169,6 +2292,13 @@ levels default of board {
             .find(|object| object["name"] == "@Cursor")
             .and_then(|object| object["id"].as_u64())
             .expect("@Cursor id");
+        let floor_id = export["engine"]["objects"]
+            .as_array()
+            .expect("engine objects")
+            .iter()
+            .find(|object| object["name"] == "@Floor")
+            .and_then(|object| object["id"].as_u64())
+            .expect("@Floor id");
         let level = &export["levels"][0];
         let request = json!({
             "version": 1,
@@ -2211,19 +2341,129 @@ levels default of board {
                 .any(|slot| slot.as_u64() == Some(cursor_id))
         );
         assert!(
+            response["observations"][0]["state"]["slots"]
+                .as_array()
+                .expect("observation slots")
+                .iter()
+                .any(|slot| slot.as_u64() == Some(floor_id))
+        );
+        assert!(
             response["steps"][0]["state"]["slots"]
                 .as_array()
                 .expect("step slots")
                 .iter()
                 .any(|slot| slot.as_u64() == Some(cursor_id))
         );
+        assert!(
+            response["steps"][0]["state"]["slots"]
+                .as_array()
+                .expect("step slots")
+                .iter()
+                .any(|slot| slot.as_u64() == Some(floor_id))
+        );
+    }
+
+    #[cfg(feature = "solver")]
+    #[test]
+    fn compiled_solver_task_initial_display_state_materializes_level_start_and_display() {
+        let source = r#"
+title = "compiled_initial_display_solver"
+
+puzzle board {
+  layers {
+    @floor = @Floor
+    actor = Player
+    @cursor = @Cursor
+  }
+  keys {
+    d ArrowRight -> right
+  }
+  rules {
+    input right [ Player ] -> win
+  }
+  routine @paint once {
+    [ Player no @Cursor ] -> [ Player @Cursor ]
+  }
+  on_level_start {
+    once_all [ no @Floor ] -> [ @Floor ]
+  }
+  on_display {
+    @paint
+  }
+}
+
+levels default of board {
+  legend {
+    . = empty
+    P = Player
+  }
+  level "start" {
+    P
+  }
+}
+"#;
+        let html = export_editor_preview_html_from_source(source, "game.puzzle", "", "")
+            .expect("preview export");
+        let export = embedded_puzzle_runtime_export_json(&html);
+        let cursor_id = export["engine"]["objects"]
+            .as_array()
+            .expect("engine objects")
+            .iter()
+            .find(|object| object["name"] == "@Cursor")
+            .and_then(|object| object["id"].as_u64())
+            .expect("@Cursor id");
+        let floor_id = export["engine"]["objects"]
+            .as_array()
+            .expect("engine objects")
+            .iter()
+            .find(|object| object["name"] == "@Floor")
+            .and_then(|object| object["id"].as_u64())
+            .expect("@Floor id");
+        let level = &export["levels"][0];
+        let request = json!({
+            "version": 1,
+            "rules": {
+                "compileId": "test-compile",
+                "documentId": "test-document",
+                "modelKind": "2d",
+                "compiledPlay": export["compiledPlay"].clone(),
+                "runRulesOnLevelStart": export["engine"]["runRulesOnLevelStart"].clone(),
+                "goal": export["goal"].clone(),
+                "lose": export["lose"].clone()
+            },
+            "target": {
+                "origin": "preview-level",
+                "compileId": "test-compile",
+                "documentId": "test-document",
+                "level": {
+                    "index": 0,
+                    "levelName": level["name"].clone()
+                },
+                "state": {
+                    "kind": "compiled-start",
+                    "lifecycle": "playable-start",
+                    "data": level["initialState"].clone()
+                }
+            },
+            "maxDepth": 2,
+            "maxNodes": 100,
+            "maxMs": 0
+        });
+
+        let response = parse_json_object(
+            &solver_task_initial_display_state_json(&request.to_string()).unwrap(),
+        );
+        let slots = response["slots"].as_array().expect("display slots");
+
+        assert!(slots.iter().any(|slot| slot.as_u64() == Some(cursor_id)));
+        assert!(slots.iter().any(|slot| slot.as_u64() == Some(floor_id)));
     }
 
     #[cfg(feature = "solver")]
     #[test]
     fn solver_materializes_level_start_for_editor_state_with_level_index() {
         let source = r#"
-title solver_level_start
+title = solver_level_start
 
 puzzle board {
   layers {
@@ -2281,7 +2521,7 @@ scene playing {
     #[test]
     fn solver_request_materializes_level_start_from_explicit_target() {
         let source = r#"
-title solver_request_level_start
+title = solver_request_level_start
 
 puzzle board {
   layers {
@@ -2355,7 +2595,7 @@ levels default of board {
     #[test]
     fn solver_treats_win_command_as_goal() {
         let source = r#"
-title solver_win_command
+title = solver_win_command
 
 puzzle board {
   layers {
@@ -2436,7 +2676,7 @@ levels default of board {
     #[test]
     fn solver_inputs_use_model_inputs_not_scene_or_control_inputs() {
         let source = r#"
-title solver_input_scope
+title = solver_input_scope
 
 puzzle board {
   layers {
@@ -2509,17 +2749,12 @@ scene playing {
     #[test]
     fn solver_accepts_puzzle3d_state_and_returns_replay_steps() {
         let source = r#"
-title "Themed 3D Solver"
+title = "Themed 3D Solver"
 
 puzzle3 push3 {
 layers {
 floor = Goal
 solid = Player Box Wall
-}
-
-keys {
-d ArrowRight -> right
-r -> restart
 }
 
 groups {
@@ -2538,6 +2773,18 @@ if win_conditions -> next_level
 win_conditions {
 some Goal
 no down [ no Box | Goal ]
+}
+
+query box_to_goal = distance(Box, Goal)
+query has_box = exists(Box)
+query box_goal_lines = count([ Box Goal ])
+
+solver {
+strategy {
+maximize box_goal_lines weight 2
+minimize box_to_goal weight 3
+prefer has_box
+}
 }
 }
 
@@ -2558,6 +2805,7 @@ PB.
 "#;
 
         let parsed = parse_puzzle3d_for_solver(source).unwrap();
+        assert_eq!(parsed.solver_strategy.terms.len(), 3);
         let state = parsed
             .level_bundle
             .as_ref()
@@ -2583,7 +2831,8 @@ PB.
         assert!(response.contains(r#""name":"right""#));
         assert!(response.contains(r#""direction":"right""#));
         assert!(response.contains(r#""completed":true"#));
-        assert!(response.contains(r#""clearCommands":["next_level"]"#));
+        assert!(response.contains(r#""clearCommands":[{"#));
+        assert!(response.contains(r#""kind": "puzzle_next_level""#));
         assert!(response.contains(r#""scene":{"kind":"puzzle3d""#));
         assert!(!response.contains(r#""name":"restart""#));
     }
@@ -2591,7 +2840,7 @@ PB.
     #[test]
     fn core_runtime_bridge_uses_core_once_all_semantics() {
         let source = r#"
-title once_all_overlap
+title = once_all_overlap
 
 puzzle board {
   layers {
@@ -2624,14 +2873,17 @@ scene playing {
         let outcome =
             transition_program_outcome_json_from_source(source, "main", -1, &state_json, 0)
                 .unwrap();
+        let outcome_contract: RuntimeTransitionProgramOutcome =
+            serde_json::from_str(&outcome).expect("2D program outcome should match contract");
 
         assert!(outcome.contains(r#""slots":[2,0,1]"#));
+        assert!(!outcome_contract.completed);
     }
 
     #[test]
     fn standalone_export_embeds_game_wasm_runtime() {
         let source = r#"
-	title Wasm Export
+	title = Wasm Export
 again_interval = 90ms
 
 puzzle board {
@@ -2664,7 +2916,7 @@ scene playing {
         assert!(html.contains("window.PuzzleStandaloneEmbeddedWasm"));
         assert!(html.contains("\\\"defaultAgainMs\\\":90"));
         assert!(html.contains("\\\"runtimeLoadedGame\\\""));
-        assert!(html.contains("puzzle_wasm_player_bg.wasm"));
+        assert!(html.contains("puzzle_wasm_game_bg.wasm"));
         assert!(html.contains("WasmStandaloneSession"));
         assert!(html.contains("WasmPuzzle3Runtime"));
         assert!(!html.contains("WasmCoreRuntime"));
@@ -2673,7 +2925,6 @@ scene playing {
         assert!(!html.contains("suggest_source_completions"));
         assert!(!html.contains("solve_state"));
         assert!(!html.contains("solve_state_with_progress"));
-        assert!(!html.contains("solver"));
         assert!(!html.contains("puzzle_solver"));
         assert!(!html.contains("SearchBudget"));
         assert!(!html.contains("best_first"));
@@ -2719,11 +2970,10 @@ scene playing {
         assert!(!STANDALONE_JS.contains("this.initializeCoreRuntime();"));
         assert!(!STANDALONE_JS.contains("WasmCoreRuntime"));
         assert!(!STANDALONE_JS.contains("WasmCompiledCoreRuntime"));
-        assert!(PUZZLE_PLAYER_WASM_JS.contains("WasmStandaloneSession"));
-        assert!(PUZZLE_PLAYER_WASM_JS.contains("WasmPuzzle3Runtime"));
-        assert!(PUZZLE_PLAYER_WASM_JS.contains("fromFixture"));
-        assert!(!PUZZLE_PLAYER_WASM_JS.contains("compile_preview"));
-        assert!(!PUZZLE_PLAYER_WASM_JS.contains("solve_state"));
+        assert!(PUZZLE_GAME_WASM_JS.contains("WasmStandaloneSession"));
+        assert!(PUZZLE_GAME_WASM_JS.contains("WasmPuzzle3Runtime"));
+        assert!(PUZZLE_GAME_WASM_JS.contains("fromFixture"));
+        assert!(!PUZZLE_GAME_WASM_JS.contains("compile_preview"));
         assert!(!PUZZLE_GAME_WASM_JS.contains("solve_state"));
         assert!(!PUZZLE_GAME_WASM_JS.contains("solver"));
         assert!(!PUZZLE_GAME_WASM_JS.contains("puzzle_solver"));
@@ -2736,7 +2986,7 @@ scene playing {
     #[test]
     fn editor_preview_runtime_bundle_serializes_scene_input_effects() {
         let source = r#"
-title Scene Input Runtime Bundle
+title = Scene Input Runtime Bundle
 
 puzzle board {
   layers {
@@ -2787,7 +3037,7 @@ scene playing {
     #[test]
     fn standalone_export_can_embed_browser_supplied_game_runtime_assets() {
         let source = r#"
-title Browser Supplied Runtime
+title = Browser Supplied Runtime
 
 puzzle board {
   layers {
@@ -2825,6 +3075,9 @@ scene playing {
         assert!(html.contains("window.PuzzleStandaloneEmbeddedWasm"));
         assert!(html.contains("export const runtimeMarker = 1;"));
         assert!(html.contains(r#"wasmBase64: "AA==""#));
+        assert!(!html.contains("PuzzleStudioSetPreviewDebugMode"));
+        assert!(!html.contains("PuzzleStudioPreviewDebugTrace"));
+        assert!(!html.contains("/api/debug/input/"));
         assert!(!html.contains("PuzzleStudioRuntimeAssetRequest"));
         assert!(!html.contains("Timed out waiting for editor preview runtime asset"));
     }
@@ -2832,7 +3085,7 @@ scene playing {
     #[test]
     fn editor_preview_export_keeps_studio_bridge_for_state_control() {
         let source = r#"
-title Editor Preview Export
+title = Editor Preview Export
 
 puzzle board {
   layers {
@@ -2870,6 +3123,9 @@ scene playing {
         assert!(html.contains("PuzzleStudioKey"));
         assert!(html.contains("PuzzleStudioCommand"));
         assert!(html.contains("PuzzleStudioPreviewState"));
+        assert!(html.contains("PuzzleStudioSetPreviewDebugMode"));
+        assert!(html.contains("PuzzleStudioPreviewDebugTrace"));
+        assert!(html.contains("/api/debug/input/"));
         assert!(html.contains("PuzzleRuntimeWasmLoader"));
         assert!(html.contains("set_current_state("));
         assert!(APP_JS.contains("await standaloneRuntime.setCurrentState(event.data.state, {"));
@@ -2906,7 +3162,7 @@ scene playing {
     #[test]
     fn standalone_export_includes_scene_and_screen_keys() {
         let source = r#"
-title Export Test
+title = Export Test
 
 puzzle default {
 layers {
@@ -2961,7 +3217,7 @@ scene playing {
     #[test]
     fn standalone_export_includes_progress_savedata_contract() {
         let source = r#"
-title Progress Export
+title = Progress Export
 
 puzzle default {
 persistent var bonus = 0
@@ -3075,6 +3331,53 @@ rules {
     }
 
     #[test]
+    fn standalone_debug_input_endpoint_reports_rule_trace() {
+        let source = r#"
+title = "Debug Trace"
+
+puzzle main {
+  layers {
+    actor = Player
+  }
+
+  rules {
+    [ Player ] -> [ ]
+  }
+}
+
+levels main of main {
+  legend {
+    . = empty
+    P = Player
+  }
+
+  level "one"
+  P
+}
+"#;
+        let mut bridge =
+            StandaloneSessionBridge::from_source(source, "debug_trace.puzzle").unwrap();
+
+        let body = bridge
+            .request_json("POST", "/api/debug/input/right")
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+
+        assert_eq!(body["snapshot"]["currentScene"], "main");
+        assert_eq!(body["debug"]["input"], "right");
+        assert_eq!(body["debug"]["executions"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            body["debug"]["executions"][0]["rule"]["sourceLine"],
+            "[ Player ] -> [ ]"
+        );
+        assert_eq!(body["debug"]["executions"][0]["patch"][0]["kind"], "remove");
+        assert_eq!(
+            body["debug"]["executions"][0]["patch"][0]["object"],
+            "Player"
+        );
+    }
+
+    #[test]
     fn standalone_session_scene_preserves_2d_render_settings_after_goto() {
         let source = include_str!("../../../games/TPGJ6/locked.puzzle");
         let mut bridge =
@@ -3095,9 +3398,45 @@ rules {
     }
 
     #[test]
+    fn standalone_editor_state_continues_locked_room_level_after_repeated_moves() {
+        let source = include_str!("../../../games/TPGJ6/locked.puzzle");
+        let document =
+            puzzle_lang::parse_game_for_path(source, "games/TPGJ6/locked.puzzle").unwrap();
+        let loaded = loaded_document_scene_host_loaded_game(&document).unwrap();
+        let level_index = loaded
+            .levels
+            .iter()
+            .position(|level| level.name == "level 5")
+            .expect("locked room level 5 should exist");
+        let mut state_json = String::new();
+        push_state_data(&mut state_json, &loaded.levels[level_index].initial_state);
+
+        let mut bridge =
+            StandaloneSessionBridge::from_source(source, "games/TPGJ6/locked.puzzle").unwrap();
+        bridge
+            .set_current_state_json(&state_json, level_index, true)
+            .unwrap();
+        bridge.apply_input_name("left").unwrap();
+        bridge.apply_command_name("__continue_effects").unwrap();
+        let after_first: serde_json::Value = serde_json::from_str(&bridge.snapshot_json()).unwrap();
+        assert!(cell_has_object(
+            &after_first["scene"]["cells"][69],
+            "Player"
+        ));
+
+        bridge.apply_input_name("left").unwrap();
+        bridge.apply_command_name("__continue_effects").unwrap();
+
+        let snapshot: serde_json::Value = serde_json::from_str(&bridge.snapshot_json()).unwrap();
+        assert_eq!(snapshot["levelIndex"], level_index);
+        assert_eq!(snapshot["currentScene"], "playing");
+        assert!(cell_has_object(&snapshot["scene"]["cells"][68], "Player"));
+    }
+
+    #[test]
     fn standalone_snapshot_reports_level_select_model_input_contract() {
         let source = r#"
-title level_select_input_contract
+title = level_select_input_contract
 
 puzzle default {
 layers {
@@ -3159,7 +3498,7 @@ level_menu
     #[test]
     fn standalone_level_menu_position_select_restarts_current_level_state() {
         let source = r#"
-title level_menu_position_restart
+title = level_menu_position_restart
 
 puzzle default {
 layers {
@@ -3239,7 +3578,7 @@ level_menu
     #[test]
     fn standalone_session_bridge_emits_tween_on_first_input() {
         let source = r#"
-title "Standalone Tween Fixture"
+title = "Standalone Tween Fixture"
 
 animation {
   tween {
@@ -3295,12 +3634,8 @@ scene playing {
                     "kind": "move",
                     "name": "tween",
                     "objectId": 1,
-                    "fromX": 0,
-                    "fromY": 0,
-                    "fromZ": 0,
-                    "toX": 1,
-                    "toY": 0,
-                    "toZ": 0
+                    "from": { "x": 0, "y": 0 },
+                    "to": { "x": 1, "y": 0 }
                 }
             ])
         );
@@ -3309,7 +3644,7 @@ scene playing {
     #[test]
     fn standalone_session_bridge_exposes_default_move_wait_boundary() {
         let source = r#"
-title "Standalone Default Move Wait Fixture"
+title = "Standalone Default Move Wait Fixture"
 
 input_buffer {
   queue_during_wait = true
@@ -3418,7 +3753,7 @@ scene playing {
     #[test]
     fn standalone_export_resolves_viewport_focus_group_objects() {
         let source = r#"
-title Flickscreen Focus
+title = Flickscreen Focus
 
 puzzle default {
 layers {
@@ -3465,9 +3800,9 @@ rules {
     #[test]
     fn standalone_export_initial_body_uses_loaded_theme() {
         let source = r##"
-title Theme Startup
+title = Theme Startup
 theme noir {
-  background_color #123456
+  background_color = #123456
 }
 
 puzzle default {
@@ -3509,14 +3844,14 @@ rules {
 
         assert!(html.contains("window.Puzzle3DFrameFixture"));
         assert!(html.contains("runtimeContractVersion"));
-        assert!(html.contains("puzzle_wasm_player_bg.wasm"));
+        assert!(html.contains("puzzle_wasm_game_bg.wasm"));
         assert!(html.contains("WasmPuzzle3Runtime"));
         assert!(html.contains("fromFixture"));
         assert!(html.contains("WasmStandaloneSession"));
         assert!(html.contains("onLifecycleEffects(effects)"));
         assert!(html.contains("function sendPuzzle3LifecycleEffects("));
         assert!(!html.contains("Unsupported Puzzle3 lifecycle effect"));
-        assert!(!html.contains("puzzle_wasm_game_bg.wasm"));
+        assert!(!html.contains("puzzle_wasm_player_bg.wasm"));
         assert!(!html.contains("\\npuzzle3 microban3d"));
 
         let preview_html = export_editor_preview_html_from_source(
@@ -3544,7 +3879,7 @@ rules {
 
     #[test]
     fn puzzle3_source_free_export_embeds_local_frame_runtime_contract() {
-        let source = r#"title "Local Frame"
+        let source = r#"title = "Local Frame"
 
 puzzle3 cube {
   layers {
@@ -3581,7 +3916,7 @@ levels3 default of cube {
 
     #[test]
     fn puzzle3_export_embeds_source_free_frame_fixture_and_path() {
-        let source = r#"title "Tiny"
+        let source = r#"title = "Tiny"
 
 puzzle3 cube {
   layers {
@@ -3819,9 +4154,9 @@ levels3 default of cube {
 
     #[test]
     fn puzzle3_frame_export_keeps_component_document_transparent() {
-        let source = r##"title "Themed 3D"
+        let source = r##"title = "Themed 3D"
 theme clean {
-  background_color #123456
+  background_color = #123456
 }
 
 puzzle3 cube {
@@ -3877,7 +4212,7 @@ levels3 default of cube {
     #[test]
     fn puzzle3_screenshot_default_scene_prefers_model_component_scene() {
         let source = r#"
-title "Screenshot"
+title = "Screenshot"
 
 puzzle3 cube {
   layers {
@@ -3889,7 +4224,7 @@ puzzle3 cube {
 
 scene title {
   layout {
-    title "Screenshot"
+    title = "Screenshot"
     button "Play" -> goto playing
   }
 }

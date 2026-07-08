@@ -423,7 +423,7 @@ fn visual_value_env(bindings: &HashMap<String, String>) -> ValueEnv {
 fn parse_value_expr(value: &str, line: &str) -> Result<ValueExpr, DiagnosticReport> {
     if let Some((name, arg)) = parse_map_call(value) {
         validate_identifier(name, line, "map name")?;
-        validate_identifier(arg, line, "map argument")?;
+        validate_map_argument(arg, line)?;
         return Ok(ValueExpr::MapCall {
             name: name.to_string(),
             arg: arg.to_string(),
@@ -436,6 +436,15 @@ fn parse_value_expr(value: &str, line: &str) -> Result<ValueExpr, DiagnosticRepo
         ));
     }
     Ok(ValueExpr::Binding(value.to_string()))
+}
+
+fn validate_map_argument(value: &str, line: &str) -> Result<(), DiagnosticReport> {
+    if let Some((base, label)) = value.split_once('#') {
+        validate_identifier(base, line, "map argument")?;
+        validate_tag_capture_label(label, line)?;
+        return Ok(());
+    }
+    validate_identifier(value, line, "map argument")
 }
 
 fn eval_bound_value_expr(
@@ -521,35 +530,34 @@ fn value_expr_result_axis(
 fn expand_for_binding_lines(
     lines: &[String],
     binding: &str,
-    axis: Option<&str>,
-    value: &str,
+    value: &ForExpansionValue,
     maps: &HashMap<String, ValueMap>,
 ) -> Result<Vec<String>, DiagnosticReport> {
     lines
         .iter()
-        .map(|line| expand_for_binding_line(line, binding, axis, value, maps))
+        .map(|line| expand_for_binding_line(line, binding, value, maps))
         .collect()
 }
 
 fn expand_for_binding_line(
     line: &str,
     binding: &str,
-    axis: Option<&str>,
-    value: &str,
+    value: &ForExpansionValue,
     maps: &HashMap<String, ValueMap>,
 ) -> Result<String, DiagnosticReport> {
     let mut env = ValueEnv::default();
-    if let Some(axis) = axis {
-        env.bind(binding, axis, value);
+    if let Some(axis) = value.axis.as_deref() {
+        env.bind(binding, axis, &value.value);
     } else {
-        env.bind_untyped(binding, value);
+        env.bind_untyped(binding, &value.value);
     }
-    let expanded = replace_map_call_tokens(line, &env, maps)?;
-    Ok(replace_identifier_token(&expanded, binding, value))
+    replace_for_tokens(line, binding, value, &env, maps)
 }
 
-fn replace_map_call_tokens(
+fn replace_for_tokens(
     line: &str,
+    binding: &str,
+    value: &ForExpansionValue,
     env: &ValueEnv,
     maps: &HashMap<String, ValueMap>,
 ) -> Result<String, DiagnosticReport> {
@@ -557,6 +565,14 @@ fn replace_map_call_tokens(
     let chars = line.chars().collect::<Vec<_>>();
     let mut i = 0usize;
     while i < chars.len() {
+        if chars[i] == '"' {
+            copy_quoted_segment(&chars, &mut i, &mut out);
+            continue;
+        }
+        if chars[i] == '/' && chars.get(i + 1) == Some(&'/') {
+            out.extend(chars[i..].iter());
+            break;
+        }
         if is_identifier_start(chars[i]) {
             let name_start = i;
             i += 1;
@@ -580,6 +596,31 @@ fn replace_map_call_tokens(
                     }
                 }
             }
+            let name = chars[name_start..i].iter().collect::<String>();
+            if name == binding {
+                if i < chars.len() && chars[i] == '.' {
+                    let attr_start = i + 1;
+                    let mut attr_end = attr_start;
+                    if attr_end < chars.len() && is_identifier_start(chars[attr_end]) {
+                        attr_end += 1;
+                        while attr_end < chars.len() && is_identifier_continue(chars[attr_end]) {
+                            attr_end += 1;
+                        }
+                        let attr = chars[attr_start..attr_end].iter().collect::<String>();
+                        let Some(projected) = value.attrs.get(&attr) else {
+                            return Err(parse_error(
+                                line,
+                                &format!("unknown for projection `{binding}.{attr}`"),
+                            ));
+                        };
+                        out.push_str(projected);
+                        i = attr_end;
+                        continue;
+                    }
+                }
+                out.push_str(&value.value);
+                continue;
+            }
             out.extend(chars[name_start..i].iter());
             continue;
         }
@@ -587,6 +628,24 @@ fn replace_map_call_tokens(
         i += 1;
     }
     Ok(out)
+}
+
+fn copy_quoted_segment(chars: &[char], i: &mut usize, out: &mut String) {
+    out.push(chars[*i]);
+    *i += 1;
+    let mut escaped = false;
+    while *i < chars.len() {
+        let ch = chars[*i];
+        out.push(ch);
+        *i += 1;
+        if escaped {
+            escaped = false;
+        } else if ch == '\\' {
+            escaped = true;
+        } else if ch == '"' {
+            break;
+        }
+    }
 }
 
 fn is_identifier_start(ch: char) -> bool {
@@ -597,43 +656,45 @@ fn is_identifier_continue(ch: char) -> bool {
     ch == '_' || ch.is_ascii_alphanumeric()
 }
 
-fn replace_identifier_token(line: &str, binding: &str, value: &str) -> String {
-    let mut out = String::with_capacity(line.len());
-    let mut token = String::new();
-    for ch in line.chars() {
-        if ch == '_' || ch.is_ascii_alphanumeric() {
-            token.push(ch);
-            continue;
-        }
-        flush_identifier_token(&mut out, &mut token, binding, value);
-        out.push(ch);
-    }
-    flush_identifier_token(&mut out, &mut token, binding, value);
-    out
-}
-
-fn flush_identifier_token(out: &mut String, token: &mut String, binding: &str, value: &str) {
-    if token.is_empty() {
-        return;
-    }
-    if token == binding {
-        out.push_str(value);
-    } else {
-        out.push_str(token);
-    }
-    token.clear();
-}
-
 #[derive(Clone, Debug)]
 struct ForExpansionValue {
     value: String,
     axis: Option<String>,
+    attrs: HashMap<String, String>,
+}
+
+impl ForExpansionValue {
+    fn atom(value: impl Into<String>) -> Self {
+        Self {
+            value: value.into(),
+            axis: None,
+            attrs: HashMap::new(),
+        }
+    }
+
+    fn axis_value(axis: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            value: value.into(),
+            axis: Some(axis.into()),
+            attrs: HashMap::new(),
+        }
+    }
 }
 
 fn for_expansion_values(
     sources: &[&str],
     value_sets: &HashMap<String, Vec<String>>,
     numeric_variables: &HashMap<String, i64>,
+    line: &str,
+) -> Result<Vec<ForExpansionValue>, DiagnosticReport> {
+    for_expansion_values_with_sets(sources, value_sets, numeric_variables, &HashMap::new(), line)
+}
+
+fn for_expansion_values_with_sets(
+    sources: &[&str],
+    value_sets: &HashMap<String, Vec<String>>,
+    numeric_variables: &HashMap<String, i64>,
+    expansion_sets: &HashMap<String, Vec<ForExpansionValue>>,
     line: &str,
 ) -> Result<Vec<ForExpansionValue>, DiagnosticReport> {
     if sources.is_empty() {
@@ -644,50 +705,42 @@ fn for_expansion_values(
     }
     if sources.len() == 1 {
         let source = sources[0];
+        if let Some(values) = expansion_sets.get(source) {
+            return Ok(values.clone());
+        }
         if let Some(values) = value_sets.get(source) {
             return Ok(values
                 .iter()
-                .map(|value| ForExpansionValue {
-                    value: value.clone(),
-                    axis: Some(source.to_string()),
-                })
+                .map(|value| ForExpansionValue::axis_value(source, value.clone()))
                 .collect());
         }
         if let Some(values) = numeric_range_values(source, numeric_variables, line)? {
-            return Ok(values
-                .into_iter()
-                .map(|value| ForExpansionValue { value, axis: None })
-                .collect());
+            return Ok(values.into_iter().map(ForExpansionValue::atom).collect());
         }
         return Err(parse_error(
             line,
-            "unknown expansion tag set or numeric range",
+            "unknown expansion set, tag set, or numeric range",
         ));
     }
 
     sources
         .iter()
         .flat_map(|source| {
+            if let Some(values) = expansion_sets.get(*source) {
+                return values.iter().cloned().map(Ok).collect::<Vec<_>>();
+            }
             if let Some(values) = value_sets.get(*source) {
                 return values
                     .iter()
-                    .map(|value| {
-                        Ok(ForExpansionValue {
-                            value: value.clone(),
-                            axis: Some((*source).to_string()),
-                        })
-                    })
+                    .map(|value| Ok(ForExpansionValue::axis_value(*source, value.clone())))
                     .collect::<Vec<_>>();
             }
             match numeric_range_values(source, numeric_variables, line) {
                 Ok(Some(values)) => values
                     .into_iter()
-                    .map(|value| Ok(ForExpansionValue { value, axis: None }))
+                    .map(|value| Ok(ForExpansionValue::atom(value)))
                     .collect(),
-                Ok(None) => vec![Ok(ForExpansionValue {
-                    value: (*source).to_string(),
-                    axis: None,
-                })],
+                Ok(None) => vec![Ok(ForExpansionValue::atom(*source))],
                 Err(error) => vec![Err(error)],
             }
         })
@@ -1119,8 +1172,7 @@ fn parse_statement_block(
                     let mut expanded_lines = match expand_for_binding_lines(
                         &body_lines,
                         binding,
-                        value.axis.as_deref(),
-                        &value.value,
+                        value,
                         maps,
                     ) {
                         Ok(lines) => lines,
@@ -2418,42 +2470,6 @@ fn parse_pattern_condition(
             false,
         )?,
     })
-}
-
-fn normalize_embedded_direction_marker(pattern: &str) -> (Option<OrientationExpr>, String) {
-    let trimmed = pattern.trim();
-    let Some(after_open) = trimmed.strip_prefix('[') else {
-        return (None, trimmed.to_string());
-    };
-    let rest = after_open.trim_start();
-    let Some(marker) = rest.chars().next() else {
-        return (None, trimmed.to_string());
-    };
-    let Some(direction_name) = embedded_direction_name(marker) else {
-        return (None, trimmed.to_string());
-    };
-    let marker_len = marker.len_utf8();
-    let after_marker = &rest[marker_len..];
-    if !after_marker.chars().next().is_some_and(char::is_whitespace) {
-        return (None, trimmed.to_string());
-    }
-    let normalized = format!("[{}", after_marker.trim_start());
-    (
-        Some(OrientationExpr::Fixed(DirectionName(
-            direction_name.to_string(),
-        ))),
-        normalized,
-    )
-}
-
-fn embedded_direction_name(marker: char) -> Option<&'static str> {
-    match marker {
-        '>' => Some("right"),
-        '<' => Some("left"),
-        '^' => Some("up"),
-        'v' => Some("down"),
-        _ => None,
-    }
 }
 
 fn is_oriented_rewrite_line(line: &str, orientation_token: &str) -> bool {

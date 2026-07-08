@@ -33,6 +33,8 @@ export function solve_solver_task_json_with_progress(request_json: string, on_ob
 
 export function solve_state(source: string, puzzle_path: string, state_json: string, max_depth: number, max_nodes: number, max_ms: number): string;
 
+export function solver_task_initial_display_state_json(request_json: string): string;
+
 export function source_outline_json(source: string): string;
 
 export function suggest_source_completions(source: string, cursor_offset: number): string;
@@ -53,6 +55,7 @@ export interface InitOutput {
     readonly solve_solver_task_json: (a: number, b: number) => [number, number, number, number];
     readonly solve_solver_task_json_with_progress: (a: number, b: number, c: any) => [number, number, number, number];
     readonly solve_state: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number, number, number];
+    readonly solver_task_initial_display_state_json: (a: number, b: number) => [number, number, number, number];
     readonly source_outline_json: (a: number, b: number) => [number, number];
     readonly suggest_source_completions: (a: number, b: number, c: number) => [number, number];
     readonly translate_puzzlescript: (a: number, b: number) => [number, number, number, number];

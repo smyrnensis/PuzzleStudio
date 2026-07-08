@@ -1241,6 +1241,7 @@ name = "html-play"
 version = "0.1.0"
 dependencies = [
  "puzzle-core",
+ "puzzle-game-runtime",
  "puzzle-grid3d",
  "puzzle-lang",
  "puzzle-play",
@@ -2452,6 +2453,7 @@ name = "puzzle-wasm-core"
 version = "0.1.0"
 dependencies = [
  "puzzle-core",
+ "puzzle-runtime-contract",
  "serde_json",
  "wasm-bindgen",
 ]

@@ -19,6 +19,7 @@ use tauri::{Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
 
 const WORKSPACE_CHANGED_EVENT: &str = "puzzlestudio-workspace-changed";
+const APP_EXIT_REQUESTED_EVENT: &str = "puzzlestudio-app-exit-requested";
 const WORKSPACE_WATCH_INTERVAL: Duration = Duration::from_millis(700);
 const WORKSPACE_WATCH_DEBOUNCE: Duration = Duration::from_millis(150);
 const LOADED_WORKSPACES_FILE: &str = "loaded-workspaces.json";
@@ -43,6 +44,7 @@ struct DesktopState {
     services: Mutex<Vec<EditorService>>,
     exported_files: Mutex<BTreeSet<PathBuf>>,
     watchers: Mutex<Vec<WorkspaceWatcher>>,
+    exit_confirmed: AtomicBool,
 }
 
 struct WorkspaceWatcher {
@@ -425,6 +427,12 @@ fn open_exported_file(
     drop(exported_files);
     open_file_with_system_handler(&path)?;
     Ok(serde_json::json!({ "ok": true }))
+}
+
+#[tauri::command]
+fn confirm_app_exit(app: tauri::AppHandle, state: tauri::State<'_, DesktopState>) {
+    state.exit_confirmed.store(true, Ordering::SeqCst);
+    app.exit(0);
 }
 
 fn open_file_with_system_handler(path: &Path) -> Result<(), String> {
@@ -1367,13 +1375,27 @@ pub fn run() {
             load_workspace_document,
             export_html,
             open_exported_file,
+            confirm_app_exit,
             create_source_file,
             create_source_folder,
             rename_workspace_entry,
             delete_workspace_entry,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running PuzzleStudio desktop app");
+        .build(tauri::generate_context!())
+        .expect("error while building PuzzleStudio desktop app")
+        .run(|app, event| {
+            if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
+                let state = app.state::<DesktopState>();
+                if state.exit_confirmed.load(Ordering::SeqCst) || app.webview_windows().is_empty() {
+                    return;
+                }
+                api.prevent_exit();
+                let payload = serde_json::json!({ "code": code });
+                if let Err(error) = app.emit(APP_EXIT_REQUESTED_EVENT, payload) {
+                    eprintln!("failed to emit app exit request: {error}");
+                }
+            }
+        });
 }
 
 #[cfg(test)]

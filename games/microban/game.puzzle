@@ -1,5 +1,5 @@
-title "Microban"
-author "Levels by David Skinner"
+title = "Microban"
+author = "Levels by David Skinner"
 
 theme puzzlescript
 
@@ -181,8 +181,8 @@ level "microban_10"
 
 scene title {
 layout {
-title "Microban"
-subtitle "Levels by David Skinner"
+title = "Microban"
+subtitle = "Levels by David Skinner"
 choice "Continue" -> goto playing
 choice "New Game" -> {
 clear_game_progress
@@ -195,8 +195,8 @@ choice "Level Select" -> goto level_select
 scene playing {
 layout {
 row {
-	title "Microban"
-	subtitle level.label
+	title = "Microban"
+	subtitle = level.label
 }
 sokoban
 }

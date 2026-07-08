@@ -1,11 +1,11 @@
-title "Stuck Room"
+title = "Stuck Room"
 
 default_wait_time = 100ms
 
-theme puzzlescript {
-accent_color #c4d0cb
-background_color #454545
-text_color #c4d0cb
+theme clean {
+accent_color = #c4d0cb
+background_color = #454545
+text_color = #c4d0cb
 }
 
 animation {
@@ -33,7 +33,7 @@ num = 0...5
 }
 
 render {
-cell_size 40
+cell_size = 40
 }
 
 map rotate directions {
@@ -64,8 +64,7 @@ Key
 solid = Player Box:state Pull:state Wall Gate:num
 @Count:num
 OnPlayer CanEnter VirtualBox
-each @LockedFrame:directions @LockedCorner:directions
-each @WallFrame:directions @WallCorner:directions
+each @LockedFrame:directions @LockedCorner:directions @WallFrame:directions @WallCorner:directions
 @Debug
 }
 
@@ -814,17 +813,18 @@ shape Flag
 
 
 scene title {
-	title
-	subtitle
+layout {
+	title = title
 	choice "Play" -> goto playing
 	// choice "New Game" -> {
 			// clear_game_progress
 			// goto playing
 		// }
 	choice "Levels" -> goto level_select
-	on_scene_start {
-		stop_music locked_room
-	}
+}
+on_scene_start {
+	stop_music locked_room
+}
 }
 
 scene playing {

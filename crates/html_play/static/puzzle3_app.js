@@ -395,10 +395,14 @@ class Puzzle3SessionRuntime {
       return false;
     }
     this.undoStack.push(before);
-    this.animationEvents = Array.isArray(outcome.animationEvents)
-      ? outcome.animationEvents.map((event) => ({ ...event }))
-      : [];
-    this.applyRuntimeCells(outcome.changedCells || []);
+    this.animationEvents = cloneRequiredJsonArray(
+      outcome.animationEvents,
+      "runtime current outcome.animationEvents",
+    );
+    this.applyRuntimeCells(cloneRequiredJsonArray(
+      outcome.changedCells,
+      "runtime current outcome.changedCells",
+    ));
     this.moveCount += 1;
     const wasCompleted = this.completed;
     this.completed = outcome.completed === true;
@@ -493,7 +497,10 @@ class Puzzle3SessionRuntime {
     this.applyRuntimeCells(level.cells);
     const outcome = this.transitionCurrent("level_start", 0);
     this.animationEvents = [];
-    this.applyRuntimeCells(outcome.changedCells || []);
+    this.applyRuntimeCells(cloneRequiredJsonArray(
+      outcome.changedCells,
+      "runtime level_start outcome.changedCells",
+    ));
     this.completed = outcome.completed === true;
   }
 
@@ -523,8 +530,11 @@ class Puzzle3SessionRuntime {
   }
 
   applyRuntimeCells(cells) {
+    if (!Array.isArray(cells)) {
+      throw new Error("Puzzle3 runtime cells must be an array.");
+    }
     const level = this.currentLevel();
-    for (const [index, cell] of (cells || []).entries()) {
+    for (const [index, cell] of cells.entries()) {
       const normalized = runtimeCellPosition(cell, `runtime cells[${index}]`);
       if (!runtimePositionInBounds(normalized, level.size)) {
         throw new Error(

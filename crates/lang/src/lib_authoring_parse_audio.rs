@@ -137,7 +137,7 @@ fn model_sounds_block_starts(lines: &[String], start: usize) -> bool {
     lines.get(start + 1).is_some_and(|first| {
         matches!(
             split_header_tokens(first).as_slice(),
-            ["move" | "cantmove", ..]
+            ["move" | "cantmove" | "undo" | "restart", ..]
         )
     })
 }

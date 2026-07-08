@@ -65,6 +65,751 @@ fn parse_map_definition(
     ))
 }
 
+fn record_authoring_declaration_surface_tokens(
+    scope: Option<SourceScope>,
+    tokens: &[SourceToken],
+    sink: &mut SurfaceSink,
+) {
+    match scope {
+        Some(SourceScope::Tags) => record_tag_declaration_surface_tokens(tokens, sink),
+        Some(SourceScope::Layers) => record_layer_declaration_surface_tokens(tokens, sink),
+        Some(SourceScope::Group) => record_group_declaration_surface_tokens(tokens, sink),
+        Some(SourceScope::Mark) => record_mark_declaration_surface_tokens(tokens, sink),
+        _ => {}
+    }
+}
+
+fn record_tag_declaration_surface_tokens(tokens: &[SourceToken], sink: &mut SurfaceSink) {
+    let [name, separator, values @ ..] = tokens else {
+        return;
+    };
+    if separator.text != "=" || values.is_empty() {
+        return;
+    }
+    add_surface_symbol(sink, name, SurfaceSemanticKind::Group);
+    for value in values {
+        add_surface_symbol(sink, value, SurfaceSemanticKind::Variant);
+    }
+}
+
+fn record_layer_declaration_surface_tokens(tokens: &[SourceToken], sink: &mut SurfaceSink) {
+    if tokens
+        .first()
+        .is_some_and(|token| matches!(token.text.as_str(), "for" | "}"))
+    {
+        return;
+    }
+    let selector_start = usize::from(tokens.first().is_some_and(|token| token.text == "each"));
+    let selector_tokens = if let Some(separator) = tokens.iter().position(|token| token.text == "=")
+    {
+        if separator > 0 {
+            add_surface_symbol(sink, &tokens[0], SurfaceSemanticKind::Group);
+        }
+        &tokens[separator + 1..]
+    } else {
+        &tokens[selector_start..]
+    };
+    for token in selector_tokens {
+        add_selector_head_surface_symbol(sink, token, SurfaceSemanticKind::Object);
+    }
+}
+
+fn record_group_declaration_surface_tokens(tokens: &[SourceToken], sink: &mut SurfaceSink) {
+    let Some(separator) = tokens.iter().position(|token| token.text == "=") else {
+        return;
+    };
+    if separator > 0 {
+        add_surface_symbol(sink, &tokens[0], SurfaceSemanticKind::Group);
+    }
+}
+
+fn record_mark_declaration_surface_tokens(tokens: &[SourceToken], sink: &mut SurfaceSink) {
+    let Some(name) = tokens.first() else {
+        return;
+    };
+    if matches!(name.text.as_str(), "}" | "for") {
+        return;
+    }
+    add_selector_head_surface_symbol(sink, name, SurfaceSemanticKind::Mark);
+}
+
+fn add_selector_head_surface_symbol(
+    sink: &mut SurfaceSink,
+    token: &SourceToken,
+    kind: SurfaceSemanticKind,
+) {
+    let Some((start, end)) = surface_identifier_bounds(&token.text) else {
+        return;
+    };
+    let span = SourceSpan {
+        start: token.start + start,
+        end: token.start + end,
+    };
+    sink.mark(span, kind);
+}
+
+fn add_surface_symbol(sink: &mut SurfaceSink, token: &SourceToken, kind: SurfaceSemanticKind) {
+    let span = SourceSpan {
+        start: token.start,
+        end: token.end,
+    };
+    sink.mark(span, kind);
+}
+
+fn record_surface_builtin_completion_symbols(sink: &mut SurfaceSink) {
+    let symbols = sink.completion_symbols_mut();
+    for (name, values) in [
+        ("directions", vec!["up", "down", "left", "right"]),
+        ("horizontal", vec!["left", "right"]),
+        ("vertical", vec!["up", "down"]),
+    ] {
+        symbols.value_set_names.insert(name.to_string());
+        symbols.direction_sets.insert(name.to_string());
+        let values = values
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<String>>();
+        symbols.object_name_atoms.extend(values.iter().cloned());
+        symbols.value_sets.insert(name.to_string(), values);
+    }
+    symbols.directions.extend(
+        ["up", "down", "left", "right"]
+            .into_iter()
+            .map(str::to_string),
+    );
+
+    add_surface_completion_effect_commands(
+        surface_builtin_effect_commands_for_catalog(),
+        &mut symbols.effects,
+        &mut symbols.emissions,
+    );
+    add_surface_completion_effect_commands(
+        surface_model_effect_commands_for_catalog(),
+        &mut symbols.model_effects,
+        &mut symbols.emissions,
+    );
+    add_surface_completion_effect_commands(
+        surface_scene_effect_commands_for_catalog(),
+        &mut symbols.scene_effects,
+        &mut symbols.emissions,
+    );
+}
+
+fn record_surface_completion_value_sets(scan: &SurfaceScan, sink: &mut SurfaceSink) {
+    for line in &scan.lines {
+        if line.scope != Some(SourceScope::Tags) {
+            continue;
+        }
+        let tokens = line
+            .structural_token_spans
+            .iter()
+            .map(|token| token.text.as_str())
+            .collect::<Vec<_>>();
+        let [name, separator, values @ ..] = tokens.as_slice() else {
+            continue;
+        };
+        if *separator != "=" || !surface_completion_tag_set_tokens(name, values) {
+            continue;
+        }
+        record_surface_completion_value_set(name, values, sink);
+    }
+}
+
+fn record_surface_completion_value_set(name: &str, values: &[&str], sink: &mut SurfaceSink) {
+    let symbols = sink.completion_symbols_mut();
+    symbols.value_set_names.insert(name.to_string());
+    let values = values
+        .iter()
+        .filter(|value| surface_catalog_identifier(value))
+        .map(|value| (*value).to_string())
+        .collect::<Vec<_>>();
+    if values.iter().all(|value| surface_completion_direction_value(value)) {
+        symbols.direction_sets.insert(name.to_string());
+    }
+    symbols.object_name_atoms.extend(values.iter().cloned());
+    symbols.value_sets.insert(name.to_string(), values);
+}
+
+fn record_surface_completion_line(
+    scope: Option<SourceScope>,
+    tokens: &[SourceToken],
+    sink: &mut SurfaceSink,
+) {
+    let token_texts = tokens
+        .iter()
+        .map(|token| token.text.as_str())
+        .collect::<Vec<_>>();
+    match token_texts.as_slice() {
+        ["puzzle", name, ..] if scope.is_none() => {
+            insert_surface_completion_identifier(&mut sink.completion_symbols_mut().puzzles, name);
+        }
+        ["scene", name, ..] => {
+            insert_surface_completion_identifier(&mut sink.completion_symbols_mut().scenes, name);
+        }
+        ["level", name, ..] => {
+            insert_surface_completion_identifier(&mut sink.completion_symbols_mut().levels, name);
+        }
+        ["routine", name, ..] | ["rule", name, ..] => {
+            insert_surface_completion_identifier(&mut sink.completion_symbols_mut().routines, name);
+        }
+        ["input", name, ..] | ["direction", name, ..] => {
+            insert_surface_completion_identifier(&mut sink.completion_symbols_mut().inputs, name);
+        }
+        ["query", name, ..] => {
+            insert_surface_completion_identifier(
+                &mut sink.completion_symbols_mut().condition_defs,
+                name,
+            );
+        }
+        ["sfx", name, ..] if scope == Some(SourceScope::Sounds) => {
+            insert_surface_completion_identifier(&mut sink.completion_symbols_mut().sfx, name);
+        }
+        ["music", name, ..] if scope == Some(SourceScope::Sounds) => {
+            insert_surface_completion_identifier(&mut sink.completion_symbols_mut().music, name);
+        }
+        ["css" | "script" | "file", path, ..] if scope == Some(SourceScope::Assets) => {
+            insert_surface_completion_path_like(&mut sink.completion_symbols_mut().assets, path);
+        }
+        ["shape", table, ..] if scope == Some(SourceScope::Visuals) => {
+            record_surface_completion_visual_table_ref(table, true, sink);
+        }
+        ["colors", table, ..] if scope == Some(SourceScope::Visuals) => {
+            record_surface_completion_visual_color_ref(table, sink);
+        }
+        [name, "=", ..] if scope == Some(SourceScope::VisualColorTable) => {
+            insert_surface_completion_identifier(&mut sink.completion_symbols_mut().colors, name);
+        }
+        [table_ref] if scope == Some(SourceScope::VisualColorTable) => {
+            record_surface_completion_visual_color_ref(table_ref, sink);
+        }
+        [name] if scope == Some(SourceScope::VisualShapeTable) => {
+            record_surface_completion_visual_table_ref(name, true, sink);
+        }
+        ["object", spec, ..] if *spec != "=" => {
+            record_surface_completion_object_spec(spec, sink);
+        }
+        ["var" | "const", name, ..]
+        | ["persistent", "var" | "const", name, ..]
+        | ["persistent", name, ..] => {
+            insert_surface_completion_identifier(&mut sink.completion_symbols_mut().states, name);
+        }
+        ["puzzle" | "puzzle3", name, "=", ..]
+            if matches!(
+                scope,
+                Some(SourceScope::SceneLayout | SourceScope::SceneState)
+            ) =>
+        {
+            insert_surface_completion_identifier(&mut sink.completion_symbols_mut().states, name);
+        }
+        [name, "=", ..]
+            if matches!(
+                scope,
+                Some(SourceScope::SceneLayout | SourceScope::SceneState)
+            ) =>
+        {
+            insert_surface_completion_identifier(&mut sink.completion_symbols_mut().states, name);
+        }
+        [name, "=", selectors @ ..] if scope == Some(SourceScope::Group) => {
+            insert_surface_completion_identifier(&mut sink.completion_symbols_mut().groups, name);
+            record_surface_completion_selector_specs(selectors, sink);
+        }
+        [..] if scope == Some(SourceScope::Layers) => {
+            record_surface_completion_layer_row(&token_texts, sink);
+        }
+        [name, "=", ty] if scope == Some(SourceScope::Mark) => {
+            record_surface_completion_mark_spec(name, Some(*ty), sink);
+        }
+        [spec] if scope == Some(SourceScope::Mark) => {
+            let cleaned = surface_completion_clean_spec(spec);
+            let (name, ty) = cleaned
+                .split_once('=')
+                .map_or((cleaned, None), |(name, ty)| (name, Some(ty)));
+            record_surface_completion_mark_spec(name, ty, sink);
+        }
+        [..] if scope == Some(SourceScope::Keys) => {
+            record_surface_completion_keys(&token_texts, sink);
+        }
+        _ => {}
+    }
+}
+
+fn record_surface_completion_layer_row(tokens: &[&str], sink: &mut SurfaceSink) {
+    match tokens {
+        [] => {}
+        [name, "=", selectors @ ..] => {
+            insert_surface_completion_identifier(&mut sink.completion_symbols_mut().groups, name);
+            record_surface_completion_selector_specs(selectors, sink);
+        }
+        ["each", selectors @ ..] => {
+            record_surface_completion_selector_specs(selectors, sink);
+        }
+        ["for", ..] => {}
+        [selectors @ ..] => {
+            record_surface_completion_selector_specs(selectors, sink);
+        }
+    }
+}
+
+fn record_surface_completion_selector_specs(specs: &[&str], sink: &mut SurfaceSink) {
+    for spec in specs {
+        if matches!(*spec, "=" | "each" | "for") {
+            continue;
+        }
+        record_surface_completion_object_spec(spec, sink);
+    }
+}
+
+fn record_surface_completion_object_spec(spec: &str, sink: &mut SurfaceSink) {
+    let cleaned = surface_completion_clean_spec(spec);
+    let parts = cleaned.split(':').collect::<Vec<_>>();
+    let Some(base) = parts.first().copied() else {
+        return;
+    };
+    insert_surface_completion_identifier(&mut sink.completion_symbols_mut().objects, base);
+    let value_set_names = sink.completion_symbols_mut().value_set_names.clone();
+    if parts.len() > 1
+        && parts[1..]
+            .iter()
+            .all(|part| value_set_names.contains(*part))
+    {
+        sink.completion_symbols_mut()
+            .object_axes
+            .entry(base.to_string())
+            .or_insert_with(|| parts[1..].iter().map(|part| (*part).to_string()).collect());
+    }
+    sink.completion_symbols_mut()
+        .object_name_atoms
+        .extend(parts[1..].iter().map(|part| (*part).to_string()));
+}
+
+fn record_surface_completion_mark_spec(name: &str, ty: Option<&str>, sink: &mut SurfaceSink) {
+    insert_surface_completion_identifier(&mut sink.completion_symbols_mut().markes, name);
+    if let Some(ty) = ty.filter(|ty| !matches!(*ty, "bool" | "int")) {
+        insert_surface_completion_identifier(
+            &mut sink.completion_symbols_mut().object_name_atoms,
+            ty,
+        );
+    }
+}
+
+fn record_surface_completion_keys(tokens: &[&str], sink: &mut SurfaceSink) {
+    let Some(separator) = tokens.iter().position(|token| matches!(*token, "=" | "->")) else {
+        return;
+    };
+    for token in &tokens[..separator] {
+        insert_surface_completion_identifier(&mut sink.completion_symbols_mut().inputs, token);
+    }
+    if let Some(command) = tokens.get(separator + 1) {
+        insert_surface_completion_identifier(&mut sink.completion_symbols_mut().commands, command);
+    }
+}
+
+fn record_surface_completion_visual_table_ref(
+    table: &str,
+    shape_table: bool,
+    sink: &mut SurfaceSink,
+) {
+    if let Some((name, axis)) = table.split_once(':') {
+        if shape_table {
+            insert_surface_completion_identifier(&mut sink.completion_symbols_mut().shapes, name);
+        }
+        insert_surface_completion_identifier(
+            &mut sink.completion_symbols_mut().object_name_atoms,
+            axis,
+        );
+    } else if shape_table {
+        insert_surface_completion_identifier(&mut sink.completion_symbols_mut().shapes, table);
+    }
+}
+
+fn record_surface_completion_visual_color_ref(table: &str, sink: &mut SurfaceSink) {
+    if let Some((name, axis)) = table.split_once(':') {
+        insert_surface_completion_identifier(&mut sink.completion_symbols_mut().colors, name);
+        insert_surface_completion_identifier(
+            &mut sink.completion_symbols_mut().object_name_atoms,
+            axis,
+        );
+    }
+}
+
+fn record_parser_catalog_completion_symbols(catalog: &Catalog, sink: &mut SurfaceSink) {
+    let symbols = sink.completion_symbols_mut();
+    symbols.objects.extend(
+        catalog
+            .object_schemas
+            .keys()
+            .filter(|name| !catalog.object_groups.contains_key(*name))
+            .cloned(),
+    );
+    symbols.groups.extend(catalog.object_groups.keys().cloned());
+    symbols.inputs.extend(catalog.input_labels.values().cloned());
+    symbols.states.extend(catalog.variable_labels.values().cloned());
+    symbols
+        .condition_defs
+        .extend(catalog.condition_labels.values().cloned());
+    for (name, values) in &catalog.value_sets {
+        symbols.value_set_names.insert(name.clone());
+        symbols.value_sets.entry(name.clone()).or_insert(values.clone());
+        symbols.object_name_atoms.extend(values.iter().cloned());
+        if values.iter().all(|value| surface_completion_direction_value(value)) {
+            symbols.direction_sets.insert(name.clone());
+        }
+    }
+    for (object, axes) in &catalog.object_axes {
+        symbols.object_axes.entry(object.clone()).or_insert(axes.clone());
+        symbols.object_name_atoms.extend(axes.iter().cloned());
+    }
+    for name in catalog.mark_names.keys() {
+        if !name.starts_with("__") {
+            symbols.markes.insert(name.clone());
+        }
+    }
+}
+
+fn normalize_surface_completion_symbols(sink: &mut SurfaceSink) {
+    let symbols = sink.completion_symbols_mut();
+    let value_set_names = symbols.value_set_names.iter().cloned().collect::<Vec<_>>();
+    let group_names = symbols.groups.iter().cloned().collect::<Vec<_>>();
+    for name in value_set_names {
+        sink.completion_symbols_mut().object_name_atoms.remove(&name);
+    }
+    for name in group_names {
+        sink.completion_symbols_mut().objects.remove(&name);
+        sink.completion_symbols_mut().object_name_atoms.remove(&name);
+    }
+}
+
+fn add_surface_completion_effect_commands(
+    commands: Vec<(&'static str, SemanticKind)>,
+    effects: &mut BTreeSet<String>,
+    emissions: &mut BTreeSet<String>,
+) {
+    for (command, kind) in commands {
+        match kind {
+            SemanticKind::Emission => {
+                emissions.insert(command.to_string());
+            }
+            SemanticKind::Effect => {
+                effects.insert(command.to_string());
+            }
+            _ => {}
+        }
+    }
+}
+
+fn surface_builtin_effect_commands_for_catalog() -> Vec<(&'static str, SemanticKind)> {
+    [
+        "apply",
+        "again",
+        "back",
+        "cancel",
+        "checkpoint",
+        "clear_checkpoint",
+        "close",
+        "clear_history",
+        "clear_undo_history",
+        "clear_game_progress",
+        "continue",
+        "copy",
+        "create",
+        "delete",
+        "enter",
+        "focus",
+        "goto",
+        "hide",
+        "input",
+        "component_effect",
+        "load",
+        "message",
+        "next_level",
+        "open",
+        "pause_music",
+        "play_music",
+        "reset",
+        "restart",
+        "resume",
+        "resume_music",
+        "sfx",
+        "show",
+        "start",
+        "stop_music",
+        "toggle",
+        "wait",
+        "win",
+    ]
+    .into_iter()
+    .filter_map(|command| {
+        let kind = if command == "sfx" {
+            SemanticKind::Effect
+        } else {
+            match rewrite_effect_command_syntax(command) {
+                Some(RewriteEffectCommandSyntax::Emission) => SemanticKind::Emission,
+                Some(RewriteEffectCommandSyntax::Effect) => SemanticKind::Effect,
+                None if scene_effect_command_syntax(command).is_some() || command == "restart" => {
+                    SemanticKind::Effect
+                }
+                None => return None,
+            }
+        };
+        Some((command, kind))
+    })
+    .collect()
+}
+
+fn surface_model_effect_commands_for_catalog() -> Vec<(&'static str, SemanticKind)> {
+    [
+        "again",
+        "cancel",
+        "checkpoint",
+        "clear_checkpoint",
+        "message",
+        "next_level",
+        "restart",
+        "sfx",
+        "wait",
+        "win",
+    ]
+    .into_iter()
+    .filter_map(|command| {
+        let kind = if command == "sfx" {
+            SemanticKind::Effect
+        } else {
+            match rewrite_effect_command_syntax(command)? {
+                RewriteEffectCommandSyntax::Emission => SemanticKind::Emission,
+                RewriteEffectCommandSyntax::Effect => SemanticKind::Effect,
+            }
+        };
+        Some((command, kind))
+    })
+    .collect()
+}
+
+fn surface_scene_effect_commands_for_catalog() -> Vec<(&'static str, SemanticKind)> {
+    [
+        "apply",
+        "clear",
+        "clear_game_progress",
+        "clear_history",
+        "clear_undo_history",
+        "component_effect",
+        "copy",
+        "goto",
+        "input",
+        "load",
+        "message",
+        "pause_music",
+        "play_music",
+        "resume_music",
+        "sfx",
+        "start",
+        "stop_music",
+        "wait",
+    ]
+    .into_iter()
+    .filter_map(|command| {
+        scene_effect_command_syntax(command)?;
+        Some((command, SemanticKind::Effect))
+    })
+    .collect()
+}
+
+fn surface_completion_tag_set_tokens(name: &str, values: &[&str]) -> bool {
+    surface_catalog_identifier(name)
+        && !values.is_empty()
+        && values.iter().all(|value| surface_catalog_identifier(value))
+}
+
+fn surface_completion_direction_value(value: &str) -> bool {
+    matches!(value, "up" | "down" | "left" | "right")
+}
+
+fn surface_completion_clean_spec(spec: &str) -> &str {
+    let spec = spec.trim_matches(|ch: char| matches!(ch, '[' | ']' | '(' | ')' | '|'));
+    spec.split_once('{').map_or(spec, |(head, _)| head)
+}
+
+fn insert_surface_completion_identifier(target: &mut BTreeSet<String>, value: &str) {
+    if surface_catalog_identifier(value) {
+        target.insert(value.to_string());
+    }
+}
+
+fn insert_surface_completion_path_like(target: &mut BTreeSet<String>, value: &str) {
+    let cleaned = value.trim_matches('"');
+    if !cleaned.is_empty() {
+        target.insert(cleaned.to_string());
+    }
+}
+
+fn surface_catalog_identifier(value: &str) -> bool {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first == '@' || first == '_' || first.is_ascii_alphabetic())
+        && chars.all(|ch| {
+            ch == '_' || ch == ':' || ch == '.' || ch == '-' || ch.is_ascii_alphanumeric()
+        })
+}
+
+fn record_parser_resolved_surface_tokens(
+    scan: &SurfaceScan,
+    catalog: &Catalog,
+    sink: &mut SurfaceSink,
+) {
+    for line in &scan.lines {
+        record_parser_resolved_layer_surface_tokens(line, catalog, sink);
+        record_parser_resolved_rule_surface_tokens(line, catalog, sink);
+    }
+}
+
+fn parser_surface_catalog(source: &str) -> Option<Catalog> {
+    let parts = parse_document_source_parts(source).ok()?;
+    let lines = parts
+        .model_lines
+        .iter()
+        .map(|line| line.text.clone())
+        .collect::<Vec<_>>();
+    let mut catalog = Catalog::default();
+    let mut i = 0usize;
+    while i < lines.len() {
+        let tokens = split_header_tokens(&lines[i]);
+        if matches!(tokens.as_slice(), ["puzzle", _]) {
+            i = record_parser_surface_puzzle_catalog(&lines, i, &mut catalog);
+        } else {
+            i += 1;
+        }
+    }
+    Some(catalog)
+}
+
+fn record_parser_surface_puzzle_catalog(
+    lines: &[String],
+    start: usize,
+    catalog: &mut Catalog,
+) -> usize {
+    let _ = collect_puzzle_tag_declarations(lines, start + 1, catalog);
+    let pending_groups = collect_puzzle_group_declarations(lines, start + 1).unwrap_or_default();
+    let mut resolved_groups = HashSet::<String>::new();
+    let mut named_layers = HashMap::<String, u16>::new();
+    let mut layer_count = None::<u16>;
+    let mut i = start + 1;
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
+        let tokens = split_header_tokens(&lines[i]);
+        match tokens.as_slice() {
+            [] => i += 1,
+            ["tags"] => i = skip_tags_block(lines, i).unwrap_or(i + 1),
+            ["map", ..] => {
+                let value_sets = catalog_value_sets(catalog);
+                match parse_map_definition(lines, i, &value_sets) {
+                    Ok((map, next_i)) => {
+                        catalog.maps.insert(map.name.clone(), map);
+                        i = next_i;
+                    }
+                    Err(_) => i = recover_after_directive_error(lines, i),
+                }
+            }
+            ["layers"] => {
+                i = parse_layers_block(
+                    lines,
+                    i + 1,
+                    &mut named_layers,
+                    &mut layer_count,
+                    catalog,
+                    &pending_groups,
+                    &mut resolved_groups,
+                )
+                .unwrap_or_else(|_| recover_after_directive_error(lines, i));
+                refresh_layer_tags_and_value_sets(&named_layers, catalog);
+            }
+            ["layers", count] => {
+                if let Ok(count) = parse_u16(Some(count), &lines[i], "missing layer count") {
+                    layer_count = Some(count);
+                }
+                i += 1;
+            }
+            ["marks"] => {
+                i = parse_mark_block(lines, i, catalog)
+                    .unwrap_or_else(|_| recover_after_directive_error(lines, i));
+            }
+            ["groups"] => {
+                i = collect_authoring_entry(lines, i, AuthoringEntryOwner::PuzzleGroups)
+                    .map(|(_, next_i)| next_i)
+                    .unwrap_or_else(|_| recover_after_directive_error(lines, i));
+                let _ = resolve_pending_group_definitions(
+                    &pending_groups,
+                    None,
+                    &mut resolved_groups,
+                    catalog,
+                );
+            }
+            _ => i = recover_after_directive_error(lines, i),
+        }
+    }
+    let _ = resolve_pending_group_definitions(&pending_groups, None, &mut resolved_groups, catalog);
+    i.saturating_add(1)
+}
+
+fn record_parser_resolved_layer_surface_tokens(
+    line: &SurfaceScanLine,
+    catalog: &Catalog,
+    sink: &mut SurfaceSink,
+) {
+    if line.scope != Some(SourceScope::Layers) {
+        return;
+    }
+    let tokens = &line.structural_token_spans;
+    if tokens
+        .first()
+        .is_some_and(|token| matches!(token.text.as_str(), "for" | "}"))
+    {
+        return;
+    }
+    let selector_start = usize::from(tokens.first().is_some_and(|token| token.text == "each"));
+    if selector_start == 1
+        && let Some(each) = tokens.first()
+    {
+        sink.mark(
+            SourceSpan {
+                start: each.start,
+                end: each.end,
+            },
+            SurfaceSemanticKind::Keyword,
+        );
+    }
+    let selector_tokens = if let Some(separator) = tokens.iter().position(|token| token.text == "=")
+    {
+        &tokens[separator + 1..]
+    } else {
+        &tokens[selector_start..]
+    };
+    for token in selector_tokens {
+        record_resolved_object_selector_surface_token(token, &line.content, catalog, sink);
+    }
+}
+
+fn record_parser_resolved_rule_surface_tokens(
+    line: &SurfaceScanLine,
+    catalog: &Catalog,
+    sink: &mut SurfaceSink,
+) {
+    if line.scope != Some(SourceScope::Other)
+        || puzzle_authoring::rule_line_surface_spans(strip_line_comment(&line.content)).is_err()
+    {
+        return;
+    }
+    let mut bracket_depth = 0usize;
+    for token in &line.token_spans {
+        let opens = token.text.chars().filter(|ch| *ch == '[').count();
+        let closes = token.text.chars().filter(|ch| *ch == ']').count();
+        bracket_depth = bracket_depth.saturating_add(opens);
+        if bracket_depth > 0 {
+            record_resolved_object_selector_surface_token(token, &line.content, catalog, sink);
+        }
+        bracket_depth = bracket_depth.saturating_sub(closes);
+    }
+}
+
 fn parse_tags_block(
     lines: &[String],
     start: usize,
@@ -673,7 +1418,12 @@ fn parse_layers_block(
     named_layers: &mut HashMap<String, u16>,
     layer_count: &mut Option<u16>,
     catalog: &mut Catalog,
+    pending_groups: &[PendingGroupDefinition],
+    resolved_groups: &mut HashSet<String>,
 ) -> Result<usize, DiagnosticReport> {
+    let used_groups = predeclare_layer_block_objects(lines, start, pending_groups, catalog)?;
+    resolve_pending_group_definitions(pending_groups, Some(&used_groups), resolved_groups, catalog)?;
+
     let mut i = start;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
         let tokens = split_header_tokens(&lines[i]);
@@ -696,13 +1446,19 @@ fn parse_layers_block(
                     let mut expanded_lines = expand_for_binding_lines(
                         &body_lines,
                         binding,
-                        value.axis.as_deref(),
-                        &value.value,
+                        value,
                         &catalog.maps,
                     )?;
                     expanded_lines.push(BLOCK_CLOSE.to_string());
-                    let parsed_i =
-                        parse_layers_block(&expanded_lines, 0, named_layers, layer_count, catalog)?;
+                    let parsed_i = parse_layers_block(
+                        &expanded_lines,
+                        0,
+                        named_layers,
+                        layer_count,
+                        catalog,
+                        pending_groups,
+                        resolved_groups,
+                    )?;
                     if parsed_i != expanded_lines.len() {
                         return Err(parse_error(&lines[i], "for expansion failed"));
                     }
@@ -763,6 +1519,304 @@ fn parse_layers_block(
         ));
     }
     Ok(i + 1)
+}
+
+fn predeclare_layer_block_objects(
+    lines: &[String],
+    start: usize,
+    pending_groups: &[PendingGroupDefinition],
+    catalog: &mut Catalog,
+) -> Result<Vec<String>, DiagnosticReport> {
+    let mut terms = Vec::<String>::new();
+    let mut used_groups = Vec::<String>::new();
+    collect_layer_block_terms(lines, start, pending_groups, catalog, &mut terms, &mut used_groups)?;
+    predeclare_layer_terms(&terms, catalog)?;
+    Ok(used_groups)
+}
+
+fn collect_layer_block_terms(
+    lines: &[String],
+    start: usize,
+    pending_groups: &[PendingGroupDefinition],
+    catalog: &Catalog,
+    terms: &mut Vec<String>,
+    used_groups: &mut Vec<String>,
+) -> Result<usize, DiagnosticReport> {
+    let mut i = start;
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
+        let tokens = split_header_tokens(&lines[i]);
+        if tokens.is_empty() {
+            i += 1;
+            continue;
+        }
+        match tokens.as_slice() {
+            ["for", binding, "in", sources @ ..] => {
+                let value_sets = catalog_value_sets(catalog);
+                let values = for_expansion_values(
+                    sources,
+                    &value_sets,
+                    &catalog.numeric_variable_defaults,
+                    &lines[i],
+                )?;
+                validate_identifier(binding, &lines[i], "expansion binding")?;
+                let (body_lines, next_i) = collect_statement_block_lines(lines, i + 1, &lines[i])?;
+                for value in &values {
+                    let mut expanded_lines = expand_for_binding_lines(
+                        &body_lines,
+                        binding,
+                        value,
+                        &catalog.maps,
+                    )?;
+                    expanded_lines.push(BLOCK_CLOSE.to_string());
+                    let parsed_i = collect_layer_block_terms(
+                        &expanded_lines,
+                        0,
+                        pending_groups,
+                        catalog,
+                        terms,
+                        used_groups,
+                    )?;
+                    if parsed_i != expanded_lines.len() {
+                        return Err(parse_error(&lines[i], "for expansion failed"));
+                    }
+                }
+                i = next_i;
+                continue;
+            }
+            ["for", ..] => {
+                return Err(parse_error(
+                    &lines[i],
+                    "for directive must be: for <binding> in <source...>",
+                ));
+            }
+            ["each", selectors @ ..] => {
+                collect_layer_terms(selectors, &lines[i], pending_groups, terms, used_groups)?;
+            }
+            [_, ..] if crate::syntax::named_selector_assignment_syntax(&tokens, true).is_some() => {
+                let syntax = crate::syntax::named_selector_assignment_syntax(&tokens, true)
+                    .expect("guarded named layer assignment syntax");
+                collect_layer_terms(
+                    &tokens[syntax.rhs_start..],
+                    &lines[i],
+                    pending_groups,
+                    terms,
+                    used_groups,
+                )?;
+            }
+            _ => {
+                collect_layer_terms(&tokens, &lines[i], pending_groups, terms, used_groups)?;
+            }
+        }
+        i += 1;
+    }
+    if i >= lines.len() {
+        return Err(parse_error(
+            &lines[start - 1],
+            "layers missing closing brace",
+        ));
+    }
+    Ok(i + 1)
+}
+
+fn collect_layer_terms(
+    selectors: &[&str],
+    line: &str,
+    pending_groups: &[PendingGroupDefinition],
+    terms: &mut Vec<String>,
+    used_groups: &mut Vec<String>,
+) -> Result<(), DiagnosticReport> {
+    let mut resolving = Vec::<String>::new();
+    for selector in selectors {
+        collect_layer_term(selector, line, pending_groups, terms, used_groups, &mut resolving)?;
+    }
+    Ok(())
+}
+
+fn collect_layer_term(
+    selector: &str,
+    line: &str,
+    pending_groups: &[PendingGroupDefinition],
+    terms: &mut Vec<String>,
+    used_groups: &mut Vec<String>,
+    resolving: &mut Vec<String>,
+) -> Result<(), DiagnosticReport> {
+    if let Some(group) = pending_group_definition(selector, pending_groups) {
+        if resolving.iter().any(|candidate| candidate == selector) {
+            return Err(parse_error(line, "group definitions cannot be cyclic"));
+        }
+        if !used_groups.contains(&group.name) {
+            used_groups.push(group.name.clone());
+        }
+        resolving.push(group.name.clone());
+        for group_selector in &group.selectors {
+            collect_layer_term(
+                group_selector,
+                &group.line,
+                pending_groups,
+                terms,
+                used_groups,
+                resolving,
+            )?;
+        }
+        resolving.pop();
+        return Ok(());
+    }
+    terms.push(selector.to_string());
+    Ok(())
+}
+
+fn predeclare_layer_terms(
+    terms: &[String],
+    catalog: &mut Catalog,
+) -> Result<(), DiagnosticReport> {
+    for term in terms {
+        predeclare_layer_schema_or_plain_object(term, catalog)?;
+    }
+    for term in terms {
+        predeclare_layer_selector_variants(term, catalog)?;
+    }
+    Ok(())
+}
+
+fn predeclare_layer_schema_or_plain_object(
+    term: &str,
+    catalog: &mut Catalog,
+) -> Result<(), DiagnosticReport> {
+    if catalog.object_names.contains_key(term) || catalog.object_groups.contains_key(term) {
+        return Ok(());
+    }
+    let parts = term.split(':').collect::<Vec<_>>();
+    if parts.len() == 1 {
+        define_layer_object_spec(term, term, catalog)?;
+        return Ok(());
+    }
+    let base = parts[0];
+    if catalog.object_schemas.contains_key(base) {
+        return Ok(());
+    }
+    let value_sets = catalog_value_sets(catalog);
+    if parts[1..].iter().all(|axis| value_sets.contains_key(*axis)) {
+        define_layer_object_spec(term, term, catalog)?;
+    }
+    Ok(())
+}
+
+fn predeclare_layer_selector_variants(
+    term: &str,
+    catalog: &mut Catalog,
+) -> Result<(), DiagnosticReport> {
+    let parts = term.split(':').collect::<Vec<_>>();
+    if parts.len() <= 1 {
+        return Ok(());
+    }
+    let Some(schema) = catalog.object_schemas.get(parts[0]).cloned() else {
+        define_layer_object_spec(term, term, catalog)?;
+        return Ok(());
+    };
+    let value_combinations = layer_selector_variant_values(&parts, &schema, catalog, term)?;
+    for values in value_combinations {
+        if schema.variants.iter().any(|variant| variant.values == values)
+            || catalog.object_schemas.get(parts[0]).is_some_and(|schema| {
+                schema.variants.iter().any(|variant| variant.values == values)
+            })
+        {
+            continue;
+        }
+        for (axis, value) in schema.axes.iter().zip(&values) {
+            let axis_values = catalog.object_axes.entry(axis.clone()).or_default();
+            if !axis_values.contains(value) {
+                axis_values.push(value.clone());
+            }
+        }
+        let name = format!("{}:{}", parts[0], values.join(":"));
+        if catalog.object_names.contains_key(&name) {
+            return Err(parse_error(term, "object variant name conflicts with existing object"));
+        }
+        let object = add_object_variant(
+            &name,
+            UNASSIGNED_LAYER,
+            &mut catalog.object_names,
+            &mut catalog.object_labels,
+            &mut catalog.object_layers,
+            &mut catalog.object_defs,
+        );
+        catalog
+            .object_schemas
+            .get_mut(parts[0])
+            .expect("schema exists while adding layer variant")
+            .variants
+            .push(ObjectVariant { values, object });
+    }
+    Ok(())
+}
+
+fn define_layer_object_spec(
+    spec: &str,
+    line: &str,
+    catalog: &mut Catalog,
+) -> Result<Vec<ObjectId>, DiagnosticReport> {
+    let value_sets = catalog_value_sets(catalog);
+    let axis_kinds = catalog.axis_kinds.clone();
+    define_object_spec(
+        spec,
+        UNASSIGNED_LAYER,
+        None,
+        line,
+        &value_sets,
+        &axis_kinds,
+        &mut catalog.object_schemas,
+        &mut catalog.object_names,
+        &mut catalog.object_labels,
+        &mut catalog.object_layers,
+        &mut catalog.object_defs,
+        &mut catalog.render_chars,
+        &mut catalog.char_objects,
+    )
+}
+
+fn layer_selector_variant_values(
+    parts: &[&str],
+    schema: &ObjectSchema,
+    catalog: &Catalog,
+    line: &str,
+) -> Result<Vec<Vec<String>>, DiagnosticReport> {
+    validate_schema_selector_arity(parts, schema, line, "object selector")?;
+    let value_sets = catalog_value_sets(catalog);
+    let mut combinations = vec![Vec::<String>::new()];
+    for (axis_index, axis) in schema.axes.iter().enumerate() {
+        let Some(value) = schema_selector_part(parts, schema, axis_index) else {
+            return Err(parse_error(
+                line,
+                "object selector must name every variant slot; use * for unconstrained slots",
+            ));
+        };
+        let values = if value == "*" {
+            schema_axis_values(schema, axis_index)?
+        } else if let Some(values) = value_sets.get(value) {
+            values
+                .iter()
+                .map(|value| normalize_axis_literal(value, schema, axis_index, line))
+                .collect::<Result<Vec<_>, _>>()?
+        } else if value == axis {
+            schema_axis_values(schema, axis_index)?
+        } else if parse_value_expr(value, line)
+            .is_ok_and(|expr| matches!(expr, ValueExpr::MapCall { .. }))
+        {
+            schema_axis_values(schema, axis_index)?
+        } else {
+            vec![normalize_axis_literal(value, schema, axis_index, line)?]
+        };
+        let mut next = Vec::new();
+        for prefix in &combinations {
+            for value in &values {
+                let mut expanded = prefix.clone();
+                expanded.push(value.clone());
+                next.push(expanded);
+            }
+        }
+        combinations = next;
+    }
+    Ok(combinations)
 }
 
 fn define_or_assign_terms_to_layer(

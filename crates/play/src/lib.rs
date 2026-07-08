@@ -4,8 +4,8 @@ use std::{
 };
 
 use puzzle_core::{
-    InputId, LayerId, ObjectId, PatchOp, ProgramContinuation, ProgramSegmentTrace, RuleStep,
-    State as PuzzleState, TransitionCommand, TransitionError, transition_outcome,
+    InputId, LayerId, ObjectId, Patch, PatchOp, ProgramContinuation, ProgramSegmentTrace, RuleId,
+    RuleStep, State as PuzzleState, TransitionCommand, TransitionError, transition_outcome,
     transition_program, transition_program_continuation_segment_trace, transition_program_outcome,
     transition_program_segment_trace,
 };
@@ -13,8 +13,8 @@ use puzzle_lang::{
     AsciiLegend, Level, LevelMenuDef, LoadedDocument, LoadedDocumentModel, LoadedGame,
     ModelOperationSound, ResourceSelection, RuleAnimation, RuleAnimationTrigger, RuleEffect,
     SceneBinaryOp, SceneComponent, SceneDef, SceneEffect, SceneEffectParam, SceneExpr,
-    ScenePuzzleInitializer, SceneTransitionTrigger, SceneValue, parse_scene_effect_params,
-    parse_scene_expression,
+    SceneLevelKey, ScenePuzzleInitializer, SceneTransitionTrigger, SceneValue, SceneVarKind,
+    parse_scene_effect_params, parse_scene_expression,
 };
 
 mod runtime_sounds;
@@ -203,6 +203,17 @@ struct ModelInputResult {
     cancelled: bool,
     effects: Vec<QueuedRuleEffect>,
     checkpoint: Option<PendingProgramContinuation>,
+    debug_transition: Option<DebugTransition>,
+}
+
+#[derive(Clone, Debug)]
+pub struct DebugTransition {
+    pub input: InputId,
+    pub target: Option<String>,
+    pub cancelled: bool,
+    pub commands: Vec<TransitionCommand>,
+    pub fired_rules: Vec<RuleId>,
+    pub patches: Vec<Patch>,
 }
 
 #[derive(Clone, Debug)]
@@ -245,6 +256,9 @@ enum PendingProgramMode {
 struct ProgramSegmentOutcome {
     next_state: PuzzleState,
     cancelled: bool,
+    commands: Vec<TransitionCommand>,
+    fired_rules: Vec<RuleId>,
+    patches: Vec<Patch>,
     effects: Vec<QueuedRuleEffect>,
     animations: Vec<AnimationEvent>,
     checkpoint: Option<EffectCheckpoint>,
@@ -317,6 +331,7 @@ pub struct GameSession {
     animation_events: Vec<AnimationEvent>,
     pending_effect_continuation: Option<PendingEffectContinuation>,
     pending_program_continuation: Option<PendingProgramContinuation>,
+    last_debug_transition: Option<DebugTransition>,
 }
 
 impl GameSession {
@@ -349,6 +364,7 @@ impl GameSession {
             animation_events: Vec::new(),
             pending_effect_continuation: None,
             pending_program_continuation: None,
+            last_debug_transition: None,
         };
         let initial_scene = session.focused_scene.clone();
         if !game_has_scene_level_owner(game) {
@@ -649,6 +665,7 @@ impl GameSession {
         game: &LoadedGame,
         input: InputId,
     ) -> Result<(), TransitionError> {
+        self.last_debug_transition = None;
         let previous_input = self.current_input.clone();
         self.current_input = game.input_labels.get(&input).cloned();
         let undo_base_len = self.history.undo_len();
@@ -667,6 +684,7 @@ impl GameSession {
                 return Err(error);
             }
         };
+        self.last_debug_transition = result.debug_transition.clone();
         if !result.cancelled {
             if let Some(checkpoint) = result.checkpoint {
                 self.queue_program_continuation(checkpoint);
@@ -686,6 +704,10 @@ impl GameSession {
         self.current_input = previous_input;
         self.end_turn_sfx_dedup(owns_turn_sfx);
         Ok(())
+    }
+
+    pub fn last_debug_transition(&self) -> Option<&DebugTransition> {
+        self.last_debug_transition.as_ref()
     }
 
     fn apply_model_input(
@@ -732,6 +754,14 @@ impl GameSession {
             cancelled,
             effects: outcome.effects,
             checkpoint,
+            debug_transition: Some(DebugTransition {
+                input,
+                target: None,
+                cancelled,
+                commands: outcome.commands,
+                fired_rules: outcome.fired_rules,
+                patches: outcome.patches,
+            }),
         })
     }
 
@@ -804,6 +834,14 @@ impl GameSession {
             cancelled,
             effects: outcome.effects,
             checkpoint,
+            debug_transition: Some(DebugTransition {
+                input,
+                target: Some(target.to_string()),
+                cancelled,
+                commands: outcome.commands,
+                fired_rules: outcome.fired_rules,
+                patches: outcome.patches,
+            }),
         })
     }
 
@@ -841,6 +879,14 @@ impl GameSession {
             cancelled,
             effects: outcome.effects,
             checkpoint,
+            debug_transition: Some(DebugTransition {
+                input,
+                target: None,
+                cancelled,
+                commands: outcome.commands,
+                fired_rules: outcome.fired_rules,
+                patches: outcome.patches,
+            }),
         })
     }
 
@@ -855,8 +901,9 @@ impl GameSession {
             .filter(|effect| matches!(effect.effect, RuleEffect::Win))
             .map(|effect| effect.target.clone())
             .collect::<Vec<_>>();
-        let condition_effect = self.condition_transition_effect(game, &win_targets);
-        let force_clear = !win_targets.is_empty();
+        let force_clear = !win_targets.is_empty() && self.can_force_clear_state(game, &self.state);
+        let forced_win_targets: &[Option<String>] = if force_clear { &win_targets } else { &[] };
+        let condition_effect = self.condition_transition_effect(game, forced_win_targets);
         let mut effects = effects;
         effects.extend(self.apply_model_level_clear(game, force_clear)?);
         self.resolve_turn_effects(game, effects, condition_effect, undo_base_len)
@@ -1261,6 +1308,9 @@ impl GameSession {
             self.apply_screen_effect(game, &effect, &HashMap::new())?;
             return Ok(());
         }
+        if command.trim_start().starts_with("goto ") || command.trim_start().starts_with("start ") {
+            return Err(TransitionError::InvalidCommand(command.to_string()));
+        }
 
         if let Some(effect) = parse_puzzle_runtime_command(command) {
             self.apply_screen_effect(game, &effect, &HashMap::new())?;
@@ -1357,8 +1407,12 @@ impl GameSession {
             return None;
         };
         screen.transitions.iter().find_map(|transition| {
-            let SceneTransitionTrigger::Condition(condition) = &transition.trigger else {
-                return None;
+            let condition = match &transition.trigger {
+                SceneTransitionTrigger::Condition(condition)
+                | SceneTransitionTrigger::Signal(condition) => condition,
+                SceneTransitionTrigger::SceneStart | SceneTransitionTrigger::LevelStart => {
+                    return None;
+                }
             };
             self.is_screen_condition_true_with_forced_win(game, condition, forced_win_targets)
                 .then(|| transition.effect.clone())
@@ -1382,7 +1436,7 @@ impl GameSession {
         if self.active_level_index.is_none() {
             return Ok(Vec::new());
         }
-        if force_clear || game.is_goal_complete(&self.state) {
+        if force_clear || self.can_clear_state(game, &self.state) {
             self.mark_current_level_cleared();
             return self.apply_level_clear_hook(game, force_clear);
         }
@@ -1576,6 +1630,9 @@ impl GameSession {
         if !force_clear && !game.is_goal_complete(&self.state) {
             return Ok(Vec::new());
         }
+        if game.is_lose_complete(&self.state) {
+            return Ok(Vec::new());
+        }
         let mut effects = Vec::new();
         let model_clear_program = if self
             .active_level_index
@@ -1662,6 +1719,10 @@ impl GameSession {
                     let right = self.screen_condition_value(game, right)?;
                     Some(left == right)
                 }
+                SceneBinaryOp::In => {
+                    let left = self.screen_condition_value(game, left)?;
+                    self.screen_condition_set_contains(game, right, &left)
+                }
                 SceneBinaryOp::NotEq => {
                     let left = self.screen_condition_value(game, left)?;
                     let right = self.screen_condition_value(game, right)?;
@@ -1693,10 +1754,7 @@ impl GameSession {
                         .is_some()
                         .then_some((&self.state, condition_name(&condition)))
                 }) {
-                    return Some(
-                        game.is_condition_true(condition_name, state)
-                            || game.is_variable_truthy(condition_name, state),
-                    );
+                    return Some(self.is_model_condition_true(game, state, condition_name));
                 }
                 self.screen_condition_value(game, &SceneExpr::Path(path.clone()))
                     .and_then(|value| value.parse::<bool>().ok())
@@ -1728,11 +1786,50 @@ impl GameSession {
         };
         forced_win_targets.iter().any(|target| {
             let Some(target) = target else {
-                return false;
+                return self.can_force_clear_state(game, &self.state);
             };
-            self.resolve_puzzle_target(game, target)
-                .is_some_and(|resolved| resolved == candidate)
+            if self
+                .resolve_puzzle_target(game, target)
+                .is_none_or(|resolved| resolved != candidate)
+            {
+                return false;
+            }
+            self.puzzle_target_state(game, target)
+                .is_some_and(|state| self.can_force_clear_state(game, state))
         })
+    }
+
+    fn is_model_condition_true(
+        &self,
+        game: &LoadedGame,
+        state: &PuzzleState,
+        condition_name: &str,
+    ) -> bool {
+        if condition_name == "win_conditions" {
+            return self.can_clear_state(game, state);
+        }
+        game.is_condition_true(condition_name, state)
+            || game.is_variable_truthy(condition_name, state)
+    }
+
+    fn can_clear_state(&self, game: &LoadedGame, state: &PuzzleState) -> bool {
+        game.is_goal_complete(state) && !game.is_lose_complete(state)
+    }
+
+    fn can_force_clear_state(&self, game: &LoadedGame, state: &PuzzleState) -> bool {
+        !game.is_lose_complete(state)
+    }
+
+    fn puzzle_target_state<'a>(
+        &'a self,
+        game: &LoadedGame,
+        target: &str,
+    ) -> Option<&'a PuzzleState> {
+        let (scene_name, puzzle_name) = self.resolve_puzzle_target(game, target)?;
+        self.scene_states
+            .get(&scene_name)
+            .and_then(|scene_state| scene_state.puzzles.get(&puzzle_name))
+            .map(|puzzle| &puzzle.state)
     }
 
     fn screen_condition_value(&self, game: &LoadedGame, expr: &SceneExpr) -> Option<String> {
@@ -1756,6 +1853,21 @@ impl GameSession {
             _ => self
                 .eval_effect_value(game, expr, &HashMap::new())
                 .map(|value| scene_value_to_string(&value)),
+        }
+    }
+
+    fn screen_condition_set_contains(
+        &self,
+        game: &LoadedGame,
+        set: &SceneExpr,
+        value: &str,
+    ) -> Option<bool> {
+        match set {
+            SceneExpr::Path(path) if path.len() == 1 => {
+                Some(scene_builtin_value_set_contains(game, &path[0], value))
+            }
+            SceneExpr::Text(name) => Some(scene_builtin_value_set_contains(game, name, value)),
+            _ => None,
         }
     }
 
@@ -1887,12 +1999,12 @@ impl GameSession {
                 Ok(())
             }
             SceneEffect::Goto { scene, params } => {
-                self.apply_screen_params(game, scene, params, bindings);
+                self.apply_screen_params(game, scene, params, bindings)?;
                 self.goto_scene(game, scene);
                 Ok(())
             }
             SceneEffect::Enter { scene, params } => {
-                self.apply_screen_params(game, scene, params, bindings);
+                self.apply_screen_params(game, scene, params, bindings)?;
                 self.enter_scene(game, scene);
                 Ok(())
             }
@@ -1942,8 +2054,7 @@ impl GameSession {
                 Ok(())
             }
             SceneEffect::GotoLevel { target, level } => {
-                self.goto_level_target(game, target, level, bindings);
-                Ok(())
+                self.goto_level_target(game, target, level, bindings)
             }
             SceneEffect::ResetPuzzle { target } => {
                 self.reset_puzzle_state(game, target);
@@ -1973,6 +2084,11 @@ impl GameSession {
                 Ok(())
             }
             SceneEffect::SetVariable { name, value } => {
+                if self.scene_variable_kind(game, &self.focused_scene, name)
+                    == Some(SceneVarKind::Signal)
+                {
+                    return self.apply_signal_assignment(game, name, value, bindings);
+                }
                 self.set_scene_variable(game, name, value, bindings)
             }
             SceneEffect::ClearUndoHistory => {
@@ -2014,7 +2130,7 @@ impl GameSession {
         scene_name: &str,
         params: &[SceneEffectParam],
         bindings: &HashMap<String, String>,
-    ) {
+    ) -> Result<(), TransitionError> {
         let mut level_changed = false;
         if !params.is_empty() {
             self.create_scene(game, scene_name);
@@ -2022,12 +2138,19 @@ impl GameSession {
         for param in params {
             match param {
                 SceneEffectParam::Level(level) => {
-                    if let Some(index) = self.eval_effect_level_index(game, level, bindings) {
-                        if scene_accepts_level(game, scene_name, index) {
-                            let _ = self.activate_level(game, index, true);
-                            self.history.clear();
-                            level_changed = true;
-                        }
+                    let Some(index) = self.eval_effect_level_index(game, level, bindings) else {
+                        return Err(TransitionError::InvalidCommand(format!(
+                            "goto {scene_name}(<level>)"
+                        )));
+                    };
+                    if scene_accepts_level(game, scene_name, index) {
+                        let _ = self.activate_level(game, index, true);
+                        self.history.clear();
+                        level_changed = true;
+                    } else {
+                        return Err(TransitionError::InvalidCommand(format!(
+                            "goto {scene_name}(<level>)"
+                        )));
                     }
                 }
                 SceneEffectParam::Named { name, value } => {
@@ -2059,6 +2182,7 @@ impl GameSession {
         if level_changed {
             self.sync_current_level_puzzles_for_scene(game, scene_name);
         }
+        Ok(())
     }
 
     pub fn restart_level(&mut self, game: &LoadedGame) {
@@ -2212,24 +2336,31 @@ impl GameSession {
         target: &str,
         level: &SceneExpr,
         bindings: &HashMap<String, String>,
-    ) {
-        let Some(value) = self.eval_effect_string(game, level, bindings) else {
-            return;
-        };
-        let Some(index) = level_index_from_value(game, &value) else {
-            return;
+    ) -> Result<(), TransitionError> {
+        let Some(index) = self.eval_effect_level_index(game, level, bindings) else {
+            return Err(TransitionError::InvalidCommand(format!(
+                "{target}.goto <level>"
+            )));
         };
         if game.scenes.iter().any(|scene| scene.name == target) {
             if !scene_accepts_level(game, target, index) {
-                return;
+                return Err(TransitionError::InvalidCommand(format!(
+                    "{target}.goto <level>"
+                )));
             }
             let _ = self.activate_level(game, index, true);
             self.history.clear();
             self.goto_scene(game, target);
             self.sync_current_level_puzzles(game);
-            return;
+            return Ok(());
         }
+        let value = game
+            .levels
+            .get(index)
+            .map(|level| level.name.clone())
+            .ok_or_else(|| TransitionError::InvalidCommand(format!("{target}.goto <level>")))?;
         self.load_puzzle_state(game, target, &value, bindings);
+        Ok(())
     }
 
     pub fn undo(&mut self, game: &LoadedGame) {
@@ -2485,8 +2616,42 @@ impl GameSession {
         expr: &SceneExpr,
         bindings: &HashMap<String, String>,
     ) -> Option<usize> {
+        match expr {
+            SceneExpr::Int(index) => {
+                return level_index_by_omitted_collection_ordinal(
+                    game,
+                    usize::try_from(*index).ok()?,
+                );
+            }
+            SceneExpr::Text(id) => {
+                return level_index_by_omitted_collection_id(game, id);
+            }
+            SceneExpr::LevelSelector {
+                collection, key, ..
+            } => return level_index_by_selector(game, collection, key),
+            SceneExpr::Path(path) if path.len() == 1 => {
+                if let Some(value) = bindings.get(&path[0]) {
+                    if let Ok(index) = value.parse::<usize>() {
+                        return level_index_by_omitted_collection_ordinal(game, index);
+                    }
+                    return level_index_by_omitted_collection_id(game, value);
+                }
+                if path[0] == "level" {
+                    return self.active_level_index;
+                }
+                return self
+                    .scene_value(&path[0])
+                    .and_then(|value| level_index_from_scene_value(game, value))
+                    .or_else(|| level_index_by_omitted_collection_id(game, &path[0]));
+            }
+            _ => {}
+        }
         self.eval_effect_value(game, expr, bindings)
-            .and_then(|value| level_index_from_scene_value(game, &value))
+            .and_then(|value| {
+                matches!(value, SceneValue::LevelRef(_))
+                    .then(|| level_index_from_scene_value(game, &value))
+                    .flatten()
+            })
     }
 
     fn eval_effect_value(
@@ -2499,6 +2664,17 @@ impl GameSession {
             SceneExpr::Bool(value) => Some(SceneValue::Bool(*value)),
             SceneExpr::Int(value) => Some(SceneValue::Int(*value)),
             SceneExpr::Text(value) => Some(SceneValue::Text(value.clone())),
+            SceneExpr::LevelSelector {
+                collection,
+                key,
+                property,
+            } => {
+                let index = level_index_by_selector(game, collection, key)?;
+                if let Some(field) = property {
+                    return level_ref_field(game, self, index, field);
+                }
+                Some(SceneValue::LevelRef(index))
+            }
             SceneExpr::Path(path) if path.len() == 1 => {
                 if let Some(value) = bindings.get(&path[0]) {
                     return Some(scene_value_from_effect_atom(game, value));
@@ -2538,13 +2714,6 @@ impl GameSession {
                     index.saturating_add(1).min(game.levels.len() - 1),
                 ))
             }
-            SceneExpr::Call { name, args } if level_selector_call_base(name).is_some() => {
-                let index = self.eval_level_selector_call(game, name, args, bindings)?;
-                if let Some(field) = level_selector_call_field(name) {
-                    return level_ref_field(game, self, index, field);
-                }
-                Some(SceneValue::LevelRef(index))
-            }
             SceneExpr::Binary { op, left, right } => {
                 let left = self.eval_effect_value(game, left, bindings)?;
                 match op {
@@ -2558,6 +2727,13 @@ impl GameSession {
                     SceneBinaryOp::Eq => {
                         let right = self.eval_effect_value(game, right, bindings)?;
                         Some(SceneValue::Bool(left == right))
+                    }
+                    SceneBinaryOp::In => {
+                        Some(SceneValue::Bool(self.screen_condition_set_contains(
+                            game,
+                            right,
+                            &scene_value_to_string(&left),
+                        )?))
                     }
                     SceneBinaryOp::NotEq => {
                         let right = self.eval_effect_value(game, right, bindings)?;
@@ -2581,49 +2757,6 @@ impl GameSession {
         }
     }
 
-    fn eval_level_selector_call(
-        &self,
-        game: &LoadedGame,
-        name: &str,
-        args: &[SceneExpr],
-        bindings: &HashMap<String, String>,
-    ) -> Option<usize> {
-        match level_selector_call_base(name)? {
-            "level" => match args {
-                [level] => {
-                    let id = self.eval_effect_string(game, level, bindings)?;
-                    level_index_by_id(game, &id)
-                }
-                [pack, level] => {
-                    let pack = self.eval_effect_string(game, pack, bindings)?;
-                    let id = self.eval_effect_string(game, level, bindings)?;
-                    level_index_by_pack_id(game, &pack, &id)
-                }
-                _ => None,
-            },
-            "level_in" => match args {
-                [pack, level] => {
-                    let pack = self.eval_effect_string(game, pack, bindings)?;
-                    let id = self.eval_effect_string(game, level, bindings)?;
-                    level_index_by_pack_id(game, &pack, &id)
-                }
-                _ => None,
-            },
-            "level_at" => match args {
-                [pack, level] => {
-                    let pack = self.eval_effect_string(game, pack, bindings)?;
-                    let index = self.eval_effect_value(game, level, bindings)?;
-                    let SceneValue::Int(index) = index else {
-                        return None;
-                    };
-                    level_index_by_pack_ordinal(game, &pack, usize::try_from(index).ok()?)
-                }
-                _ => None,
-            },
-            _ => None,
-        }
-    }
-
     fn resolve_message_text(&self, text: &str, literal: bool) -> String {
         if literal {
             return text.to_string();
@@ -2640,6 +2773,84 @@ impl GameSession {
         self.scene_state()
             .and_then(|state| state.values.get(name))
             .or_else(|| self.session_values.get(name))
+    }
+
+    fn scene_variable_kind(
+        &self,
+        game: &LoadedGame,
+        scene_name: &str,
+        name: &str,
+    ) -> Option<SceneVarKind> {
+        game.scenes
+            .iter()
+            .find(|scene| scene.name == scene_name)
+            .and_then(|scene| {
+                scene
+                    .state
+                    .variables
+                    .iter()
+                    .find(|variable| variable.name == name)
+            })
+            .map(|variable| variable.kind)
+    }
+
+    fn scene_signal_default(
+        &self,
+        game: &LoadedGame,
+        scene_name: &str,
+        name: &str,
+    ) -> Option<SceneValue> {
+        game.scenes
+            .iter()
+            .find(|scene| scene.name == scene_name)
+            .and_then(|scene| {
+                scene
+                    .state
+                    .variables
+                    .iter()
+                    .find(|variable| variable.name == name)
+            })
+            .filter(|variable| variable.kind == SceneVarKind::Signal)
+            .map(|variable| variable.default.clone())
+    }
+
+    fn apply_signal_assignment(
+        &mut self,
+        game: &LoadedGame,
+        name: &str,
+        expr: &SceneExpr,
+        bindings: &HashMap<String, String>,
+    ) -> Result<(), TransitionError> {
+        let Some(value) = self.eval_effect_value(game, expr, bindings) else {
+            return Err(TransitionError::InvalidCommand(name.to_string()));
+        };
+        let scene_name = self.focused_scene.clone();
+        let previous_input = self.current_input.clone();
+        let previous_value = self
+            .scene_states
+            .get(&scene_name)
+            .and_then(|state| state.values.get(name))
+            .cloned();
+        if let Some(state) = self.scene_states.get_mut(&scene_name) {
+            state.values.insert(name.to_string(), value.clone());
+        }
+        if name == "input" {
+            self.current_input = Some(scene_value_to_string(&value));
+        }
+        let undo_base_len = self.history.undo_len();
+        let result = self.apply_focused_scene_input_transition(game, undo_base_len);
+        let default_value = self.scene_signal_default(game, &scene_name, name);
+        if let Some(state) = self.scene_states.get_mut(&scene_name) {
+            if let Some(default) = default_value {
+                state.values.insert(name.to_string(), default);
+            } else if let Some(previous) = previous_value {
+                state.values.insert(name.to_string(), previous);
+            } else {
+                state.values.remove(name);
+            }
+        }
+        self.current_input = previous_input;
+        result
     }
 
     fn set_scene_variable(
@@ -3298,6 +3509,21 @@ fn scene_value_from_effect_atom(game: &LoadedGame, value: &str) -> SceneValue {
         .unwrap_or_else(|| SceneValue::Symbol(value.to_string()))
 }
 
+fn scene_builtin_value_set_contains(game: &LoadedGame, set: &str, value: &str) -> bool {
+    match set {
+        "directions" => ["up", "down", "left", "right"]
+            .into_iter()
+            .any(|direction| direction == value && input_id_by_label(game, direction).is_some()),
+        "horizontal" => ["left", "right"]
+            .into_iter()
+            .any(|direction| direction == value && input_id_by_label(game, direction).is_some()),
+        "vertical" => ["up", "down"]
+            .into_iter()
+            .any(|direction| direction == value && input_id_by_label(game, direction).is_some()),
+        _ => false,
+    }
+}
+
 fn level_index_from_scene_value(game: &LoadedGame, value: &SceneValue) -> Option<usize> {
     match value {
         SceneValue::LevelRef(index) => (*index < game.levels.len()).then_some(*index),
@@ -3386,10 +3612,10 @@ fn parse_runtime_command(command_text: &str, default_wait_ms: u64) -> Option<Sce
             cleared: parse_runtime_bool(rest.trim())?,
         });
     }
-    if let Some(rest) = command_text.strip_prefix("level(") {
-        let (level, cleared) = rest.split_once(").cleared = ")?;
+    if let Some((selector, cleared)) = command_text.split_once(".cleared = ") {
+        let level = parse_runtime_level_selector_expr(selector.trim())?;
         return Some(SceneEffect::SetLevelCleared {
-            level: Some(parse_runtime_level_expr(level.trim())?),
+            level: Some(level),
             cleared: parse_runtime_bool(cleared.trim())?,
         });
     }
@@ -3658,6 +3884,9 @@ fn transition_program_segment_outcome(
         return Ok(ProgramSegmentOutcome {
             next_state: state.clone(),
             cancelled: false,
+            commands: Vec::new(),
+            fired_rules: Vec::new(),
+            patches: Vec::new(),
             effects: Vec::new(),
             animations: Vec::new(),
             checkpoint: None,
@@ -3730,6 +3959,9 @@ fn program_segment_outcome_from_trace(
         return Ok(ProgramSegmentOutcome {
             next_state: outcome.next_state,
             cancelled: outcome.cancelled,
+            commands: outcome.commands,
+            fired_rules: outcome.fired_rules,
+            patches: outcome.patches,
             effects: before_wait,
             animations,
             checkpoint: Some(EffectCheckpoint {
@@ -3745,6 +3977,9 @@ fn program_segment_outcome_from_trace(
         animations,
         next_state: outcome.next_state,
         cancelled: outcome.cancelled,
+        commands: outcome.commands,
+        fired_rules: outcome.fired_rules,
+        patches: outcome.patches,
         checkpoint: None,
     })
 }
@@ -3908,6 +4143,11 @@ fn parse_runtime_level_expr(value: &str) -> Option<SceneExpr> {
     parse_runtime_expr(value)
 }
 
+fn parse_runtime_level_selector_expr(value: &str) -> Option<SceneExpr> {
+    let expr = parse_runtime_expr(value)?;
+    matches!(expr, SceneExpr::LevelSelector { .. }).then_some(expr)
+}
+
 fn is_simple_identifier(value: &str) -> bool {
     let mut chars = value.chars();
     let Some(first) = chars.next() else {
@@ -3930,24 +4170,86 @@ fn level_index_by_id(game: &LoadedGame, id: &str) -> Option<usize> {
     )
 }
 
-fn level_index_by_pack_id(game: &LoadedGame, pack: &str, id: &str) -> Option<usize> {
-    if pack == "levels" {
-        return level_index_by_id(game, id);
+fn level_index_by_selector(
+    game: &LoadedGame,
+    collection: &str,
+    key: &SceneLevelKey,
+) -> Option<usize> {
+    match key {
+        SceneLevelKey::Id(id) => level_index_by_collection_id(game, collection, id),
+        SceneLevelKey::Index(index) => {
+            level_index_by_collection_ordinal(game, collection, usize::try_from(*index).ok()?)
+        }
     }
+}
+
+fn level_index_by_collection_id(game: &LoadedGame, collection: &str, id: &str) -> Option<usize> {
+    let collection = resolve_level_collection_name(game, collection)?;
     unique_level_match(game.levels.iter().enumerate().filter_map(|(index, level)| {
-        (level.pack.as_deref() == Some(pack) && level.name == id).then_some(index)
+        level_belongs_to_collection(level, collection)
+            .then_some(index)
+            .filter(|_| level.name == id)
     }))
 }
 
-fn level_index_by_pack_ordinal(game: &LoadedGame, pack: &str, ordinal: usize) -> Option<usize> {
-    if pack == "levels" {
-        return (ordinal < game.levels.len()).then_some(ordinal);
-    }
+fn level_index_by_collection_ordinal(
+    game: &LoadedGame,
+    collection: &str,
+    ordinal: usize,
+) -> Option<usize> {
+    let collection = resolve_level_collection_name(game, collection)?;
     game.levels
         .iter()
         .enumerate()
-        .filter_map(|(index, level)| (level.pack.as_deref() == Some(pack)).then_some(index))
+        .filter_map(|(index, level)| {
+            level_belongs_to_collection(level, collection).then_some(index)
+        })
         .nth(ordinal)
+}
+
+fn level_index_by_omitted_collection_id(game: &LoadedGame, id: &str) -> Option<usize> {
+    let collection = unique_level_collection_name(game)?;
+    level_index_by_collection_id(game, collection, id)
+}
+
+fn level_index_by_omitted_collection_ordinal(game: &LoadedGame, ordinal: usize) -> Option<usize> {
+    let collection = unique_level_collection_name(game)?;
+    level_index_by_collection_ordinal(game, collection, ordinal)
+}
+
+fn resolve_level_collection_name<'a>(game: &'a LoadedGame, collection: &'a str) -> Option<&'a str> {
+    if collection == "levels" {
+        unique_level_collection_name(game)
+    } else if game
+        .levels
+        .iter()
+        .any(|level| level.pack.as_deref() == Some(collection))
+    {
+        Some(collection)
+    } else {
+        None
+    }
+}
+
+fn unique_level_collection_name(game: &LoadedGame) -> Option<&str> {
+    let mut names = game
+        .levels
+        .iter()
+        .map(|level| level.pack.as_deref().unwrap_or("levels"))
+        .collect::<Vec<_>>();
+    names.sort_unstable();
+    names.dedup();
+    let [name] = names.as_slice() else {
+        return None;
+    };
+    Some(*name)
+}
+
+fn level_belongs_to_collection(level: &Level, collection: &str) -> bool {
+    match level.pack.as_deref() {
+        Some(pack) => pack == collection,
+        None => collection == "levels",
+    }
 }
 
 fn unique_level_match(mut indices: impl Iterator<Item = usize>) -> Option<usize> {
@@ -4000,8 +4302,10 @@ fn scene_accepts_level(game: &LoadedGame, scene_name: &str, level_index: usize) 
 }
 
 fn transition_condition_mentions_input(trigger: &SceneTransitionTrigger, input: &str) -> bool {
-    let SceneTransitionTrigger::Condition(condition) = trigger else {
-        return false;
+    let condition = match trigger {
+        SceneTransitionTrigger::Condition(condition)
+        | SceneTransitionTrigger::Signal(condition) => condition,
+        SceneTransitionTrigger::SceneStart | SceneTransitionTrigger::LevelStart => return false,
     };
     scene_expr_mentions_input_value(condition, input)
 }
@@ -4052,15 +4356,6 @@ fn scene_expr_atom_name(expr: &SceneExpr) -> Option<String> {
 
 fn level_resource_matches(resource: &str, level: &Level) -> bool {
     level.name == resource || level.pack.as_deref() == Some(resource)
-}
-
-fn level_selector_call_base(name: &str) -> Option<&str> {
-    let base = name.split_once('.').map_or(name, |(base, _)| base);
-    matches!(base, "level" | "level_in" | "level_at").then_some(base)
-}
-
-fn level_selector_call_field(name: &str) -> Option<&str> {
-    name.split_once('.').map(|(_, field)| field)
 }
 
 fn component_has_level_menu(component: &SceneComponent) -> bool {
@@ -4254,7 +4549,7 @@ mod tests {
     fn again_command_runs_no_input_follow_up_turn() {
         let loaded = parse_game(
             r#"
-title again_runtime
+title = again_runtime
 puzzle default {
 layers {
 __legacy_layer_0 = Before After
@@ -4296,7 +4591,7 @@ B
     fn again_follow_up_turn_does_not_add_an_undo_step() {
         let loaded = parse_game(
             r#"
-title again_undo_boundary
+title = again_undo_boundary
 puzzle default {
 layers {
 __legacy_layer_0 = A B C
@@ -4345,7 +4640,7 @@ A
     fn rewrite_again_effect_lowers_to_transition_command() {
         let loaded = parse_game(
             r#"
-title again_effect
+title = again_effect
 puzzle default {
 layers {
 __legacy_layer_0 = Before After
@@ -4376,7 +4671,7 @@ A
     fn checkpoint_effect_changes_restart_anchor() {
         let loaded = parse_game(
             r#"
-title checkpoint_runtime
+title = checkpoint_runtime
 puzzle default {
 layers {
 __legacy_layer_0 = Player
@@ -4440,7 +4735,7 @@ P..
     fn rewrite_win_effect_lowers_to_transition_command() {
         let loaded = parse_game(
             r#"
-title win_effect
+title = win_effect
 puzzle default {
 layers {
 floor = Exit
@@ -4471,7 +4766,7 @@ X
     fn enabled_tween_emits_move_animation_event_from_patch_payload() {
         let loaded = parse_game(
             r#"
-title tween_runtime
+title = tween_runtime
 animation {
 tween {
 duration = 80ms
@@ -4523,7 +4818,7 @@ P.
     fn win_effect_forces_level_clear_lifecycle() {
         let loaded = parse_game(
             r#"
-title win_effect_runtime
+title = win_effect_runtime
 puzzle default {
 layers {
 floor = Exit
@@ -4563,10 +4858,193 @@ P
     }
 
     #[test]
+    fn lose_conditions_block_model_level_clear() {
+        let loaded = parse_game(
+            r#"
+title = lose_blocks_clear
+puzzle default {
+layers {
+actor = Player
+}
+win_conditions {
+some Player
+}
+lose_conditions {
+some Player
+}
+on_level_clear {
+next_level
+}
+rules {
+
+}
+levels {
+legend {
+. = empty
+P = Player
+}
+level "one" {
+P
+}
+level "two" {
+.
+}
+}
+}
+"#,
+        )
+        .unwrap();
+        let mut session = GameSession::new(&loaded);
+
+        session.apply_input(&loaded, InputId(0)).unwrap();
+
+        assert_eq!(session.level_index(), 0);
+        assert_eq!(session.screen(), "default");
+        assert!(!session.cleared_levels()[0]);
+    }
+
+    #[test]
+    fn lose_conditions_block_win_effect_forced_clear() {
+        let loaded = parse_game(
+            r#"
+title = lose_blocks_win_effect
+puzzle default {
+layers {
+actor = Player
+}
+lose_conditions {
+some Player
+}
+on_level_clear {
+next_level
+}
+rules {
+[ Player ] -> win
+}
+levels {
+legend {
+. = empty
+P = Player
+}
+level "one" {
+P
+}
+level "two" {
+.
+}
+}
+}
+"#,
+        )
+        .unwrap();
+        let mut session = GameSession::new(&loaded);
+
+        session.apply_input(&loaded, InputId(0)).unwrap();
+
+        assert_eq!(session.level_index(), 0);
+        assert!(!session.cleared_levels()[0]);
+    }
+
+    #[test]
+    fn lose_conditions_do_not_block_model_next_level_command() {
+        let loaded = parse_game(
+            r#"
+title = lose_allows_next_level
+puzzle default {
+layers {
+actor = Player
+}
+win_conditions {
+some Player
+}
+lose_conditions {
+some Player
+}
+rules {
+if win_conditions -> next_level
+}
+levels {
+legend {
+. = empty
+P = Player
+}
+level "one" {
+P
+}
+level "two" {
+.
+}
+}
+}
+"#,
+        )
+        .unwrap();
+        let mut session = GameSession::new(&loaded);
+
+        session.apply_input(&loaded, InputId(0)).unwrap();
+
+        assert_eq!(session.level_index(), 1);
+        assert!(!session.cleared_levels()[0]);
+    }
+
+    #[test]
+    fn lose_conditions_make_scene_win_condition_false() {
+        let loaded = parse_game(
+            r#"
+title = lose_blocks_scene_win_condition
+puzzle board {
+layers {
+actor = Player
+}
+win_conditions {
+some Player
+}
+lose_conditions {
+some Player
+}
+rules {
+
+}
+levels {
+legend {
+. = empty
+P = Player
+}
+P
+}
+}
+
+scene playing {
+layout {
+puzzle board = board
+}
+rules {
+step board
+if board.win_conditions -> goto level_clear
+}
+}
+
+scene level_clear {
+layout {
+text "clear"
+}
+}
+"#,
+        )
+        .unwrap();
+        let mut session = GameSession::new(&loaded);
+
+        session.apply_input(&loaded, InputId(0)).unwrap();
+
+        assert_eq!(session.screen(), "playing");
+        assert!(!session.cleared_levels()[0]);
+    }
+
+    #[test]
     fn conditional_win_effect_forces_level_clear_lifecycle() {
         let loaded = parse_game(
             r#"
-title conditional_win_effect_runtime
+title = conditional_win_effect_runtime
 puzzle default {
 layers {
 floor = Exit
@@ -4574,7 +5052,7 @@ marker = Cleared
 actor = Player
 }
 input clear
-condition can_clear = exists(Exit)
+query can_clear = exists(Exit)
 on_level_clear {
 [ Player Exit no Cleared ] -> [ Player Exit Cleared ]
 next_level
@@ -4610,7 +5088,7 @@ P
     fn targeted_conditional_win_effect_forces_level_clear_lifecycle() {
         let loaded = parse_game(
             r#"
-title targeted_conditional_win_effect_runtime
+title = targeted_conditional_win_effect_runtime
 puzzle board {
 layers {
 floor = Exit
@@ -4666,14 +5144,14 @@ step board
     fn conditional_win_effect_satisfies_scene_win_condition_transition() {
         let loaded = parse_game(
             r#"
-title conditional_win_effect_scene_transition
+title = conditional_win_effect_scene_transition
 puzzle board {
 layers {
 floor = Exit
 actor = Player
 }
 input clear
-condition can_clear = exists(Exit)
+query can_clear = exists(Exit)
 win_conditions {
 no Exit
 }
@@ -4722,7 +5200,7 @@ text "clear"
     fn puzzle_rule_goto_effect_changes_scene_after_turn() {
         let loaded = parse_game(
             r#"
-title puzzle_rule_goto_runtime
+title = puzzle_rule_goto_runtime
 puzzle default {
 layers {
 actor = Player
@@ -4770,7 +5248,7 @@ text "Menu"
     fn transition_fixture() -> LoadedGame {
         parse_game(
             r#"
-title transition_fixture
+title = transition_fixture
 puzzle sokoban {
 layers {
 floor = Goal
@@ -4832,13 +5310,14 @@ text "Level Select"
         loaded: &LoadedGame,
         session: &mut GameSession,
         target: &str,
+        level_pack: &str,
         level_name: &str,
     ) {
         let index = loaded
             .levels
             .iter()
-            .position(|level| level.name == level_name)
-            .unwrap_or_else(|| panic!("missing level {level_name}"));
+            .position(|level| level.pack.as_deref() == Some(level_pack) && level.name == level_name)
+            .unwrap_or_else(|| panic!("missing level {level_pack}[{level_name}]"));
         session
             .apply_command(
                 loaded,
@@ -4850,7 +5329,7 @@ text "Level Select"
     fn scene_local_puzzle_fixture() -> LoadedGame {
         parse_game(
             r#"
-title scene_local_puzzle_fixture
+title = scene_local_puzzle_fixture
 
 puzzle sokoban {
 var portal_entered = false
@@ -4926,7 +5405,7 @@ step spec_board
 
     fn enter_scene_local_hub(loaded: &LoadedGame, session: &mut GameSession) {
         session.apply_command(loaded, "goto hub").unwrap();
-        load_named_scene_level(loaded, session, "hub.spec_board", "spec.hub");
+        load_named_scene_level(loaded, session, "hub.spec_board", "spec", "hub");
         assert_eq!(session.screen(), "hub");
     }
 
@@ -4934,7 +5413,7 @@ step spec_board
     fn scene_condition_can_read_board_var_directly() {
         let loaded = parse_game(
             r#"
-title scene_var_condition
+title = scene_var_condition
 
 puzzle default {
 layers {
@@ -4989,7 +5468,7 @@ text "moved"
     fn scene_start_transition_runs_when_scene_becomes_focused() {
         let loaded = parse_game(
             r#"
-title scene_start_fixture
+title = scene_start_fixture
 puzzle default {
 persistent var moves = 0
 
@@ -5043,7 +5522,7 @@ stop_music music_name
     fn puzzle_rule_sfx_effect_queues_sound_event_on_match() {
         let loaded = parse_game(
             r#"
-title rule_sfx_fixture
+title = rule_sfx_fixture
 sounds {
 sfx push seed=push01 type=jump
 }
@@ -5085,7 +5564,7 @@ P.
     fn model_operation_sounds_emit_for_undo_and_restart() {
         let loaded = parse_game(
             r#"
-title operation_sfx_fixture
+title = operation_sfx_fixture
 sounds {
 sfx undo_tick seed=undo01 type=hit
 sfx restart_tick seed=restart01 type=jump
@@ -5143,7 +5622,7 @@ P.
     fn puzzle_rule_music_effect_queues_sound_event_on_match() {
         let loaded = parse_game(
             r#"
-title rule_music_fixture
+title = rule_music_fixture
 sounds {
 music locked_room seed=room01
 }
@@ -5185,7 +5664,7 @@ P.
     fn model_move_sound_trigger_queues_sound_event_on_matching_move() {
         let loaded = parse_game(
             r#"
-title model_move_sfx_fixture
+title = model_move_sfx_fixture
 sounds {
 sfx push seed=push01 type=jump
 }
@@ -5230,7 +5709,7 @@ PB.
     fn model_cantmove_sound_trigger_queues_sound_event_on_blocked_move_intent() {
         let loaded = parse_game(
             r#"
-title model_cantmove_sfx_fixture
+title = model_cantmove_sfx_fixture
 sounds {
 sfx bump seed=bump01 type=hit
 }
@@ -5278,7 +5757,7 @@ PB#
     fn model_cantmove_sound_trigger_ignores_direction_cleanup_without_intent() {
         let loaded = parse_game(
             r#"
-title model_cantmove_cleanup_without_intent_fixture
+title = model_cantmove_cleanup_without_intent_fixture
 sounds {
 sfx bump seed=bump01 type=hit
 }
@@ -5317,7 +5796,7 @@ A
     fn model_cantmove_sound_trigger_ignores_other_object_set_intent() {
         let loaded = parse_game(
             r#"
-title model_cantmove_other_object_set_fixture
+title = model_cantmove_other_object_set_fixture
 sounds {
 sfx bump seed=bump01 type=hit
 }
@@ -5360,7 +5839,7 @@ B#
     fn standard_move_collision_blocks_head_on_claims_and_queues_cantmove_sfx() {
         let loaded = parse_game(
             r#"
-title model_collision_sfx_fixture
+title = model_collision_sfx_fixture
 sounds {
 sfx bump seed=bump01 type=hit
 }
@@ -5409,7 +5888,7 @@ A.A
     fn standard_move_collision_blocks_corner_claims_and_queues_cantmove_sfx() {
         let loaded = parse_game(
             r#"
-title model_corner_collision_sfx_fixture
+title = model_corner_collision_sfx_fixture
 sounds {
 sfx bump seed=bump01 type=hit
 }
@@ -5460,7 +5939,7 @@ A.
     fn standard_move_collision_blocks_three_way_claims_and_queues_cantmove_sfx() {
         let loaded = parse_game(
             r#"
-title model_three_way_collision_sfx_fixture
+title = model_three_way_collision_sfx_fixture
 sounds {
 sfx bump seed=bump01 type=hit
 }
@@ -5513,7 +5992,7 @@ A.A
     fn standard_move_blocked_intent_does_not_queue_move_sfx() {
         let loaded = parse_game(
             r#"
-title model_blocked_move_sfx_fixture
+title = model_blocked_move_sfx_fixture
 sounds {
 sfx move seed=move01 type=jump
 sfx bump seed=bump01 type=hit
@@ -5563,7 +6042,7 @@ A#
     fn standard_move_successful_intent_does_not_queue_cantmove_sfx() {
         let loaded = parse_game(
             r#"
-title model_successful_move_sfx_fixture
+title = model_successful_move_sfx_fixture
 sounds {
 sfx move seed=move01 type=jump
 sfx bump seed=bump01 type=hit
@@ -5612,7 +6091,7 @@ A.
     fn standard_move_mixed_blocked_and_successful_intents_queue_both_sfx() {
         let loaded = parse_game(
             r#"
-title model_mixed_move_sfx_fixture
+title = model_mixed_move_sfx_fixture
 sounds {
 sfx move seed=move01 type=jump
 sfx bump seed=bump01 type=hit
@@ -5668,7 +6147,7 @@ A#.A.
     fn standard_move_still_moves_same_direction_chains() {
         let loaded = parse_game(
             r#"
-title model_chain_move_fixture
+title = model_chain_move_fixture
 puzzle default {
 layers {
 actor = A
@@ -5705,7 +6184,7 @@ AA.
     fn rule_sfx_is_deduped_within_one_turn() {
         let loaded = parse_game(
             r#"
-title rule_sfx_dedup_fixture
+title = rule_sfx_dedup_fixture
 sounds {
 sfx push seed=push01 type=jump
 }
@@ -5746,7 +6225,7 @@ B.B.
     fn again_follow_up_turn_has_separate_sfx_dedup_scope() {
         let loaded = parse_game(
             r#"
-title again_sfx_scope_fixture
+title = again_sfx_scope_fixture
 sounds {
 sfx push seed=push01 type=jump
 }
@@ -5792,7 +6271,7 @@ B..
     fn puzzle_do_sfx_effect_queues_sound_event() {
         let loaded = parse_game(
             r#"
-title rule_do_sfx_fixture
+title = rule_do_sfx_fixture
 sounds {
 sfx tick seed=tick01 type=jump
 }
@@ -5834,7 +6313,7 @@ P
     fn puzzle_wait_effect_waits_for_animation_or_explicit_duration() {
         let loaded = parse_game(
             r#"
-title rule_wait_fixture
+title = rule_wait_fixture
 default_wait_time = 300ms
 puzzle default {
 layers {
@@ -5878,7 +6357,7 @@ P
     fn wait_animation_pauses_until_segment_animation_completes() {
         let loaded = parse_game(
             r#"
-title wait_animation_fixture
+title = wait_animation_fixture
 animation {
 tween {
 duration = 80ms
@@ -5947,7 +6426,7 @@ P.
     fn tween_move_pauses_following_routine_until_animation_completes() {
         let loaded = parse_game(
             r#"
-title tween_routine_boundary
+title = tween_routine_boundary
 animation {
 tween {
 duration = 80ms
@@ -6018,7 +6497,7 @@ P.
     fn tween_animation_without_wait_does_not_pause_following_routine() {
         let loaded = parse_game(
             r#"
-title tween_without_wait_boundary
+title = tween_without_wait_boundary
 animation {
 tween {
 duration = 80ms
@@ -6079,7 +6558,7 @@ P.
     fn standard_move_tween_waits_after_chain_resolution() {
         let loaded = parse_game(
             r#"
-title standard_move_tween_chain_boundary
+title = standard_move_tween_chain_boundary
 animation {
 tween {
 duration = 80ms
@@ -6173,7 +6652,7 @@ PB.
     fn standard_move_tween_waits_before_following_direct_rewrite() {
         let loaded = parse_game(
             r#"
-title standard_move_tween_direct_rule_boundary
+title = standard_move_tween_direct_rule_boundary
 animation {
 tween {
 duration = 80ms
@@ -6231,11 +6710,11 @@ PB.
     fn rewrite_suffix_wait_duration_runs_once_after_repeated_rewrite() {
         let loaded = parse_game(
             r#"
-title rewrite_suffix_wait_duration_fixture
+title = rewrite_suffix_wait_duration_fixture
 puzzle default {
 layers {
-A = A
-B = B
+actor = A
+box_layer = B
 marker = Marker
 }
 rules {
@@ -6285,7 +6764,7 @@ AA
     fn wait_animation_without_animation_is_noop() {
         let loaded = parse_game(
             r#"
-title wait_animation_noop_fixture
+title = wait_animation_noop_fixture
 puzzle default {
 layers {
 actor = Player
@@ -6323,7 +6802,7 @@ P
     fn scene_message_effect_queues_popup_message() {
         let loaded = parse_game(
             r#"
-title scene_message_fixture
+title = scene_message_fixture
 default_wait_time = 350ms
 var hint = "Push the box"
 puzzle default {
@@ -6373,7 +6852,7 @@ message hint
     fn scene_level_name_condition_scopes_lifecycle_message() {
         let loaded = parse_game(
             r#"
-title level_name_condition_message
+title = level_name_condition_message
 var hint = "First level only"
 puzzle default {
 layers {
@@ -6421,7 +6900,7 @@ message hint
     fn puzzle_rule_message_effect_queues_popup_message() {
         let loaded = parse_game(
             r#"
-title puzzle_message_fixture
+title = puzzle_message_fixture
 default_wait_time = 400ms
 var hint = "Found"
 puzzle default {
@@ -6471,7 +6950,7 @@ level "start" {
     fn message_effect_waits_before_following_rule_segment() {
         let loaded = parse_game(
             r#"
-title message_rule_segment_wait
+title = message_rule_segment_wait
 default_wait_time = 450ms
 puzzle default {
 layers {
@@ -6526,7 +7005,7 @@ A
     fn routine_wait_splits_before_following_inner_rule_and_undo_is_one_turn() {
         let loaded = parse_game(
             r#"
-title routine_wait_segments
+title = routine_wait_segments
 sounds {
 sfx fall seed=fall type=hit
 }
@@ -6596,7 +7075,7 @@ A
     fn wait_before_first_state_change_keeps_single_undo_anchor() {
         let loaded = parse_game(
             r#"
-title wait_anchor_segments
+title = wait_anchor_segments
 puzzle default {
 layers {
 __legacy_layer_0 = A B
@@ -6666,7 +7145,7 @@ A
     fn render_ascii_top_uses_the_top_layer_char_for_overlaps() {
         let loaded = parse_game(
             r#"
-title overlap_render
+title = overlap_render
 puzzle default {
 layers {
 floor = Floor
@@ -6734,7 +7213,7 @@ B = Box
     fn session_restart_uses_explicit_editor_start_state() {
         let loaded = parse_game(
             r#"
-title editor_state_start
+title = editor_state_start
 
 puzzle board {
 layers {
@@ -6801,7 +7280,7 @@ step board
     fn progress_save_restores_cleared_levels_by_name() {
         let loaded = parse_game(
             r#"
-title progress_fixture
+title = progress_fixture
 puzzle default {
 persistent var moves = 0
 
@@ -6906,7 +7385,7 @@ P
         );
 
         session
-            .apply_command(&loaded, "goto playing(\"microban.1\")")
+            .apply_command(&loaded, "goto playing(\"microban_01\")")
             .unwrap();
 
         assert_eq!(session.screen(), "playing");
@@ -6924,7 +7403,7 @@ P
     fn goto_level_param_accepts_quoted_dotted_level_name() {
         let loaded = parse_game(
             r#"
-title dotted_level
+title = dotted_level
 
 puzzle default {
 layers {
@@ -6969,7 +7448,7 @@ step board
     fn goto_level_param_rejects_legacy_dotted_level_atom() {
         let loaded = parse_game(
             r#"
-title quoted_level
+title = quoted_level
 
 puzzle default {
 layers {
@@ -7010,10 +7489,97 @@ step board
     }
 
     #[test]
+    fn goto_level_param_accepts_omitted_single_levels_collection() {
+        let loaded = parse_game(
+            r#"
+title = omitted_level_collection
+
+puzzle default {
+layers {
+__legacy_layer_0 = Player
+}
+empty .
+rules {
+}
+levels {
+legend P = Player
+level "first"
+P
+level "second"
+P
+}
+}
+
+scene playing(level) {
+layout {
+puzzle board = default
+}
+}
+"#,
+        )
+        .unwrap();
+        let mut session = GameSession::new(&loaded);
+
+        session.apply_command(&loaded, "goto playing(1)").unwrap();
+        assert_eq!(session.level_index(), 1);
+
+        session
+            .apply_command(&loaded, "goto playing(\"first\")")
+            .unwrap();
+        assert_eq!(session.level_index(), 0);
+    }
+
+    #[test]
+    fn goto_level_param_accepts_named_level_collection_indexing() {
+        let loaded = parse_game(
+            r#"
+title = named_level_collection
+
+puzzle default {
+layers {
+__legacy_layer_0 = Player
+}
+empty .
+rules {
+}
+}
+
+levels worldA of default {
+legend P = Player
+level "a"
+P
+}
+
+levels worldB of default {
+legend P = Player
+level "b"
+P
+}
+
+scene playing(level) {
+layout {
+puzzle board = default
+}
+}
+"#,
+        )
+        .unwrap();
+        let mut session = GameSession::new(&loaded);
+
+        session
+            .apply_command(&loaded, "goto playing(worldB[\"b\"])")
+            .unwrap();
+        assert_eq!(session.level_index(), 1);
+
+        let error = session.apply_command(&loaded, "goto playing(levels[0])");
+        assert!(matches!(error, Err(TransitionError::InvalidCommand(_))));
+    }
+
+    #[test]
     fn game_progress_effects_update_progress_primitives() {
         let loaded = parse_game(
             r#"
-title progress_effects
+title = progress_effects
 
 puzzle default {
 persistent var score = 5
@@ -7045,7 +7611,7 @@ P
             .apply_command(&loaded, "current_level = second")
             .unwrap();
         session
-            .apply_command(&loaded, "level(\"second\").cleared = true")
+            .apply_command(&loaded, "levels[\"second\"].cleared = true")
             .unwrap();
         assert_eq!(session.selected_level_index(), 1);
         assert_eq!(session.cleared_levels(), &[false, true]);
@@ -7077,7 +7643,7 @@ P
     fn scene_variable_assignment_copies_variable_value() {
         let loaded = parse_game(
             r#"
-title scene_var_assignment
+title = scene_var_assignment
 
 var num = 0
 var num_run = 7
@@ -7143,7 +7709,7 @@ P
     fn explicit_model_input_target_must_resolve() {
         let loaded = parse_game(
             r#"
-title explicit_target_error
+title = explicit_target_error
 
 puzzle board {
 input right
@@ -7200,7 +7766,7 @@ puzzle board
     fn targeted_model_input_continuation_must_keep_resolving_target() {
         let loaded = parse_game(
             r#"
-title targeted_continuation_target_error
+title = targeted_continuation_target_error
 
 default_wait_time = 100ms
 
@@ -7265,10 +7831,79 @@ step board
     }
 
     #[test]
+    fn signal_input_handler_steps_target_puzzle_for_direction_set() {
+        let loaded = parse_game(
+            r#"
+title = signal_input_handler
+
+puzzle board {
+input right
+
+layers {
+actor = Player Marker
+}
+empty .
+rules {
+right [ Player ] -> [ Marker ]
+}
+levels {
+legend {
+P = Player
+M = Marker
+}
+level "start" {
+P
+}
+}
+}
+
+scene playing {
+var input = signal none
+layout {
+puzzle board = board
+}
+on input in directions {
+step board
+}
+}
+"#,
+        )
+        .unwrap();
+        let mut session = GameSession::new(&loaded);
+        let before = session
+            .scene_state_for("playing")
+            .unwrap()
+            .puzzles
+            .get("board")
+            .unwrap()
+            .state
+            .clone();
+
+        session.apply_command(&loaded, "input = right").unwrap();
+
+        let after = &session
+            .scene_state_for("playing")
+            .unwrap()
+            .puzzles
+            .get("board")
+            .unwrap()
+            .state;
+        assert_ne!(after, &before);
+        assert_eq!(
+            session
+                .scene_state_for("playing")
+                .unwrap()
+                .values
+                .get("input"),
+            Some(&SceneValue::Symbol("none".to_string()))
+        );
+    }
+
+    #[test]
     fn puzzle_next_level_restarts_the_target_scene_not_the_initial_scene() {
         let loaded = parse_game(
             r#"
-title next_level_target_scene
+title = next_level_target_scene
 
 puzzle board {
 layers {
@@ -7305,8 +7940,9 @@ P
 }
 
 scene title {
-title
+layout {
 button "Play" -> goto playing
+}
 rules {
 }
 }
@@ -7338,7 +7974,7 @@ if board.win_conditions -> board.next_level
     fn persistent_vars_survive_undo_and_clear_undo_history_cuts_undo() {
         let loaded = parse_game(
             r#"
-title persistent_history
+title = persistent_history
 
 puzzle default {
 persistent var cleared = false
@@ -7399,7 +8035,7 @@ step board
     #[test]
     fn puzzle_load_and_reset_do_not_depend_on_initial_scene_or_playing_name() {
         let source = r#"
-title puzzle_load_reset
+title = puzzle_load_reset
 
 puzzle default {
 layers {
@@ -7498,7 +8134,7 @@ step board
     fn cancelled_input_does_not_apply_screen_condition_transitions() {
         let loaded = parse_game(
             r#"
-title cancel_screen_transition
+title = cancel_screen_transition
 
 puzzle default {
 layers {
@@ -7572,7 +8208,7 @@ text "clear"
     fn direct_model_input_does_not_reach_level_when_level_select_is_focused() {
         let loaded = parse_game(
             r#"
-title focused_input
+title = focused_input
 sounds {
 sfx step seed=step type=jump
 }
@@ -7635,7 +8271,7 @@ level_menu
     fn direct_input_can_still_drive_focused_scene_input_transition() {
         let loaded = parse_game(
             r#"
-title scene_input_focus
+title = scene_input_focus
 puzzle default {
 layers {
 actor = Player
@@ -7747,7 +8383,13 @@ step board
         let player = object_named(&loaded, "Player");
 
         enter_scene_local_hub(&loaded, &mut session);
-        load_named_scene_level(&loaded, &mut session, "checkpoint.spec_board", "spec.hub");
+        load_named_scene_level(
+            &loaded,
+            &mut session,
+            "checkpoint.spec_board",
+            "spec",
+            "hub",
+        );
         session
             .apply_input(&loaded, input_named(&loaded, "down"))
             .unwrap();
@@ -7786,7 +8428,7 @@ step board
     fn sequence_effect_can_update_saved_puzzle_then_return() {
         let loaded = parse_game(
             r#"
-title sequence_saved_puzzle
+title = sequence_saved_puzzle
 
 puzzle default {
 var marks = 0
@@ -7913,7 +8555,7 @@ goto hub
     fn level_clear_hook_runs_before_condition_transition() {
         let loaded = parse_game(
             r#"
-title level_clear_hook
+title = level_clear_hook
 puzzle sokoban {
 layers {
 floor = Goal
@@ -7984,7 +8626,7 @@ text "done"
     fn wait_before_next_level_exposes_cleared_snapshot_until_continuation() {
         let loaded = parse_game(
             r#"
-title wait_clear_snapshot
+title = wait_clear_snapshot
 puzzle sokoban {
 layers {
 floor = Goal
@@ -8061,7 +8703,7 @@ step board
     fn wait_statement_splits_rules_into_observable_segments() {
         let loaded = parse_game(
             r#"
-title wait_statement_segments
+title = wait_statement_segments
 puzzle default {
 layers {
 __legacy_layer_0 = A B C
@@ -8109,7 +8751,7 @@ A
     #[test]
     fn screen_transition_can_goto_level_with_payload() {
         let source = r#"
-title level_select_payload
+title = level_select_payload
 
 puzzle default {
 layers {
@@ -8160,7 +8802,7 @@ level_menu
     #[test]
     fn level_menu_position_select_restarts_current_level_state() {
         let source = r#"
-title level_menu_position_restart
+title = level_menu_position_restart
 
 puzzle default {
 layers {
@@ -8226,7 +8868,7 @@ level_menu
     fn scene_level_commands_can_target_level_scene() {
         let loaded = parse_game(
             r#"
-title scene_level_commands
+title = scene_level_commands
 puzzle default {
 layers {
 __legacy_layer_0 = Player
@@ -8291,7 +8933,7 @@ rules {
     #[test]
     fn level_menu_component_owns_level_menu_commands() {
         let source = r#"
-title level_menu_commands
+title = level_menu_commands
 
 puzzle default {
 layers {
@@ -8343,7 +8985,7 @@ level_menu
     #[test]
     fn scene_level_resources_filter_level_menu_and_advance() {
         let source = r#"
-title scene_level_resources
+title = scene_level_resources
 
 puzzle default {
 layers {
@@ -8395,11 +9037,19 @@ puzzle board = default
 
         session.apply_command(&loaded, "select").unwrap();
         assert_eq!(session.level_index(), 2);
-        assert_eq!(loaded.levels[session.level_index()].name, "worldB.1");
+        assert_eq!(
+            loaded.levels[session.level_index()].pack.as_deref(),
+            Some("worldB")
+        );
+        assert_eq!(loaded.levels[session.level_index()].name, "1");
 
         session.advance_level(&loaded);
         assert_eq!(session.level_index(), 3);
-        assert_eq!(loaded.levels[session.level_index()].name, "worldB.2");
+        assert_eq!(
+            loaded.levels[session.level_index()].pack.as_deref(),
+            Some("worldB")
+        );
+        assert_eq!(loaded.levels[session.level_index()].name, "2");
 
         session.advance_level(&loaded);
         assert_eq!(session.level_index(), 3);
@@ -8408,7 +9058,7 @@ puzzle board = default
     #[test]
     fn level_menu_matrix_navigation_uses_columns() {
         let source = r#"
-title level_menu_matrix
+title = level_menu_matrix
 
 puzzle default {
 layers {
@@ -8476,7 +9126,7 @@ wrap = true
     #[test]
     fn level_menu_select_starts_selected_level() {
         let source = r#"
-title level_menu_default_select
+title = level_menu_default_select
 
 puzzle default {
 layers {
@@ -8527,7 +9177,7 @@ level_menu
     #[test]
     fn level_menu_buttons_share_level_menu_cursor() {
         let source = r#"
-title level_menu_buttons
+title = level_menu_buttons
 
 puzzle default {
 layers {
@@ -8585,7 +9235,7 @@ button "Title" -> goto title
     #[test]
     fn goto_preserves_fixed_scene_state_without_history_stack() {
         let source = r#"
-title screen_history
+title = screen_history
 puzzle default {
 layers {
 __legacy_layer_0 = Player
@@ -8650,7 +9300,7 @@ text "C"
     #[test]
     fn persistent_scene_var_survives_scene_reset() {
         let source = r#"
-title persistent_scene_var
+title = persistent_scene_var
 puzzle default {
 layers {
 __legacy_layer_0 = Player
@@ -8709,7 +9359,7 @@ text tab
     #[test]
     fn runtime_applies_scene_params_without_overwriting_consts() {
         let source = r#"
-title scene_param_rejection
+title = scene_param_rejection
 puzzle default {
 layers {
 __legacy_layer_0 = Player
@@ -8760,7 +9410,7 @@ text tab
     #[test]
     fn runtime_scene_words_keep_goto_and_start_only() {
         let source = r#"
-title scene_state_words
+title = scene_state_words
 puzzle default {
 layers {
 __legacy_layer_0 = Player
@@ -8834,7 +9484,7 @@ text "Menu"
     #[test]
     fn scene_params_keep_level_refs_and_fields_are_type_checked() {
         let source = r#"
-title level_ref_params
+title = level_ref_params
 puzzle default {
 layers {
 __legacy_layer_0 = Player
@@ -8868,7 +9518,7 @@ text selected.solved
         let mut session = GameSession::new(&loaded);
 
         session
-            .apply_command(&loaded, "level(\"first\").cleared = true")
+            .apply_command(&loaded, "levels[\"first\"].cleared = true")
             .unwrap();
         session
             .apply_command(&loaded, "goto detail with selected = first")
@@ -8897,7 +9547,7 @@ text selected.solved
     #[test]
     fn scene_visibility_and_focus_are_separate() {
         let source = r#"
-title screen_focus
+title = screen_focus
 puzzle default {
 layers {
 __legacy_layer_0 = Player
@@ -8952,7 +9602,7 @@ text "Levels"
     #[test]
     fn session_initializes_screen_local_state() {
         let source = r#"
-title scene_state
+title = scene_state
 puzzle default {
 layers {
 actor = Player
@@ -9034,7 +9684,7 @@ Escape -> goto playing
     fn puzzle_rule_effect_can_advance_to_next_level() {
         let loaded = parse_game(
             r#"
-title rule_next_level
+title = rule_next_level
 
 puzzle board {
 layers {
@@ -9092,7 +9742,7 @@ step board
     fn puzzle_condition_effect_can_advance_to_next_level() {
         let loaded = parse_game(
             r#"
-title condition_next_level
+title = condition_next_level
 
 puzzle board {
 layers {
@@ -9155,7 +9805,7 @@ step board
     fn level_start_runs_at_runtime_without_baking_initial_state() {
         let loaded = parse_game(
             r#"
-title runtime_level_start
+title = runtime_level_start
 
 puzzle board {
 layers {
@@ -9221,7 +9871,7 @@ step board
     fn level_body_message_sugar_runs_on_runtime_lifecycle() {
         let loaded = parse_game(
             r#"
-title level_message_sugar
+title = level_message_sugar
 
 puzzle board {
 layers {
@@ -9290,7 +9940,7 @@ step board
     fn title_scene_does_not_start_first_level_lifecycle() {
         let loaded = parse_game(
             r#"
-title title_level_start_boundary
+title = title_level_start_boundary
 
 puzzle board {
 layers {
@@ -9317,7 +9967,9 @@ P
 }
 
 scene title {
+layout {
 button "Play" -> goto playing
+}
 }
 
 scene playing {
@@ -9352,7 +10004,7 @@ step board
     fn rule_next_level_still_runs_model_clear_and_scene_conditions() {
         let loaded = parse_game(
             r#"
-title rule_next_level_turn_completion
+title = rule_next_level_turn_completion
 
 puzzle board {
 persistent var clear_seen = false

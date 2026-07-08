@@ -1,5 +1,5 @@
 use crate::DiagnosticReport;
-use crate::syntax::is_puzzle_lifecycle_block;
+use crate::syntax::puzzle_lifecycle_event;
 
 pub(crate) fn logical_lines(source: &str) -> Result<Vec<String>, DiagnosticReport> {
     logical_lines_with_locations(source)
@@ -406,9 +406,8 @@ fn normalize_brace_block_line(
         }
         let header_tokens = split_header_tokens(header);
         let is_levels_header = is_levels_header(&header_tokens);
-        let preserve_level_header = *levels_brace_depth > 0
-            && !starts_inline_block(&header_tokens, header)
-            || matches!(header_tokens.as_slice(), ["level", ..]);
+        let preserve_level_header =
+            *levels_brace_depth > 0 || matches!(header_tokens.as_slice(), ["level", ..]);
         if header.ends_with("->") {
             normalized.push(logical_line.with_text(format!("{header} {{")));
             return Ok(());
@@ -444,7 +443,7 @@ fn is_levels_header(tokens: &[&str]) -> bool {
 }
 
 fn starts_inline_block(tokens: &[&str], line: &str) -> bool {
-    if matches!(tokens, [lifecycle] if is_puzzle_lifecycle_block(lifecycle)) {
+    if matches!(tokens, [lifecycle] if puzzle_lifecycle_event(lifecycle).is_some()) {
         return true;
     }
     matches!(
@@ -477,17 +476,18 @@ fn starts_inline_block(tokens: &[&str], line: &str) -> bool {
             | ["input", ..]
             | ["action", ..]
             | ["if", ..]
+            | ["else"]
+            | ["for", ..]
+            | ["repeat"]
             | ["row"]
             | ["column"]
             | ["box"]
-            | ["for", ..]
             | ["level_menu"]
             | ["fix", ..]
-            | ["repeat"]
             | ["once"]
             | ["once_all"]
             | ["once_per_level"]
-    ) || matches!(tokens, ["button", ..] if line.trim_end().ends_with(" with"))
+    ) || matches!(tokens, ["button", ..] if line.trim_end().ends_with(" with") || line.contains("->"))
 }
 
 fn is_structural_block_open_segment(segment: &str) -> bool {
@@ -563,6 +563,7 @@ pub(crate) enum SourceScope {
     Group,
     Layers,
     Mark,
+    Map,
     Keys,
     Legend,
     Levels,
@@ -584,7 +585,7 @@ pub(crate) enum SourceLineRole {
     PlainFirstToken,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SourceToken {
     pub(crate) text: String,
     pub(crate) start: usize,
@@ -592,7 +593,7 @@ pub(crate) struct SourceToken {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct SourceContextLine {
+pub(crate) struct SurfaceSourceLine {
     pub(crate) tokens: Vec<String>,
     pub(crate) token_spans: Vec<SourceToken>,
     pub(crate) structural_token_spans: Vec<SourceToken>,
@@ -605,34 +606,47 @@ pub(crate) struct SourceContextLine {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum SourceStructureEvent {
-    Open { header: String, scope: SourceScope },
+    Open {
+        header: String,
+        scope: SourceScope,
+        role: SourceBlockRole,
+        virtual_braces: bool,
+    },
     Close,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SourceBlockRole {
+    SourceTree,
+    Statement,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SourceBlockStackEntry {
+    scope: SourceScope,
+    virtual_braces: bool,
+}
+
 #[derive(Clone, Debug, Default)]
-pub(crate) struct SourceContext {
+pub(crate) struct SurfaceSourceScan {
     raw: Vec<(usize, usize)>,
     plain: Vec<(usize, usize)>,
-    pub(crate) lines: Vec<SourceContextLine>,
+    pub(crate) lines: Vec<SurfaceSourceLine>,
 }
 
-impl SourceContext {
-    pub(crate) fn raw_range_starting_at(&self, start: usize) -> Option<usize> {
-        self.raw
-            .iter()
-            .find_map(|(range_start, range_end)| (*range_start == start).then_some(*range_end))
+impl SurfaceSourceScan {
+    pub(crate) fn raw_ranges(&self) -> &[(usize, usize)] {
+        &self.raw
     }
 
-    pub(crate) fn is_plain_range(&self, start: usize, end: usize) -> bool {
-        self.plain
-            .iter()
-            .any(|(range_start, range_end)| start >= *range_start && end <= *range_end)
+    pub(crate) fn plain_ranges(&self) -> &[(usize, usize)] {
+        &self.plain
     }
 }
 
-pub(crate) fn scan_source_context(source: &str) -> SourceContext {
-    let mut context = SourceContext::default();
-    let mut block_stack = Vec::<SourceScope>::new();
+pub(crate) fn scan_surface_source(source: &str) -> SurfaceSourceScan {
+    let mut context = SurfaceSourceScan::default();
+    let mut block_stack = Vec::<SourceBlockStackEntry>::new();
     let mut structural_block_stack = Vec::<String>::new();
     let mut normalize_levels_brace_depth = 0i32;
     let mut unbraced_visual_shape_body = false;
@@ -644,14 +658,24 @@ pub(crate) fn scan_source_context(source: &str) -> SourceContext {
         let content = &source[offset..content_end];
         let raw = strip_line_comment(content);
         let trimmed = raw.trim();
-        let tokens = source_context_tokens(trimmed);
-        let current = block_stack.last().copied();
+        let tokens = surface_source_tokens(trimmed);
+        let mut structural_events = Vec::<SourceStructureEvent>::new();
+
+        if block_stack.last().is_some_and(|entry| {
+            entry.virtual_braces && entry.scope == SourceScope::VisualShapeEntry
+        }) && starts_unbraced_visual_entry(trimmed, &tokens)
+        {
+            push_close_events(
+                close_virtual_block(&mut block_stack),
+                &mut structural_events,
+            );
+        }
+
+        let current = block_stack.last().map(|entry| entry.scope);
         let in_unbraced_visual_shape_body = unbraced_visual_shape_body
             && current == Some(SourceScope::VisualShapeTable)
             && !trimmed.is_empty()
             && trimmed != "}";
-
-        let mut structural_events = Vec::<SourceStructureEvent>::new();
 
         if trimmed.is_empty() {
             push_close_events(close_blank_line(&mut block_stack), &mut structural_events);
@@ -681,31 +705,38 @@ pub(crate) fn scan_source_context(source: &str) -> SourceContext {
             in_unbraced_visual_shape_body,
         );
 
-        let structural_lines = source_context_stack_lines(
+        let structural_lines = surface_source_stack_lines(
             trimmed,
             &mut structural_block_stack,
             &mut normalize_levels_brace_depth,
         );
         for stack_line in &structural_lines {
-            let tokens = source_context_tokens(&stack_line);
-            let current = block_stack.last().copied();
+            let tokens = surface_source_tokens(&stack_line);
+            let current = block_stack.last().map(|entry| entry.scope);
             if stack_line == "}" {
                 push_close_events(close_block_line(&mut block_stack), &mut structural_events);
             } else if source_opens_block(&stack_line, &tokens, current)
                 && let Some(opened) = opening_scope(&stack_line, &tokens, current)
             {
+                let role = source_block_role(&stack_line, &tokens, current, opened);
+                let virtual_braces = source_block_uses_virtual_braces(&stack_line, current, opened);
                 structural_events.push(SourceStructureEvent::Open {
                     header: structural_header(stack_line),
                     scope: opened,
+                    role,
+                    virtual_braces,
                 });
-                block_stack.push(opened);
+                block_stack.push(SourceBlockStackEntry {
+                    scope: opened,
+                    virtual_braces,
+                });
             }
         }
 
-        context.lines.push(SourceContextLine {
+        context.lines.push(SurfaceSourceLine {
             tokens: tokens.iter().map(|token| (*token).to_string()).collect(),
             token_spans: source_line_tokens(raw, offset),
-            structural_token_spans: source_context_token_spans(raw, offset),
+            structural_token_spans: surface_source_token_spans(raw, offset),
             structural_lines,
             structural_events,
             scope: current,
@@ -719,7 +750,7 @@ pub(crate) fn scan_source_context(source: &str) -> SourceContext {
     context
 }
 
-fn source_context_stack_lines(
+fn surface_source_stack_lines(
     trimmed: &str,
     structural_block_stack: &mut Vec<String>,
     normalize_levels_brace_depth: &mut i32,
@@ -770,7 +801,9 @@ fn source_line_role(
         Some(SourceScope::VisualShapeEntry) if trimmed.ends_with('{') => {
             SourceLineRole::PlainFirstToken
         }
-        Some(SourceScope::VisualShapeEntry) if is_visual_sprite_directive_row(tokens) => {
+        Some(SourceScope::VisualShapeEntry)
+            if is_visual_sprite_directive_row(tokens) || is_visual_sprite_palette_row(tokens) =>
+        {
             SourceLineRole::Normal
         }
         Some(SourceScope::VisualShapeEntry) => SourceLineRole::Raw,
@@ -786,6 +819,30 @@ fn is_visual_sprite_directive_row(tokens: &[&str]) -> bool {
     )
 }
 
+fn is_visual_sprite_palette_row(tokens: &[&str]) -> bool {
+    !tokens.is_empty()
+        && tokens
+            .iter()
+            .all(|token| *token == "transparent" || token.starts_with('#'))
+}
+
+fn starts_unbraced_visual_entry(trimmed: &str, tokens: &[&str]) -> bool {
+    !trimmed.ends_with('{') && is_unbraced_visual_entry_header(tokens)
+}
+
+fn is_unbraced_visual_entry_header(tokens: &[&str]) -> bool {
+    let Some(name) = tokens.first() else {
+        return false;
+    };
+    if !is_surface_source_identifier(name) || is_visual_sprite_directive_row(tokens) {
+        return false;
+    }
+    tokens
+        .iter()
+        .skip(1)
+        .all(|token| *token == "transparent" || token.starts_with('#'))
+}
+
 fn next_unbraced_visual_shape_body(
     current: Option<SourceScope>,
     trimmed: &str,
@@ -798,10 +855,10 @@ fn next_unbraced_visual_shape_body(
     if in_unbraced_visual_shape_body {
         return true;
     }
-    matches!(tokens, [name] if is_source_context_identifier(name)) && !trimmed.ends_with('{')
+    matches!(tokens, [name] if is_surface_source_identifier(name)) && !trimmed.ends_with('{')
 }
 
-fn is_source_context_identifier(value: &str) -> bool {
+fn is_surface_source_identifier(value: &str) -> bool {
     let Some(first) = value.chars().next() else {
         return false;
     };
@@ -815,13 +872,13 @@ fn starts_level_legend(tokens: &[&str]) -> bool {
     tokens.first().copied() == Some("legend")
 }
 
-fn source_context_tokens(line: &str) -> Vec<&str> {
+fn surface_source_tokens(line: &str) -> Vec<&str> {
     line.split(|ch: char| ch.is_whitespace() || matches!(ch, '{' | '}' | ',' | ';'))
         .filter(|token| !token.is_empty())
         .collect()
 }
 
-fn source_context_token_spans(line: &str, line_offset: usize) -> Vec<SourceToken> {
+fn surface_source_token_spans(line: &str, line_offset: usize) -> Vec<SourceToken> {
     let mut tokens = Vec::new();
     let mut start = None;
     for (index, ch) in line.char_indices() {
@@ -884,18 +941,32 @@ fn structural_header(line: &str) -> String {
         .to_string()
 }
 
-fn close_blank_line(block_stack: &mut Vec<SourceScope>) -> usize {
-    if block_stack.last() == Some(&SourceScope::UnbracedLevel) {
+fn close_blank_line(block_stack: &mut Vec<SourceBlockStackEntry>) -> usize {
+    if block_stack.last().is_some_and(|entry| entry.virtual_braces) {
         block_stack.pop();
         return 1;
     }
     0
 }
 
-fn close_block_line(block_stack: &mut Vec<SourceScope>) -> usize {
-    if block_stack.last() == Some(&SourceScope::UnbracedLevel) {
+fn close_virtual_block(block_stack: &mut Vec<SourceBlockStackEntry>) -> usize {
+    if block_stack.last().is_some_and(|entry| entry.virtual_braces) {
         block_stack.pop();
-        if block_stack.last() == Some(&SourceScope::Levels) {
+        return 1;
+    }
+    0
+}
+
+fn close_block_line(block_stack: &mut Vec<SourceBlockStackEntry>) -> usize {
+    if block_stack.last().is_some_and(|entry| entry.virtual_braces) {
+        let closed = block_stack.pop().expect("checked above");
+        if block_stack.last().is_some_and(|entry| {
+            matches!(
+                (entry.scope, closed.scope),
+                (SourceScope::Levels, SourceScope::UnbracedLevel)
+                    | (SourceScope::Visuals, SourceScope::VisualShapeEntry)
+            )
+        }) {
             block_stack.pop();
             return 2;
         }
@@ -905,67 +976,64 @@ fn close_block_line(block_stack: &mut Vec<SourceScope>) -> usize {
 }
 
 fn source_opens_block(line: &str, tokens: &[&str], current: Option<SourceScope>) -> bool {
-    if is_scene_scope(current) {
-        match tokens {
-            ["state"] | ["keys"] | ["inputs"] | ["rules"] | ["on_scene_start"] => {
-                return true;
-            }
-            ["layout", ..] => return true,
-            ["row", ..]
-            | ["column", ..]
-            | ["box", ..]
-            | ["for", ..]
-            | ["level_menu", ..]
-            | ["puzzle", ..]
-            | ["puzzle3", ..]
-            | ["routine", ..]
-            | ["input", ..]
-            | ["action", ..]
-            | ["if", ..] => return line.ends_with('{'),
-            _ => {}
-        }
-    }
     if current == Some(SourceScope::Levels) && !tokens.is_empty() {
         return true;
     }
+    if current == Some(SourceScope::Visuals) && is_unbraced_visual_entry_header(tokens) {
+        return true;
+    }
     line.ends_with('{')
-        || matches!(
-            tokens,
-            ["sounds"]
-                | ["assets"]
-                | ["groups"]
-                | ["legend"]
-                | ["levels", ..]
-                | ["levels3", ..]
-                | ["tags"]
-                | ["layers"]
-                | ["collision_layers"]
-                | ["marks"]
-                | ["keys"]
-                | ["inputs"]
-                | ["resources"]
-                | ["sprites", ..]
-                | ["sprites3", ..]
-                | ["colors"]
-                | ["shapes"]
-                | ["render"]
-                | ["camera"]
-                | ["scene", ..]
-                | ["puzzle", ..]
-                | ["puzzle3", ..]
-                | ["layout", ..]
-                | ["state"]
-                | ["rules"]
-                | ["on_scene_start"]
-                | ["input", ..]
-                | ["action", ..]
-                | ["if", ..]
-                | ["row", ..]
-                | ["column", ..]
-                | ["box", ..]
-                | ["for", ..]
-                | ["level_menu", ..]
+}
+
+fn source_block_role(
+    line: &str,
+    tokens: &[&str],
+    current: Option<SourceScope>,
+    opened: SourceScope,
+) -> SourceBlockRole {
+    let first = tokens.first().copied().unwrap_or("");
+    if is_statement_block_header(line, tokens, current, opened) || is_statement_control_flow(first)
+    {
+        SourceBlockRole::Statement
+    } else {
+        SourceBlockRole::SourceTree
+    }
+}
+
+fn source_block_uses_virtual_braces(
+    line: &str,
+    current: Option<SourceScope>,
+    opened: SourceScope,
+) -> bool {
+    opened == SourceScope::UnbracedLevel
+        || (current == Some(SourceScope::Visuals)
+            && opened == SourceScope::VisualShapeEntry
+            && !line.trim_end().ends_with('{'))
+}
+
+fn is_statement_block_header(
+    line: &str,
+    tokens: &[&str],
+    current: Option<SourceScope>,
+    opened: SourceScope,
+) -> bool {
+    if structural_header(line).trim_end().ends_with("->") || line.contains("->") {
+        return true;
+    }
+    if current == Some(SourceScope::SceneLayout) && opened == SourceScope::SceneTransitions {
+        return true;
+    }
+    matches!(
+        (current, tokens),
+        (
+            Some(SourceScope::SceneTransitions),
+            ["input", ..] | ["action", ..] | ["if", ..]
         )
+    )
+}
+
+fn is_statement_control_flow(kind: &str) -> bool {
+    matches!(kind, "repeat" | "if" | "else" | "for")
 }
 
 fn opening_scope(line: &str, tokens: &[&str], current: Option<SourceScope>) -> Option<SourceScope> {
@@ -1015,6 +1083,9 @@ fn opening_scope(line: &str, tokens: &[&str], current: Option<SourceScope>) -> O
             [..] => return Some(SourceScope::VisualShapeEntry),
         }
     }
+    if current == Some(SourceScope::Visuals) && is_unbraced_visual_entry_header(tokens) {
+        return Some(SourceScope::VisualShapeEntry);
+    }
     if current == Some(SourceScope::Levels) {
         if matches!(tokens, ["legend"]) {
             return Some(SourceScope::Legend);
@@ -1063,6 +1134,7 @@ fn source_scope_for_name(name: &str) -> Option<SourceScope> {
         "layers" | "collision_layers" => Some(SourceScope::Layers),
         "groups" => Some(SourceScope::Group),
         "marks" => Some(SourceScope::Mark),
+        "map" => Some(SourceScope::Map),
         "keys" | "inputs" => Some(SourceScope::Keys),
         "resources" => Some(SourceScope::Other),
         "legend" => Some(SourceScope::Legend),
@@ -1121,7 +1193,7 @@ fn parse_error(line: &str, message: &str) -> DiagnosticReport {
 
 #[cfg(test)]
 mod tests {
-    use super::{logical_lines, scan_source_context, split_header_tokens, split_tokens};
+    use super::{logical_lines, scan_surface_source, split_header_tokens, split_tokens};
 
     #[test]
     fn split_tokens_preserves_block_openers() {
@@ -1184,7 +1256,7 @@ if outer { text "A" } else { text "B" }
     }
 
     #[test]
-    fn source_context_uses_parser_structural_lines_for_scope_stack() {
+    fn surface_source_scan_uses_parser_structural_lines_for_scope_stack() {
         let source = r#"
 puzzle board {
 rules {
@@ -1198,7 +1270,7 @@ on_level_start {
 }
 }
 "#;
-        let context = scan_source_context(source);
+        let context = scan_surface_source(source);
         let lifecycle_line = context
             .lines
             .iter()
@@ -1209,9 +1281,9 @@ on_level_start {
     }
 
     #[test]
-    fn source_context_preserves_token_spans_before_comments() {
+    fn surface_source_scan_preserves_token_spans_before_comments() {
         let source = "scene title {\n  button start -> goto playing // comment\n}\n";
-        let context = scan_source_context(source);
+        let context = scan_surface_source(source);
         let button_line = context
             .lines
             .iter()
@@ -1234,7 +1306,7 @@ on_level_start {
     }
 
     #[test]
-    fn source_context_keeps_unbraced_visual_shape_rows_raw() {
+    fn surface_source_scan_keeps_unbraced_visual_shape_rows_raw() {
         let source = r#"
 sprites {
 shapes {
@@ -1247,15 +1319,35 @@ Pull
 }
 }
 "#;
-        let context = scan_source_context(source);
+        let context = scan_surface_source(source);
         let box_header = source.find("Box").unwrap();
         let box_row = source.find("aaa").unwrap();
         let pull_header = source.find("Pull").unwrap();
         let pull_row = source.rfind("\n0").unwrap() + 1;
 
-        assert_eq!(context.raw_range_starting_at(box_header), None);
-        assert!(context.raw_range_starting_at(box_row).is_some());
-        assert_eq!(context.raw_range_starting_at(pull_header), None);
-        assert!(context.raw_range_starting_at(pull_row).is_some());
+        assert!(
+            !context
+                .raw_ranges()
+                .iter()
+                .any(|(start, _)| *start == box_header)
+        );
+        assert!(
+            context
+                .raw_ranges()
+                .iter()
+                .any(|(start, _)| *start == box_row)
+        );
+        assert!(
+            !context
+                .raw_ranges()
+                .iter()
+                .any(|(start, _)| *start == pull_header)
+        );
+        assert!(
+            context
+                .raw_ranges()
+                .iter()
+                .any(|(start, _)| *start == pull_row)
+        );
     }
 }

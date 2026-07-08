@@ -233,6 +233,7 @@ pub enum Effect {
 }
 
 pub type ConditionValueKind = puzzle_kernel::ConditionValueKind<ObjectId, Pattern, InputId>;
+pub type Pattern2 = Pattern;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Pattern {

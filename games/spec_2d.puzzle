@@ -1,4 +1,4 @@
-title "Ascii Click Smoke"
+title = "Ascii Click Smoke"
 
 puzzle main {
   layers {

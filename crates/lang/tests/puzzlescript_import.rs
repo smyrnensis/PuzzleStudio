@@ -92,8 +92,7 @@ fn assert_imported_output_uses_current_canonical_surface(source: &str) {
         "choice \"New Game\" -> input",
         "Enter Space x -> continue_game",
         "n -> new_game",
-        "puzzle board = main",
-        "step board",
+        "layer_1 =",
     ] {
         let forbidden_lowercase = forbidden.to_ascii_lowercase();
         assert!(
@@ -155,8 +154,11 @@ fn translates_basic_vanilla_puzzlescript_to_canonical_fixture() {
     assert!(!translated.contains("n -> new_game"));
     assert!(!translated.contains("w ArrowUp -> up"));
     assert!(!translated.contains("r -> restart"));
-    assert!(translated.contains("layout {\nrow {\ntitle \"Basic PS Sokoban\"\n}\nmain\n}"));
-    assert!(translated.contains("rules {\nstep main\n}"));
+    assert!(
+        translated
+            .contains("layout {\nrow {\ntitle = \"Basic PS Sokoban\"\n}\npuzzle board = main\n}")
+    );
+    assert!(translated.contains("rules {\nstep board\n}"));
     assert!(translated.contains("Escape q -> back"));
     assert!(translated.contains("routine continue_game {\ngoto playing"));
     assert!(translated.contains("routine new_game {\nclear_game_progress"));
@@ -198,8 +200,15 @@ fn translated_basic_vanilla_puzzlescript_parses_as_loaded_game() {
     );
     assert!(playing_scene.components.iter().any(|component| matches!(
         component,
-        SceneComponent::Frame(frame) if frame.kind == "puzzle" && frame.source == "main"
+        SceneComponent::Frame(frame) if frame.kind == "puzzle" && frame.source == "board"
     )));
+    assert!(
+        playing_scene
+            .state
+            .puzzles
+            .iter()
+            .any(|puzzle| { puzzle.name == "board" && puzzle.model == "main" })
+    );
     assert!(
         loaded
             .visuals
@@ -216,7 +225,7 @@ fn translated_basic_vanilla_puzzlescript_parses_as_loaded_game() {
     );
     assert_eq!(
         loaded.goal.as_ref().map(|goal| goal.description.as_str()),
-        Some("all Target on Crate")
+        Some("no [ Target no Crate ]")
     );
 }
 
@@ -255,7 +264,7 @@ P
 #[test]
 fn group_selector_intersection_filters_impossible_same_layer_tuples() {
     let source = r#"
-title "Group Intersection"
+title = "Group Intersection"
 
 puzzle main {
 layers {
@@ -449,8 +458,9 @@ P
     assert!(
         translated.contains("puzzle main {\nflickscreen 13 13\nscreen_focus Player\n\nlayers {")
     );
-    assert!(translated.contains("layout {\nmain\n}"));
-    assert!(!translated.contains("puzzle board = main"));
+    assert!(translated.contains("layout {\npuzzle board = main\n}"));
+    assert!(translated.contains("rules {\nstep board\n}"));
+    assert!(!translated.contains("layout {\nmain\n}"));
     assert!(!translated.contains("layout size 13 13"));
     assert!(!translated.contains("puzzle board size 13 13"));
     assert!(!translated.contains("      title \"Flick Fit\""));
@@ -548,7 +558,7 @@ P
 #[test]
 fn routine_once_does_not_force_inner_rewrites_to_once() {
     let source = r#"
-title routine_once_repeat_fixture
+title = routine_once_repeat_fixture
 
 puzzle main {
 layers {
@@ -723,6 +733,79 @@ p
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
 
     assert!(translated.contains("win_conditions {\nsome Dog\n}"));
+    parse_game(&translated).unwrap();
+}
+
+#[test]
+fn puzzlescript_case_sensitive_names_preserve_group_object_case_distinction() {
+    let source = r#"
+case_sensitive
+title Case Sensitive Groups
+
+========
+OBJECTS
+========
+
+Background
+black
+
+Crate
+brown
+
+CrateW
+blue
+
+TargetCrate
+yellow
+
+Player
+white
+
+=======
+LEGEND
+=======
+
+. = Background
+C = Crate
+W = CrateW
+t = TargetCrate
+P = Player
+crate = Crate or CrateW
+
+================
+COLLISIONLAYERS
+================
+
+Background
+crate
+TargetCrate
+Player
+
+======
+RULES
+======
+
+[ TargetCrate crate ] -> [ TargetCrate crate ]
+
+==============
+WINCONDITIONS
+==============
+
+all TargetCrate on crate
+
+=======
+LEVELS
+=======
+
+PtC
+"#;
+
+    let translated = translate_puzzlescript_to_canonical(source).unwrap();
+
+    assert!(translated.contains("groups {\ncrate = Crate CrateW\n}"));
+    assert!(translated.contains("no [ TargetCrate no crate ]"));
+    assert!(translated.contains("[ TargetCrate crate ] -> [ TargetCrate crate ]"));
+    assert!(!translated.contains("no [ TargetCrate no Crate ]"));
     parse_game(&translated).unwrap();
 }
 
@@ -951,6 +1034,47 @@ fn imports_supported_official_gallery_samples_as_current_canonical_syntax() {
             .unwrap_or_else(|err| panic!("{name} should translate: {err}"));
         assert_imported_output_uses_current_canonical_surface(&translated);
     }
+}
+
+#[test]
+fn imports_puzzlescript_next_teneten_sample_as_current_canonical_syntax() {
+    let source = include_str!("../../../games/TENETEN.txt");
+
+    let translated = translate_puzzlescript_to_canonical(source)
+        .expect("TENETEN should import from PuzzleScript Next syntax");
+
+    assert!(translated.contains("title = \"TENETEN\""));
+    assert!(translated.contains("layers {\nBackground\n"));
+    assert!(translated.contains("no [ TargetCrate no crate ]"));
+    assert!(translated.contains("level \"1\""));
+    assert!(translated.lines().any(|line| line == "message \"1\""));
+    assert!(translated.contains("message \"Thank you for playing!\""));
+    assert!(translated.contains("[ TargetCrate crate ] -> [ TargetCrate crate Satisfied ]"));
+    assert!(!translated.contains("[ TargetCrate Crate ] -> [ TargetCrate Crate Satisfied ]"));
+    assert!(
+        translated.contains(
+            "[ You:D#1 Count:N#2 no Checked ] -> [ You:D_rev(D#1) Count:Nm(N#2) Checked ]"
+        )
+    );
+    assert!(!translated.contains("[ You:F Count:0 no Checked ] -> [ You:B Count:3 Checked ]"));
+    assert!(translated.contains("__ps_shape_You_F {"));
+    assert!(translated.contains("You:B\ncolors #000 #fff #00000015\nshape __ps_shape_You_F"));
+    assert!(!translated.contains("You:B {"));
+    assert_imported_output_uses_current_canonical_surface(&translated);
+
+    let loaded = parse_game(&translated).expect("translated TENETEN should parse as canonical");
+    assert_eq!(loaded.title, "TENETEN");
+    assert_eq!(loaded.author.as_deref(), Some("smyrnensis"));
+    assert_eq!(loaded.homepage.as_deref(), Some("smyrnensis.itch.io"));
+}
+
+#[test]
+fn puzzlescript_import_rejects_canonical_metadata_assignment_in_prelude() {
+    let error = translate_puzzlescript_to_canonical("title = Not PuzzleScript\n")
+        .expect_err("PuzzleScript metadata must not use canonical assignment syntax")
+        .to_string();
+
+    assert!(error.contains("PuzzleScript title metadata must use `title <text>`"));
 }
 
 #[test]
@@ -1341,9 +1465,8 @@ P
 fn puzzlescript_prelude_colors_lower_to_theme_overrides() {
     let source = r#"
 title Theme Colors
-background_color black
+background black
 text_color #9CBD0F
-
 ========
 OBJECTS
 ========
@@ -1381,10 +1504,8 @@ P
 
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
 
-    assert!(
-        translated
-            .contains("theme puzzlescript {\nbackground_color #000000\ntext_color #9CBD0F\n}")
-    );
+    assert!(translated.contains("background_color = #000000"));
+    assert!(translated.contains("text_color = #9CBD0F"));
     let loaded = parse_game(&translated).unwrap();
     assert_eq!(loaded.theme.name.as_deref(), Some("puzzlescript"));
     assert!(

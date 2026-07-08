@@ -164,10 +164,6 @@ fn route(request: &HttpRequest, state: Arc<Mutex<ServerState>>) -> String {
         }
         ("GET", "/app.js") => http_ok("text/javascript; charset=utf-8", APP_JS),
         ("GET", "/renderer.js") => http_ok("text/javascript; charset=utf-8", RENDERER_JS),
-        ("GET", "/api/state") => {
-            let mut state = state.lock().expect("server state poisoned");
-            http_ok("application/json; charset=utf-8", &state.snapshot_json())
-        }
         ("GET", "/api/scene") => {
             let state = state.lock().expect("server state poisoned");
             http_ok("application/json; charset=utf-8", &state.scene_json())
@@ -180,31 +176,56 @@ fn route(request: &HttpRequest, state: Arc<Mutex<ServerState>>) -> String {
                 Err(error) => http_error(400, &error.to_string()),
             }
         }
-        ("POST", "/api/command/undo") => mutate(state, |state| state.session.undo(&state.loaded)),
-        ("POST", "/api/command/redo") => mutate(state, |state| state.session.redo(&state.loaded)),
-        ("POST", "/api/command/restart") => {
+        (method, path) => match puzzle_game_runtime::standalone_session_request(method, path) {
+            Ok(request) => handle_standalone_session_request(state, request),
+            Err(_) => http_error(404, "not found"),
+        },
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn handle_standalone_session_request(
+    state: Arc<Mutex<ServerState>>,
+    request: puzzle_game_runtime::StandaloneSessionRequest,
+) -> String {
+    match request {
+        puzzle_game_runtime::StandaloneSessionRequest::State => {
+            let mut state = state.lock().expect("server state poisoned");
+            http_ok("application/json; charset=utf-8", &state.snapshot_json())
+        }
+        puzzle_game_runtime::StandaloneSessionRequest::Undo => {
+            mutate(state, |state| state.session.undo(&state.loaded))
+        }
+        puzzle_game_runtime::StandaloneSessionRequest::Redo => {
+            mutate(state, |state| state.session.redo(&state.loaded))
+        }
+        puzzle_game_runtime::StandaloneSessionRequest::Restart => {
             mutate(state, |state| state.session.restart_level(&state.loaded))
         }
-        ("POST", "/api/command/next") => {
+        puzzle_game_runtime::StandaloneSessionRequest::Next => {
             mutate(state, |state| state.session.advance_level(&state.loaded))
         }
-        ("POST", path) if path.starts_with("/api/input/") => {
-            let input_name = percent_decode(&path["/api/input/".len()..]);
+        puzzle_game_runtime::StandaloneSessionRequest::Input(input_name) => {
             let mut state = state.lock().expect("server state poisoned");
             match state.apply_input_name(&input_name) {
                 Ok(()) => http_ok("application/json; charset=utf-8", &state.snapshot_json()),
                 Err(error) => http_error(400, &error.to_string()),
             }
         }
-        ("POST", path) if path.starts_with("/api/command/") => {
-            let command_name = percent_decode(&path["/api/command/".len()..]);
+        puzzle_game_runtime::StandaloneSessionRequest::DebugInput(input_name) => {
+            let mut state = state.lock().expect("server state poisoned");
+            match state.apply_debug_input_name_json(&input_name) {
+                Ok(body) => http_ok("application/json; charset=utf-8", &body),
+                Err(error) => http_error(400, &error.to_string()),
+            }
+        }
+        puzzle_game_runtime::StandaloneSessionRequest::Command(command_name) => {
             let mut state = state.lock().expect("server state poisoned");
             match state.apply_command_name(&command_name) {
                 Ok(()) => http_ok("application/json; charset=utf-8", &state.snapshot_json()),
                 Err(error) => http_error(400, &error.to_string()),
             }
         }
-        _ => http_error(404, "not found"),
     }
 }
 
@@ -659,9 +680,31 @@ fn push_scene_puzzle_state(out: &mut String, loaded: &LoadedGame, session: &Game
         } else {
             out.push_str("\"level\":null");
         }
+        if let Some(puzzle) = state.puzzles.get(name) {
+            out.push(',');
+            let level = puzzle.level_index.and_then(|index| loaded.levels.get(index));
+            push_scene_object_body(
+                out,
+                loaded,
+                &puzzle.state,
+                level,
+                scene_resources(loaded, session.focused_scene()),
+            );
+        }
         out.push('}');
     }
     out.push('}');
+}
+
+fn scene_resources<'a>(
+    loaded: &'a LoadedGame,
+    scene_name: &str,
+) -> Option<&'a puzzle_lang::SceneResources> {
+    loaded
+        .scenes
+        .iter()
+        .find(|scene| scene.name == scene_name)
+        .map(|scene| &scene.resources)
 }
 
 fn push_level_ref(
@@ -898,15 +941,26 @@ fn push_scene_object(
     level: Option<&Level>,
     resources: Option<&puzzle_lang::SceneResources>,
 ) {
+    out.push('{');
+    push_scene_object_body(out, loaded, state, level, resources);
+    out.push('}');
+}
+
+fn push_scene_object_body(
+    out: &mut String,
+    loaded: &LoadedGame,
+    state: &puzzle_core::State,
+    level: Option<&Level>,
+    resources: Option<&puzzle_lang::SceneResources>,
+) {
     let display_state = match materialize_display_state(loaded, state) {
         Ok(display_state) => display_state,
         Err(error) => {
-            push_display_error_scene_object(out, loaded, state, level, resources, &error);
+            push_display_error_scene_object_body(out, loaded, state, level, resources, &error);
             return;
         }
     };
     let state = display_state.as_ref().unwrap_or(state);
-    out.push('{');
     push_json_number(out, "width", state.width as u64);
     out.push(',');
     push_json_number(out, "height", state.height as u64);
@@ -929,10 +983,9 @@ fn push_scene_object(
     push_scene_regions(out, level);
     out.push(',');
     push_cells(out, loaded, state);
-    out.push('}');
 }
 
-fn push_display_error_scene_object(
+fn push_display_error_scene_object_body(
     out: &mut String,
     loaded: &LoadedGame,
     state: &puzzle_core::State,
@@ -940,7 +993,6 @@ fn push_display_error_scene_object(
     resources: Option<&puzzle_lang::SceneResources>,
     error: &TransitionError,
 ) {
-    out.push('{');
     push_json_number(out, "width", state.width as u64);
     out.push(',');
     push_json_number(out, "height", state.height as u64);
@@ -964,7 +1016,6 @@ fn push_display_error_scene_object(
     out.push(',');
     out.push_str("\"cells\":[],\"displayError\":");
     push_json_string(out, &format!("Display program failed: {error:?}"));
-    out.push('}');
 }
 
 fn push_puzzle_settings(out: &mut String, loaded: &LoadedGame) {
@@ -1400,6 +1451,9 @@ fn push_scenes(out: &mut String, key: &str, loaded: &LoadedGame) {
                 SceneTransitionTrigger::Condition(condition) => {
                     push_json_expr_named(out, "condition", condition);
                 }
+                SceneTransitionTrigger::Signal(condition) => {
+                    push_json_expr_named(out, "signal", condition);
+                }
                 SceneTransitionTrigger::SceneStart => {
                     push_json_pair(out, "lifecycle", "scene_start");
                 }
@@ -1505,6 +1559,15 @@ fn push_scene_state_def(out: &mut String, scene: &puzzle_lang::SceneDef) {
 fn push_scene_var_def(out: &mut String, variable: &puzzle_lang::SceneVarDef) {
     out.push('{');
     push_json_pair(out, "name", &variable.name);
+    out.push(',');
+    push_json_pair(
+        out,
+        "kind",
+        match variable.kind {
+            puzzle_lang::SceneVarKind::Value => "value",
+            puzzle_lang::SceneVarKind::Signal => "signal",
+        },
+    );
     out.push(',');
     out.push_str("\"default\":");
     push_scene_default_value(out, &variable.default);
@@ -1689,24 +1752,6 @@ fn escape_script(value: &str) -> String {
 
 fn escape_style(value: &str) -> String {
     value.replace("</style", "<\\/style")
-}
-
-fn percent_decode(value: &str) -> String {
-    let bytes = value.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(hex) = u8::from_str_radix(&value[i + 1..i + 3], 16) {
-                decoded.push(hex);
-                i += 3;
-                continue;
-            }
-        }
-        decoded.push(bytes[i]);
-        i += 1;
-    }
-    String::from_utf8_lossy(&decoded).into_owned()
 }
 
 #[cfg(not(target_arch = "wasm32"))]
