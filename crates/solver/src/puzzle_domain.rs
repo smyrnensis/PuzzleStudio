@@ -1,6 +1,6 @@
 use crate::domain::SearchDomain;
-use crate::relevance::SolverRelevance;
 use crate::stable_hash::{fnv_mix, fnv_seed};
+use crate::state_slicer::SolverStateSlicer;
 use puzzle_core::{
     CompiledGame, InputId, LayerId, ObjectId, State, TransitionCommand, TransitionError,
     transition_solver_outcome,
@@ -27,7 +27,7 @@ impl PuzzleStateKey {
         slicer: &SolverStateSlicer,
         state: &PuzzleSearchState,
     ) -> Self {
-        let key_state = slicer.solver_key_state(&state.state);
+        let key_state = slicer.project_state(&state.state);
         Self::from_parts(game, &key_state, state.won)
     }
 
@@ -78,33 +78,6 @@ impl PuzzleStateKey {
 impl Hash for PuzzleStateKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
         state.write_u64(self.hash);
-    }
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct SolverStateSlicer {
-    ignored_objects: Vec<ObjectId>,
-}
-
-impl SolverStateSlicer {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn from_ignored_objects(ignored_objects: Vec<ObjectId>) -> Self {
-        Self { ignored_objects }
-    }
-
-    pub fn from_relevance(game: &CompiledGame, relevance: &SolverRelevance) -> Self {
-        Self::from_ignored_objects(relevance.ignored_objects_for_game(game))
-    }
-
-    pub fn ignored_objects(&self) -> &[ObjectId] {
-        &self.ignored_objects
-    }
-
-    pub fn solver_key_state(&self, state: &State) -> State {
-        state.without_objects(&self.ignored_objects)
     }
 }
 
@@ -159,21 +132,7 @@ impl PuzzleDomain {
         inputs: Vec<InputId>,
         is_goal: impl Fn(&State) -> bool + 'static,
     ) -> Self {
-        Self::with_ignored_objects(game, inputs, Vec::new(), is_goal)
-    }
-
-    pub fn with_ignored_objects(
-        game: Arc<CompiledGame>,
-        inputs: Vec<InputId>,
-        ignored_objects: Vec<ObjectId>,
-        is_goal: impl Fn(&State) -> bool + 'static,
-    ) -> Self {
-        Self::with_state_slicer(
-            game,
-            inputs,
-            SolverStateSlicer::from_ignored_objects(ignored_objects),
-            is_goal,
-        )
+        Self::with_state_slicer(game, inputs, SolverStateSlicer::new(), is_goal)
     }
 
     pub fn with_state_slicer(
@@ -192,6 +151,10 @@ impl PuzzleDomain {
 
     pub fn game(&self) -> &CompiledGame {
         &self.game
+    }
+
+    pub fn initial_state(&self, state: State) -> PuzzleSearchState {
+        PuzzleSearchState::new(self.state_slicer.project_state(&state))
     }
 }
 
@@ -214,9 +177,9 @@ impl SearchDomain for PuzzleDomain {
         state: &Self::State,
         action: &Self::Action,
     ) -> Result<Self::State, Self::Error> {
-        let solver_state = self.state_slicer.solver_key_state(&state.state);
+        let solver_state = self.state_slicer.project_state(&state.state);
         let outcome = transition_solver_outcome(&self.game, &solver_state, *action)?;
-        let next_state = self.state_slicer.solver_key_state(&outcome.next_state);
+        let next_state = self.state_slicer.project_state(&outcome.next_state);
         let mut input_history = state.input_history.clone();
         input_history.push(*action);
         Ok(PuzzleSearchState {
@@ -489,20 +452,20 @@ PF
         let player = object_named(&loaded, "Player");
         let floor = object_named(&loaded, "Floor");
         let game = Arc::new(loaded.game.clone());
+        let state_slicer = SolverStateSlicer::from_ignored_objects(vec![floor]);
         let mut domain =
-            PuzzleDomain::with_ignored_objects(game.clone(), vec![right], vec![floor], |_| false);
+            PuzzleDomain::with_state_slicer(game.clone(), vec![right], state_slicer, |_| false);
         let initial = loaded.levels[0].initial_state.clone();
-        let projected_initial = initial.without_objects(&[floor]);
+        let solver_initial = domain.initial_state(initial.clone());
+        let projected_initial = PuzzleSearchState::new(initial.without_objects(&[floor]));
 
         assert_eq!(
             domain.key(&PuzzleSearchState::new(initial.clone())),
-            domain.key(&PuzzleSearchState::new(projected_initial))
+            domain.key(&projected_initial)
         );
+        assert_eq!(domain.key(&solver_initial), domain.key(&projected_initial));
 
-        let stepped = domain
-            .step(&PuzzleSearchState::new(initial), &right)
-            .unwrap()
-            .into_state();
+        let stepped = domain.step(&solver_initial, &right).unwrap().into_state();
 
         assert!(!stepped.has_object(&game, 1, 0, floor));
         assert!(stepped.has_object(&game, 1, 0, player));

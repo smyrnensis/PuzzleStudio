@@ -3,6 +3,8 @@ class PuzzleRenderer {
     this.root = root;
     this.options = options;
     this.appliedThemeClass = "";
+    this.activeTriggerAnimations = [];
+    this.domAnimationToken = 0;
   }
 
   render(scene) {
@@ -26,11 +28,13 @@ class PuzzleRenderer {
     }
     this.applyThemeClass(visuals.themeClass, hasVisuals);
     this.root.replaceChildren();
+    this.domAnimationToken += 1;
 
     if (this.options.renderMode === "dom") {
       for (const cellData of this.viewportCells(scene, viewport)) {
         this.root.append(this.renderCell(cellData, scene));
       }
+      this.startDomAnimationLoop();
     } else {
       this.renderCanvas(scene, viewport);
     }
@@ -173,40 +177,107 @@ class PuzzleRenderer {
 
   renderVisualSprite(layer, definition, visualKey) {
     const sprite = document.createElement("span");
-    sprite.className = `sprite visual-sprite ${definition.className || ""} ${layer.sprite} visual-${this.classNameFor(visualKey)}`;
+    const baseFrame = this.firstVisualFrame(definition);
+    const fit = this.spriteFit(baseFrame);
+    const sampling = this.spriteSampling(baseFrame);
+    sprite.className = `sprite visual-sprite visual-fit-${fit.mode} visual-sampling-${sampling} ${definition.className || ""} ${layer.sprite} visual-${this.classNameFor(visualKey)}`;
     sprite.dataset.object = layer.object;
     sprite.dataset.layer = layer.layer;
     sprite.style.zIndex = String(definition.zIndex ?? layer.layer + 1);
-    const { cols: spriteCols, rows: spriteRows } = this.spritePatternSize(definition);
-    const { cols: cellCols, rows: cellRows } = this.spriteCellGrid(definition);
-    const fitSize = Math.max(cellCols, cellRows);
+    const { cols: spriteCols, rows: spriteRows } = this.spritePatternSize(baseFrame);
+    const { cols: boxCols, rows: boxRows } = this.spriteDrawBox(baseFrame);
     sprite.style.setProperty("--sprite-cols", String(spriteCols));
     sprite.style.setProperty("--sprite-rows", String(spriteRows));
-    sprite.style.setProperty("--sprite-cell-cols", String(cellCols));
-    sprite.style.setProperty("--sprite-cell-rows", String(cellRows));
-    sprite.style.setProperty("--sprite-cell-fit", String(fitSize));
-    sprite.style.setProperty("--sprite-offset-x", String(Number(definition.offset?.x) || 0));
-    sprite.style.setProperty("--sprite-offset-y", String(Number(definition.offset?.y) || 0));
+    sprite.style.setProperty("--sprite-box-cols", String(boxCols));
+    sprite.style.setProperty("--sprite-box-rows", String(boxRows));
+    sprite.style.setProperty("--sprite-offset-x", String(Number(baseFrame.offset?.x) || 0));
+    sprite.style.setProperty("--sprite-offset-y", String(Number(baseFrame.offset?.y) || 0));
     sprite.setAttribute("aria-hidden", "true");
+    if (this.visualFrameCount(definition) > 1) {
+      sprite.__visualAnimationDefinition = definition;
+    }
 
-    if (definition.source) {
+    if (baseFrame.source) {
       sprite.classList.add("visual-image");
-      const source = window.PuzzleAssets?.url(definition.source) || definition.source;
+      const source = window.PuzzleAssets.url(baseFrame.source);
       sprite.style.backgroundImage = `url("${String(source).replace(/"/g, '\\"')}")`;
       return sprite;
     }
 
-    const solidColor = this.solidPatternColor(definition);
-    if (solidColor && this.canPaintAsFullCellSolid(definition)) {
+    const solidColor = this.solidPatternColor(baseFrame);
+    if (solidColor && this.canPaintAsFullCellSolid(baseFrame)) {
       sprite.classList.add("visual-solid");
       sprite.style.backgroundColor = solidColor;
       return sprite;
     }
 
     sprite.classList.add("visual-pattern");
-    sprite.style.backgroundImage = `url("${this.patternDataUrl(definition)}")`;
+    sprite.style.backgroundImage = `url("${this.patternDataUrl(baseFrame)}")`;
 
     return sprite;
+  }
+
+  startDomAnimationLoop() {
+    const token = this.domAnimationToken;
+    const animatedSprites = [...this.root.querySelectorAll(".visual-sprite")]
+      .filter((sprite) => sprite.__visualAnimationDefinition);
+    if (!animatedSprites.length) {
+      return;
+    }
+    const draw = () => {
+      if (token !== this.domAnimationToken || !this.root.isConnected) {
+        return;
+      }
+      const now = performance.now();
+      for (const sprite of animatedSprites) {
+        if (!sprite.isConnected) {
+          continue;
+        }
+        const definition = sprite.__visualAnimationDefinition;
+        const frame = this.resolveVisualFrame(definition, this.loopAnimationTimeMs(now, definition));
+        this.applyDomVisualFrame(sprite, frame);
+      }
+      requestAnimationFrame(draw);
+    };
+    requestAnimationFrame(draw);
+  }
+
+  applyDomVisualFrame(sprite, frame) {
+    sprite.classList.remove("visual-image", "visual-solid", "visual-pattern");
+    for (const className of [...sprite.classList]) {
+      if (className.startsWith("visual-fit-") || className.startsWith("visual-sampling-")) {
+        sprite.classList.remove(className);
+      }
+    }
+    const fit = this.spriteFit(frame);
+    sprite.classList.add(`visual-fit-${fit.mode}`, `visual-sampling-${this.spriteSampling(frame)}`);
+    const { cols: spriteCols, rows: spriteRows } = this.spritePatternSize(frame);
+    const { cols: boxCols, rows: boxRows } = this.spriteDrawBox(frame);
+    sprite.style.setProperty("--sprite-cols", String(spriteCols));
+    sprite.style.setProperty("--sprite-rows", String(spriteRows));
+    sprite.style.setProperty("--sprite-box-cols", String(boxCols));
+    sprite.style.setProperty("--sprite-box-rows", String(boxRows));
+    sprite.style.setProperty("--sprite-offset-x", String(Number(frame.offset?.x) || 0));
+    sprite.style.setProperty("--sprite-offset-y", String(Number(frame.offset?.y) || 0));
+    sprite.style.backgroundColor = "";
+    sprite.style.backgroundImage = "";
+
+    if (frame.source) {
+      sprite.classList.add("visual-image");
+      const source = window.PuzzleAssets.url(frame.source);
+      sprite.style.backgroundImage = `url("${String(source).replace(/"/g, '\\"')}")`;
+      return;
+    }
+
+    const solidColor = this.solidPatternColor(frame);
+    if (solidColor && this.canPaintAsFullCellSolid(frame)) {
+      sprite.classList.add("visual-solid");
+      sprite.style.backgroundColor = solidColor;
+      return;
+    }
+
+    sprite.classList.add("visual-pattern");
+    sprite.style.backgroundImage = `url("${this.patternDataUrl(frame)}")`;
   }
 
   renderCanvas(scene, frame) {
@@ -219,24 +290,31 @@ class PuzzleRenderer {
     const context = canvas.getContext("2d");
     context.imageSmoothingEnabled = false;
     const animations = this.prepareAnimations(scene.animationEvents || [], frame);
+    this.recordTriggerAnimations(scene.animationEvents || [], frame);
     let startedAt = null;
     let animationFrameIndex = 0;
     const duration = this.animationDurationMs(scene);
+    const hasLoopAnimations = this.sceneUsesTimeVaryingVisuals(scene, frame);
     const draw = () => {
+      if (!canvas.isConnected) {
+        return;
+      }
       if (!this.root.isConnected) {
         requestAnimationFrame(draw);
         return;
       }
+      const now = performance.now();
       startedAt ??= performance.now();
       const progress = animations.length
         ? this.animationProgressForFrame(performance.now() - startedAt, duration, animationFrameIndex)
         : 1;
+      this.pruneTriggerAnimations(now);
       context.clearRect(0, 0, canvas.width, canvas.height);
-      this.paintCanvas(context, scene, frame, unit, animations, progress);
+      this.paintCanvas(context, scene, frame, unit, animations, progress, now);
       if (animations.length) {
         animationFrameIndex += 1;
       }
-      if (progress < 1 && this.root.isConnected) {
+      if ((progress < 1 || hasLoopAnimations || this.activeTriggerAnimations.length) && this.root.isConnected) {
         requestAnimationFrame(draw);
       }
     };
@@ -244,7 +322,7 @@ class PuzzleRenderer {
     requestAnimationFrame(draw);
   }
 
-  paintCanvas(context, scene, frame, unit, animations = [], progress = 1) {
+  paintCanvas(context, scene, frame, unit, animations = [], progress = 1, now = performance.now()) {
     context.save();
     context.imageSmoothingEnabled = false;
     const floorColor = this.canvasFloorColor();
@@ -263,12 +341,13 @@ class PuzzleRenderer {
           animatedLayers.push({ layer, x, y, animation });
           continue;
         }
-        this.paintCanvasLayer(context, layer, x, y, unit, null, progress);
+        this.paintCanvasLayer(context, layer, x, y, unit, null, progress, now);
       }
     }
     for (const item of animatedLayers) {
       this.paintCanvasLayer(context, item.layer, item.x, item.y, unit, item.animation, progress);
     }
+    this.paintTriggerAnimations(context, frame, unit, now);
     this.paintCanvasGrid(context, scene, frame, unit);
     context.restore();
   }
@@ -297,6 +376,9 @@ class PuzzleRenderer {
     return (events || [])
       .map((event) => ({ ...event, objectId: Number(event.objectId) }))
       .filter((event) => {
+        if (this.isTriggerAnimationEvent(event)) {
+          return false;
+        }
         if (!Number.isFinite(event.objectId) || event.objectId <= 0) {
           return false;
         }
@@ -338,7 +420,7 @@ class PuzzleRenderer {
     }) || null;
   }
 
-  paintCanvasLayer(context, layer, x, y, unit, animation = null, progress = 1) {
+  paintCanvasLayer(context, layer, x, y, unit, animation = null, progress = 1, now = performance.now()) {
     const visualSprite = this.resolveVisualSprite(layer);
     const definition = visualSprite?.definition;
     const transform = this.animationTransform(animation, progress, unit);
@@ -357,21 +439,29 @@ class PuzzleRenderer {
       }
       return;
     }
+    const frame = this.resolveVisualFrame(definition, this.loopAnimationTimeMs(now, definition));
 
-    if (definition.source) {
-      const image = this.cachedImage(definition.source);
+    if (frame.source) {
+      const image = this.cachedImage(frame.source);
       if (image?.complete && image.naturalWidth > 0) {
-        const fit = this.visualSpriteFit(definition, unit, {
+        const fit = this.visualSpriteFit(frame, unit, {
           cols: image.naturalWidth,
           rows: image.naturalHeight,
         });
+        const clip = this.visualSpriteBox(frame, unit);
+        context.save();
+        context.imageSmoothingEnabled = this.spriteSampling(frame) === "smooth";
+        context.beginPath();
+        context.rect(x + clip.x, y + clip.y, clip.width, clip.height);
+        context.clip();
         context.drawImage(
           image,
-          x + fit.x + (Number(definition.offset?.x) || 0) * fit.scale,
-          y + fit.y + (Number(definition.offset?.y) || 0) * fit.scale,
+          x + fit.x,
+          y + fit.y,
           fit.width,
           fit.height,
         );
+        context.restore();
       }
       if (transform) {
         context.restore();
@@ -379,8 +469,8 @@ class PuzzleRenderer {
       return;
     }
 
-    const solidColor = this.solidPatternColor(definition);
-    if (solidColor && this.canPaintAsFullCellSolid(definition)) {
+    const solidColor = this.solidPatternColor(frame);
+    if (solidColor && this.canPaintAsFullCellSolid(frame)) {
       context.fillStyle = solidColor;
       context.fillRect(x, y, unit, unit);
       if (transform) {
@@ -389,9 +479,15 @@ class PuzzleRenderer {
       return;
     }
 
-    const offset = this.visualSpriteOffset(definition, unit);
-    const fit = this.visualSpriteFit(definition, unit);
-    this.paintPattern(context, definition, x + fit.x + offset.x, y + fit.y + offset.y, fit.scale);
+    const fit = this.visualSpriteFit(frame, unit);
+    const clip = this.visualSpriteBox(frame, unit);
+    context.save();
+    context.imageSmoothingEnabled = this.spriteSampling(frame) === "smooth";
+    context.beginPath();
+    context.rect(x + clip.x, y + clip.y, clip.width, clip.height);
+    context.clip();
+    this.paintPattern(context, frame, x + fit.x, y + fit.y, fit.pixelWidth, fit.pixelHeight);
+    context.restore();
     if (transform) {
       context.restore();
     }
@@ -429,10 +525,240 @@ class PuzzleRenderer {
     return transform;
   }
 
-  paintPattern(context, definition, x, y, pixelSize) {
+  recordTriggerAnimations(events, frame) {
+    const now = performance.now();
+    for (const event of events || []) {
+      if (!this.isTriggerAnimationEvent(event)) {
+        continue;
+      }
+      const position = this.triggerAnimationPosition(event);
+      const x = Number(position?.x);
+      const y = Number(position?.y);
+      if (!(x >= frame.x && y >= frame.y && x < frame.x + frame.width && y < frame.y + frame.height)) {
+        continue;
+      }
+      const name = String(event.name || event.animation || event.sprite || "");
+      const definition = this.resolveAnimationDefinition(name);
+      if (!definition) {
+        continue;
+      }
+      const durationMs = this.animationDefinitionDurationMs(definition, event.durationMs ?? event.duration);
+      const id = this.triggerAnimationEventId(event, name, x, y);
+      if (this.activeTriggerAnimations.some((instance) => instance.id === id)) {
+        continue;
+      }
+      this.activeTriggerAnimations.push({
+        id,
+        name,
+        definition,
+        x,
+        y,
+        startedAtMs: now,
+        durationMs,
+      });
+    }
+  }
+
+  isTriggerAnimationEvent(event) {
+    return event?.kind === "sprite_animation"
+      || event?.kind === "trigger_animation"
+      || event?.kind === "trigger"
+      || event?.kind === "animation";
+  }
+
+  triggerAnimationPosition(event) {
+    return event.position || event.at || event.cell || event.to || null;
+  }
+
+  triggerAnimationEventId(event, name, x, y) {
+    if (event.id != null) {
+      return String(event.id);
+    }
+    const position = this.triggerAnimationPosition(event) || {};
+    return [
+      name,
+      Number(position.x),
+      Number(position.y),
+      Number(position.z || 0),
+      event.durationMs ?? "",
+      event.sequence ?? event.seq ?? event.ruleId ?? "",
+    ].join(":");
+  }
+
+  pruneTriggerAnimations(now) {
+    this.activeTriggerAnimations = this.activeTriggerAnimations.filter((instance) =>
+      now - instance.startedAtMs < instance.durationMs
+    );
+  }
+
+  paintTriggerAnimations(context, frame, unit, now) {
+    for (const instance of this.activeTriggerAnimations) {
+      const elapsedMs = now - instance.startedAtMs;
+      if (elapsedMs < 0 || elapsedMs >= instance.durationMs) {
+        continue;
+      }
+      const visualFrame = this.resolveVisualFrame(instance.definition, elapsedMs, {
+        playback: "once",
+        durationMs: instance.durationMs,
+      });
+      const x = (instance.x - frame.x) * unit;
+      const y = (instance.y - frame.y) * unit;
+      this.paintResolvedCanvasFrame(context, visualFrame, x, y, unit);
+    }
+  }
+
+  paintResolvedCanvasFrame(context, definition, x, y, unit) {
+    if (definition.source) {
+      const image = this.cachedImage(definition.source);
+      if (image?.complete && image.naturalWidth > 0) {
+        const fit = this.visualSpriteFit(definition, unit, {
+          cols: image.naturalWidth,
+          rows: image.naturalHeight,
+        });
+        const clip = this.visualSpriteBox(definition, unit);
+        context.save();
+        context.imageSmoothingEnabled = this.spriteSampling(definition) === "smooth";
+        context.beginPath();
+        context.rect(x + clip.x, y + clip.y, clip.width, clip.height);
+        context.clip();
+        context.drawImage(image, x + fit.x, y + fit.y, fit.width, fit.height);
+        context.restore();
+      }
+      return;
+    }
+
+    const solidColor = this.solidPatternColor(definition);
+    if (solidColor && this.canPaintAsFullCellSolid(definition)) {
+      context.fillStyle = solidColor;
+      context.fillRect(x, y, unit, unit);
+      return;
+    }
+
+    const fit = this.visualSpriteFit(definition, unit);
+    const clip = this.visualSpriteBox(definition, unit);
+    context.save();
+    context.imageSmoothingEnabled = this.spriteSampling(definition) === "smooth";
+    context.beginPath();
+    context.rect(x + clip.x, y + clip.y, clip.width, clip.height);
+    context.clip();
+    this.paintPattern(context, definition, x + fit.x, y + fit.y, fit.pixelWidth, fit.pixelHeight);
+    context.restore();
+  }
+
+  resolveAnimationDefinition(name) {
+    const visuals = this.visuals();
+    return visuals.animations?.[name]
+      || visuals.triggers?.[name]
+      || visuals.sprites?.[name]
+      || null;
+  }
+
+  sceneUsesTimeVaryingVisuals(scene, frame) {
+    for (const cell of this.frameCells(scene, frame)) {
+      for (const layer of cell.layers || []) {
+        const definition = this.resolveVisualSprite(layer)?.definition;
+        if (definition && this.visualFrameCount(definition) > 1) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  loopAnimationTimeMs(now, definition) {
+    const epoch = this.constructor.renderClockEpochMs ?? (this.constructor.renderClockEpochMs = now);
+    const phaseMs = Number(definition.phaseMs ?? definition.timing?.phaseMs ?? definition.animation?.phaseMs) || 0;
+    return Math.max(0, now - epoch + phaseMs);
+  }
+
+  resolveVisualFrame(definition, localTimeMs, timingOverride = null) {
+    const frames = this.visualFrames(definition);
+    if (frames.length <= 1) {
+      return frames[0];
+    }
+    const durationMs = this.animationDefinitionDurationMs(definition, timingOverride?.durationMs);
+    const playback = timingOverride?.playback
+      || definition.playback
+      || definition.timing?.playback
+      || definition.animation?.playback
+      || "loop";
+    const wrappedTime = playback === "loop"
+      ? this.positiveModulo(localTimeMs, durationMs)
+      : Math.min(Math.max(0, localTimeMs), Math.max(0, durationMs - 0.0001));
+    const index = Math.min(frames.length - 1, Math.floor((wrappedTime / durationMs) * frames.length));
+    return frames[index];
+  }
+
+  visualFrames(definition) {
+    if (Array.isArray(definition.frames) && definition.frames.length) {
+      return definition.frames.map((frame) => this.visualFrameFrom(definition, frame));
+    }
+    return [this.visualFrameFrom(definition, definition)];
+  }
+
+  firstVisualFrame(definition) {
+    return this.visualFrames(definition)[0];
+  }
+
+  visualFrameFrom(definition, frame) {
+    if (Array.isArray(frame)) {
+      return { ...definition, frames: undefined, pattern: frame };
+    }
+    return {
+      ...definition,
+      ...frame,
+      frames: undefined,
+      colors: frame.colors || definition.colors || {},
+      fit: frame.fit || definition.fit,
+      offset: frame.offset || definition.offset,
+      sampling: frame.sampling || definition.sampling,
+    };
+  }
+
+  visualFrameCount(definition) {
+    return Math.max(1, Array.isArray(definition.frames) ? definition.frames.length : 1);
+  }
+
+  animationDefinitionDurationMs(definition, override = null) {
+    return Math.max(
+      1,
+      Number(
+        this.durationMsValue(override)
+          ?? this.durationMsValue(definition.durationMs)
+          ?? this.durationMsValue(definition.duration)
+          ?? this.durationMsValue(definition.timing?.durationMs)
+          ?? this.durationMsValue(definition.timing?.duration)
+          ?? this.durationMsValue(definition.animation?.durationMs)
+          ?? this.durationMsValue(definition.animation?.duration)
+          ?? this.durationMsValue(this.visuals().animationDefaults?.durationMs)
+          ?? this.durationMsValue(this.visuals().animationDefaults?.duration)
+          ?? 250,
+      ) || 250,
+    );
+  }
+
+  durationMsValue(value) {
+    if (value == null || value === "") {
+      return null;
+    }
+    const number = Number(value);
+    if (Number.isFinite(number)) {
+      return number;
+    }
+    const match = String(value).trim().match(/^([0-9]+(?:\.[0-9]+)?)(ms|s)$/i);
+    if (!match) {
+      return null;
+    }
+    const amount = Number(match[1]);
+    return match[2].toLowerCase() === "s" ? amount * 1000 : amount;
+  }
+
+  positiveModulo(value, size) {
+    return ((value % size) + size) % size;
+  }
+
+  paintPattern(context, definition, x, y, pixelWidth, pixelHeight = pixelWidth) {
     const pattern = definition.pattern || [];
-    const pixelWidth = pixelSize;
-    const pixelHeight = pixelSize;
     pattern.forEach((row, rowIndex) => {
       [...row].forEach((token, colIndex) => {
         const color = definition.colors?.[token] || "transparent";
@@ -455,31 +781,52 @@ class PuzzleRenderer {
   }
 
   visualSpriteFit(definition, unit, sourceSize = null) {
-    const grid = sourceSize || this.spriteCellGrid(definition);
-    const cols = Math.max(1, Number(grid.cols) || Number(grid.width) || 1);
-    const rows = Math.max(1, Number(grid.rows) || Number(grid.height) || 1);
-    const scale = unit / Math.max(cols, rows);
-    const width = cols * scale;
-    const height = rows * scale;
+    const source = sourceSize || this.spritePatternSize(definition);
+    const sourceCols = Math.max(1, Number(source.cols) || Number(source.width) || 1);
+    const sourceRows = Math.max(1, Number(source.rows) || Number(source.height) || 1);
+    const box = this.spriteDrawBox(definition);
+    const boxWidth = box.cols * unit;
+    const boxHeight = box.rows * unit;
+    const mode = this.spriteFit(definition).mode;
+    const scaleX = boxWidth / sourceCols;
+    const scaleY = boxHeight / sourceRows;
+    const scale = mode === "cover" ? Math.max(scaleX, scaleY) : Math.min(scaleX, scaleY);
+    const width = mode === "stretch" ? boxWidth : sourceCols * scale;
+    const height = mode === "stretch" ? boxHeight : sourceRows * scale;
+    const offsetX = (Number(definition.offset?.x) || 0) * unit;
+    const offsetY = (Number(definition.offset?.y) || 0) * unit;
     return {
-      x: (unit - width) / 2,
-      y: (unit - height) / 2,
+      x: (unit - boxWidth) / 2 + (boxWidth - width) / 2 + offsetX,
+      y: (unit - boxHeight) / 2 + (boxHeight - height) / 2 + offsetY,
       width,
       height,
       scale,
+      pixelWidth: width / sourceCols,
+      pixelHeight: height / sourceRows,
+    };
+  }
+
+  visualSpriteBox(definition, unit) {
+    const box = this.spriteDrawBox(definition);
+    const width = box.cols * unit;
+    const height = box.rows * unit;
+    return {
+      x: (unit - width) / 2 + (Number(definition.offset?.x) || 0) * unit,
+      y: (unit - height) / 2 + (Number(definition.offset?.y) || 0) * unit,
+      width,
+      height,
     };
   }
 
   visualSpriteOffset(definition, unit) {
-    const fit = this.visualSpriteFit(definition, unit);
     return {
-      x: (Number(definition.offset?.x) || 0) * fit.scale,
-      y: (Number(definition.offset?.y) || 0) * fit.scale,
+      x: (Number(definition.offset?.x) || 0) * unit,
+      y: (Number(definition.offset?.y) || 0) * unit,
     };
   }
 
   cachedImage(source) {
-    const url = window.PuzzleAssets?.url(source) || source;
+    const url = window.PuzzleAssets.url(source);
     const cache = this.constructor.imageCache || (this.constructor.imageCache = new Map());
     const existing = cache.get(url);
     if (existing) {
@@ -505,12 +852,14 @@ class PuzzleRenderer {
         if (!definition) {
           continue;
         }
-        if (definition.source) {
-          hasImage = true;
-          continue;
+        for (const frameDef of this.visualFrames(definition)) {
+          if (frameDef.source) {
+            hasImage = true;
+            continue;
+          }
+          const { cols: cellCols, rows: cellRows } = this.spritePatternSize(frameDef);
+          unit = Math.max(unit, cellCols, cellRows);
         }
-        const { cols: cellCols, rows: cellRows } = this.spriteCellGrid(definition);
-        unit = Math.max(unit, cellCols, cellRows);
       }
     }
     return hasImage ? Math.max(unit, 32) : unit;
@@ -569,9 +918,18 @@ class PuzzleRenderer {
   }
 
   canPaintAsFullCellSolid(definition) {
-    return !definition.pixelsPerCell
-      && !Number(definition.offset?.x)
-      && !Number(definition.offset?.y);
+    if (definition.pixelsPerCell || Number(definition.offset?.x) || Number(definition.offset?.y)) {
+      return false;
+    }
+    const fit = this.spriteFit(definition);
+    if (fit.width !== 1 || fit.height !== 1) {
+      return false;
+    }
+    if (fit.mode !== "contain") {
+      return true;
+    }
+    const pattern = this.spritePatternSize(definition);
+    return pattern.cols === pattern.rows;
   }
 
   spritePatternSize(definition) {
@@ -588,6 +946,31 @@ class PuzzleRenderer {
       cols: Math.max(1, Number(definition.pixelsPerCell?.width) || pattern.cols),
       rows: Math.max(1, Number(definition.pixelsPerCell?.height) || pattern.rows),
     };
+  }
+
+  spriteDrawBox(definition) {
+    const fit = this.spriteFit(definition);
+    return {
+      cols: Math.max(1, Number(fit.width) || 1),
+      rows: Math.max(1, Number(fit.height) || 1),
+    };
+  }
+
+  spriteFit(definition) {
+    const fit = definition.fit || {};
+    const mode = ["contain", "cover", "stretch"].includes(fit.mode) ? fit.mode : "contain";
+    return {
+      mode,
+      width: Math.max(1, Number(fit.width) || 1),
+      height: Math.max(1, Number(fit.height) || 1),
+    };
+  }
+
+  spriteSampling(definition) {
+    if (definition.sampling === "smooth" || definition.sampling === "pixelated") {
+      return definition.sampling;
+    }
+    return definition.source && !/\.png$/i.test(definition.source) ? "smooth" : "pixelated";
   }
 
   sortedLayers(layers) {

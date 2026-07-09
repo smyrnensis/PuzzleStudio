@@ -340,18 +340,13 @@ impl Parser3 {
             ModelSetting3::CameraYaw(value) => self.settings.camera.yaw_degrees = value,
             ModelSetting3::CameraPitch(value) => self.settings.camera.pitch_degrees = value,
             ModelSetting3::CameraZoom(value) => self.settings.camera.zoom_milli = value,
-            ModelSetting3::InteractiveLook => self.settings.camera.interactive_look = true,
-            ModelSetting3::InteractiveZoom => self.settings.camera.interactive_zoom = true,
+            ModelSetting3::InteractiveLook(value) => self.settings.camera.interactive_look = value,
+            ModelSetting3::InteractiveZoom(value) => self.settings.camera.interactive_zoom = value,
             ModelSetting3::OccupiedCellGrid => self.settings.grid.occupied_cells = true,
-            ModelSetting3::SpriteShade => self.settings.sprite.shade = true,
+            ModelSetting3::SpriteShade(value) => self.settings.sprite.shade = value,
+            ModelSetting3::PixelateEnabled(value) => self.settings.pixelate.enabled = value,
             ModelSetting3::PixelateScale(value) => self.settings.pixelate.scale = value,
-            ModelSetting3::PixelateSmoothing => self.settings.pixelate.smoothing = true,
-        }
-    }
-
-    fn apply_model_settings(&mut self, settings: Vec<ModelSetting3>) {
-        for setting in settings {
-            self.apply_model_setting(setting);
+            ModelSetting3::PixelateSmoothing(value) => self.settings.pixelate.smoothing = value,
         }
     }
 
@@ -365,27 +360,10 @@ impl Parser3 {
                 index += 1;
             } else if line == "camera {" {
                 index = self.parse_camera_block(index + 1)?;
-            } else if let Some(rest) = line.strip_prefix("camera ") {
-                let settings = parse_camera_inline(rest)?;
-                self.apply_model_settings(settings);
-                index += 1;
             } else if line == "grid {" {
                 index = self.parse_grid_block(index + 1)?;
-            } else if let Some(rest) = line.strip_prefix("grid ") {
-                let settings = parse_grid_inline(rest)?;
-                self.apply_model_settings(settings);
-                index += 1;
-            } else if line == "pixelate" {
-                self.settings.pixelate.enabled = true;
-                index += 1;
             } else if line == "pixelate {" {
-                self.settings.pixelate.enabled = true;
                 index = self.parse_pixelate_block(index + 1)?;
-            } else if let Some(rest) = line.strip_prefix("pixelate ") {
-                self.settings.pixelate.enabled = true;
-                let settings = parse_pixelate_inline(rest)?;
-                self.apply_model_settings(settings);
-                index += 1;
             } else if line == "viewport {" {
                 index = self.parse_viewport_block(index + 1)?;
             } else {
@@ -1072,148 +1050,82 @@ enum ModelSetting3 {
     CameraYaw(i16),
     CameraPitch(i16),
     CameraZoom(u16),
-    InteractiveLook,
-    InteractiveZoom,
+    InteractiveLook(bool),
+    InteractiveZoom(bool),
     OccupiedCellGrid,
-    SpriteShade,
+    SpriteShade(bool),
+    PixelateEnabled(bool),
     PixelateScale(u16),
-    PixelateSmoothing,
+    PixelateSmoothing(bool),
 }
 
-pub const RENDER_BLOCK_OPTIONS3: &[&str] = &["camera", "grid", "pixelate", "viewport"];
-pub const RENDER_BARE_OPTIONS3: &[&str] = &["shade", "pixelate"];
-pub const RENDER_OPTIONS3: &[&str] = &["camera", "grid", "pixelate", "viewport", "shade"];
-pub const CAMERA_ASSIGNMENT_OPTIONS3: &[&str] = &["yaw", "pitch", "zoom"];
-pub const CAMERA_BARE_OPTIONS3: &[&str] = &["interactive_look", "interactive_zoom"];
-pub const CAMERA_OPTIONS3: &[&str] = &[
-    "yaw",
-    "pitch",
-    "zoom",
-    "interactive_look",
-    "interactive_zoom",
-];
-pub const GRID_BARE_OPTIONS3: &[&str] = &["occupied_cells"];
-pub const PIXELATE_ASSIGNMENT_OPTIONS3: &[&str] = &["scale"];
-pub const PIXELATE_BARE_OPTIONS3: &[&str] = &["smoothing"];
-pub const PIXELATE_OPTIONS3: &[&str] = &["scale", "smoothing"];
+const GRID_TYPE_VALUES3: &[&str] = &["occupied_cells"];
 
 fn parse_camera_setting_line(line: &str) -> Result<ModelSetting3, ParseError3> {
-    if line == CAMERA_BARE_OPTIONS3[0] {
-        return Ok(ModelSetting3::InteractiveLook);
-    }
-    if line == CAMERA_BARE_OPTIONS3[1] {
-        return Ok(ModelSetting3::InteractiveZoom);
-    }
     let (name, value) = parse_setting_assignment(line, "camera setting")?;
     match name {
-        name if name == CAMERA_ASSIGNMENT_OPTIONS3[0] => Ok(ModelSetting3::CameraYaw(
-            parse_degrees_setting(value, name)?,
-        )),
-        name if name == CAMERA_ASSIGNMENT_OPTIONS3[1] => Ok(ModelSetting3::CameraPitch(
-            parse_degrees_setting(value, name)?,
-        )),
-        name if name == CAMERA_ASSIGNMENT_OPTIONS3[2] => Ok(ModelSetting3::CameraZoom(
-            parse_zoom_milli_setting(value, name)?,
-        )),
+        "yaw" => Ok(ModelSetting3::CameraYaw(parse_degrees_setting(
+            value, name,
+        )?)),
+        "pitch" => Ok(ModelSetting3::CameraPitch(parse_degrees_setting(
+            value, name,
+        )?)),
+        "zoom" => Ok(ModelSetting3::CameraZoom(parse_zoom_milli_setting(
+            value, name,
+        )?)),
+        "interactive_look" => Ok(ModelSetting3::InteractiveLook(parse_boolean_setting(
+            value, name,
+        )?)),
+        "interactive_zoom" => Ok(ModelSetting3::InteractiveZoom(parse_boolean_setting(
+            value, name,
+        )?)),
         _ => Err(message(format!("unknown camera setting: {name}"))),
     }
 }
 
 fn parse_grid_setting_line(line: &str) -> Result<ModelSetting3, ParseError3> {
-    match line {
-        line if line == GRID_BARE_OPTIONS3[0] => Ok(ModelSetting3::OccupiedCellGrid),
-        _ => Err(message(format!("unknown grid setting: {line}"))),
+    let (name, value) = parse_setting_assignment(line, "grid setting")?;
+    match name {
+        "type" => parse_grid_type_setting(value),
+        _ => Err(message(format!("unknown grid setting: {name}"))),
     }
 }
 
 fn parse_pixelate_setting_line(line: &str) -> Result<ModelSetting3, ParseError3> {
-    if line == PIXELATE_BARE_OPTIONS3[0] {
-        return Ok(ModelSetting3::PixelateSmoothing);
-    }
     let (name, value) = parse_setting_assignment(line, "pixelate setting")?;
     match name {
-        name if name == PIXELATE_ASSIGNMENT_OPTIONS3[0] => Ok(ModelSetting3::PixelateScale(
-            parse_viewport_size_value(value, "pixelate scale")?,
-        )),
+        "enabled" => Ok(ModelSetting3::PixelateEnabled(parse_boolean_setting(
+            value, name,
+        )?)),
+        "scale" => Ok(ModelSetting3::PixelateScale(parse_viewport_size_value(
+            value,
+            "pixelate scale",
+        )?)),
+        "smoothing" => Ok(ModelSetting3::PixelateSmoothing(parse_boolean_setting(
+            value, name,
+        )?)),
         _ => Err(message(format!("unknown pixelate setting: {name}"))),
     }
 }
 
 fn parse_render_setting_line(line: &str) -> Result<ModelSetting3, ParseError3> {
-    match line {
-        line if line == RENDER_BARE_OPTIONS3[0] => Ok(ModelSetting3::SpriteShade),
+    let (name, value) = parse_setting_assignment(line, "render setting")?;
+    match name {
+        "shade" => Ok(ModelSetting3::SpriteShade(parse_boolean_setting(
+            value, name,
+        )?)),
         _ => Err(message(format!("unknown render setting: {line}"))),
     }
 }
 
-fn parse_camera_inline(rest: &str) -> Result<Vec<ModelSetting3>, ParseError3> {
-    rest.split_whitespace()
-        .map(parse_camera_inline_token)
-        .collect()
-}
-
-fn parse_camera_inline_token(token: &str) -> Result<ModelSetting3, ParseError3> {
-    match token {
-        token if token == CAMERA_BARE_OPTIONS3[0] => Ok(ModelSetting3::InteractiveLook),
-        token if token == CAMERA_BARE_OPTIONS3[1] => Ok(ModelSetting3::InteractiveZoom),
-        _ => {
-            let (name, value) = parse_inline_assignment(token, "camera option")?;
-            match name {
-                name if name == CAMERA_ASSIGNMENT_OPTIONS3[0] => Ok(ModelSetting3::CameraYaw(
-                    parse_degrees_setting(value, name)?,
-                )),
-                name if name == CAMERA_ASSIGNMENT_OPTIONS3[1] => Ok(ModelSetting3::CameraPitch(
-                    parse_degrees_setting(value, name)?,
-                )),
-                name if name == CAMERA_ASSIGNMENT_OPTIONS3[2] => Ok(ModelSetting3::CameraZoom(
-                    parse_zoom_milli_setting(value, name)?,
-                )),
-                _ => Err(message(format!("unknown camera option: {name}"))),
-            }
-        }
+fn parse_grid_type_setting(value: &str) -> Result<ModelSetting3, ParseError3> {
+    match value {
+        "\"occupied_cells\"" => Ok(ModelSetting3::OccupiedCellGrid),
+        _ => Err(message(format!(
+            "grid type must be one of: {}",
+            GRID_TYPE_VALUES3.join(", ")
+        ))),
     }
-}
-
-fn parse_grid_inline(rest: &str) -> Result<Vec<ModelSetting3>, ParseError3> {
-    rest.split_whitespace()
-        .map(|token| match token {
-            token if token == GRID_BARE_OPTIONS3[0] => Ok(ModelSetting3::OccupiedCellGrid),
-            _ => Err(message(format!("unknown grid option: {token}"))),
-        })
-        .collect()
-}
-
-fn parse_pixelate_inline(rest: &str) -> Result<Vec<ModelSetting3>, ParseError3> {
-    rest.split_whitespace()
-        .map(|token| match token {
-            token if token == PIXELATE_BARE_OPTIONS3[0] => Ok(ModelSetting3::PixelateSmoothing),
-            _ => {
-                let (name, value) = parse_inline_assignment(token, "pixelate option")?;
-                match name {
-                    name if name == PIXELATE_ASSIGNMENT_OPTIONS3[0] => {
-                        Ok(ModelSetting3::PixelateScale(parse_viewport_size_value(
-                            value,
-                            "pixelate scale",
-                        )?))
-                    }
-                    _ => Err(message(format!("unknown pixelate option: {name}"))),
-                }
-            }
-        })
-        .collect()
-}
-
-fn parse_inline_assignment<'a>(
-    token: &'a str,
-    context: &str,
-) -> Result<(&'a str, &'a str), ParseError3> {
-    let (name, value) = token
-        .split_once('=')
-        .ok_or_else(|| message(format!("{context} must be name=value or a bare option")))?;
-    if name.trim() != name || value.trim() != value || name.is_empty() || value.is_empty() {
-        return Err(message(format!("{context} must be name=value")));
-    }
-    Ok((name, value))
 }
 
 fn parse_viewport_directive(
@@ -1340,6 +1252,14 @@ fn parse_setting_assignment<'a>(
     match tokens.as_slice() {
         [name, "=", value] => Ok((*name, *value)),
         _ => Err(message(format!("{context} must be: <name> = <value>"))),
+    }
+}
+
+fn parse_boolean_setting(value: &str, name: &str) -> Result<bool, ParseError3> {
+    match value {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err(message(format!("{name} must be true or false"))),
     }
 }
 

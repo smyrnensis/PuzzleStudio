@@ -1,10 +1,10 @@
 use std::collections::BTreeSet;
 
+use crate::THEME_PRESET_NAMES;
 use crate::semantic::{SemanticCompletionSlot, SettingCompletionSet};
 use crate::surface::SurfaceCompletionSymbols;
 use crate::surface_completion::surface_completion_context_for_document;
 use crate::syntax::VISUAL_COLOR_NAMES;
-use crate::{THEME_PRESET_NAMES, THEME_SETTING_SPECS};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompletionList {
@@ -411,23 +411,74 @@ fn add_slot_items(
             }
             add_named_items(items, symbols.colors.iter(), CompletionKind::Color, "color");
         }
+        SemanticCompletionSlot::AuthoringRows(kind) => {
+            add_keyword_items(
+                items,
+                crate::authoring_grammar::authoring_row_surfaces(kind),
+            );
+        }
+        SemanticCompletionSlot::AuthoringChildren(kind) => {
+            add_keyword_items(
+                items,
+                crate::authoring_grammar::authoring_child_surfaces(kind),
+            );
+        }
+        SemanticCompletionSlot::AuthoringContentRows(content) => {
+            add_authoring_content_row_items(items, content);
+        }
         SemanticCompletionSlot::Settings(settings) => {
-            let setting_names: Vec<&'static str> = match settings {
-                SettingCompletionSet::Static(settings) => settings.iter().copied().collect(),
-                SettingCompletionSet::Theme => THEME_SETTING_SPECS
+            let setting_names: Vec<String> = match settings {
+                SettingCompletionSet::Static(settings) => settings
                     .iter()
-                    .map(|spec| spec.canonical)
+                    .map(|setting| (*setting).to_string())
                     .collect(),
+                SettingCompletionSet::AuthoringDefinitions(kind) => {
+                    crate::authoring_grammar::authoring_definition_surfaces(kind)
+                        .iter()
+                        .map(|setting| (*setting).to_string())
+                        .collect()
+                }
             };
             for setting in setting_names {
                 items.push(CompletionItem {
-                    label: setting.to_string(),
+                    label: setting.clone(),
                     kind: CompletionKind::Setting,
-                    insert_text: setting.to_string(),
+                    insert_text: setting,
                     detail: "setting".to_string(),
                 });
             }
         }
+    }
+}
+
+fn add_keyword_items(items: &mut Vec<CompletionItem>, keywords: Vec<&'static str>) {
+    for keyword in keywords {
+        items.push(CompletionItem {
+            label: keyword.to_string(),
+            kind: CompletionKind::Keyword,
+            insert_text: keyword.to_string(),
+            detail: "keyword".to_string(),
+        });
+    }
+}
+
+fn add_authoring_content_row_items(
+    items: &mut Vec<CompletionItem>,
+    content: crate::authoring_grammar::AuthoringContentKind,
+) {
+    for row in crate::authoring_grammar::authoring_content_row_surfaces(content) {
+        let (kind, detail) = match row.role {
+            crate::authoring_grammar::AuthoringSurfaceRole::Setting => {
+                (CompletionKind::Setting, "setting")
+            }
+            _ => (CompletionKind::Keyword, "keyword"),
+        };
+        items.push(CompletionItem {
+            label: row.surface.to_string(),
+            kind,
+            insert_text: row.surface.to_string(),
+            detail: detail.to_string(),
+        });
     }
 }
 
@@ -494,8 +545,7 @@ fn keyword_insert_text(keyword: &str) -> &str {
         | "tags"
         | "on_level_start"
         | "on_level_clear"
-        | "on_last_level_clear"
-        | "on_display" => keyword,
+        | "on_last_level_clear" => keyword,
         _ => keyword,
     }
 }
@@ -567,7 +617,7 @@ rules {
 }
 "#;
         let cursor = source.find("[ Pl").unwrap() + "[ Pl".len();
-        let list = suggest_source_completions(source, cursor);
+        let list = suggest_source_completions(&source, cursor);
 
         assert!(list.items.iter().any(|item| item.label == "Player"));
     }
@@ -652,7 +702,7 @@ rules {
 [ @
 "#;
         let cursor = source.rfind("[ @").unwrap() + "[ @".len();
-        let list = suggest_source_completions(source, cursor);
+        let list = suggest_source_completions(&source, cursor);
 
         assert!(list.items.iter().any(|item| {
             item.label == "@Count" && item.kind == CompletionKind::Object && item.detail == "object"
@@ -682,7 +732,7 @@ Actors = Pl
 }
 "#;
         let cursor = source.find("Actors = Pl").unwrap() + "Actors = Pl".len();
-        let list = suggest_source_completions(source, cursor);
+        let list = suggest_source_completions(&source, cursor);
 
         assert!(list.items.iter().any(|item| item.label == "Player"));
         assert!(
@@ -705,7 +755,7 @@ __legacy_layer_1 = Pl
 }
 "#;
         let cursor = source.rfind("Pl").unwrap() + "Pl".len();
-        let list = suggest_source_completions(source, cursor);
+        let list = suggest_source_completions(&source, cursor);
 
         assert!(list.items.iter().any(|item| item.label == "Player"));
         assert!(
@@ -1352,8 +1402,8 @@ goto menu
         let source = r#"
 title = complete_sfx
 sounds {
-sfx clear seed=clear01 type=jump
-music music_name seed=bgm01
+sfx clear { seed = clear01; type = jump }
+music music_name { seed = bgm01 }
 }
 scene playing {
 rules {
@@ -1375,7 +1425,7 @@ win -> sfx c
         let source = r#"
 title = complete_sounds_sfx
 sounds {
-sfx clear seed=clear01 type=jump
+sfx clear { seed = clear01; type = jump }
 sfx c
 }
 "#;
@@ -1391,7 +1441,7 @@ sfx c
     }
 
     #[test]
-    fn suggests_3d_render_options_from_parser_names() {
+    fn suggests_3d_render_options_from_authoring_schema() {
         let source = r#"
 title = complete_3d_render_options
 puzzle3 board {
@@ -1422,7 +1472,7 @@ rules {
             render_list
                 .items
                 .iter()
-                .any(|item| item.label == "camera" && item.kind == CompletionKind::Setting)
+                .any(|item| item.label == "camera" && item.kind == CompletionKind::Keyword)
         );
     }
 
@@ -1434,7 +1484,7 @@ sounds {
 sfx click se
 music bgm he
 }
-animation {
+render {
 tween du
 }
 scene menu {
@@ -1498,31 +1548,35 @@ show_
     }
 
     #[test]
-    fn suggests_all_asset_entry_keywords() {
+    fn does_not_suggest_asset_type_keywords_for_string_asset_rows() {
         let source = r#"
 title = complete_asset_keywords
 assets {
-s
+
 }
 "#;
-        let cursor = source.find("\ns\n").unwrap() + "\ns".len();
+        let cursor = source.find("assets {\n").unwrap() + "assets {\n".len();
         let list = suggest_source_completions(source, cursor);
 
-        assert!(
-            list.items
-                .iter()
-                .any(|item| item.label == "script" && item.kind == CompletionKind::Keyword)
-        );
+        for keyword in ["css", "script", "file"] {
+            assert!(
+                !list
+                    .items
+                    .iter()
+                    .any(|item| item.label == keyword && item.kind == CompletionKind::Keyword),
+                "asset string rows must not expose typed-entry keyword {keyword}"
+            );
+        }
     }
 
     #[test]
-    fn suggests_theme_names_after_theme_keyword() {
+    fn suggests_theme_presets_after_theme_assignment_value() {
         let source = r#"
-title = complete_theme_names
-theme p
+title = complete_theme_presets
+theme = "p
 "#;
-        let cursor = source.find("theme p").unwrap() + "theme p".len();
-        let list = suggest_source_completions(source, cursor);
+        let cursor = source.find("theme = \"p").unwrap() + "theme = \"p".len();
+        let list = suggest_source_completions(&source, cursor);
 
         assert!(
             list.items
@@ -1540,7 +1594,8 @@ theme p
     fn suggests_theme_settings_inside_theme_block() {
         let source = r#"
 title = complete_theme_settings
-theme clean {
+theme {
+preset = "clean"
 
 }
 "#;
@@ -1559,6 +1614,11 @@ theme clean {
             list.items.iter().any(|item| {
                 item.label == "accent_color" && item.kind == CompletionKind::Setting
             })
+        );
+        assert!(
+            list.items
+                .iter()
+                .any(|item| { item.label == "preset" && item.kind == CompletionKind::Setting })
         );
         assert!(list.items.iter().all(|item| item.label != "ui_font"));
         assert!(list.items.iter().all(|item| item.label != "board_color"));
@@ -1630,7 +1690,7 @@ shape box_
         let source = r#"
 title = complete_visual_assets
 assets {
-css sprites/box.png
+"sprites/box.png"
 }
 puzzle board {
 layers {
@@ -1707,14 +1767,39 @@ sprites {
     }
 
     #[test]
+    fn suggests_objects_after_canonical_sprite_selector_setting() {
+        let source = r#"
+title = complete_canonical_sprite_selector
+puzzle board {
+layers {
+__legacy_layer_0 = Player
+}
+}
+sprites {
+sprite {
+selector = Pl
+}
+}
+"#;
+        let cursor = source.find("selector = Pl").unwrap() + "selector = Pl".len();
+        let list = suggest_source_completions(source, cursor);
+
+        assert!(
+            list.items
+                .iter()
+                .any(|item| item.label == "Player" && item.kind == CompletionKind::Object)
+        );
+    }
+
+    #[test]
     fn suggests_color_names_for_theme_setting_values() {
         let source = r#"
 title = complete_theme_color_values
-theme clean {
-background_color li
+theme {
+background_color = li
 }
 "#;
-        let cursor = source.find("background_color li").unwrap() + "background_color li".len();
+        let cursor = source.find("background_color = li").unwrap() + "background_color = li".len();
         let list = suggest_source_completions(source, cursor);
 
         assert!(
@@ -1728,7 +1813,7 @@ background_color li
     }
 
     #[test]
-    fn sounds_scope_suggests_sfx_as_sounds_keyword() {
+    fn sounds_authoring_block_suggests_sfx_child() {
         let source = r#"
 title = complete_sounds_keyword
 sounds {
@@ -1756,7 +1841,7 @@ s
         let source = r#"
 title = complete_emissions
 sounds {
-sfx clear seed=clear01 type=jump
+sfx clear { seed = clear01; type = jump }
 }
 scene playing {
 rules {
@@ -1959,6 +2044,56 @@ on_
                 "missing top-level completion {keyword}"
             );
         }
+    }
+
+    #[test]
+    fn suggests_top_level_authoring_keywords_from_schema() {
+        let source = "";
+        let list = suggest_source_completions(source, 0);
+
+        for (label, kind) in [
+            ("var", CompletionKind::Keyword),
+            ("const", CompletionKind::Keyword),
+            ("persistent", CompletionKind::Keyword),
+            ("theme", CompletionKind::Keyword),
+            ("sounds", CompletionKind::Keyword),
+            ("assets", CompletionKind::Keyword),
+            ("input_buffer", CompletionKind::Keyword),
+            ("title", CompletionKind::Setting),
+            ("author", CompletionKind::Setting),
+        ] {
+            assert!(
+                list.items
+                    .iter()
+                    .any(|item| item.label == label && item.kind == kind),
+                "missing schema-owned top-level completion {label}"
+            );
+        }
+    }
+
+    #[test]
+    fn model_top_level_completion_keywords_exclude_schema_owned_heads() {
+        let keywords = crate::model_top_level_completion_keywords();
+
+        for schema_owned in [
+            "var",
+            "const",
+            "persistent",
+            "theme",
+            "sounds",
+            "assets",
+            "input_buffer",
+            "title",
+            "author",
+        ] {
+            assert!(
+                !keywords.contains(&schema_owned),
+                "schema-owned top-level completion must come from authoring schema: {schema_owned}"
+            );
+        }
+
+        assert!(keywords.contains(&"puzzle"));
+        assert!(keywords.contains(&"scene"));
     }
 
     #[test]

@@ -2260,48 +2260,6 @@ fn rewrite_with_source_line_number(
     rewrite
 }
 
-fn validate_display_hook_statements(statements: &[StatementAst]) -> Result<(), DiagnosticReport> {
-    for statement in statements {
-        match statement {
-            StatementAst::LocalRoutine { definition, .. } => {
-                validate_display_hook_statements(&definition.statements)?;
-            }
-            StatementAst::DisplayCall { .. } | StatementAst::Rewrite(_) => {}
-            StatementAst::Conditional {
-                then_statements,
-                else_statements,
-                ..
-            } => {
-                validate_display_hook_statements(then_statements)?;
-                validate_display_hook_statements(else_statements)?;
-            }
-            StatementAst::Block { statements, .. } => {
-                validate_display_hook_statements(statements)?;
-            }
-            StatementAst::RepeatUntil { statements, .. } => {
-                validate_display_hook_statements(statements)?;
-            }
-            StatementAst::Fix { statements, .. } => {
-                validate_display_hook_statements(statements)?;
-            }
-            StatementAst::If {
-                then_statements,
-                else_statements,
-                ..
-            } => {
-                validate_display_hook_statements(then_statements)?;
-                validate_display_hook_statements(else_statements)?;
-            }
-            StatementAst::Call { .. } | StatementAst::Effect { .. } => {
-                return Err(DiagnosticReport::error(
-                    "on_display can only contain display statements".to_string(),
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
 #[allow(clippy::too_many_arguments)]
 fn parse_conditional_call_statement(
     line: &str,

@@ -485,10 +485,57 @@ function replaceWorkspaceTree(root, workspaceFolder) {
     && normalizePath(child.workspaceRoot || "") === normalizedRoot
   );
   if (index >= 0) {
+    applyPreservedFolderExpansion(fileTree.children[index], workspaceFolder);
     fileTree.children.splice(index, 1, workspaceFolder);
     return;
   }
   fileTree.children.push(workspaceFolder);
+}
+
+function applyPreservedFolderExpansion(previousFolder, nextFolder) {
+  const expandedByPath = new Map();
+  collectFolderExpansion(previousFolder, "", expandedByPath);
+  restoreFolderExpansion(nextFolder, "", expandedByPath);
+}
+
+function collectFolderExpansion(folder, parentPath, expandedByPath) {
+  if (!folder || folder.kind !== "folder") {
+    return;
+  }
+  const path = folderExpansionPath(folder, parentPath);
+  expandedByPath.set(folderExpansionKey(folder, path), folder.expanded !== false);
+  for (const child of folder.children || []) {
+    if (child.kind === "folder") {
+      collectFolderExpansion(child, path, expandedByPath);
+    }
+  }
+}
+
+function restoreFolderExpansion(folder, parentPath, expandedByPath) {
+  if (!folder || folder.kind !== "folder") {
+    return;
+  }
+  const path = folderExpansionPath(folder, parentPath);
+  const key = folderExpansionKey(folder, path);
+  if (expandedByPath.has(key)) {
+    folder.expanded = expandedByPath.get(key);
+  }
+  for (const child of folder.children || []) {
+    if (child.kind === "folder") {
+      restoreFolderExpansion(child, path, expandedByPath);
+    }
+  }
+}
+
+function folderExpansionPath(folder, parentPath) {
+  if (folder.isWorkspaceRoot) {
+    return "";
+  }
+  return normalizePath(parentPath ? joinPath(parentPath, folder.name || "") : folder.name || "");
+}
+
+function folderExpansionKey(folder, path) {
+  return `${normalizePath(folder.workspaceRoot || "")}\n${normalizePath(path || "")}`;
 }
 
 async function applyWorkspaceChangedPayload(payload) {
@@ -1194,8 +1241,7 @@ function saveDocumentStore(showStatus = true, options = {}) {
 }
 
 async function saveCurrentDocument(showStatus = true) {
-  saveDocumentStore(false);
-  const document = activeDocument();
+  let document = activeDocument();
   if (!document || !isTextDocument(document)) {
     if (showStatus) {
       setEditorStatus("Nothing to save", "is-error");
@@ -1203,8 +1249,20 @@ async function saveCurrentDocument(showStatus = true) {
     return false;
   }
   if (documentNeedsContentLoad(document)) {
-    throw new Error(`Cannot save unloaded document: ${document.puzzlePath || document.name || "document"}`);
+    if (showStatus) {
+      setEditorStatus("Loading before save", "");
+    }
+    saveButton.disabled = true;
+    await ensureDocumentContentLoaded(document);
+    if (activeDocument()?.id !== document.id) {
+      throw new Error("Cannot save after the active document changed during file load.");
+    }
+    document = activeDocument();
+    if (documentNeedsContentLoad(document)) {
+      throw new Error(`Cannot save unloaded document: ${document.puzzlePath || document.name || "document"}`);
+    }
   }
+  saveDocumentStore(false);
 
   if (editorSeed) {
     document.syncedSource = document.source || "";
@@ -1228,6 +1286,7 @@ async function saveCurrentDocument(showStatus = true) {
         source: document.source || "",
         puzzlePath: document.puzzlePath || "",
         workspaceRoot: document.workspaceRoot || workspaceRoot || "",
+        contentLoaded: document.contentLoaded !== false,
       });
     } finally {
       if (isDesktopHost()) {
@@ -2081,7 +2140,6 @@ function renderTreeNode(node, parent, depth, importTitleIndex) {
       row.dataset.nodeId = node.id;
       row.dataset.dragId = node.id;
       treeRowByNodeId.set(node.id, row);
-      row.draggable = true;
       row.tabIndex = 0;
       row.style.setProperty("--depth", depth);
       row.setAttribute("role", "treeitem");
@@ -2108,7 +2166,6 @@ function renderTreeNode(node, parent, depth, importTitleIndex) {
   row.dataset.fileId = node.id;
   row.dataset.dragId = node.id;
   treeRowByNodeId.set(node.id, row);
-  row.draggable = true;
   row.tabIndex = 0;
   row.style.setProperty("--depth", depth);
   row.setAttribute("role", "treeitem");
@@ -2458,7 +2515,7 @@ function assetResolverScript(document) {
   const baseDir = directoryName(document?.puzzlePath);
   const root = document?.workspaceRoot || workspaceRoot;
   const entries = {};
-  for (const path of declaredAssetPaths(document, "file")) {
+  for (const path of declaredFileAssetPaths(document)) {
     const key = normalizePath(path);
     const url = assetUrlForPath(key, baseDir, root);
     if (!url) {
@@ -2467,6 +2524,34 @@ function assetResolverScript(document) {
     entries[key] = url;
   }
   return `window.PuzzleAssets = { files: ${JSON.stringify(entries)}, url(path) { const key = String(path || "").replaceAll("\\\\", "/"); if (Object.prototype.hasOwnProperty.call(this.files, key)) return this.files[key]; if (/^(?:data:|https?:|#)/.test(key)) return key; throw new Error(\`Puzzle asset is not embedded: \${key}. Declare it with file "\${key}" in assets.\`); } };`;
+}
+
+function declaredFileAssetPaths(document) {
+  const paths = declaredAssetPaths(document, "file");
+  for (const path of declaredSpriteImagePaths(document)) {
+    if (!paths.includes(path)) {
+      paths.push(path);
+    }
+  }
+  return paths;
+}
+
+function declaredSpriteImagePaths(document) {
+  const source = document?.source || "";
+  let expanded = source;
+  try {
+    expanded = expandPuzzleImportsForWasm(source, document?.puzzlePath || "game.puzzle");
+  } catch {
+    expanded = source;
+  }
+  const out = [];
+  for (const line of String(expanded || "").split("\n")) {
+    const match = stripLineCommentForWasm(line).trim().match(/^image\s+"([^"]+)"$/);
+    if (match && !out.includes(match[1])) {
+      out.push(match[1]);
+    }
+  }
+  return out;
 }
 
 function rewriteCssAssetUrls(css, baseDir = "", root = workspaceRoot) {
@@ -2849,7 +2934,13 @@ async function newPuzzleSourceForFile(_name) {
 
 function startDraftEntry(kind) {
   const folder = activeFolder();
-  folder.expanded = true;
+  if (!folder?.id) {
+    setEditorStatus("Select a workspace before creating files", "is-error");
+    return;
+  }
+  expandFolderPathToNode(folder.id);
+  selectedTreeId = folder.id;
+  selectedFolderId = folder.id;
   draftEntry = {
     kind,
     parentId: folder.id,
@@ -3325,12 +3416,57 @@ function activeFolder() {
   if (selected?.kind === "folder") {
     return selected;
   }
+  if (selected?.kind === "file") {
+    const selectedFileFolder = findParentFolder(fileTree, selected.id);
+    if (selectedFileFolder?.kind === "folder") {
+      return selectedFileFolder;
+    }
+  }
   const selectedFolder = selectedFolderId ? findNode(fileTree, selectedFolderId) : null;
   if (selectedFolder?.kind === "folder") {
     return selectedFolder;
   }
+  const activeWorkspaceFolder = workspaceRootFolder(workspaceRoot);
+  if (activeWorkspaceFolder?.kind === "folder") {
+    return activeWorkspaceFolder;
+  }
   const current = documents[currentDocumentIndex];
-  return findParentFolder(fileTree, current?.id) || fileTree;
+  const currentFolder = findParentFolder(fileTree, current?.id);
+  if (currentFolder?.kind === "folder") {
+    return currentFolder;
+  }
+  if (isDesktopHost()) {
+    const workspaceFolders = (fileTree?.children || []).filter((child) => child?.kind === "folder" && child.isWorkspaceRoot);
+    return workspaceFolders.length === 1 ? workspaceFolders[0] : null;
+  }
+  return fileTree;
+}
+
+function expandFolderPathToNode(nodeId) {
+  const path = folderPathToNode(fileTree, nodeId);
+  for (const folder of path) {
+    folder.expanded = true;
+  }
+}
+
+function folderPathToNode(folder, nodeId, path = []) {
+  if (!folder || folder.kind !== "folder") {
+    return [];
+  }
+  const nextPath = folder === fileTree ? path : [...path, folder];
+  if (folder.id === nodeId) {
+    return nextPath;
+  }
+  for (const child of folder.children || []) {
+    if (child.kind !== "folder") {
+      continue;
+    }
+    const found = folderPathToNode(child, nodeId, nextPath);
+    if (found.length) {
+      return found;
+    }
+  }
+  return [];
 }
 
 function findParentFolder(folder, childId) {

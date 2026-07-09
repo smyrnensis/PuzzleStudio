@@ -385,10 +385,22 @@ fn parser_keeps_render_settings_as_model_owned_display_state() {
         r#"
 puzzle3 camera_test {
 render {
-      camera yaw=90 pitch=42 zoom=1.25 interactive_look interactive_zoom
-      grid occupied_cells
-      pixelate scale=4 smoothing
-      shade
+      camera {
+yaw = 90
+pitch = 42
+zoom = 1.25
+interactive_look = true
+interactive_zoom = true
+      }
+      grid {
+type = "occupied_cells"
+      }
+      pixelate {
+enabled = true
+scale = 4
+smoothing = true
+      }
+      shade = true
     }
 
 layers {
@@ -416,7 +428,7 @@ Player actor
 }
 
 #[test]
-fn parser_rejects_old_boolean_render_setting_assignments() {
+fn parser_accepts_boolean_render_setting_assignments() {
     let parsed = parse_puzzle3d(
         r#"
 puzzle3 camera_test {
@@ -424,6 +436,132 @@ render {
   camera {
 interactive_look = true
   }
+  pixelate {
+enabled = true
+smoothing = false
+  }
+  shade = false
+}
+
+layers {
+actor
+}
+
+objects {
+Player actor
+}
+}
+"#,
+    )
+    .unwrap();
+
+    assert!(parsed.settings.camera.interactive_look);
+    assert!(parsed.settings.pixelate.enabled);
+    assert!(!parsed.settings.pixelate.smoothing);
+    assert!(!parsed.settings.sprite.shade);
+}
+
+#[test]
+fn parser_rejects_old_inline_camera_render_settings() {
+    let parsed = parse_puzzle3d(
+        r#"
+puzzle3 camera_test {
+render {
+  camera yaw=90
+}
+
+layers {
+actor
+}
+
+objects {
+Player actor
+}
+}
+"#,
+    );
+
+    assert!(parsed.is_err());
+}
+
+#[test]
+fn parser_rejects_old_bare_grid_render_settings() {
+    let parsed = parse_puzzle3d(
+        r#"
+puzzle3 camera_test {
+render {
+  grid {
+occupied_cells
+  }
+}
+
+layers {
+actor
+}
+
+objects {
+Player actor
+}
+}
+"#,
+    );
+
+    assert!(parsed.is_err());
+}
+
+#[test]
+fn parser_rejects_old_inline_grid_render_settings() {
+    let parsed = parse_puzzle3d(
+        r#"
+puzzle3 camera_test {
+render {
+  grid occupied_cells
+}
+
+layers {
+actor
+}
+
+objects {
+Player actor
+}
+}
+"#,
+    );
+
+    assert!(parsed.is_err());
+}
+
+#[test]
+fn parser_rejects_old_inline_pixelate_render_settings() {
+    let parsed = parse_puzzle3d(
+        r#"
+puzzle3 camera_test {
+render {
+  pixelate scale=4
+}
+
+layers {
+actor
+}
+
+objects {
+Player actor
+}
+}
+"#,
+    );
+
+    assert!(parsed.is_err());
+}
+
+#[test]
+fn parser_rejects_old_bare_render_settings() {
+    let parsed = parse_puzzle3d(
+        r#"
+puzzle3 camera_test {
+render {
+  shade
 }
 
 layers {

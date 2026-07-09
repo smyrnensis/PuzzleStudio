@@ -2435,6 +2435,7 @@ version = "0.1.0"
 dependencies = [
  "puzzle-core",
  "puzzle-grid3d",
+ "puzzle-kernel",
  "puzzle-lang",
 ]
 

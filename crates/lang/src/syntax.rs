@@ -69,7 +69,6 @@ pub(crate) const PUZZLE_COMPLETION_KEYWORDS: &[&str] = &[
     "levels3",
     "lose_conditions",
     "map",
-    "on_display",
     PUZZLE_LIFECYCLE_BLOCKS[0],
     PUZZLE_LIFECYCLE_BLOCKS[1],
     PUZZLE_LIFECYCLE_BLOCKS[2],

@@ -60,6 +60,22 @@ for (const asset of [
   }
 }
 
+for (const [source, copy] of [
+  ["crates/html_play/static/renderer.js", "crates/html_editor/static/renderer.js"],
+  ["crates/html_play/static/renderer.css", "crates/html_editor/static/renderer.css"],
+]) {
+  const sourcePath = path.join(repoRoot, source);
+  const copyPath = path.join(repoRoot, copy);
+  if (!fs.existsSync(sourcePath) || !fs.existsSync(copyPath)) {
+    continue;
+  }
+  if (fs.readFileSync(sourcePath, "utf8") !== fs.readFileSync(copyPath, "utf8")) {
+    failures.push(
+      `${copy} must be the generated distribution copy of ${source}; run tools/sync_static_assets.sh`,
+    );
+  }
+}
+
 if (!hasIncludeMacros(path.join(repoRoot, "crates/html_editor/src/lib.rs"))) {
   failures.push(
     "html-editor no longer appears to own embedded editor assets; move export/server ownership deliberately instead of erasing it while changing desktop",

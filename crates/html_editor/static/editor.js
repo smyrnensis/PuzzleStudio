@@ -3681,13 +3681,15 @@ function surfaceEntriesForSource(source, options = {}) {
   if (surfaceEntriesCache?.source === text) {
     return surfaceEntriesCache.entries;
   }
-  const compiler = wasmCompiler;
+  const compiler = wasmCompiler || window.PuzzleStudioRuntime?.cachedWasmCompiler?.();
   if (typeof compiler?.source_entries_json !== "function") {
-    if (options.reportUnavailable) {
-      setStatus("Source entries unavailable: editor WASM parser is not loaded.", "is-error");
+    const message = "Source entries unavailable: editor WASM parser is not loaded.";
+    if (options.reportUnavailable !== false) {
+      setStatus(message, "is-error");
     }
-    return [];
+    throw new Error(message);
   }
+  wasmCompiler = compiler;
   const raw = compiler.source_entries_json(text);
   const payload = JSON.parse(raw || "{}");
   const entries = Array.isArray(payload.entries)
@@ -3700,7 +3702,12 @@ function surfaceEntriesForSource(source, options = {}) {
 }
 
 function focusedPuzzleSurfaceEntries(context = focusedPuzzleSourceContext()) {
-  return surfaceEntriesForSource(context?.source || "", { reportUnavailable: true });
+  try {
+    return surfaceEntriesForSource(context?.source || "", { reportUnavailable: true });
+  } catch (error) {
+    console.warn("Focused source entries unavailable", error);
+    return [];
+  }
 }
 
 function focusedPuzzleSurfaceEntriesByKind(kind, context = focusedPuzzleSourceContext()) {
@@ -10415,36 +10422,22 @@ document.addEventListener("pointercancel", (event) => {
   clearDropTargets();
   resetTreeDragDecisionCache();
 });
-documentList.addEventListener("dragstart", (event) => {
-  const row = event.target.closest(".tree-row");
-  if (!row?.dataset.dragId || row.classList.contains("draft-row")) {
-    event.preventDefault();
-    return;
-  }
-  draggedNodeId = row.dataset.dragId;
-  resetTreeDragDecisionCache();
-  row.classList.add("is-dragging");
-  event.dataTransfer.effectAllowed = "move";
-  event.dataTransfer.setData("text/plain", draggedNodeId);
-});
 function dataTransferHasFiles(dataTransfer) {
   return Array.from(dataTransfer?.types || []).includes("Files");
 }
 
 documentList.addEventListener("dragover", (event) => {
   const hasExternalFiles = dataTransferHasFiles(event.dataTransfer);
-  const targetFolderId = dropFolderIdForEvent(event);
-  if (hasExternalFiles && isDesktopHost()) {
+  if (!hasExternalFiles) {
     return;
   }
-  if (!hasExternalFiles && !canDropNodeOnFolder(draggedNodeId, targetFolderId)) {
+  const targetFolderId = dropFolderIdForEvent(event);
+  if (isDesktopHost()) {
     return;
   }
   event.preventDefault();
-  event.dataTransfer.dropEffect = hasExternalFiles ? "copy" : "move";
-  markDropTarget(
-    hasExternalFiles ? targetFolderId : resolvedDropFolderIdForNode(draggedNodeId, targetFolderId),
-  );
+  event.dataTransfer.dropEffect = "copy";
+  markDropTarget(targetFolderId);
 });
 documentList.addEventListener("dragleave", (event) => {
   if (!documentList.contains(event.relatedTarget)) {
@@ -10452,31 +10445,24 @@ documentList.addEventListener("dragleave", (event) => {
   }
 });
 documentList.addEventListener("drop", (event) => {
-  event.preventDefault();
   const files = event.dataTransfer?.files;
-  const targetFolderId = dropFolderIdForEvent(event);
-  clearDropTargets();
-  if (files?.length) {
-    if (isDesktopHost()) {
-      setEditorStatus("Use Open file or Open folder in the desktop app", "is-error");
-      return;
-    }
-    const targetFolder = targetFolderId ? findNode(fileTree, targetFolderId) : fileTree;
-    if (targetFolder?.kind === "folder") {
-      importFilesIntoFolder(files, targetFolder).catch((error) => {
-        console.error(error);
-        setEditorStatus(`Import failed: ${importErrorMessage(error)}`, "is-error");
-      });
-    }
+  if (!files?.length) {
     return;
   }
-  finishTreeMove(draggedNodeId, targetFolderId);
-});
-documentList.addEventListener("dragend", () => {
-  draggedNodeId = "";
+  event.preventDefault();
+  const targetFolderId = dropFolderIdForEvent(event);
   clearDropTargets();
-  resetTreeDragDecisionCache();
-  documentList.querySelectorAll(".is-dragging").forEach((row) => row.classList.remove("is-dragging"));
+  if (isDesktopHost()) {
+    setEditorStatus("Use Open file or Open folder in the desktop app", "is-error");
+    return;
+  }
+  const targetFolder = targetFolderId ? findNode(fileTree, targetFolderId) : fileTree;
+  if (targetFolder?.kind === "folder") {
+    importFilesIntoFolder(files, targetFolder).catch((error) => {
+      console.error(error);
+      setEditorStatus(`Import failed: ${importErrorMessage(error)}`, "is-error");
+    });
+  }
 });
 initializePhysicalWorkPanes();
 paneToggleButtons.forEach((button) => {

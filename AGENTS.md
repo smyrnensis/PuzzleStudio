@@ -124,6 +124,27 @@ When a generated file looks relevant, first find the source that owns it instead
 of reading or patching the generated output. Owner-specific generated-artifact
 rules live in the corresponding folder `AGENTS.md`.
 
+## Concurrent Sessions And Worktree Ownership
+
+Prefer separate git worktrees for parallel agent sessions. A shared dirty
+worktree is not a safe coordination mechanism: the filesystem does not record
+which session owns a change, and repeatedly repairing drift in the same file can
+silently overwrite another session's work.
+
+Before editing any file that is dirty, staged, untracked, or likely to be touched
+by another session, record its current content hash after reading it. Immediately
+before applying a patch, check the hash again. If the hash changed, stop and ask
+instead of rebasing your patch mentally, re-reading and continuing, or fixing the
+new drift. Treat repeated patch context mismatches, content that reverts between
+commands, or a change that disappears after a test/build as evidence of another
+owner or generator until proven otherwise.
+
+Do not edit an `AM`, staged, or otherwise externally owned file unless the user
+explicitly assigns that file to the current session or you can identify the
+existing changes as your own. If shared-worktree editing is unavoidable, use the
+hash precondition above as the minimum safety gate; separate worktrees remain the
+preferred structure.
+
 ## Diagnose Briefly, Then Act
 
 Do not patch only the visible symptom. Before adding a prohibition, syntax case,

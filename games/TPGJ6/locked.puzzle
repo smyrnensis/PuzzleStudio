@@ -2,27 +2,28 @@ title = "Stuck Room"
 
 default_wait_time = 100ms
 
-theme clean {
+theme {
+preset = "clean"
 accent_color = #c4d0cb
 background_color = #454545
 text_color = #c4d0cb
 }
 
-animation {
+render {
 tween {
 duration = 50ms
 }
 }
 
 sounds {
-sfx push seed=301193 type=hit volume=0.2
-sfx bump seed=945816 type=hit volume=0.3
-sfx clear seed=clear type=jump
-sfx locked seed=locked type=lock
-sfx fall seed=fall type=hit
-sfx restart seed=560993 type=jump volume=0.8
-sfx undo seed=613236 type=select volume=0.50
-music locked_room seed=LockedRoom bars=64 height=0.00 bpm=90 volume=4
+sfx push { seed = 301193; type = hit; volume = 0.2 }
+sfx bump { seed = 945816; type = hit; volume = 0.3 }
+sfx clear { seed = clear; type = jump }
+sfx locked { seed = locked; type = lock }
+sfx fall { seed = fall; type = hit }
+sfx restart { seed = 560993; type = jump; volume = 0.8 }
+sfx undo { seed = 613236; type = select; volume = 0.50 }
+music locked_room { seed = LockedRoom; bars = 64; height = 0.00; bpm = 90; volume = 4 }
 }
 
 puzzle main {

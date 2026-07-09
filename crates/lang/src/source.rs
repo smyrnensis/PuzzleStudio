@@ -454,10 +454,15 @@ fn starts_inline_block(tokens: &[&str], line: &str) -> bool {
     if matches!(tokens, [lifecycle] if puzzle_lifecycle_event(lifecycle).is_some()) {
         return true;
     }
+    if tokens
+        .first()
+        .is_some_and(|surface| crate::authoring_grammar::authoring_source_block(surface).is_some())
+    {
+        return true;
+    }
     matches!(
         tokens,
         ["map", ..]
-            | ["on_display"]
             | ["marks"]
             | ["groups"]
             | ["layers"]
@@ -466,13 +471,13 @@ fn starts_inline_block(tokens: &[&str], line: &str) -> bool {
             | ["win_conditions", ..]
             | ["lose_conditions", ..]
             | ["puzzle3", ..]
-            | ["sprites", ..]
-            | ["sprites3", ..]
             | ["colors"]
             | ["shapes"]
             | ["objects"]
             | ["display_objects"]
             | ["render", ..]
+            | ["sfx", ..]
+            | ["music", ..]
             | ["camera", ..]
             | ["grid", ..]
             | ["pixelate", ..]
@@ -481,11 +486,7 @@ fn starts_inline_block(tokens: &[&str], line: &str) -> bool {
             | ["screen"]
             | ["layout"]
             | ["rule", ..]
-            | ["rules"]
             | ["main"]
-            | ["levels", ..]
-            | ["levels3", ..]
-            | ["level", ..]
             | ["state"]
             | ["keys"]
             | ["resources"]
@@ -568,8 +569,6 @@ pub(crate) fn split_header_tokens(line: &str) -> Vec<&str> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SourceScope {
     Puzzle,
-    Sounds,
-    Assets,
     Scene,
     SceneLayout,
     SceneState,
@@ -821,7 +820,9 @@ fn source_line_role(
             SourceLineRole::PlainFirstToken
         }
         Some(SourceScope::VisualShapeEntry)
-            if is_visual_sprite_directive_row(tokens) || is_visual_sprite_palette_row(tokens) =>
+            if is_visual_sprite_directive_row(tokens)
+                || is_visual_sprite_palette_row(tokens)
+                || is_visual_sprite_duration_row(tokens) =>
         {
             SourceLineRole::Normal
         }
@@ -834,7 +835,16 @@ fn source_line_role(
 fn is_visual_sprite_directive_row(tokens: &[&str]) -> bool {
     matches!(
         tokens,
-        ["colors", ..] | ["offset", ..] | ["pixels_per_cell", ..] | ["rotate", ..] | ["shape", ..]
+        ["colors", ..]
+            | ["image", ..]
+            | ["contain", ..]
+            | ["cover", ..]
+            | ["stretch", ..]
+            | ["offset", ..]
+            | ["sampling", ..]
+            | ["pixels_per_cell", ..]
+            | ["rotate", ..]
+            | ["shape", ..]
     )
 }
 
@@ -845,6 +855,19 @@ fn is_visual_sprite_palette_row(tokens: &[&str]) -> bool {
             .all(|token| *token == "transparent" || token.starts_with('#'))
 }
 
+fn is_visual_sprite_duration_row(tokens: &[&str]) -> bool {
+    let [value] = tokens else {
+        return false;
+    };
+    let Some(number) = value
+        .strip_suffix("ms")
+        .or_else(|| value.strip_suffix('s'))
+    else {
+        return false;
+    };
+    !number.is_empty() && number.chars().any(|ch| ch.is_ascii_digit())
+}
+
 fn starts_unbraced_visual_entry(trimmed: &str, tokens: &[&str]) -> bool {
     !trimmed.ends_with('{') && is_unbraced_visual_entry_header(tokens)
 }
@@ -853,7 +876,7 @@ fn is_unbraced_visual_entry_header(tokens: &[&str]) -> bool {
     let Some(name) = tokens.first() else {
         return false;
     };
-    if !is_surface_source_identifier(name) || is_visual_sprite_directive_row(tokens) {
+    if !is_visual_sprite_selector_header_token(name) || is_visual_sprite_directive_row(tokens) {
         return false;
     }
     tokens
@@ -875,6 +898,40 @@ fn next_unbraced_visual_shape_body(
         return true;
     }
     matches!(tokens, [name] if is_surface_source_identifier(name)) && !trimmed.ends_with('{')
+}
+
+fn is_visual_sprite_selector_header_token(value: &str) -> bool {
+    if matches!(
+        value,
+        "shape" | "shapes" | "colors" | "ascii" | "sprites" | "sprites3"
+    ) {
+        return false;
+    }
+    let cleaned = value.trim_start_matches('@');
+    let mut parts = cleaned.split(':');
+    let Some(first) = parts.next() else {
+        return false;
+    };
+    is_surface_source_identifier(first) && parts.all(is_visual_sprite_selector_part_token)
+}
+
+fn is_visual_sprite_selector_part_token(value: &str) -> bool {
+    value == "*"
+        || (!value.is_empty()
+            && value
+                .chars()
+                .all(|ch| ch == '_' || ch.is_ascii_alphanumeric()))
+        || is_visual_sprite_selector_map_call(value)
+}
+
+fn is_visual_sprite_selector_map_call(value: &str) -> bool {
+    let Some((name, rest)) = value.split_once('(') else {
+        return false;
+    };
+    let Some(arg) = rest.strip_suffix(')') else {
+        return false;
+    };
+    is_surface_source_identifier(name) && is_surface_source_identifier(arg)
 }
 
 fn is_surface_source_identifier(value: &str) -> bool {
@@ -1117,8 +1174,6 @@ fn opening_scope(line: &str, tokens: &[&str], current: Option<SourceScope>) -> O
         return Some(SourceScope::UnbracedLevel);
     }
     match tokens {
-        ["sounds"] => Some(SourceScope::Sounds),
-        ["assets"] => Some(SourceScope::Assets),
         ["scene", ..] => Some(SourceScope::Scene),
         ["puzzle", ..] | ["puzzle3", ..] => Some(SourceScope::Puzzle),
         ["level", ..] => Some(SourceScope::Level),
@@ -1145,9 +1200,10 @@ fn is_scene_scope(scope: Option<SourceScope>) -> bool {
 }
 
 fn source_scope_for_name(name: &str) -> Option<SourceScope> {
+    if let Some(scope) = source_scope_for_authoring_source_block(name) {
+        return Some(scope);
+    }
     match name {
-        "sounds" => Some(SourceScope::Sounds),
-        "assets" => Some(SourceScope::Assets),
         "puzzle" => Some(SourceScope::Puzzle),
         "tags" => Some(SourceScope::Tags),
         "layers" | "collision_layers" => Some(SourceScope::Layers),
@@ -1157,70 +1213,19 @@ fn source_scope_for_name(name: &str) -> Option<SourceScope> {
         "keys" | "inputs" => Some(SourceScope::Keys),
         "resources" => Some(SourceScope::Other),
         "legend" => Some(SourceScope::Legend),
-        "levels" | "levels3" => Some(SourceScope::Levels),
-        "level" => Some(SourceScope::Level),
-        "sprites" | "sprite" | "sprites3" => Some(SourceScope::Visuals),
         "render" | "camera" => Some(SourceScope::Other),
-        "rules" => Some(SourceScope::Other),
         _ => None,
     }
 }
 
-pub(crate) fn source_tree_header_keyword<'a>(
-    header: &'a str,
-    scope: SourceScope,
-    role: SourceBlockRole,
-) -> Option<&'a str> {
-    if role != SourceBlockRole::SourceTree {
-        return None;
-    }
-    let first = split_header_tokens(header).first().copied()?;
-    source_tree_scope_accepts_header_keyword(scope, first).then_some(first)
-}
-
-fn source_tree_scope_accepts_header_keyword(scope: SourceScope, first: &str) -> bool {
-    match scope {
-        SourceScope::Sounds
-        | SourceScope::Assets
-        | SourceScope::Puzzle
-        | SourceScope::Tags
-        | SourceScope::Group
-        | SourceScope::Layers
-        | SourceScope::Mark
-        | SourceScope::Map
-        | SourceScope::Keys
-        | SourceScope::Legend
-        | SourceScope::Levels
-        | SourceScope::Visuals
-        | SourceScope::VisualShapeTable
-        | SourceScope::VisualColorTable => {
-            source_scope_for_name(first).is_some()
-                || matches!(
-                    first,
-                    "sounds" | "assets" | "puzzle" | "puzzle3" | "level" | "shapes" | "colors"
-                )
-        }
-        SourceScope::Scene => first == "scene",
-        SourceScope::SceneLayout => {
-            matches!(
-                first,
-                "layout" | "row" | "column" | "box" | "puzzle" | "puzzle3"
-            )
-        }
-        SourceScope::SceneState => first == "state",
-        SourceScope::SceneKeys => matches!(first, "keys" | "inputs"),
-        SourceScope::SceneTransitions => {
-            matches!(first, "rules" | "routine" | "input" | "action" | "if")
-                || first == "on_scene_start"
-        }
-        SourceScope::LevelMenu => first == "level_menu",
-        SourceScope::Level => first == "level",
-        SourceScope::Other => {
-            matches!(first, "resources" | "render" | "camera" | "rules")
-                || puzzle_lifecycle_event(first).is_some()
-        }
-        SourceScope::UnbracedLevel | SourceScope::VisualShapeEntry => false,
-    }
+fn source_scope_for_authoring_source_block(name: &str) -> Option<SourceScope> {
+    let spec = crate::authoring_grammar::authoring_source_block(name)?;
+    Some(match spec.role {
+        crate::authoring_grammar::AuthoringBlockRole::Visuals => SourceScope::Visuals,
+        crate::authoring_grammar::AuthoringBlockRole::LevelList => SourceScope::Levels,
+        crate::authoring_grammar::AuthoringBlockRole::LevelEntry => SourceScope::Level,
+        crate::authoring_grammar::AuthoringBlockRole::Rules => SourceScope::Other,
+    })
 }
 
 fn add_assignment_left_range(

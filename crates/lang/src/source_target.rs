@@ -2,7 +2,7 @@ use crate::puzzle3_parse::{
     is_canonical_sprite_palette_line, parse_canonical_sprite_palette_line, parse_sprite_voxels,
 };
 use crate::source::{SourceScope, split_header_tokens, strip_line_comment};
-use crate::surface::{SurfaceDocument, SurfaceLine, SurfaceVisualSpriteRefs};
+use crate::surface::{SurfaceDocument, SurfaceLine, SurfaceOptionBlock, SurfaceVisualSpriteRefs};
 use crate::{SpriteColor3, SpriteVoxels3};
 use std::collections::HashSet;
 
@@ -147,7 +147,7 @@ fn resolve_source_entries_from_document(
     document: &SurfaceDocument,
 ) -> Vec<SourceTarget> {
     let mut entries = Vec::new();
-    entries.extend(resolve_sound_entries(document));
+    entries.extend(resolve_sound_entries(source, document));
     entries.extend(resolve_level3d_entries(source, document));
     entries.extend(resolve_level_entries(source, document));
     entries.extend(resolve_sprite3d_entries(source, document));
@@ -334,23 +334,28 @@ fn push_source_sprite3d_cells_json(out: &mut String, cells: &[Option<usize>]) {
     out.push(']');
 }
 
-fn resolve_sound_entries(context: &SurfaceDocument) -> Vec<SourceTarget> {
+fn resolve_sound_entries(source: &str, context: &SurfaceDocument) -> Vec<SourceTarget> {
     context
         .lines
         .iter()
-        .filter(|line| line.scope == Some(SourceScope::Sounds))
+        .filter(|line| {
+            line.option_block
+                == Some(SurfaceOptionBlock::Authoring(
+                    crate::authoring_grammar::AuthoringKind::SoundsConfig,
+                ))
+        })
         .filter_map(|line| {
-            let (sound_kind, name, params) = parse_sound_definition(line)?;
+            let sound = parse_sound_block(source, line)?;
             Some(SourceTarget {
                 kind: SourceTargetKind::Sounds,
-                name,
-                start: line.start,
-                end: line_end(line),
+                name: sound.name,
+                start: sound.start,
+                end: sound.end,
                 body_start: None,
                 body_end: None,
                 level_index: None,
-                sound_kind: Some(sound_kind),
-                params,
+                sound_kind: Some(sound.kind),
+                params: sound.params,
                 source_sprite: None,
                 source_sprite3d: None,
             })
@@ -358,28 +363,95 @@ fn resolve_sound_entries(context: &SurfaceDocument) -> Vec<SourceTarget> {
         .collect()
 }
 
-fn parse_sound_definition(
-    line: &SurfaceLine,
-) -> Option<(SoundSourceTargetKind, String, Vec<(String, String)>)> {
-    let [kind, name, rest @ ..] = line.tokens.as_slice() else {
-        return None;
-    };
-    let sound_kind = match kind.as_str() {
-        "sfx" => SoundSourceTargetKind::Sfx,
-        "music" => SoundSourceTargetKind::Music,
-        _ => return None,
-    };
-    Some((sound_kind, name.clone(), parse_assignment_params(rest)))
+struct ParsedSoundBlock {
+    kind: SoundSourceTargetKind,
+    name: String,
+    start: usize,
+    end: usize,
+    params: Vec<(String, String)>,
 }
 
-fn parse_assignment_params(tokens: &[String]) -> Vec<(String, String)> {
-    tokens
+fn parse_sound_block(source: &str, line: &SurfaceLine) -> Option<ParsedSoundBlock> {
+    let open_relative = line.content.find('{')?;
+    let open = line.start + open_relative;
+    let close = matching_source_brace(source, open)?;
+    let start = line.start + line.content.len() - line.content.trim_start().len();
+    let end = close + 1;
+    let text = source.get(start..end)?;
+    let header = &line.content[..open_relative];
+    let authoring_kind = sound_authoring_kind(header)?;
+    let node = crate::authoring_grammar::parse_authoring_node_source(text, authoring_kind).ok()?;
+    let kind = match node.kind {
+        crate::authoring_grammar::AuthoringKind::SfxSoundConfig => SoundSourceTargetKind::Sfx,
+        crate::authoring_grammar::AuthoringKind::MusicSoundConfig => SoundSourceTargetKind::Music,
+        _ => return None,
+    };
+    let [name] = node.header_args.as_slice() else {
+        return None;
+    };
+    Some(ParsedSoundBlock {
+        kind,
+        name: name.clone(),
+        start,
+        end,
+        params: sound_definition_params(&node),
+    })
+}
+
+fn sound_definition_params(
+    node: &crate::authoring_grammar::AuthoringNode,
+) -> Vec<(String, String)> {
+    node.definition_rows
         .iter()
-        .filter_map(|token| {
-            let (key, value) = token.split_once('=')?;
-            Some((key.to_string(), trim_quotes(value).to_string()))
-        })
+        .filter_map(|row| row.single_value().map(|value| (row.key.clone(), value)))
+        .map(|(key, value)| (key, trim_quotes(value).to_string()))
         .collect()
+}
+
+fn sound_authoring_kind(header: &str) -> Option<crate::authoring_grammar::AuthoringKind> {
+    let tokens = split_header_tokens(header);
+    let [kind, _name] = tokens.as_slice() else {
+        return None;
+    };
+    match *kind {
+        "sfx" => Some(crate::authoring_grammar::AuthoringKind::SfxSoundConfig),
+        "music" => Some(crate::authoring_grammar::AuthoringKind::MusicSoundConfig),
+        _ => None,
+    }
+}
+
+fn matching_source_brace(source: &str, open: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut in_quote = false;
+    let mut escaped = false;
+    for (offset, ch) in source.get(open..)?.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if in_quote && ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        if ch == '"' {
+            in_quote = !in_quote;
+            continue;
+        }
+        if in_quote {
+            continue;
+        }
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(open + offset);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn trim_quotes(value: &str) -> &str {
@@ -736,6 +808,7 @@ fn source_sprite_target(
 ) -> Option<SourceSpriteTarget> {
     let body = source.get(body_start..body_end)?;
     let mut target = SourceSpriteTarget::default();
+    let mut visual_target_name = target_name.to_string();
     let mut saw_palette = false;
     for raw_line in body.lines() {
         let trimmed = code_trim(raw_line);
@@ -744,14 +817,24 @@ fn source_sprite_target(
         }
         let tokens = split_header_tokens(trimmed);
         match tokens.as_slice() {
-            ["rotate", ..] | ["pixels_per_cell", ..] | ["offset", ..] => {
+            ["selector", "=", selector] | ["selector", selector] => {
+                visual_target_name = (*selector).to_string();
                 target.prelude_rows.push(trimmed.to_string());
             }
-            ["colors", colors @ ..] if !saw_palette && !colors.is_empty() => {
+            [
+                "image" | "contain" | "cover" | "stretch" | "rotate" | "pixels_per_cell" | "offset"
+                | "sampling",
+                ..,
+            ] => {
+                target.prelude_rows.push(trimmed.to_string());
+            }
+            ["colors", "=", colors @ ..] | ["colors", colors @ ..]
+                if !saw_palette && !colors.is_empty() =>
+            {
                 target.palette_tokens = colors.iter().map(|token| (*token).to_string()).collect();
                 saw_palette = true;
             }
-            ["shape", shape] => {
+            ["shape", "=", shape] | ["shape", shape] => {
                 target.shape_ref = Some((*shape).to_string());
             }
             [shape]
@@ -794,7 +877,7 @@ fn source_sprite_target(
     target
         .shape_assets
         .sort_by(|left, right| left.name.cmp(&right.name));
-    enrich_source_sprite_target_from_loaded_visual(source, target_name, &mut target);
+    enrich_source_sprite_target_from_loaded_visual(source, &visual_target_name, &mut target);
     if target.resolved_shape_rows.is_empty() {
         if let Some(shape_ref) = &target.shape_ref {
             if let Some(asset) = target
@@ -1372,6 +1455,9 @@ fn sprite_color_row_tokens(line: &str) -> Vec<&str> {
     if tokens.first() == Some(&"colors") {
         tokens.remove(0);
     }
+    if tokens.first() == Some(&"=") {
+        tokens.remove(0);
+    }
     tokens
 }
 
@@ -1425,10 +1511,7 @@ fn is_visual_image_source(value: &str) -> bool {
     lower.ends_with(".png")
         || lower.ends_with(".jpg")
         || lower.ends_with(".jpeg")
-        || lower.ends_with(".gif")
-        || lower.ends_with(".webp")
         || lower.ends_with(".svg")
-        || lower.ends_with(".avif")
 }
 
 fn line_end(line: &SurfaceLine) -> usize {
@@ -1729,11 +1812,11 @@ _P_
     fn resolves_sound_definition_with_params() {
         let source = r#"
 sounds {
-sfx clear seed=clear01 type=jump
-music music_name seed=test1 bars=8 height=0 bpm=100
+sfx clear { seed = clear01; type = jump }
+music music_name { seed = test1; bars = 8; height = 0; bpm = 100 }
 }
 "#;
-        let cursor = source.find("height=0").unwrap();
+        let cursor = source.find("height = 0").unwrap();
         let target = resolve_source_target(source, cursor).unwrap();
 
         assert_eq!(target.kind, SourceTargetKind::Sounds);
@@ -1752,11 +1835,11 @@ music music_name seed=test1 bars=8 height=0 bpm=100
         let source = r#"
 puzzle board {
 sounds {
-sfx clear seed=clear01 type=jump
+sfx clear { seed = clear01; type = jump }
 }
 }
 "#;
-        let cursor = source.find("type=jump").unwrap();
+        let cursor = source.find("type = jump").unwrap();
         let target = resolve_source_target(source, cursor).unwrap();
 
         assert_eq!(target.kind, SourceTargetKind::Sounds);
@@ -1978,19 +2061,22 @@ sprites {
 colors {
 accent = #e94f64
 }
-Player
-accent
+sprite {
+selector = Player
+colors = accent
+shape =
 0
 }
+}
 "##;
-        let cursor = source.find("accent\n0").unwrap();
+        let cursor = source.find("colors = accent").unwrap();
         let target = resolve_source_target(source, cursor).unwrap();
         let source_sprite = target
             .source_sprite
             .as_ref()
             .expect("source sprite contract");
 
-        assert_eq!(target.name, "Player");
+        assert_eq!(target.name, "sprite");
         assert_eq!(source_sprite.palette_tokens, vec!["accent".to_string()]);
         assert_eq!(
             source_sprite.resolved_palette,

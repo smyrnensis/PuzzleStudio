@@ -2,13 +2,14 @@ title = "Fixban Tween"
 subtitle = "Canonical Fixban with movement tween"
 author = "PuzzleStudio"
 
-theme puzzlescript {
+theme {
+preset = "puzzlescript"
 background_color = #444
 }
 
 default_wait_time = 100ms
 
-animation {
+render {
 tween {
 duration = 30ms
 }

@@ -22,7 +22,7 @@ Current vanilla PuzzleScript import scope:
 - PS `late` rules are emitted after `move`.
 - Imported level clear handlers emit `wait 0.3s` before `next_level`.
 - PS `moving` / `stationary` qualifiers become anonymous movement mark predicates such as `directions Crate` and `Crate{no directions}` on LHS; RHS `stationary` is emitted as the bare object.
-- Simple PS `SOUNDS` rows such as `sfx0 12345` become canonical `sounds { sfx sfx0 seed=12345 type=puzzlescript }`; PS rule suffixes such as `SFX0` become `sfx sfx0`.
+- Simple PS `SOUNDS` rows such as `sfx0 12345` become canonical `sounds { sfx sfx0 { seed = 12345; type = puzzlescript } }`; PS rule suffixes such as `SFX0` become `sfx sfx0`.
 - `LEVELS` splits blank-line-separated PS levels into canonical unnamed levels.
 - Default `scene title` and `scene playing` entries are generated. Title
   choices call scene-local routines directly, while the playing scene mounts the

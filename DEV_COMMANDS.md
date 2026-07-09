@@ -54,6 +54,14 @@ tools/generate_web_editor.sh games/spec_2d.puzzle -o docs/index.html
 
 ## Tauri Desktop Shell
 
+The editor frontend keeps runtime renderer assets as generated distribution
+copies. After editing `crates/html_play/static/renderer.js` or
+`crates/html_play/static/renderer.css`, sync the Tauri static copy:
+
+```bash
+tools/sync_static_assets.sh
+```
+
 Run the desktop shell in development mode:
 
 ```bash

@@ -984,6 +984,7 @@ impl GameSession {
                     return self.resolve_turn_commands(game, commands, None, undo_base_len);
                 }
                 RuleEffect::WaitAnimation => {}
+                RuleEffect::EmitAnimation { .. } => {}
                 RuleEffect::Message { text, literal } => {
                     let text = self.resolve_message_text(&text, literal);
                     self.message_events.push(MessageEvent::Message { text });

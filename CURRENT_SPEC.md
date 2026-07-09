@@ -79,7 +79,7 @@ main rules と gameplay condition は display object を読めない。display o
 
 `on_level_start` / `on_level_clear` でも `@routine` を書ける。ただし lifecycle block は通常入力ではないため、そこで呼ばれた display routine は `input` orientation / `if input == ...` を使えない。
 
-`on_display { ... }` は renderer / editor が表示 snapshot を作る直前に走る display-only hook。中には `@routine` と display rewrite だけを書ける。`display <routine>`、`display <rewrite>`、`display { ... }` は旧構文であり読まない。`on_display` は gameplay state、solver、win condition、undo key を変えるための hook ではなく、editor でセルを直接編集した状態にも同じ visual derivation をかけるための projection である。
+`on_display { ... }` は廃止済みであり読まない。表示用の派生を gameplay とは別 hook として authoring surface に残さない。`display <routine>`、`display <rewrite>`、`display { ... }` も旧構文であり読まない。
 
 main object と display object は layer order 上は同じ列に並ぶが、同じ storage layer には入れない。1つの layer row は gameplay object だけ、または display object だけを含む。`@Name` は display object を表し、object vocabulary は `layers` の右辺だけが作る。`@overlay = @Name ...` のような display 専用 layer 名も使える。`@group = ...` も display-only alias であり、右辺に main object を含められない。逆に `@` なしの layer / group は display object を含められない。
 
@@ -429,7 +429,7 @@ goto playing
 
 `again` command も turn completion で解決される。`again` は入力 event の再送ではなく、同じ puzzle target の rule entrypoint を `InputId(0)` / no semantic input で再実行する follow-up turn request である。follow-up turn は現在の turn が commit され、message / sfx / wait / navigation command の収集が終わった後に予約される。follow-up turn 内で `again` が再び出ると次の no-input turn が予約される。runtime は 1 input から派生する automatic turn を最大 256 回に制限する。standalone HTML での follow-up turn 間隔は top-level `again_interval = 100ms` / `again_interval = 0.1s` で変更でき、PuzzleScript import 互換として `again_interval 0.1` も秒指定として受け入れる。
 
-Top-level `animation { tween duration=160ms }` は move write に対する tween animation を有効化する。`tween` を書くこと自体が有効化であり、`enabled = true` は受け付けない。block 形で書く場合も `tween { duration = 160ms }` とし、値を持つ option だけを assignment にする。`duration` 省略時は `250ms`。
+Top-level `render { tween_duration = 160ms }` は move write に対する tween animation を有効化する。block 形で書く場合は `render { tween { duration = 160ms } }` または `render { tween { duration 160ms } }` とする。`tween` を書くこと自体が有効化であり、`enabled = true` は受け付けない。`duration` 省略時は `250ms`。
 
 `wait animation` は rules 内の animation boundary。runtime は boundary までの segment で発生した visual animation events の最大 duration だけ continuation を止め、完了後に同じ turn の残りの rules を実行する。animation events が空なら no-op。`sfx` / `message` / `wait 300ms` は別 effect であり、`wait animation` は visual animation だけを待つ。`wait tween` は alias として読めるが canonical は `wait animation`。
 
@@ -515,12 +515,14 @@ button "Levels" -> goto level_select
 
 The examples differ only at the model slot initializer and model window component. The implicit vertical stack, buttons, and scene effects are shared scene concepts.
 
-2D puzzle の renderer 初期値は puzzle 内の `render` が所有する。現時点では `grid occupied_cells` / `grid all_cells` を受け付け、前者は object が存在する cell、後者は空 cell を含む全 cell の外周を表示する読み取り補助として扱う。これは floor、collision、rule、win condition、level data には影響しない。省略時は表示しない。
+2D puzzle の renderer 初期値は puzzle 内の `render` が所有する。現時点では `grid { occupied_cells }` / `grid { all_cells }` を受け付け、前者は object が存在する cell、後者は空 cell を含む全 cell の外周を表示する読み取り補助として扱う。これは floor、collision、rule、win condition、level data には影響しない。省略時は表示しない。
 
 ```txt
 puzzle sokoban {
 render {
-grid occupied_cells
+grid {
+occupied_cells
+}
 }
 }
 ```
@@ -550,7 +552,7 @@ Scene layout は `puzzle3` を固定 4:3 display として扱う。`puzzle3` com
 
 3D model `rules` では `set yaw = <deg>` / `set pitch = <deg>` / `set zoom = <n>` を view-state emission として書ける。`reset_camera` は camera view を `render { camera { ... } }` の初期値に戻す。これらは `sfx` と同じく rule 発火に付随する presentation command であり、puzzle state、solver key、win condition には入らない。
 
-`grid occupied_cells` は object が存在する cell の外周 edge を表示する preview/debug 用の読み取り補助である。これは floor や volume を追加するものではなく、puzzle state、collision、win condition、level data には影響しない。省略時は表示しない。
+`grid { occupied_cells }` は object が存在する cell の外周 edge を表示する preview/debug 用の読み取り補助である。これは floor や volume を追加するものではなく、puzzle state、collision、win condition、level data には影響しない。省略時は表示しない。
 
 `render { shade }` は sprite voxel の面ごとの明暗付けを有効にする renderer 設定である。これは puzzle state、sprite voxel data、collision、win condition には影響しない。省略時も on。
 
@@ -568,9 +570,9 @@ pointer drag の所有者は開始点で決まる。pointer down が `puzzle3` �
 
 `scene level_menu [name]` の typed scene template は読まない。level list は通常 scene の `layout` 内に `level_menu` component として置く。`show_index = <true|false>`、`show_solved = <true|false>`、`layout = list`、`columns = <n>`、`wrap = <true|false>`、`locked = disabled|hidden`、`button ...` などの option は `level_menu { ... }` 内に書く。matrix では `left` / `right` が隣の item、`up` / `down` が列数ぶん前後の item に移動する。
 
-`sounds { ... }` は top-level の音源定義。`sfx <name> seed=<seed> type=<type> volume=<gain>` と `music <name> seed=<seed> tone=<0..1> bpm=<60..160> volume=<gain>` を持つ。`volume` は 0 以上の gain multiplier で、1 より大きい値は増幅として扱われる。`sfx type=puzzlescript` は PuzzleScript numeric sound seed 互換 generator を選ぶ import 用 type。scene/component RHS の canonical form は `input <name>`、`component_effect <name>`、または direct scene effect。scene effect は `sfx <name>`、`play_music <name>`、`pause_music [name]`、`resume_music [name]`、`stop_music [name]`、`goto <scene>`、`goto <scene>(<level>)`、`start <scene>`、`start <scene>(<level>)`、`clear_undo_history`、`clear_game_progress`、`<target>.restart` などを書ける。scene navigation の canonical form は `goto` と `start` だけ。`goto` は固定 scene node へ切り替え、既存の scene state を保持する。`start` は target scene state を初期化してから `goto` する。level scene への入場も `goto sokoban`、`goto sokoban(level_name)`、`goto playing(level)` のように scene call として書く。level 指定なしの `goto <level scene>` は保存済みまたは選択中の `current_level` を使い、なければ最初の level に入る。`resume` / `continue` / `open` / `enter` / `back` / `close` は canonical scene navigation ではない。旧 `start levels ... in <scene>` / `continue levels ... in <scene>` は読まず、同じ形へ誘導する error を出す。通常の clear / advance / restart は model window component と puzzle lifecycle の責務なので、scene effect は明示的な介入に限る。game progress は scene effect として `clear_game_progress`、`set current_level = <level>`、`clear current_level`、`set level.cleared = true|false`、`set level(<level>).cleared = true|false`、`reset persistent_vars`、`reset <persistent var>` で操作できる。undo/redo 履歴だけを捨てる場合は `clear_undo_history` を使う。`play_sfx <name>` は読まない。`message <expr>` は popup message を出す presentation effect で、quoted text、scene `var`、top-level `var`、effect binding を参照でき、既定で `default_wait_time` だけ待つ。`wait [duration]` は `wait 0.1s` / `wait 1s` / `wait 100ms` のように書く scene presentation wait で、`wait` 単体は既定で `0.2s`。top-level `default_wait_time = 500ms` のように bare `wait` と message の既定待ち時間を変更できる。scene 直下の lifecycle block は `on_scene_start { ... }` のみ。`on_level_start { ... }` は puzzle lifecycle block であり、scene には置けない。複数 effect は block に 1 行ずつ書き、`then` は使わない。音声、message、wait は presentation adapter の責務で、core rule state には入らない。
+`sounds { ... }` は top-level の音源定義。`sfx <name> { seed = <seed>; type = <type>; volume = <gain> }` と `music <name> { seed = <seed>; height = <0..1>; bars = <8|16|32|64>; bpm = <40..180>; volume = <gain> }` を持つ。`volume` は 0 以上の gain multiplier で、1 より大きい値は増幅として扱われる。`sfx <name> { type = puzzlescript }` は PuzzleScript numeric sound seed 互換 generator を選ぶ import 用 type。scene/component RHS の canonical form は `input <name>`、`component_effect <name>`、または direct scene effect。scene effect は `sfx <name>`、`play_music <name>`、`pause_music [name]`、`resume_music [name]`、`stop_music [name]`、`goto <scene>`、`goto <scene>(<level>)`、`start <scene>`、`start <scene>(<level>)`、`clear_undo_history`、`clear_game_progress`、`<target>.restart` などを書ける。scene navigation の canonical form は `goto` と `start` だけ。`goto` は固定 scene node へ切り替え、既存の scene state を保持する。`start` は target scene state を初期化してから `goto` する。level scene への入場も `goto sokoban`、`goto sokoban(level_name)`、`goto playing(level)` のように scene call として書く。level 指定なしの `goto <level scene>` は保存済みまたは選択中の `current_level` を使い、なければ最初の level に入る。`resume` / `continue` / `open` / `enter` / `back` / `close` は canonical scene navigation ではない。旧 `start levels ... in <scene>` / `continue levels ... in <scene>` は読まず、同じ形へ誘導する error を出す。通常の clear / advance / restart は model window component と puzzle lifecycle の責務なので、scene effect は明示的な介入に限る。game progress は scene effect として `clear_game_progress`、`set current_level = <level>`、`clear current_level`、`set level.cleared = true|false`、`set level(<level>).cleared = true|false`、`reset persistent_vars`、`reset <persistent var>` で操作できる。undo/redo 履歴だけを捨てる場合は `clear_undo_history` を使う。`play_sfx <name>` は読まない。`message <expr>` は popup message を出す presentation effect で、quoted text、scene `var`、top-level `var`、effect binding を参照でき、既定で `default_wait_time` だけ待つ。`wait [duration]` は `wait 0.1s` / `wait 1s` / `wait 100ms` のように書く scene presentation wait で、`wait` 単体は既定で `0.2s`。top-level `default_wait_time = 500ms` のように bare `wait` と message の既定待ち時間を変更できる。scene 直下の lifecycle block は `on_scene_start { ... }` のみ。`on_level_start { ... }` は puzzle lifecycle block であり、scene には置けない。複数 effect は block に 1 行ずつ書き、`then` は使わない。音声、message、wait は presentation adapter の責務で、core rule state には入らない。
 
-`theme <theme>` / `theme <theme> { ... }` は top-level の表示 theme metadata。theme の見た目の identity は HTML adapter の CSS preset が持ち、`.puzzle` の theme 宣言は preset 名の選択と、作者に公開する少数の調整項目だけを持つ。theme block の canonical entry は `<setting> <value>` で、互換 syntax として `<setting> = <value>` も読む。公開色は `accent_color`、`background_color`、`text_color` の 3 つだけである。UI の線、選択状態、panel、popup、盤面背景は HTML adapter の preset がこの 3 色の alpha だけで作り、別の実色を持たない。追加の非色設定は `ui_font`、`title_font`、`control_radius`、`panel_radius`。これらは HTML adapter が `--accent` / `--bg` / `--ink` などの CSS custom property へ lower し、preset CSS の値を上書きする。theme は `puzzle-core` の state、rule、transition には入らない。複数 theme 宣言は import 後の順序で preset 名または同じ項目を上書きする。theme 未指定時の default theme name は `clean`。標準 preset は `clean`、`terminal`、`paper`、`pixel`、`candy`、`blueprint`、`noir` で、HTML adapter は対応する CSS preset を同梱する。
+`theme = "<preset>"` / `theme { ... }` は top-level の表示 theme metadata。theme は singleton config であり、preset は `theme { preset = "clean" }` のように quoted string で選ぶ。`clean` などの preset 名は作者定義 symbol ではなく builtin preset catalog の値である。theme block の canonical entry は `<setting> = <value>`。公開色は `accent_color`、`background_color`、`text_color` の 3 つだけである。UI の線、選択状態、panel、popup、盤面背景は HTML adapter の preset がこの 3 色の alpha だけで作り、別の実色を持たない。追加の非色設定は `ui_font`、`title_font`、`control_radius`、`panel_radius`。これらは HTML adapter が `--accent` / `--bg` / `--ink` などの CSS custom property へ lower し、preset CSS の値を上書きする。theme は `puzzle-core` の state、rule、transition には入らない。複数 theme 宣言は import 後の順序で preset 名または同じ項目を上書きする。theme 未指定時の default theme preset は `"clean"`。標準 preset は `"clean"`、`"terminal"`、`"paper"`、`"pixel"`、`"puzzlescript"`、`"candy"`、`"blueprint"`、`"noir"` で、HTML adapter は対応する CSS preset を同梱する。
 
 `assets { ... }` は top-level の外部 file manifest。`css "game.css"`、`script "visuals.js"`、`file "sprites/player.png"` を持てる。path は game folder からの相対 path だけ。HTML adapter は宣言された CSS / script だけを読み込み、standalone HTML export は宣言された `file` だけを `PuzzleAssets` に埋め込む。puzzle folder 内の未宣言 file は asset として扱わない。`script` は rendered scene snapshot から追加表示を作るための補助 JS で、puzzle state、transition、undo stack、level index を直接変更してはならない。盤面に追従する script は `window.PuzzleStudio.registerAssetScript({ setup(api) { api.onRender(...) } })` を使う。
 
@@ -979,7 +981,7 @@ level warmup
 }
 ```
 
-分割 file も `.puzzle` に統一し、`import` は wrapper を作らず内容をそのまま展開する。import 先は `puzzle sokoban { ... }`、`menu level_select { ... }`、`theme clean` / `theme clean { ... }` のように必要な owner 構文を自分で持つ。
+分割 file も `.puzzle` に統一し、`import` は wrapper を作らず内容をそのまま展開する。import 先は `puzzle sokoban { ... }`、`menu level_select { ... }`、`theme = "clean"` / `theme { preset = "clean" }` のように必要な owner 構文を自分で持つ。
 
 複数 object の `legend` は overlay 表示。
 

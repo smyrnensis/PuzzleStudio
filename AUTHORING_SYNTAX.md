@@ -1162,10 +1162,10 @@ if win_conditions -> next_level
 [ Dog | Baby ] -> [ | dog_angry ] again
 ```
 
-Move tween は top-level `animation` block に書く。`tween` を書くこと自体が有効化で、`enabled = true` は使わない。
+Move tween は top-level `render` block に書く。`tween` を書くこと自体が有効化で、`enabled = true` は使わない。
 
 ```txt
-animation {
+render {
 tween duration=160ms
 }
 ```

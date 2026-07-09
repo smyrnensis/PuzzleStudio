@@ -105,13 +105,16 @@ fn lower_programs(
     let Some(main_statements) = main_statements else {
         return Err(DiagnosticReport::error("missing puzzle rules".to_string()));
     };
+    if display_statements.is_some() {
+        return Err(DiagnosticReport::error("`on_display` was removed".to_string()));
+    }
     let mut diagnostics = collect_program_reference_diagnostics(
         &definitions_by_name,
         &main_statements,
         level_start_statements.as_deref(),
         level_clear_statements.as_deref(),
         last_level_clear_statements.as_deref(),
-        display_statements.as_deref(),
+        None,
         level_bodies,
     );
     dedup_diagnostics(&mut diagnostics);
@@ -195,21 +198,7 @@ fn lower_programs(
     } else {
         None
     };
-    let display = if let Some(statements) = display_statements {
-        let mut context = StatementLoweringContext::default();
-        context.role = RuleRole::Visual;
-        context.input_allowed = false;
-        context.input_forbidden_context = Some("on_display");
-        match lowerer.lower_statements(&statements, &context) {
-            Ok(steps) => Some(steps),
-            Err(report) => {
-                diagnostics.extend(report.into_diagnostics());
-                None
-            }
-        }
-    } else {
-        None
-    };
+    let display = None;
     let mut level_starts = Vec::with_capacity(level_bodies.len());
     let mut level_clears = Vec::with_capacity(level_bodies.len());
     for level in level_bodies {

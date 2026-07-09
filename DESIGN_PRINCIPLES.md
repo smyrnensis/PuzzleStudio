@@ -179,6 +179,81 @@ display routine と gameplay routine が違うなら、同じ routine 風の形�
 
 重要なのは、ユーザーの直感が外れたときに「なぜここでは違うのか」を所有者境界や実行モデルから説明できることである。
 
+### 木構造としての宣言
+
+`.puzzle` のブロック文法は、まず owner-scoped な木構造として扱う。
+
+基本形は、名前、任意の見出し引数、定義行、子ノード、葉ごとの独自内容を持つ node である。
+
+```puzzle
+A <A> {
+duration <duration>
+name = <value>
+B {
+label = <string>
+}
+C <C> {
+colors <color...>
+D {
+}
+}
+}
+```
+
+この形では、`A`、`B`、`C`、`D` は単なる字面ではなく、親 node が受け入れる子項目として検証される。
+各 node は、自分が受け入れる定義行、子 node、葉の内容形式を定義する。
+存在しない子項目、所有者が受け入れていない定義行、型が合わない値は、その owner path 上のエラーとして報告する。
+
+定義行には、少なくとも bare な固定項目と、`=` による binding 風の定義の区別がある。
+`duration 90ms` や `colors #fff #000` のような bare 行は、その owner が読む固定設定であり、後続文法から名前で代入・更新される slot を作らない。
+`yaw = 90deg` や `# = Wall` のような `=` 行は、左辺を owner scope 内の後続文法が参照する handle として扱う。
+その handle が rule から更新可能か、読み取り専用か、level ASCII のような別葉文法だけが参照するものかは、binding の kind と owner schema が決める。
+したがって `=` の有無は厳密な mutable 変数宣言ではないが、単なる表記差でもない。
+左辺が後で何らかの文法から参照される可能性を示す authoring guideline として扱う。
+浅い parser は `=` の最終意味をここで決めず、bare 行と `=` 行を形として保持する。
+その形を許すか、どの namespace に入れるか、後続文法からどう参照できるかは owner schema と leaf parser が決める。
+
+parser は、特定機能名に直接分岐する前に、可能な限りこの構造を保った中間表現を作る。
+たとえば `animations { pop { ... } }` を「animations だから専用処理する」のではなく、`animations` の子 `pop` という owner path を持つ node として扱い、その path に対応する schema が意味を決める。
+
+子 node を1行で書く場合は、block を省略せず、`{ ... }` と `;` で内部行を区切る。
+
+```puzzle
+A {
+B <name> { setting = <value>; flag }
+}
+```
+
+これは次の block 形と同じ tree shape を持つ。
+
+```puzzle
+A {
+B <name> {
+setting = <value>
+flag
+}
+}
+```
+
+裸の `A B <time>` や `A B=C D` のような whitespace-only inline node は generic authoring tree では扱わない。
+1行にまとめたい場合も、node header と body の境界は `{}`、body 内の行境界は `;` で明示する。
+quoted string 外の `=` は常に separator token である。
+`key = value` / `key=value` は assignment definition であり、値数はその key の schema が決める。
+schema が 1 値を要求するなら `key =` や `key = value extra` は invalid である。
+schema が可変長値を要求するなら、その定義行の残りを値として取れる。
+bare definition は schema が固定項目として知っている key から始まり、その定義行の残りを値として取る。
+`rotate from up` のような複数語 directive は generic definition ではない。
+その形が必要な場合は、`rotate` を所有する leaf/owner grammar が独自 directive として読む。
+generic inline parser が unknown token を都合よく複数語 property にまとめてはならない。
+
+ただし、すべての葉が同じ汎用 property 文法で終わる必要はない。
+ASCII sprite、rule pattern、level grid、routine body のように、葉が独自文法を持つことは許される。
+その場合でも、独自文法を解釈する権限は、その葉を所有する node にある。
+generic tree walker が見た目だけから「これは grid らしい」「これは rule らしい」と推定してはならない。
+
+この原則の目的は、文法を過度に汎用化することではない。
+目的は、入れ子、所有者、子項目、定義行、葉文法の責任を分け、`animations`、`sprites`、`scene`、`levels` などの機能追加が同じ構造上の拡張として実装されるようにすることである。
+
 ### 見た目から実行意味を推定しない
 
 実装は、表示結果の合成、隣接、重なり、命名、または現在のサンプルでの使われ方から、作者が書いていない連動関係を推定してはならない。

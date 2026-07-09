@@ -4,6 +4,9 @@
       return {
         aliases: { ...(config.aliases || {}) },
         sprites: { ...(config.sprites || {}) },
+        animations: { ...(config.animations || {}) },
+        triggers: { ...(config.triggers || {}) },
+        animationDefaults: { ...(config.animationDefaults || {}) },
         boardClass: config.boardClass || "",
         themeClass: config.themeClass || "",
         editorPuzzle: { ...(config.editorPuzzle || {}) },

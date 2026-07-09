@@ -67,6 +67,7 @@ fn project_surface_semantic_kind(kind: SurfaceSemanticKind) -> semantic::Semanti
         SurfaceSemanticKind::Theme => semantic::SemanticKind::Theme,
         SurfaceSemanticKind::Asset => semantic::SemanticKind::Asset,
         SurfaceSemanticKind::Setting => semantic::SemanticKind::Setting,
+        SurfaceSemanticKind::Color => semantic::SemanticKind::Color,
         SurfaceSemanticKind::Number => semantic::SemanticKind::Number,
         SurfaceSemanticKind::String => semantic::SemanticKind::String,
     }
@@ -604,24 +605,6 @@ fn add_simple_rewrite_effect_surface_tokens(
 fn matches_rewrite_effect_command(token: &str, syntax: RewriteEffectCommandSyntax) -> bool {
     rewrite_effect_command_syntax(&token.to_ascii_lowercase()) == Some(syntax)
 }
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SoundSettingValueSyntax {
-    String,
-    Number,
-}
-
-pub(crate) fn sound_setting_value_syntax(key: &str) -> Option<SoundSettingValueSyntax> {
-    match key {
-        "seed" | "type" => Some(SoundSettingValueSyntax::String),
-        "height" | "tone" | "bars" | "bpm" | "volume" => Some(SoundSettingValueSyntax::Number),
-        _ => None,
-    }
-}
-
-pub(crate) const SFX_SOUND_SETTING_OPTIONS: &[&str] = &["seed", "type", "volume"];
-pub(crate) const MUSIC_SOUND_SETTING_OPTIONS: &[&str] =
-    &["seed", "height", "bars", "bpm", "volume"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MapHeaderTokenSyntax {
