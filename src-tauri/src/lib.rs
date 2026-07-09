@@ -1596,6 +1596,24 @@ mod tests {
     }
 
     #[test]
+    fn desktop_capabilities_allow_confirmed_window_close() {
+        let capabilities: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/default.json"))
+                .expect("desktop capabilities should be valid JSON");
+        let permissions = capabilities
+            .get("permissions")
+            .and_then(|value| value.as_array())
+            .expect("desktop capabilities should declare permissions");
+
+        assert!(
+            permissions
+                .iter()
+                .any(|permission| permission.as_str() == Some("core:window:allow-destroy")),
+            "desktop close guard calls Tauri window.destroy() after unsaved-change confirmation"
+        );
+    }
+
+    #[test]
     fn active_entry_tail_under_path_tracks_exact_file_mutation() {
         let root = std::env::temp_dir().join(format!(
             "puzzlestudio-desktop-active-file-{}",

@@ -995,6 +995,35 @@ pub enum RuleStatementBlockSurface<'a> {
     Nested,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RuleRoutineBlockHeaderSurfaceSpans {
+    pub keyword: Range<usize>,
+    pub name: Option<Range<usize>>,
+    pub modifiers: Vec<Range<usize>>,
+}
+
+pub fn rule_routine_block_header_surface_spans(
+    line: &str,
+) -> Option<RuleRoutineBlockHeaderSurfaceSpans> {
+    let tokens = header_token_spans(line, trimmed_range(line));
+    let keyword = tokens.first()?;
+    if keyword.text != "routine" {
+        return None;
+    }
+    let name = tokens.get(1).map(|token| token.range.clone());
+    let modifiers = tokens
+        .iter()
+        .skip(2)
+        .filter(|token| rule_application_surface(token.text).is_some())
+        .map(|token| token.range.clone())
+        .collect::<Vec<_>>();
+    Some(RuleRoutineBlockHeaderSurfaceSpans {
+        keyword: keyword.range.clone(),
+        name,
+        modifiers,
+    })
+}
+
 pub fn rule_statement_block_surface(
     line: &str,
     parent_is_statement_block: bool,
@@ -1165,6 +1194,20 @@ pub enum RuleLineSurfaceSpans {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RuleSemanticSurfaceKind {
+    Direction,
+    Keyword,
+    Object,
+    Mark,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RuleSemanticSurfaceSpan {
+    pub kind: RuleSemanticSurfaceKind,
+    pub span: Range<usize>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RuleLineSurfaceError {
     Input(InputRewriteSurfaceError),
     MissingOrientation,
@@ -1251,6 +1294,173 @@ pub fn rule_line_surface_spans(line: &str) -> Result<RuleLineSurfaceSpans, RuleL
         orientation: orientation.range.clone(),
         rewrite,
     })
+}
+
+pub fn rule_line_semantic_surface_spans(
+    line: &str,
+) -> Result<Vec<RuleSemanticSurfaceSpan>, RuleLineSurfaceError> {
+    let mut spans = Vec::new();
+    match rule_line_surface_spans(line)? {
+        RuleLineSurfaceSpans::StandardStep { .. } => {}
+        RuleLineSurfaceSpans::InputRewrite { surface, .. } => {
+            add_rule_rewrite_semantic_surface_spans(line, surface.rewrite, &mut spans);
+        }
+        RuleLineSurfaceSpans::NeutralRewrite { rewrite, .. }
+        | RuleLineSurfaceSpans::OrientedRewrite { rewrite, .. } => {
+            add_rule_rewrite_semantic_surface_spans(line, rewrite, &mut spans);
+        }
+    }
+    Ok(spans)
+}
+
+fn add_rule_rewrite_semantic_surface_spans(
+    line: &str,
+    rewrite: Range<usize>,
+    spans: &mut Vec<RuleSemanticSurfaceSpan>,
+) {
+    for cell in bracket_content_spans(line, rewrite) {
+        let Ok(tokens) = cell_token_spans(line, cell) else {
+            continue;
+        };
+        for token in tokens {
+            add_rule_cell_token_semantic_surface_spans(line, token, spans);
+        }
+    }
+}
+
+fn bracket_content_spans(line: &str, range: Range<usize>) -> Vec<Range<usize>> {
+    let mut spans = Vec::new();
+    let mut open = None::<usize>;
+    for (offset, ch) in line[range.clone()].char_indices() {
+        let index = range.start + offset;
+        match ch {
+            '[' if open.is_none() => open = Some(index + ch.len_utf8()),
+            ']' => {
+                if let Some(start) = open.take() {
+                    spans.push(start..index);
+                }
+            }
+            _ => {}
+        }
+    }
+    spans
+}
+
+fn cell_token_spans(line: &str, range: Range<usize>) -> Result<Vec<Range<usize>>, CellTokenError> {
+    let mut spans = Vec::new();
+    let mut token_start = None::<usize>;
+    let mut brace_depth = 0_u16;
+    let mut paren_depth = 0_u16;
+    for (offset, ch) in line[range.clone()].char_indices() {
+        let index = range.start + offset;
+        match ch {
+            ch if ch.is_whitespace() && brace_depth == 0 && paren_depth == 0 => {
+                if let Some(start) = token_start.take() {
+                    spans.push(start..index);
+                }
+            }
+            '{' => {
+                token_start.get_or_insert(index);
+                brace_depth += 1;
+            }
+            '}' => {
+                if brace_depth == 0 {
+                    return Err(CellTokenError::UnmatchedCloseBrace);
+                }
+                token_start.get_or_insert(index);
+                brace_depth -= 1;
+            }
+            '(' => {
+                token_start.get_or_insert(index);
+                paren_depth += 1;
+            }
+            ')' => {
+                if paren_depth == 0 {
+                    return Err(CellTokenError::UnmatchedCloseParen);
+                }
+                token_start.get_or_insert(index);
+                paren_depth -= 1;
+            }
+            _ => {
+                token_start.get_or_insert(index);
+            }
+        }
+    }
+    if brace_depth != 0 {
+        return Err(CellTokenError::MissingCloseBrace);
+    }
+    if paren_depth != 0 {
+        return Err(CellTokenError::MissingCloseParen);
+    }
+    if let Some(start) = token_start {
+        spans.push(start..range.end);
+    }
+    Ok(spans)
+}
+
+fn add_rule_cell_token_semantic_surface_spans(
+    line: &str,
+    token: Range<usize>,
+    spans: &mut Vec<RuleSemanticSurfaceSpan>,
+) {
+    let text = &line[token.clone()];
+    if text == "|" {
+        return;
+    }
+    if text == "no" {
+        spans.push(RuleSemanticSurfaceSpan {
+            kind: RuleSemanticSurfaceKind::Keyword,
+            span: token,
+        });
+        return;
+    }
+    if mark_sugar_kind(text) == Some(MarkSugarKind::Movement) {
+        spans.push(RuleSemanticSurfaceSpan {
+            kind: RuleSemanticSurfaceKind::Direction,
+            span: token,
+        });
+        return;
+    }
+    let mark_start = text.find('{').map(|offset| token.start + offset);
+    let selector_end = mark_start.unwrap_or(token.end);
+    if selector_end > token.start {
+        spans.push(RuleSemanticSurfaceSpan {
+            kind: RuleSemanticSurfaceKind::Object,
+            span: token.start..selector_end,
+        });
+    }
+    if let Some(open) = mark_start
+        && line[token.clone()].ends_with('}')
+    {
+        add_rule_mark_block_semantic_surface_spans(line, open + 1..token.end - 1, spans);
+    }
+}
+
+fn add_rule_mark_block_semantic_surface_spans(
+    line: &str,
+    range: Range<usize>,
+    spans: &mut Vec<RuleSemanticSurfaceSpan>,
+) {
+    let Ok(tokens) = cell_token_spans(line, range) else {
+        return;
+    };
+    for token in tokens {
+        let text = &line[token.clone()];
+        if text == "no" {
+            spans.push(RuleSemanticSurfaceSpan {
+                kind: RuleSemanticSurfaceKind::Keyword,
+                span: token,
+            });
+            continue;
+        }
+        let end = text
+            .find('=')
+            .map_or(token.end, |offset| token.start + offset);
+        spans.push(RuleSemanticSurfaceSpan {
+            kind: RuleSemanticSurfaceKind::Mark,
+            span: token.start..end,
+        });
+    }
 }
 
 fn split_rule_application_prefix_spans(
@@ -1840,6 +2050,17 @@ mod tests {
             rule_statement_block_surface("routine slide once {", false),
             Some(RuleStatementBlockSurface::Routine)
         );
+        let routine_spans = rule_routine_block_header_surface_spans("routine slide once {")
+            .expect("routine header spans");
+        assert_eq!(routine_spans.keyword, 0.."routine".len());
+        assert_eq!(
+            routine_spans.name,
+            Some("routine ".len().."routine slide".len())
+        );
+        assert_eq!(
+            routine_spans.modifiers,
+            vec!["routine slide ".len().."routine slide once".len()]
+        );
         assert_eq!(
             rule_statement_block_surface("if true {", true),
             Some(RuleStatementBlockSurface::Nested)
@@ -2096,6 +2317,20 @@ mod tests {
             split_cell_tokens("Player{> no flag} no Wall").unwrap(),
             vec!["Player{> no flag}", "no", "Wall"]
         );
+    }
+
+    #[test]
+    fn rule_semantic_surface_splits_compact_selector_marks() {
+        let line = "[ > Player{mark} ] -> [ Player ]";
+        let spans = rule_line_semantic_surface_spans(line).unwrap();
+        let projected = spans
+            .iter()
+            .map(|span| (span.kind, &line[span.span.clone()]))
+            .collect::<Vec<_>>();
+
+        assert!(projected.contains(&(RuleSemanticSurfaceKind::Direction, ">")));
+        assert!(projected.contains(&(RuleSemanticSurfaceKind::Object, "Player")));
+        assert!(projected.contains(&(RuleSemanticSurfaceKind::Mark, "mark")));
     }
 
     #[test]

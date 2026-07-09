@@ -4,8 +4,8 @@ use crate::SourceOutlineItem;
 use crate::semantic::{SemanticKind, SemanticToken};
 use crate::source_outline::source_outline_from_document;
 use crate::{
-    SurfaceAsciiRange, SurfaceDocument, SurfaceHighlightRanges, SurfaceVisualAsciiColorRange,
-    SurfaceVisualNamedColorRange,
+    SourceSpan, SurfaceAsciiRange, SurfaceDocument, SurfaceHighlightRanges,
+    SurfaceVisualAsciiColorRange, SurfaceVisualNamedColorRange,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -157,6 +157,18 @@ fn highlight_html(source: &str, document: &SurfaceDocument) -> String {
             continue;
         }
 
+        if let Some(range) =
+            visual_separator_range_starting_at(&highlight_ranges.visual_separator_ranges, index)
+        {
+            push_span(
+                &mut out,
+                HighlightKind::Operator,
+                &source[range.start..range.end],
+            );
+            skip_until(&mut chars, range.end);
+            continue;
+        }
+
         if let Some(end) = highlight_ranges.raw_range_starting_at(index) {
             if let Some(next_start) =
                 next_raw_embedded_highlight_start(index, end, highlight_ranges)
@@ -213,10 +225,12 @@ fn highlight_html(source: &str, document: &SurfaceDocument) -> String {
                 }
             }
             let token = &source[index..end];
-            let kind = semantic_kind_at(&semantic_ranges, index, end)
-                .and_then(highlight_kind_for_semantic)
-                .unwrap_or(HighlightKind::String);
-            push_span(&mut out, kind, token);
+            if !push_quoted_semantic_inner_span(&mut out, token, index, quote, &semantic_ranges) {
+                let kind = semantic_kind_at(&semantic_ranges, index, end)
+                    .and_then(highlight_kind_for_semantic)
+                    .unwrap_or(HighlightKind::String);
+                push_span(&mut out, kind, token);
+            }
             continue;
         }
 
@@ -227,13 +241,19 @@ fn highlight_html(source: &str, document: &SurfaceDocument) -> String {
         }
 
         if is_number_start(source, index, ch) {
-            let end = consume_while(source, index, |value| {
+            let lexical_end = consume_while(source, index, |value| {
                 value.is_ascii_digit() || matches!(value, '.' | '_' | '-')
             });
+            let (end, kind) = semantic_token_starting_at(&semantic_ranges, index)
+                .and_then(|token| {
+                    (token.kind == SemanticKind::Number && token.end > lexical_end)
+                        .then_some((token.end, HighlightKind::Number))
+                })
+                .unwrap_or((lexical_end, HighlightKind::Number));
             if highlight_ranges.is_plain_range(index, end) {
                 escape_html_into(&mut out, &source[index..end]);
             } else {
-                push_span(&mut out, HighlightKind::Number, &source[index..end]);
+                push_span(&mut out, kind, &source[index..end]);
             }
             skip_until(&mut chars, end);
             continue;
@@ -507,6 +527,14 @@ fn semantic_kind_at(ranges: &[SemanticToken], start: usize, end: usize) -> Optio
         .map(|range| range.kind)
 }
 
+fn semantic_token_starting_at(ranges: &[SemanticToken], start: usize) -> Option<SemanticToken> {
+    ranges
+        .iter()
+        .rev()
+        .find(|range| range.start == start)
+        .copied()
+}
+
 fn highlight_kind_for_semantic(kind: SemanticKind) -> Option<HighlightKind> {
     match kind {
         SemanticKind::Keyword => Some(HighlightKind::Keyword),
@@ -525,9 +553,37 @@ fn highlight_kind_for_semantic(kind: SemanticKind) -> Option<HighlightKind> {
         SemanticKind::Theme => Some(HighlightKind::Theme),
         SemanticKind::Asset => Some(HighlightKind::Asset),
         SemanticKind::Setting => Some(HighlightKind::Keyword),
+        SemanticKind::Color => Some(HighlightKind::Color),
         SemanticKind::Number => Some(HighlightKind::Number),
         SemanticKind::String => Some(HighlightKind::String),
     }
+}
+
+fn push_quoted_semantic_inner_span(
+    out: &mut String,
+    token: &str,
+    token_start: usize,
+    quote: char,
+    semantic_ranges: &[SemanticToken],
+) -> bool {
+    let quote_len = quote.len_utf8();
+    if token.len() < quote_len * 2 || !token.starts_with(quote) || !token.ends_with(quote) {
+        return false;
+    }
+    let inner_start = token_start + quote_len;
+    let inner_end = token_start + token.len() - quote_len;
+    let Some(kind) = semantic_kind_at(semantic_ranges, inner_start, inner_end)
+        .and_then(highlight_kind_for_semantic)
+    else {
+        return false;
+    };
+    if kind == HighlightKind::String {
+        return false;
+    }
+    escape_html_into(out, &token[..quote_len]);
+    push_span(out, kind, &token[quote_len..token.len() - quote_len]);
+    escape_html_into(out, &token[token.len() - quote_len..]);
+    true
 }
 
 fn visual_ascii_color_range_starting_at(
@@ -542,6 +598,10 @@ fn visual_named_color_range_starting_at(
     start: usize,
 ) -> Option<&SurfaceVisualNamedColorRange> {
     ranges.iter().find(|range| range.span.start == start)
+}
+
+fn visual_separator_range_starting_at(ranges: &[SourceSpan], start: usize) -> Option<&SourceSpan> {
+    ranges.iter().find(|range| range.start == start)
 }
 
 fn level_ascii_range_starting_at(
@@ -571,6 +631,12 @@ fn next_raw_embedded_highlight_start(
                 .visual_named_color_ranges
                 .iter()
                 .map(|range| range.span.start),
+        )
+        .chain(
+            ranges
+                .visual_separator_ranges
+                .iter()
+                .map(|range| range.start),
         )
         .filter(|start| *start >= raw_start && *start < raw_end)
         .min()
@@ -920,7 +986,35 @@ level "start" {
 
     #[test]
     fn teneten_group_rhs_flows_from_surface_document_to_highlight_html() {
-        let source = include_str!("../../../games/TPGJ6/TENETEN.puzzle");
+        let source = r#"
+title = group_rhs_highlight
+
+puzzle board {
+tags {
+D = F B
+}
+layers {
+You:D Crate Ball Wall Fly Headlong TimeMachine:D
+}
+groups {
+player = You:D
+object = player Crate Ball Wall Fly Headlong TimeMachine:D
+}
+rules {
+}
+on_level_start {
+}
+levels {
+legend {
+. = empty
+Y = You:F
+}
+level "start" {
+.
+}
+}
+}
+"#;
         crate::parse_game2d(source).unwrap();
         let document = crate::parse_surface_document(source);
         let tokens = crate::surface_document_semantic_tokens(&document);
@@ -989,6 +1083,219 @@ level "start" {
                 "missing highlighted structural keyword {keyword}"
             );
         }
+    }
+
+    #[test]
+    fn renders_authoring_schema_surface_roles_from_universal_nodes() {
+        let source = r##"
+title = universal_node_highlight
+
+theme {
+preset = "clean"
+background_color = #112233
+}
+
+render {
+tween_duration = 90ms
+tween {
+duration = 120ms
+}
+}
+
+sounds {
+sfx clear { seed = 17551700; type = puzzlescript }
+}
+
+input_buffer {
+queue_during_wait = false
+}
+
+assets {
+"game.css"
+}
+
+puzzle board {
+tags {
+D = F
+}
+layers {
+Ink:D
+}
+sprites {
+Ink:F
+colors #fff
+shape __ps_shape_Ink_F
+0
+}
+rules {
+}
+levels {
+legend {
+. = empty
+I = Ink:F
+}
+level "start" {
+I
+}
+}
+render {
+cell_size = 64
+grid {
+type = "all_cells"
+}
+}
+}
+
+puzzle3 board3 {
+render {
+shade = true
+camera {
+yaw = 90
+interactive_look = true
+}
+grid {
+type = "occupied_cells"
+}
+pixelate {
+enabled = true
+scale = 4
+smoothing = false
+}
+}
+}
+"##;
+        let highlighted = highlight_source(source);
+
+        for keyword in [
+            "theme",
+            "tween",
+            "sounds",
+            "sfx",
+            "input_buffer",
+            "assets",
+            "render",
+            "grid",
+            "preset",
+            "background_color",
+            "tween_duration",
+            "duration",
+            "seed",
+            "type",
+            "queue_during_wait",
+            "cell_size",
+            "type",
+            "shade",
+            "camera",
+            "yaw",
+            "interactive_look",
+            "pixelate",
+            "enabled",
+            "scale",
+            "smoothing",
+        ] {
+            assert!(
+                highlighted
+                    .html
+                    .contains(&format!("<span class=\"syntax-keyword\">{keyword}</span>")),
+                "missing schema-projected keyword/setting highlight for {keyword}"
+            );
+        }
+
+        for (class, text) in [
+            ("syntax-theme", "clean"),
+            ("syntax-asset", "clear"),
+            ("syntax-string", "puzzlescript"),
+            ("syntax-object", "Ink"),
+            ("syntax-group", "F"),
+            ("syntax-asset", "__ps_shape_Ink_F"),
+            ("syntax-literal", "false"),
+            ("syntax-literal", "all_cells"),
+            ("syntax-literal", "occupied_cells"),
+            ("syntax-literal", "true"),
+            ("syntax-number", "90ms"),
+            ("syntax-number", "120ms"),
+            ("syntax-number", "17551700"),
+            ("syntax-number", "90"),
+            ("syntax-number", "4"),
+            ("syntax-number", "64"),
+        ] {
+            assert!(
+                highlighted
+                    .html
+                    .contains(&format!("<span class=\"{class}\">{text}</span>")),
+                "missing schema-projected {class} highlight for {text}"
+            );
+        }
+        assert!(
+            highlighted
+                .html
+                .contains("<span class=\"syntax-string\">&quot;game.css&quot;</span>")
+        );
+        assert!(
+            highlighted
+                .html
+                .contains("syntax-color\" style=\"--syntax-color-token: #112233\">#112233")
+        );
+        assert!(
+            highlighted
+                .html
+                .contains("syntax-color\" style=\"--syntax-color-token: #fff\">#fff")
+        );
+    }
+
+    #[test]
+    fn renders_parser_owned_source_tree_headers_from_universal_blocks() {
+        let highlighted = highlight_source(
+            r#"
+puzzle board {
+tags {
+N = 0
+}
+layers {
+Count:N
+Moment:directions
+}
+sprites {
+Count:0
+transparent
+Moment:directions
+transparent
+}
+rules {
+routine BallPush once {
+[ Count:0 ] -> [ Count:0 ]
+}
+}
+levels {
+legend {
+. = empty
+C = Count:0
+}
+level "start"
+C
+}
+}
+"#,
+        );
+
+        assert!(
+            highlighted.html.contains(
+                "<span class=\"syntax-keyword\">routine</span> <span class=\"syntax-effect\">BallPush</span> <span class=\"syntax-keyword\">once</span>"
+            ),
+            "routine header spans must come from the parser-owned source-tree header surface"
+        );
+        assert!(
+            highlighted.html.contains(
+                "<span class=\"syntax-asset\">Count</span><span class=\"syntax-operator\">:</span><span class=\"syntax-group\">0</span>"
+            ),
+            "visual selector tags must be projected from selector structure, including digit-start values"
+        );
+        assert!(
+            highlighted.html.contains(
+                "<span class=\"syntax-asset\">Moment</span><span class=\"syntax-operator\">:</span><span class=\"syntax-group\">directions</span>"
+            ),
+            "visual selector tags must use the same selector-part path for named tag sets"
+        );
     }
 
     #[test]
@@ -1114,6 +1421,17 @@ sprites {
 Box {
 #fff #000
 01
+>
+10
+}
+
+sprite {
+selector = Box
+colors = #123456 #abcdef
+shape =
+01
+>
+10
 }
 }
 rules {
@@ -1141,11 +1459,23 @@ B
         assert!(highlighted.html.contains(
             "syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #000\">1</span>"
         ));
+        assert!(highlighted.html.contains(
+            "syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #123456\">0</span>"
+        ));
+        assert!(highlighted.html.contains(
+            "syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #abcdef\">1</span>"
+        ));
+        assert!(
+            highlighted
+                .html
+                .contains("<span class=\"syntax-operator\">&gt;</span>")
+        );
     }
 
     #[test]
     fn renders_hex_colors_independently_of_semantic_types() {
-        let highlighted = highlight_source("theme clean {\nbackground_color = #112233\n}\n");
+        let highlighted =
+            highlight_source("theme {\npreset = \"clean\"\nbackground_color = #112233\n}\n");
 
         assert!(
             highlighted

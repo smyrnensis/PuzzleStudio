@@ -961,6 +961,7 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   color: var(--ink);
   font-weight: 600;
   text-align: left;
+  user-select: none;
 }
 
 .tree-row:hover {

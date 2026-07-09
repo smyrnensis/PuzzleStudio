@@ -440,53 +440,136 @@ fn parse_puzzle_render_block(
     lines: &[String],
     start: usize,
     render: &mut PuzzleRenderDef,
+    animation: &mut AnimationDef,
 ) -> Result<usize, DiagnosticReport> {
+    let (node, next_i) = authoring_grammar::parse_placed_authoring_node(
+        lines,
+        start,
+        authoring_grammar::AuthoringKind::Root,
+        "render block missing closing brace",
+    )?;
+    if node.kind != authoring_grammar::AuthoringKind::PuzzleRenderConfig {
+        return Err(parse_error(&lines[start], "render header must be: render"));
+    }
     let mut parsed = render.clone();
-    let mut i = start + 1;
-    while i < lines.len() && !is_block_close_line(&lines[i]) {
-        let line = &lines[i];
-        let tokens = split_header_tokens(line);
-        match tokens.as_slice() {
-            [] => i += 1,
-            [name] if *name == PUZZLE_RENDER_BLOCK_OPTIONS[0] => {
-                i = parse_puzzle_render_grid_block(lines, i, &mut parsed.grid)?;
+    let mut parsed_animation = animation.clone();
+    for definition in &node.definition_rows {
+        match definition.key.as_str() {
+            "cell_size" => {
+                if definition.op != Some(authoring_grammar::AuthoringDefinitionOp::Equals) {
+                    return Err(parse_error(
+                        &definition.source_line,
+                        "cell_size directive must be: cell_size = <pixels>",
+                    ));
+                }
+                let Some(value) = definition.single_value() else {
+                    return Err(parse_error(
+                        &definition.source_line,
+                        "cell_size directive must be: cell_size = <pixels>",
+                    ));
+                };
+                parsed.cell_size = Some(parse_puzzle_render_cell_size(value, &definition.source_line)?);
             }
-            [name, options @ ..] if *name == PUZZLE_RENDER_BLOCK_OPTIONS[0] => {
-                parse_puzzle_render_grid_options(options, line, &mut parsed.grid)?;
-                i += 1;
+            "tween_duration" => {
+                if definition.op != Some(authoring_grammar::AuthoringDefinitionOp::Equals) {
+                    return Err(parse_error(
+                        &definition.source_line,
+                        "tween_duration must be: tween_duration = <duration>",
+                    ));
+                }
+                parsed_animation.tween.enabled = true;
+                apply_tween_duration_definition(definition, &mut parsed_animation.tween)?;
             }
-            [name, "=", value] if *name == PUZZLE_RENDER_BLOCK_OPTIONS[1] => {
-                parsed.cell_size = Some(parse_puzzle_render_cell_size(value, line)?);
-                i += 1;
-            }
-            [name, ..] if *name == PUZZLE_RENDER_BLOCK_OPTIONS[1] => {
+            other => {
                 return Err(parse_error(
-                    line,
-                    "cell_size directive must be: cell_size = <pixels>",
-                ));
-            }
-            [other, ..] => {
-                return Err(parse_error(
-                    line,
-                    &format!("unknown render directive {other}"),
+                    &definition.source_line,
+                    &format!("unknown render setting {other}"),
                 ));
             }
         }
     }
-    if i >= lines.len() {
-        return Err(parse_error(
-            &lines[start],
-            "render block missing closing brace",
-        ));
+    for child in &node.children {
+        match child.kind {
+            authoring_grammar::AuthoringKind::PuzzleRenderGridConfig => {
+                apply_puzzle_render_grid_node(child, &mut parsed.grid)?;
+            }
+            authoring_grammar::AuthoringKind::TweenConfig => {
+                parsed_animation.tween.enabled = true;
+                apply_animation_tween_node(child, &mut parsed_animation.tween)?;
+            }
+            _ => {
+                return Err(parse_error(
+                    &child.source_line,
+                    &format!("unknown render directive {}", child.surface),
+                ));
+            }
+        }
     }
     *render = parsed;
-    Ok(i + 1)
+    *animation = parsed_animation;
+    Ok(next_i)
 }
 
-pub(crate) const PUZZLE_RENDER_BLOCK_OPTIONS: &[&str] = &["grid", "cell_size"];
-pub(crate) const PUZZLE_RENDER_GRID_OPTIONS: &[&str] = &["occupied_cells", "all_cells"];
-pub(crate) const ANIMATION_BLOCK_OPTIONS: &[&str] = &["tween"];
-pub(crate) const ANIMATION_TWEEN_OPTIONS: &[&str] = &["duration"];
+fn apply_puzzle_render_grid_node(
+    node: &authoring_grammar::AuthoringNode,
+    grid: &mut PuzzleGridRenderDef,
+) -> Result<(), DiagnosticReport> {
+    for definition in &node.definition_rows {
+        match definition.key.as_str() {
+            "type" => {
+                if definition.op != Some(authoring_grammar::AuthoringDefinitionOp::Equals) {
+                    return Err(parse_error(
+                        &definition.source_line,
+                        "grid type directive must be: type = \"occupied_cells\" or type = \"all_cells\"",
+                    ));
+                }
+                let Some(value) = definition.single_value() else {
+                    return Err(parse_error(
+                        &definition.source_line,
+                        "grid type directive must be: type = \"occupied_cells\" or type = \"all_cells\"",
+                    ));
+                };
+                apply_puzzle_render_grid_type(value, &definition.source_line, grid)?;
+            }
+            other => {
+                return Err(parse_error(
+                    &definition.source_line,
+                    &format!("unknown grid setting {other}"),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn apply_puzzle_render_grid_type(
+    value: &str,
+    line: &str,
+    grid: &mut PuzzleGridRenderDef,
+) -> Result<(), DiagnosticReport> {
+    let spec = authoring_grammar::authoring_definition_spec(
+        authoring_grammar::AuthoringKind::PuzzleRenderGridConfig,
+        "type",
+    )
+    .expect("grid type definition exists");
+    match authoring_grammar::definition_value_literal(spec, value, line)? {
+        "occupied_cells" => {
+            grid.occupied_cells = true;
+            grid.all_cells = false;
+        }
+        "all_cells" => {
+            grid.occupied_cells = false;
+            grid.all_cells = true;
+        }
+        other => {
+            return Err(parse_error(
+                line,
+                &format!("unknown grid render type {other}"),
+            ));
+        }
+    }
+    Ok(())
+}
 
 fn parse_puzzle_render_cell_size(value: &str, line: &str) -> Result<u16, DiagnosticReport> {
     let size = value
@@ -501,119 +584,96 @@ fn parse_puzzle_render_cell_size(value: &str, line: &str) -> Result<u16, Diagnos
     Ok(size)
 }
 
-fn parse_animation_block(
+fn parse_render_animation_block(
     lines: &[String],
     start: usize,
     animation: &mut AnimationDef,
 ) -> Result<usize, DiagnosticReport> {
-    let header = split_header_tokens(&lines[start]);
-    if !matches!(header.as_slice(), ["animation"]) {
-        return Err(parse_error(
-            &lines[start],
-            "animation header must be: animation",
-        ));
+    let (node, next_i) = authoring_grammar::parse_placed_authoring_node(
+        lines,
+        start,
+        authoring_grammar::AuthoringKind::Root,
+        "render block missing closing brace",
+    )?;
+    if node.kind != authoring_grammar::AuthoringKind::PuzzleRenderConfig {
+        return Err(parse_error(&lines[start], "render header must be: render"));
     }
-
     let mut parsed = animation.clone();
-    let mut i = start + 1;
-    while i < lines.len() && !is_block_close_line(&lines[i]) {
-        let line = &lines[i];
-        let tokens = split_header_tokens(line);
-        match tokens.as_slice() {
-            [] => i += 1,
-            [name] if *name == ANIMATION_BLOCK_OPTIONS[0] => {
-                parsed.tween.enabled = true;
-                if lines
-                    .get(i + 1)
-                    .is_some_and(|next| is_block_close_line(next))
-                {
-                    i += 1;
-                } else {
-                    i = parse_animation_tween_block(lines, i, &mut parsed.tween)?;
+    for definition in &node.definition_rows {
+        match definition.key.as_str() {
+            "tween_duration" => {
+                if definition.op != Some(authoring_grammar::AuthoringDefinitionOp::Equals) {
+                    return Err(parse_error(
+                        &definition.source_line,
+                        "tween_duration must be: tween_duration = <duration>",
+                    ));
                 }
-            }
-            [name, options @ ..] if *name == ANIMATION_BLOCK_OPTIONS[0] => {
                 parsed.tween.enabled = true;
-                parse_animation_tween_options(options, line, &mut parsed.tween)?;
-                i += 1;
+                apply_tween_duration_definition(definition, &mut parsed.tween)?;
             }
-            [other, ..] => {
+            other => {
                 return Err(parse_error(
-                    line,
-                    &format!("unknown animation directive {other}"),
+                    &definition.source_line,
+                    &format!("unknown render setting {other}"),
                 ));
             }
         }
     }
-    if i >= lines.len() {
-        return Err(parse_error(
-            &lines[start],
-            "animation block missing closing brace",
-        ));
+    for child in &node.children {
+        match child.kind {
+            authoring_grammar::AuthoringKind::TweenConfig => {
+                parsed.tween.enabled = true;
+                apply_animation_tween_node(child, &mut parsed.tween)?;
+            }
+            _ => {
+                return Err(parse_error(
+                    &child.source_line,
+                    &format!("unknown render directive {}", child.surface),
+                ));
+            }
+        }
     }
     *animation = parsed;
-    Ok(i + 1)
+    Ok(next_i)
 }
 
-fn parse_animation_tween_block(
-    lines: &[String],
-    start: usize,
-    tween: &mut TweenAnimationDef,
-) -> Result<usize, DiagnosticReport> {
-    let mut parsed = tween.clone();
-    let mut i = start + 1;
-    while i < lines.len() && !is_block_close_line(&lines[i]) {
-        let line = &lines[i];
-        let tokens = split_header_tokens(line);
-        match tokens.as_slice() {
-            [] => i += 1,
-            [name, "=", value] if *name == ANIMATION_TWEEN_OPTIONS[0] => {
-                parsed.interval_ms = parse_animation_duration_ms(value, line)?;
-                i += 1;
-            }
-            [other, ..] => {
-                return Err(parse_error(line, &format!("unknown tween setting {other}")));
-            }
-        }
-    }
-    if i >= lines.len() {
-        return Err(parse_error(
-            &lines[start],
-            "tween block missing closing brace",
-        ));
-    }
-    *tween = parsed;
-    Ok(i + 1)
-}
-
-fn parse_animation_tween_options(
-    options: &[&str],
-    line: &str,
+fn apply_animation_tween_node(
+    node: &authoring_grammar::AuthoringNode,
     tween: &mut TweenAnimationDef,
 ) -> Result<(), DiagnosticReport> {
-    if options.is_empty() {
-        return Err(parse_error(
-            line,
-            "tween directive requires at least one option",
-        ));
-    }
-    for option in options {
-        let Some((name, value)) = parse_assignment_row(option) else {
-            return Err(parse_error(
-                line,
-                "tween option must be name=value in inline form",
-            ));
-        };
-        match name {
-            name if name == ANIMATION_TWEEN_OPTIONS[0] && !value.is_empty() => {
-                tween.interval_ms = parse_animation_duration_ms(value, line)?;
+    for definition in &node.definition_rows {
+        match definition.key.as_str() {
+            "duration" => {
+                apply_tween_duration_definition(definition, tween)?;
             }
-            name if name == ANIMATION_TWEEN_OPTIONS[0] => {
-                return Err(parse_error(line, "tween duration must not be empty"));
+            other => {
+                return Err(parse_error(
+                    &definition.source_line,
+                    &format!("unknown tween setting {other}"),
+                ));
             }
-            other => return Err(parse_error(line, &format!("unknown tween setting {other}"))),
         }
     }
+    Ok(())
+}
+
+fn apply_tween_duration_definition(
+    definition: &authoring_grammar::AuthoringDefinitionRow,
+    tween: &mut TweenAnimationDef,
+) -> Result<(), DiagnosticReport> {
+    let Some(value) = definition.single_value() else {
+        return Err(parse_error(
+            &definition.source_line,
+            "tween duration must be one value",
+        ));
+    };
+    if value.is_empty() {
+        return Err(parse_error(
+            &definition.source_line,
+            "tween duration must not be empty",
+        ));
+    }
+    tween.interval_ms = parse_animation_duration_ms(value, &definition.source_line)?;
     Ok(())
 }
 
@@ -623,62 +683,6 @@ fn parse_animation_duration_ms(value: &str, line: &str) -> Result<u64, Diagnosti
         return Err(parse_error(line, "tween duration must be greater than 0"));
     }
     Ok(milliseconds)
-}
-
-fn parse_puzzle_render_grid_block(
-    lines: &[String],
-    start: usize,
-    grid: &mut PuzzleGridRenderDef,
-) -> Result<usize, DiagnosticReport> {
-    let mut parsed = grid.clone();
-    let mut i = start + 1;
-    while i < lines.len() && !is_block_close_line(&lines[i]) {
-        let line = &lines[i];
-        let tokens = split_header_tokens(line);
-        match tokens.as_slice() {
-            [] => i += 1,
-            [name] if *name == PUZZLE_RENDER_GRID_OPTIONS[0] => {
-                parsed.occupied_cells = true;
-                i += 1;
-            }
-            [name] if *name == PUZZLE_RENDER_GRID_OPTIONS[1] => {
-                parsed.all_cells = true;
-                i += 1;
-            }
-            [other, ..] => {
-                return Err(parse_error(line, &format!("unknown grid setting {other}")));
-            }
-        }
-    }
-    if i >= lines.len() {
-        return Err(parse_error(
-            &lines[start],
-            "grid block missing closing brace",
-        ));
-    }
-    *grid = parsed;
-    Ok(i + 1)
-}
-
-fn parse_puzzle_render_grid_options(
-    options: &[&str],
-    line: &str,
-    grid: &mut PuzzleGridRenderDef,
-) -> Result<(), DiagnosticReport> {
-    if options.is_empty() {
-        return Err(parse_error(
-            line,
-            "grid directive requires at least one option",
-        ));
-    }
-    for option in options {
-        match *option {
-            option if option == PUZZLE_RENDER_GRID_OPTIONS[0] => grid.occupied_cells = true,
-            option if option == PUZZLE_RENDER_GRID_OPTIONS[1] => grid.all_cells = true,
-            other => return Err(parse_error(line, &format!("unknown grid setting {other}"))),
-        }
-    }
-    Ok(())
 }
 
 fn parse_puzzle_screen_directive(
@@ -928,6 +932,7 @@ fn parse_named_level_body(
     name: String,
     header: &LevelsHeader,
 ) -> Result<(LevelBlock, usize), DiagnosticReport> {
+    let mut name_override = None::<String>;
     let mut level_lines = Vec::new();
     let mut i = start + 1;
     let mut nested_blocks = 0usize;
@@ -938,6 +943,14 @@ fn parse_named_level_body(
             }
             nested_blocks -= 1;
             level_lines.push(lines[i].clone());
+            i += 1;
+            continue;
+        }
+        if nested_blocks == 0 && let Some(parsed) = canonical_level_name_override(&lines[i])? {
+            if name_override.is_some() {
+                return Err(parse_error(&lines[i], "duplicate level name"));
+            }
+            name_override = Some(parsed);
             i += 1;
             continue;
         }
@@ -953,13 +966,65 @@ fn parse_named_level_body(
 
     Ok((
         LevelBlock {
-            name,
+            name: name_override.unwrap_or(name),
             pack: header.pack.clone(),
             puzzle: header.puzzle.clone(),
             lines: level_lines,
         },
         i + 1,
     ))
+}
+
+fn canonical_level_name_override(line: &str) -> Result<Option<String>, DiagnosticReport> {
+    let Some(row) = crate::authoring_grammar::parse_authoring_definition_row(
+        crate::authoring_grammar::AuthoringKind::LevelConfig,
+        line,
+    )?
+    else {
+        return Ok(None);
+    };
+    if row.key != "name" {
+        return Ok(None);
+    }
+    let Some(value) = row.single_value() else {
+        return Err(parse_error(line, "level name must have one value"));
+    };
+    let parsed = puzzle_authoring::parse_quoted_text(value)
+        .ok_or_else(|| parse_error(line, "level name must be a quoted string"))?;
+    Ok(Some(parsed))
+}
+
+fn braced_level_name_override_or(
+    lines: &[String],
+    start: usize,
+    fallback: String,
+) -> Result<String, DiagnosticReport> {
+    let mut name = None::<String>;
+    let mut nested_blocks = 0usize;
+    let mut i = start + 1;
+    while i < lines.len() {
+        if is_block_close_line(&lines[i]) {
+            if nested_blocks == 0 {
+                return Ok(name.unwrap_or(fallback));
+            }
+            nested_blocks -= 1;
+            i += 1;
+            continue;
+        }
+        if nested_blocks == 0 && let Some(parsed) = canonical_level_name_override(&lines[i])? {
+            if name.is_some() {
+                return Err(parse_error(&lines[i], "duplicate level name"));
+            }
+            name = Some(parsed);
+            i += 1;
+            continue;
+        }
+        if is_level_body_block(&split_header_tokens(&lines[i])) {
+            nested_blocks += 1;
+        }
+        i += 1;
+    }
+    Err(parse_error(&lines[start], "level missing closing brace"))
 }
 
 fn parse_unbraced_level_body(

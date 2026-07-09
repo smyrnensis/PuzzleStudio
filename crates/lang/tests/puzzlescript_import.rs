@@ -430,8 +430,8 @@ LEVELS
 P
 "##;
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
-    assert!(translated.contains("Background\n#9CBD0F\n\nPlayer"));
-    assert!(!translated.contains("Background\n#9CBD0F\n00000"));
+    assert!(translated.contains("selector = Background\ncolors = #9CBD0F"));
+    assert!(!translated.contains("selector = Background\ncolors = #9CBD0F\nshape ="));
     assert!(
         translated.contains("on_level_start {\nonce_all [ no Background ] -> [ Background ]\n}")
     );
@@ -499,7 +499,10 @@ P12
 
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
 
-    assert!(translated.contains("pcrate1\n#800080\n00000\n0...0\n0...0\n0...0\n00000\n\npcrate2"));
+    assert!(translated.contains(
+        "selector = pcrate1\ncolors = #800080\nshape =\n00000\n0...0\n0...0\n0...0\n00000"
+    ));
+    assert!(translated.contains("selector = pcrate2"));
     assert!(!translated.contains("00000\npcrate2"));
     parse_game(&translated).unwrap();
 }
@@ -688,9 +691,9 @@ P..
 
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
 
-    assert!(translated.contains("sfx player_move seed=111 type=puzzlescript"));
-    assert!(translated.contains("sfx undo seed=222 type=puzzlescript"));
-    assert!(translated.contains("sfx restart seed=333 type=puzzlescript"));
+    assert!(translated.contains("sfx player_move { seed = 111; type = puzzlescript }"));
+    assert!(translated.contains("sfx undo { seed = 222; type = puzzlescript }"));
+    assert!(translated.contains("sfx restart { seed = 333; type = puzzlescript }"));
     assert!(translated.contains(
         "sounds {\nmove Player -> sfx player_move\nundo -> sfx undo\nrestart -> sfx restart\n}"
     ));
@@ -1603,7 +1606,7 @@ P#
 
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
 
-    assert!(translated.contains("sounds {\nsfx sfx1 seed=26 type=puzzlescript\n}"));
+    assert!(translated.contains("sfx sfx1 { seed = 26; type = puzzlescript }"));
     assert!(translated.contains("[ Player | Wall ] -> [ Player | ] sfx sfx1"));
     let parsed = parse_game(&translated).unwrap();
     assert_eq!(parsed.sounds.sfx.len(), 1);

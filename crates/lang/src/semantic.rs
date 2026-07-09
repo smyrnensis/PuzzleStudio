@@ -16,6 +16,7 @@ pub enum SemanticKind {
     Theme,
     Asset,
     Setting,
+    Color,
     Number,
     String,
 }
@@ -64,13 +65,16 @@ pub(crate) enum SemanticCompletionSlot {
     Shapes,
     Themes,
     Colors,
+    AuthoringRows(crate::authoring_grammar::AuthoringKind),
+    AuthoringChildren(crate::authoring_grammar::AuthoringKind),
+    AuthoringContentRows(crate::authoring_grammar::AuthoringContentKind),
     Settings(SettingCompletionSet),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SettingCompletionSet {
     Static(&'static [&'static str]),
-    Theme,
+    AuthoringDefinitions(crate::authoring_grammar::AuthoringKind),
 }
 
 pub fn semantic_tokens(source: &str) -> Vec<SemanticToken> {
@@ -86,7 +90,7 @@ mod tests {
         let source = r#"
 title = semantic_scope
 sounds {
-sfx clear seed=clear01 type=jump
+sfx clear { seed = clear01; type = jump }
 }
 scene playing {
 rules {
@@ -108,6 +112,73 @@ win -> sfx clear
                 && token.end == scene_sfx_start + "sfx".len()
                 && token.kind == SemanticKind::Effect
         }));
+    }
+
+    #[test]
+    fn classifies_authoring_schema_surface_tokens() {
+        let source = r#"
+title = authoring_schema_semantics
+theme = "clean"
+render {
+tween_duration = 90ms
+tween {
+duration = 120ms
+}
+}
+sounds {
+sfx clear {
+seed = clear01
+type = jump
+}
+music loop {
+seed = loop01
+bars = 4
+}
+}
+"#;
+        let tokens = semantic_tokens(source);
+
+        let title_start = source.find("title").unwrap();
+        let title_value_start = source.find("authoring_schema_semantics").unwrap();
+        let clean_start = source.find("clean").unwrap();
+        let tween_duration_start = source.find("tween_duration").unwrap();
+        let ms90_start = source.find("90ms").unwrap();
+        let sfx_start = source.find("sfx clear").unwrap();
+        let clear_start = sfx_start + "sfx ".len();
+        let seed_start = source.find("seed = clear01").unwrap();
+        let clear_seed_start = source.find("clear01").unwrap();
+        let bars_start = source.find("bars = 4").unwrap();
+        let four_start = source.find("4").unwrap();
+
+        assert_semantic_token(source, &tokens, title_start, "title", SemanticKind::Keyword);
+        assert_semantic_token(
+            source,
+            &tokens,
+            title_value_start,
+            "authoring_schema_semantics",
+            SemanticKind::String,
+        );
+        assert_semantic_token(source, &tokens, clean_start, "clean", SemanticKind::Theme);
+        assert_semantic_token(
+            source,
+            &tokens,
+            tween_duration_start,
+            "tween_duration",
+            SemanticKind::Setting,
+        );
+        assert_semantic_token(source, &tokens, ms90_start, "90ms", SemanticKind::Number);
+        assert_semantic_token(source, &tokens, sfx_start, "sfx", SemanticKind::Keyword);
+        assert_semantic_token(source, &tokens, clear_start, "clear", SemanticKind::Asset);
+        assert_semantic_token(source, &tokens, seed_start, "seed", SemanticKind::Setting);
+        assert_semantic_token(
+            source,
+            &tokens,
+            clear_seed_start,
+            "clear01",
+            SemanticKind::String,
+        );
+        assert_semantic_token(source, &tokens, bars_start, "bars", SemanticKind::Setting);
+        assert_semantic_token(source, &tokens, four_start, "4", SemanticKind::Number);
     }
 
     #[test]
@@ -421,7 +492,7 @@ facing = left right
     fn classifies_theme_state_and_condition_contexts() {
         let source = r#"
 title = semantic_contexts
-theme clean
+theme = "clean"
 var count = 1
 
 scene playing {
@@ -430,7 +501,7 @@ if board.win_conditions -> goto title
 }
 "#;
         let tokens = semantic_tokens(source);
-        let theme_start = source.find("clean").unwrap();
+        let theme_start = source.find("\"clean\"").unwrap() + 1;
         let count_start = source.find("count").unwrap();
         let win_start = source.find("win_conditions").unwrap();
         let path_win_start = source.rfind("win_conditions").unwrap();
@@ -455,6 +526,115 @@ if board.win_conditions -> goto title
                 && token.end == path_win_start + "win_conditions".len()
                 && token.kind == SemanticKind::Condition
         }));
+    }
+
+    #[test]
+    fn classifies_authoring_schema_projection_tokens() {
+        let source = r##"
+title = authoring_schema_semantics
+
+theme {
+preset = "clean"
+background_color = #112233
+}
+
+sounds {
+sfx clear {
+seed = clear01
+volume = 0.5
+}
+undo -> sfx clear
+}
+
+input_buffer {
+queue_during_wait = false
+}
+
+assets {
+"game.css"
+}
+
+puzzle board {
+layers {
+actor = Player
+}
+render {
+cell_size = 64
+grid {
+type = "all_cells"
+}
+}
+}
+
+puzzle3 board3 {
+render {
+shade = true
+camera {
+yaw = 90
+interactive_look = true
+}
+grid {
+type = "occupied_cells"
+}
+pixelate {
+enabled = true
+scale = 4
+smoothing = false
+}
+}
+}
+"##;
+        let tokens = semantic_tokens(source);
+        let has = |needle: &str, kind: SemanticKind| {
+            let start = source.find(needle).unwrap();
+            tokens.iter().any(|token| {
+                token.start == start && token.end == start + needle.len() && token.kind == kind
+            })
+        };
+
+        assert!(has("preset", SemanticKind::Setting));
+        assert!(has("clean", SemanticKind::Theme));
+        assert!(has("sfx", SemanticKind::Keyword));
+        assert!(has("clear", SemanticKind::Asset));
+        let undo_start = source.find("undo ->").unwrap();
+        let undo_sfx_start = source.rfind("sfx clear").unwrap();
+        let undo_clear_start = undo_sfx_start + "sfx ".len();
+        assert_semantic_token(source, &tokens, undo_start, "undo", SemanticKind::Keyword);
+        assert_semantic_token(
+            source,
+            &tokens,
+            undo_sfx_start,
+            "sfx",
+            SemanticKind::Keyword,
+        );
+        assert_semantic_token(
+            source,
+            &tokens,
+            undo_clear_start,
+            "clear",
+            SemanticKind::Asset,
+        );
+        assert!(has("seed", SemanticKind::Setting));
+        assert!(has("clear01", SemanticKind::String));
+        assert!(has("volume", SemanticKind::Setting));
+        assert!(has("0.5", SemanticKind::Number));
+        assert!(has("queue_during_wait", SemanticKind::Setting));
+        assert!(has("false", SemanticKind::Literal));
+        assert!(has("game.css", SemanticKind::String));
+        assert!(has("cell_size", SemanticKind::Setting));
+        assert!(has("64", SemanticKind::Number));
+        assert!(has("type", SemanticKind::Setting));
+        assert!(has("all_cells", SemanticKind::Literal));
+        assert!(has("shade", SemanticKind::Setting));
+        assert!(has("true", SemanticKind::Literal));
+        assert!(has("yaw", SemanticKind::Setting));
+        assert!(has("interactive_look", SemanticKind::Setting));
+        assert!(has("occupied_cells", SemanticKind::Literal));
+        assert!(has("enabled", SemanticKind::Setting));
+        assert!(has("scale", SemanticKind::Setting));
+        assert!(has("smoothing", SemanticKind::Setting));
+        assert!(has("false", SemanticKind::Literal));
+        assert!(has("#112233", SemanticKind::Color));
     }
 
     #[test]
@@ -958,46 +1138,86 @@ level "start" {
     }
 
     #[test]
+    fn classifies_compact_rule_selector_mark_from_rule_attachment_surface() {
+        let source = r#"
+title = compact_rule_selector_mark
+
+puzzle board {
+marks {
+mark = bool
+}
+layers {
+actor = Player
+}
+rules {
+[ > Player{mark} ] -> [ Player ]
+}
+levels {
+legend {
+. = empty
+P = Player
+}
+level "start" {
+.
+}
+}
+}
+"#;
+        crate::parse_game2d(source).unwrap();
+        let tokens = semantic_tokens(source);
+        let direction_start = source.find("> Player").unwrap();
+        let player_start = source.find("Player{mark}").unwrap();
+        let mark_start = player_start + "Player{".len();
+
+        assert_semantic_token(source, &tokens, direction_start, ">", SemanticKind::Keyword);
+        assert_semantic_token(
+            source,
+            &tokens,
+            player_start,
+            "Player",
+            SemanticKind::Object,
+        );
+        assert_semantic_token(source, &tokens, mark_start, "mark", SemanticKind::Mark);
+    }
+
+    #[test]
     fn semantic_highlight_does_not_resolve_selector_identity() {
-        let source = include_str!("semantic.rs");
-        let forbidden_fragments = [
-            ["use crate::", "source"],
-            ["scan_source", "_context"],
-            ["ExpectedCompletion", "Value"],
-            ["completion", "_slots("],
-            ["completion", "_keywords_for_scope"],
-            ["COMPLETION", "_KEYWORDS"],
-            ["semantic_completion", "_context("],
-            ["semantic_builtin", "_effect_commands"],
-            ["is_completion", "_keyword("],
-            ["struct ", "LineToken"],
-            ["fn scan_", "semantic_line"],
-            ["fn scan_visual", "_semantic_line"],
-            ["fn scan_authoring", "_semantic_line"],
-            ["fn add_token", "_range"],
-            ["fn add_token", "_subrange"],
-            ["source_tokens", "_as_line_tokens"],
-            ["scene_effect", "_semantic_tokens"],
-            ["rewrite_effect", "_semantic_tokens"],
-            ["struct ", "SemanticSymbols"],
-            ["add_tag", "_definition_line"],
-            ["add_layer", "_definition_line"],
-            ["add_group", "_definition_line"],
-            ["scan_rule", "_pattern_selector_line"],
-            ["scan_layer", "_assignment_line"],
-            ["add_selector", "_symbol_token"],
-            ["SourceScope::", "Tags) => self"],
-            ["SourceScope::", "Layers) => self"],
-            ["SourceScope::", "Group) => self"],
-            ["SemanticKind::", "Selector"],
-        ];
-        for parts in forbidden_fragments {
-            let forbidden = parts.concat();
-            assert!(
-                !source.contains(&forbidden),
-                "semantic.rs must preserve parser-emitted surface tokens, not resolve selector identity via {forbidden}"
-            );
-        }
+        assert_production_source_omits_fragments(
+            "semantic.rs",
+            include_str!("semantic.rs"),
+            &[
+                &["use crate::", "source"],
+                &["scan_source", "_context"],
+                &["ExpectedCompletion", "Value"],
+                &["completion", "_slots("],
+                &["completion", "_keywords_for_scope"],
+                &["COMPLETION", "_KEYWORDS"],
+                &["semantic_completion", "_context("],
+                &["semantic_builtin", "_effect_commands"],
+                &["is_completion", "_keyword("],
+                &["struct ", "LineToken"],
+                &["fn scan_", "semantic_line"],
+                &["fn scan_visual", "_semantic_line"],
+                &["fn scan_authoring", "_semantic_line"],
+                &["fn add_token", "_range"],
+                &["fn add_token", "_subrange"],
+                &["source_tokens", "_as_line_tokens"],
+                &["scene_effect", "_semantic_tokens"],
+                &["rewrite_effect", "_semantic_tokens"],
+                &["struct ", "SemanticSymbols"],
+                &["add_tag", "_definition_line"],
+                &["add_layer", "_definition_line"],
+                &["add_group", "_definition_line"],
+                &["scan_rule", "_pattern_selector_line"],
+                &["scan_layer", "_assignment_line"],
+                &["add_selector", "_symbol_token"],
+                &["SourceScope::", "Tags) => self"],
+                &["SourceScope::", "Layers) => self"],
+                &["SourceScope::", "Group) => self"],
+                &["SemanticKind::", "Selector"],
+            ],
+            "preserve parser-emitted surface tokens",
+        );
     }
 
     #[test]
@@ -1018,6 +1238,93 @@ level "start" {
             assert!(
                 !source.contains(&forbidden),
                 "lib_surface_doc.rs must call parser-owned surface emitters, not classify authoring declarations via {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn surface_document_does_not_own_assets_content_classification() {
+        let source = include_str!("lib_surface_doc.rs");
+        for forbidden in ["\"css\"", "\"script\"", "\"file\""] {
+            assert!(
+                !source.contains(forbidden),
+                "lib_surface_doc.rs must call the content surface projector, not classify assets rows via {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn surface_completion_does_not_own_authoring_content_keywords() {
+        assert_production_source_omits_fragments(
+            "surface_completion.rs",
+            include_str!("surface_completion.rs"),
+            &[
+                &["\"", "css", "\""],
+                &["\"", "script", "\""],
+                &["\"", "file", "\""],
+                &["ASSET", "_COMPLETION", "_KEYWORDS"],
+            ],
+            "derive asset content completions from authoring schema",
+        );
+    }
+
+    #[test]
+    fn surface_completion_does_not_own_authoring_sound_children() {
+        assert_production_source_omits_fragments(
+            "surface_completion.rs",
+            include_str!("surface_completion.rs"),
+            &[
+                &["SOUNDS", "_COMPLETION", "_KEYWORDS"],
+                &["Some(SourceScope::Sounds) => SOUNDS"],
+            ],
+            "derive sounds children from authoring schema",
+        );
+    }
+
+    #[test]
+    fn authoring_catalog_does_not_own_sound_symbol_exports() {
+        assert_production_source_omits_fragments(
+            "lib_authoring_parse_catalog.rs",
+            include_str!("lib_authoring_parse_catalog.rs"),
+            &[
+                &["AuthoringKind::", "SfxSoundConfig"],
+                &["AuthoringKind::", "MusicSoundConfig"],
+                &["symbols_mut().", "sfx, &name"],
+                &["symbols_mut().", "music, &name"],
+            ],
+            "read authoring symbol exports from schema",
+        );
+    }
+
+    #[test]
+    fn completion_items_do_not_own_authoring_setting_vocabularies() {
+        assert_production_source_omits_fragments(
+            "completion.rs",
+            include_str!("completion.rs"),
+            &[
+                &["THEME", "_SETTING", "_SPECS"],
+                &["ASSET", "_COMPLETION", "_KEYWORDS"],
+                &["SOUNDS", "_COMPLETION", "_KEYWORDS"],
+            ],
+            "render schema-provided completion slots",
+        );
+    }
+
+    fn assert_production_source_omits_fragments(
+        file_name: &str,
+        source: &str,
+        forbidden_fragments: &[&[&str]],
+        required_owner: &str,
+    ) {
+        let source = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("source file has production section");
+        for parts in forbidden_fragments {
+            let forbidden = parts.concat();
+            assert!(
+                !source.contains(&forbidden),
+                "{file_name} must {required_owner}, not own {forbidden}"
             );
         }
     }

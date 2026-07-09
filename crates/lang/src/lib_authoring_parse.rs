@@ -165,7 +165,7 @@ fn parse_puzzle_definition(
     level_clear_local_frame: &mut Option<LocalFrame<ObjectId>>,
     last_level_clear_statements: &mut Option<Vec<StatementAst>>,
     last_level_clear_local_frame: &mut Option<LocalFrame<ObjectId>>,
-    display_statements: &mut Option<Vec<StatementAst>>,
+    _display_statements: &mut Option<Vec<StatementAst>>,
     render_overlays: &mut OverlayDefs,
     model_sound_triggers: &mut Vec<ModelSoundTriggerSpec>,
     model_operation_sounds: &mut Vec<ModelOperationSoundSpec>,
@@ -494,10 +494,7 @@ fn parse_puzzle_definition(
                 i = next_i;
             }
             "render" => {
-                i = parse_puzzle_render_block(lines, i, render)?;
-            }
-            "animation" => {
-                i = parse_animation_block(lines, i, animation)?;
+                i = parse_puzzle_render_block(lines, i, render, animation)?;
             }
             "sounds" => {
                 i = parse_model_sounds_block(
@@ -611,55 +608,15 @@ fn parse_puzzle_definition(
                 i = recover_after_directive_error(lines, i);
             }
             "on_display" => {
-                resolve_groups_after_layers(
-                    *layer_count,
-                    &pending_groups,
-                    &mut resolved_groups,
-                    catalog,
-                )?;
-                if tokens.len() != 1 {
-                    return Err(parse_error(line, "display hook header must be: on_display"));
-                }
-                if display_statements.is_some() {
-                    diagnostics.extend(
-                        parse_error(line, "multiple on_display blocks are not supported")
-                            .into_diagnostics(),
-                    );
-                    i = recover_after_directive_error(lines, i);
-                    continue;
-                }
-                match parse_statement_block(
-                    lines,
-                    Some(line_numbers),
-                    i + 1,
-                    &[BLOCK_CLOSE],
-                    &catalog.object_names,
-                    &catalog.object_schemas,
-                    &catalog_value_sets(catalog),
-                    &catalog.maps,
-                    &catalog.object_groups,
-                    &catalog.input_names,
-                    &catalog.variable_names,
-                    &catalog.numeric_variable_defaults,
-                    &catalog.condition_names,
-                    named_conditions,
-                    &[],
-                ) {
-                    Ok((statements, next_i)) => {
-                        validate_display_hook_statements(&statements)?;
-                        *display_statements = Some(statements);
-                        i = next_i;
-                    }
-                    Err(report) => {
-                        diagnostics.extend(report.into_diagnostics());
-                        i = recover_after_directive_error(lines, i);
-                    }
-                }
+                diagnostics.extend(
+                    parse_error(line, "`on_display` was removed").into_diagnostics(),
+                );
+                i = recover_after_directive_error(lines, i);
             }
             "display" => {
                 diagnostics.extend(parse_error(
                     line,
-                    "`display ...` syntax was removed; use @ display objects and @routine calls",
+                    "`display ...` syntax was removed",
                 ).into_diagnostics());
                 i = recover_after_directive_error(lines, i);
             }

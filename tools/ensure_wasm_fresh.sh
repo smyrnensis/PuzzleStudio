@@ -148,6 +148,30 @@ ensure_game_wasm_copies_match() {
   fi
 }
 
+ensure_static_asset_copies_match() {
+  local build_cmd="tools/sync_static_assets.sh"
+  if cmp -s \
+    crates/html_play/static/renderer.js \
+    crates/html_editor/static/renderer.js \
+    && cmp -s \
+      crates/html_play/static/renderer.css \
+      crates/html_editor/static/renderer.css; then
+    return
+  fi
+
+  echo "static: html_editor renderer copy differs; running $build_cmd" >&2
+  "$build_cmd"
+  if ! cmp -s \
+    crates/html_play/static/renderer.js \
+    crates/html_editor/static/renderer.js \
+    || ! cmp -s \
+      crates/html_play/static/renderer.css \
+      crates/html_editor/static/renderer.css; then
+    echo "static: html_editor renderer copy still differs after $build_cmd" >&2
+    exit 1
+  fi
+}
+
 workspace_sources=(
   Cargo.toml
   Cargo.lock
@@ -213,3 +237,4 @@ ensure_target_current \
   "${scene_sources[@]}"
 
 ensure_game_wasm_copies_match
+ensure_static_asset_copies_match

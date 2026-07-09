@@ -1,6 +1,7 @@
 target/
 .DS_Store
 archive/
+AI generated game/
 
 # Local tool and editor state.
 .claude/settings.local.json

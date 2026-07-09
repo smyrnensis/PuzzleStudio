@@ -533,11 +533,12 @@ fn ps_viewport_focus(
 
 fn push_theme_colors(out: &mut Vec<String>, colors: &[(String, String)]) {
     if colors.is_empty() {
-        out.push("theme puzzlescript".to_string());
+        out.push("theme = \"puzzlescript\"".to_string());
         out.push(String::new());
         return;
     }
-    out.push("theme puzzlescript {".to_string());
+    out.push("theme {".to_string());
+    out.push("  preset = \"puzzlescript\"".to_string());
     for (name, value) in colors {
         out.push(format!("  {name} = {value}"));
     }
@@ -642,7 +643,7 @@ fn push_sounds(out: &mut Vec<String>, sounds: &[PsSoundDef]) {
     out.push("sounds {".to_string());
     for sound in sounds {
         out.push(format!(
-            "  sfx {} seed={} type=puzzlescript",
+            "  sfx {} {{ seed = {}; type = puzzlescript }}",
             sound.name, sound.seed
         ));
     }
@@ -1368,7 +1369,12 @@ fn push_sprites(out: &mut Vec<String>, objects: &[PsObjectDef]) {
     if sprites.is_empty() {
         return;
     }
-    let shape_sources = ps_copy_shape_sources(objects);
+    let mut shape_sources = ps_copy_shape_sources(objects);
+    for (name, sprite) in &sprites {
+        if sprite.rotate_from.is_some() {
+            shape_sources.insert((*name).clone());
+        }
+    }
 
     out.push("sprites {".to_string());
     if !shape_sources.is_empty() {
@@ -1381,10 +1387,13 @@ fn push_sprites(out: &mut Vec<String>, objects: &[PsObjectDef]) {
             else {
                 continue;
             };
-            out.push(format!("    {} {{", ps_copy_shape_name(source)));
-            if let Some(from) = &sprite.rotate_from {
-                out.push(format!("      rotate from {from}"));
-            }
+            let shape_name = ps_copy_shape_name(source);
+            let header = if let Some(from) = &sprite.rotate_from {
+                format!("    {shape_name} rotate from {from} {{")
+            } else {
+                format!("    {shape_name} {{")
+            };
+            out.push(header);
             for row in &sprite.pattern {
                 out.push(format!("      {row}"));
             }
@@ -1395,21 +1404,22 @@ fn push_sprites(out: &mut Vec<String>, objects: &[PsObjectDef]) {
     }
     for (name, sprite) in sprites {
         let copy_shape = ps_copy_shape_for_object(name, objects, &shape_sources);
+        out.push("  sprite {".to_string());
+        out.push(format!("    selector = {name}"));
+        out.push(format!("    colors = {}", sprite.colors.join(" ")));
         if let Some(shape) = copy_shape {
-            out.push(format!("  {name}"));
-            out.push(format!("    colors {}", sprite.colors.join(" ")));
-            out.push(format!("    shape {}", ps_copy_shape_name(&shape)));
+            out.push(format!("    shape = {}", ps_copy_shape_name(&shape)));
+            out.push("  }".to_string());
             out.push(String::new());
             continue;
         }
-        out.push(format!("  {name}"));
-        if let Some(from) = &sprite.rotate_from {
-            out.push(format!("    rotate from {from}"));
+        if !sprite.pattern.is_empty() {
+            out.push("    shape =".to_string());
+            for row in &sprite.pattern {
+                out.push(format!("    {row}"));
+            }
         }
-        out.push(format!("    {}", sprite.colors.join(" ")));
-        for row in &sprite.pattern {
-            out.push(format!("    {row}"));
-        }
+        out.push("  }".to_string());
         out.push(String::new());
     }
     if matches!(out.last(), Some(line) if line.is_empty()) {

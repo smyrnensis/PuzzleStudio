@@ -701,6 +701,22 @@ fn push_ordered_rule_effect(out: &mut String, effect: &RuleEffect) {
             push_json_number(out, "milliseconds", *milliseconds);
         }
         RuleEffect::WaitAnimation => push_json_pair(out, "kind", "wait_animation"),
+        RuleEffect::EmitAnimation {
+            name,
+            component,
+            offset,
+        } => {
+            push_json_pair(out, "kind", "emit_animation");
+            out.push(',');
+            push_json_pair(out, "name", name);
+            out.push(',');
+            push_json_number(out, "component", *component as u64);
+            out.push_str(",\"offset\":{");
+            push_json_number(out, "x", offset.x as u64);
+            out.push(',');
+            push_json_number(out, "y", offset.y as u64);
+            out.push('}');
+        }
         RuleEffect::Message { text, literal } => {
             push_json_pair(out, "kind", "message");
             out.push(',');

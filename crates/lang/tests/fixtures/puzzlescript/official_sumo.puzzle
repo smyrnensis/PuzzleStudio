@@ -2,10 +2,10 @@ title = "Multiple Patterns"
 author = "increpare"
 homepage = "www.puzzlescript.net"
 
-theme puzzlescript
+theme = "puzzlescript"
 
 sounds {
-sfx sumo_move seed=48878907 type=puzzlescript
+sfx sumo_move { seed = 48878907; type = puzzlescript }
 }
 
 puzzle main {

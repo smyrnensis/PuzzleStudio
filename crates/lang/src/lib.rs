@@ -1,4 +1,5 @@
 mod ast;
+mod authoring_grammar;
 mod catalog;
 mod completion;
 mod error;
@@ -62,8 +63,10 @@ pub use loaded::{
     SceneTransitionTrigger, SceneValue, SceneVarDef, SceneVarKind, SfxSoundDef, SolverStrategy,
     SolverStrategy3, SolverStrategyDirection, SolverStrategyOf, SolverStrategyTerm,
     SolverStrategyTerm3, SolverStrategyTermOf, SoundsDef, ThemeDef, ThemeVariableDef,
-    TweenAnimationDef, ViewportModeDef, ViewportSizeDef, VisualAliasDef, VisualColorDef,
-    VisualSpriteDef, VisualSpriteKind, VisualSpriteOffset, VisualSpritePixelsPerCell, VisualsDef,
+    TriggerAnimationDef, TriggerAnimationKind, TweenAnimationDef, ViewportModeDef, ViewportSizeDef,
+    VisualAliasDef, VisualColorDef, VisualSpriteDef, VisualSpriteFit, VisualSpriteFitMode,
+    VisualSpriteKind, VisualSpriteLoopDef, VisualSpriteOffset, VisualSpritePixelsPerCell,
+    VisualSpriteSampling, VisualsDef,
 };
 
 const BLOCK_CLOSE: &str = "}";
@@ -94,11 +97,7 @@ pub use puzzle3_model::{
     SpriteRenderSettings3, ViewportFollow3, ViewportFraming3, ViewportHeight3, ViewportMode3,
     ViewportSettings3,
 };
-pub use puzzle3_parse::{
-    CAMERA_ASSIGNMENT_OPTIONS3, CAMERA_BARE_OPTIONS3, CAMERA_OPTIONS3, GRID_BARE_OPTIONS3,
-    PIXELATE_ASSIGNMENT_OPTIONS3, PIXELATE_BARE_OPTIONS3, PIXELATE_OPTIONS3, ParseError3,
-    RENDER_BARE_OPTIONS3, RENDER_BLOCK_OPTIONS3, RENDER_OPTIONS3, parse_puzzle3d,
-};
+pub use puzzle3_parse::{ParseError3, parse_puzzle3d};
 pub use puzzle3_sprite::{Sprite3, SpriteColor3, SpriteSet3, SpriteVoxels3};
 pub use puzzle3_visual_fixture::{
     VisualFixtureAnimation3, VisualFixtureExportError3, export_visual_fixture_json,

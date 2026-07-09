@@ -1,5 +1,5 @@
 sounds {
-music possesion seed=517275 bars=8 height=0.50 bpm=100 volume=0.50
+music possesion { seed = 517275; bars = 8; height = 0.50; bpm = 100; volume = 0.50 }
 }
 
 puzzle possesion {

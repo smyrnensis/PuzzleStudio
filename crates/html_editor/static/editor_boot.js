@@ -227,7 +227,10 @@
       return fetchText("/api/save", {
         method: "POST",
         headers: { "Content-Type": "application/json; charset=utf-8" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({
+          ...payload,
+          contentLoaded: payload?.contentLoaded === true,
+        }),
       });
     },
     async loadWorkspaceDocument(payload) {

@@ -203,27 +203,34 @@ fn parse_top_level_var_directive(
     _tokens: &[&str],
     line: &str,
 ) -> Result<SceneVarDef, DiagnosticReport> {
-    let (rest, lifetime, mutable) = if let Some(rest) = line.trim().strip_prefix("persistent var ")
-    {
-        (rest.trim_start(), SceneStateLifetime::Persistent, true)
-    } else if let Some(rest) = line.trim().strip_prefix("persistent const ") {
-        (rest.trim_start(), SceneStateLifetime::Persistent, false)
-    } else if let Some(rest) = line.trim().strip_prefix("var ") {
-        (rest.trim_start(), SceneStateLifetime::Instance, true)
-    } else if let Some(rest) = line.trim().strip_prefix("const ") {
-        (rest.trim_start(), SceneStateLifetime::Instance, false)
-    } else {
+    let Some(row) =
+        authoring_grammar::parse_authoring_row(authoring_grammar::AuthoringKind::Root, line)?
+    else {
         return Err(parse_error(
             line,
             "top-level variable must be: var <name> = <literal> or const <name> = <literal>",
         ));
     };
-    let (name, value) = require_assignment_row(
-        rest,
-        "top-level variable must be: var <name> = <literal> or const <name> = <literal>",
-    )?;
+    let (lifetime, mutable) = match row.kind {
+        authoring_grammar::AuthoringRowKind::VarDeclaration => (SceneStateLifetime::Instance, true),
+        authoring_grammar::AuthoringRowKind::ConstDeclaration => {
+            (SceneStateLifetime::Instance, false)
+        }
+        authoring_grammar::AuthoringRowKind::PersistentVarDeclaration => {
+            (SceneStateLifetime::Persistent, true)
+        }
+        authoring_grammar::AuthoringRowKind::PersistentConstDeclaration => {
+            (SceneStateLifetime::Persistent, false)
+        }
+    };
+    let Some(name) = row.single_capture("name") else {
+        return Err(parse_error(&row.source_line, "variable name is missing"));
+    };
+    let Some(value) = row.joined_capture("value") else {
+        return Err(parse_error(&row.source_line, "variable value is missing"));
+    };
     validate_identifier(name, line, "variable name")?;
-    let (kind, default) = parse_scene_var_default(value, line)?;
+    let (kind, default) = parse_scene_var_default(&value, line)?;
     Ok(SceneVarDef {
         name: name.to_string(),
         kind,
@@ -233,14 +240,36 @@ fn parse_top_level_var_directive(
     })
 }
 
-fn parse_default_wait_time_directive(tokens: &[&str], line: &str) -> Result<u64, DiagnosticReport> {
-    let ["default_wait_time", "=", duration] = tokens else {
-        return Err(parse_error(
-            line,
-            "default_wait_time must be: default_wait_time = <duration>",
-        ));
+fn parse_root_scalar_definition_value(
+    line: &str,
+    key: &str,
+    usage_message: &str,
+) -> Result<String, DiagnosticReport> {
+    let Some(definition) = authoring_grammar::parse_authoring_definition_row(
+        authoring_grammar::AuthoringKind::Root,
+        line,
+    )?
+    else {
+        return Err(parse_error(line, usage_message));
     };
-    parse_wait_duration_ms(duration, line)
+    if definition.key != key
+        || definition.op != Some(authoring_grammar::AuthoringDefinitionOp::Equals)
+    {
+        return Err(parse_error(line, usage_message));
+    }
+    definition
+        .single_value()
+        .map(str::to_string)
+        .ok_or_else(|| parse_error(line, usage_message))
+}
+
+fn parse_default_wait_time_directive(line: &str) -> Result<u64, DiagnosticReport> {
+    let duration = parse_root_scalar_definition_value(
+        line,
+        "default_wait_time",
+        "default_wait_time must be: default_wait_time = <duration>",
+    )?;
+    parse_wait_duration_ms(&duration, line)
 }
 
 fn parse_input_buffer_block(
@@ -248,8 +277,13 @@ fn parse_input_buffer_block(
     start: usize,
     input_buffer: &mut InputBufferDef,
 ) -> Result<usize, DiagnosticReport> {
-    let header = split_header_tokens(&lines[start]);
-    if !matches!(header.as_slice(), ["input_buffer"]) {
+    let (node, next_i) = authoring_grammar::parse_placed_authoring_node(
+        lines,
+        start,
+        authoring_grammar::AuthoringKind::Root,
+        "input_buffer missing closing brace",
+    )?;
+    if node.kind != authoring_grammar::AuthoringKind::InputBufferConfig {
         return Err(parse_error(
             &lines[start],
             "input_buffer header must be: input_buffer",
@@ -257,48 +291,49 @@ fn parse_input_buffer_block(
     }
 
     let mut parsed = input_buffer.clone();
-    let mut i = start + 1;
-    while i < lines.len() {
-        let line = &lines[i];
-        if is_block_close_line(line) {
-            *input_buffer = parsed;
-            return Ok(i + 1);
+    for definition in &node.definition_rows {
+        if definition.op != Some(authoring_grammar::AuthoringDefinitionOp::Equals) {
+            return Err(parse_error(
+                &definition.source_line,
+                "input_buffer setting must use `=`",
+            ));
         }
-        let tokens = split_header_tokens(line);
-        match tokens.as_slice() {
-            ["queue_during_wait", "=", value] => {
-                parsed.queue_during_wait = parse_boolean_option(value, line)?;
+        let Some(value) = definition.single_value() else {
+            return Err(parse_error(
+                &definition.source_line,
+                "input_buffer setting must have one value",
+            ));
+        };
+        match definition.key.as_str() {
+            "queue_during_wait" => {
+                parsed.queue_during_wait = parse_boolean_option(value, &definition.source_line)?;
             }
-            ["fast_forward_wait", "=", value] => {
-                parsed.fast_forward_wait = parse_boolean_option(value, line)?;
+            "fast_forward_wait" => {
+                parsed.fast_forward_wait = parse_boolean_option(value, &definition.source_line)?;
             }
-            ["min_wait", "=", value] => {
-                parsed.min_wait_ms = parse_wait_duration_ms(value, line)?;
+            "min_wait" => {
+                parsed.min_wait_ms = parse_wait_duration_ms(value, &definition.source_line)?;
             }
-            _ => {
+            other => {
                 return Err(parse_error(
-                    line,
-                    "input_buffer entry must be: queue_during_wait = <true|false> | fast_forward_wait = <true|false> | min_wait = <duration>",
+                    &definition.source_line,
+                    &format!("unknown input_buffer setting {other}"),
                 ));
             }
         }
-        i += 1;
     }
 
-    Err(parse_error(
-        &lines[start],
-        "input_buffer missing closing brace",
-    ))
+    *input_buffer = parsed;
+    Ok(next_i)
 }
 
-fn parse_again_interval_directive(tokens: &[&str], line: &str) -> Result<u64, DiagnosticReport> {
-    match tokens {
-        ["again_interval", "=", duration] => parse_wait_duration_ms(duration, line),
-        _ => Err(parse_error(
-            line,
-            "again_interval must be: again_interval = <duration>",
-        )),
-    }
+fn parse_again_interval_directive(line: &str) -> Result<u64, DiagnosticReport> {
+    let duration = parse_root_scalar_definition_value(
+        line,
+        "again_interval",
+        "again_interval must be: again_interval = <duration>",
+    )?;
+    parse_wait_duration_ms(&duration, line)
 }
 
 fn parse_scene_value(value: &str, line: &str) -> Result<SceneValue, DiagnosticReport> {

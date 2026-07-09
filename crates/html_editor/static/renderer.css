@@ -74,17 +74,13 @@ body.is-component-embed .board-canvas {
 }
 
 .visual-sprite {
-  left: calc((100% - (100% * var(--sprite-cell-cols, var(--sprite-cols, 1)) / var(--sprite-cell-fit, var(--sprite-cell-cols, var(--sprite-cols, 1))))) / 2);
-  top: calc((100% - (100% * var(--sprite-cell-rows, var(--sprite-rows, 1)) / var(--sprite-cell-fit, var(--sprite-cell-rows, var(--sprite-rows, 1))))) / 2);
-  width: calc(100% * var(--sprite-cols, 1) / var(--sprite-cell-fit, var(--sprite-cell-cols, var(--sprite-cols, 1))));
-  height: calc(100% * var(--sprite-rows, 1) / var(--sprite-cell-fit, var(--sprite-cell-rows, var(--sprite-rows, 1))));
+  left: calc((100% - (100% * var(--sprite-box-cols, 1))) / 2 + (100% * var(--sprite-offset-x, 0)));
+  top: calc((100% - (100% * var(--sprite-box-rows, 1))) / 2 + (100% * var(--sprite-offset-y, 0)));
+  width: calc(100% * var(--sprite-box-cols, 1));
+  height: calc(100% * var(--sprite-box-rows, 1));
   background-position: center;
   background-repeat: no-repeat;
-  background-size: 100% 100%;
-  transform: translate(
-    calc(var(--sprite-offset-x, 0) * 100% / var(--sprite-cell-fit, var(--sprite-cell-cols, var(--sprite-cols, 1)))),
-    calc(var(--sprite-offset-y, 0) * 100% / var(--sprite-cell-fit, var(--sprite-cell-rows, var(--sprite-rows, 1))))
-  );
+  background-size: contain;
 }
 
 .visual-pixel {
@@ -95,12 +91,27 @@ body.is-component-embed .board-canvas {
 .visual-pattern {
   background-position: center;
   background-repeat: no-repeat;
-  background-size: 100% 100%;
   image-rendering: pixelated;
 }
 
-.visual-image {
+.visual-fit-contain {
   background-size: contain;
+}
+
+.visual-fit-cover {
+  background-size: cover;
+}
+
+.visual-fit-stretch {
+  background-size: 100% 100%;
+}
+
+.visual-sampling-smooth {
+  image-rendering: auto;
+}
+
+.visual-sampling-pixelated {
+  image-rendering: pixelated;
 }
 
 @media (max-width: 720px) {

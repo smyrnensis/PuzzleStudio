@@ -3,24 +3,25 @@ author = "smyrnensis"
 homepage = "smyrnensis.itch.io"
 again_interval = 0.10s
 
-theme puzzlescript {
+theme {
+preset = "puzzlescript"
 background_color = #243
 }
 
 sounds {
-sfx sfx0 seed=17551700 type=puzzlescript
-sfx sfx1 seed=75011107 type=puzzlescript
-sfx sfx2 seed=85372903 type=puzzlescript
-sfx sfx3 seed=47068304 type=puzzlescript
-sfx sfx4 seed=59023902 type=puzzlescript
-sfx sfx5 seed=18102904 type=puzzlescript
-sfx sfx6 seed=75615703 type=puzzlescript
-sfx sfx10 seed=84421108 type=puzzlescript
-sfx player_move seed=9405707 type=puzzlescript
-sfx crate_move seed=64059507 type=puzzlescript
-sfx restart seed=24001300 type=puzzlescript
-sfx undo seed=84443307 type=puzzlescript
-sfx endlevel seed=91940500 type=puzzlescript
+sfx sfx0 { seed = 17551700; type = puzzlescript }
+sfx sfx1 { seed = 75011107; type = puzzlescript }
+sfx sfx2 { seed = 85372903; type = puzzlescript }
+sfx sfx3 { seed = 47068304; type = puzzlescript }
+sfx sfx4 { seed = 59023902; type = puzzlescript }
+sfx sfx5 { seed = 18102904; type = puzzlescript }
+sfx sfx6 { seed = 75615703; type = puzzlescript }
+sfx sfx10 { seed = 84421108; type = puzzlescript }
+sfx player_move { seed = 9405707; type = puzzlescript }
+sfx crate_move { seed = 64059507; type = puzzlescript }
+sfx restart { seed = 24001300; type = puzzlescript }
+sfx undo { seed = 84443307; type = puzzlescript }
+sfx endlevel { seed = 91940500; type = puzzlescript }
 }
 
 puzzle main {

@@ -11,7 +11,7 @@ solid = Player Box Wall
 }
 
 win_conditions {
-some Goal
+some [ Goal ]
 no [ Box no Goal ]
 }
 
@@ -20,7 +20,7 @@ once_all [ no Background ] -> [ Background ]
 }
 
 rules {
-input [ Player ] -> [ > Player ]
+input [ Player ] -> [ > Player ] 
 [ > Player | Box ] -> [ > Player | > Box ]
 move
 }
@@ -32,21 +32,78 @@ next_level
 }
 
 sprites {
-Background
-#90ee90 #008000
+
+sprite {
+selector = Background
+colors = #90ee90 #008000
+duration = 500ms
+shape =
 11111
 01111
 11101
 11111
 10111
+>
+10111
+11111
+01111
+11101
+11111
+>
+11111
+10111
+11111
+01111
+11101
+>
+11101
+11111
+10111
+11111
+01111
+> 
+01111
+11101
+11111
+10111
+11111
+}
 
-Wall
-#a46322 #493c2b
+sprite {
+selector = Wall
+colors = #a46322 #493c2b
+duration = 500ms
+shape =
 00010
 11111
 01000
 11111
 00010
+>
+00010
+00010
+11111
+01000
+11111
+>
+11111
+00010
+00010
+11111
+01000
+>
+01000
+11111
+00010
+00010
+11111
+>
+11111
+01000
+11111
+00010
+00010
+}
 
 Goal
 #00008b
@@ -179,45 +236,45 @@ level "microban_10"
 #########..
 }
 
-scene title {
-layout {
-title = "Microban"
-subtitle = "Levels by David Skinner"
-choice "Continue" -> goto playing
-choice "New Game" -> {
-clear_game_progress
-start playing
-}
-choice "Level Select" -> goto level_select
-}
-}
+// scene title {
+// layout {
+// title = "Microban"
+// subtitle = "Levels by David Skinner"
+// choice "Continue" -> goto playing
+// choice "New Game" -> {
+// clear_game_progress
+// start playing
+// }
+// choice "Level Select" -> goto level_select
+// }
+// }
 
-scene playing {
-layout {
-row {
-title = "Microban"
-subtitle = level.label
-}
-sokoban
-}
+// scene playing {
+// layout {
+// row {
+	// title = "Microban"
+	// subtitle = level.label
+// }
+// sokoban
+// }
 
-keys {
-q Escape -> goto level_select
-}
+// keys {
+// q Escape -> goto level_select
+// }
 
-rules {
-step sokoban
-}
-}
+// rules {
+// step sokoban
+// }
+// }
 
-scene level_select {
-layout {
-text "Select a level"
-level_menu
-button "Back" -> goto title
-}
+// scene level_select {
+// layout {
+	// text "Select a level"
+	// level_menu
+	// button "Back" -> goto title
+// }
 
-keys {
-q Escape -> goto title
-}
-}
+// keys {
+// q Escape -> goto title
+// }
+// }

@@ -28,6 +28,7 @@ pub(crate) enum SurfaceSemanticKind {
     Theme,
     Asset,
     Setting,
+    Color,
     Number,
     String,
 }
@@ -84,6 +85,8 @@ pub(crate) struct SurfaceStructuralBlock {
     pub(crate) header: String,
     pub(crate) scope: SourceScope,
     pub(crate) role: SurfaceStructuralBlockRole,
+    pub(crate) authoring_kind: Option<crate::authoring_grammar::AuthoringKind>,
+    pub(crate) authoring_content: Option<crate::authoring_grammar::AuthoringContentKind>,
     pub(crate) virtual_braces: bool,
     pub(crate) start: usize,
     pub(crate) end: usize,
@@ -98,6 +101,7 @@ pub(crate) struct SurfaceHighlightRanges {
     pub(crate) level_ascii_ranges: Vec<SurfaceAsciiRange>,
     pub(crate) visual_ascii_color_ranges: Vec<SurfaceVisualAsciiColorRange>,
     pub(crate) visual_named_color_ranges: Vec<SurfaceVisualNamedColorRange>,
+    pub(crate) visual_separator_ranges: Vec<SourceSpan>,
 }
 
 impl SurfaceHighlightRanges {
@@ -162,17 +166,22 @@ impl SurfaceVisualSpriteRefs {
 pub(crate) enum SurfaceOptionBlock {
     Puzzle2,
     Puzzle3,
-    Render2,
-    Render3,
-    Camera3,
-    Grid2,
-    Grid3,
-    Pixelate3,
-    Animation,
-    Tween,
+    Authoring(crate::authoring_grammar::AuthoringKind),
     LevelMenu,
-    Theme,
     Other,
+}
+
+impl SurfaceOptionBlock {
+    pub(crate) fn authoring_parent_kind(self) -> Option<crate::authoring_grammar::AuthoringKind> {
+        match self {
+            SurfaceOptionBlock::Puzzle2 => Some(crate::authoring_grammar::AuthoringKind::Root),
+            SurfaceOptionBlock::Puzzle3 => {
+                Some(crate::authoring_grammar::AuthoringKind::Puzzle3Root)
+            }
+            SurfaceOptionBlock::Authoring(kind) => Some(kind),
+            SurfaceOptionBlock::LevelMenu | SurfaceOptionBlock::Other => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -299,6 +308,8 @@ impl SurfaceHighlightRanges {
             .extend(other.visual_ascii_color_ranges);
         self.visual_named_color_ranges
             .extend(other.visual_named_color_ranges);
+        self.visual_separator_ranges
+            .extend(other.visual_separator_ranges);
     }
 }
 

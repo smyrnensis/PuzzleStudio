@@ -664,6 +664,147 @@ fn solve_current_state_with_budget(
 }
 
 #[cfg(feature = "solver")]
+fn solver_state_slicer_for_compiled(
+    game: &CompiledGame,
+    goal: Option<&GoalExpr>,
+    lose: Option<&GoalExpr>,
+) -> puzzle_solver::SolverStateSlicer {
+    let mut roots = BTreeSet::new();
+    if let Some(goal) = goal {
+        collect_goal_expr_roots(game, goal, &mut roots);
+    }
+    if let Some(lose) = lose {
+        collect_goal_expr_roots(game, lose, &mut roots);
+    }
+    let relevance = puzzle_solver::SolverRelevance::from_root_objects(game, roots);
+    puzzle_solver::SolverStateSlicer::<ObjectId>::from_relevance(game, &relevance)
+}
+
+#[cfg(feature = "solver")]
+fn solver_state_slicer_for_loaded(
+    loaded: &LoadedGame,
+    solver_game: &CompiledGame,
+) -> puzzle_solver::SolverStateSlicer {
+    let mut roots = BTreeSet::new();
+    if let Some(goal) = &loaded.goal {
+        collect_goal_expr_roots(solver_game, &goal.expr, &mut roots);
+    }
+    if let Some(lose) = &loaded.lose {
+        collect_goal_expr_roots(solver_game, &lose.expr, &mut roots);
+    }
+    for term in &loaded.solver_strategy.terms {
+        collect_query_expr_roots(&term.value, &mut roots, &mut |kind, roots| {
+            puzzle_solver::object_refs::collect_condition_value_roots(kind, roots)
+        });
+    }
+    let relevance = puzzle_solver::SolverRelevance::from_root_objects(solver_game, roots);
+    puzzle_solver::SolverStateSlicer::<ObjectId>::from_relevance(solver_game, &relevance)
+}
+
+#[cfg(feature = "solver")]
+fn solver_state_slicer_for_puzzle3(
+    parsed: &ParsedPuzzle3,
+) -> puzzle_solver::SolverStateSlicer<ObjectId3> {
+    let mut roots = BTreeSet::new();
+    if let Some(win_condition) = &parsed.win_condition {
+        collect_win_condition3_roots(win_condition, &mut roots);
+    }
+    for term in &parsed.solver_strategy.terms {
+        collect_query_expr_roots(&term.value, &mut roots, &mut |kind, roots| {
+            puzzle_solver::object_refs::collect_condition_value_roots(kind, roots)
+        });
+    }
+    let relevance = puzzle_solver::SolverRelevance::<ObjectId3>::from_game3_root_objects(
+        &parsed.game,
+        &parsed.rules,
+        roots,
+    );
+    puzzle_solver::SolverStateSlicer::<ObjectId3>::from_relevance(&parsed.game, &relevance)
+}
+
+#[cfg(feature = "solver")]
+fn collect_goal_expr_roots(
+    game: &CompiledGame,
+    expr: &GoalExpr,
+    roots: &mut BTreeSet<ObjectId>,
+) {
+    match expr {
+        GoalExpr::All(exprs) | GoalExpr::Any(exprs) => {
+            for expr in exprs {
+                collect_goal_expr_roots(game, expr, roots);
+            }
+        }
+        GoalExpr::Clause(clause) => collect_goal_value_roots(game, &clause.value, roots),
+    }
+}
+
+#[cfg(feature = "solver")]
+fn collect_goal_value_roots(
+    game: &CompiledGame,
+    value: &GoalValue,
+    roots: &mut BTreeSet<ObjectId>,
+) {
+    match value {
+        GoalValue::Variable(_) => {}
+        GoalValue::Condition(condition) => {
+            if let Some(condition) = game.condition_def(*condition) {
+                puzzle_solver::object_refs::collect_condition_value_roots(&condition.kind, roots);
+            }
+        }
+        GoalValue::InlineConditionValue(kind) => {
+            puzzle_solver::object_refs::collect_condition_value_roots(kind, roots);
+        }
+    }
+}
+
+#[cfg(feature = "solver")]
+fn collect_query_expr_roots<Object, Value, Variable>(
+    value: &QueryExprOf<Object, Value, Variable>,
+    roots: &mut BTreeSet<Object>,
+    collect_value: &mut impl FnMut(&Value, &mut BTreeSet<Object>),
+) where
+    Object: Copy + Ord,
+{
+    match value {
+        QueryExprOf::Variable(_) => {}
+        QueryExprOf::Value(kind) => collect_value(kind, roots),
+        QueryExprOf::Distance { from, to } => {
+            roots.extend(from.iter().copied());
+            roots.extend(to.iter().copied());
+        }
+        QueryExprOf::Compare { left, .. } => collect_query_expr_roots(left, roots, collect_value),
+    }
+}
+
+#[cfg(feature = "solver")]
+fn collect_win_condition3_roots(condition: &WinCondition3, roots: &mut BTreeSet<ObjectId3>) {
+    match condition {
+        WinCondition3::All(conditions) | WinCondition3::Any(conditions) => {
+            for condition in conditions {
+                collect_win_condition3_roots(condition, roots);
+            }
+        }
+        WinCondition3::SomeObject(object) | WinCondition3::NoObject(object) => {
+            if !object.is_empty() {
+                roots.insert(*object);
+            }
+        }
+        WinCondition3::SomePattern(pattern) | WinCondition3::NoPattern(pattern) => {
+            puzzle_solver::object_refs::collect_pattern_roots(pattern, roots);
+        }
+        WinCondition3::AllObjectsCoveredByPattern {
+            object,
+            cover_pattern,
+        } => {
+            if !object.is_empty() {
+                roots.insert(*object);
+            }
+            puzzle_solver::object_refs::collect_pattern_roots(cover_pattern, roots);
+        }
+    }
+}
+
+#[cfg(feature = "solver")]
 fn solve_compiled_state_with_budget_and_progress<O>(
     engine: &puzzle_core_wasm::CompiledEngine,
     goal: Option<GoalExpr>,
@@ -683,21 +824,21 @@ where
         return Err(AppError::Config("no model inputs available".to_string()));
     }
 
-    let ignored_objects = engine.display_objects().to_vec();
     let game = Arc::new(game.clone());
     let goal_game = game.clone();
     let goal_for_domain = goal.clone();
-    let mut domain = PuzzleDomain::with_ignored_objects(
+    let state_slicer = solver_state_slicer_for_compiled(&game, goal.as_ref(), lose.as_ref());
+    let mut domain = PuzzleDomain::with_state_slicer(
         game.clone(),
         inputs,
-        ignored_objects.clone(),
+        state_slicer,
         move |state: &State| {
             goal_for_domain
                 .as_ref()
                 .is_some_and(|goal| eval_goal_expr(&goal_game, state, goal))
         },
     );
-    let solver_initial = PuzzleSearchState::new(initial.without_objects(&ignored_objects));
+    let solver_initial = domain.initial_state(initial.clone());
     let display_initial = initial.clone();
     let score_game = game.clone();
     let score_goal = goal.clone();
@@ -824,14 +965,14 @@ where
     let solver_game = loaded.solver_game();
     let game = Arc::new(solver_game);
     let goal_game = loaded.clone();
-    let ignored_objects = loaded.display_objects.clone();
-    let mut domain = PuzzleDomain::with_ignored_objects(
+    let state_slicer = solver_state_slicer_for_loaded(loaded, &game);
+    let mut domain = PuzzleDomain::with_state_slicer(
         game.clone(),
         inputs,
-        ignored_objects.clone(),
+        state_slicer,
         move |state: &State| goal_game.is_goal_complete(state),
     );
-    let solver_initial = PuzzleSearchState::new(initial.without_objects(&ignored_objects));
+    let solver_initial = domain.initial_state(initial.clone());
     let score_game = loaded.clone();
     let lose_game = loaded.clone();
     let replay_game = loaded.game.clone();
@@ -939,16 +1080,16 @@ where
 
     let game = Arc::new(parsed.game.clone());
     let rules = parsed.rules.clone();
-    let ignored_objects = parsed.display_objects.clone();
     let goal_game = Arc::clone(&game);
-    let mut domain = Puzzle3Domain::with_ignored_objects(
+    let state_slicer = solver_state_slicer_for_puzzle3(parsed);
+    let mut domain = Puzzle3Domain::with_state_slicer(
         Arc::clone(&game),
         rules.clone(),
         inputs,
-        ignored_objects.clone(),
+        state_slicer,
         move |state: &State3| win_condition.is_met(&goal_game, state),
     );
-    let solver_initial = initial.without_objects(&ignored_objects);
+    let solver_initial = domain.initial_state(initial);
     let replay_initial = solver_initial.clone();
     let score_game = Arc::clone(&game);
     let score_strategy = parsed.solver_strategy.clone();

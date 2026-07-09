@@ -2,10 +2,10 @@ title = "Simple Block Sliding Game"
 author = "increpare"
 homepage = "www.increpare.com"
 
-theme puzzlescript
+theme = "puzzlescript"
 
 sounds {
-sfx crate_move seed=36772507 type=puzzlescript
+sfx crate_move { seed = 36772507; type = puzzlescript }
 }
 
 puzzle main {

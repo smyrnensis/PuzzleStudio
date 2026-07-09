@@ -1,4 +1,7 @@
-use crate::surface::{SurfaceDocument, SurfaceStructuralBlock, SurfaceStructuralBlockRole};
+use crate::{
+    authoring_grammar::{self, AuthoringOutlinePolicy},
+    surface::{SurfaceDocument, SurfaceStructuralBlock, SurfaceStructuralBlockRole},
+};
 use std::collections::HashMap;
 
 #[derive(Clone, Debug)]
@@ -44,7 +47,15 @@ pub(crate) fn source_outline_from_document(document: &SurfaceDocument) -> Vec<So
             });
             continue;
         }
-        let suppress_children = outline_block_suppresses_children(block);
+        let Some(policy) = outline_block_policy(block) else {
+            stack.push(OutlineStackEntry {
+                id: None,
+                suppress_children: true,
+            });
+            continue;
+        };
+        let suppress_children = matches!(policy, AuthoringOutlinePolicy::CollapseChildren)
+            || outline_block_suppresses_children(block);
         let id = push_source_outline_item(
             &mut items,
             &mut ids_by_item_key,
@@ -112,6 +123,9 @@ fn source_outline_suppresses_children(stack: &[OutlineStackEntry]) -> bool {
 }
 
 fn outline_block_suppresses_children(block: &SurfaceStructuralBlock) -> bool {
+    if block.authoring_kind.is_some() {
+        return false;
+    }
     let first = outline_block_kind(block);
     matches!(
         first.as_str(),
@@ -121,12 +135,29 @@ fn outline_block_suppresses_children(block: &SurfaceStructuralBlock) -> bool {
 }
 
 fn outline_block_kind(block: &SurfaceStructuralBlock) -> String {
+    if let Some(kind) = block.authoring_kind {
+        return authoring_grammar::authoring_kind_spec(kind)
+            .header
+            .usage
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .to_string();
+    }
     block
         .header
         .split_whitespace()
         .next()
         .unwrap_or("")
         .to_string()
+}
+
+fn outline_block_policy(block: &SurfaceStructuralBlock) -> Option<AuthoringOutlinePolicy> {
+    let policy = block
+        .authoring_kind
+        .map(|kind| authoring_grammar::authoring_kind_spec(kind).outline_policy)
+        .unwrap_or(AuthoringOutlinePolicy::Visible);
+    (policy != AuthoringOutlinePolicy::Hidden).then_some(policy)
 }
 
 fn push_item_json(out: &mut String, item: &SourceOutlineItem) {
@@ -180,7 +211,9 @@ fn push_json_string_value(out: &mut String, value: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{source_outline, source_outline_json};
+    use crate::{authoring_grammar::AuthoringKind, parse_surface_structure_document};
+
+    use super::{source_outline, source_outline_from_document, source_outline_json};
 
     #[test]
     fn source_outline_keeps_author_source_order() {
@@ -375,6 +408,39 @@ puzzle board {
                 (0, "puzzle".to_string(), "puzzle board".to_string()),
                 (1, "rules".to_string(), "rules".to_string()),
                 (2, "routine".to_string(), "routine open_gate".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn source_outline_authoring_blocks_carry_schema_kind() {
+        let source = r#"
+sounds {
+  sfx beep {
+    seed = coin
+  }
+}
+"#;
+        let document = parse_surface_structure_document(source);
+        let authoring_blocks = document
+            .structural_blocks
+            .iter()
+            .filter_map(|block| block.authoring_kind)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            authoring_blocks,
+            vec![AuthoringKind::SoundsConfig, AuthoringKind::SfxSoundConfig]
+        );
+
+        let labels = source_outline_from_document(&document)
+            .into_iter()
+            .map(|item| (item.depth, item.kind, item.label))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            labels,
+            vec![
+                (0, "sounds".to_string(), "sounds".to_string()),
+                (1, "sfx".to_string(), "sfx beep".to_string()),
             ]
         );
     }

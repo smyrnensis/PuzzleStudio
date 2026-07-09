@@ -74,8 +74,8 @@ use puzzle_runtime_contract::{
 };
 #[cfg(feature = "solver")]
 use puzzle_solver::{
-    Puzzle3Domain, PuzzleDomain, PuzzleSearchState, SearchBudget, SearchOutcome, SearchProgress,
-    SearchStats, best_first_with_dead_states_and_progress,
+    Puzzle3Domain, PuzzleDomain, SearchBudget, SearchOutcome, SearchProgress, SearchStats,
+    best_first_with_dead_states_and_progress,
 };
 
 const INDEX_HTML: &str = include_str!("../static/index.html");
@@ -320,7 +320,7 @@ step default
     #[test]
     fn stateful_core_runtime_exposes_changed_cells_for_2d() {
         let source = r#"
-animation {
+render {
   tween
 }
 
@@ -549,8 +549,8 @@ actor = Player
 }
 sprites {
 Player {
-pixels_per_cell 5 5
-offset 2 -1
+stretch 2 1
+offset 0.5 -0.25
 #fff
 00000
 00000
@@ -576,19 +576,23 @@ P
         let loaded = parse_game(source).unwrap();
         let visuals = generated_visuals_js(&loaded);
 
-        assert!(visuals.contains("\"offset\":{\"x\":2,\"y\":-1}"));
-        assert!(visuals.contains("\"pixelsPerCell\":{\"width\":5,\"height\":5}"));
+        assert!(visuals.contains("\"offset\":{\"x\":0.5,\"y\":-0.25}"));
+        assert!(visuals.contains("\"fit\":{\"mode\":\"stretch\",\"width\":2,\"height\":1}"));
+        assert!(!visuals.contains("\"pixelsPerCell\""));
         assert!(RENDERER_JS.contains("visualSpriteOffset(definition, unit)"));
         assert!(RENDERER_JS.contains("visualSpriteFit(definition, unit, sourceSize = null)"));
-        assert!(RENDERER_JS.contains("definition.pixelsPerCell?.width"));
+        assert!(RENDERER_JS.contains("spriteDrawBox(definition)"));
         assert!(RENDERER_JS.contains("solidColor && this.canPaintAsFullCellSolid(definition)"));
         assert!(RENDERER_JS.contains("unit = Math.max(unit, cellCols, cellRows);"));
-        assert!(RENDERER_JS.contains("const scale = unit / Math.max(cols, rows);"));
+        assert!(
+            RENDERER_JS.contains(
+                "mode === \"cover\" ? Math.max(scaleX, scaleY) : Math.min(scaleX, scaleY)"
+            )
+        );
         assert!(RENDERER_JS.contains("context.drawImage(\n          image,"));
-        assert!(RENDERER_CSS.contains("--sprite-cell-fit"));
+        assert!(RENDERER_CSS.contains("--sprite-box-cols"));
         assert!(RENDERER_CSS.contains("background-size: contain;"));
         assert!(!RENDERER_JS.contains("leastCommonMultiple("));
-        assert!(RENDERER_JS.contains("const pixelWidth = pixelSize;"));
         assert!(RENDERER_JS.contains("const left = Math.round(x + colIndex * pixelWidth);"));
         assert!(RENDERER_JS.contains("Math.max(1, right - left)"));
         assert!(
@@ -611,7 +615,9 @@ layers {
 actor = Player
 }
 render {
-grid occupied_cells all_cells
+grid {
+type = "all_cells"
+}
 }
 rules {
 
@@ -638,7 +644,7 @@ P
         );
 
         assert!(scene.contains(
-            r#""settings":{"render":{},"grid":{"visibility":1,"occupied_cells":true,"all_cells":true},"inputBuffer":{"queueDuringWait":true,"fastForwardWait":true,"minWaitMs":50},"animation":{"tween":{"enabled":false,"intervalMs":250}}}"#
+            r#""settings":{"render":{},"grid":{"visibility":1,"occupied_cells":false,"all_cells":true},"inputBuffer":{"queueDuringWait":true,"fastForwardWait":true,"minWaitMs":50},"animation":{"tween":{"enabled":false,"intervalMs":250}}}"#
         ));
         assert!(RENDERER_JS.contains("gridSettings(scene)"));
         assert!(RENDERER_JS.contains("scene.settings?.grid"));
@@ -1529,7 +1535,7 @@ scene playing {
     }
 
     #[test]
-    fn mixed_export_hosts_puzzle3_as_scene_component() {
+    fn mixed_export_rejects_puzzle3_scene_component() {
         let source = r#"
 title = Mixed Game
 
@@ -1583,63 +1589,16 @@ scene mixed_play {
       puzzle flat_board = flat
       puzzle3 cube_board = cube
     }
-  }
+}
 }
 "#;
-        let document = puzzle_lang::parse_game(source).unwrap();
-        let loaded = loaded_document_scene_host_loaded_game(&document).unwrap();
-        let mixed_scene = loaded
-            .scenes
-            .iter()
-            .find(|scene| scene.name == "mixed_play")
-            .unwrap();
-        assert_eq!(mixed_scene.state.puzzles.len(), 1);
-        assert_eq!(mixed_scene.state.puzzles[0].name, "flat_board");
+        let error = puzzle_lang::parse_game(source).unwrap_err().to_string();
 
-        let html = export_mixed_document_html(
-            &document,
-            loaded.clone(),
-            source.to_string(),
-            "mixed.puzzle".to_string(),
-            String::new(),
-            VISUALS_JS.to_string(),
-            SolverConfig::default(),
-            StandaloneHostMode::Export,
-            StandaloneRuntimeWasm::HostDefault,
-        )
-        .unwrap();
-        assert!(html.contains("puzzle_wasm_game_bg.wasm"));
-        assert!(html.contains("WasmPuzzle3Runtime"));
-        assert!(html.contains("fromFixture"));
-
-        let preview_html = export_mixed_document_html(
-            &document,
-            loaded,
-            source.to_string(),
-            "mixed.puzzle".to_string(),
-            String::new(),
-            VISUALS_JS.to_string(),
-            SolverConfig::default(),
-            StandaloneHostMode::EditorPreview,
-            StandaloneRuntimeWasm::HostDefault,
-        )
-        .unwrap();
-        assert!(html.contains("window.Puzzle3DFrameFixture"));
-        assert!(html.contains("window.Puzzle3DFrameAssets"));
-        assert!(!html.contains("\"themeCss\""));
-        assert!(html.contains("case \"puzzle3\""));
-        assert!(html.contains("window.Puzzle3ControllerAutoBoot = false"));
-        assert!(html.contains("window.Puzzle3Controller"));
-        assert!(!html.contains("iframe.puzzle3-frame"));
-        assert!(html.contains("\\\"kind\\\":\\\"puzzle3\\\""));
-        assert!(!html.contains("\\npuzzle3 cube"));
-        assert!(!html.contains("\\nscene mixed_play"));
-        assert!(!html.contains("\\npuzzle3 cube_board"));
-        assert!(preview_html.contains("window.Puzzle3DFrameFixture"));
+        assert!(error.contains("mixed 2D/3D documents are no longer supported"));
     }
 
     #[test]
-    fn mixed_microban_scene_metadata_stays_model_agnostic() {
+    fn mixed_microban_scene_metadata_is_rejected_before_export() {
         let source = r#"
 title = Mixed Microban
 
@@ -1708,110 +1667,9 @@ text level.title
 }
 }
 "#;
-        let document = puzzle_lang::parse_game(source).unwrap();
-        assert_eq!(document.models.len(), 2);
-        assert!(matches!(
-            &document.models[0],
-            LoadedDocumentModel::Puzzle2d { name, game }
-                if name == "microban2d"
-                    && game.levels.iter().map(|level| level.name.as_str()).collect::<Vec<_>>()
-                        == ["microban_01", "microban_02"]
-        ));
-        assert!(matches!(
-            &document.models[1],
-            LoadedDocumentModel::Puzzle3d { name, puzzle }
-                if name == "microban3d"
-                    && puzzle.level_bundle.as_ref().is_some_and(|bundle| {
-                        bundle.level(0).is_some_and(|level| level.name == "microban_03")
-                            && bundle.level(1).is_some_and(|level| level.name == "microban_04")
-                    })
-        ));
+        let error = puzzle_lang::parse_game(source).unwrap_err().to_string();
 
-        let level_select = document
-            .scenes
-            .iter()
-            .find(|scene| scene.name == "level_select")
-            .expect("expected level_select scene");
-        assert!(level_select.state.puzzles.is_empty());
-        assert!(matches!(
-            level_select.components.as_slice(),
-            [
-                SceneComponent::Title(_),
-                SceneComponent::Column(column),
-            ] if matches!(
-                column.children.as_slice(),
-                [SceneComponent::For(for_view)]
-                    if for_view.source.as_str() == "levels"
-                        && matches!(
-                            for_view.children.as_slice(),
-                            [SceneComponent::Choice(_)]
-                        )
-            )
-        ));
-
-        let loaded = loaded_document_scene_host_loaded_game(&document).unwrap();
-        assert_eq!(
-            loaded
-                .levels
-                .iter()
-                .map(|level| level.name.as_str())
-                .collect::<Vec<_>>(),
-            ["microban_01", "microban_02"]
-        );
-
-        let mut host_data = String::new();
-        push_export_data(
-            &mut host_data,
-            &ServerState::new(
-                loaded.clone(),
-                source.to_string(),
-                "mixed_microban.puzzle".to_string(),
-                String::new(),
-                VISUALS_JS.to_string(),
-                SolverConfig::default(),
-            ),
-        );
-        let host_json: Value = serde_json::from_str(&host_data).unwrap();
-        let host_level_select = host_json["scenes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|scene| scene["name"] == "level_select")
-            .expect("host export should keep level_select");
-        assert_eq!(
-            host_level_select["components"][1]["children"][0]["kind"],
-            "for"
-        );
-        assert_eq!(
-            host_level_select["components"][1]["children"][0]["children"][0]["kind"],
-            "choice"
-        );
-
-        let fixture_json = mixed_document_puzzle3_fixture_json(&document).unwrap();
-        let fixture: Value = serde_json::from_str(&fixture_json).unwrap();
-        assert_eq!(
-            fixture["levels"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|level| level["name"].as_str().unwrap())
-                .collect::<Vec<_>>(),
-            ["microban_03", "microban_04"]
-        );
-        let fixture_level_select = fixture["scenes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|scene| scene["name"] == "level_select")
-            .expect("3D fixture should keep level_select");
-        assert_eq!(
-            fixture_level_select["components"][1]["children"][0]["kind"],
-            "for"
-        );
-        assert_eq!(
-            fixture_level_select["components"][1]["children"][0]["children"][0]["kind"],
-            "choice"
-        );
+        assert!(error.contains("mixed 2D/3D documents are no longer supported"));
     }
 
     #[test]
@@ -2182,281 +2040,6 @@ levels default of board {
         assert!(response.contains(r#""result":"solved""#));
         assert!(response.contains(r#""observations":["#));
         assert!(response.contains(r#""progress":{"#));
-    }
-
-    #[cfg(feature = "solver")]
-    #[test]
-    fn solver_solution_steps_materialize_display_objects_for_display() {
-        let source = r#"
-title = "display_solver"
-
-puzzle board {
-  layers {
-    @floor = @Floor
-    actor = Player
-    @cursor = @Cursor
-  }
-  empty .
-  rules {
-    input right [ Player ] -> [ Player ]
-    [ Player ] -> [ Player ]
-  }
-  routine @paint once {
-    [ Player no @Cursor ] -> [ Player @Cursor ]
-  }
-  on_level_start {
-    once_all [ no @Floor ] -> [ @Floor ]
-  }
-  on_display {
-    @paint
-  }
-  win_conditions {
-    some Player
-  }
-}
-
-levels default of board {
-  legend {
-    . = empty
-    P = Player
-  }
-  level "start" {
-    P
-  }
-}
-
-scene playing {
-  layout {
-    puzzle board
-  }
-}
-"#;
-
-        let loaded = parse_game(source).unwrap();
-        let mut state_json = String::new();
-        push_state_data(&mut state_json, &loaded.levels[0].initial_state);
-
-        let response =
-            solve_state_json_from_source(source, "game.puzzle", &state_json, 8, 1000, 0).unwrap();
-
-        assert!(response.contains(r#""result":"solved""#));
-        assert!(response.contains(r#""object":"@Cursor""#));
-    }
-
-    #[cfg(feature = "solver")]
-    #[test]
-    fn compiled_solver_observations_materialize_display_objects_for_display() {
-        let source = r#"
-title = "compiled_display_solver"
-
-puzzle board {
-  layers {
-    @floor = @Floor
-    actor = Player
-    @cursor = @Cursor
-  }
-  keys {
-    d ArrowRight -> right
-  }
-  rules {
-    input right [ Player ] -> win
-  }
-  routine @paint once {
-    [ Player no @Cursor ] -> [ Player @Cursor ]
-  }
-  on_level_start {
-    once_all [ no @Floor ] -> [ @Floor ]
-  }
-  on_display {
-    @paint
-  }
-}
-
-levels default of board {
-  legend {
-    . = empty
-    P = Player
-  }
-  level "start" {
-    P
-  }
-}
-"#;
-        let html = export_editor_preview_html_from_source(source, "game.puzzle", "", "")
-            .expect("preview export");
-        let export = embedded_puzzle_runtime_export_json(&html);
-        let cursor_id = export["engine"]["objects"]
-            .as_array()
-            .expect("engine objects")
-            .iter()
-            .find(|object| object["name"] == "@Cursor")
-            .and_then(|object| object["id"].as_u64())
-            .expect("@Cursor id");
-        let floor_id = export["engine"]["objects"]
-            .as_array()
-            .expect("engine objects")
-            .iter()
-            .find(|object| object["name"] == "@Floor")
-            .and_then(|object| object["id"].as_u64())
-            .expect("@Floor id");
-        let level = &export["levels"][0];
-        let request = json!({
-            "version": 1,
-            "rules": {
-                "compileId": "test-compile",
-                "documentId": "test-document",
-                "modelKind": "2d",
-                "compiledPlay": export["compiledPlay"].clone(),
-                "runRulesOnLevelStart": export["engine"]["runRulesOnLevelStart"].clone(),
-                "goal": export["goal"].clone(),
-                "lose": export["lose"].clone()
-            },
-            "target": {
-                "origin": "preview-level",
-                "compileId": "test-compile",
-                "documentId": "test-document",
-                "level": {
-                    "index": 0,
-                    "levelName": level["name"].clone()
-                },
-                "state": {
-                    "kind": "compiled-start",
-                    "lifecycle": "playable-start",
-                    "data": level["initialState"].clone()
-                }
-            },
-            "maxDepth": 2,
-            "maxNodes": 100,
-            "maxMs": 0
-        });
-
-        let response = parse_json_object(&solve_solver_task_json(&request.to_string()).unwrap());
-
-        assert_eq!(response["result"], "solved");
-        assert!(
-            response["observations"][0]["state"]["slots"]
-                .as_array()
-                .expect("observation slots")
-                .iter()
-                .any(|slot| slot.as_u64() == Some(cursor_id))
-        );
-        assert!(
-            response["observations"][0]["state"]["slots"]
-                .as_array()
-                .expect("observation slots")
-                .iter()
-                .any(|slot| slot.as_u64() == Some(floor_id))
-        );
-        assert!(
-            response["steps"][0]["state"]["slots"]
-                .as_array()
-                .expect("step slots")
-                .iter()
-                .any(|slot| slot.as_u64() == Some(cursor_id))
-        );
-        assert!(
-            response["steps"][0]["state"]["slots"]
-                .as_array()
-                .expect("step slots")
-                .iter()
-                .any(|slot| slot.as_u64() == Some(floor_id))
-        );
-    }
-
-    #[cfg(feature = "solver")]
-    #[test]
-    fn compiled_solver_task_initial_display_state_materializes_level_start_and_display() {
-        let source = r#"
-title = "compiled_initial_display_solver"
-
-puzzle board {
-  layers {
-    @floor = @Floor
-    actor = Player
-    @cursor = @Cursor
-  }
-  keys {
-    d ArrowRight -> right
-  }
-  rules {
-    input right [ Player ] -> win
-  }
-  routine @paint once {
-    [ Player no @Cursor ] -> [ Player @Cursor ]
-  }
-  on_level_start {
-    once_all [ no @Floor ] -> [ @Floor ]
-  }
-  on_display {
-    @paint
-  }
-}
-
-levels default of board {
-  legend {
-    . = empty
-    P = Player
-  }
-  level "start" {
-    P
-  }
-}
-"#;
-        let html = export_editor_preview_html_from_source(source, "game.puzzle", "", "")
-            .expect("preview export");
-        let export = embedded_puzzle_runtime_export_json(&html);
-        let cursor_id = export["engine"]["objects"]
-            .as_array()
-            .expect("engine objects")
-            .iter()
-            .find(|object| object["name"] == "@Cursor")
-            .and_then(|object| object["id"].as_u64())
-            .expect("@Cursor id");
-        let floor_id = export["engine"]["objects"]
-            .as_array()
-            .expect("engine objects")
-            .iter()
-            .find(|object| object["name"] == "@Floor")
-            .and_then(|object| object["id"].as_u64())
-            .expect("@Floor id");
-        let level = &export["levels"][0];
-        let request = json!({
-            "version": 1,
-            "rules": {
-                "compileId": "test-compile",
-                "documentId": "test-document",
-                "modelKind": "2d",
-                "compiledPlay": export["compiledPlay"].clone(),
-                "runRulesOnLevelStart": export["engine"]["runRulesOnLevelStart"].clone(),
-                "goal": export["goal"].clone(),
-                "lose": export["lose"].clone()
-            },
-            "target": {
-                "origin": "preview-level",
-                "compileId": "test-compile",
-                "documentId": "test-document",
-                "level": {
-                    "index": 0,
-                    "levelName": level["name"].clone()
-                },
-                "state": {
-                    "kind": "compiled-start",
-                    "lifecycle": "playable-start",
-                    "data": level["initialState"].clone()
-                }
-            },
-            "maxDepth": 2,
-            "maxNodes": 100,
-            "maxMs": 0
-        });
-
-        let response = parse_json_object(
-            &solver_task_initial_display_state_json(&request.to_string()).unwrap(),
-        );
-        let slots = response["slots"].as_array().expect("display slots");
-
-        assert!(slots.iter().any(|slot| slot.as_u64() == Some(cursor_id)));
-        assert!(slots.iter().any(|slot| slot.as_u64() == Some(floor_id)));
     }
 
     #[cfg(feature = "solver")]
@@ -3309,8 +2892,8 @@ rules {
 
         let initial = bridge.request_json("GET", "/api/state").unwrap();
         let initial: serde_json::Value = serde_json::from_str(&initial).unwrap();
-        assert_eq!(initial["currentScene"], "main");
-        assert_eq!(initial["title"], "Ascii Click Smoke");
+        assert_eq!(initial["currentScene"], "title");
+        assert_eq!(initial["title"], "Microban");
         let initial = initial.as_object().unwrap();
         assert!(initial.contains_key("visibleScenes"));
         assert!(initial.contains_key("sceneState"));
@@ -3320,14 +2903,14 @@ rules {
         assert!(!initial.contains_key("screenPuzzles"));
 
         let playing = bridge
-            .request_json("POST", "/api/command/goto%20main")
+            .request_json("POST", "/api/command/goto%20playing")
             .unwrap();
         let playing: serde_json::Value = serde_json::from_str(&playing).unwrap();
-        assert_eq!(playing["currentScene"], "main");
+        assert_eq!(playing["currentScene"], "playing");
         assert_eq!(playing["levelIndex"], 0);
 
         let save: serde_json::Value = serde_json::from_str(&bridge.progress_save_json()).unwrap();
-        assert_eq!(save["currentLevel"], "ascii");
+        assert_eq!(save["currentLevel"], "microban_01");
     }
 
     #[test]
@@ -3580,7 +3163,7 @@ level_menu
         let source = r#"
 title = "Standalone Tween Fixture"
 
-animation {
+render {
   tween {
     duration = 300ms
   }
@@ -3619,7 +3202,7 @@ scene playing {
                 .unwrap();
 
         let playing = bridge
-            .request_json("POST", "/api/command/goto%20playing(default.first)")
+            .request_json("POST", "/api/command/goto%20playing(%22first%22)")
             .unwrap();
         let playing: serde_json::Value = serde_json::from_str(&playing).unwrap();
         assert_eq!(playing["currentScene"], "playing");
@@ -3652,7 +3235,7 @@ input_buffer {
   min_wait = 75ms
 }
 
-animation {
+render {
   tween {
     duration = 80ms
   }
@@ -3694,7 +3277,7 @@ scene playing {
                 .unwrap();
 
         bridge
-            .request_json("POST", "/api/command/goto%20playing(default.first)")
+            .request_json("POST", "/api/command/goto%20playing(%22first%22)")
             .unwrap();
 
         let moved = bridge.request_json("POST", "/api/input/right").unwrap();
@@ -3739,7 +3322,7 @@ scene playing {
         .unwrap();
         bridge
             .restore_progress_save_json(
-                r#"{"version":1,"levels":[{"name":"ascii","cleared":true}],"currentLevel":"ascii","persistentVars":[]}"#,
+                r#"{"version":1,"levels":[{"name":"microban_01","cleared":true}],"currentLevel":"microban_01","persistentVars":[]}"#,
             )
             .unwrap();
 

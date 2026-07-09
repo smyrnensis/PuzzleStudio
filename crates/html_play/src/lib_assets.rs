@@ -46,7 +46,7 @@ fn load_asset_css(puzzle_path: &Path, assets: &AssetsDef) -> Result<String, AppE
 #[cfg(not(target_arch = "wasm32"))]
 fn load_game_visuals_js(puzzle_path: &Path, loaded: &LoadedGame) -> Result<String, AppError> {
     let mut scripts = vec![
-        asset_resolver_js(puzzle_path, &loaded.assets)?,
+        asset_resolver_js(puzzle_path, loaded)?,
         VISUALS_JS.to_string(),
     ];
     let base_dir = puzzle_path.parent().unwrap_or_else(|| Path::new("."));
@@ -125,17 +125,28 @@ fn inline_css_urls(css: &str, base_dir: &Path) -> Result<String, AppError> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn asset_resolver_js(puzzle_path: &Path, assets: &AssetsDef) -> Result<String, AppError> {
+fn asset_resolver_js(puzzle_path: &Path, loaded: &LoadedGame) -> Result<String, AppError> {
     let parent = puzzle_path.parent().unwrap_or_else(|| Path::new("."));
     let mut files = String::new();
     files.push('{');
     let mut first = true;
-    for asset in assets
+    let mut paths = loaded
+        .assets
         .entries
         .iter()
         .filter(|asset| asset.kind == AssetKind::File)
+        .map(|asset| asset.path.clone())
+        .collect::<Vec<_>>();
+    for sprite in &loaded.visuals.sprites {
+        if let VisualSpriteKind::Image { source } = &sprite.kind
+            && !paths.iter().any(|path| path == source)
+        {
+            paths.push(source.clone());
+        }
+    }
+    for asset_path in paths
     {
-        let path = resolve_asset_path(parent, &asset.path)?;
+        let path = resolve_asset_path(parent, &asset_path)?;
         push_asset_resolver_entry(parent, &path, &mut files, &mut first)?;
     }
     files.push('}');
@@ -318,14 +329,36 @@ fn push_visual_sprite(out: &mut String, sprite: &VisualSpriteDef) {
             out.push_str("]}");
         }
     }
-    if sprite.offset.x != 0 || sprite.offset.y != 0 || sprite.pixels_per_cell.is_some() {
+    if sprite.offset.x != 0.0
+        || sprite.offset.y != 0.0
+        || sprite.fit != Default::default()
+        || sprite.sampling.is_some()
+        || sprite.loop_animation.is_some()
+        || sprite.pixels_per_cell.is_some()
+    {
         out.pop();
-        if sprite.offset.x != 0 || sprite.offset.y != 0 {
+        if sprite.offset.x != 0.0 || sprite.offset.y != 0.0 {
             out.push_str(",\"offset\":{\"x\":");
             out.push_str(&sprite.offset.x.to_string());
             out.push_str(",\"y\":");
             out.push_str(&sprite.offset.y.to_string());
             out.push('}');
+        }
+        if sprite.fit != Default::default() {
+            out.push_str(",\"fit\":{\"mode\":");
+            push_json_string(out, visual_sprite_fit_mode_name(sprite.fit.mode));
+            out.push_str(",\"width\":");
+            out.push_str(&sprite.fit.width.to_string());
+            out.push_str(",\"height\":");
+            out.push_str(&sprite.fit.height.to_string());
+            out.push('}');
+        }
+        if let Some(sampling) = sprite.sampling {
+            out.push_str(",\"sampling\":");
+            push_json_string(out, visual_sprite_sampling_name(sampling));
+        }
+        if let Some(loop_animation) = &sprite.loop_animation {
+            push_visual_sprite_loop(out, loop_animation);
         }
         if let Some(pixels_per_cell) = sprite.pixels_per_cell {
             out.push_str(",\"pixelsPerCell\":{\"width\":");
@@ -335,5 +368,40 @@ fn push_visual_sprite(out: &mut String, sprite: &VisualSpriteDef) {
             out.push('}');
         }
         out.push('}');
+    }
+}
+
+fn push_visual_sprite_loop(out: &mut String, loop_animation: &puzzle_lang::VisualSpriteLoopDef) {
+    out.push_str(",\"durationMs\":");
+    out.push_str(&loop_animation.duration_ms.to_string());
+    out.push_str(",\"frames\":[");
+    for (frame_index, frame) in loop_animation.frames.iter().enumerate() {
+        if frame_index > 0 {
+            out.push(',');
+        }
+        out.push('[');
+        for (row_index, row) in frame.iter().enumerate() {
+            if row_index > 0 {
+                out.push(',');
+            }
+            push_json_string(out, row);
+        }
+        out.push(']');
+    }
+    out.push(']');
+}
+
+fn visual_sprite_fit_mode_name(mode: puzzle_lang::VisualSpriteFitMode) -> &'static str {
+    match mode {
+        puzzle_lang::VisualSpriteFitMode::Contain => "contain",
+        puzzle_lang::VisualSpriteFitMode::Cover => "cover",
+        puzzle_lang::VisualSpriteFitMode::Stretch => "stretch",
+    }
+}
+
+fn visual_sprite_sampling_name(sampling: puzzle_lang::VisualSpriteSampling) -> &'static str {
+    match sampling {
+        puzzle_lang::VisualSpriteSampling::Pixelated => "pixelated",
+        puzzle_lang::VisualSpriteSampling::Smooth => "smooth",
     }
 }

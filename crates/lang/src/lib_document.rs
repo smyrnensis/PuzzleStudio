@@ -222,7 +222,7 @@ fn classify_known_mixed_document_section(tokens: &[&str]) -> Option<MixedSection
         | ["default_wait_time", ..]
         | ["again_interval", ..]
         | ["input_buffer", ..]
-        | ["animation", ..]
+        | ["render", ..]
         | ["sounds", ..]
         | ["theme", ..]
         | ["assets", ..] => MixedSectionTarget::Shared,
@@ -672,6 +672,7 @@ enum ModelTopLevelDirective {
     DefaultWaitTime,
     AgainInterval,
     InputBuffer,
+    Render,
     Animation,
     Scene,
     Sounds,
@@ -799,11 +800,18 @@ const MODEL_TOP_LEVEL_ALTERNATIVES: &[HeaderChoiceAlternative<
         authoring_surface: true,
     },
     HeaderChoiceAlternative {
+        trigger: "render",
+        label: "render",
+        action: ModelTopLevelDirective::Render,
+        expected_group: Some(ModelTopLevelExpectedGroup::Config),
+        authoring_surface: true,
+    },
+    HeaderChoiceAlternative {
         trigger: "animation",
         label: "animation",
         action: ModelTopLevelDirective::Animation,
-        expected_group: Some(ModelTopLevelExpectedGroup::Config),
-        authoring_surface: true,
+        expected_group: None,
+        authoring_surface: false,
     },
     HeaderChoiceAlternative {
         trigger: "scene",
@@ -906,7 +914,13 @@ fn model_top_level_surface_directive(token: &str) -> Option<ModelTopLevelDirecti
 pub(crate) fn model_top_level_completion_keywords() -> Vec<&'static str> {
     MODEL_TOP_LEVEL_ALTERNATIVES
         .iter()
-        .filter(|alternative| alternative.authoring_surface)
+        .filter(|alternative| {
+            alternative.authoring_surface
+                && !crate::authoring_grammar::authoring_head_surface(
+                    crate::authoring_grammar::AuthoringKind::Root,
+                    alternative.trigger,
+                )
+        })
         .map(|alternative| alternative.trigger)
         .collect()
 }
@@ -998,6 +1012,9 @@ fn parse_document_shell_lines(
     while index < lines.len() {
         let tokens = split_header_tokens(&line_texts[index]);
         match tokens.as_slice() {
+            [] => {
+                index += 1;
+            }
             ["title", ..] => {
                 shell.title = parse_metadata_text(&line_texts[index], "title")?;
                 index += 1;
@@ -1015,20 +1032,24 @@ fn parse_document_shell_lines(
                 index += 1;
             }
             ["default_wait_time", ..] => {
-                shell.default_wait_ms =
-                    parse_default_wait_time_directive(&tokens, &line_texts[index])?;
+                shell.default_wait_ms = parse_default_wait_time_directive(&line_texts[index])?;
                 index += 1;
             }
             ["again_interval", ..] => {
-                shell.default_again_ms =
-                    parse_again_interval_directive(&tokens, &line_texts[index])?;
+                shell.default_again_ms = parse_again_interval_directive(&line_texts[index])?;
                 index += 1;
             }
             ["input_buffer", ..] => {
                 index = parse_input_buffer_block(&line_texts, index, &mut shell.input_buffer)?;
             }
+            ["render", ..] => {
+                index = parse_render_animation_block(&line_texts, index, &mut shell.animation)?;
+            }
             ["animation", ..] => {
-                index = parse_animation_block(&line_texts, index, &mut shell.animation)?;
+                return Err(parse_error(
+                    &line_texts[index],
+                    "top-level animation block was removed; use render { tween_duration = <duration> }",
+                ));
             }
             ["sounds"] => {
                 if model_sounds_block_starts(&line_texts, index) {
@@ -1037,22 +1058,13 @@ fn parse_document_shell_lines(
                     index = parse_sounds_block(&line_texts, index, &mut shell.sounds)?;
                 }
             }
-            ["theme", name] if next_line_is_not_block_body(&line_texts, index) => {
-                parse_theme_name_directive(&line_texts[index], name, &mut shell.theme)?;
-                index += 1;
-            }
             ["theme"] | ["theme", ..] => {
                 index = parse_theme_statement(&line_texts, index, &mut shell.theme)?;
             }
             ["assets"] => {
                 index = parse_assets_block(&line_texts, index, &mut shell.assets)?;
             }
-            _ if is_block_header_line(&line_texts[index]) => {
-                index = skip_logical_block(&line_texts, index);
-            }
-            _ => {
-                index += 1;
-            }
+            _ => break,
         }
     }
     Ok(shell)
@@ -1077,7 +1089,7 @@ fn strip_document_shell_source(source: &str) -> Result<String, DiagnosticReport>
                     index += 1;
                     continue;
                 }
-                ["input_buffer", ..] | ["animation", ..] | ["sounds", ..] | ["assets", ..] => {
+                ["input_buffer", ..] | ["render", ..] | ["sounds", ..] | ["assets", ..] => {
                     index = skip_surface_shell_block_by_syntax(&document, index);
                     continue;
                 }
@@ -1103,7 +1115,7 @@ fn strip_document_shell_source(source: &str) -> Result<String, DiagnosticReport>
                     | ["default_wait_time", ..]
                     | ["again_interval", ..]
                     | ["input_buffer", ..]
-                    | ["animation", ..]
+                    | ["render", ..]
                     | ["sounds", ..]
                     | ["assets", ..]
                     | ["theme", ..]
@@ -1136,7 +1148,7 @@ fn strip_document_shell_lines(lines: &[source::LogicalLine]) -> Vec<source::Logi
                     index += 1;
                     continue;
                 }
-                ["input_buffer", ..] | ["animation", ..] | ["sounds", ..] | ["assets", ..] => {
+                ["input_buffer", ..] | ["render", ..] | ["sounds", ..] | ["assets", ..] => {
                     index = skip_shell_logical_block_by_syntax(lines, index);
                     continue;
                 }
@@ -1162,7 +1174,7 @@ fn strip_document_shell_lines(lines: &[source::LogicalLine]) -> Vec<source::Logi
                     | ["default_wait_time", ..]
                     | ["again_interval", ..]
                     | ["input_buffer", ..]
-                    | ["animation", ..]
+                    | ["render", ..]
                     | ["sounds", ..]
                     | ["assets", ..]
                     | ["theme", ..]
@@ -1225,58 +1237,12 @@ fn skip_surface_shell_block_by_syntax(document: &SurfaceDocument, index: usize) 
 
 fn surface_theme_line_is_block(document: &SurfaceDocument, index: usize) -> bool {
     let trimmed = strip_line_comment(&document.lines[index].content).trim();
-    if raw_brace_delta(trimmed) > 0 {
-        return true;
-    }
-    document.lines.get(index + 1).is_some_and(|next| {
-        let trimmed = strip_line_comment(&next.content).trim();
-        trimmed == BLOCK_CLOSE || is_theme_setting_line(trimmed)
-    })
+    raw_brace_delta(trimmed) > 0
 }
 
 fn logical_theme_line_is_block(lines: &[source::LogicalLine], index: usize) -> bool {
     let trimmed = strip_line_comment(&lines[index].text).trim();
-    if raw_brace_delta(trimmed) > 0 {
-        return true;
-    }
-    lines.get(index + 1).is_some_and(|next| {
-        let trimmed = strip_line_comment(&next.text).trim();
-        trimmed == BLOCK_CLOSE || is_theme_setting_line(trimmed)
-    })
-}
-
-fn next_line_is_not_block_body(lines: &[String], index: usize) -> bool {
-    let Some(next) = lines.get(index + 1) else {
-        return true;
-    };
-    if is_block_close_line(next) {
-        return true;
-    }
-    let tokens = split_header_tokens(next);
-    logical_line_starts_document_boundary(tokens.as_slice())
-}
-
-fn logical_line_starts_document_boundary(tokens: &[&str]) -> bool {
-    matches!(
-        tokens,
-        ["title", ..]
-            | ["subtitle", ..]
-            | ["author", ..]
-            | ["homepage", ..]
-            | ["default_wait_time", ..]
-            | ["again_interval", ..]
-            | ["input_buffer", ..]
-            | ["puzzle", ..]
-            | ["puzzle3", ..]
-            | ["levels", ..]
-            | ["levels3", ..]
-            | ["sprites", ..]
-            | ["sprites3", ..]
-            | ["scene", ..]
-            | ["sounds"]
-            | ["theme", ..]
-            | ["assets"]
-    )
+    raw_brace_delta(trimmed) > 0
 }
 
 fn skip_logical_block(lines: &[String], start: usize) -> usize {
@@ -1482,10 +1448,17 @@ fn collect_levels2_expansion_entries(
                     entries.len(),
                     namespace_count,
                 );
-                let name = if matches!(tokens.as_slice(), ["{"]) {
+                let header_name = if matches!(tokens.as_slice(), ["{"]) {
                     auto_name
                 } else {
                     parse_level_header_name_or_auto(&lines[i], auto_name)?
+                };
+                let name = if puzzle_authoring::is_braced_level_header(&lines[i])
+                    || matches!(tokens.as_slice(), ["{"])
+                {
+                    braced_level_name_override_or(lines, i, header_name)?
+                } else {
+                    header_name
                 };
                 entries.push(LevelExpansionEntry {
                     name,
@@ -1545,11 +1518,12 @@ fn collect_levels3_expansion_entries(
                 entries.len(),
                 namespace_count,
             );
-            let name = if line == "{" {
+            let header_name = if line == "{" {
                 auto_name
             } else {
                 parse_level_header_name_or_auto(line, auto_name)?
             };
+            let name = braced_level_name_override_or(lines, i, header_name)?;
             entries.push(LevelExpansionEntry {
                 name,
                 pack: pack.clone(),
@@ -2269,18 +2243,28 @@ fn parse_game2d_expanded_lines_with_shell_inner(
                 i += 1;
             }
             ModelTopLevelDirective::DefaultWaitTime => {
-                default_wait_ms = parse_default_wait_time_directive(&tokens, line)?;
+                default_wait_ms = parse_default_wait_time_directive(line)?;
                 i += 1;
             }
             ModelTopLevelDirective::AgainInterval => {
-                default_again_ms = parse_again_interval_directive(&tokens, line)?;
+                default_again_ms = parse_again_interval_directive(line)?;
                 i += 1;
             }
             ModelTopLevelDirective::InputBuffer => {
                 i = parse_input_buffer_block(&lines, i, &mut input_buffer)?;
             }
+            ModelTopLevelDirective::Render => {
+                i = parse_puzzle_render_block(&lines, i, &mut render, &mut animation)?;
+            }
             ModelTopLevelDirective::Animation => {
-                i = parse_animation_block(&lines, i, &mut animation)?;
+                diagnostics.extend(
+                    parse_error(
+                        line,
+                        "top-level animation block was removed; use render { tween_duration = <duration> }",
+                    )
+                    .into_diagnostics(),
+                );
+                i = recover_after_directive_error(&lines, i);
             }
             ModelTopLevelDirective::Scene => {
                 diagnostics.extend(parse_error(

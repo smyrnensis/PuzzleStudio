@@ -293,12 +293,18 @@ pub enum RuleAnimationTrigger {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AnimationDef {
     pub tween: TweenAnimationDef,
+    #[serde(default)]
+    pub default_duration_ms: Option<u64>,
+    #[serde(default)]
+    pub triggers: Vec<TriggerAnimationDef>,
 }
 
 impl Default for AnimationDef {
     fn default() -> Self {
         Self {
             tween: TweenAnimationDef::default(),
+            default_duration_ms: None,
+            triggers: Vec::new(),
         }
     }
 }
@@ -319,6 +325,24 @@ impl Default for TweenAnimationDef {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TriggerAnimationDef {
+    pub name: String,
+    pub duration_ms: u64,
+    pub kind: TriggerAnimationKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TriggerAnimationKind {
+    Motion {
+        motion: String,
+    },
+    Ascii {
+        frames: Vec<Vec<String>>,
+        colors: Vec<VisualColorDef>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RuleEffect {
     Win,
     Restart,
@@ -326,15 +350,41 @@ pub enum RuleEffect {
     Again,
     Checkpoint,
     ClearCheckpoint,
-    PlaySfx { name: String },
-    PlayMusic { name: String },
-    PauseMusic { name: Option<String> },
-    ResumeMusic { name: Option<String> },
-    StopMusic { name: Option<String> },
-    Wait { milliseconds: u64 },
+    PlaySfx {
+        name: String,
+    },
+    PlayMusic {
+        name: String,
+    },
+    PauseMusic {
+        name: Option<String>,
+    },
+    ResumeMusic {
+        name: Option<String>,
+    },
+    StopMusic {
+        name: Option<String>,
+    },
+    Wait {
+        milliseconds: u64,
+    },
     WaitAnimation,
-    Message { text: String, literal: bool },
+    EmitAnimation {
+        name: String,
+        component: u16,
+        offset: AnimationOffset,
+    },
+    Message {
+        text: String,
+        literal: bool,
+    },
     Scene(SceneEffect),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnimationOffset {
+    pub x: u16,
+    pub y: u16,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -430,13 +480,56 @@ pub struct VisualSpriteDef {
     pub name: String,
     pub kind: VisualSpriteKind,
     pub offset: VisualSpriteOffset,
+    pub fit: VisualSpriteFit,
+    pub sampling: Option<VisualSpriteSampling>,
+    #[serde(default)]
+    pub loop_animation: Option<VisualSpriteLoopDef>,
+    #[serde(default)]
     pub pixels_per_cell: Option<VisualSpritePixelsPerCell>,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct VisualSpriteLoopDef {
+    pub duration_ms: u64,
+    pub frames: Vec<Vec<String>>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct VisualSpriteOffset {
-    pub x: i32,
-    pub y: i32,
+    pub x: f64,
+    pub y: f64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VisualSpriteFit {
+    pub mode: VisualSpriteFitMode,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl Default for VisualSpriteFit {
+    fn default() -> Self {
+        Self {
+            mode: VisualSpriteFitMode::Contain,
+            width: 1,
+            height: 1,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VisualSpriteFitMode {
+    Contain,
+    Cover,
+    Stretch,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VisualSpriteSampling {
+    Pixelated,
+    Smooth,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -457,7 +550,7 @@ pub enum VisualSpriteKind {
     },
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VisualColorDef {
     pub token: char,
     pub color: String,

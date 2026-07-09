@@ -1,6 +1,6 @@
 title = "Basic PS Sokoban"
 
-theme puzzlescript
+theme = "puzzlescript"
 
 puzzle main {
 layers {

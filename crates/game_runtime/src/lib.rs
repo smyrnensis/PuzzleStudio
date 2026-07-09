@@ -2917,7 +2917,7 @@ step board
         let source = r#"
 title = "Runtime Tween Fixture"
 
-animation {
+render {
   tween {
     duration = 300ms
   }
@@ -2987,7 +2987,7 @@ scene = playing {
         let source = r#"
 title = "3D Tween"
 
-animation {
+render {
   tween {
     duration = 300ms
   }
@@ -3056,7 +3056,7 @@ P.
         let source = r#"
 title = "3D Fixture Runtime"
 
-animation {
+render {
   tween {
     duration = 300ms
   }

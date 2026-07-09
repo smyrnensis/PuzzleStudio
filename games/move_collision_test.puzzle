@@ -4,8 +4,8 @@ author = "PuzzleStudio"
 default_wait_time = 100ms
 
 sounds {
-sfx move seed=move type=jump
-sfx bump seed=bump type=hit
+sfx move { seed = move; type = jump }
+sfx bump { seed = bump; type = hit }
 }
 
 puzzle move_collision {

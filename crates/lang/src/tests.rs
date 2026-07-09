@@ -231,7 +231,6 @@ fn test_starts_block(tokens: &[&str]) -> bool {
             | ["level_start"]
             | ["on_level_clear"]
             | ["level_clear"]
-            | ["on_display"]
             | ["routine", ..]
             | ["rule", ..]
             | ["once_all"]
@@ -531,10 +530,6 @@ routine @paint once {
 [ Player no @Cursor no @Hint ] -> [ Player @Cursor @Hint ]
 }
 
-on_display {
-@paint
-}
-
 rules {
 @paint
 }
@@ -555,15 +550,9 @@ P
     assert!(loaded.is_display_object(hint));
     assert!(!initial.has_object(&loaded.game, 0, 0, cursor));
 
-    let displayed = transition_program(
-        &loaded.game,
-        loaded.display_program.as_deref().unwrap(),
-        initial,
-        InputId(0),
-    )
-    .unwrap();
-    assert!(displayed.has_object(&loaded.game, 0, 0, cursor));
-    assert!(displayed.has_object(&loaded.game, 0, 0, hint));
+    let stepped = transition_state(&loaded.game, initial, InputId(0)).unwrap();
+    assert!(stepped.has_object(&loaded.game, 0, 0, cursor));
+    assert!(stepped.has_object(&loaded.game, 0, 0, hint));
 }
 
 #[test]
@@ -724,8 +713,8 @@ fn top_level_sounds_keeps_only_seed_and_settings() {
 title = sounds_game
 
 sounds {
-  sfx effect seed=746670 type=jump volume=0.35
-  music loop seed=123456 bars=16 height=0.62 bpm=104 volume=0.8
+sfx effect { seed = 746670; type = jump; volume = 0.35 }
+music loop { seed = 123456; bars = 16; height = 0.62; bpm = 104; volume = 0.8 }
 }
 
 puzzle board {
@@ -770,7 +759,7 @@ fn top_level_sfx_volume_defaults_to_existing_full_gain() {
 title = sounds_game
 
 sounds {
-  sfx effect seed=746670 type=jump
+sfx effect { seed = 746670; type = jump }
 }
 
 puzzle board {
@@ -804,8 +793,8 @@ fn top_level_sounds_allow_volume_above_full_gain() {
 title = sounds_game
 
 sounds {
-  sfx effect seed=746670 type=jump volume=1.5
-  music loop seed=123456 bars=16 height=0.62 bpm=104 volume=1.25
+sfx effect { seed = 746670; type = jump; volume = 1.5 }
+music loop { seed = 123456; bars = 16; height = 0.62; bpm = 104; volume = 1.25 }
 }
 
 puzzle board {
@@ -840,7 +829,7 @@ fn top_level_sounds_reject_negative_volume() {
 title = sounds_game
 
 sounds {
-  sfx effect seed=746670 type=jump volume=-0.1
+sfx effect { seed = 746670; type = jump; volume = -0.1 }
 }
 
 puzzle board {
@@ -874,7 +863,7 @@ P
 title = sounds_game
 
 sounds {
-  music loop seed=123456 bars=16 height=0.62 bpm=104 volume=-0.1
+music loop { seed = 123456; bars = 16; height = 0.62; bpm = 104; volume = -0.1 }
 }
 
 puzzle board {
@@ -911,7 +900,7 @@ fn model_sounds_resolve_against_whole_puzzle_scope() {
 title = scoped_model_sounds
 
 sounds {
-sfx push seed=push01 type=jump
+sfx push { seed = push01; type = jump }
 }
 
 puzzle sokoban {
@@ -952,8 +941,8 @@ fn model_sounds_parse_undo_and_restart_sfx_operations() {
 title = operation_sounds
 
 sounds {
-sfx back seed=back01 type=hit
-sfx reset seed=reset01 type=jump
+sfx back { seed = back01; type = hit }
+sfx reset { seed = reset01; type = jump }
 }
 
 puzzle sokoban {
@@ -1004,7 +993,7 @@ fn model_sounds_report_selector_errors_at_sound_entry() {
 title = bad_model_sound_selector
 
 sounds {
-sfx push seed=push01 type=jump
+sfx push { seed = push01; type = jump }
 }
 
 puzzle sokoban {
@@ -1047,7 +1036,7 @@ fn top_level_audio_block_is_rejected() {
 title = old_sounds_keyword
 
 audio {
-  sfx effect seed=746670 type=jump
+  sfx effect { seed = 746670; type = jump }
 }
 "#;
 
@@ -1317,12 +1306,12 @@ P
 }
 
 #[test]
-fn top_level_animation_tween_parses_to_game_settings() {
+fn top_level_render_tween_parses_to_game_settings() {
     let loaded = parse_game(
         r#"
 title = tween_fixture
-animation {
-tween duration=90ms
+render {
+tween_duration = 90ms
 }
 
 puzzle main {
@@ -1347,6 +1336,39 @@ P
 
     assert!(loaded.animation.tween.enabled);
     assert_eq!(loaded.animation.tween.interval_ms, 90);
+}
+
+#[test]
+fn top_level_render_tween_rejects_zero_header_inline_node() {
+    let error = parse_game(
+        r#"
+title = tween_fixture
+render {
+tween duration 90ms
+}
+
+puzzle main {
+layers {
+actor = Player
+}
+rules {
+
+}
+levels {
+legend {
+. = empty
+P = Player
+}
+level "first"
+P
+}
+}
+"#,
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("tween must use block form"));
 }
 
 #[test]
@@ -1386,10 +1408,10 @@ P
 }
 
 #[test]
-fn animation_tween_rejects_old_enabled_assignment() {
+fn render_tween_rejects_old_enabled_assignment() {
     let source = r#"
 title = tween_fixture
-animation {
+render {
 tween {
 enabled = true
 }
@@ -1417,11 +1439,11 @@ P
 }
 
 #[test]
-fn animation_tween_adds_move_rule_animation_without_sounds() {
+fn render_tween_adds_move_rule_animation_without_sounds() {
     let loaded = parse_game(
         r#"
 title = tween_animation_fixture
-animation {
+render {
 tween {
 duration = 80ms
 }
@@ -5892,9 +5914,9 @@ fn parses_declared_assets() {
 title = assets_test
 
 assets {
-css "game.css"
-script "visuals.js"
-file "sprites/player.png"
+"game.css"
+"visuals.js"
+"sprites/player.png"
 }
 
 puzzle sokoban {
@@ -5926,6 +5948,35 @@ P
 }
 
 #[test]
+fn assets_reject_typed_entry_syntax() {
+    let source = r#"
+title = assets_old_syntax
+
+assets {
+css "game.css"
+}
+
+puzzle sokoban {
+layers {
+solid = Player
+}
+legend {
+. = empty
+P = Player
+}
+rules {
+}
+levels {
+level "one"
+P
+}
+}
+"#;
+    let error = parse_game(source).unwrap_err().to_string();
+    assert!(error.contains("css row must be: <string>"));
+}
+
+#[test]
 fn top_level_levels_and_sprites_are_canonical_resources() {
     let source = r##"
 title = top_resources
@@ -5942,7 +5993,10 @@ rules {
 }
 
 sprites {
-Player #fff
+sprite {
+selector = Player
+colors = #fff
+}
 }
 
 levels worldA of default {
@@ -6074,9 +6128,12 @@ sprites {
 colors {
 white = #ffffff
 }
-Player
-white
+sprite {
+selector = Player
+colors = white
+shape =
 0
+}
 }
 "##,
     )
@@ -6115,8 +6172,14 @@ rules {
 }
 
 sprites {
-Player #fff
-Box #000
+sprite {
+selector = Player
+colors = #fff
+}
+sprite {
+selector = Box
+colors = #000
+}
 }
 
 levels worldA of default {
@@ -6184,7 +6247,8 @@ P
 }
 }
 
-theme clean {
+theme {
+preset = "clean"
 accent_color = #2f7ebc
 }
 "##,
@@ -6230,9 +6294,12 @@ sprites {
 colors {
 white = #ffffff
 }
-Player
-white
+sprite {
+selector = Player
+colors = white
+shape =
 0
+}
 }
 
 levels worldA of default {
@@ -6270,7 +6337,8 @@ fn theme_background_alias_sets_background_variable() {
     let loaded = parse_game(
         r##"
 title = themed
-theme puzzlescript {
+theme {
+preset = "puzzlescript"
 background = #123456
 }
 puzzle default {
@@ -6335,15 +6403,17 @@ LEVELS
     )
     .unwrap();
 
-    assert!(canonical.contains("theme puzzlescript {\nbackground_color = #123456\n}"));
+    assert!(
+        canonical.contains("theme {\npreset = \"puzzlescript\"\nbackground_color = #123456\n}")
+    );
 }
 
 #[test]
-fn theme_name_can_be_declared_without_block() {
+fn theme_preset_can_be_selected_without_block() {
     let loaded = parse_game(
         r##"
 title = themed
-theme pixel
+theme = "pixel"
 puzzle default {
 layers {
 actor = Player
@@ -6372,7 +6442,8 @@ fn theme_setting_accepts_assignment_syntax() {
     let loaded = parse_game(
         r##"
 title = themed
-theme clean {
+theme {
+preset = "clean"
 background_color = #123456
 accent_color = #abcdef
 }
@@ -6421,7 +6492,8 @@ fn theme_rejects_non_public_color_settings() {
     let error = parse_game(
         r##"
 title = themed
-theme clean {
+theme {
+preset = "clean"
 board_color = #edf1f2
 }
 puzzle default {
@@ -6454,7 +6526,8 @@ fn theme_rejects_non_color_style_settings() {
     let error = parse_game(
         r##"
 title = themed
-theme clean {
+theme {
+preset = "clean"
 ui_font = Inter
 }
 puzzle default {
@@ -6487,12 +6560,12 @@ P
 }
 
 #[test]
-fn theme_block_requires_name_in_header() {
+fn theme_block_requires_quoted_preset_value() {
     let error = parse_game(
         r##"
 title = themed
 theme {
-name pixel
+preset = pixel
 }
 puzzle default {
 layers {
@@ -6514,7 +6587,7 @@ P
     .unwrap_err()
     .to_string();
 
-    assert!(error.contains("theme header must be: theme <theme> or theme <theme> {"));
+    assert!(error.contains("preset must be a quoted string"));
 }
 
 #[test]
@@ -6705,12 +6778,15 @@ B {
 }
 }
 }
-Box:kind {
-colors piece_color:kind transparent
-shape mark:kind
+sprite {
+selector = Box:kind
+colors = piece_color:kind transparent
+shape = mark:kind
 }
-Wall {
-#444
+sprite {
+selector = Wall
+colors = #444
+shape =
 0
 }
 }
@@ -6769,8 +6845,10 @@ legend {
 . = empty
 }
 sprites {
-Player {
-#e94f64 #2f80ed
+sprite {
+selector = Player
+colors = #e94f64 #2f80ed
+shape =
 0.
 .1
 }
@@ -6826,8 +6904,10 @@ legend {
 . = empty
 }
 sprites {
-Box
-#aaa
+sprite {
+selector = Box
+colors = #aaa
+}
 }
 rules {
 
@@ -6866,8 +6946,10 @@ legend {
 . = empty
 }
 sprites {
-@Floor
-#eeeeee
+sprite {
+selector = @Floor
+colors = #eeeeee
+}
 }
 rules {
 
@@ -6900,8 +6982,10 @@ title = sprites_before_layers
 
 puzzle default {
 sprites {
-@Floor
-#eeeeee
+sprite {
+selector = @Floor
+colors = #eeeeee
+}
 }
 layers {
 @display_floor = @Floor
@@ -7037,10 +7121,14 @@ legend {
 . = empty
 }
 sprites {
-Player
-#ff0000
-@Floor
-#eeeeee
+sprite {
+selector = Player
+colors = #ff0000
+}
+sprite {
+selector = @Floor
+colors = #eeeeee
+}
 }
 rules {
 
@@ -7089,10 +7177,14 @@ legend {
 . = empty
 }
 sprites {
-Player
-#ff0000
-@Floor
-#eeeeee
+sprite {
+selector = Player
+colors = #ff0000
+}
+sprite {
+selector = @Floor
+colors = #eeeeee
+}
 }
 rules {
 
@@ -7127,9 +7219,14 @@ legend {
 . = empty
 }
 sprites {
-red #ff0000
-blue
-#0000ff
+sprite {
+selector = red
+colors = #ff0000
+}
+sprite {
+selector = blue
+colors = #0000ff
+}
 }
 rules {
 
@@ -7187,7 +7284,10 @@ A = #4a4
 B = #a4a
 }
 }
-Light:kind piece_color:kind
+sprite {
+selector = Light:kind
+colors = piece_color:kind
+}
 }
 rules {
 
@@ -7228,15 +7328,20 @@ legend {
 . = empty
 }
 sprites {
-Box
-#aaa
+sprite {
+selector = Box
+colors = #aaa
+shape =
 00000
 00000
 00000
 00000
 00000
-Wall
-#444
+}
+sprite {
+selector = Wall
+colors = #444
+}
 }
 rules {
 
@@ -7312,16 +7417,22 @@ Box {
 }
 }
 
-Hole
-#000
+sprite {
+selector = Hole
+colors = #000
+}
 
-Box:open
-#45667d #2f485d
-shape Box
+sprite {
+selector = Box:open
+colors = #45667d #2f485d
+shape = Box
+}
 
-Box:close
-#34444e #262f38
-shape Box
+sprite {
+selector = Box:close
+colors = #34444e #262f38
+shape = Box
+}
 }
 rules {
 
@@ -7383,17 +7494,23 @@ legend {
 . = empty
 }
 sprites {
-Crack
-#2cc511
+sprite {
+selector = Crack
+colors = #2cc511
+shape =
 .....
 ..0..
 .000.
 ..0..
 .....
+}
 
-Crack
-#000
+sprite {
+selector = Crack
+colors = #000
+shape =
 0
+}
 }
 rules {
 
@@ -7435,18 +7552,24 @@ legend {
 . = empty
 }
 sprites {
-Box
-#aaa
+sprite {
+selector = Box
+colors = #aaa
+shape =
 0000
 0000
 0000
 0000
+}
 
-Pull
-#bbb
+sprite {
+selector = Pull
+colors = #bbb
+shape =
 000
 000
 000
+}
 }
 rules {
 
@@ -7479,17 +7602,23 @@ legend {
 . = empty
 }
 sprites {
-Box
-#aaa
+sprite {
+selector = Box
+colors = #aaa
+shape =
 0000
 0000
 0000
 0000
+}
 
-Pull
-#bbb
+sprite {
+selector = Pull
+colors = #bbb
+shape =
 00
 00
+}
 }
 rules {
 
@@ -7527,12 +7656,18 @@ legend {
 . = empty
 }
 sprites {
-Box:base
-#aaa
+sprite {
+selector = Box:base
+colors = #aaa
+shape =
 0
-Box:movable
-#bbb
+}
+sprite {
+selector = Box:movable
+colors = #bbb
+shape =
 0
+}
 }
 rules {
 
@@ -7584,10 +7719,13 @@ colors {
 Gate_color_1 = #111111
 Gate_color_2 = #222222
 }
-Gate:num
-Gate_color_1 Gate_color_2
+sprite {
+selector = Gate:num
+colors = Gate_color_1 Gate_color_2
+shape =
 01
 10
+}
 }
 rules {
 
@@ -7713,8 +7851,10 @@ legend {
 . = empty
 }
 sprites {
-Player {
-#fff
+sprite {
+selector = Player
+colors = #fff
+shape =
 00000
 00000
 00000
@@ -7734,7 +7874,8 @@ P
 "##;
     let error = parse_game(source).unwrap_err().to_string();
     assert!(
-        error.contains("translate sprite transforms were removed; use `offset <x> <y>`"),
+        error.contains("visual shape rows must be equal-width ascii")
+            || error.contains("ASCII rows cannot contain braces"),
         "{error}"
     );
 }
@@ -7753,8 +7894,10 @@ legend {
 . = empty
 }
 sprites {
-Player {
-#fff
+sprite {
+selector = Player
+colors = #fff
+shape =
 0
 translate:right
 }
@@ -7770,7 +7913,7 @@ P
 "##;
     let error = parse_game(source).unwrap_err().to_string();
     assert!(
-        error.contains("translate sprite transforms were removed; use `offset <x> <y>`"),
+        error.contains("visual shape rows must be equal-width ascii"),
         "{error}"
     );
 }
@@ -7796,9 +7939,10 @@ box_shape {
 010
 }
 }
-Box {
-colors #111 #eee
-shape box_shape
+sprite {
+selector = Box
+colors = #111 #eee
+shape = box_shape
 }
 }
 rules {
@@ -7846,9 +7990,10 @@ box_shape {
 10
 }
 }
-Box {
-#111 #eee
-box_shape
+sprite {
+selector = Box
+colors = #111 #eee
+shape = box_shape
 }
 }
 rules {
@@ -7918,13 +8063,15 @@ B
 floor
 0
 }
-Box:kind {
-piece_color:kind transparent
-mark:kind
+sprite {
+selector = Box:kind
+colors = piece_color:kind transparent
+shape = mark:kind
 }
-@Floor {
-#111 #eee
-floor
+sprite {
+selector = @Floor
+colors = #111 #eee
+shape = floor
 }
 }
 rules {
@@ -7995,9 +8142,10 @@ mark:B
 11
 00
 }
-Box:kind {
-#111 #eee
-mark:kind
+sprite {
+selector = Box:kind
+colors = #111 #eee
+shape = mark:kind
 }
 }
 rules {
@@ -8052,9 +8200,10 @@ colors {
 box_color = #eee
 }
 
-Box {
-box_color #111
-shape box_shape
+sprite {
+selector = Box
+colors = box_color #111
+shape = box_shape
 }
 }
 rules {
@@ -8121,14 +8270,16 @@ Pull
 000
 }
 
-Box {
-colors #111 #eee
-shape Box
+sprite {
+selector = Box
+colors = #111 #eee
+shape = Box
 }
 
-Pull {
-colors #222 #0f0
-shape Pull
+sprite {
+selector = Pull
+colors = #222 #0f0
+shape = Pull
 }
 }
 rules {
@@ -8199,14 +8350,16 @@ Pad
 0
 }
 
-Box {
-colors #111 #eee
-shape Box
+sprite {
+selector = Box
+colors = #111 #eee
+shape = Box
 }
 
-Pad {
-colors #222
-shape Pad
+sprite {
+selector = Pad
+colors = #222
+shape = Pad
 }
 }
 rules {
@@ -8278,9 +8431,10 @@ box_shape {
 0123
 }
 }
-Box {
-colors shared shared tagged:A tagged:A
-shape box_shape
+sprite {
+selector = Box
+colors = shared shared tagged:A tagged:A
+shape = box_shape
 }
 }
 rules {
@@ -8315,7 +8469,48 @@ B
 }
 
 #[test]
-fn puzzle_sprites_accept_image_sprite_refs() {
+fn puzzle_sprites_accept_blank_separated_sprite_attachment() {
+    let source = r##"
+title = blank_separated_sprite_attachment
+
+puzzle default {
+layers {
+__legacy_layer_0 = Box
+}
+legend B = Box
+legend {
+. = empty
+}
+sprites {
+Box
+#123456
+}
+rules {
+
+}
+levels {
+level "start"
+B
+}
+}
+"##;
+    let loaded = parse_game(source).unwrap();
+    let sprite = loaded
+        .visuals
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "Box")
+        .unwrap();
+    match &sprite.kind {
+        VisualSpriteKind::Solid(color) => {
+            assert_eq!(color, "#123456");
+        }
+        _ => panic!("Box should be a solid sprite"),
+    }
+}
+
+#[test]
+fn puzzle_sprites_reject_same_line_sprite_attachment_body() {
     let source = r##"
 title = image_sprite_ref
 
@@ -8339,6 +8534,42 @@ B
 }
 }
 "##;
+    let error = parse_game(source).unwrap_err().to_string();
+    assert!(
+        error.contains("sprite attachment header must be one selector"),
+        "{error}"
+    );
+}
+
+#[test]
+fn puzzle_sprites_accept_braced_sprite_attachment_properties() {
+    let source = r##"
+title = braced_sprite_attachment
+
+puzzle default {
+layers {
+__legacy_layer_0 = Box
+}
+legend B = Box
+legend {
+. = empty
+}
+sprites {
+Box {
+image = "sprites/box.png"
+offset = 0 -1/4
+sampling = smooth
+}
+}
+rules {
+
+}
+levels {
+level "start"
+B
+}
+}
+"##;
     let loaded = parse_game(source).unwrap();
     let sprite = loaded
         .visuals
@@ -8352,6 +8583,90 @@ B
         }
         _ => panic!("Box should be an image sprite"),
     }
+    assert_eq!(sprite.offset.x, 0.0);
+    assert_eq!(sprite.offset.y, -0.25);
+    assert_eq!(sprite.sampling, Some(VisualSpriteSampling::Smooth));
+}
+
+#[test]
+fn puzzle_sprites_accept_sprite_node_image_properties() {
+    let source = r##"
+title = sprite_node_image_ref
+
+puzzle default {
+layers {
+__legacy_layer_0 = Box
+}
+legend B = Box
+legend {
+. = empty
+}
+sprites {
+sprite {
+selector = Box
+image = "sprites/box.png"
+offset = 0 -1/4
+sampling = smooth
+}
+}
+rules {
+
+}
+levels {
+level "start"
+B
+}
+}
+"##;
+    let loaded = parse_game(source).unwrap();
+    let sprite = loaded
+        .visuals
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "Box")
+        .unwrap();
+    match &sprite.kind {
+        VisualSpriteKind::Image { source } => {
+            assert_eq!(source, "sprites/box.png");
+        }
+        _ => panic!("Box should be an image sprite"),
+    }
+    assert_eq!(sprite.fit, VisualSpriteFit::default());
+    assert_eq!(sprite.offset.x, 0.0);
+    assert_eq!(sprite.offset.y, -0.25);
+    assert_eq!(sprite.sampling, Some(VisualSpriteSampling::Smooth));
+}
+
+#[test]
+fn puzzle_sprites_reject_gif_image_sprite_refs() {
+    let source = r##"
+title = image_sprite_ref
+
+puzzle default {
+layers {
+__legacy_layer_0 = Box
+}
+legend B = Box
+legend {
+. = empty
+}
+sprites {
+sprite {
+selector = Box
+image = "sprites/box.gif"
+}
+}
+rules {
+
+}
+levels {
+level "start"
+B
+}
+}
+"##;
+    let error = parse_game(source).unwrap_err().to_string();
+    assert!(error.contains("sprite image must use .png, .jpg, .jpeg, or .svg"));
 }
 
 #[test]
@@ -8368,8 +8683,10 @@ legend {
 . = empty
 }
 sprites {
-Player {
-#000000 #111111 #222222 #333333 #444444 #555555 #666666 #777777 #888888 #999999 #aaaaaa
+sprite {
+selector = Player
+colors = #000000 #111111 #222222 #333333 #444444 #555555 #666666 #777777 #888888 #999999 #aaaaaa
+shape =
 a
 }
 }
@@ -8416,8 +8733,10 @@ legend {
 . = empty
 }
 sprites {
-Player {
-#ff004d80 #00000000
+sprite {
+selector = Player
+colors = #ff004d80 #00000000
+shape =
 01
 }
 }
@@ -8469,8 +8788,10 @@ legend {
 . = empty
 }
 sprites {
-Player {
-#00000000 #555555
+sprite {
+selector = Player
+colors = #00000000 #555555
+shape =
 01.
 }
 }
@@ -8523,8 +8844,10 @@ legend {
 . = empty
 }
 sprites {
-Player {
-transparent #555
+sprite {
+selector = Player
+colors = transparent #555
+shape =
 01
 }
 }
@@ -8577,8 +8900,10 @@ legend {
 . = empty
 }
 sprites {
-Player {
-transparent
+sprite {
+selector = Player
+colors = transparent
+shape =
 01
 }
 }
@@ -8616,9 +8941,10 @@ player_shape {
 }
 }
 
-Player {
-#e94f64 #2f80ed
-player_shape
+sprite {
+selector = Player
+colors = #e94f64 #2f80ed
+shape = player_shape
 }
 }
 rules {
@@ -8759,9 +9085,10 @@ right {
 }
 }
 }
-Boundary:directions {
-colors transparent #555
-shape edge:directions
+sprite {
+selector = Boundary:directions
+colors = transparent #555
+shape = edge:directions
 }
 }
 rules {
@@ -8869,16 +9196,16 @@ legend {
 }
 sprites {
 shapes {
-edge:directions {
-rotate from up
+edge:directions rotate from up {
 111
 000
 000
 }
 }
-Boundary:directions {
-colors transparent #555
-shape edge:directions
+sprite {
+selector = Boundary:directions
+colors = transparent #555
+shape = edge:directions
 }
 }
 rules {
@@ -8936,12 +9263,18 @@ legend {
 . = empty
 }
 sprites {
-Boundary:directions
-rotate from up
-transparent #555
+shapes {
+edge:directions rotate from up {
 111
 000
 000
+}
+}
+sprite {
+selector = Boundary:directions
+colors = transparent #555
+shape = edge:directions
+}
 }
 rules {
 
@@ -8989,8 +9322,8 @@ layers {
 each @WallFrame:directions
 }
 sprites {
-@WallFrame:directions rotate from up
-#585858
+shapes {
+wall_frame:directions rotate from up {
 0000000
 .......
 .......
@@ -8998,6 +9331,13 @@ sprites {
 .......
 .......
 .......
+}
+}
+sprite {
+selector = @WallFrame:directions
+colors = #585858
+shape = wall_frame:directions
+}
 }
 rules {
 
@@ -9086,24 +9426,33 @@ shapes {
 Flag
 11
 00
-}
-@Boundary:directions
-rotate from up
-#000 #fff
+
+boundary:directions rotate from up {
 100
 000
 000
-
-@Corner:directions
-rotate from up
-#111 #fff
+}
+corner:directions rotate from up {
 010
 000
 000
-
-Goal:state
-shape Flag
-#222 #333
+}
+}
+sprite {
+selector = @Boundary:directions
+colors = #000 #fff
+shape = boundary:directions
+}
+sprite {
+selector = @Corner:directions
+colors = #111 #fff
+shape = corner:directions
+}
+sprite {
+selector = Goal:state
+colors = #222 #333
+shape = Flag
+}
 }
 rules {
 
@@ -9164,17 +9513,22 @@ shapes {
 Flag
 11
 00
-}
-Goal:state
-#222 #333
-shape Flag
 
-@LockedFrame:directions {
-rotate from up
-#000 #fff
+locked_frame:directions rotate from up {
 100
 000
 000
+}
+}
+sprite {
+selector = Goal:state
+colors = #222 #333
+shape = Flag
+}
+sprite {
+selector = @LockedFrame:directions
+colors = #000 #fff
+shape = locked_frame:directions
 }
 }
 rules {
@@ -9222,16 +9576,16 @@ legend {
 }
 sprites {
 shapes {
-edge:directions {
-rotate using clockwise from up
+edge:directions rotate using clockwise from up {
 111
 000
 000
 }
 }
-Boundary:directions {
-colors transparent #555
-shape edge:directions
+sprite {
+selector = Boundary:directions
+colors = transparent #555
+shape = edge:directions
 }
 }
 rules {
@@ -9276,10 +9630,12 @@ legend {
 . = empty
 }
 sprites {
-Player {
-pixels_per_cell 5 5
-offset 2 -1
-#e94f64 #2f80ed
+sprite {
+selector = Player
+offset = 0.5 -1/4
+sampling = smooth
+colors = #e94f64 #2f80ed
+shape =
 ........
 ..00....
 ..01....
@@ -9302,10 +9658,11 @@ P
         .iter()
         .find(|sprite| sprite.name == "Player")
         .unwrap();
-    assert_eq!(sprite.offset.x, 2);
-    assert_eq!(sprite.offset.y, -1);
-    assert_eq!(sprite.pixels_per_cell.unwrap().width, 5);
-    assert_eq!(sprite.pixels_per_cell.unwrap().height, 5);
+    assert_eq!(sprite.offset.x, 0.5);
+    assert_eq!(sprite.offset.y, -0.25);
+    assert_eq!(sprite.fit, VisualSpriteFit::default());
+    assert_eq!(sprite.sampling, Some(VisualSpriteSampling::Smooth));
+    assert!(sprite.pixels_per_cell.is_none());
     match &sprite.kind {
         VisualSpriteKind::Ascii { pattern, colors } => {
             assert_eq!(
@@ -9317,6 +9674,179 @@ P
                     "........".to_string(),
                 ]
                 .as_slice()
+            );
+            assert_eq!(colors[0].color, "#e94f64");
+            assert_eq!(colors[1].color, "#2f80ed");
+        }
+        _ => panic!("Player should be an ascii sprite"),
+    }
+}
+
+#[test]
+fn sprite_entry_accepts_canonical_selector_block() {
+    let source = r##"
+title = canonical_sprite_selector
+
+puzzle default {
+layers {
+__legacy_layer_0 = Player
+}
+legend P = Player
+legend {
+. = empty
+}
+sprites {
+sprite {
+selector = Player
+colors = #e94f64 #2f80ed
+shape =
+........
+..00....
+..01....
+........
+}
+}
+rules {
+
+}
+levels {
+level "start"
+P
+}
+}
+"##;
+    let loaded = parse_game(source).unwrap();
+    let sprite = loaded
+        .visuals
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "Player")
+        .unwrap();
+    match &sprite.kind {
+        VisualSpriteKind::Ascii { pattern, colors } => {
+            assert_eq!(
+                pattern.as_slice(),
+                [
+                    "........".to_string(),
+                    "..00....".to_string(),
+                    "..01....".to_string(),
+                    "........".to_string(),
+                ]
+                .as_slice()
+            );
+            assert_eq!(colors[0].color, "#e94f64");
+            assert_eq!(colors[1].color, "#2f80ed");
+        }
+        _ => panic!("Player should be an ascii sprite"),
+    }
+}
+
+#[test]
+fn sprite_entry_accepts_canonical_property_shape_block() {
+    let source = r##"
+title = canonical_sprite_property_shape
+
+puzzle default {
+layers {
+__legacy_layer_0 = Player
+}
+legend P = Player
+legend {
+. = empty
+}
+sprites {
+sprite {
+selector = Player
+colors = #e94f64 #2f80ed
+shape =
+........
+..00....
+..01....
+........
+}
+}
+rules {
+
+}
+levels {
+level "start"
+P
+}
+}
+"##;
+    let loaded = parse_game(source).unwrap();
+    let sprite = loaded
+        .visuals
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "Player")
+        .unwrap();
+    match &sprite.kind {
+        VisualSpriteKind::Ascii { pattern, colors } => {
+            assert_eq!(
+                pattern.as_slice(),
+                [
+                    "........".to_string(),
+                    "..00....".to_string(),
+                    "..01....".to_string(),
+                    "........".to_string(),
+                ]
+                .as_slice()
+            );
+            assert_eq!(colors[0].color, "#e94f64");
+            assert_eq!(colors[1].color, "#2f80ed");
+        }
+        _ => panic!("Player should be an ascii sprite"),
+    }
+}
+
+#[test]
+fn sprite_entry_accepts_explicit_shape_reference_property() {
+    let source = r##"
+title = canonical_sprite_shape_ref
+
+puzzle default {
+layers {
+__legacy_layer_0 = Player
+}
+legend P = Player
+legend {
+. = empty
+}
+sprites {
+shapes {
+BoxShape {
+00
+01
+}
+}
+sprite {
+selector = Player
+colors = #e94f64 #2f80ed
+shape = BoxShape
+}
+}
+rules {
+
+}
+levels {
+level "start"
+P
+}
+}
+"##;
+    let loaded = parse_game(source).unwrap();
+    let sprite = loaded
+        .visuals
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "Player")
+        .unwrap();
+    match &sprite.kind {
+        VisualSpriteKind::Ascii { pattern, colors } => {
+            assert_eq!(
+                pattern.as_slice(),
+                ["00".to_string(), "01".to_string()].as_slice()
             );
             assert_eq!(colors[0].color, "#e94f64");
             assert_eq!(colors[1].color, "#2f80ed");
@@ -9338,12 +9868,17 @@ legend {
 . = empty
 }
 sprites {
-Boundary:directions {
-rotate from up
-transparent #555
+shapes {
+edge:directions rotate from up {
 111
 000
 000
+}
+}
+sprite {
+selector = Boundary:directions
+colors = transparent #555
+shape = edge:directions
 }
 }
 rules {
@@ -9402,12 +9937,17 @@ legend {
 . = empty
 }
 sprites {
-Boundary:directions {
-rotate from up
-transparent #555
+shapes {
+edge:directions rotate from up {
 111
 000
 000
+}
+}
+sprite {
+selector = Boundary:directions
+colors = transparent #555
+shape = edge:directions
 }
 }
 rules {
@@ -9457,12 +9997,17 @@ legend {
 . = empty
 }
 sprites {
-Boundary:directions {
-rotate from up
-transparent #555
+shapes {
+edge:directions rotate from up {
 111
 000
 000
+}
+}
+sprite {
+selector = Boundary:directions
+colors = transparent #555
+shape = edge:directions
 }
 }
 rules {
@@ -9513,16 +10058,16 @@ legend {
 }
 sprites {
 shapes {
-edge:directions {
-rotate from up
+edge:directions rotate from up {
 111
 000
 000
 }
 }
-Boundary:directions {
-colors transparent #555
-shape edge:rotate(directions)
+sprite {
+selector = Boundary:directions
+colors = transparent #555
+shape = edge:rotate(directions)
 }
 }
 rules {
@@ -9581,16 +10126,16 @@ legend {
 }
 sprites {
 shapes {
-edge:directions {
-rotate from up
+edge:directions rotate from up {
 111
 000
 000
 }
 }
-Boundary:rotate(directions) {
-colors transparent #555
-shape edge:directions
+sprite {
+selector = Boundary:rotate(directions)
+colors = transparent #555
+shape = edge:directions
 }
 }
 rules {
@@ -11256,8 +11801,8 @@ fn scene_effects_parse_inline_sequences_by_effect_vocabulary() {
 title = inline_effect_sequence
 
 sounds {
-music music seed=123456
-sfx click seed=746670 type=jump
+music music { seed = 123456 }
+sfx click { seed = 746670; type = jump }
 }
 
 puzzle default {
@@ -12600,7 +13145,7 @@ fn routine_for_condition_accepts_inclusive_loop_binding_comparison() {
 title = routine_inclusive_loop_compare
 
 sounds {
-sfx bump seed=746670 type=jump
+sfx bump { seed = 746670; type = jump }
 }
 
 puzzle default {
@@ -12779,7 +13324,7 @@ fn routine_for_condition_runs_inclusive_loop_binding_else_branch() {
 title = routine_inclusive_loop_compare_else
 
 sounds {
-sfx bump seed=746670 type=jump
+sfx bump { seed = 746670; type = jump }
 }
 
 puzzle default {
@@ -15018,6 +15563,34 @@ P.
 }
 
 #[test]
+fn levels_block_accepts_canonical_level_name_definition() {
+    let source = r#"
+title = canonical_level_name
+
+puzzle default {
+layers {
+__legacy_layer_0 = Player
+}
+empty .
+legend P = Player
+rules {
+
+}
+levels {
+level {
+name = "intro"
+P
+}
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+
+    assert_eq!(loaded.levels.len(), 1);
+    assert_eq!(loaded.levels[0].name, "intro");
+}
+
+#[test]
 fn levels_block_rejects_legacy_braced_name_without_level_keyword() {
     let source = r#"
 title = legacy_braced_level_name
@@ -15210,7 +15783,7 @@ level "start" {
 }
 
 #[test]
-fn puzzle_render_parses_grid_occupied_cells() {
+fn puzzle_render_parses_grid_type_all_cells() {
     let source = r#"
 title = grid_render
 
@@ -15219,7 +15792,39 @@ layers 1
 empty .
 
 render {
-grid occupied_cells all_cells
+grid {
+type = "all_cells"
+}
+}
+
+rules {
+
+}
+
+level "start" {
+.
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+
+    assert!(!loaded.render.grid.occupied_cells);
+    assert!(loaded.render.grid.all_cells);
+}
+
+#[test]
+fn puzzle_render_parses_grid_type_occupied_cells() {
+    let source = r#"
+title = grid_render
+
+puzzle default {
+layers 1
+empty .
+
+render {
+grid {
+type = "occupied_cells"
+}
 }
 
 rules {
@@ -15234,7 +15839,7 @@ level "start" {
     let loaded = parse_game(source).unwrap();
 
     assert!(loaded.render.grid.occupied_cells);
-    assert!(loaded.render.grid.all_cells);
+    assert!(!loaded.render.grid.all_cells);
 }
 
 #[test]
@@ -15330,6 +15935,34 @@ empty .
 render {
 grid {
 occupied_cells = true
+}
+}
+
+rules {
+
+}
+
+level "start" {
+.
+}
+}
+"#;
+
+    assert!(parse_game(source).is_err());
+}
+
+#[test]
+fn puzzle_render_rejects_old_bare_grid_type_rows() {
+    let source = r#"
+title = grid_render
+
+puzzle default {
+layers 1
+empty .
+
+render {
+grid {
+occupied_cells
 }
 }
 
@@ -15874,33 +16507,22 @@ rules {
 }
 
 #[test]
-fn on_display_lowers_to_snapshot_display_program() {
+fn on_display_is_removed() {
     let source = r#"
-title = display_snapshot
+title = display_removed
 
 puzzle default {
 layers {
-__legacy_layer_0 = Player
-}
-
-
-layers {
 actor = Player
-@marker = @Trail
 }
 
 legend {
 . = empty
 P = Player
-t = @Trail
-}
-
-routine @paint once {
-[ Player no @Trail ] -> [ Player @Trail ]
 }
 
 on_display {
-@paint
+[ Player ] -> [ Player ]
 }
 
 rules {
@@ -15913,39 +16535,18 @@ P
 }
 }
 "#;
-    let loaded = parse_game(source).unwrap();
-    let trail = object_named(&loaded, "Trail");
-    let initial = &loaded.levels[0].initial_state;
+    let error = parse_game(source).unwrap_err().to_string();
 
-    assert!(!initial.has_object(&loaded.game, 0, 0, trail));
-    let displayed = transition_program(
-        &loaded.game,
-        loaded.display_program.as_deref().unwrap(),
-        initial,
-        InputId(0),
-    )
-    .unwrap();
-    assert!(displayed.has_object(&loaded.game, 0, 0, trail));
+    assert!(error.contains("`on_display` was removed"));
 }
 
 #[test]
-fn spec_2d_display_floor_is_a_non_colliding_projection_layer() {
+fn display_floor_projection_source_declares_display_object_without_hook() {
     let loaded = parse_game(display_floor_projection_source()).unwrap();
-    let goal = object_named(&loaded, "Goal");
-    let floor = object_named(&loaded, "@Floor");
-    let initial = &loaded.levels[0].initial_state;
+    let floor = object_named(&loaded, "Floor");
 
-    let displayed = transition_program(
-        &loaded.game,
-        loaded.display_program.as_deref().unwrap(),
-        initial,
-        InputId(0),
-    )
-    .unwrap();
-
-    assert!(displayed.has_object(&loaded.game, 2, 1, goal));
-    assert!(displayed.has_object(&loaded.game, 2, 1, floor));
-    assert!(displayed.has_object(&loaded.game, 5, 1, floor));
+    assert!(loaded.is_display_object(floor));
+    assert!(loaded.display_program.is_none());
 }
 
 fn display_floor_projection_source() -> &'static str {
@@ -15963,14 +16564,6 @@ legend {
 G = Goal
 }
 
-routine @fill_floor repeat {
-[ no @Floor ] -> [ @Floor ]
-}
-
-on_display {
-@fill_floor
-}
-
 rules {
 
 }
@@ -15986,7 +16579,7 @@ level "start" {
 }
 
 #[test]
-fn on_display_rejects_input_dependent_display_rules() {
+fn removed_on_display_rejects_input_dependent_display_rules_before_lowering() {
     let source = r#"
 title = display_snapshot_input
 
@@ -16026,11 +16619,11 @@ P.
 "#;
     let error = parse_game(source).unwrap_err().to_string();
 
-    assert!(error.contains("on_display cannot depend on input"));
+    assert!(error.contains("`on_display` was removed"));
 }
 
 #[test]
-fn on_display_rejects_main_statements() {
+fn removed_on_display_rejects_main_statements_before_lowering() {
     let source = r#"
 title = display_snapshot_main_statement
 
@@ -16061,7 +16654,7 @@ P
 "#;
     let error = parse_game(source).unwrap_err().to_string();
 
-    assert!(error.contains("display routines and display blocks can only contain display rules"));
+    assert!(error.contains("`on_display` was removed"));
 }
 
 #[test]
@@ -16501,14 +17094,6 @@ layers {
 solid = Player Box Wall
 }
 
-routine @fill_floor repeat {
-[ no @Floor ] -> [ @Floor ]
-}
-
-on_display {
-@fill_floor
-}
-
 rules {
 input directions [ Player ] -> [ Player{>} ]
 [ Player{>} | Box | no solid ] -> [ Player{>} | Box{>} | ]
@@ -16757,14 +17342,6 @@ actor = Player
 
 groups {
 @paint = @Shadow @Glow
-}
-
-routine @clear once {
-[ @paint ] -> [ ]
-}
-
-on_display {
-@clear
 }
 
 legend {
@@ -17082,14 +17659,14 @@ fn parse_game2d_document_owns_scene_blocks() {
     let source = r#"
 title = "Two Dee"
 
-animation {
+render {
   tween {
-    duration = 30ms
+    duration 30ms
   }
 }
 
 sounds {
-  sfx push seed=push01 type=hit
+  sfx push { seed = push01; type = hit }
 }
 
 puzzle default {
@@ -17231,13 +17808,14 @@ homepage = "https://example.com/3d"
 default_wait_time = 100ms
 again_interval = 80ms
 sounds {
-  sfx push seed=push01 type=jump
+  sfx push { seed = push01; type = jump }
 }
-theme clean {
+theme {
+preset = "clean"
   accent_color = #ff0000
 }
 assets {
-  css "game.css"
+  "game.css"
 }
 
 puzzle3 push3 {
@@ -17372,11 +17950,11 @@ levels3 demo of push3 {
 }
 
 #[test]
-fn theme_name_statement_before_puzzle3_does_not_capture_model_block() {
+fn theme_preset_statement_before_puzzle3_does_not_capture_model_block() {
     let document = super::parse_game(
         r#"
 title = "Themed 3D"
-theme puzzlescript
+theme = "puzzlescript"
 
 puzzle3 push3 {
   layers {
@@ -17410,7 +17988,7 @@ levels3 demo of push3 {
 fn document_runtime_sources_keep_model_sources_separate_from_document_scenes() {
     let source = r#"
 title = "Mixed Runtime"
-theme puzzlescript
+theme = "puzzlescript"
 
 puzzle flat {
 layers {
@@ -17467,7 +18045,7 @@ puzzle3 cube_board = cube
     assert!(sources.model_3d.contains("levels3 cube_levels"));
     assert!(!sources.model_3d.contains("puzzle flat"));
     assert!(!sources.model_3d.contains("scene mixed_play"));
-    assert!(!sources.model_3d.contains("theme puzzlescript"));
+    assert!(!sources.model_3d.contains("theme = \"puzzlescript\""));
 }
 
 #[test]

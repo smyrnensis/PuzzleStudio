@@ -465,11 +465,13 @@ impl EditorService {
         let preview_path = resolve_workspace_request_path(&request.puzzle_path, &workspace_root)?;
         let expanded_source =
             expand_preview_source_under_root(&request.source, &preview_path, &workspace_root)?;
+        let game_visuals_js =
+            load_base_game_visuals_js(&preview_path, &workspace_root, &expanded_source)?;
         html_play::export_editor_preview_html_from_source(
             &expanded_source,
             &preview_path.display().to_string(),
             &request.game_css,
-            &self.state.base_game_visuals_js,
+            &game_visuals_js,
         )
         .map_err(AppError::Diagnostics)
     }
@@ -594,7 +596,13 @@ fn load_base_game_visuals_js(
     source: &str,
 ) -> Result<String, AppError> {
     let assets = puzzle_lang::parse_document_assets(source).map_err(AppError::Diagnostics)?;
-    let mut scripts = vec![asset_resolver_js(puzzle_path, workspace_root, &assets)?];
+    let image_paths = sprite_image_asset_paths(source);
+    let mut scripts = vec![asset_resolver_js(
+        puzzle_path,
+        workspace_root,
+        &assets,
+        &image_paths,
+    )?];
     #[cfg(feature = "embedded-assets")]
     scripts.push(VISUALS_JS.to_string());
     let visuals_path = puzzle_path
@@ -650,23 +658,53 @@ fn asset_resolver_js(
     puzzle_path: &Path,
     workspace_root: &Path,
     assets: &AssetsDef,
+    image_paths: &[String],
 ) -> Result<String, AppError> {
     let parent = puzzle_path.parent().unwrap_or_else(|| Path::new("."));
     let mut files = String::new();
     files.push('{');
     let mut first = true;
-    for asset in assets
+    let mut paths = assets
         .entries
         .iter()
         .filter(|asset| asset.kind == AssetKind::File)
-    {
-        let path = resolve_asset_path(parent, &asset.path)?;
+        .map(|asset| asset.path.clone())
+        .collect::<Vec<_>>();
+    for image_path in image_paths {
+        if !paths.iter().any(|path| path == image_path) {
+            paths.push(image_path.clone());
+        }
+    }
+    for asset_path in paths {
+        let path = resolve_asset_path(parent, &asset_path)?;
         push_asset_resolver_entry(parent, &path, workspace_root, &mut files, &mut first)?;
     }
     files.push('}');
     Ok(format!(
         "window.PuzzleAssets = {{ files: {files}, url(path) {{ const key = String(path || '').replaceAll('\\\\\\\\', '/'); if (Object.prototype.hasOwnProperty.call(this.files, key)) return this.files[key]; if (/^(?:data:|https?:|#)/.test(key)) return key; throw new Error(`Puzzle asset is not embedded: ${{key}}. Declare it with file \\\"${{key}}\\\" in assets.`); }} }};"
     ))
+}
+
+#[cfg(any(feature = "native-preview", feature = "embedded-assets"))]
+fn sprite_image_asset_paths(source: &str) -> Vec<String> {
+    let mut paths = Vec::new();
+    for line in source.lines() {
+        let trimmed = line.trim();
+        let Some(rest) = trimmed.strip_prefix("image ") else {
+            continue;
+        };
+        let rest = rest.trim();
+        let Some(path) = rest
+            .strip_prefix('"')
+            .and_then(|value| value.split_once('"').map(|(path, _)| path))
+        else {
+            continue;
+        };
+        if !paths.iter().any(|existing| existing == path) {
+            paths.push(path.to_string());
+        }
+    }
+    paths
 }
 
 #[cfg(any(feature = "native-preview", feature = "embedded-assets"))]
@@ -1504,6 +1542,7 @@ impl PreviewRequest {
 pub struct SaveRequest {
     pub source: String,
     pub puzzle_path: String,
+    pub content_loaded: bool,
 }
 
 impl SaveRequest {
@@ -1511,6 +1550,7 @@ impl SaveRequest {
         Self {
             source: source.into(),
             puzzle_path: puzzle_path.into(),
+            content_loaded: true,
         }
     }
 
@@ -1520,11 +1560,13 @@ impl SaveRequest {
                 source: json_string_field(body, "source").unwrap_or_default(),
                 puzzle_path: json_string_field(body, "puzzlePath")
                     .unwrap_or_else(|| state.puzzle_path.clone()),
+                content_loaded: json_bool_field(body, "contentLoaded").unwrap_or(false),
             };
         }
         Self {
             source: body.to_string(),
             puzzle_path: state.puzzle_path.clone(),
+            content_loaded: true,
         }
     }
 }
@@ -1626,6 +1668,11 @@ impl DeleteWorkspaceEntryRequest {
 }
 
 fn save_source_file(request: &SaveRequest, state: &EditorState) -> Result<(), AppError> {
+    if !request.content_loaded {
+        return Err(AppError::Config(
+            "cannot save unloaded workspace document".to_string(),
+        ));
+    }
     let workspace_root_path = PathBuf::from(&state.workspace_root);
     let workspace_root = workspace_root_path.canonicalize()?;
     let requested_path = if request.puzzle_path.trim().is_empty() {
@@ -1953,6 +2000,29 @@ fn json_string_field(source: &str, key: &str) -> Option<String> {
             },
             other => out.push(other),
         }
+    }
+    None
+}
+
+fn json_bool_field(source: &str, key: &str) -> Option<bool> {
+    let needle = format!("\"{key}\"");
+    let mut index = source.find(&needle)? + needle.len();
+    let bytes = source.as_bytes();
+    while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+        index += 1;
+    }
+    if bytes.get(index) != Some(&b':') {
+        return None;
+    }
+    index += 1;
+    while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+        index += 1;
+    }
+    if source[index..].starts_with("true") {
+        return Some(true);
+    }
+    if source[index..].starts_with("false") {
+        return Some(false);
     }
     None
 }
@@ -4128,6 +4198,20 @@ levels3 demo of push3 {
     }
 
     #[test]
+    fn save_loads_workspace_document_before_file_write() {
+        assert!(EDITOR_WORKSPACE_JS.contains("setEditorStatus(\"Loading before save\", \"\");"));
+        let load_before_save = EDITOR_WORKSPACE_JS
+            .find("await ensureDocumentContentLoaded(document);")
+            .expect("save should load deferred workspace document content before saving");
+        let host_save = EDITOR_WORKSPACE_JS
+            .find("await window.PuzzleStudioHost.save({")
+            .expect("save should still call the host save boundary");
+        assert!(load_before_save < host_save);
+        assert!(EDITOR_WORKSPACE_JS.contains("contentLoaded: document.contentLoaded !== false,"));
+        assert!(EDITOR_BOOT_JS.contains("contentLoaded: payload?.contentLoaded === true,"));
+    }
+
+    #[test]
     fn editor_preview_iframe_allows_audio_playback() {
         let preview_frame = EDITOR_HTML
             .find(r#"id="previewFrame""#)
@@ -4411,6 +4495,13 @@ levels3 demo of push3 {
             EDITOR_WORKSPACE_JS
                 .contains("selectedFolderId = targetFolder === fileTree ? \"\" : targetFolder.id;")
         );
+        assert!(!EDITOR_WORKSPACE_JS.contains("row.draggable = true;"));
+        let tree_row_css = EDITOR_CSS
+            .split(".tree-row {")
+            .nth(1)
+            .and_then(|tail| tail.split("\n}").next())
+            .expect("tree row CSS");
+        assert!(tree_row_css.contains("user-select: none;"));
         assert!(EDITOR_JS.contains("function finishTreeMove(nodeId, targetFolderId)"));
         assert!(EDITOR_JS.contains("documentList.addEventListener(\"pointerdown\", (event) => {"));
         assert!(EDITOR_JS.contains(
@@ -4419,9 +4510,11 @@ levels3 demo of push3 {
         assert!(EDITOR_JS.contains(
             "markDropTarget(resolvedDropFolderIdForNode(treePointerDrag.nodeId, targetFolderId));"
         ));
-        assert!(EDITOR_JS.contains(
-            "markDropTarget(\n    hasExternalFiles ? targetFolderId : resolvedDropFolderIdForNode(draggedNodeId, targetFolderId),\n  );"
-        ));
+        assert!(!EDITOR_JS.contains("documentList.addEventListener(\"dragstart\""));
+        assert!(EDITOR_JS.contains("if (!hasExternalFiles) {\n    return;\n  }"));
+        assert!(EDITOR_JS.contains("event.dataTransfer.dropEffect = \"copy\";"));
+        assert!(EDITOR_JS.contains("markDropTarget(targetFolderId);"));
+        assert!(!EDITOR_JS.contains("finishTreeMove(draggedNodeId"));
         assert!(EDITOR_JS.contains(
             "setEditorStatus(workspaceMutationErrorMessage(\"Move failed\", error), \"is-error\");"
         ));
@@ -4924,7 +5017,17 @@ levels3 demo of push3 {
     #[test]
     fn focused_puzzle_entries_consume_wasm_surface_entries() {
         assert!(EDITOR_JS.contains("function focusedPuzzleSurfaceEntries("));
-        assert!(EDITOR_JS.contains("compiler.source_entries_json(context.source)"));
+        assert!(EDITOR_JS.contains("window.PuzzleStudioRuntime?.cachedWasmCompiler?.()"));
+        assert!(EDITOR_JS.contains("compiler.source_entries_json(text)"));
+        assert!(EDITOR_JS.contains("throw new Error(message);"));
+        assert!(EDITOR_JS.contains("console.warn(\"Focused source entries unavailable\", error);"));
+        assert!(
+            EDITOR_JS.contains("return [];\n  }\n}\n\nfunction focusedPuzzleSurfaceEntriesByKind")
+        );
+        assert!(
+            !EDITOR_JS
+                .contains("return [];\n  }\n  const raw = compiler.source_entries_json(text);")
+        );
         assert!(EDITOR_JS.contains("focusedPuzzleSurfaceEntriesByKind(\"level\""));
         assert!(EDITOR_JS.contains("focusedPuzzleSurfaceEntriesByKind(\"level3d\""));
         assert!(EDITOR_JS.contains("focusedPuzzleSurfaceEntriesByKind(\"sprite\""));
@@ -7197,6 +7300,32 @@ levels3 demo of push3 {
             .expect_err("saving outside the editor workspace should be rejected")
             .to_string();
         assert!(outside_error.contains("can only save files under"));
+    }
+
+    #[test]
+    fn save_source_file_rejects_unloaded_workspace_document_payload() {
+        let workspace = TestWorkspace::new();
+        let game_path = workspace.write(
+            "games/editor_fixture/game.puzzle",
+            editor_fixture_source("Save Before"),
+        );
+        let service = EditorService::open(&game_path).expect("open editor fixture");
+        let body = format!(
+            "{{\"source\":\"\",\"puzzlePath\":\"{}\",\"contentLoaded\":false}}",
+            game_path.display()
+        );
+        let request = SaveRequest::from_body(&body, service.state());
+
+        let error = service
+            .save_source_file(&request)
+            .expect_err("server save must reject unloaded document payloads")
+            .to_string();
+
+        assert!(error.contains("cannot save unloaded workspace document"));
+        assert_eq!(
+            fs::read_to_string(&game_path).expect("read unchanged game"),
+            editor_fixture_source("Save Before")
+        );
     }
 
     #[test]

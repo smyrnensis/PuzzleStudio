@@ -102,7 +102,6 @@ impl WasmCompiledCoreRuntime {
 
 pub struct CompiledEngine {
     game: CompiledGame,
-    display_objects: Vec<ObjectId>,
     level_start_program: Vec<RuleStep>,
     level_clear_program: Vec<RuleStep>,
     display_level_start_program: Vec<RuleStep>,
@@ -115,10 +114,6 @@ pub struct CompiledEngine {
 impl CompiledEngine {
     pub fn game(&self) -> &CompiledGame {
         &self.game
-    }
-
-    pub fn display_objects(&self) -> &[ObjectId] {
-        &self.display_objects
     }
 
     pub fn program(&self, key: &str, level_index: i32) -> Option<&[RuleStep]> {
@@ -183,7 +178,7 @@ pub fn decode_compiled_play(value: &Value) -> Result<CompiledEngine, String> {
         .iter()
         .map(decode_compact_condition)
         .collect::<Result<Vec<_>, _>>()?;
-    let visual_objects = array_at(data, 3, "transition visual objects")?
+    let _visual_objects = array_at(data, 3, "transition visual objects")?
         .iter()
         .map(|item| Ok(ObjectId(u16_value(item, "visual object")?)))
         .collect::<Result<Vec<_>, String>>()?;
@@ -214,7 +209,6 @@ pub fn decode_compiled_play(value: &Value) -> Result<CompiledEngine, String> {
     }
     Ok(CompiledEngine {
         game,
-        display_objects: visual_objects,
         level_start_program: decode_compact_program(value_at(programs, 1, "level start program")?)?,
         level_clear_program: decode_compact_program(value_at(programs, 2, "level clear program")?)?,
         display_level_start_program: decode_compact_program(value_at(

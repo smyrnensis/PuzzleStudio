@@ -231,10 +231,17 @@ fn record_surface_completion_value_set(name: &str, values: &[&str], sink: &mut S
 }
 
 fn record_surface_completion_line(
+    option_block: Option<SurfaceOptionBlock>,
     scope: Option<SourceScope>,
     tokens: &[SourceToken],
     sink: &mut SurfaceSink,
 ) {
+    if record_authoring_content_completion_line(option_block, tokens, sink) {
+        return;
+    }
+    if record_authoring_child_completion_line(option_block, tokens, sink) {
+        return;
+    }
     let token_texts = tokens
         .iter()
         .map(|token| token.text.as_str())
@@ -260,15 +267,6 @@ fn record_surface_completion_line(
                 &mut sink.completion_symbols_mut().condition_defs,
                 name,
             );
-        }
-        ["sfx", name, ..] if scope == Some(SourceScope::Sounds) => {
-            insert_surface_completion_identifier(&mut sink.completion_symbols_mut().sfx, name);
-        }
-        ["music", name, ..] if scope == Some(SourceScope::Sounds) => {
-            insert_surface_completion_identifier(&mut sink.completion_symbols_mut().music, name);
-        }
-        ["css" | "script" | "file", path, ..] if scope == Some(SourceScope::Assets) => {
-            insert_surface_completion_path_like(&mut sink.completion_symbols_mut().assets, path);
         }
         ["shape", table, ..] if scope == Some(SourceScope::Visuals) => {
             record_surface_completion_visual_table_ref(table, true, sink);
@@ -330,6 +328,87 @@ fn record_surface_completion_line(
             record_surface_completion_keys(&token_texts, sink);
         }
         _ => {}
+    }
+}
+
+fn record_authoring_content_completion_line(
+    option_block: Option<SurfaceOptionBlock>,
+    tokens: &[SourceToken],
+    sink: &mut SurfaceSink,
+) -> bool {
+    let Some(SurfaceOptionBlock::Authoring(kind)) = option_block else {
+        return false;
+    };
+    let crate::authoring_grammar::AuthoringBody::Content(content) =
+        crate::authoring_grammar::authoring_kind_spec(kind).body
+    else {
+        return false;
+    };
+    let line = tokens
+        .iter()
+        .map(|token| token.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let Ok(Some(row)) = crate::authoring_grammar::parse_authoring_content_row(content, &line) else {
+        return false;
+    };
+    if let Some(values) = crate::authoring_grammar::authoring_capture_values(&row.captures, "path")
+    {
+        for value in values {
+            insert_surface_completion_path_like(&mut sink.completion_symbols_mut().assets, value);
+        }
+    }
+    true
+}
+
+fn record_authoring_child_completion_line(
+    option_block: Option<SurfaceOptionBlock>,
+    tokens: &[SourceToken],
+    sink: &mut SurfaceSink,
+) -> bool {
+    let Some(SurfaceOptionBlock::Authoring(parent)) = option_block else {
+        return false;
+    };
+    let [surface, ..] = tokens else {
+        return false;
+    };
+    let Some(child) = crate::authoring_grammar::placed_authoring_kind(parent, &surface.text) else {
+        return false;
+    };
+    let mut recorded = false;
+    for export in crate::authoring_grammar::authoring_symbol_exports(child) {
+        let Some(value) = authoring_symbol_export_value(export.source, tokens) else {
+            continue;
+        };
+        record_authoring_symbol_export(export.target, value, sink);
+        recorded = true;
+    }
+    recorded
+}
+
+fn authoring_symbol_export_value(
+    source: crate::authoring_grammar::AuthoringSymbolExportSource,
+    tokens: &[SourceToken],
+) -> Option<&str> {
+    match source {
+        crate::authoring_grammar::AuthoringSymbolExportSource::HeaderArg(index) => {
+            tokens.get(index + 1).map(|token| token.text.as_str())
+        }
+    }
+}
+
+fn record_authoring_symbol_export(
+    target: crate::authoring_grammar::AuthoringSymbolExportTarget,
+    value: &str,
+    sink: &mut SurfaceSink,
+) {
+    match target {
+        crate::authoring_grammar::AuthoringSymbolExportTarget::Sfx => {
+            insert_surface_completion_identifier(&mut sink.completion_symbols_mut().sfx, value);
+        }
+        crate::authoring_grammar::AuthoringSymbolExportTarget::Music => {
+            insert_surface_completion_identifier(&mut sink.completion_symbols_mut().music, value);
+        }
     }
 }
 

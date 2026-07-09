@@ -1,12 +1,9 @@
+use crate::LEVEL_MENU_OPTIONS;
+use crate::authoring_grammar::AuthoringKind;
 use crate::semantic::{SemanticCompletionContext, SemanticCompletionSlot, SettingCompletionSet};
 use crate::source::SourceScope;
 use crate::surface::{SurfaceDocument, SurfaceLine, SurfaceOptionBlock};
 use crate::syntax::{ExpectedCompletionValue, PUZZLE_COMPLETION_KEYWORDS, PUZZLE_LIFECYCLE_BLOCKS};
-use crate::{
-    ANIMATION_BLOCK_OPTIONS, ANIMATION_TWEEN_OPTIONS, LEVEL_MENU_OPTIONS,
-    MUSIC_SOUND_SETTING_OPTIONS, PUZZLE_RENDER_BLOCK_OPTIONS, PUZZLE_RENDER_GRID_OPTIONS,
-    SFX_SOUND_SETTING_OPTIONS, THEME_SETTING_SPECS,
-};
 
 pub(crate) fn surface_completion_context_for_document(
     source: &str,
@@ -17,7 +14,9 @@ pub(crate) fn surface_completion_context_for_document(
     let token = completion_token_at_cursor(source, cursor);
     let previous = previous_completion_token(source, token.replace_start);
     let scope = scope_at_cursor(document, cursor);
-    let sounds_definition_scope = scope == Some(SourceScope::Sounds);
+    let option_block = option_block_at_cursor(document, cursor);
+    let sounds_definition_scope =
+        option_block == Some(SurfaceOptionBlock::Authoring(AuthoringKind::SoundsConfig));
 
     let contextual_slots = contextual_completion_slots(source, document, &token, scope);
     let slots = if let Some(slots) = contextual_slots {
@@ -32,8 +31,11 @@ pub(crate) fn surface_completion_context_for_document(
         vec![SemanticCompletionSlot::Inputs]
     } else if previous.as_deref() == Some("of") {
         vec![SemanticCompletionSlot::Puzzles]
-    } else if previous.as_deref() == Some("theme") {
-        vec![SemanticCompletionSlot::Themes]
+    } else if scope.is_none()
+        && let Some(slots) =
+            authoring_root_definition_value_completion_slots(source, token.replace_start)
+    {
+        slots
     } else if previous.as_deref() == Some("sfx")
         && (!sounds_definition_scope
             || sounds_operation_sfx_target_context(source, token.replace_start))
@@ -80,10 +82,6 @@ fn contextual_completion_slots(
 
     if cursor_is_after_effect_arrow(before) {
         return Some(arrow_rhs_completion_slots(scope));
-    }
-
-    if let Some(options) = sound_setting_completion_slots(line.scope, before) {
-        return Some(options);
     }
 
     if let Some(options) = option_completion_slots(line.option_block, before) {
@@ -217,7 +215,6 @@ fn arrow_rhs_completion_slots(scope: Option<SourceScope>) -> Vec<SemanticComplet
             SemanticCompletionSlot::SceneEffects,
             SemanticCompletionSlot::Routines,
         ],
-        Some(SourceScope::Sounds) => vec![],
         _ => vec![
             SemanticCompletionSlot::ModelEffects,
             SemanticCompletionSlot::Emissions,
@@ -231,11 +228,9 @@ fn line_head_completion_slots(
     scope: Option<SourceScope>,
 ) -> Vec<SemanticCompletionSlot> {
     match scope {
-        None => vec![SemanticCompletionSlot::ModelTopLevelKeywords],
+        None => authoring_root_line_head_completion_slots(),
         Some(
             SourceScope::Puzzle
-            | SourceScope::Sounds
-            | SourceScope::Assets
             | SourceScope::Scene
             | SourceScope::SceneLayout
             | SourceScope::SceneState
@@ -313,28 +308,6 @@ fn update_completion_block_stack(line: &str, stack: &mut Vec<CompletionBlockKind
     stack.push(kind);
 }
 
-fn sound_setting_completion_slots(
-    scope: Option<SourceScope>,
-    before: &str,
-) -> Option<Vec<SemanticCompletionSlot>> {
-    if scope != Some(SourceScope::Sounds) {
-        return None;
-    }
-    let tokens = before
-        .split(|ch: char| ch.is_whitespace() || matches!(ch, '{' | '}' | ',' | ';'))
-        .filter(|token| !token.is_empty())
-        .collect::<Vec<_>>();
-    match tokens.as_slice() {
-        ["sfx", _, ..] => Some(vec![SemanticCompletionSlot::Settings(
-            SettingCompletionSet::Static(SFX_SOUND_SETTING_OPTIONS),
-        )]),
-        ["music", _, ..] => Some(vec![SemanticCompletionSlot::Settings(
-            SettingCompletionSet::Static(MUSIC_SOUND_SETTING_OPTIONS),
-        )]),
-        _ => None,
-    }
-}
-
 fn line_at_cursor(document: &SurfaceDocument, cursor: usize) -> Option<(usize, &SurfaceLine)> {
     document.lines.iter().enumerate().find(|(_, line)| {
         let end = line.start + line.content.len();
@@ -353,28 +326,13 @@ fn option_completion_slots(
     let first = tokens_before.first().copied();
 
     let option_names = match (block, first) {
-        (Some(SurfaceOptionBlock::Render3), Some("camera")) => crate::CAMERA_OPTIONS3,
-        (Some(SurfaceOptionBlock::Render3), Some("grid")) => crate::GRID_BARE_OPTIONS3,
-        (Some(SurfaceOptionBlock::Render3), Some("pixelate")) => crate::PIXELATE_OPTIONS3,
-        (Some(SurfaceOptionBlock::Render2), Some("grid")) => PUZZLE_RENDER_GRID_OPTIONS,
-        (Some(SurfaceOptionBlock::Animation), Some("tween")) => ANIMATION_TWEEN_OPTIONS,
-        (Some(SurfaceOptionBlock::Camera3), _) => crate::CAMERA_OPTIONS3,
-        (Some(SurfaceOptionBlock::Grid3), _) => crate::GRID_BARE_OPTIONS3,
-        (Some(SurfaceOptionBlock::Pixelate3), _) => crate::PIXELATE_OPTIONS3,
-        (Some(SurfaceOptionBlock::Grid2), _) => PUZZLE_RENDER_GRID_OPTIONS,
-        (Some(SurfaceOptionBlock::Tween), _) => ANIMATION_TWEEN_OPTIONS,
-        (Some(SurfaceOptionBlock::LevelMenu), _) => LEVEL_MENU_OPTIONS,
-        (Some(SurfaceOptionBlock::Theme), _) => {
-            if theme_setting_value_is_before_cursor(before) {
-                return Some(vec![SemanticCompletionSlot::Colors]);
-            }
-            return Some(vec![SemanticCompletionSlot::Settings(
-                SettingCompletionSet::Theme,
-            )]);
+        (Some(block), _) if block.authoring_parent_kind().is_some() => {
+            let kind = block
+                .authoring_parent_kind()
+                .expect("checked authoring parent kind");
+            return authoring_option_completion_slots(kind, before, first);
         }
-        (Some(SurfaceOptionBlock::Render3), _) => crate::RENDER_OPTIONS3,
-        (Some(SurfaceOptionBlock::Render2), _) => PUZZLE_RENDER_BLOCK_OPTIONS,
-        (Some(SurfaceOptionBlock::Animation), _) => ANIMATION_BLOCK_OPTIONS,
+        (Some(SurfaceOptionBlock::LevelMenu), _) => LEVEL_MENU_OPTIONS,
         _ => return None,
     };
 
@@ -383,21 +341,120 @@ fn option_completion_slots(
     )])
 }
 
-fn theme_setting_value_is_before_cursor(before: &str) -> bool {
-    let tokens = before
-        .split(|ch: char| ch.is_whitespace() || matches!(ch, '{' | '}' | ',' | ';'))
-        .filter(|token| !token.is_empty())
-        .collect::<Vec<_>>();
-    let Some(first) = tokens.first().copied() else {
-        return false;
-    };
-    if !THEME_SETTING_SPECS
-        .iter()
-        .any(|spec| spec.canonical == first || spec.aliases.contains(&first))
+fn authoring_option_completion_slots(
+    kind: AuthoringKind,
+    before: &str,
+    first: Option<&str>,
+) -> Option<Vec<SemanticCompletionSlot>> {
+    let mut slots = Vec::<SemanticCompletionSlot>::new();
+    if let Some(first) = first
+        && let Some(child) = crate::authoring_grammar::placed_authoring_kind(kind, first)
     {
-        return false;
+        if let Some(child_slots) = authoring_schema_completion_slots(child, false) {
+            slots.extend(child_slots);
+        }
+    } else if let Some(definition_slots) = authoring_definition_value_completion_slots(before, kind)
+    {
+        slots.extend(definition_slots);
+    } else if let Some(schema_slots) = authoring_schema_completion_slots(kind, true) {
+        slots.extend(schema_slots);
     }
-    tokens.len() > 1 || before.chars().next_back().is_some_and(char::is_whitespace)
+
+    if crate::authoring_grammar::authoring_block_role(kind)
+        == Some(crate::authoring_grammar::AuthoringBlockRole::Visuals)
+    {
+        if let Some(visual_slots) = visual_completion_slots(Some(SourceScope::Visuals), before) {
+            slots.extend(visual_slots);
+        } else if before.trim().is_empty() {
+            slots.extend(completion_slots_for_value_classes(
+                crate::syntax::visual_line_head_expected_completion_values(),
+            ));
+        }
+    }
+
+    Some(slots)
+}
+
+fn authoring_schema_completion_slots(
+    kind: AuthoringKind,
+    include_children: bool,
+) -> Option<Vec<SemanticCompletionSlot>> {
+    let mut slots = Vec::<SemanticCompletionSlot>::new();
+    if include_children && !crate::authoring_grammar::authoring_child_surfaces(kind).is_empty() {
+        slots.push(SemanticCompletionSlot::AuthoringChildren(kind));
+    }
+    if !crate::authoring_grammar::authoring_definition_surfaces(kind).is_empty() {
+        slots.push(SemanticCompletionSlot::Settings(
+            SettingCompletionSet::AuthoringDefinitions(kind),
+        ));
+    }
+    if let crate::authoring_grammar::AuthoringBody::Content(content) =
+        crate::authoring_grammar::authoring_kind_spec(kind).body
+    {
+        if !crate::authoring_grammar::authoring_content_row_surfaces(content).is_empty() {
+            slots.push(SemanticCompletionSlot::AuthoringContentRows(content));
+        }
+        return Some(slots);
+    }
+    (!slots.is_empty()).then_some(slots)
+}
+
+fn authoring_root_line_head_completion_slots() -> Vec<SemanticCompletionSlot> {
+    vec![
+        SemanticCompletionSlot::AuthoringRows(AuthoringKind::Root),
+        SemanticCompletionSlot::AuthoringChildren(AuthoringKind::Root),
+        SemanticCompletionSlot::Settings(SettingCompletionSet::AuthoringDefinitions(
+            AuthoringKind::Root,
+        )),
+        SemanticCompletionSlot::ModelTopLevelKeywords,
+    ]
+}
+
+fn authoring_root_definition_value_completion_slots(
+    source: &str,
+    cursor: usize,
+) -> Option<Vec<SemanticCompletionSlot>> {
+    let line_start = source[..cursor].rfind('\n').map_or(0, |index| index + 1);
+    let before = source[line_start..cursor].trim_start();
+    authoring_definition_value_completion_slots(before, AuthoringKind::Root)
+}
+
+fn authoring_definition_value_completion_slots(
+    before: &str,
+    kind: AuthoringKind,
+) -> Option<Vec<SemanticCompletionSlot>> {
+    let tokens = crate::authoring_grammar::split_authoring_tokens(before);
+    let [key, op, ..] = tokens.as_slice() else {
+        return None;
+    };
+    if op != "=" {
+        return None;
+    }
+    let spec = crate::authoring_grammar::authoring_definition_spec(kind, key)?;
+    match crate::authoring_grammar::definition_value_domain(spec) {
+        crate::authoring_grammar::DefinitionValueDomain::Builtin(
+            crate::authoring_grammar::DefinitionBuiltinDomain::ThemePreset,
+        ) => Some(vec![SemanticCompletionSlot::Themes]),
+        crate::authoring_grammar::DefinitionValueDomain::Builtin(domain) => {
+            Some(vec![SemanticCompletionSlot::Literals(
+                crate::authoring_grammar::definition_builtin_domain_values(domain),
+            )])
+        }
+        crate::authoring_grammar::DefinitionValueDomain::None => {
+            match crate::authoring_grammar::definition_value_syntax(spec) {
+                crate::authoring_grammar::DefinitionValueSyntax::Color => {
+                    Some(vec![SemanticCompletionSlot::Colors])
+                }
+                _ => match crate::authoring_grammar::definition_value_role(spec) {
+                    Some(crate::authoring_grammar::AuthoringSurfaceRole::Object) => Some(vec![
+                        SemanticCompletionSlot::Objects,
+                        SemanticCompletionSlot::Groups,
+                    ]),
+                    _ => None,
+                },
+            }
+        }
+    }
 }
 
 fn visual_completion_slots(
@@ -487,12 +544,7 @@ fn scene_effect_scope(scope: Option<SourceScope>) -> bool {
 
 fn default_completion_slots_for_scope(scope: Option<SourceScope>) -> Vec<SemanticCompletionSlot> {
     match scope {
-        None => vec![SemanticCompletionSlot::ModelTopLevelKeywords],
-        Some(SourceScope::Sounds | SourceScope::Assets) => {
-            vec![SemanticCompletionSlot::Keywords(
-                completion_keywords_for_scope(scope),
-            )]
-        }
+        None => authoring_root_line_head_completion_slots(),
         Some(SourceScope::Tags | SourceScope::Map) => vec![],
         Some(SourceScope::Group | SourceScope::Layers) => vec![
             SemanticCompletionSlot::Keywords(completion_keywords_for_scope(scope)),
@@ -589,8 +641,6 @@ fn rule_expression_completion_slots() -> Vec<SemanticCompletionSlot> {
 fn completion_keywords_for_scope(scope: Option<SourceScope>) -> &'static [&'static str] {
     match scope {
         None => &[],
-        Some(SourceScope::Sounds) => SOUNDS_COMPLETION_KEYWORDS,
-        Some(SourceScope::Assets) => ASSET_COMPLETION_KEYWORDS,
         Some(SourceScope::Puzzle) => PUZZLE_COMPLETION_KEYWORDS,
         Some(SourceScope::Tags) => TAG_COMPLETION_KEYWORDS,
         Some(SourceScope::Group) => GROUP_COMPLETION_KEYWORDS,
@@ -628,6 +678,22 @@ fn scope_at_cursor(document: &SurfaceDocument, cursor: usize) -> Option<SourceSc
         }
         if line.start <= cursor {
             previous = line.scope;
+        } else {
+            break;
+        }
+    }
+    previous
+}
+
+fn option_block_at_cursor(document: &SurfaceDocument, cursor: usize) -> Option<SurfaceOptionBlock> {
+    let mut previous = None;
+    for line in &document.lines {
+        let end = line.start + line.content.len();
+        if cursor >= line.start && cursor <= end {
+            return line.option_block;
+        }
+        if line.start <= cursor {
+            previous = line.option_block;
         } else {
             break;
         }
@@ -693,10 +759,6 @@ fn is_completion_char(ch: char) -> bool {
     ch == '@' || ch == '_' || ch == ':' || ch == '.' || ch == '-' || ch.is_ascii_alphanumeric()
 }
 
-const SOUNDS_COMPLETION_KEYWORDS: &[&str] = &["music", "restart", "sfx", "undo"];
-
-const ASSET_COMPLETION_KEYWORDS: &[&str] = &["css", "file", "script"];
-
 const TAG_COMPLETION_KEYWORDS: &[&str] = &[];
 const GROUP_COMPLETION_KEYWORDS: &[&str] = &["each"];
 const LAYER_COMPLETION_KEYWORDS: &[&str] = &["each"];
@@ -731,13 +793,8 @@ const SCENE_COMPLETION_KEYWORDS: &[&str] = &[
 ];
 
 const VISUAL_COMPLETION_KEYWORDS: &[&str] = &[
-    "colors",
-    "offset",
-    "pixels_per_cell",
-    "rotate",
-    "shape",
-    "shapes",
-    "sprite",
+    "contain", "cover", "colors", "image", "offset", "rotate", "sampling", "shape", "shapes",
+    "sprite", "stretch",
 ];
 const COMPLETION_LITERALS: &[&str] = &["false", "true"];
 
@@ -752,10 +809,8 @@ const COMPLETION_KEYWORDS: &[&str] = &[
     "colors",
     "collision_layers",
     "component_effect",
-    "css",
     "direction",
     "each",
-    "file",
     "else",
     "for",
     "from",
@@ -777,7 +832,6 @@ const COMPLETION_KEYWORDS: &[&str] = &[
     "map",
     "music",
     "of",
-    "on_display",
     PUZZLE_LIFECYCLE_BLOCKS[0],
     PUZZLE_LIFECYCLE_BLOCKS[1],
     PUZZLE_LIFECYCLE_BLOCKS[2],
@@ -830,12 +884,14 @@ fn split_completion_line_tokens(line: &str) -> Vec<&str> {
 
 #[cfg(test)]
 mod tests {
+    use crate::authoring_grammar::AuthoringKind;
+
     use super::{SemanticCompletionSlot, surface_completion_context_for_document};
 
     #[test]
     fn completion_context_uses_source_scope_for_same_word() {
         let sounds_source = r#"
-title = completion_sounds_scope
+title = completion_sounds_authoring_block
 sounds {
 s
 }
@@ -844,9 +900,13 @@ s
         let sounds_document = crate::parse_surface_document(sounds_source);
         let sounds_context =
             surface_completion_context_for_document(sounds_source, sounds_cursor, &sounds_document);
-        assert!(sounds_context.slots.iter().any(|slot| {
-            matches!(slot, SemanticCompletionSlot::Keywords(keywords) if keywords.contains(&"sfx"))
-        }));
+        assert!(
+            sounds_context
+                .slots
+                .contains(&SemanticCompletionSlot::AuthoringChildren(
+                    AuthoringKind::SoundsConfig
+                ))
+        );
         assert!(
             !sounds_context
                 .slots
@@ -872,6 +932,24 @@ win -> s
         );
         assert!(!scene_context.slots.iter().any(|slot| {
             matches!(slot, SemanticCompletionSlot::Keywords(keywords) if keywords.contains(&"sfx"))
+        }));
+    }
+
+    #[test]
+    fn assets_completion_does_not_use_typed_entry_keywords() {
+        let source = r#"
+title = completion_assets_content
+assets {
+
+}
+"#;
+        let cursor = source.find("assets {\n").unwrap() + "assets {\n".len();
+        let document = crate::parse_surface_document(source);
+        let context = surface_completion_context_for_document(source, cursor, &document);
+
+        assert!(context.slots.is_empty());
+        assert!(!context.slots.iter().any(|slot| {
+            matches!(slot, SemanticCompletionSlot::Keywords(keywords) if keywords.contains(&"css"))
         }));
     }
 
