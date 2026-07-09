@@ -1,5 +1,5 @@
 use crate::{object_refs, relevance::SolverRelevance};
-use puzzle_grid3d::{ConditionValueKind3, Game3, Guard3, ObjectId, Pattern3, Rule3};
+use puzzle_grid3d::{ConditionValueKind3, Game3, Guard3, ObjectId, Pattern3, Rule3, RuleId3};
 
 impl SolverRelevance<ObjectId> {
     pub fn from_game3_root_objects(
@@ -29,12 +29,17 @@ impl SolverRelevance<ObjectId> {
             .collect()
     }
 
+    pub fn relevant_rules(&self) -> Vec<RuleId3> {
+        self.relevant_rule_ids().into_iter().map(RuleId3).collect()
+    }
+
     fn propagate_rule(&mut self, game: &Game3, rule: &Rule3) -> bool {
         if !rule_has_relevant_output(rule, self) {
             return false;
         }
 
-        let mut changed = self.insert_pattern_objects(&rule.pattern);
+        let mut changed = self.insert_relevant_rule_id(rule.id.0);
+        changed |= self.insert_pattern_objects(&rule.pattern);
         for guard in &rule.guards {
             changed |= self.insert_guard_objects(game, guard);
         }
@@ -143,6 +148,7 @@ mod tests {
         assert!(relevance.contains_object(DOOR));
         assert!(relevance.contains_object(SWITCH));
         assert!(!relevance.contains_object(SPARKLE));
+        assert_eq!(relevance.relevant_rules(), vec![RuleId3(1)]);
     }
 
     #[test]

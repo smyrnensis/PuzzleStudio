@@ -76,6 +76,11 @@ for k in box_kind {
 }
 }
 
+routine move {
+[ > solid | no solid ] -> [  | solid ] 
+[ > solid ] -> [ solid ]
+}
+
 routine @refresh_board {
 [ @wall_visual ] -> []
 [ @light ] -> []

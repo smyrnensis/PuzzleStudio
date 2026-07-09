@@ -550,6 +550,13 @@ let sprite = {
   shapeBind: null,
   solidSource: false,
   sourcePreludeRows: [],
+  animationMode: false,
+  animationFrameIndex: 0,
+  animationDurationMs: 120,
+  animationFrameCount: 1,
+  animationFrames: [],
+  animationPlaybackIndex: 0,
+  animationPlaying: false,
   cells: [],
   palette: [
     { color: "#ff004d" },
@@ -669,6 +676,12 @@ function visualEditSnapshot(kind) {
         solidSource: Boolean(sprite.solidSource),
         sourcePreludeRows: cloneVisualEditValue(sprite.sourcePreludeRows || []),
         sourceSpriteContract: cloneVisualEditValue(sprite.sourceSpriteContract || null),
+        animationMode: Boolean(sprite.animationMode),
+        animationFrameIndex: sprite.animationFrameIndex,
+        animationDurationMs: sprite.animationDurationMs,
+        animationFrameCount: sprite.animationFrameCount,
+        animationFrames: cloneVisualEditValue(sprite.animationFrames || []),
+        animationPlaybackIndex: sprite.animationPlaybackIndex,
       },
     };
   }
@@ -781,11 +794,28 @@ function restoreVisualEditSnapshot(snapshot) {
     sprite.solidSource = Boolean(state.solidSource);
     sprite.sourcePreludeRows = cloneVisualEditValue(state.sourcePreludeRows || []);
     sprite.sourceSpriteContract = cloneVisualEditValue(state.sourceSpriteContract || null);
+    sprite.animationMode = Boolean(state.animationMode);
+    sprite.animationFrameIndex = Math.max(0, Math.trunc(Number(state.animationFrameIndex) || 0));
+    sprite.animationDurationMs = Number.isFinite(Number(state.animationDurationMs))
+      ? normalizedSpriteAnimationDuration(state.animationDurationMs)
+      : normalizedSpriteAnimationDuration();
+    sprite.animationFrameCount = normalizedSpriteAnimationFrameCount(state.animationFrameCount);
+    sprite.animationFrames = cloneVisualEditValue(state.animationFrames || []);
+    sprite.animationPlaybackIndex = Math.max(0, Math.trunc(Number(state.animationPlaybackIndex) || 0));
+    if (typeof ensureSpriteAnimationFrames === "function") {
+      ensureSpriteAnimationFrames();
+    }
+    if (sprite.animationFrames[sprite.animationFrameIndex]) {
+      sprite.cells = sprite.animationFrames[sprite.animationFrameIndex];
+    }
     sprite.addPaletteOpen = false;
     sprite.editPaletteOpen = false;
     sprite.customColorOpen = false;
     sprite.addDraftColorIndex = null;
     renderSpriteBuilder();
+    if (typeof syncSpriteAnimationInputValues === "function") {
+      syncSpriteAnimationInputValues();
+    }
   } else if (snapshot.kind === "sprite3d") {
     sprite3d.size = clampSprite3dSize(state.size);
     sprite3d.editDocumentId = state.editDocumentId || null;
@@ -857,6 +887,9 @@ function redoVisualEdit(kind = currentVisualEditKind()) {
 function isTextEntryTarget(target) {
   const tagName = target?.tagName || "";
   if (target?.closest?.(".sprite-code-glyph")) {
+    return false;
+  }
+  if (typeof isSpriteVisualEditUndoTarget === "function" && isSpriteVisualEditUndoTarget(target)) {
     return false;
   }
   return target?.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(tagName);
@@ -4196,12 +4229,14 @@ function syncPreviewModeButtonState() {
   playModeButton.classList.toggle("is-active", paneVisible && previewMode === "play");
   editModeButton.classList.toggle("is-active", isPaneVisible("level"));
   solverModeButton.classList.toggle("is-active", paneVisible && previewMode === "solver");
-  spriteModeButton.classList.toggle("is-active", spritePaneVisible);
+  spriteModeButton.classList.toggle("is-active", spritePaneVisible && !sprite.animationMode);
+  spriteAnimateModeButton?.classList.toggle("is-active", spritePaneVisible && currentSpritePaneMode === "sprite" && sprite.animationMode);
   sprite3dModeButton?.classList.toggle("is-active", spritePaneVisible && currentSpritePaneMode === "sprite3d");
   editModeButton.title = `Open ${dimensionLabel} level editor`;
   editModeButton.setAttribute("aria-label", `Open ${dimensionLabel} level editor`);
   spriteModeButton.title = `Open ${dimensionLabel} sprite editor`;
   spriteModeButton.setAttribute("aria-label", `Open ${dimensionLabel} sprite editor`);
+  spriteAnimateModeButton?.setAttribute("aria-pressed", String(spritePaneVisible && currentSpritePaneMode === "sprite" && sprite.animationMode));
   if (editorDimensionSwitch) {
     editorDimensionSwitch.dataset.mode = currentEditorDimension;
   }
@@ -4236,6 +4271,9 @@ function setPreviewMode(mode, options = {}) {
   }
   if (wasSpriteMode && previewMode !== "sprite" && sprite) {
     sprite.shapeTagPickerOpen = false;
+    if (typeof stopSpriteAnimationPlayback === "function") {
+      stopSpriteAnimationPlayback();
+    }
   }
   if (!options.skipPaneSync) {
     showPreviewModePane(previewMode);
@@ -10999,10 +11037,24 @@ for (const button of levelPaneModeButtons) {
   });
 }
 spriteModeButton.addEventListener("click", () => {
+  if (typeof setSpriteAnimationMode === "function") {
+    setSpriteAnimationMode(false, { render: false });
+  }
   openSpritePaneForCurrentDimension();
+  if (currentSpritePaneMode === "sprite" && typeof renderSpriteBuilder === "function") {
+    renderSpriteBuilder();
+  }
+});
+spriteAnimateModeButton?.addEventListener("click", () => {
+  if (typeof setSpriteAnimationMode === "function") {
+    setSpriteAnimationMode(!sprite.animationMode);
+  }
 });
 newSprite3dButton?.addEventListener("click", addEmptySprite3dToFocusedSource);
 sprite3dModeButton?.addEventListener("click", () => {
+  if (typeof setSpriteAnimationMode === "function") {
+    setSpriteAnimationMode(false, { render: false });
+  }
   openSpritePaneForCurrentDimension();
 });
 for (const button of spritePaneModeButtons) {

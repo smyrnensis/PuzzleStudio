@@ -903,10 +903,11 @@ function confirmDesktopExitWithUnsavedChanges(actionLabel) {
   );
 }
 
-function confirmDesktopDeleteWorkspaceEntry(node) {
+function confirmDeleteWorkspaceEntry(node, options = {}) {
   const name = node?.name || fileName(node?.puzzlePath) || "this entry";
   const kind = node?.kind === "folder" ? "folder" : "file";
-  return window.confirm(`Delete ${kind} "${name}" from disk?\n\nThis cannot be undone.`);
+  const location = options.fromDisk ? "from disk" : "from this workspace";
+  return window.confirm(`Delete ${kind} "${name}" ${location}?\n\nThis cannot be undone.`);
 }
 
 async function openProjectFromDesktop(kind = "folder") {
@@ -3327,11 +3328,14 @@ async function deleteTreeNode(nodeId) {
   const entryPath = target.node.kind === "folder"
     ? folderPath(target.node)
     : target.node.puzzlePath;
+  if (!confirmDeleteWorkspaceEntry(target.node, {
+    fromDisk: !editorSeed && isDesktopHost() && typeof window.PuzzleStudioHost.deleteWorkspaceEntry === "function",
+  })) {
+    setEditorStatus("Delete canceled", "");
+    return;
+  }
+
   if (!editorSeed && typeof window.PuzzleStudioHost.deleteWorkspaceEntry === "function") {
-    if (!confirmDesktopDeleteWorkspaceEntry(target.node)) {
-      setEditorStatus("Delete canceled", "");
-      return;
-    }
     beginWorkspaceHostMutation();
     try {
       await window.PuzzleStudioHost.deleteWorkspaceEntry({

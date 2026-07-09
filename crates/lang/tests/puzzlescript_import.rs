@@ -761,6 +761,9 @@ levels {
 fn translated_basic_vanilla_puzzlescript_uses_player_move_bridge() {
     let source = include_str!("fixtures/puzzlescript/basic_sokoban.ps");
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
+    assert!(translated.contains("routine move {\nrepeat {"));
+    assert!(translated.contains("layer1 = Background"));
+    assert!(translated.contains("for l in layer1 layer2 layer3 {"));
     let loaded = parse_game(&translated).unwrap();
     assert!(!loaded.scenes[1].key_bindings.is_empty());
     let right = input_named(&loaded, "right");
@@ -1197,13 +1200,13 @@ fn imports_supported_official_gallery_samples_as_current_canonical_syntax() {
 
 #[test]
 fn imports_puzzlescript_next_teneten_sample_as_current_canonical_syntax() {
-    let source = include_str!("../../../games/TENETEN.txt");
+    let source = include_str!("fixtures/puzzlescript/teneten_next.txt");
 
     let translated = translate_puzzlescript_to_canonical(source)
         .expect("TENETEN should import from PuzzleScript Next syntax");
 
     assert!(translated.contains("title = \"TENETEN\""));
-    assert!(translated.contains("layers {\nBackground\n"));
+    assert!(translated.contains("layers {\nlayer1 = Background\n"));
     assert!(translated.contains("no [ TargetCrate no crate ]"));
     assert!(translated.contains("level \"1\""));
     assert!(translated.lines().any(|line| line == "message \"1\""));
@@ -1217,7 +1220,9 @@ fn imports_puzzlescript_next_teneten_sample_as_current_canonical_syntax() {
     );
     assert!(!translated.contains("[ You:F Count:0 no Checked ] -> [ You:B Count:3 Checked ]"));
     assert!(translated.contains("shape_You_F {"));
-    assert!(translated.contains("You:B\ncolors #000 #fff #00000015\nshape shape_You_F"));
+    assert!(
+        translated.contains("selector = You:B\ncolors = #000 #fff #00000015\nshape = shape_You_F")
+    );
     assert!(!translated.contains("You:B {"));
     assert!(translated.contains("choice \"Level Select\" -> goto level_select"));
     assert!(translated.contains("scene level_select {\nlayout {\nlevel_menu {"));

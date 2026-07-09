@@ -1431,6 +1431,7 @@ fn record_surface_document_line(
         record_authoring_declaration_surface_tokens(scope, tokens, sink);
         record_general_surface_tokens(scope, tokens, sink);
     }
+    record_legend_empty_literal_surface_tokens(scope, tokens, sink);
     record_visual_surface_line(scope, tokens, sink);
     if record_inline_authoring_surface_line(option_block, line_start, line, structural_lines, sink) {
         return;
@@ -1457,6 +1458,7 @@ fn record_surface_document_line(
     }
     record_fix_default_surface_tokens(scope, tokens, line, sink);
     record_standard_move_surface_tokens(scope, tokens, sink);
+    record_rule_routine_header_surface_line(scope, line_start, line, sink);
     record_rule_statement_surface_tokens(scope, tokens, sink);
     record_rule_line_surface_tokens(scope, line_start, line, sink);
     record_oriented_pattern_arg_surface_line(scope, line_start, line, sink);
@@ -1468,10 +1470,7 @@ fn record_structural_block_surface_tokens(
     strict_projection: bool,
     sink: &mut SurfaceSink,
 ) -> Result<(), DiagnosticReport> {
-    for block in blocks
-        .iter()
-        .filter(|block| block.role == SurfaceStructuralBlockRole::SourceTree)
-    {
+    for block in blocks {
         let tokens = source_line_tokens(&block.header, block.start);
         if tokens.is_empty() {
             continue;
@@ -1481,15 +1480,15 @@ fn record_structural_block_surface_tokens(
             || record_visual_shape_entry_block_header_surface_tokens(block, &tokens, sink)
             || record_condition_block_header_surface_tokens(&tokens, sink)
             || record_unbraced_level_block_header_surface_tokens(block, &tokens, sink)
-            || record_known_source_tree_block_header_surface_tokens(block, &tokens, sink)
+            || record_known_structural_block_header_surface_tokens(block, &tokens, sink)
         {
             continue;
         }
         if strict_projection {
             return Err(DiagnosticReport::error_at_line(
                 format!(
-                    "unowned source-tree block header `{}` in scope {:?}; add an owner-specific surface projector or a universal source-tree header rule",
-                    block.header, block.scope
+                    "unowned structural block header `{}` in scope {:?} role {:?}; add an owner-specific surface projector or a universal structural header rule",
+                    block.header, block.scope, block.role
                 ),
                 block.header.clone(),
             ));
@@ -1516,23 +1515,50 @@ fn record_rule_routine_block_header_surface_tokens(
     block: &SurfaceStructuralBlock,
     sink: &mut SurfaceSink,
 ) -> bool {
+    if !matches!(block.scope, SourceScope::Puzzle | SourceScope::Other) {
+        return false;
+    }
     let Some(spans) = puzzle_authoring::rule_routine_block_header_surface_spans(&block.header)
     else {
         return false;
     };
-    mark_surface_span(
-        block.start,
-        spans.keyword,
-        SurfaceSemanticKind::Keyword,
-        sink,
-    );
+    record_rule_routine_header_surface_spans(block.start, spans, sink);
+    true
+}
+
+fn record_rule_routine_header_surface_line(
+    scope: Option<SourceScope>,
+    line_start: usize,
+    line: &str,
+    sink: &mut SurfaceSink,
+) {
+    if !matches!(scope, Some(SourceScope::Puzzle | SourceScope::Other)) {
+        return;
+    }
+    if !matches!(
+        puzzle_authoring::rule_statement_block_surface(line, scope == Some(SourceScope::Other)),
+        Some(puzzle_authoring::RuleStatementBlockSurface::Routine)
+    ) {
+        return;
+    }
+    let Some(spans) = puzzle_authoring::rule_routine_block_header_surface_spans(line) else {
+        return;
+    };
+    record_rule_routine_header_surface_spans(line_start, spans, sink);
+}
+
+fn record_rule_routine_header_surface_spans(
+    line_start: usize,
+    spans: puzzle_authoring::RuleRoutineBlockHeaderSurfaceSpans,
+    sink: &mut SurfaceSink,
+) {
+    mark_surface_span(line_start, spans.keyword, SurfaceSemanticKind::Keyword, sink);
     if let Some(name) = spans.name {
-        mark_surface_span(block.start, name, SurfaceSemanticKind::Effect, sink);
+        mark_surface_span(line_start, name, SurfaceSemanticKind::Effect, sink);
     }
     for modifier in spans.modifiers {
-        mark_surface_span(block.start, modifier, SurfaceSemanticKind::Keyword, sink);
+        mark_surface_span(line_start, modifier, SurfaceSemanticKind::Keyword, sink);
     }
-    true
 }
 
 fn record_visual_shape_entry_block_header_surface_tokens(
@@ -1603,21 +1629,21 @@ fn record_unbraced_level_block_header_surface_tokens(
     true
 }
 
-fn record_known_source_tree_block_header_surface_tokens(
+fn record_known_structural_block_header_surface_tokens(
     block: &SurfaceStructuralBlock,
     tokens: &[SourceToken],
     sink: &mut SurfaceSink,
 ) -> bool {
-    if !(source_tree_container_header_scope(block.scope)
+    if !(structural_container_header_scope(block.scope)
         || source_tree_rule_program_header(&block.header)
         || source_tree_lifecycle_header(&block.header))
     {
         return false;
     }
-    record_universal_source_tree_block_header_surface_tokens(tokens, sink)
+    record_universal_structural_block_header_surface_tokens(tokens, sink)
 }
 
-fn record_universal_source_tree_block_header_surface_tokens(
+fn record_universal_structural_block_header_surface_tokens(
     tokens: &[SourceToken],
     sink: &mut SurfaceSink,
 ) -> bool {
@@ -1635,7 +1661,7 @@ fn record_universal_source_tree_block_header_surface_tokens(
     true
 }
 
-fn source_tree_container_header_scope(scope: SourceScope) -> bool {
+fn structural_container_header_scope(scope: SourceScope) -> bool {
     !matches!(
         scope,
         SourceScope::Other | SourceScope::UnbracedLevel | SourceScope::VisualShapeEntry
@@ -1754,6 +1780,33 @@ fn record_level_path_surface_token(token: &SourceToken, sink: &mut SurfaceSink) 
     }
 }
 
+fn record_legend_empty_literal_surface_tokens(
+    scope: Option<SourceScope>,
+    tokens: &[SourceToken],
+    sink: &mut SurfaceSink,
+) {
+    let token_texts = tokens
+        .iter()
+        .map(|token| token.text.as_str())
+        .collect::<Vec<_>>();
+    let syntax = match scope {
+        Some(SourceScope::Legend) => crate::syntax::legend_block_row_syntax(&token_texts, true),
+        Some(SourceScope::Level | SourceScope::UnbracedLevel) => {
+            crate::syntax::legend_directive_syntax(&token_texts, true)
+        }
+        _ => None,
+    };
+    let Some(syntax) = syntax else {
+        return;
+    };
+    if token_texts[syntax.rhs_start..] != ["empty"] {
+        return;
+    }
+    if let Some(empty) = tokens.get(syntax.rhs_start) {
+        add_scene_effect_token_range(sink, empty, SurfaceSemanticKind::Literal);
+    }
+}
+
 fn record_sounds_operation_surface_line(
     option_block: Option<SurfaceOptionBlock>,
     tokens: &[SourceToken],
@@ -1822,19 +1875,38 @@ fn record_rule_statement_surface_tokens(
     let Ok(surface) = puzzle_authoring::rule_statement_surface(&line) else {
         return;
     };
-    if matches!(
-        surface,
-        puzzle_authoring::RuleStatementSurface::ApplicationBlock { .. }
-    ) && let Some(first) = tokens.first()
-    {
-        sink.mark(
-            SourceSpan {
-                start: first.start,
-                end: first.end,
-            },
-            SurfaceSemanticKind::Keyword,
-        );
+    match surface {
+        puzzle_authoring::RuleStatementSurface::ApplicationBlock { .. } => {
+            if let Some(first) = tokens.first() {
+                sink.mark(
+                    SourceSpan {
+                        start: first.start,
+                        end: first.end,
+                    },
+                    SurfaceSemanticKind::Keyword,
+                );
+            }
+        }
+        puzzle_authoring::RuleStatementSurface::Call { name } => {
+            if let [call] = tokens
+                && name == call.text
+            {
+                record_rule_call_surface_token(call, sink);
+            }
+        }
+        puzzle_authoring::RuleStatementSurface::RuleLine(_) => {}
     }
+}
+
+fn record_rule_call_surface_token(token: &SourceToken, sink: &mut SurfaceSink) -> bool {
+    if !matches!(
+        puzzle_authoring::rule_statement_surface(&token.text),
+        Ok(puzzle_authoring::RuleStatementSurface::Call { name }) if name == token.text
+    ) {
+        return false;
+    }
+    add_scene_effect_token_range(sink, token, SurfaceSemanticKind::Effect);
+    true
 }
 
 fn record_rule_line_surface_tokens(
@@ -2300,19 +2372,66 @@ fn mark_option_surface_tokens(
     sink: &mut SurfaceSink,
 ) -> bool {
     let mut marked_any = false;
-    for token in tokens {
-        let name = token
-            .text
-            .split_once('=')
-            .map_or(token.text.as_str(), |(name, _)| name);
-        if !name.is_empty()
-            && option_names.contains(&name)
-            && mark_token_part(sink, token, name, SurfaceSemanticKind::Setting)
-        {
-            marked_any = true;
+    let mut index = 0usize;
+    while index < tokens.len() {
+        if let Some((name, value)) = tokens[index].text.split_once('=') {
+            if option_names.contains(&name)
+                && mark_token_part(sink, &tokens[index], name, SurfaceSemanticKind::Setting)
+            {
+                marked_any = true;
+            }
+            if !value.is_empty() {
+                marked_any |= mark_token_part(
+                    sink,
+                    &tokens[index],
+                    value,
+                    option_value_surface_kind(value),
+                );
+            }
+            index += 1;
+            continue;
         }
+        let token = &tokens[index];
+        if option_names.contains(&token.text.as_str()) {
+            marked_any |= mark_token_part(sink, token, &token.text, SurfaceSemanticKind::Setting);
+            if tokens.get(index + 1).is_some_and(|next| next.text == "=")
+                && let Some(value) = tokens.get(index + 2)
+            {
+                sink.mark(
+                    SourceSpan {
+                        start: value.start,
+                        end: value.end,
+                    },
+                    option_value_surface_kind(&value.text),
+                );
+                marked_any = true;
+                index += 3;
+                continue;
+            }
+        }
+        index += 1;
     }
     marked_any
+}
+
+fn option_value_surface_kind(value: &str) -> SurfaceSemanticKind {
+    if surface_number_literal(value) {
+        SurfaceSemanticKind::Number
+    } else if matches!(value, "true" | "false") {
+        SurfaceSemanticKind::Literal
+    } else if value.starts_with('"') && value.ends_with('"') {
+        SurfaceSemanticKind::String
+    } else {
+        SurfaceSemanticKind::Literal
+    }
+}
+
+fn surface_number_literal(value: &str) -> bool {
+    value.parse::<u16>().is_ok()
+        || value
+            .strip_suffix("ms")
+            .or_else(|| value.strip_suffix('s'))
+            .is_some_and(|number| number.parse::<u16>().is_ok())
 }
 
 fn mark_token_part(
@@ -2895,7 +3014,11 @@ fn record_rewrite_surface_line(
             .rposition(|token| token.text.contains(']'))
             .map_or(0, |index| index + 1);
         if effect_start < rhs.len() {
-            sink.extend(rewrite_effect_surface_document(&rhs[effect_start..]));
+            let effect_tokens = &rhs[effect_start..];
+            sink.extend(rewrite_effect_surface_document(effect_tokens));
+            if let [call] = effect_tokens {
+                record_rule_call_surface_token(call, sink);
+            }
         }
         return;
     }
@@ -2940,8 +3063,11 @@ fn record_visual_surface_line(
                         | "contain"
                         | "cover"
                         | "stretch"
+                        | "selector"
                         | "offset"
                         | "sampling"
+                        | "duration"
+                        | "frame_duration"
                         | "pixels_per_cell"
                         | "rotate"
                 ) =>
@@ -3078,7 +3204,7 @@ mod surface_document_flow_tests {
         parse_surface_document, parse_surface_structure_document, source_line_tokens,
         validate_surface_document_projection,
     };
-    use crate::surface::SurfaceStructuralBlockRole;
+    use crate::surface::SurfaceSemanticKind;
 
     #[test]
     fn structure_only_surface_document_shares_full_structural_product() {
@@ -3189,7 +3315,7 @@ puzzle board {
     }
 
     #[test]
-    fn every_source_tree_header_token_receives_a_surface_token() {
+    fn every_structural_header_token_receives_a_surface_token() {
         let source = r#"
 puzzle board {
 rules {
@@ -3204,18 +3330,128 @@ routine Push once {
         for block in document
             .structural_blocks
             .iter()
-            .filter(|block| block.role == SurfaceStructuralBlockRole::SourceTree)
         {
             for header_token in source_line_tokens(&block.header, block.start) {
                 assert!(
                     document.semantic_tokens.iter().any(|token| {
                         token.span.start == header_token.start && token.span.end == header_token.end
                     }),
-                    "source-tree block `{}` left header token `{}` without a surface token",
+                    "structural block `{}` left header token `{}` without a surface token",
                     block.header,
                     header_token.text
                 );
             }
+        }
+    }
+
+    #[test]
+    fn puzzle_statement_headers_receive_surface_tokens() {
+        let source = r#"
+puzzle board {
+rules {
+}
+on_level_start {
+}
+on_level_clear {
+}
+}
+"#;
+        let document = parse_surface_document(source);
+
+        for header in ["rules", "on_level_start", "on_level_clear"] {
+            let start = source.find(&format!("{header} {{")).unwrap();
+            assert!(
+                document.semantic_tokens.iter().any(|token| {
+                    token.span.start == start
+                        && token.span.end == start + header.len()
+                        && token.kind == SurfaceSemanticKind::Keyword
+                }),
+                "statement block header `{header}` did not receive a keyword surface token"
+            );
+        }
+    }
+
+    #[test]
+    fn scene_keys_and_routine_headers_receive_surface_tokens() {
+        let source = r#"
+scene title {
+keys {
+Enter -> start playing
+}
+routine continue_game {
+goto playing
+}
+}
+"#;
+        let document = parse_surface_document(source);
+
+        for (needle, text, kind) in [
+            ("keys {", "keys", SurfaceSemanticKind::Keyword),
+            ("routine continue_game", "routine", SurfaceSemanticKind::Keyword),
+            (
+                "routine continue_game",
+                "continue_game",
+                SurfaceSemanticKind::Binding,
+            ),
+        ] {
+            let needle_start = source.find(needle).unwrap();
+            let start = source[needle_start..].find(text).unwrap() + needle_start;
+            assert!(
+                document.semantic_tokens.iter().any(|token| {
+                    token.span.start == start
+                        && token.span.end == start + text.len()
+                        && token.kind == kind
+                }),
+                "scene token `{text}` did not receive {kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn reserved_literals_and_scene_options_receive_surface_tokens() {
+        let source = r#"
+puzzle board {
+levels {
+legend {
+. = empty
+}
+level "start" {
+.
+}
+}
+}
+
+scene level_select {
+layout {
+level_menu {
+show_index = true
+show_solved=false
+columns = 3
+}
+}
+}
+"#;
+        let document = parse_surface_document(source);
+
+        for (needle, text, kind) in [
+            (". = empty", "empty", SurfaceSemanticKind::Literal),
+            ("show_index = true", "show_index", SurfaceSemanticKind::Setting),
+            ("show_index = true", "true", SurfaceSemanticKind::Literal),
+            ("show_solved=false", "show_solved", SurfaceSemanticKind::Setting),
+            ("show_solved=false", "false", SurfaceSemanticKind::Literal),
+            ("columns = 3", "columns", SurfaceSemanticKind::Setting),
+            ("columns = 3", "3", SurfaceSemanticKind::Number),
+        ] {
+            let needle_start = source.find(needle).unwrap();
+            let start = source[needle_start..].find(text).unwrap() + needle_start;
+            assert!(
+                document.semantic_tokens.iter().any(|token| {
+                    token.span.start == start
+                        && token.span.end == start + text.len()
+                        && token.kind == kind
+                }),
+                "token `{text}` in `{needle}` did not receive {kind:?}"
+            );
         }
     }
 
@@ -3340,7 +3576,7 @@ __invalid_unowned_surface_node__ {
         assert!(
             error
                 .to_string()
-                .contains("unowned source-tree block header `__invalid_unowned_surface_node__`"),
+                .contains("unowned structural block header `__invalid_unowned_surface_node__`"),
             "{error}"
         );
     }

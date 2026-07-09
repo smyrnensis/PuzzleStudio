@@ -927,7 +927,6 @@ PB
 rules {
 input directions [ Player ] -> [ > Player ]
 [ > Player | Box ] -> [ > Player | > Box ]
-move
 }
 }
 "#;
@@ -1017,7 +1016,6 @@ P
 
 rules {
 input directions [ Player ] -> [ > Player ]
-move
 }
 }
 "#;
@@ -1523,7 +1521,7 @@ actor = Player
 }
 rules {
 input directions [ Player ] -> [ Player{>} ]
-move
+input directions [ Player | no Player ] -> [ | Player ]
 }
 levels {
 legend {
@@ -4239,7 +4237,6 @@ legend L = Lock
 rules {
   once [ pushable ] -> [ pushable{>} ]
   [ key{>} | lock ] -> [ | ]
-  move
 }
 
 level "start" {
@@ -4425,57 +4422,14 @@ x -> input action
 }
 
 #[test]
-fn standard_move_clears_blocked_movement_before_later_rules() {
+fn move_call_without_explicit_routine_reports_unknown_routine() {
     let source = r#"
-title = blocked_move_cleanup
-
-puzzle default {
-layers {
-floor = Marker
-actor = Box Wall
-}
-
-legend {
-B = Box
-W = Wall
-. = empty
-}
-
-rules {
-
-once right [ Box ] -> [ > Box ]
-move
-once [ > Box ] -> [ Box Marker ]
-}
-
-levels {
-level "start"
-BW
-}
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let moved = transition_state(
-        &loaded.game,
-        &loaded.levels[0].initial_state,
-        input_named(&loaded, "right"),
-    )
-    .unwrap();
-    let box_object = object_named(&loaded, "Box");
-    let marker = object_named(&loaded, "Marker");
-
-    assert!(moved.has_object(&loaded.game, 0, 0, box_object));
-    assert!(!moved.has_object(&loaded.game, 0, 0, marker));
-}
-
-#[test]
-fn standard_move_resolves_movement_intent_one_cell_per_call() {
-    let source = r#"
-title = standard_move_one_cell
+title = move_requires_explicit_routine
 
 puzzle default {
 layers {
 actor = Box
+marker = Marker
 }
 
 legend {
@@ -4484,8 +4438,41 @@ B = Box
 }
 
 rules {
+move
+}
 
-once right [ Box ] -> [ > Box ]
+levels {
+level "start"
+B
+}
+}
+"#;
+    let error = parse_game(source).unwrap_err().to_string();
+
+    assert!(error.contains("unknown routine call: move"));
+}
+
+#[test]
+fn explicit_move_routine_remains_callable() {
+    let source = r#"
+title = explicit_move_routine
+
+puzzle default {
+layers {
+actor = Box
+marker = Marker
+}
+
+legend {
+B = Box
+. = empty
+}
+
+routine move {
+[ Box ] -> [ Box Marker ]
+}
+
+rules {
 move
 }
 
@@ -4503,130 +4490,10 @@ B..
     )
     .unwrap();
     let box_object = object_named(&loaded, "Box");
+    let marker = object_named(&loaded, "Marker");
 
-    assert!(!moved.has_object(&loaded.game, 0, 0, box_object));
-    assert!(moved.has_object(&loaded.game, 1, 0, box_object));
-    assert!(!moved.has_object(&loaded.game, 2, 0, box_object));
-}
-
-#[test]
-fn standard_move_moves_same_direction_chains_one_cell() {
-    let source = r#"
-title = standard_move_chain
-
-puzzle default {
-layers {
-actor = Box
-}
-
-legend {
-B = Box
-. = empty
-}
-
-rules {
-
-once_all right [ Box ] -> [ > Box ]
-move
-}
-
-levels {
-level "start"
-BB..
-}
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let moved = transition_state(
-        &loaded.game,
-        &loaded.levels[0].initial_state,
-        input_named(&loaded, "right"),
-    )
-    .unwrap();
-    let box_object = object_named(&loaded, "Box");
-
-    assert!(!moved.has_object(&loaded.game, 0, 0, box_object));
-    assert!(moved.has_object(&loaded.game, 1, 0, box_object));
-    assert!(moved.has_object(&loaded.game, 2, 0, box_object));
-    assert!(!moved.has_object(&loaded.game, 3, 0, box_object));
-}
-
-#[test]
-fn standard_move_uses_object_set_matchers_without_object_expansion() {
-    let source = r#"
-title = standard_move_object_sets
-
-puzzle default {
-layers {
-actor = Player Box Key
-wall = Wall
-}
-
-legend {
-P = Player
-B = Box
-K = Key
-W = Wall
-. = empty
-}
-
-rules {
-once_all right [ Player ] -> [ > Player ]
-move
-}
-
-levels {
-level "start"
-PBK.
-}
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-
-    fn count_steps(steps: &[RuleStep], rules: &mut usize, object_sets: &mut usize) {
-        for step in steps {
-            match step {
-                RuleStep::Rule(rule) => {
-                    *rules += 1;
-                    for component in &rule.pattern.components {
-                        for cell in &component.cells {
-                            *object_sets += cell.require_object_sets.len();
-                        }
-                    }
-                }
-                RuleStep::ConditionalBlock { steps, .. }
-                | RuleStep::Block { steps, .. }
-                | RuleStep::LocalFrame { steps, .. } => {
-                    count_steps(steps, rules, object_sets);
-                }
-                RuleStep::ConditionalBranch {
-                    then_steps,
-                    else_steps,
-                    ..
-                } => {
-                    count_steps(then_steps, rules, object_sets);
-                    count_steps(else_steps, rules, object_sets);
-                }
-                RuleStep::AfterTriggered { steps, then_steps } => {
-                    count_steps(steps, rules, object_sets);
-                    count_steps(then_steps, rules, object_sets);
-                }
-            }
-        }
-    }
-
-    let mut rules = 0;
-    let mut object_sets = 0;
-    count_steps(loaded.game.program(), &mut rules, &mut object_sets);
-
-    assert!(
-        object_sets > 0,
-        "move should preserve layer groups as object-set matchers"
-    );
-    assert!(
-        rules < 100,
-        "move lowered to object-expanded rules: {rules}"
-    );
+    assert!(moved.has_object(&loaded.game, 0, 0, box_object));
+    assert!(moved.has_object(&loaded.game, 0, 0, marker));
 }
 
 #[test]
@@ -8221,6 +8088,114 @@ B
 }
 
 #[test]
+fn puzzle_sprites_accept_frame_duration_for_animation_body() {
+    let source = r##"
+title = frame_duration_animation_sprite
+
+puzzle default {
+layers {
+__legacy_layer_0 = Background
+}
+legend {
+. = empty
+B = Background
+}
+sprites {
+Background
+#90ee90 #008000
+frame_duration 100ms
+11111
+01111
+11101
+11111
+10111
+>
+10111
+11111
+01111
+11101
+11111
+>
+11111
+10111
+11111
+01111
+11101
+}
+rules {
+}
+levels {
+level "start"
+B
+}
+}
+"##;
+    let loaded = parse_game(source).unwrap();
+    let sprite = loaded
+        .visuals
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "Background")
+        .unwrap();
+    assert_eq!(
+        sprite
+            .loop_animation
+            .as_ref()
+            .map(|animation| animation.duration_ms),
+        Some(300)
+    );
+}
+
+#[test]
+fn puzzle_sprites_reject_conflicting_duration_and_frame_duration() {
+    let source = r##"
+title = conflicting_duration_animation_sprite
+
+puzzle default {
+layers {
+__legacy_layer_0 = Background
+}
+legend {
+. = empty
+B = Background
+}
+sprites {
+Background
+#90ee90 #008000
+duration 500ms
+frame_duration 100ms
+11111
+01111
+11101
+11111
+10111
+>
+10111
+11111
+01111
+11101
+11111
+>
+11111
+10111
+11111
+01111
+11101
+}
+rules {
+}
+levels {
+level "start"
+B
+}
+}
+"##;
+    let error = parse_game(source).unwrap_err().to_string();
+
+    assert!(error.contains("sprite duration must equal frame_duration multiplied by frame count"));
+}
+
+#[test]
 fn puzzle_sprites_accept_unbraced_shape_table_values_and_bare_refs() {
     let source = r##"
 title = unbraced_shape_table_values
@@ -11509,6 +11484,18 @@ routine CancelTurn once {
 [ Player ] -> [ Player Marker ]
 }
 
+routine move {
+repeat {
+for d in directions {
+d [ d object | no object no {__move_collision} ] -> [ | object{no directions} ]
+}
+for d in directions {
+once_all d [ d object ] -> [ object ]
+}
+once_all [ {__move_collision} ] -> [ ]
+}
+}
+
 rules {
 input directions [ player ] -> [ > player ]
 [ > object | Wall ] -> CancelTurn
@@ -11564,6 +11551,18 @@ object = player Wall
 legend P = Player
 legend b = Background
 legend # = Wall
+
+routine move {
+repeat {
+for d in directions {
+d [ d object | no object no {__move_collision} ] -> [ | object{no directions} ]
+}
+for d in directions {
+once_all d [ d object ] -> [ object ]
+}
+once_all [ {__move_collision} ] -> [ ]
+}
+}
 
 rules {
 input directions [ player ] -> [ > player ]
@@ -11622,6 +11621,18 @@ object = player Wall
 legend P = Player
 legend b = Background
 legend # = Wall
+
+routine move {
+repeat {
+for d in directions {
+d [ d object | no object no {__move_collision} ] -> [ | object{no directions} ]
+}
+for d in directions {
+once_all d [ d object ] -> [ object ]
+}
+once_all [ {__move_collision} ] -> [ ]
+}
+}
 
 rules {
 input directions [ player ] -> [ > player ]
@@ -12704,42 +12715,6 @@ x
 
     let error = parse_game(source).unwrap_err().to_string();
     assert!(error.contains("unknown level char 'x'"));
-}
-
-#[test]
-fn standard_move_registers_anonymous_layers_as_internal_groups() {
-    let source = r#"
-title = standard_move_anonymous_layers
-
-puzzle default {
-layers {
-__legacy_layer_0 = Player Box
-}
-legend P = Player
-legend B = Box
-
-legend {
-. = empty
-}
-
-rules {
-if input == right {
-once right [ Player | ] -> [ > Player | ]
-}
-move
-}
-
-level "start" {
-P.
-}
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let right = input_named(&loaded, "right");
-    let player = object_named(&loaded, "Player");
-
-    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, right).unwrap();
-    assert!(moved.has_object(&loaded.game, 1, 0, player));
 }
 
 #[test]
@@ -17336,7 +17311,6 @@ A = Box:A
 rules {
 input [ Box:A ] -> [ > Box:A ]
 [ > Box:* @light ] -> [ > Box:* > @light ]
-move
 }
 
 levels {
@@ -17488,46 +17462,6 @@ P.
     let error = parse_game(source).unwrap_err().to_string();
 
     assert!(error.contains("display routines and display blocks can only contain display rules"));
-}
-
-#[test]
-fn standard_move_ignores_display_only_layers() {
-    let source = r#"
-title = standard_move_display_layers
-
-puzzle default {
-layers {
-@display_floor = @Floor
-solid = Player Box Wall
-}
-
-rules {
-input directions [ Player ] -> [ Player{>} ]
-[ Player{>} | Box | no solid ] -> [ Player{>} | Box{>} | ]
-move
-}
-
-levels {
-legend {
-. = empty
-P = Player
-B = Box
-}
-
-level "start"
-PB.
-}
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let right = input_named(&loaded, "right");
-    let player = object_named(&loaded, "Player");
-    let box_object = object_named(&loaded, "Box");
-
-    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, right).unwrap();
-
-    assert!(moved.has_object(&loaded.game, 1, 0, player));
-    assert!(moved.has_object(&loaded.game, 2, 0, box_object));
 }
 
 #[test]
@@ -18512,7 +18446,8 @@ P
 
 #[test]
 fn spec_3d_exports_playable_puzzle_scene() {
-    let document = super::parse_game(include_str!("../../../games/spec_3d.puzzle3")).unwrap();
+    let document =
+        super::parse_game(include_str!("../tests/fixtures/spec_3d_full.puzzle3")).unwrap();
     let fixture_json = crate::export_loaded_document_visual_fixture_json(&document).unwrap();
 
     assert!(fixture_json.contains("\"currentScene\": \"title\""));

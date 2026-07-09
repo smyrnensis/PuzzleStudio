@@ -8,11 +8,18 @@ let spriteClipSelection = null;
 let spriteClipDrag = null;
 let spriteClipClipboard = null;
 let spriteClipFloating = null;
+let spriteAnimationPlaybackTimer = 0;
+let spriteAnimationPlaybackDurationMs = 0;
+let spriteAnimationInsertMode = false;
+let spriteAnimationRemoveMode = false;
 const spriteColorEditSessions = {
   sprite: null,
   sprite3d: null,
 };
 const SPRITE_EDITOR_MAX_SIZE = 64;
+const SPRITE_ANIMATION_MAX_FRAMES = 24;
+const SPRITE_ANIMATION_MIN_DURATION_MS = 20;
+const SPRITE_ANIMATION_MAX_DURATION_MS = 5000;
 const SPRITE_BRUSH_PRESETS = {
   pixel: { label: "1px", diameterCells: 1 },
   thin: { label: "Marker S", ratio: 1 / 32 },
@@ -23,6 +30,7 @@ const SPRITE_BRUSH_PRESETS = {
 function resetSpriteBuilder(size = sprite.size) {
   sprite.size = clampSpriteSize(size);
   sprite.cells = Array.from({ length: sprite.size * sprite.size }, () => null);
+  resetSpriteAnimationFramesFromCurrentCells();
   sprite.shapeBind = null;
   sprite.solidSource = false;
   sprite.sourcePreludeRows = [];
@@ -42,10 +50,431 @@ function renderSpriteBuilder() {
   if (!spriteBoard || !spritePalette) {
     return;
   }
+  ensureSpriteAnimationFrames();
   renderSpriteControls();
   renderSpritePalette();
   renderSpriteBoard();
+  renderSpriteAnimationControls();
   syncSpriteSourceActionButtons();
+}
+
+function setSpriteAnimationMode(enabled, options = {}) {
+  sprite.animationMode = Boolean(enabled);
+  ensureSpriteAnimationFrames();
+  if (!sprite.animationMode) {
+    stopSpriteAnimationPlayback({ render: false });
+  }
+  if (options.render !== false) {
+    renderSpriteBuilder();
+  }
+  if (typeof syncPreviewModeButtonState === "function") {
+    syncPreviewModeButtonState();
+  }
+}
+
+function resetSpriteAnimationFramesFromCurrentCells() {
+  sprite.animationFrameIndex = 0;
+  sprite.animationFrameCount = 1;
+  sprite.animationPlaybackIndex = 0;
+  sprite.animationFrames = [cloneSpriteCells(sprite.cells)];
+  spriteAnimationInsertMode = false;
+  spriteAnimationRemoveMode = false;
+}
+
+function cloneSpriteCells(cells = sprite.cells) {
+  const length = sprite.size * sprite.size;
+  return Array.from({ length }, (_, index) => {
+    const colorIndex = cells[index];
+    return validSpriteColorIndex(colorIndex) ? colorIndex : null;
+  });
+}
+
+function normalizedSpriteAnimationFrameCount(value = sprite.animationFrameCount) {
+  const parsed = Math.trunc(Number(value));
+  const count = Number.isFinite(parsed) ? parsed : 1;
+  return Math.max(1, Math.min(SPRITE_ANIMATION_MAX_FRAMES, count));
+}
+
+function normalizedSpriteAnimationDuration(value = sprite.animationDurationMs) {
+  const parsed = Math.trunc(Number(value));
+  const duration = Number.isFinite(parsed) ? parsed : 120;
+  return Math.max(SPRITE_ANIMATION_MIN_DURATION_MS, Math.min(SPRITE_ANIMATION_MAX_DURATION_MS, duration));
+}
+
+function ensureSpriteAnimationFrames() {
+  sprite.animationFrameCount = normalizedSpriteAnimationFrameCount(sprite.animationFrameCount);
+  sprite.animationDurationMs = normalizedSpriteAnimationDuration(sprite.animationDurationMs);
+  if (!Array.isArray(sprite.animationFrames) || !sprite.animationFrames.length) {
+    sprite.animationFrames = [cloneSpriteCells(sprite.cells)];
+  }
+  while (sprite.animationFrames.length < sprite.animationFrameCount) {
+    sprite.animationFrames.push(cloneSpriteCells(sprite.cells));
+  }
+  if (sprite.animationFrames.length > sprite.animationFrameCount) {
+    sprite.animationFrames.length = sprite.animationFrameCount;
+  }
+  for (let index = 0; index < sprite.animationFrames.length; index += 1) {
+    sprite.animationFrames[index] = normalizeSpriteAnimationFrameCells(sprite.animationFrames[index]);
+  }
+  sprite.animationFrameIndex = Math.max(0, Math.min(sprite.animationFrameCount - 1, Math.trunc(Number(sprite.animationFrameIndex) || 0)));
+  sprite.animationPlaybackIndex = Math.max(0, Math.min(sprite.animationFrameCount - 1, Math.trunc(Number(sprite.animationPlaybackIndex) || 0)));
+  if (sprite.animationMode) {
+    sprite.cells = sprite.animationFrames[sprite.animationFrameIndex];
+  }
+}
+
+function normalizeSpriteAnimationFrameCells(cells) {
+  const length = sprite.size * sprite.size;
+  return Array.from({ length }, (_, index) => {
+    const colorIndex = Array.isArray(cells) ? cells[index] : null;
+    return validSpriteColorIndex(colorIndex) ? colorIndex : null;
+  });
+}
+
+function resizeSpriteAnimationCells(cells, previousSize, nextSize) {
+  const nextCells = Array.from({ length: nextSize * nextSize }, () => null);
+  const copySize = Math.min(previousSize, nextSize);
+  for (let y = 0; y < copySize; y += 1) {
+    for (let x = 0; x < copySize; x += 1) {
+      const colorIndex = cells[y * previousSize + x];
+      nextCells[y * nextSize + x] = validSpriteColorIndex(colorIndex) ? colorIndex : null;
+    }
+  }
+  return nextCells;
+}
+
+function syncSpriteAnimationFramesAfterSizeChange(previousSize, nextSize, activeCells) {
+  if (!sprite.animationMode) {
+    resetSpriteAnimationFramesFromCurrentCells();
+    return;
+  }
+  ensureSpriteAnimationFrames();
+  sprite.animationFrames = sprite.animationFrames.map((cells, index) => (
+    index === sprite.animationFrameIndex
+      ? cloneSpriteCells(activeCells)
+      : resizeSpriteAnimationCells(cells, previousSize, nextSize)
+  ));
+  sprite.cells = sprite.animationFrames[sprite.animationFrameIndex];
+}
+
+function renderSpriteAnimationControls() {
+  if (!spriteBuilder) {
+    return;
+  }
+  ensureSpriteAnimationFrames();
+  spriteBuilder.classList.toggle("is-animation-mode", sprite.animationMode);
+  if (!sprite.animationMode) {
+    spriteAnimationInsertMode = false;
+    spriteAnimationRemoveMode = false;
+    return;
+  }
+  syncSpriteAnimationInputValues({ preserveActive: true });
+  if (spriteAnimationFrameTotal) {
+    spriteAnimationFrameTotal.textContent = String(sprite.animationFrameCount);
+  }
+  if (spriteAnimationPreviousFrameButton) {
+    spriteAnimationPreviousFrameButton.disabled = sprite.animationFrameCount <= 1;
+  }
+  if (spriteAnimationNextFrameButton) {
+    spriteAnimationNextFrameButton.disabled = sprite.animationFrameCount <= 1;
+  }
+  if (spriteAnimationInsertFrameButton) {
+    const canInsertFrame = sprite.animationFrameCount < SPRITE_ANIMATION_MAX_FRAMES;
+    spriteAnimationInsertFrameButton.disabled = !canInsertFrame;
+    spriteAnimationInsertFrameButton.classList.toggle("is-active", spriteAnimationInsertMode && canInsertFrame);
+    spriteAnimationInsertFrameButton.setAttribute("aria-pressed", spriteAnimationInsertMode && canInsertFrame ? "true" : "false");
+  }
+  if (spriteAnimationRemoveFrameButton) {
+    const canRemoveFrame = sprite.animationFrameCount > 1;
+    spriteAnimationRemoveFrameButton.disabled = !canRemoveFrame;
+    spriteAnimationRemoveFrameButton.classList.toggle("is-active", spriteAnimationRemoveMode && canRemoveFrame);
+    spriteAnimationRemoveFrameButton.setAttribute("aria-pressed", spriteAnimationRemoveMode && canRemoveFrame ? "true" : "false");
+  }
+  renderSpriteAnimationSurfaces();
+  syncSpriteAnimationPlayback();
+}
+
+function syncSpriteAnimationInputValues(options = {}) {
+  const preserveActive = options.preserveActive === true;
+  if (spriteAnimationDurationInput && (!preserveActive || document.activeElement !== spriteAnimationDurationInput)) {
+    spriteAnimationDurationInput.value = String(sprite.animationDurationMs);
+  }
+  if (spriteAnimationFrameCountInput && (!preserveActive || document.activeElement !== spriteAnimationFrameCountInput)) {
+    spriteAnimationFrameCountInput.value = String(sprite.animationFrameCount);
+  }
+  if (spriteAnimationFrameInput && (!preserveActive || document.activeElement !== spriteAnimationFrameInput)) {
+    spriteAnimationFrameInput.value = String(sprite.animationFrameIndex + 1);
+  }
+  if (spriteAnimationFrameInput) {
+    spriteAnimationFrameInput.max = String(sprite.animationFrameCount);
+  }
+}
+
+function renderSpriteAnimationSurfaces() {
+  if (!sprite.animationMode) {
+    return;
+  }
+  renderSpriteAnimationPlaybackView(sprite.animationFrames[sprite.animationPlaybackIndex] || sprite.cells);
+  renderSpriteAnimationFrameStrip();
+}
+
+function renderSpriteAnimationPlaybackView(cells) {
+  if (!spriteAnimationPlaybackView) {
+    return;
+  }
+  spriteAnimationPlaybackView.style.setProperty("--sprite-size", sprite.size);
+  spriteAnimationPlaybackView.replaceChildren(...spriteAnimationFrameCells(cells));
+}
+
+function spriteAnimationFrameCells(cells) {
+  return Array.from({ length: sprite.size * sprite.size }, (_, index) => {
+    const colorIndex = validSpriteColorIndex(cells?.[index]) ? cells[index] : null;
+    const cell = document.createElement("span");
+    cell.className = "sprite-animation-frame-cell";
+    cell.style.setProperty("--sprite-swatch-color", spriteColorForColorIndex(colorIndex));
+    return cell;
+  });
+}
+
+function renderSpriteAnimationFrameStrip() {
+  if (!spriteAnimationFrameStrip) {
+    return;
+  }
+  const showInsertTargets = spriteAnimationInsertMode && sprite.animationFrameCount < SPRITE_ANIMATION_MAX_FRAMES;
+  const showRemoveTargets = spriteAnimationRemoveMode && sprite.animationFrameCount > 1;
+  spriteAnimationFrameStrip.classList.toggle("is-insert-mode", showInsertTargets);
+  spriteAnimationFrameStrip.classList.toggle("is-remove-mode", showRemoveTargets);
+  const fragment = document.createDocumentFragment();
+  for (let index = 0; index < sprite.animationFrameCount; index += 1) {
+    if (showInsertTargets) {
+      fragment.append(spriteAnimationInsertTargetButton(index));
+    }
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "sprite-animation-frame-button";
+    button.classList.toggle("is-active", index === sprite.animationFrameIndex);
+    button.classList.toggle("is-playing-frame", sprite.animationMode && index === sprite.animationPlaybackIndex);
+    button.style.setProperty("--sprite-size", sprite.size);
+    button.setAttribute("aria-label", showRemoveTargets ? `Remove sprite animation frame ${index + 1}` : `Edit sprite animation frame ${index + 1}`);
+    button.title = showRemoveTargets ? "Remove frame" : `Frame ${index + 1}`;
+    button.append(...spriteAnimationFrameCells(sprite.animationFrames[index]));
+    const label = document.createElement("span");
+    label.className = "sprite-animation-frame-index";
+    label.textContent = String(index + 1);
+    button.append(label);
+    button.addEventListener("click", () => {
+      if (spriteAnimationRemoveMode) {
+        removeSpriteAnimationFrameAt(index);
+        return;
+      }
+      setSpriteAnimationFrame(index);
+    });
+    fragment.append(button);
+  }
+  if (showInsertTargets) {
+    fragment.append(spriteAnimationInsertTargetButton(sprite.animationFrameCount));
+  }
+  spriteAnimationFrameStrip.replaceChildren(fragment);
+}
+
+function spriteAnimationInsertTargetButton(index) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "sprite-animation-insert-target";
+  button.setAttribute("aria-label", `Insert sprite animation frame at position ${index + 1}`);
+  button.title = "Add frame";
+  button.addEventListener("click", () => insertSpriteAnimationFrameAt(index));
+  return button;
+}
+
+function setSpriteAnimationFrame(index) {
+  ensureSpriteAnimationFrames();
+  spriteAnimationInsertMode = false;
+  spriteAnimationRemoveMode = false;
+  const nextIndex = Math.max(0, Math.min(sprite.animationFrameCount - 1, Math.trunc(Number(index) || 0)));
+  if (nextIndex === sprite.animationFrameIndex) {
+    renderSpriteAnimationControls();
+    return;
+  }
+  sprite.animationFrameIndex = nextIndex;
+  sprite.cells = sprite.animationFrames[nextIndex];
+  deactivateSpriteClipMode({ render: false });
+  renderSpriteBuilder();
+  setSpriteActionStatus(`Frame ${nextIndex + 1}`, "is-ok");
+}
+
+function moveSpriteAnimationFrame(delta) {
+  ensureSpriteAnimationFrames();
+  const count = sprite.animationFrameCount;
+  const next = (sprite.animationFrameIndex + delta + count) % count;
+  setSpriteAnimationFrame(next);
+}
+
+function updateSpriteAnimationFrameCount(value) {
+  const before = visualEditSnapshot("sprite");
+  sprite.animationFrameCount = normalizedSpriteAnimationFrameCount(value);
+  spriteAnimationInsertMode = false;
+  spriteAnimationRemoveMode = false;
+  ensureSpriteAnimationFrames();
+  renderSpriteBuilder();
+  pushVisualEditUndoSnapshot("sprite", before);
+}
+
+function toggleSpriteAnimationInsertMode() {
+  ensureSpriteAnimationFrames();
+  if (sprite.animationFrameCount >= SPRITE_ANIMATION_MAX_FRAMES) {
+    spriteAnimationInsertMode = false;
+    renderSpriteAnimationControls();
+    setSpriteActionStatus(`Maximum ${SPRITE_ANIMATION_MAX_FRAMES} frames`, "is-error");
+    return;
+  }
+  spriteAnimationRemoveMode = false;
+  spriteAnimationInsertMode = !spriteAnimationInsertMode;
+  renderSpriteAnimationControls();
+  setSpriteActionStatus(spriteAnimationInsertMode ? "Click a frame gap" : "Add frame canceled", "is-ok");
+}
+
+function toggleSpriteAnimationRemoveMode() {
+  ensureSpriteAnimationFrames();
+  if (sprite.animationFrameCount <= 1) {
+    spriteAnimationRemoveMode = false;
+    renderSpriteAnimationControls();
+    setSpriteActionStatus("At least 1 frame is required", "is-error");
+    return;
+  }
+  spriteAnimationInsertMode = false;
+  spriteAnimationRemoveMode = !spriteAnimationRemoveMode;
+  renderSpriteAnimationControls();
+  setSpriteActionStatus(spriteAnimationRemoveMode ? "Click a frame to remove" : "Remove frame canceled", "is-ok");
+}
+
+function insertSpriteAnimationFrameAt(index) {
+  ensureSpriteAnimationFrames();
+  if (sprite.animationFrameCount >= SPRITE_ANIMATION_MAX_FRAMES) {
+    spriteAnimationInsertMode = false;
+    renderSpriteAnimationControls();
+    setSpriteActionStatus(`Maximum ${SPRITE_ANIMATION_MAX_FRAMES} frames`, "is-error");
+    return;
+  }
+  const before = visualEditSnapshot("sprite");
+  const insertIndex = Math.max(0, Math.min(sprite.animationFrameCount, Math.trunc(Number(index) || 0)));
+  const copyIndex = Math.max(0, Math.min(sprite.animationFrameCount - 1, insertIndex - 1));
+  const insertedCells = cloneSpriteCells(sprite.animationFrames[copyIndex]);
+  stopSpriteAnimationPlayback({ render: false });
+  sprite.animationFrames.splice(insertIndex, 0, insertedCells);
+  sprite.animationFrameCount = sprite.animationFrames.length;
+  sprite.animationFrameIndex = insertIndex;
+  sprite.animationPlaybackIndex = insertIndex;
+  sprite.cells = sprite.animationFrames[insertIndex];
+  spriteAnimationInsertMode = false;
+  spriteAnimationRemoveMode = false;
+  deactivateSpriteClipMode({ render: false });
+  renderSpriteBuilder();
+  setSpriteActionStatus(`Added frame ${insertIndex + 1}`, "is-ok");
+  pushVisualEditUndoSnapshot("sprite", before);
+}
+
+function removeSpriteAnimationFrameAt(index) {
+  ensureSpriteAnimationFrames();
+  if (sprite.animationFrameCount <= 1) {
+    spriteAnimationRemoveMode = false;
+    renderSpriteAnimationControls();
+    setSpriteActionStatus("At least 1 frame is required", "is-error");
+    return;
+  }
+  const before = visualEditSnapshot("sprite");
+  const removeIndex = Math.max(0, Math.min(sprite.animationFrameCount - 1, Math.trunc(Number(index) || 0)));
+  stopSpriteAnimationPlayback({ render: false });
+  sprite.animationFrames.splice(removeIndex, 1);
+  sprite.animationFrameCount = sprite.animationFrames.length;
+  sprite.animationFrameIndex = Math.max(0, Math.min(removeIndex, sprite.animationFrameCount - 1));
+  sprite.animationPlaybackIndex = sprite.animationFrameIndex;
+  sprite.cells = sprite.animationFrames[sprite.animationFrameIndex];
+  spriteAnimationInsertMode = false;
+  spriteAnimationRemoveMode = false;
+  deactivateSpriteClipMode({ render: false });
+  renderSpriteBuilder();
+  setSpriteActionStatus(`Removed frame ${removeIndex + 1}`, "is-ok");
+  pushVisualEditUndoSnapshot("sprite", before);
+}
+
+function updateSpriteAnimationDuration(value, options = {}) {
+  const nextDuration = normalizedSpriteAnimationDuration(value);
+  const changed = nextDuration !== sprite.animationDurationMs;
+  const before = options.recordHistory === false || !changed ? null : visualEditSnapshot("sprite");
+  sprite.animationDurationMs = nextDuration;
+  if (
+    spriteAnimationDurationInput
+    && !(options.preserveInput === true && document.activeElement === spriteAnimationDurationInput)
+  ) {
+    spriteAnimationDurationInput.value = String(sprite.animationDurationMs);
+  }
+  if (changed && sprite.animationMode && sprite.animationFrameCount > 1) {
+    stopSpriteAnimationPlayback({ render: false });
+    startSpriteAnimationPlayback();
+  }
+  if (before) {
+    pushVisualEditUndoSnapshot("sprite", before);
+  }
+}
+
+function isSpriteVisualEditUndoTarget(target) {
+  return target === spriteAnimationDurationInput || target === spriteAnimationFrameCountInput;
+}
+
+function spriteAnimationFrameDelayMs() {
+  ensureSpriteAnimationFrames();
+  return Math.max(1, Math.round(sprite.animationDurationMs / sprite.animationFrameCount));
+}
+
+function syncSpriteAnimationPlayback() {
+  if (!sprite.animationMode || sprite.animationFrameCount <= 1) {
+    stopSpriteAnimationPlayback({ render: false });
+    sprite.animationPlaybackIndex = sprite.animationFrameIndex;
+    renderSpriteAnimationPlaybackView(sprite.cells);
+    renderSpriteAnimationFrameStrip();
+    return;
+  }
+  if (
+    !sprite.animationPlaying
+    || !spriteAnimationPlaybackTimer
+    || spriteAnimationPlaybackDurationMs !== spriteAnimationFrameDelayMs()
+  ) {
+    startSpriteAnimationPlayback();
+  }
+}
+
+function startSpriteAnimationPlayback() {
+  ensureSpriteAnimationFrames();
+  if (sprite.animationFrameCount <= 1) {
+    stopSpriteAnimationPlayback({ render: false });
+    return;
+  }
+  stopSpriteAnimationPlayback({ render: false });
+  sprite.animationPlaying = true;
+  spriteAnimationPlaybackDurationMs = spriteAnimationFrameDelayMs();
+  sprite.animationPlaybackIndex = sprite.animationFrameIndex;
+  renderSpriteAnimationPlaybackView(sprite.animationFrames[sprite.animationPlaybackIndex] || sprite.cells);
+  const tick = () => {
+    if (!sprite.animationPlaying) {
+      return;
+    }
+    sprite.animationPlaybackIndex = (sprite.animationPlaybackIndex + 1) % sprite.animationFrameCount;
+    renderSpriteAnimationPlaybackView(sprite.animationFrames[sprite.animationPlaybackIndex] || sprite.cells);
+    spriteAnimationPlaybackDurationMs = spriteAnimationFrameDelayMs();
+    spriteAnimationPlaybackTimer = window.setTimeout(tick, spriteAnimationPlaybackDurationMs);
+  };
+  spriteAnimationPlaybackTimer = window.setTimeout(tick, spriteAnimationPlaybackDurationMs);
+}
+
+function stopSpriteAnimationPlayback(options = {}) {
+  window.clearTimeout(spriteAnimationPlaybackTimer);
+  spriteAnimationPlaybackTimer = 0;
+  spriteAnimationPlaybackDurationMs = 0;
+  sprite.animationPlaying = false;
+  if (options.render !== false) {
+    renderSpriteAnimationSurfaces();
+  }
 }
 
 function renderSpriteControls() {
@@ -470,6 +899,62 @@ function renderSpritePalette() {
   removeButton.addEventListener("click", deleteSelectedSpriteColor);
   paletteGrid.append(removeButton);
 
+  spritePalette.append(paletteGrid);
+
+  if (sprite.addPaletteOpen) {
+    const draft = validSpriteColorIndex(sprite.addDraftColorIndex)
+      ? sprite.palette[sprite.addDraftColorIndex].color
+      : nextSpritePresetColor();
+    const addMenu = renderSpriteColorMenu({
+      mode: "add",
+      customValue: draft,
+    });
+    addMenu.classList.add("is-add-menu");
+    spritePalette.append(addMenu);
+    positionSpriteColorMenu(addMenu, paletteGrid, { side: "left" });
+  }
+
+  const paintToolRow = document.createElement("span");
+  paintToolRow.className = "sprite-paint-tool-row";
+
+  const brushActions = document.createElement("span");
+  brushActions.className = "sprite-paint-tool-group sprite-brush-actions";
+  brushActions.append(spriteMarkerTool);
+  if (spriteFillButton) {
+    brushActions.append(spriteFillButton);
+  }
+  brushActions.append(renderSpriteClipActions());
+  paintToolRow.append(brushActions);
+
+  const globalEditActions = document.createElement("span");
+  globalEditActions.className = "sprite-paint-tool-group sprite-global-edit-actions";
+
+  if (spriteGridButton) {
+    globalEditActions.append(spriteGridButton);
+  }
+
+  const transformActions = document.createElement("span");
+  transformActions.className = "sprite-paint-transform-actions";
+  for (const button of [
+    spriteRotateLeftButton,
+    spriteRotateRightButton,
+    spriteFlipHorizontalButton,
+    spriteFlipVerticalButton,
+    spriteClearButton,
+  ]) {
+    if (button) {
+      transformActions.append(button);
+    }
+  }
+  globalEditActions.append(transformActions);
+  if (sourceActions) {
+    globalEditActions.append(sourceActions);
+  }
+  paintToolRow.append(globalEditActions);
+  spritePalette.append(paintToolRow);
+}
+
+function renderSpriteClipActions() {
   const clipActions = document.createElement("span");
   clipActions.className = "sprite-clip-actions";
   clipActions.classList.toggle("is-expanded", spriteClipActive);
@@ -481,7 +966,9 @@ function renderSpritePalette() {
     icon: spriteLucideIconSvg("mouse-pointer-2"),
   }));
   if (spriteClipActive) {
-    clipActions.append(
+    const expandedActions = document.createElement("span");
+    expandedActions.className = "sprite-clip-expanded-actions";
+    expandedActions.append(
       renderSpriteClipButton({
         title: "Copy clip",
         ariaLabel: "Copy selected sprite area",
@@ -512,60 +999,9 @@ function renderSpritePalette() {
         icon: spriteLucideIconSvg("trash-2"),
       }),
     );
+    clipActions.append(expandedActions);
   }
-  paletteGrid.append(clipActions);
-  spritePalette.append(paletteGrid);
-
-  if (sprite.addPaletteOpen) {
-    const draft = validSpriteColorIndex(sprite.addDraftColorIndex)
-      ? sprite.palette[sprite.addDraftColorIndex].color
-      : nextSpritePresetColor();
-    const addMenu = renderSpriteColorMenu({
-      mode: "add",
-      customValue: draft,
-    });
-    addMenu.classList.add("is-add-menu");
-    spritePalette.append(addMenu);
-    positionSpriteColorMenu(addMenu, paletteGrid, { side: "left" });
-  }
-
-  const paintToolRow = document.createElement("span");
-  paintToolRow.className = "sprite-paint-tool-row";
-
-  const brushActions = document.createElement("span");
-  brushActions.className = "sprite-paint-tool-group sprite-brush-actions";
-  brushActions.append(spriteMarkerTool);
-  if (spriteFillButton) {
-    brushActions.append(spriteFillButton);
-  }
-  paintToolRow.append(brushActions);
-
-  const globalEditActions = document.createElement("span");
-  globalEditActions.className = "sprite-paint-tool-group sprite-global-edit-actions";
-
-  if (spriteGridButton) {
-    globalEditActions.append(spriteGridButton);
-  }
-
-  const transformActions = document.createElement("span");
-  transformActions.className = "sprite-paint-transform-actions";
-  for (const button of [
-    spriteRotateLeftButton,
-    spriteRotateRightButton,
-    spriteFlipHorizontalButton,
-    spriteFlipVerticalButton,
-    spriteClearButton,
-  ]) {
-    if (button) {
-      transformActions.append(button);
-    }
-  }
-  globalEditActions.append(transformActions);
-  if (sourceActions) {
-    globalEditActions.append(sourceActions);
-  }
-  paintToolRow.append(globalEditActions);
-  spritePalette.append(paintToolRow);
+  return clipActions;
 }
 
 function spritePaletteEntryBindInfo(entry) {
@@ -1713,6 +2149,7 @@ function renderSpriteBoard() {
   }
   renderSpriteClipSelectionFrame(nextBoard);
   spriteBoard.replaceChildren(nextBoard);
+  renderSpriteAnimationSurfaces();
 }
 
 function syncSpriteGridVisibility() {
@@ -2039,7 +2476,7 @@ function removeSpritePaletteColor(deletedIndex) {
   }
   const oldPaletteLength = sprite.palette.length;
   sprite.palette.splice(deletedIndex, 1);
-  sprite.cells = sprite.cells.map((colorIndex) => {
+  const normalizeCell = (colorIndex) => {
     if (!Number.isInteger(colorIndex) || colorIndex < 0 || colorIndex >= oldPaletteLength) {
       return null;
     }
@@ -2047,7 +2484,17 @@ function removeSpritePaletteColor(deletedIndex) {
       return null;
     }
     return colorIndex > deletedIndex ? colorIndex - 1 : colorIndex;
-  });
+  };
+  sprite.cells = sprite.cells.map(normalizeCell);
+  if (Array.isArray(sprite.animationFrames)) {
+    sprite.animationFrames = sprite.animationFrames.map((frame) => (
+      Array.isArray(frame) ? frame.map(normalizeCell) : frame
+    ));
+    if (sprite.animationMode) {
+      ensureSpriteAnimationFrames();
+      sprite.animationFrames[sprite.animationFrameIndex] = sprite.cells;
+    }
+  }
   sprite.selectedColorIndex = Math.min(deletedIndex, sprite.palette.length - 1);
 }
 
@@ -2187,6 +2634,7 @@ function readableInkForColor(color) {
 
 function updateSpriteSize(value) {
   const before = visualEditSnapshot("sprite");
+  const previousSize = sprite.size;
   const nextSize = clampSpriteSize(value);
   if (nextSize === sprite.size) {
     renderSpriteControls();
@@ -2202,6 +2650,7 @@ function updateSpriteSize(value) {
   }
   sprite.size = nextSize;
   sprite.cells = nextCells;
+  syncSpriteAnimationFramesAfterSizeChange(previousSize, nextSize, nextCells);
   updateSpriteBoundShapeDefinition();
   renderSpriteBuilder();
   pushVisualEditUndoSnapshot("sprite", before);
@@ -2218,6 +2667,7 @@ function canScaleDownSprite(factor = spriteScaleFactor()) {
 function scaleUpSprite() {
   const before = visualEditSnapshot("sprite");
   const factor = spriteScaleFactor();
+  const previousSize = sprite.size;
   const nextSize = sprite.size * factor;
   if (nextSize > SPRITE_EDITOR_MAX_SIZE) {
     setSpriteActionStatus(`Sprite size limit is ${SPRITE_EDITOR_MAX_SIZE}`, "is-error");
@@ -2243,6 +2693,7 @@ function scaleUpSprite() {
 
   sprite.size = nextSize;
   sprite.cells = nextCells;
+  syncSpriteAnimationFramesAfterSizeChange(previousSize, nextSize, nextCells);
   updateSpriteBoundShapeDefinition();
   renderSpriteBuilder();
   const message = `Scaled ${factor}x to ${nextSize}x${nextSize}`;
@@ -2260,6 +2711,7 @@ function scaleDownSprite() {
     return;
   }
 
+  const previousSize = sprite.size;
   const nextSize = sprite.size / factor;
   const nextCells = Array.from({ length: nextSize * nextSize }, () => null);
   for (let y = 0; y < nextSize; y += 1) {
@@ -2272,6 +2724,7 @@ function scaleDownSprite() {
 
   sprite.size = nextSize;
   sprite.cells = nextCells;
+  syncSpriteAnimationFramesAfterSizeChange(previousSize, nextSize, nextCells);
   updateSpriteBoundShapeDefinition();
   renderSpriteBuilder();
   const message = `Scaled down ${factor}x to ${nextSize}x${nextSize}`;
@@ -2293,6 +2746,10 @@ function transformSpriteCells(mapper, message) {
     }
   }
   sprite.cells = nextCells;
+  if (sprite.animationMode) {
+    ensureSpriteAnimationFrames();
+    sprite.animationFrames[sprite.animationFrameIndex] = sprite.cells;
+  }
   sprite.addPaletteOpen = false;
   sprite.editPaletteOpen = false;
   sprite.customColorOpen = false;
@@ -2456,6 +2913,7 @@ function finishSpritePaintMutation(changedIndices, options = {}) {
     updateSpriteBoundShapeDefinition();
   }
   renderSpriteCellsAtIndices(changedIndices);
+  renderSpriteAnimationSurfaces();
   if (!options.deferSourceSync) {
     syncSpriteSourceActionButtons();
   }
@@ -3152,6 +3610,21 @@ function loadSpriteSourceTarget(target, options = {}) {
   sprite.solidSource = Boolean(loaded.solid);
   sprite.sourcePreludeRows = Array.isArray(loaded.sourcePreludeRows) ? loaded.sourcePreludeRows : [];
   sprite.cells = loaded.cells;
+  if (loaded.animationMode) {
+    sprite.animationMode = true;
+    sprite.animationDurationMs = normalizedSpriteAnimationDuration(loaded.animationDurationMs);
+    sprite.animationFrameCount = normalizedSpriteAnimationFrameCount(loaded.animationFrameCount);
+    sprite.animationFrameIndex = 0;
+    sprite.animationPlaybackIndex = 0;
+    sprite.animationPlaying = false;
+    sprite.animationFrames = Array.isArray(loaded.animationFrames)
+      ? loaded.animationFrames.map((frame) => cloneSpriteCells(frame))
+      : [cloneSpriteCells(sprite.cells)];
+    ensureSpriteAnimationFrames();
+  } else {
+    sprite.animationMode = false;
+    resetSpriteAnimationFramesFromCurrentCells();
+  }
   sprite.selectedColorIndex = sprite.palette.length ? 0 : null;
   sprite.addPaletteOpen = false;
   sprite.editPaletteOpen = false;
@@ -3180,7 +3653,9 @@ function applyIncompleteSpriteSourceTarget(name, target) {
   sprite.shapeBind = null;
   sprite.solidSource = false;
   sprite.sourcePreludeRows = [];
+  sprite.animationMode = false;
   sprite.cells = Array.from({ length: sprite.size * sprite.size }, () => null);
+  resetSpriteAnimationFramesFromCurrentCells();
   sprite.selectedColorIndex = null;
   sprite.addPaletteOpen = false;
   sprite.editPaletteOpen = false;
@@ -3201,6 +3676,15 @@ function parseSpriteDefinitionSource(contract, selectorName = "") {
     : [];
   const asciiRows = Array.isArray(contract.pixelRows)
     ? contract.pixelRows.map((line) => String(line || "").trim()).filter(Boolean)
+    : [];
+  const animationRows = Array.isArray(contract.animationFrames)
+    ? contract.animationFrames
+        .map((frame) => (
+          Array.isArray(frame)
+            ? frame.map((line) => String(line || "").trim()).filter(Boolean)
+            : []
+        ))
+        .filter((frame) => frame.length)
     : [];
   const shapeName = typeof contract.shapeRef === "string" ? contract.shapeRef.trim() : "";
   const resolvedPalette = Array.isArray(contract.resolvedPalette)
@@ -3234,6 +3718,33 @@ function parseSpriteDefinitionSource(contract, selectorName = "") {
     }
     shapeBind = { type: "shape", name: shapeName, linked: true };
     asciiRows.splice(0, asciiRows.length, ...shapeRows);
+  }
+  if (animationRows.length >= 2 && !shapeBind) {
+    const parsedFrames = animationRows.map((frame) => spriteCellsFromAsciiRows(frame, palette.length));
+    if (parsedFrames.some((frame) => !frame)) {
+      return null;
+    }
+    const size = parsedFrames[0].size;
+    if (parsedFrames.some((frame) => frame.size !== size)) {
+      return null;
+    }
+    const frameDurationMs = Number.isFinite(Number(contract.frameDurationMs))
+      ? Number(contract.frameDurationMs)
+      : null;
+    const durationMs = Number.isFinite(Number(contract.durationMs))
+      ? normalizedSpriteAnimationDuration(contract.durationMs)
+      : normalizedSpriteAnimationDuration(frameDurationMs === null ? undefined : frameDurationMs * parsedFrames.length);
+    return {
+      size,
+      palette,
+      shapeBind: null,
+      sourcePreludeRows,
+      animationMode: true,
+      animationDurationMs: durationMs,
+      animationFrameCount: parsedFrames.length,
+      animationFrames: parsedFrames.map((frame) => frame.cells),
+      cells: parsedFrames[0].cells,
+    };
   }
   if (asciiRows.length === 0) {
     if (palette.length !== 1) {
@@ -3585,6 +4096,16 @@ function sourceWithStagedSpriteAssetDefinitions(source) {
 
 function clearSpriteBuilder() {
   const before = visualEditSnapshot("sprite");
+  if (sprite.animationMode) {
+    ensureSpriteAnimationFrames();
+    sprite.cells = Array.from({ length: sprite.size * sprite.size }, () => null);
+    sprite.animationFrames[sprite.animationFrameIndex] = sprite.cells;
+    updateSpriteBoundShapeDefinition();
+    renderSpriteBuilder();
+    setSpriteActionStatus(`Cleared frame ${sprite.animationFrameIndex + 1}`, "is-ok");
+    pushVisualEditUndoSnapshot("sprite", before);
+    return;
+  }
   resetSpriteBuilder(sprite.size);
   setSpriteActionStatus("Cleared", "is-ok");
   pushVisualEditUndoSnapshot("sprite", before);
@@ -3940,15 +4461,15 @@ function ensureSpriteColorDefinition(source, name, color) {
     return null;
   }
   const normalized = normalizeSpriteColor(color);
-  const colorsBlock = findVisualAssetBlock(source, spritesBlock, "colors");
-  if (colorsBlock) {
-    const rowIndent = spriteSourceChildIndent(colorsBlock.indent);
-    return `${source.slice(0, colorsBlock.bodyEnd).trimEnd()}\n${rowIndent}${name} = ${normalized}\n${source.slice(colorsBlock.bodyEnd)}`;
+  const paletteBlock = findVisualAssetBlock(source, spritesBlock, "palette");
+  if (paletteBlock) {
+    const rowIndent = spriteSourceChildIndent(paletteBlock.indent);
+    return `${source.slice(0, paletteBlock.bodyEnd).trimEnd()}\n${rowIndent}${name} = ${normalized}\n${source.slice(paletteBlock.bodyEnd)}`;
   }
   const blockIndent = spriteSourceChildIndent(spritesBlock.indent);
   const rowIndent = spriteSourceChildIndent(blockIndent);
-  const colorsText = `\n${blockIndent}colors {\n${rowIndent}${name} = ${normalized}\n${blockIndent}}\n`;
-  return `${source.slice(0, spritesBlock.bodyStart)}${colorsText}${source.slice(spritesBlock.bodyStart)}`;
+  const paletteText = `\n${blockIndent}palette {\n${rowIndent}${name} = ${normalized}\n${blockIndent}}\n`;
+  return `${source.slice(0, spritesBlock.bodyStart)}${paletteText}${source.slice(spritesBlock.bodyStart)}`;
 }
 
 function replaceSpriteColorDefinition(source, name, color) {
@@ -4137,19 +4658,19 @@ function findSpriteShapeTableRowRange(source, shapesBlock, tableName, value = ""
 
 function findSpriteColorDefinitionRange(source, name) {
   const spritesBlock = findSpritesBlock(source);
-  const colorsBlock = spritesBlock ? findVisualAssetBlock(source, spritesBlock, "colors") : null;
-  if (!colorsBlock) {
+  const paletteBlock = spritesBlock ? findVisualAssetBlock(source, spritesBlock, "palette") : null;
+  if (!paletteBlock) {
     return null;
   }
   const tableSeparator = name.indexOf(":");
   if (tableSeparator > 0) {
-    return findSpriteColorTableRowRange(source, colorsBlock, name.slice(0, tableSeparator), name.slice(tableSeparator + 1));
+    return findSpriteColorTableRowRange(source, paletteBlock, name.slice(0, tableSeparator), name.slice(tableSeparator + 1));
   }
-  return findSpriteFlatAssetRowRange(source, colorsBlock, name);
+  return findSpriteFlatAssetRowRange(source, paletteBlock, name);
 }
 
-function findSpriteColorTableRowRange(source, colorsBlock, tableName, rowName) {
-  const body = source.slice(colorsBlock.bodyStart, colorsBlock.bodyEnd);
+function findSpriteColorTableRowRange(source, paletteBlock, tableName, rowName) {
+  const body = source.slice(paletteBlock.bodyStart, paletteBlock.bodyEnd);
   const pattern = new RegExp(`(^|\\n)([\\t ]*)${escapeRegExp(tableName)}(?::[A-Za-z_][\\w]*)?\\s*\\{`, "g");
   let match = null;
   while ((match = pattern.exec(body))) {
@@ -4157,9 +4678,9 @@ function findSpriteColorTableRowRange(source, colorsBlock, tableName, rowName) {
     if (topLevelDepthAt(body, bodyMatchStart) !== 0) {
       continue;
     }
-    const openIndex = source.indexOf("{", colorsBlock.bodyStart + bodyMatchStart);
+    const openIndex = source.indexOf("{", paletteBlock.bodyStart + bodyMatchStart);
     const closeIndex = findMatchingBrace(source, openIndex);
-    if (openIndex < 0 || closeIndex < 0 || closeIndex > colorsBlock.bodyEnd) {
+    if (openIndex < 0 || closeIndex < 0 || closeIndex > paletteBlock.bodyEnd) {
       continue;
     }
     const rowRange = findSpriteFlatAssetRowRange(source, { bodyStart: openIndex + 1, bodyEnd: closeIndex }, rowName);
@@ -4230,7 +4751,8 @@ function spriteObjectDefinitionText(indent) {
   const shapeInfo = spriteAssetBindInfo(sprite.shapeBind, "shape");
   const colorRow = spritePaletteSourceTokens().join(" ");
   const solidRow = sprite.solidSource ? spriteSolidDefinitionRow(shapeInfo) : null;
-  const preludeRows = spriteSourcePreludeRows().map((row) => `${rowIndent}${row}`);
+  const animationSource = spriteAnimationSourceFrames();
+  const preludeRows = spriteSourcePreludeRows({ omitDuration: Boolean(animationSource) }).map((row) => `${rowIndent}${row}`);
   if (solidRow) {
     return [
       `${normalizedIndent}${spriteObjectName()}`,
@@ -4245,16 +4767,51 @@ function spriteObjectDefinitionText(indent) {
   ];
   if (shapeInfo.linked && shapeInfo.name) {
     lines.push(`${rowIndent}shape ${shapeInfo.name}`);
+  } else if (animationSource) {
+    lines.splice(lines.length - 1, 0, `${rowIndent}duration ${sprite.animationDurationMs}ms`);
+    animationSource.forEach((frame, index) => {
+      if (index > 0) {
+        lines.push(`${rowIndent}>`);
+      }
+      lines.push(...frame.map((row) => `${rowIndent}${row}`));
+    });
   } else {
     lines.push(...spriteAscii().split("\n").map((row) => `${rowIndent}${row}`));
   }
   return lines.join("\n");
 }
 
-function spriteSourcePreludeRows() {
+function spriteAnimationSourceFrames() {
+  if (!sprite.animationMode) {
+    return null;
+  }
+  ensureSpriteAnimationFrames();
+  if (sprite.animationFrameCount < 2 || sprite.solidSource) {
+    return null;
+  }
+  return sprite.animationFrames
+    .slice(0, sprite.animationFrameCount)
+    .map((frame) => spriteAsciiFromCells(frame));
+}
+
+function spriteAsciiFromCells(cells) {
+  return Array.from({ length: sprite.size }, (_, y) => (
+    Array.from({ length: sprite.size }, (_, x) => {
+      const cell = Array.isArray(cells) ? cells[y * sprite.size + x] : null;
+      return spriteExportCharForColorIndex(cell);
+    }).join("")
+  )).join("\n");
+}
+
+function spriteSourcePreludeRows(options = {}) {
   return (Array.isArray(sprite.sourcePreludeRows) ? sprite.sourcePreludeRows : [])
     .map((row) => String(row || "").trim())
+    .filter((row) => !(options.omitDuration && isSpriteTimingPreludeRow(row)))
     .filter(Boolean);
+}
+
+function isSpriteTimingPreludeRow(row) {
+  return /^(?:duration|frame_duration)(?:\s*=)?\s+\S+$/i.test(String(row || "").trim());
 }
 
 function spriteSolidDefinitionRow(shapeInfo) {
@@ -4283,7 +4840,14 @@ function topLevelDepthAt(text, endIndex) {
   return depth;
 }
 
-for (const input of [spriteNameInput, spriteSizeInput, spriteScaleInput]) {
+for (const input of [
+  spriteNameInput,
+  spriteSizeInput,
+  spriteScaleInput,
+  spriteAnimationDurationInput,
+  spriteAnimationFrameCountInput,
+  spriteAnimationFrameInput,
+]) {
   if (input) {
     installSelectAllOnFocus(input);
   }
@@ -4306,6 +4870,35 @@ spriteScaleInput.addEventListener("keydown", (event) => {
   }
   event.preventDefault();
 });
+spriteAnimationDurationInput?.addEventListener("input", () => updateSpriteAnimationDuration(spriteAnimationDurationInput.value, { preserveInput: true, recordHistory: false }));
+spriteAnimationDurationInput?.addEventListener("change", () => updateSpriteAnimationDuration(spriteAnimationDurationInput.value));
+spriteAnimationDurationInput?.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") {
+    return;
+  }
+  event.preventDefault();
+  updateSpriteAnimationDuration(spriteAnimationDurationInput.value);
+});
+spriteAnimationFrameCountInput?.addEventListener("change", () => updateSpriteAnimationFrameCount(spriteAnimationFrameCountInput.value));
+spriteAnimationFrameCountInput?.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") {
+    return;
+  }
+  event.preventDefault();
+  updateSpriteAnimationFrameCount(spriteAnimationFrameCountInput.value);
+});
+spriteAnimationFrameInput?.addEventListener("change", () => setSpriteAnimationFrame(Number(spriteAnimationFrameInput.value) - 1));
+spriteAnimationFrameInput?.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") {
+    return;
+  }
+  event.preventDefault();
+  setSpriteAnimationFrame(Number(spriteAnimationFrameInput.value) - 1);
+});
+spriteAnimationPreviousFrameButton?.addEventListener("click", () => moveSpriteAnimationFrame(-1));
+spriteAnimationNextFrameButton?.addEventListener("click", () => moveSpriteAnimationFrame(1));
+spriteAnimationInsertFrameButton?.addEventListener("click", toggleSpriteAnimationInsertMode);
+spriteAnimationRemoveFrameButton?.addEventListener("click", toggleSpriteAnimationRemoveMode);
 for (const button of spriteBrushPresetButtons()) {
   button.addEventListener("click", () => selectSpriteBrushPreset(button.dataset.spriteBrushPreset));
 }

@@ -6,7 +6,7 @@ again_interval = 0.10s
 theme {
 preset = "puzzlescript"
 background_color = #243
-}
+} 
 
 sounds {
 sfx sfx0 { seed = 17551700; type = puzzlescript }

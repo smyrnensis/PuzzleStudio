@@ -2468,20 +2468,6 @@ fn parse_game2d_expanded_lines_with_shell_inner(
             "run_rules_on_level_start cannot be combined with on_level_start".to_string(),
         ));
     }
-    add_standard_move_rule_if_missing(
-        &mut rule_definitions,
-        &animation,
-        &catalog.object_names,
-        &catalog.object_schemas,
-        &catalog.object_layers,
-        &catalog.visual_objects,
-        &value_sets,
-        &catalog.maps,
-        &catalog.object_groups,
-        &catalog.input_names,
-        &catalog.variable_names,
-        &catalog.condition_names,
-    )?;
     let visual_objects = catalog.visual_objects.clone();
     let model_sound_triggers = resolve_model_sound_triggers(&model_sound_triggers, &catalog)?;
     let model_operation_sounds = resolve_model_operation_sounds(&model_operation_sounds);

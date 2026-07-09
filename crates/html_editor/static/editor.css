@@ -2606,14 +2606,19 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   font: inherit;
 }
 
-.source-action-button:hover,
-.source-action-button:focus {
+.source-action-button:hover {
   background: var(--active-bg);
   color: var(--ink);
 }
 
+.source-action-button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
+  outline-offset: 1px;
+}
+
 .source-action-button.is-primary:hover,
-.source-action-button.is-primary:focus {
+.source-action-button.is-active,
+.source-action-button[aria-pressed="true"] {
   background: var(--active-bg);
   color: var(--ink);
 }
@@ -3970,7 +3975,7 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   width: var(--level3d-frame-virtual-width);
   height: var(--level3d-frame-virtual-height);
   border: 0;
-  border-radius: 8px;
+  border-radius: 0;
   box-shadow: inset 0 0 0 1px var(--line);
   overflow: hidden;
   background: var(--preview-game-bg, var(--sprite3d-preview-bg));
@@ -4042,18 +4047,21 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   flex-wrap: nowrap;
   box-sizing: border-box;
   overflow: hidden;
-  box-shadow: 0 1px 4px rgb(0 0 0 / 18%);
+  border-color: rgb(255 255 255 / 18%);
+  background: rgb(34 38 44 / 88%);
+  box-shadow: 0 2px 10px rgb(0 0 0 / 35%);
+  backdrop-filter: blur(3px);
 }
 
 .level3d-layer-toolbar .sprite3d-layer-axis-label,
 .level3d-layer-toolbar .sprite3d-slice-value-wrap,
 .level3d-layer-toolbar .sprite3d-slice-value-wrap input {
-  color: var(--log-ink);
+  color: #f6f8fb;
 }
 
 .level3d-layer-toolbar .sprite3d-slice-total-separator,
 .level3d-layer-toolbar .sprite3d-slice-total {
-  color: var(--log-muted);
+  color: rgb(246 248 251 / 72%);
 }
 
 .level3d-layer-toolbar .sprite-icon-button {
@@ -4061,6 +4069,10 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   min-width: var(--sprite3d-overlay-control-item-size);
   height: var(--sprite3d-overlay-control-item-size);
   min-height: var(--sprite3d-overlay-control-item-size);
+}
+
+.level3d-layer-toolbar .level3d-slice-add-button {
+  font: 900 15px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
 }
 
 .level3d-layer-toolbar .sprite3d-layer-axis-label,
@@ -4125,7 +4137,9 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   border: 0;
   border-radius: 0;
   box-shadow: inset 0 0 0 1px var(--line);
-  background: var(--preview-game-bg, var(--sprite3d-preview-bg));
+  background-color: var(--sprite-swatch-bg);
+  background-image: var(--sprite-swatch-checker);
+  background-size: 8px 8px;
   cursor: crosshair;
   touch-action: none;
   user-select: none;
@@ -4187,12 +4201,16 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   height: 100%;
   border: 0;
   border-radius: 0;
-  background: color-mix(in srgb, var(--preview-game-bg, var(--sprite3d-preview-bg)) 92%, var(--panel));
+  background: transparent;
   color: var(--fg);
   display: grid;
   place-items: center;
   padding: 0;
   cursor: crosshair;
+}
+
+.level3d-layer-board.is-grid-board .level3d-layer-cell:not(.is-empty) {
+  background: color-mix(in srgb, var(--preview-game-bg, var(--sprite3d-preview-bg)) 72%, transparent);
 }
 
 .level3d-layer-board.is-grid-board .level3d-layer-cell:hover,
@@ -4458,10 +4476,17 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 }
 
 #spriteBuilder .sprite-controls .sprite-name-control {
-  flex: 1 1 168px;
+  flex: 0 1 auto;
   width: auto;
-  min-width: 132px;
-  max-width: min(320px, 100%);
+  min-width: 76px;
+  max-width: min(260px, 100%);
+}
+
+#spriteBuilder .sprite-controls .sprite-name-control input {
+  width: auto;
+  min-width: 7ch;
+  max-width: 100%;
+  field-sizing: content;
 }
 
 #spriteBuilder .sprite-controls .sprite-shape-field {
@@ -4477,6 +4502,27 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   max-width: 100%;
   flex-wrap: nowrap;
   align-items: start;
+}
+
+#spriteBuilder:not(.is-animation-mode) .sprite-duration-control,
+#spriteBuilder:not(.is-animation-mode) .sprite-frame-count-control,
+#spriteBuilder:not(.is-animation-mode) .sprite-animation-toolbar,
+#spriteBuilder:not(.is-animation-mode) .sprite-animation-panel {
+  display: none;
+}
+
+#spriteBuilder.is-animation-mode .sprite-transform-bar {
+  flex-wrap: wrap;
+}
+
+#spriteBuilder .sprite-duration-control input,
+#spriteBuilder .sprite-frame-count-control input {
+  width: 70px;
+}
+
+.sprite-pane-header-actions {
+  display: inline-flex;
+  align-items: center;
 }
 
 #spriteBuilder .sprite-source-actions {
@@ -4891,11 +4937,6 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   gap: 3px;
 }
 
-.sprite-paint-tool-group + .sprite-paint-tool-group {
-  padding-left: 6px;
-  border-left: 1px solid var(--line);
-}
-
 .sprite-global-edit-actions {
   gap: 4px;
 }
@@ -4905,16 +4946,31 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 }
 
 .sprite-clip-actions {
+  position: relative;
   display: inline-flex;
   align-items: center;
+  width: 26px;
+  min-width: 26px;
+  height: 26px;
+  min-height: 26px;
   gap: 0;
+  isolation: isolate;
 }
 
-.sprite-clip-actions.is-expanded {
+.sprite-clip-expanded-actions {
+  position: absolute;
+  z-index: 20;
+  top: 0;
+  left: calc(100% + 3px);
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
   padding: 1px;
   border: 1px solid var(--line);
   border-radius: 5px;
   background: color-mix(in srgb, var(--control-bg) 78%, var(--panel));
+  box-sizing: border-box;
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--shadow) 18%, transparent);
 }
 
 .sprite-clip-actions .sprite-clip-button {
@@ -5708,10 +5764,228 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   width: 100%;
   max-width: 100%;
   overflow: auto;
+  gap: 8px;
 }
 
 #spriteBuilder .sprite-board {
   --sprite-cell: clamp(8px, calc(100cqw / var(--sprite-size)), 64px);
+}
+
+.sprite-animation-workspace {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: max-content auto;
+  align-items: start;
+  gap: 10px;
+}
+
+.sprite-animation-sidecar {
+  min-width: 72px;
+  max-width: 112px;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+}
+
+.sprite-animation-toolbar.sprite3d-slice-axis-control {
+  min-width: 0;
+  width: max-content;
+  max-width: 100%;
+  min-height: calc(var(--sprite3d-overlay-control-height) + 2px);
+  height: calc(var(--sprite3d-overlay-control-height) + 2px);
+  padding: 0 3px;
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+.sprite-animation-toolbar .sprite3d-layer-axis-label,
+.sprite-animation-toolbar .sprite3d-slice-value-wrap {
+  height: var(--sprite3d-overlay-control-height);
+  min-height: var(--sprite3d-overlay-control-height);
+  line-height: var(--sprite3d-overlay-control-height);
+}
+
+.sprite-animation-toolbar .sprite3d-slice-value-wrap input {
+  height: var(--sprite3d-overlay-control-input-height);
+  min-height: var(--sprite3d-overlay-control-input-height);
+  line-height: var(--sprite3d-overlay-control-input-height);
+}
+
+.sprite-animation-toolbar .sprite-icon-button {
+  width: var(--sprite3d-overlay-control-item-size);
+  min-width: var(--sprite3d-overlay-control-item-size);
+  height: var(--sprite3d-overlay-control-item-size);
+  min-height: var(--sprite3d-overlay-control-item-size);
+}
+
+.sprite-animation-panel {
+  min-width: 0;
+  max-width: 100%;
+  display: grid;
+  align-content: start;
+  gap: 4px;
+}
+
+.sprite-animation-insert-frame-button,
+.sprite-animation-remove-frame-button {
+  width: var(--sprite3d-overlay-control-item-size);
+  min-width: var(--sprite3d-overlay-control-item-size);
+  height: var(--sprite3d-overlay-control-item-size);
+  min-height: var(--sprite3d-overlay-control-item-size);
+}
+
+.sprite-animation-playback-panel {
+  position: relative;
+  width: max-content;
+  min-width: 0;
+  max-width: 100%;
+  display: block;
+}
+
+.sprite-animation-playback-view-label {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 4px);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1;
+  text-transform: uppercase;
+  pointer-events: none;
+}
+
+.sprite-animation-playback-view,
+.sprite-animation-frame-button {
+  --sprite-preview-size: 52px;
+  --sprite-size: 5;
+  --sprite-preview-cell: calc(var(--sprite-preview-size) / var(--sprite-size));
+  width: var(--sprite-preview-size);
+  height: var(--sprite-preview-size);
+  display: grid;
+  grid-template-columns: repeat(var(--sprite-size), var(--sprite-preview-cell));
+  grid-template-rows: repeat(var(--sprite-size), var(--sprite-preview-cell));
+  border: 1px solid var(--line);
+  background-color: var(--sprite-swatch-bg);
+  background-image: var(--sprite-swatch-checker);
+  background-size: 8px 8px;
+}
+
+.sprite-animation-frame-strip {
+  max-height: min(360px, 52vh);
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  overflow: auto;
+}
+
+.sprite-animation-frame-strip.is-insert-mode {
+  gap: 1px;
+}
+
+.sprite-animation-frame-strip.is-remove-mode .sprite-animation-frame-button {
+  cursor: not-allowed;
+}
+
+.sprite-animation-frame-strip.is-remove-mode .sprite-animation-frame-button:hover,
+.sprite-animation-frame-strip.is-remove-mode .sprite-animation-frame-button:focus-visible {
+  border-color: var(--danger);
+}
+
+.sprite-animation-frame-button {
+  position: relative;
+  padding: 0;
+  border-color: var(--line);
+  border-radius: 0;
+  background-color: var(--sprite-swatch-bg);
+  cursor: pointer;
+}
+
+.sprite-animation-frame-button.is-active {
+  border-color: var(--accent);
+}
+
+.sprite-animation-frame-button.is-active::after,
+.sprite-animation-frame-strip.is-remove-mode .sprite-animation-frame-button:hover::after,
+.sprite-animation-frame-strip.is-remove-mode .sprite-animation-frame-button:focus-visible::after {
+  content: "";
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  border: 2px solid var(--accent);
+  border-radius: 0;
+  pointer-events: none;
+  box-sizing: border-box;
+}
+
+.sprite-animation-frame-strip.is-remove-mode .sprite-animation-frame-button:hover::after,
+.sprite-animation-frame-strip.is-remove-mode .sprite-animation-frame-button:focus-visible::after {
+  border-color: var(--danger);
+}
+
+.sprite-animation-frame-button:hover,
+.sprite-animation-frame-button:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.sprite-animation-insert-target {
+  width: var(--sprite-preview-size, 52px);
+  height: 14px;
+  min-height: 14px;
+  margin-block: -3.5px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  cursor: copy;
+  line-height: 1;
+  transition: margin-block 120ms ease;
+}
+
+.sprite-animation-insert-target:hover,
+.sprite-animation-insert-target:focus-visible {
+  margin-block: 0;
+}
+
+.sprite-animation-insert-target::before {
+  content: "";
+  width: 100%;
+  height: 1px;
+  display: block;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 34%, transparent);
+}
+
+.sprite-animation-insert-target:hover::before,
+.sprite-animation-insert-target:focus-visible::before {
+  height: 2px;
+  background: var(--accent);
+}
+
+.sprite-animation-insert-target:focus-visible {
+  outline: none;
+}
+
+.sprite-animation-frame-index {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  min-width: 14px;
+  height: 14px;
+  display: grid;
+  place-items: center;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--control-bg) 86%, transparent);
+  color: var(--ink);
+  font: 800 9px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.sprite-animation-frame-cell {
+  min-width: 0;
+  min-height: 0;
+  background-color: var(--sprite-swatch-color);
 }
 
 .sprite3d-workspace {
@@ -6156,7 +6430,7 @@ html.is-sprite3d-slice-scrubbing * {
 }
 
 .sprite-clip-actions {
-  min-width: 0;
+  min-width: 26px;
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;

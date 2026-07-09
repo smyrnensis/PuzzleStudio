@@ -3083,6 +3083,9 @@ mod tests {
         if kind.starts_with("on_") || kind.contains(':') {
             return false;
         }
+        if kind.chars().all(|ch| matches!(ch, '.' | '#')) {
+            return false;
+        }
         !kind
             .chars()
             .next()
@@ -3325,7 +3328,7 @@ step board
         let workspace = TestWorkspace::new();
         let game_path = workspace.write(
             "games/puzzle3_editor_fixture/game.puzzle3",
-            include_str!("../../../games/spec_3d.puzzle3"),
+            include_str!("../../lang/tests/fixtures/spec_3d_full.puzzle3"),
         );
         workspace.write("games/puzzle3_editor_fixture/notes.md", "# Notes\n");
 
@@ -4093,7 +4096,7 @@ P
     #[test]
     fn compile_preview_supports_puzzle3_documents() {
         let workspace = TestWorkspace::new();
-        let source = include_str!("../../../games/spec_3d.puzzle3");
+        let source = include_str!("../../lang/tests/fixtures/spec_3d_full.puzzle3");
         let game_path = workspace.write("games/puzzle3_fixture/game.puzzle3", source);
         let service = EditorService::open(&game_path).expect("open puzzle3 fixture");
 
@@ -4562,6 +4565,15 @@ levels3 demo of push3 {
     }
 
     #[test]
+    fn source_action_buttons_do_not_hold_mouse_focus_as_toggle_state() {
+        assert!(EDITOR_CSS.contains(".source-action-button:focus-visible"));
+        assert!(EDITOR_CSS.contains("outline: 2px solid color-mix"));
+        assert!(!EDITOR_CSS.contains(".source-action-button:focus {\n"));
+        assert!(!EDITOR_CSS.contains(".source-action-button:hover,\n.source-action-button:focus-visible"));
+        assert!(EDITOR_CSS.contains(".source-action-button[aria-pressed=\"true\"]"));
+    }
+
+    #[test]
     fn file_import_commits_workspace_without_preview_compile() {
         let load_imported = EDITOR_IMPORT_EXPORT_JS
             .find("loadEmbeddedDocument(currentDocumentIndex);")
@@ -4805,6 +4817,65 @@ levels3 demo of push3 {
         assert!(EDITOR_LEVEL3D_JS.contains("level3dLayerBoard?.addEventListener(\"keydown\", (event) => {\n  if (handleLevel3dSliceHorizontalInput(event))"));
         assert!(EDITOR_LEVEL3D_JS.contains("document.addEventListener(\"keydown\", (event) => {\n  handleLevel3dSliceHorizontalInput(event);"));
         assert!(EDITOR_LEVEL3D_JS.contains("level3dPlaytestActive\n    || (event.key !== \"ArrowLeft\" && event.key !== \"ArrowRight\")"));
+    }
+
+    #[test]
+    fn level3d_editor_can_insert_slices_from_layer_toolbar() {
+        assert!(EDITOR_HTML.contains(r#"id="level3dAddSliceAboveButton""#));
+        assert!(EDITOR_HTML.contains(r#"id="level3dAddSliceBelowButton""#));
+        assert!(
+            EDITOR_DOM_JS.contains("const level3dAddSliceAboveButton = document.querySelector")
+        );
+        assert!(
+            EDITOR_DOM_JS.contains("const level3dAddSliceBelowButton = document.querySelector")
+        );
+        assert!(EDITOR_LEVEL3D_JS.contains("function insertLevel3dSlice(relative)"));
+        assert!(
+            EDITOR_LEVEL3D_JS
+                .contains("const insertIndex = relative === \"below\" ? current + 1 : current;")
+        );
+        assert!(EDITOR_LEVEL3D_JS.contains(
+            "level3d.slices.splice(insertIndex, 0, emptyLevel3dSlice(level3dEmptyChar()));"
+        ));
+        assert!(EDITOR_LEVEL3D_JS.contains("level3d.slice = insertIndex;"));
+        assert!(EDITOR_LEVEL3D_JS.contains(
+            "level3dAddSliceAboveButton?.addEventListener(\"click\", () => insertLevel3dSlice(\"above\"));"
+        ));
+        assert!(EDITOR_LEVEL3D_JS.contains(
+            "level3dAddSliceBelowButton?.addEventListener(\"click\", () => insertLevel3dSlice(\"below\"));"
+        ));
+        assert!(EDITOR_CSS.contains(".level3d-layer-toolbar .level3d-slice-add-button"));
+    }
+
+    #[test]
+    fn level3d_layer_empty_cells_show_checkerboard_background() {
+        assert!(
+            EDITOR_LEVEL3D_JS
+                .contains("cell.classList.toggle(\"is-empty\", !entry || !entry.objects?.length);")
+        );
+        assert!(EDITOR_CSS.contains(".level3d-layer-board {\n  --level3d-layer-width: 1;"));
+        assert!(EDITOR_CSS.contains("background-color: var(--sprite-swatch-bg);"));
+        assert!(EDITOR_CSS.contains("background-image: var(--sprite-swatch-checker);"));
+        assert!(
+            EDITOR_CSS.contains(
+                ".level3d-layer-board.is-grid-board .level3d-layer-cell {\n  min-width: 0;"
+            )
+        );
+        assert!(EDITOR_CSS.contains("background: transparent;"));
+        assert!(
+            EDITOR_CSS
+                .contains(".level3d-layer-board.is-grid-board .level3d-layer-cell:not(.is-empty)")
+        );
+    }
+
+    #[test]
+    fn level3d_slice_overlay_has_readable_contrast() {
+        assert!(EDITOR_CSS.contains(".level3d-layer-toolbar.sprite3d-slice-axis-control {"));
+        assert!(EDITOR_CSS.contains("background: rgb(34 38 44 / 88%);"));
+        assert!(EDITOR_CSS.contains("box-shadow: 0 2px 10px rgb(0 0 0 / 35%);"));
+        assert!(EDITOR_CSS.contains(".level3d-layer-toolbar .sprite3d-layer-axis-label,"));
+        assert!(EDITOR_CSS.contains("color: #f6f8fb;"));
+        assert!(EDITOR_CSS.contains("color: rgb(246 248 251 / 72%);"));
     }
 
     #[test]
@@ -5625,8 +5696,21 @@ levels3 demo of push3 {
         }
 
         for source in [
-            include_str!("../../../games/spec_2d.puzzle"),
-            include_str!("../../../games/spec_3d.puzzle3"),
+            r#"
+title = "Outline 2D"
+
+puzzle outline {
+layers {
+actor = Player
+}
+
+rules {
+input [ Player ] -> [ > Player ]
+move
+}
+}
+"#,
+            include_str!("../../lang/tests/fixtures/spec_3d_full.puzzle3"),
             include_str!("../../lang/tests/fixtures/spec_3d_preview_contract.puzzle3"),
             include_str!("../../lang/tests/fixtures/puzzlescript/basic_sokoban.puzzle"),
         ] {
@@ -5860,6 +5944,8 @@ levels3 demo of push3 {
         assert!(EDITOR_LEVEL3D_JS.contains("sourceLevel3dRangeHasReadableLegend(source, range)"));
         assert!(!EDITOR_LEVEL3D_JS.contains("function sendLevel3dSnapshotToPreviewFrame"));
         assert!(EDITOR_LEVEL3D_JS.contains("function refreshLevel3dRuntimePreviews()"));
+        assert!(EDITOR_LEVEL3D_JS.contains("renderLevel3dRuntime();"));
+        assert!(EDITOR_LEVEL3D_JS.contains("renderLevel3dLayerRuntime();"));
         assert!(EDITOR_LEVEL3D_JS.contains("sendLevel3dLayerSnapshotToRuntime();"));
         assert!(EDITOR_LEVEL3D_JS.contains(
             "renderLevel3dLayerBoard();\n  renderLevel3dStageOverlay();\n  refreshLevel3dRuntimePreviews();\n  return true;"
@@ -6303,12 +6389,17 @@ levels3 demo of push3 {
     }
 
     #[test]
-    fn sprite_clip_toolbar_keeps_clip_and_clear_only() {
-        assert!(EDITOR_SPRITE_JS.contains("ariaLabel: \"Clip sprite area\","));
-        assert!(EDITOR_SPRITE_JS.contains("ariaLabel: \"Clear selected sprite area\","));
-        assert!(!EDITOR_SPRITE_JS.contains("ariaLabel: \"Copy selected sprite area\","));
-        assert!(!EDITOR_SPRITE_JS.contains("ariaLabel: \"Cut selected sprite area\","));
-        assert!(!EDITOR_SPRITE_JS.contains("ariaLabel: \"Paste copied sprite area\","));
+    fn sprite_clip_toolbar_stays_in_paint_tool_row_without_layout_growth() {
+        assert!(EDITOR_SPRITE_JS.contains("brushActions.append(spriteFillButton);"));
+        assert!(EDITOR_SPRITE_JS.contains("brushActions.append(renderSpriteClipActions());"));
+        assert!(!EDITOR_SPRITE_JS.contains("globalEditActions.append(renderSpriteClipActions());"));
+        assert!(!EDITOR_SPRITE_JS.contains("paletteGrid.append(clipActions);"));
+        assert!(EDITOR_CSS.contains(".sprite-clip-actions {\n  position: relative;"));
+        assert!(EDITOR_CSS.contains("width: 26px;\n  min-width: 26px;"));
+        assert!(EDITOR_CSS.contains("height: 26px;\n  min-height: 26px;"));
+        assert!(EDITOR_CSS.contains(".sprite-clip-expanded-actions {\n  position: absolute;"));
+        assert!(EDITOR_CSS.contains("left: calc(100% + 3px);"));
+        assert!(EDITOR_CSS.contains("height: 26px;"));
     }
 
     #[test]
@@ -6661,6 +6752,33 @@ levels3 demo of push3 {
         assert!(!EDITOR_SOURCE_JS.contains("suggestSourceCompletionsFromEditorContext"));
         assert!(!EDITOR_SOURCE_JS.contains("function sourceImportPathCompletionContext"));
         assert!(!EDITOR_SOURCE_JS.contains("function sourceImportPathCompletionItems"));
+    }
+
+    #[test]
+    fn source_completion_popover_anchors_below_caret_rect() {
+        assert!(
+            EDITOR_SOURCE_JS.contains("const wrapRect = sourceEditorWrap.getBoundingClientRect();")
+        );
+        assert!(EDITOR_SOURCE_JS.contains("const anchorRect = sourceCaretRectForOffset(anchor);"));
+        assert!(
+            EDITOR_SOURCE_JS.contains(
+                "const cursorRect = sourceCaretRectForOffset(sourceEditor.selectionStart);"
+            )
+        );
+        assert!(EDITOR_SOURCE_JS.contains("const left = wrapRect.left + anchorRect.left;"));
+        assert!(
+            EDITOR_SOURCE_JS
+                .contains("const top = wrapRect.top + cursorRect.top + cursorRect.height + 6;")
+        );
+        let completion_position = EDITOR_SOURCE_JS
+            .find("function positionSourceCompletionPopover()")
+            .expect("source completion popover positioning function");
+        let completion_position_end = EDITOR_SOURCE_JS[completion_position..]
+            .find("\n}")
+            .map(|offset| completion_position + offset)
+            .expect("source completion popover positioning function end");
+        let block = &EDITOR_SOURCE_JS[completion_position..completion_position_end];
+        assert!(!block.contains("sourceEditor.getBoundingClientRect()"));
     }
 
     #[test]
@@ -7074,6 +7192,20 @@ levels3 demo of push3 {
     }
 
     #[test]
+    fn sprite_source_color_staging_uses_palette_block() {
+        assert!(EDITOR_SPRITE_JS.contains(
+            "const paletteBlock = findVisualAssetBlock(source, spritesBlock, \"palette\");"
+        ));
+        assert!(EDITOR_SPRITE_JS.contains(
+            "const paletteText = `\\n${blockIndent}palette {\\n${rowIndent}${name} = ${normalized}\\n${blockIndent}}\\n`;"
+        ));
+        assert!(
+            !EDITOR_SPRITE_JS.contains("findVisualAssetBlock(source, spritesBlock, \"colors\")")
+        );
+        assert!(!EDITOR_SPRITE_JS.contains("${blockIndent}colors {"));
+    }
+
+    #[test]
     fn sprite_color_tag_picker_shows_color_values() {
         assert!(EDITOR_SPRITE_JS.contains("const colorAssets = spriteSourceColorAssets();"));
         assert!(
@@ -7129,9 +7261,112 @@ levels3 demo of push3 {
         );
         assert!(EDITOR_SPRITE_JS.contains("sourcePreludeRows,"));
         assert!(EDITOR_SPRITE_JS.contains(
-            "const preludeRows = spriteSourcePreludeRows().map((row) => `${rowIndent}${row}`);"
+            "const preludeRows = spriteSourcePreludeRows({ omitDuration: Boolean(animationSource) }).map((row) => `${rowIndent}${row}`);"
         ));
         assert!(EDITOR_SPRITE_JS.contains("...preludeRows,"));
+    }
+
+    #[test]
+    fn sprite_source_loader_handles_animation_frames() {
+        assert!(
+            EDITOR_SPRITE_JS
+                .contains("const animationRows = Array.isArray(contract.animationFrames)")
+        );
+        assert!(EDITOR_SPRITE_JS.contains("animationMode: true,"));
+        assert!(
+            EDITOR_SPRITE_JS.contains(
+                "const frameDurationMs = Number.isFinite(Number(contract.frameDurationMs))"
+            )
+        );
+        assert!(EDITOR_SPRITE_JS.contains("frameDurationMs * parsedFrames.length"));
+        assert!(EDITOR_SPRITE_JS.contains("animationDurationMs: durationMs,"));
+        assert!(
+            EDITOR_SPRITE_JS.contains("animationFrames: parsedFrames.map((frame) => frame.cells),")
+        );
+        assert!(
+            EDITOR_SPRITE_JS.contains("const animationSource = spriteAnimationSourceFrames();")
+        );
+        assert!(EDITOR_SPRITE_JS.contains("lines.push(`${rowIndent}>`);"));
+        assert!(
+            EDITOR_SPRITE_JS
+                .contains("spriteSourcePreludeRows({ omitDuration: Boolean(animationSource) })")
+        );
+        assert!(EDITOR_SPRITE_JS.contains("function isSpriteTimingPreludeRow(row)"));
+        assert!(EDITOR_SPRITE_JS.contains("duration|frame_duration"));
+    }
+
+    #[test]
+    fn sprite_animation_settings_are_visual_undo_state() {
+        assert!(EDITOR_JS.contains("animationDurationMs: sprite.animationDurationMs,"));
+        assert!(EDITOR_JS.contains("animationFrameCount: sprite.animationFrameCount,"));
+        assert!(
+            EDITOR_JS
+                .contains("animationFrames: cloneVisualEditValue(sprite.animationFrames || []),")
+        );
+        assert!(EDITOR_JS.contains(
+            "sprite.animationDurationMs = Number.isFinite(Number(state.animationDurationMs))"
+        ));
+        assert!(EDITOR_SPRITE_JS.contains("const before = visualEditSnapshot(\"sprite\");\n  sprite.animationFrameCount = normalizedSpriteAnimationFrameCount(value);"));
+        assert!(EDITOR_SPRITE_JS.contains("const before = visualEditSnapshot(\"sprite\");\n  sprite.animationDurationMs = normalizedSpriteAnimationDuration(value);"));
+        assert!(EDITOR_SPRITE_JS.contains("function isSpriteVisualEditUndoTarget(target)"));
+        assert!(EDITOR_SPRITE_JS.contains("function syncSpriteAnimationInputValues(options = {})"));
+        assert!(EDITOR_JS.contains("syncSpriteAnimationInputValues();"));
+        assert!(EDITOR_JS.contains("isSpriteVisualEditUndoTarget(target)"));
+    }
+
+    #[test]
+    fn sprite_animation_playback_view_is_separate_from_frame_panel() {
+        assert!(EDITOR_HTML.contains(r#"aria-label="Sprite animation frames""#));
+        assert!(EDITOR_HTML.contains(r#"class="sprite-animation-sidecar""#));
+        assert!(EDITOR_HTML.contains(r#"class="sprite-animation-playback-panel""#));
+        assert!(EDITOR_HTML.contains("spriteAnimationPlaybackView"));
+        assert!(EDITOR_HTML.contains("sprite-animation-playback-view-label"));
+        assert!(EDITOR_CSS.contains(".sprite-animation-playback-panel {\n  position: relative;"));
+        assert!(
+            EDITOR_CSS.contains(".sprite-animation-playback-view-label {\n  position: absolute;")
+        );
+        let playback_panel = EDITOR_HTML
+            .find(r#"class="sprite-animation-playback-panel""#)
+            .expect("sprite animation playback panel");
+        let frame_panel = EDITOR_HTML
+            .find(r#"id="spriteAnimationPanel""#)
+            .expect("sprite animation frame panel");
+        assert!(playback_panel < frame_panel);
+        assert!(EDITOR_CSS.contains(".sprite-animation-sidecar {\n  min-width: 72px;"));
+        assert!(EDITOR_SPRITE_JS.contains("function renderSpriteAnimationPlaybackView(cells)"));
+        assert!(EDITOR_SPRITE_JS.contains("function syncSpriteAnimationPlayback()"));
+        assert!(EDITOR_SPRITE_JS.contains("function spriteAnimationFrameDelayMs()"));
+        assert!(
+            EDITOR_SPRITE_JS
+                .contains("Math.round(sprite.animationDurationMs / sprite.animationFrameCount)")
+        );
+        assert!(
+            EDITOR_SPRITE_JS
+                .contains("spriteAnimationPlaybackDurationMs !== spriteAnimationFrameDelayMs()")
+        );
+        assert!(
+            EDITOR_SPRITE_JS.contains("spriteAnimationDurationInput?.addEventListener(\"input\"")
+        );
+        assert!(EDITOR_SPRITE_JS.contains("recordHistory: false"));
+        assert!(EDITOR_SPRITE_JS.contains("function spriteAnimationFrameCells(cells)"));
+        assert!(EDITOR_SPRITE_JS.contains("button.classList.toggle(\"is-playing-frame\""));
+        assert!(!EDITOR_HTML.contains("spriteAnimationPlayButton"));
+        assert!(!EDITOR_DOM_JS.contains("spriteAnimationPlayButton"));
+        assert!(!EDITOR_SPRITE_JS.contains("toggleSpriteAnimationPlayback"));
+        assert!(!EDITOR_HTML.contains("spriteAnimationCurrentPreview"));
+        assert!(!EDITOR_HTML.contains("sprite-animation-preview-label"));
+        assert!(!EDITOR_HTML.contains("spriteAnimationPlaybackPreview"));
+        assert!(!EDITOR_CSS.contains(".sprite-animation-preview-box"));
+        assert!(!EDITOR_CSS.contains(".sprite-animation-preview,"));
+        assert!(!EDITOR_SPRITE_JS.contains("renderSpriteAnimationPreview"));
+        assert!(!EDITOR_HTML.contains(r#"aria-label="Sprite animation playback and frames""#));
+    }
+
+    #[test]
+    fn level3d_frame_surface_is_square_cornered() {
+        assert!(EDITOR_CSS.contains(
+            ".level3d-frame-surface {\n  position: absolute;\n  inset: 0 auto auto 0;\n  width: var(--level3d-frame-virtual-width);\n  height: var(--level3d-frame-virtual-height);\n  border: 0;\n  border-radius: 0;"
+        ));
     }
 
     #[test]
@@ -7832,7 +8067,9 @@ levels3 demo of push3 {
         assert_eq!(EDITOR_STATIC_RENDERER_JS, RENDERER_JS);
         assert_eq!(EDITOR_STATIC_RENDERER_CSS, RENDERER_CSS);
         assert!(EDITOR_HTML.contains(r#"<link rel="stylesheet" href="renderer.css">"#));
-        assert!(EDITOR_HTML.contains(r#"<script src="renderer.js"></script>"#));
+        assert!(
+            EDITOR_HTML.contains(r#"<script src="renderer.js?v=board-canvas-visuals"></script>"#)
+        );
     }
 
     #[test]
@@ -7877,6 +8114,9 @@ levels3 demo of push3 {
     fn tauri_editor_busts_cache_for_theme_css_and_tab_unsaved_assets() {
         assert!(
             EDITOR_HTML.contains(r#"<script src="editor_boot.js?v=desktop-export-link"></script>"#)
+        );
+        assert!(
+            EDITOR_HTML.contains(r#"<script src="renderer.js?v=board-canvas-visuals"></script>"#)
         );
         assert!(
             EDITOR_HTML

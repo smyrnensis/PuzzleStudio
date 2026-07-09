@@ -1,18 +1,20 @@
 use crate::object_refs;
 use puzzle_core::{
-    CompiledGame, ConditionValueKind, Effect, Guard, ObjectId as ObjectId2, Rule, RuleStep,
+    CompiledGame, ConditionValueKind, Effect, Guard, ObjectId as ObjectId2, Rule, RuleId, RuleStep,
 };
 use std::collections::BTreeSet;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SolverRelevance<ObjectId = ObjectId2> {
     relevant_objects: BTreeSet<ObjectId>,
+    relevant_rules: BTreeSet<u16>,
 }
 
 impl<ObjectId> Default for SolverRelevance<ObjectId> {
     fn default() -> Self {
         Self {
             relevant_objects: BTreeSet::new(),
+            relevant_rules: BTreeSet::new(),
         }
     }
 }
@@ -35,6 +37,14 @@ impl<ObjectId: Copy + Ord> SolverRelevance<ObjectId> {
 
     pub fn relevant_objects(&self) -> Vec<ObjectId> {
         self.relevant_objects.iter().copied().collect()
+    }
+
+    pub(crate) fn insert_relevant_rule_id(&mut self, rule: u16) -> bool {
+        self.relevant_rules.insert(rule)
+    }
+
+    pub(crate) fn relevant_rule_ids(&self) -> Vec<u16> {
+        self.relevant_rules.iter().copied().collect()
     }
 
     pub(crate) fn insert_relevant_objects<'a>(
@@ -86,6 +96,10 @@ impl SolverRelevance<ObjectId2> {
                 (!object.id.is_empty() && !self.contains_object(object.id)).then_some(object.id)
             })
             .collect()
+    }
+
+    pub fn relevant_rules(&self) -> Vec<RuleId> {
+        self.relevant_rule_ids().into_iter().map(RuleId).collect()
     }
 
     fn propagate_step(&mut self, game: &CompiledGame, step: &RuleStep) -> bool {
@@ -165,7 +179,8 @@ impl SolverRelevance<ObjectId2> {
             return false;
         }
 
-        let mut changed = self.insert_pattern_objects(&rule.pattern);
+        let mut changed = self.insert_relevant_rule_id(rule.id.0);
+        changed |= self.insert_pattern_objects(&rule.pattern);
         for guard in &rule.guards {
             changed |= self.insert_guard_objects(game, guard);
         }
@@ -175,7 +190,8 @@ impl SolverRelevance<ObjectId2> {
     fn insert_step_read_objects(&mut self, game: &CompiledGame, step: &RuleStep) -> bool {
         match step {
             RuleStep::Rule(rule) => {
-                let mut changed = self.insert_pattern_objects(&rule.pattern);
+                let mut changed = self.insert_relevant_rule_id(rule.id.0);
+                changed |= self.insert_pattern_objects(&rule.pattern);
                 for guard in &rule.guards {
                     changed |= self.insert_guard_objects(game, guard);
                 }
@@ -554,6 +570,7 @@ P
         assert_relevant(&relevance, PLAYER);
         assert_relevant(&relevance, GOAL);
         assert_pruned(&relevance, FLOOR);
+        assert_eq!(relevance.relevant_rules(), vec![RuleId(2)]);
     }
 
     #[test]

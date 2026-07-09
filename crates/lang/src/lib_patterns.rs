@@ -2009,24 +2009,86 @@ fn record_schema_selector_suffix_surface_parts(
         let Some(raw_value) = schema_selector_part(parts, schema, axis_index) else {
             continue;
         };
-        let value = raw_value
-            .split_once('#')
-            .map_or(raw_value, |(base, _)| base);
-        if value == "*" {
-            continue;
-        }
-        let kind = if value == axis
-            || catalog.value_sets.contains_key(value)
-            || catalog.object_axes.contains_key(value)
-        {
-            SurfaceSemanticKind::Group
-        } else if catalog.variable_names.contains_key(value) {
-            SurfaceSemanticKind::State
-        } else {
-            SurfaceSemanticKind::Variant
-        };
-        mark_surface_token_part(token, selector_offset, selector, value, kind, sink);
+        record_schema_selector_value_surface_parts(
+            token,
+            selector_offset,
+            selector,
+            raw_value,
+            axis,
+            catalog,
+            sink,
+        );
     }
+}
+
+fn record_schema_selector_value_surface_parts(
+    token: &SourceToken,
+    selector_offset: usize,
+    selector: &str,
+    raw_value: &str,
+    axis: &str,
+    catalog: &Catalog,
+    sink: &mut SurfaceSink,
+) {
+    if let Some((map_name, raw_arg)) = parse_map_call(raw_value) {
+        if catalog.maps.contains_key(map_name) {
+            mark_surface_token_part(
+                token,
+                selector_offset,
+                selector,
+                map_name,
+                SurfaceSemanticKind::Group,
+                sink,
+            );
+        }
+        record_schema_selector_value_atom_surface_part(
+            token,
+            selector_offset,
+            selector,
+            raw_arg,
+            axis,
+            catalog,
+            sink,
+        );
+        return;
+    }
+    record_schema_selector_value_atom_surface_part(
+        token,
+        selector_offset,
+        selector,
+        raw_value,
+        axis,
+        catalog,
+        sink,
+    );
+}
+
+fn record_schema_selector_value_atom_surface_part(
+    token: &SourceToken,
+    selector_offset: usize,
+    selector: &str,
+    raw_value: &str,
+    axis: &str,
+    catalog: &Catalog,
+    sink: &mut SurfaceSink,
+) {
+    let value = raw_value
+        .split_once('#')
+        .map_or(raw_value, |(base, _)| base);
+    if value == "*" {
+        return;
+    }
+    let kind = if value == axis
+        || catalog.value_sets.contains_key(value)
+        || catalog.object_axes.contains_key(value)
+    {
+        SurfaceSemanticKind::Group
+    } else if catalog.variable_names.contains_key(value) {
+        SurfaceSemanticKind::State
+    } else {
+        SurfaceSemanticKind::Variant
+    };
+    mark_surface_token_part(token, selector_offset, selector, value, kind, sink);
 }
 
 fn record_selector_mark_surface_parts(

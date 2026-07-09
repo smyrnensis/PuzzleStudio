@@ -1,0 +1,858 @@
+title = "Stuck Room"
+
+default_wait_time = 100ms
+
+theme {
+preset = "clean"
+accent_color = #c4d0cb
+background_color = #454545
+text_color = #c4d0cb
+}
+
+sounds {
+sfx push { seed = 301193; type = hit; volume = 0.2 }
+sfx bump { seed = 945816; type = hit; volume = 0.3 }
+sfx clear { seed = clear; type = jump }
+sfx locked { seed = locked; type = lock }
+sfx fall { seed = fall; type = hit }
+sfx restart { seed = 560993; type = jump; volume = 0.8 }
+sfx undo { seed = 613236; type = select; volume = 0.50 }
+music locked_room { seed = LockedRoom; bars = 64; height = 0.00; bpm = 90; volume = 4 }
+}
+
+puzzle main {
+
+tags {
+state = open close
+num = 0...5
+}
+
+render {
+cell_size = 40
+tween = true
+tween_duration = 50ms
+}
+
+map rotate directions {
+up -> right
+right -> down
+down -> left
+left -> up
+}
+
+marks {
+checked
+}
+
+sounds {
+restart -> sfx restart
+undo -> sfx undo
+}
+
+layers {
+@Floor @Floor2
+@Lock
+room = Room Room:state
+Carpet
+Crack Hole
+Goal:state Door:state
+GoalCount:num
+Key
+solid = Player Box:state Pull:state Wall Gate:num
+@Count:num
+OnPlayer CanEnter VirtualBox
+each @LockedFrame:directions @LockedCorner:directions @WallFrame:directions @WallCorner:directions
+@Debug
+}
+
+groups {
+separate = Box:* Pull:* Wall Gate:* Hole
+fixed = Box:close Pull:close Wall Gate:*
+cantgo = Box:* Pull:* Wall Gate:*
+cantpush = Box:* Pull:* Wall Gate:* Carpet
+heavy = Box:* Pull:* Player
+nonplayer = Box:* Pull:*
+box = Box:* VirtualBox
+}
+
+var locked_room_count = 0
+var previous_count = 0
+
+routine @initial_displays {
+once [ no @Floor ] -> [ @Floor ]
+repeat {
+[ @Floor | no @Floor2 ] -> [ @Floor | @Floor2 ]
+[ @Floor2 | no @Floor ] -> [ @Floor2 | @Floor ]
+}
+[ Wall | no Wall ] -> [ Wall @WallFrame:> |  ] 
+[ Wall | Wall ; Wall | no Wall ] -> [ Wall @WallCorner:> | Wall ; Wall |  ]
+}
+
+routine check_OnPlayer {
+[ OnPlayer ] -> [  ]
+once [ Player ] -> [ Player OnPlayer ]
+repeat {
+[ OnPlayer | no OnPlayer no separate ] -> [ OnPlayer | OnPlayer ] 
+[ OnPlayer | Box:open | no cantpush ] -> [ OnPlayer | Box:open  OnPlayer |  ]
+}
+}
+
+routine check_stuck {
+for obj in Box Pull {
+[ obj:close ] -> [ obj:open ]
+}
+[ OnPlayer | Box:open{no checked} | no cantpush ] -> [ OnPlayer | Box:open{checked} |  ]
+
+[ no cantgo | OnPlayer | Pull:open{no checked} ] -> [  | OnPlayer | Pull:open{checked} ]
+[ no cantpush | Box:open | OnPlayer | Pull:open{no checked} ] -> [ | = | = | Pull:open{checked} ]
+
+for obj in Box Pull {
+[ obj:open{no checked} ] -> [ obj:close ]
+[ obj:open{checked} ] -> [ obj:open ]
+}
+}
+
+routine compute_locked_rooms {
+once_all [ Room:close no separate ] -> [ Room:close @Lock ]
+locked_room_count = 0
+[ room ] -> [  ]
+once_all [ no separate ] -> [ Room ]
+for obj in Box Pull {
+[ obj:open | Room ] -> [ obj:open | Room:open ]
+}
+[ OnPlayer Crack Room ] -> [ OnPlayer Crack Room:open ]
+[ Room:open | Room ] -> [ Room:open | Room:open ] 
+repeat {
+	once [ Room ] -> [ Room:close ] locked_room_count += 1
+	[ Room:close | Room ] -> [ Room:close | Room:close ]
+}
+once [ Room:close no @Lock ] -> [ Room:close ] sfx locked
+once [ Room:open @Lock ] -> [ = ] sfx locked
+[ @Lock ] -> [  ]
+}
+
+routine @display_locked_frame {
+[ @LockedFrame:* ] -> [  ] 
+[ @LockedCorner:* ] -> [  ]
+[ Room:close | no Room:close ] 
+-> [ Room:close @LockedFrame:> |  ]
+[ Room:close | @LockedFrame:v ; @LockedFrame:> |  ] 
+-> [ Room:close @LockedCorner:> | @LockedFrame:v ; @LockedFrame:> |  ] 
+}
+
+routine move {
+repeat {
+[ > nonplayer | no solid ] -> [  | nonplayer ] sfx push
+[ > Player | no solid ] -> [  | Player ]
+}
+[ > solid ] -> [ solid ] sfx bump
+wait
+}
+
+routine open_gate {
+for n in 1...5 {
+	if some([ Gate:n{checked} ]) {
+		if locked_room_count == n {
+			[ @Count:* ] -> [ @Count:locked_room_count ]
+			[ Gate:n{checked} ] -> [  ]
+		} else {
+			[ Gate:n{checked} ] -> [ Gate:n ]
+		}
+	}
+}
+}
+
+routine check_win {
+for n in 1...5 {
+	if locked_room_count == n {
+		[ Goal:close GoalCount:n ] -> [ Goal:open GoalCount:n ]
+	}
+}
+[ Player Goal:open ] -> win
+}
+
+routine check_crack {
+[ Crack heavy ] -> [ Crack{checked} heavy ]
+}
+
+routine change_crack {
+[ Crack{checked} no heavy ] -> [ Hole ]
+}
+
+routine fall {
+[ Hole heavy ] -> wait 0.1s
+[ Hole heavy ] -> [ ] sfx fall
+}
+
+on_level_start {
+@initial_displays
+check_OnPlayer
+check_stuck
+locked_room_count = 0
+compute_locked_rooms
+@display_locked_frame
+}
+
+rules {
+check_crack
+
+input [ Player ] -> [ > Player ]
+
+[ > Player | Gate:* ] -> [ > Player | Gate:*{checked} ] open_gate
+
+[ > Player | Box:open ] -> [ > Player | > Box:open ]
+[ < Player | Pull:open ] -> [ < Player | < Pull:open ]
+[ > nonplayer | Carpet ] -> [ nonplayer | Carpet ] sfx bump
+move
+
+fall
+change_crack
+
+
+check_OnPlayer
+check_stuck
+compute_locked_rooms
+@display_locked_frame
+check_win
+}
+
+
+lose_conditions {
+no ([ *:open ]) and no([ Goal:open ])
+}
+
+on_level_clear {
+sfx clear
+wait 0.35s
+next_level
+}
+
+on_last_level_clear {
+sfx clear
+wait 0.35s
+message "Thanks for playing!"
+goto level_select
+}
+}
+
+levels {
+legend {
+. = empty
+P = Player
+B = Box:open
+C = Pull:open
+$ = Carpet
+# = Wall
+* = Crack
+1 = Goal:close GoalCount:1
+2 = Goal:close GoalCount:2
+3 = Goal:close GoalCount:3
+4 = Goal:close GoalCount:4
+a = Gate:1
+b = Gate:2
+}
+
+level "level 1"
+#######
+#######
+#######
+#1PB..#
+#######
+#######
+#######
+
+level "level 2"
+######
+######
+#..B.#
+#1P..#
+#..B.#
+######
+######
+
+level "level 3"
+#########
+#.....#.#
+#.3.B...#
+#..P..###
+##.##.###
+##.#...##
+#########
+
+level "level 4"
+########
+#......#
+#.2B.B.#
+#......#
+#.PB.B.#
+#......#
+########
+
+level "level 5"
+#########
+#...#...#
+#.3...B.#
+#...#...#
+##.###.##
+#...#...#
+#.B...B.#
+#...#..P#
+#########
+
+level "level 6"
+#########
+#.......#
+#.PBBBB.#
+#4......#
+##.####.#
+#..####.#
+#.......#
+#########
+
+level "level 7"
+########
+#.B.B.B#
+#..B.B.#
+#4..B.B#
+#..B.B.#
+#.P.B.B#
+#....B.#
+########
+
+level "level 8"
+#######
+###..1#
+###...#
+###...#
+#.P.#.#
+#.C...#
+#.....#
+#######
+
+level "level 9"
+#######
+#.....#
+#..#..#
+#1P#..#
+#.BC..#
+#.....#
+#######
+
+level "level 10"
+#######
+#....##
+#.CC.##
+#.#..##
+#..BP.#
+###..3#
+#######
+
+level "level 11"
+#######
+#....##
+#.CC2##
+#.#..##
+#..BP.#
+###...#
+#######
+
+level "level 12"
+#######
+#....##
+#.C.C##
+#.#.B.#
+#.P...#
+##...1#
+#######
+
+// #######
+// #....##
+// #.CC.##
+// #.#1.##
+// #..BP.#
+// ###...#
+// #######
+
+// #######
+// #....##
+// #.CC.##
+// #.#1.##
+// #..BP.#
+// ###...#
+// #######
+
+// #######
+// #....##
+// #.B..##
+// #.#a###
+// #..PB.#
+// ###..3#
+// #######
+
+// #######
+// #.....#
+// #..C..#
+// #.BP..#
+// #1##.##
+// #.##.##
+// #....##
+// #######
+
+// ########
+// #......#
+// #.PBC..#
+// #.....##
+// #.###.##
+// #.###.##
+// #.###.2#
+// #.....##
+// ########
+
+
+
+// #######
+// #.....#
+// #..#..#
+// #2P#..#
+// #.BC..#
+// #.....#
+// #######
+
+// ######
+// #$$$$#
+// #..B.#
+// #1P*.#
+// #..B.#
+// #$$$$#
+// ######
+
+// ######
+// #....#
+// #..B.#
+// #1P*.#
+// #..B.#
+// #....#
+// ######
+}
+
+sprites {
+
+shapes {
+Box
+....................
+...00000000000000...
+..0000000000000000..
+.000011111111110000.
+.000111111111100000.
+.001111111111000100.
+.001111111110001100.
+.001111111100011100.
+.001111111000111100.
+.001111110001111100.
+.001111100011111100.
+.001111000111111100.
+.001110001111111100.
+.001100011111111100.
+.001000111111111100.
+.000001111111111000.
+.000011111111110000.
+..0000000000000000..
+...00000000000000...
+....................
+
+Pull
+....................
+..0000000000000000..
+.000000000000000000.
+.000111111111111000.
+.001111111111111100.
+.001111111111111100.
+.001111111111111100.
+.001111111111111100.
+.001111111111111100.
+.001111111111111100.
+.001111111111111100.
+.001111111111111100.
+.001111111111111100.
+.001111111111111100.
+.001111111111111100.
+.001111111111111100.
+.000111111111111000.
+.000000000000000000.
+..0000000000000000..
+....................
+
+Flag
+....................
+....................
+...11000000000000...
+...11000000000000...
+...11000000000000...
+...11000000000000...
+...11000000000000...
+...11000000000000...
+...11000000000000...
+...11000000000000...
+...11000000000000...
+...11000000000000...
+...11...............
+...11...............
+...11...............
+...11...............
+...11...............
+...11...............
+....................
+....................
+
+}
+
+palette {
+Gate_color_1 = #921e87
+Gate_color_2 = #c2c3c7
+Count_color = #e5cf29f2
+Player_color = #d85cff
+Box_color = #e6a728
+Pull_color = #3be628
+stuck_color = #97702c
+Goal_color_2 = #6d4028
+Goal_color_3 = #c2c3c7
+Box_color_2 = #ac7e22
+GoalCount = #acacac
+}
+
+@Debug
+#f00
+
+@Floor
+#8b8b8b
+
+@Floor2
+#808080
+
+Wall
+#454545
+
+// Room:open
+// #008751c2
+
+// OnPlayer
+// #0059ff85
+
+// Room:close
+// #95262655
+
+Player
+#000000
+........................................
+........................................
+........................................
+........................................
+........................................
+........................................
+........................................
+...........000000000000000000...........
+...........000000000000000000...........
+...........000000000000000000...........
+...........000000000000000000...........
+...........000000000000000000...........
+...........000000000000000000...........
+...........000000000000000000...........
+...........000000000000000000...........
+...........000000000000000000...........
+...........000000000000000000...........
+...........000000000000000000...........
+...........000000000000000000...........
+.....000000000000000000000000000000.....
+.....000000000000000000000000000000.....
+.....000000000000000000000000000000.....
+.....000000000000000000000000000000.....
+.....000000000000000000000000000000.....
+.....000000000000000000000000000000.....
+...........000000000000000000...........
+...........000000000000000000...........
+...........000000000000000000...........
+...........000000000000000000...........
+...........000000000000000000...........
+...........000000000000000000...........
+...........000000......000000...........
+...........000000......000000...........
+...........000000......000000...........
+...........000000......000000...........
+...........000000......000000...........
+...........000000......000000...........
+........................................
+........................................
+........................................
+
+Crack
+#2cc511
+.....
+..0..
+.000.
+..0..
+.....
+
+Hole
+#000
+
+Box:open
+#45667d #2f485d
+shape Box
+
+Box:close
+#34444e #262f38
+shape Box
+
+Pull:open
+#2cc511 #008751
+shape Pull
+
+Pull:close
+#3d5939 #29473b
+shape Pull
+
+@LockedFrame:directions
+rotate from up
+#000000
+....................
+.000..000..000..000.
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+
+@LockedCorner:directions
+rotate from up
+#000000
+....................
+..................0.
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+
+@WallFrame:directions
+rotate from up
+#585858
+00000000
+........
+........
+........
+........
+........
+........
+........
+
+
+@WallCorner:directions
+rotate from up
+#585858
+.......0
+........
+........
+........
+........
+........
+........
+........
+
+GoalCount:1
+GoalCount
+....................
+....................
+....................
+....................
+....................
+....................
+..........00........
+..........00........
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+
+GoalCount:2
+GoalCount
+....................
+....................
+....................
+....................
+....................
+....................
+........00..00......
+........00..00......
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+
+GoalCount:3
+GoalCount
+....................
+....................
+....................
+....................
+..........00........
+..........00........
+....................
+....................
+........00..00......
+........00..00......
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+
+GoalCount:4
+GoalCount
+....................
+....................
+....................
+....................
+........00..00......
+........00..00......
+....................
+....................
+........00..00......
+........00..00......
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+
+GoalCount:5
+GoalCount
+....................
+....................
+....................
+....................
+........00..00......
+........00..00......
+..........00........
+..........00........
+........00..00......
+........00..00......
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+
+Goal:open
+#eed72c #6d4028
+shape Flag
+
+Goal:close
+#737048 #664737
+shape Flag
+}
+
+
+scene title {
+layout {
+	title = title
+	choice "Play" -> goto playing
+	// choice "New Game" -> {
+			// clear_game_progress
+			// goto playing
+		// }
+	choice "Levels" -> goto level_select
+}
+on_scene_start {
+	stop_music locked_room
+}
+}
+
+scene playing {
+	layout {
+		main
+	}
+	keys {
+		q Escape -> {
+		stop_music locked_room
+		goto level_select
+		}
+	}
+	on_scene_start {
+		play_music locked_room
+	}
+	rules {
+		step main
+	}
+}
+
+
+scene level_select {
+			layout {
+				text "Select a level"
+				level_menu
+				choice "Title" -> goto title
+			}
+		keys {
+			q Escape -> goto title
+		}
+	on_scene_start {
+		stop_music locked_room
+	}
+}

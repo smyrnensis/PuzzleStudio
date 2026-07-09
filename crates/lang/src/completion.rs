@@ -176,7 +176,6 @@ fn slot_requires_symbols(slot: &SemanticCompletionSlot) -> bool {
         SemanticCompletionSlot::Keywords(_)
         | SemanticCompletionSlot::ModelTopLevelKeywords
         | SemanticCompletionSlot::Literals(_)
-        | SemanticCompletionSlot::StandardRuleSteps
         | SemanticCompletionSlot::Themes
         | SemanticCompletionSlot::AuthoringRows(_)
         | SemanticCompletionSlot::AuthoringChildren(_)
@@ -397,16 +396,6 @@ fn add_slot_items(
         ),
         SemanticCompletionSlot::Inputs => {
             add_named_items(items, symbols.inputs.iter(), CompletionKind::Input, "input")
-        }
-        SemanticCompletionSlot::StandardRuleSteps => {
-            for step in puzzle_authoring::STANDARD_RULE_STEP_NAMES {
-                items.push(CompletionItem {
-                    label: (*step).to_string(),
-                    kind: CompletionKind::Effect,
-                    insert_text: (*step).to_string(),
-                    detail: "standard rule step".to_string(),
-                });
-            }
         }
         SemanticCompletionSlot::ModelEffects => add_named_items(
             items,
@@ -1257,11 +1246,12 @@ rules {
         let move_source = source.replacen("\n\n}", "\nmo\n}", 1);
         let move_cursor = move_source.find("\nmo\n").unwrap() + "\nmo".len();
         let move_list = suggest_source_completions(&move_source, move_cursor);
-        assert!(move_list.items.iter().any(|item| {
-            item.label == "move"
-                && item.kind == CompletionKind::Effect
-                && item.detail == "standard rule step"
-        }));
+        assert!(
+            !move_list
+                .items
+                .iter()
+                .any(|item| { item.label == "move" && item.detail == "standard rule step" })
+        );
 
         let effect_source = source.replacen("\n\n}", "\nsf\n}", 1);
         let effect_cursor = effect_source.find("\nsf\n").unwrap() + "\nsf".len();

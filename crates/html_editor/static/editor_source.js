@@ -2409,19 +2409,19 @@ function positionSourceCompletionPopover() {
   if (!sourceCompletionPopover || !sourceEditorWrap || !sourceEditor) {
     return;
   }
-  const style = window.getComputedStyle(sourceEditor);
-  const lineHeight = parseFloat(style.lineHeight || "0") || 20;
   const anchor = Math.max(
     0,
     Math.min(sourceEditor.value.length, sourceCompletionState?.replaceStart ?? sourceEditor.selectionStart),
   );
-  const editorRect = sourceEditor.getBoundingClientRect();
-  const anchorPoint = sourceEditorCaretPoint(anchor);
-  const cursorPoint = sourceVisualCaretPoint(sourceEditor.selectionStart) || sourceEditorCaretPoint(sourceEditor.selectionStart);
+  const wrapRect = sourceEditorWrap.getBoundingClientRect();
+  const anchorRect = sourceCaretRectForOffset(anchor);
+  const cursorRect = sourceCaretRectForOffset(sourceEditor.selectionStart);
+  if (!anchorRect || !cursorRect) {
+    return;
+  }
   const maxLeft = Math.max(8, window.innerWidth - 284);
-  const visualAnchorPoint = sourceVisualCaretPoint(anchor) || anchorPoint;
-  const left = editorRect.left + visualAnchorPoint.left;
-  const top = editorRect.top + cursorPoint.top + lineHeight + 6;
+  const left = wrapRect.left + anchorRect.left;
+  const top = wrapRect.top + cursorRect.top + cursorRect.height + 6;
   const availableBelow = Math.max(56, window.innerHeight - top - 8);
   sourceCompletionPopover.style.left = `${Math.max(8, Math.min(maxLeft, left))}px`;
   sourceCompletionPopover.style.top = `${top}px`;

@@ -51,7 +51,6 @@ pub(crate) enum SemanticCompletionSlot {
     Directions,
     DirectionSets,
     Inputs,
-    StandardRuleSteps,
     ModelEffects,
     SceneEffects,
     Emissions,
@@ -304,6 +303,135 @@ move
                 && token.end == move_start + "move".len()
                 && token.kind == SemanticKind::Effect
         }));
+    }
+
+    #[test]
+    fn classifies_user_routine_calls_as_effects() {
+        let source = r#"
+title = routine_call_semantics
+
+puzzle board {
+layers {
+actor = Player Wall
+}
+routine push_player once {
+[ Player ] -> [ Player ]
+}
+on_level_start {
+routine prep once {
+[ Player ] -> [ Player ]
+}
+prep
+}
+rules {
+input [ Player | Wall ] -> push_player
+push_player
+routine local once {
+[ Player ] -> [ Player ]
+}
+local
+}
+levels {
+legend {
+. = empty
+P = Player
+}
+level "start" {
+P
+}
+}
+}
+"#;
+        crate::parse_game2d(source).unwrap();
+        let tokens = semantic_tokens(source);
+        let inline_call_start = source.find("-> push_player").unwrap() + "-> ".len();
+        let bare_call_start = source.find("\npush_player\nroutine").unwrap() + 1;
+        let puzzle_routine_header_start =
+            source.find("routine push_player").unwrap() + "routine ".len();
+        let puzzle_routine_once_start =
+            source.find("routine push_player once").unwrap() + "routine push_player ".len();
+        let on_level_start_routine_header_start =
+            source.find("routine prep once").unwrap() + "routine ".len();
+        let on_level_start_call_start = source.find("\nprep\n").unwrap() + 1;
+        let rules_routine_header_start =
+            source.find("routine local once").unwrap() + "routine ".len();
+        let rules_routine_call_start = source.find("\nlocal\n}").unwrap() + 1;
+
+        assert_semantic_token(
+            source,
+            &tokens,
+            inline_call_start,
+            "push_player",
+            SemanticKind::Effect,
+        );
+        assert_semantic_token(
+            source,
+            &tokens,
+            bare_call_start,
+            "push_player",
+            SemanticKind::Effect,
+        );
+        assert_semantic_token(
+            source,
+            &tokens,
+            puzzle_routine_header_start,
+            "push_player",
+            SemanticKind::Effect,
+        );
+        assert_semantic_token(
+            source,
+            &tokens,
+            puzzle_routine_once_start,
+            "once",
+            SemanticKind::Keyword,
+        );
+        assert_semantic_token(
+            source,
+            &tokens,
+            on_level_start_routine_header_start,
+            "prep",
+            SemanticKind::Effect,
+        );
+        assert_semantic_token(
+            source,
+            &tokens,
+            on_level_start_call_start,
+            "prep",
+            SemanticKind::Effect,
+        );
+        assert_semantic_token(
+            source,
+            &tokens,
+            rules_routine_header_start,
+            "local",
+            SemanticKind::Effect,
+        );
+        assert_semantic_token(
+            source,
+            &tokens,
+            rules_routine_call_start,
+            "local",
+            SemanticKind::Effect,
+        );
+    }
+
+    #[test]
+    fn classifies_teneten_puzzle_scoped_routine_header() {
+        let source = include_str!("../tests/fixtures/teneten.puzzle");
+        let tokens = semantic_tokens(source);
+        let routine_start = source.find("routine Start once").unwrap();
+        let name_start = routine_start + "routine ".len();
+        let once_start = routine_start + "routine Start ".len();
+
+        assert_semantic_token(
+            source,
+            &tokens,
+            routine_start,
+            "routine",
+            SemanticKind::Keyword,
+        );
+        assert_semantic_token(source, &tokens, name_start, "Start", SemanticKind::Effect);
+        assert_semantic_token(source, &tokens, once_start, "once", SemanticKind::Keyword);
     }
 
     #[test]
@@ -755,6 +883,56 @@ shape Block:kind
     }
 
     #[test]
+    fn classifies_sprite_entry_properties_as_visual_keywords() {
+        let source = r#"
+title = sprite_property_semantics
+
+puzzle board {
+layers {
+objects = Box
+}
+sprites {
+sprite {
+selector = Box
+colors = #fff #000
+duration = 120ms
+frame_duration = 60ms
+01
+>
+10
+}
+}
+}
+"#;
+        let tokens = semantic_tokens(source);
+        let selector_start = source.find("selector = Box").unwrap();
+        let duration_start = source.find("duration = 120ms").unwrap();
+        let frame_duration_start = source.find("frame_duration = 60ms").unwrap();
+
+        assert_semantic_token(
+            source,
+            &tokens,
+            selector_start,
+            "selector",
+            SemanticKind::Setting,
+        );
+        assert_semantic_token(
+            source,
+            &tokens,
+            duration_start,
+            "duration",
+            SemanticKind::Setting,
+        );
+        assert_semantic_token(
+            source,
+            &tokens,
+            frame_duration_start,
+            "frame_duration",
+            SemanticKind::Setting,
+        );
+    }
+
+    #[test]
     fn classifies_rule_selectors_from_parser_resolved_surface_tokens() {
         let source = r#"
 title = selector_parser_resolved_surface_tokens
@@ -982,7 +1160,7 @@ level "start" {
 
     #[test]
     fn classifies_teneten_group_rhs_selectors_from_parser_resolved_surface_tokens() {
-        let source = include_str!("../../../games/TPGJ6/TENETEN.puzzle");
+        let source = include_str!("../tests/fixtures/teneten.puzzle");
         let tokens = semantic_tokens(source);
         let groups_start = source.find("groups {").unwrap();
         let object_rhs_start =
@@ -1179,6 +1357,109 @@ level "start" {
             SemanticKind::Object,
         );
         assert_semantic_token(source, &tokens, mark_start, "mark", SemanticKind::Mark);
+    }
+
+    #[test]
+    fn classifies_labeled_tag_selectors_and_rule_effects_from_surface_tokens() {
+        let source = r#"
+title = labeled_tag_selector_semantics
+
+sounds {
+sfx sfx0 { seed = 17551700; type = puzzlescript }
+}
+
+puzzle board {
+tags {
+kind = a b
+}
+map flip kind {
+a -> b
+b -> a
+}
+layers {
+Background
+Background2
+Count:kind Ink:kind
+Obj:kind
+Start
+Computer
+Checked
+}
+rules {
+[ Start Background no Background2 | no Start Background ] -> [ Start Background | Start Background2 ]
+once [ Computer | Obj:kind#1 ] -> [ Computer | Obj:kind#1 ] sfx sfx0
+once [ Obj:kind#1 Ink:flip(kind#1) ] -> [ Obj:flip(kind#1) Ink:flip(kind#1) ] sfx sfx0
+once [ Obj:kind#1 Count:kind#2 no Checked ] -> [ Obj:flip(kind#1) Count:flip(kind#2) Checked ] sfx sfx0
+}
+levels {
+legend {
+. = empty
+X = Obj:a
+}
+level "start" {
+X
+}
+}
+}
+"#;
+        crate::parse_game2d(source).unwrap();
+        let tokens = semantic_tokens(source);
+
+        let background2_start = source.find("Background2 |").unwrap();
+        let first_obj_start = source.find("Obj:kind#1").unwrap();
+        let first_kind_start = first_obj_start + "Obj:".len();
+        let count_start = source.find("Count:kind#2").unwrap();
+        let count_kind_start = count_start + "Count:".len();
+        let map_call_start = source.find("flip(kind#2)").unwrap();
+        let map_arg_start = map_call_start + "flip(".len();
+        let sfx_effect_start = source.find("] sfx sfx0").unwrap() + "] ".len();
+        let sfx_asset_start = sfx_effect_start + "sfx ".len();
+
+        assert_semantic_token(
+            source,
+            &tokens,
+            background2_start,
+            "Background2",
+            SemanticKind::Object,
+        );
+        assert_semantic_token(
+            source,
+            &tokens,
+            first_obj_start,
+            "Obj",
+            SemanticKind::Object,
+        );
+        assert_semantic_token(
+            source,
+            &tokens,
+            first_kind_start,
+            "kind",
+            SemanticKind::Group,
+        );
+        assert_semantic_token(source, &tokens, count_start, "Count", SemanticKind::Object);
+        assert_semantic_token(
+            source,
+            &tokens,
+            count_kind_start,
+            "kind",
+            SemanticKind::Group,
+        );
+        assert_semantic_token(source, &tokens, map_call_start, "flip", SemanticKind::Group);
+        assert_semantic_token(source, &tokens, map_arg_start, "kind", SemanticKind::Group);
+        assert_semantic_token(
+            source,
+            &tokens,
+            sfx_effect_start,
+            "sfx",
+            SemanticKind::Effect,
+        );
+        assert_semantic_token(
+            source,
+            &tokens,
+            sfx_asset_start,
+            "sfx0",
+            SemanticKind::Asset,
+        );
     }
 
     #[test]
@@ -1398,7 +1679,11 @@ level "start" {
             tokens.iter().any(|token| {
                 token.start == start && token.end == start + text.len() && token.kind == kind
             }),
-            "missing {kind:?} token for {text:?} at {start}"
+            "missing {kind:?} token for {text:?} at {start}; matching text tokens: {:?}",
+            tokens
+                .iter()
+                .filter(|token| &source[token.start..token.end] == text)
+                .collect::<Vec<_>>()
         );
     }
 }

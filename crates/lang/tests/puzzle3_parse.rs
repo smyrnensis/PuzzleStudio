@@ -15,7 +15,7 @@ const MICROBAN_BOX: ObjectId = ObjectId(4);
 const MICROBAN_WALL: ObjectId = ObjectId(5);
 
 fn spec_3d_model_source() -> String {
-    let source = include_str!("../../../games/spec_3d.puzzle3");
+    let source = include_str!("fixtures/spec_3d_full.puzzle3");
     [
         source_block(source, "puzzle3 sokoban").as_str(),
         source_block(source, "levels3 microban").as_str(),
