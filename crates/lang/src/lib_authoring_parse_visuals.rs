@@ -242,6 +242,7 @@ struct SpriteEntrySpec {
     offset: VisualSpriteOffset,
     sampling: Option<VisualSpriteSampling>,
     loop_duration_ms: Option<u64>,
+    loop_frame_duration_ms: Option<u64>,
     image_source: Option<String>,
     shape_ref: Option<(String, ValueExpr)>,
     inline_pattern: Option<Vec<String>>,
@@ -258,6 +259,7 @@ impl SpriteEntrySpec {
             offset: VisualSpriteOffset::default(),
             sampling: None,
             loop_duration_ms: None,
+            loop_frame_duration_ms: None,
             image_source: None,
             shape_ref: None,
             inline_pattern: None,
@@ -301,6 +303,14 @@ impl SpriteEntrySpec {
             return Err(parse_error(line, "duplicate sprite duration"));
         }
         self.loop_duration_ms = Some(parse_wait_duration_ms(value, line)?);
+        Ok(())
+    }
+
+    fn set_frame_duration(&mut self, value: &str, line: &str) -> Result<(), DiagnosticReport> {
+        if self.loop_frame_duration_ms.is_some() {
+            return Err(parse_error(line, "duplicate sprite frame_duration"));
+        }
+        self.loop_frame_duration_ms = Some(parse_wait_duration_ms(value, line)?);
         Ok(())
     }
 
@@ -785,9 +795,33 @@ fn apply_sprite_ascii_frames(
     }
     push_sprite_animation_frame(&mut frames, &mut frame, source_line)?;
     validate_sprite_animation_frames(&frames, source_line)?;
-    let duration_ms = entry
-        .loop_duration_ms
-        .ok_or_else(|| parse_error(source_line, "sprite animation missing duration"))?;
+    let frame_count = u64::try_from(frames.len())
+        .map_err(|_| parse_error(source_line, "sprite animation has too many frames"))?;
+    let frame_duration_ms = entry.loop_frame_duration_ms;
+    let duration_ms = match (entry.loop_duration_ms, frame_duration_ms) {
+        (Some(duration_ms), Some(frame_duration_ms)) => {
+            let expected_duration_ms = frame_duration_ms.checked_mul(frame_count).ok_or_else(|| {
+                parse_error(source_line, "sprite frame_duration is too large")
+            })?;
+            if duration_ms != expected_duration_ms {
+                return Err(parse_error(
+                    source_line,
+                    "sprite duration must equal frame_duration multiplied by frame count",
+                ));
+            }
+            duration_ms
+        }
+        (Some(duration_ms), None) => duration_ms,
+        (None, Some(frame_duration_ms)) => frame_duration_ms
+            .checked_mul(frame_count)
+            .ok_or_else(|| parse_error(source_line, "sprite frame_duration is too large"))?,
+        (None, None) => {
+            return Err(parse_error(
+                source_line,
+                "sprite animation missing duration or frame_duration",
+            ));
+        }
+    };
     entry.inline_pattern = Some(frames[0].clone());
     entry.loop_animation = Some(VisualSpriteLoopDef {
         duration_ms,
@@ -833,6 +867,9 @@ fn apply_unbraced_sprite_attachment_body(
             }
             ["duration", "=", value] | ["duration", value] => {
                 entry.set_duration(value, line)?;
+            }
+            ["frame_duration", "=", value] | ["frame_duration", value] => {
+                entry.set_frame_duration(value, line)?;
             }
             ["shape", "="] => {
                 if !frame.is_empty() || has_frame_separator {

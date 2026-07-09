@@ -227,6 +227,7 @@ pub fn translate_puzzlescript_to_canonical(source: &str) -> Result<String, Diagn
     );
     push_rules(
         &mut out,
+        &collision_layers,
         &object_defs,
         &aliases,
         &tags,
@@ -1233,7 +1234,7 @@ fn parse_collision_layers(
             continue;
         }
         layers.push(PsLayerDef::Named {
-            name: format!("layer_{index}"),
+            name: format!("layer{index}"),
             selectors: unique_names(layer_objects),
         });
         index += 1;
@@ -1327,12 +1328,25 @@ fn push_groups(out: &mut Vec<String>, aliases: &[PsAliasDef]) {
     out.push(String::new());
 }
 
+fn ps_move_layer_names(layers: &[PsLayerDef]) -> Vec<String> {
+    layers
+        .iter()
+        .flat_map(|layer| match layer {
+            PsLayerDef::Named { name, selectors } if !selectors.is_empty() => {
+                vec![name.clone()]
+            }
+            PsLayerDef::Each { selectors } => selectors.clone(),
+            PsLayerDef::Named { .. } => Vec::new(),
+        })
+        .collect()
+}
+
 fn push_layers(out: &mut Vec<String>, layers: &[PsLayerDef]) {
     out.push("layers {".to_string());
     for layer in layers {
         match layer {
-            PsLayerDef::Named { selectors, .. } => {
-                out.push(format!("  {}", selectors.join(" ")));
+            PsLayerDef::Named { name, selectors } => {
+                out.push(format!("  {name} = {}", selectors.join(" ")));
             }
             PsLayerDef::Each { selectors } => {
                 out.push(format!("  each {}", selectors.join(" ")));
@@ -1389,7 +1403,8 @@ fn push_sprites(out: &mut Vec<String>, objects: &[PsObjectDef]) {
             };
             let shape_name = ps_copy_shape_name(source);
             let header = if let Some(from) = &sprite.rotate_from {
-                format!("    {shape_name} rotate from {from} {{")
+                let table_name = ps_copy_shape_table_name(source);
+                format!("    {table_name} rotate from {from} {{")
             } else {
                 format!("    {shape_name} {{")
             };
@@ -1408,7 +1423,10 @@ fn push_sprites(out: &mut Vec<String>, objects: &[PsObjectDef]) {
         out.push(format!("    selector = {name}"));
         out.push(format!("    colors = {}", sprite.colors.join(" ")));
         if let Some(shape) = copy_shape {
-            out.push(format!("    shape = {}", ps_copy_shape_name(&shape)));
+            out.push(format!(
+                "    shape = {}",
+                ps_copy_shape_ref_name(&shape, objects)
+            ));
             out.push("  }".to_string());
             out.push(String::new());
             continue;
@@ -1471,6 +1489,31 @@ fn ps_copy_shape_name(source: &str) -> String {
         }
     }
     name
+}
+
+fn ps_copy_shape_table_name(source: &str) -> String {
+    let mut name = String::from(PS_COPY_SHAPE_PREFIX);
+    for ch in source.chars() {
+        if ch == ':' || ch == '_' || ch.is_ascii_alphanumeric() {
+            name.push(ch);
+        } else {
+            name.push('_');
+        }
+    }
+    name
+}
+
+fn ps_copy_shape_ref_name(source: &str, objects: &[PsObjectDef]) -> String {
+    let rotate_from = objects
+        .iter()
+        .find(|object| object.name == source)
+        .and_then(|object| object.sprite.as_ref())
+        .and_then(|sprite| sprite.rotate_from.as_ref());
+    if rotate_from.is_some() {
+        ps_copy_shape_table_name(source)
+    } else {
+        ps_copy_shape_name(source)
+    }
 }
 
 fn push_legend(
@@ -1718,6 +1761,7 @@ fn canonical_condition_row(
 
 fn push_rules(
     out: &mut Vec<String>,
+    collision_layers: &[PsLayerDef],
     objects: &[PsObjectDef],
     aliases: &[PsAliasDef],
     tags: &[PsTagDef],
@@ -1730,6 +1774,7 @@ fn push_rules(
     rule_sections: &PsRuleSections,
 ) {
     let player_selector = ps_player_selector(objects, aliases, tags, maps, case_sensitive);
+    push_ps_move_routine(out, collision_layers);
     push_ps_subroutines(
         out,
         &rule_sections.routines,
@@ -1795,6 +1840,26 @@ fn push_rules(
         sounds,
         "  ",
     );
+    out.push("}".to_string());
+    out.push(String::new());
+}
+
+fn push_ps_move_routine(out: &mut Vec<String>, collision_layers: &[PsLayerDef]) {
+    let move_layers = ps_move_layer_names(collision_layers);
+    if move_layers.is_empty() {
+        return;
+    }
+
+    out.push("routine move {".to_string());
+    out.push("  repeat {".to_string());
+    out.push(format!("    for l in {} {{", move_layers.join(" ")));
+    out.push("      once_all [ > l | | < l ] -> [ l | {__move_collision} | l ]".to_string());
+    out.push("      once_all [ > l | ; | ^ l ] -> [ l | {__move_collision} ; | l ]".to_string());
+    out.push("      [ > l | no l no {__move_collision} ] -> [ | l{no directions} ]".to_string());
+    out.push("      once_all [ > l ] -> [ l ]".to_string());
+    out.push("    }".to_string());
+    out.push("    once_all [ {__move_collision} ] -> [ ]".to_string());
+    out.push("  }".to_string());
     out.push("}".to_string());
     out.push(String::new());
 }

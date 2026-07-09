@@ -1721,6 +1721,12 @@ function renderLevel3dLayerControls() {
   if (level3dLayerTotal) {
     level3dLayerTotal.textContent = String(height);
   }
+  if (level3dAddSliceAboveButton) {
+    level3dAddSliceAboveButton.disabled = level3dPlaytestActive || !level3d.slices.length;
+  }
+  if (level3dAddSliceBelowButton) {
+    level3dAddSliceBelowButton.disabled = level3dPlaytestActive || !level3d.slices.length;
+  }
   if (level3dPreviousLayerButton) {
     level3dPreviousLayerButton.disabled = level3d.slice <= 0;
   }
@@ -1886,6 +1892,8 @@ function renderLevel3dLayerGrid() {
       cell.setAttribute("role", "button");
       cell.setAttribute("aria-label", level3dCellLabel(ch));
       cell.tabIndex = 0;
+      const entry = level3d.palette.find((candidate) => candidate.char === ch);
+      cell.classList.toggle("is-empty", !entry || !entry.objects?.length);
       cell.classList.toggle("is-hover", level3dLayerHover
         && level3dLayerHover.x === x
         && level3dLayerHover.y === y
@@ -2061,6 +2069,30 @@ function setLevel3dLayer(value) {
 
 function moveLevel3dLayer(delta) {
   setLevel3dLayer(level3d.slice + delta);
+}
+
+function insertLevel3dSlice(relative) {
+  if (level3dPlaytestActive || !level3d.slices.length) {
+    syncLevel3dSizeControls();
+    return false;
+  }
+  const before = visualEditSnapshot("level3d");
+  const height = Math.max(1, Math.trunc(Number(level3d.height) || level3d.slices.length || 1));
+  const current = Math.max(0, Math.min(height - 1, Math.trunc(Number(level3d.slice) || 0)));
+  const insertIndex = relative === "below" ? current + 1 : current;
+  level3d.slices.splice(insertIndex, 0, emptyLevel3dSlice(level3dEmptyChar()));
+  level3d.height = height + 1;
+  level3d.slice = insertIndex;
+  syncLevel3dSizeControls();
+  renderLevel3dLayerControls();
+  renderLevel3dLayerBoard();
+  renderLevel3dSourcePreview();
+  level3dStageHit = null;
+  renderLevel3dStageOverlay();
+  refreshLevel3dRuntimePreviews();
+  pushVisualEditUndoSnapshot("level3d", before);
+  setLevel3dActionStatus(`Added slice ${insertIndex + 1}`, "is-ok");
+  return true;
 }
 
 function handleLevel3dSliceHorizontalInput(event) {
@@ -3011,8 +3043,16 @@ function sendLevel3dSnapshotToRuntime() {
 
 function refreshLevel3dRuntimePreviews() {
   level3dStageRendererView = null;
-  sendLevel3dSnapshotToRuntime();
-  sendLevel3dLayerSnapshotToRuntime();
+  if (!level3dRuntimeFrameLoaded || !level3dRuntimeFrame?.contentWindow) {
+    renderLevel3dRuntime();
+  } else {
+    sendLevel3dSnapshotToRuntime();
+  }
+  if (!level3dLayerFrameLoaded || !level3dLayerFrame?.contentWindow) {
+    renderLevel3dLayerRuntime();
+  } else {
+    sendLevel3dLayerSnapshotToRuntime();
+  }
 }
 
 async function startLevel3dPlaytest() {
@@ -6295,6 +6335,8 @@ window.addEventListener("pointercancel", stopLevel3dSliceScrub, true);
 window.addEventListener("blur", () => finishLevel3dSliceScrub());
 level3dPreviousLayerButton?.addEventListener("click", () => moveLevel3dLayer(-1));
 level3dNextLayerButton?.addEventListener("click", () => moveLevel3dLayer(1));
+level3dAddSliceAboveButton?.addEventListener("click", () => insertLevel3dSlice("above"));
+level3dAddSliceBelowButton?.addEventListener("click", () => insertLevel3dSlice("below"));
 level3dLayerBoard?.addEventListener("pointerdown", startLevel3dLayerPaint);
 level3dLayerBoard?.addEventListener("pointermove", continueLevel3dLayerPaint);
 level3dLayerBoard?.addEventListener("pointerup", stopLevel3dLayerPaint);

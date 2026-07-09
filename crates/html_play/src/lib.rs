@@ -513,17 +513,32 @@ levels3 default of board {
         assert!(RENDERER_JS.contains("minimumAnimationFrameCount()"));
         assert!(RENDERER_JS.contains("return 3;"));
         assert!(RENDERER_JS.contains("requestAnimationFrame(draw);"));
-        assert!(RENDERER_JS.contains("const animatedLayers = [];"));
-        assert!(RENDERER_JS.contains("animatedLayers.push({ layer, x, y, animation });"));
-        assert!(RENDERER_JS.contains("for (const item of animatedLayers)"));
+        assert!(RENDERER_JS.contains("canvasDisplayList(scene, frame, unit, animations = [], progress = 1)"));
+        assert!(RENDERER_JS.contains("const staticItems = [];"));
+        assert!(RENDERER_JS.contains("const animatedItems = [];"));
+        assert!(RENDERER_JS.contains("animation: animation && progress < 1 ? animation : null"));
+        assert!(RENDERER_JS.contains("return [...staticItems, ...animatedItems];"));
+        assert!(RENDERER_JS.contains("for (const item of this.canvasDisplayList(scene, frame, unit, animations, progress))"));
+        assert!(RENDERER_JS.contains("paintCanvasItem(context, item, unit, progress = 1, now = performance.now())"));
         assert!(RENDERER_JS.contains(
-            "this.paintCanvasLayer(context, item.layer, item.x, item.y, unit, item.animation, progress);"
+            "this.paintCanvasLayer(context, item.layer, item.x, item.y, unit, item.animation, progress, now);"
         ));
-        assert!(RENDERER_JS.contains("return hasImage ? Math.max(unit, 32) : unit;"));
+        assert_eq!(RENDERER_JS.matches("context.clip();").count(), 1);
+        assert!(!RENDERER_JS.contains("visualSpriteBox("));
+        assert!(RENDERER_JS.contains("canvasMetrics(canvas, scene, frame)"));
+        assert!(RENDERER_JS.contains("canvasPresentationCellUnit(scene)"));
+        assert!(RENDERER_JS.contains("context.setTransform(metrics.scale, 0, 0, metrics.scale, 0, 0);"));
+        assert!(RENDERER_JS.contains("const rect = canvas.getBoundingClientRect();"));
+        assert!(!RENDERER_JS.contains("canvasCellUnit(scene, frame)"));
+        assert!(!RENDERER_JS.contains("spritePatternSize(frameDef)"));
+        assert!(!RENDERER_JS.contains("return hasImage ? Math.max(unit, 32) : unit;"));
         assert!(!RENDERER_JS.contains("leastCommonMultiple("));
         assert!(!RENDERER_JS.contains("maximumCanvasCellUnit()"));
         assert!(!RENDERER_JS.contains("scaledPixelEdge(index, sourceUnits, targetPixels)"));
         assert!(!RENDERER_JS.contains("animationForVisualCompanion"));
+        assert!(RENDERER_JS.contains("requiresCanvasTransformStack(transform)"));
+        assert!(RENDERER_JS.contains("x = Math.round(x + transform.x);"));
+        assert!(RENDERER_JS.contains("y = Math.round(y + transform.y);"));
     }
 
     #[test]
@@ -583,7 +598,8 @@ P
         assert!(RENDERER_JS.contains("visualSpriteFit(definition, unit, sourceSize = null)"));
         assert!(RENDERER_JS.contains("spriteDrawBox(definition)"));
         assert!(RENDERER_JS.contains("solidColor && this.canPaintAsFullCellSolid(definition)"));
-        assert!(RENDERER_JS.contains("unit = Math.max(unit, cellCols, cellRows);"));
+        assert!(!RENDERER_JS.contains("unit = Math.max(unit, cellCols, cellRows);"));
+        assert!(RENDERER_JS.contains("const presentationUnit = this.canvasPresentationCellUnit(scene);"));
         assert!(
             RENDERER_JS.contains(
                 "mode === \"cover\" ? Math.max(scaleX, scaleY) : Math.min(scaleX, scaleY)"
@@ -1923,6 +1939,79 @@ levels default of board {
 
     #[cfg(feature = "solver")]
     #[test]
+    fn solver_compiled_slicer_uses_stage_availability() {
+        let source = r#"
+title = solver_compiled_stage_availability
+
+puzzle board {
+  layers {
+    floor = Goal
+    actor = Player Box
+    item = Battery Door
+  }
+  keys {
+    d ArrowRight -> right
+  }
+  rules {
+    input right [ Player | Box | Goal no actor ] -> [ | Player | Goal Box ]
+    [ Battery ] -> [ Door ]
+  }
+  win_conditions {
+    all Goal on Box
+  }
+}
+
+levels default of board {
+  legend {
+    . = empty
+    P = Player
+    B = Box
+    G = Goal
+    X = Battery
+  }
+  level "start" {
+    PBG.
+  }
+}
+"#;
+
+        let loaded = parse_game(source).unwrap();
+        let object_named = |name: &str| {
+            loaded
+                .object_labels
+                .iter()
+                .find_map(|(id, label)| (label == name).then_some(*id))
+                .unwrap_or_else(|| panic!("missing object {name}"))
+        };
+        let battery = object_named("Battery");
+        let initial = &loaded.levels[0].initial_state;
+        let goal = loaded.goal.as_ref().map(|goal| &goal.expr);
+        let lose = loaded.lose.as_ref().map(|lose| &lose.expr);
+        let (solver_game, slicer) =
+            solver_game_and_state_slicer_for_compiled(loaded.game.clone(), initial, goal, lose);
+        let mut probe = initial.clone();
+        probe.place_object(&solver_game, 3, 0, battery).unwrap();
+
+        let projected = slicer.project_state(&probe);
+
+        assert!(!projected.has_object(&solver_game, 3, 0, battery));
+        let rule_ids = solver_game
+            .rules()
+            .iter()
+            .map(|rule| rule.id)
+            .collect::<Vec<_>>();
+        let battery_rule = loaded
+            .rule_debug_info
+            .iter()
+            .find_map(|(rule, info)| {
+                (info.source_line == "[ Battery ] -> [ Door ]").then_some(*rule)
+            })
+            .expect("battery rule debug info");
+        assert!(!rule_ids.contains(&battery_rule));
+    }
+
+    #[cfg(feature = "solver")]
+    #[test]
     fn solver_task_request_treats_win_command_as_goal_without_win_conditions() {
         let source = r#"
 title = solver_task_win_command
@@ -1998,7 +2087,7 @@ levels default of board {
     #[cfg(feature = "solver")]
     #[test]
     fn solver_task_accepts_locked_win_command_sample() {
-        let source = include_str!("../../../games/TPGJ6/locked.puzzle");
+        let source = include_str!("../tests/fixtures/locked.puzzle");
         let html = export_editor_preview_html_from_source(source, "locked.puzzle", "", "")
             .expect("preview export");
         let export = embedded_puzzle_runtime_export_json(&html);
@@ -2407,6 +2496,226 @@ levels default of board {
 
         assert!(heuristic.score(&middle) < heuristic.score(&initial));
         assert_eq!(heuristic.score(&goal), 0);
+    }
+
+    #[cfg(feature = "solver")]
+    #[test]
+    fn solver_loaded_slicer_uses_stage_availability() {
+        let source = r#"
+title = solver_stage_availability
+
+puzzle board {
+  layers {
+    actor = Player
+    item = Switch Battery Door
+  }
+  rules {
+    [ Switch ] -> [ Door ]
+    [ Battery ] -> [ Door ]
+  }
+  win_conditions {
+    some Door
+  }
+}
+
+levels default of board {
+  legend {
+    . = empty
+    P = Player
+    S = Switch
+    B = Battery
+  }
+  level "start" {
+    PS.
+  }
+}
+"#;
+
+        let loaded = parse_game(source).unwrap();
+        let object_named = |name: &str| {
+            loaded
+                .object_labels
+                .iter()
+                .find_map(|(id, label)| (label == name).then_some(*id))
+                .unwrap_or_else(|| panic!("missing object {name}"))
+        };
+        let switch = object_named("Switch");
+        let battery = object_named("Battery");
+        let solver_game = loaded.solver_game();
+        let initial = &loaded.levels[0].initial_state;
+        let (solver_game, slicer) = solver_game_and_state_slicer_for_loaded(
+            &loaded,
+            solver_game,
+            initial,
+            None,
+            None,
+            None,
+        );
+        let mut probe = initial.clone();
+        probe.place_object(&solver_game, 2, 0, battery).unwrap();
+
+        let projected = slicer.project_state(&probe);
+
+        assert!(projected.has_object(&solver_game, 1, 0, switch));
+        assert!(!projected.has_object(&solver_game, 2, 0, battery));
+        let rule_ids = solver_game
+            .rules()
+            .iter()
+            .map(|rule| rule.id)
+            .collect::<Vec<_>>();
+        assert_eq!(rule_ids.len(), 2);
+        assert!(rule_ids.contains(&RuleId(1)));
+        assert!(rule_ids.contains(&RuleId(3)));
+        assert!(!rule_ids.contains(&RuleId(2)));
+    }
+
+    #[cfg(feature = "solver")]
+    #[test]
+    fn solver_collect_slicer_uses_stage_availability() {
+        let source = r#"
+title = solver_collect_stage_availability
+
+puzzle board {
+  layers {
+    actor = Player
+    item = Switch Battery Door
+  }
+  rules {
+    [ Switch ] -> [ Door ]
+    [ Battery ] -> [ Door ]
+  }
+}
+
+levels default of board {
+  legend {
+    . = empty
+    P = Player
+    S = Switch
+    B = Battery
+  }
+  level "start" {
+    PS.
+  }
+}
+"#;
+
+        let loaded = parse_game(source).unwrap();
+        let object_named = |name: &str| {
+            loaded
+                .object_labels
+                .iter()
+                .find_map(|(id, label)| (label == name).then_some(*id))
+                .unwrap_or_else(|| panic!("missing object {name}"))
+        };
+        let switch = object_named("Switch");
+        let battery = object_named("Battery");
+        let door = object_named("Door");
+        let selector = SolverCollectSelector2::Maximize(GoalValue::InlineConditionValue(
+            ConditionValueKind::CountObjects(vec![door]),
+        ));
+        let initial = &loaded.levels[0].initial_state;
+        let (solver_game, slicer) = solver_game_and_state_slicer_for_collect(
+            &loaded,
+            loaded.solver_game(),
+            initial,
+            &selector,
+            None,
+        );
+        let mut probe = initial.clone();
+        probe.place_object(&solver_game, 2, 0, battery).unwrap();
+
+        let projected = slicer.project_state(&probe);
+
+        assert!(projected.has_object(&solver_game, 1, 0, switch));
+        assert!(!projected.has_object(&solver_game, 2, 0, battery));
+        let rule_ids = solver_game
+            .rules()
+            .iter()
+            .map(|rule| rule.id)
+            .collect::<Vec<_>>();
+        assert_eq!(rule_ids.len(), 2);
+        assert!(rule_ids.contains(&RuleId(1)));
+        assert!(rule_ids.contains(&RuleId(3)));
+        assert!(!rule_ids.contains(&RuleId(2)));
+    }
+
+    #[cfg(feature = "solver")]
+    #[test]
+    fn solver_exact_state_slicer_uses_stage_availability() {
+        let source = r#"
+title = solver_exact_stage_availability
+
+puzzle board {
+  layers {
+    actor = Player
+    item = Battery Door
+  }
+  keys {
+    d ArrowRight -> right
+  }
+  rules {
+    input right [ Player | no actor ] -> [ | Player ]
+    [ Battery ] -> [ Door ]
+  }
+}
+
+levels default of board {
+  legend {
+    . = empty
+    P = Player
+    B = Battery
+  }
+  level "start" {
+    P..
+  }
+}
+"#;
+
+        let loaded = parse_game(source).unwrap();
+        let object_named = |name: &str| {
+            loaded
+                .object_labels
+                .iter()
+                .find_map(|(id, label)| (label == name).then_some(*id))
+                .unwrap_or_else(|| panic!("missing object {name}"))
+        };
+        let player = object_named("Player");
+        let battery = object_named("Battery");
+        let mut legend = HashMap::new();
+        legend.insert('.', Vec::new());
+        legend.insert('P', vec![player]);
+        let (goal, _) = puzzle_lang::parse_level_ascii_state(
+            &loaded.game,
+            &[".P.".to_string()],
+            '.',
+            &legend,
+            loaded.levels[0].initial_state.visible_variables(),
+        )
+        .unwrap();
+        let initial = &loaded.levels[0].initial_state;
+        let (solver_game, slicer) = solver_game_and_state_slicer_for_loaded(
+            &loaded,
+            loaded.solver_game(),
+            initial,
+            Some(&goal),
+            None,
+            None,
+        );
+        let mut probe = initial.clone();
+        probe.place_object(&solver_game, 2, 0, battery).unwrap();
+
+        let projected = slicer.project_state(&probe);
+
+        assert!(projected.has_object(&solver_game, 0, 0, player));
+        assert!(!projected.has_object(&solver_game, 2, 0, battery));
+        let rule_ids = solver_game
+            .rules()
+            .iter()
+            .map(|rule| rule.id)
+            .collect::<Vec<_>>();
+        assert!(rule_ids.contains(&RuleId(1)));
+        assert!(rule_ids.contains(&RuleId(3)));
+        assert!(!rule_ids.contains(&RuleId(2)));
     }
 
     #[cfg(feature = "solver")]
@@ -3640,7 +3949,7 @@ levels main of main {
 
     #[test]
     fn standalone_session_scene_preserves_2d_render_settings_after_goto() {
-        let source = include_str!("../../../games/TPGJ6/locked.puzzle");
+        let source = include_str!("../tests/fixtures/locked.puzzle");
         let mut bridge =
             StandaloneSessionBridge::from_source(source, "games/TPGJ6/locked.puzzle").unwrap();
 
@@ -3660,7 +3969,7 @@ levels main of main {
 
     #[test]
     fn standalone_editor_state_continues_locked_room_level_after_repeated_moves() {
-        let source = include_str!("../../../games/TPGJ6/locked.puzzle");
+        let source = include_str!("../tests/fixtures/locked.puzzle");
         let document =
             puzzle_lang::parse_game_for_path(source, "games/TPGJ6/locked.puzzle").unwrap();
         let loaded = loaded_document_scene_host_loaded_game(&document).unwrap();
@@ -4092,7 +4401,7 @@ rules {
 
     #[test]
     fn standalone_export_supports_single_puzzle3_document() {
-        let source = include_str!("../../../games/spec_3d.puzzle3");
+        let source = include_str!("../../lang/tests/fixtures/spec_3d_full.puzzle3");
         let html = export_html_from_source(
             source,
             "games/spec_3d.puzzle3",

@@ -174,16 +174,20 @@ fn highlight_html(source: &str, document: &SurfaceDocument) -> String {
 
         if let Some(end) = highlight_ranges.raw_range_starting_at(index) {
             if let Some(next_start) =
-                next_raw_embedded_highlight_start(index, end, highlight_ranges)
+                next_raw_embedded_highlight_start(index, end, highlight_ranges, &semantic_ranges)
                 && next_start > index
             {
                 escape_html_into(&mut out, &source[index..next_start]);
                 skip_until(&mut chars, next_start);
                 continue;
             }
-            escape_html_into(&mut out, &source[index..end]);
-            skip_until(&mut chars, end);
-            continue;
+            if next_raw_embedded_highlight_start(index, end, highlight_ranges, &semantic_ranges)
+                != Some(index)
+            {
+                escape_html_into(&mut out, &source[index..end]);
+                skip_until(&mut chars, end);
+                continue;
+            }
         }
 
         if highlight_ranges.is_plain_range(index, index + ch.len_utf8()) {
@@ -583,9 +587,7 @@ fn push_quoted_semantic_inner_span(
     if kind == HighlightKind::String {
         return false;
     }
-    escape_html_into(out, &token[..quote_len]);
-    push_span(out, kind, &token[quote_len..token.len() - quote_len]);
-    escape_html_into(out, &token[token.len() - quote_len..]);
+    push_span(out, kind, token);
     true
 }
 
@@ -618,6 +620,7 @@ fn next_raw_embedded_highlight_start(
     raw_start: usize,
     raw_end: usize,
     ranges: &SurfaceHighlightRanges,
+    semantic_ranges: &[SemanticToken],
 ) -> Option<usize> {
     ranges
         .level_ascii_ranges
@@ -641,6 +644,7 @@ fn next_raw_embedded_highlight_start(
                 .iter()
                 .map(|range| range.start),
         )
+        .chain(semantic_ranges.iter().map(|token| token.start))
         .filter(|start| *start >= raw_start && *start < raw_end)
         .min()
 }
@@ -1218,15 +1222,12 @@ smoothing = false
         }
 
         for (class, text) in [
-            ("syntax-theme", "clean"),
             ("syntax-asset", "clear"),
             ("syntax-string", "puzzlescript"),
             ("syntax-object", "Ink"),
             ("syntax-group", "F"),
             ("syntax-asset", "__ps_shape_Ink_F"),
             ("syntax-literal", "false"),
-            ("syntax-literal", "all_cells"),
-            ("syntax-literal", "occupied_cells"),
             ("syntax-literal", "true"),
             ("syntax-number", "90ms"),
             ("syntax-number", "17551700"),
@@ -1239,6 +1240,18 @@ smoothing = false
                     .html
                     .contains(&format!("<span class=\"{class}\">{text}</span>")),
                 "missing schema-projected {class} highlight for {text}"
+            );
+        }
+        for (class, text) in [
+            ("syntax-theme", "&quot;clean&quot;"),
+            ("syntax-literal", "&quot;all_cells&quot;"),
+            ("syntax-literal", "&quot;occupied_cells&quot;"),
+        ] {
+            assert!(
+                highlighted
+                    .html
+                    .contains(&format!("<span class=\"{class}\">{text}</span>")),
+                "missing schema-projected quoted {class} highlight for {text}"
             );
         }
         assert!(
@@ -1453,6 +1466,7 @@ Background
 sprite {
 selector = Box
 colors = #123456 #abcdef
+duration = 120ms
 shape =
 01
 >
@@ -1500,6 +1514,16 @@ B
             highlighted
                 .html
                 .contains("<span class=\"syntax-arrow\">&gt;</span>")
+        );
+        assert!(
+            highlighted
+                .html
+                .contains("<span class=\"syntax-keyword\">selector</span>")
+        );
+        assert!(
+            highlighted
+                .html
+                .contains("<span class=\"syntax-keyword\">duration</span>")
         );
     }
 

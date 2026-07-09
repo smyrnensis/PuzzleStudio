@@ -283,43 +283,67 @@ class PuzzleRenderer {
   renderCanvas(scene, frame) {
     const canvas = document.createElement("canvas");
     canvas.className = "board-canvas";
-    const unit = this.canvasCellUnit(scene, frame);
-    canvas.width = Math.max(1, frame.width * unit);
-    canvas.height = Math.max(1, frame.height * unit);
+    const presentationUnit = this.canvasPresentationCellUnit(scene);
+    canvas.width = Math.max(1, Math.ceil(frame.width * presentationUnit));
+    canvas.height = Math.max(1, Math.ceil(frame.height * presentationUnit));
     canvas.setAttribute("aria-label", this.boardLabel(scene, frame));
-    const context = canvas.getContext("2d");
-    context.imageSmoothingEnabled = false;
     const animations = this.prepareAnimations(scene.animationEvents || [], frame);
     this.recordTriggerAnimations(scene.animationEvents || [], frame);
     let startedAt = null;
     let animationFrameIndex = 0;
     const duration = this.animationDurationMs(scene);
     const hasLoopAnimations = this.sceneUsesTimeVaryingVisuals(scene, frame);
+    let queuedFrame = false;
     const draw = () => {
+      queuedFrame = false;
       if (!canvas.isConnected) {
+        resizeObserver?.disconnect();
         return;
       }
       if (!this.root.isConnected) {
-        requestAnimationFrame(draw);
+        queueDraw();
         return;
       }
+      const metrics = this.canvasMetrics(canvas, scene, frame);
+      if (!metrics) {
+        queueDraw();
+        return;
+      }
+      if (canvas.width !== metrics.pixelWidth || canvas.height !== metrics.pixelHeight) {
+        canvas.width = metrics.pixelWidth;
+        canvas.height = metrics.pixelHeight;
+      }
+      const context = canvas.getContext("2d");
+      context.setTransform(metrics.scale, 0, 0, metrics.scale, 0, 0);
+      context.imageSmoothingEnabled = false;
       const now = performance.now();
       startedAt ??= performance.now();
       const progress = animations.length
         ? this.animationProgressForFrame(performance.now() - startedAt, duration, animationFrameIndex)
         : 1;
       this.pruneTriggerAnimations(now);
-      context.clearRect(0, 0, canvas.width, canvas.height);
-      this.paintCanvas(context, scene, frame, unit, animations, progress, now);
+      context.clearRect(0, 0, metrics.cssWidth, metrics.cssHeight);
+      this.paintCanvas(context, scene, frame, metrics.unit, animations, progress, now);
       if (animations.length) {
         animationFrameIndex += 1;
       }
       if ((progress < 1 || hasLoopAnimations || this.activeTriggerAnimations.length) && this.root.isConnected) {
-        requestAnimationFrame(draw);
+        queueDraw();
       }
     };
+    const queueDraw = () => {
+      if (queuedFrame) {
+        return;
+      }
+      queuedFrame = true;
+      requestAnimationFrame(draw);
+    };
+    const resizeObserver = typeof ResizeObserver === "function"
+      ? new ResizeObserver(queueDraw)
+      : null;
     this.root.append(canvas);
-    requestAnimationFrame(draw);
+    resizeObserver?.observe(canvas);
+    queueDraw();
   }
 
   paintCanvas(context, scene, frame, unit, animations = [], progress = 1, now = performance.now()) {
@@ -330,26 +354,35 @@ class PuzzleRenderer {
       context.fillStyle = floorColor;
       context.fillRect(0, 0, frame.width * unit, frame.height * unit);
     }
+    context.beginPath();
+    context.rect(0, 0, frame.width * unit, frame.height * unit);
+    context.clip();
 
-    const animatedLayers = [];
+    for (const item of this.canvasDisplayList(scene, frame, unit, animations, progress)) {
+      this.paintCanvasItem(context, item, unit, progress, now);
+    }
+    this.paintTriggerAnimations(context, frame, unit, now);
+    this.paintCanvasGrid(context, scene, frame, unit);
+    context.restore();
+  }
+
+  canvasDisplayList(scene, frame, unit, animations = [], progress = 1) {
+    const staticItems = [];
+    const animatedItems = [];
     for (const cell of this.frameCells(scene, frame)) {
       const x = (cell.x - frame.x) * unit;
       const y = (cell.y - frame.y) * unit;
       for (const layer of this.sortedLayers(cell.layers)) {
         const animation = this.animationForLayer(animations, cell, layer);
-        if (animation) {
-          animatedLayers.push({ layer, x, y, animation });
-          continue;
+        const item = { layer, x, y, animation: animation && progress < 1 ? animation : null };
+        if (item.animation) {
+          animatedItems.push(item);
+        } else {
+          staticItems.push(item);
         }
-        this.paintCanvasLayer(context, layer, x, y, unit, null, progress, now);
       }
     }
-    for (const item of animatedLayers) {
-      this.paintCanvasLayer(context, item.layer, item.x, item.y, unit, item.animation, progress);
-    }
-    this.paintTriggerAnimations(context, frame, unit, now);
-    this.paintCanvasGrid(context, scene, frame, unit);
-    context.restore();
+    return [...staticItems, ...animatedItems];
   }
 
   paintCanvasGrid(context, scene, frame, unit) {
@@ -420,11 +453,20 @@ class PuzzleRenderer {
     }) || null;
   }
 
+  paintCanvasItem(context, item, unit, progress = 1, now = performance.now()) {
+    this.paintCanvasLayer(context, item.layer, item.x, item.y, unit, item.animation, progress, now);
+  }
+
   paintCanvasLayer(context, layer, x, y, unit, animation = null, progress = 1, now = performance.now()) {
     const visualSprite = this.resolveVisualSprite(layer);
     const definition = visualSprite?.definition;
     const transform = this.animationTransform(animation, progress, unit);
-    if (transform) {
+    const usesTransformStack = transform && this.requiresCanvasTransformStack(transform);
+    if (transform && !usesTransformStack) {
+      x = Math.round(x + transform.x);
+      y = Math.round(y + transform.y);
+    }
+    if (usesTransformStack) {
       context.save();
       context.globalAlpha *= transform.alpha;
       context.translate(x + unit / 2 + transform.x, y + unit / 2 + transform.y);
@@ -434,7 +476,7 @@ class PuzzleRenderer {
       y = -unit / 2;
     }
     if (!definition) {
-      if (transform) {
+      if (usesTransformStack) {
         context.restore();
       }
       return;
@@ -448,12 +490,8 @@ class PuzzleRenderer {
           cols: image.naturalWidth,
           rows: image.naturalHeight,
         });
-        const clip = this.visualSpriteBox(frame, unit);
         context.save();
         context.imageSmoothingEnabled = this.spriteSampling(frame) === "smooth";
-        context.beginPath();
-        context.rect(x + clip.x, y + clip.y, clip.width, clip.height);
-        context.clip();
         context.drawImage(
           image,
           x + fit.x,
@@ -463,7 +501,7 @@ class PuzzleRenderer {
         );
         context.restore();
       }
-      if (transform) {
+      if (usesTransformStack) {
         context.restore();
       }
       return;
@@ -473,24 +511,26 @@ class PuzzleRenderer {
     if (solidColor && this.canPaintAsFullCellSolid(frame)) {
       context.fillStyle = solidColor;
       context.fillRect(x, y, unit, unit);
-      if (transform) {
+      if (usesTransformStack) {
         context.restore();
       }
       return;
     }
 
     const fit = this.visualSpriteFit(frame, unit);
-    const clip = this.visualSpriteBox(frame, unit);
     context.save();
     context.imageSmoothingEnabled = this.spriteSampling(frame) === "smooth";
-    context.beginPath();
-    context.rect(x + clip.x, y + clip.y, clip.width, clip.height);
-    context.clip();
     this.paintPattern(context, frame, x + fit.x, y + fit.y, fit.pixelWidth, fit.pixelHeight);
     context.restore();
-    if (transform) {
+    if (usesTransformStack) {
       context.restore();
     }
+  }
+
+  requiresCanvasTransformStack(transform) {
+    return transform.alpha !== 1
+      || transform.scale !== 1
+      || transform.angle !== 0;
   }
 
   animationTransform(animation, progress, unit) {
@@ -615,12 +655,8 @@ class PuzzleRenderer {
           cols: image.naturalWidth,
           rows: image.naturalHeight,
         });
-        const clip = this.visualSpriteBox(definition, unit);
         context.save();
         context.imageSmoothingEnabled = this.spriteSampling(definition) === "smooth";
-        context.beginPath();
-        context.rect(x + clip.x, y + clip.y, clip.width, clip.height);
-        context.clip();
         context.drawImage(image, x + fit.x, y + fit.y, fit.width, fit.height);
         context.restore();
       }
@@ -635,12 +671,8 @@ class PuzzleRenderer {
     }
 
     const fit = this.visualSpriteFit(definition, unit);
-    const clip = this.visualSpriteBox(definition, unit);
     context.save();
     context.imageSmoothingEnabled = this.spriteSampling(definition) === "smooth";
-    context.beginPath();
-    context.rect(x + clip.x, y + clip.y, clip.width, clip.height);
-    context.clip();
     this.paintPattern(context, definition, x + fit.x, y + fit.y, fit.pixelWidth, fit.pixelHeight);
     context.restore();
   }
@@ -806,18 +838,6 @@ class PuzzleRenderer {
     };
   }
 
-  visualSpriteBox(definition, unit) {
-    const box = this.spriteDrawBox(definition);
-    const width = box.cols * unit;
-    const height = box.rows * unit;
-    return {
-      x: (unit - width) / 2 + (Number(definition.offset?.x) || 0) * unit,
-      y: (unit - height) / 2 + (Number(definition.offset?.y) || 0) * unit,
-      width,
-      height,
-    };
-  }
-
   visualSpriteOffset(definition, unit) {
     return {
       x: (Number(definition.offset?.x) || 0) * unit,
@@ -843,26 +863,40 @@ class PuzzleRenderer {
     return image;
   }
 
-  canvasCellUnit(scene, frame) {
-    let unit = 1;
-    let hasImage = false;
-    for (const cell of this.frameCells(scene, frame)) {
-      for (const layer of cell.layers || []) {
-        const definition = this.resolveVisualSprite(layer)?.definition;
-        if (!definition) {
-          continue;
-        }
-        for (const frameDef of this.visualFrames(definition)) {
-          if (frameDef.source) {
-            hasImage = true;
-            continue;
-          }
-          const { cols: cellCols, rows: cellRows } = this.spritePatternSize(frameDef);
-          unit = Math.max(unit, cellCols, cellRows);
-        }
-      }
+  canvasMetrics(canvas, scene, frame) {
+    const rect = canvas.getBoundingClientRect();
+    const presentationUnit = this.canvasPresentationCellUnit(scene);
+    const cssWidth = rect.width > 0 ? rect.width : frame.width * presentationUnit;
+    const cssHeight = rect.height > 0 ? rect.height : frame.height * presentationUnit;
+    if (cssWidth <= 0 || cssHeight <= 0) {
+      return null;
     }
-    return hasImage ? Math.max(unit, 32) : unit;
+    const unit = Math.max(
+      0.0001,
+      Math.min(cssWidth / Math.max(1, frame.width), cssHeight / Math.max(1, frame.height)),
+    );
+    const scale = Math.max(1, Number(window.devicePixelRatio) || 1);
+    return {
+      cssWidth,
+      cssHeight,
+      unit,
+      scale,
+      pixelWidth: Math.max(1, Math.round(cssWidth * scale)),
+      pixelHeight: Math.max(1, Math.round(cssHeight * scale)),
+    };
+  }
+
+  canvasPresentationCellUnit(scene) {
+    const configured = Number(scene?.settings?.render?.cellSize);
+    if (Number.isFinite(configured) && configured > 0) {
+      return configured;
+    }
+    const cssValue = getComputedStyle(this.root).getPropertyValue("--cell-size").trim();
+    const parsed = Number.parseFloat(cssValue);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+    return 56;
   }
 
   canvasFloorColor() {

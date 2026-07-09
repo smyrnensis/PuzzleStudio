@@ -296,7 +296,6 @@ fn line_head_completion_slots(
             vec![
                 SemanticCompletionSlot::Keywords(puzzle_authoring::RULE_STATEMENT_HEAD_KEYWORDS),
                 SemanticCompletionSlot::Routines,
-                SemanticCompletionSlot::StandardRuleSteps,
                 SemanticCompletionSlot::Directions,
                 SemanticCompletionSlot::DirectionSets,
                 SemanticCompletionSlot::ModelEffects,

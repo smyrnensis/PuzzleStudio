@@ -2375,7 +2375,7 @@ scene playing {
     #[test]
     fn sokoban_literally_in_3d_recreates_microban_level_1() {
         let parsed =
-            parse_puzzle3d(include_str!("../games/sokoban_literally_in_3d.puzzle")).unwrap();
+            parse_puzzle3d(include_str!("../fixtures/sokoban_literally_in_3d.puzzle")).unwrap();
         let bundle = parsed.level_bundle.as_ref().expect("level bundle exists");
         let win = parsed.win_condition.as_ref().expect("win condition exists");
 
@@ -2580,7 +2580,7 @@ scene playing {
     #[test]
     fn handmade_3d_sokoban_can_be_authored_from_puzzle_file() {
         let parsed =
-            parse_puzzle3d(include_str!("../games/from_puzzle_sokoban_3d.puzzle")).unwrap();
+            parse_puzzle3d(include_str!("../fixtures/from_puzzle_sokoban_3d.puzzle")).unwrap();
         let bundle = parsed.level_bundle.as_ref().expect("level bundle exists");
         let win = parsed.win_condition.as_ref().expect("win condition exists");
         let sprites = parsed.sprite_set.as_ref().expect("sprite set exists");

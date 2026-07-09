@@ -8,7 +8,9 @@ pub mod puzzle_domain;
 pub mod relevance;
 mod relevance3;
 pub mod report;
+pub mod slice;
 mod stable_hash;
+pub mod stage_availability;
 pub mod state_slicer;
 
 pub use best_first::{
@@ -23,4 +25,6 @@ pub use puzzle_domain::{PuzzleDomain, PuzzleSearchState, PuzzleStateKey};
 pub use puzzle3_domain::{Puzzle3Domain, Puzzle3StateKey};
 pub use relevance::SolverRelevance;
 pub use report::{SearchFailure, SearchOutcome, SearchProgress, SearchStats, Witness};
+pub use slice::SolverSlice;
+pub use stage_availability::SolverStageAvailability;
 pub use state_slicer::{SolverStateProjection, SolverStateSlicer};

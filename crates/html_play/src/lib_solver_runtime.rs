@@ -717,82 +717,114 @@ enum CollectResponse<State, Input> {
 type PuzzleCollectResponse = CollectResponse<State, InputId>;
 
 #[cfg(feature = "solver")]
-fn solver_state_slicer_for_compiled(
-    game: &CompiledGame,
+fn solver_game_and_state_slicer_for_compiled(
+    game: CompiledGame,
+    initial: &State,
     goal: Option<&GoalExpr>,
     lose: Option<&GoalExpr>,
-) -> puzzle_solver::SolverStateSlicer {
+) -> (CompiledGame, puzzle_solver::SolverStateSlicer) {
     let mut roots = BTreeSet::new();
     if let Some(goal) = goal {
-        collect_goal_expr_roots(game, goal, &mut roots);
+        collect_goal_expr_roots(&game, goal, &mut roots);
     }
     if let Some(lose) = lose {
-        collect_goal_expr_roots(game, lose, &mut roots);
+        collect_goal_expr_roots(&game, lose, &mut roots);
     }
-    let relevance = puzzle_solver::SolverRelevance::from_root_objects(game, roots);
-    puzzle_solver::SolverStateSlicer::<ObjectId>::from_relevance(game, &relevance)
+    let relevance = puzzle_solver::SolverRelevance::from_root_objects(&game, roots);
+    if goal.is_none() {
+        let state_slicer =
+            puzzle_solver::SolverStateSlicer::<ObjectId>::from_relevance(&game, &relevance);
+        return (game, state_slicer);
+    }
+    let availability = puzzle_solver::SolverStageAvailability::from_initial_state(&game, initial);
+    let slice =
+        puzzle_solver::SolverSlice::from_relevance_and_availability(&relevance, &availability);
+    let state_slicer =
+        puzzle_solver::SolverStateSlicer::<ObjectId>::from_kept_objects(&game, slice.kept_objects());
+    (slice.project_game(&game), state_slicer)
 }
 
 #[cfg(feature = "solver")]
-fn solver_state_slicer_for_loaded(
+fn solver_game_and_state_slicer_for_loaded(
     loaded: &LoadedGame,
-    solver_game: &CompiledGame,
+    solver_game: CompiledGame,
     initial: &State,
     exact_goal: Option<&State>,
     explicit_goal: Option<&GoalExpr>,
     explicit_lose: Option<&GoalExpr>,
-) -> puzzle_solver::SolverStateSlicer {
+) -> (CompiledGame, puzzle_solver::SolverStateSlicer) {
     let mut roots = BTreeSet::new();
     if let Some(goal) = exact_goal {
         collect_state_objects(initial, &mut roots);
         collect_state_objects(goal, &mut roots);
     } else if let Some(goal) = explicit_goal {
-        collect_goal_expr_roots(solver_game, goal, &mut roots);
+        collect_goal_expr_roots(&solver_game, goal, &mut roots);
     } else if let Some(goal) = &loaded.goal {
-        collect_goal_expr_roots(solver_game, &goal.expr, &mut roots);
+        collect_goal_expr_roots(&solver_game, &goal.expr, &mut roots);
     }
     if let Some(lose) = explicit_lose {
-        collect_goal_expr_roots(solver_game, lose, &mut roots);
+        collect_goal_expr_roots(&solver_game, lose, &mut roots);
     } else if let Some(lose) = &loaded.lose {
-        collect_goal_expr_roots(solver_game, &lose.expr, &mut roots);
+        collect_goal_expr_roots(&solver_game, &lose.expr, &mut roots);
     }
     for term in &loaded.solver_strategy.terms {
         collect_query_expr_roots(&term.value, &mut roots, &mut |kind, roots| {
             puzzle_solver::object_refs::collect_condition_value_roots(kind, roots)
         });
     }
-    let relevance = puzzle_solver::SolverRelevance::from_root_objects(solver_game, roots);
-    puzzle_solver::SolverStateSlicer::<ObjectId>::from_relevance(solver_game, &relevance)
+    let relevance = puzzle_solver::SolverRelevance::from_root_objects(&solver_game, roots);
+    let availability = puzzle_solver::SolverStageAvailability::from_initial_state(
+        &solver_game,
+        initial,
+    );
+    let slice = puzzle_solver::SolverSlice::from_relevance_and_availability(
+        &relevance,
+        &availability,
+    );
+    let state_slicer = puzzle_solver::SolverStateSlicer::<ObjectId>::from_kept_objects(
+        &solver_game,
+        slice.kept_objects(),
+    );
+    (slice.project_game(&solver_game), state_slicer)
 }
 
 #[cfg(feature = "solver")]
-fn solver_state_slicer_for_collect(
+fn solver_game_and_state_slicer_for_collect(
     loaded: &LoadedGame,
-    solver_game: &CompiledGame,
+    solver_game: CompiledGame,
+    initial: &State,
     selector: &SolverCollectSelector2,
     explicit_lose: Option<&GoalExpr>,
-) -> puzzle_solver::SolverStateSlicer {
+) -> (CompiledGame, puzzle_solver::SolverStateSlicer) {
     let mut roots = BTreeSet::new();
     match selector {
         SolverCollectSelector2::Predicate(predicate) => {
-            collect_goal_expr_roots(solver_game, predicate, &mut roots);
+            collect_goal_expr_roots(&solver_game, predicate, &mut roots);
         }
         SolverCollectSelector2::Maximize(value) => {
-            collect_goal_value_roots(solver_game, value, &mut roots);
+            collect_goal_value_roots(&solver_game, value, &mut roots);
         }
     }
     if let Some(lose) = explicit_lose {
-        collect_goal_expr_roots(solver_game, lose, &mut roots);
+        collect_goal_expr_roots(&solver_game, lose, &mut roots);
     } else if let Some(lose) = &loaded.lose {
-        collect_goal_expr_roots(solver_game, &lose.expr, &mut roots);
+        collect_goal_expr_roots(&solver_game, &lose.expr, &mut roots);
     }
     for term in &loaded.solver_strategy.terms {
         collect_query_expr_roots(&term.value, &mut roots, &mut |kind, roots| {
             puzzle_solver::object_refs::collect_condition_value_roots(kind, roots)
         });
     }
-    let relevance = puzzle_solver::SolverRelevance::from_root_objects(solver_game, roots);
-    puzzle_solver::SolverStateSlicer::<ObjectId>::from_relevance(solver_game, &relevance)
+    let relevance = puzzle_solver::SolverRelevance::from_root_objects(&solver_game, roots);
+    let availability =
+        puzzle_solver::SolverStageAvailability::from_initial_state(&solver_game, initial);
+    let slice =
+        puzzle_solver::SolverSlice::from_relevance_and_availability(&relevance, &availability);
+    let state_slicer = puzzle_solver::SolverStateSlicer::<ObjectId>::from_kept_objects(
+        &solver_game,
+        slice.kept_objects(),
+    );
+    (slice.project_game(&solver_game), state_slicer)
 }
 
 #[cfg(feature = "solver")]
@@ -928,10 +960,15 @@ where
         return Err(AppError::Config("no model inputs available".to_string()));
     }
 
-    let game = Arc::new(game.clone());
+    let (solver_game, state_slicer) = solver_game_and_state_slicer_for_compiled(
+        game.clone(),
+        &initial,
+        goal.as_ref(),
+        lose.as_ref(),
+    );
+    let game = Arc::new(solver_game);
     let goal_game = game.clone();
     let goal_for_domain = goal.clone();
-    let state_slicer = solver_state_slicer_for_compiled(&game, goal.as_ref(), lose.as_ref());
     let mut domain = PuzzleDomain::with_state_slicer_and_win_command_goal(
         game.clone(),
         inputs,
@@ -1091,8 +1128,6 @@ where
         return Err(AppError::Config("no model inputs available".to_string()));
     }
 
-    let solver_game = loaded.solver_game();
-    let game = Arc::new(solver_game);
     let goal_game = loaded.clone();
     let explicit_goal = match &goal {
         SolverGoal2::BuiltIn => None,
@@ -1103,14 +1138,15 @@ where
         SolverGoal2::ExactState(goal) => Some(goal),
         SolverGoal2::BuiltIn | SolverGoal2::Expr(_) => None,
     };
-    let state_slicer = solver_state_slicer_for_loaded(
+    let (solver_game, state_slicer) = solver_game_and_state_slicer_for_loaded(
         loaded,
-        &game,
+        loaded.solver_game(),
         &initial,
         exact_goal,
         explicit_goal,
         lose.as_ref(),
     );
+    let game = Arc::new(solver_game);
     let projected_initial = state_slicer.project_state(&initial);
     let projected_exact_goal = exact_goal.map(|goal| state_slicer.project_state(goal));
     let exact_heuristic = projected_exact_goal
@@ -1189,9 +1225,14 @@ where
         ));
     }
 
-    let solver_game = loaded.solver_game();
+    let (solver_game, state_slicer) = solver_game_and_state_slicer_for_collect(
+        loaded,
+        loaded.solver_game(),
+        &initial,
+        &selector,
+        lose.as_ref(),
+    );
     let game = Arc::new(solver_game);
-    let state_slicer = solver_state_slicer_for_collect(loaded, &game, &selector, lose.as_ref());
     let mut domain = PuzzleDomain::with_state_slicer_and_win_command_goal(
         game.clone(),
         inputs,

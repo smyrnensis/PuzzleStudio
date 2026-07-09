@@ -252,7 +252,9 @@ function toolPaneHeaderActionGroups(paneId) {
     ].filter(Boolean);
   }
   if (paneId === "sprite") {
-    return [];
+    return [
+      document.querySelector("#spritePaneHeaderActions"),
+    ].filter(Boolean);
   }
   return [];
 }

@@ -37,7 +37,9 @@ pub fn loaded_document_scene_host_loaded_game(
         .find(|model| matches!(model, LoadedDocumentModel::Puzzle2d { .. }))
     {
         let mut loaded = game.clone();
+        let model_animation = loaded.animation.clone();
         copy_document_shell_to_loaded_game(document, &mut loaded);
+        loaded.animation = model_animation;
         if document.models.len() > 1 {
             loaded.scenes = document
                 .scenes
@@ -4496,7 +4498,7 @@ mod tests {
 
     #[test]
     fn loaded_document_scene_host_loaded_game_uses_shared_3d_level_header_syntax() {
-        let source = include_str!("../../../games/spec_3d.puzzle3");
+        let source = include_str!("../../lang/tests/fixtures/spec_3d_full.puzzle3");
         let document = puzzle_lang::parse_game_for_path(source, "games/spec_3d.puzzle3").unwrap();
         let loaded = loaded_document_scene_host_loaded_game(&document).unwrap();
 
@@ -4506,6 +4508,53 @@ mod tests {
         assert_eq!(loaded.levels.len(), 3);
         assert_eq!(loaded.levels[0].name, "microban 1");
         assert_eq!(loaded.levels[0].pack.as_deref(), Some("microban"));
+    }
+
+    #[test]
+    fn loaded_document_scene_host_preserves_2d_render_animation_settings() {
+        let source = r#"
+title = "Tween Settings"
+
+puzzle board {
+render {
+tween = true
+tween_duration = 75ms
+}
+layers {
+actor = Player
+}
+rules {
+input right [ Player | no Player ] -> [ | Player ]
+}
+}
+
+levels default of board {
+legend {
+. = empty
+P = Player
+}
+level "first" {
+P.
+}
+}
+
+scene playing {
+state {
+board = puzzle board
+}
+rules {
+step board
+}
+layout {
+puzzle board
+}
+}
+"#;
+        let document = puzzle_lang::parse_game_for_path(source, "tween_settings.puzzle").unwrap();
+        let loaded = loaded_document_scene_host_loaded_game(&document).unwrap();
+
+        assert!(loaded.animation.tween.enabled);
+        assert_eq!(loaded.animation.tween.interval_ms, 75);
     }
 
     #[test]

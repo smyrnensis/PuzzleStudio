@@ -561,6 +561,20 @@
             <span id="levelSolveStatus" class="level-solve-status tool-feedback-bar" aria-live="polite">Ready to solve</span>
           </div>
           <div id="spriteBuilder" class="sprite-builder" hidden>
+            <div id="spritePaneHeaderActions" class="source-action-group source-preview-actions sprite-pane-header-actions" role="group" aria-label="Sprite pane actions">
+              <button id="spriteAnimateModeButton" class="source-action-button" type="button" aria-label="Animate sprite" aria-pressed="false" title="Animate sprite">
+                <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-film-icon lucide-film">
+                  <rect width="18" height="18" x="3" y="3" rx="2"></rect>
+                  <path d="M7 3v18"></path>
+                  <path d="M3 7.5h4"></path>
+                  <path d="M3 12h18"></path>
+                  <path d="M3 16.5h4"></path>
+                  <path d="M17 3v18"></path>
+                  <path d="M17 7.5h4"></path>
+                  <path d="M17 16.5h4"></path>
+                </svg>
+              </button>
+            </div>
             <div class="tool-pane-scroll">
               <div class="sprite-controls">
               <div class="sprite-source-fields" aria-label="Sprite ASCII source fields">
@@ -596,6 +610,14 @@
                     </button>
                   </div>
                 </div>
+                <label class="sprite-duration-control sprite-compact-control">
+                  <span>Duration</span>
+                  <input id="spriteAnimationDurationInput" type="number" min="20" max="5000" step="10" value="120" inputmode="numeric" aria-label="Animation loop duration">
+                </label>
+                <label class="sprite-frame-count-control sprite-compact-control">
+                  <span>Frames</span>
+                  <input id="spriteAnimationFrameCountInput" type="number" min="1" max="24" value="1" inputmode="numeric" aria-label="Animation frame count">
+                </label>
                 </div>
                 <div id="spriteShapeField" class="sprite-source-field sprite-shape-field"></div>
               </div>
@@ -703,7 +725,53 @@
                 </span>
               </div>
               <div class="sprite-board-wrap">
-                <div id="spriteBoard" class="sprite-board" aria-label="Editable sprite puzzle"></div>
+                <div class="sprite-animation-toolbar sprite3d-slice-axis-control" role="group" aria-label="Sprite animation frame controls">
+                  <span class="sprite3d-layer-axis-label">Frame</span>
+                  <button id="spriteAnimationPreviousFrameButton" class="sprite-icon-button" type="button" aria-label="Move to previous sprite frame" title="Previous frame">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M15 18l-6-6 6-6"></path>
+                    </svg>
+                  </button>
+                  <span class="sprite3d-slice-value-wrap" title="Adjust frame">
+                    <input id="spriteAnimationFrameInput" class="sprite3d-layer-axis-value" type="number" min="1" max="1" value="1" inputmode="numeric" aria-label="Current sprite animation frame">
+                    <span class="sprite3d-slice-total-separator" aria-hidden="true">/</span>
+                    <span id="spriteAnimationFrameTotal" class="sprite3d-slice-total">1</span>
+                  </span>
+                  <button id="spriteAnimationNextFrameButton" class="sprite-icon-button" type="button" aria-label="Move to next sprite frame" title="Next frame">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M9 18l6-6-6-6"></path>
+                    </svg>
+                  </button>
+                  <button id="spriteAnimationInsertFrameButton" class="sprite-animation-insert-frame-button sprite-icon-button" type="button" aria-label="Add animation frame" aria-pressed="false" title="Add frame" data-tooltip="Add frame">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <rect x="3" y="4" width="18" height="14" rx="2"></rect>
+                      <path d="M8 21h8"></path>
+                      <path d="M12 18v3"></path>
+                      <path d="M12 8v6"></path>
+                      <path d="M9 11h6"></path>
+                    </svg>
+                  </button>
+                  <button id="spriteAnimationRemoveFrameButton" class="sprite-animation-remove-frame-button sprite-icon-button" type="button" aria-label="Remove animation frame" aria-pressed="false" title="Remove frame" data-tooltip="Remove frame">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <rect x="3" y="4" width="18" height="14" rx="2"></rect>
+                      <path d="M8 21h8"></path>
+                      <path d="M12 18v3"></path>
+                      <path d="M9 11h6"></path>
+                    </svg>
+                  </button>
+                </div>
+                <div class="sprite-animation-workspace">
+                  <div id="spriteBoard" class="sprite-board" aria-label="Editable sprite puzzle"></div>
+                  <div class="sprite-animation-sidecar">
+                    <section class="sprite-animation-playback-panel" aria-label="Sprite animation playback preview">
+                      <span class="sprite-animation-playback-view-label">Preview</span>
+                      <div id="spriteAnimationPlaybackView" class="sprite-animation-playback-view" aria-label="Sprite animation playback preview"></div>
+                    </section>
+                    <aside id="spriteAnimationPanel" class="sprite-animation-panel" aria-label="Sprite animation frames">
+                      <div id="spriteAnimationFrameStrip" class="sprite-animation-frame-strip" aria-label="Sprite animation frames"></div>
+                    </aside>
+                  </div>
+                </div>
               </div>
             </div>
             <span id="spriteActionStatus" class="sprite-action-status tool-feedback-bar" aria-live="polite"></span>
@@ -1048,6 +1116,9 @@
                 <div class="level3d-layer-frame-viewport level-board-wrap game-preview-scope">
                   <div class="level3d-layer-toolbar sprite3d-slice-axis-control" role="group" aria-label="3D level slice controls">
                     <span class="sprite3d-layer-axis-label">Slice</span>
+                    <button id="level3dAddSliceAboveButton" class="sprite-icon-button level3d-slice-add-button" type="button" aria-label="Add slice above current 3D level slice" title="Add slice above">
+                      <span aria-hidden="true">+</span>
+                    </button>
                     <button id="level3dPreviousLayerButton" class="sprite-icon-button" type="button" aria-label="Move to lower 3D level slice" title="Lower slice">
                       <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path d="M15 18l-6-6 6-6"></path>
@@ -1062,6 +1133,9 @@
                       <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path d="M9 18l6-6-6-6"></path>
                       </svg>
+                    </button>
+                    <button id="level3dAddSliceBelowButton" class="sprite-icon-button level3d-slice-add-button" type="button" aria-label="Add slice below current 3D level slice" title="Add slice below">
+                      <span aria-hidden="true">+</span>
                     </button>
                   </div>
                   <div class="level-board-editor level3d-layer-board-editor" aria-label="Editable top-down 3D level layer">
@@ -1262,7 +1336,7 @@
       </section>
     </main>
 
-    <script src="renderer.js"></script>
+    <script src="renderer.js?v=board-canvas-visuals"></script>
     <script src="sound-generator.js"></script>
     <script src="editor_dom.js"></script>
     <script src="editor_workspace.js?v=outline-pane-layout"></script>

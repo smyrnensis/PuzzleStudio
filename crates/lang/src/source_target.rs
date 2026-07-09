@@ -63,6 +63,9 @@ pub struct SourceSpriteTarget {
     pub palette_tokens: Vec<String>,
     pub resolved_palette: Vec<SourceSpritePaletteEntry>,
     pub pixel_rows: Vec<String>,
+    pub duration_ms: Option<u64>,
+    pub frame_duration_ms: Option<u64>,
+    pub animation_frames: Vec<Vec<String>>,
     pub shape_ref: Option<String>,
     pub resolved_shape_rows: Vec<String>,
     pub color_assets: Vec<SourceSpriteColorAsset>,
@@ -251,6 +254,18 @@ fn push_source_sprite_json(out: &mut String, sprite: &SourceSpriteTarget) {
     push_source_sprite_palette_json(out, &sprite.resolved_palette);
     out.push(',');
     push_json_string_array(out, "pixelRows", &sprite.pixel_rows);
+    if let Some(duration_ms) = sprite.duration_ms {
+        out.push(',');
+        push_json_number(out, "durationMs", duration_ms as usize);
+    }
+    if let Some(frame_duration_ms) = sprite.frame_duration_ms {
+        out.push(',');
+        push_json_number(out, "frameDurationMs", frame_duration_ms as usize);
+    }
+    if !sprite.animation_frames.is_empty() {
+        out.push_str(",\"animationFrames\":");
+        push_json_string_matrix_value(out, &sprite.animation_frames);
+    }
     out.push_str(",\"shapeRef\":");
     match &sprite.shape_ref {
         Some(shape_ref) => push_json_string_value(out, shape_ref),
@@ -821,6 +836,9 @@ fn source_sprite_target(
     let mut target = SourceSpriteTarget::default();
     let mut visual_target_name = target_name.to_string();
     let mut saw_palette = false;
+    let mut animation_frames = Vec::<Vec<String>>::new();
+    let mut current_frame = Vec::<String>::new();
+    let mut saw_frame_separator = false;
     for raw_line in body.lines() {
         let trimmed = code_trim(raw_line);
         if trimmed.is_empty() {
@@ -830,6 +848,20 @@ fn source_sprite_target(
         match tokens.as_slice() {
             ["selector", "=", selector] | ["selector", selector] => {
                 visual_target_name = (*selector).to_string();
+                target.prelude_rows.push(trimmed.to_string());
+            }
+            ["duration", "=", value] | ["duration", value] => {
+                if target.duration_ms.is_none() {
+                    target.duration_ms =
+                        puzzle_scene::parse_wait_duration_ms_at(value, trimmed).ok();
+                }
+                target.prelude_rows.push(trimmed.to_string());
+            }
+            ["frame_duration", "=", value] | ["frame_duration", value] => {
+                if target.frame_duration_ms.is_none() {
+                    target.frame_duration_ms =
+                        puzzle_scene::parse_wait_duration_ms_at(value, trimmed).ok();
+                }
                 target.prelude_rows.push(trimmed.to_string());
             }
             [
@@ -845,13 +877,17 @@ fn source_sprite_target(
                 target.palette_tokens = colors.iter().map(|token| (*token).to_string()).collect();
                 saw_palette = true;
             }
+            ["shape", "="] => {
+                target.prelude_rows.push(trimmed.to_string());
+            }
             ["shape", "=", shape] | ["shape", shape] => {
                 target.shape_ref = Some((*shape).to_string());
             }
             [shape]
                 if saw_palette
                     && target.shape_ref.is_none()
-                    && target.pixel_rows.is_empty()
+                    && current_frame.is_empty()
+                    && animation_frames.is_empty()
                     && visual_refs.contains_shape(shape) =>
             {
                 target.shape_ref = Some((*shape).to_string());
@@ -860,11 +896,30 @@ fn source_sprite_target(
                 target.palette_tokens = tokens.iter().map(|token| (*token).to_string()).collect();
                 saw_palette = true;
             }
+            [">"] if saw_palette && target.shape_ref.is_none() => {
+                saw_frame_separator = true;
+                if !current_frame.is_empty() {
+                    animation_frames.push(std::mem::take(&mut current_frame));
+                }
+            }
             _ if saw_palette && target.shape_ref.is_none() => {
-                target.pixel_rows.push(trimmed.to_string());
+                current_frame.push(trimmed.to_string());
             }
             _ => {}
         }
+    }
+    if saw_frame_separator {
+        if !current_frame.is_empty() {
+            animation_frames.push(current_frame);
+        }
+        if let Some(first_frame) = animation_frames.first() {
+            target.pixel_rows = first_frame.clone();
+        }
+        if animation_frames.len() >= 2 {
+            target.animation_frames = animation_frames;
+        }
+    } else {
+        target.pixel_rows = current_frame;
     }
     target.color_assets = visual_refs
         .color_assets
@@ -1609,6 +1664,17 @@ fn push_json_string_array_value(out: &mut String, values: &[String]) {
     out.push(']');
 }
 
+fn push_json_string_matrix_value(out: &mut String, values: &[Vec<String>]) {
+    out.push('[');
+    for (index, row) in values.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        push_json_string_array_value(out, row);
+    }
+    out.push(']');
+}
+
 fn push_json_string_value(out: &mut String, value: &str) {
     out.push('"');
     escape_json_string(out, value);
@@ -1988,6 +2054,121 @@ red blue
     }
 
     #[test]
+    fn animation_sprite_rows_resolve_to_sprite_target() {
+        let source = r##"
+sprites {
+Player
+duration 120ms
+#000 #fff
+.0.
+111
+.0.
+>
+111
+.0.
+111
+}
+"##;
+
+        for cursor_text in ["duration 120ms", ".0.", ">", "111\n}"] {
+            let cursor = source.find(cursor_text).unwrap();
+            let target = resolve_source_target(source, cursor).unwrap();
+
+            assert_eq!(target.kind, SourceTargetKind::Sprite);
+            assert_eq!(target.name, "Player");
+            let sprite = target.source_sprite.unwrap();
+            assert_eq!(sprite.duration_ms, Some(120));
+            assert_eq!(
+                sprite.animation_frames,
+                vec![
+                    vec![".0.".to_string(), "111".to_string(), ".0.".to_string()],
+                    vec!["111".to_string(), ".0.".to_string(), "111".to_string()],
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn animation_sprite_frame_duration_resolves_to_sprite_target() {
+        let source = r##"
+sprites {
+Player
+frame_duration 60ms
+#000 #fff
+.0.
+111
+.0.
+>
+111
+.0.
+111
+}
+"##;
+        let cursor = source.find("frame_duration 60ms").unwrap();
+        let target = resolve_source_target(source, cursor).unwrap();
+        let sprite = target.source_sprite.unwrap();
+
+        assert_eq!(sprite.frame_duration_ms, Some(60));
+        assert_eq!(sprite.prelude_rows, vec!["frame_duration 60ms".to_string()]);
+    }
+
+    #[test]
+    fn blank_shape_directive_does_not_become_animation_shape_ref() {
+        let source = r##"
+sprites {
+sprite {
+selector = Background
+colors = #90ee90 #008000
+duration = 500ms
+shape =
+11111
+01111
+11101
+11111
+10111
+>
+10111
+11111
+01111
+11101
+11111
+}
+}
+"##;
+        let cursor = source.find("shape =").unwrap();
+        let target = resolve_source_target(source, cursor).unwrap();
+        let source_sprite = target
+            .source_sprite
+            .as_ref()
+            .expect("source sprite contract");
+
+        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.name, "sprite");
+        assert_eq!(source_sprite.shape_ref, None);
+        assert!(source_sprite.prelude_rows.contains(&"shape =".to_string()));
+        assert_eq!(source_sprite.duration_ms, Some(500));
+        assert_eq!(
+            source_sprite.animation_frames,
+            vec![
+                vec![
+                    "11111".to_string(),
+                    "01111".to_string(),
+                    "11101".to_string(),
+                    "11111".to_string(),
+                    "10111".to_string(),
+                ],
+                vec![
+                    "10111".to_string(),
+                    "11111".to_string(),
+                    "01111".to_string(),
+                    "11101".to_string(),
+                    "11111".to_string(),
+                ],
+            ]
+        );
+    }
+
+    #[test]
     fn user_named_color_row_stays_in_current_sprite_target() {
         let source = r##"
 sprites {
@@ -2096,6 +2277,110 @@ shape =
                 color: "#e94f64".to_string(),
                 linked: true,
             }]
+        );
+    }
+
+    #[test]
+    fn sprite_source_contract_preserves_selector_and_duration_rows() {
+        let source = r##"
+puzzle main {
+layers {
+Player
+}
+
+rules {
+}
+}
+
+levels main of main {
+legend {
+. = empty
+P = Player
+}
+level "one"
+P
+}
+
+sprites {
+palette {
+accent = #e94f64
+}
+Player {
+selector = Player
+duration 120ms
+colors accent
+0
+}
+}
+"##;
+        let cursor = source.find("duration 120ms").unwrap();
+        let target = resolve_source_target(source, cursor).unwrap();
+        let source_sprite = target
+            .source_sprite
+            .as_ref()
+            .expect("source sprite contract");
+
+        assert_eq!(
+            source_sprite.prelude_rows,
+            vec![
+                "selector = Player".to_string(),
+                "duration 120ms".to_string()
+            ]
+        );
+        assert_eq!(source_sprite.duration_ms, Some(120));
+    }
+
+    #[test]
+    fn sprite_source_contract_exposes_animation_frames() {
+        let source = r##"
+puzzle main {
+layers {
+Player
+}
+
+rules {
+}
+}
+
+levels main of main {
+legend {
+. = empty
+P = Player
+}
+level "one"
+P
+}
+
+sprites {
+Player {
+duration 120ms
+#e94f64
+0.
+..
+>
+..
+.0
+}
+}
+"##;
+        let cursor = source.find(">").unwrap();
+        let target = resolve_source_target(source, cursor).unwrap();
+        let source_sprite = target
+            .source_sprite
+            .as_ref()
+            .expect("source sprite contract");
+
+        assert_eq!(source_sprite.duration_ms, Some(120));
+        assert_eq!(
+            source_sprite.pixel_rows,
+            vec!["0.".to_string(), "..".to_string()]
+        );
+        assert_eq!(
+            source_sprite.animation_frames,
+            vec![
+                vec!["0.".to_string(), "..".to_string()],
+                vec!["..".to_string(), ".0".to_string()],
+            ]
         );
     }
 

@@ -10,6 +10,11 @@ Goal
 solid = Player Box Wall
 }
 
+render {
+tween = true
+tween_duration = 3s
+}
+
 win_conditions {
 some [ Goal ]
 no [ Box no Goal ]
@@ -44,30 +49,6 @@ shape =
 11101
 11111
 10111
->
-10111
-11111
-01111
-11101
-11111
->
-11111
-10111
-11111
-01111
-11101
->
-11101
-11111
-10111
-11111
-01111
-> 
-01111
-11101
-11111
-10111
-11111
 }
 
 sprite {
@@ -79,30 +60,6 @@ shape =
 11111
 01000
 11111
-00010
->
-00010
-00010
-11111
-01000
-11111
->
-11111
-00010
-00010
-11111
-01000
->
-01000
-11111
-00010
-00010
-11111
->
-11111
-01000
-11111
-00010
 00010
 }
 
@@ -236,46 +193,3 @@ level "microban_10"
 #.......#..
 #########..
 }
-
-// scene title {
-// layout {
-// title = "Microban"
-// subtitle = "Levels by David Skinner"
-// choice "Continue" -> goto playing
-// choice "New Game" -> {
-// clear_game_progress
-// start playing
-// }
-// choice "Level Select" -> goto level_select
-// }
-// }
-
-// scene playing {
-// layout {
-// row {
-	// title = "Microban"
-	// subtitle = level.label
-// }
-// sokoban
-// }
-
-// keys {
-// q Escape -> goto level_select
-// }
-
-// rules {
-// step sokoban
-// }
-// }
-
-// scene level_select {
-// layout {
-	// text "Select a level"
-	// level_menu
-	// button "Back" -> goto title
-// }
-
-// keys {
-// q Escape -> goto title
-// }
-// }

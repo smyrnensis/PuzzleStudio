@@ -1,6 +1,7 @@
 use crate::relevance::SolverRelevance;
 use puzzle_core::{CompiledGame, ObjectId as ObjectId2, State};
 use puzzle_grid3d::{Game3, ObjectId as ObjectId3, State3};
+use std::collections::BTreeSet;
 
 pub trait SolverStateProjection: Sized {
     type ObjectId: Copy;
@@ -51,13 +52,37 @@ impl<ObjectId: Copy> SolverStateSlicer<ObjectId> {
 }
 
 impl SolverStateSlicer<ObjectId2> {
+    pub fn from_kept_objects(game: &CompiledGame, kept_objects: &BTreeSet<ObjectId2>) -> Self {
+        Self::from_ignored_objects(
+            game.objects()
+                .iter()
+                .filter_map(|object| {
+                    (!object.id.is_empty() && !kept_objects.contains(&object.id))
+                        .then_some(object.id)
+                })
+                .collect(),
+        )
+    }
+
     pub fn from_relevance(game: &CompiledGame, relevance: &SolverRelevance) -> Self {
-        Self::from_ignored_objects(relevance.ignored_objects_for_game(game))
+        Self::from_kept_objects(game, &relevance.relevant_objects().into_iter().collect())
     }
 }
 
 impl SolverStateSlicer<ObjectId3> {
+    pub fn from_kept_objects(game: &Game3, kept_objects: &BTreeSet<ObjectId3>) -> Self {
+        Self::from_ignored_objects(
+            game.objects
+                .iter()
+                .filter_map(|object| {
+                    (!object.id.is_empty() && !kept_objects.contains(&object.id))
+                        .then_some(object.id)
+                })
+                .collect(),
+        )
+    }
+
     pub fn from_relevance(game: &Game3, relevance: &SolverRelevance<ObjectId3>) -> Self {
-        Self::from_ignored_objects(relevance.ignored_objects_for_game(game))
+        Self::from_kept_objects(game, &relevance.relevant_objects().into_iter().collect())
     }
 }

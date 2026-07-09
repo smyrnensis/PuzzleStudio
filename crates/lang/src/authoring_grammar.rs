@@ -895,6 +895,12 @@ const SPRITE_CONFIG_DEFINITIONS: &[DefinitionSpec] = &[
         DefinitionValueSyntax::Duration,
         AuthoringSurfaceRole::Number,
     ),
+    DefinitionSpec::value_role(
+        "frame_duration",
+        DefinitionValueSpec::One,
+        DefinitionValueSyntax::Duration,
+        AuthoringSurfaceRole::Number,
+    ),
     DefinitionSpec::multiline_value_role(
         "shape",
         DefinitionValueSpec::One,
