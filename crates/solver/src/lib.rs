@@ -12,7 +12,9 @@ mod stable_hash;
 pub mod state_slicer;
 
 pub use best_first::{
-    best_first, best_first_with_dead_states, best_first_with_dead_states_and_progress,
+    ScanControl, ScanOutcome, SearchMatch, best_first,
+    best_first_scan_with_dead_states_and_progress, best_first_with_dead_states,
+    best_first_with_dead_states_and_progress,
 };
 pub use bfs::exact_bfs;
 pub use budget::SearchBudget;

@@ -1,7 +1,7 @@
 title = "Microban"
 author = "Levels by David Skinner"
 
-theme puzzlescript
+theme = "puzzlescript"
 
 puzzle sokoban {
 layers {

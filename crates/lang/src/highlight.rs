@@ -104,7 +104,10 @@ pub fn highlight_source_with_outline(source: &str) -> HighlightedSourceWithOutli
     }
 }
 
-fn highlight_source_with_document(source: &str, document: &SurfaceDocument) -> HighlightedSource {
+pub(crate) fn highlight_source_with_document(
+    source: &str,
+    document: &SurfaceDocument,
+) -> HighlightedSource {
     HighlightedSource {
         html: highlight_html(source, document),
         parsed: true,
@@ -162,7 +165,7 @@ fn highlight_html(source: &str, document: &SurfaceDocument) -> String {
         {
             push_span(
                 &mut out,
-                HighlightKind::Operator,
+                HighlightKind::Arrow,
                 &source[range.start..range.end],
             );
             skip_until(&mut chars, range.end);
@@ -917,6 +920,19 @@ mod tests {
     use super::{highlight_source, highlight_source_with_document};
 
     #[test]
+    fn highlight_keeps_surface_projection_lenient_for_unowned_headers() {
+        let highlighted =
+            highlight_source("puzzle board {\n__invalid_unowned_surface_node__ {\n}\n}\n");
+
+        assert!(highlighted.parsed);
+        assert!(
+            highlighted
+                .html
+                .contains("__invalid_unowned_surface_node__")
+        );
+    }
+
+    #[test]
     fn renders_parser_semantic_tokens_without_local_symbol_classification() {
         let source = r#"
 title = highlight_symbols
@@ -1095,10 +1111,10 @@ preset = "clean"
 background_color = #112233
 }
 
+puzzle main {
 render {
+tween = true
 tween_duration = 90ms
-tween {
-duration = 120ms
 }
 }
 
@@ -1177,8 +1193,8 @@ smoothing = false
             "grid",
             "preset",
             "background_color",
+            "tween",
             "tween_duration",
-            "duration",
             "seed",
             "type",
             "queue_during_wait",
@@ -1213,7 +1229,6 @@ smoothing = false
             ("syntax-literal", "occupied_cells"),
             ("syntax-literal", "true"),
             ("syntax-number", "90ms"),
-            ("syntax-number", "120ms"),
             ("syntax-number", "17551700"),
             ("syntax-number", "90"),
             ("syntax-number", "4"),
@@ -1425,6 +1440,16 @@ Box {
 10
 }
 
+Background
+#90ee90 #008000
+500ms
+11111
+01111
+>
+10111
+11111
+>
+
 sprite {
 selector = Box
 colors = #123456 #abcdef
@@ -1465,10 +1490,16 @@ B
         assert!(highlighted.html.contains(
             "syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #abcdef\">1</span>"
         ));
+        assert!(highlighted.html.contains(
+            "syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #90ee90\">0</span>"
+        ));
+        assert!(highlighted.html.contains(
+            "syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #008000\">1</span>"
+        ));
         assert!(
             highlighted
                 .html
-                .contains("<span class=\"syntax-operator\">&gt;</span>")
+                .contains("<span class=\"syntax-arrow\">&gt;</span>")
         );
     }
 

@@ -154,6 +154,7 @@ function endWorkspaceHostMutation() {
 
 async function loadSource() {
   setEditorStatus("Loading", "");
+  await ensureEditorWasmParserLoaded();
   if (editorSeed) {
     workspaceRoot = editorSeed.workspaceRoot || "";
     const embedded = embeddedDocuments();
@@ -624,6 +625,7 @@ async function applyWorkspaceChangedPayload(payload) {
   selectedTreeId = activeFileId;
   selectedFolderId = activeFileId ? findParentFolder(fileTree, activeFileId)?.id || selectedFolderId : selectedFolderId;
   currentDocumentIndex = activeDocumentIndex();
+  await ensureEditorWasmParserLoaded();
   if (activeFileId) {
     const activeAfterReload = activeDocument();
     const preserveActiveView = previousActive
@@ -652,6 +654,13 @@ async function applyWorkspaceChangedPayload(payload) {
   } else {
     setEditorStatus("Reloaded external changes", "is-ok");
   }
+}
+
+async function ensureEditorWasmParserLoaded() {
+  if (typeof loadWasmCompiler !== "function") {
+    throw new Error("Editor WASM parser loader is unavailable.");
+  }
+  await loadWasmCompiler();
 }
 
 function externalReloadErrorMessage(error) {

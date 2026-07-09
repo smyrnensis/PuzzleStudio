@@ -7,7 +7,6 @@ use crate::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AuthoringKind {
     Root,
-    TweenConfig,
     PuzzleRenderConfig,
     PuzzleRenderGridConfig,
     Puzzle3Root,
@@ -451,6 +450,21 @@ pub(crate) struct AuthoringDefinitionRow {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AuthoringBodyCompletion {
+    Rows(AuthoringKind),
+    Children(AuthoringKind),
+    Definitions(AuthoringKind),
+    ContentRows(AuthoringContentKind),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AuthoringDefinitionCompletion {
+    Builtin(DefinitionBuiltinDomain),
+    Color,
+    Object,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AuthoringDefinitionOp {
     Equals,
 }
@@ -635,18 +649,18 @@ const ROOT_DEFINITIONS: &[DefinitionSpec] = &[
         "preset",
     ),
 ];
-const TWEEN_CONFIG_DEFINITIONS: &[DefinitionSpec] = &[DefinitionSpec::value_role(
-    "duration",
-    DefinitionValueSpec::One,
-    DefinitionValueSyntax::Duration,
-    AuthoringSurfaceRole::Number,
-)];
 const PUZZLE_RENDER_CONFIG_DEFINITIONS: &[DefinitionSpec] = &[
     DefinitionSpec::value_role(
         "cell_size",
         DefinitionValueSpec::One,
         DefinitionValueSyntax::Number,
         AuthoringSurfaceRole::Number,
+    ),
+    DefinitionSpec::value_role(
+        "tween",
+        DefinitionValueSpec::One,
+        DefinitionValueSyntax::Boolean,
+        AuthoringSurfaceRole::Literal,
     ),
     DefinitionSpec::value_role(
         "tween_duration",
@@ -902,12 +916,6 @@ const ROOT_HEADER: HeaderSpec = HeaderSpec {
     usage: "root",
     arg_roles: NO_HEADER_ARGS,
 };
-const TWEEN_HEADER: HeaderSpec = HeaderSpec {
-    min_args: 0,
-    max_args: 0,
-    usage: "tween",
-    arg_roles: NO_HEADER_ARGS,
-};
 const PUZZLE_RENDER_HEADER: HeaderSpec = HeaderSpec {
     min_args: 0,
     max_args: 0,
@@ -1029,18 +1037,6 @@ pub(crate) const KIND_SPECS: &[KindSpec] = &[
         keyword_role: AuthoringSurfaceRole::Keyword,
         outline_policy: AuthoringOutlinePolicy::Hidden,
         missing_close_message: "block missing closing brace",
-    },
-    KindSpec {
-        kind: AuthoringKind::TweenConfig,
-        header: TWEEN_HEADER,
-        definitions: TWEEN_CONFIG_DEFINITIONS,
-        rows: NO_ROWS,
-        body: AuthoringBody::None,
-        symbol_exports: NO_SYMBOL_EXPORTS,
-        block_role: None,
-        keyword_role: AuthoringSurfaceRole::Keyword,
-        outline_policy: AuthoringOutlinePolicy::Visible,
-        missing_close_message: "tween block missing closing brace",
     },
     KindSpec {
         kind: AuthoringKind::PuzzleRenderConfig,
@@ -1262,11 +1258,6 @@ pub(crate) const KIND_SPECS: &[KindSpec] = &[
 
 pub(crate) const PLACEMENT_SPECS: &[PlacementSpec] = &[
     PlacementSpec {
-        parent: AuthoringKind::PuzzleRenderConfig,
-        surface: "tween",
-        child: AuthoringKind::TweenConfig,
-    },
-    PlacementSpec {
         parent: AuthoringKind::Root,
         surface: "render",
         child: AuthoringKind::PuzzleRenderConfig,
@@ -1484,6 +1475,47 @@ pub(crate) fn authoring_head_surface(kind: AuthoringKind, surface: &str) -> bool
     placed_authoring_kind(kind, surface).is_some()
         || authoring_definition_spec(kind, surface).is_some()
         || authoring_row_surfaces(kind).contains(&surface)
+}
+
+pub(crate) fn authoring_body_completions(
+    kind: AuthoringKind,
+    include_children: bool,
+) -> Vec<AuthoringBodyCompletion> {
+    let mut completions = Vec::new();
+    if !authoring_row_surfaces(kind).is_empty() {
+        completions.push(AuthoringBodyCompletion::Rows(kind));
+    }
+    if include_children && !authoring_child_surfaces(kind).is_empty() {
+        completions.push(AuthoringBodyCompletion::Children(kind));
+    }
+    if !authoring_definition_surfaces(kind).is_empty() {
+        completions.push(AuthoringBodyCompletion::Definitions(kind));
+    }
+    if let AuthoringBody::Content(content) = authoring_kind_spec(kind).body
+        && !authoring_content_row_surfaces(content).is_empty()
+    {
+        completions.push(AuthoringBodyCompletion::ContentRows(content));
+    }
+    completions
+}
+
+pub(crate) fn authoring_definition_completion(
+    kind: AuthoringKind,
+    key: &str,
+) -> Option<AuthoringDefinitionCompletion> {
+    let spec = authoring_definition_spec(kind, key)?;
+    match definition_value_domain(spec) {
+        DefinitionValueDomain::Builtin(domain) => {
+            Some(AuthoringDefinitionCompletion::Builtin(domain))
+        }
+        DefinitionValueDomain::None => match definition_value_syntax(spec) {
+            DefinitionValueSyntax::Color => Some(AuthoringDefinitionCompletion::Color),
+            _ => match definition_value_role(spec) {
+                Some(AuthoringSurfaceRole::Object) => Some(AuthoringDefinitionCompletion::Object),
+                _ => None,
+            },
+        },
+    }
 }
 
 pub(crate) fn authoring_capture_values<'a>(
@@ -2208,6 +2240,7 @@ fn match_row_parts(parts: &[RowPartSpec], texts: &[&str]) -> Option<Vec<RowPartM
     (index == texts.len()).then_some(matches)
 }
 
+#[cfg(test)]
 pub(crate) fn parse_authoring_definition_body(
     kind: AuthoringKind,
     lines: &[String],
@@ -2472,14 +2505,10 @@ mod tests {
     };
 
     #[test]
-    fn render_tween_placement_is_data_driven() {
+    fn render_placement_is_data_driven() {
         assert_eq!(
             placed_authoring_kind(AuthoringKind::Root, "render"),
             Some(AuthoringKind::PuzzleRenderConfig)
-        );
-        assert_eq!(
-            placed_authoring_kind(AuthoringKind::PuzzleRenderConfig, "tween"),
-            Some(AuthoringKind::TweenConfig)
         );
         assert_eq!(
             placed_authoring_kind(AuthoringKind::PuzzleRenderConfig, "grid"),
@@ -2487,7 +2516,7 @@ mod tests {
         );
         assert_eq!(
             authoring_child_surfaces(AuthoringKind::PuzzleRenderConfig),
-            vec!["tween", "grid"]
+            vec!["grid"]
         );
         assert_eq!(
             placed_authoring_kind(AuthoringKind::Puzzle3Root, "render"),
@@ -2551,6 +2580,7 @@ mod tests {
     fn parses_parent_assignment_definition() {
         let lines = vec![
             "render {".to_string(),
+            "tween = true".to_string(),
             "tween_duration = 90ms".to_string(),
             "}".to_string(),
         ];
@@ -2561,36 +2591,16 @@ mod tests {
             "render block missing closing brace",
         )
         .unwrap();
-        assert_eq!(next_i, 3);
+        assert_eq!(next_i, 4);
         assert_eq!(node.kind, AuthoringKind::PuzzleRenderConfig);
-        assert_eq!(node.definition_rows[0].key, "tween_duration");
+        assert_eq!(node.definition_rows[0].key, "tween");
         assert_eq!(
             node.definition_rows[0].op,
             Some(super::AuthoringDefinitionOp::Equals)
         );
-        assert_eq!(node.definition_rows[0].values, vec!["90ms"]);
-    }
-
-    #[test]
-    fn parses_bare_definition_rows_for_fixed_items() {
-        let lines = vec![
-            "render {".to_string(),
-            "tween {".to_string(),
-            "duration 90ms".to_string(),
-            "}".to_string(),
-            "}".to_string(),
-        ];
-        let (node, next_i) = parse_placed_authoring_node(
-            &lines,
-            0,
-            AuthoringKind::Root,
-            "render block missing closing brace",
-        )
-        .unwrap();
-        assert_eq!(next_i, 5);
-        assert_eq!(node.children[0].definition_rows[0].key, "duration");
-        assert_eq!(node.children[0].definition_rows[0].op, None);
-        assert_eq!(node.children[0].definition_rows[0].values, vec!["90ms"]);
+        assert_eq!(node.definition_rows[0].values, vec!["true"]);
+        assert_eq!(node.definition_rows[1].key, "tween_duration");
+        assert_eq!(node.definition_rows[1].values, vec!["90ms"]);
     }
 
     #[test]

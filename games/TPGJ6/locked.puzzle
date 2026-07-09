@@ -9,12 +9,6 @@ background_color = #454545
 text_color = #c4d0cb
 }
 
-render {
-tween {
-duration = 50ms
-}
-}
-
 sounds {
 sfx push { seed = 301193; type = hit; volume = 0.2 }
 sfx bump { seed = 945816; type = hit; volume = 0.3 }
@@ -35,6 +29,8 @@ num = 0...5
 
 render {
 cell_size = 40
+tween = true
+tween_duration = 50ms
 }
 
 map rotate directions {
@@ -510,7 +506,7 @@ Flag
 
 }
 
-colors {
+palette {
 Gate_color_1 = #921e87
 Gate_color_2 = #c2c3c7
 Count_color = #e5cf29f2

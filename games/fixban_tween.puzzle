@@ -9,13 +9,11 @@ background_color = #444
 
 default_wait_time = 100ms
 
-render {
-tween {
-duration = 30ms
-}
-}
-
 puzzle fixban {
+render {
+tween = true
+tween_duration = 30ms
+}
 tags {
 kind = A B C P
 box_kind = A B C
@@ -114,7 +112,7 @@ next_level
 }
 
 sprites {
-colors {
+palette {
 piece_color:kind {
 A = #4a4
 B = #a4a
@@ -252,7 +250,7 @@ P = Box:P
 2 = Box:B Target:A
 }
 
-level level_1
+level "level_1"
 ########
 ##.a####
 ##A.####
@@ -261,7 +259,7 @@ level level_1
 ##P.####
 ########
 
-level level_2
+level "level_2"
 ########
 #...####
 #P.AA..#
@@ -270,7 +268,7 @@ level level_2
 ##a.a.##
 ########
 
-level level_3
+level "level_3"
 #######
 ###..##
 #.AB..#
@@ -278,7 +276,7 @@ level level_3
 #.ab.##
 #######
 
-level level_4
+level "level_4"
 #########
 ###..####
 ###A.####
@@ -287,7 +285,7 @@ level level_4
 ###..####
 #########
 
-level level_5
+level "level_5"
 #######
 ###..##
 #Pb..##
@@ -296,7 +294,7 @@ level level_5
 #....##
 #######
 
-level level_6
+level "level_6"
 ########
 #......#
 #.2..1.#
@@ -305,7 +303,7 @@ level level_6
 #......#
 ########
 
-level level_7
+level "level_7"
 ########
 #....#p#
 #.B.Bb.#
@@ -313,7 +311,7 @@ level level_7
 ###.b.P#
 ########
 
-level level_8
+level "level_8"
 ########
 ####...#
 #PA.b2.#
@@ -323,6 +321,7 @@ level level_8
 }
 
 scene title {
+layout {
 title = title
 subtitle = subtitle
 choice "Continue" -> goto playing
@@ -331,6 +330,7 @@ clear_game_progress
 start playing
 }
 choice "Level Select" -> goto level_select
+}
 }
 
 scene playing {

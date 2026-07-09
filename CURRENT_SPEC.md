@@ -130,6 +130,7 @@ Control word の境界:
 - lifecycle hook は `on_level_start { ... }` / `on_level_clear { ... }`。puzzle lifecycle point なので scene transition arrow にはしない。
 - `on_level_start` is runtime lifecycle, not parser materialization: raw `Level.initial_state` remains the parsed map, and `puzzle-play` / standalone HTML apply the hook on level entry, restart, and level navigation. Rule emissions such as `message` and `sfx` are collected at that runtime point.
 - level body can add level-local lifecycle behavior. In `level { ... }`, `on_level_start { ... }` / `on_level_clear { ... }` attach statement lists to that level only. As sugar, `message` / `sfx` / `wait` before the first ASCII map row become level-local `on_level_start`, and the same commands after the map become level-local `on_level_clear`.
+- level ASCII layer composition is language lowering, not runtime or renderer behavior. Within one blank-line-delimited region, a single `+` line separates same-size ASCII layers. Empty chars are transparent; non-empty chars are placed into the same compiled state cell. When multiple layer maps place objects into the same cell and core layer, the later map is the upper layer and replaces the earlier object for that core layer before the compiled state is built. Blank lines still split auto-placed regions, so `+` only composes adjacent maps without blank lines.
 - component behavior は component が入力の意味を所有する。`level_menu` は cursor 移動と enter を所有するため、author は `cursor.*` や `emit` を書かない。
 
 例:
@@ -429,7 +430,7 @@ goto playing
 
 `again` command も turn completion で解決される。`again` は入力 event の再送ではなく、同じ puzzle target の rule entrypoint を `InputId(0)` / no semantic input で再実行する follow-up turn request である。follow-up turn は現在の turn が commit され、message / sfx / wait / navigation command の収集が終わった後に予約される。follow-up turn 内で `again` が再び出ると次の no-input turn が予約される。runtime は 1 input から派生する automatic turn を最大 256 回に制限する。standalone HTML での follow-up turn 間隔は top-level `again_interval = 100ms` / `again_interval = 0.1s` で変更でき、PuzzleScript import 互換として `again_interval 0.1` も秒指定として受け入れる。
 
-Top-level `render { tween_duration = 160ms }` は move write に対する tween animation を有効化する。block 形で書く場合は `render { tween { duration = 160ms } }` または `render { tween { duration 160ms } }` とする。`tween` を書くこと自体が有効化であり、`enabled = true` は受け付けない。`duration` 省略時は `250ms`。
+Puzzle/model 内の `render` block では `tween = true` が move write に対する tween animation を有効化する。duration は `tween_duration = 160ms` で指定する。`tween_duration` は `tween = true` と同じ render block にある場合だけ有効で、単独では error。旧 block 形の `tween { duration = ... }` は読まない。`tween = false` は明示的な無効化。
 
 `wait animation` は rules 内の animation boundary。runtime は boundary までの segment で発生した visual animation events の最大 duration だけ continuation を止め、完了後に同じ turn の残りの rules を実行する。animation events が空なら no-op。`sfx` / `message` / `wait 300ms` は別 effect であり、`wait animation` は visual animation だけを待つ。`wait tween` は alias として読めるが canonical は `wait animation`。
 
@@ -788,11 +789,11 @@ solid = actor
 
 単純な sprite は `sprites` 内で block braces なしでも書ける。`Box` の次に `#aaa` だけを書くと cell 全体の単色塗りつぶしになる。これは `Background` の次に `#9CBD0F` だけを書くような PuzzleScript 由来の色だけ sprite でも同じで、ASCII pattern 行は省略できる。続けて `00000` などの ASCII pattern 行を書くと、その行数・列数が sprite pixel grid になる。`pixels_per_cell <w> <h>` を省略した場合は pattern の幅・高さが 1 cell の pixel grid になり、明示した場合は pattern が cell grid より大きくても描画は overflow できる。外部画像は `Box sprites/box.png` のように selector と画像パスを 1 行に書き、パスは game folder からの相対参照として HTML renderer に渡される。
 
-再利用する見た目部品は `colors` と `shapes` sub-block に分ける。`colors` は色名、`shapes` は ASCII shape を所有する。sprite entry の canonical order は `pixels_per_cell` / `offset`、必要なら `rotate from <value>`、色行、ASCII pattern または `shape <ref>`。色行の `colors` keyword は省略できる。色は CSS color として渡されるため、`transparent`、基本 CSS color keywords、`orange`、`grey` / `gray` variants、`brown`、`pink`、alpha 付き hex も使える。`<name>:<tag_set>` は selector binding と同じ tag set を使って variant を解決する。
+再利用する見た目部品は `palette` と `shapes` sub-block に分ける。`palette` は色名、`shapes` は ASCII shape を所有する。sprite entry の canonical order は `pixels_per_cell` / `offset`、必要なら `rotate from <value>`、色行、ASCII pattern または `shape <ref>`。色行の `colors` keyword は省略できる。色は CSS color として渡されるため、`transparent`、基本 CSS color keywords、`orange`、`grey` / `gray` variants、`brown`、`pink`、alpha 付き hex も使える。`<name>:<tag_set>` は selector binding と同じ tag set を使って variant を解決する。
 
 ```txt
 sprites fixban of sokoban {
-colors {
+palette {
 piece:kind {
 A = #4a4
 B = #a4a

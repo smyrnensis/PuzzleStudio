@@ -1306,15 +1306,16 @@ P
 }
 
 #[test]
-fn top_level_render_tween_parses_to_game_settings() {
+fn puzzle_render_tween_parses_to_game_settings() {
     let loaded = parse_game(
         r#"
 title = tween_fixture
-render {
-tween_duration = 90ms
-}
 
 puzzle main {
+render {
+tween = true
+tween_duration = 90ms
+}
 layers {
 actor = Player
 }
@@ -1339,12 +1340,79 @@ P
 }
 
 #[test]
-fn top_level_render_tween_rejects_zero_header_inline_node() {
+fn puzzle_render_tween_duration_requires_enabled_tween() {
+    let error = parse_game(
+        r#"
+title = tween_fixture
+
+puzzle main {
+render {
+tween_duration = 90ms
+}
+layers {
+actor = Player
+}
+rules {
+
+}
+levels {
+legend {
+. = empty
+P = Player
+}
+level "first"
+P
+}
+}
+"#,
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("tween_duration requires tween = true"));
+}
+
+#[test]
+fn puzzle_render_rejects_old_inline_tween_node() {
+    let error = parse_game(
+        r#"
+title = tween_fixture
+
+puzzle main {
+render {
+tween duration 90ms
+}
+layers {
+actor = Player
+}
+rules {
+
+}
+levels {
+legend {
+. = empty
+P = Player
+}
+level "first"
+P
+}
+}
+"#,
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("tween must have one value"));
+}
+
+#[test]
+fn top_level_render_tween_is_not_shell_syntax() {
     let error = parse_game(
         r#"
 title = tween_fixture
 render {
-tween duration 90ms
+tween = true
+tween_duration = 90ms
 }
 
 puzzle main {
@@ -1368,7 +1436,7 @@ P
     .unwrap_err()
     .to_string();
 
-    assert!(error.contains("tween must use block form"));
+    assert!(error.contains("unknown top-level directive `render`"));
 }
 
 #[test]
@@ -1408,16 +1476,16 @@ P
 }
 
 #[test]
-fn render_tween_rejects_old_enabled_assignment() {
+fn render_tween_rejects_old_block_form() {
     let source = r#"
 title = tween_fixture
-render {
-tween {
-enabled = true
-}
-}
 
 puzzle main {
+render {
+tween {
+duration = 80ms
+}
+}
 layers {
 actor = Player
 }
@@ -1435,7 +1503,8 @@ P
 }
 "#;
 
-    assert!(parse_game(source).is_err());
+    let error = parse_game(source).unwrap_err().to_string();
+    assert!(error.contains("tween must have one value"));
 }
 
 #[test]
@@ -1443,13 +1512,12 @@ fn render_tween_adds_move_rule_animation_without_sounds() {
     let loaded = parse_game(
         r#"
 title = tween_animation_fixture
-render {
-tween {
-duration = 80ms
-}
-}
 
 puzzle main {
+render {
+tween = true
+tween_duration = 80ms
+}
 layers {
 actor = Player
 }
@@ -6039,7 +6107,7 @@ rules {
 }
 
 sprites {
-colors {
+palette {
 white = #ffffff
 black = #000000
 }
@@ -6125,7 +6193,7 @@ P
 }
 
 sprites {
-colors {
+palette {
 white = #ffffff
 }
 sprite {
@@ -6291,7 +6359,7 @@ rules {
 }
 
 sprites {
-colors {
+palette {
 white = #ffffff
 }
 sprite {
@@ -6760,7 +6828,7 @@ legend {
 . = empty
 }
 sprites {
-colors {
+palette {
 piece_color:kind {
 A = #4a4
 B = #a4a
@@ -7278,7 +7346,7 @@ legend {
 . = empty
 }
 sprites {
-colors {
+palette {
 piece_color:kind {
 A = #4a4
 B = #a4a
@@ -7715,7 +7783,7 @@ legend {
 . = empty
 }
 sprites {
-colors {
+palette {
 Gate_color_1 = #111111
 Gate_color_2 = #222222
 }
@@ -8028,6 +8096,131 @@ B
 }
 
 #[test]
+fn unbraced_sprite_attachment_colors_property_does_not_enter_palette() {
+    let source = r##"
+title = unbraced_sprite_colors_property
+
+puzzle default {
+layers {
+__legacy_layer_0 = Player
+}
+sprites {
+shapes {
+player_shape {
+00
+11
+}
+}
+Player
+colors #fff #000
+shape player_shape
+}
+rules {
+
+}
+levels {
+legend {
+. = empty
+P = Player
+}
+level "start"
+P
+}
+}
+"##;
+    let loaded = parse_game(source).unwrap();
+    let sprite = loaded
+        .visuals
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "Player")
+        .unwrap();
+    match &sprite.kind {
+        VisualSpriteKind::Ascii { pattern, colors } => {
+            assert_eq!(pattern.as_slice(), ["00".to_string(), "11".to_string()]);
+            assert_eq!(colors[0].color, "#fff");
+            assert_eq!(colors[1].color, "#000");
+            assert!(!colors.iter().any(|color| color.color == "colors"));
+        }
+        _ => panic!("Player should be an ascii sprite"),
+    }
+}
+
+#[test]
+fn puzzle_sprites_accept_unbraced_shorthand_animation_body() {
+    let source = r##"
+title = shorthand_animation_sprite
+
+puzzle default {
+layers {
+__legacy_layer_0 = Background
+}
+legend {
+. = empty
+B = Background
+}
+sprites {
+Background
+#90ee90 #008000
+500ms
+11111
+01111
+11101
+11111
+10111
+>
+10111
+11111
+01111
+11101
+11111
+>
+11111
+10111
+11111
+01111
+11101
+}
+rules {
+}
+levels {
+level "start"
+B
+}
+}
+"##;
+    let loaded = parse_game(source).unwrap();
+    let sprite = loaded
+        .visuals
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "Background")
+        .unwrap();
+    assert_eq!(
+        sprite
+            .loop_animation
+            .as_ref()
+            .map(|animation| animation.duration_ms),
+        Some(500)
+    );
+    assert_eq!(
+        sprite
+            .loop_animation
+            .as_ref()
+            .map(|animation| animation.frames.len()),
+        Some(3)
+    );
+    match &sprite.kind {
+        VisualSpriteKind::Ascii { pattern, colors } => {
+            assert_eq!(pattern[0], "11111");
+            assert_eq!(colors[0].color, "#90ee90");
+            assert_eq!(colors[1].color, "#008000");
+        }
+        _ => panic!("Background should be an ascii sprite"),
+    }
+}
+
+#[test]
 fn puzzle_sprites_accept_unbraced_shape_table_values_and_bare_refs() {
     let source = r##"
 title = unbraced_shape_table_values
@@ -8045,7 +8238,7 @@ legend {
 . = empty
 }
 sprites {
-colors {
+palette {
 piece_color:kind {
 A = #4a4
 B = #a4a
@@ -8196,7 +8389,7 @@ box_shape
 010
 }
 
-colors {
+palette {
 box_color = #eee
 }
 
@@ -8419,7 +8612,7 @@ legend {
 . = empty
 }
 sprites {
-colors {
+palette {
 shared = #123456
 tagged:kind {
 A = #abcdef
@@ -9045,7 +9238,44 @@ P
 "##;
     let error = parse_game(source).unwrap_err().to_string();
     assert!(
-        error.contains("palettes block was removed; write sprite colors rows directly"),
+        error.contains("palettes block was renamed to palette"),
+        "{error}"
+    );
+}
+
+#[test]
+fn puzzle_sprites_reject_legacy_colors_block_for_palette_defs() {
+    let source = r##"
+title = legacy_colors_block
+
+puzzle default {
+layers {
+__legacy_layer_0 = Player
+}
+legend P = Player
+legend {
+. = empty
+}
+sprites {
+colors {
+player = #e94f64
+}
+Player
+colors #e94f64
+0
+}
+rules {
+
+}
+levels {
+level "start"
+P
+}
+}
+"##;
+    let error = parse_game(source).unwrap_err().to_string();
+    assert!(
+        error.contains("colors block was renamed to palette; sprite color rows still use colors"),
         "{error}"
     );
 }
@@ -15641,6 +15871,183 @@ P{
 }
 
 #[test]
+fn level_ascii_layers_overlay_empty_cells_as_transparent() {
+    let source = r#"
+title = level_ascii_layers
+
+puzzle default {
+layers {
+terrain = Floor
+actor = Player
+}
+empty .
+legend f = Floor
+legend P = Player
+rules {
+}
+levels {
+level "start" {
+fff
+fff
+fff
++
+...
+.P.
+...
+}
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let floor = object_named(&loaded, "Floor");
+    let player = object_named(&loaded, "Player");
+    let initial = &loaded.levels[0].initial_state;
+
+    assert_eq!(initial.width, 3);
+    assert_eq!(initial.height, 3);
+    assert!(initial.has_object(&loaded.game, 1, 1, floor));
+    assert!(initial.has_object(&loaded.game, 1, 1, player));
+    assert!(initial.has_object(&loaded.game, 0, 0, floor));
+    assert!(!initial.has_object(&loaded.game, 0, 0, player));
+}
+
+#[test]
+fn level_ascii_layers_reject_different_sizes_in_same_region() {
+    let source = r#"
+title = level_ascii_layer_size
+
+puzzle default {
+layers {
+actor = Player
+}
+empty .
+legend P = Player
+rules {
+}
+levels {
+level "start" {
+PP
++
+P
+}
+}
+}
+"#;
+    let error = parse_game(source).unwrap_err().to_string();
+
+    assert!(error.contains("level ASCII layers in the same region must have the same size"));
+}
+
+#[test]
+fn level_ascii_layers_reject_separator_without_following_layer() {
+    let source = r#"
+title = level_ascii_layer_separator
+
+puzzle default {
+layers {
+actor = Player
+}
+empty .
+legend P = Player
+rules {
+}
+levels {
+level "start" {
+P
++
+}
+}
+}
+"#;
+    let error = parse_game(source).unwrap_err().to_string();
+
+    assert!(error.contains("level layer separator requires a following ASCII layer"));
+}
+
+#[test]
+fn level_ascii_layers_preserve_blank_line_region_split() {
+    let source = r#"
+title = level_ascii_layer_regions
+
+puzzle default {
+layers {
+terrain = Floor
+actor = Player Box
+}
+empty .
+legend f = Floor
+legend P = Player
+legend B = Box
+rules {
+}
+levels {
+level "start" {
+ff
+ff
++
+P.
+..
+
+ff
+ff
++
+.B
+..
+}
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let floor = object_named(&loaded, "Floor");
+    let player = object_named(&loaded, "Player");
+    let box_object = object_named(&loaded, "Box");
+    let stage = &loaded.levels[0];
+
+    assert_eq!(stage.initial_state.width, 6);
+    assert_eq!(stage.initial_state.height, 2);
+    assert_eq!(stage.regions.len(), 2);
+    assert!(stage.initial_state.has_object(&loaded.game, 0, 0, floor));
+    assert!(stage.initial_state.has_object(&loaded.game, 0, 0, player));
+    assert!(
+        stage
+            .initial_state
+            .has_object(&loaded.game, 5, 0, box_object)
+    );
+}
+
+#[test]
+fn level_ascii_layers_prefer_upper_object_on_same_core_layer() {
+    let source = r#"
+title = level_ascii_layer_priority
+
+puzzle default {
+layers {
+actor = Player Box
+}
+empty .
+legend P = Player
+legend B = Box
+rules {
+}
+levels {
+level "start" {
+P
++
+B
+}
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let player = object_named(&loaded, "Player");
+    let box_object = object_named(&loaded, "Box");
+    let initial = &loaded.levels[0].initial_state;
+
+    assert!(!initial.has_object(&loaded.game, 0, 0, player));
+    assert!(initial.has_object(&loaded.game, 0, 0, box_object));
+}
+
+#[test]
 fn puzzle_view_parses_flickscreen_viewport_controls() {
     let source = r#"
 title = frame_view
@@ -17659,17 +18066,15 @@ fn parse_game2d_document_owns_scene_blocks() {
     let source = r#"
 title = "Two Dee"
 
-render {
-  tween {
-    duration 30ms
-  }
-}
-
 sounds {
   sfx push { seed = push01; type = hit }
 }
 
 puzzle default {
+render {
+  tween = true
+  tween_duration = 30ms
+}
 layers {
 __legacy_layer_0 = Player
 }

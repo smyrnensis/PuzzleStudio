@@ -593,6 +593,12 @@ fn solver_task_initial_display_state_json_inner(request_json: &str) -> Result<St
             let compiled_play = required_json_value(rules, "compiledPlay")?;
             let engine =
                 puzzle_core_wasm::decode_compiled_play(compiled_play).map_err(AppError::Config)?;
+            if required_json_string(target_state, "kind")? == "level-ascii" {
+                return Err(AppError::Config(
+                    "compiled solver task display materialization does not support level-ascii target states"
+                        .to_string(),
+                ));
+            }
             let mut state = puzzle_core_wasm::decode_state(engine.game(), &state_data)
                 .map_err(AppError::Config)?;
             if solver_request_materializes_level_start(target_state)? {
@@ -650,6 +656,11 @@ where
             let engine =
                 puzzle_core_wasm::decode_compiled_play(compiled_play).map_err(AppError::Config)?;
             validate_compiled_solver_input_labels(engine.game(), &input_labels)?;
+            if required_json_string(target_state, "kind")? == "level-ascii" {
+                return Err(AppError::Config(
+                    "compiled solver task does not support level-ascii target states".to_string(),
+                ));
+            }
             let mut state = puzzle_core_wasm::decode_state(engine.game(), &state_data)
                 .map_err(AppError::Config)?;
             if solver_request_materializes_level_start(target_state)? {
@@ -675,6 +686,7 @@ where
                 &engine,
                 decode_optional_goal_expr(rules.get("goal"))?,
                 decode_optional_goal_expr(rules.get("lose"))?,
+                optional_json_bool(request.get("acceptWinCommand"), true)?,
                 state,
                 solver_request_budget(max_depth, max_nodes, max_ms)?,
                 Some(&mut progress_json),
@@ -697,6 +709,7 @@ fn solve_request_json_inner(request_json: &str) -> Result<String, AppError> {
     let request: serde_json::Value = serde_json::from_str(request_json)
         .map_err(|error| AppError::Config(format!("solver request JSON is invalid: {error}")))?;
     let request = json_object(&request, "solver request")?;
+    let task = decode_solver_request_task(request.get("task"))?;
     let source = required_json_string(request, "source")?;
     let puzzle_path = required_json_string(request, "puzzlePath")?;
     let model_kind = required_json_string(request, "modelKind")?;
@@ -706,6 +719,10 @@ fn solve_request_json_inner(request_json: &str) -> Result<String, AppError> {
     let max_depth = json_u32_value(request.get("maxDepth"), "maxDepth")?;
     let max_nodes = json_usize_value(request.get("maxNodes"), "maxNodes")?;
     let max_ms = json_u64_value(request.get("maxMs"), "maxMs")?;
+    let goal = request.get("goal");
+    let collect = request.get("collect");
+    let lose = decode_optional_goal_expr(request.get("lose"))?;
+    let accept_win_command = optional_json_bool(request.get("acceptWinCommand"), true)?;
 
     puzzle_lang::validate_source_profile_for_path(source, puzzle_path)?;
     match model_kind {
@@ -718,6 +735,11 @@ fn solve_request_json_inner(request_json: &str) -> Result<String, AppError> {
             max_depth,
             max_nodes,
             max_ms,
+            task,
+            goal,
+            collect,
+            lose,
+            accept_win_command,
         ),
         "3d" => solve_request3_json_from_source_inner(
             source,
@@ -727,6 +749,9 @@ fn solve_request_json_inner(request_json: &str) -> Result<String, AppError> {
             max_depth,
             max_nodes,
             max_ms,
+            task,
+            decode_optional_goal_expr(goal)?,
+            lose,
         ),
         other => Err(AppError::Config(format!(
             "unsupported solver request modelKind {other:?}"
@@ -744,17 +769,63 @@ fn solve_request2_json_from_source_inner(
     max_depth: u32,
     max_nodes: usize,
     max_ms: u64,
+    task: SolverRequestTask,
+    goal: Option<&serde_json::Value>,
+    collect: Option<&serde_json::Value>,
+    lose: Option<GoalExpr>,
+    accept_win_command: bool,
 ) -> Result<String, AppError> {
+    if matches!(task, SolverRequestTask::Reachability) && goal.is_none() {
+        return Err(AppError::Config(
+            "solver reachability requests require an explicit goal".to_string(),
+        ));
+    }
+    if matches!(task, SolverRequestTask::Collect) && goal.is_some() {
+        return Err(AppError::Config(
+            "solver collect requests use collect, not goal".to_string(),
+        ));
+    }
     let loaded = parse_game(source)?;
     let level_index = validate_solver_request_level2d(&loaded, target)?;
-    let mut state = state_from_json(&loaded, state_json)?;
+    let mut state = state2_from_solver_target(&loaded, target_state, level_index, state_json)?;
     if solver_request_materializes_level_start(target_state)? {
         state = materialize_level_start_state(&loaded, state, level_index)?;
     }
     let budget = solver_request_budget(max_depth, max_nodes, max_ms)?;
-    let response = solve_current_state_with_budget(&loaded, state, budget)?;
+    if matches!(task, SolverRequestTask::Collect) {
+        let (selector, max_results) = decode_solver_collect2(collect)?;
+        let response = solve_current_state_collect_with_budget_inner(
+            &loaded,
+            selector,
+            lose,
+            accept_win_command,
+            state,
+            budget,
+            max_results,
+            None::<fn(&State, SearchProgress)>,
+        )?;
+        let mut out = String::new();
+        push_collect_response(&mut out, &loaded, &response);
+        return Ok(out);
+    }
+    let solver_goal = decode_optional_solver_goal2(&loaded, goal, level_index)?;
+    let response = solve_current_state_with_goal_with_budget_inner(
+        &loaded,
+        solver_goal,
+        lose,
+        accept_win_command,
+        state,
+        budget,
+        None::<fn(&State, SearchProgress)>,
+    )?;
     let mut out = String::new();
-    push_solution_response(&mut out, &loaded, &response);
+    match task {
+        SolverRequestTask::Solve => push_solution_response(&mut out, &loaded, &response),
+        SolverRequestTask::Reachability => {
+            push_reachability_response(&mut out, &loaded, &response)
+        }
+        SolverRequestTask::Collect => unreachable!("collect task returned before solve response"),
+    }
     Ok(out)
 }
 
@@ -767,7 +838,26 @@ fn solve_request3_json_from_source_inner(
     max_depth: u32,
     max_nodes: usize,
     max_ms: u64,
+    task: SolverRequestTask,
+    goal: Option<GoalExpr>,
+    lose: Option<GoalExpr>,
 ) -> Result<String, AppError> {
+    if matches!(task, SolverRequestTask::Reachability) {
+        return Err(AppError::Config(
+            "3D source solver request does not support reachability tasks yet".to_string(),
+        ));
+    }
+    if matches!(task, SolverRequestTask::Collect) {
+        return Err(AppError::Config(
+            "3D source solver request does not support collect tasks yet".to_string(),
+        ));
+    }
+    if goal.is_some() || lose.is_some() {
+        return Err(AppError::Config(
+            "3D source solver request does not support explicit goal or lose conditions yet"
+                .to_string(),
+        ));
+    }
     let parsed = parse_puzzle3d_for_solver(source)?;
     validate_solver_request_level3d(&parsed, target)?;
     let mut state = state3_from_json(&parsed.game, state_json)?;
@@ -779,6 +869,33 @@ fn solve_request3_json_from_source_inner(
     let mut out = String::new();
     push_solution_response3(&mut out, &parsed, &response);
     Ok(out)
+}
+
+#[cfg(feature = "solver")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SolverRequestTask {
+    Solve,
+    Reachability,
+    Collect,
+}
+
+#[cfg(feature = "solver")]
+fn decode_solver_request_task(
+    value: Option<&serde_json::Value>,
+) -> Result<SolverRequestTask, AppError> {
+    let Some(value) = value else {
+        return Ok(SolverRequestTask::Solve);
+    };
+    match value.as_str().ok_or_else(|| {
+        AppError::Config("solver request task must be a string".to_string())
+    })? {
+        "solve" => Ok(SolverRequestTask::Solve),
+        "reachability" => Ok(SolverRequestTask::Reachability),
+        "collect" => Ok(SolverRequestTask::Collect),
+        other => Err(AppError::Config(format!(
+            "unsupported solver request task {other:?}"
+        ))),
+    }
 }
 
 #[cfg(feature = "solver")]
@@ -867,6 +984,67 @@ fn decode_optional_goal_expr(
     let goal = json_object(value, "solver task goal")?;
     let expr = required_json_value(goal, "expr")?;
     decode_goal_expr(expr).map(Some)
+}
+
+#[cfg(feature = "solver")]
+fn decode_optional_solver_goal2(
+    loaded: &LoadedGame,
+    value: Option<&serde_json::Value>,
+    level_index: usize,
+) -> Result<SolverGoal2, AppError> {
+    let Some(value) = value else {
+        return Ok(SolverGoal2::BuiltIn);
+    };
+    if value.is_null() {
+        return Ok(SolverGoal2::BuiltIn);
+    }
+    let goal = json_object(value, "solver request goal")?;
+    if let Some(expr) = goal.get("expr") {
+        return decode_goal_expr(expr).map(SolverGoal2::Expr);
+    }
+    match required_json_string(goal, "kind")? {
+        "exact-state" => {
+            let state_spec = required_json_object(goal, "state")?;
+            state2_from_solver_state_spec(loaded, state_spec, level_index).map(SolverGoal2::ExactState)
+        }
+        other => Err(AppError::Config(format!(
+            "unsupported solver goal kind {other:?}"
+        ))),
+    }
+}
+
+#[cfg(feature = "solver")]
+fn decode_solver_collect2(
+    value: Option<&serde_json::Value>,
+) -> Result<(SolverCollectSelector2, usize), AppError> {
+    let value = value.ok_or_else(|| {
+        AppError::Config("solver collect requests require collect".to_string())
+    })?;
+    let collect = json_object(value, "solver collect")?;
+    let max_results = json_usize_value(collect.get("maxResults"), "collect.maxResults")?;
+    if max_results == 0 {
+        return Err(AppError::Config(
+            "solver collect maxResults must be greater than zero".to_string(),
+        ));
+    }
+    let selector = match required_json_string(collect, "kind")? {
+        "predicate" => {
+            let predicate = required_json_object(collect, "predicate")?;
+            let expr = decode_goal_expr(required_json_value(predicate, "expr")?)?;
+            SolverCollectSelector2::Predicate(expr)
+        }
+        "maximize" => {
+            let objective = required_json_object(collect, "objective")?;
+            let value = decode_goal_value(required_json_value(objective, "value")?)?;
+            SolverCollectSelector2::Maximize(value)
+        }
+        other => {
+            return Err(AppError::Config(format!(
+                "unsupported solver collect kind {other:?}"
+            )));
+        }
+    };
+    Ok((selector, max_results))
 }
 
 #[cfg(feature = "solver")]
@@ -1257,7 +1435,7 @@ fn solver_request_materializes_level_start(
     target_state: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<bool, AppError> {
     match required_json_string(target_state, "kind")? {
-        "compiled-start" | "editor-staged" => {}
+        "compiled-start" | "editor-staged" | "level-ascii" => {}
         other => {
             return Err(AppError::Config(format!(
                 "unsupported solver target state kind {other:?}"
@@ -1271,6 +1449,98 @@ fn solver_request_materializes_level_start(
             "unsupported solver target state lifecycle {other:?}"
         ))),
     }
+}
+
+#[cfg(feature = "solver")]
+fn state2_from_solver_target(
+    loaded: &LoadedGame,
+    target_state: &serde_json::Map<String, serde_json::Value>,
+    level_index: usize,
+    state_json: &str,
+) -> Result<State, AppError> {
+    state2_from_solver_state_spec_with_data(loaded, target_state, level_index, state_json)
+}
+
+#[cfg(feature = "solver")]
+fn state2_from_solver_state_spec(
+    loaded: &LoadedGame,
+    state_spec: &serde_json::Map<String, serde_json::Value>,
+    level_index: usize,
+) -> Result<State, AppError> {
+    let state_json = required_json_value(state_spec, "data")?.to_string();
+    state2_from_solver_state_spec_with_data(loaded, state_spec, level_index, &state_json)
+}
+
+#[cfg(feature = "solver")]
+fn state2_from_solver_state_spec_with_data(
+    loaded: &LoadedGame,
+    state_spec: &serde_json::Map<String, serde_json::Value>,
+    level_index: usize,
+    state_json: &str,
+) -> Result<State, AppError> {
+    match required_json_string(state_spec, "kind")? {
+        "raw" | "compiled-start" | "editor-staged" => state_from_json(loaded, state_json),
+        "level-ascii" => {
+            let data = required_json_value(state_spec, "data")?;
+            state_from_level_ascii_json(loaded, data, level_index)
+        }
+        other => Err(AppError::Config(format!(
+            "unsupported solver state kind {other:?}"
+        ))),
+    }
+}
+
+#[cfg(feature = "solver")]
+fn state_from_level_ascii_json(
+    loaded: &LoadedGame,
+    data: &serde_json::Value,
+    level_index: usize,
+) -> Result<State, AppError> {
+    let object = json_object(data, "solver level-ascii state")?;
+    let empty = single_char_json_string(required_json_value(object, "empty")?, "empty")?;
+    let lines = required_json_value(object, "lines")?
+        .as_array()
+        .ok_or_else(|| AppError::Config("solver level-ascii lines must be an array".to_string()))?
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    AppError::Config("solver level-ascii line must be a string".to_string())
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let legend = json_object(
+        required_json_value(object, "legend")?,
+        "solver level-ascii legend",
+    )?;
+    let mut char_objects = HashMap::<char, Vec<ObjectId>>::new();
+    for (raw_char, raw_objects) in legend {
+        let ch = single_char(raw_char, "solver level-ascii legend key")?;
+        let objects = decode_object_ids(raw_objects)?;
+        char_objects.insert(ch, objects);
+    }
+    let variable_defaults = loaded
+        .levels
+        .get(level_index)
+        .ok_or_else(|| {
+            AppError::Config(format!(
+                "solver target level index out of range: {level_index}"
+            ))
+        })?
+        .initial_state
+        .visible_variables()
+        .to_vec();
+    let (state, _) = puzzle_lang::parse_level_ascii_state(
+        &loaded.game,
+        &lines,
+        empty,
+        &char_objects,
+        &variable_defaults,
+    )
+    .map_err(|error| AppError::Config(error.to_string()))?;
+    Ok(state)
 }
 
 #[cfg(feature = "solver")]
@@ -1312,6 +1582,30 @@ fn required_json_string<'a>(
 }
 
 #[cfg(feature = "solver")]
+fn single_char_json_string(value: &serde_json::Value, label: &str) -> Result<char, AppError> {
+    let raw = value
+        .as_str()
+        .ok_or_else(|| AppError::Config(format!("solver request {label} must be a string")))?;
+    single_char(raw, label)
+}
+
+#[cfg(feature = "solver")]
+fn single_char(value: &str, label: &str) -> Result<char, AppError> {
+    let mut chars = value.chars();
+    let Some(ch) = chars.next() else {
+        return Err(AppError::Config(format!(
+            "solver request {label} must be one character"
+        )));
+    };
+    if chars.next().is_some() {
+        return Err(AppError::Config(format!(
+            "solver request {label} must be one character"
+        )));
+    }
+    Ok(ch)
+}
+
+#[cfg(feature = "solver")]
 fn json_u32_value(value: Option<&serde_json::Value>, key: &str) -> Result<u32, AppError> {
     let raw = value.and_then(serde_json::Value::as_u64).ok_or_else(|| {
         AppError::Config(format!("solver request {key} must be an unsigned integer"))
@@ -1334,6 +1628,19 @@ fn json_u64_value(value: Option<&serde_json::Value>, key: &str) -> Result<u64, A
     value.and_then(serde_json::Value::as_u64).ok_or_else(|| {
         AppError::Config(format!("solver request {key} must be an unsigned integer"))
     })
+}
+
+#[cfg(feature = "solver")]
+fn optional_json_bool(
+    value: Option<&serde_json::Value>,
+    default: bool,
+) -> Result<bool, AppError> {
+    let Some(value) = value else {
+        return Ok(default);
+    };
+    value
+        .as_bool()
+        .ok_or_else(|| AppError::Config("solver request acceptWinCommand must be a boolean".into()))
 }
 
 #[cfg(feature = "solver")]

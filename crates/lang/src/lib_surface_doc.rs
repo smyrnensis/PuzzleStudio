@@ -90,6 +90,13 @@ impl SurfaceDocumentProducts {
         visual_sprite_refs: true,
     };
 
+    const COMPLETION_SYMBOLS: Self = Self {
+        semantic_tokens: false,
+        completion_symbols: true,
+        highlight_ranges: false,
+        visual_sprite_refs: false,
+    };
+
     fn needs_parser_catalog(self) -> bool {
         self.semantic_tokens || self.completion_symbols
     }
@@ -105,8 +112,20 @@ fn parse_surface_compile_document(source: &str) -> Result<SurfaceDocument, Diagn
     Ok(document)
 }
 
+pub fn validate_surface_document_projection(source: &str) -> Result<(), DiagnosticReport> {
+    try_build_surface_document(source, SurfaceDocumentProducts::FULL, true).map(|_| ())
+}
+
 pub(crate) fn parse_surface_structure_document(source: &str) -> SurfaceDocument {
     build_surface_document(source, SurfaceDocumentProducts::STRUCTURE_ONLY)
+}
+
+pub(crate) fn parse_surface_completion_context_document(source: &str) -> SurfaceDocument {
+    build_surface_document(source, SurfaceDocumentProducts::STRUCTURE_ONLY)
+}
+
+pub(crate) fn parse_surface_completion_symbols_document(source: &str) -> SurfaceDocument {
+    build_surface_document(source, SurfaceDocumentProducts::COMPLETION_SYMBOLS)
 }
 
 fn parse_surface_source_target_document(source: &str) -> SurfaceDocument {
@@ -114,6 +133,14 @@ fn parse_surface_source_target_document(source: &str) -> SurfaceDocument {
 }
 
 fn build_surface_document(source: &str, products: SurfaceDocumentProducts) -> SurfaceDocument {
+    try_build_surface_document(source, products, false).expect("surface document scan failed")
+}
+
+fn try_build_surface_document(
+    source: &str,
+    products: SurfaceDocumentProducts,
+    strict_projection: bool,
+) -> Result<SurfaceDocument, DiagnosticReport> {
     let scan = scan_surface_document_source(source);
     let mut sink = SurfaceSink::default();
     let structural_blocks = surface_structural_blocks(&scan);
@@ -127,7 +154,7 @@ fn build_surface_document(source: &str, products: SurfaceDocumentProducts) -> Su
         .then(|| parser_surface_catalog(source))
         .flatten();
     if products.semantic_tokens {
-        record_structural_block_surface_tokens(&structural_blocks, &mut sink);
+        record_structural_block_surface_tokens(&structural_blocks, strict_projection, &mut sink)?;
     }
     let mut option_stack = Vec::<SurfaceOptionBlock>::new();
     for line in &scan.lines {
@@ -181,7 +208,7 @@ fn build_surface_document(source: &str, products: SurfaceDocumentProducts) -> Su
     if products.completion_symbols {
         normalize_surface_completion_symbols(&mut sink);
     }
-    sink.into_document()
+    Ok(sink.into_document())
 }
 
 fn scan_surface_document_source(source: &str) -> SurfaceScan {
@@ -671,7 +698,7 @@ fn surface_visual_opening_scope(
     match (current, first) {
         (None, Some("sprites" | "sprites3")) => Some(SurfaceVisualScope::Sprites),
         (Some(SurfaceVisualScope::Sprites), Some(first)) => match first {
-            "colors" => Some(SurfaceVisualScope::Colors),
+            "palette" => Some(SurfaceVisualScope::Colors),
             "shapes" => Some(SurfaceVisualScope::Other),
             _ if opens_block => Some(SurfaceVisualScope::SpriteEntry),
             _ => None,
@@ -964,7 +991,7 @@ fn visual_sprite_entry_start_color_token(token: &str, aliases: &HashMap<String, 
 fn visual_sprite_selector_token(value: &str) -> bool {
     if matches!(
         value,
-        "shape" | "shapes" | "colors" | "ascii" | "sprites" | "sprites3"
+        "shape" | "shapes" | "palette" | "colors" | "ascii" | "sprites" | "sprites3"
     ) {
         return false;
     }
@@ -1122,7 +1149,7 @@ fn surface_visual_sprite_refs(source: &str, scan: &SurfaceScan) -> SurfaceVisual
         if !matches!(
             (kind, line.scope),
             (
-                "colors",
+                "palette",
                 Some(SourceScope::Visuals | SourceScope::VisualColorTable)
             ) | (
                 "shapes",
@@ -1142,7 +1169,7 @@ fn surface_visual_sprite_refs(source: &str, scan: &SurfaceScan) -> SurfaceVisual
             continue;
         };
         match kind {
-            "colors" => {
+            "palette" => {
                 collect_surface_visual_flat_asset_names(scan, open_index, close_index, &mut refs)
             }
             "shapes" => {
@@ -1293,7 +1320,7 @@ fn surface_visual_shape_ref_token(value: &str) -> bool {
 fn surface_visual_shape_name_token(value: &str) -> bool {
     if matches!(
         value,
-        "shape" | "shapes" | "colors" | "ascii" | "sprites" | "sprites3"
+        "shape" | "shapes" | "palette" | "colors" | "ascii" | "sprites" | "sprites3"
     ) {
         return false;
     }
@@ -1438,8 +1465,9 @@ fn record_surface_document_line(
 
 fn record_structural_block_surface_tokens(
     blocks: &[SurfaceStructuralBlock],
+    strict_projection: bool,
     sink: &mut SurfaceSink,
-) {
+) -> Result<(), DiagnosticReport> {
     for block in blocks
         .iter()
         .filter(|block| block.role == SurfaceStructuralBlockRole::SourceTree)
@@ -1448,24 +1476,40 @@ fn record_structural_block_surface_tokens(
         if tokens.is_empty() {
             continue;
         }
-        if let Some(kind) = block.authoring_kind {
-            mark_authoring_surface_spans(
-                authoring_grammar::project_authoring_header_surface(kind, &tokens),
-                sink,
-            );
-            continue;
-        }
-        if record_rule_routine_block_header_surface_tokens(block, sink) {
-            continue;
-        }
-        if (source_tree_container_header_scope(block.scope)
-            || source_tree_rule_program_header(&block.header)
-            || source_tree_lifecycle_header(&block.header))
-            && let Some(first) = tokens.first()
+        if record_authoring_block_header_surface_tokens(block, &tokens, sink)
+            || record_rule_routine_block_header_surface_tokens(block, sink)
+            || record_visual_shape_entry_block_header_surface_tokens(block, &tokens, sink)
+            || record_condition_block_header_surface_tokens(&tokens, sink)
+            || record_unbraced_level_block_header_surface_tokens(block, &tokens, sink)
+            || record_known_source_tree_block_header_surface_tokens(block, &tokens, sink)
         {
-            add_scene_effect_token_range(sink, first, SurfaceSemanticKind::Keyword);
+            continue;
+        }
+        if strict_projection {
+            return Err(DiagnosticReport::error_at_line(
+                format!(
+                    "unowned source-tree block header `{}` in scope {:?}; add an owner-specific surface projector or a universal source-tree header rule",
+                    block.header, block.scope
+                ),
+                block.header.clone(),
+            ));
         }
     }
+    Ok(())
+}
+
+fn record_authoring_block_header_surface_tokens(
+    block: &SurfaceStructuralBlock,
+    tokens: &[SourceToken],
+    sink: &mut SurfaceSink,
+) -> bool {
+    let Some(kind) = block.authoring_kind else {
+        return false;
+    };
+    mark_authoring_surface_spans(
+        authoring_grammar::project_authoring_header_surface(kind, tokens),
+        sink,
+    )
 }
 
 fn record_rule_routine_block_header_surface_tokens(
@@ -1487,6 +1531,106 @@ fn record_rule_routine_block_header_surface_tokens(
     }
     for modifier in spans.modifiers {
         mark_surface_span(block.start, modifier, SurfaceSemanticKind::Keyword, sink);
+    }
+    true
+}
+
+fn record_visual_shape_entry_block_header_surface_tokens(
+    block: &SurfaceStructuralBlock,
+    tokens: &[SourceToken],
+    sink: &mut SurfaceSink,
+) -> bool {
+    if block.scope != SourceScope::VisualShapeEntry {
+        return false;
+    }
+    let Some(first) = tokens.first() else {
+        return false;
+    };
+    if !visual_sprite_selector_token(&first.text) {
+        return false;
+    }
+    record_visual_table_ref_surface_token(first, sink);
+    record_visual_shape_entry_header_surface_keywords(&tokens[1..], sink);
+    true
+}
+
+fn record_visual_shape_entry_header_surface_keywords(tokens: &[SourceToken], sink: &mut SurfaceSink) {
+    for token in tokens {
+        if matches!(token.text.as_str(), "rotate" | "from" | "using") {
+            add_scene_effect_token_range(sink, token, SurfaceSemanticKind::Keyword);
+        }
+    }
+}
+
+fn record_condition_block_header_surface_tokens(
+    tokens: &[SourceToken],
+    sink: &mut SurfaceSink,
+) -> bool {
+    let Some(first) = tokens.first() else {
+        return false;
+    };
+    if !matches!(first.text.as_str(), "win_conditions" | "lose_conditions") {
+        return false;
+    }
+    add_scene_effect_token_range(sink, first, SurfaceSemanticKind::Condition);
+    for token in &tokens[1..] {
+        add_scene_effect_token_range(sink, token, SurfaceSemanticKind::Keyword);
+    }
+    true
+}
+
+fn record_unbraced_level_block_header_surface_tokens(
+    block: &SurfaceStructuralBlock,
+    tokens: &[SourceToken],
+    sink: &mut SurfaceSink,
+) -> bool {
+    if block.scope != SourceScope::UnbracedLevel {
+        return false;
+    }
+    match tokens {
+        [keyword, rest @ ..] if keyword.text == "level" => {
+            add_scene_effect_token_range(sink, keyword, SurfaceSemanticKind::Keyword);
+            for token in rest {
+                add_scene_effect_token_range(sink, token, SurfaceSemanticKind::Binding);
+            }
+        }
+        _ => {
+            for token in tokens {
+                add_scene_effect_token_range(sink, token, SurfaceSemanticKind::Literal);
+            }
+        }
+    }
+    true
+}
+
+fn record_known_source_tree_block_header_surface_tokens(
+    block: &SurfaceStructuralBlock,
+    tokens: &[SourceToken],
+    sink: &mut SurfaceSink,
+) -> bool {
+    if !(source_tree_container_header_scope(block.scope)
+        || source_tree_rule_program_header(&block.header)
+        || source_tree_lifecycle_header(&block.header))
+    {
+        return false;
+    }
+    record_universal_source_tree_block_header_surface_tokens(tokens, sink)
+}
+
+fn record_universal_source_tree_block_header_surface_tokens(
+    tokens: &[SourceToken],
+    sink: &mut SurfaceSink,
+) -> bool {
+    if tokens.is_empty() {
+        return false;
+    }
+    for (index, token) in tokens.iter().enumerate() {
+        let kind = if index == 0 {
+            SurfaceSemanticKind::Keyword
+        } else {
+            SurfaceSemanticKind::Binding
+        };
+        add_scene_effect_token_range(sink, token, kind);
     }
     true
 }
@@ -2007,33 +2151,20 @@ fn update_surface_option_block_stack(
     line: &SurfaceScanLine,
     stack: &mut Vec<SurfaceOptionBlock>,
 ) {
-    for structural_line in &line.structural_lines {
-        let trimmed = structural_line.trim();
-        if trimmed == "}" {
-            stack.pop();
-            continue;
+    for event in &line.structural_events {
+        match event {
+            source::SourceStructureEvent::Open { header, .. } => {
+                let tokens = split_header_tokens(header)
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect::<Vec<_>>();
+                stack.push(surface_option_block_for_opening(&tokens, stack));
+            }
+            source::SourceStructureEvent::Close => {
+                stack.pop();
+            }
         }
-        let tokens = split_header_tokens(trimmed)
-            .into_iter()
-            .map(str::to_string)
-            .collect::<Vec<_>>();
-        if !surface_structural_line_opens_option_block(trimmed, &tokens, stack) {
-            continue;
-        }
-        let block = surface_option_block_for_opening(&tokens, stack);
-        stack.push(block);
     }
-}
-
-fn surface_structural_line_opens_option_block(
-    line: &str,
-    tokens: &[String],
-    stack: &[SurfaceOptionBlock],
-) -> bool {
-    if line.ends_with('{') {
-        return true;
-    }
-    surface_option_block_for_opening(tokens, stack) != SurfaceOptionBlock::Other
 }
 
 fn surface_option_block_for_opening(
@@ -2046,9 +2177,8 @@ fn surface_option_block_for_opening(
     match first {
         "puzzle3" => SurfaceOptionBlock::Puzzle3,
         "puzzle" => SurfaceOptionBlock::Puzzle2,
-        "render" => {
-            SurfaceOptionBlock::Authoring(authoring_grammar::AuthoringKind::PuzzleRenderConfig)
-        }
+        "render" => surface_authoring_option_block_for_opening(first, stack)
+            .unwrap_or(SurfaceOptionBlock::Other),
         "level_menu" => SurfaceOptionBlock::LevelMenu,
         _ => surface_authoring_option_block_for_opening(first, stack)
             .unwrap_or(SurfaceOptionBlock::Other),
@@ -2805,7 +2935,7 @@ fn record_visual_surface_line(
             [keyword, rest @ ..]
                 if matches!(
                     keyword.text.as_str(),
-                    "colors"
+                    "colors" | "palette"
                         | "image"
                         | "contain"
                         | "cover"
@@ -2829,7 +2959,9 @@ fn record_visual_surface_line(
                 add_scene_effect_token_range(sink, keyword, SurfaceSemanticKind::Keyword);
                 record_visual_rotation_surface_keywords(rest, sink);
             }
-            [keyword, ..] if matches!(keyword.text.as_str(), "shape" | "shapes" | "colors") => {
+            [keyword, ..]
+                if matches!(keyword.text.as_str(), "shape" | "shapes" | "palette" | "colors") =>
+            {
                 add_scene_effect_token_range(sink, keyword, SurfaceSemanticKind::Keyword);
             }
             _ => record_visual_table_ref_surface_token(first, sink),
@@ -2840,7 +2972,7 @@ fn record_visual_surface_line(
             }
             if matches!(
                 first.text.as_str(),
-                "shape" | "shapes" | "colors" | "rotate"
+                "shape" | "shapes" | "palette" | "colors" | "rotate"
             ) {
                 add_scene_effect_token_range(sink, first, SurfaceSemanticKind::Keyword);
             } else {
@@ -2941,7 +3073,12 @@ fn surface_word_continue(ch: char) -> bool {
 
 #[cfg(test)]
 mod surface_document_flow_tests {
-    use super::{parse_surface_document, parse_surface_structure_document};
+    use super::{
+        parse_surface_completion_context_document, parse_surface_completion_symbols_document,
+        parse_surface_document, parse_surface_structure_document, source_line_tokens,
+        validate_surface_document_projection,
+    };
+    use crate::surface::SurfaceStructuralBlockRole;
 
     #[test]
     fn structure_only_surface_document_shares_full_structural_product() {
@@ -2970,11 +3107,49 @@ puzzle board {
     }
 
     #[test]
+    fn completion_context_surface_document_skips_derived_products() {
+        let source = r#"
+puzzle board {
+  sounds {
+    sfx click = "click.wav"
+  }
+  rules {
+  }
+}
+"#;
+        let full = parse_surface_document(source);
+        let context = parse_surface_completion_context_document(source);
+        assert_eq!(context.lines, full.lines);
+        assert_eq!(context.structural_blocks, full.structural_blocks);
+        assert!(context.semantic_tokens.is_empty());
+        assert!(context.highlight_ranges.raw_ranges.is_empty());
+        assert!(context.completion_symbols.sfx.is_empty());
+        assert!(context.visual_sprite_refs.color_names.is_empty());
+    }
+
+    #[test]
+    fn completion_symbols_surface_document_skips_non_completion_products() {
+        let source = r#"
+puzzle board {
+  sounds {
+    sfx click = "click.wav"
+  }
+}
+"#;
+        let symbols = parse_surface_completion_symbols_document(source);
+        assert!(symbols.completion_symbols.sfx.contains("click"));
+        assert!(symbols.semantic_tokens.is_empty());
+        assert!(symbols.highlight_ranges.raw_ranges.is_empty());
+        assert!(symbols.visual_sprite_refs.color_names.is_empty());
+    }
+
+    #[test]
     fn surface_document_entrypoints_share_single_builder() {
         let source = include_str!("lib_surface_doc.rs");
         let required = [
             "build_surface_document(source, SurfaceDocumentProducts::FULL)",
             "build_surface_document(source, SurfaceDocumentProducts::STRUCTURE_ONLY)",
+            "build_surface_document(source, SurfaceDocumentProducts::COMPLETION_SYMBOLS)",
             "build_surface_document(source, SurfaceDocumentProducts::SOURCE_TARGET)",
         ];
         for required in required {
@@ -3010,6 +3185,163 @@ puzzle board {
         assert!(
             !source_scanner_source.contains("source_tree_header_keyword"),
             "source scanner must not own highlight header whitelist decisions"
+        );
+    }
+
+    #[test]
+    fn every_source_tree_header_token_receives_a_surface_token() {
+        let source = r#"
+puzzle board {
+rules {
+routine Push once {
+[ Player ] -> [ > Player ]
+}
+}
+}
+"#;
+        let document = parse_surface_document(source);
+
+        for block in document
+            .structural_blocks
+            .iter()
+            .filter(|block| block.role == SurfaceStructuralBlockRole::SourceTree)
+        {
+            for header_token in source_line_tokens(&block.header, block.start) {
+                assert!(
+                    document.semantic_tokens.iter().any(|token| {
+                        token.span.start == header_token.start && token.span.end == header_token.end
+                    }),
+                    "source-tree block `{}` left header token `{}` without a surface token",
+                    block.header,
+                    header_token.text
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn condition_source_tree_headers_are_owned_surface_tokens() {
+        let source = r#"
+puzzle board {
+win_conditions {
+some([ Goal ])
+}
+lose_conditions any {
+some([ Trap ])
+}
+}
+"#;
+        let document = parse_surface_document(source);
+
+        for header in ["win_conditions", "lose_conditions any"] {
+            let block = document
+                .structural_blocks
+                .iter()
+                .find(|block| block.header == header)
+                .expect("condition structural block");
+            for token in source_line_tokens(&block.header, block.start) {
+                assert!(
+                    document.semantic_tokens.iter().any(|semantic| {
+                        semantic.span.start == token.start && semantic.span.end == token.end
+                    }),
+                    "condition block `{}` left header token `{}` without a surface token",
+                    block.header,
+                    token.text
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unbraced_level_source_tree_headers_are_owned_surface_tokens() {
+        let source = r#"
+puzzle board {
+levels {
+legend {
+P = Player
+. = empty
+x = Wall
+}
+level one
+P.x
+
+P.x
+}
+}
+"#;
+        let document = parse_surface_document(source);
+
+        assert!(
+            document
+                .structural_blocks
+                .iter()
+                .any(|block| block.header == "level one"),
+            "named unbraced level block should be present"
+        );
+        for header in ["P.x"] {
+            let block = document
+                .structural_blocks
+                .iter()
+                .find(|block| block.header == header)
+                .expect("unbraced level structural block");
+            for token in source_line_tokens(&block.header, block.start) {
+                assert!(
+                    document.semantic_tokens.iter().any(|semantic| {
+                        semantic.span.start == token.start && semantic.span.end == token.end
+                    }),
+                    "unbraced level block `{}` left header token `{}` without a surface token",
+                    block.header,
+                    token.text
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn scene_layout_source_tree_headers_are_owned_surface_tokens() {
+        let source = r#"
+scene playing {
+layout {
+row {
+text "Ready"
+}
+}
+}
+"#;
+        let document = parse_surface_document(source);
+        let block = document
+            .structural_blocks
+            .iter()
+            .find(|block| block.header == "layout")
+            .expect("layout structural block");
+
+        assert!(
+            source_line_tokens(&block.header, block.start)
+                .into_iter()
+                .all(|header_token| document.semantic_tokens.iter().any(|semantic| {
+                    semantic.span.start == header_token.start
+                        && semantic.span.end == header_token.end
+                })),
+            "layout header should be owned by scene surface projection"
+        );
+    }
+
+    #[test]
+    fn unowned_source_tree_header_reports_surface_projection_error() {
+        let source = r#"
+puzzle board {
+__invalid_unowned_surface_node__ {
+}
+}
+"#;
+        let error =
+            validate_surface_document_projection(source).expect_err("unowned header should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("unowned source-tree block header `__invalid_unowned_surface_node__`"),
+            "{error}"
         );
     }
 }

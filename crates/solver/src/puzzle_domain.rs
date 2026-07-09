@@ -124,6 +124,7 @@ pub struct PuzzleDomain {
     inputs: Vec<InputId>,
     state_slicer: SolverStateSlicer,
     is_goal: Box<dyn Fn(&State) -> bool>,
+    accept_win_command: bool,
 }
 
 impl PuzzleDomain {
@@ -141,11 +142,22 @@ impl PuzzleDomain {
         state_slicer: SolverStateSlicer,
         is_goal: impl Fn(&State) -> bool + 'static,
     ) -> Self {
+        Self::with_state_slicer_and_win_command_goal(game, inputs, state_slicer, true, is_goal)
+    }
+
+    pub fn with_state_slicer_and_win_command_goal(
+        game: Arc<CompiledGame>,
+        inputs: Vec<InputId>,
+        state_slicer: SolverStateSlicer,
+        accept_win_command: bool,
+        is_goal: impl Fn(&State) -> bool + 'static,
+    ) -> Self {
         Self {
             game,
             inputs,
             state_slicer,
             is_goal: Box::new(is_goal),
+            accept_win_command,
         }
     }
 
@@ -185,11 +197,12 @@ impl SearchDomain for PuzzleDomain {
         Ok(PuzzleSearchState {
             state: next_state,
             input_history,
-            won: state.won
-                || outcome
-                    .commands
-                    .iter()
-                    .any(|command| matches!(command, TransitionCommand::Win)),
+            won: self.accept_win_command
+                && (state.won
+                    || outcome
+                        .commands
+                        .iter()
+                        .any(|command| matches!(command, TransitionCommand::Win))),
         })
     }
 

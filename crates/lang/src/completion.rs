@@ -11,6 +11,7 @@ pub struct CompletionList {
     pub replace_start: usize,
     pub replace_end: usize,
     pub items: Vec<CompletionItem>,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -85,9 +86,31 @@ impl CompletionKind {
 }
 
 pub fn suggest_source_completions(source: &str, cursor_offset: usize) -> CompletionList {
-    let document = crate::parse_surface_document(source);
-    let context = surface_completion_context_for_document(source, cursor_offset, &document);
-    let mut symbols = document.completion_symbols.clone();
+    let context_document = crate::parse_surface_completion_context_document(source);
+    let context = surface_completion_context_for_document(source, cursor_offset, &context_document);
+    if completion_context_requires_symbols(&context) {
+        let symbols_document = crate::parse_surface_completion_symbols_document(source);
+        return completion_list_from_context(
+            source,
+            cursor_offset,
+            context,
+            symbols_document.completion_symbols,
+        );
+    }
+    completion_list_from_context(
+        source,
+        cursor_offset,
+        context,
+        SurfaceCompletionSymbols::default(),
+    )
+}
+
+pub(crate) fn completion_list_from_context(
+    source: &str,
+    cursor_offset: usize,
+    context: crate::semantic::SemanticCompletionContext,
+    mut symbols: SurfaceCompletionSymbols,
+) -> CompletionList {
     remove_current_token_symbols(&mut symbols, &context.token_text);
 
     let mut items = Vec::<CompletionItem>::new();
@@ -138,6 +161,49 @@ pub fn suggest_source_completions(source: &str, cursor_offset: usize) -> Complet
         replace_start,
         replace_end,
         items,
+        warnings: context.warnings,
+    }
+}
+
+pub(crate) fn completion_context_requires_symbols(
+    context: &crate::semantic::SemanticCompletionContext,
+) -> bool {
+    context.token_text.contains(':') || context.slots.iter().any(slot_requires_symbols)
+}
+
+fn slot_requires_symbols(slot: &SemanticCompletionSlot) -> bool {
+    match slot {
+        SemanticCompletionSlot::Keywords(_)
+        | SemanticCompletionSlot::ModelTopLevelKeywords
+        | SemanticCompletionSlot::Literals(_)
+        | SemanticCompletionSlot::StandardRuleSteps
+        | SemanticCompletionSlot::Themes
+        | SemanticCompletionSlot::AuthoringRows(_)
+        | SemanticCompletionSlot::AuthoringChildren(_)
+        | SemanticCompletionSlot::AuthoringContentRows(_)
+        | SemanticCompletionSlot::Settings(_) => false,
+        SemanticCompletionSlot::Objects
+        | SemanticCompletionSlot::Groups
+        | SemanticCompletionSlot::States
+        | SemanticCompletionSlot::Markes
+        | SemanticCompletionSlot::ObjectNameAtoms
+        | SemanticCompletionSlot::ValueSets
+        | SemanticCompletionSlot::Directions
+        | SemanticCompletionSlot::DirectionSets
+        | SemanticCompletionSlot::Inputs
+        | SemanticCompletionSlot::ModelEffects
+        | SemanticCompletionSlot::SceneEffects
+        | SemanticCompletionSlot::Emissions
+        | SemanticCompletionSlot::Routines
+        | SemanticCompletionSlot::Conditions
+        | SemanticCompletionSlot::Scenes
+        | SemanticCompletionSlot::Puzzles
+        | SemanticCompletionSlot::SfxAssets
+        | SemanticCompletionSlot::MusicAssets
+        | SemanticCompletionSlot::Sprites
+        | SemanticCompletionSlot::Assets
+        | SemanticCompletionSlot::Shapes
+        | SemanticCompletionSlot::Colors => true,
     }
 }
 
@@ -160,6 +226,15 @@ pub fn completion_list_json(list: &CompletionList) -> String {
         push_json_string(&mut out, "insertText", &item.insert_text);
         out.push(',');
         push_json_string(&mut out, "detail", &item.detail);
+        out.push('}');
+    }
+    out.push_str("],\"warnings\":[");
+    for (index, warning) in list.warnings.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push('{');
+        push_json_string(&mut out, "message", warning);
         out.push('}');
     }
     out.push_str("]}");
@@ -1484,8 +1559,10 @@ sounds {
 sfx click se
 music bgm he
 }
+puzzle main {
 render {
-tween du
+tween_dur
+}
 }
 scene menu {
 layout {
@@ -1519,13 +1596,36 @@ show_
                 .any(|item| item.label == "height" && item.kind == CompletionKind::Setting)
         );
 
-        let tween_cursor = source.find("tween du").unwrap() + "tween du".len();
+        let tween_cursor = source.find("tween_dur").unwrap() + "tween_dur".len();
         let tween_list = suggest_source_completions(source, tween_cursor);
         assert!(
             tween_list
                 .items
                 .iter()
-                .any(|item| item.label == "duration" && item.kind == CompletionKind::Setting)
+                .any(|item| item.label == "tween_duration" && item.kind == CompletionKind::Setting)
+        );
+
+        let tween_enabled_source = r#"
+puzzle main {
+render {
+tw
+}
+}
+"#;
+        let tween_enabled_cursor = tween_enabled_source.find("tw").unwrap() + "tw".len();
+        let tween_enabled_list =
+            suggest_source_completions(tween_enabled_source, tween_enabled_cursor);
+        assert!(
+            tween_enabled_list
+                .items
+                .iter()
+                .any(|item| item.label == "tween" && item.kind == CompletionKind::Setting)
+        );
+        assert!(
+            !tween_enabled_list
+                .items
+                .iter()
+                .any(|item| item.label == "tween" && item.kind == CompletionKind::Keyword)
         );
 
         let menu_cursor = source.find("show_").unwrap() + "show_".len();
@@ -1588,6 +1688,23 @@ theme = "p
                 .iter()
                 .any(|item| item.label == "paper" && item.kind == CompletionKind::Theme)
         );
+    }
+
+    #[test]
+    fn reports_missing_authoring_assignment_rhs_schema_in_completion_json() {
+        let source = r#"
+title = complete_unknown_assignment
+theme {
+unknown = li
+}
+"#;
+        let cursor = source.find("unknown = li").unwrap() + "unknown = li".len();
+        let list = suggest_source_completions(source, cursor);
+
+        assert!(list.items.is_empty());
+        assert_eq!(list.warnings.len(), 1);
+        let json = completion_list_json(&list);
+        assert!(json.contains(r#""warnings":[{"message":"owner schema does not define assignment key `unknown`; no RHS completions are available"}]"#));
     }
 
     #[test]
@@ -1753,6 +1870,11 @@ sprites {
             list.items
                 .iter()
                 .any(|item| item.label == "colors" && item.kind == CompletionKind::Keyword)
+        );
+        assert!(
+            list.items
+                .iter()
+                .any(|item| item.label == "palette" && item.kind == CompletionKind::Keyword)
         );
 
         let prefix_source = source.replacen("\n\n}", "\nBo\n}", 1);
@@ -2180,5 +2302,25 @@ rules {
                 "completion.rs must consume surface completion products, not rebuild parser context via {forbidden}"
             );
         }
+    }
+
+    #[test]
+    fn completion_entrypoint_uses_completion_products_not_full_surface_document() {
+        let source = include_str!("completion.rs");
+        let start = source
+            .find("pub fn suggest_source_completions")
+            .expect("completion entrypoint");
+        let end = source[start..]
+            .find("pub(crate) fn completion_list_from_context")
+            .map(|offset| start + offset)
+            .expect("context completion entrypoint");
+        let body = &source[start..end];
+
+        assert!(body.contains("parse_surface_completion_context_document"));
+        assert!(body.contains("parse_surface_completion_symbols_document"));
+        assert!(
+            !body.contains("parse_surface_document"),
+            "completion entrypoint must not build the full surface document"
+        );
     }
 }

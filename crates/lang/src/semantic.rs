@@ -34,6 +34,7 @@ pub(crate) struct SemanticCompletionContext {
     pub(crate) replace_end: usize,
     pub(crate) token_text: String,
     pub(crate) slots: Vec<SemanticCompletionSlot>,
+    pub(crate) warnings: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -119,10 +120,10 @@ win -> sfx clear
         let source = r#"
 title = authoring_schema_semantics
 theme = "clean"
+puzzle main {
 render {
+tween = true
 tween_duration = 90ms
-tween {
-duration = 120ms
 }
 }
 sounds {

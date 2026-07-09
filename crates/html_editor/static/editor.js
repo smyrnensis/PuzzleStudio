@@ -525,6 +525,7 @@ let level = {
   addPaletteOpen: false,
   activeLayer: 0,
   hiddenLayers: [],
+  layers: [],
   palette: [],
   regions: [],
   cells: [],
@@ -637,6 +638,7 @@ function visualEditSnapshot(kind) {
         height: level.height,
         activeLayer: level.activeLayer,
         regions: cloneVisualEditValue(level.regions || []),
+        layers: cloneVisualEditValue(level.layers || []),
         cells: cloneVisualEditValue(level.cells || []),
       },
     };
@@ -750,7 +752,9 @@ function restoreVisualEditSnapshot(snapshot) {
     level.height = Math.max(1, Math.trunc(Number(state.height) || 1));
     level.activeLayer = Math.max(0, Math.trunc(Number(state.activeLayer) || 0));
     level.regions = cloneVisualEditValue(state.regions || []);
+    level.layers = cloneVisualEditValue(state.layers || []);
     level.cells = cloneVisualEditValue(state.cells || []);
+    ensureLevelLayerMaps();
     clearSolutionPreview();
     levelDisplayCells = null;
     renderLevelBoard();
@@ -3681,19 +3685,25 @@ function surfaceEntriesForSource(source, options = {}) {
   if (surfaceEntriesCache?.source === text) {
     return surfaceEntriesCache.entries;
   }
-  const compiler = wasmCompiler || window.PuzzleStudioRuntime?.cachedWasmCompiler?.();
-  if (typeof compiler?.source_entries_json !== "function") {
+  if (typeof window.PuzzleStudioRuntime?.sourceEntries !== "function") {
     const message = "Source entries unavailable: editor WASM parser is not loaded.";
     if (options.reportUnavailable !== false) {
       setStatus(message, "is-error");
     }
     throw new Error(message);
   }
-  wasmCompiler = compiler;
-  const raw = compiler.source_entries_json(text);
-  const payload = JSON.parse(raw || "{}");
-  const entries = Array.isArray(payload.entries)
-    ? payload.entries
+  let rawEntries;
+  try {
+    rawEntries = window.PuzzleStudioRuntime.sourceEntries(text);
+  } catch (error) {
+    const message = `Source entries unavailable: ${userFacingRuntimeError(error)}`;
+    if (options.reportUnavailable !== false) {
+      setStatus(message, "is-error");
+    }
+    throw new Error(message);
+  }
+  const entries = Array.isArray(rawEntries)
+    ? rawEntries
       .map((entry) => normalizeResolvedSourceTarget(text, entry))
       .filter(Boolean)
     : [];
@@ -3944,6 +3954,9 @@ function addEmptyLevel2dToFocusedSource() {
   level.height = 5;
   level.regions = defaultLevelRegions(level.width, level.height);
   level.cells = makeEmptyCells(level.width, level.height);
+  level.layers = [cloneVisualEditValue(level.cells)];
+  level.activeLayer = 0;
+  level.hiddenLayers = [];
   renderLevelBoard();
   renderLevelSourcePreview();
   applyPaneVisibility();
@@ -4359,7 +4372,11 @@ function resetLevelBuilderFromSource(resetCells = true) {
     level.height = size.height || level.height;
     level.regions = defaultLevelRegions(level.width, level.height);
     level.cells = makeEmptyCells(level.width, level.height, exportData);
+    level.layers = [cloneVisualEditValue(level.cells)];
+    level.activeLayer = 0;
+    level.hiddenLayers = [];
   }
+  ensureLevelLayerMaps(exportData);
   if (!level.palette.some((entry) => entry.id === level.selectedObjectId)) {
     level.selectedObjectId = level.palette[0]?.id ?? 0;
   }
@@ -5035,12 +5052,11 @@ async function loadLevelFromSourcePosition(position, options = {}) {
 }
 
 async function resolveSourceTargetFromWasm(source, position) {
-  const compiler = await loadWasmCompiler();
-  if (typeof compiler?.resolve_source_target !== "function") {
+  if (typeof window.PuzzleStudioRuntime?.resolveSourceTarget !== "function") {
     return null;
   }
   const cursorByteOffset = sourceByteOffset(source, position);
-  const raw = compiler.resolve_source_target(source, cursorByteOffset);
+  const raw = await window.PuzzleStudioRuntime.resolveSourceTarget(source, cursorByteOffset);
   const payload = JSON.parse(raw || "{}");
   return normalizeResolvedSourceTarget(source, payload?.target || null, position);
 }
@@ -5237,6 +5253,7 @@ function loadLevelFromSourceEntry(source, entry, options = {}) {
   level.width = state.width;
   level.height = state.height;
   level.regions = state.regions;
+  level.layers = state.layers;
   level.cells = state.cells;
   level.exportData = exportData;
   level.palette = levelPaletteFromExport(referenceSource, exportData);
@@ -5270,49 +5287,68 @@ function sourceLevelStateFromEntry(source, entry, exportData = currentLevelExpor
     ...parsed.localLegends.map((row) => legendEntryFromRow(row, new Set(engineObjects(exportData).map((object) => object.name)))).filter(Boolean),
   ];
   const charMap = new Map(charEntries.map((charEntry) => [charEntry.char, charEntry.objects]));
-  const groups = sourceLevelRowGroups(parsed.rows);
-  if (!groups.length) {
+  const regionGroups = sourceLevelRegionGroups(parsed.rows);
+  if (!regionGroups?.length) {
     return null;
   }
   const regions = [];
   let width = 0;
   let height = 0;
-  for (const group of groups) {
-    const regionWidth = Math.max(1, ...group.map((row) => [...row].length));
-    const regionHeight = Math.max(1, group.length);
+  let asciiLayerCount = 1;
+  for (const regionLayers of regionGroups) {
+    asciiLayerCount = Math.max(asciiLayerCount, regionLayers.length);
+    const baseLayer = regionLayers[0] || [];
+    const regionWidth = Math.max(1, ...baseLayer.map((row) => [...row].length));
+    const regionHeight = Math.max(1, baseLayer.length);
+    if (regionLayers.some((layerRows) => layerRows.length !== regionHeight || layerRows.some((row) => [...row].length !== regionWidth))) {
+      return null;
+    }
     regions.push({ index: regions.length, x: width, y: 0, width: regionWidth, height: regionHeight });
     width += regionWidth;
     height = Math.max(height, regionHeight);
   }
-  const cells = makeEmptyCells(width, height, exportData);
+  const previousWidth = level.width;
+  const previousHeight = level.height;
+  level.width = width;
+  level.height = height;
+  const layers = Array.from({ length: asciiLayerCount }, () => makeEmptyCells(width, height, exportData));
   const objectIdsByName = new Map(engineObjects(exportData).map((object) => [object.name, object.id]));
-  for (const [regionIndex, group] of groups.entries()) {
+  for (const [regionIndex, regionLayers] of regionGroups.entries()) {
     const region = regions[regionIndex];
-    for (let y = 0; y < group.length; y += 1) {
-      const chars = [...group[y]];
-      for (let x = 0; x < region.width; x += 1) {
-        const char = chars[x] ?? ".";
-        const objects = /\s/.test(char) ? [] : charMap.get(char);
-        if (!objects) {
-          return null;
-        }
-        const slots = makeEmptyCell(exportData);
-        for (const objectName of objects) {
-          const objectId = objectIdsByName.get(objectName) || 0;
-          const object = engineObjectById(objectId, exportData);
-          if (!object) {
+    for (const [asciiLayerIndex, group] of regionLayers.entries()) {
+      for (let y = 0; y < group.length; y += 1) {
+        const chars = [...group[y]];
+        for (let x = 0; x < region.width; x += 1) {
+          const char = chars[x] ?? ".";
+          const objects = /\s/.test(char) ? [] : charMap.get(char);
+          if (!objects) {
             return null;
           }
-          slots[object.layer] = object.id;
+          const slots = makeEmptyCell(exportData);
+          for (const objectName of objects) {
+            const objectId = objectIdsByName.get(objectName) || 0;
+            const object = engineObjectById(objectId, exportData);
+            if (!object) {
+              return null;
+            }
+            slots[object.layer] = object.id;
+          }
+          layers[asciiLayerIndex][((region.y + y) * width) + region.x + x] = slots;
         }
-        cells[((region.y + y) * width) + region.x + x] = slots;
       }
     }
   }
+  const previousLayers = level.layers;
+  level.layers = layers;
+  const cells = levelCompositeCells({ includeHidden: true, exportData });
+  level.layers = previousLayers;
+  level.width = previousWidth;
+  level.height = previousHeight;
   return {
     width,
     height,
     regions: normalizedLevelRegions(regions, width, height),
+    layers,
     cells,
   };
 }
@@ -5370,23 +5406,51 @@ function sourceLevelEntryHasHeader(tokens) {
     || (tokens.at(-1) === "{" && tokens[0] !== "legend");
 }
 
-function sourceLevelRowGroups(rows) {
-  const groups = [];
-  let current = [];
+function sourceLevelRegionGroups(rows) {
+  const regions = [];
+  let currentLayers = [];
+  let currentRows = [];
+  let expectsLayerRows = false;
+  const flushLayer = () => {
+    if (!currentRows.length) {
+      return !expectsLayerRows;
+    }
+    currentLayers.push(currentRows);
+    currentRows = [];
+    expectsLayerRows = false;
+    return true;
+  };
+  const flushRegion = () => {
+    if (!flushLayer()) {
+      return false;
+    }
+    if (currentLayers.length) {
+      regions.push(currentLayers);
+      currentLayers = [];
+    }
+    return true;
+  };
   for (const row of rows) {
-    if (String(row || "").trim() === "") {
-      if (current.length) {
-        groups.push(current);
-        current = [];
+    const text = String(row || "");
+    if (!text.trim()) {
+      if (!flushRegion()) {
+        return null;
       }
       continue;
     }
-    current.push(String(row || ""));
+    if (text === "+") {
+      if (!flushLayer()) {
+        return null;
+      }
+      expectsLayerRows = true;
+      continue;
+    }
+    currentRows.push(text);
   }
-  if (current.length) {
-    groups.push(current);
+  if (!flushRegion()) {
+    return null;
   }
-  return groups;
+  return regions;
 }
 
 function previewLevelIndexForSourceEntry(entry, exportData = previewExport) {
@@ -6293,6 +6357,10 @@ function makeEmptyCells(width, height, exportData = currentLevelExportData()) {
   return Array.from({ length: width * height }, () => makeEmptyCell(exportData));
 }
 
+function makeEmptyLevelLayer(width = level.width, height = level.height, exportData = currentLevelExportData()) {
+  return makeEmptyCells(width, height, exportData);
+}
+
 function makeEmptyCell(exportData = currentLevelExportData()) {
   return Array.from({ length: layerCount(exportData) }, () => 0);
 }
@@ -6307,9 +6375,71 @@ function cloneCellSlots(slots, exportData = currentLevelExportData()) {
   return next;
 }
 
+function normalizeLevelLayerMap(cells, exportData = currentLevelExportData()) {
+  const size = Math.max(1, level.width) * Math.max(1, level.height);
+  const next = makeEmptyLevelLayer(level.width, level.height, exportData);
+  if (!Array.isArray(cells)) {
+    return next;
+  }
+  for (let index = 0; index < Math.min(size, cells.length); index += 1) {
+    next[index] = cloneCellSlots(cells[index], exportData);
+  }
+  return next;
+}
+
+function ensureLevelLayerMaps(exportData = currentLevelExportData()) {
+  const sourceLayers = Array.isArray(level.layers) && level.layers.length
+    ? level.layers
+    : [Array.isArray(level.cells) && level.cells.length ? level.cells : makeEmptyLevelLayer(level.width, level.height, exportData)];
+  level.layers = sourceLayers.map((layerCells) => normalizeLevelLayerMap(layerCells, exportData));
+  if (!level.layers.length) {
+    level.layers = [makeEmptyLevelLayer(level.width, level.height, exportData)];
+  }
+  level.activeLayer = normalizedLevelActiveLayer(level.activeLayer);
+  normalizedLevelHiddenLayers();
+  level.cells = levelCompositeCells({ includeHidden: true, exportData });
+  return level.layers;
+}
+
+function levelLayerCount2d() {
+  return Math.max(1, Array.isArray(level.layers) ? level.layers.length : 0);
+}
+
+function levelLayerCells(layerIndex = level.activeLayer, exportData = currentLevelExportData()) {
+  ensureLevelLayerMaps(exportData);
+  const index = normalizedLevelActiveLayer(layerIndex);
+  return level.layers[index] || level.layers[0];
+}
+
+function levelCompositeCells(options = {}) {
+  const exportData = options.exportData || currentLevelExportData();
+  const includeHidden = options.includeHidden === true;
+  const hidden = includeHidden ? new Set() : normalizedLevelHiddenLayers();
+  const layers = Array.isArray(level.layers) && level.layers.length ? level.layers : [];
+  const composite = makeEmptyCells(level.width, level.height, exportData);
+  for (const [layerIndex, layerCells] of layers.entries()) {
+    if (hidden.has(layerIndex)) {
+      continue;
+    }
+    const normalizedCells = normalizeLevelLayerMap(layerCells, exportData);
+    for (let cellIndex = 0; cellIndex < composite.length; cellIndex += 1) {
+      const target = composite[cellIndex];
+      const source = normalizedCells[cellIndex];
+      for (let slotIndex = 0; slotIndex < target.length; slotIndex += 1) {
+        if (source[slotIndex]) {
+          target[slotIndex] = source[slotIndex];
+        }
+      }
+    }
+  }
+  return composite;
+}
+
 function renderLevelPalette() {
+  ensureLevelLayerMaps();
   const eraserButton = renderLevelEraserButton();
-  levelPalette.replaceChildren(...[levelFillButton, eraserButton].filter(Boolean));
+  const layerRow = renderLevelLayerEditRow();
+  levelPalette.replaceChildren(...[layerRow, levelFillButton, eraserButton].filter(Boolean));
   levelPalette.classList.add("is-sprite-only");
   const mainObjects = level.palette.filter((object) => object.id !== 0 && !isVisualObject(object));
   const visualObjects = level.palette.filter((object) => object.id !== 0 && isVisualObject(object));
@@ -6318,6 +6448,147 @@ function renderLevelPalette() {
   levelPalette.append(renderLevelAddLegendButton());
   syncLevelLayerVisibilityControl();
   updateLevelPlaytestControls();
+}
+
+function renderLevelLayerEditRow() {
+  const row = document.createElement("div");
+  row.className = "level3d-layer-palette-row level-layer-edit-row";
+  row.append(
+    levelLayerStepButton(-1),
+    levelLayerInputControl(),
+    levelLayerStepButton(1),
+    levelLayerAddButton(),
+    levelLayerRemoveButton(),
+  );
+  return row;
+}
+
+function levelLayerStepButton(delta) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "sprite-icon-button level-layer-step-button";
+  button.setAttribute("aria-label", delta < 0 ? "Previous level layer" : "Next level layer");
+  button.title = delta < 0 ? "Previous layer" : "Next layer";
+  button.dataset.tooltip = button.title;
+  button.disabled = levelPlaytestActive || levelLayerCount2d() <= 1;
+  button.innerHTML = delta < 0
+    ? `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>`
+    : `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg>`;
+  button.addEventListener("click", () => moveLevelLayer(delta));
+  return button;
+}
+
+function levelLayerInputControl() {
+  const wrap = document.createElement("label");
+  wrap.className = "sprite3d-slice-value-wrap level-layer-value-wrap";
+  const input = document.createElement("input");
+  input.type = "number";
+  input.min = "1";
+  input.max = String(levelLayerCount2d());
+  input.value = String(normalizedLevelActiveLayer() + 1);
+  input.disabled = levelPlaytestActive;
+  input.setAttribute("aria-label", "Current level layer");
+  input.addEventListener("change", () => setLevelLayer(Number(input.value) - 1));
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowLeft" || event.key === "ArrowDown") {
+      event.preventDefault();
+      moveLevelLayer(-1);
+    } else if (event.key === "ArrowRight" || event.key === "ArrowUp") {
+      event.preventDefault();
+      moveLevelLayer(1);
+    }
+  });
+  const total = document.createElement("span");
+  total.className = "sprite3d-slice-total";
+  total.textContent = `/ ${levelLayerCount2d()}`;
+  wrap.append(input, total);
+  return wrap;
+}
+
+function levelLayerAddButton() {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "sprite-icon-button level-layer-add-button";
+  button.setAttribute("aria-label", "Add level layer");
+  button.title = "Add layer";
+  button.dataset.tooltip = "Add layer";
+  button.disabled = levelPlaytestActive;
+  button.innerHTML = `
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 5v14"></path>
+      <path d="M5 12h14"></path>
+    </svg>
+  `;
+  button.addEventListener("click", () => addLevelLayer());
+  return button;
+}
+
+function levelLayerRemoveButton() {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "sprite-icon-button level-layer-remove-button";
+  button.setAttribute("aria-label", "Remove current level layer");
+  button.title = "Remove layer";
+  button.dataset.tooltip = "Remove layer";
+  button.disabled = levelPlaytestActive || levelLayerCount2d() <= 1;
+  button.innerHTML = `
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M5 12h14"></path>
+    </svg>
+  `;
+  button.addEventListener("click", () => removeLevelLayer());
+  return button;
+}
+
+function setLevelLayer(layerIndex) {
+  ensureLevelLayerMaps();
+  level.activeLayer = normalizedLevelActiveLayer(layerIndex);
+  renderLevelPalette();
+  renderLevelBoard();
+  setStatus(`Editing layer ${level.activeLayer + 1}`, "is-ok");
+}
+
+function moveLevelLayer(delta) {
+  setLevelLayer(level.activeLayer + Math.trunc(Number(delta) || 0));
+}
+
+function addLevelLayer() {
+  if (levelPlaytestActive) {
+    return false;
+  }
+  const before = visualEditSnapshot("level");
+  ensureLevelLayerMaps();
+  const insertAt = normalizedLevelActiveLayer() + 1;
+  level.layers.splice(insertAt, 0, makeEmptyLevelLayer());
+  level.activeLayer = insertAt;
+  level.cells = levelCompositeCells({ includeHidden: true });
+  renderLevelPalette();
+  renderLevelBoard();
+  pushVisualEditUndoSnapshot("level", before);
+  setStatus(`Added layer ${level.activeLayer + 1}`, "is-ok");
+  return true;
+}
+
+function removeLevelLayer() {
+  if (levelPlaytestActive || levelLayerCount2d() <= 1) {
+    return false;
+  }
+  const before = visualEditSnapshot("level");
+  ensureLevelLayerMaps();
+  const removeAt = normalizedLevelActiveLayer();
+  level.layers.splice(removeAt, 1);
+  level.hiddenLayers = (level.hiddenLayers || [])
+    .map((layerIndex) => Math.trunc(Number(layerIndex)))
+    .filter((layerIndex) => Number.isInteger(layerIndex) && layerIndex !== removeAt)
+    .map((layerIndex) => layerIndex > removeAt ? layerIndex - 1 : layerIndex);
+  level.activeLayer = normalizedLevelActiveLayer(Math.min(removeAt, level.layers.length - 1));
+  normalizedLevelHiddenLayers();
+  level.cells = levelCompositeCells({ includeHidden: true });
+  renderLevelPalette();
+  renderLevelBoard();
+  pushVisualEditUndoSnapshot("level", before);
+  setStatus(`Removed layer ${removeAt + 1}`, "is-ok");
+  return true;
 }
 
 function renderLevelEraserButton() {
@@ -6440,7 +6711,7 @@ function renderLevelBoard() {
   syncLevelLayerVisibilityControl();
   renderLevelSourcePreview();
   const cells = displayedLevelCells();
-  const visibleCells = levelVisibleCells(cells);
+  const visibleCells = levelPlaytestActive ? cells : levelVisibleCells(cells);
   const exportData = currentLevelExportData();
   if (!levelRenderer) {
     levelBoard.replaceChildren();
@@ -6677,6 +6948,9 @@ function loadLevelFromPreviewState(options = {}) {
   level.height = scene.height;
   level.regions = normalizedLevelRegions(scene.regions, level.width, level.height);
   level.cells = scene.cells.map((cell) => cellSlotsFromLayers(cell.layers || [], exportData));
+  level.layers = [cloneVisualEditValue(level.cells)];
+  level.activeLayer = 0;
+  level.hiddenLayers = [];
   level.exportData = exportData;
   level.palette = levelPaletteFromExport(levelReferenceSource(exportData), exportData);
   const levelName = exportData?.levels?.[levelIndex]?.name;
@@ -6703,6 +6977,9 @@ function applyPreviewSceneToLevel(scene) {
   level.height = scene.height;
   level.regions = normalizedLevelRegions(scene.regions, level.width, level.height);
   level.cells = scene.cells.map((cell) => cellSlotsFromLayers(cell.layers || [], exportData));
+  level.layers = [cloneVisualEditValue(level.cells)];
+  level.activeLayer = 0;
+  level.hiddenLayers = [];
   level.exportData = exportData;
   level.palette = levelPaletteFromExport(levelReferenceSource(exportData), exportData);
   renderLevelPalette();
@@ -6831,16 +7108,17 @@ function levelListFilterIconSvg() {
 }
 
 function levelLayerVisibilityEntries(exportData = currentLevelExportData()) {
-  const count = Math.max(1, layerCount(exportData));
-  const layerNames = sourceLayerNameEntries(levelReferenceSource(exportData), exportData);
+  void exportData;
+  const count = levelLayerCount2d();
   return Array.from({ length: count }, (_, layerIndex) => ({
     layer: layerIndex,
-    label: layerNames.get(layerIndex) || "",
+    label: `Layer ${layerIndex + 1}`,
   }));
 }
 
 function normalizedLevelHiddenLayers(exportData = currentLevelExportData()) {
-  const count = Math.max(1, layerCount(exportData));
+  void exportData;
+  const count = levelLayerCount2d();
   const hidden = new Set();
   for (const layerIndex of level.hiddenLayers || []) {
     const normalized = Math.trunc(Number(layerIndex));
@@ -6853,36 +7131,14 @@ function normalizedLevelHiddenLayers(exportData = currentLevelExportData()) {
 }
 
 function levelLayerIsVisible(layerIndex, exportData = currentLevelExportData()) {
+  void exportData;
   return !normalizedLevelHiddenLayers(exportData).has(Math.trunc(Number(layerIndex) || 0));
 }
 
-function levelVisibleLayerIndexes(exportData = currentLevelExportData()) {
-  const count = Math.max(1, layerCount(exportData));
-  const hidden = normalizedLevelHiddenLayers(exportData);
-  return Array.from({ length: count }, (_unused, layerIndex) => layerIndex)
-    .filter((layerIndex) => !hidden.has(layerIndex));
-}
-
-function levelFilteredCellSlots(slots, exportData = currentLevelExportData()) {
-  const hidden = normalizedLevelHiddenLayers(exportData);
-  if (!hidden.size) {
-    return slots;
-  }
-  const next = cloneCellSlots(slots, exportData);
-  for (const layerIndex of hidden) {
-    if (layerIndex >= 0 && layerIndex < next.length) {
-      next[layerIndex] = 0;
-    }
-  }
-  return next;
-}
-
 function levelVisibleCells(sourceCells = displayedLevelCells(), exportData = currentLevelExportData()) {
-  const hidden = normalizedLevelHiddenLayers(exportData);
-  if (!hidden.size) {
-    return sourceCells;
-  }
-  return (sourceCells || []).map((slots) => levelFilteredCellSlots(slots, exportData));
+  void sourceCells;
+  ensureLevelLayerMaps(exportData);
+  return levelCompositeCells({ includeHidden: false, exportData });
 }
 
 function syncLevelLayerVisibilityControl() {
@@ -6997,7 +7253,11 @@ function normalizedCellSlots(slots, exportData = currentLevelExportData()) {
 }
 
 function displayedLevelCells() {
-  return levelPlaytestActive && levelDisplayCells?.length === level.cells.length ? levelDisplayCells : level.cells;
+  if (levelPlaytestActive && levelDisplayCells?.length === level.cells.length) {
+    return levelDisplayCells;
+  }
+  ensureLevelLayerMaps();
+  return levelCompositeCells({ includeHidden: true });
 }
 
 function displayedSolverScene(exportData = previewExport || extractPreviewExport(latestHtml)) {
@@ -7092,25 +7352,31 @@ function resizeLevelEdge(edge, mode = levelResizeMode || "expand") {
     return;
   }
 
-  const nextCells = makeEmptyCells(nextWidth, nextHeight);
-  const targetOffsetX = normalizedMode === "expand" && edge === "left" ? 1 : 0;
-  const targetOffsetY = normalizedMode === "expand" && edge === "top" ? 1 : 0;
-  const sourceOffsetX = normalizedMode === "shrink" && edge === "left" ? 1 : 0;
-  const sourceOffsetY = normalizedMode === "shrink" && edge === "top" ? 1 : 0;
-  for (let y = 0; y < nextHeight; y += 1) {
-    for (let x = 0; x < nextWidth; x += 1) {
-      const sourceX = normalizedMode === "expand" ? x - targetOffsetX : x + sourceOffsetX;
-      const sourceY = normalizedMode === "expand" ? y - targetOffsetY : y + sourceOffsetY;
-      if (sourceX >= 0 && sourceX < level.width && sourceY >= 0 && sourceY < level.height) {
-        nextCells[y * nextWidth + x] = cloneCellSlots(level.cells[sourceY * level.width + sourceX]);
+  ensureLevelLayerMaps();
+  const previousLayers = level.layers;
+  const resizeLayerCells = (sourceCells) => {
+    const targetOffsetX = normalizedMode === "expand" && edge === "left" ? 1 : 0;
+    const targetOffsetY = normalizedMode === "expand" && edge === "top" ? 1 : 0;
+    const sourceOffsetX = normalizedMode === "shrink" && edge === "left" ? 1 : 0;
+    const sourceOffsetY = normalizedMode === "shrink" && edge === "top" ? 1 : 0;
+    const resized = makeEmptyCells(nextWidth, nextHeight);
+    for (let y = 0; y < nextHeight; y += 1) {
+      for (let x = 0; x < nextWidth; x += 1) {
+        const sourceX = normalizedMode === "expand" ? x - targetOffsetX : x + sourceOffsetX;
+        const sourceY = normalizedMode === "expand" ? y - targetOffsetY : y + sourceOffsetY;
+        if (sourceX >= 0 && sourceX < level.width && sourceY >= 0 && sourceY < level.height) {
+          resized[y * nextWidth + x] = cloneCellSlots(sourceCells[sourceY * level.width + sourceX]);
+        }
       }
     }
-  }
+    return resized;
+  };
+  level.layers = previousLayers.map(resizeLayerCells);
 
   level.width = nextWidth;
   level.height = nextHeight;
   level.regions = resizeLevelRegions(levelRegions(), edge, nextWidth, nextHeight, delta);
-  level.cells = nextCells;
+  level.cells = levelCompositeCells({ includeHidden: true });
   setLevelSolveStatus("");
   renderLevelBoard();
   pushVisualEditUndoSnapshot("level", before);
@@ -7218,27 +7484,32 @@ function transformLevelCells({ nextWidth, nextHeight, mapCell, mapRegion, messag
   levelDisplayCells = null;
   const previousWidth = level.width;
   const previousHeight = level.height;
-  const previousCells = level.cells;
+  ensureLevelLayerMaps();
+  const previousLayers = level.layers;
   const previousRegions = levelRegions();
-  const nextCells = makeEmptyCells(nextWidth, nextHeight);
-  for (let y = 0; y < nextHeight; y += 1) {
-    for (let x = 0; x < nextWidth; x += 1) {
-      const source = mapCell(x, y, previousWidth, previousHeight);
-      if (
-        source
-        && source.x >= 0
-        && source.x < previousWidth
-        && source.y >= 0
-        && source.y < previousHeight
-      ) {
-        nextCells[y * nextWidth + x] = cloneCellSlots(previousCells[source.y * previousWidth + source.x]);
+  const transformLayerCells = (sourceCells) => {
+    const nextCells = makeEmptyCells(nextWidth, nextHeight);
+    for (let y = 0; y < nextHeight; y += 1) {
+      for (let x = 0; x < nextWidth; x += 1) {
+        const source = mapCell(x, y, previousWidth, previousHeight);
+        if (
+          source
+          && source.x >= 0
+          && source.x < previousWidth
+          && source.y >= 0
+          && source.y < previousHeight
+        ) {
+          nextCells[y * nextWidth + x] = cloneCellSlots(sourceCells[source.y * previousWidth + source.x]);
+        }
       }
     }
-  }
+    return nextCells;
+  };
   level.width = nextWidth;
   level.height = nextHeight;
   level.regions = normalizedLevelRegions(previousRegions.map((region) => mapRegion(region, previousWidth, previousHeight)), nextWidth, nextHeight);
-  level.cells = nextCells;
+  level.layers = previousLayers.map(transformLayerCells);
+  level.cells = levelCompositeCells({ includeHidden: true });
   setLevelSolveStatus("");
   renderLevelBoard();
   pushVisualEditUndoSnapshot("level", before);
@@ -7309,18 +7580,14 @@ function updateLevelSizeLabel() {
 }
 
 function normalizedLevelActiveLayer(layer = level.activeLayer, exportData = currentLevelExportData()) {
-  const count = Math.max(1, layerCount(exportData));
+  void exportData;
+  const count = levelLayerCount2d();
   return Math.max(0, Math.min(count - 1, Math.trunc(Number(layer) || 0)));
 }
 
 function setLevelActiveLayerForObject(objectId) {
-  const exportData = currentLevelExportData();
-  const object = engineObjectById(objectId, exportData);
-  if (object && Number.isInteger(object.layer)) {
-    level.activeLayer = normalizedLevelActiveLayer(object.layer);
-  } else {
-    level.activeLayer = normalizedLevelActiveLayer(level.activeLayer);
-  }
+  void objectId;
+  level.activeLayer = normalizedLevelActiveLayer(level.activeLayer);
 }
 
 function paintLevelCellFromElement(element) {
@@ -7345,29 +7612,30 @@ function bucketFillLevelFromElement(element) {
 }
 
 function bucketFillLevelFromIndex(index) {
-  if (levelPlaytestActive || !Number.isInteger(index) || index < 0 || index >= level.cells.length) {
+  const activeCells = levelLayerCells();
+  if (levelPlaytestActive || !Number.isInteger(index) || index < 0 || index >= activeCells.length) {
     return false;
   }
   clearSolutionPreview();
   levelDisplayCells = null;
-  const replacement = paintCellSlots(level.cells[index], level.selectedObjectId);
-  const target = cloneCellSlots(level.cells[index]);
-  if (sameCellSlotsForVisibleLayers(target, replacement)) {
+  const replacement = paintCellSlots(activeCells[index], level.selectedObjectId);
+  const target = cloneCellSlots(activeCells[index]);
+  if (sameCellSlots(target, replacement)) {
     setStatus("Connected area already has that tile", "is-ok");
     deactivateLevelBucketModeAfterUse();
     return true;
   }
 
-  const visited = new Uint8Array(level.cells.length);
+  const visited = new Uint8Array(activeCells.length);
   const stack = [index];
   let changed = 0;
   while (stack.length) {
     const current = stack.pop();
-    if (visited[current] || !sameCellSlotsForVisibleLayers(level.cells[current], target)) {
+    if (visited[current] || !sameCellSlots(activeCells[current], target)) {
       continue;
     }
     visited[current] = 1;
-    level.cells[current] = cloneCellSlots(replacement);
+    activeCells[current] = cloneCellSlots(replacement);
     changed += 1;
     const x = current % level.width;
     const y = Math.floor(current / level.width);
@@ -7389,6 +7657,7 @@ function bucketFillLevelFromIndex(index) {
     return true;
   }
   setLevelSolveStatus("");
+  level.cells = levelCompositeCells({ includeHidden: true });
   renderLevelBoard();
   deactivateLevelBucketModeAfterUse();
   setStatus(level.selectedObjectId ? "Filled connected area" : "Erased connected area", "is-ok");
@@ -7396,19 +7665,22 @@ function bucketFillLevelFromIndex(index) {
 }
 
 function paintLevelCellAtIndex(index, objectId, options = {}) {
+  void options;
   if (levelPlaytestActive) {
     return false;
   }
   clearSolutionPreview();
   levelDisplayCells = null;
-  if (!Number.isInteger(index) || index < 0 || index >= level.cells.length) {
+  const activeCells = levelLayerCells();
+  if (!Number.isInteger(index) || index < 0 || index >= activeCells.length) {
     return false;
   }
-  const next = paintCellSlots(level.cells[index], objectId);
-  if (sameCellSlots(level.cells[index], next)) {
+  const next = paintCellSlots(activeCells[index], objectId);
+  if (sameCellSlots(activeCells[index], next)) {
     return false;
   }
-  level.cells[index] = next;
+  activeCells[index] = next;
+  level.cells = levelCompositeCells({ includeHidden: true });
   setLevelSolveStatus("");
   renderLevelBoard();
   return true;
@@ -7602,7 +7874,15 @@ function updateLevelPlaytestControls() {
     }
   }
   levelPalette?.querySelectorAll("button").forEach((button) => {
+    if (button.closest(".level-layer-edit-row")) {
+      button.disabled = levelPlaytestActive
+        || ((button.classList.contains("level-layer-step-button") || button.classList.contains("level-layer-remove-button")) && levelLayerCount2d() <= 1);
+      return;
+    }
     button.disabled = levelPlaytestActive;
+  });
+  levelPalette?.querySelectorAll(".level-layer-edit-row input").forEach((input) => {
+    input.disabled = levelPlaytestActive;
   });
   levelEdgeButtons.forEach((button) => {
     button.disabled = levelPlaytestActive;
@@ -7616,26 +7896,16 @@ function sameCellSlots(left, right) {
   return left.every((value, index) => value === right[index]);
 }
 
-function sameCellSlotsForVisibleLayers(left, right, exportData = currentLevelExportData()) {
-  const leftSlots = cloneCellSlots(left, exportData);
-  const rightSlots = cloneCellSlots(right, exportData);
-  return levelVisibleLayerIndexes(exportData).every((layerIndex) => leftSlots[layerIndex] === rightSlots[layerIndex]);
-}
-
 function paintCellSlots(slots, objectId, exportData = currentLevelExportData()) {
-  const visibleLayers = new Set(levelVisibleLayerIndexes(exportData));
   const next = cloneCellSlots(slots, exportData);
-  for (const layerIndex of visibleLayers) {
-    next[layerIndex] = 0;
-  }
   if (!objectId) {
-    return next;
+    return makeEmptyCell(exportData);
   }
   const object = engineObjectById(objectId, exportData);
   if (!object) {
     return cloneCellSlots(slots, exportData);
   }
-  if (visibleLayers.has(object.layer)) {
+  if (Number.isInteger(object.layer) && object.layer >= 0 && object.layer < next.length) {
     next[object.layer] = object.id;
   }
   return next;
@@ -8801,6 +9071,7 @@ function exportLevelData(exportData, levelName) {
 }
 
 function levelStateData(exportData) {
+  ensureLevelLayerMaps(exportData);
   const width = level.width;
   const height = level.height;
   const layerCount = exportData?.engine?.layerCount;
@@ -8809,7 +9080,8 @@ function levelStateData(exportData) {
   }
 
   const slots = Array.from({ length: width * height * layerCount }, () => 0);
-  level.cells.forEach((cellSlots, cellIndex) => {
+  const compositeCells = levelCompositeCells({ includeHidden: true, exportData });
+  compositeCells.forEach((cellSlots, cellIndex) => {
     const sourceSlots = cloneCellSlots(cellSlots, exportData);
     for (let layer = 0; layer < layerCount; layer += 1) {
       slots[(cellIndex * layerCount) + layer] = sourceSlots[layer] || 0;
@@ -9289,6 +9561,7 @@ function currentLevelAuthoringSource(exportData = currentLevelExportData()) {
 }
 
 function levelSourceData(source = currentLevelAuthoringSource(), exportData = currentLevelExportData()) {
+  ensureLevelLayerMaps(exportData);
   const charEntries = sourceCharEntries(source, exportData);
   const allocator = createLevelLegendAllocator(charEntries, sourceReservedLegendChars(source));
   const visualObjects = visualObjectNameSet(exportData);
@@ -9298,15 +9571,41 @@ function levelSourceData(source = currentLevelAuthoringSource(), exportData = cu
     if (regionIndex > 0) {
       rows.push("");
     }
-    for (let y = region.y; y < region.y + region.height; y += 1) {
-      const row = [];
-      for (let x = region.x; x < region.x + region.width; x += 1) {
-        row.push(charForSourceCell(level.cells[y * level.width + x], charEntries, allocator, exportData, visualObjects));
+    const lastLayer = highestNonEmptyLevelLayerForRegion(region, exportData);
+    for (let asciiLayerIndex = 0; asciiLayerIndex <= lastLayer; asciiLayerIndex += 1) {
+      if (asciiLayerIndex > 0) {
+        rows.push("+");
       }
-      rows.push(row.join(""));
+      const layerCells = level.layers[asciiLayerIndex] || makeEmptyLevelLayer(level.width, level.height, exportData);
+      for (let y = region.y; y < region.y + region.height; y += 1) {
+        const row = [];
+        for (let x = region.x; x < region.x + region.width; x += 1) {
+          row.push(charForSourceCell(layerCells[y * level.width + x], charEntries, allocator, exportData, visualObjects));
+        }
+        rows.push(row.join(""));
+      }
     }
   }
   return { rows, localLegends: allocator.localLegends };
+}
+
+function highestNonEmptyLevelLayerForRegion(region, exportData = currentLevelExportData()) {
+  let highest = 0;
+  const layers = ensureLevelLayerMaps(exportData);
+  for (const [asciiLayerIndex, layerCells] of layers.entries()) {
+    for (let y = region.y; y < region.y + region.height; y += 1) {
+      for (let x = region.x; x < region.x + region.width; x += 1) {
+        if (cellHasAnyObject(layerCells[y * level.width + x], exportData)) {
+          highest = asciiLayerIndex;
+        }
+      }
+    }
+  }
+  return highest;
+}
+
+function cellHasAnyObject(slots, exportData = currentLevelExportData()) {
+  return cloneCellSlots(slots, exportData).some((objectId) => Number(objectId) > 0);
 }
 
 function createLevelLegendAllocator(entries, reservedChars = []) {
@@ -9338,7 +9637,7 @@ function createLevelLegendAllocator(entries, reservedChars = []) {
 }
 
 function levelLegendCandidateChars() {
-  const ascii = [..."xyzabcdefghijklmnopqrstuvwABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@$%&?!~^:;,_+-*/<>|()[]"];
+  const ascii = [..."xyzabcdefghijklmnopqrstuvwABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@$%&?!~^:;,_-*/<>|()[]"];
   const ranges = [
     [0x0391, 0x03A1],
     [0x03A3, 0x03FF],
