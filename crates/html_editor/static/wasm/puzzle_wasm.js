@@ -162,6 +162,17 @@ export function compile_preview(source, puzzle_path, game_css, game_visuals_js) 
 
 /**
  * @param {string} source
+ * @returns {number}
+ */
+export function create_source_analysis_handle(source) {
+    const ptr0 = passStringToWasm0(source, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.create_source_analysis_handle(ptr0, len0);
+    return ret >>> 0;
+}
+
+/**
+ * @param {string} source
  * @param {string} puzzle_path
  * @param {string} game_css
  * @param {string} game_visuals_js
@@ -201,6 +212,16 @@ export function export_html(source, puzzle_path, game_css, game_visuals_js, game
 }
 
 /**
+ * @param {number} handle
+ */
+export function free_source_analysis_handle(handle) {
+    const ret = wasm.free_source_analysis_handle(handle);
+    if (ret[1]) {
+        throw takeFromExternrefTable0(ret[0]);
+    }
+}
+
+/**
  * @param {string} source
  * @param {string} base_visuals_js
  * @returns {string}
@@ -225,65 +246,6 @@ export function generate_visuals_js(source, base_visuals_js) {
         return getStringFromWasm0(ptr3, len3);
     } finally {
         wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
-    }
-}
-
-/**
- * @param {string} source
- * @returns {string}
- */
-export function highlight_source_html(source) {
-    let deferred2_0;
-    let deferred2_1;
-    try {
-        const ptr0 = passStringToWasm0(source, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.highlight_source_html(ptr0, len0);
-        deferred2_0 = ret[0];
-        deferred2_1 = ret[1];
-        return getStringFromWasm0(ret[0], ret[1]);
-    } finally {
-        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
-    }
-}
-
-/**
- * @param {string} source
- * @param {boolean} include_outline
- * @returns {string}
- */
-export function highlight_source_json(source, include_outline) {
-    let deferred2_0;
-    let deferred2_1;
-    try {
-        const ptr0 = passStringToWasm0(source, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.highlight_source_json(ptr0, len0, include_outline);
-        deferred2_0 = ret[0];
-        deferred2_1 = ret[1];
-        return getStringFromWasm0(ret[0], ret[1]);
-    } finally {
-        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
-    }
-}
-
-/**
- * @param {string} source
- * @param {number} cursor_offset
- * @returns {string}
- */
-export function resolve_source_target(source, cursor_offset) {
-    let deferred2_0;
-    let deferred2_1;
-    try {
-        const ptr0 = passStringToWasm0(source, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.resolve_source_target(ptr0, len0, cursor_offset);
-        deferred2_0 = ret[0];
-        deferred2_1 = ret[1];
-        return getStringFromWasm0(ret[0], ret[1]);
-    } finally {
-        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
     }
 }
 
@@ -423,58 +385,141 @@ export function solver_task_initial_display_state_json(request_json) {
 }
 
 /**
- * @param {string} source
+ * @param {number} handle
  * @returns {string}
  */
-export function source_entries_json(source) {
+export function source_analysis_entries_json(handle) {
     let deferred2_0;
     let deferred2_1;
     try {
-        const ptr0 = passStringToWasm0(source, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.source_entries_json(ptr0, len0);
-        deferred2_0 = ret[0];
-        deferred2_1 = ret[1];
-        return getStringFromWasm0(ret[0], ret[1]);
+        const ret = wasm.source_analysis_entries_json(handle);
+        var ptr1 = ret[0];
+        var len1 = ret[1];
+        if (ret[3]) {
+            ptr1 = 0; len1 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred2_0 = ptr1;
+        deferred2_1 = len1;
+        return getStringFromWasm0(ptr1, len1);
     } finally {
         wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
     }
 }
 
 /**
- * @param {string} source
+ * @param {number} handle
+ * @param {boolean} include_outline
  * @returns {string}
  */
-export function source_outline_json(source) {
+export function source_analysis_highlight_json(handle, include_outline) {
     let deferred2_0;
     let deferred2_1;
     try {
-        const ptr0 = passStringToWasm0(source, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.source_outline_json(ptr0, len0);
-        deferred2_0 = ret[0];
-        deferred2_1 = ret[1];
-        return getStringFromWasm0(ret[0], ret[1]);
+        const ret = wasm.source_analysis_highlight_json(handle, include_outline);
+        var ptr1 = ret[0];
+        var len1 = ret[1];
+        if (ret[3]) {
+            ptr1 = 0; len1 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred2_0 = ptr1;
+        deferred2_1 = len1;
+        return getStringFromWasm0(ptr1, len1);
     } finally {
         wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
     }
 }
 
 /**
- * @param {string} source
+ * @param {number} handle
+ * @returns {string}
+ */
+export function source_analysis_json(handle) {
+    let deferred2_0;
+    let deferred2_1;
+    try {
+        const ret = wasm.source_analysis_json(handle);
+        var ptr1 = ret[0];
+        var len1 = ret[1];
+        if (ret[3]) {
+            ptr1 = 0; len1 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred2_0 = ptr1;
+        deferred2_1 = len1;
+        return getStringFromWasm0(ptr1, len1);
+    } finally {
+        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+    }
+}
+
+/**
+ * @param {number} handle
+ * @returns {string}
+ */
+export function source_analysis_outline_json(handle) {
+    let deferred2_0;
+    let deferred2_1;
+    try {
+        const ret = wasm.source_analysis_outline_json(handle);
+        var ptr1 = ret[0];
+        var len1 = ret[1];
+        if (ret[3]) {
+            ptr1 = 0; len1 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred2_0 = ptr1;
+        deferred2_1 = len1;
+        return getStringFromWasm0(ptr1, len1);
+    } finally {
+        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+    }
+}
+
+/**
+ * @param {number} handle
  * @param {number} cursor_offset
  * @returns {string}
  */
-export function suggest_source_completions(source, cursor_offset) {
+export function source_analysis_resolve_source_target(handle, cursor_offset) {
     let deferred2_0;
     let deferred2_1;
     try {
-        const ptr0 = passStringToWasm0(source, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.suggest_source_completions(ptr0, len0, cursor_offset);
-        deferred2_0 = ret[0];
-        deferred2_1 = ret[1];
-        return getStringFromWasm0(ret[0], ret[1]);
+        const ret = wasm.source_analysis_resolve_source_target(handle, cursor_offset);
+        var ptr1 = ret[0];
+        var len1 = ret[1];
+        if (ret[3]) {
+            ptr1 = 0; len1 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred2_0 = ptr1;
+        deferred2_1 = len1;
+        return getStringFromWasm0(ptr1, len1);
+    } finally {
+        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+    }
+}
+
+/**
+ * @param {number} handle
+ * @param {number} cursor_offset
+ * @returns {string}
+ */
+export function source_analysis_suggest_source_completions(handle, cursor_offset) {
+    let deferred2_0;
+    let deferred2_1;
+    try {
+        const ret = wasm.source_analysis_suggest_source_completions(handle, cursor_offset);
+        var ptr1 = ret[0];
+        var len1 = ret[1];
+        if (ret[3]) {
+            ptr1 = 0; len1 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred2_0 = ptr1;
+        deferred2_1 = len1;
+        return getStringFromWasm0(ptr1, len1);
     } finally {
         wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
     }

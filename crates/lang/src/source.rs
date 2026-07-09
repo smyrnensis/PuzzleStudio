@@ -471,7 +471,7 @@ fn starts_inline_block(tokens: &[&str], line: &str) -> bool {
             | ["win_conditions", ..]
             | ["lose_conditions", ..]
             | ["puzzle3", ..]
-            | ["colors"]
+            | ["palette"]
             | ["shapes"]
             | ["objects"]
             | ["display_objects"]
@@ -859,10 +859,7 @@ fn is_visual_sprite_duration_row(tokens: &[&str]) -> bool {
     let [value] = tokens else {
         return false;
     };
-    let Some(number) = value
-        .strip_suffix("ms")
-        .or_else(|| value.strip_suffix('s'))
-    else {
+    let Some(number) = value.strip_suffix("ms").or_else(|| value.strip_suffix('s')) else {
         return false;
     };
     !number.is_empty() && number.chars().any(|ch| ch.is_ascii_digit())
@@ -903,7 +900,7 @@ fn next_unbraced_visual_shape_body(
 fn is_visual_sprite_selector_header_token(value: &str) -> bool {
     if matches!(
         value,
-        "shape" | "shapes" | "colors" | "ascii" | "sprites" | "sprites3"
+        "shape" | "shapes" | "palette" | "colors" | "ascii" | "sprites" | "sprites3"
     ) {
         return false;
     }
@@ -1093,6 +1090,11 @@ fn is_statement_block_header(
     current: Option<SourceScope>,
     opened: SourceScope,
 ) -> bool {
+    if puzzle_authoring::rule_statement_block_surface(line, current == Some(SourceScope::Other))
+        .is_some()
+    {
+        return true;
+    }
     if structural_header(line).trim_end().ends_with("->") || line.contains("->") {
         return true;
     }
@@ -1145,6 +1147,9 @@ fn opening_scope(line: &str, tokens: &[&str], current: Option<SourceScope>) -> O
             };
         }
     }
+    if current == Some(SourceScope::Puzzle) && matches!(tokens, ["layout", ..]) {
+        return Some(SourceScope::SceneLayout);
+    }
     if matches!(
         current,
         Some(SourceScope::VisualShapeTable | SourceScope::VisualShapeEntry)
@@ -1154,7 +1159,7 @@ fn opening_scope(line: &str, tokens: &[&str], current: Option<SourceScope>) -> O
     }
     if current == Some(SourceScope::Visuals) && line.ends_with('{') {
         match tokens {
-            ["colors"] => return Some(SourceScope::VisualColorTable),
+            ["palette"] => return Some(SourceScope::VisualColorTable),
             ["shapes"] => return Some(SourceScope::VisualShapeTable),
             [..] => return Some(SourceScope::VisualShapeEntry),
         }
@@ -1178,7 +1183,7 @@ fn opening_scope(line: &str, tokens: &[&str], current: Option<SourceScope>) -> O
         ["puzzle", ..] | ["puzzle3", ..] => Some(SourceScope::Puzzle),
         ["level", ..] => Some(SourceScope::Level),
         ["shapes"] => Some(SourceScope::VisualShapeTable),
-        ["colors"] => Some(SourceScope::VisualColorTable),
+        ["palette"] => Some(SourceScope::VisualColorTable),
         [first, ..] => source_scope_for_name(first),
         [] => line.ends_with('{').then_some(SourceScope::Other),
     }
@@ -1384,6 +1389,134 @@ on_level_start {
                 .iter()
                 .any(|token| token.text == "//" || token.text == "comment")
         );
+    }
+
+    #[test]
+    fn surface_source_scan_uses_parser_rule_statement_block_surface() {
+        let source = r#"
+puzzle board {
+rules {
+fix once {
+[ Player ] -> [ Player ]
+}
+}
+}
+"#;
+        let context = scan_surface_source(source);
+        let fix_line = context
+            .lines
+            .iter()
+            .find(|line| line.content.trim() == "fix once {")
+            .unwrap();
+
+        assert!(fix_line.structural_events.iter().any(|event| {
+            matches!(
+                event,
+                super::SourceStructureEvent::Open {
+                    header,
+                    role: super::SourceBlockRole::Statement,
+                    ..
+                } if header == "fix once"
+            )
+        }));
+    }
+
+    #[test]
+    fn surface_source_scan_keeps_scene_scope_after_choice_block() {
+        let source = r#"
+puzzle board {
+scene title {
+choice "New Game" -> {
+start playing
+}
+}
+scene playing {
+layout {
+}
+}
+}
+"#;
+        let context = scan_surface_source(source);
+        let layout_line = context
+            .lines
+            .iter()
+            .find(|line| line.content.trim() == "layout {")
+            .unwrap();
+
+        assert!(layout_line.structural_events.iter().any(|event| {
+            matches!(
+                event,
+                super::SourceStructureEvent::Open {
+                    header,
+                    scope: super::SourceScope::SceneLayout,
+                    ..
+                } if header == "layout"
+            )
+        }));
+    }
+
+    #[test]
+    fn surface_source_scan_closes_unbraced_levels_before_scene() {
+        let source = r#"
+levels board of board {
+legend {
+. = empty
+P = Player
+}
+level one
+P.
+}
+
+scene playing {
+layout {
+}
+}
+"#;
+        let context = scan_surface_source(source);
+        let layout_line = context
+            .lines
+            .iter()
+            .find(|line| line.content.trim() == "layout {")
+            .unwrap();
+
+        assert!(layout_line.structural_events.iter().any(|event| {
+            matches!(
+                event,
+                super::SourceStructureEvent::Open {
+                    header,
+                    scope: super::SourceScope::SceneLayout,
+                    ..
+                } if header == "layout"
+            )
+        }));
+    }
+
+    #[test]
+    fn surface_source_scan_recognizes_puzzle_default_scene_layout() {
+        let source = r#"
+puzzle board {
+layout {
+title
+}
+}
+"#;
+        let context = scan_surface_source(source);
+        let layout_line = context
+            .lines
+            .iter()
+            .find(|line| line.content.trim() == "layout {")
+            .unwrap();
+
+        assert!(layout_line.structural_events.iter().any(|event| {
+            matches!(
+                event,
+                super::SourceStructureEvent::Open {
+                    header,
+                    scope: super::SourceScope::SceneLayout,
+                    ..
+                } if header == "layout"
+            )
+        }));
     }
 
     #[test]

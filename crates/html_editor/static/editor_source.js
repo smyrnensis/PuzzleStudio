@@ -39,6 +39,8 @@ const SOURCE_EDITABLE_TARGETS = [
 ];
 const sourceEditableTargetHandlers = new Map();
 let sourceHighlightTimer = 0;
+let sourceOptimisticHighlightFrame = 0;
+let sourceOptimisticHighlightSource = null;
 let sourceCompletionTimer = 0;
 let sourceOutlineTimer = 0;
 let activeHighlightRequest = null;
@@ -808,12 +810,21 @@ function scheduleSourceHighlight(immediate = false, options = {}) {
   }
   setSourcePlainTextMode(false);
   const preserveCurrent = options.preserveCurrent !== false;
-  if (preserveCurrent && sourceHighlightMode) {
-    if (!renderOptimisticSourceHighlight()) {
-      syncSourceHighlightScroll();
+  if (immediate) {
+    window.cancelAnimationFrame(sourceOptimisticHighlightFrame);
+    sourceOptimisticHighlightFrame = 0;
+    sourceOptimisticHighlightSource = null;
+    if (preserveCurrent && sourceHighlightMode) {
+      if (!renderOptimisticSourceHighlight()) {
+        syncSourceHighlightScroll();
+      }
+    } else {
+      renderPlainSourceHighlight();
     }
+  } else if (preserveCurrent && sourceHighlightMode) {
+    scheduleOptimisticSourceHighlight();
   } else {
-    renderPlainSourceHighlight();
+    schedulePlainSourceHighlight();
   }
   window.clearTimeout(sourceHighlightTimer);
   sourceHighlightTimer = window.setTimeout(() => {
@@ -822,10 +833,43 @@ function scheduleSourceHighlight(immediate = false, options = {}) {
   }, immediate ? 0 : 140);
 }
 
+function scheduleOptimisticSourceHighlight(source = null) {
+  sourceOptimisticHighlightSource = typeof source === "string" ? source : null;
+  if (sourceOptimisticHighlightFrame) {
+    return;
+  }
+  sourceOptimisticHighlightFrame = window.requestAnimationFrame(() => {
+    sourceOptimisticHighlightFrame = 0;
+    const expectedSource = sourceOptimisticHighlightSource;
+    sourceOptimisticHighlightSource = null;
+    const currentSource = sourceEditor.value || "";
+    if (expectedSource !== null && expectedSource !== currentSource) {
+      return;
+    }
+    if (!renderOptimisticSourceHighlight(expectedSource ?? currentSource)) {
+      syncSourceHighlightScroll();
+    }
+  });
+}
+
+function schedulePlainSourceHighlight() {
+  sourceOptimisticHighlightSource = null;
+  if (sourceOptimisticHighlightFrame) {
+    return;
+  }
+  sourceOptimisticHighlightFrame = window.requestAnimationFrame(() => {
+    sourceOptimisticHighlightFrame = 0;
+    renderPlainSourceHighlight();
+  });
+}
+
 function resetSourcePuzzleAnalysisState() {
   const plainModeChanged = setSourcePlainTextMode(true);
   window.clearTimeout(sourceHighlightTimer);
   sourceHighlightTimer = 0;
+  window.cancelAnimationFrame(sourceOptimisticHighlightFrame);
+  sourceOptimisticHighlightFrame = 0;
+  sourceOptimisticHighlightSource = null;
   window.clearTimeout(sourceOutlineTimer);
   sourceOutlineTimer = 0;
   window.clearTimeout(sourceCompletionTimer);
@@ -1985,12 +2029,11 @@ function syncSourceOutlineActiveItem(options = {}) {
 }
 
 async function suggestSourceCompletionsWithWasm(source, cursorOffset) {
-  const compiler = await loadWasmCompiler();
-  if (typeof compiler.suggest_source_completions !== "function") {
+  if (typeof window.PuzzleStudioRuntime?.suggestSourceCompletions !== "function") {
     return null;
   }
   const cursorByteOffset = sourceByteOffset(source, cursorOffset);
-  const json = compiler.suggest_source_completions(source, cursorByteOffset);
+  const json = await window.PuzzleStudioRuntime.suggestSourceCompletions(source, cursorByteOffset);
   const list = JSON.parse(json || "{}");
   return {
     replaceStart: sourceUtf16OffsetFromByteOffset(source, Number(list.replaceStart) || 0),
@@ -2105,8 +2148,7 @@ async function showSourceCompletions(options = {}) {
   }
   const requestId = ++sourceCompletionRequestId;
   try {
-    const list = suggestSourceCompletionsFromEditorContext(source, cursor, document)
-      || await suggestSourceCompletionsWithWasm(source, cursor);
+    const list = await suggestSourceCompletionsWithWasm(source, cursor);
     if (requestId !== sourceCompletionRequestId || source !== sourceEditor.value || cursor !== sourceEditor.selectionStart) {
       return false;
     }
@@ -2182,75 +2224,6 @@ function filterSourceCompletionsForTypedReplacement(items, list, source, cursor)
   return items.filter((item) => (item?.insertText || item?.label || "") !== current);
 }
 
-function suggestSourceCompletionsFromEditorContext(source, cursor, document) {
-  const importContext = sourceImportPathCompletionContext(source, cursor);
-  if (!importContext) {
-    return null;
-  }
-  return {
-    replaceStart: importContext.replaceStart,
-    replaceEnd: importContext.replaceEnd,
-    items: sourceImportPathCompletionItems(importContext, document),
-  };
-}
-
-function sourceImportPathCompletionItems(context, document) {
-  const currentDocumentPath = normalizePath(document?.puzzlePath || "");
-  const preferredRoot = normalizePath(document?.workspaceRoot || workspaceRoot || "");
-  const prefix = normalizePath(context.prefix || "");
-  const seen = new Set();
-  const items = [];
-  for (const candidate of documents) {
-    if (!candidate || !isPuzzleDocument(candidate) || !isTextDocument(candidate)) {
-      continue;
-    }
-    const candidatePath = normalizePath(candidate.puzzlePath || "");
-    if (!candidatePath || candidatePath === currentDocumentPath) {
-      continue;
-    }
-    if (preferredRoot && normalizePath(candidate.workspaceRoot || "") !== preferredRoot) {
-      continue;
-    }
-    const relativePath = sourceRelativeImportPath(document, candidate);
-    if (!relativePath || (prefix && !relativePath.startsWith(prefix)) || seen.has(relativePath)) {
-      continue;
-    }
-    seen.add(relativePath);
-    items.push({
-      label: relativePath,
-      kind: "puzzle",
-      insertText: context.needsClosingQuote ? `${relativePath}"` : relativePath,
-      detail: "path",
-    });
-  }
-  items.sort((left, right) => (left.label || "").localeCompare(right.label || ""));
-  return items.slice(0, 80);
-}
-
-function sourceRelativeImportPath(fromDocument, toDocument) {
-  const baseDir = directoryName(fromDocument?.puzzlePath || "");
-  const targetPath = normalizePath(toDocument?.puzzlePath || "");
-  return sourceRelativePathFromDirectory(baseDir, targetPath);
-}
-
-function sourceRelativePathFromDirectory(baseDir, targetPath) {
-  const baseParts = normalizePath(baseDir).split("/").filter(Boolean);
-  const targetParts = normalizePath(targetPath).split("/").filter(Boolean);
-  let shared = 0;
-  while (
-    shared < baseParts.length
-    && shared < targetParts.length
-    && baseParts[shared] === targetParts[shared]
-  ) {
-    shared += 1;
-  }
-  const parts = [
-    ...baseParts.slice(shared).map(() => ".."),
-    ...targetParts.slice(shared),
-  ];
-  return parts.join("/");
-}
-
 function sourceAutoCompletionEligible(source, cursor) {
   if (
     sourceEditor.selectionStart !== sourceEditor.selectionEnd
@@ -2260,8 +2233,7 @@ function sourceAutoCompletionEligible(source, cursor) {
     return false;
   }
   return sourceCursorHasCompletionPrefix(source, cursor)
-    || sourceCursorAfterSelectorTagSeparator(source, cursor)
-    || Boolean(sourceImportPathCompletionContext(source, cursor));
+    || sourceCursorAfterSelectorTagSeparator(source, cursor);
 }
 
 function sourceCursorHasCompletionPrefix(source, cursor) {
@@ -2288,9 +2260,6 @@ function sourceCursorBeforeSyntaxBoundaryWithoutPrefix(source, cursor) {
 
 function sourceCompletionMode(options, list, source, cursor) {
   if (options.manual) {
-    return "completion";
-  }
-  if (sourceImportPathCompletionContext(source, cursor)) {
     return "completion";
   }
   const replaceStart = Math.max(0, Math.min(source.length, Number(list?.replaceStart) || 0));
@@ -3321,7 +3290,7 @@ function handleSourceBeforeInputTextInsert(event) {
     if (event.isComposing || event.inputType === "insertCompositionText") {
       beginSourceCompositionPreview(predicted);
     } else {
-      renderPredictedSourceHighlight(predicted);
+      scheduleOptimisticSourceHighlight(predicted);
     }
   }
 }
@@ -5079,57 +5048,6 @@ function sourceImportLinesWithOffsets(source) {
     start = end + 1;
   }
   return lines;
-}
-
-function sourceImportPathCompletionContext(source, cursor) {
-  const lines = sourceImportLinesWithOffsets(source);
-  const lineIndex = sourceLineIndexAtOffset(lines, cursor);
-  const line = lines[lineIndex];
-  if (!line) {
-    return null;
-  }
-  const column = Math.max(0, Math.min(line.raw.length, cursor - line.start));
-  const code = stripSourceImportLineComment(line.raw);
-  if (column > code.length) {
-    return null;
-  }
-  const prefix = code.match(/^(\s*import\s+)"/);
-  if (!prefix) {
-    return null;
-  }
-  const pathStartColumn = prefix[0].length;
-  if (column < pathStartColumn) {
-    return null;
-  }
-  let escaped = false;
-  let closeQuoteColumn = -1;
-  for (let index = pathStartColumn; index < code.length; index += 1) {
-    const char = code[index];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (char === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (char === "\"") {
-      closeQuoteColumn = index;
-      break;
-    }
-  }
-  const pathEndColumn = closeQuoteColumn >= 0 ? closeQuoteColumn : code.length;
-  if (column > pathEndColumn) {
-    return null;
-  }
-  const replaceStart = line.start + pathStartColumn;
-  const replaceEnd = line.start + pathEndColumn;
-  return {
-    replaceStart,
-    replaceEnd,
-    prefix: code.slice(pathStartColumn, column),
-    needsClosingQuote: closeQuoteColumn < 0,
-  };
 }
 
 function sourceImportLinkAtOffset(source, offset, lines = sourceImportLinesWithOffsets(source)) {

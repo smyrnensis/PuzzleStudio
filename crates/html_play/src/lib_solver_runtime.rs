@@ -664,6 +664,59 @@ fn solve_current_state_with_budget(
 }
 
 #[cfg(feature = "solver")]
+#[derive(Clone, Debug)]
+enum SolverGoal2 {
+    BuiltIn,
+    Expr(GoalExpr),
+    ExactState(State),
+}
+
+#[cfg(feature = "solver")]
+#[derive(Clone, Debug)]
+enum SolverCollectSelector2 {
+    Predicate(GoalExpr),
+    Maximize(GoalValue),
+}
+
+#[cfg(feature = "solver")]
+#[derive(Clone, Debug)]
+struct CollectMatch<State, Input> {
+    depth: u32,
+    score: Option<i64>,
+    moves: Vec<Input>,
+    state: State,
+}
+
+#[cfg(feature = "solver")]
+#[derive(Clone, Debug)]
+enum CollectResponse<State, Input> {
+    Completed {
+        stats: SearchStats,
+        matches: Vec<CollectMatch<State, Input>>,
+        observations: Vec<SearchObservation<State>>,
+    },
+    LimitReached {
+        stats: SearchStats,
+        matches: Vec<CollectMatch<State, Input>>,
+        observations: Vec<SearchObservation<State>>,
+    },
+    BudgetExceeded {
+        stats: SearchStats,
+        matches: Vec<CollectMatch<State, Input>>,
+        observations: Vec<SearchObservation<State>>,
+    },
+    Failed {
+        depth: u32,
+        error: String,
+        matches: Vec<CollectMatch<State, Input>>,
+        observations: Vec<SearchObservation<State>>,
+    },
+}
+
+#[cfg(feature = "solver")]
+type PuzzleCollectResponse = CollectResponse<State, InputId>;
+
+#[cfg(feature = "solver")]
 fn solver_state_slicer_for_compiled(
     game: &CompiledGame,
     goal: Option<&GoalExpr>,
@@ -684,12 +737,23 @@ fn solver_state_slicer_for_compiled(
 fn solver_state_slicer_for_loaded(
     loaded: &LoadedGame,
     solver_game: &CompiledGame,
+    initial: &State,
+    exact_goal: Option<&State>,
+    explicit_goal: Option<&GoalExpr>,
+    explicit_lose: Option<&GoalExpr>,
 ) -> puzzle_solver::SolverStateSlicer {
     let mut roots = BTreeSet::new();
-    if let Some(goal) = &loaded.goal {
+    if let Some(goal) = exact_goal {
+        collect_state_objects(initial, &mut roots);
+        collect_state_objects(goal, &mut roots);
+    } else if let Some(goal) = explicit_goal {
+        collect_goal_expr_roots(solver_game, goal, &mut roots);
+    } else if let Some(goal) = &loaded.goal {
         collect_goal_expr_roots(solver_game, &goal.expr, &mut roots);
     }
-    if let Some(lose) = &loaded.lose {
+    if let Some(lose) = explicit_lose {
+        collect_goal_expr_roots(solver_game, lose, &mut roots);
+    } else if let Some(lose) = &loaded.lose {
         collect_goal_expr_roots(solver_game, &lose.expr, &mut roots);
     }
     for term in &loaded.solver_strategy.terms {
@@ -699,6 +763,45 @@ fn solver_state_slicer_for_loaded(
     }
     let relevance = puzzle_solver::SolverRelevance::from_root_objects(solver_game, roots);
     puzzle_solver::SolverStateSlicer::<ObjectId>::from_relevance(solver_game, &relevance)
+}
+
+#[cfg(feature = "solver")]
+fn solver_state_slicer_for_collect(
+    loaded: &LoadedGame,
+    solver_game: &CompiledGame,
+    selector: &SolverCollectSelector2,
+    explicit_lose: Option<&GoalExpr>,
+) -> puzzle_solver::SolverStateSlicer {
+    let mut roots = BTreeSet::new();
+    match selector {
+        SolverCollectSelector2::Predicate(predicate) => {
+            collect_goal_expr_roots(solver_game, predicate, &mut roots);
+        }
+        SolverCollectSelector2::Maximize(value) => {
+            collect_goal_value_roots(solver_game, value, &mut roots);
+        }
+    }
+    if let Some(lose) = explicit_lose {
+        collect_goal_expr_roots(solver_game, lose, &mut roots);
+    } else if let Some(lose) = &loaded.lose {
+        collect_goal_expr_roots(solver_game, &lose.expr, &mut roots);
+    }
+    for term in &loaded.solver_strategy.terms {
+        collect_query_expr_roots(&term.value, &mut roots, &mut |kind, roots| {
+            puzzle_solver::object_refs::collect_condition_value_roots(kind, roots)
+        });
+    }
+    let relevance = puzzle_solver::SolverRelevance::from_root_objects(solver_game, roots);
+    puzzle_solver::SolverStateSlicer::<ObjectId>::from_relevance(solver_game, &relevance)
+}
+
+#[cfg(feature = "solver")]
+fn collect_state_objects(state: &State, roots: &mut BTreeSet<ObjectId>) {
+    for object in state.slots() {
+        if !object.is_empty() {
+            roots.insert(*object);
+        }
+    }
 }
 
 #[cfg(feature = "solver")]
@@ -809,6 +912,7 @@ fn solve_compiled_state_with_budget_and_progress<O>(
     engine: &puzzle_core_wasm::CompiledEngine,
     goal: Option<GoalExpr>,
     lose: Option<GoalExpr>,
+    accept_win_command: bool,
     initial: State,
     budget: SearchBudget,
     mut on_observation: Option<O>,
@@ -828,10 +932,11 @@ where
     let goal_game = game.clone();
     let goal_for_domain = goal.clone();
     let state_slicer = solver_state_slicer_for_compiled(&game, goal.as_ref(), lose.as_ref());
-    let mut domain = PuzzleDomain::with_state_slicer(
+    let mut domain = PuzzleDomain::with_state_slicer_and_win_command_goal(
         game.clone(),
         inputs,
         state_slicer,
+        accept_win_command,
         move |state: &State| {
             goal_for_domain
                 .as_ref()
@@ -957,6 +1062,30 @@ fn solve_current_state_with_budget_inner<O>(
 where
     O: FnMut(&State, SearchProgress),
 {
+    solve_current_state_with_goal_with_budget_inner(
+        loaded,
+        SolverGoal2::BuiltIn,
+        None,
+        true,
+        initial,
+        budget,
+        on_progress,
+    )
+}
+
+#[cfg(feature = "solver")]
+fn solve_current_state_with_goal_with_budget_inner<O>(
+    loaded: &LoadedGame,
+    goal: SolverGoal2,
+    lose: Option<GoalExpr>,
+    accept_win_command: bool,
+    initial: State,
+    budget: SearchBudget,
+    on_progress: Option<O>,
+) -> Result<PuzzleSolutionResponse, AppError>
+where
+    O: FnMut(&State, SearchProgress),
+{
     let inputs = solver_inputs(loaded);
     if inputs.is_empty() {
         return Err(AppError::Config("no model inputs available".to_string()));
@@ -965,30 +1094,256 @@ where
     let solver_game = loaded.solver_game();
     let game = Arc::new(solver_game);
     let goal_game = loaded.clone();
-    let state_slicer = solver_state_slicer_for_loaded(loaded, &game);
-    let mut domain = PuzzleDomain::with_state_slicer(
+    let explicit_goal = match &goal {
+        SolverGoal2::BuiltIn => None,
+        SolverGoal2::Expr(goal) => Some(goal),
+        SolverGoal2::ExactState(_) => None,
+    };
+    let exact_goal = match &goal {
+        SolverGoal2::ExactState(goal) => Some(goal),
+        SolverGoal2::BuiltIn | SolverGoal2::Expr(_) => None,
+    };
+    let state_slicer = solver_state_slicer_for_loaded(
+        loaded,
+        &game,
+        &initial,
+        exact_goal,
+        explicit_goal,
+        lose.as_ref(),
+    );
+    let projected_initial = state_slicer.project_state(&initial);
+    let projected_exact_goal = exact_goal.map(|goal| state_slicer.project_state(goal));
+    let exact_heuristic = projected_exact_goal
+        .as_ref()
+        .map(|goal| ExactStateHeuristic::new(&game, &projected_initial, goal));
+    let goal_for_domain = goal.clone();
+    let goal_expr_game = game.clone();
+    let mut domain = PuzzleDomain::with_state_slicer_and_win_command_goal(
         game.clone(),
         inputs,
         state_slicer,
-        move |state: &State| goal_game.is_goal_complete(state),
+        accept_win_command,
+        move |state: &State| match &goal_for_domain {
+            SolverGoal2::BuiltIn => goal_game.is_goal_complete(state),
+            SolverGoal2::Expr(goal) => eval_goal_expr(&goal_expr_game, state, goal),
+            SolverGoal2::ExactState(_) => projected_exact_goal
+                .as_ref()
+                .is_some_and(|goal| state == goal),
+        },
     );
     let solver_initial = domain.initial_state(initial.clone());
     let score_game = loaded.clone();
+    let score_expr_game = game.clone();
+    let score_goal = goal.clone();
     let lose_game = loaded.clone();
+    let lose_expr_game = game.clone();
     let replay_game = loaded.game.clone();
     solve_domain_with_observations(
         &mut domain,
         solver_initial,
         budget,
         move |state| {
-            goal_score(&score_game, state.state())
-                + solver_strategy_score(&score_game, state.state())
+            let goal_score = match &score_goal {
+                SolverGoal2::BuiltIn => goal_score(&score_game, state.state()),
+                SolverGoal2::Expr(goal) => goal_expr_score(&score_expr_game, state.state(), goal),
+                SolverGoal2::ExactState(_) => exact_heuristic
+                    .as_ref()
+                    .map_or(0, |heuristic| heuristic.score(state.state())),
+            };
+            goal_score + solver_strategy_score(&score_game, state.state())
         },
-        move |state| lose_game.is_lose_complete(state.state()),
+        move |state| {
+            if let Some(lose) = &lose {
+                eval_goal_expr(&lose_expr_game, state.state(), lose)
+            } else {
+                lose_game.is_lose_complete(state.state())
+            }
+        },
         |state| state.state().clone(),
         on_progress,
         move |solution_inputs| solution_steps(&replay_game, initial, solution_inputs),
     )
+}
+
+#[cfg(feature = "solver")]
+fn solve_current_state_collect_with_budget_inner<O>(
+    loaded: &LoadedGame,
+    selector: SolverCollectSelector2,
+    lose: Option<GoalExpr>,
+    accept_win_command: bool,
+    initial: State,
+    budget: SearchBudget,
+    max_results: usize,
+    on_progress: Option<O>,
+) -> Result<PuzzleCollectResponse, AppError>
+where
+    O: FnMut(&State, SearchProgress),
+{
+    let inputs = solver_inputs(loaded);
+    if inputs.is_empty() {
+        return Err(AppError::Config("no model inputs available".to_string()));
+    }
+    if max_results == 0 {
+        return Err(AppError::Config(
+            "solver collect maxResults must be greater than zero".to_string(),
+        ));
+    }
+
+    let solver_game = loaded.solver_game();
+    let game = Arc::new(solver_game);
+    let state_slicer = solver_state_slicer_for_collect(loaded, &game, &selector, lose.as_ref());
+    let mut domain = PuzzleDomain::with_state_slicer_and_win_command_goal(
+        game.clone(),
+        inputs,
+        state_slicer,
+        accept_win_command,
+        |_state: &State| false,
+    );
+    let solver_initial = domain.initial_state(initial);
+    let score_game = game.clone();
+    let score_selector = selector.clone();
+    let lose_game = loaded.clone();
+    let lose_expr_game = game.clone();
+    let mut observations = SearchObservationSampler::new(96);
+    let mut on_progress = on_progress;
+    let mut matches = Vec::<CollectMatch<State, InputId>>::new();
+
+    let outcome = best_first_scan_with_dead_states_and_progress(
+        &mut domain,
+        solver_initial,
+        budget,
+        move |state| collect_priority_score(&score_game, state.state(), &score_selector),
+        move |state| {
+            if let Some(lose) = &lose {
+                eval_goal_expr(&lose_expr_game, state.state(), lose)
+            } else {
+                lose_game.is_lose_complete(state.state())
+            }
+        },
+        |search_match| {
+            let state = search_match.state.state().clone();
+            match collect_match_score(&game, &state, &selector) {
+                Some(score) => {
+                    push_collect_match(
+                        &mut matches,
+                        CollectMatch {
+                            depth: search_match.depth,
+                            score,
+                            moves: search_match.actions,
+                            state,
+                        },
+                        max_results,
+                    );
+                    if matches.len() >= max_results
+                        && matches.iter().all(|candidate| candidate.score.is_none())
+                    {
+                        ScanControl::Stop
+                    } else {
+                        ScanControl::Continue
+                    }
+                }
+                None => ScanControl::Continue,
+            }
+        },
+        |state, progress| {
+            let observation = state.state().clone();
+            observations.observe(&observation, progress);
+            if let Some(on_progress) = on_progress.as_mut() {
+                on_progress(&observation, progress);
+            }
+        },
+    );
+
+    sort_collect_matches(&mut matches);
+    let observations = observations.into_observations();
+    Ok(match outcome {
+        ScanOutcome::Completed { stats } => CollectResponse::Completed {
+            stats,
+            matches,
+            observations,
+        },
+        ScanOutcome::Stopped { stats } => CollectResponse::LimitReached {
+            stats,
+            matches,
+            observations,
+        },
+        ScanOutcome::BudgetExceeded { stats } => CollectResponse::BudgetExceeded {
+            stats,
+            matches,
+            observations,
+        },
+        ScanOutcome::Failed { failure } => CollectResponse::Failed {
+            depth: failure.depth,
+            error: format!("{:?}", failure.error),
+            matches,
+            observations,
+        },
+    })
+}
+
+#[cfg(feature = "solver")]
+fn collect_priority_score(
+    game: &CompiledGame,
+    state: &State,
+    selector: &SolverCollectSelector2,
+) -> i64 {
+    match selector {
+        SolverCollectSelector2::Predicate(predicate) => goal_expr_score(game, state, predicate),
+        SolverCollectSelector2::Maximize(value) => goal_value(game, state, value).saturating_neg(),
+    }
+}
+
+#[cfg(feature = "solver")]
+fn collect_match_score(
+    game: &CompiledGame,
+    state: &State,
+    selector: &SolverCollectSelector2,
+) -> Option<Option<i64>> {
+    match selector {
+        SolverCollectSelector2::Predicate(predicate) => {
+            eval_goal_expr(game, state, predicate).then_some(None)
+        }
+        SolverCollectSelector2::Maximize(value) => Some(Some(goal_value(game, state, value))),
+    }
+}
+
+#[cfg(feature = "solver")]
+fn push_collect_match(
+    matches: &mut Vec<CollectMatch<State, InputId>>,
+    candidate: CollectMatch<State, InputId>,
+    max_results: usize,
+) {
+    if matches.len() < max_results {
+        matches.push(candidate);
+        return;
+    }
+    let Some(score) = candidate.score else {
+        return;
+    };
+    let Some((replace_index, _)) = matches
+        .iter()
+        .enumerate()
+        .filter_map(|(index, current)| current.score.map(|current_score| (index, current_score)))
+        .min_by_key(|(_, current_score)| *current_score)
+    else {
+        return;
+    };
+    if matches[replace_index]
+        .score
+        .is_some_and(|current_score| score > current_score)
+    {
+        matches[replace_index] = candidate;
+    }
+}
+
+#[cfg(feature = "solver")]
+fn sort_collect_matches(matches: &mut [CollectMatch<State, InputId>]) {
+    matches.sort_by(|left, right| {
+        right
+            .score
+            .cmp(&left.score)
+            .then_with(|| left.depth.cmp(&right.depth))
+    });
 }
 
 #[cfg(feature = "solver")]
@@ -1369,6 +1724,88 @@ fn goal_expr_score(game: &CompiledGame, state: &State, expr: &GoalExpr) -> i64 {
             }
         }
     }
+}
+
+#[cfg(feature = "solver")]
+fn exact_state_score(state: &State, goal: &State) -> i64 {
+    if state.width != goal.width
+        || state.height != goal.height
+        || state.layer_count != goal.layer_count
+    {
+        return i64::MIN / 4;
+    }
+    state
+        .slots()
+        .iter()
+        .zip(goal.slots())
+        .filter(|(current, expected)| current != expected)
+        .count() as i64
+}
+
+#[cfg(feature = "solver")]
+#[derive(Clone, Debug)]
+struct ExactStateHeuristic {
+    goal: State,
+    changed_objects: Vec<ObjectId>,
+}
+
+#[cfg(feature = "solver")]
+impl ExactStateHeuristic {
+    fn new(game: &CompiledGame, initial: &State, goal: &State) -> Self {
+        let changed_objects = (1..=game.object_count())
+            .map(|id| ObjectId(id as u16))
+            .filter(|object| object_positions_for_exact(initial, *object) != object_positions_for_exact(goal, *object))
+            .collect();
+        Self {
+            goal: goal.clone(),
+            changed_objects,
+        }
+    }
+
+    fn score(&self, state: &State) -> i64 {
+        exact_state_score(state, &self.goal)
+            + self
+                .changed_objects
+                .iter()
+                .map(|object| exact_object_distance_score(state, &self.goal, *object))
+                .sum::<i64>()
+    }
+}
+
+#[cfg(feature = "solver")]
+fn exact_object_distance_score(state: &State, goal: &State, object: ObjectId) -> i64 {
+    let current_positions = object_positions_for_exact(state, object);
+    let mut goal_positions = object_positions_for_exact(goal, object);
+    let fallback = i64::from(state.width) + i64::from(state.height) + 1;
+    let mut score = current_positions
+        .len()
+        .abs_diff(goal_positions.len()) as i64
+        * fallback;
+    for current in current_positions {
+        let Some((index, distance)) = goal_positions
+            .iter()
+            .enumerate()
+            .map(|(index, goal)| (index, manhattan(current.0, current.1, goal.0, goal.1)))
+            .min_by_key(|(_, distance)| *distance)
+        else {
+            score += fallback;
+            continue;
+        };
+        score += distance;
+        goal_positions.remove(index);
+    }
+    score
+}
+
+#[cfg(feature = "solver")]
+fn object_positions_for_exact(state: &State, object: ObjectId) -> Vec<(u16, u16)> {
+    let mut positions = state
+        .object_positions(object)
+        .iter()
+        .filter_map(|slot| state.slot_position(*slot))
+        .collect::<Vec<_>>();
+    positions.sort_unstable();
+    positions
 }
 
 #[cfg(feature = "solver")]

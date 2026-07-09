@@ -19,6 +19,7 @@ let level3dPlaytestSnapshot = null;
 let level3dPreviewCameraState = null;
 let level3dPreviewOrigin = { x: 0, y: 0, z: 0 };
 let level3dSurfaceResizeFrame = 0;
+let level3dViewMode = "stage";
 const LEVEL3D_EDITOR_MAX_SIZE = 256;
 const LEVEL3D_PALETTE_PREVIEW_SIZE = 42;
 const LEVEL3D_FRAME_VIRTUAL_WIDTH = 960;
@@ -43,7 +44,6 @@ let level3d = {
   selectedChar: LEVEL3D_EMPTY_CHAR,
   editMode: "replace",
   layerFillActive: false,
-  layerPaletteCollapsed: false,
   layerGridVisible: true,
   hiddenLayers: [],
   stageResizeMode: null,
@@ -61,6 +61,7 @@ function renderLevel3dBuilder() {
     return;
   }
   syncLevel3dFrameLayout();
+  syncLevel3dViewMode();
   syncLevel3dControlsFromPreview();
   renderLevel3dPalette();
   renderLevel3dLayerPalette();
@@ -77,15 +78,11 @@ function syncLevel3dFrameLayout() {
   if (!level3dBuilder) {
     return;
   }
-  const workspace = level3dBuilder.querySelector(".level3d-workspace");
   const container = level3dBuilder.querySelector(".tool-pane-scroll") || level3dBuilder;
   const availableWidth = Math.max(1, Math.floor(level3dContentInlineSize(container)));
-  const canFitSideBySide = availableWidth >= LEVEL3D_FRAME_MIN_WIDTH * 2 + LEVEL3D_FRAME_GAP;
   const maxFrameWidth = Math.max(
     LEVEL3D_FRAME_MIN_WIDTH,
-    Math.min(LEVEL3D_FRAME_MAX_WIDTH, canFitSideBySide
-      ? Math.floor((availableWidth - LEVEL3D_FRAME_GAP) / 2)
-      : availableWidth),
+    Math.min(LEVEL3D_FRAME_MAX_WIDTH, availableWidth),
   );
   const frameWidth = Math.max(LEVEL3D_FRAME_MIN_WIDTH, maxFrameWidth);
   const scale = frameWidth / LEVEL3D_FRAME_VIRTUAL_WIDTH;
@@ -97,7 +94,33 @@ function syncLevel3dFrameLayout() {
   setLevel3dBuilderStyleProperty("--level3d-frame-scale", String(scale));
   setLevel3dBuilderStyleProperty("--level3d-frame-inverse-scale", String(1 / scale));
   setLevel3dBuilderStyleProperty("--level3d-frame-gap", `${LEVEL3D_FRAME_GAP}px`);
-  workspace?.classList.toggle("is-stacked", !canFitSideBySide);
+}
+
+function syncLevel3dViewMode() {
+  const mode = level3dViewMode === "layer" ? "layer" : "stage";
+  const workspace = level3dBuilder?.querySelector(".level3d-workspace");
+  workspace?.classList.toggle("is-view-stage", mode === "stage");
+  workspace?.classList.toggle("is-view-layer", mode === "layer");
+  level3dStageViewButton?.classList.toggle("is-active", mode === "stage");
+  level3dLayerViewButton?.classList.toggle("is-active", mode === "layer");
+  level3dStageViewButton?.setAttribute("aria-pressed", String(mode === "stage"));
+  level3dLayerViewButton?.setAttribute("aria-pressed", String(mode === "layer"));
+}
+
+function setLevel3dViewMode(mode) {
+  const nextMode = mode === "layer" ? "layer" : "stage";
+  if (level3dPlaytestActive && nextMode !== "stage") {
+    return;
+  }
+  if (level3dViewMode === nextMode) {
+    syncLevel3dViewMode();
+    return;
+  }
+  level3dViewMode = nextMode;
+  level3dStageHit = null;
+  level3dLayerHover = null;
+  syncLevel3dViewMode();
+  scheduleLevel3dSurfaceResize();
 }
 
 function setLevel3dBuilderStyleProperty(name, value) {
@@ -267,7 +290,6 @@ function clearLoadedLevel3dState(source, document = level3dSourceDocument()) {
     selectedChar: level3dSelectedCharForPalette(palette, level3d.selectedChar),
     editMode: level3dEditMode(),
     layerFillActive: Boolean(level3d.layerFillActive),
-    layerPaletteCollapsed: Boolean(level3d.layerPaletteCollapsed),
     layerGridVisible: level3d.layerGridVisible !== false,
     hiddenLayers: Array.isArray(level3d.hiddenLayers) ? [...level3d.hiddenLayers] : [],
     stageResizeMode: null,
@@ -1037,14 +1059,13 @@ function renderLevel3dLayerPalette() {
   }
   level3dLayerPalette.replaceChildren();
   level3dLayerPalette.classList.add("is-sprite-only");
-  level3dLayerPalette.classList.toggle("is-collapsed", Boolean(level3d.layerPaletteCollapsed));
   const exportData = previewExport || extractPreviewExport(latestHtml);
   const transformRow = document.createElement("div");
   transformRow.className = "level3d-layer-palette-row level3d-layer-transform-row";
   transformRow.append(
+    level3dLayerGridButton(),
     level3dLayerResizeModeButton("expand"),
     level3dLayerResizeModeButton("shrink"),
-    level3dLayerGridButton(),
     level3dLayerVisibilityControl(),
     level3dLayerTransformButton("rotate-left"),
     level3dLayerTransformButton("rotate-right"),
@@ -1055,7 +1076,6 @@ function renderLevel3dLayerPalette() {
   const editRow = document.createElement("div");
   editRow.className = "level3d-layer-palette-row level3d-layer-edit-row";
   editRow.append(
-    level3dLayerPaletteCollapseButton(),
     level3dLayerFillButton(),
     level3dLayerEraserButton(),
   );
@@ -1416,40 +1436,6 @@ function deactivateLevel3dLayerFillModeAfterUse() {
   }
   level3d.layerFillActive = false;
   renderLevel3dLayerPalette();
-}
-
-function level3dLayerPaletteCollapseButton() {
-  const collapsed = Boolean(level3d.layerPaletteCollapsed);
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "level-palette-toggle-button";
-  button.classList.toggle("is-active", collapsed);
-  button.classList.toggle("is-collapsed", collapsed);
-  button.setAttribute("aria-expanded", String(!collapsed));
-  button.setAttribute("aria-label", collapsed ? "Show top-down palette" : "Hide top-down palette");
-  button.title = collapsed ? "Show palette" : "Hide palette";
-  button.dataset.tooltip = button.title;
-  button.disabled = level3dPlaytestActive;
-  button.innerHTML = `
-    <svg class="palette-open-icon" viewBox="0 0 24 24" aria-hidden="true">
-      <rect x="4" y="4" width="6" height="6" rx="1"></rect>
-      <rect x="14" y="4" width="6" height="6" rx="1"></rect>
-      <rect x="4" y="14" width="6" height="6" rx="1"></rect>
-      <rect x="14" y="14" width="6" height="6" rx="1"></rect>
-    </svg>
-    <svg class="palette-closed-icon" viewBox="0 0 24 24" aria-hidden="true">
-      <rect x="4" y="4" width="6" height="6" rx="1"></rect>
-      <rect x="14" y="4" width="6" height="6" rx="1"></rect>
-      <rect x="4" y="14" width="6" height="6" rx="1"></rect>
-      <rect x="14" y="14" width="6" height="6" rx="1"></rect>
-      <path d="M3 21 21 3"></path>
-    </svg>
-  `;
-  button.addEventListener("click", () => {
-    level3d.layerPaletteCollapsed = !level3d.layerPaletteCollapsed;
-    renderLevel3dLayerPalette();
-  });
-  return button;
 }
 
 function level3dLayerEraserButton() {
@@ -3053,6 +3039,7 @@ async function startLevel3dPlaytest() {
   level3dPlaytestSnapshot = level3dNormalizePlaytestSnapshot(snapshot);
   level3dPlaytestActive = true;
   level3dStageHit = null;
+  setLevel3dViewMode("stage");
   updateLevel3dPlaytestControls();
   renderLevel3dStageOverlay();
   refreshLevel3dRuntimePreviews();
@@ -3116,6 +3103,7 @@ function updateLevel3dPlaytestControls() {
     level3dOriginYScrub,
     level3dOriginZScrub,
     level3dResetPreviewButton,
+    level3dLayerViewButton,
   ]) {
     if (element) {
       element.disabled = level3dPlaytestActive;
@@ -6287,6 +6275,8 @@ document.addEventListener("click", (event) => {
   });
 });
 level3dResetPreviewButton?.addEventListener("click", resetLevel3dPreviewView);
+level3dStageViewButton?.addEventListener("click", () => setLevel3dViewMode("stage"));
+level3dLayerViewButton?.addEventListener("click", () => setLevel3dViewMode("layer"));
 level3dLayerInput?.addEventListener("change", applyLevel3dLayerInput);
 level3dLayerInput?.addEventListener("keydown", (event) => {
   if (event.key !== "Enter") {

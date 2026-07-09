@@ -2917,13 +2917,12 @@ step board
         let source = r#"
 title = "Runtime Tween Fixture"
 
-render {
-  tween {
-    duration = 300ms
-  }
-}
-
 puzzle mover {
+  render {
+    tween {
+      duration = 300ms
+    }
+  }
   layers {
     actor = Player
   }

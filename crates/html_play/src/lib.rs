@@ -1,7 +1,7 @@
 #![cfg_attr(any(target_arch = "wasm32", not(feature = "solver")), allow(dead_code))]
 
 #[cfg(feature = "solver")]
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 #[cfg(not(target_arch = "wasm32"))]
 use std::env;
 use std::fmt::Write as FmtWrite;
@@ -74,7 +74,8 @@ use puzzle_runtime_contract::{
 };
 #[cfg(feature = "solver")]
 use puzzle_solver::{
-    Puzzle3Domain, PuzzleDomain, SearchBudget, SearchOutcome, SearchProgress, SearchStats,
+    Puzzle3Domain, PuzzleDomain, ScanControl, ScanOutcome, SearchBudget, SearchOutcome,
+    SearchProgress, SearchStats, best_first_scan_with_dead_states_and_progress,
     best_first_with_dead_states_and_progress,
 };
 
@@ -320,11 +321,10 @@ step default
     #[test]
     fn stateful_core_runtime_exposes_changed_cells_for_2d() {
         let source = r#"
-render {
-  tween
-}
-
 puzzle board {
+  render {
+    tween
+  }
   layers {
     actor = Player
   }
@@ -2176,6 +2176,609 @@ levels default of board {
 
     #[cfg(feature = "solver")]
     #[test]
+    fn solver_request_accepts_level_ascii_state() {
+        let source = r#"
+title = solver_request_level_ascii
+
+puzzle board {
+  layers {
+    floor = Goal
+    actor = Player Box Wall
+  }
+  keys {
+    d ArrowRight -> right
+  }
+  rules {
+    input right [ Player | Box | Goal no actor ] -> [ | Player | Goal Box ]
+  }
+  win_conditions {
+    all Goal on Box
+  }
+}
+
+levels default of board {
+  legend {
+    . = empty
+    P = Player
+    B = Box
+    G = Goal
+  }
+  level "start" {
+    PBG
+  }
+}
+"#;
+
+        let loaded = parse_game(source).unwrap();
+        let object_id = |name: &str| {
+            loaded
+                .object_labels
+                .iter()
+                .find_map(|(id, label)| (label == name).then_some(id.0))
+                .unwrap_or_else(|| panic!("missing object {name}"))
+        };
+        let request = json!({
+            "source": source,
+            "puzzlePath": "game.puzzle",
+            "modelKind": "2d",
+            "target": {
+                "origin": "preview-level",
+                "compileId": "test-compile",
+                "documentId": "test-document",
+                "level": {
+                    "index": 0,
+                    "levelName": loaded.levels[0].name,
+                    "levelPuzzle": loaded.levels[0].puzzle,
+                    "levelPack": loaded.levels[0].pack,
+                },
+                "state": {
+                    "kind": "level-ascii",
+                    "lifecycle": "already-materialized",
+                    "data": {
+                        "empty": ".",
+                        "legend": {
+                            ".": [],
+                            "P": [object_id("Player")],
+                            "B": [object_id("Box")],
+                            "G": [object_id("Goal")]
+                        },
+                        "lines": ["PBG"]
+                    },
+                },
+            },
+            "maxDepth": 4,
+            "maxNodes": 1000,
+            "maxMs": 0,
+        });
+
+        let response = solve_request_json(&request.to_string()).unwrap();
+
+        assert!(response.contains(r#""result":"solved""#), "{response}");
+        assert!(response.contains(r#""depth":1"#), "{response}");
+    }
+
+    #[cfg(feature = "solver")]
+    #[test]
+    fn solver_request_accepts_exact_state_goal() {
+        let source = r#"
+title = solver_request_exact_state_goal
+
+puzzle board {
+  layers {
+    actor = Player
+  }
+  keys {
+    d ArrowRight -> right
+  }
+  rules {
+    input right [ Player | no actor ] -> [ | Player ]
+  }
+}
+
+levels default of board {
+  legend {
+    . = empty
+    P = Player
+  }
+  level "start" {
+    P.
+  }
+}
+"#;
+
+        let loaded = parse_game(source).unwrap();
+        let object_id = |name: &str| {
+            loaded
+                .object_labels
+                .iter()
+                .find_map(|(id, label)| (label == name).then_some(id.0))
+                .unwrap_or_else(|| panic!("missing object {name}"))
+        };
+        let player = object_id("Player");
+        let state_spec = |lines: Vec<&str>| {
+            json!({
+                "kind": "level-ascii",
+                "data": {
+                    "empty": ".",
+                    "legend": {
+                        ".": [],
+                        "P": [player]
+                    },
+                    "lines": lines
+                }
+            })
+        };
+        let request = json!({
+            "source": source,
+            "puzzlePath": "game.puzzle",
+            "modelKind": "2d",
+            "target": {
+                "origin": "preview-level",
+                "compileId": "test-compile",
+                "documentId": "test-document",
+                "level": {
+                    "index": 0,
+                    "levelName": loaded.levels[0].name,
+                    "levelPuzzle": loaded.levels[0].puzzle,
+                    "levelPack": loaded.levels[0].pack,
+                },
+                "state": {
+                    "kind": "level-ascii",
+                    "lifecycle": "already-materialized",
+                    "data": {
+                        "empty": ".",
+                        "legend": {
+                            ".": [],
+                            "P": [player]
+                        },
+                        "lines": ["P."]
+                    },
+                },
+            },
+            "goal": {
+                "kind": "exact-state",
+                "state": state_spec(vec![".P"])
+            },
+            "acceptWinCommand": false,
+            "maxDepth": 4,
+            "maxNodes": 1000,
+            "maxMs": 0,
+        });
+
+        let response = solve_request_json(&request.to_string()).unwrap();
+
+        assert!(response.contains(r#""result":"solved""#), "{response}");
+        assert!(response.contains(r#""depth":1"#), "{response}");
+    }
+
+    #[cfg(feature = "solver")]
+    #[test]
+    fn exact_state_heuristic_uses_start_goal_object_distance() {
+        let source = r#"
+title = solver_exact_state_heuristic
+
+puzzle board {
+  layers {
+    actor = Player
+  }
+  keys {
+    d ArrowRight -> right
+  }
+  rules {
+    input right [ Player | no actor ] -> [ | Player ]
+  }
+}
+
+levels default of board {
+  legend {
+    . = empty
+    P = Player
+  }
+  level "start" {
+    P..
+  }
+}
+"#;
+
+        let loaded = parse_game(source).unwrap();
+        let player = loaded
+            .object_labels
+            .iter()
+            .find_map(|(id, label)| (label == "Player").then_some(*id))
+            .unwrap_or_else(|| panic!("missing object Player"));
+        let mut legend = HashMap::new();
+        legend.insert('.', Vec::new());
+        legend.insert('P', vec![player]);
+        let parse_state = |line: &str| {
+            puzzle_lang::parse_level_ascii_state(
+                &loaded.game,
+                &[line.to_string()],
+                '.',
+                &legend,
+                loaded.levels[0].initial_state.visible_variables(),
+            )
+            .map(|(state, _)| state)
+            .unwrap()
+        };
+        let initial = parse_state("P..");
+        let middle = parse_state(".P.");
+        let goal = parse_state("..P");
+        let heuristic = ExactStateHeuristic::new(&loaded.game, &initial, &goal);
+
+        assert!(heuristic.score(&middle) < heuristic.score(&initial));
+        assert_eq!(heuristic.score(&goal), 0);
+    }
+
+    #[cfg(feature = "solver")]
+    #[test]
+    fn solver_request_supports_reachability_task() {
+        let source = r#"
+title = solver_request_reachability
+
+puzzle board {
+  layers {
+    actor = Player
+  }
+  keys {
+    d ArrowRight -> right
+  }
+  rules {
+    input right [ Player | no actor ] -> [ | Player ]
+  }
+}
+
+levels default of board {
+  legend {
+    . = empty
+    P = Player
+  }
+  level "start" {
+    P.
+  }
+}
+"#;
+
+        let loaded = parse_game(source).unwrap();
+        let player = loaded
+            .object_labels
+            .iter()
+            .find_map(|(id, label)| (label == "Player").then_some(id.0))
+            .unwrap_or_else(|| panic!("missing object Player"));
+        let state_spec = |lines: Vec<&str>| {
+            json!({
+                "kind": "level-ascii",
+                "data": {
+                    "empty": ".",
+                    "legend": {
+                        ".": [],
+                        "P": [player]
+                    },
+                    "lines": lines
+                }
+            })
+        };
+        let request = json!({
+            "task": "reachability",
+            "source": source,
+            "puzzlePath": "game.puzzle",
+            "modelKind": "2d",
+            "target": {
+                "origin": "preview-level",
+                "compileId": "test-compile",
+                "documentId": "test-document",
+                "level": {
+                    "index": 0,
+                    "levelName": loaded.levels[0].name,
+                    "levelPuzzle": loaded.levels[0].puzzle,
+                    "levelPack": loaded.levels[0].pack,
+                },
+                "state": {
+                    "kind": "level-ascii",
+                    "lifecycle": "already-materialized",
+                    "data": {
+                        "empty": ".",
+                        "legend": {
+                            ".": [],
+                            "P": [player]
+                        },
+                        "lines": ["P."]
+                    },
+                },
+            },
+            "goal": {
+                "kind": "exact-state",
+                "state": state_spec(vec![".P"])
+            },
+            "acceptWinCommand": false,
+            "maxDepth": 4,
+            "maxNodes": 1000,
+            "maxMs": 0,
+        });
+
+        let response = solve_request_json(&request.to_string()).unwrap();
+
+        assert!(response.contains(r#""task":"reachability""#), "{response}");
+        assert!(response.contains(r#""result":"reachable""#), "{response}");
+        assert!(response.contains(r#""reachable":true"#), "{response}");
+        assert!(response.contains(r#""cost":{"steps":1}"#), "{response}");
+        assert!(response.contains(r#""path":["#), "{response}");
+    }
+
+    #[cfg(feature = "solver")]
+    #[test]
+    fn solver_request_reachability_requires_explicit_goal() {
+        let source = r#"
+title = solver_request_reachability_requires_goal
+
+puzzle board {
+  layers {
+    actor = Player
+  }
+  keys {
+    d ArrowRight -> right
+  }
+  rules {
+    input right [ Player | no actor ] -> [ | Player ]
+  }
+}
+
+levels default of board {
+  legend {
+    . = empty
+    P = Player
+  }
+  level "start" {
+    P.
+  }
+}
+"#;
+
+        let loaded = parse_game(source).unwrap();
+        let player = loaded
+            .object_labels
+            .iter()
+            .find_map(|(id, label)| (label == "Player").then_some(id.0))
+            .unwrap_or_else(|| panic!("missing object Player"));
+        let request = json!({
+            "task": "reachability",
+            "source": source,
+            "puzzlePath": "game.puzzle",
+            "modelKind": "2d",
+            "target": {
+                "origin": "preview-level",
+                "compileId": "test-compile",
+                "documentId": "test-document",
+                "level": {
+                    "index": 0,
+                    "levelName": loaded.levels[0].name,
+                    "levelPuzzle": loaded.levels[0].puzzle,
+                    "levelPack": loaded.levels[0].pack,
+                },
+                "state": {
+                    "kind": "level-ascii",
+                    "lifecycle": "already-materialized",
+                    "data": {
+                        "empty": ".",
+                        "legend": {
+                            ".": [],
+                            "P": [player]
+                        },
+                        "lines": ["P."]
+                    },
+                },
+            },
+            "maxDepth": 4,
+            "maxNodes": 1000,
+            "maxMs": 0,
+        });
+
+        let error = solve_request_json(&request.to_string()).unwrap_err();
+
+        assert!(error.contains("reachability requests require an explicit goal"));
+    }
+
+    #[cfg(feature = "solver")]
+    #[test]
+    fn solver_request_collects_predicate_matches() {
+        let source = r#"
+title = solver_request_collect_predicate
+
+puzzle board {
+  layers {
+    floor = Trail
+    actor = Player
+  }
+  keys {
+    d ArrowRight -> right
+  }
+  rules {
+    input right [ Player | no actor ] -> [ Trail | Player ]
+  }
+}
+
+levels default of board {
+  legend {
+    . = empty
+    P = Player
+  }
+  level "start" {
+    P...
+  }
+}
+"#;
+
+        let loaded = parse_game(source).unwrap();
+        let object_id = |name: &str| {
+            loaded
+                .object_labels
+                .iter()
+                .find_map(|(id, label)| (label == name).then_some(id.0))
+                .unwrap_or_else(|| panic!("missing object {name}"))
+        };
+        let player = object_id("Player");
+        let trail = object_id("Trail");
+        let count_trails = json!({
+            "kind": "condition_value",
+            "conditionValueKind": {
+                "kind": "count_objects",
+                "objects": [trail]
+            }
+        });
+        let request = json!({
+            "task": "collect",
+            "source": source,
+            "puzzlePath": "game.puzzle",
+            "modelKind": "2d",
+            "target": {
+                "origin": "preview-level",
+                "compileId": "test-compile",
+                "documentId": "test-document",
+                "level": {
+                    "index": 0,
+                    "levelName": loaded.levels[0].name,
+                    "levelPuzzle": loaded.levels[0].puzzle,
+                    "levelPack": loaded.levels[0].pack,
+                },
+                "state": {
+                    "kind": "level-ascii",
+                    "lifecycle": "already-materialized",
+                    "data": {
+                        "empty": ".",
+                        "legend": {
+                            ".": [],
+                            "P": [player]
+                        },
+                        "lines": ["P..."]
+                    },
+                },
+            },
+            "collect": {
+                "kind": "predicate",
+                "maxResults": 1,
+                "predicate": {
+                    "expr": {
+                        "kind": "clause",
+                        "value": count_trails,
+                        "op": "greater_eq",
+                        "expected": 1
+                    }
+                }
+            },
+            "acceptWinCommand": false,
+            "maxDepth": 4,
+            "maxNodes": 1000,
+            "maxMs": 0,
+        });
+
+        let response = solve_request_json(&request.to_string()).unwrap();
+
+        assert!(response.contains(r#""task":"collect""#), "{response}");
+        assert!(
+            response.contains(r#""result":"limit_reached""#),
+            "{response}"
+        );
+        assert!(response.contains(r#""count":1"#), "{response}");
+        assert!(response.contains(r#""matches":["#), "{response}");
+        assert!(response.contains(r#""score":null"#), "{response}");
+    }
+
+    #[cfg(feature = "solver")]
+    #[test]
+    fn solver_request_collects_maximized_objective_matches() {
+        let source = r#"
+title = solver_request_collect_maximize
+
+puzzle board {
+  layers {
+    floor = Trail
+    actor = Player
+  }
+  keys {
+    d ArrowRight -> right
+  }
+  rules {
+    input right [ Player | no actor ] -> [ Trail | Player ]
+  }
+}
+
+levels default of board {
+  legend {
+    . = empty
+    P = Player
+  }
+  level "start" {
+    P...
+  }
+}
+"#;
+
+        let loaded = parse_game(source).unwrap();
+        let object_id = |name: &str| {
+            loaded
+                .object_labels
+                .iter()
+                .find_map(|(id, label)| (label == name).then_some(id.0))
+                .unwrap_or_else(|| panic!("missing object {name}"))
+        };
+        let player = object_id("Player");
+        let trail = object_id("Trail");
+        let count_trails = json!({
+            "kind": "condition_value",
+            "conditionValueKind": {
+                "kind": "count_objects",
+                "objects": [trail]
+            }
+        });
+        let request = json!({
+            "task": "collect",
+            "source": source,
+            "puzzlePath": "game.puzzle",
+            "modelKind": "2d",
+            "target": {
+                "origin": "preview-level",
+                "compileId": "test-compile",
+                "documentId": "test-document",
+                "level": {
+                    "index": 0,
+                    "levelName": loaded.levels[0].name,
+                    "levelPuzzle": loaded.levels[0].puzzle,
+                    "levelPack": loaded.levels[0].pack,
+                },
+                "state": {
+                    "kind": "level-ascii",
+                    "lifecycle": "already-materialized",
+                    "data": {
+                        "empty": ".",
+                        "legend": {
+                            ".": [],
+                            "P": [player]
+                        },
+                        "lines": ["P..."]
+                    },
+                },
+            },
+            "collect": {
+                "kind": "maximize",
+                "maxResults": 1,
+                "objective": {
+                    "value": count_trails
+                }
+            },
+            "acceptWinCommand": false,
+            "maxDepth": 3,
+            "maxNodes": 1000,
+            "maxMs": 0,
+        });
+
+        let response = solve_request_json(&request.to_string()).unwrap();
+
+        assert!(response.contains(r#""task":"collect""#), "{response}");
+        assert!(response.contains(r#""count":1"#), "{response}");
+        assert!(response.contains(r#""score":3"#), "{response}");
+    }
+
+    #[cfg(feature = "solver")]
+    #[test]
     fn solver_treats_win_command_as_goal() {
         let source = r#"
 title = solver_win_command
@@ -2214,6 +2817,81 @@ levels default of board {
 
         assert!(response.contains(r#""result":"solved""#));
         assert!(response.contains(r#""depth":1"#));
+    }
+
+    #[cfg(feature = "solver")]
+    #[test]
+    fn solver_request_can_disable_win_command_for_explicit_goal() {
+        let source = r#"
+title = solver_explicit_goal_without_win
+
+puzzle board {
+  layers {
+    floor = Flag
+    actor = Player Exit
+  }
+  keys {
+    d ArrowRight -> right
+  }
+  rules {
+    input right [ Player | Exit ] -> win
+    input right [ Player | no actor ] -> [ | Player ]
+  }
+  win_conditions {
+    all Flag on Player
+  }
+}
+
+levels default of board {
+  legend {
+    . = empty
+    P = Player
+    E = Exit
+    F = Flag
+  }
+  level "start" {
+    PEF
+  }
+}
+"#;
+
+        let loaded = parse_game(source).unwrap();
+        let html = export_editor_preview_html_from_source(source, "game.puzzle", "", "")
+            .expect("preview export");
+        let export = embedded_puzzle_runtime_export_json(&html);
+        let mut state_json = String::new();
+        push_state_data(&mut state_json, &loaded.levels[0].initial_state);
+        let state: Value = serde_json::from_str(&state_json).unwrap();
+        let request = json!({
+            "source": source,
+            "puzzlePath": "game.puzzle",
+            "modelKind": "2d",
+            "target": {
+                "origin": "preview-level",
+                "compileId": "test-compile",
+                "documentId": "test-document",
+                "level": {
+                    "index": 0,
+                    "levelName": loaded.levels[0].name,
+                    "levelPuzzle": loaded.levels[0].puzzle,
+                    "levelPack": loaded.levels[0].pack,
+                },
+                "state": {
+                    "kind": "compiled-start",
+                    "lifecycle": "already-materialized",
+                    "data": state,
+                },
+            },
+            "goal": export["goal"].clone(),
+            "acceptWinCommand": false,
+            "maxDepth": 1,
+            "maxNodes": 100,
+            "maxMs": 0,
+        });
+
+        let response = solve_request_json(&request.to_string()).unwrap();
+
+        assert!(response.contains(r#""result":"exhausted""#), "{response}");
     }
 
     #[cfg(feature = "solver")]
@@ -3163,13 +3841,12 @@ level_menu
         let source = r#"
 title = "Standalone Tween Fixture"
 
-render {
-  tween {
-    duration = 300ms
-  }
-}
-
 puzzle board {
+  render {
+    tween {
+      duration = 300ms
+    }
+  }
   layers {
     actor = Player
   }
@@ -3235,13 +3912,12 @@ input_buffer {
   min_wait = 75ms
 }
 
-render {
-  tween {
-    duration = 80ms
-  }
-}
-
 puzzle board {
+  render {
+    tween {
+      duration = 80ms
+    }
+  }
   layers {
     actor = Player
     marker = Done

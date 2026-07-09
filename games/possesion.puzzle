@@ -47,7 +47,7 @@ move
 }
 
 sprites {
-colors {
+palette {
 Alien_skin = #00949b
 }
 

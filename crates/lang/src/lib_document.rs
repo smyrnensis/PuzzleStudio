@@ -222,7 +222,7 @@ fn classify_known_mixed_document_section(tokens: &[&str]) -> Option<MixedSection
         | ["default_wait_time", ..]
         | ["again_interval", ..]
         | ["input_buffer", ..]
-        | ["render", ..]
+        | ["animation", ..]
         | ["sounds", ..]
         | ["theme", ..]
         | ["assets", ..] => MixedSectionTarget::Shared,
@@ -672,7 +672,6 @@ enum ModelTopLevelDirective {
     DefaultWaitTime,
     AgainInterval,
     InputBuffer,
-    Render,
     Animation,
     Scene,
     Sounds,
@@ -796,13 +795,6 @@ const MODEL_TOP_LEVEL_ALTERNATIVES: &[HeaderChoiceAlternative<
         trigger: "input_buffer",
         label: "input_buffer",
         action: ModelTopLevelDirective::InputBuffer,
-        expected_group: Some(ModelTopLevelExpectedGroup::Config),
-        authoring_surface: true,
-    },
-    HeaderChoiceAlternative {
-        trigger: "render",
-        label: "render",
-        action: ModelTopLevelDirective::Render,
         expected_group: Some(ModelTopLevelExpectedGroup::Config),
         authoring_surface: true,
     },
@@ -1042,13 +1034,10 @@ fn parse_document_shell_lines(
             ["input_buffer", ..] => {
                 index = parse_input_buffer_block(&line_texts, index, &mut shell.input_buffer)?;
             }
-            ["render", ..] => {
-                index = parse_render_animation_block(&line_texts, index, &mut shell.animation)?;
-            }
             ["animation", ..] => {
                 return Err(parse_error(
                     &line_texts[index],
-                    "top-level animation block was removed; use render { tween_duration = <duration> }",
+                    "top-level animation block was removed; put tween_duration under puzzle render",
                 ));
             }
             ["sounds"] => {
@@ -1089,7 +1078,7 @@ fn strip_document_shell_source(source: &str) -> Result<String, DiagnosticReport>
                     index += 1;
                     continue;
                 }
-                ["input_buffer", ..] | ["render", ..] | ["sounds", ..] | ["assets", ..] => {
+                ["input_buffer", ..] | ["animation", ..] | ["sounds", ..] | ["assets", ..] => {
                     index = skip_surface_shell_block_by_syntax(&document, index);
                     continue;
                 }
@@ -1115,7 +1104,7 @@ fn strip_document_shell_source(source: &str) -> Result<String, DiagnosticReport>
                     | ["default_wait_time", ..]
                     | ["again_interval", ..]
                     | ["input_buffer", ..]
-                    | ["render", ..]
+                    | ["animation", ..]
                     | ["sounds", ..]
                     | ["assets", ..]
                     | ["theme", ..]
@@ -1148,7 +1137,7 @@ fn strip_document_shell_lines(lines: &[source::LogicalLine]) -> Vec<source::Logi
                     index += 1;
                     continue;
                 }
-                ["input_buffer", ..] | ["render", ..] | ["sounds", ..] | ["assets", ..] => {
+                ["input_buffer", ..] | ["animation", ..] | ["sounds", ..] | ["assets", ..] => {
                     index = skip_shell_logical_block_by_syntax(lines, index);
                     continue;
                 }
@@ -1174,7 +1163,7 @@ fn strip_document_shell_lines(lines: &[source::LogicalLine]) -> Vec<source::Logi
                     | ["default_wait_time", ..]
                     | ["again_interval", ..]
                     | ["input_buffer", ..]
-                    | ["render", ..]
+                    | ["animation", ..]
                     | ["sounds", ..]
                     | ["assets", ..]
                     | ["theme", ..]
@@ -2253,14 +2242,11 @@ fn parse_game2d_expanded_lines_with_shell_inner(
             ModelTopLevelDirective::InputBuffer => {
                 i = parse_input_buffer_block(&lines, i, &mut input_buffer)?;
             }
-            ModelTopLevelDirective::Render => {
-                i = parse_puzzle_render_block(&lines, i, &mut render, &mut animation)?;
-            }
             ModelTopLevelDirective::Animation => {
                 diagnostics.extend(
                     parse_error(
                         line,
-                        "top-level animation block was removed; use render { tween_duration = <duration> }",
+                        "top-level animation block was removed; put tween_duration under puzzle render",
                     )
                     .into_diagnostics(),
                 );

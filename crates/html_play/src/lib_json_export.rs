@@ -2220,6 +2220,204 @@ fn push_solution_response(
 }
 
 #[cfg(feature = "solver")]
+fn push_reachability_response(
+    out: &mut String,
+    loaded: &LoadedGame,
+    response: &PuzzleSolutionResponse,
+) {
+    out.push('{');
+    push_json_pair(out, "task", "reachability");
+    out.push(',');
+    match response {
+        SolutionResponse::Solved {
+            depth,
+            moves,
+            steps,
+            observations,
+        } => {
+            push_json_pair(out, "result", "reachable");
+            out.push(',');
+            push_json_bool(out, "reachable", true);
+            out.push_str(",\"cost\":{");
+            push_json_number(out, "steps", *depth as u64);
+            out.push('}');
+            out.push(',');
+            push_solution_moves(out, loaded, moves);
+            out.push(',');
+            out.push_str("\"path\":");
+            push_solution_path(out, loaded, steps);
+            out.push(',');
+            push_search_observations(out, observations);
+        }
+        SolutionResponse::Exhausted {
+            stats,
+            observations,
+        } => {
+            push_json_pair(out, "result", "unreachable");
+            out.push(',');
+            push_json_bool(out, "reachable", false);
+            out.push(',');
+            push_search_stats(out, stats);
+            out.push(',');
+            push_search_observations(out, observations);
+        }
+        SolutionResponse::BudgetExceeded {
+            stats,
+            observations,
+        } => {
+            push_json_pair(out, "result", "budget_exceeded");
+            out.push(',');
+            push_json_bool(out, "reachable", false);
+            out.push(',');
+            push_search_stats(out, stats);
+            out.push(',');
+            push_search_observations(out, observations);
+        }
+        SolutionResponse::Failed {
+            depth,
+            error,
+            observations,
+        } => {
+            push_json_pair(out, "result", "failed");
+            out.push(',');
+            push_json_bool(out, "reachable", false);
+            out.push(',');
+            push_json_number(out, "depth", *depth as u64);
+            out.push(',');
+            push_json_pair(out, "error", error);
+            out.push(',');
+            push_search_observations(out, observations);
+        }
+    }
+    out.push('}');
+}
+
+#[cfg(feature = "solver")]
+fn push_collect_response(out: &mut String, loaded: &LoadedGame, response: &PuzzleCollectResponse) {
+    out.push('{');
+    push_json_pair(out, "task", "collect");
+    out.push(',');
+    match response {
+        CollectResponse::Completed {
+            stats,
+            matches,
+            observations,
+        } => {
+            push_json_pair(out, "result", "completed");
+            out.push(',');
+            push_json_number(out, "count", matches.len() as u64);
+            out.push(',');
+            push_search_stats(out, stats);
+            out.push(',');
+            push_collect_matches(out, loaded, matches);
+            out.push(',');
+            push_search_observations(out, observations);
+        }
+        CollectResponse::LimitReached {
+            stats,
+            matches,
+            observations,
+        } => {
+            push_json_pair(out, "result", "limit_reached");
+            out.push(',');
+            push_json_number(out, "count", matches.len() as u64);
+            out.push(',');
+            push_search_stats(out, stats);
+            out.push(',');
+            push_collect_matches(out, loaded, matches);
+            out.push(',');
+            push_search_observations(out, observations);
+        }
+        CollectResponse::BudgetExceeded {
+            stats,
+            matches,
+            observations,
+        } => {
+            push_json_pair(out, "result", "budget_exceeded");
+            out.push(',');
+            push_json_number(out, "count", matches.len() as u64);
+            out.push(',');
+            push_search_stats(out, stats);
+            out.push(',');
+            push_collect_matches(out, loaded, matches);
+            out.push(',');
+            push_search_observations(out, observations);
+        }
+        CollectResponse::Failed {
+            depth,
+            error,
+            matches,
+            observations,
+        } => {
+            push_json_pair(out, "result", "failed");
+            out.push(',');
+            push_json_number(out, "depth", *depth as u64);
+            out.push(',');
+            push_json_pair(out, "error", error);
+            out.push(',');
+            push_json_number(out, "count", matches.len() as u64);
+            out.push(',');
+            push_collect_matches(out, loaded, matches);
+            out.push(',');
+            push_search_observations(out, observations);
+        }
+    }
+    out.push('}');
+}
+
+#[cfg(feature = "solver")]
+fn push_collect_matches(
+    out: &mut String,
+    loaded: &LoadedGame,
+    matches: &[CollectMatch<State, InputId>],
+) {
+    out.push_str("\"matches\":[");
+    for (index, collect_match) in matches.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push('{');
+        push_json_number(out, "index", index as u64);
+        out.push(',');
+        push_json_number(out, "depth", collect_match.depth as u64);
+        out.push(',');
+        match collect_match.score {
+            Some(score) => push_json_i64(out, "score", score),
+            None => out.push_str("\"score\":null"),
+        }
+        out.push(',');
+        push_solution_moves(out, loaded, &collect_match.moves);
+        out.push_str(",\"state\":");
+        push_state_data(out, &collect_match.state);
+        out.push('}');
+    }
+    out.push(']');
+}
+
+#[cfg(feature = "solver")]
+fn push_solution_path(out: &mut String, loaded: &LoadedGame, steps: &[PuzzleSolutionStep]) {
+    out.push('[');
+    for (index, step) in steps.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push('{');
+        push_json_number(out, "index", step.index as u64);
+        out.push(',');
+        if let Some(input) = step.input {
+            out.push_str("\"move\":");
+            push_input_move(out, loaded, input);
+        } else {
+            out.push_str("\"move\":null");
+        }
+        out.push(',');
+        push_scene(out, loaded, &step.state, None, None);
+        out.push('}');
+    }
+    out.push(']');
+}
+
+#[cfg(feature = "solver")]
 fn push_compiled_solution_response(
     out: &mut String,
     response: &PuzzleSolutionResponse,

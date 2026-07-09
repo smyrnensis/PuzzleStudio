@@ -133,16 +133,27 @@ pub(crate) fn resolve_source_target_from_document(
     document: &SurfaceDocument,
     cursor: usize,
 ) -> Option<SourceTarget> {
-    let mut target = resolve_source_entries_from_document(source, document)
-        .into_iter()
-        .find(|entry| cursor >= entry.start && cursor <= entry.end)?;
+    let entries = resolve_source_entries_from_document(source, document);
+    resolve_source_target_from_entries(source, document, &entries, cursor)
+}
+
+pub(crate) fn resolve_source_target_from_entries(
+    source: &str,
+    document: &SurfaceDocument,
+    entries: &[SourceTarget],
+    cursor: usize,
+) -> Option<SourceTarget> {
+    let mut target = entries
+        .iter()
+        .find(|entry| cursor >= entry.start && cursor <= entry.end)?
+        .clone();
     if target.kind == SourceTargetKind::Sprite {
         target.source_sprite = source_sprite_for_target(source, document, &target);
     }
     Some(target)
 }
 
-fn resolve_source_entries_from_document(
+pub(crate) fn resolve_source_entries_from_document(
     source: &str,
     document: &SurfaceDocument,
 ) -> Vec<SourceTarget> {
@@ -171,7 +182,7 @@ pub fn source_target_json(target: Option<&SourceTarget>) -> String {
     out
 }
 
-fn source_entries_json_from_entries(entries: &[SourceTarget]) -> String {
+pub(crate) fn source_entries_json_from_entries(entries: &[SourceTarget]) -> String {
     let mut out = String::from("{\"entries\":[");
     for (index, entry) in entries.iter().enumerate() {
         if index > 0 {
@@ -1359,7 +1370,7 @@ fn is_visual_sprite_entry_boundary<'a>(
     }
     match line.tokens.as_slice() {
         [keyword, ..]
-            if (keyword == "colors" || keyword == "shapes")
+            if (keyword == "palette" || keyword == "shapes")
                 && line.content.trim_end().ends_with('{') =>
         {
             true
@@ -1420,7 +1431,7 @@ fn starts_next_sprite_entry(
 fn sprite_definition_name_token(value: &str) -> bool {
     if matches!(
         value,
-        "shape" | "shapes" | "colors" | "ascii" | "sprites" | "sprites3"
+        "shape" | "shapes" | "palette" | "colors" | "ascii" | "sprites" | "sprites3"
     ) {
         return false;
     }
@@ -1980,7 +1991,7 @@ red blue
     fn user_named_color_row_stays_in_current_sprite_target() {
         let source = r##"
 sprites {
-colors {
+palette {
 accent = #e94f64
 }
 Player
@@ -2005,7 +2016,7 @@ Box
     fn tagged_sprite_color_name_row_stays_in_current_sprite_target() {
         let source = r##"
 sprites {
-colors {
+palette {
 GoalCount = #acacac
 }
 GoalCount:5
@@ -2058,7 +2069,7 @@ P
 }
 
 sprites {
-colors {
+palette {
 accent = #e94f64
 }
 sprite {
@@ -2092,7 +2103,7 @@ shape =
     fn consecutive_tagged_sprite_color_name_rows_do_not_become_sprite_headers() {
         let source = r##"
 sprites {
-colors {
+palette {
 GoalCount = #acacac
 }
 GoalCount:1
@@ -2131,7 +2142,7 @@ GoalCount
     fn line_style_sprite_accepts_user_named_color() {
         let source = r##"
 sprites {
-colors {
+palette {
 accent = #e94f64
 }
 Player accent

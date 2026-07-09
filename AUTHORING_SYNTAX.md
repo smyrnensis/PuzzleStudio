@@ -122,7 +122,7 @@ count = 1...10
 
 tag value list の中の `<start>...<end>` は inclusive numeric range として展開される。`count = 1...10` は `count = 1 2 3 4 5 6 7 8 9 10` と同じ tag set を作る。
 
-`directions` は組み込み tag set で、常に `up down left right` を表す。`horizontal` は `left right`、`vertical` は `up down` を表す。これらは object schema、`map`、visual `shape` / `colors`、`for` の展開元で同じように使える。再定義はできない。
+`directions` は組み込み tag set で、常に `up down left right` を表す。`horizontal` は `left right`、`vertical` は `up down` を表す。これらは object schema、`map`、visual `shape` / `palette`、`for` の展開元で同じように使える。再定義はできない。
 
 `layers` は object 定義から作られる組み込み tag set。名前付き layer はその名前、匿名 layer は内部名で展開される。各 layer 名は同じ layer に属する object group としても登録される。
 
@@ -628,6 +628,22 @@ P.x
 ```
 
 level-local `legend` は、その level を読むときだけ `levels` 直下の共有 legend に重ねる。別の level には漏れず、描画用 legend も変更しない。右辺は一つの concrete object set に解決できる必要がある。`empty` は局所定義ではなく `levels` 直下の `legend` で定義する。
+
+同じ region の ASCII map は、空白行を入れずに単独行 `+` でつなぐと複数 layer として重ねられる。`empty` char は透明で、それ以外の char は同じ cell に追加配置される。同じ core layer の object が同じ cell に重なった場合は、後に書いた上側 layer が優先される。空白行は従来通り region separator なので、`+` の前後には空白行を入れない。
+
+```txt
+levels {
+level intro {
+###
+#.#
+###
++
+...
+.P.
+...
+}
+}
+```
 
 level body では、map row の前に置いた `message` / `sfx` / `wait` はその level の `on_level_start` sugar、map row の後に置いたものは `on_level_clear` sugar として扱う。
 
@@ -1162,11 +1178,14 @@ if win_conditions -> next_level
 [ Dog | Baby ] -> [ | dog_angry ] again
 ```
 
-Move tween は top-level `render` block に書く。`tween` を書くこと自体が有効化で、`enabled = true` は使わない。
+Move tween は puzzle/model 内の `render` block に書く。`tween` を書くこと自体が有効化で、`enabled = true` は使わない。
 
 ```txt
+puzzle sokoban {
 render {
-tween duration=160ms
+tween = true
+tween_duration = 160ms
+}
 }
 ```
 

@@ -4629,8 +4629,10 @@ levels3 demo of push3 {
         assert!(!EDITOR_HTML.contains(r#"id="levelScopeLayerButton""#));
         assert!(!EDITOR_HTML.contains(r#"aria-label="Level edit scope""#));
         assert!(EDITOR_JS.contains("function levelVisibleCells("));
-        assert!(EDITOR_JS.contains("function levelVisibleLayerIndexes("));
-        assert!(EDITOR_JS.contains("function sameCellSlotsForVisibleLayers("));
+        assert!(EDITOR_JS.contains("function renderLevelLayerEditRow("));
+        assert!(EDITOR_JS.contains("function levelCompositeCells(options = {})"));
+        assert!(EDITOR_JS.contains("levelCompositeCells({ includeHidden: true"));
+        assert!(EDITOR_JS.contains("levelCompositeCells({ includeHidden: false"));
         assert!(EDITOR_JS.contains(
             "function paintCellSlots(slots, objectId, exportData = currentLevelExportData())"
         ));
@@ -4663,8 +4665,8 @@ levels3 demo of push3 {
         assert!(!EDITOR_JS.contains("function levelEditorSourceExportData(source, entry)"));
         assert!(!EDITOR_JS.contains("function sourceGameVisualsJs(source)"));
         assert!(EDITOR_JS.contains("applyGameVisuals(compiledPreviewGameVisualsJs(html));"));
-        assert!(EDITOR_JS.contains("function sourceLayerNameEntries("));
-        assert!(EDITOR_JS.contains("label: layerNames.get(layerIndex) || \"\""));
+        assert!(EDITOR_JS.contains("function levelLayerVisibilityEntries("));
+        assert!(EDITOR_JS.contains("label: `Layer ${layerIndex + 1}`"));
         assert!(EDITOR_CSS.contains(".level-board.board.has-all-cell-grid .cell::after"));
         assert!(EDITOR_CSS.contains("z-index: 100;"));
     }
@@ -4752,9 +4754,11 @@ levels3 demo of push3 {
         assert!(
             EDITOR_JS.contains("levelDisplayCells = stateDataToLevelCells(stateData, exportData);")
         );
+        assert!(EDITOR_JS.contains("function displayedLevelCells()"));
         assert!(EDITOR_JS.contains(
-            "return levelPlaytestActive && levelDisplayCells?.length === level.cells.length ? levelDisplayCells : level.cells;"
+            "if (levelPlaytestActive && levelDisplayCells?.length === level.cells.length)"
         ));
+        assert!(EDITOR_JS.contains("return levelCompositeCells({ includeHidden: true });"));
         assert!(EDITOR_JS.contains(
             "if (!levelBuilder.hidden && levelPlaytestActive && pendingPreviewKeyStateSync > 0)"
         ));
@@ -4920,7 +4924,8 @@ levels3 demo of push3 {
         );
         assert!(EDITOR_JS.contains("function sourceLevelRowsAndLocalLegends(source, entry)"));
         assert!(EDITOR_JS.contains("function sourceLevelEntryHasHeader(tokens)"));
-        assert!(EDITOR_JS.contains("sourceLevelRowGroups(parsed.rows)"));
+        assert!(EDITOR_JS.contains("sourceLevelRegionGroups(parsed.rows)"));
+        assert!(EDITOR_JS.contains("if (text === \"+\")"));
         assert!(EDITOR_JS.contains(
             "if (!loadLevelFromSourceEntry(source, entry, { ...options, exportData, levelIndex, levelName }))"
         ));
@@ -5017,8 +5022,34 @@ levels3 demo of push3 {
     #[test]
     fn focused_puzzle_entries_consume_wasm_surface_entries() {
         assert!(EDITOR_JS.contains("function focusedPuzzleSurfaceEntries("));
-        assert!(EDITOR_JS.contains("window.PuzzleStudioRuntime?.cachedWasmCompiler?.()"));
-        assert!(EDITOR_JS.contains("compiler.source_entries_json(text)"));
+        assert!(EDITOR_RUNTIME_JS.contains("let sourceAnalysisCache = null;"));
+        assert!(
+            EDITOR_RUNTIME_JS.contains(
+                "const create = requireSourceAnalysisFunction(module, \"create_source_analysis_handle\");"
+            )
+        );
+        assert!(EDITOR_RUNTIME_JS.contains(
+            "const free = requireSourceAnalysisFunction(module, \"free_source_analysis_handle\");"
+        ));
+        assert!(
+            EDITOR_RUNTIME_JS
+                .contains("return querySourceAnalysis(wasmCompiler, analysis.handle, \"source_analysis_outline_json\");")
+        );
+        assert!(EDITOR_RUNTIME_JS.contains(
+            "const raw = querySourceAnalysis(wasmCompiler, analysis.handle, \"source_analysis_entries_json\");"
+        ));
+        assert!(EDITOR_RUNTIME_JS.contains("payload: null,"));
+        assert!(!EDITOR_RUNTIME_JS.contains(
+            "const raw = querySourceAnalysis(module, handle, \"source_analysis_json\");"
+        ));
+        assert!(EDITOR_JS.contains("window.PuzzleStudioRuntime?.sourceEntries"));
+        assert!(EDITOR_JS.contains("rawEntries = window.PuzzleStudioRuntime.sourceEntries(text);"));
+        assert!(EDITOR_WORKSPACE_JS.contains("async function ensureEditorWasmParserLoaded()"));
+        assert!(
+            EDITOR_WORKSPACE_JS
+                .contains("await ensureEditorWasmParserLoaded();\n  if (editorSeed)")
+        );
+        assert!(EDITOR_WORKSPACE_JS.contains("await loadWasmCompiler();"));
         assert!(EDITOR_JS.contains("throw new Error(message);"));
         assert!(EDITOR_JS.contains("console.warn(\"Focused source entries unavailable\", error);"));
         assert!(
@@ -5028,6 +5059,7 @@ levels3 demo of push3 {
             !EDITOR_JS
                 .contains("return [];\n  }\n  const raw = compiler.source_entries_json(text);")
         );
+        assert!(!EDITOR_JS.contains("compiler.source_entries_json(text)"));
         assert!(EDITOR_JS.contains("focusedPuzzleSurfaceEntriesByKind(\"level\""));
         assert!(EDITOR_JS.contains("focusedPuzzleSurfaceEntriesByKind(\"level3d\""));
         assert!(EDITOR_JS.contains("focusedPuzzleSurfaceEntriesByKind(\"sprite\""));
@@ -5680,6 +5712,15 @@ levels3 demo of push3 {
         );
         assert!(EDITOR_SOURCE_JS.contains("if (preserveCurrent && sourceHighlightMode)"));
         assert!(EDITOR_SOURCE_JS.contains("renderOptimisticSourceHighlight()"));
+        assert!(
+            EDITOR_SOURCE_JS.contains("function scheduleOptimisticSourceHighlight(source = null)")
+        );
+        assert!(
+            EDITOR_SOURCE_JS
+                .contains("sourceOptimisticHighlightFrame = window.requestAnimationFrame(() => {")
+        );
+        assert!(EDITOR_SOURCE_JS.contains("scheduleOptimisticSourceHighlight(predicted);"));
+        assert!(!EDITOR_SOURCE_JS.contains("renderPredictedSourceHighlight(predicted);"));
         assert!(EDITOR_SOURCE_JS.contains("function sourceHighlightRunsFromDom()"));
         assert!(EDITOR_SOURCE_JS.contains("function sourceHighlightStyleAtOffset(runs, offset)"));
         assert!(EDITOR_SOURCE_JS.contains("function sourcePredictedBeforeInputValue(event)"));
@@ -5693,10 +5734,13 @@ levels3 demo of push3 {
                 "sourceEditor.setSelectionRange(edit.selectionStart, edit.selectionEnd);"
             )
         );
-        assert!(EDITOR_SOURCE_JS.contains("sourceEditorContentChanged();\n  scheduleSourceCompletion();\n  syncPreviewModeFromSourceCursor();"));
+        assert!(EDITOR_SOURCE_JS.contains("sourceEditorContentChanged();"));
+        assert!(EDITOR_SOURCE_JS.contains("scheduleSourceCompletion();"));
+        assert!(EDITOR_SOURCE_JS.contains("syncPreviewModeFromSourceCursor();"));
         assert!(
-            EDITOR_SOURCE_JS.contains("const predicted = sourcePredictedBeforeInputValue(event);")
+            EDITOR_SOURCE_JS.contains("const predicted = sourceDocumentSupportsEditableTargets()")
         );
+        assert!(EDITOR_SOURCE_JS.contains("? sourcePredictedBeforeInputValue(event)"));
         assert!(
             EDITOR_SOURCE_JS
                 .contains("const preserveCurrentHighlight = options.preserveHighlight !== false;")
@@ -6053,7 +6097,7 @@ levels3 demo of push3 {
         assert!(!EDITOR_SPRITE3D_JS.contains("function findSprite3dDefinitionAtPosition"));
         assert!(!EDITOR_SPRITE3D_JS.contains("function findSprite3dDefinitions"));
         assert!(EDITOR_JS.contains("focusedPuzzleSurfaceEntriesByKind(\"sprite3d\""));
-        assert!(EDITOR_JS.contains("compiler.source_entries_json(text)"));
+        assert!(EDITOR_JS.contains("window.PuzzleStudioRuntime.sourceEntries(text)"));
         assert!(!EDITOR_JS.contains("findSprite3dDefinitionByName(source, name)"));
         assert!(EDITOR_SPRITE3D_JS.contains("function sprite3dTargetPayload(target)"));
         assert!(EDITOR_SPRITE3D_JS.contains("target?.sourceSprite3d?.status === \"incomplete\""));
@@ -6564,7 +6608,7 @@ levels3 demo of push3 {
         );
         assert!(
             EDITOR_SOURCE_JS.contains(
-                "return sourceCursorHasCompletionPrefix(source, cursor)\n    || sourceCursorAfterSelectorTagSeparator(source, cursor)\n    || Boolean(sourceImportPathCompletionContext(source, cursor));"
+                "return sourceCursorHasCompletionPrefix(source, cursor)\n    || sourceCursorAfterSelectorTagSeparator(source, cursor);"
             )
         );
         assert!(!EDITOR_SOURCE_JS.contains("function sourceCursorAtBareLineTail"));
@@ -6582,7 +6626,7 @@ levels3 demo of push3 {
         );
         assert!(
             EDITOR_SOURCE_JS.contains(
-                "return sourceCursorHasCompletionPrefix(source, cursor)\n    || sourceCursorAfterSelectorTagSeparator(source, cursor)\n    || Boolean(sourceImportPathCompletionContext(source, cursor));"
+                "return sourceCursorHasCompletionPrefix(source, cursor)\n    || sourceCursorAfterSelectorTagSeparator(source, cursor);"
             )
         );
         assert!(
@@ -6609,36 +6653,14 @@ levels3 demo of push3 {
     }
 
     #[test]
-    fn source_completion_suggests_import_paths_from_workspace_documents() {
-        assert!(EDITOR_SOURCE_JS.contains(
-            "const list = suggestSourceCompletionsFromEditorContext(source, cursor, document)\n      || await suggestSourceCompletionsWithWasm(source, cursor);"
-        ));
-        assert!(
-            EDITOR_SOURCE_JS.contains("function sourceImportPathCompletionContext(source, cursor)")
-        );
+    fn source_completion_uses_wasm_entrypoint_only() {
         assert!(
             EDITOR_SOURCE_JS
-                .contains("function sourceImportPathCompletionItems(context, document)")
+                .contains("const list = await suggestSourceCompletionsWithWasm(source, cursor);")
         );
-        assert!(EDITOR_SOURCE_JS.contains(
-            "if (!candidate || !isPuzzleDocument(candidate) || !isTextDocument(candidate))"
-        ));
-        assert!(EDITOR_SOURCE_JS.contains("candidatePath === currentDocumentPath"));
-        assert!(EDITOR_SOURCE_JS.contains(
-            "if (preferredRoot && normalizePath(candidate.workspaceRoot || \"\") !== preferredRoot)"
-        ));
-        assert!(
-            EDITOR_SOURCE_JS
-                .contains("const relativePath = sourceRelativeImportPath(document, candidate);")
-        );
-        assert!(EDITOR_SOURCE_JS.contains(
-            "insertText: context.needsClosingQuote ? `${relativePath}\"` : relativePath,"
-        ));
-        assert!(EDITOR_SOURCE_JS.contains("needsClosingQuote: closeQuoteColumn < 0"));
-        assert!(EDITOR_SOURCE_JS.contains("detail: \"path\""));
-        assert!(EDITOR_SOURCE_JS.contains(
-            "if (sourceImportPathCompletionContext(source, cursor)) {\n    return \"completion\";\n  }"
-        ));
+        assert!(!EDITOR_SOURCE_JS.contains("suggestSourceCompletionsFromEditorContext"));
+        assert!(!EDITOR_SOURCE_JS.contains("function sourceImportPathCompletionContext"));
+        assert!(!EDITOR_SOURCE_JS.contains("function sourceImportPathCompletionItems"));
     }
 
     #[test]
@@ -7654,7 +7676,7 @@ levels3 demo of push3 {
         assert!(EDITOR_RUNTIME_JS.contains("window.PuzzleStudioRuntime"));
         assert!(EDITOR_RUNTIME_JS.contains("compile_preview"));
         assert!(EDITOR_RUNTIME_JS.contains("export_html"));
-        assert!(EDITOR_RUNTIME_JS.contains("highlight_source_html"));
+        assert!(EDITOR_RUNTIME_JS.contains("source_analysis_highlight_json"));
         assert!(EDITOR_RUNTIME_JS.contains("solver_task_initial_display_state_json"));
         assert!(EDITOR_HTML.contains("editor_runtime.js"));
         assert!(

@@ -1,4 +1,128 @@
+use std::cell::RefCell;
+use std::collections::BTreeMap;
+
 use wasm_bindgen::prelude::*;
+
+type SourceAnalysisHandle = u32;
+
+thread_local! {
+    static SOURCE_ANALYSES: RefCell<SourceAnalysisStore> =
+        RefCell::new(SourceAnalysisStore::default());
+}
+
+#[derive(Default)]
+struct SourceAnalysisStore {
+    next_handle: SourceAnalysisHandle,
+    analyses: BTreeMap<SourceAnalysisHandle, puzzle_lang::SourceAnalysis>,
+}
+
+impl SourceAnalysisStore {
+    fn insert(&mut self, analysis: puzzle_lang::SourceAnalysis) -> SourceAnalysisHandle {
+        let handle = self.next_handle.max(1);
+        self.next_handle = handle
+            .checked_add(1)
+            .expect("source analysis handle counter exhausted");
+        let previous = self.analyses.insert(handle, analysis);
+        assert!(
+            previous.is_none(),
+            "source analysis handle counter reused a live handle"
+        );
+        handle
+    }
+
+    fn remove(&mut self, handle: SourceAnalysisHandle) -> Result<(), String> {
+        self.analyses
+            .remove(&handle)
+            .map(|_| ())
+            .ok_or_else(|| invalid_source_analysis_handle_message(handle))
+    }
+
+    fn with_analysis<T>(
+        &self,
+        handle: SourceAnalysisHandle,
+        f: impl FnOnce(&puzzle_lang::SourceAnalysis) -> T,
+    ) -> Result<T, String> {
+        self.analyses
+            .get(&handle)
+            .map(f)
+            .ok_or_else(|| invalid_source_analysis_handle_message(handle))
+    }
+}
+
+fn invalid_source_analysis_handle_message(handle: SourceAnalysisHandle) -> String {
+    format!(
+        "source analysis handle `{handle}` is not live; create a new analysis before querying it"
+    )
+}
+
+fn source_analysis_error_js_value(message: String) -> JsValue {
+    JsValue::from_str(&message)
+}
+
+fn with_source_analysis<T>(
+    handle: SourceAnalysisHandle,
+    f: impl FnOnce(&puzzle_lang::SourceAnalysis) -> T,
+) -> Result<T, String> {
+    SOURCE_ANALYSES.with(|store| store.borrow().with_analysis(handle, f))
+}
+
+#[wasm_bindgen]
+pub fn create_source_analysis_handle(source: &str) -> SourceAnalysisHandle {
+    let analysis = puzzle_lang::analyze_source(source);
+    SOURCE_ANALYSES.with(|store| store.borrow_mut().insert(analysis))
+}
+
+#[wasm_bindgen]
+pub fn free_source_analysis_handle(handle: SourceAnalysisHandle) -> Result<(), JsValue> {
+    SOURCE_ANALYSES
+        .with(|store| store.borrow_mut().remove(handle))
+        .map_err(source_analysis_error_js_value)
+}
+
+#[wasm_bindgen]
+pub fn source_analysis_json(handle: SourceAnalysisHandle) -> Result<String, JsValue> {
+    with_source_analysis(handle, puzzle_lang::SourceAnalysis::analysis_json)
+        .map_err(source_analysis_error_js_value)
+}
+
+#[wasm_bindgen]
+pub fn source_analysis_highlight_json(
+    handle: SourceAnalysisHandle,
+    include_outline: bool,
+) -> Result<String, JsValue> {
+    with_source_analysis(handle, |analysis| analysis.highlight_json(include_outline))
+        .map_err(source_analysis_error_js_value)
+}
+
+#[wasm_bindgen]
+pub fn source_analysis_outline_json(handle: SourceAnalysisHandle) -> Result<String, JsValue> {
+    with_source_analysis(handle, puzzle_lang::SourceAnalysis::outline_json)
+        .map_err(source_analysis_error_js_value)
+}
+
+#[wasm_bindgen]
+pub fn source_analysis_suggest_source_completions(
+    handle: SourceAnalysisHandle,
+    cursor_offset: usize,
+) -> Result<String, JsValue> {
+    with_source_analysis(handle, |analysis| analysis.completion_json(cursor_offset))
+        .map_err(source_analysis_error_js_value)
+}
+
+#[wasm_bindgen]
+pub fn source_analysis_resolve_source_target(
+    handle: SourceAnalysisHandle,
+    cursor_offset: usize,
+) -> Result<String, JsValue> {
+    with_source_analysis(handle, |analysis| analysis.target_json(cursor_offset))
+        .map_err(source_analysis_error_js_value)
+}
+
+#[wasm_bindgen]
+pub fn source_analysis_entries_json(handle: SourceAnalysisHandle) -> Result<String, JsValue> {
+    with_source_analysis(handle, puzzle_lang::SourceAnalysis::entries_json)
+        .map_err(source_analysis_error_js_value)
+}
 
 #[wasm_bindgen]
 pub fn compile_preview(
@@ -48,74 +172,9 @@ pub fn generate_visuals_js(source: &str, base_visuals_js: &str) -> Result<String
 }
 
 #[wasm_bindgen]
-pub fn highlight_source_html(source: &str) -> String {
-    puzzle_lang::highlight_source(source).html
-}
-
-#[wasm_bindgen]
-pub fn highlight_source_json(source: &str, include_outline: bool) -> String {
-    if include_outline {
-        let highlighted = puzzle_lang::highlight_source_with_outline(source);
-        return highlighted_source_json(
-            &highlighted.highlighted,
-            Some(highlighted.outline.as_slice()),
-        );
-    }
-    let highlighted = puzzle_lang::highlight_source(source);
-    highlighted_source_json(&highlighted, None)
-}
-
-fn highlighted_source_json(
-    highlighted: &puzzle_lang::HighlightedSource,
-    outline: Option<&[puzzle_lang::SourceOutlineItem]>,
-) -> String {
-    let mut out = String::from("{");
-    out.push_str("\"parsed\":");
-    out.push_str(if highlighted.parsed { "true" } else { "false" });
-    out.push(',');
-    push_json_pair(&mut out, "html", &highlighted.html);
-    if let Some(items) = outline {
-        out.push_str(",\"outline\":{\"items\":[");
-        for (index, item) in items.iter().enumerate() {
-            if index > 0 {
-                out.push(',');
-            }
-            push_source_outline_item_json(&mut out, item);
-        }
-        out.push_str("]}");
-    }
-    out.push('}');
-    out
-}
-
-#[wasm_bindgen]
-pub fn source_outline_json(source: &str) -> String {
-    puzzle_lang::source_outline_json(source)
-}
-
-#[wasm_bindgen]
 pub fn translate_puzzlescript(source: &str) -> Result<String, JsValue> {
     puzzle_lang::translate_puzzlescript_to_canonical(source)
         .map_err(|error| JsValue::from_str(&error.to_string()))
-}
-
-#[wasm_bindgen]
-pub fn suggest_source_completions(source: &str, cursor_offset: usize) -> String {
-    puzzle_lang::completion_list_json(&puzzle_lang::suggest_source_completions(
-        source,
-        cursor_offset,
-    ))
-}
-
-#[wasm_bindgen]
-pub fn resolve_source_target(source: &str, cursor_offset: usize) -> String {
-    let target = puzzle_lang::resolve_source_target(source, cursor_offset);
-    puzzle_lang::source_target_json(target.as_ref())
-}
-
-#[wasm_bindgen]
-pub fn source_entries_json(source: &str) -> String {
-    puzzle_lang::source_entries_json(source)
 }
 
 #[wasm_bindgen]
@@ -226,37 +285,11 @@ fn push_diagnostic_json(out: &mut String, diagnostic: &puzzle_lang::Diagnostic) 
     out.push('}');
 }
 
-fn push_source_outline_item_json(out: &mut String, item: &puzzle_lang::SourceOutlineItem) {
-    out.push('{');
-    push_json_pair(out, "id", &item.id);
-    out.push(',');
-    push_json_pair(out, "kind", &item.kind);
-    out.push(',');
-    push_json_pair(out, "label", &item.label);
-    out.push(',');
-    push_json_number(out, "start", item.start);
-    out.push(',');
-    push_json_number(out, "end", item.end);
-    out.push(',');
-    push_json_number(out, "depth", item.depth);
-    out.push_str(",\"parent\":");
-    match item.parent.as_deref() {
-        Some(parent) => push_json_string(out, parent),
-        None => out.push_str("null"),
-    }
-    out.push('}');
-}
-
+#[cfg(test)]
 fn push_json_pair(out: &mut String, key: &str, value: &str) {
     push_json_string(out, key);
     out.push(':');
     push_json_string(out, value);
-}
-
-fn push_json_number(out: &mut String, key: &str, value: usize) {
-    push_json_string(out, key);
-    out.push(':');
-    out.push_str(&value.to_string());
 }
 
 #[cfg(test)]
@@ -279,6 +312,7 @@ fn push_json_option_string(out: &mut String, key: &str, value: Option<&str>) {
     }
 }
 
+#[cfg(test)]
 fn push_json_string(out: &mut String, value: &str) {
     out.push('"');
     for ch in value.chars() {
@@ -334,7 +368,12 @@ fn set_js_optional_string(payload: &js_sys::Object, key: &str, value: Option<&st
 
 #[cfg(test)]
 mod tests {
-    use super::{compile_preview, diagnostic_report_json, highlight_source_json};
+    use super::{
+        compile_preview, create_source_analysis_handle, diagnostic_report_json,
+        free_source_analysis_handle, source_analysis_entries_json, source_analysis_json,
+        source_analysis_outline_json, source_analysis_suggest_source_completions,
+        with_source_analysis,
+    };
 
     #[test]
     fn compile_preview_accepts_display_object_single_color_sprite() {
@@ -389,22 +428,27 @@ level "start"
     }
 
     #[test]
-    fn highlight_source_json_includes_outline_only_when_requested() {
-        let source = r#"
-puzzle board {
-  rules {
-  }
-}
-"#;
+    fn source_analysis_handle_queries_live_rust_analysis() {
+        let source = "puzzle Demo {\n  sounds {\n    \n  }\n}\n";
+        let cursor = source.find("    ").unwrap() + 4;
+        let handle = create_source_analysis_handle(source);
 
-        let without_outline = highlight_source_json(source, false);
-        assert!(without_outline.contains(r#""html":"#));
-        assert!(!without_outline.contains(r#""outline":"#));
+        let analysis = source_analysis_json(handle).expect("analysis json");
+        assert!(analysis.contains(r#""version":1"#));
+        assert!(analysis.contains(r#""entries":"#));
 
-        let with_outline = highlight_source_json(source, true);
-        assert!(with_outline.contains(r#""html":"#));
-        assert!(with_outline.contains(r#""outline":{"items":["#));
-        assert!(with_outline.contains(r#""label":"puzzle board""#));
-        assert!(with_outline.contains(r#""label":"rules""#));
+        let completions =
+            source_analysis_suggest_source_completions(handle, cursor).expect("completions");
+        assert!(completions.contains(r#""label":"sfx""#));
+        assert!(completions.contains(r#""label":"music""#));
+
+        let entries = source_analysis_entries_json(handle).expect("entries");
+        assert!(entries.contains(r#""entries":"#));
+
+        let outline = source_analysis_outline_json(handle).expect("outline");
+        assert!(outline.contains(r#""items":"#));
+
+        free_source_analysis_handle(handle).expect("free analysis");
+        assert!(with_source_analysis(handle, puzzle_lang::SourceAnalysis::analysis_json).is_err());
     }
 }

@@ -453,6 +453,7 @@ fn parse_puzzle_render_block(
     }
     let mut parsed = render.clone();
     let mut parsed_animation = animation.clone();
+    let mut tween_duration_source_line = None::<String>;
     for definition in &node.definition_rows {
         match definition.key.as_str() {
             "cell_size" => {
@@ -477,8 +478,17 @@ fn parse_puzzle_render_block(
                         "tween_duration must be: tween_duration = <duration>",
                     ));
                 }
-                parsed_animation.tween.enabled = true;
+                tween_duration_source_line = Some(definition.source_line.clone());
                 apply_tween_duration_definition(definition, &mut parsed_animation.tween)?;
+            }
+            "tween" => {
+                if definition.op != Some(authoring_grammar::AuthoringDefinitionOp::Equals) {
+                    return Err(parse_error(
+                        &definition.source_line,
+                        "tween must be: tween = true or tween = false",
+                    ));
+                }
+                parsed_animation.tween.enabled = parse_puzzle_render_tween_enabled(definition)?;
             }
             other => {
                 return Err(parse_error(
@@ -488,14 +498,18 @@ fn parse_puzzle_render_block(
             }
         }
     }
+    if let Some(source_line) = tween_duration_source_line
+        && !parsed_animation.tween.enabled
+    {
+        return Err(parse_error(
+            &source_line,
+            "tween_duration requires tween = true",
+        ));
+    }
     for child in &node.children {
         match child.kind {
             authoring_grammar::AuthoringKind::PuzzleRenderGridConfig => {
                 apply_puzzle_render_grid_node(child, &mut parsed.grid)?;
-            }
-            authoring_grammar::AuthoringKind::TweenConfig => {
-                parsed_animation.tween.enabled = true;
-                apply_animation_tween_node(child, &mut parsed_animation.tween)?;
             }
             _ => {
                 return Err(parse_error(
@@ -584,79 +598,6 @@ fn parse_puzzle_render_cell_size(value: &str, line: &str) -> Result<u16, Diagnos
     Ok(size)
 }
 
-fn parse_render_animation_block(
-    lines: &[String],
-    start: usize,
-    animation: &mut AnimationDef,
-) -> Result<usize, DiagnosticReport> {
-    let (node, next_i) = authoring_grammar::parse_placed_authoring_node(
-        lines,
-        start,
-        authoring_grammar::AuthoringKind::Root,
-        "render block missing closing brace",
-    )?;
-    if node.kind != authoring_grammar::AuthoringKind::PuzzleRenderConfig {
-        return Err(parse_error(&lines[start], "render header must be: render"));
-    }
-    let mut parsed = animation.clone();
-    for definition in &node.definition_rows {
-        match definition.key.as_str() {
-            "tween_duration" => {
-                if definition.op != Some(authoring_grammar::AuthoringDefinitionOp::Equals) {
-                    return Err(parse_error(
-                        &definition.source_line,
-                        "tween_duration must be: tween_duration = <duration>",
-                    ));
-                }
-                parsed.tween.enabled = true;
-                apply_tween_duration_definition(definition, &mut parsed.tween)?;
-            }
-            other => {
-                return Err(parse_error(
-                    &definition.source_line,
-                    &format!("unknown render setting {other}"),
-                ));
-            }
-        }
-    }
-    for child in &node.children {
-        match child.kind {
-            authoring_grammar::AuthoringKind::TweenConfig => {
-                parsed.tween.enabled = true;
-                apply_animation_tween_node(child, &mut parsed.tween)?;
-            }
-            _ => {
-                return Err(parse_error(
-                    &child.source_line,
-                    &format!("unknown render directive {}", child.surface),
-                ));
-            }
-        }
-    }
-    *animation = parsed;
-    Ok(next_i)
-}
-
-fn apply_animation_tween_node(
-    node: &authoring_grammar::AuthoringNode,
-    tween: &mut TweenAnimationDef,
-) -> Result<(), DiagnosticReport> {
-    for definition in &node.definition_rows {
-        match definition.key.as_str() {
-            "duration" => {
-                apply_tween_duration_definition(definition, tween)?;
-            }
-            other => {
-                return Err(parse_error(
-                    &definition.source_line,
-                    &format!("unknown tween setting {other}"),
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
 fn apply_tween_duration_definition(
     definition: &authoring_grammar::AuthoringDefinitionRow,
     tween: &mut TweenAnimationDef,
@@ -675,6 +616,30 @@ fn apply_tween_duration_definition(
     }
     tween.interval_ms = parse_animation_duration_ms(value, &definition.source_line)?;
     Ok(())
+}
+
+fn parse_puzzle_render_tween_enabled(
+    definition: &authoring_grammar::AuthoringDefinitionRow,
+) -> Result<bool, DiagnosticReport> {
+    let Some(value) = definition.single_value() else {
+        return Err(parse_error(
+            &definition.source_line,
+            "tween must be one boolean value",
+        ));
+    };
+    let spec = authoring_grammar::authoring_definition_spec(
+        authoring_grammar::AuthoringKind::PuzzleRenderConfig,
+        "tween",
+    )
+    .expect("render tween definition exists");
+    match authoring_grammar::definition_value_literal(spec, value, &definition.source_line)? {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        other => Err(parse_error(
+            &definition.source_line,
+            &format!("unknown tween value {other}"),
+        )),
+    }
 }
 
 fn parse_animation_duration_ms(value: &str, line: &str) -> Result<u64, DiagnosticReport> {

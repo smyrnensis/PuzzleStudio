@@ -14,6 +14,7 @@ mod puzzlescript;
 mod semantic;
 mod solver_surface;
 mod source;
+mod source_analysis;
 mod source_outline;
 mod source_target;
 mod surface;
@@ -89,8 +90,8 @@ use puzzle_core::{
     ComparisonOp, CompiledGame, ConditionDef, ConditionId, ConditionValueKind, Effect, GapTerm,
     Guard, InputId, LayerId, LocalFrame, LocalFrameExtent, MarkDef, MarkId, MarkKind, MarkPattern,
     MarkValueMatch, MatchCell, ObjectDef, ObjectId, ObjectSetMarkPattern, ObjectSetMatcher, Offset,
-    Pattern, PatternComponent, Rule, RuleApplication, RuleCondition, RuleId, RuleStep, VariableId,
-    VariableUpdateOp, WriteOp,
+    Pattern, PatternComponent, Rule, RuleApplication, RuleCondition, RuleId, RuleStep, State,
+    VariableId, VariableUpdateOp, WriteOp,
 };
 pub use puzzle3_model::{
     CameraSettings3, GridSettings3, ModelSettings3, ParsedPuzzle3, PixelateRenderSettings3,
@@ -110,6 +111,18 @@ use source::{
     SourceScope, SourceToken, logical_lines_with_locations, source_line_tokens,
     split_header_tokens, strip_line_comment,
 };
+
+pub fn parse_level_ascii_state(
+    game: &CompiledGame,
+    lines: &[String],
+    empty: char,
+    char_objects: &HashMap<char, Vec<ObjectId>>,
+    variable_defaults: &[i64],
+) -> Result<(State, Vec<LevelRegionDef>), DiagnosticReport> {
+    let parsed = parse_level(game, lines, empty, char_objects, variable_defaults)?;
+    Ok((parsed.state, parsed.regions))
+}
+pub use source_analysis::{SourceAnalysis, analyze_source, analyze_source_json};
 pub use source_outline::{SourceOutlineItem, source_outline, source_outline_json};
 pub use source_target::{
     SoundSourceTargetKind, SourceSprite3dStatus, SourceSprite3dTarget, SourceSpriteColorAsset,

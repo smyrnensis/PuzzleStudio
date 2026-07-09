@@ -3900,14 +3900,26 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   font: 800 15px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
+.level3d-view-toggle {
+  min-width: 0;
+  min-height: 28px;
+  padding: 0;
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border: 0;
+  background: transparent;
+}
+
 .level3d-workspace {
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, var(--level3d-frame-width)) minmax(0, var(--level3d-frame-width));
+  grid-template-columns: minmax(0, var(--level3d-frame-width));
   grid-auto-rows: max-content;
   grid-template-areas:
-    "preview layer"
-    "source source";
+    "preview"
+    "source";
   align-content: start;
   align-items: start;
   gap: var(--level3d-frame-gap);
@@ -3915,12 +3927,15 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   max-width: 100%;
 }
 
-.level3d-workspace.is-stacked {
-  grid-template-columns: minmax(0, var(--level3d-frame-width));
+.level3d-workspace.is-view-layer {
   grid-template-areas:
-    "preview"
     "layer"
     "source";
+}
+
+.level3d-workspace.is-view-stage .level3d-layer-editor,
+.level3d-workspace.is-view-layer .level3d-runtime-wrap {
+  display: none;
 }
 
 .level3d-runtime-wrap,
@@ -3931,10 +3946,18 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 
 .level3d-runtime-wrap {
   grid-area: preview;
-  position: relative;
-  display: block;
+  display: grid;
+  grid-template-rows: auto minmax(0, var(--level3d-frame-height));
+  gap: 8px;
   min-width: 0;
   max-width: 100%;
+  width: var(--level3d-frame-width);
+  height: auto;
+  overflow: visible;
+}
+
+.level3d-runtime-surface-viewport {
+  position: relative;
   width: var(--level3d-frame-width);
   height: var(--level3d-frame-height);
   overflow: hidden;

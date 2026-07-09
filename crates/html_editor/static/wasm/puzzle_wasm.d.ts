@@ -15,15 +15,13 @@ export class WasmCompiledCoreRuntime {
 
 export function compile_preview(source: string, puzzle_path: string, game_css: string, game_visuals_js: string): string;
 
+export function create_source_analysis_handle(source: string): number;
+
 export function export_html(source: string, puzzle_path: string, game_css: string, game_visuals_js: string, game_runtime_module_js: string, game_runtime_wasm_base64: string): string;
 
+export function free_source_analysis_handle(handle: number): void;
+
 export function generate_visuals_js(source: string, base_visuals_js: string): string;
-
-export function highlight_source_html(source: string): string;
-
-export function highlight_source_json(source: string, include_outline: boolean): string;
-
-export function resolve_source_target(source: string, cursor_offset: number): string;
 
 export function solve_request_json(request_json: string): string;
 
@@ -35,11 +33,17 @@ export function solve_state(source: string, puzzle_path: string, state_json: str
 
 export function solver_task_initial_display_state_json(request_json: string): string;
 
-export function source_entries_json(source: string): string;
+export function source_analysis_entries_json(handle: number): string;
 
-export function source_outline_json(source: string): string;
+export function source_analysis_highlight_json(handle: number, include_outline: boolean): string;
 
-export function suggest_source_completions(source: string, cursor_offset: number): string;
+export function source_analysis_json(handle: number): string;
+
+export function source_analysis_outline_json(handle: number): string;
+
+export function source_analysis_resolve_source_target(handle: number, cursor_offset: number): string;
+
+export function source_analysis_suggest_source_completions(handle: number, cursor_offset: number): string;
 
 export function translate_puzzlescript(source: string): string;
 
@@ -48,19 +52,21 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly compile_preview: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
+    readonly create_source_analysis_handle: (a: number, b: number) => number;
     readonly export_html: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number, number];
+    readonly free_source_analysis_handle: (a: number) => [number, number];
     readonly generate_visuals_js: (a: number, b: number, c: number, d: number) => [number, number, number, number];
-    readonly highlight_source_html: (a: number, b: number) => [number, number];
-    readonly highlight_source_json: (a: number, b: number, c: number) => [number, number];
-    readonly resolve_source_target: (a: number, b: number, c: number) => [number, number];
     readonly solve_request_json: (a: number, b: number) => [number, number, number, number];
     readonly solve_solver_task_json: (a: number, b: number) => [number, number, number, number];
     readonly solve_solver_task_json_with_progress: (a: number, b: number, c: any) => [number, number, number, number];
     readonly solve_state: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number, number, number];
     readonly solver_task_initial_display_state_json: (a: number, b: number) => [number, number, number, number];
-    readonly source_entries_json: (a: number, b: number) => [number, number];
-    readonly source_outline_json: (a: number, b: number) => [number, number];
-    readonly suggest_source_completions: (a: number, b: number, c: number) => [number, number];
+    readonly source_analysis_entries_json: (a: number) => [number, number, number, number];
+    readonly source_analysis_highlight_json: (a: number, b: number) => [number, number, number, number];
+    readonly source_analysis_json: (a: number) => [number, number, number, number];
+    readonly source_analysis_outline_json: (a: number) => [number, number, number, number];
+    readonly source_analysis_resolve_source_target: (a: number, b: number) => [number, number, number, number];
+    readonly source_analysis_suggest_source_completions: (a: number, b: number) => [number, number, number, number];
     readonly translate_puzzlescript: (a: number, b: number) => [number, number, number, number];
     readonly __wbg_wasmcompiledcoreruntime_free: (a: number, b: number) => void;
     readonly wasmcompiledcoreruntime_current_state: (a: number) => [number, number, number, number];

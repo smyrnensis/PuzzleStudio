@@ -17,6 +17,8 @@ pub(crate) fn surface_completion_context_for_document(
     let option_block = option_block_at_cursor(document, cursor);
     let sounds_definition_scope =
         option_block == Some(SurfaceOptionBlock::Authoring(AuthoringKind::SoundsConfig));
+    let warnings =
+        authoring_assignment_completion_warnings(source, token.replace_start, option_block, scope);
 
     let contextual_slots = contextual_completion_slots(source, document, &token, scope);
     let slots = if let Some(slots) = contextual_slots {
@@ -58,7 +60,41 @@ pub(crate) fn surface_completion_context_for_document(
         replace_end: token.replace_end,
         token_text: token.text,
         slots,
+        warnings,
     }
+}
+
+fn authoring_assignment_completion_warnings(
+    source: &str,
+    cursor: usize,
+    option_block: Option<SurfaceOptionBlock>,
+    scope: Option<SourceScope>,
+) -> Vec<String> {
+    let Some(kind) = authoring_assignment_owner_kind(option_block, scope) else {
+        return Vec::new();
+    };
+    let line_start = source[..cursor].rfind('\n').map_or(0, |index| index + 1);
+    let before = source[line_start..cursor].trim_start();
+    let tokens = crate::authoring_grammar::split_authoring_tokens(before);
+    let [key, op, ..] = tokens.as_slice() else {
+        return Vec::new();
+    };
+    if op != "=" || crate::authoring_grammar::authoring_definition_spec(kind, key).is_some() {
+        return Vec::new();
+    }
+    vec![format!(
+        "owner schema does not define assignment key `{key}`; no RHS completions are available"
+    )]
+}
+
+fn authoring_assignment_owner_kind(
+    option_block: Option<SurfaceOptionBlock>,
+    scope: Option<SourceScope>,
+) -> Option<AuthoringKind> {
+    if let Some(kind) = option_block.and_then(SurfaceOptionBlock::authoring_parent_kind) {
+        return Some(kind);
+    }
+    scope.is_none().then_some(AuthoringKind::Root)
 }
 
 fn contextual_completion_slots(
@@ -380,21 +416,23 @@ fn authoring_schema_completion_slots(
     include_children: bool,
 ) -> Option<Vec<SemanticCompletionSlot>> {
     let mut slots = Vec::<SemanticCompletionSlot>::new();
-    if include_children && !crate::authoring_grammar::authoring_child_surfaces(kind).is_empty() {
-        slots.push(SemanticCompletionSlot::AuthoringChildren(kind));
-    }
-    if !crate::authoring_grammar::authoring_definition_surfaces(kind).is_empty() {
-        slots.push(SemanticCompletionSlot::Settings(
-            SettingCompletionSet::AuthoringDefinitions(kind),
-        ));
-    }
-    if let crate::authoring_grammar::AuthoringBody::Content(content) =
-        crate::authoring_grammar::authoring_kind_spec(kind).body
-    {
-        if !crate::authoring_grammar::authoring_content_row_surfaces(content).is_empty() {
-            slots.push(SemanticCompletionSlot::AuthoringContentRows(content));
+    for completion in crate::authoring_grammar::authoring_body_completions(kind, include_children) {
+        match completion {
+            crate::authoring_grammar::AuthoringBodyCompletion::Rows(kind) => {
+                slots.push(SemanticCompletionSlot::AuthoringRows(kind));
+            }
+            crate::authoring_grammar::AuthoringBodyCompletion::Children(kind) => {
+                slots.push(SemanticCompletionSlot::AuthoringChildren(kind));
+            }
+            crate::authoring_grammar::AuthoringBodyCompletion::Definitions(kind) => {
+                slots.push(SemanticCompletionSlot::Settings(
+                    SettingCompletionSet::AuthoringDefinitions(kind),
+                ));
+            }
+            crate::authoring_grammar::AuthoringBodyCompletion::ContentRows(content) => {
+                slots.push(SemanticCompletionSlot::AuthoringContentRows(content));
+            }
         }
-        return Some(slots);
     }
     (!slots.is_empty()).then_some(slots)
 }
@@ -430,30 +468,26 @@ fn authoring_definition_value_completion_slots(
     if op != "=" {
         return None;
     }
-    let spec = crate::authoring_grammar::authoring_definition_spec(kind, key)?;
-    match crate::authoring_grammar::definition_value_domain(spec) {
-        crate::authoring_grammar::DefinitionValueDomain::Builtin(
+    let Some(completion) = crate::authoring_grammar::authoring_definition_completion(kind, key)
+    else {
+        return Some(Vec::new());
+    };
+    match completion {
+        crate::authoring_grammar::AuthoringDefinitionCompletion::Builtin(
             crate::authoring_grammar::DefinitionBuiltinDomain::ThemePreset,
         ) => Some(vec![SemanticCompletionSlot::Themes]),
-        crate::authoring_grammar::DefinitionValueDomain::Builtin(domain) => {
+        crate::authoring_grammar::AuthoringDefinitionCompletion::Builtin(domain) => {
             Some(vec![SemanticCompletionSlot::Literals(
                 crate::authoring_grammar::definition_builtin_domain_values(domain),
             )])
         }
-        crate::authoring_grammar::DefinitionValueDomain::None => {
-            match crate::authoring_grammar::definition_value_syntax(spec) {
-                crate::authoring_grammar::DefinitionValueSyntax::Color => {
-                    Some(vec![SemanticCompletionSlot::Colors])
-                }
-                _ => match crate::authoring_grammar::definition_value_role(spec) {
-                    Some(crate::authoring_grammar::AuthoringSurfaceRole::Object) => Some(vec![
-                        SemanticCompletionSlot::Objects,
-                        SemanticCompletionSlot::Groups,
-                    ]),
-                    _ => None,
-                },
-            }
+        crate::authoring_grammar::AuthoringDefinitionCompletion::Color => {
+            Some(vec![SemanticCompletionSlot::Colors])
         }
+        crate::authoring_grammar::AuthoringDefinitionCompletion::Object => Some(vec![
+            SemanticCompletionSlot::Objects,
+            SemanticCompletionSlot::Groups,
+        ]),
     }
 }
 
@@ -474,10 +508,12 @@ fn visual_completion_slots(
             match tokens.as_slice() {
                 ["colors", ..] => Some(vec![SemanticCompletionSlot::Colors]),
                 ["shape", ..] => Some(vec![SemanticCompletionSlot::Shapes]),
-                [first, ..] if !matches!(*first, "shape" | "sprite" | "colors") => Some(vec![
-                    SemanticCompletionSlot::Colors,
-                    SemanticCompletionSlot::Assets,
-                ]),
+                [first, ..] if !matches!(*first, "shape" | "sprite" | "palette" | "colors") => {
+                    Some(vec![
+                        SemanticCompletionSlot::Colors,
+                        SemanticCompletionSlot::Assets,
+                    ])
+                }
                 _ => None,
             }
         }
@@ -793,8 +829,8 @@ const SCENE_COMPLETION_KEYWORDS: &[&str] = &[
 ];
 
 const VISUAL_COMPLETION_KEYWORDS: &[&str] = &[
-    "contain", "cover", "colors", "image", "offset", "rotate", "sampling", "shape", "shapes",
-    "sprite", "stretch",
+    "contain", "cover", "colors", "image", "offset", "palette", "rotate", "sampling", "shape",
+    "shapes", "sprite", "stretch",
 ];
 const COMPLETION_LITERALS: &[&str] = &["false", "true"];
 
@@ -951,6 +987,62 @@ assets {
         assert!(!context.slots.iter().any(|slot| {
             matches!(slot, SemanticCompletionSlot::Keywords(keywords) if keywords.contains(&"css"))
         }));
+    }
+
+    #[test]
+    fn authoring_generic_completions_follow_owner_schema() {
+        let source = r#"
+title = completion_authoring_schema
+sounds {
+s
+}
+theme {
+background_color = li
+unknown = z
+}
+puzzle board {
+render {
+g
+grid {
+type = "o
+}
+}
+}
+"#;
+        let document = crate::parse_surface_document(source);
+        let context_at = |needle: &str| {
+            let cursor = source.find(needle).unwrap() + needle.len();
+            surface_completion_context_for_document(source, cursor, &document)
+        };
+
+        assert!(
+            context_at("\ns\n")
+                .slots
+                .contains(&SemanticCompletionSlot::AuthoringChildren(
+                    AuthoringKind::SoundsConfig
+                ))
+        );
+        assert!(
+            context_at("\ng\n")
+                .slots
+                .contains(&SemanticCompletionSlot::AuthoringChildren(
+                    AuthoringKind::PuzzleRenderConfig
+                ))
+        );
+        assert!(
+            context_at("background_color = li")
+                .slots
+                .contains(&SemanticCompletionSlot::Colors)
+        );
+        assert!(
+            context_at("type = \"o")
+                .slots
+                .iter()
+                .any(|slot| matches!(slot, SemanticCompletionSlot::Literals(_)))
+        );
+        let unknown = context_at("unknown = z");
+        assert!(unknown.slots.is_empty());
+        assert!(unknown.warnings[0].contains("assignment key `unknown`"));
     }
 
     #[test]

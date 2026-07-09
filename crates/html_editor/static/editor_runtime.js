@@ -3,6 +3,7 @@
   let wasmCompiler = null;
   let wasmCompilerPromise = null;
   let gameRuntimeAssetsPromise = null;
+  let sourceAnalysisCache = null;
 
   function runtimeUnavailable(message) {
     const error = new Error(message);
@@ -73,6 +74,64 @@
     return typeof value === "string" ? value : "";
   }
 
+  function requireSourceAnalysisFunction(module, name) {
+    const fn = module?.[name];
+    if (typeof fn !== "function") {
+      throw runtimeUnavailable(`Editor WASM function is missing: ${name}`);
+    }
+    return fn;
+  }
+
+  function parseSourceAnalysisJson(raw) {
+    const payload = JSON.parse(raw || "{}");
+    return payload && typeof payload === "object" ? payload : {};
+  }
+
+  function releaseSourceAnalysisCache(module) {
+    if (!sourceAnalysisCache) {
+      return;
+    }
+    const free = requireSourceAnalysisFunction(module, "free_source_analysis_handle");
+    free(sourceAnalysisCache.handle);
+    sourceAnalysisCache = null;
+  }
+
+  function querySourceAnalysis(module, handle, name, ...args) {
+    const query = requireSourceAnalysisFunction(module, name);
+    return query(handle, ...args);
+  }
+
+  function createSourceAnalysis(module, source) {
+    const text = asString(source);
+    if (sourceAnalysisCache?.source === text) {
+      return sourceAnalysisCache;
+    }
+    releaseSourceAnalysisCache(module);
+    const create = requireSourceAnalysisFunction(module, "create_source_analysis_handle");
+    const handle = create(text);
+    if (!Number.isInteger(handle) || handle <= 0) {
+      throw runtimeUnavailable(`Editor WASM source analysis handle is invalid: ${handle}`);
+    }
+    sourceAnalysisCache = {
+      source: text,
+      handle,
+      payload: null,
+    };
+    return sourceAnalysisCache;
+  }
+
+  async function sourceAnalysisForSource(source) {
+    const module = await loadWasmCompiler();
+    return createSourceAnalysis(module, source);
+  }
+
+  function sourceAnalysisForLoadedSource(source) {
+    if (!wasmCompiler) {
+      throw runtimeUnavailable("Editor WASM parser is not loaded.");
+    }
+    return createSourceAnalysis(wasmCompiler, source);
+  }
+
   window.PuzzleStudioRuntime = {
     async compilePreview(payload = {}) {
       const compile = await requireWasmFunction("compile_preview");
@@ -98,13 +157,18 @@
     },
 
     async highlightSource(payload = {}) {
-      const highlight = await requireWasmFunction("highlight_source_json");
-      return highlight(asString(payload.source), Boolean(payload.includeOutline));
+      const analysis = await sourceAnalysisForSource(payload.source);
+      return querySourceAnalysis(
+        wasmCompiler,
+        analysis.handle,
+        "source_analysis_highlight_json",
+        Boolean(payload.includeOutline),
+      );
     },
 
     async sourceOutline(payload = {}) {
-      const outline = await requireWasmFunction("source_outline_json");
-      return outline(asString(payload.source));
+      const analysis = await sourceAnalysisForSource(payload.source);
+      return querySourceAnalysis(wasmCompiler, analysis.handle, "source_analysis_outline_json");
     },
 
     async translatePuzzleScript(source) {
@@ -113,8 +177,39 @@
     },
 
     async suggestSourceCompletions(source, cursorOffset) {
-      const suggest = await requireWasmFunction("suggest_source_completions");
-      return suggest(asString(source), Number(cursorOffset) || 0);
+      const analysis = await sourceAnalysisForSource(source);
+      return querySourceAnalysis(
+        wasmCompiler,
+        analysis.handle,
+        "source_analysis_suggest_source_completions",
+        Number(cursorOffset) || 0,
+      );
+    },
+
+    async resolveSourceTarget(source, cursorOffset) {
+      const analysis = await sourceAnalysisForSource(source);
+      return querySourceAnalysis(
+        wasmCompiler,
+        analysis.handle,
+        "source_analysis_resolve_source_target",
+        Number(cursorOffset) || 0,
+      );
+    },
+
+    sourceEntries(source) {
+      const analysis = sourceAnalysisForLoadedSource(source);
+      const raw = querySourceAnalysis(wasmCompiler, analysis.handle, "source_analysis_entries_json");
+      const payload = parseSourceAnalysisJson(raw);
+      return Array.isArray(payload.entries) ? payload.entries : [];
+    },
+
+    sourceAnalysisPayload(source) {
+      const analysis = sourceAnalysisForLoadedSource(source);
+      if (!analysis.payload) {
+        const raw = querySourceAnalysis(wasmCompiler, analysis.handle, "source_analysis_json");
+        analysis.payload = parseSourceAnalysisJson(raw);
+      }
+      return analysis.payload;
     },
 
     async solveState(source, puzzlePath, stateJson, maxDepth, maxNodes, maxMs) {

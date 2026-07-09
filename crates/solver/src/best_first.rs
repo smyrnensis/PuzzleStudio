@@ -210,6 +210,193 @@ where
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SearchMatch<State, Action> {
+    pub state: State,
+    pub actions: Vec<Action>,
+    pub depth: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScanControl {
+    Continue,
+    Stop,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ScanOutcome<Action, Error> {
+    Completed {
+        stats: SearchStats,
+    },
+    Stopped {
+        stats: SearchStats,
+    },
+    BudgetExceeded {
+        stats: SearchStats,
+    },
+    Failed {
+        failure: SearchFailure<Action, Error>,
+    },
+}
+
+pub fn best_first_scan_with_dead_states_and_progress<D, F, P, S, O>(
+    domain: &mut D,
+    initial: D::State,
+    budget: SearchBudget,
+    mut score: F,
+    mut is_dead: P,
+    mut on_discovered: S,
+    mut on_progress: O,
+) -> ScanOutcome<D::Action, D::Error>
+where
+    D: SearchDomain,
+    D::State: Clone,
+    D::Action: Clone,
+    F: FnMut(&D::State) -> i64,
+    P: FnMut(&D::State) -> bool,
+    S: FnMut(SearchMatch<D::State, D::Action>) -> ScanControl,
+    O: FnMut(&D::State, SearchProgress),
+{
+    let started_at = budget.max_duration.map(|_| Instant::now());
+    let initial_key = domain.key(&initial);
+    let mut nodes = vec![NodeRecord {
+        state: initial,
+        parent: None,
+        action: None,
+        depth: 0,
+    }];
+    let mut visited = HashMap::from([(initial_key, 0_usize)]);
+    let mut frontier = BinaryHeap::from([QueueEntry {
+        score: score(&nodes[0].state),
+        depth: 0,
+        sequence: 0,
+        node_index: 0,
+    }]);
+    let mut expanded = 0_usize;
+    let mut max_depth_reached = 0_u32;
+    let mut sequence = 1_usize;
+    let mut depth_budget_hit = false;
+
+    if on_discovered(reconstruct_match(&nodes, 0)) == ScanControl::Stop {
+        return ScanOutcome::Stopped {
+            stats: stats(
+                started_at,
+                visited.len(),
+                frontier.len(),
+                expanded,
+                max_depth_reached,
+            ),
+        };
+    }
+
+    loop {
+        if let Some(stats) = budget_exceeded(
+            budget,
+            started_at,
+            visited.len(),
+            frontier.len(),
+            expanded,
+            max_depth_reached,
+        ) {
+            return ScanOutcome::BudgetExceeded { stats };
+        }
+
+        let Some(entry) = frontier.pop() else {
+            let stats = stats(
+                started_at,
+                visited.len(),
+                frontier.len(),
+                expanded,
+                max_depth_reached,
+            );
+            return if depth_budget_hit {
+                ScanOutcome::BudgetExceeded { stats }
+            } else {
+                ScanOutcome::Completed { stats }
+            };
+        };
+
+        let current_index = entry.node_index;
+        let current_depth = nodes[current_index].depth;
+        max_depth_reached = max_depth_reached.max(current_depth);
+        if budget
+            .max_depth
+            .is_some_and(|max_depth| current_depth >= max_depth)
+        {
+            depth_budget_hit = true;
+            continue;
+        }
+
+        expanded += 1;
+        on_progress(
+            &nodes[current_index].state,
+            SearchProgress {
+                visited: visited.len(),
+                expanded,
+                frontier: frontier.len(),
+                max_depth_reached,
+                depth: current_depth,
+            },
+        );
+        let current_key = domain.key(&nodes[current_index].state);
+        let actions = domain.actions(&nodes[current_index].state).to_vec();
+        for action in actions {
+            let next = match domain.step(&nodes[current_index].state, &action) {
+                Ok(next) => next,
+                Err(error) => {
+                    return ScanOutcome::Failed {
+                        failure: SearchFailure {
+                            action,
+                            depth: current_depth + 1,
+                            error,
+                        },
+                    };
+                }
+            };
+
+            if is_dead(&next) {
+                continue;
+            }
+
+            let next_key = domain.key(&next);
+            if next_key == current_key || visited.contains_key(&next_key) {
+                continue;
+            }
+
+            let next_depth = current_depth + 1;
+            let next_index = nodes.len();
+            nodes.push(NodeRecord {
+                state: next,
+                parent: Some(current_index),
+                action: Some(action),
+                depth: next_depth,
+            });
+            visited.insert(next_key, next_index);
+            max_depth_reached = max_depth_reached.max(next_depth);
+
+            if on_discovered(reconstruct_match(&nodes, next_index)) == ScanControl::Stop {
+                return ScanOutcome::Stopped {
+                    stats: stats(
+                        started_at,
+                        visited.len(),
+                        frontier.len(),
+                        expanded,
+                        max_depth_reached,
+                    ),
+                };
+            }
+
+            frontier.push(QueueEntry {
+                score: score(&nodes[next_index].state),
+                depth: next_depth,
+                sequence,
+                node_index: next_index,
+            });
+            sequence += 1;
+        }
+    }
+}
+
 fn reconstruct_witness<State, Action: Clone>(
     nodes: &[NodeRecord<State, Action>],
     mut index: usize,
@@ -224,6 +411,18 @@ fn reconstruct_witness<State, Action: Clone>(
     }
     actions.reverse();
     Witness { actions, depth }
+}
+
+fn reconstruct_match<State: Clone, Action: Clone>(
+    nodes: &[NodeRecord<State, Action>],
+    index: usize,
+) -> SearchMatch<State, Action> {
+    let witness = reconstruct_witness(nodes, index);
+    SearchMatch {
+        state: nodes[index].state.clone(),
+        actions: witness.actions,
+        depth: witness.depth,
+    }
 }
 
 fn budget_exceeded(
@@ -336,5 +535,33 @@ mod tests {
         assert!(matches!(outcome, SearchOutcome::Solved(_)));
         assert_eq!(observed[0], (0, 1, 0));
         assert!(observed.iter().any(|(_, _, depth)| *depth > 0));
+    }
+
+    #[test]
+    fn scans_discovered_states_with_witness_actions() {
+        let mut domain = LineDomain { actions: [1] };
+        let mut discovered = Vec::new();
+
+        let outcome = best_first_scan_with_dead_states_and_progress(
+            &mut domain,
+            0,
+            SearchBudget {
+                max_depth: Some(4),
+                max_nodes: Some(32),
+                max_frontier: None,
+                max_duration: None,
+            },
+            |state| i64::from(4_u8.saturating_sub(*state)),
+            |_| false,
+            |search_match| {
+                discovered.push((search_match.state, search_match.actions, search_match.depth));
+                ScanControl::Continue
+            },
+            |_, _| {},
+        );
+
+        assert!(matches!(outcome, ScanOutcome::BudgetExceeded { .. }));
+        assert!(discovered.contains(&(0, Vec::new(), 0)));
+        assert!(discovered.contains(&(2, vec![1, 1], 2)));
     }
 }
