@@ -42,7 +42,7 @@ async function downloadHtml() {
         return;
       }
       if (result?.ok) {
-        setEditorStatus(`Exported ${fileName(result.path) || filename}`);
+        setExportedFileStatus(result.path, filename);
         return;
       }
     } catch (error) {
@@ -54,6 +54,50 @@ async function downloadHtml() {
   const blob = new Blob([html], { type: "text/html;charset=utf-8" });
   downloadBlob(blob, filename);
   setEditorStatus(`Exported ${filename}`, "is-ok");
+}
+
+function setExportedFileStatus(path, fallbackName) {
+  const label = fileName(path) || fallbackName || "exported file";
+  const options = exportedFileStatusLinkOptions(path, label);
+  setEditorStatusLink("Exported ", label, options);
+  const activePaneElement = setPaneStatusLink(activeStatusPaneId(), "Exported ", label, options);
+  if (!activePaneElement) {
+    setPaneStatusLink("preview", "Exported ", label, options);
+  }
+}
+
+function exportedFileStatusLinkOptions(path, label) {
+  return {
+    className: "is-ok",
+    href: fileUrlForPath(path),
+    title: path,
+    download: label,
+    onClick: async (event) => {
+      event.preventDefault();
+      try {
+        await window.PuzzleStudioHost.openExportedFile({ path });
+      } catch (error) {
+        console.error(error);
+        setEditorStatus(`Open failed: ${error.message || error}`, "is-error");
+      }
+    },
+  };
+}
+
+function fileUrlForPath(path) {
+  const raw = String(path || "");
+  const normalized = raw.replaceAll("\\", "/");
+  const encodedPath = normalized
+    .split("/")
+    .map((segment, index) => (index === 0 && /^[A-Za-z]:$/.test(segment) ? segment : encodeURIComponent(segment)))
+    .join("/");
+  if (normalized.startsWith("//")) {
+    return `file:${encodedPath}`;
+  }
+  if (normalized.startsWith("/")) {
+    return `file://${encodedPath}`;
+  }
+  return `file:///${encodedPath}`;
 }
 
 function htmlDownloadFileName() {
@@ -486,31 +530,66 @@ function setPuzzleScriptImportStatus(message, tone = "") {
   setPaneStatus("psimport", message, tone);
 }
 
+let puzzleScriptImportConversionTimer = 0;
+let puzzleScriptImportConversionGeneration = 0;
+
+function setPuzzleScriptImportOutputReady(ready) {
+  if (psImportCopyButton) {
+    psImportCopyButton.disabled = !ready;
+  }
+  if (psImportAddFileButton) {
+    psImportAddFileButton.disabled = !ready;
+  }
+}
+
 function resetPuzzleScriptImportConversion() {
+  puzzleScriptImportConversionGeneration += 1;
+  if (puzzleScriptImportConversionTimer) {
+    window.clearTimeout(puzzleScriptImportConversionTimer);
+    puzzleScriptImportConversionTimer = 0;
+  }
   if (psImportOutput) {
     psImportOutput.value = "";
   }
-  if (psImportCopyButton) {
-    psImportCopyButton.disabled = true;
-  }
-  if (psImportAddFileButton) {
-    psImportAddFileButton.disabled = true;
-  }
+  setPuzzleScriptImportOutputReady(false);
   setPuzzleScriptImportStatus("", "");
 }
 
-async function convertPuzzleScriptImport() {
+function schedulePuzzleScriptImportConversion() {
+  const source = psImportSourceInput?.value || "";
+  if (!source.trim()) {
+    resetPuzzleScriptImportConversion();
+    return;
+  }
+  const generation = puzzleScriptImportConversionGeneration + 1;
+  puzzleScriptImportConversionGeneration = generation;
+  if (puzzleScriptImportConversionTimer) {
+    window.clearTimeout(puzzleScriptImportConversionTimer);
+  }
+  if (psImportOutput) {
+    psImportOutput.value = "";
+  }
+  setPuzzleScriptImportOutputReady(false);
+  setPuzzleScriptImportStatus("", "");
+  puzzleScriptImportConversionTimer = window.setTimeout(() => {
+    puzzleScriptImportConversionTimer = 0;
+    convertPuzzleScriptImport(generation).catch((error) => {
+      if (generation !== puzzleScriptImportConversionGeneration) {
+        return;
+      }
+      console.error(error);
+      setPuzzleScriptImportStatus(error.message || String(error), "is-error");
+    });
+  }, 180);
+}
+
+async function convertPuzzleScriptImport(generation = ++puzzleScriptImportConversionGeneration) {
   const source = psImportSourceInput?.value || "";
   if (!source.trim()) {
     if (psImportOutput) {
       psImportOutput.value = "";
     }
-    if (psImportCopyButton) {
-      psImportCopyButton.disabled = true;
-    }
-    if (psImportAddFileButton) {
-      psImportAddFileButton.disabled = true;
-    }
+    setPuzzleScriptImportOutputReady(false);
     setPuzzleScriptImportStatus("", "");
     return "";
   }
@@ -520,49 +599,59 @@ async function convertPuzzleScriptImport() {
     throw new Error("PuzzleScript import is unavailable in this editor build.");
   }
   const canonical = compiler.translate_puzzlescript(source);
+  if (generation !== puzzleScriptImportConversionGeneration || source !== (psImportSourceInput?.value || "")) {
+    return "";
+  }
   if (psImportOutput) {
     psImportOutput.value = canonical;
   }
-  if (psImportCopyButton) {
-    psImportCopyButton.disabled = false;
-  }
-  if (psImportAddFileButton) {
-    psImportAddFileButton.disabled = false;
-  }
+  setPuzzleScriptImportOutputReady(true);
   setPuzzleScriptImportStatus("Converted", "is-ok");
   return canonical;
 }
 
 function puzzleScriptImportTitle(source, canonical) {
-  const explicitTitle = String(source || "")
+  const explicitTitle = puzzleScriptSourceTitle(source);
+  if (explicitTitle) {
+    return explicitTitle;
+  }
+  const canonicalTitle = puzzleStudioMetadataTitle(canonical);
+  if (canonicalTitle) {
+    return canonicalTitle;
+  }
+  return "PuzzleScript import";
+}
+
+function puzzleScriptSourceTitle(source) {
+  const title = String(source || "")
     .split("\n")
     .map((line) => line.split("//", 1)[0].trim())
     .find((line) => /^title(?:\s+|$)/i.test(line))
     ?.replace(/^title\s*/i, "")
-    .trim();
-  if (explicitTitle) {
-    return explicitTitle;
-  }
-  const canonicalTitle = String(canonical || "")
+    .trim()
+    .replace(/^"|"$/g, "") || "";
+  return title.startsWith("=") ? "" : title;
+}
+
+function puzzleStudioMetadataTitle(canonical) {
+  const value = String(canonical || "")
     .split("\n")
-    .find((line) => /^title(?:\s+|$)/.test(line.trim()))
-    ?.trim()
-    .replace(/^title\s*/, "")
-    .trim();
-  if (canonicalTitle) {
+    .map((line) => line.trim().match(/^title\s*=\s*(.+)$/)?.[1]?.trim())
+    .find((value) => value);
+  if (value) {
     try {
-      return JSON.parse(canonicalTitle);
+      return JSON.parse(value);
     } catch {
-      return canonicalTitle.replace(/^"|"$/g, "");
+      return value.replace(/^"|"$/g, "");
     }
   }
-  return "PuzzleScript import";
+  return "";
 }
 
 async function copyPuzzleScriptImportOutput() {
   const output = psImportOutput?.value || "";
   if (!output.trim()) {
-    setPuzzleScriptImportStatus("Generate import first", "is-error");
+    setPuzzleScriptImportStatus("No converted .puzzle yet", "is-error");
     return;
   }
   try {
@@ -578,7 +667,7 @@ async function copyPuzzleScriptImportOutput() {
 async function addPuzzleScriptImportFile() {
   const output = psImportOutput?.value || "";
   if (!output.trim()) {
-    setPuzzleScriptImportStatus("Generate import first", "is-error");
+    setPuzzleScriptImportStatus("No converted .puzzle yet", "is-error");
     return;
   }
 
@@ -613,3 +702,12 @@ async function addPuzzleScriptImportFile() {
   saveDocumentStore(false);
   setPuzzleScriptImportStatus(`Added ${fileNameValue}`, "is-ok");
 }
+
+window.PuzzleStudioImportExport = {
+  ...(window.PuzzleStudioImportExport || {}),
+  addPuzzleScriptImportFile,
+  copyPuzzleScriptImportOutput,
+  resetPuzzleScriptImportConversion,
+  schedulePuzzleScriptImportConversion,
+  setPuzzleScriptImportStatus,
+};

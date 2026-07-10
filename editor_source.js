@@ -33,16 +33,22 @@ const SOURCE_EDITABLE_TARGETS = [
   },
   {
     kind: "sounds",
-    label: (entry) => entry?.kind || "sound",
+    label: (entry) => entry?.soundKind || "sound",
     openOptions: { switchMode: true },
   },
 ];
 const sourceEditableTargetHandlers = new Map();
 let sourceHighlightTimer = 0;
+let sourceOptimisticHighlightFrame = 0;
+let sourceOptimisticHighlightSource = null;
 let sourceCompletionTimer = 0;
+let sourceOutlineTimer = 0;
 let activeHighlightRequest = null;
 let sourceHighlightRequestId = 0;
 let sourceCompletionRequestId = 0;
+let sourceOutlineRequestId = 0;
+let sourceOutlineSignature = "";
+let sourceOutlineDirty = true;
 let sourceColorEdit = null;
 let sourceCompletionState = null;
 let sourceImportLinkState = null;
@@ -63,6 +69,7 @@ let sourceHighlightHtml = "";
 let sourceHighlightMode = "";
 let sourceHighlightRuns = [];
 let sourceHighlightUnavailableStatusShown = false;
+let sourcePlainTextModeActive = false;
 let sourceLayoutSyncFrame = 0;
 let sourceCompositionPreviewSource = "";
 let sourceCompositionRange = null;
@@ -81,6 +88,53 @@ let sourceFoldViewMap = [];
 let sourceFoldBlockCacheSource = "";
 let sourceFoldBlockCache = [];
 let sourceFoldEditSnapshot = null;
+let sourceOutlineItems = [];
+let sourceOutlineExpandedItemIds = new Set();
+
+function sourcePuzzleLevelName(value, defaultName = "") {
+  const text = String(value ?? "").trim();
+  return text || String(defaultName ?? "").trim();
+}
+
+function sourcePuzzleQuotedText(value, context = "source text") {
+  const text = String(value ?? "");
+  if (/[\r\n]/.test(text)) {
+    throw new Error(`${context} cannot contain line breaks`);
+  }
+  return `"${text.replace(/"/g, "\\\"")}"`;
+}
+
+function parseSourcePuzzleQuotedText(value) {
+  const text = String(value ?? "").trim();
+  if (!text.startsWith("\"") || !text.endsWith("\"")) {
+    return null;
+  }
+  return text.slice(1, -1).replace(/\\"/g, "\"");
+}
+
+function sourcePuzzleLevelHeaderName(code) {
+  const text = String(code || "").trim();
+  if (!/^level(?:\s|$)/.test(text)) {
+    return null;
+  }
+  let rest = text.slice("level".length).trim();
+  if (rest.endsWith("{")) {
+    rest = rest.slice(0, -1).trim();
+  }
+  if (!rest) {
+    return "";
+  }
+  return parseSourcePuzzleQuotedText(rest);
+}
+
+function sourcePuzzleLevelHeaderSource(name, indent = "", options = {}) {
+  const levelName = sourcePuzzleLevelName(name, options.defaultName || "");
+  const opensBlock = options.openBlock === true;
+  if (!levelName) {
+    return opensBlock ? `${indent}{` : `${indent}level`;
+  }
+  return `${indent}level ${sourcePuzzleQuotedText(levelName, "level name")}${opensBlock ? " {" : ""}`;
+}
 
 function sourceEditorDocumentValue() {
   return sourceFoldBaseSource !== null
@@ -717,6 +771,11 @@ function setSourceEditorValue(value, options = {}) {
   const sameUnfoldedValue = sourceFoldBaseSource === null && currentValue === nextValue;
   if (sameUnfoldedValue && preserveCurrentHighlight && sourceHighlightSource === nextValue) {
     updateSourceMeta();
+    if (sourceDocumentSupportsEditableTargets()) {
+      scheduleSourceOutlineRefresh(true, { force: true });
+    } else {
+      resetSourcePuzzleAnalysisState();
+    }
     if (preservesUndo) {
       ensureSourceUndoHistory();
     } else if (options.resetUndo === false) {
@@ -729,7 +788,12 @@ function setSourceEditorValue(value, options = {}) {
   resetSourceFoldingState();
   sourceEditor.value = nextValue;
   updateSourceMeta();
-  scheduleSourceHighlight(true, { preserveCurrent: preserveCurrentHighlight });
+  if (sourceDocumentSupportsEditableTargets()) {
+    scheduleSourceHighlight(true, { preserveCurrent: preserveCurrentHighlight });
+    scheduleSourceOutlineRefresh(true, { force: true });
+  } else {
+    resetSourcePuzzleAnalysisState();
+  }
   if (preservesUndo) {
     ensureSourceUndoHistory();
   } else if (options.resetUndo === false) {
@@ -740,16 +804,111 @@ function setSourceEditorValue(value, options = {}) {
 }
 
 function scheduleSourceHighlight(immediate = false, options = {}) {
+  if (!sourceDocumentSupportsEditableTargets()) {
+    resetSourcePuzzleAnalysisState();
+    return;
+  }
+  setSourcePlainTextMode(false);
   const preserveCurrent = options.preserveCurrent !== false;
-  if (preserveCurrent && sourceHighlightMode) {
-    if (!renderOptimisticSourceHighlight()) {
-      syncSourceHighlightScroll();
+  if (immediate) {
+    window.cancelAnimationFrame(sourceOptimisticHighlightFrame);
+    sourceOptimisticHighlightFrame = 0;
+    sourceOptimisticHighlightSource = null;
+    if (preserveCurrent && sourceHighlightMode) {
+      if (!renderOptimisticSourceHighlight()) {
+        syncSourceHighlightScroll();
+      }
+    } else {
+      renderPlainSourceHighlight();
     }
+  } else if (preserveCurrent && sourceHighlightMode) {
+    scheduleOptimisticSourceHighlight();
   } else {
-    renderPlainSourceHighlight();
+    schedulePlainSourceHighlight();
   }
   window.clearTimeout(sourceHighlightTimer);
-  sourceHighlightTimer = window.setTimeout(refreshSourceHighlight, immediate ? 0 : 140);
+  sourceHighlightTimer = window.setTimeout(() => {
+    sourceHighlightTimer = 0;
+    refreshSourceHighlight();
+  }, immediate ? 0 : 140);
+}
+
+function scheduleOptimisticSourceHighlight(source = null) {
+  sourceOptimisticHighlightSource = typeof source === "string" ? source : null;
+  if (sourceOptimisticHighlightFrame) {
+    return;
+  }
+  sourceOptimisticHighlightFrame = window.requestAnimationFrame(() => {
+    sourceOptimisticHighlightFrame = 0;
+    const expectedSource = sourceOptimisticHighlightSource;
+    sourceOptimisticHighlightSource = null;
+    const currentSource = sourceEditor.value || "";
+    if (expectedSource !== null && expectedSource !== currentSource) {
+      return;
+    }
+    if (!renderOptimisticSourceHighlight(expectedSource ?? currentSource)) {
+      syncSourceHighlightScroll();
+    }
+  });
+}
+
+function schedulePlainSourceHighlight() {
+  sourceOptimisticHighlightSource = null;
+  if (sourceOptimisticHighlightFrame) {
+    return;
+  }
+  sourceOptimisticHighlightFrame = window.requestAnimationFrame(() => {
+    sourceOptimisticHighlightFrame = 0;
+    renderPlainSourceHighlight();
+  });
+}
+
+function resetSourcePuzzleAnalysisState() {
+  const plainModeChanged = setSourcePlainTextMode(true);
+  window.clearTimeout(sourceHighlightTimer);
+  sourceHighlightTimer = 0;
+  window.cancelAnimationFrame(sourceOptimisticHighlightFrame);
+  sourceOptimisticHighlightFrame = 0;
+  sourceOptimisticHighlightSource = null;
+  window.clearTimeout(sourceOutlineTimer);
+  sourceOutlineTimer = 0;
+  window.clearTimeout(sourceCompletionTimer);
+  sourceCompletionTimer = 0;
+  if (activeHighlightRequest) {
+    activeHighlightRequest.abort();
+    activeHighlightRequest = null;
+  }
+  sourceHighlightRequestId += 1;
+  sourceOutlineRequestId += 1;
+  sourceCompletionRequestId += 1;
+  sourceOutlineItems = [];
+  sourceOutlineDirty = true;
+  sourceOutlineSignature = "";
+  sourceCursorPreviewKey = "";
+  sourceCursorResolveSignature = null;
+  sourceCursorResolveRegion = null;
+  hideSourceCompletions();
+  if (plainModeChanged && sourceHighlight) {
+    sourceHighlight.innerHTML = "";
+    sourceHighlightSource = "";
+    sourceHighlightHtml = "";
+    sourceHighlightRuns = [];
+    sourceHighlightMode = "plain-text";
+    syncSourceHighlightScroll();
+  }
+  if (plainModeChanged) {
+    renderSourceOutlineEmpty("No outline");
+  }
+}
+
+function setSourcePlainTextMode(enabled) {
+  const next = Boolean(enabled);
+  if (sourcePlainTextModeActive === next) {
+    return false;
+  }
+  sourcePlainTextModeActive = next;
+  sourceEditorWrap?.classList.toggle("is-plain-source", next);
+  return true;
 }
 
 function renderOptimisticSourceHighlight(source = sourceEditor.value) {
@@ -1088,8 +1247,10 @@ function syncSourceHighlightMetrics() {
   if (!sourceHighlight || !sourceEditor) {
     return;
   }
-  const clientWidth = sourceEditor.clientWidth;
-  const scrollHeight = sourceEditor.scrollHeight;
+  sourceEditor.style.height = "auto";
+  const clientWidth = sourceEditorWrap.clientWidth;
+  const scrollHeight = Math.max(sourceEditorWrap.clientHeight, sourceEditor.scrollHeight);
+  sourceEditor.style.height = `${scrollHeight}px`;
   if (sourceHighlightClientWidth !== clientWidth) {
     sourceHighlightClientWidth = clientWidth;
     sourceHighlight.style.width = `${clientWidth}px`;
@@ -1097,6 +1258,17 @@ function syncSourceHighlightMetrics() {
   if (sourceHighlightScrollHeight !== scrollHeight) {
     sourceHighlightScrollHeight = scrollHeight;
     sourceHighlight.style.height = `${scrollHeight}px`;
+  }
+  syncSourceOverlayLayerMetrics(clientWidth, scrollHeight);
+}
+
+function syncSourceOverlayLayerMetrics(clientWidth, scrollHeight) {
+  for (const layer of [sourceBlockSelectionLayer, sourceFindMatchLayer]) {
+    if (!layer) {
+      continue;
+    }
+    layer.style.width = `${clientWidth}px`;
+    layer.style.height = `${scrollHeight}px`;
   }
 }
 
@@ -1106,20 +1278,44 @@ function syncSourceHighlightScroll() {
   }
   syncSourceHighlightMetrics();
   syncSourceHighlightTransform();
-  if (isSourceFindPanelOpen() && sourceFindState.matches.length) {
-    renderSourceFindMatches();
-  }
-  if (sourceEditorBlockSelection?.ranges?.length) {
-    renderSourceBlockSelection();
-  }
 }
 
 function syncSourceHighlightTransform() {
   if (!sourceHighlight) {
     return;
   }
-  sourceHighlight.style.transform = `translate(${-sourceEditor.scrollLeft}px, ${-sourceEditor.scrollTop}px)`;
+  sourceHighlight.style.transform = "";
+  if (sourceBlockSelectionLayer) {
+    sourceBlockSelectionLayer.style.transform = "";
+  }
+  if (sourceFindMatchLayer) {
+    sourceFindMatchLayer.style.transform = "";
+  }
   syncSourceLineNumberScroll();
+}
+
+function sourceScrollTop() {
+  return sourceEditorWrap.scrollTop || 0;
+}
+
+function sourceScrollLeft() {
+  return sourceEditorWrap.scrollLeft || 0;
+}
+
+function setSourceScrollTop(value) {
+  sourceEditorWrap.scrollTop = Math.max(0, value || 0);
+}
+
+function setSourceScrollLeft(value) {
+  sourceEditorWrap.scrollLeft = Math.max(0, value || 0);
+}
+
+function sourceViewportHeight() {
+  return sourceEditorWrap.clientHeight;
+}
+
+function sourceViewportWidth() {
+  return sourceEditorWrap.clientWidth;
 }
 
 function scheduleSourceEditorLayoutSync(frameCount = 1) {
@@ -1147,6 +1343,95 @@ function sourceDocumentSupportsEditableTargets() {
     && isTextDocument(activeDocument());
 }
 
+function sourceOutlineVisible() {
+  if (!sourceOutlineList) {
+    return false;
+  }
+  const section = sourceOutlineList.closest("[data-explorer-section='outline']");
+  if (section?.classList.contains("is-collapsed")) {
+    return false;
+  }
+  const sections = sourceOutlineList.closest(".explorer-sections");
+  return !sections?.classList.contains("is-outline-collapsed");
+}
+
+function stripSourceStructureLineComment(line) {
+  let quote = "";
+  let escaped = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const ch = line[index];
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === quote) {
+        quote = "";
+      }
+      continue;
+    }
+    if (ch === "\"" || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === "/" && line[index + 1] === "/") {
+      return line.slice(0, index);
+    }
+  }
+  return line;
+}
+
+function sourceLineHasStructuralBrace(line) {
+  let quote = "";
+  let escaped = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const ch = line[index];
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === quote) {
+        quote = "";
+      }
+      continue;
+    }
+    if (ch === "\"" || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === "/" && line[index + 1] === "/") {
+      return false;
+    }
+    if (ch === "{" || ch === "}") {
+      return true;
+    }
+  }
+  return false;
+}
+
+function sourceOutlineStructuralSignature(source) {
+  // Labels and offsets are both derived from one exact source snapshot. A
+  // non-structural line inserted before an item changes its location, so a
+  // brace-only signature leaves outline navigation stale.
+  return String(source || "");
+}
+
+function markSourceOutlineDirtyForSource(source, options = {}) {
+  const signature = sourceOutlineStructuralSignature(source);
+  if (options.force === true || signature !== sourceOutlineSignature) {
+    sourceOutlineSignature = signature;
+    sourceOutlineDirty = true;
+    return true;
+  }
+  return false;
+}
+
+function sourceOutlineShouldRefreshForSource(source, options = {}) {
+  markSourceOutlineDirtyForSource(source, options);
+  return sourceOutlineDirty && sourceOutlineVisible();
+}
+
 async function refreshSourceHighlight() {
   const document = activeDocument();
   if (!sourceHighlight || !isPuzzleDocument(document) || !isTextDocument(document)) {
@@ -1161,13 +1446,14 @@ async function refreshSourceHighlight() {
   }
   const source = sourceEditorDocumentValue();
   const displaySource = sourceEditor.value || "";
+  const includeOutline = sourceOutlineShouldRefreshForSource(source);
   const requestId = ++sourceHighlightRequestId;
   const controller = new AbortController();
   activeHighlightRequest = controller;
 
   try {
     const text = await window.PuzzleStudioHost.highlight(
-      { source },
+      { source, includeOutline },
       { signal: controller.signal },
     );
     if (
@@ -1179,6 +1465,9 @@ async function refreshSourceHighlight() {
     }
     syncSourceHighlightMetrics();
     const payload = JSON.parse(text);
+    if (payload.outline) {
+      applySourceOutlinePayload(payload.outline, source);
+    }
     if (sourceFoldsActive()) {
       const foldedRuns = sourceFoldHighlightRuns(sourceHighlightRunsFromHtml(payload.html || escapeHtml(source || " ")), source);
       setSourceHighlightHtml(displaySource, sourceHighlightRunsToHtml(foldedRuns), "server", foldedRuns);
@@ -1204,17 +1493,545 @@ async function refreshSourceHighlight() {
   }
 }
 
+function scheduleSourceOutlineRefresh(immediate = false, options = {}) {
+  if (!sourceDocumentSupportsEditableTargets()) {
+    resetSourcePuzzleAnalysisState();
+    return;
+  }
+  const source = sourceEditorDocumentValue();
+  if (!sourceOutlineShouldRefreshForSource(source, options)) {
+    return;
+  }
+  if (sourceHighlightTimer) {
+    return;
+  }
+  window.clearTimeout(sourceOutlineTimer);
+  sourceOutlineTimer = window.setTimeout(() => {
+    sourceOutlineTimer = 0;
+    refreshSourceOutline();
+  }, immediate ? 0 : 160);
+}
+
+async function refreshSourceOutline() {
+  const document = activeDocument();
+  const requestId = ++sourceOutlineRequestId;
+  if (!sourceOutlineList) {
+    return;
+  }
+  if (!document || !isPuzzleDocument(document) || !isTextDocument(document)) {
+    sourceOutlineItems = [];
+    renderSourceOutlineEmpty("No outline");
+    return;
+  }
+  const source = sourceEditorDocumentValue();
+  if (!sourceOutlineShouldRefreshForSource(source)) {
+    return;
+  }
+  try {
+    const text = await window.PuzzleStudioHost.sourceOutline({ source });
+    if (requestId !== sourceOutlineRequestId || source !== sourceEditorDocumentValue()) {
+      return;
+    }
+    const payload = JSON.parse(text || "{}");
+    applySourceOutlinePayload(payload, source);
+  } catch (error) {
+    if (error.name === "AbortError") {
+      return;
+    }
+    if (requestId !== sourceOutlineRequestId) {
+      return;
+    }
+    sourceOutlineItems = [];
+    renderSourceOutlineEmpty(`Outline unavailable: ${userFacingRuntimeError(error)}`);
+  }
+}
+
+function applySourceOutlinePayload(payload, source) {
+  sourceOutlineItems = normalizeSourceOutlineItems(payload?.items, source);
+  pruneSourceOutlineExpandedItems();
+  sourceOutlineDirty = false;
+  sourceOutlineSignature = sourceOutlineStructuralSignature(source);
+  renderSourceOutline();
+  syncSourceOutlineActiveItem();
+}
+
+function normalizeSourceOutlineItems(items, source) {
+  return (Array.isArray(items) ? items : []).map((item) => {
+    const start = sourceUtf16OffsetFromByteOffset(source, Number(item?.start) || 0);
+    const end = sourceUtf16OffsetFromByteOffset(source, Number(item?.end) || Number(item?.start) || 0);
+    return {
+      id: String(item?.id || ""),
+      kind: String(item?.kind || "item"),
+      label: String(item?.label || item?.kind || "item"),
+      start,
+      end: Math.max(start, end),
+      depth: Math.max(0, Math.min(8, Number(item?.depth) || 0)),
+      parent: item?.parent == null ? "" : String(item.parent),
+    };
+  }).filter((item) => item.id && Number.isFinite(item.start));
+}
+
+function sourceOutlineItemById() {
+  return new Map(sourceOutlineItems.map((item) => [item.id, item]));
+}
+
+function sourceOutlineParentIdsWithChildren() {
+  const parentIds = new Set();
+  for (const item of sourceOutlineItems) {
+    if (item.parent) {
+      parentIds.add(item.parent);
+    }
+  }
+  return parentIds;
+}
+
+function pruneSourceOutlineExpandedItems() {
+  const ids = new Set(sourceOutlineItems.map((item) => item.id));
+  sourceOutlineExpandedItemIds = new Set(
+    [...sourceOutlineExpandedItemIds].filter((id) => ids.has(id)),
+  );
+}
+
+function sourceOutlineItemHiddenByCollapsedParent(item, itemsById = sourceOutlineItemById()) {
+  let parentId = item?.parent || "";
+  while (parentId) {
+    if (!sourceOutlineExpandedItemIds.has(parentId)) {
+      return true;
+    }
+    parentId = itemsById.get(parentId)?.parent || "";
+  }
+  return false;
+}
+
+function visibleSourceOutlineItems() {
+  const itemsById = sourceOutlineItemById();
+  return sourceOutlineItems.filter((item) => !sourceOutlineItemHiddenByCollapsedParent(item, itemsById));
+}
+
+function renderSourceOutline() {
+  if (!sourceOutlineList) {
+    return;
+  }
+  if (!sourceOutlineItems.length) {
+    renderSourceOutlineEmpty("No outline");
+    return;
+  }
+  const parentIdsWithChildren = sourceOutlineParentIdsWithChildren();
+  sourceOutlineList.replaceChildren(...visibleSourceOutlineItems().map((item) => {
+    const hasChildren = parentIdsWithChildren.has(item.id);
+    const expanded = sourceOutlineExpandedItemIds.has(item.id);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "source-outline-row";
+    button.dataset.sourceOutlineId = item.id;
+    button.dataset.sourceOutlineStart = String(item.start);
+    button.style.setProperty("--depth", String(item.depth));
+    button.setAttribute("role", "treeitem");
+    button.setAttribute("aria-level", String(item.depth + 1));
+    button.setAttribute("aria-label", item.label);
+    if (hasChildren) {
+      button.setAttribute("aria-expanded", String(expanded));
+    }
+    const chevron = document.createElement("span");
+    chevron.className = hasChildren
+      ? "source-outline-chevron"
+      : "source-outline-chevron source-outline-chevron-spacer";
+    if (hasChildren) {
+      chevron.dataset.sourceOutlineToggle = item.id;
+      chevron.innerHTML = sourceOutlineChevronSvg(expanded);
+    }
+    const kind = document.createElement("span");
+    kind.className = "source-outline-kind";
+    kind.innerHTML = sourceOutlineKindIconSvg(item.kind);
+    const label = document.createElement("span");
+    label.className = "source-outline-label";
+    label.textContent = item.label;
+    button.append(chevron, kind, label);
+    return button;
+  }));
+}
+
+function renderSourceOutlineEmpty(message) {
+  if (!sourceOutlineList) {
+    return;
+  }
+  const empty = document.createElement("div");
+  empty.className = "source-outline-empty";
+  empty.textContent = message;
+  sourceOutlineList.replaceChildren(empty);
+}
+
+function sourceOutlineChevronSvg(expanded) {
+  const path = expanded ? "M4 6l4 4 4-4" : "M6 4l4 4-4 4";
+  return `<svg class="source-outline-chevron-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="${path}"></path></svg>`;
+}
+
+const SOURCE_OUTLINE_KIND_ICON_NAMES = Object.freeze({
+  "puzzle": "puzzle",
+  "puzzle3": "puzzle",
+  "levels": "map",
+  "levels3": "map",
+  "level": "map",
+  "sprites": "image",
+  "sprites3": "image",
+  "sprite": "image",
+  "objects": "boxes",
+  "object": "box",
+  "groups": "group",
+  "tags": "tag",
+  "marks": "bookmark",
+  "render": "scan-eye",
+  "camera": "camera",
+  "animation": "circle-play",
+  "tween": "chart-spline",
+  "row": "rows-3",
+  "column": "columns-3",
+  "choice": "mouse-pointer-click",
+  "button": "square-mouse-pointer",
+  "text": "message-square",
+  "message": "message-square",
+  "title": "file-text",
+  "subtitle": "file-text",
+  "author": "file-text",
+  "homepage": "file-text",
+  "import": "import",
+  "rules": "list-checks",
+  "rule": "list-checks",
+  "routine": "workflow",
+  "win_conditions": "flag",
+  "lose_conditions": "flag-off",
+  "scene": "clapperboard",
+  "screen": "panels-top-left",
+  "layout": "panels-top-left",
+  "level_menu": "panels-top-left",
+  "assets": "package",
+  "resources": "package",
+  "legend": "move-horizontal",
+  "map": "arrow-right",
+  "theme": "swatch-book",
+  "colors": "palette",
+  "shapes": "shapes",
+  "sounds": "volume-2",
+  "keys": "keyboard",
+  "layers": "layers",
+  "collision_layers": "layers",
+  "metadata": "info",
+  "fix": "wrench",
+});
+
+const SOURCE_OUTLINE_LIFECYCLE_ICON_NAME = "zap";
+const SOURCE_OUTLINE_DEFAULT_ICON_NAME = "file-code-2";
+
+function sourceOutlineKindIconName(kind) {
+  const text = String(kind || "").trim();
+  if (Object.prototype.hasOwnProperty.call(SOURCE_OUTLINE_KIND_ICON_NAMES, text)) {
+    return SOURCE_OUTLINE_KIND_ICON_NAMES[text];
+  }
+  if (text.startsWith("on_")) {
+    return SOURCE_OUTLINE_LIFECYCLE_ICON_NAME;
+  }
+  return SOURCE_OUTLINE_DEFAULT_ICON_NAME;
+}
+
+function sourceOutlineKindIconSvg(kind) {
+  const name = sourceOutlineKindIconName(kind);
+  const icons = {
+    puzzle: `
+      <path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"></path>
+    `,
+    map: `
+      <path d="M14.106 5.553a2 2 0 0 0 1.788 0l3.659-1.83A1 1 0 0 1 21 4.619v12.764a1 1 0 0 1-.553.894l-4.553 2.277a2 2 0 0 1-1.788 0l-4.212-2.106a2 2 0 0 0-1.788 0l-3.659 1.83A1 1 0 0 1 3 19.381V6.618a1 1 0 0 1 .553-.894l4.553-2.277a2 2 0 0 1 1.788 0z"></path>
+      <path d="M15 5.764v15"></path>
+      <path d="M9 3.236v15"></path>
+    `,
+    box: `
+      <path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"></path>
+      <path d="m3.3 7 8.7 5 8.7-5"></path>
+      <path d="M12 22V12"></path>
+    `,
+    boxes: `
+      <path d="M2.97 12.92A2 2 0 0 0 2 14.63v3.24a2 2 0 0 0 .97 1.71l3 1.8a2 2 0 0 0 2.06 0L12 19v-5.5l-5-3-4.03 2.42Z"></path>
+      <path d="m7 16.5-4.74-2.85"></path>
+      <path d="m7 16.5 5-3"></path>
+      <path d="M7 16.5v5.17"></path>
+      <path d="M12 13.5V19l3.97 2.38a2 2 0 0 0 2.06 0l3-1.8a2 2 0 0 0 .97-1.71v-3.24a2 2 0 0 0-.97-1.71L17 10.5l-5 3Z"></path>
+      <path d="m17 16.5-5-3"></path>
+      <path d="m17 16.5 4.74-2.85"></path>
+      <path d="M17 16.5v5.17"></path>
+      <path d="M7.97 4.42A2 2 0 0 0 7 6.13v4.37l5 3 5-3V6.13a2 2 0 0 0-.97-1.71l-3-1.8a2 2 0 0 0-2.06 0l-3 1.8Z"></path>
+      <path d="M12 8 7.26 5.15"></path>
+      <path d="m12 8 4.74-2.85"></path>
+      <path d="M12 13.5V8"></path>
+    `,
+    image: `
+      <rect width="18" height="18" x="3" y="3" rx="2" ry="2"></rect>
+      <circle cx="9" cy="9" r="2"></circle>
+      <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"></path>
+    `,
+    group: `
+      <path d="M3 7V5c0-1.1.9-2 2-2h2"></path>
+      <path d="M17 3h2c1.1 0 2 .9 2 2v2"></path>
+      <path d="M21 17v2c0 1.1-.9 2-2 2h-2"></path>
+      <path d="M7 21H5c-1.1 0-2-.9-2-2v-2"></path>
+      <rect width="7" height="5" x="7" y="7" rx="1"></rect>
+      <rect width="7" height="5" x="10" y="12" rx="1"></rect>
+    `,
+    tag: `
+      <path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z"></path>
+      <circle cx="7.5" cy="7.5" r=".5" fill="currentColor"></circle>
+    `,
+    bookmark: `
+      <path d="M17 3a2 2 0 0 1 2 2v15a1 1 0 0 1-1.496.868l-4.512-2.578a2 2 0 0 0-1.984 0l-4.512 2.578A1 1 0 0 1 5 20V5a2 2 0 0 1 2-2z"></path>
+    `,
+    "scan-eye": `
+      <path d="M3 7V5a2 2 0 0 1 2-2h2"></path>
+      <path d="M17 3h2a2 2 0 0 1 2 2v2"></path>
+      <path d="M21 17v2a2 2 0 0 1-2 2h-2"></path>
+      <path d="M7 21H5a2 2 0 0 1-2-2v-2"></path>
+      <circle cx="12" cy="12" r="1"></circle>
+      <path d="M18.944 12.33a1 1 0 0 0 0-.66 7.5 7.5 0 0 0-13.888 0 1 1 0 0 0 0 .66 7.5 7.5 0 0 0 13.888 0"></path>
+    `,
+    camera: `
+      <path d="M13.997 4a2 2 0 0 1 1.76 1.05l.486.9A2 2 0 0 0 18.003 7H20a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h1.997a2 2 0 0 0 1.759-1.048l.489-.904A2 2 0 0 1 10.004 4z"></path>
+      <circle cx="12" cy="13" r="3"></circle>
+    `,
+    "chart-spline": `
+      <path d="M3 3v16a2 2 0 0 0 2 2h16"></path>
+      <path d="M7 16c.5-2 1.5-7 4-7 2 0 2 3 4 3 2.5 0 4.5-5 5-7"></path>
+    `,
+    "circle-play": `
+      <path d="M9 9.003a1 1 0 0 1 1.517-.859l4.997 2.997a1 1 0 0 1 0 1.718l-4.997 2.997A1 1 0 0 1 9 14.996z"></path>
+      <circle cx="12" cy="12" r="10"></circle>
+    `,
+    "rows-3": `
+      <rect width="18" height="18" x="3" y="3" rx="2"></rect>
+      <path d="M21 9H3"></path>
+      <path d="M21 15H3"></path>
+    `,
+    "columns-3": `
+      <rect width="18" height="18" x="3" y="3" rx="2"></rect>
+      <path d="M9 3v18"></path>
+      <path d="M15 3v18"></path>
+    `,
+    "mouse-pointer-click": `
+      <path d="M14 4.1 12 6"></path>
+      <path d="m5.1 8-2.9-.8"></path>
+      <path d="m6 12-1.9 2"></path>
+      <path d="M7.2 2.2 8 5.1"></path>
+      <path d="M9.037 9.69a.498.498 0 0 1 .653-.653l11 4.5a.5.5 0 0 1-.074.949l-4.349 1.041a1 1 0 0 0-.74.739l-1.04 4.35a.5.5 0 0 1-.95.074z"></path>
+    `,
+    "square-mouse-pointer": `
+      <path d="M12.034 12.681a.498.498 0 0 1 .647-.647l9 3.5a.5.5 0 0 1-.033.943l-3.444 1.068a1 1 0 0 0-.66.66l-1.067 3.443a.5.5 0 0 1-.943.033z"></path>
+      <path d="M21 11V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h6"></path>
+    `,
+    "message-square": `
+      <path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"></path>
+    `,
+    "file-text": `
+      <path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"></path>
+      <path d="M14 2v5a1 1 0 0 0 1 1h5"></path>
+      <path d="M10 9H8"></path>
+      <path d="M16 13H8"></path>
+      <path d="M16 17H8"></path>
+    `,
+    "import": `
+      <path d="M12 3v12"></path>
+      <path d="m8 11 4 4 4-4"></path>
+      <path d="M8 5H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-4"></path>
+    `,
+    "list-checks": `
+      <path d="M13 5h8"></path>
+      <path d="M13 12h8"></path>
+      <path d="M13 19h8"></path>
+      <path d="m3 17 2 2 4-4"></path>
+      <path d="m3 7 2 2 4-4"></path>
+    `,
+    workflow: `
+      <rect width="8" height="8" x="3" y="3" rx="2"></rect>
+      <path d="M7 11v4a2 2 0 0 0 2 2h4"></path>
+      <rect width="8" height="8" x="13" y="13" rx="2"></rect>
+    `,
+    flag: `
+      <path d="M4 22V4a1 1 0 0 1 .4-.8A6 6 0 0 1 8 2c3 0 5 2 7.333 2q2 0 3.067-.8A1 1 0 0 1 20 4v10a1 1 0 0 1-.4.8A6 6 0 0 1 16 16c-3 0-5-2-8-2a6 6 0 0 0-4 1.528"></path>
+    `,
+    "flag-off": `
+      <path d="M16 16c-3 0-5-2-8-2a6 6 0 0 0-4 1.528"></path>
+      <path d="m2 2 20 20"></path>
+      <path d="M4 22V4"></path>
+      <path d="M7.656 2H8c3 0 5 2 7.333 2q2 0 3.067-.8A1 1 0 0 1 20 4v10.347"></path>
+    `,
+    "panels-top-left": `
+      <rect width="18" height="18" x="3" y="3" rx="2"></rect>
+      <path d="M3 9h18"></path>
+      <path d="M9 21V9"></path>
+    `,
+    clapperboard: `
+      <path d="m12.296 3.464 3.02 3.956"></path>
+      <path d="M20.2 6 3 11l-.9-2.4c-.3-1.1.3-2.2 1.3-2.5l13.5-4c1.1-.3 2.2.3 2.5 1.3z"></path>
+      <path d="M3 11h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+      <path d="m6.18 5.276 3.1 3.899"></path>
+    `,
+    package: `
+      <path d="m7.5 4.27 9 5.15"></path>
+      <path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"></path>
+      <path d="m3.3 7 8.7 5 8.7-5"></path>
+      <path d="M12 22V12"></path>
+    `,
+    palette: `
+      <circle cx="13.5" cy="6.5" r=".5" fill="currentColor"></circle>
+      <circle cx="17.5" cy="10.5" r=".5" fill="currentColor"></circle>
+      <circle cx="8.5" cy="7.5" r=".5" fill="currentColor"></circle>
+      <circle cx="6.5" cy="12.5" r=".5" fill="currentColor"></circle>
+      <path d="M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10c0 1.657-1.343 3-3 3h-1.5a2.5 2.5 0 0 0 0 5H19a3 3 0 0 1-3 3z"></path>
+    `,
+    "swatch-book": `
+      <path d="M11 17a4 4 0 0 1-8 0V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2Z"></path>
+      <path d="M16.7 13H19a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H7"></path>
+      <path d="M 7 17h.01"></path>
+      <path d="m11 8 2.3-2.3a2.4 2.4 0 0 1 3.404.004L18.6 7.6a2.4 2.4 0 0 1 .026 3.434L9.9 19.8"></path>
+    `,
+    shapes: `
+      <path d="M8.3 10a.7.7 0 0 1-.626-1.079L11.4 3a.7.7 0 0 1 1.198-.043L16.3 8.9a.7.7 0 0 1-.572 1.1Z"></path>
+      <rect x="3" y="14" width="7" height="7" rx="1"></rect>
+      <circle cx="17.5" cy="17.5" r="3.5"></circle>
+    `,
+    "move-horizontal": `
+      <path d="m18 8 4 4-4 4"></path>
+      <path d="M2 12h20"></path>
+      <path d="m6 8-4 4 4 4"></path>
+    `,
+    "arrow-right": `
+      <path d="M5 12h14"></path>
+      <path d="m12 5 7 7-7 7"></path>
+    `,
+    "volume-2": `
+      <path d="M11 4.702a1 1 0 0 0-1.664-.747L5.23 7.5H3a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h2.23l4.106 3.545A1 1 0 0 0 11 19.298z"></path>
+      <path d="M16 9a5 5 0 0 1 0 6"></path>
+      <path d="M19.364 18.364a9 9 0 0 0 0-12.728"></path>
+    `,
+    keyboard: `
+      <path d="M10 8h.01"></path>
+      <path d="M12 12h.01"></path>
+      <path d="M14 8h.01"></path>
+      <path d="M16 12h.01"></path>
+      <path d="M18 8h.01"></path>
+      <path d="M6 8h.01"></path>
+      <path d="M7 16h10"></path>
+      <path d="M8 12h.01"></path>
+      <rect width="20" height="16" x="2" y="4" rx="2"></rect>
+    `,
+    layers: `
+      <path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z"></path>
+      <path d="m22 12.5-9.17 4.18a2 2 0 0 1-1.66 0L2 12.5"></path>
+      <path d="m22 17.5-9.17 4.18a2 2 0 0 1-1.66 0L2 17.5"></path>
+    `,
+    info: `
+      <circle cx="12" cy="12" r="10"></circle>
+      <path d="M12 16v-4"></path>
+      <path d="M12 8h.01"></path>
+    `,
+    wrench: `
+      <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94z"></path>
+    `,
+    zap: `
+      <path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"></path>
+    `,
+    "file-code-2": `
+      <path d="M4 22h14a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v4"></path>
+      <path d="M14 2v4a2 2 0 0 0 2 2h4"></path>
+      <path d="m5 12-3 3 3 3"></path>
+      <path d="m9 18 3-3-3-3"></path>
+    `,
+  };
+  const paths = icons[name];
+  if (!paths) {
+    throw new Error(`Unknown source outline lucide icon ${name}`);
+  }
+  return `
+    <svg xmlns="http://www.w3.org/2000/svg" class="source-outline-icon lucide lucide-${name}-icon lucide-${name}" viewBox="0 0 24 24" aria-hidden="true">
+      ${paths}
+    </svg>
+  `;
+}
+
+function toggleSourceOutlineItem(itemId, expanded = null) {
+  const parentIdsWithChildren = sourceOutlineParentIdsWithChildren();
+  if (!parentIdsWithChildren.has(itemId)) {
+    return false;
+  }
+  const nextExpanded = expanded ?? !sourceOutlineExpandedItemIds.has(itemId);
+  if (nextExpanded) {
+    sourceOutlineExpandedItemIds.add(itemId);
+  } else {
+    sourceOutlineExpandedItemIds.delete(itemId);
+  }
+  renderSourceOutline();
+  syncSourceOutlineActiveItem();
+  sourceOutlineList
+    ?.querySelector(`[data-source-outline-id="${CSS.escape(itemId)}"]`)
+    ?.focus({ preventScroll: true });
+  return true;
+}
+
+function openSourceOutlineItem(itemId) {
+  const item = sourceOutlineItems.find((entry) => entry.id === itemId);
+  const document = activeDocument();
+  if (!item || !document) {
+    return false;
+  }
+  const opened = revealSourceLocation({
+    document,
+    start: item.start,
+  });
+  if (opened) {
+    syncSourceOutlineActiveItem();
+    sourceEditor.focus({ preventScroll: true });
+  }
+  return opened;
+}
+
+function syncSourceOutlineActiveItem(options = {}) {
+  if (!sourceOutlineList || !sourceOutlineItems.length) {
+    return;
+  }
+  const cursor = Number.isInteger(options.position)
+    ? options.position
+    : sourceViewOffsetToDocumentOffset(sourceEditor.selectionStart || 0, "start");
+  let active = null;
+  for (const item of sourceOutlineItems) {
+    if (cursor >= item.start && cursor <= Math.max(item.end, item.start)) {
+      if (!active || item.start >= active.start) {
+        active = item;
+      }
+    } else if (!active && cursor >= item.start) {
+      active = item;
+    } else if (cursor >= item.start && item.start > active.start) {
+      active = item;
+    }
+  }
+  const itemsById = sourceOutlineItemById();
+  let activeId = active?.id || "";
+  let parentId = active?.parent || "";
+  while (parentId) {
+    if (!sourceOutlineExpandedItemIds.has(parentId)) {
+      activeId = parentId;
+    }
+    parentId = itemsById.get(parentId)?.parent || "";
+  }
+  for (const row of sourceOutlineList.querySelectorAll("[data-source-outline-id]")) {
+    row.classList.toggle("is-active", activeId === row.dataset.sourceOutlineId);
+  }
+}
+
 async function suggestSourceCompletionsWithWasm(source, cursorOffset) {
-  const compiler = await loadWasmCompiler();
-  if (typeof compiler.suggest_source_completions !== "function") {
+  if (typeof window.PuzzleStudioRuntime?.suggestSourceCompletions !== "function") {
     return null;
   }
-  const cursorByteOffset = sourceByteOffset(source, cursorOffset);
-  const json = compiler.suggest_source_completions(source, cursorByteOffset);
+  const json = await window.PuzzleStudioRuntime.suggestSourceCompletions(source, cursorOffset);
   const list = JSON.parse(json || "{}");
   return {
-    replaceStart: sourceUtf16OffsetFromByteOffset(source, Number(list.replaceStart) || 0),
-    replaceEnd: sourceUtf16OffsetFromByteOffset(source, Number(list.replaceEnd) || 0),
+    replaceStart: Number(list.replaceStart) || 0,
+    replaceEnd: Number(list.replaceEnd) || 0,
     items: Array.isArray(list.items) ? list.items : [],
   };
 }
@@ -1301,6 +2118,10 @@ function createSourceFindPanel() {
 }
 
 function scheduleSourceCompletion(immediate = false) {
+  if (!sourceDocumentSupportsEditableTargets()) {
+    hideSourceCompletions();
+    return;
+  }
   window.clearTimeout(sourceCompletionTimer);
   sourceCompletionTimer = window.setTimeout(() => {
     showSourceCompletions({ manual: false });
@@ -1321,8 +2142,7 @@ async function showSourceCompletions(options = {}) {
   }
   const requestId = ++sourceCompletionRequestId;
   try {
-    const list = suggestSourceCompletionsFromEditorContext(source, cursor, document)
-      || await suggestSourceCompletionsWithWasm(source, cursor);
+    const list = await suggestSourceCompletionsWithWasm(source, cursor);
     if (requestId !== sourceCompletionRequestId || source !== sourceEditor.value || cursor !== sourceEditor.selectionStart) {
       return false;
     }
@@ -1398,75 +2218,6 @@ function filterSourceCompletionsForTypedReplacement(items, list, source, cursor)
   return items.filter((item) => (item?.insertText || item?.label || "") !== current);
 }
 
-function suggestSourceCompletionsFromEditorContext(source, cursor, document) {
-  const importContext = sourceImportPathCompletionContext(source, cursor);
-  if (!importContext) {
-    return null;
-  }
-  return {
-    replaceStart: importContext.replaceStart,
-    replaceEnd: importContext.replaceEnd,
-    items: sourceImportPathCompletionItems(importContext, document),
-  };
-}
-
-function sourceImportPathCompletionItems(context, document) {
-  const currentDocumentPath = normalizePath(document?.puzzlePath || "");
-  const preferredRoot = normalizePath(document?.workspaceRoot || workspaceRoot || "");
-  const prefix = normalizePath(context.prefix || "");
-  const seen = new Set();
-  const items = [];
-  for (const candidate of documents) {
-    if (!candidate || !isPuzzleDocument(candidate) || !isTextDocument(candidate)) {
-      continue;
-    }
-    const candidatePath = normalizePath(candidate.puzzlePath || "");
-    if (!candidatePath || candidatePath === currentDocumentPath) {
-      continue;
-    }
-    if (preferredRoot && normalizePath(candidate.workspaceRoot || "") !== preferredRoot) {
-      continue;
-    }
-    const relativePath = sourceRelativeImportPath(document, candidate);
-    if (!relativePath || (prefix && !relativePath.startsWith(prefix)) || seen.has(relativePath)) {
-      continue;
-    }
-    seen.add(relativePath);
-    items.push({
-      label: relativePath,
-      kind: "puzzle",
-      insertText: context.needsClosingQuote ? `${relativePath}"` : relativePath,
-      detail: "path",
-    });
-  }
-  items.sort((left, right) => (left.label || "").localeCompare(right.label || ""));
-  return items.slice(0, 80);
-}
-
-function sourceRelativeImportPath(fromDocument, toDocument) {
-  const baseDir = directoryName(fromDocument?.puzzlePath || "");
-  const targetPath = normalizePath(toDocument?.puzzlePath || "");
-  return sourceRelativePathFromDirectory(baseDir, targetPath);
-}
-
-function sourceRelativePathFromDirectory(baseDir, targetPath) {
-  const baseParts = normalizePath(baseDir).split("/").filter(Boolean);
-  const targetParts = normalizePath(targetPath).split("/").filter(Boolean);
-  let shared = 0;
-  while (
-    shared < baseParts.length
-    && shared < targetParts.length
-    && baseParts[shared] === targetParts[shared]
-  ) {
-    shared += 1;
-  }
-  const parts = [
-    ...baseParts.slice(shared).map(() => ".."),
-    ...targetParts.slice(shared),
-  ];
-  return parts.join("/");
-}
-
 function sourceAutoCompletionEligible(source, cursor) {
   if (
     sourceEditor.selectionStart !== sourceEditor.selectionEnd
@@ -1476,8 +2227,7 @@ function sourceAutoCompletionEligible(source, cursor) {
     return false;
   }
   return sourceCursorHasCompletionPrefix(source, cursor)
-    || sourceCursorAfterSelectorTagSeparator(source, cursor)
-    || Boolean(sourceImportPathCompletionContext(source, cursor));
+    || sourceCursorAfterSelectorTagSeparator(source, cursor);
 }
 
 function sourceCursorHasCompletionPrefix(source, cursor) {
@@ -1504,9 +2254,6 @@ function sourceCursorBeforeSyntaxBoundaryWithoutPrefix(source, cursor) {
 
 function sourceCompletionMode(options, list, source, cursor) {
   if (options.manual) {
-    return "completion";
-  }
-  if (sourceImportPathCompletionContext(source, cursor)) {
     return "completion";
   }
   const replaceStart = Math.max(0, Math.min(source.length, Number(list?.replaceStart) || 0));
@@ -1561,6 +2308,10 @@ function hideSourceCompletions() {
     sourceCompletionPopover.hidden = true;
     sourceCompletionPopover.innerHTML = "";
   }
+}
+
+function keepSourceCompletionsVisibleDuringEdit() {
+  return Boolean(sourceCompletionPopover && !sourceCompletionPopover.hidden && sourceCompletionState);
 }
 
 function renderSourceCompletionItems() {
@@ -1620,7 +2371,11 @@ function sourceCursorInLineLeadingWhitespace() {
 }
 
 function acceptSourceCompletion(index = sourceCompletionState?.selectedIndex ?? 0) {
-  if (!sourceCompletionState) {
+  if (!sourceDocumentSupportsEditableTargets()) {
+    hideSourceCompletions();
+    return false;
+  }
+  if (!sourceCompletionState || !sourceCompletionMatchesCurrentCursor()) {
     return false;
   }
   const item = sourceCompletionState.items[index];
@@ -1648,19 +2403,19 @@ function positionSourceCompletionPopover() {
   if (!sourceCompletionPopover || !sourceEditorWrap || !sourceEditor) {
     return;
   }
-  const style = window.getComputedStyle(sourceEditor);
-  const lineHeight = parseFloat(style.lineHeight || "0") || 20;
   const anchor = Math.max(
     0,
     Math.min(sourceEditor.value.length, sourceCompletionState?.replaceStart ?? sourceEditor.selectionStart),
   );
-  const editorRect = sourceEditor.getBoundingClientRect();
-  const anchorPoint = sourceEditorCaretPoint(anchor);
-  const cursorPoint = sourceVisualCaretPoint(sourceEditor.selectionStart) || sourceEditorCaretPoint(sourceEditor.selectionStart);
+  const wrapRect = sourceEditorWrap.getBoundingClientRect();
+  const anchorRect = sourceCaretRectForOffset(anchor);
+  const cursorRect = sourceCaretRectForOffset(sourceEditor.selectionStart);
+  if (!anchorRect || !cursorRect) {
+    return;
+  }
   const maxLeft = Math.max(8, window.innerWidth - 284);
-  const visualAnchorPoint = sourceVisualCaretPoint(anchor) || anchorPoint;
-  const left = editorRect.left + visualAnchorPoint.left;
-  const top = editorRect.top + cursorPoint.top + lineHeight + 6;
+  const left = wrapRect.left + anchorRect.left;
+  const top = wrapRect.top + cursorRect.top + cursorRect.height + 6;
   const availableBelow = Math.max(56, window.innerHeight - top - 8);
   sourceCompletionPopover.style.left = `${Math.max(8, Math.min(maxLeft, left))}px`;
   sourceCompletionPopover.style.top = `${top}px`;
@@ -1966,14 +2721,14 @@ function scrollSourceOffsetIntoView(offset) {
   }
   const margin = 32;
   if (rect.top < margin) {
-    sourceEditor.scrollTop = Math.max(0, sourceEditor.scrollTop + rect.top - margin);
-  } else if (rect.top + rect.height > sourceEditor.clientHeight - margin) {
-    sourceEditor.scrollTop += rect.top + rect.height - sourceEditor.clientHeight + margin;
+    setSourceScrollTop(sourceScrollTop() + rect.top - margin);
+  } else if (rect.top + rect.height > sourceViewportHeight() - margin) {
+    setSourceScrollTop(sourceScrollTop() + rect.top + rect.height - sourceViewportHeight() + margin);
   }
   if (rect.left < margin) {
-    sourceEditor.scrollLeft = Math.max(0, sourceEditor.scrollLeft + rect.left - margin);
-  } else if (rect.left > sourceEditor.clientWidth - margin) {
-    sourceEditor.scrollLeft += rect.left - sourceEditor.clientWidth + margin;
+    setSourceScrollLeft(sourceScrollLeft() + rect.left - margin);
+  } else if (rect.left > sourceViewportWidth() - margin) {
+    setSourceScrollLeft(sourceScrollLeft() + rect.left - sourceViewportWidth() + margin);
   }
   syncSourceHighlightScroll();
 }
@@ -1991,13 +2746,15 @@ function sourceEditorCaretPoint(offset) {
   mirror.style.visibility = "hidden";
   mirror.style.pointerEvents = "none";
   mirror.style.boxSizing = "border-box";
-  mirror.style.width = `${sourceEditor.clientWidth}px`;
+  mirror.style.width = `${sourceViewportWidth()}px`;
   mirror.style.minHeight = "0";
   mirror.style.padding = style.padding;
   mirror.style.border = style.border;
   mirror.style.font = style.font;
   mirror.style.lineHeight = style.lineHeight;
   mirror.style.letterSpacing = style.letterSpacing;
+  mirror.style.fontVariantLigatures = style.fontVariantLigatures;
+  mirror.style.fontFeatureSettings = style.fontFeatureSettings;
   mirror.style.tabSize = style.tabSize;
   mirror.style.whiteSpace = "pre-wrap";
   mirror.style.overflowWrap = "break-word";
@@ -2007,8 +2764,8 @@ function sourceEditorCaretPoint(offset) {
   mirror.append(marker);
   document.body.append(mirror);
   const point = {
-    left: marker.offsetLeft - sourceEditor.scrollLeft,
-    top: marker.offsetTop - sourceEditor.scrollTop,
+    left: marker.offsetLeft - sourceScrollLeft(),
+    top: marker.offsetTop - sourceScrollTop(),
   };
   mirror.remove();
   return point;
@@ -2131,6 +2888,8 @@ function sourceVisualOffsetFromPoint(clientX, clientY) {
   const walker = document.createTreeWalker(sourceHighlight, NodeFilter.SHOW_TEXT);
   const range = document.createRange();
   let sourceOffset = 0;
+  let nearestLineDistance = Number.POSITIVE_INFINITY;
+  const textNodes = [];
   let best = null;
   let lineHit = null;
   let bestInLine = null;
@@ -2140,6 +2899,30 @@ function sourceVisualOffsetFromPoint(clientX, clientY) {
     if (!text.length) {
       continue;
     }
+    range.selectNodeContents(node);
+    const lineDistance = Array.from(range.getClientRects()).reduce((distance, rect) => {
+      if (rect.width <= 0 && rect.height <= 0) {
+        return distance;
+      }
+      const next = clientY < rect.top
+        ? rect.top - clientY
+        : clientY > rect.bottom
+          ? clientY - rect.bottom
+          : 0;
+      return Math.min(distance, next);
+    }, Number.POSITIVE_INFINITY);
+    textNodes.push({ node, text, sourceOffset, lineDistance });
+    nearestLineDistance = Math.min(nearestLineDistance, lineDistance);
+    sourceOffset += text.length;
+  }
+
+  // A click belongs to one visual line. Locate that line from whole text-node
+  // rectangles first, then measure only characters belonging to that line.
+  for (const entry of textNodes) {
+    if (entry.lineDistance > nearestLineDistance + 0.5) {
+      continue;
+    }
+    const { node, text } = entry;
     for (let index = 0; index < text.length; index += 1) {
       range.setStart(node, index);
       range.setEnd(node, index + 1);
@@ -2154,7 +2937,7 @@ function sourceVisualOffsetFromPoint(clientX, clientY) {
             : 0;
         const midX = rect.left + (rect.width / 2);
         const char = text[index];
-        const charStart = sourceOffset + index;
+        const charStart = entry.sourceOffset + index;
         const charEnd = char === "\n" ? charStart : charStart + 1;
         const boundary = clientX <= midX ? charStart : charEnd;
         const horizontalDistance = clientX < rect.left
@@ -2186,7 +2969,6 @@ function sourceVisualOffsetFromPoint(clientX, clientY) {
         }
       }
     }
-    sourceOffset += text.length;
   }
   range.detach?.();
   if (lineHit) {
@@ -2234,10 +3016,6 @@ function sourceOffsetFromVisualPoint(clientX, clientY, source = sourceEditorDocu
     ? sourceViewOffsetToDocumentOffset(offset, "start")
     : offset;
   return Math.max(0, Math.min(String(source || "").length, documentOffset));
-}
-
-function sourceByteOffset(value, utf16Offset) {
-  return sourceCompletionTextEncoder.encode(value.slice(0, utf16Offset)).length;
 }
 
 function sourceUtf16OffsetFromByteOffset(value, byteOffset) {
@@ -2297,7 +3075,7 @@ function createSourceImportLinkFrame() {
   return frame;
 }
 
-function showSourceColorEditor(event = null) {
+function showSourceColorEditor(event = null, visualOffset = null) {
   if (!sourceColorPopover) {
     return false;
   }
@@ -2315,7 +3093,7 @@ function showSourceColorEditor(event = null) {
     hideSourceColorEditor();
     return false;
   }
-  if (event && !sourceColorEventTargetsToken(event, token)) {
+  if (event && !sourceColorEventTargetsToken(event, token, visualOffset)) {
     hideSourceColorEditor();
     return false;
   }
@@ -2366,11 +3144,13 @@ function positionSourceColorPopoverForToken(token) {
   sourceColorPopover.style.top = `${Math.round(top)}px`;
 }
 
-function sourceColorEventTargetsToken(event, token) {
+function sourceColorEventTargetsToken(event, token, visualOffset = null) {
   if (!event || !token) {
     return true;
   }
-  const offset = sourceViewOffsetFromVisualPoint(event.clientX, event.clientY);
+  const offset = Number.isInteger(visualOffset)
+    ? visualOffset
+    : sourceViewOffsetFromVisualPoint(event.clientX, event.clientY);
   if (!Number.isInteger(offset)) {
     return true;
   }
@@ -2429,6 +3209,11 @@ function applySourceColorRgb(rgb) {
   updateSourceMeta();
   if (documents[currentDocumentIndex]) {
     documents[currentDocumentIndex].source = sourceEditorDocumentValue();
+  }
+  if (!sourceDocumentSupportsEditableTargets()) {
+    resetSourcePuzzleAnalysisState();
+    scheduleLocalSave();
+    return;
   }
   scheduleSourceHighlight(true);
   scheduleLocalSave();
@@ -2515,12 +3300,14 @@ function handleSourceBeforeInputTextInsert(event) {
     }
     return;
   }
-  const predicted = sourcePredictedBeforeInputValue(event);
+  const predicted = sourceDocumentSupportsEditableTargets()
+    ? sourcePredictedBeforeInputValue(event)
+    : null;
   if (predicted !== null) {
     if (event.isComposing || event.inputType === "insertCompositionText") {
       beginSourceCompositionPreview(predicted);
     } else {
-      renderPredictedSourceHighlight(predicted);
+      scheduleOptimisticSourceHighlight(predicted);
     }
   }
 }
@@ -2537,6 +3324,9 @@ sourceEditor.addEventListener("compositionupdate", (event) => {
   if (!isTextDocument(documents[currentDocumentIndex])) {
     return;
   }
+  if (!sourceDocumentSupportsEditableTargets()) {
+    return;
+  }
   beginSourceCompositionPreview(sourceCompositionPreviewValue(event.data));
 });
 sourceEditor.addEventListener("input", () => {
@@ -2547,32 +3337,50 @@ sourceEditor.addEventListener("input", () => {
     const changed = commitSourceFoldedDisplayEdit();
     if (!changed) {
       clearSourceCompositionPreview();
-      scheduleSourceHighlight(true, { preserveCurrent: false });
+      if (sourceDocumentSupportsEditableTargets()) {
+        scheduleSourceHighlight(true, { preserveCurrent: false });
+      } else {
+        resetSourcePuzzleAnalysisState();
+      }
       updateSourceMeta();
       return;
     }
   }
   clearSourceCompositionPreview();
-  scheduleSourceHighlight();
+  const puzzleSource = sourceDocumentSupportsEditableTargets();
+  if (puzzleSource) {
+    scheduleSourceHighlight();
+    scheduleSourceOutlineRefresh();
+  } else {
+    resetSourcePuzzleAnalysisState();
+  }
   hideSourceImportLinkFrame();
   clearSourceBlockSelection();
   sourceEditorPreferredCaretX = null;
   recordSourceUndoSnapshot();
   updateSourceMeta();
-  refreshSourceColorEditor();
+  if (puzzleSource) {
+    refreshSourceColorEditor();
+  }
   refreshSourceFindAfterSourceChange();
-  scheduleSourceCompletion();
   if (documents[currentDocumentIndex]) {
     documents[currentDocumentIndex].source = sourceEditorDocumentValue();
   }
   scheduleLocalSave();
-  scheduleLevelBuilderResetFromSource(false);
-  scheduleSourceCursorPreviewSync();
-  schedulePreview();
+  if (puzzleSource) {
+    scheduleSourceCompletion();
+    scheduleLevelBuilderResetFromSource(false);
+    scheduleSourceCursorPreviewSync();
+    schedulePreview();
+  }
 });
 sourceEditor.addEventListener("compositionend", () => {
   const previewSource = sourceCompositionPreviewSource;
   sourceCompositionRange = null;
+  if (!sourceDocumentSupportsEditableTargets()) {
+    clearSourceCompositionPreview();
+    return;
+  }
   window.requestAnimationFrame(() => {
     if (sourceCompositionPreviewSource === previewSource) {
       clearSourceCompositionPreview();
@@ -2582,12 +3390,22 @@ sourceEditor.addEventListener("compositionend", () => {
 });
 sourceEditor.addEventListener("click", (event) => {
   sourceEditorPreferredCaretX = null;
-  if (openSourceImportLinkFromPointer(event)) {
+  const interaction = sourceInteractionFromPointer(event);
+  if (!interaction) {
     return;
   }
-  showSourceColorEditor(event);
-  window.setTimeout(() => showSourceCompletions({ manual: false }), 0);
-  syncPreviewModeFromSourcePointer(event);
+  if (openSourceImportLinkFromPointer(event, interaction.position)) {
+    return;
+  }
+  if (sourceDocumentSupportsEditableTargets()) {
+    showSourceColorEditor(event, interaction.viewOffset);
+    window.setTimeout(() => showSourceCompletions({ manual: false }), 0);
+    syncPreviewModeFromSourceCursor({
+      recordHistory: true,
+      allowInactiveMode: true,
+      position: interaction.documentOffset,
+    });
+  }
 });
 sourceEditor.addEventListener("pointerdown", handleSourceBlockSelectionPointerDown);
 sourceEditor.addEventListener("mouseleave", handleSourceImportEditorMouseLeave);
@@ -2612,15 +3430,19 @@ sourceEditor.addEventListener("keyup", (event) => {
     return;
   }
   if (event.key.startsWith("Arrow") || event.key === "Home" || event.key === "End") {
-    showSourceColorEditor();
-    showSourceCompletions({ manual: false });
-    scheduleSourceCursorPreviewSync();
+    if (sourceDocumentSupportsEditableTargets()) {
+      showSourceColorEditor();
+      showSourceCompletions({ manual: false });
+      scheduleSourceCursorPreviewSync();
+    }
   }
   renderSourceBlockSelection();
 });
 sourceEditor.addEventListener("focus", () => {
   renderSourceBlockSelection();
-  syncPreviewModeFromSourceCursor({ force: true });
+  if (sourceDocumentSupportsEditableTargets()) {
+    scheduleSourceCursorPreviewSync();
+  }
 });
 sourceEditor.addEventListener("blur", () => {
   clearSourceCompositionPreview();
@@ -2632,7 +3454,10 @@ document.addEventListener("selectionchange", () => {
     renderSourceBlockSelection();
     return;
   }
-  scheduleSourceCursorPreviewSync();
+  if (sourceDocumentSupportsEditableTargets()) {
+    scheduleSourceCursorPreviewSync();
+    syncSourceOutlineActiveItem();
+  }
   syncSourceFindIndexFromSelection();
   renderSourceBlockSelection();
 });
@@ -2933,7 +3758,7 @@ function sourceVerticalPosition(delta) {
 
 function sourcePagePosition(delta) {
   const lineHeight = sourceEditorLineHeight();
-  const lines = Math.max(1, Math.floor(sourceEditor.clientHeight / lineHeight) - 1);
+  const lines = Math.max(1, Math.floor(sourceViewportHeight() / lineHeight) - 1);
   let position = sourceSelectionFocus();
   for (let step = 0; step < lines; step += 1) {
     const next = sourceVerticalPositionFrom(position, delta);
@@ -3056,19 +3881,19 @@ function syncSourceLineNumberScroll() {
   if (!sourceLineNumbers || !sourceEditor) {
     return;
   }
-  const scrollHeight = sourceEditor.scrollHeight;
+  const scrollHeight = Math.max(sourceEditor.scrollHeight, sourceEditorWrap?.clientHeight || 0);
   if (sourceLineNumberScrollHeight !== scrollHeight) {
     sourceLineNumberScrollHeight = scrollHeight;
     sourceLineNumbers.style.height = `${scrollHeight}px`;
   }
-  sourceLineNumbers.style.transform = `translateY(${-sourceEditor.scrollTop}px)`;
+  sourceLineNumbers.style.transform = "";
 }
 
 function sourceEditorTextColumnCapacity() {
   const style = window.getComputedStyle(sourceEditor);
   const paddingLeft = Number.parseFloat(style.paddingLeft) || 0;
   const paddingRight = Number.parseFloat(style.paddingRight) || 0;
-  const contentWidth = Math.max(1, sourceEditor.clientWidth - paddingLeft - paddingRight);
+  const contentWidth = Math.max(1, sourceViewportWidth() - paddingLeft - paddingRight);
   return Math.max(1, Math.floor(contentWidth / sourceEditorCharWidth()));
 }
 
@@ -3679,31 +4504,69 @@ function handleSourceRewritePatternTab(event) {
   return true;
 }
 
-function sourceEditorContentChanged() {
+function sourceEditorContentChanged(options = {}) {
+  const preserveCompletions = Boolean(options.preserveSourceCompletions && keepSourceCompletionsVisibleDuringEdit());
+  const puzzleSource = sourceDocumentSupportsEditableTargets();
   if (sourceFoldsActive()) {
     const changed = commitSourceFoldedDisplayEdit();
     if (!changed) {
-      scheduleSourceHighlight(true, { preserveCurrent: false });
+      if (puzzleSource) {
+        scheduleSourceHighlight(true, { preserveCurrent: false });
+      } else {
+        resetSourcePuzzleAnalysisState();
+      }
       updateSourceMeta();
-      refreshSourceColorEditor();
+      if (puzzleSource) {
+        refreshSourceColorEditor();
+      }
       refreshSourceFindAfterSourceChange();
       scheduleLocalSave();
-      hideSourceCompletions();
+      if (preserveCompletions) {
+        positionSourceCompletionPopover();
+      } else {
+        hideSourceCompletions();
+      }
       return;
     }
   }
-  scheduleSourceHighlight();
+  if (puzzleSource) {
+    scheduleSourceHighlight();
+    scheduleSourceOutlineRefresh();
+  } else {
+    resetSourcePuzzleAnalysisState();
+  }
   recordSourceUndoSnapshot();
   updateSourceMeta();
-  refreshSourceColorEditor();
+  if (puzzleSource) {
+    refreshSourceColorEditor();
+  }
   refreshSourceFindAfterSourceChange();
   if (documents[currentDocumentIndex]) {
     documents[currentDocumentIndex].source = sourceEditorDocumentValue();
   }
   scheduleLocalSave();
-  scheduleLevelBuilderResetFromSource(false);
-  schedulePreview();
-  hideSourceCompletions();
+  if (puzzleSource) {
+    scheduleLevelBuilderResetFromSource(false);
+    schedulePreview();
+  }
+  if (preserveCompletions) {
+    positionSourceCompletionPopover();
+  } else {
+    hideSourceCompletions();
+  }
+}
+
+function sourceCompletionCanStayVisibleForKeydownEdit(event) {
+  return Boolean(
+    event
+    && !event.defaultPrevented
+    && !event.isComposing
+    && !event.altKey
+    && !event.ctrlKey
+    && !event.metaKey
+    && !sourceEditorBlockSelection?.ranges?.length
+    && (event.key.length === 1 || event.key === "Backspace" || event.key === "Delete")
+  );
 }
 
 function sourcePrintableKeydownEdit(event) {
@@ -3755,7 +4618,7 @@ function handleSourcePrintableKeydownInput(event) {
     "end",
   );
   sourceEditor.setSelectionRange(edit.selectionStart, edit.selectionEnd);
-  sourceEditorContentChanged();
+  sourceEditorContentChanged({ preserveSourceCompletions: true });
   scheduleSourceCompletion();
   syncPreviewModeFromSourceCursor();
   return true;
@@ -4092,8 +4955,8 @@ function updateSourceImportLinkFromPointer(event) {
   hideSourceImportLinkFrame();
 }
 
-function sourceImportLinkAtPointer(event) {
-  const position = sourceEditorPositionFromPoint(event.clientX, event.clientY);
+function sourceImportLinkAtPointer(event, resolvedPosition = null) {
+  const position = resolvedPosition || sourceEditorPositionFromPoint(event.clientX, event.clientY);
   if (!position) {
     return null;
   }
@@ -4108,10 +4971,18 @@ function sourceImportLinkAtPointer(event) {
 }
 
 function sourceEditableTargetAtOffset(source, offset) {
-  for (const config of SOURCE_EDITABLE_TARGETS) {
-    const finder = sourceEditableTargetFinder(config);
-    const entry = finder ? finder(source, offset) : null;
-    if (!entry) {
+  if (typeof surfaceEntriesForSource !== "function") {
+    return null;
+  }
+  for (const entry of surfaceEntriesForSource(source)) {
+    if (!Number.isInteger(entry?.start) || !Number.isInteger(entry?.end)) {
+      continue;
+    }
+    if (offset < entry.start || offset > entry.end) {
+      continue;
+    }
+    const config = SOURCE_EDITABLE_TARGETS.find((item) => item.kind === entry.kind);
+    if (!config) {
       continue;
     }
     return {
@@ -4122,11 +4993,6 @@ function sourceEditableTargetAtOffset(source, offset) {
     };
   }
   return null;
-}
-
-function sourceEditableTargetFinder(config) {
-  const finder = sourceEditableTargetHandlers.get(config.kind)?.find;
-  return typeof finder === "function" ? finder : null;
 }
 
 function sourceEditableTargetLoader(config) {
@@ -4144,7 +5010,6 @@ function registerSourceEditableTarget(kind, handlers = {}) {
     return;
   }
   sourceEditableTargetHandlers.set(kind, {
-    find: typeof handlers.find === "function" ? handlers.find : null,
     load: typeof handlers.load === "function" ? handlers.load : null,
   });
 }
@@ -4165,7 +5030,7 @@ function sourceFrameRectForOffsets(start, end) {
   mirror.style.visibility = "hidden";
   mirror.style.pointerEvents = "none";
   mirror.style.boxSizing = "border-box";
-  mirror.style.width = `${sourceEditor.clientWidth}px`;
+  mirror.style.width = `${sourceViewportWidth()}px`;
   mirror.style.minHeight = "0";
   mirror.style.padding = style.padding;
   mirror.style.border = style.border;
@@ -4182,8 +5047,8 @@ function sourceFrameRectForOffsets(start, end) {
   const rangeRect = range.getBoundingClientRect();
   const lineHeight = sourceEditorLineHeight();
   const rect = {
-    left: rangeRect.left - mirrorRect.left - sourceEditor.scrollLeft - 2,
-    top: rangeRect.top - mirrorRect.top - sourceEditor.scrollTop,
+    left: rangeRect.left - mirrorRect.left - sourceScrollLeft() - 2,
+    top: rangeRect.top - mirrorRect.top - sourceScrollTop(),
     width: Math.max(8, rangeRect.width + 4),
     height: Math.max(lineHeight, rangeRect.height || lineHeight),
   };
@@ -4208,57 +5073,6 @@ function sourceImportLinesWithOffsets(source) {
     start = end + 1;
   }
   return lines;
-}
-
-function sourceImportPathCompletionContext(source, cursor) {
-  const lines = sourceImportLinesWithOffsets(source);
-  const lineIndex = sourceLineIndexAtOffset(lines, cursor);
-  const line = lines[lineIndex];
-  if (!line) {
-    return null;
-  }
-  const column = Math.max(0, Math.min(line.raw.length, cursor - line.start));
-  const code = stripSourceImportLineComment(line.raw);
-  if (column > code.length) {
-    return null;
-  }
-  const prefix = code.match(/^(\s*import\s+)"/);
-  if (!prefix) {
-    return null;
-  }
-  const pathStartColumn = prefix[0].length;
-  if (column < pathStartColumn) {
-    return null;
-  }
-  let escaped = false;
-  let closeQuoteColumn = -1;
-  for (let index = pathStartColumn; index < code.length; index += 1) {
-    const char = code[index];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (char === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (char === "\"") {
-      closeQuoteColumn = index;
-      break;
-    }
-  }
-  const pathEndColumn = closeQuoteColumn >= 0 ? closeQuoteColumn : code.length;
-  if (column > pathEndColumn) {
-    return null;
-  }
-  const replaceStart = line.start + pathStartColumn;
-  const replaceEnd = line.start + pathEndColumn;
-  return {
-    replaceStart,
-    replaceEnd,
-    prefix: code.slice(pathStartColumn, column),
-    needsClosingQuote: closeQuoteColumn < 0,
-  };
 }
 
 function sourceImportLinkAtOffset(source, offset, lines = sourceImportLinesWithOffsets(source)) {
@@ -4465,11 +5279,11 @@ function sourceEditableEntryFromTarget(source, target, options = {}) {
   return body && typeof body === "object" ? { ...entry, ...body } : entry;
 }
 
-function openSourceImportLinkFromPointer(event) {
+function openSourceImportLinkFromPointer(event, position = null) {
   if (sourceEditorBlockSelection || !sourceDocumentSupportsEditableTargets()) {
     return false;
   }
-  const link = sourceImportLinkAtPointer(event);
+  const link = sourceImportLinkAtPointer(event, position);
   if (!link) {
     return false;
   }
@@ -4515,7 +5329,9 @@ function sourceEditorPositionFromPoint(clientX, clientY, options = {}) {
     return null;
   }
   const rawPosition = sourceEditorRawPositionFromPoint(clientX, clientY, lines);
-  const visualOffset = sourceViewOffsetFromVisualPoint(clientX, clientY);
+  const visualOffset = Number.isInteger(options.visualOffset)
+    ? options.visualOffset
+    : sourceViewOffsetFromVisualPoint(clientX, clientY);
   if (Number.isInteger(visualOffset)) {
     const visualPosition = sourceLineColumnForOffset(lines, visualOffset);
     return options.preserveColumn
@@ -4525,6 +5341,27 @@ function sourceEditorPositionFromPoint(clientX, clientY, options = {}) {
   return rawPosition;
 }
 
+function sourceInteractionFromPointer(event, source = sourceEditorDocumentValue()) {
+  if (!event || !sourceEditorWrap?.contains(event.target)) {
+    return null;
+  }
+  const viewOffset = sourceViewOffsetFromVisualPoint(event.clientX, event.clientY);
+  if (!Number.isInteger(viewOffset)) {
+    return null;
+  }
+  const position = sourceEditorPositionFromPoint(event.clientX, event.clientY, {
+    visualOffset: viewOffset,
+  });
+  const documentOffset = sourceFoldsActive()
+    ? sourceViewOffsetToDocumentOffset(viewOffset, "start")
+    : viewOffset;
+  return {
+    viewOffset,
+    documentOffset: Math.max(0, Math.min(String(source || "").length, documentOffset)),
+    position,
+  };
+}
+
 function sourceEditorRawPositionFromPoint(clientX, clientY, lines) {
   const rect = sourceEditor.getBoundingClientRect();
   const style = window.getComputedStyle(sourceEditor);
@@ -4532,8 +5369,8 @@ function sourceEditorRawPositionFromPoint(clientX, clientY, lines) {
   const paddingTop = Number.parseFloat(style.paddingTop) || 0;
   const lineHeight = sourceEditorLineHeight();
   const charWidth = sourceEditorCharWidth();
-  const x = clientX - rect.left + sourceEditor.scrollLeft - paddingLeft;
-  const y = clientY - rect.top + sourceEditor.scrollTop - paddingTop;
+  const x = clientX - rect.left + sourceScrollLeft() - paddingLeft;
+  const y = clientY - rect.top + sourceScrollTop() - paddingTop;
   return {
     lineIndex: Math.max(0, Math.min(lines.length - 1, Math.floor(y / lineHeight))),
     column: Math.max(0, Math.round(x / charWidth)),
@@ -4606,8 +5443,8 @@ function appendSourceBlockRange(range) {
   }
   const caret = document.createElement("div");
   caret.className = "source-block-selection-caret";
-  caret.style.left = `${rect.left}px`;
-  caret.style.top = `${rect.top}px`;
+  caret.style.left = `${rect.left + sourceScrollLeft()}px`;
+  caret.style.top = `${rect.top + sourceScrollTop()}px`;
   caret.style.height = `${rect.height}px`;
   sourceBlockSelectionLayer.append(caret);
 }
@@ -4651,9 +5488,9 @@ function sourceSelectionRectsForOffsets(start, end) {
       const rectHeight = rect.height || lineHeight;
       const height = Math.max(lineHeight, rectHeight);
       return {
-        left: rect.left - wrapRect.left,
-        right: rect.right - wrapRect.left,
-        top: rect.top - wrapRect.top - Math.max(0, (lineHeight - rectHeight) / 2),
+        left: rect.left - wrapRect.left + sourceScrollLeft(),
+        right: rect.right - wrapRect.left + sourceScrollLeft(),
+        top: rect.top - wrapRect.top + sourceScrollTop() - Math.max(0, (lineHeight - rectHeight) / 2),
         height,
       };
     });
@@ -4956,7 +5793,9 @@ sourceEditor.addEventListener("keydown", (event) => {
   }
   if (sourceCompletionState && !sourceCompletionPopover?.hidden) {
     if (!sourceCompletionMatchesCurrentCursor()) {
-      hideSourceCompletions();
+      if (!sourceCompletionCanStayVisibleForKeydownEdit(event)) {
+        hideSourceCompletions();
+      }
     } else {
       if (event.key === "Escape") {
         event.preventDefault();
@@ -5089,9 +5928,14 @@ function insertAtSelection(value) {
   if (documents[currentDocumentIndex]) {
     documents[currentDocumentIndex].source = sourceEditorDocumentValue();
   }
-  scheduleSourceHighlight();
+  if (sourceDocumentSupportsEditableTargets()) {
+    scheduleSourceHighlight();
+    scheduleSourceOutlineRefresh();
+    schedulePreview();
+  } else {
+    resetSourcePuzzleAnalysisState();
+  }
   scheduleLocalSave();
-  schedulePreview();
   hideSourceCompletions();
 }
 
@@ -5109,16 +5953,49 @@ function setSourceEditorText(value, selectionStart = null, selectionEnd = select
   if (documents[currentDocumentIndex]) {
     documents[currentDocumentIndex].source = sourceEditorDocumentValue();
   }
-  scheduleSourceHighlight();
-  resetLevelBuilderFromSource(false);
+  if (sourceDocumentSupportsEditableTargets()) {
+    scheduleSourceHighlight();
+    scheduleSourceOutlineRefresh(true);
+    resetLevelBuilderFromSource(false);
+  } else {
+    resetSourcePuzzleAnalysisState();
+  }
 }
 
 function bindSourceEditorPopoverEvents() {
-sourceEditor.addEventListener("scroll", syncSourceHighlightScroll);
-sourceEditor.addEventListener("scroll", hideSourceColorEditor);
-sourceEditor.addEventListener("scroll", hideSourceCompletions);
-sourceEditor.addEventListener("scroll", hideSourceImportLinkFrame);
+sourceEditorWrap?.addEventListener("scroll", hideSourceColorEditor);
+sourceEditorWrap?.addEventListener("scroll", hideSourceCompletions);
+sourceEditorWrap?.addEventListener("scroll", hideSourceImportLinkFrame);
+sourceEditor.addEventListener("click", syncSourceOutlineActiveItem);
+sourceEditor.addEventListener("keyup", syncSourceOutlineActiveItem);
 sourceLineNumbers?.addEventListener("click", handleSourceFoldGutterClick);
+sourceOutlineList?.addEventListener("click", (event) => {
+  const row = event.target.closest("[data-source-outline-id]");
+  if (!row || !sourceOutlineList.contains(row)) {
+    return;
+  }
+  if (event.target.closest("[data-source-outline-toggle]")) {
+    event.preventDefault();
+    toggleSourceOutlineItem(row.dataset.sourceOutlineId);
+    return;
+  }
+  openSourceOutlineItem(row.dataset.sourceOutlineId);
+});
+sourceOutlineList?.addEventListener("keydown", (event) => {
+  if (!["Enter", " ", "ArrowRight", "ArrowLeft"].includes(event.key)) {
+    return;
+  }
+  const row = event.target.closest("[data-source-outline-id]");
+  if (!row || !sourceOutlineList.contains(row)) {
+    return;
+  }
+  event.preventDefault();
+  if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
+    toggleSourceOutlineItem(row.dataset.sourceOutlineId, event.key === "ArrowRight");
+    return;
+  }
+  openSourceOutlineItem(row.dataset.sourceOutlineId);
+});
 document.addEventListener("pointerdown", hideSourceColorEditorForOutsidePointer);
 window.addEventListener("resize", syncSourceHighlightScroll);
 window.addEventListener("resize", renderSourceLineNumbers);
