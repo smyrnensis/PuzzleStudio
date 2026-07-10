@@ -19,6 +19,7 @@ let level3dPlaytestSnapshot = null;
 let level3dPreviewCameraState = null;
 let level3dPreviewOrigin = { x: 0, y: 0, z: 0 };
 let level3dSurfaceResizeFrame = 0;
+let level3dViewMode = "stage";
 const LEVEL3D_EDITOR_MAX_SIZE = 256;
 const LEVEL3D_PALETTE_PREVIEW_SIZE = 42;
 const LEVEL3D_FRAME_VIRTUAL_WIDTH = 960;
@@ -43,7 +44,6 @@ let level3d = {
   selectedChar: LEVEL3D_EMPTY_CHAR,
   editMode: "replace",
   layerFillActive: false,
-  layerPaletteCollapsed: false,
   layerGridVisible: true,
   hiddenLayers: [],
   stageResizeMode: null,
@@ -61,6 +61,7 @@ function renderLevel3dBuilder() {
     return;
   }
   syncLevel3dFrameLayout();
+  syncLevel3dViewMode();
   syncLevel3dControlsFromPreview();
   renderLevel3dPalette();
   renderLevel3dLayerPalette();
@@ -77,15 +78,11 @@ function syncLevel3dFrameLayout() {
   if (!level3dBuilder) {
     return;
   }
-  const workspace = level3dBuilder.querySelector(".level3d-workspace");
   const container = level3dBuilder.querySelector(".tool-pane-scroll") || level3dBuilder;
   const availableWidth = Math.max(1, Math.floor(level3dContentInlineSize(container)));
-  const canFitSideBySide = availableWidth >= LEVEL3D_FRAME_MIN_WIDTH * 2 + LEVEL3D_FRAME_GAP;
   const maxFrameWidth = Math.max(
     LEVEL3D_FRAME_MIN_WIDTH,
-    Math.min(LEVEL3D_FRAME_MAX_WIDTH, canFitSideBySide
-      ? Math.floor((availableWidth - LEVEL3D_FRAME_GAP) / 2)
-      : availableWidth),
+    Math.min(LEVEL3D_FRAME_MAX_WIDTH, availableWidth),
   );
   const frameWidth = Math.max(LEVEL3D_FRAME_MIN_WIDTH, maxFrameWidth);
   const scale = frameWidth / LEVEL3D_FRAME_VIRTUAL_WIDTH;
@@ -97,7 +94,33 @@ function syncLevel3dFrameLayout() {
   setLevel3dBuilderStyleProperty("--level3d-frame-scale", String(scale));
   setLevel3dBuilderStyleProperty("--level3d-frame-inverse-scale", String(1 / scale));
   setLevel3dBuilderStyleProperty("--level3d-frame-gap", `${LEVEL3D_FRAME_GAP}px`);
-  workspace?.classList.toggle("is-stacked", !canFitSideBySide);
+}
+
+function syncLevel3dViewMode() {
+  const mode = level3dViewMode === "layer" ? "layer" : "stage";
+  const workspace = level3dBuilder?.querySelector(".level3d-workspace");
+  workspace?.classList.toggle("is-view-stage", mode === "stage");
+  workspace?.classList.toggle("is-view-layer", mode === "layer");
+  level3dStageViewButton?.classList.toggle("is-active", mode === "stage");
+  level3dLayerViewButton?.classList.toggle("is-active", mode === "layer");
+  level3dStageViewButton?.setAttribute("aria-pressed", String(mode === "stage"));
+  level3dLayerViewButton?.setAttribute("aria-pressed", String(mode === "layer"));
+}
+
+function setLevel3dViewMode(mode) {
+  const nextMode = mode === "layer" ? "layer" : "stage";
+  if (level3dPlaytestActive && nextMode !== "stage") {
+    return;
+  }
+  if (level3dViewMode === nextMode) {
+    syncLevel3dViewMode();
+    return;
+  }
+  level3dViewMode = nextMode;
+  level3dStageHit = null;
+  level3dLayerHover = null;
+  syncLevel3dViewMode();
+  scheduleLevel3dSurfaceResize();
 }
 
 function setLevel3dBuilderStyleProperty(name, value) {
@@ -156,7 +179,7 @@ function syncLevel3dControlsFromPreview() {
   if (!sourceDefinition) {
     syncLevel3dPaletteWithoutLoadedLevel(source, sourceDocument);
     if (level3dNameInput && !level3dNameInput.dataset.userEdited) {
-      level3dNameInput.value = "level_1";
+      level3dNameInput.value = "level 1";
     }
     if (level3dBundleInput && !level3dBundleInput.dataset.userEdited) {
       level3dBundleInput.value = currentLevel3dBundleName(exportData);
@@ -267,7 +290,6 @@ function clearLoadedLevel3dState(source, document = level3dSourceDocument()) {
     selectedChar: level3dSelectedCharForPalette(palette, level3d.selectedChar),
     editMode: level3dEditMode(),
     layerFillActive: Boolean(level3d.layerFillActive),
-    layerPaletteCollapsed: Boolean(level3d.layerPaletteCollapsed),
     layerGridVisible: level3d.layerGridVisible !== false,
     hiddenLayers: Array.isArray(level3d.hiddenLayers) ? [...level3d.hiddenLayers] : [],
     stageResizeMode: null,
@@ -791,7 +813,7 @@ function renderLevel3dSourcePreview() {
     return;
   }
   syncLevel3dNameOptions();
-  const levelName = sanitizeLevel3dName(level3dNameInput?.value || currentLevel3dSourceDefinition(level3dEditorSource())?.name || "level_1");
+  const levelName = sanitizeLevel3dName(level3dNameInput?.value || currentLevel3dSourceDefinition(level3dEditorSource())?.name || "level 1");
   const sourceData = level3dSourceData();
   level3dSourcePreview.textContent = level3dSnippetSource(levelName, sourceData, "", { bodyIndent: "" });
 }
@@ -1037,14 +1059,13 @@ function renderLevel3dLayerPalette() {
   }
   level3dLayerPalette.replaceChildren();
   level3dLayerPalette.classList.add("is-sprite-only");
-  level3dLayerPalette.classList.toggle("is-collapsed", Boolean(level3d.layerPaletteCollapsed));
   const exportData = previewExport || extractPreviewExport(latestHtml);
   const transformRow = document.createElement("div");
   transformRow.className = "level3d-layer-palette-row level3d-layer-transform-row";
   transformRow.append(
+    level3dLayerGridButton(),
     level3dLayerResizeModeButton("expand"),
     level3dLayerResizeModeButton("shrink"),
-    level3dLayerGridButton(),
     level3dLayerVisibilityControl(),
     level3dLayerTransformButton("rotate-left"),
     level3dLayerTransformButton("rotate-right"),
@@ -1055,7 +1076,6 @@ function renderLevel3dLayerPalette() {
   const editRow = document.createElement("div");
   editRow.className = "level3d-layer-palette-row level3d-layer-edit-row";
   editRow.append(
-    level3dLayerPaletteCollapseButton(),
     level3dLayerFillButton(),
     level3dLayerEraserButton(),
   );
@@ -1418,40 +1438,6 @@ function deactivateLevel3dLayerFillModeAfterUse() {
   renderLevel3dLayerPalette();
 }
 
-function level3dLayerPaletteCollapseButton() {
-  const collapsed = Boolean(level3d.layerPaletteCollapsed);
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "level-palette-toggle-button";
-  button.classList.toggle("is-active", collapsed);
-  button.classList.toggle("is-collapsed", collapsed);
-  button.setAttribute("aria-expanded", String(!collapsed));
-  button.setAttribute("aria-label", collapsed ? "Show top-down palette" : "Hide top-down palette");
-  button.title = collapsed ? "Show palette" : "Hide palette";
-  button.dataset.tooltip = button.title;
-  button.disabled = level3dPlaytestActive;
-  button.innerHTML = `
-    <svg class="palette-open-icon" viewBox="0 0 24 24" aria-hidden="true">
-      <rect x="4" y="4" width="6" height="6" rx="1"></rect>
-      <rect x="14" y="4" width="6" height="6" rx="1"></rect>
-      <rect x="4" y="14" width="6" height="6" rx="1"></rect>
-      <rect x="14" y="14" width="6" height="6" rx="1"></rect>
-    </svg>
-    <svg class="palette-closed-icon" viewBox="0 0 24 24" aria-hidden="true">
-      <rect x="4" y="4" width="6" height="6" rx="1"></rect>
-      <rect x="14" y="4" width="6" height="6" rx="1"></rect>
-      <rect x="4" y="14" width="6" height="6" rx="1"></rect>
-      <rect x="14" y="14" width="6" height="6" rx="1"></rect>
-      <path d="M3 21 21 3"></path>
-    </svg>
-  `;
-  button.addEventListener("click", () => {
-    level3d.layerPaletteCollapsed = !level3d.layerPaletteCollapsed;
-    renderLevel3dLayerPalette();
-  });
-  return button;
-}
-
 function level3dLayerEraserButton() {
   const entry = level3d.palette.find((candidate) => !candidate.objects?.length)
     || { char: level3dEmptyChar(), objects: [] };
@@ -1735,6 +1721,12 @@ function renderLevel3dLayerControls() {
   if (level3dLayerTotal) {
     level3dLayerTotal.textContent = String(height);
   }
+  if (level3dAddSliceAboveButton) {
+    level3dAddSliceAboveButton.disabled = level3dPlaytestActive || !level3d.slices.length;
+  }
+  if (level3dAddSliceBelowButton) {
+    level3dAddSliceBelowButton.disabled = level3dPlaytestActive || !level3d.slices.length;
+  }
   if (level3dPreviousLayerButton) {
     level3dPreviousLayerButton.disabled = level3d.slice <= 0;
   }
@@ -1900,6 +1892,8 @@ function renderLevel3dLayerGrid() {
       cell.setAttribute("role", "button");
       cell.setAttribute("aria-label", level3dCellLabel(ch));
       cell.tabIndex = 0;
+      const entry = level3d.palette.find((candidate) => candidate.char === ch);
+      cell.classList.toggle("is-empty", !entry || !entry.objects?.length);
       cell.classList.toggle("is-hover", level3dLayerHover
         && level3dLayerHover.x === x
         && level3dLayerHover.y === y
@@ -2075,6 +2069,30 @@ function setLevel3dLayer(value) {
 
 function moveLevel3dLayer(delta) {
   setLevel3dLayer(level3d.slice + delta);
+}
+
+function insertLevel3dSlice(relative) {
+  if (level3dPlaytestActive || !level3d.slices.length) {
+    syncLevel3dSizeControls();
+    return false;
+  }
+  const before = visualEditSnapshot("level3d");
+  const height = Math.max(1, Math.trunc(Number(level3d.height) || level3d.slices.length || 1));
+  const current = Math.max(0, Math.min(height - 1, Math.trunc(Number(level3d.slice) || 0)));
+  const insertIndex = relative === "below" ? current + 1 : current;
+  level3d.slices.splice(insertIndex, 0, emptyLevel3dSlice(level3dEmptyChar()));
+  level3d.height = height + 1;
+  level3d.slice = insertIndex;
+  syncLevel3dSizeControls();
+  renderLevel3dLayerControls();
+  renderLevel3dLayerBoard();
+  renderLevel3dSourcePreview();
+  level3dStageHit = null;
+  renderLevel3dStageOverlay();
+  refreshLevel3dRuntimePreviews();
+  pushVisualEditUndoSnapshot("level3d", before);
+  setLevel3dActionStatus(`Added slice ${insertIndex + 1}`, "is-ok");
+  return true;
 }
 
 function handleLevel3dSliceHorizontalInput(event) {
@@ -2521,9 +2539,10 @@ function level3dSnippetSource(name, levelData, indent = "", options = {}) {
 
 function levelDefinition3dSource(name, levelData, indent = "", options = {}) {
   const { rows } = normalizeLevel3dSourceData(levelData);
+  const levelName = sanitizeLevel3dName(name);
   const bodyIndent = Object.prototype.hasOwnProperty.call(options, "bodyIndent") ? options.bodyIndent : `${indent}  `;
   return [
-    `${indent}level ${sanitizeLevel3dName(name)} {`,
+    sourcePuzzleLevelHeaderSource(levelName, indent, { defaultName: "level 1", openBlock: true }),
     ...rows.map((row) => String(row || "").length ? `${bodyIndent}${row}` : ""),
     `${indent}}`,
   ].join("\n") + (options.trailingNewline === false ? "" : "\n");
@@ -2569,8 +2588,7 @@ function level3dUsedCharsInRows(rows) {
 }
 
 function sanitizeLevel3dName(value) {
-  const cleaned = String(value || "").trim().replace(/[^\w:.]/g, "_").replace(/^_+/, "");
-  return cleaned || "level_1";
+  return sourcePuzzleLevelName(value, "level 1");
 }
 
 function sanitizeLevel3dBundle(value) {
@@ -2641,8 +2659,8 @@ function findLevel3dDefinitions(source, range) {
   const startIndex = lines.findIndex((line) => line.start >= range.bodyStart);
   for (let index = Math.max(0, startIndex); index < lines.length && lines[index].start < range.bodyEnd; index += 1) {
     const code = level3dScannerCode(lines[index].raw);
-    const match = code.match(/^level\s+([A-Za-z_][\w:.]*)\s*\{$/);
-    if (!match) {
+    const name = sourcePuzzleLevelHeaderName(code);
+    if (name === null || !name || !code.endsWith("{")) {
       continue;
     }
     const close = findLevel3dBlockClose(lines, index);
@@ -2650,7 +2668,7 @@ function findLevel3dDefinitions(source, range) {
       continue;
     }
     definitions.push({
-      name: match[1],
+      name,
       start: lines[index].start,
       bodyStart: lines[index].end + 1,
       bodyEnd: close.start,
@@ -2907,15 +2925,14 @@ function loadLevel3dSourceTarget(target, options = {}) {
   const source = sourceEditorDocumentValue();
   const entry = Number.isInteger(target?.bodyStart) && Number.isInteger(target?.bodyEnd)
     ? sourceEditableEntryFromTarget(source, target, {
-      find: findLevel3dDefinitionAtPosition,
-      defaultName: "level_1",
+      defaultName: "level 1",
       body: (_source, entry) => ({
         bundle: entry.bundle || entry.params?.bundle || "",
         model: entry.model || entry.params?.model || "",
         rows: rowsForLevel3dDefinition(_source, entry),
       }),
     })
-    : findLevel3dDefinitionAtPosition(source, target?.start ?? 0);
+    : null;
   if (!entry) {
     return null;
   }
@@ -2944,7 +2961,7 @@ function loadLevel3dSourceDefinition(entry, source, options = {}) {
     setActiveLevelIndex(levelIndex, exportData);
   }
   if (level3dNameInput) {
-    level3dNameInput.value = entry.name || "level_1";
+    level3dNameInput.value = entry.name || "level 1";
     delete level3dNameInput.dataset.userEdited;
   }
   if (level3dBundleInput) {
@@ -3026,8 +3043,16 @@ function sendLevel3dSnapshotToRuntime() {
 
 function refreshLevel3dRuntimePreviews() {
   level3dStageRendererView = null;
-  sendLevel3dSnapshotToRuntime();
-  sendLevel3dLayerSnapshotToRuntime();
+  if (!level3dRuntimeFrameLoaded || !level3dRuntimeFrame?.contentWindow) {
+    renderLevel3dRuntime();
+  } else {
+    sendLevel3dSnapshotToRuntime();
+  }
+  if (!level3dLayerFrameLoaded || !level3dLayerFrame?.contentWindow) {
+    renderLevel3dLayerRuntime();
+  } else {
+    sendLevel3dLayerSnapshotToRuntime();
+  }
 }
 
 async function startLevel3dPlaytest() {
@@ -3054,6 +3079,7 @@ async function startLevel3dPlaytest() {
   level3dPlaytestSnapshot = level3dNormalizePlaytestSnapshot(snapshot);
   level3dPlaytestActive = true;
   level3dStageHit = null;
+  setLevel3dViewMode("stage");
   updateLevel3dPlaytestControls();
   renderLevel3dStageOverlay();
   refreshLevel3dRuntimePreviews();
@@ -3117,6 +3143,7 @@ function updateLevel3dPlaytestControls() {
     level3dOriginYScrub,
     level3dOriginZScrub,
     level3dResetPreviewButton,
+    level3dLayerViewButton,
   ]) {
     if (element) {
       element.disabled = level3dPlaytestActive;
@@ -3206,7 +3233,7 @@ function level3dNormalizePlaytestSnapshot(snapshot) {
   next.cells = cells;
   if (!Array.isArray(next.levels) || !next.levels.length) {
     next.levels = [{
-      name: level3dNameInput?.value || "level_1",
+      name: level3dNameInput?.value || "level 1",
       label: level3dNameInput?.value || "Level 1",
       size: { ...next.size },
       cells,
@@ -3283,7 +3310,7 @@ function level3dRuntimePreviewUpdate() {
   return {
     levelIndex,
     level: {
-      name: levelEntry.name || level3dNameInput?.value || "level_1",
+      name: levelEntry.name || level3dNameInput?.value || "level 1",
       label: levelEntry.label || levelEntry.name || level3dNameInput?.value || "Level 1",
       size: size ? { ...size } : undefined,
       cells: JSON.parse(JSON.stringify(cells)),
@@ -4234,7 +4261,7 @@ function level3dRuntimePreviewDocument(update) {
     const target = levels[levelIndex] || {};
     levels[levelIndex] = {
       ...target,
-      name: level.name || target.name || "level_1",
+      name: level.name || target.name || "level 1",
       label: level.label || target.label || level.name || target.name || "Level 1",
       size: { ...size },
       cells: JSON.parse(JSON.stringify(cells)),
@@ -4519,7 +4546,7 @@ function level3dPreviewUpdateFromSnapshot(snapshot) {
   return {
     levelIndex,
     level: {
-      name: levelEntry.name || level3dNameInput?.value || "level_1",
+      name: levelEntry.name || level3dNameInput?.value || "level 1",
       label: levelEntry.label || levelEntry.name || level3dNameInput?.value || "Level 1",
       size: size ? { ...size } : undefined,
       cells: level3dCellsWithObjectDescriptors(cells, resources.objects),
@@ -5460,9 +5487,9 @@ function level3dObjectPreviewVoxels(position, object, snapshot) {
           z: Math.max(0, spriteHeight - 1 - z),
         };
         const voxelPosition = {
-          x: Number(position.x) + (grid.x + 0.5) * scale - 0.5,
-          y: Number(position.y) + (grid.y + 0.5) * scale - 0.5,
-          z: Number(position.z) + (grid.z + 0.5) * scale - 0.5,
+          x: Number(position.x) + (grid.x + 0.5 - spriteWidth / 2) * scale,
+          y: Number(position.y) + (grid.y + 0.5 - spriteDepth / 2) * scale,
+          z: Number(position.z) + (grid.z + 0.5 - spriteHeight / 2) * scale,
         };
         voxels.push({
           fill,
@@ -5931,7 +5958,7 @@ function level3dClampNumber(value, min, max) {
 }
 
 async function copyLevel3dToClipboard() {
-  const levelName = sanitizeLevel3dName(level3dNameInput?.value || currentLevel3dEntry()?.name || "level_1");
+  const levelName = sanitizeLevel3dName(level3dNameInput?.value || currentLevel3dEntry()?.name || "level 1");
   await copyTextToClipboard(level3dSnippetSource(levelName, level3dSourceData(), "", { bodyIndent: "" }));
   setLevel3dActionStatus("Copied 3D level", "is-ok");
 }
@@ -5942,7 +5969,7 @@ function addLevel3dToSource() {
     setLevel3dActionStatus("No game entry for 3D level", "is-error");
     return;
   }
-  const levelName = sanitizeLevel3dName(level3dNameInput?.value || "level_1");
+  const levelName = sanitizeLevel3dName(level3dNameInput?.value || "level 1");
   const bundle = sanitizeLevel3dBundle(level3dBundleInput?.value || "");
   const nextSource = insertLevel3d(level3dEditorSource(sourceDocument), levelName, level3dSourceData(), bundle);
   if (!nextSource) {
@@ -5961,7 +5988,7 @@ function updateLevel3dInSource() {
     setLevel3dActionStatus("No game entry for 3D level", "is-error");
     return;
   }
-  const levelName = sanitizeLevel3dName(level3dNameInput?.value || "level_1");
+  const levelName = sanitizeLevel3dName(level3dNameInput?.value || "level 1");
   const bundle = sanitizeLevel3dBundle(level3dBundleInput?.value || "");
   const result = replaceLevel3dByName(level3dEditorSource(sourceDocument), levelName, level3dSourceData(), bundle);
   if (!result) {
@@ -6288,6 +6315,8 @@ document.addEventListener("click", (event) => {
   });
 });
 level3dResetPreviewButton?.addEventListener("click", resetLevel3dPreviewView);
+level3dStageViewButton?.addEventListener("click", () => setLevel3dViewMode("stage"));
+level3dLayerViewButton?.addEventListener("click", () => setLevel3dViewMode("layer"));
 level3dLayerInput?.addEventListener("change", applyLevel3dLayerInput);
 level3dLayerInput?.addEventListener("keydown", (event) => {
   if (event.key !== "Enter") {
@@ -6306,6 +6335,8 @@ window.addEventListener("pointercancel", stopLevel3dSliceScrub, true);
 window.addEventListener("blur", () => finishLevel3dSliceScrub());
 level3dPreviousLayerButton?.addEventListener("click", () => moveLevel3dLayer(-1));
 level3dNextLayerButton?.addEventListener("click", () => moveLevel3dLayer(1));
+level3dAddSliceAboveButton?.addEventListener("click", () => insertLevel3dSlice("above"));
+level3dAddSliceBelowButton?.addEventListener("click", () => insertLevel3dSlice("below"));
 level3dLayerBoard?.addEventListener("pointerdown", startLevel3dLayerPaint);
 level3dLayerBoard?.addEventListener("pointermove", continueLevel3dLayerPaint);
 level3dLayerBoard?.addEventListener("pointerup", stopLevel3dLayerPaint);
@@ -6372,6 +6403,5 @@ copyLevel3dButton?.addEventListener("click", () => {
 addLevel3dButton?.addEventListener("click", addLevel3dToSource);
 updateLevel3dButton?.addEventListener("click", updateLevel3dInSource);
 registerSourceEditableTarget?.("level3d", {
-  find: findLevel3dDefinitionAtPosition,
   load: loadLevel3dFromSourcePosition,
 });

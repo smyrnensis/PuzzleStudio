@@ -1,4 +1,4 @@
-const soundPlayIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><polygon points="8 5 19 12 8 19 8 5"></polygon></svg>';
+const soundPlayIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 11 7-11 7V5z"></path></svg>';
 const soundPauseIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14"></path><path d="M16 5v14"></path></svg>';
 const soundMusicBarOptions = [8, 16, 32, 64];
 
@@ -49,8 +49,16 @@ function renderSoundsBuilder() {
   renderSoundMusic();
 }
 
+function soundSfxType() {
+  return soundsSfxTypeSelect.value || "random";
+}
+
 function soundSfxEffect() {
-  return soundsApi().generateSoundEffect(soundsSfxSeedInput.value, { type: soundsSfxTypeSelect.value });
+  const api = soundsApi();
+  if (soundSfxType() === "puzzlescript" && api?.generatePuzzleScriptSoundEffect) {
+    return api.generatePuzzleScriptSoundEffect(soundsSfxSeedInput.value);
+  }
+  return api.generateSoundEffect(soundsSfxSeedInput.value, { type: soundSfxType() });
 }
 
 function soundSfxVolume() {
@@ -134,7 +142,11 @@ async function playSoundSfx() {
   }
   await ensureAudioContext();
   sounds.sfxPlayer?.stop();
-  sounds.sfxPlayer = api.createSfxPlayer(sounds.context, soundSfxEffect(), { volume: soundSfxVolume() });
+  if (soundSfxType() === "puzzlescript" && api?.createPuzzleScriptSfxPlayer) {
+    sounds.sfxPlayer = api.createPuzzleScriptSfxPlayer(sounds.context, soundSfxEffect(), { volume: soundSfxVolume() });
+  } else {
+    sounds.sfxPlayer = api.createSfxPlayer(sounds.context, soundSfxEffect(), { volume: soundSfxVolume() });
+  }
   sounds.sfxPlayer.start(sounds.context.currentTime);
   renderSoundSfx();
 }
@@ -1072,7 +1084,6 @@ soundsMusicProgress.addEventListener("keydown", (event) => {
   }
 });
 registerSourceEditableTarget?.("sounds", {
-  find: findSoundsDefinitionAtPosition,
   load: loadSoundFromSourcePosition,
 });
 
