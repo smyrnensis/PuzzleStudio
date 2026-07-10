@@ -1,5 +1,9 @@
-const sourceEditor = document.querySelector("#sourceEditor");
 const sourceEditorWrap = document.querySelector("#sourceEditorWrap");
+const sourceEditorMount = document.querySelector("#sourceEditorMount");
+if (typeof window.PuzzleSourceEditorBundle?.createSourceEditor !== "function") {
+  throw new Error("Required CodeMirror source editor bundle is unavailable.");
+}
+const sourceEditor = window.PuzzleSourceEditorBundle.createSourceEditor(sourceEditorMount);
 const sourceLineNumbers = document.querySelector("#sourceLineNumbers");
 const sourceHighlight = document.querySelector("#sourceHighlight");
 let previewFrame = document.querySelector("#previewFrame");

@@ -5,6 +5,12 @@ highlighting integration, workspace behavior, and editor-owned layout.
 
 ## Generated Output
 
+`static/editor_codemirror.js` is generated from `web/src/editor_codemirror.js`
+and the locked npm dependencies under `web/`. Do not edit the bundle directly.
+Install dependencies with `npm ci` in `crates/html_editor/web`, then regenerate
+it with `tools/build_editor_frontend.sh`. A missing bundle is an error; do not
+load CodeMirror from a CDN or fall back to the old textarea editor.
+
 The web release surface is the GitHub Pages site under `docs/`, not a root
 single-file `editor.html`. Patch this crate's source owner, such as `src/` or
 `static/`, then regenerate the Pages site through `tools/generate_web_editor.sh`

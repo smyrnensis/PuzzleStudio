@@ -1552,7 +1552,7 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   min-width: 0;
   min-height: 0;
   position: relative;
-  overflow: auto;
+  overflow: hidden;
   background: var(--code-bg);
   --source-selection-bg: color-mix(in srgb, var(--accent) 34%, transparent);
   --source-line-number-width: 44px;
@@ -1560,7 +1560,63 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   --source-line-gutter-width: calc(var(--source-line-number-width) + var(--source-fold-gutter-width));
 }
 
-#sourceEditor,
+.source-editor-mount,
+.source-editor-mount > .cm-editor {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.source-editor-mount > .cm-editor {
+  background: var(--code-bg);
+  color: var(--code-ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.source-editor-mount .cm-scroller {
+  min-width: 0;
+  min-height: 0;
+  font-family: inherit;
+  line-height: inherit;
+}
+
+.source-editor-mount .cm-content#sourceEditor {
+  box-sizing: border-box;
+  padding: 16px;
+  margin: 0;
+  color: var(--code-ink);
+  caret-color: var(--code-ink);
+  font: inherit;
+  font-variant-ligatures: none;
+  font-feature-settings: "liga" 0, "calt" 0;
+  tab-size: 2;
+}
+
+.source-editor-mount .cm-gutters {
+  min-width: 44px;
+  border-right: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+  background: var(--code-bg);
+  color: var(--muted);
+}
+
+.source-editor-mount .cm-lineNumbers .cm-gutterElement {
+  min-width: 44px;
+  padding: 0 8px 0 6px;
+  line-height: 20px;
+}
+
+.source-editor-mount .cm-content::selection,
+.source-editor-mount .cm-content ::selection {
+  background: var(--source-selection-bg) !important;
+}
+
+.source-editor-mount > .cm-editor.cm-focused {
+  outline: none;
+}
+
 .source-highlight {
   box-sizing: border-box;
   width: 100%;
@@ -1739,35 +1795,14 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   background: transparent;
 }
 
-#sourceEditor {
-  position: relative;
-  z-index: 1;
-  min-width: 0;
-  min-height: 100%;
-  resize: none;
-  overflow: hidden;
-  border: 0;
-  outline: none;
-  background: transparent;
-  color: transparent;
-  caret-color: var(--code-ink);
-}
-
 .source-editor-wrap.is-plain-source .source-highlight {
   display: none;
-}
-
-.source-editor-wrap.is-plain-source #sourceEditor {
-  color: var(--code-ink);
 }
 
 #sourceEditor.has-source-block-selection {
   caret-color: transparent;
 }
 
-#sourceEditor::selection {
-  background: var(--source-selection-bg);
-}
 
 .syntax-asset { color: var(--syntax-asset); }
 .syntax-color {

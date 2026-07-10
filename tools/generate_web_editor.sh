@@ -27,6 +27,7 @@ done
 
 output_dir="$(dirname "$output")"
 mkdir -p "$output_dir"
+"$repo_root/tools/build_editor_frontend.sh"
 if ((${#args[@]})); then
   cargo run -p html-editor -- "${args[@]}"
 else

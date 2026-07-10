@@ -299,12 +299,19 @@ function sourceFoldRangesForSource(source) {
 }
 
 function sourceFoldStateForSource(source = sourceEditorDocumentValue()) {
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
+    return [];
+  }
   return sourceFoldableBlocks(source)
     .filter((block) => sourceFoldedBlockKeys.has(block.key))
     .map((block) => block.key);
 }
 
 function restoreSourceFoldState(keys = []) {
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
+    resetSourceFoldingState();
+    return false;
+  }
   const validKeys = new Set(sourceFoldableBlocks(sourceEditorDocumentValue()).map((block) => block.key));
   sourceFoldedBlockKeys = new Set(
     (Array.isArray(keys) ? keys : []).filter((key) => typeof key === "string" && validKeys.has(key)),
@@ -671,11 +678,19 @@ function sourceSnapshotWithChangedRangeSelection(snapshot, nextValue) {
 }
 
 function resetSourceUndoHistory() {
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
+    sourceUndoStack = [];
+    sourceRedoStack = [];
+    return;
+  }
   sourceUndoStack = [sourceEditorSnapshot()];
   sourceRedoStack = [];
 }
 
 function ensureSourceUndoHistory() {
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
+    return;
+  }
   if (!sourceUndoStack.length || sourceUndoStack.at(-1)?.value !== sourceEditorDocumentValue()) {
     resetSourceUndoHistory();
     return;
@@ -687,7 +702,7 @@ function ensureSourceUndoHistory() {
 }
 
 function recordSourceUndoSnapshot() {
-  if (sourceUndoApplying) {
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror" || sourceUndoApplying) {
     return;
   }
   const snapshot = sourceEditorSnapshot();
@@ -786,7 +801,13 @@ function setSourceEditorValue(value, options = {}) {
     return;
   }
   resetSourceFoldingState();
-  sourceEditor.value = nextValue;
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
+    sourceEditor.sourceEditorPort.replaceDocument(nextValue, {
+      preserveHistory: preservesUndo,
+    });
+  } else {
+    sourceEditor.value = nextValue;
+  }
   updateSourceMeta();
   if (sourceDocumentSupportsEditableTargets()) {
     scheduleSourceHighlight(true, { preserveCurrent: preserveCurrentHighlight });
@@ -804,6 +825,10 @@ function setSourceEditorValue(value, options = {}) {
 }
 
 function scheduleSourceHighlight(immediate = false, options = {}) {
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
+    setSourcePlainTextMode(true);
+    return;
+  }
   if (!sourceDocumentSupportsEditableTargets()) {
     resetSourcePuzzleAnalysisState();
     return;
@@ -1295,26 +1320,46 @@ function syncSourceHighlightTransform() {
 }
 
 function sourceScrollTop() {
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
+    return sourceEditor.sourceEditorPort.scrollTop();
+  }
   return sourceEditorWrap.scrollTop || 0;
 }
 
 function sourceScrollLeft() {
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
+    return sourceEditor.sourceEditorPort.scrollLeft();
+  }
   return sourceEditorWrap.scrollLeft || 0;
 }
 
 function setSourceScrollTop(value) {
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
+    sourceEditor.sourceEditorPort.scrollTop(value);
+    return;
+  }
   sourceEditorWrap.scrollTop = Math.max(0, value || 0);
 }
 
 function setSourceScrollLeft(value) {
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
+    sourceEditor.sourceEditorPort.scrollLeft(value);
+    return;
+  }
   sourceEditorWrap.scrollLeft = Math.max(0, value || 0);
 }
 
 function sourceViewportHeight() {
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
+    return sourceEditor.sourceEditorPort.viewportSize().height;
+  }
   return sourceEditorWrap.clientHeight;
 }
 
 function sourceViewportWidth() {
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
+    return sourceEditor.sourceEditorPort.viewportSize().width;
+  }
   return sourceEditorWrap.clientWidth;
 }
 
@@ -2715,6 +2760,10 @@ function renderSourceFindMatches() {
 }
 
 function scrollSourceOffsetIntoView(offset) {
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
+    sourceEditor.sourceEditorPort.scrollIntoView(offset);
+    return;
+  }
   const rect = sourceCaretRectForOffset(offset);
   if (!rect) {
     return;
@@ -2774,6 +2823,18 @@ function sourceEditorCaretPoint(offset) {
 function sourceCaretRectForOffset(offset) {
   const source = sourceEditor.value || "";
   const safeOffset = Math.max(0, Math.min(source.length, offset || 0));
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
+    const rect = sourceEditor.sourceEditorPort.coordsAtOffset(safeOffset);
+    if (!rect) {
+      return null;
+    }
+    const wrapRect = sourceEditorWrap.getBoundingClientRect();
+    return {
+      left: rect.left - wrapRect.left,
+      top: rect.top - wrapRect.top,
+      height: rect.height,
+    };
+  }
   const domPosition = sourceHighlightDomPositionForOffset(safeOffset);
   if (!domPosition) {
     const fallback = sourceEditorCaretPoint(safeOffset);
@@ -2878,6 +2939,10 @@ function sourceHighlightDomPositionForOffset(offset) {
 }
 
 function sourceVisualOffsetFromPoint(clientX, clientY) {
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
+    const offset = sourceEditor.sourceEditorPort.offsetAtCoords(clientX, clientY);
+    return Number.isInteger(offset) ? offset : null;
+  }
   if (!sourceHighlight || !sourceEditor) {
     return null;
   }
@@ -3285,6 +3350,9 @@ function formatHexColorToken(rgb, alpha) {
 
 function handleSourceBeforeInputTextInsert(event) {
   if (!isTextDocument(documents[currentDocumentIndex])) {
+    return;
+  }
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
     return;
   }
   if (sourceFoldsActive() && event.inputType !== "historyUndo" && event.inputType !== "historyRedo") {
@@ -5775,6 +5843,9 @@ sourceEditor.addEventListener("keydown", (event) => {
     event.preventDefault();
     event.stopPropagation();
     closeSourceFindPanel();
+    return;
+  }
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
     return;
   }
   if (sourceFoldsActive() && sourceKeydownWillEdit(event)) {
