@@ -1,0 +1,15 @@
+{
+  "name": "puzzlestudio-html-editor-web",
+  "private": true,
+  "scripts": {
+    "build": "esbuild src/editor_codemirror.js --bundle --format=iife --global-name=PuzzleSourceEditorBundle --minify --outfile=../static/editor_codemirror.js"
+  },
+  "dependencies": {
+    "@codemirror/commands": "6.10.4",
+    "@codemirror/state": "6.7.1",
+    "@codemirror/view": "6.43.6"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.1"
+  }
+}

@@ -179,9 +179,7 @@
             </div>
           </div>
           <div id="sourceEditorWrap" class="source-editor-wrap">
-            <pre id="sourceLineNumbers" class="source-line-numbers" aria-hidden="true"></pre>
-            <pre id="sourceHighlight" class="source-highlight" aria-hidden="true"></pre>
-            <textarea id="sourceEditor" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
+            <div id="sourceEditorMount" class="source-editor-mount"></div>
           </div>
           <div class="code-footer pane-footer">
             <span id="editorStatusLabel" class="document-status" data-pane-status="source">Idle</span>
@@ -1338,6 +1336,7 @@
 
     <script src="renderer.js?v=board-canvas-visuals"></script>
     <script src="sound-generator.js"></script>
+    <script src="editor_codemirror.js"></script>
     <script src="editor_dom.js"></script>
     <script src="editor_workspace.js?v=outline-pane-layout"></script>
     <script src="editor_color.js"></script>

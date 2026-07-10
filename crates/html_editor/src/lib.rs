@@ -82,6 +82,8 @@ const EDITOR_RUNTIME_JS: &str = include_str!("../static/editor_runtime.js");
 #[cfg(feature = "embedded-assets")]
 const EDITOR_BOOT_JS: &str = include_str!("../static/editor_boot.js");
 #[cfg(feature = "embedded-assets")]
+const EDITOR_CODEMIRROR_JS: &str = include_str!("../static/editor_codemirror.js");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_DOM_JS: &str = include_str!("../static/editor_dom.js");
 #[cfg(feature = "embedded-assets")]
 const EDITOR_WORKSPACE_JS: &str = include_str!("../static/editor_workspace.js");
@@ -1348,6 +1350,9 @@ fn route(request: &HttpRequest, service: &EditorService) -> Vec<u8> {
         ("GET", "/renderer.css") => http_ok("text/css; charset=utf-8", RENDERER_CSS),
         ("GET", "/game.css") => http_ok("text/css; charset=utf-8", &service.state().game_css),
         ("GET", "/editor_boot.js") => http_ok("text/javascript; charset=utf-8", EDITOR_BOOT_JS),
+        ("GET", "/editor_codemirror.js") => {
+            http_ok("text/javascript; charset=utf-8", EDITOR_CODEMIRROR_JS)
+        }
         ("GET", "/editor_runtime.js") => {
             http_ok("text/javascript; charset=utf-8", EDITOR_RUNTIME_JS)
         }
@@ -2040,6 +2045,7 @@ fn write_pages_editor_site(output_path: &Path, html: String) -> Result<(), AppEr
     write_text_asset(output_dir, "editor.css", EDITOR_CSS)?;
     write_text_asset(output_dir, "editor_runtime.js", EDITOR_RUNTIME_JS)?;
     write_text_asset(output_dir, "editor_boot.js", EDITOR_BOOT_JS)?;
+    write_text_asset(output_dir, "editor_codemirror.js", EDITOR_CODEMIRROR_JS)?;
     write_text_asset(output_dir, "editor_dom.js", EDITOR_DOM_JS)?;
     write_text_asset(output_dir, "editor_workspace.js", &editor_workspace_js())?;
     write_text_asset(output_dir, "editor_color.js", EDITOR_COLOR_JS)?;
@@ -5253,24 +5259,23 @@ levels3 demo of push3 {
     }
 
     #[test]
-    fn editor_source_line_numbers_are_loaded_by_static_editor() {
-        assert!(EDITOR_HTML.contains(r#"id="sourceLineNumbers""#));
-        assert!(EDITOR_DOM_JS.contains(
-            r##"const sourceLineNumbers = document.querySelector("#sourceLineNumbers");"##
-        ));
-        assert!(EDITOR_CSS.contains(".source-line-numbers"));
-        assert!(EDITOR_SOURCE_JS.contains(
-            r#"const visibleLines = visibleSource.length ? visibleSource.split("\n") : [""];"#
-        ));
-        assert!(EDITOR_SOURCE_JS.contains("sourceFoldableBlocks(source)"));
-        assert!(EDITOR_SOURCE_JS.contains("sourceFoldMarkerHighlightRuns(runs, range)"));
-        assert!(EDITOR_SOURCE_JS.contains("range.closeOffset, range.closeOffset + 1"));
-        assert!(EDITOR_SOURCE_JS.contains("function sourceFoldStateForSource("));
-        assert!(EDITOR_WORKSPACE_JS.contains("sourceFoldedBlockKeys"));
+    fn editor_source_uses_bundled_codemirror() {
+        assert!(EDITOR_HTML.contains(r#"id="sourceEditorMount""#));
+        assert!(!EDITOR_HTML.contains(r#"id="sourceLineNumbers""#));
+        assert!(!EDITOR_HTML.contains(r#"id="sourceHighlight""#));
+        assert!(!EDITOR_HTML.contains(r#"<textarea id="sourceEditor""#));
+        let bundle = EDITOR_HTML
+            .find(r#"<script src="editor_codemirror.js"></script>"#)
+            .expect("CodeMirror bundle script");
+        let dom = EDITOR_HTML
+            .find(r#"<script src="editor_dom.js"></script>"#)
+            .expect("editor DOM script");
+        assert!(bundle < dom);
+        assert!(EDITOR_DOM_JS.contains("PuzzleSourceEditorBundle.createSourceEditor"));
+        assert!(EDITOR_CODEMIRROR_JS.contains("createSourceEditor"));
         assert!(
-            EDITOR_WORKSPACE_JS.contains("restoreSourceFoldState(document.sourceFoldedBlockKeys)")
+            EDITOR_SOURCE_JS.contains("sourceEditor.sourceEditorPort?.kind === \"codemirror\"")
         );
-        assert!(EDITOR_JS.contains("renderSourceLineNumbers();"));
     }
 
     #[test]
@@ -6888,14 +6893,12 @@ move
     }
 
     #[test]
-    fn source_layers_share_native_scroll_container() {
-        assert!(EDITOR_CSS.contains(".source-editor-wrap {\n  min-width: 0;\n  min-height: 0;\n  position: relative;\n  overflow: auto;"));
-        assert!(
-            EDITOR_CSS.contains(
-                "#sourceEditor,\n.source-highlight {\n  box-sizing: border-box;\n  width: 100%;\n  min-height: 100%;"
-            )
-        );
-        assert!(EDITOR_CSS.contains("  overflow: hidden;\n  border: 0;"));
+    fn source_editor_uses_codemirror_scroll_port() {
+        assert!(EDITOR_CSS.contains(".source-editor-wrap {\n  min-width: 0;\n  min-height: 0;\n  position: relative;\n  overflow: hidden;"));
+        assert!(EDITOR_CSS.contains(".source-editor-mount .cm-scroller"));
+        assert!(EDITOR_CSS.contains(".source-editor-mount .cm-content#sourceEditor"));
+        assert!(EDITOR_SOURCE_JS.contains("return sourceEditor.sourceEditorPort.scrollTop();"));
+        assert!(EDITOR_SOURCE_JS.contains("sourceEditor.sourceEditorPort.scrollTop(value);"));
         assert!(
             EDITOR_SOURCE_JS
                 .contains("function syncSourceOverlayLayerMetrics(clientWidth, scrollHeight)")
@@ -6930,26 +6933,22 @@ move
             "--source-selection-bg: color-mix(in srgb, var(--accent) 34%, transparent);"
         ));
         assert!(EDITOR_CSS.contains(".source-block-selection-range {\n  position: absolute;\n  min-width: 2px;\n  background: var(--source-selection-bg);\n}"));
-        assert!(
-            EDITOR_CSS.contains(
-                "#sourceEditor::selection {\n  background: var(--source-selection-bg);\n}"
-            )
-        );
+        assert!(EDITOR_CSS.contains(".source-editor-mount .cm-content ::selection"));
     }
 
     #[test]
-    fn source_editor_keeps_native_caret_visible() {
+    fn source_editor_keeps_codemirror_caret_visible() {
         let start = EDITOR_CSS
-            .find("#sourceEditor {")
+            .find(".source-editor-mount .cm-content#sourceEditor {")
             .expect("source editor CSS block");
         let end = EDITOR_CSS[start..]
             .find("\n}")
             .map(|offset| start + offset)
             .expect("source editor CSS block end");
         let block = &EDITOR_CSS[start..end];
-        assert!(block.contains("color: transparent;"));
+        assert!(block.contains("color: var(--code-ink);"));
         assert!(block.contains("caret-color: var(--code-ink);"));
-        assert!(!block.contains("-webkit-text-fill-color: transparent;"));
+        assert!(!block.contains("color: transparent;"));
     }
 
     #[test]

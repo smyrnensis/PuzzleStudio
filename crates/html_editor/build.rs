@@ -44,6 +44,7 @@ fn main() {
     println!("cargo:rerun-if-changed=docs/theme.md");
     println!("cargo:rerun-if-changed=docs/sounds.md");
     println!("cargo:rerun-if-changed=static/editor_boot.js");
+    println!("cargo:rerun-if-changed=static/editor_codemirror.js");
     println!("cargo:rerun-if-changed=static/editor_runtime.js");
     println!("cargo:rerun-if-changed=static/editor_dom.js");
     println!("cargo:rerun-if-changed=static/editor_workspace.js");
