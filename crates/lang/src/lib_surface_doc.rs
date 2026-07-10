@@ -293,11 +293,8 @@ fn surface_structural_blocks(scan: &SurfaceScan) -> Vec<SurfaceStructuralBlock> 
                             .and_then(|spec| spec.content)
                     });
                     let parent = stack.iter().rev().find_map(|index| {
-                        matches!(
-                            blocks[*index].role,
-                            SurfaceStructuralBlockRole::SourceTree
-                        )
-                        .then_some(*index)
+                        matches!(blocks[*index].role, SurfaceStructuralBlockRole::SourceTree)
+                            .then_some(*index)
                     });
                     let block = SurfaceStructuralBlock {
                         header: header.clone(),
@@ -365,7 +362,8 @@ fn surface_highlight_ranges(scan: &SurfaceScan) -> SurfaceHighlightRanges {
         scan_visual_named_color_surface_ranges(scan, &visual_color_aliases);
     ranges.visual_ascii_color_ranges =
         scan_visual_ascii_color_surface_ranges(scan, &visual_color_aliases);
-    ranges.visual_separator_ranges = scan_visual_separator_surface_ranges(scan, &visual_color_aliases);
+    ranges.visual_separator_ranges =
+        scan_visual_separator_surface_ranges(scan, &visual_color_aliases);
     ranges
 }
 
@@ -516,7 +514,8 @@ fn starts_level_header(
     if !levels_is_2d || trimmed.is_empty() {
         return false;
     }
-    matches!(tokens, ["level", ..]) || (scope == Some(SourceScope::Levels) && matches!(tokens, ["{"]))
+    matches!(tokens, ["level", ..])
+        || (scope == Some(SourceScope::Levels) && matches!(tokens, ["{"]))
 }
 
 fn starts_implicit_unbraced_level_row(trimmed: &str, tokens: &[&str]) -> bool {
@@ -559,7 +558,8 @@ fn is_level_ascii_map_row(
     if trimmed.is_empty() || trimmed == "}" {
         return false;
     }
-    if !implicit_level_row && !matches!(scope, Some(SourceScope::Level | SourceScope::UnbracedLevel))
+    if !implicit_level_row
+        && !matches!(scope, Some(SourceScope::Level | SourceScope::UnbracedLevel))
     {
         return false;
     }
@@ -608,7 +608,10 @@ fn scan_visual_shape_ascii_surface_ranges(scan: &SurfaceScan) -> Vec<SurfaceAsci
                 line.scope,
                 Some(SourceScope::VisualShapeTable | SourceScope::VisualShapeEntry)
             )
-            && scan.raw_ranges.iter().any(|range| range.start == line.start)
+            && scan
+                .raw_ranges
+                .iter()
+                .any(|range| range.start == line.start)
         {
             add_known_ascii_line_surface_ranges(&mut ranges, line);
         }
@@ -626,7 +629,10 @@ fn scan_visual_shape_ascii_surface_ranges(scan: &SurfaceScan) -> Vec<SurfaceAsci
     ranges
 }
 
-fn add_known_ascii_line_surface_ranges(ranges: &mut Vec<SurfaceAsciiRange>, line: &SurfaceScanLine) {
+fn add_known_ascii_line_surface_ranges(
+    ranges: &mut Vec<SurfaceAsciiRange>,
+    line: &SurfaceScanLine,
+) {
     let known_chars = line
         .content
         .chars()
@@ -815,40 +821,28 @@ fn scan_visual_separator_surface_ranges(
     ranges
 }
 
-#[derive(Default)]
-struct VisualSpritePixelScan {
-    palette: HashMap<char, String>,
-}
-
-impl VisualSpritePixelScan {
-    fn has_palette(&self) -> bool {
-        !self.palette.is_empty()
-    }
-}
-
 fn scan_braced_visual_sprite_entry(
     scan: &SurfaceScan,
     start: usize,
     aliases: &HashMap<String, String>,
     ranges: &mut Vec<SurfaceVisualAsciiColorRange>,
 ) -> usize {
-    let mut scan_state = VisualSpritePixelScan::default();
     let mut index = start + 1;
     while index < scan.lines.len() {
         let line = &scan.lines[index];
         if line.scope == Some(SourceScope::Visuals) {
             break;
         }
-        scan_visual_sprite_body_line(&mut scan_state, ranges, line, aliases);
         index += 1;
     }
+    add_sprite_syntax_pixel_ranges(&scan.lines[start + 1..index], aliases, ranges);
     index.max(start + 1)
 }
 
 fn scan_braced_visual_sprite_separators(
     scan: &SurfaceScan,
     start: usize,
-    aliases: &HashMap<String, String>,
+    _aliases: &HashMap<String, String>,
     ranges: &mut Vec<SourceSpan>,
 ) -> usize {
     let mut index = start + 1;
@@ -857,9 +851,9 @@ fn scan_braced_visual_sprite_separators(
         if line.scope == Some(SourceScope::Visuals) {
             break;
         }
-        scan_visual_sprite_separator_line(ranges, line, aliases);
         index += 1;
     }
+    add_sprite_syntax_separator_ranges(&scan.lines[start + 1..index], ranges);
     index.max(start + 1)
 }
 
@@ -869,23 +863,56 @@ fn scan_unbraced_visual_sprite_entry(
     aliases: &HashMap<String, String>,
     ranges: &mut Vec<SurfaceVisualAsciiColorRange>,
 ) -> usize {
-    let mut scan_state = VisualSpritePixelScan::default();
     let mut index = start + 1;
     while index < scan.lines.len() {
         let line = &scan.lines[index];
         if line.scope != Some(SourceScope::VisualShapeEntry) || is_visual_closing_line(line) {
             break;
         }
-        scan_visual_sprite_body_line(&mut scan_state, ranges, line, aliases);
         index += 1;
     }
+    add_sprite_syntax_pixel_ranges(&scan.lines[start + 1..index], aliases, ranges);
     index.max(start + 1)
+}
+
+fn add_sprite_syntax_pixel_ranges(
+    lines: &[SurfaceScanLine],
+    aliases: &HashMap<String, String>,
+    ranges: &mut Vec<SurfaceVisualAsciiColorRange>,
+) {
+    let body = lines
+        .iter()
+        .map(|line| line.content.clone())
+        .collect::<Vec<_>>();
+    let syntax = crate::sprite_authoring::parse_sprite_node(None, &body);
+    let Some(colors) = syntax.colors else {
+        return;
+    };
+    let color_tokens = colors.iter().map(String::as_str).collect::<Vec<_>>();
+    let Some(palette) = visual_ascii_palette(&color_tokens, aliases) else {
+        return;
+    };
+    let row_indexes = match syntax.shape {
+        Some(crate::sprite_authoring::SpriteShapeSyntax::Inline { frames, .. }) => frames
+            .into_iter()
+            .flatten()
+            .map(|row| row.body_line)
+            .collect::<HashSet<_>>(),
+        _ => HashSet::new(),
+    };
+    for (index, line) in lines.iter().enumerate() {
+        let raw = strip_line_comment(&line.content);
+        let trimmed = raw.trim();
+        if row_indexes.contains(&index) {
+            add_visual_ascii_row_surface_ranges(ranges, line.start, raw, trimmed, &palette);
+        }
+    }
 }
 
 fn scan_unbraced_visual_sprite_separators(
     scan: &SurfaceScan,
     start: usize,
-    aliases: &HashMap<String, String>,
+    _aliases: &HashMap<String, String>,
     ranges: &mut Vec<SourceSpan>,
 ) -> usize {
     let mut index = start + 1;
@@ -894,58 +921,29 @@ fn scan_unbraced_visual_sprite_separators(
         if line.scope != Some(SourceScope::VisualShapeEntry) || is_visual_closing_line(line) {
             break;
         }
-        scan_visual_sprite_separator_line(ranges, line, aliases);
         index += 1;
     }
+    add_sprite_syntax_separator_ranges(&scan.lines[start + 1..index], ranges);
     index.max(start + 1)
 }
 
-fn scan_visual_sprite_body_line(
-    scan_state: &mut VisualSpritePixelScan,
-    ranges: &mut Vec<SurfaceVisualAsciiColorRange>,
-    line: &SurfaceScanLine,
-    aliases: &HashMap<String, String>,
-) {
-    let raw = strip_line_comment(&line.content);
-    let trimmed = raw.trim();
-    if trimmed.is_empty() || trimmed == "}" {
-        return;
+fn add_sprite_syntax_separator_ranges(lines: &[SurfaceScanLine], ranges: &mut Vec<SourceSpan>) {
+    let body = lines
+        .iter()
+        .map(|line| line.content.clone())
+        .collect::<Vec<_>>();
+    let syntax = crate::sprite_authoring::parse_sprite_node(None, &body);
+    for index in syntax.separator_body_lines {
+        let Some(line) = lines.get(index) else {
+            continue;
+        };
+        let raw = strip_line_comment(&line.content);
+        let leading = raw.len() - raw.trim_start().len();
+        ranges.push(SourceSpan {
+            start: line.start + leading,
+            end: line.start + leading + 1,
+        });
     }
-    let tokens = line.tokens.iter().map(String::as_str).collect::<Vec<_>>();
-    if let Some(palette) = visual_ascii_palette_for_line(&tokens, aliases) {
-        scan_state.palette = palette;
-        return;
-    }
-    if scan_state.has_palette() && visual_ascii_row(trimmed, &scan_state.palette) {
-        add_visual_ascii_row_surface_ranges(
-            ranges,
-            line.start,
-            raw,
-            trimmed,
-            &scan_state.palette,
-        );
-    }
-}
-
-fn scan_visual_sprite_separator_line(
-    ranges: &mut Vec<SourceSpan>,
-    line: &SurfaceScanLine,
-    aliases: &HashMap<String, String>,
-) {
-    let raw = strip_line_comment(&line.content);
-    let trimmed = raw.trim();
-    if trimmed != ">" {
-        return;
-    }
-    let tokens = line.tokens.iter().map(String::as_str).collect::<Vec<_>>();
-    if visual_ascii_palette_for_line(&tokens, aliases).is_some() {
-        return;
-    }
-    let leading = raw.len() - raw.trim_start().len();
-    ranges.push(SourceSpan {
-        start: line.start + leading,
-        end: line.start + leading + ">".len(),
-    });
 }
 
 fn visual_sprite_entry_header_line(
@@ -1051,28 +1049,11 @@ fn visual_ascii_palette(
     (!palette.is_empty()).then_some(palette)
 }
 
-fn visual_ascii_palette_for_line(
-    tokens: &[&str],
-    aliases: &HashMap<String, String>,
-) -> Option<HashMap<char, String>> {
-    match tokens {
-        ["colors", "=", colors @ ..] if !colors.is_empty() => visual_ascii_palette(colors, aliases),
-        ["colors", colors @ ..] if !colors.is_empty() => visual_ascii_palette(colors, aliases),
-        colors => visual_ascii_palette(colors, aliases),
-    }
-}
-
 fn visual_color_value_for_token(token: &str, aliases: &HashMap<String, String>) -> Option<String> {
     if let Some(color) = aliases.get(token) {
         return Some(color.clone());
     }
     highlightable_visual_color_token(token).then(|| token.to_string())
-}
-
-fn visual_ascii_row(row: &str, palette: &HashMap<char, String>) -> bool {
-    !row.is_empty()
-        && !row.contains(char::is_whitespace)
-        && row.chars().all(|ch| ch == '.' || palette.contains_key(&ch))
 }
 
 fn add_visual_ascii_row_surface_ranges(
@@ -1312,9 +1293,9 @@ fn surface_visual_shape_ref_token(value: &str) -> bool {
     };
     surface_identifier_token(table)
         && !value.is_empty()
-        && value.chars().all(|ch| {
-            ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '+' | '*' | '(' | ')')
-        })
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '+' | '*' | '(' | ')'))
 }
 
 fn surface_visual_shape_name_token(value: &str) -> bool {
@@ -1328,9 +1309,9 @@ fn surface_visual_shape_name_token(value: &str) -> bool {
         return false;
     };
     (first.is_ascii_alphabetic() || first == '_')
-        && value.chars().all(|ch| {
-            ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '+' | '*' | '(' | ')')
-        })
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '+' | '*' | '(' | ')'))
 }
 
 fn surface_identifier_token(value: &str) -> bool {
@@ -1433,7 +1414,8 @@ fn record_surface_document_line(
     }
     record_legend_empty_literal_surface_tokens(scope, tokens, sink);
     record_visual_surface_line(scope, tokens, sink);
-    if record_inline_authoring_surface_line(option_block, line_start, line, structural_lines, sink) {
+    if record_inline_authoring_surface_line(option_block, line_start, line, structural_lines, sink)
+    {
         return;
     }
     if record_document_prelude_surface_line(scope, tokens, sink) {
@@ -1552,7 +1534,12 @@ fn record_rule_routine_header_surface_spans(
     spans: puzzle_authoring::RuleRoutineBlockHeaderSurfaceSpans,
     sink: &mut SurfaceSink,
 ) {
-    mark_surface_span(line_start, spans.keyword, SurfaceSemanticKind::Keyword, sink);
+    mark_surface_span(
+        line_start,
+        spans.keyword,
+        SurfaceSemanticKind::Keyword,
+        sink,
+    );
     if let Some(name) = spans.name {
         mark_surface_span(line_start, name, SurfaceSemanticKind::Effect, sink);
     }
@@ -1580,7 +1567,10 @@ fn record_visual_shape_entry_block_header_surface_tokens(
     true
 }
 
-fn record_visual_shape_entry_header_surface_keywords(tokens: &[SourceToken], sink: &mut SurfaceSink) {
+fn record_visual_shape_entry_header_surface_keywords(
+    tokens: &[SourceToken],
+    sink: &mut SurfaceSink,
+) {
     for token in tokens {
         if matches!(token.text.as_str(), "rotate" | "from" | "using") {
             add_scene_effect_token_range(sink, token, SurfaceSemanticKind::Keyword);
@@ -1812,9 +1802,11 @@ fn record_sounds_operation_surface_line(
     tokens: &[SourceToken],
     sink: &mut SurfaceSink,
 ) -> bool {
-    if option_block != Some(SurfaceOptionBlock::Authoring(
-        authoring_grammar::AuthoringKind::SoundsConfig,
-    )) {
+    if option_block
+        != Some(SurfaceOptionBlock::Authoring(
+            authoring_grammar::AuthoringKind::SoundsConfig,
+        ))
+    {
         return false;
     }
     match tokens {
@@ -2130,15 +2122,13 @@ fn record_inline_authoring_surface_line(
     let root_kind = match option_block.and_then(|block| block.authoring_parent_kind()) {
         Some(kind) => kind,
         None if structural_lines.first().is_some_and(|line| {
-            surface_piece_tokens(line)
-                .first()
-                .is_some_and(|surface| {
-                    authoring_grammar::placed_authoring_kind(
-                        authoring_grammar::AuthoringKind::Root,
-                        surface,
-                    )
-                    .is_some()
-                })
+            surface_piece_tokens(line).first().is_some_and(|surface| {
+                authoring_grammar::placed_authoring_kind(
+                    authoring_grammar::AuthoringKind::Root,
+                    surface,
+                )
+                .is_some()
+            })
         }) =>
         {
             authoring_grammar::AuthoringKind::Root
@@ -2158,7 +2148,8 @@ fn record_inline_authoring_surface_line(
             continue;
         }
 
-        let Some(tokens) = surface_tokens_for_structural_piece(line, line_start, trimmed, &mut cursor)
+        let Some(tokens) =
+            surface_tokens_for_structural_piece(line, line_start, trimmed, &mut cursor)
         else {
             continue;
         };
@@ -2219,10 +2210,7 @@ fn active_surface_option_block(stack: &[SurfaceOptionBlock]) -> Option<SurfaceOp
     })
 }
 
-fn update_surface_option_block_stack(
-    line: &SurfaceScanLine,
-    stack: &mut Vec<SurfaceOptionBlock>,
-) {
+fn update_surface_option_block_stack(line: &SurfaceScanLine, stack: &mut Vec<SurfaceOptionBlock>) {
     for event in &line.structural_events {
         match event {
             source::SourceStructureEvent::Open { header, .. } => {
@@ -3058,7 +3046,8 @@ fn record_visual_surface_line(
             [keyword, rest @ ..]
                 if matches!(
                     keyword.text.as_str(),
-                    "colors" | "palette"
+                    "colors"
+                        | "palette"
                         | "image"
                         | "contain"
                         | "cover"
@@ -3086,7 +3075,10 @@ fn record_visual_surface_line(
                 record_visual_rotation_surface_keywords(rest, sink);
             }
             [keyword, ..]
-                if matches!(keyword.text.as_str(), "shape" | "shapes" | "palette" | "colors") =>
+                if matches!(
+                    keyword.text.as_str(),
+                    "shape" | "shapes" | "palette" | "colors"
+                ) =>
             {
                 add_scene_effect_token_range(sink, keyword, SurfaceSemanticKind::Keyword);
             }
@@ -3304,7 +3296,8 @@ puzzle board {
     fn semantic_tokens_follow_structural_blocks_not_header_whitelists() {
         let surface_doc_source = include_str!("lib_surface_doc.rs");
         assert!(
-            surface_doc_source.contains("record_structural_block_surface_tokens(&structural_blocks"),
+            surface_doc_source
+                .contains("record_structural_block_surface_tokens(&structural_blocks"),
             "semantic tokens must start from the universal structural block product"
         );
         let source_scanner_source = include_str!("source.rs");
@@ -3327,10 +3320,7 @@ routine Push once {
 "#;
         let document = parse_surface_document(source);
 
-        for block in document
-            .structural_blocks
-            .iter()
-        {
+        for block in document.structural_blocks.iter() {
             for header_token in source_line_tokens(&block.header, block.start) {
                 assert!(
                     document.semantic_tokens.iter().any(|token| {
@@ -3387,7 +3377,11 @@ goto playing
 
         for (needle, text, kind) in [
             ("keys {", "keys", SurfaceSemanticKind::Keyword),
-            ("routine continue_game", "routine", SurfaceSemanticKind::Keyword),
+            (
+                "routine continue_game",
+                "routine",
+                SurfaceSemanticKind::Keyword,
+            ),
             (
                 "routine continue_game",
                 "continue_game",
@@ -3435,9 +3429,17 @@ columns = 3
 
         for (needle, text, kind) in [
             (". = empty", "empty", SurfaceSemanticKind::Literal),
-            ("show_index = true", "show_index", SurfaceSemanticKind::Setting),
+            (
+                "show_index = true",
+                "show_index",
+                SurfaceSemanticKind::Setting,
+            ),
             ("show_index = true", "true", SurfaceSemanticKind::Literal),
-            ("show_solved=false", "show_solved", SurfaceSemanticKind::Setting),
+            (
+                "show_solved=false",
+                "show_solved",
+                SurfaceSemanticKind::Setting,
+            ),
             ("show_solved=false", "false", SurfaceSemanticKind::Literal),
             ("columns = 3", "columns", SurfaceSemanticKind::Setting),
             ("columns = 3", "3", SurfaceSemanticKind::Number),
@@ -3554,10 +3556,12 @@ text "Ready"
         assert!(
             source_line_tokens(&block.header, block.start)
                 .into_iter()
-                .all(|header_token| document.semantic_tokens.iter().any(|semantic| {
-                    semantic.span.start == header_token.start
-                        && semantic.span.end == header_token.end
-                })),
+                .all(
+                    |header_token| document.semantic_tokens.iter().any(|semantic| {
+                        semantic.span.start == header_token.start
+                            && semantic.span.end == header_token.end
+                    })
+                ),
             "layout header should be owned by scene surface projection"
         );
     }

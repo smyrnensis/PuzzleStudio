@@ -1535,7 +1535,7 @@ Box actor
 }
 
 rules {
-right:up [ Player | Box ] -> [ | Player | Box ]
+(right, up) [ Player | Box ] -> [ | Player | Box ]
 }
 "#,
     )
@@ -1571,7 +1571,7 @@ Box actor
 }
 
 rules {
-right:up [ Player
+right, up [ Player
 Box ] -> [ Player
 Box ]
 }
@@ -1583,6 +1583,91 @@ Box ]
     assert_eq!(
         parsed.rules[0].pattern.cells[1].offset,
         Direction3::UP.offset
+    );
+}
+
+#[test]
+fn parser_binds_frame3_domain_values_to_parenthesized_object_slots() {
+    let parsed = parse_puzzle3d(
+        r#"
+pose = right, front front, left
+
+layers {
+actor
+}
+
+objects {
+Die:pose actor
+}
+
+legend {
+d = Die:(right, front)
+}
+
+rules {
+right [ Die:(right, front) ] -> [ Die:(right, front) ]
+}
+
+levels3 test {
+level "one" {
+d
+}
+}
+"#,
+    )
+    .unwrap();
+
+    assert_eq!(parsed.game.objects.len(), 2);
+    assert_eq!(parsed.rules.len(), 1);
+}
+
+#[test]
+fn parser_rejects_colon_frame_orientation_syntax() {
+    let error = parse_puzzle3d(
+        r#"
+layers {
+actor
+}
+
+objects {
+Player actor
+}
+
+rules {
+right:up [ Player ] -> [ Player ]
+}
+"#,
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(error, ParseError3::Message(message) if message.contains("unknown direction set"))
+    );
+}
+
+#[test]
+fn parser_rejects_unparenthesized_frame3_object_slots() {
+    let error = parse_puzzle3d(
+        r#"
+pose = right, front
+
+layers {
+actor
+}
+
+objects {
+Die:pose actor
+}
+
+rules {
+right [ Die:right,front ] -> [ Die:right,front ]
+}
+"#,
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(error, ParseError3::Message(message) if message.contains("frame3 object slot must be parenthesized"))
     );
 }
 
@@ -2013,6 +2098,43 @@ all Goal on down [ Box | Goal ]
 
     assert!(
         matches!(err, ParseError3::Message(message) if message.contains("all <selector> on <pattern> is not valid"))
+    );
+}
+
+#[test]
+fn parser_preserves_all_on_as_covered_object_condition() {
+    let parsed = parse_puzzle3d(
+        r#"
+puzzle3 push3d {
+layers {
+floor = Goal
+actor = Box
+}
+
+win_conditions {
+all Goal on Box
+}
+}
+"#,
+    )
+    .unwrap();
+    let goal = object_id(&parsed, "Goal");
+    let box_object = object_id(&parsed, "Box");
+    let WinCondition3::AllObjectsCoveredByPattern {
+        object,
+        cover_pattern,
+    } = parsed.win_condition.as_ref().unwrap()
+    else {
+        panic!("all X on Y should preserve its covered-object semantics");
+    };
+
+    assert_eq!(*object, goal);
+    assert_eq!(cover_pattern.cells().len(), 1);
+    assert!(cover_pattern.cells()[0].require_objects.contains(&goal));
+    assert!(
+        cover_pattern.cells()[0]
+            .require_objects
+            .contains(&box_object)
     );
 }
 

@@ -16,6 +16,7 @@ use puzzle_lang::{
     SceneLevelKey, ScenePuzzleInitializer, SceneTransitionTrigger, SceneValue, SceneVarKind,
     parse_scene_effect_params, parse_scene_expression,
 };
+use puzzle_runtime_contract::{RuntimeAnimationEvent, RuntimeCoord};
 
 mod runtime_sounds;
 mod session3;
@@ -157,6 +158,7 @@ pub enum AnimationEvent {
     Move {
         name: String,
         object: ObjectId,
+        from_object: Option<ObjectId>,
         from_x: u16,
         from_y: u16,
         from_z: u16,
@@ -170,6 +172,50 @@ pub enum AnimationEvent {
         x: u16,
         y: u16,
     },
+}
+
+pub fn animation_events_contract_2d(
+    loaded: &LoadedGame,
+    events: &[AnimationEvent],
+) -> Vec<RuntimeAnimationEvent> {
+    events
+        .iter()
+        .map(|event| match event {
+            AnimationEvent::Move {
+                name,
+                object,
+                from_object,
+                from_x,
+                from_y,
+                to_x,
+                to_y,
+                ..
+            } => RuntimeAnimationEvent::Move {
+                name: name.clone(),
+                object_id: object.0,
+                from_object: from_object.map(|object| loaded.object_name(object).to_string()),
+                from: RuntimeCoord {
+                    x: *from_x,
+                    y: *from_y,
+                    z: None,
+                },
+                to: RuntimeCoord {
+                    x: *to_x,
+                    y: *to_y,
+                    z: None,
+                },
+            },
+            AnimationEvent::CantMove { name, object, x, y } => RuntimeAnimationEvent::CantMove {
+                name: name.clone(),
+                object_id: object.0,
+                position: RuntimeCoord {
+                    x: *x,
+                    y: *y,
+                    z: None,
+                },
+            },
+        })
+        .collect()
 }
 
 #[derive(Clone, Debug, Default)]
@@ -4023,11 +4069,33 @@ pub fn animation_events_for_trace(
                                 AnimationEvent::Move {
                                     name: name.clone(),
                                     object: *object,
+                                    from_object: None,
                                     from_x: *from_x,
                                     from_y: *from_y,
                                     from_z: 0,
                                     to_x: *to_x,
                                     to_y: *to_y,
+                                    to_z: 0,
+                                },
+                            );
+                        }
+                    }
+                    for op in patch.ops() {
+                        let PatchOp::Replace { x, y, remove, add } = op else {
+                            continue;
+                        };
+                        if objects.contains(add) && sprite_rotation_changes(game, *remove, *add) {
+                            push_unique_animation(
+                                &mut events,
+                                AnimationEvent::Move {
+                                    name: name.clone(),
+                                    object: *add,
+                                    from_object: Some(*remove),
+                                    from_x: *x,
+                                    from_y: *y,
+                                    from_z: 0,
+                                    to_x: *x,
+                                    to_y: *y,
                                     to_z: 0,
                                 },
                             );
@@ -4078,6 +4146,48 @@ pub fn animation_events_for_trace(
         }
     }
     events
+}
+
+fn sprite_rotation_changes(game: &LoadedGame, from: ObjectId, to: ObjectId) -> bool {
+    let rotations = |object| {
+        let object_name = game.object_name(object);
+        let sprite_name = game
+            .visuals
+            .aliases
+            .iter()
+            .find_map(|alias| (alias.object == object_name).then_some(alias.sprite.as_str()))?;
+        let sprite = game
+            .visuals
+            .sprites
+            .iter()
+            .find(|sprite| sprite.name == sprite_name)?;
+        Some(
+            sprite
+                .transforms
+                .iter()
+                .enumerate()
+                .filter_map(|(index, transform)| match transform {
+                    puzzle_lang::VisualSpriteTransform::Rotate { degrees } => {
+                        Some((index, *degrees))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+        )
+    };
+    let (Some(from), Some(to)) = (rotations(from), rotations(to)) else {
+        return false;
+    };
+    from.len() == to.len()
+        && !from.is_empty()
+        && from
+            .iter()
+            .zip(&to)
+            .all(|((from_index, _), (to_index, _))| from_index == to_index)
+        && from.iter().zip(&to).any(|((_, from), (_, to))| {
+            let delta = (to - from).rem_euclid(360.0);
+            delta > f64::EPSILON && (360.0 - delta) > f64::EPSILON
+        })
 }
 
 fn push_unique_animation(events: &mut Vec<AnimationEvent>, event: AnimationEvent) {
@@ -4854,6 +4964,7 @@ P.
             vec![AnimationEvent::Move {
                 name: "tween".to_string(),
                 object: player,
+                from_object: None,
                 from_x: 0,
                 from_y: 0,
                 from_z: 0,
@@ -4861,6 +4972,270 @@ P.
                 to_y: 0,
                 to_z: 0,
             }]
+        );
+    }
+
+    #[test]
+    fn tween_emits_same_cell_event_for_wildcard_rotation_variant_rewrite() {
+        let loaded = parse_game(
+            r#"
+title = rotation_tween_variant
+
+puzzle default {
+render {
+tween = true
+tween_duration = 80ms
+}
+layers {
+actor = Player:directions
+}
+sprites {
+Player:directions {
+colors = #fff
+rotate directions
+0
+}
+}
+rules {
+input [ Player:* ] -> [ > Player:> ]
+}
+levels {
+legend {
+. = empty
+P = Player:up
+}
+P
+}
+}
+"#,
+        )
+        .unwrap();
+        let from = object_named(&loaded, "Player:up");
+        let to = object_named(&loaded, "Player:right");
+        let mut session = GameSession::new(&loaded);
+        session
+            .apply_input(&loaded, input_named(&loaded, "right"))
+            .unwrap();
+
+        let patch_ops = session
+            .last_debug_transition()
+            .unwrap()
+            .patches
+            .iter()
+            .flat_map(|patch| patch.ops())
+            .collect::<Vec<_>>();
+        assert!(patch_ops.iter().any(|op| {
+            matches!(
+                op,
+                PatchOp::Replace {
+                    x: 0,
+                    y: 0,
+                    remove,
+                    add,
+                } if *remove == from && *add == to
+            )
+        }));
+        assert!(!patch_ops.iter().any(|op| {
+            matches!(op, PatchOp::Remove { x: 0, y: 0, object } if *object == from)
+                || matches!(op, PatchOp::Add { x: 0, y: 0, object } if *object == to)
+        }));
+
+        assert_eq!(
+            session.take_animation_events(),
+            vec![AnimationEvent::Move {
+                name: "tween".to_string(),
+                object: to,
+                from_object: Some(from),
+                from_x: 0,
+                from_y: 0,
+                from_z: 0,
+                to_x: 0,
+                to_y: 0,
+                to_z: 0,
+            }]
+        );
+    }
+
+    #[test]
+    fn tween_does_not_infer_variant_identity_from_same_cell_remove_and_add() {
+        let loaded = parse_game(
+            r#"
+title = unrelated_rotation_rewrite
+
+puzzle default {
+render {
+tween = true
+tween_duration = 80ms
+}
+layers {
+actor = A B
+}
+sprites {
+A {
+colors = #fff
+rotate 0deg
+0
+}
+B {
+colors = #fff
+rotate 90deg
+0
+}
+}
+rules {
+input [ A ] -> [ B ]
+}
+levels {
+legend {
+. = empty
+A = A
+}
+A
+}
+}
+"#,
+        )
+        .unwrap();
+        let mut session = GameSession::new(&loaded);
+
+        session
+            .apply_input(&loaded, input_named(&loaded, "right"))
+            .unwrap();
+
+        assert!(session.take_animation_events().is_empty());
+    }
+
+    #[test]
+    fn congruent_sprite_rotations_do_not_require_rotation_tween() {
+        let loaded = parse_game(
+            r#"
+title = congruent_rotation_tween
+
+puzzle default {
+tags {
+facing = 0deg 360deg
+}
+layers {
+actor = Player:facing
+}
+sprites {
+Player:facing {
+colors = #fff
+rotate facing
+0
+}
+}
+rules {
+}
+levels {
+legend {
+. = empty
+P = Player:0deg
+}
+P
+}
+}
+"#,
+        )
+        .unwrap();
+
+        assert!(!sprite_rotation_changes(
+            &loaded,
+            object_named(&loaded, "Player:0deg"),
+            object_named(&loaded, "Player:360deg"),
+        ));
+    }
+
+    #[test]
+    fn runtime_animation_contract_serializes_rotation_tween_source_object() {
+        let loaded = parse_game(
+            r#"
+title = rotation_tween_contract
+puzzle default {
+layers {
+actor = Player:directions
+}
+rules {
+}
+levels {
+legend {
+. = empty
+P = Player:up
+}
+P
+}
+}
+"#,
+        )
+        .unwrap();
+        let from = object_named(&loaded, "Player:up");
+        let to = object_named(&loaded, "Player:right");
+        let events = animation_events_contract_2d(
+            &loaded,
+            &[AnimationEvent::Move {
+                name: "tween".to_string(),
+                object: to,
+                from_object: Some(from),
+                from_x: 0,
+                from_y: 0,
+                from_z: 0,
+                to_x: 0,
+                to_y: 0,
+                to_z: 0,
+            }],
+        );
+
+        assert_eq!(
+            serde_json::to_value(events).unwrap(),
+            serde_json::json!([{
+                "kind": "move",
+                "name": "tween",
+                "objectId": to.0,
+                "fromObject": "Player:up",
+                "from": { "x": 0, "y": 0 },
+                "to": { "x": 0, "y": 0 }
+            }])
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "compiled object 65535 is missing its required object label")]
+    fn runtime_animation_contract_rejects_missing_source_object_label() {
+        let loaded = parse_game(
+            r#"
+title = rotation_tween_missing_label
+puzzle default {
+layers {
+actor = Player
+}
+rules {
+}
+levels {
+legend {
+. = empty
+P = Player
+}
+P
+}
+}
+"#,
+        )
+        .unwrap();
+        let player = object_named(&loaded, "Player");
+
+        let _ = animation_events_contract_2d(
+            &loaded,
+            &[AnimationEvent::Move {
+                name: "tween".to_string(),
+                object: player,
+                from_object: Some(ObjectId(u16::MAX)),
+                from_x: 0,
+                from_y: 0,
+                from_z: 0,
+                to_x: 0,
+                to_y: 0,
+                to_z: 0,
+            }],
         );
     }
 
@@ -6454,6 +6829,7 @@ P.
             vec![AnimationEvent::Move {
                 name: "tween".to_string(),
                 object: player,
+                from_object: None,
                 from_x: 0,
                 from_y: 0,
                 from_z: 0,
@@ -6527,6 +6903,7 @@ P.
             vec![AnimationEvent::Move {
                 name: "tween".to_string(),
                 object: player,
+                from_object: None,
                 from_x: 0,
                 from_y: 0,
                 from_z: 0,
@@ -6594,6 +6971,7 @@ P.
             vec![AnimationEvent::Move {
                 name: "tween".to_string(),
                 object: player,
+                from_object: None,
                 from_x: 0,
                 from_y: 0,
                 from_z: 0,
@@ -6670,6 +7048,7 @@ PB.
                 AnimationEvent::Move {
                     name: "tween".to_string(),
                     object: player,
+                    from_object: None,
                     from_x: 0,
                     from_y: 0,
                     from_z: 0,
@@ -6680,6 +7059,7 @@ PB.
                 AnimationEvent::Move {
                     name: "tween".to_string(),
                     object: box_object,
+                    from_object: None,
                     from_x: 1,
                     from_y: 0,
                     from_z: 0,

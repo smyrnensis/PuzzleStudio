@@ -329,20 +329,40 @@ fn push_visual_sprite(out: &mut String, sprite: &VisualSpriteDef) {
             out.push_str("]}");
         }
     }
-    if sprite.offset.x != 0.0
-        || sprite.offset.y != 0.0
+    if !sprite.transforms.is_empty()
         || sprite.fit != Default::default()
         || sprite.sampling.is_some()
         || sprite.loop_animation.is_some()
         || sprite.pixels_per_cell.is_some()
     {
         out.pop();
-        if sprite.offset.x != 0.0 || sprite.offset.y != 0.0 {
-            out.push_str(",\"offset\":{\"x\":");
-            out.push_str(&sprite.offset.x.to_string());
-            out.push_str(",\"y\":");
-            out.push_str(&sprite.offset.y.to_string());
-            out.push('}');
+        if !sprite.transforms.is_empty() {
+            out.push_str(",\"transforms\":[");
+            for (index, transform) in sprite.transforms.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                match transform {
+                    VisualSpriteTransform::Rotate { degrees } => {
+                        out.push_str("{\"kind\":\"rotate\",\"degrees\":");
+                        out.push_str(&degrees.to_string());
+                        out.push('}');
+                    }
+                    VisualSpriteTransform::Translate { x, y } => {
+                        out.push_str("{\"kind\":\"translate\",\"x\":");
+                        out.push_str(&x.to_string());
+                        out.push_str(",\"y\":");
+                        out.push_str(&y.to_string());
+                        out.push('}');
+                    }
+                    VisualSpriteTransform::Flip { enabled } => {
+                        out.push_str("{\"kind\":\"flip\",\"enabled\":");
+                        out.push_str(if *enabled { "true" } else { "false" });
+                        out.push('}');
+                    }
+                }
+            }
+            out.push(']');
         }
         if sprite.fit != Default::default() {
             out.push_str(",\"fit\":{\"mode\":");

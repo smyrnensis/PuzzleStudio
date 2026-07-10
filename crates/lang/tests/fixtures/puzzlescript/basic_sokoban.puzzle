@@ -52,7 +52,7 @@ Player
 }
 
 win_conditions {
-no [ Target no Crate ]
+all Target on Crate
 }
 
 on_level_start {
@@ -60,7 +60,7 @@ once_all [ no Background ] -> [ Background ]
 }
 
 rules {
-input directions [ Player ] -> [ > Player ]
+input [ Player ] -> [ > Player ]
 [ > Player | Crate ] -> [ > Player | > Crate ]
 move
 }
@@ -72,13 +72,12 @@ next_level
 
 levels {
 legend {
-. = Background
+. = empty
 # = Wall
 P = Player
 B = Crate
 T = Target
 * = Crate Target
-_ = empty
 }
 
 #######

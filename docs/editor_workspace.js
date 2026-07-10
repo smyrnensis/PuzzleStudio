@@ -8,6 +8,7 @@
 // compiler internals, or tool-specific editing state.
 const documentStoreKey = "PuzzleStudioFileTree:v4";
 const legacyDocumentStoreKey = "PuzzleStudioEditorStore:v1";
+const explorerSectionStoreKey = "PuzzleStudioExplorerSections:v1";
 let sourceCursorPreviewKey = "";
 let sourceTargetRequestId = 0;
 let sourceCursorResolveSignature = null;
@@ -27,10 +28,19 @@ let openTabIds = [];
 let draftEntry = null;
 let renameEntry = null;
 let draggedNodeId = "";
+let treeRowByNodeId = new Map();
+let treeDragDecisionCache = null;
+let currentDropTargetId = null;
+let currentDropTargetElement = null;
 let workspaceChangeUnlisten = null;
 let workspaceHostMutationDepth = 0;
 let deferredWorkspaceChangedPayload = null;
 let recentWorkspaces = [];
+let explorerFilesCollapsed = false;
+let explorerOutlineCollapsed = false;
+let explorerOutlineHeight = "35%";
+let draggingOutlineSplitter = false;
+let draggingOutlineSplitterPointerId = null;
 
 function configureFolderImport() {
   if (!importFolderInput || !importFolderButton || "webkitdirectory" in importFolderInput) {
@@ -144,6 +154,13 @@ function endWorkspaceHostMutation() {
 
 async function loadSource() {
   setEditorStatus("Loading", "");
+  // Source loading is independent from parser initialization. Start the WASM
+  // download now, but let the workspace request and first document render
+  // proceed immediately; analysis requests share this initialization promise.
+  const wasmParserLoad = ensureEditorWasmParserLoaded();
+  void wasmParserLoad.catch((error) => {
+    console.error("Editor WASM parser failed to load", error);
+  });
   if (editorSeed) {
     workspaceRoot = editorSeed.workspaceRoot || "";
     const embedded = embeddedDocuments();
@@ -161,7 +178,7 @@ async function loadSource() {
     renderDocumentSelect();
     loadEmbeddedDocument(currentDocumentIndex);
     runButton.disabled = false;
-    runButton.title = "Run preview";
+    runButton.title = "Play preview";
     setEditorStatus(useStored ? "Loaded files" : "Preview embedded", "is-ok");
     return;
   }
@@ -475,10 +492,57 @@ function replaceWorkspaceTree(root, workspaceFolder) {
     && normalizePath(child.workspaceRoot || "") === normalizedRoot
   );
   if (index >= 0) {
+    applyPreservedFolderExpansion(fileTree.children[index], workspaceFolder);
     fileTree.children.splice(index, 1, workspaceFolder);
     return;
   }
   fileTree.children.push(workspaceFolder);
+}
+
+function applyPreservedFolderExpansion(previousFolder, nextFolder) {
+  const expandedByPath = new Map();
+  collectFolderExpansion(previousFolder, "", expandedByPath);
+  restoreFolderExpansion(nextFolder, "", expandedByPath);
+}
+
+function collectFolderExpansion(folder, parentPath, expandedByPath) {
+  if (!folder || folder.kind !== "folder") {
+    return;
+  }
+  const path = folderExpansionPath(folder, parentPath);
+  expandedByPath.set(folderExpansionKey(folder, path), folder.expanded !== false);
+  for (const child of folder.children || []) {
+    if (child.kind === "folder") {
+      collectFolderExpansion(child, path, expandedByPath);
+    }
+  }
+}
+
+function restoreFolderExpansion(folder, parentPath, expandedByPath) {
+  if (!folder || folder.kind !== "folder") {
+    return;
+  }
+  const path = folderExpansionPath(folder, parentPath);
+  const key = folderExpansionKey(folder, path);
+  if (expandedByPath.has(key)) {
+    folder.expanded = expandedByPath.get(key);
+  }
+  for (const child of folder.children || []) {
+    if (child.kind === "folder") {
+      restoreFolderExpansion(child, path, expandedByPath);
+    }
+  }
+}
+
+function folderExpansionPath(folder, parentPath) {
+  if (folder.isWorkspaceRoot) {
+    return "";
+  }
+  return normalizePath(parentPath ? joinPath(parentPath, folder.name || "") : folder.name || "");
+}
+
+function folderExpansionKey(folder, path) {
+  return `${normalizePath(folder.workspaceRoot || "")}\n${normalizePath(path || "")}`;
 }
 
 async function applyWorkspaceChangedPayload(payload) {
@@ -567,6 +631,7 @@ async function applyWorkspaceChangedPayload(payload) {
   selectedTreeId = activeFileId;
   selectedFolderId = activeFileId ? findParentFolder(fileTree, activeFileId)?.id || selectedFolderId : selectedFolderId;
   currentDocumentIndex = activeDocumentIndex();
+  await ensureEditorWasmParserLoaded();
   if (activeFileId) {
     const activeAfterReload = activeDocument();
     const preserveActiveView = previousActive
@@ -595,6 +660,13 @@ async function applyWorkspaceChangedPayload(payload) {
   } else {
     setEditorStatus("Reloaded external changes", "is-ok");
   }
+}
+
+async function ensureEditorWasmParserLoaded() {
+  if (typeof loadWasmCompiler !== "function") {
+    throw new Error("Editor WASM parser loader is unavailable.");
+  }
+  await loadWasmCompiler();
 }
 
 function externalReloadErrorMessage(error) {
@@ -815,10 +887,33 @@ function confirmRemoveWorkspaceWithUnsavedChanges(node, unsavedDocuments) {
   );
 }
 
-function confirmDesktopDeleteWorkspaceEntry(node) {
+function unsavedWorkspaceDocuments() {
+  persistCurrentDocument();
+  return collectTextDocumentsInNode(fileTree).filter((document) => isDocumentUnsaved(document));
+}
+
+function confirmDesktopExitWithUnsavedChanges(actionLabel) {
+  const unsavedDocuments = unsavedWorkspaceDocuments();
+  if (!unsavedDocuments.length) {
+    return true;
+  }
+  const fileList = unsavedDocuments
+    .slice(0, 4)
+    .map((document) => `- ${document.puzzlePath || document.name || "Untitled"}`)
+    .join("\n");
+  const more = unsavedDocuments.length > 4
+    ? `\n- and ${unsavedDocuments.length - 4} more`
+    : "";
+  return window.confirm(
+    `${actionLabel} without saving?\n\nUnsaved changes will be lost:\n${fileList}${more}`,
+  );
+}
+
+function confirmDeleteWorkspaceEntry(node, options = {}) {
   const name = node?.name || fileName(node?.puzzlePath) || "this entry";
   const kind = node?.kind === "folder" ? "folder" : "file";
-  return window.confirm(`Delete ${kind} "${name}" from disk?\n\nThis cannot be undone.`);
+  const location = options.fromDisk ? "from disk" : "from this workspace";
+  return window.confirm(`Delete ${kind} "${name}" ${location}?\n\nThis cannot be undone.`);
 }
 
 async function openProjectFromDesktop(kind = "folder") {
@@ -1032,6 +1127,7 @@ function normalizeTree(node, parentPath = "") {
 }
 
 function syncDocumentsFromTree() {
+  resetTreeDragDecisionCache();
   documents = [];
   collectFiles(fileTree, "");
 }
@@ -1161,8 +1257,7 @@ function saveDocumentStore(showStatus = true, options = {}) {
 }
 
 async function saveCurrentDocument(showStatus = true) {
-  saveDocumentStore(false);
-  const document = activeDocument();
+  let document = activeDocument();
   if (!document || !isTextDocument(document)) {
     if (showStatus) {
       setEditorStatus("Nothing to save", "is-error");
@@ -1170,8 +1265,20 @@ async function saveCurrentDocument(showStatus = true) {
     return false;
   }
   if (documentNeedsContentLoad(document)) {
-    throw new Error(`Cannot save unloaded document: ${document.puzzlePath || document.name || "document"}`);
+    if (showStatus) {
+      setEditorStatus("Loading before save", "");
+    }
+    saveButton.disabled = true;
+    await ensureDocumentContentLoaded(document);
+    if (activeDocument()?.id !== document.id) {
+      throw new Error("Cannot save after the active document changed during file load.");
+    }
+    document = activeDocument();
+    if (documentNeedsContentLoad(document)) {
+      throw new Error(`Cannot save unloaded document: ${document.puzzlePath || document.name || "document"}`);
+    }
   }
+  saveDocumentStore(false);
 
   if (editorSeed) {
     document.syncedSource = document.source || "";
@@ -1195,6 +1302,7 @@ async function saveCurrentDocument(showStatus = true) {
         source: document.source || "",
         puzzlePath: document.puzzlePath || "",
         workspaceRoot: document.workspaceRoot || workspaceRoot || "",
+        contentLoaded: document.contentLoaded !== false,
       });
     } finally {
       if (isDesktopHost()) {
@@ -1238,8 +1346,8 @@ function editorNavigationLocation() {
     documentId: document?.id || activeFileId || "",
     selectionStart,
     selectionEnd,
-    scrollTop: sourceEditor?.scrollTop || 0,
-    scrollLeft: sourceEditor?.scrollLeft || 0,
+    scrollTop: sourceScrollTop(),
+    scrollLeft: sourceScrollLeft(),
     previewMode: currentPreviewMode || "play",
     levelIndex: Number.isInteger(activeLevelIndex) ? activeLevelIndex : 0,
   };
@@ -1297,8 +1405,8 @@ function restoreEditorNavigationLocation(location) {
     const start = sourceDocumentOffsetToViewOffset(sourceStart, "start");
     const end = sourceDocumentOffsetToViewOffset(sourceEnd, "end");
     sourceEditor.setSelectionRange(start, end);
-    sourceEditor.scrollTop = Math.max(0, location.scrollTop || 0);
-    sourceEditor.scrollLeft = Math.max(0, location.scrollLeft || 0);
+    setSourceScrollTop(location.scrollTop || 0);
+    setSourceScrollLeft(location.scrollLeft || 0);
     if (typeof syncSourceHighlightScroll === "function") {
       syncSourceHighlightScroll();
     }
@@ -1351,7 +1459,7 @@ function openDocumentTab(documentId = activeFileId) {
 function closeDocumentTab(documentId) {
   openTabIds = openTabIds.filter((id) => id !== documentId);
   if (documentId === activeFileId) {
-    const nextId = openTabIds[openTabIds.length - 1] || documents.find((document) => document.id !== documentId)?.id || "";
+    const nextId = openTabIds[openTabIds.length - 1] || "";
     if (nextId) {
       persistCurrentDocument();
       activeFileId = nextId;
@@ -1515,7 +1623,10 @@ function normalizedDocumentTabWheelDelta(event) {
 function activePreviewDocument() {
   const selected = selectedTreeNode();
   if (selected?.kind === "folder") {
-    return previewDocumentForFolder(selected);
+    const folderPreview = previewDocumentForFolder(selected);
+    if (folderPreview) {
+      return folderPreview;
+    }
   }
   return previewDocumentFor(activeDocument());
 }
@@ -1828,8 +1939,11 @@ function activeEmbeddedDocumentIndex() {
 }
 
 function renderDocumentSelect() {
+  treeRowByNodeId = new Map();
+  clearDropTargets();
   documentList.replaceChildren();
-  renderTreeNode(fileTree, documentList, 0);
+  const importTitleIndex = buildTreeImportTitleIndex();
+  renderTreeNode(fileTree, documentList, 0, importTitleIndex);
   renderExplorerEmptyState();
   updateFileCreationAvailability();
   focusDraftInput();
@@ -1887,7 +2001,151 @@ document.addEventListener("click", (event) => {
   });
 });
 
-function renderTreeNode(node, parent, depth) {
+function loadExplorerSectionState() {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(explorerSectionStoreKey) || "{}");
+    explorerFilesCollapsed = parsed.filesCollapsed === true;
+    explorerOutlineCollapsed = parsed.outlineCollapsed === true;
+    explorerOutlineHeight = validExplorerOutlineHeight(parsed.outlineHeight) || explorerOutlineHeight;
+  } catch {
+    explorerFilesCollapsed = false;
+    explorerOutlineCollapsed = false;
+    explorerOutlineHeight = "35%";
+  }
+  if (explorerFilesCollapsed && explorerOutlineCollapsed) {
+    explorerOutlineCollapsed = false;
+  }
+  applyExplorerSectionLayout();
+}
+
+function saveExplorerSectionState() {
+  try {
+    window.localStorage.setItem(explorerSectionStoreKey, JSON.stringify({
+      filesCollapsed: explorerFilesCollapsed,
+      outlineCollapsed: explorerOutlineCollapsed,
+      outlineHeight: explorerOutlineHeight,
+    }));
+  } catch {
+  }
+}
+
+function validExplorerOutlineHeight(value) {
+  const text = String(value || "").trim();
+  if (!/^\d+(?:\.\d+)?%$/.test(text)) {
+    return "";
+  }
+  const numeric = Number.parseFloat(text);
+  return Number.isFinite(numeric) && numeric >= 18 && numeric <= 75 ? text : "";
+}
+
+function explorerSectionsElement() {
+  return document.querySelector(".explorer-sections");
+}
+
+function explorerSectionElement(id) {
+  return document.querySelector(`[data-explorer-section="${id}"]`);
+}
+
+function applyExplorerSectionLayout() {
+  const sections = explorerSectionsElement();
+  if (!sections) {
+    return;
+  }
+  sections.classList.toggle("is-files-collapsed", explorerFilesCollapsed);
+  sections.classList.toggle("is-outline-collapsed", explorerOutlineCollapsed);
+  sections.style.setProperty("--source-outline-height", explorerOutlineHeight);
+  syncExplorerSectionToggle("files", explorerFilesCollapsed);
+  syncExplorerSectionToggle("outline", explorerOutlineCollapsed);
+}
+
+function syncExplorerSectionToggle(id, collapsed) {
+  explorerSectionElement(id)?.classList.toggle("is-collapsed", collapsed);
+  const toggle = document.querySelector(`[data-explorer-section-toggle="${id}"]`);
+  if (toggle) {
+    toggle.setAttribute("aria-expanded", String(!collapsed));
+  }
+}
+
+function toggleExplorerSection(id) {
+  const outlineWasCollapsed = explorerOutlineCollapsed;
+  if (id === "files") {
+    explorerFilesCollapsed = !explorerFilesCollapsed;
+    if (explorerFilesCollapsed && explorerOutlineCollapsed) {
+      explorerOutlineCollapsed = false;
+    }
+  } else if (id === "outline") {
+    explorerOutlineCollapsed = !explorerOutlineCollapsed;
+    if (explorerOutlineCollapsed && explorerFilesCollapsed) {
+      explorerFilesCollapsed = false;
+    }
+  } else {
+    return;
+  }
+  applyExplorerSectionLayout();
+  saveExplorerSectionState();
+  const outlineShouldRefresh = !explorerOutlineCollapsed
+    && (outlineWasCollapsed || (id === "files" && explorerFilesCollapsed));
+  if (outlineShouldRefresh && typeof scheduleSourceOutlineRefresh === "function") {
+    scheduleSourceOutlineRefresh(true, { force: true });
+  }
+}
+
+function resizeExplorerOutlineFromPointer(clientY) {
+  const sections = explorerSectionsElement();
+  if (!sections || explorerFilesCollapsed || explorerOutlineCollapsed) {
+    return;
+  }
+  const rect = sections.getBoundingClientRect();
+  const headerHeight = 24 * 2;
+  const splitterHeight = outlineSplitter?.offsetHeight || 5;
+  const available = Math.max(1, rect.height - headerHeight - splitterHeight);
+  const outlinePixels = rect.bottom - clientY - 12;
+  const percent = Math.max(18, Math.min(75, (outlinePixels / available) * 100));
+  explorerOutlineHeight = `${percent.toFixed(1)}%`;
+  applyExplorerSectionLayout();
+}
+
+document.querySelectorAll("[data-explorer-section-toggle]").forEach((toggle) => {
+  toggle.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    toggleExplorerSection(toggle.dataset.explorerSectionToggle);
+  });
+});
+
+outlineSplitter?.addEventListener("pointerdown", (event) => {
+  if (event.button !== 0 || explorerFilesCollapsed || explorerOutlineCollapsed) {
+    return;
+  }
+  draggingOutlineSplitter = true;
+  draggingOutlineSplitterPointerId = event.pointerId;
+  outlineSplitter.setPointerCapture?.(event.pointerId);
+  outlineSplitter.classList.add("is-active-splitter");
+  event.preventDefault();
+});
+
+document.addEventListener("pointermove", (event) => {
+  if (!draggingOutlineSplitter || event.pointerId !== draggingOutlineSplitterPointerId) {
+    return;
+  }
+  resizeExplorerOutlineFromPointer(event.clientY);
+});
+
+function stopExplorerOutlineResize(event) {
+  if (!draggingOutlineSplitter || event.pointerId !== draggingOutlineSplitterPointerId) {
+    return;
+  }
+  draggingOutlineSplitter = false;
+  draggingOutlineSplitterPointerId = null;
+  outlineSplitter?.classList.remove("is-active-splitter");
+  saveExplorerSectionState();
+}
+
+document.addEventListener("pointerup", stopExplorerOutlineResize);
+document.addEventListener("pointercancel", stopExplorerOutlineResize);
+loadExplorerSectionState();
+
+function renderTreeNode(node, parent, depth, importTitleIndex) {
   if (!node) {
     return;
   }
@@ -1897,7 +2155,7 @@ function renderTreeNode(node, parent, depth) {
       row.className = "tree-row folder-row";
       row.dataset.nodeId = node.id;
       row.dataset.dragId = node.id;
-      row.draggable = true;
+      treeRowByNodeId.set(node.id, row);
       row.tabIndex = 0;
       row.style.setProperty("--depth", depth);
       row.setAttribute("role", "treeitem");
@@ -1912,7 +2170,7 @@ function renderTreeNode(node, parent, depth) {
     }
     if (node === fileTree || node.expanded !== false) {
       for (const child of node.children || []) {
-        renderTreeNode(child, parent, node === fileTree ? depth : depth + 1);
+        renderTreeNode(child, parent, node === fileTree ? depth : depth + 1, importTitleIndex);
       }
       renderDraftEntry(node, parent, node === fileTree ? depth : depth + 1);
     }
@@ -1923,7 +2181,7 @@ function renderTreeNode(node, parent, depth) {
   row.className = "tree-row file-row";
   row.dataset.fileId = node.id;
   row.dataset.dragId = node.id;
-  row.draggable = true;
+  treeRowByNodeId.set(node.id, row);
   row.tabIndex = 0;
   row.style.setProperty("--depth", depth);
   row.setAttribute("role", "treeitem");
@@ -1933,7 +2191,7 @@ function renderTreeNode(node, parent, depth) {
   row.classList.toggle("is-renaming", renameEntry?.nodeId === node.id);
   row.innerHTML = `${fileIconSvg(node)}${treeNameHtml(node)}${treeActionsHtml("file")}`;
   setTreeName(row, node);
-  setTreeImportTitle(row, node);
+  setTreeImportTitle(row, node, importTitleIndex);
   parent.append(row);
 }
 
@@ -1992,12 +2250,78 @@ function setTreeName(row, node) {
   row.querySelector(".tree-label").textContent = node.name || fileName(node.puzzlePath);
 }
 
-function setTreeImportTitle(row, node) {
+function buildTreeImportTitleIndex() {
+  const parentGamesById = new Map();
+  const directImportersById = new Map();
+  const puzzleDocuments = documents.filter((document) => isPuzzleDocument(document) && isTextDocument(document));
+  const gameEntries = puzzleDocuments.filter((document) => documentDeclaresGameEntry(document));
+  const pathsByDocumentId = new Map();
+
+  for (const document of puzzleDocuments) {
+    pathsByDocumentId.set(document.id, puzzleImportPathsForDocument(document));
+  }
+
+  const importedDocumentsFor = (document) => {
+    const root = document.workspaceRoot || workspaceRoot || "";
+    return (pathsByDocumentId.get(document.id) || [])
+      .map((importPath) => documentByPathForWorkspace(importPath, root))
+      .filter((imported) => imported && isPuzzleDocument(imported) && isTextDocument(imported));
+  };
+
+  for (const document of puzzleDocuments) {
+    if (documentDeclaresGameEntry(document)) {
+      parentGamesById.set(document.id, [document]);
+    }
+    const directImportedIds = new Set();
+    for (const imported of importedDocumentsFor(document)) {
+      if (imported.id === document.id || directImportedIds.has(imported.id)) {
+        continue;
+      }
+      directImportedIds.add(imported.id);
+      if (!directImportersById.has(imported.id)) {
+        directImportersById.set(imported.id, []);
+      }
+      directImportersById.get(imported.id).push(document);
+    }
+  }
+
+  for (const gameEntry of gameEntries) {
+    const visited = new Set();
+    const stack = importedDocumentsFor(gameEntry);
+    while (stack.length) {
+      const imported = stack.pop();
+      if (!imported || visited.has(imported.id)) {
+        continue;
+      }
+      visited.add(imported.id);
+      if (documentDeclaresGameEntry(imported)) {
+        stack.push(...importedDocumentsFor(imported));
+        continue;
+      }
+      if (!parentGamesById.has(imported.id)) {
+        parentGamesById.set(imported.id, []);
+      }
+      parentGamesById.get(imported.id).push(gameEntry);
+      stack.push(...importedDocumentsFor(imported));
+    }
+  }
+
+  for (const values of parentGamesById.values()) {
+    values.sort(comparePuzzleEntryDocuments);
+  }
+  for (const values of directImportersById.values()) {
+    values.sort(comparePuzzleEntryDocuments);
+  }
+
+  return { parentGamesById, directImportersById };
+}
+
+function setTreeImportTitle(row, node, importTitleIndex) {
   if (!isPuzzleDocument(node) || !isTextDocument(node)) {
     return;
   }
   const lines = [];
-  const parentGames = parentGameCandidatesForDocument(node);
+  const parentGames = importTitleIndex.parentGamesById.get(node.id) || [];
   if (parentGames.length > 1) {
     lines.push(`Parent games: ${parentGames.map((item) => item.puzzlePath || item.name || "game").join(", ")}`);
     lines.push(`Preview uses: ${parentGames[0].puzzlePath || parentGames[0].name || "game"}`);
@@ -2006,7 +2330,7 @@ function setTreeImportTitle(row, node) {
   } else if (parentGames.length === 1) {
     lines.push("Game entry");
   }
-  const importers = directImportersForDocument(node);
+  const importers = importTitleIndex.directImportersById.get(node.id) || [];
   if (importers.length) {
     lines.push(`Imported by: ${importers.map((item) => item.puzzlePath || item.name).join(", ")}`);
   } else if (!parentGames.length) {
@@ -2207,7 +2531,7 @@ function assetResolverScript(document) {
   const baseDir = directoryName(document?.puzzlePath);
   const root = document?.workspaceRoot || workspaceRoot;
   const entries = {};
-  for (const path of declaredAssetPaths(document, "file")) {
+  for (const path of declaredFileAssetPaths(document)) {
     const key = normalizePath(path);
     const url = assetUrlForPath(key, baseDir, root);
     if (!url) {
@@ -2216,6 +2540,34 @@ function assetResolverScript(document) {
     entries[key] = url;
   }
   return `window.PuzzleAssets = { files: ${JSON.stringify(entries)}, url(path) { const key = String(path || "").replaceAll("\\\\", "/"); if (Object.prototype.hasOwnProperty.call(this.files, key)) return this.files[key]; if (/^(?:data:|https?:|#)/.test(key)) return key; throw new Error(\`Puzzle asset is not embedded: \${key}. Declare it with file "\${key}" in assets.\`); } };`;
+}
+
+function declaredFileAssetPaths(document) {
+  const paths = declaredAssetPaths(document, "file");
+  for (const path of declaredSpriteImagePaths(document)) {
+    if (!paths.includes(path)) {
+      paths.push(path);
+    }
+  }
+  return paths;
+}
+
+function declaredSpriteImagePaths(document) {
+  const source = document?.source || "";
+  let expanded = source;
+  try {
+    expanded = expandPuzzleImportsForWasm(source, document?.puzzlePath || "game.puzzle");
+  } catch {
+    expanded = source;
+  }
+  const out = [];
+  for (const line of String(expanded || "").split("\n")) {
+    const match = stripLineCommentForWasm(line).trim().match(/^image\s+"([^"]+)"$/);
+    if (match && !out.includes(match[1])) {
+      out.push(match[1]);
+    }
+  }
+  return out;
 }
 
 function rewriteCssAssetUrls(css, baseDir = "", root = workspaceRoot) {
@@ -2425,6 +2777,8 @@ function loadEmbeddedDocument(index) {
     return;
   }
   const previousActiveFileId = activeFileId;
+  const previousPreviewDocument = activePreviewDocument();
+  const previousPreviewKey = previousPreviewDocument ? documentIdentityKey(previousPreviewDocument) : "";
   showWorkPane(SOURCE_WORK_PANE_ID);
   currentDocumentIndex = index;
   activeFileId = document.id;
@@ -2470,7 +2824,14 @@ function loadEmbeddedDocument(index) {
     restoreSourceFoldState(document.sourceFoldedBlockKeys);
   }
   updateDocumentTabUnsavedStates();
-  invalidateCompiledPreview(previewDocument);
+  const previewTargetUnchanged = previewDocument
+    && previousPreviewKey
+    && documentIdentityKey(previewDocument) === previousPreviewKey;
+  if (previewTargetUnchanged) {
+    markPreviewDirty();
+  } else {
+    invalidateCompiledPreview(previewDocument);
+  }
   if (typeof syncPaneModesFromFocusedPuzzleSource === "function") {
     syncPaneModesFromFocusedPuzzleSource({ switchOpenPane: true });
   }
@@ -2589,11 +2950,17 @@ async function newPuzzleSourceForFile(_name) {
 
 function startDraftEntry(kind) {
   const folder = activeFolder();
-  folder.expanded = true;
+  if (!folder?.id) {
+    setEditorStatus("Select a workspace before creating files", "is-error");
+    return;
+  }
+  expandFolderPathToNode(folder.id);
+  selectedTreeId = folder.id;
+  selectedFolderId = folder.id;
   draftEntry = {
     kind,
     parentId: folder.id,
-    name: kind === "folder" ? "folder" : "untitled.puzzle",
+    name: kind === "folder" ? "folder" : "untitled",
   };
   renderDocumentSelect();
 }
@@ -2603,9 +2970,7 @@ async function commitDraftEntry(rawName) {
     return;
   }
   const parent = findNode(fileTree, draftEntry.parentId) || fileTree;
-  const name = draftEntry.kind === "folder"
-    ? sanitizeFileName(rawName)
-    : ensurePuzzleExtension(rawName);
+  const name = sanitizeFileName(rawName);
   const kind = draftEntry.kind;
   draftEntry = null;
   if (!name) {
@@ -2665,15 +3030,15 @@ async function moveNodeToFolder(nodeId, targetFolderId) {
   if (!nodeId) {
     return false;
   }
-  const targetFolder = targetFolderId ? findNode(fileTree, targetFolderId) : fileTree;
   const source = findNodeWithParent(fileTree, nodeId);
+  const targetFolder = source?.node ? moveTargetFolderForSource(source.node, targetFolderId) : null;
   if (!source || !source.parent || !source.node || targetFolder?.kind !== "folder") {
     return false;
   }
   if (source.node === fileTree || source.parent === targetFolder) {
     return false;
   }
-  if (source.node.isWorkspaceRoot || targetFolder.isWorkspaceRoot && source.node.workspaceRoot && source.node.workspaceRoot !== targetFolder.workspaceRoot) {
+  if (source.node.isWorkspaceRoot) {
     return false;
   }
   if (source.node.kind === "folder" && containsNode(source.node, targetFolder.id)) {
@@ -2685,9 +3050,6 @@ async function moveNodeToFolder(nodeId, targetFolderId) {
   const targetWorkspaceRoot = targetFolder === fileTree
     ? sourceWorkspaceRoot
     : workspaceRootForFolder(targetFolder);
-  if (sourceWorkspaceRoot && targetWorkspaceRoot && sourceWorkspaceRoot !== targetWorkspaceRoot) {
-    throw new Error("Cannot move entries between workspaces.");
-  }
   const sourcePath = source.node.kind === "folder"
     ? folderPath(source.node)
     : source.node.puzzlePath;
@@ -2703,8 +3065,9 @@ async function moveNodeToFolder(nodeId, targetFolderId) {
     try {
       await window.PuzzleStudioHost.renameWorkspaceEntry({
         fromPath: hostPathForEditorPath(sourcePath, sourceWorkspaceRoot),
-        toPath: hostPathForEditorPath(targetPath, sourceWorkspaceRoot),
+        toPath: hostPathForEditorPath(targetPath, targetWorkspaceRoot),
         workspaceRoot: sourceWorkspaceRoot,
+        targetWorkspaceRoot,
       });
     } finally {
       endWorkspaceHostMutation();
@@ -2717,9 +3080,10 @@ async function moveNodeToFolder(nodeId, targetFolderId) {
   } else {
     source.node.name = uniqueChildName(targetFolder, source.node.name || "item");
   }
+  setWorkspaceRootForNode(source.node, targetWorkspaceRoot);
   targetFolder.children.push(source.node);
   targetFolder.expanded = true;
-  selectedFolderId = targetFolder.id;
+  selectedFolderId = targetFolder === fileTree ? "" : targetFolder.id;
   selectedTreeId = source.node.id;
   syncDocumentsFromTree();
   currentDocumentIndex = activeDocumentIndex();
@@ -2750,45 +3114,104 @@ function dropFolderIdForPoint(x, y) {
   return dropFolderIdForElement(document.elementFromPoint(x, y));
 }
 
+function moveTargetFolderForSource(sourceNode, targetFolderId) {
+  const requestedFolder = targetFolderId ? findNode(fileTree, targetFolderId) : fileTree;
+  if (requestedFolder !== fileTree) {
+    return requestedFolder;
+  }
+  const sourceWorkspaceRoot = workspaceRootForNode(sourceNode);
+  const sourceWorkspaceFolder = sourceWorkspaceRoot ? workspaceRootFolder(sourceWorkspaceRoot) : null;
+  if (sourceWorkspaceFolder) {
+    return sourceWorkspaceFolder;
+  }
+  return fileTree;
+}
+
+function resolvedDropFolderIdForNode(nodeId, targetFolderId) {
+  const source = treeDragCacheForNode(nodeId)?.source;
+  const targetFolder = source?.node ? moveTargetFolderForSource(source.node, targetFolderId) : null;
+  if (!targetFolder || targetFolder === fileTree) {
+    return "";
+  }
+  return targetFolder.id;
+}
+
 function canDropNodeOnFolder(nodeId, targetFolderId) {
   if (!nodeId) {
     return false;
   }
-  const source = findNodeWithParent(fileTree, nodeId);
-  const targetFolder = targetFolderId ? findNode(fileTree, targetFolderId) : fileTree;
-  if (!source?.node || !source.parent || targetFolder?.kind !== "folder") {
+  const cache = treeDragCacheForNode(nodeId);
+  if (!cache?.source?.node || !cache.source.parent) {
     return false;
   }
-  if (source.parent === targetFolder) {
-    return false;
+  const targetKey = targetFolderId || "";
+  if (cache.targetDecisions.has(targetKey)) {
+    return cache.targetDecisions.get(targetKey);
   }
-  if (source.node.isWorkspaceRoot || targetFolder.isWorkspaceRoot && source.node.workspaceRoot && source.node.workspaceRoot !== targetFolder.workspaceRoot) {
-    return false;
+  const source = cache.source;
+  const targetFolder = moveTargetFolderForSource(source.node, targetFolderId);
+  let allowed = true;
+  if (targetFolder?.kind !== "folder") {
+    allowed = false;
   }
-  const sourceWorkspaceRoot = workspaceRootForNode(source.node);
-  const targetWorkspaceRoot = targetFolder === fileTree
-    ? sourceWorkspaceRoot
-    : workspaceRootForFolder(targetFolder);
-  if (sourceWorkspaceRoot && targetWorkspaceRoot && sourceWorkspaceRoot !== targetWorkspaceRoot) {
-    return false;
+  if (allowed && source.parent === targetFolder) {
+    allowed = false;
   }
-  if (source.node.kind === "folder" && containsNode(source.node, targetFolder.id)) {
-    return false;
+  if (allowed && source.node.isWorkspaceRoot) {
+    allowed = false;
   }
-  return true;
+  if (allowed && source.node.kind === "folder" && containsNode(source.node, targetFolder.id)) {
+    allowed = false;
+  }
+  cache.targetDecisions.set(targetKey, allowed);
+  return allowed;
 }
 
 function markDropTarget(folderId) {
+  const targetId = folderId || "";
+  const target = targetId ? treeRowByNodeId.get(targetId) : documentList;
+  if (currentDropTargetId === targetId && currentDropTargetElement === target) {
+    return;
+  }
   clearDropTargets();
-  const target = folderId
-    ? Array.from(documentList.querySelectorAll("[data-node-id]")).find((row) => row.dataset.nodeId === folderId)
-    : documentList;
-  target?.classList.add("is-drop-target");
+  currentDropTargetId = targetId;
+  currentDropTargetElement = target || null;
+  currentDropTargetElement?.classList.add("is-drop-target");
 }
 
 function clearDropTargets() {
-  documentList.classList.remove("is-drop-target");
-  documentList.querySelectorAll(".is-drop-target").forEach((row) => row.classList.remove("is-drop-target"));
+  currentDropTargetElement?.classList.remove("is-drop-target");
+  currentDropTargetId = null;
+  currentDropTargetElement = null;
+}
+
+function resetTreeDragDecisionCache() {
+  treeDragDecisionCache = null;
+}
+
+function treeDragCacheForNode(nodeId) {
+  if (treeDragDecisionCache?.nodeId === nodeId) {
+    return treeDragDecisionCache;
+  }
+  const source = findNodeWithParent(fileTree, nodeId);
+  treeDragDecisionCache = {
+    nodeId,
+    source,
+    targetDecisions: new Map(),
+  };
+  return treeDragDecisionCache;
+}
+
+function setWorkspaceRootForNode(node, nextRoot) {
+  if (!node) {
+    return;
+  }
+  node.workspaceRoot = nextRoot || "";
+  if (node.kind === "folder") {
+    for (const child of node.children || []) {
+      setWorkspaceRootForNode(child, nextRoot);
+    }
+  }
 }
 
 function findNodeWithParent(folder, nodeId, parent = null) {
@@ -2911,11 +3334,14 @@ async function deleteTreeNode(nodeId) {
   const entryPath = target.node.kind === "folder"
     ? folderPath(target.node)
     : target.node.puzzlePath;
+  if (!confirmDeleteWorkspaceEntry(target.node, {
+    fromDisk: !editorSeed && isDesktopHost() && typeof window.PuzzleStudioHost.deleteWorkspaceEntry === "function",
+  })) {
+    setEditorStatus("Delete canceled", "");
+    return;
+  }
+
   if (!editorSeed && typeof window.PuzzleStudioHost.deleteWorkspaceEntry === "function") {
-    if (!confirmDesktopDeleteWorkspaceEntry(target.node)) {
-      setEditorStatus("Delete canceled", "");
-      return;
-    }
     beginWorkspaceHostMutation();
     try {
       await window.PuzzleStudioHost.deleteWorkspaceEntry({
@@ -3009,12 +3435,57 @@ function activeFolder() {
   if (selected?.kind === "folder") {
     return selected;
   }
+  if (selected?.kind === "file") {
+    const selectedFileFolder = findParentFolder(fileTree, selected.id);
+    if (selectedFileFolder?.kind === "folder") {
+      return selectedFileFolder;
+    }
+  }
   const selectedFolder = selectedFolderId ? findNode(fileTree, selectedFolderId) : null;
   if (selectedFolder?.kind === "folder") {
     return selectedFolder;
   }
+  const activeWorkspaceFolder = workspaceRootFolder(workspaceRoot);
+  if (activeWorkspaceFolder?.kind === "folder") {
+    return activeWorkspaceFolder;
+  }
   const current = documents[currentDocumentIndex];
-  return findParentFolder(fileTree, current?.id) || fileTree;
+  const currentFolder = findParentFolder(fileTree, current?.id);
+  if (currentFolder?.kind === "folder") {
+    return currentFolder;
+  }
+  if (isDesktopHost()) {
+    const workspaceFolders = (fileTree?.children || []).filter((child) => child?.kind === "folder" && child.isWorkspaceRoot);
+    return workspaceFolders.length === 1 ? workspaceFolders[0] : null;
+  }
+  return fileTree;
+}
+
+function expandFolderPathToNode(nodeId) {
+  const path = folderPathToNode(fileTree, nodeId);
+  for (const folder of path) {
+    folder.expanded = true;
+  }
+}
+
+function folderPathToNode(folder, nodeId, path = []) {
+  if (!folder || folder.kind !== "folder") {
+    return [];
+  }
+  const nextPath = folder === fileTree ? path : [...path, folder];
+  if (folder.id === nodeId) {
+    return nextPath;
+  }
+  for (const child of folder.children || []) {
+    if (child.kind !== "folder") {
+      continue;
+    }
+    const found = folderPathToNode(child, nodeId, nextPath);
+    if (found.length) {
+      return found;
+    }
+  }
+  return [];
 }
 
 function findParentFolder(folder, childId) {
@@ -3078,14 +3549,6 @@ function folderPathVisit(node, targetId, path) {
     path.pop();
   }
   return false;
-}
-
-function ensurePuzzleExtension(name) {
-  const cleaned = sanitizeFileName(name);
-  if (!cleaned) {
-    return "";
-  }
-  return cleaned.endsWith(".puzzle") ? cleaned : `${cleaned}.puzzle`;
 }
 
 function sanitizeFileName(name) {
@@ -3153,3 +3616,35 @@ function setFileActionsMenuOpen(open) {
   fileActionsMenu.hidden = !open;
   fileActionsButton.setAttribute("aria-expanded", open ? "true" : "false");
 }
+
+let desktopExitConfirmationOpen = false;
+
+function installDesktopExitGuards() {
+  if (!isDesktopHost()) {
+    return;
+  }
+  window.PuzzleStudioHost.listenDesktopCloseRequested(async (event) => {
+    if (desktopExitConfirmationOpen) {
+      event.preventDefault();
+      return;
+    }
+    desktopExitConfirmationOpen = true;
+    try {
+      if (!confirmDesktopExitWithUnsavedChanges("Close this window")) {
+        event.preventDefault();
+        setEditorStatus("Close canceled: unsaved changes", "is-error");
+      }
+    } catch (error) {
+      event.preventDefault();
+      console.error(error);
+      setEditorStatus("Close blocked: unsaved state unavailable", "is-error");
+    } finally {
+      desktopExitConfirmationOpen = false;
+    }
+  }).catch((error) => {
+    console.error(error);
+    setEditorStatus("Close guard unavailable", "is-error");
+  });
+}
+
+installDesktopExitGuards();

@@ -156,7 +156,12 @@ fn push_runtime_export_data(out: &mut String, state: &ServerState) {
     out.push('}');
 }
 
-fn push_export_boot_data(out: &mut String, state: &ServerState, include_source: bool) {
+fn push_export_boot_data(
+    out: &mut String,
+    state: &ServerState,
+    include_source: bool,
+    editor_preview: bool,
+) {
     out.push('{');
     push_json_pair(out, "title", &state.loaded.title);
     out.push(',');
@@ -186,6 +191,8 @@ fn push_export_boot_data(out: &mut String, state: &ServerState, include_source: 
         out.push(',');
         push_json_pair(out, "puzzlePath", &state.puzzle_path);
     }
+    out.push(',');
+    push_json_bool(out, "editorPreview", editor_preview);
     out.push(',');
     push_json_pair(
         out,
@@ -508,9 +515,9 @@ fn push_wait_events(out: &mut String, events: &[WaitEvent]) {
     out.push(']');
 }
 
-fn push_animation_events(out: &mut String, events: &[AnimationEvent]) {
+fn push_animation_events(out: &mut String, loaded: &LoadedGame, events: &[AnimationEvent]) {
     out.push_str("\"animationEvents\":");
-    let events_json = serde_json::to_string(&animation_events_contract_2d(events))
+    let events_json = serde_json::to_string(&animation_events_contract_2d(loaded, events))
         .expect("runtime animation event contract should serialize");
     out.push_str(&events_json);
 }
@@ -2084,6 +2091,13 @@ fn push_goal_value(out: &mut String, value: &GoalValue) {
             push_json_pair(out, "kind", "condition_value");
             out.push(',');
             push_condition_value_kind(out, kind);
+        }
+        GoalValue::AllObjectsOn { subjects, covers } => {
+            push_json_pair(out, "kind", "all_objects_on");
+            out.push(',');
+            push_object_ids(out, "subjects", subjects);
+            out.push(',');
+            push_object_ids(out, "covers", covers);
         }
     }
     out.push('}');

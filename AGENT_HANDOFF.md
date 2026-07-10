@@ -137,6 +137,11 @@ Top-level docs are split by audience:
   lowering/runtime constraints, and implementation plans.
 - Folder `AGENTS.md` files carry operational handoff details for each owner.
 
+The canonical parser/editor source-analysis boundary is specified in
+`SOURCE_ANALYSIS_CONTRACT.md`. Read it before changing `SurfaceDocument`,
+`SourceAnalysis`, analysis profiles, source offsets, or language-aware editor
+integration.
+
 When a feature changes, update the user-facing explanation, developer-facing
 principle/spec, or owner-specific agent handoff according to the audience that
 needs the information.

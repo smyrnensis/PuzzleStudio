@@ -914,9 +914,6 @@ function applyPaneVisibility() {
   syncPreviewModeButtonState();
   scheduleBoardScaleSync();
   requestAnimationFrame(syncPreviewViewportScale);
-  if (typeof syncPreviewFrameLifecycleForPaneVisibility === "function") {
-    syncPreviewFrameLifecycleForPaneVisibility();
-  }
 }
 
 function toggleWorkPaneMaximized(paneId) {

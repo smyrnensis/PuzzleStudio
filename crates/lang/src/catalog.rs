@@ -8,7 +8,7 @@ use puzzle_core::{
 pub(crate) struct Catalog {
     pub(crate) value_sets: HashMap<String, Vec<String>>,
     pub(crate) object_axes: HashMap<String, Vec<String>>,
-    pub(crate) axis_kinds: HashMap<String, AxisKind>,
+    pub(crate) axis_types: HashMap<String, ValueType>,
     pub(crate) maps: HashMap<String, ValueMap>,
     pub(crate) object_schemas: HashMap<String, ObjectSchema>,
     pub(crate) object_groups: HashMap<String, Vec<ObjectId>>,
@@ -43,6 +43,11 @@ impl Default for Catalog {
                 .map(str::to_string)
                 .collect(),
         );
+        let axis_types = HashMap::from([
+            ("directions".to_string(), ValueType::Direction),
+            ("horizontal".to_string(), ValueType::Direction),
+            ("vertical".to_string(), ValueType::Direction),
+        ]);
         value_sets.insert(
             "horizontal".to_string(),
             ["left", "right"].into_iter().map(str::to_string).collect(),
@@ -89,7 +94,7 @@ impl Default for Catalog {
         Self {
             value_sets,
             object_axes: HashMap::new(),
-            axis_kinds: HashMap::new(),
+            axis_types,
             maps: HashMap::new(),
             object_schemas: HashMap::new(),
             object_groups: HashMap::new(),
@@ -125,7 +130,7 @@ impl Default for Catalog {
 #[derive(Clone, Debug)]
 pub(crate) struct ObjectSchema {
     pub(crate) axes: Vec<String>,
-    pub(crate) axis_kinds: Vec<Option<AxisKind>>,
+    pub(crate) axis_types: Vec<Option<ValueType>>,
     pub(crate) variants: Vec<ObjectVariant>,
 }
 
@@ -143,9 +148,16 @@ pub(crate) struct ValueMap {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum AxisKind {
-    Rotation,
-    Translation,
+pub(crate) enum ValueType {
+    Int,
+    Rational,
+    Bool,
+    String,
+    Angle,
+    Vec2,
+    Frame3,
+    Direction,
+    Nominal,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -182,6 +194,10 @@ impl Rational {
             numerator: value,
             denominator: 1,
         }
+    }
+
+    pub(crate) fn as_f64(self) -> f64 {
+        self.numerator as f64 / self.denominator as f64
     }
 
     pub(crate) fn add(self, other: Self) -> Self {

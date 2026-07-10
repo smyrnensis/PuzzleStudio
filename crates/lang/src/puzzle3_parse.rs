@@ -1028,10 +1028,13 @@ fn parse_value_set(line: &str) -> Result<(String, Vec<String>), ParseError3> {
     let (name, values) = line
         .split_once('=')
         .ok_or_else(|| message("value set must be: name = value..."))?;
-    let values = values
-        .split_whitespace()
-        .map(str::to_string)
-        .collect::<Vec<_>>();
+    let values = match crate::frame3_literal::parse_frame3_domain(values.trim()).map_err(message)? {
+        Some(values) => values,
+        None => values
+            .split_whitespace()
+            .map(str::to_string)
+            .collect::<Vec<_>>(),
+    };
     if values.is_empty() {
         return Err(message("value set must contain at least one value"));
     }
@@ -1347,8 +1350,8 @@ fn parse_group_spec(line: &str) -> Result<GroupSpec3, ParseError3> {
     let (name, selectors) = line
         .split_once('=')
         .ok_or_else(|| message("group row must be: name = selector..."))?;
-    let selectors = selectors
-        .split_whitespace()
+    let selectors = puzzle_authoring::split_header_tokens(selectors)
+        .into_iter()
         .map(str::to_string)
         .collect::<Vec<_>>();
     if selectors.is_empty() {
@@ -1374,8 +1377,8 @@ fn parse_legend_spec(line: &str) -> Result<LegendSpec3, ParseError3> {
         .split_once('=')
         .ok_or_else(|| message("legend row must be: <char> = selector..."))?;
     let ch = parse_legend_char(ch.trim())?;
-    let selectors = selectors
-        .split_whitespace()
+    let selectors = puzzle_authoring::split_header_tokens(selectors)
+        .into_iter()
         .map(str::to_string)
         .collect::<Vec<_>>();
     if selectors.is_empty() {
@@ -1917,7 +1920,7 @@ fn parse_rule_line(
         } => (application, orientation, rewrite),
     };
     let (lhs, rhs, effects) = parse_rewrite(rest)?;
-    if prefix.contains(':') || matches!(prefix, "frames" | "canonical" | "mirrored") {
+    if prefix.contains(',') || matches!(prefix, "frames" | "canonical" | "mirrored") {
         let orientation = parse_frame_orientation(prefix)?;
         let rule = DenseRuleTemplate3::once(
             orientation,
@@ -2264,11 +2267,14 @@ fn parse_all_on_condition(
         ));
     }
     let cover_object = resolve_single_selector_object(catalog, cover.trim())?;
-    Ok(WinCondition3::NoPattern(Pattern3::new(vec![
-        MatchCell3::new(Offset3::ZERO)
-            .require(object)
-            .forbid(cover_object),
-    ])))
+    Ok(WinCondition3::AllObjectsCoveredByPattern {
+        object,
+        cover_pattern: Pattern3::new(vec![
+            MatchCell3::new(Offset3::ZERO)
+                .require(object)
+                .require(cover_object),
+        ]),
+    })
 }
 
 fn pattern_conditions(
@@ -2400,7 +2406,7 @@ fn lower_surface_pattern_arg3d(
         .map(|rules| rules.into_iter().map(|rule| rule.pattern).collect())
         .map_err(|error| message(format!("failed to lower pattern: {error}")));
     };
-    if orientation.contains(':')
+    if orientation.contains(',')
         || matches!(orientation.as_str(), "frames" | "canonical" | "mirrored")
     {
         let orientation = parse_frame_orientation(&orientation)?;
@@ -2508,10 +2514,16 @@ fn parse_frame_orientation(prefix: &str) -> Result<FrameOrientation3, ParseError
         "mirrored" => return Ok(FrameOrientation3::FrameSet(FrameSet3::Mirrored)),
         _ => {}
     }
-    let parts = prefix.split(':').collect::<Vec<_>>();
-    if parts.len() < 2 || parts.len() > 3 {
-        return Err(message("frame orientation must be A:B or A:B:C"));
-    }
+    let prefix = prefix.trim();
+    let body = if prefix.starts_with('(') || prefix.ends_with(')') {
+        prefix
+            .strip_prefix('(')
+            .and_then(|prefix| prefix.strip_suffix(')'))
+            .ok_or_else(|| message("frame3 orientation has unmatched parentheses"))?
+    } else {
+        prefix
+    };
+    let parts = crate::frame3_literal::split_frame3_components(body).map_err(message)?;
     let expr = if parts.len() == 2 {
         FrameExpr3::from_two(parse_frame_slot(parts[0])?, parse_frame_slot(parts[1])?)
     } else {
@@ -3264,19 +3276,33 @@ fn parse_selector(
 ) -> Result<ObjectSelector3, ParseError3> {
     let (selector, mark) = split_selector_mark3(token)?;
     let (selector, occurrence_label) = split_selector_occurrence_label3(selector)?;
-    let parts = selector.split(':').collect::<Vec<_>>();
+    let mut parts = selector.split(':').map(str::to_string).collect::<Vec<_>>();
+    for part in parts.iter_mut().skip(1) {
+        if part.contains(',') && !(part.starts_with('(') && part.ends_with(')')) {
+            return Err(message(
+                "frame3 object slot must be parenthesized: Object:(primary, secondary)",
+            ));
+        }
+        if part.starts_with('(') && part.ends_with(')') {
+            match crate::frame3_literal::parse_frame3_domain(part).map_err(message)? {
+                Some(values) if values.len() == 1 => *part = values[0].clone(),
+                Some(_) => unreachable!("one parenthesized frame3 literal yields one value"),
+                None => {}
+            }
+        }
+    }
     let parsed = if selector == "*" {
         ObjectSelector3::any()
     } else if parts.len() > 1 {
         ObjectSelector3::variant(
-            parts[0],
+            &parts[0],
             parts[1..]
                 .iter()
                 .map(|part| {
-                    if *part == "*" {
+                    if part == "*" {
                         SelectorTag3::any()
                     } else {
-                        SelectorTag3::value(*part)
+                        SelectorTag3::value(part)
                     }
                 })
                 .collect(),

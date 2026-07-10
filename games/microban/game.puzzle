@@ -11,8 +11,7 @@ solid = Player Box Wall
 }
 
 win_conditions {
-some Goal
-no [ Box no Goal ]
+all Goal on Box
 }
 
 on_level_start {
@@ -22,7 +21,7 @@ once_all [ no Background ] -> [ Background ]
 rules {
 input [ Player ] -> [ > Player ] 
 [ > Player | Box ] -> [ > Player | > Box ]
-move
+[ > solid | no solid ] -> [  | solid ]
 }
 
 on_level_clear {

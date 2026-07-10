@@ -6066,8 +6066,9 @@ white = #ffffff
 sprite {
 selector = Player
 colors = white
-shape =
+shape = {
 0
+}
 }
 }
 "##,
@@ -6232,8 +6233,9 @@ white = #ffffff
 sprite {
 selector = Player
 colors = white
-shape =
+shape = {
 0
+}
 }
 }
 
@@ -6721,8 +6723,9 @@ shape = mark:kind
 sprite {
 selector = Wall
 colors = #444
-shape =
+shape = {
 0
+}
 }
 }
 rules {
@@ -6783,9 +6786,10 @@ sprites {
 sprite {
 selector = Player
 colors = #e94f64 #2f80ed
-shape =
+shape = {
 0.
 .1
+}
 }
 }
 rules {
@@ -7266,12 +7270,13 @@ sprites {
 sprite {
 selector = Box
 colors = #aaa
-shape =
+shape = {
 00000
 00000
 00000
 00000
 00000
+}
 }
 sprite {
 selector = Wall
@@ -7432,19 +7437,21 @@ sprites {
 sprite {
 selector = Crack
 colors = #2cc511
-shape =
+shape = {
 .....
 ..0..
 .000.
 ..0..
 .....
 }
+}
 
 sprite {
 selector = Crack
 colors = #000
-shape =
+shape = {
 0
+}
 }
 }
 rules {
@@ -7490,20 +7497,22 @@ sprites {
 sprite {
 selector = Box
 colors = #aaa
-shape =
+shape = {
 0000
 0000
 0000
 0000
 }
+}
 
 sprite {
 selector = Pull
 colors = #bbb
-shape =
+shape = {
 000
 000
 000
+}
 }
 }
 rules {
@@ -7540,19 +7549,21 @@ sprites {
 sprite {
 selector = Box
 colors = #aaa
-shape =
+shape = {
 0000
 0000
 0000
 0000
 }
+}
 
 sprite {
 selector = Pull
 colors = #bbb
-shape =
+shape = {
 00
 00
+}
 }
 }
 rules {
@@ -7594,14 +7605,16 @@ sprites {
 sprite {
 selector = Box:base
 colors = #aaa
-shape =
+shape = {
 0
+}
 }
 sprite {
 selector = Box:movable
 colors = #bbb
-shape =
+shape = {
 0
+}
 }
 }
 rules {
@@ -7657,9 +7670,10 @@ Gate_color_2 = #222222
 sprite {
 selector = Gate:num
 colors = Gate_color_1 Gate_color_2
-shape =
+shape = {
 01
 10
+}
 }
 }
 rules {
@@ -7789,13 +7803,14 @@ sprites {
 sprite {
 selector = Player
 colors = #fff
-shape =
+shape = {
 00000
 00000
 00000
 00000
 00000
 translate:right:2 translate:up:1
+}
 }
 }
 rules {
@@ -7810,7 +7825,8 @@ P
     let error = parse_game(source).unwrap_err().to_string();
     assert!(
         error.contains("visual shape rows must be equal-width ascii")
-            || error.contains("ASCII rows cannot contain braces"),
+            || error.contains("ASCII rows cannot contain braces")
+            || error.contains("sprite ASCII row must be a single token row"),
         "{error}"
     );
 }
@@ -7832,9 +7848,10 @@ sprites {
 sprite {
 selector = Player
 colors = #fff
-shape =
+shape = {
 0
 translate:right
+}
 }
 }
 rules {
@@ -8022,6 +8039,7 @@ puzzle default {
 layers {
 __legacy_layer_0 = Background
 }
+
 legend {
 . = empty
 B = Background
@@ -8085,6 +8103,91 @@ B
         }
         _ => panic!("Background should be an ascii sprite"),
     }
+}
+
+#[test]
+fn puzzle_sprites_accept_explicit_braced_inline_shape() {
+    let source = r##"
+title = explicit_braced_inline_shape
+
+puzzle default {
+layers {
+__legacy_layer_0 = Player
+}
+sprites {
+sprite {
+selector = Player
+colors = #fff #000
+shape = {
+000
+010
+000
+}
+}
+}
+rules {
+}
+levels {
+legend {
+. = empty
+P = Player
+}
+level "start"
+P
+}
+}
+"##;
+    let loaded = parse_game(source).unwrap();
+    let sprite = loaded
+        .visuals
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "Player")
+        .unwrap();
+    match &sprite.kind {
+        VisualSpriteKind::Ascii { pattern, .. } => {
+            assert_eq!(pattern, &["000", "010", "000"]);
+        }
+        _ => panic!("Player should be an ascii sprite"),
+    }
+}
+
+#[test]
+fn puzzle_sprites_reject_legacy_unbraced_shape_marker() {
+    let source = r##"
+title = reject_legacy_unbraced_shape_marker
+
+puzzle default {
+layers {
+__legacy_layer_0 = Player
+}
+sprites {
+sprite {
+selector = Player
+colors = #fff #000
+shape =
+000
+010
+000
+}
+}
+rules {
+}
+levels {
+legend {
+. = empty
+P = Player
+}
+level "start"
+P
+}
+}
+"##;
+    let error = parse_game(source).unwrap_err().to_string();
+    assert!(
+        error.contains("inline sprite shape must be `shape = { ... }` or bare ASCII rows"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -8703,10 +8806,7 @@ B
 }
 "##;
     let error = parse_game(source).unwrap_err().to_string();
-    assert!(
-        error.contains("sprite attachment header must be one selector"),
-        "{error}"
-    );
+    assert!(error.contains("sprite entry missing selector"), "{error}");
 }
 
 #[test]
@@ -8725,7 +8825,7 @@ legend {
 sprites {
 Box {
 image = "sprites/box.png"
-offset = 0 -1/4
+translate (0, -1/4)
 sampling = smooth
 }
 }
@@ -8751,8 +8851,10 @@ B
         }
         _ => panic!("Box should be an image sprite"),
     }
-    assert_eq!(sprite.offset.x, 0.0);
-    assert_eq!(sprite.offset.y, -0.25);
+    assert_eq!(
+        sprite.transforms,
+        [VisualSpriteTransform::Translate { x: 0.0, y: -0.25 }]
+    );
     assert_eq!(sprite.sampling, Some(VisualSpriteSampling::Smooth));
 }
 
@@ -8773,7 +8875,7 @@ sprites {
 sprite {
 selector = Box
 image = "sprites/box.png"
-offset = 0 -1/4
+translate (0, -1/4)
 sampling = smooth
 }
 }
@@ -8800,9 +8902,38 @@ B
         _ => panic!("Box should be an image sprite"),
     }
     assert_eq!(sprite.fit, VisualSpriteFit::default());
-    assert_eq!(sprite.offset.x, 0.0);
-    assert_eq!(sprite.offset.y, -0.25);
+    assert_eq!(
+        sprite.transforms,
+        [VisualSpriteTransform::Translate { x: 0.0, y: -0.25 }]
+    );
     assert_eq!(sprite.sampling, Some(VisualSpriteSampling::Smooth));
+}
+
+#[test]
+fn puzzle_sprites_reject_removed_offset_property() {
+    let source = r##"
+title = removed_sprite_offset
+
+puzzle default {
+layers {
+actor = Box
+}
+sprites {
+Box {
+image = "sprites/box.png"
+offset 0.5 0
+}
+}
+rules {
+}
+level "start" {
+.
+}
+}
+"##;
+    let error = parse_game(source).unwrap_err().to_string();
+
+    assert!(error.contains("sprite offset was replaced by translate (<x>, <y>)"));
 }
 
 #[test]
@@ -8854,8 +8985,9 @@ sprites {
 sprite {
 selector = Player
 colors = #000000 #111111 #222222 #333333 #444444 #555555 #666666 #777777 #888888 #999999 #aaaaaa
-shape =
+shape = {
 a
+}
 }
 }
 rules {
@@ -8904,8 +9036,9 @@ sprites {
 sprite {
 selector = Player
 colors = #ff004d80 #00000000
-shape =
+shape = {
 01
+}
 }
 }
 rules {
@@ -8959,8 +9092,9 @@ sprites {
 sprite {
 selector = Player
 colors = #00000000 #555555
-shape =
+shape = {
 01.
+}
 }
 }
 rules {
@@ -9015,8 +9149,9 @@ sprites {
 sprite {
 selector = Player
 colors = transparent #555
-shape =
+shape = {
 01
+}
 }
 }
 rules {
@@ -9071,8 +9206,9 @@ sprites {
 sprite {
 selector = Player
 colors = transparent
-shape =
+shape = {
 01
+}
 }
 }
 rules {
@@ -9178,7 +9314,10 @@ P
 }
 "##;
     let error = parse_game(source).unwrap_err().to_string();
-    assert!(error.contains("unknown sprites directive Player"));
+    assert!(
+        error.contains("sprite ASCII row must be a single token row"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -9837,14 +9976,15 @@ legend {
 sprites {
 sprite {
 selector = Player
-offset = 0.5 -1/4
+translate (0.5, -1/4)
 sampling = smooth
 colors = #e94f64 #2f80ed
-shape =
+shape = {
 ........
 ..00....
 ..01....
 ........
+}
 }
 }
 rules {
@@ -9863,8 +10003,10 @@ P
         .iter()
         .find(|sprite| sprite.name == "Player")
         .unwrap();
-    assert_eq!(sprite.offset.x, 0.5);
-    assert_eq!(sprite.offset.y, -0.25);
+    assert_eq!(
+        sprite.transforms,
+        [VisualSpriteTransform::Translate { x: 0.5, y: -0.25 }]
+    );
     assert_eq!(sprite.fit, VisualSpriteFit::default());
     assert_eq!(sprite.sampling, Some(VisualSpriteSampling::Smooth));
     assert!(sprite.pixels_per_cell.is_none());
@@ -9904,11 +10046,12 @@ sprites {
 sprite {
 selector = Player
 colors = #e94f64 #2f80ed
-shape =
+shape = {
 ........
 ..00....
 ..01....
 ........
+}
 }
 }
 rules {
@@ -9963,11 +10106,12 @@ sprites {
 sprite {
 selector = Player
 colors = #e94f64 #2f80ed
-shape =
+shape = {
 ........
 ..00....
 ..01....
 ........
+}
 }
 }
 rules {
@@ -14484,6 +14628,44 @@ level "start"
 }
 
 #[test]
+fn all_on_preserves_quantified_subject_and_cover_semantics() {
+    let source = r#"
+title = all_on_semantics
+puzzle default {
+empty .
+layers {
+floor = Goal
+actor = Box
+}
+legend G = Goal
+legend B = Box
+win_conditions {
+all Goal on Box
+}
+rules {
+}
+level "start" {
+GB
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let goal = loaded.goal.as_ref().unwrap();
+    let GoalExpr::Clause(GoalClause {
+        value: GoalValue::AllObjectsOn { subjects, covers },
+        op: ComparisonOp::Eq,
+        expected: 1,
+    }) = &goal.expr
+    else {
+        panic!("all X on Y should preserve its quantified subject and cover");
+    };
+
+    assert_eq!(loaded.object_labels.get(&subjects[0]).unwrap(), "Goal");
+    assert_eq!(loaded.object_labels.get(&covers[0]).unwrap(), "Box");
+    assert!(!loaded.is_goal_complete(&loaded.levels[0].initial_state));
+}
+
+#[test]
 fn schema_selector_tag_can_be_subset_value_set() {
     let source = r#"
 title = subset_selector
@@ -14945,7 +15127,7 @@ Pb.
 }
 
 #[test]
-fn geometric_axes_declare_rotation_and_translation_variants() {
+fn typed_tags_declare_angle_and_vec2_variant_domains() {
     let source = r#"
 title = geometric_axes
 
@@ -14954,8 +15136,8 @@ empty .
 
 tags {
 color = red blue
-facing = rotation step 90deg
-offset = translation step 1/2
+facing = 0deg..<360deg step 90deg
+offset = (0..<1 step 1/2, 0..<1 step 1/2)
 }
 
 layers {
@@ -14963,7 +15145,7 @@ __legacy_layer_1 = Box:facing:color Ball:offset:color
 }
 
 legend b = Box:0deg:red
-legend o = Ball:0,0:red
+legend o = Ball:(0, 0):red
 
 rules {
 
@@ -14977,7 +15159,267 @@ bo
     let loaded = parse_game(source).unwrap();
 
     object_named(&loaded, "Box:270deg:blue");
-    object_named(&loaded, "Ball:1/2,1/2:blue");
+    object_named(&loaded, "Ball:(1/2,1/2):blue");
+}
+
+#[test]
+fn frame3_tags_accept_domain_sugar_and_require_parenthesized_object_slots() {
+    let source = r#"
+title = frame3_axis
+
+puzzle default {
+empty .
+
+tags {
+pose = right, front front, left
+}
+
+layers {
+actors = Die:pose
+}
+
+legend d = Die:(right, front)
+
+rules {
+
+}
+
+level "start" {
+d
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+
+    object_named(&loaded, "Die:(right,front)");
+    object_named(&loaded, "Die:(front,left)");
+}
+
+#[test]
+fn frame3_object_slots_reject_unparenthesized_values() {
+    let source = r#"
+title = frame3_slot_requires_parentheses
+
+puzzle default {
+empty .
+
+tags {
+pose = right, front
+}
+
+layers {
+actors = Die:pose
+}
+
+legend d = Die:right,front
+
+rules {
+
+}
+
+level "start" {
+d
+}
+}
+"#;
+    let error = parse_game(source).unwrap_err().to_string();
+
+    assert!(error.contains("frame3 value must be parenthesized"));
+}
+
+#[test]
+fn vec2_domain_expansion_accepts_independent_component_domains_internally() {
+    let x = [Rational::ZERO, Rational::new(1, 2).unwrap()];
+    let y = [Rational::integer(-1), Rational::integer(1)];
+
+    assert_eq!(
+        expand_vec2_domain(&x, &y),
+        ["(0,-1)", "(0,1)", "(1/2,-1)", "(1/2,1)"]
+    );
+}
+
+#[test]
+fn sprite_transforms_bind_typed_slots_and_preserve_source_order() {
+    let source = r#"
+title = typed_sprite_transforms
+
+puzzle default {
+empty .
+
+tags {
+hor = 0..<1 step 0.5
+}
+
+layers {
+actors = Player:directions:hor
+}
+
+legend p = Player:right:0.5
+
+sprites {
+Player:directions:hor {
+colors = #fff
+translate (hor, 0)
+rotate directions from up
+0
+}
+}
+
+rules {
+
+}
+
+level "start" {
+p
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let sprite = loaded
+        .visuals
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "Player-right-1-2")
+        .unwrap();
+
+    assert_eq!(
+        sprite.transforms,
+        [
+            VisualSpriteTransform::Translate { x: 0.5, y: 0.0 },
+            VisualSpriteTransform::Rotate { degrees: -90.0 },
+        ]
+    );
+    let up = loaded
+        .visuals
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "Player-up-1-2")
+        .unwrap();
+    assert_eq!(
+        up.transforms,
+        [
+            VisualSpriteTransform::Translate { x: 0.5, y: 0.0 },
+            VisualSpriteTransform::Rotate { degrees: 0.0 },
+        ]
+    );
+    let down = loaded
+        .visuals
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "Player-down-1-2")
+        .unwrap();
+    assert_eq!(
+        down.transforms,
+        [
+            VisualSpriteTransform::Translate { x: 0.5, y: 0.0 },
+            VisualSpriteTransform::Rotate { degrees: -180.0 },
+        ]
+    );
+}
+
+#[test]
+fn sprite_direction_minus_angle_matches_rotate_from_sugar() {
+    let bindings = HashMap::from([("directions".to_string(), "up".to_string())]);
+    let explicit =
+        eval_sprite_angle_expr("directions - 90deg", &bindings, "rotate expression").unwrap();
+    let from_sugar = eval_sprite_angle_expr("directions", &bindings, "rotate expression")
+        .unwrap()
+        .sub(eval_sprite_angle_expr("up", &bindings, "rotate expression").unwrap());
+
+    assert_eq!(explicit, from_sugar);
+    assert_eq!(explicit, Rational::ZERO);
+}
+
+#[test]
+fn sprite_flip_binds_boolean_tag_values() {
+    let source = r#"
+title = sprite_flip
+
+puzzle default {
+empty .
+
+tags {
+reversed = false true
+}
+
+layers {
+actors = Player:reversed
+}
+
+legend p = Player:true
+
+sprites {
+Player:reversed {
+colors = #fff
+flip reversed
+0
+}
+}
+
+rules {
+
+}
+
+level "start" {
+p
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let flipped = loaded
+        .visuals
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "Player-true")
+        .unwrap();
+    let unflipped = loaded
+        .visuals
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "Player-false")
+        .unwrap();
+
+    assert_eq!(
+        flipped.transforms,
+        [VisualSpriteTransform::Flip { enabled: true }]
+    );
+    assert_eq!(
+        unflipped.transforms,
+        [VisualSpriteTransform::Flip { enabled: false }]
+    );
+}
+
+#[test]
+fn vec2_domain_accepts_literal_and_component_range_items() {
+    let source = r#"
+title = vec2_domain_items
+
+puzzle default {
+empty .
+
+tags {
+offset = (0, -1) (0..<1 step 0.5, 0..<1 step 1/2)
+}
+
+layers {
+actors = Ball:offset
+}
+
+legend b = Ball:(0.5, 0.5)
+
+rules {
+
+}
+
+level "start" {
+b
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+
+    object_named(&loaded, "Ball:(0,-1)");
+    object_named(&loaded, "Ball:(1/2,1/2)");
 }
 
 #[test]
@@ -14990,7 +15432,7 @@ empty .
 
 tags {
 color = red blue
-facing = rotation step 90deg
+facing = 0deg..<360deg step 90deg
 }
 
 layers {
@@ -15028,19 +15470,19 @@ puzzle default {
 empty .
 
 tags {
-offset = translation step 1/2
-facing = rotation step 90deg
+offset = (0..<1 step 1/2, 0..<1 step 1/2)
+facing = 0deg..<360deg step 90deg
 }
 
 layers {
 __legacy_layer_1 = Ball:offset Arrow:facing:offset
 }
 
-legend b = Ball:0,0
-legend a = Arrow:0deg:1/2,1/2
+legend b = Ball:(0, 0)
+legend a = Arrow:0deg:(1/2, 1/2)
 
 rules {
-once [ Ball:offset ] -> [ Ball:(offset + 0, 0) ]
+once [ Ball:offset ] -> [ Ball:(offset + (0, 0)) ]
 once [ Arrow:facing:offset ] -> [ Arrow:facing:(offset + 1/2 < + 1/2 >) ]
 }
 
@@ -15053,12 +15495,12 @@ ba
     let moved =
         transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
 
-    assert!(moved.has_object(&loaded.game, 0, 0, object_named(&loaded, "Ball:0,0")));
+    assert!(moved.has_object(&loaded.game, 0, 0, object_named(&loaded, "Ball:(0,0)")));
     assert!(moved.has_object(
         &loaded.game,
         1,
         0,
-        object_named(&loaded, "Arrow:0deg:1/2,1/2")
+        object_named(&loaded, "Arrow:0deg:(1/2,1/2)")
     ));
 }
 
@@ -15071,17 +15513,17 @@ puzzle default {
 empty .
 
 tags {
-offset = translation 0, 1/2
+offset = (0...1/2 step 1/2, 0...1/2 step 1/2)
 }
 
 layers {
 __legacy_layer_1 = Ball:offset
 }
 
-legend b = Ball:1/2,0
+legend b = Ball:(1/2, 0)
 
 rules {
-once [ Ball:offset ] -> [ Ball:(offset + 1/2, 0) ]
+once [ Ball:offset ] -> [ Ball:(offset + (1/2, 0)) ]
 }
 
 level "start" {
@@ -15091,7 +15533,100 @@ b
 "#;
     let error = parse_game(source).unwrap_err().to_string();
 
-    assert!(error.contains("translation computed selector target is not declared"));
+    assert!(error.contains("vec2 computed selector target is not declared"));
+}
+
+#[test]
+fn angle_tag_domains_accept_literal_lists() {
+    let source = r#"
+title = typed_tag_range_required
+
+puzzle default {
+empty .
+
+tags {
+facing = 0deg 90deg
+}
+
+layers {
+actor = Player:facing
+}
+
+rules {
+
+}
+
+legend p = Player:90deg
+
+level "start" {
+p
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    object_named(&loaded, "Player:90deg");
+}
+
+#[test]
+fn legacy_geometric_axis_kinds_fail_visibly() {
+    let source = r#"
+title = legacy_geometric_type
+
+puzzle default {
+empty .
+
+tags {
+facing = rotation step 90deg
+}
+
+layers {
+actor = Player:facing
+}
+
+rules {
+
+}
+
+level "start" {
+.
+}
+}
+"#;
+    let error = parse_game(source).unwrap_err().to_string();
+
+    assert!(error.contains("tag value types are inferred from literals"));
+}
+
+#[test]
+fn vec2_tag_values_require_parentheses() {
+    let source = r#"
+title = vec2_parentheses
+
+puzzle default {
+empty .
+
+tags {
+offset = (0..<1 step 1/2, 0..<1 step 1/2)
+}
+
+layers {
+actor = Ball:offset
+}
+
+legend b = Ball:0,0
+
+rules {
+
+}
+
+level "start" {
+b
+}
+}
+"#;
+    let error = parse_game(source).unwrap_err().to_string();
+
+    assert!(error.contains("vec2 value must be parenthesized"));
 }
 
 #[test]

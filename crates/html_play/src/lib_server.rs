@@ -436,7 +436,7 @@ fn push_input_move(out: &mut String, loaded: &LoadedGame, input: InputId) {
         .input_labels
         .get(&input)
         .map(String::as_str)
-        .unwrap_or("?");
+        .unwrap_or_else(|| panic!("compiled input {} is missing its required label", input.0));
     push_json_pair(out, "name", name);
     out.push(',');
     if let Some(key) = key_for_input(loaded, input) {
@@ -456,7 +456,9 @@ fn push_input_move(out: &mut String, loaded: &LoadedGame, input: InputId) {
 fn push_input_move3(out: &mut String, parsed: &ParsedPuzzle3, input: InputId) {
     out.push('{');
     let input_def = parsed.game.input(input);
-    let name = input_def.map(|input| input.name.as_str()).unwrap_or("?");
+    let name = input_def
+        .map(|input| input.name.as_str())
+        .unwrap_or_else(|| panic!("compiled 3D input {} is missing its definition", input.0));
     push_json_pair(out, "name", name);
     out.push(',');
     out.push_str("\"key\":null");
@@ -554,7 +556,12 @@ fn push_object3(out: &mut String, parsed: &ParsedPuzzle3, object: ObjectId3) {
         .objects
         .iter()
         .find_map(|entry| (entry.id == object).then_some(entry.name.as_str()))
-        .unwrap_or("?");
+        .unwrap_or_else(|| {
+            panic!(
+                "compiled 3D object {} is missing its required catalog entry",
+                object.0
+            )
+        });
     push_json_pair(out, "name", name);
     out.push(',');
     if let Some(layer) = parsed.game.object_layer(object) {

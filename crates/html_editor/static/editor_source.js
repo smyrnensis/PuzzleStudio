@@ -1411,15 +1411,10 @@ function sourceLineHasStructuralBrace(line) {
 }
 
 function sourceOutlineStructuralSignature(source) {
-  const lines = String(source || "").split("\n");
-  const structural = [];
-  for (const line of lines) {
-    if (!sourceLineHasStructuralBrace(line)) {
-      continue;
-    }
-    structural.push(stripSourceStructureLineComment(line).trim());
-  }
-  return structural.join("\n");
+  // Labels and offsets are both derived from one exact source snapshot. A
+  // non-structural line inserted before an item changes its location, so a
+  // brace-only signature leaves outline navigation stale.
+  return String(source || "");
 }
 
 function markSourceOutlineDirtyForSource(source, options = {}) {
@@ -2032,12 +2027,11 @@ async function suggestSourceCompletionsWithWasm(source, cursorOffset) {
   if (typeof window.PuzzleStudioRuntime?.suggestSourceCompletions !== "function") {
     return null;
   }
-  const cursorByteOffset = sourceByteOffset(source, cursorOffset);
-  const json = await window.PuzzleStudioRuntime.suggestSourceCompletions(source, cursorByteOffset);
+  const json = await window.PuzzleStudioRuntime.suggestSourceCompletions(source, cursorOffset);
   const list = JSON.parse(json || "{}");
   return {
-    replaceStart: sourceUtf16OffsetFromByteOffset(source, Number(list.replaceStart) || 0),
-    replaceEnd: sourceUtf16OffsetFromByteOffset(source, Number(list.replaceEnd) || 0),
+    replaceStart: Number(list.replaceStart) || 0,
+    replaceEnd: Number(list.replaceEnd) || 0,
     items: Array.isArray(list.items) ? list.items : [],
   };
 }
@@ -2894,6 +2888,8 @@ function sourceVisualOffsetFromPoint(clientX, clientY) {
   const walker = document.createTreeWalker(sourceHighlight, NodeFilter.SHOW_TEXT);
   const range = document.createRange();
   let sourceOffset = 0;
+  let nearestLineDistance = Number.POSITIVE_INFINITY;
+  const textNodes = [];
   let best = null;
   let lineHit = null;
   let bestInLine = null;
@@ -2903,6 +2899,30 @@ function sourceVisualOffsetFromPoint(clientX, clientY) {
     if (!text.length) {
       continue;
     }
+    range.selectNodeContents(node);
+    const lineDistance = Array.from(range.getClientRects()).reduce((distance, rect) => {
+      if (rect.width <= 0 && rect.height <= 0) {
+        return distance;
+      }
+      const next = clientY < rect.top
+        ? rect.top - clientY
+        : clientY > rect.bottom
+          ? clientY - rect.bottom
+          : 0;
+      return Math.min(distance, next);
+    }, Number.POSITIVE_INFINITY);
+    textNodes.push({ node, text, sourceOffset, lineDistance });
+    nearestLineDistance = Math.min(nearestLineDistance, lineDistance);
+    sourceOffset += text.length;
+  }
+
+  // A click belongs to one visual line. Locate that line from whole text-node
+  // rectangles first, then measure only characters belonging to that line.
+  for (const entry of textNodes) {
+    if (entry.lineDistance > nearestLineDistance + 0.5) {
+      continue;
+    }
+    const { node, text } = entry;
     for (let index = 0; index < text.length; index += 1) {
       range.setStart(node, index);
       range.setEnd(node, index + 1);
@@ -2917,7 +2937,7 @@ function sourceVisualOffsetFromPoint(clientX, clientY) {
             : 0;
         const midX = rect.left + (rect.width / 2);
         const char = text[index];
-        const charStart = sourceOffset + index;
+        const charStart = entry.sourceOffset + index;
         const charEnd = char === "\n" ? charStart : charStart + 1;
         const boundary = clientX <= midX ? charStart : charEnd;
         const horizontalDistance = clientX < rect.left
@@ -2949,7 +2969,6 @@ function sourceVisualOffsetFromPoint(clientX, clientY) {
         }
       }
     }
-    sourceOffset += text.length;
   }
   range.detach?.();
   if (lineHit) {
@@ -2997,10 +3016,6 @@ function sourceOffsetFromVisualPoint(clientX, clientY, source = sourceEditorDocu
     ? sourceViewOffsetToDocumentOffset(offset, "start")
     : offset;
   return Math.max(0, Math.min(String(source || "").length, documentOffset));
-}
-
-function sourceByteOffset(value, utf16Offset) {
-  return sourceCompletionTextEncoder.encode(value.slice(0, utf16Offset)).length;
 }
 
 function sourceUtf16OffsetFromByteOffset(value, byteOffset) {
@@ -3060,7 +3075,7 @@ function createSourceImportLinkFrame() {
   return frame;
 }
 
-function showSourceColorEditor(event = null) {
+function showSourceColorEditor(event = null, visualOffset = null) {
   if (!sourceColorPopover) {
     return false;
   }
@@ -3078,7 +3093,7 @@ function showSourceColorEditor(event = null) {
     hideSourceColorEditor();
     return false;
   }
-  if (event && !sourceColorEventTargetsToken(event, token)) {
+  if (event && !sourceColorEventTargetsToken(event, token, visualOffset)) {
     hideSourceColorEditor();
     return false;
   }
@@ -3129,11 +3144,13 @@ function positionSourceColorPopoverForToken(token) {
   sourceColorPopover.style.top = `${Math.round(top)}px`;
 }
 
-function sourceColorEventTargetsToken(event, token) {
+function sourceColorEventTargetsToken(event, token, visualOffset = null) {
   if (!event || !token) {
     return true;
   }
-  const offset = sourceViewOffsetFromVisualPoint(event.clientX, event.clientY);
+  const offset = Number.isInteger(visualOffset)
+    ? visualOffset
+    : sourceViewOffsetFromVisualPoint(event.clientX, event.clientY);
   if (!Number.isInteger(offset)) {
     return true;
   }
@@ -3373,13 +3390,21 @@ sourceEditor.addEventListener("compositionend", () => {
 });
 sourceEditor.addEventListener("click", (event) => {
   sourceEditorPreferredCaretX = null;
-  if (openSourceImportLinkFromPointer(event)) {
+  const interaction = sourceInteractionFromPointer(event);
+  if (!interaction) {
+    return;
+  }
+  if (openSourceImportLinkFromPointer(event, interaction.position)) {
     return;
   }
   if (sourceDocumentSupportsEditableTargets()) {
-    showSourceColorEditor(event);
+    showSourceColorEditor(event, interaction.viewOffset);
     window.setTimeout(() => showSourceCompletions({ manual: false }), 0);
-    syncPreviewModeFromSourcePointer(event);
+    syncPreviewModeFromSourceCursor({
+      recordHistory: true,
+      allowInactiveMode: true,
+      position: interaction.documentOffset,
+    });
   }
 });
 sourceEditor.addEventListener("pointerdown", handleSourceBlockSelectionPointerDown);
@@ -3416,7 +3441,7 @@ sourceEditor.addEventListener("keyup", (event) => {
 sourceEditor.addEventListener("focus", () => {
   renderSourceBlockSelection();
   if (sourceDocumentSupportsEditableTargets()) {
-    syncPreviewModeFromSourceCursor({ force: true });
+    scheduleSourceCursorPreviewSync();
   }
 });
 sourceEditor.addEventListener("blur", () => {
@@ -4930,8 +4955,8 @@ function updateSourceImportLinkFromPointer(event) {
   hideSourceImportLinkFrame();
 }
 
-function sourceImportLinkAtPointer(event) {
-  const position = sourceEditorPositionFromPoint(event.clientX, event.clientY);
+function sourceImportLinkAtPointer(event, resolvedPosition = null) {
+  const position = resolvedPosition || sourceEditorPositionFromPoint(event.clientX, event.clientY);
   if (!position) {
     return null;
   }
@@ -5254,11 +5279,11 @@ function sourceEditableEntryFromTarget(source, target, options = {}) {
   return body && typeof body === "object" ? { ...entry, ...body } : entry;
 }
 
-function openSourceImportLinkFromPointer(event) {
+function openSourceImportLinkFromPointer(event, position = null) {
   if (sourceEditorBlockSelection || !sourceDocumentSupportsEditableTargets()) {
     return false;
   }
-  const link = sourceImportLinkAtPointer(event);
+  const link = sourceImportLinkAtPointer(event, position);
   if (!link) {
     return false;
   }
@@ -5304,7 +5329,9 @@ function sourceEditorPositionFromPoint(clientX, clientY, options = {}) {
     return null;
   }
   const rawPosition = sourceEditorRawPositionFromPoint(clientX, clientY, lines);
-  const visualOffset = sourceViewOffsetFromVisualPoint(clientX, clientY);
+  const visualOffset = Number.isInteger(options.visualOffset)
+    ? options.visualOffset
+    : sourceViewOffsetFromVisualPoint(clientX, clientY);
   if (Number.isInteger(visualOffset)) {
     const visualPosition = sourceLineColumnForOffset(lines, visualOffset);
     return options.preserveColumn
@@ -5312,6 +5339,27 @@ function sourceEditorPositionFromPoint(clientX, clientY, options = {}) {
       : visualPosition;
   }
   return rawPosition;
+}
+
+function sourceInteractionFromPointer(event, source = sourceEditorDocumentValue()) {
+  if (!event || !sourceEditorWrap?.contains(event.target)) {
+    return null;
+  }
+  const viewOffset = sourceViewOffsetFromVisualPoint(event.clientX, event.clientY);
+  if (!Number.isInteger(viewOffset)) {
+    return null;
+  }
+  const position = sourceEditorPositionFromPoint(event.clientX, event.clientY, {
+    visualOffset: viewOffset,
+  });
+  const documentOffset = sourceFoldsActive()
+    ? sourceViewOffsetToDocumentOffset(viewOffset, "start")
+    : viewOffset;
+  return {
+    viewOffset,
+    documentOffset: Math.max(0, Math.min(String(source || "").length, documentOffset)),
+    position,
+  };
 }
 
 function sourceEditorRawPositionFromPoint(clientX, clientY, lines) {

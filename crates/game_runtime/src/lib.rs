@@ -18,7 +18,7 @@ use puzzle_lang::{
 use puzzle_play::{
     AnimationEvent, DebugTransition, GameSession, GameSession3, LevelProgressSaveData,
     MessageEvent, PersistentVarSaveData, ProgressSaveData, SoundEvent, WaitEvent,
-    loaded_document_scene_host_loaded_game, runtime_sounds_def,
+    animation_events_contract_2d, loaded_document_scene_host_loaded_game, runtime_sounds_def,
 };
 use puzzle_runtime_contract::{
     RuntimeAnimationEvent, RuntimeChangedCell, RuntimeCoord, RuntimeMarkValue,
@@ -250,7 +250,7 @@ impl StandaloneSessionBridge {
             "soundEvents": sound_events_value(sound_events),
             "messageEvents": message_events_value(message_events),
             "waitEvents": wait_events_value(wait_events),
-            "animationEvents": animation_events_value(animation_events),
+            "animationEvents": animation_events_contract_2d(&self.loaded, animation_events),
             "level": level_context_value(&self.loaded, &self.session),
             "levelIndex": self.session.active_level_index(),
             "levelCount": self.loaded.levels.len(),
@@ -1467,11 +1467,7 @@ fn position2_value(x: u16, y: u16) -> Value {
 }
 
 fn object_name(loaded: &LoadedGame, object: ObjectId) -> String {
-    loaded
-        .object_labels
-        .get(&object)
-        .cloned()
-        .unwrap_or_else(|| "?".to_string())
+    loaded.object_name(object).to_string()
 }
 
 fn mark_name(loaded: &LoadedGame, mark: MarkId) -> String {
@@ -1604,45 +1600,6 @@ fn wait_events_value(events: &[WaitEvent]) -> Vec<Value> {
             WaitEvent::ContinueEffects { milliseconds } => {
                 json!({"kind": "continue_effects", "milliseconds": milliseconds})
             }
-        })
-        .collect()
-}
-
-fn animation_events_value(events: &[AnimationEvent]) -> Vec<RuntimeAnimationEvent> {
-    events
-        .iter()
-        .map(|event| match event {
-            AnimationEvent::Move {
-                name,
-                object,
-                from_x,
-                from_y,
-                to_x,
-                to_y,
-                ..
-            } => RuntimeAnimationEvent::Move {
-                name: name.clone(),
-                object_id: object.0,
-                from: RuntimeCoord {
-                    x: *from_x,
-                    y: *from_y,
-                    z: None,
-                },
-                to: RuntimeCoord {
-                    x: *to_x,
-                    y: *to_y,
-                    z: None,
-                },
-            },
-            AnimationEvent::CantMove { name, object, x, y } => RuntimeAnimationEvent::CantMove {
-                name: name.clone(),
-                object_id: object.0,
-                position: RuntimeCoord {
-                    x: *x,
-                    y: *y,
-                    z: None,
-                },
-            },
         })
         .collect()
 }
@@ -2264,6 +2221,7 @@ fn animation_events3_contract(
                 events.push(RuntimeAnimationEvent::Move {
                     name: "tween".to_string(),
                     object_id: object.0,
+                    from_object: None,
                     from: runtime_coord3(source),
                     to: runtime_coord3(target),
                 });

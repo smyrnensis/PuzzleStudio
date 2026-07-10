@@ -7,12 +7,12 @@ puzzle sokoban {
 layers {
 Background
 Goal
-solid = Player Box Wall
+solid = Player:directions Box Wall
 }
 
 render {
 tween = true
-tween_duration = 3s
+tween_duration = 0.1s
 }
 
 win_conditions {
@@ -25,8 +25,8 @@ once_all [ no Background ] -> [ Background ]
 }
 
 rules {
-input [ Player ] -> [ > Player ] 
-[ > Player | Box ] -> [ > Player | > Box ]
+input [ Player:* ] -> [ > Player:> ] 
+[ > Player:> | Box ] -> [ > Player:> | > Box ]
 [ > solid | no solid ] -> [  | solid ] 
 [ > solid ] -> [ solid ]
 }
@@ -43,7 +43,6 @@ sprite {
 selector = Background
 colors = #90ee90 #008000
 duration = 500ms
-shape =
 11111
 01111
 11101
@@ -55,7 +54,6 @@ sprite {
 selector = Wall
 colors = #a46322 #493c2b
 duration = 500ms
-shape =
 00010
 11111
 01000
@@ -79,24 +77,27 @@ Box
 0...0
 00000
 
-Player
-#000000 #ffa500 #ffffff #0000ff
+sprite {
+selector = Player:directions
+rotate directions from up
+colors = #000000 #ffa500 #ffffff #0000ff
 .000.
 .111.
 22222
 .333.
 .3.3.
 }
+}
 
 levels microban of sokoban {
 legend {
 . = empty
 G = Goal
-P = Player
+P = Player:up
 B = Box
 # = Wall
 * = Goal Box
-+ = Goal Player
++ = Goal Player:up
 }
 
 level "microban_01"

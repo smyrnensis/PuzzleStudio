@@ -154,7 +154,13 @@ function endWorkspaceHostMutation() {
 
 async function loadSource() {
   setEditorStatus("Loading", "");
-  await ensureEditorWasmParserLoaded();
+  // Source loading is independent from parser initialization. Start the WASM
+  // download now, but let the workspace request and first document render
+  // proceed immediately; analysis requests share this initialization promise.
+  const wasmParserLoad = ensureEditorWasmParserLoaded();
+  void wasmParserLoad.catch((error) => {
+    console.error("Editor WASM parser failed to load", error);
+  });
   if (editorSeed) {
     workspaceRoot = editorSeed.workspaceRoot || "";
     const embedded = embeddedDocuments();
@@ -172,7 +178,7 @@ async function loadSource() {
     renderDocumentSelect();
     loadEmbeddedDocument(currentDocumentIndex);
     runButton.disabled = false;
-    runButton.title = "Run preview";
+    runButton.title = "Play preview";
     setEditorStatus(useStored ? "Loaded files" : "Preview embedded", "is-ok");
     return;
   }

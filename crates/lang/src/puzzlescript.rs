@@ -249,6 +249,7 @@ pub fn translate_puzzlescript_to_canonical(source: &str) -> Result<String, Diagn
         &tags,
         &maps,
         case_sensitive,
+        background_object.as_deref(),
     );
     out.push("}".to_string());
     out.push(String::new());
@@ -1419,25 +1420,18 @@ fn push_sprites(out: &mut Vec<String>, objects: &[PsObjectDef]) {
     }
     for (name, sprite) in sprites {
         let copy_shape = ps_copy_shape_for_object(name, objects, &shape_sources);
-        out.push("  sprite {".to_string());
-        out.push(format!("    selector = {name}"));
-        out.push(format!("    colors = {}", sprite.colors.join(" ")));
+        out.push(format!("  {name}"));
+        out.push(format!("  {}", sprite.colors.join(" ")));
         if let Some(shape) = copy_shape {
-            out.push(format!(
-                "    shape = {}",
-                ps_copy_shape_ref_name(&shape, objects)
-            ));
-            out.push("  }".to_string());
+            out.push(format!("  {}", ps_copy_shape_ref_name(&shape, objects)));
             out.push(String::new());
             continue;
         }
         if !sprite.pattern.is_empty() {
-            out.push("    shape =".to_string());
             for row in &sprite.pattern {
-                out.push(format!("    {row}"));
+                out.push(format!("  {row}"));
             }
         }
-        out.push("  }".to_string());
         out.push(String::new());
     }
     if matches!(out.last(), Some(line) if line.is_empty()) {
@@ -1525,6 +1519,7 @@ fn push_legend(
     tags: &[PsTagDef],
     maps: &[PsMapDef],
     case_sensitive: bool,
+    background_object: Option<&str>,
 ) -> BTreeMap<char, char> {
     out.push("legend {".to_string());
     let mut has_empty = false;
@@ -1536,6 +1531,9 @@ fn push_legend(
         let Some(ch) = object.shorthand else {
             continue;
         };
+        if Some(object.name.as_str()) == background_object {
+            continue;
+        }
         out.push(format!("  {ch} = {}", object.name));
         defined_chars.insert(ch);
     }
@@ -1548,11 +1546,16 @@ fn push_legend(
             continue;
         };
         let output_ch = char_map.get(&ch).copied().unwrap_or(ch);
-        let terms = split_ps_relation(rhs)
+        let resolved_terms = split_ps_relation(rhs)
             .into_iter()
             .filter_map(|term| resolve_name(term, objects, aliases, tags, maps, case_sensitive))
             .collect::<Vec<_>>();
-        if terms == ["empty"] {
+        let terms = resolved_terms
+            .iter()
+            .cloned()
+            .filter(|term| Some(term.as_str()) != background_object)
+            .collect::<Vec<_>>();
+        if terms == ["empty"] || (!resolved_terms.is_empty() && terms.is_empty()) {
             out.push(format!("  {output_ch} = empty"));
             has_empty = true;
         } else if !terms.is_empty() {
@@ -1724,7 +1727,7 @@ fn canonical_condition_row(
             .unwrap_or_else(|| tokens[1].to_string());
         let target = resolve_name(tokens[3], objects, aliases, tags, maps, case_sensitive)
             .unwrap_or_else(|| tokens[3].to_string());
-        return format!("no [ {subject} no {target} ]");
+        return format!("all {subject} on {target}");
     }
     if matches!(tokens.first(), Some(first) if first.eq_ignore_ascii_case("some"))
         && tokens.len() == 2
@@ -1808,7 +1811,7 @@ fn push_rules(
 
         out.push("rules {".to_string());
         out.push(format!(
-            "  input directions [ {player_selector} ] -> [ > {player_selector} ]"
+            "  input [ {player_selector} ] -> [ > {player_selector} ]"
         ));
         push_ps_action_bridge(out, uses_action_input, &player_selector, "  ");
         out.push(format!("  {PS_MAIN_ROUTINE}"));
@@ -1826,7 +1829,7 @@ fn push_rules(
 
     out.push("rules {".to_string());
     out.push(format!(
-        "  input directions [ {player_selector} ] -> [ > {player_selector} ]"
+        "  input [ {player_selector} ] -> [ > {player_selector} ]"
     ));
     push_ps_action_bridge(out, uses_action_input, &player_selector, "  ");
     push_ps_main_rule_body(
@@ -2676,6 +2679,7 @@ fn push_levels(
     tags: &[PsTagDef],
     maps: &[PsMapDef],
     case_sensitive: bool,
+    background_object: Option<&str>,
 ) {
     out.push("levels {".to_string());
     let mut legend = Vec::new();
@@ -2688,6 +2692,7 @@ fn push_levels(
         tags,
         maps,
         case_sensitive,
+        background_object,
     );
     for line in legend {
         if line.is_empty() {

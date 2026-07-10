@@ -2,8 +2,8 @@ use puzzle_core::ComparisonOp;
 use std::collections::HashMap;
 
 use crate::{
-    DiagnosticReport, QueryExprOf, SolverStrategyDirection, SolverStrategyOf, SolverStrategyTermOf,
-    is_block_header_line, split_header_tokens,
+    DiagnosticReport, QueryExprOf, SolverDeadendOf, SolverStrategyDirection, SolverStrategyOf,
+    SolverStrategyTermOf, is_block_header_line, split_header_tokens,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -68,6 +68,7 @@ pub(crate) enum OrientedPatternArgOrientationSurface {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct SolverSurfaceStrategy {
     pub(crate) terms: Vec<SolverSurfaceStrategyTerm>,
+    pub(crate) deadends: Vec<SolverSurfaceDeadend>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -76,6 +77,19 @@ pub(crate) struct SolverSurfaceStrategyTerm {
     pub(crate) direction: SolverStrategyDirection,
     pub(crate) value: SolverSurfaceQueryExpr,
     pub(crate) weight: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SolverSurfaceDeadend {
+    pub(crate) source_line: String,
+    pub(crate) combinator: SolverSurfaceDeadendCombinator,
+    pub(crate) values: Vec<SolverSurfaceQueryExpr>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SolverSurfaceDeadendCombinator {
+    All,
+    Any,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -306,7 +320,29 @@ where
             })
         })
         .collect::<Result<Vec<_>, Adapter::Error>>()?;
-    Ok(SolverStrategyOf { terms })
+    let deadends = strategy
+        .deadends
+        .into_iter()
+        .map(|deadend| {
+            let values = deadend
+                .values
+                .into_iter()
+                .map(|value| {
+                    lower_query_expr_with::<Adapter, Context>(
+                        &value,
+                        &deadend.source_line,
+                        context,
+                        &mut lowerer,
+                    )
+                })
+                .collect::<Result<Vec<_>, Adapter::Error>>()?;
+            Ok(match deadend.combinator {
+                SolverSurfaceDeadendCombinator::All => SolverDeadendOf::All(values),
+                SolverSurfaceDeadendCombinator::Any => SolverDeadendOf::Any(values),
+            })
+        })
+        .collect::<Result<Vec<_>, Adapter::Error>>()?;
+    Ok(SolverStrategyOf { terms, deadends })
 }
 
 fn surface_query_definition_name(definition: &SolverSurfaceQueryDefinition) -> &str {
@@ -408,11 +444,14 @@ pub(crate) fn parse_solver_block(
     }
 
     let mut strategy = None::<SolverSurfaceStrategy>;
+    let mut deadends = Vec::new();
     let mut i = start + 1;
     while i < lines.len() {
         let line = &lines[i];
         if line == "}" {
-            return Ok((i + 1, strategy.unwrap_or_default()));
+            let mut solver = strategy.unwrap_or_default();
+            solver.deadends = deadends;
+            return Ok((i + 1, solver));
         }
         let tokens = split_header_tokens(line);
         if tokens.is_empty() {
@@ -434,12 +473,98 @@ pub(crate) fn parse_solver_block(
                     "solver strategy block must be: strategy { ... }",
                 ));
             }
+            ["deadend"] if is_block_header_line(line) => {
+                let (next_i, deadend) =
+                    parse_solver_deadend_block(lines, i, SolverSurfaceDeadendCombinator::All)?;
+                deadends.push(deadend);
+                i = next_i;
+            }
+            ["deadend", "all"] if is_block_header_line(line) => {
+                let (next_i, deadend) =
+                    parse_solver_deadend_block(lines, i, SolverSurfaceDeadendCombinator::All)?;
+                deadends.push(deadend);
+                i = next_i;
+            }
+            ["deadend", "any"] if is_block_header_line(line) => {
+                let (next_i, deadend) =
+                    parse_solver_deadend_block(lines, i, SolverSurfaceDeadendCombinator::Any)?;
+                deadends.push(deadend);
+                i = next_i;
+            }
+            ["deadend"] => return Err(parse_error(line, "deadend must have a query or block")),
+            ["deadend", "all"] | ["deadend", "any"] => {
+                return Err(parse_error(
+                    line,
+                    "deadend block must be: deadend [all | any] { ... }",
+                ));
+            }
+            ["deadend", ..] if is_block_header_line(line) => {
+                return Err(parse_error(
+                    line,
+                    "deadend block must be: deadend [all | any] { ... }",
+                ));
+            }
+            ["deadend", ..] => {
+                let value = line
+                    .trim_start()
+                    .strip_prefix("deadend")
+                    .expect("deadend came from the line prefix")
+                    .trim();
+                if value.is_empty() {
+                    return Err(parse_error(line, "deadend must have a query"));
+                }
+                deadends.push(SolverSurfaceDeadend {
+                    source_line: line.to_string(),
+                    combinator: SolverSurfaceDeadendCombinator::All,
+                    values: vec![parse_query_expr(value, line)?],
+                });
+                i += 1;
+            }
             _ => return Err(parse_error(line, "unknown solver block row")),
         }
     }
     Err(parse_error(
         &lines[start],
         "solver block missing closing brace",
+    ))
+}
+
+fn parse_solver_deadend_block(
+    lines: &[String],
+    start: usize,
+    combinator: SolverSurfaceDeadendCombinator,
+) -> Result<(usize, SolverSurfaceDeadend), DiagnosticReport> {
+    let source_line = lines[start].clone();
+    let mut values = Vec::new();
+    let mut i = start + 1;
+    while i < lines.len() {
+        let line = &lines[i];
+        if line == "}" {
+            if values.is_empty() {
+                return Err(parse_error(
+                    &source_line,
+                    "deadend block requires at least one query",
+                ));
+            }
+            return Ok((
+                i + 1,
+                SolverSurfaceDeadend {
+                    source_line,
+                    combinator,
+                    values,
+                },
+            ));
+        }
+        if line.trim().is_empty() {
+            i += 1;
+            continue;
+        }
+        values.push(parse_query_expr(line, line)?);
+        i += 1;
+    }
+    Err(parse_error(
+        &source_line,
+        "deadend block missing closing brace",
     ))
 }
 
@@ -452,7 +577,13 @@ fn parse_solver_strategy_block(
     while i < lines.len() {
         let line = &lines[i];
         if line == "}" {
-            return Ok((i + 1, SolverSurfaceStrategy { terms }));
+            return Ok((
+                i + 1,
+                SolverSurfaceStrategy {
+                    terms,
+                    deadends: Vec::new(),
+                },
+            ));
         }
         if line.trim().is_empty() {
             i += 1;
@@ -522,6 +653,45 @@ fn parse_solver_strategy_value_and_weight<'a>(
         return Err(parse_error(line, "solver strategy row missing query"));
     }
     Ok((value, weight))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn solver_block_parses_direct_deadend_queries() {
+        let lines = [
+            "solver {",
+            "deadend blocked",
+            "deadend any {",
+            "blocked",
+            "other_blocked",
+            "}",
+            "strategy {",
+            "avoid blocked",
+            "}",
+            "}",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+
+        let (next, solver) = parse_solver_block(&lines, 0).unwrap();
+
+        assert_eq!(next, lines.len());
+        assert_eq!(solver.terms.len(), 1);
+        assert_eq!(solver.deadends.len(), 2);
+        assert!(matches!(
+            solver.deadends[0].values[0],
+            SolverSurfaceQueryExpr::Named(ref name) if name == "blocked"
+        ));
+        assert_eq!(
+            solver.deadends[1].combinator,
+            SolverSurfaceDeadendCombinator::Any
+        );
+        assert_eq!(solver.deadends[1].values.len(), 2);
+    }
 }
 
 fn parse_query_expr(expr: &str, line: &str) -> Result<SolverSurfaceQueryExpr, DiagnosticReport> {

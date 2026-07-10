@@ -188,6 +188,29 @@ and satisfies the corrected contract. When the diagnosis shows the current shape
 is at the wrong layer, delete, replace, or move it instead of polishing it in
 place.
 
+## DRY Check Gate
+
+Before adding or copying implementation, documentation, tests, configuration,
+or UI behavior, perform a targeted repository search for the same responsibility
+and nearby variants. Identify the existing owner before writing a second version.
+
+- If the behavior is already owned, extend or parameterize that owner instead of
+  duplicating it at the new call site.
+- If two copies must remain because their contracts genuinely differ, state the
+  distinction, keep their ownership separate, and add a focused test or
+  documentation note that makes the divergence intentional.
+- Do not extract a shared abstraction merely because text is similar. Extract
+  only when the behavior, lifecycle, and owner contract are actually shared;
+  otherwise the abstraction is a new cross-boundary coupling.
+- Before finalizing, inspect the changed area for copied branches, parallel
+  constants, duplicated validation, and adapter-specific reimplementations of
+  language, runtime, or session semantics. Consolidate them or report the
+  intentional boundary.
+
+This is a gate, not a suggestion: a change that adds a second implementation
+without checking the first is incomplete. Prefer a visible request for the
+missing shared contract over copying behavior while its proper owner is unknown.
+
 ## Boundary Discipline
 
 Many bugs in this project come from putting a useful default in the wrong scope.
@@ -287,6 +310,15 @@ Preserve the major package boundaries:
   component behavior.
 - adapters and editors own presentation, host IO, browser/terminal behavior, and
   export surfaces.
+
+JavaScript adapters and editors must not recognize or interpret PuzzleStudio
+source syntax. They may consume only explicit, typed contracts produced by the
+language-processing owner. In particular, JavaScript must not tokenize source,
+identify declarations or blocks, resolve names, combine legends, levels, or
+sprites, or infer language semantics from source text. If an editor needs
+information that its current contract does not provide, extend the language
+contract and fail visibly until that contract is available; do not add a
+JavaScript parser, regex recognizer, heuristic, or fallback source path.
 
 If a behavior is duplicated across runtime/adapters, update each owned copy or
 explicitly document why one side is intentionally different.

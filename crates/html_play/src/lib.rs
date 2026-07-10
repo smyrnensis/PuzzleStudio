@@ -54,7 +54,7 @@ use puzzle_lang::{
     LoadedGame, ResourceSelection, RuleAnimation, RuleAnimationTrigger, RuleEffect, SceneComponent,
     SceneEffect, SceneExpr, SceneLayoutDef, ScenePuzzleInitializer, SceneTextContent,
     SceneTransitionTrigger, SceneValue, SoundsDef, ThemeDef, VisualSpriteDef, VisualSpriteKind,
-    parse_game2d as parse_game,
+    VisualSpriteTransform, parse_game2d as parse_game,
 };
 use puzzle_lang::{AssetKind, DiagnosticReport};
 #[cfg(feature = "solver")]
@@ -63,14 +63,13 @@ use puzzle_lang::{QueryExpr, QueryExpr3, QueryExprOf, SolverStrategy3, SolverStr
 use puzzle_lang::{discover_game_entries, expand_game_imports_for_file, resolve_game_entry};
 use puzzle_play::{
     AnimationEvent, GameSession, LevelProgressSaveData, MessageEvent, PersistentVarSaveData,
-    ProgressSaveData, SoundEvent, WaitEvent, animation_events_for_trace,
-    loaded_document_scene_host_loaded_game, runtime_sounds_def,
+    ProgressSaveData, SoundEvent, WaitEvent, animation_events_contract_2d,
+    animation_events_for_trace, loaded_document_scene_host_loaded_game, runtime_sounds_def,
 };
 use puzzle_runtime_contract::{
-    LifecycleCommand, RuntimeAnimationEvent, RuntimeChangedCell, RuntimeCoord, RuntimeMarkValue,
-    RuntimeMarkValueMatch, RuntimeModelKind, RuntimePatchOp, RuntimeStateSnapshot,
-    RuntimeStateSnapshot2d, RuntimeTransitionCommand, RuntimeTransitionCurrentOutcome,
-    RuntimeTransitionProgramOutcome,
+    LifecycleCommand, RuntimeChangedCell, RuntimeCoord, RuntimeMarkValue, RuntimeMarkValueMatch,
+    RuntimeModelKind, RuntimePatchOp, RuntimeStateSnapshot, RuntimeStateSnapshot2d,
+    RuntimeTransitionCommand, RuntimeTransitionCurrentOutcome, RuntimeTransitionProgramOutcome,
 };
 #[cfg(feature = "solver")]
 use puzzle_solver::{
@@ -513,13 +512,33 @@ levels3 default of board {
         assert!(RENDERER_JS.contains("minimumAnimationFrameCount()"));
         assert!(RENDERER_JS.contains("return 3;"));
         assert!(RENDERER_JS.contains("requestAnimationFrame(draw);"));
-        assert!(RENDERER_JS.contains("canvasDisplayList(scene, frame, unit, animations = [], progress = 1)"));
+        assert!(
+            RENDERER_JS
+                .contains("canvasDisplayList(scene, frame, unit, animations = [], progress = 1)")
+        );
+        assert!(!RENDERER_JS.contains("const staticSurfaces = new Map();"));
         assert!(RENDERER_JS.contains("const staticItems = [];"));
         assert!(RENDERER_JS.contains("const animatedItems = [];"));
+        assert!(RENDERER_JS.contains("let order = 0;"));
+        assert!(RENDERER_JS.contains("layerOrder: Number(layer.layer) || 0,"));
+        assert!(!RENDERER_JS.contains("canvasSurfaceItemForLayer("));
+        assert!(RENDERER_JS.contains(
+            "const compare = (a, b) => a.layerOrder - b.layerOrder || a.order - b.order;"
+        ));
+        assert!(
+            RENDERER_JS
+                .contains("return [...staticItems.sort(compare), ...animatedItems.sort(compare)];")
+        );
+        assert!(!RENDERER_JS.contains("paintCanvasSurface("));
+        assert!(!RENDERER_JS.contains("paintCanvasPatternSurface("));
+        assert!(!RENDERER_JS.contains("mergedCanvasRects("));
         assert!(RENDERER_JS.contains("animation: animation && progress < 1 ? animation : null"));
-        assert!(RENDERER_JS.contains("return [...staticItems, ...animatedItems];"));
-        assert!(RENDERER_JS.contains("for (const item of this.canvasDisplayList(scene, frame, unit, animations, progress))"));
-        assert!(RENDERER_JS.contains("paintCanvasItem(context, item, unit, progress = 1, now = performance.now())"));
+        assert!(RENDERER_JS.contains(
+            "for (const item of this.canvasDisplayList(scene, frame, unit, animations, progress))"
+        ));
+        assert!(RENDERER_JS.contains(
+            "paintCanvasItem(context, item, unit, progress = 1, now = performance.now())"
+        ));
         assert!(RENDERER_JS.contains(
             "this.paintCanvasLayer(context, item.layer, item.x, item.y, unit, item.animation, progress, now);"
         ));
@@ -527,7 +546,15 @@ levels3 default of board {
         assert!(!RENDERER_JS.contains("visualSpriteBox("));
         assert!(RENDERER_JS.contains("canvasMetrics(canvas, scene, frame)"));
         assert!(RENDERER_JS.contains("canvasPresentationCellUnit(scene)"));
-        assert!(RENDERER_JS.contains("context.setTransform(metrics.scale, 0, 0, metrics.scale, 0, 0);"));
+        assert!(
+            RENDERER_JS
+                .contains("context.setTransform(metrics.scaleX, 0, 0, metrics.scaleY, 0, 0);")
+        );
+        assert!(RENDERER_JS.contains("context.__puzzleCanvasScaleX = metrics.scaleX;"));
+        assert!(RENDERER_JS.contains("fillCanvasRect(context, x, y, width, height)"));
+        assert!(RENDERER_JS.contains("canvasPixelEdge(context, value, axis)"));
+        assert!(RENDERER_JS.contains("scaleX: pixelWidth / cssWidth,"));
+        assert!(RENDERER_JS.contains("scaleY: pixelHeight / cssHeight,"));
         assert!(RENDERER_JS.contains("const rect = canvas.getBoundingClientRect();"));
         assert!(!RENDERER_JS.contains("canvasCellUnit(scene, frame)"));
         assert!(!RENDERER_JS.contains("spritePatternSize(frameDef)"));
@@ -537,8 +564,10 @@ levels3 default of board {
         assert!(!RENDERER_JS.contains("scaledPixelEdge(index, sourceUnits, targetPixels)"));
         assert!(!RENDERER_JS.contains("animationForVisualCompanion"));
         assert!(RENDERER_JS.contains("requiresCanvasTransformStack(transform)"));
-        assert!(RENDERER_JS.contains("x = Math.round(x + transform.x);"));
-        assert!(RENDERER_JS.contains("y = Math.round(y + transform.y);"));
+        assert!(RENDERER_JS.contains("x += transform.x;"));
+        assert!(RENDERER_JS.contains("y += transform.y;"));
+        assert!(!RENDERER_JS.contains("x = Math.round(x + transform.x);"));
+        assert!(!RENDERER_JS.contains("y = Math.round(y + transform.y);"));
     }
 
     #[test]
@@ -555,7 +584,7 @@ levels3 default of board {
     }
 
     #[test]
-    fn generated_visuals_include_sprite_translate_offset() {
+    fn generated_visuals_include_ordered_sprite_transforms() {
         let source = r#"
 title = sprite_translate
 puzzle default {
@@ -564,8 +593,9 @@ actor = Player
 }
 sprites {
 Player {
-stretch 2 1
-offset 0.5 -0.25
+translate (0.5, -0.25)
+rotate 90deg
+flip true
 #fff
 00000
 00000
@@ -591,26 +621,51 @@ P
         let loaded = parse_game(source).unwrap();
         let visuals = generated_visuals_js(&loaded);
 
-        assert!(visuals.contains("\"offset\":{\"x\":0.5,\"y\":-0.25}"));
-        assert!(visuals.contains("\"fit\":{\"mode\":\"stretch\",\"width\":2,\"height\":1}"));
+        assert!(visuals.contains("\"transforms\":[{\"kind\":\"translate\",\"x\":0.5,\"y\":-0.25},{\"kind\":\"rotate\",\"degrees\":90},{\"kind\":\"flip\",\"enabled\":true}]"));
         assert!(!visuals.contains("\"pixelsPerCell\""));
-        assert!(RENDERER_JS.contains("visualSpriteOffset(definition, unit)"));
+        assert!(RENDERER_JS.contains(
+            "applyCanvasVisualTransforms(context, definition, unit, animation = null, progress = 1"
+        ));
+        assert!(RENDERER_JS.contains("for (const transform of [...transforms].reverse())"));
+        assert!(
+            RENDERER_JS.contains("tweenedVisualTransforms(definition, animation, progress, now)")
+        );
+        assert!(RENDERER_JS.contains("if (!animation?.fromObject || progress >= 1)"));
+        assert!(RENDERER_JS.contains("rotationTweenDeltaDegrees(fromDegrees, toDegrees)"));
+        assert!(RENDERER_JS.contains("if (transform?.kind !== \"rotate\")"));
+        assert!(RENDERER_JS.contains("return transform;"));
+        assert!(RENDERER_JS.contains("if (delta === -180)"));
+        assert!(RENDERER_JS.contains("delta = 180;"));
+        assert!(RENDERER_JS.contains("scale(-1, -1)"));
         assert!(RENDERER_JS.contains("visualSpriteFit(definition, unit, sourceSize = null)"));
         assert!(RENDERER_JS.contains("spriteDrawBox(definition)"));
         assert!(RENDERER_JS.contains("solidColor && this.canPaintAsFullCellSolid(definition)"));
         assert!(!RENDERER_JS.contains("unit = Math.max(unit, cellCols, cellRows);"));
-        assert!(RENDERER_JS.contains("const presentationUnit = this.canvasPresentationCellUnit(scene);"));
+        assert!(
+            RENDERER_JS
+                .contains("const presentationUnit = this.canvasPresentationCellUnit(scene);")
+        );
         assert!(
             RENDERER_JS.contains(
                 "mode === \"cover\" ? Math.max(scaleX, scaleY) : Math.min(scaleX, scaleY)"
             )
         );
         assert!(RENDERER_JS.contains("context.drawImage(\n          image,"));
+        assert!(RENDERER_JS.contains("cachedPatternBitmap(definition)"));
+        assert!(RENDERER_JS.contains("bitmapContext.fillRect(colIndex, rowIndex, 1, 1)"));
+        assert!(
+            RENDERER_JS
+                .contains("context.drawImage(bitmap, x + fit.x, y + fit.y, fit.width, fit.height)")
+        );
+        assert!(
+            RENDERER_JS
+                .contains("return this.cachedPatternBitmap(definition).toDataURL(\"image/png\")")
+        );
+        assert!(!RENDERER_JS.contains("paintPattern(context"));
         assert!(RENDERER_CSS.contains("--sprite-box-cols"));
         assert!(RENDERER_CSS.contains("background-size: contain;"));
         assert!(!RENDERER_JS.contains("leastCommonMultiple("));
-        assert!(RENDERER_JS.contains("const left = Math.round(x + colIndex * pixelWidth);"));
-        assert!(RENDERER_JS.contains("Math.max(1, right - left)"));
+        assert!(!RENDERER_JS.contains("const left = x + colIndex * pixelWidth;"));
         assert!(
             RENDERER_JS.contains(
                 "const { cols: width, rows: height } = this.spritePatternSize(definition);"
@@ -949,10 +1004,15 @@ P
         assert!(!APP_JS.contains("--ps-confirm-before"));
         assert!(!APP_JS.contains("--ps-confirm-after"));
         assert!(THEME_PRESETS_CSS.contains("--ps-terminal-control-width: 36ch;"));
-        assert!(THEME_PRESETS_CSS.contains("--ps-title-font-size: 40px;"));
+        assert!(THEME_PRESETS_CSS.contains("--ps-title-font-size: 48px;"));
+        assert!(THEME_PRESETS_CSS.contains("--ps-title-line-height: 60px;"));
         assert!(THEME_PRESETS_CSS.contains("--ps-body-font-size: 24px;"));
-        assert!(THEME_PRESETS_CSS.contains("--ps-control-font-size: 26px;"));
-        assert!(THEME_PRESETS_CSS.contains("--ps-line-height: 1.25;"));
+        assert!(THEME_PRESETS_CSS.contains("--ps-body-line-height: 36px;"));
+        assert!(THEME_PRESETS_CSS.contains("--ps-control-font-size: 24px;"));
+        assert!(THEME_PRESETS_CSS.contains("--ps-control-line-height: 36px;"));
+        assert!(THEME_PRESETS_CSS.contains("--ps-message-font-size: 24px;"));
+        assert!(THEME_PRESETS_CSS.contains("--ps-message-line-height: 36px;"));
+        assert!(!THEME_PRESETS_CSS.contains("--ps-line-height:"));
         assert!(THEME_PRESETS_CSS.contains("font-size: var(--ps-title-font-size);"));
         assert!(THEME_PRESETS_CSS.contains("font-size: var(--ps-body-font-size);"));
         assert!(THEME_PRESETS_CSS.contains("font-size: var(--ps-control-font-size);"));
@@ -4152,9 +4212,8 @@ title = "Standalone Tween Fixture"
 
 puzzle board {
   render {
-    tween {
-      duration = 300ms
-    }
+    tween = true
+    tween_duration = 300ms
   }
   layers {
     actor = Player
@@ -4223,17 +4282,18 @@ input_buffer {
 
 puzzle board {
   render {
-    tween {
-      duration = 80ms
-    }
+    tween = true
+    tween_duration = 80ms
   }
   layers {
-    actor = Player
+    solid = Player
     marker = Done
   }
   rules {
     input right [ Player ] -> [ > Player ]
-    move
+    [ > solid | no solid ] -> [ | solid ]
+    [ > solid ] -> [ solid ]
+    wait animation
     [ Player no Done ] -> [ Player Done ]
   }
 }

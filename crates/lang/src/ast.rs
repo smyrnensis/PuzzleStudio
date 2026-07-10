@@ -104,6 +104,10 @@ pub(crate) struct FixDefaults {
 pub(crate) enum ConditionAst {
     All(Vec<ConditionAst>),
     Any(Vec<ConditionAst>),
+    AllObjectsOn {
+        subjects: Vec<ObjectId>,
+        covers: Vec<ObjectId>,
+    },
     InputIs(String),
     InputIn(String),
     VariableEquals {

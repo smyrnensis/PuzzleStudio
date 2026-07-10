@@ -822,20 +822,30 @@ fn parse_condition_block_row(
 
     let tokens = split_header_tokens(line);
     match tokens.as_slice() {
-        ["all", target, "on", cover] => {
-            let expr = format!("none([ {target} no {cover} ])");
-            parse_condition_expr(
-                &expr,
+        ["all", subject, "on", cover] => {
+            let subjects = resolve_object_selector(
+                subject,
                 line,
-                &catalog.input_names,
-                &catalog.variable_names,
-                &catalog.condition_names,
                 &catalog.object_names,
                 &catalog.object_schemas,
                 &catalog_value_sets(catalog),
                 &catalog.maps,
                 &catalog.object_groups,
-            )
+                &HashMap::new(),
+            )?
+            .alternatives;
+            let covers = resolve_object_selector(
+                cover,
+                line,
+                &catalog.object_names,
+                &catalog.object_schemas,
+                &catalog_value_sets(catalog),
+                &catalog.maps,
+                &catalog.object_groups,
+                &HashMap::new(),
+            )?
+            .alternatives;
+            Ok(ConditionAst::AllObjectsOn { subjects, covers })
         }
         ["some", target, "on", cover] => {
             let expr = format!("exists([ {target} {cover} ])");
@@ -1076,6 +1086,24 @@ fn parse_level_body(
     empty_char: char,
     named_conditions: &HashMap<String, (String, ConditionAst)>,
 ) -> Result<ParsedLevelBody, DiagnosticReport> {
+    parse_level_body_with_rules(level, catalog, empty_char, named_conditions, true)
+}
+
+fn parse_level_body_for_editor(
+    level: &LevelBlock,
+    catalog: &Catalog,
+    empty_char: char,
+) -> Result<ParsedLevelBody, DiagnosticReport> {
+    parse_level_body_with_rules(level, catalog, empty_char, &HashMap::new(), false)
+}
+
+fn parse_level_body_with_rules(
+    level: &LevelBlock,
+    catalog: &Catalog,
+    empty_char: char,
+    named_conditions: &HashMap<String, (String, ConditionAst)>,
+    include_rules: bool,
+) -> Result<ParsedLevelBody, DiagnosticReport> {
     let mut body = ParsedLevelBody::default();
     let mut saw_map_row = false;
     let mut i = 0;
@@ -1091,6 +1119,10 @@ fn parse_level_body(
         }
 
         if matches!(tokens.as_slice(), ["on_level_start"] | ["on_level_clear"]) {
+            if !include_rules {
+                i = recover_after_directive_error(&level.lines, i);
+                continue;
+            }
             let (statements, next_i) = parse_statement_block(
                 &level.lines,
                 None,
@@ -1117,12 +1149,20 @@ fn parse_level_body(
             continue;
         }
         if tokens[0] == "on_level_start" || tokens[0] == "on_level_clear" {
+            if !include_rules {
+                i = recover_after_directive_error(&level.lines, i);
+                continue;
+            }
             return Err(parse_error(
                 line,
                 "level lifecycle block header must be: on_level_start | on_level_clear",
             ));
         }
 
+        if !include_rules && is_level_event_sugar(line, &tokens) {
+            i += 1;
+            continue;
+        }
         if let Some(statement) = parse_level_event_sugar(line)? {
             if saw_map_row {
                 body.level_clear_statements.push(statement);

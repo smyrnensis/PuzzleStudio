@@ -999,6 +999,60 @@ level "start" {
     }
 
     #[test]
+    fn classifies_rule_for_expansion_header_from_parser_resolved_surface_tokens() {
+        let source = r#"
+puzzle board {
+layers {
+layer1 = Background
+layer2 = Wall
+each Boundary:directions
+}
+routine move {
+for l in layer1 layer2 Boundary:directions {
+[ l ] -> [ l ]
+}
+}
+}
+"#;
+        let tokens = semantic_tokens(source);
+        let header_start = source.find("for l in layer1").unwrap();
+        let layer1_start = header_start + "for l in ".len();
+        let boundary_start =
+            source[header_start..].find("Boundary:directions").unwrap() + header_start;
+
+        assert_semantic_token(source, &tokens, header_start, "for", SemanticKind::Keyword);
+        assert_semantic_token(
+            source,
+            &tokens,
+            header_start + "for ".len(),
+            "l",
+            SemanticKind::Binding,
+        );
+        assert_semantic_token(
+            source,
+            &tokens,
+            header_start + "for l ".len(),
+            "in",
+            SemanticKind::Keyword,
+        );
+        assert_semantic_token(source, &tokens, layer1_start, "layer1", SemanticKind::Group);
+        assert_semantic_token(
+            source,
+            &tokens,
+            boundary_start,
+            "Boundary",
+            SemanticKind::Object,
+        );
+        assert_semantic_token(
+            source,
+            &tokens,
+            boundary_start + "Boundary:".len(),
+            "directions",
+            SemanticKind::Group,
+        );
+    }
+
+    #[test]
     fn classifies_map_row_values_from_parser_resolved_surface_tokens() {
         let source = r#"
 title = map_row_semantics

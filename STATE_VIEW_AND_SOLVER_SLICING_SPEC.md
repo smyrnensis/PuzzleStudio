@@ -67,7 +67,7 @@ becomes relevant only when that read can affect a relevant output.
 
 Roots include:
 
-- win and lose conditions;
+- win and lose conditions, and `solver { deadend <query> }` predicates;
 - query values used by gameplay conditions, goals, or solver-visible reports;
 - input availability and input-dependent transition differences;
 - movement, collision, and layer occupancy that can change relevant objects;

@@ -833,19 +833,7 @@ fn source_line_role(
 }
 
 fn is_visual_sprite_directive_row(tokens: &[&str]) -> bool {
-    matches!(
-        tokens,
-        ["colors", ..]
-            | ["image", ..]
-            | ["contain", ..]
-            | ["cover", ..]
-            | ["stretch", ..]
-            | ["offset", ..]
-            | ["sampling", ..]
-            | ["pixels_per_cell", ..]
-            | ["rotate", ..]
-            | ["shape", ..]
-    )
+    crate::sprite_authoring::is_sprite_property_tokens(tokens)
 }
 
 fn is_visual_sprite_palette_row(tokens: &[&str]) -> bool {
@@ -859,10 +847,7 @@ fn is_visual_sprite_duration_row(tokens: &[&str]) -> bool {
     let [value] = tokens else {
         return false;
     };
-    let Some(number) = value.strip_suffix("ms").or_else(|| value.strip_suffix('s')) else {
-        return false;
-    };
-    !number.is_empty() && number.chars().any(|ch| ch.is_ascii_digit())
+    crate::sprite_authoring::is_sprite_duration_token(value)
 }
 
 fn starts_unbraced_visual_entry(trimmed: &str, tokens: &[&str]) -> bool {
@@ -1090,9 +1075,10 @@ fn is_statement_block_header(
     current: Option<SourceScope>,
     opened: SourceScope,
 ) -> bool {
-    if puzzle_authoring::rule_statement_block_surface(line, current == Some(SourceScope::Other))
-        .is_some()
-    {
+    if matches!(
+        puzzle_authoring::rule_statement_block_surface(line, current == Some(SourceScope::Other),),
+        Some(puzzle_authoring::RuleStatementBlockSurface::Nested)
+    ) {
         return true;
     }
     if structural_header(line).trim_end().ends_with("->") || line.contains("->") {
@@ -1419,6 +1405,42 @@ fix once {
                 } if header == "fix once"
             )
         }));
+    }
+
+    #[test]
+    fn surface_source_scan_keeps_rule_program_and_routine_in_source_tree() {
+        let source = r#"
+puzzle board {
+routine push once {
+[ Player | Crate ] -> [ Player | Crate ]
+}
+rules {
+push
+}
+on_level_start {
+push
+}
+}
+"#;
+        let context = scan_surface_source(source);
+
+        for header in ["routine push once", "rules", "on_level_start"] {
+            let line = context
+                .lines
+                .iter()
+                .find(|line| line.content.trim() == format!("{header} {{"))
+                .unwrap();
+            assert!(line.structural_events.iter().any(|event| {
+                matches!(
+                    event,
+                    super::SourceStructureEvent::Open {
+                        header: opened_header,
+                        role: super::SourceBlockRole::SourceTree,
+                        ..
+                    } if opened_header == header
+                )
+            }));
+        }
     }
 
     #[test]

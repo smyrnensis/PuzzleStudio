@@ -308,7 +308,7 @@ fn runtime_transition_program_outcome_json(
         commands: transition_commands_contract(commands),
         fired_rules: fired_rules.iter().map(|rule| rule.0).collect(),
         patches: patches_contract_2d(patches),
-        animation_events: animation_events_contract_2d(&animation_events),
+        animation_events: animation_events_contract_2d(loaded, &animation_events),
     }
     .to_json_string()
     .map_err(|error| AppError::Config(error.to_string()))
@@ -338,7 +338,7 @@ fn runtime_transition_current_outcome_json(
         commands: transition_commands_contract(commands),
         fired_rules: fired_rules.iter().map(|rule| rule.0).collect(),
         patches: patches_contract_2d(patches),
-        animation_events: animation_events_contract_2d(&animation_events),
+        animation_events: animation_events_contract_2d(loaded, &animation_events),
         state_hash: state.hash(),
         state_hash_key: state.hash().to_string(),
         previous_state_handle,
@@ -484,45 +484,6 @@ fn patch_op_contract_2d(op: &PatchOp) -> RuntimePatchOp {
             match_value: runtime_mark_value_match(match_value),
         },
     }
-}
-
-fn animation_events_contract_2d(events: &[AnimationEvent]) -> Vec<RuntimeAnimationEvent> {
-    events
-        .iter()
-        .map(|event| match event {
-            AnimationEvent::Move {
-                name,
-                object,
-                from_x,
-                from_y,
-                to_x,
-                to_y,
-                ..
-            } => RuntimeAnimationEvent::Move {
-                name: name.clone(),
-                object_id: object.0,
-                from: RuntimeCoord {
-                    x: *from_x,
-                    y: *from_y,
-                    z: None,
-                },
-                to: RuntimeCoord {
-                    x: *to_x,
-                    y: *to_y,
-                    z: None,
-                },
-            },
-            AnimationEvent::CantMove { name, object, x, y } => RuntimeAnimationEvent::CantMove {
-                name: name.clone(),
-                object_id: object.0,
-                position: RuntimeCoord {
-                    x: *x,
-                    y: *y,
-                    z: None,
-                },
-            },
-        })
-        .collect()
 }
 
 fn runtime_mark_value_match(match_value: MarkValueMatch) -> RuntimeMarkValueMatch {
@@ -1095,6 +1056,10 @@ fn decode_goal_value(value: &serde_json::Value) -> Result<GoalValue, AppError> {
         "condition_value" => Ok(GoalValue::InlineConditionValue(
             decode_condition_value_kind(required_json_value(object, "conditionValueKind")?)?,
         )),
+        "all_objects_on" => Ok(GoalValue::AllObjectsOn {
+            subjects: decode_object_ids(required_json_value(object, "subjects")?)?,
+            covers: decode_object_ids(required_json_value(object, "covers")?)?,
+        }),
         other => Err(AppError::Config(format!(
             "unsupported goal value kind {other:?}"
         ))),

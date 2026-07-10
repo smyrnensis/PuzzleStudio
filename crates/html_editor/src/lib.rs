@@ -147,51 +147,13 @@ const RENDERER_JS: &str = include_str!("../../html_play/static/renderer.js");
 #[cfg(all(test, feature = "embedded-assets"))]
 const EDITOR_STATIC_RENDERER_JS: &str = include_str!("../static/renderer.js");
 #[cfg(feature = "embedded-assets")]
-const PAGES_EXAMPLE_PUZZLE_PATH: &str = "examples/puzzlestudio-example.puzzle";
+const PAGES_EXAMPLE_PUZZLE_PATH: &str = "starter/game.puzzle";
 #[cfg(feature = "embedded-assets")]
-const PAGES_EXAMPLE_PUZZLE_SOURCE: &str = r#"title = "PuzzleStudio Example"
-subtitle = "Push the box onto the goal"
-
-puzzle sokoban {
-layers {
-Floor
-Goal
-Player Box Wall
-}
-
-win_conditions {
-all Goal on Box
-}
-
-on_level_start {
-[ no Floor ] -> [ Floor ]
-}
-
-rules {
-input [ Player ] -> [ > Player ]
-[ > Player | Box ] -> [ > Player | > Box ]
-move
-}
-}
-
-levels {
-legend {
-. = empty
-# = Wall
-P = Player
-B = Box
-G = Goal
-* = Box Goal
-}
-
-level "start"
-#######
-#.....#
-#.PB.G#
-#.....#
-#######
-}
-"#;
+const PAGES_EXAMPLE_PUZZLE_SOURCE: &str = include_str!("../starter/game.puzzle");
+#[cfg(feature = "embedded-assets")]
+const PAGES_STARTER_README_PATH: &str = "starter/README.md";
+#[cfg(feature = "embedded-assets")]
+const PAGES_STARTER_README_SOURCE: &str = include_str!("../starter/README.md");
 const SKIPPED_WORKSPACE_DIRS: &[&str] = &[
     ".cache",
     ".git",
@@ -333,21 +295,37 @@ impl EditorService {
                 game_css: String::new(),
                 #[cfg(any(feature = "native-preview", feature = "embedded-assets"))]
                 base_game_visuals_js: String::new(),
-                folders: Vec::new(),
-                documents: vec![EditorDocument {
-                    puzzle_path: PAGES_EXAMPLE_PUZZLE_PATH.to_string(),
-                    encoding: "text".to_string(),
-                    mime_type: mime_type(Path::new(PAGES_EXAMPLE_PUZZLE_PATH)).to_string(),
-                    source,
-                    data_url: String::new(),
-                    content_loaded: true,
-                    declares_game_entry: true,
-                    preview_html: String::new(),
-                    preview_error: String::new(),
-                    game_css: String::new(),
-                    imported_by: Vec::new(),
-                    parent_game_path: PAGES_EXAMPLE_PUZZLE_PATH.to_string(),
-                }],
+                folders: vec!["starter".to_string()],
+                documents: vec![
+                    EditorDocument {
+                        puzzle_path: PAGES_EXAMPLE_PUZZLE_PATH.to_string(),
+                        encoding: "text".to_string(),
+                        mime_type: mime_type(Path::new(PAGES_EXAMPLE_PUZZLE_PATH)).to_string(),
+                        source,
+                        data_url: String::new(),
+                        content_loaded: true,
+                        declares_game_entry: true,
+                        preview_html: String::new(),
+                        preview_error: String::new(),
+                        game_css: String::new(),
+                        imported_by: Vec::new(),
+                        parent_game_path: PAGES_EXAMPLE_PUZZLE_PATH.to_string(),
+                    },
+                    EditorDocument {
+                        puzzle_path: PAGES_STARTER_README_PATH.to_string(),
+                        encoding: "text".to_string(),
+                        mime_type: mime_type(Path::new(PAGES_STARTER_README_PATH)).to_string(),
+                        source: PAGES_STARTER_README_SOURCE.to_string(),
+                        data_url: String::new(),
+                        content_loaded: true,
+                        declares_game_entry: false,
+                        preview_html: String::new(),
+                        preview_error: String::new(),
+                        game_css: String::new(),
+                        imported_by: Vec::new(),
+                        parent_game_path: String::new(),
+                    },
+                ],
             },
         }
     }
@@ -3153,8 +3131,10 @@ step board
         let state = service.state();
         assert_eq!(state.workspace_root, "");
         assert_eq!(state.puzzle_path, PAGES_EXAMPLE_PUZZLE_PATH);
-        assert_eq!(state.documents.len(), 1);
+        assert_eq!(state.folders, ["starter"]);
+        assert_eq!(state.documents.len(), 2);
         assert_eq!(state.documents[0].puzzle_path, PAGES_EXAMPLE_PUZZLE_PATH);
+        assert_eq!(state.documents[1].puzzle_path, PAGES_STARTER_README_PATH);
         assert!(state.source.contains("PuzzleStudio Example"));
 
         let html = service
@@ -3163,12 +3143,14 @@ step board
         assert!(html.contains("PuzzleStudio Example"));
         assert!(html.contains("Push the box onto the goal"));
         assert!(html.contains("all Goal on Box"));
-        assert!(html.contains("input [ Player ]"));
+        assert!(html.contains("input [ Player | Box | no Wall ]"));
         assert!(!html.contains("Player{&gt;}"));
         assert!(!html.contains("Player{>}"));
         assert!(html.contains(PAGES_EXAMPLE_PUZZLE_PATH));
+        assert!(html.contains(PAGES_STARTER_README_PATH));
         assert!(!html.contains("games/spec_2d.puzzle"));
         assert!(!html.contains("/games/"));
+        assert!(!html.contains("/private/"));
         assert!(!html.contains("Managed GitHub Pages starter"));
         assert!(!html.contains("levels demo of starter"));
     }
@@ -3212,7 +3194,7 @@ step board
             "games/editor_fixture/game.puzzle",
             editor_fixture_source("Editor Fixture").replace(
                 "\npuzzle default {",
-                "\nassets {\nfile \"tile.svg\"\n}\n\npuzzle default {",
+                "\nassets {\n\"tile.svg\"\n}\n\npuzzle default {",
             ),
         );
         workspace.write("games/editor_fixture/notes.md", "# Notes\n");
@@ -3681,7 +3663,7 @@ step board
         let workspace = TestWorkspace::new();
         let source = editor_fixture_source("Top Level Sounds").replace(
             "puzzle default {",
-            "sounds {\nsfx push seed=301193 type=hit volume=0.3\n}\n\npuzzle default {",
+            "sounds {\nsfx push { seed = 301193; type = hit; volume = 0.3 }\n}\n\npuzzle default {",
         );
         let game_path = workspace.write("games/top_level_sounds/game.puzzle", &source);
         let service = EditorService::open(&game_path).expect("open editor fixture");
@@ -3703,7 +3685,7 @@ step board
         let workspace = TestWorkspace::new();
         let themed_source = editor_fixture_source("Themed Preview").replace(
             "puzzle default {",
-            "theme puzzlescript {\nbackground_color = #ffffff\ntext_color = #000000\n}\n\npuzzle default {",
+            "theme {\npreset = \"puzzlescript\"\nbackground_color = #ffffff\ntext_color = #000000\n}\n\npuzzle default {",
         );
         let game_path = workspace.write("games/themed_preview/game.puzzle", &themed_source);
         let service = EditorService::open(&game_path).expect("open themed editor fixture");
@@ -4170,10 +4152,11 @@ levels3 demo of push3 {
     }
 
     #[test]
-    fn source_run_button_opens_play_preview() {
+    fn source_play_button_opens_play_preview() {
         assert!(EDITOR_HTML.contains(r#"id="runButton""#));
-        assert!(EDITOR_HTML.contains(r#"aria-label="Run preview""#));
-        assert!(EDITOR_HTML.contains("lucide-play"));
+        assert!(EDITOR_HTML.contains(r#"aria-label="Play preview""#));
+        assert!(EDITOR_HTML.contains("source-preview-play-icon"));
+        assert!(EDITOR_HTML.contains("source-preview-stop-icon"));
         assert!(EDITOR_JS.contains("async function runPreviewFromSourcePane()"));
         assert!(EDITOR_JS.contains(
             "async function runPreviewFromSourcePane() {\n  ensurePreviewTargetsActiveDocument();"
@@ -4194,10 +4177,13 @@ levels3 demo of push3 {
         assert!(EDITOR_WORKSPACE_JS.contains("return true;\n  } catch (error) {"));
         assert!(EDITOR_WORKSPACE_JS.contains("throw error;\n  } finally {"));
         assert!(EDITOR_JS.contains("openPreviewModePane(\"play\", { focus: false });"));
-        assert!(
-            EDITOR_JS.contains("runButton.addEventListener(\"click\", runPreviewFromSourcePane);")
-        );
-        assert!(EDITOR_WORKSPACE_JS.contains("runButton.title = \"Run preview\";"));
+        assert!(EDITOR_JS.contains("function previewRuntimeIsRunning()"));
+        assert!(EDITOR_JS.contains("function syncSourcePreviewRunButton()"));
+        assert!(EDITOR_JS.contains("activePreviewRequest = controller;\n  runButton.disabled = false;\n  syncSourcePreviewRunButton();"));
+        assert!(EDITOR_JS.contains(
+            "runButton.addEventListener(\"click\", () => {\n  if (previewRuntimeIsRunning())"
+        ));
+        assert!(EDITOR_WORKSPACE_JS.contains("runButton.title = \"Play preview\";"));
     }
 
     #[test]
@@ -4307,9 +4293,12 @@ levels3 demo of push3 {
 
     #[test]
     fn desktop_workspace_delete_requires_confirmation() {
-        assert!(EDITOR_WORKSPACE_JS.contains("function confirmDesktopDeleteWorkspaceEntry(node)"));
+        assert!(
+            EDITOR_WORKSPACE_JS
+                .contains("function confirmDeleteWorkspaceEntry(node, options = {})")
+        );
         let confirm = EDITOR_WORKSPACE_JS
-            .find("confirmDesktopDeleteWorkspaceEntry(target.node)")
+            .find("confirmDeleteWorkspaceEntry(target.node, {")
             .expect("desktop delete confirms the selected workspace entry");
         let host_delete = EDITOR_WORKSPACE_JS
             .find("window.PuzzleStudioHost.deleteWorkspaceEntry({")
@@ -4569,7 +4558,10 @@ levels3 demo of push3 {
         assert!(EDITOR_CSS.contains(".source-action-button:focus-visible"));
         assert!(EDITOR_CSS.contains("outline: 2px solid color-mix"));
         assert!(!EDITOR_CSS.contains(".source-action-button:focus {\n"));
-        assert!(!EDITOR_CSS.contains(".source-action-button:hover,\n.source-action-button:focus-visible"));
+        assert!(
+            !EDITOR_CSS
+                .contains(".source-action-button:hover,\n.source-action-button:focus-visible")
+        );
         assert!(EDITOR_CSS.contains(".source-action-button[aria-pressed=\"true\"]"));
     }
 
@@ -4630,21 +4622,29 @@ levels3 demo of push3 {
                 .contains("const levelGridButton = document.querySelector(\"#levelGridButton\");")
         );
         assert!(EDITOR_JS.contains("let levelGridVisible = false;"));
-        assert!(EDITOR_HTML.contains(r#"id="levelLayerVisibilityButton""#));
-        assert!(EDITOR_HTML.contains("lucide-list-filter"));
-        assert!(
-            EDITOR_DOM_JS.contains(
-                "const levelLayerVisibilityButton = document.querySelector(\"#levelLayerVisibilityButton\");"
-            )
-        );
-        assert!(EDITOR_JS.contains("hiddenLayers: []"));
+        assert!(EDITOR_HTML.contains(r#"id="levelLayerControls""#));
+        assert!(EDITOR_HTML.contains(r#"id="levelLayerPreviewPanel""#));
+        assert!(EDITOR_HTML.contains(r#"id="levelLayerPreviewStrip""#));
+        assert!(EDITOR_DOM_JS.contains(
+            "const levelLayerControls = document.querySelector(\"#levelLayerControls\");"
+        ));
+        assert!(EDITOR_DOM_JS.contains(
+            "const levelLayerPreviewPanel = document.querySelector(\"#levelLayerPreviewPanel\");"
+        ));
+        assert!(EDITOR_DOM_JS.contains(
+            "const levelLayerPreviewStrip = document.querySelector(\"#levelLayerPreviewStrip\");"
+        ));
+        assert!(!EDITOR_DOM_JS.contains("levelLayerVisibilityButton"));
+        assert!(!EDITOR_DOM_JS.contains("levelLayerVisibilityMenu"));
+        assert!(EDITOR_JS.contains("layerMode: false,"));
+        assert!(EDITOR_JS.contains("showCompositeLayers: false,"));
         assert!(!EDITOR_HTML.contains(r#"id="levelScopeLayerButton""#));
         assert!(!EDITOR_HTML.contains(r#"aria-label="Level edit scope""#));
-        assert!(EDITOR_JS.contains("function levelVisibleCells("));
-        assert!(EDITOR_JS.contains("function renderLevelLayerEditRow("));
+        assert!(EDITOR_JS.contains("function renderLevelLayerControls()"));
+        assert!(EDITOR_JS.contains("function renderLevelLayerPreviews()"));
+        assert!(EDITOR_JS.contains("function levelLayerCells("));
         assert!(EDITOR_JS.contains("function levelCompositeCells(options = {})"));
         assert!(EDITOR_JS.contains("levelCompositeCells({ includeHidden: true"));
-        assert!(EDITOR_JS.contains("levelCompositeCells({ includeHidden: false"));
         assert!(EDITOR_JS.contains(
             "function paintCellSlots(slots, objectId, exportData = currentLevelExportData())"
         ));
@@ -4656,8 +4656,8 @@ levels3 demo of push3 {
             EDITOR_JS
                 .contains("levelBoard?.classList.toggle(\"has-all-cell-grid\", levelGridVisible);")
         );
-        assert!(EDITOR_JS.contains("levelRenderer.render(levelScene(visibleCells, exportData));"));
-        assert!(!EDITOR_JS.contains("renderEditorLevelBoardDom(visibleCells, exportData);"));
+        assert!(EDITOR_JS.contains("levelRenderer.render(levelScene(cells, exportData));"));
+        assert!(!EDITOR_JS.contains("renderEditorLevelBoardDom(cells, exportData);"));
         assert!(
             EDITOR_JS
                 .contains("syncLevelGridVisibility();\n  levelBoard.querySelectorAll(\".cell\")")
@@ -4677,8 +4677,8 @@ levels3 demo of push3 {
         assert!(!EDITOR_JS.contains("function levelEditorSourceExportData(source, entry)"));
         assert!(!EDITOR_JS.contains("function sourceGameVisualsJs(source)"));
         assert!(EDITOR_JS.contains("applyGameVisuals(compiledPreviewGameVisualsJs(html));"));
-        assert!(EDITOR_JS.contains("function levelLayerVisibilityEntries("));
-        assert!(EDITOR_JS.contains("label: `Layer ${layerIndex + 1}`"));
+        assert!(EDITOR_JS.contains("label.textContent = `Layer ${index + 1}`;"));
+        assert!(EDITOR_JS.contains("levelLayerPreviewStrip.replaceChildren(fragment);"));
         assert!(EDITOR_CSS.contains(".level-board.board.has-all-cell-grid .cell::after"));
         assert!(EDITOR_CSS.contains("z-index: 100;"));
     }
@@ -4768,9 +4768,11 @@ levels3 demo of push3 {
         );
         assert!(EDITOR_JS.contains("function displayedLevelCells()"));
         assert!(EDITOR_JS.contains(
-            "if (levelPlaytestActive && levelDisplayCells?.length === level.cells.length)"
+            "if (levelPlaytestActive) {\n    if (levelDisplayCells?.length === level.cells.length)"
         ));
-        assert!(EDITOR_JS.contains("return levelCompositeCells({ includeHidden: true });"));
+        assert!(EDITOR_JS.contains(
+            "return level.showCompositeLayers ? levelCompositeCells() : levelLayerCells();"
+        ));
         assert!(EDITOR_JS.contains(
             "if (!levelBuilder.hidden && levelPlaytestActive && pendingPreviewKeyStateSync > 0)"
         ));
@@ -4907,9 +4909,18 @@ levels3 demo of push3 {
         assert!(!EDITOR_JS.contains("level.palette = levelPaletteFromExport(source, exportData);"));
         assert!(!EDITOR_JS.contains("previewDirty"));
         assert!(EDITOR_JS.contains("previewExport = null;"));
-        assert!(EDITOR_JS.contains(
-            "return !compiledPreviewStale && Array.isArray(exportData?.engine?.objects) ? exportData : null;"
-        ));
+        assert!(!EDITOR_JS.contains("function levelEditorCurrentExportData()"));
+        let level_source_loader = EDITOR_JS
+            .find("function loadLevelSourceEntry(source, entry, options = {})")
+            .expect("level source loader");
+        let level_source_loader_end = EDITOR_JS[level_source_loader..]
+            .find("function levelEditorSourceExportData(source)")
+            .map(|index| level_source_loader + index)
+            .expect("level source loader end");
+        let level_source_loader = &EDITOR_JS[level_source_loader..level_source_loader_end];
+        assert!(level_source_loader.contains("levelEditorSourceExportData(source)"));
+        assert!(!level_source_loader.contains("PuzzleStudioHost.preview"));
+        assert!(!level_source_loader.contains("renderPreview"));
         assert!(
             EDITOR_JS.contains(
                 "if (levelPlaytestActive && !compiledPreviewStale && exportData === currentPreviewExportData()) {"
@@ -4918,14 +4929,23 @@ levels3 demo of push3 {
         assert!(EDITOR_JS.contains(
             "function activePreviewModeAcceptsLevelState() {\n  return currentPreviewMode === \"edit\" && levelPlaytestActive;\n}"
         ));
-        assert!(EDITOR_JS.contains("function levelEditorCurrentExportData()"));
-        assert!(EDITOR_JS.contains("async function loadLevelSourceEntryAfterPreviewCompile("));
-        assert!(EDITOR_JS.contains("async function compileLevelEditorPreviewData()"));
+        assert!(EDITOR_JS.contains("function levelEditorSourceExportData(source)"));
+        assert!(EDITOR_RUNTIME_JS.contains("levelEditorSourceSession(source)"));
+        assert!(EDITOR_RUNTIME_JS.contains("active_source_analysis_level_editor_manifest_json"));
+        assert!(EDITOR_RUNTIME_JS.contains("active_source_analysis_level_editor_level_slots"));
+        assert!(EDITOR_RUNTIME_JS.contains("active_source_analysis_level_editor_sprite_json"));
+        assert!(!EDITOR_JS.contains("loadLevelSourceEntryAfterPreviewCompile"));
+        assert!(EDITOR_JS.contains("applyLevelEditorContractVisuals(session, objects)"));
+        assert!(EDITOR_JS.contains("session.levelSlots(levelIndex, authoredLayer)"));
+        assert!(!EDITOR_JS.contains("function levelEditorRuntimeSprite("));
+        assert!(EDITOR_JS.contains("if (exportData.editorSourceContract) {"));
+        assert!(EDITOR_JS.contains("stateDataToEditorCells(integrated.initialState, exportData)"));
+        assert!(EDITOR_JS.contains("async function compileSolverPreviewData()"));
         assert!(EDITOR_JS.contains("function loadLevelSourceEntryWithExportData("));
         assert!(EDITOR_JS.contains("function reportLevelSourceLoadFailure("));
         let level_editor_compile = EDITOR_JS
-            .find("async function compileLevelEditorPreviewData()")
-            .expect("level editor metadata compiler");
+            .find("async function compileSolverPreviewData()")
+            .expect("solver metadata compiler");
         let level_editor_compile_end = EDITOR_JS[level_editor_compile..]
             .find("function loadLevelSourceEntryWithExportData(")
             .map(|index| level_editor_compile + index)
@@ -4941,7 +4961,7 @@ levels3 demo of push3 {
         assert!(EDITOR_JS.contains(
             "const runtimeExportLiteral = extractAssignedStringLiteral(source, \"PuzzleRuntimeExportJson\");"
         ));
-        assert!(EDITOR_JS.contains("function extractAssignedStringLiteral(source, variableName)"));
+        assert!(EDITOR_JS.contains("function extractAssignedStringLiteral(source, windowName)"));
         assert!(EDITOR_JS.contains("function extractStringLiteralAt(source, start)"));
         assert!(
             level_editor_compile_source.contains("const exportData = exportInspection.exportData;")
@@ -4963,7 +4983,8 @@ levels3 demo of push3 {
         assert!(!level_editor_compile_source.contains("setPreviewFrameHtml("));
         assert!(!level_editor_compile_source.contains("await renderPreview();"));
         assert!(EDITOR_JS.contains("requirePreviewFrame: true,"));
-        assert!(EDITOR_JS.contains("setPaneStatus(\"level\", \"Locating level metadata\", \"\");"));
+        assert!(!EDITOR_JS.contains("Compiling level metadata"));
+        assert!(EDITOR_JS.contains("Could not load level editor source contract:"));
         assert!(EDITOR_JS.contains(
             "const levels = exportData?.levels || [];\n  let levelIndex = levels.length"
         ));
@@ -5093,31 +5114,31 @@ levels3 demo of push3 {
     #[test]
     fn focused_puzzle_entries_consume_wasm_surface_entries() {
         assert!(EDITOR_JS.contains("function focusedPuzzleSurfaceEntries("));
-        assert!(EDITOR_RUNTIME_JS.contains("let sourceAnalysisCache = null;"));
-        assert!(
-            EDITOR_RUNTIME_JS.contains(
-                "const create = requireSourceAnalysisFunction(module, \"create_source_analysis_handle\");"
-            )
-        );
+        assert!(EDITOR_RUNTIME_JS.contains("let activeSourceAnalysis = null;"));
         assert!(EDITOR_RUNTIME_JS.contains(
-            "const free = requireSourceAnalysisFunction(module, \"free_source_analysis_handle\");"
+            "const activate = requireSourceAnalysisFunction(module, \"activate_source_analysis\");"
         ));
+        assert!(!EDITOR_RUNTIME_JS.contains("free_source_analysis_handle"));
+        assert!(!EDITOR_RUNTIME_JS.contains("analysis.handle"));
         assert!(
             EDITOR_RUNTIME_JS
-                .contains("return querySourceAnalysis(wasmCompiler, analysis.handle, \"source_analysis_outline_json\");")
+                .contains("return querySourceAnalysis(wasmCompiler, analysis.revision, \"active_source_analysis_outline_json\");")
         );
         assert!(EDITOR_RUNTIME_JS.contains(
-            "const raw = querySourceAnalysis(wasmCompiler, analysis.handle, \"source_analysis_entries_json\");"
+            "const raw = querySourceAnalysis(wasmCompiler, analysis.revision, \"active_source_analysis_entries_json\");"
         ));
         assert!(EDITOR_RUNTIME_JS.contains("payload: null,"));
         assert!(!EDITOR_RUNTIME_JS.contains(
-            "const raw = querySourceAnalysis(module, handle, \"source_analysis_json\");"
+            "const raw = querySourceAnalysis(module, revision, \"active_source_analysis_json\");"
         ));
         assert!(EDITOR_JS.contains("window.PuzzleStudioRuntime?.sourceEntries"));
         assert!(EDITOR_JS.contains("rawEntries = window.PuzzleStudioRuntime.sourceEntries(text);"));
         assert!(EDITOR_WORKSPACE_JS.contains("async function ensureEditorWasmParserLoaded()"));
+        assert!(EDITOR_WORKSPACE_JS.contains(
+            "const wasmParserLoad = ensureEditorWasmParserLoaded();\n  void wasmParserLoad.catch"
+        ));
         assert!(
-            EDITOR_WORKSPACE_JS
+            !EDITOR_WORKSPACE_JS
                 .contains("await ensureEditorWasmParserLoaded();\n  if (editorSeed)")
         );
         assert!(EDITOR_WORKSPACE_JS.contains("await loadWasmCompiler();"));
@@ -5257,22 +5278,17 @@ levels3 demo of push3 {
         assert!(EDITOR_HTML.contains(r#"id="previewSolveButton""#));
         assert!(EDITOR_DOM_JS.contains("const previewSolveButton = document.querySelector"));
         assert!(EDITOR_CSS.contains(".preview-solve-button.is-solving"));
-        assert!(EDITOR_HTML.contains(r#"id="solverTaskSummary""#));
-        assert!(EDITOR_DOM_JS.contains("const solverTaskSummary = document.querySelector"));
         assert!(EDITOR_HTML.contains(r#"id="solverLevelSelect""#));
         assert!(
-            EDITOR_HTML
-                .contains(r#"class="solver-target-readout" aria-label="Current solve target""#)
+            EDITOR_HTML.contains(r#"class="solver-task-readout" aria-label="Current solver task""#)
         );
         assert!(EDITOR_HTML.contains(r#"id="solverTargetName""#));
-        assert!(EDITOR_HTML.contains(r#"id="solverTargetContext""#));
-        assert!(EDITOR_HTML.contains(r#"<span>Load level</span>"#));
         assert!(EDITOR_HTML.contains(r#"aria-label="Load level""#));
+        assert!(EDITOR_HTML.contains("lucide-folder-input"));
         assert!(EDITOR_DOM_JS.contains("const solverLevelSelect = document.querySelector"));
         assert!(EDITOR_DOM_JS.contains("const solverTargetName = document.querySelector"));
-        assert!(EDITOR_DOM_JS.contains("const solverTargetContext = document.querySelector"));
         assert!(EDITOR_CSS.contains(".solver-level-select"));
-        assert!(EDITOR_CSS.contains(".solver-target-readout"));
+        assert!(EDITOR_CSS.contains(".solver-task-readout"));
         assert!(EDITOR_CSS.contains(".solver-load-control"));
         assert!(EDITOR_JS.contains("let activeSolverTask = null;"));
         assert!(EDITOR_JS.contains("let solverSelectedLevelIndex = null;"));
@@ -5282,7 +5298,7 @@ levels3 demo of push3 {
         assert!(!EDITOR_JS.contains("solverStateOverride"));
         assert!(!EDITOR_JS.contains("solverSceneOverride"));
         assert!(!EDITOR_JS.contains("stagedSolverCells"));
-        assert!(EDITOR_JS.contains("function syncSolverTaskSummary("));
+        assert!(EDITOR_JS.contains("function syncSolverTaskReadout("));
         assert!(EDITOR_JS.contains("function createSolverTask("));
         assert!(EDITOR_JS.contains("function createPreviewSolverTask("));
         assert!(EDITOR_JS.contains("function createEditorSolverTask("));
@@ -5303,25 +5319,19 @@ levels3 demo of push3 {
         assert!(EDITOR_JS.contains("return null;"));
         assert!(!EDITOR_JS.contains("scene: previewSceneForLevel(targetIndex, exportData)"));
         assert!(EDITOR_JS.contains("requestFocusedPreviewState();"));
-        assert!(EDITOR_JS.contains("return \"Loaded level\";"));
         assert!(EDITOR_JS.contains("return \"Current board\";"));
         assert!(EDITOR_JS.contains("function solverTaskLevelLabel("));
         assert!(EDITOR_JS.contains("solverTargetName.textContent = solverTaskLevelLabel();"));
-        assert!(EDITOR_JS.contains(
-            "solverTargetContext.textContent = activeSolverTask ? solverTaskProducerLabel(activeSolverTask.producer) : \"\";"
-        ));
         assert!(EDITOR_JS.contains("return level?.name || `Level ${index + 1}`;"));
         assert!(EDITOR_JS.contains(
-            "placeholder.textContent = levels.length ? \"Load...\" : \"No level to solve\";"
+            "placeholder.textContent = levels.length ? \"Load\" : \"No level to solve\";"
         ));
         assert!(EDITOR_JS.contains("solverLevelSelect.value = \"\";"));
         assert!(
             !EDITOR_JS.contains("solverLevelSelect.value = levels.length ? selectedValue : \"\";")
         );
-        assert!(EDITOR_JS.contains("solverTaskSummary.hidden = true;"));
         assert!(!EDITOR_JS.contains("Edited level"));
         assert!(!EDITOR_JS.contains("active-task"));
-        assert!(EDITOR_CSS.contains(".solver-task-summary[hidden]"));
         assert!(!EDITOR_JS.contains("return \"Preview state\";"));
         assert!(!EDITOR_JS.contains("const state = task.state?.kind || \"state\";"));
         assert!(!EDITOR_JS.contains("return `${producer}: ${level} (${state})`;"));
@@ -5356,18 +5366,15 @@ levels3 demo of push3 {
         assert!(open_solver_source.contains("solverSelectedLevelIndex = null;"));
         assert!(open_solver_source.contains("await ensurePreviewSolverExportData();"));
         assert!(EDITOR_JS.contains("async function ensurePreviewSolverExportData()"));
-        assert!(EDITOR_JS.contains("exportData = await compileLevelEditorPreviewData();"));
-        assert!(EDITOR_JS.contains(
-            "setLevelSolveStatus(`Solver metadata compile failed: ${userFacingRuntimeError(error)}`, \"is-error\");"
-        ));
+        assert!(EDITOR_JS.contains("exportData = await compileSolverPreviewData();"));
+        assert!(EDITOR_JS.contains("setLevelSolveStatus(\"Preview failed\", \"is-error\");"));
+        assert!(!EDITOR_JS.contains("Solver metadata compile failed"));
+        assert!(!EDITOR_JS.contains("Preview failed: ${userFacingRuntimeError(error)}"));
         assert!(open_solver_source.contains("return Boolean(activeSolverTask);"));
         assert!(EDITOR_JS.contains("async function solvePreviewPaneCurrentLevel()"));
         assert!(EDITOR_JS.contains("const ready = await openSolverPaneForCurrentLevel();"));
         assert!(EDITOR_JS.contains("if (!ready) {"));
-        assert!(
-            !EDITOR_JS
-                .contains("const target = await resolveSourceTargetFromWasm(source, position);")
-        );
+        assert!(!open_solver_source.contains("resolveSourceTargetFromWasm("));
         assert!(
             EDITOR_JS.contains(
                 "solverModeButton.addEventListener(\"click\", () => {\n  openSolverPaneForCurrentLevel().catch((error) => {"
@@ -5470,7 +5477,7 @@ levels3 demo of push3 {
     fn preview_debug_mode_uses_lucide_icon_and_runtime_trace_contract() {
         assert!(!EDITOR_HTML.contains(r#"id="previewDebugToolbar""#));
         assert!(EDITOR_HTML.contains(r#"id="previewDebugToggleButton""#));
-        assert!(EDITOR_HTML.contains(r#"aria-label="Toggle debug mode""#));
+        assert!(EDITOR_HTML.contains(r#"aria-label="Debug""#));
         assert!(
             EDITOR_HTML.contains(r#"class="pane-header-icon-button preview-debug-toggle-button""#)
         );
@@ -5487,7 +5494,7 @@ levels3 demo of push3 {
         assert!(EDITOR_DOM_JS.contains("const previewDebugControls = document.querySelector"));
         assert!(EDITOR_JS.contains("let previewDebugEnabled = false;"));
         assert!(EDITOR_JS.contains("function setPreviewDebugEnabled(enabled)"));
-        assert!(EDITOR_JS.contains("function handlePreviewDebugTrace(debug)"));
+        assert!(EDITOR_JS.contains("function handlePreviewDebugTrace(debug, snapshot = null)"));
         assert!(EDITOR_JS.contains("type: \"PuzzleStudioSetPreviewDebugMode\""));
         assert!(EDITOR_JS.contains("event.data?.type === \"PuzzleStudioPreviewDebugTrace\""));
         assert!(EDITOR_JS.contains("previewDebugToggleButton?.addEventListener(\"click\""));
@@ -5533,13 +5540,13 @@ levels3 demo of push3 {
         assert!(EDITOR_HTML.contains(r#"id="sourceOutlineList""#));
         assert!(EDITOR_CSS.contains(".explorer-sections {\n  grid-row: 2;"));
         assert!(EDITOR_CSS.contains(
-            "grid-template-rows: minmax(88px, calc(100% - var(--source-outline-height) - 5px)) 5px minmax(88px, var(--source-outline-height));"
+            "grid-template-rows: minmax(88px, calc(100% - var(--source-outline-height) - 6px)) 6px minmax(88px, var(--source-outline-height));"
         ));
-        assert!(EDITOR_CSS.contains("grid-template-rows: minmax(0, 1fr) 0 24px;"));
+        assert!(EDITOR_CSS.contains("grid-template-rows: minmax(0, 1fr) 0 26px;"));
         assert!(EDITOR_CSS.contains(".explorer-files-section {\n  grid-row: 1;"));
         assert!(EDITOR_CSS.contains(".outline-splitter {\n  grid-row: 2;"));
         assert!(EDITOR_CSS.contains(".explorer-outline-section {\n  grid-row: 3;"));
-        assert!(EDITOR_CSS.contains(".explorer-section.is-collapsed {\n  min-height: 24px;"));
+        assert!(EDITOR_CSS.contains(".explorer-section.is-collapsed {\n  min-height: 26px;"));
         assert!(EDITOR_CSS.contains(".source-outline-chevron"));
         assert!(EDITOR_SOURCE_JS.contains("const SOURCE_OUTLINE_KIND_ICON_NAMES"));
         assert!(EDITOR_SOURCE_JS.contains("const SOURCE_OUTLINE_LIFECYCLE_ICON_NAME"));
@@ -5753,14 +5760,29 @@ move
     }
 
     #[test]
-    fn closing_preview_pane_terminates_preview_game() {
+    fn preview_run_controls_own_runtime_lifecycle_while_close_only_hides_pane() {
         assert!(EDITOR_JS.contains("function terminatePreviewGame()"));
+        assert!(EDITOR_JS.contains("previewFrameHasCurrentCompiledPreview = false;"));
         assert!(EDITOR_JS.contains("setPreviewFrameHtml(emptyPreviewDocument());"));
+        assert!(EDITOR_HTML.contains(r#"id="sourceRefreshButton""#));
+        assert!(EDITOR_HTML.contains(r#"aria-label="Refresh preview""#));
+        assert!(EDITOR_DOM_JS.contains("const sourceRefreshButton = document.querySelector"));
         assert!(
-            EDITOR_WORKBENCH_JS.contains(
-                "if (normalized === PREVIEW_WORK_PANE_ID && typeof terminatePreviewGame === \"function\")"
-            )
+            EDITOR_JS.contains("sourceRefreshButton?.addEventListener(\"click\", renderPreview);")
         );
+        assert!(EDITOR_JS.contains("runButton.addEventListener(\"click\", () => {\n  if (previewRuntimeIsRunning()) {\n    terminatePreviewGame();"));
+        assert!(
+            EDITOR_CSS
+                .contains(".source-preview-toggle-button.is-running .source-preview-stop-icon")
+        );
+        assert!(EDITOR_CSS.contains("fill: none;"));
+        assert!(!EDITOR_HTML.contains("sourceStopButton"));
+        assert!(!EDITOR_HTML.contains("previewPlayButton"));
+        assert!(!EDITOR_HTML.contains("previewStopButton"));
+        assert!(!EDITOR_HTML.contains("previewRefreshButton"));
+        assert!(!EDITOR_WORKBENCH_JS.contains("terminatePreviewGame"));
+        assert!(!EDITOR_WORKBENCH_JS.contains("syncPreviewFrameLifecycleForPaneVisibility"));
+        assert!(!EDITOR_JS.contains("function suspendCompiledPreviewRuntime"));
     }
 
     #[test]
@@ -5879,7 +5901,7 @@ move
             frame_fixture < puzzle_export,
             "3D editor previews must extract the 3D frame fixture before the outer scene export"
         );
-        assert!(EDITOR_JS.contains("const variableName = exportData?.__kind === \"puzzle3d\" ? \"Puzzle3DFrameFixture\" : \"PuzzleExport\";"));
+        assert!(EDITOR_JS.contains("const windowName = exportData?.__kind === \"puzzle3d\" ? \"Puzzle3DFrameFixture\" : \"PuzzleExport\";"));
         assert!(EDITOR_LEVEL3D_JS.contains("function level3dRuntimePreviewUpdate()"));
         assert!(EDITOR_JS.contains("function ensureLevel3dRuntimePreviewForOpenPane()"));
         assert!(EDITOR_JS.contains("requireFresh: true,"));
@@ -6042,12 +6064,10 @@ move
 
     #[test]
     fn level3d_editor_syncs_source_focus_and_click_targets() {
-        assert!(
-            EDITOR_JS
-                .contains("sourceEditor.addEventListener(\"click\", loadLevelFromSourceClick);")
-        );
+        assert!(EDITOR_SOURCE_JS.contains("sourceInteractionFromPointer(event)"));
+        assert!(EDITOR_SOURCE_JS.contains("syncPreviewModeFromSourceCursor({"));
         assert!(EDITOR_LEVEL3D_JS.contains("registerSourceEditableTarget?.(\"level3d\""));
-        assert!(EDITOR_SOURCE_JS.contains("syncPreviewModeFromSourceCursor({ force: true });"));
+        assert!(EDITOR_SOURCE_JS.contains("scheduleSourceCursorPreviewSync();"));
         assert!(EDITOR_JS.contains("function syncPreviewModeFromSourceCursor(options = {})"));
         assert!(EDITOR_JS.contains("[\"edit\", \"level3d\", \"sprite\", \"sprite3d\", \"sounds\"].includes(currentPreviewMode)"));
         assert!(!EDITOR_JS.contains("loadSourceTargetWithJsFallback"));
@@ -6064,7 +6084,7 @@ move
             .find("function syncPreviewModeFromSourceCursor(options = {})")
             .expect("source cursor target sync function");
         let sync_end = EDITOR_JS[sync_start..]
-            .find("function syncPreviewModeFromSourcePointer")
+            .find("function syncSourceFromPreviewPane")
             .map(|index| sync_start + index)
             .expect("next source cursor sync function");
         let sync = &EDITOR_JS[sync_start..sync_end];
@@ -6088,63 +6108,35 @@ move
     #[test]
     fn editor_js_does_not_embed_raw_nul_bytes() {
         assert!(!EDITOR_JS.as_bytes().contains(&0));
-        assert!(EDITOR_JS.contains(r#"const resolveSignature = `${position}\u0000${source}`;"#));
+        assert!(EDITOR_JS.contains(
+            r#"const resolveSignature = `${position}\u0000${activePaneSignature}\u0000${source}`;"#
+        ));
     }
 
     #[test]
-    fn sprite_source_click_uses_rust_target_sync() {
-        let click_start = EDITOR_SPRITE_JS
-            .find("function loadSpriteFromSourceClick(event = null)")
-            .expect("sprite source click handler");
-        let click_end = EDITOR_SPRITE_JS[click_start..]
-            .find("function loadSpriteSourceTarget")
-            .map(|index| click_start + index)
-            .expect("sprite rust target loader");
-        let click = &EDITOR_SPRITE_JS[click_start..click_end];
-
-        assert!(click.contains("allowInactiveMode: true,"));
-        assert!(click.contains("position: clickOffset ?? ("));
+    fn source_click_has_one_semantic_target_sync_owner() {
         assert!(
-            click.contains(
-                "sourceViewOffsetToDocumentOffset(sourceEditor.selectionStart, \"start\")"
-            )
+            EDITOR_SOURCE_JS.contains("const interaction = sourceInteractionFromPointer(event);")
+        );
+        assert!(EDITOR_SOURCE_JS.contains("position: interaction.documentOffset,"));
+        assert!(EDITOR_SOURCE_JS.contains("allowInactiveMode: true,"));
+        assert!(EDITOR_SOURCE_JS.contains("recordHistory: true,"));
+        assert!(!EDITOR_SOURCE_JS.contains("force: true,\n      recordHistory: true,"));
+        assert!(!EDITOR_JS.contains("function loadLevelFromSourceClick"));
+        assert!(!EDITOR_SPRITE_JS.contains("function loadSpriteFromSourceClick"));
+        assert!(
+            !EDITOR_JS
+                .contains("sourceEditor.addEventListener(\"click\", loadLevelFromSourceClick);")
         );
         assert!(
-            EDITOR_SPRITE_JS
+            !EDITOR_SPRITE_JS
                 .contains("sourceEditor.addEventListener(\"click\", loadSpriteFromSourceClick);")
         );
-    }
-
-    #[test]
-    fn level_source_click_uses_rust_target_sync_after_source_click_binding() {
-        let click_start = EDITOR_JS
-            .find("function loadLevelFromSourceClick(event = null)")
-            .expect("level source click handler");
-        let click_end = EDITOR_JS[click_start..]
-            .find("function loadLevelFromSourcePosition")
-            .map(|index| click_start + index)
-            .expect("level source position loader");
-        let click = &EDITOR_JS[click_start..click_end];
-
-        assert!(click.contains("syncPreviewModeFromSourceCursor({"));
-        assert!(click.contains("allowInactiveMode: true,"));
-        assert!(click.contains("const position = clickOffset ?? ("));
-        assert!(!click.contains("findLevelDefinitionAtPosition(source, position)"));
-        assert!(click.contains("position,"));
-        assert!(
-            click.contains(
-                "sourceViewOffsetToDocumentOffset(sourceEditor.selectionStart, \"start\")"
-            )
-        );
-        assert!(!click.contains("loadSourceEditableTargetFromPosition"));
-
-        let source_bind = EDITOR_JS
-            .find("bindSourceEditorEvents();")
-            .expect("source click handlers are bound");
-        let level_bind = EDITOR_JS
-            .find("sourceEditor.addEventListener(\"click\", loadLevelFromSourceClick);")
-            .expect("level click handler is bound");
-        assert!(source_bind < level_bind);
+        assert!(EDITOR_JS.contains("function loadResolvedSourceTarget(target, options = {})"));
+        assert!(EDITOR_JS.contains("function previewModeForSourceTargetKind(kind)"));
+        assert!(EDITOR_JS.contains("kind: target.kind, start: target.start, end: target.end"));
+        assert!(EDITOR_JS.contains("currentPreviewMode === resolvedMode"));
+        assert!(EDITOR_SPRITE_JS.contains("function loadSpriteSourceTarget(target, options = {})"));
     }
 
     #[test]
@@ -6271,9 +6263,12 @@ move
         assert!(EDITOR_SOURCE_JS.contains(
             "document.activeElement === sourceEditor && !sourceColorSelectionTargetsToken(current)"
         ));
-        assert!(EDITOR_SOURCE_JS.contains(
-            "const offset = sourceViewOffsetFromVisualPoint(event.clientX, event.clientY);"
-        ));
+        assert!(
+            EDITOR_SOURCE_JS.contains(
+                "function sourceColorEventTargetsToken(event, token, visualOffset = null)"
+            )
+        );
+        assert!(EDITOR_SOURCE_JS.contains("const offset = Number.isInteger(visualOffset)"));
         assert!(!EDITOR_SOURCE_JS.contains("sourceColorInput"));
         assert!(!EDITOR_SOURCE_JS.contains("source-native-color-input"));
         assert!(!EDITOR_SOURCE_JS.contains("showPicker"));
@@ -6374,7 +6369,14 @@ move
         );
         assert!(!EDITOR_SPRITE_JS.contains("frame.style.gridColumn"));
         assert!(!EDITOR_SPRITE_JS.contains("frame.style.gridRow"));
-        assert!(!EDITOR_SPRITE_JS.contains("is-clip-selected"));
+        assert!(
+            EDITOR_SPRITE_JS
+                .contains("button.classList.toggle(\"is-clip-selected\", isClipSelected);")
+        );
+        assert!(EDITOR_CSS.contains(
+            ".sprite-board.is-clip-active .sprite-cell.is-clip-selected {\n  cursor: grab;"
+        ));
+        assert!(EDITOR_CSS.contains(".sprite-cell.is-clip-selected {\n  box-shadow: none;"));
         assert!(EDITOR_CSS.contains(".sprite-clip-selection-frame {\n  position: absolute;"));
         assert!(EDITOR_CSS.contains("left: calc(var(--sprite-clip-x) * var(--sprite-cell));"));
         assert!(EDITOR_CSS.contains("background: transparent;"));
@@ -6410,15 +6412,11 @@ move
         assert!(EDITOR_HTML.contains(
             r#"<div class="source-action-group source-preview-actions sprite-source-actions sprite-header-actions" role="group" aria-label="3D sprite source actions">"#
         ));
-        assert!(EDITOR_WORKBENCH_JS.contains("if (paneId === \"sprite\") {\n    return [];\n  }"));
-        assert!(!EDITOR_CSS.contains(".pane-title .sprite-header-actions"));
-        assert!(EDITOR_CSS.contains("\"name . .\"\n    \"transform shape .\""));
+        assert!(EDITOR_HTML.contains(r#"id="spritePaneHeaderActions""#));
         assert!(
-            EDITOR_CSS.contains(
-                "grid-template-columns: minmax(160px, 220px) max-content minmax(0, 1fr);"
-            )
+            EDITOR_WORKBENCH_JS.contains("document.querySelector(\"#spritePaneHeaderActions\")")
         );
-        assert!(EDITOR_CSS.contains("max-width: 220px;"));
+        assert!(!EDITOR_CSS.contains(".pane-title .sprite-header-actions"));
         assert!(EDITOR_CSS.contains("#spriteBuilder .sprite-source-actions {\n  width: auto;"));
         assert!(
             EDITOR_CSS.contains("border: 0;\n  background: transparent;\n  color: var(--muted);")
@@ -6442,7 +6440,7 @@ move
     #[test]
     fn sprite_brush_presets_are_relative_and_paint_updates_changed_cells() {
         assert!(EDITOR_CSS.contains(
-            "#spriteBuilder .sprite-board {\n  --sprite-cell: clamp(8px, calc((100cqw - 2px) / var(--sprite-size)), 64px);\n}"
+            "#spriteBuilder .sprite-board {\n  --sprite-cell: clamp(8px, calc(100cqw / var(--sprite-size)), 64px);\n}"
         ));
         assert!(EDITOR_CSS.contains("--sprite-puzzle-line: #1d242b;"));
         assert!(EDITOR_CSS.contains(
@@ -6547,7 +6545,7 @@ move
                 .contains("transformActions.className = \"sprite-paint-transform-actions\";")
         );
         assert!(EDITOR_SPRITE_JS.contains("spriteFlipVerticalButton,\n    spriteClearButton,"));
-        assert!(EDITOR_CSS.contains(".sprite-paint-tool-group + .sprite-paint-tool-group {"));
+        assert!(EDITOR_CSS.contains(".sprite-global-edit-actions > * + * {\n  margin-left: 2px;"));
         assert!(
             EDITOR_CSS
                 .contains(".sprite-paint-tool-button {\n  border: 0;\n  background: transparent;")
@@ -6810,6 +6808,9 @@ move
 
     #[test]
     fn source_editor_clicks_right_of_text_stay_on_visual_line_end() {
+        assert!(EDITOR_SOURCE_JS.contains("const textNodes = [];"));
+        assert!(EDITOR_SOURCE_JS.contains("range.selectNodeContents(node);"));
+        assert!(EDITOR_SOURCE_JS.contains("entry.lineDistance > nearestLineDistance + 0.5"));
         assert!(EDITOR_SOURCE_JS.contains("let lineHit = null;"));
         assert!(EDITOR_SOURCE_JS.contains("let bestInLine = null;"));
         assert!(EDITOR_SOURCE_JS.contains("if (lineDistance === 0 && char !== \"\\n\")"));
@@ -6818,18 +6819,14 @@ move
             EDITOR_SOURCE_JS
                 .contains("return Math.max(0, Math.min(source.length, lineHit.endOffset));")
         );
-        assert!(EDITOR_JS.contains("function sourceOffsetFromEditorClick(event, source)"));
-        assert!(
-            EDITOR_JS.contains(
-                "return sourceOffsetFromVisualPoint(event.clientX, event.clientY, source);"
-            )
-        );
+        assert!(EDITOR_SOURCE_JS.contains("function sourceInteractionFromPointer(event"));
+        assert!(EDITOR_SOURCE_JS.contains("visualOffset: viewOffset,"));
     }
 
     #[test]
     fn source_line_gutter_does_not_capture_text_selection_drag() {
         assert!(EDITOR_CSS.contains(
-            ".source-line-numbers {\n  position: absolute;\n  top: 0;\n  left: 0;\n  z-index: 2;"
+            ".source-line-numbers {\n  box-sizing: border-box;\n  position: absolute;\n  top: 0;\n  left: 0;\n  z-index: 2;"
         ));
         assert!(EDITOR_CSS.contains("  pointer-events: none;\n  will-change: transform;"));
         assert!(
@@ -6874,19 +6871,20 @@ move
             "const next = sourceViewOffsetFromVisualPoint(targetClientX, targetClientY);"
         ));
         assert!(
-            EDITOR_SOURCE_JS.contains(
-                "const visualOffset = sourceViewOffsetFromVisualPoint(clientX, clientY);"
-            )
+            EDITOR_SOURCE_JS
+                .contains("const visualOffset = Number.isInteger(options.visualOffset)")
         );
+        assert!(EDITOR_SOURCE_JS.contains(": sourceViewOffsetFromVisualPoint(clientX, clientY);"));
     }
 
     #[test]
     fn source_pointer_sync_uses_visual_click_offset() {
-        assert!(EDITOR_JS.contains("function syncPreviewModeFromSourcePointer(event)"));
-        assert!(
-            EDITOR_JS.contains("const clickOffset = sourceOffsetFromEditorClick(event, source);")
-        );
-        assert!(EDITOR_JS.contains("position: clickOffset"));
+        assert!(EDITOR_SOURCE_JS.contains("function sourceInteractionFromPointer(event"));
+        assert!(EDITOR_SOURCE_JS.contains(
+            "const viewOffset = sourceViewOffsetFromVisualPoint(event.clientX, event.clientY);"
+        ));
+        assert!(EDITOR_SOURCE_JS.contains("position: interaction.documentOffset,"));
+        assert!(!EDITOR_JS.contains("function syncPreviewModeFromSourcePointer(event)"));
     }
 
     #[test]
@@ -6894,7 +6892,7 @@ move
         assert!(EDITOR_CSS.contains(".source-editor-wrap {\n  min-width: 0;\n  min-height: 0;\n  position: relative;\n  overflow: auto;"));
         assert!(
             EDITOR_CSS.contains(
-                "#sourceEditor,\n.source-highlight {\n  width: 100%;\n  min-height: 100%;"
+                "#sourceEditor,\n.source-highlight {\n  box-sizing: border-box;\n  width: 100%;\n  min-height: 100%;"
             )
         );
         assert!(EDITOR_CSS.contains("  overflow: hidden;\n  border: 0;"));
@@ -7229,7 +7227,31 @@ move
         );
         assert!(EDITOR_SPRITE_JS.contains("assets.set(shapeName, resolvedRows);"));
         assert!(EDITOR_SPRITE_JS.contains("if (!shapeRows.length)"));
-        assert!(EDITOR_SPRITE_JS.contains("Cannot resolve shape ${name}"));
+        let contract_error_start = EDITOR_SPRITE_JS
+            .find("function spriteSourceContractError(contract)")
+            .expect("sprite source contract validation");
+        let contract_error_end = EDITOR_SPRITE_JS[contract_error_start..]
+            .find("function spritePaletteEntrySourceToken")
+            .map(|offset| contract_error_start + offset)
+            .expect("sprite source contract validation end");
+        let contract_error = &EDITOR_SPRITE_JS[contract_error_start..contract_error_end];
+        assert!(contract_error.contains("if (shapeName && !shapeRows.length)"));
+        assert!(contract_error.contains("return `Cannot resolve shape ${shapeName}`;"));
+
+        let loader_start = EDITOR_SPRITE_JS
+            .find("function loadSpriteSourceTarget(target, options = {})")
+            .expect("sprite source target loader");
+        let loader_end = EDITOR_SPRITE_JS[loader_start..]
+            .find("function isIncompleteSpriteSourceTarget")
+            .map(|offset| loader_start + offset)
+            .expect("sprite source target loader end");
+        let loader = &EDITOR_SPRITE_JS[loader_start..loader_end];
+        assert!(
+            loader
+                .contains("const contractError = spriteSourceContractError(target.sourceSprite);")
+        );
+        assert!(loader.contains("setSpriteActionStatus(contractError, \"is-error\");"));
+        assert!(loader.contains("setStatus(contractError, \"is-error\");"));
     }
 
     #[test]
@@ -7911,7 +7933,7 @@ move
         assert!(EDITOR_RUNTIME_JS.contains("window.PuzzleStudioRuntime"));
         assert!(EDITOR_RUNTIME_JS.contains("compile_preview"));
         assert!(EDITOR_RUNTIME_JS.contains("export_html"));
-        assert!(EDITOR_RUNTIME_JS.contains("source_analysis_highlight_json"));
+        assert!(EDITOR_RUNTIME_JS.contains("active_source_analysis_highlight_json"));
         assert!(EDITOR_RUNTIME_JS.contains("solver_task_initial_display_state_json"));
         assert!(EDITOR_HTML.contains("editor_runtime.js"));
         assert!(

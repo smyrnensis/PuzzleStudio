@@ -130,6 +130,8 @@ pub enum RuntimeAnimationEvent {
         name: String,
         #[serde(rename = "objectId")]
         object_id: u16,
+        #[serde(rename = "fromObject", skip_serializing_if = "Option::is_none")]
+        from_object: Option<String>,
         from: RuntimeCoord,
         to: RuntimeCoord,
     },
@@ -658,6 +660,7 @@ mod tests {
             animation_events: vec![RuntimeAnimationEvent::Move {
                 name: "tween".to_string(),
                 object_id: 1,
+                from_object: None,
                 from: RuntimeCoord {
                     x: 0,
                     y: 0,

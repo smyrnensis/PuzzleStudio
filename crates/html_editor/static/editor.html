@@ -139,9 +139,20 @@
           <div class="document-tabbar" data-pane-drag-handle="source" draggable="true" title="Drag header to move source pane">
             <div id="documentTabs" class="document-tabs" role="tablist" aria-label="Open files"></div>
             <div class="document-tabbar-actions">
-              <button id="runButton" class="icon-button source-action-button level-playtest-button source-refresh-button" type="button" aria-label="Run preview" title="Run preview">
-                <svg xmlns="http://www.w3.org/2000/svg" class="level-play-icon lucide lucide-play-icon lucide-play" viewBox="0 0 24 24" aria-hidden="true">
-                  <polygon points="8 5 19 12 8 19 8 5"></polygon>
+              <button id="runButton" class="icon-button source-action-button source-preview-toggle-button" type="button" aria-label="Play preview" aria-pressed="false" title="Play preview">
+                <svg class="source-preview-play-icon lucide lucide-play-icon lucide-play" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="m8 5 11 7-11 7V5z"></path>
+                </svg>
+                <svg class="source-preview-stop-icon lucide lucide-square-icon lucide-square" viewBox="0 0 24 24" aria-hidden="true">
+                  <rect width="14" height="14" x="5" y="5" rx="1"></rect>
+                </svg>
+              </button>
+              <button id="sourceRefreshButton" class="icon-button source-action-button" type="button" aria-label="Refresh preview" title="Refresh preview">
+                <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-refresh-cw-icon lucide-refresh-cw">
+                  <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path>
+                  <path d="M21 3v5h-5"></path>
+                  <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path>
+                  <path d="M8 16H3v5"></path>
                 </svg>
               </button>
               <button id="saveButton" class="icon-button document-save-button" type="button" aria-label="Save" title="Save (Command+S)">
@@ -217,14 +228,6 @@
                 <svg class="cancel-solve-icon" viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M6 6l12 12"></path>
                   <path d="M18 6 6 18"></path>
-                </svg>
-              </button>
-              <button id="previewRefreshButton" class="pane-header-icon-button preview-refresh-button" type="button" aria-label="Refresh preview" title="Refresh preview">
-                <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-refresh-cw-icon lucide-refresh-cw">
-                  <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path>
-                  <path d="M21 3v5h-5"></path>
-                  <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path>
-                  <path d="M8 16H3v5"></path>
                 </svg>
               </button>
               <button class="pane-maximize-button" type="button" data-pane-maximize="active-preview" aria-label="Maximize Preview pane" aria-pressed="false" title="Maximize Preview pane">
@@ -350,7 +353,7 @@
               <div class="source-action-group source-preview-actions level-header-actions" role="group" aria-label="Level source actions">
                 <button id="levelPlaytestButton" class="source-action-button level-playtest-button" type="button" aria-label="Play level" title="Play" data-tooltip="Play">
                   <svg class="level-play-icon" viewBox="0 0 24 24" aria-hidden="true">
-                    <polygon points="8 5 19 12 8 19 8 5"></polygon>
+                    <path d="m8 5 11 7-11 7V5z"></path>
                   </svg>
                   <svg class="level-stop-icon" viewBox="0 0 24 24" aria-hidden="true">
                     <rect x="7" y="7" width="10" height="10" rx="1"></rect>
@@ -419,16 +422,6 @@
                   <path d="M9 4.2V9m0 0H4.2M9 9 3 3"></path>
                 </svg>
               </button>
-              <div class="level-layer-visibility-wrap">
-                <button id="levelLayerVisibilityButton" class="sprite-icon-button level-layer-visibility-button" type="button" aria-label="Layer visibility" aria-expanded="false" title="Layer visibility" data-tooltip="Layer visibility">
-                  <svg class="lucide lucide-list-filter level-layer-visibility-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true">
-                    <path d="M3 6h18"></path>
-                    <path d="M7 12h10"></path>
-                    <path d="M10 18h4"></path>
-                  </svg>
-                </button>
-                <div id="levelLayerVisibilityMenu" class="level-layer-visibility-menu" role="menu" aria-label="Layer visibility" hidden></div>
-              </div>
               <button id="levelRotateLeftButton" class="sprite-icon-button" type="button" aria-label="Rotate level left" title="Rotate left" data-tooltip="Rotate left">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M3 12a9 9 0 1 0 2.64-6.36L3 8"></path>
@@ -461,6 +454,7 @@
                   <path d="M22 12h-2"></path>
                 </svg>
               </button>
+              <div id="levelLayerControls" class="level-layer-controls" aria-label="Level layer controls"></div>
             </div>
             <div class="level-palette-toolbar" aria-label="Palette display controls" hidden></div>
             <div id="levelPalette" class="level-palette" aria-label="Level tile palette">
@@ -485,22 +479,28 @@
               </div>
               <span id="levelSizeLabel" class="level-size">9 × 5</span>
             </div>
-            <pre id="levelSourcePreview" class="level-source-preview source-line-preview" aria-label="Level source preview"></pre>
+            <section id="levelLayerPreviewPanel" class="level-layer-preview-panel" aria-label="Level layers" hidden>
+              <div id="levelLayerPreviewStrip" class="level-layer-preview-strip" aria-label="Level layers"></div>
+            </section>
           </div>
           <div id="solverPanel" class="solver-panel" hidden>
             <div class="tool-pane-scroll">
               <div class="solver-level-strip">
                 <div class="solver-level-control">
-                  <div class="solver-target-readout" aria-label="Current solve target">
-                    <span class="solver-target-label">Target</span>
-                    <strong id="solverTargetName" class="solver-target-name">Choose a level</strong>
-                    <span id="solverTargetContext" class="solver-target-context"></span>
+                  <div class="solver-task-readout" aria-label="Current solver task">
+                    <span class="solver-task-info">
+                      <span class="solver-task-label">Task</span>
+                      <strong id="solverTargetName" class="solver-target-name">Choose a level</strong>
+                    </span>
+                    <label class="solver-load-control">
+                      <svg class="solver-load-icon lucide lucide-folder-input-icon lucide-folder-input" viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M4 20.5a2 2 0 0 1-2-2V5.5a2 2 0 0 1 2-2h5.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H20a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2Z"></path>
+                        <path d="M12 10v6"></path>
+                        <path d="m9 13 3 3 3-3"></path>
+                      </svg>
+                      <select id="solverLevelSelect" class="solver-level-select" aria-label="Load level"></select>
+                    </label>
                   </div>
-                  <label class="solver-load-control">
-                    <span>Load level</span>
-                    <select id="solverLevelSelect" class="solver-level-select" aria-label="Load level"></select>
-                  </label>
-                  <output id="solverTaskSummary" class="solver-task-summary" aria-live="polite" hidden></output>
                 </div>
               </div>
               <div class="solver-controls">
@@ -579,7 +579,7 @@
               <div class="sprite-controls">
               <div class="sprite-source-fields" aria-label="Sprite ASCII source fields">
                 <label class="sprite-name-control sprite-source-field">
-                  <span>Name</span>
+                  <span>Sprite for</span>
                   <input id="spriteNameInput" type="text" value="Sprite" spellcheck="false" autocomplete="off" autocapitalize="off">
                 </label>
                 <div class="sprite-transform-bar sprite-source-field" aria-label="Sprite transform settings">
@@ -1007,7 +1007,7 @@
               <div class="source-action-group source-preview-actions level-header-actions level3d-source-actions" role="group" aria-label="3D level source actions">
                 <button id="level3dPlaytestButton" class="source-action-button level-playtest-button" type="button" aria-label="Play" title="Play">
                   <svg class="level-play-icon" viewBox="0 0 24 24" aria-hidden="true">
-                    <polygon points="8 5 19 12 8 19 8 5"></polygon>
+                    <path d="m8 5 11 7-11 7V5z"></path>
                   </svg>
                   <svg class="level-stop-icon" viewBox="0 0 24 24" aria-hidden="true">
                     <rect x="7" y="7" width="10" height="10" rx="1"></rect>
@@ -1179,7 +1179,7 @@
                 <div id="soundsSfxTransport" class="sounds-transport" role="group" aria-label="SFX transport">
                   <button id="soundsSfxPlayButton" class="sounds-icon-button" type="button" aria-label="Play SFX" title="Play SFX">
                     <svg viewBox="0 0 24 24" aria-hidden="true">
-                      <polygon points="8 5 19 12 8 19 8 5"></polygon>
+                      <path d="m8 5 11 7-11 7V5z"></path>
                     </svg>
                   </button>
                   <button id="soundsSfxRandomButton" class="sounds-icon-button" type="button" aria-label="Randomize SFX" title="Randomize SFX">
@@ -1250,7 +1250,7 @@
                 <div id="soundsMusicTransport" class="sounds-transport" role="group" aria-label="Music transport">
                   <button id="soundsMusicPlayButton" class="sounds-icon-button" type="button" aria-label="Play music" title="Play music">
                     <svg viewBox="0 0 24 24" aria-hidden="true">
-                      <polygon points="8 5 19 12 8 19 8 5"></polygon>
+                      <path d="m8 5 11 7-11 7V5z"></path>
                     </svg>
                   </button>
                   <button id="soundsMusicRandomButton" class="sounds-icon-button" type="button" aria-label="Randomize music" title="Randomize music">

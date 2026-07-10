@@ -22,7 +22,8 @@ once_all [ no Background ] -> [ Background ]
 rules {
 input [ Player ] -> [ > Player ]
 [ > Player | Box ] -> [ > Player | > Box ]
-move
+[ > solid | no solid ] -> [ | solid ]
+[ > solid ] -> [ solid ]
 }
 
 on_level_clear {

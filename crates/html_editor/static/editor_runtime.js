@@ -3,7 +3,7 @@
   let wasmCompiler = null;
   let wasmCompilerPromise = null;
   let gameRuntimeAssetsPromise = null;
-  let sourceAnalysisCache = null;
+  let activeSourceAnalysis = null;
 
   function runtimeUnavailable(message) {
     const error = new Error(message);
@@ -87,49 +87,39 @@
     return payload && typeof payload === "object" ? payload : {};
   }
 
-  function releaseSourceAnalysisCache(module) {
-    if (!sourceAnalysisCache) {
-      return;
-    }
-    const free = requireSourceAnalysisFunction(module, "free_source_analysis_handle");
-    free(sourceAnalysisCache.handle);
-    sourceAnalysisCache = null;
-  }
-
-  function querySourceAnalysis(module, handle, name, ...args) {
+  function querySourceAnalysis(module, revision, name, ...args) {
     const query = requireSourceAnalysisFunction(module, name);
-    return query(handle, ...args);
+    return query(revision, ...args);
   }
 
-  function createSourceAnalysis(module, source) {
+  function activateSourceAnalysis(module, source) {
     const text = asString(source);
-    if (sourceAnalysisCache?.source === text) {
-      return sourceAnalysisCache;
+    if (activeSourceAnalysis?.source === text) {
+      return activeSourceAnalysis;
     }
-    releaseSourceAnalysisCache(module);
-    const create = requireSourceAnalysisFunction(module, "create_source_analysis_handle");
-    const handle = create(text);
-    if (!Number.isInteger(handle) || handle <= 0) {
-      throw runtimeUnavailable(`Editor WASM source analysis handle is invalid: ${handle}`);
+    const activate = requireSourceAnalysisFunction(module, "activate_source_analysis");
+    const revision = activate(text);
+    if (!Number.isInteger(revision) || revision <= 0) {
+      throw runtimeUnavailable(`Editor WASM source analysis revision is invalid: ${revision}`);
     }
-    sourceAnalysisCache = {
+    activeSourceAnalysis = {
       source: text,
-      handle,
+      revision,
       payload: null,
     };
-    return sourceAnalysisCache;
+    return activeSourceAnalysis;
   }
 
   async function sourceAnalysisForSource(source) {
     const module = await loadWasmCompiler();
-    return createSourceAnalysis(module, source);
+    return activateSourceAnalysis(module, source);
   }
 
   function sourceAnalysisForLoadedSource(source) {
     if (!wasmCompiler) {
       throw runtimeUnavailable("Editor WASM parser is not loaded.");
     }
-    return createSourceAnalysis(wasmCompiler, source);
+    return activateSourceAnalysis(wasmCompiler, source);
   }
 
   window.PuzzleStudioRuntime = {
@@ -160,15 +150,15 @@
       const analysis = await sourceAnalysisForSource(payload.source);
       return querySourceAnalysis(
         wasmCompiler,
-        analysis.handle,
-        "source_analysis_highlight_json",
+        analysis.revision,
+        "active_source_analysis_highlight_json",
         Boolean(payload.includeOutline),
       );
     },
 
     async sourceOutline(payload = {}) {
       const analysis = await sourceAnalysisForSource(payload.source);
-      return querySourceAnalysis(wasmCompiler, analysis.handle, "source_analysis_outline_json");
+      return querySourceAnalysis(wasmCompiler, analysis.revision, "active_source_analysis_outline_json");
     },
 
     async translatePuzzleScript(source) {
@@ -180,8 +170,8 @@
       const analysis = await sourceAnalysisForSource(source);
       return querySourceAnalysis(
         wasmCompiler,
-        analysis.handle,
-        "source_analysis_suggest_source_completions",
+        analysis.revision,
+        "active_source_analysis_suggest_source_completions",
         Number(cursorOffset) || 0,
       );
     },
@@ -190,23 +180,60 @@
       const analysis = await sourceAnalysisForSource(source);
       return querySourceAnalysis(
         wasmCompiler,
-        analysis.handle,
-        "source_analysis_resolve_source_target",
+        analysis.revision,
+        "active_source_analysis_resolve_source_target",
         Number(cursorOffset) || 0,
       );
     },
 
     sourceEntries(source) {
       const analysis = sourceAnalysisForLoadedSource(source);
-      const raw = querySourceAnalysis(wasmCompiler, analysis.handle, "source_analysis_entries_json");
+      const raw = querySourceAnalysis(wasmCompiler, analysis.revision, "active_source_analysis_entries_json");
       const payload = parseSourceAnalysisJson(raw);
       return Array.isArray(payload.entries) ? payload.entries : [];
+    },
+
+    levelEditorSourceSession(source) {
+      const analysis = sourceAnalysisForLoadedSource(source);
+      return {
+        revision: analysis.revision,
+        manifest() {
+          const raw = querySourceAnalysis(
+            wasmCompiler,
+            analysis.revision,
+            "active_source_analysis_level_editor_manifest_json",
+          );
+          return parseSourceAnalysisJson(raw);
+        },
+        levelSlots(levelIndex, authoredLayer = -1) {
+          const slots = querySourceAnalysis(
+            wasmCompiler,
+            analysis.revision,
+            "active_source_analysis_level_editor_level_slots",
+            Number(levelIndex),
+            Number(authoredLayer),
+          );
+          if (!(slots instanceof Uint32Array)) {
+            throw runtimeUnavailable("Editor WASM returned level slots in an invalid format.");
+          }
+          return slots;
+        },
+        sprite(objectId) {
+          const raw = querySourceAnalysis(
+            wasmCompiler,
+            analysis.revision,
+            "active_source_analysis_level_editor_sprite_json",
+            Number(objectId),
+          );
+          return JSON.parse(raw || "null");
+        },
+      };
     },
 
     sourceAnalysisPayload(source) {
       const analysis = sourceAnalysisForLoadedSource(source);
       if (!analysis.payload) {
-        const raw = querySourceAnalysis(wasmCompiler, analysis.handle, "source_analysis_json");
+        const raw = querySourceAnalysis(wasmCompiler, analysis.revision, "active_source_analysis_json");
         analysis.payload = parseSourceAnalysisJson(raw);
       }
       return analysis.payload;

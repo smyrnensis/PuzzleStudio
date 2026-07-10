@@ -14,6 +14,7 @@ pub(crate) struct LevelBlock {
 
 pub(crate) struct ParsedLevel {
     pub(crate) state: State,
+    pub(crate) layer_states: Vec<State>,
     pub(crate) regions: Vec<LevelRegionDef>,
 }
 
@@ -33,10 +34,27 @@ pub(crate) fn parse_level(
         game.object_count(),
         variable_defaults.to_vec(),
     )?;
+    let authored_layer_count = layout
+        .regions
+        .iter()
+        .map(|placed| placed.region.layers.len())
+        .max()
+        .unwrap_or(1);
+    let mut layer_states = (0..authored_layer_count)
+        .map(|_| {
+            State::empty_with_variables(
+                layout.width as u16,
+                layout.height as u16,
+                game.layer_count,
+                game.object_count(),
+                variable_defaults.to_vec(),
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
     let mut placements = HashMap::<(usize, usize, LayerId), ObjectId>::new();
     for placed_region in &layout.regions {
-        for layer in &placed_region.region.layers {
+        for (authored_layer, layer) in placed_region.region.layers.iter().enumerate() {
             for (y, row) in layer.iter().enumerate() {
                 for (x, ch) in row.chars().enumerate() {
                     if ch == empty {
@@ -61,6 +79,12 @@ pub(crate) fn parse_level(
                             .into());
                         }
                         placements.insert((placed_region.x + x, y, object_layer), *object);
+                        layer_states[authored_layer].place_object(
+                            game,
+                            (placed_region.x + x) as u16,
+                            y as u16,
+                            *object,
+                        )?;
                     }
                 }
             }
@@ -72,6 +96,7 @@ pub(crate) fn parse_level(
 
     Ok(ParsedLevel {
         state,
+        layer_states,
         regions: layout
             .regions
             .into_iter()
