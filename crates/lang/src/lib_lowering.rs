@@ -1245,6 +1245,14 @@ fn lower_goal_expr(
                 })
                 .collect::<Result<Vec<_>, DiagnosticReport>>()?,
         )),
+        ConditionAst::AllObjectsOn { subjects, covers } => Ok(GoalExpr::Clause(GoalClause {
+            value: GoalValue::AllObjectsOn {
+                subjects: subjects.clone(),
+                covers: covers.clone(),
+            },
+            op: ComparisonOp::Eq,
+            expected: 1,
+        })),
         ConditionAst::VariableEquals { name, value } => Ok(GoalExpr::Clause(GoalClause {
             value: GoalValue::Variable(resolve_variable_for_goal(name, variable_names)?),
             op: ComparisonOp::Eq,
@@ -1538,6 +1546,9 @@ fn write_template_touches_visual_object(
         WriteOpTemplate::Add { object, .. }
         | WriteOpTemplate::Remove { object, .. }
         | WriteOpTemplate::Move { object, .. } => object_is_visual(*object, visual_objects),
+        WriteOpTemplate::Replace { remove, add, .. } => {
+            object_is_visual(*remove, visual_objects) || object_is_visual(*add, visual_objects)
+        }
         WriteOpTemplate::MoveObjectSet { objects, .. } => objects
             .iter()
             .any(|object| object_is_visual(*object, visual_objects)),
@@ -1564,6 +1575,9 @@ fn write_template_touches_main_state(
         WriteOpTemplate::Add { object, .. }
         | WriteOpTemplate::Remove { object, .. }
         | WriteOpTemplate::Move { object, .. } => !object_is_visual(*object, visual_objects),
+        WriteOpTemplate::Replace { remove, add, .. } => {
+            !object_is_visual(*remove, visual_objects) || !object_is_visual(*add, visual_objects)
+        }
         WriteOpTemplate::MoveObjectSet { objects, .. } => objects
             .iter()
             .any(|object| !object_is_visual(*object, visual_objects)),
@@ -2494,6 +2508,11 @@ impl<'a> ProgramLowerer<'a> {
             }
             ConditionAst::All(_) | ConditionAst::Any(_) => Err(report_at_source_line_number(
                 "nested condition expression was not expanded",
+                source_line,
+                source_line_number,
+            )),
+            ConditionAst::AllObjectsOn { .. } => Err(report_at_source_line_number(
+                "all <object> on <object> is only valid in win_conditions or lose_conditions",
                 source_line,
                 source_line_number,
             )),

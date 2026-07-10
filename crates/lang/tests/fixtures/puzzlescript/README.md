@@ -11,10 +11,10 @@ Current vanilla PuzzleScript import scope:
 - A PuzzleScript object named `Background` is treated as PS's special background object: it remains a normal canonical object/sprite, and the importer adds `on_level_start { once_all [ no Background ] -> [ Background ] }` so every level cell gets background on load.
 - `COLLISIONLAYERS` rows become canonical `layers`; generated output does not use `objects {}`.
 - `COLLISIONLAYERS` property aliases are expanded to their concrete objects.
-- `WINCONDITIONS` rows are lowered into canonical condition expressions; PuzzleScript `all Target on Crate` becomes `no [ Target no Crate ]`.
+- `WINCONDITIONS` rows preserve PuzzleScript `all Target on Crate` as canonical `all Target on Crate`, so the solver can derive its subject-to-cover distance strategy. General pattern conditions such as `no [ Target no Crate ]` remain general conditions and do not imply that strategy.
 - Empty PS `WINCONDITIONS` sections are omitted from canonical output.
 - `RULES` rows are copied as canonical rules. Prefixless rules containing PS movement markers (`>`, `<`, `^`, `v`) rely on canonical implicit cardinal expansion.
-- PS's special `Player` movement is represented by inserting `input directions [ Player ] -> [ > Player ]`.
+- PS's special `Player` movement is represented by inserting `input [ Player ] -> [ > Player ]`.
 - PS movement markers use the canonical anonymous movement mark, and the importer emits an explicit `routine move` to resolve the movement phase.
 - PS `again` rule suffixes become canonical `again` effects. Runtime-owned
   automatic no-input follow-up turns handle the repeat; the importer does not

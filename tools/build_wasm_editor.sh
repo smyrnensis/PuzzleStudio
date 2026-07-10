@@ -11,13 +11,28 @@ wasm-bindgen \
   --out-dir crates/html_editor/static/wasm \
   target/wasm32-unknown-unknown/release/puzzle_wasm.wasm
 
-if ! grep -q "export function create_source_analysis_handle" crates/html_editor/static/wasm/puzzle_wasm.js; then
-  echo "generated WASM bindings are missing create_source_analysis_handle" >&2
+if ! grep -q "export function activate_source_analysis" crates/html_editor/static/wasm/puzzle_wasm.js; then
+  echo "generated WASM bindings are missing activate_source_analysis" >&2
   exit 1
 fi
 
-if ! grep -q "export function source_analysis_outline_json" crates/html_editor/static/wasm/puzzle_wasm.js; then
-  echo "generated WASM bindings are missing source_analysis_outline_json" >&2
+if ! grep -q "export function active_source_analysis_outline_json" crates/html_editor/static/wasm/puzzle_wasm.js; then
+  echo "generated WASM bindings are missing active_source_analysis_outline_json" >&2
+  exit 1
+fi
+
+if ! grep -q "export function active_source_analysis_level_editor_manifest_json" crates/html_editor/static/wasm/puzzle_wasm.js; then
+  echo "generated WASM bindings are missing active_source_analysis_level_editor_manifest_json" >&2
+  exit 1
+fi
+
+if ! grep -q "export function active_source_analysis_level_editor_level_slots" crates/html_editor/static/wasm/puzzle_wasm.js; then
+  echo "generated WASM bindings are missing active_source_analysis_level_editor_level_slots" >&2
+  exit 1
+fi
+
+if ! grep -q "export function active_source_analysis_level_editor_sprite_json" crates/html_editor/static/wasm/puzzle_wasm.js; then
+  echo "generated WASM bindings are missing active_source_analysis_level_editor_sprite_json" >&2
   exit 1
 fi
 
@@ -30,3 +45,5 @@ if grep -Eq "WasmCoreRuntime|WasmPuzzle3Runtime|WasmStandaloneSession|transition
   echo "generated editor WASM bindings include runtime exports" >&2
   exit 1
 fi
+
+node tools/check_wasm_editor_preview.mjs

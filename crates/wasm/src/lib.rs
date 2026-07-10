@@ -1,9 +1,8 @@
 use std::cell::RefCell;
-use std::collections::BTreeMap;
 
 use wasm_bindgen::prelude::*;
 
-type SourceAnalysisHandle = u32;
+type SourceAnalysisRevision = u32;
 
 thread_local! {
     static SOURCE_ANALYSES: RefCell<SourceAnalysisStore> =
@@ -12,47 +11,51 @@ thread_local! {
 
 #[derive(Default)]
 struct SourceAnalysisStore {
-    next_handle: SourceAnalysisHandle,
-    analyses: BTreeMap<SourceAnalysisHandle, puzzle_lang::SourceAnalysis>,
+    next_revision: SourceAnalysisRevision,
+    active: Option<ActiveSourceAnalysis>,
+}
+
+struct ActiveSourceAnalysis {
+    revision: SourceAnalysisRevision,
+    analysis: puzzle_lang::SourceAnalysis,
 }
 
 impl SourceAnalysisStore {
-    fn insert(&mut self, analysis: puzzle_lang::SourceAnalysis) -> SourceAnalysisHandle {
-        let handle = self.next_handle.max(1);
-        self.next_handle = handle
+    fn activate(&mut self, source: &str) -> SourceAnalysisRevision {
+        if let Some(active) = &self.active {
+            if active.analysis.source() == source {
+                return active.revision;
+            }
+        }
+        let revision = self.next_revision.max(1);
+        self.next_revision = revision
             .checked_add(1)
-            .expect("source analysis handle counter exhausted");
-        let previous = self.analyses.insert(handle, analysis);
-        assert!(
-            previous.is_none(),
-            "source analysis handle counter reused a live handle"
-        );
-        handle
-    }
-
-    fn remove(&mut self, handle: SourceAnalysisHandle) -> Result<(), String> {
-        self.analyses
-            .remove(&handle)
-            .map(|_| ())
-            .ok_or_else(|| invalid_source_analysis_handle_message(handle))
+            .expect("source analysis revision counter exhausted");
+        self.active = Some(ActiveSourceAnalysis {
+            revision,
+            analysis: puzzle_lang::analyze_source(source),
+        });
+        revision
     }
 
     fn with_analysis<T>(
         &self,
-        handle: SourceAnalysisHandle,
+        revision: SourceAnalysisRevision,
         f: impl FnOnce(&puzzle_lang::SourceAnalysis) -> T,
     ) -> Result<T, String> {
-        self.analyses
-            .get(&handle)
-            .map(f)
-            .ok_or_else(|| invalid_source_analysis_handle_message(handle))
+        let Some(active) = &self.active else {
+            return Err(
+                "source analysis is not active; activate the source before querying it".to_string(),
+            );
+        };
+        if active.revision != revision {
+            return Err(format!(
+                "source analysis revision `{revision}` is stale; active revision is `{}`",
+                active.revision
+            ));
+        }
+        Ok(f(&active.analysis))
     }
-}
-
-fn invalid_source_analysis_handle_message(handle: SourceAnalysisHandle) -> String {
-    format!(
-        "source analysis handle `{handle}` is not live; create a new analysis before querying it"
-    )
 }
 
 fn source_analysis_error_js_value(message: String) -> JsValue {
@@ -60,68 +63,169 @@ fn source_analysis_error_js_value(message: String) -> JsValue {
 }
 
 fn with_source_analysis<T>(
-    handle: SourceAnalysisHandle,
+    revision: SourceAnalysisRevision,
     f: impl FnOnce(&puzzle_lang::SourceAnalysis) -> T,
 ) -> Result<T, String> {
-    SOURCE_ANALYSES.with(|store| store.borrow().with_analysis(handle, f))
+    SOURCE_ANALYSES.with(|store| store.borrow().with_analysis(revision, f))
+}
+
+fn utf8_offset_from_utf16(source: &str, utf16_offset: usize) -> usize {
+    let mut consumed = 0;
+    for (byte_offset, ch) in source.char_indices() {
+        if consumed >= utf16_offset {
+            return byte_offset;
+        }
+        let next = consumed + ch.len_utf16();
+        if next > utf16_offset {
+            return byte_offset;
+        }
+        consumed = next;
+    }
+    source.len()
+}
+
+fn utf16_offset_from_utf8(source: &str, byte_offset: usize) -> usize {
+    source
+        .char_indices()
+        .take_while(|(index, _)| *index < byte_offset.min(source.len()))
+        .map(|(_, ch)| ch.len_utf16())
+        .sum()
+}
+
+fn source_target_with_utf16_offsets(
+    source: &str,
+    mut target: puzzle_lang::SourceTarget,
+) -> puzzle_lang::SourceTarget {
+    target.start = utf16_offset_from_utf8(source, target.start);
+    target.end = utf16_offset_from_utf8(source, target.end);
+    target.body_start = target
+        .body_start
+        .map(|offset| utf16_offset_from_utf8(source, offset));
+    target.body_end = target
+        .body_end
+        .map(|offset| utf16_offset_from_utf8(source, offset));
+    target
 }
 
 #[wasm_bindgen]
-pub fn create_source_analysis_handle(source: &str) -> SourceAnalysisHandle {
-    let analysis = puzzle_lang::analyze_source(source);
-    SOURCE_ANALYSES.with(|store| store.borrow_mut().insert(analysis))
+pub fn activate_source_analysis(source: &str) -> SourceAnalysisRevision {
+    SOURCE_ANALYSES.with(|store| store.borrow_mut().activate(source))
 }
 
 #[wasm_bindgen]
-pub fn free_source_analysis_handle(handle: SourceAnalysisHandle) -> Result<(), JsValue> {
-    SOURCE_ANALYSES
-        .with(|store| store.borrow_mut().remove(handle))
+pub fn active_source_analysis_json(revision: SourceAnalysisRevision) -> Result<String, JsValue> {
+    with_source_analysis(revision, puzzle_lang::SourceAnalysis::analysis_json)
         .map_err(source_analysis_error_js_value)
 }
 
 #[wasm_bindgen]
-pub fn source_analysis_json(handle: SourceAnalysisHandle) -> Result<String, JsValue> {
-    with_source_analysis(handle, puzzle_lang::SourceAnalysis::analysis_json)
-        .map_err(source_analysis_error_js_value)
-}
-
-#[wasm_bindgen]
-pub fn source_analysis_highlight_json(
-    handle: SourceAnalysisHandle,
+pub fn active_source_analysis_highlight_json(
+    revision: SourceAnalysisRevision,
     include_outline: bool,
 ) -> Result<String, JsValue> {
-    with_source_analysis(handle, |analysis| analysis.highlight_json(include_outline))
-        .map_err(source_analysis_error_js_value)
+    with_source_analysis(revision, |analysis| {
+        analysis.highlight_json(include_outline)
+    })
+    .map_err(source_analysis_error_js_value)
 }
 
 #[wasm_bindgen]
-pub fn source_analysis_outline_json(handle: SourceAnalysisHandle) -> Result<String, JsValue> {
-    with_source_analysis(handle, puzzle_lang::SourceAnalysis::outline_json)
-        .map_err(source_analysis_error_js_value)
-}
-
-#[wasm_bindgen]
-pub fn source_analysis_suggest_source_completions(
-    handle: SourceAnalysisHandle,
-    cursor_offset: usize,
+pub fn active_source_analysis_outline_json(
+    revision: SourceAnalysisRevision,
 ) -> Result<String, JsValue> {
-    with_source_analysis(handle, |analysis| analysis.completion_json(cursor_offset))
+    with_source_analysis(revision, puzzle_lang::SourceAnalysis::outline_json)
         .map_err(source_analysis_error_js_value)
 }
 
 #[wasm_bindgen]
-pub fn source_analysis_resolve_source_target(
-    handle: SourceAnalysisHandle,
-    cursor_offset: usize,
+pub fn active_source_analysis_suggest_source_completions(
+    revision: SourceAnalysisRevision,
+    cursor_utf16_offset: usize,
 ) -> Result<String, JsValue> {
-    with_source_analysis(handle, |analysis| analysis.target_json(cursor_offset))
-        .map_err(source_analysis_error_js_value)
+    with_source_analysis(revision, |analysis| {
+        let source = analysis.source();
+        let cursor_offset = utf8_offset_from_utf16(source, cursor_utf16_offset);
+        let mut completions = analysis.completion_list(cursor_offset);
+        completions.replace_start = utf16_offset_from_utf8(source, completions.replace_start);
+        completions.replace_end = utf16_offset_from_utf8(source, completions.replace_end);
+        puzzle_lang::completion_list_json(&completions)
+    })
+    .map_err(source_analysis_error_js_value)
 }
 
 #[wasm_bindgen]
-pub fn source_analysis_entries_json(handle: SourceAnalysisHandle) -> Result<String, JsValue> {
-    with_source_analysis(handle, puzzle_lang::SourceAnalysis::entries_json)
+pub fn active_source_analysis_resolve_source_target(
+    revision: SourceAnalysisRevision,
+    cursor_utf16_offset: usize,
+) -> Result<String, JsValue> {
+    with_source_analysis(revision, |analysis| {
+        let source = analysis.source();
+        let cursor_offset = utf8_offset_from_utf16(source, cursor_utf16_offset);
+        let target = analysis
+            .resolve_target(cursor_offset)
+            .map(|target| source_target_with_utf16_offsets(source, target));
+        puzzle_lang::source_target_json(target.as_ref())
+    })
+    .map_err(source_analysis_error_js_value)
+}
+
+#[wasm_bindgen]
+pub fn active_source_analysis_entries_json(
+    revision: SourceAnalysisRevision,
+) -> Result<String, JsValue> {
+    with_source_analysis(revision, puzzle_lang::SourceAnalysis::entries_json)
         .map_err(source_analysis_error_js_value)
+}
+
+/// Returns level-editor metadata for the active source snapshot. Board cells and
+/// sprite payloads deliberately travel through their own on-demand exports.
+#[wasm_bindgen]
+pub fn active_source_analysis_level_editor_manifest_json(
+    revision: SourceAnalysisRevision,
+) -> Result<String, JsValue> {
+    with_source_analysis(
+        revision,
+        puzzle_lang::SourceAnalysis::level_editor_manifest_json,
+    )
+    .map_err(source_analysis_error_js_value)?
+    .map_err(source_analysis_error_js_value)
+}
+
+/// Returns a typed object-ID buffer for one integrated level state. Pass `-1` for
+/// the composite state, otherwise pass the authored ASCII layer index.
+#[wasm_bindgen]
+pub fn active_source_analysis_level_editor_level_slots(
+    revision: SourceAnalysisRevision,
+    level_index: usize,
+    authored_layer: i32,
+) -> Result<Vec<u32>, JsValue> {
+    let authored_layer = match authored_layer {
+        -1 => None,
+        value if value >= 0 => Some(value as usize),
+        value => {
+            return Err(source_analysis_error_js_value(format!(
+                "level editor authored layer must be -1 or non-negative, got {value}"
+            )));
+        }
+    };
+    with_source_analysis(revision, |analysis| {
+        analysis.level_editor_level_slots(level_index, authored_layer)
+    })
+    .map_err(source_analysis_error_js_value)?
+    .map_err(source_analysis_error_js_value)
+}
+
+/// Returns one renderer-ready sprite payload by canonical object ID.
+#[wasm_bindgen]
+pub fn active_source_analysis_level_editor_sprite_json(
+    revision: SourceAnalysisRevision,
+    object_id: u16,
+) -> Result<String, JsValue> {
+    with_source_analysis(revision, |analysis| {
+        analysis.level_editor_sprite_payload_json(object_id)
+    })
+    .map_err(source_analysis_error_js_value)?
+    .map_err(source_analysis_error_js_value)
 }
 
 #[wasm_bindgen]
@@ -369,9 +473,9 @@ fn set_js_optional_string(payload: &js_sys::Object, key: &str, value: Option<&st
 #[cfg(test)]
 mod tests {
     use super::{
-        compile_preview, create_source_analysis_handle, diagnostic_report_json,
-        free_source_analysis_handle, source_analysis_entries_json, source_analysis_json,
-        source_analysis_outline_json, source_analysis_suggest_source_completions,
+        activate_source_analysis, active_source_analysis_entries_json, active_source_analysis_json,
+        active_source_analysis_outline_json, active_source_analysis_suggest_source_completions,
+        compile_preview, diagnostic_report_json, utf8_offset_from_utf16, utf16_offset_from_utf8,
         with_source_analysis,
     };
 
@@ -428,27 +532,46 @@ level "start"
     }
 
     #[test]
-    fn source_analysis_handle_queries_live_rust_analysis() {
+    fn active_source_analysis_reuses_exact_source_and_rejects_stale_revisions() {
         let source = "puzzle Demo {\n  sounds {\n    \n  }\n}\n";
         let cursor = source.find("    ").unwrap() + 4;
-        let handle = create_source_analysis_handle(source);
+        let revision = activate_source_analysis(source);
+        assert_eq!(activate_source_analysis(source), revision);
 
-        let analysis = source_analysis_json(handle).expect("analysis json");
+        let analysis = active_source_analysis_json(revision).expect("analysis json");
         assert!(analysis.contains(r#""version":1"#));
         assert!(analysis.contains(r#""entries":"#));
 
-        let completions =
-            source_analysis_suggest_source_completions(handle, cursor).expect("completions");
+        let completions = active_source_analysis_suggest_source_completions(revision, cursor)
+            .expect("completions");
         assert!(completions.contains(r#""label":"sfx""#));
         assert!(completions.contains(r#""label":"music""#));
 
-        let entries = source_analysis_entries_json(handle).expect("entries");
+        let entries = active_source_analysis_entries_json(revision).expect("entries");
         assert!(entries.contains(r#""entries":"#));
 
-        let outline = source_analysis_outline_json(handle).expect("outline");
+        let outline = active_source_analysis_outline_json(revision).expect("outline");
         assert!(outline.contains(r#""items":"#));
 
-        free_source_analysis_handle(handle).expect("free analysis");
-        assert!(with_source_analysis(handle, puzzle_lang::SourceAnalysis::analysis_json).is_err());
+        let next_revision = activate_source_analysis("puzzle Other {}\n");
+        assert_ne!(next_revision, revision);
+        assert!(
+            with_source_analysis(revision, puzzle_lang::SourceAnalysis::analysis_json).is_err()
+        );
+    }
+
+    #[test]
+    fn active_source_analysis_boundary_uses_browser_utf16_offsets() {
+        let source = "title = \"😀\"\npuzzle Demo {\n  sounds {\n    \n  }\n}\n";
+        let cursor_byte = source.find("    ").unwrap() + 4;
+        let cursor_utf16 = source[..cursor_byte].encode_utf16().count();
+        let revision = activate_source_analysis(source);
+
+        assert_eq!(utf8_offset_from_utf16(source, cursor_utf16), cursor_byte);
+        assert_eq!(utf16_offset_from_utf8(source, cursor_byte), cursor_utf16);
+
+        let completions = active_source_analysis_suggest_source_completions(revision, cursor_utf16)
+            .expect("source completions");
+        assert!(completions.contains(&format!(r#""replaceStart":{cursor_utf16}"#)));
     }
 }

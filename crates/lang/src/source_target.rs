@@ -4,7 +4,7 @@ use crate::puzzle3_parse::{
 use crate::source::{SourceScope, split_header_tokens, strip_line_comment};
 use crate::surface::{SurfaceDocument, SurfaceLine, SurfaceOptionBlock, SurfaceVisualSpriteRefs};
 use crate::{SpriteColor3, SpriteVoxels3};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SourceTargetKind {
@@ -745,6 +745,9 @@ fn resolve_sprite_entries(
             .map(|offset| line.start + offset)
         {
             if let Some(end) = find_matching_brace(source, open_index).map(|index| index + 1) {
+                let name =
+                    sprite_node_selector_name(source, &line.content, open_index + 1, end - 1)
+                        .unwrap_or(name);
                 entries.push(SourceTarget {
                     kind: SourceTargetKind::Sprite,
                     name,
@@ -833,93 +836,39 @@ fn source_sprite_target(
     visual_refs: &SurfaceVisualSpriteRefs,
 ) -> Option<SourceSpriteTarget> {
     let body = source.get(body_start..body_end)?;
+    let body_lines = body
+        .lines()
+        .map(|line| code_trim(line).to_string())
+        .collect::<Vec<_>>();
+    let syntax = crate::sprite_authoring::parse_sprite_node(None, &body_lines);
     let mut target = SourceSpriteTarget::default();
-    let mut visual_target_name = target_name.to_string();
-    let mut saw_palette = false;
-    let mut animation_frames = Vec::<Vec<String>>::new();
-    let mut current_frame = Vec::<String>::new();
-    let mut saw_frame_separator = false;
-    for raw_line in body.lines() {
-        let trimmed = code_trim(raw_line);
-        if trimmed.is_empty() {
-            continue;
-        }
-        let tokens = split_header_tokens(trimmed);
-        match tokens.as_slice() {
-            ["selector", "=", selector] | ["selector", selector] => {
-                visual_target_name = (*selector).to_string();
-                target.prelude_rows.push(trimmed.to_string());
-            }
-            ["duration", "=", value] | ["duration", value] => {
-                if target.duration_ms.is_none() {
-                    target.duration_ms =
-                        puzzle_scene::parse_wait_duration_ms_at(value, trimmed).ok();
-                }
-                target.prelude_rows.push(trimmed.to_string());
-            }
-            ["frame_duration", "=", value] | ["frame_duration", value] => {
-                if target.frame_duration_ms.is_none() {
-                    target.frame_duration_ms =
-                        puzzle_scene::parse_wait_duration_ms_at(value, trimmed).ok();
-                }
-                target.prelude_rows.push(trimmed.to_string());
-            }
-            [
-                "image" | "contain" | "cover" | "stretch" | "rotate" | "pixels_per_cell" | "offset"
-                | "sampling",
-                ..,
-            ] => {
-                target.prelude_rows.push(trimmed.to_string());
-            }
-            ["colors", "=", colors @ ..] | ["colors", colors @ ..]
-                if !saw_palette && !colors.is_empty() =>
-            {
-                target.palette_tokens = colors.iter().map(|token| (*token).to_string()).collect();
-                saw_palette = true;
-            }
-            ["shape", "="] => {
-                target.prelude_rows.push(trimmed.to_string());
-            }
-            ["shape", "=", shape] | ["shape", shape] => {
-                target.shape_ref = Some((*shape).to_string());
-            }
-            [shape]
-                if saw_palette
-                    && target.shape_ref.is_none()
-                    && current_frame.is_empty()
-                    && animation_frames.is_empty()
-                    && visual_refs.contains_shape(shape) =>
-            {
-                target.shape_ref = Some((*shape).to_string());
-            }
-            _ if !saw_palette && is_sprite_entry_start_color_row(trimmed, visual_refs) => {
-                target.palette_tokens = tokens.iter().map(|token| (*token).to_string()).collect();
-                saw_palette = true;
-            }
-            [">"] if saw_palette && target.shape_ref.is_none() => {
-                saw_frame_separator = true;
-                if !current_frame.is_empty() {
-                    animation_frames.push(std::mem::take(&mut current_frame));
-                }
-            }
-            _ if saw_palette && target.shape_ref.is_none() => {
-                current_frame.push(trimmed.to_string());
-            }
-            _ => {}
-        }
+    let visual_target_name = syntax
+        .selector
+        .clone()
+        .unwrap_or_else(|| target_name.to_string());
+    target.palette_tokens = syntax.colors.unwrap_or_default();
+    target.prelude_rows = syntax.prelude_rows;
+    if let Some(value) = syntax.duration {
+        target.duration_ms = puzzle_scene::parse_wait_duration_ms_at(&value, &value).ok();
     }
-    if saw_frame_separator {
-        if !current_frame.is_empty() {
-            animation_frames.push(current_frame);
+    if let Some(value) = syntax.frame_duration {
+        target.frame_duration_ms = puzzle_scene::parse_wait_duration_ms_at(&value, &value).ok();
+    }
+    match syntax.shape {
+        Some(crate::sprite_authoring::SpriteShapeSyntax::Reference(reference)) => {
+            target.shape_ref = Some(reference);
         }
-        if let Some(first_frame) = animation_frames.first() {
-            target.pixel_rows = first_frame.clone();
+        Some(crate::sprite_authoring::SpriteShapeSyntax::Inline { frames, .. }) => {
+            let frames = frames
+                .into_iter()
+                .map(|frame| frame.into_iter().map(|row| row.text).collect::<Vec<_>>())
+                .collect::<Vec<_>>();
+            target.pixel_rows = frames.first().cloned().unwrap_or_default();
+            if frames.len() >= 2 {
+                target.animation_frames = frames;
+            }
         }
-        if animation_frames.len() >= 2 {
-            target.animation_frames = animation_frames;
-        }
-    } else {
-        target.pixel_rows = current_frame;
+        None => {}
     }
     target.color_assets = visual_refs
         .color_assets
@@ -956,7 +905,8 @@ fn source_sprite_target(
         }
     }
     if target.resolved_palette.is_empty() {
-        target.resolved_palette = direct_source_sprite_palette(&target.palette_tokens);
+        target.resolved_palette =
+            source_sprite_palette_from_refs(&target.palette_tokens, &visual_refs.color_assets);
     }
     Some(target)
 }
@@ -1037,18 +987,34 @@ fn loaded_visual_sprite_for_source_target(
     None
 }
 
-fn direct_source_sprite_palette(tokens: &[String]) -> Vec<SourceSpritePaletteEntry> {
-    if tokens.is_empty() || !tokens.iter().all(|token| is_sprite_color(token)) {
+fn source_sprite_palette_from_refs(
+    tokens: &[String],
+    color_assets: &BTreeMap<String, String>,
+) -> Vec<SourceSpritePaletteEntry> {
+    if tokens.is_empty() {
         return Vec::new();
     }
     tokens
         .iter()
-        .map(|token| SourceSpritePaletteEntry {
-            source: token.clone(),
-            color: token.clone(),
-            linked: false,
+        .map(|token| {
+            if is_sprite_color(token) {
+                Some(SourceSpritePaletteEntry {
+                    source: token.clone(),
+                    color: token.clone(),
+                    linked: false,
+                })
+            } else {
+                color_assets
+                    .get(token)
+                    .map(|color| SourceSpritePaletteEntry {
+                        source: token.clone(),
+                        color: color.clone(),
+                        linked: true,
+                    })
+            }
         })
-        .collect()
+        .collect::<Option<Vec<_>>>()
+        .unwrap_or_default()
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1328,6 +1294,20 @@ fn sprite_name(line: &SurfaceLine) -> Option<String> {
         }
         _ => None,
     }
+}
+
+fn sprite_node_selector_name(
+    source: &str,
+    header: &str,
+    body_start: usize,
+    body_end: usize,
+) -> Option<String> {
+    let body = source.get(body_start..body_end)?;
+    let lines = body.lines().map(str::to_string).collect::<Vec<_>>();
+    crate::sprite_authoring::parse_sprite_node(Some(header), &lines)
+        .selector
+        .filter(|selector| sprite_definition_name_token(selector))
+        .map(|selector| clean_name_token(&selector))
 }
 
 fn line_style_sprite_header(
@@ -2113,14 +2093,14 @@ frame_duration 60ms
     }
 
     #[test]
-    fn blank_shape_directive_does_not_become_animation_shape_ref() {
+    fn explicit_shape_block_resolves_animation_rows_without_shape_ref() {
         let source = r##"
 sprites {
 sprite {
 selector = Background
 colors = #90ee90 #008000
 duration = 500ms
-shape =
+shape = {
 11111
 01111
 11101
@@ -2134,6 +2114,7 @@ shape =
 11111
 }
 }
+}
 "##;
         let cursor = source.find("shape =").unwrap();
         let target = resolve_source_target(source, cursor).unwrap();
@@ -2143,9 +2124,14 @@ shape =
             .expect("source sprite contract");
 
         assert_eq!(target.kind, SourceTargetKind::Sprite);
-        assert_eq!(target.name, "sprite");
+        assert_eq!(target.name, "Background");
         assert_eq!(source_sprite.shape_ref, None);
-        assert!(source_sprite.prelude_rows.contains(&"shape =".to_string()));
+        assert!(
+            !source_sprite
+                .prelude_rows
+                .iter()
+                .any(|row| row.starts_with("shape"))
+        );
         assert_eq!(source_sprite.duration_ms, Some(500));
         assert_eq!(
             source_sprite.animation_frames,
@@ -2256,8 +2242,9 @@ accent = #e94f64
 sprite {
 selector = Player
 colors = accent
-shape =
+shape = {
 0
+}
 }
 }
 "##;
@@ -2268,7 +2255,7 @@ shape =
             .as_ref()
             .expect("source sprite contract");
 
-        assert_eq!(target.name, "sprite");
+        assert_eq!(target.name, "Player");
         assert_eq!(source_sprite.palette_tokens, vec!["accent".to_string()]);
         assert_eq!(
             source_sprite.resolved_palette,

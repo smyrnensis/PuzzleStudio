@@ -159,7 +159,7 @@ impl ServerState {
         out.push(',');
         push_wait_events(&mut out, &wait_events);
         out.push(',');
-        push_animation_events(&mut out, &animation_events);
+        push_animation_events(&mut out, &self.loaded, &animation_events);
         out.push(',');
         push_level_context(
             &mut out,
@@ -767,8 +767,20 @@ fn solver_game_and_state_slicer_for_loaded(
     } else if let Some(lose) = &loaded.lose {
         collect_goal_expr_roots(&solver_game, &lose.expr, &mut roots);
     }
-    for term in &loaded.solver_strategy.terms {
-        collect_query_expr_roots(&term.value, &mut roots, &mut |kind, roots| {
+    for query in loaded
+        .solver_strategy
+        .terms
+        .iter()
+        .map(|term| &term.value)
+        .chain(
+            loaded
+                .solver_strategy
+                .deadends
+                .iter()
+                .flat_map(|deadend| deadend.values()),
+        )
+    {
+        collect_query_expr_roots(query, &mut roots, &mut |kind, roots| {
             puzzle_solver::object_refs::collect_condition_value_roots(kind, roots)
         });
     }
@@ -810,8 +822,20 @@ fn solver_game_and_state_slicer_for_collect(
     } else if let Some(lose) = &loaded.lose {
         collect_goal_expr_roots(&solver_game, &lose.expr, &mut roots);
     }
-    for term in &loaded.solver_strategy.terms {
-        collect_query_expr_roots(&term.value, &mut roots, &mut |kind, roots| {
+    for query in loaded
+        .solver_strategy
+        .terms
+        .iter()
+        .map(|term| &term.value)
+        .chain(
+            loaded
+                .solver_strategy
+                .deadends
+                .iter()
+                .flat_map(|deadend| deadend.values()),
+        )
+    {
+        collect_query_expr_roots(query, &mut roots, &mut |kind, roots| {
             puzzle_solver::object_refs::collect_condition_value_roots(kind, roots)
         });
     }
@@ -844,8 +868,20 @@ fn solver_state_slicer_for_puzzle3(
     if let Some(win_condition) = &parsed.win_condition {
         collect_win_condition3_roots(win_condition, &mut roots);
     }
-    for term in &parsed.solver_strategy.terms {
-        collect_query_expr_roots(&term.value, &mut roots, &mut |kind, roots| {
+    for query in parsed
+        .solver_strategy
+        .terms
+        .iter()
+        .map(|term| &term.value)
+        .chain(
+            parsed
+                .solver_strategy
+                .deadends
+                .iter()
+                .flat_map(|deadend| deadend.values()),
+        )
+    {
+        collect_query_expr_roots(query, &mut roots, &mut |kind, roots| {
             puzzle_solver::object_refs::collect_condition_value_roots(kind, roots)
         });
     }
@@ -888,6 +924,10 @@ fn collect_goal_value_roots(
         }
         GoalValue::InlineConditionValue(kind) => {
             puzzle_solver::object_refs::collect_condition_value_roots(kind, roots);
+        }
+        GoalValue::AllObjectsOn { subjects, covers } => {
+            roots.extend(subjects.iter().copied());
+            roots.extend(covers.iter().copied());
         }
     }
 }
@@ -1169,6 +1209,7 @@ where
     );
     let solver_initial = domain.initial_state(initial.clone());
     let score_game = loaded.clone();
+    let deadend_game = loaded.clone();
     let score_expr_game = game.clone();
     let score_goal = goal.clone();
     let lose_game = loaded.clone();
@@ -1189,11 +1230,13 @@ where
             goal_score + solver_strategy_score(&score_game, state.state())
         },
         move |state| {
-            if let Some(lose) = &lose {
+            let deadend = solver_has_deadend(&deadend_game, state.state());
+            let lose = if let Some(lose) = &lose {
                 eval_goal_expr(&lose_expr_game, state.state(), lose)
             } else {
                 lose_game.is_lose_complete(state.state())
-            }
+            };
+            deadend || lose
         },
         |state| state.state().clone(),
         on_progress,
@@ -1255,11 +1298,13 @@ where
         budget,
         move |state| collect_priority_score(&score_game, state.state(), &score_selector),
         move |state| {
-            if let Some(lose) = &lose {
+            let deadend = solver_has_deadend(loaded, state.state());
+            let lose = if let Some(lose) = &lose {
                 eval_goal_expr(&lose_expr_game, state.state(), lose)
             } else {
                 lose_game.is_lose_complete(state.state())
-            }
+            };
+            deadend || lose
         },
         |search_match| {
             let state = search_match.state.state().clone();
@@ -1477,6 +1522,7 @@ where
     let game = Arc::new(parsed.game.clone());
     let rules = parsed.rules.clone();
     let goal_game = Arc::clone(&game);
+    let score_win_condition = win_condition.clone();
     let state_slicer = solver_state_slicer_for_puzzle3(parsed);
     let mut domain = Puzzle3Domain::with_state_slicer(
         Arc::clone(&game),
@@ -1489,12 +1535,17 @@ where
     let replay_initial = solver_initial.clone();
     let score_game = Arc::clone(&game);
     let score_strategy = parsed.solver_strategy.clone();
+    let deadend_game = Arc::clone(&game);
+    let deadend_strategy = parsed.solver_strategy.clone();
     solve_domain_with_observations(
         &mut domain,
         solver_initial,
         budget,
-        move |state| solver_strategy_score3(&score_game, &score_strategy, state),
-        |_| false,
+        move |state| {
+            win_condition3_score(&score_game, state, &score_win_condition)
+                + solver_strategy_score3(&score_game, &score_strategy, state)
+        },
+        move |state| solver_has_deadend3(&deadend_game, &deadend_strategy, state),
         |state| state.clone(),
         on_progress,
         move |solution_inputs| {
@@ -1553,6 +1604,13 @@ fn solver_strategy_score(loaded: &LoadedGame, state: &State) -> i64 {
     solver_strategy_score_with(&loaded.solver_strategy, |value| {
         solver_query_expr_value(loaded, state, value)
     })
+}
+
+#[cfg(feature = "solver")]
+fn solver_has_deadend(loaded: &LoadedGame, state: &State) -> bool {
+    loaded
+        .solver_strategy
+        .has_deadend_with(|query| solver_query_expr_value(loaded, state, query) != 0)
 }
 
 #[cfg(feature = "solver")]
@@ -1617,6 +1675,11 @@ fn solver_strategy_score3(game: &Game3, strategy: &SolverStrategy3, state: &Stat
     solver_strategy_score_with(strategy, |value| {
         solver_query_expr_value3(game, state, value)
     })
+}
+
+#[cfg(feature = "solver")]
+fn solver_has_deadend3(game: &Game3, strategy: &SolverStrategy3, state: &State3) -> bool {
+    strategy.has_deadend_with(|query| solver_query_expr_value3(game, state, query) != 0)
 }
 
 #[cfg(feature = "solver")]
@@ -1745,6 +1808,82 @@ fn manhattan3(a: Coord3, b: Coord3) -> i64 {
 }
 
 #[cfg(feature = "solver")]
+fn win_condition3_score(game: &Game3, state: &State3, condition: &WinCondition3) -> i64 {
+    match condition {
+        WinCondition3::All(conditions) => conditions
+            .iter()
+            .map(|condition| win_condition3_score(game, state, condition))
+            .sum(),
+        WinCondition3::Any(conditions) => conditions
+            .iter()
+            .map(|condition| win_condition3_score(game, state, condition))
+            .min()
+            .unwrap_or(0),
+        WinCondition3::AllObjectsCoveredByPattern {
+            object,
+            cover_pattern,
+        } => same_cell_all_objects_on_score3(game, state, *object, cover_pattern).unwrap_or(0),
+        WinCondition3::SomeObject(_)
+        | WinCondition3::NoObject(_)
+        | WinCondition3::SomePattern(_)
+        | WinCondition3::NoPattern(_) => 0,
+    }
+}
+
+#[cfg(feature = "solver")]
+fn same_cell_all_objects_on_score3(
+    game: &Game3,
+    state: &State3,
+    subject: ObjectId3,
+    cover_pattern: &puzzle_grid3d::Pattern3,
+) -> Option<i64> {
+    let [cell] = cover_pattern.cells() else {
+        return None;
+    };
+    if cell.offset != puzzle_grid3d::Offset3::ZERO
+        || !cell.require_objects.contains(&subject)
+        || !cell.require_object_sets.is_empty()
+        || !cell.forbid_objects.is_empty()
+        || !cell.require_mark.is_empty()
+        || !cell.require_object_set_mark.is_empty()
+        || !cell.forbid_mark.is_empty()
+        || !cell.forbid_object_set_mark.is_empty()
+    {
+        return None;
+    }
+    let covers = cell
+        .require_objects
+        .iter()
+        .copied()
+        .filter(|object| *object != subject)
+        .collect::<Vec<_>>();
+    if covers.is_empty() {
+        return None;
+    }
+    let cover_positions = selector_object_positions3(game, state, &covers);
+    let fallback =
+        i64::from(state.size.width) + i64::from(state.size.depth) + i64::from(state.size.height);
+    Some(
+        selector_object_positions3(game, state, &[subject])
+            .into_iter()
+            .filter(|position| {
+                !covers
+                    .iter()
+                    .any(|cover| state.has_object(game, *position, *cover))
+            })
+            .map(|position| {
+                cover_positions
+                    .iter()
+                    .map(|cover| manhattan3(position, *cover))
+                    .min()
+                    .unwrap_or(fallback)
+                    .max(1)
+            })
+            .sum(),
+    )
+}
+
+#[cfg(feature = "solver")]
 fn goal_expr_score(game: &CompiledGame, state: &State, expr: &GoalExpr) -> i64 {
     match expr {
         GoalExpr::All(exprs) => exprs
@@ -1761,7 +1900,14 @@ fn goal_expr_score(game: &CompiledGame, state: &State, expr: &GoalExpr) -> i64 {
             if compare_i64(value, clause.op, clause.expected) {
                 0
             } else {
-                goal_clause_score(game, state, &clause.value, value, clause.expected)
+                goal_clause_score(
+                    game,
+                    state,
+                    &clause.value,
+                    value,
+                    clause.op,
+                    clause.expected,
+                )
             }
         }
     }
@@ -1839,6 +1985,11 @@ fn exact_object_distance_score(state: &State, goal: &State, object: ObjectId) ->
 }
 
 #[cfg(feature = "solver")]
+fn manhattan(ax: u16, ay: u16, bx: u16, by: u16) -> i64 {
+    i64::from(ax.abs_diff(bx)) + i64::from(ay.abs_diff(by))
+}
+
+#[cfg(feature = "solver")]
 fn object_positions_for_exact(state: &State, object: ObjectId) -> Vec<(u16, u16)> {
     let mut positions = state
         .object_positions(object)
@@ -1868,20 +2019,51 @@ fn goal_clause_score(
     state: &State,
     value: &GoalValue,
     current: i64,
+    op: ComparisonOp,
     expected: i64,
 ) -> i64 {
     match value {
-        GoalValue::Variable(_) => current.abs_diff(expected) as i64,
+        GoalValue::Variable(_) => comparison_violation_score(current, op, expected),
         GoalValue::Condition(condition) => game
             .condition_def(*condition)
             .map(|condition| {
-                condition_value_kind_score(game, state, &condition.kind, current, expected)
+                condition_value_kind_score(game, state, &condition.kind, current, op, expected)
             })
-            .unwrap_or_else(|| current.abs_diff(expected) as i64),
+            .unwrap_or_else(|| comparison_violation_score(current, op, expected)),
         GoalValue::InlineConditionValue(kind) => {
-            condition_value_kind_score(game, state, kind, current, expected)
+            condition_value_kind_score(game, state, kind, current, op, expected)
+        }
+        GoalValue::AllObjectsOn { subjects, covers } => {
+            all_objects_on_score(game, state, subjects, covers)
         }
     }
+}
+
+#[cfg(feature = "solver")]
+fn all_objects_on_score(
+    game: &CompiledGame,
+    state: &State,
+    subjects: &[ObjectId],
+    covers: &[ObjectId],
+) -> i64 {
+    let cover_positions = selector_object_positions(game, state, covers);
+    let fallback = i64::from(state.width) + i64::from(state.height);
+    selector_object_positions(game, state, subjects)
+        .into_iter()
+        .filter(|(x, y)| {
+            !covers
+                .iter()
+                .any(|cover| state.has_object(game, *x, *y, *cover))
+        })
+        .map(|(x, y)| {
+            cover_positions
+                .iter()
+                .map(|(cover_x, cover_y)| manhattan(x, y, *cover_x, *cover_y))
+                .min()
+                .unwrap_or(fallback)
+                .max(1)
+        })
+        .sum()
 }
 
 #[cfg(feature = "solver")]
@@ -1890,98 +2072,45 @@ fn condition_value_kind_score(
     state: &State,
     kind: &ConditionValueKind,
     current: i64,
+    op: ComparisonOp,
     expected: i64,
 ) -> i64 {
     match kind {
-        ConditionValueKind::CountMatches(patterns) if expected == 0 => patterns
+        // A win condition may establish whether a state is better, but it does
+        // not establish a spatial preference.  In particular, inferring a
+        // distance from `no [ A no B ]` presumes that moving A closer to B is
+        // always desirable, which is not generally true for Sokoban-like games.
+        // Authors can state that preference explicitly in `solver.strategy`.
+        ConditionValueKind::NoneObjects(objects) if current == 0 => objects
             .iter()
-            .map(|pattern| pattern_distance_score(game, state, pattern))
+            .map(|object| i64::from(state.object_count(*object)))
             .sum(),
-        ConditionValueKind::NoneMatches(patterns) if expected != 0 => patterns
+        ConditionValueKind::ExistsObjects(_) if current == 0 => 1,
+        ConditionValueKind::NoneMatches(patterns) if current == 0 => patterns
             .iter()
-            .map(|pattern| pattern_distance_score(game, state, pattern))
+            .map(|pattern| i64::from(puzzle_core::count_pattern_matches(game, state, pattern)))
             .sum(),
-        ConditionValueKind::ExistsMatches(patterns) if expected != 0 => patterns
-            .iter()
-            .map(|pattern| pattern_distance_score(game, state, pattern))
-            .min()
-            .unwrap_or(1),
-        _ => current.abs_diff(expected) as i64,
+        ConditionValueKind::ExistsMatches(_) if current == 0 => 1,
+        _ => comparison_violation_score(current, op, expected),
     }
 }
 
 #[cfg(feature = "solver")]
-fn pattern_distance_score(game: &CompiledGame, state: &State, pattern: &Pattern) -> i64 {
-    let Some(component) = pattern.components.first() else {
-        return 0;
-    };
-    if pattern.components.len() != 1 || component.cells.len() != 1 {
-        return i64::from(puzzle_core::count_pattern_matches(game, state, pattern));
+fn comparison_violation_score(current: i64, op: ComparisonOp, expected: i64) -> i64 {
+    match op {
+        ComparisonOp::Eq => current.abs_diff(expected) as i64,
+        ComparisonOp::NotEq => 1,
+        ComparisonOp::Greater => expected
+            .saturating_sub(current)
+            .max(0)
+            .saturating_add(1),
+        ComparisonOp::GreaterEq => expected.saturating_sub(current).max(0),
+        ComparisonOp::Less => current
+            .saturating_sub(expected)
+            .max(0)
+            .saturating_add(1),
+        ComparisonOp::LessEq => current.saturating_sub(expected).max(0),
     }
-    let cell = &component.cells[0];
-    if cell.require_objects.is_empty() || cell.forbid_objects.is_empty() {
-        return i64::from(puzzle_core::count_pattern_matches(game, state, pattern));
-    }
-
-    let targets = object_positions(game, state, &cell.forbid_objects);
-    let fallback = i64::from(state.width) + i64::from(state.height);
-    let mut score = 0_i64;
-    for y in 0..state.height {
-        for x in 0..state.width {
-            if !has_all_objects(game, state, x, y, &cell.require_objects) {
-                continue;
-            }
-            if has_all_objects(game, state, x, y, &cell.forbid_objects) {
-                continue;
-            }
-            let distance = targets
-                .iter()
-                .map(|(tx, ty)| manhattan(x, y, *tx, *ty))
-                .min()
-                .unwrap_or(fallback);
-            score += distance.max(1);
-        }
-    }
-    score
-}
-
-#[cfg(feature = "solver")]
-fn object_positions(game: &CompiledGame, state: &State, objects: &[ObjectId]) -> Vec<(u16, u16)> {
-    if let [object] = objects {
-        return state
-            .object_positions(*object)
-            .iter()
-            .filter_map(|slot| state.slot_position(*slot))
-            .collect();
-    }
-
-    let mut positions = Vec::new();
-    for y in 0..state.height {
-        for x in 0..state.width {
-            if has_all_objects(game, state, x, y, objects) {
-                positions.push((x, y));
-            }
-        }
-    }
-    positions
-}
-
-#[cfg(feature = "solver")]
-fn has_all_objects(
-    game: &CompiledGame,
-    state: &State,
-    x: u16,
-    y: u16,
-    objects: &[ObjectId],
-) -> bool {
-    objects
-        .iter()
-        .all(|object| state.has_object(game, x, y, *object))
-}
-
-#[cfg(feature = "solver")]
-fn manhattan(ax: u16, ay: u16, bx: u16, by: u16) -> i64 {
-    i64::from(ax.abs_diff(bx)) + i64::from(ay.abs_diff(by))
 }
 
 #[cfg(feature = "solver")]
@@ -2005,6 +2134,21 @@ fn goal_value(game: &CompiledGame, state: &State, value: &GoalValue) -> i64 {
             .map(|condition| goal_condition_value_kind(game, state, &condition.kind))
             .unwrap_or(0),
         GoalValue::InlineConditionValue(kind) => goal_condition_value_kind(game, state, kind),
+        GoalValue::AllObjectsOn { subjects, covers } => {
+            if subjects.iter().all(|subject| {
+                state.object_positions(*subject).iter().all(|slot| {
+                    state.slot_position(*slot).is_some_and(|(x, y)| {
+                        covers
+                            .iter()
+                            .any(|cover| state.has_object(game, x, y, *cover))
+                    })
+                })
+            }) {
+                1
+            } else {
+                0
+            }
+        }
     }
 }
 
@@ -2056,5 +2200,126 @@ fn goal_condition_value_kind(game: &CompiledGame, state: &State, kind: &Conditio
         ConditionValueKind::CountInputMatches(_)
         | ConditionValueKind::ExistsInputMatches(_)
         | ConditionValueKind::NoneInputMatches(_) => 0,
+    }
+}
+
+#[cfg(all(test, feature = "solver"))]
+mod solver_goal_score_tests {
+    use super::*;
+
+    #[test]
+    fn no_pattern_goal_scores_violations_without_spatial_distance() {
+        let source = r#"
+title = no_pattern_score
+
+puzzle board {
+layers {
+floor = Goal
+actor = Box Player
+}
+
+win_conditions {
+no [ Box no Goal ]
+}
+
+rules {
+}
+}
+
+levels default of board {
+legend {
+. = empty
+B = Box
+G = Goal
+}
+
+level "start" {
+B.BG
+}
+}
+"#;
+        let loaded = parse_game(source).expect("test game should load");
+
+        assert_eq!(goal_score(&loaded, &loaded.levels[0].initial_state), 2);
+    }
+
+    #[test]
+    fn all_objects_on_goal_scores_from_quantified_subjects_to_covers() {
+        let source = r#"
+title = all_on_score
+
+puzzle board {
+layers {
+floor = Goal
+actor = Box
+}
+
+win_conditions {
+all Goal on Box
+}
+
+rules {
+}
+}
+
+levels default of board {
+legend {
+. = empty
+B = Box
+G = Goal
+}
+
+level "start" {
+G..B
+}
+}
+"#;
+        let loaded = parse_game(source).expect("test game should load");
+
+        assert_eq!(goal_score(&loaded, &loaded.levels[0].initial_state), 3);
+    }
+
+    #[test]
+    fn all_objects_on_goal_generates_the_same_subject_first_score_in_3d() {
+        let parsed = parse_puzzle3d_for_solver(
+            r#"
+puzzle3 board {
+layers {
+floor = Goal
+actor = Box
+}
+win_conditions {
+all Goal on Box
+}
+}
+
+levels3 default of board {
+legend {
+. = empty
+G = Goal
+B = Box
+}
+level "start" {
+G.B
+}
+}
+"#,
+        )
+        .expect("test puzzle3 should load");
+        let state = parsed
+            .level_bundle
+            .as_ref()
+            .expect("test puzzle3 should have levels")
+            .build_level_state(0)
+            .expect("test level should build");
+
+        assert_eq!(
+            win_condition3_score(
+                &parsed.game,
+                &state,
+                parsed.win_condition.as_ref().expect("test win condition"),
+            ),
+            2
+        );
     }
 }

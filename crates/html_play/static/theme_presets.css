@@ -352,11 +352,14 @@ body.theme-pixel {
 body.theme-puzzlescript {
   color-scheme: dark;
   --ps-terminal-control-width: 36ch;
-  --ps-title-font-size: 40px;
+  --ps-title-font-size: 48px;
+  --ps-title-line-height: 60px;
   --ps-body-font-size: 24px;
-  --ps-control-font-size: 26px;
-  --ps-message-font-size: 28px;
-  --ps-line-height: 1.25;
+  --ps-body-line-height: 36px;
+  --ps-control-font-size: 24px;
+  --ps-control-line-height: 36px;
+  --ps-message-font-size: 24px;
+  --ps-message-line-height: 36px;
   --background: #000000;
   --text: #ffffff;
   --accent: #ffffff;
@@ -408,21 +411,21 @@ body.theme-puzzlescript {
 .theme-puzzlescript .view-title {
   width: min(100%, 36ch);
   font-size: var(--ps-title-font-size);
-  line-height: var(--ps-line-height);
+  line-height: var(--ps-title-line-height);
   text-align: center;
 }
 
 .theme-puzzlescript .view-subtitle {
   width: min(100%, 36ch);
   font-size: var(--ps-body-font-size);
-  line-height: var(--ps-line-height);
+  line-height: var(--ps-body-line-height);
   text-align: center;
 }
 
 .theme-puzzlescript .screen-view .view-text {
   width: min(100%, 36ch);
   font-size: var(--ps-body-font-size);
-  line-height: var(--ps-line-height);
+  line-height: var(--ps-body-line-height);
   text-align: center;
 }
 
@@ -438,10 +441,11 @@ body.theme-puzzlescript {
   color: var(--text);
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, max-content) minmax(0, 1fr);
+  column-gap: 1ch;
   align-items: center;
   justify-content: center;
   font-size: var(--ps-control-font-size);
-  line-height: var(--ps-line-height);
+  line-height: var(--ps-control-line-height);
   box-shadow: none;
   font-weight: 400;
   letter-spacing: 0;
@@ -577,7 +581,7 @@ body.theme-puzzlescript {
 
 .theme-puzzlescript .message-popup-text {
   font-size: var(--ps-message-font-size);
-  line-height: var(--ps-line-height);
+  line-height: var(--ps-message-line-height);
 }
 
 body.theme-candy {

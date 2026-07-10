@@ -543,7 +543,7 @@ all <selector> on <selector>
 some <selector> on <selector>
 ```
 
-`exists(Goal)` と `none([ Goal no Box ])` は「Goal が存在し、Box が乗っていない Goal がなければクリア」という意味になる。PuzzleScript 互換の読みやすい sugar として `some Goal` / `all Goal on Box` も受け付ける。
+`exists(Goal)` と `none([ Goal no Box ])` は「Goal が存在し、Box が乗っていない Goal がなければクリア」という意味になる。`some Goal` は `exists(Goal)` の読みやすい sugar として受け付ける。`all Goal on Box` は同じクリア判定に加えて、solver が量化対象の Goal から cover の Box への距離 strategy を生成できる明示構文として扱う。一般の `none` / `no` pattern 条件から空間 strategy は推測しない。
 `all <selector> on <selector>` の右辺は selector だけを受け取る。方向つきの空間関係は `all Goal on down [ Box | Goal ]` のように混ぜず、`exists` / `none` または `some` / `no` の pattern 条件で書く。たとえば 3D で「Box が上にない Goal がない」は `none(down [ no Box | Goal ])` と書く。
 
 ### Levels
@@ -1461,10 +1461,12 @@ Player {
 pixels_per_cell 5 5
 offset 2 -1
 #e94f64 #2f80ed #22a06b
+shape = {
 ........
 ..00....
 ..01....
 ........
+}
 }
 
 shapes {
@@ -1503,6 +1505,10 @@ shape player_shape
 }
 }
 ```
+
+sprite のインライン ASCII shape を明示する場合は `shape = { ... }` を使う。
+`shape =` の次行から暗黙に row が続く形は使わない。shape 以外の設定から
+ASCII row を区別できる場合は、`shape = {}` 自体を省略して row だけを書ける。
 
 sprite entry は、selector block の中に色行、ASCII pattern の順で書ける。canonical では `pixels_per_cell` / `offset` の配置メタデータを上に置き、`rotate from <value>` を使う場合はその次、色行、ASCII pattern または `shape <name>` の順で書く。brace なし sprite entry でも同じ順序で `rotate from <value>` を書ける。色行は `colors` keyword を付けてもよいが、省略するのが canonical。色は CSS color として渡されるため、`transparent`、基本 CSS color keywords、`orange`、`grey` / `gray` variants、`brown`、`pink`、`#rrggbbaa` の alpha 付き hex も使える。`.` は透明、`0`..`9`、`a`..`z`、`A`..`Z` は色行の順序に対応する。
 

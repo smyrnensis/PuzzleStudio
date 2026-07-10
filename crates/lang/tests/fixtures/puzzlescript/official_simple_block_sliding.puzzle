@@ -110,7 +110,7 @@ once_all [ no Background ] -> [ Background ]
 }
 
 rules {
-input directions [ Player ] -> [ > Player ]
+input [ Player ] -> [ > Player ]
 [ > Player slidetag ] -> [ > Player ]
 [ up Player ] -> [ up Player slideup ] again
 [ down Player ] -> [ down Player slidedown ] again
@@ -141,7 +141,7 @@ legend {
 2 = Crate2
 3 = Crate3
 , = nospawn
-. = Background
+. = empty
 # = Wall
 P = Player
 p = Player

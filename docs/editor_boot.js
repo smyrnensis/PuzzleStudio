@@ -139,6 +139,22 @@
       }
       return invoke("remove_workspace", { request: payload });
     },
+    async listenDesktopCloseRequested(handler) {
+      const invoke = tauriInvoke();
+      if (!invoke) {
+        return () => {};
+      }
+      const getCurrentWindow = window.__TAURI__?.window?.getCurrentWindow
+        || window.__TAURI__?.window?.Window?.getCurrent;
+      if (!getCurrentWindow) {
+        throw new Error("Desktop close events are unavailable.");
+      }
+      const currentWindow = getCurrentWindow();
+      if (!currentWindow?.onCloseRequested) {
+        throw new Error("Desktop close events are unavailable.");
+      }
+      return currentWindow.onCloseRequested(handler);
+    },
     async listenWorkspaceChanged(handler) {
       const listen = tauriListen("puzzlestudio-workspace-changed", (event) => {
         handler(event?.payload || {});
@@ -174,6 +190,12 @@
       }
       return editorRuntime().highlightSource(payload);
     },
+    async sourceOutline(payload, options = {}) {
+      if (options.signal?.aborted) {
+        throw new DOMException("Outline request was aborted.", "AbortError");
+      }
+      return editorRuntime().sourceOutline(payload);
+    },
     async soundTools() {
       const invoke = tauriInvoke();
       if (invoke) {
@@ -205,7 +227,10 @@
       return fetchText("/api/save", {
         method: "POST",
         headers: { "Content-Type": "application/json; charset=utf-8" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({
+          ...payload,
+          contentLoaded: payload?.contentLoaded === true,
+        }),
       });
     },
     async loadWorkspaceDocument(payload) {
@@ -228,6 +253,13 @@
         return invoke("export_html", { request: payload });
       }
       return { handled: false };
+    },
+    async openExportedFile(payload) {
+      const invoke = tauriInvoke();
+      if (!invoke) {
+        throw new Error("Opening exported files is only available in the desktop app.");
+      }
+      return invoke("open_exported_file", { request: payload });
     },
     async createSourceFile(payload) {
       const invoke = tauriInvoke();

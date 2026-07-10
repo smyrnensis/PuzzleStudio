@@ -3,8 +3,10 @@ mod authoring_grammar;
 mod catalog;
 mod completion;
 mod error;
+mod frame3_literal;
 mod highlight;
 mod level;
+mod level_editor_source;
 mod loaded;
 mod puzzle3_model;
 mod puzzle3_parse;
@@ -17,6 +19,7 @@ mod source;
 mod source_analysis;
 mod source_outline;
 mod source_target;
+mod sprite_authoring;
 mod surface;
 mod surface_completion;
 mod syntax;
@@ -38,7 +41,7 @@ use ast::{
     PatternConditionAst, PatternPredicateAst, QueryDefinitionAst, RuleDefinitionAst, RuleRole,
     SolverStrategyAst, StatementAst, VariableValueAst,
 };
-use catalog::{AxisKind, Catalog, ObjectSchema, ObjectVariant, Rational, ValueMap};
+use catalog::{Catalog, ObjectSchema, ObjectVariant, Rational, ValueMap, ValueType};
 pub use completion::{
     CompletionItem, CompletionKind, CompletionList, completion_list_json,
     suggest_source_completions,
@@ -61,13 +64,13 @@ pub use loaded::{
     SceneForDef, SceneLayoutDef, SceneLevelKey, ScenePuzzleDef, ScenePuzzleInitializer,
     ScenePuzzleRule, SceneResources, SceneRoutineDef, SceneSizeDef, SceneStateDef,
     SceneStateLifetime, SceneTextContent, SceneTextDef, SceneTitleDef, SceneTransition,
-    SceneTransitionTrigger, SceneValue, SceneVarDef, SceneVarKind, SfxSoundDef, SolverStrategy,
-    SolverStrategy3, SolverStrategyDirection, SolverStrategyOf, SolverStrategyTerm,
+    SceneTransitionTrigger, SceneValue, SceneVarDef, SceneVarKind, SfxSoundDef, SolverDeadendOf,
+    SolverStrategy, SolverStrategy3, SolverStrategyDirection, SolverStrategyOf, SolverStrategyTerm,
     SolverStrategyTerm3, SolverStrategyTermOf, SoundsDef, ThemeDef, ThemeVariableDef,
     TriggerAnimationDef, TriggerAnimationKind, TweenAnimationDef, ViewportModeDef, ViewportSizeDef,
     VisualAliasDef, VisualColorDef, VisualSpriteDef, VisualSpriteFit, VisualSpriteFitMode,
-    VisualSpriteKind, VisualSpriteLoopDef, VisualSpriteOffset, VisualSpritePixelsPerCell,
-    VisualSpriteSampling, VisualsDef,
+    VisualSpriteKind, VisualSpriteLoopDef, VisualSpritePixelsPerCell, VisualSpriteSampling,
+    VisualSpriteTransform, VisualsDef,
 };
 
 const BLOCK_CLOSE: &str = "}";

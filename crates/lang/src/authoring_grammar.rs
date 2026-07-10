@@ -225,26 +225,6 @@ impl DefinitionSpec {
             },
         }
     }
-
-    const fn multiline_value_role(
-        surface: &'static str,
-        values: DefinitionValueSpec,
-        value_syntax: DefinitionValueSyntax,
-        multiline_syntax: DefinitionMultilineSyntax,
-        value_role: AuthoringSurfaceRole,
-    ) -> Self {
-        Self {
-            surface,
-            aliases: &[],
-            values,
-            value_syntax,
-            multiline_syntax: Some(multiline_syntax),
-            value_domain: DefinitionValueDomain::None,
-            key_role: AuthoringSurfaceRole::Setting,
-            value_role: Some(value_role),
-            value_source: DefinitionValueSource::Local,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -878,10 +858,22 @@ const SPRITE_CONFIG_DEFINITIONS: &[DefinitionSpec] = &[
         AuthoringSurfaceRole::String,
     ),
     DefinitionSpec::value_role(
-        "offset",
+        "translate",
+        DefinitionValueSpec::One,
+        DefinitionValueSyntax::Any,
+        AuthoringSurfaceRole::Number,
+    ),
+    DefinitionSpec::value_role(
+        "rotate",
         DefinitionValueSpec::Many,
         DefinitionValueSyntax::Any,
         AuthoringSurfaceRole::Number,
+    ),
+    DefinitionSpec::value_role(
+        "flip",
+        DefinitionValueSpec::One,
+        DefinitionValueSyntax::Any,
+        AuthoringSurfaceRole::Literal,
     ),
     DefinitionSpec::value_role(
         "sampling",
@@ -901,11 +893,10 @@ const SPRITE_CONFIG_DEFINITIONS: &[DefinitionSpec] = &[
         DefinitionValueSyntax::Duration,
         AuthoringSurfaceRole::Number,
     ),
-    DefinitionSpec::multiline_value_role(
+    DefinitionSpec::value_role(
         "shape",
         DefinitionValueSpec::One,
         DefinitionValueSyntax::Any,
-        DefinitionMultilineSyntax::Lines,
         AuthoringSurfaceRole::Literal,
     ),
 ];
@@ -2368,6 +2359,20 @@ pub(crate) fn parse_authoring_definition_row(
     parse_authoring_definition_block(kind, &lines, 0).map(|parsed| parsed.map(|(row, _)| row))
 }
 
+pub(crate) fn authoring_definition_single_value(
+    kind: AuthoringKind,
+    key: &str,
+    line: &str,
+) -> Result<Option<String>, DiagnosticReport> {
+    let Some(definition) = parse_authoring_definition_row(kind, line)? else {
+        return Ok(None);
+    };
+    if definition.key != key {
+        return Ok(None);
+    }
+    Ok(definition.single_value().map(str::to_string))
+}
+
 fn validate_definition_values(
     spec: &DefinitionSpec,
     values: &[String],
@@ -2804,7 +2809,7 @@ mod tests {
     }
 
     #[test]
-    fn sprite_properties_support_explicit_shape_ref_and_multiline_shape() {
+    fn sprite_properties_support_explicit_shape_ref() {
         let rows = parse_authoring_definition_body(
             AuthoringKind::SpriteConfig,
             &[
@@ -2820,22 +2825,6 @@ mod tests {
         assert_eq!(rows[2].key, "shape");
         assert_eq!(rows[2].values, vec!["BoxShape"]);
         assert_eq!(rows[2].value_kind, AuthoringDefinitionValueKind::SingleLine);
-
-        let rows = parse_authoring_definition_body(
-            AuthoringKind::SpriteConfig,
-            &[
-                "selector = Player".to_string(),
-                "colors = #fff #000".to_string(),
-                "shape =".to_string(),
-                "000".to_string(),
-                "101".to_string(),
-                "000".to_string(),
-            ],
-        )
-        .unwrap();
-        let shape = rows.iter().find(|row| row.key == "shape").unwrap();
-        assert_eq!(shape.value_kind, AuthoringDefinitionValueKind::Multiline);
-        assert_eq!(shape.values, vec!["000", "101", "000"]);
     }
 
     #[test]

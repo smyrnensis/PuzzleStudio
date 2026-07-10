@@ -3551,28 +3551,6 @@ function spriteCellsFromAsciiRows(rows, paletteLength) {
   return { size, cells };
 }
 
-function loadSpriteFromSourceClick(event = null) {
-  if (event?.defaultPrevented) {
-    return;
-  }
-  if (typeof syncPreviewModeFromSourceCursor !== "function") {
-    setSpriteActionStatus("Source target sync unavailable", "is-error");
-    return;
-  }
-  const source = sourceEditorDocumentValue();
-  const clickOffset = typeof sourceOffsetFromEditorClick === "function"
-    ? sourceOffsetFromEditorClick(event, source)
-    : null;
-  syncPreviewModeFromSourceCursor({
-    force: true,
-    recordHistory: true,
-    allowInactiveMode: true,
-    position: clickOffset ?? (
-      sourceViewOffsetToDocumentOffset(sourceEditor.selectionStart, "start")
-    ),
-  });
-}
-
 function loadSpriteSourceTarget(target, options = {}) {
   if (!isPuzzleDocument(activeDocument()) || !isTextDocument(activeDocument())) {
     return null;
@@ -3584,6 +3562,14 @@ function loadSpriteSourceTarget(target, options = {}) {
   const targetName = target.name || spriteObjectName();
   const loaded = parseSpriteDefinitionSource(target.sourceSprite, targetName);
   if (!loaded) {
+    const contractError = spriteSourceContractError(target.sourceSprite);
+    if (contractError) {
+      if (!options.silent) {
+        setSpriteActionStatus(contractError, "is-error");
+        setStatus(contractError, "is-error");
+      }
+      return null;
+    }
     if (isIncompleteSpriteSourceTarget(source, target)) {
       applyIncompleteSpriteSourceTarget(targetName, target);
       if (!options.silent) {
@@ -3779,6 +3765,20 @@ function parseSpriteDefinitionSource(contract, selectorName = "") {
     sourcePreludeRows,
     cells,
   };
+}
+
+function spriteSourceContractError(contract) {
+  if (!contract || typeof contract !== "object") {
+    return "";
+  }
+  const shapeName = typeof contract.shapeRef === "string" ? contract.shapeRef.trim() : "";
+  const shapeRows = Array.isArray(contract.resolvedShapeRows)
+    ? contract.resolvedShapeRows.map((row) => String(row || "").trim()).filter(Boolean)
+    : [];
+  if (shapeName && !shapeRows.length) {
+    return `Cannot resolve shape ${shapeName}`;
+  }
+  return "";
 }
 
 function spritePaletteEntrySourceToken(entry) {
@@ -4269,8 +4269,7 @@ function duplicateCurrentSpriteDefinition(source) {
   if (!entry || !block || entry.start < block.bodyStart || entry.start > block.bodyEnd) {
     return null;
   }
-  const text = String(source || "").slice(entry.start, entry.end).trimEnd();
-  const originalName = spriteDefinitionSourceName(text);
+  const originalName = spriteObjectName();
   if (!originalName) {
     return null;
   }
@@ -4278,10 +4277,7 @@ function duplicateCurrentSpriteDefinition(source) {
   if (!name) {
     return null;
   }
-  const duplicateText = renameSpriteDefinitionSourceText(text, name);
-  if (!duplicateText) {
-    return null;
-  }
+  const duplicateText = spriteObjectDefinitionText(spriteSourceIndent(entry.indent), name);
   const inserted = insertSpriteSourceTextAt(
     source,
     spriteSourceInsertionLineEnd(source, entry.end),
@@ -4294,25 +4290,6 @@ function duplicateCurrentSpriteDefinition(source) {
     end: inserted.end,
     name,
   };
-}
-
-function spriteDefinitionSourceName(text) {
-  const firstLineEnd = String(text || "").search(/\r?\n/);
-  const firstLine = firstLineEnd < 0 ? String(text || "") : String(text || "").slice(0, firstLineEnd);
-  const match = /^([\t ]*)([^\s{}#]+)(.*)$/.exec(firstLine);
-  return match?.[2] || "";
-}
-
-function renameSpriteDefinitionSourceText(text, name) {
-  const sourceText = String(text || "");
-  const firstLineEnd = sourceText.search(/\r?\n/);
-  const firstLine = firstLineEnd < 0 ? sourceText : sourceText.slice(0, firstLineEnd);
-  const rest = firstLineEnd < 0 ? "" : sourceText.slice(firstLineEnd);
-  const match = /^([\t ]*)([^\s{}#]+)(.*)$/.exec(firstLine);
-  if (!match) {
-    return null;
-  }
-  return `${match[1]}${name}${match[3]}${rest}`;
 }
 
 function uniqueSpriteDuplicateName(source, originalName) {
@@ -4330,22 +4307,8 @@ function uniqueSpriteDuplicateName(source, originalName) {
 
 function spriteSourceDefinitionNames(source) {
   const names = new Set();
-  const block = findSpritesBlock(source);
-  if (!block) {
-    return names;
-  }
-  const body = String(source || "").slice(block.bodyStart, block.bodyEnd);
-  const pattern = /(^|\n)([\t ]*)([^\s{}#]+)(?=\s*(?:\{|#|$))/g;
-  let match = null;
-  while ((match = pattern.exec(body))) {
-    const bodyMatchStart = match.index + match[1].length;
-    if (topLevelDepthAt(body, bodyMatchStart) !== 0) {
-      continue;
-    }
-    if (match[3] === "colors" || match[3] === "shapes") {
-      continue;
-    }
-    names.add(match[3]);
+  for (const entry of surfaceEntriesForSource(source).filter((entry) => entry.kind === "sprite")) {
+    names.add(entry.name);
   }
   return names;
 }
@@ -4745,7 +4708,7 @@ function spriteSourceChildIndent(indent = "") {
   return `${spriteSourceIndent(indent)}${SPRITE_SOURCE_INDENT}`;
 }
 
-function spriteObjectDefinitionText(indent) {
+function spriteObjectDefinitionText(indent, name = spriteObjectName()) {
   const normalizedIndent = spriteSourceIndent(indent);
   const rowIndent = spriteSourceChildIndent(normalizedIndent);
   const shapeInfo = spriteAssetBindInfo(sprite.shapeBind, "shape");
@@ -4755,13 +4718,13 @@ function spriteObjectDefinitionText(indent) {
   const preludeRows = spriteSourcePreludeRows({ omitDuration: Boolean(animationSource) }).map((row) => `${rowIndent}${row}`);
   if (solidRow) {
     return [
-      `${normalizedIndent}${spriteObjectName()}`,
+      `${normalizedIndent}${name}`,
       ...preludeRows,
       `${rowIndent}${solidRow}`,
     ].join("\n");
   }
   const lines = [
-    `${normalizedIndent}${spriteObjectName()}`,
+    `${normalizedIndent}${name}`,
     ...preludeRows,
     `${rowIndent}${colorRow}`,
   ];
@@ -4806,8 +4769,13 @@ function spriteAsciiFromCells(cells) {
 function spriteSourcePreludeRows(options = {}) {
   return (Array.isArray(sprite.sourcePreludeRows) ? sprite.sourcePreludeRows : [])
     .map((row) => String(row || "").trim())
+    .filter((row) => !isSpriteSelectorPreludeRow(row))
     .filter((row) => !(options.omitDuration && isSpriteTimingPreludeRow(row)))
     .filter(Boolean);
+}
+
+function isSpriteSelectorPreludeRow(row) {
+  return /^selector(?:\s*=)?\s+\S+$/i.test(String(row || "").trim());
 }
 
 function isSpriteTimingPreludeRow(row) {
@@ -4961,5 +4929,4 @@ spriteFlipHorizontalButton.addEventListener("click", flipSpriteHorizontal);
 spriteFlipVerticalButton.addEventListener("click", flipSpriteVertical);
 spriteFillButton.addEventListener("click", toggleSpriteBucketMode);
 spriteGridButton?.addEventListener("click", toggleSpriteGrid);
-sourceEditor.addEventListener("click", loadSpriteFromSourceClick);
 resetSpriteBuilder();

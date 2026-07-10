@@ -6,7 +6,7 @@ again_interval = 0.10s
 theme {
 preset = "puzzlescript"
 background_color = #243
-} 
+}
 
 sounds {
 sfx sfx0 { seed = 17551700; type = puzzlescript }
@@ -44,32 +44,32 @@ B -> F
 }
 
 layers {
-Background
-Pond Puddle Crack Hole
-Background2
-TargetYou TargetCrate TargetBall TargetFly TargetHeadlong
-CrateW BallW Button GateO
-Satisfied
-Count:N Ink:D
-You:D Crate Ball Wall Fly Headlong TimeMachine:D GateC
+layer1 = Background
+layer2 = Pond Puddle Crack Hole
+layer3 = Background2
+layer4 = TargetYou TargetCrate TargetBall TargetFly TargetHeadlong
+layer5 = CrateW BallW Button GateO
+layer6 = Satisfied
+layer7 = Count:N Ink:D
+layer8 = You:D Crate Ball Wall Fly Headlong TimeMachine:D GateC
 each Boundary:directions
 each Corner:directions
-WallShadow
-Star
-NoGo
-Checked
-Time:D
-Start
-Computer
+layer9 = WallShadow
+layer10 = Star
+layer11 = NoGo
+layer12 = Checked
+layer13 = Time:D
+layer14 = Start
+layer15 = Computer
 each NotEdge:directions
 each Marker:directions
-StopFlag
-CrackFlag
-CancelTurn
-OpenFlag
-OnlyOneButton
-Moment:directions
-FallFlag
+layer16 = StopFlag
+layer17 = CrackFlag
+layer18 = CancelTurn
+layer19 = OpenFlag
+layer20 = OnlyOneButton
+layer21 = Moment:directions
+layer22 = FallFlag
 }
 
 groups {
@@ -81,7 +81,7 @@ push = Crate TimeMachine:D
 objectW = CrateW BallW
 water = Pond Puddle
 nogoF = Wall Fly GateC Hole Headlong
-nogoB = Wall Crate Crack Hole Headlong
+nogoB = Wall Crate Crack Ball Hole Headlong
 crate = Crate CrateW
 ball = Ball BallW
 heavy = player Crate Ball
@@ -91,7 +91,7 @@ targets = TargetYou TargetCrate TargetBall TargetFly TargetHeadlong
 
 sprites {
 shapes {
-__ps_shape_Ball {
+shape_Ball {
 ..............
 ..............
 ....000000....
@@ -107,377 +107,7 @@ __ps_shape_Ball {
 ....222222....
 ....222222....
 }
-__ps_shape_Ink_F {
-..............
-..............
-..............
-..............
-....000000....
-....000000....
-....000000....
-....000000....
-....000000....
-....000000....
-..............
-..............
-..............
-..............
-}
-__ps_shape_TimeMachine_F {
-..............
-..............
-..............
-..............
-....111111....
-....111111....
-....110011....
-....110011....
-....111111....
-....111111....
-....222222....
-....222222....
-..............
-..............
-}
-__ps_shape_You_F {
-..............
-..............
-....00..00....
-....00..00....
-....110011....
-....110011....
-....000000....
-....000000....
-....000000....
-....000000....
-....002200....
-....002200....
-....22..22....
-....22..22....
-}
-}
-
-Background
-#8fcf6f
-
-Background2
-#0000000a
-
-You:F
-colors #fff #000 #00000015
-shape __ps_shape_You_F
-
-You:B
-colors #000 #fff #00000015
-shape __ps_shape_You_F
-
-TargetYou
-colors #0003 #0003 #0000
-shape __ps_shape_You_F
-
-Crate
-#b85 #a74 #00000015
-..............
-..............
-..0000000000..
-..0000000000..
-..0022222200..
-..0022222200..
-..00......00..
-..00......00..
-..00......00..
-..00......00..
-..0000000000..
-..0000000000..
-..2222222222..
-..2222222222..
-
-CrateW
-#88c
-..............
-..............
-..0000000000..
-..0000000000..
-..00......00..
-..00......00..
-..00......00..
-..00......00..
-..00......00..
-..00......00..
-..0000000000..
-..0000000000..
-..............
-..............
-
-TargetCrate
-#0003
-..............
-..............
-..0000000000..
-..0000000000..
-..00......00..
-..00......00..
-..00......00..
-..00......00..
-..00......00..
-..00......00..
-..0000000000..
-..0000000000..
-..............
-..............
-
-Ball
-colors #83d #a7f #00000015
-shape __ps_shape_Ball
-
-BallW
-colors #43d #65d #0000
-shape __ps_shape_Ball
-
-TargetBall
-#0003
-..............
-..............
-....000000....
-....000000....
-..0000000000..
-..0000000000..
-..0000000000..
-..0000000000..
-..0000000000..
-..0000000000..
-....000000....
-....000000....
-..............
-..............
-
-Fly
-#fd0 #220 #6cf #00000015
-..............
-..............
-..............
-..............
-....000000....
-....000000....
-..2211001122..
-..2211001122..
-....000000....
-....000000....
-....333333....
-....333333....
-..............
-..............
-
-TargetFly
-#0003
-..............
-..............
-..............
-..............
-....000000....
-....000000....
-..0000000000..
-..0000000000..
-....000000....
-....000000....
-..............
-..............
-..............
-..............
-
-Headlong
-#f82 #201a00 #00000015
-..............
-..............
-....000000....
-....000000....
-....110011....
-....110011....
-....000000....
-....000000....
-....002200....
-....002200....
-....00..00....
-....00..00....
-....22..22....
-....22..22....
-
-TargetHeadlong
-#0003
-..............
-..............
-....000000....
-....000000....
-....000000....
-....000000....
-....000000....
-....000000....
-....00..00....
-....00..00....
-....00..00....
-....00..00....
-..............
-..............
-
-NoGo
-#b44
-..............
-..............
-..00......00..
-..00......00..
-....00..00....
-....00..00....
-......00......
-......00......
-....00..00....
-....00..00....
-..00......00..
-..00......00..
-..............
-..............
-
-Pond
-#3373d3 #3575d5
-00000000000000
-11111111111111
-00000000000000
-11111111111111
-00000000000000
-11111111111111
-00000000000000
-11111111111111
-00000000000000
-11111111111111
-00000000000000
-11111111111111
-00000000000000
-11111111111111
-
-Crack
-#037
-..............
-..............
-..............
-..............
-....00..00....
-....00..00....
-......00......
-......00......
-....00..00....
-....00..00....
-..............
-..............
-..............
-..............
-
-Puddle
-#3373d3 #3575d5 #8fcf6f
-22000000000022
-22111111111122
-00000000000000
-11111111111111
-00000000000000
-11111111111111
-00000000000000
-11111111111111
-00000000000000
-11111111111111
-00000000000000
-11111111111111
-22000000000022
-22111111111122
-
-CrackFlag
-transparent
-
-Hole
-#332a11 #3a2f1a
-00000000000000
-01111111111110
-01000000000010
-01011111111010
-01010000001010
-01010111101010
-01010100101010
-01010100101010
-01010111101010
-01010000001010
-01011111111010
-01000000000010
-01111111111110
-00000000000000
-
-Button
-#777 #b44 #6a6a6a
-..............
-..............
-..0000000000..
-..0000000000..
-..0011111100..
-..0011111100..
-..0011111100..
-..0011111100..
-..0011111100..
-..0011111100..
-..0022222200..
-..0022222200..
-..............
-..............
-
-GateC
-#b44 #00000015
-..............
-..............
-......00......
-......00......
-......00......
-......00......
-..0000000000..
-..0000000000..
-..1111001111..
-..1111001111..
-......00......
-......00......
-......11......
-......11......
-
-GateO
-#b443
-..............
-..............
-......00......
-......00......
-......00......
-......00......
-..0000000000..
-..0000000000..
-......00......
-......00......
-......00......
-......00......
-..............
-..............
-
-Wall
-#224433 #234534
-00000000010000
-01101000111011
-01011101111110
-00001111110100
-00000111100000
-00010010000000
-01111000010000
-01111100111010
-11011101111111
-00001111111110
-00100111101100
-01110011001000
-00110000110000
-00000000100000
-
-Boundary:directions
-rotate from up
-#447755 #477a58
+shape_Boundary:directions rotate from up {
 01110011101101
 00101001000100
 ..............
@@ -492,10 +122,8 @@ rotate from up
 ..............
 ..............
 ..............
-
-Corner:directions
-rotate from up
-#475
+}
+shape_Corner:directions rotate from up {
 ............00
 ............00
 ..............
@@ -510,9 +138,454 @@ rotate from up
 ..............
 ..............
 ..............
+}
+shape_Ink_F {
+..............
+..............
+..............
+..............
+....000000....
+....000000....
+....000000....
+....000000....
+....000000....
+....000000....
+..............
+..............
+..............
+..............
+}
+shape_TimeMachine_F {
+..............
+..............
+..............
+..............
+....111111....
+....111111....
+....110011....
+....110011....
+....111111....
+....111111....
+....222222....
+....222222....
+..............
+..............
+}
+shape_You_F {
+..............
+..............
+....00..00....
+....00..00....
+....110011....
+....110011....
+....000000....
+....000000....
+....000000....
+....000000....
+....002200....
+....002200....
+....22..22....
+....22..22....
+}
+}
 
-WallShadow
-#00000015
+sprite {
+selector = Background
+colors = #8fcf6f
+}
+
+sprite {
+selector = Background2
+colors = #0000000a
+}
+
+sprite {
+selector = You:F
+colors = #fff #000 #00000015
+shape = shape_You_F
+}
+
+sprite {
+selector = You:B
+colors = #000 #fff #00000015
+shape = shape_You_F
+}
+
+sprite {
+selector = TargetYou
+colors = #0003 #0003 #0000
+shape = shape_You_F
+}
+
+sprite {
+selector = Crate
+colors = #b85 #a74 #00000015
+..............
+..............
+..0000000000..
+..0000000000..
+..0022222200..
+..0022222200..
+..00......00..
+..00......00..
+..00......00..
+..00......00..
+..0000000000..
+..0000000000..
+..2222222222..
+..2222222222..
+}
+
+sprite {
+selector = CrateW
+colors = #88c
+..............
+..............
+..0000000000..
+..0000000000..
+..00......00..
+..00......00..
+..00......00..
+..00......00..
+..00......00..
+..00......00..
+..0000000000..
+..0000000000..
+..............
+..............
+}
+
+sprite {
+selector = TargetCrate
+colors = #0003
+shape =
+..............
+..............
+..0000000000..
+..0000000000..
+..00......00..
+..00......00..
+..00......00..
+..00......00..
+..00......00..
+..00......00..
+..0000000000..
+..0000000000..
+..............
+..............
+}
+
+sprite {
+selector = Ball
+colors = #83d #a7f #00000015
+shape = shape_Ball
+}
+
+sprite {
+selector = BallW
+colors = #43d #65d #0000
+shape = shape_Ball
+}
+
+sprite {
+selector = TargetBall
+colors = #0003
+..............
+..............
+....000000....
+....000000....
+..0000000000..
+..0000000000..
+..0000000000..
+..0000000000..
+..0000000000..
+..0000000000..
+....000000....
+....000000....
+..............
+..............
+}
+
+sprite {
+selector = Fly
+colors = #fd0 #220 #6cf #00000015
+..............
+..............
+..............
+..............
+....000000....
+....000000....
+..2211001122..
+..2211001122..
+....000000....
+....000000....
+....333333....
+....333333....
+..............
+..............
+}
+
+sprite {
+selector = TargetFly
+colors = #0003
+shape =
+..............
+..............
+..............
+..............
+....000000....
+....000000....
+..0000000000..
+..0000000000..
+....000000....
+....000000....
+..............
+..............
+..............
+..............
+}
+
+sprite {
+selector = Headlong
+colors = #f82 #201a00 #00000015
+shape =
+..............
+..............
+....000000....
+....000000....
+....110011....
+....110011....
+....000000....
+....000000....
+....002200....
+....002200....
+....00..00....
+....00..00....
+....22..22....
+....22..22....
+}
+
+sprite {
+selector = TargetHeadlong
+colors = #0003
+shape =
+..............
+..............
+....000000....
+....000000....
+....000000....
+....000000....
+....000000....
+....000000....
+....00..00....
+....00..00....
+....00..00....
+....00..00....
+..............
+..............
+}
+
+sprite {
+selector = NoGo
+colors = #b44
+shape =
+..............
+..............
+..00......00..
+..00......00..
+....00..00....
+....00..00....
+......00......
+......00......
+....00..00....
+....00..00....
+..00......00..
+..00......00..
+..............
+..............
+}
+
+sprite {
+selector = Pond
+colors = #3373d3 #3575d5
+shape =
+00000000000000
+11111111111111
+00000000000000
+11111111111111
+00000000000000
+11111111111111
+00000000000000
+11111111111111
+00000000000000
+11111111111111
+00000000000000
+11111111111111
+00000000000000
+11111111111111
+}
+
+sprite {
+selector = Crack
+colors = #037
+shape =
+..............
+..............
+..............
+..............
+....00..00....
+....00..00....
+......00......
+......00......
+....00..00....
+....00..00....
+..............
+..............
+..............
+..............
+}
+
+sprite {
+selector = Puddle
+colors = #3373d3 #3575d5 #8fcf6f
+shape =
+22000000000022
+22111111111122
+00000000000000
+11111111111111
+00000000000000
+11111111111111
+00000000000000
+11111111111111
+00000000000000
+11111111111111
+00000000000000
+11111111111111
+22000000000022
+22111111111122
+}
+
+sprite {
+selector = CrackFlag
+colors = transparent
+}
+
+sprite {
+selector = Hole
+colors = #332a11 #3a2f1a
+shape =
+00000000000000
+01111111111110
+01000000000010
+01011111111010
+01010000001010
+01010111101010
+01010100101010
+01010100101010
+01010111101010
+01010000001010
+01011111111010
+01000000000010
+01111111111110
+00000000000000
+}
+
+sprite {
+selector = Button
+colors = #777 #b44 #6a6a6a
+shape =
+..............
+..............
+..0000000000..
+..0000000000..
+..0011111100..
+..0011111100..
+..0011111100..
+..0011111100..
+..0011111100..
+..0011111100..
+..0022222200..
+..0022222200..
+..............
+..............
+}
+
+sprite {
+selector = GateC
+colors = #b44 #00000015
+shape =
+..............
+..............
+......00......
+......00......
+......00......
+......00......
+..0000000000..
+..0000000000..
+..1111001111..
+..1111001111..
+......00......
+......00......
+......11......
+......11......
+}
+
+sprite {
+selector = GateO
+colors = #b443
+shape =
+..............
+..............
+......00......
+......00......
+......00......
+......00......
+..0000000000..
+..0000000000..
+......00......
+......00......
+......00......
+......00......
+..............
+..............
+}
+
+sprite {
+selector = Wall
+colors = #224433 #234534
+shape =
+00000000010000
+01101000111011
+01011101111110
+00001111110100
+00000111100000
+00010010000000
+01111000010000
+01111100111010
+11011101111111
+00001111111110
+00100111101100
+01110011001000
+00110000110000
+00000000100000
+}
+
+sprite {
+selector = Boundary:directions
+colors = #447755 #477a58
+shape = shape_Boundary:directions
+}
+
+sprite {
+selector = Corner:directions
+colors = #475
+shape = shape_Corner:directions
+}
+
+sprite {
+selector = WallShadow
+colors = #00000015
+shape =
 00000000000000
 00000000000000
 ..............
@@ -527,12 +600,17 @@ WallShadow
 ..............
 ..............
 ..............
+}
 
-Count:0
-transparent
+sprite {
+selector = Count:0
+colors = transparent
+}
 
-Count:1
-#000 #fff #888
+sprite {
+selector = Count:1
+colors = #000 #fff #888
+shape =
 ..............
 ..............
 ..............
@@ -547,9 +625,12 @@ Count:1
 ..............
 ..............
 ..............
+}
 
-Count:2
-#000 #fff #888
+sprite {
+selector = Count:2
+colors = #000 #fff #888
+shape =
 ..............
 ..............
 ..............
@@ -564,9 +645,12 @@ Count:2
 ..............
 ..............
 ..............
+}
 
-Count:3
-#000 #fff #888
+sprite {
+selector = Count:3
+colors = #000 #fff #888
+shape =
 ..............
 ..............
 .....0011.....
@@ -581,9 +665,12 @@ Count:3
 ..1100..1100..
 ..............
 ..............
+}
 
-Count:Inf
-#000 #fff
+sprite {
+selector = Count:Inf
+colors = #000 #fff
+shape =
 ..............
 ..............
 ..............
@@ -598,25 +685,36 @@ Count:Inf
 ..............
 ..............
 ..............
+}
 
-Ink:F
-colors #fff
-shape __ps_shape_Ink_F
+sprite {
+selector = Ink:F
+colors = #fff
+shape = shape_Ink_F
+}
 
-Ink:B
-colors #000
-shape __ps_shape_Ink_F
+sprite {
+selector = Ink:B
+colors = #000
+shape = shape_Ink_F
+}
 
-TimeMachine:F
-colors #fff #888 #00000015
-shape __ps_shape_TimeMachine_F
+sprite {
+selector = TimeMachine:F
+colors = #fff #888 #00000015
+shape = shape_TimeMachine_F
+}
 
-TimeMachine:B
-colors #000 #888 #00000015
-shape __ps_shape_TimeMachine_F
+sprite {
+selector = TimeMachine:B
+colors = #000 #888 #00000015
+shape = shape_TimeMachine_F
+}
 
-Star
-#dd33 #000
+sprite {
+selector = Star
+colors = #fff3 #000
+shape =
 ..............
 ..............
 ..............
@@ -631,56 +729,103 @@ Star
 ..............
 ..............
 ..............
+}
 
-Satisfied
-#ff04
+sprite {
+selector = Satisfied
+colors = #ff04
+}
 
-Checked
-transparent
+sprite {
+selector = Checked
+colors = transparent
+}
 
-Computer
-transparent
+sprite {
+selector = Computer
+colors = transparent
+}
 
-Start
-transparent
+sprite {
+selector = Start
+colors = transparent
+}
 
-NotEdge:directions
-transparent
+sprite {
+selector = NotEdge:directions
+colors = transparent
+}
 
-Marker:directions
-transparent
+sprite {
+selector = Marker:directions
+colors = transparent
+}
 
-StopFlag
-transparent
+sprite {
+selector = StopFlag
+colors = transparent
+}
 
-CancelTurn
-transparent
+sprite {
+selector = CancelTurn
+colors = transparent
+}
 
-OpenFlag
-transparent
+sprite {
+selector = OpenFlag
+colors = transparent
+}
 
-OnlyOneButton
-transparent
+sprite {
+selector = OnlyOneButton
+colors = transparent
+}
 
-Time:D
-transparent
+sprite {
+selector = Time:D
+colors = transparent
+}
 
-Moment:directions
-transparent
+sprite {
+selector = Moment:directions
+colors = transparent
+}
 
-FallFlag
-transparent
+sprite {
+selector = FallFlag
+colors = transparent
+}
+}
+
+sounds {
+move player -> sfx player_move
+move Crate -> sfx crate_move
+restart -> sfx restart
+undo -> sfx undo
 }
 
 win_conditions {
-no [ TargetCrate no Crate ]
+no [ TargetCrate no crate ]
 no [ TargetBall no Ball ]
 no [ TargetYou no You:D ]
 no [ TargetFly no Fly ]
 no [ TargetHeadlong no Headlong ]
 }
 
+routine move {
+repeat {
+for l in layer1 layer2 layer3 layer4 layer5 layer6 layer7 layer8 Boundary:directions Corner:directions layer9 layer10 layer11 layer12 layer13 layer14 layer15 NotEdge:directions Marker:directions layer16 layer17 layer18 layer19 layer20 layer21 layer22 {
+once_all [ > l | | < l ] -> [ l | {__move_collision} | l ]
+once_all [ > l | ; | ^ l ] -> [ l | {__move_collision} ; | l ]
+[ > l | no l no {__move_collision} ] -> [ | l{no directions} ]
+once_all [ > l ] -> [ l ]
+}
+once_all [ {__move_collision} ] -> [ ]
+}
+}
+
 routine BallPush once {
+[ > object | Ball | stopper ] -> CancelTurn
 [ > object | Ball | no stopper ] -> [ > object | | Ball Moment:> ] sfx sfx1
 [ Ball Moment:> | no stopper ] -> [ | Ball Moment:> ]
 [ Ball Moment:> | stopper ] -> [ Ball | stopper ]
@@ -690,10 +835,10 @@ routine BallPush once {
 routine BallPull once {
 [ < object | no stopper ] -> [ < object | Marker:< ]
 [ Marker:< | no stopper ] -> [ Marker:< | Marker:< ]
-[ Marker:< | Ball | stopper ] -> [ Marker:< | Ball Moment:< | stopper ]
+[ Marker:< | ball | stopper ] -> [ Marker:< | Ball Moment:< | stopper ]
 [ Marker:< | Ball Moment:< ] -> [ Ball Moment:< | ]
 [ < object | Ball Moment:< ] -> [ < object | < Ball ] sfx sfx1
-[ < object | Ball | stopper ] -> [ < object | < Ball | stopper ] sfx sfx1
+[ < object | ball | stopper ] -> [ < object | < Ball | stopper ] sfx sfx1
 [ Moment:> ] -> [ ]
 [ Marker:> ] -> [ ]
 [ Computer ] -> [ Computer OnlyOneButton ]
@@ -702,10 +847,10 @@ routine BallPull once {
 [ Checked ] -> [ ]
 [ < object | no stopper ] -> [ < object | Marker:< ]
 [ Marker:< | no stopper ] -> [ Marker:< | Marker:< ]
-[ OnlyOneButton ] [ Marker:< | Ball Button | GateO ] -> [ OnlyOneButton ] [ Marker:< | Ball Moment:< Button | GateO ]
+[ OnlyOneButton ] [ Marker:< | ball Button | GateO ] -> [ OnlyOneButton ] [ Marker:< | Ball Moment:< Button | GateO ]
 [ Marker:< | Ball Moment:< ] -> [ Ball Moment:< | ]
 [ < object | Ball Moment:< ] -> [ < object | < Ball ] sfx sfx1
-[ OnlyOneButton ] [ < object | Ball Button | GateO ] -> [ OnlyOneButton ] [ < object | < Ball Button | GateO ] sfx sfx1
+[ OnlyOneButton ] [ < object | ball Button | GateO ] -> [ OnlyOneButton ] [ < object | < Ball Button | GateO ] sfx sfx1
 [ OnlyOneButton ] -> [ ]
 [ Marker:> ] -> [ ]
 [ Moment:> ] -> [ ]
@@ -755,7 +900,7 @@ routine FlipTimeDirection once {
 [ Computer ] [ You:D#1 ] -> [ Computer Time:D#1 ] [ You:D#1 ]
 }
 
-routine __ps_main once {
+routine main once {
 [ Start ] -> Start
 [ NoGo ] -> [ ]
 [ > You:F | nogoF ] -> CancelTurn
@@ -786,7 +931,7 @@ routine __ps_main once {
 [ Computer no OpenFlag ] [ push{no directions} | > You:B GateO ] -> CancelTurn
 [ Computer no OpenFlag ] [ Ball{no directions} | > You:B GateO ] -> CancelTurn
 [ Computer no OpenFlag ] [ objectW{no directions} | > You:B GateO ] -> CancelTurn
-[ Computer no OpenFlag ] [ no Crate no Ball no objectW | > object GateO | ... | > You:B ] -> [ Computer ] [ | object GateO | ... | > You:B ]
+[ Computer no OpenFlag ] [ no crate no Ball no objectW | > object GateO | ... | > You:B ] -> [ Computer ] [ | object GateO | ... | > You:B ]
 [ Computer no OpenFlag ] [ Ball{no directions} | > object GateO | ... | > You:B ] -> [ Computer ] [ | object GateO | ... | > You:B ]
 [ > You:D#1 | TimeMachine:D_rev(D#1) | cantpush ] -> [ > You:D_rev(D#1) | | cantpush ] sfx sfx0
 [ > You:D#1 | TimeMachine:D#1 | cantpush ] -> [ > You:D#1 | | cantpush ] sfx sfx4
@@ -814,8 +959,8 @@ move
 [ Button heavy ] [ Computer ] -> [ Button heavy ] [ Computer OpenFlag ]
 [ TargetYou You:D ] -> [ TargetYou You:D Satisfied ]
 [ TargetYou no You:D Satisfied ] -> [ TargetYou ]
-[ TargetCrate Crate ] -> [ TargetCrate Crate Satisfied ]
-[ TargetCrate no Crate Satisfied ] -> [ TargetCrate ]
+[ TargetCrate crate ] -> [ TargetCrate crate Satisfied ]
+[ TargetCrate no crate Satisfied ] -> [ TargetCrate ]
 [ TargetBall Ball ] -> [ TargetBall Ball Satisfied ]
 [ TargetBall no Ball Satisfied ] -> [ TargetBall ]
 [ TargetFly Fly ] -> [ TargetFly Fly Satisfied ]
@@ -826,12 +971,12 @@ move
 
 on_level_start {
 once_all [ no Background ] -> [ Background ]
-__ps_main
+main
 }
 
 rules {
 input directions [ player ] -> [ > player ]
-__ps_main
+main
 }
 
 on_level_clear {
@@ -841,7 +986,7 @@ next_level
 
 levels {
 legend {
-. = Background
+. = empty
 p = TargetYou
 C = Crate
 𝒞 = CrateW
@@ -877,17 +1022,51 @@ Q = You:B Start
 @ = Crate TargetCrate
 # = Wall
 ⋆ = Wall Star
-_ = empty
 }
 
-level "1"
+level "1-1"
+message "push and pull"
+######
+#....#
+#.Cc.#
+#PC..#
+#...c#
+######
+
+level "1-2"
+######
+#•...#
+#.P..#
+#...c#
+#..C.#
+######
+
+level "1-3"
 #####
 #∘•c#
 #.#.#
 #PC.#
 #####
 
-level "2"
+level "1-4"
+#######
+#######
+#PC•c##
+#...#p#
+#.....#
+#.C##χ#
+#..####
+#######
+
+level "1-5"
+#######
+##.Pc##
+##CC•##
+##∘..##
+####c##
+#######
+
+level "1-6"
 ######
 #.c###
 #∘.###
@@ -896,29 +1075,81 @@ level "2"
 #P.###
 ######
 
-level "3"
+level "1-6"
+######
+#.•.c#
+#.CC.#
+#P∘.c#
+###.##
+######
+
+level "1-7"
 #######
 ##c.•.#
-#.P.∘C#
-#...χ##
+#χP.∘C#
+#....##
 #######
 
-level "4"
+level "1-8"
+############
+#....•∘....#
+#PC.####.c.#
+#.C.####.c.#
+#....∘•....#
+############
+
+level "1-9"
+######
+#..P##
+#2Cc.#
+##...#
+###cC#
+######
+
+level "1-10+"
+######
+#∘.c##
+#P#C.#
+#..•.#
+#c.C.#
+######
+
+level "1-11+"
 #######
 #..∘•##
 #P#C.c#
 #.•C.c#
 #######
 
-level "5"
+level "2-1"
+message "throw and catch"
+########
+#..BPb.#
+#•.....#
+########
+
+level "2-2"
+###########
+######....#
+##B.......#
+##.Q.#....#
+##......#.#
+#...#.....#
+#.b....#..#
+#.#.......#
+#...#.....#
+#.....#..##
+###########
+
+level "2-3"
 ######
-#•P.##
+##P.##
 #•Bb##
 #....#
 ##.∘.#
 ######
 
-level "6"
+level "2-4"
 ###########
 #ooooooooo#
 #o2..ooooo#
@@ -929,7 +1160,7 @@ level "6"
 #ooooooooo#
 ###########
 
-level "7"
+level "2-5"
 #########
 #ooooooo#
 #o•...∘o#
@@ -940,15 +1171,17 @@ level "7"
 #ooooooo#
 #########
 
-level "8"
-#######
-#...•##
-#.#Bc##
-#..∘b.#
-###.CP#
-#######
+level "2-6"
+#########
+##....###
+##.P..•##
+##.B#.c##
+#o.C.∘b.#
+#####...#
+#########
 
-level "9"
+level "3-1"
+message "pull and push"
 ######
 ##..##
 #.C..#
@@ -956,7 +1189,7 @@ level "9"
 #.c.##
 ######
 
-level "10"
+level "3-2"
 ######
 #.Qx##
 #.XpX#
@@ -964,7 +1197,7 @@ level "10"
 ##.x##
 ######
 
-level "11"
+level "3-3"
 ######
 #..Q##
 #2Xx.#
@@ -972,7 +1205,8 @@ level "11"
 ###xX#
 ######
 
-level "12"
+level "4-1"
+message "fall and rise"
 #########
 ###c.≃.1#
 ######..#
@@ -982,7 +1216,7 @@ level "12"
 #...#..##
 #########
 
-level "13"
+level "4-2"
 #######
 #.P.2##
 #.CC###
@@ -991,14 +1225,23 @@ level "13"
 #.~~~p#
 #######
 
-level "14"
+level "4-3"
 #########
 #...###c#
 #CP•≃≃..#
 #..∘**..#
 #########
 
-level "15"
+level "4-4"
+########
+###...##
+#.QC.b##
+#..B.~c#
+#....###
+#...2###
+########
+
+level "4-5"
 ###########
 #ooooooooo#
 #o.&~.bc.o#
@@ -1008,15 +1251,16 @@ level "15"
 #ooooooooo#
 ###########
 
-level "16"
-########
-###....#
-#c*•P.C#
-#**∘..C#
-#:*#####
-########
+level "4-6"
+#########
+###.....#
+#c.•P.C.#
+#*.∘..C.#
+#:.#....#
+#########
 
-level "17"
+level "5-1"
+message "close and open"
 #########
 #pP.+C..#
 #...+C..#
@@ -1025,7 +1269,7 @@ level "17"
 #...++.c#
 #########
 
-level "18"
+level "5-2"
 ##########
 #...++X###
 #..•######
@@ -1034,7 +1278,7 @@ level "18"
 ######P.∘#
 ##########
 
-level "19"
+level "5-3"
 ########
 #B..P•##
 #+#..c##
@@ -1043,14 +1287,102 @@ level "19"
 #...++p#
 ########
 
-level "20"
+level "5-4"
+##########
+#C.##....#
+#...+c..C#
+#x.c+...X#
+#p###∘P.•#
+##########
+
+level "5-5"
 ########
 #c.c####
 ##.+C..#
 ##..C+.#
 ####∘P•#
 ########
+
+level "a"
 message "Thank you for playing!"
+########
+##.∘####
+##CP.###
+##B...##
+##~~.•##
+##b#..##
+##c..###
+########
+
+level "b"
+######
+#.c###
+#C.###
+#.2Cc#
+#....#
+#P.###
+######
+
+level "test"
+#######
+##1.###
+#....##
+#.HXhx#
+##.P..#
+#######
+
+level "7"
+message "7"
+######
+#1.###
+#Pcb.#
+#.BC.#
+#...##
+######
+
+level "5"
+########
+##**≃.p#
+#c**≃.P#
+#2*≃C.##
+########
+
+level "7"
+########
+#....xX#
+#.Xx...#
+#∘##..P#
+#.######
+#•##..p#
+#.xX...#
+#....Xx#
+########
+
+level "10"
+message "10"
+###########
+#...∘.•...#
+#.##.#.##.#
+#....#....#
+####x#X####
+####P#p####
+####X#x####
+###########
+
+level "2-5+"
+⋆######
+#...•##
+#.#Bc##
+#..∘b.#
+###.CP#
+#######
+
+########
+###....#
+#c*•P.C#
+#.*∘..C#
+#:.#####
+########
 }
 }
 
@@ -1072,8 +1404,6 @@ clear_game_progress
 goto playing(0)
 }
 }
-
-
 
 scene playing {
 layout {

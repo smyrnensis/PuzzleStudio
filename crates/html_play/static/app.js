@@ -304,6 +304,9 @@ async function requestJson(url, options = {}) {
   if (standaloneRuntime) {
     return standaloneRuntime.requestJson(url, options);
   }
+  if (puzzleBoot.editorPreview === true) {
+    throw new Error("Editor preview requires its WASM session runtime; /api requests are unavailable in the preview iframe.");
+  }
   const response = await fetch(url, options);
   const body = await response.json();
   if (!response.ok) {
@@ -333,6 +336,9 @@ async function loadWasmSolver() {
 
 async function solveStandaloneCurrentState(options = {}) {
   if (!standaloneRuntime) {
+    if (puzzleBoot.editorPreview === true) {
+      throw new Error("Editor preview requires its WASM session runtime; /api requests are unavailable in the preview iframe.");
+    }
     return requestJson("/api/solve", { method: "POST" });
   }
   if (!puzzleBoot.source) {

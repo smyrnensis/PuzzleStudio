@@ -183,9 +183,9 @@ fn component_cell_has_object_movement_intent(
     object: ObjectId,
 ) -> bool {
     component_cell(components, component, offset).is_some_and(|cell| {
-        cell.require_mark.iter().any(|mark| {
-            mark.mark == ANONYMOUS_MOVEMENT_MARK && mark.object == object
-        })
+        cell.require_mark
+            .iter()
+            .any(|mark| mark.mark == ANONYMOUS_MOVEMENT_MARK && mark.object == object)
     })
 }
 
@@ -205,9 +205,10 @@ fn component_cell_has_object_set_movement_intent(
                     .any(|object| trigger.objects.contains(object))
         });
         binding_matches_trigger
-            && cell.require_object_set_mark.iter().any(|mark| {
-                mark.mark == ANONYMOUS_MOVEMENT_MARK && mark.binding == binding
-            })
+            && cell
+                .require_object_set_mark
+                .iter()
+                .any(|mark| mark.mark == ANONYMOUS_MOVEMENT_MARK && mark.binding == binding)
     })
 }
 
@@ -247,6 +248,11 @@ fn append_tween_rule_animations(
                     if !objects.contains(object) {
                         objects.push(*object);
                     }
+                }
+            }
+            WriteOpTemplate::Replace { add: object, .. } => {
+                if !objects.contains(object) {
+                    objects.push(*object);
                 }
             }
             _ => {}
@@ -509,11 +515,13 @@ fn parse_rewrite_effect_value(
                 name: Some((*name).to_string()),
             }])
         }
-        [name, op, value] if is_variable_update_operator(op) => Ok(vec![EffectAst::UpdateVariable {
-            name: (*name).to_string(),
-            op: parse_variable_update_op(op, line)?,
-            value: parse_variable_update_value(value, line)?,
-        }]),
+        [name, op, value] if is_variable_update_operator(op) => {
+            Ok(vec![EffectAst::UpdateVariable {
+                name: (*name).to_string(),
+                op: parse_variable_update_op(op, line)?,
+                value: parse_variable_update_value(value, line)?,
+            }])
+        }
         _ => Err(parse_error(
             line,
             "rewrite effect must be: cancel, win, restart, next_level, again, checkpoint, clear_checkpoint, sfx <name>, play_music <name>, pause_music [name], resume_music [name], stop_music [name], wait [duration], message <text>, or <variable> <op> <value>",
@@ -735,7 +743,10 @@ fn parse_variable_update_op(op: &str, line: &str) -> Result<VariableUpdateOp, Di
     }
 }
 
-fn parse_variable_update_value(token: &str, line: &str) -> Result<VariableValueAst, DiagnosticReport> {
+fn parse_variable_update_value(
+    token: &str,
+    line: &str,
+) -> Result<VariableValueAst, DiagnosticReport> {
     if let Ok(value) = parse_variable_value(token, line) {
         return Ok(VariableValueAst::Literal(value));
     }
@@ -957,6 +968,12 @@ enum WriteOpTemplate {
         binding: u16,
         objects: Vec<ObjectId>,
     },
+    Replace {
+        component: u16,
+        offset: OffsetTemplate,
+        remove: ObjectId,
+        add: ObjectId,
+    },
     Move {
         component: u16,
         from_offset: OffsetTemplate,
@@ -1034,6 +1051,7 @@ struct ObjectSelector {
     alternatives: Vec<ObjectId>,
     transform: Option<SelectorTransform>,
     family_wildcard: Option<FamilyWildcardSelector>,
+    correspondence_source_token: Option<String>,
     relative_constraints: Vec<RelativeSelectorConstraint>,
     capture_requirements: HashMap<ObjectId, Vec<CaptureSelectorRequirement>>,
     dynamic_guards: HashMap<ObjectId, Vec<DynamicSelectorGuard>>,
@@ -1431,14 +1449,20 @@ fn parse_block_cell(
     while let Some(token) = tokens.next() {
         if let Some(mark) = parse_cell_mark_token(token, line)? {
             if parsed.require_null {
-                return Err(parse_error(line, "`null` cell pattern cannot contain other tokens"));
+                return Err(parse_error(
+                    line,
+                    "`null` cell pattern cannot contain other tokens",
+                ));
             }
             parsed.require_cell_mark.extend(mark);
             continue;
         }
         if let Some(anonymous) = anonymous_mark_for_token(token) {
             if parsed.require_null {
-                return Err(parse_error(line, "`null` cell pattern cannot contain other tokens"));
+                return Err(parse_error(
+                    line,
+                    "`null` cell pattern cannot contain other tokens",
+                ));
             }
             let selector = tokens
                 .next()
@@ -1467,7 +1491,10 @@ fn parse_block_cell(
         }
         if token == "no" {
             if parsed.require_null {
-                return Err(parse_error(line, "`null` cell pattern cannot contain other tokens"));
+                return Err(parse_error(
+                    line,
+                    "`null` cell pattern cannot contain other tokens",
+                ));
             }
             let selector = tokens
                 .next()
@@ -1509,7 +1536,10 @@ fn parse_block_cell(
                 continue;
             }
             if parsed.require_null {
-                return Err(parse_error(line, "`null` cell pattern cannot contain other tokens"));
+                return Err(parse_error(
+                    line,
+                    "`null` cell pattern cannot contain other tokens",
+                ));
             }
             parsed.require.push(resolve_object_selector(
                 token,
@@ -1587,6 +1617,7 @@ fn resolve_object_selector(
             alternatives: vec![object],
             transform: None,
             family_wildcard: None,
+            correspondence_source_token: None,
             relative_constraints: Vec::new(),
             capture_requirements: HashMap::new(),
             dynamic_guards: HashMap::new(),
@@ -1602,6 +1633,7 @@ fn resolve_object_selector(
             alternatives: objects.clone(),
             transform: None,
             family_wildcard: None,
+            correspondence_source_token: None,
             relative_constraints: Vec::new(),
             capture_requirements: HashMap::new(),
             dynamic_guards: HashMap::new(),
@@ -1680,8 +1712,10 @@ fn resolve_object_selector(
                     key,
                 }));
             }
-            if let Some(kind) = schema.axis_kinds.get(index).copied().flatten()
-                && let Some(expr) = parse_axis_computed_selector_value(value, axis, kind, line)?
+            if let Some(value_type @ (ValueType::Angle | ValueType::Vec2)) =
+                schema.axis_types.get(index).copied().flatten()
+                && let Some(expr) =
+                    parse_axis_computed_selector_value(value, axis, value_type, line)?
             {
                 source_token_parts.push(axis.clone());
                 return Ok(Some(SelectorConstraint::AxisComputed {
@@ -1702,7 +1736,19 @@ fn resolve_object_selector(
                     relative,
                 }));
             }
-            if schema.axis_kinds.get(index).copied().flatten().is_some() && value != axis {
+            let axis_type = schema.axis_types.get(index).copied().flatten();
+            if matches!(
+                axis_type,
+                Some(ValueType::Angle | ValueType::Vec2 | ValueType::Frame3)
+            ) && value != axis
+            {
+                let value = normalize_axis_literal(value, schema, index, line)?;
+                source_token_parts.push(value.clone());
+                return Ok(Some(SelectorConstraint::Fixed(value)));
+            }
+            if matches!(axis_type, Some(ValueType::Int | ValueType::Rational))
+                && parse_rational_value(value, line).is_ok()
+            {
                 let value = normalize_axis_literal(value, schema, index, line)?;
                 source_token_parts.push(value.clone());
                 return Ok(Some(SelectorConstraint::Fixed(value)));
@@ -1810,8 +1856,27 @@ fn resolve_object_selector(
         return Err(parse_error(line, "object selector matched no objects"));
     }
     let relative_constraints = relative_selector_constraints(&constraints, schema, &alternatives)?;
-    let capture_requirements =
-        capture_selector_requirements(&constraints, schema, &alternatives)?;
+    let capture_requirements = capture_selector_requirements(&constraints, schema, &alternatives)?;
+    let correspondence_source_token = constraints
+        .iter()
+        .any(|constraint| matches!(constraint, Some(SelectorConstraint::Relative { .. })))
+        .then(|| {
+            let source_parts = constraints
+                .iter()
+                .zip(&source_token_parts)
+                .map(|(constraint, value)| {
+                    if matches!(constraint, Some(SelectorConstraint::Relative { .. })) {
+                        "*".to_string()
+                    } else {
+                        value.clone()
+                    }
+                })
+                .collect::<Vec<_>>();
+            labeled_selector_token(
+                &format!("{}:{}", parts[0], source_parts.join(":")),
+                occurrence_label.as_deref(),
+            )
+        });
 
     if constraints
         .iter()
@@ -1821,9 +1886,9 @@ fn resolve_object_selector(
             &format!("{}:{}", parts[0], source_token_parts.join(":")),
             occurrence_label.as_deref(),
         );
-        let preserves_once_group = constraints.iter().any(|constraint| {
-            matches!(constraint, Some(SelectorConstraint::AxisComputed { .. }))
-        });
+        let preserves_once_group = constraints
+            .iter()
+            .any(|constraint| matches!(constraint, Some(SelectorConstraint::AxisComputed { .. })));
         let mut mapped_objects = HashMap::new();
         let mut target_objects = Vec::new();
         for source in &schema.variants {
@@ -1865,6 +1930,7 @@ fn resolve_object_selector(
                 preserves_once_group,
             }),
             family_wildcard: None,
+            correspondence_source_token,
             relative_constraints,
             capture_requirements: capture_requirements.clone(),
             dynamic_guards: HashMap::new(),
@@ -1881,6 +1947,7 @@ fn resolve_object_selector(
         alternatives,
         transform: None,
         family_wildcard: None,
+        correspondence_source_token,
         relative_constraints,
         capture_requirements,
         dynamic_guards,
@@ -1934,7 +2001,9 @@ fn record_resolved_selector_surface_parts(
     let selector = selector.as_ref();
     let selector_offset = token.text.find(selector).unwrap_or(0);
     if !selector.contains(':') {
-        if catalog.object_names.contains_key(selector) || catalog.object_schemas.contains_key(selector) {
+        if catalog.object_names.contains_key(selector)
+            || catalog.object_schemas.contains_key(selector)
+        {
             mark_surface_token_part(
                 token,
                 selector_offset,
@@ -1970,7 +2039,14 @@ fn record_resolved_selector_surface_parts(
             SurfaceSemanticKind::Object,
             sink,
         );
-        record_schema_selector_suffix_surface_parts(token, selector_offset, selector, &parts, catalog, sink);
+        record_schema_selector_suffix_surface_parts(
+            token,
+            selector_offset,
+            selector,
+            &parts,
+            catalog,
+            sink,
+        );
     } else if catalog.value_sets.contains_key(base) || catalog.object_axes.contains_key(base) {
         mark_surface_token_part(
             token,
@@ -2099,10 +2175,24 @@ fn record_selector_mark_surface_parts(
 ) {
     for mark in marks {
         if catalog.mark_names.contains_key(&mark.name) {
-            mark_surface_token_part(token, 0, &token.text, &mark.name, SurfaceSemanticKind::Mark, sink);
+            mark_surface_token_part(
+                token,
+                0,
+                &token.text,
+                &mark.name,
+                SurfaceSemanticKind::Mark,
+                sink,
+            );
         }
         if let Some(value) = &mark.value {
-            mark_surface_token_part(token, 0, &token.text, value, SurfaceSemanticKind::Variant, sink);
+            mark_surface_token_part(
+                token,
+                0,
+                &token.text,
+                value,
+                SurfaceSemanticKind::Variant,
+                sink,
+            );
         }
     }
 }
@@ -2146,6 +2236,7 @@ fn resolve_any_object_selector(
         alternatives,
         transform: None,
         family_wildcard: None,
+        correspondence_source_token: None,
         relative_constraints: Vec::new(),
         capture_requirements: HashMap::new(),
         dynamic_guards: HashMap::new(),
@@ -2233,6 +2324,7 @@ fn resolve_qualified_value_set_selector(
         transform: None,
         family_wildcard: (can_map && !mapped_objects.is_empty())
             .then_some(FamilyWildcardSelector { mapped_objects }),
+        correspondence_source_token: None,
         relative_constraints: Vec::new(),
         capture_requirements: HashMap::new(),
         dynamic_guards,
@@ -2380,6 +2472,7 @@ fn resolve_schema_family_wildcard_selector(
         alternatives,
         transform: None,
         family_wildcard,
+        correspondence_source_token: None,
         relative_constraints: Vec::new(),
         capture_requirements: HashMap::new(),
         dynamic_guards: HashMap::new(),
@@ -2619,10 +2712,7 @@ fn split_selector_mark<'a>(
         .strip_suffix('}')
         .ok_or_else(|| parse_error(line, "mark selector must end with }"))?;
     if base.is_empty() {
-        return Err(parse_error(
-            line,
-            "mark selector must attach to an object",
-        ));
+        return Err(parse_error(line, "mark selector must attach to an object"));
     }
     let attrs = parse_selector_mark(attrs, line)?;
     Ok((base, attrs))
@@ -2706,13 +2796,16 @@ enum SelectorConstraint {
 
 #[derive(Clone, Debug)]
 enum AxisComputedExpr {
-    RotationDelta { delta: Rational },
-    TranslationDelta { terms: Vec<TranslationDeltaTerm> },
+    AngleDelta { delta: Rational },
+    Vec2Delta { terms: Vec<Vec2DeltaTerm> },
 }
 
 #[derive(Clone, Debug)]
-enum TranslationDeltaTerm {
-    Coordinate { dx: Rational, dy: Rational },
+enum Vec2DeltaTerm {
+    Coordinate {
+        dx: Rational,
+        dy: Rational,
+    },
     AbsoluteDirection {
         amount: Rational,
         direction: AbsoluteOffsetDirection,
@@ -2778,9 +2871,7 @@ fn map_argument_axis(arg: &str) -> &str {
     arg.split_once('#').map_or(arg, |(axis, _)| axis)
 }
 
-fn selector_constraint_needs_occurrence_transform(
-    constraint: &Option<SelectorConstraint>,
-) -> bool {
+fn selector_constraint_needs_occurrence_transform(constraint: &Option<SelectorConstraint>) -> bool {
     match constraint {
         Some(SelectorConstraint::AxisComputed { .. }) => true,
         Some(SelectorConstraint::Mapped { expr, .. }) => !value_expr_uses_tag_capture_ref(expr),
@@ -2939,15 +3030,21 @@ fn ambiguous_selector_tag_error(
 fn parse_axis_computed_selector_value(
     value: &str,
     axis: &str,
-    kind: AxisKind,
+    value_type: ValueType,
     line: &str,
 ) -> Result<Option<AxisComputedExpr>, DiagnosticReport> {
     let value = value.trim();
-    let Some(inner) = value.strip_prefix('(').and_then(|value| value.strip_suffix(')')) else {
+    let Some(inner) = value
+        .strip_prefix('(')
+        .and_then(|value| value.strip_suffix(')'))
+    else {
         return Ok(None);
     };
     let inner = inner.trim();
     let Some((expr_axis, _)) = split_axis_delta_expr(inner) else {
+        if value_type == ValueType::Vec2 && parse_vec2_value(value, line).is_ok() {
+            return Ok(None);
+        }
         return Err(parse_error(
             line,
             "computed selector must start with its axis name",
@@ -2959,13 +3056,14 @@ fn parse_axis_computed_selector_value(
             "computed selector axis name must match the selector slot",
         ));
     }
-    let expr = match kind {
-        AxisKind::Rotation => AxisComputedExpr::RotationDelta {
+    let expr = match value_type {
+        ValueType::Angle => AxisComputedExpr::AngleDelta {
             delta: parse_rotation_delta_expr(inner, line)?,
         },
-        AxisKind::Translation => AxisComputedExpr::TranslationDelta {
-            terms: parse_translation_delta_expr(inner, line)?,
+        ValueType::Vec2 => AxisComputedExpr::Vec2Delta {
+            terms: parse_vec2_delta_expr(inner, line)?,
         },
+        _ => return Ok(None),
     };
     Ok(Some(expr))
 }
@@ -2974,34 +3072,41 @@ fn parse_rotation_delta_expr(expr: &str, line: &str) -> Result<Rational, Diagnos
     let Some((_, delta)) = split_axis_delta_expr(expr) else {
         return Err(parse_error(
             line,
-            "rotation computed selector must be: (axis + <deg>) or (axis - <deg>)",
+            "angle computed selector must be: (axis + <deg>) or (axis - <deg>)",
         ));
     };
     parse_signed_degree_delta(delta, line)
 }
 
-fn parse_translation_delta_expr(
-    expr: &str,
-    line: &str,
-) -> Result<Vec<TranslationDeltaTerm>, DiagnosticReport> {
+fn parse_vec2_delta_expr(expr: &str, line: &str) -> Result<Vec<Vec2DeltaTerm>, DiagnosticReport> {
     let Some((_, delta)) = split_axis_delta_expr(expr) else {
         return Err(parse_error(
             line,
-            "translation computed selector must start with axis + or axis -",
+            "vec2 computed selector must start with axis + or axis -",
         ));
     };
-    if delta.contains(',') {
-        let parts = delta.split(',').map(str::trim).collect::<Vec<_>>();
-        if parts.len() != 2 || parts[0].is_empty() || parts[1].is_empty() {
-            return Err(parse_error(
-                line,
-                "translation coordinate delta must be: (axis + <x>, <y>)",
-            ));
+    let delta = delta.trim();
+    if delta
+        .strip_prefix('+')
+        .or_else(|| delta.strip_prefix('-'))
+        .is_some_and(|value| value.trim_start().starts_with('('))
+    {
+        let (sign, value) = if let Some(value) = delta.strip_prefix('+') {
+            (1, value)
+        } else {
+            (
+                -1,
+                delta
+                    .strip_prefix('-')
+                    .expect("vec2 delta sign was checked"),
+            )
+        };
+        let (mut dx, mut dy) = parse_vec2_value(value.trim(), line)?;
+        if sign < 0 {
+            dx = dx.neg();
+            dy = dy.neg();
         }
-        return Ok(vec![TranslationDeltaTerm::Coordinate {
-            dx: parse_signed_rational_delta(parts[0], line)?,
-            dy: parse_rational_value(parts[1], line)?,
-        }]);
+        return Ok(vec![Vec2DeltaTerm::Coordinate { dx, dy }]);
     }
 
     let mut terms = Vec::new();
@@ -3013,21 +3118,21 @@ fn parse_translation_delta_expr(
             _ => {
                 return Err(parse_error(
                     line,
-                    "translation direction delta must use terms like + 1/2 left",
+                    "vec2 direction delta must use terms like + 1/2 left",
                 ));
             }
         };
         let amount = parse_signed_rational_delta(&amount, line)?;
         if let Some(direction) = parse_absolute_offset_direction(direction) {
-            terms.push(TranslationDeltaTerm::AbsoluteDirection { amount, direction });
+            terms.push(Vec2DeltaTerm::AbsoluteDirection { amount, direction });
         } else if let Some(direction) = parse_relative_direction_value(direction) {
-            terms.push(TranslationDeltaTerm::RelativeDirection { amount, direction });
+            terms.push(Vec2DeltaTerm::RelativeDirection { amount, direction });
         } else {
-            return Err(parse_error(line, "unknown translation direction"));
+            return Err(parse_error(line, "unknown vec2 direction"));
         }
     }
     if terms.is_empty() {
-        return Err(parse_error(line, "translation computed selector has no delta"));
+        return Err(parse_error(line, "vec2 computed selector has no delta"));
     }
     Ok(terms)
 }
@@ -3108,25 +3213,33 @@ fn normalize_axis_literal(
     axis_index: usize,
     line: &str,
 ) -> Result<String, DiagnosticReport> {
-    match schema.axis_kinds.get(axis_index).copied().flatten() {
-        Some(AxisKind::Rotation) => Ok(format!("{}deg", parse_degree_value(value, line)?.format())),
-        Some(AxisKind::Translation) => normalize_translation_value(value, line),
+    match schema.axis_types.get(axis_index).copied().flatten() {
+        Some(ValueType::Angle) => Ok(format!("{}deg", parse_degree_value(value, line)?.format())),
+        Some(ValueType::Vec2) => normalize_vec2_value(value, line),
+        Some(ValueType::Frame3) => crate::frame3_literal::normalize_frame3_literal(value)
+            .map_err(|error| parse_error(line, &error)),
+        Some(ValueType::Int | ValueType::Rational) => {
+            Ok(parse_rational_value(value, line)?.format())
+        }
+        Some(_) => Ok(value.to_string()),
         None => Ok(value.to_string()),
     }
 }
 
-fn normalize_translation_value(value: &str, line: &str) -> Result<String, DiagnosticReport> {
-    let (x, y) = parse_translation_value(value, line)?;
-    Ok(format!("{},{}", x.format(), y.format()))
+fn normalize_vec2_value(value: &str, line: &str) -> Result<String, DiagnosticReport> {
+    let (x, y) = parse_vec2_value(value, line)?;
+    Ok(format!("({},{})", x.format(), y.format()))
 }
 
-fn parse_translation_value(
-    value: &str,
-    line: &str,
-) -> Result<(Rational, Rational), DiagnosticReport> {
-    let parts = value.split(',').map(str::trim).collect::<Vec<_>>();
+fn parse_vec2_value(value: &str, line: &str) -> Result<(Rational, Rational), DiagnosticReport> {
+    let value = value.trim();
+    let inner = value
+        .strip_prefix('(')
+        .and_then(|value| value.strip_suffix(')'))
+        .ok_or_else(|| parse_error(line, "vec2 value must be parenthesized: (<x>, <y>)"))?;
+    let parts = inner.split(',').map(str::trim).collect::<Vec<_>>();
     if parts.len() != 2 || parts[0].is_empty() || parts[1].is_empty() {
-        return Err(parse_error(line, "translation value must be: <x>,<y>"));
+        return Err(parse_error(line, "vec2 value must be: (<x>, <y>)"));
     }
     Ok((
         parse_rational_value(parts[0], line)?,
@@ -3144,30 +3257,30 @@ fn validate_axis_computed_source_constraints(
         matches!(
             constraint,
             SelectorConstraint::AxisComputed {
-                expr: AxisComputedExpr::TranslationDelta { terms },
+                expr: AxisComputedExpr::Vec2Delta { terms },
                 ..
             } if terms
                 .iter()
-                .any(|term| matches!(term, TranslationDeltaTerm::RelativeDirection { .. }))
+                .any(|term| matches!(term, Vec2DeltaTerm::RelativeDirection { .. }))
         )
     });
     if !relative_translation {
         return Ok(());
     }
     let Some(rotation_index) = schema
-        .axis_kinds
+        .axis_types
         .iter()
-        .position(|kind| *kind == Some(AxisKind::Rotation))
+        .position(|value_type| *value_type == Some(ValueType::Angle))
     else {
         return Err(parse_error(
             line,
-            "relative translation requires a rotation axis on the same object",
+            "relative vec2 arithmetic requires an angle tag on the same object",
         ));
     };
     if source_token_parts.get(rotation_index) != schema.axes.get(rotation_index) {
         return Err(parse_error(
             line,
-            "relative translation requires the rotation axis to be captured",
+            "relative vec2 arithmetic requires the angle tag to be captured",
         ));
     }
     Ok(())
@@ -3180,13 +3293,16 @@ fn eval_axis_computed_selector_value(
     line: &str,
 ) -> Result<String, DiagnosticReport> {
     match expr {
-        AxisComputedExpr::RotationDelta { delta } => {
+        AxisComputedExpr::AngleDelta { delta } => {
             let Some(axis_index) = schema
-                .axis_kinds
+                .axis_types
                 .iter()
-                .position(|kind| *kind == Some(AxisKind::Rotation))
+                .position(|value_type| *value_type == Some(ValueType::Angle))
             else {
-                return Err(parse_error(line, "rotation computed selector requires rotation axis"));
+                return Err(parse_error(
+                    line,
+                    "angle computed selector requires an angle tag",
+                ));
             };
             let current = source
                 .values
@@ -3195,36 +3311,36 @@ fn eval_axis_computed_selector_value(
             let target = parse_degree_value(current, line)?.add(*delta);
             resolve_rotation_axis_value(schema, axis_index, target, line)
         }
-        AxisComputedExpr::TranslationDelta { terms } => {
+        AxisComputedExpr::Vec2Delta { terms } => {
             let Some(axis_index) = schema
-                .axis_kinds
+                .axis_types
                 .iter()
-                .position(|kind| *kind == Some(AxisKind::Translation))
+                .position(|value_type| *value_type == Some(ValueType::Vec2))
             else {
                 return Err(parse_error(
                     line,
-                    "translation computed selector requires translation axis",
+                    "vec2 computed selector requires a vec2 tag",
                 ));
             };
             let current = source
                 .values
                 .get(axis_index)
                 .ok_or_else(|| parse_error(line, "internal schema variant missing axis value"))?;
-            let (mut x, mut y) = parse_translation_value(current, line)?;
-            let facing = source_rotation_degrees(schema, source, line)?;
+            let (mut x, mut y) = parse_vec2_value(current, line)?;
+            let facing = source_angle_degrees(schema, source, line)?;
             for term in terms {
-                let (dx, dy) = translation_delta_vector(term, facing, line)?;
+                let (dx, dy) = vec2_delta_vector(term, facing, line)?;
                 x = x.add(dx);
                 y = y.add(dy);
             }
-            let target = format!("{},{}", x.format(), y.format());
+            let target = format!("({},{})", x.format(), y.format());
             let axis_values = schema_axis_values(schema, axis_index)?;
             if axis_values.contains(&target) {
                 Ok(target)
             } else {
                 Err(parse_error(
                     line,
-                    "translation computed selector target is not declared",
+                    "vec2 computed selector target is not declared",
                 ))
             }
         }
@@ -3248,7 +3364,10 @@ fn resolve_rotation_axis_value(
             return Ok(value);
         }
     }
-    Err(parse_error(line, "rotation computed selector target is not declared"))
+    Err(parse_error(
+        line,
+        "angle computed selector target is not declared",
+    ))
 }
 
 fn degrees_congruent(left: Rational, right: Rational) -> bool {
@@ -3256,15 +3375,15 @@ fn degrees_congruent(left: Rational, right: Rational) -> bool {
     diff.numerator % (360 * diff.denominator) == 0
 }
 
-fn source_rotation_degrees(
+fn source_angle_degrees(
     schema: &ObjectSchema,
     source: &ObjectVariant,
     line: &str,
 ) -> Result<Option<Rational>, DiagnosticReport> {
     let Some(axis_index) = schema
-        .axis_kinds
+        .axis_types
         .iter()
-        .position(|kind| *kind == Some(AxisKind::Rotation))
+        .position(|value_type| *value_type == Some(ValueType::Angle))
     else {
         return Ok(None);
     };
@@ -3275,21 +3394,22 @@ fn source_rotation_degrees(
     Ok(Some(parse_degree_value(value, line)?))
 }
 
-fn translation_delta_vector(
-    term: &TranslationDeltaTerm,
+fn vec2_delta_vector(
+    term: &Vec2DeltaTerm,
     facing: Option<Rational>,
     line: &str,
 ) -> Result<(Rational, Rational), DiagnosticReport> {
     match term {
-        TranslationDeltaTerm::Coordinate { dx, dy } => Ok((*dx, *dy)),
-        TranslationDeltaTerm::AbsoluteDirection { amount, direction } => {
-            Ok(scale_offset_vector(*amount, absolute_offset_vector(*direction)))
-        }
-        TranslationDeltaTerm::RelativeDirection { amount, direction } => {
+        Vec2DeltaTerm::Coordinate { dx, dy } => Ok((*dx, *dy)),
+        Vec2DeltaTerm::AbsoluteDirection { amount, direction } => Ok(scale_offset_vector(
+            *amount,
+            absolute_offset_vector(*direction),
+        )),
+        Vec2DeltaTerm::RelativeDirection { amount, direction } => {
             let facing = facing.ok_or_else(|| {
                 parse_error(
                     line,
-                    "relative translation requires a rotation axis on the same object",
+                    "relative vec2 arithmetic requires an angle tag on the same object",
                 )
             })?;
             let vector = relative_offset_vector(facing, *direction, line)?;
@@ -3315,15 +3435,15 @@ fn relative_offset_vector(
     let base = if degrees_congruent(facing, Rational::integer(0)) {
         (1, 0)
     } else if degrees_congruent(facing, Rational::integer(90)) {
-        (0, 1)
+        (0, -1)
     } else if degrees_congruent(facing, Rational::integer(180)) {
         (-1, 0)
     } else if degrees_congruent(facing, Rational::integer(270)) {
-        (0, -1)
+        (0, 1)
     } else {
         return Err(parse_error(
             line,
-            "relative translation requires cardinal rotation values",
+            "relative vec2 arithmetic requires cardinal angle values",
         ));
     };
     Ok(match direction {
@@ -3579,12 +3699,8 @@ fn compile_before_after_blocks(
                                 mark_names,
                                 line,
                             )?;
-                            let after_mark = block_cell_mark(
-                                after_cell,
-                                &after_occurrences,
-                                mark_names,
-                                line,
-                            )?;
+                            let after_mark =
+                                block_cell_mark(after_cell, &after_occurrences, mark_names, line)?;
                             dedup_objects(&mut before_objects);
                             dedup_objects(&mut after_objects);
                             let require_objects =
@@ -3686,9 +3802,7 @@ fn compile_before_after_blocks(
                                 require_object_sets,
                                 forbid_objects,
                                 require_mark: before_mark.require.clone(),
-                                require_object_set_mark: before_mark
-                                    .require_object_set
-                                    .clone(),
+                                require_object_set_mark: before_mark.require_object_set.clone(),
                                 forbid_mark: before_mark.forbid.clone(),
                                 forbid_object_set_mark: before_mark.forbid_object_set.clone(),
                             });
@@ -3697,10 +3811,17 @@ fn compile_before_after_blocks(
                                 object_set_objects_for_occurrences(&before_occurrences);
                             let after_object_set_objects =
                                 object_set_objects_for_occurrences(&after_occurrences);
+                            let replacements = same_cell_occurrence_replacements(
+                                &before_occurrences,
+                                &after_occurrences,
+                            );
 
                             for object in before_objects.iter().filter(|object| {
                                 !after_objects.contains(object)
                                     && !before_object_set_objects.contains(object)
+                                    && !replacements
+                                        .iter()
+                                        .any(|(remove, _)| remove == *object)
                             }) {
                                 writes.push(WriteOpTemplate::Remove {
                                     component: component_index,
@@ -3712,11 +3833,20 @@ fn compile_before_after_blocks(
                             for object in after_objects.iter().filter(|object| {
                                 !before_objects.contains(object)
                                     && !after_object_set_objects.contains(object)
+                                    && !replacements.iter().any(|(_, add)| add == *object)
                             }) {
                                 writes.push(WriteOpTemplate::Add {
                                     component: component_index,
                                     offset: offset.clone(),
                                     object: *object,
+                                });
+                            }
+                            for (remove, add) in replacements {
+                                writes.push(WriteOpTemplate::Replace {
+                                    component: component_index,
+                                    offset: offset.clone(),
+                                    remove,
+                                    add,
                                 });
                             }
                             append_object_set_presence_writes(
@@ -3727,11 +3857,9 @@ fn compile_before_after_blocks(
                                 &mut writes,
                             );
 
-                            for attr in mark_to_set(
-                                &after_mark.require,
-                                &before_mark.require,
-                                line,
-                            )? {
+                            for attr in
+                                mark_to_set(&after_mark.require, &before_mark.require, line)?
+                            {
                                 writes.push(WriteOpTemplate::SetMark {
                                     component: component_index,
                                     offset: offset.clone(),
@@ -3754,13 +3882,11 @@ fn compile_before_after_blocks(
                                 });
                             }
 
-                            for attr in
-                                mark_to_remove(&before_mark.require, &after_mark.require)
-                                    .into_iter()
-                                    .filter(|attr| {
-                                        attr.object.is_empty()
-                                            || after_objects.contains(&attr.object)
-                                    })
+                            for attr in mark_to_remove(&before_mark.require, &after_mark.require)
+                                .into_iter()
+                                .filter(|attr| {
+                                    attr.object.is_empty() || after_objects.contains(&attr.object)
+                                })
                             {
                                 writes.push(WriteOpTemplate::RemoveMark {
                                     component: component_index,
@@ -3826,7 +3952,7 @@ fn compile_before_after_blocks(
                     });
                 }
 
-                writes = preserve_moved_occurrence_mark(
+                writes = normalize_occurrence_writes(
                     writes,
                     &before_placements,
                     &after_placements,
@@ -4086,10 +4212,7 @@ fn expand_negated_movement_mark_set_list(mark: &mut Vec<ParsedMark>) {
     *mark = expanded;
 }
 
-fn collect_movement_mark_set_bindings(
-    block: &PatternBlock,
-    bindings: &mut Vec<MarkSetBinding>,
-) {
+fn collect_movement_mark_set_bindings(block: &PatternBlock, bindings: &mut Vec<MarkSetBinding>) {
     let mut selector_counts = HashMap::<String, usize>::new();
     for (component_index, component) in block.components.iter().enumerate() {
         for (row_index, row) in component.rows.iter().enumerate() {
@@ -4284,7 +4407,7 @@ fn occurrence_key_has_label(key: &OccurrenceKey) -> bool {
     key.token.contains('#')
 }
 
-fn preserve_moved_occurrence_mark(
+fn normalize_occurrence_writes(
     writes: Vec<WriteOpTemplate>,
     before_placements: &HashMap<OccurrenceKey, OccurrencePlacement>,
     after_placements: &HashMap<OccurrenceKey, OccurrencePlacement>,
@@ -4300,7 +4423,6 @@ fn preserve_moved_occurrence_mark(
                 .then_some((before, after))
         })
         .collect::<Vec<_>>();
-
     if moves.is_empty() {
         return Ok(writes);
     }
@@ -4480,9 +4602,13 @@ fn validate_null_cell_rewrite(
     after: &BlockComponent,
     line: &str,
 ) -> Result<(), DiagnosticReport> {
-    for (before_part, after_part) in before.rows.iter().flatten().zip(after.rows.iter().flatten()) {
-        let (BlockPart::Cell(before_cell), BlockPart::Cell(after_cell)) =
-            (before_part, after_part)
+    for (before_part, after_part) in before
+        .rows
+        .iter()
+        .flatten()
+        .zip(after.rows.iter().flatten())
+    {
+        let (BlockPart::Cell(before_cell), BlockPart::Cell(after_cell)) = (before_part, after_part)
         else {
             continue;
         };
@@ -4583,8 +4709,7 @@ fn block_cell_mark(
                     }
                 }
                 ResolvedObjectMatch::ObjectSet { binding, .. } => {
-                    let pattern =
-                        parsed_object_set_mark_pattern(*binding, mark, mark_names, line)?;
+                    let pattern = parsed_object_set_mark_pattern(*binding, mark, mark_names, line)?;
                     if mark.negated {
                         out.forbid_object_set.push(pattern);
                     } else {
@@ -4727,11 +4852,9 @@ fn parsed_anonymous_mark_pattern(
         ),
         AnonymousMark::Int => (
             ANONYMOUS_INT_MARK,
-            Some(MarkValueTemplate::Literal(
-                value
-                    .parse::<i64>()
-                    .map_err(|_| parse_error(line, "expected integer mark value"))?,
-            )),
+            Some(MarkValueTemplate::Literal(value.parse::<i64>().map_err(
+                |_| parse_error(line, "expected integer mark value"),
+            )?)),
             MarkValueMatch::Exact,
         ),
     };
@@ -5202,8 +5325,13 @@ fn assignment_matches_capture_requirements(
         let selector = SelectorRequirementView {
             capture_requirements: &occurrence.capture_requirements,
         };
-        if !selector_object_matches_capture_requirements(&selector, object, tag_captures, maps, line)?
-        {
+        if !selector_object_matches_capture_requirements(
+            &selector,
+            object,
+            tag_captures,
+            maps,
+            line,
+        )? {
             return Ok(false);
         }
     }
@@ -5290,7 +5418,7 @@ fn block_cell_object_occurrences(
                 ordinal
             };
             if let Some(transform) = &selector.transform {
-                let before_occurrences =
+                let source_indices =
                     before_by_token
                         .get(&transform.source_token)
                         .ok_or_else(|| {
@@ -5300,7 +5428,7 @@ fn block_cell_object_occurrences(
                                 "mapped selector source must appear in before",
                             )
                         })?;
-                let before_index = before_occurrences.get(ordinal).ok_or_else(|| {
+                let before_index = source_indices.get(ordinal).ok_or_else(|| {
                     parse_error_at_source_line_number(
                         line,
                         source_line_number,
@@ -5317,6 +5445,23 @@ fn block_cell_object_occurrences(
                             "internal selector assignment missing",
                         )
                     })?;
+                let source = before_occurrences.get(*before_index).ok_or_else(|| {
+                    parse_error_at_source_line_number(
+                        line,
+                        source_line_number,
+                        "mapped selector source occurrence missing",
+                    )
+                })?;
+                let source_ordinal = before_by_token
+                    .get(&source.token)
+                    .and_then(|indices| indices.iter().position(|index| index == before_index))
+                    .ok_or_else(|| {
+                        parse_error_at_source_line_number(
+                            line,
+                            source_line_number,
+                            "mapped selector source key missing",
+                        )
+                    })?;
                 return transform
                     .mapped_objects
                     .get(&source_object)
@@ -5324,7 +5469,10 @@ fn block_cell_object_occurrences(
                     .map(|object| ResolvedObjectOccurrence {
                         token: selector.token.clone(),
                         matched: ResolvedObjectMatch::Object(object),
-                        key: None,
+                        key: Some(OccurrenceKey {
+                            token: source.token.clone(),
+                            ordinal: source_ordinal,
+                        }),
                         from_multi_selector: selector.alternatives.len() > 1,
                     })
                     .ok_or_else(|| {
@@ -5334,6 +5482,43 @@ fn block_cell_object_occurrences(
                             "mapped selector source object missing",
                         )
                     });
+            }
+            if let Some(source_token) = &selector.correspondence_source_token
+                && let Some(source_indices) = before_by_token.get(source_token)
+            {
+                let source_index = source_indices.get(ordinal).ok_or_else(|| {
+                    parse_error_at_source_line_number(
+                        line,
+                        source_line_number,
+                        "relative selector source occurrence missing",
+                    )
+                })?;
+                let source = before_occurrences.get(*source_index).ok_or_else(|| {
+                    parse_error_at_source_line_number(
+                        line,
+                        source_line_number,
+                        "relative selector source occurrence missing",
+                    )
+                })?;
+                let target = match selector.alternatives.as_slice() {
+                    [target] => *target,
+                    _ => {
+                        return Err(parse_error_at_source_line_number(
+                            line,
+                            source_line_number,
+                            "relative selector target must resolve to one object",
+                        ));
+                    }
+                };
+                return Ok(ResolvedObjectOccurrence {
+                    token: selector.token.clone(),
+                    matched: ResolvedObjectMatch::Object(target),
+                    key: Some(OccurrenceKey {
+                        token: source.token.clone(),
+                        ordinal,
+                    }),
+                    from_multi_selector: selector.alternatives.len() > 1,
+                });
             }
             if let Some(before_occurrences) = before_by_token.get(&selector.token) {
                 if let Some(before_index) = before_occurrences.get(ordinal) {
@@ -5430,12 +5615,12 @@ fn block_cell_object_occurrences(
                         }
                         let source = assignment.get(index).and_then(assignment_concrete_object)?;
                         let target = family_wildcard.mapped_objects.get(&source).copied()?;
-                        Some(target)
+                        Some((index, target))
                     })
                     .collect::<Vec<_>>();
-                let target = if selector.occurrence_label.is_some() {
+                let (source_index, target) = if selector.occurrence_label.is_some() {
                     match candidates.as_slice() {
-                        [target] => *target,
+                        [candidate] => *candidate,
                         [] => {
                             return Err(parse_error_at_source_line_number(
                                 line,
@@ -5460,10 +5645,30 @@ fn block_cell_object_occurrences(
                         )
                     })?
                 };
+                let source = before_occurrences.get(source_index).ok_or_else(|| {
+                    parse_error_at_source_line_number(
+                        line,
+                        source_line_number,
+                        "family wildcard selector source occurrence missing",
+                    )
+                })?;
+                let source_ordinal = before_by_token
+                    .get(&source.token)
+                    .and_then(|indices| indices.iter().position(|index| *index == source_index))
+                    .ok_or_else(|| {
+                        parse_error_at_source_line_number(
+                            line,
+                            source_line_number,
+                            "family wildcard selector source key missing",
+                        )
+                    })?;
                 return Ok(ResolvedObjectOccurrence {
                     token: selector.token.clone(),
                     matched: ResolvedObjectMatch::Object(target),
-                    key: None,
+                    key: Some(OccurrenceKey {
+                        token: source.token.clone(),
+                        ordinal: source_ordinal,
+                    }),
                     from_multi_selector: selector.alternatives.len() > 1,
                 });
             }
@@ -5667,6 +5872,28 @@ fn resolved_occurrences_may_be_same_object(
         .any(|object| right.matched.possible_objects().contains(object))
 }
 
+fn same_cell_occurrence_replacements(
+    before_occurrences: &[ResolvedObjectOccurrence],
+    after_occurrences: &[ResolvedObjectOccurrence],
+) -> Vec<(ObjectId, ObjectId)> {
+    let mut replacements = Vec::new();
+    for before in before_occurrences {
+        let (Some(key), ResolvedObjectMatch::Object(remove)) = (&before.key, &before.matched) else {
+            continue;
+        };
+        for after in after_occurrences {
+            let (Some(after_key), ResolvedObjectMatch::Object(add)) = (&after.key, &after.matched)
+            else {
+                continue;
+            };
+            if key == after_key && remove != add && !replacements.contains(&(*remove, *add)) {
+                replacements.push((*remove, *add));
+            }
+        }
+    }
+    replacements
+}
+
 fn direction_by_name(
     name: &str,
     input_names: &HashMap<String, InputId>,
@@ -5734,6 +5961,20 @@ fn resolve_write(
                 component: *component,
                 offset,
                 binding: *binding,
+            })
+        }
+        WriteOpTemplate::Replace {
+            component,
+            offset,
+            remove,
+            add,
+        } => {
+            let offset = resolve_offset(offset.clone(), direction, dir_any, line)?;
+            Ok(WriteOp::Replace {
+                component: *component,
+                offset,
+                remove: *remove,
+                add: *add,
             })
         }
         WriteOpTemplate::Move {

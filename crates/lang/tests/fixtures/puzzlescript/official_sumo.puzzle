@@ -57,7 +57,7 @@ once_all [ no Background ] -> [ Background ]
 }
 
 rules {
-input directions [ Player ] -> [ > Player ]
+input [ Player ] -> [ > Player ]
 [ > Player ] [ Sumo ] -> [ > Player ] [ > Sumo ]
 move
 }
@@ -69,11 +69,10 @@ next_level
 
 levels {
 legend {
-. = Background
+. = empty
 # = Wall
 P = Player
 S = Sumo
-_ = empty
 }
 
 ########

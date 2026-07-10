@@ -1,5 +1,5 @@
 use crate::{
-    authoring_grammar::{self, AuthoringOutlinePolicy},
+    authoring_grammar::{self, AuthoringKind, AuthoringOutlinePolicy},
     surface::{SurfaceDocument, SurfaceStructuralBlock, SurfaceStructuralBlockRole},
 };
 use std::collections::HashMap;
@@ -32,10 +32,11 @@ pub(crate) fn source_outline_from_document(document: &SurfaceDocument) -> Vec<So
     let mut ids_by_item_key = HashMap::<(usize, String, String), String>::new();
     let mut next_id = 0usize;
 
-    for block in document
+    for (block_index, block) in document
         .structural_blocks
         .iter()
-        .filter(|block| matches!(block.role, SurfaceStructuralBlockRole::SourceTree))
+        .enumerate()
+        .filter(|(_, block)| matches!(block.role, SurfaceStructuralBlockRole::SourceTree))
     {
         while stack.len() > block.depth {
             stack.pop();
@@ -63,8 +64,8 @@ pub(crate) fn source_outline_from_document(document: &SurfaceDocument) -> Vec<So
             &mut next_id,
             block.start,
             block.end,
-            outline_block_kind(block),
-            block.header.clone(),
+            outline_block_kind(document, block_index),
+            outline_block_label(document, block_index),
         );
         stack.push(OutlineStackEntry {
             id: Some(id),
@@ -126,7 +127,7 @@ fn outline_block_suppresses_children(block: &SurfaceStructuralBlock) -> bool {
     if block.authoring_kind.is_some() {
         return false;
     }
-    let first = outline_block_kind(block);
+    let first = outline_block_header_kind(block);
     matches!(
         first.as_str(),
         "keys" | "inputs" | "routine" | "query" | "fix"
@@ -134,7 +135,15 @@ fn outline_block_suppresses_children(block: &SurfaceStructuralBlock) -> bool {
         || block.virtual_braces
 }
 
-fn outline_block_kind(block: &SurfaceStructuralBlock) -> String {
+fn outline_block_kind(document: &SurfaceDocument, block_index: usize) -> String {
+    let block = &document.structural_blocks[block_index];
+    if is_sprite_outline_entry(document, block_index) {
+        return "sprite".to_string();
+    }
+    outline_block_header_kind(block)
+}
+
+fn outline_block_header_kind(block: &SurfaceStructuralBlock) -> String {
     if let Some(kind) = block.authoring_kind {
         return authoring_grammar::authoring_kind_spec(kind)
             .header
@@ -150,6 +159,58 @@ fn outline_block_kind(block: &SurfaceStructuralBlock) -> String {
         .next()
         .unwrap_or("")
         .to_string()
+}
+
+fn outline_block_label(document: &SurfaceDocument, block_index: usize) -> String {
+    let block = &document.structural_blocks[block_index];
+    if block.authoring_kind == Some(AuthoringKind::SpriteConfig) {
+        return explicit_sprite_selector(document, block_index)
+            .unwrap_or_else(|| block.header.clone());
+    }
+    if is_sprite_outline_entry(document, block_index) {
+        return block
+            .header
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .to_string();
+    }
+    block.header.clone()
+}
+
+fn is_sprite_outline_entry(document: &SurfaceDocument, block_index: usize) -> bool {
+    let block = &document.structural_blocks[block_index];
+    block.authoring_kind == Some(AuthoringKind::SpriteConfig)
+        || (block.scope == crate::source::SourceScope::VisualShapeEntry
+            && block
+                .parent
+                .and_then(|parent| document.structural_blocks.get(parent))
+                .is_some_and(|parent| parent.authoring_kind == Some(AuthoringKind::SpritesConfig)))
+}
+
+fn explicit_sprite_selector(document: &SurfaceDocument, block_index: usize) -> Option<String> {
+    let block = &document.structural_blocks[block_index];
+    let sibling_start = document
+        .structural_blocks
+        .iter()
+        .skip(block_index + 1)
+        .filter(|candidate| candidate.parent == block.parent)
+        .map(|candidate| candidate.start)
+        .next()
+        .unwrap_or(usize::MAX);
+    document
+        .lines
+        .iter()
+        .filter(|line| line.start > block.end && line.start < sibling_start)
+        .find_map(|line| {
+            authoring_grammar::authoring_definition_single_value(
+                AuthoringKind::SpriteConfig,
+                "selector",
+                &line.content,
+            )
+            .ok()
+            .flatten()
+        })
 }
 
 fn outline_block_policy(block: &SurfaceStructuralBlock) -> Option<AuthoringOutlinePolicy> {
@@ -310,10 +371,38 @@ Light
             labels,
             vec![
                 (0, "sprites".to_string(), "sprites".to_string()),
-                (1, "Player".to_string(), "Player".to_string()),
-                (1, "Wall".to_string(), "Wall #000".to_string()),
-                (1, "Crate".to_string(), "Crate".to_string()),
-                (1, "Light".to_string(), "Light".to_string()),
+                (1, "sprite".to_string(), "Player".to_string()),
+                (1, "sprite".to_string(), "Wall".to_string()),
+                (1, "sprite".to_string(), "Crate".to_string()),
+                (1, "sprite".to_string(), "Light".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn source_outline_names_explicit_sprite_entries_by_selector() {
+        let source = r#"
+sprites {
+  sprite {
+    selector = Sugar:flavor
+    colors = #f5f5f5
+  }
+  sprite {
+    selector Honey
+    colors = #e3a018
+  }
+}
+"#;
+        let items = source_outline(source)
+            .into_iter()
+            .map(|item| (item.depth, item.kind, item.label))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            items,
+            vec![
+                (0, "sprites".to_string(), "sprites".to_string()),
+                (1, "sprite".to_string(), "Sugar:flavor".to_string()),
+                (1, "sprite".to_string(), "Honey".to_string()),
             ]
         );
     }

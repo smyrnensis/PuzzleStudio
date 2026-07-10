@@ -73,6 +73,7 @@ fn assert_imported_output_uses_current_canonical_surface(source: &str) {
     }
     for forbidden in [
         "\nobjects {",
+        "\nsprite {",
         "\ncollisionlayers",
         "\ntransitions {",
         "\nmain {",
@@ -171,6 +172,48 @@ fn translates_basic_vanilla_puzzlescript_to_canonical_fixture() {
 }
 
 #[test]
+fn puzzlescript_import_omits_background_from_level_legend() {
+    let source = r#"
+title Background Legend
+
+OBJECTS
+
+Background
+black
+
+Player
+blue
+
+LEGEND
+
+. = Background
+P = Background and Player
+
+COLLISIONLAYERS
+
+Background
+Player
+
+LEVELS
+
+.P
+"#;
+
+    let translated = translate_puzzlescript_to_canonical(source).unwrap();
+
+    assert!(
+        translated.contains("levels {\nlegend {\n. = empty\nP = Player\n}"),
+        "{translated}"
+    );
+    assert!(!translated.contains("\n. = Background"));
+    assert!(!translated.contains("\nP = Background Player"));
+    assert!(
+        translated.contains("on_level_start {\nonce_all [ no Background ] -> [ Background ]\n}")
+    );
+    parse_game(&translated).expect("background-filled imported game should parse");
+}
+
+#[test]
 fn translated_basic_vanilla_puzzlescript_parses_as_loaded_game() {
     let source = include_str!("fixtures/puzzlescript/basic_sokoban.ps");
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
@@ -227,7 +270,7 @@ fn translated_basic_vanilla_puzzlescript_parses_as_loaded_game() {
     );
     assert_eq!(
         loaded.goal.as_ref().map(|goal| goal.description.as_str()),
-        Some("no [ Target no Crate ]")
+        Some("all Target on Crate")
     );
 }
 
@@ -430,8 +473,8 @@ LEVELS
 P
 "##;
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
-    assert!(translated.contains("selector = Background\ncolors = #9CBD0F"));
-    assert!(!translated.contains("selector = Background\ncolors = #9CBD0F\nshape ="));
+    assert!(translated.contains("Background\n#9CBD0F"));
+    assert!(!translated.contains("Background\n#9CBD0F\nshape ="));
     assert!(
         translated.contains("on_level_start {\nonce_all [ no Background ] -> [ Background ]\n}")
     );
@@ -499,10 +542,8 @@ P12
 
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
 
-    assert!(translated.contains(
-        "selector = pcrate1\ncolors = #800080\nshape =\n00000\n0...0\n0...0\n0...0\n00000"
-    ));
-    assert!(translated.contains("selector = pcrate2"));
+    assert!(translated.contains("pcrate1\n#800080\n00000\n0...0\n0...0\n0...0\n00000"));
+    assert!(translated.contains("pcrate2\n#ffff00"));
     assert!(!translated.contains("00000\npcrate2"));
     parse_game(&translated).unwrap();
 }
@@ -844,8 +885,8 @@ P
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
 
     assert!(translated.contains("groups {\nplayer = Player_u Player_d\n}"));
-    assert!(translated.contains("input directions [ player ] -> [ > player ]"));
-    assert!(!translated.contains("input directions [ Player ]"));
+    assert!(translated.contains("input [ player ] -> [ > player ]"));
+    assert!(!translated.contains("input [ Player ]"));
     parse_game(&translated).unwrap();
 }
 
@@ -965,9 +1006,9 @@ PtC
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
 
     assert!(translated.contains("groups {\ncrate = Crate CrateW\n}"));
-    assert!(translated.contains("no [ TargetCrate no crate ]"));
+    assert!(translated.contains("all TargetCrate on crate"));
     assert!(translated.contains("[ TargetCrate crate ] -> [ TargetCrate crate ]"));
-    assert!(!translated.contains("no [ TargetCrate no Crate ]"));
+    assert!(!translated.contains("all TargetCrate on Crate"));
     parse_game(&translated).unwrap();
 }
 
@@ -1207,7 +1248,7 @@ fn imports_puzzlescript_next_teneten_sample_as_current_canonical_syntax() {
 
     assert!(translated.contains("title = \"TENETEN\""));
     assert!(translated.contains("layers {\nlayer1 = Background\n"));
-    assert!(translated.contains("no [ TargetCrate no crate ]"));
+    assert!(translated.contains("all TargetCrate on crate"));
     assert!(translated.contains("level \"1\""));
     assert!(translated.lines().any(|line| line == "message \"1\""));
     assert!(translated.contains("message \"Thank you for playing!\""));
@@ -1220,9 +1261,7 @@ fn imports_puzzlescript_next_teneten_sample_as_current_canonical_syntax() {
     );
     assert!(!translated.contains("[ You:F Count:0 no Checked ] -> [ You:B Count:3 Checked ]"));
     assert!(translated.contains("shape_You_F {"));
-    assert!(
-        translated.contains("selector = You:B\ncolors = #000 #fff #00000015\nshape = shape_You_F")
-    );
+    assert!(translated.contains("You:B\n#000 #fff #00000015\nshape_You_F"));
     assert!(!translated.contains("You:B {"));
     assert!(translated.contains("choice \"Level Select\" -> goto level_select"));
     assert!(translated.contains("scene level_select {\nlayout {\nlevel_menu {"));
@@ -1316,7 +1355,7 @@ LEVELS
     assert!(translated.contains("routine main once {\n[ Wall ] -> [ Player ]\nmove\n}"));
     assert!(translated.contains("on_level_start {\n"));
     assert!(translated.contains("main\n}"));
-    assert!(translated.contains("rules {\ninput directions [ Player ] -> [ > Player ]\nmain\n}"));
+    assert!(translated.contains("rules {\ninput [ Player ] -> [ > Player ]\nmain\n}"));
     assert!(!translated.contains("run_rules_on_level_start"));
 
     let loaded = parse_game(&translated).unwrap();

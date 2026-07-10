@@ -479,7 +479,8 @@ pub struct VisualAliasDef {
 pub struct VisualSpriteDef {
     pub name: String,
     pub kind: VisualSpriteKind,
-    pub offset: VisualSpriteOffset,
+    #[serde(default)]
+    pub transforms: Vec<VisualSpriteTransform>,
     pub fit: VisualSpriteFit,
     pub sampling: Option<VisualSpriteSampling>,
     #[serde(default)]
@@ -494,10 +495,12 @@ pub struct VisualSpriteLoopDef {
     pub frames: Vec<Vec<String>>,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct VisualSpriteOffset {
-    pub x: f64,
-    pub y: f64,
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum VisualSpriteTransform {
+    Rotate { degrees: f64 },
+    Translate { x: f64, y: f64 },
+    Flip { enabled: bool },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -644,6 +647,10 @@ pub enum GoalValue {
     Variable(VariableId),
     Condition(ConditionId),
     InlineConditionValue(ConditionValueKind),
+    AllObjectsOn {
+        subjects: Vec<ObjectId>,
+        covers: Vec<ObjectId>,
+    },
 }
 
 pub type SolverStrategy = SolverStrategyOf<QueryExpr>;
@@ -660,11 +667,49 @@ pub type QueryExpr3 = QueryExprOf<
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SolverStrategyOf<Query> {
     pub terms: Vec<SolverStrategyTermOf<Query>>,
+    #[serde(default = "empty_solver_deadends")]
+    pub deadends: Vec<SolverDeadendOf<Query>>,
+}
+
+fn empty_solver_deadends<Query>() -> Vec<SolverDeadendOf<Query>> {
+    Vec::new()
 }
 
 impl<Query> Default for SolverStrategyOf<Query> {
     fn default() -> Self {
-        Self { terms: Vec::new() }
+        Self {
+            terms: Vec::new(),
+            deadends: Vec::new(),
+        }
+    }
+}
+
+impl<Query> SolverStrategyOf<Query> {
+    pub fn has_deadend_with(&self, mut evaluate: impl FnMut(&Query) -> bool) -> bool {
+        self.deadends
+            .iter()
+            .any(|deadend| deadend.is_met_with(&mut evaluate))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SolverDeadendOf<Query> {
+    All(Vec<Query>),
+    Any(Vec<Query>),
+}
+
+impl<Query> SolverDeadendOf<Query> {
+    pub fn values(&self) -> &[Query] {
+        match self {
+            Self::All(values) | Self::Any(values) => values,
+        }
+    }
+
+    fn is_met_with(&self, evaluate: &mut impl FnMut(&Query) -> bool) -> bool {
+        match self {
+            Self::All(values) => values.iter().all(evaluate),
+            Self::Any(values) => values.iter().any(evaluate),
+        }
     }
 }
 
@@ -847,7 +892,12 @@ impl LoadedGame {
         self.object_labels
             .get(&object)
             .map(String::as_str)
-            .unwrap_or("?")
+            .unwrap_or_else(|| {
+                panic!(
+                    "compiled object {} is missing its required object label",
+                    object.0
+                )
+            })
     }
 
     pub fn is_goal_complete(&self, state: &State) -> bool {
@@ -905,6 +955,21 @@ fn eval_goal_value(game: &CompiledGame, state: &State, value: &GoalValue) -> i64
             .map(|condition| eval_goal_condition_value_kind(game, state, &condition.kind))
             .unwrap_or(0),
         GoalValue::InlineConditionValue(kind) => eval_goal_condition_value_kind(game, state, kind),
+        GoalValue::AllObjectsOn { subjects, covers } => {
+            if subjects.iter().all(|subject| {
+                state.object_positions(*subject).iter().all(|slot| {
+                    state.slot_position(*slot).is_some_and(|(x, y)| {
+                        covers
+                            .iter()
+                            .any(|cover| state.has_object(game, x, y, *cover))
+                    })
+                })
+            }) {
+                1
+            } else {
+                0
+            }
+        }
     }
 }
 

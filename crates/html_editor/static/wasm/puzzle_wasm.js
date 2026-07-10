@@ -128,6 +128,226 @@ if (Symbol.dispose) WasmCompiledCoreRuntime.prototype[Symbol.dispose] = WasmComp
 
 /**
  * @param {string} source
+ * @returns {number}
+ */
+export function activate_source_analysis(source) {
+    const ptr0 = passStringToWasm0(source, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.activate_source_analysis(ptr0, len0);
+    return ret >>> 0;
+}
+
+/**
+ * @param {number} revision
+ * @returns {string}
+ */
+export function active_source_analysis_entries_json(revision) {
+    let deferred2_0;
+    let deferred2_1;
+    try {
+        const ret = wasm.active_source_analysis_entries_json(revision);
+        var ptr1 = ret[0];
+        var len1 = ret[1];
+        if (ret[3]) {
+            ptr1 = 0; len1 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred2_0 = ptr1;
+        deferred2_1 = len1;
+        return getStringFromWasm0(ptr1, len1);
+    } finally {
+        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+    }
+}
+
+/**
+ * @param {number} revision
+ * @param {boolean} include_outline
+ * @returns {string}
+ */
+export function active_source_analysis_highlight_json(revision, include_outline) {
+    let deferred2_0;
+    let deferred2_1;
+    try {
+        const ret = wasm.active_source_analysis_highlight_json(revision, include_outline);
+        var ptr1 = ret[0];
+        var len1 = ret[1];
+        if (ret[3]) {
+            ptr1 = 0; len1 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred2_0 = ptr1;
+        deferred2_1 = len1;
+        return getStringFromWasm0(ptr1, len1);
+    } finally {
+        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+    }
+}
+
+/**
+ * @param {number} revision
+ * @returns {string}
+ */
+export function active_source_analysis_json(revision) {
+    let deferred2_0;
+    let deferred2_1;
+    try {
+        const ret = wasm.active_source_analysis_json(revision);
+        var ptr1 = ret[0];
+        var len1 = ret[1];
+        if (ret[3]) {
+            ptr1 = 0; len1 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred2_0 = ptr1;
+        deferred2_1 = len1;
+        return getStringFromWasm0(ptr1, len1);
+    } finally {
+        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+    }
+}
+
+/**
+ * Returns a typed object-ID buffer for one integrated level state. Pass `-1` for
+ * the composite state, otherwise pass the authored ASCII layer index.
+ * @param {number} revision
+ * @param {number} level_index
+ * @param {number} authored_layer
+ * @returns {Uint32Array}
+ */
+export function active_source_analysis_level_editor_level_slots(revision, level_index, authored_layer) {
+    const ret = wasm.active_source_analysis_level_editor_level_slots(revision, level_index, authored_layer);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v1 = getArrayU32FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+    return v1;
+}
+
+/**
+ * Returns level-editor metadata for the active source snapshot. Board cells and
+ * sprite payloads deliberately travel through their own on-demand exports.
+ * @param {number} revision
+ * @returns {string}
+ */
+export function active_source_analysis_level_editor_manifest_json(revision) {
+    let deferred2_0;
+    let deferred2_1;
+    try {
+        const ret = wasm.active_source_analysis_level_editor_manifest_json(revision);
+        var ptr1 = ret[0];
+        var len1 = ret[1];
+        if (ret[3]) {
+            ptr1 = 0; len1 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred2_0 = ptr1;
+        deferred2_1 = len1;
+        return getStringFromWasm0(ptr1, len1);
+    } finally {
+        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+    }
+}
+
+/**
+ * Returns one renderer-ready sprite payload by canonical object ID.
+ * @param {number} revision
+ * @param {number} object_id
+ * @returns {string}
+ */
+export function active_source_analysis_level_editor_sprite_json(revision, object_id) {
+    let deferred2_0;
+    let deferred2_1;
+    try {
+        const ret = wasm.active_source_analysis_level_editor_sprite_json(revision, object_id);
+        var ptr1 = ret[0];
+        var len1 = ret[1];
+        if (ret[3]) {
+            ptr1 = 0; len1 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred2_0 = ptr1;
+        deferred2_1 = len1;
+        return getStringFromWasm0(ptr1, len1);
+    } finally {
+        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+    }
+}
+
+/**
+ * @param {number} revision
+ * @returns {string}
+ */
+export function active_source_analysis_outline_json(revision) {
+    let deferred2_0;
+    let deferred2_1;
+    try {
+        const ret = wasm.active_source_analysis_outline_json(revision);
+        var ptr1 = ret[0];
+        var len1 = ret[1];
+        if (ret[3]) {
+            ptr1 = 0; len1 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred2_0 = ptr1;
+        deferred2_1 = len1;
+        return getStringFromWasm0(ptr1, len1);
+    } finally {
+        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+    }
+}
+
+/**
+ * @param {number} revision
+ * @param {number} cursor_utf16_offset
+ * @returns {string}
+ */
+export function active_source_analysis_resolve_source_target(revision, cursor_utf16_offset) {
+    let deferred2_0;
+    let deferred2_1;
+    try {
+        const ret = wasm.active_source_analysis_resolve_source_target(revision, cursor_utf16_offset);
+        var ptr1 = ret[0];
+        var len1 = ret[1];
+        if (ret[3]) {
+            ptr1 = 0; len1 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred2_0 = ptr1;
+        deferred2_1 = len1;
+        return getStringFromWasm0(ptr1, len1);
+    } finally {
+        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+    }
+}
+
+/**
+ * @param {number} revision
+ * @param {number} cursor_utf16_offset
+ * @returns {string}
+ */
+export function active_source_analysis_suggest_source_completions(revision, cursor_utf16_offset) {
+    let deferred2_0;
+    let deferred2_1;
+    try {
+        const ret = wasm.active_source_analysis_suggest_source_completions(revision, cursor_utf16_offset);
+        var ptr1 = ret[0];
+        var len1 = ret[1];
+        if (ret[3]) {
+            ptr1 = 0; len1 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred2_0 = ptr1;
+        deferred2_1 = len1;
+        return getStringFromWasm0(ptr1, len1);
+    } finally {
+        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+    }
+}
+
+/**
+ * @param {string} source
  * @param {string} puzzle_path
  * @param {string} game_css
  * @param {string} game_visuals_js
@@ -158,17 +378,6 @@ export function compile_preview(source, puzzle_path, game_css, game_visuals_js) 
     } finally {
         wasm.__wbindgen_free(deferred6_0, deferred6_1, 1);
     }
-}
-
-/**
- * @param {string} source
- * @returns {number}
- */
-export function create_source_analysis_handle(source) {
-    const ptr0 = passStringToWasm0(source, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.create_source_analysis_handle(ptr0, len0);
-    return ret >>> 0;
 }
 
 /**
@@ -208,16 +417,6 @@ export function export_html(source, puzzle_path, game_css, game_visuals_js, game
         return getStringFromWasm0(ptr7, len7);
     } finally {
         wasm.__wbindgen_free(deferred8_0, deferred8_1, 1);
-    }
-}
-
-/**
- * @param {number} handle
- */
-export function free_source_analysis_handle(handle) {
-    const ret = wasm.free_source_analysis_handle(handle);
-    if (ret[1]) {
-        throw takeFromExternrefTable0(ret[0]);
     }
 }
 
@@ -385,147 +584,6 @@ export function solver_task_initial_display_state_json(request_json) {
 }
 
 /**
- * @param {number} handle
- * @returns {string}
- */
-export function source_analysis_entries_json(handle) {
-    let deferred2_0;
-    let deferred2_1;
-    try {
-        const ret = wasm.source_analysis_entries_json(handle);
-        var ptr1 = ret[0];
-        var len1 = ret[1];
-        if (ret[3]) {
-            ptr1 = 0; len1 = 0;
-            throw takeFromExternrefTable0(ret[2]);
-        }
-        deferred2_0 = ptr1;
-        deferred2_1 = len1;
-        return getStringFromWasm0(ptr1, len1);
-    } finally {
-        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
-    }
-}
-
-/**
- * @param {number} handle
- * @param {boolean} include_outline
- * @returns {string}
- */
-export function source_analysis_highlight_json(handle, include_outline) {
-    let deferred2_0;
-    let deferred2_1;
-    try {
-        const ret = wasm.source_analysis_highlight_json(handle, include_outline);
-        var ptr1 = ret[0];
-        var len1 = ret[1];
-        if (ret[3]) {
-            ptr1 = 0; len1 = 0;
-            throw takeFromExternrefTable0(ret[2]);
-        }
-        deferred2_0 = ptr1;
-        deferred2_1 = len1;
-        return getStringFromWasm0(ptr1, len1);
-    } finally {
-        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
-    }
-}
-
-/**
- * @param {number} handle
- * @returns {string}
- */
-export function source_analysis_json(handle) {
-    let deferred2_0;
-    let deferred2_1;
-    try {
-        const ret = wasm.source_analysis_json(handle);
-        var ptr1 = ret[0];
-        var len1 = ret[1];
-        if (ret[3]) {
-            ptr1 = 0; len1 = 0;
-            throw takeFromExternrefTable0(ret[2]);
-        }
-        deferred2_0 = ptr1;
-        deferred2_1 = len1;
-        return getStringFromWasm0(ptr1, len1);
-    } finally {
-        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
-    }
-}
-
-/**
- * @param {number} handle
- * @returns {string}
- */
-export function source_analysis_outline_json(handle) {
-    let deferred2_0;
-    let deferred2_1;
-    try {
-        const ret = wasm.source_analysis_outline_json(handle);
-        var ptr1 = ret[0];
-        var len1 = ret[1];
-        if (ret[3]) {
-            ptr1 = 0; len1 = 0;
-            throw takeFromExternrefTable0(ret[2]);
-        }
-        deferred2_0 = ptr1;
-        deferred2_1 = len1;
-        return getStringFromWasm0(ptr1, len1);
-    } finally {
-        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
-    }
-}
-
-/**
- * @param {number} handle
- * @param {number} cursor_offset
- * @returns {string}
- */
-export function source_analysis_resolve_source_target(handle, cursor_offset) {
-    let deferred2_0;
-    let deferred2_1;
-    try {
-        const ret = wasm.source_analysis_resolve_source_target(handle, cursor_offset);
-        var ptr1 = ret[0];
-        var len1 = ret[1];
-        if (ret[3]) {
-            ptr1 = 0; len1 = 0;
-            throw takeFromExternrefTable0(ret[2]);
-        }
-        deferred2_0 = ptr1;
-        deferred2_1 = len1;
-        return getStringFromWasm0(ptr1, len1);
-    } finally {
-        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
-    }
-}
-
-/**
- * @param {number} handle
- * @param {number} cursor_offset
- * @returns {string}
- */
-export function source_analysis_suggest_source_completions(handle, cursor_offset) {
-    let deferred2_0;
-    let deferred2_1;
-    try {
-        const ret = wasm.source_analysis_suggest_source_completions(handle, cursor_offset);
-        var ptr1 = ret[0];
-        var len1 = ret[1];
-        if (ret[3]) {
-            ptr1 = 0; len1 = 0;
-            throw takeFromExternrefTable0(ret[2]);
-        }
-        deferred2_0 = ptr1;
-        deferred2_1 = len1;
-        return getStringFromWasm0(ptr1, len1);
-    } finally {
-        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
-    }
-}
-
-/**
  * @param {string} source
  * @returns {string}
  */
@@ -611,8 +669,21 @@ function addToExternrefTable0(obj) {
     return idx;
 }
 
+function getArrayU32FromWasm0(ptr, len) {
+    ptr = ptr >>> 0;
+    return getUint32ArrayMemory0().subarray(ptr / 4, ptr / 4 + len);
+}
+
 function getStringFromWasm0(ptr, len) {
     return decodeText(ptr >>> 0, len);
+}
+
+let cachedUint32ArrayMemory0 = null;
+function getUint32ArrayMemory0() {
+    if (cachedUint32ArrayMemory0 === null || cachedUint32ArrayMemory0.byteLength === 0) {
+        cachedUint32ArrayMemory0 = new Uint32Array(wasm.memory.buffer);
+    }
+    return cachedUint32ArrayMemory0;
 }
 
 let cachedUint8ArrayMemory0 = null;
@@ -709,6 +780,7 @@ function __wbg_finalize_init(instance, module) {
     wasmInstance = instance;
     wasm = instance.exports;
     wasmModule = module;
+    cachedUint32ArrayMemory0 = null;
     cachedUint8ArrayMemory0 = null;
     wasm.__wbindgen_start();
     return wasm;

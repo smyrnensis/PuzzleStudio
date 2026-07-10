@@ -3,6 +3,9 @@ use crate::completion::{
     completion_list_json,
 };
 use crate::highlight::{HighlightedSourceWithOutline, highlight_source_with_document};
+use crate::level_editor_source::{
+    level_editor_level_slots, level_editor_manifest_json, level_editor_sprite_payload_json,
+};
 use crate::source_outline::{SourceOutlineItem, source_outline_from_document};
 use crate::source_target::{
     SourceTarget, resolve_source_entries_from_document, resolve_source_target_from_entries,
@@ -11,6 +14,7 @@ use crate::source_target::{
 use crate::surface::{SurfaceCompletionSymbols, SurfaceDocument};
 use crate::surface_completion::surface_completion_context_for_document;
 use std::cell::OnceCell;
+use std::fmt;
 
 /// Parser-owned source analysis shared by editor-facing derived products.
 ///
@@ -18,7 +22,6 @@ use std::cell::OnceCell;
 /// highlighting, outline, completion, source entries, and source target lookup
 /// are derived from the same parsed surface document instead of rebuilding
 /// independent documents per query.
-#[derive(Clone, Debug)]
 pub struct SourceAnalysis {
     source: String,
     structure_document: OnceCell<SurfaceDocument>,
@@ -27,6 +30,24 @@ pub struct SourceAnalysis {
     completion_symbols: OnceCell<SurfaceCompletionSymbols>,
     entries: OnceCell<Vec<SourceTarget>>,
     outline: OnceCell<Vec<SourceOutlineItem>>,
+    level_editor_integration: OnceCell<Result<crate::LevelEditorIntegration, String>>,
+}
+
+impl Clone for SourceAnalysis {
+    fn clone(&self) -> Self {
+        // Cached parser products are implementation detail; cloning preserves the
+        // source snapshot while keeping each analysis cache independently lazy.
+        Self::new(&self.source)
+    }
+}
+
+impl fmt::Debug for SourceAnalysis {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SourceAnalysis")
+            .field("source", &self.source)
+            .finish_non_exhaustive()
+    }
 }
 
 impl SourceAnalysis {
@@ -40,6 +61,7 @@ impl SourceAnalysis {
             completion_symbols: OnceCell::new(),
             entries: OnceCell::new(),
             outline: OnceCell::new(),
+            level_editor_integration: OnceCell::new(),
         }
     }
 
@@ -81,6 +103,16 @@ impl SourceAnalysis {
         self.outline
             .get_or_init(|| source_outline_from_document(self.structure_document()))
             .as_slice()
+    }
+
+    fn level_editor_integration(&self) -> Result<&crate::LevelEditorIntegration, String> {
+        self.level_editor_integration
+            .get_or_init(|| {
+                crate::integrate_level_editor_authoring(&self.source)
+                    .map_err(|report| report.to_string())
+            })
+            .as_ref()
+            .map_err(Clone::clone)
     }
 
     /// Produces highlighting and outline from this analysis document.
@@ -145,6 +177,29 @@ impl SourceAnalysis {
     /// Emits source entries JSON from the entries captured by this analysis.
     pub fn entries_json(&self) -> String {
         source_entries_json_from_entries(self.entries())
+    }
+
+    /// Emits level-editor metadata without transferring per-cell state or every sprite.
+    pub fn level_editor_manifest_json(&self) -> Result<String, String> {
+        level_editor_manifest_json(self.level_editor_integration()?, self.entries())
+    }
+
+    /// Returns a compact object-ID slot buffer for one level state.
+    pub fn level_editor_level_slots(
+        &self,
+        level_index: usize,
+        authored_layer: Option<usize>,
+    ) -> Result<Vec<u32>, String> {
+        level_editor_level_slots(
+            self.level_editor_integration()?,
+            level_index,
+            authored_layer,
+        )
+    }
+
+    /// Returns one renderer-ready sprite payload on demand.
+    pub fn level_editor_sprite_payload_json(&self, object_id: u16) -> Result<String, String> {
+        level_editor_sprite_payload_json(self.level_editor_integration()?, object_id)
     }
 }
 
@@ -339,6 +394,123 @@ mod tests {
         assert!(json.contains("\"outline\":{\"items\":["));
         assert!(json.contains("\"entries\":["));
         assert!(json.contains("\"kind\":\"level\""));
+    }
+
+    #[test]
+    fn level_editor_contract_uses_parser_products_without_compiling_routines() {
+        let source = r#"
+title = move_requires_explicit_routine
+
+puzzle default {
+layers {
+actor = Box
+marker = Marker
+}
+rules {
+move
+}
+}
+sprites {
+Box {
+#fff
+0
+}
+}
+levels {
+legend {
+B = Box
+M = Marker
+. = empty
+}
+level "start"
+B
++
+M
+}
+"#;
+        let analysis = analyze_source(source);
+        let json = analysis
+            .level_editor_manifest_json()
+            .expect("level editor manifest must not compile routines");
+
+        assert!(json.contains(r#""kind":"puzzle2d-level-editor""#));
+        assert!(json.contains(r#""id":1,"layer":0,"name":"Box""#));
+        assert!(json.contains(r#""objectIds":[1],"symbol":"B""#));
+        assert!(json.contains(r#""name":"start""#));
+        assert!(
+            !json.contains("slots"),
+            "manifest must not transfer board cells: {json}"
+        );
+        assert!(
+            !json.contains("sprites"),
+            "manifest must not transfer sprite definitions: {json}"
+        );
+        assert_eq!(
+            analysis.level_editor_level_slots(0, None).unwrap(),
+            vec![1, 2]
+        );
+        assert_eq!(
+            analysis.level_editor_level_slots(0, Some(0)).unwrap(),
+            vec![1, 0]
+        );
+        assert_eq!(
+            analysis.level_editor_level_slots(0, Some(1)).unwrap(),
+            vec![0, 2]
+        );
+        let sprite = analysis.level_editor_sprite_payload_json(1).unwrap();
+        assert!(
+            sprite.contains(r##""colors":{"0":"#fff"}"##),
+            "unexpected sprite: {sprite}"
+        );
+    }
+
+    #[test]
+    fn level_editor_manifest_keeps_parser_legend_diagnostics_without_failing_the_session() {
+        let source = "puzzle default {\nlayers {\nactor = Box\n}\n}\nlevels {\nlegend {\nX = Missing\n. = empty\n}\nlevel \"one\"\nX\n}\n";
+        let manifest = analyze_source(source)
+            .level_editor_manifest_json()
+            .expect("invalid legend must remain visible to the level editor");
+
+        assert!(
+            manifest.contains("unknown object selector: X = Missing"),
+            "unexpected parser diagnostic: {manifest}"
+        );
+    }
+
+    #[test]
+    fn level_editor_manifest_keeps_levels_when_a_sprite_is_invalid() {
+        let source = r#"
+puzzle default {
+layers {
+actor = Box
+}
+rules {
+move
+}
+}
+sprites {
+Box {
+unknown nope
+}
+}
+levels {
+legend {
+B = Box
+. = empty
+}
+level "one"
+B
+}
+"#;
+        let manifest = analyze_source(source)
+            .level_editor_manifest_json()
+            .expect("sprite diagnostics must not stop the level editor session");
+
+        assert!(
+            manifest.contains("solid sprite requires exactly one color"),
+            "{manifest}"
+        );
+        assert!(manifest.contains(r#""name":"one""#), "{manifest}");
     }
 
     #[test]

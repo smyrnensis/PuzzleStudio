@@ -150,10 +150,6 @@ impl SurfaceVisualSpriteRefs {
         self.color_names.contains(value)
     }
 
-    pub(crate) fn contains_shape(&self, value: &str) -> bool {
-        self.shape_names.contains(value)
-    }
-
     pub(crate) fn merge(&mut self, other: SurfaceVisualSpriteRefs) {
         self.color_names.extend(other.color_names);
         self.shape_names.extend(other.shape_names);

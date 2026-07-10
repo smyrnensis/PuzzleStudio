@@ -1467,10 +1467,11 @@ sprite {
 selector = Box
 colors = #123456 #abcdef
 duration = 120ms
-shape =
+shape = {
 01
 >
 10
+}
 }
 }
 rules {

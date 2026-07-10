@@ -608,7 +608,32 @@ pub fn split_object_spec(token: &str) -> Option<(&str, impl Iterator<Item = &str
 }
 
 pub fn split_header_tokens(line: &str) -> Vec<&str> {
-    let mut tokens = line.split_whitespace().collect::<Vec<_>>();
+    let mut tokens = Vec::new();
+    let mut start = None::<usize>;
+    let mut paren_depth = 0_u16;
+    for (index, ch) in line.char_indices() {
+        match ch {
+            '(' => {
+                start.get_or_insert(index);
+                paren_depth += 1;
+            }
+            ')' => {
+                start.get_or_insert(index);
+                paren_depth = paren_depth.saturating_sub(1);
+            }
+            ch if ch.is_whitespace() && paren_depth == 0 => {
+                if let Some(token_start) = start.take() {
+                    tokens.push(&line[token_start..index]);
+                }
+            }
+            _ => {
+                start.get_or_insert(index);
+            }
+        }
+    }
+    if let Some(token_start) = start {
+        tokens.push(&line[token_start..]);
+    }
     if tokens.len() > 1 && tokens.last().copied() == Some("{") {
         tokens.pop();
     }
@@ -1281,17 +1306,21 @@ pub fn rule_line_surface_spans(line: &str) -> Result<RuleLineSurfaceSpans, RuleL
             rewrite: rest,
         });
     }
-    let tokens = header_token_spans(line, rest.clone());
-    let Some(orientation) = tokens.first() else {
+    let Some(pattern_offset) = line[rest.clone()].find('[') else {
         return Err(RuleLineSurfaceError::MissingOrientation);
     };
-    let rewrite = trim_start_range(line, orientation.range.end..rest.end);
+    let rewrite_start = rest.start + pattern_offset;
+    let orientation = trim_end_range(line, rest.start..rewrite_start);
+    if orientation.is_empty() {
+        return Err(RuleLineSurfaceError::MissingOrientation);
+    }
+    let rewrite = rewrite_start..rest.end;
     if !line[rewrite.clone()].starts_with('[') {
         return Err(RuleLineSurfaceError::RewriteMustStartWithPattern);
     }
     Ok(RuleLineSurfaceSpans::OrientedRewrite {
         application,
-        orientation: orientation.range.clone(),
+        orientation,
         rewrite,
     })
 }
@@ -1766,6 +1795,22 @@ fn trim_start_range(line: &str, range: Range<usize>) -> Range<usize> {
     start..range.end
 }
 
+fn trim_end_range(line: &str, range: Range<usize>) -> Range<usize> {
+    let end = line[range.clone()]
+        .rfind(|ch: char| !ch.is_whitespace())
+        .map(|offset| {
+            let index = range.start + offset;
+            index
+                + line[index..]
+                    .chars()
+                    .next()
+                    .map(char::len_utf8)
+                    .unwrap_or(0)
+        })
+        .unwrap_or(range.start);
+    range.start..end
+}
+
 fn word_boundary_before(value: &str, index: usize) -> bool {
     value[..index]
         .chars()
@@ -1956,6 +2001,14 @@ pub fn split_cell_tokens(cell: &str) -> Result<Vec<String>, CellTokenError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn split_header_tokens_keeps_parenthesized_values_together() {
+        assert_eq!(
+            split_header_tokens("legend b = Ball:(0, 1):red"),
+            ["legend", "b", "=", "Ball:(0, 1):red"]
+        );
+    }
 
     #[test]
     fn new_puzzle_source_is_blank() {
@@ -2226,14 +2279,14 @@ mod tests {
             )
         );
         let dense_multiline = vec![
-            "right:up [ Player".to_string(),
+            "(right, up) [ Player".to_string(),
             "Box ] -> [ Player".to_string(),
             "Box ]".to_string(),
         ];
         assert_eq!(
             collect_rule_statement_line(&dense_multiline, 0),
             (
-                "right:up [ Player ; Box ] -> [ Player ; Box ]".to_string(),
+                "(right, up) [ Player ; Box ] -> [ Player ; Box ]".to_string(),
                 3,
             )
         );
@@ -2270,6 +2323,22 @@ mod tests {
                 application: Some(RuleApplicationSurface::Repeat),
                 orientation: "right",
                 rewrite: "[ Player ] -> [ > Player ]",
+            }
+        );
+        assert_eq!(
+            rule_line_surface("right, front [ Player ] -> [ Player ]").unwrap(),
+            RuleLineSurface::OrientedRewrite {
+                application: None,
+                orientation: "right, front",
+                rewrite: "[ Player ] -> [ Player ]",
+            }
+        );
+        assert_eq!(
+            rule_line_surface("(right, front) [ Player ] -> [ Player ]").unwrap(),
+            RuleLineSurface::OrientedRewrite {
+                application: None,
+                orientation: "(right, front)",
+                rewrite: "[ Player ] -> [ Player ]",
             }
         );
         assert_eq!(

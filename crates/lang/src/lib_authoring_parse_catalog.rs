@@ -223,7 +223,10 @@ fn record_surface_completion_value_set(name: &str, values: &[&str], sink: &mut S
         .filter(|value| surface_catalog_identifier(value))
         .map(|value| (*value).to_string())
         .collect::<Vec<_>>();
-    if values.iter().all(|value| surface_completion_direction_value(value)) {
+    if values
+        .iter()
+        .all(|value| surface_completion_direction_value(value))
+    {
         symbols.direction_sets.insert(name.to_string());
     }
     symbols.object_name_atoms.extend(values.iter().cloned());
@@ -349,7 +352,8 @@ fn record_authoring_content_completion_line(
         .map(|token| token.text.as_str())
         .collect::<Vec<_>>()
         .join(" ");
-    let Ok(Some(row)) = crate::authoring_grammar::parse_authoring_content_row(content, &line) else {
+    let Ok(Some(row)) = crate::authoring_grammar::parse_authoring_content_row(content, &line)
+    else {
         return false;
     };
     if let Some(values) = crate::authoring_grammar::authoring_capture_values(&row.captures, "path")
@@ -521,21 +525,34 @@ fn record_parser_catalog_completion_symbols(catalog: &Catalog, sink: &mut Surfac
             .cloned(),
     );
     symbols.groups.extend(catalog.object_groups.keys().cloned());
-    symbols.inputs.extend(catalog.input_labels.values().cloned());
-    symbols.states.extend(catalog.variable_labels.values().cloned());
+    symbols
+        .inputs
+        .extend(catalog.input_labels.values().cloned());
+    symbols
+        .states
+        .extend(catalog.variable_labels.values().cloned());
     symbols
         .condition_defs
         .extend(catalog.condition_labels.values().cloned());
     for (name, values) in &catalog.value_sets {
         symbols.value_set_names.insert(name.clone());
-        symbols.value_sets.entry(name.clone()).or_insert(values.clone());
+        symbols
+            .value_sets
+            .entry(name.clone())
+            .or_insert(values.clone());
         symbols.object_name_atoms.extend(values.iter().cloned());
-        if values.iter().all(|value| surface_completion_direction_value(value)) {
+        if values
+            .iter()
+            .all(|value| surface_completion_direction_value(value))
+        {
             symbols.direction_sets.insert(name.clone());
         }
     }
     for (object, axes) in &catalog.object_axes {
-        symbols.object_axes.entry(object.clone()).or_insert(axes.clone());
+        symbols
+            .object_axes
+            .entry(object.clone())
+            .or_insert(axes.clone());
         symbols.object_name_atoms.extend(axes.iter().cloned());
     }
     for name in catalog.mark_names.keys() {
@@ -550,11 +567,15 @@ fn normalize_surface_completion_symbols(sink: &mut SurfaceSink) {
     let value_set_names = symbols.value_set_names.iter().cloned().collect::<Vec<_>>();
     let group_names = symbols.groups.iter().cloned().collect::<Vec<_>>();
     for name in value_set_names {
-        sink.completion_symbols_mut().object_name_atoms.remove(&name);
+        sink.completion_symbols_mut()
+            .object_name_atoms
+            .remove(&name);
     }
     for name in group_names {
         sink.completion_symbols_mut().objects.remove(&name);
-        sink.completion_symbols_mut().object_name_atoms.remove(&name);
+        sink.completion_symbols_mut()
+            .object_name_atoms
+            .remove(&name);
     }
 }
 
@@ -745,7 +766,13 @@ fn record_parser_resolved_surface_tokens(
         record_parser_resolved_layer_surface_tokens(line, catalog, sink);
         record_parser_resolved_group_surface_tokens(line, catalog, sink);
         record_parser_resolved_legend_surface_tokens(line, catalog, sink);
-        record_parser_resolved_map_surface_tokens(line, current_map_axis.as_deref(), &value_sets, sink);
+        record_parser_resolved_map_surface_tokens(
+            line,
+            current_map_axis.as_deref(),
+            &value_sets,
+            sink,
+        );
+        record_parser_resolved_for_expansion_surface_tokens(line, catalog, sink);
         record_parser_resolved_rule_surface_tokens(line, catalog, sink);
         if line.scope == Some(SourceScope::Map)
             && line
@@ -754,6 +781,36 @@ fn record_parser_resolved_surface_tokens(
                 .is_some_and(|token| token.text == "}")
         {
             current_map_axis = None;
+        }
+    }
+}
+
+fn record_parser_resolved_for_expansion_surface_tokens(
+    line: &SurfaceScanLine,
+    catalog: &Catalog,
+    sink: &mut SurfaceSink,
+) {
+    if line.scope != Some(SourceScope::Other) {
+        return;
+    }
+    let tokens = &line.structural_token_spans;
+    let [for_keyword, binding, in_keyword, sources @ ..] = tokens.as_slice() else {
+        return;
+    };
+    if for_keyword.text != "for" || in_keyword.text != "in" || sources.is_empty() {
+        return;
+    }
+
+    add_surface_symbol(sink, for_keyword, SurfaceSemanticKind::Keyword);
+    add_surface_symbol(sink, binding, SurfaceSemanticKind::Binding);
+    add_surface_symbol(sink, in_keyword, SurfaceSemanticKind::Keyword);
+    for source in sources {
+        if catalog_value_set(catalog, &source.text).is_some()
+            || catalog.object_groups.contains_key(&source.text)
+        {
+            add_surface_symbol(sink, source, SurfaceSemanticKind::Group);
+        } else {
+            record_resolved_object_selector_surface_token(source, &line.content, catalog, sink);
         }
     }
 }
@@ -778,7 +835,9 @@ fn parser_surface_catalog(source: &str) -> Option<Catalog> {
     while i < lines.len() {
         let tokens = split_header_tokens(&lines[i]);
         if matches!(tokens.as_slice(), ["puzzle", _]) {
-            i = record_parser_surface_puzzle_catalog(&lines, i, &mut catalog);
+            i = record_parser_surface_puzzle_catalog(&lines, i, &mut catalog, false)
+                .ok()?
+                .0;
         } else {
             i += 1;
         }
@@ -786,16 +845,181 @@ fn parser_surface_catalog(source: &str) -> Option<Catalog> {
     Some(catalog)
 }
 
+/// Editor-specific integration of parser-owned authoring facts. Unlike full
+/// compilation it never resolves rules, routines, or lifecycle programs.
+pub(crate) struct LevelEditorIntegration {
+    pub(crate) catalog: Catalog,
+    pub(crate) empty_char: Option<char>,
+    pub(crate) visuals: VisualsDef,
+    pub(crate) levels: Vec<LevelEditorIntegratedLevel>,
+    pub(crate) diagnostics: Vec<String>,
+}
+
+pub(crate) struct LevelEditorIntegratedLevel {
+    pub(crate) source_level_index: usize,
+    pub(crate) name: String,
+    pub(crate) state: State,
+    pub(crate) layers: Vec<State>,
+    pub(crate) regions: Vec<LevelRegionDef>,
+    pub(crate) char_objects: HashMap<char, Vec<ObjectId>>,
+}
+
+pub(crate) fn integrate_level_editor_authoring(
+    source: &str,
+) -> Result<LevelEditorIntegration, DiagnosticReport> {
+    let parts = parse_document_source_parts(source)?;
+    let lines = parts
+        .model_lines
+        .iter()
+        .map(|line| line.text.clone())
+        .collect::<Vec<_>>();
+    let mut catalog = Catalog::default();
+    let mut level_blocks = Vec::<LevelBlock>::new();
+    let mut pending_level_blocks = Vec::<PendingLevelBlock>::new();
+    let mut pending_visual_blocks = Vec::<usize>::new();
+    let mut render_overlays = Vec::<(Vec<ObjectId>, char)>::new();
+    let mut empty_char = None::<char>;
+    let mut diagnostics = Vec::<String>::new();
+    let mut i = 0usize;
+    while i < lines.len() {
+        let tokens = split_header_tokens(&lines[i]);
+        match tokens.as_slice() {
+            ["puzzle", _] => {
+                match record_parser_surface_puzzle_catalog(&lines, i, &mut catalog, false) {
+                    Ok((next_i, mut levels, mut visuals)) => {
+                        pending_level_blocks.append(&mut levels);
+                        pending_visual_blocks.append(&mut visuals);
+                        i = next_i;
+                    }
+                    Err(report) => {
+                        diagnostics.push(report.to_string());
+                        i = recover_after_directive_error(&lines, i);
+                    }
+                }
+            }
+            ["levels", ..] => {
+                pending_level_blocks.push(PendingLevelBlock::levels(i, None));
+                match collect_levels_authoring_entry(&lines, i) {
+                    Ok((_, next_i)) => i = next_i,
+                    Err(report) => {
+                        diagnostics.push(report.to_string());
+                        pending_level_blocks.pop();
+                        i = recover_after_directive_error(&lines, i);
+                    }
+                }
+            }
+            ["level", ..] => {
+                pending_level_blocks.push(PendingLevelBlock::level(i, None));
+                match parse_level_block(&lines, i, 0) {
+                    Ok((_, next_i)) => i = next_i,
+                    Err(report) => {
+                        diagnostics.push(report.to_string());
+                        pending_level_blocks.pop();
+                        i = recover_after_directive_error(&lines, i);
+                    }
+                }
+            }
+            ["sprites", ..] => {
+                pending_visual_blocks.push(i);
+                match collect_authoring_entry(&lines, i, AuthoringEntryOwner::DocumentVisuals) {
+                    Ok((_, next_i)) => i = next_i,
+                    Err(report) => {
+                        diagnostics.push(report.to_string());
+                        pending_visual_blocks.pop();
+                        i = recover_after_directive_error(&lines, i);
+                    }
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    for pending in &pending_level_blocks {
+        if let Err(report) = parse_pending_level_block(
+            &lines,
+            pending,
+            &mut level_blocks,
+            &mut catalog,
+            &mut render_overlays,
+            &mut empty_char,
+        ) {
+            diagnostics.push(report.to_string());
+        }
+    }
+    let mut visuals = VisualsDef::default();
+    for visual_start in pending_visual_blocks {
+        if let Err(report) = parse_visuals_block(&lines, visual_start, &catalog, &mut visuals) {
+            diagnostics.push(report.to_string());
+        }
+    }
+    let layer_count = catalog
+        .object_defs
+        .iter()
+        .filter_map(|object| (object.layer_id.0 != UNASSIGNED_LAYER).then_some(object.layer_id.0))
+        .max()
+        .map_or(0, |layer| layer.saturating_add(1));
+    let game = CompiledGame::new(layer_count, catalog.object_defs.clone(), Vec::new());
+    let mut levels = Vec::new();
+    if let Some(empty_char) = empty_char {
+        for (source_level_index, level) in level_blocks.into_iter().enumerate() {
+            let level_name = level.name.clone();
+            let parsed = (|| {
+                let body = parse_level_body_for_editor(&level, &catalog, empty_char)?;
+                let mut char_objects = catalog.char_objects.clone();
+                char_objects.extend(body.local_char_objects);
+                let parsed = parse_level(&game, &body.lines, empty_char, &char_objects, &[])?;
+                Ok::<_, DiagnosticReport>(LevelEditorIntegratedLevel {
+                    source_level_index,
+                    name: level.name,
+                    state: parsed.state,
+                    layers: parsed.layer_states,
+                    regions: parsed.regions,
+                    char_objects,
+                })
+            })();
+            match parsed {
+                Ok(level) => levels.push(level),
+                Err(report) => diagnostics.push(format!("level `{level_name}`: {report}")),
+            }
+        }
+    } else if !level_blocks.is_empty() {
+        diagnostics.push(
+            "level editor requires `levels { legend { . = empty } }` before it can integrate level cells"
+                .to_string(),
+        );
+    }
+    Ok(LevelEditorIntegration {
+        catalog,
+        empty_char,
+        visuals,
+        levels,
+        diagnostics,
+    })
+}
+
 fn record_parser_surface_puzzle_catalog(
     lines: &[String],
     start: usize,
     catalog: &mut Catalog,
-) -> usize {
-    let _ = collect_puzzle_tag_declarations(lines, start + 1, catalog);
-    let pending_groups = collect_puzzle_group_declarations(lines, start + 1).unwrap_or_default();
+    strict: bool,
+) -> Result<(usize, Vec<PendingLevelBlock>, Vec<usize>), DiagnosticReport> {
+    if let Err(error) = collect_puzzle_tag_declarations(lines, start + 1, catalog)
+        && strict
+    {
+        return Err(error);
+    }
+    let pending_groups = match collect_puzzle_group_declarations(lines, start + 1) {
+        Ok(groups) => groups,
+        Err(error) if strict => return Err(error),
+        Err(_) => Vec::new(),
+    };
     let mut resolved_groups = HashSet::<String>::new();
     let mut named_layers = HashMap::<String, u16>::new();
     let mut layer_count = None::<u16>;
+    let puzzle_name = split_header_tokens(&lines[start])
+        .get(1)
+        .map(|name| (*name).to_string());
+    let mut pending_level_blocks = Vec::<PendingLevelBlock>::new();
+    let mut pending_visual_blocks = Vec::<usize>::new();
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
         let tokens = split_header_tokens(&lines[i]);
@@ -809,11 +1033,12 @@ fn record_parser_surface_puzzle_catalog(
                         catalog.maps.insert(map.name.clone(), map);
                         i = next_i;
                     }
+                    Err(error) if strict => return Err(error),
                     Err(_) => i = recover_after_directive_error(lines, i),
                 }
             }
             ["layers"] => {
-                i = parse_layers_block(
+                let parsed = parse_layers_block(
                     lines,
                     i + 1,
                     &mut named_layers,
@@ -821,36 +1046,73 @@ fn record_parser_surface_puzzle_catalog(
                     catalog,
                     &pending_groups,
                     &mut resolved_groups,
-                )
-                .unwrap_or_else(|_| recover_after_directive_error(lines, i));
+                );
+                i = match parsed {
+                    Ok(next_i) => next_i,
+                    Err(error) if strict => return Err(error),
+                    Err(_) => recover_after_directive_error(lines, i),
+                };
                 refresh_layer_tags_and_value_sets(&named_layers, catalog);
             }
             ["layers", count] => {
-                if let Ok(count) = parse_u16(Some(count), &lines[i], "missing layer count") {
-                    layer_count = Some(count);
+                match parse_u16(Some(count), &lines[i], "missing layer count") {
+                    Ok(count) => layer_count = Some(count),
+                    Err(error) if strict => return Err(error),
+                    Err(_) => {}
                 }
                 i += 1;
             }
             ["marks"] => {
-                i = parse_mark_block(lines, i, catalog)
-                    .unwrap_or_else(|_| recover_after_directive_error(lines, i));
+                i = match parse_mark_block(lines, i, catalog) {
+                    Ok(next_i) => next_i,
+                    Err(error) if strict => return Err(error),
+                    Err(_) => recover_after_directive_error(lines, i),
+                };
             }
             ["groups"] => {
-                i = collect_authoring_entry(lines, i, AuthoringEntryOwner::PuzzleGroups)
-                    .map(|(_, next_i)| next_i)
-                    .unwrap_or_else(|_| recover_after_directive_error(lines, i));
-                let _ = resolve_pending_group_definitions(
+                i = match collect_authoring_entry(lines, i, AuthoringEntryOwner::PuzzleGroups) {
+                    Ok((_, next_i)) => next_i,
+                    Err(error) if strict => return Err(error),
+                    Err(_) => recover_after_directive_error(lines, i),
+                };
+                let resolved = resolve_pending_group_definitions(
                     &pending_groups,
                     None,
                     &mut resolved_groups,
                     catalog,
                 );
+                if let Err(error) = resolved
+                    && strict
+                {
+                    return Err(error);
+                }
+            }
+            ["levels", ..] => {
+                pending_level_blocks.push(PendingLevelBlock::levels(i, puzzle_name.clone()));
+                i = collect_levels_authoring_entry(lines, i)?.1;
+            }
+            ["level", ..] => {
+                pending_level_blocks.push(PendingLevelBlock::level(i, puzzle_name.clone()));
+                i = parse_level_block(lines, i, 0)?.1;
+            }
+            ["sprites", ..] => {
+                pending_visual_blocks.push(i);
+                i = collect_authoring_entry(lines, i, AuthoringEntryOwner::DocumentVisuals)?.1;
             }
             _ => i = recover_after_directive_error(lines, i),
         }
     }
-    let _ = resolve_pending_group_definitions(&pending_groups, None, &mut resolved_groups, catalog);
-    i.saturating_add(1)
+    if let Err(error) =
+        resolve_pending_group_definitions(&pending_groups, None, &mut resolved_groups, catalog)
+        && strict
+    {
+        return Err(error);
+    }
+    Ok((
+        i.saturating_add(1),
+        pending_level_blocks,
+        pending_visual_blocks,
+    ))
 }
 
 fn record_parser_resolved_layer_surface_tokens(
@@ -1060,11 +1322,41 @@ fn parse_tag_set_directive(
     if values.is_empty() {
         return Err(parse_error(line, "tag set must have at least one value"));
     }
-    if matches!(values.first().copied(), Some("rotation" | "translation")) {
-        return parse_typed_axis_directive(name, values, line, catalog);
+    if matches!(
+        values.first().copied(),
+        Some("rotation" | "translation" | "angle" | "vec2")
+    ) {
+        return Err(parse_error(
+            line,
+            "tag value types are inferred from literals; use 0deg or (<x>, <y>) values",
+        ));
     }
-    let expanded_values =
-        expand_numeric_ranges_in_value_list(values, &catalog.numeric_variable_defaults, line)?;
+    let frame3_domain = crate::frame3_literal::parse_frame3_domain(&values.join(" "))
+        .map_err(|error| parse_error(line, &error))?;
+    let (expanded_values, value_type) = if let Some(values) = frame3_domain {
+        (values, ValueType::Frame3)
+    } else if values.iter().all(|value| {
+        let value = value.trim();
+        value.starts_with('(') && value.ends_with(')')
+    }) {
+        (parse_vec2_domain_values(values, line)?, ValueType::Vec2)
+    } else if values.iter().any(|value| value.contains("deg")) {
+        (parse_angle_domain_values(values, line)?, ValueType::Angle)
+    } else if values.contains(&"step")
+        && values
+            .iter()
+            .any(|value| value.contains("...") || value.contains("..<"))
+    {
+        parse_numeric_domain_range(values, line)?
+    } else {
+        let expanded =
+            expand_numeric_ranges_in_value_list(values, &catalog.numeric_variable_defaults, line)?;
+        let value_type = infer_tag_value_type(&expanded, line)?;
+        (
+            normalize_tag_values(expanded, value_type, line)?,
+            value_type,
+        )
+    };
     if expanded_values.is_empty() {
         return Err(parse_error(line, "tag set must have at least one value"));
     }
@@ -1077,83 +1369,171 @@ fn parse_tag_set_directive(
     catalog
         .object_axes
         .insert(name.to_string(), expanded_values);
+    catalog.axis_types.insert(name.to_string(), value_type);
     Ok(())
 }
 
-fn parse_typed_axis_directive(
-    name: &str,
+fn parse_numeric_domain_range(
     values: &[&str],
     line: &str,
-    catalog: &mut Catalog,
-) -> Result<(), DiagnosticReport> {
-    if is_builtin_value_set(name) {
-        return Err(parse_error(line, "built-in tag set cannot be redefined"));
-    }
-    if catalog.value_sets.contains_key(name)
-        || catalog.object_axes.contains_key(name)
-        || catalog.axis_kinds.contains_key(name)
-    {
-        return Err(parse_error(line, "duplicate tag set"));
-    }
-
-    let kind = match values.first().copied() {
-        Some("rotation") => AxisKind::Rotation,
-        Some("translation") => AxisKind::Translation,
-        _ => {
-            return Err(parse_error(
-                line,
-                "axis declaration must start with rotation or translation",
-            ))
-        }
+) -> Result<(Vec<String>, ValueType), DiagnosticReport> {
+    let body = values.join(" ");
+    let (range, step) = split_axis_range_and_step(&body, line)?;
+    let (start, end, inclusive) = parse_rational_range(range, line)?;
+    let step = parse_rational_value(step, line)?;
+    let value_type = if values.iter().all(|value| !value.contains(['/', '.'])) {
+        ValueType::Int
+    } else {
+        ValueType::Rational
     };
-    let body = values[1..].join(" ");
-    let expanded_values = match kind {
-        AxisKind::Rotation => parse_rotation_axis_values(&body, line)?,
-        AxisKind::Translation => parse_translation_axis_values(&body, line)?,
-    };
-    if expanded_values.is_empty() {
-        return Err(parse_error(line, "axis must have at least one value"));
-    }
-    catalog
-        .object_axes
-        .insert(name.to_string(), expanded_values);
-    catalog.axis_kinds.insert(name.to_string(), kind);
-    Ok(())
+    Ok((
+        expand_rational_range(start, end, inclusive, step, line)?
+            .into_iter()
+            .map(Rational::format)
+            .collect(),
+        value_type,
+    ))
 }
 
-fn parse_rotation_axis_values(body: &str, line: &str) -> Result<Vec<String>, DiagnosticReport> {
-    let body = body.trim();
-    if let Some(step) = body.strip_prefix("step ").map(str::trim) {
+fn normalize_tag_values(
+    values: Vec<String>,
+    value_type: ValueType,
+    line: &str,
+) -> Result<Vec<String>, DiagnosticReport> {
+    let mut normalized = Vec::with_capacity(values.len());
+    let mut seen = HashSet::new();
+    for value in values {
+        let value = match value_type {
+            ValueType::Int | ValueType::Rational => parse_rational_value(&value, line)?.format(),
+            ValueType::Frame3 => crate::frame3_literal::normalize_frame3_literal(&value)
+                .map_err(|error| parse_error(line, &error))?,
+            _ => value,
+        };
+        if !seen.insert(value.clone()) {
+            return Err(parse_error(line, "tag domain contains a duplicate value"));
+        }
+        normalized.push(value);
+    }
+    Ok(normalized)
+}
+
+fn infer_tag_value_type(values: &[String], line: &str) -> Result<ValueType, DiagnosticReport> {
+    if values
+        .iter()
+        .all(|value| matches!(value.as_str(), "up" | "down" | "left" | "right"))
+    {
+        return Ok(ValueType::Direction);
+    }
+    if values
+        .iter()
+        .all(|value| matches!(value.as_str(), "true" | "false"))
+    {
+        return Ok(ValueType::Bool);
+    }
+    let parsed_numbers = values
+        .iter()
+        .map(|value| parse_rational_value(value, line))
+        .collect::<Result<Vec<_>, _>>();
+    if parsed_numbers.is_ok() {
+        return Ok(if values.iter().all(|value| !value.contains(['/', '.'])) {
+            ValueType::Int
+        } else {
+            ValueType::Rational
+        });
+    }
+    if values
+        .iter()
+        .all(|value| value.starts_with('"') && value.ends_with('"'))
+    {
+        return Ok(ValueType::String);
+    }
+    Ok(ValueType::Nominal)
+}
+
+fn parse_angle_domain_values(values: &[&str], line: &str) -> Result<Vec<String>, DiagnosticReport> {
+    let body = values.join(" ");
+    if body.contains("...") || body.contains("..<") {
+        let (range, step) = split_axis_range_and_step(&body, line)?;
+        let (start, end, inclusive) = parse_degree_range(range, line)?;
         let step = parse_degree_value(step, line)?;
-        return expand_rotation_range(Rational::ZERO, Rational::integer(360), false, step, line);
+        return expand_angle_range(start, end, inclusive, step, line);
+    }
+    values
+        .iter()
+        .map(|value| parse_degree_value(value, line).map(|value| format!("{}deg", value.format())))
+        .collect()
+}
+
+fn parse_vec2_domain_values(values: &[&str], line: &str) -> Result<Vec<String>, DiagnosticReport> {
+    let mut expanded = Vec::new();
+    let mut seen = HashSet::new();
+    for value in values {
+        let inner = value
+            .trim()
+            .strip_prefix('(')
+            .and_then(|value| value.strip_suffix(')'))
+            .ok_or_else(|| parse_error(line, "vec2 domain item must be parenthesized"))?;
+        let (x, y) = split_vec2_components(inner, line)?;
+        let x_domain = parse_vec2_component_domain(x, line)?;
+        let y_domain = parse_vec2_component_domain(y, line)?;
+        for item in expand_vec2_domain(&x_domain, &y_domain) {
+            if !seen.insert(item.clone()) {
+                return Err(parse_error(line, "vec2 domain contains a duplicate value"));
+            }
+            expanded.push(item);
+        }
+    }
+    Ok(expanded)
+}
+
+fn split_vec2_components<'a>(
+    value: &'a str,
+    line: &str,
+) -> Result<(&'a str, &'a str), DiagnosticReport> {
+    let mut depth = 0usize;
+    let mut comma = None;
+    for (index, ch) in value.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                if comma.replace(index).is_some() {
+                    return Err(parse_error(
+                        line,
+                        "vec2 value must have exactly two components",
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+    let comma = comma.ok_or_else(|| parse_error(line, "vec2 value must have two components"))?;
+    let x = value[..comma].trim();
+    let y = value[comma + 1..].trim();
+    if x.is_empty() || y.is_empty() {
+        return Err(parse_error(line, "vec2 components must not be empty"));
+    }
+    Ok((x, y))
+}
+
+fn expand_vec2_domain(x_domain: &[Rational], y_domain: &[Rational]) -> Vec<String> {
+    let mut values = Vec::new();
+    for x in x_domain {
+        for y in y_domain {
+            values.push(format!("({},{})", x.format(), y.format()));
+        }
+    }
+    values
+}
+
+fn parse_vec2_component_domain(body: &str, line: &str) -> Result<Vec<Rational>, DiagnosticReport> {
+    if !body.contains("...") && !body.contains("..<") {
+        return Ok(vec![parse_rational_value(body, line)?]);
     }
     let (range, step) = split_axis_range_and_step(body, line)?;
-    let (start, end, inclusive) = parse_degree_range(range, line)?;
-    let step = parse_degree_value(step, line)?;
-    expand_rotation_range(start, end, inclusive, step, line)
-}
-
-fn parse_translation_axis_values(body: &str, line: &str) -> Result<Vec<String>, DiagnosticReport> {
-    let body = body.trim();
-    let scalar_values = if let Some(step) = body.strip_prefix("step ").map(str::trim) {
-        let step = parse_rational_value(step, line)?;
-        expand_rational_range(Rational::ZERO, Rational::integer(1), false, step, line)?
-    } else if body.contains(" step ") {
-        let (range, step) = split_axis_range_and_step(body, line)?;
-        let (start, end, inclusive) = parse_rational_range(range, line)?;
-        let step = parse_rational_value(step, line)?;
-        expand_rational_range(start, end, inclusive, step, line)?
-    } else {
-        parse_rational_list(body, line)?
-    };
-
-    let mut values = Vec::new();
-    for x in &scalar_values {
-        for y in &scalar_values {
-            values.push(format!("{},{}", x.format(), y.format()));
-        }
-    }
-    Ok(values)
+    let (start, end, inclusive) = parse_rational_range(range, line)?;
+    let step = parse_rational_value(step, line)?;
+    expand_rational_range(start, end, inclusive, step, line)
 }
 
 fn split_axis_range_and_step<'a>(
@@ -1186,7 +1566,7 @@ fn parse_degree_range(
         ));
     }
     let Some((start, end)) = value.split_once("...") else {
-        return Err(parse_error(line, "rotation range must use ... or ..<"));
+        return Err(parse_error(line, "angle range must use ... or ..<"));
     };
     Ok((
         parse_degree_value(start.trim(), line)?,
@@ -1207,7 +1587,10 @@ fn parse_rational_range(
         ));
     }
     let Some((start, end)) = value.split_once("...") else {
-        return Err(parse_error(line, "translation range must use ... or ..<"));
+        return Err(parse_error(
+            line,
+            "vec2 component range must use ... or ..<",
+        ));
     };
     Ok((
         parse_rational_value(start.trim(), line)?,
@@ -1216,7 +1599,7 @@ fn parse_rational_range(
     ))
 }
 
-fn expand_rotation_range(
+fn expand_angle_range(
     start: Rational,
     end: Rational,
     inclusive: bool,
@@ -1283,29 +1666,11 @@ fn expand_rational_range(
     Ok(values)
 }
 
-fn parse_rational_list(body: &str, line: &str) -> Result<Vec<Rational>, DiagnosticReport> {
-    let mut values = Vec::new();
-    for value in body.split(',') {
-        let value = value.trim();
-        if value.is_empty() {
-            return Err(parse_error(
-                line,
-                "translation value list must not contain empty values",
-            ));
-        }
-        let value = parse_rational_value(value, line)?;
-        if !values.contains(&value) {
-            values.push(value);
-        }
-    }
-    Ok(values)
-}
-
 fn parse_degree_value(value: &str, line: &str) -> Result<Rational, DiagnosticReport> {
     let value = value
         .trim()
         .strip_suffix("deg")
-        .ok_or_else(|| parse_error(line, "rotation values must use deg"))?;
+        .ok_or_else(|| parse_error(line, "angle values must use deg"))?;
     parse_rational_value(value.trim(), line)
 }
 
@@ -1364,7 +1729,10 @@ fn parse_assignment_directive(
     }
     let (parsed_name, expr) = require_assignment_row(line, "assignment must be: <name> = <value>")?;
     if parsed_name != name {
-        return Err(parse_error(line, "assignment name does not match directive"));
+        return Err(parse_error(
+            line,
+            "assignment name does not match directive",
+        ));
     }
     if looks_like_condition_expr(expr) {
         if named_conditions.contains_key(name) {
@@ -1484,14 +1852,14 @@ fn parse_layer_term(
         selector.alternatives
     } else {
         let value_sets = catalog_value_sets(catalog);
-        let axis_kinds = catalog.axis_kinds.clone();
+        let axis_types = catalog.axis_types.clone();
         define_object_spec(
             term,
             layer,
             None,
             line,
             &value_sets,
-            &axis_kinds,
+            &axis_types,
             &mut catalog.object_schemas,
             &mut catalog.object_names,
             &mut catalog.object_labels,
@@ -1601,7 +1969,12 @@ fn parse_layers_block(
     resolved_groups: &mut HashSet<String>,
 ) -> Result<usize, DiagnosticReport> {
     let used_groups = predeclare_layer_block_objects(lines, start, pending_groups, catalog)?;
-    resolve_pending_group_definitions(pending_groups, Some(&used_groups), resolved_groups, catalog)?;
+    resolve_pending_group_definitions(
+        pending_groups,
+        Some(&used_groups),
+        resolved_groups,
+        catalog,
+    )?;
 
     let mut i = start;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
@@ -1622,12 +1995,8 @@ fn parse_layers_block(
                 validate_identifier(binding, &lines[i], "expansion binding")?;
                 let (body_lines, next_i) = collect_statement_block_lines(lines, i + 1, &lines[i])?;
                 for value in &values {
-                    let mut expanded_lines = expand_for_binding_lines(
-                        &body_lines,
-                        binding,
-                        value,
-                        &catalog.maps,
-                    )?;
+                    let mut expanded_lines =
+                        expand_for_binding_lines(&body_lines, binding, value, &catalog.maps)?;
                     expanded_lines.push(BLOCK_CLOSE.to_string());
                     let parsed_i = parse_layers_block(
                         &expanded_lines,
@@ -1708,7 +2077,14 @@ fn predeclare_layer_block_objects(
 ) -> Result<Vec<String>, DiagnosticReport> {
     let mut terms = Vec::<String>::new();
     let mut used_groups = Vec::<String>::new();
-    collect_layer_block_terms(lines, start, pending_groups, catalog, &mut terms, &mut used_groups)?;
+    collect_layer_block_terms(
+        lines,
+        start,
+        pending_groups,
+        catalog,
+        &mut terms,
+        &mut used_groups,
+    )?;
     predeclare_layer_terms(&terms, catalog)?;
     Ok(used_groups)
 }
@@ -1740,12 +2116,8 @@ fn collect_layer_block_terms(
                 validate_identifier(binding, &lines[i], "expansion binding")?;
                 let (body_lines, next_i) = collect_statement_block_lines(lines, i + 1, &lines[i])?;
                 for value in &values {
-                    let mut expanded_lines = expand_for_binding_lines(
-                        &body_lines,
-                        binding,
-                        value,
-                        &catalog.maps,
-                    )?;
+                    let mut expanded_lines =
+                        expand_for_binding_lines(&body_lines, binding, value, &catalog.maps)?;
                     expanded_lines.push(BLOCK_CLOSE.to_string());
                     let parsed_i = collect_layer_block_terms(
                         &expanded_lines,
@@ -1806,7 +2178,14 @@ fn collect_layer_terms(
 ) -> Result<(), DiagnosticReport> {
     let mut resolving = Vec::<String>::new();
     for selector in selectors {
-        collect_layer_term(selector, line, pending_groups, terms, used_groups, &mut resolving)?;
+        collect_layer_term(
+            selector,
+            line,
+            pending_groups,
+            terms,
+            used_groups,
+            &mut resolving,
+        )?;
     }
     Ok(())
 }
@@ -1844,10 +2223,7 @@ fn collect_layer_term(
     Ok(())
 }
 
-fn predeclare_layer_terms(
-    terms: &[String],
-    catalog: &mut Catalog,
-) -> Result<(), DiagnosticReport> {
+fn predeclare_layer_terms(terms: &[String], catalog: &mut Catalog) -> Result<(), DiagnosticReport> {
     for term in terms {
         predeclare_layer_schema_or_plain_object(term, catalog)?;
     }
@@ -1894,9 +2270,15 @@ fn predeclare_layer_selector_variants(
     };
     let value_combinations = layer_selector_variant_values(&parts, &schema, catalog, term)?;
     for values in value_combinations {
-        if schema.variants.iter().any(|variant| variant.values == values)
+        if schema
+            .variants
+            .iter()
+            .any(|variant| variant.values == values)
             || catalog.object_schemas.get(parts[0]).is_some_and(|schema| {
-                schema.variants.iter().any(|variant| variant.values == values)
+                schema
+                    .variants
+                    .iter()
+                    .any(|variant| variant.values == values)
             })
         {
             continue;
@@ -1909,7 +2291,10 @@ fn predeclare_layer_selector_variants(
         }
         let name = format!("{}:{}", parts[0], values.join(":"));
         if catalog.object_names.contains_key(&name) {
-            return Err(parse_error(term, "object variant name conflicts with existing object"));
+            return Err(parse_error(
+                term,
+                "object variant name conflicts with existing object",
+            ));
         }
         let object = add_object_variant(
             &name,
@@ -1935,14 +2320,14 @@ fn define_layer_object_spec(
     catalog: &mut Catalog,
 ) -> Result<Vec<ObjectId>, DiagnosticReport> {
     let value_sets = catalog_value_sets(catalog);
-    let axis_kinds = catalog.axis_kinds.clone();
+    let axis_types = catalog.axis_types.clone();
     define_object_spec(
         spec,
         UNASSIGNED_LAYER,
         None,
         line,
         &value_sets,
-        &axis_kinds,
+        &axis_types,
         &mut catalog.object_schemas,
         &mut catalog.object_names,
         &mut catalog.object_labels,
@@ -2097,14 +2482,14 @@ fn resolve_or_declare_layer_selector(
         .alternatives
     } else {
         let value_sets = catalog_value_sets(catalog);
-        let axis_kinds = catalog.axis_kinds.clone();
+        let axis_types = catalog.axis_types.clone();
         define_object_spec(
             selector,
             UNASSIGNED_LAYER,
             None,
             line,
             &value_sets,
-            &axis_kinds,
+            &axis_types,
             &mut catalog.object_schemas,
             &mut catalog.object_names,
             &mut catalog.object_labels,
@@ -2505,6 +2890,7 @@ fn collect_implicit_inputs_from_condition(condition: &ConditionAst, names: &mut 
             names.insert(name.clone());
         }
         ConditionAst::InputIn(_)
+        | ConditionAst::AllObjectsOn { .. }
         | ConditionAst::VariableEquals { .. }
         | ConditionAst::VariableCompare { .. }
         | ConditionAst::ConditionEquals { .. }

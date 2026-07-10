@@ -1,22 +1,24 @@
 /* tslint:disable */
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
+export const activate_source_analysis: (a: number, b: number) => number;
+export const active_source_analysis_entries_json: (a: number) => [number, number, number, number];
+export const active_source_analysis_highlight_json: (a: number, b: number) => [number, number, number, number];
+export const active_source_analysis_json: (a: number) => [number, number, number, number];
+export const active_source_analysis_level_editor_level_slots: (a: number, b: number, c: number) => [number, number, number, number];
+export const active_source_analysis_level_editor_manifest_json: (a: number) => [number, number, number, number];
+export const active_source_analysis_level_editor_sprite_json: (a: number, b: number) => [number, number, number, number];
+export const active_source_analysis_outline_json: (a: number) => [number, number, number, number];
+export const active_source_analysis_resolve_source_target: (a: number, b: number) => [number, number, number, number];
+export const active_source_analysis_suggest_source_completions: (a: number, b: number) => [number, number, number, number];
 export const compile_preview: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
-export const create_source_analysis_handle: (a: number, b: number) => number;
 export const export_html: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number, number];
-export const free_source_analysis_handle: (a: number) => [number, number];
 export const generate_visuals_js: (a: number, b: number, c: number, d: number) => [number, number, number, number];
 export const solve_request_json: (a: number, b: number) => [number, number, number, number];
 export const solve_solver_task_json: (a: number, b: number) => [number, number, number, number];
 export const solve_solver_task_json_with_progress: (a: number, b: number, c: any) => [number, number, number, number];
 export const solve_state: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number, number, number];
 export const solver_task_initial_display_state_json: (a: number, b: number) => [number, number, number, number];
-export const source_analysis_entries_json: (a: number) => [number, number, number, number];
-export const source_analysis_highlight_json: (a: number, b: number) => [number, number, number, number];
-export const source_analysis_json: (a: number) => [number, number, number, number];
-export const source_analysis_outline_json: (a: number) => [number, number, number, number];
-export const source_analysis_resolve_source_target: (a: number, b: number) => [number, number, number, number];
-export const source_analysis_suggest_source_completions: (a: number, b: number) => [number, number, number, number];
 export const translate_puzzlescript: (a: number, b: number) => [number, number, number, number];
 export const __wbg_wasmcompiledcoreruntime_free: (a: number, b: number) => void;
 export const wasmcompiledcoreruntime_current_state: (a: number) => [number, number, number, number];

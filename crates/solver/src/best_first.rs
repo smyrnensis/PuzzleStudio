@@ -99,6 +99,16 @@ where
     let mut sequence = 1_usize;
     let mut depth_budget_hit = false;
 
+    if is_dead(&nodes[0].state) {
+        return SearchOutcome::Exhausted(stats(
+            started_at,
+            visited.len(),
+            frontier.len(),
+            expanded,
+            max_depth_reached,
+        ));
+    }
+
     if domain.is_goal(&nodes[0].state) {
         return SearchOutcome::Solved(Witness {
             actions: Vec::new(),
@@ -170,6 +180,9 @@ where
             };
 
             let next_depth = current_depth + 1;
+            if is_dead(&next) {
+                continue;
+            }
             if domain.is_goal(&next) {
                 let next_index = nodes.len();
                 nodes.push(NodeRecord {
@@ -180,10 +193,6 @@ where
                 });
                 return SearchOutcome::Solved(reconstruct_witness(&nodes, next_index));
             }
-            if is_dead(&next) {
-                continue;
-            }
-
             let next_key = domain.key(&next);
             if next_key == current_key || visited.contains_key(&next_key) {
                 continue;
@@ -276,6 +285,18 @@ where
     let mut max_depth_reached = 0_u32;
     let mut sequence = 1_usize;
     let mut depth_budget_hit = false;
+
+    if is_dead(&nodes[0].state) {
+        return ScanOutcome::Completed {
+            stats: stats(
+                started_at,
+                visited.len(),
+                frontier.len(),
+                expanded,
+                max_depth_reached,
+            ),
+        };
+    }
 
     if on_discovered(reconstruct_match(&nodes, 0)) == ScanControl::Stop {
         return ScanOutcome::Stopped {
@@ -535,6 +556,26 @@ mod tests {
         assert!(matches!(outcome, SearchOutcome::Solved(_)));
         assert_eq!(observed[0], (0, 1, 0));
         assert!(observed.iter().any(|(_, _, depth)| *depth > 0));
+    }
+
+    #[test]
+    fn prunes_dead_states_before_accepting_goals() {
+        let mut domain = LineDomain { actions: [1] };
+
+        let outcome = best_first_with_dead_states(
+            &mut domain,
+            0,
+            SearchBudget {
+                max_depth: Some(8),
+                max_nodes: Some(32),
+                max_frontier: None,
+                max_duration: None,
+            },
+            |_| 0,
+            |state| *state >= 3,
+        );
+
+        assert!(matches!(outcome, SearchOutcome::Exhausted(_)));
     }
 
     #[test]

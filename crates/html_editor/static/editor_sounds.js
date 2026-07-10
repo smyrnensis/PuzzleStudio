@@ -1,4 +1,4 @@
-const soundPlayIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><polygon points="8 5 19 12 8 19 8 5"></polygon></svg>';
+const soundPlayIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 11 7-11 7V5z"></path></svg>';
 const soundPauseIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14"></path><path d="M16 5v14"></path></svg>';
 const soundMusicBarOptions = [8, 16, 32, 64];
 

@@ -38,6 +38,7 @@ fn export_html_with_runtime_wasm(
         &mut boot_data,
         state,
         host_mode == StandaloneHostMode::EditorPreview,
+        host_mode == StandaloneHostMode::EditorPreview,
     );
     let boot_data = escape_script_json(&boot_data);
     let body_theme_attributes = preview_body_theme_attributes(&state.loaded.theme);
@@ -53,7 +54,7 @@ fn export_html_with_runtime_wasm(
     let app_js_source = standalone_host_js(state, host_mode);
     let app_js = escape_script(&app_js_source);
 
-    INDEX_HTML
+    let html = INDEX_HTML
         .replace("<title>PuzzleStudio HTML Play</title>", "<title>PuzzleStudio HTML Export</title>")
         .replace(
             r#"<link rel="stylesheet" href="/app.css">"#,
@@ -80,16 +81,36 @@ fn export_html_with_runtime_wasm(
             &format!("<script>\n{sound_tools_js}\n</script>"),
         )
         .replace(
-            r#"<script src="/renderer.js"></script>"#,
-            &format!(
-                "<script>\nwindow.PuzzleBoot = JSON.parse(\"{boot_data}\");\nwindow.PuzzleRuntimeExportJson = \"{data}\";\n{runtime_wasm_js}\n</script>\n<script>\n{renderer_js}\n</script>\n<script>\n{standalone_js}\n</script>"
-            ),
-        )
-        .replace(
             r#"<script src="/app.js"></script>"#,
             &format!("<script>\n{app_js}\n</script>"),
         )
-        .replace("<body>", &format!("<body{body_theme_attributes}>"))
+        .replace("<body>", &format!("<body{body_theme_attributes}>"));
+    replace_required_script_asset(
+        html,
+        "/renderer.js",
+        &format!(
+            "<script>\nwindow.PuzzleBoot = JSON.parse(\"{boot_data}\");\nwindow.PuzzleRuntimeExportJson = \"{data}\";\n{runtime_wasm_js}\n</script>\n<script>\n{renderer_js}\n</script>\n<script>\n{standalone_js}\n</script>"
+        ),
+    )
+}
+
+fn replace_required_script_asset(html: String, asset_path: &str, replacement: &str) -> String {
+    let prefix = format!(r#"<script src="{asset_path}"#);
+    let count = html.matches(&prefix).count();
+    assert_eq!(
+        count, 1,
+        "HTML export template must contain exactly one script for {asset_path}, found {count}"
+    );
+    let start = html
+        .find(&prefix)
+        .expect("checked renderer script tag is present");
+    let end = html[start..]
+        .find("></script>")
+        .map(|offset| start + offset + "></script>".len())
+        .expect("HTML export renderer script tag must close");
+    let mut output = html;
+    output.replace_range(start..end, replacement);
+    output
 }
 
 fn standalone_host_js(state: &ServerState, host_mode: StandaloneHostMode) -> String {
