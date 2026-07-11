@@ -11,8 +11,7 @@ solid = Player Box Wall
 }
 
 win_conditions {
-some [ Goal ]
-no [ Box no Goal ]
+all Box on Goal
 }
 
 on_level_start {
@@ -38,7 +37,6 @@ sprite {
 selector = Background
 colors = #90ee90 #008000
 duration = 500ms
-shape =
 11111
 01111
 11101
@@ -74,7 +72,6 @@ sprite {
 selector = Wall
 colors = #a46322 #493c2b
 duration = 500ms
-shape =
 00010
 11111
 01000

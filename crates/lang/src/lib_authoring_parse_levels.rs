@@ -1083,7 +1083,7 @@ struct ParsedLevelBody {
 fn parse_level_body(
     level: &LevelBlock,
     catalog: &Catalog,
-    empty_char: char,
+    empty_char: Option<char>,
     named_conditions: &HashMap<String, (String, ConditionAst)>,
 ) -> Result<ParsedLevelBody, DiagnosticReport> {
     parse_level_body_with_rules(level, catalog, empty_char, named_conditions, true)
@@ -1094,13 +1094,13 @@ fn parse_level_body_for_editor(
     catalog: &Catalog,
     empty_char: char,
 ) -> Result<ParsedLevelBody, DiagnosticReport> {
-    parse_level_body_with_rules(level, catalog, empty_char, &HashMap::new(), false)
+    parse_level_body_with_rules(level, catalog, Some(empty_char), &HashMap::new(), false)
 }
 
 fn parse_level_body_with_rules(
     level: &LevelBlock,
     catalog: &Catalog,
-    empty_char: char,
+    empty_char: Option<char>,
     named_conditions: &HashMap<String, (String, ConditionAst)>,
     include_rules: bool,
 ) -> Result<ParsedLevelBody, DiagnosticReport> {
@@ -1236,7 +1236,7 @@ fn parse_level_event_sugar(line: &str) -> Result<Option<StatementAst>, Diagnosti
 fn parse_level_legend_block_row(
     line: &str,
     catalog: &Catalog,
-    empty_char: char,
+    empty_char: Option<char>,
     local_char_objects: &mut HashMap<char, Vec<ObjectId>>,
 ) -> Result<(), DiagnosticReport> {
     let tokens = split_header_tokens(line);
@@ -1258,7 +1258,7 @@ fn parse_level_legend_directive(
     tokens: &[&str],
     line: &str,
     catalog: &Catalog,
-    empty_char: char,
+    empty_char: Option<char>,
 ) -> Result<(char, Vec<ObjectId>), DiagnosticReport> {
     let Some(syntax) = crate::syntax::level_legend_directive_syntax(tokens, true) else {
         return Err(parse_error(
@@ -1268,7 +1268,7 @@ fn parse_level_legend_directive(
     };
 
     let ch = parse_char(tokens.get(1), line, "missing legend char")?;
-    if ch == empty_char || tokens[syntax.rhs_start..] == ["empty"] {
+    if Some(ch) == empty_char || tokens[syntax.rhs_start..] == ["empty"] {
         return Err(parse_error(line, "level-local legend cannot define empty"));
     }
     let selector_sets = selector_sets(

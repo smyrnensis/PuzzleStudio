@@ -571,7 +571,7 @@ pub fn new_puzzle_source(_title: &str) -> String {
     String::new()
 }
 
-pub fn is_display_object_token(token: &str) -> bool {
+pub fn is_at_identifier_token(token: &str) -> bool {
     let Some(rest) = token.strip_prefix('@') else {
         return false;
     };
@@ -2034,13 +2034,13 @@ mod tests {
     }
 
     #[test]
-    fn at_name_marks_display_object_tokens() {
-        assert!(is_display_object_token("@Trail"));
-        assert!(is_display_object_token("@Trail:kind"));
-        assert!(is_display_object_token("@Trail{right}"));
-        assert!(!is_display_object_token("Trail"));
-        assert!(!is_display_object_token("@"));
-        assert!(!is_display_object_token("@:kind"));
+    fn recognizes_at_prefixed_identifiers_without_assigning_a_role() {
+        assert!(is_at_identifier_token("@Trail"));
+        assert!(is_at_identifier_token("@Trail:kind"));
+        assert!(is_at_identifier_token("@Trail{right}"));
+        assert!(!is_at_identifier_token("Trail"));
+        assert!(!is_at_identifier_token("@"));
+        assert!(!is_at_identifier_token("@:kind"));
     }
 
     #[test]

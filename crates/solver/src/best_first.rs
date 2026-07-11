@@ -3,6 +3,7 @@ use crate::domain::SearchDomain;
 use crate::report::{SearchFailure, SearchOutcome, SearchProgress, SearchStats, Witness};
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
+use std::time::Duration;
 use std::time::Instant;
 
 #[derive(Clone, Debug)]
@@ -497,6 +498,312 @@ fn stats(
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ResumableSearchLimits {
+    pub max_depth: u32,
+    pub max_stored_nodes: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ResumableSearchAllowance {
+    pub max_expanded_nodes: usize,
+    pub max_duration: Duration,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResumablePauseReason {
+    ExpandedNodes,
+    Duration,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResumableSearchStatus {
+    Active,
+    Solved { candidate_index: usize },
+    Exhausted,
+    ResourceLimit,
+    Failed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResumableSearchCandidate<State, Action> {
+    pub index: usize,
+    pub state: State,
+    pub actions: Vec<Action>,
+    pub score: i64,
+    pub depth: u32,
+    pub discovery_index: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ResumableAdvanceOutcome<Action, Error> {
+    Paused {
+        reason: ResumablePauseReason,
+        stats: SearchStats,
+    },
+    Solved {
+        candidate_index: usize,
+        stats: SearchStats,
+    },
+    Exhausted {
+        stats: SearchStats,
+    },
+    ResourceLimit {
+        stats: SearchStats,
+    },
+    Failed {
+        failure: SearchFailure<Action, Error>,
+        stats: SearchStats,
+    },
+}
+
+#[derive(Clone, Debug)]
+struct ResumableNode<State, Action> {
+    state: State,
+    parent: Option<usize>,
+    action: Option<Action>,
+    score: i64,
+    depth: u32,
+    discovery_index: usize,
+}
+
+pub struct ResumableBestFirst<State, Action, Key> {
+    limits: ResumableSearchLimits,
+    nodes: Vec<ResumableNode<State, Action>>,
+    visited: HashMap<Key, usize>,
+    frontier: BinaryHeap<QueueEntry>,
+    next_sequence: usize,
+    expanded: usize,
+    max_depth_reached: u32,
+    elapsed: Duration,
+    status: ResumableSearchStatus,
+    initial_goal_checked: bool,
+}
+
+impl<State, Action, Key> ResumableBestFirst<State, Action, Key>
+where
+    State: Clone,
+    Action: Clone,
+    Key: Eq + std::hash::Hash,
+{
+    pub fn new(
+        initial: State,
+        initial_key: Key,
+        initial_score: i64,
+        limits: ResumableSearchLimits,
+    ) -> Self {
+        let nodes = vec![ResumableNode {
+            state: initial,
+            parent: None,
+            action: None,
+            score: initial_score,
+            depth: 0,
+            discovery_index: 0,
+        }];
+        Self {
+            limits,
+            nodes,
+            visited: HashMap::from([(initial_key, 0)]),
+            frontier: BinaryHeap::from([QueueEntry {
+                score: initial_score,
+                depth: 0,
+                sequence: 0,
+                node_index: 0,
+            }]),
+            next_sequence: 1,
+            expanded: 0,
+            max_depth_reached: 0,
+            elapsed: Duration::ZERO,
+            status: ResumableSearchStatus::Active,
+            initial_goal_checked: false,
+        }
+    }
+
+    pub fn status(&self) -> ResumableSearchStatus {
+        self.status
+    }
+
+    pub fn stats(&self) -> SearchStats {
+        SearchStats {
+            visited: self.visited.len(),
+            expanded: self.expanded,
+            frontier: self.frontier.len(),
+            max_depth_reached: self.max_depth_reached,
+            elapsed: self.elapsed,
+        }
+    }
+
+    pub fn candidate(&self, index: usize) -> Option<ResumableSearchCandidate<State, Action>> {
+        let node = self.nodes.get(index)?;
+        let witness = resumable_witness(&self.nodes, index);
+        Some(ResumableSearchCandidate {
+            index,
+            state: node.state.clone(),
+            actions: witness.actions,
+            score: node.score,
+            depth: node.depth,
+            discovery_index: node.discovery_index,
+        })
+    }
+
+    pub fn best_candidates(&self, limit: usize) -> Vec<ResumableSearchCandidate<State, Action>> {
+        let mut indices = (0..self.nodes.len()).collect::<Vec<_>>();
+        indices.sort_by_key(|index| {
+            let node = &self.nodes[*index];
+            (node.score, node.depth, node.discovery_index)
+        });
+        indices.truncate(limit);
+        indices
+            .into_iter()
+            .filter_map(|index| self.candidate(index))
+            .collect()
+    }
+
+    pub fn advance<D, F>(
+        &mut self,
+        domain: &mut D,
+        allowance: ResumableSearchAllowance,
+        mut score: F,
+    ) -> ResumableAdvanceOutcome<Action, D::Error>
+    where
+        D: SearchDomain<State = State, Action = Action, Key = Key>,
+        F: FnMut(&State) -> i64,
+    {
+        assert!(
+            matches!(self.status, ResumableSearchStatus::Active),
+            "terminal resumable search must not be advanced"
+        );
+        assert!(allowance.max_expanded_nodes > 0);
+        assert!(!allowance.max_duration.is_zero());
+
+        let started_at = Instant::now();
+        let expanded_before = self.expanded;
+        if !self.initial_goal_checked {
+            self.initial_goal_checked = true;
+            if domain.is_goal(&self.nodes[0].state) {
+                self.status = ResumableSearchStatus::Solved { candidate_index: 0 };
+                self.elapsed += started_at.elapsed();
+                return ResumableAdvanceOutcome::Solved {
+                    candidate_index: 0,
+                    stats: self.stats(),
+                };
+            }
+        }
+
+        loop {
+            if self.expanded - expanded_before >= allowance.max_expanded_nodes {
+                self.elapsed += started_at.elapsed();
+                return ResumableAdvanceOutcome::Paused {
+                    reason: ResumablePauseReason::ExpandedNodes,
+                    stats: self.stats(),
+                };
+            }
+            if started_at.elapsed() >= allowance.max_duration {
+                self.elapsed += started_at.elapsed();
+                return ResumableAdvanceOutcome::Paused {
+                    reason: ResumablePauseReason::Duration,
+                    stats: self.stats(),
+                };
+            }
+
+            let Some(entry) = self.frontier.pop() else {
+                self.status = ResumableSearchStatus::Exhausted;
+                self.elapsed += started_at.elapsed();
+                return ResumableAdvanceOutcome::Exhausted {
+                    stats: self.stats(),
+                };
+            };
+            let current_index = entry.node_index;
+            let current_depth = self.nodes[current_index].depth;
+            self.max_depth_reached = self.max_depth_reached.max(current_depth);
+            if current_depth >= self.limits.max_depth {
+                continue;
+            }
+
+            self.expanded += 1;
+            let current_key = domain.key(&self.nodes[current_index].state);
+            let actions = domain.actions(&self.nodes[current_index].state).to_vec();
+            for action in actions {
+                let next = match domain.step(&self.nodes[current_index].state, &action) {
+                    Ok(next) => next,
+                    Err(error) => {
+                        self.status = ResumableSearchStatus::Failed;
+                        self.elapsed += started_at.elapsed();
+                        return ResumableAdvanceOutcome::Failed {
+                            failure: SearchFailure {
+                                action,
+                                depth: current_depth + 1,
+                                error,
+                            },
+                            stats: self.stats(),
+                        };
+                    }
+                };
+                let next_key = domain.key(&next);
+                if next_key == current_key || self.visited.contains_key(&next_key) {
+                    continue;
+                }
+                if self.nodes.len() >= self.limits.max_stored_nodes {
+                    self.status = ResumableSearchStatus::ResourceLimit;
+                    self.elapsed += started_at.elapsed();
+                    return ResumableAdvanceOutcome::ResourceLimit {
+                        stats: self.stats(),
+                    };
+                }
+
+                let next_depth = current_depth + 1;
+                let next_score = score(&next);
+                let next_index = self.nodes.len();
+                self.nodes.push(ResumableNode {
+                    state: next,
+                    parent: Some(current_index),
+                    action: Some(action),
+                    score: next_score,
+                    depth: next_depth,
+                    discovery_index: self.next_sequence,
+                });
+                self.visited.insert(next_key, next_index);
+                self.max_depth_reached = self.max_depth_reached.max(next_depth);
+                self.next_sequence += 1;
+
+                if domain.is_goal(&self.nodes[next_index].state) {
+                    self.status = ResumableSearchStatus::Solved {
+                        candidate_index: next_index,
+                    };
+                    self.elapsed += started_at.elapsed();
+                    return ResumableAdvanceOutcome::Solved {
+                        candidate_index: next_index,
+                        stats: self.stats(),
+                    };
+                }
+
+                self.frontier.push(QueueEntry {
+                    score: next_score,
+                    depth: next_depth,
+                    sequence: self.nodes[next_index].discovery_index,
+                    node_index: next_index,
+                });
+            }
+        }
+    }
+}
+
+fn resumable_witness<State, Action: Clone>(
+    nodes: &[ResumableNode<State, Action>],
+    mut index: usize,
+) -> Witness<Action> {
+    let depth = nodes[index].depth;
+    let mut actions = Vec::new();
+    while let Some(parent) = nodes[index].parent {
+        if let Some(action) = &nodes[index].action {
+            actions.push(action.clone());
+        }
+        index = parent;
+    }
+    actions.reverse();
+    Witness { actions, depth }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -604,5 +911,50 @@ mod tests {
         assert!(matches!(outcome, ScanOutcome::BudgetExceeded { .. }));
         assert!(discovered.contains(&(0, Vec::new(), 0)));
         assert!(discovered.contains(&(2, vec![1, 1], 2)));
+    }
+
+    #[test]
+    fn resumable_search_preserves_frontier_and_witnesses_between_advances() {
+        let mut domain = LineDomain { actions: [1] };
+        let mut machine = ResumableBestFirst::new(
+            0,
+            0,
+            3,
+            ResumableSearchLimits {
+                max_depth: 8,
+                max_stored_nodes: 32,
+            },
+        );
+        let allowance = ResumableSearchAllowance {
+            max_expanded_nodes: 1,
+            max_duration: Duration::from_secs(1),
+        };
+
+        let first = machine.advance(&mut domain, allowance, |state| i64::from(3 - *state));
+        assert!(matches!(
+            first,
+            ResumableAdvanceOutcome::Paused {
+                reason: ResumablePauseReason::ExpandedNodes,
+                ..
+            }
+        ));
+        assert_eq!(machine.stats().expanded, 1);
+        assert_eq!(machine.candidate(1).unwrap().actions, vec![1]);
+
+        let second = machine.advance(&mut domain, allowance, |state| i64::from(3 - *state));
+        assert!(matches!(second, ResumableAdvanceOutcome::Paused { .. }));
+        assert_eq!(machine.stats().expanded, 2);
+
+        let solved = machine.advance(&mut domain, allowance, |state| i64::from(3 - *state));
+        let ResumableAdvanceOutcome::Solved {
+            candidate_index, ..
+        } = solved
+        else {
+            panic!("third advance must solve the line domain");
+        };
+        let candidate = machine.candidate(candidate_index).unwrap();
+        assert_eq!(candidate.state, 3);
+        assert_eq!(candidate.actions, vec![1, 1, 1]);
+        assert_eq!(candidate.depth, 3);
     }
 }

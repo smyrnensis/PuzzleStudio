@@ -29,10 +29,8 @@ pub(crate) enum SpritePropertySyntax {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum SpriteShapeSyntax {
     Reference(String),
-    Inline {
-        frames: Vec<Vec<SpriteShapeRow>>,
-        explicit: bool,
-    },
+    ExplicitInline(Vec<Vec<SpriteShapeRow>>),
+    BareFrames(Vec<Vec<SpriteShapeRow>>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -170,18 +168,67 @@ pub(crate) fn parse_sprite_node(header: Option<&str>, lines: &[String]) -> Sprit
         }
     }
     if saw_shape {
-        if syntax
-            .shape
-            .replace(SpriteShapeSyntax::Inline {
-                frames,
-                explicit: explicit_shape,
-            })
-            .is_some()
-        {
+        let shape = if explicit_shape {
+            SpriteShapeSyntax::ExplicitInline(frames)
+        } else {
+            SpriteShapeSyntax::BareFrames(frames)
+        };
+        if syntax.shape.replace(shape).is_some() {
             issue(&mut syntax, "", "duplicate sprite shape");
         }
     }
     syntax
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ResolvedSpriteShape {
+    None,
+    Reference(String),
+    Inline(Vec<Vec<SpriteShapeRow>>),
+    UnknownBareReference(String),
+    AmbiguousBareRow(String),
+}
+
+pub(crate) fn resolve_sprite_shape(
+    syntax: &SpriteNodeSyntax,
+    mut is_known_shape: impl FnMut(&str) -> bool,
+) -> ResolvedSpriteShape {
+    let Some(shape) = &syntax.shape else {
+        return ResolvedSpriteShape::None;
+    };
+    let frames = match shape {
+        SpriteShapeSyntax::Reference(reference) => {
+            return ResolvedSpriteShape::Reference(reference.clone());
+        }
+        SpriteShapeSyntax::ExplicitInline(frames) => {
+            return ResolvedSpriteShape::Inline(frames.clone());
+        }
+        SpriteShapeSyntax::BareFrames(frames) => frames,
+    };
+    let [frame] = frames.as_slice() else {
+        return ResolvedSpriteShape::Inline(frames.clone());
+    };
+    let [row] = frame.as_slice() else {
+        return ResolvedSpriteShape::Inline(frames.clone());
+    };
+    let candidate = row.text.as_str();
+    let shape_name = candidate
+        .split_once(':')
+        .map_or(candidate, |(name, _)| name);
+    let known_shape = is_known_shape(shape_name);
+    let palette_size = syntax.colors.as_ref().map_or(0, Vec::len);
+    let valid_inline_row = candidate.chars().all(|token| {
+        token == '.'
+            || (0..palette_size)
+                .filter_map(crate::visual_color_token_for_index)
+                .any(|palette_token| token == palette_token)
+    });
+    match (known_shape, valid_inline_row) {
+        (true, true) => ResolvedSpriteShape::AmbiguousBareRow(candidate.to_string()),
+        (true, false) => ResolvedSpriteShape::Reference(candidate.to_string()),
+        (false, true) => ResolvedSpriteShape::Inline(frames.clone()),
+        (false, false) => ResolvedSpriteShape::UnknownBareReference(candidate.to_string()),
+    }
 }
 
 pub(crate) fn is_sprite_property_tokens(tokens: &[&str]) -> bool {
@@ -324,7 +371,7 @@ mod tests {
     use super::{SpriteShapeSyntax, parse_sprite_node};
 
     #[test]
-    fn explicit_and_owner_shorthand_normalize_equally() {
+    fn explicit_and_bare_inline_rows_preserve_distinct_syntax_with_same_content() {
         let explicit = parse_sprite_node(
             Some("sprite {"),
             &[
@@ -345,12 +392,22 @@ mod tests {
         assert_eq!(explicit.selector, shorthand.selector);
         assert_eq!(explicit.colors, shorthand.colors);
         assert_eq!(explicit.duration, shorthand.duration);
+        assert!(matches!(
+            explicit.shape.as_ref(),
+            Some(SpriteShapeSyntax::ExplicitInline(_))
+        ));
+        assert!(matches!(
+            shorthand.shape.as_ref(),
+            Some(SpriteShapeSyntax::BareFrames(_))
+        ));
         let rows = |shape: SpriteShapeSyntax| match shape {
-            SpriteShapeSyntax::Inline { frames, .. } => frames
-                .into_iter()
-                .flatten()
-                .map(|row| row.text)
-                .collect::<Vec<_>>(),
+            SpriteShapeSyntax::ExplicitInline(frames) | SpriteShapeSyntax::BareFrames(frames) => {
+                frames
+                    .into_iter()
+                    .flatten()
+                    .map(|row| row.text)
+                    .collect::<Vec<_>>()
+            }
             _ => panic!("inline"),
         };
         assert_eq!(

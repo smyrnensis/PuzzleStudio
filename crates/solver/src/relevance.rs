@@ -164,8 +164,12 @@ impl SolverRelevance<ObjectId2> {
                 }
                 changed
             }
-            RuleStep::LocalFrame { steps, .. } => {
+            RuleStep::LocalFrame { frame, steps } => {
                 let mut changed = false;
+                if steps.iter().any(|step| step_has_relevant_write(step, self)) {
+                    changed |=
+                        self.insert_relevant_objects(&frame.focus_objects, &ObjectId2::is_empty);
+                }
                 for step in steps {
                     changed |= self.propagate_step(game, step);
                 }
@@ -235,8 +239,9 @@ impl SolverRelevance<ObjectId2> {
                 }
                 changed
             }
-            RuleStep::LocalFrame { steps, .. } => {
-                let mut changed = false;
+            RuleStep::LocalFrame { frame, steps } => {
+                let mut changed =
+                    self.insert_relevant_objects(&frame.focus_objects, &ObjectId2::is_empty);
                 for step in steps {
                     changed |= self.insert_step_read_objects(game, step);
                 }
@@ -332,9 +337,11 @@ fn rule_has_relevant_output(rule: &Rule, relevance: &SolverRelevance) -> bool {
 fn effect_is_solver_visible(effect: &Effect) -> bool {
     matches!(
         effect,
-        Effect::Win
+        Effect::Cancel
+            | Effect::Win
             | Effect::Restart
             | Effect::NextLevel
+            | Effect::Again
             | Effect::Checkpoint
             | Effect::ClearCheckpoint
             | Effect::UpdateVariable { .. }
@@ -571,6 +578,59 @@ P
         assert_relevant(&relevance, GOAL);
         assert_pruned(&relevance, FLOOR);
         assert_eq!(relevance.relevant_rules(), vec![RuleId(2)]);
+    }
+
+    #[test]
+    fn transition_control_effects_are_solver_relevant() {
+        const PLAYER: ObjectId = ObjectId(1);
+        for effect in [Effect::Cancel, Effect::Again] {
+            let game = CompiledGame::new_with_program(
+                1,
+                vec![object(1, ACTOR)],
+                vec![RuleStep::Rule(rule(
+                    1,
+                    pattern(vec![cell(vec![PLAYER], Vec::new())]),
+                    Vec::new(),
+                    Vec::new(),
+                    vec![effect],
+                ))],
+            );
+            let relevance = SolverRelevance::from_root_objects(&game, []);
+            assert_relevant(&relevance, PLAYER);
+            assert_eq!(relevance.relevant_rules(), vec![RuleId(1)]);
+        }
+    }
+
+    #[test]
+    fn local_frame_focus_objects_are_control_dependencies() {
+        const PLAYER: ObjectId = ObjectId(1);
+        const FOCUS: ObjectId = ObjectId(2);
+        const GOAL: ObjectId = ObjectId(3);
+        let game = CompiledGame::new_with_program(
+            3,
+            vec![object(1, ACTOR), object(2, ITEM), object(3, ITEM)],
+            vec![RuleStep::LocalFrame {
+                frame: puzzle_core::LocalFrame::new(
+                    puzzle_core::LocalFrameExtent::Full,
+                    puzzle_core::LocalFrameExtent::Full,
+                    puzzle_core::LocalFrameExtent::Full,
+                    vec![FOCUS],
+                ),
+                steps: vec![RuleStep::Rule(rule(
+                    1,
+                    pattern(vec![cell(vec![PLAYER], Vec::new())]),
+                    Vec::new(),
+                    vec![add(GOAL)],
+                    Vec::new(),
+                ))],
+            }],
+        );
+
+        let relevance = SolverRelevance::from_root_objects(&game, [GOAL]);
+
+        assert_relevant(&relevance, PLAYER);
+        assert_relevant(&relevance, FOCUS);
+        assert_relevant(&relevance, GOAL);
     }
 
     #[test]

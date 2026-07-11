@@ -5,6 +5,15 @@ use std::{
 
 #[test]
 fn editor_browser_smoke_flows() {
+    run_editor_browser_smoke(&[]);
+}
+
+#[test]
+fn sprite_palette_mouse_click_preserves_pane_scroll() {
+    run_editor_browser_smoke(&["--sprite-palette-only"]);
+}
+
+fn run_editor_browser_smoke(extra_args: &[&str]) {
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)
@@ -15,13 +24,14 @@ fn editor_browser_smoke_flows() {
         .map(PathBuf::from)
         .expect("cargo should expose the html-editor binary path to integration tests");
 
-    let status = Command::new("node")
+    let mut command = Command::new("node");
+    command
         .arg(script)
         .arg("--editor-bin")
         .arg(editor_bin)
-        .current_dir(&repo_root)
-        .status()
-        .expect("run editor browser smoke test");
+        .args(extra_args)
+        .current_dir(&repo_root);
+    let status = command.status().expect("run editor browser smoke test");
 
     assert!(status.success(), "editor browser smoke test failed");
 }

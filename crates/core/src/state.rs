@@ -434,7 +434,7 @@ impl State {
     pub(crate) fn set_slot_unchecked(&mut self, x: u16, y: u16, layer: LayerId, object: ObjectId) {
         let index = self.slot_index_unchecked(x, y, layer);
         let existing = self.slots[index];
-        if object.is_empty() {
+        if existing != object {
             self.clear_slot_mark_positions(index, existing);
             self.mark.clear_slot(index);
         }

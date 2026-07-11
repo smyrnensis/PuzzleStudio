@@ -211,7 +211,7 @@ class PuzzleRenderer {
     }
 
     sprite.classList.add("visual-pattern");
-    sprite.style.backgroundImage = `url("${this.patternDataUrl(baseFrame)}")`;
+    sprite.style.backgroundImage = `url("${this.domPatternDataUrl(baseFrame)}")`;
 
     return sprite;
   }
@@ -275,7 +275,7 @@ class PuzzleRenderer {
     }
 
     sprite.classList.add("visual-pattern");
-    sprite.style.backgroundImage = `url("${this.patternDataUrl(frame)}")`;
+    sprite.style.backgroundImage = `url("${this.domPatternDataUrl(frame)}")`;
   }
 
   renderCanvas(scene, frame) {
@@ -528,10 +528,9 @@ class PuzzleRenderer {
     }
 
     const fit = this.visualSpriteFit(frame, unit);
-    const bitmap = this.cachedPatternBitmap(frame);
     context.save();
     context.imageSmoothingEnabled = this.spriteSampling(frame) === "smooth";
-    context.drawImage(bitmap, x + fit.x, y + fit.y, fit.width, fit.height);
+    this.paintLogicalPatternToCanvas(context, frame, x + fit.x, y + fit.y, fit.pixelWidth, fit.pixelHeight);
     context.restore();
     if (usesTransformStack) {
       context.restore();
@@ -693,10 +692,9 @@ class PuzzleRenderer {
     }
 
     const fit = this.visualSpriteFit(definition, unit);
-    const bitmap = this.cachedPatternBitmap(definition);
     context.save();
     context.imageSmoothingEnabled = this.spriteSampling(definition) === "smooth";
-    context.drawImage(bitmap, x + fit.x, y + fit.y, fit.width, fit.height);
+    this.paintLogicalPatternToCanvas(context, definition, x + fit.x, y + fit.y, fit.pixelWidth, fit.pixelHeight);
     context.restore();
     if (usesTransformStack) {
       context.restore();
@@ -893,19 +891,7 @@ class PuzzleRenderer {
     return ((value % size) + size) % size;
   }
 
-  cachedPatternBitmap(definition) {
-    const key = JSON.stringify([definition.pattern || [], definition.colors || {}]);
-    const cache = this.constructor.patternBitmapCache || (this.constructor.patternBitmapCache = new Map());
-    const existing = cache.get(key);
-    if (existing) {
-      return existing;
-    }
-    const { cols: width, rows: height } = this.spritePatternSize(definition);
-    const bitmap = document.createElement("canvas");
-    bitmap.width = width;
-    bitmap.height = height;
-    const bitmapContext = bitmap.getContext("2d");
-    bitmapContext.imageSmoothingEnabled = false;
+  paintLogicalPatternToCanvas(context, definition, x, y, pixelWidth, pixelHeight = pixelWidth) {
     const pattern = definition.pattern || [];
     pattern.forEach((row, rowIndex) => {
       [...row].forEach((token, colIndex) => {
@@ -913,12 +899,14 @@ class PuzzleRenderer {
         if (!color || color === "transparent") {
           return;
         }
-        bitmapContext.fillStyle = color;
-        bitmapContext.fillRect(colIndex, rowIndex, 1, 1);
+        context.fillStyle = color;
+        const left = x + colIndex * pixelWidth;
+        const right = x + (colIndex + 1) * pixelWidth;
+        const top = y + rowIndex * pixelHeight;
+        const bottom = y + (rowIndex + 1) * pixelHeight;
+        this.fillCanvasRect(context, left, top, right - left, bottom - top);
       });
     });
-    cache.set(key, bitmap);
-    return bitmap;
   }
 
   fillCanvasRect(context, x, y, width, height) {
@@ -1037,8 +1025,34 @@ class PuzzleRenderer {
     return `Board ${frame.width} by ${frame.height}`;
   }
 
-  patternDataUrl(definition) {
-    return this.cachedPatternBitmap(definition).toDataURL("image/png");
+  domPatternDataUrl(definition) {
+    const key = JSON.stringify([definition.pattern || [], definition.colors || {}]);
+    const cache = this.constructor.domPatternDataUrlCache
+      || (this.constructor.domPatternDataUrlCache = new Map());
+    const existing = cache.get(key);
+    if (existing) {
+      return existing;
+    }
+    const { cols: width, rows: height } = this.spritePatternSize(definition);
+    const bitmap = document.createElement("canvas");
+    bitmap.width = width;
+    bitmap.height = height;
+    const bitmapContext = bitmap.getContext("2d");
+    bitmapContext.imageSmoothingEnabled = false;
+    const pattern = definition.pattern || [];
+    pattern.forEach((row, rowIndex) => {
+      [...row].forEach((token, colIndex) => {
+        const color = definition.colors?.[token] || "transparent";
+        if (!color || color === "transparent") {
+          return;
+        }
+        bitmapContext.fillStyle = color;
+        bitmapContext.fillRect(colIndex, rowIndex, 1, 1);
+      });
+    });
+    const url = bitmap.toDataURL("image/png");
+    cache.set(key, url);
+    return url;
   }
 
   solidPatternColor(definition) {

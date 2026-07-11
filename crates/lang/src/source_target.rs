@@ -841,6 +841,9 @@ fn source_sprite_target(
         .map(|line| code_trim(line).to_string())
         .collect::<Vec<_>>();
     let syntax = crate::sprite_authoring::parse_sprite_node(None, &body_lines);
+    let resolved_shape = crate::sprite_authoring::resolve_sprite_shape(&syntax, |name| {
+        visual_refs.shape_names.contains(name)
+    });
     let mut target = SourceSpriteTarget::default();
     let visual_target_name = syntax
         .selector
@@ -854,11 +857,11 @@ fn source_sprite_target(
     if let Some(value) = syntax.frame_duration {
         target.frame_duration_ms = puzzle_scene::parse_wait_duration_ms_at(&value, &value).ok();
     }
-    match syntax.shape {
-        Some(crate::sprite_authoring::SpriteShapeSyntax::Reference(reference)) => {
+    match resolved_shape {
+        crate::sprite_authoring::ResolvedSpriteShape::Reference(reference) => {
             target.shape_ref = Some(reference);
         }
-        Some(crate::sprite_authoring::SpriteShapeSyntax::Inline { frames, .. }) => {
+        crate::sprite_authoring::ResolvedSpriteShape::Inline(frames) => {
             let frames = frames
                 .into_iter()
                 .map(|frame| frame.into_iter().map(|row| row.text).collect::<Vec<_>>())
@@ -868,7 +871,9 @@ fn source_sprite_target(
                 target.animation_frames = frames;
             }
         }
-        None => {}
+        crate::sprite_authoring::ResolvedSpriteShape::None
+        | crate::sprite_authoring::ResolvedSpriteShape::UnknownBareReference(_)
+        | crate::sprite_authoring::ResolvedSpriteShape::AmbiguousBareRow(_) => {}
     }
     target.color_assets = visual_refs
         .color_assets
@@ -2630,6 +2635,37 @@ Next
         let body = &source[target.body_start.unwrap()..target.body_end.unwrap()];
         assert!(body.contains("shape box_shape"));
         assert!(!body.contains("Next"));
+    }
+
+    #[test]
+    fn bare_shape_reference_uses_shared_owner_scope_resolution() {
+        let source = r##"
+sprites {
+Box
+#111 #eee
+box_shape
+
+shapes {
+box_shape
+010
+111
+010
+}
+}
+"##;
+        let cursor = source.find("box_shape\n\nshapes").unwrap();
+        let target = resolve_source_target(source, cursor).unwrap();
+        let source_sprite = target
+            .source_sprite
+            .as_ref()
+            .expect("source sprite contract");
+
+        assert_eq!(source_sprite.shape_ref.as_deref(), Some("box_shape"));
+        assert!(source_sprite.pixel_rows.is_empty());
+        assert_eq!(
+            source_sprite.resolved_shape_rows,
+            vec!["010".to_string(), "111".to_string(), "010".to_string()]
+        );
     }
 
     #[test]

@@ -2070,6 +2070,76 @@ pub fn expand_game_imports_for_file_under_root(
     expand_game_imports(source, base_dir, &mut import_stack, Some(&root))
 }
 
+/// Expands a 2D puzzle entry against an explicit in-memory document set.
+/// Hosts provide files; the language layer alone interprets import syntax.
+pub fn expand_game_imports_from_documents(
+    entry_path: &str,
+    documents: &[(String, String)],
+) -> Result<String, DiagnosticReport> {
+    let entry = normalize_virtual_import_path(Path::new(entry_path));
+    let sources = documents
+        .iter()
+        .map(|(path, source)| (normalize_virtual_import_path(Path::new(path)), source.as_str()))
+        .collect::<HashMap<_, _>>();
+    let source = sources.get(&entry).copied().ok_or_else(|| {
+        DiagnosticReport::error(format!("workspace puzzle entry not found: {}", entry.display()))
+    })?;
+    expand_virtual_game_imports(source, &entry, &sources, &mut vec![entry.clone()])
+}
+
+fn expand_virtual_game_imports(
+    source: &str,
+    current_path: &Path,
+    sources: &HashMap<PathBuf, &str>,
+    import_stack: &mut Vec<PathBuf>,
+) -> Result<String, DiagnosticReport> {
+    let mut out = String::new();
+    for raw_line in source.split_inclusive('\n') {
+        let content = raw_line.strip_suffix('\n').unwrap_or(raw_line);
+        if let Some(requested) = import_directive_path(content)? {
+            if requested.is_absolute() {
+                return Err(DiagnosticReport::error("workspace imports must be relative".to_string()));
+            }
+            let base = current_path.parent().unwrap_or_else(|| Path::new(""));
+            let resolved = normalize_virtual_import_path(&base.join(requested));
+            if import_stack.contains(&resolved) {
+                return Err(DiagnosticReport::error(format!(
+                    "cyclic import: {}",
+                    import_stack.iter().chain(std::iter::once(&resolved))
+                        .map(|path| path.display().to_string()).collect::<Vec<_>>().join(" -> ")
+                )));
+            }
+            let imported = sources.get(&resolved).copied().ok_or_else(|| {
+                DiagnosticReport::error(format!(
+                    "import not found: {} from {}", resolved.display(), current_path.display()
+                ))
+            })?;
+            import_stack.push(resolved.clone());
+            let expanded = expand_virtual_game_imports(imported, &resolved, sources, import_stack);
+            import_stack.pop();
+            let expanded = expanded?;
+            out.push_str(&expanded);
+            if !expanded.ends_with('\n') { out.push('\n'); }
+        } else {
+            out.push_str(raw_line);
+        }
+    }
+    Ok(out)
+}
+
+fn normalize_virtual_import_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => { normalized.pop(); }
+            Component::Normal(part) => normalized.push(part),
+            Component::RootDir | Component::Prefix(_) => {}
+        }
+    }
+    normalized
+}
+
 fn parse_game2d_expanded_lines_with_shell(
     logical_lines: Vec<source::LogicalLine>,
     shell: &DocumentShell,
@@ -2084,6 +2154,81 @@ fn parse_game2d_expanded_lines_with_shell(
         .collect::<Vec<_>>();
     parse_game2d_expanded_lines_with_shell_inner(&lines, &line_numbers, shell)
         .map_err(|report| report_with_source_line_numbers(report, &lines, &line_numbers))
+}
+
+fn lower_win_condition_strategy(
+    condition: &ConditionAst,
+    strategy: &mut SolverStrategy,
+    object_layers: &HashMap<ObjectId, LayerId>,
+    mark_names: &HashMap<String, MarkDef>,
+    value_sets: &HashMap<String, Vec<String>>,
+    maps: &HashMap<String, ValueMap>,
+    input_names: &HashMap<String, InputId>,
+    directions: &[Direction],
+) -> Result<(), DiagnosticReport> {
+    match condition {
+        ConditionAst::All(conditions) => {
+            for condition in conditions {
+                lower_win_condition_strategy(
+                    condition,
+                    strategy,
+                    object_layers,
+                    mark_names,
+                    value_sets,
+                    maps,
+                    input_names,
+                    directions,
+                )?;
+            }
+        }
+        ConditionAst::AllObjectsOn { subjects, covers } => {
+            let already_present = strategy.terms.iter().any(|term| {
+                matches!(
+                    &term.value,
+                    QueryExpr::AllOnDistance {
+                        subjects: existing_subjects,
+                        covers: existing_covers,
+                    } if existing_subjects == subjects && existing_covers == covers
+                )
+            });
+            if !already_present {
+                strategy.terms.push(SolverStrategyTerm {
+                    direction: SolverStrategyDirection::Minimize,
+                    value: QueryExpr::AllOnDistance {
+                        subjects: subjects.clone(),
+                        covers: covers.clone(),
+                    },
+                    weight: 1,
+                });
+            }
+        }
+        ConditionAst::InlineConditionNonZero(ConditionValueAst::NoneMatches(pattern)) => {
+            let value = lower_condition_value_kind(
+                &ConditionValueAst::CountMatches(pattern.clone()),
+                input_names,
+                object_layers,
+                mark_names,
+                value_sets,
+                maps,
+                directions,
+            )?;
+            strategy.terms.push(SolverStrategyTerm {
+                direction: SolverStrategyDirection::Minimize,
+                value: QueryExpr::Value(value),
+                weight: 1,
+            });
+        }
+        ConditionAst::InlineConditionNonZero(ConditionValueAst::NoneObjects(objects)) => {
+            strategy.terms.push(SolverStrategyTerm {
+                direction: SolverStrategyDirection::Minimize,
+                value: QueryExpr::Value(ConditionValueKind::CountObjects(objects.clone())),
+                weight: 1,
+            });
+        }
+        ConditionAst::Any(_) => {}
+        _ => {}
+    }
+    Ok(())
 }
 
 fn parse_game2d_expanded_lines_with_shell_inner(
@@ -2334,12 +2479,6 @@ fn parse_game2d_expanded_lines_with_shell_inner(
         return Err(DiagnosticReport::from_diagnostics(diagnostics));
     }
 
-    let empty_char = empty_char.ok_or_else(|| {
-        DiagnosticReport::error(
-            "missing empty char; use `levels { legend { . = empty } }`".to_string(),
-        )
-    })?;
-    validate_layer_role_separation(&catalog, &named_layers)?;
     refresh_layer_tags_and_value_sets(&mut named_layers, &mut catalog);
     let layer_count =
         layer_count.ok_or_else(|| DiagnosticReport::error("missing layers".to_string()))?;
@@ -2409,7 +2548,7 @@ fn parse_game2d_expanded_lines_with_shell_inner(
         &catalog.input_names,
         &effective_directions,
     )?;
-    let solver_strategy = lower_solver_strategy(
+    let mut solver_strategy = lower_solver_strategy(
         solver_strategy,
         &query_definitions,
         &catalog.object_names,
@@ -2424,6 +2563,21 @@ fn parse_game2d_expanded_lines_with_shell_inner(
         &catalog.input_names,
         &effective_directions,
     )?;
+    if let Some((_, win_condition)) = named_conditions
+        .get("win_conditions")
+        .or_else(|| named_conditions.get("goal"))
+    {
+        lower_win_condition_strategy(
+            win_condition,
+            &mut solver_strategy,
+            &catalog.object_layers,
+            &catalog.mark_names,
+            &value_sets,
+            &catalog.maps,
+            &catalog.input_names,
+            &effective_directions,
+        )?;
+    }
     let condition_defs = lower_condition_defs(
         condition_definitions,
         &catalog.object_layers,
@@ -2770,9 +2924,7 @@ fn collect_dynamic_selector_statement_warnings(
                     warnings,
                 );
             }
-            StatementAst::Call { .. }
-            | StatementAst::DisplayCall { .. }
-            | StatementAst::Effect { .. } => {}
+            StatementAst::Call { .. } | StatementAst::Effect { .. } => {}
         }
     }
 }
@@ -3003,10 +3155,7 @@ fn expand_game_imports(
     let mut out = String::new();
     for raw_line in source.split_inclusive('\n') {
         let content = raw_line.strip_suffix('\n').unwrap_or(raw_line);
-        let line = strip_line_comment(content).trim();
-        let tokens = split_header_tokens(line);
-        if matches!(tokens.as_slice(), ["import", _]) {
-            let path = import_path(tokens[1], line)?;
+        if let Some(path) = import_directive_path(content)? {
             let imported = read_import_expanded(base_dir, &path, import_stack, root)?;
             out.push_str(&imported);
             if !imported.ends_with('\n') {
@@ -3058,13 +3207,21 @@ fn read_import_expanded(
     expanded
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn import_path(token: &str, line: &str) -> Result<PathBuf, DiagnosticReport> {
     let path = token
         .strip_prefix('"')
         .and_then(|value| value.strip_suffix('"'))
         .ok_or_else(|| parse_error(line, "import path must be quoted"))?;
     Ok(PathBuf::from(path))
+}
+
+fn import_directive_path(line: &str) -> Result<Option<PathBuf>, DiagnosticReport> {
+    let line = strip_line_comment(line).trim();
+    let tokens = split_header_tokens(line);
+    if !matches!(tokens.as_slice(), ["import", _]) {
+        return Ok(None);
+    }
+    import_path(tokens[1], line).map(Some)
 }
 
 #[cfg(not(target_arch = "wasm32"))]

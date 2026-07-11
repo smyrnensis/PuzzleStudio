@@ -103,15 +103,6 @@ impl CorePatch {
                     if existing == object {
                         continue;
                     }
-                    if !existing.is_empty() {
-                        return Err(PatchError::LayerOccupied {
-                            x,
-                            y,
-                            layer,
-                            existing,
-                            attempted: object,
-                        });
-                    }
                     slots.set(x, y, layer, object);
                     changed = true;
                 }
@@ -161,15 +152,6 @@ impl CorePatch {
                     let existing = slots.get(game, state, x, y, add_layer)?;
                     if existing == add {
                         continue;
-                    }
-                    if !existing.is_empty() {
-                        return Err(PatchError::LayerOccupied {
-                            x,
-                            y,
-                            layer: add_layer,
-                            existing,
-                            attempted: add,
-                        });
                     }
                     slots.set(x, y, add_layer, add);
                     changed = true;
@@ -597,15 +579,6 @@ fn apply_add(
     if existing == object {
         return Ok(());
     }
-    if !existing.is_empty() {
-        return Err(PatchError::LayerOccupied {
-            x,
-            y,
-            layer,
-            existing,
-            attempted: object,
-        });
-    }
 
     state.set_slot_unchecked(x, y, layer, object);
     Ok(())
@@ -995,5 +968,144 @@ mod tests {
                 found: ObjectId::EMPTY,
             }) if expected == object
         ));
+    }
+
+    #[test]
+    fn add_sets_the_layer_slot_and_clears_marks_from_the_displaced_object() {
+        let existing = ObjectId(1);
+        let added = ObjectId(2);
+        let mark = MarkId(0);
+        let game = CompiledGame::new(
+            1,
+            vec![
+                ObjectDef {
+                    id: existing,
+                    layer_id: LayerId(0),
+                },
+                ObjectDef {
+                    id: added,
+                    layer_id: LayerId(0),
+                },
+            ],
+            Vec::new(),
+        );
+        let mut state = State::empty(1, 1, 1, 2).unwrap();
+        state.place_object(&game, 0, 0, existing).unwrap();
+        state.set_mark_unchecked(0, 0, LayerId(0), mark, Some(7));
+
+        let patch = Patch::from_ops(vec![PatchOp::Add {
+            x: 0,
+            y: 0,
+            object: added,
+        }]);
+
+        assert!(patch.validate(&game, &state).unwrap());
+        let next = patch.apply(&game, &state).unwrap();
+
+        assert_eq!(next.get_layer(0, 0, LayerId(0)).unwrap(), added);
+        assert_eq!(next.object_count(existing), 0);
+        assert_eq!(next.object_count(added), 1);
+        assert!(next.slot_mark().iter().all(Vec::is_empty));
+    }
+
+    #[test]
+    fn idempotent_add_preserves_marks_on_the_existing_object() {
+        let object = ObjectId(1);
+        let mark = MarkId(0);
+        let game = CompiledGame::new(
+            1,
+            vec![ObjectDef {
+                id: object,
+                layer_id: LayerId(0),
+            }],
+            Vec::new(),
+        );
+        let mut state = State::empty(1, 1, 1, 1).unwrap();
+        state.place_object(&game, 0, 0, object).unwrap();
+        state.set_mark_unchecked(0, 0, LayerId(0), mark, Some(7));
+
+        let patch = Patch::from_ops(vec![PatchOp::Add { x: 0, y: 0, object }]);
+        let next = patch.apply(&game, &state).unwrap();
+
+        assert!(next.has_mark(&game, 0, 0, object, mark, Some(7)));
+    }
+
+    #[test]
+    fn ordered_adds_set_the_slot_to_the_last_object() {
+        let first = ObjectId(1);
+        let second = ObjectId(2);
+        let game = CompiledGame::new(
+            1,
+            vec![
+                ObjectDef {
+                    id: first,
+                    layer_id: LayerId(0),
+                },
+                ObjectDef {
+                    id: second,
+                    layer_id: LayerId(0),
+                },
+            ],
+            Vec::new(),
+        );
+        let state = State::empty(1, 1, 1, 2).unwrap();
+        let patch = Patch::from_ops(vec![
+            PatchOp::Add {
+                x: 0,
+                y: 0,
+                object: first,
+            },
+            PatchOp::Add {
+                x: 0,
+                y: 0,
+                object: second,
+            },
+        ]);
+
+        assert!(patch.validate(&game, &state).unwrap());
+        let next = patch.apply(&game, &state).unwrap();
+
+        assert_eq!(next.get_layer(0, 0, LayerId(0)).unwrap(), second);
+    }
+
+    #[test]
+    fn replace_overwrites_an_occupied_add_layer() {
+        let removed = ObjectId(1);
+        let existing = ObjectId(2);
+        let added = ObjectId(3);
+        let game = CompiledGame::new(
+            2,
+            vec![
+                ObjectDef {
+                    id: removed,
+                    layer_id: LayerId(0),
+                },
+                ObjectDef {
+                    id: existing,
+                    layer_id: LayerId(1),
+                },
+                ObjectDef {
+                    id: added,
+                    layer_id: LayerId(1),
+                },
+            ],
+            Vec::new(),
+        );
+        let mut state = State::empty(1, 1, 2, 3).unwrap();
+        state.place_object(&game, 0, 0, removed).unwrap();
+        state.place_object(&game, 0, 0, existing).unwrap();
+
+        let patch = Patch::from_ops(vec![PatchOp::Replace {
+            x: 0,
+            y: 0,
+            remove: removed,
+            add: added,
+        }]);
+
+        assert!(patch.validate(&game, &state).unwrap());
+        let next = patch.apply(&game, &state).unwrap();
+
+        assert_eq!(next.get_layer(0, 0, LayerId(0)).unwrap(), ObjectId::EMPTY);
+        assert_eq!(next.get_layer(0, 0, LayerId(1)).unwrap(), added);
     }
 }

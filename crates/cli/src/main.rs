@@ -1,5 +1,6 @@
 use std::env;
 use std::fs;
+use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 
 use puzzle_lang::{Diagnostic, DiagnosticReport, LoadedDocument, LoadedDocumentModel};
@@ -30,6 +31,7 @@ fn run() -> Result<(), CliError> {
         "export-editor" => export_editor_command(&args),
         "import-puzzlescript" => import_puzzlescript_command(&args),
         "inspect" | "list" => inspect_command(&args),
+        "agent" => agent_command(&args),
         "screenshot" => screenshot_command(&args),
         "play" => play_command(&args),
         "preview" => preview_command(&args),
@@ -40,6 +42,35 @@ fn run() -> Result<(), CliError> {
         }
         other => Err(CliError::Usage(format!("unknown command: {other}"))),
     }
+}
+
+fn agent_command(args: &[String]) -> Result<(), CliError> {
+    match args {
+        [arg] if arg == "--help" || arg == "-h" || arg == "help" => {
+            print_agent_usage();
+            Ok(())
+        }
+        [arg] if arg == "--stdio" || arg == "request" => {
+            agent_json_lines(io::stdin().lock(), io::stdout().lock())
+        }
+        [] => Err(CliError::Usage(
+            "agent requires --stdio or request".to_string(),
+        )),
+        _ => Err(CliError::Usage(format!(
+            "unknown agent arguments: {}",
+            args.join(" ")
+        ))),
+    }
+}
+
+fn agent_json_lines(reader: impl BufRead, mut writer: impl Write) -> Result<(), CliError> {
+    let mut server = puzzle_agent_runtime::AgentServer::new();
+    for line in reader.lines() {
+        let response = server.handle_line(&line?);
+        writeln!(writer, "{response}")?;
+        writer.flush()?;
+    }
+    Ok(())
 }
 
 fn play_command(args: &[String]) -> Result<(), CliError> {
@@ -744,8 +775,14 @@ fn escape_json(value: &str) -> String {
 
 fn print_usage() {
     eprintln!(
-        "usage:\n  puzzlestudio check <path> [--json]\n  puzzlestudio inspect <path>\n  puzzlestudio play [path]\n  puzzlestudio preview [path] [--port 7878] [--solver-depth N] [--solver-nodes N] [--solver-ms N]\n  puzzlestudio editor [path] [--port 8787]\n  puzzlestudio export-html <path> -o <output.html>\n  puzzlestudio export-editor [path] -o <docs/index.html>\n  puzzlestudio screenshot <path> -o <output.png> [--scene name] [--level name-or-index] [--input name] [--inputs a,b,c] [--width 1280] [--height 720] [--browser path]\n  puzzlestudio screenshot <path> --list\n  puzzlestudio import-puzzlescript <source.txt> -o <game.puzzle>{}",
+        "usage:\n  puzzlestudio check <path> [--json]\n  puzzlestudio inspect <path>\n  puzzlestudio agent --stdio\n  puzzlestudio agent request < requests.jsonl\n  puzzlestudio play [path]\n  puzzlestudio preview [path] [--port 7878] [--solver-depth N] [--solver-nodes N] [--solver-ms N]\n  puzzlestudio editor [path] [--port 8787]\n  puzzlestudio export-html <path> -o <output.html>\n  puzzlestudio export-editor [path] -o <docs/index.html>\n  puzzlestudio screenshot <path> -o <output.png> [--scene name] [--level name-or-index] [--input name] [--inputs a,b,c] [--width 1280] [--height 720] [--browser path]\n  puzzlestudio screenshot <path> --list\n  puzzlestudio import-puzzlescript <source.txt> -o <game.puzzle>{}",
         adapter_feature_note()
+    );
+}
+
+fn print_agent_usage() {
+    eprintln!(
+        "usage:\n  puzzlestudio agent --stdio\n  puzzlestudio agent request < requests.jsonl"
     );
 }
 
@@ -841,6 +878,20 @@ mod tests {
             screenshot_inspect_args(&args).expect("parse screenshot list args"),
             vec!["games/spec_2d.puzzle".to_string()]
         );
+    }
+
+    #[test]
+    fn agent_json_lines_keeps_the_session_alive_after_request_errors() {
+        let input = b"{\n{\"version\":1,\"op\":\"manifest\",\"sessionId\":\"missing\"}\n";
+        let mut output = Vec::new();
+
+        agent_json_lines(std::io::Cursor::new(input), &mut output).unwrap();
+
+        let lines = String::from_utf8(output).unwrap();
+        let responses = lines.lines().collect::<Vec<_>>();
+        assert_eq!(responses.len(), 2);
+        assert!(responses[0].contains(r#""code":"invalid_request""#));
+        assert!(responses[1].contains(r#""code":"unknown_session""#));
     }
 }
 

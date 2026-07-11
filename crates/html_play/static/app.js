@@ -34,6 +34,7 @@ class PuzzleSoundRuntime {
     this.activeMusic = new Map();
     this.pausedMusic = new Map();
     this.visibilityPausedMusic = new Map();
+    this.activeSfx = new Map();
     this.sfxEffectCache = new Map();
     this.sfxEffectApi = null;
     this.soundWarnings = new Set();
@@ -88,24 +89,11 @@ class PuzzleSoundRuntime {
     }
     const api = window.PuzzleSoundGenerator || window.PuzzleSoundTools || null;
     const volume = Number(def.volume ?? 1);
-    if (def.type === "puzzlescript" && api?.generatePuzzleScriptSoundEffect && api?.createPuzzleScriptSfxPlayer) {
-      try {
-        const effect = this.puzzleScriptSfxEffect(api, def);
-        const player = api.createPuzzleScriptSfxPlayer(context, effect, { volume });
-        player.start(context.currentTime);
-      } catch (error) {
-        this.warnSoundIssue(`sfx:${name}:puzzlescript`, `Sound effect "${name}" was skipped: ${error?.message || error}`);
-      }
-      return;
-    }
-    if (def.type === "puzzlescript") {
-      this.warnSoundIssue(`sfx:${name}:puzzlescript`, `Sound effect "${name}" was skipped because the PuzzleScript sound generator is unavailable.`);
-      return;
-    }
     if (api?.generateSoundEffect && api?.createSfxPlayer) {
       try {
         const effect = this.sfxEffect(api, def);
         const player = api.createSfxPlayer(context, effect, { volume });
+        this.replaceActiveSfx(name, player);
         player.start(context.currentTime);
       } catch (error) {
         this.warnSoundIssue(`sfx:${name}:${def.type || "random"}`, `Sound effect "${name}" was skipped: ${error?.message || error}`);
@@ -113,6 +101,11 @@ class PuzzleSoundRuntime {
       return;
     }
     this.warnSoundIssue(`sfx:${name}`, `Sound effect "${name}" was skipped because the sound generator is unavailable.`);
+  }
+
+  replaceActiveSfx(name, player) {
+    this.activeSfx.get(name)?.stop();
+    this.activeSfx.set(name, player);
   }
 
   sfxDef(name) {
@@ -129,20 +122,6 @@ class PuzzleSoundRuntime {
     let effect = this.sfxEffectCache.get(key);
     if (!effect) {
       effect = api.generateSoundEffect(def.seed, { type });
-      this.sfxEffectCache.set(key, effect);
-    }
-    return effect;
-  }
-
-  puzzleScriptSfxEffect(api, def) {
-    if (this.sfxEffectApi !== api) {
-      this.sfxEffectApi = api;
-      this.sfxEffectCache.clear();
-    }
-    const key = `${String(def.seed)}\u0000puzzlescript`;
-    let effect = this.sfxEffectCache.get(key);
-    if (!effect) {
-      effect = api.generatePuzzleScriptSoundEffect(def.seed);
       this.sfxEffectCache.set(key, effect);
     }
     return effect;

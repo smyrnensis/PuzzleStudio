@@ -390,7 +390,10 @@ impl StandaloneSessionBridge {
                 Ok(self.snapshot_json())
             }
             puzzle_game_runtime::StandaloneSessionRequest::Restart => {
-                self.state.session.restart_level(&self.state.loaded);
+                self.state
+                    .session
+                    .restart_level(&self.state.loaded)
+                    .map_err(|error| format!("{error:?}"))?;
                 Ok(self.snapshot_json())
             }
             puzzle_game_runtime::StandaloneSessionRequest::Next => {
@@ -722,6 +725,7 @@ fn solver_game_and_state_slicer_for_compiled(
     initial: &State,
     goal: Option<&GoalExpr>,
     lose: Option<&GoalExpr>,
+    strategy: &SolverStrategy,
 ) -> (CompiledGame, puzzle_solver::SolverStateSlicer) {
     let mut roots = BTreeSet::new();
     if let Some(goal) = goal {
@@ -729,6 +733,11 @@ fn solver_game_and_state_slicer_for_compiled(
     }
     if let Some(lose) = lose {
         collect_goal_expr_roots(&game, lose, &mut roots);
+    }
+    for term in &strategy.terms {
+        collect_query_expr_roots(&term.value, &mut roots, &mut |kind, roots| {
+            puzzle_solver::object_refs::collect_condition_value_roots(kind, roots)
+        });
     }
     let relevance = puzzle_solver::SolverRelevance::from_root_objects(&game, roots);
     if goal.is_none() {
@@ -739,8 +748,10 @@ fn solver_game_and_state_slicer_for_compiled(
     let availability = puzzle_solver::SolverStageAvailability::from_initial_state(&game, initial);
     let slice =
         puzzle_solver::SolverSlice::from_relevance_and_availability(&relevance, &availability);
-    let state_slicer =
-        puzzle_solver::SolverStateSlicer::<ObjectId>::from_kept_objects(&game, slice.kept_objects());
+    let state_slicer = puzzle_solver::SolverStateSlicer::<ObjectId>::from_kept_objects(
+        &game,
+        slice.kept_objects(),
+    );
     (slice.project_game(&game), state_slicer)
 }
 
@@ -785,14 +796,10 @@ fn solver_game_and_state_slicer_for_loaded(
         });
     }
     let relevance = puzzle_solver::SolverRelevance::from_root_objects(&solver_game, roots);
-    let availability = puzzle_solver::SolverStageAvailability::from_initial_state(
-        &solver_game,
-        initial,
-    );
-    let slice = puzzle_solver::SolverSlice::from_relevance_and_availability(
-        &relevance,
-        &availability,
-    );
+    let availability =
+        puzzle_solver::SolverStageAvailability::from_initial_state(&solver_game, initial);
+    let slice =
+        puzzle_solver::SolverSlice::from_relevance_and_availability(&relevance, &availability);
     let state_slicer = puzzle_solver::SolverStateSlicer::<ObjectId>::from_kept_objects(
         &solver_game,
         slice.kept_objects(),
@@ -894,11 +901,7 @@ fn solver_state_slicer_for_puzzle3(
 }
 
 #[cfg(feature = "solver")]
-fn collect_goal_expr_roots(
-    game: &CompiledGame,
-    expr: &GoalExpr,
-    roots: &mut BTreeSet<ObjectId>,
-) {
+fn collect_goal_expr_roots(game: &CompiledGame, expr: &GoalExpr, roots: &mut BTreeSet<ObjectId>) {
     match expr {
         GoalExpr::All(exprs) | GoalExpr::Any(exprs) => {
             for expr in exprs {
@@ -925,10 +928,6 @@ fn collect_goal_value_roots(
         GoalValue::InlineConditionValue(kind) => {
             puzzle_solver::object_refs::collect_condition_value_roots(kind, roots);
         }
-        GoalValue::AllObjectsOn { subjects, covers } => {
-            roots.extend(subjects.iter().copied());
-            roots.extend(covers.iter().copied());
-        }
     }
 }
 
@@ -946,6 +945,10 @@ fn collect_query_expr_roots<Object, Value, Variable>(
         QueryExprOf::Distance { from, to } => {
             roots.extend(from.iter().copied());
             roots.extend(to.iter().copied());
+        }
+        QueryExprOf::AllOnDistance { subjects, covers } => {
+            roots.extend(subjects.iter().copied());
+            roots.extend(covers.iter().copied());
         }
         QueryExprOf::Compare { left, .. } => collect_query_expr_roots(left, roots, collect_value),
     }
@@ -982,6 +985,7 @@ fn collect_win_condition3_roots(condition: &WinCondition3, roots: &mut BTreeSet<
 #[cfg(feature = "solver")]
 fn solve_compiled_state_with_budget_and_progress<O>(
     engine: &puzzle_core_wasm::CompiledEngine,
+    strategy: SolverStrategy,
     goal: Option<GoalExpr>,
     lose: Option<GoalExpr>,
     accept_win_command: bool,
@@ -1005,6 +1009,7 @@ where
         &initial,
         goal.as_ref(),
         lose.as_ref(),
+        &strategy,
     );
     let game = Arc::new(solver_game);
     let goal_game = game.clone();
@@ -1022,8 +1027,7 @@ where
     );
     let solver_initial = domain.initial_state(initial.clone());
     let display_initial = initial.clone();
-    let score_game = game.clone();
-    let score_goal = goal.clone();
+    let strategy_game = game.clone();
     let lose_game = game.clone();
     let mut observations = SearchObservationSampler::new(96);
     let mut observation_error = None::<AppError>;
@@ -1031,12 +1035,7 @@ where
         &mut domain,
         solver_initial,
         budget,
-        move |state| {
-            score_goal
-                .as_ref()
-                .map(|goal| goal_expr_score(&score_game, state.state(), goal))
-                .unwrap_or(0)
-        },
+        move |state| solver_strategy_score_for_compiled(&strategy_game, &strategy, state.state()),
         move |state| {
             lose.as_ref()
                 .is_some_and(|lose| eval_goal_expr(&lose_game, state.state(), lose))
@@ -1210,7 +1209,6 @@ where
     let solver_initial = domain.initial_state(initial.clone());
     let score_game = loaded.clone();
     let deadend_game = loaded.clone();
-    let score_expr_game = game.clone();
     let score_goal = goal.clone();
     let lose_game = loaded.clone();
     let lose_expr_game = game.clone();
@@ -1220,14 +1218,13 @@ where
         solver_initial,
         budget,
         move |state| {
-            let goal_score = match &score_goal {
-                SolverGoal2::BuiltIn => goal_score(&score_game, state.state()),
-                SolverGoal2::Expr(goal) => goal_expr_score(&score_expr_game, state.state(), goal),
+            let target_score = match &score_goal {
+                SolverGoal2::BuiltIn | SolverGoal2::Expr(_) => 0,
                 SolverGoal2::ExactState(_) => exact_heuristic
                     .as_ref()
                     .map_or(0, |heuristic| heuristic.score(state.state())),
             };
-            goal_score + solver_strategy_score(&score_game, state.state())
+            target_score + solver_strategy_score(&score_game, state.state())
         },
         move |state| {
             let deadend = solver_has_deadend(&deadend_game, state.state());
@@ -1591,18 +1588,26 @@ fn solution_steps3(
 }
 
 #[cfg(feature = "solver")]
-fn goal_score(loaded: &LoadedGame, state: &State) -> i64 {
-    loaded
-        .goal
-        .as_ref()
-        .map(|goal| goal_expr_score(&loaded.game, state, &goal.expr))
-        .unwrap_or(0)
-}
-
-#[cfg(feature = "solver")]
 fn solver_strategy_score(loaded: &LoadedGame, state: &State) -> i64 {
     solver_strategy_score_with(&loaded.solver_strategy, |value| {
         solver_query_expr_value(loaded, state, value)
+    })
+}
+
+#[cfg(feature = "solver")]
+fn solver_strategy_score_for_compiled(
+    game: &CompiledGame,
+    strategy: &SolverStrategy,
+    state: &State,
+) -> i64 {
+    solver_strategy_score_with(strategy, |value| {
+        solver_query_expr_value_with(
+            value,
+            &mut |variable| state.variable_value(variable).unwrap_or(0),
+            &mut |kind| goal_condition_value_kind(game, state, kind),
+            &mut |from, to| solver_strategy_distance(game, state, from, to),
+            &mut |subjects, covers| all_objects_on_score(game, state, subjects, covers),
+        )
     })
 }
 
@@ -1624,6 +1629,7 @@ fn solver_query_expr_value(loaded: &LoadedGame, state: &State, value: &QueryExpr
         },
         &mut |kind| goal_condition_value_kind(&loaded.game, state, kind),
         &mut |from, to| solver_strategy_distance(&loaded.game, state, from, to),
+        &mut |subjects, covers| all_objects_on_score(&loaded.game, state, subjects, covers),
     )
 }
 
@@ -1733,33 +1739,47 @@ fn solver_query_expr_value3(game: &Game3, state: &State3, value: &QueryExpr3) ->
         },
         &mut |kind| eval_condition_kind(game, state, kind, None),
         &mut |from, to| solver_strategy_distance3(game, state, from, to),
+        &mut |from, to| solver_strategy_distance3(game, state, from, to),
     )
 }
 
 #[cfg(feature = "solver")]
-fn solver_query_expr_value_with<Object, Value, Variable, EvalVariable, EvalValue, EvalDistance>(
+fn solver_query_expr_value_with<
+    Object,
+    Value,
+    Variable,
+    EvalVariable,
+    EvalValue,
+    EvalDistance,
+    EvalAllOnDistance,
+>(
     value: &QueryExprOf<Object, Value, Variable>,
     eval_variable: &mut EvalVariable,
     eval_value: &mut EvalValue,
     eval_distance: &mut EvalDistance,
+    eval_all_on_distance: &mut EvalAllOnDistance,
 ) -> i64
 where
     Variable: Copy,
     EvalVariable: FnMut(Variable) -> i64,
     EvalValue: FnMut(&Value) -> i64,
     EvalDistance: FnMut(&[Object], &[Object]) -> i64,
+    EvalAllOnDistance: FnMut(&[Object], &[Object]) -> i64,
 {
     match value {
         QueryExprOf::Variable(variable) => eval_variable(*variable),
         QueryExprOf::Value(kind) => eval_value(kind),
         QueryExprOf::Distance { from, to } => eval_distance(from, to),
+        QueryExprOf::AllOnDistance { subjects, covers } => eval_all_on_distance(subjects, covers),
         QueryExprOf::Compare { left, op, right } => {
-            let left = solver_query_expr_value_with(left, eval_variable, eval_value, eval_distance);
-            if compare_i64(left, *op, *right) {
-                1
-            } else {
-                0
-            }
+            let left = solver_query_expr_value_with(
+                left,
+                eval_variable,
+                eval_value,
+                eval_distance,
+                eval_all_on_distance,
+            );
+            if compare_i64(left, *op, *right) { 1 } else { 0 }
         }
     }
 }
@@ -1941,7 +1961,10 @@ impl ExactStateHeuristic {
     fn new(game: &CompiledGame, initial: &State, goal: &State) -> Self {
         let changed_objects = (1..=game.object_count())
             .map(|id| ObjectId(id as u16))
-            .filter(|object| object_positions_for_exact(initial, *object) != object_positions_for_exact(goal, *object))
+            .filter(|object| {
+                object_positions_for_exact(initial, *object)
+                    != object_positions_for_exact(goal, *object)
+            })
             .collect();
         Self {
             goal: goal.clone(),
@@ -1964,10 +1987,7 @@ fn exact_object_distance_score(state: &State, goal: &State, object: ObjectId) ->
     let current_positions = object_positions_for_exact(state, object);
     let mut goal_positions = object_positions_for_exact(goal, object);
     let fallback = i64::from(state.width) + i64::from(state.height) + 1;
-    let mut score = current_positions
-        .len()
-        .abs_diff(goal_positions.len()) as i64
-        * fallback;
+    let mut score = current_positions.len().abs_diff(goal_positions.len()) as i64 * fallback;
     for current in current_positions {
         let Some((index, distance)) = goal_positions
             .iter()
@@ -2033,9 +2053,6 @@ fn goal_clause_score(
         GoalValue::InlineConditionValue(kind) => {
             condition_value_kind_score(game, state, kind, current, op, expected)
         }
-        GoalValue::AllObjectsOn { subjects, covers } => {
-            all_objects_on_score(game, state, subjects, covers)
-        }
     }
 }
 
@@ -2100,15 +2117,9 @@ fn comparison_violation_score(current: i64, op: ComparisonOp, expected: i64) -> 
     match op {
         ComparisonOp::Eq => current.abs_diff(expected) as i64,
         ComparisonOp::NotEq => 1,
-        ComparisonOp::Greater => expected
-            .saturating_sub(current)
-            .max(0)
-            .saturating_add(1),
+        ComparisonOp::Greater => expected.saturating_sub(current).max(0).saturating_add(1),
         ComparisonOp::GreaterEq => expected.saturating_sub(current).max(0),
-        ComparisonOp::Less => current
-            .saturating_sub(expected)
-            .max(0)
-            .saturating_add(1),
+        ComparisonOp::Less => current.saturating_sub(expected).max(0).saturating_add(1),
         ComparisonOp::LessEq => current.saturating_sub(expected).max(0),
     }
 }
@@ -2134,21 +2145,6 @@ fn goal_value(game: &CompiledGame, state: &State, value: &GoalValue) -> i64 {
             .map(|condition| goal_condition_value_kind(game, state, &condition.kind))
             .unwrap_or(0),
         GoalValue::InlineConditionValue(kind) => goal_condition_value_kind(game, state, kind),
-        GoalValue::AllObjectsOn { subjects, covers } => {
-            if subjects.iter().all(|subject| {
-                state.object_positions(*subject).iter().all(|slot| {
-                    state.slot_position(*slot).is_some_and(|(x, y)| {
-                        covers
-                            .iter()
-                            .any(|cover| state.has_object(game, x, y, *cover))
-                    })
-                })
-            }) {
-                1
-            } else {
-                0
-            }
-        }
     }
 }
 
@@ -2208,7 +2204,7 @@ mod solver_goal_score_tests {
     use super::*;
 
     #[test]
-    fn no_pattern_goal_scores_violations_without_spatial_distance() {
+    fn generic_no_pattern_goal_scores_direct_pattern_violations_only() {
         let source = r#"
 title = no_pattern_score
 
@@ -2240,7 +2236,10 @@ B.BG
 "#;
         let loaded = parse_game(source).expect("test game should load");
 
-        assert_eq!(goal_score(&loaded, &loaded.levels[0].initial_state), 2);
+        assert_eq!(
+            solver_strategy_score(&loaded, &loaded.levels[0].initial_state),
+            2
+        );
     }
 
     #[test]
@@ -2276,7 +2275,11 @@ G..B
 "#;
         let loaded = parse_game(source).expect("test game should load");
 
-        assert_eq!(goal_score(&loaded, &loaded.levels[0].initial_state), 3);
+        assert!(!loaded.is_goal_complete(&loaded.levels[0].initial_state));
+        assert_eq!(
+            solver_strategy_score(&loaded, &loaded.levels[0].initial_state),
+            3
+        );
     }
 
     #[test]

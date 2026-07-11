@@ -715,6 +715,9 @@ function closeWorkPane(paneId) {
   if (!isWorkPaneId(normalized) || !visibleWorkPanes.includes(normalized) || !layoutPaneIdsFor(next, currentPreviewMode, { allowEmpty: true }).length) {
     return false;
   }
+  if (normalized === PREVIEW_WORK_PANE_ID) {
+    stopPreviewRuntime();
+  }
   visibleWorkPanes = next;
   if (maximizedWorkPaneId === normalized) {
     maximizedWorkPaneId = "";

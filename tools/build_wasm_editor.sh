@@ -16,6 +16,16 @@ if ! grep -q "export function activate_source_analysis" crates/html_editor/stati
   exit 1
 fi
 
+if ! grep -q "export function active_source_analysis_highlight_range_json" crates/html_editor/static/wasm/puzzle_wasm.js; then
+  echo "generated WASM bindings are missing active_source_analysis_highlight_range_json" >&2
+  exit 1
+fi
+
+if ! grep -q "export function apply_source_analysis_edit" crates/html_editor/static/wasm/puzzle_wasm.js; then
+  echo "generated WASM bindings are missing apply_source_analysis_edit" >&2
+  exit 1
+fi
+
 if ! grep -q "export function active_source_analysis_outline_json" crates/html_editor/static/wasm/puzzle_wasm.js; then
   echo "generated WASM bindings are missing active_source_analysis_outline_json" >&2
   exit 1
@@ -36,7 +46,7 @@ if ! grep -q "export function active_source_analysis_level_editor_sprite_json" c
   exit 1
 fi
 
-if grep -Eq "export class WasmSourceAnalysis|export function analyze_source|export function highlight_source_html|export function highlight_source_json|export function source_outline_json|export function suggest_source_completions|export function resolve_source_target|export function source_entries_json" crates/html_editor/static/wasm/puzzle_wasm.js; then
+if grep -Eq "export class WasmSourceAnalysis|export function analyze_source|export function highlight_source_html|export function highlight_source_json|export function active_source_analysis_highlight_json|export function source_outline_json|export function suggest_source_completions|export function resolve_source_target|export function source_entries_json" crates/html_editor/static/wasm/puzzle_wasm.js; then
   echo "generated editor WASM bindings include old source analysis exports" >&2
   exit 1
 fi

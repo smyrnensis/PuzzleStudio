@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import {
-  createPuzzleScriptSfxPlayer,
   createSfxPlayer,
   generatePuzzleScriptSoundEffect,
   generateSoundEffect,
@@ -232,10 +231,10 @@ assert.ok(SFX_TYPES.includes(generateSoundEffect(targetedRandom.seed).type), "ta
 assert.equal(generateSoundEffect("123456", { type: "laser" }).type, "laser", "type override should select laser without encoding it in the seed");
 assert.equal(generateSoundEffect("123456", { type: "wild" }).type, "wild", "type override should select Wild without encoding it in the seed");
 assert.ok(SFX_TYPES.includes(generateSoundEffect("manual-seed-without-prefix").type), "plain seeds should still map deterministically to a concrete SFX type");
-assert.throws(
-  () => generateSoundEffect("123456", { type: "puzzlescript" }),
-  /unsupported SFX type: puzzlescript/,
-  "unsupported explicit SFX types should fail visibly instead of falling back to another type",
+assert.deepEqual(
+  generateSoundEffect("17551700", { type: "puzzlescript" }),
+  generatePuzzleScriptSoundEffect("17551700"),
+  "PuzzleScript should be a generation type behind the common SFX API",
 );
 const puzzleScriptEffect = generatePuzzleScriptSoundEffect("17551700");
 assert.equal(puzzleScriptEffect.type, "puzzlescript", "PuzzleScript SFX should use its explicit generator API");
@@ -446,6 +445,7 @@ class FakeAudioContext {
     this.sourceStartTimes = [];
     this.bufferCreateCount = 0;
     this.bufferRenderSeconds = Number(options.bufferRenderSeconds ?? 0);
+    this.createdBuffers = [];
     this.gainNodes = [];
     this.destination = new FakeAudioNode(this.sourceStartTimes, false);
   }
@@ -472,11 +472,13 @@ class FakeAudioContext {
     this.bufferCreateCount += 1;
     this.currentTime += this.bufferRenderSeconds;
     const data = Array.from({ length: channels }, () => new Float32Array(samples));
-    return {
+    const buffer = {
       getChannelData(index) {
         return data[index];
       },
     };
+    this.createdBuffers.push(buffer);
+    return buffer;
   }
 }
 
@@ -552,13 +554,24 @@ assert.throws(
 );
 
 const puzzleScriptAudio = new FakeAudioContext();
-const puzzleScriptPlayer = createPuzzleScriptSfxPlayer(puzzleScriptAudio, puzzleScriptEffect, { volume: 0.35 });
+const puzzleScriptPlayer = createSfxPlayer(puzzleScriptAudio, puzzleScriptEffect, { volume: 0.35 });
 puzzleScriptPlayer.start(12.5);
 assert.ok(puzzleScriptAudio.bufferCreateCount > 0, "PuzzleScript SFX playback should render an audio buffer");
 assert.equal(puzzleScriptAudio.gainNodes[0].gain.value, 0.35, "PuzzleScript SFX playback should use requested volume");
 assert.ok(
   puzzleScriptAudio.sourceStartTimes.every((time) => time >= 12.5),
   "PuzzleScript SFX playback should schedule relative to the adapter-provided start time",
+);
+
+const firstPuzzleScriptNoiseAudio = new FakeAudioContext();
+const secondPuzzleScriptNoiseAudio = new FakeAudioContext();
+const puzzleScriptNoiseEffect = generateSoundEffect("64059507", { type: "puzzlescript" });
+createSfxPlayer(firstPuzzleScriptNoiseAudio, puzzleScriptNoiseEffect).start(12.5);
+createSfxPlayer(secondPuzzleScriptNoiseAudio, puzzleScriptNoiseEffect).start(12.5);
+assert.deepEqual(
+  firstPuzzleScriptNoiseAudio.createdBuffers[0].getChannelData(0),
+  secondPuzzleScriptNoiseAudio.createdBuffers[0].getChannelData(0),
+  "PuzzleScript noise playback should render identical PCM for the same seed in separate audio contexts",
 );
 
 const cachedBufferEffect = {

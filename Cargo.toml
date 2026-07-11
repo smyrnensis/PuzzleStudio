@@ -19,6 +19,7 @@ members = [
     "crates/wasm_game",
     "crates/wasm_player",
     "crates/wasm_core",
+    "crates/agent_runtime",
     "src-tauri",
 ]
 resolver = "3"

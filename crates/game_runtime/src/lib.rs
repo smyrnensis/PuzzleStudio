@@ -133,7 +133,9 @@ impl StandaloneSessionBridge {
                 Ok(self.snapshot_json())
             }
             StandaloneSessionRequest::Restart => {
-                self.session.restart_level(&self.loaded);
+                self.session
+                    .restart_level(&self.loaded)
+                    .map_err(|error| format!("{error:?}"))?;
                 Ok(self.snapshot_json())
             }
             StandaloneSessionRequest::Next => {

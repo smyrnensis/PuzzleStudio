@@ -37,6 +37,15 @@ The surface document path is moving toward typed `SurfaceDocument` /
 completion behavior toward the shared token/span pipeline instead of duplicating
 effect vocabularies.
 
+Sprite body parsing must preserve the distinction between explicit properties and
+owner-resolved bare content. A bare row after colors may be inline ASCII or a
+declared shape reference; resolve that once through the shared sprite authoring
+resolver after the complete `sprites` owner scope is known. Compile, highlight,
+completion/source refs, and source-target projection must consume that shared
+decision instead of independently reclassifying the row. If a declared shape
+name is also valid ASCII for the active palette, fail visibly and require
+`shape = <name>` or `shape = { ... }` to disambiguate.
+
 ## PuzzleScript Import
 
 PuzzleScript import is intentionally minimal and compatibility-oriented. It

@@ -17,6 +17,7 @@ mod semantic;
 mod solver_surface;
 mod source;
 mod source_analysis;
+mod source_import;
 mod source_outline;
 mod source_target;
 mod sprite_authoring;
@@ -31,9 +32,7 @@ use solver_surface::{
 use std::collections::{BTreeSet, HashMap, HashSet};
 #[cfg(not(target_arch = "wasm32"))]
 use std::fs;
-use std::path::Path;
-#[cfg(not(target_arch = "wasm32"))]
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 
 use ast::{
     ConditionAst, ConditionDefinitionAst, ConditionPatternAst, ConditionValueAst, Direction,
@@ -48,8 +47,8 @@ pub use completion::{
 };
 pub use error::{Diagnostic, DiagnosticReport, DiagnosticSeverity, DiagnosticSpan};
 pub use highlight::{
-    HighlightedSource, HighlightedSourceWithOutline, highlight_source,
-    highlight_source_with_outline,
+    HighlightedSource, HighlightedSourceWithOutline, SourceHighlightKind, SourceHighlightSpan,
+    highlight_source, highlight_source_with_outline,
 };
 use level::{LevelBlock, parse_level};
 pub use loaded::{
@@ -122,10 +121,14 @@ pub fn parse_level_ascii_state(
     char_objects: &HashMap<char, Vec<ObjectId>>,
     variable_defaults: &[i64],
 ) -> Result<(State, Vec<LevelRegionDef>), DiagnosticReport> {
-    let parsed = parse_level(game, lines, empty, char_objects, variable_defaults)?;
+    let parsed = parse_level(game, lines, Some(empty), char_objects, variable_defaults)?;
     Ok((parsed.state, parsed.regions))
 }
-pub use source_analysis::{SourceAnalysis, analyze_source, analyze_source_json};
+pub use source_analysis::{
+    SourceAnalysis, SourceAnalysisEdit, SourceAnalysisEditResult, analyze_source,
+    analyze_source_json,
+};
+pub use source_import::{SourceImportRange, SourceImportReference};
 pub use source_outline::{SourceOutlineItem, source_outline, source_outline_json};
 pub use source_target::{
     SoundSourceTargetKind, SourceSprite3dStatus, SourceSprite3dTarget, SourceSpriteColorAsset,

@@ -336,6 +336,7 @@ fn parse_visuals_block(
     let mut plain_shapes = HashMap::<String, Vec<String>>::new();
     let mut color_aliases = HashMap::<String, String>::new();
     let mut colors = HashMap::<String, VisualColorTable>::new();
+    let mut sprite_entries = Vec::<SpriteAttachmentEntry>::new();
     let mut i = start + 1;
 
     while i < lines.len() && !is_block_close_line(&lines[i]) {
@@ -425,32 +426,18 @@ fn parse_visuals_block(
                 ));
             }
             ["sprite"] if is_block_header_line(line) => {
-                i = parse_sprite_entry(
-                    lines,
-                    i,
-                    &plain_shapes,
-                    &shapes,
-                    &color_aliases,
-                    &colors,
-                    catalog,
-                    visuals,
-                )?;
+                let entry = collect_sprite_attachment_entry(lines, i)?;
+                i = entry.next_i;
+                sprite_entries.push(entry);
             }
             [other, ..] => {
                 if crate::authoring_grammar::authoring_kind_content_attachment(
                     crate::authoring_grammar::AuthoringKind::SpritesConfig,
                 ) == Some(crate::authoring_grammar::ContentAttachment::SpriteEntries)
                 {
-                    i = parse_sprite_attachment_entry(
-                        lines,
-                        i,
-                        &plain_shapes,
-                        &shapes,
-                        &color_aliases,
-                        &colors,
-                        catalog,
-                        visuals,
-                    )?;
+                    let entry = collect_sprite_attachment_entry(lines, i)?;
+                    i = entry.next_i;
+                    sprite_entries.push(entry);
                     continue;
                 }
                 return Err(parse_error(
@@ -462,6 +449,17 @@ fn parse_visuals_block(
     }
     if i >= lines.len() {
         return Err(parse_error(&lines[start], "sprites missing closing brace"));
+    }
+    for attachment in sprite_entries {
+        lower_sprite_attachment_entry(
+            attachment,
+            &plain_shapes,
+            &shapes,
+            &color_aliases,
+            &colors,
+            catalog,
+            visuals,
+        )?;
     }
     Ok(i + 1)
 }
@@ -577,33 +575,6 @@ fn parse_visual_shapes_block(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn parse_sprite_entry(
-    lines: &[String],
-    start: usize,
-    plain_shapes: &HashMap<String, Vec<String>>,
-    shapes: &HashMap<String, VisualShapeTable>,
-    color_aliases: &HashMap<String, String>,
-    color_tables: &HashMap<String, VisualColorTable>,
-    catalog: &Catalog,
-    visuals: &mut VisualsDef,
-) -> Result<usize, DiagnosticReport> {
-    let (body_lines, next_i) =
-        collect_braced_body_lines(lines, start, "sprite entry missing closing brace")?;
-
-    let mut entry = SpriteEntrySpec::new(&lines[start], None);
-    apply_sprite_attachment_body(&mut entry, &lines[start], &body_lines)?;
-    lower_sprite_entry(
-        entry,
-        plain_shapes,
-        shapes,
-        color_aliases,
-        color_tables,
-        catalog,
-        visuals,
-    )?;
-    Ok(next_i)
-}
-
 struct SpriteAttachmentEntry {
     source_line: String,
     body_lines: Vec<String>,
@@ -611,19 +582,23 @@ struct SpriteAttachmentEntry {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn parse_sprite_attachment_entry(
-    lines: &[String],
-    start: usize,
+fn lower_sprite_attachment_entry(
+    attachment: SpriteAttachmentEntry,
     plain_shapes: &HashMap<String, Vec<String>>,
     shapes: &HashMap<String, VisualShapeTable>,
     color_aliases: &HashMap<String, String>,
     color_tables: &HashMap<String, VisualColorTable>,
     catalog: &Catalog,
     visuals: &mut VisualsDef,
-) -> Result<usize, DiagnosticReport> {
-    let attachment = collect_sprite_attachment_entry(lines, start)?;
+) -> Result<(), DiagnosticReport> {
     let mut entry = SpriteEntrySpec::new(&attachment.source_line, None);
-    apply_sprite_attachment_body(&mut entry, &attachment.source_line, &attachment.body_lines)?;
+    apply_sprite_attachment_body(
+        &mut entry,
+        &attachment.source_line,
+        &attachment.body_lines,
+        plain_shapes,
+        shapes,
+    )?;
     lower_sprite_entry(
         entry,
         plain_shapes,
@@ -633,7 +608,7 @@ fn parse_sprite_attachment_entry(
         catalog,
         visuals,
     )?;
-    Ok(attachment.next_i)
+    Ok(())
 }
 
 fn collect_sprite_attachment_entry(
@@ -817,9 +792,14 @@ fn apply_sprite_attachment_body(
     entry: &mut SpriteEntrySpec,
     header: &str,
     body_lines: &[String],
+    plain_shapes: &HashMap<String, Vec<String>>,
+    shapes: &HashMap<String, VisualShapeTable>,
 ) -> Result<(), DiagnosticReport> {
     entry.selector = None;
     let syntax = crate::sprite_authoring::parse_sprite_node(header.into(), body_lines);
+    let resolved_shape = crate::sprite_authoring::resolve_sprite_shape(&syntax, |name| {
+        plain_shapes.contains_key(name) || shapes.contains_key(name)
+    });
     if let Some(issue) = syntax.issues.first() {
         return Err(parse_error(&issue.line, issue.message));
     }
@@ -889,11 +869,11 @@ fn apply_sprite_attachment_body(
             }
         }
     }
-    match syntax.shape {
-        Some(crate::sprite_authoring::SpriteShapeSyntax::Reference(reference)) => {
+    match resolved_shape {
+        crate::sprite_authoring::ResolvedSpriteShape::Reference(reference) => {
             entry.set_shape_ref(&reference, &entry.source_line.clone())?;
         }
-        Some(crate::sprite_authoring::SpriteShapeSyntax::Inline { frames, .. }) => {
+        crate::sprite_authoring::ResolvedSpriteShape::Inline(frames) => {
             let mut frames = frames
                 .into_iter()
                 .map(|frame| frame.into_iter().map(|row| row.text).collect::<Vec<_>>())
@@ -920,7 +900,19 @@ fn apply_sprite_attachment_body(
                 &entry.source_line.clone(),
             )?;
         }
-        None => {}
+        crate::sprite_authoring::ResolvedSpriteShape::UnknownBareReference(reference) => {
+            return Err(parse_error(
+                &reference,
+                &format!("unknown sprite shape `{reference}`"),
+            ));
+        }
+        crate::sprite_authoring::ResolvedSpriteShape::AmbiguousBareRow(value) => {
+            return Err(parse_error(
+                &value,
+                "bare sprite row is both a declared shape name and valid ASCII; use `shape = <name>` for a reference or `shape = { ... }` for inline ASCII",
+            ));
+        }
+        crate::sprite_authoring::ResolvedSpriteShape::None => {}
     }
     Ok(())
 }

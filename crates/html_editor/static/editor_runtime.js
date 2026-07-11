@@ -4,6 +4,12 @@
   let wasmCompilerPromise = null;
   let gameRuntimeAssetsPromise = null;
   let activeSourceAnalysis = null;
+  let analysisWorker = null;
+  let analysisWorkerFailure = null;
+  let nextAnalysisWorkerRequestId = 1;
+  const analysisWorkerRequests = new Map();
+  let analysisWorkerSource = null;
+  let analysisWorkerMutation = Promise.resolve();
 
   function runtimeUnavailable(message) {
     const error = new Error(message);
@@ -13,6 +19,120 @@
 
   function wasmModuleUrl(path, version = wasmCompilerAssetVersion) {
     return `${path}?v=${encodeURIComponent(version)}`;
+  }
+
+  function rejectAnalysisWorkerRequests(error) {
+    for (const request of analysisWorkerRequests.values()) {
+      request.reject(error);
+    }
+    analysisWorkerRequests.clear();
+  }
+
+  function requireAnalysisWorker() {
+    if (analysisWorkerFailure) {
+      throw analysisWorkerFailure;
+    }
+    if (analysisWorker) {
+      return analysisWorker;
+    }
+    if (typeof Worker !== "function") {
+      throw runtimeUnavailable("Editor source analysis requires Web Worker support.");
+    }
+    const worker = new Worker(wasmModuleUrl("./editor_analysis_worker.js"), { type: "module" });
+    worker.addEventListener("message", (event) => {
+      const response = event.data || {};
+      const request = analysisWorkerRequests.get(Number(response.id));
+      if (!request) {
+        return;
+      }
+      analysisWorkerRequests.delete(Number(response.id));
+      if (typeof response.error === "string" && response.error) {
+        request.reject(runtimeUnavailable(response.error));
+      } else {
+        request.resolve(response.value);
+      }
+    });
+    worker.addEventListener("error", (event) => {
+      const error = runtimeUnavailable(event.message || "Editor source analysis worker failed.");
+      analysisWorkerFailure = error;
+      analysisWorker = null;
+      worker.terminate();
+      rejectAnalysisWorkerRequests(error);
+    });
+    analysisWorker = worker;
+    return worker;
+  }
+
+  function postAnalysisWorker(method, payload = {}) {
+    let worker;
+    try {
+      worker = requireAnalysisWorker();
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    const id = nextAnalysisWorkerRequestId++;
+    return new Promise((resolve, reject) => {
+      analysisWorkerRequests.set(id, { resolve, reject });
+      worker.postMessage({ id, method, ...payload });
+    });
+  }
+
+  function resetAnalysisWorkerSource(source) {
+    const text = asString(source);
+    analysisWorkerSource = text;
+    analysisWorkerMutation = analysisWorkerMutation.then(() => postAnalysisWorker("reset", {
+      source: text,
+    }));
+    return analysisWorkerMutation;
+  }
+
+  function applyAnalysisWorkerEdits(changes, source) {
+    if (analysisWorkerSource === null) {
+      throw runtimeUnavailable("Editor source analysis document is not initialized.");
+    }
+    const normalized = (Array.isArray(changes) ? changes : []).map((change) => ({
+      from: Number(change?.from),
+      to: Number(change?.to),
+      insert: asString(change?.insert),
+    })).sort((left, right) => right.from - left.from);
+    let next = analysisWorkerSource;
+    for (const change of normalized) {
+      if (
+        !Number.isInteger(change.from)
+        || !Number.isInteger(change.to)
+        || change.from < 0
+        || change.from > change.to
+        || change.to > next.length
+      ) {
+        throw runtimeUnavailable("Editor source analysis edit has an invalid UTF-16 range.");
+      }
+      next = `${next.slice(0, change.from)}${change.insert}${next.slice(change.to)}`;
+    }
+    const expected = asString(source);
+    if (next !== expected) {
+      throw runtimeUnavailable("Editor source analysis edits do not match the active CodeMirror document.");
+    }
+    analysisWorkerSource = next;
+    analysisWorkerMutation = analysisWorkerMutation.then(() => postAnalysisWorker("edit", {
+      changes: normalized,
+      sourceLength: next.length,
+    }));
+    return analysisWorkerMutation;
+  }
+
+  async function querySynchronizedAnalysisWorker(method, source, payload = {}) {
+    const expected = asString(source);
+    if (analysisWorkerSource !== expected) {
+      throw runtimeUnavailable("Editor source analysis is not synchronized with CodeMirror.");
+    }
+    await analysisWorkerMutation;
+    if (analysisWorkerSource !== expected) {
+      throw runtimeUnavailable("Editor source analysis changed before the query started.");
+    }
+    return postAnalysisWorker(method, {
+      ...payload,
+      sourceLength: expected.length,
+    });
   }
 
   function bytesToBase64(bytes) {
@@ -110,11 +230,6 @@
     return activeSourceAnalysis;
   }
 
-  async function sourceAnalysisForSource(source) {
-    const module = await loadWasmCompiler();
-    return activateSourceAnalysis(module, source);
-  }
-
   function sourceAnalysisForLoadedSource(source) {
     if (!wasmCompiler) {
       throw runtimeUnavailable("Editor WASM parser is not loaded.");
@@ -124,21 +239,21 @@
 
   window.PuzzleStudioRuntime = {
     async compilePreview(payload = {}) {
-      const compile = await requireWasmFunction("compile_preview");
+      const compile = await requireWasmFunction("compile_workspace_preview");
       return compile(
-        asString(payload.source),
         asString(payload.puzzlePath) || "game.puzzle",
+        JSON.stringify(payload.workspaceDocuments || []),
         asString(payload.gameCss),
         asString(payload.gameVisualsJs),
       );
     },
 
     async exportHtml(payload = {}) {
-      const exportHtml = await requireWasmFunction("export_html");
+      const exportHtml = await requireWasmFunction("export_workspace_html");
       const runtimeAssets = await window.PuzzleStudioRuntime.gameRuntimeAssets();
       return exportHtml(
-        asString(payload.source),
         asString(payload.puzzlePath) || "game.puzzle",
+        JSON.stringify(payload.workspaceDocuments || []),
         asString(payload.gameCss),
         asString(payload.gameVisualsJs),
         asString(runtimeAssets.moduleSource),
@@ -147,18 +262,28 @@
     },
 
     async highlightSource(payload = {}) {
-      const analysis = await sourceAnalysisForSource(payload.source);
-      return querySourceAnalysis(
-        wasmCompiler,
-        analysis.revision,
-        "active_source_analysis_highlight_json",
-        Boolean(payload.includeOutline),
-      );
+      const source = asString(payload.source);
+      const rangeStart = Number(payload.rangeStart);
+      const rangeEnd = Number(payload.rangeEnd);
+      if (
+        !Number.isInteger(rangeStart)
+        || !Number.isInteger(rangeEnd)
+        || rangeStart < 0
+        || rangeStart > rangeEnd
+        || rangeEnd > source.length
+      ) {
+        throw runtimeUnavailable("Editor source highlighting requires a valid UTF-16 viewport range.");
+      }
+      return querySynchronizedAnalysisWorker("highlightRange", source, {
+        rangeStart,
+        rangeEnd,
+        includeOutline: Boolean(payload.includeOutline),
+      });
     },
 
     async sourceOutline(payload = {}) {
-      const analysis = await sourceAnalysisForSource(payload.source);
-      return querySourceAnalysis(wasmCompiler, analysis.revision, "active_source_analysis_outline_json");
+      const source = asString(payload.source);
+      return querySynchronizedAnalysisWorker("outline", source);
     },
 
     async translatePuzzleScript(source) {
@@ -167,26 +292,36 @@
     },
 
     async suggestSourceCompletions(source, cursorOffset) {
-      const analysis = await sourceAnalysisForSource(source);
-      return querySourceAnalysis(
-        wasmCompiler,
-        analysis.revision,
-        "active_source_analysis_suggest_source_completions",
-        Number(cursorOffset) || 0,
-      );
+      return querySynchronizedAnalysisWorker("completion", source, {
+        cursorOffset: Number(cursorOffset) || 0,
+      });
     },
 
     async resolveSourceTarget(source, cursorOffset) {
-      const analysis = await sourceAnalysisForSource(source);
-      return querySourceAnalysis(
-        wasmCompiler,
-        analysis.revision,
-        "active_source_analysis_resolve_source_target",
-        Number(cursorOffset) || 0,
-      );
+      return querySynchronizedAnalysisWorker("target", source, {
+        cursorOffset: Number(cursorOffset) || 0,
+      });
     },
 
-    sourceEntries(source) {
+    sourceImportReference(source, documentPath, cursorOffset) {
+      const analysis = sourceAnalysisForLoadedSource(source);
+      const raw = querySourceAnalysis(
+        wasmCompiler,
+        analysis.revision,
+        "active_source_analysis_import_at_json",
+        asString(documentPath),
+        Number(cursorOffset) || 0,
+      );
+      return parseSourceAnalysisJson(raw)?.reference || null;
+    },
+
+    async sourceEntries(source) {
+      const raw = await querySynchronizedAnalysisWorker("entries", asString(source));
+      const payload = parseSourceAnalysisJson(raw);
+      return Array.isArray(payload.entries) ? payload.entries : [];
+    },
+
+    workspaceSourceEntries(source) {
       const analysis = sourceAnalysisForLoadedSource(source);
       const raw = querySourceAnalysis(wasmCompiler, analysis.revision, "active_source_analysis_entries_json");
       const payload = parseSourceAnalysisJson(raw);
@@ -237,6 +372,18 @@
         analysis.payload = parseSourceAnalysisJson(raw);
       }
       return analysis.payload;
+    },
+
+    resetSourceAnalysis(source) {
+      return resetAnalysisWorkerSource(source);
+    },
+
+    applySourceAnalysisEdits(changes, source) {
+      try {
+        return applyAnalysisWorkerEdits(changes, source);
+      } catch (error) {
+        return Promise.reject(error);
+      }
     },
 
     async solveState(source, puzzlePath, stateJson, maxDepth, maxNodes, maxMs) {

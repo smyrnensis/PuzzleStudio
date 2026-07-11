@@ -125,6 +125,7 @@ pub struct PuzzleDomain {
     state_slicer: SolverStateSlicer,
     is_goal: Box<dyn Fn(&State) -> bool>,
     accept_win_command: bool,
+    track_input_history: bool,
 }
 
 impl PuzzleDomain {
@@ -158,7 +159,13 @@ impl PuzzleDomain {
             state_slicer,
             is_goal: Box::new(is_goal),
             accept_win_command,
+            track_input_history: true,
         }
+    }
+
+    pub fn without_input_history(mut self) -> Self {
+        self.track_input_history = false;
+        self
     }
 
     pub fn game(&self) -> &CompiledGame {
@@ -192,8 +199,13 @@ impl SearchDomain for PuzzleDomain {
         let solver_state = self.state_slicer.project_state(&state.state);
         let outcome = transition_solver_outcome(&self.game, &solver_state, *action)?;
         let next_state = self.state_slicer.project_state(&outcome.next_state);
-        let mut input_history = state.input_history.clone();
-        input_history.push(*action);
+        let input_history = if self.track_input_history {
+            let mut input_history = state.input_history.clone();
+            input_history.push(*action);
+            input_history
+        } else {
+            Vec::new()
+        };
         Ok(PuzzleSearchState {
             state: next_state,
             input_history,

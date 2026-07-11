@@ -40,11 +40,6 @@ pub(crate) enum StatementAst {
         source_line: String,
         source_line_number: Option<usize>,
     },
-    DisplayCall {
-        name: String,
-        source_line: String,
-        source_line_number: Option<usize>,
-    },
     Conditional {
         source_line: String,
         source_line_number: Option<usize>,

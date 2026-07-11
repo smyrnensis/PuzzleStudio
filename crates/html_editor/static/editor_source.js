@@ -76,12 +76,8 @@ let sourceCompositionRange = null;
 let sourceLevelBuilderResetFrame = 0;
 let sourceLevelBuilderResetCells = false;
 let sourceLevelBuilderResetSignature = null;
-let sourceLineNumberSource = null;
-let sourceLineNumberColumns = 0;
-let sourceLineNumberLineHeight = 0;
 let sourceHighlightClientWidth = 0;
 let sourceHighlightScrollHeight = 0;
-let sourceLineNumberScrollHeight = 0;
 let sourceFoldedBlockKeys = new Set();
 let sourceFoldBaseSource = null;
 let sourceFoldViewMap = [];
@@ -162,118 +158,11 @@ function resetSourceFoldingState() {
   sourceFoldBlockCache = [];
 }
 
-function sourceFoldLinesWithOffsets(source) {
-  const lines = [];
-  let start = 0;
-  const text = String(source || "");
-  for (const raw of text.split("\n")) {
-    const end = start + raw.length;
-    const hasNewline = end < text.length;
-    lines.push({
-      raw,
-      start,
-      end,
-      absoluteEnd: end + (hasNewline ? 1 : 0),
-      hasNewline,
-    });
-    start = end + 1;
-  }
-  return lines;
-}
-
-function sourceLineIndexForFoldOffset(lines, offset) {
-  const position = Math.max(0, offset || 0);
-  for (let index = 0; index < lines.length; index += 1) {
-    if (position <= lines[index].end || index === lines.length - 1) {
-      return index;
-    }
-  }
-  return Math.max(0, lines.length - 1);
-}
-
 function sourceFoldableBlocks(source) {
-  const text = String(source || "");
-  if (sourceFoldBlockCacheSource === text) {
-    return sourceFoldBlockCache;
-  }
-  const lines = sourceFoldLinesWithOffsets(text);
-  const stack = [];
-  const blocks = [];
-  let lineIndex = 0;
-  let quote = "";
-  let escaped = false;
-  let lineComment = false;
-
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index];
-    const next = text[index + 1] || "";
-    if (char === "\n") {
-      lineIndex += 1;
-      lineComment = false;
-      escaped = false;
-      continue;
-    }
-    if (lineComment) {
-      continue;
-    }
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (quote) {
-      if (char === "\\") {
-        escaped = true;
-      } else if (char === quote) {
-        quote = "";
-      }
-      continue;
-    }
-    if (char === "/" && next === "/") {
-      lineComment = true;
-      index += 1;
-      continue;
-    }
-    if (char === "\"") {
-      quote = char;
-      continue;
-    }
-    if (char === "{") {
-      stack.push({ offset: index, lineIndex });
-      continue;
-    }
-    if (char !== "}") {
-      continue;
-    }
-    const open = stack.pop();
-    if (!open || lineIndex <= open.lineIndex) {
-      continue;
-    }
-    const openLine = lines[open.lineIndex];
-    const closeLine = lines[lineIndex];
-    if (!openLine || !closeLine) {
-      continue;
-    }
-    blocks.push({
-      key: `${open.offset}:${index}`,
-      openOffset: open.offset,
-      closeOffset: index,
-      openLine: open.lineIndex,
-      closeLine: lineIndex,
-      sourceStart: openLine.end,
-      sourceEnd: closeLine.absoluteEnd,
-      hiddenLineCount: Math.max(1, lineIndex - open.lineIndex),
-      hasTrailingNewline: closeLine.hasNewline,
-    });
-  }
-
-  blocks.sort((left, right) => (
-    left.openLine - right.openLine
-    || left.openOffset - right.openOffset
-    || right.closeOffset - left.closeOffset
-  ));
-  sourceFoldBlockCacheSource = text;
-  sourceFoldBlockCache = blocks;
-  return blocks;
+  // CodeMirror owns generic folding. Puzzle syntax recognition must stay in
+  // Rust, so the removed textarea folding path cannot infer brace blocks here.
+  void source;
+  return [];
 }
 
 function sourceFoldRangesForSource(source) {
@@ -825,15 +714,22 @@ function setSourceEditorValue(value, options = {}) {
 }
 
 function scheduleSourceHighlight(immediate = false, options = {}) {
-  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
-    setSourcePlainTextMode(true);
-    return;
-  }
   if (!sourceDocumentSupportsEditableTargets()) {
     resetSourcePuzzleAnalysisState();
     return;
   }
   setSourcePlainTextMode(false);
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
+    window.cancelAnimationFrame(sourceOptimisticHighlightFrame);
+    sourceOptimisticHighlightFrame = 0;
+    sourceOptimisticHighlightSource = null;
+    window.clearTimeout(sourceHighlightTimer);
+    sourceHighlightTimer = window.setTimeout(() => {
+      sourceHighlightTimer = 0;
+      refreshSourceHighlight();
+    }, immediate ? 0 : 140);
+    return;
+  }
   const preserveCurrent = options.preserveCurrent !== false;
   if (immediate) {
     window.cancelAnimationFrame(sourceOptimisticHighlightFrame);
@@ -913,6 +809,13 @@ function resetSourcePuzzleAnalysisState() {
   sourceCursorResolveSignature = null;
   sourceCursorResolveRegion = null;
   hideSourceCompletions();
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
+    sourceEditor.sourceEditorPort.clearHighlights();
+    sourceHighlightSource = "";
+    sourceHighlightHtml = "";
+    sourceHighlightRuns = [];
+    sourceHighlightMode = "plain-text";
+  }
   if (plainModeChanged && sourceHighlight) {
     sourceHighlight.innerHTML = "";
     sourceHighlightSource = "";
@@ -991,12 +894,6 @@ function sourceHighlightRunsFromDom() {
     return runs;
   }
   return sourceHighlightRunsFromRoot(sourceHighlight);
-}
-
-function sourceHighlightRunsFromHtml(html) {
-  const root = document.createElement("div");
-  root.innerHTML = html || "";
-  return sourceHighlightRunsFromRoot(root);
 }
 
 function sourceHighlightRunsFromRoot(root) {
@@ -1225,6 +1122,22 @@ function scheduleLevelBuilderResetFromSource(resetCells = false) {
 }
 
 function renderPlainSourceHighlight(source = sourceEditor.value, reason = null) {
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
+    sourceEditor.sourceEditorPort.clearHighlights();
+    sourceHighlightSource = String(source || "");
+    sourceHighlightHtml = "";
+    sourceHighlightRuns = [];
+    sourceHighlightMode = "plain-text";
+    if (reason) {
+      const message = `Source highlighting unavailable: ${userFacingRuntimeError(reason)}`;
+      if (!sourceHighlightUnavailableStatusShown && typeof setEditorStatus === "function") {
+        sourceHighlightUnavailableStatusShown = true;
+        setEditorStatus(message, "is-error");
+      }
+      console.warn(message);
+    }
+    return;
+  }
   if (!sourceHighlight) {
     return;
   }
@@ -1316,7 +1229,6 @@ function syncSourceHighlightTransform() {
   if (sourceFindMatchLayer) {
     sourceFindMatchLayer.style.transform = "";
   }
-  syncSourceLineNumberScroll();
 }
 
 function sourceScrollTop() {
@@ -1371,7 +1283,6 @@ function scheduleSourceEditorLayoutSync(frameCount = 1) {
   const sync = () => {
     sourceLayoutSyncFrame = 0;
     syncSourceHighlightScroll();
-    renderSourceLineNumbers();
     if (remainingFrames > 1) {
       remainingFrames -= 1;
       sourceLayoutSyncFrame = window.requestAnimationFrame(sync);
@@ -1479,8 +1390,12 @@ function sourceOutlineShouldRefreshForSource(source, options = {}) {
 
 async function refreshSourceHighlight() {
   const document = activeDocument();
-  if (!sourceHighlight || !isPuzzleDocument(document) || !isTextDocument(document)) {
+  const codeMirror = sourceEditor.sourceEditorPort?.kind === "codemirror";
+  if (!isPuzzleDocument(document) || !isTextDocument(document)) {
     return;
+  }
+  if (!codeMirror) {
+    throw new Error("Source highlighting requires the CodeMirror source editor port.");
   }
   if (sourceCompositionPreviewSource) {
     return;
@@ -1491,6 +1406,7 @@ async function refreshSourceHighlight() {
   }
   const source = sourceEditorDocumentValue();
   const displaySource = sourceEditor.value || "";
+  const range = sourceEditor.sourceEditorPort.highlightViewportRange();
   const includeOutline = sourceOutlineShouldRefreshForSource(source);
   const requestId = ++sourceHighlightRequestId;
   const controller = new AbortController();
@@ -1498,7 +1414,12 @@ async function refreshSourceHighlight() {
 
   try {
     const text = await window.PuzzleStudioHost.highlight(
-      { source, includeOutline },
+      {
+        source,
+        rangeStart: range.from,
+        rangeEnd: range.to,
+        includeOutline,
+      },
       { signal: controller.signal },
     );
     if (
@@ -1508,17 +1429,17 @@ async function refreshSourceHighlight() {
     ) {
       return;
     }
-    syncSourceHighlightMetrics();
     const payload = JSON.parse(text);
     if (payload.outline) {
       applySourceOutlinePayload(payload.outline, source);
     }
-    if (sourceFoldsActive()) {
-      const foldedRuns = sourceFoldHighlightRuns(sourceHighlightRunsFromHtml(payload.html || escapeHtml(source || " ")), source);
-      setSourceHighlightHtml(displaySource, sourceHighlightRunsToHtml(foldedRuns), "server", foldedRuns);
-    } else {
-      setSourceHighlightHtml(source, payload.html || escapeHtml(source || " "), "server");
-    }
+    sourceEditor.sourceEditorPort.applyHighlightRange(source, range, payload);
+    sourceHighlightSource = source;
+    sourceHighlightHtml = "";
+    sourceHighlightRuns = [];
+    sourceHighlightMode = "server";
+    sourceHighlightUnavailableStatusShown = false;
+    renderSourceBlockSelection();
   } catch (error) {
     if (error.name === "AbortError") {
       return;
@@ -1592,28 +1513,91 @@ async function refreshSourceOutline() {
 }
 
 function applySourceOutlinePayload(payload, source) {
-  sourceOutlineItems = normalizeSourceOutlineItems(payload?.items, source);
+  const nextItems = normalizeSourceOutlineItems(payload?.items, source);
+  const structureChanged = sourceOutlineStructureSignature(sourceOutlineItems)
+    !== sourceOutlineStructureSignature(nextItems);
+  sourceOutlineItems = nextItems;
   pruneSourceOutlineExpandedItems();
   sourceOutlineDirty = false;
   sourceOutlineSignature = sourceOutlineStructuralSignature(source);
-  renderSourceOutline();
+  if (structureChanged) {
+    renderSourceOutline();
+  } else {
+    syncSourceOutlineRowOffsets();
+  }
   syncSourceOutlineActiveItem();
 }
 
+function sourceOutlineStructureSignature(items) {
+  return items.map((item) => [
+    item.id,
+    item.kind,
+    item.label,
+    item.depth,
+    item.parent,
+  ].join("\u0000")).join("\u0001");
+}
+
+function syncSourceOutlineRowOffsets() {
+  if (!sourceOutlineList) {
+    return;
+  }
+  const itemsById = sourceOutlineItemById();
+  for (const row of sourceOutlineList.querySelectorAll("[data-source-outline-id]")) {
+    const item = itemsById.get(row.dataset.sourceOutlineId || "");
+    if (item && row.dataset.sourceOutlineStart !== String(item.start)) {
+      row.dataset.sourceOutlineStart = String(item.start);
+    }
+  }
+}
+
 function normalizeSourceOutlineItems(items, source) {
+  const utf16ByUtf8 = sourceUtf16OffsetsByUtf8Byte(source);
   return (Array.isArray(items) ? items : []).map((item) => {
-    const start = sourceUtf16OffsetFromByteOffset(source, Number(item?.start) || 0);
-    const end = sourceUtf16OffsetFromByteOffset(source, Number(item?.end) || Number(item?.start) || 0);
+    const byteStart = Number(item?.start);
+    const byteEnd = Number(item?.end);
+    const start = utf16ByUtf8.get(byteStart);
+    const end = utf16ByUtf8.get(byteEnd);
+    if (
+      !Number.isInteger(byteStart)
+      || !Number.isInteger(byteEnd)
+      || byteStart < 0
+      || byteStart > byteEnd
+      || start === undefined
+      || end === undefined
+    ) {
+      throw new Error("Rust source outline contains an invalid UTF-8 source range.");
+    }
     return {
       id: String(item?.id || ""),
       kind: String(item?.kind || "item"),
       label: String(item?.label || item?.kind || "item"),
       start,
-      end: Math.max(start, end),
+      end,
       depth: Math.max(0, Math.min(8, Number(item?.depth) || 0)),
       parent: item?.parent == null ? "" : String(item.parent),
     };
   }).filter((item) => item.id && Number.isFinite(item.start));
+}
+
+function sourceUtf16OffsetsByUtf8Byte(source) {
+  const offsets = new Map([[0, 0]]);
+  let byteOffset = 0;
+  for (let utf16Offset = 0; utf16Offset < source.length;) {
+    const codePoint = source.codePointAt(utf16Offset);
+    const utf16Length = codePoint > 0xffff ? 2 : 1;
+    const utf8Length = codePoint <= 0x7f
+      ? 1
+      : codePoint <= 0x7ff
+        ? 2
+        : codePoint <= 0xffff
+          ? 3
+          : 4;
+    byteOffset += utf8Length;
+    utf16Offset += utf16Length;
+    offsets.set(byteOffset, utf16Offset);
+  }
+  return offsets;
 }
 
 function sourceOutlineItemById() {
@@ -2219,12 +2203,6 @@ async function showSourceCompletions(options = {}) {
       replaceEnd: list.replaceEnd,
       items,
       selectedIndex,
-      keyboardCommit: Boolean(options.manual || sourceCompletionSessionMatches(previousState, {
-        source,
-        cursor,
-        replaceStart: list.replaceStart,
-        replaceEnd: list.replaceEnd,
-      }) && previousState?.keyboardCommit),
     };
     renderSourceCompletionItems();
     positionSourceCompletionPopover();
@@ -2386,17 +2364,12 @@ function moveSourceCompletionSelection(delta) {
     return;
   }
   sourceCompletionState.mode = "completion";
-  sourceCompletionState.keyboardCommit = true;
   if (!Number.isInteger(sourceCompletionState.selectedIndex)) {
     sourceCompletionState.selectedIndex = 0;
   }
   const count = sourceCompletionState.items.length;
   sourceCompletionState.selectedIndex = (sourceCompletionState.selectedIndex + delta + count) % count;
   renderSourceCompletionItems();
-}
-
-function sourceCompletionCanKeyboardCommit() {
-  return Boolean(sourceCompletionState?.keyboardCommit && sourceCompletionState?.mode === "completion");
 }
 
 function sourceCompletionMatchesCurrentCursor() {
@@ -2759,9 +2732,9 @@ function renderSourceFindMatches() {
   sourceFindMatchLayer.hidden = sourceFindMatchLayer.childElementCount === 0;
 }
 
-function scrollSourceOffsetIntoView(offset) {
+function scrollSourceOffsetIntoView(offset, alignment = "nearest") {
   if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
-    sourceEditor.sourceEditorPort.scrollIntoView(offset);
+    sourceEditor.sourceEditorPort.scrollIntoView(offset, alignment);
     return;
   }
   const rect = sourceCaretRectForOffset(offset);
@@ -3380,8 +3353,26 @@ function handleSourceBeforeInputTextInsert(event) {
   }
 }
 
+function applySourceAnalysisEditorChanges(changes, source) {
+  if (!Array.isArray(changes)) {
+    throw new Error("CodeMirror edit must provide source analysis changes.");
+  }
+  window.PuzzleStudioRuntime
+    .applySourceAnalysisEdits(changes, source)
+    .catch((error) => console.error("Source analysis edit failed", error));
+}
+
 function bindSourceEditorEvents() {
 sourceEditor.addEventListener("beforeinput", handleSourceBeforeInputTextInsert);
+sourceEditor.addEventListener("sourceanalysisreset", () => {
+  const source = sourceEditorDocumentValue();
+  window.PuzzleStudioRuntime.resetSourceAnalysis(source).catch((error) => {
+    console.error("Source analysis reset failed", error);
+  });
+});
+sourceEditor.addEventListener("sourceanalysisedit", (event) => {
+  applySourceAnalysisEditorChanges(event.detail?.changes, event.detail?.source);
+});
 sourceEditor.addEventListener("compositionstart", () => {
   sourceCompositionRange = {
     start: sourceEditor.selectionStart || 0,
@@ -3397,9 +3388,17 @@ sourceEditor.addEventListener("compositionupdate", (event) => {
   }
   beginSourceCompositionPreview(sourceCompositionPreviewValue(event.data));
 });
-sourceEditor.addEventListener("input", () => {
+sourceEditor.addEventListener("input", (event) => {
   if (!isTextDocument(documents[currentDocumentIndex])) {
     return;
+  }
+  const sourceChanges = event.detail?.changes;
+  const editedSource = sourceEditorDocumentValue();
+  applySourceAnalysisEditorChanges(sourceChanges, editedSource);
+  if (typeof refreshSurfaceEntriesForActiveSource === "function") {
+    void refreshSurfaceEntriesForActiveSource(editedSource).catch((error) => {
+      console.error("Source entries refresh failed", error);
+    });
   }
   if (sourceFoldsActive()) {
     const changed = commitSourceFoldedDisplayEdit();
@@ -3440,6 +3439,11 @@ sourceEditor.addEventListener("input", () => {
     scheduleLevelBuilderResetFromSource(false);
     scheduleSourceCursorPreviewSync();
     schedulePreview();
+  }
+});
+sourceEditor.addEventListener("sourceviewportchange", () => {
+  if (sourceDocumentSupportsEditableTargets()) {
+    scheduleSourceHighlight(true);
   }
 });
 sourceEditor.addEventListener("compositionend", () => {
@@ -3851,136 +3855,6 @@ function sourceVerticalPositionFrom(position, delta) {
 function sourceEditorLineHeight() {
   const lineHeight = Number.parseFloat(getComputedStyle(sourceEditor).lineHeight);
   return Number.isFinite(lineHeight) && lineHeight > 0 ? lineHeight : 18;
-}
-
-function renderSourceLineNumbers() {
-  if (!sourceLineNumbers || !sourceEditor || !sourceEditorWrap) {
-    return;
-  }
-  const visibleSource = sourceEditor.value || "";
-  const documentSource = sourceEditorDocumentValue();
-  const visibleLines = visibleSource.length ? visibleSource.split("\n") : [""];
-  const documentLines = sourceFoldLinesWithOffsets(documentSource);
-  const digits = Math.max(2, String(Math.max(1, documentLines.length)).length);
-  const numberWidth = Math.max(44, Math.min(88, 24 + (digits * sourceEditorCharWidth())));
-  sourceEditorWrap.style.setProperty("--source-line-number-width", `${Math.ceil(numberWidth)}px`);
-
-  const lineHeight = sourceEditorLineHeight();
-  const columns = sourceEditorTextColumnCapacity();
-  if (
-    sourceLineNumberSource === `${visibleSource}\u0000${documentSource}\u0000${Array.from(sourceFoldedBlockKeys).join("|")}`
-    && sourceLineNumberColumns === columns
-    && sourceLineNumberLineHeight === lineHeight
-  ) {
-    syncSourceLineNumberScroll();
-    return;
-  }
-
-  sourceLineNumberSource = `${visibleSource}\u0000${documentSource}\u0000${Array.from(sourceFoldedBlockKeys).join("|")}`;
-  sourceLineNumberColumns = columns;
-  sourceLineNumberLineHeight = lineHeight;
-  const foldBlocksByLine = sourceFoldBlocksByOpenLine(documentSource);
-  // Without active folds, view lines map 1:1 to document lines, so the line
-  // index is just the loop counter. Resolving it via sourceLineIndexForFoldOffset
-  // is an O(lines) scan per line -> O(lines^2) per keystroke; only pay that when
-  // folds actually remap the view.
-  const foldsRemapLines = sourceFoldsActive();
-  let viewLineStart = 0;
-  sourceLineNumbers.innerHTML = visibleLines.map((line, viewLineIndex) => {
-    const sourceLineIndex = foldsRemapLines
-      ? sourceLineIndexForFoldOffset(documentLines, sourceViewOffsetToDocumentOffset(viewLineStart, "start"))
-      : viewLineIndex;
-    const foldBlock = foldBlocksByLine.get(sourceLineIndex) || null;
-    const folded = foldBlock ? sourceFoldedBlockKeys.has(foldBlock.key) : false;
-    const visualRows = sourceVisualRowCount(line, columns);
-    const height = Math.max(lineHeight, visualRows * lineHeight);
-    const lineNumber = Number.isInteger(sourceLineIndex) ? sourceLineIndex + 1 : "";
-    const foldIcon = folded
-      ? `<svg class="source-fold-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg>`
-      : `<svg class="source-fold-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>`;
-    const button = foldBlock
-      ? `<button class="source-fold-button${folded ? " is-folded" : ""}" type="button" data-source-fold-key="${escapeHtml(foldBlock.key)}" data-source-fold-line="${sourceLineIndex}" aria-label="${folded ? "Expand" : "Fold"} block at line ${lineNumber}" title="${folded ? "Expand" : "Fold"} block">${foldIcon}</button>`
-      : `<span class="source-fold-spacer" aria-hidden="true"></span>`;
-    viewLineStart += line.length + 1;
-    return `<span class="source-line-number-row" style="height:${height}px"><span class="source-line-number-label">${lineNumber}</span>${button}</span>`;
-  }).join("");
-  syncSourceLineNumberScroll();
-}
-
-function sourceFoldBlocksByOpenLine(source) {
-  const byLine = new Map();
-  for (const block of sourceFoldableBlocks(source)) {
-    const existing = byLine.get(block.openLine);
-    if (!existing || block.closeLine > existing.closeLine) {
-      byLine.set(block.openLine, block);
-    }
-  }
-  return byLine;
-}
-
-function toggleSourceFoldByKey(key) {
-  const source = sourceEditorDocumentValue();
-  const block = sourceFoldableBlocks(source).find((item) => item.key === key);
-  if (!block) {
-    return false;
-  }
-  if (sourceFoldedBlockKeys.has(block.key)) {
-    sourceFoldedBlockKeys.delete(block.key);
-  } else {
-    sourceFoldedBlockKeys.add(block.key);
-  }
-  applySourceFoldingView();
-  scheduleLocalSave();
-  return true;
-}
-
-function handleSourceFoldGutterClick(event) {
-  const button = event.target?.closest?.("[data-source-fold-key]");
-  if (!button || !sourceLineNumbers?.contains(button)) {
-    return;
-  }
-  event.preventDefault();
-  event.stopPropagation();
-  toggleSourceFoldByKey(button.dataset.sourceFoldKey || "");
-  sourceEditor.focus({ preventScroll: true });
-}
-
-function syncSourceLineNumberScroll() {
-  if (!sourceLineNumbers || !sourceEditor) {
-    return;
-  }
-  const scrollHeight = Math.max(sourceEditor.scrollHeight, sourceEditorWrap?.clientHeight || 0);
-  if (sourceLineNumberScrollHeight !== scrollHeight) {
-    sourceLineNumberScrollHeight = scrollHeight;
-    sourceLineNumbers.style.height = `${scrollHeight}px`;
-  }
-  sourceLineNumbers.style.transform = "";
-}
-
-function sourceEditorTextColumnCapacity() {
-  const style = window.getComputedStyle(sourceEditor);
-  const paddingLeft = Number.parseFloat(style.paddingLeft) || 0;
-  const paddingRight = Number.parseFloat(style.paddingRight) || 0;
-  const contentWidth = Math.max(1, sourceViewportWidth() - paddingLeft - paddingRight);
-  return Math.max(1, Math.floor(contentWidth / sourceEditorCharWidth()));
-}
-
-function sourceVisualRowCount(line, columns) {
-  return Math.max(1, Math.ceil(sourceVisualColumnCount(line) / Math.max(1, columns)));
-}
-
-function sourceVisualColumnCount(line) {
-  const tabSize = 2;
-  let columns = 0;
-  for (const char of line || "") {
-    if (char === "\t") {
-      const remainder = columns % tabSize;
-      columns += remainder === 0 ? tabSize : tabSize - remainder;
-    } else {
-      columns += 1;
-    }
-  }
-  return columns;
 }
 
 function sourceWordPosition(delta) {
@@ -5144,104 +5018,24 @@ function sourceImportLinesWithOffsets(source) {
 }
 
 function sourceImportLinkAtOffset(source, offset, lines = sourceImportLinesWithOffsets(source)) {
-  const lineIndex = sourceLineIndexAtOffset(lines, offset);
-  const line = lines[lineIndex];
-  if (!line) {
+  const reference = window.PuzzleStudioRuntime?.sourceImportReference?.(
+    source,
+    activeDocument()?.puzzlePath || "game.puzzle",
+    offset,
+  );
+  if (!reference?.range || !reference?.pathRange || !reference.resolvedPath) {
     return null;
   }
-  const code = stripSourceImportLineComment(line.raw);
-  const importMatch = code.match(/^(\s*import\s*)"((?:\\.|[^"\\])*)"/);
-  if (importMatch) {
-    return sourceQuotedPathLinkForMatch(importMatch, line, lineIndex, offset, "import");
-  }
-  if (!sourceLineIsInAssetsBlock(lines, lineIndex)) {
-    return null;
-  }
-  const assetMatch = code.match(/^(\s*(?:css|script|file)\s*)"((?:\\.|[^"\\])*)"/);
-  if (assetMatch) {
-    return sourceQuotedPathLinkForMatch(assetMatch, line, lineIndex, offset, "asset");
-  }
-  return null;
-}
-
-function sourceQuotedPathLinkForMatch(match, line, lineIndex, offset, kind) {
-  if (!match) {
-    return null;
-  }
-  const quoteStart = line.start + match[1].length;
-  const frameStart = quoteStart;
-  const frameEnd = quoteStart + match[0].length - match[1].length;
-  const pathStart = quoteStart + 1;
-  const pathEnd = pathStart + match[2].length;
-  if (offset < frameStart || offset > frameEnd) {
-    return null;
-  }
-  const baseDir = directoryName(activeDocument()?.puzzlePath || "");
-  const resolvedPath = resolveWasmImportPath(baseDir, match[2]);
   return {
-    kind,
-    rawPath: match[2],
-    resolvedPath,
-    lineIndex,
-    start: frameStart,
-    end: frameEnd,
-    rect: sourceFrameRectForOffsets(frameStart, frameEnd),
-    pathStart,
-    pathEnd,
+    rawPath: reference.rawPath,
+    resolvedPath: reference.resolvedPath,
+    lineIndex: sourceLineIndexAtOffset(lines, reference.range.start),
+    start: reference.range.start,
+    end: reference.range.end,
+    rect: sourceFrameRectForOffsets(reference.range.start, reference.range.end),
+    pathStart: reference.pathRange.start,
+    pathEnd: reference.pathRange.end,
   };
-}
-
-function sourceLineIsInAssetsBlock(lines, lineIndex) {
-  const stack = [];
-  for (let index = 0; index < lineIndex; index += 1) {
-    const code = stripSourceImportLineComment(lines[index]?.raw || "").trim();
-    if (!code) {
-      continue;
-    }
-    if (code === "}" || code === "end") {
-      stack.pop();
-      continue;
-    }
-    if (/^assets(?:\s*\{)?$/.test(code)) {
-      stack.push("assets");
-      continue;
-    }
-    if (code.endsWith("{")) {
-      stack.push("other");
-    }
-  }
-  return stack.at(-1) === "assets";
-}
-
-function stripSourceImportLineComment(line) {
-  let quote = "";
-  let escaped = false;
-  for (let index = 0; index < line.length; index += 1) {
-    const char = line[index];
-    const next = line[index + 1] || "";
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (char === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (quote) {
-      if (char === quote) {
-        quote = "";
-      }
-      continue;
-    }
-    if (char === "\"") {
-      quote = char;
-      continue;
-    }
-    if (char === "/" && next === "/") {
-      return line.slice(0, index);
-    }
-  }
-  return line;
 }
 
 function renderSourceImportLinkFrame() {
@@ -5291,7 +5085,7 @@ function openSourceImportLink() {
   }
   const target = documentByPath(link.resolvedPath);
   if (!target || !isTextDocument(target)) {
-    setEditorStatus(`${link.kind === "asset" ? "Asset" : "Import"} not found`, "is-error");
+    setEditorStatus("Import not found", "is-error");
     hideSourceImportLinkFrame();
     return false;
   }
@@ -5829,6 +5623,40 @@ function applySourceBlockSelectionReplacement(replacer, options = {}) {
   renderSourceBlockSelection();
 }
 
+sourceEditor.addEventListener("sourcecompletioncommand", (event) => {
+  if (!isTextDocument(documents[currentDocumentIndex])) {
+    return;
+  }
+  const command = event.detail?.command;
+  if (command === "show") {
+    event.preventDefault();
+    showSourceCompletions({ manual: true });
+    return;
+  }
+  if (
+    !sourceCompletionState
+    || sourceCompletionPopover?.hidden
+    || !sourceCompletionMatchesCurrentCursor()
+  ) {
+    return;
+  }
+  if (command === "close") {
+    event.preventDefault();
+    hideSourceCompletions();
+    return;
+  }
+  if (command === "next" || command === "previous") {
+    event.preventDefault();
+    moveSourceCompletionSelection(command === "next" ? 1 : -1);
+    return;
+  }
+  if (command === "commit" && sourceCompletionState.mode === "completion") {
+    if (acceptSourceCompletion()) {
+      event.preventDefault();
+    }
+  }
+});
+
 sourceEditor.addEventListener("keydown", (event) => {
   if (!isTextDocument(documents[currentDocumentIndex])) {
     return;
@@ -5889,7 +5717,7 @@ sourceEditor.addEventListener("keydown", (event) => {
           acceptSourceCompletion();
           return;
         }
-        if (event.key === "Enter" && sourceCompletionCanKeyboardCommit()) {
+        if (event.key === "Enter") {
           event.preventDefault();
           acceptSourceCompletion();
           return;
@@ -6039,7 +5867,6 @@ sourceEditorWrap?.addEventListener("scroll", hideSourceCompletions);
 sourceEditorWrap?.addEventListener("scroll", hideSourceImportLinkFrame);
 sourceEditor.addEventListener("click", syncSourceOutlineActiveItem);
 sourceEditor.addEventListener("keyup", syncSourceOutlineActiveItem);
-sourceLineNumbers?.addEventListener("click", handleSourceFoldGutterClick);
 sourceOutlineList?.addEventListener("click", (event) => {
   const row = event.target.closest("[data-source-outline-id]");
   if (!row || !sourceOutlineList.contains(row)) {
@@ -6069,7 +5896,6 @@ sourceOutlineList?.addEventListener("keydown", (event) => {
 });
 document.addEventListener("pointerdown", hideSourceColorEditorForOutsidePointer);
 window.addEventListener("resize", syncSourceHighlightScroll);
-window.addEventListener("resize", renderSourceLineNumbers);
 window.addEventListener("resize", hideSourceColorEditor);
 window.addEventListener("resize", () => {
   if (sourceEditorBlockSelection?.ranges?.length) {

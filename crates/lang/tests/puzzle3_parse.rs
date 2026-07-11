@@ -88,7 +88,7 @@ fn occupied_cells(state: &State3) -> Vec<(Coord3, Vec<ObjectId>)> {
 }
 
 #[test]
-fn display_objects_are_carried_by_parsed_puzzle3_not_game3() {
+fn at_prefixed_layer_objects_are_not_display_objects() {
     let parsed = parse_puzzle3d(
         r#"
 puzzle3 display3 {
@@ -105,8 +105,8 @@ input right [ Player | no Player ] -> [ | Player ]
     )
     .unwrap();
 
-    let dust = object_id(&parsed, "@Dust");
-    assert_eq!(parsed.display_objects, vec![dust]);
+    object_id(&parsed, "@Dust");
+    assert!(parsed.display_objects.is_empty());
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

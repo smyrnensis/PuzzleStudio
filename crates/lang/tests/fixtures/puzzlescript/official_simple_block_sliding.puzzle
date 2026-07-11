@@ -10,11 +10,11 @@ sfx crate_move { seed = 36772507; type = puzzlescript }
 
 puzzle main {
 layers {
-layer_1 = Background
-layer_2 = Target
-layer_3 = Player Wall Crate1 Crate2 Crate3
-layer_4 = slideleft slideup slideright slidedown
-layer_5 = nospawn
+layer1 = Background
+layer2 = Target
+layer3 = Player Wall Crate1 Crate2 Crate3
+layer4 = slideleft slideup slideright slidedown
+layer5 = nospawn
 }
 
 groups {
@@ -101,12 +101,24 @@ nospawn
 .....
 }
 
+sounds {
+move crate -> sfx crate_move
+}
+
 win_conditions {
 no crate
 }
 
-on_level_start {
-once_all [ no Background ] -> [ Background ]
+routine move {
+repeat {
+for l in layer1 layer2 layer3 layer4 layer5 {
+once_all [ > l | | < l ] -> [ l | {__move_collision} | l ]
+once_all [ > l | ; | ^ l ] -> [ l | {__move_collision} ; | l ]
+[ > l | no l no {__move_collision} ] -> [ | l{no directions} ]
+once_all [ > l ] -> [ l ]
+}
+once_all [ {__move_collision} ] -> [ ]
+}
 }
 
 rules {
@@ -137,19 +149,18 @@ next_level
 
 levels {
 legend {
-1 = Crate1
-2 = Crate2
-3 = Crate3
-, = nospawn
-. = empty
-# = Wall
-P = Player
-p = Player
-* = Crate1
-@ = Crate1 Target
-O = Target nospawn
-o = Target nospawn
-_ = empty
+1 = Crate1 Background
+2 = Crate2 Background
+3 = Crate3 Background
+, = nospawn Background
+. = Background
+# = Wall Background
+P = Player Background
+p = Player Background
+* = Crate1 Background
+@ = Crate1 Target Background
+O = Target nospawn Background
+o = Target nospawn Background
 }
 
 #######p##
@@ -487,16 +498,14 @@ layout {
 title = "Simple Block Sliding Game"
 subtitle = "by increpare"
 if has_progress_save {
-choice "Continue" -> continue_game
-}
-choice "New Game" -> new_game
-}
-routine continue_game {
+choice "Continue" -> {
 goto playing
 }
-routine new_game {
+}
+choice "New Game" -> {
 clear_game_progress
-goto playing(0)
+start playing
+}
 }
 }
 
@@ -508,12 +517,9 @@ title = "Simple Block Sliding Game"
 puzzle board = main
 }
 keys {
-Escape q -> back
+Escape q -> goto title
 }
 rules {
 step board
-}
-routine back {
-goto title
 }
 }

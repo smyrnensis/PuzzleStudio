@@ -259,7 +259,7 @@ fn record_surface_completion_line(
         ["level", name, ..] => {
             insert_surface_completion_identifier(&mut sink.completion_symbols_mut().levels, name);
         }
-        ["routine", name, ..] | ["rule", name, ..] => {
+        ["routine", name, ..] => {
             insert_surface_completion_identifier(&mut sink.completion_symbols_mut().routines, name);
         }
         ["input", name, ..] | ["direction", name, ..] => {
@@ -285,9 +285,6 @@ fn record_surface_completion_line(
         }
         [name] if scope == Some(SourceScope::VisualShapeTable) => {
             record_surface_completion_visual_table_ref(name, true, sink);
-        }
-        ["object", spec, ..] if *spec != "=" => {
-            record_surface_completion_object_spec(spec, sink);
         }
         ["var" | "const", name, ..]
         | ["persistent", "var" | "const", name, ..]
@@ -774,6 +771,7 @@ fn record_parser_resolved_surface_tokens(
         );
         record_parser_resolved_for_expansion_surface_tokens(line, catalog, sink);
         record_parser_resolved_rule_surface_tokens(line, catalog, sink);
+        record_parser_resolved_condition_surface_tokens(line, catalog, sink);
         if line.scope == Some(SourceScope::Map)
             && line
                 .structural_token_spans
@@ -783,6 +781,24 @@ fn record_parser_resolved_surface_tokens(
             current_map_axis = None;
         }
     }
+}
+
+fn record_parser_resolved_condition_surface_tokens(
+    line: &SurfaceScanLine,
+    catalog: &Catalog,
+    sink: &mut SurfaceSink,
+) {
+    if line.scope != Some(SourceScope::Condition) {
+        return;
+    }
+    let [all, subject, on, cover] = line.structural_token_spans.as_slice() else {
+        return;
+    };
+    if all.text != "all" || on.text != "on" {
+        return;
+    }
+    record_resolved_object_selector_surface_token(subject, &line.content, catalog, sink);
+    record_resolved_object_selector_surface_token(cover, &line.content, catalog, sink);
 }
 
 fn record_parser_resolved_for_expansion_surface_tokens(
@@ -966,7 +982,13 @@ pub(crate) fn integrate_level_editor_authoring(
                 let body = parse_level_body_for_editor(&level, &catalog, empty_char)?;
                 let mut char_objects = catalog.char_objects.clone();
                 char_objects.extend(body.local_char_objects);
-                let parsed = parse_level(&game, &body.lines, empty_char, &char_objects, &[])?;
+                let parsed = parse_level(
+                    &game,
+                    &body.lines,
+                    Some(empty_char),
+                    &char_objects,
+                    &[],
+                )?;
                 Ok::<_, DiagnosticReport>(LevelEditorIntegratedLevel {
                     source_level_index,
                     name: level.name,
@@ -1792,8 +1814,8 @@ fn looks_like_condition_expr(expr: &str) -> bool {
             .any(|token| matches!(token, "and" | "or"))
 }
 
-fn is_display_role_token(token: &str) -> bool {
-    puzzle_authoring::is_display_object_token(token)
+fn is_at_identifier_token(token: &str) -> bool {
+    puzzle_authoring::is_at_identifier_token(token)
 }
 
 fn validate_selector_alias_name(
@@ -1801,7 +1823,7 @@ fn validate_selector_alias_name(
     line: &str,
     label: &str,
 ) -> Result<(), DiagnosticReport> {
-    if is_display_role_token(value) || is_qualified_identifier(value) {
+    if is_at_identifier_token(value) || is_qualified_identifier(value) {
         Ok(())
     } else {
         Err(parse_error(
@@ -1812,7 +1834,7 @@ fn validate_selector_alias_name(
 }
 
 fn validate_rule_name(value: &str, line: &str) -> Result<(), DiagnosticReport> {
-    if is_display_role_token(value) || is_qualified_identifier(value) {
+    if is_at_identifier_token(value) || is_qualified_identifier(value) {
         Ok(())
     } else {
         Err(parse_error(
@@ -1869,7 +1891,7 @@ fn parse_layer_term(
             &mut catalog.char_objects,
         )?
     };
-    mark_visual_objects(&declared, visual || is_display_role_token(term), catalog);
+    mark_visual_objects(&declared, visual, catalog);
     Ok(declared)
 }
 
@@ -2037,15 +2059,7 @@ fn parse_layers_block(
                     .expect("guarded named layer assignment syntax");
                 let selectors = &tokens[syntax.rhs_start..];
                 let layer = layer_id_for_name(name, &lines[i], named_layers, layer_count, catalog)?;
-                let objects =
-                    define_or_assign_terms_to_layer(selectors, &lines[i], layer, catalog, false)?;
-                validate_named_selector_role(
-                    name,
-                    &objects,
-                    &catalog.visual_objects,
-                    &lines[i],
-                    "layer",
-                )?;
+                define_or_assign_terms_to_layer(selectors, &lines[i], layer, catalog, false)?;
                 register_layer_tag_from_layer(name, layer, catalog);
             }
             _ => {
@@ -2499,11 +2513,7 @@ fn resolve_or_declare_layer_selector(
             &mut catalog.char_objects,
         )?
     };
-    mark_visual_objects(
-        &declared,
-        visual || is_display_role_token(selector),
-        catalog,
-    );
+    mark_visual_objects(&declared, visual, catalog);
     Ok(declared)
 }
 
@@ -2553,70 +2563,6 @@ fn register_layer_tag_from_layer(name: &str, layer: u16, catalog: &mut Catalog) 
         .filter_map(|definition| (definition.layer_id == layer).then_some(definition.id))
         .collect::<Vec<_>>();
     catalog.object_groups.insert(name.to_string(), objects);
-}
-
-fn validate_named_selector_role(
-    name: &str,
-    objects: &[ObjectId],
-    visual_objects: &[ObjectId],
-    line: &str,
-    kind: &str,
-) -> Result<(), DiagnosticReport> {
-    let display_name = is_display_role_token(name);
-    let has_main = objects
-        .iter()
-        .any(|object| !object.is_empty() && !visual_objects.contains(object));
-    let has_display = objects.iter().any(|object| visual_objects.contains(object));
-    if display_name && has_main {
-        return Err(parse_error(
-            line,
-            &format!("@{kind} can only contain display objects"),
-        ));
-    }
-    if !display_name && has_display {
-        return Err(parse_error(
-            line,
-            &format!("{kind} containing display objects must use an @ name"),
-        ));
-    }
-    Ok(())
-}
-
-fn validate_layer_role_separation(
-    catalog: &Catalog,
-    named_layers: &HashMap<String, u16>,
-) -> Result<(), DiagnosticReport> {
-    let mut layer_roles = HashMap::<LayerId, (bool, bool)>::new();
-    for definition in &catalog.object_defs {
-        if definition.layer_id.0 == UNASSIGNED_LAYER || definition.id.is_empty() {
-            continue;
-        }
-        let visual = catalog.visual_objects.contains(&definition.id);
-        let entry = layer_roles
-            .entry(definition.layer_id)
-            .or_insert((false, false));
-        if visual {
-            entry.1 = true;
-        } else {
-            entry.0 = true;
-        }
-    }
-
-    for (layer, (has_main, has_visual)) in layer_roles {
-        if has_main && has_visual {
-            let name = named_layers
-                .iter()
-                .find_map(|(name, named_layer)| {
-                    (*named_layer == layer.0 && !name.starts_with("__anonymous_layer_"))
-                        .then_some(name.as_str())
-                })
-                .unwrap_or("<anonymous>");
-            return Err(DiagnosticReport::error(format!(
-                "layers cannot mix gameplay objects and display objects in the same storage layer ({name}); put display objects in a separate layer"
-            )));
-        }
-    }
-    Ok(())
 }
 
 fn refresh_layer_tags_and_value_sets(named_layers: &HashMap<String, u16>, catalog: &mut Catalog) {
@@ -2872,7 +2818,6 @@ fn collect_implicit_inputs_from_statements(
                 collect_implicit_inputs_from_statements(else_statements, names);
             }
             StatementAst::Call { .. }
-            | StatementAst::DisplayCall { .. }
             | StatementAst::Effect { .. }
             | StatementAst::Rewrite(_) => {}
         }

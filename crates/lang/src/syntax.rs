@@ -81,7 +81,6 @@ pub(crate) const PUZZLE_COMPLETION_KEYWORDS: &[&str] = &[
     "resources",
     "render",
     "routine",
-    "rule",
     "rules",
     "solver",
     "marks",

@@ -154,14 +154,14 @@ function endWorkspaceHostMutation() {
 
 async function loadSource() {
   setEditorStatus("Loading", "");
-  // Source loading is independent from parser initialization. Start the WASM
-  // download now, but let the workspace request and first document render
-  // proceed immediately; analysis requests share this initialization promise.
+  // Start source loading and parser initialization independently, but do not
+  // render a document until the synchronous workspace resolver is available.
   const wasmParserLoad = ensureEditorWasmParserLoaded();
   void wasmParserLoad.catch((error) => {
     console.error("Editor WASM parser failed to load", error);
   });
   if (editorSeed) {
+    await wasmParserLoad;
     workspaceRoot = editorSeed.workspaceRoot || "";
     const embedded = embeddedDocuments();
     const key = embeddedSeedKey(embedded);
@@ -183,7 +183,10 @@ async function loadSource() {
     return;
   }
 
-  const payload = await window.PuzzleStudioHost.loadSource();
+  const [payload] = await Promise.all([
+    window.PuzzleStudioHost.loadSource(),
+    wasmParserLoad,
+  ]);
   await applyLoadedSourcePayload(payload);
 }
 
@@ -646,7 +649,8 @@ async function applyWorkspaceChangedPayload(payload) {
       renderDocumentTabs();
       updateDocumentTabUnsavedStates();
       if (typeof syncPaneModesFromFocusedPuzzleSource === "function") {
-        syncPaneModesFromFocusedPuzzleSource({ switchOpenPane: true, loadFirst: false });
+        void syncPaneModesFromFocusedPuzzleSource({ switchOpenPane: true, loadFirst: false })
+          .catch((error) => setEditorStatus(userFacingRuntimeError(error), "is-error"));
       }
     } else {
       loadEmbeddedDocument(currentDocumentIndex);
@@ -766,35 +770,8 @@ async function ensurePreviewDocumentsLoaded(document) {
     return;
   }
   const root = document.workspaceRoot || workspaceRoot || "";
-  await ensureDocumentContentLoaded(document);
-  await ensurePuzzleImportDocumentsLoaded(document, root, []);
+  await ensureWorkspaceDocumentsLoaded(root);
   await ensureDeclaredPreviewAssetDocumentsLoaded(document, root);
-}
-
-async function ensurePuzzleImportDocumentsLoaded(document, root, importStack = []) {
-  if (!isPuzzleDocument(document) || puzzleSourceProfile(document) !== "puzzle2d") {
-    return;
-  }
-  const normalizedPath = normalizePath(document.puzzlePath || "game.puzzle");
-  if (importStack.includes(normalizedPath)) {
-    throw new Error(`cyclic import: ${[...importStack, normalizedPath].join(" -> ")}`);
-  }
-  const nextStack = [...importStack, normalizedPath];
-  const baseDir = directoryName(normalizedPath);
-  for (const line of String(currentSourceForDocument(document) || "").split("\n")) {
-    const code = stripWorkspaceImportLineComment(line).trim();
-    const match = code.match(/^import\s+"((?:\\.|[^"\\])*)"\s*$/);
-    if (!match) {
-      continue;
-    }
-    const importPath = resolveWorkspaceImportPath(baseDir, match[1], root);
-    const imported = documentByPathForWorkspace(importPath, root);
-    if (!imported || !isTextDocument(imported)) {
-      throw new Error(`import not found: ${match[1]} from ${normalizedPath}`);
-    }
-    await ensureDocumentContentLoaded(imported);
-    await ensurePuzzleImportDocumentsLoaded(imported, root, nextStack);
-  }
 }
 
 async function ensureDeclaredPreviewAssetDocumentsLoaded(document, root) {
@@ -2553,13 +2530,7 @@ function declaredFileAssetPaths(document) {
 }
 
 function declaredSpriteImagePaths(document) {
-  const source = document?.source || "";
-  let expanded = source;
-  try {
-    expanded = expandPuzzleImportsForWasm(source, document?.puzzlePath || "game.puzzle");
-  } catch {
-    expanded = source;
-  }
+  const expanded = expandedWorkspaceSourceForEditor(document);
   const out = [];
   for (const line of String(expanded || "").split("\n")) {
     const match = stripLineCommentForWasm(line).trim().match(/^image\s+"([^"]+)"$/);
@@ -2643,13 +2614,7 @@ function normalizeThemeAssetName(name) {
 }
 
 function effectiveThemeName(document) {
-  const source = document?.source || "";
-  let expanded = source;
-  try {
-    expanded = expandPuzzleImportsForWasm(source, document?.puzzlePath || "game.puzzle");
-  } catch {
-    expanded = source;
-  }
+  const expanded = expandedWorkspaceSourceForEditor(document);
   return themeNameFromPuzzleSource(expanded) || "clean";
 }
 
@@ -2708,13 +2673,7 @@ function effectiveGameVisualsJs(document) {
 }
 
 function declaredAssetPaths(document, kind) {
-  const source = document?.source || "";
-  let expanded = source;
-  try {
-    expanded = expandPuzzleImportsForWasm(source, document?.puzzlePath || "game.puzzle");
-  } catch {
-    expanded = source;
-  }
+  const expanded = expandedWorkspaceSourceForEditor(document);
   const out = [];
   let inAssets = false;
   let depth = 0;
@@ -2749,6 +2708,18 @@ function declaredAssetPaths(document, kind) {
     }
   }
   return out;
+}
+
+function expandedWorkspaceSourceForEditor(document) {
+  const compiler = window.PuzzleStudioRuntime?.cachedWasmCompiler?.();
+  const expand = compiler?.expand_workspace_entry_source;
+  if (typeof expand !== "function") {
+    throw new Error("Editor WASM workspace source resolver is unavailable");
+  }
+  return expand(
+    document?.puzzlePath || "game.puzzle",
+    JSON.stringify(workspaceCompilerDocuments(document)),
+  );
 }
 
 function folderDocument(document, name) {
@@ -2824,16 +2795,20 @@ function loadEmbeddedDocument(index) {
     restoreSourceFoldState(document.sourceFoldedBlockKeys);
   }
   updateDocumentTabUnsavedStates();
+  const activeSourceChanged = Boolean(previousActiveFileId && document.id !== previousActiveFileId);
   const previewTargetUnchanged = previewDocument
     && previousPreviewKey
     && documentIdentityKey(previewDocument) === previousPreviewKey;
-  if (previewTargetUnchanged) {
+  if (activeSourceChanged) {
+    invalidateCompiledPreview(previewDocument);
+  } else if (previewTargetUnchanged) {
     markPreviewDirty();
   } else {
     invalidateCompiledPreview(previewDocument);
   }
   if (typeof syncPaneModesFromFocusedPuzzleSource === "function") {
-    syncPaneModesFromFocusedPuzzleSource({ switchOpenPane: true });
+    void syncPaneModesFromFocusedPuzzleSource({ switchOpenPane: true })
+      .catch((error) => setEditorStatus(userFacingRuntimeError(error), "is-error"));
   }
   syncPreviewViewportAspect();
   runButton.disabled = !previewDocument;
@@ -3318,7 +3293,8 @@ async function commitRenameEntry(value) {
   saveDocumentStore(false);
   renderDocumentSelect();
   if (target.node.id === activeFileId && typeof syncPaneModesFromFocusedPuzzleSource === "function") {
-    syncPaneModesFromFocusedPuzzleSource({ switchOpenPane: true, loadFirst: false });
+    void syncPaneModesFromFocusedPuzzleSource({ switchOpenPane: true, loadFirst: false })
+      .catch((error) => setEditorStatus(userFacingRuntimeError(error), "is-error"));
   }
   setEditorStatus("Renamed", "is-ok");
 }

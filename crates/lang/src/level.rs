@@ -21,7 +21,7 @@ pub(crate) struct ParsedLevel {
 pub(crate) fn parse_level(
     game: &CompiledGame,
     lines: &[String],
-    empty: char,
+    empty: Option<char>,
     char_objects: &HashMap<char, Vec<ObjectId>>,
     variable_defaults: &[i64],
 ) -> Result<ParsedLevel, DiagnosticReport> {
@@ -57,7 +57,7 @@ pub(crate) fn parse_level(
         for (authored_layer, layer) in placed_region.region.layers.iter().enumerate() {
             for (y, row) in layer.iter().enumerate() {
                 for (x, ch) in row.chars().enumerate() {
-                    if ch == empty {
+                    if Some(ch) == empty {
                         continue;
                     }
                     let objects = char_objects.get(&ch).ok_or_else(|| {

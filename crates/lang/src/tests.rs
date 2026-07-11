@@ -1,4 +1,57 @@
 use super::*;
+
+#[test]
+fn virtual_workspace_imports_are_resolved_by_the_language_layer() {
+    let documents = vec![
+        (
+            "games/demo/game.puzzle".to_string(),
+            "import \"parts/model.puzzle\"\n".to_string(),
+        ),
+        (
+            "games/demo/parts/model.puzzle".to_string(),
+            "title = imported\npuzzle default { objects {} collision_layers {} rules {} levels default of default {} }\n".to_string(),
+        ),
+    ];
+    let expanded = expand_game_imports_from_documents("games/demo/game.puzzle", &documents)
+        .expect("virtual import expansion");
+    assert!(expanded.contains("title = imported"));
+    assert!(!expanded.contains("import \"parts/model.puzzle\""));
+}
+
+#[test]
+fn virtual_workspace_import_cycles_fail_visibly() {
+    let documents = vec![
+        (
+            "game.puzzle".to_string(),
+            "import \"part.puzzle\"\n".to_string(),
+        ),
+        (
+            "part.puzzle".to_string(),
+            "import \"game.puzzle\"\n".to_string(),
+        ),
+    ];
+    let error =
+        expand_game_imports_from_documents("game.puzzle", &documents).expect_err("cycle must fail");
+    assert!(error.to_string().contains("cyclic import"));
+}
+
+#[test]
+fn source_analysis_returns_typed_import_reference_at_the_path_only() {
+    let source = "// import \"ignored.puzzle\"\nimport \"parts/model.puzzle\"\nassets {\n  file \"not-a-link.png\"\n}\n";
+    let analysis = analyze_source(source);
+    let cursor = source.find("model.puzzle").unwrap();
+    let reference = analysis
+        .import_reference_at("games/demo/game.puzzle", cursor)
+        .expect("import reference");
+    assert_eq!(reference.raw_path, "parts/model.puzzle");
+    assert_eq!(reference.resolved_path, "games/demo/parts/model.puzzle");
+    let asset_cursor = source.find("not-a-link.png").unwrap();
+    assert!(
+        analysis
+            .import_reference_at("games/demo/game.puzzle", asset_cursor)
+            .is_none()
+    );
+}
 use puzzle_core::{LocalFrameExtent, RuleStep, State, transition_program, transition_state};
 
 fn parse_game(source: &str) -> Result<LoadedGame, DiagnosticReport> {
@@ -510,7 +563,7 @@ B
 }
 
 #[test]
-fn at_display_objects_and_rules_share_object_layers() {
+fn at_prefixed_objects_and_routines_use_normal_gameplay_semantics() {
     let source = r#"
 title = at_display
 
@@ -546,8 +599,8 @@ P
     let hint = object_named(&loaded, "@Hint");
     let initial = &loaded.levels[0].initial_state;
 
-    assert!(loaded.is_display_object(cursor));
-    assert!(loaded.is_display_object(hint));
+    assert!(!loaded.is_display_object(cursor));
+    assert!(!loaded.is_display_object(hint));
     assert!(!initial.has_object(&loaded.game, 0, 0, cursor));
 
     let stepped = transition_state(&loaded.game, initial, InputId(0)).unwrap();
@@ -2546,7 +2599,10 @@ q = goto level_select
 }
 "#;
     let error = parse_game(source).unwrap_err().to_string();
-    assert!(error.contains("keys row must use `->`"));
+    assert!(
+        error.contains("keys row must be: <key...> -> <scene effect-or-input>"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -3033,7 +3089,10 @@ resume = Escape
 "#;
     let error = parse_game(source).unwrap_err().to_string();
 
-    assert!(error.contains("keys row must use `->`"));
+    assert!(
+        error.contains("keys row must be: <key...> -> <scene effect-or-input>"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -5097,7 +5156,7 @@ P.
 }
 
 #[test]
-fn display_level_start_keeps_raw_initial_state_and_keeps_runtime_program() {
+fn at_prefixed_level_start_routine_uses_normal_runtime_program() {
     let source = r#"
 title = display_level_start
 
@@ -5134,7 +5193,7 @@ S
     let loaded = parse_game(source).unwrap();
     let marker = object_named(&loaded, "Marker");
 
-    assert!(loaded.is_display_object(marker));
+    assert!(!loaded.is_display_object(marker));
     assert!(
         !loaded.levels[0]
             .initial_state
@@ -5184,7 +5243,7 @@ P.
 }
 
 #[test]
-fn display_level_start_rejects_main_object_writes() {
+fn at_prefixed_level_start_routine_accepts_normal_object_writes() {
     let source = r#"
 title = display_level_start_main_write
 
@@ -5218,9 +5277,7 @@ S
 }
 }
 "#;
-    let error = parse_game(source).unwrap_err().to_string();
-
-    assert!(error.contains("display routines and display blocks can only contain display rules"));
+    parse_game(source).unwrap();
 }
 
 #[test]
@@ -5549,42 +5606,6 @@ B.
     let wall = object_named(&loaded, "Wall");
 
     assert!(moved.has_object(&loaded.game, 0, 0, wall));
-}
-
-#[test]
-fn conditional_rule_call_accepts_embedded_puzzlescript_direction_marker() {
-    let source = r#"
-title = conditional_direction_marker
-
-puzzle default {
-layers {
-__legacy_layer_1 = Player Wall Flag
-}
-empty .
-
-legend P = Player
-legend W = Wall
-legend F = Flag
-
-routine Mark once {
-[ Player ] -> [ Flag ]
-}
-
-rules {
-[ < Player | Wall ] -> Mark
-}
-
-level "start" {
-WP
-}
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let moved =
-        transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
-    let flag = object_named(&loaded, "Flag");
-
-    assert!(moved.has_object(&loaded.game, 1, 0, flag));
 }
 
 #[test]
@@ -10878,24 +10899,25 @@ legend b = Obj:b
 legend c = Obj:c
 
 rules {
-[ Obj:tags ] -> [ Obj:flip(tags) ]
+once [ Obj:tags ] -> [ Obj:flip(tags) ]
 }
 
 levels {
+legend {
+. = empty
+}
 level "start"
-abc
+bc
 }
 }
 "#;
     let loaded = parse_game(source).unwrap();
     let next = transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
     let obj_a = object_named(&loaded, "Obj:a");
-    let obj_b = object_named(&loaded, "Obj:b");
     let obj_c = object_named(&loaded, "Obj:c");
 
-    assert!(next.has_object(&loaded.game, 0, 0, obj_b));
-    assert!(next.has_object(&loaded.game, 1, 0, obj_a));
-    assert!(next.has_object(&loaded.game, 2, 0, obj_c));
+    assert!(next.has_object(&loaded.game, 0, 0, obj_a));
+    assert!(next.has_object(&loaded.game, 1, 0, obj_c));
 }
 
 #[test]
@@ -12024,7 +12046,7 @@ show_solved = true
     assert_eq!(loaded.scenes[0].name, "playing");
     assert_eq!(loaded.scenes[0].state.puzzles.len(), 1);
     assert_eq!(loaded.scenes[0].state.puzzles[0].name, "board");
-    assert_eq!(loaded.scenes[0].state.variables.len(), 3);
+    assert_eq!(loaded.scenes[0].state.variables.len(), 4);
     assert_eq!(loaded.scenes[0].state.variables[0].name, "message_visible");
     assert_eq!(
         loaded.scenes[0].state.variables[0].default,
@@ -12034,6 +12056,11 @@ show_solved = true
         loaded.scenes[0].state.variables[2].default,
         SceneValue::Text("Push the box".to_string())
     );
+    assert!(loaded.scenes[0].state.variables.iter().any(|variable| {
+        variable.name == "input"
+            && variable.kind == SceneVarKind::Signal
+            && variable.default == SceneValue::Symbol("none".to_string())
+    }));
     assert_eq!(loaded.scenes[0].key_bindings[0].keys.len(), 2);
     assert_eq!(
         loaded.controls.keys.get(&b'd'),
@@ -14628,7 +14655,7 @@ level "start"
 }
 
 #[test]
-fn all_on_preserves_quantified_subject_and_cover_semantics() {
+fn all_on_lowers_to_generic_goal_and_generates_solver_strategy() {
     let source = r#"
 title = all_on_semantics
 puzzle default {
@@ -14651,15 +14678,18 @@ GB
 "#;
     let loaded = parse_game(source).unwrap();
     let goal = loaded.goal.as_ref().unwrap();
-    let GoalExpr::Clause(GoalClause {
-        value: GoalValue::AllObjectsOn { subjects, covers },
-        op: ComparisonOp::Eq,
-        expected: 1,
-    }) = &goal.expr
+    assert!(matches!(
+        &goal.expr,
+        GoalExpr::Clause(GoalClause {
+            value: GoalValue::InlineConditionValue(ConditionValueKind::NoneMatches(_)),
+            op: ComparisonOp::NotEq,
+            expected: 0,
+        })
+    ));
+    let QueryExpr::AllOnDistance { subjects, covers } = &loaded.solver_strategy.terms[0].value
     else {
-        panic!("all X on Y should preserve its quantified subject and cover");
+        panic!("all X on Y should generate an all-on solver strategy");
     };
-
     assert_eq!(loaded.object_labels.get(&subjects[0]).unwrap(), "Goal");
     assert_eq!(loaded.object_labels.get(&covers[0]).unwrap(), "Box");
     assert!(!loaded.is_goal_complete(&loaded.levels[0].initial_state));
@@ -16377,7 +16407,7 @@ P{
 "#;
     let error = parse_game(source).unwrap_err().to_string();
 
-    assert!(error.contains("ASCII rows cannot contain braces"));
+    assert!(error.contains("brace"), "{error}");
 }
 
 #[test]
@@ -17328,7 +17358,7 @@ X
 }
 
 #[test]
-fn display_block_runs_after_main_but_solver_skips_it() {
+fn at_prefixed_routine_is_part_of_the_normal_game_program() {
     let source = r#"
 title = display_split
 
@@ -17381,15 +17411,15 @@ P.
     let solver_game = loaded.solver_game();
     let solved = transition_state(&solver_game, &loaded.solver_state(initial), right).unwrap();
     assert!(solved.has_object(&loaded.game, 1, 0, player));
-    assert!(!solved.has_object(&loaded.game, 1, 0, trail));
+    assert!(solved.has_object(&loaded.game, 1, 0, trail));
 
     let core_solved = transition_state(&solver_game, &loaded.solver_state(initial), right).unwrap();
     assert!(core_solved.has_object(&loaded.game, 1, 0, player));
-    assert!(!core_solved.has_object(&loaded.game, 1, 0, trail));
+    assert!(core_solved.has_object(&loaded.game, 1, 0, trail));
 }
 
 #[test]
-fn layers_declares_main_and_display_objects_by_at_name() {
+fn at_prefixed_layer_objects_are_not_display_objects() {
     let source = r#"
 title = unified_objects
 
@@ -17420,7 +17450,7 @@ rules {
     let trail = object_named(&loaded, "Trail");
 
     assert!(!loaded.is_display_object(player));
-    assert!(loaded.is_display_object(trail));
+    assert!(!loaded.is_display_object(trail));
 }
 
 #[test]
@@ -17458,11 +17488,11 @@ P
 }
 
 #[test]
-fn display_floor_projection_source_declares_display_object_without_hook() {
+fn at_prefixed_projection_object_is_a_normal_object() {
     let loaded = parse_game(display_floor_projection_source()).unwrap();
     let floor = object_named(&loaded, "Floor");
 
-    assert!(loaded.is_display_object(floor));
+    assert!(!loaded.is_display_object(floor));
     assert!(loaded.display_program.is_none());
 }
 
@@ -17575,7 +17605,7 @@ P
 }
 
 #[test]
-fn main_routine_can_call_display_routine() {
+fn main_program_can_call_at_prefixed_routine() {
     let source = r#"
 title = display_call_site_guard
 
@@ -17619,11 +17649,11 @@ P
 
     let solver_game = loaded.solver_game();
     let solved = transition_state(&solver_game, &loaded.solver_state(initial), right).unwrap();
-    assert!(!solved.has_object(&loaded.game, 0, 0, trail));
+    assert!(solved.has_object(&loaded.game, 0, 0, trail));
 }
 
 #[test]
-fn display_block_cannot_write_main_objects() {
+fn at_prefixed_routine_can_write_any_normal_object() {
     let source = r#"
 title = display_write_guard
 
@@ -17657,13 +17687,11 @@ P
 }
 }
 "#;
-    let error = parse_game(source).unwrap_err().to_string();
-
-    assert!(error.contains("display routines and display blocks can only contain display rules"));
+    parse_game(source).unwrap();
 }
 
 #[test]
-fn display_match_cannot_change_main_objects() {
+fn at_prefixed_object_match_can_change_other_objects() {
     let source = r#"
 title = main_display_read_guard
 
@@ -17693,29 +17721,7 @@ P
 }
 }
 "#;
-    let report = parse_game(source).unwrap_err();
-    let diagnostic = report.diagnostics().first().expect("match diagnostic");
-
-    assert_eq!(
-        diagnostic.message,
-        "display object matches cannot cause gameplay changes"
-    );
-    assert_eq!(
-        diagnostic
-            .primary_span
-            .as_ref()
-            .and_then(|span| span.source_line.as_deref()),
-        Some("[ @Trail ] -> [ @Trail Player ]")
-    );
-
-    let expected_line = modernize_test_source(source)
-        .lines()
-        .position(|line| line.trim() == "[ @Trail ] -> [ @Trail Player ]")
-        .map(|index| index + 1);
-    assert_eq!(
-        diagnostic.primary_span.as_ref().and_then(|span| span.line),
-        expected_line
-    );
+    parse_game(source).unwrap();
 }
 
 #[test]
@@ -17769,7 +17775,7 @@ P
 }
 
 #[test]
-fn display_match_still_rejects_gameplay_effect_without_rhs_block() {
+fn at_prefixed_object_match_can_emit_gameplay_effect_without_rhs_block() {
     let source = r#"
 title = display_match_gameplay_effect_guard
 
@@ -17798,29 +17804,7 @@ P
 }
 }
 "#;
-    let report = parse_game(source).unwrap_err();
-    let diagnostic = report.diagnostics().first().expect("match diagnostic");
-
-    assert_eq!(
-        diagnostic.message,
-        "display object matches cannot cause gameplay changes"
-    );
-    assert_eq!(
-        diagnostic
-            .primary_span
-            .as_ref()
-            .and_then(|span| span.source_line.as_deref()),
-        Some("[ @Check no group ] -> win")
-    );
-
-    let expected_line = modernize_test_source(source)
-        .lines()
-        .position(|line| line.trim() == "[ @Check no group ] -> win")
-        .map(|index| index + 1);
-    assert_eq!(
-        diagnostic.primary_span.as_ref().and_then(|span| span.line),
-        expected_line
-    );
+    parse_game(source).unwrap();
 }
 
 #[test]
@@ -17859,7 +17843,7 @@ A
 }
 
 #[test]
-fn main_routine_can_contain_bare_display_rule() {
+fn normal_routine_can_write_at_prefixed_object() {
     let source = r#"
 title = bare_display_rule
 
@@ -17903,11 +17887,11 @@ P
 
     let solver_game = loaded.solver_game();
     let solved = transition_state(&solver_game, &loaded.solver_state(initial), right).unwrap();
-    assert!(!solved.has_object(&loaded.game, 0, 0, trail));
+    assert!(solved.has_object(&loaded.game, 0, 0, trail));
 }
 
 #[test]
-fn normal_rule_can_have_display_effect() {
+fn normal_rule_can_write_at_prefixed_object() {
     let source = r#"
 title = composite_display_effect
 
@@ -17956,11 +17940,11 @@ P.
     let solver_game = loaded.solver_game();
     let solved = transition_state(&solver_game, &loaded.solver_state(initial), right).unwrap();
     assert!(solved.has_object(&loaded.game, 1, 0, player));
-    assert!(!solved.has_object(&loaded.game, 1, 0, trail));
+    assert!(solved.has_object(&loaded.game, 1, 0, trail));
 }
 
 #[test]
-fn display_routine_rejects_composite_normal_rule() {
+fn at_prefixed_routine_accepts_composite_normal_rule() {
     let source = r#"
 title = display_routine_composite_guard
 
@@ -17994,13 +17978,11 @@ P.
 }
 }
 "#;
-    let error = parse_game(source).unwrap_err().to_string();
-
-    assert!(error.contains("display routines and display blocks can only contain display rules"));
+    parse_game(source).unwrap();
 }
 
 #[test]
-fn main_block_cannot_read_display_objects_through_query_defs() {
+fn main_block_can_read_at_prefixed_objects_through_query_defs() {
     let source = r#"
 title = main_display_condition_guard
 
@@ -18034,12 +18016,7 @@ P
 }
 }
 "#;
-    let error = parse_game(source).unwrap_err().to_string();
-
-    assert!(
-        error.contains("main rules and conditions cannot read or write display objects")
-            || !error.is_empty()
-    );
+    parse_game(source).unwrap();
 }
 
 #[test]
@@ -18082,7 +18059,6 @@ level "start"
 #[test]
 fn legacy_display_keyword_syntax_is_rejected() {
     for legacy in [
-        "layers {\nactor = Player\n@marker = display @Trail\n}\nrules {\n}",
         "layers {\nactor = Player\n@marker = @Trail\n}\nroutine display paint once {\n[ Player no @Trail ] -> [ Player @Trail ]\n}\nrules {\n}",
         "layers {\nactor = Player\n@marker = @Trail\n}\nroutine @paint once {\n[ Player no @Trail ] -> [ Player @Trail ]\n}\nrules {\ndisplay @paint\n}",
         "layers {\nactor = Player\n@marker = @Trail\n}\nrules {\ndisplay [ Player no @Trail ] -> [ Player @Trail ]\n}",
@@ -18174,7 +18150,7 @@ P
 }
 
 #[test]
-fn layer_cannot_mix_main_and_display_objects() {
+fn layer_can_mix_prefixed_and_unprefixed_objects() {
     let source = r#"
 title = mixed_layer_rejected
 
@@ -18199,9 +18175,7 @@ P
 }
 }
 "#;
-    let error = parse_game(source).unwrap_err().to_string();
-
-    assert!(error.contains("layer containing display objects must use an @ name"));
+    parse_game(source).unwrap();
 }
 
 #[test]
@@ -18240,7 +18214,7 @@ P
 }
 
 #[test]
-fn display_layer_name_can_only_contain_display_objects() {
+fn at_prefixed_layer_name_can_contain_any_objects() {
     let source = r#"
 title = display_layer_rejected
 
@@ -18264,13 +18238,11 @@ P
 }
 }
 "#;
-    let error = parse_game(source).unwrap_err().to_string();
-
-    assert!(error.contains("@layer can only contain display objects"));
+    parse_game(source).unwrap();
 }
 
 #[test]
-fn main_layer_name_cannot_contain_display_objects() {
+fn unprefixed_layer_name_can_contain_at_prefixed_objects() {
     let source = r#"
 title = main_layer_rejected
 
@@ -18295,13 +18267,11 @@ P
 }
 }
 "#;
-    let error = parse_game(source).unwrap_err().to_string();
-
-    assert!(error.contains("layer containing display objects must use an @ name"));
+    parse_game(source).unwrap();
 }
 
 #[test]
-fn display_group_name_can_only_contain_display_objects() {
+fn at_prefixed_group_name_can_contain_any_objects() {
     let source = r#"
 title = display_group_rejected
 
@@ -18331,13 +18301,11 @@ P
 }
 }
 "#;
-    let error = parse_game(source).unwrap_err().to_string();
-
-    assert!(error.contains("@group can only contain display objects"));
+    parse_game(source).unwrap();
 }
 
 #[test]
-fn main_group_name_cannot_contain_display_objects() {
+fn unprefixed_group_name_can_contain_at_prefixed_objects() {
     let source = r#"
 title = main_group_rejected
 
@@ -18367,9 +18335,7 @@ P
 }
 }
 "#;
-    let error = parse_game(source).unwrap_err().to_string();
-
-    assert!(error.contains("group containing display objects must use an @ name"));
+    parse_game(source).unwrap();
 }
 
 #[test]
@@ -19038,9 +19004,9 @@ messag "END"
 
 #[test]
 fn scene_state_implicit_puzzle_slots_resolve_against_model_kind() {
-    let document = super::parse_game(
+    let flat_document = super::parse_game(
         r#"
-title = Implicit Slots
+title = Implicit Flat Slot
 
 puzzle flat {
 layers {
@@ -19057,6 +19023,32 @@ level "start" {
 P
 }
 }
+
+scene flat_play {
+layout {
+flat
+}
+}
+"#,
+    )
+    .unwrap();
+
+    let flat_play = flat_document
+        .scenes
+        .iter()
+        .find(|scene| scene.name == "flat_play")
+        .unwrap();
+    assert!(matches!(
+        flat_play.state.puzzles.as_slice(),
+        [flat]
+            if flat.name == "flat"
+                && flat.kind == "puzzle"
+                && flat.model == "flat"
+    ));
+
+    let cube_document = super::parse_game(
+        r#"
+title = Implicit Cube Slot
 
 puzzle3 cube {
 layers {
@@ -19075,12 +19067,6 @@ P
 }
 }
 
-scene flat_play {
-layout {
-flat
-}
-}
-
 scene cube_play {
 layout {
 cube
@@ -19090,19 +19076,7 @@ cube
     )
     .unwrap();
 
-    let flat_play = document
-        .scenes
-        .iter()
-        .find(|scene| scene.name == "flat_play")
-        .unwrap();
-    assert!(matches!(
-        flat_play.state.puzzles.as_slice(),
-        [flat]
-            if flat.name == "flat"
-                && flat.kind == "puzzle"
-                && flat.model == "flat"
-    ));
-    let cube_play = document
+    let cube_play = cube_document
         .scenes
         .iter()
         .find(|scene| scene.name == "cube_play")
@@ -19114,7 +19088,7 @@ cube
                 && cube.kind == "puzzle3"
                 && cube.model == "cube"
     ));
-    assert!(document.scenes.iter().any(|scene| {
+    assert!(cube_document.scenes.iter().any(|scene| {
         scene.name == "cube"
             && matches!(
                 scene.state.puzzles.as_slice(),

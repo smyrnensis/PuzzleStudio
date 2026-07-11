@@ -80,9 +80,13 @@ const EDITOR_CSS: &str = include_str!("../static/editor.css");
 #[cfg(feature = "embedded-assets")]
 const EDITOR_RUNTIME_JS: &str = include_str!("../static/editor_runtime.js");
 #[cfg(feature = "embedded-assets")]
+const EDITOR_ANALYSIS_WORKER_JS: &str = include_str!("../static/editor_analysis_worker.js");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_BOOT_JS: &str = include_str!("../static/editor_boot.js");
 #[cfg(feature = "embedded-assets")]
 const EDITOR_CODEMIRROR_JS: &str = include_str!("../static/editor_codemirror.js");
+#[cfg(test)]
+const EDITOR_CODEMIRROR_SOURCE_JS: &str = include_str!("../web/src/editor_codemirror.js");
 #[cfg(feature = "embedded-assets")]
 const EDITOR_DOM_JS: &str = include_str!("../static/editor_dom.js");
 #[cfg(feature = "embedded-assets")]
@@ -461,7 +465,7 @@ impl EditorService {
     }
 
     pub fn highlight_source_json(source: &str) -> String {
-        highlight_json(&puzzle_lang::highlight_source(source))
+        puzzle_lang::analyze_source(source).highlight_json(false)
     }
 
     pub fn save_source_file(&self, request: &SaveRequest) -> Result<(), AppError> {
@@ -1356,6 +1360,9 @@ fn route(request: &HttpRequest, service: &EditorService) -> Vec<u8> {
         ("GET", "/editor_runtime.js") => {
             http_ok("text/javascript; charset=utf-8", EDITOR_RUNTIME_JS)
         }
+        ("GET", "/editor_analysis_worker.js") => {
+            http_ok("text/javascript; charset=utf-8", EDITOR_ANALYSIS_WORKER_JS)
+        }
         ("GET", "/editor_dom.js") => http_ok("text/javascript; charset=utf-8", EDITOR_DOM_JS),
         ("GET", "/editor_workspace.js") => {
             http_ok("text/javascript; charset=utf-8", &editor_workspace_js())
@@ -2044,6 +2051,11 @@ fn write_pages_editor_site(output_path: &Path, html: String) -> Result<(), AppEr
     write_text_asset(output_dir, "favicon.svg", FAVICON_SVG)?;
     write_text_asset(output_dir, "editor.css", EDITOR_CSS)?;
     write_text_asset(output_dir, "editor_runtime.js", EDITOR_RUNTIME_JS)?;
+    write_text_asset(
+        output_dir,
+        "editor_analysis_worker.js",
+        EDITOR_ANALYSIS_WORKER_JS,
+    )?;
     write_text_asset(output_dir, "editor_boot.js", EDITOR_BOOT_JS)?;
     write_text_asset(output_dir, "editor_codemirror.js", EDITOR_CODEMIRROR_JS)?;
     write_text_asset(output_dir, "editor_dom.js", EDITOR_DOM_JS)?;
@@ -2390,7 +2402,10 @@ fn render_docs_code_block(out: &mut String, language: &str, source: &str) {
     if is_puzzle_docs_code_language(language) {
         out.push_str(" class=\"language-puzzle\"");
         out.push('>');
-        out.push_str(&puzzle_lang::highlight_source(source).html);
+        out.push_str(&render_source_highlight_html(
+            source,
+            &puzzle_lang::highlight_source(source),
+        ));
     } else {
         out.push('>');
         out.push_str(&escape_html(source));
@@ -2401,6 +2416,53 @@ fn render_docs_code_block(out: &mut String, language: &str, source: &str) {
 #[cfg(feature = "editor-docs")]
 fn is_puzzle_docs_code_language(language: &str) -> bool {
     matches!(language.trim(), "puzzle" | ".puzzle")
+}
+
+#[cfg(feature = "editor-docs")]
+fn render_source_highlight_html(
+    source: &str,
+    highlighted: &puzzle_lang::HighlightedSource,
+) -> String {
+    let mut out = String::with_capacity(source.len().saturating_add(source.len() / 8));
+    let mut cursor = 0usize;
+    for span in &highlighted.spans {
+        assert!(
+            cursor <= span.start
+                && span.start < span.end
+                && span.end <= source.len()
+                && source.is_char_boundary(span.start)
+                && source.is_char_boundary(span.end),
+            "language highlight spans must be ordered UTF-8 source ranges"
+        );
+        out.push_str(&escape_html(&source[cursor..span.start]));
+        out.push_str("<span class=\"syntax-");
+        out.push_str(span.kind.as_str());
+        if span.transparent {
+            out.push_str(" is-transparent");
+        }
+        out.push('"');
+        if let Some(color) = &span.color {
+            let property = if span.kind == puzzle_lang::SourceHighlightKind::SpritePixel {
+                "--syntax-sprite-pixel-color"
+            } else {
+                "--syntax-color-token"
+            };
+            out.push_str(" style=\"");
+            out.push_str(property);
+            out.push_str(": ");
+            out.push_str(&escape_html(color));
+            out.push('"');
+        }
+        out.push('>');
+        out.push_str(&escape_html(&source[span.start..span.end]));
+        out.push_str("</span>");
+        cursor = span.end;
+    }
+    out.push_str(&escape_html(&source[cursor..]));
+    if source.ends_with('\n') {
+        out.push(' ');
+    }
+    out
 }
 
 #[cfg(feature = "editor-docs")]
@@ -2712,17 +2774,6 @@ fn push_editor_document_json(
     push_json_pair(out, "parentGamePath", &document.parent_game_path);
     out.push('}');
     Ok(())
-}
-
-fn highlight_json(highlighted: &puzzle_lang::HighlightedSource) -> String {
-    let mut out = String::new();
-    out.push('{');
-    out.push_str("\"parsed\":");
-    out.push_str(if highlighted.parsed { "true" } else { "false" });
-    out.push(',');
-    push_json_pair(&mut out, "html", &highlighted.html);
-    out.push('}');
-    out
 }
 
 fn push_json_pair(out: &mut String, key: &str, value: &str) {
@@ -3653,14 +3704,13 @@ step board
             html.contains(r#"\"engine\""#),
             "editor preview metadata must include engine data for level editing"
         );
-        assert!(
-            html.contains(r#"\"compiledPlay\""#),
-            "editor preview metadata must include compiled play data for solver and playtest actions"
-        );
+        assert!(!html.contains("PuzzleEditorSolverRulesJson"));
+        assert!(!html.contains(r#"\"solver_strategy\""#));
         assert!(
             EDITOR_JS.contains("extractAssignedStringLiteral(source, \"PuzzleRuntimeExportJson\")"),
-            "editor metadata extraction must read the same preview export contract"
+            "editor metadata extraction must read the preview runtime contract"
         );
+        assert!(!EDITOR_JS.contains("PuzzleEditorSolverRulesJson"));
         assert!(!html.contains("Preview Before"));
     }
 
@@ -4162,7 +4212,8 @@ levels3 demo of push3 {
         assert!(EDITOR_HTML.contains(r#"id="runButton""#));
         assert!(EDITOR_HTML.contains(r#"aria-label="Play preview""#));
         assert!(EDITOR_HTML.contains("source-preview-play-icon"));
-        assert!(EDITOR_HTML.contains("source-preview-stop-icon"));
+        assert!(EDITOR_HTML.contains("source-preview-refresh-icon"));
+        assert!(!EDITOR_HTML.contains("source-preview-stop-icon"));
         assert!(EDITOR_JS.contains("async function runPreviewFromSourcePane()"));
         assert!(EDITOR_JS.contains(
             "async function runPreviewFromSourcePane() {\n  ensurePreviewTargetsActiveDocument();"
@@ -4187,7 +4238,7 @@ levels3 demo of push3 {
         assert!(EDITOR_JS.contains("function syncSourcePreviewRunButton()"));
         assert!(EDITOR_JS.contains("activePreviewRequest = controller;\n  runButton.disabled = false;\n  syncSourcePreviewRunButton();"));
         assert!(EDITOR_JS.contains(
-            "runButton.addEventListener(\"click\", () => {\n  if (previewRuntimeIsRunning())"
+            "runButton.addEventListener(\"click\", () => {\n  runPreviewFromSourcePane();\n});"
         ));
         assert!(EDITOR_WORKSPACE_JS.contains("runButton.title = \"Play preview\";"));
     }
@@ -4421,7 +4472,7 @@ levels3 demo of push3 {
     }
 
     #[test]
-    fn same_preview_target_reload_keeps_live_preview_frame() {
+    fn source_switch_stops_live_preview_even_when_preview_target_is_unchanged() {
         let load_document = EDITOR_WORKSPACE_JS
             .split("function loadEmbeddedDocument(index) {")
             .nth(1)
@@ -4431,13 +4482,22 @@ levels3 demo of push3 {
         assert!(load_document.contains(
             "const previewTargetUnchanged = previewDocument\n    && previousPreviewKey\n    && documentIdentityKey(previewDocument) === previousPreviewKey;"
         ));
-        let unchanged = load_document
-            .find("if (previewTargetUnchanged) {\n    markPreviewDirty();")
-            .expect("unchanged preview target marks stale without replacing iframe");
-        let changed = load_document[unchanged..]
-            .find("} else {\n    invalidateCompiledPreview(previewDocument);\n  }")
-            .expect("changed preview target discards compiled preview");
-        assert!(changed > 0);
+        assert!(load_document.contains(
+            "if (activeSourceChanged) {\n    invalidateCompiledPreview(previewDocument);\n  } else if (previewTargetUnchanged) {\n    markPreviewDirty();"
+        ));
+    }
+
+    #[test]
+    fn closing_preview_pane_stops_preview_runtime() {
+        assert!(EDITOR_JS.contains("function stopPreviewRuntime()"));
+        let close_pane = EDITOR_WORKBENCH_JS
+            .split("function closeWorkPane(paneId) {")
+            .nth(1)
+            .and_then(|tail| tail.split("\nfunction showWorkPane").next())
+            .expect("closeWorkPane source");
+        assert!(close_pane.contains(
+            "if (normalized === PREVIEW_WORK_PANE_ID) {\n    stopPreviewRuntime();\n  }"
+        ));
     }
 
     #[test]
@@ -4500,8 +4560,14 @@ levels3 demo of push3 {
             .and_then(|tail| tail.split("\n}").next())
             .expect("tree row CSS");
         assert!(tree_row_css.contains("user-select: none;"));
+        assert!(EDITOR_CSS.contains(".tree-row[data-drag-id] {\n  cursor: grab;"));
+        assert!(EDITOR_CSS.contains(".tree-row.is-dragging {\n  cursor: grabbing;"));
         assert!(EDITOR_JS.contains("function finishTreeMove(nodeId, targetFolderId)"));
         assert!(EDITOR_JS.contains("documentList.addEventListener(\"pointerdown\", (event) => {"));
+        assert!(
+            EDITOR_JS
+                .contains("event.preventDefault();\n  row.setPointerCapture?.(event.pointerId);")
+        );
         assert!(EDITOR_JS.contains(
             "const targetFolderId = dropFolderIdForPoint(event.clientX, event.clientY);"
         ));
@@ -4946,48 +5012,25 @@ levels3 demo of push3 {
         assert!(!EDITOR_JS.contains("function levelEditorRuntimeSprite("));
         assert!(EDITOR_JS.contains("if (exportData.editorSourceContract) {"));
         assert!(EDITOR_JS.contains("stateDataToEditorCells(integrated.initialState, exportData)"));
-        assert!(EDITOR_JS.contains("async function compileSolverPreviewData()"));
+        assert!(!EDITOR_JS.contains("async function compileSolverPreviewData()"));
+        assert!(EDITOR_JS.contains("function prepareEditorSolverArtifact("));
+        assert!(EDITOR_JS.contains("module.compile_workspace_solver_rules_json"));
+        assert!(!EDITOR_JS.contains("function expandPuzzleImportsForPreviewRequest("));
+        assert!(!EDITOR_JS.contains("function expandPuzzleImportsForWasm("));
+        assert!(!EDITOR_WORKSPACE_JS.contains("function ensurePuzzleImportDocumentsLoaded("));
+        assert!(EDITOR_JS.contains("workspaceDocuments: workspaceCompilerDocuments(document)"));
+        assert!(EDITOR_JS.contains("module.editor_solver_cache_policy_json"));
         assert!(EDITOR_JS.contains("function loadLevelSourceEntryWithExportData("));
         assert!(EDITOR_JS.contains("function reportLevelSourceLoadFailure("));
-        let level_editor_compile = EDITOR_JS
-            .find("async function compileSolverPreviewData()")
-            .expect("solver metadata compiler");
-        let level_editor_compile_end = EDITOR_JS[level_editor_compile..]
-            .find("function loadLevelSourceEntryWithExportData(")
-            .map(|index| level_editor_compile + index)
-            .expect("level editor metadata compiler end");
-        let level_editor_compile_source =
-            &EDITOR_JS[level_editor_compile..level_editor_compile_end];
-        assert!(level_editor_compile_source.contains("window.PuzzleStudioHost.preview({"));
-        assert!(
-            level_editor_compile_source
-                .contains("const exportInspection = inspectPreviewExport(html);")
-        );
+        assert!(EDITOR_JS.contains("const artifacts = new Map();"));
+        assert!(EDITOR_JS.contains("entry.id !== displayedArtifactId"));
+        assert!(EDITOR_JS.contains("entry.activeSolves === 0"));
         assert!(EDITOR_JS.contains("window.PuzzleRuntimeExportJson"));
         assert!(EDITOR_JS.contains(
             "const runtimeExportLiteral = extractAssignedStringLiteral(source, \"PuzzleRuntimeExportJson\");"
         ));
         assert!(EDITOR_JS.contains("function extractAssignedStringLiteral(source, windowName)"));
         assert!(EDITOR_JS.contains("function extractStringLiteralAt(source, start)"));
-        assert!(
-            level_editor_compile_source.contains("const exportData = exportInspection.exportData;")
-        );
-        assert!(
-            level_editor_compile_source
-                .contains("if (!exportData || !Array.isArray(exportData?.engine?.objects))")
-        );
-        assert!(
-            level_editor_compile_source.contains("previewMetadataErrorMessage(exportInspection)")
-        );
-        assert!(
-            level_editor_compile_source
-                .contains("applyGameVisuals(compiledPreviewGameVisualsJs(html));")
-        );
-        assert!(
-            level_editor_compile_source.contains("previewFrameHasCurrentCompiledPreview = false;")
-        );
-        assert!(!level_editor_compile_source.contains("setPreviewFrameHtml("));
-        assert!(!level_editor_compile_source.contains("await renderPreview();"));
         assert!(EDITOR_JS.contains("requirePreviewFrame: true,"));
         assert!(!EDITOR_JS.contains("Compiling level metadata"));
         assert!(EDITOR_JS.contains("Could not load level editor source contract:"));
@@ -5126,19 +5169,37 @@ levels3 demo of push3 {
         ));
         assert!(!EDITOR_RUNTIME_JS.contains("free_source_analysis_handle"));
         assert!(!EDITOR_RUNTIME_JS.contains("analysis.handle"));
+        assert!(EDITOR_RUNTIME_JS.contains("return querySynchronizedAnalysisWorker(\"outline\""));
+        assert!(
+            EDITOR_RUNTIME_JS.contains("new Worker(wasmModuleUrl(\"./editor_analysis_worker.js\")")
+        );
+        assert!(EDITOR_ANALYSIS_WORKER_JS.contains("active_source_analysis_highlight_range_json"));
+        assert!(EDITOR_ANALYSIS_WORKER_JS.contains("active_source_analysis_outline_json"));
+        assert!(
+            EDITOR_ANALYSIS_WORKER_JS.contains("active_source_analysis_entries_json\")(revision)")
+        );
+        assert!(
+            EDITOR_ANALYSIS_WORKER_JS.contains("active_source_analysis_suggest_source_completions")
+        );
+        assert!(EDITOR_ANALYSIS_WORKER_JS.contains("active_source_analysis_resolve_source_target"));
+        assert!(EDITOR_ANALYSIS_WORKER_JS.contains("apply_source_analysis_edit"));
+        assert!(EDITOR_SOURCE_JS.contains("applySourceAnalysisEditorChanges(sourceChanges"));
+        assert!(EDITOR_CODEMIRROR_JS.contains("sourceanalysisreset"));
+        assert!(EDITOR_RUNTIME_JS.contains("async sourceEntries(source)"));
         assert!(
             EDITOR_RUNTIME_JS
-                .contains("return querySourceAnalysis(wasmCompiler, analysis.revision, \"active_source_analysis_outline_json\");")
+                .contains("await querySynchronizedAnalysisWorker(\"entries\", asString(source))")
         );
-        assert!(EDITOR_RUNTIME_JS.contains(
-            "const raw = querySourceAnalysis(wasmCompiler, analysis.revision, \"active_source_analysis_entries_json\");"
-        ));
         assert!(EDITOR_RUNTIME_JS.contains("payload: null,"));
         assert!(!EDITOR_RUNTIME_JS.contains(
             "const raw = querySourceAnalysis(module, revision, \"active_source_analysis_json\");"
         ));
         assert!(EDITOR_JS.contains("window.PuzzleStudioRuntime?.sourceEntries"));
-        assert!(EDITOR_JS.contains("rawEntries = window.PuzzleStudioRuntime.sourceEntries(text);"));
+        assert!(EDITOR_JS.contains("await loadSurfaceEntriesForSource(context.source"));
+        assert!(EDITOR_JS.contains("window.PuzzleStudioRuntime.sourceEntries(text)"));
+        assert!(EDITOR_JS.contains(
+            "currentContext?.document?.id !== documentId || currentContext.source !== context.source"
+        ));
         assert!(EDITOR_WORKSPACE_JS.contains("async function ensureEditorWasmParserLoaded()"));
         assert!(EDITOR_WORKSPACE_JS.contains(
             "const wasmParserLoad = ensureEditorWasmParserLoaded();\n  void wasmParserLoad.catch"
@@ -5279,6 +5340,33 @@ levels3 demo of push3 {
     }
 
     #[test]
+    fn codemirror_highlight_consumes_typed_rust_spans_as_decorations() {
+        let payload = EditorService::highlight_source_json("title = \"Demo\"\n");
+        assert!(payload.contains("\"version\":3"));
+        assert!(payload.contains("\"offsetEncoding\":\"utf8\""));
+        assert!(payload.contains("\"range\":{\"start\":0,"));
+        assert!(payload.contains("\"kind\":\"keyword\""));
+        assert!(!payload.contains("\"html\""));
+        assert!(EDITOR_SOURCE_JS.contains(
+            "sourceEditor.sourceEditorPort.applyHighlightRange(source, range, payload);"
+        ));
+        assert!(EDITOR_SOURCE_JS.contains("sourceEditorPort.highlightViewportRange()"));
+        assert!(EDITOR_SOURCE_JS.contains("sourceOutlineStructureSignature(sourceOutlineItems)"));
+        assert!(EDITOR_SOURCE_JS.contains("syncSourceOutlineRowOffsets();"));
+        assert!(!EDITOR_SOURCE_JS.contains("sourceHighlightRunsFromHtml"));
+        assert!(!EDITOR_SOURCE_JS.contains("payload.html"));
+        assert!(EDITOR_SOURCE_JS.contains(
+            "requestId !== sourceHighlightRequestId\n      || source !== sourceEditorDocumentValue()"
+        ));
+        assert!(EDITOR_CODEMIRROR_JS.contains("Unsupported Rust source highlight span contract."));
+        assert!(EDITOR_CODEMIRROR_JS.contains("offsetEncoding"));
+        assert!(EDITOR_CODEMIRROR_JS.contains("utf8"));
+        assert!(
+            EDITOR_CODEMIRROR_JS.contains("Cannot apply stale source highlighting to CodeMirror.")
+        );
+    }
+
+    #[test]
     fn solver_pane_consumes_explicit_solver_task() {
         assert!(EDITOR_HTML.contains(r#"id="previewSolveButton""#));
         assert!(EDITOR_DOM_JS.contains("const previewSolveButton = document.querySelector"));
@@ -5289,7 +5377,7 @@ levels3 demo of push3 {
         );
         assert!(EDITOR_HTML.contains(r#"id="solverTargetName""#));
         assert!(EDITOR_HTML.contains(r#"aria-label="Load level""#));
-        assert!(EDITOR_HTML.contains("lucide-folder-input"));
+        assert!(!EDITOR_HTML.contains("solver-load-icon"));
         assert!(EDITOR_DOM_JS.contains("const solverLevelSelect = document.querySelector"));
         assert!(EDITOR_DOM_JS.contains("const solverTargetName = document.querySelector"));
         assert!(EDITOR_CSS.contains(".solver-level-select"));
@@ -5371,9 +5459,9 @@ levels3 demo of push3 {
         assert!(open_solver_source.contains("solverSelectedLevelIndex = null;"));
         assert!(open_solver_source.contains("await ensurePreviewSolverExportData();"));
         assert!(EDITOR_JS.contains("async function ensurePreviewSolverExportData()"));
-        assert!(EDITOR_JS.contains("exportData = await compileSolverPreviewData();"));
-        assert!(EDITOR_JS.contains("setLevelSolveStatus(\"Preview failed\", \"is-error\");"));
-        assert!(!EDITOR_JS.contains("Solver metadata compile failed"));
+        assert!(EDITOR_JS.contains("await prepareEditorSolverArtifact({"));
+        assert!(EDITOR_JS.contains("setLevelSolveStatus(\"Preparing solver\", \"\");"));
+        assert!(EDITOR_JS.contains("exportData.__solverArtifactId = prepared.artifactId;"));
         assert!(!EDITOR_JS.contains("Preview failed: ${userFacingRuntimeError(error)}"));
         assert!(open_solver_source.contains("return Boolean(activeSolverTask);"));
         assert!(EDITOR_JS.contains("async function solvePreviewPaneCurrentLevel()"));
@@ -5393,7 +5481,10 @@ levels3 demo of push3 {
         assert!(EDITOR_JS.contains("function compiledLevelStateData("));
         assert!(EDITOR_JS.contains("function solverPuzzle3dPreviewSnapshot("));
         assert!(EDITOR_JS.contains("const solve = module.solve_solver_task_json_with_progress;"));
-        assert!(EDITOR_JS.contains("const solutionJson = solve(JSON.stringify(data.request),"));
+        assert!(EDITOR_JS.contains("const solutionJson = solve(JSON.stringify(request),"));
+        assert!(
+            EDITOR_JS.contains("const entry = artifacts.get(String(data.artifactId || \"\"));")
+        );
         assert!(EDITOR_JS.contains("function solverRequestForTask(task)"));
         assert!(EDITOR_JS.contains("if (isSolverTaskComplete(task))"));
         assert!(EDITOR_JS.contains(
@@ -5765,20 +5856,19 @@ move
     }
 
     #[test]
-    fn preview_run_controls_own_runtime_lifecycle_while_close_only_hides_pane() {
-        assert!(EDITOR_JS.contains("function terminatePreviewGame()"));
-        assert!(EDITOR_JS.contains("previewFrameHasCurrentCompiledPreview = false;"));
-        assert!(EDITOR_JS.contains("setPreviewFrameHtml(emptyPreviewDocument());"));
-        assert!(EDITOR_HTML.contains(r#"id="sourceRefreshButton""#));
-        assert!(EDITOR_HTML.contains(r#"aria-label="Refresh preview""#));
-        assert!(EDITOR_DOM_JS.contains("const sourceRefreshButton = document.querySelector"));
+    fn preview_run_control_becomes_refresh_without_a_stop_action() {
+        assert!(!EDITOR_JS.contains("function terminatePreviewGame()"));
+        assert!(!EDITOR_HTML.contains(r#"id="sourceRefreshButton""#));
+        assert!(!EDITOR_DOM_JS.contains("const sourceRefreshButton = document.querySelector"));
         assert!(
-            EDITOR_JS.contains("sourceRefreshButton?.addEventListener(\"click\", renderPreview);")
+            EDITOR_JS.contains("const label = running ? \"Refresh preview\" : \"Play preview\";")
         );
-        assert!(EDITOR_JS.contains("runButton.addEventListener(\"click\", () => {\n  if (previewRuntimeIsRunning()) {\n    terminatePreviewGame();"));
+        assert!(EDITOR_JS.contains(
+            "runButton.addEventListener(\"click\", () => {\n  runPreviewFromSourcePane();\n});"
+        ));
         assert!(
             EDITOR_CSS
-                .contains(".source-preview-toggle-button.is-running .source-preview-stop-icon")
+                .contains(".source-preview-toggle-button.is-running .source-preview-refresh-icon")
         );
         assert!(EDITOR_CSS.contains("fill: none;"));
         assert!(!EDITOR_HTML.contains("sourceStopButton"));
@@ -5788,6 +5878,29 @@ move
         assert!(!EDITOR_WORKBENCH_JS.contains("terminatePreviewGame"));
         assert!(!EDITOR_WORKBENCH_JS.contains("syncPreviewFrameLifecycleForPaneVisibility"));
         assert!(!EDITOR_JS.contains("function suspendCompiledPreviewRuntime"));
+    }
+
+    #[test]
+    fn unloaded_preview_hides_the_runtime_frame_until_the_replacement_loads() {
+        assert!(EDITOR_HTML.contains(
+            "<div id=\"playPreview\" class=\"play-preview is-preview-unloaded\">"
+        ));
+        let empty_document = EDITOR_JS
+            .split("function emptyPreviewDocument() {")
+            .nth(1)
+            .and_then(|tail| tail.split("\nfunction setPreviewFrameHtml").next())
+            .expect("empty preview document source");
+        assert!(empty_document.contains("background: transparent;"));
+        assert!(EDITOR_CSS.contains(
+            ".play-preview.is-preview-unloaded .preview-frame {\n  visibility: hidden;\n}"
+        ));
+        assert!(EDITOR_JS.contains("function setPreviewFrameHtml(html, options = {})"));
+        assert!(EDITOR_JS.contains(
+            "if (options.markDocumentLoaded) {\n      setPreviewDocumentLoaded(true);\n    }"
+        ));
+        assert!(EDITOR_JS.contains(
+            "setPreviewFrameHtml(editorPreviewDocument(html), { markDocumentLoaded: true });"
+        ));
     }
 
     #[test]
@@ -5884,7 +5997,9 @@ move
         assert!(EDITOR_JS.contains("let previewFrameHasEditorLevelState = false;"));
         assert!(EDITOR_JS.contains("function restoreCompiledGamePreview()"));
         assert!(EDITOR_JS.contains("if (previewMode === \"play\")"));
-        assert!(EDITOR_JS.contains("setPreviewFrameHtml(editorPreviewDocument(latestHtml));"));
+        assert!(EDITOR_JS.contains(
+            "setPreviewFrameHtml(editorPreviewDocument(latestHtml), { markDocumentLoaded: true });"
+        ));
         assert!(EDITOR_LEVEL3D_JS.contains("function addLevel3dToSource()"));
         assert!(EDITOR_LEVEL3D_JS.contains("function updateLevel3dInSource()"));
         assert!(EDITOR_LEVEL3D_JS.contains("sourceEditableEntryFromTarget(source, target, {"));
@@ -6108,6 +6223,16 @@ move
         assert!(catch.contains("return false;"));
         assert!(!catch.contains("loadResolvedSourceTarget("));
         assert!(!catch.contains("finishSourceTargetSync("));
+    }
+
+    #[test]
+    fn source_import_navigation_consumes_typed_rust_reference_without_asset_links() {
+        assert!(EDITOR_RUNTIME_JS.contains("active_source_analysis_import_at_json"));
+        assert!(EDITOR_SOURCE_JS.contains("sourceImportReference?.("));
+        assert!(!EDITOR_SOURCE_JS.contains("sourceLineIsInAssetsBlock"));
+        assert!(!EDITOR_SOURCE_JS.contains("sourceQuotedPathLinkForMatch"));
+        assert!(!EDITOR_SOURCE_JS.contains("Asset not found"));
+        assert!(!EDITOR_SOURCE_JS.contains("(?:css|script|file)"));
     }
 
     #[test]
@@ -6503,20 +6628,23 @@ move
     #[test]
     fn sprite_marker_preserves_paint_material_and_fill_owns_fill_mode() {
         assert!(
-            EDITOR_SPRITE_JS
-                .contains("const selected = !spriteBucketActive && preset === spriteBrushPreset;")
+            EDITOR_SPRITE_JS.contains(
+                "const selected = !spriteBucketActive && !spriteClipActive && preset === spriteBrushPreset;"
+            )
         );
         assert!(EDITOR_SPRITE_JS.contains(
-            "const wasBucketActive = spriteBucketActive;\n  spriteBrushPreset = normalizeSpriteBrushPreset(preset);\n  spriteBucketActive = false;"
+            "const wasBucketActive = spriteBucketActive;\n  const wasClipActive = spriteClipActive || spriteClipSelection;\n  spriteBrushPreset = normalizeSpriteBrushPreset(preset);\n  spriteBucketActive = false;\n  deactivateSpriteClipMode({ render: false });"
         ));
         assert!(
-            EDITOR_SPRITE_JS.contains("if (wasBucketActive) {\n    renderSpritePalette();\n  }")
+            EDITOR_SPRITE_JS.contains(
+                "if (wasBucketActive || wasClipActive) {\n    renderSpritePalette();\n  }"
+            )
         );
         assert!(EDITOR_SPRITE_JS.contains(
             "spriteBucketActive = !spriteBucketActive;\n  syncSpritePaintToolControls();\n  renderSpritePalette();"
         ));
-        assert!(!EDITOR_SPRITE_JS.contains(
-            "sprite.selectedColorIndex = validSpriteColorIndex(spriteLastPaintColorIndex)"
+        assert!(EDITOR_SPRITE_JS.contains(
+            "if (!validSpriteColorIndex(sprite.selectedColorIndex)) {\n    sprite.selectedColorIndex = validSpriteColorIndex(spriteLastPaintColorIndex) ? spriteLastPaintColorIndex : 0;\n  }"
         ));
     }
 
@@ -6526,19 +6654,6 @@ move
             ".sprite-brush-size-button:hover:not(:disabled),\n.sprite-brush-size-button:has(:hover),\n.sprite-brush-size-button:focus-visible {\n  background: var(--active-bg);"
         ));
         assert!(EDITOR_JS.contains("|| element.classList.contains(\"sprite-brush-size-button\");"));
-    }
-
-    #[test]
-    fn sprite_palette_mouse_buttons_do_not_focus_scroll_container() {
-        assert!(EDITOR_SPRITE_JS.contains(
-            "spritePalette.addEventListener(\"mousedown\", (event) => {\n  const button = event.target.closest(\"button\");"
-        ));
-        assert!(EDITOR_SPRITE_JS.contains(
-            "if (!button || !spritePalette.contains(button)) {\n    return;\n  }\n  event.preventDefault();"
-        ));
-        assert!(
-            EDITOR_SPRITE_JS.contains("spritePalette.addEventListener(\"keydown\", (event) => {")
-        );
     }
 
     #[test]
@@ -6640,25 +6755,36 @@ move
     }
 
     #[test]
-    fn source_completion_keyboard_commit_splits_tab_from_enter() {
+    fn source_completion_keyboard_commands_precede_codemirror_defaults() {
         assert!(EDITOR_SOURCE_JS.contains("function sourceCompletionSelectedIndexForSession"));
         assert!(EDITOR_SOURCE_JS.contains("function sourceCompletionSessionMatches"));
         assert!(EDITOR_SOURCE_JS.contains("function sourceCompletionItemsMatch"));
-        assert!(EDITOR_SOURCE_JS.contains("keyboardCommit: Boolean(options.manual || sourceCompletionSessionMatches(previousState, {"));
-        assert!(EDITOR_SOURCE_JS.contains("sourceCompletionState.keyboardCommit = true;"));
-        assert!(EDITOR_SOURCE_JS.contains("if (event.key === \"Tab\")"));
         assert!(
-            EDITOR_SOURCE_JS
-                .contains("if (event.key === \"Enter\" && sourceCompletionCanKeyboardCommit())")
+            EDITOR_SOURCE_JS.contains(
+                "sourceEditor.addEventListener(\"sourcecompletioncommand\", (event) => {"
+            )
         );
-        let tab_handler = EDITOR_SOURCE_JS
-            .find("if (event.key === \"Tab\")")
-            .expect("source completion Tab handler");
-        let enter_handler = EDITOR_SOURCE_JS
-            .find("if (event.key === \"Enter\" && sourceCompletionCanKeyboardCommit())")
-            .expect("source completion Enter handler");
+        assert!(EDITOR_SOURCE_JS.contains("if (command === \"show\")"));
+        assert!(EDITOR_SOURCE_JS.contains("if (command === \"next\" || command === \"previous\")"));
+        assert!(EDITOR_SOURCE_JS.contains(
+            "if (command === \"commit\" && sourceCompletionState.mode === \"completion\")"
+        ));
+        assert!(EDITOR_SOURCE_JS.contains("if (acceptSourceCompletion())"));
+        assert!(EDITOR_SOURCE_JS.contains("if (event.key === \"Tab\")"));
+        assert!(EDITOR_SOURCE_JS.contains("if (event.key === \"Enter\")"));
         assert!(EDITOR_SOURCE_JS.contains("if (sourceCompletionState.mode === \"completion\")"));
-        assert!(tab_handler < enter_handler);
+        assert!(!EDITOR_SOURCE_JS.contains("sourceCompletionCanKeyboardCommit"));
+        assert!(EDITOR_CODEMIRROR_SOURCE_JS.contains("const sourceCompletionKeymap = ["));
+        assert!(EDITOR_CODEMIRROR_SOURCE_JS.contains(
+            "{ key: \"Tab\", run: (view) => dispatchSourceCompletionCommand(view, \"commit\") }"
+        ));
+        assert!(EDITOR_CODEMIRROR_SOURCE_JS.contains(
+            "{ key: \"Enter\", run: (view) => dispatchSourceCompletionCommand(view, \"commit\") }"
+        ));
+        assert!(EDITOR_CODEMIRROR_SOURCE_JS.contains(
+            "keymap.of([...sourceCompletionKeymap, indentWithTab, ...defaultKeymap, ...historyKeymap])"
+        ));
+        assert!(EDITOR_CODEMIRROR_JS.contains("sourcecompletioncommand"));
     }
 
     #[test]
@@ -6693,6 +6819,34 @@ move
             .find("scrollSourceOffsetIntoView(start);")
             .expect("source snapshot reveal");
         assert!(selection_restore < reveal);
+    }
+
+    #[test]
+    fn source_location_reveal_uses_editor_geometry_for_wrapped_lines() {
+        let reveal_start = EDITOR_JS
+            .find("function revealSourceLocation(target, options = {})")
+            .expect("source location reveal");
+        let reveal_end = EDITOR_JS[reveal_start..]
+            .find("function currentLevelSourceLocation()")
+            .map(|index| reveal_start + index)
+            .expect("source location reveal end");
+        let reveal = &EDITOR_JS[reveal_start..reveal_end];
+        assert!(reveal.contains("scrollSourceOffsetIntoView(start, options.scrollAlignment);"));
+        assert!(!reveal.contains("lineIndex * lineHeight"));
+        assert!(!EDITOR_JS.contains("function scrollSourceEditorToPosition("));
+    }
+
+    #[test]
+    fn preview_error_source_reveal_centers_the_target_line() {
+        assert!(EDITOR_JS.contains("{ recordHistory: true, scrollAlignment: \"center\" },"));
+        assert!(
+            EDITOR_SOURCE_JS
+                .contains("function scrollSourceOffsetIntoView(offset, alignment = \"nearest\")")
+        );
+        assert!(
+            EDITOR_CODEMIRROR_SOURCE_JS.contains("scrollIntoView(offset, alignment = \"nearest\")")
+        );
+        assert!(EDITOR_CODEMIRROR_SOURCE_JS.contains("{ y: alignment, x: \"nearest\" }"));
     }
 
     #[test]
@@ -7328,7 +7482,17 @@ move
             "sprite.animationDurationMs = Number.isFinite(Number(state.animationDurationMs))"
         ));
         assert!(EDITOR_SPRITE_JS.contains("const before = visualEditSnapshot(\"sprite\");\n  sprite.animationFrameCount = normalizedSpriteAnimationFrameCount(value);"));
-        assert!(EDITOR_SPRITE_JS.contains("const before = visualEditSnapshot(\"sprite\");\n  sprite.animationDurationMs = normalizedSpriteAnimationDuration(value);"));
+        assert!(EDITOR_SPRITE_JS.contains(
+            "const nextDuration = normalizedSpriteAnimationDuration(value);\n  const changed = nextDuration !== sprite.animationDurationMs;"
+        ));
+        assert!(EDITOR_SPRITE_JS.contains(
+            "const before = options.recordHistory === false || !changed ? null : visualEditSnapshot(\"sprite\");\n  sprite.animationDurationMs = nextDuration;"
+        ));
+        assert!(
+            EDITOR_SPRITE_JS.contains(
+                "if (before) {\n    pushVisualEditUndoSnapshot(\"sprite\", before);\n  }"
+            )
+        );
         assert!(EDITOR_SPRITE_JS.contains("function isSpriteVisualEditUndoTarget(target)"));
         assert!(EDITOR_SPRITE_JS.contains("function syncSpriteAnimationInputValues(options = {})"));
         assert!(EDITOR_JS.contains("syncSpriteAnimationInputValues();"));
@@ -7930,9 +8094,10 @@ move
     #[test]
     fn browser_preview_compile_uses_browser_runtime_not_host_api() {
         assert!(EDITOR_RUNTIME_JS.contains("window.PuzzleStudioRuntime"));
-        assert!(EDITOR_RUNTIME_JS.contains("compile_preview"));
-        assert!(EDITOR_RUNTIME_JS.contains("export_html"));
-        assert!(EDITOR_RUNTIME_JS.contains("active_source_analysis_highlight_json"));
+        assert!(EDITOR_RUNTIME_JS.contains("compile_workspace_preview"));
+        assert!(EDITOR_RUNTIME_JS.contains("export_workspace_html"));
+        assert!(EDITOR_RUNTIME_JS.contains("querySynchronizedAnalysisWorker(\"highlightRange\""));
+        assert!(EDITOR_ANALYSIS_WORKER_JS.contains("active_source_analysis_highlight_range_json"));
         assert!(EDITOR_RUNTIME_JS.contains("solver_task_initial_display_state_json"));
         assert!(EDITOR_HTML.contains("editor_runtime.js"));
         assert!(
@@ -8019,11 +8184,12 @@ move
         assert!(EDITOR_SOUNDS_JS.contains("volume=${soundSfxVolume().toFixed(2)}"));
         assert!(EDITOR_SOUNDS_JS.contains("function soundSfxType()"));
         assert!(
-            EDITOR_SOUNDS_JS.contains("generatePuzzleScriptSoundEffect(soundsSfxSeedInput.value)")
+            EDITOR_SOUNDS_JS.contains(
+                "generateSoundEffect(soundsSfxSeedInput.value, { type: soundSfxType() })"
+            )
         );
-        assert!(EDITOR_SOUNDS_JS.contains(
-            "createPuzzleScriptSfxPlayer(sounds.context, soundSfxEffect(), { volume: soundSfxVolume() })"
-        ));
+        assert!(!EDITOR_SOUNDS_JS.contains("generatePuzzleScriptSoundEffect"));
+        assert!(!EDITOR_SOUNDS_JS.contains("createPuzzleScriptSfxPlayer"));
         assert!(EDITOR_SOUNDS_JS.contains(
             "createSfxPlayer(sounds.context, soundSfxEffect(), { volume: soundSfxVolume() })"
         ));

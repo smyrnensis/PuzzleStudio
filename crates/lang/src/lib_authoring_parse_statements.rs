@@ -60,15 +60,7 @@ fn parse_rule_application(
 ) -> Result<RuleApplication, DiagnosticReport> {
     match (role, tokens) {
         (RuleRole::Main, [kind, _]) if *kind == declaration => Ok(RuleApplication::Once),
-        (RuleRole::Visual, [kind, name]) if *kind == declaration && is_display_role_token(name) => {
-            Ok(RuleApplication::Once)
-        }
         (RuleRole::Main, [kind, _, application]) if *kind == declaration => {
-            parse_application_keyword(application, line)
-        }
-        (RuleRole::Visual, [kind, name, application])
-            if *kind == declaration && is_display_role_token(name) =>
-        {
             parse_application_keyword(application, line)
         }
         _ => Err(parse_error(
@@ -2187,8 +2179,8 @@ fn parse_statement_block(
                 });
                 i += 1;
             }
-            Some(call) if tokens.len() == 1 && is_display_role_token(call) => {
-                statements.push(StatementAst::DisplayCall {
+            Some(call) if tokens.len() == 1 && is_at_identifier_token(call) => {
+                statements.push(StatementAst::Call {
                     name: call.to_string(),
                     source_line: line.to_string(),
                     source_line_number,

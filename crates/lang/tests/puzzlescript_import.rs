@@ -149,8 +149,10 @@ fn translates_basic_vanilla_puzzlescript_to_canonical_fixture() {
     assert!(!translated.contains("Player {"));
     assert!(!translated.contains("level imported_1 {"));
     assert!(!translated.contains("-> effect "));
-    assert!(translated.contains("if has_progress_save {\nchoice \"Continue\" -> continue_game"));
-    assert!(translated.contains("choice \"New Game\" -> new_game"));
+    assert!(
+        translated.contains("if has_progress_save {\nchoice \"Continue\" -> {\ngoto playing\n}")
+    );
+    assert!(translated.contains("choice \"New Game\" -> {\nclear_game_progress\nstart playing\n}"));
     assert!(!translated.contains("choice \"Continue\" -> input"));
     assert!(!translated.contains("choice \"New Game\" -> input"));
     assert!(!translated.contains("Enter Space x -> continue_game"));
@@ -162,17 +164,17 @@ fn translates_basic_vanilla_puzzlescript_to_canonical_fixture() {
             .contains("layout {\nrow {\ntitle = \"Basic PS Sokoban\"\n}\npuzzle board = main\n}")
     );
     assert!(translated.contains("rules {\nstep board\n}"));
-    assert!(translated.contains("Escape q -> back"));
-    assert!(translated.contains("routine continue_game {\ngoto playing"));
-    assert!(translated.contains("routine new_game {\nclear_game_progress"));
-    assert!(translated.contains("routine back {\ngoto title"));
+    assert!(translated.contains("Escape q -> goto title"));
+    assert!(!translated.contains("routine continue_game"));
+    assert!(!translated.contains("routine new_game"));
+    assert!(!translated.contains("routine back"));
     assert!(translated.contains("on_level_clear {\nwait 0.3s\nnext_level\n}"));
     assert!(!translated.contains("board.next_level"));
     assert!(!translated.contains("board.level.has_next"));
 }
 
 #[test]
-fn puzzlescript_import_omits_background_from_level_legend() {
+fn puzzlescript_import_adds_background_to_every_level_legend_entry_without_empty() {
     let source = r#"
 title Background Legend
 
@@ -202,15 +204,12 @@ LEVELS
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
 
     assert!(
-        translated.contains("levels {\nlegend {\n. = empty\nP = Player\n}"),
+        translated.contains("levels {\nlegend {\n. = Background\nP = Player Background\n}"),
         "{translated}"
     );
-    assert!(!translated.contains("\n. = Background"));
-    assert!(!translated.contains("\nP = Background Player"));
-    assert!(
-        translated.contains("on_level_start {\nonce_all [ no Background ] -> [ Background ]\n}")
-    );
-    parse_game(&translated).expect("background-filled imported game should parse");
+    assert!(!translated.contains("= empty"));
+    assert!(!translated.contains("once_all [ no Background ] -> [ Background ]"));
+    parse_game(&translated).expect("background-legended imported game should parse");
 }
 
 #[test]
@@ -233,16 +232,28 @@ fn translated_basic_vanilla_puzzlescript_parses_as_loaded_game() {
     );
     let continue_button = find_choice_by_label(&title_scene.components, "Continue")
         .expect("expected title continue choice");
-    assert_eq!(
-        continue_button.effect,
-        SceneEffect::RoutineCall("continue_game".to_string())
-    );
+    assert!(matches!(
+        &continue_button.effect,
+        SceneEffect::Goto { scene, params } if scene == "playing" && params.is_empty()
+    ));
     let new_game_button = find_choice_by_label(&title_scene.components, "New Game")
         .expect("expected title new game choice");
-    assert_eq!(
-        new_game_button.effect,
-        SceneEffect::RoutineCall("new_game".to_string())
-    );
+    assert!(matches!(
+        &new_game_button.effect,
+        SceneEffect::Sequence { effects } if matches!(
+            effects.as_slice(),
+            [
+                SceneEffect::ClearGameProgress,
+                SceneEffect::Sequence { effects: navigation }
+            ] if matches!(
+                navigation.as_slice(),
+                [
+                    SceneEffect::Reset { scene: reset_scene },
+                    SceneEffect::Goto { scene: goto_scene, params }
+                ] if reset_scene == "playing" && goto_scene == "playing" && params.is_empty()
+            )
+        )
+    ));
     assert!(playing_scene.components.iter().any(|component| matches!(
         component,
         SceneComponent::Frame(frame) if frame.kind == "puzzle" && frame.source == "board"
@@ -329,6 +340,8 @@ G
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
 
     assert!(translated.contains("choice \"Level Select\" -> goto level_select"));
+    assert!(translated.contains("Escape q -> goto level_select"));
+    assert!(!translated.contains("Escape q -> goto title"));
     assert!(translated.contains("scene level_select {\nlayout {\nlevel_menu {"));
     assert!(translated.contains("show_index = true"));
     assert!(translated.contains("show_solved = true"));
@@ -475,11 +488,9 @@ P
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
     assert!(translated.contains("Background\n#9CBD0F"));
     assert!(!translated.contains("Background\n#9CBD0F\nshape ="));
-    assert!(
-        translated.contains("on_level_start {\nonce_all [ no Background ] -> [ Background ]\n}")
-    );
-    assert!(translated.contains("P = Player"));
-    assert!(!translated.contains("P = Background Player"));
+    assert!(!translated.contains("once_all [ no Background ] -> [ Background ]"));
+    assert!(translated.contains("P = Player Background"));
+    assert!(!translated.contains("= empty"));
 
     let loaded = parse_game(&translated).unwrap();
     let background_sprite = loaded
@@ -626,56 +637,33 @@ P
 
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
 
-    assert!(translated.contains("if has_progress_save {\nchoice \"Continue\" -> continue_game"));
-    assert!(translated.contains("choice \"New Game\" -> new_game"));
+    assert!(translated.contains(
+        "if has_progress_save {\nchoice \"Continue\" -> {\nsfx startgame\ngoto playing\n}"
+    ));
+    assert!(translated.contains(
+        "choice \"New Game\" -> {\nsfx startgame\nclear_game_progress\nstart playing\n}"
+    ));
     assert!(!translated.contains("choice \"Continue\" -> input"));
     assert!(!translated.contains("choice \"New Game\" -> input"));
     assert!(!translated.contains("Enter Space x -> continue_game"));
     assert!(!translated.contains("n -> new_game"));
-    assert!(translated.contains("routine continue_game {\nsfx startgame\ngoto playing"));
-    assert!(
-        translated
-            .contains("routine new_game {\nsfx startgame\nclear_game_progress\ngoto playing(0)")
-    );
+    assert!(!translated.contains("routine continue_game"));
+    assert!(!translated.contains("routine new_game"));
 
     let loaded = parse_game(&translated).unwrap();
     let title_scene = scene_by_name(&loaded, "title");
     let button = find_choice_by_label(&title_scene.components, "Continue")
         .expect("expected title continue choice");
-    assert_eq!(
-        button.effect,
-        SceneEffect::RoutineCall("continue_game".to_string())
-    );
+    assert!(matches!(
+        &button.effect,
+        SceneEffect::Sequence { effects } if matches!(
+            effects.as_slice(),
+            [SceneEffect::PlaySfx { name }, SceneEffect::Goto { scene, params }]
+                if name == "startgame" && scene == "playing" && params.is_empty()
+        )
+    ));
     assert!(title_scene.key_bindings.is_empty());
-    assert!(title_scene.routines.iter().any(|routine| {
-        matches!(
-            &routine.effect,
-            SceneEffect::Sequence { effects }
-                if matches!(
-                    effects.as_slice(),
-                    [
-                        SceneEffect::PlaySfx { name },
-                        SceneEffect::Goto { scene, params }
-                    ] if name == "startgame" && scene == "playing" && params.is_empty()
-                )
-        )
-    }));
-    assert!(title_scene.routines.iter().any(|routine| {
-        matches!(
-            &routine.effect,
-            SceneEffect::Sequence { effects }
-                if matches!(
-                    effects.as_slice(),
-                    [
-                        SceneEffect::PlaySfx { name },
-                        SceneEffect::ClearGameProgress,
-                        SceneEffect::Goto { scene, params }
-                    ] if name == "startgame"
-                        && scene == "playing"
-                        && params.len() == 1
-                )
-        )
-    }));
+    assert!(title_scene.routines.is_empty());
 }
 
 #[test]
@@ -1137,16 +1125,18 @@ fn translates_official_sumo_demo_with_disconnected_pattern() {
     assert!(translated.contains("[ > Player ] [ Sumo ] -> [ > Player ] [ > Sumo ]"));
     assert!(!translated.contains("win_conditions {"));
     assert!(!translated.contains("-> effect "));
-    assert!(translated.contains("if has_progress_save {\nchoice \"Continue\" -> continue_game"));
-    assert!(translated.contains("choice \"New Game\" -> new_game"));
+    assert!(
+        translated.contains("if has_progress_save {\nchoice \"Continue\" -> {\ngoto playing\n}")
+    );
+    assert!(translated.contains("choice \"New Game\" -> {\nclear_game_progress\nstart playing\n}"));
     assert!(!translated.contains("choice \"Continue\" -> input"));
     assert!(!translated.contains("choice \"New Game\" -> input"));
     assert!(!translated.contains("Enter Space x -> continue_game"));
     assert!(!translated.contains("n -> new_game"));
-    assert!(translated.contains("Escape q -> back"));
-    assert!(translated.contains("routine continue_game {\ngoto playing"));
-    assert!(translated.contains("routine new_game {\nclear_game_progress"));
-    assert!(translated.contains("routine back {\ngoto title"));
+    assert!(translated.contains("Escape q -> goto title"));
+    assert!(!translated.contains("routine continue_game"));
+    assert!(!translated.contains("routine new_game"));
+    assert!(!translated.contains("routine back"));
     assert!(!translated.contains("if board.win_conditions -> {"));
     assert!(translated.contains("on_level_clear {\nwait 0.3s\nnext_level\n}"));
 
