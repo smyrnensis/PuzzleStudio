@@ -3,7 +3,8 @@
 export const memory: WebAssembly.Memory;
 export const activate_source_analysis: (a: number, b: number) => number;
 export const active_source_analysis_entries_json: (a: number) => [number, number, number, number];
-export const active_source_analysis_highlight_json: (a: number, b: number) => [number, number, number, number];
+export const active_source_analysis_highlight_range_json: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+export const active_source_analysis_import_at_json: (a: number, b: number, c: number, d: number) => [number, number, number, number];
 export const active_source_analysis_json: (a: number) => [number, number, number, number];
 export const active_source_analysis_level_editor_level_slots: (a: number, b: number, c: number) => [number, number, number, number];
 export const active_source_analysis_level_editor_manifest_json: (a: number) => [number, number, number, number];
@@ -11,8 +12,15 @@ export const active_source_analysis_level_editor_sprite_json: (a: number, b: num
 export const active_source_analysis_outline_json: (a: number) => [number, number, number, number];
 export const active_source_analysis_resolve_source_target: (a: number, b: number) => [number, number, number, number];
 export const active_source_analysis_suggest_source_completions: (a: number, b: number) => [number, number, number, number];
+export const apply_source_analysis_edit: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
 export const compile_preview: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
+export const compile_solver_rules_json: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+export const compile_workspace_preview: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
+export const compile_workspace_solver_rules_json: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+export const editor_solver_cache_policy_json: () => [number, number];
+export const expand_workspace_entry_source: (a: number, b: number, c: number, d: number) => [number, number, number, number];
 export const export_html: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number, number];
+export const export_workspace_html: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number, number];
 export const generate_visuals_js: (a: number, b: number, c: number, d: number) => [number, number, number, number];
 export const solve_request_json: (a: number, b: number) => [number, number, number, number];
 export const solve_solver_task_json: (a: number, b: number) => [number, number, number, number];

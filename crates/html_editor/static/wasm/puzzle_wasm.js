@@ -162,14 +162,16 @@ export function active_source_analysis_entries_json(revision) {
 
 /**
  * @param {number} revision
+ * @param {number} range_start_utf16
+ * @param {number} range_end_utf16
  * @param {boolean} include_outline
  * @returns {string}
  */
-export function active_source_analysis_highlight_json(revision, include_outline) {
+export function active_source_analysis_highlight_range_json(revision, range_start_utf16, range_end_utf16, include_outline) {
     let deferred2_0;
     let deferred2_1;
     try {
-        const ret = wasm.active_source_analysis_highlight_json(revision, include_outline);
+        const ret = wasm.active_source_analysis_highlight_range_json(revision, range_start_utf16, range_end_utf16, include_outline);
         var ptr1 = ret[0];
         var len1 = ret[1];
         if (ret[3]) {
@@ -181,6 +183,33 @@ export function active_source_analysis_highlight_json(revision, include_outline)
         return getStringFromWasm0(ptr1, len1);
     } finally {
         wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+    }
+}
+
+/**
+ * @param {number} revision
+ * @param {string} document_path
+ * @param {number} cursor_utf16_offset
+ * @returns {string}
+ */
+export function active_source_analysis_import_at_json(revision, document_path, cursor_utf16_offset) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passStringToWasm0(document_path, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.active_source_analysis_import_at_json(revision, ptr0, len0, cursor_utf16_offset);
+        var ptr2 = ret[0];
+        var len2 = ret[1];
+        if (ret[3]) {
+            ptr2 = 0; len2 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred3_0 = ptr2;
+        deferred3_1 = len2;
+        return getStringFromWasm0(ptr2, len2);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
     }
 }
 
@@ -347,6 +376,34 @@ export function active_source_analysis_suggest_source_completions(revision, curs
 }
 
 /**
+ * @param {number} revision
+ * @param {number} start_utf16
+ * @param {number} end_utf16
+ * @param {string} insert
+ * @returns {string}
+ */
+export function apply_source_analysis_edit(revision, start_utf16, end_utf16, insert) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passStringToWasm0(insert, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.apply_source_analysis_edit(revision, start_utf16, end_utf16, ptr0, len0);
+        var ptr2 = ret[0];
+        var len2 = ret[1];
+        if (ret[3]) {
+            ptr2 = 0; len2 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred3_0 = ptr2;
+        deferred3_1 = len2;
+        return getStringFromWasm0(ptr2, len2);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
  * @param {string} source
  * @param {string} puzzle_path
  * @param {string} game_css
@@ -383,6 +440,140 @@ export function compile_preview(source, puzzle_path, game_css, game_visuals_js) 
 /**
  * @param {string} source
  * @param {string} puzzle_path
+ * @returns {string}
+ */
+export function compile_solver_rules_json(source, puzzle_path) {
+    let deferred4_0;
+    let deferred4_1;
+    try {
+        const ptr0 = passStringToWasm0(source, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(puzzle_path, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.compile_solver_rules_json(ptr0, len0, ptr1, len1);
+        var ptr3 = ret[0];
+        var len3 = ret[1];
+        if (ret[3]) {
+            ptr3 = 0; len3 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred4_0 = ptr3;
+        deferred4_1 = len3;
+        return getStringFromWasm0(ptr3, len3);
+    } finally {
+        wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+    }
+}
+
+/**
+ * @param {string} entry_path
+ * @param {string} documents_json
+ * @param {string} game_css
+ * @param {string} game_visuals_js
+ * @returns {string}
+ */
+export function compile_workspace_preview(entry_path, documents_json, game_css, game_visuals_js) {
+    let deferred6_0;
+    let deferred6_1;
+    try {
+        const ptr0 = passStringToWasm0(entry_path, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(documents_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(game_css, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ptr3 = passStringToWasm0(game_visuals_js, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len3 = WASM_VECTOR_LEN;
+        const ret = wasm.compile_workspace_preview(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3);
+        var ptr5 = ret[0];
+        var len5 = ret[1];
+        if (ret[3]) {
+            ptr5 = 0; len5 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred6_0 = ptr5;
+        deferred6_1 = len5;
+        return getStringFromWasm0(ptr5, len5);
+    } finally {
+        wasm.__wbindgen_free(deferred6_0, deferred6_1, 1);
+    }
+}
+
+/**
+ * @param {string} entry_path
+ * @param {string} documents_json
+ * @returns {string}
+ */
+export function compile_workspace_solver_rules_json(entry_path, documents_json) {
+    let deferred4_0;
+    let deferred4_1;
+    try {
+        const ptr0 = passStringToWasm0(entry_path, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(documents_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.compile_workspace_solver_rules_json(ptr0, len0, ptr1, len1);
+        var ptr3 = ret[0];
+        var len3 = ret[1];
+        if (ret[3]) {
+            ptr3 = 0; len3 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred4_0 = ptr3;
+        deferred4_1 = len3;
+        return getStringFromWasm0(ptr3, len3);
+    } finally {
+        wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+    }
+}
+
+/**
+ * @returns {string}
+ */
+export function editor_solver_cache_policy_json() {
+    let deferred1_0;
+    let deferred1_1;
+    try {
+        const ret = wasm.editor_solver_cache_policy_json();
+        deferred1_0 = ret[0];
+        deferred1_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+    }
+}
+
+/**
+ * @param {string} entry_path
+ * @param {string} documents_json
+ * @returns {string}
+ */
+export function expand_workspace_entry_source(entry_path, documents_json) {
+    let deferred4_0;
+    let deferred4_1;
+    try {
+        const ptr0 = passStringToWasm0(entry_path, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(documents_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.expand_workspace_entry_source(ptr0, len0, ptr1, len1);
+        var ptr3 = ret[0];
+        var len3 = ret[1];
+        if (ret[3]) {
+            ptr3 = 0; len3 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred4_0 = ptr3;
+        deferred4_1 = len3;
+        return getStringFromWasm0(ptr3, len3);
+    } finally {
+        wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+    }
+}
+
+/**
+ * @param {string} source
+ * @param {string} puzzle_path
  * @param {string} game_css
  * @param {string} game_visuals_js
  * @param {string} game_runtime_module_js
@@ -406,6 +597,46 @@ export function export_html(source, puzzle_path, game_css, game_visuals_js, game
         const ptr5 = passStringToWasm0(game_runtime_wasm_base64, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len5 = WASM_VECTOR_LEN;
         const ret = wasm.export_html(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5);
+        var ptr7 = ret[0];
+        var len7 = ret[1];
+        if (ret[3]) {
+            ptr7 = 0; len7 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred8_0 = ptr7;
+        deferred8_1 = len7;
+        return getStringFromWasm0(ptr7, len7);
+    } finally {
+        wasm.__wbindgen_free(deferred8_0, deferred8_1, 1);
+    }
+}
+
+/**
+ * @param {string} entry_path
+ * @param {string} documents_json
+ * @param {string} game_css
+ * @param {string} game_visuals_js
+ * @param {string} game_runtime_module_js
+ * @param {string} game_runtime_wasm_base64
+ * @returns {string}
+ */
+export function export_workspace_html(entry_path, documents_json, game_css, game_visuals_js, game_runtime_module_js, game_runtime_wasm_base64) {
+    let deferred8_0;
+    let deferred8_1;
+    try {
+        const ptr0 = passStringToWasm0(entry_path, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(documents_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(game_css, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ptr3 = passStringToWasm0(game_visuals_js, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len3 = WASM_VECTOR_LEN;
+        const ptr4 = passStringToWasm0(game_runtime_module_js, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len4 = WASM_VECTOR_LEN;
+        const ptr5 = passStringToWasm0(game_runtime_wasm_base64, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len5 = WASM_VECTOR_LEN;
+        const ret = wasm.export_workspace_html(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5);
         var ptr7 = ret[0];
         var len7 = ret[1];
         if (ret[3]) {

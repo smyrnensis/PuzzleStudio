@@ -17,7 +17,9 @@ export function activate_source_analysis(source: string): number;
 
 export function active_source_analysis_entries_json(revision: number): string;
 
-export function active_source_analysis_highlight_json(revision: number, include_outline: boolean): string;
+export function active_source_analysis_highlight_range_json(revision: number, range_start_utf16: number, range_end_utf16: number, include_outline: boolean): string;
+
+export function active_source_analysis_import_at_json(revision: number, document_path: string, cursor_utf16_offset: number): string;
 
 export function active_source_analysis_json(revision: number): string;
 
@@ -44,9 +46,23 @@ export function active_source_analysis_resolve_source_target(revision: number, c
 
 export function active_source_analysis_suggest_source_completions(revision: number, cursor_utf16_offset: number): string;
 
+export function apply_source_analysis_edit(revision: number, start_utf16: number, end_utf16: number, insert: string): string;
+
 export function compile_preview(source: string, puzzle_path: string, game_css: string, game_visuals_js: string): string;
 
+export function compile_solver_rules_json(source: string, puzzle_path: string): string;
+
+export function compile_workspace_preview(entry_path: string, documents_json: string, game_css: string, game_visuals_js: string): string;
+
+export function compile_workspace_solver_rules_json(entry_path: string, documents_json: string): string;
+
+export function editor_solver_cache_policy_json(): string;
+
+export function expand_workspace_entry_source(entry_path: string, documents_json: string): string;
+
 export function export_html(source: string, puzzle_path: string, game_css: string, game_visuals_js: string, game_runtime_module_js: string, game_runtime_wasm_base64: string): string;
+
+export function export_workspace_html(entry_path: string, documents_json: string, game_css: string, game_visuals_js: string, game_runtime_module_js: string, game_runtime_wasm_base64: string): string;
 
 export function generate_visuals_js(source: string, base_visuals_js: string): string;
 
@@ -68,7 +84,8 @@ export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly activate_source_analysis: (a: number, b: number) => number;
     readonly active_source_analysis_entries_json: (a: number) => [number, number, number, number];
-    readonly active_source_analysis_highlight_json: (a: number, b: number) => [number, number, number, number];
+    readonly active_source_analysis_highlight_range_json: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+    readonly active_source_analysis_import_at_json: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly active_source_analysis_json: (a: number) => [number, number, number, number];
     readonly active_source_analysis_level_editor_level_slots: (a: number, b: number, c: number) => [number, number, number, number];
     readonly active_source_analysis_level_editor_manifest_json: (a: number) => [number, number, number, number];
@@ -76,8 +93,15 @@ export interface InitOutput {
     readonly active_source_analysis_outline_json: (a: number) => [number, number, number, number];
     readonly active_source_analysis_resolve_source_target: (a: number, b: number) => [number, number, number, number];
     readonly active_source_analysis_suggest_source_completions: (a: number, b: number) => [number, number, number, number];
+    readonly apply_source_analysis_edit: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
     readonly compile_preview: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
+    readonly compile_solver_rules_json: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+    readonly compile_workspace_preview: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
+    readonly compile_workspace_solver_rules_json: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+    readonly editor_solver_cache_policy_json: () => [number, number];
+    readonly expand_workspace_entry_source: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly export_html: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number, number];
+    readonly export_workspace_html: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number, number];
     readonly generate_visuals_js: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly solve_request_json: (a: number, b: number) => [number, number, number, number];
     readonly solve_solver_task_json: (a: number, b: number) => [number, number, number, number];

@@ -283,6 +283,7 @@ fn line_head_completion_slots(
             | SourceScope::Levels
             | SourceScope::Level
             | SourceScope::UnbracedLevel
+            | SourceScope::Condition
             | SourceScope::VisualShapeTable
             | SourceScope::VisualShapeEntry
             | SourceScope::VisualColorTable,
@@ -617,6 +618,13 @@ fn default_completion_slots_for_scope(scope: Option<SourceScope>) -> Vec<Semanti
             SemanticCompletionSlot::Directions,
             SemanticCompletionSlot::DirectionSets,
         ],
+        Some(SourceScope::Condition) => vec![
+            SemanticCompletionSlot::Keywords(completion_keywords_for_scope(scope)),
+            SemanticCompletionSlot::Objects,
+            SemanticCompletionSlot::Groups,
+            SemanticCompletionSlot::Conditions,
+            SemanticCompletionSlot::States,
+        ],
         Some(
             SourceScope::Scene
             | SourceScope::SceneLayout
@@ -677,6 +685,7 @@ fn completion_keywords_for_scope(scope: Option<SourceScope>) -> &'static [&'stat
     match scope {
         None => &[],
         Some(SourceScope::Puzzle) => PUZZLE_COMPLETION_KEYWORDS,
+        Some(SourceScope::Condition) => &["all", "some", "no", "on"],
         Some(SourceScope::Tags) => TAG_COMPLETION_KEYWORDS,
         Some(SourceScope::Group) => GROUP_COMPLETION_KEYWORDS,
         Some(SourceScope::Map) => &[],
@@ -883,7 +892,6 @@ const COMPLETION_KEYWORDS: &[&str] = &[
     "render",
     "row",
     "routine",
-    "rule",
     "rules",
     "scene",
     "marks",

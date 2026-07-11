@@ -5,7 +5,6 @@ fn parse_group_definition(
     object_schemas: &HashMap<String, ObjectSchema>,
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
-    visual_objects: &[ObjectId],
     object_groups: &mut HashMap<String, Vec<ObjectId>>,
 ) -> Result<(), DiagnosticReport> {
     let Some(syntax) = crate::syntax::named_selector_assignment_syntax(tokens, true) else {
@@ -44,7 +43,6 @@ fn parse_group_definition(
     if objects.is_empty() {
         return Err(parse_error(line, "group must contain at least one object"));
     }
-    validate_named_selector_role(name, &objects, visual_objects, line, "group")?;
 
     object_groups.insert(name.to_string(), objects);
     Ok(())
@@ -191,7 +189,6 @@ fn resolve_pending_group_definition(
         &catalog.object_schemas,
         &catalog_value_sets(catalog),
         &catalog.maps,
-        &catalog.visual_objects,
         &mut catalog.object_groups,
     )?;
     resolved_groups.insert(name.to_string());
@@ -859,14 +856,7 @@ fn parse_rule_definition(
 ) -> Result<(RuleDefinitionAst, usize), DiagnosticReport> {
     let header = split_header_tokens(&lines[start]);
     let declaration = header.first().copied().unwrap_or("routine");
-    let role = if header
-        .get(1)
-        .is_some_and(|name| is_display_role_token(name))
-    {
-        RuleRole::Visual
-    } else {
-        RuleRole::Main
-    };
+    let role = RuleRole::Main;
     let name_index = 1;
     let name_spec = expect(
         header.get(name_index),

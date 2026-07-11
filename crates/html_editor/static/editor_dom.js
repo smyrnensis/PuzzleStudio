@@ -40,7 +40,6 @@ const openProjectMenuButton = document.querySelector("#openProjectMenuButton");
 const importButton = document.querySelector("#importButton");
 const importFolderButton = document.querySelector("#importFolderButton");
 const runButton = document.querySelector("#runButton");
-const sourceRefreshButton = document.querySelector("#sourceRefreshButton");
 const downloadButton = document.querySelector("#downloadButton");
 const themeToggleButton = document.querySelector("#themeToggleButton");
 const importFileInput = document.querySelector("#importFileInput");

@@ -645,6 +645,12 @@ where
             };
             let response = solve_compiled_state_with_budget_and_progress(
                 &engine,
+                serde_json::from_value(
+                    required_json_value(rules, "solverStrategy")?.clone(),
+                )
+                .map_err(|error| {
+                    AppError::Config(format!("solver task strategy is invalid: {error}"))
+                })?,
                 decode_optional_goal_expr(rules.get("goal"))?,
                 decode_optional_goal_expr(rules.get("lose"))?,
                 optional_json_bool(request.get("acceptWinCommand"), true)?,
@@ -1056,10 +1062,6 @@ fn decode_goal_value(value: &serde_json::Value) -> Result<GoalValue, AppError> {
         "condition_value" => Ok(GoalValue::InlineConditionValue(
             decode_condition_value_kind(required_json_value(object, "conditionValueKind")?)?,
         )),
-        "all_objects_on" => Ok(GoalValue::AllObjectsOn {
-            subjects: decode_object_ids(required_json_value(object, "subjects")?)?,
-            covers: decode_object_ids(required_json_value(object, "covers")?)?,
-        }),
         other => Err(AppError::Config(format!(
             "unsupported goal value kind {other:?}"
         ))),

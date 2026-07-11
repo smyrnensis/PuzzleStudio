@@ -485,7 +485,6 @@ fn starts_inline_block(tokens: &[&str], line: &str) -> bool {
             | ["assets"]
             | ["screen"]
             | ["layout"]
-            | ["rule", ..]
             | ["main"]
             | ["state"]
             | ["keys"]
@@ -585,6 +584,7 @@ pub(crate) enum SourceScope {
     Levels,
     Level,
     UnbracedLevel,
+    Condition,
     Visuals,
     VisualShapeTable,
     VisualShapeEntry,
@@ -608,7 +608,7 @@ pub(crate) struct SourceToken {
     pub(crate) end: usize,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SurfaceSourceLine {
     pub(crate) tokens: Vec<String>,
     pub(crate) token_spans: Vec<SourceToken>,
@@ -619,6 +619,7 @@ pub(crate) struct SurfaceSourceLine {
     pub(crate) start: usize,
     pub(crate) line: usize,
     pub(crate) content: String,
+    scanner_state_after: SurfaceSourceScannerState,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -644,11 +645,19 @@ struct SourceBlockStackEntry {
     virtual_braces: bool,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct SurfaceSourceScan {
     raw: Vec<(usize, usize)>,
     plain: Vec<(usize, usize)>,
     pub(crate) lines: Vec<SurfaceSourceLine>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct SurfaceSourceScannerState {
+    block_stack: Vec<SourceBlockStackEntry>,
+    structural_block_stack: Vec<String>,
+    normalize_levels_brace_depth: i32,
+    unbraced_visual_shape_body: bool,
 }
 
 impl SurfaceSourceScan {
@@ -659,98 +668,243 @@ impl SurfaceSourceScan {
     pub(crate) fn plain_ranges(&self) -> &[(usize, usize)] {
         &self.plain
     }
+
+    pub(crate) fn line_count(&self) -> usize {
+        self.lines.len()
+    }
+
+    pub(crate) fn apply_edit(
+        &mut self,
+        old_source: &str,
+        new_source: &str,
+        edit_start: usize,
+        edit_end: usize,
+        insert_len: usize,
+    ) -> usize {
+        let rescan_start = old_source[..edit_start]
+            .rfind('\n')
+            .map_or(0, |index| index + 1);
+        let prefix_line_count = self
+            .lines
+            .iter()
+            .take_while(|line| line.start < rescan_start)
+            .count();
+        let mut state = self
+            .lines
+            .get(prefix_line_count.wrapping_sub(1))
+            .map(|line| line.scanner_state_after.clone())
+            .unwrap_or_default();
+
+        let old_suffix_lines = self.lines.split_off(prefix_line_count);
+        let old_raw = self.raw.clone();
+        let old_plain = self.plain.clone();
+        self.raw.retain(|(_, end)| *end <= rescan_start);
+        self.plain.retain(|(_, end)| *end <= rescan_start);
+
+        let mut offset = rescan_start;
+        let mut rescanned = 0usize;
+        let delta = insert_len as i64 - (edit_end - edit_start) as i64;
+        let new_unchanged_suffix = edit_start + insert_len;
+        for (relative_line_index, line) in
+            new_source[rescan_start..].split_inclusive('\n').enumerate()
+        {
+            let line_index = prefix_line_count + relative_line_index;
+            let scanned = scan_surface_source_line(line, offset, line_index, &mut state);
+            self.raw.extend(scanned.raw_ranges.iter().copied());
+            self.plain.extend(scanned.plain_ranges.iter().copied());
+            offset += line.len();
+            rescanned += 1;
+            let converged_old_index = (scanned.line.start >= new_unchanged_suffix)
+                .then(|| shift_offset(scanned.line.start, -delta))
+                .and_then(|old_start| {
+                    old_suffix_lines.iter().position(|old| {
+                        old.start == old_start
+                            && old.content == scanned.line.content
+                            && old.scanner_state_after == scanned.line.scanner_state_after
+                            && old_line_has_newline(old_source, old) == line.ends_with('\n')
+                    })
+                });
+            let new_line_number = scanned.line.line;
+            self.lines.push(scanned.line);
+            if let Some(old_index) = converged_old_index {
+                let old_line_number = old_suffix_lines[old_index].line;
+                let line_delta = new_line_number as i64 - old_line_number as i64;
+                let old_reuse_start = old_suffix_lines
+                    .get(old_index + 1)
+                    .map_or(old_source.len(), |line| line.start);
+                self.lines.extend(
+                    old_suffix_lines[old_index + 1..]
+                        .iter()
+                        .cloned()
+                        .map(|line| shift_surface_source_line(line, delta, line_delta)),
+                );
+                self.raw.extend(
+                    old_raw
+                        .iter()
+                        .copied()
+                        .filter(|(start, _)| *start >= old_reuse_start)
+                        .map(|(start, end)| (shift_offset(start, delta), shift_offset(end, delta))),
+                );
+                self.plain.extend(
+                    old_plain
+                        .iter()
+                        .copied()
+                        .filter(|(start, _)| *start >= old_reuse_start)
+                        .map(|(start, end)| (shift_offset(start, delta), shift_offset(end, delta))),
+                );
+                return rescanned;
+            }
+        }
+        rescanned
+    }
+}
+
+fn shift_offset(value: usize, delta: i64) -> usize {
+    usize::try_from(value as i64 + delta).expect("incremental source offset underflow")
+}
+
+fn old_line_has_newline(source: &str, line: &SurfaceSourceLine) -> bool {
+    source
+        .as_bytes()
+        .get(line.start + line.content.len())
+        .is_some_and(|byte| *byte == b'\n')
+}
+
+fn shift_surface_source_line(
+    mut line: SurfaceSourceLine,
+    offset_delta: i64,
+    line_delta: i64,
+) -> SurfaceSourceLine {
+    line.start = shift_offset(line.start, offset_delta);
+    line.line =
+        usize::try_from(line.line as i64 + line_delta).expect("incremental source line underflow");
+    for token in line
+        .token_spans
+        .iter_mut()
+        .chain(line.structural_token_spans.iter_mut())
+    {
+        token.start = shift_offset(token.start, offset_delta);
+        token.end = shift_offset(token.end, offset_delta);
+    }
+    line
 }
 
 pub(crate) fn scan_surface_source(source: &str) -> SurfaceSourceScan {
     let mut context = SurfaceSourceScan::default();
-    let mut block_stack = Vec::<SourceBlockStackEntry>::new();
-    let mut structural_block_stack = Vec::<String>::new();
-    let mut normalize_levels_brace_depth = 0i32;
-    let mut unbraced_visual_shape_body = false;
+    let mut state = SurfaceSourceScannerState::default();
     let mut offset = 0usize;
 
     for (line_index, line) in source.split_inclusive('\n').enumerate() {
-        let line_end = offset + line.len();
-        let content_end = line_end - usize::from(line.ends_with('\n'));
-        let content = &source[offset..content_end];
-        let raw = strip_line_comment(content);
-        let trimmed = raw.trim();
-        let tokens = surface_source_tokens(trimmed);
-        let mut structural_events = Vec::<SourceStructureEvent>::new();
+        let scanned = scan_surface_source_line(line, offset, line_index, &mut state);
+        context.raw.extend(scanned.raw_ranges.iter().copied());
+        context.plain.extend(scanned.plain_ranges.iter().copied());
+        offset += line.len();
+        context.lines.push(scanned.line);
+    }
 
-        if block_stack.last().is_some_and(|entry| {
-            entry.virtual_braces && entry.scope == SourceScope::VisualShapeEntry
-        }) && starts_unbraced_visual_entry(trimmed, &tokens)
-        {
+    context
+}
+
+struct ScannedSurfaceSourceLine {
+    line: SurfaceSourceLine,
+    raw_ranges: Vec<(usize, usize)>,
+    plain_ranges: Vec<(usize, usize)>,
+}
+
+fn scan_surface_source_line(
+    line: &str,
+    offset: usize,
+    line_index: usize,
+    state: &mut SurfaceSourceScannerState,
+) -> ScannedSurfaceSourceLine {
+    let line_end = offset + line.len();
+    let content_end = line_end - usize::from(line.ends_with('\n'));
+    let content = &line[..line.len() - usize::from(line.ends_with('\n'))];
+    let raw = strip_line_comment(content);
+    let trimmed = raw.trim();
+    let tokens = surface_source_tokens(trimmed);
+    let mut structural_events = Vec::<SourceStructureEvent>::new();
+    let mut raw_ranges = Vec::new();
+    let mut plain_ranges = Vec::new();
+
+    if state
+        .block_stack
+        .last()
+        .is_some_and(|entry| entry.virtual_braces && entry.scope == SourceScope::VisualShapeEntry)
+        && starts_unbraced_visual_entry(trimmed, &tokens)
+    {
+        push_close_events(
+            close_virtual_block(&mut state.block_stack),
+            &mut structural_events,
+        );
+    }
+
+    let current = state.block_stack.last().map(|entry| entry.scope);
+    let in_unbraced_visual_shape_body = state.unbraced_visual_shape_body
+        && current == Some(SourceScope::VisualShapeTable)
+        && !trimmed.is_empty()
+        && trimmed != "}";
+
+    if trimmed.is_empty() {
+        push_close_events(
+            close_blank_line(&mut state.block_stack),
+            &mut structural_events,
+        );
+    }
+
+    if !trimmed.is_empty() && trimmed != "}" {
+        match source_line_role(current, trimmed, &tokens, in_unbraced_visual_shape_body) {
+            SourceLineRole::Normal => {}
+            SourceLineRole::Raw => raw_ranges.push((offset, content_end)),
+            SourceLineRole::PlainAssignmentLeft => {
+                add_assignment_left_range(content, offset, 0, &mut plain_ranges);
+            }
+            SourceLineRole::PlainAfterKeywordAssignmentLeft => {
+                let keyword_len = leading_token_len(content).unwrap_or(0);
+                add_assignment_left_range(content, offset, keyword_len, &mut plain_ranges);
+            }
+            SourceLineRole::PlainFirstToken => {
+                add_first_token_range(content, offset, &mut plain_ranges);
+            }
+        }
+    }
+
+    state.unbraced_visual_shape_body =
+        next_unbraced_visual_shape_body(current, trimmed, &tokens, in_unbraced_visual_shape_body);
+
+    let structural_lines = surface_source_stack_lines(
+        trimmed,
+        &mut state.structural_block_stack,
+        &mut state.normalize_levels_brace_depth,
+    );
+    for stack_line in &structural_lines {
+        let tokens = surface_source_tokens(stack_line);
+        let current = state.block_stack.last().map(|entry| entry.scope);
+        if stack_line == "}" {
             push_close_events(
-                close_virtual_block(&mut block_stack),
+                close_block_line(&mut state.block_stack),
                 &mut structural_events,
             );
+        } else if source_opens_block(stack_line, &tokens, current)
+            && let Some(opened) = opening_scope(stack_line, &tokens, current)
+        {
+            let role = source_block_role(stack_line, &tokens, current, opened);
+            let virtual_braces = source_block_uses_virtual_braces(stack_line, current, opened);
+            structural_events.push(SourceStructureEvent::Open {
+                header: structural_header(stack_line),
+                scope: opened,
+                role,
+                virtual_braces,
+            });
+            state.block_stack.push(SourceBlockStackEntry {
+                scope: opened,
+                virtual_braces,
+            });
         }
+    }
 
-        let current = block_stack.last().map(|entry| entry.scope);
-        let in_unbraced_visual_shape_body = unbraced_visual_shape_body
-            && current == Some(SourceScope::VisualShapeTable)
-            && !trimmed.is_empty()
-            && trimmed != "}";
-
-        if trimmed.is_empty() {
-            push_close_events(close_blank_line(&mut block_stack), &mut structural_events);
-        }
-
-        if !trimmed.is_empty() && trimmed != "}" {
-            match source_line_role(current, trimmed, &tokens, in_unbraced_visual_shape_body) {
-                SourceLineRole::Normal => {}
-                SourceLineRole::Raw => context.raw.push((offset, content_end)),
-                SourceLineRole::PlainAssignmentLeft => {
-                    add_assignment_left_range(content, offset, 0, &mut context.plain);
-                }
-                SourceLineRole::PlainAfterKeywordAssignmentLeft => {
-                    let keyword_len = leading_token_len(content).unwrap_or(0);
-                    add_assignment_left_range(content, offset, keyword_len, &mut context.plain);
-                }
-                SourceLineRole::PlainFirstToken => {
-                    add_first_token_range(content, offset, &mut context.plain);
-                }
-            }
-        }
-
-        unbraced_visual_shape_body = next_unbraced_visual_shape_body(
-            current,
-            trimmed,
-            &tokens,
-            in_unbraced_visual_shape_body,
-        );
-
-        let structural_lines = surface_source_stack_lines(
-            trimmed,
-            &mut structural_block_stack,
-            &mut normalize_levels_brace_depth,
-        );
-        for stack_line in &structural_lines {
-            let tokens = surface_source_tokens(&stack_line);
-            let current = block_stack.last().map(|entry| entry.scope);
-            if stack_line == "}" {
-                push_close_events(close_block_line(&mut block_stack), &mut structural_events);
-            } else if source_opens_block(&stack_line, &tokens, current)
-                && let Some(opened) = opening_scope(&stack_line, &tokens, current)
-            {
-                let role = source_block_role(&stack_line, &tokens, current, opened);
-                let virtual_braces = source_block_uses_virtual_braces(&stack_line, current, opened);
-                structural_events.push(SourceStructureEvent::Open {
-                    header: structural_header(stack_line),
-                    scope: opened,
-                    role,
-                    virtual_braces,
-                });
-                block_stack.push(SourceBlockStackEntry {
-                    scope: opened,
-                    virtual_braces,
-                });
-            }
-        }
-
-        context.lines.push(SurfaceSourceLine {
+    ScannedSurfaceSourceLine {
+        line: SurfaceSourceLine {
             tokens: tokens.iter().map(|token| (*token).to_string()).collect(),
             token_spans: source_line_tokens(raw, offset),
             structural_token_spans: surface_source_token_spans(raw, offset),
@@ -760,12 +914,11 @@ pub(crate) fn scan_surface_source(source: &str) -> SurfaceSourceScan {
             start: offset,
             line: line_index + 1,
             content: content.to_string(),
-        });
-
-        offset = line_end;
+            scanner_state_after: state.clone(),
+        },
+        raw_ranges,
+        plain_ranges,
     }
-
-    context
 }
 
 fn surface_source_stack_lines(
@@ -1204,6 +1357,7 @@ fn source_scope_for_name(name: &str) -> Option<SourceScope> {
         "keys" | "inputs" => Some(SourceScope::Keys),
         "resources" => Some(SourceScope::Other),
         "legend" => Some(SourceScope::Legend),
+        "win_conditions" | "lose_conditions" => Some(SourceScope::Condition),
         "render" | "camera" => Some(SourceScope::Other),
         _ => None,
     }
@@ -1279,6 +1433,45 @@ mod tests {
         assert_eq!(split_header_tokens("level first {"), vec!["level", "first"]);
         assert_eq!(split_header_tokens("levels {"), vec!["levels"]);
         assert_eq!(split_header_tokens("{"), vec!["{"]);
+    }
+
+    #[test]
+    fn incremental_surface_scan_reuses_prefix_and_matches_full_scan() {
+        let old = "puzzle board {\n  rules {\n    [ Player ] -> [ Player ]\n  }\n}\n// old\n";
+        let new = "puzzle board {\n  rules {\n    [ Player ] -> [ Player ]\n  }\n}\n// new value\n";
+        let edit_start = old.find("old").expect("edit start");
+        let mut incremental = scan_surface_source(old);
+
+        let rescanned = incremental.apply_edit(old, new, edit_start, edit_start + 3, 9);
+
+        assert_eq!(rescanned, 1);
+        assert_eq!(incremental, scan_surface_source(new));
+    }
+
+    #[test]
+    fn incremental_surface_scan_recomputes_structural_suffix() {
+        let old = "puzzle board {\n  rules {\n  }\n}\nscene menu {\n}\n";
+        let new = "puzzle board {\n  rules\n  }\n}\nscene menu {\n}\n";
+        let edit_start = old.find("rules {").expect("edit start") + "rules".len();
+        let mut incremental = scan_surface_source(old);
+
+        let rescanned = incremental.apply_edit(old, new, edit_start, edit_start + 1, 0);
+
+        assert_eq!(rescanned, 5);
+        assert_eq!(incremental, scan_surface_source(new));
+    }
+
+    #[test]
+    fn incremental_surface_scan_reuses_suffix_after_state_converges() {
+        let old = "puzzle board {\n  // old\n  rules {\n  }\n}\nscene menu {\n}\n";
+        let new = "puzzle board {\n  // longer note\n  rules {\n  }\n}\nscene menu {\n}\n";
+        let edit_start = old.find("old").expect("edit start");
+        let mut incremental = scan_surface_source(old);
+
+        let rescanned = incremental.apply_edit(old, new, edit_start, edit_start + 3, 11);
+
+        assert_eq!(rescanned, 2);
+        assert_eq!(incremental, scan_surface_source(new));
     }
 
     #[test]

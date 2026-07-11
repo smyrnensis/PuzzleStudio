@@ -4875,6 +4875,13 @@ sourceEditor.addEventListener("input", () => {
   invalidateSpriteEditSourceForDocument(activeDocument());
   syncSpriteSourceActionButtons();
 });
+spritePalette.addEventListener("mousedown", (event) => {
+  const button = event.target.closest("button");
+  if (!button || !spritePalette.contains(button)) {
+    return;
+  }
+  event.preventDefault();
+});
 spritePalette.addEventListener("keydown", (event) => {
   const token = event.target.closest(".sprite-token");
   if (!token) {

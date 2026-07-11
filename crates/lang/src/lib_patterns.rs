@@ -3556,11 +3556,6 @@ fn compile_before_after_blocks(
         validate_null_component_has_anchor_cell(before_component, line)?;
         validate_null_cell_rewrite(before_component, after_component, line)?;
     }
-    let occupancy_objects = object_layers
-        .iter()
-        .filter_map(|(object, layer)| (layer.0 > 0).then_some(*object))
-        .collect::<Vec<_>>();
-
     let expanded_blocks = expand_movement_mark_sets(before, after);
     let mut alternatives = Vec::new();
 
@@ -3787,12 +3782,6 @@ fn compile_before_after_blocks(
                                 }
                             }
                             let mut forbid_objects = block_cell_forbid_objects(before_cell);
-                            forbid_objects.extend(implicit_layer_forbids(
-                                &before_objects,
-                                &after_objects,
-                                object_layers,
-                                &occupancy_objects,
-                            ));
                             dedup_objects(&mut forbid_objects);
 
                             component_cells.push(MatchCellTemplate {
@@ -3819,9 +3808,7 @@ fn compile_before_after_blocks(
                             for object in before_objects.iter().filter(|object| {
                                 !after_objects.contains(object)
                                     && !before_object_set_objects.contains(object)
-                                    && !replacements
-                                        .iter()
-                                        .any(|(remove, _)| remove == *object)
+                                    && !replacements.iter().any(|(remove, _)| remove == *object)
                             }) {
                                 writes.push(WriteOpTemplate::Remove {
                                     component: component_index,
@@ -5000,32 +4987,6 @@ fn mark_to_remove_object_set(
         .collect()
 }
 
-fn implicit_layer_forbids(
-    before_objects: &[ObjectId],
-    after_objects: &[ObjectId],
-    object_layers: &HashMap<ObjectId, LayerId>,
-    occupancy_objects: &[ObjectId],
-) -> Vec<ObjectId> {
-    let mut forbids = Vec::new();
-    for after_object in after_objects {
-        if before_objects.contains(after_object) {
-            continue;
-        }
-        let Some(after_layer) = object_layers.get(after_object) else {
-            continue;
-        };
-        forbids.extend(occupancy_objects.iter().filter_map(|object| {
-            let object_layer = object_layers.get(object)?;
-            (object_layer == after_layer
-                && !before_objects.contains(object)
-                && !after_objects.contains(object))
-            .then_some(*object)
-        }));
-    }
-    dedup_objects(&mut forbids);
-    forbids
-}
-
 fn dedup_objects(objects: &mut Vec<ObjectId>) {
     let mut deduped = Vec::with_capacity(objects.len());
     for object in objects.drain(..) {
@@ -5878,7 +5839,8 @@ fn same_cell_occurrence_replacements(
 ) -> Vec<(ObjectId, ObjectId)> {
     let mut replacements = Vec::new();
     for before in before_occurrences {
-        let (Some(key), ResolvedObjectMatch::Object(remove)) = (&before.key, &before.matched) else {
+        let (Some(key), ResolvedObjectMatch::Object(remove)) = (&before.key, &before.matched)
+        else {
             continue;
         };
         for after in after_occurrences {

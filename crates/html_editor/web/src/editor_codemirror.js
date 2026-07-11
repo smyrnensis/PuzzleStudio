@@ -1,5 +1,14 @@
-import { Annotation, Compartment, EditorSelection, EditorState, Transaction } from "@codemirror/state";
 import {
+  Annotation,
+  Compartment,
+  EditorSelection,
+  EditorState,
+  StateEffect,
+  StateField,
+  Transaction,
+} from "@codemirror/state";
+import {
+  Decoration,
   EditorView,
   keymap,
   lineNumbers,
@@ -12,14 +21,169 @@ import {
 } from "@codemirror/commands";
 
 const sourceEditorProgrammatic = Annotation.define();
+// CodeMirror owns physical key arbitration, but the source workflow owns the
+// meaning and state of completion commands. A command returns false unless that
+// workflow explicitly consumes it, preserving the normal CodeMirror key action.
+const sourceCompletionKeymap = [
+  { key: "Ctrl-Space", run: (view) => dispatchSourceCompletionCommand(view, "show") },
+  { key: "ArrowDown", run: (view) => dispatchSourceCompletionCommand(view, "next") },
+  { key: "ArrowUp", run: (view) => dispatchSourceCompletionCommand(view, "previous") },
+  { key: "Tab", run: (view) => dispatchSourceCompletionCommand(view, "commit") },
+  { key: "Enter", run: (view) => dispatchSourceCompletionCommand(view, "commit") },
+  { key: "Escape", run: (view) => dispatchSourceCompletionCommand(view, "close") },
+];
+const sourceHighlightClasses = Object.freeze({
+  keyword: "syntax-keyword",
+  literal: "syntax-literal",
+  binding: "syntax-binding",
+  effect: "syntax-effect",
+  emission: "syntax-emission",
+  object: "syntax-object",
+  input: "syntax-input",
+  state: "syntax-state",
+  group: "syntax-group",
+  mark: "syntax-mark",
+  variant: "syntax-variant",
+  condition: "syntax-condition",
+  scene: "syntax-scene",
+  theme: "syntax-theme",
+  asset: "syntax-asset",
+  color: "syntax-color",
+  number: "syntax-number",
+  string: "syntax-string",
+  comment: "syntax-comment",
+  operator: "syntax-operator",
+  arrow: "syntax-arrow",
+  "brace-depth-0": "syntax-brace-depth-0",
+  "brace-depth-1": "syntax-brace-depth-1",
+  "brace-depth-2": "syntax-brace-depth-2",
+  "brace-depth-3": "syntax-brace-depth-3",
+  "brace-depth-4": "syntax-brace-depth-4",
+  "brace-depth-5": "syntax-brace-depth-5",
+  "brace-invalid": "syntax-brace-invalid",
+  "level-cell": "syntax-level-cell",
+  "level-cell-invalid": "syntax-level-cell-invalid",
+  "sprite-pixel": "syntax-sprite-pixel",
+});
+const replaceSourceHighlightRange = StateEffect.define();
+const clearSourceHighlightDecorations = StateEffect.define();
+const sourceHighlightDecorations = StateField.define({
+  create() {
+    return Decoration.none;
+  },
+  update(decorations, transaction) {
+    let next = decorations.map(transaction.changes);
+    for (const effect of transaction.effects) {
+      if (effect.is(replaceSourceHighlightRange)) {
+        const replacement = effect.value;
+        next = Decoration.set(replacement.decorations, true);
+      } else if (effect.is(clearSourceHighlightDecorations)) {
+        next = Decoration.none;
+      }
+    }
+    return next;
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
 
 function clampOffset(view, value) {
   const offset = Number.isFinite(Number(value)) ? Math.trunc(Number(value)) : 0;
   return Math.max(0, Math.min(view.state.doc.length, offset));
 }
 
+function dispatchSourceCompletionCommand(view, command) {
+  const event = new CustomEvent("sourcecompletioncommand", {
+    bubbles: true,
+    cancelable: true,
+    detail: { command },
+  });
+  view.contentDOM.dispatchEvent(event);
+  return event.defaultPrevented;
+}
+
 function selectionDirection(selection) {
   return selection.main.anchor > selection.main.head ? "backward" : "forward";
+}
+
+function sourceOffsetMaps(source) {
+  const utf16ByUtf8 = new Map([[0, 0]]);
+  const utf8ByUtf16 = new Map([[0, 0]]);
+  let byteOffset = 0;
+  for (let utf16Offset = 0; utf16Offset < source.length;) {
+    const codePoint = source.codePointAt(utf16Offset);
+    const utf16Length = codePoint > 0xffff ? 2 : 1;
+    const utf8Length = codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
+    byteOffset += utf8Length;
+    utf16Offset += utf16Length;
+    utf16ByUtf8.set(byteOffset, utf16Offset);
+    utf8ByUtf16.set(utf16Offset, byteOffset);
+  }
+  return { utf16ByUtf8, utf8ByUtf16, byteLength: byteOffset };
+}
+
+function highlightDecorations(source, request, payload) {
+  if (payload?.version !== 3 || payload?.offsetEncoding !== "utf8" || !Array.isArray(payload?.spans)) {
+    throw new Error("Unsupported Rust source highlight span contract.");
+  }
+  const offsets = sourceOffsetMaps(source);
+  const expectedStart = offsets.utf8ByUtf16.get(request.from);
+  const expectedEnd = offsets.utf8ByUtf16.get(request.to);
+  if (
+    payload.sourceLength !== offsets.byteLength
+    || payload?.range?.start !== expectedStart
+    || payload?.range?.end !== expectedEnd
+  ) {
+    throw new Error("Rust source highlight range does not match the active CodeMirror viewport.");
+  }
+  const decorations = [];
+  const validatedColors = new Set();
+  let previousEnd = 0;
+  for (const span of payload.spans) {
+    const byteStart = Number(span?.start);
+    const byteEnd = Number(span?.end);
+    const className = sourceHighlightClasses[String(span?.kind || "")];
+    const from = offsets.utf16ByUtf8.get(byteStart);
+    const to = offsets.utf16ByUtf8.get(byteEnd);
+    if (
+      !Number.isInteger(byteStart)
+      || !Number.isInteger(byteEnd)
+      || byteStart < previousEnd
+      || byteStart >= byteEnd
+      || byteEnd <= expectedStart
+      || byteStart >= expectedEnd
+      || from === undefined
+      || to === undefined
+      || !className
+    ) {
+      throw new Error("Rust source highlight spans are invalid for the active CodeMirror document.");
+    }
+    let decorationClass = className;
+    const spec = {};
+    if (span.transparent === true) {
+      if (span.kind !== "sprite-pixel") {
+        throw new Error("Only sprite-pixel highlights may be transparent.");
+      }
+      decorationClass += " is-transparent";
+    }
+    spec.class = decorationClass;
+    if (span.color !== null && span.color !== undefined) {
+      const color = String(span.color);
+      if (
+        (span.kind !== "color" && span.kind !== "sprite-pixel")
+        || (!validatedColors.has(color) && !CSS.supports("color", color))
+      ) {
+        throw new Error("Rust source highlight color is invalid.");
+      }
+      validatedColors.add(color);
+      const property = span.kind === "sprite-pixel"
+        ? "--syntax-sprite-pixel-color"
+        : "--syntax-color-token";
+      spec.attributes = { style: `${property}: ${color}` };
+    }
+    decorations.push(Decoration.mark(spec).range(from, to));
+    previousEnd = byteEnd;
+  }
+  return decorations;
 }
 
 function createState(text, readOnlyCompartment, readOnly, inputListeners) {
@@ -28,8 +192,9 @@ function createState(text, readOnlyCompartment, readOnly, inputListeners) {
     extensions: [
       lineNumbers(),
       history(),
+      sourceHighlightDecorations,
       EditorView.lineWrapping,
-      keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap]),
+      keymap.of([...sourceCompletionKeymap, indentWithTab, ...defaultKeymap, ...historyKeymap]),
       EditorView.contentAttributes.of({
         "aria-label": "Puzzle source",
         "aria-multiline": "true",
@@ -39,11 +204,21 @@ function createState(text, readOnlyCompartment, readOnly, inputListeners) {
       }),
       readOnlyCompartment.of(EditorState.readOnly.of(Boolean(readOnly))),
       EditorView.updateListener.of((update) => {
+        if (update.viewportChanged && !update.docChanged) {
+          queueMicrotask(() => update.view.contentDOM.dispatchEvent(new Event("sourceviewportchange")));
+        }
         if (!update.docChanged || update.transactions.some((transaction) => transaction.annotation(sourceEditorProgrammatic))) {
           return;
         }
+        const changes = [];
+        update.changes.iterChanges((from, to, _fromAfter, _toAfter, inserted) => {
+          changes.push({ from, to, insert: inserted.toString() });
+        });
         queueMicrotask(() => {
-          const event = new Event("input", { bubbles: true });
+          const event = new CustomEvent("input", {
+            bubbles: true,
+            detail: { changes },
+          });
           for (const listener of inputListeners) {
             if (typeof listener === "function") {
               listener.call(update.view.contentDOM, event);
@@ -94,9 +269,33 @@ export function createSourceEditor(parent) {
       const anchor = clampOffset(view, selection.anchor);
       const head = clampOffset(view, selection.head ?? selection.anchor);
       view.dispatch({ selection: EditorSelection.single(anchor, head) });
+      content.dispatchEvent(new CustomEvent("sourceanalysisreset", { detail: { source: next } }));
     },
-    scrollIntoView(offset) {
-      view.dispatch({ effects: EditorView.scrollIntoView(clampOffset(view, offset), { y: "nearest", x: "nearest" }) });
+    highlightViewportRange(overscanLines = 80) {
+      const startLine = view.state.doc.lineAt(view.viewport.from).number;
+      const endLine = view.state.doc.lineAt(view.viewport.to).number;
+      const from = view.state.doc.line(Math.max(1, startLine - overscanLines)).from;
+      const to = view.state.doc.line(Math.min(view.state.doc.lines, endLine + overscanLines)).to;
+      return { from, to };
+    },
+    applyHighlightRange(source, request, payload) {
+      const expected = String(source || "");
+      if (expected !== view.state.doc.toString()) {
+        throw new Error("Cannot apply stale source highlighting to CodeMirror.");
+      }
+      view.dispatch({
+        effects: replaceSourceHighlightRange.of({
+          from: request.from,
+          to: request.to,
+          decorations: highlightDecorations(expected, request, payload),
+        }),
+      });
+    },
+    clearHighlights() {
+      view.dispatch({ effects: clearSourceHighlightDecorations.of(null) });
+    },
+    scrollIntoView(offset, alignment = "nearest") {
+      view.dispatch({ effects: EditorView.scrollIntoView(clampOffset(view, offset), { y: alignment, x: "nearest" }) });
     },
     coordsAtOffset(offset) {
       return view.coordsAtPos(clampOffset(view, offset));
@@ -193,6 +392,12 @@ export function createSourceEditor(parent) {
       selection,
       annotations: [sourceEditorProgrammatic.of(true), Transaction.userEvent.of("input")],
     });
+    content.dispatchEvent(new CustomEvent("sourceanalysisedit", {
+      detail: {
+        changes: [{ from, to, insert }],
+        source: view.state.doc.toString(),
+      },
+    }));
   };
   content.addEventListener = (type, listener, options) => {
     if (type === "input") {

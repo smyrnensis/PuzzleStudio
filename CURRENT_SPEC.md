@@ -1071,6 +1071,6 @@ all <selector> on <selector>
 some <selector> on <selector>
 ```
 
-Canonical な意味モデルでは `exists(matcher)` / `none(matcher)` / `count(matcher)` を使う。`some Goal` は `exists(Goal)`、`no <pattern>` は `none(<pattern>)` へ lower される。`all Goal on Box` は same-cell coverage の判定を保つ独立した意味形であり、solver は量化対象の Goal を起点、Box を cover とする距離 strategy をこの形からだけ生成する。一般の `none` / `no` pattern 条件から空間 strategy は推測しない。
+Canonical な勝利条件モデルでは `exists(matcher)` / `none(matcher)` / `count(matcher)` を使う。`some Goal` は `exists(Goal)`、`no <pattern>` は `none(<pattern>)` へ lower される。`all Goal on Box` の勝利判定も generic な same-cell coverage 条件へ lower されるが、language processing は lowering 前の明示構文から Goal を起点、Box を cover とする solver strategy を別契約として生成する。一般の `none` / `no` pattern 条件から空間 strategy は推測しない。
 
 `all <selector> on <selector>` は same-cell coverage sugar であり、右辺に oriented pattern を取らない。方向つきの spatial relation は condition pattern が所有するため、`exists(<orientation> [ ... ])` / `none(<orientation> [ ... ])` または `some <orientation> [ ... ]` / `no <orientation> [ ... ]` で表す。3D の vertical support goal なら `exists(Goal)` と `none(down [ no Box | Goal ])` の組み合わせが canonical で、`all Goal on down [ Box | Goal ]` は受け入れない。

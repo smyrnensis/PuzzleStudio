@@ -675,6 +675,23 @@ pub fn export_editor_preview_html_from_source(
     )
 }
 
+pub fn export_solver_rules_json_from_source(
+    source: &str,
+    puzzle_path: &str,
+) -> Result<String, DiagnosticReport> {
+    let document = puzzle_lang::parse_game_for_path(source, puzzle_path)?;
+    if matches!(document.single_model(), Some(LoadedDocumentModel::Puzzle3d { .. })) {
+        return Err(DiagnosticReport::error(
+            "prepared solver rules currently require a 2D puzzle".to_string(),
+        ));
+    }
+    let loaded = loaded_document_scene_host_loaded_game(&document)
+        .map_err(DiagnosticReport::error)?;
+    let mut out = String::new();
+    push_editor_solver_rules(&mut out, &loaded);
+    Ok(out)
+}
+
 fn export_html_from_source_with_host_mode(
     source: &str,
     puzzle_path: &str,

@@ -968,6 +968,10 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   background: var(--tree-hover-bg);
 }
 
+.tree-row[data-drag-id] {
+  cursor: grab;
+}
+
 .document-list.is-drop-target,
 .tree-row.is-drop-target {
   background: rgba(39, 107, 143, 0.22);
@@ -976,6 +980,7 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 }
 
 .tree-row.is-dragging {
+  cursor: grabbing;
   opacity: 0.45;
 }
 
@@ -2283,6 +2288,10 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   transform-origin: top left;
 }
 
+.play-preview.is-preview-unloaded .preview-frame {
+  visibility: hidden;
+}
+
 .preview-log-splitter {
   min-height: 6px;
   margin: 0 12px;
@@ -2672,12 +2681,12 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   fill: none;
 }
 
-.source-preview-toggle-button .source-preview-stop-icon,
+.source-preview-toggle-button .source-preview-refresh-icon,
 .source-preview-toggle-button.is-running .source-preview-play-icon {
   display: none;
 }
 
-.source-preview-toggle-button.is-running .source-preview-stop-icon {
+.source-preview-toggle-button.is-running .source-preview-refresh-icon {
   display: block;
 }
 
@@ -2899,7 +2908,7 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 .solver-level-select {
   width: 100%;
   height: 26px;
-  padding: 0 18px 0 25px;
+  padding: 0 18px 0 6px;
   border: 1px solid transparent;
   border-radius: 4px;
   background: transparent;
@@ -2919,22 +2928,6 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 .solver-level-select:disabled {
   color: var(--muted);
   opacity: 0.75;
-}
-
-.solver-load-icon {
-  width: 14px;
-  height: 14px;
-  position: absolute;
-  z-index: 1;
-  top: 6px;
-  left: 6px;
-  color: var(--muted);
-  pointer-events: none;
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 2;
 }
 
 .level-solve-status {

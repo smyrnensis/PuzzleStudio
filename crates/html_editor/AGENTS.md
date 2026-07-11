@@ -70,3 +70,23 @@ Highlighting should use the Rust host/server path. If highlighting is
 unavailable, show plain escaped text and surface the reason visibly enough for
 debugging. Do not fall back to a second highlighter path such as WASM or a
 JavaScript `.puzzle` grammar.
+
+### Source Editor And CodeMirror
+
+CodeMirror owns the generic editing mechanism: the text buffer, selection,
+history, viewport, generic editing commands, and arbitration of physical key
+bindings. It must not own PuzzleStudio completion policy, inspect completion
+items, decide whether a source context is completable, or trigger save, preview,
+highlight, and level-builder side effects.
+
+`static/editor_source.js` owns the source-editing workflow above that mechanism:
+completion eligibility, request and popup state, candidate selection, commit
+validation and replacement, and all editor workflow effects after a commit.
+
+The CodeMirror adapter may translate a physical key into a semantic source
+editor command such as `show`, `next`, `previous`, `commit`, or `close`. The
+source workflow must explicitly consume that command before CodeMirror suppresses
+its normal behavior. When the workflow does not consume it, CodeMirror must keep
+the ordinary meaning of the key, including Tab indentation and Enter newline.
+Do not duplicate completion state or PuzzleStudio syntax knowledge in the
+CodeMirror adapter.

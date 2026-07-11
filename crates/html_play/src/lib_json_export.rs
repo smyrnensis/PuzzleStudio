@@ -156,6 +156,31 @@ fn push_runtime_export_data(out: &mut String, state: &ServerState) {
     out.push('}');
 }
 
+fn push_editor_solver_rules(out: &mut String, loaded: &LoadedGame) {
+    out.push('{');
+    push_json_number(out, "version", 1);
+    out.push(',');
+    push_json_pair(out, "modelKind", "2d");
+    out.push(',');
+    push_compiled_play_bundle(out, loaded);
+    out.push(',');
+    push_json_bool(
+        out,
+        "runRulesOnLevelStart",
+        loaded.run_rules_on_level_start,
+    );
+    out.push(',');
+    push_export_goal(out, "goal", loaded.goal.as_ref());
+    out.push(',');
+    push_export_goal(out, "lose", loaded.lose.as_ref());
+    out.push_str(",\"solverStrategy\":");
+    out.push_str(
+        &serde_json::to_string(&loaded.solver_strategy)
+            .expect("solver strategy serialization must succeed"),
+    );
+    out.push('}');
+}
+
 fn push_export_boot_data(
     out: &mut String,
     state: &ServerState,
@@ -797,7 +822,12 @@ fn push_runtime_loaded_game_bundle(out: &mut String, loaded: &LoadedGame) {
 }
 
 fn runtime_loaded_game_json(loaded: &LoadedGame) -> Result<String, serde_json::Error> {
-    serde_json::to_string(loaded)
+    let mut value = serde_json::to_value(loaded)?;
+    value
+        .as_object_mut()
+        .expect("LoadedGame must serialize as an object")
+        .remove("solver_strategy");
+    serde_json::to_string(&value)
 }
 
 fn push_compact_objects(out: &mut String, loaded: &LoadedGame) {
@@ -2091,13 +2121,6 @@ fn push_goal_value(out: &mut String, value: &GoalValue) {
             push_json_pair(out, "kind", "condition_value");
             out.push(',');
             push_condition_value_kind(out, kind);
-        }
-        GoalValue::AllObjectsOn { subjects, covers } => {
-            push_json_pair(out, "kind", "all_objects_on");
-            out.push(',');
-            push_object_ids(out, "subjects", subjects);
-            out.push(',');
-            push_object_ids(out, "covers", covers);
         }
     }
     out.push('}');

@@ -1,17 +1,22 @@
+use crate::catalog::Catalog;
 use crate::completion::{
     CompletionList, completion_context_requires_symbols, completion_list_from_context,
     completion_list_json,
 };
-use crate::highlight::{HighlightedSourceWithOutline, highlight_source_with_document};
+use crate::highlight::{
+    HighlightedSource, HighlightedSourceWithOutline, highlight_source_range_with_document,
+    highlight_source_with_document,
+};
 use crate::level_editor_source::{
     level_editor_level_slots, level_editor_manifest_json, level_editor_sprite_payload_json,
 };
+use crate::source::SurfaceSourceScan;
 use crate::source_outline::{SourceOutlineItem, source_outline_from_document};
 use crate::source_target::{
     SourceTarget, resolve_source_entries_from_document, resolve_source_target_from_entries,
     source_entries_json_from_entries, source_target_json,
 };
-use crate::surface::{SurfaceCompletionSymbols, SurfaceDocument};
+use crate::surface::SurfaceDocument;
 use crate::surface_completion::surface_completion_context_for_document;
 use std::cell::OnceCell;
 use std::fmt;
@@ -24,13 +29,26 @@ use std::fmt;
 /// independent documents per query.
 pub struct SourceAnalysis {
     source: String,
-    structure_document: OnceCell<SurfaceDocument>,
-    highlight_document: OnceCell<SurfaceDocument>,
-    source_target_document: OnceCell<SurfaceDocument>,
-    completion_symbols: OnceCell<SurfaceCompletionSymbols>,
+    source_scan: OnceCell<SurfaceSourceScan>,
+    parser_catalog: OnceCell<Option<Catalog>>,
+    document: OnceCell<SurfaceDocument>,
+    highlighted_source: OnceCell<HighlightedSource>,
     entries: OnceCell<Vec<SourceTarget>>,
     outline: OnceCell<Vec<SourceOutlineItem>>,
     level_editor_integration: OnceCell<Result<crate::LevelEditorIntegration, String>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SourceAnalysisEdit {
+    pub start: usize,
+    pub end: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SourceAnalysisEditResult {
+    pub rescanned_lines: usize,
+    pub total_lines: usize,
+    pub parser_catalog_reused: bool,
 }
 
 impl Clone for SourceAnalysis {
@@ -55,10 +73,10 @@ impl SourceAnalysis {
     pub fn new(source: &str) -> Self {
         Self {
             source: source.to_string(),
-            structure_document: OnceCell::new(),
-            highlight_document: OnceCell::new(),
-            source_target_document: OnceCell::new(),
-            completion_symbols: OnceCell::new(),
+            source_scan: OnceCell::new(),
+            parser_catalog: OnceCell::new(),
+            document: OnceCell::new(),
+            highlighted_source: OnceCell::new(),
             entries: OnceCell::new(),
             outline: OnceCell::new(),
             level_editor_integration: OnceCell::new(),
@@ -70,38 +88,38 @@ impl SourceAnalysis {
         &self.source
     }
 
-    fn structure_document(&self) -> &SurfaceDocument {
-        self.structure_document
-            .get_or_init(|| crate::parse_surface_completion_context_document(&self.source))
+    fn source_scan(&self) -> &SurfaceSourceScan {
+        self.source_scan
+            .get_or_init(|| crate::source::scan_surface_source(&self.source))
     }
 
-    fn highlight_document(&self) -> &SurfaceDocument {
-        self.highlight_document
-            .get_or_init(|| crate::parse_surface_document(&self.source))
-    }
-
-    fn source_target_document(&self) -> &SurfaceDocument {
-        self.source_target_document
-            .get_or_init(|| crate::parse_surface_source_target_document(&self.source))
-    }
-
-    fn completion_symbols(&self) -> &SurfaceCompletionSymbols {
-        self.completion_symbols.get_or_init(|| {
-            crate::parse_surface_completion_symbols_document(&self.source).completion_symbols
+    fn document(&self) -> &SurfaceDocument {
+        self.document.get_or_init(|| {
+            let parser_catalog = self
+                .parser_catalog
+                .get_or_init(|| crate::parser_surface_catalog(&self.source));
+            crate::build_surface_document_from_source_scan(
+                &self.source,
+                self.source_scan(),
+                parser_catalog.as_ref(),
+            )
         })
+    }
+
+    fn highlighted_source(&self) -> &HighlightedSource {
+        self.highlighted_source
+            .get_or_init(|| highlight_source_with_document(&self.source, self.document()))
     }
 
     fn entries(&self) -> &[SourceTarget] {
         self.entries
-            .get_or_init(|| {
-                resolve_source_entries_from_document(&self.source, self.source_target_document())
-            })
+            .get_or_init(|| resolve_source_entries_from_document(&self.source, self.document()))
             .as_slice()
     }
 
     fn outline(&self) -> &[SourceOutlineItem] {
         self.outline
-            .get_or_init(|| source_outline_from_document(self.structure_document()))
+            .get_or_init(|| source_outline_from_document(self.document()))
             .as_slice()
     }
 
@@ -118,22 +136,19 @@ impl SourceAnalysis {
     /// Produces highlighting and outline from this analysis document.
     pub fn highlighted(&self) -> HighlightedSourceWithOutline {
         HighlightedSourceWithOutline {
-            highlighted: highlight_source_with_document(&self.source, self.highlight_document()),
+            highlighted: self.highlighted_source().clone(),
             outline: self.outline().to_vec(),
         }
     }
 
     /// Produces completions from this analysis document.
     pub fn completion_list(&self, cursor_offset: usize) -> CompletionList {
-        let context = surface_completion_context_for_document(
-            &self.source,
-            cursor_offset,
-            self.structure_document(),
-        );
+        let context =
+            surface_completion_context_for_document(&self.source, cursor_offset, self.document());
         let symbols = if completion_context_requires_symbols(&context) {
-            self.completion_symbols().clone()
+            self.document().completion_symbols.clone()
         } else {
-            SurfaceCompletionSymbols::default()
+            Default::default()
         };
         completion_list_from_context(&self.source, cursor_offset, context, symbols)
     }
@@ -142,10 +157,58 @@ impl SourceAnalysis {
     pub fn resolve_target(&self, cursor_offset: usize) -> Option<SourceTarget> {
         resolve_source_target_from_entries(
             &self.source,
-            self.source_target_document(),
+            self.document(),
             self.entries(),
             cursor_offset.min(self.source.len()),
         )
+    }
+
+    /// Applies one UTF-8 source edit while preserving this document session.
+    pub fn apply_edit(
+        &mut self,
+        edit: SourceAnalysisEdit,
+        insert: &str,
+    ) -> Result<SourceAnalysisEditResult, String> {
+        if edit.start > edit.end
+            || edit.end > self.source.len()
+            || !self.source.is_char_boundary(edit.start)
+            || !self.source.is_char_boundary(edit.end)
+        {
+            return Err("source analysis edit range is not a valid UTF-8 boundary".to_string());
+        }
+
+        let old_source = self.source.clone();
+        let parser_catalog_reused =
+            comment_only_source_edit(&old_source, edit.start, edit.end, insert);
+        self.source_scan();
+        self.source.replace_range(edit.start..edit.end, insert);
+        let scan = self
+            .source_scan
+            .get_mut()
+            .expect("source scan initialized before edit");
+        let rescanned_lines = scan.apply_edit(
+            &old_source,
+            &self.source,
+            edit.start,
+            edit.end,
+            insert.len(),
+        );
+        let total_lines = scan.line_count();
+
+        self.document.take();
+        self.highlighted_source.take();
+        self.entries.take();
+        self.outline.take();
+        self.level_editor_integration.take();
+        if !parser_catalog_reused {
+            self.parser_catalog.take();
+        }
+
+        Ok(SourceAnalysisEditResult {
+            rescanned_lines,
+            total_lines,
+            parser_catalog_reused,
+        })
     }
 
     /// Emits the shared editor analysis JSON for this exact source snapshot.
@@ -155,7 +218,38 @@ impl SourceAnalysis {
 
     /// Emits highlight JSON from this analysis document.
     pub fn highlight_json(&self, include_outline: bool) -> String {
-        highlighted_source_json(&self.highlighted(), include_outline)
+        self.highlight_range_json(0, self.source.len(), include_outline)
+    }
+
+    /// Emits highlight JSON for spans intersecting one UTF-8 byte range.
+    pub fn highlight_range_json(
+        &self,
+        range_start: usize,
+        range_end: usize,
+        include_outline: bool,
+    ) -> String {
+        let start = range_start.min(self.source.len());
+        let end = range_end.max(start).min(self.source.len());
+        assert!(self.source.is_char_boundary(start));
+        assert!(self.source.is_char_boundary(end));
+        if start == 0 && end == self.source.len() {
+            return highlighted_source_json(
+                self.source.len(),
+                self.highlighted_source(),
+                start,
+                end,
+                include_outline.then(|| self.outline()),
+            );
+        }
+        let highlighted =
+            highlight_source_range_with_document(&self.source, self.document(), start, end);
+        highlighted_source_json(
+            self.source.len(),
+            &highlighted,
+            start,
+            end,
+            include_outline.then(|| self.outline()),
+        )
     }
 
     /// Emits source outline JSON from the cached structure document.
@@ -172,6 +266,14 @@ impl SourceAnalysis {
     pub fn target_json(&self, cursor_offset: usize) -> String {
         let target = self.resolve_target(cursor_offset);
         source_target_json(target.as_ref())
+    }
+
+    pub fn import_reference_at(
+        &self,
+        document_path: &str,
+        cursor_offset: usize,
+    ) -> Option<crate::SourceImportReference> {
+        crate::source_import::source_import_reference_at(&self.source, document_path, cursor_offset)
     }
 
     /// Emits source entries JSON from the entries captured by this analysis.
@@ -203,6 +305,26 @@ impl SourceAnalysis {
     }
 }
 
+fn comment_only_source_edit(source: &str, start: usize, end: usize, insert: &str) -> bool {
+    if insert.contains(['\n', '\r']) || source[start..end].contains(['\n', '\r']) {
+        return false;
+    }
+    let line_start = source[..start].rfind('\n').map_or(0, |index| index + 1);
+    let line_end = source[end..]
+        .find('\n')
+        .map_or(source.len(), |offset| end + offset);
+    let old_line = &source[line_start..line_end];
+    let relative_start = start - line_start;
+    let relative_end = end - line_start;
+    let old_code = crate::source::strip_line_comment(old_line);
+    if old_code.len() == old_line.len() || relative_start < old_code.len() + 2 {
+        return false;
+    }
+    let mut new_line = old_line.to_string();
+    new_line.replace_range(relative_start..relative_end, insert);
+    crate::source::strip_line_comment(&new_line) == old_code
+}
+
 /// Builds a parser-owned source analysis for one exact source snapshot.
 pub fn analyze_source(source: &str) -> SourceAnalysis {
     SourceAnalysis::new(source)
@@ -215,7 +337,7 @@ pub fn analyze_source_json(source: &str) -> String {
 
 fn source_analysis_json(analysis: &SourceAnalysis) -> String {
     let highlighted = analysis.highlighted();
-    let mut out = String::from("{\"version\":1");
+    let mut out = String::from("{\"version\":2");
     out.push_str(",\"sourceLength\":");
     out.push_str(&analysis.source.len().to_string());
     out.push_str(",\"highlight\":");
@@ -246,21 +368,33 @@ fn source_outline_items_json(items: &[SourceOutlineItem]) -> String {
 }
 
 fn highlighted_source_json(
-    highlighted: &HighlightedSourceWithOutline,
-    include_outline: bool,
+    source_length: usize,
+    highlighted: &HighlightedSource,
+    range_start: usize,
+    range_end: usize,
+    outline: Option<&[SourceOutlineItem]>,
 ) -> String {
-    let mut out = String::from("{");
-    out.push_str("\"parsed\":");
-    out.push_str(if highlighted.highlighted.parsed {
-        "true"
-    } else {
-        "false"
-    });
+    let mut out = String::from("{\"version\":3,\"offsetEncoding\":\"utf8\",");
+    out.push_str("\"sourceLength\":");
+    out.push_str(&source_length.to_string());
+    out.push_str(",\"range\":{");
+    push_json_number(&mut out, "start", range_start);
     out.push(',');
-    push_json_string(&mut out, "html", &highlighted.highlighted.html);
-    if include_outline {
+    push_json_number(&mut out, "end", range_end);
+    out.push_str("},");
+    out.push_str("\"parsed\":");
+    out.push_str(if highlighted.parsed { "true" } else { "false" });
+    out.push_str(",\"spans\":");
+    push_highlight_spans_json(
+        &mut out,
+        highlighted
+            .spans
+            .iter()
+            .filter(|span| span.end > range_start && span.start < range_end),
+    );
+    if let Some(outline) = outline {
         out.push_str(",\"outline\":{\"items\":[");
-        for (index, item) in highlighted.outline.iter().enumerate() {
+        for (index, item) in outline.iter().enumerate() {
             if index > 0 {
                 out.push(',');
             }
@@ -274,11 +408,39 @@ fn highlighted_source_json(
 
 fn push_highlight_json_value(out: &mut String, highlighted: &crate::HighlightedSource) {
     out.push('{');
+    out.push_str("\"offsetEncoding\":\"utf8\",");
     out.push_str("\"parsed\":");
     out.push_str(if highlighted.parsed { "true" } else { "false" });
-    out.push(',');
-    push_json_string(out, "html", &highlighted.html);
+    out.push_str(",\"spans\":");
+    push_highlight_spans_json(out, &highlighted.spans);
     out.push('}');
+}
+
+fn push_highlight_spans_json<'a>(
+    out: &mut String,
+    spans: impl IntoIterator<Item = &'a crate::SourceHighlightSpan>,
+) {
+    out.push('[');
+    for (index, span) in spans.into_iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push('{');
+        push_json_number(out, "start", span.start);
+        out.push(',');
+        push_json_number(out, "end", span.end);
+        out.push(',');
+        push_json_string(out, "kind", span.kind.as_str());
+        out.push_str(",\"color\":");
+        match &span.color {
+            Some(color) => push_json_string_value(out, color),
+            None => out.push_str("null"),
+        }
+        out.push(',');
+        push_json_bool(out, "transparent", span.transparent);
+        out.push('}');
+    }
+    out.push(']');
 }
 
 fn push_entries_json_value(out: &mut String, entries: &[SourceTarget]) {
@@ -325,6 +487,12 @@ fn push_json_number(out: &mut String, key: &str, value: usize) {
     out.push_str(&value.to_string());
 }
 
+fn push_json_bool(out: &mut String, key: &str, value: bool) {
+    push_json_string_value(out, key);
+    out.push(':');
+    out.push_str(if value { "true" } else { "false" });
+}
+
 fn push_json_string_value(out: &mut String, value: &str) {
     out.push('"');
     for ch in value.chars() {
@@ -346,7 +514,7 @@ fn push_json_string_value(out: &mut String, value: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::analyze_source;
+    use super::{SourceAnalysisEdit, analyze_source};
     use crate::SourceTargetKind;
 
     #[test]
@@ -389,11 +557,33 @@ mod tests {
         let source = "puzzle Demo {\n  level Start {\n    .\n  }\n}\n";
         let analysis = analyze_source(source);
         let json = analysis.analysis_json();
-        assert!(json.contains("\"version\":1"));
+        assert!(json.contains("\"version\":2"));
         assert!(json.contains("\"highlight\":"));
+        assert!(json.contains("\"offsetEncoding\":\"utf8\""));
+        assert!(json.contains("\"spans\":["));
+        assert!(!json.contains("\"html\""));
         assert!(json.contains("\"outline\":{\"items\":["));
         assert!(json.contains("\"entries\":["));
         assert!(json.contains("\"kind\":\"level\""));
+    }
+
+    #[test]
+    fn highlight_range_json_returns_only_intersecting_normalized_spans() {
+        let source = "title = \"Demo\"\n// visible\nauthor = \"Elsewhere\"\n";
+        let range_start = source.find("// visible").expect("range start");
+        let range_end = range_start + "// visible".len();
+        let json = analyze_source(source).highlight_range_json(range_start, range_end, false);
+
+        assert!(json.contains("\"version\":3"));
+        assert!(json.contains(&format!(
+            "\"sourceLength\":{},\"range\":{{\"start\":{},\"end\":{}}}",
+            source.len(),
+            range_start,
+            range_end
+        )));
+        assert!(json.contains("\"kind\":\"comment\""));
+        assert!(!json.contains("\"kind\":\"string\""));
+        assert!(!json.contains("\"outline\""));
     }
 
     #[test]
@@ -525,5 +715,75 @@ B
         assert!(!new_body.contains("parse_surface_document"));
         assert!(!new_body.contains("resolve_source_entries_from_document"));
         assert!(!new_body.contains("source_outline_from_document"));
+    }
+
+    #[test]
+    fn source_analysis_comment_edit_rescans_only_the_changed_suffix_line() {
+        let source = "puzzle board {\n  rules {\n  }\n}\n// note\n";
+        let mut analysis = analyze_source(source);
+        let _ = analysis.highlight_json(true);
+        let insert_at = source.find("note").expect("comment") + "note".len();
+
+        let result = analysis
+            .apply_edit(
+                SourceAnalysisEdit {
+                    start: insert_at,
+                    end: insert_at,
+                },
+                "😀",
+            )
+            .expect("incremental edit");
+
+        assert_eq!(result.rescanned_lines, 1);
+        assert!(result.total_lines > result.rescanned_lines);
+        assert!(result.parser_catalog_reused);
+        let mut expected = source.to_string();
+        expected.insert_str(insert_at, "😀");
+        assert_eq!(analysis.source(), expected);
+        assert_eq!(
+            analysis.highlight_json(true),
+            analyze_source(&expected).highlight_json(true)
+        );
+    }
+
+    #[test]
+    fn source_analysis_structural_edit_invalidates_the_dependent_suffix() {
+        let source = "puzzle board {\n  rules {\n  }\n}\nscene menu {\n}\n";
+        let mut analysis = analyze_source(source);
+        let _ = analysis.analysis_json();
+        let brace = source.find("rules {").expect("rules") + "rules ".len();
+
+        let result = analysis
+            .apply_edit(
+                SourceAnalysisEdit {
+                    start: brace,
+                    end: brace + 1,
+                },
+                "",
+            )
+            .expect("structural edit");
+
+        assert!(!result.parser_catalog_reused);
+        assert_eq!(result.rescanned_lines, 3);
+        assert!(result.rescanned_lines < result.total_lines);
+        let expected = source.replacen("rules {", "rules ", 1);
+        assert_eq!(
+            analysis.analysis_json(),
+            analyze_source(&expected).analysis_json()
+        );
+    }
+
+    #[test]
+    fn source_analysis_owns_one_shared_surface_document() {
+        let implementation = include_str!("source_analysis.rs");
+        let production = implementation
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production source");
+
+        assert_eq!(production.matches("OnceCell<SurfaceDocument>").count(), 1);
+        assert!(!production.contains("parse_surface_completion_context_document"));
+        assert!(!production.contains("parse_surface_source_target_document"));
+        assert!(!production.contains("parse_surface_completion_symbols_document"));
     }
 }

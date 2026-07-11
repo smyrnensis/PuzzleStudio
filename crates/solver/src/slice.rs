@@ -104,11 +104,26 @@ impl SolverSlice {
                 })
             }
             RuleStep::AfterTriggered { steps, then_steps } => {
-                let then_steps = self.filter_program(then_steps);
-                (!then_steps.is_empty()).then(|| RuleStep::AfterTriggered {
-                    steps: steps.clone(),
-                    then_steps,
-                })
+                let filtered_steps = self.filter_program(steps);
+                let filtered_then_steps = self.filter_program(then_steps);
+                if !filtered_then_steps.is_empty() {
+                    // The complete trigger program determines whether the relevant
+                    // continuation runs; pruning it would change that predicate.
+                    Some(RuleStep::AfterTriggered {
+                        steps: steps.clone(),
+                        then_steps: filtered_then_steps,
+                    })
+                } else if !filtered_steps.is_empty() {
+                    // The trigger itself can contain relevant writes even when its
+                    // continuation is irrelevant. Keep the wrapper so application
+                    // and fired-state semantics remain unchanged.
+                    Some(RuleStep::AfterTriggered {
+                        steps: filtered_steps,
+                        then_steps: Vec::new(),
+                    })
+                } else {
+                    None
+                }
             }
             RuleStep::LocalFrame { frame, steps } => {
                 let steps = self.filter_program(steps);
@@ -294,6 +309,38 @@ mod tests {
         };
         assert_eq!(steps.len(), 1);
         assert_eq!(then_steps.len(), 1);
+    }
+
+    #[test]
+    fn solver_slice_keeps_relevant_after_triggered_steps_when_continuation_is_pruned() {
+        let game = CompiledGame::new_with_program(
+            2,
+            vec![
+                object(1, LayerId(0)),
+                object(2, LayerId(1)),
+                object(3, LayerId(1)),
+            ],
+            vec![RuleStep::AfterTriggered {
+                steps: vec![RuleStep::Rule(rule(1, PLAYER, SWITCH))],
+                then_steps: vec![RuleStep::Rule(rule(2, PLAYER, BATTERY))],
+            }],
+        );
+        let mut initial = State::empty(2, 1, 2, 3).unwrap();
+        initial.place_object(&game, 0, 0, PLAYER).unwrap();
+        let relevance = SolverRelevance::from_root_objects(&game, [SWITCH]);
+        let availability = SolverStageAvailability::from_initial_state(&game, &initial);
+        let slice = SolverSlice::from_relevance_and_availability(&relevance, &availability);
+
+        let projected = slice.project_game(&game);
+
+        let [RuleStep::AfterTriggered { steps, then_steps }] = projected.program() else {
+            panic!("expected projected after-triggered step");
+        };
+        assert_eq!(steps.len(), 1);
+        assert!(then_steps.is_empty());
+        let outcome = transition_state(&projected, &initial, InputId(0)).unwrap();
+        assert_eq!(outcome.object_count(SWITCH), 1);
+        assert_eq!(outcome.object_count(BATTERY), 0);
     }
 
     #[test]

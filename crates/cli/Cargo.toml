@@ -22,4 +22,5 @@ path = "src/main.rs"
 ascii-play = { path = "../ascii_play", optional = true }
 html-editor = { path = "../html_editor", optional = true }
 html-play = { path = "../html_play", optional = true }
+puzzle-agent-runtime = { path = "../agent_runtime" }
 puzzle-lang = { path = "../lang" }

@@ -2335,6 +2335,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "puzzle-agent-runtime"
+version = "0.1.0"
+dependencies = [
+ "puzzle-core",
+ "puzzle-lang",
+ "puzzle-play",
+ "puzzle-solver",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "puzzle-authoring"
 version = "0.1.0"
 
@@ -2446,6 +2458,7 @@ dependencies = [
  "html-play",
  "js-sys",
  "puzzle-lang",
+ "serde_json",
  "wasm-bindgen",
 ]
 
@@ -2482,6 +2495,7 @@ dependencies = [
  "ascii-play",
  "html-editor",
  "html-play",
+ "puzzle-agent-runtime",
  "puzzle-lang",
 ]
 

@@ -10,7 +10,7 @@ use crate::{
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HighlightedSource {
-    pub html: String,
+    pub spans: Vec<SourceHighlightSpan>,
     pub parsed: bool,
 }
 
@@ -20,8 +20,17 @@ pub struct HighlightedSourceWithOutline {
     pub outline: Vec<SourceOutlineItem>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SourceHighlightSpan {
+    pub start: usize,
+    pub end: usize,
+    pub kind: SourceHighlightKind,
+    pub color: Option<String>,
+    pub transparent: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum HighlightKind {
+pub enum SourceHighlightKind {
     Keyword,
     Literal,
     Binding,
@@ -52,41 +61,43 @@ enum HighlightKind {
     InvalidBrace,
     LevelCell,
     InvalidLevelCell,
+    SpritePixel,
 }
 
-impl HighlightKind {
-    fn class_name(self) -> &'static str {
+impl SourceHighlightKind {
+    pub fn as_str(self) -> &'static str {
         match self {
-            HighlightKind::Keyword => "syntax-keyword",
-            HighlightKind::Literal => "syntax-literal",
-            HighlightKind::Binding => "syntax-binding",
-            HighlightKind::Effect => "syntax-effect",
-            HighlightKind::Emission => "syntax-emission",
-            HighlightKind::Object => "syntax-object",
-            HighlightKind::Input => "syntax-input",
-            HighlightKind::State => "syntax-state",
-            HighlightKind::Group => "syntax-group",
-            HighlightKind::Mark => "syntax-mark",
-            HighlightKind::Variant => "syntax-variant",
-            HighlightKind::Condition => "syntax-condition",
-            HighlightKind::Scene => "syntax-scene",
-            HighlightKind::Theme => "syntax-theme",
-            HighlightKind::Asset => "syntax-asset",
-            HighlightKind::Color => "syntax-color",
-            HighlightKind::Number => "syntax-number",
-            HighlightKind::String => "syntax-string",
-            HighlightKind::Comment => "syntax-comment",
-            HighlightKind::Operator => "syntax-operator",
-            HighlightKind::Arrow => "syntax-arrow",
-            HighlightKind::Brace0 => "syntax-brace-depth-0",
-            HighlightKind::Brace1 => "syntax-brace-depth-1",
-            HighlightKind::Brace2 => "syntax-brace-depth-2",
-            HighlightKind::Brace3 => "syntax-brace-depth-3",
-            HighlightKind::Brace4 => "syntax-brace-depth-4",
-            HighlightKind::Brace5 => "syntax-brace-depth-5",
-            HighlightKind::InvalidBrace => "syntax-brace-invalid",
-            HighlightKind::LevelCell => "syntax-level-cell",
-            HighlightKind::InvalidLevelCell => "syntax-level-cell-invalid",
+            SourceHighlightKind::Keyword => "keyword",
+            SourceHighlightKind::Literal => "literal",
+            SourceHighlightKind::Binding => "binding",
+            SourceHighlightKind::Effect => "effect",
+            SourceHighlightKind::Emission => "emission",
+            SourceHighlightKind::Object => "object",
+            SourceHighlightKind::Input => "input",
+            SourceHighlightKind::State => "state",
+            SourceHighlightKind::Group => "group",
+            SourceHighlightKind::Mark => "mark",
+            SourceHighlightKind::Variant => "variant",
+            SourceHighlightKind::Condition => "condition",
+            SourceHighlightKind::Scene => "scene",
+            SourceHighlightKind::Theme => "theme",
+            SourceHighlightKind::Asset => "asset",
+            SourceHighlightKind::Color => "color",
+            SourceHighlightKind::Number => "number",
+            SourceHighlightKind::String => "string",
+            SourceHighlightKind::Comment => "comment",
+            SourceHighlightKind::Operator => "operator",
+            SourceHighlightKind::Arrow => "arrow",
+            SourceHighlightKind::Brace0 => "brace-depth-0",
+            SourceHighlightKind::Brace1 => "brace-depth-1",
+            SourceHighlightKind::Brace2 => "brace-depth-2",
+            SourceHighlightKind::Brace3 => "brace-depth-3",
+            SourceHighlightKind::Brace4 => "brace-depth-4",
+            SourceHighlightKind::Brace5 => "brace-depth-5",
+            SourceHighlightKind::InvalidBrace => "brace-invalid",
+            SourceHighlightKind::LevelCell => "level-cell",
+            SourceHighlightKind::InvalidLevelCell => "level-cell-invalid",
+            SourceHighlightKind::SpritePixel => "sprite-pixel",
         }
     }
 }
@@ -109,28 +120,54 @@ pub(crate) fn highlight_source_with_document(
     document: &SurfaceDocument,
 ) -> HighlightedSource {
     HighlightedSource {
-        html: highlight_html(source, document),
+        spans: highlight_spans(source, document, 0, source.len()),
         parsed: true,
     }
 }
 
-fn highlight_html(source: &str, document: &SurfaceDocument) -> String {
-    let mut out = String::with_capacity(source.len().saturating_add(source.len() / 8));
-    let semantic_ranges = crate::surface_document_semantic_tokens(document);
+pub(crate) fn highlight_source_range_with_document(
+    source: &str,
+    document: &SurfaceDocument,
+    range_start: usize,
+    range_end: usize,
+) -> HighlightedSource {
+    HighlightedSource {
+        spans: highlight_spans(source, document, range_start, range_end),
+        parsed: true,
+    }
+}
+
+fn highlight_spans(
+    source: &str,
+    document: &SurfaceDocument,
+    range_start: usize,
+    range_end: usize,
+) -> Vec<SourceHighlightSpan> {
+    let mut spans = Vec::new();
+    let scan_start = source[..range_start]
+        .rfind('\n')
+        .map_or(0, |index| index + 1);
+    let scan_end = source[range_end..]
+        .find('\n')
+        .map_or(source.len(), |offset| range_end + offset);
+    let semantic_ranges = semantic_tokens_intersecting(document, scan_start, scan_end);
     let brace_ranges = scan_brace_ranges(source);
-    let highlight_ranges = &document.highlight_ranges;
-    let mut chars = source.char_indices().peekable();
+    let highlight_ranges = highlight_ranges_intersecting(document, scan_start, scan_end);
+    let mut chars = source[scan_start..scan_end]
+        .char_indices()
+        .map(|(index, ch)| (scan_start + index, ch))
+        .peekable();
 
     while let Some((index, ch)) = chars.next() {
         if let Some(range) =
             level_ascii_range_starting_at(&highlight_ranges.level_ascii_ranges, index)
         {
             let kind = if range.known {
-                HighlightKind::LevelCell
+                SourceHighlightKind::LevelCell
             } else {
-                HighlightKind::InvalidLevelCell
+                SourceHighlightKind::InvalidLevelCell
             };
-            push_span(&mut out, kind, &source[range.span.start..range.span.end]);
+            push_span(&mut spans, range.span.start, range.span.end, kind);
             skip_until(&mut chars, range.span.end);
             continue;
         }
@@ -138,10 +175,11 @@ fn highlight_html(source: &str, document: &SurfaceDocument) -> String {
         if let Some(range) =
             visual_ascii_color_range_starting_at(&highlight_ranges.visual_ascii_color_ranges, index)
         {
-            push_colored_text_span(
-                &mut out,
+            push_colored_span(
+                &mut spans,
+                range.span.start,
+                range.span.end,
                 &range.color,
-                &source[range.span.start..range.span.end],
                 range.transparent,
             );
             skip_until(&mut chars, range.span.end);
@@ -151,11 +189,7 @@ fn highlight_html(source: &str, document: &SurfaceDocument) -> String {
         if let Some(range) =
             visual_named_color_range_starting_at(&highlight_ranges.visual_named_color_ranges, index)
         {
-            push_color_text_span(
-                &mut out,
-                &range.color,
-                &source[range.span.start..range.span.end],
-            );
+            push_color_span(&mut spans, range.span.start, range.span.end, &range.color);
             skip_until(&mut chars, range.span.end);
             continue;
         }
@@ -164,9 +198,10 @@ fn highlight_html(source: &str, document: &SurfaceDocument) -> String {
             visual_separator_range_starting_at(&highlight_ranges.visual_separator_ranges, index)
         {
             push_span(
-                &mut out,
-                HighlightKind::Arrow,
-                &source[range.start..range.end],
+                &mut spans,
+                range.start,
+                range.end,
+                SourceHighlightKind::Arrow,
             );
             skip_until(&mut chars, range.end);
             continue;
@@ -174,24 +209,21 @@ fn highlight_html(source: &str, document: &SurfaceDocument) -> String {
 
         if let Some(end) = highlight_ranges.raw_range_starting_at(index) {
             if let Some(next_start) =
-                next_raw_embedded_highlight_start(index, end, highlight_ranges, &semantic_ranges)
+                next_raw_embedded_highlight_start(index, end, &highlight_ranges, &semantic_ranges)
                 && next_start > index
             {
-                escape_html_into(&mut out, &source[index..next_start]);
                 skip_until(&mut chars, next_start);
                 continue;
             }
-            if next_raw_embedded_highlight_start(index, end, highlight_ranges, &semantic_ranges)
+            if next_raw_embedded_highlight_start(index, end, &highlight_ranges, &semantic_ranges)
                 != Some(index)
             {
-                escape_html_into(&mut out, &source[index..end]);
                 skip_until(&mut chars, end);
                 continue;
             }
         }
 
         if highlight_ranges.is_plain_range(index, index + ch.len_utf8()) {
-            escape_char_into(&mut out, ch);
             continue;
         }
 
@@ -200,9 +232,8 @@ fn highlight_html(source: &str, document: &SurfaceDocument) -> String {
                 .find('\n')
                 .map(|offset| index + offset)
                 .unwrap_or(source.len());
-            push_span(&mut out, HighlightKind::Comment, &source[index..end]);
+            push_span(&mut spans, index, end, SourceHighlightKind::Comment);
             if end < source.len() {
-                out.push('\n');
                 while chars
                     .peek()
                     .is_some_and(|(next_index, _)| *next_index <= end)
@@ -232,17 +263,17 @@ fn highlight_html(source: &str, document: &SurfaceDocument) -> String {
                 }
             }
             let token = &source[index..end];
-            if !push_quoted_semantic_inner_span(&mut out, token, index, quote, &semantic_ranges) {
+            if !push_quoted_semantic_inner_span(&mut spans, token, index, quote, &semantic_ranges) {
                 let kind = semantic_kind_at(&semantic_ranges, index, end)
                     .and_then(highlight_kind_for_semantic)
-                    .unwrap_or(HighlightKind::String);
-                push_span(&mut out, kind, token);
+                    .unwrap_or(SourceHighlightKind::String);
+                push_span(&mut spans, index, end, kind);
             }
             continue;
         }
 
         if let Some(end) = hex_color_end(source, index, ch) {
-            push_color_span(&mut out, &source[index..end]);
+            push_color_span(&mut spans, index, end, &source[index..end]);
             skip_until(&mut chars, end);
             continue;
         }
@@ -254,13 +285,12 @@ fn highlight_html(source: &str, document: &SurfaceDocument) -> String {
             let (end, kind) = semantic_token_starting_at(&semantic_ranges, index)
                 .and_then(|token| {
                     (token.kind == SemanticKind::Number && token.end > lexical_end)
-                        .then_some((token.end, HighlightKind::Number))
+                        .then_some((token.end, SourceHighlightKind::Number))
                 })
-                .unwrap_or((lexical_end, HighlightKind::Number));
+                .unwrap_or((lexical_end, SourceHighlightKind::Number));
             if highlight_ranges.is_plain_range(index, end) {
-                escape_html_into(&mut out, &source[index..end]);
             } else {
-                push_span(&mut out, kind, &source[index..end]);
+                push_span(&mut spans, index, end, kind);
             }
             skip_until(&mut chars, end);
             continue;
@@ -270,47 +300,124 @@ fn highlight_html(source: &str, document: &SurfaceDocument) -> String {
             let end = consume_word(source, index);
             let token = &source[index..end];
             if highlight_ranges.is_plain_range(index, end) {
-                escape_html_into(&mut out, token);
             } else {
-                push_word(&mut out, token, index, &semantic_ranges);
+                push_word(&mut spans, token, index, &semantic_ranges);
             }
             skip_until(&mut chars, end);
             continue;
         }
 
         if source[index..].starts_with("->") {
-            push_span(&mut out, HighlightKind::Arrow, &source[index..index + 2]);
+            push_span(&mut spans, index, index + 2, SourceHighlightKind::Arrow);
             skip_until(&mut chars, index + 2);
             continue;
         }
 
         if is_direction_glyph_token(source, index, ch) {
             push_span(
-                &mut out,
-                HighlightKind::Literal,
-                &source[index..index + ch.len_utf8()],
+                &mut spans,
+                index,
+                index + ch.len_utf8(),
+                SourceHighlightKind::Literal,
             );
             continue;
         }
 
         if is_operator_char(ch) {
             let end = consume_while(source, index, is_operator_char);
-            push_operator_run(&mut out, source, index, end, &brace_ranges);
+            push_operator_run(&mut spans, source, index, end, &brace_ranges);
             skip_until(&mut chars, end);
             continue;
         }
-
-        escape_char_into(&mut out, ch);
     }
-
-    if source.ends_with('\n') {
-        out.push(' ');
-    }
-    out
+    normalize_highlight_spans(spans)
+        .into_iter()
+        .filter(|span| span.end > range_start && span.start < range_end)
+        .collect()
 }
 
-fn scan_brace_ranges(source: &str) -> HashMap<usize, HighlightKind> {
-    let mut ranges = HashMap::<usize, HighlightKind>::new();
+fn semantic_tokens_intersecting(
+    document: &SurfaceDocument,
+    start: usize,
+    end: usize,
+) -> Vec<SemanticToken> {
+    document
+        .semantic_tokens
+        .iter()
+        .filter(|token| token.span.end > start && token.span.start < end)
+        .map(|token| SemanticToken {
+            start: token.span.start,
+            end: token.span.end,
+            kind: crate::project_surface_semantic_kind(token.kind),
+        })
+        .collect()
+}
+
+fn highlight_ranges_intersecting(
+    document: &SurfaceDocument,
+    start: usize,
+    end: usize,
+) -> SurfaceHighlightRanges {
+    let ranges = &document.highlight_ranges;
+    SurfaceHighlightRanges {
+        raw_ranges: ranges
+            .raw_ranges
+            .iter()
+            .copied()
+            .filter(|range| range.end > start && range.start < end)
+            .collect(),
+        plain_ranges: ranges
+            .plain_ranges
+            .iter()
+            .copied()
+            .filter(|range| range.end > start && range.start < end)
+            .collect(),
+        level_ascii_ranges: ranges
+            .level_ascii_ranges
+            .iter()
+            .cloned()
+            .filter(|range| range.span.end > start && range.span.start < end)
+            .collect(),
+        visual_ascii_color_ranges: ranges
+            .visual_ascii_color_ranges
+            .iter()
+            .cloned()
+            .filter(|range| range.span.end > start && range.span.start < end)
+            .collect(),
+        visual_named_color_ranges: ranges
+            .visual_named_color_ranges
+            .iter()
+            .cloned()
+            .filter(|range| range.span.end > start && range.span.start < end)
+            .collect(),
+        visual_separator_ranges: ranges
+            .visual_separator_ranges
+            .iter()
+            .copied()
+            .filter(|range| range.end > start && range.start < end)
+            .collect(),
+    }
+}
+
+fn normalize_highlight_spans(spans: Vec<SourceHighlightSpan>) -> Vec<SourceHighlightSpan> {
+    let mut normalized = Vec::<SourceHighlightSpan>::with_capacity(spans.len());
+    for span in spans {
+        if let Some(previous) = normalized.last_mut()
+            && previous.end == span.start
+            && previous.kind == span.kind
+            && previous.color == span.color
+            && previous.transparent == span.transparent
+        {
+            previous.end = span.end;
+            continue;
+        }
+        normalized.push(span);
+    }
+    normalized
+}
+
+fn scan_brace_ranges(source: &str) -> HashMap<usize, SourceHighlightKind> {
+    let mut ranges = HashMap::<usize, SourceHighlightKind>::new();
     let mut block_stack = Vec::<(usize, usize)>::new();
     let mut line_start = 0usize;
 
@@ -338,7 +445,7 @@ fn scan_brace_ranges(source: &str) -> HashMap<usize, HighlightKind> {
     }
 
     for (open_index, _) in block_stack {
-        ranges.insert(open_index, HighlightKind::InvalidBrace);
+        ranges.insert(open_index, SourceHighlightKind::InvalidBrace);
     }
 
     ranges
@@ -349,7 +456,7 @@ fn scan_brace_line(
     line_start: usize,
     content_end: usize,
     block_stack: &mut Vec<(usize, usize)>,
-    ranges: &mut HashMap<usize, HighlightKind>,
+    ranges: &mut HashMap<usize, SourceHighlightKind>,
 ) {
     let line = &source[line_start..content_end];
     let code_end = line_code_end(line);
@@ -378,7 +485,7 @@ fn scan_brace_line(
                     ranges.insert(open_index, kind);
                     ranges.insert(index, kind);
                 } else {
-                    ranges.insert(index, HighlightKind::InvalidBrace);
+                    ranges.insert(index, SourceHighlightKind::InvalidBrace);
                 }
             }
             _ => {}
@@ -435,38 +542,41 @@ fn line_code_braces(source: &str, line_start: usize, code_end: usize) -> Vec<(us
     braces
 }
 
-fn brace_highlight_kind(depth: usize) -> HighlightKind {
+fn brace_highlight_kind(depth: usize) -> SourceHighlightKind {
     match depth % 6 {
-        0 => HighlightKind::Brace0,
-        1 => HighlightKind::Brace1,
-        2 => HighlightKind::Brace2,
-        3 => HighlightKind::Brace3,
-        4 => HighlightKind::Brace4,
-        _ => HighlightKind::Brace5,
+        0 => SourceHighlightKind::Brace0,
+        1 => SourceHighlightKind::Brace1,
+        2 => SourceHighlightKind::Brace2,
+        3 => SourceHighlightKind::Brace3,
+        4 => SourceHighlightKind::Brace4,
+        _ => SourceHighlightKind::Brace5,
     }
 }
 
-fn push_word(out: &mut String, token: &str, token_start: usize, semantic_ranges: &[SemanticToken]) {
+fn push_word(
+    spans: &mut Vec<SourceHighlightSpan>,
+    token: &str,
+    token_start: usize,
+    semantic_ranges: &[SemanticToken],
+) {
     let parts = split_highlight_word(token);
     for part in &parts {
         if let Some(separator) = part.separator_before {
-            push_span(out, HighlightKind::Operator, separator);
+            let separator_start = token_start + part.start - separator.len();
+            push_span(
+                spans,
+                separator_start,
+                token_start + part.start,
+                SourceHighlightKind::Operator,
+            );
         }
         let absolute_start = token_start + part.start;
         let absolute_end = token_start + part.end;
-        let text = &token[part.start..part.end];
         if let Some(kind) = semantic_kind_at(semantic_ranges, absolute_start, absolute_end)
             .and_then(highlight_kind_for_semantic)
         {
-            push_span(out, kind, text);
-        } else {
-            escape_html_into(out, text);
+            push_span(spans, absolute_start, absolute_end, kind);
         };
-    }
-    if let Some(last) = parts.last()
-        && last.end < token.len()
-    {
-        escape_html_into(out, &token[last.end..]);
     }
 }
 
@@ -542,32 +652,32 @@ fn semantic_token_starting_at(ranges: &[SemanticToken], start: usize) -> Option<
         .copied()
 }
 
-fn highlight_kind_for_semantic(kind: SemanticKind) -> Option<HighlightKind> {
+fn highlight_kind_for_semantic(kind: SemanticKind) -> Option<SourceHighlightKind> {
     match kind {
-        SemanticKind::Keyword => Some(HighlightKind::Keyword),
-        SemanticKind::Literal => Some(HighlightKind::Literal),
-        SemanticKind::Binding => Some(HighlightKind::Binding),
-        SemanticKind::Effect => Some(HighlightKind::Effect),
-        SemanticKind::Emission => Some(HighlightKind::Emission),
-        SemanticKind::Object => Some(HighlightKind::Object),
-        SemanticKind::Input => Some(HighlightKind::Input),
-        SemanticKind::State => Some(HighlightKind::State),
-        SemanticKind::Group => Some(HighlightKind::Group),
-        SemanticKind::Mark => Some(HighlightKind::Mark),
-        SemanticKind::Variant => Some(HighlightKind::Variant),
-        SemanticKind::Condition => Some(HighlightKind::Condition),
-        SemanticKind::Scene => Some(HighlightKind::Scene),
-        SemanticKind::Theme => Some(HighlightKind::Theme),
-        SemanticKind::Asset => Some(HighlightKind::Asset),
-        SemanticKind::Setting => Some(HighlightKind::Keyword),
-        SemanticKind::Color => Some(HighlightKind::Color),
-        SemanticKind::Number => Some(HighlightKind::Number),
-        SemanticKind::String => Some(HighlightKind::String),
+        SemanticKind::Keyword => Some(SourceHighlightKind::Keyword),
+        SemanticKind::Literal => Some(SourceHighlightKind::Literal),
+        SemanticKind::Binding => Some(SourceHighlightKind::Binding),
+        SemanticKind::Effect => Some(SourceHighlightKind::Effect),
+        SemanticKind::Emission => Some(SourceHighlightKind::Emission),
+        SemanticKind::Object => Some(SourceHighlightKind::Object),
+        SemanticKind::Input => Some(SourceHighlightKind::Input),
+        SemanticKind::State => Some(SourceHighlightKind::State),
+        SemanticKind::Group => Some(SourceHighlightKind::Group),
+        SemanticKind::Mark => Some(SourceHighlightKind::Mark),
+        SemanticKind::Variant => Some(SourceHighlightKind::Variant),
+        SemanticKind::Condition => Some(SourceHighlightKind::Condition),
+        SemanticKind::Scene => Some(SourceHighlightKind::Scene),
+        SemanticKind::Theme => Some(SourceHighlightKind::Theme),
+        SemanticKind::Asset => Some(SourceHighlightKind::Asset),
+        SemanticKind::Setting => Some(SourceHighlightKind::Keyword),
+        SemanticKind::Color => Some(SourceHighlightKind::Color),
+        SemanticKind::Number => Some(SourceHighlightKind::Number),
+        SemanticKind::String => Some(SourceHighlightKind::String),
     }
 }
 
 fn push_quoted_semantic_inner_span(
-    out: &mut String,
+    spans: &mut Vec<SourceHighlightSpan>,
     token: &str,
     token_start: usize,
     quote: char,
@@ -584,10 +694,10 @@ fn push_quoted_semantic_inner_span(
     else {
         return false;
     };
-    if kind == HighlightKind::String {
+    if kind == SourceHighlightKind::String {
         return false;
     }
-    push_span(out, kind, token);
+    push_span(spans, token_start, token_start + token.len(), kind);
     true
 }
 
@@ -690,7 +800,7 @@ fn is_number_start(source: &str, index: usize, ch: char) -> bool {
 }
 
 fn is_word_start(ch: char) -> bool {
-    ch == '@' || ch == '_' || ch.is_ascii_alphabetic()
+    ch == '_' || ch.is_ascii_alphabetic()
 }
 
 fn is_word_start_at(source: &str, index: usize, ch: char) -> bool {
@@ -698,8 +808,7 @@ fn is_word_start_at(source: &str, index: usize, ch: char) -> bool {
 }
 
 fn is_word_continue(ch: char) -> bool {
-    ch == '@'
-        || ch == '_'
+    ch == '_'
         || ch == ':'
         || ch == '.'
         || ch == '#'
@@ -757,27 +866,27 @@ fn is_direction_glyph_boundary(ch: Option<char>) -> bool {
 }
 
 fn push_operator_run(
-    out: &mut String,
+    spans: &mut Vec<SourceHighlightSpan>,
     source: &str,
     start: usize,
     end: usize,
-    brace_ranges: &HashMap<usize, HighlightKind>,
+    brace_ranges: &HashMap<usize, SourceHighlightKind>,
 ) {
     let mut plain_start = start;
     for (offset, ch) in source[start..end].char_indices() {
         let index = start + offset;
         if let Some(kind) = brace_ranges.get(&index).copied() {
             if plain_start < index {
-                push_span(out, HighlightKind::Operator, &source[plain_start..index]);
+                push_span(spans, plain_start, index, SourceHighlightKind::Operator);
             }
-            let display_kind = if kind != HighlightKind::InvalidBrace
+            let display_kind = if kind != SourceHighlightKind::InvalidBrace
                 && is_inline_selector_mark_brace(source, index, ch)
             {
-                HighlightKind::Mark
+                SourceHighlightKind::Mark
             } else {
                 kind
             };
-            push_span(out, display_kind, &source[index..index + ch.len_utf8()]);
+            push_span(spans, index, index + ch.len_utf8(), display_kind);
             plain_start = index + ch.len_utf8();
             continue;
         }
@@ -785,17 +894,18 @@ fn push_operator_run(
             continue;
         }
         if plain_start < index {
-            push_span(out, HighlightKind::Operator, &source[plain_start..index]);
+            push_span(spans, plain_start, index, SourceHighlightKind::Operator);
         }
         push_span(
-            out,
-            HighlightKind::Literal,
-            &source[index..index + ch.len_utf8()],
+            spans,
+            index,
+            index + ch.len_utf8(),
+            SourceHighlightKind::Literal,
         );
         plain_start = index + ch.len_utf8();
     }
     if plain_start < end {
-        push_span(out, HighlightKind::Operator, &source[plain_start..end]);
+        push_span(spans, plain_start, end, SourceHighlightKind::Operator);
     }
 }
 
@@ -863,84 +973,117 @@ fn consume_while(source: &str, start: usize, predicate: impl Fn(char) -> bool) -
     end
 }
 
-fn skip_until(chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>, end: usize) {
+fn skip_until(chars: &mut std::iter::Peekable<impl Iterator<Item = (usize, char)>>, end: usize) {
     while chars.peek().is_some_and(|(index, _)| *index < end) {
         chars.next();
     }
 }
 
-fn push_span(out: &mut String, kind: HighlightKind, text: &str) {
-    out.push_str("<span class=\"");
-    out.push_str(kind.class_name());
-    out.push_str("\">");
-    escape_html_into(out, text);
-    out.push_str("</span>");
+fn push_span(
+    spans: &mut Vec<SourceHighlightSpan>,
+    start: usize,
+    end: usize,
+    kind: SourceHighlightKind,
+) {
+    spans.push(SourceHighlightSpan {
+        start,
+        end,
+        kind,
+        color: None,
+        transparent: false,
+    });
 }
 
-fn push_color_span(out: &mut String, color: &str) {
-    push_color_text_span(out, color, color);
+fn push_color_span(spans: &mut Vec<SourceHighlightSpan>, start: usize, end: usize, color: &str) {
+    spans.push(SourceHighlightSpan {
+        start,
+        end,
+        kind: SourceHighlightKind::Color,
+        color: Some(color.to_string()),
+        transparent: false,
+    });
 }
 
-fn push_color_text_span(out: &mut String, color: &str, text: &str) {
-    out.push_str("<span class=\"");
-    out.push_str(HighlightKind::Color.class_name());
-    out.push_str("\" style=\"--syntax-color-token: ");
-    out.push_str(color);
-    out.push_str("\">");
-    escape_html_into(out, text);
-    out.push_str("</span>");
-}
-
-fn push_colored_text_span(out: &mut String, color: &str, text: &str, transparent: bool) {
-    out.push_str("<span class=\"syntax-sprite-pixel");
-    if transparent {
-        out.push_str(" is-transparent");
-    }
-    out.push_str("\" style=\"--syntax-sprite-pixel-color: ");
-    out.push_str(color);
-    out.push_str("\">");
-    escape_html_into(out, text);
-    out.push_str("</span>");
-}
-
-fn escape_html_into(out: &mut String, text: &str) {
-    for ch in text.chars() {
-        escape_char_into(out, ch);
-    }
-}
-
-fn escape_char_into(out: &mut String, ch: char) {
-    match ch {
-        '&' => out.push_str("&amp;"),
-        '<' => out.push_str("&lt;"),
-        '>' => out.push_str("&gt;"),
-        '"' => out.push_str("&quot;"),
-        _ => out.push(ch),
-    }
+fn push_colored_span(
+    spans: &mut Vec<SourceHighlightSpan>,
+    start: usize,
+    end: usize,
+    color: &str,
+    transparent: bool,
+) {
+    spans.push(SourceHighlightSpan {
+        start,
+        end,
+        kind: SourceHighlightKind::SpritePixel,
+        color: Some(color.to_string()),
+        transparent,
+    });
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{highlight_source, highlight_source_with_document};
+    use super::{
+        HighlightedSource, SourceHighlightKind, SourceHighlightSpan, highlight_source,
+        highlight_source_range_with_document, highlight_source_with_document,
+    };
 
-    #[test]
-    fn highlight_keeps_surface_projection_lenient_for_unowned_headers() {
-        let highlighted =
-            highlight_source("puzzle board {\n__invalid_unowned_surface_node__ {\n}\n}\n");
+    fn spans_for_text<'a>(
+        source: &'a str,
+        highlighted: &'a HighlightedSource,
+        kind: SourceHighlightKind,
+        text: &str,
+    ) -> Vec<&'a SourceHighlightSpan> {
+        highlighted
+            .spans
+            .iter()
+            .filter(|span| span.kind == kind && &source[span.start..span.end] == text)
+            .collect()
+    }
 
-        assert!(highlighted.parsed);
+    fn assert_span(
+        source: &str,
+        highlighted: &HighlightedSource,
+        kind: SourceHighlightKind,
+        text: &str,
+    ) {
         assert!(
-            highlighted
-                .html
-                .contains("__invalid_unowned_surface_node__")
+            !spans_for_text(source, highlighted, kind, text).is_empty(),
+            "missing {kind:?} highlight for {text:?}"
         );
     }
 
     #[test]
-    fn renders_parser_semantic_tokens_without_local_symbol_classification() {
-        let source = r#"
-title = highlight_symbols
+    fn at_prefix_is_plain_and_the_name_uses_normal_object_highlight() {
+        let source = r#"puzzle board {
+layers {
+objects = @Box
+}
+rules {
+[ @Box ] -> [ @Box ]
+}
+}
+"#;
+        let highlighted = highlight_source(source);
 
+        assert_span(source, &highlighted, SourceHighlightKind::Object, "Box");
+        assert!(spans_for_text(source, &highlighted, SourceHighlightKind::Mark, "@Box").is_empty());
+        let prefix = source.find("@Box").expect("at-prefixed object");
+        assert!(
+            highlighted
+                .spans
+                .iter()
+                .all(|span| !(span.start <= prefix && prefix < span.end)),
+            "the @ prefix must not receive a semantic highlight"
+        );
+    }
+
+    #[test]
+    fn highlighting_is_a_typed_utf8_span_product() {
+        let source = r##"title = "Demo"
+theme {
+preset = "clean"
+background_color = #112233
+}
 puzzle board {
 layers {
 actor = Player
@@ -949,32 +1092,60 @@ rules {
 once [ Player ] -> [ Player ]
 }
 }
-
 levels {
 legend {
 . = empty
 P = Player
 }
 level "start"
-P
+PX
 }
-"#;
-        crate::parse_game2d(source).unwrap();
+"##;
         let highlighted = highlight_source(source);
 
         assert!(highlighted.parsed);
-        assert!(highlighted.html.contains("syntax-keyword\">puzzle"));
-        assert!(highlighted.html.contains("syntax-object\">Player"));
-        assert!(highlighted.html.contains("syntax-arrow\">-&gt;</span>"));
+        assert_span(source, &highlighted, SourceHighlightKind::Keyword, "title");
+        assert_span(
+            source,
+            &highlighted,
+            SourceHighlightKind::String,
+            "\"Demo\"",
+        );
+        assert_span(
+            source,
+            &highlighted,
+            SourceHighlightKind::Theme,
+            "\"clean\"",
+        );
+        assert_span(source, &highlighted, SourceHighlightKind::Object, "Player");
+        assert_span(source, &highlighted, SourceHighlightKind::Arrow, "->");
+        assert_span(source, &highlighted, SourceHighlightKind::LevelCell, "P");
+        assert_span(
+            source,
+            &highlighted,
+            SourceHighlightKind::InvalidLevelCell,
+            "X",
+        );
+        let color = spans_for_text(source, &highlighted, SourceHighlightKind::Color, "#112233");
+        assert_eq!(color.len(), 1);
+        assert_eq!(color[0].color.as_deref(), Some("#112233"));
+
+        for pair in highlighted.spans.windows(2) {
+            assert!(
+                pair[0].end <= pair[1].start,
+                "highlight spans must not overlap"
+            );
+        }
+        for span in &highlighted.spans {
+            assert!(span.start < span.end && span.end <= source.len());
+            assert!(source.is_char_boundary(span.start));
+            assert!(source.is_char_boundary(span.end));
+        }
     }
 
     #[test]
-    fn selectors_render_parser_semantic_kinds_without_tag_slots() {
-        let highlighted = highlight_source(
-            r#"
-title = selector_parser_colors
-
-puzzle board {
+    fn selector_parts_keep_parser_owned_semantic_kinds() {
+        let source = r#"puzzle board {
 layers {
 each A:directions
 }
@@ -984,464 +1155,67 @@ movers = A:left
 rules {
 once [ movers | A:directions ] -> [ A:left | movers ]
 }
-levels {
-legend {
-. = empty
-L = A:left
 }
-level "start" {
-.
-}
-}
-}
-"#,
-        );
+"#;
+        let highlighted = highlight_source(source);
 
-        assert!(highlighted.parsed);
-        assert!(!highlighted.html.contains("syntax-tag-"));
-        assert!(highlighted.html.contains("syntax-group\">directions"));
-        assert!(highlighted.html.contains("syntax-variant\">left"));
-        assert!(!highlighted.html.contains("syntax-object\">directions"));
+        assert_span(
+            source,
+            &highlighted,
+            SourceHighlightKind::Group,
+            "directions",
+        );
+        assert_span(source, &highlighted, SourceHighlightKind::Variant, "left");
+        assert!(
+            spans_for_text(
+                source,
+                &highlighted,
+                SourceHighlightKind::Object,
+                "directions"
+            )
+            .is_empty()
+        );
     }
 
     #[test]
-    fn teneten_group_rhs_flows_from_surface_document_to_highlight_html() {
-        let source = r#"
-title = group_rhs_highlight
+    fn braces_encode_depth_and_invalid_state() {
+        let source = "puzzle board {\nrules {\nif { flag } -> score = 1\n}\n}\n}\nscene menu {\n";
+        let highlighted = highlight_source(source);
 
-puzzle board {
-tags {
-D = F B
-}
+        assert_span(source, &highlighted, SourceHighlightKind::Brace0, "{");
+        assert_span(source, &highlighted, SourceHighlightKind::Brace1, "{");
+        assert_span(source, &highlighted, SourceHighlightKind::Brace2, "{");
+        assert!(
+            spans_for_text(source, &highlighted, SourceHighlightKind::InvalidBrace, "}").len() == 1
+        );
+        assert_span(source, &highlighted, SourceHighlightKind::InvalidBrace, "{");
+    }
+
+    #[test]
+    fn all_on_condition_highlights_keywords_and_object_selectors() {
+        let source = r#"puzzle board {
 layers {
-You:D Crate Ball Wall Fly Headlong TimeMachine:D
+floor = Goal
+actor = Box
 }
-groups {
-player = You:D
-object = player Crate Ball Wall Fly Headlong TimeMachine:D
+win_conditions {
+all Box on Goal
 }
 rules {
-}
-on_level_start {
-}
-levels {
-legend {
-. = empty
-Y = You:F
-}
-level "start" {
-.
-}
 }
 }
 "#;
-        crate::parse_game2d(source).unwrap();
-        let document = crate::parse_surface_document(source);
-        let tokens = crate::surface_document_semantic_tokens(&document);
-        let object_line_start = source
-            .find("object = player Crate Ball Wall Fly Headlong TimeMachine:D")
-            .unwrap();
-        let structural_keyword_starts = [
-            ("layers", source.find("layers {").unwrap()),
-            ("groups", source.find("groups {").unwrap()),
-            ("rules", source.find("rules {").unwrap()),
-            ("on_level_start", source.find("on_level_start {").unwrap()),
-            ("levels", source.find("levels {").unwrap()),
-            ("legend", source.find("legend {").unwrap()),
-        ];
-
-        for (text, kind) in [
-            ("layers", crate::SemanticKind::Keyword),
-            ("groups", crate::SemanticKind::Keyword),
-            ("rules", crate::SemanticKind::Keyword),
-            ("on_level_start", crate::SemanticKind::Keyword),
-            ("levels", crate::SemanticKind::Keyword),
-            ("legend", crate::SemanticKind::Keyword),
-            ("object", crate::SemanticKind::Group),
-            ("player", crate::SemanticKind::Group),
-            ("Crate", crate::SemanticKind::Object),
-            ("Ball", crate::SemanticKind::Object),
-            ("Wall", crate::SemanticKind::Object),
-            ("Fly", crate::SemanticKind::Object),
-            ("Headlong", crate::SemanticKind::Object),
-            ("TimeMachine", crate::SemanticKind::Object),
-            ("D", crate::SemanticKind::Group),
-        ] {
-            let search_start = structural_keyword_starts
-                .iter()
-                .find_map(|(keyword, start)| (*keyword == text).then_some(*start))
-                .unwrap_or(object_line_start);
-            let start = search_start + source[search_start..].find(text).unwrap();
-            assert!(
-                tokens.iter().any(|token| {
-                    token.start == start && token.end == start + text.len() && token.kind == kind
-                }),
-                "missing parser surface semantic token for {text} as {kind:?}"
-            );
-        }
-
-        let highlighted = highlight_source_with_document(source, &document);
-        assert!(highlighted.parsed);
-        assert!(highlighted.html.contains(
-            "<span class=\"syntax-group\">object</span> <span class=\"syntax-operator\">=</span> <span class=\"syntax-group\">player</span> <span class=\"syntax-object\">Crate</span>"
-        ));
-        assert!(highlighted.html.contains(
-            "<span class=\"syntax-object\">TimeMachine</span><span class=\"syntax-operator\">:</span><span class=\"syntax-group\">D</span>"
-        ));
-        for keyword in [
-            "layers",
-            "groups",
-            "rules",
-            "on_level_start",
-            "levels",
-            "legend",
-        ] {
-            assert!(
-                highlighted
-                    .html
-                    .contains(&format!("<span class=\"syntax-keyword\">{keyword}</span>")),
-                "missing highlighted structural keyword {keyword}"
-            );
-        }
-    }
-
-    #[test]
-    fn renders_authoring_schema_surface_roles_from_universal_nodes() {
-        let source = r##"
-title = universal_node_highlight
-
-theme {
-preset = "clean"
-background_color = #112233
-}
-
-puzzle main {
-render {
-tween = true
-tween_duration = 90ms
-}
-}
-
-sounds {
-sfx clear { seed = 17551700; type = puzzlescript }
-}
-
-input_buffer {
-queue_during_wait = false
-}
-
-assets {
-"game.css"
-}
-
-puzzle board {
-tags {
-D = F
-}
-layers {
-Ink:D
-}
-sprites {
-Ink:F
-colors #fff
-shape __ps_shape_Ink_F
-0
-}
-rules {
-}
-levels {
-legend {
-. = empty
-I = Ink:F
-}
-level "start" {
-I
-}
-}
-render {
-cell_size = 64
-grid {
-type = "all_cells"
-}
-}
-}
-
-puzzle3 board3 {
-render {
-shade = true
-camera {
-yaw = 90
-interactive_look = true
-}
-grid {
-type = "occupied_cells"
-}
-pixelate {
-enabled = true
-scale = 4
-smoothing = false
-}
-}
-}
-"##;
         let highlighted = highlight_source(source);
 
-        for keyword in [
-            "theme",
-            "tween",
-            "sounds",
-            "sfx",
-            "input_buffer",
-            "assets",
-            "render",
-            "grid",
-            "preset",
-            "background_color",
-            "tween",
-            "tween_duration",
-            "seed",
-            "type",
-            "queue_during_wait",
-            "cell_size",
-            "type",
-            "shade",
-            "camera",
-            "yaw",
-            "interactive_look",
-            "pixelate",
-            "enabled",
-            "scale",
-            "smoothing",
-        ] {
-            assert!(
-                highlighted
-                    .html
-                    .contains(&format!("<span class=\"syntax-keyword\">{keyword}</span>")),
-                "missing schema-projected keyword/setting highlight for {keyword}"
-            );
-        }
-
-        for (class, text) in [
-            ("syntax-asset", "clear"),
-            ("syntax-string", "puzzlescript"),
-            ("syntax-object", "Ink"),
-            ("syntax-group", "F"),
-            ("syntax-asset", "__ps_shape_Ink_F"),
-            ("syntax-literal", "false"),
-            ("syntax-literal", "true"),
-            ("syntax-number", "90ms"),
-            ("syntax-number", "17551700"),
-            ("syntax-number", "90"),
-            ("syntax-number", "4"),
-            ("syntax-number", "64"),
-        ] {
-            assert!(
-                highlighted
-                    .html
-                    .contains(&format!("<span class=\"{class}\">{text}</span>")),
-                "missing schema-projected {class} highlight for {text}"
-            );
-        }
-        for (class, text) in [
-            ("syntax-theme", "&quot;clean&quot;"),
-            ("syntax-literal", "&quot;all_cells&quot;"),
-            ("syntax-literal", "&quot;occupied_cells&quot;"),
-        ] {
-            assert!(
-                highlighted
-                    .html
-                    .contains(&format!("<span class=\"{class}\">{text}</span>")),
-                "missing schema-projected quoted {class} highlight for {text}"
-            );
-        }
-        assert!(
-            highlighted
-                .html
-                .contains("<span class=\"syntax-string\">&quot;game.css&quot;</span>")
-        );
-        assert!(
-            highlighted
-                .html
-                .contains("syntax-color\" style=\"--syntax-color-token: #112233\">#112233")
-        );
-        assert!(
-            highlighted
-                .html
-                .contains("syntax-color\" style=\"--syntax-color-token: #fff\">#fff")
-        );
+        assert_span(source, &highlighted, SourceHighlightKind::Keyword, "all");
+        assert_span(source, &highlighted, SourceHighlightKind::Keyword, "on");
+        assert_span(source, &highlighted, SourceHighlightKind::Object, "Box");
+        assert_span(source, &highlighted, SourceHighlightKind::Object, "Goal");
     }
 
     #[test]
-    fn renders_parser_owned_source_tree_headers_from_universal_blocks() {
-        let highlighted = highlight_source(
-            r#"
-puzzle board {
-tags {
-N = 0
-}
-layers {
-Count:N
-Moment:directions
-}
-sprites {
-Count:0
-transparent
-Moment:directions
-transparent
-}
-rules {
-routine BallPush once {
-[ Count:0 ] -> [ Count:0 ]
-}
-}
-levels {
-legend {
-. = empty
-C = Count:0
-}
-level "start"
-C
-}
-}
-"#,
-        );
-
-        assert!(
-            highlighted.html.contains(
-                "<span class=\"syntax-keyword\">routine</span> <span class=\"syntax-effect\">BallPush</span> <span class=\"syntax-keyword\">once</span>"
-            ),
-            "routine header spans must come from the parser-owned source-tree header surface"
-        );
-        assert!(
-            highlighted.html.contains(
-                "<span class=\"syntax-asset\">Count</span><span class=\"syntax-operator\">:</span><span class=\"syntax-group\">0</span>"
-            ),
-            "visual selector tags must be projected from selector structure, including digit-start values"
-        );
-        assert!(
-            highlighted.html.contains(
-                "<span class=\"syntax-asset\">Moment</span><span class=\"syntax-operator\">:</span><span class=\"syntax-group\">directions</span>"
-            ),
-            "visual selector tags must use the same selector-part path for named tag sets"
-        );
-    }
-
-    #[test]
-    fn highlight_renderer_consumes_surface_document_not_source_scanner() {
-        let source = include_str!("highlight.rs");
-        let forbidden_fragments = [
-            ["scan_source", "_context"],
-            ["Source", "Context"],
-            ["Source", "ContextLine"],
-            ["Source", "Scope::"],
-            ["strip_line", "_comment"],
-            ["scan_level", "_ascii"],
-            ["scan_", "visual"],
-            ["visual_", "highlight"],
-            ["VisualSprite", "PixelScan"],
-            ["LevelAscii", "Scan"],
-        ];
-        for parts in forbidden_fragments {
-            let forbidden = parts.concat();
-            assert!(
-                !source.contains(&forbidden),
-                "highlight.rs must render SurfaceDocument products, not recover source grammar via {forbidden}"
-            );
-        }
-    }
-
-    #[test]
-    fn highlight_with_outline_reuses_same_surface_document() {
-        let source = include_str!("highlight.rs");
-        let function_start = source
-            .find("pub fn highlight_source_with_outline")
-            .expect("highlight_source_with_outline function");
-        let function_end = source[function_start..]
-            .find("fn highlight_source_with_document")
-            .expect("highlight_source_with_document function");
-        let function = &source[function_start..function_start + function_end];
-        let required = "source_outline_from_document(&document)";
-        assert!(
-            function.contains(required),
-            "highlight_source_with_outline must derive outline from the same SurfaceDocument"
-        );
-        let forbidden_fragments: &[&[&str]] = &[
-            &["outline: crate::source_", "outline(source)"],
-            &["let highlighted = highlight_", "source(source);"],
-        ];
-        for parts in forbidden_fragments {
-            let forbidden = parts.concat();
-            assert!(
-                !function.contains(&forbidden),
-                "highlight_source_with_outline must not trigger a second surface parse via {forbidden}"
-            );
-        }
-    }
-
-    #[test]
-    fn renders_braces_by_depth_and_marks_unmatched_braces() {
-        let highlighted = highlight_source(
-            r#"
-puzzle board {
-rules {
-if { flag } -> score = 1
-}
-}
-}
-scene menu {
-"{ignored string}"
-// {ignored comment}
-layout {
-"#,
-        );
-
-        assert!(highlighted.html.contains("syntax-brace-depth-0\">{</span>"));
-        assert!(highlighted.html.contains("syntax-brace-depth-1\">{</span>"));
-        assert!(highlighted.html.contains("syntax-brace-depth-2\">{</span>"));
-        assert!(highlighted.html.contains("syntax-brace-invalid\">}</span>"));
-        assert!(highlighted.html.contains("syntax-brace-invalid\">{</span>"));
-    }
-
-    #[test]
-    fn renders_level_cells_from_legend_context() {
-        let highlighted = highlight_source(
-            r#"
-title = level_cell_highlight
-
-puzzle board {
-layers {
-actor = Player
-}
-rules {
-}
-}
-
-levels {
-legend {
-. = empty
-P = Player
-}
-level "start"
-PX
-}
-"#,
-        );
-
-        assert!(highlighted.html.contains("syntax-level-cell\">P</span>"));
-        assert!(
-            highlighted
-                .html
-                .contains("syntax-level-cell-invalid\">X</span>")
-        );
-    }
-
-    #[test]
-    fn renders_visual_color_tokens_and_sprite_pixels() {
-        let highlighted = highlight_source(
-            r##"
-title = sprite_pixel_highlight
-
-puzzle default {
+    fn visual_pixels_carry_color_and_transparency_as_data() {
+        let source = r##"puzzle default {
 layers {
 objects = Box
 }
@@ -1449,101 +1223,113 @@ sprites {
 Box {
 #fff #000
 01
->
-10
-}
-
-Background
-#90ee90 #008000
-500ms
-11111
-01111
->
-10111
-11111
->
-
-sprite {
-selector = Box
-colors = #123456 #abcdef
-duration = 120ms
-shape = {
-01
->
-10
-}
 }
 }
 rules {
 }
-levels {
-legend {
-. = empty
-B = Box
 }
-level "start"
-B
-}
-}
-"##,
-        );
+"##;
+        let highlighted = highlight_source(source);
+        let zero = spans_for_text(source, &highlighted, SourceHighlightKind::SpritePixel, "0");
+        let one = spans_for_text(source, &highlighted, SourceHighlightKind::SpritePixel, "1");
 
         assert!(
-            highlighted
-                .html
-                .contains("syntax-color\" style=\"--syntax-color-token: #fff\">#fff")
+            zero.iter()
+                .any(|span| span.color.as_deref() == Some("#fff"))
         );
-        assert!(highlighted.html.contains(
-            "syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #fff\">0</span>"
-        ));
-        assert!(highlighted.html.contains(
-            "syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #000\">1</span>"
-        ));
-        assert!(highlighted.html.contains(
-            "syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #123456\">0</span>"
-        ));
-        assert!(highlighted.html.contains(
-            "syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #abcdef\">1</span>"
-        ));
-        assert!(highlighted.html.contains(
-            "syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #90ee90\">0</span>"
-        ));
-        assert!(highlighted.html.contains(
-            "syntax-sprite-pixel\" style=\"--syntax-sprite-pixel-color: #008000\">1</span>"
-        ));
-        assert!(
-            highlighted
-                .html
-                .contains("<span class=\"syntax-arrow\">&gt;</span>")
-        );
-        assert!(
-            highlighted
-                .html
-                .contains("<span class=\"syntax-keyword\">selector</span>")
-        );
-        assert!(
-            highlighted
-                .html
-                .contains("<span class=\"syntax-keyword\">duration</span>")
-        );
+        assert!(one.iter().any(|span| span.color.as_deref() == Some("#000")));
+        assert!(zero.iter().all(|span| !span.transparent));
     }
 
     #[test]
-    fn renders_hex_colors_independently_of_semantic_types() {
-        let highlighted =
-            highlight_source("theme {\npreset = \"clean\"\nbackground_color = #112233\n}\n");
+    fn unicode_offsets_remain_utf8_byte_offsets() {
+        let source = "title = 星😀\n// 注釈😀\n";
+        let highlighted = highlight_source(source);
+        let comment_start = source.find("//").expect("comment start");
+        let comment = highlighted
+            .spans
+            .iter()
+            .find(|span| span.kind == SourceHighlightKind::Comment)
+            .expect("comment highlight");
 
-        assert!(
-            highlighted
-                .html
-                .contains("syntax-color\" style=\"--syntax-color-token: #112233\">#112233")
-        );
+        assert_eq!(comment.start, comment_start);
+        assert_eq!(comment.end, source.trim_end().len());
+        assert_eq!(&source[comment.start..comment.end], "// 注釈😀");
     }
 
     #[test]
-    fn appends_space_for_trailing_newline_to_keep_empty_final_line_visible() {
-        let highlighted = highlight_source("title = trailing_newline\n");
+    fn adjacent_identical_highlights_are_normalized_into_runs() {
+        let source = r##"puzzle default {
+layers {
+objects = Box
+}
+sprites {
+Box {
+#fff
+00000
+}
+}
+rules {
+}
+}
+"##;
+        let highlighted = highlight_source(source);
+        let pixels = spans_for_text(
+            source,
+            &highlighted,
+            SourceHighlightKind::SpritePixel,
+            "00000",
+        );
 
-        assert!(highlighted.html.ends_with(' '));
+        assert_eq!(pixels.len(), 1);
+        assert_eq!(pixels[0].color.as_deref(), Some("#fff"));
+        assert!(!pixels[0].transparent);
+    }
+
+    #[test]
+    fn range_highlighting_matches_full_highlighting_for_intersecting_spans() {
+        let source = r##"title = "Demo"
+puzzle board {
+sprites {
+Box {
+#fff #000
+00110
+}
+}
+rules {
+[ Box ] -> [ Box ]
+}
+}
+// 注釈😀
+"##;
+        let document = crate::parse_surface_document(source);
+        let full = highlight_source_with_document(source, &document);
+        let start = source.find("#fff").expect("range start");
+        let end = source.find("rules").expect("range end");
+        let ranged = highlight_source_range_with_document(source, &document, start, end);
+        let expected = full
+            .spans
+            .into_iter()
+            .filter(|span| span.end > start && span.start < end)
+            .collect::<Vec<_>>();
+
+        assert_eq!(ranged.spans, expected);
+    }
+
+    #[test]
+    fn highlighting_and_outline_share_one_surface_document() {
+        let source = "puzzle board {\nrules {\n}\n}\n";
+        let document = crate::parse_surface_document(source);
+        let highlighted = highlight_source_with_document(source, &document);
+        assert!(highlighted.parsed);
+
+        let implementation = include_str!("highlight.rs");
+        let production = implementation
+            .split("#[cfg(test)]")
+            .next()
+            .expect("highlight production source");
+        assert!(!production.contains("<span"));
+        assert!(!production.contains("escape_html"));
+        assert!(!production.contains("syntax-"));
     }
 }

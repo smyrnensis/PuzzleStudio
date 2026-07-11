@@ -1318,7 +1318,7 @@ fn parse_object_spec(line: &str) -> Result<ObjectSpec3, ParseError3> {
         name: base.to_string(),
         axes: axes.map(str::to_string).collect(),
         layer: layer.to_string(),
-        display: puzzle_authoring::is_display_object_token(name),
+        display: false,
     })
 }
 
@@ -1342,7 +1342,7 @@ fn parse_layer_object_spec(token: &str, layer: &str) -> Result<ObjectSpec3, Pars
         name: base.to_string(),
         axes: axes.map(str::to_string).collect(),
         layer: layer.to_string(),
-        display: puzzle_authoring::is_display_object_token(token),
+        display: false,
     })
 }
 

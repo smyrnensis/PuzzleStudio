@@ -10,8 +10,8 @@ sfx sumo_move { seed = 48878907; type = puzzlescript }
 
 puzzle main {
 layers {
-Background
-Player Wall Sumo
+layer1 = Background
+layer2 = Player Wall Sumo
 }
 
 sprites {
@@ -52,8 +52,16 @@ sounds {
 move Sumo -> sfx sumo_move
 }
 
-on_level_start {
-once_all [ no Background ] -> [ Background ]
+routine move {
+repeat {
+for l in layer1 layer2 {
+once_all [ > l | | < l ] -> [ l | {__move_collision} | l ]
+once_all [ > l | ; | ^ l ] -> [ l | {__move_collision} ; | l ]
+[ > l | no l no {__move_collision} ] -> [ | l{no directions} ]
+once_all [ > l ] -> [ l ]
+}
+once_all [ {__move_collision} ] -> [ ]
+}
 }
 
 rules {
@@ -69,10 +77,10 @@ next_level
 
 levels {
 legend {
-. = empty
-# = Wall
-P = Player
-S = Sumo
+. = Background
+# = Wall Background
+P = Player Background
+S = Sumo Background
 }
 
 ########
@@ -90,16 +98,14 @@ layout {
 title = "Multiple Patterns"
 subtitle = "by increpare"
 if has_progress_save {
-choice "Continue" -> continue_game
-}
-choice "New Game" -> new_game
-}
-routine continue_game {
+choice "Continue" -> {
 goto playing
 }
-routine new_game {
+}
+choice "New Game" -> {
 clear_game_progress
-goto playing(0)
+start playing
+}
 }
 }
 
@@ -111,12 +117,9 @@ title = "Multiple Patterns"
 puzzle board = main
 }
 keys {
-Escape q -> back
+Escape q -> goto title
 }
 rules {
 step board
-}
-routine back {
-goto title
 }
 }

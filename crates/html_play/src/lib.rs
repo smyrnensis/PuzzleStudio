@@ -58,7 +58,9 @@ use puzzle_lang::{
 };
 use puzzle_lang::{AssetKind, DiagnosticReport};
 #[cfg(feature = "solver")]
-use puzzle_lang::{QueryExpr, QueryExpr3, QueryExprOf, SolverStrategy3, SolverStrategyDirection};
+use puzzle_lang::{
+    QueryExpr, QueryExpr3, QueryExprOf, SolverStrategy, SolverStrategy3, SolverStrategyDirection,
+};
 #[cfg(not(target_arch = "wasm32"))]
 use puzzle_lang::{discover_game_entries, expand_game_imports_for_file, resolve_game_entry};
 use puzzle_play::{
@@ -208,6 +210,13 @@ P*
             "\";",
             "PuzzleRuntimeExportJson",
         )
+    }
+
+    fn prepared_editor_solver_rules_json(source: &str, path: &str) -> Value {
+        serde_json::from_str(
+            &export_solver_rules_json_from_source(source, path).expect("prepared solver rules"),
+        )
+        .expect("prepared solver rules json")
     }
 
     fn embedded_puzzle_boot_json(html: &str) -> Value {
@@ -651,21 +660,9 @@ P
             )
         );
         assert!(RENDERER_JS.contains("context.drawImage(\n          image,"));
-        assert!(RENDERER_JS.contains("cachedPatternBitmap(definition)"));
-        assert!(RENDERER_JS.contains("bitmapContext.fillRect(colIndex, rowIndex, 1, 1)"));
-        assert!(
-            RENDERER_JS
-                .contains("context.drawImage(bitmap, x + fit.x, y + fit.y, fit.width, fit.height)")
-        );
-        assert!(
-            RENDERER_JS
-                .contains("return this.cachedPatternBitmap(definition).toDataURL(\"image/png\")")
-        );
-        assert!(!RENDERER_JS.contains("paintPattern(context"));
         assert!(RENDERER_CSS.contains("--sprite-box-cols"));
         assert!(RENDERER_CSS.contains("background-size: contain;"));
         assert!(!RENDERER_JS.contains("leastCommonMultiple("));
-        assert!(!RENDERER_JS.contains("const left = x + colIndex * pixelWidth;"));
         assert!(
             RENDERER_JS.contains(
                 "const { cols: width, rows: height } = this.spritePatternSize(definition);"
@@ -675,6 +672,34 @@ P
         assert!(!RENDERER_JS.contains("scaledPixelEdge(index, sourceUnits, targetPixels)"));
         assert!(!RENDERER_JS.contains("boundedLeastCommonMultiple"));
         assert!(RENDERER_CSS.contains("overflow: visible;"));
+    }
+
+    #[test]
+    fn canvas_patterns_do_not_cross_a_per_sprite_raster_boundary() {
+        assert!(!RENDERER_JS.contains("cachedPatternBitmap"));
+        assert!(!RENDERER_JS.contains("cachedDomPatternBitmap"));
+        assert!(RENDERER_JS.contains("domPatternDataUrl(definition)"));
+        assert_eq!(RENDERER_JS.matches("this.domPatternDataUrl(").count(), 2);
+        assert!(RENDERER_JS.contains("bitmapContext.fillRect(colIndex, rowIndex, 1, 1)"));
+        assert!(RENDERER_JS.contains("const url = bitmap.toDataURL(\"image/png\");"));
+        assert!(RENDERER_JS.contains("cache.set(key, url);\n    return url;"));
+
+        assert!(!RENDERER_JS.contains("context.drawImage(bitmap,"));
+        assert!(RENDERER_JS.contains(
+            "this.paintLogicalPatternToCanvas(context, frame, x + fit.x, y + fit.y, fit.pixelWidth, fit.pixelHeight)"
+        ));
+        assert!(RENDERER_JS.contains(
+            "this.paintLogicalPatternToCanvas(context, definition, x + fit.x, y + fit.y, fit.pixelWidth, fit.pixelHeight)"
+        ));
+        assert!(RENDERER_JS.contains(
+            "paintLogicalPatternToCanvas(context, definition, x, y, pixelWidth, pixelHeight = pixelWidth)"
+        ));
+        assert!(RENDERER_JS.contains("const left = x + colIndex * pixelWidth;"));
+        assert!(
+            RENDERER_JS
+                .contains("this.fillCanvasRect(context, left, top, right - left, bottom - top);")
+        );
+        assert!(!RENDERER_JS.contains("Math.round(x + colIndex * pixelWidth)"));
     }
 
     #[test]
@@ -783,7 +808,10 @@ P
         assert!(
             APP_JS.contains("screenFrame.style.height = `min(${Math.ceil(fit.height)}px, 100%)`;")
         );
-        assert!(APP_CSS.contains("transform: scale(var(--screen-scale, 1));"));
+        assert!(APP_CSS.contains("zoom: var(--screen-scale, 1);"));
+        assert!(!APP_CSS.contains("transform: scale(var(--screen-scale, 1));"));
+        assert!(APP_CSS.contains("body.is-component-embed .screen-view {"));
+        assert!(APP_CSS.contains("zoom: 1;"));
         assert!(APP_CSS.contains("justify-content: center;"));
         assert!(APP_CSS.contains("display: flex;"));
         assert!(APP_CSS.contains("flex-direction: column;"));
@@ -1137,11 +1165,9 @@ P
         assert!(APP_JS.contains("const volume = Number(def.volume ?? 1);"));
         assert!(APP_JS.contains("createSfxPlayer(context, effect, { volume })"));
         assert!(APP_JS.contains("player.start(context.currentTime);"));
-        assert!(APP_JS.contains("def.type === \"puzzlescript\""));
-        assert!(APP_JS.contains("createPuzzleScriptSfxPlayer(context, effect, { volume })"));
-        assert!(APP_JS.contains("generatePuzzleScriptSoundEffect(def.seed)"));
-        assert!(APP_JS.contains("puzzleScriptSfxEffect(api, def)"));
-        assert!(APP_JS.contains("PuzzleScript sound generator is unavailable"));
+        assert!(!APP_JS.contains("def.type === \"puzzlescript\""));
+        assert!(!APP_JS.contains("createPuzzleScriptSfxPlayer"));
+        assert!(!APP_JS.contains("generatePuzzleScriptSoundEffect"));
     }
 
     #[test]
@@ -1156,8 +1182,9 @@ P
         assert!(APP_JS.contains("if (command) {\n    soundRuntime.primePlayback();"));
         assert!(APP_JS.contains("const effect = this.sfxEffect(api, def);"));
         assert!(APP_JS.contains("effect = api.generateSoundEffect(def.seed, { type });"));
-        assert!(!APP_JS.contains("this.activeSfx = new Map();"));
-        assert!(!APP_JS.contains("replaceActiveSfx"));
+        assert!(APP_JS.contains("this.activeSfx = new Map();"));
+        assert!(APP_JS.contains("this.replaceActiveSfx(name, player);"));
+        assert!(APP_JS.contains("this.activeSfx.get(name)?.stop();"));
         assert!(!APP_JS.contains("stopActiveSfx"));
         assert!(!APP_JS.contains("sfxQueue"));
         assert!(!APP_JS.contains("soundQueue"));
@@ -1949,7 +1976,13 @@ levels default of board {
 "#;
         let html = export_editor_preview_html_from_source(source, "game.puzzle", "", "")
             .expect("preview export");
+        let standalone =
+            export_html_from_source(source, "game.puzzle", "", "").expect("standalone export");
+        assert!(!html.contains("PuzzleEditorSolverRulesJson"));
+        assert!(!standalone.contains("PuzzleEditorSolverRulesJson"));
         let export = embedded_puzzle_runtime_export_json(&html);
+        let solver_rules = prepared_editor_solver_rules_json(source, "game.puzzle");
+        assert!(export["runtimeLoadedGame"]["loaded"]["solver_strategy"].is_null());
         assert!(
             export["compiledPlay"]["inputLabels"]
                 .as_object()
@@ -1963,11 +1996,12 @@ levels default of board {
             "rules": {
                 "compileId": "test-compile",
                 "documentId": "test-document",
-                "modelKind": "2d",
-                "compiledPlay": export["compiledPlay"].clone(),
-                "runRulesOnLevelStart": export["engine"]["runRulesOnLevelStart"].clone(),
-                "goal": export["goal"].clone(),
-                "lose": export["lose"].clone()
+                "modelKind": solver_rules["modelKind"].clone(),
+                "compiledPlay": solver_rules["compiledPlay"].clone(),
+                "runRulesOnLevelStart": solver_rules["runRulesOnLevelStart"].clone(),
+                "goal": solver_rules["goal"].clone(),
+                "lose": solver_rules["lose"].clone(),
+                "solverStrategy": solver_rules["solverStrategy"].clone()
             },
             "target": {
                 "origin": "preview-level",
@@ -1995,6 +2029,116 @@ levels default of board {
         assert!(response.contains(r#""name":"right""#));
         assert!(!response.contains("input_"));
         assert!(!request.to_string().contains("source"));
+    }
+
+    #[cfg(all(feature = "solver", not(target_arch = "wasm32")))]
+    #[test]
+    fn editor_solver_task_solves_microban_5_with_generated_strategy() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../games/microban/game.puzzle");
+        let source = std::fs::read_to_string(&path).expect("microban source");
+        let html =
+            export_editor_preview_html_from_source(&source, &path.display().to_string(), "", "")
+                .expect("microban editor preview");
+        let export = embedded_puzzle_runtime_export_json(&html);
+        let solver_rules = prepared_editor_solver_rules_json(&source, &path.display().to_string());
+        let level = &export["levels"][4];
+        assert_eq!(level["name"], "microban_05");
+        assert_eq!(
+            solver_rules["solverStrategy"]["terms"][0]["value"],
+            json!({"AllOnDistance":{"subjects":[2],"covers":[4]}})
+        );
+        let request = json!({
+            "version": 1,
+            "rules": {
+                "compileId": "microban-5",
+                "documentId": "microban",
+                "modelKind": solver_rules["modelKind"].clone(),
+                "compiledPlay": solver_rules["compiledPlay"].clone(),
+                "runRulesOnLevelStart": solver_rules["runRulesOnLevelStart"].clone(),
+                "goal": solver_rules["goal"].clone(),
+                "lose": solver_rules["lose"].clone(),
+                "solverStrategy": solver_rules["solverStrategy"].clone()
+            },
+            "target": {
+                "origin": "preview-level",
+                "compileId": "microban-5",
+                "documentId": "microban",
+                "level": {"index": 4, "levelName": "microban_05"},
+                "state": {
+                    "kind": "compiled-start",
+                    "lifecycle": "playable-start",
+                    "data": level["initialState"].clone()
+                }
+            },
+            "maxDepth": 512,
+            "maxNodes": 100_000,
+            "maxMs": 0
+        });
+
+        let response = solve_solver_task_json(&request.to_string()).expect("editor solver task");
+        assert!(response.contains(r#""result":"solved""#), "{response}");
+        let response_json: Value = serde_json::from_str(&response).expect("solver response JSON");
+        let expanded = response_json["observations"]
+            .as_array()
+            .and_then(|observations| observations.last())
+            .and_then(|observation| observation["progress"]["expanded"].as_u64())
+            .expect("solved response should retain final search progress");
+        let visited = response_json["observations"]
+            .as_array()
+            .and_then(|observations| observations.last())
+            .and_then(|observation| observation["progress"]["visited"].as_u64())
+            .expect("solved response should retain visited search progress");
+        eprintln!("microban_05 editor solver visited={visited} expanded={expanded}");
+        assert!(visited < 35_000, "visited {visited} positions");
+        assert!(expanded < 100_000, "expanded {expanded} positions");
+    }
+
+    #[cfg(all(feature = "solver", not(target_arch = "wasm32")))]
+    #[test]
+    fn editor_solver_task_preserves_teneten_routine_control_flow() {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../games/TENETEN.puzzle");
+        let source = std::fs::read_to_string(&path).expect("TENETEN source");
+        let html =
+            export_editor_preview_html_from_source(&source, &path.display().to_string(), "", "")
+                .expect("TENETEN editor preview");
+        let export = embedded_puzzle_runtime_export_json(&html);
+        let solver_rules = prepared_editor_solver_rules_json(&source, &path.display().to_string());
+        let level = &export["levels"][1];
+        assert_eq!(level["name"], "1-2");
+        let request = json!({
+            "version": 1,
+            "rules": {
+                "compileId": "teneten-1-2",
+                "documentId": "teneten",
+                "modelKind": solver_rules["modelKind"].clone(),
+                "compiledPlay": solver_rules["compiledPlay"].clone(),
+                "runRulesOnLevelStart": solver_rules["runRulesOnLevelStart"].clone(),
+                "goal": solver_rules["goal"].clone(),
+                "lose": solver_rules["lose"].clone(),
+                "solverStrategy": solver_rules["solverStrategy"].clone()
+            },
+            "target": {
+                "origin": "preview-level",
+                "compileId": "teneten-1-2",
+                "documentId": "teneten",
+                "level": {"index": 1, "levelName": "1-2"},
+                "state": {
+                    "kind": "compiled-start",
+                    "lifecycle": "playable-start",
+                    "data": level["initialState"].clone()
+                }
+            },
+            "maxDepth": 128,
+            "maxNodes": 100_000,
+            "maxMs": 0
+        });
+
+        let response = solve_solver_task_json(&request.to_string()).expect("TENETEN solver task");
+        let response: Value = serde_json::from_str(&response).expect("solver response JSON");
+        assert_eq!(response["result"], "solved", "{response}");
+        assert_eq!(response["depth"], 14);
     }
 
     #[cfg(feature = "solver")]
@@ -2047,8 +2191,13 @@ levels default of board {
         let initial = &loaded.levels[0].initial_state;
         let goal = loaded.goal.as_ref().map(|goal| &goal.expr);
         let lose = loaded.lose.as_ref().map(|lose| &lose.expr);
-        let (solver_game, slicer) =
-            solver_game_and_state_slicer_for_compiled(loaded.game.clone(), initial, goal, lose);
+        let (solver_game, slicer) = solver_game_and_state_slicer_for_compiled(
+            loaded.game.clone(),
+            initial,
+            goal,
+            lose,
+            &loaded.solver_strategy,
+        );
         let mut probe = initial.clone();
         probe.place_object(&solver_game, 3, 0, battery).unwrap();
 

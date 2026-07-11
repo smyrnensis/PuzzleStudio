@@ -1194,12 +1194,12 @@ impl GameSession {
     ) -> Result<(), TransitionError> {
         let mut pending_next_level = None::<Option<String>>;
         let mut pending_again = None::<Option<String>>;
-        let mut pending_restart = None::<Option<String>>;
+        let mut pending_restart = false;
         for command in commands {
             match command.command {
                 TransitionCommand::Win => {}
                 TransitionCommand::Restart => {
-                    pending_restart.get_or_insert(command.target);
+                    pending_restart = true;
                 }
                 TransitionCommand::NextLevel => {
                     pending_next_level.get_or_insert(command.target);
@@ -1210,12 +1210,8 @@ impl GameSession {
                 TransitionCommand::Checkpoint | TransitionCommand::ClearCheckpoint => {}
             }
         }
-        if let Some(target) = pending_restart {
-            if let Some(target) = target {
-                self.reset_puzzle_state(game, &target);
-            } else {
-                self.restart_level(game);
-            }
+        if pending_restart {
+            self.restart_level(game)?;
             return Ok(());
         }
         if let Some(effect) = condition_effect {
@@ -2234,35 +2230,45 @@ impl GameSession {
         Ok(())
     }
 
-    pub fn restart_level(&mut self, game: &LoadedGame) {
+    pub fn restart_level(&mut self, game: &LoadedGame) -> Result<(), TransitionError> {
         if self.active_level_index.is_none() {
-            return;
+            return Ok(());
         }
+        self.begin_new_level_attempt();
         self.emit_model_operation_sfx(game, ModelOperationSound::Restart);
         if let Some(checkpoint) = &self.level_checkpoint_state {
             let mut next = checkpoint.clone();
             self.apply_persistent_vars(game, &mut next);
-            self.replace_state_if_changed(game, next);
+            self.replace_state_if_changed_without_undo(game, next);
+            self.apply_model_level_start(game, true)?;
+            self.apply_level_start_transition(game)?;
             self.sync_current_level_puzzles(game);
-            return;
+            return Ok(());
         }
         if let Some(initial) = self.level_initial_state_override.clone() {
             let mut next = initial.state;
             self.apply_persistent_vars(game, &mut next);
-            self.replace_state_if_changed(game, next);
-            if initial.materialize_level_start {
-                let _ = self.apply_model_level_start(game, true);
-            }
-            let _ = self.apply_level_start_transition(game);
+            self.replace_state_if_changed_without_undo(game, next);
+            self.apply_model_level_start(game, true)?;
+            self.apply_level_start_transition(game)?;
             self.sync_current_level_puzzles(game);
-            return;
+            return Ok(());
         }
         let mut next = self.current_level(game).initial_state.clone();
         self.apply_persistent_vars(game, &mut next);
-        self.replace_state_if_changed(game, next);
-        let _ = self.apply_model_level_start(game, true);
-        let _ = self.apply_level_start_transition(game);
+        self.replace_state_if_changed_without_undo(game, next);
+        self.apply_model_level_start(game, true)?;
+        self.apply_level_start_transition(game)?;
         self.sync_current_level_puzzles(game);
+        Ok(())
+    }
+
+    fn begin_new_level_attempt(&mut self) {
+        self.history.clear();
+        self.pending_effect_continuation = None;
+        self.pending_program_continuation = None;
+        self.wait_events.clear();
+        self.animation_events.clear();
     }
 
     pub fn advance_level(&mut self, game: &LoadedGame) {
@@ -4838,6 +4844,7 @@ __legacy_layer_0 = Player
 }
 empty .
 input save
+input delay
 input clear
 rules {
 if input == right {
@@ -4845,6 +4852,10 @@ once right [ Player | no Player ] -> [ | Player ]
 }
 if input == save {
 checkpoint
+}
+if input == delay {
+wait 1s
+sfx locked
 }
 if input == clear {
 clear_checkpoint
@@ -5991,8 +6002,8 @@ P.
             r#"
 title = operation_sfx_fixture
 sounds {
-sfx undo_tick seed=undo01 type=hit
-sfx restart_tick seed=restart01 type=jump
+sfx undo_tick { seed = undo01; type = hit }
+sfx restart_tick { seed = restart01; type = jump }
 }
 puzzle default {
 sounds {
@@ -6034,12 +6045,158 @@ P.
             }]
         );
 
-        session.restart_level(&loaded);
+        session.restart_level(&loaded).unwrap();
         assert_eq!(
             session.take_sound_events(),
             vec![SoundEvent::PlaySfx {
                 name: "restart_tick".to_string()
             }]
+        );
+    }
+
+    #[test]
+    fn restart_input_starts_a_new_level_attempt_and_component_reset_does_not() {
+        let loaded = parse_game(
+            r#"
+title = restart_attempt_lifecycle
+sounds {
+sfx restart_tick { seed = restart01; type = jump }
+sfx locked { seed = locked01; type = lock }
+}
+puzzle default {
+sounds {
+restart -> sfx restart_tick
+}
+layers {
+actor = Player
+marker = Started
+}
+empty .
+input save
+input delay
+on_level_start {
+sfx locked
+once [ Player no Started ] -> [ Player Started ]
+}
+rules {
+if input == save {
+checkpoint
+}
+if input == delay {
+wait 1s
+sfx locked
+}
+}
+levels {
+legend P = Player
+level "start" {
+P
+}
+}
+}
+scene playing {
+layout {
+puzzle board = default
+}
+rules {
+step board
+}
+}
+"#,
+        )
+        .unwrap();
+        let mut session = GameSession::new(&loaded);
+
+        assert_eq!(
+            session.take_sound_events(),
+            vec![SoundEvent::PlaySfx {
+                name: "locked".to_string()
+            }]
+        );
+
+        session
+            .apply_input(&loaded, input_named(&loaded, "restart"))
+            .unwrap();
+        assert!(!session.can_undo());
+        assert!(!session.can_redo());
+        assert_eq!(
+            session.take_sound_events(),
+            vec![
+                SoundEvent::PlaySfx {
+                    name: "restart_tick".to_string()
+                },
+                SoundEvent::PlaySfx {
+                    name: "locked".to_string()
+                },
+            ]
+        );
+
+        session
+            .start_level_from_state(&loaded, 0, loaded.levels[0].initial_state.clone(), false)
+            .unwrap();
+        assert!(session.take_sound_events().is_empty());
+        session.restart_level(&loaded).unwrap();
+        assert_eq!(
+            session.take_sound_events(),
+            vec![
+                SoundEvent::PlaySfx {
+                    name: "restart_tick".to_string()
+                },
+                SoundEvent::PlaySfx {
+                    name: "locked".to_string()
+                },
+            ]
+        );
+
+        session
+            .apply_input(&loaded, input_named(&loaded, "save"))
+            .unwrap();
+        assert!(session.take_sound_events().is_empty());
+        session
+            .apply_input(&loaded, input_named(&loaded, "restart"))
+            .unwrap();
+        assert_eq!(
+            session.take_sound_events(),
+            vec![
+                SoundEvent::PlaySfx {
+                    name: "restart_tick".to_string()
+                },
+                SoundEvent::PlaySfx {
+                    name: "locked".to_string()
+                },
+            ]
+        );
+
+        session.apply_command(&loaded, "board.restart").unwrap();
+        assert_eq!(
+            session.take_sound_events(),
+            vec![SoundEvent::PlaySfx {
+                name: "restart_tick".to_string()
+            }]
+        );
+
+        session
+            .apply_input(&loaded, input_named(&loaded, "delay"))
+            .unwrap();
+        assert!(
+            session.pending_effect_continuation.is_some()
+                || session.pending_program_continuation.is_some()
+        );
+        assert!(!session.take_wait_events().is_empty());
+        session.restart_level(&loaded).unwrap();
+        assert!(session.pending_effect_continuation.is_none());
+        assert!(session.pending_program_continuation.is_none());
+        assert!(session.take_wait_events().is_empty());
+        assert_eq!(
+            session.take_sound_events(),
+            vec![
+                SoundEvent::PlaySfx {
+                    name: "restart_tick".to_string()
+                },
+                SoundEvent::PlaySfx {
+                    name: "locked".to_string()
+                },
+            ]
         );
     }
 
@@ -7631,12 +7788,13 @@ B = Box
         assert!(session.can_undo());
         assert!(!session.can_redo());
 
-        session.restart_level(&loaded);
+        session.restart_level(&loaded).unwrap();
         assert_eq!(session.state(), &initial);
-        assert!(session.can_undo());
+        assert!(!session.can_undo());
+        assert!(!session.can_redo());
 
         session.undo(&loaded);
-        assert_eq!(session.state(), &moved);
+        assert_eq!(session.state(), &initial);
     }
 
     #[test]
@@ -7697,13 +7855,14 @@ step board
         assert_ne!(moved, editor_start);
         assert!(session.can_undo());
 
-        session.restart_level(&loaded);
+        session.restart_level(&loaded).unwrap();
         assert_eq!(session.state(), &editor_start);
         assert_ne!(session.state(), &authored);
-        assert!(session.can_undo());
+        assert!(!session.can_undo());
+        assert!(!session.can_redo());
 
         session.undo(&loaded);
-        assert_eq!(session.state(), &moved);
+        assert_eq!(session.state(), &editor_start);
     }
 
     #[test]

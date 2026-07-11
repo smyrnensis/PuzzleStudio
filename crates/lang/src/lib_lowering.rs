@@ -354,19 +354,6 @@ fn collect_statement_reference_diagnostics(
                     ));
                 }
             }
-            StatementAst::DisplayCall {
-                name,
-                source_line,
-                source_line_number,
-            } => {
-                if !routine_definition_exists(name, definitions_by_name, local_scopes) {
-                    diagnostics.push(diagnostic_at_source_line_number(
-                        format!("unknown display routine call: {name}"),
-                        source_line,
-                        *source_line_number,
-                    ));
-                }
-            }
             StatementAst::Block { statements, .. } => {
                 collect_statement_reference_diagnostics(
                     statements,
@@ -1245,14 +1232,29 @@ fn lower_goal_expr(
                 })
                 .collect::<Result<Vec<_>, DiagnosticReport>>()?,
         )),
-        ConditionAst::AllObjectsOn { subjects, covers } => Ok(GoalExpr::Clause(GoalClause {
-            value: GoalValue::AllObjectsOn {
-                subjects: subjects.clone(),
-                covers: covers.clone(),
-            },
-            op: ComparisonOp::Eq,
-            expected: 1,
-        })),
+        ConditionAst::AllObjectsOn { subjects, covers } => {
+            let patterns = subjects
+                .iter()
+                .map(|subject| Pattern {
+                    components: vec![PatternComponent::new(vec![MatchCell {
+                        offset: Offset::Fixed { dx: 0, dy: 0 },
+                        require_null: false,
+                        require_objects: vec![*subject],
+                        require_object_sets: Vec::new(),
+                        forbid_objects: covers.clone(),
+                        require_mark: Vec::new(),
+                        require_object_set_mark: Vec::new(),
+                        forbid_mark: Vec::new(),
+                        forbid_object_set_mark: Vec::new(),
+                    }])],
+                })
+                .collect();
+            Ok(GoalExpr::Clause(GoalClause {
+                value: GoalValue::InlineConditionValue(ConditionValueKind::NoneMatches(patterns)),
+                op: ComparisonOp::NotEq,
+                expected: 0,
+            }))
+        }
         ConditionAst::VariableEquals { name, value } => Ok(GoalExpr::Clause(GoalClause {
             value: GoalValue::Variable(resolve_variable_for_goal(name, variable_names)?),
             op: ComparisonOp::Eq,
@@ -1672,11 +1674,6 @@ impl<'a> ProgramLowerer<'a> {
                 source_line,
                 source_line_number,
             } => self.lower_call(name, source_line, *source_line_number, context),
-            StatementAst::DisplayCall {
-                name,
-                source_line,
-                source_line_number,
-            } => self.lower_display_call(name, source_line, *source_line_number, context),
             StatementAst::Conditional {
                 source_line,
                 source_line_number,
@@ -1899,48 +1896,6 @@ impl<'a> ProgramLowerer<'a> {
         }])
     }
 
-    fn lower_display_call(
-        &mut self,
-        name: &str,
-        source_line: &str,
-        source_line_number: Option<usize>,
-        context: &StatementLoweringContext,
-    ) -> Result<Vec<RuleStep>, DiagnosticReport> {
-        if context.call_stack.iter().any(|active| active == name) {
-            return Err(report_at_source_line_number(
-                format!("recursive routine call: {name}"),
-                source_line,
-                source_line_number,
-            ));
-        }
-        let resolved = self.resolve_display_routine_definition(
-            name,
-            source_line,
-            source_line_number,
-            context,
-        )?;
-        let definition = resolved.definition;
-        let mut nested_context = context.clone();
-        if !resolved.is_local {
-            nested_context.local_definitions.clear();
-        }
-        nested_context.role = RuleRole::Visual;
-        nested_context.call_stack.push(name.to_string());
-        nested_context.application = if definition.application == RuleApplication::Random {
-            RuleApplication::Once
-        } else {
-            RuleApplication::UntilStable
-        };
-        nested_context.application_fixed = false;
-        nested_context.orientation = None;
-        let steps = self.lower_statements(&definition.statements, &nested_context)?;
-        Ok(vec![RuleStep::Block {
-            application: definition.application,
-            stop_condition: None,
-            steps,
-        }])
-    }
-
     fn resolve_routine_definition(
         &self,
         name: &str,
@@ -1966,37 +1921,6 @@ impl<'a> ProgramLowerer<'a> {
             .ok_or_else(|| {
                 report_at_source_line_number(
                     format!("unknown routine call: {name}"),
-                    source_line,
-                    source_line_number,
-                )
-            })
-    }
-
-    fn resolve_display_routine_definition(
-        &self,
-        name: &str,
-        source_line: &str,
-        source_line_number: Option<usize>,
-        context: &StatementLoweringContext,
-    ) -> Result<ResolvedRoutineDefinition, DiagnosticReport> {
-        for scope in context.local_definitions.iter().rev() {
-            if let Some(definition) = scope.get(name) {
-                return Ok(ResolvedRoutineDefinition {
-                    definition: definition.clone(),
-                    is_local: true,
-                });
-            }
-        }
-        self.definitions
-            .get(name)
-            .cloned()
-            .map(|definition| ResolvedRoutineDefinition {
-                definition,
-                is_local: false,
-            })
-            .ok_or_else(|| {
-                report_at_source_line_number(
-                    format!("unknown display routine call: {name}"),
                     source_line,
                     source_line_number,
                 )

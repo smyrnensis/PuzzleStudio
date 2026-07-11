@@ -74,7 +74,7 @@ export function createPuzzleScriptSfxPlayer(audioContext, effect, options = {}) 
       throw new Error("PuzzleScript SFX player start requires an explicit AudioContext time");
     }
     stop();
-    const buffer = psRenderBuffer(audioContext, effect.params);
+    const buffer = psRenderBuffer(audioContext, effect.params, effect.numericSeed);
     source = audioContext.createBufferSource();
     const gain = audioContext.createGain();
     const filter1 = audioContext.createBiquadFilter();
@@ -566,7 +566,8 @@ const PS_GENERATORS = [
   psBirdSound,
 ];
 
-function psRenderBuffer(audioContext, ps) {
+function psRenderBuffer(audioContext, ps, numericSeed) {
+  const noiseRng = mulberry32(hashSeed(`puzzlescript-noise:${numericSeed}`));
   let repTime;
   let fperiod;
   let period;
@@ -631,7 +632,7 @@ function psRenderBuffer(audioContext, ps) {
   let iphase = Math.abs(Math.floor(fphase));
   let ipp = 0;
   const phaserBuffer = new Array(1024).fill(0.0);
-  const noiseBuffer = Array.from({ length: 32 }, () => Math.random() * 2.0 - 1.0);
+  const noiseBuffer = Array.from({ length: 32 }, () => noiseRng() * 2.0 - 1.0);
   let repLimit = Math.floor(Math.pow(1.0 - ps.p_repeat_speed, 2.0) * 20000 + 32);
   if (ps.p_repeat_speed === 0.0) {
     repLimit = 0;
@@ -701,7 +702,7 @@ function psRenderBuffer(audioContext, ps) {
         phase %= period;
         if (ps.wave_type === PS_NOISE) {
           for (let i = 0; i < 32; i += 1) {
-            noiseBuffer[i] = Math.random() * 2.0 - 1.0;
+            noiseBuffer[i] = noiseRng() * 2.0 - 1.0;
           }
         }
       }
@@ -852,6 +853,9 @@ const SFX_START_LOOKAHEAD_SECONDS = 0.008;
 
 export function generateSoundEffect(seed, options = {}) {
   const seedText = String(seed);
+  if (options.type === "puzzlescript") {
+    return generatePuzzleScriptSoundEffect(seedText);
+  }
   const overrideType = normalizeType(options.type);
   const type = overrideType ?? typeFromSeed(seedText);
   const rng = mulberry32(hashSeed(seedText));
@@ -899,6 +903,9 @@ export function randomSfxPreset(seed = Date.now(), targetType = null) {
 }
 
 export function createSfxPlayer(audioContext, effect, options = {}) {
+  if (effect?.type === "puzzlescript") {
+    return createPuzzleScriptSfxPlayer(audioContext, effect, options);
+  }
   const activeSources = new Set();
   let output = null;
 

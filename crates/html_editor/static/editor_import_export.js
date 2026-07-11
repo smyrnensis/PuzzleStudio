@@ -14,20 +14,20 @@ async function downloadHtml() {
     return;
   }
   const source = currentSourceForDocument(document);
-  const requestSource = previewRequestSourceForDocument(document, source);
   const filename = htmlDownloadFileName();
   setEditorStatus(`Exporting ${filename}`, "");
   let html = "";
   try {
     html = await window.PuzzleStudioHost.exportStandaloneHtml({
-      source: requestSource,
+      source,
+      workspaceDocuments: workspaceCompilerDocuments(document),
       puzzlePath: document.puzzlePath,
       workspaceRoot: document.workspaceRoot || "",
       gameCss: effectiveGameCss(document),
       gameVisualsJs: effectiveGameVisualsJs(document),
     });
   } catch (error) {
-    appendCompileDiagnostics(error, { source: "compiler", document, sourceText: requestSource });
+    appendCompileDiagnostics(error, { source: "compiler", document, sourceText: source });
     setEditorStatus("Export failed", "is-error");
     return;
   }

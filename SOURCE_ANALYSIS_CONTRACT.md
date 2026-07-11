@@ -156,9 +156,41 @@ reuse an unlabeled numeric offset across that boundary.
 ### Highlighting
 
 Highlighting must derive semantic token kinds and special display ranges from
-the canonical surface document. The language boundary should expose typed spans
-and kinds. HTML generation may remain a presentation helper during migration,
-but HTML is not the canonical language product.
+the canonical surface document. The language boundary exposes typed
+`SourceHighlightSpan` values with UTF-8 byte ranges, `SourceHighlightKind`, and
+optional display data such as a color or transparency flag. Editor wire version
+3 serializes those spans with `offsetEncoding: "utf8"`, the exact source byte
+length, and the requested `[start, end)` byte range. A range response contains
+only spans intersecting that range; intersecting spans retain their complete
+token boundaries. HTML and CSS class names must not cross the language boundary;
+an adapter may render local HTML or map kinds to editor decorations after
+consuming the typed product.
+
+The editor must request the visible source range plus bounded overscan. It must
+map existing decorations through edits and replace only the returned range,
+rather than requesting or rebuilding a whole-document presentation after every
+keystroke. Viewport selection is presentation state owned by the editor; token
+recognition within that range remains language-owned.
+
+Browser source-analysis queries run in one dedicated worker and share its active
+source revision. Highlight, outline, completion, and target queries must not run
+Rust parsing synchronously on the browser main thread. Worker failure is a
+visible analysis failure; the editor must not fall back to a JavaScript grammar
+or to main-thread source analysis.
+
+The active analysis is a long-lived document session. CodeMirror initializes it
+with one exact source snapshot, then sends ordered UTF-16 edits as
+`{ from, to, insert }`; the WASM boundary converts those edits to UTF-8 before
+updating the parser-owned source. Ordinary typing must not reactivate analysis
+from a newly transferred full source string. Each accepted edit advances the
+analysis revision, and queries against an earlier revision fail visibly.
+
+One revision owns one full `SurfaceDocument`. Highlight, outline, completion,
+entries, and target projections must consume that document rather than building
+product-specific surface documents. The line scanner preserves the prefix before
+the first changed line and rescans the structurally dependent suffix. Parser
+catalog data may survive only when the edit is proven to affect comment text
+alone; otherwise it is invalidated explicitly.
 
 Highlighting may display recovered or incomplete tokens. It must not claim that
 their enclosing construct is valid merely because it can assign a color.
@@ -327,4 +359,3 @@ must consume typed projections satisfying this contract. The old textarea
 overlay and the new editor must not remain as long-lived runtime alternatives;
 the final cutover must delete the old source-rendering, undo, folding, and caret
 geometry paths once feature and performance gates pass.
-

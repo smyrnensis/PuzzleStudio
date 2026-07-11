@@ -4,9 +4,9 @@ theme = "puzzlescript"
 
 puzzle main {
 layers {
-Background
-Target
-Player Wall Crate
+layer1 = Background
+layer2 = Target
+layer3 = Player Wall Crate
 }
 
 sprites {
@@ -55,8 +55,16 @@ win_conditions {
 all Target on Crate
 }
 
-on_level_start {
-once_all [ no Background ] -> [ Background ]
+routine move {
+repeat {
+for l in layer1 layer2 layer3 {
+once_all [ > l | | < l ] -> [ l | {__move_collision} | l ]
+once_all [ > l | ; | ^ l ] -> [ l | {__move_collision} ; | l ]
+[ > l | no l no {__move_collision} ] -> [ | l{no directions} ]
+once_all [ > l ] -> [ l ]
+}
+once_all [ {__move_collision} ] -> [ ]
+}
 }
 
 rules {
@@ -72,12 +80,12 @@ next_level
 
 levels {
 legend {
-. = empty
-# = Wall
-P = Player
-B = Crate
-T = Target
-* = Crate Target
+. = Background
+# = Wall Background
+P = Player Background
+B = Crate Background
+T = Target Background
+* = Crate Target Background
 }
 
 #######
@@ -91,16 +99,14 @@ scene title {
 layout {
 title = "Basic PS Sokoban"
 if has_progress_save {
-choice "Continue" -> continue_game
-}
-choice "New Game" -> new_game
-}
-routine continue_game {
+choice "Continue" -> {
 goto playing
 }
-routine new_game {
+}
+choice "New Game" -> {
 clear_game_progress
-goto playing(0)
+start playing
+}
 }
 }
 
@@ -112,12 +118,9 @@ title = "Basic PS Sokoban"
 puzzle board = main
 }
 keys {
-Escape q -> back
+Escape q -> goto title
 }
 rules {
 step board
-}
-routine back {
-goto title
 }
 }

@@ -234,7 +234,6 @@ pub fn translate_puzzlescript_to_canonical(source: &str) -> Result<String, Diagn
         &maps,
         case_sensitive,
         run_rules_on_level_start,
-        background_object.as_deref(),
         &sounds,
         uses_action_input,
         &rule_sections,
@@ -1522,7 +1521,6 @@ fn push_legend(
     background_object: Option<&str>,
 ) -> BTreeMap<char, char> {
     out.push("legend {".to_string());
-    let mut has_empty = false;
     let mut defined_chars = BTreeSet::<char>::new();
     let used_chars = level_chars(level_lines);
     let char_map = ps_level_char_map(lines, &used_chars);
@@ -1531,10 +1529,9 @@ fn push_legend(
         let Some(ch) = object.shorthand else {
             continue;
         };
-        if Some(object.name.as_str()) == background_object {
-            continue;
-        }
-        out.push(format!("  {ch} = {}", object.name));
+        let mut terms = vec![object.name.clone()];
+        append_ps_background(&mut terms, background_object);
+        out.push(format!("  {ch} = {}", terms.join(" ")));
         defined_chars.insert(ch);
     }
 
@@ -1550,15 +1547,13 @@ fn push_legend(
             .into_iter()
             .filter_map(|term| resolve_name(term, objects, aliases, tags, maps, case_sensitive))
             .collect::<Vec<_>>();
-        let terms = resolved_terms
+        let mut terms = resolved_terms
             .iter()
             .cloned()
-            .filter(|term| Some(term.as_str()) != background_object)
+            .filter(|term| term != "empty")
             .collect::<Vec<_>>();
-        if terms == ["empty"] || (!resolved_terms.is_empty() && terms.is_empty()) {
-            out.push(format!("  {output_ch} = empty"));
-            has_empty = true;
-        } else if !terms.is_empty() {
+        append_ps_background(&mut terms, background_object);
+        if !terms.is_empty() {
             out.push(format!("  {output_ch} = {}", terms.join(" ")));
         }
         if !terms.is_empty() {
@@ -1576,13 +1571,21 @@ fn push_legend(
             }
         }
     }
-    if !has_empty {
+    if background_object.is_none() {
         let empty = choose_empty_legend_char(&defined_chars, &used_chars);
         out.push(format!("  {empty} = empty"));
     }
     out.push("}".to_string());
     out.push(String::new());
     char_map
+}
+
+fn append_ps_background(terms: &mut Vec<String>, background_object: Option<&str>) {
+    let Some(background) = background_object else {
+        return;
+    };
+    terms.retain(|term| term != background);
+    terms.push(background.to_string());
 }
 
 fn ps_background_object(objects: &[PsObjectDef]) -> Option<String> {
@@ -1771,7 +1774,6 @@ fn push_rules(
     maps: &[PsMapDef],
     case_sensitive: bool,
     run_rules_on_level_start: bool,
-    background_object: Option<&str>,
     sounds: &[PsSoundDef],
     uses_action_input: bool,
     rule_sections: &PsRuleSections,
@@ -1804,7 +1806,6 @@ fn push_rules(
         out.push(String::new());
 
         out.push("on_level_start {".to_string());
-        push_ps_background_fill(out, background_object, "  ");
         out.push(format!("  {PS_MAIN_ROUTINE}"));
         out.push("}".to_string());
         out.push(String::new());
@@ -1818,13 +1819,6 @@ fn push_rules(
         out.push("}".to_string());
         out.push(String::new());
         return;
-    }
-
-    if background_object.is_some() {
-        out.push("on_level_start {".to_string());
-        push_ps_background_fill(out, background_object, "  ");
-        out.push("}".to_string());
-        out.push(String::new());
     }
 
     out.push("rules {".to_string());
@@ -1855,16 +1849,30 @@ fn push_ps_move_routine(out: &mut Vec<String>, collision_layers: &[PsLayerDef]) 
 
     out.push("routine move {".to_string());
     out.push("  repeat {".to_string());
-    out.push(format!("    for l in {} {{", move_layers.join(" ")));
-    out.push("      once_all [ > l | | < l ] -> [ l | {__move_collision} | l ]".to_string());
-    out.push("      once_all [ > l | ; | ^ l ] -> [ l | {__move_collision} ; | l ]".to_string());
-    out.push("      [ > l | no l no {__move_collision} ] -> [ | l{no directions} ]".to_string());
-    out.push("      once_all [ > l ] -> [ l ]".to_string());
-    out.push("    }".to_string());
+    if let [layer] = move_layers.as_slice() {
+        push_ps_move_layer_rules(out, layer, "    ");
+    } else {
+        out.push(format!("    for l in {} {{", move_layers.join(" ")));
+        push_ps_move_layer_rules(out, "l", "      ");
+        out.push("    }".to_string());
+    }
     out.push("    once_all [ {__move_collision} ] -> [ ]".to_string());
     out.push("  }".to_string());
     out.push("}".to_string());
     out.push(String::new());
+}
+
+fn push_ps_move_layer_rules(out: &mut Vec<String>, layer: &str, indent: &str) {
+    out.push(format!(
+        "{indent}once_all [ > {layer} | | < {layer} ] -> [ {layer} | {{__move_collision}} | {layer} ]"
+    ));
+    out.push(format!(
+        "{indent}once_all [ > {layer} | ; | ^ {layer} ] -> [ {layer} | {{__move_collision}} ; | {layer} ]"
+    ));
+    out.push(format!(
+        "{indent}[ > {layer} | no {layer} no {{__move_collision}} ] -> [ | {layer}{{no directions}} ]"
+    ));
+    out.push(format!("{indent}once_all [ > {layer} ] -> [ {layer} ]"));
 }
 
 fn parse_ps_rule_sections(lines: &[String]) -> PsRuleSections {
@@ -1979,15 +1987,6 @@ fn push_ps_level_clear(out: &mut Vec<String>) {
     out.push("  next_level".to_string());
     out.push("}".to_string());
     out.push(String::new());
-}
-
-fn push_ps_background_fill(out: &mut Vec<String>, background_object: Option<&str>, indent: &str) {
-    let Some(background) = background_object else {
-        return;
-    };
-    out.push(format!(
-        "{indent}once_all [ no {background} ] -> [ {background} ]"
-    ));
 }
 
 fn push_ps_main_rule_body(
@@ -2733,20 +2732,25 @@ fn push_playing_scene(
         ));
     }
     out.push("    if has_progress_save {".to_string());
-    out.push("      choice \"Continue\" -> continue_game".to_string());
+    push_scene_action(
+        out,
+        "      ",
+        "choice \"Continue\"",
+        &["goto playing"],
+        startgame_sfx,
+    );
     out.push("    }".to_string());
-    out.push("    choice \"New Game\" -> new_game".to_string());
+    push_scene_action(
+        out,
+        "    ",
+        "choice \"New Game\"",
+        &["clear_game_progress", "start playing"],
+        startgame_sfx,
+    );
     if level_select {
         out.push("    choice \"Level Select\" -> goto level_select".to_string());
     }
     out.push("  }".to_string());
-    push_scene_routine(out, "continue_game", &["goto playing"], startgame_sfx);
-    push_scene_routine(
-        out,
-        "new_game",
-        &["clear_game_progress", "goto playing(0)"],
-        startgame_sfx,
-    );
     out.push("}".to_string());
     out.push(String::new());
 
@@ -2764,12 +2768,15 @@ fn push_playing_scene(
         out.push("  }".to_string());
     }
     out.push("  keys {".to_string());
-    out.push("    Escape q -> back".to_string());
+    if level_select {
+        out.push("    Escape q -> goto level_select".to_string());
+    } else {
+        out.push("    Escape q -> goto title".to_string());
+    }
     out.push("  }".to_string());
     out.push("  rules {".to_string());
     out.push("    step board".to_string());
     out.push("  }".to_string());
-    push_scene_routine(out, "back", &["goto title"], None);
     out.push("}".to_string());
     out.push(String::new());
 
@@ -2787,24 +2794,25 @@ fn push_playing_scene(
     }
 }
 
-fn push_scene_routine(
+fn push_scene_action(
     out: &mut Vec<String>,
-    name: &str,
+    indent: &str,
+    header: &str,
     effects: &[&str],
     startgame_sfx: Option<&str>,
 ) {
-    out.push(format!("  routine {name} {{"));
+    out.push(format!("{indent}{header} -> {{"));
     if let Some(name) = startgame_sfx {
-        out.push(format!("    sfx {name}"));
+        out.push(format!("{indent}  sfx {name}"));
         for effect in effects {
-            out.push(format!("    {effect}"));
+            out.push(format!("{indent}  {effect}"));
         }
     } else {
         for effect in effects {
-            out.push(format!("    {effect}"));
+            out.push(format!("{indent}  {effect}"));
         }
     }
-    out.push("  }".to_string());
+    out.push(format!("{indent}}}"));
 }
 
 fn escape_scene_text(text: &str) -> String {

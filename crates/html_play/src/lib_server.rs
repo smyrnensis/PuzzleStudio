@@ -200,7 +200,17 @@ fn handle_standalone_session_request(
             mutate(state, |state| state.session.redo(&state.loaded))
         }
         puzzle_game_runtime::StandaloneSessionRequest::Restart => {
-            mutate(state, |state| state.session.restart_level(&state.loaded))
+            let mut state = state.lock().expect("server state poisoned");
+            let result = {
+                let ServerState {
+                    session, loaded, ..
+                } = &mut *state;
+                session.restart_level(loaded)
+            };
+            match result {
+                Ok(()) => http_ok("application/json; charset=utf-8", &state.snapshot_json()),
+                Err(error) => http_error(400, &format!("{error:?}")),
+            }
         }
         puzzle_game_runtime::StandaloneSessionRequest::Next => {
             mutate(state, |state| state.session.advance_level(&state.loaded))
@@ -689,7 +699,9 @@ fn push_scene_puzzle_state(out: &mut String, loaded: &LoadedGame, session: &Game
         }
         if let Some(puzzle) = state.puzzles.get(name) {
             out.push(',');
-            let level = puzzle.level_index.and_then(|index| loaded.levels.get(index));
+            let level = puzzle
+                .level_index
+                .and_then(|index| loaded.levels.get(index));
             push_scene_object_body(
                 out,
                 loaded,

@@ -31,7 +31,7 @@ pub fn parse_game2d(source: &str) -> Result<LoadedGame, DiagnosticReport> {
 }
 
 #[derive(Clone, Debug, Default)]
-struct SurfaceScan {
+pub(crate) struct SurfaceScan {
     raw_ranges: Vec<SourceSpan>,
     plain_ranges: Vec<SourceSpan>,
     lines: Vec<SurfaceScanLine>,
@@ -142,6 +142,26 @@ fn try_build_surface_document(
     strict_projection: bool,
 ) -> Result<SurfaceDocument, DiagnosticReport> {
     let scan = scan_surface_document_source(source);
+    let parser_catalog = products
+        .needs_parser_catalog()
+        .then(|| parser_surface_catalog(source))
+        .flatten();
+    try_build_surface_document_from_scan(
+        source,
+        &scan,
+        products,
+        strict_projection,
+        parser_catalog.as_ref(),
+    )
+}
+
+fn try_build_surface_document_from_scan(
+    source: &str,
+    scan: &SurfaceScan,
+    products: SurfaceDocumentProducts,
+    strict_projection: bool,
+    parser_catalog: Option<&Catalog>,
+) -> Result<SurfaceDocument, DiagnosticReport> {
     let mut sink = SurfaceSink::default();
     let structural_blocks = surface_structural_blocks(&scan);
     sink.set_structural_blocks(structural_blocks.clone());
@@ -149,10 +169,6 @@ fn try_build_surface_document(
         record_surface_builtin_completion_symbols(&mut sink);
         record_surface_completion_value_sets(&scan, &mut sink);
     }
-    let parser_catalog = products
-        .needs_parser_catalog()
-        .then(|| parser_surface_catalog(source))
-        .flatten();
     if products.semantic_tokens {
         record_structural_block_surface_tokens(&structural_blocks, strict_projection, &mut sink)?;
     }
@@ -190,7 +206,7 @@ fn try_build_surface_document(
         }
         update_surface_option_block_stack(line, &mut option_stack);
     }
-    if let Some(catalog) = parser_catalog.as_ref() {
+    if let Some(catalog) = parser_catalog {
         if products.semantic_tokens {
             record_parser_resolved_surface_tokens(&scan, catalog, &mut sink);
         }
@@ -198,12 +214,20 @@ fn try_build_surface_document(
             record_parser_catalog_completion_symbols(catalog, &mut sink);
         }
     }
+    let visual_sprite_refs = (products.highlight_ranges || products.visual_sprite_refs)
+        .then(|| surface_visual_sprite_refs(source, &scan));
     if products.highlight_ranges {
-        sink.set_highlight_ranges(surface_highlight_ranges(&scan));
+        sink.set_highlight_ranges(surface_highlight_ranges(
+            &scan,
+            visual_sprite_refs
+                .as_ref()
+                .expect("highlight ranges requested visual sprite refs"),
+        ));
     }
     if products.visual_sprite_refs {
-        sink.visual_sprite_refs_mut()
-            .merge(surface_visual_sprite_refs(source, &scan));
+        sink.visual_sprite_refs_mut().merge(
+            visual_sprite_refs.expect("visual sprite refs were requested by the product set"),
+        );
     }
     if products.completion_symbols {
         normalize_surface_completion_symbols(&mut sink);
@@ -211,8 +235,28 @@ fn try_build_surface_document(
     Ok(sink.into_document())
 }
 
+pub(crate) fn build_surface_document_from_source_scan(
+    source: &str,
+    source_scan: &source::SurfaceSourceScan,
+    parser_catalog: Option<&Catalog>,
+) -> SurfaceDocument {
+    let scan = surface_scan_from_source_scan(source_scan);
+    try_build_surface_document_from_scan(
+        source,
+        &scan,
+        SurfaceDocumentProducts::FULL,
+        false,
+        parser_catalog,
+    )
+    .expect("surface document scan failed")
+}
+
 fn scan_surface_document_source(source: &str) -> SurfaceScan {
     let context = source::scan_surface_source(source);
+    surface_scan_from_source_scan(&context)
+}
+
+fn surface_scan_from_source_scan(context: &source::SurfaceSourceScan) -> SurfaceScan {
     let mut scan = SurfaceScan {
         raw_ranges: context
             .raw_ranges()
@@ -232,18 +276,18 @@ fn scan_surface_document_source(source: &str) -> SurfaceScan {
             .collect(),
         lines: context
             .lines
-            .into_iter()
+            .iter()
             .map(|line| SurfaceScanLine {
-                tokens: line.tokens,
-                token_spans: line.token_spans,
-                structural_token_spans: line.structural_token_spans,
-                structural_lines: line.structural_lines,
-                structural_events: line.structural_events,
+                tokens: line.tokens.clone(),
+                token_spans: line.token_spans.clone(),
+                structural_token_spans: line.structural_token_spans.clone(),
+                structural_lines: line.structural_lines.clone(),
+                structural_events: line.structural_events.clone(),
                 visual_scope: None,
                 scope: line.scope,
                 start: line.start,
                 line: line.line,
-                content: line.content,
+                content: line.content.clone(),
             })
             .collect(),
     };
@@ -345,7 +389,10 @@ fn line_start_offset(content: &str, line_start: usize) -> usize {
     line_start + content.len() - content.trim_start().len()
 }
 
-fn surface_highlight_ranges(scan: &SurfaceScan) -> SurfaceHighlightRanges {
+fn surface_highlight_ranges(
+    scan: &SurfaceScan,
+    visual_refs: &SurfaceVisualSpriteRefs,
+) -> SurfaceHighlightRanges {
     let mut ranges = SurfaceHighlightRanges {
         raw_ranges: scan.raw_ranges.clone(),
         plain_ranges: scan.plain_ranges.clone(),
@@ -361,7 +408,7 @@ fn surface_highlight_ranges(scan: &SurfaceScan) -> SurfaceHighlightRanges {
     ranges.visual_named_color_ranges =
         scan_visual_named_color_surface_ranges(scan, &visual_color_aliases);
     ranges.visual_ascii_color_ranges =
-        scan_visual_ascii_color_surface_ranges(scan, &visual_color_aliases);
+        scan_visual_ascii_color_surface_ranges(scan, &visual_color_aliases, visual_refs);
     ranges.visual_separator_ranges =
         scan_visual_separator_surface_ranges(scan, &visual_color_aliases);
     ranges
@@ -770,6 +817,7 @@ fn highlightable_visual_color_token(value: &str) -> bool {
 fn scan_visual_ascii_color_surface_ranges(
     scan: &SurfaceScan,
     aliases: &HashMap<String, String>,
+    visual_refs: &SurfaceVisualSpriteRefs,
 ) -> Vec<SurfaceVisualAsciiColorRange> {
     let mut ranges = Vec::new();
 
@@ -784,9 +832,21 @@ fn scan_visual_ascii_color_surface_ranges(
         if visual_inline_sprite_entry_line(line, aliases) {
             line_index += 1;
         } else if line.content.trim_end().ends_with('{') {
-            line_index = scan_braced_visual_sprite_entry(scan, line_index, aliases, &mut ranges);
+            line_index = scan_braced_visual_sprite_entry(
+                scan,
+                line_index,
+                aliases,
+                visual_refs,
+                &mut ranges,
+            );
         } else {
-            line_index = scan_unbraced_visual_sprite_entry(scan, line_index, aliases, &mut ranges);
+            line_index = scan_unbraced_visual_sprite_entry(
+                scan,
+                line_index,
+                aliases,
+                visual_refs,
+                &mut ranges,
+            );
         }
     }
 
@@ -825,6 +885,7 @@ fn scan_braced_visual_sprite_entry(
     scan: &SurfaceScan,
     start: usize,
     aliases: &HashMap<String, String>,
+    visual_refs: &SurfaceVisualSpriteRefs,
     ranges: &mut Vec<SurfaceVisualAsciiColorRange>,
 ) -> usize {
     let mut index = start + 1;
@@ -835,7 +896,7 @@ fn scan_braced_visual_sprite_entry(
         }
         index += 1;
     }
-    add_sprite_syntax_pixel_ranges(&scan.lines[start + 1..index], aliases, ranges);
+    add_sprite_syntax_pixel_ranges(&scan.lines[start + 1..index], aliases, visual_refs, ranges);
     index.max(start + 1)
 }
 
@@ -861,6 +922,7 @@ fn scan_unbraced_visual_sprite_entry(
     scan: &SurfaceScan,
     start: usize,
     aliases: &HashMap<String, String>,
+    visual_refs: &SurfaceVisualSpriteRefs,
     ranges: &mut Vec<SurfaceVisualAsciiColorRange>,
 ) -> usize {
     let mut index = start + 1;
@@ -871,13 +933,14 @@ fn scan_unbraced_visual_sprite_entry(
         }
         index += 1;
     }
-    add_sprite_syntax_pixel_ranges(&scan.lines[start + 1..index], aliases, ranges);
+    add_sprite_syntax_pixel_ranges(&scan.lines[start + 1..index], aliases, visual_refs, ranges);
     index.max(start + 1)
 }
 
 fn add_sprite_syntax_pixel_ranges(
     lines: &[SurfaceScanLine],
     aliases: &HashMap<String, String>,
+    visual_refs: &SurfaceVisualSpriteRefs,
     ranges: &mut Vec<SurfaceVisualAsciiColorRange>,
 ) {
     let body = lines
@@ -885,6 +948,9 @@ fn add_sprite_syntax_pixel_ranges(
         .map(|line| line.content.clone())
         .collect::<Vec<_>>();
     let syntax = crate::sprite_authoring::parse_sprite_node(None, &body);
+    let resolved_shape = crate::sprite_authoring::resolve_sprite_shape(&syntax, |name| {
+        visual_refs.shape_names.contains(name)
+    });
     let Some(colors) = syntax.colors else {
         return;
     };
@@ -892,8 +958,8 @@ fn add_sprite_syntax_pixel_ranges(
     let Some(palette) = visual_ascii_palette(&color_tokens, aliases) else {
         return;
     };
-    let row_indexes = match syntax.shape {
-        Some(crate::sprite_authoring::SpriteShapeSyntax::Inline { frames, .. }) => frames
+    let row_indexes = match resolved_shape {
+        crate::sprite_authoring::ResolvedSpriteShape::Inline(frames) => frames
             .into_iter()
             .flatten()
             .map(|row| row.body_line)
@@ -1440,11 +1506,29 @@ fn record_surface_document_line(
     }
     record_fix_default_surface_tokens(scope, tokens, line, sink);
     record_standard_move_surface_tokens(scope, tokens, sink);
+    record_condition_surface_tokens(scope, tokens, sink);
     record_rule_routine_header_surface_line(scope, line_start, line, sink);
     record_rule_statement_surface_tokens(scope, tokens, sink);
     record_rule_line_surface_tokens(scope, line_start, line, sink);
     record_oriented_pattern_arg_surface_line(scope, line_start, line, sink);
     record_rewrite_surface_line(scope, line, tokens, sink);
+}
+
+fn record_condition_surface_tokens(
+    scope: Option<SourceScope>,
+    tokens: &[SourceToken],
+    sink: &mut SurfaceSink,
+) {
+    if scope != Some(SourceScope::Condition) {
+        return;
+    }
+    if let [all, _, on, _] = tokens
+        && all.text == "all"
+        && on.text == "on"
+    {
+        add_scene_effect_token_range(sink, all, SurfaceSemanticKind::Keyword);
+        add_scene_effect_token_range(sink, on, SurfaceSemanticKind::Keyword);
+    }
 }
 
 fn record_structural_block_surface_tokens(
@@ -3197,6 +3281,58 @@ mod surface_document_flow_tests {
         validate_surface_document_projection,
     };
     use crate::surface::SurfaceSemanticKind;
+
+    #[test]
+    fn bare_shape_reference_is_not_highlighted_as_inline_pixels() {
+        let source = r##"
+puzzle board {
+layers {
+actors = Box
+}
+sprites {
+Box
+#111 #eee
+box_shape
+
+shapes {
+box_shape {
+010
+111
+010
+}
+}
+}
+rules {
+}
+levels {
+legend {
+. = empty
+B = Box
+}
+level "one"
+B
+}
+}
+"##;
+        let reference_start = source.find("box_shape\n\nshapes").unwrap();
+        let reference_end = reference_start + "box_shape".len();
+        let document = parse_surface_document(source);
+
+        assert!(
+            document
+                .visual_sprite_refs
+                .shape_names
+                .contains("box_shape")
+        );
+        assert!(
+            document
+                .highlight_ranges
+                .visual_ascii_color_ranges
+                .iter()
+                .all(|range| range.span.end <= reference_start || range.span.start >= reference_end),
+            "shape references must not be projected as inline pixel rows"
+        );
+    }
 
     #[test]
     fn structure_only_surface_document_shares_full_structural_product() {

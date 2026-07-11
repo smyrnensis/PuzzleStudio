@@ -39,10 +39,12 @@ levels {
 }
 
 scene title {
+  layout {
+    button "Play" -> input confirm
+  }
   keys {
     Enter Space x -> confirm
   }
-  button "Play" -> input confirm
   routine confirm {
     goto playing
   }

@@ -152,7 +152,7 @@ impl LoadedGame {
                 level_clear_program: None,
             }],
             run_rules_on_level_start: false,
-            legend: AsciiLegend::new(0, '.'),
+            legend: AsciiLegend::new(0, Some('.')),
             controls: Controls::default(),
             variables: Vec::new(),
             scenes: Vec::new(),
@@ -183,80 +183,11 @@ impl LoadedGame {
     }
 
     pub fn solver_game(&self) -> CompiledGame {
-        let program = filter_display_steps(self.game.program(), &self.display_rules);
-        CompiledGame::new_with_mark_condition_defs_and_program(
-            self.game.layer_count,
-            self.game.objects().to_vec(),
-            self.game.mark().to_vec(),
-            self.game.condition_defs().to_vec(),
-            program,
-        )
+        self.game.clone()
     }
 
     pub fn solver_state(&self, state: &State) -> State {
-        state.without_objects(&self.display_objects)
-    }
-}
-
-fn filter_display_steps(program: &[RuleStep], display_rules: &[RuleId]) -> Vec<RuleStep> {
-    program
-        .iter()
-        .filter_map(|step| filter_display_step(step, display_rules))
-        .collect()
-}
-
-fn filter_display_step(step: &RuleStep, display_rules: &[RuleId]) -> Option<RuleStep> {
-    match step {
-        RuleStep::Rule(rule) => display_rules
-            .binary_search(&rule.id)
-            .is_err()
-            .then(|| RuleStep::Rule(rule.clone())),
-        RuleStep::ConditionalBlock { condition, steps } => {
-            let steps = filter_display_steps(steps, display_rules);
-            (!steps.is_empty()).then(|| RuleStep::ConditionalBlock {
-                condition: condition.clone(),
-                steps,
-            })
-        }
-        RuleStep::ConditionalBranch {
-            condition,
-            then_steps,
-            else_steps,
-        } => {
-            let then_steps = filter_display_steps(then_steps, display_rules);
-            let else_steps = filter_display_steps(else_steps, display_rules);
-            (!then_steps.is_empty() || !else_steps.is_empty()).then(|| {
-                RuleStep::ConditionalBranch {
-                    condition: condition.clone(),
-                    then_steps,
-                    else_steps,
-                }
-            })
-        }
-        RuleStep::Block {
-            application,
-            stop_condition,
-            steps,
-        } => {
-            let steps = filter_display_steps(steps, display_rules);
-            (!steps.is_empty()).then(|| RuleStep::Block {
-                application: *application,
-                stop_condition: stop_condition.clone(),
-                steps,
-            })
-        }
-        RuleStep::AfterTriggered { steps, then_steps } => {
-            let steps = filter_display_steps(steps, display_rules);
-            let then_steps = filter_display_steps(then_steps, display_rules);
-            (!steps.is_empty()).then(|| RuleStep::AfterTriggered { steps, then_steps })
-        }
-        RuleStep::LocalFrame { frame, steps } => {
-            let steps = filter_display_steps(steps, display_rules);
-            (!steps.is_empty()).then(|| RuleStep::LocalFrame {
-                frame: frame.clone(),
-                steps,
-            })
-        }
+        state.clone()
     }
 }
 
@@ -647,10 +578,6 @@ pub enum GoalValue {
     Variable(VariableId),
     Condition(ConditionId),
     InlineConditionValue(ConditionValueKind),
-    AllObjectsOn {
-        subjects: Vec<ObjectId>,
-        covers: Vec<ObjectId>,
-    },
 }
 
 pub type SolverStrategy = SolverStrategyOf<QueryExpr>;
@@ -735,6 +662,10 @@ pub enum QueryExprOf<Object, Value, Variable> {
     Distance {
         from: Vec<Object>,
         to: Vec<Object>,
+    },
+    AllOnDistance {
+        subjects: Vec<Object>,
+        covers: Vec<Object>,
     },
     Compare {
         left: Box<QueryExprOf<Object, Value, Variable>>,
@@ -955,21 +886,6 @@ fn eval_goal_value(game: &CompiledGame, state: &State, value: &GoalValue) -> i64
             .map(|condition| eval_goal_condition_value_kind(game, state, &condition.kind))
             .unwrap_or(0),
         GoalValue::InlineConditionValue(kind) => eval_goal_condition_value_kind(game, state, kind),
-        GoalValue::AllObjectsOn { subjects, covers } => {
-            if subjects.iter().all(|subject| {
-                state.object_positions(*subject).iter().all(|slot| {
-                    state.slot_position(*slot).is_some_and(|(x, y)| {
-                        covers
-                            .iter()
-                            .any(|cover| state.has_object(game, x, y, *cover))
-                    })
-                })
-            }) {
-                1
-            } else {
-                0
-            }
-        }
     }
 }
 
@@ -1047,11 +963,11 @@ pub struct AsciiLegend {
 }
 
 impl AsciiLegend {
-    pub(crate) fn new(object_count: usize, empty: char) -> Self {
+    pub(crate) fn new(object_count: usize, empty: Option<char>) -> Self {
         Self {
             chars: vec!['?'; object_count + 1],
             ignored: Vec::new(),
-            empty,
+            empty: empty.unwrap_or('?'),
             unknown: '?',
         }
     }

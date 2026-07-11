@@ -11,12 +11,13 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 
 const args = parseArgs(process.argv.slice(2));
 const editorBin = requiredPath(args.editorBin, "--editor-bin");
-const fixture2d = path.resolve(repoRoot, args.fixture || "games/spec_2d.puzzle");
+const fixture2d = path.resolve(repoRoot, args.fixture || "crates/lang/tests/fixtures/spec_2d_microban_basic.puzzle");
 const fixture3d = path.resolve(repoRoot, args.fixture3d || "games/spec_3d.puzzle3");
 const importFileOnly = args.importFileOnly ? path.resolve(repoRoot, args.importFileOnly) : "";
 const chromePath = resolveChrome(args.chrome);
 const headless = !args.headed;
 const sourceInputOnly = Boolean(args.sourceInputOnly);
+const spritePaletteOnly = Boolean(args.spritePaletteOnly);
 
 const failures = [];
 
@@ -30,6 +31,10 @@ async function main() {
       await editorLoads(page);
       if (importFileOnly) {
         await fileInputImportAddsExternalPuzzleDocument(page, importFileOnly);
+        return;
+      }
+      await spritePaletteMouseClickPreservesPaneScroll(page);
+      if (spritePaletteOnly) {
         return;
       }
       await sourceEditorReflectsInputBeforeKeyup(page);
@@ -49,7 +54,7 @@ async function main() {
       await sourceLevelAsciiClickOpensLevelEditor(page);
     });
 
-    if (!sourceInputOnly && !importFileOnly) {
+    if (!sourceInputOnly && !spritePaletteOnly && !importFileOnly) {
       await withEditorServer(fixture3d, async (server) => {
         await page.navigate(server.url);
         await editorLoads(page);
@@ -65,6 +70,87 @@ async function main() {
     throw new Error(`browser smoke saw page errors:\n- ${failures.join("\n- ")}`);
   }
   console.log("editor browser smoke tests passed");
+}
+
+async function spritePaletteMouseClickPreservesPaneScroll(page) {
+  await clickTop(page, "#spriteModeButton");
+  await page.waitForTop(
+    `Boolean(document.querySelector("#spriteBuilder") && !document.querySelector("#spriteBuilder").hidden)`,
+    "2D sprite pane"
+  );
+  const clickPoint = await page.evaluateTop(`(() => {
+    const palette = document.querySelector("#spritePalette");
+    const button = palette?.querySelector('[data-sprite-brush-preset="thick"]');
+    const scroller = palette?.closest(".tool-pane-scroll");
+    if (!palette || !button || !scroller) {
+      throw new Error("missing sprite palette scroll test target");
+    }
+    window.__spritePaletteSmokeScroller = scroller;
+    window.__spritePaletteSmokeOriginalStyle = scroller.style.cssText;
+    window.__spritePaletteSmokeClicked = false;
+    scroller.style.height = "458px";
+    scroller.style.maxHeight = "458px";
+    scroller.style.overflow = "auto";
+    const maxScroll = scroller.scrollHeight - scroller.clientHeight;
+    scroller.scrollTop = Math.min(70, maxScroll);
+    if (scroller.scrollTop <= 0) {
+      throw new Error(
+        "sprite palette smoke requires overflow: " + JSON.stringify({
+          clientHeight: scroller.clientHeight,
+          scrollHeight: scroller.scrollHeight,
+        })
+      );
+    }
+    const buttonRect = button.getBoundingClientRect();
+    const scrollerRect = scroller.getBoundingClientRect();
+    if (buttonRect.bottom <= scrollerRect.top || buttonRect.top >= scrollerRect.bottom) {
+      throw new Error("sprite palette smoke button is outside the scroller viewport");
+    }
+    window.__spritePaletteSmokeBaseline = scroller.scrollTop;
+    button.addEventListener("click", () => {
+      window.__spritePaletteSmokeClicked = true;
+    }, { once: true });
+    return {
+      x: Math.round(buttonRect.left + buttonRect.width / 2),
+      y: Math.round(buttonRect.top + buttonRect.height / 2),
+    };
+  })()`);
+
+  try {
+    await clickViewport(page, clickPoint);
+    const result = await page.evaluateTop(`(() => {
+      const scroller = window.__spritePaletteSmokeScroller;
+      const button = document.querySelector('#spritePalette [data-sprite-brush-preset="thick"]');
+      return {
+        baseline: window.__spritePaletteSmokeBaseline,
+        scrollTop: scroller?.scrollTop ?? null,
+        clicked: window.__spritePaletteSmokeClicked === true,
+        buttonFocused: document.activeElement === button,
+      };
+    })()`);
+    assert.equal(result.clicked, true, "sprite palette button click should still fire");
+    assert.equal(
+      result.scrollTop,
+      result.baseline,
+      `sprite palette mouse click changed pane scroll: ${JSON.stringify(result)}`
+    );
+    assert.equal(result.buttonFocused, false, "sprite palette mouse click should not take focus");
+  } finally {
+    await page.evaluateTop(`(() => {
+      const scroller = window.__spritePaletteSmokeScroller;
+      if (scroller) {
+        scroller.style.cssText = window.__spritePaletteSmokeOriginalStyle || "";
+        scroller.scrollTop = 0;
+      }
+      delete window.__spritePaletteSmokeScroller;
+      delete window.__spritePaletteSmokeOriginalStyle;
+      delete window.__spritePaletteSmokeBaseline;
+      delete window.__spritePaletteSmokeClicked;
+      return true;
+    })()`).catch(() => {});
+    await clickTop(page, "#playModeButton").catch(() => {});
+  }
+  await page.assertNoErrors("sprite palette mouse focus");
 }
 
 async function editorLoads(page) {
@@ -1838,6 +1924,10 @@ function parseArgs(argv) {
     }
     if (arg === "--source-input-only") {
       parsed.sourceInputOnly = true;
+      continue;
+    }
+    if (arg === "--sprite-palette-only") {
+      parsed.spritePaletteOnly = true;
       continue;
     }
     if (arg === "--editor-bin") {

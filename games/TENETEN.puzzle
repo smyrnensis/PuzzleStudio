@@ -189,37 +189,26 @@ shape_You_F {
 }
 }
 
-sprite {
-selector = Background
-colors = #8fcf6f
-}
+Background
+#8fcf6f
 
-sprite {
-selector = Background2
-colors = #0000000a
-}
+Background2
+#0000000a
 
-sprite {
-selector = You:F
-colors = #fff #000 #00000015
-shape = shape_You_F
-}
+You:F
+#fff #000 #00000015
+shape_You_F
 
-sprite {
-selector = You:B
-colors = #000 #fff #00000015
-shape = shape_You_F
-}
+You:B
+#000 #fff #00000015
+shape_You_F
 
-sprite {
-selector = TargetYou
-colors = #0003 #0003 #0000
-shape = shape_You_F
-}
+TargetYou
+#0003 #0003 #0000
+shape_You_F
 
-sprite {
-selector = Crate
-colors = #b85 #a74 #00000015
+Crate
+#b85 #a74 #00000015
 ..............
 ..............
 ..0000000000..
@@ -234,11 +223,9 @@ colors = #b85 #a74 #00000015
 ..0000000000..
 ..2222222222..
 ..2222222222..
-}
 
-sprite {
-selector = CrateW
-colors = #88c
+CrateW
+#88c
 ..............
 ..............
 ..0000000000..
@@ -253,12 +240,9 @@ colors = #88c
 ..0000000000..
 ..............
 ..............
-}
 
-sprite {
-selector = TargetCrate
-colors = #0003
-shape =
+TargetCrate
+#0003
 ..............
 ..............
 ..0000000000..
@@ -273,23 +257,17 @@ shape =
 ..0000000000..
 ..............
 ..............
-}
 
-sprite {
-selector = Ball
-colors = #83d #a7f #00000015
-shape = shape_Ball
-}
+Ball
+#83d #a7f #00000015
+shape_Ball
 
-sprite {
-selector = BallW
-colors = #43d #65d #0000
-shape = shape_Ball
-}
+BallW
+#43d #65d #0000
+shape_Ball
 
-sprite {
-selector = TargetBall
-colors = #0003
+TargetBall
+#0003
 ..............
 ..............
 ....000000....
@@ -304,11 +282,9 @@ colors = #0003
 ....000000....
 ..............
 ..............
-}
 
-sprite {
-selector = Fly
-colors = #fd0 #220 #6cf #00000015
+Fly
+#fd0 #220 #6cf #00000015
 ..............
 ..............
 ..............
@@ -323,12 +299,9 @@ colors = #fd0 #220 #6cf #00000015
 ....333333....
 ..............
 ..............
-}
 
-sprite {
-selector = TargetFly
-colors = #0003
-shape =
+TargetFly
+#0003
 ..............
 ..............
 ..............
@@ -343,12 +316,9 @@ shape =
 ..............
 ..............
 ..............
-}
 
-sprite {
-selector = Headlong
-colors = #f82 #201a00 #00000015
-shape =
+Headlong
+#f82 #201a00 #00000015
 ..............
 ..............
 ....000000....
@@ -363,12 +333,9 @@ shape =
 ....00..00....
 ....22..22....
 ....22..22....
-}
 
-sprite {
-selector = TargetHeadlong
-colors = #0003
-shape =
+TargetHeadlong
+#0003
 ..............
 ..............
 ....000000....
@@ -383,12 +350,9 @@ shape =
 ....00..00....
 ..............
 ..............
-}
 
-sprite {
-selector = NoGo
-colors = #b44
-shape =
+NoGo
+#b44
 ..............
 ..............
 ..00......00..
@@ -403,12 +367,9 @@ shape =
 ..00......00..
 ..............
 ..............
-}
 
-sprite {
-selector = Pond
-colors = #3373d3 #3575d5
-shape =
+Pond
+#3373d3 #3575d5
 00000000000000
 11111111111111
 00000000000000
@@ -423,12 +384,9 @@ shape =
 11111111111111
 00000000000000
 11111111111111
-}
 
-sprite {
-selector = Crack
-colors = #037
-shape =
+Crack
+#037
 ..............
 ..............
 ..............
@@ -443,12 +401,9 @@ shape =
 ..............
 ..............
 ..............
-}
 
-sprite {
-selector = Puddle
-colors = #3373d3 #3575d5 #8fcf6f
-shape =
+Puddle
+#3373d3 #3575d5 #8fcf6f
 22000000000022
 22111111111122
 00000000000000
@@ -463,17 +418,12 @@ shape =
 11111111111111
 22000000000022
 22111111111122
-}
 
-sprite {
-selector = CrackFlag
-colors = transparent
-}
+CrackFlag
+transparent
 
-sprite {
-selector = Hole
-colors = #332a11 #3a2f1a
-shape =
+Hole
+#332a11 #3a2f1a
 00000000000000
 01111111111110
 01000000000010
@@ -488,12 +438,9 @@ shape =
 01000000000010
 01111111111110
 00000000000000
-}
 
-sprite {
-selector = Button
-colors = #777 #b44 #6a6a6a
-shape =
+Button
+#777 #b44 #6a6a6a
 ..............
 ..............
 ..0000000000..
@@ -508,12 +455,9 @@ shape =
 ..0022222200..
 ..............
 ..............
-}
 
-sprite {
-selector = GateC
-colors = #b44 #00000015
-shape =
+GateC
+#b44 #00000015
 ..............
 ..............
 ......00......
@@ -528,12 +472,9 @@ shape =
 ......00......
 ......11......
 ......11......
-}
 
-sprite {
-selector = GateO
-colors = #b443
-shape =
+GateO
+#b443
 ..............
 ..............
 ......00......
@@ -548,12 +489,9 @@ shape =
 ......00......
 ..............
 ..............
-}
 
-sprite {
-selector = Wall
-colors = #224433 #234534
-shape =
+Wall
+#224433 #234534
 00000000010000
 01101000111011
 01011101111110
@@ -568,24 +506,17 @@ shape =
 01110011001000
 00110000110000
 00000000100000
-}
 
-sprite {
-selector = Boundary:directions
-colors = #447755 #477a58
-shape = shape_Boundary:directions
-}
+Boundary:directions
+#447755 #477a58
+shape_Boundary:directions
 
-sprite {
-selector = Corner:directions
-colors = #475
-shape = shape_Corner:directions
-}
+Corner:directions
+#475
+shape_Corner:directions
 
-sprite {
-selector = WallShadow
-colors = #00000015
-shape =
+WallShadow
+#00000015
 00000000000000
 00000000000000
 ..............
@@ -600,17 +531,12 @@ shape =
 ..............
 ..............
 ..............
-}
 
-sprite {
-selector = Count:0
-colors = transparent
-}
+Count:0
+transparent
 
-sprite {
-selector = Count:1
-colors = #000 #fff #888
-shape =
+Count:1
+#000 #fff #888
 ..............
 ..............
 ..............
@@ -625,12 +551,9 @@ shape =
 ..............
 ..............
 ..............
-}
 
-sprite {
-selector = Count:2
-colors = #000 #fff #888
-shape =
+Count:2
+#000 #fff #888
 ..............
 ..............
 ..............
@@ -645,12 +568,9 @@ shape =
 ..............
 ..............
 ..............
-}
 
-sprite {
-selector = Count:3
-colors = #000 #fff #888
-shape =
+Count:3
+#000 #fff #888
 ..............
 ..............
 .....0011.....
@@ -665,12 +585,9 @@ shape =
 ..1100..1100..
 ..............
 ..............
-}
 
-sprite {
-selector = Count:Inf
-colors = #000 #fff
-shape =
+Count:Inf
+#000 #fff
 ..............
 ..............
 ..............
@@ -685,36 +602,25 @@ shape =
 ..............
 ..............
 ..............
-}
 
-sprite {
-selector = Ink:F
-colors = #fff
-shape = shape_Ink_F
-}
+Ink:F
+#fff
+shape_Ink_F
 
-sprite {
-selector = Ink:B
-colors = #000
-shape = shape_Ink_F
-}
+Ink:B
+#000
+shape_Ink_F
 
-sprite {
-selector = TimeMachine:F
-colors = #fff #888 #00000015
-shape = shape_TimeMachine_F
-}
+TimeMachine:F
+#fff #888 #00000015
+shape_TimeMachine_F
 
-sprite {
-selector = TimeMachine:B
-colors = #000 #888 #00000015
-shape = shape_TimeMachine_F
-}
+TimeMachine:B
+#000 #888 #00000015
+shape_TimeMachine_F
 
-sprite {
-selector = Star
-colors = #fff3 #000
-shape =
+Star
+#fff3 #000
 ..............
 ..............
 ..............
@@ -729,72 +635,45 @@ shape =
 ..............
 ..............
 ..............
-}
 
-sprite {
-selector = Satisfied
-colors = #ff04
-}
+Satisfied
+#ff04
 
-sprite {
-selector = Checked
-colors = transparent
-}
+Checked
+transparent
 
-sprite {
-selector = Computer
-colors = transparent
-}
+Computer
+transparent
 
-sprite {
-selector = Start
-colors = transparent
-}
+Start
+transparent
 
-sprite {
-selector = NotEdge:directions
-colors = transparent
-}
+NotEdge:directions
+transparent
 
-sprite {
-selector = Marker:directions
-colors = transparent
-}
+Marker:directions
+transparent
 
-sprite {
-selector = StopFlag
-colors = transparent
-}
+StopFlag
+transparent
 
-sprite {
-selector = CancelTurn
-colors = transparent
-}
+CancelTurn
+transparent
 
-sprite {
-selector = OpenFlag
-colors = transparent
-}
+OpenFlag
+transparent
 
-sprite {
-selector = OnlyOneButton
-colors = transparent
-}
+OnlyOneButton
+transparent
 
-sprite {
-selector = Time:D
-colors = transparent
-}
+Time:D
+transparent
 
-sprite {
-selector = Moment:directions
-colors = transparent
-}
+Moment:directions
+transparent
 
-sprite {
-selector = FallFlag
-colors = transparent
-}
+FallFlag
+transparent
 }
 
 sounds {
@@ -805,11 +684,11 @@ undo -> sfx undo
 }
 
 win_conditions {
-no [ TargetCrate no crate ]
-no [ TargetBall no Ball ]
-no [ TargetYou no You:D ]
-no [ TargetFly no Fly ]
-no [ TargetHeadlong no Headlong ]
+all TargetCrate on crate
+all TargetBall on Ball
+all TargetYou on You:D
+all TargetFly on Fly
+all TargetHeadlong on Headlong
 }
 
 routine move {
@@ -970,12 +849,11 @@ move
 }
 
 on_level_start {
-once_all [ no Background ] -> [ Background ]
 main
 }
 
 rules {
-input directions [ player ] -> [ > player ]
+input [ player ] -> [ > player ]
 main
 }
 
@@ -986,42 +864,43 @@ next_level
 
 levels {
 legend {
-. = empty
-p = TargetYou
-C = Crate
-𝒞 = CrateW
-c = TargetCrate
-B = Ball
-b = TargetBall
-X = Fly
-x = TargetFly
-H = Headlong
-h = TargetHeadlong
-~ = Pond
-* = Crack
-≃ = Puddle
-o = Hole
-! = Button
-+ = GateC
-O = GateO
-$ = TimeMachine:F
-% = TimeMachine:B
-P = You:F Start
-Q = You:B Start
-β = Ball TargetBall
-χ = Crate TargetCrate
-: = Crack TargetCrate
-; = Pond TargetCrate
-& = Ball TargetCrate
-1 = Count:1
-2 = Count:2
-3 = Count:3
-∞ = Count:Inf
-∘ = Ink:F
-• = Ink:B
-@ = Crate TargetCrate
-# = Wall
-⋆ = Wall Star
+. = Background
+p = TargetYou Background
+C = Crate Background
+𝒞 = CrateW Background
+c = TargetCrate Background
+B = Ball Background
+b = TargetBall Background
+X = Fly Background
+x = TargetFly Background
+H = Headlong Background
+h = TargetHeadlong Background
+~ = Pond Background
+* = Crack Background
+≃ = Puddle Background
+o = Hole Background
+! = Button Background
++ = GateC Background
+O = GateO Background
+$ = TimeMachine:F Background
+% = TimeMachine:B Background
+P = You:F Start Background
+Q = You:B Start Background
+β = Ball TargetBall Background
+χ = Crate TargetCrate Background
+: = Crack TargetCrate Background
+; = Pond TargetCrate Background
+& = Ball TargetCrate Background
+1 = Count:1 Background
+2 = Count:2 Background
+3 = Count:3 Background
+∞ = Count:Inf Background
+∘ = Ink:F Background
+• = Ink:B Background
+a = Ink:B Crate Background
+@ = Crate TargetCrate Background
+# = Wall Background
+⋆ = Wall Star Background
 }
 
 level "1-1"
@@ -1042,23 +921,14 @@ level "1-2"
 ######
 
 level "1-3"
-#####
-#∘•c#
-#.#.#
-#PC.#
-#####
+######
+#.∘•c#
+#.##.#
+#P##.#
+#C...#
+######
 
 level "1-4"
-#######
-#######
-#PC•c##
-#...#p#
-#.....#
-#.C##χ#
-#..####
-#######
-
-level "1-5"
 #######
 ##.Pc##
 ##CC•##
@@ -1066,7 +936,7 @@ level "1-5"
 ####c##
 #######
 
-level "1-6"
+level "1-5"
 ######
 #.c###
 #∘.###
@@ -1092,10 +962,10 @@ level "1-7"
 
 level "1-8"
 ############
-#....•∘....#
+#...∘•∘•...#
 #PC.####.c.#
-#.C.####.c.#
-#....∘•....#
+#...####.c.#
+#...•∘a∘...#
 ############
 
 level "1-9"
@@ -1383,6 +1253,16 @@ level "2-5+"
 #.*∘..C#
 #:.#####
 ########
+
+level "1-4"
+#######
+#######
+#PC•c##
+#...#p#
+#.....#
+#.C##χ#
+#..####
+#######
 }
 }
 
@@ -1391,17 +1271,15 @@ layout {
 title = "TENETEN"
 subtitle = "by smyrnensis"
 if has_progress_save {
-choice "Continue" -> continue_game
-}
-choice "New Game" -> new_game
-choice "Level Select" -> goto level_select
-}
-routine continue_game {
+choice "Continue" -> {
 goto playing
 }
-routine new_game {
+}
+choice "New Game" -> {
 clear_game_progress
-goto playing(0)
+start playing
+}
+choice "Level Select" -> goto level_select
 }
 }
 
@@ -1413,13 +1291,10 @@ title = "TENETEN"
 puzzle board = main
 }
 keys {
-Escape q -> back
+Escape q -> goto title
 }
 rules {
 step board
-}
-routine back {
-goto title
 }
 }
 
