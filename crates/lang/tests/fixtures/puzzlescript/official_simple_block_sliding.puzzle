@@ -495,8 +495,8 @@ o = Target nospawn Background
 
 scene title {
 layout {
-title = "Simple Block Sliding Game"
-subtitle = "by increpare"
+heading "Simple Block Sliding Game"
+subheading "by increpare"
 if has_progress_save {
 choice "Continue" -> {
 goto playing
@@ -512,7 +512,7 @@ start playing
 scene playing {
 layout {
 row {
-title = "Simple Block Sliding Game"
+heading "Simple Block Sliding Game"
 }
 puzzle board = main
 }

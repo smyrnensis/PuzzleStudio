@@ -95,6 +95,7 @@ fn assert_imported_output_uses_current_canonical_surface(source: &str) {
         "n -> new_game",
         "layer_1 =",
         "\nscene =",
+        "rotate from ",
         "__ps_",
     ] {
         let forbidden_lowercase = forbidden.to_ascii_lowercase();
@@ -161,7 +162,7 @@ fn translates_basic_vanilla_puzzlescript_to_canonical_fixture() {
     assert!(!translated.contains("r -> restart"));
     assert!(
         translated
-            .contains("layout {\nrow {\ntitle = \"Basic PS Sokoban\"\n}\npuzzle board = main\n}")
+            .contains("layout {\nrow {\nheading \"Basic PS Sokoban\"\n}\npuzzle board = main\n}")
     );
     assert!(translated.contains("rules {\nstep board\n}"));
     assert!(translated.contains("Escape q -> goto title"));
@@ -1352,6 +1353,8 @@ fn imports_puzzlescript_next_teneten_sample_as_current_canonical_syntax() {
     assert!(translated.contains("shape_You_F {"));
     assert!(translated.contains("You:B\n#000 #fff #00000015\nshape_You_F"));
     assert!(!translated.contains("You:B {"));
+    assert!(translated.contains("rotate (directions - up)"));
+    assert!(!translated.contains("rotate from up"));
     assert!(translated.contains("choice \"Level Select\" -> goto level_select"));
     assert!(translated.contains("scene level_select {\nlayout {\nlevel_menu {"));
     assert_imported_output_uses_current_canonical_surface(&translated);

@@ -182,8 +182,8 @@ level "microban_10"
 
 scene title {
 layout {
-title = "Microban"
-subtitle = "Levels by David Skinner"
+heading "Microban"
+subheading "Levels by David Skinner"
 choice "Continue" -> goto playing
 choice "New Game" -> {
 clear_game_progress
@@ -196,8 +196,8 @@ choice "Level Select" -> goto level_select
 scene playing {
 layout {
 row {
-title = "Microban"
-subtitle = level.label
+heading "Microban"
+subheading level.label
 }
 sokoban
 }

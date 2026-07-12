@@ -265,14 +265,6 @@ fn render_component(
                 out.push('\n');
             }
         }
-        SceneComponent::Title(title) => {
-            out.push_str(&eval_expr(loaded, session, &title.content, scope));
-            out.push('\n');
-        }
-        SceneComponent::Subtitle(subtitle) => {
-            out.push_str(&eval_expr(loaded, session, &subtitle.content, scope));
-            out.push('\n');
-        }
         SceneComponent::Text(text) => {
             out.push_str(&eval_text(loaded, session, &text.content, scope));
             out.push('\n');
@@ -1392,11 +1384,7 @@ fn collect_button_commands(
                     }
                 }
             }
-            SceneComponent::Frame(_)
-            | SceneComponent::Title(_)
-            | SceneComponent::Subtitle(_)
-            | SceneComponent::Text(_)
-            | SceneComponent::LevelMenu(_) => {}
+            SceneComponent::Frame(_) | SceneComponent::Text(_) | SceneComponent::LevelMenu(_) => {}
         }
     }
 }

@@ -2570,8 +2570,8 @@ message "Rings and Boxes \\n\\n by smyrnensis"
 
 scene title {
 layout {
-title = "Rings and Boxes"
-subtitle = "by smyrnensis"
+heading "Rings and Boxes"
+subheading "by smyrnensis"
 if has_progress_save {
 choice "Continue" -> {
 goto playing
@@ -2588,7 +2588,7 @@ choice "Level Select" -> goto level_select
 scene playing {
 layout {
 row {
-title = "Rings and Boxes"
+heading "Rings and Boxes"
 }
 puzzle board = main
 }

@@ -1,7 +1,14 @@
 :root {
   color-scheme: light;
-  --scene-layout-unit: 180px;
   --scene-layout-gap-unit: 1px;
+  --text-heading-size: 2rem;
+  --text-heading-line-height: 1.2;
+  --text-subheading-size: 1.5rem;
+  --text-subheading-line-height: 1.3;
+  --text-body-size: 1rem;
+  --text-body-line-height: 1.5;
+  --text-caption-size: 0.75rem;
+  --text-caption-line-height: 1.4;
   --background: #f5f3ef;
   --text: #1f2428;
   --accent: var(--text);
@@ -280,11 +287,6 @@ button:disabled {
   flex-direction: column;
 }
 
-.has-layout-size {
-  min-width: 0;
-  min-height: 0;
-}
-
 .view-row {
   flex-direction: row;
   flex-wrap: nowrap;
@@ -491,24 +493,31 @@ button.standard-choice.is-selected {
 .screen-view .view-text {
   margin: 0;
   color: var(--text);
-  font-weight: 700;
+  font-size: var(--text-body-size);
+  line-height: var(--text-body-line-height);
 }
 
-.view-title,
-.view-subtitle {
-  margin: 0;
+.view-text[data-text-role="heading"],
+.view-text[data-text-role="subheading"] {
   font-family: var(--title-font);
   font-weight: 700;
 }
 
-.view-title {
-  color: var(--text);
+.view-text[data-text-role="heading"] {
+  font-size: var(--text-heading-size);
+  line-height: var(--text-heading-line-height);
 }
 
-.view-subtitle {
+.view-text[data-text-role="subheading"] {
   color: var(--muted);
-  text-align: right;
-  font-size: 14px;
+  font-size: var(--text-subheading-size);
+  line-height: var(--text-subheading-line-height);
+}
+
+.view-text[data-text-role="caption"] {
+  color: var(--muted);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line-height);
 }
 
 @media (max-width: 720px) {

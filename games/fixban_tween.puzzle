@@ -327,8 +327,8 @@ level "level_8"
 
 scene title {
 layout {
-title = title
-subtitle = subtitle
+heading title
+subheading subtitle
 choice "Continue" -> goto playing
 choice "New Game" -> {
 clear_game_progress
@@ -341,8 +341,8 @@ choice "Level Select" -> goto level_select
 scene playing {
 layout {
 row {
-title = title
-subtitle = level.label
+heading title
+subheading level.label
 }
 puzzle board = fixban
 }

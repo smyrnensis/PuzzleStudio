@@ -19,10 +19,10 @@ canonical な制御語は `if` に寄せる。
 ## File Shape
 
 ```txt
-title "Sokoban"
-subtitle "A compact pushing puzzle"
-author "Puzzle Author"
-homepage "https://example.com"
+title = "Sokoban"
+subtitle = "A compact pushing puzzle"
+author = "Puzzle Author"
+homepage = "https://example.com"
 
 puzzle sokoban {
 layers {
@@ -100,13 +100,13 @@ button "Title" -> goto title
 ### `title` / `subtitle` / `author` / `homepage`
 
 ```txt
-title "Sokoban"
-subtitle "A compact pushing puzzle"
-author "Puzzle Author"
-homepage "https://example.com"
+title = "Sokoban"
+subtitle = "A compact pushing puzzle"
+author = "Puzzle Author"
+homepage = "https://example.com"
 ```
 
-表示用・配布用のゲーム metadata。`title` はゲーム名、`subtitle` は短い説明、`author` は作者名、`homepage` は作者または作品の URL。`subtitle` / `author` / `homepage` は省略可能。scene の `title` / `subtitle` component は、引数を省略すると top-level metadata を表示する。scene expression からは `title` / `subtitle` / `author` / `homepage` を top scope の bare name として読む。`name <text>` は top-level metadata としては読まない。
+表示用・配布用のゲーム metadata。`title` はゲーム名、`subtitle` は短い説明、`author` は作者名、`homepage` は作者または作品の URL。`subtitle` / `author` / `homepage` は省略可能。scene expression からはこれらを top scope の bare name として読み、`heading title` や `caption author` のように任意の text role から参照できる。metadata と text role は独立している。`name <text>` は top-level metadata としては読まない。
 
 ### Tags / Object Schema
 
@@ -1747,9 +1747,9 @@ top-level に `puzzle sokoban { ... }` を定義し、同名の `scene sokoban` 
 
 scene は 2D / 3D model の違いを直接所有しない。scene が所有するのは root layout、component tree、入力、遷移で、model の違いは model window component に閉じる。`layout { ... }` 直下に component を改行で並べる形は、暗黙の `column` として扱う。作者は通常、細かい幅・高さ・gap を書かず、どの component があり、どの選択肢が縦積み・横並び・matrix なのかを書く。root scene の論理サイズ、標準 gap、文字・button metrics は default / theme / renderer が持つ。
 
-`choice` は方向キー・ゲームパッドで選ばれる主選択肢、`button` は click/tap や明示 key binding で押す補助操作である。標準 UI focus cursor に入るのは `choice` だけで、`button` は入らない。`text` / `title` / `subtitle` は cell を占有するが選択対象ではない。`row` は children を横に、`column` / `box` は縦に連結して論理 grid を作る。方向入力は同じ行または同じ列の次の `choice` にだけ移動し、欠けている cell へ斜めに補正しない。Enter/Space/x は focused choice を実行する。scene はデフォルトで input を component 群へ broadcast し、各 component が関係する input だけに反応する。これは UI focus であり、puzzle の cursor movement ではない。
+`choice` は方向キー・ゲームパッドで選ばれる主選択肢、`button` は click/tap や明示 key binding で押す補助操作である。標準 UI focus cursor に入るのは `choice` だけで、`button` は入らない。`heading` / `subheading` / `text` / `caption` は同じtext componentのroleで、cellを占有するが選択対象ではない。`row` はchildrenを横に、`column` / `box`は縦に連結してlogical gridを作る。
 
-renderer は component を sizing class で扱う。`title` / `subtitle` / `text` / `button` は flow content、`puzzle` / `puzzle3` / `frame` は ratio content、`level_menu` / `menu` / `for` は collection content、`row` / `column` / `box` は container である。ratio content は割り当てられた slot 内で aspect ratio を守って contain される。`size` / `gap` / `align` は既存ファイル向けに読めるが、新しい例では default に任せる。
+renderer はtext roleとbuttonを既定の`space fit`、`puzzle` / `puzzle3` / `frame`を既定の`space fill 1`として扱う。`space fill <weight>`は親の主軸に残った空間をweight比で受け取り、`aspect <w> <h>`はslot内の比率だけを定める。containerの`align`はcross axis、`distribute`はmain axisを所有する。文字サイズはlayoutではなくroleとthemeが所有する。
 
 ```txt
 scene playing {
@@ -1848,7 +1848,32 @@ shape = {
 }
 ```
 
-Canonical な generic scene component は `title`、`subtitle`、`text`、`choice`、`button`、`row`、`column`、`box`、`for`、`level_menu`、`menu`。Model window component は `puzzle` と `puzzle3`。`layout` は component ではなく scene root layout block。`panel` は component keyword ではない。
+Canonical な generic scene component は `heading`、`subheading`、`text`、`caption`、`choice`、`button`、`row`、`column`、`box`、`for`、`level_menu`、`menu`。4つの text keyword は一つの text component を異なる role で作る。Model window component は `puzzle` と `puzzle3`。`layout` は component ではなく scene root layout block。`panel` は component keyword ではない。
+
+Text role は表示値と独立しており、同じ role を複数置ける。
+
+```puzzle
+layout {
+heading title
+heading chapter_title
+subheading subtitle
+text description
+caption author
+}
+```
+
+標準 typography scale は `heading = 2rem / 1.2`、`subheading = 1.5rem / 1.3`、`text = 1rem / 1.5`、`caption = 0.75rem / 1.4`（font-size / line-height）。これは theme token の標準値であり、scene layout の space allocation ではない。
+
+component の親主軸に対する標準 allocation は、text/control が `space fit`、model window が `space fill 1`。複数の fill component は weight 比で残余空間を分ける。`aspect <w> <h>` は allocation 量ではなく、割り当てられた slot 内で保つ比率を表す。
+
+```puzzle
+row align center distribute between {
+frame map space fill 2 aspect 4 3
+frame inventory space fill 1 aspect 1 1
+}
+```
+
+`align` は container の cross axis、`distribute` は main axis にだけ作用する。文字列自体の揃えは text role/theme の責任であり、container alignment と混同しない。
 
 `scene puzzle [name]` は puzzle state を主モデルに持つ playable scene を定義する。`name` を省略すると `playing` になる。中の `layers` は board/object layer、`layout` は画面配置を意味する。scene-local な puzzle slot を明示しない場合は、`<name>` state slot が暗黙に `puzzle <name>` として用意される。`board` は予約 slot 名ではない。明示した slot がある場合はそれが primary puzzle slot になり、`update <slot>` で現在 input をその puzzle transition に渡せる。
 
@@ -1950,7 +1975,7 @@ button "Title" -> goto title
 button level.label -> playing.goto level
 ```
 
-`box` / `row` / `column` は layout component を入れ子にする layout primitive。`box` は純粋な配置用の矩形で、背景・枠線・装飾をデフォルトでは持たない。renderer はこれを HTML 固有の DOM ではなく、構造化された layout tree として受け取る。`panel` は layout primitive ではなく、canonical syntax では使わない。`layout` 直下の改行並びは暗黙の `column` なので、縦積みだけなら `column { ... }` は省略してよい。`size <w> <h>`、`gap <n>`、`align <x> [y]` は既存ファイル向けに読めるが、canonical authoring では default / theme に任せ、選択肢の縦・横・matrix 構造を優先して書く。標準 UI focus は `choice` の論理構造から決まるため、細かい座標ではなく `row` / `column` の論理構造を書く。
+`box` / `row` / `column` は layout component を入れ子にする layout primitive。`box` は純粋な配置用の矩形で、背景・枠線・装飾をデフォルトでは持たない。renderer はこれを HTML 固有の DOM ではなく、構造化された layout tree として受け取る。`panel` は layout primitive ではなく、canonical syntax では使わない。`layout` 直下の改行並びは暗黙の `column` なので、縦積みだけなら `column { ... }` は省略してよい。space allocation は `space fit` または `space fill [weight]`、比率は `aspect <w> <h>`、cross-axis配置は `align start|center|end|stretch`、main-axis配置は `distribute start|center|end|between` として互いに独立して指定する。旧 `size <w> <h>` と `align <x> [y]` は読まない。
 
 `for` は collection の各 item から layout node を生成する projection primitive。固定 component を並べる場合も、collection を表示する場合も、最終的には `row` / `column` の children として扱われる。`for` 自体は cursor、enter、scroll を所有しない。
 

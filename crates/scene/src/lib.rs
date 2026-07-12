@@ -9,70 +9,109 @@ pub use parse::{
     parse_wait_duration_ms_at,
 };
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SceneLayout {
-    pub size: Option<SceneSize>,
+    pub space: SceneSpace,
+    pub align_self: Option<SceneAlign>,
+    pub aspect_ratio: Option<SceneAspectRatio>,
     pub gap: Option<u16>,
     pub align: SceneAlign,
+    pub distribute: SceneDistribution,
     pub scroll: bool,
 }
 
+impl Default for SceneLayout {
+    fn default() -> Self {
+        Self {
+            space: SceneSpace::Fit,
+            align_self: None,
+            aspect_ratio: None,
+            gap: None,
+            align: SceneAlign::Center,
+            distribute: SceneDistribution::Center,
+            scroll: false,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SceneSpace {
+    #[default]
+    Fit,
+    Fill {
+        weight: u16,
+    },
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SceneSize {
+pub struct SceneAspectRatio {
     pub width: u16,
     pub height: u16,
 }
 
-impl SceneSize {
+impl SceneAspectRatio {
     pub fn new(width: u16, height: u16) -> Self {
         Self { width, height }
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SceneAlign {
-    pub x: SceneAlignX,
-    pub y: SceneAlignY,
-}
-
-impl Default for SceneAlign {
-    fn default() -> Self {
-        Self {
-            x: SceneAlignX::Center,
-            y: SceneAlignY::Center,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum SceneAlignX {
-    Left,
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SceneAlign {
+    Start,
+    #[default]
     Center,
-    Right,
+    End,
+    Stretch,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum SceneAlignY {
-    Top,
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SceneDistribution {
+    Start,
+    #[default]
     Center,
-    Bottom,
+    End,
+    Between,
 }
 
 pub fn scene_layout_is_default(layout: &SceneLayout) -> bool {
-    layout.size.is_none()
+    layout.space == SceneSpace::Fit
+        && layout.align_self.is_none()
+        && layout.aspect_ratio.is_none()
         && layout.gap.is_none()
         && layout.align == SceneLayout::default().align
+        && layout.distribute == SceneLayout::default().distribute
         && !layout.scroll
 }
 
 pub fn write_scene_layout_json(out: &mut String, layout: &SceneLayout) {
     out.push('{');
     let mut wrote = false;
-    if let Some(size) = layout.size {
-        out.push_str("\"size\": { \"width\": ");
-        out.push_str(&size.width.to_string());
+    if layout.space != SceneSpace::Fit {
+        let SceneSpace::Fill { weight } = layout.space else {
+            unreachable!()
+        };
+        out.push_str("\"space\": { \"kind\": \"fill\", \"weight\": ");
+        out.push_str(&weight.to_string());
+        out.push_str(" }");
+        wrote = true;
+    }
+    if let Some(align_self) = layout.align_self {
+        if wrote {
+            out.push_str(", ");
+        }
+        out.push_str("\"alignSelf\": \"");
+        out.push_str(scene_align_name(align_self));
+        out.push('"');
+        wrote = true;
+    }
+    if let Some(ratio) = layout.aspect_ratio {
+        if wrote {
+            out.push_str(", ");
+        }
+        out.push_str("\"aspectRatio\": { \"width\": ");
+        out.push_str(&ratio.width.to_string());
         out.push_str(", \"height\": ");
-        out.push_str(&size.height.to_string());
+        out.push_str(&ratio.height.to_string());
         out.push_str(" }");
         wrote = true;
     }
@@ -88,19 +127,18 @@ pub fn write_scene_layout_json(out: &mut String, layout: &SceneLayout) {
         if wrote {
             out.push_str(", ");
         }
-        out.push_str("\"align\": { \"x\": \"");
-        out.push_str(match layout.align.x {
-            SceneAlignX::Left => "left",
-            SceneAlignX::Center => "center",
-            SceneAlignX::Right => "right",
-        });
-        out.push_str("\", \"y\": \"");
-        out.push_str(match layout.align.y {
-            SceneAlignY::Top => "top",
-            SceneAlignY::Center => "center",
-            SceneAlignY::Bottom => "bottom",
-        });
-        out.push_str("\" }");
+        out.push_str("\"align\": \"");
+        out.push_str(scene_align_name(layout.align));
+        out.push('"');
+        wrote = true;
+    }
+    if layout.distribute != SceneLayout::default().distribute {
+        if wrote {
+            out.push_str(", ");
+        }
+        out.push_str("\"distribute\": \"");
+        out.push_str(scene_distribution_name(layout.distribute));
+        out.push('"');
         wrote = true;
     }
     if layout.scroll {
@@ -110,6 +148,24 @@ pub fn write_scene_layout_json(out: &mut String, layout: &SceneLayout) {
         out.push_str("\"scroll\": true");
     }
     out.push('}');
+}
+
+fn scene_align_name(value: SceneAlign) -> &'static str {
+    match value {
+        SceneAlign::Start => "start",
+        SceneAlign::Center => "center",
+        SceneAlign::End => "end",
+        SceneAlign::Stretch => "stretch",
+    }
+}
+
+fn scene_distribution_name(value: SceneDistribution) -> &'static str {
+    match value {
+        SceneDistribution::Start => "start",
+        SceneDistribution::Center => "center",
+        SceneDistribution::End => "end",
+        SceneDistribution::Between => "between",
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -255,8 +311,6 @@ pub enum SceneComponent<
     ConditionExpr = String,
 > {
     Frame(FrameComponent),
-    Title(SceneTextComponent<LabelExpr>),
-    Subtitle(SceneTextComponent<LabelExpr>),
     Text(SceneTextComponent<TextExpr>),
     Button(SceneButton<Effect, LabelExpr>),
     Choice(SceneButton<Effect, LabelExpr>),
@@ -274,8 +328,6 @@ impl<Effect, LabelExpr, TextExpr, ConditionExpr>
     pub fn kind(&self) -> SceneComponentKind {
         match self {
             Self::Frame(_) => SceneComponentKind::Frame,
-            Self::Title(_) => SceneComponentKind::Title,
-            Self::Subtitle(_) => SceneComponentKind::Subtitle,
             Self::Text(_) => SceneComponentKind::Text,
             Self::Button(_) => SceneComponentKind::Button,
             Self::Choice(_) => SceneComponentKind::Choice,
@@ -320,7 +372,6 @@ impl<Effect, LabelExpr, TextExpr, ConditionExpr>
                 Some(&container.layout)
             }
             Self::LevelMenu(menu) => Some(&menu.layout),
-            Self::Title(text) | Self::Subtitle(text) => Some(&text.layout),
             Self::Text(text) => Some(&text.layout),
             Self::Conditional(_) | Self::For(_) => None,
         }
@@ -334,7 +385,6 @@ impl<Effect, LabelExpr, TextExpr, ConditionExpr>
                 Some(&mut container.layout)
             }
             Self::LevelMenu(menu) => Some(&mut menu.layout),
-            Self::Title(text) | Self::Subtitle(text) => Some(&mut text.layout),
             Self::Text(text) => Some(&mut text.layout),
             Self::Conditional(_) | Self::For(_) => None,
         }
@@ -344,8 +394,6 @@ impl<Effect, LabelExpr, TextExpr, ConditionExpr>
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SceneComponentKind {
     Frame,
-    Title,
-    Subtitle,
     Text,
     Button,
     Choice,
@@ -361,8 +409,6 @@ impl SceneComponentKind {
     pub fn keyword(self) -> &'static str {
         match self {
             Self::Frame => "frame",
-            Self::Title => "title",
-            Self::Subtitle => "subtitle",
             Self::Text => "text",
             Self::Button => "button",
             Self::Choice => "choice",
@@ -378,9 +424,7 @@ impl SceneComponentKind {
     pub fn from_keyword(value: &str) -> Option<Self> {
         Some(match value {
             "frame" | "puzzle" | "puzzle3" => Self::Frame,
-            "title" => Self::Title,
-            "subtitle" => Self::Subtitle,
-            "text" => Self::Text,
+            "heading" | "subheading" | "text" | "caption" => Self::Text,
             "button" => Self::Button,
             "choice" => Self::Choice,
             "row" => Self::Row,
@@ -399,8 +443,6 @@ impl SceneComponentKind {
 }
 
 pub const GENERIC_SCENE_COMPONENT_KINDS: &[SceneComponentKind] = &[
-    SceneComponentKind::Title,
-    SceneComponentKind::Subtitle,
     SceneComponentKind::Text,
     SceneComponentKind::Button,
     SceneComponentKind::Choice,
@@ -427,8 +469,26 @@ pub enum SceneTextExpr {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SceneTextComponent<Expr = SceneTextExpr> {
+    pub role: SceneTextRole,
     pub content: Expr,
+    pub text_align: Option<SceneTextAlign>,
     pub layout: SceneLayout,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SceneTextRole {
+    Heading,
+    Subheading,
+    #[default]
+    Body,
+    Caption,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SceneTextAlign {
+    Start,
+    Center,
+    End,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1076,21 +1136,25 @@ where
             push_inline_layout_json(out, &frame.layout);
             out.push_str(" }");
         }
-        SceneComponent::Title(title) => {
-            out.push_str("{ \"kind\": \"title\", \"content\": ");
-            write_scene_expr_json(out, &title.content);
-            push_inline_layout_json(out, &title.layout);
-            out.push_str(" }");
-        }
-        SceneComponent::Subtitle(subtitle) => {
-            out.push_str("{ \"kind\": \"subtitle\", \"content\": ");
-            write_scene_expr_json(out, &subtitle.content);
-            push_inline_layout_json(out, &subtitle.layout);
-            out.push_str(" }");
-        }
         SceneComponent::Text(text) => {
-            out.push_str("{ \"kind\": \"text\", ");
+            out.push_str("{ \"kind\": \"text\", \"role\": \"");
+            out.push_str(match text.role {
+                SceneTextRole::Heading => "heading",
+                SceneTextRole::Subheading => "subheading",
+                SceneTextRole::Body => "body",
+                SceneTextRole::Caption => "caption",
+            });
+            out.push_str("\", ");
             write_text_fields(out, &text.content);
+            if let Some(align) = text.text_align {
+                out.push_str(", \"textAlign\": \"");
+                out.push_str(match align {
+                    SceneTextAlign::Start => "start",
+                    SceneTextAlign::Center => "center",
+                    SceneTextAlign::End => "end",
+                });
+                out.push('"');
+            }
             push_inline_layout_json(out, &text.layout);
             out.push_str(" }");
         }
@@ -1645,15 +1709,50 @@ pub fn parse_scene_layout_attrs(tokens: &[&str]) -> Result<SceneLayout, SceneLay
     let mut layout = SceneLayout::default();
     while index < tokens.len() {
         match tokens[index] {
-            "size" => {
+            "space" => {
+                let Some(kind) = tokens.get(index + 1) else {
+                    return Err(SceneLayoutParseError::new(
+                        "space must be: space fit | space fill [weight]",
+                    ));
+                };
+                match *kind {
+                    "fit" => {
+                        layout.space = SceneSpace::Fit;
+                        index += 2;
+                    }
+                    "fill" => {
+                        let weight = tokens
+                            .get(index + 2)
+                            .filter(|value| value.chars().all(|ch| ch.is_ascii_digit()))
+                            .map(|value| parse_layout_u16(value, "space weight"))
+                            .transpose()?
+                            .unwrap_or(1);
+                        layout.space = SceneSpace::Fill { weight };
+                        index += if tokens
+                            .get(index + 2)
+                            .is_some_and(|value| value.chars().all(|ch| ch.is_ascii_digit()))
+                        {
+                            3
+                        } else {
+                            2
+                        };
+                    }
+                    _ => {
+                        return Err(SceneLayoutParseError::new(
+                            "space must be: space fit | space fill [weight]",
+                        ));
+                    }
+                }
+            }
+            "aspect" => {
                 if index + 2 >= tokens.len() {
                     return Err(SceneLayoutParseError::new(
-                        "size must be: size <width> <height>",
+                        "aspect must be: aspect <width> <height>",
                     ));
                 }
-                layout.size = Some(SceneSize::new(
-                    parse_layout_u16(tokens[index + 1], "width")?,
-                    parse_layout_u16(tokens[index + 2], "height")?,
+                layout.aspect_ratio = Some(SceneAspectRatio::new(
+                    parse_layout_u16(tokens[index + 1], "aspect width")?,
+                    parse_layout_u16(tokens[index + 2], "aspect height")?,
                 ));
                 index += 3;
             }
@@ -1670,14 +1769,26 @@ pub fn parse_scene_layout_attrs(tokens: &[&str]) -> Result<SceneLayout, SceneLay
                         "align must name at least one alignment",
                     ));
                 }
-                let first = tokens[index + 1];
-                let second = tokens.get(index + 2).copied();
-                layout.align = parse_scene_align(first, second)?;
-                index += if second.is_some_and(is_scene_align_token) {
-                    3
-                } else {
-                    2
+                layout.align = parse_scene_align(tokens[index + 1])?;
+                index += 2;
+            }
+            "align_self" => {
+                let Some(value) = tokens.get(index + 1) else {
+                    return Err(SceneLayoutParseError::new(
+                        "align_self must name start, center, end, or stretch",
+                    ));
                 };
+                layout.align_self = Some(parse_scene_align(value)?);
+                index += 2;
+            }
+            "distribute" => {
+                let Some(value) = tokens.get(index + 1) else {
+                    return Err(SceneLayoutParseError::new(
+                        "distribute must name start, center, end, or between",
+                    ));
+                };
+                layout.distribute = parse_scene_distribution(value)?;
+                index += 2;
             }
             "scroll" => {
                 layout.scroll = true;
@@ -1959,42 +2070,28 @@ fn parse_layout_u16(value: &str, name: &str) -> Result<u16, SceneLayoutParseErro
     Ok(parsed)
 }
 
-fn parse_scene_align(
-    first: &str,
-    second: Option<&str>,
-) -> Result<SceneAlign, SceneLayoutParseError> {
-    let mut align = SceneAlign::default();
-    apply_scene_align_token(&mut align, first)?;
-    if let Some(second) = second.filter(|token| is_scene_align_token(token)) {
-        apply_scene_align_token(&mut align, second)?;
-    }
-    Ok(align)
-}
-
-fn apply_scene_align_token(
-    align: &mut SceneAlign,
-    token: &str,
-) -> Result<(), SceneLayoutParseError> {
+fn parse_scene_align(token: &str) -> Result<SceneAlign, SceneLayoutParseError> {
     match token {
-        "left" => align.x = SceneAlignX::Left,
-        "center" => {
-            align.x = SceneAlignX::Center;
-            align.y = SceneAlignY::Center;
-        }
-        "right" => align.x = SceneAlignX::Right,
-        "top" => align.y = SceneAlignY::Top,
-        "bottom" => align.y = SceneAlignY::Bottom,
-        _ => {
-            return Err(SceneLayoutParseError::new(
-                "align must use left, center, right, top, or bottom",
-            ));
-        }
+        "start" => Ok(SceneAlign::Start),
+        "center" => Ok(SceneAlign::Center),
+        "end" => Ok(SceneAlign::End),
+        "stretch" => Ok(SceneAlign::Stretch),
+        _ => Err(SceneLayoutParseError::new(
+            "align must use start, center, end, or stretch",
+        )),
     }
-    Ok(())
 }
 
-fn is_scene_align_token(token: &str) -> bool {
-    matches!(token, "left" | "center" | "right" | "top" | "bottom")
+fn parse_scene_distribution(token: &str) -> Result<SceneDistribution, SceneLayoutParseError> {
+    match token {
+        "start" => Ok(SceneDistribution::Start),
+        "center" => Ok(SceneDistribution::Center),
+        "end" => Ok(SceneDistribution::End),
+        "between" => Ok(SceneDistribution::Between),
+        _ => Err(SceneLayoutParseError::new(
+            "distribute must use start, center, end, or between",
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -2022,8 +2119,10 @@ mod tests {
 
     #[test]
     fn component_children_helpers_only_expose_tree_children() {
-        let child = SceneComponent::<SceneCommand>::Title(SceneTextComponent {
+        let child = SceneComponent::<SceneCommand>::Text(SceneTextComponent {
+            role: SceneTextRole::Heading,
             content: SceneTextExpr::Literal("Title".to_string()),
+            text_align: None,
             layout: SceneLayout::default(),
         });
         let mut row = SceneComponent::<SceneCommand>::Row(SceneContainer {
@@ -2036,7 +2135,9 @@ mod tests {
         row.children_mut()
             .unwrap()
             .push(SceneComponent::Text(SceneTextComponent {
+                role: SceneTextRole::Body,
                 content: SceneTextExpr::Literal("Body".to_string()),
+                text_align: None,
                 layout: SceneLayout::default(),
             }));
         assert_eq!(row.children().len(), 2);
@@ -2062,13 +2163,13 @@ mod tests {
             layout: SceneLayout::default(),
         });
 
-        component.layout_mut().unwrap().size = Some(SceneSize::new(4, 3));
+        component.layout_mut().unwrap().space = SceneSpace::Fill { weight: 2 };
         component.layout_mut().unwrap().scroll = true;
 
         assert_eq!(component.kind(), SceneComponentKind::Frame);
         assert_eq!(
-            component.layout().and_then(|layout| layout.size),
-            Some(SceneSize::new(4, 3))
+            component.layout().map(|layout| layout.space),
+            Some(SceneSpace::Fill { weight: 2 })
         );
         assert!(component.layout().is_some_and(|layout| layout.scroll));
     }
@@ -2097,7 +2198,7 @@ mod tests {
         let lines = vec![
             "row gap 2".to_string(),
             "leaf A".to_string(),
-            "column size 10 20".to_string(),
+            "column space fill 2 aspect 10 20".to_string(),
             "leaf B".to_string(),
             "end".to_string(),
             "end".to_string(),
@@ -2132,15 +2233,15 @@ mod tests {
     #[test]
     fn parses_brace_delimited_component_blocks_and_layout_headers() {
         let lines = vec![
-            "layout size 4 3 {".to_string(),
-            "box align left top {".to_string(),
+            "layout space fill 2 {".to_string(),
+            "box align start distribute end {".to_string(),
             "leaf".to_string(),
             "}".to_string(),
             "}".to_string(),
         ];
         let layout =
             parse_scene_layout_header(&lines[0], "layout", SceneBlockSyntax::Braces).unwrap();
-        assert_eq!(layout.size, Some(SceneSize::new(4, 3)));
+        assert_eq!(layout.space, SceneSpace::Fill { weight: 2 });
 
         let mut parse_leaf =
             |lines: &[String], index: usize| -> Result<(usize, String), SceneBlockParseError> {
@@ -2151,8 +2252,8 @@ mod tests {
                 format!(
                     "{}:{:?}/{:?}:{}",
                     kind.keyword(),
-                    layout.align.x,
-                    layout.align.y,
+                    layout.align,
+                    layout.distribute,
                     children.join(",")
                 )
             };
@@ -2168,6 +2269,6 @@ mod tests {
         .unwrap();
 
         assert_eq!(next, 5);
-        assert_eq!(components, vec!["box:Left/Top:leaf".to_string()]);
+        assert_eq!(components, vec!["box:Start/End:leaf".to_string()]);
     }
 }

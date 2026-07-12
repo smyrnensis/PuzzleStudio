@@ -79,6 +79,8 @@
   --sprite3d-slice-hover-stroke: rgba(137, 148, 158, 0.15);
   --sprite3d-slice-active-fill: rgba(125, 208, 160, 0.022);
   --sprite3d-slice-active-stroke: rgba(125, 208, 160, 0.12);
+  --sprite3d-clip-fill: rgba(125, 208, 160, 0.08);
+  --sprite3d-clip-stroke: rgba(125, 208, 160, 0.9);
 }
 
 html[data-theme="light"] {
@@ -151,6 +153,8 @@ html[data-theme="light"] {
   --sprite3d-slice-hover-stroke: rgba(91, 103, 112, 0.14);
   --sprite3d-slice-active-fill: rgba(33, 128, 88, 0.025);
   --sprite3d-slice-active-stroke: rgba(33, 128, 88, 0.13);
+  --sprite3d-clip-fill: rgba(33, 128, 88, 0.08);
+  --sprite3d-clip-stroke: rgba(33, 128, 88, 0.82);
 }
 
 * {
@@ -1645,6 +1649,10 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   tab-size: 2;
 }
 
+.source-editor-mount .cm-cursor {
+  border-left-color: var(--code-ink);
+}
+
 .source-editor-mount .cm-gutters {
   min-width: 44px;
   border-right: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
@@ -1658,9 +1666,9 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   line-height: 20px;
 }
 
-.source-editor-mount .cm-content::selection,
-.source-editor-mount .cm-content ::selection {
-  background: var(--source-selection-bg) !important;
+.source-editor-mount .cm-selectionBackground,
+.source-editor-mount > .cm-editor.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground {
+  background: var(--source-selection-bg);
 }
 
 .source-editor-mount > .cm-editor.cm-focused {
@@ -2621,6 +2629,11 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   align-self: end;
 }
 
+#levelBuilder .level-source-control > .level-header-actions {
+  margin-left: 0;
+  justify-self: start;
+}
+
 .pane-title .level-header-actions {
   margin-left: 0;
   margin-right: 2px;
@@ -3471,7 +3484,7 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   pointer-events: none;
 }
 
-.level-layer-preview-view .board {
+.level-layer-preview-view.board {
   --cell-size: min(calc(76px / var(--cols)), calc(58px / var(--rows)));
   width: calc(var(--cols) * var(--cell-size));
   height: calc(var(--rows) * var(--cell-size));
@@ -4715,6 +4728,19 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 #spriteBuilder .sprite-duration-control input,
 #spriteBuilder .sprite-frame-count-control input {
   width: 70px;
+}
+
+#spriteBuilder .sprite-duration-input {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+#spriteBuilder .sprite-duration-unit {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: none;
 }
 
 .sprite-pane-header-actions {
@@ -6439,6 +6465,18 @@ html.is-sprite3d-slice-scrubbing * {
   border: 0;
   border-radius: 0;
   color: var(--sprite-cell-ink);
+}
+
+.sprite-board.is-translate-active {
+  cursor: grab;
+}
+
+.sprite-board.is-translate-active .sprite-cell {
+  cursor: inherit;
+}
+
+.sprite-board.is-translate-active.is-translating {
+  cursor: grabbing;
 }
 
 .sprite-board .sprite-cell.sprite-color-swatch {

@@ -1056,8 +1056,8 @@ message "Thank you for playing!"
 
 scene title {
 layout {
-title = "TENETEN"
-subtitle = "by smyrnensis"
+heading "TENETEN"
+subheading "by smyrnensis"
 if has_progress_save {
 choice "Continue" -> continue_game
 }
@@ -1078,7 +1078,7 @@ goto playing(0)
 scene playing {
 layout {
 row {
-title = "TENETEN"
+heading "TENETEN"
 }
 puzzle board = main
 }

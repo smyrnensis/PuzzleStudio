@@ -2736,10 +2736,12 @@ goto level_select
 }
 
 #[test]
-fn explicit_scene_title_and_subtitle_can_reference_game_metadata() {
+fn scene_text_roles_can_reference_game_metadata() {
     let source = r#"
 title = "Display Title"
 subtitle = "Display Subtitle"
+author = "Display Author"
+homepage = "https://example.com"
 
 puzzle board {
 layers {
@@ -2759,8 +2761,10 @@ P
 
 scene title {
 layout {
-title = title
-subtitle = subtitle
+heading title
+subheading subtitle
+text author
+caption homepage
 }
 }
 "#;
@@ -2768,13 +2772,27 @@ subtitle = subtitle
     let scene = &loaded.scenes[0];
     assert!(matches!(
         &scene.components[0],
-        SceneComponent::Title(title)
-            if title.content == SceneExpr::Path(vec!["title".to_string()])
+        SceneComponent::Text(text)
+            if text.role == SceneTextRoleDef::Heading
+                && text.content == SceneTextContent::Path(vec!["title".to_string()])
     ));
     assert!(matches!(
         &scene.components[1],
-        SceneComponent::Subtitle(subtitle)
-            if subtitle.content == SceneExpr::Path(vec!["subtitle".to_string()])
+        SceneComponent::Text(text)
+            if text.role == SceneTextRoleDef::Subheading
+                && text.content == SceneTextContent::Path(vec!["subtitle".to_string()])
+    ));
+    assert!(matches!(
+        &scene.components[2],
+        SceneComponent::Text(text)
+            if text.role == SceneTextRoleDef::Body
+                && text.content == SceneTextContent::Path(vec!["author".to_string()])
+    ));
+    assert!(matches!(
+        &scene.components[3],
+        SceneComponent::Text(text)
+            if text.role == SceneTextRoleDef::Caption
+                && text.content == SceneTextContent::Path(vec!["homepage".to_string()])
     ));
 }
 
@@ -3159,26 +3177,31 @@ P
 }
 
 scene menu {
-layout size 4 3 {
-box size 3 2 gap 1 align left top {
+layout space fill 2 {
+box space fill 3 aspect 3 2 gap 1 align start distribute end {
 text "Ready"
 }
 }
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    assert_eq!(loaded.scenes[0].layout.size.unwrap().width, 4);
-    assert_eq!(loaded.scenes[0].layout.size.unwrap().height, 3);
+    assert_eq!(
+        loaded.scenes[0].layout.space,
+        SceneSpaceDef::Fill { weight: 2 }
+    );
     assert!(matches!(
         &loaded.scenes[0].components[0],
         SceneComponent::Box(container)
-            if container.layout.size.unwrap().width == 3
-                && container.layout.size.unwrap().height == 2
+            if container.layout.space == SceneSpaceDef::Fill { weight: 3 }
+                && container.layout.aspect_ratio == Some(SceneAspectRatioDef::new(3, 2))
                 && container.layout.gap == Some(1)
                 && matches!(&container.children[0], SceneComponent::Text(_))
     ));
 
-    let rejected = source.replace("box size 3 2 gap 1 align left top {", "panel {");
+    let rejected = source.replace(
+        "box space fill 3 aspect 3 2 gap 1 align start distribute end {",
+        "panel {",
+    );
     let error = parse_game(&rejected).unwrap_err();
     assert!(
         error.to_string().contains("unknown layout directive panel"),
@@ -3712,7 +3735,7 @@ fn scene_root_rejects_layout_components() {
 title = title_scene
 
 scene title {
-title = title
+heading title
 choice "Play" -> goto playing
 on_scene_start {
 stop_music locked_room
@@ -3756,8 +3779,8 @@ P.
 
 scene title {
 layout {
-title = title
-subtitle = "A tiny puzzle"
+heading title
+subheading "A tiny puzzle"
 button "Play" -> goto playing
 button "Levels" -> goto level_select
 }
@@ -3806,8 +3829,8 @@ P
 
 scene title {
 layout {
-title = title
-subtitle = subtitle
+heading title
+subheading subtitle
 text author
 text homepage
 }
@@ -12594,7 +12617,7 @@ fn surface_document_collects_parser_owned_effect_nodes() {
     let source = r#"
 scene title {
 layout {
-title = title
+heading title
 button "Play" -> goto playing
 }
 }
@@ -12607,7 +12630,7 @@ rules {
 "#;
     let surface = parse_surface_document(source);
     let scene_name_start = source.find("scene title").unwrap() + "scene ".len();
-    let component_title_start = source.rfind("title = title").unwrap();
+    let component_title_start = source.rfind("heading title").unwrap();
 
     assert!(surface.semantic_tokens.iter().any(|token| {
         &source[token.span.start..token.span.end] == "scene"
@@ -12620,7 +12643,7 @@ rules {
     }));
     assert!(surface.semantic_tokens.iter().any(|token| {
         token.span.start == component_title_start
-            && &source[token.span.start..token.span.end] == "title"
+            && &source[token.span.start..token.span.end] == "heading"
             && token.kind == SurfaceSemanticKind::Keyword
     }));
     assert!(surface.nodes.iter().any(|node| {
@@ -18561,7 +18584,7 @@ P
 
 scene title {
   layout {
-    title = "Two Dee"
+    heading "Two Dee"
   }
 }
 "#;
@@ -18724,8 +18747,8 @@ levels3 demo of push3 {
 }
 
 scene title {
-  layout size 4 3 {
-    title = "Three Dee"
+  layout space fill 2 aspect 4 3 {
+    heading "Three Dee"
     button "Play" -> goto push3(demo.start)
     button "Level Select" -> goto level_select
   }
@@ -18733,7 +18756,7 @@ scene title {
 
 scene level_select {
   layout {
-    title = "Select Level"
+    heading "Select Level"
     column scroll=true {
       for level in levels {
         button join(level.num, ". ", level.title) -> goto push3(level)
@@ -18761,8 +18784,8 @@ scene level_select {
         document.scenes.as_slice(),
         [title, level_select, push3]
             if title.name == "title"
-                && title.layout.size.unwrap().width == 4
-                && title.layout.size.unwrap().height == 3
+                && title.layout.space == SceneSpaceDef::Fill { weight: 2 }
+                && title.layout.aspect_ratio == Some(SceneAspectRatioDef::new(4, 3))
                 && level_select.name == "level_select"
                 && push3.name == "push3"
                 && matches!(push3.state.puzzles.as_slice(), [puzzle] if puzzle.name == "push3" && puzzle.kind == "puzzle3" && puzzle.model == "push3")
@@ -19151,7 +19174,7 @@ rules {
 
 scene title {
   layout {
-    title = "Level Menu 3D"
+    heading "Level Menu 3D"
     button "Levels" -> goto level_select
   }
 }

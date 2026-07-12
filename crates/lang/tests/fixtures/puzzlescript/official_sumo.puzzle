@@ -95,8 +95,8 @@ S = Sumo Background
 
 scene title {
 layout {
-title = "Multiple Patterns"
-subtitle = "by increpare"
+heading "Multiple Patterns"
+subheading "by increpare"
 if has_progress_save {
 choice "Continue" -> {
 goto playing
@@ -112,7 +112,7 @@ start playing
 scene playing {
 layout {
 row {
-title = "Multiple Patterns"
+heading "Multiple Patterns"
 }
 puzzle board = main
 }

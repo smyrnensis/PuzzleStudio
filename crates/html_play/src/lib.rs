@@ -755,7 +755,7 @@ P
     #[test]
     fn html_play_fits_the_logical_scene_root_not_individual_cells() {
         assert!(INDEX_HTML.contains(r#"<div id="screenFrame" class="screen-frame">"#));
-        assert!(APP_CSS.contains("--scene-layout-unit: 180px;"));
+        assert!(!APP_CSS.contains("--scene-layout-unit"));
         assert!(APP_CSS.contains("--scene-layout-gap-unit: 1px;"));
         assert!(APP_CSS.contains("width: 100vw;\n  height: 100vh;"));
         assert!(APP_CSS.contains("max-width: 100vw;\n  height: 100vh;"));
@@ -793,20 +793,21 @@ P
             "window.visualViewport?.addEventListener(\"resize\", () => scheduleScreenScaleSync(6));"
         ));
         assert!(!APP_JS.contains("visualViewport?.addEventListener(\"scroll\""));
-        assert!(APP_JS.contains("const defaultSceneLogicalSize = { width: 4, height: 3 };"));
-        assert!(APP_JS.contains("function fitLogicalSceneSize("));
+        assert!(APP_JS.contains("function fitSceneViewport("));
+        assert!(APP_JS.contains("function currentSceneAspectRatio("));
         assert!(APP_JS.contains("function visibleViewportSize()"));
         assert!(APP_JS.contains("const rect = element.getBoundingClientRect();"));
         assert!(APP_JS.contains("Math.min(rect.right, viewport.width) - Math.max(rect.left, 0)"));
         assert!(APP_JS.contains("Math.min(rect.bottom, viewport.height) - Math.max(rect.top, 0)"));
-        assert!(APP_JS.contains("const defaultSceneLayoutUnit = 180;"));
-        assert!(APP_JS.contains("function virtualSceneSize("));
         assert!(APP_JS.contains("screenView.style.setProperty(\"--screen-scale\""));
         assert!(
-            APP_JS.contains("screenFrame.style.width = `min(${Math.ceil(fit.width)}px, 100%)`;")
+            APP_JS
+                .contains("screenFrame.style.width = `min(${Math.ceil(viewport.width)}px, 100%)`;")
         );
         assert!(
-            APP_JS.contains("screenFrame.style.height = `min(${Math.ceil(fit.height)}px, 100%)`;")
+            APP_JS.contains(
+                "screenFrame.style.height = `min(${Math.ceil(viewport.height)}px, 100%)`;"
+            )
         );
         assert!(APP_CSS.contains("zoom: var(--screen-scale, 1);"));
         assert!(!APP_CSS.contains("transform: scale(var(--screen-scale, 1));"));
@@ -1755,7 +1756,7 @@ level "microban_04" {
 
 scene level_select {
 layout {
-title = "Microban"
+heading "Microban"
 column {
 for level in levels {
 choice join(level.num, ". ", level.title) -> goto playing(level)
@@ -5001,7 +5002,7 @@ puzzle3 cube {
 
 scene title {
   layout {
-    title = "Screenshot"
+    heading "Screenshot"
     button "Play" -> goto playing
   }
 }

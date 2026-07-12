@@ -27,6 +27,12 @@ keys to model semantic inputs; scene keys map raw keys to scene routines, input
 effects, or explicit scene commands. The semantic input concept remains, but
 `inputs { <input> <- <key...> }` is not canonical syntax.
 
+Scene text syntax lowers `heading`, `subheading`, `text`, and `caption` through
+one text-component path. Top-scope `title`, `subtitle`, `author`, and `homepage`
+remain content values and must not select a component kind. Scene layout syntax
+lowers allocation, ratio, cross-axis alignment, and main-axis distribution into
+the typed `puzzle-scene` contract; it must not encode CSS or adapter sizing.
+
 ## Surface/Highlighting Direction
 
 Highlighting should remain Rust-owned. Browser/editor fallbacks may escape text,

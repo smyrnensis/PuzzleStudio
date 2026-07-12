@@ -539,6 +539,7 @@ let level = {
   editSourceBodyStart: null,
   editSourceBodyEnd: null,
   editSourceName: "",
+  sourceSpriteContract: null,
   selectedObjectId: 0,
   addPaletteOpen: false,
   activeLayer: 0,
@@ -610,6 +611,11 @@ let sprite3d = {
     zoom: 1,
   },
   cells: [],
+  frames: [],
+  animationDurationMs: null,
+  frameDurationMs: null,
+  shapeBind: null,
+  sourceSpatialOps: [],
 };
 let sounds = {
   mode: "sfx",
@@ -717,11 +723,17 @@ function visualEditSnapshot(kind) {
         editSourceBodyStart: sprite3d.editSourceBodyStart,
         editSourceBodyEnd: sprite3d.editSourceBodyEnd,
         editSourceName: sprite3d.editSourceName,
+        sourceSpriteContract: cloneVisualEditValue(sprite3d.sourceSpriteContract || null),
         axis: sprite3d.axis,
         slice: sprite3d.slice,
         editScope: sprite3d.editScope,
         palette: cloneVisualEditValue(sprite3d.palette || []),
         cells: cloneVisualEditValue(sprite3d.cells || []),
+        frames: cloneVisualEditValue(sprite3d.frames || []),
+        animationDurationMs: sprite3d.animationDurationMs,
+        frameDurationMs: sprite3d.frameDurationMs,
+        shapeBind: cloneVisualEditValue(sprite3d.shapeBind || null),
+        sourceSpatialOps: cloneVisualEditValue(sprite3d.sourceSpatialOps || []),
         sliceClipboard: cloneVisualEditValue(sprite3d.sliceClipboard || null),
         hoverSlice: sprite3d.hoverSlice,
       },
@@ -844,11 +856,17 @@ function restoreVisualEditSnapshot(snapshot) {
     sprite3d.editSourceBodyStart = Number.isInteger(state.editSourceBodyStart) ? state.editSourceBodyStart : null;
     sprite3d.editSourceBodyEnd = Number.isInteger(state.editSourceBodyEnd) ? state.editSourceBodyEnd : null;
     sprite3d.editSourceName = state.editSourceName || "";
+    sprite3d.sourceSpriteContract = cloneVisualEditValue(state.sourceSpriteContract || null);
     sprite3d.axis = ["x", "y", "z"].includes(state.axis) ? state.axis : "z";
     sprite3d.slice = Math.max(0, Math.min(sprite3d.size - 1, Math.trunc(Number(state.slice) || 0)));
     sprite3d.editScope = state.editScope === "all" ? "all" : "slice";
     sprite3d.palette = cloneVisualEditValue(state.palette || [{ color: "#ff004d" }]);
     sprite3d.cells = cloneVisualEditValue(state.cells || []);
+    sprite3d.frames = cloneVisualEditValue(state.frames || []);
+    sprite3d.animationDurationMs = Number.isFinite(state.animationDurationMs) ? state.animationDurationMs : null;
+    sprite3d.frameDurationMs = Number.isFinite(state.frameDurationMs) ? state.frameDurationMs : null;
+    sprite3d.shapeBind = cloneVisualEditValue(state.shapeBind || null);
+    sprite3d.sourceSpatialOps = cloneVisualEditValue(state.sourceSpatialOps || []);
     sprite3d.sliceClipboard = cloneVisualEditValue(state.sliceClipboard || null);
     sprite3d.hoverSlice = Number.isInteger(state.hoverSlice) ? state.hoverSlice : null;
     sprite3d.addPaletteOpen = false;
@@ -3554,8 +3572,8 @@ function previewAspectForScene(exportData = previewExport, sceneName = "") {
       ? scenes.find((candidate) => candidate?.name === initialName)
       : null;
   }
-  const width = Number(scene?.layout?.size?.width);
-  const height = Number(scene?.layout?.size?.height);
+  const width = Number(scene?.layout?.aspectRatio?.width);
+  const height = Number(scene?.layout?.aspectRatio?.height);
   if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
     return width / height;
   }
@@ -4202,16 +4220,6 @@ function addEmptyLevel3dToFocusedSource() {
   setPaneStatus("level", "Added 3D level", "is-ok");
   hideEditorHoverTooltip();
   return true;
-}
-
-function addEmptySprite3dToFocusedSource() {
-  currentSpritePaneMode = "sprite3d";
-  openPreviewModePane("sprite3d");
-  if (typeof addEmptySprite3dToSource === "function") {
-    addEmptySprite3dToSource();
-  }
-  applyPaneVisibility();
-  hideEditorHoverTooltip();
 }
 
 function openLevelPaneForCurrentPreviewLevel() {
@@ -6656,7 +6664,7 @@ function renderLevelPalette() {
   const mainObjects = level.palette.filter((object) => object.id !== 0 && !isVisualObject(object));
   const visualObjects = level.palette.filter((object) => object.id !== 0 && isVisualObject(object));
   renderLevelPaletteGroup("", mainObjects);
-  renderLevelPaletteGroup("Visual", visualObjects);
+  renderLevelPaletteGroup("", visualObjects);
   levelPalette.append(renderLevelAddLegendButton());
   renderLevelLayerControls();
   renderLevelLayerPreviews();
@@ -6856,7 +6864,7 @@ function renderLevelLayerPreviews() {
     button.setAttribute("aria-label", canRemove ? `Remove level layer ${index + 1}` : `Edit level layer ${index + 1}`);
     button.title = canRemove ? "Remove layer" : `Layer ${index + 1}`;
     const view = document.createElement("span");
-    view.className = "level-layer-preview-view game-preview-scope";
+    view.className = "level-layer-preview-view game-preview-scope board";
     view.setAttribute("aria-hidden", "true");
     if (window.PuzzleRenderer) {
       new window.PuzzleRenderer(view, { renderMode: "dom", themeRoot: view }).render(levelScene(levelLayerCells(index, exportData), exportData));
@@ -11268,7 +11276,6 @@ spriteAnimateModeButton?.addEventListener("click", () => {
     setSpriteAnimationMode(!sprite.animationMode);
   }
 });
-newSprite3dButton?.addEventListener("click", addEmptySprite3dToFocusedSource);
 sprite3dModeButton?.addEventListener("click", () => {
   if (typeof setSpriteAnimationMode === "function") {
     setSpriteAnimationMode(false, { render: false });

@@ -97,7 +97,7 @@ T = Target Background
 
 scene title {
 layout {
-title = "Basic PS Sokoban"
+heading "Basic PS Sokoban"
 if has_progress_save {
 choice "Continue" -> {
 goto playing
@@ -113,7 +113,7 @@ start playing
 scene playing {
 layout {
 row {
-title = "Basic PS Sokoban"
+heading "Basic PS Sokoban"
 }
 puzzle board = main
 }

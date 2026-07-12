@@ -52,17 +52,19 @@ pub struct SourceTarget {
     pub level_index: Option<usize>,
     pub sound_kind: Option<SoundSourceTargetKind>,
     pub params: Vec<(String, String)>,
-    pub source_sprite: Option<SourceSpriteTarget>,
-    pub source_sprite3d: Option<SourceSprite3dTarget>,
+    pub source_sprite: Option<SourceSpriteDocument>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct SourceSpriteTarget {
-    pub status: SourceSprite3dStatus,
+pub struct SourceSpriteDocument {
+    pub dimension: SourceSpriteDimension,
+    pub status: SourceSpriteStatus,
     pub prelude_rows: Vec<String>,
     pub palette_tokens: Vec<String>,
     pub resolved_palette: Vec<SourceSpritePaletteEntry>,
+    pub palette: Vec<String>,
     pub pixel_rows: Vec<String>,
+    pub rows: Vec<String>,
     pub duration_ms: Option<u64>,
     pub frame_duration_ms: Option<u64>,
     pub animation_frames: Vec<Vec<String>>,
@@ -72,9 +74,15 @@ pub struct SourceSpriteTarget {
     pub shape_assets: Vec<SourceSpriteShapeAsset>,
     pub width: Option<usize>,
     pub height: Option<usize>,
+    pub depth: Option<usize>,
+    pub size: Option<usize>,
+    pub cells: Vec<Option<usize>>,
     pub frames: Vec<Vec<Vec<Option<usize>>>>,
     pub spatial_ops: Vec<crate::VisualSpriteTransform>,
+    pub spatial_ops3: Vec<crate::SpriteSpatialOp3>,
 }
+
+pub type SourceSpriteTarget = SourceSpriteDocument;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SourceSpritePaletteEntry {
@@ -95,29 +103,31 @@ pub struct SourceSpriteShapeAsset {
     pub rows: Vec<String>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct SourceSprite3dTarget {
-    pub status: SourceSprite3dStatus,
-    pub palette_tokens: Vec<String>,
-    pub palette: Vec<String>,
-    pub rows: Vec<String>,
-    pub frames: Vec<Vec<Vec<String>>>,
-    pub duration_ms: Option<u64>,
-    pub frame_duration_ms: Option<u64>,
-    pub size: Option<usize>,
-    pub cells: Vec<Option<usize>>,
-    pub spatial_ops: Vec<crate::SpriteSpatialOp3>,
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SourceSpriteDimension {
+    #[default]
+    Two,
+    Three,
+}
+
+impl SourceSpriteDimension {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Two => "2d",
+            Self::Three => "3d",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub enum SourceSprite3dStatus {
+pub enum SourceSpriteStatus {
     Complete,
     #[default]
     Incomplete,
     Invalid,
 }
 
-impl SourceSprite3dStatus {
+impl SourceSpriteStatus {
     fn as_str(&self) -> &'static str {
         match self {
             Self::Complete => "complete",
@@ -126,6 +136,8 @@ impl SourceSprite3dStatus {
         }
     }
 }
+
+pub type SourceSprite3dStatus = SourceSpriteStatus;
 
 pub fn resolve_source_target(source: &str, cursor_offset: usize) -> Option<SourceTarget> {
     let cursor = cursor_offset.min(source.len());
@@ -163,7 +175,7 @@ pub(crate) fn resolve_source_target_from_entries(
             target.source_sprite = source_sprite_for_target(source, document, &target);
         }
         SourceTargetKind::Sprite3d => {
-            target.source_sprite3d = source_sprite3d_for_target(source, document, &target);
+            target.source_sprite = source_sprite3d_for_target(source, document, &target);
         }
         _ => {}
     }
@@ -251,16 +263,12 @@ fn push_target_json(out: &mut String, target: &SourceTarget) {
         out.push_str(",\"sourceSprite\":");
         push_source_sprite_json(out, sprite);
     }
-    if let Some(sprite3d) = &target.source_sprite3d {
-        out.push_str(",\"sourceSprite\":");
-        push_source_sprite3d_json(out, sprite3d);
-    }
     out.push('}');
 }
 
 fn push_source_sprite_json(out: &mut String, sprite: &SourceSpriteTarget) {
     out.push('{');
-    push_json_string(out, "dimension", "2d");
+    push_json_string(out, "dimension", sprite.dimension.as_str());
     out.push(',');
     push_json_string(out, "status", sprite.status.as_str());
     out.push(',');
@@ -298,11 +306,17 @@ fn push_source_sprite_json(out: &mut String, sprite: &SourceSpriteTarget) {
     push_json_number(out, "width", sprite.width.unwrap_or(0));
     out.push(',');
     push_json_number(out, "height", sprite.height.unwrap_or(0));
-    out.push_str(",\"depth\":1}");
+    out.push(',');
+    push_json_number(out, "depth", sprite.depth.unwrap_or(1));
+    out.push('}');
     out.push_str(",\"frames\":");
     push_source_sprite_edit_frames_json(out, &sprite.frames);
     out.push_str(",\"spatialOps\":");
-    push_source_sprite2d_spatial_ops_json(out, &sprite.spatial_ops);
+    if sprite.dimension == SourceSpriteDimension::Two {
+        push_source_sprite2d_spatial_ops_json(out, &sprite.spatial_ops);
+    } else {
+        push_source_sprite3d_spatial_ops_json(out, &sprite.spatial_ops3);
+    }
     out.push('}');
 }
 
@@ -415,47 +429,6 @@ fn push_source_sprite_shape_assets_json(out: &mut String, entries: &[SourceSprit
     out.push(']');
 }
 
-fn push_source_sprite3d_json(out: &mut String, sprite: &SourceSprite3dTarget) {
-    out.push('{');
-    push_json_string(out, "dimension", "3d");
-    out.push(',');
-    push_json_string(out, "status", sprite.status.as_str());
-    out.push(',');
-    push_json_string_array(out, "paletteTokens", &sprite.palette_tokens);
-    out.push(',');
-    push_json_string_array(out, "palette", &sprite.palette);
-    out.push(',');
-    out.push_str("\"extent\":{");
-    let size = sprite.size.unwrap_or(0);
-    push_json_number(out, "width", size);
-    out.push(',');
-    push_json_number(out, "height", size);
-    out.push(',');
-    push_json_number(out, "depth", size);
-    out.push_str("},\"frames\":");
-    push_source_sprite3d_frames_json(out, &sprite.frames, sprite.palette.len());
-    out.push_str(",\"durationMs\":");
-    match sprite.duration_ms {
-        Some(value) => out.push_str(&value.to_string()),
-        None => out.push_str("null"),
-    }
-    out.push_str(",\"frameDurationMs\":");
-    match sprite.frame_duration_ms {
-        Some(value) => out.push_str(&value.to_string()),
-        None => out.push_str("null"),
-    }
-    out.push_str(",\"size\":");
-    match sprite.size {
-        Some(size) => out.push_str(&size.to_string()),
-        None => out.push_str("null"),
-    }
-    out.push_str(",\"cells\":");
-    push_source_sprite3d_cells_json(out, &sprite.cells);
-    out.push_str(",\"spatialOps\":");
-    push_source_sprite3d_spatial_ops_json(out, &sprite.spatial_ops);
-    out.push('}');
-}
-
 fn push_source_sprite3d_spatial_ops_json(out: &mut String, ops: &[crate::SpriteSpatialOp3]) {
     out.push('[');
     for (index, op) in ops.iter().enumerate() {
@@ -475,63 +448,6 @@ fn sprite_space_name3(space: crate::SpriteSpace3) -> &'static str {
         crate::SpriteSpace3::World => "world",
         crate::SpriteSpace3::Local => "local",
     }
-}
-
-fn push_source_sprite3d_frames_json(
-    out: &mut String,
-    frames: &[Vec<Vec<String>>],
-    palette_len: usize,
-) {
-    out.push('[');
-    for (frame_index, frame) in frames.iter().enumerate() {
-        if frame_index > 0 {
-            out.push(',');
-        }
-        out.push_str("{\"layers\":[");
-        for (layer_index, layer) in frame.iter().enumerate() {
-            if layer_index > 0 {
-                out.push(',');
-            }
-            out.push_str("{\"cells\":[");
-            let mut cell_index = 0usize;
-            for row in layer {
-                for ch in row.chars() {
-                    if cell_index > 0 {
-                        out.push(',');
-                    }
-                    if ch == '.' || ch == ' ' {
-                        out.push_str("null");
-                    } else if let Some(index) = SOURCE_SPRITE3D_PALETTE_KEYS
-                        .chars()
-                        .position(|key| key == ch)
-                        .filter(|index| *index < palette_len)
-                    {
-                        out.push_str(&index.to_string());
-                    } else {
-                        out.push_str("null");
-                    }
-                    cell_index += 1;
-                }
-            }
-            out.push_str("]}");
-        }
-        out.push_str("]}");
-    }
-    out.push(']');
-}
-
-fn push_source_sprite3d_cells_json(out: &mut String, cells: &[Option<usize>]) {
-    out.push('[');
-    for (index, cell) in cells.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        match cell {
-            Some(value) => out.push_str(&value.to_string()),
-            None => out.push_str("null"),
-        }
-    }
-    out.push(']');
 }
 
 fn resolve_sound_entries(source: &str, context: &SurfaceDocument) -> Vec<SourceTarget> {
@@ -557,7 +473,6 @@ fn resolve_sound_entries(source: &str, context: &SurfaceDocument) -> Vec<SourceT
                 sound_kind: Some(sound.kind),
                 params: sound.params,
                 source_sprite: None,
-                source_sprite3d: None,
             })
         })
         .collect()
@@ -704,7 +619,6 @@ fn resolve_level_entries(source: &str, context: &SurfaceDocument) -> Vec<SourceT
             sound_kind: None,
             params: Vec::new(),
             source_sprite: None,
-            source_sprite3d: None,
         });
         level_index += 1;
         index = next_level_scan_index(context, index, end);
@@ -807,7 +721,6 @@ fn resolve_level3d_entries(source: &str, context: &SurfaceDocument) -> Vec<Sourc
                     ("model".to_string(), model.clone()),
                 ],
                 source_sprite: None,
-                source_sprite3d: None,
             });
             level_index += 1;
         }
@@ -905,7 +818,6 @@ fn resolve_sprite_entries(
                 sound_kind: None,
                 params: Vec::new(),
                 source_sprite: None,
-                source_sprite3d: None,
             });
             covered_until = line_end;
             continue;
@@ -932,7 +844,6 @@ fn resolve_sprite_entries(
                     sound_kind: None,
                     params: Vec::new(),
                     source_sprite: None,
-                    source_sprite3d: None,
                 });
                 covered_until = end;
             }
@@ -953,7 +864,6 @@ fn resolve_sprite_entries(
             sound_kind: None,
             params: Vec::new(),
             source_sprite: None,
-            source_sprite3d: None,
         });
         covered_until = end;
     }
@@ -980,7 +890,7 @@ fn source_sprite3d_for_target(
     source: &str,
     document: &SurfaceDocument,
     target: &SourceTarget,
-) -> Option<SourceSprite3dTarget> {
+) -> Option<SourceSpriteTarget> {
     let body_start = target.body_start?;
     let body_end = target.body_end?;
     let body = source.get(body_start..body_end)?;
@@ -990,35 +900,59 @@ fn source_sprite3d_for_target(
         .collect::<Vec<_>>();
     let syntax = crate::sprite_authoring::parse_sprite_node(None, &body_lines);
     if !syntax.issues.is_empty() {
-        return Some(SourceSprite3dTarget {
+        return Some(SourceSpriteTarget {
+            dimension: SourceSpriteDimension::Three,
             status: SourceSprite3dStatus::Invalid,
-            ..SourceSprite3dTarget::default()
+            ..SourceSpriteTarget::default()
         });
     }
     let Ok(spatial_ops) = crate::puzzle3_parse::parse_sprite_spatial_ops3(&syntax) else {
-        return Some(SourceSprite3dTarget {
+        return Some(SourceSpriteTarget {
+            dimension: SourceSpriteDimension::Three,
             status: SourceSprite3dStatus::Invalid,
-            ..SourceSprite3dTarget::default()
+            ..SourceSpriteTarget::default()
         });
     };
     let palette_tokens = syntax.colors.clone().unwrap_or_default();
     if palette_tokens.is_empty() {
-        return Some(SourceSprite3dTarget {
+        return Some(SourceSpriteTarget {
+            dimension: SourceSpriteDimension::Three,
             status: SourceSprite3dStatus::Incomplete,
-            ..SourceSprite3dTarget::default()
+            ..SourceSpriteTarget::default()
         });
     }
-    let palette_line = palette_tokens.join(" ");
-    let Ok(palette_map) = parse_canonical_sprite_palette_line(&palette_line) else {
-        return Some(SourceSprite3dTarget {
+    let resolved_palette =
+        source_sprite_palette_from_refs(&palette_tokens, &document.visual_sprite_refs.color_assets);
+    if resolved_palette.is_empty() {
+        return Some(SourceSpriteTarget {
+            dimension: SourceSpriteDimension::Three,
             status: SourceSprite3dStatus::Invalid,
             palette_tokens,
-            ..SourceSprite3dTarget::default()
+            ..SourceSpriteTarget::default()
+        });
+    }
+    let palette_line = resolved_palette
+        .iter()
+        .map(|entry| entry.color.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let Ok(palette_map) = parse_canonical_sprite_palette_line(&palette_line) else {
+        return Some(SourceSpriteTarget {
+            dimension: SourceSpriteDimension::Three,
+            status: SourceSprite3dStatus::Invalid,
+            palette_tokens,
+            ..SourceSpriteTarget::default()
         });
     };
     let resolved = crate::sprite_authoring::resolve_sprite_shape(&syntax, |name| {
         document.visual_sprite_refs.shape_names.contains(name)
     });
+    let shape_ref = match &resolved {
+        crate::sprite_authoring::ResolvedSpriteShape::Reference(reference) => {
+            Some(reference.clone())
+        }
+        _ => None,
+    };
     let frames = match resolved {
         crate::sprite_authoring::ResolvedSpriteShape::Reference(reference) => {
             let rows = document.visual_sprite_refs.shape_assets.get(&reference)?;
@@ -1045,10 +979,11 @@ fn source_sprite3d_for_target(
         }
         crate::sprite_authoring::ResolvedSpriteShape::UnknownBareReference(_)
         | crate::sprite_authoring::ResolvedSpriteShape::AmbiguousBareRow(_) => {
-            return Some(SourceSprite3dTarget {
+            return Some(SourceSpriteTarget {
+                dimension: SourceSpriteDimension::Three,
                 status: SourceSprite3dStatus::Invalid,
                 palette_tokens,
-                ..SourceSprite3dTarget::default()
+                ..SourceSpriteTarget::default()
             });
         }
     };
@@ -1069,20 +1004,44 @@ fn source_sprite3d_for_target(
         })
         .collect::<Vec<_>>();
     let Some(layers) = frame_layers.first() else {
-        return Some(SourceSprite3dTarget {
+        return Some(SourceSpriteTarget {
+            dimension: SourceSpriteDimension::Three,
             status: SourceSprite3dStatus::Invalid,
             palette_tokens,
-            ..SourceSprite3dTarget::default()
+            ..SourceSpriteTarget::default()
         });
     };
-    let Ok(voxels) = crate::puzzle3_parse::parse_sprite_layers(&target.name, layers, &palette_map)
-    else {
-        return Some(SourceSprite3dTarget {
-            status: SourceSprite3dStatus::Invalid,
-            palette_tokens,
-            ..SourceSprite3dTarget::default()
-        });
-    };
+    let mut edit_frames = Vec::with_capacity(frame_layers.len());
+    let mut common_size = None;
+    for frame in &frame_layers {
+        let Ok(voxels) =
+            crate::puzzle3_parse::parse_sprite_layers(&target.name, frame, &palette_map)
+        else {
+            return Some(SourceSpriteTarget {
+                dimension: SourceSpriteDimension::Three,
+                status: SourceSprite3dStatus::Invalid,
+                palette_tokens,
+                ..SourceSpriteTarget::default()
+            });
+        };
+        let (size, cells) = source_sprite3d_cells_from_voxels(&voxels, palette_tokens.len());
+        if common_size.is_some_and(|expected| expected != size) {
+            return Some(SourceSpriteTarget {
+                dimension: SourceSpriteDimension::Three,
+                status: SourceSprite3dStatus::Invalid,
+                palette_tokens,
+                ..SourceSpriteTarget::default()
+            });
+        }
+        common_size = Some(size);
+        let layer_len = size * size;
+        edit_frames.push(
+            cells
+                .chunks(layer_len)
+                .map(|layer| layer.to_vec())
+                .collect::<Vec<_>>(),
+        );
+    }
     let palette = palette_map
         .values()
         .map(source_sprite3d_color_string)
@@ -1098,13 +1057,38 @@ fn source_sprite3d_for_target(
             rows
         })
         .collect::<Vec<_>>();
-    let (size, cells) = source_sprite3d_cells_from_voxels(&voxels, palette_tokens.len());
-    Some(SourceSprite3dTarget {
+    let size = common_size.unwrap_or(0);
+    let cells = edit_frames
+        .first()
+        .map(|layers| layers.iter().flatten().copied().collect())
+        .unwrap_or_default();
+    Some(SourceSpriteTarget {
+        dimension: SourceSpriteDimension::Three,
         status: SourceSprite3dStatus::Complete,
         palette_tokens,
+        resolved_palette,
         palette,
+        shape_ref,
+        color_assets: document
+            .visual_sprite_refs
+            .color_assets
+            .iter()
+            .map(|(name, color)| SourceSpriteColorAsset {
+                name: name.clone(),
+                color: color.clone(),
+            })
+            .collect(),
+        shape_assets: document
+            .visual_sprite_refs
+            .shape_assets
+            .iter()
+            .map(|(name, rows)| SourceSpriteShapeAsset {
+                name: name.clone(),
+                rows: rows.clone(),
+            })
+            .collect(),
         rows,
-        frames: frame_layers,
+        frames: edit_frames,
         duration_ms: syntax
             .duration
             .as_deref()
@@ -1115,7 +1099,11 @@ fn source_sprite3d_for_target(
             .and_then(|value| puzzle_scene::parse_wait_duration_ms_at(value, value).ok()),
         size: Some(size),
         cells,
-        spatial_ops,
+        width: Some(size),
+        height: Some(size),
+        depth: Some(size),
+        spatial_ops3: spatial_ops,
+        ..SourceSpriteTarget::default()
     })
 }
 
@@ -1866,7 +1854,7 @@ fn code_trim(line: &str) -> &str {
     strip_line_comment(line).trim()
 }
 
-fn find_matching_brace(source: &str, open_index: usize) -> Option<usize> {
+pub(crate) fn find_matching_brace(source: &str, open_index: usize) -> Option<usize> {
     let mut depth = 0usize;
     let mut quote = None::<char>;
     let mut escaped = false;
@@ -3180,7 +3168,7 @@ shape = {
         assert!(body.contains("#90ee90"));
         assert!(body.contains("11111"));
         assert!(!body.contains("Goal"));
-        let sprite3d = target.source_sprite3d.as_ref().unwrap();
+        let sprite3d = target.source_sprite.as_ref().unwrap();
         assert_eq!(sprite3d.status, SourceSprite3dStatus::Complete);
         assert_eq!(sprite3d.size, Some(5));
         assert_eq!(sprite3d.palette, vec!["#90ee90", "#008000"]);
@@ -3188,6 +3176,63 @@ shape = {
         assert_eq!(sprite3d.cells[(4 * 5 + 1) * 5 + 2], Some(0));
         assert_eq!(sprite3d.cells[(3 * 5) * 5], Some(1));
         assert_eq!(sprite3d.cells[(0 * 5 + 1) * 5 + 2], None);
+    }
+
+    #[test]
+    fn sprite3d_contract_preserves_named_color_shape_and_all_animation_frames() {
+        let source = r#"
+puzzle3 board {
+}
+sprites art of board {
+palette {
+accent = #123456
+}
+shapes {
+pulse {
+0
+>
+.
+}
+}
+Orb {
+duration = 200ms
+frame_duration = 100ms
+colors = accent
+shape = pulse
+}
+}
+"#;
+        let cursor = source.find("duration = 200ms").unwrap();
+        let target = resolve_source_target(source, cursor).unwrap();
+        let sprite = target.source_sprite.unwrap();
+
+        assert_eq!(sprite.status, SourceSprite3dStatus::Complete);
+        assert_eq!(sprite.shape_ref.as_deref(), Some("pulse"));
+        assert_eq!(sprite.duration_ms, Some(200));
+        assert_eq!(sprite.frame_duration_ms, Some(100));
+        assert_eq!(sprite.frames.len(), 2);
+        assert_eq!(sprite.frames[0], vec![vec![Some(0)]]);
+        assert_eq!(sprite.frames[1], vec![vec![None]]);
+        assert_eq!(
+            sprite.resolved_palette,
+            vec![SourceSpritePaletteEntry {
+                source: "accent".to_string(),
+                color: "#123456".to_string(),
+                linked: true,
+            }]
+        );
+        assert!(
+            sprite
+                .color_assets
+                .iter()
+                .any(|asset| asset.name == "accent")
+        );
+        assert!(
+            sprite
+                .shape_assets
+                .iter()
+                .any(|asset| asset.name == "pulse")
+        );
     }
 
     #[test]
@@ -3239,7 +3284,7 @@ Floor {
                 .is_empty()
         );
         assert_eq!(
-            target.source_sprite3d.as_ref().unwrap().status,
+            target.source_sprite.as_ref().unwrap().status,
             SourceSprite3dStatus::Incomplete
         );
     }

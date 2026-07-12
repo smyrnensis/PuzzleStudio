@@ -60,18 +60,19 @@ pub use loaded::{
     ModelOperationSound, ModelOperationSoundDef, MusicSoundDef, PuzzleGridRenderDef,
     PuzzleRenderDef, PuzzleScreenDef, PuzzleViewDef, QueryExpr, QueryExpr3, QueryExprOf,
     ResourceSelection, RuleAnimation, RuleAnimationTrigger, RuleDebugInfo, RuleEffect,
-    SceneAlignDef, SceneAlignXDef, SceneAlignYDef, SceneBinaryOp, SceneButtonDef, SceneComponent,
-    SceneConditionalDef, SceneContainerDef, SceneDef, SceneEffect, SceneEffectParam, SceneExpr,
-    SceneForDef, SceneLayoutDef, SceneLevelKey, ScenePuzzleDef, ScenePuzzleInitializer,
-    ScenePuzzleRule, SceneResources, SceneRoutineDef, SceneSizeDef, SceneStateDef,
-    SceneStateLifetime, SceneTextContent, SceneTextDef, SceneTitleDef, SceneTransition,
-    SceneTransitionTrigger, SceneValue, SceneVarDef, SceneVarKind, SfxSoundDef, SolverDeadendOf,
-    SolverStrategy, SolverStrategy3, SolverStrategyDirection, SolverStrategyOf, SolverStrategyTerm,
-    SolverStrategyTerm3, SolverStrategyTermOf, SoundsDef, ThemeDef, ThemeVariableDef,
-    TriggerAnimationDef, TriggerAnimationKind, TweenAnimationDef, ViewportModeDef, ViewportSizeDef,
-    VisualAliasDef, VisualColorDef, VisualSpriteDef, VisualSpriteFit, VisualSpriteFitMode,
-    VisualSpriteKind, VisualSpriteLoopDef, VisualSpritePixelsPerCell, VisualSpriteSampling,
-    VisualSpriteSpace, VisualSpriteTransform, VisualsDef,
+    SceneAlignDef, SceneAspectRatioDef, SceneBinaryOp, SceneButtonDef, SceneComponent,
+    SceneConditionalDef, SceneContainerDef, SceneDef, SceneDistributionDef, SceneEffect,
+    SceneEffectParam, SceneExpr, SceneForDef, SceneLayoutDef, SceneLevelKey, ScenePuzzleDef,
+    ScenePuzzleInitializer, ScenePuzzleRule, SceneResources, SceneRoutineDef, SceneSpaceDef,
+    SceneStateDef, SceneStateLifetime, SceneTextAlignDef, SceneTextContent, SceneTextDef,
+    SceneTextRoleDef, SceneTransition, SceneTransitionTrigger, SceneValue, SceneVarDef,
+    SceneVarKind, SfxSoundDef, SolverDeadendOf, SolverStrategy, SolverStrategy3,
+    SolverStrategyDirection, SolverStrategyOf, SolverStrategyTerm, SolverStrategyTerm3,
+    SolverStrategyTermOf, SoundsDef, ThemeDef, ThemeVariableDef, TriggerAnimationDef,
+    TriggerAnimationKind, TweenAnimationDef, ViewportModeDef, ViewportSizeDef, VisualAliasDef,
+    VisualColorDef, VisualSpriteDef, VisualSpriteFit, VisualSpriteFitMode, VisualSpriteKind,
+    VisualSpriteLoopDef, VisualSpritePixelsPerCell, VisualSpriteSampling, VisualSpriteSpace,
+    VisualSpriteTransform, VisualsDef,
 };
 
 const BLOCK_CLOSE: &str = "}";
@@ -137,9 +138,10 @@ pub use source_import::{SourceImportRange, SourceImportReference};
 pub use source_outline::{SourceOutlineItem, source_outline, source_outline_json};
 pub use source_sprite_edit::{SpriteEditMutationResult, mutate_sprite_source};
 pub use source_target::{
-    SoundSourceTargetKind, SourceSprite3dStatus, SourceSprite3dTarget, SourceSpriteColorAsset,
-    SourceSpritePaletteEntry, SourceSpriteShapeAsset, SourceSpriteTarget, SourceTarget,
-    SourceTargetKind, resolve_source_target, source_entries_json, source_target_json,
+    SoundSourceTargetKind, SourceSprite3dStatus, SourceSpriteColorAsset, SourceSpriteDimension,
+    SourceSpriteDocument, SourceSpritePaletteEntry, SourceSpriteShapeAsset, SourceSpriteStatus,
+    SourceSpriteTarget, SourceTarget, SourceTargetKind, resolve_source_target, source_entries_json,
+    source_target_json,
 };
 use surface::{
     SourceSpan, SurfaceAsciiRange, SurfaceDocument, SurfaceHighlightRanges, SurfaceNodeKind,
