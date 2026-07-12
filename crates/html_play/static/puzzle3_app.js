@@ -1341,6 +1341,9 @@ function draw(options = {}) {
   }
   applyPixelatePostprocess();
   notifyPuzzle3View(width, height);
+  if (hasRuntimeSpriteAnimation()) {
+    scheduleViewportAnimation();
+  }
 }
 
 function drawWithThree() {
@@ -2692,17 +2695,22 @@ function spriteVoxelTemplate(spriteName) {
   if (!sprite) {
     return null;
   }
-  const cached = spriteVoxelTemplateCache.get(sprite);
-  if (cached) {
-    return cached;
+  const animated = Array.isArray(sprite.frames) && sprite.frames.length > 1;
+  if (!animated) {
+    const cached = spriteVoxelTemplateCache.get(sprite);
+    if (cached) {
+      return cached;
+    }
   }
   const template = buildSpriteVoxelTemplate(sprite);
-  spriteVoxelTemplateCache.set(sprite, template);
+  if (!animated) {
+    spriteVoxelTemplateCache.set(sprite, template);
+  }
   return template;
 }
 
 function buildSpriteVoxelTemplate(sprite) {
-  const blocks = bitmapBlocks(sprite.bitmap || []);
+  const blocks = currentRuntimeSpriteLayers(sprite);
   const height = Math.max(1, blocks.length);
   const depth = Math.max(1, ...blocks.map((rows) => rows.length));
   const width = Math.max(1, ...blocks.flatMap((rows) => rows.map((row) => row.length)));
@@ -3129,16 +3137,29 @@ function projectCellRenderOwner(ownerCell) {
   };
 }
 
-function bitmapBlocks(bitmap) {
-  const blocks = [[]];
-  for (const row of bitmap) {
-    if (row === "") {
-      blocks.push([]);
-    } else {
-      blocks[blocks.length - 1].push(row);
-    }
+function currentRuntimeSpriteLayers(sprite, now = performance.now()) {
+  const frames = Array.isArray(sprite?.frames) ? sprite.frames : [];
+  if (!frames.length) {
+    throw new Error("Puzzle3 runtime sprite frames are missing.");
   }
-  return blocks;
+  const frameDuration = Number(sprite.frameDurationMs)
+    || (Number(sprite.durationMs) > 0 ? Number(sprite.durationMs) / frames.length : 0);
+  const index = frames.length > 1 && frameDuration > 0
+    ? Math.floor(now / frameDuration) % frames.length
+    : 0;
+  const layers = frames[index]?.layers;
+  if (!Array.isArray(layers) || !layers.length || layers.some((layer) => !Array.isArray(layer) || !layer.length)) {
+    throw new Error("Puzzle3 runtime sprite frame layers are missing or invalid.");
+  }
+  return layers;
+}
+
+function hasRuntimeSpriteAnimation() {
+  return Object.values(snapshot?.sprites || {}).some((sprite) => (
+    Array.isArray(sprite?.frames)
+    && sprite.frames.length > 1
+    && (Number(sprite.frameDurationMs) > 0 || Number(sprite.durationMs) > 0)
+  ));
 }
 
 function shadeFill(fill, light) {
@@ -3949,7 +3970,10 @@ function cloneRuntimeSprites(sprites) {
       {
         ...sprite,
         palette: { ...(sprite.palette || {}) },
-        bitmap: [...(sprite.bitmap || [])],
+        frames: (sprite.frames || []).map((frame) => ({
+          ...frame,
+          layers: (frame.layers || []).map((layer) => [...layer]),
+        })),
       },
     ]),
   );

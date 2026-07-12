@@ -626,9 +626,9 @@ fn write_sprites(out: &mut String, sprite_set: Option<&SpriteSet3>) {
         let visible_colors = sprite
             .palette
             .iter()
-            .filter_map(|(key, color)| match color {
-                SpriteColor3::Transparent => None,
-                SpriteColor3::Hex(value) => Some((*key, value)),
+            .map(|(key, color)| match color {
+                SpriteColor3::Transparent => (*key, "transparent"),
+                SpriteColor3::Hex(value) => (*key, value.as_str()),
             })
             .collect::<Vec<_>>();
         for (color_index, (key, value)) in visible_colors.iter().enumerate() {
@@ -644,19 +644,46 @@ fn write_sprites(out: &mut String, sprite_set: Option<&SpriteSet3>) {
             .unwrap();
         }
         out.push_str("},\n");
-        out.push_str("      \"bitmap\": [\n");
-        let mut rows = Vec::new();
-        for (slice_index, slice) in sprite.voxels.slices.iter().enumerate() {
-            if slice_index > 0 {
-                rows.push(String::new());
+        out.push_str("      \"frames\": [\n");
+        for (frame_index, frame) in sprite.frames.iter().enumerate() {
+            out.push_str("        { \"layers\": [\n");
+            for (layer_index, layer) in frame.slices.iter().enumerate() {
+                out.push_str("          [");
+                for (row_index, row) in layer.iter().enumerate() {
+                    if row_index > 0 {
+                        out.push_str(", ");
+                    }
+                    out.push_str(&json_string(row));
+                }
+                let layer_comma = if layer_index + 1 == frame.slices.len() {
+                    ""
+                } else {
+                    ","
+                };
+                writeln!(out, "]{layer_comma}").unwrap();
             }
-            rows.extend(slice.iter().cloned());
+            let frame_comma = if frame_index + 1 == sprite.frames.len() {
+                ""
+            } else {
+                ","
+            };
+            writeln!(out, "        ] }}{frame_comma}").unwrap();
         }
-        for (row_index, row) in rows.iter().enumerate() {
-            let row_comma = if row_index + 1 == rows.len() { "" } else { "," };
-            writeln!(out, "        {}{}", json_string(row), row_comma).unwrap();
+        out.push_str("      ],\n");
+        match sprite.duration_ms {
+            Some(value) => writeln!(out, "      \"durationMs\": {value},").unwrap(),
+            None => out.push_str("      \"durationMs\": null,\n"),
         }
-        out.push_str("      ]\n");
+        match sprite.frame_duration_ms {
+            Some(value) => writeln!(out, "      \"frameDurationMs\": {value},").unwrap(),
+            None => out.push_str("      \"frameDurationMs\": null,\n"),
+        }
+        out.push_str("      \"spatialOps\": ");
+        out.push_str(&serde_json::to_string(&sprite.spatial_ops.iter().map(|op| match op {
+            crate::SpriteSpatialOp3::Translate { space, value } => serde_json::json!({"kind":"translate3","space":match space { crate::SpriteSpace3::World => "world", crate::SpriteSpace3::Local => "local" },"value":value}),
+            crate::SpriteSpatialOp3::Rotate { space, axis, degrees } => serde_json::json!({"kind":"rotate3","space":match space { crate::SpriteSpace3::World => "world", crate::SpriteSpace3::Local => "local" },"axis":axis,"degrees":degrees}),
+        }).collect::<Vec<_>>()).expect("sprite spatial ops serialize"));
+        out.push('\n');
         writeln!(out, "    }}{}", comma).unwrap();
     }
     out.push_str("  }\n");

@@ -1702,7 +1702,6 @@ const SOURCE_OUTLINE_KIND_ICON_NAMES = Object.freeze({
   "levels3": "map",
   "level": "map",
   "sprites": "image",
-  "sprites3": "image",
   "sprite": "image",
   "objects": "boxes",
   "object": "box",
@@ -1740,6 +1739,7 @@ const SOURCE_OUTLINE_KIND_ICON_NAMES = Object.freeze({
   "theme": "swatch-book",
   "colors": "palette",
   "shapes": "shapes",
+  "shape": "shapes",
   "sounds": "volume-2",
   "keys": "keyboard",
   "layers": "layers",
@@ -2219,7 +2219,7 @@ function filterSourceCompletionsForDocument(items, document) {
   const hidden = profile === "puzzle3d"
     ? new Set(["puzzle", "levels", "sprites"])
     : profile === "puzzle2d"
-      ? new Set(["puzzle3", "levels3", "sprites3"])
+      ? new Set(["puzzle3", "levels3", "sprites"])
       : null;
   if (!hidden) {
     return items;
@@ -2271,7 +2271,7 @@ function sourceCursorBeforeSyntaxBoundaryWithoutPrefix(source, cursor) {
   }
   const lineEnd = source.indexOf("\n", cursor);
   const safeLineEnd = lineEnd < 0 ? source.length : lineEnd;
-  const after = stripSourceImportLineComment(source.slice(cursor, safeLineEnd));
+  const after = stripSourceStructureLineComment(source.slice(cursor, safeLineEnd));
   return /^[\t ]*[\]{}]/.test(after);
 }
 
@@ -2431,13 +2431,28 @@ function positionSourceCompletionPopover() {
   if (!anchorRect || !cursorRect) {
     return;
   }
-  const maxLeft = Math.max(8, window.innerWidth - 284);
+  const margin = 8;
+  const gap = 6;
+  const popoverWidth = Math.min(276, Math.max(0, wrapRect.width - margin * 2));
+  const maxLeft = Math.max(wrapRect.left + margin, wrapRect.right - popoverWidth - margin);
   const left = wrapRect.left + anchorRect.left;
-  const top = wrapRect.top + cursorRect.top + cursorRect.height + 6;
-  const availableBelow = Math.max(56, window.innerHeight - top - 8);
-  sourceCompletionPopover.style.left = `${Math.max(8, Math.min(maxLeft, left))}px`;
-  sourceCompletionPopover.style.top = `${top}px`;
-  sourceCompletionPopover.style.maxHeight = `${Math.min(216, availableBelow)}px`;
+  const caretTop = wrapRect.top + cursorRect.top;
+  const caretBottom = caretTop + cursorRect.height;
+  const viewportTop = Math.max(margin, wrapRect.top + margin);
+  const viewportBottom = Math.min(window.innerHeight - margin, wrapRect.bottom - margin);
+  const availableBelow = Math.max(0, viewportBottom - caretBottom - gap);
+  const availableAbove = Math.max(0, caretTop - viewportTop - gap);
+  const desiredHeight = Math.min(216, Math.max(38, (sourceCompletionState?.items?.length || 1) * 28 + 10));
+  const placeBelow = availableBelow >= desiredHeight || availableBelow >= availableAbove;
+  const available = placeBelow ? availableBelow : availableAbove;
+  const height = Math.max(0, Math.min(desiredHeight, available));
+  const top = placeBelow
+    ? caretBottom + gap
+    : caretTop - gap - height;
+  sourceCompletionPopover.dataset.placement = placeBelow ? "below" : "above";
+  sourceCompletionPopover.style.left = `${Math.max(wrapRect.left + margin, Math.min(maxLeft, left))}px`;
+  sourceCompletionPopover.style.top = `${Math.max(viewportTop, top)}px`;
+  sourceCompletionPopover.style.maxHeight = `${height}px`;
 }
 
 function sourceFindShortcutRequested(event) {
@@ -2498,6 +2513,7 @@ function openSourceFindPanel(options = {}) {
     sourceFindInput.value = selected;
   }
   sourceFindPanel.hidden = false;
+  syncSourceFindPanelLayout();
   syncSourceFindMatches({ select: Boolean(sourceFindInput.value), anchor: sourceEditor.selectionStart });
   window.setTimeout(() => {
     sourceFindInput.focus();
@@ -2511,6 +2527,7 @@ function closeSourceFindPanel(options = {}) {
     return;
   }
   sourceFindPanel.hidden = true;
+  syncSourceFindPanelLayout();
   sourceFindState.matches = [];
   sourceFindState.selectedIndex = -1;
   renderSourceFindMatches();
@@ -2537,6 +2554,25 @@ function setSourceFindReplaceVisible(visible) {
   } else {
     sourceReplaceInput?.setAttribute("tabindex", "-1");
   }
+  if (isSourceFindPanelOpen()) {
+    syncSourceFindPanelLayout();
+  }
+}
+
+function syncSourceFindPanelLayout() {
+  const open = isSourceFindPanelOpen();
+  sourceEditorWrap?.classList.toggle("has-source-find-panel", open);
+  if (!sourceEditorWrap) {
+    return;
+  }
+  if (!open) {
+    sourceEditorWrap.style.removeProperty("--source-find-panel-space");
+    return;
+  }
+  sourceEditorWrap.style.setProperty(
+    "--source-find-panel-space",
+    `${Math.ceil(sourceFindPanel.getBoundingClientRect().height) + 16}px`,
+  );
 }
 
 function syncSourceFindMatches(options = {}) {
@@ -2602,7 +2638,7 @@ function selectSourceFindMatch(index, options = {}) {
   }
   sourceFindState.selectedIndex = index;
   sourceEditor.setSelectionRange(match.start, match.end);
-  scrollSourceOffsetIntoView(match.start);
+  scrollSourceOffsetIntoView(match.start, "start");
   if (options.focusEditor) {
     sourceEditor.focus({ preventScroll: true });
   }
@@ -2714,6 +2750,18 @@ function renderSourceFindMatches() {
     return;
   }
   sourceFindMatchLayer.replaceChildren();
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
+    const matches = isSourceFindPanelOpen() && isTextDocument(activeDocument())
+      ? sourceFindState.matches
+      : [];
+    sourceEditor.sourceEditorPort.applyFindMatches(
+      sourceEditor.value,
+      matches,
+      sourceFindState.selectedIndex,
+    );
+    sourceFindMatchLayer.hidden = true;
+    return;
+  }
   if (!isSourceFindPanelOpen() || !sourceFindState.matches.length || !isTextDocument(activeDocument())) {
     sourceFindMatchLayer.hidden = true;
     return;
@@ -4009,8 +4057,8 @@ function handleSourceRewriteLhsBracketAssist(event) {
   const safeLineEnd = lineEnd < 0 ? source.length : lineEnd;
   const lineBeforeSelection = source.slice(lineStart, start);
   const lineAfterSelection = source.slice(end, safeLineEnd);
-  const codeBeforeSelection = stripSourceImportLineComment(lineBeforeSelection);
-  const codeAfterSelection = stripSourceImportLineComment(lineAfterSelection);
+  const codeBeforeSelection = stripSourceStructureLineComment(lineBeforeSelection);
+  const codeAfterSelection = stripSourceStructureLineComment(lineAfterSelection);
   if (codeBeforeSelection.length !== lineBeforeSelection.length) {
     return false;
   }
@@ -4114,7 +4162,7 @@ function handleSourceRewriteRhsPatternAssist(event) {
   const safeLineEnd = lineEnd < 0 ? source.length : lineEnd;
   const line = source.slice(lineStart, safeLineEnd);
   const cursorColumn = cursor - lineStart;
-  const code = stripSourceImportLineComment(line);
+  const code = stripSourceStructureLineComment(line);
   if (cursorColumn > code.length) {
     return false;
   }
@@ -4252,7 +4300,7 @@ function sourceRuleBracketCellSlots(source, cursor) {
   const lineEnd = source.indexOf("\n", cursor);
   const safeLineEnd = lineEnd < 0 ? source.length : lineEnd;
   const lineBeforeCursor = source.slice(lineStart, cursor);
-  if (stripSourceImportLineComment(lineBeforeCursor).length !== lineBeforeCursor.length) {
+  if (stripSourceStructureLineComment(lineBeforeCursor).length !== lineBeforeCursor.length) {
     return null;
   }
   const open = source.lastIndexOf("[", cursor - 1);
@@ -4339,7 +4387,7 @@ function handleSourceRuleBracketCellTabExit(event) {
   const lineEnd = source.indexOf("\n", cursor);
   const safeLineEnd = lineEnd < 0 ? source.length : lineEnd;
   const lineBeforeCursor = source.slice(lineStart, cursor);
-  if (stripSourceImportLineComment(lineBeforeCursor).length !== lineBeforeCursor.length) {
+  if (stripSourceStructureLineComment(lineBeforeCursor).length !== lineBeforeCursor.length) {
     return false;
   }
   const open = source.lastIndexOf("[", cursor - 1);
@@ -4397,7 +4445,7 @@ function handleSourceRewritePatternTab(event) {
   const lineEnd = source.indexOf("\n", cursor);
   const safeLineEnd = lineEnd < 0 ? source.length : lineEnd;
   const line = source.slice(lineStart, safeLineEnd);
-  const code = stripSourceImportLineComment(line);
+  const code = stripSourceStructureLineComment(line);
   const cursorColumn = cursor - lineStart;
   if (cursorColumn > code.length) {
     return false;
@@ -5653,6 +5701,74 @@ sourceEditor.addEventListener("sourcecompletioncommand", (event) => {
   if (command === "commit" && sourceCompletionState.mode === "completion") {
     if (acceptSourceCompletion()) {
       event.preventDefault();
+    }
+  }
+});
+
+function sourceEditingCommandKeyEvent(event) {
+  const command = event.detail?.command || "";
+  const key = command === "open-brace"
+    ? "{"
+    : command === "close-brace"
+      ? "}"
+      : command === "open-bracket"
+        ? "["
+        : command === "backspace"
+          ? "Backspace"
+          : command === "enter"
+            ? "Enter"
+            : "Tab";
+  return {
+    key,
+    shiftKey: command === "shift-tab",
+    altKey: false,
+    ctrlKey: false,
+    metaKey: false,
+    isComposing: false,
+    preventDefault() {
+      event.preventDefault();
+    },
+    stopPropagation() {},
+  };
+}
+
+sourceEditor.addEventListener("sourceeditingcommand", (event) => {
+  if (!isTextDocument(documents[currentDocumentIndex])) {
+    return;
+  }
+  const command = event.detail?.command || "";
+  const keyEvent = sourceEditingCommandKeyEvent(event);
+  if (command === "open-brace" || command === "close-brace" || command === "backspace") {
+    if (handleSourceBraceAssist(keyEvent)) {
+      return;
+    }
+    if (command === "backspace") {
+      handleSourceIndentBackspace(keyEvent);
+    }
+    return;
+  }
+  if (command === "open-bracket") {
+    if (handleSourceRewriteLhsBracketAssist(keyEvent)) {
+      return;
+    }
+    handleSourceRewriteRhsPatternAssist(keyEvent);
+    return;
+  }
+  if (command === "tab" || command === "shift-tab") {
+    if (handleSourceRuleBracketCellSlotTab(keyEvent)) {
+      return;
+    }
+    if (handleSourceRuleBracketCellTabExit(keyEvent)) {
+      return;
+    }
+    handleSourceRewritePatternTab(keyEvent);
+    return;
+  }
+  if (command === "enter") {
+    const insert = nextLineIndent();
+    if (sourceNewlineCursorOffset(insert) !== null) {
+      event.preventDefault();
+      insertSourceNewlineAtSelection();
     }
   }
 });

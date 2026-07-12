@@ -900,7 +900,6 @@ const COMPLETION_KEYWORDS: &[&str] = &[
     "show_index",
     "show_solved",
     "sprite",
-    "sprites3",
     "state",
     "subtitle",
     "text",

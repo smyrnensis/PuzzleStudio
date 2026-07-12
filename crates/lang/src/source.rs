@@ -58,10 +58,8 @@ pub(crate) fn logical_lines_with_locations(
         }
 
         let tokens = split_header_tokens(line);
-        if matches!(
-            tokens.as_slice(),
-            ["sprites"] | ["sprites", ..] | ["sprites3"] | ["sprites3", ..]
-        ) && line.ends_with('{')
+        if matches!(tokens.as_slice(), ["sprites"] | ["sprites", ..])
+            && line.ends_with('{')
             && !preserve_level_blanks
         {
             preserve_sprite_blanks = true;
@@ -168,10 +166,7 @@ fn expand_structural_source_line(
 }
 
 fn ascii_sensitive_block(block: &str) -> bool {
-    matches!(
-        block,
-        "levels" | "levels3" | "sprites" | "sprite" | "sprites3" | "map"
-    )
+    matches!(block, "levels" | "levels3" | "sprites" | "sprite" | "map")
 }
 
 fn ascii_row_contains_brace(line: &str) -> bool {
@@ -1038,7 +1033,7 @@ fn next_unbraced_visual_shape_body(
 fn is_visual_sprite_selector_header_token(value: &str) -> bool {
     if matches!(
         value,
-        "shape" | "shapes" | "palette" | "colors" | "ascii" | "sprites" | "sprites3"
+        "shape" | "shapes" | "palette" | "colors" | "ascii" | "sprites"
     ) {
         return false;
     }

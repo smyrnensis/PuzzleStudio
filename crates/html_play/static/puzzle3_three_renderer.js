@@ -58,17 +58,18 @@ class Puzzle3ThreeRenderer {
     this.camera = camera;
     this.viewPayload = threeViewPayload(frame, camera, this.canvas);
     this.updateViewportMotion(frame);
-    this.scheduleAnimationFrame(snapshot, view, animation.progress);
+    const spriteAnimating = hasLoopingSpriteAnimation(snapshot);
+    this.scheduleAnimationFrame(snapshot, view, animation.progress, spriteAnimating);
     return {
       rendered: true,
       objectCount: frame.objectCount,
-      animating: animation.progress < 1 || (frame.viewport?.follow === "smooth" && frame.viewportAnimating === true),
+      animating: animation.progress < 1 || spriteAnimating || (frame.viewport?.follow === "smooth" && frame.viewportAnimating === true),
       view: this.viewPayload,
     };
   }
 
-  scheduleAnimationFrame(snapshot, view, progress) {
-    if (progress >= 1 || this.animationFrame) {
+  scheduleAnimationFrame(snapshot, view, progress, spriteAnimating) {
+    if ((progress >= 1 && !spriteAnimating) || this.animationFrame) {
       return;
     }
     this.animationFrame = requestAnimationFrame(() => {
@@ -282,8 +283,7 @@ function spriteVisual(sprite) {
     return null;
   }
   const palette = sprite.palette || {};
-  const bitmap = sprite.bitmap || [];
-  const blocks = splitBitmapSlices(bitmap);
+  const blocks = currentSpriteLayers(sprite);
   const height = Math.max(1, blocks.length);
   const depth = Math.max(1, Math.max(...blocks.map((rows) => rows.length), 1));
   const width = Math.max(1, Math.max(...blocks.flat().map((row) => String(row).length), 1));
@@ -316,16 +316,29 @@ function spriteVisual(sprite) {
   return { kind: "voxels", size: { width, depth, height }, voxels };
 }
 
-function splitBitmapSlices(bitmap) {
-  const slices = [[]];
-  for (const row of bitmap || []) {
-    if (String(row).length === 0) {
-      slices.push([]);
-    } else {
-      slices[slices.length - 1].push(String(row));
-    }
+function currentSpriteLayers(sprite, now = performance.now()) {
+  const frames = Array.isArray(sprite?.frames) ? sprite.frames : [];
+  if (!frames.length) {
+    throw new Error("Puzzle3 sprite frames are missing.");
   }
-  return slices.filter((slice) => slice.length > 0);
+  const frameDuration = Number(sprite.frameDurationMs)
+    || (Number(sprite.durationMs) > 0 ? Number(sprite.durationMs) / frames.length : 0);
+  const index = frames.length > 1 && frameDuration > 0
+    ? Math.floor(now / frameDuration) % frames.length
+    : 0;
+  const layers = frames[index]?.layers;
+  if (!Array.isArray(layers) || !layers.length || layers.some((layer) => !Array.isArray(layer) || !layer.length)) {
+    throw new Error("Puzzle3 sprite frame layers are missing or invalid.");
+  }
+  return layers;
+}
+
+function hasLoopingSpriteAnimation(snapshot) {
+  return Object.values(snapshot?.sprites || {}).some((sprite) => (
+    Array.isArray(sprite?.frames)
+    && sprite.frames.length > 1
+    && (Number(sprite.frameDurationMs) > 0 || Number(sprite.durationMs) > 0)
+  ));
 }
 
 function addLights(THREE, scene, frame) {

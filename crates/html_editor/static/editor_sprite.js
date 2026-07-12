@@ -34,6 +34,7 @@ function resetSpriteBuilder(size = sprite.size) {
   sprite.shapeBind = null;
   sprite.solidSource = false;
   sprite.sourcePreludeRows = [];
+  sprite.sourceSpatialOps = [];
   if (!Number.isInteger(sprite.selectedColorIndex) || !sprite.palette[sprite.selectedColorIndex]) {
     sprite.selectedColorIndex = 0;
   }
@@ -3595,6 +3596,7 @@ function loadSpriteSourceTarget(target, options = {}) {
   sprite.shapeBind = loaded.shapeBind || null;
   sprite.solidSource = Boolean(loaded.solid);
   sprite.sourcePreludeRows = Array.isArray(loaded.sourcePreludeRows) ? loaded.sourcePreludeRows : [];
+  sprite.sourceSpatialOps = Array.isArray(loaded.sourceSpatialOps) ? loaded.sourceSpatialOps : [];
   sprite.cells = loaded.cells;
   if (loaded.animationMode) {
     sprite.animationMode = true;
@@ -3639,6 +3641,7 @@ function applyIncompleteSpriteSourceTarget(name, target) {
   sprite.shapeBind = null;
   sprite.solidSource = false;
   sprite.sourcePreludeRows = [];
+  sprite.sourceSpatialOps = [];
   sprite.animationMode = false;
   sprite.cells = Array.from({ length: sprite.size * sprite.size }, () => null);
   resetSpriteAnimationFramesFromCurrentCells();
@@ -3657,26 +3660,15 @@ function parseSpriteDefinitionSource(contract, selectorName = "") {
   const sourcePreludeRows = Array.isArray(contract.preludeRows)
     ? contract.preludeRows.map((row) => String(row || "").trim()).filter(Boolean)
     : [];
+  const sourceSpatialOps = Array.isArray(contract.spatialOps) ? contract.spatialOps : [];
   const paletteTokens = Array.isArray(contract.paletteTokens)
     ? contract.paletteTokens.map((token) => String(token || "").trim()).filter(Boolean)
-    : [];
-  const asciiRows = Array.isArray(contract.pixelRows)
-    ? contract.pixelRows.map((line) => String(line || "").trim()).filter(Boolean)
-    : [];
-  const animationRows = Array.isArray(contract.animationFrames)
-    ? contract.animationFrames
-        .map((frame) => (
-          Array.isArray(frame)
-            ? frame.map((line) => String(line || "").trim()).filter(Boolean)
-            : []
-        ))
-        .filter((frame) => frame.length)
     : [];
   const shapeName = typeof contract.shapeRef === "string" ? contract.shapeRef.trim() : "";
   const resolvedPalette = Array.isArray(contract.resolvedPalette)
     ? contract.resolvedPalette
     : [];
-  if (!paletteTokens.length || !resolvedPalette.length) {
+  if (contract.status !== "complete" || !paletteTokens.length || !resolvedPalette.length) {
     return null;
   }
   let shapeBind = null;
@@ -3696,24 +3688,31 @@ function parseSpriteDefinitionSource(contract, selectorName = "") {
     return null;
   }
   if (shapeName) {
-    const shapeRows = Array.isArray(contract.resolvedShapeRows)
-      ? contract.resolvedShapeRows.map((row) => String(row || "").trim()).filter(Boolean)
-      : [];
-    if (!shapeRows.length) {
-      return null;
-    }
     shapeBind = { type: "shape", name: shapeName, linked: true };
-    asciiRows.splice(0, asciiRows.length, ...shapeRows);
   }
-  if (animationRows.length >= 2 && !shapeBind) {
-    const parsedFrames = animationRows.map((frame) => spriteCellsFromAsciiRows(frame, palette.length));
-    if (parsedFrames.some((frame) => !frame)) {
-      return null;
+  const width = Number(contract?.extent?.width);
+  const height = Number(contract?.extent?.height);
+  const depth = Number(contract?.extent?.depth);
+  const semanticFrames = Array.isArray(contract.frames) ? contract.frames : [];
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0 || depth !== 1 || !semanticFrames.length) {
+    return null;
+  }
+  const size = clampSpriteSize(Math.max(width, height));
+  const parsedFrames = semanticFrames.map((frame) => {
+    const cells = frame?.layers?.[0]?.cells;
+    if (!Array.isArray(cells) || cells.length !== width * height) return null;
+    const padded = Array.from({ length: size * size }, () => null);
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const cell = cells[y * width + x];
+        if (cell !== null && (!Number.isInteger(cell) || cell < 0 || cell >= palette.length)) return null;
+        padded[y * size + x] = cell;
+      }
     }
-    const size = parsedFrames[0].size;
-    if (parsedFrames.some((frame) => frame.size !== size)) {
-      return null;
-    }
+    return padded;
+  });
+  if (parsedFrames.some((frame) => !frame)) return null;
+  if (parsedFrames.length >= 2) {
     const frameDurationMs = Number.isFinite(Number(contract.frameDurationMs))
       ? Number(contract.frameDurationMs)
       : null;
@@ -3725,45 +3724,22 @@ function parseSpriteDefinitionSource(contract, selectorName = "") {
       palette,
       shapeBind: null,
       sourcePreludeRows,
+      sourceSpatialOps,
       animationMode: true,
       animationDurationMs: durationMs,
       animationFrameCount: parsedFrames.length,
-      animationFrames: parsedFrames.map((frame) => frame.cells),
-      cells: parsedFrames[0].cells,
+      animationFrames: parsedFrames,
+      cells: parsedFrames[0],
     };
-  }
-  if (asciiRows.length === 0) {
-    if (palette.length !== 1) {
-      return null;
-    }
-    return {
-      size: 1,
-      palette,
-      shapeBind: null,
-      solid: true,
-      sourcePreludeRows,
-      cells: [0],
-    };
-  }
-  const width = Math.max(...asciiRows.map((row) => row.length));
-  const height = asciiRows.length;
-  const size = clampSpriteSize(Math.max(width, height));
-  const cells = Array.from({ length: size * size }, () => null);
-  for (let y = 0; y < Math.min(height, size); y += 1) {
-    for (let x = 0; x < Math.min(asciiRows[y].length, size); x += 1) {
-      const colorIndex = spriteColorIndexForPaletteChar(asciiRows[y][x], palette.length);
-      if (colorIndex === undefined) {
-        return null;
-      }
-      cells[y * size + x] = colorIndex;
-    }
   }
   return {
     size,
     palette,
     shapeBind,
     sourcePreludeRows,
-    cells,
+    sourceSpatialOps,
+    solid: width === 1 && height === 1 && parsedFrames[0][0] === 0,
+    cells: parsedFrames[0],
   };
 }
 
@@ -3982,7 +3958,47 @@ async function exportSpriteAscii() {
   }
 }
 
-function addSpriteToSource() {
+async function mutateSpriteSourceFromRust(source, request) {
+  if (typeof window.PuzzleStudioRuntime?.mutateSpriteSource !== "function") {
+    throw new Error("Editor WASM sprite mutation API is unavailable.");
+  }
+  const result = await window.PuzzleStudioRuntime.mutateSpriteSource(source, request);
+  if (!result || typeof result.source !== "string" || !Number.isInteger(result.start) || !Number.isInteger(result.end)) {
+    throw new Error("Editor WASM returned an invalid sprite mutation result.");
+  }
+  return result;
+}
+
+function spriteEditFrames() {
+  const frames = sprite.animationMode
+    ? sprite.animationFrames.slice(0, sprite.animationFrameCount)
+    : [sprite.cells];
+  return frames.map((cells) => [Array.from({ length: sprite.size }, (_, y) => (
+    Array.from({ length: sprite.size }, (_, x) => {
+      const cell = Array.isArray(cells) ? cells[y * sprite.size + x] : null;
+      return Number.isInteger(cell) ? cell : null;
+    })
+  ))]);
+}
+
+function spriteEditMutationRequest(operation, options = {}) {
+  const shape = spriteAssetBindInfo(sprite.shapeBind, "shape");
+  return {
+    operation,
+    dimension: "2d",
+    name: options.name ?? spriteObjectName(),
+    originalName: options.originalName ?? sprite.editSourceName ?? spriteObjectName(),
+    cursor: options.cursor,
+    palette: spritePaletteSourceTokens(),
+    frames: spriteEditFrames(),
+    durationMs: sprite.animationMode ? sprite.animationDurationMs : null,
+    shapeRef: shape.linked ? shape.name : null,
+    preludeRows: sprite.sourcePreludeRows || [],
+    spatialOps: sprite.sourceSpatialOps || [],
+  };
+}
+
+async function addSpriteToSource() {
   const document = activeSpriteEditDocument();
   if (!document || !isTextDocument(document)) {
     setSpriteActionStatus("No puzzle source", "is-error");
@@ -3990,12 +4006,15 @@ function addSpriteToSource() {
     return;
   }
 
-  const inserted = insertSpriteDefinition(activeSpriteEditSource());
-  const source = sourceWithStagedSpriteAssetDefinitions(inserted.source);
-  if (!source) {
+  let result;
+  try {
+    result = await mutateSpriteSourceFromRust(activeSpriteEditSource(), spriteEditMutationRequest("insert", {
+      cursor: spriteSourceCursorPosition(activeSpriteEditSource(), document),
+    }));
+  } catch (error) {
+    setSpriteActionStatus(userFacingRuntimeError(error), "is-error");
     return;
   }
-  const result = { source, start: inserted.start };
   document.source = result.source;
   if (document.id === activeDocument()?.id) {
     setSourceEditorValue(result.source, { resetUndo: false });
@@ -4003,7 +4022,7 @@ function addSpriteToSource() {
   }
   scheduleLocalSave();
   schedulePreview();
-  setSpriteEditSource({ start: result.start, name: spriteObjectName() }, document);
+  setSpriteEditSource({ start: result.start, end: result.end, name: result.name }, document);
   sourceEditor.focus({ preventScroll: true });
   setSpriteActionStatus("Added sprite", "is-ok");
   setStatus("Added sprite", "is-ok");
@@ -4017,14 +4036,13 @@ async function updateSpriteInSource() {
     return;
   }
 
-  const stagedSource = sourceWithStagedSpriteAssetDefinitions(activeSpriteEditSource());
-  if (!stagedSource) {
-    return;
-  }
-  const result = await replaceCurrentSpriteDefinitionFromParser(stagedSource);
-  if (!result) {
+  let result;
+  try {
+    result = await mutateSpriteSourceFromRust(activeSpriteEditSource(), spriteEditMutationRequest("update"));
+  } catch (error) {
     setSpriteActionStatus("No selected sprite source range", "is-error");
     setStatus("No selected sprite source range", "is-error");
+    setSpriteActionStatus(userFacingRuntimeError(error), "is-error");
     return;
   }
   document.source = result.source;
@@ -4034,13 +4052,13 @@ async function updateSpriteInSource() {
   }
   scheduleLocalSave();
   schedulePreview();
-  setSpriteEditSource({ ...result.target, start: result.start, end: result.end, name: spriteObjectName() }, document);
+  setSpriteEditSource({ start: result.start, end: result.end, name: result.name }, document);
   sourceEditor.focus({ preventScroll: true });
   setSpriteActionStatus("Updated sprite", "is-ok");
   setStatus("Updated sprite", "is-ok");
 }
 
-function duplicateSpriteInSource() {
+async function duplicateSpriteInSource() {
   const document = activeSpriteEditDocument();
   if (!document || !isTextDocument(document)) {
     setSpriteActionStatus("No puzzle source", "is-error");
@@ -4048,10 +4066,13 @@ function duplicateSpriteInSource() {
     return;
   }
 
-  const result = duplicateCurrentSpriteDefinition(activeSpriteEditSource());
-  if (!result) {
+  let result;
+  try {
+    result = await mutateSpriteSourceFromRust(activeSpriteEditSource(), spriteEditMutationRequest("duplicate"));
+  } catch (error) {
     setSpriteActionStatus("No selected sprite source range", "is-error");
     setStatus("No selected sprite source range", "is-error");
+    setSpriteActionStatus(userFacingRuntimeError(error), "is-error");
     return;
   }
   document.source = result.source;
@@ -4183,7 +4204,7 @@ async function spriteSourceTargetAtCursor(source, cursor) {
   return resolveSourceTargetFromWasm(source, cursor);
 }
 
-async function spriteSourceTargetByName(source, name) {
+async function spriteSourceTargetByName(source, name, targetKind = "sprite") {
   const targetName = String(name || "").trim();
   if (!targetName) {
     return null;
@@ -4198,7 +4219,7 @@ async function spriteSourceTargetByName(source, name) {
   const unique = new Map();
   for (const candidate of candidates) {
     const target = await spriteSourceTargetAtCursor(text, candidate);
-    if (target?.kind !== "sprite" || target.name !== targetName) {
+    if (target?.kind !== targetKind || target.name !== targetName) {
       continue;
     }
     const key = `${target.start}:${target.end}`;

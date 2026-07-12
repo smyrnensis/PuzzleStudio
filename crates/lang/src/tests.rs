@@ -959,7 +959,6 @@ sfx push { seed = push01; type = jump }
 puzzle sokoban {
 sounds {
 move Box -> sfx push
-cantmove Box -> sfx push
 }
 
 layers {
@@ -8874,7 +8873,11 @@ B
     }
     assert_eq!(
         sprite.transforms,
-        [VisualSpriteTransform::Translate { x: 0.0, y: -0.25 }]
+        [VisualSpriteTransform::Translate {
+            x: 0.0,
+            y: -0.25,
+            space: VisualSpriteSpace::World
+        }]
     );
     assert_eq!(sprite.sampling, Some(VisualSpriteSampling::Smooth));
 }
@@ -8925,7 +8928,11 @@ B
     assert_eq!(sprite.fit, VisualSpriteFit::default());
     assert_eq!(
         sprite.transforms,
-        [VisualSpriteTransform::Translate { x: 0.0, y: -0.25 }]
+        [VisualSpriteTransform::Translate {
+            x: 0.0,
+            y: -0.25,
+            space: VisualSpriteSpace::World
+        }]
     );
     assert_eq!(sprite.sampling, Some(VisualSpriteSampling::Smooth));
 }
@@ -10026,7 +10033,11 @@ P
         .unwrap();
     assert_eq!(
         sprite.transforms,
-        [VisualSpriteTransform::Translate { x: 0.5, y: -0.25 }]
+        [VisualSpriteTransform::Translate {
+            x: 0.5,
+            y: -0.25,
+            space: VisualSpriteSpace::World
+        }]
     );
     assert_eq!(sprite.fit, VisualSpriteFit::default());
     assert_eq!(sprite.sampling, Some(VisualSpriteSampling::Smooth));
@@ -15290,7 +15301,7 @@ sprites {
 Player:directions:hor {
 colors = #fff
 translate (hor, 0)
-rotate directions from up
+rotate (directions - up)
 0
 }
 }
@@ -15315,8 +15326,15 @@ p
     assert_eq!(
         sprite.transforms,
         [
-            VisualSpriteTransform::Translate { x: 0.5, y: 0.0 },
-            VisualSpriteTransform::Rotate { degrees: -90.0 },
+            VisualSpriteTransform::Translate {
+                x: 0.5,
+                y: 0.0,
+                space: VisualSpriteSpace::World
+            },
+            VisualSpriteTransform::Rotate {
+                degrees: -90.0,
+                space: VisualSpriteSpace::World
+            },
         ]
     );
     let up = loaded
@@ -15328,8 +15346,15 @@ p
     assert_eq!(
         up.transforms,
         [
-            VisualSpriteTransform::Translate { x: 0.5, y: 0.0 },
-            VisualSpriteTransform::Rotate { degrees: 0.0 },
+            VisualSpriteTransform::Translate {
+                x: 0.5,
+                y: 0.0,
+                space: VisualSpriteSpace::World
+            },
+            VisualSpriteTransform::Rotate {
+                degrees: 0.0,
+                space: VisualSpriteSpace::World
+            },
         ]
     );
     let down = loaded
@@ -15341,8 +15366,15 @@ p
     assert_eq!(
         down.transforms,
         [
-            VisualSpriteTransform::Translate { x: 0.5, y: 0.0 },
-            VisualSpriteTransform::Rotate { degrees: -180.0 },
+            VisualSpriteTransform::Translate {
+                x: 0.5,
+                y: 0.0,
+                space: VisualSpriteSpace::World
+            },
+            VisualSpriteTransform::Rotate {
+                degrees: -180.0,
+                space: VisualSpriteSpace::World
+            },
         ]
     );
 }

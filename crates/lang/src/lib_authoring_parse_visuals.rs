@@ -315,8 +315,14 @@ impl SpriteEntrySpec {
 
 #[derive(Clone, Debug)]
 enum SpriteTransformExpr {
-    Rotate { value: String, from: Option<String> },
-    Translate(String),
+    Rotate {
+        angle: String,
+        space: crate::sprite_authoring::SpriteSpaceSyntax,
+    },
+    Translate {
+        value: String,
+        space: crate::sprite_authoring::SpriteSpaceSyntax,
+    },
     Flip(String),
 }
 
@@ -342,6 +348,12 @@ fn parse_visuals_block(
     while i < lines.len() && !is_block_close_line(&lines[i]) {
         let line = &lines[i];
         let tokens = split_header_tokens(line);
+        if tokens.first() == Some(&"shape") && tokens.iter().any(|token| *token == "rotate") {
+            return Err(parse_error(
+                line,
+                "shape rotation derivation syntax was removed; use sprite rotate",
+            ));
+        }
         match tokens.as_slice() {
             [] => i += 1,
             ["palette"] => {
@@ -515,6 +527,12 @@ fn parse_visual_shapes_block(
     while i < lines.len() && !is_block_close_line(&lines[i]) {
         let line = &lines[i];
         let tokens = split_header_tokens(line);
+        if tokens.iter().any(|token| *token == "rotate") {
+            return Err(parse_error(
+                line,
+                "shape rotation derivation syntax was removed; use sprite rotate",
+            ));
+        }
         match tokens.as_slice() {
             [] => i += 1,
             [name] if !name.contains(':') => {
@@ -826,34 +844,24 @@ fn apply_sprite_attachment_body(
             crate::sprite_authoring::SpritePropertySyntax::Sampling(value) => {
                 entry.set_sampling(&value, &property_line)?;
             }
-            crate::sprite_authoring::SpritePropertySyntax::Translate(value) => {
-                entry.transforms.push(SpriteTransformExpr::Translate(value));
-            }
-            crate::sprite_authoring::SpritePropertySyntax::Rotate { value, from } => {
+            crate::sprite_authoring::SpritePropertySyntax::Translate { value, space } => {
                 entry
                     .transforms
-                    .push(SpriteTransformExpr::Rotate { value, from });
+                    .push(SpriteTransformExpr::Translate { value, space });
+            }
+            crate::sprite_authoring::SpritePropertySyntax::Rotate { angle, axis, space } => {
+                if axis.is_some() {
+                    return Err(parse_error(
+                        &property_line,
+                        "2D sprite rotate does not accept an axis",
+                    ));
+                }
+                entry
+                    .transforms
+                    .push(SpriteTransformExpr::Rotate { angle, space });
             }
             crate::sprite_authoring::SpritePropertySyntax::Flip(value) => {
                 entry.transforms.push(SpriteTransformExpr::Flip(value));
-            }
-            crate::sprite_authoring::SpritePropertySyntax::RotateFrom(from) => {
-                if entry
-                    .rotation
-                    .replace(VisualShapeRotation::intrinsic(&from))
-                    .is_some()
-                {
-                    return Err(parse_error(&property_line, "duplicate sprite rotation"));
-                }
-            }
-            crate::sprite_authoring::SpritePropertySyntax::RotateUsing { map, from } => {
-                if entry
-                    .rotation
-                    .replace(VisualShapeRotation::using(&map, &from))
-                    .is_some()
-                {
-                    return Err(parse_error(&property_line, "duplicate sprite rotation"));
-                }
             }
             crate::sprite_authoring::SpritePropertySyntax::RemovedOffset => {
                 return Err(parse_error(
@@ -862,6 +870,12 @@ fn apply_sprite_attachment_body(
                 ));
             }
             crate::sprite_authoring::SpritePropertySyntax::Unknown(property) => {
+                if property == "rotate" {
+                    return Err(parse_error(
+                        &property_line,
+                        "removed sprite rotation syntax; use rotate [world|local] <angle>",
+                    ));
+                }
                 return Err(parse_error(
                     &property_line,
                     &format!("unknown sprite property {property}"),
@@ -874,7 +888,8 @@ fn apply_sprite_attachment_body(
             entry.set_shape_ref(&reference, &entry.source_line.clone())?;
         }
         crate::sprite_authoring::ResolvedSpriteShape::Inline(frames) => {
-            let mut frames = frames
+            let mut frames = crate::sprite_authoring::into_single_layer_frames(frames)
+                .map_err(|message| parse_error(&entry.source_line, message))?
                 .into_iter()
                 .map(|frame| frame.into_iter().map(|row| row.text).collect::<Vec<_>>())
                 .collect::<Vec<_>>();
@@ -1849,20 +1864,19 @@ fn eval_sprite_transforms(
     expressions
         .iter()
         .map(|expression| match expression {
-            SpriteTransformExpr::Rotate { value, from } => {
-                let mut degrees = eval_sprite_angle_expr(value, bindings, line)?;
-                if let Some(from) = from {
-                    degrees = degrees.sub(eval_sprite_angle_expr(from, bindings, line)?);
-                }
+            SpriteTransformExpr::Rotate { angle, space } => {
+                let degrees = eval_sprite_angle_expr(angle, bindings, line)?;
                 Ok(VisualSpriteTransform::Rotate {
                     degrees: degrees.as_f64(),
+                    space: visual_sprite_space(*space),
                 })
             }
-            SpriteTransformExpr::Translate(value) => {
+            SpriteTransformExpr::Translate { value, space } => {
                 let (x, y) = eval_sprite_vec2_expr(value, bindings, line)?;
                 Ok(VisualSpriteTransform::Translate {
                     x: x.as_f64(),
                     y: y.as_f64(),
+                    space: visual_sprite_space(*space),
                 })
             }
             SpriteTransformExpr::Flip(value) => Ok(VisualSpriteTransform::Flip {
@@ -1870,6 +1884,15 @@ fn eval_sprite_transforms(
             }),
         })
         .collect()
+}
+
+fn visual_sprite_space(
+    space: crate::sprite_authoring::SpriteSpaceSyntax,
+) -> crate::VisualSpriteSpace {
+    match space {
+        crate::sprite_authoring::SpriteSpaceSyntax::World => crate::VisualSpriteSpace::World,
+        crate::sprite_authoring::SpriteSpaceSyntax::Local => crate::VisualSpriteSpace::Local,
+    }
 }
 
 fn eval_sprite_bool_expr(

@@ -5,7 +5,7 @@ use puzzle_runtime_contract::{Puzzle3CameraEffect, RuntimeLifecycle};
 
 use crate::{SolverStrategy3, SpriteSet3};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ParsedPuzzle3 {
     pub game: Game3,
     pub catalog: SelectorCatalog3,

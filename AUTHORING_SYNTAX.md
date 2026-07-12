@@ -1459,7 +1459,7 @@ Gem sprites/gem.png
 
 Player {
 pixels_per_cell 5 5
-offset 2 -1
+translate (2, -1)
 #e94f64 #2f80ed #22a06b
 shape = {
 ........
@@ -1470,8 +1470,7 @@ shape = {
 }
 
 shapes {
-edge:directions {
-rotate from up
+edge {
 11111
 00000
 00000
@@ -1488,7 +1487,7 @@ player_shape {
 }
 
 Boundary:directions {
-rotate from up
+rotate (directions - up)
 transparent #555
 11111
 00000
@@ -1499,7 +1498,7 @@ transparent #555
 
 Player {
 pixels_per_cell 5 5
-offset 2 -1
+translate (2, -1)
 #e94f64 #2f80ed
 shape player_shape
 }
@@ -1510,7 +1509,9 @@ sprite のインライン ASCII shape を明示する場合は `shape = { ... }`
 `shape =` の次行から暗黙に row が続く形は使わない。shape 以外の設定から
 ASCII row を区別できる場合は、`shape = {}` 自体を省略して row だけを書ける。
 
-sprite entry は、selector block の中に色行、ASCII pattern の順で書ける。canonical では `pixels_per_cell` / `offset` の配置メタデータを上に置き、`rotate from <value>` を使う場合はその次、色行、ASCII pattern または `shape <name>` の順で書く。brace なし sprite entry でも同じ順序で `rotate from <value>` を書ける。色行は `colors` keyword を付けてもよいが、省略するのが canonical。色は CSS color として渡されるため、`transparent`、基本 CSS color keywords、`orange`、`grey` / `gray` variants、`brown`、`pink`、`#rrggbbaa` の alpha 付き hex も使える。`.` は透明、`0`..`9`、`a`..`z`、`A`..`Z` は色行の順序に対応する。
+sprite shape は時間 × Z × Y × X の共通モデルを使う。`>` だけの行は次の animation frame、`-` だけの行は同じ frame 内の次の -Z layer を表す。shape 内に空行は書かない。2D model に属する `sprites` は Z depth 1 だけを受け付けるため `-` は使えず、3D model に属する `sprites` では複数 layer を書ける。2D/3D は `sprites` の綴りではなく、`of <model>` または所有 model の `puzzle` / `puzzle3` から決まる。
+
+sprite entry は、selector block の中に色行、空間操作、ASCII pattern の順で書ける。人間向けには `translate local (1, 0)` / `rotate local 90deg` の簡潔形を使え、world は既定なので省略できる。script/editor は `translate { space = world; value = (...) }` / `rotate { space = local; angle = ...; axis = ... }` の明示blockを生成する。色行は `colors` keyword を省略できる。`transparent` は通常のpalette色であり、`.` のempty cellとは異なる。
 
 単純な sprite は block braces なしでも書ける。selector の次の行が色 1 つだけで pattern がなければ cell 全体の単色塗りつぶしになる。これは `Background` / `#9CBD0F` のような PuzzleScript 由来の色だけ sprite でも同じで、`00000` のようなダミー ASCII pattern は不要。pattern を続けると、その行数・列数が sprite pixel grid になる。`pixels_per_cell <w> <h>` を省略した場合は ASCII pattern の行数・列数が 1 cell の pixel grid になる。明示した場合は、pattern がその grid より大きくても描画は overflow できる。
 
@@ -1518,13 +1519,12 @@ sprite entry は、selector block の中に色行、ASCII pattern の順で書�
 
 shape lookup は value expression を読める。たとえば `edge:rotate(directions)` は、selector で bind された `directions` 値を `rotate` map で置換してから shape table を引く。再利用したい pattern は `shape` と object block 内の色行 + `shape <ref>` で分けて書く。
 
-`offset <x> <y>` は描画位置だけをずらす。基準は sprite pixel grid の左上で、正の x は右、正の y は下。object の実セル、collision、rule matching は変えない。
+2D translateはvec2、3D translateはvec3を要求する。3D rotateは`rotate [world|local] <angle> around <direction-or-vec3>`でaxisを必須にする。操作はsource順のaffine列で、world操作は左合成、local操作は右合成する。旧`offset`、`rotate from`、`rotate using`、包括的な`transform` nodeは受理しない。
 
-`sprites` は HTML renderer 用の sprite alias と ASCII pattern を定義する。`shapes` 内の `<name>:<tag_set>` は value ごとの ASCII pattern table。table 内または sprite entry 内で `rotate from <value>` の後に pattern rows を書くと、その pattern を `<value>` として登録し、標準方向 tag set では `up -> right -> down -> left -> up` の内蔵 cycle で他の value の pattern を生成する。
+`sprites` はsprite alias、palette、shape、空間操作を定義する。`shapes`はvisual dataだけを所有し、rotation派生を所有しない。同じnamed shapeを異なる姿勢で使う場合は各sprite参照側へ`rotate`を書く。
 
 HTML renderer が生成する sprite 名と CSS class は、object 名の大文字・小文字を保持する。CSS class として危ない区切り文字だけ `-` に置き換える。例: `Player` は `.sprite.Player`、`Box:A` は `.sprite.Box-A`。
 
-標準方向以外の tag set や別順の cycle を使う場合は table 内で `rotate using <map_name> from <value>` の後に pattern rows を書く。既存 table entry と分けたい場合は、`<value> { ... }` の後に `rotate from <value>` だけを書く形も読む。旧互換として `rotate from <value> { ... }`、`shape <name>:<tag_set> rotate from <value>`、`shape <name>:<tag_set> rotate <map_name> from <value>` も読むが、canonical では table header や source value に余分な block を足さない。rotation は parse/lowering 時点で通常の shape entries に展開されるため、runtime state や renderer は tag set 固有の挙動を持たない。
 
 ### `legend`
 
@@ -1703,7 +1703,6 @@ model 内の `sounds` block では、object が実際に move として lower �
 puzzle sokoban {
 sounds {
 move Box -> sfx push
-cantmove Box -> sfx bump
 undo -> sfx back
 restart -> sfx reset
 }
@@ -1714,11 +1713,11 @@ actor = Player Box
 }
 ```
 
-`move <selector> -> sfx <name>` / `cantmove <selector> -> sfx <name>` の `<selector>` は通常の object selector / group / schema selector。`sounds` が `layers` より前にあっても、同じ puzzle scope の最終 catalog に対して解決する。これは runtime event watcher ではなく lowering sugar で、rewrite alternative が standard move の move / blocked move に対応するときだけ、その rule に `sfx` emission を付ける。remove+add として書かれた変化は move ではないので対象外。
+`move <selector> -> sfx <name>` の `<selector>` は通常の object selector / group / schema selector。`sounds` が `layers` より前にあっても、同じ puzzle scope の最終 catalog に対して解決する。これは runtime event watcher ではなく lowering sugar で、rewrite alternative が対象 object の lower-level `Move` write を持つときだけ、その rule に `sfx` emission を付ける。remove+add として書かれた変化は move ではないので対象外。canonical syntax は blocked move を推測する `cantmove` sound trigger を持たない。
 
 `undo -> sfx <name>` / `restart -> sfx <name>` は、同じ model の session 操作が成功したときに one-shot SFX を鳴らす。これは rule input ではなく play/session 操作の presentation event なので、undo stack が空の undo では鳴らず、active puzzle がない restart でも鳴らない。top-level `sounds` は音源定義だけを持つため、これらの操作割り当ては puzzle 内の `sounds` に書く。
 
-PuzzleScript の `Sounds` section は object move / create / SFX0 などの runtime event に seed を結びつける。importer は `sfx0 12345` のような単純な named seed を `sounds { sfx sfx0 seed=12345 type=puzzlescript }` に lower し、rule suffix の `SFX0` は明示的な `sfx sfx0` として鳴らす。PuzzleScript importer の event-based sounds、たとえば object movement / create sounds はまだ canonical syntax へ自動変換しない。
+PuzzleScript の `Sounds` section は object move / cantmove / create / endlevel / SFX0 などの runtime event に seed を結びつける。importer は `sfx0 12345` のような単純な named seed を canonical な named SFX に lower し、rule suffix の `SFX0` は明示的な `sfx sfx0` として鳴らす。object move は canonical の `move` sound triggerへ変換する。PuzzleScript 固有の `cantmove` は canonical surface に持ち込まず、importer が生成する `move` routine 内の衝突規則と未解決 movement cleanup 規則へ `sfx` effect を明示的に埋め込む。`endlevel` も専用 trigger にはせず、importer が生成する `on_level_clear` の先頭へ明示的な `sfx endlevel` として埋め込む。
 
 ## Menu / Scene Syntax
 
@@ -1830,14 +1829,22 @@ Scene layout は `puzzle3` を固定 4:3 display として扱う。`puzzle3` は
 
 `render { shade }` は 3D sprite voxel の面ごとの明暗付けを有効にする表示設定。sprite data や puzzle state には影響しない。省略時も on。
 
-3D object は `sprites3` に同名 sprite が定義されている場合だけ voxel sprite を描く。sprite 未指定の object に暗黙の cube や色は割り当てない。位置や占有を読みたい場合は `grid occupied_cells` などの debug 表示を使う。
+3D object は、その `puzzle3` model に属する `sprites` に同名 sprite が定義されている場合だけ voxel sprite を描く。sprite 未指定の object に暗黙の cube や色は割り当てない。位置や占有を読みたい場合は `grid occupied_cells` などの debug 表示を使う。
 
-`sprites3` の sprite entry は、object 名、色行、voxel rows の順に書く。色行だけなら 1x1x1 の filled cube sprite になる。再利用する voxel pattern は `shape <name> { ... }` で定義し、sprite entry 側では色行の次に bare shape ref だけを書く。
+3D sprite も2Dと同じ sprite entry、palette、shape、animation frame 文法を使う。`-` だけの行が次の -Z layer、`>` だけの行が次の frame であり、separator の前後に空行は入れない。色行だけなら 1x1x1 の filled cube sprite になる。再利用する voxel pattern は `shapes { <name> { ... } }` で定義し、sprite entry 側では `shape = <name>` と書く。
 
 ```txt
-sprites3 simple {
-Floor
-#90ee90
+sprites simple of world {
+Floor {
+colors = #90ee90
+shape = {
+00
+00
+-
+00
+00
+}
+}
 }
 ```
 

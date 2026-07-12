@@ -18,6 +18,7 @@ const chromePath = resolveChrome(args.chrome);
 const headless = !args.headed;
 const sourceInputOnly = Boolean(args.sourceInputOnly);
 const spritePaletteOnly = Boolean(args.spritePaletteOnly);
+const sourceEditingCommandsOnly = Boolean(args.sourceEditingCommandsOnly);
 
 const failures = [];
 
@@ -37,12 +38,19 @@ async function main() {
       if (spritePaletteOnly) {
         return;
       }
+      if (sourceEditingCommandsOnly) {
+        await sourceCodeMirrorEditingCommandsReachWorkflow(page);
+        await sourceCompletionPopoverStaysInsideEditor(page);
+        return;
+      }
       await sourceEditorReflectsInputBeforeKeyup(page);
       await sourceEditorPairsDoubleQuote(page);
       await sourceUndoReturnsToEditedLocationAfterCursorMove(page);
       await sourceUndoSurvivesSameDocumentReload(page);
       await sourceEditorReflectsCompositionBeforeCommit(page);
       await sourceCompletionKeepsKeyboardSelectionAcrossRefresh(page);
+      await sourceCompletionPopoverStaysInsideEditor(page);
+      await sourceCodeMirrorEditingCommandsReachWorkflow(page);
       await sourceRewritePatternTabCopiesLhsToEmptyRhs(page);
       await fileInputImportAddsPuzzleDocument(page);
       if (sourceInputOnly) {
@@ -54,7 +62,7 @@ async function main() {
       await sourceLevelAsciiClickOpensLevelEditor(page);
     });
 
-    if (!sourceInputOnly && !spritePaletteOnly && !importFileOnly) {
+    if (!sourceInputOnly && !sourceEditingCommandsOnly && !spritePaletteOnly && !importFileOnly) {
       await withEditorServer(fixture3d, async (server) => {
         await page.navigate(server.url);
         await editorLoads(page);
@@ -789,6 +797,169 @@ async function sourceCompletionKeepsKeyboardSelectionAcrossRefresh(page) {
     return true;
   })()`);
   await page.assertNoErrors("source completion keyboard selection");
+}
+
+async function sourceCodeMirrorEditingCommandsReachWorkflow(page) {
+  const original = await page.evaluateTop(`(() => {
+    const editor = document.querySelector("#sourceEditor");
+    if (!editor?.sourceEditorPort || editor.sourceEditorPort.kind !== "codemirror") {
+      throw new Error("missing CodeMirror source editor");
+    }
+    const value = editor.value || "";
+    window.__sourceEditingCommandsOriginal = value;
+    return value;
+  })()`);
+  try {
+    await setSourceAndCursor(page, "puzzle command_smoke\nrules\n", "puzzle command_smoke\nrules\n".length);
+    await pressKey(page, { key: "{", code: "BracketLeft", keyCode: 219 });
+    assert.deepEqual(
+      await sourceValueAndSelection(page),
+      { value: "puzzle command_smoke\nrules\n{}", start: 28, end: 28 },
+      "CodeMirror { should insert a brace pair and select its interior"
+    );
+    await pressKey(page, { key: "}", code: "BracketRight", keyCode: 221 });
+    assert.deepEqual(
+      await sourceValueAndSelection(page),
+      { value: "puzzle command_smoke\nrules\n{}", start: 29, end: 29 },
+      "CodeMirror } should move across an existing closing brace"
+    );
+    await page.evaluateTop(`document.querySelector("#sourceEditor").setSelectionRange(28, 28)`);
+    await pressKey(page, { key: "Backspace", code: "Backspace", keyCode: 8 });
+    assert.deepEqual(
+      await sourceValueAndSelection(page),
+      { value: "puzzle command_smoke\nrules\n", start: 27, end: 27 },
+      "CodeMirror Backspace should remove an empty brace pair"
+    );
+
+    const emptyRuleSource = "puzzle command_smoke\nrules\n";
+    await setSourceAndCursor(page, emptyRuleSource, emptyRuleSource.length);
+    await pressKey(page, { key: "[", code: "BracketLeft", keyCode: 219 });
+    assert.deepEqual(
+      await sourceValueAndSelection(page),
+      { value: `${emptyRuleSource}[  ]`, start: emptyRuleSource.length + 2, end: emptyRuleSource.length + 2 },
+      "CodeMirror [ should insert an editable rule cell"
+    );
+    await pressKey(page, { key: "Tab", code: "Tab", keyCode: 9 });
+    assert.deepEqual(
+      await sourceValueAndSelection(page),
+      { value: `${emptyRuleSource}[  ] `, start: emptyRuleSource.length + 5, end: emptyRuleSource.length + 5 },
+      "CodeMirror Tab should exit an empty rule cell"
+    );
+
+    const bracketSource = "puzzle command_smoke\nrules\n[  |  ]";
+    await setSourceAndCursor(page, bracketSource, bracketSource.indexOf("[  ") + 2);
+    await pressKey(page, { key: "Tab", code: "Tab", keyCode: 9 });
+    const secondSlot = bracketSource.indexOf("|  ") + 2;
+    assert.deepEqual(
+      await sourceValueAndSelection(page),
+      { value: bracketSource, start: secondSlot, end: secondSlot },
+      "CodeMirror Tab should move to the next rule-cell slot"
+    );
+
+    const ordinaryTabSource = "puzzle command_smoke\nrules\nplain";
+    await setSourceAndCursor(page, ordinaryTabSource, ordinaryTabSource.length);
+    await pressKey(page, { key: "Tab", code: "Tab", keyCode: 9 });
+    assert.equal(
+      (await sourceValueAndSelection(page)).value,
+      "puzzle command_smoke\nrules\n  plain",
+      "an unconsumed CodeMirror Tab should keep ordinary indentation"
+    );
+
+    const rewriteSource = "puzzle command_smoke\nrules\n[ A B ] -> ";
+    await setSourceAndCursor(page, rewriteSource, rewriteSource.length);
+    await pressKey(page, { key: "Tab", code: "Tab", keyCode: 9 });
+    assert.equal(
+      (await sourceValueAndSelection(page)).value,
+      `${rewriteSource}[ A B ]`,
+      "CodeMirror Tab should copy the rewrite LHS into an empty RHS"
+    );
+  } finally {
+    await page.evaluateTop(`(() => {
+      const value = window.__sourceEditingCommandsOriginal;
+      setSourceEditorValue(typeof value === "string" ? value : ${JSON.stringify(original)}, { resetUndo: true });
+      if (documents[currentDocumentIndex]) {
+        documents[currentDocumentIndex].source = sourceEditor.value;
+      }
+      delete window.__sourceEditingCommandsOriginal;
+      return true;
+    })()`);
+  }
+  await page.assertNoErrors("CodeMirror source editing commands");
+}
+
+async function sourceCompletionPopoverStaysInsideEditor(page) {
+  await page.evaluateTop(`(() => {
+    const editor = document.querySelector("#sourceEditor");
+    if (!editor || !sourceCompletionPopover) {
+      throw new Error("missing source completion positioning targets");
+    }
+    const original = editor.value || "";
+    const source = Array.from({ length: 36 }, (_, index) => "line_" + index).join("\\n");
+    try {
+      setSourceEditorValue(source, { resetUndo: true });
+      editor.setSelectionRange(source.length, source.length);
+      editor.sourceEditorPort.scrollIntoView(source.length, "end");
+      sourceCompletionState = {
+        mode: "completion",
+        source,
+        cursor: source.length,
+        replaceStart: source.length - "line_35".length,
+        replaceEnd: source.length,
+        selectedIndex: 0,
+        items: Array.from({ length: 20 }, (_, index) => ({
+          label: "candidate_" + index,
+          insertText: "candidate_" + index,
+          kind: "keyword",
+          detail: "keyword",
+        })),
+      };
+      renderSourceCompletionItems();
+      sourceCompletionPopover.hidden = false;
+      positionSourceCompletionPopover();
+      const popoverRect = sourceCompletionPopover.getBoundingClientRect();
+      const wrapRect = sourceEditorWrap.getBoundingClientRect();
+      if (
+        sourceCompletionPopover.dataset.placement !== "above"
+        || popoverRect.top < wrapRect.top
+        || popoverRect.bottom > wrapRect.bottom
+      ) {
+        throw new Error("completion popover escaped editor: " + JSON.stringify({
+          placement: sourceCompletionPopover.dataset.placement,
+          popover: { top: popoverRect.top, bottom: popoverRect.bottom },
+          wrap: { top: wrapRect.top, bottom: wrapRect.bottom },
+        }));
+      }
+    } finally {
+      hideSourceCompletions();
+      setSourceEditorValue(original, { resetUndo: true });
+      if (documents[currentDocumentIndex]) {
+        documents[currentDocumentIndex].source = original;
+      }
+    }
+    return true;
+  })()`);
+  await page.assertNoErrors("source completion popover positioning");
+}
+
+async function setSourceAndCursor(page, source, cursor) {
+  await page.evaluateTop(`(() => {
+    const editor = document.querySelector("#sourceEditor");
+    setSourceEditorValue(${JSON.stringify(source)}, { resetUndo: true });
+    if (documents[currentDocumentIndex]) {
+      documents[currentDocumentIndex].source = editor.value;
+    }
+    editor.focus();
+    editor.setSelectionRange(${cursor}, ${cursor});
+    hideSourceCompletions();
+    return true;
+  })()`);
+}
+
+async function sourceValueAndSelection(page) {
+  return page.evaluateTop(`(() => {
+    const editor = document.querySelector("#sourceEditor");
+    return { value: editor.value, start: editor.selectionStart, end: editor.selectionEnd };
+  })()`);
 }
 
 async function sourceRewritePatternTabCopiesLhsToEmptyRhs(page) {
@@ -1924,6 +2095,10 @@ function parseArgs(argv) {
     }
     if (arg === "--source-input-only") {
       parsed.sourceInputOnly = true;
+      continue;
+    }
+    if (arg === "--source-editing-commands-only") {
+      parsed.sourceEditingCommandsOnly = true;
       continue;
     }
     if (arg === "--sprite-palette-only") {

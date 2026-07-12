@@ -303,6 +303,11 @@
       });
     },
 
+    async mutateSpriteSource(source, sprite) {
+      const raw = await querySynchronizedAnalysisWorker("mutateSprite", asString(source), { sprite });
+      return JSON.parse(raw || "null");
+    },
+
     sourceImportReference(source, documentPath, cursorOffset) {
       const analysis = sourceAnalysisForLoadedSource(source);
       const raw = querySourceAnalysis(

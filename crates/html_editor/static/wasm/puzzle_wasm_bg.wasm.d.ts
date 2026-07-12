@@ -9,6 +9,7 @@ export const active_source_analysis_json: (a: number) => [number, number, number
 export const active_source_analysis_level_editor_level_slots: (a: number, b: number, c: number) => [number, number, number, number];
 export const active_source_analysis_level_editor_manifest_json: (a: number) => [number, number, number, number];
 export const active_source_analysis_level_editor_sprite_json: (a: number, b: number) => [number, number, number, number];
+export const active_source_analysis_mutate_sprite: (a: number, b: number, c: number) => [number, number, number, number];
 export const active_source_analysis_outline_json: (a: number) => [number, number, number, number];
 export const active_source_analysis_resolve_source_target: (a: number, b: number) => [number, number, number, number];
 export const active_source_analysis_suggest_source_completions: (a: number, b: number) => [number, number, number, number];

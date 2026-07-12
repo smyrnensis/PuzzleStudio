@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::{Diagnostic, DiagnosticReport, source::strip_line_comment};
+use crate::{Diagnostic, DiagnosticReport};
 
 const PS_MAIN_ROUTINE: &str = "main";
 const PS_SOUND_MARK_EXISTING_ROUTINE: &str = "sound_mark_existing";
@@ -22,8 +22,33 @@ enum PsSection {
     Levels,
 }
 
+impl PsSection {
+    fn source_name(self) -> &'static str {
+        match self {
+            Self::Prelude => "PRELUDE",
+            Self::Tags => "TAGS",
+            Self::Objects => "OBJECTS",
+            Self::Legend => "LEGEND",
+            Self::Mappings => "MAPPINGS",
+            Self::Sounds => "SOUNDS",
+            Self::CollisionLayers => "COLLISIONLAYERS",
+            Self::Rules => "RULES",
+            Self::WinConditions => "WINCONDITIONS",
+            Self::Levels => "LEVELS",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PsComment {
+    section: PsSection,
+    line: usize,
+    text: String,
+}
+
 #[derive(Default)]
 struct PsSections {
+    comments: Vec<PsComment>,
     prelude: Vec<String>,
     tags: Vec<String>,
     objects: Vec<String>,
@@ -109,6 +134,7 @@ enum PsSoundOperation {
 enum PsSoundEvent {
     Create,
     Move,
+    CantMove,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -154,6 +180,7 @@ pub fn translate_puzzlescript_to_canonical(source: &str) -> Result<String, Diagn
     let viewport_size = parse_viewport_size(&sections.prelude);
     let sounds = parse_sound_defs(&sections.sounds);
     let startgame_sfx = ps_sound_name(&sounds, "startgame");
+    let endlevel_sfx = ps_sound_name(&sounds, "endlevel");
     let uses_action_input = ps_rules_use_action_input(&sections.rules);
     let rule_sections = parse_ps_rule_sections(&sections.rules);
     reject_generated_routine_conflicts(&rule_sections, &sounds, run_rules_on_level_start)?;
@@ -181,6 +208,7 @@ pub fn translate_puzzlescript_to_canonical(source: &str) -> Result<String, Diagn
     if let Some(seconds) = &again_interval {
         out.push(format!("again_interval = {seconds}s"));
     }
+    push_imported_comments(&mut out, &sections.comments);
     out.push(String::new());
     push_theme_colors(&mut out, &theme_colors);
     push_sounds(&mut out, &sounds);
@@ -238,7 +266,7 @@ pub fn translate_puzzlescript_to_canonical(source: &str) -> Result<String, Diagn
         uses_action_input,
         &rule_sections,
     );
-    push_ps_level_clear(&mut out);
+    push_ps_level_clear(&mut out, endlevel_sfx.as_deref());
     push_levels(
         &mut out,
         &sections.levels,
@@ -274,21 +302,26 @@ fn canonical_without_line_indents(source: &str) -> String {
 fn collect_sections(source: &str) -> PsSections {
     let mut sections = PsSections::default();
     let mut current = PsSection::Prelude;
-    let mut in_parenthetical_comment = false;
-    for raw_line in source.lines() {
-        let line = strip_line_comment(raw_line).trim().to_string();
-        if in_parenthetical_comment {
-            if line.ends_with(')') {
-                in_parenthetical_comment = false;
-            }
-            continue;
+    let mut parenthetical_comment: Option<(PsSection, usize, String)> = None;
+    for (line_index, raw_line) in source.lines().enumerate() {
+        let line_number = line_index + 1;
+        let (without_line_comment, line_comment) = split_ps_line_comment(raw_line);
+        if let Some(text) = line_comment.filter(|text| !text.trim().is_empty()) {
+            sections.comments.push(PsComment {
+                section: current,
+                line: line_number,
+                text: text.trim().to_string(),
+            });
         }
-        if line.starts_with('(') {
-            if !line.ends_with(')') {
-                in_parenthetical_comment = true;
-            }
-            continue;
-        }
+        let line = strip_ps_parenthetical_comments(
+            without_line_comment,
+            current,
+            line_number,
+            &mut parenthetical_comment,
+            &mut sections.comments,
+        )
+        .trim()
+        .to_string();
         if is_section_separator(&line) {
             continue;
         }
@@ -312,6 +345,99 @@ fn collect_sections(source: &str) -> PsSections {
         }
     }
     sections
+}
+
+fn push_imported_comments(out: &mut Vec<String>, comments: &[PsComment]) {
+    if comments.is_empty() {
+        return;
+    }
+    out.push(String::new());
+    out.push("// Comments preserved from the imported PuzzleScript source.".to_string());
+    for comment in comments {
+        let prefix = format!(
+            "// [{} line {}]",
+            comment.section.source_name(),
+            comment.line
+        );
+        for (index, line) in comment.text.lines().enumerate() {
+            if index == 0 {
+                out.push(format!("{prefix} {}", line.trim()));
+            } else {
+                out.push(format!("// {}", line.trim()));
+            }
+        }
+    }
+}
+
+fn split_ps_line_comment(line: &str) -> (&str, Option<&str>) {
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut previous = None;
+    for (index, ch) in line.char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+        } else if ch == '"' {
+            in_string = true;
+        } else if previous == Some('/') && ch == '/' {
+            return (&line[..index - 1], Some(&line[index + 1..]));
+        }
+        previous = Some(ch);
+    }
+    (line, None)
+}
+
+fn strip_ps_parenthetical_comments(
+    line: &str,
+    section: PsSection,
+    line_number: usize,
+    active: &mut Option<(PsSection, usize, String)>,
+    comments: &mut Vec<PsComment>,
+) -> String {
+    let mut code = String::new();
+    let mut in_string = false;
+    let mut escaped = false;
+    for ch in line.chars() {
+        if let Some((comment_section, start_line, text)) = active.as_mut() {
+            if ch == ')' {
+                comments.push(PsComment {
+                    section: *comment_section,
+                    line: *start_line,
+                    text: text.trim().to_string(),
+                });
+                *active = None;
+            } else {
+                text.push(ch);
+            }
+            continue;
+        }
+        if in_string {
+            code.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+        } else if ch == '"' {
+            in_string = true;
+            code.push(ch);
+        } else if ch == '(' {
+            *active = Some((section, line_number, String::new()));
+        } else {
+            code.push(ch);
+        }
+    }
+    if let Some((_, _, text)) = active.as_mut() {
+        text.push('\n');
+    }
+    code
 }
 
 fn is_section_separator(line: &str) -> bool {
@@ -618,6 +744,7 @@ fn parse_sound_event(token: &str) -> Option<PsSoundEvent> {
     match token.to_ascii_lowercase().as_str() {
         "create" => Some(PsSoundEvent::Create),
         "move" => Some(PsSoundEvent::Move),
+        "cantmove" => Some(PsSoundEvent::CantMove),
         _ => None,
     }
 }
@@ -626,6 +753,7 @@ fn ps_event_sound_name(target: &str, event: PsSoundEvent) -> String {
     let event = match event {
         PsSoundEvent::Create => "create",
         PsSoundEvent::Move => "move",
+        PsSoundEvent::CantMove => "cantmove",
     };
     format!("{}_{}", target.to_ascii_lowercase(), event)
 }
@@ -799,7 +927,7 @@ fn push_ps_sound_mark(out: &mut Vec<String>, sounds: &[PsSoundDef]) {
                 &mut emitted,
                 format!("{PS_SOUND_EXISTING_MARK_PREFIX}{key}"),
             ),
-            PsSoundEvent::Move => {}
+            PsSoundEvent::Move | PsSoundEvent::CantMove => {}
         }
     }
     out.push("}".to_string());
@@ -849,7 +977,7 @@ fn push_ps_sound_routines(
                 "  once [ {target}{{no {PS_SOUND_EXISTING_MARK_PREFIX}{key}}} ] -> sfx {}",
                 sound.name
             )),
-            PsSoundEvent::Move => {}
+            PsSoundEvent::Move | PsSoundEvent::CantMove => {}
         }
     }
     out.push("}".to_string());
@@ -1571,10 +1699,6 @@ fn push_legend(
             }
         }
     }
-    if background_object.is_none() {
-        let empty = choose_empty_legend_char(&defined_chars, &used_chars);
-        out.push(format!("  {empty} = empty"));
-    }
     out.push("}".to_string());
     out.push(String::new());
     char_map
@@ -1607,13 +1731,6 @@ fn ps_player_selector(
         .unwrap_or_else(|| "Player".to_string())
 }
 
-fn choose_empty_legend_char(defined_chars: &BTreeSet<char>, used_chars: &BTreeSet<char>) -> char {
-    ['.', '_', '~', '`']
-        .into_iter()
-        .find(|ch| !defined_chars.contains(ch) && !used_chars.contains(ch))
-        .unwrap_or('_')
-}
-
 fn ps_level_char_map(lines: &[String], used_chars: &BTreeSet<char>) -> BTreeMap<char, char> {
     let mut defined_chars = BTreeSet::<char>::new();
     for line in lines.iter().filter(|line| !line.trim().is_empty()) {
@@ -1643,7 +1760,7 @@ fn ps_level_char_map(lines: &[String], used_chars: &BTreeSet<char>) -> BTreeMap<
 }
 
 fn is_canonical_legend_syntax_char(ch: char) -> bool {
-    matches!(ch, '{' | '}' | '"')
+    matches!(ch, '{' | '}' | '"' | ';')
 }
 
 fn choose_ps_level_char_replacement(reserved: &BTreeSet<char>) -> char {
@@ -1779,7 +1896,16 @@ fn push_rules(
     rule_sections: &PsRuleSections,
 ) {
     let player_selector = ps_player_selector(objects, aliases, tags, maps, case_sensitive);
-    push_ps_move_routine(out, collision_layers);
+    push_ps_move_routine(
+        out,
+        collision_layers,
+        sounds,
+        objects,
+        aliases,
+        tags,
+        maps,
+        case_sensitive,
+    );
     push_ps_subroutines(
         out,
         &rule_sections.routines,
@@ -1841,7 +1967,16 @@ fn push_rules(
     out.push(String::new());
 }
 
-fn push_ps_move_routine(out: &mut Vec<String>, collision_layers: &[PsLayerDef]) {
+fn push_ps_move_routine(
+    out: &mut Vec<String>,
+    collision_layers: &[PsLayerDef],
+    sounds: &[PsSoundDef],
+    objects: &[PsObjectDef],
+    aliases: &[PsAliasDef],
+    tags: &[PsTagDef],
+    maps: &[PsMapDef],
+    case_sensitive: bool,
+) {
     let move_layers = ps_move_layer_names(collision_layers);
     if move_layers.is_empty() {
         return;
@@ -1849,6 +1984,17 @@ fn push_ps_move_routine(out: &mut Vec<String>, collision_layers: &[PsLayerDef]) 
 
     out.push("routine move {".to_string());
     out.push("  repeat {".to_string());
+    push_ps_cantmove_collision_sounds(
+        out,
+        sounds,
+        objects,
+        aliases,
+        tags,
+        maps,
+        case_sensitive,
+        &move_layers,
+        "    ",
+    );
     if let [layer] = move_layers.as_slice() {
         push_ps_move_layer_rules(out, layer, "    ");
     } else {
@@ -1856,10 +2002,86 @@ fn push_ps_move_routine(out: &mut Vec<String>, collision_layers: &[PsLayerDef]) 
         push_ps_move_layer_rules(out, "l", "      ");
         out.push("    }".to_string());
     }
+    push_ps_cantmove_remaining_sounds(
+        out,
+        sounds,
+        objects,
+        aliases,
+        tags,
+        maps,
+        case_sensitive,
+        "    ",
+    );
     out.push("    once_all [ {__move_collision} ] -> [ ]".to_string());
     out.push("  }".to_string());
     out.push("}".to_string());
     out.push(String::new());
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_ps_cantmove_collision_sounds(
+    out: &mut Vec<String>,
+    sounds: &[PsSoundDef],
+    objects: &[PsObjectDef],
+    aliases: &[PsAliasDef],
+    tags: &[PsTagDef],
+    maps: &[PsMapDef],
+    case_sensitive: bool,
+    move_layers: &[String],
+    indent: &str,
+) {
+    for sound in sounds {
+        let PsSoundTrigger::Event {
+            target,
+            event: PsSoundEvent::CantMove,
+        } = &sound.trigger
+        else {
+            continue;
+        };
+        let target = ps_sound_target_selector(target, objects, aliases, tags, maps, case_sensitive);
+        for layer in move_layers {
+            out.push(format!(
+                "{indent}once [ > {target} | | < {layer} ] -> sfx {}",
+                sound.name
+            ));
+            out.push(format!(
+                "{indent}once [ > {layer} | | < {target} ] -> sfx {}",
+                sound.name
+            ));
+            out.push(format!(
+                "{indent}once [ > {target} | ; | ^ {layer} ] -> sfx {}",
+                sound.name
+            ));
+            out.push(format!(
+                "{indent}once [ > {layer} | ; | ^ {target} ] -> sfx {}",
+                sound.name
+            ));
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_ps_cantmove_remaining_sounds(
+    out: &mut Vec<String>,
+    sounds: &[PsSoundDef],
+    objects: &[PsObjectDef],
+    aliases: &[PsAliasDef],
+    tags: &[PsTagDef],
+    maps: &[PsMapDef],
+    case_sensitive: bool,
+    indent: &str,
+) {
+    for sound in sounds {
+        let PsSoundTrigger::Event {
+            target,
+            event: PsSoundEvent::CantMove,
+        } = &sound.trigger
+        else {
+            continue;
+        };
+        let target = ps_sound_target_selector(target, objects, aliases, tags, maps, case_sensitive);
+        out.push(format!("{indent}once [ > {target} ] -> sfx {}", sound.name));
+    }
 }
 
 fn push_ps_move_layer_rules(out: &mut Vec<String>, layer: &str, indent: &str) {
@@ -1981,8 +2203,11 @@ fn push_ps_action_bridge(
     }
 }
 
-fn push_ps_level_clear(out: &mut Vec<String>) {
+fn push_ps_level_clear(out: &mut Vec<String>, endlevel_sfx: Option<&str>) {
     out.push("on_level_clear {".to_string());
+    if let Some(name) = endlevel_sfx {
+        out.push(format!("  sfx {name}"));
+    }
     out.push("  wait 0.3s".to_string());
     out.push("  next_level".to_string());
     out.push("}".to_string());

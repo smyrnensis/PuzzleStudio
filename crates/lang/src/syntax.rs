@@ -86,7 +86,6 @@ pub(crate) const PUZZLE_COMPLETION_KEYWORDS: &[&str] = &[
     "marks",
     "sounds",
     "sprites",
-    "sprites3",
     "state",
     "tags",
     "var",

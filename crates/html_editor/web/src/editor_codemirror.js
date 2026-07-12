@@ -8,10 +8,14 @@ import {
   Transaction,
 } from "@codemirror/state";
 import {
+  crosshairCursor,
   Decoration,
+  drawSelection,
   EditorView,
   keymap,
   lineNumbers,
+  rectangularSelection,
+  scrollPastEnd,
 } from "@codemirror/view";
 import {
   defaultKeymap,
@@ -31,6 +35,17 @@ const sourceCompletionKeymap = [
   { key: "Tab", run: (view) => dispatchSourceCompletionCommand(view, "commit") },
   { key: "Enter", run: (view) => dispatchSourceCompletionCommand(view, "commit") },
   { key: "Escape", run: (view) => dispatchSourceCompletionCommand(view, "close") },
+];
+// PuzzleStudio-specific edit policy stays in editor_source.js. This keymap only
+// gives that workflow first refusal before CodeMirror applies its generic edit.
+const sourceEditingKeymap = [
+  { key: "{", run: (view) => dispatchSourceEditingCommand(view, "open-brace") },
+  { key: "}", run: (view) => dispatchSourceEditingCommand(view, "close-brace") },
+  { key: "[", run: (view) => dispatchSourceEditingCommand(view, "open-bracket") },
+  { key: "Backspace", run: (view) => dispatchSourceEditingCommand(view, "backspace") },
+  { key: "Tab", run: (view) => dispatchSourceEditingCommand(view, "tab") },
+  { key: "Shift-Tab", run: (view) => dispatchSourceEditingCommand(view, "shift-tab") },
+  { key: "Enter", run: (view) => dispatchSourceEditingCommand(view, "enter") },
 ];
 const sourceHighlightClasses = Object.freeze({
   keyword: "syntax-keyword",
@@ -67,6 +82,7 @@ const sourceHighlightClasses = Object.freeze({
 });
 const replaceSourceHighlightRange = StateEffect.define();
 const clearSourceHighlightDecorations = StateEffect.define();
+const replaceSourceFindDecorations = StateEffect.define();
 const sourceHighlightDecorations = StateField.define({
   create() {
     return Decoration.none;
@@ -85,6 +101,21 @@ const sourceHighlightDecorations = StateField.define({
   },
   provide: (field) => EditorView.decorations.from(field),
 });
+const sourceFindDecorations = StateField.define({
+  create() {
+    return Decoration.none;
+  },
+  update(decorations, transaction) {
+    let next = decorations.map(transaction.changes);
+    for (const effect of transaction.effects) {
+      if (effect.is(replaceSourceFindDecorations)) {
+        next = effect.value;
+      }
+    }
+    return next;
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
 
 function clampOffset(view, value) {
   const offset = Number.isFinite(Number(value)) ? Math.trunc(Number(value)) : 0;
@@ -93,6 +124,16 @@ function clampOffset(view, value) {
 
 function dispatchSourceCompletionCommand(view, command) {
   const event = new CustomEvent("sourcecompletioncommand", {
+    bubbles: true,
+    cancelable: true,
+    detail: { command },
+  });
+  view.contentDOM.dispatchEvent(event);
+  return event.defaultPrevented;
+}
+
+function dispatchSourceEditingCommand(view, command) {
+  const event = new CustomEvent("sourceeditingcommand", {
     bubbles: true,
     cancelable: true,
     detail: { command },
@@ -193,8 +234,20 @@ function createState(text, readOnlyCompartment, readOnly, inputListeners) {
       lineNumbers(),
       history(),
       sourceHighlightDecorations,
+      sourceFindDecorations,
+      EditorState.allowMultipleSelections.of(true),
+      drawSelection(),
+      rectangularSelection(),
+      crosshairCursor(),
       EditorView.lineWrapping,
-      keymap.of([...sourceCompletionKeymap, indentWithTab, ...defaultKeymap, ...historyKeymap]),
+      scrollPastEnd(),
+      keymap.of([
+        ...sourceCompletionKeymap,
+        ...sourceEditingKeymap,
+        indentWithTab,
+        ...defaultKeymap,
+        ...historyKeymap,
+      ]),
       EditorView.contentAttributes.of({
         "aria-label": "Puzzle source",
         "aria-multiline": "true",
@@ -293,6 +346,25 @@ export function createSourceEditor(parent) {
     },
     clearHighlights() {
       view.dispatch({ effects: clearSourceHighlightDecorations.of(null) });
+    },
+    applyFindMatches(source, matches, selectedIndex) {
+      const expected = String(source || "");
+      if (expected !== view.state.doc.toString()) {
+        throw new Error("Cannot apply stale source find matches to CodeMirror.");
+      }
+      const decorations = (Array.isArray(matches) ? matches : []).slice(0, 600).map((match, index) => {
+        const from = clampOffset(view, match?.start);
+        const to = clampOffset(view, match?.end);
+        if (from >= to) {
+          return null;
+        }
+        return Decoration.mark({
+          class: `cm-source-find-match${index === selectedIndex ? " is-current" : ""}`,
+        }).range(from, to);
+      }).filter(Boolean);
+      view.dispatch({
+        effects: replaceSourceFindDecorations.of(Decoration.set(decorations, true)),
+      });
     },
     scrollIntoView(offset, alignment = "nearest") {
       view.dispatch({ effects: EditorView.scrollIntoView(clampOffset(view, offset), { y: alignment, x: "nearest" }) });

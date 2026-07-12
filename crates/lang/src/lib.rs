@@ -19,8 +19,10 @@ mod source;
 mod source_analysis;
 mod source_import;
 mod source_outline;
+mod source_sprite_edit;
 mod source_target;
 mod sprite_authoring;
+mod sprite_spatial;
 mod surface;
 mod surface_completion;
 mod syntax;
@@ -69,7 +71,7 @@ pub use loaded::{
     TriggerAnimationDef, TriggerAnimationKind, TweenAnimationDef, ViewportModeDef, ViewportSizeDef,
     VisualAliasDef, VisualColorDef, VisualSpriteDef, VisualSpriteFit, VisualSpriteFitMode,
     VisualSpriteKind, VisualSpriteLoopDef, VisualSpritePixelsPerCell, VisualSpriteSampling,
-    VisualSpriteTransform, VisualsDef,
+    VisualSpriteSpace, VisualSpriteTransform, VisualsDef,
 };
 
 const BLOCK_CLOSE: &str = "}";
@@ -101,7 +103,9 @@ pub use puzzle3_model::{
     ViewportSettings3,
 };
 pub use puzzle3_parse::{ParseError3, parse_puzzle3d};
-pub use puzzle3_sprite::{Sprite3, SpriteColor3, SpriteSet3, SpriteVoxels3};
+pub use puzzle3_sprite::{
+    Sprite3, SpriteColor3, SpriteSet3, SpriteSpace3, SpriteSpatialOp3, SpriteVoxels3,
+};
 pub use puzzle3_visual_fixture::{
     VisualFixtureAnimation3, VisualFixtureExportError3, export_visual_fixture_json,
     export_visual_fixture_json_with_title, export_visual_fixture_json_with_title_and_scenes,
@@ -113,6 +117,7 @@ use source::{
     SourceScope, SourceToken, logical_lines_with_locations, source_line_tokens,
     split_header_tokens, strip_line_comment,
 };
+pub use sprite_spatial::{SpriteAffine3, evaluate_sprite_spatial_ops3};
 
 pub fn parse_level_ascii_state(
     game: &CompiledGame,
@@ -130,6 +135,7 @@ pub use source_analysis::{
 };
 pub use source_import::{SourceImportRange, SourceImportReference};
 pub use source_outline::{SourceOutlineItem, source_outline, source_outline_json};
+pub use source_sprite_edit::{SpriteEditMutationResult, mutate_sprite_source};
 pub use source_target::{
     SoundSourceTargetKind, SourceSprite3dStatus, SourceSprite3dTarget, SourceSpriteColorAsset,
     SourceSpritePaletteEntry, SourceSpriteShapeAsset, SourceSpriteTarget, SourceTarget,

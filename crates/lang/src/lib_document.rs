@@ -225,11 +225,10 @@ fn classify_known_mixed_document_section(tokens: &[&str]) -> Option<MixedSection
         | ["animation", ..]
         | ["sounds", ..]
         | ["theme", ..]
-        | ["assets", ..] => MixedSectionTarget::Shared,
-        ["puzzle", ..] | ["levels", ..] | ["sprites", ..] | ["level", ..] => {
-            MixedSectionTarget::Puzzle2d
-        }
-        ["puzzle3", ..] | ["levels3", ..] | ["sprites3", ..] => MixedSectionTarget::Puzzle3d,
+        | ["assets", ..]
+        | ["sprites", ..] => MixedSectionTarget::Shared,
+        ["puzzle", ..] | ["levels", ..] | ["level", ..] => MixedSectionTarget::Puzzle2d,
+        ["puzzle3", ..] | ["levels3", ..] => MixedSectionTarget::Puzzle3d,
         ["var", ..] | ["const", ..] | ["persistent", ..] => MixedSectionTarget::Puzzle2d,
         ["scene", ..] => return Some(MixedSectionRecognition::Scene),
         _ => return None,
@@ -1726,7 +1725,7 @@ fn detect_game_document_kind(source: &str) -> Result<GameDocumentKind, Diagnosti
         match (line.scope, tokens.as_slice()) {
             (None, ["puzzle", ..]) => has_2d = true,
             (None, ["puzzle3", ..]) => has_3d = true,
-            (_, ["levels3", ..] | ["sprites3", ..]) => has_3d = true,
+            (_, ["levels3", ..]) => has_3d = true,
             _ => {}
         }
     }
@@ -1764,11 +1763,11 @@ fn validate_source_profile(
                 .to_string(),
         )),
         (PuzzleSourceProfile::Puzzle2d, GameDocumentKind::Puzzle3d) => Err(DiagnosticReport::error(
-            ".puzzle files cannot contain 3D puzzle3, levels3, or sprites3 sections; use .puzzle3"
+            ".puzzle files cannot contain 3D puzzle3 or levels3 sections; use .puzzle3"
                 .to_string(),
         )),
         (PuzzleSourceProfile::Puzzle3d, GameDocumentKind::Puzzle2d) => Err(DiagnosticReport::error(
-            ".puzzle3 files must contain 3D puzzle3, levels3, or sprites3 sections".to_string(),
+            ".puzzle3 files must contain 3D puzzle3 or levels3 sections".to_string(),
         )),
     }
 }
@@ -2079,10 +2078,18 @@ pub fn expand_game_imports_from_documents(
     let entry = normalize_virtual_import_path(Path::new(entry_path));
     let sources = documents
         .iter()
-        .map(|(path, source)| (normalize_virtual_import_path(Path::new(path)), source.as_str()))
+        .map(|(path, source)| {
+            (
+                normalize_virtual_import_path(Path::new(path)),
+                source.as_str(),
+            )
+        })
         .collect::<HashMap<_, _>>();
     let source = sources.get(&entry).copied().ok_or_else(|| {
-        DiagnosticReport::error(format!("workspace puzzle entry not found: {}", entry.display()))
+        DiagnosticReport::error(format!(
+            "workspace puzzle entry not found: {}",
+            entry.display()
+        ))
     })?;
     expand_virtual_game_imports(source, &entry, &sources, &mut vec![entry.clone()])
 }
@@ -2098,20 +2105,28 @@ fn expand_virtual_game_imports(
         let content = raw_line.strip_suffix('\n').unwrap_or(raw_line);
         if let Some(requested) = import_directive_path(content)? {
             if requested.is_absolute() {
-                return Err(DiagnosticReport::error("workspace imports must be relative".to_string()));
+                return Err(DiagnosticReport::error(
+                    "workspace imports must be relative".to_string(),
+                ));
             }
             let base = current_path.parent().unwrap_or_else(|| Path::new(""));
             let resolved = normalize_virtual_import_path(&base.join(requested));
             if import_stack.contains(&resolved) {
                 return Err(DiagnosticReport::error(format!(
                     "cyclic import: {}",
-                    import_stack.iter().chain(std::iter::once(&resolved))
-                        .map(|path| path.display().to_string()).collect::<Vec<_>>().join(" -> ")
+                    import_stack
+                        .iter()
+                        .chain(std::iter::once(&resolved))
+                        .map(|path| path.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(" -> ")
                 )));
             }
             let imported = sources.get(&resolved).copied().ok_or_else(|| {
                 DiagnosticReport::error(format!(
-                    "import not found: {} from {}", resolved.display(), current_path.display()
+                    "import not found: {} from {}",
+                    resolved.display(),
+                    current_path.display()
                 ))
             })?;
             import_stack.push(resolved.clone());
@@ -2119,7 +2134,9 @@ fn expand_virtual_game_imports(
             import_stack.pop();
             let expanded = expanded?;
             out.push_str(&expanded);
-            if !expanded.ends_with('\n') { out.push('\n'); }
+            if !expanded.ends_with('\n') {
+                out.push('\n');
+            }
         } else {
             out.push_str(raw_line);
         }
@@ -2132,7 +2149,9 @@ fn normalize_virtual_import_path(path: &Path) -> PathBuf {
     for component in path.components() {
         match component {
             Component::CurDir => {}
-            Component::ParentDir => { normalized.pop(); }
+            Component::ParentDir => {
+                normalized.pop();
+            }
             Component::Normal(part) => normalized.push(part),
             Component::RootDir | Component::Prefix(_) => {}
         }

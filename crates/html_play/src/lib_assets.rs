@@ -144,8 +144,7 @@ fn asset_resolver_js(puzzle_path: &Path, loaded: &LoadedGame) -> Result<String, 
             paths.push(source.clone());
         }
     }
-    for asset_path in paths
-    {
+    for asset_path in paths {
         let path = resolve_asset_path(parent, &asset_path)?;
         push_asset_resolver_entry(parent, &path, &mut files, &mut first)?;
     }
@@ -343,16 +342,28 @@ fn push_visual_sprite(out: &mut String, sprite: &VisualSpriteDef) {
                     out.push(',');
                 }
                 match transform {
-                    VisualSpriteTransform::Rotate { degrees } => {
+                    VisualSpriteTransform::Rotate { degrees, space } => {
                         out.push_str("{\"kind\":\"rotate\",\"degrees\":");
                         out.push_str(&degrees.to_string());
+                        out.push_str(",\"space\":\"");
+                        out.push_str(match space {
+                            puzzle_lang::VisualSpriteSpace::World => "world",
+                            puzzle_lang::VisualSpriteSpace::Local => "local",
+                        });
+                        out.push('"');
                         out.push('}');
                     }
-                    VisualSpriteTransform::Translate { x, y } => {
+                    VisualSpriteTransform::Translate { x, y, space } => {
                         out.push_str("{\"kind\":\"translate\",\"x\":");
                         out.push_str(&x.to_string());
                         out.push_str(",\"y\":");
                         out.push_str(&y.to_string());
+                        out.push_str(",\"space\":\"");
+                        out.push_str(match space {
+                            puzzle_lang::VisualSpriteSpace::World => "world",
+                            puzzle_lang::VisualSpriteSpace::Local => "local",
+                        });
+                        out.push('"');
                         out.push('}');
                     }
                     VisualSpriteTransform::Flip { enabled } => {

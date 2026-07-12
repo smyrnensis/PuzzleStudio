@@ -554,11 +554,6 @@ const AUTHORING_SOURCE_BLOCK_SPECS: &[AuthoringSourceBlockSpec] = &[
         role: AuthoringBlockRole::Visuals,
     },
     AuthoringSourceBlockSpec {
-        surface: "sprites3",
-        content: None,
-        role: AuthoringBlockRole::Visuals,
-    },
-    AuthoringSourceBlockSpec {
         surface: "levels",
         content: None,
         role: AuthoringBlockRole::LevelList,
