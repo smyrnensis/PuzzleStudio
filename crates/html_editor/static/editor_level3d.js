@@ -1817,7 +1817,7 @@ function level3dTopDownSpriteSize(sprite) {
   if (!sprite) {
     return null;
   }
-  const blocks = level3dBitmapBlocks(sprite.bitmap || []);
+  const blocks = level3dSpriteLayers(sprite);
   return {
     depth: Math.max(1, ...blocks.map((rows) => rows.length)),
     width: Math.max(1, ...blocks.flatMap((rows) => rows.map((row) => row.length))),
@@ -1989,7 +1989,7 @@ function level3dTopDownSpriteProjection(sprite, options = {}) {
   if (!sprite) {
     return null;
   }
-  const blocks = level3dBitmapBlocks(sprite.bitmap || []);
+  const blocks = level3dSpriteLayers(sprite);
   const depth = Math.max(1, ...blocks.map((rows) => rows.length));
   const width = Math.max(1, ...blocks.flatMap((rows) => rows.map((row) => row.length)));
   const pixels = Array.from({ length: depth }, () => Array.from({ length: width }, () => ""));
@@ -3418,7 +3418,7 @@ function sourceLevel3dSprites(source) {
 
 function sourceLevel3dSpriteBlocks(source) {
   const text = String(source || "");
-  const pattern = /(^|\n)([\t ]*)sprites3(?:\s+[^\n{]+)?\s*\{/gm;
+  const pattern = /(^|\n)([\t ]*)sprites(?:\s+[^\n{]+)?\s*\{/gm;
   const blocks = [];
   let match = null;
   while ((match = pattern.exec(text))) {
@@ -5467,7 +5467,7 @@ function level3dObjectPreviewVoxels(position, object, snapshot) {
   if (!sprite) {
     return [];
   }
-  const blocks = level3dBitmapBlocks(sprite.bitmap || []);
+  const blocks = level3dSpriteLayers(sprite);
   const spriteHeight = Math.max(1, blocks.length);
   const spriteDepth = Math.max(1, ...blocks.map((rows) => rows.length));
   const spriteWidth = Math.max(1, ...blocks.flatMap((rows) => rows.map((row) => row.length)));
@@ -5851,16 +5851,21 @@ function drawLevel3dPolygonPath(ctx, points) {
   ctx.closePath();
 }
 
-function level3dBitmapBlocks(bitmap) {
-  const blocks = [[]];
-  for (const row of bitmap || []) {
-    if (row === "") {
-      blocks.push([]);
-    } else {
-      blocks[blocks.length - 1].push(String(row));
-    }
+function level3dSpriteLayers(sprite, now = performance.now()) {
+  const frames = Array.isArray(sprite?.frames) ? sprite.frames : [];
+  if (!frames.length) {
+    throw new Error("3D level editor sprite frames are missing.");
   }
-  return blocks;
+  const frameDuration = Number(sprite.frameDurationMs)
+    || (Number(sprite.durationMs) > 0 ? Number(sprite.durationMs) / frames.length : 0);
+  const index = frames.length > 1 && frameDuration > 0
+    ? Math.floor(now / frameDuration) % frames.length
+    : 0;
+  const layers = frames[index]?.layers;
+  if (!Array.isArray(layers) || !layers.length) {
+    throw new Error("3D level editor sprite layers are missing.");
+  }
+  return layers;
 }
 
 function level3dVoxelBounds(position, scale) {

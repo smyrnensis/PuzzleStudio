@@ -199,14 +199,13 @@ struct ModelOperationSoundSpec {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ModelSoundTriggerKind {
     Move,
-    CantMove,
 }
 
 fn model_sounds_block_starts(lines: &[String], start: usize) -> bool {
     lines.get(start + 1).is_some_and(|first| {
         matches!(
             split_header_tokens(first).as_slice(),
-            ["move" | "cantmove" | "undo" | "restart", ..]
+            ["move" | "undo" | "restart", ..]
         )
     })
 }
@@ -235,7 +234,6 @@ fn parse_model_sounds_block(
         let tokens = split_header_tokens(line);
         let trigger_kind = match tokens.as_slice() {
             ["move", ..] => Some(ModelSoundTriggerKind::Move),
-            ["cantmove", ..] => Some(ModelSoundTriggerKind::CantMove),
             _ => None,
         };
         let operation = match tokens.as_slice() {
@@ -269,7 +267,7 @@ fn parse_model_sounds_block(
             _ => {
                 return Err(parse_error(
                     line,
-                    "model sounds entry must be: move <object-selector> -> sfx <name> | cantmove <object-selector> -> sfx <name> | undo -> sfx <name> | restart -> sfx <name>",
+                    "model sounds entry must be: move <object-selector> -> sfx <name> | undo -> sfx <name> | restart -> sfx <name>",
                 ));
             }
         }

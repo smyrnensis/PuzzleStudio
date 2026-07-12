@@ -213,6 +213,81 @@ LEVELS
 }
 
 #[test]
+fn puzzlescript_import_does_not_inject_an_empty_legend_entry() {
+    let source = r#"
+title Explicit Legend Only
+
+OBJECTS
+
+Wall
+gray
+
+Player
+blue
+
+LEGEND
+
+_ = Wall
+P = Player
+
+COLLISIONLAYERS
+
+Wall
+Player
+
+LEVELS
+
+_
+"#;
+
+    let translated = translate_puzzlescript_to_canonical(source).unwrap();
+
+    assert!(
+        translated.contains("legend {\n_ = Wall\nP = Player\n}"),
+        "{translated}"
+    );
+    assert!(!translated.contains("= empty"), "{translated}");
+    parse_game(&translated)
+        .expect("explicit underscore legend should parse without injected empty");
+}
+
+#[test]
+fn puzzlescript_import_remaps_semicolon_legend_chars() {
+    let source = r#"
+title Semicolon Legend
+
+OBJECTS
+
+Wall
+gray
+
+Player
+blue
+
+LEGEND
+
+; = Wall
+P = Player
+
+COLLISIONLAYERS
+
+Wall
+Player
+
+LEVELS
+
+;;
+"#;
+
+    let translated = translate_puzzlescript_to_canonical(source).unwrap();
+
+    assert!(!translated.contains("; = Wall"), "{translated}");
+    assert!(translated.contains("A = Wall"), "{translated}");
+    assert!(translated.contains("\nAA\n"), "{translated}");
+    parse_game(&translated).expect("semicolon-remapped imported game should parse");
+}
+
+#[test]
 fn translated_basic_vanilla_puzzlescript_parses_as_loaded_game() {
     let source = include_str!("fixtures/puzzlescript/basic_sokoban.ps");
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
@@ -667,7 +742,7 @@ P
 }
 
 #[test]
-fn puzzlescript_move_undo_and_restart_sounds_lower_to_model_sounds() {
+fn puzzlescript_event_and_operation_sounds_lower_at_owned_boundaries() {
     let source = r##"
 title Sound Operations
 
@@ -698,6 +773,8 @@ Wall
 
 SOUNDS
 player move 111
+player cantmove 444
+endlevel 555
 undo 222
 restart 333
 
@@ -721,11 +798,21 @@ P..
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
 
     assert!(translated.contains("sfx player_move { seed = 111; type = puzzlescript }"));
+    assert!(translated.contains("sfx player_cantmove { seed = 444; type = puzzlescript }"));
+    assert!(translated.contains("sfx endlevel { seed = 555; type = puzzlescript }"));
     assert!(translated.contains("sfx undo { seed = 222; type = puzzlescript }"));
     assert!(translated.contains("sfx restart { seed = 333; type = puzzlescript }"));
     assert!(translated.contains(
         "sounds {\nmove Player -> sfx player_move\nundo -> sfx undo\nrestart -> sfx restart\n}"
     ));
+    assert!(!translated.contains("cantmove Player -> sfx"));
+    assert!(translated.contains("once [ > Player | | < "));
+    assert!(translated.contains("| | < Player ] -> sfx player_cantmove"));
+    assert!(translated.contains("] -> sfx player_cantmove"));
+    assert!(translated.contains("once [ > Player | ; | ^ "));
+    assert!(translated.contains("| ; | ^ Player ] -> sfx player_cantmove"));
+    assert!(translated.contains("once [ > Player ] -> sfx player_cantmove"));
+    assert!(translated.contains("on_level_clear {\nsfx endlevel\nwait 0.3s\nnext_level\n}"));
 
     let loaded = parse_game(&translated).unwrap();
     assert_eq!(
@@ -1062,7 +1149,7 @@ P
 }
 
 #[test]
-fn puzzlescript_parenthetical_comment_lines_are_not_imported_as_rules() {
+fn puzzlescript_comments_are_preserved_without_becoming_rules() {
     let source = r#"
 title Parenthetical Comment
 
@@ -1094,6 +1181,7 @@ Player
 RULES
 ======
 
+[ Player ] -> [ Player ] // ordinary movement
 ( [ Player ] -> cancel )
 [ Player ] -> [ Player ]
 
@@ -1109,8 +1197,19 @@ choose 1 [ ] -> [ Player ]
 
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
 
+    assert!(
+        translated.contains("// [RULES line 32] ordinary movement"),
+        "{translated}"
+    );
+    assert!(
+        translated.contains("// [RULES line 33] [ Player ] -> cancel"),
+        "{translated}"
+    );
+    assert!(
+        translated.contains("// [LEVELS line 41] choose 1 [ ] -> [ Player ]"),
+        "{translated}"
+    );
     assert!(!translated.contains("( [ Player ] -> cancel )"));
-    assert!(!translated.contains("choose 1"));
     parse_game(&translated).unwrap();
 }
 

@@ -243,6 +243,28 @@ pub fn active_source_analysis_resolve_source_target(
 }
 
 #[wasm_bindgen]
+pub fn active_source_analysis_mutate_sprite(
+    revision: SourceAnalysisRevision,
+    request_json: &str,
+) -> Result<String, JsValue> {
+    with_source_analysis(revision, |analysis| {
+        puzzle_lang::mutate_sprite_source(analysis.source(), request_json).map(|result| {
+            let start = utf16_offset_from_utf8(&result.source, result.start);
+            let end = utf16_offset_from_utf8(&result.source, result.end);
+            serde_json::json!({
+                "source": result.source,
+                "start": start,
+                "end": end,
+                "name": result.name,
+            })
+            .to_string()
+        })
+    })
+    .map_err(source_analysis_error_js_value)?
+    .map_err(source_analysis_error_js_value)
+}
+
+#[wasm_bindgen]
 pub fn active_source_analysis_import_at_json(
     revision: SourceAnalysisRevision,
     document_path: &str,

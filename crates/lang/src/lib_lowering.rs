@@ -2842,7 +2842,6 @@ impl<'a> ProgramLowerer<'a> {
             guards.extend(alternative.guards.clone());
             let mut rule_effects = lowered_effects.ordered.clone();
             append_move_sound_effects(
-                &alternative.components,
                 &alternative.writes,
                 self.model_sound_triggers,
                 &mut rule_effects,

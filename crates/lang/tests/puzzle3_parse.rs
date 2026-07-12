@@ -19,7 +19,7 @@ fn spec_3d_model_source() -> String {
     [
         source_block(source, "puzzle3 sokoban").as_str(),
         source_block(source, "levels3 microban").as_str(),
-        source_block(source, "sprites3 basic").as_str(),
+        source_block(source, "sprites basic").as_str(),
     ]
     .join("\n\n")
 }
@@ -1826,23 +1826,26 @@ P.
 }
 
 #[test]
-fn parser_lowers_canonical_sprites3_entries() {
+fn parser_lowers_canonical_3d_sprite_entries() {
     let parsed = parse_puzzle3d(
         r##"
 layers {
 floor = Floor
 }
 
-sprites3 basic {
-Floor
-#90ee90 #008000 transparent
+sprites basic {
+Floor {
+colors = #90ee90 #008000 transparent
+shape = {
 .....
 ..1..
 .....
-
+-
 00000
 0...0
 00000
+}
+}
 }
 "##,
     )
@@ -1861,31 +1864,34 @@ Floor
         Some(&SpriteColor3::Hex("#008000".to_string()))
     );
     assert_eq!(floor.palette.get(&'2'), Some(&SpriteColor3::Transparent));
-    assert_eq!(floor.voxels.size, Size3::new(5, 3, 2));
+    assert_eq!(floor.first_frame().size, Size3::new(5, 3, 2));
 }
 
 #[test]
-fn parser_lowers_canonical_sprites3_shape_refs() {
+fn parser_lowers_canonical_3d_sprite_shape_refs() {
     let parsed = parse_puzzle3d(
         r##"
 layers {
 floor = Floor
 }
 
-sprites3 basic {
-shape flat {
+sprites basic {
+shapes {
+flat {
 .....
 ..1..
 .....
-
+-
 00000
 0...0
 00000
 }
+}
 
-Floor
-#90ee90 #008000
-flat
+Floor {
+colors = #90ee90 #008000
+shape = flat
+}
 }
 "##,
     )
@@ -1902,11 +1908,11 @@ flat
         floor.palette.get(&'1'),
         Some(&SpriteColor3::Hex("#008000".to_string()))
     );
-    assert_eq!(floor.voxels.size, Size3::new(5, 3, 2));
+    assert_eq!(floor.first_frame().size, Size3::new(5, 3, 2));
 }
 
 #[test]
-fn parser_lowers_color_only_sprites3_entry_to_filled_cube() {
+fn parser_lowers_color_only_3d_sprite_entry_to_filled_cube() {
     let parsed = parse_puzzle3d(
         r##"
 layers {
@@ -1914,12 +1920,14 @@ floor = Floor
 target = Goal
 }
 
-sprites3 basic {
-Floor
-#90ee90
+sprites basic {
+Floor {
+colors = #90ee90
+}
 
-Goal
-#00008b
+Goal {
+colors = #00008b
+}
 }
 "##,
     )
@@ -1929,34 +1937,38 @@ Goal
     let floor = sprites.sprite("Floor").expect("Floor sprite exists");
     let goal = sprites.sprite("Goal").expect("Goal sprite exists");
 
-    assert_eq!(floor.voxels.size, Size3::new(1, 1, 1));
-    assert_eq!(floor.voxels.slices.as_slice(), &[vec!["0".to_string()]]);
-    assert_eq!(goal.voxels.size, Size3::new(1, 1, 1));
+    assert_eq!(floor.first_frame().size, Size3::new(1, 1, 1));
+    assert_eq!(
+        floor.first_frame().slices.as_slice(),
+        &[vec!["0".to_string()]]
+    );
+    assert_eq!(goal.first_frame().size, Size3::new(1, 1, 1));
 }
 
 #[test]
-fn parser_rejects_prefixed_sprites3_shape_refs() {
+fn parser_rejects_blank_lines_in_sprite_shape() {
     let err = parse_puzzle3d(
         r##"
 layers {
 floor = Floor
 }
 
-sprites3 basic {
-shape flat {
+sprites basic {
+Floor {
+colors = #90ee90
+shape = {
+0
+
 0
 }
-
-Floor
-#90ee90
-shape flat
+}
 }
 "##,
     )
     .unwrap_err();
 
     assert!(
-        matches!(err, ParseError3::Message(message) if message.contains("shape refs are bare"))
+        matches!(err, ParseError3::Message(message) if message.contains("cannot contain blank lines"))
     );
 }
 
@@ -1983,7 +1995,57 @@ voxels {
     )
     .unwrap_err();
 
-    assert!(matches!(err, ParseError3::Message(message) if message.contains("canonical form")));
+    assert!(
+        matches!(err, ParseError3::Message(message) if message.contains("unknown 3D puzzle directive: sprites3"))
+    );
+}
+
+#[test]
+fn parser_lowers_world_and_local_3d_sprite_spatial_ops_in_source_order() {
+    let source = include_str!("fixtures/spec_3d_full.puzzle3").replacen(
+        "Floor {\ncolors =",
+        "Floor {\ntranslate local (1, 0, -1/2)\nrotate 45deg around (1, 1, 0)\nrotate local 90deg around up\ncolors =",
+        1,
+    );
+    let parsed = parse_puzzle3d(&source).unwrap();
+    let sprite = parsed.sprite_set.as_ref().unwrap().sprite("Floor").unwrap();
+    assert_eq!(sprite.spatial_ops.len(), 3);
+    assert_eq!(
+        sprite.spatial_ops[0],
+        SpriteSpatialOp3::Translate {
+            space: SpriteSpace3::Local,
+            value: [1.0, 0.0, -0.5]
+        }
+    );
+    assert!(matches!(
+        sprite.spatial_ops[1],
+        SpriteSpatialOp3::Rotate {
+            space: SpriteSpace3::World,
+            ..
+        }
+    ));
+    assert_eq!(
+        sprite.spatial_ops[2],
+        SpriteSpatialOp3::Rotate {
+            space: SpriteSpace3::Local,
+            axis: [0.0, 0.0, 1.0],
+            degrees: 90.0
+        }
+    );
+}
+
+#[test]
+fn parser_rejects_removed_shape_rotation_derivation() {
+    let source = include_str!("fixtures/spec_3d_full.puzzle3").replacen(
+        "Floor {\ncolors =",
+        "Floor {\nrotate from up\ncolors =",
+        1,
+    );
+    let error = parse_puzzle3d(&source).unwrap_err();
+    assert!(
+        matches!(&error, ParseError3::Message(message) if message.contains("removed sprite rotation syntax")),
+        "{error:?}"
+    );
 }
 
 #[test]
@@ -2272,19 +2334,19 @@ fn spec_3d_recreates_microban_level_1() {
     assert_eq!(sprites.model.as_deref(), Some("sokoban"));
     assert_eq!(sprites.sprites.len(), 5);
     assert_eq!(
-        sprites.sprite("Floor").unwrap().voxels.size,
+        sprites.sprite("Floor").unwrap().first_frame().size,
         Size3::new(5, 5, 5)
     );
     assert_eq!(
-        sprites.sprite("Box").unwrap().voxels.size,
+        sprites.sprite("Box").unwrap().first_frame().size,
         Size3::new(5, 5, 5)
     );
     assert_eq!(
-        sprites.sprite("Player").unwrap().voxels.size,
+        sprites.sprite("Player").unwrap().first_frame().size,
         Size3::new(5, 5, 5)
     );
     assert_eq!(
-        sprites.sprite("Wall").unwrap().voxels.size,
+        sprites.sprite("Wall").unwrap().first_frame().size,
         Size3::new(5, 5, 5)
     );
     let fixture_json = export_visual_fixture_json(&parsed).unwrap();
@@ -2298,7 +2360,8 @@ fn spec_3d_recreates_microban_level_1() {
     );
     assert!(contract.win_condition.is_some());
     assert!(fixture_json.contains("\"Box\": {"));
-    assert!(fixture_json.contains("\"bitmap\": ["));
+    assert!(fixture_json.contains("\"frames\": ["));
+    assert!(fixture_json.contains("\"layers\": ["));
 
     let initial = bundle.build_level_state(0).unwrap();
     let floor_cells = occupied_cells(&initial)
@@ -2341,11 +2404,11 @@ fn spec_3d_sokoban_can_be_authored_from_puzzle_file() {
     assert_eq!(bundle.level(1).unwrap().name, "microban 2");
     assert_eq!(bundle.level(0).unwrap().level.size, Size3::new(6, 7, 2));
     assert_eq!(
-        sprites.sprite("Floor").unwrap().voxels.size,
+        sprites.sprite("Floor").unwrap().first_frame().size,
         Size3::new(5, 5, 5)
     );
     assert_eq!(
-        sprites.sprite("Box").unwrap().voxels.size,
+        sprites.sprite("Box").unwrap().first_frame().size,
         Size3::new(5, 5, 5)
     );
 

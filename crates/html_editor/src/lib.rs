@@ -4562,7 +4562,12 @@ levels3 demo of push3 {
         assert!(tree_row_css.contains("user-select: none;"));
         assert!(EDITOR_CSS.contains(".tree-row[data-drag-id] {\n  cursor: grab;"));
         assert!(EDITOR_CSS.contains(".tree-row.is-dragging {\n  cursor: grabbing;"));
+        assert!(EDITOR_CSS.contains(".tree-drag-preview {"));
+        assert!(EDITOR_CSS.contains("pointer-events: none;"));
         assert!(EDITOR_JS.contains("function finishTreeMove(nodeId, targetFolderId)"));
+        assert!(EDITOR_JS.contains("function createTreeDragPreview(drag)"));
+        assert!(EDITOR_JS.contains("function updateTreeDragFeedback(drag, clientX, clientY)"));
+        assert!(EDITOR_JS.contains("function clearTreeDragFeedback(drag)"));
         assert!(EDITOR_JS.contains("documentList.addEventListener(\"pointerdown\", (event) => {"));
         assert!(
             EDITOR_JS
@@ -4571,9 +4576,15 @@ levels3 demo of push3 {
         assert!(EDITOR_JS.contains(
             "const targetFolderId = dropFolderIdForPoint(event.clientX, event.clientY);"
         ));
+        assert!(
+            EDITOR_JS.contains(
+                "markDropTarget(resolvedDropFolderIdForNode(drag.nodeId, targetFolderId));"
+            )
+        );
         assert!(EDITOR_JS.contains(
-            "markDropTarget(resolvedDropFolderIdForNode(treePointerDrag.nodeId, targetFolderId));"
+            "folder.expanded = folder.expanded === false;\n      loadFolderPreview(folder);"
         ));
+        assert!(!EDITOR_JS.contains("if (event.target.closest(\".tree-chevron, .tree-icon\"))"));
         assert!(!EDITOR_JS.contains("documentList.addEventListener(\"dragstart\""));
         assert!(EDITOR_JS.contains("if (!hasExternalFiles) {\n    return;\n  }"));
         assert!(EDITOR_JS.contains("event.dataTransfer.dropEffect = \"copy\";"));
@@ -5882,9 +5893,10 @@ move
 
     #[test]
     fn unloaded_preview_hides_the_runtime_frame_until_the_replacement_loads() {
-        assert!(EDITOR_HTML.contains(
-            "<div id=\"playPreview\" class=\"play-preview is-preview-unloaded\">"
-        ));
+        assert!(
+            EDITOR_HTML
+                .contains("<div id=\"playPreview\" class=\"play-preview is-preview-unloaded\">")
+        );
         let empty_document = EDITOR_JS
             .split("function emptyPreviewDocument() {")
             .nth(1)
@@ -6297,7 +6309,7 @@ move
     }
 
     #[test]
-    fn sprite3d_source_tools_scan_all_sprites3_blocks() {
+    fn sprite3d_source_tools_use_shared_sprite_target_contract() {
         assert!(EDITOR_SPRITE3D_JS.contains("function findSprites3dBlocks(source)"));
         assert!(EDITOR_SPRITE3D_JS.contains("while ((match = pattern.exec(source)))"));
         assert!(EDITOR_SPRITE3D_JS.contains("pattern.lastIndex = closeIndex + 1;"));
@@ -6308,7 +6320,10 @@ move
         assert!(EDITOR_JS.contains("window.PuzzleStudioRuntime.sourceEntries(text)"));
         assert!(!EDITOR_JS.contains("findSprite3dDefinitionByName(source, name)"));
         assert!(EDITOR_SPRITE3D_JS.contains("function sprite3dTargetPayload(target)"));
-        assert!(EDITOR_SPRITE3D_JS.contains("target?.sourceSprite3d?.status === \"incomplete\""));
+        assert!(EDITOR_SPRITE3D_JS.contains(
+            "target?.sourceSprite?.dimension === \"3d\" && target.sourceSprite.status === \"incomplete\""
+        ));
+        assert!(!EDITOR_SPRITE3D_JS.contains("sourceSprite3d"));
         assert!(!EDITOR_SPRITE3D_JS.contains("function parseSprite3dDefinitionSource"));
         assert!(!EDITOR_SPRITE3D_JS.contains("function parseSprite3dRows"));
         assert!(!EDITOR_SPRITE3D_JS.contains("typeof spriteSourceCursorPosition"));
@@ -6788,6 +6803,35 @@ move
     }
 
     #[test]
+    fn source_editing_commands_precede_codemirror_defaults_without_owning_policy() {
+        assert!(EDITOR_CODEMIRROR_SOURCE_JS.contains("const sourceEditingKeymap = ["));
+        assert!(
+            EDITOR_CODEMIRROR_SOURCE_JS
+                .contains("dispatchSourceEditingCommand(view, \"open-brace\")")
+        );
+        assert!(
+            EDITOR_CODEMIRROR_SOURCE_JS
+                .contains("dispatchSourceEditingCommand(view, \"open-bracket\")")
+        );
+        assert!(
+            EDITOR_CODEMIRROR_SOURCE_JS
+                .contains("dispatchSourceEditingCommand(view, \"shift-tab\")")
+        );
+        assert!(EDITOR_CODEMIRROR_SOURCE_JS.contains(
+            "...sourceCompletionKeymap,\n        ...sourceEditingKeymap,\n        indentWithTab,"
+        ));
+        assert!(!EDITOR_CODEMIRROR_SOURCE_JS.contains("handleSourceRuleBracketCell"));
+        assert!(
+            EDITOR_SOURCE_JS
+                .contains("sourceEditor.addEventListener(\"sourceeditingcommand\", (event) => {")
+        );
+        assert!(EDITOR_SOURCE_JS.contains("handleSourceBraceAssist(keyEvent)"));
+        assert!(EDITOR_SOURCE_JS.contains("handleSourceRewriteLhsBracketAssist(keyEvent)"));
+        assert!(EDITOR_SOURCE_JS.contains("handleSourceRuleBracketCellSlotTab(keyEvent)"));
+        assert!(EDITOR_SOURCE_JS.contains("handleSourceRewritePatternTab(keyEvent)"));
+    }
+
+    #[test]
     fn source_find_supports_command_g_match_navigation() {
         assert!(EDITOR_SOURCE_JS.contains("function sourceFindMoveShortcutRequested(event)"));
         assert!(EDITOR_SOURCE_JS.contains("!event.metaKey || event.ctrlKey || event.altKey"));
@@ -6795,6 +6839,31 @@ move
         assert!(EDITOR_SOURCE_JS.contains("function handleSourceFindMoveShortcut(event)"));
         assert!(EDITOR_SOURCE_JS.contains("moveSourceFindSelection(event.shiftKey ? -1 : 1);"));
         assert!(EDITOR_SOURCE_JS.contains("if (handleSourceFindMoveShortcut(event))"));
+    }
+
+    #[test]
+    fn source_find_uses_codemirror_decorations_and_reserves_panel_space() {
+        assert!(
+            EDITOR_CODEMIRROR_SOURCE_JS.contains("const sourceFindDecorations = StateField.define")
+        );
+        assert!(
+            EDITOR_CODEMIRROR_SOURCE_JS
+                .contains("applyFindMatches(source, matches, selectedIndex)")
+        );
+        assert!(
+            EDITOR_CODEMIRROR_SOURCE_JS.contains(
+                "cm-source-find-match${index === selectedIndex ? \" is-current\" : \"\"}"
+            )
+        );
+        assert!(EDITOR_SOURCE_JS.contains("function syncSourceFindPanelLayout()"));
+        assert!(EDITOR_SOURCE_JS.contains("--source-find-panel-space"));
+        assert!(EDITOR_SOURCE_JS.contains("sourceEditor.sourceEditorPort.applyFindMatches("));
+        assert!(EDITOR_SOURCE_JS.contains("scrollSourceOffsetIntoView(match.start, \"start\")"));
+        assert!(EDITOR_CODEMIRROR_SOURCE_JS.contains("scrollPastEnd(),"));
+        assert!(
+            EDITOR_CSS.contains(".source-editor-wrap.has-source-find-panel .source-editor-mount")
+        );
+        assert!(EDITOR_CSS.contains(".cm-source-find-match.is-current"));
     }
 
     #[test]
@@ -6912,7 +6981,7 @@ move
     }
 
     #[test]
-    fn source_completion_popover_anchors_below_caret_rect() {
+    fn source_completion_popover_stays_within_editor_and_flips_above_caret() {
         assert!(
             EDITOR_SOURCE_JS.contains("const wrapRect = sourceEditorWrap.getBoundingClientRect();")
         );
@@ -6923,10 +6992,19 @@ move
             )
         );
         assert!(EDITOR_SOURCE_JS.contains("const left = wrapRect.left + anchorRect.left;"));
+        assert!(EDITOR_SOURCE_JS.contains("const viewportBottom = Math.min(window.innerHeight - margin, wrapRect.bottom - margin);"));
+        assert!(
+            EDITOR_SOURCE_JS.contains(
+                "const availableBelow = Math.max(0, viewportBottom - caretBottom - gap);"
+            )
+        );
         assert!(
             EDITOR_SOURCE_JS
-                .contains("const top = wrapRect.top + cursorRect.top + cursorRect.height + 6;")
+                .contains("const availableAbove = Math.max(0, caretTop - viewportTop - gap);")
         );
+        assert!(EDITOR_SOURCE_JS.contains(
+            "sourceCompletionPopover.dataset.placement = placeBelow ? \"below\" : \"above\";"
+        ));
         let completion_position = EDITOR_SOURCE_JS
             .find("function positionSourceCompletionPopover()")
             .expect("source completion popover positioning function");

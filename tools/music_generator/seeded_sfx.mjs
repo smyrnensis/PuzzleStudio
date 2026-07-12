@@ -129,21 +129,31 @@ function psParams() {
 }
 
 function psFrnd(range) {
-  return (psSfxRng ? psSfxRng.uniform() : Math.random()) * range;
+  return requirePuzzleScriptRng().uniform() * range;
 }
 
 function psRnd(max) {
-  return Math.floor((psSfxRng ? psSfxRng.uniform() : Math.random()) * (max + 1));
+  return Math.floor(requirePuzzleScriptRng().uniform() * (max + 1));
+}
+
+function requirePuzzleScriptRng() {
+  if (!psSfxRng) {
+    throw new Error("PuzzleScript SFX generation requires an active seeded RNG");
+  }
+  return psSfxRng;
 }
 
 function psGenerateFromSeed(seed) {
   psSfxRng = new PsRng((seed / 100) | 0);
-  const generatorIndex = seed % 100;
-  const generator = PS_GENERATORS[generatorIndex % PS_GENERATORS.length];
-  const params = generator();
-  params.seed = seed;
-  psSfxRng = null;
-  return params;
+  try {
+    const generatorIndex = seed % 100;
+    const generator = PS_GENERATORS[generatorIndex % PS_GENERATORS.length];
+    const params = generator();
+    params.seed = seed;
+    return params;
+  } finally {
+    psSfxRng = null;
+  }
 }
 
 function psPickupCoin() {

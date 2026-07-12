@@ -95,7 +95,6 @@ struct RuleBodyAlternative {
 }
 
 fn append_move_sound_effects(
-    components: &[PatternComponentTemplate],
     writes: &[WriteOpTemplate],
     triggers: &[ModelSoundTrigger],
     ordered_effects: &mut Vec<RuleEffect>,
@@ -104,16 +103,6 @@ fn append_move_sound_effects(
         return;
     }
     for trigger in triggers {
-        let moves_trigger_object = writes.iter().any(|write| {
-            matches!(
-                write,
-                WriteOpTemplate::Move { object, .. } if trigger.objects.contains(object)
-            ) || matches!(
-                write,
-                WriteOpTemplate::MoveObjectSet { objects, .. }
-                    if objects.iter().any(|object| trigger.objects.contains(object))
-            )
-        });
         let matches_trigger = writes.iter().any(|write| match (trigger.kind, write) {
             (ModelSoundTriggerKind::Move, WriteOpTemplate::Move { object, .. }) => {
                 trigger.objects.contains(object)
@@ -125,10 +114,6 @@ fn append_move_sound_effects(
             }
             _ => false,
         });
-        let matches_cantmove_intent = trigger.kind == ModelSoundTriggerKind::CantMove
-            && !moves_trigger_object
-            && cantmove_intent_is_consumed(components, writes, trigger);
-        let matches_trigger = matches_trigger || matches_cantmove_intent;
         if !matches_trigger {
             continue;
         }
@@ -139,89 +124,6 @@ fn append_move_sound_effects(
             ordered_effects.push(RuleEffect::PlaySfx { name: name.clone() });
         }
     }
-}
-
-fn cantmove_intent_is_consumed(
-    components: &[PatternComponentTemplate],
-    writes: &[WriteOpTemplate],
-    trigger: &ModelSoundTrigger,
-) -> bool {
-    writes.iter().any(|write| match write {
-        WriteOpTemplate::RemoveMark {
-            component,
-            offset,
-            object,
-            mark,
-            ..
-        } => {
-            *mark == ANONYMOUS_MOVEMENT_MARK
-                && trigger.objects.contains(object)
-                && component_cell_has_object_movement_intent(
-                    components, *component, offset, *object,
-                )
-        }
-        WriteOpTemplate::RemoveObjectSetMark {
-            component,
-            offset,
-            binding,
-            mark,
-            ..
-        } => {
-            *mark == ANONYMOUS_MOVEMENT_MARK
-                && component_cell_has_object_set_movement_intent(
-                    components, *component, offset, *binding, trigger,
-                )
-        }
-        _ => false,
-    })
-}
-
-fn component_cell_has_object_movement_intent(
-    components: &[PatternComponentTemplate],
-    component: u16,
-    offset: &OffsetTemplate,
-    object: ObjectId,
-) -> bool {
-    component_cell(components, component, offset).is_some_and(|cell| {
-        cell.require_mark
-            .iter()
-            .any(|mark| mark.mark == ANONYMOUS_MOVEMENT_MARK && mark.object == object)
-    })
-}
-
-fn component_cell_has_object_set_movement_intent(
-    components: &[PatternComponentTemplate],
-    component: u16,
-    offset: &OffsetTemplate,
-    binding: u16,
-    trigger: &ModelSoundTrigger,
-) -> bool {
-    component_cell(components, component, offset).is_some_and(|cell| {
-        let binding_matches_trigger = cell.require_object_sets.iter().any(|object_set| {
-            object_set.binding == binding
-                && object_set
-                    .objects
-                    .iter()
-                    .any(|object| trigger.objects.contains(object))
-        });
-        binding_matches_trigger
-            && cell
-                .require_object_set_mark
-                .iter()
-                .any(|mark| mark.mark == ANONYMOUS_MOVEMENT_MARK && mark.binding == binding)
-    })
-}
-
-fn component_cell<'a>(
-    components: &'a [PatternComponentTemplate],
-    component: u16,
-    offset: &OffsetTemplate,
-) -> Option<&'a MatchCellTemplate> {
-    components
-        .get(component as usize)?
-        .cells
-        .iter()
-        .find(|cell| cell.offset == *offset)
 }
 
 fn append_tween_rule_animations(

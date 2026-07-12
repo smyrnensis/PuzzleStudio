@@ -1503,6 +1503,7 @@ up [ BoxShadow | FallFlag ] -> [ | FallFlag ]
 }
 
 on_level_start {
+[ no floor ] -> [ WhiteFloor ]
 main
 }
 
@@ -1569,11 +1570,10 @@ I = Ice Water
 . = OrangeRing GreenBox
 ~ = PurpleRing GreenBox
 : = GreenRing OrangeBox
-; = GreenRing PurpleBox
+9 = GreenRing PurpleBox
 § = GreenRing WhiteBox
 ¶ = PurpleRing WhiteBox
 ← = Quit
-_ = empty
 }
 
 level "Tutorial-1"
@@ -1629,12 +1629,9 @@ ww__w__w
 wb__2b_w
 wwwwwwww
 wwwwwwww
-
 message "This is the end of the tutorial. There are still many things that haven't been explained, but discover them on your own."
 message "Remember you can skip any level."
 
-level "-------------------------"
-←
 
 level "Basics-1"
 message "Basics"
@@ -1673,10 +1670,7 @@ w_wwwwwzw
 w__wwwwww
 w__2wwwww
 wwwwwwwww
-
-level "-------------------------"
 message "Levels labeled with letters are optional puzzles. \\n You can choose whether or not to skip them."
-←
 
 level "Basics-A"
 wwwwwwww
@@ -1698,10 +1692,6 @@ wwwwaww_w
 wwwwa___w
 wwwwwwwww
 
-goto Parity-1
-
-level "------------------------"
-←
 
 level "Parity-1"
 message "Parity"
@@ -1750,11 +1740,6 @@ w_aww_1_w
 wwwww__1w
 wwwwz_aww
 wwwwwwwww
-
-goto Simultaneous-1
-
-level "------------------------"
-←
 
 level "Simultaneous-1"
 message "Simultaneous"
@@ -1805,9 +1790,6 @@ ww____w1ww
 wwwwwwwwww
 wwwwwwwwww
 
-level "------------------------"
-←
-
 level "Simultaneous-A"
 wwwwwwww
 wwzww2ww
@@ -1836,11 +1818,6 @@ w____!*._w
 wwwww_ww_w
 wwwwz____w
 wwwwwwwwww
-
-goto Water-1
-
-level "------------------------"
-←
 
 level "Water-1"
 message "Water"
@@ -1873,7 +1850,7 @@ w\__za_\w
 w\_11a_\w
 w\\__!\\w
 w\\\\\\\w
-wwwwwwww
+wwwwwwwww
 
 level "Self-1"
 message "Self"
@@ -1925,9 +1902,6 @@ w\\___\\w
 w\\\\\\\w
 wwwwwwwww
 
-level "------------------------"
-←
-
 level "Self-A"
 wwwwwwwww
 wwwwwwwww
@@ -1957,11 +1931,6 @@ w__\zz_ww
 ww_____ww
 ww\_*__\w
 wwwwwwwww
-
-goto Filled-1
-
-level "------------------------"
-←
 
 level "Filled-1"
 message "Filled"
@@ -1995,14 +1964,11 @@ wwdddddw
 wwcdcdzw
 wwwwwwww
 
-level "------------------------"
-←
-
 level "Filled-A"
 wwwwwww
 wwddwww
 wwddwww
-wd~$;dw
+wd~$9dw
 wdddddw
 wwddzww
 wwwwwww
@@ -2010,9 +1976,9 @@ wwwwwww
 level "Filled-B"
 wwwwwwww
 wddddddw
-wd~dd;dw
+wd~dd9dw
 wdwd$zdw
-wdw~d;dw
+wdw~d9dw
 wddddddw
 wwwwwwww
 
@@ -2021,15 +1987,10 @@ wwwwwwww
 wwwwwwww
 wwwwdddw
 w$§db~dw
-wd;zd¶dw
+wd9zd¶dw
 wdddcddw
 wwwwwwww
 wwwwwwww
-
-goto Ice-1
-
-level "------------------------"
-←
 
 level "Ice-1"
 message "Ice"
@@ -2098,9 +2059,6 @@ w_w_w___bww
 w___w___bww
 wwwwwwwwwww
 
-level "------------------------"
-←
-
 level "Ice-A"
 wwwwwwwwwwwwww
 w\\\\\\\\\\\\w
@@ -2156,11 +2114,6 @@ w1w_www
 wwwzwww
 wwwwwww
 
-goto Button-1
-
-level "------------------------"
-←
-
 level "Button-1"
 message "Button"
 wwwwwwwwww
@@ -2207,9 +2160,6 @@ w__i____wwww
 w_______wwww
 wwwwwwwwwwww
 
-level "------------------------"
-←
-
 level "Button-A"
 wwwwwwww
 w1aωwwww
@@ -2238,11 +2188,6 @@ wca?_Gw
 ww1wwww
 wwwwwww
 
-goto Wall-1
-
-level "------------------------"
-←
-
 level "Wall-1"
 message "Wall"
 wwwwwwwww
@@ -2268,7 +2213,7 @@ wwwwwwwww
 level "Wall-3"
 wwwwwwww
 wwwwwwww
-w___;__w
+w___9__w
 w@w#_w_w
 w___bw_w
 w1_z×_-w
@@ -2298,9 +2243,6 @@ wαw-_ww+__ββ__×w
 w\w__wwwwwwwwwww
 wwwwwwwwwwwwwwww
 wwwwwwwwwwwwwwww
-
-level "------------------------"
-←
 
 level "Wall-A"
 wwwwwwwwwwwww
@@ -2372,9 +2314,6 @@ w__αβαβαzβα\w
 www\\\\\\\\\w
 wwwwwwwwwwwww
 
-level "------------------------"
-←
-
 level "Revival-A"
 message "Revival"
 wwwwwwwww
@@ -2405,11 +2344,6 @@ wz\\\\__0z_+w
 wβ\\\\______w
 w\\\\\______w
 wwwwwwwwwwwww
-
-goto Rigid-1
-
-level "------------------------"
-←
 
 level "Rigid-1"
 message "Rigid"
@@ -2463,11 +2397,6 @@ wwwwRR_ww
 wwww2wwww
 wwwwwwwww
 
-goto Transport-1
-
-level "------------------------"
-←
-
 level "Transport-1"
 message "Transport"
 wwwwwwwwwwwwwww
@@ -2515,9 +2444,6 @@ w____\\\\w___a_w
 wwwwwwwwwwwwwwww
 wwwwwwwwwwwwwwww
 
-level "------------------------"
-←
-
 level "Transport-A"
 wwwwwwwwww
 www\\\\\\w
@@ -2548,11 +2474,6 @@ ww_____w2w
 wwa!\\rrrw
 wwwwwww__w
 wwwwwwwwww
-
-goto Reshape-1
-
-level "-------------------------"
-←
 
 level "Reshape-1"
 message "Reshape"
@@ -2604,9 +2525,6 @@ w_______\\\\\\zw
 wss_____1\\\\www
 wwwwwwwwwwwwwwww
 
-level "-------------------------"
-←
-
 level "Reshape-A"
 wwwwwwwwww
 w\\\\\\\\w
@@ -2644,11 +2562,6 @@ w__zw__w
 ww00!00w
 wwwwwwww
 wwwwwwww
-
-goto THE END
-
-level "-------------------------"
-←
 message "THE END"
 message "Thanks to competor and Karoo for helpful feedbacks.\\n\\n And thank you so much for playing through to the very end!"
 message "Rings and Boxes \\n\\n by smyrnensis"

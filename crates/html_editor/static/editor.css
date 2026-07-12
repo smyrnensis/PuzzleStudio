@@ -984,6 +984,46 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   opacity: 0.45;
 }
 
+.tree-drag-preview {
+  position: fixed;
+  z-index: 10000;
+  left: 0;
+  top: 0;
+  max-width: 260px;
+  min-height: 28px;
+  padding: 5px 10px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+  background: var(--side-bg);
+  color: var(--ink);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+  opacity: 0.96;
+  overflow: hidden;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.tree-drag-preview .tree-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.tree-drag-preview span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tree-drag-preview.is-invalid {
+  border-color: var(--muted);
+  opacity: 0.58;
+}
+
 .tree-row.is-active {
   border-left-color: var(--accent);
   background: var(--tree-active-bg);
@@ -1573,6 +1613,11 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   min-height: 0;
 }
 
+.source-editor-wrap.has-source-find-panel .source-editor-mount {
+  height: calc(100% - var(--source-find-panel-space));
+  margin-top: var(--source-find-panel-space);
+}
+
 .source-editor-mount > .cm-editor {
   background: var(--code-bg);
   color: var(--code-ink);
@@ -1761,6 +1806,19 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   box-shadow:
     inset 0 0 0 1px color-mix(in srgb, var(--accent) 82%, transparent),
     0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.cm-source-find-match {
+  border-radius: 2px;
+  background: color-mix(in srgb, #f2c94c 34%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #f2c94c 72%, transparent);
+}
+
+.cm-source-find-match.is-current {
+  background: color-mix(in srgb, var(--accent) 36%, transparent);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--accent) 92%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 .source-block-selection-range {
@@ -6176,19 +6234,6 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 
 .sprite3d-source-actions {
   justify-self: start;
-}
-
-.sprite-text-preview.sprite3d-text-preview {
-  width: var(--sprite3d-slice-size);
-  min-height: 140px;
-  max-height: min(220px, 30vh);
-  justify-self: start;
-}
-
-@container (min-width: 704px) {
-  .sprite-text-preview.sprite3d-text-preview {
-    width: calc(var(--sprite3d-slice-size) + var(--sprite3d-preview-width) + 12px);
-  }
 }
 
 .sprite3d-slice-board {

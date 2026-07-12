@@ -429,9 +429,26 @@ pub struct VisualSpriteLoopDef {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum VisualSpriteTransform {
-    Rotate { degrees: f64 },
-    Translate { x: f64, y: f64 },
-    Flip { enabled: bool },
+    Rotate {
+        degrees: f64,
+        space: VisualSpriteSpace,
+    },
+    Translate {
+        x: f64,
+        y: f64,
+        space: VisualSpriteSpace,
+    },
+    Flip {
+        enabled: bool,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VisualSpriteSpace {
+    #[default]
+    World,
+    Local,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

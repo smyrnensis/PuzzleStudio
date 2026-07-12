@@ -749,7 +749,7 @@ fn surface_visual_opening_scope(
     let first = line.tokens.first().map(String::as_str);
     let has_assignment = line.tokens.iter().any(|token| token == "=");
     match (current, first) {
-        (None, Some("sprites" | "sprites3")) => Some(SurfaceVisualScope::Sprites),
+        (None, Some("sprites")) => Some(SurfaceVisualScope::Sprites),
         (Some(SurfaceVisualScope::Sprites), Some(first)) => match first {
             "palette" => Some(SurfaceVisualScope::Colors),
             "shapes" => Some(SurfaceVisualScope::Other),
@@ -961,7 +961,8 @@ fn add_sprite_syntax_pixel_ranges(
     let row_indexes = match resolved_shape {
         crate::sprite_authoring::ResolvedSpriteShape::Inline(frames) => frames
             .into_iter()
-            .flatten()
+            .flat_map(|frame| frame.layers)
+            .flat_map(|layer| layer.rows)
             .map(|row| row.body_line)
             .collect::<HashSet<_>>(),
         _ => HashSet::new(),
@@ -1055,7 +1056,7 @@ fn visual_sprite_entry_start_color_token(token: &str, aliases: &HashMap<String, 
 fn visual_sprite_selector_token(value: &str) -> bool {
     if matches!(
         value,
-        "shape" | "shapes" | "palette" | "colors" | "ascii" | "sprites" | "sprites3"
+        "shape" | "shapes" | "palette" | "colors" | "ascii" | "sprites"
     ) {
         return false;
     }
@@ -1367,7 +1368,7 @@ fn surface_visual_shape_ref_token(value: &str) -> bool {
 fn surface_visual_shape_name_token(value: &str) -> bool {
     if matches!(
         value,
-        "shape" | "shapes" | "palette" | "colors" | "ascii" | "sprites" | "sprites3"
+        "shape" | "shapes" | "palette" | "colors" | "ascii" | "sprites"
     ) {
         return false;
     }

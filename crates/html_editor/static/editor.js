@@ -3832,9 +3832,7 @@ async function loadSurfaceEntriesForSource(source, options = {}) {
   request.source = text;
   request.promise = window.PuzzleStudioRuntime.sourceEntries(text)
     .then((rawEntries) => {
-      const entries = Array.isArray(rawEntries)
-        ? rawEntries.map((entry) => normalizeResolvedSourceTarget(text, entry)).filter(Boolean)
-        : [];
+      const entries = normalizeResolvedSourceTargets(text, rawEntries);
       if (surfaceEntriesRequest === request) {
         surfaceEntriesCache = { source: text, entries };
         surfaceEntriesRequest = null;
@@ -3894,11 +3892,7 @@ function surfaceEntriesForSource(source, options = {}) {
     }
     throw new Error(message);
   }
-  const entries = Array.isArray(rawEntries)
-    ? rawEntries
-      .map((entry) => normalizeResolvedSourceTarget(text, entry))
-      .filter(Boolean)
-    : [];
+  const entries = normalizeResolvedSourceTargets(text, rawEntries);
   surfaceEntriesCache = { source: text, entries };
   return entries;
 }
@@ -5232,6 +5226,48 @@ function normalizeResolvedSourceTarget(source, target, position = null, utf16Off
     }
   }
   return normalized;
+}
+
+function normalizeResolvedSourceTargets(source, targets) {
+  if (!Array.isArray(targets)) {
+    return [];
+  }
+  const keys = ["start", "end", "bodyStart", "bodyEnd"];
+  const byteOffsets = new Set();
+  for (const target of targets) {
+    for (const key of keys) {
+      if (Number.isInteger(target?.[key])) {
+        byteOffsets.add(target[key]);
+      }
+    }
+  }
+  const pending = Array.from(byteOffsets).sort((left, right) => left - right);
+  const utf16ByByte = new Map();
+  let pendingIndex = 0;
+  let byteOffset = 0;
+  let utf16Offset = 0;
+  while (pendingIndex < pending.length) {
+    const targetByte = pending[pendingIndex];
+    while (byteOffset < targetByte && utf16Offset < source.length) {
+      const codePoint = source.codePointAt(utf16Offset);
+      byteOffset += codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
+      utf16Offset += codePoint > 0xffff ? 2 : 1;
+    }
+    utf16ByByte.set(targetByte, utf16Offset);
+    pendingIndex += 1;
+  }
+  return targets.map((target) => {
+    if (!target || typeof target !== "object") {
+      return null;
+    }
+    const normalized = { ...target };
+    for (const key of keys) {
+      if (Number.isInteger(normalized[key])) {
+        normalized[key] = utf16ByByte.get(normalized[key]);
+      }
+    }
+    return normalized;
+  }).filter(Boolean);
 }
 
 function loadLevelSourceTarget(target, options = {}) {
@@ -10752,6 +10788,41 @@ if (window.ResizeObserver && documentTabs) {
 let treePointerDrag = null;
 let suppressNextTreeClick = false;
 
+function createTreeDragPreview(drag) {
+  const preview = document.createElement("div");
+  preview.className = "tree-drag-preview";
+  preview.setAttribute("aria-hidden", "true");
+  const icon = drag.row.querySelector(".tree-icon")?.cloneNode(true);
+  if (icon) {
+    preview.append(icon);
+  }
+  const label = document.createElement("span");
+  label.textContent = drag.row.querySelector(".tree-label")?.textContent?.trim()
+    || findNode(fileTree, drag.nodeId)?.name
+    || "Item";
+  preview.append(label);
+  document.body.append(preview);
+  drag.preview = preview;
+}
+
+function updateTreeDragFeedback(drag, clientX, clientY) {
+  drag.preview.style.transform = `translate3d(${clientX + 12}px, ${clientY + 12}px, 0)`;
+  const targetFolderId = dropFolderIdForPoint(clientX, clientY);
+  const allowed = canDropNodeOnFolder(drag.nodeId, targetFolderId);
+  drag.preview.classList.toggle("is-invalid", !allowed);
+  if (allowed) {
+    markDropTarget(resolvedDropFolderIdForNode(drag.nodeId, targetFolderId));
+  } else {
+    clearDropTargets();
+  }
+}
+
+function clearTreeDragFeedback(drag) {
+  drag?.row?.classList.remove("is-dragging");
+  drag?.preview?.remove();
+  clearDropTargets();
+}
+
 function finishTreeMove(nodeId, targetFolderId) {
   moveNodeToFolder(nodeId, targetFolderId).then((moved) => {
     if (moved) {
@@ -10803,9 +10874,7 @@ documentList.addEventListener("click", (event) => {
   if (row.dataset.nodeId) {
     const folder = findNode(fileTree, row.dataset.nodeId);
     if (folder?.kind === "folder") {
-      if (event.target.closest(".tree-chevron, .tree-icon")) {
-        folder.expanded = folder.expanded === false;
-      }
+      folder.expanded = folder.expanded === false;
       loadFolderPreview(folder);
     }
     return;
@@ -10875,13 +10944,9 @@ document.addEventListener("pointermove", (event) => {
     treePointerDrag.active = true;
     draggedNodeId = treePointerDrag.nodeId;
     treePointerDrag.row.classList.add("is-dragging");
+    createTreeDragPreview(treePointerDrag);
   }
-  const targetFolderId = dropFolderIdForPoint(event.clientX, event.clientY);
-  if (canDropNodeOnFolder(treePointerDrag.nodeId, targetFolderId)) {
-    markDropTarget(resolvedDropFolderIdForNode(treePointerDrag.nodeId, targetFolderId));
-  } else {
-    clearDropTargets();
-  }
+  updateTreeDragFeedback(treePointerDrag, event.clientX, event.clientY);
 });
 document.addEventListener("pointerup", (event) => {
   if (!treePointerDrag || event.pointerId !== treePointerDrag.pointerId) {
@@ -10889,8 +10954,7 @@ document.addEventListener("pointerup", (event) => {
   }
   const drag = treePointerDrag;
   treePointerDrag = null;
-  drag.row.classList.remove("is-dragging");
-  clearDropTargets();
+  clearTreeDragFeedback(drag);
   resetTreeDragDecisionCache();
   draggedNodeId = "";
   if (!drag.active) {
@@ -10908,10 +10972,9 @@ document.addEventListener("pointercancel", (event) => {
   if (!treePointerDrag || event.pointerId !== treePointerDrag.pointerId) {
     return;
   }
-  treePointerDrag.row.classList.remove("is-dragging");
+  clearTreeDragFeedback(treePointerDrag);
   treePointerDrag = null;
   draggedNodeId = "";
-  clearDropTargets();
   resetTreeDragDecisionCache();
 });
 function dataTransferHasFiles(dataTransfer) {

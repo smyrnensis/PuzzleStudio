@@ -5,7 +5,6 @@ default_wait_time = 100ms
 
 sounds {
 sfx move { seed = move; type = jump }
-sfx bump { seed = bump; type = hit }
 }
 
 puzzle move_collision {
@@ -61,7 +60,6 @@ Wall
 
 sounds {
 move movers -> sfx move
-cantmove movers -> sfx bump
 }
 
 rules {

@@ -559,9 +559,9 @@ Scene layout は `puzzle3` を固定 4:3 display として扱う。`puzzle3` com
 
 `pixelate` / `pixelate scale=4` は 3D canvas の描画後 pixel 化 postprocess を有効にする。`scale` は一度縮小する倍率で、省略時は `4`。省略時は pixel 化しない。
 
-3D object は `sprites3` に同名 sprite が定義されている場合だけ voxel sprite を描く。sprite 未指定の object に暗黙の cube や色は割り当てない。位置や占有を読みたい場合は `grid occupied_cells` などの debug 表示を使う。
+3D object は、その `puzzle3` model に属する `sprites` に同名 sprite が定義されている場合だけ voxel sprite を描く。sprite 未指定の object に暗黙の cube や色は割り当てない。位置や占有を読みたい場合は `grid occupied_cells` などの debug 表示を使う。
 
-`sprites3` の sprite entry は、object 名、色行、voxel rows の順に書く。色行だけなら 1x1x1 の filled cube sprite になる。再利用する voxel pattern は `shape <name> { ... }` で定義し、sprite entry 側では色行の次に bare shape ref だけを書く。`shape <name>` のような呼び出し prefix は使わない。
+sprite は2D/3D共通の時間 × Z × Y × X model を持つ。2D sprite は depth 1 の特殊例である。`>` だけの行が次の animation frame、`-` だけの行が同じ frame 内の次の -Z layer を表し、shape 内に空行は許さない。3D sprite も2Dと同じ `sprites` entry、palette、`shapes` table、`shape =` propertyを使う。resource の dimension は `sprites` keyword ではなく、`of <model>` または所有する `puzzle` / `puzzle3` model から決定する。2D owner では `-` を明示的に拒否する。色だけなら2Dでは単色 cell、3Dでは1x1x1 filled cubeになる。
 
 `interactive_look` は semantic input ではない。親 scene は click/drag を 3D camera 用として特別扱いせず、raw input を通常どおり focused scene と layout/hit-test に従って component へ配信する。`puzzle3` component は、自分の表示 box 内で始まった pointer drag を取得してよい。`interactive_look` を書いたときだけ、その gesture を camera yaw/pitch の view-state 更新として解釈する。これは model `rules` の `input` には渡らず、`if input == ...`、undo、restart、transition state、win condition には影響しない。
 
@@ -636,7 +636,7 @@ button "Title" -> goto title
 
 level の開始、読み込み、restart は level scene / puzzle slot に対する effect として書ける。ただし通常の clear / advance / restart は level scene 内の model window component と puzzle lifecycle が所有する。scene からの target effect は、title/menu から入る、button で明示 restart する、hub から特定 level に飛ぶ、通常 clear とは別の例外 flow に入る、などの介入だけに使う。canonical な開始は `goto sokoban` または `goto sokoban(level_name)`。独自 scene なら `scene playing(level) { state { sokoban(level) } layout { sokoban } rules { step sokoban } }` として `goto playing(level)` で入る。旧 `start levels ... in <scene>` / `continue levels ... in <scene>` は読まない。`playing.restart` は playing scene の現在 level を初期状態に戻し、`playing.next_level` は playing scene を次 level で開始し、`playing.previous_level` は前 level で開始する。`playing.goto <level>` は指定 level で playing scene に移る。`board.restart` のように puzzle slot を target にした場合は、その puzzle state を初期状態に戻す。`board.next_level` はその puzzle を所有する level scene を進める。
 
-puzzle rule でも `win`、`restart`、`next_level`、`again`、`message`、`sfx`、`goto` / `start` を effect として出せる。`win` はその turn の `win_conditions` を true として扱う clear outcome effect で、`set win_conditions = true` の sugar に近い。model rules では `restart -> restart` が semantic input `restart` を model restart effect に接続する rule になる。model rules 内に `restart` input handler がない場合は、この default handler が暗黙に追加される。scene key dispatch は `keys { q -> level_select }` と `routine level_select { goto level_select }` で書く。scene 側で restart / level navigation に介入したい場合は、`board.restart` や `playing.next_level` のような target effect を明示する。これは通常進行の書き方ではなく、ユーザー操作や特殊 flow のための escape hatch である。`[ Goal Box ] -> next_level` と `if win_conditions -> next_level` は board transition の結果として、所有 component/runtime に level advance effect を渡す。`again` は現在の turn を commit した後、runtime に no-input follow-up turn を要求する。`again` が再実行するのは直前の key / semantic input ではなく、同じ puzzle target の rule entrypoint である。したがって follow-up turn では input guard は成立しない。自動 turn は最大 256 回で止まり、`cancel` が出た場合はその自動 turn だけを取り消して停止する。standalone HTML では follow-up turn を `defaultAgainMs` 間隔で実行し、未指定時は 120ms を使う。`again_interval = 100ms` や `again_interval = 0.1s` で変更できる。各 turn の `sfx` / `message` emissions は別 snapshot として公開する。`[ Player Goal ] -> message "Found"` と `[ Player Box ] -> message hint` は popup message effect を渡し、既定で `default_wait_time` だけ後続 effect / 後続 rule segment を待たせる。`[ Player | Box | ] -> [ | Player | Box ] sfx push` は rule が match したときに named SFX を再生する effect を渡す。同じ turn 内で同じ named SFX が複数回出ても再生 event は 1 回にまとめる。`again` の follow-up は別 turn なので、各 automatic turn で同じ SFX を最大 1 回ずつ出せる。model 内の `sounds { move <selector> -> sfx <name> }` / `sounds { cantmove <selector> -> sfx <name> }` は、同じ puzzle scope の最終 catalog に対して selector を解決し、lowering 後の rewrite alternative が対象 object の `Move` write または blocked move に対応するときだけ、その rule に `sfx` emission を付ける。remove+add は move sound の対象外。
+puzzle rule でも `win`、`restart`、`next_level`、`again`、`message`、`sfx`、`goto` / `start` を effect として出せる。`win` はその turn の `win_conditions` を true として扱う clear outcome effect で、`set win_conditions = true` の sugar に近い。model rules では `restart -> restart` が semantic input `restart` を model restart effect に接続する rule になる。model rules 内に `restart` input handler がない場合は、この default handler が暗黙に追加される。scene key dispatch は `keys { q -> level_select }` と `routine level_select { goto level_select }` で書く。scene 側で restart / level navigation に介入したい場合は、`board.restart` や `playing.next_level` のような target effect を明示する。これは通常進行の書き方ではなく、ユーザー操作や特殊 flow のための escape hatch である。`[ Goal Box ] -> next_level` と `if win_conditions -> next_level` は board transition の結果として、所有 component/runtime に level advance effect を渡す。`again` は現在の turn を commit した後、runtime に no-input follow-up turn を要求する。`again` が再実行するのは直前の key / semantic input ではなく、同じ puzzle target の rule entrypoint である。したがって follow-up turn では input guard は成立しない。自動 turn は最大 256 回で止まり、`cancel` が出た場合はその自動 turn だけを取り消して停止する。standalone HTML では follow-up turn を `defaultAgainMs` 間隔で実行し、未指定時は 120ms を使う。`again_interval = 100ms` や `again_interval = 0.1s` で変更できる。各 turn の `sfx` / `message` emissions は別 snapshot として公開する。`[ Player Goal ] -> message "Found"` と `[ Player Box ] -> message hint` は popup message effect を渡し、既定で `default_wait_time` だけ後続 effect / 後続 rule segment を待たせる。`[ Player | Box | ] -> [ | Player | Box ] sfx push` は rule が match したときに named SFX を再生する effect を渡す。同じ turn 内で同じ named SFX が複数回出ても再生 event は 1 回にまとめる。`again` の follow-up は別 turn なので、各 automatic turn で同じ SFX を最大 1 回ずつ出せる。model 内の `sounds { move <selector> -> sfx <name> }` は、同じ puzzle scope の最終 catalog に対して selector を解決し、lowering 後の rewrite alternative が対象 object の `Move` writeを持つときだけ、その rule に `sfx` emission を付ける。remove+add は move sound の対象外。canonical syntax は `cantmove` sound trigger を持たない。PuzzleScript importer だけが PS `cantmove` を生成 `move` routine 内の明示的な `sfx` rule として変換する。PS `endlevel` も canonical sound trigger にはせず、生成 `on_level_clear` の先頭に `sfx endlevel` として明示的に埋め込む。
 
 level list は `level_menu` または明示的な `for level in levels` projection で表す。`for` は単なる layout projection であり、cursor 移動や confirm 動作は所有しない。
 
@@ -789,7 +789,7 @@ solid = actor
 
 単純な sprite は `sprites` 内で block braces なしでも書ける。`Box` の次に `#aaa` だけを書くと cell 全体の単色塗りつぶしになる。これは `Background` の次に `#9CBD0F` だけを書くような PuzzleScript 由来の色だけ sprite でも同じで、ASCII pattern 行は省略できる。続けて `00000` などの ASCII pattern 行を書くと、その行数・列数が sprite pixel grid になる。`pixels_per_cell <w> <h>` を省略した場合は pattern の幅・高さが 1 cell の pixel grid になり、明示した場合は pattern が cell grid より大きくても描画は overflow できる。外部画像は `Box sprites/box.png` のように selector と画像パスを 1 行に書き、パスは game folder からの相対参照として HTML renderer に渡される。
 
-再利用する見た目部品は `palette` と `shapes` sub-block に分ける。`palette` は色名、`shapes` は ASCII shape を所有する。sprite entry の canonical order は `pixels_per_cell` / `offset`、必要なら `rotate from <value>`、色行、ASCII pattern または `shape <ref>`。色行の `colors` keyword は省略できる。色は CSS color として渡されるため、`transparent`、基本 CSS color keywords、`orange`、`grey` / `gray` variants、`brown`、`pink`、alpha 付き hex も使える。`<name>:<tag_set>` は selector binding と同じ tag set を使って variant を解決する。
+再利用する見た目部品は `palette` と `shapes` sub-block に分ける。`palette` は色名、`shapes` はvisual dataだけを所有する。`transparent` は通常のpalette色で、empty cellとは異なる。translate/rotateはshapeではなくsprite参照側の順序付き空間操作である。worldが既定で、localだけを明示する。
 
 ```txt
 sprites fixban of sokoban {
@@ -800,8 +800,7 @@ B = #a4a
 }
 }
 shapes {
-edge:directions {
-rotate from up
+edge {
 111
 000
 000
@@ -825,7 +824,7 @@ shape mark:kind
 }
 ```
 
-`rotate from <value>` は shape table または selector-bound sprite entry 内の派生指定。続く pattern を source value として登録し、`map rotate <tag_set>` を使って他の value の pattern を生成する。別名 map の `rotate using <map_name> from <value>` や block 付きの旧形も読むが、canonical では `rotate from <value>` とし、source pattern 用の追加 braces は置かない。`offset <x> <y>` は sprite pixel grid 左上基準の描画 offset で、正の x は右、正の y は下。
+2Dは`translate [world|local] <vec2>`と`rotate [world|local] <angle>`、3Dは`translate [world|local] <vec3>`と`rotate [world|local] <angle> around <direction-or-vec3>`を使う。world操作はaffine変換へ左合成、local操作は右合成する。旧`offset`、`rotate from`、`rotate using`、`transform` nodeは受理しない。
 
 cell は visible objects の有限集合。実装は layer-slot 方式。
 

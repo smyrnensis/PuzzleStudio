@@ -139,8 +139,8 @@ impl Parser3 {
             } else if is_levels3_header(&line) {
                 let pack = parse_levels3_header(&line)?;
                 index = self.parse_levels_block(index + 1, pack.as_deref())?;
-            } else if is_sprites3_header(&line) {
-                index = self.parse_sprites3_block(index + 1, &line)?;
+            } else if is_sprites_header(&line) {
+                index = self.parse_sprites_block(index + 1, &line)?;
             } else if let Some(name) = parse_scene_header(&line) {
                 let _ = name;
                 index = skip_braced_block(&self.lines, index + 1)?;
@@ -313,8 +313,8 @@ impl Parser3 {
                 index = self.parse_solver_block(index)?;
             } else if line == "render {" {
                 index = self.parse_render_block(index + 1)?;
-            } else if is_sprites3_header(&line) {
-                index = self.parse_sprites3_block(index + 1, &line)?;
+            } else if is_sprites_header(&line) {
+                index = self.parse_sprites_block(index + 1, &line)?;
             } else if let Some(name) = parse_scene_header(&line) {
                 let _ = name;
                 index = skip_braced_block(&self.lines, index + 1)?;
@@ -442,17 +442,17 @@ impl Parser3 {
         Err(message("pixelate block missing }"))
     }
 
-    fn parse_sprites3_block(
+    fn parse_sprites_block(
         &mut self,
         mut index: usize,
         header: &str,
     ) -> Result<usize, ParseError3> {
         if self.sprite_set.is_some() {
-            return Err(message("duplicate sprites3 block"));
+            return Err(message("duplicate sprites block"));
         }
-        let (name, model) = parse_sprites3_header(header)?;
+        let (name, model) = parse_sprites_header(header)?;
         let mut sprites = Vec::new();
-        let mut shapes = HashMap::<String, Vec<String>>::new();
+        let mut shapes = HashMap::<String, Vec<crate::sprite_authoring::SpriteFrameSyntax>>::new();
         while index < self.lines.len() {
             let line = self.lines[index].clone();
             if line == "}" {
@@ -463,110 +463,31 @@ impl Parser3 {
                 index += 1;
                 continue;
             }
-            if line.starts_with("sprite ") {
-                return Err(message(
-                    "sprites3 entries must use canonical form: <name>, color row, voxel rows or shape ref",
-                ));
-            }
-            if let Some(shape_name) = parse_sprite3_shape_header(&line) {
-                if shapes.contains_key(shape_name) {
-                    return Err(message(format!("duplicate sprite3 shape: {shape_name}")));
+            if line == "shapes {" {
+                let (next, parsed_shapes) = parse_sprite_shapes_block(&self.lines, index + 1)?;
+                for (shape_name, shape) in parsed_shapes {
+                    if shapes.insert(shape_name.clone(), shape).is_some() {
+                        return Err(message(format!("duplicate sprite shape: {shape_name}")));
+                    }
                 }
-                let (next, rows) = parse_sprite3_shape_block(&self.lines, index + 1, shape_name)?;
-                shapes.insert(shape_name.to_string(), rows);
                 index = next;
                 continue;
             }
-            if is_canonical_sprite_name(&line) {
-                let sprite_name = line.clone();
-                if sprites.iter().any(|sprite| sprite.name == sprite_name) {
-                    return Err(message(format!("duplicate sprite: {sprite_name}")));
+            if is_sprite_entry_block_header(&line) {
+                let (next, body) = collect_sprite_block_body(&self.lines, index + 1)?;
+                let sprite = parse_sprite3_from_shared_syntax(&line, &body, &shapes)?;
+                if sprites.iter().any(|existing| existing.name == sprite.name) {
+                    return Err(message(format!("duplicate sprite: {}", sprite.name)));
                 }
-                let (next, sprite) =
-                    self.parse_canonical_sprite(index + 1, sprite_name, &shapes)?;
                 sprites.push(sprite);
                 index = next;
                 continue;
             }
-            return Err(message(format!("invalid sprites3 sprite name: {line}")));
+            return Err(message(format!(
+                "invalid sprites entry; expected `<selector> {{ ... }}` or `shapes {{ ... }}`: {line}"
+            )));
         }
-        Err(message("sprites3 block missing }"))
-    }
-
-    fn parse_canonical_sprite(
-        &self,
-        mut index: usize,
-        name: String,
-        shapes: &HashMap<String, Vec<String>>,
-    ) -> Result<(usize, Sprite3), ParseError3> {
-        while index < self.lines.len() && self.lines[index].is_empty() {
-            index += 1;
-        }
-        if index >= self.lines.len() || self.lines[index] == "}" {
-            return Err(message(format!("sprite {name} missing color row")));
-        }
-        let palette = parse_canonical_sprite_palette_line(&self.lines[index])?;
-        index += 1;
-
-        while index < self.lines.len() && self.lines[index].is_empty() {
-            index += 1;
-        }
-
-        if index < self.lines.len() {
-            let line = self.lines[index].clone();
-            if line == "}"
-                || self.is_canonical_sprite_start(index)
-                || parse_sprite3_shape_header(&line).is_some()
-            {
-                let rows = vec!["0".to_string()];
-                let voxels = parse_sprite_voxels(&name, &rows, &palette)?;
-                return Ok((index, Sprite3::new(name, palette, voxels)));
-            }
-            if let Some(rows) = shapes.get(&line) {
-                let voxels = parse_sprite_voxels(&name, rows, &palette)?;
-                return Ok((index + 1, Sprite3::new(name, palette, voxels)));
-            }
-            if let Some(rest) = line.strip_prefix("shape ") {
-                let shape_name = rest.trim();
-                if shapes.contains_key(shape_name) {
-                    return Err(message("sprite3 shape refs are bare; remove `shape`"));
-                }
-            }
-        }
-
-        let mut rows = Vec::new();
-        while index < self.lines.len() {
-            let line = self.lines[index].clone();
-            if line == "}" {
-                break;
-            }
-            if line.starts_with("sprite ") || line == "colors {" || line == "voxels {" {
-                return Err(message(
-                    "sprites3 entries must use canonical form: <name>, color row, voxel rows or shape ref",
-                ));
-            }
-            if !rows.is_empty()
-                && (self.is_canonical_sprite_start(index)
-                    || parse_sprite3_shape_header(&line).is_some())
-            {
-                break;
-            }
-            rows.push(line);
-            index += 1;
-        }
-        let voxels = parse_sprite_voxels(&name, &rows, &palette)?;
-        Ok((index, Sprite3::new(name, palette, voxels)))
-    }
-
-    fn is_canonical_sprite_start(&self, index: usize) -> bool {
-        if index >= self.lines.len() || !is_canonical_sprite_name(&self.lines[index]) {
-            return false;
-        }
-        let mut next = index + 1;
-        while next < self.lines.len() && self.lines[next].is_empty() {
-            next += 1;
-        }
-        next < self.lines.len() && is_canonical_sprite_palette_line(&self.lines[next])
+        Err(message("sprites block missing }"))
     }
 
     fn parse_layers_block(&mut self, mut index: usize) -> Result<usize, ParseError3> {
@@ -1474,18 +1395,18 @@ fn parse_levels3_header(line: &str) -> Result<Option<String>, ParseError3> {
     }
 }
 
-fn is_sprites3_header(line: &str) -> bool {
-    line == "sprites3 {"
+fn is_sprites_header(line: &str) -> bool {
+    line == "sprites {"
         || line
-            .strip_prefix("sprites3 ")
+            .strip_prefix("sprites ")
             .is_some_and(|rest| rest.ends_with('{'))
 }
 
-fn parse_sprites3_header(line: &str) -> Result<(String, Option<String>), ParseError3> {
+fn parse_sprites_header(line: &str) -> Result<(String, Option<String>), ParseError3> {
     let header = line
-        .strip_prefix("sprites3")
+        .strip_prefix("sprites")
         .and_then(|rest| rest.strip_suffix('{'))
-        .ok_or_else(|| message("sprites3 block must end with {"))?
+        .ok_or_else(|| message("sprites block must end with {"))?
         .trim();
     if header.is_empty() {
         return Ok(("default".to_string(), None));
@@ -1495,48 +1416,327 @@ fn parse_sprites3_header(line: &str) -> Result<(String, Option<String>), ParseEr
         [name] => Ok(((*name).to_string(), None)),
         [name, "of", model] => Ok(((*name).to_string(), Some((*model).to_string()))),
         _ => Err(message(
-            "sprites3 header must be: sprites3 [name [of model]] {",
+            "sprites header must be: sprites [name [of model]] {",
         )),
     }
 }
 
-fn parse_sprite3_shape_header(line: &str) -> Option<&str> {
-    let rest = line.strip_prefix("shape ")?;
-    let name = rest.strip_suffix(" {")?;
-    is_canonical_sprite_shape_name(name).then_some(name)
+fn is_sprite_entry_block_header(line: &str) -> bool {
+    let Some(header) = line.strip_suffix('{').map(str::trim) else {
+        return false;
+    };
+    let tokens = header.split_whitespace().collect::<Vec<_>>();
+    matches!(tokens.as_slice(), ["sprite"] | [_])
 }
 
-fn is_canonical_sprite_shape_name(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | ':' | '@'))
-}
-
-fn parse_sprite3_shape_block(
+fn collect_sprite_block_body(
     lines: &[String],
     mut index: usize,
-    name: &str,
 ) -> Result<(usize, Vec<String>), ParseError3> {
-    let mut rows = Vec::new();
+    let mut depth = 1usize;
+    let mut body = Vec::new();
     while index < lines.len() {
         let line = lines[index].clone();
         if line == "}" {
-            if rows.is_empty() {
-                return Err(message(format!("sprite3 shape {name} requires voxel rows")));
+            depth -= 1;
+            if depth == 0 {
+                return Ok((index + 1, body));
             }
-            split_level_slices(&rows)?;
-            return Ok((index + 1, rows));
+            body.push(line);
+            index += 1;
+            continue;
         }
-        if line.starts_with("sprite ") || line == "colors {" || line == "voxels {" {
-            return Err(message(
-                "sprites3 entries must use canonical form: <name>, color row, voxel rows or shape ref",
-            ));
+        if line.ends_with('{') {
+            depth += 1;
         }
-        rows.push(line);
+        body.push(line);
         index += 1;
     }
-    Err(message(format!("sprite3 shape {name} missing }}")))
+    Err(message("sprite block missing }"))
+}
+
+fn parse_sprite_shapes_block(
+    lines: &[String],
+    mut index: usize,
+) -> Result<
+    (
+        usize,
+        HashMap<String, Vec<crate::sprite_authoring::SpriteFrameSyntax>>,
+    ),
+    ParseError3,
+> {
+    let mut shapes = HashMap::new();
+    while index < lines.len() {
+        let line = lines[index].clone();
+        if line == "}" {
+            return Ok((index + 1, shapes));
+        }
+        if line.is_empty() {
+            index += 1;
+            continue;
+        }
+        let Some(name) = line.strip_suffix('{').map(str::trim) else {
+            return Err(message(format!("invalid shape entry: {line}")));
+        };
+        if !is_canonical_sprite_name(name) {
+            return Err(message(format!("invalid sprite shape name: {name}")));
+        }
+        let (next, rows) = collect_sprite_block_body(lines, index + 1)?;
+        let mut body = Vec::with_capacity(rows.len() + 2);
+        body.push("shape = {".to_string());
+        body.extend(rows);
+        body.push("}".to_string());
+        let syntax = crate::sprite_authoring::parse_sprite_node(None, &body);
+        if let Some(issue) = syntax.issues.first() {
+            return Err(message(issue.message));
+        }
+        let Some(crate::sprite_authoring::SpriteShapeSyntax::ExplicitInline(frames)) = syntax.shape
+        else {
+            return Err(message(format!("sprite shape {name} requires ASCII rows")));
+        };
+        if shapes.insert(name.to_string(), frames).is_some() {
+            return Err(message(format!("duplicate sprite shape: {name}")));
+        }
+        index = next;
+    }
+    Err(message("shapes block missing }"))
+}
+
+fn parse_sprite3_from_shared_syntax(
+    header: &str,
+    body: &[String],
+    shapes: &HashMap<String, Vec<crate::sprite_authoring::SpriteFrameSyntax>>,
+) -> Result<Sprite3, ParseError3> {
+    let syntax = crate::sprite_authoring::parse_sprite_node(Some(header), body);
+    if let Some(issue) = syntax.issues.first() {
+        return Err(message(issue.message));
+    }
+    let spatial_ops = parse_sprite_spatial_ops3(&syntax)?;
+    let name = syntax
+        .selector
+        .clone()
+        .ok_or_else(|| message("sprite entry missing selector"))?;
+    let colors = syntax
+        .colors
+        .clone()
+        .ok_or_else(|| message(format!("sprite {name} missing colors")))?;
+    let palette = parse_canonical_sprite_palette_line(&colors.join(" "))?;
+    let resolved = crate::sprite_authoring::resolve_sprite_shape(&syntax, |shape_name| {
+        shapes.contains_key(shape_name)
+    });
+    let frames = match resolved {
+        crate::sprite_authoring::ResolvedSpriteShape::Reference(reference) => shapes
+            .get(&reference)
+            .cloned()
+            .ok_or_else(|| message(format!("unknown sprite shape `{reference}`")))?,
+        crate::sprite_authoring::ResolvedSpriteShape::Inline(frames) => frames,
+        crate::sprite_authoring::ResolvedSpriteShape::None => {
+            vec![crate::sprite_authoring::SpriteFrameSyntax {
+                layers: vec![crate::sprite_authoring::SpriteLayerSyntax {
+                    rows: vec![crate::sprite_authoring::SpriteShapeRow {
+                        text: "0".to_string(),
+                        body_line: 0,
+                    }],
+                }],
+            }]
+        }
+        crate::sprite_authoring::ResolvedSpriteShape::UnknownBareReference(reference) => {
+            return Err(message(format!("unknown sprite shape `{reference}`")));
+        }
+        crate::sprite_authoring::ResolvedSpriteShape::AmbiguousBareRow(value) => {
+            return Err(message(format!(
+                "ambiguous sprite shape `{value}`; use `shape = <name>` or `shape = {{ ... }}`"
+            )));
+        }
+    };
+    let mut compiled_frames = Vec::with_capacity(frames.len());
+    for frame in frames {
+        let layers = frame
+            .layers
+            .into_iter()
+            .map(|layer| {
+                layer
+                    .rows
+                    .into_iter()
+                    .map(|row| row.text)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        compiled_frames.push(parse_sprite_layers(&name, &layers, &palette)?);
+    }
+    let Some(first_size) = compiled_frames.first().map(|frame| frame.size) else {
+        return Err(message(format!(
+            "sprite {name} requires at least one frame"
+        )));
+    };
+    if compiled_frames.iter().any(|frame| frame.size != first_size) {
+        return Err(message(format!(
+            "sprite {name} animation frames must have the same width, height, and Z-layer count"
+        )));
+    }
+    let duration_ms = syntax
+        .duration
+        .as_deref()
+        .map(parse_sprite_duration_ms)
+        .transpose()?;
+    let frame_duration_ms = syntax
+        .frame_duration
+        .as_deref()
+        .map(parse_sprite_duration_ms)
+        .transpose()?;
+    validate_sprite_frame_timing(&name, compiled_frames.len(), duration_ms, frame_duration_ms)?;
+    let mut sprite = Sprite3::new(
+        name,
+        palette,
+        compiled_frames,
+        duration_ms,
+        frame_duration_ms,
+    );
+    sprite.spatial_ops = spatial_ops;
+    Ok(sprite)
+}
+
+pub(crate) fn parse_sprite_spatial_ops3(
+    syntax: &crate::sprite_authoring::SpriteNodeSyntax,
+) -> Result<Vec<crate::SpriteSpatialOp3>, ParseError3> {
+    let mut ops = Vec::new();
+    for (property, line) in &syntax.properties {
+        match property {
+            crate::sprite_authoring::SpritePropertySyntax::Translate { space, value } => {
+                ops.push(crate::SpriteSpatialOp3::Translate {
+                    space: sprite_space3(*space),
+                    value: parse_sprite_vec3(value)
+                        .map_err(|error| message(format!("{line}: {error}")))?,
+                })
+            }
+            crate::sprite_authoring::SpritePropertySyntax::Rotate { space, angle, axis } => {
+                let axis = axis
+                    .as_deref()
+                    .ok_or_else(|| message("3D sprite rotate requires an axis"))?;
+                ops.push(crate::SpriteSpatialOp3::Rotate {
+                    space: sprite_space3(*space),
+                    axis: parse_sprite_axis3(axis)
+                        .map_err(|error| message(format!("{line}: {error}")))?,
+                    degrees: parse_sprite_angle3(angle)
+                        .map_err(|error| message(format!("{line}: {error}")))?,
+                });
+            }
+            crate::sprite_authoring::SpritePropertySyntax::Unknown(name) if name == "rotate" => {
+                return Err(message(
+                    "removed sprite rotation syntax; use rotate [world|local] <angle> around <axis>",
+                ));
+            }
+            _ => {
+                return Err(message(format!(
+                    "sprite property is not supported by voxel sprites: {line}"
+                )));
+            }
+        }
+    }
+    Ok(ops)
+}
+
+fn sprite_space3(space: crate::sprite_authoring::SpriteSpaceSyntax) -> crate::SpriteSpace3 {
+    match space {
+        crate::sprite_authoring::SpriteSpaceSyntax::World => crate::SpriteSpace3::World,
+        crate::sprite_authoring::SpriteSpaceSyntax::Local => crate::SpriteSpace3::Local,
+    }
+}
+
+fn parse_sprite_scalar3(value: &str) -> Result<f64, String> {
+    let value = value.trim();
+    if let Some((numerator, denominator)) = value.split_once('/') {
+        let numerator = numerator
+            .trim()
+            .parse::<f64>()
+            .map_err(|_| "sprite spatial value must be numeric".to_string())?;
+        let denominator = denominator
+            .trim()
+            .parse::<f64>()
+            .map_err(|_| "sprite spatial value must be numeric".to_string())?;
+        if denominator == 0.0 {
+            return Err("sprite spatial value cannot divide by zero".to_string());
+        }
+        return Ok(numerator / denominator);
+    }
+    value
+        .parse::<f64>()
+        .map_err(|_| "sprite spatial value must be numeric".to_string())
+}
+
+fn parse_sprite_vec3(value: &str) -> Result<[f64; 3], String> {
+    let inner = value
+        .trim()
+        .strip_prefix('(')
+        .and_then(|value| value.strip_suffix(')'))
+        .ok_or_else(|| "3D sprite translate requires a vec3".to_string())?;
+    let parts = inner.split(',').map(str::trim).collect::<Vec<_>>();
+    let [x, y, z] = parts.as_slice() else {
+        return Err("3D sprite translate requires a vec3".to_string());
+    };
+    Ok([
+        parse_sprite_scalar3(x)?,
+        parse_sprite_scalar3(y)?,
+        parse_sprite_scalar3(z)?,
+    ])
+}
+
+fn parse_sprite_axis3(value: &str) -> Result<[f64; 3], String> {
+    let axis = match value.trim() {
+        "right" => [1.0, 0.0, 0.0],
+        "left" => [-1.0, 0.0, 0.0],
+        "front" => [0.0, 1.0, 0.0],
+        "back" => [0.0, -1.0, 0.0],
+        "up" => [0.0, 0.0, 1.0],
+        "down" => [0.0, 0.0, -1.0],
+        _ => parse_sprite_vec3(value)?,
+    };
+    let length = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
+    if length == 0.0 {
+        return Err("3D sprite rotate axis cannot be zero".to_string());
+    }
+    Ok([axis[0] / length, axis[1] / length, axis[2] / length])
+}
+
+fn parse_sprite_angle3(value: &str) -> Result<f64, String> {
+    let degrees = value
+        .trim()
+        .strip_suffix("deg")
+        .ok_or_else(|| "3D sprite rotate angle must use deg".to_string())?;
+    parse_sprite_scalar3(degrees)
+}
+
+fn parse_sprite_duration_ms(value: &str) -> Result<u64, ParseError3> {
+    puzzle_scene::parse_wait_duration_ms_at(value, value)
+        .map_err(|error| message(error.to_string()))
+}
+
+fn validate_sprite_frame_timing(
+    name: &str,
+    frame_count: usize,
+    duration_ms: Option<u64>,
+    frame_duration_ms: Option<u64>,
+) -> Result<(), ParseError3> {
+    if frame_count <= 1 {
+        return Ok(());
+    }
+    match (duration_ms, frame_duration_ms) {
+        (None, None) => Err(message(format!(
+            "sprite {name} animation requires duration or frame_duration"
+        ))),
+        (Some(duration), Some(frame_duration)) => {
+            let expected = frame_duration
+                .checked_mul(frame_count as u64)
+                .ok_or_else(|| message(format!("sprite {name} frame duration is too large")))?;
+            if duration != expected {
+                return Err(message(format!(
+                    "sprite {name} duration must equal frame_duration multiplied by frame count"
+                )));
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
 }
 
 fn lower_level_bundle(
@@ -1661,7 +1861,8 @@ fn is_canonical_sprite_name(line: &str) -> bool {
 
 pub(crate) fn is_canonical_sprite_palette_line(line: &str) -> bool {
     let mut tokens = line.split_whitespace().peekable();
-    tokens.peek().is_some() && tokens.all(|token| token == "transparent" || is_hex_color(token))
+    tokens.peek().is_some()
+        && tokens.all(|token| token == "transparent" || crate::is_visual_color_token(token))
 }
 
 pub(crate) fn parse_canonical_sprite_palette_line(
@@ -1692,33 +1893,41 @@ fn sprite_palette_key(index: usize) -> Result<char, ParseError3> {
         .ok_or_else(|| message("sprite palette supports at most 62 colors"))
 }
 
-fn is_hex_color(value: &str) -> bool {
-    value.starts_with('#')
-        && matches!(value.len(), 4 | 5 | 7 | 9)
-        && value[1..].chars().all(|ch| ch.is_ascii_hexdigit())
-}
-
-pub(crate) fn parse_sprite_voxels(
+pub(crate) fn parse_sprite_layers(
     sprite_name: &str,
-    rows: &[String],
+    layers: &[Vec<String>],
     palette: &BTreeMap<char, SpriteColor3>,
 ) -> Result<SpriteVoxels3, ParseError3> {
-    let slices = split_level_slices(rows)?;
-    let depth = slices[0].len();
-    let width = slices[0][0].chars().count();
+    let Some(first_layer) = layers.first() else {
+        return Err(message(format!(
+            "sprite {sprite_name} requires at least one Z layer"
+        )));
+    };
+    let Some(first_row) = first_layer.first() else {
+        return Err(message(format!(
+            "sprite {sprite_name} Z layer requires at least one row"
+        )));
+    };
+    let height = first_layer.len();
+    let width = first_row.chars().count();
     if width == 0 {
         return Err(message(format!("sprite {sprite_name} has an empty row")));
     }
-    for slice in &slices {
-        if slice.len() != depth {
+    for layer in layers {
+        if layer.is_empty() {
             return Err(message(format!(
-                "sprite {sprite_name} slices must have the same depth",
+                "sprite {sprite_name} Z layer requires at least one row"
             )));
         }
-        for row in slice {
+        if layer.len() != height {
+            return Err(message(format!(
+                "sprite {sprite_name} Z layers must have the same height"
+            )));
+        }
+        for row in layer {
             if row.chars().count() != width {
                 return Err(message(format!(
-                    "sprite {sprite_name} slices must have the same width",
+                    "sprite {sprite_name} Z layers must have the same width"
                 )));
             }
             for ch in row.chars() {
@@ -1727,15 +1936,15 @@ pub(crate) fn parse_sprite_voxels(
                 }
                 if !palette.contains_key(&ch) {
                     return Err(message(format!(
-                        "sprite {sprite_name} uses undefined color key: {ch}",
+                        "sprite {sprite_name} uses undefined color key: {ch}"
                     )));
                 }
             }
         }
     }
     Ok(SpriteVoxels3::new(
-        Size3::new(width as u16, depth as u16, slices.len() as u16),
-        slices,
+        Size3::new(width as u16, height as u16, layers.len() as u16),
+        layers.to_vec(),
     ))
 }
 
