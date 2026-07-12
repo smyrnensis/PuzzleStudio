@@ -109,16 +109,18 @@ L#.C.
 }
 
 scene title {
-title = title
+layout {
+heading title
 choice "Play" -> goto playing
 choice "Level Select" -> goto level_select
+}
 }
 
 scene playing {
 layout {
 row {
-title = title
-subtitle = level.label
+heading title
+subheading level.label
 }
 move_collision
 }

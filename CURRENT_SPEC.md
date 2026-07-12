@@ -16,7 +16,7 @@
 
 `puzzle-lang` が authoring syntax を読み、`CompiledGame` と level / legend / controls などの metadata を作る。
 
-Top-level metadata は `title <text>` と省略可能な `subtitle <text>` / `author <text>` / `homepage <text>` で書く。`name <text>` は top-level metadata として読まない。scene の `title` / `subtitle` component は、引数を省略すると top-level metadata を表示する。scene expression からは `title` / `subtitle` / `author` / `homepage` を top scope の bare name として読む。
+Top-level metadata は `title = <text>` と省略可能な `subtitle = <text>` / `author = <text>` / `homepage = <text>` で書く。`name <text>` は top-level metadata として読まない。scene expression からは `title` / `subtitle` / `author` / `homepage` を top scope の bare nameとして読み、`heading title` や `caption author` のように任意のtext roleから参照する。metadata名はcomponent kindではない。
 
 ## Game Entry And Imports
 
@@ -446,18 +446,21 @@ scene は 2D / 3D model の所有者ではなく、presentation と flow の所�
 
 top-level `puzzle <name>` / `puzzle3 <name>` は、同名の `scene <name>` が明示されていない場合に限り、同名の playable scene を自動追加する。2D では `state { puzzle <name> }`、`layout { <name> }`、`rules { step <name> }` 相当、3D では同じ slot 名で `puzzle3` model window を置く scene 相当になる。明示された `scene <name>` は override とみなし、自動 scene は追加しない。
 
-renderer は component を sizing class で扱う。`title` / `subtitle` / `text` / `button` は flow content で、親から与えられた幅の中で高さを測る。`puzzle` / `puzzle3` / `frame` は ratio content で、割り当てられた slot 内で aspect ratio を守って contain される。`level_menu` / `menu` / `for` は collection content で、列数や item 数から表示し、多すぎる場合は component が scroll を所有する。`row` / `column` / `box` は container であり、見た目の箱ではない。
+renderer は component を sizing class で扱う。`heading` / `subheading` / `text` / `caption` は一つのtext componentのroleで、既定では`space fit`として親から与えられた幅の中で高さを測る。`puzzle` / `puzzle3` / `frame` は既定で`space fill 1`のratio contentで、割り当てられたslot内でaspect ratioを守ってcontainされる。`level_menu` / `menu` / `for` はcollection content、`row` / `column` / `box` はcontainerである。
 
-`choice` は標準 UI cursor で選ばれる主選択肢、`button` は pointer や明示 key binding で押す補助操作である。`choice` だけが logical focus graph に入る。`button` は focus graph に入らない。`text` / `title` / `subtitle` は cell を占有する non-focusable item。`layout` 直下は暗黙 column、`row` は child footprint を横連結、`column` / `box` は縦連結として論理 grid に投影する。方向入力は同じ行または同じ列の次の focusable `choice` にだけ移動し、欠けている cell には斜め吸着しない。端では no-op。Enter/Space/x は focused choice を activate する。これは UI component の focus であり、puzzle/model cursor movement ではない。デフォルトでは scene は input を component 群へ broadcast し、各 component が関係する input だけに反応する。`for` projection は cursor や confirm を所有しない。
+`choice` は標準 UI cursor で選ばれる主選択肢、`button` は pointer や明示 key binding で押す補助操作である。`choice` だけが logical focus graph に入る。`button` は focus graph に入らない。すべてのtext roleはcellを占有するnon-focusable item。`layout` 直下は暗黙column、`row`はchild footprintを横連結、`column` / `box`は縦連結としてlogical gridに投影する。方向入力は同じ行または同じ列の次のfocusable `choice`にだけ移動する。
 
-`size <w> <h>`、`gap <n>`、`align <x> [y]`、`scroll` は既存ファイル向けに読めるが、canonical authoring の中心ではない。`size` は pixel ではなく logical size / ratio metadata で、絶対的な実寸は renderer と theme が決める。新しい例では、root `layout size 4 3` よりも default root size を前提にした `layout { ... }` を優先する。
+space allocation と配置は別契約である。`space fit` は内容量、`space fill [weight]` は主軸の残余空間、`aspect <w> <h>` は比率を表す。container の `align start|center|end|stretch` は cross axis、`distribute start|center|end|between` は main axis を所有する。`gap` と `scroll` はcontainerだけが所有し、文字サイズはtext roleとthemeが所有する。旧 `size` と二軸を混ぜた `align left top` は読まない。
+
+Text component は内部的に一種類で、role は `heading` / `subheading` / `body` / `caption`。authoring keyword `text` は `body` roleへlowerする。標準 typography scale は順に `2rem/1.2`、`1.5rem/1.3`、`1rem/1.5`、`0.75rem/1.4`（font-size/line-height）で、themeが同じrole tokenをoverrideできる。metadataの`title` / `subtitle`はcontent値であり、roleやcomponent kindではない。
 
 Canonical generic scene component keywords:
 
 ```txt
-title
-subtitle
+heading
+subheading
 text
+caption
 button
 choice
 row
@@ -614,7 +617,7 @@ show_index = true
 }
 ```
 
-`text` は literal text、scene state の scalar value、または `for` binding の path を表示する。`choice` と `button` は input、component effect、または scene effect を発行する layout component。`choice` は方向キー・ゲームパッドで選ばれる主選択肢、`button` は click/tap や明示 key binding 向けの補助操作である。旧 `button "Label" = name`、`choice "Label" action name`、裸名 RHS は読まない。`choice "Resume" -> input resume`、`button "Help" -> goto help` のように `-> input <name>`、`-> component_effect <name>`、または direct scene effect を使う。`box` / `row` / `column` は入れ子の layout tree を作る layout component。`box` は純粋な配置用の矩形で、背景・枠線・装飾をデフォルトでは持たない。`panel` は layout primitive ではなく、canonical syntax では使わない。`layout` / `box` / `row` / `column` は layout metadata として `size <w> <h>`、`gap <n>`、`align <x> [y]` を読めるが、canonical examples では default / theme に任せる。`size` と `gap` の実寸は HTML adapter / theme が決め、`.puzzle` author は px を書かない。通常 `choice` 配列では、`row` / `column` / `box` の論理 grid に沿って arrow keys または `w/a/s/d` で UI focus が移動し、Enter/Space/x で focused choice を実行する。`for` は scene state collection や level list の各 item から layout node を生成する projection primitive で、cursor 移動や confirm 動作は所有しない。
+`heading` / `subheading` / `text` / `caption` は同じ text component のroleで、literal text、scene stateのscalar value、または`for` bindingのpathを表示する。`choice` と `button` は input、component effect、または scene effect を発行する layout component。`choice` は方向キー・ゲームパッドで選ばれる主選択肢、`button` は click/tap や明示 key binding 向けの補助操作である。旧 `button "Label" = name`、`choice "Label" action name`、裸名 RHS は読まない。`box` / `row` / `column` は入れ子の layout tree を作る。allocationは`space fit|fill [weight]`、比率は`aspect <w> <h>`、cross-axis配置は`align`、main-axis配置は`distribute`がそれぞれ所有する。旧`size <w> <h>`と二軸`align <x> [y]`は読まない。通常 `choice` 配列では、layout treeの論理構造に沿ってUI focusが移動する。`for` はprojection primitiveで、cursor移動やconfirm動作は所有しない。
 
 scene condition は current level context を読める。`level.name == <name>` / `level.name != <name>`、`level.label == <label>` / `level.label != <label>`、`level.last`、`level.has_next` をサポートする。level 固有の message / sounds / exception flow は effect 側ではなく condition 側で scoped にする。通常の level progression は scene condition の標準責務にしない。authoring での level 指定は `level.name` を標準にし、index / number 条件は標準 surface にしない。
 

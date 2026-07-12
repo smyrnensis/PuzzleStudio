@@ -278,10 +278,7 @@ fn scene_component_uses_signal_name(component: &SceneComponent, name: &str) -> b
                     .iter()
                     .any(|button| scene_effect_uses_signal_name(&button.effect, name))
         }
-        SceneComponent::Frame(_)
-        | SceneComponent::Title(_)
-        | SceneComponent::Subtitle(_)
-        | SceneComponent::Text(_) => false,
+        SceneComponent::Frame(_) | SceneComponent::Text(_) => false,
     }
 }
 
@@ -521,10 +518,7 @@ fn resolve_scene_component_actions(
             }
             Ok(())
         }
-        SceneComponent::Frame(_)
-        | SceneComponent::Title(_)
-        | SceneComponent::Subtitle(_)
-        | SceneComponent::Text(_) => Ok(()),
+        SceneComponent::Frame(_) | SceneComponent::Text(_) => Ok(()),
     }
 }
 
@@ -715,10 +709,7 @@ fn validate_scene_component_routine_calls(
             }
             Ok(())
         }
-        SceneComponent::Frame(_)
-        | SceneComponent::Title(_)
-        | SceneComponent::Subtitle(_)
-        | SceneComponent::Text(_) => Ok(()),
+        SceneComponent::Frame(_) | SceneComponent::Text(_) => Ok(()),
     }
 }
 
@@ -1207,7 +1198,9 @@ fn parse_layer_visibility(line: &str) -> Result<Option<(String, bool)>, Diagnost
 }
 
 fn scene_frame_component(kind: impl Into<String>, source: impl Into<String>) -> SceneComponent {
-    scene_frame_component_with_layout(kind, source, SceneLayoutDef::default())
+    let mut layout = SceneLayoutDef::default();
+    layout.space = SceneSpaceDef::Fill { weight: 1 };
+    scene_frame_component_with_layout(kind, source, layout)
 }
 
 fn scene_frame_component_with_layout(
@@ -1370,17 +1363,10 @@ fn parse_scene_leaf_component_units(
                 None,
             ))
         }
-        ["text", ..] => Ok((vec![parse_text_component(&lines[start])?], start + 1, None)),
-        ["title", ..] => Ok((
-            vec![parse_title_component(&lines[start], true)?],
-            start + 1,
-            None,
-        )),
-        ["subtitle", ..] => Ok((
-            vec![parse_title_component(&lines[start], false)?],
-            start + 1,
-            None,
-        )),
+        ["heading", ..] => Ok((vec![parse_text_component(&lines[start], SceneTextRoleDef::Heading)?], start + 1, None)),
+        ["subheading", ..] => Ok((vec![parse_text_component(&lines[start], SceneTextRoleDef::Subheading)?], start + 1, None)),
+        ["text", ..] => Ok((vec![parse_text_component(&lines[start], SceneTextRoleDef::Body)?], start + 1, None)),
+        ["caption", ..] => Ok((vec![parse_text_component(&lines[start], SceneTextRoleDef::Caption)?], start + 1, None)),
         ["button", ..] => {
             let (component, next) = parse_button_component(lines, start)?;
             Ok((vec![component], next, None))
@@ -1425,51 +1411,40 @@ fn parse_scene_layout_attrs_for_line(
     puzzle_scene::parse_scene_layout_attrs(attrs).map_err(|error| parse_error(line, &error.message))
 }
 
-fn parse_title_component(line: &str, is_title: bool) -> Result<SceneComponent, DiagnosticReport> {
-    let keyword = if is_title { "title" } else { "subtitle" };
-    let Some((name, value)) = parse_assignment_row(line) else {
+fn parse_text_component(line: &str, role: SceneTextRoleDef) -> Result<SceneComponent, DiagnosticReport> {
+    let keyword = match role {
+        SceneTextRoleDef::Heading => "heading",
+        SceneTextRoleDef::Subheading => "subheading",
+        SceneTextRoleDef::Body => "text",
+        SceneTextRoleDef::Caption => "caption",
+    };
+    let Some(rest) = line.strip_prefix(keyword) else {
         return Err(parse_error(
             line,
-            &format!("{keyword} must be: {keyword} = <text-or-path>"),
-        ));
-    };
-    if name != keyword {
-        return Err(parse_error(line, "title component has the wrong keyword"));
-    }
-    let content = parse_scene_expr(value, line)?;
-    let title = SceneTitleDef {
-        content,
-        layout: SceneLayoutDef::default(),
-    };
-    Ok(if is_title {
-        SceneComponent::Title(title)
-    } else {
-        SceneComponent::Subtitle(title)
-    })
-}
-
-fn parse_text_component(line: &str) -> Result<SceneComponent, DiagnosticReport> {
-    let Some(rest) = line.strip_prefix("text") else {
-        return Err(parse_error(
-            line,
-            "text must be: text \"<text>\" | text <state>",
+            &format!("{keyword} must be: {keyword} <text-expression>"),
         ));
     };
     let rest = rest.trim();
     if let Some(text) = parse_quoted_text(rest) {
         return Ok(SceneComponent::Text(SceneTextDef {
+            role,
             content: SceneTextContent::Literal(text),
+            text_align: None,
             layout: SceneLayoutDef::default(),
         }));
     }
     if let Some(path) = parse_view_path(rest) {
         return Ok(SceneComponent::Text(SceneTextDef {
+            role,
             content: SceneTextContent::Path(path),
+            text_align: None,
             layout: SceneLayoutDef::default(),
         }));
     }
     Ok(SceneComponent::Text(SceneTextDef {
+        role,
         content: SceneTextContent::Expr(parse_scene_expr(rest, line)?),
+        text_align: None,
         layout: SceneLayoutDef::default(),
     }))
 }

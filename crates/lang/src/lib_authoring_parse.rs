@@ -9,8 +9,6 @@ fn scene_entry_is_component(tokens: &[&str]) -> bool {
         puzzle_scene::SceneComponentKind::Button
         | puzzle_scene::SceneComponentKind::Choice
         | puzzle_scene::SceneComponentKind::Text
-        | puzzle_scene::SceneComponentKind::Title
-        | puzzle_scene::SceneComponentKind::Subtitle
         | puzzle_scene::SceneComponentKind::Row
         | puzzle_scene::SceneComponentKind::Column
         | puzzle_scene::SceneComponentKind::Box

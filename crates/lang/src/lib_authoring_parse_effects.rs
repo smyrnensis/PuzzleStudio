@@ -886,10 +886,7 @@ fn resolve_default_wait_in_component(component: &mut SceneComponent, default_wai
                 resolve_default_wait_in_effect(&mut button.effect, default_wait_ms);
             }
         }
-        SceneComponent::Frame(_)
-        | SceneComponent::Title(_)
-        | SceneComponent::Subtitle(_)
-        | SceneComponent::Text(_) => {}
+        SceneComponent::Frame(_) | SceneComponent::Text(_) => {}
     }
 }
 

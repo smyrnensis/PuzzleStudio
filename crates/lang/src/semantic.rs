@@ -800,13 +800,13 @@ title = semantic_surface_roles
 
 scene title {
 layout {
-title = title
+heading title
 }
 "#;
         let tokens = semantic_tokens(source);
         let metadata_title_start = source.find("title = semantic_surface_roles").unwrap();
         let scene_title_start = source.find("scene title").unwrap() + "scene ".len();
-        let component_title_start = source.rfind("title = title").unwrap();
+        let component_title_start = source.rfind("heading title").unwrap();
 
         assert!(tokens.iter().any(|token| {
             token.start == metadata_title_start
@@ -820,7 +820,7 @@ title = title
         }));
         assert!(tokens.iter().any(|token| {
             token.start == component_title_start
-                && token.end == component_title_start + "title".len()
+                && token.end == component_title_start + "heading".len()
                 && token.kind == SemanticKind::Keyword
         }));
     }
@@ -1281,7 +1281,7 @@ P
 scene title {
 layout {
 row {
-title = "Title"
+heading "Title"
 }
 }
 }

@@ -1,5 +1,7 @@
 let spriteActionClearTimer = 0;
 let spriteBucketActive = false;
+let spriteTranslateActive = false;
+let spriteTranslateDrag = null;
 let spriteGridVisible = true;
 let spriteBrushPreset = "pixel";
 let spriteLastPaintColorIndex = 0;
@@ -924,6 +926,7 @@ function renderSpritePalette() {
   if (spriteFillButton) {
     brushActions.append(spriteFillButton);
   }
+  brushActions.append(renderSpriteTranslateButton());
   brushActions.append(renderSpriteClipActions());
   paintToolRow.append(brushActions);
 
@@ -953,6 +956,18 @@ function renderSpritePalette() {
   }
   paintToolRow.append(globalEditActions);
   spritePalette.append(paintToolRow);
+}
+
+function renderSpriteTranslateButton() {
+  const button = renderSpriteClipButton({
+    title: spriteTranslateActive ? "Stop translating sprite" : "Translate sprite",
+    ariaLabel: spriteTranslateActive ? "Stop translating sprite" : "Translate sprite",
+    active: spriteTranslateActive,
+    onClick: toggleSpriteTranslateMode,
+    icon: spriteLucideIconSvg("move"),
+  });
+  button.classList.add("sprite-translate-button");
+  return button;
 }
 
 function renderSpriteClipActions() {
@@ -1003,22 +1018,6 @@ function renderSpriteClipActions() {
     clipActions.append(expandedActions);
   }
   return clipActions;
-}
-
-function spritePaletteEntryBindInfo(entry) {
-  const bind = entry?.bind ?? entry?.bound ?? entry?.sourceRef ?? null;
-  if (!bind) {
-    return { available: true, linked: false, name: "", label: "Unlinked color" };
-  }
-  if (typeof bind === "string") {
-    return { available: true, linked: true, name: bind, label: `Bound to ${bind}` };
-  }
-  if (typeof bind === "object") {
-    const name = bind.name || bind.ref || bind.source || bind.color || "";
-    const linked = !(bind.linked === false || bind.unlinked === true || bind.detached === true);
-    return { available: true, linked, name, label: name ? `Bound to ${name}` : "Bound color" };
-  }
-  return { available: true, linked: true, name: "", label: "Bound color" };
 }
 
 function spritePaletteEntryDisplayName(entry) {
@@ -1324,18 +1323,6 @@ function renderSpriteAssetBindToggle({ bind, className, label, linkedTitle, unli
   return button;
 }
 
-function spriteAssetBindInfo(bind, label) {
-  if (!bind) {
-    return { linked: false, name: "", label: `Unlinked ${label}` };
-  }
-  if (typeof bind === "string") {
-    return { linked: true, name: bind, label: `Bound to ${bind}` };
-  }
-  const name = bind.name || bind.ref || bind.source || "";
-  const linked = !(bind.linked === false || bind.unlinked === true || bind.detached === true);
-  return { linked, name, label: name ? `Bound to ${name}` : `Bound ${label}` };
-}
-
 function toggleSpritePaletteEntryBinding(index) {
   if (!validSpriteColorIndex(index)) {
     return;
@@ -1584,66 +1571,27 @@ function applySpriteSourceChange(source, statusText = "") {
 }
 
 function activeSpriteEditDocument() {
-  const editDocument = sprite.editDocumentId
-    ? documents.find((candidate) => candidate.id === sprite.editDocumentId)
-    : null;
-  if (editDocument && isTextDocument(editDocument) && isPuzzleDocument(editDocument)) {
-    return editDocument;
-  }
-  const document = activeDocument();
-  if (document && isTextDocument(document) && isPuzzleDocument(document)) {
-    return document;
-  }
-  return activePreviewDocument();
-}
-
-function setSpriteEditDocument(document = activeDocument()) {
-  sprite.editDocumentId = document && isTextDocument(document) && isPuzzleDocument(document)
-    ? document.id
-    : null;
+  return spriteEditorOwnedDocument(sprite, { allowActive: true }) || activePreviewDocument();
 }
 
 function setSpriteEditSource(entry, document = activeDocument()) {
-  setSpriteEditDocument(document);
-  sprite.editSourceStart = Number.isInteger(entry?.start)
-    ? entry.start
-    : Number.isInteger(entry?.openIndex)
-      ? entry.openIndex
-      : null;
-  sprite.editSourceEnd = Number.isInteger(entry?.end) ? entry.end : null;
-  sprite.editSourceBodyStart = Number.isInteger(entry?.bodyStart) ? entry.bodyStart : null;
-  sprite.editSourceBodyEnd = Number.isInteger(entry?.bodyEnd) ? entry.bodyEnd : null;
-  sprite.editSourceName = entry?.name || "";
-  sprite.sourceSpriteContract = entry?.sourceSprite && typeof entry.sourceSprite === "object"
-    ? cloneVisualEditValue(entry.sourceSprite)
-    : null;
+  const normalized = Number.isInteger(entry?.start) ? entry : { ...entry, start: entry?.openIndex };
+  setSpriteEditorSourceTarget(sprite, normalized, document);
 }
 
 function clearSpriteEditSource() {
-  sprite.editSourceStart = null;
-  sprite.editSourceEnd = null;
-  sprite.editSourceBodyStart = null;
-  sprite.editSourceBodyEnd = null;
-  sprite.editSourceName = "";
-  sprite.sourceSpriteContract = null;
+  clearSpriteEditorSourceTarget(sprite);
 }
 
 function invalidateSpriteEditSourceForDocument(document = activeDocument()) {
   if (!document || !sprite.editDocumentId || document.id !== sprite.editDocumentId) {
     return false;
   }
-  clearSpriteEditSource();
-  return true;
+  return invalidateSpriteEditorSourceTarget(sprite, document);
 }
 
 function activeSpriteEditSource() {
-  const document = activeSpriteEditDocument();
-  if (!document || !isTextDocument(document)) {
-    return "";
-  }
-  return document.id === activeDocument()?.id
-    ? sourceEditorDocumentValue()
-    : document.source || "";
+  return spriteEditorSourceSnapshot(sprite, { allowActive: true }).source;
 }
 
 function spriteLinkIconSvg() {
@@ -1797,6 +1745,14 @@ function spriteLucideIconSvg(name) {
     "mouse-pointer-2": `
       <path d="M4.037 4.688a.495.495 0 0 1 .651-.651l16 6.5a.5.5 0 0 1-.063.947l-6.124 1.58a2 2 0 0 0-1.438 1.435l-1.579 6.126a.5.5 0 0 1-.947.063z"></path>
     `,
+    move: `
+      <path d="M12 2v20"></path>
+      <path d="m15 5-3-3-3 3"></path>
+      <path d="m19 9 3 3-3 3"></path>
+      <path d="M2 12h20"></path>
+      <path d="m5 9-3 3 3 3"></path>
+      <path d="m9 19 3 3 3-3"></path>
+    `,
     copy: `
       <rect width="14" height="14" x="8" y="8" rx="2" ry="2"></rect>
       <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>
@@ -1832,6 +1788,104 @@ function spriteLucideIconSvg(name) {
       ${paths}
     </svg>
   `;
+}
+
+function toggleSpriteTranslateMode() {
+  if (spriteTranslateActive) {
+    deactivateSpriteTranslateMode();
+    return;
+  }
+  spriteBucketActive = false;
+  deactivateSpriteClipMode({ render: false });
+  spriteTranslateActive = true;
+  spriteTranslateDrag = null;
+  renderSpriteBuilder();
+  setSpriteActionStatus("Translate: drag the sprite", "is-ok");
+}
+
+function deactivateSpriteTranslateMode(options = {}) {
+  const wasActive = spriteTranslateActive || spriteTranslateDrag;
+  if (spriteTranslateDrag && spriteBoard.hasPointerCapture?.(spriteTranslateDrag.pointerId)) {
+    spriteBoard.releasePointerCapture(spriteTranslateDrag.pointerId);
+  }
+  spriteTranslateActive = false;
+  spriteTranslateDrag = null;
+  if (options.render === false || !wasActive) {
+    return;
+  }
+  renderSpriteBuilder();
+  setSpriteActionStatus(spritePaintToolStatusText(), "is-ok");
+}
+
+function spritePositiveModulo(value, size) {
+  return ((value % size) + size) % size;
+}
+
+function translatedSpriteCells(cells, dx, dy) {
+  const size = sprite.size;
+  const next = Array.from({ length: size * size }, () => null);
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      const targetX = spritePositiveModulo(x + dx, size);
+      const targetY = spritePositiveModulo(y + dy, size);
+      next[targetY * size + targetX] = cells[y * size + x];
+    }
+  }
+  return next;
+}
+
+function spriteCellsEqual(left, right) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function startSpriteTranslate(event, geometry) {
+  event.preventDefault();
+  spriteTranslateDrag = {
+    pointerId: event.pointerId,
+    startClientX: event.clientX,
+    startClientY: event.clientY,
+    geometry,
+    originCells: [...sprite.cells],
+    beforeSnapshot: visualEditSnapshot("sprite"),
+  };
+  spriteBoard.setPointerCapture?.(event.pointerId);
+  spriteBoard.classList.add("is-translating");
+}
+
+function continueSpriteTranslate(event) {
+  if (!spriteTranslateDrag || spriteTranslateDrag.pointerId !== event.pointerId) {
+    return false;
+  }
+  event.preventDefault();
+  const cellWidth = spriteTranslateDrag.geometry.width / sprite.size;
+  const cellHeight = spriteTranslateDrag.geometry.height / sprite.size;
+  const dx = Math.round((event.clientX - spriteTranslateDrag.startClientX) / cellWidth);
+  const dy = Math.round((event.clientY - spriteTranslateDrag.startClientY) / cellHeight);
+  sprite.cells = translatedSpriteCells(spriteTranslateDrag.originCells, dx, dy);
+  if (sprite.animationMode) {
+    sprite.animationFrames[sprite.animationFrameIndex] = sprite.cells;
+  }
+  renderSpriteBoard();
+  spriteBoard.classList.add("is-translating");
+  return true;
+}
+
+function stopSpriteTranslate(event) {
+  if (!spriteTranslateDrag || spriteTranslateDrag.pointerId !== event.pointerId) {
+    return false;
+  }
+  if (spriteBoard.hasPointerCapture?.(event.pointerId)) {
+    spriteBoard.releasePointerCapture(event.pointerId);
+  }
+  const drag = spriteTranslateDrag;
+  spriteTranslateDrag = null;
+  spriteBoard.classList.remove("is-translating");
+  if (!spriteCellsEqual(sprite.cells, drag.originCells)) {
+    updateSpriteBoundShapeDefinition();
+    syncSpriteSourceActionButtons();
+    pushVisualEditUndoSnapshot("sprite", drag.beforeSnapshot);
+  }
+  return true;
 }
 
 function renderSpriteClipButton({ title, ariaLabel, icon, active = false, disabled = false, danger = false, onClick }) {
@@ -2136,6 +2190,7 @@ function spriteClipFloatingCellsForSelection(rect) {
 
 function renderSpriteBoard() {
   spriteBoard.style.setProperty("--sprite-size", sprite.size);
+  spriteBoard.classList.toggle("is-translate-active", spriteTranslateActive);
   syncSpriteGridVisibility();
   spriteBoard.classList.toggle("is-clip-active", spriteClipActive);
   spriteBoard.classList.toggle("is-clip-floating", Boolean(spriteClipActive && spriteClipFloating && spriteClipClipboard));
@@ -3263,6 +3318,11 @@ function startSpritePaint(event) {
     return;
   }
   const geometry = spriteBoardGeometry();
+  if (spriteTranslateActive) {
+    event.preventDefault();
+    startSpriteTranslate(event, geometry);
+    return;
+  }
   const point = spriteBoardPointFromClient(event.clientX, event.clientY, geometry);
   const index = spriteCellIndexFromPoint(point);
   if (spriteClipActive) {
@@ -3299,6 +3359,9 @@ function startSpritePaint(event) {
 }
 
 function continueSpritePaint(event) {
+  if (continueSpriteTranslate(event)) {
+    return;
+  }
   if (continueSpriteClip(event)) {
     return;
   }
@@ -3312,6 +3375,9 @@ function continueSpritePaint(event) {
 }
 
 function stopSpritePaint(event) {
+  if (stopSpriteTranslate(event)) {
+    return;
+  }
   if (stopSpriteClip(event)) {
     return;
   }
@@ -3654,7 +3720,8 @@ function applyIncompleteSpriteSourceTarget(name, target) {
 }
 
 function parseSpriteDefinitionSource(contract, selectorName = "") {
-  if (!contract || typeof contract !== "object") {
+  const documentContract = projectSpriteDocumentContract(contract);
+  if (!documentContract || documentContract.dimension !== "2d") {
     return null;
   }
   const sourcePreludeRows = Array.isArray(contract.preludeRows)
@@ -3665,9 +3732,7 @@ function parseSpriteDefinitionSource(contract, selectorName = "") {
     ? contract.paletteTokens.map((token) => String(token || "").trim()).filter(Boolean)
     : [];
   const shapeName = typeof contract.shapeRef === "string" ? contract.shapeRef.trim() : "";
-  const resolvedPalette = Array.isArray(contract.resolvedPalette)
-    ? contract.resolvedPalette
-    : [];
+  const resolvedPalette = documentContract.resolvedPalette;
   if (contract.status !== "complete" || !paletteTokens.length || !resolvedPalette.length) {
     return null;
   }
@@ -3983,6 +4048,9 @@ function spriteEditFrames() {
 
 function spriteEditMutationRequest(operation, options = {}) {
   const shape = spriteAssetBindInfo(sprite.shapeBind, "shape");
+  const colorBindings = sprite.palette
+    .filter((entry) => entry?.bind?.type === "color" && entry.bind.linked && entry.bind.name)
+    .map((entry) => ({ name: entry.bind.name, color: normalizeSpriteColor(entry.color) }));
   return {
     operation,
     dimension: "2d",
@@ -3995,97 +4063,62 @@ function spriteEditMutationRequest(operation, options = {}) {
     shapeRef: shape.linked ? shape.name : null,
     preludeRows: sprite.sourcePreludeRows || [],
     spatialOps: sprite.sourceSpatialOps || [],
+    colorBindings,
   };
 }
 
 async function addSpriteToSource() {
-  const document = activeSpriteEditDocument();
-  if (!document || !isTextDocument(document)) {
-    setSpriteActionStatus("No puzzle source", "is-error");
-    setStatus("No puzzle source for sprite", "is-error");
-    return;
-  }
-
   let result;
   try {
-    result = await mutateSpriteSourceFromRust(activeSpriteEditSource(), spriteEditMutationRequest("insert", {
-      cursor: spriteSourceCursorPosition(activeSpriteEditSource(), document),
+    ({ result } = await commitSpriteEditorMutation({
+      state: sprite,
+      allowActiveDocument: true,
+      request: (source, document) => spriteEditMutationRequest("insert", {
+        cursor: spriteSourceCursorPosition(source, document),
+      }),
     }));
   } catch (error) {
     setSpriteActionStatus(userFacingRuntimeError(error), "is-error");
     return;
   }
-  document.source = result.source;
-  if (document.id === activeDocument()?.id) {
-    setSourceEditorValue(result.source, { resetUndo: false });
-    revealSpriteSourceResult(document, result);
-  }
-  scheduleLocalSave();
-  schedulePreview();
-  setSpriteEditSource({ start: result.start, end: result.end, name: result.name }, document);
-  sourceEditor.focus({ preventScroll: true });
   setSpriteActionStatus("Added sprite", "is-ok");
   setStatus("Added sprite", "is-ok");
+  syncSpriteSourceActionButtons();
 }
 
 async function updateSpriteInSource() {
-  const document = activeSpriteEditDocument();
-  if (!document || !isTextDocument(document)) {
-    setSpriteActionStatus("No puzzle source", "is-error");
-    setStatus("No puzzle source for sprite", "is-error");
-    return;
-  }
-
   let result;
   try {
-    result = await mutateSpriteSourceFromRust(activeSpriteEditSource(), spriteEditMutationRequest("update"));
+    ({ result } = await commitSpriteEditorMutation({
+      state: sprite,
+      request: () => spriteEditMutationRequest("update"),
+    }));
   } catch (error) {
     setSpriteActionStatus("No selected sprite source range", "is-error");
     setStatus("No selected sprite source range", "is-error");
     setSpriteActionStatus(userFacingRuntimeError(error), "is-error");
     return;
   }
-  document.source = result.source;
-  if (document.id === activeDocument()?.id) {
-    setSourceEditorValue(result.source, { resetUndo: false });
-    revealSpriteSourceResult(document, result);
-  }
-  scheduleLocalSave();
-  schedulePreview();
-  setSpriteEditSource({ start: result.start, end: result.end, name: result.name }, document);
-  sourceEditor.focus({ preventScroll: true });
   setSpriteActionStatus("Updated sprite", "is-ok");
   setStatus("Updated sprite", "is-ok");
+  syncSpriteSourceActionButtons();
 }
 
 async function duplicateSpriteInSource() {
-  const document = activeSpriteEditDocument();
-  if (!document || !isTextDocument(document)) {
-    setSpriteActionStatus("No puzzle source", "is-error");
-    setStatus("No puzzle source for sprite", "is-error");
-    return;
-  }
-
   let result;
   try {
-    result = await mutateSpriteSourceFromRust(activeSpriteEditSource(), spriteEditMutationRequest("duplicate"));
+    ({ result } = await commitSpriteEditorMutation({
+      state: sprite,
+      request: () => spriteEditMutationRequest("duplicate"),
+    }));
   } catch (error) {
     setSpriteActionStatus("No selected sprite source range", "is-error");
     setStatus("No selected sprite source range", "is-error");
     setSpriteActionStatus(userFacingRuntimeError(error), "is-error");
     return;
   }
-  document.source = result.source;
-  if (document.id === activeDocument()?.id) {
-    setSourceEditorValue(result.source, { resetUndo: false });
-    revealSpriteSourceResult(document, result);
-  }
-  scheduleLocalSave();
-  schedulePreview();
   spriteNameInput.value = result.name;
-  setSpriteEditSource({ start: result.start, end: result.end, name: result.name }, document);
   syncSpriteSourceActionButtons();
-  sourceEditor.focus({ preventScroll: true });
   setSpriteActionStatus("Duplicated sprite", "is-ok");
   setStatus("Duplicated sprite", "is-ok");
 }
@@ -4349,22 +4382,7 @@ function syncSpriteSourceActionButtons() {
 }
 
 function currentSpriteEditSourceRange(source) {
-  const start = sprite.editSourceStart;
-  const end = sprite.editSourceEnd;
-  if (
-    !Number.isInteger(start)
-    || !Number.isInteger(end)
-    || start < 0
-    || end < start
-    || end > String(source || "").length
-  ) {
-    return null;
-  }
-  return {
-    start,
-    end,
-    indent: spriteSourceIndent(source.slice(source.lastIndexOf("\n", start - 1) + 1, start)),
-  };
+  return spriteEditorSourceRange(sprite, source, spriteSourceIndent);
 }
 
 function revealSpriteSourceResult(document, result) {
@@ -4926,6 +4944,10 @@ spriteBoard.addEventListener("pointermove", continueSpritePaint);
 spriteBoard.addEventListener("pointerup", stopSpritePaint);
 spriteBoard.addEventListener("pointercancel", stopSpritePaint);
 spriteBoard.addEventListener("keydown", (event) => {
+  if (spriteTranslateActive) {
+    event.preventDefault();
+    return;
+  }
   if (handleSpriteClipKeyboard(event)) {
     return;
   }
@@ -4935,6 +4957,22 @@ spriteBoard.addEventListener("keydown", (event) => {
       event.preventDefault();
       event.stopPropagation();
     }
+  }
+});
+document.addEventListener("click", (event) => {
+  if (!spriteTranslateActive || spriteBoard.contains(event.target)) {
+    return;
+  }
+  const translateButton = event.target.closest?.(".sprite-translate-button");
+  if (translateButton) {
+    return;
+  }
+  deactivateSpriteTranslateMode();
+});
+document.addEventListener("keydown", (event) => {
+  if (spriteTranslateActive && event.key === "Escape") {
+    event.preventDefault();
+    deactivateSpriteTranslateMode();
   }
 });
 document.addEventListener("keydown", handleSpriteClipKeyboard);

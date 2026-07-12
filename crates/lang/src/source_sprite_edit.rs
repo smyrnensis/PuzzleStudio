@@ -26,6 +26,14 @@ struct SpriteEditRequest {
     shape_ref: Option<String>,
     prelude_rows: Option<Vec<String>>,
     spatial_ops: Option<Vec<SpriteEditSpatialOp>>,
+    color_bindings: Option<Vec<SpriteEditColorBinding>>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SpriteEditColorBinding {
+    name: String,
+    color: String,
 }
 
 #[derive(Deserialize)]
@@ -85,6 +93,19 @@ fn replace_sprite(
         .or(request.name.as_deref())
         .filter(|name| !name.trim().is_empty())
         .ok_or_else(|| "sprite edit requires an original name".to_string())?;
+    let owned_source = if !duplicate {
+        let mutated = mutate_linked_definitions(source, request)?;
+        (mutated != source).then_some(mutated)
+    } else {
+        None
+    };
+    let source = owned_source.as_deref().unwrap_or(source);
+    let entries = if owned_source.is_some() {
+        let document = parse_surface_source_target_document(source);
+        resolve_source_entries_from_document(source, &document)
+    } else {
+        entries.to_vec()
+    };
     let matching = entries
         .iter()
         .filter(|entry| entry.kind == kind && entry.name == original)
@@ -95,7 +116,7 @@ fn replace_sprite(
         ));
     };
     let name = if duplicate {
-        unique_name(entries, kind, original)
+        unique_name(&entries, kind, original)
     } else {
         request.name.clone().unwrap_or_else(|| original.to_string())
     };
@@ -114,6 +135,139 @@ fn replace_sprite(
         end: target.start + text.len(),
         name,
     })
+}
+
+fn mutate_linked_definitions(source: &str, request: &SpriteEditRequest) -> Result<String, String> {
+    let mut next = source.to_string();
+    for binding in request.color_bindings.as_deref().unwrap_or_default() {
+        next = replace_named_color_definition(&next, binding)?;
+    }
+    if let Some(shape_name) = request
+        .shape_ref
+        .as_deref()
+        .filter(|name| !name.trim().is_empty())
+    {
+        let frames = request
+            .frames
+            .as_ref()
+            .filter(|frames| !frames.is_empty())
+            .ok_or_else(|| "linked shape update requires frames".to_string())?;
+        next = replace_named_shape_definition(
+            &next,
+            shape_name,
+            frames,
+            request.palette.as_ref().map_or(0, Vec::len),
+        )?;
+    }
+    Ok(next)
+}
+
+fn replace_named_color_definition(
+    source: &str,
+    binding: &SpriteEditColorBinding,
+) -> Result<String, String> {
+    let document = parse_surface_source_target_document(source);
+    let matches = document
+        .lines
+        .iter()
+        .filter(|line| {
+            line.scope == Some(crate::source::SourceScope::VisualColorTable)
+                && line
+                    .tokens
+                    .first()
+                    .is_some_and(|token| token == &binding.name)
+        })
+        .collect::<Vec<_>>();
+    let [line] = matches.as_slice() else {
+        return Err(format!(
+            "named color `{}` must resolve to exactly one definition",
+            binding.name
+        ));
+    };
+    let line_end = (line.start + line.content.len()).min(source.len());
+    let end = if source.as_bytes().get(line_end) == Some(&b'\n') {
+        line_end + 1
+    } else {
+        line_end
+    };
+    let indent = &source[line.start
+        ..line.start + source[line.start..end].len() - source[line.start..end].trim_start().len()];
+    let replacement = format!("{indent}{} = {}\n", binding.name, binding.color);
+    Ok(format!(
+        "{}{}{}",
+        &source[..line.start],
+        replacement,
+        &source[end..]
+    ))
+}
+
+fn replace_named_shape_definition(
+    source: &str,
+    name: &str,
+    frames: &[Vec<Vec<Vec<Option<usize>>>>],
+    palette_len: usize,
+) -> Result<String, String> {
+    let document = parse_surface_source_target_document(source);
+    let matches = document
+        .lines
+        .iter()
+        .filter_map(|line| {
+            if line.scope != Some(crate::source::SourceScope::VisualShapeTable)
+                || !line.tokens.first().is_some_and(|token| token == name)
+            {
+                return None;
+            }
+            let end = (line.start + line.content.len()).min(source.len());
+            let open = source[line.start..end]
+                .find('{')
+                .map(|offset| line.start + offset)?;
+            let close = crate::source_target::find_matching_brace(source, open)?;
+            Some((line.start, close + 1))
+        })
+        .collect::<Vec<_>>();
+    let [(start, end)] = matches.as_slice() else {
+        return Err(format!(
+            "named shape `{name}` must resolve to exactly one definition"
+        ));
+    };
+    let indent = &source
+        [*start..*start + source[*start..*end].len() - source[*start..*end].trim_start().len()];
+    let mut lines = vec![format!("{indent}{name} {{")];
+    serialize_shape_frames(&mut lines, frames, palette_len, indent)?;
+    lines.push(format!("{indent}}}"));
+    Ok(format!(
+        "{}{}{}",
+        &source[..*start],
+        lines.join("\n"),
+        &source[*end..]
+    ))
+}
+
+fn serialize_shape_frames(
+    lines: &mut Vec<String>,
+    frames: &[Vec<Vec<Vec<Option<usize>>>>],
+    palette_len: usize,
+    indent: &str,
+) -> Result<(), String> {
+    for (frame_index, layers) in frames.iter().enumerate() {
+        if frame_index > 0 {
+            lines.push(format!("{indent}>"));
+        }
+        for (layer_index, rows) in layers.iter().enumerate() {
+            if layer_index > 0 {
+                lines.push(format!("{indent}-"));
+            }
+            for row in rows {
+                lines.push(format!(
+                    "{indent}{}",
+                    row.iter()
+                        .map(|cell| palette_char(*cell, palette_len))
+                        .collect::<Result<String, _>>()?
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn insert_sprite(
@@ -389,5 +543,26 @@ mod tests {
                 .unwrap_err()
                 .contains("exactly one Z layer")
         );
+    }
+
+    #[test]
+    fn update_mutates_linked_definitions_and_preserves_bindings() {
+        let source = "puzzle3 world {\n}\n\nsprites art of world {\npalette {\naccent = red\n}\nshapes {\nbox_shape {\n0\n}\n}\nBox {\ncolors = accent\nshape = box_shape\n}\nOther {\ncolors = accent\nshape = box_shape\n}\n}\n";
+        let request = serde_json::json!({
+            "operation": "update",
+            "dimension": "3d",
+            "name": "Box",
+            "originalName": "Box",
+            "palette": ["accent"],
+            "colorBindings": [{"name": "accent", "color": "#123456"}],
+            "shapeRef": "box_shape",
+            "frames": [[[[0]], [[0]]]]
+        });
+
+        let result = mutate_sprite_source(source, &request.to_string()).unwrap();
+        assert!(result.source.contains("accent = #123456"));
+        assert!(result.source.contains("box_shape {\n0\n-\n0\n}"));
+        assert_eq!(result.source.matches("colors = accent").count(), 2);
+        assert_eq!(result.source.matches("shape = box_shape").count(), 2);
     }
 }

@@ -101,7 +101,13 @@ struct PsMapDef {
 struct PsSpriteDef {
     colors: Vec<String>,
     pattern: Vec<String>,
-    rotate_from: Option<String>,
+    rotation: Option<PsSpriteRotation>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PsSpriteRotation {
+    from: String,
+    axis: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1166,10 +1172,10 @@ fn parse_object_sprite(lines: &[String], start: usize) -> (Option<PsSpriteDef>, 
         i += 1;
     }
 
-    let rotate_from = lines
+    let rotation = lines
         .get(i)
         .and_then(|line| parse_ps_rotation_directive(line.trim()));
-    if rotate_from.is_some() {
+    if rotation.is_some() {
         i += 1;
     }
 
@@ -1177,13 +1183,13 @@ fn parse_object_sprite(lines: &[String], start: usize) -> (Option<PsSpriteDef>, 
         Some(PsSpriteDef {
             colors,
             pattern,
-            rotate_from,
+            rotation,
         }),
         i,
     )
 }
 
-fn parse_ps_rotation_directive(line: &str) -> Option<String> {
+fn parse_ps_rotation_directive(line: &str) -> Option<PsSpriteRotation> {
     let mut parts = line.split(':');
     let command = parts.next()?;
     if !command.eq_ignore_ascii_case("rot") {
@@ -1191,7 +1197,10 @@ fn parse_ps_rotation_directive(line: &str) -> Option<String> {
     }
     let from = parts.next()?.trim();
     let axis = parts.next()?.trim();
-    (parts.next().is_none() && !from.is_empty() && !axis.is_empty()).then(|| from.to_string())
+    (parts.next().is_none() && !from.is_empty() && !axis.is_empty()).then(|| PsSpriteRotation {
+        from: from.to_string(),
+        axis: axis.to_string(),
+    })
 }
 
 fn resolve_copy_sprites(objects: &mut [PsObjectDef]) {
@@ -1209,8 +1218,8 @@ fn resolve_copy_sprites(objects: &mut [PsObjectDef]) {
         match &mut objects[index].sprite {
             Some(sprite) if sprite.pattern.is_empty() => {
                 sprite.pattern = source.pattern;
-                if sprite.rotate_from.is_none() {
-                    sprite.rotate_from = source.rotate_from;
+                if sprite.rotation.is_none() {
+                    sprite.rotation = source.rotation;
                 }
             }
             Some(_) => {}
@@ -1511,12 +1520,7 @@ fn push_sprites(out: &mut Vec<String>, objects: &[PsObjectDef]) {
     if sprites.is_empty() {
         return;
     }
-    let mut shape_sources = ps_copy_shape_sources(objects);
-    for (name, sprite) in &sprites {
-        if sprite.rotate_from.is_some() {
-            shape_sources.insert((*name).clone());
-        }
-    }
+    let shape_sources = ps_copy_shape_sources(objects);
 
     out.push("sprites {".to_string());
     if !shape_sources.is_empty() {
@@ -1530,13 +1534,7 @@ fn push_sprites(out: &mut Vec<String>, objects: &[PsObjectDef]) {
                 continue;
             };
             let shape_name = ps_copy_shape_name(source);
-            let header = if let Some(from) = &sprite.rotate_from {
-                let table_name = ps_copy_shape_table_name(source);
-                format!("    {table_name} rotate from {from} {{")
-            } else {
-                format!("    {shape_name} {{")
-            };
-            out.push(header);
+            out.push(format!("    {shape_name} {{"));
             for row in &sprite.pattern {
                 out.push(format!("      {row}"));
             }
@@ -1549,8 +1547,11 @@ fn push_sprites(out: &mut Vec<String>, objects: &[PsObjectDef]) {
         let copy_shape = ps_copy_shape_for_object(name, objects, &shape_sources);
         out.push(format!("  {name}"));
         out.push(format!("  {}", sprite.colors.join(" ")));
+        if let Some(rotation) = &sprite.rotation {
+            out.push(format!("  rotate ({} - {})", rotation.axis, rotation.from));
+        }
         if let Some(shape) = copy_shape {
-            out.push(format!("  {}", ps_copy_shape_ref_name(&shape, objects)));
+            out.push(format!("  {}", ps_copy_shape_name(&shape)));
             out.push(String::new());
             continue;
         }
@@ -1610,31 +1611,6 @@ fn ps_copy_shape_name(source: &str) -> String {
         }
     }
     name
-}
-
-fn ps_copy_shape_table_name(source: &str) -> String {
-    let mut name = String::from(PS_COPY_SHAPE_PREFIX);
-    for ch in source.chars() {
-        if ch == ':' || ch == '_' || ch.is_ascii_alphanumeric() {
-            name.push(ch);
-        } else {
-            name.push('_');
-        }
-    }
-    name
-}
-
-fn ps_copy_shape_ref_name(source: &str, objects: &[PsObjectDef]) -> String {
-    let rotate_from = objects
-        .iter()
-        .find(|object| object.name == source)
-        .and_then(|object| object.sprite.as_ref())
-        .and_then(|sprite| sprite.rotate_from.as_ref());
-    if rotate_from.is_some() {
-        ps_copy_shape_table_name(source)
-    } else {
-        ps_copy_shape_name(source)
-    }
 }
 
 fn push_legend(
@@ -2949,10 +2925,10 @@ fn push_playing_scene(
 ) {
     out.push("scene title {".to_string());
     out.push("  layout {".to_string());
-    out.push(format!("    title = \"{}\"", escape_scene_text(title)));
+    out.push(format!("    heading \"{}\"", escape_scene_text(title)));
     if let Some(author) = author {
         out.push(format!(
-            "    subtitle = \"by {}\"",
+            "    subheading \"by {}\"",
             escape_scene_text(author)
         ));
     }
@@ -2987,7 +2963,7 @@ fn push_playing_scene(
     } else {
         out.push("  layout {".to_string());
         out.push("    row {".to_string());
-        out.push(format!("      title = \"{}\"", escape_scene_text(title)));
+        out.push(format!("      heading \"{}\"", escape_scene_text(title)));
         out.push("    }".to_string());
         out.push("    puzzle board = main".to_string());
         out.push("  }".to_string());

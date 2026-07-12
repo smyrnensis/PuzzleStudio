@@ -130,7 +130,7 @@ canvas.has-interactive-look.is-dragging {
   padding: 32px;
 }
 
-.view-title,
+.view-text[data-text-role="heading"],
 .scene-menu h1 {
   margin: 0 0 10px;
   color: var(--text);

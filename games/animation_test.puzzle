@@ -232,12 +232,14 @@ level "microban_10"
 #.#.#.#.###
 #.......#..
 #########..
+message "END"
+
 }
 
 // scene title {
 // layout {
-// title = "Microban"
-// subtitle = "Levels by David Skinner"
+// heading "Microban"
+// subheading "Levels by David Skinner"
 // choice "Continue" -> goto playing
 // choice "New Game" -> {
 // clear_game_progress
@@ -250,8 +252,8 @@ level "microban_10"
 // scene playing {
 // layout {
 // row {
-	// title = "Microban"
-	// subtitle = level.label
+	// heading "Microban"
+	// subheading level.label
 // }
 // sokoban
 // }

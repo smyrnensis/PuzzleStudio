@@ -6,12 +6,13 @@ use puzzle_core::{
     RuleStep, State, VariableId,
 };
 pub use puzzle_scene::{
-    LevelMenuLocked, SceneAlign as SceneAlignDef, SceneAlignX as SceneAlignXDef,
-    SceneAlignY as SceneAlignYDef, SceneBinaryOp, SceneButton as SharedSceneButton,
-    SceneComponent as SharedSceneComponent, SceneConditional as SharedSceneConditional,
-    SceneContainer as SharedSceneContainer, SceneEffect, SceneEffectParam, SceneExpr,
+    LevelMenuLocked, SceneAlign as SceneAlignDef, SceneAspectRatio as SceneAspectRatioDef,
+    SceneBinaryOp, SceneButton as SharedSceneButton, SceneComponent as SharedSceneComponent,
+    SceneConditional as SharedSceneConditional, SceneContainer as SharedSceneContainer,
+    SceneDistribution as SceneDistributionDef, SceneEffect, SceneEffectParam, SceneExpr,
     SceneFor as SharedSceneFor, SceneForSource as ForSource, SceneLayout as SceneLayoutDef,
-    SceneLevelKey, SceneSize as SceneSizeDef, SceneTextComponent as SharedSceneTextComponent,
+    SceneLevelKey, SceneSpace as SceneSpaceDef, SceneTextAlign as SceneTextAlignDef,
+    SceneTextComponent as SharedSceneTextComponent, SceneTextRole as SceneTextRoleDef,
 };
 use serde::{Deserialize, Serialize};
 
@@ -785,8 +786,6 @@ pub enum SceneStateLifetime {
 }
 
 pub type SceneComponent = SharedSceneComponent<SceneEffect, SceneExpr, SceneTextContent, SceneExpr>;
-
-pub type SceneTitleDef = SharedSceneTextComponent<SceneExpr>;
 
 pub type SceneTextDef = SharedSceneTextComponent<SceneTextContent>;
 

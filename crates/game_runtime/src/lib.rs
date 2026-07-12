@@ -10,10 +10,11 @@ use puzzle_grid3d::{
 use puzzle_grid3d_authoring::SelectorCatalog3;
 use puzzle_lang::{
     ArrowKey, KeyTrigger, Level, LoadedDocumentModel, LoadedGame, ModelSettings3, ParsedPuzzle3,
-    ResourceSelection, SceneAlignXDef, SceneAlignYDef, SceneBinaryOp, SceneComponent, SceneDef,
-    SceneEffect, SceneEffectParam, SceneExpr, SceneLayoutDef, SceneLevelKey,
-    ScenePuzzleInitializer, SceneStateLifetime, SceneTextContent, SceneTransitionTrigger,
-    SceneValue, SolverStrategy3, ThemeDef, ViewportModeDef, ViewportSizeDef,
+    ResourceSelection, SceneAlignDef, SceneBinaryOp, SceneComponent, SceneDef,
+    SceneDistributionDef, SceneEffect, SceneEffectParam, SceneExpr, SceneLayoutDef, SceneLevelKey,
+    ScenePuzzleInitializer, SceneSpaceDef, SceneStateLifetime, SceneTextContent, SceneTextRoleDef,
+    SceneTransitionTrigger, SceneValue, SolverStrategy3, ThemeDef, ViewportModeDef,
+    ViewportSizeDef,
 };
 use puzzle_play::{
     AnimationEvent, DebugTransition, GameSession, GameSession3, LevelProgressSaveData,
@@ -943,10 +944,16 @@ fn scene_state_lifetime_name(lifetime: SceneStateLifetime) -> &'static str {
 
 fn scene_layout_value(layout: &SceneLayoutDef) -> Value {
     let mut value = serde_json::Map::new();
-    if let Some(size) = layout.size {
+    if let SceneSpaceDef::Fill { weight } = layout.space {
         value.insert(
-            "size".to_string(),
-            json!({ "width": size.width, "height": size.height }),
+            "space".to_string(),
+            json!({ "kind": "fill", "weight": weight }),
+        );
+    }
+    if let Some(ratio) = layout.aspect_ratio {
+        value.insert(
+            "aspectRatio".to_string(),
+            json!({ "width": ratio.width, "height": ratio.height }),
         );
     }
     if let Some(gap) = layout.gap {
@@ -955,17 +962,22 @@ fn scene_layout_value(layout: &SceneLayoutDef) -> Value {
     if layout.align != SceneLayoutDef::default().align {
         value.insert(
             "align".to_string(),
-            json!({
-                "x": match layout.align.x {
-                    SceneAlignXDef::Left => "left",
-                    SceneAlignXDef::Center => "center",
-                    SceneAlignXDef::Right => "right",
-                },
-                "y": match layout.align.y {
-                    SceneAlignYDef::Top => "top",
-                    SceneAlignYDef::Center => "center",
-                    SceneAlignYDef::Bottom => "bottom",
-                },
+            json!(match layout.align {
+                SceneAlignDef::Start => "start",
+                SceneAlignDef::Center => "center",
+                SceneAlignDef::End => "end",
+                SceneAlignDef::Stretch => "stretch",
+            }),
+        );
+    }
+    if layout.distribute != SceneLayoutDef::default().distribute {
+        value.insert(
+            "distribute".to_string(),
+            json!(match layout.distribute {
+                SceneDistributionDef::Start => "start",
+                SceneDistributionDef::Center => "center",
+                SceneDistributionDef::End => "end",
+                SceneDistributionDef::Between => "between",
             }),
         );
     }
@@ -982,17 +994,21 @@ fn scene_component_value(component: &SceneComponent) -> Value {
             "source": frame.source,
             "layout": scene_layout_value(&frame.layout),
         }),
-        SceneComponent::Title(title) => json!({
-            "kind": "title",
-            "content": scene_expr_value(&title.content),
-        }),
-        SceneComponent::Subtitle(subtitle) => json!({
-            "kind": "subtitle",
-            "content": scene_expr_value(&subtitle.content),
-        }),
         SceneComponent::Text(text) => {
             let mut value = serde_json::Map::new();
             value.insert("kind".to_string(), Value::String("text".to_string()));
+            value.insert(
+                "role".to_string(),
+                Value::String(
+                    match text.role {
+                        SceneTextRoleDef::Heading => "heading",
+                        SceneTextRoleDef::Subheading => "subheading",
+                        SceneTextRoleDef::Body => "body",
+                        SceneTextRoleDef::Caption => "caption",
+                    }
+                    .to_string(),
+                ),
+            );
             match &text.content {
                 SceneTextContent::Literal(text) => {
                     value.insert("source".to_string(), Value::String("literal".to_string()));

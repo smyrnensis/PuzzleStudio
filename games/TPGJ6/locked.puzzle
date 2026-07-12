@@ -811,7 +811,7 @@ shape Flag
 
 scene title {
 layout {
-	title = title
+	heading title
 	choice "Play" -> goto playing
 	// choice "New Game" -> {
 			// clear_game_progress

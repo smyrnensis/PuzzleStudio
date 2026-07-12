@@ -4490,8 +4490,6 @@ fn component_has_level_menu(component: &SceneComponent) -> bool {
             .any(component_has_level_menu),
         SceneComponent::For(for_view) => for_view.children.iter().any(component_has_level_menu),
         SceneComponent::Frame(_)
-        | SceneComponent::Title(_)
-        | SceneComponent::Subtitle(_)
         | SceneComponent::Text(_)
         | SceneComponent::Button(_)
         | SceneComponent::Choice(_) => false,

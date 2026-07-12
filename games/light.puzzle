@@ -101,7 +101,7 @@ Escape q -> goto title
 
 scene title {
 layout {
-title = title
+heading title
 choice "Start" -> goto main
 choice "Levels" -> goto level_select
 }

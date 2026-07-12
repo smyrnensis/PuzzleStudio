@@ -104,6 +104,8 @@ const EDITOR_IMPORT_EXPORT_JS: &str = include_str!("../static/editor_import_expo
 #[cfg(feature = "embedded-assets")]
 const EDITOR_JS: &str = include_str!("../static/editor.js");
 #[cfg(feature = "embedded-assets")]
+const EDITOR_SPRITE_DOCUMENT_JS: &str = include_str!("../static/editor_sprite_document.js");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_SPRITE_JS: &str = include_str!("../static/editor_sprite.js");
 #[cfg(feature = "embedded-assets")]
 const PUZZLE3_VISUAL_CORE_JS: &str = include_str!("../../html_play/static/puzzle3_visual_core.js");
@@ -1379,6 +1381,9 @@ fn route(request: &HttpRequest, service: &EditorService) -> Vec<u8> {
             http_ok("text/javascript; charset=utf-8", EDITOR_IMPORT_EXPORT_JS)
         }
         ("GET", "/editor.js") => http_ok("text/javascript; charset=utf-8", EDITOR_JS),
+        ("GET", "/editor_sprite_document.js") => {
+            http_ok("text/javascript; charset=utf-8", EDITOR_SPRITE_DOCUMENT_JS)
+        }
         ("GET", "/editor_sprite.js") => http_ok("text/javascript; charset=utf-8", EDITOR_SPRITE_JS),
         ("GET", "/puzzle3_visual_core.js") => {
             http_ok("text/javascript; charset=utf-8", PUZZLE3_VISUAL_CORE_JS)
@@ -2070,6 +2075,11 @@ fn write_pages_editor_site(output_path: &Path, html: String) -> Result<(), AppEr
         EDITOR_IMPORT_EXPORT_JS,
     )?;
     write_text_asset(output_dir, "editor.js", EDITOR_JS)?;
+    write_text_asset(
+        output_dir,
+        "editor_sprite_document.js",
+        EDITOR_SPRITE_DOCUMENT_JS,
+    )?;
     write_text_asset(output_dir, "editor_sprite.js", EDITOR_SPRITE_JS)?;
     write_text_asset(output_dir, "editor_sprite3d.js", EDITOR_SPRITE3D_JS)?;
     write_text_asset(output_dir, "editor_sounds.js", EDITOR_SOUNDS_JS)?;
@@ -6301,8 +6311,8 @@ move
                 .contains("const name = uniqueSpriteDuplicateName(source, originalName);")
         );
         assert!(EDITOR_SPRITE_JS.contains("spriteSourceInsertionLineEnd(source, entry.end),"));
-        assert!(EDITOR_SPRITE_JS.contains(
-            "setSpriteEditSource({ start: result.start, end: result.end, name: result.name }, document);"
+        assert!(EDITOR_SPRITE_DOCUMENT_JS.contains(
+            "setSpriteEditorSourceTarget(state, { start: result.start, end: result.end, name: result.name }, document);"
         ));
         assert!(!EDITOR_SPRITE_JS.contains("function addEmptySpriteToSource"));
         assert!(!EDITOR_SPRITE_JS.contains("function insertEmptySpriteDefinition"));
@@ -6310,9 +6320,10 @@ move
 
     #[test]
     fn sprite3d_source_tools_use_shared_sprite_target_contract() {
-        assert!(EDITOR_SPRITE3D_JS.contains("function findSprites3dBlocks(source)"));
-        assert!(EDITOR_SPRITE3D_JS.contains("while ((match = pattern.exec(source)))"));
-        assert!(EDITOR_SPRITE3D_JS.contains("pattern.lastIndex = closeIndex + 1;"));
+        assert!(!EDITOR_SPRITE3D_JS.contains("function findSprites3dBlocks(source)"));
+        assert!(!EDITOR_SPRITE3D_JS.contains("pattern.exec(source)"));
+        assert!(EDITOR_SPRITE_DOCUMENT_JS.contains("function projectSpriteDocumentContract"));
+        assert!(EDITOR_SPRITE_DOCUMENT_JS.contains("async function commitSpriteEditorMutation"));
         assert!(!EDITOR_SPRITE3D_JS.contains("function findSprite3dDefinitionByName"));
         assert!(!EDITOR_SPRITE3D_JS.contains("function findSprite3dDefinitionAtPosition"));
         assert!(!EDITOR_SPRITE3D_JS.contains("function findSprite3dDefinitions"));
@@ -6550,12 +6561,89 @@ move
     }
 
     #[test]
+    fn sprite3d_clip_uses_scope_owned_world_box_selection() {
+        assert!(EDITOR_HTML.contains(r#"id="sprite3dClipActions""#));
+        let action_row = EDITOR_HTML
+            .split_once(r#"<div class="sprite3d-action-row" role="group" aria-label="3D sprite edit commands">"#)
+            .expect("3D sprite action row exists")
+            .1
+            .split_once("</div>")
+            .expect("3D sprite action row closes")
+            .0;
+        assert!(
+            action_row.find(r#"id="sprite3dClearButton""#)
+                < action_row.find(r#"id="sprite3dClipActions""#),
+            "clip actions stay at the right edge so their rightward expansion does not cover commands"
+        );
+        assert!(EDITOR_SPRITE3D_JS.contains("function normalizeSprite3dClipBox(box)"));
+        assert!(EDITOR_SPRITE3D_JS.contains(
+            "fullDepth: sprite3dEditScope() === \"all\""
+        ));
+        assert!(EDITOR_SPRITE3D_JS.contains(
+            "box[`min${worldAxis.toUpperCase()}`] = fullDepth ? 0 : fixedStack;"
+        ));
+        assert!(EDITOR_SPRITE3D_JS.contains(
+            "box[`max${worldAxis.toUpperCase()}`] = fullDepth ? sprite3d.size - 1 : fixedStack;"
+        ));
+        assert!(EDITOR_SPRITE3D_JS.contains(
+            "sprite3dClipBoxFromPlaneRect(rect, { base: sprite3dClipDrag.originBox })"
+        ));
+        assert!(EDITOR_SPRITE3D_JS.contains(
+            "sprite3dClipClipboardFromSelection(box, dimensions)"
+        ));
+        assert!(EDITOR_SPRITE3D_JS.contains(
+            "if (sprite3dClipClipboard.scope === \"slice\")"
+        ));
+        assert!(EDITOR_SPRITE3D_JS.contains(
+            "renderSprite3dClipFloatingPreview(rect);"
+        ));
+        assert!(EDITOR_SPRITE3D_JS.contains("drawSprite3dClipBounds(ctx, view);"));
+        assert!(EDITOR_SPRITE3D_JS.contains(
+            "const box = normalizeSprite3dClipBox(sprite3dClipSelection);"
+        ));
+        assert!(EDITOR_CSS.contains("--sprite3d-clip-stroke:"));
+        let clip_paste_cell = EDITOR_SPRITE3D_JS
+            .split_once("function pasteSprite3dClipCell(index, clipboardValue) {")
+            .expect("3D clip paste cell owner exists")
+            .1
+            .split_once("function setSprite3dClipCells(box, clipboard) {")
+            .expect("3D clip paste cell owner closes")
+            .0;
+        assert!(clip_paste_cell.contains("if (clipboardValue === null)"));
+        assert!(clip_paste_cell.contains("return false;"));
+        assert!(clip_paste_cell.contains("validSprite3dColorIndex(clipboardValue)"));
+        assert!(!clip_paste_cell.contains("sprite3dColorForColorIndex"));
+        assert!(!clip_paste_cell.contains("#00000000"));
+        assert_eq!(
+            EDITOR_SPRITE3D_JS
+                .matches("pasteSprite3dClipCell(index, clipboard.cells[offset])")
+                .count(),
+            2,
+            "whole and slice paste share transparent-hole semantics"
+        );
+        let clip_drag = EDITOR_SPRITE3D_JS
+            .split_once("function continueSprite3dClip(event) {")
+            .expect("3D clip drag handler exists")
+            .1
+            .split_once("function stopSprite3dClip(event) {")
+            .expect("3D clip drag handler closes")
+            .0;
+        assert!(
+            clip_drag.contains("renderSprite3dPreview();"),
+            "3D preview follows clip selection, move, and resize while dragging"
+        );
+        assert!(EDITOR_SPRITE3D_JS.contains(
+            "sprite3dEditScope() === \"slice\" && nextAxis !== sprite3d.axis"
+        ));
+    }
+
+    #[test]
     fn sprite_source_actions_stay_inside_sprite_pane() {
         assert!(EDITOR_HTML.contains(
             r#"<div class="source-action-group source-preview-actions sprite-source-actions sprite-header-actions" role="group" aria-label="Sprite source actions">"#
         ));
         assert!(EDITOR_HTML.contains(
-            r#"<div class="source-action-group source-preview-actions sprite-source-actions sprite-header-actions" role="group" aria-label="3D sprite source actions">"#
+            r#"<div class="source-action-group source-preview-actions sprite-source-actions sprite-header-actions sprite3d-source-actions" role="group" aria-label="3D sprite source actions">"#
         ));
         assert!(EDITOR_HTML.contains(r#"id="spritePaneHeaderActions""#));
         assert!(
@@ -6580,6 +6668,26 @@ move
             + sprite_actions;
         assert!(sprite_palette < sprite_actions);
         assert!(sprite_actions < sprite_board);
+
+        let sprite3d_palette = EDITOR_HTML
+            .find(r#"id="sprite3dPalette""#)
+            .expect("3D sprite palette exists");
+        let sprite3d_actions = EDITOR_HTML[sprite3d_palette..]
+            .find(r#"aria-label="3D sprite source actions""#)
+            .expect("3D sprite source actions follow palette")
+            + sprite3d_palette;
+        let sprite3d_workspace = EDITOR_HTML[sprite3d_actions..]
+            .find(r#"class="sprite3d-workspace""#)
+            .expect("3D sprite workspace follows source actions")
+            + sprite3d_actions;
+        let sprite3d_actions_html = &EDITOR_HTML[sprite3d_actions..sprite3d_workspace];
+        assert!(sprite3d_palette < sprite3d_actions);
+        assert!(sprite3d_actions < sprite3d_workspace);
+        assert!(sprite3d_actions_html.contains(r#"id="sprite3dUpdateButton""#));
+        assert!(sprite3d_actions_html.contains(r#"id="duplicateSprite3dButton""#));
+        assert!(sprite3d_actions_html.contains(r#"id="sprite3dExportButton""#));
+        assert!(!EDITOR_HTML.contains(r#"id="newSprite3dButton""#));
+        assert!(!EDITOR_HTML.contains(r#"id="sprite3dInsertButton""#));
     }
 
     #[test]
@@ -6634,9 +6742,10 @@ move
         assert!(!EDITOR_SPRITE_JS.contains("SOLID_SPRITE_EDITOR_SIZE"));
         assert!(EDITOR_SPRITE_JS.contains("const size = Number.isFinite(parsed) ? parsed : 5;"));
         assert!(!EDITOR_SPRITE_JS.contains("Math.trunc(Number(value) || 5)"));
-        assert!(EDITOR_SPRITE_JS.contains(
-            "return {\n      size: 1,\n      palette,\n      shapeBind: null,\n      solid: true,\n      sourcePreludeRows,\n      cells: [0],"
-        ));
+        assert!(
+            EDITOR_SPRITE_JS
+                .contains("solid: width === 1 && height === 1 && parsedFrames[0][0] === 0,")
+        );
         assert!(!EDITOR_SPRITE_JS.contains("const size = 5;"));
     }
 
@@ -7165,7 +7274,10 @@ move
             "--source-selection-bg: color-mix(in srgb, var(--accent) 34%, transparent);"
         ));
         assert!(EDITOR_CSS.contains(".source-block-selection-range {\n  position: absolute;\n  min-width: 2px;\n  background: var(--source-selection-bg);\n}"));
-        assert!(EDITOR_CSS.contains(".source-editor-mount .cm-content ::selection"));
+        assert!(EDITOR_CSS.contains(
+            ".source-editor-mount > .cm-editor.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground {\n  background: var(--source-selection-bg);\n}"
+        ));
+        assert!(!EDITOR_CSS.contains(".source-editor-mount .cm-content ::selection"));
     }
 
     #[test]
@@ -7269,8 +7381,8 @@ move
     fn sprite_source_loader_consumes_lang_sprite_contract_instead_of_source_parsing() {
         assert!(!EDITOR_SPRITE_JS.contains("`${tableName}:*`"));
         assert!(!EDITOR_SPRITE_JS.contains(":*"));
-        assert!(EDITOR_SPRITE_JS.contains(
-            "sprite.sourceSpriteContract = entry?.sourceSprite && typeof entry.sourceSprite === \"object\""
+        assert!(EDITOR_SPRITE_DOCUMENT_JS.contains(
+            "state.sourceSpriteContract = target?.sourceSprite && typeof target.sourceSprite === \"object\""
         ));
         assert!(EDITOR_SPRITE_JS.contains("function spriteSourceColorAssets()"));
         assert!(EDITOR_SPRITE_JS.contains("function spriteSourceShapeAssets()"));
@@ -7323,11 +7435,8 @@ move
         assert!(!EDITOR_SPRITE_JS.contains("const rowIndent = `${indent}\\t`;"));
 
         assert!(EDITOR_SPRITE3D_JS.contains("const SPRITE3D_SOURCE_INDENT = \"\";"));
-        assert!(EDITOR_SPRITE3D_JS.contains("function sprite3dSourceChildIndent(indent = \"\")"));
-        assert!(
-            EDITOR_SPRITE3D_JS
-                .contains("sprite3dObjectDefinitionText(sprite3dSourceIndent(entry.indent))")
-        );
+        assert!(!EDITOR_SPRITE3D_JS.contains("function sprite3dSourceChildIndent"));
+        assert!(!EDITOR_SPRITE3D_JS.contains("replaceSprite3dDefinition"));
     }
 
     #[test]
@@ -7336,7 +7445,7 @@ move
             "const loaded = parseSpriteDefinitionSource(target.sourceSprite, targetName);"
         ));
         assert!(
-            EDITOR_SPRITE_JS
+            EDITOR_SPRITE_DOCUMENT_JS
                 .contains("const resolvedPalette = Array.isArray(contract.resolvedPalette)")
         );
         assert!(
@@ -7457,7 +7566,6 @@ move
                 .contains("const resolvedRows = Array.isArray(contract?.resolvedShapeRows)")
         );
         assert!(EDITOR_SPRITE_JS.contains("assets.set(shapeName, resolvedRows);"));
-        assert!(EDITOR_SPRITE_JS.contains("if (!shapeRows.length)"));
         let contract_error_start = EDITOR_SPRITE_JS
             .find("function spriteSourceContractError(contract)")
             .expect("sprite source contract validation");
@@ -7508,7 +7616,6 @@ move
             EDITOR_SPRITE_JS
                 .contains("const paletteTokens = Array.isArray(contract.paletteTokens)")
         );
-        assert!(EDITOR_SPRITE_JS.contains("const asciiRows = Array.isArray(contract.pixelRows)"));
         assert!(
             EDITOR_SPRITE_JS.contains("const shapeName = typeof contract.shapeRef === \"string\"")
         );
@@ -7521,10 +7628,9 @@ move
 
     #[test]
     fn sprite_source_loader_handles_animation_frames() {
-        assert!(
-            EDITOR_SPRITE_JS
-                .contains("const animationRows = Array.isArray(contract.animationFrames)")
-        );
+        assert!(EDITOR_SPRITE_JS.contains(
+            "const semanticFrames = Array.isArray(contract.frames) ? contract.frames : [];"
+        ));
         assert!(EDITOR_SPRITE_JS.contains("animationMode: true,"));
         assert!(
             EDITOR_SPRITE_JS.contains(
@@ -7533,9 +7639,7 @@ move
         );
         assert!(EDITOR_SPRITE_JS.contains("frameDurationMs * parsedFrames.length"));
         assert!(EDITOR_SPRITE_JS.contains("animationDurationMs: durationMs,"));
-        assert!(
-            EDITOR_SPRITE_JS.contains("animationFrames: parsedFrames.map((frame) => frame.cells),")
-        );
+        assert!(EDITOR_SPRITE_JS.contains("animationFrames: parsedFrames,"));
         assert!(
             EDITOR_SPRITE_JS.contains("const animationSource = spriteAnimationSourceFrames();")
         );
@@ -7639,26 +7743,33 @@ move
         assert!(EDITOR_JS.contains("editSourceBodyStart: null"));
         assert!(EDITOR_JS.contains("editSourceBodyEnd: null"));
         assert!(EDITOR_SPRITE_JS.contains("function revealSpriteSourceResult"));
-        assert!(EDITOR_SPRITE_JS.contains("const result = { source, start: inserted.start };"));
-        assert!(EDITOR_SPRITE_JS.contains("revealSourceLocation({"));
-        assert!(EDITOR_SPRITE_JS.contains("recordHistory: false"));
-        assert!(EDITOR_SPRITE_JS.contains("sourceEditor.focus({ preventScroll: true });"));
+        assert!(EDITOR_SPRITE_DOCUMENT_JS.contains("async function commitSpriteEditorMutation"));
+        assert!(EDITOR_SPRITE_DOCUMENT_JS.contains("revealSpriteSourceResult(document, result);"));
+        assert!(EDITOR_SPRITE_DOCUMENT_JS.contains("sourceEditor.focus({ preventScroll: true });"));
+        assert!(EDITOR_SPRITE_DOCUMENT_JS.contains("function spriteEditorSourceRange"));
+        assert!(EDITOR_SPRITE_DOCUMENT_JS.contains("state.editSourceEnd"));
         assert!(EDITOR_SPRITE_JS.contains("function currentSpriteEditSourceRange(source)"));
-        assert!(EDITOR_SPRITE_JS.contains("end: entry.start + replacement.length"));
-        assert!(
-            EDITOR_SPRITE_JS.contains("async function replaceCurrentSpriteDefinitionFromParser")
-        );
-        assert!(EDITOR_SPRITE_JS.contains(
-            "const result = await replaceCurrentSpriteDefinitionFromParser(stagedSource);"
-        ));
-        assert!(EDITOR_SPRITE_JS.contains(
-            "setSpriteEditSource({ ...result.target, start: result.start, end: result.end, name: spriteObjectName() }, document);"
-        ));
-        assert!(EDITOR_SPRITE_JS.contains("const start = sprite.editSourceStart;"));
-        assert!(EDITOR_SPRITE_JS.contains("const end = sprite.editSourceEnd;"));
+        assert!(EDITOR_SPRITE_JS.contains("commitSpriteEditorMutation({"));
         assert!(EDITOR_JS.contains(
             "const trailingBoundary = removed.match(/((?:\\r?\\n[\\t ]*)+)$/)?.[1] || \"\";"
         ));
+    }
+
+    #[test]
+    fn shared_sprite_document_controller_loads_before_dimension_views() {
+        let document = EDITOR_HTML
+            .find(r#"<script src="editor_sprite_document.js"></script>"#)
+            .expect("editor loads shared sprite document controller");
+        let sprite2d = EDITOR_HTML
+            .find(r#"<script src="editor_sprite.js"></script>"#)
+            .expect("editor loads 2D sprite view");
+        let sprite3d = EDITOR_HTML
+            .find(r#"<script src="editor_sprite3d.js"#)
+            .expect("editor loads 3D sprite view");
+        assert!(document < sprite2d);
+        assert!(document < sprite3d);
+        assert!(EDITOR_SPRITE_DOCUMENT_JS.contains("function projectSpriteDocumentContract"));
+        assert!(!EDITOR_SPRITE_DOCUMENT_JS.contains("findMatchingBrace"));
     }
 
     #[test]
@@ -7667,7 +7778,7 @@ move
         assert!(EDITOR_SPRITE_JS.contains(
             "function invalidateSpriteEditSourceForDocument(document = activeDocument())"
         ));
-        assert!(EDITOR_SPRITE_JS.contains("clearSpriteEditSource();"));
+        assert!(EDITOR_SPRITE_DOCUMENT_JS.contains("clearSpriteEditorSourceTarget(state);"));
         assert!(EDITOR_SPRITE_JS.contains(
             "sourceEditor.addEventListener(\"input\", () => {\n  invalidateSpriteEditSourceForDocument(activeDocument());\n  syncSpriteSourceActionButtons();\n});"
         ));

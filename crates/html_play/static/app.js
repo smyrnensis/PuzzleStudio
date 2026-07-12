@@ -268,8 +268,6 @@ const standardChoiceCursors = new Map();
 const sceneMenuCursors = new Map();
 let screenScaleSyncFrame = 0;
 let screenScaleSyncPasses = 0;
-const defaultSceneLogicalSize = { width: 4, height: 3 };
-const defaultSceneLayoutUnit = 180;
 let pendingModelInput = null;
 const activeWaitTimers = new Set();
 let drainingQueuedModelInput = false;
@@ -469,64 +467,45 @@ function syncScreenScale() {
   if (screenView.getClientRects().length === 0 || playSurface.getClientRects().length === 0) {
     return;
   }
-  const logicalSize = currentSceneLogicalSize();
   const available = elementContentBox(playSurface);
   if (available.width <= 0 || available.height <= 0) {
     return;
   }
-  const virtualSize = virtualSceneSize(logicalSize);
-  const fit = fitLogicalSceneSize(virtualSize, available);
-  const scale = Math.max(
-    0.0001,
-    Math.min(fit.width / virtualSize.width, fit.height / virtualSize.height),
-  );
-  const unit = virtualSize.unit;
-  screenView.style.setProperty("--scene-layout-unit", `${unit}px`);
-  screenView.style.setProperty("--scene-logical-width", String(logicalSize.width));
-  screenView.style.setProperty("--scene-logical-height", String(logicalSize.height));
-  screenView.style.setProperty("--screen-virtual-width", `${virtualSize.width}px`);
-  screenView.style.setProperty("--screen-virtual-height", `${virtualSize.height}px`);
-  screenView.style.setProperty("--screen-scale", scale.toFixed(6));
-  screenFrame.style.width = `min(${Math.ceil(fit.width)}px, 100%)`;
-  screenFrame.style.height = `min(${Math.ceil(fit.height)}px, 100%)`;
-  screenFrame.dataset.screenScale = scale.toFixed(6);
-  screenFrame.dataset.screenWidth = String(logicalSize.width);
-  screenFrame.dataset.screenHeight = String(logicalSize.height);
-  screenFrame.dataset.screenVirtualWidth = String(virtualSize.width);
-  screenFrame.dataset.screenVirtualHeight = String(virtualSize.height);
-  syncLogicalLayoutElementSizes(unit);
+  const viewport = fitSceneViewport(available, currentSceneAspectRatio());
+  screenView.style.setProperty("--screen-virtual-width", `${viewport.width}px`);
+  screenView.style.setProperty("--screen-virtual-height", `${viewport.height}px`);
+  screenView.style.setProperty("--screen-scale", "1");
+  screenFrame.style.width = `min(${Math.ceil(viewport.width)}px, 100%)`;
+  screenFrame.style.height = `min(${Math.ceil(viewport.height)}px, 100%)`;
+  screenFrame.dataset.screenScale = "1";
+  screenFrame.dataset.screenVirtualWidth = String(viewport.width);
+  screenFrame.dataset.screenVirtualHeight = String(viewport.height);
   syncCleanControlGroupWidths(screenView);
   fitPuzzleFrameComponents(screenView);
 }
 
-function currentSceneLogicalSize() {
-  if (sceneEditorPreview?.layout?.size) {
-    return logicalSceneSize(sceneEditorPreview.layout.size);
+function currentSceneAspectRatio() {
+  if (sceneEditorPreview?.layout?.aspectRatio) {
+    return normalizedAspectRatio(sceneEditorPreview.layout.aspectRatio);
   }
   const layers = sceneLayers(currentState);
   const layer = layers.find((candidate) => candidate.focused === true) || layers[0];
   const sceneDef = sceneDefByName(layer?.name) || currentSceneDef();
-  return logicalSceneSize(sceneDef?.layout?.size);
+  return normalizedAspectRatio(sceneDef?.layout?.aspectRatio);
 }
 
-function logicalSceneSize(size) {
-  const width = Math.max(1, Number(size?.width) || defaultSceneLogicalSize.width);
-  const height = Math.max(1, Number(size?.height) || defaultSceneLogicalSize.height);
-  return { width, height };
+function normalizedAspectRatio(ratio) {
+  const width = Number(ratio?.width);
+  const height = Number(ratio?.height);
+  return Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0
+    ? width / height
+    : null;
 }
 
-function virtualSceneSize(logicalSize) {
-  const width = Math.max(1, logicalSize.width * defaultSceneLayoutUnit);
-  const height = Math.max(1, logicalSize.height * defaultSceneLayoutUnit);
-  return {
-    width,
-    height,
-    unit: defaultSceneLayoutUnit,
-  };
-}
-
-function fitLogicalSceneSize(virtualSize, available) {
-  const aspect = virtualSize.width / virtualSize.height;
+function fitSceneViewport(available, aspect) {
+  if (!aspect) {
+    return { width: Math.max(1, available.width), height: Math.max(1, available.height) };
+  }
   let width = available.width;
   let height = width / aspect;
   if (height > available.height) {
@@ -713,7 +692,7 @@ function notifySceneEditorPreview(requestId = sceneEditorPreview?.requestId || "
     scene: sceneName,
     theme: sceneEditorPreview.theme || currentState?.theme || puzzleBoot.theme || null,
     layout,
-    logicalSize: logicalSceneSize(layout?.size),
+    aspectRatio: normalizedAspectRatio(layout?.aspectRatio),
     components: sceneEditorComponentMetadata(sceneDef?.components || [], {
       __sceneDef: sceneDef,
       __sceneState: sceneEditorPreview.state || currentState?.sceneState || {},
@@ -795,11 +774,8 @@ function renderSceneEditorLayer(sceneDef, state) {
 function mergedScenePreviewLayout(sceneDef, override) {
   const base = cloneJson(sceneDef?.layout || {});
   const next = { ...base, ...(override || {}) };
-  if (override?.size) {
-    next.size = { ...(base.size || {}), ...override.size };
-  }
-  if (override?.align) {
-    next.align = { ...(base.align || {}), ...override.align };
+  if (override?.aspectRatio) {
+    next.aspectRatio = { ...(base.aspectRatio || {}), ...override.aspectRatio };
   }
   return next;
 }
@@ -827,11 +803,11 @@ function normalizeScenePreviewLayout(layout) {
     return null;
   }
   const next = {};
-  if (layout.size) {
-    const width = Number(layout.size.width);
-    const height = Number(layout.size.height);
+  if (layout.aspectRatio) {
+    const width = Number(layout.aspectRatio.width);
+    const height = Number(layout.aspectRatio.height);
     if (Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0) {
-      next.size = { width, height };
+      next.aspectRatio = { width, height };
     }
   }
   if (layout.gap !== undefined && layout.gap !== null && layout.gap !== "") {
@@ -840,14 +816,19 @@ function normalizeScenePreviewLayout(layout) {
       next.gap = gap;
     }
   }
-  if (layout.align && typeof layout.align === "object") {
-    next.align = {};
-    if (layout.align.x) {
-      next.align.x = String(layout.align.x);
+  if (["start", "center", "end", "stretch"].includes(layout.align)) {
+    next.align = layout.align;
+  }
+  if (["start", "center", "end", "between"].includes(layout.distribute)) {
+    next.distribute = layout.distribute;
+  }
+  if (layout.space?.kind === "fill") {
+    const weight = Number(layout.space.weight);
+    if (Number.isFinite(weight) && weight > 0) {
+      next.space = { kind: "fill", weight };
     }
-    if (layout.align.y) {
-      next.align.y = String(layout.align.y);
-    }
+  } else if (layout.space?.kind === "fit") {
+    next.space = { kind: "fit" };
   }
   return Object.keys(next).length ? next : null;
 }
@@ -898,7 +879,7 @@ function sceneEditorComponentMeta(component, path, scope = {}) {
   if (component.kind === "button" || component.kind === "choice") {
     meta.label = resolveLabel(component.label, scope) || sceneTitle(effectLabel(component.effect));
     meta.effect = component.effect || null;
-  } else if (component.kind === "text" || component.kind === "title" || component.kind === "subtitle") {
+  } else if (component.kind === "text") {
     meta.label = resolveLabel(component.content || component, scope);
   } else if (component.source) {
     meta.source = component.source;
@@ -1108,8 +1089,6 @@ function componentSizingKind(component) {
     case "puzzle":
     case "puzzle3":
       return "ratio";
-    case "title":
-    case "subtitle":
     case "text":
     case "button":
     case "choice":
@@ -1260,10 +1239,6 @@ function renderComponent(component, scope = {}) {
     case "puzzle":
     case "puzzle3":
       return renderRatioComponent(component, scope);
-    case "title":
-      return renderTitle(component, "view-title", scope);
-    case "subtitle":
-      return renderTitle(component, "view-subtitle", scope);
     case "text":
       return renderText(component, scope);
     case "button":
@@ -1286,15 +1261,6 @@ function renderComponent(component, scope = {}) {
       return empty;
     }
   }
-}
-
-function renderTitle(component, className, scope = {}) {
-  const title = document.createElement("p");
-  title.className = className;
-  title.textContent = resolveLabel(component.content, scope);
-  applySizingKind(title, component);
-  applySceneLayout(title, component.layout);
-  return title;
 }
 
 function renderPuzzle(component, scope = {}) {
@@ -1572,12 +1538,16 @@ function syncPuzzle3ControllerLevel(entry) {
 function renderText(component, scope = {}) {
   const text = document.createElement("p");
   text.className = "view-text";
+  text.dataset.textRole = component.role || "body";
   if (component.source === "expr") {
     text.textContent = resolveLabel(component.content, scope);
   } else if (component.source === "path") {
     text.textContent = String(resolveViewPath(component.path, scope) ?? "");
   } else {
     text.textContent = component.value || "";
+  }
+  if (component.textAlign) {
+    text.style.textAlign = sceneTextAlignCss(component.textAlign);
   }
   applySizingKind(text, component);
   applySceneLayout(text, component.layout);
@@ -1952,102 +1922,43 @@ function applySceneLayout(element, layout, options = {}) {
   if (!element || !layout) {
     return;
   }
-  if (layout.size) {
-    const width = Math.max(1, Number(layout.size.width) || 1);
-    const height = Math.max(1, Number(layout.size.height) || 1);
-    element.classList.add("has-layout-size");
-    element.style.setProperty("--layout-width", String(width));
-    element.style.setProperty("--layout-height", String(height));
-    element.dataset.layoutWidth = String(width);
-    element.dataset.layoutHeight = String(height);
-    element.dataset.layoutRoot = options.root ? "true" : "false";
+  if (layout.space?.kind === "fill") {
+    const weight = Math.max(1, Number(layout.space.weight) || 1);
+    element.style.flex = `${weight} 1 0`;
+    element.dataset.sceneSpace = "fill";
+  } else {
+    element.dataset.sceneSpace = "fit";
+  }
+  if (layout.aspectRatio) {
+    const width = Math.max(1, Number(layout.aspectRatio.width) || 1);
+    const height = Math.max(1, Number(layout.aspectRatio.height) || 1);
     element.style.aspectRatio = `${width} / ${height}`;
-    if (!options.root) {
-      applyLogicalElementSize(element);
-    }
+  }
+  if (layout.alignSelf) {
+    element.style.alignSelf = sceneLayoutAlignCss(layout.alignSelf);
   }
   if (layout.gap !== undefined && layout.gap !== null) {
     element.style.gap = `calc(${Math.max(0, Number(layout.gap) || 0)} * var(--scene-layout-gap-unit))`;
   }
-  const align = layout.align || {};
-  applySceneAlignment(element, align);
+  applySceneAlignment(element, layout.align, layout.distribute);
 }
 
-function applySceneAlignment(element, align = {}) {
-  const x = align.x ? sceneLayoutAlignCss(align.x) : "";
-  const y = align.y ? sceneLayoutAlignCss(align.y) : "";
-  if (x) {
-    element.style.justifyItems = x;
-  }
-  if (y) {
-    element.style.alignContent = y;
-  }
-  const isColumnFlex =
-    element.classList.contains("scene-layer")
-    || element.classList.contains("view-column")
-    || element.classList.contains("view-box");
-  const isRowFlex = element.classList.contains("view-row");
-  if (isColumnFlex) {
-    if (x) {
-      element.style.alignItems = x;
-    }
-    if (y) {
-      element.style.justifyContent = y;
-    }
-    return;
-  }
-  if (isRowFlex) {
-    if (x) {
-      element.style.justifyContent = x;
-    }
-    if (y) {
-      element.style.alignItems = y;
-    }
-    return;
-  }
-  if (x) {
-    element.style.justifyContent = x;
-  }
-  if (y) {
-    element.style.alignItems = y;
-  }
-}
-
-function syncLogicalLayoutElementSizes(unit = currentSceneLayoutUnit()) {
-  document.querySelectorAll(".has-layout-size").forEach((element) => {
-    applyLogicalElementSize(element, unit);
-  });
-}
-
-function applyLogicalElementSize(element, unit = currentSceneLayoutUnit()) {
-  if (!element || element.dataset.layoutRoot === "true") {
-    return;
-  }
-  const width = Math.max(1, Number(element.dataset.layoutWidth) || 1);
-  const height = Math.max(1, Number(element.dataset.layoutHeight) || 1);
-  element.style.inlineSize = `${Math.ceil(width * unit)}px`;
-  element.style.blockSize = `${Math.ceil(height * unit)}px`;
-}
-
-function currentSceneLayoutUnit() {
-  const inlineValue = Number.parseFloat(screenView?.style.getPropertyValue("--scene-layout-unit") || "");
-  if (Number.isFinite(inlineValue) && inlineValue > 0) {
-    return inlineValue;
-  }
-  const computedValue = Number.parseFloat(
-    getComputedStyle(screenView || document.documentElement).getPropertyValue("--scene-layout-unit") || "",
-  );
-  return Number.isFinite(computedValue) && computedValue > 0 ? computedValue : 1;
+function applySceneAlignment(element, align = "center", distribute = "center") {
+  element.style.alignItems = sceneLayoutAlignCss(align);
+  element.style.justifyContent = sceneDistributionCss(distribute);
 }
 
 function sceneLayoutAlignCss(value) {
-  if (value === "left" || value === "top") {
-    return "start";
-  }
-  if (value === "right" || value === "bottom") {
-    return "end";
-  }
-  return "center";
+  return ["start", "center", "end", "stretch"].includes(value) ? value : "center";
+}
+
+function sceneDistributionCss(value) {
+  if (value === "between") return "space-between";
+  return ["start", "center", "end"].includes(value) ? value : "center";
+}
+
+function sceneTextAlignCss(value) {
+  return ["start", "center", "end"].includes(value) ? value : "start";
 }
 
 function renderFor(component, scope = {}) {
@@ -2898,7 +2809,7 @@ function componentFootprint(component, context = {}) {
   if (focusKind === "menu" && component.kind === "level_menu") {
     return levelMenuFocusFootprint(component, context);
   }
-  if (["title", "subtitle", "text", "frame", "puzzle", "puzzle3"].includes(component.kind)) {
+  if (["text", "frame", "puzzle", "puzzle3"].includes(component.kind)) {
     return emptyCellFootprint();
   }
   if (component.kind === "row") {
