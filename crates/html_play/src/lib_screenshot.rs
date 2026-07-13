@@ -38,7 +38,9 @@ fn capture_html_screenshot(
     let timeout_arg = format!("--timeout={}", config.timeout_ms);
     let mut child = Command::new(&browser_path)
         .arg("--headless=new")
-        .arg("--disable-gpu")
+        .arg("--use-gl=angle")
+        .arg("--use-angle=swiftshader")
+        .arg("--enable-unsafe-swiftshader")
         .arg("--no-first-run")
         .arg("--no-default-browser-check")
         .arg("--disable-background-networking")
@@ -173,16 +175,7 @@ fn url_condition_value(value: &str) -> String {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn default_puzzle3_screenshot_scene(document: &puzzle_lang::LoadedDocument) -> Option<String> {
-    document
-        .scenes
-        .iter()
-        .find(|scene| {
-            scene
-                .components
-                .iter()
-                .any(component_contains_puzzle3_frame)
-        })
-        .map(|scene| scene.name.clone())
+    document.scenes.first().map(|scene| scene.name.clone())
 }
 
 fn component_contains_puzzle3_frame(component: &SceneComponent) -> bool {
@@ -206,4 +199,3 @@ fn component_contains_puzzle3_frame(component: &SceneComponent) -> bool {
         _ => false,
     }
 }
-

@@ -345,8 +345,16 @@ impl ServerState {
 
     #[cfg(feature = "solver")]
     fn solve_json(&self) -> Result<String, AppError> {
-        let response =
-            solve_current_state(&self.loaded, self.session.state().clone(), self.solver)?;
+        let level_index = self
+            .session
+            .active_level_index()
+            .ok_or_else(|| AppError::Config("solver requires an active level".to_string()))?;
+        let response = solve_current_state(
+            &self.loaded,
+            level_index,
+            self.session.state().clone(),
+            self.solver,
+        )?;
         let mut out = String::new();
         push_solution_response(&mut out, &self.loaded, &response);
         Ok(out)
@@ -646,20 +654,23 @@ where
 #[cfg(feature = "solver")]
 fn solve_current_state(
     loaded: &LoadedGame,
+    level_index: usize,
     initial: State,
     solver: SolverConfig,
 ) -> Result<PuzzleSolutionResponse, AppError> {
-    solve_current_state_with_budget(loaded, initial, solver.budget())
+    solve_current_state_with_budget(loaded, level_index, initial, solver.budget())
 }
 
 #[cfg(feature = "solver")]
 fn solve_current_state_with_budget(
     loaded: &LoadedGame,
+    level_index: usize,
     initial: State,
     budget: SearchBudget,
 ) -> Result<PuzzleSolutionResponse, AppError> {
     solve_current_state_with_budget_inner(
         loaded,
+        level_index,
         initial,
         budget,
         None::<fn(&State, SearchProgress)>,
@@ -985,6 +996,7 @@ fn collect_win_condition3_roots(condition: &WinCondition3, roots: &mut BTreeSet<
 #[cfg(feature = "solver")]
 fn solve_compiled_state_with_budget_and_progress<O>(
     engine: &puzzle_core_wasm::CompiledEngine,
+    level_index: usize,
     strategy: SolverStrategy,
     goal: Option<GoalExpr>,
     lose: Option<GoalExpr>,
@@ -997,7 +1009,12 @@ where
     O: FnMut(&State, SearchProgress),
 {
     let mut inputs = BTreeSet::new();
-    let game = engine.game();
+    let level_game = engine.game_for_level(level_index).ok_or_else(|| {
+        AppError::Config(format!(
+            "compiled solver level index out of range: {level_index}"
+        ))
+    })?;
+    let game = &level_game;
     collect_solver_inputs(game.program(), &mut inputs);
     let inputs = inputs.into_iter().collect::<Vec<_>>();
     if inputs.is_empty() {
@@ -1131,6 +1148,7 @@ fn compiled_display_state_after_inputs(
 #[cfg(feature = "solver")]
 fn solve_current_state_with_budget_inner<O>(
     loaded: &LoadedGame,
+    level_index: usize,
     initial: State,
     budget: SearchBudget,
     on_progress: Option<O>,
@@ -1140,6 +1158,7 @@ where
 {
     solve_current_state_with_goal_with_budget_inner(
         loaded,
+        level_index,
         SolverGoal2::BuiltIn,
         None,
         true,
@@ -1152,6 +1171,7 @@ where
 #[cfg(feature = "solver")]
 fn solve_current_state_with_goal_with_budget_inner<O>(
     loaded: &LoadedGame,
+    level_index: usize,
     goal: SolverGoal2,
     lose: Option<GoalExpr>,
     accept_win_command: bool,
@@ -1162,7 +1182,10 @@ fn solve_current_state_with_goal_with_budget_inner<O>(
 where
     O: FnMut(&State, SearchProgress),
 {
-    let inputs = solver_inputs(loaded);
+    let selected_game = loaded.compiled_game_for_level(level_index).ok_or_else(|| {
+        AppError::Config(format!("solver level index out of range: {level_index}"))
+    })?;
+    let inputs = solver_inputs_for_program(loaded, selected_game.program());
     if inputs.is_empty() {
         return Err(AppError::Config("no model inputs available".to_string()));
     }
@@ -1179,7 +1202,7 @@ where
     };
     let (solver_game, state_slicer) = solver_game_and_state_slicer_for_loaded(
         loaded,
-        loaded.solver_game(),
+        selected_game,
         &initial,
         exact_goal,
         explicit_goal,
@@ -1212,7 +1235,7 @@ where
     let score_goal = goal.clone();
     let lose_game = loaded.clone();
     let lose_expr_game = game.clone();
-    let replay_game = loaded.game.clone();
+    let replay_game = game.as_ref().clone();
     solve_domain_with_observations(
         &mut domain,
         solver_initial,
@@ -1244,6 +1267,7 @@ where
 #[cfg(feature = "solver")]
 fn solve_current_state_collect_with_budget_inner<O>(
     loaded: &LoadedGame,
+    level_index: usize,
     selector: SolverCollectSelector2,
     lose: Option<GoalExpr>,
     accept_win_command: bool,
@@ -1255,7 +1279,10 @@ fn solve_current_state_collect_with_budget_inner<O>(
 where
     O: FnMut(&State, SearchProgress),
 {
-    let inputs = solver_inputs(loaded);
+    let selected_game = loaded.compiled_game_for_level(level_index).ok_or_else(|| {
+        AppError::Config(format!("solver level index out of range: {level_index}"))
+    })?;
+    let inputs = solver_inputs_for_program(loaded, selected_game.program());
     if inputs.is_empty() {
         return Err(AppError::Config("no model inputs available".to_string()));
     }
@@ -1267,7 +1294,7 @@ where
 
     let (solver_game, state_slicer) = solver_game_and_state_slicer_for_collect(
         loaded,
-        loaded.solver_game(),
+        selected_game,
         &initial,
         &selector,
         lose.as_ref(),
@@ -1560,7 +1587,7 @@ where
 #[cfg(feature = "solver")]
 fn solution_steps3(
     game: &Game3,
-    rules: &[Rule3],
+    rules: &[RuleStep3],
     win_condition: Option<&WinCondition3>,
     mut state: State3,
     inputs: &[InputId],
@@ -2286,7 +2313,7 @@ G..B
     fn all_objects_on_goal_generates_the_same_subject_first_score_in_3d() {
         let parsed = parse_puzzle3d_for_solver(
             r#"
-puzzle3 board {
+puzzle board {
 layers {
 floor = Goal
 actor = Box
@@ -2296,7 +2323,7 @@ all Goal on Box
 }
 }
 
-levels3 default of board {
+levels default of board {
 legend {
 . = empty
 G = Goal

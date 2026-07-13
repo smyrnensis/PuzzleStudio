@@ -11,6 +11,7 @@ use crate::level_editor_source::{
     level_editor_level_slots, level_editor_manifest_json, level_editor_sprite_payload_json,
 };
 use crate::source::SurfaceSourceScan;
+use crate::source_folding::{SourceFoldRange, source_fold_ranges_from_document};
 use crate::source_outline::{SourceOutlineItem, source_outline_from_document};
 use crate::source_target::{
     SourceTarget, resolve_source_entries_from_document, resolve_source_target_from_entries,
@@ -35,6 +36,7 @@ pub struct SourceAnalysis {
     highlighted_source: OnceCell<HighlightedSource>,
     entries: OnceCell<Vec<SourceTarget>>,
     outline: OnceCell<Vec<SourceOutlineItem>>,
+    folds: OnceCell<Vec<SourceFoldRange>>,
     level_editor_integration: OnceCell<Result<crate::LevelEditorIntegration, String>>,
 }
 
@@ -79,6 +81,7 @@ impl SourceAnalysis {
             highlighted_source: OnceCell::new(),
             entries: OnceCell::new(),
             outline: OnceCell::new(),
+            folds: OnceCell::new(),
             level_editor_integration: OnceCell::new(),
         }
     }
@@ -120,6 +123,12 @@ impl SourceAnalysis {
     fn outline(&self) -> &[SourceOutlineItem] {
         self.outline
             .get_or_init(|| source_outline_from_document(self.document()))
+            .as_slice()
+    }
+
+    fn folds(&self) -> &[SourceFoldRange] {
+        self.folds
+            .get_or_init(|| source_fold_ranges_from_document(&self.source, self.document()))
             .as_slice()
     }
 
@@ -199,6 +208,7 @@ impl SourceAnalysis {
         self.highlighted_source.take();
         self.entries.take();
         self.outline.take();
+        self.folds.take();
         self.level_editor_integration.take();
         if !parser_catalog_reused {
             self.parser_catalog.take();
@@ -238,7 +248,7 @@ impl SourceAnalysis {
                 self.highlighted_source(),
                 start,
                 end,
-                include_outline.then(|| self.outline()),
+                include_outline.then(|| (self.outline(), self.folds())),
             );
         }
         let highlighted =
@@ -248,13 +258,13 @@ impl SourceAnalysis {
             &highlighted,
             start,
             end,
-            include_outline.then(|| self.outline()),
+            include_outline.then(|| (self.outline(), self.folds())),
         )
     }
 
     /// Emits source outline JSON from the cached structure document.
     pub fn outline_json(&self) -> String {
-        source_outline_items_json(self.outline())
+        source_outline_items_json(self.outline(), self.folds(), self.source.len())
     }
 
     /// Emits completion JSON from this analysis document.
@@ -355,14 +365,22 @@ fn source_analysis_json(analysis: &SourceAnalysis) -> String {
     out
 }
 
-fn source_outline_items_json(items: &[SourceOutlineItem]) -> String {
-    let mut out = String::from("{\"items\":[");
+fn source_outline_items_json(
+    items: &[SourceOutlineItem],
+    folds: &[SourceFoldRange],
+    source_length: usize,
+) -> String {
+    let mut out = String::from("{\"version\":1,\"offsetEncoding\":\"utf8\",\"sourceLength\":");
+    out.push_str(&source_length.to_string());
+    out.push_str(",\"items\":[");
     for (index, item) in items.iter().enumerate() {
         if index > 0 {
             out.push(',');
         }
         push_source_outline_item_json(&mut out, item);
     }
+    out.push_str("],\"folds\":[");
+    push_source_fold_ranges_json(&mut out, folds);
     out.push_str("]}");
     out
 }
@@ -372,7 +390,7 @@ fn highlighted_source_json(
     highlighted: &HighlightedSource,
     range_start: usize,
     range_end: usize,
-    outline: Option<&[SourceOutlineItem]>,
+    outline: Option<(&[SourceOutlineItem], &[SourceFoldRange])>,
 ) -> String {
     let mut out = String::from("{\"version\":3,\"offsetEncoding\":\"utf8\",");
     out.push_str("\"sourceLength\":");
@@ -392,7 +410,7 @@ fn highlighted_source_json(
             .iter()
             .filter(|span| span.end > range_start && span.start < range_end),
     );
-    if let Some(outline) = outline {
+    if let Some((outline, folds)) = outline {
         out.push_str(",\"outline\":{\"items\":[");
         for (index, item) in outline.iter().enumerate() {
             if index > 0 {
@@ -400,10 +418,27 @@ fn highlighted_source_json(
             }
             push_source_outline_item_json(&mut out, item);
         }
+        out.push_str("],\"version\":1,\"offsetEncoding\":\"utf8\",\"sourceLength\":");
+        out.push_str(&source_length.to_string());
+        out.push_str(",\"folds\":[");
+        push_source_fold_ranges_json(&mut out, folds);
         out.push_str("]}");
     }
     out.push('}');
     out
+}
+
+fn push_source_fold_ranges_json(out: &mut String, folds: &[SourceFoldRange]) {
+    for (index, range) in folds.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push('{');
+        push_json_number(out, "from", range.from);
+        out.push(',');
+        push_json_number(out, "to", range.to);
+        out.push('}');
+    }
 }
 
 fn push_highlight_json_value(out: &mut String, highlighted: &crate::HighlightedSource) {
@@ -715,6 +750,25 @@ B
         assert!(!new_body.contains("parse_surface_document"));
         assert!(!new_body.contains("resolve_source_entries_from_document"));
         assert!(!new_body.contains("source_outline_from_document"));
+        assert!(!new_body.contains("source_fold_ranges_from_document"));
+    }
+
+    #[test]
+    fn source_outline_contract_includes_parser_owned_utf8_fold_ranges() {
+        let source = "puzzle démo {\n  rules {\n    move\n  }\n}\n";
+        let payload = analyze_source(source).outline_json();
+        let outer_from = source.find('{').unwrap() + 1;
+        let outer_to = source.rfind('}').unwrap();
+        assert!(payload.contains("\"offsetEncoding\":\"utf8\""), "{payload}");
+        assert!(payload.contains("\"version\":1"), "{payload}");
+        assert!(
+            payload.contains(&format!("\"sourceLength\":{}", source.len())),
+            "{payload}"
+        );
+        assert!(
+            payload.contains(&format!("\"from\":{outer_from},\"to\":{outer_to}")),
+            "{payload}"
+        );
     }
 
     #[test]

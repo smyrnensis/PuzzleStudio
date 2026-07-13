@@ -3,7 +3,7 @@ let spriteBucketActive = false;
 let spriteTranslateActive = false;
 let spriteTranslateDrag = null;
 let spriteGridVisible = true;
-let spriteBrushPreset = "pixel";
+let spriteBrushSizePx = 1;
 let spriteLastPaintColorIndex = 0;
 let spriteClipActive = false;
 let spriteClipSelection = null;
@@ -22,12 +22,6 @@ const SPRITE_EDITOR_MAX_SIZE = 64;
 const SPRITE_ANIMATION_MAX_FRAMES = 24;
 const SPRITE_ANIMATION_MIN_DURATION_MS = 20;
 const SPRITE_ANIMATION_MAX_DURATION_MS = 5000;
-const SPRITE_BRUSH_PRESETS = {
-  pixel: { label: "1px", diameterCells: 1 },
-  thin: { label: "Marker S", ratio: 1 / 32 },
-  medium: { label: "Marker M", ratio: 1 / 20 },
-  thick: { label: "Marker L", ratio: 1 / 12 },
-};
 
 function resetSpriteBuilder(size = sprite.size) {
   sprite.size = clampSpriteSize(size);
@@ -164,6 +158,7 @@ function renderSpriteAnimationControls() {
   if (!spriteBuilder) {
     return;
   }
+  mountSharedSpriteAnimationUi("2d");
   ensureSpriteAnimationFrames();
   spriteBuilder.classList.toggle("is-animation-mode", sprite.animationMode);
   if (!sprite.animationMode) {
@@ -172,29 +167,64 @@ function renderSpriteAnimationControls() {
     return;
   }
   syncSpriteAnimationInputValues({ preserveActive: true });
-  if (spriteAnimationFrameTotal) {
-    spriteAnimationFrameTotal.textContent = String(sprite.animationFrameCount);
-  }
-  if (spriteAnimationPreviousFrameButton) {
-    spriteAnimationPreviousFrameButton.disabled = sprite.animationFrameCount <= 1;
-  }
-  if (spriteAnimationNextFrameButton) {
-    spriteAnimationNextFrameButton.disabled = sprite.animationFrameCount <= 1;
-  }
-  if (spriteAnimationInsertFrameButton) {
-    const canInsertFrame = sprite.animationFrameCount < SPRITE_ANIMATION_MAX_FRAMES;
-    spriteAnimationInsertFrameButton.disabled = !canInsertFrame;
-    spriteAnimationInsertFrameButton.classList.toggle("is-active", spriteAnimationInsertMode && canInsertFrame);
-    spriteAnimationInsertFrameButton.setAttribute("aria-pressed", spriteAnimationInsertMode && canInsertFrame ? "true" : "false");
-  }
-  if (spriteAnimationRemoveFrameButton) {
-    const canRemoveFrame = sprite.animationFrameCount > 1;
-    spriteAnimationRemoveFrameButton.disabled = !canRemoveFrame;
-    spriteAnimationRemoveFrameButton.classList.toggle("is-active", spriteAnimationRemoveMode && canRemoveFrame);
-    spriteAnimationRemoveFrameButton.setAttribute("aria-pressed", spriteAnimationRemoveMode && canRemoveFrame ? "true" : "false");
-  }
+  syncSharedSpriteAnimationToolbarState(sprite.animationFrameCount, SPRITE_ANIMATION_MAX_FRAMES);
   renderSpriteAnimationSurfaces();
   syncSpriteAnimationPlayback();
+}
+
+function syncSharedSpriteAnimationToolbarState(frameCount, maxFrames) {
+  if (spriteAnimationFrameTotal) spriteAnimationFrameTotal.textContent = String(frameCount);
+  if (spriteAnimationPreviousFrameButton) spriteAnimationPreviousFrameButton.disabled = frameCount <= 1;
+  if (spriteAnimationNextFrameButton) spriteAnimationNextFrameButton.disabled = frameCount <= 1;
+  if (spriteAnimationInsertFrameButton) {
+    const active = spriteAnimationInsertMode && frameCount < maxFrames;
+    spriteAnimationInsertFrameButton.disabled = frameCount >= maxFrames;
+    spriteAnimationInsertFrameButton.classList.toggle("is-active", active);
+    spriteAnimationInsertFrameButton.setAttribute("aria-pressed", active ? "true" : "false");
+  }
+  if (spriteAnimationRemoveFrameButton) {
+    const active = spriteAnimationRemoveMode && frameCount > 1;
+    spriteAnimationRemoveFrameButton.disabled = frameCount <= 1;
+    spriteAnimationRemoveFrameButton.classList.toggle("is-active", active);
+    spriteAnimationRemoveFrameButton.setAttribute("aria-pressed", active ? "true" : "false");
+  }
+}
+
+function mountSharedSpriteAnimationUi(dimension) {
+  const toolbar = spriteAnimationFrameInput?.closest(".sprite-animation-toolbar");
+  const panel = spriteAnimationFrameStrip?.closest(".sprite-animation-panel");
+  const playbackPanel = spriteAnimationPlaybackView?.closest(".sprite-animation-playback-panel");
+  const sidecar = panel?.closest(".sprite-animation-sidecar");
+  if (!toolbar || !panel || !playbackPanel || !sidecar) {
+    throw new Error("Shared sprite animation UI is unavailable");
+  }
+  if (dimension === "3d") {
+    const previewColumn = sprite3dBuilder?.querySelector(".sprite3d-preview-column");
+    const previewStage = sprite3dBuilder?.querySelector(".sprite3d-preview-stage");
+    if (!previewColumn || !previewStage) {
+      throw new Error("3D sprite animation hosts are unavailable");
+    }
+    previewColumn.insertBefore(toolbar, previewStage);
+    toolbar.classList.add("is-sprite3d-shared");
+    previewStage.append(sidecar);
+    toolbar.setAttribute("aria-label", "3D sprite animation frame controls");
+    playbackPanel.setAttribute("aria-label", "3D sprite animation playback preview");
+    spriteAnimationPlaybackView.setAttribute("aria-label", "3D sprite animation playback preview");
+    panel.setAttribute("aria-label", "3D sprite animation frames");
+    return;
+  }
+  const boardWrap = spriteBuilder.querySelector(".sprite-board-wrap");
+  const workspace = spriteBuilder.querySelector(".sprite-animation-workspace");
+  if (!boardWrap || !workspace) {
+    throw new Error("2D sprite animation hosts are unavailable");
+  }
+  boardWrap.insertBefore(toolbar, workspace);
+  toolbar.classList.remove("is-sprite3d-shared");
+  workspace.append(sidecar);
+  toolbar.setAttribute("aria-label", "Sprite animation frame controls");
+  playbackPanel.setAttribute("aria-label", "Sprite animation playback preview");
+  spriteAnimationPlaybackView.setAttribute("aria-label", "Sprite animation playback preview");
+  panel.setAttribute("aria-label", "Sprite animation frames");
 }
 
 function syncSpriteAnimationInputValues(options = {}) {
@@ -222,11 +252,7 @@ function renderSpriteAnimationSurfaces() {
 }
 
 function renderSpriteAnimationPlaybackView(cells) {
-  if (!spriteAnimationPlaybackView) {
-    return;
-  }
-  spriteAnimationPlaybackView.style.setProperty("--sprite-size", sprite.size);
-  spriteAnimationPlaybackView.replaceChildren(...spriteAnimationFrameCells(cells));
+  renderSharedSpriteAnimationPlaybackView(sharedSpriteAnimationController("sprite"), cells);
 }
 
 function spriteAnimationFrameCells(cells) {
@@ -245,72 +271,207 @@ function renderSpriteAnimationFrameStrip() {
   }
   const showInsertTargets = spriteAnimationInsertMode && sprite.animationFrameCount < SPRITE_ANIMATION_MAX_FRAMES;
   const showRemoveTargets = spriteAnimationRemoveMode && sprite.animationFrameCount > 1;
-  spriteAnimationFrameStrip.classList.toggle("is-insert-mode", showInsertTargets);
-  spriteAnimationFrameStrip.classList.toggle("is-remove-mode", showRemoveTargets);
+  renderSpriteAnimationFrameStripView({
+    target: spriteAnimationFrameStrip,
+    frameCount: sprite.animationFrameCount,
+    activeIndex: sprite.animationFrameIndex,
+    playingIndex: sprite.animationPlaybackIndex,
+    size: sprite.size,
+    showInsertTargets,
+    showRemoveTargets,
+    renderCells: (index) => spriteAnimationFrameCells(sprite.animationFrames[index]),
+    onSelect: setSpriteAnimationFrame,
+    onRemove: removeSpriteAnimationFrameAt,
+    renderInsertTarget: spriteAnimationInsertTargetButton,
+    noun: "sprite animation",
+  });
+}
+
+function renderSpriteAnimationFrameStripView(options) {
+  const target = options.target;
+  if (!target) {
+    return;
+  }
+  target.classList.toggle("is-insert-mode", Boolean(options.showInsertTargets));
+  target.classList.toggle("is-remove-mode", Boolean(options.showRemoveTargets));
   const fragment = document.createDocumentFragment();
-  for (let index = 0; index < sprite.animationFrameCount; index += 1) {
-    if (showInsertTargets) {
-      fragment.append(spriteAnimationInsertTargetButton(index));
+  for (let index = 0; index < options.frameCount; index += 1) {
+    if (options.showInsertTargets) {
+      fragment.append(options.renderInsertTarget(index));
     }
     const button = document.createElement("button");
     button.type = "button";
     button.className = "sprite-animation-frame-button";
-    button.classList.toggle("is-active", index === sprite.animationFrameIndex);
-    button.classList.toggle("is-playing-frame", sprite.animationMode && index === sprite.animationPlaybackIndex);
-    button.style.setProperty("--sprite-size", sprite.size);
-    button.setAttribute("aria-label", showRemoveTargets ? `Remove sprite animation frame ${index + 1}` : `Edit sprite animation frame ${index + 1}`);
-    button.title = showRemoveTargets ? "Remove frame" : `Frame ${index + 1}`;
-    button.append(...spriteAnimationFrameCells(sprite.animationFrames[index]));
+    button.classList.toggle("is-active", index === options.activeIndex);
+    button.classList.toggle("is-playing-frame", index === options.playingIndex);
+    button.style.setProperty("--sprite-size", options.size);
+    if (options.columns) {
+      button.style.setProperty("--sprite-preview-cols", options.columns);
+    }
+    if (options.rows) {
+      button.style.setProperty("--sprite-preview-rows", options.rows);
+    }
+    button.setAttribute("aria-label", options.showRemoveTargets
+      ? `Remove ${options.noun} frame ${index + 1}`
+      : `Edit ${options.noun} frame ${index + 1}`);
+    button.title = options.showRemoveTargets ? "Remove frame" : `Frame ${index + 1}`;
+    button.append(...options.renderCells(index));
     const label = document.createElement("span");
     label.className = "sprite-animation-frame-index";
     label.textContent = String(index + 1);
     button.append(label);
     button.addEventListener("click", () => {
-      if (spriteAnimationRemoveMode) {
-        removeSpriteAnimationFrameAt(index);
+      if (options.showRemoveTargets) {
+        options.onRemove(index);
         return;
       }
-      setSpriteAnimationFrame(index);
+      options.onSelect(index);
     });
     fragment.append(button);
   }
-  if (showInsertTargets) {
-    fragment.append(spriteAnimationInsertTargetButton(sprite.animationFrameCount));
+  if (options.showInsertTargets) {
+    fragment.append(options.renderInsertTarget(options.frameCount));
   }
-  spriteAnimationFrameStrip.replaceChildren(fragment);
+  target.replaceChildren(fragment);
 }
 
-function spriteAnimationInsertTargetButton(index) {
+function spriteAnimationInsertTargetButton(index, onInsert = insertSpriteAnimationFrameAt, noun = "sprite animation") {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "sprite-animation-insert-target";
-  button.setAttribute("aria-label", `Insert sprite animation frame at position ${index + 1}`);
+  button.setAttribute("aria-label", `Insert ${noun} frame at position ${index + 1}`);
   button.title = "Add frame";
-  button.addEventListener("click", () => insertSpriteAnimationFrameAt(index));
+  button.addEventListener("click", () => onInsert(index));
   return button;
 }
 
-function setSpriteAnimationFrame(index) {
-  ensureSpriteAnimationFrames();
-  spriteAnimationInsertMode = false;
-  spriteAnimationRemoveMode = false;
-  const nextIndex = Math.max(0, Math.min(sprite.animationFrameCount - 1, Math.trunc(Number(index) || 0)));
-  if (nextIndex === sprite.animationFrameIndex) {
-    renderSpriteAnimationControls();
+function sharedSpriteAnimationController(dimension = currentSpritePaneMode) {
+  const is3d = dimension === "sprite3d" || dimension === "3d";
+  if (is3d) ensureSprite3dAnimationState();
+  else ensureSpriteAnimationFrames();
+  const state = is3d ? sprite3d : sprite;
+  return {
+    dimension: is3d ? "sprite3d" : "sprite",
+    state,
+    frames: is3d ? state.frames : state.animationFrames,
+    maxFrames: is3d ? SPRITE3D_ANIMATION_MAX_FRAMES : SPRITE_ANIMATION_MAX_FRAMES,
+    noun: is3d ? "3D sprite animation" : "sprite animation",
+    durationMs: () => is3d ? normalizedSprite3dAnimationDuration() : normalizedSpriteAnimationDuration(),
+    renderPlaybackFrame: is3d
+      ? (frame) => sprite3dAnimationFramePreview(frame)
+      : (frame) => spriteAnimationFrameCells(frame),
+    commit: is3d ? commitSprite3dActiveFrame : () => {},
+    stopPlayback: () => stopSpriteAnimationPlayback({ render: false }),
+    deactivateClip: is3d
+      ? () => deactivateSprite3dClipMode({ render: false })
+      : () => deactivateSpriteClipMode({ render: false }),
+    render: is3d ? renderSprite3dBuilder : renderSpriteBuilder,
+  };
+}
+
+function toggleSharedSpriteAnimationEditMode(mode) {
+  const context = sharedSpriteAnimationController();
+  const inserting = mode === "insert";
+  if (inserting && context.state.animationFrameCount >= context.maxFrames) {
+    spriteAnimationInsertMode = false;
+    context.render();
+    setSpriteActionStatus(`Maximum ${context.maxFrames} frames`, "is-error");
     return;
   }
-  sprite.animationFrameIndex = nextIndex;
-  sprite.cells = sprite.animationFrames[nextIndex];
-  deactivateSpriteClipMode({ render: false });
-  renderSpriteBuilder();
+  if (!inserting && context.state.animationFrameCount <= 1) {
+    spriteAnimationRemoveMode = false;
+    context.render();
+    setSpriteActionStatus("At least 1 frame is required", "is-error");
+    return;
+  }
+  spriteAnimationInsertMode = inserting ? !spriteAnimationInsertMode : false;
+  spriteAnimationRemoveMode = inserting ? false : !spriteAnimationRemoveMode;
+  context.render();
+  const active = inserting ? spriteAnimationInsertMode : spriteAnimationRemoveMode;
+  setSpriteActionStatus(active
+    ? (inserting ? "Click a frame gap" : "Click a frame to remove")
+    : (inserting ? "Add frame canceled" : "Remove frame canceled"), "is-ok");
+}
+
+function selectSharedSpriteAnimationFrame(dimension, index) {
+  const context = sharedSpriteAnimationController(dimension);
+  context.commit();
+  spriteAnimationInsertMode = false;
+  spriteAnimationRemoveMode = false;
+  const nextIndex = Math.max(0, Math.min(context.state.animationFrameCount - 1, Math.trunc(Number(index) || 0)));
+  context.state.animationFrameIndex = nextIndex;
+  context.state.animationPlaybackIndex = nextIndex;
+  context.state.cells = context.frames[nextIndex];
+  context.deactivateClip();
+  context.render();
   setSpriteActionStatus(`Frame ${nextIndex + 1}`, "is-ok");
 }
 
+function moveSharedSpriteAnimationFrame(dimension, delta) {
+  const context = sharedSpriteAnimationController(dimension);
+  const count = context.state.animationFrameCount;
+  selectSharedSpriteAnimationFrame(dimension, (context.state.animationFrameIndex + delta + count) % count);
+}
+
+function insertSharedSpriteAnimationFrameAt(dimension, index) {
+  const context = sharedSpriteAnimationController(dimension);
+  if (context.state.animationFrameCount >= context.maxFrames) {
+    spriteAnimationInsertMode = false;
+    context.render();
+    setSpriteActionStatus(`Maximum ${context.maxFrames} frames`, "is-error");
+    return false;
+  }
+  const before = visualEditSnapshot(context.dimension);
+  context.commit();
+  const insertIndex = Math.max(0, Math.min(context.state.animationFrameCount, Math.trunc(Number(index) || 0)));
+  const copyIndex = Math.max(0, Math.min(context.state.animationFrameCount - 1, insertIndex - 1));
+  context.stopPlayback();
+  context.frames.splice(insertIndex, 0, context.frames[copyIndex].slice());
+  context.state.animationFrameCount = context.frames.length;
+  context.state.animationFrameIndex = insertIndex;
+  context.state.animationPlaybackIndex = insertIndex;
+  context.state.cells = context.frames[insertIndex];
+  spriteAnimationInsertMode = false;
+  spriteAnimationRemoveMode = false;
+  context.deactivateClip();
+  context.render();
+  setSpriteActionStatus(`Added frame ${insertIndex + 1}`, "is-ok");
+  pushVisualEditUndoSnapshot(context.dimension, before);
+  return true;
+}
+
+function removeSharedSpriteAnimationFrameAt(dimension, index) {
+  const context = sharedSpriteAnimationController(dimension);
+  if (context.state.animationFrameCount <= 1) {
+    spriteAnimationRemoveMode = false;
+    context.render();
+    setSpriteActionStatus("At least 1 frame is required", "is-error");
+    return false;
+  }
+  const before = visualEditSnapshot(context.dimension);
+  context.commit();
+  const removeIndex = Math.max(0, Math.min(context.state.animationFrameCount - 1, Math.trunc(Number(index) || 0)));
+  context.stopPlayback();
+  context.frames.splice(removeIndex, 1);
+  context.state.animationFrameCount = context.frames.length;
+  context.state.animationFrameIndex = Math.min(removeIndex, context.frames.length - 1);
+  context.state.animationPlaybackIndex = context.state.animationFrameIndex;
+  context.state.cells = context.frames[context.state.animationFrameIndex];
+  spriteAnimationInsertMode = false;
+  spriteAnimationRemoveMode = false;
+  context.deactivateClip();
+  context.render();
+  setSpriteActionStatus(`Removed frame ${removeIndex + 1}`, "is-ok");
+  pushVisualEditUndoSnapshot(context.dimension, before);
+  return true;
+}
+
+function setSpriteAnimationFrame(index) {
+  selectSharedSpriteAnimationFrame("sprite", index);
+}
+
 function moveSpriteAnimationFrame(delta) {
-  ensureSpriteAnimationFrames();
-  const count = sprite.animationFrameCount;
-  const next = (sprite.animationFrameIndex + delta + count) % count;
-  setSpriteAnimationFrame(next);
+  moveSharedSpriteAnimationFrame("sprite", delta);
 }
 
 function updateSpriteAnimationFrameCount(value) {
@@ -323,82 +484,12 @@ function updateSpriteAnimationFrameCount(value) {
   pushVisualEditUndoSnapshot("sprite", before);
 }
 
-function toggleSpriteAnimationInsertMode() {
-  ensureSpriteAnimationFrames();
-  if (sprite.animationFrameCount >= SPRITE_ANIMATION_MAX_FRAMES) {
-    spriteAnimationInsertMode = false;
-    renderSpriteAnimationControls();
-    setSpriteActionStatus(`Maximum ${SPRITE_ANIMATION_MAX_FRAMES} frames`, "is-error");
-    return;
-  }
-  spriteAnimationRemoveMode = false;
-  spriteAnimationInsertMode = !spriteAnimationInsertMode;
-  renderSpriteAnimationControls();
-  setSpriteActionStatus(spriteAnimationInsertMode ? "Click a frame gap" : "Add frame canceled", "is-ok");
-}
-
-function toggleSpriteAnimationRemoveMode() {
-  ensureSpriteAnimationFrames();
-  if (sprite.animationFrameCount <= 1) {
-    spriteAnimationRemoveMode = false;
-    renderSpriteAnimationControls();
-    setSpriteActionStatus("At least 1 frame is required", "is-error");
-    return;
-  }
-  spriteAnimationInsertMode = false;
-  spriteAnimationRemoveMode = !spriteAnimationRemoveMode;
-  renderSpriteAnimationControls();
-  setSpriteActionStatus(spriteAnimationRemoveMode ? "Click a frame to remove" : "Remove frame canceled", "is-ok");
-}
-
 function insertSpriteAnimationFrameAt(index) {
-  ensureSpriteAnimationFrames();
-  if (sprite.animationFrameCount >= SPRITE_ANIMATION_MAX_FRAMES) {
-    spriteAnimationInsertMode = false;
-    renderSpriteAnimationControls();
-    setSpriteActionStatus(`Maximum ${SPRITE_ANIMATION_MAX_FRAMES} frames`, "is-error");
-    return;
-  }
-  const before = visualEditSnapshot("sprite");
-  const insertIndex = Math.max(0, Math.min(sprite.animationFrameCount, Math.trunc(Number(index) || 0)));
-  const copyIndex = Math.max(0, Math.min(sprite.animationFrameCount - 1, insertIndex - 1));
-  const insertedCells = cloneSpriteCells(sprite.animationFrames[copyIndex]);
-  stopSpriteAnimationPlayback({ render: false });
-  sprite.animationFrames.splice(insertIndex, 0, insertedCells);
-  sprite.animationFrameCount = sprite.animationFrames.length;
-  sprite.animationFrameIndex = insertIndex;
-  sprite.animationPlaybackIndex = insertIndex;
-  sprite.cells = sprite.animationFrames[insertIndex];
-  spriteAnimationInsertMode = false;
-  spriteAnimationRemoveMode = false;
-  deactivateSpriteClipMode({ render: false });
-  renderSpriteBuilder();
-  setSpriteActionStatus(`Added frame ${insertIndex + 1}`, "is-ok");
-  pushVisualEditUndoSnapshot("sprite", before);
+  return insertSharedSpriteAnimationFrameAt("sprite", index);
 }
 
 function removeSpriteAnimationFrameAt(index) {
-  ensureSpriteAnimationFrames();
-  if (sprite.animationFrameCount <= 1) {
-    spriteAnimationRemoveMode = false;
-    renderSpriteAnimationControls();
-    setSpriteActionStatus("At least 1 frame is required", "is-error");
-    return;
-  }
-  const before = visualEditSnapshot("sprite");
-  const removeIndex = Math.max(0, Math.min(sprite.animationFrameCount - 1, Math.trunc(Number(index) || 0)));
-  stopSpriteAnimationPlayback({ render: false });
-  sprite.animationFrames.splice(removeIndex, 1);
-  sprite.animationFrameCount = sprite.animationFrames.length;
-  sprite.animationFrameIndex = Math.max(0, Math.min(removeIndex, sprite.animationFrameCount - 1));
-  sprite.animationPlaybackIndex = sprite.animationFrameIndex;
-  sprite.cells = sprite.animationFrames[sprite.animationFrameIndex];
-  spriteAnimationInsertMode = false;
-  spriteAnimationRemoveMode = false;
-  deactivateSpriteClipMode({ render: false });
-  renderSpriteBuilder();
-  setSpriteActionStatus(`Removed frame ${removeIndex + 1}`, "is-ok");
-  pushVisualEditUndoSnapshot("sprite", before);
+  return removeSharedSpriteAnimationFrameAt("sprite", index);
 }
 
 function updateSpriteAnimationDuration(value, options = {}) {
@@ -426,16 +517,16 @@ function isSpriteVisualEditUndoTarget(target) {
 }
 
 function spriteAnimationFrameDelayMs() {
-  ensureSpriteAnimationFrames();
-  return Math.max(1, Math.round(sprite.animationDurationMs / sprite.animationFrameCount));
+  const context = sharedSpriteAnimationController();
+  return Math.max(1, Math.round(context.durationMs() / context.state.animationFrameCount));
 }
 
 function syncSpriteAnimationPlayback() {
-  if (!sprite.animationMode || sprite.animationFrameCount <= 1) {
+  const context = sharedSpriteAnimationController();
+  if (!context.state.animationMode || context.state.animationFrameCount <= 1) {
     stopSpriteAnimationPlayback({ render: false });
-    sprite.animationPlaybackIndex = sprite.animationFrameIndex;
-    renderSpriteAnimationPlaybackView(sprite.cells);
-    renderSpriteAnimationFrameStrip();
+    context.state.animationPlaybackIndex = context.state.animationFrameIndex;
+    renderSharedSpriteAnimationPlaybackView(context, context.state.cells);
     return;
   }
   if (
@@ -448,22 +539,23 @@ function syncSpriteAnimationPlayback() {
 }
 
 function startSpriteAnimationPlayback() {
-  ensureSpriteAnimationFrames();
-  if (sprite.animationFrameCount <= 1) {
+  const dimension = currentSpritePaneMode;
+  const context = sharedSpriteAnimationController(dimension);
+  if (context.state.animationFrameCount <= 1) {
     stopSpriteAnimationPlayback({ render: false });
     return;
   }
   stopSpriteAnimationPlayback({ render: false });
-  sprite.animationPlaying = true;
+  context.state.animationPlaying = true;
   spriteAnimationPlaybackDurationMs = spriteAnimationFrameDelayMs();
-  sprite.animationPlaybackIndex = sprite.animationFrameIndex;
-  renderSpriteAnimationPlaybackView(sprite.animationFrames[sprite.animationPlaybackIndex] || sprite.cells);
+  context.state.animationPlaybackIndex = context.state.animationFrameIndex;
+  renderSharedSpriteAnimationPlaybackView(context, context.frames[context.state.animationPlaybackIndex] || context.state.cells);
   const tick = () => {
-    if (!sprite.animationPlaying) {
+    if (!context.state.animationPlaying || currentSpritePaneMode !== dimension) {
       return;
     }
-    sprite.animationPlaybackIndex = (sprite.animationPlaybackIndex + 1) % sprite.animationFrameCount;
-    renderSpriteAnimationPlaybackView(sprite.animationFrames[sprite.animationPlaybackIndex] || sprite.cells);
+    context.state.animationPlaybackIndex = (context.state.animationPlaybackIndex + 1) % context.state.animationFrameCount;
+    renderSharedSpriteAnimationPlaybackView(context, context.frames[context.state.animationPlaybackIndex] || context.state.cells);
     spriteAnimationPlaybackDurationMs = spriteAnimationFrameDelayMs();
     spriteAnimationPlaybackTimer = window.setTimeout(tick, spriteAnimationPlaybackDurationMs);
   };
@@ -475,16 +567,148 @@ function stopSpriteAnimationPlayback(options = {}) {
   spriteAnimationPlaybackTimer = 0;
   spriteAnimationPlaybackDurationMs = 0;
   sprite.animationPlaying = false;
+  sprite3d.animationPlaying = false;
   if (options.render !== false) {
-    renderSpriteAnimationSurfaces();
+    const context = sharedSpriteAnimationController();
+    renderSharedSpriteAnimationPlaybackView(context, context.frames[context.state.animationPlaybackIndex] || context.state.cells);
   }
 }
 
+function renderSharedSpriteAnimationPlaybackView(context, frame) {
+  if (!spriteAnimationPlaybackView) {
+    return;
+  }
+  spriteAnimationPlaybackView.classList.toggle("is-sprite3d", context.dimension === "sprite3d");
+  spriteAnimationPlaybackView.style.setProperty("--sprite-size", context.state.size);
+  spriteAnimationPlaybackView.replaceChildren(...context.renderPlaybackFrame(frame));
+}
+
+function renderSpriteEditorUpperControls(target, controls) {
+  if (!target) {
+    return;
+  }
+
+  const labeledControl = (labelText, control, className) => {
+    const label = document.createElement("label");
+    label.className = `sprite-compact-control ${className}`;
+    const caption = document.createElement("span");
+    caption.textContent = labelText;
+    label.append(caption, control);
+    return label;
+  };
+
+  const root = document.createElement("div");
+  root.className = "sprite-editor-upper-controls";
+  root.setAttribute("aria-label", "Sprite source fields");
+
+  const nameRow = document.createElement("div");
+  nameRow.className = "sprite-editor-name-row";
+  const sourceActions = document.createElement("span");
+  sourceActions.className = "sprite-editor-source-actions";
+  sourceActions.setAttribute("role", "group");
+  sourceActions.setAttribute("aria-label", `${controls.dimension.toUpperCase()} sprite source actions`);
+  sourceActions.append(controls.newButton, controls.addButton, controls.saveButton);
+  nameRow.append(labeledControl("Sprite for", controls.nameInput, "sprite-name-control"), sourceActions);
+
+  const geometry = document.createElement("div");
+  geometry.className = "sprite-editor-geometry-group";
+  geometry.append(labeledControl("Size", controls.sizeInput, "sprite-size-control"));
+
+  const scale = document.createElement("div");
+  scale.className = "sprite-scale-control sprite-compact-control";
+  scale.setAttribute("role", "group");
+  scale.setAttribute("aria-label", "Sprite scale");
+  const scaleLabel = document.createElement("span");
+  scaleLabel.className = "sprite-control-label";
+  scaleLabel.textContent = "Scale";
+  const scaleGroup = document.createElement("div");
+  scaleGroup.className = "sprite-scale-group";
+  const scalePrefix = document.createElement("span");
+  scalePrefix.className = "sprite-scale-prefix";
+  scalePrefix.setAttribute("aria-hidden", "true");
+  scalePrefix.textContent = "×";
+  scaleGroup.append(
+    scalePrefix,
+    controls.scaleInput,
+    controls.scaleDownButton,
+    controls.scaleUpButton,
+  );
+  scale.append(scaleLabel, scaleGroup);
+  geometry.append(scale);
+
+  const animation = document.createElement("div");
+  animation.className = "sprite-editor-animation-group";
+  const durationWrap = document.createElement("span");
+  durationWrap.className = "sprite-duration-input";
+  const durationUnit = document.createElement("span");
+  durationUnit.className = "sprite-duration-unit";
+  durationUnit.setAttribute("aria-hidden", "true");
+  durationUnit.textContent = "ms";
+  durationWrap.append(controls.durationInput, durationUnit);
+  animation.append(
+    labeledControl("Duration", durationWrap, "sprite-duration-control"),
+    labeledControl("Frames", controls.frameCountInput, "sprite-frame-count-control"),
+  );
+
+  root.append(nameRow, controls.shapeField, geometry, animation);
+  target.replaceChildren(root);
+}
+
+function spriteEditorUpperControls2d() {
+  return {
+    dimension: "2d",
+    nameInput: spriteNameInput,
+    sizeInput: spriteSizeInput,
+    scaleInput: spriteScaleInput,
+    scaleDownButton: spriteScaleDownButton,
+    scaleUpButton: spriteScaleUpButton,
+    durationInput: spriteAnimationDurationInput,
+    frameCountInput: spriteAnimationFrameCountInput,
+    shapeField: spriteShapeField,
+    newButton: newSpriteButton,
+    addButton: spriteInsertButton,
+    saveButton: spriteUpdateButton,
+  };
+}
+
+function spriteEditorUpperControls3d() {
+  return {
+    dimension: "3d",
+    nameInput: sprite3dNameInput,
+    sizeInput: sprite3dSizeInput,
+    scaleInput: sprite3dScaleInput,
+    scaleDownButton: sprite3dScaleDownButton,
+    scaleUpButton: sprite3dScaleUpButton,
+    durationInput: sprite3dAnimationDurationInput,
+    frameCountInput: sprite3dAnimationFrameCountInput,
+    shapeField: sprite3dShapeField,
+    newButton: newSprite3dButton,
+    addButton: sprite3dInsertButton,
+    saveButton: sprite3dUpdateButton,
+  };
+}
+
 function renderSpriteControls() {
+  renderSpriteEditorUpperControls(
+    spriteBuilder.querySelector(".sprite-controls"),
+    spriteEditorUpperControls2d(),
+  );
   spriteSizeInput.value = String(sprite.size);
   syncSpritePaintToolControls();
   syncSpriteGridButton();
-  renderSpriteShapeBindRow(spriteShapeField);
+  renderSpriteShapeBindControl(spriteShapeField, {
+    state: sprite,
+    render: renderSpriteControls,
+    onChange: () => {
+      const bind = spriteAssetBindInfo(sprite.shapeBind, "shape");
+      if (bind.linked && bind.name) {
+        setSpriteShapeSync(true, bind.name);
+        return;
+      }
+      rewriteCurrentSpriteDefinitionFromBuilder("Updated shape tag");
+      renderSpriteBuilder();
+    },
+  });
   renderSpriteScaleControl({
     size: sprite.size,
     maxSize: SPRITE_EDITOR_MAX_SIZE,
@@ -498,7 +722,7 @@ function renderSpriteControls() {
 
 function syncSpritePaintToolControls() {
   syncSpriteBucketButton();
-  syncSpriteMarkerButton();
+  syncSpriteMarkerControl();
 }
 
 function syncSpriteBucketButton() {
@@ -507,8 +731,10 @@ function syncSpriteBucketButton() {
   }
   spriteFillButton.classList.toggle("is-active", spriteBucketActive);
   spriteFillButton.setAttribute("aria-pressed", String(spriteBucketActive));
-  spriteFillButton.setAttribute("aria-label", "Bucket fill");
-  spriteFillButton.title = spriteBucketActive ? "Bucket active" : "Bucket fill";
+  spriteFillButton.setAttribute("aria-label", "Fill");
+  spriteFillButton.title = "Fill";
+  spriteFillButton.dataset.tooltip = "Fill";
+  spriteFillButton.dataset.shortcut = "F";
 }
 
 function toggleSpriteBucketMode() {
@@ -534,23 +760,15 @@ function deactivateSpriteBucketModeAfterUse() {
   syncSpritePaintToolControls();
 }
 
-function syncSpriteMarkerButton() {
-  spriteBrushPreset = normalizeSpriteBrushPreset(spriteBrushPreset);
-  for (const button of spriteBrushPresetButtons()) {
-    const preset = normalizeSpriteBrushPreset(button.dataset.spriteBrushPreset);
-    const selected = !spriteBucketActive && !spriteClipActive && preset === spriteBrushPreset;
-    const label = spriteBrushPresetLabel(preset);
-    button.classList.toggle("is-active", selected);
-    button.setAttribute("aria-pressed", String(selected));
-    button.title = label;
-    button.setAttribute("aria-label", `Brush: ${label}`);
-  }
+function syncSpriteMarkerControl() {
+  spriteBrushSizePx = normalizeSpriteBrushSize(spriteBrushSizePx);
+  spriteBrushSizeInput.value = String(spriteBrushSizePx);
 }
 
-function selectSpriteBrushPreset(preset) {
+function selectSpriteBrushSize(size) {
   const wasBucketActive = spriteBucketActive;
   const wasClipActive = spriteClipActive || spriteClipSelection;
-  spriteBrushPreset = normalizeSpriteBrushPreset(preset);
+  spriteBrushSizePx = normalizeSpriteBrushSize(size);
   spriteBucketActive = false;
   deactivateSpriteClipMode({ render: false });
   if (!validSpriteColorIndex(sprite.selectedColorIndex)) {
@@ -566,24 +784,13 @@ function selectSpriteBrushPreset(preset) {
   setSpriteActionStatus(spritePaintToolStatusText(), "is-ok");
 }
 
-function normalizeSpriteBrushPreset(preset) {
-  return Object.prototype.hasOwnProperty.call(SPRITE_BRUSH_PRESETS, preset) ? preset : "pixel";
-}
-
-function spriteBrushPresetLabel(preset = spriteBrushPreset) {
-  return SPRITE_BRUSH_PRESETS[normalizeSpriteBrushPreset(preset)].label;
-}
-
-function spriteBrushPresetButtons() {
-  return spriteMarkerTool.querySelectorAll("[data-sprite-brush-preset]");
-}
-
-function spriteBrushIsPixel(preset = spriteBrushPreset) {
-  return normalizeSpriteBrushPreset(preset) === "pixel";
+function normalizeSpriteBrushSize(size) {
+  const parsed = Number(size);
+  return Number.isInteger(parsed) ? Math.max(1, Math.min(SPRITE_EDITOR_MAX_SIZE, parsed)) : 1;
 }
 
 function spritePaintToolStatusText() {
-  return `Brush: ${spriteBrushPresetLabel(spriteBrushPreset).toLowerCase()}`;
+  return `Brush: ${spriteBrushSizePx}px`;
 }
 
 function beginSpriteColorEditHistory(kind) {
@@ -630,8 +837,109 @@ function renderSpriteColorAdjuster({ color, ariaLabel, onChange }) {
   return editor;
 }
 
+function renderSpritePaletteGrid({
+  target,
+  leadingControl,
+  entries,
+  selectedIndex,
+  bucketActive,
+  emptyTitle,
+  emptyAriaLabel,
+  colorAriaLabel,
+  onSelect,
+  onAdd,
+  onRemove,
+  addOpen,
+  renderAddMenu,
+}) {
+  const paletteGrid = document.createElement("span");
+  paletteGrid.className = "sprite-palette-grid";
+  if (leadingControl) {
+    leadingControl.dataset.tooltip = "Brush";
+    leadingControl.dataset.shortcut = "B";
+    paletteGrid.append(leadingControl);
+  }
+  const eraseButton = document.createElement("button");
+  eraseButton.type = "button";
+  eraseButton.className = "sprite-token sprite-token-erase sprite-icon-button";
+  eraseButton.classList.toggle("is-selected", selectedIndex === null && !bucketActive);
+  eraseButton.dataset.colorIndex = "erase";
+  eraseButton.style.setProperty("--sprite-swatch-color", "#00000000");
+  eraseButton.title = emptyTitle;
+  eraseButton.setAttribute("aria-label", emptyAriaLabel);
+  eraseButton.innerHTML = `
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"></path>
+      <path d="M22 21H7"></path>
+      <path d="m5 11 9 9"></path>
+    </svg>
+  `;
+  eraseButton.addEventListener("click", () => onSelect(null));
+  paletteGrid.append(eraseButton);
+
+  for (const [index, entry] of entries.entries()) {
+    const item = document.createElement("span");
+    item.className = "sprite-token-item";
+    item.classList.toggle("is-selected", index === selectedIndex);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "sprite-token sprite-color-swatch";
+    button.classList.toggle("is-selected", index === selectedIndex);
+    button.dataset.colorIndex = String(index);
+    button.style.setProperty("--sprite-swatch-color", normalizeSpriteColor(entry.color));
+    button.style.setProperty("--sprite-token-ink", readableInkForColor(entry.color));
+    const bind = spritePaletteEntryBindInfo(entry);
+    button.classList.toggle("is-bound", bind.available && bind.linked);
+    button.classList.toggle("is-unlinked", bind.available && !bind.linked);
+    const displayName = bind.linked && bind.name ? bind.name : "";
+    button.title = displayName ? `Paint ${displayName} (${entry.color})` : `Paint ${entry.color}`;
+    if (index < 9) {
+      button.dataset.shortcut = String(index + 1);
+    }
+    button.setAttribute("aria-label", colorAriaLabel(index, displayName));
+    button.addEventListener("click", () => onSelect(index));
+    item.append(button);
+    const marker = renderSpriteBindMarker(entry);
+    if (marker) {
+      item.append(marker);
+    }
+    paletteGrid.append(item);
+  }
+
+  const addWrap = document.createElement("span");
+  addWrap.className = "sprite-add-wrap";
+  const addButton = document.createElement("button");
+  addButton.type = "button";
+  addButton.className = "sprite-token sprite-add-color-button";
+  addButton.disabled = entries.length >= SPRITE_COLOR_TOKENS.length;
+  addButton.title = "Add color";
+  addButton.setAttribute("aria-label", "Add sprite color");
+  addButton.setAttribute("aria-expanded", String(addOpen));
+  addButton.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg>`;
+  addButton.addEventListener("click", onAdd);
+  addWrap.append(addButton);
+  paletteGrid.append(addWrap);
+
+  const removeButton = document.createElement("button");
+  removeButton.type = "button";
+  removeButton.className = "sprite-token sprite-remove-color-button";
+  removeButton.disabled = !Number.isInteger(selectedIndex) || entries.length <= 1;
+  removeButton.title = "Remove selected color";
+  removeButton.setAttribute("aria-label", "Remove selected color");
+  removeButton.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"></path></svg>`;
+  removeButton.addEventListener("click", onRemove);
+  paletteGrid.append(removeButton);
+  target.append(paletteGrid);
+  if (addOpen) {
+    const menu = renderAddMenu();
+    menu.classList.add("is-add-menu");
+    target.append(menu);
+    positionSpriteColorMenu(menu, paletteGrid, { side: "left" });
+  }
+  return paletteGrid;
+}
+
 function renderSpritePalette() {
-  const sourceActions = document.querySelector("#spriteBuilder .sprite-source-actions");
   spritePalette.replaceChildren();
   const selectedIsTransparent = sprite.selectedColorIndex === null;
   if (selectedIsTransparent || validSpriteColorIndex(sprite.selectedColorIndex)) {
@@ -698,7 +1006,18 @@ function renderSpritePalette() {
         ? "Transparent color code"
         : selectedDisplayName ? "Selected color tag" : "Selected color code",
     );
-    const currentTagButton = selectedIsTransparent ? null : renderSpriteCurrentColorTagButton(selected);
+    const currentTagButton = selectedIsTransparent ? null : renderSpriteCurrentColorTagButton({
+      state: sprite,
+      entry: selected,
+      onToggle: (opening) => {
+        if (opening) {
+          clearSpriteColorEditorState();
+          sprite.shapeTagPickerOpen = false;
+          renderSpriteControls();
+        }
+        renderSpritePalette();
+      },
+    });
     const currentTagUnlinkButton = !selectedIsTransparent && selectedBind.linked && selectedBind.name
       ? renderSpriteCurrentColorUnlinkButton(sprite.selectedColorIndex, selectedBind)
       : null;
@@ -825,198 +1144,195 @@ function renderSpritePalette() {
     }
   }
 
-  const paletteGrid = document.createElement("span");
-  paletteGrid.className = "sprite-palette-grid";
-
-  const eraseButton = document.createElement("button");
-  eraseButton.type = "button";
-  eraseButton.className = "sprite-token sprite-token-erase sprite-icon-button";
-  eraseButton.classList.toggle("is-selected", sprite.selectedColorIndex === null && !spriteBucketActive);
-  eraseButton.dataset.colorIndex = "erase";
-  eraseButton.style.setProperty("--sprite-swatch-color", "#00000000");
-  eraseButton.title = "Paint transparent";
-  eraseButton.setAttribute("aria-label", "Paint transparent sprite cell");
-  eraseButton.innerHTML = `
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"></path>
-      <path d="M22 21H7"></path>
-      <path d="m5 11 9 9"></path>
-    </svg>
-  `;
-  eraseButton.addEventListener("click", () => {
-    spriteBucketActive = false;
-    selectSpriteColor(null);
-  });
-  paletteGrid.append(eraseButton);
-
-  for (const [index, entry] of sprite.palette.entries()) {
-    const item = document.createElement("span");
-    item.className = "sprite-token-item";
-    item.classList.toggle("is-selected", index === sprite.selectedColorIndex);
-
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "sprite-token sprite-color-swatch";
-    button.classList.toggle("is-selected", index === sprite.selectedColorIndex);
-    button.dataset.colorIndex = String(index);
-    button.style.setProperty("--sprite-swatch-color", normalizeSpriteColor(entry.color));
-    button.style.setProperty("--sprite-token-ink", readableInkForColor(entry.color));
-    const bind = spritePaletteEntryBindInfo(entry);
-    button.classList.toggle("is-bound", bind.available && bind.linked);
-    button.classList.toggle("is-unlinked", bind.available && !bind.linked);
-    const displayName = spritePaletteEntryDisplayName(entry);
-    button.title = displayName ? `Paint ${displayName} (${entry.color})` : `Paint ${entry.color}`;
-    button.setAttribute("aria-label", displayName ? `Paint color ${index}: ${displayName}` : `Paint color ${index}`);
-    button.addEventListener("click", () => selectSpriteColor(index));
-    item.append(button);
-
-    const bindMarker = renderSpriteBindMarker(entry);
-    if (bindMarker) {
-      item.append(bindMarker);
-    }
-
-    paletteGrid.append(item);
-  }
-
-  const addWrap = document.createElement("span");
-  addWrap.className = "sprite-add-wrap";
-  const addButton = document.createElement("button");
-  addButton.type = "button";
-  addButton.className = "sprite-token sprite-add-color-button";
-  addButton.disabled = sprite.palette.length >= SPRITE_COLOR_TOKENS.length;
-  addButton.title = "Add color";
-  addButton.setAttribute("aria-label", "Add sprite color");
-  addButton.setAttribute("aria-expanded", String(sprite.addPaletteOpen));
-  addButton.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg>`;
-  addButton.addEventListener("click", toggleSpriteAddPalette);
-  addWrap.append(addButton);
-  paletteGrid.append(addWrap);
-
-  const removeButton = document.createElement("button");
-  removeButton.type = "button";
-  removeButton.className = "sprite-token sprite-remove-color-button";
-  removeButton.disabled = !validSpriteColorIndex(sprite.selectedColorIndex) || sprite.palette.length <= 1;
-  removeButton.title = "Remove selected color";
-  removeButton.setAttribute("aria-label", "Remove selected color");
-  removeButton.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"></path></svg>`;
-  removeButton.addEventListener("click", deleteSelectedSpriteColor);
-  paletteGrid.append(removeButton);
-
-  spritePalette.append(paletteGrid);
-
-  if (sprite.addPaletteOpen) {
-    const draft = validSpriteColorIndex(sprite.addDraftColorIndex)
-      ? sprite.palette[sprite.addDraftColorIndex].color
-      : nextSpritePresetColor();
-    const addMenu = renderSpriteColorMenu({
+  renderSpritePaletteGrid({
+    target: spritePalette,
+    leadingControl: spriteMarkerTool,
+    entries: sprite.palette,
+    selectedIndex: sprite.selectedColorIndex,
+    bucketActive: spriteBucketActive,
+    emptyTitle: "Paint transparent",
+    emptyAriaLabel: "Paint transparent sprite cell",
+    colorAriaLabel: (index, name) => name ? `Paint color ${index}: ${name}` : `Paint color ${index}`,
+    onSelect: (index) => {
+      spriteBucketActive = false;
+      selectSpriteColor(index);
+    },
+    onAdd: toggleSpriteAddPalette,
+    onRemove: deleteSelectedSpriteColor,
+    addOpen: sprite.addPaletteOpen,
+    renderAddMenu: () => renderSpriteColorMenu({
       mode: "add",
-      customValue: draft,
-    });
-    addMenu.classList.add("is-add-menu");
-    spritePalette.append(addMenu);
-    positionSpriteColorMenu(addMenu, paletteGrid, { side: "left" });
+      customValue: validSpriteColorIndex(sprite.addDraftColorIndex)
+        ? sprite.palette[sprite.addDraftColorIndex].color
+        : nextSpritePresetColor(),
+    }),
+  });
+
+  renderSpriteEditorToolbar({ dimension: "2d", target: spriteToolbarHost });
+}
+
+const SPRITE_EDITOR_TOOL_SCHEMA = Object.freeze([
+  { key: "scope", group: "context" },
+  { key: "grid", group: "context" },
+  { key: "clip", group: "context" },
+  { key: "fill", group: "paint" },
+  { key: "translate", group: "paint" },
+  { key: "rotate-left", group: "transform" },
+  { key: "rotate-right", group: "transform" },
+  { key: "flip-horizontal", group: "transform" },
+  { key: "flip-vertical", group: "transform" },
+  { key: "copy", group: "clipboard" },
+  { key: "cut", group: "clipboard" },
+  { key: "paste", group: "clipboard" },
+  { key: "delete", group: "clipboard" },
+]);
+
+function spriteEditorToolbarParts(dimension) {
+  const is3d = dimension === "3d";
+  return {
+    marker: spriteMarkerTool,
+    fill: is3d ? sprite3dFillButton : spriteFillButton,
+    translate: is3d ? sprite3dTranslateButton : renderSpriteTranslateButton(),
+    grid: spriteGridButton,
+    "rotate-left": is3d ? sprite3dRotatePlaneLeftButton : spriteRotateLeftButton,
+    "rotate-right": is3d ? sprite3dRotatePlaneRightButton : spriteRotateRightButton,
+    "flip-horizontal": is3d ? sprite3dFlipPlaneHorizontalButton : spriteFlipHorizontalButton,
+    "flip-vertical": is3d ? sprite3dFlipPlaneVerticalButton : spriteFlipVerticalButton,
+    copy: renderSpriteEditCommandButton(dimension, "copy"),
+    cut: renderSpriteEditCommandButton(dimension, "cut"),
+    paste: renderSpriteEditCommandButton(dimension, "paste"),
+    delete: renderSpriteEditCommandButton(dimension, "delete"),
+    scope: is3d ? document.querySelector(".sprite3d-scope-toggle") : null,
+    clip: is3d ? sprite3dClipActions : renderSpriteClipActions(),
+  };
+}
+
+function renderSpriteEditCommandButton(dimension, command) {
+  const icons = {
+    copy: "copy",
+    cut: "scissors",
+    paste: "clipboard-paste",
+    delete: "trash-2",
+  };
+  const label = spriteEditCommandLabel(dimension, command);
+  const button = renderSpriteClipButton({
+    title: label,
+    ariaLabel: label,
+    danger: command === "delete",
+    onClick: () => runSpriteEditCommand(dimension, command),
+    icon: spriteLucideIconSvg(icons[command]),
+  });
+  button.classList.add("sprite-edit-command-button", `is-${command}`);
+  button.dataset.spriteEditCommand = command;
+  button.dataset.shortcut = {
+    copy: "⌘/Ctrl C",
+    cut: "⌘/Ctrl X",
+    paste: "⌘/Ctrl V",
+    delete: "Delete",
+  }[command];
+  return button;
+}
+
+function spriteEditTargetLabel(dimension) {
+  if (dimension === "3d") {
+    if (sprite3dClipActive && sprite3dClipSelection) return "selected 3D area";
+    return sprite3dEditScope() === "all" ? "whole 3D sprite" : "current slice";
   }
+  return spriteClipActive && spriteClipSelection ? "selected area" : "whole sprite";
+}
 
-  const paintToolRow = document.createElement("span");
-  paintToolRow.className = "sprite-paint-tool-row";
+function spriteEditCommandLabel(dimension, command) {
+  const target = spriteEditTargetLabel(dimension);
+  const verb = command === "paste" ? "Paste into" : `${command[0].toUpperCase()}${command.slice(1)}`;
+  return `${verb} ${target}`;
+}
 
-  const brushActions = document.createElement("span");
-  brushActions.className = "sprite-paint-tool-group sprite-brush-actions";
-  brushActions.append(spriteMarkerTool);
-  if (spriteFillButton) {
-    brushActions.append(spriteFillButton);
+function syncSpriteEditCommandLabels(dimension) {
+  const host = dimension === "3d" ? sprite3dToolbarHost : spriteToolbarHost;
+  for (const button of host?.querySelectorAll?.("[data-sprite-edit-command]") || []) {
+    const label = spriteEditCommandLabel(dimension, button.dataset.spriteEditCommand);
+    button.title = label;
+    button.setAttribute("aria-label", label);
   }
-  brushActions.append(renderSpriteTranslateButton());
-  brushActions.append(renderSpriteClipActions());
-  paintToolRow.append(brushActions);
+}
 
-  const globalEditActions = document.createElement("span");
-  globalEditActions.className = "sprite-paint-tool-group sprite-global-edit-actions";
-
-  if (spriteGridButton) {
-    globalEditActions.append(spriteGridButton);
+function runSpriteEditCommand(dimension, command) {
+  if (dimension === "3d") {
+    return runSprite3dEditCommand(command);
   }
+  if (spriteClipActive && !normalizeSpriteClipRect(spriteClipSelection)) {
+    setSpriteActionStatus("Select a clip region first", "is-error");
+    return false;
+  }
+  if (command === "copy") return copySpriteEditRegion();
+  if (command === "cut") return cutSpriteEditRegion();
+  if (command === "paste") return pasteSpriteEditRegion();
+  if (command === "delete") return deleteSpriteEditRegion();
+  throw new Error(`Unknown sprite edit command ${command}`);
+}
 
-  const transformActions = document.createElement("span");
-  transformActions.className = "sprite-paint-transform-actions";
-  for (const button of [
-    spriteRotateLeftButton,
-    spriteRotateRightButton,
-    spriteFlipHorizontalButton,
-    spriteFlipVerticalButton,
-    spriteClearButton,
-  ]) {
-    if (button) {
-      transformActions.append(button);
+function renderSpriteEditorToolbar({ dimension, target }) {
+  if (!target) {
+    throw new Error(`Missing ${dimension} sprite toolbar host`);
+  }
+  const parts = spriteEditorToolbarParts(dimension);
+  const row = document.createElement("div");
+  row.className = "sprite-paint-tool-row sprite-editor-toolbar";
+  row.setAttribute("role", "toolbar");
+  const contextRow = document.createElement("div");
+  contextRow.className = "sprite-toolbar-context-row";
+  const operationRow = document.createElement("div");
+  operationRow.className = "sprite-toolbar-operation-row";
+  const context = document.createElement("span");
+  context.className = "sprite-paint-tool-group sprite-context-actions";
+  const paint = document.createElement("span");
+  paint.className = "sprite-paint-tool-group sprite-scoped-paint-actions";
+  const transform = document.createElement("span");
+  transform.className = "sprite-paint-tool-group sprite-scoped-transform-actions";
+  const clipboard = document.createElement("span");
+  clipboard.className = "sprite-paint-tool-group sprite-scoped-clipboard-actions";
+  const groups = { context, paint, transform, clipboard };
+  for (const { key, group } of SPRITE_EDITOR_TOOL_SCHEMA) {
+    const part = parts[key];
+    if (!part) {
+      continue;
     }
+    groups[group].append(part);
   }
-  globalEditActions.append(transformActions);
-  if (sourceActions) {
-    globalEditActions.append(sourceActions);
-  }
-  paintToolRow.append(globalEditActions);
-  spritePalette.append(paintToolRow);
+  contextRow.append(context);
+  operationRow.append(paint, transform, clipboard);
+  row.append(contextRow, operationRow);
+  target.replaceChildren(row);
+  return row;
 }
 
 function renderSpriteTranslateButton() {
   const button = renderSpriteClipButton({
-    title: spriteTranslateActive ? "Stop translating sprite" : "Translate sprite",
-    ariaLabel: spriteTranslateActive ? "Stop translating sprite" : "Translate sprite",
+    title: "Move",
+    ariaLabel: "Move",
     active: spriteTranslateActive,
     onClick: toggleSpriteTranslateMode,
     icon: spriteLucideIconSvg("move"),
   });
   button.classList.add("sprite-translate-button");
+  button.dataset.tooltip = "Move";
+  button.dataset.shortcut = "M";
   return button;
 }
 
 function renderSpriteClipActions() {
   const clipActions = document.createElement("span");
   clipActions.className = "sprite-clip-actions";
-  clipActions.classList.toggle("is-expanded", spriteClipActive);
-  clipActions.append(renderSpriteClipButton({
-    title: spriteClipActive ? "Close clip tools" : "Clip",
-    ariaLabel: spriteClipActive ? "Close clip tools" : "Open clip tools",
+  const button = renderSpriteClipButton({
+    title: "Clip",
+    ariaLabel: "Clip",
     active: spriteClipActive,
     onClick: toggleSpriteClipMode,
     icon: spriteLucideIconSvg("mouse-pointer-2"),
-  }));
-  if (spriteClipActive) {
-    const expandedActions = document.createElement("span");
-    expandedActions.className = "sprite-clip-expanded-actions";
-    expandedActions.append(
-      renderSpriteClipButton({
-        title: "Copy clip",
-        ariaLabel: "Copy selected sprite area",
-        disabled: !spriteClipSelection,
-        onClick: copySpriteClipSelection,
-        icon: spriteLucideIconSvg("copy"),
-      }),
-      renderSpriteClipButton({
-        title: "Cut clip",
-        ariaLabel: "Cut selected sprite area",
-        disabled: !spriteClipSelection,
-        onClick: cutSpriteClipSelection,
-        icon: spriteLucideIconSvg("scissors"),
-      }),
-      renderSpriteClipButton({
-        title: "Paste clip",
-        ariaLabel: "Paste copied sprite area",
-        disabled: !spriteClipClipboard,
-        onClick: pasteSpriteClipClipboard,
-        icon: spriteLucideIconSvg("clipboard-paste"),
-      }),
-      renderSpriteClipButton({
-        title: spriteClipFloating ? "Discard clip preview" : "Clear clip",
-        ariaLabel: spriteClipFloating ? "Discard clipped sprite preview" : "Clear selected sprite area",
-        disabled: !spriteClipSelection && !spriteClipFloating,
-        danger: true,
-        onClick: clearSpriteClipSelection,
-        icon: spriteLucideIconSvg("trash-2"),
-      }),
-    );
-    clipActions.append(expandedActions);
-  }
+  });
+  button.dataset.tooltip = "Clip";
+  button.dataset.shortcut = "C";
+  clipActions.append(button);
   return clipActions;
 }
 
@@ -1025,7 +1341,7 @@ function spritePaletteEntryDisplayName(entry) {
   return bind.linked && bind.name ? bind.name : "";
 }
 
-function renderSpriteCurrentColorTagButton(entry) {
+function renderSpriteCurrentColorTagButton({ state, entry, onToggle }) {
   const bind = spritePaletteEntryBindInfo(entry);
   const button = document.createElement("button");
   button.type = "button";
@@ -1035,17 +1351,12 @@ function renderSpriteCurrentColorTagButton(entry) {
   button.setAttribute("aria-label", button.title);
   button.setAttribute("aria-pressed", String(bind.linked));
   button.setAttribute("aria-haspopup", "listbox");
-  button.setAttribute("aria-expanded", String(Boolean(sprite.colorTagPickerOpen)));
+  button.setAttribute("aria-expanded", String(Boolean(state.colorTagPickerOpen)));
   button.innerHTML = spriteTagIconSvg();
   button.addEventListener("click", () => {
-    const opening = !sprite.colorTagPickerOpen;
-    if (opening) {
-      clearSpriteColorEditorState();
-      sprite.shapeTagPickerOpen = false;
-      renderSpriteControls();
-    }
-    sprite.colorTagPickerOpen = opening;
-    renderSpritePalette();
+    const opening = !state.colorTagPickerOpen;
+    state.colorTagPickerOpen = opening;
+    onToggle(opening);
   });
   return button;
 }
@@ -2014,6 +2325,34 @@ function spriteClipRectCells(rect) {
   return cells;
 }
 
+function pasteSpriteClipCell(index, clipboardValue) {
+  if (clipboardValue === null) {
+    return false;
+  }
+  if (!validSpriteColorIndex(clipboardValue)) {
+    throw new Error(`Invalid sprite clip palette index ${clipboardValue}`);
+  }
+  return setSpriteCellColorAtIndex(index, clipboardValue);
+}
+
+function spriteClipCellsForCurrentPalette(clipboard) {
+  if (!Array.isArray(clipboard?.colors)) return clipboard?.cells;
+  const colorToIndex = new Map(sprite.palette.map((entry, index) => [normalizeSpriteColor(entry.color), index]));
+  const sourceToTarget = clipboard.colors.map((rawColor) => {
+    const color = normalizeSpriteColor(rawColor);
+    if (color === "#00000000") return null;
+    if (!colorToIndex.has(color)) {
+      if (sprite.palette.length >= SPRITE_COLOR_TOKENS.length) {
+        throw new Error("Paste needs more colors than the sprite palette can hold");
+      }
+      colorToIndex.set(color, sprite.palette.length);
+      sprite.palette.push({ color });
+    }
+    return colorToIndex.get(color);
+  });
+  return clipboard.cells.map((value) => value === null ? null : sourceToTarget[value]);
+}
+
 function setSpriteClipRectCells(rect, cells) {
   const normalized = normalizeSpriteClipRect(rect);
   if (!normalized || !Array.isArray(cells) || cells.length !== normalized.width * normalized.height) {
@@ -2024,7 +2363,7 @@ function setSpriteClipRectCells(rect, cells) {
     for (let x = 0; x < normalized.width; x += 1) {
       const index = (normalized.y + y) * sprite.size + normalized.x + x;
       const next = cells[y * normalized.width + x];
-      if (setSpriteCellColorAtIndex(index, next)) {
+      if (pasteSpriteClipCell(index, next)) {
         changedIndices.push(index);
       }
     }
@@ -2065,47 +2404,7 @@ function commitSpriteClipMutation(before, changedIndices, message) {
   return true;
 }
 
-function copySpriteClipSelection() {
-  const rect = normalizeSpriteClipRect(spriteClipSelection);
-  if (!rect) {
-    setSpriteActionStatus("No clip selection", "is-error");
-    return false;
-  }
-  spriteClipClipboard = {
-    width: rect.width,
-    height: rect.height,
-    cells: spriteClipRectCells(rect),
-  };
-  spriteClipFloating = { kind: "copy" };
-  spriteClipActive = true;
-  spriteClipSelection = rect;
-  renderSpriteBuilder();
-  setSpriteActionStatus(`Copied ${rect.width}x${rect.height} clip: drag target, Command+V to paste`, "is-ok");
-  return true;
-}
-
-function cutSpriteClipSelection() {
-  const rect = normalizeSpriteClipRect(spriteClipSelection);
-  if (!rect) {
-    setSpriteActionStatus("No clip selection", "is-error");
-    return false;
-  }
-  const before = visualEditSnapshot("sprite");
-  spriteClipClipboard = {
-    width: rect.width,
-    height: rect.height,
-    cells: spriteClipRectCells(rect),
-  };
-  spriteClipFloating = { kind: "cut" };
-  spriteClipActive = true;
-  spriteClipSelection = rect;
-  const changedIndices = clearSpriteClipRect(rect);
-  commitSpriteClipMutation(before, changedIndices, `Cut ${rect.width}x${rect.height} clip`);
-  setSpriteActionStatus(`Cut ${rect.width}x${rect.height} clip: drag target, Command+V to paste`, "is-ok");
-  return true;
-}
-
-function clearSpriteClipSelection() {
+function deleteSpriteClipSelection() {
   if (spriteClipFloating) {
     spriteClipFloating = null;
     spriteClipSelection = null;
@@ -2121,7 +2420,7 @@ function clearSpriteClipSelection() {
   }
   const before = visualEditSnapshot("sprite");
   const changedIndices = clearSpriteClipRect(rect);
-  return commitSpriteClipMutation(before, changedIndices, "Cleared clip");
+  return commitSpriteClipMutation(before, changedIndices, "Deleted selected area");
 }
 
 function pasteSpriteClipClipboard() {
@@ -2145,13 +2444,103 @@ function pasteSpriteClipClipboard() {
     return false;
   }
   const before = visualEditSnapshot("sprite");
-  const changedIndices = setSpriteClipRectCells(rect, spriteClipClipboard.cells);
+  let cells;
+  try {
+    cells = spriteClipCellsForCurrentPalette(spriteClipClipboard);
+  } catch (error) {
+    setSpriteActionStatus(error?.message || String(error), "is-error");
+    return false;
+  }
+  const changedIndices = setSpriteClipRectCells(rect, cells);
   spriteClipActive = true;
   spriteClipSelection = rect;
   spriteClipFloating = null;
   commitSpriteClipMutation(before, changedIndices, `Pasted ${rect.width}x${rect.height} clip`);
   setSpriteActionStatus(`Pasted ${rect.width}x${rect.height} clip`, "is-ok");
   return true;
+}
+
+function spriteWholeEditRect() {
+  return { x: 0, y: 0, width: sprite.size, height: sprite.size };
+}
+
+function spriteEditRect() {
+  return spriteClipActive ? normalizeSpriteClipRect(spriteClipSelection) : spriteWholeEditRect();
+}
+
+function spriteClipboardTextForRect(rect) {
+  const cells = spriteClipRectCells(rect);
+  const rows = [];
+  for (let y = 0; y < rect.height; y += 1) {
+    rows.push(cells.slice(y * rect.width, (y + 1) * rect.width).map(spriteExportCharForColorIndex).join(""));
+  }
+  return [
+    "SpriteClip {",
+    `colors = ${spritePaletteSourceTokens().join(" ")}`,
+    "shape = {",
+    ...rows,
+    "}",
+    "}",
+  ].join("\n");
+}
+
+async function copySpriteEditRegion() {
+  const rect = spriteEditRect();
+  if (!rect) return false;
+  spriteClipClipboard = {
+    dimension: "2d",
+    width: rect.width,
+    height: rect.height,
+    cells: spriteClipRectCells(rect),
+    colors: sprite.palette.map((entry) => normalizeSpriteColor(entry.color)),
+  };
+  try {
+    await copyTextToClipboard(spriteClipboardTextForRect(rect));
+  } catch (error) {
+    setSpriteActionStatus(`Copy failed: ${error?.message || error}`, "is-error");
+    return false;
+  }
+  renderSpriteBuilder();
+  setSpriteActionStatus(`Copied ${rect.width}x${rect.height} edit region`, "is-ok");
+  return true;
+}
+
+async function cutSpriteEditRegion() {
+  const rect = spriteEditRect();
+  if (!rect) return false;
+  try {
+    if (!await copySpriteEditRegion()) return false;
+  } catch (error) {
+    setSpriteActionStatus(`Copy failed; sprite was not cut: ${error?.message || error}`, "is-error");
+    return false;
+  }
+  const before = visualEditSnapshot("sprite");
+  return commitSpriteClipMutation(before, clearSpriteClipRect(rect), `Cut ${rect.width}x${rect.height} edit region`);
+}
+
+function pasteSpriteEditRegion() {
+  if (!spriteClipClipboard) {
+    setSpriteActionStatus("No copied sprite region", "is-error");
+    return false;
+  }
+  const wasClipActive = spriteClipActive;
+  if (!wasClipActive) spriteClipSelection = { x: 0, y: 0, width: 1, height: 1 };
+  const result = pasteSpriteClipClipboard();
+  if (!wasClipActive) {
+    spriteClipActive = false;
+    spriteClipSelection = null;
+    spriteClipFloating = null;
+    renderSpriteBuilder();
+  }
+  return result;
+}
+
+function deleteSpriteEditRegion() {
+  if (!spriteClipActive) {
+    deleteWholeSpriteRegion();
+    return true;
+  }
+  return deleteSpriteClipSelection();
 }
 
 function moveSpriteClipRange(target, message = "Moved clip range") {
@@ -2849,11 +3238,16 @@ function floodFillSpriteComponentAtIndex(index, colorIndex) {
   }
   const size = sprite.size;
   const visited = new Uint8Array(sprite.cells.length);
+  const region = spriteClipActive ? normalizeSpriteClipRect(spriteClipSelection) : spriteWholeEditRect();
+  if (!region || !spriteClipRectContainsIndex(region, index)) {
+    return 0;
+  }
   const stack = [index];
   let changed = 0;
   while (stack.length) {
     const current = stack.pop();
-    if (visited[current] || normalizedSpriteCellColorIndex(current) !== targetColorIndex) {
+    if (visited[current] || !spriteClipRectContainsIndex(region, current)
+      || normalizedSpriteCellColorIndex(current) !== targetColorIndex) {
       continue;
     }
     visited[current] = 1;
@@ -2889,6 +3283,14 @@ function floodFillSpriteComponentAtIndex(index, colorIndex) {
 }
 
 function bucketFillSpriteFromIndex(index) {
+  if (spriteClipActive && !normalizeSpriteClipRect(spriteClipSelection)) {
+    setSpriteActionStatus("Select a clip region before bucket fill", "is-error");
+    return false;
+  }
+  if (spriteClipActive && !spriteClipRectContainsIndex(spriteClipSelection, index)) {
+    setSpriteActionStatus("Bucket fill start must be inside the clip region", "is-error");
+    return false;
+  }
   const count = floodFillSpriteComponentAtIndex(index, sprite.selectedColorIndex);
   if (!count) {
     setSpriteActionStatus("Connected area already has that color", "is-ok");
@@ -3021,19 +3423,19 @@ function spriteCellIndexFromPoint(point) {
   return y * sprite.size + x;
 }
 
-function spriteBrushDiameterCells(preset = spriteBrushPreset) {
-  const config = SPRITE_BRUSH_PRESETS[normalizeSpriteBrushPreset(preset)];
-  if (Number.isFinite(config.diameterCells)) {
-    return Math.min(sprite.size, config.diameterCells);
-  }
-  return Math.min(sprite.size, sprite.size * config.ratio);
+function spriteBrushDiameterCells() {
+  return Math.min(sprite.size, spriteBrushSizePx);
+}
+
+function spriteBrushDiameterForSize(size) {
+  return Math.min(size, spriteBrushSizePx);
 }
 
 function spritePaintIndicesForPoint(point) {
   if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
     return [];
   }
-  if (spriteBrushIsPixel()) {
+  if (spriteBrushSizePx === 1) {
     const index = spriteCellIndexFromPoint(point);
     return index >= 0 ? [index] : [];
   }
@@ -3256,7 +3658,7 @@ function spriteClipShortcutTargetIsText(target) {
 }
 
 function spriteClipShortcutsAreActive() {
-  return currentPreviewMode === "sprite" && spriteClipActive && !spriteBuilder.hidden;
+  return currentPreviewMode === "sprite" && !spriteBuilder.hidden;
 }
 
 function moveSpriteClipRangeBy(dx, dy) {
@@ -3285,24 +3687,24 @@ function handleSpriteClipKeyboard(event) {
   const modifier = (event.metaKey && !event.ctrlKey) || (event.ctrlKey && !event.metaKey);
   let handled = false;
   if (modifier && !event.altKey && !event.shiftKey && key === "c") {
-    handled = copySpriteClipSelection();
+    handled = runSpriteEditCommand("2d", "copy");
   } else if (modifier && !event.altKey && !event.shiftKey && key === "x") {
-    handled = cutSpriteClipSelection();
+    handled = runSpriteEditCommand("2d", "cut");
   } else if (modifier && !event.altKey && !event.shiftKey && key === "v") {
-    handled = pasteSpriteClipClipboard();
+    handled = runSpriteEditCommand("2d", "paste");
   } else if (!modifier && !event.altKey && (key === "Backspace" || key === "Delete")) {
-    handled = clearSpriteClipSelection();
-  } else if (!modifier && !event.altKey && key === "Escape") {
+    handled = runSpriteEditCommand("2d", "delete");
+  } else if (spriteClipActive && !modifier && !event.altKey && key === "Escape") {
     deactivateSpriteClipMode();
     setSpriteActionStatus(spritePaintToolStatusText(), "is-ok");
     handled = true;
-  } else if (!modifier && !event.altKey && key === "ArrowLeft") {
+  } else if (spriteClipActive && !modifier && !event.altKey && key === "ArrowLeft") {
     handled = moveSpriteClipRangeBy(-1, 0);
-  } else if (!modifier && !event.altKey && key === "ArrowRight") {
+  } else if (spriteClipActive && !modifier && !event.altKey && key === "ArrowRight") {
     handled = moveSpriteClipRangeBy(1, 0);
-  } else if (!modifier && !event.altKey && key === "ArrowUp") {
+  } else if (spriteClipActive && !modifier && !event.altKey && key === "ArrowUp") {
     handled = moveSpriteClipRangeBy(0, -1);
-  } else if (!modifier && !event.altKey && key === "ArrowDown") {
+  } else if (spriteClipActive && !modifier && !event.altKey && key === "ArrowDown") {
     handled = moveSpriteClipRangeBy(0, 1);
   }
   if (!handled) {
@@ -3310,6 +3712,65 @@ function handleSpriteClipKeyboard(event) {
   }
   event.preventDefault();
   event.stopPropagation();
+  return true;
+}
+
+function spritePaneShortcutDimension() {
+  if (currentPreviewMode === "sprite" && !spriteBuilder.hidden) return "2d";
+  if (currentPreviewMode === "sprite3d" && !sprite3dBuilder.hidden) return "3d";
+  return "";
+}
+
+function activateSpriteBrushShortcut(dimension) {
+  if (dimension === "3d") selectSprite3dBrushSize(spriteBrushSizeInput.value);
+  else selectSpriteBrushSize(spriteBrushSizeInput.value);
+}
+
+function selectSpritePaletteShortcut(dimension, index) {
+  const entries = dimension === "3d" ? sprite3dPaletteEntries() : sprite.palette;
+  if (index < 0 || index >= entries.length) return false;
+  if (dimension === "3d") selectSprite3dColor(index);
+  else selectSpriteColor(index);
+  return true;
+}
+
+function cancelSpritePaneToolShortcut(dimension) {
+  if (dimension === "3d") {
+    if (sprite3dClipActive) deactivateSprite3dClipMode();
+    else if (sprite3dTranslateActive) deactivateSprite3dTranslateMode();
+    else if (sprite3dBucketActive) toggleSprite3dBucketMode();
+    else return false;
+    return true;
+  }
+  if (spriteClipActive) deactivateSpriteClipMode();
+  else if (spriteTranslateActive) deactivateSpriteTranslateMode();
+  else if (spriteBucketActive) toggleSpriteBucketMode();
+  else return false;
+  return true;
+}
+
+function handleSpritePaneCommandShortcut(event) {
+  const dimension = spritePaneShortcutDimension();
+  if (!dimension || event.defaultPrevented || event.repeat
+    || spriteClipShortcutTargetIsText(event.target)
+    || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) {
+    return false;
+  }
+  const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+  let handled = true;
+  if (key === "b") activateSpriteBrushShortcut(dimension);
+  else if (key === "f") dimension === "3d" ? toggleSprite3dBucketMode() : toggleSpriteBucketMode();
+  else if (key === "m") dimension === "3d" ? toggleSprite3dTranslateMode() : toggleSpriteTranslateMode();
+  else if (key === "c") dimension === "3d" ? toggleSprite3dClipMode() : toggleSpriteClipMode();
+  else if (/^[1-9]$/.test(key)) handled = selectSpritePaletteShortcut(dimension, Number(key) - 1);
+  else if (dimension === "3d" && ["x", "y", "z"].includes(key)) setSprite3dAxis(key);
+  else if (dimension === "3d" && key === "[") moveSprite3dSlice(-1);
+  else if (dimension === "3d" && key === "]") moveSprite3dSlice(1);
+  else if (key === "Escape") handled = cancelSpritePaneToolShortcut(dimension);
+  else handled = false;
+  if (!handled) return false;
+  event.preventDefault();
+  event.stopImmediatePropagation();
   return true;
 }
 
@@ -3385,7 +3846,7 @@ function stopSpritePaint(event) {
     return;
   }
   if (spriteBoard.hasPointerCapture?.(event.pointerId)) {
-    spriteBoard.releasePointerCapture(event.pointerId);
+    spriteBoard.releasePointerCapture(spritePaintDrag.pointerId);
   }
   if (spritePaintDrag.changed) {
     updateSpriteBoundShapeDefinition();
@@ -3526,6 +3987,96 @@ function renderSpriteShapeBindRow(target) {
     requestAnimationFrame(() => {
       focusSpriteTagPickerInput(tagPicker);
     });
+  }
+  target.append(row);
+}
+
+function renderSpriteShapeBindControl(target, options) {
+  if (!target) {
+    return;
+  }
+  const state = options.state;
+  const info = spriteAssetBindInfo(state.shapeBind, "shape");
+  target.replaceChildren();
+  const row = document.createElement("div");
+  row.className = "sprite-shape-bind-row";
+  row.classList.toggle("has-unlink", info.linked && info.name);
+  const label = document.createElement("span");
+  label.className = "sprite-shape-bind-label";
+  label.textContent = "Shape";
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "sprite-shape-name-input";
+  input.value = info.name || "";
+  input.spellcheck = false;
+  input.autocomplete = "off";
+  input.setAttribute("aria-label", "Shape name");
+  const tagButton = document.createElement("button");
+  tagButton.type = "button";
+  tagButton.className = "sprite-shape-tag-button sprite-icon-button";
+  tagButton.classList.toggle("is-active", info.linked);
+  tagButton.innerHTML = spriteTagIconSvg();
+  tagButton.setAttribute("aria-pressed", String(info.linked));
+  tagButton.setAttribute("aria-haspopup", "listbox");
+  tagButton.setAttribute("aria-expanded", String(Boolean(state.shapeTagPickerOpen)));
+  tagButton.title = info.name ? `Shape tag: ${info.name}` : "Tag shape by name";
+  tagButton.setAttribute("aria-label", tagButton.title);
+  const commit = (linked = info.linked) => {
+    const name = sanitizeSpriteShapeRef(input.value);
+    state.shapeBind = name ? { type: "shape", name, linked: Boolean(linked) } : null;
+    options.onChange();
+  };
+  input.addEventListener("change", () => commit());
+  input.addEventListener("keydown", (event) => {
+    event.stopPropagation();
+    if (event.key === "Enter") {
+      event.preventDefault();
+      commit();
+    }
+  });
+  tagButton.addEventListener("click", () => {
+    state.shapeTagPickerOpen = !state.shapeTagPickerOpen;
+    if (state.shapeTagPickerOpen && input.value) {
+      commit(true);
+      return;
+    }
+    options.render();
+  });
+  row.append(label, input, tagButton);
+  if (info.linked && info.name) {
+    const unlink = document.createElement("button");
+    unlink.type = "button";
+    unlink.className = "sprite-shape-tag-unlink-button sprite-icon-button";
+    unlink.title = `Unlink shape tag ${info.name}`;
+    unlink.setAttribute("aria-label", unlink.title);
+    unlink.innerHTML = spriteUnlinkIconSvg();
+    unlink.addEventListener("click", () => {
+      state.shapeTagPickerOpen = false;
+      state.shapeBind = { type: "shape", name: info.name, linked: false };
+      options.onChange();
+    });
+    row.append(unlink);
+  }
+  if (state.shapeTagPickerOpen) {
+    const picker = renderSpriteAssetNamePicker({
+      className: "sprite-shape-tag-picker",
+      names: spriteShapeAssetNames(),
+      value: info.name || "",
+      placeholder: "",
+      ariaLabel: "Shape tag name",
+      emptyText: "No named shapes yet",
+      onCommit: (name) => {
+        state.shapeTagPickerOpen = false;
+        state.shapeBind = { type: "shape", name, linked: true };
+        options.onChange();
+        return true;
+      },
+      onCancel: () => {
+        state.shapeTagPickerOpen = false;
+        options.render();
+      },
+    });
+    row.append(picker);
   }
   target.append(row);
 }
@@ -4009,20 +4560,6 @@ function spriteColorIndexForPaletteChar(char, paletteLength) {
   return index >= 0 && index < paletteLength ? index : undefined;
 }
 
-async function exportSpriteAscii() {
-  const text = spriteClipboardText();
-  try {
-    window.focus();
-    spriteExportButton.focus({ preventScroll: true });
-    await copyTextToClipboard(text);
-    setSpriteActionStatus("Copied", "is-ok");
-    setStatus("Copied sprite", "is-ok");
-  } catch (error) {
-    setSpriteActionStatus("Copy failed", "is-error");
-    setStatus(`Could not copy sprite: ${error?.message || error}`, "is-error");
-  }
-}
-
 async function mutateSpriteSourceFromRust(source, request) {
   if (typeof window.PuzzleStudioRuntime?.mutateSpriteSource !== "function") {
     throw new Error("Editor WASM sprite mutation API is unavailable.");
@@ -4073,17 +4610,31 @@ async function addSpriteToSource() {
     ({ result } = await commitSpriteEditorMutation({
       state: sprite,
       allowActiveDocument: true,
-      request: (source, document) => spriteEditMutationRequest("insert", {
-        cursor: spriteSourceCursorPosition(source, document),
-      }),
+      request: (source, document) => spriteEditMutationRequest(
+        canReplaceCurrentSpriteDefinition(source) ? "duplicate" : "insert",
+        { cursor: spriteSourceCursorPosition(source, document) },
+      ),
     }));
   } catch (error) {
     setSpriteActionStatus(userFacingRuntimeError(error), "is-error");
     return;
   }
+  spriteNameInput.value = result.name;
   setSpriteActionStatus("Added sprite", "is-ok");
   setStatus("Added sprite", "is-ok");
   syncSpriteSourceActionButtons();
+}
+
+function newSpriteDraft() {
+  const before = visualEditSnapshot("sprite");
+  clearSpriteEditSource();
+  spriteNameInput.value = "Sprite";
+  sprite.palette = [{ color: "#ff004d" }];
+  sprite.selectedColorIndex = 0;
+  sprite.animationMode = false;
+  resetSpriteBuilder(5);
+  setSpriteActionStatus("Started new sprite", "is-ok");
+  pushVisualEditUndoSnapshot("sprite", before);
 }
 
 async function updateSpriteInSource() {
@@ -4102,25 +4653,6 @@ async function updateSpriteInSource() {
   setSpriteActionStatus("Updated sprite", "is-ok");
   setStatus("Updated sprite", "is-ok");
   syncSpriteSourceActionButtons();
-}
-
-async function duplicateSpriteInSource() {
-  let result;
-  try {
-    ({ result } = await commitSpriteEditorMutation({
-      state: sprite,
-      request: () => spriteEditMutationRequest("duplicate"),
-    }));
-  } catch (error) {
-    setSpriteActionStatus("No selected sprite source range", "is-error");
-    setStatus("No selected sprite source range", "is-error");
-    setSpriteActionStatus(userFacingRuntimeError(error), "is-error");
-    return;
-  }
-  spriteNameInput.value = result.name;
-  syncSpriteSourceActionButtons();
-  setSpriteActionStatus("Duplicated sprite", "is-ok");
-  setStatus("Duplicated sprite", "is-ok");
 }
 
 function sourceWithStagedSpriteAssetDefinitions(source) {
@@ -4148,7 +4680,7 @@ function sourceWithStagedSpriteAssetDefinitions(source) {
   return nextSource;
 }
 
-function clearSpriteBuilder() {
+function deleteWholeSpriteRegion() {
   const before = visualEditSnapshot("sprite");
   if (sprite.animationMode) {
     ensureSpriteAnimationFrames();
@@ -4156,12 +4688,12 @@ function clearSpriteBuilder() {
     sprite.animationFrames[sprite.animationFrameIndex] = sprite.cells;
     updateSpriteBoundShapeDefinition();
     renderSpriteBuilder();
-    setSpriteActionStatus(`Cleared frame ${sprite.animationFrameIndex + 1}`, "is-ok");
+    setSpriteActionStatus(`Deleted frame ${sprite.animationFrameIndex + 1} contents`, "is-ok");
     pushVisualEditUndoSnapshot("sprite", before);
     return;
   }
   resetSpriteBuilder(sprite.size);
-  setSpriteActionStatus("Cleared", "is-ok");
+  setSpriteActionStatus("Deleted whole sprite contents", "is-ok");
   pushVisualEditUndoSnapshot("sprite", before);
 }
 
@@ -4376,8 +4908,8 @@ function syncSpriteSourceActionButtons() {
   if (spriteUpdateButton) {
     spriteUpdateButton.disabled = !hasEditableSource;
   }
-  if (duplicateSpriteButton) {
-    duplicateSpriteButton.disabled = !hasEditableSource;
+  if (spriteInsertButton) {
+    spriteInsertButton.disabled = false;
   }
 }
 
@@ -4859,6 +5391,11 @@ for (const input of [
     installSelectAllOnFocus(input);
   }
 }
+spriteSizeInput.addEventListener("input", () => {
+  if (spriteSizeInput.validity.valid && spriteSizeInput.value !== "") {
+    updateSpriteSize(spriteSizeInput.value);
+  }
+});
 spriteSizeInput.addEventListener("change", () => updateSpriteSize(spriteSizeInput.value));
 spriteSizeInput.addEventListener("keydown", (event) => {
   if (event.key !== "Enter") {
@@ -4894,21 +5431,29 @@ spriteAnimationFrameCountInput?.addEventListener("keydown", (event) => {
   event.preventDefault();
   updateSpriteAnimationFrameCount(spriteAnimationFrameCountInput.value);
 });
-spriteAnimationFrameInput?.addEventListener("change", () => setSpriteAnimationFrame(Number(spriteAnimationFrameInput.value) - 1));
+spriteAnimationFrameInput?.addEventListener("change", () => {
+  if (currentSpritePaneMode === "sprite3d") return setSprite3dAnimationFrame(Number(spriteAnimationFrameInput.value) - 1);
+  return setSpriteAnimationFrame(Number(spriteAnimationFrameInput.value) - 1);
+});
 spriteAnimationFrameInput?.addEventListener("keydown", (event) => {
   if (event.key !== "Enter") {
     return;
   }
   event.preventDefault();
-  setSpriteAnimationFrame(Number(spriteAnimationFrameInput.value) - 1);
+  if (currentSpritePaneMode === "sprite3d") setSprite3dAnimationFrame(Number(spriteAnimationFrameInput.value) - 1);
+  else setSpriteAnimationFrame(Number(spriteAnimationFrameInput.value) - 1);
 });
-spriteAnimationPreviousFrameButton?.addEventListener("click", () => moveSpriteAnimationFrame(-1));
-spriteAnimationNextFrameButton?.addEventListener("click", () => moveSpriteAnimationFrame(1));
-spriteAnimationInsertFrameButton?.addEventListener("click", toggleSpriteAnimationInsertMode);
-spriteAnimationRemoveFrameButton?.addEventListener("click", toggleSpriteAnimationRemoveMode);
-for (const button of spriteBrushPresetButtons()) {
-  button.addEventListener("click", () => selectSpriteBrushPreset(button.dataset.spriteBrushPreset));
-}
+spriteAnimationPreviousFrameButton?.addEventListener("click", () => currentSpritePaneMode === "sprite3d" ? moveSprite3dAnimationFrame(-1) : moveSpriteAnimationFrame(-1));
+spriteAnimationNextFrameButton?.addEventListener("click", () => currentSpritePaneMode === "sprite3d" ? moveSprite3dAnimationFrame(1) : moveSpriteAnimationFrame(1));
+spriteAnimationInsertFrameButton?.addEventListener("click", () => toggleSharedSpriteAnimationEditMode("insert"));
+spriteAnimationRemoveFrameButton?.addEventListener("click", () => toggleSharedSpriteAnimationEditMode("remove"));
+spriteBrushSizeInput.addEventListener("change", () => {
+  if (currentSpritePaneMode === "sprite3d" && typeof selectSprite3dBrushSize === "function") {
+    selectSprite3dBrushSize(spriteBrushSizeInput.value);
+    return;
+  }
+  selectSpriteBrushSize(spriteBrushSizeInput.value);
+});
 spriteNameInput.addEventListener("input", syncSpriteSourceActionButtons);
 sourceEditor.addEventListener("input", () => {
   invalidateSpriteEditSourceForDocument(activeDocument());
@@ -4975,10 +5520,9 @@ document.addEventListener("keydown", (event) => {
     deactivateSpriteTranslateMode();
   }
 });
+document.addEventListener("keydown", handleSpritePaneCommandShortcut);
 document.addEventListener("keydown", handleSpriteClipKeyboard);
 document.addEventListener("pointerdown", closeSpriteColorEditorFromOutside);
-spriteClearButton.addEventListener("click", clearSpriteBuilder);
-spriteExportButton.addEventListener("click", exportSpriteAscii);
 spriteUpdateButton.addEventListener("click", () => {
   updateSpriteInSource().catch((error) => {
     console.error(error);
@@ -4986,7 +5530,8 @@ spriteUpdateButton.addEventListener("click", () => {
     setStatus("Sprite source update failed", "is-error");
   });
 });
-duplicateSpriteButton?.addEventListener("click", duplicateSpriteInSource);
+newSpriteButton?.addEventListener("click", newSpriteDraft);
+spriteInsertButton?.addEventListener("click", addSpriteToSource);
 spriteScaleDownButton.addEventListener("click", scaleDownSprite);
 spriteScaleUpButton.addEventListener("click", scaleUpSprite);
 spriteRotateLeftButton.addEventListener("click", rotateSpriteLeft);
@@ -4994,5 +5539,11 @@ spriteRotateRightButton.addEventListener("click", rotateSpriteRight);
 spriteFlipHorizontalButton.addEventListener("click", flipSpriteHorizontal);
 spriteFlipVerticalButton.addEventListener("click", flipSpriteVertical);
 spriteFillButton.addEventListener("click", toggleSpriteBucketMode);
-spriteGridButton?.addEventListener("click", toggleSpriteGrid);
+spriteGridButton?.addEventListener("click", () => {
+  if (currentSpritePaneMode === "sprite3d" && typeof toggleSprite3dGrid === "function") {
+    toggleSprite3dGrid();
+    return;
+  }
+  toggleSpriteGrid();
+});
 resetSpriteBuilder();

@@ -1,0 +1,86 @@
+// BASIC
+// EXPECT: Push the box onto the goal to clear the level.
+// TRY: Change the level, a sprite color, or the win condition.
+
+title = "01 — Basic"
+subtitle = "Rules, collision, winning, sprites, and levels"
+
+puzzle basic {
+layers {
+Floor
+Goal
+Player Box Wall
+}
+
+sprites {
+Floor
+#f4f0e6
+
+Goal
+#ffd166
+.....
+.000.
+.0.0.
+.000.
+.....
+
+Player
+#2563eb
+.000.
+00000
+.000.
+.0.0.
+.0.0.
+
+Box
+#b5651d #f4a261
+00000
+01110
+01110
+01110
+00000
+
+Wall
+#334155
+00000
+00000
+00000
+00000
+00000
+}
+
+win_conditions {
+all Goal on Box
+}
+
+on_level_start {
+[ no Floor ] -> [ Floor ]
+}
+
+rules {
+input [ Player | Box | no Wall ] -> [ | Player | Box ]
+input [ Player | no Box no Wall ] -> [ | Player ]
+}
+
+on_level_clear {
+message "Cleared!"
+}
+
+levels {
+legend {
+. = empty
+# = Wall
+P = Player
+B = Box
+G = Goal
+* = Box Goal
+}
+
+level "push the box"
+#######
+#.....#
+#.PB.G#
+#.....#
+#######
+}
+}

@@ -36,5 +36,9 @@ level start
 ```
 
 A puzzle usually contains layers, sprites, rules, win conditions, and levels.
+`rules { ... }` is the required gameplay entry point; the removed
+`transitions`, `main`, and `rule` forms are not alternatives.
 
 Files can contain more than one puzzle when scenes need to switch between them.
+Use `puzzle` for a 3D model. Both model kinds use `levels { ... }`; `levels3`
+is no longer syntax.

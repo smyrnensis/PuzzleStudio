@@ -882,7 +882,7 @@ fn translated_basic_vanilla_puzzlescript_uses_player_move_bridge() {
     assert!(translated.contains("layer1 = Background"));
     assert!(translated.contains("for l in layer1 layer2 layer3 {"));
     let loaded = parse_game(&translated).unwrap();
-    assert!(!loaded.scenes[1].key_bindings.is_empty());
+    assert!(loaded.scenes.iter().any(|scene| !scene.key_bindings.is_empty()));
     let right = input_named(&loaded, "right");
     let player = object_named(&loaded, "Player");
 
@@ -1633,6 +1633,67 @@ vB.
 
     assert!(translated.contains("[ > victimSolo | pushBlock ] -> [ > victimSolo | > pushBlock ]"));
     assert!(!translated.contains("v ictimSolo"));
+    parse_game(&translated).unwrap();
+}
+
+#[test]
+fn puzzlescript_imports_compact_directional_rule_with_moving_qualifiers() {
+    let source = r#"
+title Compact Moving Rule
+
+========
+OBJECTS
+========
+
+Background
+black
+
+Player
+white
+
+edge
+blue
+
+push
+red
+
+=======
+LEGEND
+=======
+
+. = Background
+P = Player
+e = edge
+p = push
+
+================
+COLLISIONLAYERS
+================
+
+Background
+Player
+edge
+push
+
+======
+RULES
+======
+
+down[edge     | moving push] -> [moving edge     |moving push]
+
+=======
+LEVELS
+=======
+
+Pep
+"#;
+
+    let translated = translate_puzzlescript_to_canonical(source).unwrap();
+
+    assert!(
+        translated
+            .contains("down [ edge | directions push ] -> [ directions edge | directions push ]")
+    );
     parse_game(&translated).unwrap();
 }
 

@@ -166,7 +166,7 @@ fn expand_structural_source_line(
 }
 
 fn ascii_sensitive_block(block: &str) -> bool {
-    matches!(block, "levels" | "levels3" | "sprites" | "sprite" | "map")
+    matches!(block, "levels" | "sprites" | "sprite" | "map")
 }
 
 fn ascii_row_contains_brace(line: &str) -> bool {
@@ -436,12 +436,7 @@ fn normalize_brace_block_line(
 fn is_levels_header(tokens: &[&str]) -> bool {
     matches!(
         tokens,
-        ["levels"]
-            | ["levels", "of", _]
-            | ["levels", _, "of", _]
-            | ["levels3"]
-            | ["levels3", "of", _]
-            | ["levels3", _, "of", _]
+        ["levels"] | ["levels", "of", _] | ["levels", _, "of", _]
     )
 }
 
@@ -465,7 +460,6 @@ fn starts_inline_block(tokens: &[&str], line: &str) -> bool {
             | ["legend"]
             | ["win_conditions", ..]
             | ["lose_conditions", ..]
-            | ["puzzle3", ..]
             | ["palette"]
             | ["shapes"]
             | ["objects"]
@@ -1257,7 +1251,7 @@ fn opening_scope(line: &str, tokens: &[&str], current: Option<SourceScope>) -> O
             | ["box", ..]
             | ["for", ..]
             | ["puzzle", ..]
-            | ["puzzle3", ..] => {
+            => {
                 return Some(SourceScope::SceneLayout);
             }
             ["state"] => return Some(SourceScope::SceneState),
@@ -1314,7 +1308,7 @@ fn opening_scope(line: &str, tokens: &[&str], current: Option<SourceScope>) -> O
     }
     match tokens {
         ["scene", ..] => Some(SourceScope::Scene),
-        ["puzzle", ..] | ["puzzle3", ..] => Some(SourceScope::Puzzle),
+        ["puzzle", ..] => Some(SourceScope::Puzzle),
         ["level", ..] => Some(SourceScope::Level),
         ["shapes"] => Some(SourceScope::VisualShapeTable),
         ["palette"] => Some(SourceScope::VisualColorTable),

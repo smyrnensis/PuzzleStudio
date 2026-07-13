@@ -23,6 +23,13 @@ import {
   historyKeymap,
   indentWithTab,
 } from "@codemirror/commands";
+import {
+  foldGutter,
+  foldKeymap,
+  foldService,
+  foldedRanges,
+  unfoldEffect,
+} from "@codemirror/language";
 
 const sourceEditorProgrammatic = Annotation.define();
 // CodeMirror owns physical key arbitration, but the source workflow owns the
@@ -83,6 +90,7 @@ const sourceHighlightClasses = Object.freeze({
 const replaceSourceHighlightRange = StateEffect.define();
 const clearSourceHighlightDecorations = StateEffect.define();
 const replaceSourceFindDecorations = StateEffect.define();
+const replaceSourceFoldRanges = StateEffect.define();
 const sourceHighlightDecorations = StateField.define({
   create() {
     return Decoration.none;
@@ -116,6 +124,40 @@ const sourceFindDecorations = StateField.define({
   },
   provide: (field) => EditorView.decorations.from(field),
 });
+const sourceFoldRanges = StateField.define({
+  create() {
+    return [];
+  },
+  update(ranges, transaction) {
+    let next = transaction.docChanged
+      ? ranges.map((range) => ({
+        from: transaction.changes.mapPos(range.from, 1),
+        to: transaction.changes.mapPos(range.to, -1),
+      })).filter((range) => range.from < range.to)
+      : ranges;
+    for (const effect of transaction.effects) {
+      if (effect.is(replaceSourceFoldRanges)) {
+        next = effect.value;
+      }
+    }
+    return next;
+  },
+});
+
+function sourceFoldRangeForLine(state, lineStart, lineEnd) {
+  return state.field(sourceFoldRanges).find((range) => (
+    range.from >= lineStart && range.from <= lineEnd + 1
+  )) || null;
+}
+
+function sourceFoldMarkerDOM(open) {
+  const marker = document.createElement("span");
+  marker.className = "cm-source-fold-marker";
+  marker.innerHTML = open
+    ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>'
+    : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg>';
+  return marker;
+}
 
 function clampOffset(view, value) {
   const offset = Number.isFinite(Number(value)) ? Math.trunc(Number(value)) : 0;
@@ -232,6 +274,12 @@ function createState(text, readOnlyCompartment, readOnly, inputListeners) {
     doc: String(text || ""),
     extensions: [
       lineNumbers(),
+      sourceFoldRanges,
+      foldService.of(sourceFoldRangeForLine),
+      foldGutter({
+        markerDOM: sourceFoldMarkerDOM,
+        foldingChanged: (update) => update.startState.field(sourceFoldRanges) !== update.state.field(sourceFoldRanges),
+      }),
       history(),
       sourceHighlightDecorations,
       sourceFindDecorations,
@@ -244,6 +292,7 @@ function createState(text, readOnlyCompartment, readOnly, inputListeners) {
       keymap.of([
         ...sourceCompletionKeymap,
         ...sourceEditingKeymap,
+        ...foldKeymap,
         indentWithTab,
         ...defaultKeymap,
         ...historyKeymap,
@@ -284,6 +333,36 @@ function createState(text, readOnlyCompartment, readOnly, inputListeners) {
       EditorView.theme({
         "&": { height: "100%" },
         ".cm-scroller": { overflow: "auto" },
+        ".cm-foldGutter .cm-gutterElement": {
+          boxSizing: "border-box",
+          width: "18px",
+          minWidth: "18px",
+          padding: "0 2px",
+        },
+        ".cm-source-fold-marker": {
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          width: "14px",
+          height: "20px",
+          color: "var(--muted)",
+        },
+        ".cm-source-fold-marker svg": {
+          width: "14px",
+          height: "14px",
+          fill: "none",
+          stroke: "currentColor",
+          strokeWidth: "2",
+          strokeLinecap: "round",
+          strokeLinejoin: "round",
+        },
+        ".cm-foldPlaceholder": {
+          margin: "0 2px",
+          padding: "0",
+          border: "0",
+          background: "transparent",
+          color: "var(--muted)",
+        },
       }),
     ],
   });
@@ -346,6 +425,36 @@ export function createSourceEditor(parent) {
     },
     clearHighlights() {
       view.dispatch({ effects: clearSourceHighlightDecorations.of(null) });
+    },
+    applyFoldRanges(source, payload) {
+      const expected = String(source || "");
+      if (expected !== view.state.doc.toString()) {
+        throw new Error("Cannot apply stale source folding to CodeMirror.");
+      }
+      if (
+        payload?.version !== 1
+        || payload?.offsetEncoding !== "utf8"
+        || payload?.sourceLength !== new TextEncoder().encode(expected).length
+        || !Array.isArray(payload?.folds)
+      ) {
+        throw new Error("Unsupported Rust source folding range contract.");
+      }
+      const offsets = sourceOffsetMaps(expected);
+      const ranges = payload.folds.map((range) => {
+        const from = offsets.utf16ByUtf8.get(Number(range?.from));
+        const to = offsets.utf16ByUtf8.get(Number(range?.to));
+        if (from === undefined || to === undefined || from >= to) {
+          throw new Error("Rust source folding ranges are invalid for the active CodeMirror document.");
+        }
+        return { from, to };
+      });
+      const effects = [replaceSourceFoldRanges.of(ranges)];
+      foldedRanges(view.state).between(0, view.state.doc.length, (from, to) => {
+        if (!ranges.some((range) => range.from === from && range.to === to)) {
+          effects.push(unfoldEffect.of({ from, to }));
+        }
+      });
+      view.dispatch({ effects });
     },
     applyFindMatches(source, matches, selectedIndex) {
       const expected = String(source || "");

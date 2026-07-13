@@ -17,6 +17,7 @@ mod semantic;
 mod solver_surface;
 mod source;
 mod source_analysis;
+mod source_folding;
 mod source_import;
 mod source_outline;
 mod source_sprite_edit;
@@ -140,8 +141,8 @@ pub use source_sprite_edit::{SpriteEditMutationResult, mutate_sprite_source};
 pub use source_target::{
     SoundSourceTargetKind, SourceSprite3dStatus, SourceSpriteColorAsset, SourceSpriteDimension,
     SourceSpriteDocument, SourceSpritePaletteEntry, SourceSpriteShapeAsset, SourceSpriteStatus,
-    SourceSpriteTarget, SourceTarget, SourceTargetKind, resolve_source_target, source_entries_json,
-    source_target_json,
+    SourceSpriteTarget, SourceTarget, SourceTargetKind, resolve_source_target,
+    resolve_source_target_for_profile, source_entries_json, source_target_json,
 };
 use surface::{
     SourceSpan, SurfaceAsciiRange, SurfaceDocument, SurfaceHighlightRanges, SurfaceNodeKind,

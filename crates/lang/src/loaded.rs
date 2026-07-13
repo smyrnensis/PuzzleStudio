@@ -149,6 +149,7 @@ impl LoadedGame {
                 puzzle: puzzle_name,
                 initial_state,
                 regions: Vec::new(),
+                program: Vec::new(),
                 level_start_program: None,
                 level_clear_program: None,
             }],
@@ -183,8 +184,15 @@ impl LoadedGame {
         self.display_objects.contains(&object)
     }
 
-    pub fn solver_game(&self) -> CompiledGame {
-        self.game.clone()
+    pub fn program_for_level(&self, level_index: usize) -> Option<&[RuleStep]> {
+        self.levels
+            .get(level_index)
+            .map(|level| level.program.as_slice())
+    }
+
+    pub fn compiled_game_for_level(&self, level_index: usize) -> Option<CompiledGame> {
+        self.program_for_level(level_index)
+            .map(|program| self.game.clone_with_program(program.to_vec()))
     }
 
     pub fn solver_state(&self, state: &State) -> State {
@@ -527,6 +535,7 @@ pub struct Level {
     pub puzzle: String,
     pub initial_state: State,
     pub regions: Vec<LevelRegionDef>,
+    pub program: Vec<RuleStep>,
     pub level_start_program: Option<Vec<RuleStep>>,
     pub level_clear_program: Option<Vec<RuleStep>>,
 }

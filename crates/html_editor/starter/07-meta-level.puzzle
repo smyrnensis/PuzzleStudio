@@ -1,0 +1,111 @@
+// META LEVEL
+// EXPECT: Walk onto a portal in one puzzle to choose a level in another puzzle.
+// TRY: Add a third main level and a matching portal to the selector puzzle.
+
+title = "07 — Meta Level"
+subtitle = "Use one puzzle as a playable level selector for another"
+
+puzzle level_select {
+tags {
+choice = first second
+}
+
+layers {
+Portal:choice
+Selector Wall
+}
+
+win_conditions {
+some Selector on Portal:*
+}
+
+rules {
+input [ Selector | no Wall ] -> [ | Selector ]
+}
+
+on_level_clear {
+if some([ Selector Portal:first ]) {
+goto playing("first")
+}
+if some([ Selector Portal:second ]) {
+goto playing("second")
+}
+}
+
+levels {
+legend {
+. = empty
+# = Wall
+S = Selector
+1 = Portal:first
+2 = Portal:second
+}
+
+level "choose"
+#########
+#1..S..2#
+#########
+}
+}
+
+puzzle main {
+layers {
+Goal
+Player Box Wall
+}
+
+levels {
+legend {
+. = empty
+# = Wall
+P = Player
+B = Box
+G = Goal
+}
+
+level "first" {
+rules {
+input [ Player | Box | no Wall ] -> [ | Player | Box ]
+input [ Player | no Box no Wall ] -> [ | Player ]
+}
+#######
+#.PBG.#
+#######
+}
+
+level "second" {
+rules {
+input [ Player | Box | no Wall ] -> [ | Player | Box ]
+input [ Player | no Box no Wall ] -> [ | Player ]
+}
+########
+#..P.BG#
+########
+}
+}
+}
+
+scene select {
+layout {
+heading "Walk onto a portal"
+level_select
+caption "This board is a puzzle, not a level_menu component."
+}
+rules {
+step level_select
+}
+}
+
+scene playing(level) {
+keys {
+Escape -> goto select
+}
+layout {
+heading level.title
+main
+caption "Escape returns to the playable selector."
+}
+rules {
+step main
+}
+}

@@ -11,6 +11,7 @@ pub type ObjectSetMatcher = puzzle_kernel::ObjectSetMatcher<ObjectId, LayerId>;
 pub type ObjectSetMarkPattern = puzzle_kernel::ObjectSetMarkPattern<MarkId>;
 pub type PatternComponent = puzzle_kernel::RulePatternComponent<MatchCell>;
 pub type Rule = puzzle_kernel::RuleModel<RuleId, Guard, Pattern, WriteOp, Effect>;
+pub type RuleStep = puzzle_kernel::ProgramStep<Rule, RuleCondition, LocalFrame<ObjectId>>;
 pub type WriteOp = puzzle_kernel::RuleWriteOp<Offset, ObjectId, MarkId>;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -113,6 +114,16 @@ impl CompiledGame {
         &self.program
     }
 
+    pub fn clone_with_program(&self, program: Vec<RuleStep>) -> Self {
+        Self::new_with_mark_condition_defs_and_program(
+            self.layer_count,
+            self.objects.clone(),
+            self.mark.clone(),
+            self.condition_defs.clone(),
+            program,
+        )
+    }
+
     #[inline]
     pub fn object(&self, object: ObjectId) -> Option<&ObjectDef> {
         if object.is_empty() {
@@ -178,33 +189,6 @@ pub struct MarkDef {
     pub id: MarkId,
     pub kind: MarkKind,
     pub values: Vec<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum RuleStep {
-    Rule(Rule),
-    ConditionalBlock {
-        condition: RuleCondition,
-        steps: Vec<RuleStep>,
-    },
-    ConditionalBranch {
-        condition: RuleCondition,
-        then_steps: Vec<RuleStep>,
-        else_steps: Vec<RuleStep>,
-    },
-    Block {
-        application: RuleApplication,
-        stop_condition: Option<RuleCondition>,
-        steps: Vec<RuleStep>,
-    },
-    AfterTriggered {
-        steps: Vec<RuleStep>,
-        then_steps: Vec<RuleStep>,
-    },
-    LocalFrame {
-        frame: LocalFrame<ObjectId>,
-        steps: Vec<RuleStep>,
-    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

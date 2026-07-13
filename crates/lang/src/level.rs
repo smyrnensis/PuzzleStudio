@@ -57,7 +57,7 @@ pub(crate) fn parse_level(
         for (authored_layer, layer) in placed_region.region.layers.iter().enumerate() {
             for (y, row) in layer.iter().enumerate() {
                 for (x, ch) in row.chars().enumerate() {
-                    if Some(ch) == empty {
+                    if ch == '.' || Some(ch) == empty {
                         continue;
                     }
                     let objects = char_objects.get(&ch).ok_or_else(|| {

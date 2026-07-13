@@ -1440,7 +1440,16 @@ impl CompiledSession {
         // that the presentation-aware solver projection may omit. Search the
         // authoritative compiled game so the stopping predicate and replay see
         // the same state contract.
-        let solver_game = Arc::new(self.game.game.clone());
+        let solver_game = Arc::new(
+            self.game
+                .compiled_game_for_level(goal.level_index)
+                .ok_or_else(|| {
+                    AgentError::new(
+                        "search_level_out_of_range",
+                        format!("semantic goal level {} is out of range", goal.level_index),
+                    )
+                })?,
+        );
         let goal_for_domain = goal.clone();
         Ok(PuzzleDomain::with_state_slicer_and_win_command_goal(
             solver_game,
@@ -2696,7 +2705,7 @@ keys {
 d ArrowRight -> right
 }
 rules {
-input right [ Player | no actor ] -> [ Trail | Player ]
+input right [ Player ] -> [ Player ]
 }
 }
 
@@ -2707,6 +2716,9 @@ P = Player
 G = Goal
 }
 level "start" {
+rules before {
+input right [ Player | no actor ] -> [ Trail | Player ]
+}
 P.G
 }
 }

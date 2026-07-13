@@ -6,8 +6,14 @@ pub fn parse_game_for_path(
     source: &str,
     path: impl AsRef<Path>,
 ) -> Result<LoadedDocument, DiagnosticReport> {
-    validate_source_profile_for_path(source, path)?;
-    parse_game_document(source)
+    let profile = puzzle_source_profile_for_path(path.as_ref()).ok_or_else(|| {
+        DiagnosticReport::error(format!(
+            "puzzle source must use .puzzle or .puzzle3 extension: {}",
+            path.as_ref().display()
+        ))
+    })?;
+    validate_source_profile(source, profile)?;
+    parse_game_document_with_profile(source, profile)
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -350,6 +356,10 @@ fn surface_structural_blocks(scan: &SurfaceScan) -> Vec<SurfaceStructuralBlock> 
                         },
                         authoring_content,
                         virtual_braces: *virtual_braces,
+                        open_brace: (!virtual_braces)
+                            .then(|| line.content.rfind('{').map(|offset| line.start + offset))
+                            .flatten(),
+                        close_brace: None,
                         start: line_start_offset(&line.content, line.start),
                         end: line.start + line.content.len(),
                         depth: stack
@@ -369,7 +379,10 @@ fn surface_structural_blocks(scan: &SurfaceScan) -> Vec<SurfaceStructuralBlock> 
                     option_stack.push(option_block);
                 }
                 source::SourceStructureEvent::Close => {
-                    stack.pop();
+                    if let Some(index) = stack.pop() {
+                        blocks[index].close_brace =
+                            line.content.find('}').map(|offset| line.start + offset);
+                    }
                     option_stack.pop();
                 }
             }
@@ -430,7 +443,7 @@ enum LevelLegendTarget {
 
 fn scan_level_ascii_surface_ranges(scan: &SurfaceScan) -> Vec<SurfaceAsciiRange> {
     let mut ranges = Vec::new();
-    let mut variable_chars = HashSet::<char>::new();
+    let mut variable_chars = HashSet::from(['.']);
     let mut levels = Vec::<LevelAsciiScanLevel>::new();
     let mut line_levels = vec![None::<usize>; scan.lines.len()];
     let mut current_level = None::<usize>;
@@ -469,7 +482,7 @@ fn scan_level_ascii_surface_ranges(scan: &SurfaceScan) -> Vec<SurfaceAsciiRange>
             current_level = Some(level_index);
         }
 
-        if let Some(ch) = inline_legend_directive_char(&tokens) {
+        if let Some(ch) = inline_legend_directive_char(trimmed, &tokens) {
             if let Some(level_index) = current_level
                 && matches!(
                     line.scope,
@@ -481,7 +494,7 @@ fn scan_level_ascii_surface_ranges(scan: &SurfaceScan) -> Vec<SurfaceAsciiRange>
                 variable_chars.insert(ch);
             }
         } else if let Some(target) = level_legend_stack.last().copied()
-            && let Some(ch) = legend_row_char(&tokens)
+            && let Some(ch) = legend_row_char(trimmed)
         {
             match target {
                 LevelLegendTarget::Variable { enabled } if enabled => {
@@ -522,7 +535,7 @@ fn scan_level_ascii_surface_ranges(scan: &SurfaceScan) -> Vec<SurfaceAsciiRange>
         }
 
         if starts_levels_block(&tokens) {
-            levels_2d_stack.push(tokens.first().copied() == Some("levels"));
+            levels_2d_stack.push(true);
         }
 
         if line.scope == Some(SourceScope::Legend) && trimmed == "}" {
@@ -549,7 +562,7 @@ fn scan_level_ascii_surface_ranges(scan: &SurfaceScan) -> Vec<SurfaceAsciiRange>
 }
 
 fn starts_levels_block(tokens: &[&str]) -> bool {
-    matches!(tokens.first().copied(), Some("levels" | "levels3"))
+    matches!(tokens.first().copied(), Some("levels"))
 }
 
 fn starts_level_header(
@@ -576,18 +589,18 @@ fn opens_level_legend_block(trimmed: &str, tokens: &[&str]) -> bool {
     matches!(tokens, ["legend"]) && (trimmed == "legend" || trimmed.ends_with('{'))
 }
 
-fn inline_legend_directive_char(tokens: &[&str]) -> Option<char> {
-    match tokens {
-        ["legend", ch, "=", ..] => single_char_token(ch),
-        _ => None,
+fn inline_legend_directive_char(line: &str, tokens: &[&str]) -> Option<char> {
+    if tokens.first().copied() != Some("legend") {
+        return None;
     }
+    let assignment = line.strip_prefix("legend")?.trim_start();
+    let (name, _) = puzzle_authoring::parse_assignment_row(assignment)?;
+    single_char_token(name)
 }
 
-fn legend_row_char(tokens: &[&str]) -> Option<char> {
-    match tokens {
-        [ch, "=", ..] => single_char_token(ch),
-        _ => None,
-    }
+fn legend_row_char(line: &str) -> Option<char> {
+    let (name, _) = puzzle_authoring::parse_assignment_row(line)?;
+    single_char_token(name)
 }
 
 fn single_char_token(token: &str) -> Option<char> {
@@ -612,7 +625,12 @@ fn is_level_ascii_map_row(
     }
     if matches!(
         tokens,
-        ["legend", ..] | ["on_level_start", ..] | ["on_level_clear", ..]
+        ["legend", ..]
+            | ["on_level_start", ..]
+            | ["on_level_clear", ..]
+            | ["rules"]
+            | ["rules", "before"]
+            | ["rules", "after"]
     ) {
         return false;
     }
@@ -2180,11 +2198,6 @@ fn record_document_prelude_surface_line(
     .is_some()
     {
         add_scene_effect_token_range(sink, first, SurfaceSemanticKind::Keyword);
-        if matches!(first.text.as_str(), "puzzle3")
-            && let Some(name) = tokens.get(1)
-        {
-            add_scene_effect_token_range(sink, name, SurfaceSemanticKind::Scene);
-        }
         return true;
     }
     false
@@ -2288,8 +2301,7 @@ fn active_surface_option_block(stack: &[SurfaceOptionBlock]) -> Option<SurfaceOp
     stack.iter().rev().copied().find(|block| {
         matches!(
             block,
-            SurfaceOptionBlock::Puzzle3
-                | SurfaceOptionBlock::Authoring(_)
+            SurfaceOptionBlock::Authoring(_)
                 | SurfaceOptionBlock::LevelMenu
         )
     })
@@ -2320,7 +2332,6 @@ fn surface_option_block_for_opening(
         return SurfaceOptionBlock::Other;
     };
     match first {
-        "puzzle3" => SurfaceOptionBlock::Puzzle3,
         "puzzle" => SurfaceOptionBlock::Puzzle2,
         "render" => surface_authoring_option_block_for_opening(first, stack)
             .unwrap_or(SurfaceOptionBlock::Other),
@@ -2646,14 +2657,14 @@ fn record_scene_layout_attr_surface_tokens(tokens: &[SourceToken], sink: &mut Su
     };
     let attr_start = match first.text.as_str() {
         "layout" | "row" | "column" | "box" => 1,
-        "puzzle" | "puzzle3" if tokens.get(2).is_some_and(|token| token.text == "=") => {
+        "puzzle" if tokens.get(2).is_some_and(|token| token.text == "=") => {
             if tokens.get(4).is_some_and(|token| token.text == "level") {
                 6
             } else {
                 4
             }
         }
-        "puzzle" | "puzzle3" | "frame" => 2,
+        "puzzle" | "frame" => 2,
         _ => return,
     };
     let attrs = tokens

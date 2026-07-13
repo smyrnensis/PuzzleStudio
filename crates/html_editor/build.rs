@@ -43,6 +43,17 @@ fn main() {
     println!("cargo:rerun-if-changed=docs/display.md");
     println!("cargo:rerun-if-changed=docs/theme.md");
     println!("cargo:rerun-if-changed=docs/sounds.md");
+    println!("cargo:rerun-if-changed=docs/routines.md");
+    println!("cargo:rerun-if-changed=docs/rule-application.md");
+    println!("cargo:rerun-if-changed=docs/patterns.md");
+    println!("cargo:rerun-if-changed=docs/imports.md");
+    println!("cargo:rerun-if-changed=docs/rendering.md");
+    println!("cargo:rerun-if-changed=docs/3d.md");
+    println!("cargo:rerun-if-changed=docs/assets.md");
+    println!("cargo:rerun-if-changed=docs/rule-effects.md");
+    println!("cargo:rerun-if-changed=docs/sprite-shapes.md");
+    println!("cargo:rerun-if-changed=docs/scene-state-effects.md");
+    println!("cargo:rerun-if-changed=docs/maps-expansion.md");
     println!("cargo:rerun-if-changed=static/editor_boot.js");
     println!("cargo:rerun-if-changed=static/editor_codemirror.js");
     println!("cargo:rerun-if-changed=static/editor_runtime.js");

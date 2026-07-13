@@ -291,22 +291,6 @@ impl SpriteEntrySpec {
         Ok(())
     }
 
-    fn set_duration(&mut self, value: &str, line: &str) -> Result<(), DiagnosticReport> {
-        if self.loop_duration_ms.is_some() {
-            return Err(parse_error(line, "duplicate sprite duration"));
-        }
-        self.loop_duration_ms = Some(parse_wait_duration_ms(value, line)?);
-        Ok(())
-    }
-
-    fn set_frame_duration(&mut self, value: &str, line: &str) -> Result<(), DiagnosticReport> {
-        if self.loop_frame_duration_ms.is_some() {
-            return Err(parse_error(line, "duplicate sprite frame_duration"));
-        }
-        self.loop_frame_duration_ms = Some(parse_wait_duration_ms(value, line)?);
-        Ok(())
-    }
-
     fn set_shape_ref(&mut self, value: &str, line: &str) -> Result<(), DiagnosticReport> {
         self.shape_ref = Some(parse_sprite_shape_ref(value, line)?);
         Ok(())
@@ -317,6 +301,7 @@ impl SpriteEntrySpec {
 enum SpriteTransformExpr {
     Rotate {
         angle: String,
+        from: Option<String>,
         space: crate::sprite_authoring::SpriteSpaceSyntax,
     },
     Translate {
@@ -338,14 +323,16 @@ fn parse_visuals_block(
     catalog: &Catalog,
     visuals: &mut VisualsDef,
 ) -> Result<usize, DiagnosticReport> {
+    let resource = puzzle_authoring::collect_resource_block_surface(lines, start, "sprites")
+        .map_err(|error| parse_error(&lines[start], error.message()))?;
     let mut shapes = HashMap::<String, VisualShapeTable>::new();
     let mut plain_shapes = HashMap::<String, Vec<String>>::new();
     let mut color_aliases = HashMap::<String, String>::new();
     let mut colors = HashMap::<String, VisualColorTable>::new();
-    let mut sprite_entries = Vec::<SpriteAttachmentEntry>::new();
-    let mut i = start + 1;
+    let mut sprite_entries = Vec::<crate::sprite_authoring::SpriteAttachmentSyntax>::new();
+    let mut i = resource.body_start;
 
-    while i < lines.len() && !is_block_close_line(&lines[i]) {
+    while i < resource.body_end {
         let line = &lines[i];
         let tokens = split_header_tokens(line);
         if tokens.first() == Some(&"shape") && tokens.iter().any(|token| *token == "rotate") {
@@ -439,7 +426,7 @@ fn parse_visuals_block(
             }
             ["sprite"] if is_block_header_line(line) => {
                 let entry = collect_sprite_attachment_entry(lines, i)?;
-                i = entry.next_i;
+                i = entry.next_index;
                 sprite_entries.push(entry);
             }
             [other, ..] => {
@@ -448,7 +435,7 @@ fn parse_visuals_block(
                 ) == Some(crate::authoring_grammar::ContentAttachment::SpriteEntries)
                 {
                     let entry = collect_sprite_attachment_entry(lines, i)?;
-                    i = entry.next_i;
+                    i = entry.next_index;
                     sprite_entries.push(entry);
                     continue;
                 }
@@ -458,9 +445,6 @@ fn parse_visuals_block(
                 ));
             }
         }
-    }
-    if i >= lines.len() {
-        return Err(parse_error(&lines[start], "sprites missing closing brace"));
     }
     for attachment in sprite_entries {
         lower_sprite_attachment_entry(
@@ -473,7 +457,7 @@ fn parse_visuals_block(
             visuals,
         )?;
     }
-    Ok(i + 1)
+    Ok(resource.next_index)
 }
 
 fn parse_visual_palette_block(
@@ -593,15 +577,9 @@ fn parse_visual_shapes_block(
 }
 
 #[allow(clippy::too_many_arguments)]
-struct SpriteAttachmentEntry {
-    source_line: String,
-    body_lines: Vec<String>,
-    next_i: usize,
-}
-
 #[allow(clippy::too_many_arguments)]
 fn lower_sprite_attachment_entry(
-    attachment: SpriteAttachmentEntry,
+    attachment: crate::sprite_authoring::SpriteAttachmentSyntax,
     plain_shapes: &HashMap<String, Vec<String>>,
     shapes: &HashMap<String, VisualShapeTable>,
     color_aliases: &HashMap<String, String>,
@@ -609,10 +587,10 @@ fn lower_sprite_attachment_entry(
     catalog: &Catalog,
     visuals: &mut VisualsDef,
 ) -> Result<(), DiagnosticReport> {
-    let mut entry = SpriteEntrySpec::new(&attachment.source_line, None);
+    let mut entry = SpriteEntrySpec::new(&attachment.header, None);
     apply_sprite_attachment_body(
         &mut entry,
-        &attachment.source_line,
+        &attachment.header,
         &attachment.body_lines,
         plain_shapes,
         shapes,
@@ -632,178 +610,9 @@ fn lower_sprite_attachment_entry(
 fn collect_sprite_attachment_entry(
     lines: &[String],
     start: usize,
-) -> Result<SpriteAttachmentEntry, DiagnosticReport> {
-    let source_line = lines[start].clone();
-    if is_block_header_line(&source_line) {
-        let (body_lines, next_i) =
-            collect_braced_body_lines(lines, start, "sprite attachment missing closing brace")?;
-        return Ok(SpriteAttachmentEntry {
-            source_line,
-            body_lines,
-            next_i,
-        });
-    }
-
-    let mut body_lines = Vec::new();
-    let mut i = start + 1;
-    let mut nested_depth = 0i32;
-    while i < lines.len() {
-        if is_block_close_line(&lines[i]) && nested_depth == 0 {
-            break;
-        }
-        if nested_depth == 0
-            && body_lines.len() >= 2
-            && is_tagged_sprite_attachment_header(&lines[i])
-        {
-            break;
-        }
-        if split_header_tokens(&lines[i]).is_empty() {
-            if nested_depth > 0 {
-                body_lines.push(lines[i].clone());
-                i += 1;
-                continue;
-            }
-            break;
-        }
-        if is_block_close_line(&lines[i]) {
-            nested_depth -= 1;
-        }
-        body_lines.push(lines[i].clone());
-        if is_block_header_line(&lines[i]) {
-            nested_depth += 1;
-        }
-        i += 1;
-    }
-    Ok(SpriteAttachmentEntry {
-        source_line,
-        body_lines,
-        next_i: i,
-    })
-}
-
-fn is_tagged_sprite_attachment_header(line: &str) -> bool {
-    matches!(
-        split_header_tokens(block_header_text(line)).as_slice(),
-        [selector] if selector.contains(':') || selector.contains('@')
-    )
-}
-
-fn collect_braced_body_lines(
-    lines: &[String],
-    start: usize,
-    missing_close_message: &str,
-) -> Result<(Vec<String>, usize), DiagnosticReport> {
-    let mut body_lines = Vec::new();
-    let mut depth = 0usize;
-    let mut i = start + 1;
-    while i < lines.len() {
-        if is_block_close_line(&lines[i]) {
-            if depth == 0 {
-                return Ok((body_lines, i + 1));
-            }
-            depth -= 1;
-            body_lines.push(lines[i].clone());
-            i += 1;
-            continue;
-        }
-        body_lines.push(lines[i].clone());
-        if is_block_header_line(&lines[i]) {
-            depth += 1;
-        }
-        i += 1;
-    }
-    Err(parse_error(&lines[start], missing_close_message))
-}
-
-fn push_sprite_animation_frame(
-    frames: &mut Vec<Vec<String>>,
-    frame: &mut Vec<String>,
-    line: &str,
-) -> Result<(), DiagnosticReport> {
-    if frame.is_empty() {
-        return Err(parse_error(
-            line,
-            "sprite animation frame requires at least one row",
-        ));
-    }
-    validate_visual_pattern(frame, line)?;
-    frames.push(std::mem::take(frame));
-    Ok(())
-}
-
-fn validate_sprite_animation_frames(
-    frames: &[Vec<String>],
-    line: &str,
-) -> Result<(), DiagnosticReport> {
-    if frames.len() < 2 {
-        return Err(parse_error(
-            line,
-            "sprite animation requires at least two frames",
-        ));
-    }
-    let width = frames[0][0].chars().count();
-    let height = frames[0].len();
-    if frames
-        .iter()
-        .any(|frame| frame.len() != height || frame[0].chars().count() != width)
-    {
-        return Err(parse_error(
-            line,
-            "sprite animation frames must have the same size",
-        ));
-    }
-    Ok(())
-}
-
-fn apply_sprite_ascii_frames(
-    entry: &mut SpriteEntrySpec,
-    mut frames: Vec<Vec<String>>,
-    mut frame: Vec<String>,
-    has_frame_separator: bool,
-    source_line: &str,
-) -> Result<(), DiagnosticReport> {
-    if !has_frame_separator {
-        if !frame.is_empty() {
-            validate_visual_pattern(&frame, source_line)?;
-            entry.inline_pattern = Some(frame);
-        }
-        return Ok(());
-    }
-    push_sprite_animation_frame(&mut frames, &mut frame, source_line)?;
-    validate_sprite_animation_frames(&frames, source_line)?;
-    let frame_count = u64::try_from(frames.len())
-        .map_err(|_| parse_error(source_line, "sprite animation has too many frames"))?;
-    let frame_duration_ms = entry.loop_frame_duration_ms;
-    let duration_ms = match (entry.loop_duration_ms, frame_duration_ms) {
-        (Some(duration_ms), Some(frame_duration_ms)) => {
-            let expected_duration_ms = frame_duration_ms
-                .checked_mul(frame_count)
-                .ok_or_else(|| parse_error(source_line, "sprite frame_duration is too large"))?;
-            if duration_ms != expected_duration_ms {
-                return Err(parse_error(
-                    source_line,
-                    "sprite duration must equal frame_duration multiplied by frame count",
-                ));
-            }
-            duration_ms
-        }
-        (Some(duration_ms), None) => duration_ms,
-        (None, Some(frame_duration_ms)) => frame_duration_ms
-            .checked_mul(frame_count)
-            .ok_or_else(|| parse_error(source_line, "sprite frame_duration is too large"))?,
-        (None, None) => {
-            return Err(parse_error(
-                source_line,
-                "sprite animation missing duration or frame_duration",
-            ));
-        }
-    };
-    entry.inline_pattern = Some(frames[0].clone());
-    entry.loop_animation = Some(VisualSpriteLoopDef {
-        duration_ms,
-        frames,
-    });
-    Ok(())
+) -> Result<crate::sprite_authoring::SpriteAttachmentSyntax, DiagnosticReport> {
+    crate::sprite_authoring::collect_sprite_attachment(lines, start)
+        .map_err(|message| parse_error(&lines[start], message))
 }
 
 fn apply_sprite_attachment_body(
@@ -814,13 +623,23 @@ fn apply_sprite_attachment_body(
     shapes: &HashMap<String, VisualShapeTable>,
 ) -> Result<(), DiagnosticReport> {
     entry.selector = None;
-    let syntax = crate::sprite_authoring::parse_sprite_node(header.into(), body_lines);
-    let resolved_shape = crate::sprite_authoring::resolve_sprite_shape(&syntax, |name| {
+    let analyzed = crate::sprite_authoring::analyze_sprite_body(Some(header), body_lines, |name| {
         plain_shapes.contains_key(name) || shapes.contains_key(name)
-    });
-    if let Some(issue) = syntax.issues.first() {
-        return Err(parse_error(&issue.line, issue.message));
-    }
+    })
+    .map_err(|error| parse_error(&error.line, &error.message))?;
+    let syntax = analyzed.syntax;
+    let inline_frame_count = match &analyzed.shape {
+        crate::sprite_authoring::ResolvedSpriteShape::Inline(frames) => frames.len(),
+        _ => 1,
+    };
+    let timing = crate::sprite_authoring::resolve_sprite_timing(
+        inline_frame_count,
+        syntax.duration.as_deref(),
+        syntax.frame_duration.as_deref(),
+    )
+    .map_err(|message| parse_error(&entry.source_line, &message))?;
+    entry.loop_duration_ms = timing.duration_ms;
+    entry.loop_frame_duration_ms = timing.frame_duration_ms;
     if let Some(selector) = syntax.selector {
         if entry.selector.replace(selector).is_some() {
             return Err(parse_error(&entry.source_line, "duplicate sprite selector"));
@@ -829,12 +648,6 @@ fn apply_sprite_attachment_body(
     if let Some(colors) = syntax.colors {
         let values = colors.iter().map(String::as_str).collect::<Vec<_>>();
         entry.color_exprs = Some(visual_colors_from_tokens(&values, &entry.source_line)?);
-    }
-    if let Some(duration) = syntax.duration {
-        entry.set_duration(&duration, &entry.source_line.clone())?;
-    }
-    if let Some(frame_duration) = syntax.frame_duration {
-        entry.set_frame_duration(&frame_duration, &entry.source_line.clone())?;
     }
     for (property, property_line) in syntax.properties {
         match property {
@@ -849,7 +662,12 @@ fn apply_sprite_attachment_body(
                     .transforms
                     .push(SpriteTransformExpr::Translate { value, space });
             }
-            crate::sprite_authoring::SpritePropertySyntax::Rotate { angle, axis, space } => {
+            crate::sprite_authoring::SpritePropertySyntax::Rotate {
+                angle,
+                from,
+                axis,
+                space,
+            } => {
                 if axis.is_some() {
                     return Err(parse_error(
                         &property_line,
@@ -858,7 +676,7 @@ fn apply_sprite_attachment_body(
                 }
                 entry
                     .transforms
-                    .push(SpriteTransformExpr::Rotate { angle, space });
+                    .push(SpriteTransformExpr::Rotate { angle, from, space });
             }
             crate::sprite_authoring::SpritePropertySyntax::Flip(value) => {
                 entry.transforms.push(SpriteTransformExpr::Flip(value));
@@ -883,12 +701,14 @@ fn apply_sprite_attachment_body(
             }
         }
     }
-    match resolved_shape {
+    match analyzed.shape {
         crate::sprite_authoring::ResolvedSpriteShape::Reference(reference) => {
             entry.set_shape_ref(&reference, &entry.source_line.clone())?;
         }
         crate::sprite_authoring::ResolvedSpriteShape::Inline(frames) => {
-            let mut frames = crate::sprite_authoring::into_single_layer_frames(frames)
+            crate::sprite_authoring::validate_sprite_frame_geometry(&frames)
+                .map_err(|message| parse_error(&entry.source_line, message))?;
+            let frames = crate::sprite_authoring::into_single_layer_frames(frames)
                 .map_err(|message| parse_error(&entry.source_line, message))?
                 .into_iter()
                 .map(|frame| frame.into_iter().map(|row| row.text).collect::<Vec<_>>())
@@ -905,15 +725,18 @@ fn apply_sprite_attachment_body(
                     "sprite animation frame requires at least one row",
                 ));
             }
-            let frame = frames.pop().expect("non-empty frames");
-            let has_separator = !frames.is_empty();
-            apply_sprite_ascii_frames(
-                entry,
-                frames,
-                frame,
-                has_separator,
-                &entry.source_line.clone(),
-            )?;
+            for frame in &frames {
+                validate_visual_pattern(frame, &entry.source_line)?;
+            }
+            entry.inline_pattern = frames.first().cloned();
+            if frames.len() > 1 {
+                entry.loop_animation = Some(VisualSpriteLoopDef {
+                    duration_ms: timing
+                        .total_duration_ms
+                        .expect("shared timing resolves animated sprite duration"),
+                    frames,
+                });
+            }
         }
         crate::sprite_authoring::ResolvedSpriteShape::UnknownBareReference(reference) => {
             return Err(parse_error(
@@ -1864,8 +1687,11 @@ fn eval_sprite_transforms(
     expressions
         .iter()
         .map(|expression| match expression {
-            SpriteTransformExpr::Rotate { angle, space } => {
-                let degrees = eval_sprite_angle_expr(angle, bindings, line)?;
+            SpriteTransformExpr::Rotate { angle, from, space } => {
+                let mut degrees = eval_sprite_angle_expr(angle, bindings, line)?;
+                if let Some(from) = from {
+                    degrees = degrees.sub(eval_sprite_angle_expr(from, bindings, line)?);
+                }
                 Ok(VisualSpriteTransform::Rotate {
                     degrees: degrees.as_f64(),
                     space: visual_sprite_space(*space),

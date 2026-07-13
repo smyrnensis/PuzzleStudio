@@ -12,4 +12,3 @@ move
 The first rule marks the player. The second rule passes that direction to a box.
 
 `move` applies the marked movement and blocks movement into occupied cells in the same layer.
-

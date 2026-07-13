@@ -223,7 +223,7 @@ function renderSpriteScaleControl({
     : `Scale down by ${factor}x`;
 }
 
-const editorHoverTooltipSelector = "button";
+const editorHoverTooltipSelector = "button, [data-tooltip]";
 let editorHoverTooltip = null;
 let editorHoverTooltipTarget = null;
 
@@ -233,11 +233,12 @@ function editorTooltipTargetFromEventTarget(target) {
     return null;
   }
   const hasIconGlyph = element.querySelector("svg")
-    || element.classList.contains("sprite-brush-size-button");
+    || element.classList.contains("sprite-brush-size-input");
+  const hasHoverContent = hasIconGlyph || element.dataset.shortcut;
   if (
     element.classList.contains("sprite-cell")
     || element.classList.contains("source-outline-row")
-    || !hasIconGlyph
+    || !hasHoverContent
   ) {
     return null;
   }
@@ -317,6 +318,30 @@ function compactEditorTooltipText(text) {
   if (unlinkTagMatch) {
     return "Unlink tag";
   }
+  const scopedEditMatch = cleaned.match(/^(Copy|Cut|Delete) (?:whole (?:3D )?sprite|current slice|selected (?:3D )?area)$/i);
+  if (scopedEditMatch) {
+    return `${scopedEditMatch[1][0].toUpperCase()}${scopedEditMatch[1].slice(1).toLowerCase()}`;
+  }
+  if (/^Paste into (?:whole (?:3D )?sprite|current slice|selected (?:3D )?area)$/i.test(cleaned)) {
+    return "Paste";
+  }
+  if (/^(?:Select edit region in|Clear selected (?:3D )?edit region)/i.test(cleaned)) {
+    return cleaned.startsWith("Clear") ? "Clear region" : "Select region";
+  }
+  if (/^Stop translating (?:3D )?sprite$/i.test(cleaned)) {
+    return "Stop translate";
+  }
+  const scopedTransformMatch = cleaned.match(/^(Translate|Fill connected (?:3D component|area)|Rotate|Flip)\b/i);
+  if (scopedTransformMatch) {
+    const action = scopedTransformMatch[1].toLowerCase();
+    if (action === "rotate") {
+      return /\bCCW$/i.test(cleaned) ? "Rotate CCW" : /\bCW$/i.test(cleaned) ? "Rotate CW" : "Rotate";
+    }
+    if (action === "flip") {
+      return /horizontally$/i.test(cleaned) ? "Flip horizontal" : /vertically$/i.test(cleaned) ? "Flip vertical" : "Flip";
+    }
+    return action.startsWith("fill") ? "Fill" : "Translate";
+  }
   return cleaned;
 }
 
@@ -388,7 +413,14 @@ function showEditorHoverTooltip(element) {
     element.removeAttribute("title");
   }
   const tooltip = ensureEditorHoverTooltip();
-  tooltip.textContent = text;
+  tooltip.replaceChildren(document.createTextNode(text));
+  const shortcut = String(element.dataset.shortcut || "").trim();
+  if (shortcut) {
+    const keycap = document.createElement("kbd");
+    keycap.className = "editor-hover-shortcut";
+    keycap.textContent = shortcut;
+    tooltip.append(keycap);
+  }
   tooltip.hidden = false;
   positionEditorHoverTooltip();
 }
@@ -402,7 +434,7 @@ function hideEditorHoverTooltip(element = editorHoverTooltipTarget) {
   }
   if (editorHoverTooltip) {
     editorHoverTooltip.hidden = true;
-    editorHoverTooltip.textContent = "";
+    editorHoverTooltip.replaceChildren();
   }
   if (!element || element === editorHoverTooltipTarget) {
     editorHoverTooltipTarget = null;
@@ -442,6 +474,7 @@ function installEditorHoverTooltips() {
 
 let latestHtml = "";
 let previewExport = null;
+let compiledPreviewDocumentId = null;
 let compiledPreviewStale = false;
 let previewFrameHasCurrentCompiledPreview = false;
 let previewTimer = 0;
@@ -568,6 +601,8 @@ let sprite = {
   editPaletteOpen: false,
   customColorOpen: false,
   addDraftColorIndex: null,
+  colorTagPickerOpen: false,
+  shapeTagPickerOpen: false,
   paletteBind: null,
   shapeBind: null,
   solidSource: false,
@@ -586,6 +621,7 @@ let sprite = {
 };
 let sprite3d = {
   size: 5,
+  depth: 5,
   editDocumentId: null,
   editSourceStart: null,
   editSourceEnd: null,
@@ -600,10 +636,11 @@ let sprite3d = {
   editPaletteOpen: false,
   customColorOpen: false,
   addDraftColorIndex: null,
+  colorTagPickerOpen: false,
+  shapeTagPickerOpen: false,
   palette: [
     { color: "#ff004d" },
   ],
-  sliceClipboard: null,
   hoverSlice: null,
   camera: {
     yawDegrees: 340,
@@ -612,6 +649,11 @@ let sprite3d = {
   },
   cells: [],
   frames: [],
+  animationMode: false,
+  animationFrameIndex: 0,
+  animationFrameCount: 1,
+  animationPlaybackIndex: 0,
+  animationPlaying: false,
   animationDurationMs: null,
   frameDurationMs: null,
   shapeBind: null,
@@ -717,6 +759,7 @@ function visualEditSnapshot(kind) {
       ...base,
       state: {
         size: sprite3d.size,
+        depth: sprite3d.depth,
         editDocumentId: sprite3d.editDocumentId,
         editSourceStart: sprite3d.editSourceStart,
         editSourceEnd: sprite3d.editSourceEnd,
@@ -730,11 +773,14 @@ function visualEditSnapshot(kind) {
         palette: cloneVisualEditValue(sprite3d.palette || []),
         cells: cloneVisualEditValue(sprite3d.cells || []),
         frames: cloneVisualEditValue(sprite3d.frames || []),
+        animationMode: Boolean(sprite3d.animationMode),
+        animationFrameIndex: sprite3d.animationFrameIndex,
+        animationFrameCount: sprite3d.animationFrameCount,
+        animationPlaybackIndex: sprite3d.animationPlaybackIndex,
         animationDurationMs: sprite3d.animationDurationMs,
         frameDurationMs: sprite3d.frameDurationMs,
         shapeBind: cloneVisualEditValue(sprite3d.shapeBind || null),
         sourceSpatialOps: cloneVisualEditValue(sprite3d.sourceSpatialOps || []),
-        sliceClipboard: cloneVisualEditValue(sprite3d.sliceClipboard || null),
         hoverSlice: sprite3d.hoverSlice,
       },
     };
@@ -834,11 +880,15 @@ function restoreVisualEditSnapshot(snapshot) {
     sprite.animationFrameCount = normalizedSpriteAnimationFrameCount(state.animationFrameCount);
     sprite.animationFrames = cloneVisualEditValue(state.animationFrames || []);
     sprite.animationPlaybackIndex = Math.max(0, Math.trunc(Number(state.animationPlaybackIndex) || 0));
-    if (typeof ensureSpriteAnimationFrames === "function") {
-      ensureSpriteAnimationFrames();
-    }
-    if (sprite.animationFrames[sprite.animationFrameIndex]) {
-      sprite.cells = sprite.animationFrames[sprite.animationFrameIndex];
+    if (sprite.animationMode) {
+      if (typeof ensureSpriteAnimationFrames === "function") {
+        ensureSpriteAnimationFrames();
+      }
+      if (sprite.animationFrames[sprite.animationFrameIndex]) {
+        sprite.cells = sprite.animationFrames[sprite.animationFrameIndex];
+      }
+    } else if (typeof resetSpriteAnimationFramesFromCurrentCells === "function") {
+      resetSpriteAnimationFramesFromCurrentCells();
     }
     sprite.addPaletteOpen = false;
     sprite.editPaletteOpen = false;
@@ -850,6 +900,7 @@ function restoreVisualEditSnapshot(snapshot) {
     }
   } else if (snapshot.kind === "sprite3d") {
     sprite3d.size = clampSprite3dSize(state.size);
+    sprite3d.depth = clampSprite3dSize(state.depth ?? state.size);
     sprite3d.editDocumentId = state.editDocumentId || null;
     sprite3d.editSourceStart = Number.isInteger(state.editSourceStart) ? state.editSourceStart : null;
     sprite3d.editSourceEnd = Number.isInteger(state.editSourceEnd) ? state.editSourceEnd : null;
@@ -863,11 +914,14 @@ function restoreVisualEditSnapshot(snapshot) {
     sprite3d.palette = cloneVisualEditValue(state.palette || [{ color: "#ff004d" }]);
     sprite3d.cells = cloneVisualEditValue(state.cells || []);
     sprite3d.frames = cloneVisualEditValue(state.frames || []);
+    sprite3d.animationMode = Boolean(state.animationMode);
+    sprite3d.animationFrameCount = Math.max(1, Math.trunc(Number(state.animationFrameCount) || sprite3d.frames.length || 1));
+    sprite3d.animationFrameIndex = Math.max(0, Math.min(sprite3d.animationFrameCount - 1, Math.trunc(Number(state.animationFrameIndex) || 0)));
+    sprite3d.animationPlaybackIndex = Math.max(0, Math.min(sprite3d.animationFrameCount - 1, Math.trunc(Number(state.animationPlaybackIndex) || 0)));
     sprite3d.animationDurationMs = Number.isFinite(state.animationDurationMs) ? state.animationDurationMs : null;
     sprite3d.frameDurationMs = Number.isFinite(state.frameDurationMs) ? state.frameDurationMs : null;
     sprite3d.shapeBind = cloneVisualEditValue(state.shapeBind || null);
     sprite3d.sourceSpatialOps = cloneVisualEditValue(state.sourceSpatialOps || []);
-    sprite3d.sliceClipboard = cloneVisualEditValue(state.sliceClipboard || null);
     sprite3d.hoverSlice = Number.isInteger(state.hoverSlice) ? state.hoverSlice : null;
     sprite3d.addPaletteOpen = false;
     sprite3d.editPaletteOpen = false;
@@ -1716,13 +1770,16 @@ async function runPreviewFromSourcePane() {
 
 function applyCompiledPreviewHtml(html, document, source) {
   latestHtml = html;
-  const previousLevelIndex = currentEditableLevelIndex(previewExport);
+  const previousLevelIndex = compiledPreviewDocumentId === document.id
+    ? currentEditableLevelIndex(previewExport)
+    : null;
   previewExport = extractPreviewExport(html);
+  compiledPreviewDocumentId = document.id;
   compiledPreviewStale = false;
   previewFrameHasCurrentCompiledPreview = true;
   syncPreviewViewportAspect();
   applyPreviewTheme(previewExport?.theme || null);
-  setActiveLevelIndex(previousLevelIndex, previewExport);
+  setActiveLevelIndex(previousLevelIndex ?? previewExport?.initialLevelIndex ?? 0, previewExport);
   clearSolverTask();
   latestPreviewState = null;
   latestPreviewRuntimeStatus = null;
@@ -4180,7 +4237,7 @@ function insertLevel3dWithDefaultBlock(source, name, levelData, bundle = "levels
   const normalizedBundle = sanitizeLevel3dBundle(bundle || "levels");
   const levelSource = levelDefinition3dSource(name, levelData, "  ", { bodyIndent: "    " }).trimEnd();
   const prefix = source.trimEnd() ? `${source.trimEnd()}\n\n` : "";
-  return `${prefix}levels3 ${normalizedBundle} {\n  legend {\n    ${LEVEL3D_EMPTY_CHAR} = empty\n  }\n\n${levelSource}\n}\n`;
+  return `${prefix}levels ${normalizedBundle} {\n  legend {\n    ${LEVEL3D_EMPTY_CHAR} = empty\n  }\n\n${levelSource}\n}\n`;
 }
 
 function addEmptyLevel3dToFocusedSource() {
@@ -4352,20 +4409,11 @@ function setEditorDimensionMode(dimension) {
   return currentPreviewMode;
 }
 
-function paneBindLabel(kind) {
-  if (kind === "level") {
-    if (currentLevelPaneMode === "edit") {
-      return "2D";
-    }
-    if (currentLevelPaneMode === "level3d") {
-      return "3D";
-    }
-    return "none";
-  }
-  if (currentSpritePaneMode === "sprite") {
+function levelPaneBindLabel() {
+  if (currentLevelPaneMode === "edit") {
     return "2D";
   }
-  if (currentSpritePaneMode === "sprite3d") {
+  if (currentLevelPaneMode === "level3d") {
     return "3D";
   }
   return "none";
@@ -4373,10 +4421,7 @@ function paneBindLabel(kind) {
 
 function syncPaneBindLabels() {
   if (levelPaneModeSwitch) {
-    levelPaneModeSwitch.textContent = paneBindLabel("level");
-  }
-  if (spritePaneModeSwitch) {
-    spritePaneModeSwitch.textContent = paneBindLabel("sprite");
+    levelPaneModeSwitch.textContent = levelPaneBindLabel();
   }
 }
 
@@ -4389,13 +4434,19 @@ function syncPreviewModeButtonState() {
   editModeButton.classList.toggle("is-active", isPaneVisible("level"));
   solverModeButton.classList.toggle("is-active", paneVisible && previewMode === "solver");
   spriteModeButton.classList.toggle("is-active", spritePaneVisible && !sprite.animationMode);
-  spriteAnimateModeButton?.classList.toggle("is-active", spritePaneVisible && currentSpritePaneMode === "sprite" && sprite.animationMode);
   sprite3dModeButton?.classList.toggle("is-active", spritePaneVisible && currentSpritePaneMode === "sprite3d");
   editModeButton.title = `Open ${dimensionLabel} level editor`;
   editModeButton.setAttribute("aria-label", `Open ${dimensionLabel} level editor`);
   spriteModeButton.title = `Open ${dimensionLabel} sprite editor`;
   spriteModeButton.setAttribute("aria-label", `Open ${dimensionLabel} sprite editor`);
-  spriteAnimateModeButton?.setAttribute("aria-pressed", String(spritePaneVisible && currentSpritePaneMode === "sprite" && sprite.animationMode));
+  const spriteAnimationActive = currentSpritePaneMode === "sprite3d" ? Boolean(sprite3d.animationMode) : Boolean(sprite.animationMode);
+  spriteAnimateModeButton?.classList.toggle("is-active", spritePaneVisible && spriteAnimationActive);
+  spriteAnimateModeButton?.setAttribute("aria-pressed", String(spritePaneVisible && spriteAnimationActive));
+  for (const button of spriteDimensionButtons) {
+    const active = normalizeEditorDimension(button.dataset.spriteDimension) === currentEditorDimension;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", String(active));
+  }
   if (editorDimensionSwitch) {
     editorDimensionSwitch.dataset.mode = currentEditorDimension;
   }
@@ -4461,9 +4512,6 @@ function setPreviewMode(mode, options = {}) {
   }
   if (levelPaneModeSwitch) {
     levelPaneModeSwitch.hidden = !isPaneVisible("level");
-  }
-  if (spritePaneModeSwitch) {
-    spritePaneModeSwitch.hidden = !isPaneVisible("sprite");
   }
   if (soundsHeaderTools) {
     soundsHeaderTools.hidden = !isPaneVisible("sounds");
@@ -10733,14 +10781,14 @@ themeToggleButton?.addEventListener("click", toggleEditorTheme);
 importFileInput.addEventListener("change", () => {
   importFiles(importFileInput.files).catch((error) => {
     console.error(error);
-    setEditorStatus(`Import failed: ${importErrorMessage(error)}`, "is-error");
+    setEditorStatus(`Open failed: ${importErrorMessage(error)}`, "is-error");
   });
   importFileInput.value = "";
 });
 importFolderInput.addEventListener("change", () => {
   importFiles(importFolderInput.files).catch((error) => {
     console.error(error);
-    setEditorStatus(`Import failed: ${importErrorMessage(error)}`, "is-error");
+    setEditorStatus(`Open failed: ${importErrorMessage(error)}`, "is-error");
   });
   importFolderInput.value = "";
 });
@@ -11272,10 +11320,21 @@ spriteModeButton.addEventListener("click", () => {
   }
 });
 spriteAnimateModeButton?.addEventListener("click", () => {
-  if (typeof setSpriteAnimationMode === "function") {
+  if (currentSpritePaneMode === "sprite3d" && typeof setSprite3dAnimationMode === "function") {
+    setSprite3dAnimationMode(!sprite3d.animationMode);
+  } else if (typeof setSpriteAnimationMode === "function") {
     setSpriteAnimationMode(!sprite.animationMode);
   }
 });
+for (const button of spriteDimensionButtons) {
+  button.addEventListener("click", () => {
+    const dimension = normalizeEditorDimension(button.dataset.spriteDimension);
+    if (dimension === currentEditorDimension) {
+      return;
+    }
+    setEditorDimensionMode(dimension);
+  });
+}
 sprite3dModeButton?.addEventListener("click", () => {
   if (typeof setSpriteAnimationMode === "function") {
     setSpriteAnimationMode(false, { render: false });
@@ -11538,7 +11597,9 @@ registerSourceEditableTarget?.("level", {
 
 applyPaneVisibility();
 
-loadSource().catch((error) => {
+loadSource().then(() => {
+  setWorkspaceFileActionsReady();
+}).catch((error) => {
   setPreviewDocumentLoaded(false);
   setPreviewFrameHtml(emptyPreviewDocument());
   resetPreviewLog("Load failed");

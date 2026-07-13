@@ -891,6 +891,8 @@ fn push_compact_level_programs(out: &mut String, loaded: &LoadedGame) {
         push_compact_optional_rule_program(out, level.level_start_program.as_deref());
         out.push(',');
         push_compact_optional_rule_program(out, level.level_clear_program.as_deref());
+        out.push(',');
+        push_compact_rule_program(out, &level.program);
         out.push(']');
     }
     out.push(']');

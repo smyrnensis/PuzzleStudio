@@ -2585,7 +2585,7 @@ fn translate_motion_qualifiers_on_side(
                 resolve_name(selector, objects, aliases, tags, maps, case_sensitive).is_some()
             })
         {
-            if !is_lhs && (is_moving || is_stationary) {
+            if !is_lhs && is_stationary {
                 translated.push(selector.clone());
             } else {
                 let mark = if is_moving {

@@ -768,12 +768,15 @@ fn export_html_from_source_with_runtime_wasm(
 pub fn export_html_file(path: impl AsRef<Path>) -> Result<String, String> {
     let puzzle_path = resolve_game_entry(path).map_err(|error| error.to_string())?;
     let source = fs::read_to_string(&puzzle_path).map_err(|error| error.to_string())?;
-    let source = if source_looks_puzzle3d(&source) {
+    let source = if puzzle_lang::puzzle_source_profile_for_path(&puzzle_path)
+        == Some(puzzle_lang::PuzzleSourceProfile::Puzzle3d)
+    {
         source
     } else {
         expand_game_imports_for_file(&source, &puzzle_path).map_err(|error| error.to_string())?
     };
-    let document = puzzle_lang::parse_game(&source).map_err(|error| error.to_string())?;
+    let document = puzzle_lang::parse_game_for_path(&source, &puzzle_path)
+        .map_err(|error| error.to_string())?;
     let game_css =
         load_asset_css(&puzzle_path, &document.assets).map_err(|error| error.to_string())?;
 

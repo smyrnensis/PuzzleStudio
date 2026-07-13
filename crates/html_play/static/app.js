@@ -1346,6 +1346,7 @@ function renderPuzzle3Frame(component, scope = {}) {
     puzzle3Controllers.set(key, entry);
   }
   syncPuzzle3ControllerLevel(entry);
+  schedulePuzzle3ControllerConnectedResize(entry);
   return entry.root;
 }
 
@@ -1532,6 +1533,26 @@ function syncPuzzle3ControllerLevel(entry) {
     entry.levelIndex = level;
     controller.ready?.then(() => controller.command("goto_level", { level }));
   }
+}
+
+function schedulePuzzle3ControllerConnectedResize(entry) {
+  if (!entry?.controller || entry.connectedResizePending) {
+    return;
+  }
+  entry.connectedResizePending = true;
+  Promise.resolve(entry.controller.ready)
+    .then(() => {
+      requestAnimationFrame(() => {
+        entry.connectedResizePending = false;
+        if (entry.root?.isConnected) {
+          entry.controller.resize();
+        }
+      });
+    })
+    .catch((error) => {
+      entry.connectedResizePending = false;
+      showError(error);
+    });
 }
 /* puzzle-host:optional:puzzle3:end */
 

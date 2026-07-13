@@ -31,4 +31,6 @@ move
 }
 ```
 
-Directional movement uses a temporary direction mark. `move` applies that direction after the input rule runs.
+Directional movement uses a temporary direction mark. `move` applies that
+direction after the input rule runs. All marks are transition-local and are
+cleared after the transition; use `var` for saved puzzle state.

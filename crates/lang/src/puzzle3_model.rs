@@ -1,4 +1,4 @@
-use puzzle_grid3d::{Game3, LevelBundle3, ObjectId, Rule3, WinCondition3};
+use puzzle_grid3d::{Game3, LevelBundle3, ObjectId, RuleStep3, WinCondition3};
 use puzzle_grid3d_authoring::SelectorCatalog3;
 use puzzle_kernel::LocalFrame;
 use puzzle_runtime_contract::{Puzzle3CameraEffect, RuntimeLifecycle};
@@ -11,14 +11,14 @@ pub struct ParsedPuzzle3 {
     pub catalog: SelectorCatalog3,
     pub settings: ModelSettings3,
     pub local_frame: Option<LocalFrame<ObjectId>>,
-    pub rules: Vec<Rule3>,
+    pub rules: Vec<RuleStep3>,
     pub display_objects: Vec<ObjectId>,
     pub rule_camera_effects: Vec<Vec<Puzzle3CameraEffect>>,
     pub level_bundle: Option<LevelBundle3>,
     pub level_packs: Vec<Option<String>>,
     pub win_condition: Option<WinCondition3>,
     pub solver_strategy: SolverStrategy3,
-    pub lifecycle: RuntimeLifecycle<Rule3, LocalFrame<ObjectId>>,
+    pub lifecycle: RuntimeLifecycle<RuleStep3, LocalFrame<ObjectId>>,
     pub on_level_start_camera_effects: Vec<Vec<Puzzle3CameraEffect>>,
     pub sprite_set: Option<SpriteSet3>,
 }
@@ -28,6 +28,7 @@ pub struct ModelSettings3 {
     pub camera: CameraSettings3,
     pub grid: GridSettings3,
     pub sprite: SpriteRenderSettings3,
+    pub shadow: bool,
     pub viewport: ViewportSettings3,
     pub pixelate: PixelateRenderSettings3,
 }
@@ -38,6 +39,7 @@ impl Default for ModelSettings3 {
             camera: CameraSettings3::default(),
             grid: GridSettings3::default(),
             sprite: SpriteRenderSettings3::default(),
+            shadow: false,
             viewport: ViewportSettings3::default(),
             pixelate: PixelateRenderSettings3::default(),
         }

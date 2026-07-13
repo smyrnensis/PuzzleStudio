@@ -17,11 +17,11 @@ pub use puzzle_kernel::{LocalFrame, LocalFrameExtent, MarkKind, MarkValueMatch, 
 pub use state::{CellView3, SlotMark3, State3, StateError3};
 pub use transition::{
     ConditionDef3, ConditionValueKind3, Guard3, MarkPattern3, MatchCell3, ObjectSetMarkPattern3,
-    ObjectSetMatcher3, Pattern3, PatternComponent3, Rule3, RuleApplication3, RuleEffect3,
-    TransitionCommand3, TransitionError3, TransitionOutcome3, WriteOp3, count_pattern_matches,
-    eval_condition_kind, has_pattern_match, transition_once, transition_once_all,
-    transition_once_per_level, transition_once_with_input, transition_program,
-    transition_program_outcome, transition_program_outcome_with_local_frame,
+    ObjectSetMatcher3, Pattern3, PatternComponent3, Rule3, RuleApplication3, RuleCondition3,
+    RuleEffect3, RuleStep3, TransitionCommand3, TransitionError3, TransitionOutcome3, WriteOp3,
+    count_pattern_matches, eval_condition_kind, flattened_rules, has_pattern_match,
+    transition_once, transition_once_all, transition_once_per_level, transition_once_with_input,
+    transition_program, transition_program_outcome, transition_program_outcome_with_local_frame,
     transition_program_with_local_frame, transition_program_without_input,
     transition_program_without_input_outcome,
     transition_program_without_input_outcome_with_local_frame,
@@ -158,7 +158,9 @@ mod tests {
             .unwrap();
         let rule = move_rule(Direction3::RIGHT);
 
-        let outcome = transition_program_outcome(&game, &state, &[rule], INPUT_RIGHT).unwrap();
+        let outcome =
+            transition_program_outcome(&game, &state, &[RuleStep3::Rule(rule)], INPUT_RIGHT)
+                .unwrap();
 
         assert_eq!(outcome.input, Some(INPUT_RIGHT));
         assert_eq!(outcome.fired_rules, vec![RuleId3(0)]);
@@ -943,8 +945,8 @@ mod tests {
             .unwrap();
 
         let rules = vec![
-            move_rule(Direction3::LEFT).when_input(INPUT_LEFT),
-            move_rule(Direction3::RIGHT).when_input(INPUT_RIGHT),
+            RuleStep3::Rule(move_rule(Direction3::LEFT).when_input(INPUT_LEFT)),
+            RuleStep3::Rule(move_rule(Direction3::RIGHT).when_input(INPUT_RIGHT)),
         ];
 
         let next = transition_program(&game, &state, &rules, INPUT_LEFT).unwrap();
@@ -1123,9 +1125,20 @@ mod tests {
         )
         .with_id(RuleId3(7));
 
-        let first =
-            transition_program(&game, &state, &[player_to_box.clone()], INPUT_RIGHT).unwrap();
-        let second = transition_program(&game, &first, &[player_to_box], INPUT_RIGHT).unwrap();
+        let first = transition_program(
+            &game,
+            &state,
+            &[RuleStep3::Rule(player_to_box.clone())],
+            INPUT_RIGHT,
+        )
+        .unwrap();
+        let second = transition_program(
+            &game,
+            &first,
+            &[RuleStep3::Rule(player_to_box)],
+            INPUT_RIGHT,
+        )
+        .unwrap();
 
         assert!(first.has_object(&game, Coord3::new(0, 0, 0), BOX));
         assert!(first.has_object(&game, Coord3::new(1, 0, 0), PLAYER));
@@ -1148,7 +1161,13 @@ mod tests {
         )
         .with_id(RuleId3(8));
 
-        let next = transition_program(&game, &state, &[player_to_box], INPUT_RIGHT).unwrap();
+        let next = transition_program(
+            &game,
+            &state,
+            &[RuleStep3::Rule(player_to_box)],
+            INPUT_RIGHT,
+        )
+        .unwrap();
 
         assert_eq!(next, state);
         assert!(!next.level_rule_has_fired(RuleId3(8)));
@@ -1268,8 +1287,12 @@ mod tests {
             }],
         );
 
-        let next =
-            transition_program_without_input(&game, &state, &[mark_player, consume_mark]).unwrap();
+        let next = transition_program_without_input(
+            &game,
+            &state,
+            &[RuleStep3::Rule(mark_player), RuleStep3::Rule(consume_mark)],
+        )
+        .unwrap();
 
         assert!(!next.has_object(&game, Coord3::new(0, 0, 0), PLAYER));
         assert!(next.has_object(&game, Coord3::new(0, 0, 0), WALL));
@@ -1396,9 +1419,14 @@ mod tests {
             vec![PLAYER],
         );
 
-        let next =
-            transition_program_with_local_frame(&game, &state, &[rule], INPUT_RIGHT, Some(&frame))
-                .unwrap();
+        let next = transition_program_with_local_frame(
+            &game,
+            &state,
+            &[RuleStep3::Rule(rule)],
+            INPUT_RIGHT,
+            Some(&frame),
+        )
+        .unwrap();
 
         assert!(next.has_object(&game, Coord3::new(1, 0, 2), WALL));
         assert!(next.has_object(&game, Coord3::new(3, 0, 0), BOX));

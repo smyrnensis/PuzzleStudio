@@ -53,6 +53,7 @@ pub(crate) struct SurfaceNode {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct SurfaceDocument {
+    pub(crate) source_profile: Option<crate::PuzzleSourceProfile>,
     pub(crate) logical_lines: Vec<LogicalLine>,
     pub(crate) lines: Vec<SurfaceLine>,
     pub(crate) structural_blocks: Vec<SurfaceStructuralBlock>,
@@ -88,6 +89,8 @@ pub(crate) struct SurfaceStructuralBlock {
     pub(crate) authoring_kind: Option<crate::authoring_grammar::AuthoringKind>,
     pub(crate) authoring_content: Option<crate::authoring_grammar::AuthoringContentKind>,
     pub(crate) virtual_braces: bool,
+    pub(crate) open_brace: Option<usize>,
+    pub(crate) close_brace: Option<usize>,
     pub(crate) start: usize,
     pub(crate) end: usize,
     pub(crate) depth: usize,
@@ -161,7 +164,6 @@ impl SurfaceVisualSpriteRefs {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SurfaceOptionBlock {
     Puzzle2,
-    Puzzle3,
     Authoring(crate::authoring_grammar::AuthoringKind),
     LevelMenu,
     Other,
@@ -171,9 +173,6 @@ impl SurfaceOptionBlock {
     pub(crate) fn authoring_parent_kind(self) -> Option<crate::authoring_grammar::AuthoringKind> {
         match self {
             SurfaceOptionBlock::Puzzle2 => Some(crate::authoring_grammar::AuthoringKind::Root),
-            SurfaceOptionBlock::Puzzle3 => {
-                Some(crate::authoring_grammar::AuthoringKind::Puzzle3Root)
-            }
             SurfaceOptionBlock::Authoring(kind) => Some(kind),
             SurfaceOptionBlock::LevelMenu | SurfaceOptionBlock::Other => None,
         }

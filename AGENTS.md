@@ -133,17 +133,28 @@ silently overwrite another session's work.
 
 Before editing any file that is dirty, staged, untracked, or likely to be touched
 by another session, record its current content hash after reading it. Immediately
-before applying a patch, check the hash again. If the hash changed, stop and ask
-instead of rebasing your patch mentally, re-reading and continuing, or fixing the
-new drift. Treat repeated patch context mismatches, content that reverts between
+before applying a patch, check the hash again. If the hash changed, treat that as
+evidence of concurrent ownership, not as an automatic reason to stop. Re-read the
+latest file and its diff, identify whether the concurrent change overlaps the
+lines or behavior contract you intend to change, and reconstruct your smallest
+patch against the latest content while preserving all unrelated work.
+
+Do not revert, overwrite, normalize, or otherwise repair concurrent changes merely
+to restore the state you first inspected. Do not alter another session's work to
+make a test pass, reduce the diff, satisfy formatting, or recover an expected
+generated output. Run verification against the combined current state and report
+failures that belong to concurrent work without trying to absorb or conceal them.
+Ask the user only when the concurrent change overlaps the same lines or semantic
+contract, makes ownership impossible to determine, or prevents a safe minimal
+patch. Treat repeated patch context mismatches, content that reverts between
 commands, or a change that disappears after a test/build as evidence of another
-owner or generator until proven otherwise.
+owner or generator and narrow the work accordingly.
 
 Do not edit an `AM`, staged, or otherwise externally owned file unless the user
 explicitly assigns that file to the current session or you can identify the
 existing changes as your own. If shared-worktree editing is unavoidable, use the
-hash precondition above as the minimum safety gate; separate worktrees remain the
-preferred structure.
+hash-and-overlap check above as the minimum safety gate; separate worktrees remain
+the preferred structure.
 
 ## Diagnose Briefly, Then Act
 

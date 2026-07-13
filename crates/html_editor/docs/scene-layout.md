@@ -7,7 +7,7 @@ gets a playable screen automatically.
 ```puzzle
 puzzle sokoban {
 layout {
-title
+heading title
 sokoban
 }
 }
@@ -20,8 +20,13 @@ Use an explicit `scene` when you need a title screen, menu, or level select scre
 ```puzzle
 scene title {
 layout {
-title
+heading title
 choice "Start" -> goto sokoban
 }
 }
 ```
+
+`heading`, `subheading`, `text`, and `caption` are text roles. `row`, `column`,
+and `box` are containers. Layout allocation uses `space fit` or
+`space fill <weight>`; `aspect <w> <h>` controls ratio. Layout does not use CSS
+sizes or the removed `size <w> <h>` form.

@@ -654,15 +654,435 @@ pub struct CallSurface<'a> {
 pub fn parse_assignment_row(line: &str) -> Option<(&str, &str)> {
     for (index, ch) in top_level_scan(line) {
         let previous = line[..index].chars().next_back();
-        let next = line[index + 1..].chars().next();
+        let next = line[index + ch.len_utf8()..].chars().next();
         if ch == '='
             && !matches!(previous, Some('=' | '!' | '<' | '>'))
             && !matches!(next, Some('='))
         {
-            return Some((line[..index].trim(), line[index + 1..].trim()));
+            return Some((line[..index].trim(), line[index + ch.len_utf8()..].trim()));
         }
     }
     None
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SelectorAssignmentSurface<'a> {
+    pub name: &'a str,
+    pub selectors: Vec<&'a str>,
+}
+
+pub fn selector_assignment_surface(line: &str) -> Option<SelectorAssignmentSurface<'_>> {
+    let (name, selectors) = parse_assignment_row(line)?;
+    let name_tokens = split_header_tokens(name);
+    let selector_tokens = split_header_tokens(selectors);
+    let [name] = name_tokens.as_slice() else {
+        return None;
+    };
+    if selector_tokens.is_empty() {
+        return None;
+    }
+    Some(SelectorAssignmentSurface {
+        name,
+        selectors: selector_tokens,
+    })
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LayerRowSurface<'a> {
+    Anonymous { selectors: Vec<&'a str> },
+    Named(SelectorAssignmentSurface<'a>),
+    Each { selectors: Vec<&'a str> },
+}
+
+pub fn layer_row_surface(line: &str) -> Option<LayerRowSurface<'_>> {
+    if let Some(assignment) = selector_assignment_surface(line) {
+        return Some(LayerRowSurface::Named(assignment));
+    }
+    let tokens = split_header_tokens(line);
+    match tokens.as_slice() {
+        [] | ["each"] => None,
+        ["each", selectors @ ..] => Some(LayerRowSurface::Each {
+            selectors: selectors.to_vec(),
+        }),
+        selectors => Some(LayerRowSurface::Anonymous {
+            selectors: selectors.to_vec(),
+        }),
+    }
+}
+
+pub fn selector_alias_conflicts<'a>(
+    name: &str,
+    object_names: impl IntoIterator<Item = &'a str>,
+    family_names: impl IntoIterator<Item = &'a str>,
+    group_names: impl IntoIterator<Item = &'a str>,
+) -> bool {
+    object_names
+        .into_iter()
+        .chain(family_names)
+        .chain(group_names)
+        .any(|candidate| candidate == name)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PuzzleDirectiveSurface {
+    Empty,
+    Close,
+    Model,
+    RemovedModelPrefix,
+    Metadata,
+    DocumentShell,
+    Layers,
+    Tags,
+    Objects,
+    DisplayObjects,
+    Keys,
+    Inputs,
+    Groups,
+    SingularGroup,
+    Legend,
+    Levels,
+    Level,
+    RemovedLevels3,
+    Sprites,
+    Scene,
+    RuleProgram,
+    WinConditions,
+    Query,
+    Solver,
+    Render,
+    Assignment,
+    Unknown,
+}
+
+pub fn puzzle_directive_surface(line: &str) -> PuzzleDirectiveSurface {
+    let line = line.trim();
+    if line.is_empty() {
+        return PuzzleDirectiveSurface::Empty;
+    }
+    if line == "}" {
+        return PuzzleDirectiveSurface::Close;
+    }
+    if rule_program_block_surface(line).is_some() {
+        return PuzzleDirectiveSurface::RuleProgram;
+    }
+    let tokens = split_header_tokens(line);
+    let Some(first) = tokens.first().copied() else {
+        return PuzzleDirectiveSurface::Unknown;
+    };
+    match first {
+        "puzzle" => PuzzleDirectiveSurface::Model,
+        "model" => PuzzleDirectiveSurface::RemovedModelPrefix,
+        "title" | "subtitle" | "author" | "homepage" | "default_wait_time" | "again_interval" => {
+            PuzzleDirectiveSurface::Metadata
+        }
+        "theme" if parse_assignment_row(line).is_some() => PuzzleDirectiveSurface::Metadata,
+        "sounds" | "theme" | "assets" => PuzzleDirectiveSurface::DocumentShell,
+        "layers" => PuzzleDirectiveSurface::Layers,
+        "tags" => PuzzleDirectiveSurface::Tags,
+        "objects" => PuzzleDirectiveSurface::Objects,
+        "display_objects" => PuzzleDirectiveSurface::DisplayObjects,
+        "keys" => PuzzleDirectiveSurface::Keys,
+        "inputs" => PuzzleDirectiveSurface::Inputs,
+        "groups" => PuzzleDirectiveSurface::Groups,
+        "group" => PuzzleDirectiveSurface::SingularGroup,
+        "legend" => PuzzleDirectiveSurface::Legend,
+        "levels" => PuzzleDirectiveSurface::Levels,
+        "level" => PuzzleDirectiveSurface::Level,
+        "levels3" => PuzzleDirectiveSurface::RemovedLevels3,
+        "sprites" => PuzzleDirectiveSurface::Sprites,
+        "scene" => PuzzleDirectiveSurface::Scene,
+        "win_conditions" => PuzzleDirectiveSurface::WinConditions,
+        "query" => PuzzleDirectiveSurface::Query,
+        "solver" => PuzzleDirectiveSurface::Solver,
+        "render" => PuzzleDirectiveSurface::Render,
+        _ if parse_assignment_row(line).is_some() => PuzzleDirectiveSurface::Assignment,
+        _ => PuzzleDirectiveSurface::Unknown,
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResourceHeaderSurface<'a> {
+    pub name: Option<&'a str>,
+    pub owner: Option<&'a str>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResourceBlockSurface<'a> {
+    pub header: ResourceHeaderSurface<'a>,
+    pub body_start: usize,
+    pub body_end: usize,
+    pub next_index: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResourceHeaderSurfaceError {
+    message: String,
+}
+
+impl ResourceHeaderSurfaceError {
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+pub fn resource_header_surface<'a>(
+    line: &'a str,
+    keyword: &str,
+) -> Result<ResourceHeaderSurface<'a>, ResourceHeaderSurfaceError> {
+    let tokens = split_header_tokens(line);
+    let (name, owner) = match tokens.as_slice() {
+        [head] if *head == keyword => (None, None),
+        [head, "of", owner] if *head == keyword => (None, Some(*owner)),
+        [head, name] if *head == keyword => (Some(*name), None),
+        [head, name, "of", owner] if *head == keyword => (Some(*name), Some(*owner)),
+        _ => {
+            return Err(resource_header_error(format!(
+                "{keyword} header must be: {keyword} [name] [of owner] {{"
+            )));
+        }
+    };
+    if name.is_some_and(|name| !is_qualified_identifier(name)) {
+        return Err(resource_header_error(format!(
+            "{keyword} resource name must be a qualified identifier"
+        )));
+    }
+    if owner.is_some_and(|owner| !is_qualified_identifier(owner)) {
+        return Err(resource_header_error(format!(
+            "{keyword} owner must be a qualified identifier"
+        )));
+    }
+    Ok(ResourceHeaderSurface { name, owner })
+}
+
+fn resource_header_error(message: String) -> ResourceHeaderSurfaceError {
+    ResourceHeaderSurfaceError { message }
+}
+
+pub fn collect_resource_block_surface<'a>(
+    lines: &'a [String],
+    header_index: usize,
+    keyword: &str,
+) -> Result<ResourceBlockSurface<'a>, ResourceHeaderSurfaceError> {
+    let header_line = lines
+        .get(header_index)
+        .ok_or_else(|| resource_header_error(format!("{keyword} resource header is missing")))?;
+    if !header_line.trim_end().ends_with('{') {
+        return Err(resource_header_error(format!(
+            "{keyword} block must end with {{"
+        )));
+    }
+    let header = resource_header_surface(header_line, keyword)?;
+    let body_start = header_index + 1;
+    let block = collect_container_block_surface(lines, body_start, keyword)
+        .map_err(|error| resource_header_error(error.message().to_string()))?;
+    Ok(ResourceBlockSurface {
+        header,
+        body_start: block.body_start,
+        body_end: block.body_end,
+        next_index: block.next_index,
+    })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WinConditionQuantifier {
+    Exists,
+    None,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WinConditionRowSurface<'a> {
+    Query {
+        quantifier: WinConditionQuantifier,
+        argument: &'a str,
+    },
+    SomeOn {
+        subject: &'a str,
+        cover: &'a str,
+    },
+    AllOn {
+        subject: &'a str,
+        cover: &'a str,
+    },
+    Expression(&'a str),
+}
+
+pub fn win_condition_row_surface(line: &str) -> Result<WinConditionRowSurface<'_>, &'static str> {
+    let line = line.trim();
+    if let Some((call, suffix)) = parse_optional_call_surface_with_suffix(line)
+        .map_err(|_| "win condition call has unbalanced parentheses")?
+    {
+        if !suffix.is_empty() {
+            return Ok(WinConditionRowSurface::Expression(line));
+        }
+        let quantifier = match call.name {
+            "exists" | "some" => WinConditionQuantifier::Exists,
+            "none" | "no" => WinConditionQuantifier::None,
+            _ => return Ok(WinConditionRowSurface::Expression(line)),
+        };
+        let [argument] = call.args.as_slice() else {
+            return Err("win condition query must have exactly one argument");
+        };
+        return Ok(WinConditionRowSurface::Query {
+            quantifier,
+            argument: argument.trim(),
+        });
+    }
+
+    let tokens = split_header_tokens(line);
+    Ok(match tokens.as_slice() {
+        ["all", subject, "on", cover] => WinConditionRowSurface::AllOn { subject, cover },
+        ["some", subject, "on", cover] => WinConditionRowSurface::SomeOn { subject, cover },
+        ["some", argument @ ..] if !argument.is_empty() => WinConditionRowSurface::Query {
+            quantifier: WinConditionQuantifier::Exists,
+            argument: line.strip_prefix("some").unwrap_or_default().trim(),
+        },
+        ["no", argument @ ..] if !argument.is_empty() => WinConditionRowSurface::Query {
+            quantifier: WinConditionQuantifier::None,
+            argument: line.strip_prefix("no").unwrap_or_default().trim(),
+        },
+        _ => WinConditionRowSurface::Expression(line),
+    })
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RowBlockSurface<'a> {
+    pub rows: Vec<&'a str>,
+    pub next_index: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RowBlockSurfaceError {
+    message: String,
+}
+
+impl RowBlockSurfaceError {
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+pub fn collect_row_block_surface<'a>(
+    lines: &'a [String],
+    body_start: usize,
+    owner: &str,
+) -> Result<RowBlockSurface<'a>, RowBlockSurfaceError> {
+    let mut rows = Vec::new();
+    let mut index = body_start;
+    while let Some(line) = lines.get(index) {
+        if line == "}" {
+            return Ok(RowBlockSurface {
+                rows,
+                next_index: index + 1,
+            });
+        }
+        if line.ends_with('{') {
+            return Err(RowBlockSurfaceError {
+                message: format!("{owner} accepts rows, not nested blocks: {line}"),
+            });
+        }
+        if !line.is_empty() {
+            rows.push(line.as_str());
+        }
+        index += 1;
+    }
+    Err(RowBlockSurfaceError {
+        message: format!("{owner} block missing }}"),
+    })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ContainerBlockSurface {
+    pub body_start: usize,
+    pub body_end: usize,
+    pub next_index: usize,
+}
+
+pub fn collect_container_block_surface(
+    lines: &[String],
+    body_start: usize,
+    owner: &str,
+) -> Result<ContainerBlockSurface, RowBlockSurfaceError> {
+    let mut depth = 1usize;
+    let mut index = body_start;
+    while let Some(line) = lines.get(index) {
+        if line == "}" {
+            depth -= 1;
+            if depth == 0 {
+                return Ok(ContainerBlockSurface {
+                    body_start,
+                    body_end: index,
+                    next_index: index + 1,
+                });
+            }
+        } else if line.ends_with('{') {
+            depth += 1;
+        }
+        index += 1;
+    }
+    Err(RowBlockSurfaceError {
+        message: format!("{owner} block missing }}"),
+    })
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SelectorGroupDeclaration {
+    pub name: String,
+    pub selectors: Vec<String>,
+    pub source_line: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExpandedLayerSelectors {
+    pub terms: Vec<String>,
+    pub used_groups: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LayerSelectorExpansionError {
+    pub source_line: String,
+    pub message: &'static str,
+}
+
+pub fn expand_layer_selectors(
+    selectors: &[impl AsRef<str>],
+    groups: &[SelectorGroupDeclaration],
+) -> Result<ExpandedLayerSelectors, LayerSelectorExpansionError> {
+    let mut expanded = ExpandedLayerSelectors {
+        terms: Vec::new(),
+        used_groups: Vec::new(),
+    };
+    let mut resolving = Vec::<String>::new();
+    for selector in selectors {
+        expand_layer_selector(selector.as_ref(), groups, &mut resolving, &mut expanded)?;
+    }
+    Ok(expanded)
+}
+
+fn expand_layer_selector(
+    selector: &str,
+    groups: &[SelectorGroupDeclaration],
+    resolving: &mut Vec<String>,
+    expanded: &mut ExpandedLayerSelectors,
+) -> Result<(), LayerSelectorExpansionError> {
+    let Some(group) = groups.iter().find(|group| group.name == selector) else {
+        expanded.terms.push(selector.to_string());
+        return Ok(());
+    };
+    if resolving.iter().any(|candidate| candidate == selector) {
+        return Err(LayerSelectorExpansionError {
+            source_line: group.source_line.clone(),
+            message: "group definitions cannot be cyclic",
+        });
+    }
+    if !expanded.used_groups.contains(&group.name) {
+        expanded.used_groups.push(group.name.clone());
+    }
+    resolving.push(group.name.clone());
+    for selector in &group.selectors {
+        expand_layer_selector(selector, groups, resolving, expanded)?;
+    }
+    resolving.pop();
+    Ok(())
 }
 
 pub fn parse_optional_call_surface_with_suffix<'a>(
@@ -2407,6 +2827,240 @@ mod tests {
         assert_eq!(
             split_cell_tokens("Box:(facing + 90deg):red no Wall").unwrap(),
             vec!["Box:(facing + 90deg):red", "no", "Wall"]
+        );
+    }
+
+    #[test]
+    fn shared_layer_rows_distinguish_anonymous_named_and_each_forms() {
+        assert_eq!(
+            layer_row_surface("Player Box"),
+            Some(LayerRowSurface::Anonymous {
+                selectors: vec!["Player", "Box"],
+            })
+        );
+        assert_eq!(
+            layer_row_surface("solid = Player Box"),
+            Some(LayerRowSurface::Named(SelectorAssignmentSurface {
+                name: "solid",
+                selectors: vec!["Player", "Box"],
+            }))
+        );
+        assert_eq!(
+            layer_row_surface("each Player Box"),
+            Some(LayerRowSurface::Each {
+                selectors: vec!["Player", "Box"],
+            })
+        );
+        assert_eq!(
+            selector_assignment_surface("𝒞 = Crate Background"),
+            Some(SelectorAssignmentSurface {
+                name: "𝒞",
+                selectors: vec!["Crate", "Background"],
+            })
+        );
+        assert!(selector_alias_conflicts(
+            "solid",
+            ["Player"],
+            ["Door"],
+            ["solid"]
+        ));
+        assert!(!selector_alias_conflicts(
+            "target",
+            ["Player"],
+            ["Door"],
+            ["solid"]
+        ));
+    }
+
+    #[test]
+    fn shared_puzzle_directive_surface_classifies_dimension_independent_heads() {
+        assert_eq!(
+            puzzle_directive_surface("puzzle3 board {"),
+            PuzzleDirectiveSurface::Model
+        );
+        assert_eq!(
+            puzzle_directive_surface("layers {"),
+            PuzzleDirectiveSurface::Layers
+        );
+        assert_eq!(
+            puzzle_directive_surface("on_level_start {"),
+            PuzzleDirectiveSurface::RuleProgram
+        );
+        assert_eq!(
+            puzzle_directive_surface("levels3 old {"),
+            PuzzleDirectiveSurface::RemovedLevels3
+        );
+        assert_eq!(
+            puzzle_directive_surface("state = open closed"),
+            PuzzleDirectiveSurface::Assignment
+        );
+        assert_eq!(
+            puzzle_directive_surface("theme = \"puzzlescript\""),
+            PuzzleDirectiveSurface::Metadata
+        );
+        assert_eq!(
+            puzzle_directive_surface("theme dark {"),
+            PuzzleDirectiveSurface::DocumentShell
+        );
+    }
+
+    #[test]
+    fn shared_resource_headers_cover_named_and_owner_scoped_forms() {
+        assert_eq!(
+            resource_header_surface("levels {", "levels").unwrap(),
+            ResourceHeaderSurface {
+                name: None,
+                owner: None,
+            }
+        );
+        assert_eq!(
+            resource_header_surface("levels microban of sokoban {", "levels").unwrap(),
+            ResourceHeaderSurface {
+                name: Some("microban"),
+                owner: Some("sokoban"),
+            }
+        );
+        assert_eq!(
+            resource_header_surface("sprites of board {", "sprites").unwrap(),
+            ResourceHeaderSurface {
+                name: None,
+                owner: Some("board"),
+            }
+        );
+        assert_eq!(
+            resource_header_surface("sprites demo", "sprites").unwrap(),
+            ResourceHeaderSurface {
+                name: Some("demo"),
+                owner: None,
+            }
+        );
+        assert!(resource_header_surface("levels bad name {", "levels").is_err());
+        assert!(collect_resource_block_surface(&["sprites demo".to_string()], 0, "sprites")
+            .is_err());
+
+        let lines = [
+            "sprites icons of board {",
+            "shapes {",
+            "dot {",
+            "0",
+            "}",
+            "}",
+            "Player {",
+            "#fff",
+            "0",
+            "}",
+            "}",
+            "after",
+        ]
+        .map(str::to_string);
+        assert_eq!(
+            collect_resource_block_surface(&lines, 0, "sprites").unwrap(),
+            ResourceBlockSurface {
+                header: ResourceHeaderSurface {
+                    name: Some("icons"),
+                    owner: Some("board"),
+                },
+                body_start: 1,
+                body_end: 10,
+                next_index: 11,
+            }
+        );
+    }
+
+    #[test]
+    fn shared_row_block_collector_owns_close_and_nested_block_rules() {
+        let lines = ["A", "", "B", "}", "after"].map(str::to_string);
+        assert_eq!(
+            collect_row_block_surface(&lines, 0, "groups").unwrap(),
+            RowBlockSurface {
+                rows: vec!["A", "B"],
+                next_index: 4,
+            }
+        );
+        let nested = ["child {", "}", "}"].map(str::to_string);
+        assert!(
+            collect_row_block_surface(&nested, 0, "groups")
+                .unwrap_err()
+                .message()
+                .contains("not nested blocks")
+        );
+        let container = ["child {", "row", "}", "}", "after"].map(str::to_string);
+        assert_eq!(
+            collect_container_block_surface(&container, 0, "levels").unwrap(),
+            ContainerBlockSurface {
+                body_start: 0,
+                body_end: 3,
+                next_index: 4,
+            }
+        );
+    }
+
+    #[test]
+    fn shared_win_condition_rows_normalize_function_and_legacy_forms() {
+        assert_eq!(
+            win_condition_row_surface("exists([ Player | Goal ])").unwrap(),
+            WinConditionRowSurface::Query {
+                quantifier: WinConditionQuantifier::Exists,
+                argument: "[ Player | Goal ]",
+            }
+        );
+        assert_eq!(
+            win_condition_row_surface("no Box").unwrap(),
+            WinConditionRowSurface::Query {
+                quantifier: WinConditionQuantifier::None,
+                argument: "Box",
+            }
+        );
+        assert_eq!(
+            win_condition_row_surface("all Box on Goal").unwrap(),
+            WinConditionRowSurface::AllOn {
+                subject: "Box",
+                cover: "Goal",
+            }
+        );
+        assert_eq!(
+            win_condition_row_surface("score >= 10").unwrap(),
+            WinConditionRowSurface::Expression("score >= 10")
+        );
+    }
+
+    #[test]
+    fn shared_layer_selector_expansion_resolves_forward_groups_and_cycles() {
+        let groups = vec![
+            SelectorGroupDeclaration {
+                name: "solid".to_string(),
+                selectors: vec!["pushable".to_string(), "Wall".to_string()],
+                source_line: "solid = pushable Wall".to_string(),
+            },
+            SelectorGroupDeclaration {
+                name: "pushable".to_string(),
+                selectors: vec!["Box".to_string(), "Crate".to_string()],
+                source_line: "pushable = Box Crate".to_string(),
+            },
+        ];
+        assert_eq!(
+            expand_layer_selectors(&["solid"], &groups).unwrap(),
+            ExpandedLayerSelectors {
+                terms: vec!["Box".to_string(), "Crate".to_string(), "Wall".to_string()],
+                used_groups: vec!["solid".to_string(), "pushable".to_string()],
+            }
+        );
+
+        let cyclic = vec![
+            SelectorGroupDeclaration {
+                name: "a".to_string(),
+                selectors: vec!["b".to_string()],
+                source_line: "a = b".to_string(),
+            },
+            SelectorGroupDeclaration {
+                name: "b".to_string(),
+                selectors: vec!["a".to_string()],
+                source_line: "b = a".to_string(),
+            },
+        ];
+        assert_eq!(
+            expand_layer_selectors(&["a"], &cyclic).unwrap_err().message,
+            "group definitions cannot be cyclic"
         );
     }
 

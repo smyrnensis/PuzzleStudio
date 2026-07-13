@@ -1,5 +1,4 @@
 fn parse_group_definition(
-    tokens: &[&str],
     line: &str,
     object_names: &HashMap<String, ObjectId>,
     object_schemas: &HashMap<String, ObjectSchema>,
@@ -7,14 +6,14 @@ fn parse_group_definition(
     maps: &HashMap<String, ValueMap>,
     object_groups: &mut HashMap<String, Vec<ObjectId>>,
 ) -> Result<(), DiagnosticReport> {
-    let Some(syntax) = crate::syntax::named_selector_assignment_syntax(tokens, true) else {
+    let Some(assignment) = puzzle_authoring::selector_assignment_surface(line) else {
         return Err(parse_error(
             line,
             "group row must be: <name> = <selector...>",
         ));
     };
 
-    let name = tokens[0];
+    let name = assignment.name;
     validate_selector_alias_name(name, line, "group name")?;
     if selector_name_conflicts_with(name, object_names, object_schemas, object_groups) {
         return Err(parse_error(
@@ -24,7 +23,7 @@ fn parse_group_definition(
     }
 
     let selector_sets = selector_sets(
-        &tokens[syntax.rhs_start..],
+        &assignment.selectors,
         line,
         object_names,
         object_schemas,
@@ -48,12 +47,7 @@ fn parse_group_definition(
     Ok(())
 }
 
-#[derive(Clone, Debug)]
-struct PendingGroupDefinition {
-    name: String,
-    selectors: Vec<String>,
-    line: String,
-}
+type PendingGroupDefinition = puzzle_authoring::SelectorGroupDeclaration;
 
 fn collect_puzzle_group_declarations(
     lines: &[String],
@@ -72,7 +66,10 @@ fn collect_puzzle_group_declarations(
                     continue;
                 }
                 ["groups", ..] => {
-                    return Err(parse_error(&lines[i], "groups block must be: groups { ... }"));
+                    return Err(parse_error(
+                        &lines[i],
+                        "groups block must be: groups { ... }",
+                    ));
                 }
                 _ => {}
             }
@@ -89,38 +86,31 @@ fn collect_pending_group_block(
     groups: &mut Vec<PendingGroupDefinition>,
     names: &mut HashSet<String>,
 ) -> Result<usize, DiagnosticReport> {
-    let mut i = start + 1;
-    while i < lines.len() && !is_block_close_line(&lines[i]) {
-        let tokens = split_header_tokens(&lines[i]);
-        if tokens.is_empty() {
-            i += 1;
-            continue;
-        }
-        let Some(syntax) = crate::syntax::named_selector_assignment_syntax(&tokens, true) else {
+    let block = puzzle_authoring::collect_row_block_surface(lines, start + 1, "groups")
+        .map_err(|error| parse_error(&lines[start], error.message()))?;
+    for line in block.rows {
+        let Some(assignment) = puzzle_authoring::selector_assignment_surface(line) else {
             return Err(parse_error(
-                &lines[i],
+                line,
                 "group row must be: <name> = <selector...>",
             ));
         };
-        let name = tokens[0];
-        validate_selector_alias_name(name, &lines[i], "group name")?;
+        let name = assignment.name;
+        validate_selector_alias_name(name, line, "group name")?;
         if !names.insert(name.to_string()) {
-            return Err(parse_error(&lines[i], "duplicate group"));
+            return Err(parse_error(line, "duplicate group"));
         }
         groups.push(PendingGroupDefinition {
             name: name.to_string(),
-            selectors: tokens[syntax.rhs_start..]
+            selectors: assignment
+                .selectors
                 .iter()
                 .map(|selector| (*selector).to_string())
                 .collect(),
-            line: lines[i].clone(),
+            source_line: line.to_string(),
         });
-        i += 1;
     }
-    if i >= lines.len() {
-        return Err(parse_error(&lines[start], "groups missing closing brace"));
-    }
-    Ok(i + 1)
+    Ok(block.next_index)
 }
 fn resolve_pending_group_definitions(
     pending_groups: &[PendingGroupDefinition],
@@ -128,9 +118,12 @@ fn resolve_pending_group_definitions(
     resolved_groups: &mut HashSet<String>,
     catalog: &mut Catalog,
 ) -> Result<(), DiagnosticReport> {
-    let names = only_names
-        .map(|names| names.to_vec())
-        .unwrap_or_else(|| pending_groups.iter().map(|group| group.name.clone()).collect());
+    let names = only_names.map(|names| names.to_vec()).unwrap_or_else(|| {
+        pending_groups
+            .iter()
+            .map(|group| group.name.clone())
+            .collect()
+    });
     let mut resolving = Vec::<String>::new();
     for name in names {
         resolve_pending_group_definition(
@@ -159,12 +152,15 @@ fn resolve_pending_group_definition(
     };
     if catalog.object_groups.contains_key(name) {
         return Err(parse_error(
-            &group.line,
+            &group.source_line,
             "group name must not shadow another selector",
         ));
     }
     if resolving.iter().any(|candidate| candidate == name) {
-        return Err(parse_error(&group.line, "group definitions cannot be cyclic"));
+        return Err(parse_error(
+            &group.source_line,
+            "group definitions cannot be cyclic",
+        ));
     }
     resolving.push(name.to_string());
     for selector in &group.selectors {
@@ -180,11 +176,8 @@ fn resolve_pending_group_definition(
     }
     resolving.pop();
 
-    let mut tokens = vec![group.name.as_str(), "="];
-    tokens.extend(group.selectors.iter().map(String::as_str));
     parse_group_definition(
-        &tokens,
-        &group.line,
+        &group.source_line,
         &catalog.object_names,
         &catalog.object_schemas,
         &catalog_value_sets(catalog),
@@ -222,6 +215,12 @@ fn parse_legend_directive(
     };
 
     let ch = parse_char(tokens.get(1), line, "missing legend char")?;
+    if ch == '.' {
+        return Err(parse_error(
+            line,
+            "levels reserve `.` for empty; use another legend char for objects",
+        ));
+    }
     let selector_sets = selector_sets(
         &tokens[syntax.rhs_start..],
         line,
@@ -607,7 +606,10 @@ fn parse_condition_pattern_surface_arg(
         }
         crate::solver_surface::SolverSurfacePatternOrientation::Input { axis } => {
             let axis = axis.as_deref().unwrap_or("directions");
-            (OrientationExpr::InputSet(axis.to_string()), pattern.pattern.clone())
+            (
+                OrientationExpr::InputSet(axis.to_string()),
+                pattern.pattern.clone(),
+            )
         }
         crate::solver_surface::SolverSurfacePatternOrientation::Orientation(orientation) => (
             parse_statement_orientation_expr(orientation, &[]),
@@ -766,9 +768,7 @@ fn split_oriented_pattern_arg(
         }
         crate::solver_surface::OrientedPatternArgOrientationSurface::Orientation {
             orientation,
-        } => {
-            parse_statement_orientation_expr(&arg[orientation], &[])
-        }
+        } => parse_statement_orientation_expr(&arg[orientation], &[]),
     };
     Ok(Some((orientation, pattern.to_string())))
 }

@@ -109,6 +109,7 @@ pub struct CompiledEngine {
     display_program: Vec<RuleStep>,
     level_start_programs: Vec<Vec<RuleStep>>,
     level_clear_programs: Vec<Vec<RuleStep>>,
+    level_main_programs: Vec<Vec<RuleStep>>,
 }
 
 impl CompiledEngine {
@@ -116,8 +117,17 @@ impl CompiledEngine {
         &self.game
     }
 
+    pub fn game_for_level(&self, level_index: usize) -> Option<CompiledGame> {
+        self.level_main_programs
+            .get(level_index)
+            .map(|program| self.game.clone_with_program(program.clone()))
+    }
+
     pub fn program(&self, key: &str, level_index: i32) -> Option<&[RuleStep]> {
         match key {
+            "main" | "run_rules_on_level_start" if level_index >= 0 => {
+                level_program(&self.level_main_programs, level_index)
+            }
             "main" | "run_rules_on_level_start" => Some(self.game.program()),
             "level_start" => Some(&self.level_start_program),
             "level_clear" => Some(&self.level_clear_program),
@@ -194,6 +204,7 @@ pub fn decode_compiled_play(value: &Value) -> Result<CompiledEngine, String> {
     let level_programs = array_at(data, 5, "transition level programs")?;
     let mut level_start_programs = Vec::with_capacity(level_programs.len());
     let mut level_clear_programs = Vec::with_capacity(level_programs.len());
+    let mut level_main_programs = Vec::with_capacity(level_programs.len());
     for (index, entry) in level_programs.iter().enumerate() {
         let entry = value_array(entry, &format!("level program {index}"))?;
         level_start_programs.push(decode_compact_program(value_at(
@@ -205,6 +216,11 @@ pub fn decode_compiled_play(value: &Value) -> Result<CompiledEngine, String> {
             entry,
             1,
             "level clear local program",
+        )?)?);
+        level_main_programs.push(decode_compact_program(value_at(
+            entry,
+            2,
+            "level main program",
         )?)?);
     }
     Ok(CompiledEngine {
@@ -224,6 +240,7 @@ pub fn decode_compiled_play(value: &Value) -> Result<CompiledEngine, String> {
         display_program: decode_compact_program(value_at(programs, 5, "display program")?)?,
         level_start_programs,
         level_clear_programs,
+        level_main_programs,
     })
 }
 

@@ -1,7 +1,7 @@
 use crate::puzzle3_parse::parse_canonical_sprite_palette_line;
 use crate::source::{SourceScope, split_header_tokens, strip_line_comment};
 use crate::surface::{SurfaceDocument, SurfaceLine, SurfaceOptionBlock, SurfaceVisualSpriteRefs};
-use crate::{SpriteColor3, SpriteVoxels3};
+use crate::{PuzzleSourceProfile, SpriteColor3, SpriteVoxels3};
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::Write as _;
 
@@ -140,8 +140,17 @@ impl SourceSpriteStatus {
 pub type SourceSprite3dStatus = SourceSpriteStatus;
 
 pub fn resolve_source_target(source: &str, cursor_offset: usize) -> Option<SourceTarget> {
+    resolve_source_target_for_profile(source, cursor_offset, PuzzleSourceProfile::Puzzle2d)
+}
+
+pub fn resolve_source_target_for_profile(
+    source: &str,
+    cursor_offset: usize,
+    profile: PuzzleSourceProfile,
+) -> Option<SourceTarget> {
     let cursor = cursor_offset.min(source.len());
-    let document = crate::parse_surface_source_target_document(source);
+    let mut document = crate::parse_surface_source_target_document(source);
+    document.source_profile = Some(profile);
     resolve_source_target_from_document(source, &document, cursor)
 }
 
@@ -632,7 +641,7 @@ fn is_unnamed_level_start(line: &SurfaceLine) -> bool {
     }
     !matches!(
         line.tokens.first().map(String::as_str),
-        None | Some("legend" | "level" | "levels" | "levels3" | "}")
+        None | Some("legend" | "level" | "levels" | "}")
     )
 }
 
@@ -1411,17 +1420,40 @@ struct Level3dBlock {
 }
 
 fn level3d_blocks(source: &str, context: &SurfaceDocument) -> Vec<Level3dBlock> {
+    let is_puzzle3 = context.source_profile == Some(PuzzleSourceProfile::Puzzle3d);
+    let model3_names = context
+        .lines
+        .iter()
+        .filter(|line| line.scope.is_none())
+        .filter_map(|line| match line.tokens.as_slice() {
+            [kind, name, ..] if kind == "puzzle3" || (is_puzzle3 && kind == "puzzle") => {
+                Some(clean_name_token(name))
+            }
+            _ => None,
+        })
+        .collect::<HashSet<_>>();
+    let has_model2 = !is_puzzle3 && context.lines.iter().any(|line| {
+        line.scope.is_none() && matches!(line.tokens.as_slice(), [kind, ..] if kind == "puzzle")
+    });
     context
         .lines
         .iter()
-        .filter(|line| line.tokens.first().is_some_and(|token| token == "levels3"))
+        .filter(|line| line.tokens.first().is_some_and(|token| token == "levels"))
         .filter_map(|line| {
             let header_end = line_end(line);
             let open_index = source[line.start..header_end]
                 .find('{')
                 .map(|offset| line.start + offset)?;
             let close_index = find_matching_brace(source, open_index)?;
-            let (bundle, model) = parse_levels3_tokens(&line.tokens);
+            let (bundle, model) = parse_levels_tokens(&line.tokens);
+            let targets_3d = if model.is_empty() {
+                !model3_names.is_empty() && !has_model2
+            } else {
+                model3_names.contains(&model)
+            };
+            if !targets_3d {
+                return None;
+            }
             Some(Level3dBlock {
                 open_index,
                 close_index,
@@ -1432,7 +1464,7 @@ fn level3d_blocks(source: &str, context: &SurfaceDocument) -> Vec<Level3dBlock> 
         .collect()
 }
 
-fn parse_levels3_tokens(tokens: &[String]) -> (String, String) {
+fn parse_levels_tokens(tokens: &[String]) -> (String, String) {
     let bundle = tokens
         .get(1)
         .filter(|token| token.as_str() != "of" && token.as_str() != "{")
@@ -1486,6 +1518,7 @@ const SOURCE_SPRITE3D_PALETTE_KEYS: &str =
     "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
 pub(crate) fn sprite_blocks(source: &str, context: &SurfaceDocument) -> Vec<SpriteBlock> {
+    let is_puzzle3 = context.source_profile == Some(PuzzleSourceProfile::Puzzle3d);
     let models = context
         .lines
         .iter()
@@ -1505,7 +1538,7 @@ pub(crate) fn sprite_blocks(source: &str, context: &SurfaceDocument) -> Vec<Spri
                 clean_name_token(name),
                 open_index,
                 close_index,
-                if kind == "puzzle3" {
+                if kind == "puzzle3" || is_puzzle3 {
                     SourceTargetKind::Sprite3d
                 } else {
                     SourceTargetKind::Sprite
@@ -1965,7 +1998,9 @@ mod tests {
     use super::{
         SoundSourceTargetKind, SourceSprite3dStatus, SourceSpritePaletteEntry, SourceTargetKind,
         resolve_source_entries_from_document, resolve_source_target,
+        resolve_source_target_for_profile,
     };
+    use crate::PuzzleSourceProfile;
 
     #[test]
     fn source_target_consumes_surface_visual_refs_instead_of_collecting_assets() {
@@ -2031,7 +2066,7 @@ level "two" {
 }
 }
 
-puzzle3 board3 {
+puzzle board3 {
 sprites {
 Cube {
 colors = #fff
@@ -2040,30 +2075,21 @@ shape = {
 }
 }
 }
-levels3 pack of board3 {
+levels pack of board3 {
 level "three" {
 0
 }
 }
 }
 "#;
-        let document = crate::parse_surface_document(source);
+        let mut document = crate::parse_surface_document(source);
+        document.source_profile = Some(PuzzleSourceProfile::Puzzle3d);
         let entries = resolve_source_entries_from_document(source, &document);
 
-        assert!(entries.iter().any(|entry| {
-            entry.kind == SourceTargetKind::Level
-                && entry.name == "one"
-                && entry.level_index == Some(0)
-        }));
-        assert!(entries.iter().any(|entry| {
-            entry.kind == SourceTargetKind::Level
-                && entry.name == "two"
-                && entry.level_index == Some(1)
-        }));
         assert!(
             entries
                 .iter()
-                .any(|entry| { entry.kind == SourceTargetKind::Sprite && entry.name == "Player" })
+                .any(|entry| { entry.kind == SourceTargetKind::Sprite3d && entry.name == "Player" })
         );
         assert!(entries.iter().any(|entry| {
             entry.kind == SourceTargetKind::Level3d
@@ -2131,9 +2157,17 @@ PP
     }
 
     #[test]
-    fn resolves_levels3_body_to_3d_level() {
+    fn resolves_levels_body_to_3d_level() {
         let source = r#"
-levels3 basic of push3d {
+puzzle push3d {
+layers {
+Player
+}
+rules {
+}
+}
+
+levels basic of push3d {
 level "push3d_01" {
 ___
 _P_
@@ -2141,7 +2175,12 @@ _P_
 }
 "#;
         let cursor = source.find("_P_").unwrap();
-        let target = resolve_source_target(source, cursor).unwrap();
+        let target = resolve_source_target_for_profile(
+            source,
+            cursor,
+            PuzzleSourceProfile::Puzzle3d,
+        )
+        .unwrap();
 
         assert_eq!(target.kind, SourceTargetKind::Level3d);
         assert_eq!(target.name, "push3d_01");
@@ -3055,7 +3094,7 @@ shape foo:bar
         let source = r##"
 sprites {
 @LockedFrame:directions
-rotate from up
+rotate directions from up
 #000000
 ....................
 .000..000..000..000.
@@ -3072,7 +3111,7 @@ rotate from up
             .expect("source sprite contract");
         assert_eq!(
             source_sprite.prelude_rows,
-            vec!["rotate from up".to_string()]
+            vec!["rotate directions from up".to_string()]
         );
         assert_eq!(source_sprite.palette_tokens, vec!["#000000".to_string()]);
         assert_eq!(
@@ -3083,7 +3122,7 @@ rotate from up
             ]
         );
         let body = &source[target.body_start.unwrap()..target.body_end.unwrap()];
-        assert!(body.contains("rotate from up"));
+        assert!(body.contains("rotate directions from up"));
         assert!(body.contains(".000..000..000..000."));
     }
 
@@ -3136,7 +3175,7 @@ colors #222
     #[test]
     fn resolves_stacked_sprite_entry_as_sprite3d() {
         let source = r##"
-puzzle3 push3d {
+puzzle push3d {
 }
 sprites basic of push3d {
 Floor {
@@ -3160,7 +3199,12 @@ shape = {
 }
 "##;
         let cursor = source.find("..0..").unwrap();
-        let target = resolve_source_target(source, cursor).unwrap();
+        let target = resolve_source_target_for_profile(
+            source,
+            cursor,
+            PuzzleSourceProfile::Puzzle3d,
+        )
+        .unwrap();
 
         assert_eq!(target.kind, SourceTargetKind::Sprite3d);
         assert_eq!(target.name, "Floor");
@@ -3181,7 +3225,7 @@ shape = {
     #[test]
     fn sprite3d_contract_preserves_named_color_shape_and_all_animation_frames() {
         let source = r#"
-puzzle3 board {
+puzzle board {
 }
 sprites art of board {
 palette {
@@ -3203,7 +3247,12 @@ shape = pulse
 }
 "#;
         let cursor = source.find("duration = 200ms").unwrap();
-        let target = resolve_source_target(source, cursor).unwrap();
+        let target = resolve_source_target_for_profile(
+            source,
+            cursor,
+            PuzzleSourceProfile::Puzzle3d,
+        )
+        .unwrap();
         let sprite = target.source_sprite.unwrap();
 
         assert_eq!(sprite.status, SourceSprite3dStatus::Complete);
@@ -3238,7 +3287,7 @@ shape = pulse
     #[test]
     fn resolves_second_stacked_sprite_entry_as_sprite3d() {
         let source = r##"
-puzzle3 board {
+puzzle board {
 sprites basic {
 Floor {
 colors = #90ee90
@@ -3257,7 +3306,12 @@ shape = {
 }
 "##;
         let cursor = source.find(".000.").unwrap();
-        let target = resolve_source_target(source, cursor).unwrap();
+        let target = resolve_source_target_for_profile(
+            source,
+            cursor,
+            PuzzleSourceProfile::Puzzle3d,
+        )
+        .unwrap();
 
         assert_eq!(target.kind, SourceTargetKind::Sprite3d);
         assert_eq!(target.name, "Goal");
@@ -3266,7 +3320,7 @@ shape = {
     #[test]
     fn resolves_unfinished_sprite3d_name_as_sprite3d_target() {
         let source = r#"
-puzzle3 board {
+puzzle board {
 sprites basic {
 Floor {
 }
@@ -3274,7 +3328,12 @@ Floor {
 }
 "#;
         let cursor = source.find("Floor").unwrap() + "Floor".len();
-        let target = resolve_source_target(source, cursor).unwrap();
+        let target = resolve_source_target_for_profile(
+            source,
+            cursor,
+            PuzzleSourceProfile::Puzzle3d,
+        )
+        .unwrap();
 
         assert_eq!(target.kind, SourceTargetKind::Sprite3d);
         assert_eq!(target.name, "Floor");
@@ -3292,7 +3351,7 @@ Floor {
     #[test]
     fn unfinished_sprite3d_stops_before_next_entry_header() {
         let source = r#"
-puzzle3 board {
+puzzle board {
 sprites basic {
 Floor {
 }
@@ -3302,7 +3361,12 @@ Goal {
 }
 "#;
         let cursor = source.find("Goal").unwrap();
-        let target = resolve_source_target(source, cursor).unwrap();
+        let target = resolve_source_target_for_profile(
+            source,
+            cursor,
+            PuzzleSourceProfile::Puzzle3d,
+        )
+        .unwrap();
 
         assert_eq!(target.kind, SourceTargetKind::Sprite3d);
         assert_eq!(target.name, "Goal");

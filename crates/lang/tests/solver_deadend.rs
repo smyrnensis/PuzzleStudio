@@ -53,7 +53,7 @@ level "start" {
 #[test]
 fn deadend_queries_lower_for_puzzle3d() {
     let source = r#"
-puzzle3 default {
+puzzle default {
 layers {
 floor = Goal
 actor = Box
@@ -72,7 +72,7 @@ blocked
 }
 }
 
-levels3 tiny of default {
+levels tiny of default {
 legend {
 . = empty
 * = Box Goal

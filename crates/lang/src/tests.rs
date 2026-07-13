@@ -54,6 +54,99 @@ fn source_analysis_returns_typed_import_reference_at_the_path_only() {
 }
 use puzzle_core::{LocalFrameExtent, RuleStep, State, transition_program, transition_state};
 
+#[test]
+fn level_rules_compose_before_global_and_after_in_one_program() {
+    let source = r#"
+title = level_rules_order
+
+puzzle board {
+  layers {
+    item = A B C D
+  }
+  rules {
+    [ B ] -> [ C ]
+  }
+}
+
+levels default of board {
+  legend {
+    A = A
+  }
+  level "ordered" {
+    rules before {
+      [ A ] -> [ B ]
+    }
+    A
+    rules {
+      [ C ] -> [ D ]
+    }
+  }
+  level "global-only" {
+    A
+  }
+}
+"#;
+    let loaded = super::parse_game2d(source).unwrap();
+    let first = transition_program(
+        &loaded.game,
+        &loaded.levels[0].program,
+        &loaded.levels[0].initial_state,
+        InputId(0),
+    )
+    .unwrap();
+    let second = transition_program(
+        &loaded.game,
+        &loaded.levels[1].program,
+        &loaded.levels[1].initial_state,
+        InputId(0),
+    )
+    .unwrap();
+    let object = |name: &str| {
+        loaded
+            .object_labels
+            .iter()
+            .find_map(|(id, label)| (label == name).then_some(*id))
+            .unwrap()
+    };
+
+    assert!(first.has_object(&loaded.game, 0, 0, object("D")));
+    assert!(second.has_object(&loaded.game, 0, 0, object("A")));
+}
+
+#[test]
+fn level_rules_reject_duplicate_after_slot() {
+    let source = r#"
+title = duplicate_level_rules
+puzzle board {
+  layers {
+    item = A
+  }
+  rules {
+    [ A ] -> [ A ]
+  }
+}
+levels default of board {
+  legend {
+    A = A
+  }
+  level "one" {
+    rules {
+      [ A ] -> [ A ]
+    }
+    rules after {
+      [ A ] -> [ A ]
+    }
+    A
+  }
+}
+"#;
+    let error = super::parse_game2d(source).unwrap_err().to_string();
+    assert!(
+        error.contains("duplicate level rules after block"),
+        "{error}"
+    );
+}
+
 fn parse_game(source: &str) -> Result<LoadedGame, DiagnosticReport> {
     super::parse_game2d(&modernize_test_source(source))
 }
@@ -1157,7 +1250,7 @@ stop_music music_name
 "#;
 
     let loaded = parse_game(source).unwrap();
-    let scene = &loaded.scenes[0];
+    let scene = loaded.scenes.iter().find(|scene| scene.name == "playing").unwrap();
     let scene_start = scene
         .transitions
         .iter()
@@ -1201,7 +1294,7 @@ next_level
 "#;
 
     let loaded = parse_game(source).unwrap();
-    let scene_start = loaded.scenes[0]
+    let scene_start = loaded.scenes.iter().find(|scene| scene.name == "playing").unwrap()
         .transitions
         .iter()
         .find(|transition| transition.trigger == SceneTransitionTrigger::SceneStart)
@@ -1247,7 +1340,7 @@ message hint
 "#;
 
     let loaded = parse_game(source).unwrap();
-    let scene_start = loaded.scenes[0]
+    let scene_start = loaded.scenes.iter().find(|scene| scene.name == "playing").unwrap()
         .transitions
         .iter()
         .find(|transition| transition.trigger == SceneTransitionTrigger::SceneStart)
@@ -2218,7 +2311,7 @@ goto title
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let scene = &loaded.scenes[0];
+    let scene = loaded.scenes.iter().find(|scene| scene.name == "playing").unwrap();
     let SceneEffect::Input(action) = &scene.key_bindings[0].effect else {
         panic!("expected key assignment to emit an input action");
     };
@@ -2260,7 +2353,7 @@ goto level_select
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let scene = &loaded.scenes[0];
+    let scene = loaded.scenes.iter().find(|scene| scene.name == "title").unwrap();
     assert!(
         matches!(&scene.key_bindings[0].effect, SceneEffect::RoutineCall(name) if name == "level_select")
     );
@@ -2307,7 +2400,7 @@ text "Playing"
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let scene = &loaded.scenes[0];
+    let scene = loaded.scenes.iter().find(|scene| scene.name == "title").unwrap();
     let SceneTransitionTrigger::Condition(condition) = &scene.transitions[0].trigger else {
         panic!("expected rules row to lower to condition transition");
     };
@@ -2360,7 +2453,7 @@ text "Playing"
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let scene = &loaded.scenes[0];
+    let scene = loaded.scenes.iter().find(|scene| scene.name == "title").unwrap();
     let SceneTransitionTrigger::Condition(condition) = &scene.transitions[0].trigger else {
         panic!("expected condition block to lower to condition transition");
     };
@@ -2411,7 +2504,7 @@ button "New Game" -> input new_game
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let scene = &loaded.scenes[0];
+    let scene = loaded.scenes.iter().find(|scene| scene.name == "title").unwrap();
     let Some(SceneComponent::Conditional(conditional)) = scene.components.first() else {
         panic!("expected layout if to lower to a conditional component");
     };
@@ -2459,7 +2552,7 @@ goto level_select
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let scene = &loaded.scenes[0];
+    let scene = loaded.scenes.iter().find(|scene| scene.name == "title").unwrap();
     assert!(matches!(
         &scene.key_bindings[0].effect,
         SceneEffect::RoutineCall(input) if input == "level_select"
@@ -2506,7 +2599,7 @@ goto playing
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let scene = &loaded.scenes[0];
+    let scene = loaded.scenes.iter().find(|scene| scene.name == "title").unwrap();
     assert!(matches!(
         &scene.key_bindings[0].effect,
         SceneEffect::Sequence { effects }
@@ -2553,7 +2646,7 @@ goto title
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let scene = &loaded.scenes[0];
+    let scene = loaded.scenes.iter().find(|scene| scene.name == "title").unwrap();
     let SceneEffect::Sequence { effects } = &scene.key_bindings[0].effect else {
         panic!("expected key effect block to parse as sequence");
     };
@@ -2727,7 +2820,7 @@ goto level_select
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let scene = &loaded.scenes[0];
+    let scene = loaded.scenes.iter().find(|scene| scene.name == "title").unwrap();
     assert_eq!(scene.key_bindings[0].keys.len(), 2);
     assert!(matches!(
         &scene.key_bindings[0].effect,
@@ -2769,7 +2862,7 @@ caption homepage
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let scene = &loaded.scenes[0];
+    let scene = loaded.scenes.iter().find(|scene| scene.name == "title").unwrap();
     assert!(matches!(
         &scene.components[0],
         SceneComponent::Text(text)
@@ -2827,7 +2920,7 @@ step sokoban
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let scene = &loaded.scenes[0];
+    let scene = loaded.scenes.iter().find(|scene| scene.name == "playing").unwrap();
     assert_eq!(scene.state.puzzles[0].name, "sokoban");
     assert!(matches!(
         &scene.components[0],
@@ -2875,7 +2968,7 @@ step board
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let scene = &loaded.scenes[0];
+    let scene = loaded.scenes.iter().find(|scene| scene.name == "playing").unwrap();
     assert!(scene.state.variables.iter().any(|variable| {
         variable.name == "input"
             && variable.kind == SceneVarKind::Signal
@@ -2967,7 +3060,7 @@ frame board
 "#;
     let loaded = parse_game(source).unwrap();
     assert!(matches!(
-        &loaded.scenes[0].components[1],
+        &loaded.scenes.iter().find(|scene| scene.name == "playing").unwrap().components[1],
         SceneComponent::Frame(frame) if frame.kind == "frame" && frame.source == "board"
     ));
 }
@@ -3037,7 +3130,7 @@ step sokoban1
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let scene = &loaded.scenes[0];
+    let scene = loaded.scenes.iter().find(|scene| scene.name == "playing").unwrap();
     assert_eq!(scene.state.puzzles[0].name, "sokoban1");
     assert_eq!(scene.state.puzzles[1].name, "sokoban2");
     assert!(matches!(
@@ -3144,7 +3237,7 @@ button "Resume" -> input resume
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let scene = &loaded.scenes[0];
+    let scene = loaded.scenes.iter().find(|scene| scene.name == "menu").unwrap();
     let SceneComponent::Button(button) = &scene.components[0] else {
         panic!("expected button component");
     };
@@ -3186,11 +3279,11 @@ text "Ready"
 "#;
     let loaded = parse_game(source).unwrap();
     assert_eq!(
-        loaded.scenes[0].layout.space,
+        loaded.scenes.iter().find(|scene| scene.name == "menu").unwrap().layout.space,
         SceneSpaceDef::Fill { weight: 2 }
     );
     assert!(matches!(
-        &loaded.scenes[0].components[0],
+        &loaded.scenes.iter().find(|scene| scene.name == "menu").unwrap().components[0],
         SceneComponent::Box(container)
             if container.layout.space == SceneSpaceDef::Fill { weight: 3 }
                 && container.layout.aspect_ratio == Some(SceneAspectRatioDef::new(3, 2))
@@ -3244,7 +3337,7 @@ r -> board.restart
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let scene = &loaded.scenes[0];
+    let scene = loaded.scenes.iter().find(|scene| scene.name == "playing").unwrap();
     assert!(matches!(&scene.key_bindings[0].effect, SceneEffect::Input(input) if input == "right"));
     assert!(
         matches!(&scene.key_bindings[1].effect, SceneEffect::ComponentEffect(effect) if effect == "down")
@@ -3291,7 +3384,7 @@ button "Restart" -> board.restart
 "#;
 
     let loaded = parse_game(source).unwrap();
-    assert!(loaded.scenes[0].components.iter().any(|component| matches!(
+    assert!(loaded.scenes.iter().find(|scene| scene.name == "playing").unwrap().components.iter().any(|component| matches!(
         component,
         SceneComponent::Button(button)
             if matches!(&button.effect, SceneEffect::ResetPuzzle { target } if target == "board")
@@ -3369,7 +3462,7 @@ button join(level.num, ". ", level.title, " ", level.solved) -> goto playing(lev
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let SceneComponent::Column(column) = &loaded.scenes[0].components[0] else {
+    let SceneComponent::Column(column) = &loaded.scenes.iter().find(|scene| scene.name == "level_select").unwrap().components[0] else {
         panic!("expected scrollable column");
     };
     assert!(column.layout.scroll);
@@ -3427,7 +3520,7 @@ button join(l.num, ". ", l.title) -> goto playing(l)
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let SceneComponent::Button(button) = &loaded.scenes[0].components[0] else {
+    let SceneComponent::Button(button) = &loaded.scenes.iter().find(|scene| scene.name == "level_select").unwrap().components[0] else {
         panic!("expected level button");
     };
     assert!(matches!(&button.label, SceneExpr::Call { name, args }
@@ -3483,8 +3576,9 @@ levels second
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    assert_eq!(loaded.scenes[0].components.len(), 1);
-    let SceneComponent::Button(button) = &loaded.scenes[0].components[0] else {
+    let level_select = loaded.scenes.iter().find(|scene| scene.name == "level_select").unwrap();
+    assert_eq!(level_select.components.len(), 1);
+    let SceneComponent::Button(button) = &level_select.components[0] else {
         panic!("expected one expanded level button");
     };
     assert!(matches!(&button.label, SceneExpr::Call { name, args }
@@ -3524,7 +3618,7 @@ button "level.title" -> goto playing(level)
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let SceneComponent::Button(button) = &loaded.scenes[0].components[0] else {
+    let SceneComponent::Button(button) = &loaded.scenes.iter().find(|scene| scene.name == "level_select").unwrap().components[0] else {
         panic!("expected expanded level button");
     };
     assert!(matches!(&button.label, SceneExpr::Text(value) if value == "level.title"));
@@ -3571,7 +3665,7 @@ wrap = true
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let scene = &loaded.scenes[0];
+    let scene = loaded.scenes.iter().find(|scene| scene.name == "level_select").unwrap();
     assert_eq!(scene.name, "level_select");
     let SceneComponent::LevelMenu(menu) = &scene.components[0] else {
         panic!("expected level menu component");
@@ -3614,7 +3708,7 @@ button "Back" -> goto title
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let scene = &loaded.scenes[0];
+    let scene = loaded.scenes.iter().find(|scene| scene.name == "level_select").unwrap();
     let [
         SceneComponent::LevelMenu(menu),
         SceneComponent::Button(button),
@@ -3793,7 +3887,7 @@ puzzle board = default
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let title = &loaded.scenes[0];
+    let title = loaded.scenes.iter().find(|scene| scene.name == "title").unwrap();
     assert_eq!(title.name, "title");
     assert_eq!(title.components.len(), 4);
     assert!(title.key_bindings.is_empty());
@@ -6622,7 +6716,7 @@ fn game_entry_resolution_accepts_puzzle3_extension() {
         r#"
 title = "3D Entry"
 
-puzzle3 cube {
+puzzle cube {
   layers {
     actor = Player
   }
@@ -6637,7 +6731,7 @@ puzzle3 cube {
 }
 
 #[test]
-fn parse_game_file_rejects_puzzle3_sections_in_puzzle_file() {
+fn parse_game_file_rejects_removed_puzzle3_keyword() {
     let dir = std::env::temp_dir().join(format!(
         "puzzlestudio_puzzle_profile_mismatch_test_{}",
         std::process::id()
@@ -6661,12 +6755,12 @@ puzzle3 cube {
     .unwrap();
 
     let error = super::parse_game_file(&game_path).unwrap_err().to_string();
-    assert!(error.contains(".puzzle files cannot contain 3D"));
-    assert!(error.contains("use .puzzle3"));
+    assert!(error.contains("`puzzle3` was removed"));
+    assert!(error.contains("use `puzzle <name> { ... }`"));
 }
 
 #[test]
-fn parse_game_file_rejects_puzzle_sections_in_puzzle3_file() {
+fn parse_game_file_accepts_puzzle_keyword_in_puzzle3_file() {
     let dir = std::env::temp_dir().join(format!(
         "puzzlestudio_puzzle3_profile_mismatch_test_{}",
         std::process::id()
@@ -6682,10 +6776,13 @@ puzzle board {
   layers {
     actor = Player
   }
+  rules {
+  }
+}
+
+levels default of board {
   legend {
     P = Player
-  }
-  rules {
   }
   level "start" {
     P
@@ -6695,8 +6792,11 @@ puzzle board {
     )
     .unwrap();
 
-    let error = super::parse_game_file(&game_path).unwrap_err().to_string();
-    assert!(error.contains(".puzzle3 files must contain 3D"));
+    let document = super::parse_game_file(&game_path).unwrap();
+    assert!(matches!(
+        document.models.as_slice(),
+        [LoadedDocumentModel::Puzzle3d { name, .. }] if name == "board"
+    ));
 }
 
 #[test]
@@ -7867,9 +7967,7 @@ P
 "##;
     let error = parse_game(source).unwrap_err().to_string();
     assert!(
-        error.contains("visual shape rows must be equal-width ascii")
-            || error.contains("ASCII rows cannot contain braces")
-            || error.contains("sprite ASCII row must be a single token row"),
+        error.contains("removed sprite translate syntax; use translate (<x>, <y>)"),
         "{error}"
     );
 }
@@ -7908,7 +8006,7 @@ P
 "##;
     let error = parse_game(source).unwrap_err().to_string();
     assert!(
-        error.contains("visual shape rows must be equal-width ascii"),
+        error.contains("removed sprite translate syntax; use translate (<x>, <y>)"),
         "{error}"
     );
 }
@@ -9572,7 +9670,7 @@ B
 }
 
 #[test]
-fn sprite_shape_can_generate_direction_variants_by_rotation() {
+fn sprite_shape_table_can_define_direction_variants() {
     let source = r#"
 title = rotated_sprites
 
@@ -9591,10 +9689,27 @@ legend {
 }
 sprites {
 shapes {
-edge:directions rotate from up {
+edge:directions {
+up {
 111
 000
 000
+}
+right {
+001
+001
+001
+}
+down {
+000
+000
+111
+}
+left {
+100
+100
+100
+}
 }
 }
 sprite {
@@ -9640,7 +9755,7 @@ level "start"
 }
 
 #[test]
-fn unbraced_sprite_entry_can_generate_direction_variants_by_rotation() {
+fn unbraced_sprite_entry_can_use_direction_shape_table() {
     let source = r#"
 title = unbraced_rotated_sprite
 
@@ -9659,10 +9774,27 @@ legend {
 }
 sprites {
 shapes {
-edge:directions rotate from up {
+edge:directions {
+up {
 111
 000
 000
+}
+right {
+001
+001
+001
+}
+down {
+000
+000
+111
+}
+left {
+100
+100
+100
+}
 }
 }
 sprite {
@@ -9708,7 +9840,7 @@ level "start"
 }
 
 #[test]
-fn unbraced_display_sprite_entry_can_put_rotation_on_selector_line() {
+fn unbraced_display_sprite_entry_can_use_direction_shape_table() {
     let source = r#"
 title = unbraced_display_rotated_sprite_header
 
@@ -9718,7 +9850,8 @@ each @WallFrame:directions
 }
 sprites {
 shapes {
-wall_frame:directions rotate from up {
+wall_frame:directions {
+up {
 0000000
 .......
 .......
@@ -9726,6 +9859,34 @@ wall_frame:directions rotate from up {
 .......
 .......
 .......
+}
+right {
+......0
+......0
+......0
+......0
+......0
+......0
+......0
+}
+down {
+.......
+.......
+.......
+.......
+.......
+.......
+0000000
+}
+left {
+0......
+0......
+0......
+0......
+0......
+0......
+0......
+}
 }
 }
 sprite {
@@ -9822,15 +9983,49 @@ Flag
 11
 00
 
-boundary:directions rotate from up {
+boundary:directions {
+up {
 100
 000
 000
 }
-corner:directions rotate from up {
+right {
+001
+000
+000
+}
+down {
+000
+000
+001
+}
+left {
+000
+000
+100
+}
+}
+corner:directions {
+up {
 010
 000
 000
+}
+right {
+000
+001
+000
+}
+down {
+000
+000
+010
+}
+left {
+000
+100
+000
+}
 }
 }
 sprite {
@@ -9909,10 +10104,27 @@ Flag
 11
 00
 
-locked_frame:directions rotate from up {
+locked_frame:directions {
+up {
 100
 000
 000
+}
+right {
+001
+000
+000
+}
+down {
+000
+000
+001
+}
+left {
+000
+000
+100
+}
 }
 }
 sprite {
@@ -9952,7 +10164,7 @@ level "start"
 }
 
 #[test]
-fn sprite_shape_rotation_can_use_named_map_directive() {
+fn sprite_shape_lookup_can_use_named_map_directive() {
     let source = r#"
 title = rotated_sprites_named_map
 
@@ -9971,16 +10183,33 @@ legend {
 }
 sprites {
 shapes {
-edge:directions rotate using clockwise from up {
+edge:directions {
+up {
 111
 000
 000
+}
+right {
+001
+001
+001
+}
+down {
+000
+000
+111
+}
+left {
+100
+100
+100
+}
 }
 }
 sprite {
 selector = Boundary:directions
 colors = transparent #555
-shape = edge:directions
+shape = edge:clockwise(directions)
 }
 }
 rules {
@@ -10004,7 +10233,7 @@ level "start"
         VisualSpriteKind::Ascii { pattern, .. } => {
             assert_eq!(
                 pattern.as_slice(),
-                ["001".to_string(), "001".to_string(), "001".to_string()].as_slice()
+                ["000".to_string(), "000".to_string(), "111".to_string()].as_slice()
             );
         }
         _ => panic!("Boundary-right should be an ascii sprite"),
@@ -10272,17 +10501,13 @@ legend {
 . = empty
 }
 sprites {
-shapes {
-edge:directions rotate from up {
+sprite {
+selector = Boundary:directions
+rotate directions from up
+colors = transparent #555
 111
 000
 000
-}
-}
-sprite {
-selector = Boundary:directions
-colors = transparent #555
-shape = edge:directions
 }
 }
 rules {
@@ -10296,13 +10521,13 @@ level "start"
 "#;
     let loaded = parse_game(source).unwrap();
     let expected = [
-        ("Boundary-up", vec!["111", "000", "000"]),
-        ("Boundary-right", vec!["001", "001", "001"]),
-        ("Boundary-down", vec!["000", "000", "111"]),
-        ("Boundary-left", vec!["100", "100", "100"]),
+        ("Boundary-up", 0.0),
+        ("Boundary-right", -90.0),
+        ("Boundary-down", -180.0),
+        ("Boundary-left", 90.0),
     ];
 
-    for (name, pattern) in expected {
+    for (name, degrees) in expected {
         let sprite = loaded
             .visuals
             .sprites
@@ -10313,11 +10538,17 @@ level "start"
             VisualSpriteKind::Ascii {
                 pattern: actual, ..
             } => {
-                let expected = pattern.into_iter().map(str::to_string).collect::<Vec<_>>();
-                assert_eq!(actual.as_slice(), expected.as_slice());
+                assert_eq!(actual, &["111", "000", "000"]);
             }
             _ => panic!("{name} should be an ascii sprite"),
         }
+        assert_eq!(
+            sprite.transforms,
+            [VisualSpriteTransform::Rotate {
+                degrees,
+                space: VisualSpriteSpace::World,
+            }]
+        );
     }
 }
 
@@ -10341,17 +10572,13 @@ legend {
 . = empty
 }
 sprites {
-shapes {
-edge:directions rotate from up {
+sprite {
+selector = Boundary:directions
+rotate directions from up
+colors = transparent #555
 111
 000
 000
-}
-}
-sprite {
-selector = Boundary:directions
-colors = transparent #555
-shape = edge:directions
 }
 }
 rules {
@@ -10371,15 +10598,13 @@ level "start"
         .find(|sprite| sprite.name == "Boundary-right")
         .unwrap();
 
-    match &boundary_right.kind {
-        VisualSpriteKind::Ascii { pattern, .. } => {
-            assert_eq!(
-                pattern.as_slice(),
-                ["001".to_string(), "001".to_string(), "001".to_string()].as_slice()
-            );
-        }
-        _ => panic!("Boundary-right should be an ascii sprite"),
-    }
+    assert_eq!(
+        boundary_right.transforms,
+        [VisualSpriteTransform::Rotate {
+            degrees: -90.0,
+            space: VisualSpriteSpace::World,
+        }]
+    );
 }
 
 #[test]
@@ -10401,17 +10626,13 @@ legend {
 . = empty
 }
 sprites {
-shapes {
-edge:directions rotate from up {
+sprite {
+selector = Boundary:directions
+rotate directions from up
+colors = transparent #555
 111
 000
 000
-}
-}
-sprite {
-selector = Boundary:directions
-colors = transparent #555
-shape = edge:directions
 }
 }
 rules {
@@ -10431,15 +10652,13 @@ level "start"
         .find(|sprite| sprite.name == "Boundary-right")
         .unwrap();
 
-    match &boundary_right.kind {
-        VisualSpriteKind::Ascii { pattern, .. } => {
-            assert_eq!(
-                pattern.as_slice(),
-                ["001".to_string(), "001".to_string(), "001".to_string()].as_slice()
-            );
-        }
-        _ => panic!("Boundary-right should be an ascii sprite"),
-    }
+    assert_eq!(
+        boundary_right.transforms,
+        [VisualSpriteTransform::Rotate {
+            degrees: -90.0,
+            space: VisualSpriteSpace::World,
+        }]
+    );
 }
 
 #[test]
@@ -10462,10 +10681,27 @@ legend {
 }
 sprites {
 shapes {
-edge:directions rotate from up {
+edge:directions {
+up {
 111
 000
 000
+}
+right {
+001
+001
+001
+}
+down {
+000
+000
+111
+}
+left {
+100
+100
+100
+}
 }
 }
 sprite {
@@ -10530,10 +10766,27 @@ legend {
 }
 sprites {
 shapes {
-edge:directions rotate from up {
+edge:directions {
+up {
 111
 000
 000
+}
+right {
+001
+001
+001
+}
+down {
+000
+000
+111
+}
+left {
+100
+100
+100
+}
 }
 }
 sprite {
@@ -11294,10 +11547,14 @@ A..
     let object = object_named(&loaded, "A");
 
     assert!(moved.has_object(&loaded.game, 2, 0, object));
-    assert_eq!(
-        loaded.game.rules()[0].application,
-        RuleApplication::UntilStable
-    );
+    assert!(matches!(
+        loaded.game.program().first(),
+        Some(RuleStep::Block {
+            application: RuleApplication::UntilStable,
+            steps,
+            ..
+        }) if matches!(steps.as_slice(), [RuleStep::Rule(rule)] if rule.application == RuleApplication::Once)
+    ));
 }
 
 #[test]
@@ -11703,14 +11960,10 @@ move
 }
 
 levels {
-legend {
-_ = empty
-}
-
 level "start" {
-b_
+b.
 P#
-__
+..
 }
 }
 }
@@ -11773,14 +12026,10 @@ move
 }
 
 levels {
-legend {
-_ = empty
-}
-
 level "start" {
-b_
+b.
 P#
-__
+..
 }
 }
 }
@@ -11843,14 +12092,10 @@ move
 }
 
 levels {
-legend {
-_ = empty
-}
-
 level "start" {
-#_
-P_
-__
+#.
+P.
+..
 }
 }
 }
@@ -12072,37 +12317,37 @@ show_solved = true
     let loaded = parse_game(source).unwrap();
 
     assert!(
-        matches!(loaded.scenes.as_slice(), [playing, level_select, default]
+        matches!(loaded.scenes.as_slice(), [default, playing, level_select]
             if playing.name == "playing"
                 && level_select.name == "level_select"
                 && default.name == "default")
     );
-    assert_eq!(loaded.scenes[0].name, "playing");
-    assert_eq!(loaded.scenes[0].state.puzzles.len(), 1);
-    assert_eq!(loaded.scenes[0].state.puzzles[0].name, "board");
-    assert_eq!(loaded.scenes[0].state.variables.len(), 4);
-    assert_eq!(loaded.scenes[0].state.variables[0].name, "message_visible");
+    let playing = loaded.scenes.iter().find(|scene| scene.name == "playing").unwrap();
+    assert_eq!(playing.state.puzzles.len(), 1);
+    assert_eq!(playing.state.puzzles[0].name, "board");
+    assert_eq!(playing.state.variables.len(), 4);
+    assert_eq!(playing.state.variables[0].name, "message_visible");
     assert_eq!(
-        loaded.scenes[0].state.variables[0].default,
+        playing.state.variables[0].default,
         SceneValue::Bool(false)
     );
     assert_eq!(
-        loaded.scenes[0].state.variables[2].default,
+        playing.state.variables[2].default,
         SceneValue::Text("Push the box".to_string())
     );
-    assert!(loaded.scenes[0].state.variables.iter().any(|variable| {
+    assert!(playing.state.variables.iter().any(|variable| {
         variable.name == "input"
             && variable.kind == SceneVarKind::Signal
             && variable.default == SceneValue::Symbol("none".to_string())
     }));
-    assert_eq!(loaded.scenes[0].key_bindings[0].keys.len(), 2);
+    assert_eq!(playing.key_bindings[0].keys.len(), 2);
     assert_eq!(
         loaded.controls.keys.get(&b'd'),
         loaded.controls.arrows.get(&ArrowKey::Right)
     );
     assert!(loaded.controls.keys.get(&b'q').is_none());
 
-    let SceneComponent::LevelMenu(menu) = &loaded.scenes[1].components[0] else {
+    let SceneComponent::LevelMenu(menu) = &loaded.scenes.iter().find(|scene| scene.name == "level_select").unwrap().components[0] else {
         panic!("expected level menu component");
     };
     assert!(menu.show_index);
@@ -12153,7 +12398,8 @@ puzzle board = default
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let column = loaded.scenes[0]
+    let select = loaded.scenes.iter().find(|scene| scene.name == "select").unwrap();
+    let column = select
         .components
         .iter()
         .find_map(|component| match component {
@@ -12189,7 +12435,7 @@ puzzle board = default
     };
     assert!(matches!(level, SceneExpr::Path(_)));
     assert!(matches!(
-        loaded.scenes[0].routines[0].effect,
+        select.routines[0].effect,
         SceneEffect::GotoLevel { .. }
     ));
 }
@@ -12224,7 +12470,8 @@ button "Restart Board" -> board.restart
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let SceneComponent::Button(scene_button) = &loaded.scenes[0].components[1] else {
+    let playing = loaded.scenes.iter().find(|scene| scene.name == "playing").unwrap();
+    let SceneComponent::Button(scene_button) = &playing.components[1] else {
         panic!("expected scene restart button");
     };
     assert!(matches!(
@@ -12232,7 +12479,7 @@ button "Restart Board" -> board.restart
         SceneEffect::ResetPuzzle { target } if target == "playing"
     ));
 
-    let SceneComponent::Button(board_button) = &loaded.scenes[0].components[2] else {
+    let SceneComponent::Button(board_button) = &playing.components[2] else {
         panic!("expected board restart button");
     };
     assert!(matches!(
@@ -12284,7 +12531,8 @@ puzzle board = default
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let SceneComponent::Button(new_game) = &loaded.scenes[0].components[0] else {
+    let title = loaded.scenes.iter().find(|scene| scene.name == "title").unwrap();
+    let SceneComponent::Button(new_game) = &title.components[0] else {
         panic!("expected new game button");
     };
     assert!(matches!(
@@ -12296,7 +12544,7 @@ puzzle board = default
             ] if scene == "playing" && name == "music")
     ));
 
-    let SceneComponent::Button(continue_button) = &loaded.scenes[0].components[1] else {
+    let SceneComponent::Button(continue_button) = &title.components[1] else {
         panic!("expected continue button");
     };
     assert!(matches!(
@@ -12310,7 +12558,7 @@ puzzle board = default
     ));
 
     assert!(matches!(
-        &loaded.scenes[0].routines[0].effect,
+        &title.routines[0].effect,
         SceneEffect::Sequence { effects }
             if matches!(effects.as_slice(), [
                 SceneEffect::Goto { scene, .. },
@@ -12772,16 +13020,17 @@ puzzle board = default
             .any(|name| name == "cleared")
     );
     assert_eq!(loaded.persistent_vars.len(), 1);
-    assert_eq!(loaded.scenes[0].state.variables.len(), 2);
-    assert_eq!(loaded.scenes[0].state.variables[1].name, "last_tab");
+    let playing = loaded.scenes.iter().find(|scene| scene.name == "playing").unwrap();
+    assert_eq!(playing.state.variables.len(), 2);
+    assert_eq!(playing.state.variables[1].name, "last_tab");
     assert_eq!(
-        loaded.scenes[0].state.variables[1].lifetime,
+        playing.state.variables[1].lifetime,
         SceneStateLifetime::Persistent
     );
 }
 
 #[test]
-fn layers_and_legend_define_rendering_groups_and_empty() {
+fn layers_and_legend_use_reserved_dot_empty_without_a_declaration() {
     let source = r#"
 title = object_blocks
 
@@ -12799,7 +13048,6 @@ solid = Player Box Wall
 }
 
 legend {
-. = empty
 * = Goal Box
 + = Goal Player
 }
@@ -12830,6 +13078,37 @@ d ArrowRight -> input right
     assert_eq!(loaded.legend.char_for_cell(&[]), '.');
     assert_eq!(loaded.levels[0].initial_state.width, 5);
     assert!(loaded.controls.keys.get(&b'd').is_some());
+}
+
+#[test]
+fn levels_reject_object_and_non_dot_empty_redefinitions_of_reserved_dot() {
+    let source = |legend_row: &str| {
+        format!(
+            r#"puzzle default {{
+layers {{
+actor = Player
+}}
+rules {{
+}}
+levels {{
+legend {{
+P = Player
+{legend_row}
+}}
+level "one" {{
+P.
+}}
+}}
+}}
+"#
+        )
+    };
+
+    let dot_object = parse_game(&source(". = Player")).unwrap_err().to_string();
+    assert!(dot_object.contains("levels reserve `.` for empty"));
+
+    let non_dot_empty = parse_game(&source("_ = empty")).unwrap_err().to_string();
+    assert!(non_dot_empty.contains("levels use `.` for empty"));
 }
 
 #[test]
@@ -15324,7 +15603,7 @@ sprites {
 Player:directions:hor {
 colors = #fff
 translate (hor, 0)
-rotate (directions - up)
+rotate directions from up
 0
 }
 }
@@ -17463,7 +17742,7 @@ P.
     assert!(played.has_object(&loaded.game, 1, 0, player));
     assert!(played.has_object(&loaded.game, 1, 0, trail));
 
-    let solver_game = loaded.solver_game();
+    let solver_game = loaded.compiled_game_for_level(0).unwrap();
     let solved = transition_state(&solver_game, &loaded.solver_state(initial), right).unwrap();
     assert!(solved.has_object(&loaded.game, 1, 0, player));
     assert!(solved.has_object(&loaded.game, 1, 0, trail));
@@ -17702,7 +17981,7 @@ P
     let played = transition_state(&loaded.game, initial, right).unwrap();
     assert!(played.has_object(&loaded.game, 0, 0, trail));
 
-    let solver_game = loaded.solver_game();
+    let solver_game = loaded.compiled_game_for_level(0).unwrap();
     let solved = transition_state(&solver_game, &loaded.solver_state(initial), right).unwrap();
     assert!(solved.has_object(&loaded.game, 0, 0, trail));
 }
@@ -17940,7 +18219,7 @@ P
     let played = transition_state(&loaded.game, initial, right).unwrap();
     assert!(played.has_object(&loaded.game, 0, 0, trail));
 
-    let solver_game = loaded.solver_game();
+    let solver_game = loaded.compiled_game_for_level(0).unwrap();
     let solved = transition_state(&solver_game, &loaded.solver_state(initial), right).unwrap();
     assert!(solved.has_object(&loaded.game, 0, 0, trail));
 }
@@ -17992,7 +18271,7 @@ P.
     assert!(played.has_object(&loaded.game, 1, 0, player));
     assert!(played.has_object(&loaded.game, 1, 0, trail));
 
-    let solver_game = loaded.solver_game();
+    let solver_game = loaded.compiled_game_for_level(0).unwrap();
     let solved = transition_state(&solver_game, &loaded.solver_state(initial), right).unwrap();
     assert!(solved.has_object(&loaded.game, 1, 0, player));
     assert!(solved.has_object(&loaded.game, 1, 0, trail));
@@ -18449,7 +18728,7 @@ level "start"
 fn puzzle3_parser_is_available_through_lang_crate() {
     let parsed = crate::parse_puzzle3d(
         r#"
-puzzle3 push3 {
+puzzle push3 {
   layers {
     floor = Floor
     actor = Player Box Wall
@@ -18466,7 +18745,7 @@ puzzle3 push3 {
   }
 }
 
-levels3 demo of push3 {
+levels demo of push3 {
   legend {
     . = empty
     P = Player
@@ -18485,12 +18764,14 @@ levels3 demo of push3 {
     )
     .unwrap();
 
-    assert_eq!(parsed.rules.len(), 8);
+    assert_eq!(parsed.rules.len(), 2);
+    assert_eq!(puzzle_grid3d::flattened_rules(&parsed.rules).len(), 8);
     assert_eq!(parsed.level_bundle.as_ref().unwrap().level_count(), 1);
     let fixture_json = crate::export_visual_fixture_json(&parsed).unwrap();
     let contract =
         puzzle_runtime_contract::puzzle3_runtime_model_from_fixture_json(&fixture_json).unwrap();
     assert_eq!(contract.rules.len(), parsed.rules.len());
+    assert_eq!(puzzle_grid3d::flattened_rules(&contract.rules).len(), 8);
     assert!(!fixture_json.contains("pushableObjectIds"));
     assert!(!fixture_json.contains("blocksMovement"));
 }
@@ -18591,11 +18872,11 @@ scene title {
 
     let public_game = super::parse_game2d(source).unwrap();
     assert!(
-        matches!(public_game.scenes.as_slice(), [title, default] if title.name == "title" && default.name == "default")
+        matches!(public_game.scenes.as_slice(), [default, title] if default.name == "default" && title.name == "title")
     );
 
     let parts = super::parse_document_source_parts(source).unwrap();
-    assert!(matches!(parts.scenes.as_slice(), [scene] if scene.name == "title"));
+    assert!(matches!(parts.scenes.as_slice(), [default, title] if default.name == "default" && title.name == "title"));
     assert!(!parts.model_source.contains("scene title"));
     assert!(!parts.model_source.contains("title \"Two Dee\""));
     assert!(!parts.model_source.contains("sfx push"));
@@ -18633,10 +18914,69 @@ scene sokoban {
     .unwrap();
 
     assert!(matches!(loaded.scenes.as_slice(), [scene] if scene.name == "sokoban"));
-    let scene = &loaded.scenes[0];
+    let scene = loaded.scenes.iter().find(|scene| scene.name == "sokoban").unwrap();
     assert!(scene.state.puzzles.is_empty());
     assert!(scene.components.is_empty());
     assert!(scene.puzzle_rule.is_none());
+}
+
+#[test]
+fn puzzle_default_scene_participates_in_document_scene_order() {
+    let puzzle_first = super::parse_game2d(
+        r#"
+puzzle board {
+layers {
+actor = Player
+}
+rules {
+}
+levels {
+legend {
+P = Player
+}
+level "first" {
+P
+}
+}
+}
+
+scene title {
+}
+"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        puzzle_first.scenes.as_slice(),
+        [board, title] if board.name == "board" && title.name == "title"
+    ));
+
+    let title_first = super::parse_game2d(
+        r#"
+scene title {
+}
+
+puzzle board {
+layers {
+actor = Player
+}
+rules {
+}
+levels {
+legend {
+P = Player
+}
+level "first" {
+P
+}
+}
+}
+"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        title_first.scenes.as_slice(),
+        [title, board] if title.name == "title" && board.name == "board"
+    ));
 }
 
 #[test]
@@ -18694,7 +19034,7 @@ P
 
 #[test]
 fn parse_game_returns_document_for_3d_model() {
-    let document = super::parse_game(
+    let document = super::parse_game_for_path(
         r#"
 title = "Three Dee"
 subtitle = "Cubic puzzle"
@@ -18713,7 +19053,7 @@ assets {
   "game.css"
 }
 
-puzzle3 push3 {
+puzzle push3 {
   layers {
     floor = Floor
     actor = Player Box Wall
@@ -18730,7 +19070,7 @@ puzzle3 push3 {
   }
 }
 
-levels3 demo of push3 {
+levels demo of push3 {
   legend {
     . = empty
     P = Player
@@ -18765,6 +19105,7 @@ scene level_select {
   }
 }
 "#,
+        "test.puzzle3",
     )
     .unwrap();
 
@@ -18782,7 +19123,7 @@ scene level_select {
     assert_eq!(document.assets.entries[0].path, "game.css");
     assert!(matches!(
         document.scenes.as_slice(),
-        [title, level_select, push3]
+        [push3, title, level_select]
             if title.name == "title"
                 && title.layout.space == SceneSpaceDef::Fill { weight: 2 }
                 && title.layout.aspect_ratio == Some(SceneAspectRatioDef::new(4, 3))
@@ -18793,13 +19134,14 @@ scene level_select {
                 && matches!(&push3.puzzle_rule, Some(ScenePuzzleRule { target, rule }) if target == "push3" && rule == "rules")
     ));
     assert_eq!(name, "push3");
-    assert_eq!(puzzle.rules.len(), 8);
+    assert_eq!(puzzle.rules.len(), 2);
+    assert_eq!(puzzle_grid3d::flattened_rules(&puzzle.rules).len(), 8);
     assert_eq!(puzzle.level_bundle.as_ref().unwrap().level_count(), 1);
     let fixture_json = crate::export_loaded_document_visual_fixture_json(&document).unwrap();
     assert!(fixture_json.contains("\"title\": \"Three Dee\""));
     assert!(fixture_json.contains("\"theme\": {\"name\":\"clean\""));
     assert!(fixture_json.contains("\"variables\":[{\"name\":\"accent\",\"value\":\"#ff0000\"}]"));
-    assert!(fixture_json.contains("\"currentScene\": \"title\""));
+    assert!(fixture_json.contains("\"currentScene\": \"push3\""));
     assert!(fixture_json.contains("\"layout\": {"));
     assert!(fixture_json.contains("\"width\": 4"));
     assert!(!fixture_json.contains("\"kind\": \"for\""));
@@ -18810,11 +19152,11 @@ scene level_select {
 
 #[test]
 fn parse_game_accepts_3d_input_rule_without_orientation_set() {
-    let document = super::parse_game(
+    let document = super::parse_game_for_path(
         r#"
 title = "Bare 3D Input"
 
-puzzle3 push3 {
+puzzle push3 {
   layers {
     actor = Player
   }
@@ -18824,7 +19166,7 @@ puzzle3 push3 {
   }
 }
 
-levels3 demo of push3 {
+levels demo of push3 {
   legend {
     . = empty
     P = Player
@@ -18835,23 +19177,25 @@ levels3 demo of push3 {
   }
 }
 "#,
+        "test.puzzle3",
     )
     .unwrap();
 
     let Some(LoadedDocumentModel::Puzzle3d { puzzle, .. }) = document.single_model() else {
         panic!("expected one 3D puzzle model");
     };
-    assert_eq!(puzzle.rules.len(), 6);
+    assert_eq!(puzzle.rules.len(), 1);
+    assert_eq!(puzzle_grid3d::flattened_rules(&puzzle.rules).len(), 6);
 }
 
 #[test]
 fn theme_preset_statement_before_puzzle3_does_not_capture_model_block() {
-    let document = super::parse_game(
+    let document = super::parse_game_for_path(
         r#"
 title = "Themed 3D"
 theme = "puzzlescript"
 
-puzzle3 push3 {
+puzzle push3 {
   layers {
     actor = Player
   }
@@ -18859,7 +19203,7 @@ puzzle3 push3 {
   }
 }
 
-levels3 demo of push3 {
+levels demo of push3 {
   legend {
     P = Player
   }
@@ -18868,6 +19212,7 @@ levels3 demo of push3 {
   }
 }
 "#,
+        "test.puzzle3",
     )
     .unwrap();
 
@@ -18880,7 +19225,7 @@ levels3 demo of push3 {
 }
 
 #[test]
-fn document_runtime_sources_keep_model_sources_separate_from_document_scenes() {
+fn document_runtime_sources_do_not_infer_3d_from_unified_puzzle_keyword() {
     let source = r#"
 title = "Mixed Runtime"
 theme = "puzzlescript"
@@ -18901,7 +19246,7 @@ P
 }
 }
 
-puzzle3 cube {
+puzzle cube {
 layers {
 actor = Player
 }
@@ -18909,7 +19254,7 @@ rules {
 }
 }
 
-levels3 cube_levels of cube {
+levels cube_levels of cube {
 legend {
 P = Player
 }
@@ -18922,7 +19267,7 @@ scene mixed_play {
 layout {
 row {
 puzzle flat_board = flat
-puzzle3 cube_board = cube
+puzzle cube_board = cube
 }
 }
 }
@@ -18933,23 +19278,17 @@ puzzle3 cube_board = cube
     assert!(sources.model_2d.contains("puzzle flat"));
     assert!(sources.model_2d.contains("levels flat_levels"));
     assert!(!sources.model_2d.contains("scene mixed_play"));
-    assert!(!sources.model_2d.contains("puzzle3 cube_board"));
-    assert!(!sources.model_2d.contains("puzzle3 cube {"));
-    assert!(!sources.model_2d.contains("levels3 cube_levels"));
-    assert!(sources.model_3d.contains("puzzle3 cube {"));
-    assert!(sources.model_3d.contains("levels3 cube_levels"));
-    assert!(!sources.model_3d.contains("puzzle flat"));
-    assert!(!sources.model_3d.contains("scene mixed_play"));
-    assert!(!sources.model_3d.contains("theme = \"puzzlescript\""));
+    assert!(sources.model_2d.contains("puzzle cube {"));
+    assert!(sources.model_2d.contains("levels cube_levels"));
 }
 
 #[test]
 fn puzzle3_model_layout_block_lowers_to_default_scene() {
-    let document = super::parse_game(
+    let document = super::parse_game_for_path(
         r#"
 title = Inline Scene 3D
 
-puzzle3 push3 {
+puzzle push3 {
 layers {
 actor = Player
 }
@@ -18957,11 +19296,11 @@ rules {
 }
 layout {
 text "Ready"
-puzzle3
+puzzle
 }
 }
 
-levels3 demo of push3 {
+levels demo of push3 {
 legend {
 P = Player
 }
@@ -18970,6 +19309,7 @@ P
 }
 }
 "#,
+        "test.puzzle3",
     )
     .unwrap();
 
@@ -19003,10 +19343,14 @@ P
 #[test]
 fn spec_3d_exports_playable_puzzle_scene() {
     let document =
-        super::parse_game(include_str!("../tests/fixtures/spec_3d_full.puzzle3")).unwrap();
+        super::parse_game_for_path(
+            include_str!("../tests/fixtures/spec_3d_full.puzzle3"),
+            "spec_3d_full.puzzle3",
+        )
+        .unwrap();
     let fixture_json = crate::export_loaded_document_visual_fixture_json(&document).unwrap();
 
-    assert!(fixture_json.contains("\"currentScene\": \"title\""));
+    assert!(fixture_json.contains("\"currentScene\": \"sokoban\""));
     assert!(fixture_json.contains("\"name\": \"sokoban\""));
     assert!(fixture_json.contains("\"slot\": \"sokoban\""));
     assert!(fixture_json.contains("\"model\": \"sokoban\""));
@@ -19023,7 +19367,7 @@ fn spec_3d_exports_playable_puzzle_scene() {
 fn puzzle3_lifecycle_diagnostic_uses_shared_source_line_mapping() {
     let source = r#"title = = "Line Probe"
 
-puzzle3 lifecycle {
+puzzle lifecycle {
 layers {
 actor = Player
 }
@@ -19033,7 +19377,7 @@ messag "END"
 }
 }
 "#;
-    let report = super::parse_game(source).unwrap_err();
+    let report = super::parse_game_for_path(source, "test.puzzle3").unwrap_err();
     let diagnostic = report
         .diagnostics()
         .iter()
@@ -19101,11 +19445,11 @@ flat
                 && flat.model == "flat"
     ));
 
-    let cube_document = super::parse_game(
+    let cube_document = super::parse_game_for_path(
         r#"
 title = Implicit Cube Slot
 
-puzzle3 cube {
+puzzle cube {
 layers {
 actor = Player
 }
@@ -19113,7 +19457,7 @@ rules {
 }
 }
 
-levels3 cube_levels of cube {
+levels cube_levels of cube {
 legend {
 P = Player
 }
@@ -19128,6 +19472,7 @@ cube
 }
 }
 "#,
+        "test.puzzle3",
     )
     .unwrap();
 
@@ -19158,11 +19503,11 @@ cube
 
 #[test]
 fn puzzle3_level_menu_fixture_uses_goto_level_action_not_start_levels() {
-    let document = super::parse_game(
+    let document = super::parse_game_for_path(
         r#"
 title = Level Menu 3D
 
-puzzle3 demo {
+puzzle demo {
 layers {
   floor = Floor
   actor = Player
@@ -19187,11 +19532,11 @@ scene level_select {
 
 scene playing {
   layout {
-    puzzle3 board = demo
+    puzzle board = demo
   }
 }
 
-levels3 test of demo {
+levels test of demo {
 legend {
   . = empty
   , = Floor
@@ -19205,6 +19550,7 @@ P
 }
 }
 "#,
+        "test.puzzle3",
     )
     .unwrap();
     let fixture_json = crate::export_loaded_document_visual_fixture_json(&document).unwrap();
@@ -19219,11 +19565,11 @@ P
 
 #[test]
 fn puzzle3_fixture_serializes_shared_scene_effects() {
-    let document = super::parse_game(
+    let document = super::parse_game_for_path(
         r#"
 title = Shared Effects 3D
 
-puzzle3 demo {
+puzzle demo {
 layers {
   actor = Player
 }
@@ -19238,7 +19584,7 @@ scene title {
   }
 }
 
-levels3 test of demo {
+levels test of demo {
 legend {
   P = Player
 }
@@ -19248,6 +19594,7 @@ P
 }
 }
 "#,
+        "test.puzzle3",
     )
     .unwrap();
     let fixture_json = crate::export_loaded_document_visual_fixture_json(&document).unwrap();
@@ -19305,16 +19652,16 @@ model puzzle3 push3 {
     )
     .unwrap_err();
 
-    assert!(matches!(
-        error,
-        ParseError3::Message(message)
-            if message.contains("top-level 3D puzzle definition must be: puzzle3 <name>")
-    ));
+    assert!(
+        error
+            .to_string()
+            .contains("top-level 3D puzzle definition must be: puzzle <name>")
+    );
 }
 
 #[test]
-fn parse_game_rejects_mixed_2d_and_3d_models() {
-    let error = super::parse_game(
+fn parse_game_for_path_rejects_removed_puzzle3_keyword() {
+    let error = super::parse_game_for_path(
         r#"
 title = Mixed Game
 
@@ -19349,7 +19696,7 @@ puzzle3 cube {
   }
 }
 
-levels3 cube_levels of cube {
+levels cube_levels of cube {
   legend {
     . = empty
     P = Player
@@ -19364,16 +19711,17 @@ scene mixed_play {
   layout {
     row {
       puzzle flat_board = flat
-      puzzle3 cube_board = cube
+      puzzle cube_board = cube
     }
   }
 }
 "#,
+        "mixed.puzzle3",
     )
     .unwrap_err()
     .to_string();
 
-    assert!(error.contains("mixed 2D/3D documents are no longer supported"));
+    assert!(error.contains("`puzzle3` was removed"));
 }
 
 #[test]

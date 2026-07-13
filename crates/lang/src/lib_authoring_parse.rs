@@ -318,7 +318,11 @@ fn parse_puzzle_definition(
                 i = recover_after_directive_error(lines, i);
             }
             "empty" => {
-                *empty_char = Some(parse_char(tokens.get(1), line, "missing empty char")?);
+                let ch = parse_char(tokens.get(1), line, "missing empty char")?;
+                if ch != '.' {
+                    return Err(parse_error(line, "levels use `.` for empty"));
+                }
+                *empty_char = Some('.');
                 i += 1;
             }
             "marks" => {

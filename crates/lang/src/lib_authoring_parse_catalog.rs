@@ -291,7 +291,7 @@ fn record_surface_completion_line(
         | ["persistent", name, ..] => {
             insert_surface_completion_identifier(&mut sink.completion_symbols_mut().states, name);
         }
-        ["puzzle" | "puzzle3", name, "=", ..]
+        ["puzzle", name, "=", ..]
             if matches!(
                 scope,
                 Some(SourceScope::SceneLayout | SourceScope::SceneState)
@@ -894,7 +894,7 @@ pub(crate) fn integrate_level_editor_authoring(
     let mut pending_level_blocks = Vec::<PendingLevelBlock>::new();
     let mut pending_visual_blocks = Vec::<usize>::new();
     let mut render_overlays = Vec::<(Vec<ObjectId>, char)>::new();
-    let mut empty_char = None::<char>;
+    let mut empty_char = Some('.');
     let mut diagnostics = Vec::<String>::new();
     let mut i = 0usize;
     while i < lines.len() {
@@ -975,43 +975,31 @@ pub(crate) fn integrate_level_editor_authoring(
         .map_or(0, |layer| layer.saturating_add(1));
     let game = CompiledGame::new(layer_count, catalog.object_defs.clone(), Vec::new());
     let mut levels = Vec::new();
-    if let Some(empty_char) = empty_char {
-        for (source_level_index, level) in level_blocks.into_iter().enumerate() {
-            let level_name = level.name.clone();
-            let parsed = (|| {
-                let body = parse_level_body_for_editor(&level, &catalog, empty_char)?;
-                let mut char_objects = catalog.char_objects.clone();
-                char_objects.extend(body.local_char_objects);
-                let parsed = parse_level(
-                    &game,
-                    &body.lines,
-                    Some(empty_char),
-                    &char_objects,
-                    &[],
-                )?;
-                Ok::<_, DiagnosticReport>(LevelEditorIntegratedLevel {
-                    source_level_index,
-                    name: level.name,
-                    state: parsed.state,
-                    layers: parsed.layer_states,
-                    regions: parsed.regions,
-                    char_objects,
-                })
-            })();
-            match parsed {
-                Ok(level) => levels.push(level),
-                Err(report) => diagnostics.push(format!("level `{level_name}`: {report}")),
-            }
+    let empty_char = empty_char.expect("level editor always reserves dot for empty");
+    for (source_level_index, level) in level_blocks.into_iter().enumerate() {
+        let level_name = level.name.clone();
+        let parsed = (|| {
+            let body = parse_level_body_for_editor(&level, &catalog, empty_char)?;
+            let mut char_objects = catalog.char_objects.clone();
+            char_objects.extend(body.local_char_objects);
+            let parsed = parse_level(&game, &body.lines, Some(empty_char), &char_objects, &[])?;
+            Ok::<_, DiagnosticReport>(LevelEditorIntegratedLevel {
+                source_level_index,
+                name: level.name,
+                state: parsed.state,
+                layers: parsed.layer_states,
+                regions: parsed.regions,
+                char_objects,
+            })
+        })();
+        match parsed {
+            Ok(level) => levels.push(level),
+            Err(report) => diagnostics.push(format!("level `{level_name}`: {report}")),
         }
-    } else if !level_blocks.is_empty() {
-        diagnostics.push(
-            "level editor requires `levels { legend { . = empty } }` before it can integrate level cells"
-                .to_string(),
-        );
     }
     Ok(LevelEditorIntegration {
         catalog,
-        empty_char,
+        empty_char: Some(empty_char),
         visuals,
         levels,
         diagnostics,
@@ -1045,53 +1033,51 @@ fn record_parser_surface_puzzle_catalog(
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
         let tokens = split_header_tokens(&lines[i]);
-        match tokens.as_slice() {
-            [] => i += 1,
-            ["tags"] => i = skip_tags_block(lines, i).unwrap_or(i + 1),
-            ["map", ..] => {
-                let value_sets = catalog_value_sets(catalog);
-                match parse_map_definition(lines, i, &value_sets) {
-                    Ok((map, next_i)) => {
-                        catalog.maps.insert(map.name.clone(), map);
-                        i = next_i;
+        let directive = puzzle_authoring::puzzle_directive_surface(&lines[i]);
+        match directive {
+            puzzle_authoring::PuzzleDirectiveSurface::Empty => i += 1,
+            puzzle_authoring::PuzzleDirectiveSurface::Tags => {
+                if tokens.as_slice() != ["tags"] {
+                    if strict {
+                        return Err(parse_error(&lines[i], "tags header must be: tags"));
                     }
-                    Err(error) if strict => return Err(error),
-                    Err(_) => i = recover_after_directive_error(lines, i),
+                    i = recover_after_directive_error(lines, i);
+                } else {
+                    i = skip_tags_block(lines, i).unwrap_or(i + 1);
                 }
             }
-            ["layers"] => {
-                let parsed = parse_layers_block(
-                    lines,
-                    i + 1,
-                    &mut named_layers,
-                    &mut layer_count,
-                    catalog,
-                    &pending_groups,
-                    &mut resolved_groups,
-                );
-                i = match parsed {
-                    Ok(next_i) => next_i,
-                    Err(error) if strict => return Err(error),
-                    Err(_) => recover_after_directive_error(lines, i),
-                };
-                refresh_layer_tags_and_value_sets(&named_layers, catalog);
-            }
-            ["layers", count] => {
-                match parse_u16(Some(count), &lines[i], "missing layer count") {
-                    Ok(count) => layer_count = Some(count),
-                    Err(error) if strict => return Err(error),
-                    Err(_) => {}
+            puzzle_authoring::PuzzleDirectiveSurface::Layers => match tokens.as_slice() {
+                ["layers"] => {
+                    let parsed = parse_layers_block(
+                        lines,
+                        i + 1,
+                        &mut named_layers,
+                        &mut layer_count,
+                        catalog,
+                        &pending_groups,
+                        &mut resolved_groups,
+                    );
+                    i = match parsed {
+                        Ok(next_i) => next_i,
+                        Err(error) if strict => return Err(error),
+                        Err(_) => recover_after_directive_error(lines, i),
+                    };
+                    refresh_layer_tags_and_value_sets(&named_layers, catalog);
                 }
-                i += 1;
-            }
-            ["marks"] => {
-                i = match parse_mark_block(lines, i, catalog) {
-                    Ok(next_i) => next_i,
-                    Err(error) if strict => return Err(error),
-                    Err(_) => recover_after_directive_error(lines, i),
-                };
-            }
-            ["groups"] => {
+                ["layers", count] => {
+                    match parse_u16(Some(count), &lines[i], "missing layer count") {
+                        Ok(count) => layer_count = Some(count),
+                        Err(error) if strict => return Err(error),
+                        Err(_) => {}
+                    }
+                    i += 1;
+                }
+                _ if strict => {
+                    return Err(parse_error(&lines[i], "layers header is malformed"));
+                }
+                _ => i = recover_after_directive_error(lines, i),
+            },
+            puzzle_authoring::PuzzleDirectiveSurface::Groups => {
                 i = match collect_authoring_entry(lines, i, AuthoringEntryOwner::PuzzleGroups) {
                     Ok((_, next_i)) => next_i,
                     Err(error) if strict => return Err(error),
@@ -1109,19 +1095,39 @@ fn record_parser_surface_puzzle_catalog(
                     return Err(error);
                 }
             }
-            ["levels", ..] => {
+            puzzle_authoring::PuzzleDirectiveSurface::Levels => {
                 pending_level_blocks.push(PendingLevelBlock::levels(i, puzzle_name.clone()));
                 i = collect_levels_authoring_entry(lines, i)?.1;
             }
-            ["level", ..] => {
+            puzzle_authoring::PuzzleDirectiveSurface::Level => {
                 pending_level_blocks.push(PendingLevelBlock::level(i, puzzle_name.clone()));
                 i = parse_level_block(lines, i, 0)?.1;
             }
-            ["sprites", ..] => {
+            puzzle_authoring::PuzzleDirectiveSurface::Sprites => {
                 pending_visual_blocks.push(i);
                 i = collect_authoring_entry(lines, i, AuthoringEntryOwner::DocumentVisuals)?.1;
             }
-            _ => i = recover_after_directive_error(lines, i),
+            _ => match tokens.as_slice() {
+                ["map", ..] => {
+                    let value_sets = catalog_value_sets(catalog);
+                    match parse_map_definition(lines, i, &value_sets) {
+                        Ok((map, next_i)) => {
+                            catalog.maps.insert(map.name.clone(), map);
+                            i = next_i;
+                        }
+                        Err(error) if strict => return Err(error),
+                        Err(_) => i = recover_after_directive_error(lines, i),
+                    }
+                }
+                ["marks"] => {
+                    i = match parse_mark_block(lines, i, catalog) {
+                        Ok(next_i) => next_i,
+                        Err(error) if strict => return Err(error),
+                        Err(_) => recover_after_directive_error(lines, i),
+                    };
+                }
+                _ => i = recover_after_directive_error(lines, i),
+            },
         }
     }
     if let Err(error) =
@@ -1281,16 +1287,13 @@ fn parse_tags_block(
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
         let line = &lines[i];
-        let tokens = split_header_tokens(line);
-        match tokens.as_slice() {
-            [] => {}
-            [name, "=", values @ ..] => {
-                parse_tag_set_directive(name, values, line, catalog)?;
-            }
-            _ => {
-                return Err(parse_error(line, "tag row must be: <name> = <value...>"));
-            }
+        if line.trim().is_empty() {
+            i += 1;
+            continue;
         }
+        let assignment = puzzle_authoring::selector_assignment_surface(line)
+            .ok_or_else(|| parse_error(line, "tag row must be: <name> = <value...>"))?;
+        parse_tag_set_directive(assignment.name, &assignment.selectors, line, catalog)?;
         i += 1;
     }
     if i >= lines.len() {
@@ -1341,6 +1344,26 @@ fn parse_tag_set_directive(
     catalog: &mut Catalog,
 ) -> Result<(), DiagnosticReport> {
     validate_identifier(name, line, "tag set name")?;
+    let (expanded_values, value_type) =
+        parse_tag_domain_values(values, &catalog.numeric_variable_defaults, line)?;
+    if is_builtin_value_set(name) {
+        return Err(parse_error(line, "built-in tag set cannot be redefined"));
+    }
+    if catalog.value_sets.contains_key(name) || catalog.object_axes.contains_key(name) {
+        return Err(parse_error(line, "duplicate tag set"));
+    }
+    catalog
+        .object_axes
+        .insert(name.to_string(), expanded_values);
+    catalog.axis_types.insert(name.to_string(), value_type);
+    Ok(())
+}
+
+pub(crate) fn parse_tag_domain_values(
+    values: &[&str],
+    numeric_variables: &HashMap<String, i64>,
+    line: &str,
+) -> Result<(Vec<String>, ValueType), DiagnosticReport> {
     if values.is_empty() {
         return Err(parse_error(line, "tag set must have at least one value"));
     }
@@ -1371,8 +1394,7 @@ fn parse_tag_set_directive(
     {
         parse_numeric_domain_range(values, line)?
     } else {
-        let expanded =
-            expand_numeric_ranges_in_value_list(values, &catalog.numeric_variable_defaults, line)?;
+        let expanded = expand_numeric_ranges_in_value_list(values, numeric_variables, line)?;
         let value_type = infer_tag_value_type(&expanded, line)?;
         (
             normalize_tag_values(expanded, value_type, line)?,
@@ -1382,17 +1404,7 @@ fn parse_tag_set_directive(
     if expanded_values.is_empty() {
         return Err(parse_error(line, "tag set must have at least one value"));
     }
-    if is_builtin_value_set(name) {
-        return Err(parse_error(line, "built-in tag set cannot be redefined"));
-    }
-    if catalog.value_sets.contains_key(name) || catalog.object_axes.contains_key(name) {
-        return Err(parse_error(line, "duplicate tag set"));
-    }
-    catalog
-        .object_axes
-        .insert(name.to_string(), expanded_values);
-    catalog.axis_types.insert(name.to_string(), value_type);
-    Ok(())
+    Ok((expanded_values, value_type))
 }
 
 fn parse_numeric_domain_range(
@@ -2042,35 +2054,45 @@ fn parse_layers_block(
                     "for directive must be: for <binding> in <source...>",
                 ));
             }
-            ["each", selectors @ ..] => {
-                assign_selectors_to_separate_layers(
-                    selectors,
-                    &lines[i],
-                    named_layers,
-                    layer_count,
-                    catalog,
-                    false,
-                )?;
-            }
-            [name, ..]
-                if crate::syntax::named_selector_assignment_syntax(&tokens, true).is_some() =>
-            {
-                let syntax = crate::syntax::named_selector_assignment_syntax(&tokens, true)
-                    .expect("guarded named layer assignment syntax");
-                let selectors = &tokens[syntax.rhs_start..];
-                let layer = layer_id_for_name(name, &lines[i], named_layers, layer_count, catalog)?;
-                define_or_assign_terms_to_layer(selectors, &lines[i], layer, catalog, false)?;
-                register_layer_tag_from_layer(name, layer, catalog);
-            }
-            _ => {
-                assign_selectors_to_anonymous_layer(
-                    &tokens,
-                    &lines[i],
-                    named_layers,
-                    layer_count,
-                    catalog,
-                )?;
-            }
+            _ => match puzzle_authoring::layer_row_surface(&lines[i]) {
+                Some(puzzle_authoring::LayerRowSurface::Each { selectors }) => {
+                    assign_selectors_to_separate_layers(
+                        &selectors,
+                        &lines[i],
+                        named_layers,
+                        layer_count,
+                        catalog,
+                        false,
+                    )?;
+                }
+                Some(puzzle_authoring::LayerRowSurface::Named(assignment)) => {
+                    let layer = layer_id_for_name(
+                        assignment.name,
+                        &lines[i],
+                        named_layers,
+                        layer_count,
+                        catalog,
+                    )?;
+                    define_or_assign_terms_to_layer(
+                        &assignment.selectors,
+                        &lines[i],
+                        layer,
+                        catalog,
+                        false,
+                    )?;
+                    register_layer_tag_from_layer(assignment.name, layer, catalog);
+                }
+                Some(puzzle_authoring::LayerRowSurface::Anonymous { selectors }) => {
+                    assign_selectors_to_anonymous_layer(
+                        &selectors,
+                        &lines[i],
+                        named_layers,
+                        layer_count,
+                        catalog,
+                    )?;
+                }
+                None => return Err(parse_error(&lines[i], "invalid layer row")),
+            },
         }
         i += 1;
     }
@@ -2154,22 +2176,16 @@ fn collect_layer_block_terms(
                     "for directive must be: for <binding> in <source...>",
                 ));
             }
-            ["each", selectors @ ..] => {
-                collect_layer_terms(selectors, &lines[i], pending_groups, terms, used_groups)?;
-            }
-            [_, ..] if crate::syntax::named_selector_assignment_syntax(&tokens, true).is_some() => {
-                let syntax = crate::syntax::named_selector_assignment_syntax(&tokens, true)
-                    .expect("guarded named layer assignment syntax");
-                collect_layer_terms(
-                    &tokens[syntax.rhs_start..],
-                    &lines[i],
-                    pending_groups,
-                    terms,
-                    used_groups,
-                )?;
-            }
             _ => {
-                collect_layer_terms(&tokens, &lines[i], pending_groups, terms, used_groups)?;
+                let selectors = match puzzle_authoring::layer_row_surface(&lines[i]) {
+                    Some(puzzle_authoring::LayerRowSurface::Each { selectors })
+                    | Some(puzzle_authoring::LayerRowSurface::Anonymous { selectors }) => selectors,
+                    Some(puzzle_authoring::LayerRowSurface::Named(assignment)) => {
+                        assignment.selectors
+                    }
+                    None => return Err(parse_error(&lines[i], "invalid layer row")),
+                };
+                collect_layer_terms(&selectors, &lines[i], pending_groups, terms, used_groups)?;
             }
         }
         i += 1;
@@ -2185,55 +2201,21 @@ fn collect_layer_block_terms(
 
 fn collect_layer_terms(
     selectors: &[&str],
-    line: &str,
+    _line: &str,
     pending_groups: &[PendingGroupDefinition],
     terms: &mut Vec<String>,
     used_groups: &mut Vec<String>,
 ) -> Result<(), DiagnosticReport> {
-    let mut resolving = Vec::<String>::new();
-    for selector in selectors {
-        collect_layer_term(
-            selector,
-            line,
-            pending_groups,
-            terms,
-            used_groups,
-            &mut resolving,
-        )?;
+    let expanded = puzzle_authoring::expand_layer_selectors(selectors, pending_groups)
+        .map_err(|error| parse_error(&error.source_line, error.message))?;
+    for term in expanded.terms {
+        terms.push(term);
     }
-    Ok(())
-}
-
-fn collect_layer_term(
-    selector: &str,
-    line: &str,
-    pending_groups: &[PendingGroupDefinition],
-    terms: &mut Vec<String>,
-    used_groups: &mut Vec<String>,
-    resolving: &mut Vec<String>,
-) -> Result<(), DiagnosticReport> {
-    if let Some(group) = pending_group_definition(selector, pending_groups) {
-        if resolving.iter().any(|candidate| candidate == selector) {
-            return Err(parse_error(line, "group definitions cannot be cyclic"));
+    for group in expanded.used_groups {
+        if !used_groups.contains(&group) {
+            used_groups.push(group);
         }
-        if !used_groups.contains(&group.name) {
-            used_groups.push(group.name.clone());
-        }
-        resolving.push(group.name.clone());
-        for group_selector in &group.selectors {
-            collect_layer_term(
-                group_selector,
-                &group.line,
-                pending_groups,
-                terms,
-                used_groups,
-                resolving,
-            )?;
-        }
-        resolving.pop();
-        return Ok(());
     }
-    terms.push(selector.to_string());
     Ok(())
 }
 
@@ -2656,14 +2638,18 @@ fn selector_name_conflicts_with(
     object_schemas: &HashMap<String, ObjectSchema>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
 ) -> bool {
-    object_names.contains_key(name)
-        || object_schemas.contains_key(name)
-        || object_groups.contains_key(name)
-        || name.split_once(':').is_some_and(|(base, _)| {
-            object_names.contains_key(base)
-                || object_schemas.contains_key(base)
-                || object_groups.contains_key(base)
-        })
+    let conflicts = |candidate: &str| {
+        puzzle_authoring::selector_alias_conflicts(
+            candidate,
+            object_names.keys().map(String::as_str),
+            object_schemas.keys().map(String::as_str),
+            object_groups.keys().map(String::as_str),
+        )
+    };
+    conflicts(name)
+        || name
+            .split_once(':')
+            .is_some_and(|(base, _)| conflicts(base))
 }
 
 fn parse_legend_block(
@@ -2673,16 +2659,12 @@ fn parse_legend_block(
     render_overlays: &mut OverlayDefs,
     empty_char: &mut Option<char>,
 ) -> Result<usize, DiagnosticReport> {
-    let mut i = start + 1;
-    while i < lines.len() && !is_block_close_line(&lines[i]) {
-        parse_legend_block_row(&lines[i], catalog, render_overlays, empty_char)?;
-        i += 1;
+    let block = puzzle_authoring::collect_row_block_surface(lines, start + 1, "legend")
+        .map_err(|error| parse_error(&lines[start], error.message()))?;
+    for line in block.rows {
+        parse_legend_block_row(line, catalog, render_overlays, empty_char)?;
     }
-    if i >= lines.len() {
-        return Err(parse_error(&lines[start], "legend missing closing brace"));
-    }
-
-    Ok(i + 1)
+    Ok(block.next_index)
 }
 
 fn parse_legend_block_row(
@@ -2691,22 +2673,33 @@ fn parse_legend_block_row(
     render_overlays: &mut OverlayDefs,
     empty_char: &mut Option<char>,
 ) -> Result<(), DiagnosticReport> {
-    let tokens = split_header_tokens(line);
-    let Some(syntax) = crate::syntax::legend_block_row_syntax(&tokens, true) else {
+    let Some(assignment) = puzzle_authoring::selector_assignment_surface(line) else {
         return Err(parse_error(
             line,
             "legend row must be: <char> = <empty | selector...>",
         ));
     };
 
-    let ch = parse_char(tokens.first(), line, "missing legend char")?;
-    if tokens[syntax.rhs_start..] == ["empty"] {
+    let ch = parse_char(Some(&assignment.name), line, "missing legend char")?;
+    if assignment.selectors == ["empty"] {
+        if ch != '.' {
+            return Err(parse_error(
+                line,
+                "levels use `.` for empty; remove the non-dot empty legend row",
+            ));
+        }
         *empty_char = Some(ch);
         return Ok(());
     }
+    if ch == '.' {
+        return Err(parse_error(
+            line,
+            "levels reserve `.` for empty; use another legend char for objects",
+        ));
+    }
 
-    let mut directive_tokens = vec!["legend"];
-    directive_tokens.extend(tokens);
+    let mut directive_tokens = vec!["legend", assignment.name, "="];
+    directive_tokens.extend(assignment.selectors);
     parse_legend_directive(
         &directive_tokens,
         line,
@@ -2765,6 +2758,8 @@ fn add_implicit_input_guards_to_catalog(
         collect_implicit_inputs_from_statements(statements, &mut names);
     }
     for level in level_bodies {
+        collect_implicit_inputs_from_statements(&level.rules_before_statements, &mut names);
+        collect_implicit_inputs_from_statements(&level.rules_after_statements, &mut names);
         collect_implicit_inputs_from_statements(&level.level_start_statements, &mut names);
         collect_implicit_inputs_from_statements(&level.level_clear_statements, &mut names);
     }
@@ -2817,9 +2812,7 @@ fn collect_implicit_inputs_from_statements(
                 collect_implicit_inputs_from_statements(then_statements, names);
                 collect_implicit_inputs_from_statements(else_statements, names);
             }
-            StatementAst::Call { .. }
-            | StatementAst::Effect { .. }
-            | StatementAst::Rewrite(_) => {}
+            StatementAst::Call { .. } | StatementAst::Effect { .. } | StatementAst::Rewrite(_) => {}
         }
     }
 }

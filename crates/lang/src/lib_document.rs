@@ -41,11 +41,11 @@ pub fn parse_game_file(path: impl AsRef<Path>) -> Result<LoadedDocument, Diagnos
     })?;
     validate_source_profile(&source, profile)?;
     if profile == PuzzleSourceProfile::Puzzle3d {
-        return parse_game_document(&source);
+        return parse_game_document_with_profile(&source, profile);
     }
     let expanded = expand_game_imports_for_file(&source, path)?;
     validate_source_profile(&expanded, profile)?;
-    parse_game_document(&expanded)
+    parse_game_document_with_profile(&expanded, profile)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -92,29 +92,18 @@ fn parse_game2d_from_document_parts(
 }
 
 fn parse_game_document(source: &str) -> Result<LoadedDocument, DiagnosticReport> {
-    let kind = detect_game_document_kind(source)?;
-    match kind {
-        GameDocumentKind::Puzzle2d | GameDocumentKind::Puzzle3d => {
-            parse_single_model_game_document(source, kind)
-        }
-        GameDocumentKind::Mixed => Err(DiagnosticReport::error(
-            "mixed 2D/3D documents are no longer supported; split 2D .puzzle and 3D .puzzle3 sources"
-                .to_string(),
-        )),
-    }
+    validate_source_profile(source, PuzzleSourceProfile::Puzzle2d)?;
+    parse_game_document_with_profile(source, PuzzleSourceProfile::Puzzle2d)
 }
 
-fn parse_single_model_game_document(
+fn parse_game_document_with_profile(
     source: &str,
-    kind: GameDocumentKind,
+    profile: PuzzleSourceProfile,
 ) -> Result<LoadedDocument, DiagnosticReport> {
     let parts = parse_document_source_parts_from_surface_source(source)?;
-    match kind {
-        GameDocumentKind::Puzzle2d => parse_puzzle2d_loaded_document(parts),
-        GameDocumentKind::Puzzle3d => parse_puzzle3d_loaded_document(parts),
-        GameDocumentKind::Mixed => Err(DiagnosticReport::error(
-            "single-model document parser received a mixed 2D/3D document".to_string(),
-        )),
+    match profile {
+        PuzzleSourceProfile::Puzzle2d => parse_puzzle2d_loaded_document(parts),
+        PuzzleSourceProfile::Puzzle3d => parse_puzzle3d_loaded_document(parts),
     }
 }
 
@@ -139,11 +128,25 @@ fn parse_puzzle3d_loaded_document(
     parts: DocumentSourceParts,
 ) -> Result<LoadedDocument, DiagnosticReport> {
     let name =
-        first_model_name(&parts.model_source, "puzzle3").unwrap_or_else(|| "default".to_string());
+        first_model_name(&parts.model_source, "puzzle").unwrap_or_else(|| "default".to_string());
     let mut scenes = parts.scenes;
+    normalize_puzzle3_scene_kinds(&mut scenes);
     resolve_inferred_scene_puzzle_slots(&mut scenes, std::iter::once(("puzzle3", &name)))?;
-    let puzzle = crate::puzzle3_parse::parse_puzzle3d_logical_lines(&parts.model_lines)
-        .map_err(|error| puzzle3_parse_error_report(error, &parts.model_lines))?;
+    let puzzle = crate::puzzle3_parse::parse_puzzle3d_logical_lines(&parts.model_lines).map_err(
+        |report| {
+            let lines = parts
+                .model_lines
+                .iter()
+                .map(|line| line.text.clone())
+                .collect::<Vec<_>>();
+            let line_numbers = parts
+                .model_lines
+                .iter()
+                .map(|line| line.line)
+                .collect::<Vec<_>>();
+            report_with_source_line_numbers(report, &lines, &line_numbers)
+        },
+    )?;
     let mut scenes = add_implicit_model_scenes(scenes, std::iter::once(("puzzle3", &name)));
     resolve_scene_actions(&mut scenes, &HashMap::new())?;
     Ok(loaded_document_from_shell(
@@ -175,25 +178,6 @@ fn loaded_document_from_shell(
     }
 }
 
-fn puzzle3_parse_error_report(
-    error: ParseError3,
-    model_lines: &[source::LogicalLine],
-) -> DiagnosticReport {
-    let report = match error {
-        ParseError3::Message(message) => DiagnosticReport::error(message),
-        ParseError3::MessageAtSourceLine {
-            message,
-            source_line,
-        } => DiagnosticReport::error_at_line(message, source_line),
-    };
-    let lines = model_lines
-        .iter()
-        .map(|line| line.text.clone())
-        .collect::<Vec<_>>();
-    let line_numbers = model_lines.iter().map(|line| line.line).collect::<Vec<_>>();
-    report_with_source_line_numbers(report, &lines, &line_numbers)
-}
-
 #[derive(Default)]
 struct MixedDocumentSources {
     puzzle2d: String,
@@ -203,7 +187,6 @@ struct MixedDocumentSources {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MixedSectionTarget {
     Puzzle2d,
-    Puzzle3d,
     Shared,
 }
 
@@ -227,8 +210,8 @@ fn classify_known_mixed_document_section(tokens: &[&str]) -> Option<MixedSection
         | ["theme", ..]
         | ["assets", ..]
         | ["sprites", ..] => MixedSectionTarget::Shared,
-        ["puzzle", ..] | ["levels", ..] | ["level", ..] => MixedSectionTarget::Puzzle2d,
-        ["puzzle3", ..] | ["levels3", ..] => MixedSectionTarget::Puzzle3d,
+        ["puzzle", ..] | ["level", ..] => MixedSectionTarget::Puzzle2d,
+        ["levels", ..] => MixedSectionTarget::Shared,
         ["var", ..] | ["const", ..] | ["persistent", ..] => MixedSectionTarget::Puzzle2d,
         ["scene", ..] => return Some(MixedSectionRecognition::Scene),
         _ => return None,
@@ -268,7 +251,7 @@ fn split_mixed_game_document_source(
         } else {
             index + 1
         };
-        if is_block && matches!(tokens.as_slice(), ["puzzle", ..] | ["puzzle3", ..]) {
+        if is_block && matches!(tokens.as_slice(), ["puzzle", ..]) {
             push_raw_model_block_without_default_scene_layouts(
                 &raw_lines,
                 index,
@@ -294,7 +277,6 @@ fn push_raw_model_block_without_default_scene_layouts(
     for line in stripped {
         match target {
             MixedSectionTarget::Puzzle2d => push_raw_line(&mut sources.puzzle2d, line),
-            MixedSectionTarget::Puzzle3d => push_raw_line(&mut sources.puzzle3d, line),
             MixedSectionTarget::Shared => {
                 push_raw_line(&mut sources.puzzle2d, line);
                 push_raw_line(&mut sources.puzzle3d, line);
@@ -317,7 +299,6 @@ fn push_raw_block(
     for line in &raw_lines[start..end] {
         match target {
             MixedSectionTarget::Puzzle2d => push_raw_line(&mut sources.puzzle2d, line),
-            MixedSectionTarget::Puzzle3d => push_raw_line(&mut sources.puzzle3d, line),
             MixedSectionTarget::Shared => {
                 push_raw_line(&mut sources.puzzle2d, line);
                 push_raw_line(&mut sources.puzzle3d, line);
@@ -378,7 +359,7 @@ fn resolve_inferred_scene_puzzle_slots<'a>(
             }
             if ambiguous.contains(&puzzle.model) {
                 return Err(DiagnosticReport::error(format!(
-                    "scene puzzle slot `{}` is ambiguous; use `puzzle <name>` or `puzzle3 <name>`",
+                    "scene puzzle slot `{}` is ambiguous; use `puzzle <name>`",
                     puzzle.model
                 )));
             }
@@ -418,6 +399,30 @@ fn resolve_inferred_scene_component_frames(
                     resolve_inferred_scene_component_frames(children, puzzle_kinds);
                 }
             }
+        }
+    }
+}
+
+fn normalize_puzzle3_scene_kinds(scenes: &mut [SceneDef]) {
+    for scene in scenes {
+        for puzzle in &mut scene.state.puzzles {
+            if puzzle.kind == "puzzle" {
+                puzzle.kind = "puzzle3".to_string();
+            }
+        }
+        normalize_puzzle3_component_kinds(&mut scene.components);
+    }
+}
+
+fn normalize_puzzle3_component_kinds(components: &mut [SceneComponent]) {
+    for component in components {
+        if let SceneComponent::Frame(frame) = component {
+            if frame.kind == "puzzle" {
+                frame.kind = "puzzle3".to_string();
+            }
+        }
+        if let Some(children) = component.children_mut() {
+            normalize_puzzle3_component_kinds(children);
         }
     }
 }
@@ -479,9 +484,7 @@ fn puzzle3_scene_fixture_fields(document: &LoadedDocument) -> (Option<String>, V
     let mut level_bundle_names = Vec::new();
     let current_scene = document
         .scenes
-        .iter()
-        .find(|scene| scene.name == "title")
-        .or_else(|| document.scenes.first())
+        .first()
         .map(|scene| scene.name.as_str())
         .unwrap_or("playing");
     let mut out = String::new();
@@ -1294,18 +1297,25 @@ fn split_document_scene_logical_lines(
     let level_entries = collect_level_expansion_entries(&lines)?;
     let mut model_lines = Vec::new();
     let mut scenes = Vec::new();
+    let mut model_scene_indices = HashMap::<String, usize>::new();
     let mut i = 0;
     while i < lines.len() {
         let tokens = split_header_tokens(&lines[i]);
         if matches!(tokens.as_slice(), ["scene", ..]) {
             let (scene, next_i) = parse_scene_definition(&lines, i, &level_entries)?;
-            scenes.push(scene);
+            if let Some(index) = model_scene_indices.remove(&scene.name) {
+                scenes[index] = scene;
+            } else {
+                scenes.push(scene);
+            }
             i = next_i;
         } else if let Some((kind, name)) = model_header_name(tokens.as_slice()) {
             let (entry, default_scene, next_i) =
                 extract_default_model_scene(&logical_lines, &lines, i, kind, name)?;
             model_lines.extend(entry);
-            if let Some(scene) = default_scene {
+            if !scenes.iter().any(|scene| scene.name == name) {
+                let scene = default_scene.unwrap_or_else(|| implicit_model_scene(kind, name));
+                model_scene_indices.insert(name.to_string(), scenes.len());
                 scenes.push(scene);
             }
             i = next_i;
@@ -1341,9 +1351,6 @@ fn collect_level_expansion_entries(
                     pack: level.pack,
                 });
                 i = next_i;
-            }
-            _ if is_levels3_header_line(&lines[i]) => {
-                i = collect_levels3_expansion_entries(lines, i, &mut entries)?;
             }
             _ => i += 1,
         }
@@ -1484,53 +1491,6 @@ fn collect_levels2_expansion_entries(
     Ok(i + 1)
 }
 
-fn collect_levels3_expansion_entries(
-    lines: &[String],
-    start: usize,
-    entries: &mut Vec<LevelExpansionEntry>,
-) -> Result<usize, DiagnosticReport> {
-    let pack = parse_levels3_expansion_pack(&lines[start])?;
-    let mut namespace_count = 0usize;
-    let mut i = start + 1;
-    while i < lines.len() && !is_block_close_line(&lines[i]) {
-        let line = &lines[i];
-        if line == "legend {" {
-            let (_, next_i) = collect_authoring_entry(lines, i, AuthoringEntryOwner::GenericBlock)?;
-            i = next_i;
-            continue;
-        }
-        if puzzle_authoring::is_braced_level_header(line) || line == "{" {
-            namespace_count += 1;
-            let auto_name = puzzle_authoring::namespaced_unnamed_level_name(
-                pack.as_deref(),
-                entries.len(),
-                namespace_count,
-            );
-            let header_name = if line == "{" {
-                auto_name
-            } else {
-                parse_level_header_name_or_auto(line, auto_name)?
-            };
-            let name = braced_level_name_override_or(lines, i, header_name)?;
-            entries.push(LevelExpansionEntry {
-                name,
-                pack: pack.clone(),
-            });
-            let (_, next_i) = collect_authoring_entry(lines, i, AuthoringEntryOwner::GenericBlock)?;
-            i = next_i;
-            continue;
-        }
-        i += 1;
-    }
-    if i >= lines.len() {
-        return Err(parse_error(
-            &lines[start],
-            "levels3 block missing closing brace",
-        ));
-    }
-    Ok(i + 1)
-}
-
 fn collect_unbraced_level_entry(lines: &[String], start: usize) -> (Vec<String>, usize) {
     let mut body = Vec::new();
     let mut i = start;
@@ -1545,35 +1505,9 @@ fn collect_unbraced_level_entry(lines: &[String], start: usize) -> (Vec<String>,
     (body, i)
 }
 
-fn is_levels3_header_line(line: &str) -> bool {
-    line == "levels3 {"
-        || line
-            .strip_prefix("levels3 ")
-            .is_some_and(|rest| rest.ends_with('{'))
-}
-
-fn parse_levels3_expansion_pack(line: &str) -> Result<Option<String>, DiagnosticReport> {
-    let header = line
-        .strip_prefix("levels3")
-        .and_then(|rest| rest.strip_suffix('{'))
-        .ok_or_else(|| parse_error(line, "levels3 block must end with {"))?
-        .trim();
-    if header.is_empty() {
-        return Ok(None);
-    }
-    let parts = header.split_whitespace().collect::<Vec<_>>();
-    match parts.as_slice() {
-        [name] | [name, "of", _] => Ok(Some((*name).to_string())),
-        _ => Err(parse_error(
-            line,
-            "levels3 header must be: levels3 [name [of model]] {",
-        )),
-    }
-}
-
 fn model_header_name<'a>(tokens: &'a [&'a str]) -> Option<(&'a str, &'a str)> {
     match tokens {
-        ["puzzle", name, ..] | ["puzzle3", name, ..] => Some((tokens[0], *name)),
+        ["puzzle", name, ..] => Some((tokens[0], *name)),
         _ => None,
     }
 }
@@ -1709,33 +1643,6 @@ fn raw_brace_delta(line: &str) -> i32 {
         - line.chars().filter(|ch| *ch == '}').count() as i32
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum GameDocumentKind {
-    Puzzle2d,
-    Puzzle3d,
-    Mixed,
-}
-
-fn detect_game_document_kind(source: &str) -> Result<GameDocumentKind, DiagnosticReport> {
-    let mut has_2d = false;
-    let mut has_3d = false;
-    let document = parse_surface_structure_document(source);
-    for line in &document.lines {
-        let tokens = line.tokens.iter().map(String::as_str).collect::<Vec<_>>();
-        match (line.scope, tokens.as_slice()) {
-            (None, ["puzzle", ..]) => has_2d = true,
-            (None, ["puzzle3", ..]) => has_3d = true,
-            (_, ["levels3", ..]) => has_3d = true,
-            _ => {}
-        }
-    }
-    Ok(match (has_2d, has_3d) {
-        (true, true) => GameDocumentKind::Mixed,
-        (false, true) => GameDocumentKind::Puzzle3d,
-        _ => GameDocumentKind::Puzzle2d,
-    })
-}
-
 pub fn validate_source_profile_for_path(
     source: &str,
     path: impl AsRef<Path>,
@@ -1752,24 +1659,22 @@ pub fn validate_source_profile_for_path(
 
 fn validate_source_profile(
     source: &str,
-    profile: PuzzleSourceProfile,
+    _profile: PuzzleSourceProfile,
 ) -> Result<(), DiagnosticReport> {
-    let kind = detect_game_document_kind(source)?;
-    match (profile, kind) {
-        (PuzzleSourceProfile::Puzzle2d, GameDocumentKind::Puzzle2d)
-        | (PuzzleSourceProfile::Puzzle3d, GameDocumentKind::Puzzle3d) => Ok(()),
-        (_, GameDocumentKind::Mixed) => Err(DiagnosticReport::error(
-            "mixed 2D/3D documents are no longer supported; split 2D .puzzle and 3D .puzzle3 sources"
+    let document = parse_surface_structure_document(source);
+    if document.lines.iter().any(|line| {
+        line.scope.is_none()
+            && line
+                .tokens
+                .first()
+                .is_some_and(|token| token == "puzzle3")
+    }) {
+        return Err(DiagnosticReport::error(
+            "`puzzle3` was removed; use `puzzle <name> { ... }` and select 3D with the .puzzle3 file extension"
                 .to_string(),
-        )),
-        (PuzzleSourceProfile::Puzzle2d, GameDocumentKind::Puzzle3d) => Err(DiagnosticReport::error(
-            ".puzzle files cannot contain 3D puzzle3 or levels3 sections; use .puzzle3"
-                .to_string(),
-        )),
-        (PuzzleSourceProfile::Puzzle3d, GameDocumentKind::Puzzle2d) => Err(DiagnosticReport::error(
-            ".puzzle3 files must contain 3D puzzle3 or levels3 sections".to_string(),
-        )),
+        ));
     }
+    Ok(())
 }
 
 fn first_model_name(source: &str, kind: &str) -> Option<String> {
@@ -1913,7 +1818,7 @@ pub fn source_declares_game_entry(source: &str) -> bool {
         let trimmed = code.trim();
         if depth == 0 {
             let first = trimmed.split_whitespace().next().unwrap_or("");
-            if matches!(first, "puzzle" | "puzzle3") {
+            if first == "puzzle" {
                 return true;
             }
         }
@@ -2260,7 +2165,7 @@ fn parse_game2d_expanded_lines_with_shell_inner(
     let mut author = shell.author.clone();
     let mut homepage = shell.homepage.clone();
     let mut layer_count = None;
-    let mut empty_char = None;
+    let mut empty_char = Some('.');
     let mut named_layers = HashMap::<String, u16>::new();
     let mut catalog = Catalog::default();
     let mut query_definitions = Vec::<QueryDefinitionAst>::new();
@@ -2358,7 +2263,7 @@ fn parse_game2d_expanded_lines_with_shell_inner(
             ModelTopLevelDirective::RemovedModelPrefix => {
                 let message = match tokens.as_slice() {
                     ["model", "puzzle3", ..] => {
-                        "top-level 3D puzzle definition must be: puzzle3 <name>"
+                        "top-level 3D puzzle definition must be: puzzle <name>"
                     }
                     _ => "top-level puzzle definition must be: puzzle <name>",
                 };
@@ -2523,6 +2428,8 @@ fn parse_game2d_expanded_lines_with_shell_inner(
                 char_objects,
                 level_start_statements: body.level_start_statements,
                 level_clear_statements: body.level_clear_statements,
+                rules_before_statements: body.rules_before_statements,
+                rules_after_statements: body.rules_after_statements,
             })
         })
         .collect::<Result<Vec<_>, DiagnosticReport>>()?;
@@ -2719,6 +2626,7 @@ fn parse_game2d_expanded_lines_with_shell_inner(
                 puzzle: prepared.puzzle,
                 initial_state: parsed_level.state,
                 regions: parsed_level.regions,
+                program: programs.level_programs[index].clone(),
                 level_start_program: programs.level_starts[index].clone(),
                 level_clear_program: programs.level_clears[index].clone(),
             })
@@ -2861,6 +2769,16 @@ fn collect_dynamic_selector_warnings(
         collect_dynamic_selector_statement_warnings(statements, constant_variables, &mut warnings);
     }
     for body in level_bodies {
+        collect_dynamic_selector_statement_warnings(
+            &body.rules_before_statements,
+            constant_variables,
+            &mut warnings,
+        );
+        collect_dynamic_selector_statement_warnings(
+            &body.rules_after_statements,
+            constant_variables,
+            &mut warnings,
+        );
         collect_dynamic_selector_statement_warnings(
             &body.level_start_statements,
             constant_variables,

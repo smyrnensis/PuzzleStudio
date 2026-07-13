@@ -695,7 +695,7 @@ type = "all_cells"
 }
 }
 
-puzzle3 board3 {
+puzzle board3 {
 render {
 shade = true
 camera {

@@ -47,6 +47,25 @@ for (const token of required) {
   }
 }
 
+const puzzle3Source = await readFile(
+  "crates/lang/tests/fixtures/spec_3d_preview_contract.puzzle3",
+  "utf8",
+);
+const puzzle3Html = compile_preview(
+  puzzle3Source,
+  "spec_3d_preview_contract.puzzle3",
+  "",
+  "",
+);
+for (const token of [
+  "function schedulePuzzle3ControllerConnectedResize(entry)",
+  "entry.root?.isConnected",
+]) {
+  if (!puzzle3Html.includes(token)) {
+    throw new Error(`generated 3D editor preview is missing required connected-render contract: ${token}`);
+  }
+}
+
 const editorSource = `
 puzzle default {
 layers {

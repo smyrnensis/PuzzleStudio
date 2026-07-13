@@ -3,19 +3,20 @@ author = "Levels by David Skinner"
 
 theme = "puzzlescript"
 
-puzzle3 sokoban {
+puzzle sokoban {
 render {
 camera {
 	yaw = 0
 	pitch = 90
-	zoom = 1
+		zoom = 1
 }
+	shadow = true
 }
 
 layers {
 floor = Floor
 target = Goal
-solid = Player Box Wall
+Player Box Wall
 }
 
 groups {
@@ -75,9 +76,8 @@ layout {
 }
 }
 
-levels3 microban of sokoban {
+levels microban of sokoban {
 legend {
-. = empty
 , = Floor
 G = Floor Goal
 P = Player
@@ -93,7 +93,7 @@ level "microban 1" {
 #..B.#
 #..###
 ####..
-
+-
 ,,,,,,
 ,,G,,,
 ,,,,,,
@@ -111,7 +111,7 @@ level "microban 2" {
 #..B.#
 #....#
 ######
-
+-
 ,,,,,,
 ,,,,,,
 ,,,,,,
@@ -128,7 +128,7 @@ level "microban 3" {
 #.#..#B.#
 #....#P.#
 #########
-
+-
 ,,,,,,,,,
 ,,,,,,,,,
 ,,,,,,,,,

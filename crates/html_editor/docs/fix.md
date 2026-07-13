@@ -10,5 +10,6 @@ fix once {
 }
 ```
 
-`fix once` applies each contained rewrite as a single match instead of repeatedly applying it.
-
+`fix once` gives each contained rewrite the `once` application mode. It fixes
+the enclosed rules' defaults; it does not make the whole block a new routine or
+repeat the block as a unit.

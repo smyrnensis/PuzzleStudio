@@ -1,8 +1,9 @@
 title = "TENETEN"
 sprites {
-Floor
+Floor {
 #8fcf6f
 0
+}
 
 Floor2 {
 #0000000a
@@ -10,7 +11,8 @@ Floor2 {
 }
 
 TEN {
-#ffffff #008000
+colors = #ffffff #282828
+shape = {
 .......
 .......
 .......
@@ -32,7 +34,7 @@ TEN {
 .......
 .......
 ..000..
-..000..
+..101..
 .......
 -
 ...0...
@@ -41,7 +43,7 @@ TEN {
 ..000..
 ..000..
 ..000..
-...0...
+.......
 -
 .......
 ..000..
@@ -67,14 +69,19 @@ TEN {
 .......
 .......
 }
+}
 
 }
 
-puzzle3 TENETEN {
+puzzle TENETEN {
 
-collision_layers {
+layers {
 floor = Floor Floor2
-TEN
+solid = TEN
+}
+
+on_level_start {
+down [ no Floor | null ] -> [ Floor | ]
 }
 
 rules {
@@ -84,19 +91,20 @@ input [ TEN ] -> [ > TEN ]
 }
 
 levels {
-legend = {
+legend {
 T = TEN
 . = empty
 _ = Floor
 }
 
-level "first"
+level "first" {
 .....
 ...T.
 .....
--
-_____
-_____
-_____
+
+.....
+.....
+.....
+}
 
 }

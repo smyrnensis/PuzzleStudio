@@ -2602,7 +2602,7 @@ function findLevels3Ranges(source) {
   const ranges = [];
   for (let index = 0; index < lines.length; index += 1) {
     const code = level3dScannerCode(lines[index].raw);
-    const header = parseLevels3Header(code);
+    const header = parseLevelsHeader(code);
     if (!header) {
       continue;
     }
@@ -2624,8 +2624,8 @@ function findLevels3Ranges(source) {
   return ranges;
 }
 
-function parseLevels3Header(code) {
-  const match = String(code || "").match(/^levels3(?:\s+([A-Za-z_][\w:.]*)(?:\s+of\s+([A-Za-z_][\w:.]*))?)?\s*\{$/);
+function parseLevelsHeader(code) {
+  const match = String(code || "").match(/^levels(?:\s+([A-Za-z_][\w:.]*)(?:\s+of\s+([A-Za-z_][\w:.]*))?)?\s*\{$/);
   if (!match) {
     return null;
   }
@@ -2903,7 +2903,7 @@ function currentLevel3dSourceLocation() {
     }
   }
   const range = findLevels3InsertionRange(source, bundle);
-  return range ? { document, start: range.start, key: `${range.bundle}:levels3` } : null;
+  return range ? { document, start: range.start, key: `${range.bundle}:levels` } : null;
 }
 
 function loadLevel3dFromSourcePosition(position, options = {}) {
@@ -5978,7 +5978,7 @@ function addLevel3dToSource() {
   const bundle = sanitizeLevel3dBundle(level3dBundleInput?.value || "");
   const nextSource = insertLevel3d(level3dEditorSource(sourceDocument), levelName, level3dSourceData(), bundle);
   if (!nextSource) {
-    setLevel3dActionStatus(`No levels3 block named ${bundle}`, "is-error");
+    setLevel3dActionStatus(`No levels block named ${bundle}`, "is-error");
     return;
   }
   applyLevel3dSourceChange(sourceDocument, nextSource);

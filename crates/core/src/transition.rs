@@ -6,8 +6,9 @@ use crate::ids::{ConditionId, InputId, MarkId, ObjectId, RuleId};
 use crate::patch::{CorePatch, CorePatchOp, Patch, PatchError};
 use crate::state::State;
 use puzzle_kernel::{
-    GridCoord, GridOffset, TransitionOutcome as KernelTransitionOutcome,
-    bind_object as bind_object_shared, bound_object as bound_object_shared,
+    GridCoord, GridOffset, ProgramApplyOutcome, ProgramBackend,
+    TransitionOutcome as KernelTransitionOutcome, bind_object as bind_object_shared,
+    bound_object as bound_object_shared,
     collect_component_placements as collect_component_placements_shared,
     complete_component_placements as complete_component_placements_shared,
     placement_object_binding as placement_object_binding_shared,
@@ -431,135 +432,110 @@ fn apply_step(
     commands: &mut Vec<TransitionCommand>,
     collect_trace: bool,
 ) -> TransitionResult<ApplyOutcome> {
-    match step {
-        RuleStep::Rule(rule) => apply_rule_step(
-            game,
+    let mut backend = CoreProgramBackend {
+        game,
+        context,
+        fired_rules,
+        patches,
+        commands,
+        collect_trace,
+    };
+    let outcome = puzzle_kernel::execute_program(
+        &mut backend,
+        current,
+        std::slice::from_ref(step),
+        context.local_frame,
+        UNTIL_STABLE_REPEAT_LIMIT,
+    )?;
+    Ok(ApplyOutcome {
+        fired: outcome.fired,
+        cancelled: outcome.cancelled,
+    })
+}
+
+#[derive(Clone)]
+struct CoreProgramSnapshot {
+    fired_rules: Vec<RuleId>,
+    patches: Vec<Patch>,
+    commands: Vec<TransitionCommand>,
+}
+
+struct CoreProgramBackend<'a, 'context> {
+    game: &'a CompiledGame,
+    context: &'a TransitionContext<'context>,
+    fired_rules: &'a mut Vec<RuleId>,
+    patches: &'a mut Vec<Patch>,
+    commands: &'a mut Vec<TransitionCommand>,
+    collect_trace: bool,
+}
+
+impl ProgramBackend<Rule, RuleCondition, LocalFrame<ObjectId>, State>
+    for CoreProgramBackend<'_, '_>
+{
+    type Error = TransitionError;
+    type Snapshot = CoreProgramSnapshot;
+
+    fn condition_accepts(
+        &mut self,
+        state: &State,
+        condition: &RuleCondition,
+        frame: Option<&LocalFrame<ObjectId>>,
+    ) -> bool {
+        let context = TransitionContext {
+            local_frame: frame,
+            ..*self.context
+        };
+        condition_accepts(self.game, condition, &context, state)
+    }
+
+    fn apply_rule(
+        &mut self,
+        state: &mut State,
+        rule: &Rule,
+        frame: Option<&LocalFrame<ObjectId>>,
+    ) -> TransitionResult<ProgramApplyOutcome> {
+        let context = TransitionContext {
+            local_frame: frame,
+            ..*self.context
+        };
+        let outcome = apply_rule_step(
+            self.game,
             rule,
-            context,
-            current,
-            fired_rules,
-            patches,
-            commands,
-            collect_trace,
-        ),
-        RuleStep::ConditionalBlock { condition, steps } => {
-            if condition_accepts(game, condition, context, current) {
-                apply_block_once(
-                    game,
-                    steps,
-                    context,
-                    current,
-                    fired_rules,
-                    patches,
-                    commands,
-                    collect_trace,
-                )
-            } else {
-                Ok(ApplyOutcome::idle())
-            }
+            &context,
+            state,
+            self.fired_rules,
+            self.patches,
+            self.commands,
+            self.collect_trace,
+        )?;
+        Ok(ProgramApplyOutcome {
+            fired: outcome.fired,
+            cancelled: outcome.cancelled,
+        })
+    }
+
+    fn checkpoint(&self) -> Self::Snapshot {
+        CoreProgramSnapshot {
+            fired_rules: self.fired_rules.clone(),
+            patches: self.patches.clone(),
+            commands: self.commands.clone(),
         }
-        RuleStep::ConditionalBranch {
-            condition,
-            then_steps,
-            else_steps,
-        } => {
-            let selected_steps = if condition_accepts(game, condition, context, current) {
-                then_steps
-            } else {
-                else_steps
-            };
-            apply_block_once(
-                game,
-                selected_steps,
-                context,
-                current,
-                fired_rules,
-                patches,
-                commands,
-                collect_trace,
-            )
-        }
-        RuleStep::Block {
-            application,
-            stop_condition,
-            steps,
-        } => match application {
-            RuleApplication::Once | RuleApplication::OnceAll | RuleApplication::OncePerLevel => {
-                apply_block_once(
-                    game,
-                    steps,
-                    context,
-                    current,
-                    fired_rules,
-                    patches,
-                    commands,
-                    collect_trace,
-                )
-            }
-            RuleApplication::Random => apply_block_random(
-                game,
-                steps,
-                context,
-                current,
-                fired_rules,
-                patches,
-                commands,
-                collect_trace,
-            ),
-            RuleApplication::UntilStable => apply_block_until_stable(
-                game,
-                stop_condition.as_ref(),
-                steps,
-                context,
-                current,
-                fired_rules,
-                patches,
-                commands,
-                collect_trace,
-            ),
-        },
-        RuleStep::AfterTriggered { steps, then_steps } => {
-            let mut outcome = apply_block_once(
-                game,
-                steps,
-                context,
-                current,
-                fired_rules,
-                patches,
-                commands,
-                collect_trace,
-            )?;
-            if outcome.fired && !outcome.cancelled {
-                let then_outcome = apply_block_once(
-                    game,
-                    then_steps,
-                    context,
-                    current,
-                    fired_rules,
-                    patches,
-                    commands,
-                    collect_trace,
-                )?;
-                outcome.merge(then_outcome);
-            }
-            Ok(outcome)
-        }
-        RuleStep::LocalFrame { frame, steps } => {
-            let scoped_context = TransitionContext {
-                local_frame: Some(frame),
-                ..*context
-            };
-            apply_block_once(
-                game,
-                steps,
-                &scoped_context,
-                current,
-                fired_rules,
-                patches,
-                commands,
-                collect_trace,
-            )
-        }
+    }
+
+    fn restore(&mut self, snapshot: &Self::Snapshot) {
+        *self.fired_rules = snapshot.fired_rules.clone();
+        *self.patches = snapshot.patches.clone();
+        *self.commands = snapshot.commands.clone();
+    }
+
+    fn choose_random(&self, state: &State, candidate_count: usize) -> usize {
+        random_choice_index(
+            self.game,
+            state,
+            self.context.input,
+            RuleId(0),
+            candidate_count,
+        )
     }
 }
 
@@ -880,36 +856,6 @@ fn apply_rule_step(
     }
 }
 
-fn apply_block_once(
-    game: &CompiledGame,
-    steps: &[RuleStep],
-    context: &TransitionContext,
-    current: &mut State,
-    fired_rules: &mut Vec<RuleId>,
-    patches: &mut Vec<Patch>,
-    commands: &mut Vec<TransitionCommand>,
-    collect_trace: bool,
-) -> TransitionResult<ApplyOutcome> {
-    let mut outcome = ApplyOutcome::idle();
-    for step in steps {
-        let step_outcome = apply_step(
-            game,
-            step,
-            context,
-            current,
-            fired_rules,
-            patches,
-            commands,
-            collect_trace,
-        )?;
-        outcome.merge(step_outcome);
-        if outcome.cancelled {
-            break;
-        }
-    }
-    Ok(outcome)
-}
-
 fn apply_block_once_segment<F>(
     game: &CompiledGame,
     steps: &[RuleStep],
@@ -1188,64 +1134,6 @@ fn apply_block_random(
     Ok(ApplyOutcome {
         fired: true,
         cancelled: candidate.cancelled,
-    })
-}
-
-fn apply_block_until_stable(
-    game: &CompiledGame,
-    stop_condition: Option<&RuleCondition>,
-    steps: &[RuleStep],
-    context: &TransitionContext,
-    current: &mut State,
-    fired_rules: &mut Vec<RuleId>,
-    patches: &mut Vec<Patch>,
-    commands: &mut Vec<TransitionCommand>,
-    collect_trace: bool,
-) -> TransitionResult<ApplyOutcome> {
-    let mut seen_states = StateHistory::from_current(current);
-    let mut fired_any = false;
-    let mut repeat_count = 0;
-
-    loop {
-        if stop_condition
-            .is_some_and(|condition| condition_accepts(game, condition, context, current))
-        {
-            break;
-        }
-        let before_hash = current.hash();
-        let before = current.clone();
-        let pass_outcome = apply_block_once(
-            game,
-            steps,
-            context,
-            current,
-            fired_rules,
-            patches,
-            commands,
-            collect_trace,
-        )?;
-        if pass_outcome.cancelled {
-            return Ok(pass_outcome);
-        }
-        if !pass_outcome.fired {
-            break;
-        }
-        fired_any = true;
-        if current.hash() == before_hash && *current == before {
-            break;
-        }
-        if !seen_states.insert(current) {
-            break;
-        }
-        repeat_count += 1;
-        if repeat_count >= UNTIL_STABLE_REPEAT_LIMIT {
-            break;
-        }
-    }
-
-    Ok(ApplyOutcome {
-        fired: fired_any,
-        cancelled: false,
     })
 }
 
@@ -1770,11 +1658,6 @@ impl ApplyOutcome {
             fired: false,
             cancelled: false,
         }
-    }
-
-    fn merge(&mut self, other: Self) {
-        self.fired |= other.fired;
-        self.cancelled |= other.cancelled;
     }
 }
 
