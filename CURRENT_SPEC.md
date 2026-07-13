@@ -20,7 +20,7 @@ Top-level metadata は `title = <text>` と省略可能な `subtitle = <text>` /
 
 ## Game Entry And Imports
 
-ゲーム folder は package の単位で、実行 entry は top-level `puzzle` または `puzzle3` model を宣言する `.puzzle` / `.puzzle3` とする。`title` / `subtitle` / `author` / `homepage` は表示 metadata であり、entry 資格ではない。
+ゲーム folder は package の単位で、実行 entry は top-level `puzzle` model を宣言する `.puzzle` / `.puzzle3` とする。model の次元は拡張子で決まり、`.puzzle3` でも宣言は `puzzle <name>` と書く。旧 `puzzle3` 宣言は error。`title` / `subtitle` / `author` / `homepage` は表示 metadata であり、entry 資格ではない。
 
 ```txt
 games/fixban/
@@ -89,7 +89,7 @@ main object と display object は layer order 上は同じ列に並ぶが、同
 
 ```txt
 routine slide {
-input directions [ Player ] -> [ > Player ]
+input [ Player ] -> [ > Player ]
 move
 }
 ```
@@ -104,7 +104,7 @@ rewrite 行も application を持つ。plain rewrite のデフォルトも `repe
 
 ```txt
 routine direct_slide once {
-once input directions [ Player | ] -> [ | Player ]
+once input [ Player | ] -> [ | Player ]
 }
 ```
 
@@ -130,14 +130,14 @@ Control word の境界:
 - lifecycle hook は `on_level_start { ... }` / `on_level_clear { ... }`。puzzle lifecycle point なので scene transition arrow にはしない。
 - `on_level_start` is runtime lifecycle, not parser materialization: raw `Level.initial_state` remains the parsed map, and `puzzle-play` / standalone HTML apply the hook on level entry, restart, and level navigation. Rule emissions such as `message` and `sfx` are collected at that runtime point.
 - level body can add level-local lifecycle behavior. In `level { ... }`, `on_level_start { ... }` / `on_level_clear { ... }` attach statement lists to that level only. As sugar, `message` / `sfx` / `wait` before the first ASCII map row become level-local `on_level_start`, and the same commands after the map become level-local `on_level_clear`.
-- level ASCII layer composition is language lowering, not runtime or renderer behavior. Within one blank-line-delimited region, a single `+` line separates same-size ASCII layers. Empty chars are transparent; non-empty chars are placed into the same compiled state cell. When multiple layer maps place objects into the same cell and core layer, the later map is the upper layer and replaces the earlier object for that core layer before the compiled state is built. Blank lines still split auto-placed regions, so `+` only composes adjacent maps without blank lines.
+- level ASCII layer composition is language lowering, not runtime or renderer behavior. Within one blank-line-delimited region, a single `+` line separates same-size ASCII layers. Reserved `.` cells are transparent; non-empty chars are placed into the same compiled state cell. When multiple layer maps place objects into the same cell and core layer, the later map is the upper layer and replaces the earlier object for that core layer before the compiled state is built. Blank lines still split auto-placed regions, so `+` only composes adjacent maps without blank lines.
 - component behavior は component が入力の意味を所有する。`level_menu` は cursor 移動と enter を所有するため、author は `cursor.*` や `emit` を書かない。
 
 例:
 
 ```txt
 rules {
-input directions [ Player ] -> [ > Player ]
+input [ Player ] -> [ > Player ]
 [ > Player | Box ] -> [ > Player | > Box ]
 move
 }
@@ -149,9 +149,9 @@ anonymous inline rewrite は application prefix を持てる。
 
 ```txt
 rules {
-input directions [ Player ] -> [ > Player ]
+input [ Player ] -> [ > Player ]
 move
-repeat input directions [ Fire | Wood ] -> [ Fire | Fire ]
+repeat input [ Fire | Wood ] -> [ Fire | Fire ]
 }
 ```
 
@@ -160,8 +160,8 @@ repeat input directions [ Fire | Wood ] -> [ Fire | Fire ]
 ```txt
 rules {
 repeat {
-input directions [ Fire | Wood ] -> [ Fire | Fire ]
-input directions [ Fire | Grass ] -> [ Fire | Fire ]
+input [ Fire | Wood ] -> [ Fire | Fire ]
+input [ Fire | Grass ] -> [ Fire | Fire ]
 }
 }
 ```
@@ -282,7 +282,7 @@ OrientationExpr::Neutral
 
 `directions` / `horizontal` / `vertical` は orientation set prefix として使える。runtime で式評価するのではなく、lowering でそれぞれの方向 variants に展開する。`horizontal [ ... ]` は `left [ ... ]` と `right [ ... ]`、`directions [ ... ]` は `up` / `down` / `left` / `right` の rewrite として読む。
 
-`input horizontal [ ... ]` / `input directions [ ... ]` は input guard 付きの orientation set。通常の入力方向移動では、この形で builtin movement mark を付け、標準 `move` routine で実際の移動と collision を処理する。これは lowering 上、現在の input が set の member だったときだけその member の oriented rewrite を評価する。
+bare `input [ ... ]` は標準4方向の input guard 付き orientation を表す。`input <direction-set> [ ... ]` は対象集合を指定し、`input horizontal [ ... ]` / `input vertical [ ... ]` / `input directions [ ... ]` と書ける。通常の4方向入力移動では bare `input` で builtin movement mark を付け、標準 `move` routine で実際の移動と collision を処理する。lowering 上は、現在の input が対象 set の member だったときだけ、その member の oriented rewrite を評価する。
 
 prefix なしの単独セル pattern は neutral として扱い、offset を方向回転しない。
 
@@ -374,7 +374,7 @@ d [ d l | no l ] -> [ | l ]
 transition(state, input) -> state
 ```
 
-Input guard と `input directions` は transition context の input 名を参照する。
+Input guard、bare `input`、direction set を指定する `input directions` は transition context の input 名を参照する。
 
 方向 set に対して同じ rewrite を書く場合は、orientation set prefix を使える。
 
@@ -440,13 +440,13 @@ Puzzle/model 内の `render` block では `tween = true` が move write に対�
 
 scene は local state を持てる。`layout` block は scene-local state slot と表示 component をまとめて定義する。
 
-scene は 2D / 3D model の所有者ではなく、presentation と flow の所有者である。root layout、component tree、scene input、scene transition は model の次元数に依存しない。同じ scene 構文の中で、model window component だけが `puzzle <slot>` または `puzzle3 <slot>` として model-specific になる。
+scene は 2D / 3D model の所有者ではなく、presentation と flow の所有者である。root layout、component tree、scene input、scene transition は model の次元数に依存しない。model window component は次元にかかわらず `puzzle <slot>` と書く。
 
 `layout` は component ではなく scene root layout block。`layout { ... }` 直下に component を改行で並べる形は、暗黙の `column` として扱う。作者は通常、細かい幅・高さ・gap を書かず、どの component があり、どの選択肢が `row` / `column` / matrix なのかを書く。root scene の論理サイズ、標準 gap、文字・button metrics は default / theme / renderer が持つ。
 
-top-level `puzzle <name>` / `puzzle3 <name>` は、同名の `scene <name>` が明示されていない場合に限り、同名の playable scene を自動追加する。2D では `state { puzzle <name> }`、`layout { <name> }`、`rules { step <name> }` 相当、3D では同じ slot 名で `puzzle3` model window を置く scene 相当になる。明示された `scene <name>` は override とみなし、自動 scene は追加しない。
+top-level `puzzle <name>` は、同名の `scene <name>` が明示されていない場合に限り、同名の playable scene を自動追加する。2D では `state { puzzle <name> }`、`layout { <name> }`、`rules { step <name> }` 相当、3D では同じ slot 名で `puzzle` model window を置く scene 相当になる。明示された `scene <name>` は override とみなし、自動 scene は追加しない。
 
-renderer は component を sizing class で扱う。`heading` / `subheading` / `text` / `caption` は一つのtext componentのroleで、既定では`space fit`として親から与えられた幅の中で高さを測る。`puzzle` / `puzzle3` / `frame` は既定で`space fill 1`のratio contentで、割り当てられたslot内でaspect ratioを守ってcontainされる。`level_menu` / `menu` / `for` はcollection content、`row` / `column` / `box` はcontainerである。
+renderer は component を sizing class で扱う。`heading` / `subheading` / `text` / `caption` は一つのtext componentのroleで、既定では`space fit`として親から与えられた幅の中で高さを測る。`puzzle` / `frame` は既定で`space fill 1`のratio contentで、割り当てられたslot内でaspect ratioを守ってcontainされる。`level_menu` / `menu` / `for` はcollection content、`row` / `column` / `box` はcontainerである。
 
 `choice` は標準 UI cursor で選ばれる主選択肢、`button` は pointer や明示 key binding で押す補助操作である。`choice` だけが logical focus graph に入る。`button` は focus graph に入らない。すべてのtext roleはcellを占有するnon-focusable item。`layout` 直下は暗黙column、`row`はchild footprintを横連結、`column` / `box`は縦連結としてlogical gridに投影する。方向入力は同じ行または同じ列の次のfocusable `choice`にだけ移動する。
 
@@ -475,7 +475,7 @@ Model window component keywords:
 
 ```txt
 puzzle   // 2D puzzle model window
-puzzle3  // 3D puzzle model window
+puzzle  // 3D puzzle model window
 ```
 
 `panel` は component keyword ではない。styled panel が必要な場合も、文法上は `box` に theme / adapter 側の style を対応させる。
@@ -505,10 +505,10 @@ step sokoban
 ```txt
 scene playing3d {
 state {
-puzzle3 board = push3d
+puzzle board = push3d
 }
 layout {
-puzzle3 board
+puzzle board
 row {
 button "Restart" -> board.restart
 button "Levels" -> goto level_select
@@ -518,6 +518,8 @@ button "Levels" -> goto level_select
 ```
 
 The examples differ only at the model slot initializer and model window component. The implicit vertical stack, buttons, and scene effects are shared scene concepts.
+
+開始 scene は top-level の明示順で決める。`scene` に加えて `puzzle` が生成する同名 scene もその宣言位置で数え、最初の scene を開く。title scene を既定表示にするには、その `scene` を model 宣言より前に置く。adapter は `title` という名前や puzzle component の有無から開始 scene を上書きしない。
 
 2D puzzle の renderer 初期値は puzzle 内の `render` が所有する。現時点では `grid { occupied_cells }` / `grid { all_cells }` を受け付け、前者は object が存在する cell、後者は空 cell を含む全 cell の外周を表示する読み取り補助として扱う。これは floor、collision、rule、win condition、level data には影響しない。省略時は表示しない。
 
@@ -531,10 +533,10 @@ occupied_cells
 }
 ```
 
-3D puzzle の renderer 初期値は puzzle3 内の `render` が所有する。camera は scene layout や rule state ではないため、canonical syntax では puzzle3 top scope の個別設定ではなく `render` 内の `camera` group に書く。設定 group は `camera yaw=34 pitch=38 interactive_look` の inline 形と、`camera { yaw = 34 ... }` の block 形を同じ意味として扱う。bare option は有効化、値を持つ option は `key=value` で書く。
+3D puzzle の renderer 初期値は puzzle 内の `render` が所有する。camera は scene layout や rule state ではないため、canonical syntax では puzzle top scope の個別設定ではなく `render` 内の `camera` group に書く。設定 group は `camera yaw=34 pitch=38 interactive_look` の inline 形と、`camera { yaw = 34 ... }` の block 形を同じ意味として扱う。bare option は有効化、値を持つ option は `key=value` で書く。
 
 ```txt
-puzzle3 push3d {
+puzzle push3d {
 render {
 camera yaw=34 pitch=38 zoom=1 interactive_look interactive_zoom
 grid occupied_cells
@@ -552,7 +554,7 @@ shade
 
 3D `zoomscreen` / `smoothscreen` は `render { viewport { ... } }` が所有する focus-follow framing 設定である。`zoomscreen <w> <d>` は focus object を中心に `w x d x full` の仮想 world-space box を置き、その box を現在の camera yaw/pitch で投影して画面に収まる最大倍率にする。`full` は occupied height ではなく `level.size.height` を使う。`zoomscreen <w> <d> <h>` は高さも focus 周りの `h` cell として扱う。`smoothscreen` は同じ desired framing を作るが、描画用 view target / scale だけが遅れて追従する。どちらも culling ではなく framing であり、外側 object を消さない。`focus <selector>` は追従対象で、省略時は `Player`。
 
-Scene layout は `puzzle3` を固定 4:3 display として扱う。`puzzle3` component は可変 window ではなく、scene から割り当てられた display の内側に 3D visual を描く。scene は level の幅、focus object、`zoomscreen` の有無、投影後の見え方を参照して layout を決めてはいけない。`zoomscreen` の fitting は、親から渡された frame `W x H` と viewport 指定の cell frame `W cells x H cells` から決まる明確な計算であり、DOM や scene layout state を読まない関数として扱う。
+Scene layout は `puzzle` を固定 4:3 display として扱う。`puzzle` component は可変 window ではなく、scene から割り当てられた display の内側に 3D visual を描く。scene は level の幅、focus object、`zoomscreen` の有無、投影後の見え方を参照して layout を決めてはいけない。`zoomscreen` の fitting は、親から渡された frame `W x H` と viewport 指定の cell frame `W cells x H cells` から決まる明確な計算であり、DOM や scene layout state を読まない関数として扱う。
 
 3D model `rules` では `set yaw = <deg>` / `set pitch = <deg>` / `set zoom = <n>` を view-state emission として書ける。`reset_camera` は camera view を `render { camera { ... } }` の初期値に戻す。これらは `sfx` と同じく rule 発火に付随する presentation command であり、puzzle state、solver key、win condition には入らない。
 
@@ -562,13 +564,13 @@ Scene layout は `puzzle3` を固定 4:3 display として扱う。`puzzle3` com
 
 `pixelate` / `pixelate scale=4` は 3D canvas の描画後 pixel 化 postprocess を有効にする。`scale` は一度縮小する倍率で、省略時は `4`。省略時は pixel 化しない。
 
-3D object は、その `puzzle3` model に属する `sprites` に同名 sprite が定義されている場合だけ voxel sprite を描く。sprite 未指定の object に暗黙の cube や色は割り当てない。位置や占有を読みたい場合は `grid occupied_cells` などの debug 表示を使う。
+3D object は、その `puzzle` model に属する `sprites` に同名 sprite が定義されている場合だけ voxel sprite を描く。sprite 未指定の object に暗黙の cube や色は割り当てない。位置や占有を読みたい場合は `grid occupied_cells` などの debug 表示を使う。
 
-sprite は2D/3D共通の時間 × Z × Y × X model を持つ。2D sprite は depth 1 の特殊例である。`>` だけの行が次の animation frame、`-` だけの行が同じ frame 内の次の -Z layer を表し、shape 内に空行は許さない。3D sprite も2Dと同じ `sprites` entry、palette、`shapes` table、`shape =` propertyを使う。resource の dimension は `sprites` keyword ではなく、`of <model>` または所有する `puzzle` / `puzzle3` model から決定する。2D owner では `-` を明示的に拒否する。色だけなら2Dでは単色 cell、3Dでは1x1x1 filled cubeになる。
+sprite は2D/3D共通の時間 × Z × Y × X model を持つ。2D sprite は depth 1 の特殊例である。`>` だけの行が次の animation frame、`-` だけの行が同じ frame 内の次の -Z layer を表し、shape 内に空行は許さない。3D sprite も2Dと同じ `sprites` entry、palette、`shapes` table、`shape =` propertyを使う。resource の dimension は `sprites` keyword ではなく、`of <model>` または所有する `puzzle` / `puzzle` model から決定する。2D owner では `-` を明示的に拒否する。色だけなら2Dでは単色 cell、3Dでは1x1x1 filled cubeになる。
 
-`interactive_look` は semantic input ではない。親 scene は click/drag を 3D camera 用として特別扱いせず、raw input を通常どおり focused scene と layout/hit-test に従って component へ配信する。`puzzle3` component は、自分の表示 box 内で始まった pointer drag を取得してよい。`interactive_look` を書いたときだけ、その gesture を camera yaw/pitch の view-state 更新として解釈する。これは model `rules` の `input` には渡らず、`if input == ...`、undo、restart、transition state、win condition には影響しない。
+`interactive_look` は semantic input ではない。親 scene は click/drag を 3D camera 用として特別扱いせず、raw input を通常どおり focused scene と layout/hit-test に従って component へ配信する。`puzzle` component は、自分の表示 box 内で始まった pointer drag を取得してよい。`interactive_look` を書いたときだけ、その gesture を camera yaw/pitch の view-state 更新として解釈する。これは model `rules` の `input` には渡らず、`if input == ...`、undo、restart、transition state、win condition には影響しない。
 
-pointer drag の所有者は開始点で決まる。pointer down が `puzzle3` の box 内なら、release/cancel まではその component が gesture を capture してよく、途中で pointer が box 外へ出ても同じ drag として継続する。例外は modal、disabled component、overlay、明示的な pointer capture、scene-level gesture など、より具体的な所有者がある場合だけである。
+pointer drag の所有者は開始点で決まる。pointer down が `puzzle` の box 内なら、release/cancel まではその component が gesture を capture してよく、途中で pointer が box 外へ出ても同じ drag として継続する。例外は modal、disabled component、overlay、明示的な pointer capture、scene-level gesture など、より具体的な所有者がある場合だけである。
 
 `scene puzzle [name]` は puzzle state を主モデルに持つ playable scene。`name` 省略時は `playing`。中の `layers` は board/object layer、`layout` は画面配置を表す。scene-local な puzzle slot を明示しない場合は、`<name>` slot が暗黙に `puzzle <name>` として用意される。`board` は予約 slot 名ではない。`input <name...> { update <slot> }` は各 semantic input をその puzzle slot の transition に適用する scene transition へ lowering する。`if win_conditions { ... }` のような unqualified condition は primary puzzle slot の `<slot>.win_conditions` として解決できるが、通常の level progression には使わない。scene transition の `<slot>.<name>` は named condition を先に見て、存在しなければ `<slot>` の var `<name>` を truthy 判定する。
 
@@ -643,7 +645,7 @@ puzzle rule でも `win`、`restart`、`next_level`、`again`、`message`、`sfx
 
 level list は `level_menu` または明示的な `for level in levels` projection で表す。`for` は単なる layout projection であり、cursor 移動や confirm 動作は所有しない。
 
-3D scene の `keys { ... }` も 2D と同じ shared scene contract で扱う。`keys` は `<key...> -> <routine-or-effect>` の scene shortcut、または model/component が読む semantic input への owner-scoped mapping。model-specific input interpretation は `puzzle` / `puzzle3` component または model runtime が所有する。
+3D scene の `keys { ... }` も 2D と同じ shared scene contract で扱う。`keys` は `<key...> -> <routine-or-effect>` の scene shortcut、または model/component が読む semantic input への owner-scoped mapping。model-specific input interpretation は `puzzle` / `puzzle` component または model runtime が所有する。
 
 ## Variables
 
@@ -827,7 +829,7 @@ shape mark:kind
 }
 ```
 
-2Dは`translate [world|local] <vec2>`と`rotate [world|local] <angle>`、3Dは`translate [world|local] <vec3>`と`rotate [world|local] <angle> around <direction-or-vec3>`を使う。world操作はaffine変換へ左合成、local操作は右合成する。旧`offset`、`rotate from`、`rotate using`、`transform` nodeは受理しない。
+2Dは`translate [world|local] <vec2>`と`rotate [world|local] <angle> [from <angle>]`、3Dは`translate [world|local] <vec3>`と`rotate [world|local] <angle> around <direction-or-vec3>`を使う。2D の `from` は左側の angle expression から基準 angle を引く sugar で、`rotate directions from up` は `rotate (directions - up)` と同じ。world操作はaffine変換へ左合成、local操作は右合成する。主 angle を欠く旧`rotate from <angle>`、旧`rotate using`、`offset`、`transform` nodeは受理しない。
 
 cell は visible objects の有限集合。実装は layer-slot 方式。
 
@@ -843,7 +845,7 @@ RHS cell が `=` だけなら、対応する LHS cell へ parse/lowering 時に�
 `=` は RHS 専用で、LHS / condition pattern には置けず、同じ cell で他 token と混ぜられない。
 
 ```txt
-input directions [ Player ] -> [ > Player ]
+input [ Player ] -> [ > Player ]
 move
 ```
 
@@ -853,7 +855,7 @@ move
 group {
 blocked = Wall Box
 }
-input directions [ Player | no blocked ] -> [ | Player ]
+input [ Player | no blocked ] -> [ | Player ]
 ```
 
 右辺で object を追加するセルは、その object の layer が空いていることを暗黙に要求する。
@@ -921,6 +923,18 @@ tag slot label を付ける。single-slot schema では `[ Obj:* ] -> captured =
 単体参照は読まず、`*#1` または `kind#1` のように capture key 全体を書く。
 capture を puzzle `var` update value として使う場合は、tag value が `true` / `false` /
 integer として読める必要がある。
+
+object/group selector、schema tag selector、movement mark set は、rewrite-local な
+集合 binding として同じ解決規約を持つ。左辺は concrete value の capture 宣言、右辺は
+capture reference。解決優先順位は明示 `#label`、同一 occurrence、一意な compatible
+capture。複数候補は ambiguous error、候補なしは unbound error。negated selector は
+capture を作らない。`for <binding> in <set>` は rewrite capture ではなく lexical な
+列挙であり、この規約の対象外。
+
+movement set の `directions` / `horizontal` / `vertical` も出現ごとの独立 cartesian
+展開にはしない。`[ directions A ] -> [ directions A directions B ]` の右辺は、左辺で
+一致した同じ concrete direction を参照する。複数の独立 capture は
+`directions#1` / `directions#2` のように label を付ける。
 
 同じ selector が rewrite 左辺と右辺に出る場合、右辺は左辺で一致した concrete object を保持する。
 
@@ -990,7 +1004,7 @@ level warmup
 
 `empty` は object ではなく、何もない cell を表す予約語。
 
-3D `levels3` では `.` が empty 文字として予約されており、`legend` に `. = empty` を書かなくても空 cell として読まれる。`_ = empty` のように別文字を empty にする書き方や、`. = Floor` のように `.` を object に割り当てる書き方は rejected syntax。floor などの実体 object は `, = Floor` のように別の文字へ割り当てる。
+2D / 3D に共通の `levels` では `.` が empty 文字として予約されており、`legend` に `. = empty` を書かなくても空 cell として読まれる。`. = empty` は同じ契約を明示する表記として受け入れる。`_ = empty` のように別文字を empty にする書き方や、`. = Floor` のように `.` を object に割り当てる書き方は rejected syntax。floor などの実体 object は `, = Floor` のように別の文字へ割り当てる。
 
 level:
 

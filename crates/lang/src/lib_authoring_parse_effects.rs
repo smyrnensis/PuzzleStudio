@@ -636,7 +636,7 @@ pub(crate) enum SceneStateLhsSyntax {
 
 pub(crate) fn scene_state_lhs_syntax(tokens: &[&str]) -> Option<(usize, SceneStateLhsSyntax)> {
     match tokens {
-        ["puzzle" | "puzzle3", name, "=", ..] if is_identifier(name) => {
+        ["puzzle", name, "=", ..] if is_identifier(name) => {
             Some((1, SceneStateLhsSyntax::PuzzleSlot))
         }
         ["var" | "const", name, "=", ..] if is_identifier(name) => {

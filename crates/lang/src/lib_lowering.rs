@@ -46,6 +46,7 @@ struct LoweredPrograms {
     last_level_clear: Option<Vec<RuleStep>>,
     level_starts: Vec<Option<Vec<RuleStep>>>,
     level_clears: Vec<Option<Vec<RuleStep>>>,
+    level_programs: Vec<Vec<RuleStep>>,
     display: Option<Vec<RuleStep>>,
     visual_rules: Vec<RuleId>,
     rule_animations: HashMap<RuleId, Vec<RuleAnimation>>,
@@ -201,7 +202,29 @@ fn lower_programs(
     let display = None;
     let mut level_starts = Vec::with_capacity(level_bodies.len());
     let mut level_clears = Vec::with_capacity(level_bodies.len());
+    let mut level_programs = Vec::with_capacity(level_bodies.len());
     for level in level_bodies {
+        let mut context = StatementLoweringContext::default();
+        context.input_allowed = true;
+        let before = match lowerer.lower_statements(&level.rules_before_statements, &context) {
+            Ok(steps) => steps,
+            Err(report) => {
+                diagnostics.extend(report.into_diagnostics());
+                Vec::new()
+            }
+        };
+        let after = match lowerer.lower_statements(&level.rules_after_statements, &context) {
+            Ok(steps) => steps,
+            Err(report) => {
+                diagnostics.extend(report.into_diagnostics());
+                Vec::new()
+            }
+        };
+        let mut effective = before;
+        effective.extend(program.as_deref().unwrap_or_default().iter().cloned());
+        effective.extend(after);
+        level_programs.push(effective);
+
         let mut context = StatementLoweringContext::default();
         context.input_allowed = false;
         context.input_forbidden_context = Some("level on_level_start");
@@ -244,6 +267,7 @@ fn lower_programs(
         last_level_clear,
         level_starts,
         level_clears,
+        level_programs,
         display,
         visual_rules: lowerer.visual_rules,
         rule_animations: lowerer.rule_animations,
@@ -303,6 +327,18 @@ fn collect_program_reference_diagnostics(
         );
     }
     for level in level_bodies {
+        collect_statement_reference_diagnostics(
+            &level.rules_before_statements,
+            definitions_by_name,
+            &mut Vec::new(),
+            &mut diagnostics,
+        );
+        collect_statement_reference_diagnostics(
+            &level.rules_after_statements,
+            definitions_by_name,
+            &mut Vec::new(),
+            &mut diagnostics,
+        );
         collect_statement_reference_diagnostics(
             &level.level_start_statements,
             definitions_by_name,
@@ -2946,15 +2982,16 @@ impl<'a> ProgramLowerer<'a> {
 }
 
 fn once_alternative_chain(patterns: Vec<Pattern>, rules: Vec<RuleStep>) -> RuleStep {
-    let mut else_steps = Vec::new();
-    for (pattern, rule) in patterns.into_iter().zip(rules).rev() {
-        else_steps = vec![RuleStep::ConditionalBranch {
-            condition: RuleCondition::AnyMatches(vec![pattern]),
-            then_steps: vec![rule],
-            else_steps,
-        }];
-    }
-    else_steps
-        .pop()
+    let alternatives = patterns
+        .into_iter()
+        .zip(rules)
+        .map(|(pattern, step)| {
+            let RuleStep::Rule(rule) = step else {
+                unreachable!("lowered rewrite alternatives must be rule steps");
+            };
+            (RuleCondition::AnyMatches(vec![pattern]), rule)
+        })
+        .collect();
+    puzzle_kernel::first_matching_program_alternative(alternatives)
         .expect("once alternative chain requires at least one rule")
 }

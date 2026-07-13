@@ -31,7 +31,7 @@ sprites {
 Gate {
 image "sprites/gate.svg"
 contain 2 2
-offset 0 -0.25
+translate (0, -0.25)
 }
 
 Portrait {
@@ -47,3 +47,12 @@ stretch 2 1
 ```
 
 Use `layers` for collision and `legend` for level characters.
+
+Sprite spatial operations use `translate [world|local] <vector>`. A 2D sprite
+uses `rotate [world|local] <angle> [from <angle>]`, for example
+`rotate directions from up`. A 3D sprite requires an axis:
+`rotate local 90deg around up`. The removed `offset`, `rotate using`, and
+generic `transform` forms are not accepted.
+
+Both model kinds use `sprites`. In a reusable ASCII shape, `>` starts the next
+animation frame and `-` starts the next -Z layer; 2D sprites must have depth 1.

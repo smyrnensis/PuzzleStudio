@@ -257,10 +257,9 @@ fn input_id_by_name(loaded: &LoadedGame, input_name: &str) -> Option<InputId> {
 }
 
 #[cfg(feature = "solver")]
-fn solver_inputs(loaded: &LoadedGame) -> Vec<InputId> {
-    let solver_game = loaded.solver_game();
+fn solver_inputs_for_program(loaded: &LoadedGame, program: &[RuleStep]) -> Vec<InputId> {
     let mut inputs = BTreeSet::new();
-    collect_solver_inputs(solver_game.program(), &mut inputs);
+    collect_solver_inputs(program, &mut inputs);
 
     let mut inputs = if inputs.is_empty() {
         loaded.input_labels.keys().copied().collect::<Vec<_>>()

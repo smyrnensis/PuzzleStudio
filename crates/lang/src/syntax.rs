@@ -66,7 +66,6 @@ pub(crate) const PUZZLE_COMPLETION_KEYWORDS: &[&str] = &[
     "legend",
     "level",
     "levels",
-    "levels3",
     "lose_conditions",
     "map",
     PUZZLE_LIFECYCLE_BLOCKS[0],

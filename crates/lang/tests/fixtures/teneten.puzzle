@@ -877,7 +877,7 @@ Q = You:B Start
 @ = Crate TargetCrate
 # = Wall
 ⋆ = Wall Star
-_ = empty
+. = empty
 }
 
 level "1"

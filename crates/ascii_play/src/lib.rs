@@ -414,7 +414,7 @@ impl Puzzle3TerminalSession {
         let bundle = parsed
             .level_bundle
             .as_ref()
-            .ok_or_else(|| AppError::Config("3D ascii play requires levels3".to_string()))?;
+            .ok_or_else(|| AppError::Config("3D ascii play requires levels".to_string()))?;
         let mut session = GameSession3::new_with_lifecycle(bundle, &parsed.lifecycle)
             .map_err(|error| AppError::Runtime(format!("{error:?}")))?;
         if let Some(win_condition) = &parsed.win_condition {
@@ -446,9 +446,10 @@ impl Puzzle3TerminalSession {
                 Ok(false)
             }
             TerminalKey::Char('r') => {
-                let bundle = parsed.level_bundle.as_ref().ok_or_else(|| {
-                    AppError::Config("3D ascii play requires levels3".to_string())
-                })?;
+                let bundle = parsed
+                    .level_bundle
+                    .as_ref()
+                    .ok_or_else(|| AppError::Config("3D ascii play requires levels".to_string()))?;
                 self.session
                     .restart_with_lifecycle(bundle, &parsed.lifecycle)
                     .map_err(AppError::from)?;
@@ -467,7 +468,7 @@ impl Puzzle3TerminalSession {
         let bundle = parsed
             .level_bundle
             .as_ref()
-            .ok_or_else(|| AppError::Config("3D ascii play requires levels3".to_string()))?;
+            .ok_or_else(|| AppError::Config("3D ascii play requires levels".to_string()))?;
         let result = if let Some(win_condition) = &parsed.win_condition {
             self.session
                 .apply_input_with_lifecycle(
@@ -2026,7 +2027,7 @@ actor = Top Bottom
 rules {
 }
 
-levels3 stack {
+levels stack {
 legend {
 . = empty
 T = Top

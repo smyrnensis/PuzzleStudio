@@ -1509,7 +1509,7 @@ sfx c
     fn suggests_3d_render_options_from_authoring_schema() {
         let source = r#"
 title = complete_3d_render_options
-puzzle3 board {
+puzzle board {
 layers {
 actor
 }

@@ -141,7 +141,7 @@ scene title {
 "##;
 
     let loaded = parse_game(source).unwrap();
-    let title = &loaded.scenes[0];
+    let title = loaded.scenes.iter().find(|scene| scene.name == "title").unwrap();
     assert!(matches!(
         title.components.first(),
         Some(SceneComponent::Choice(choice))
@@ -191,7 +191,7 @@ scene title {
 "##;
 
     let loaded = parse_game(source).unwrap();
-    let title = &loaded.scenes[0];
+    let title = loaded.scenes.iter().find(|scene| scene.name == "title").unwrap();
     let Some(SceneComponent::Conditional(conditional)) = title.components.first() else {
         panic!("expected conditional component");
     };
@@ -247,7 +247,7 @@ scene title {
 "##;
 
     let loaded = parse_game(source).unwrap();
-    let title = &loaded.scenes[0];
+    let title = loaded.scenes.iter().find(|scene| scene.name == "title").unwrap();
     assert!(matches!(
         &title.components[0],
         SceneComponent::Text(text)
@@ -300,7 +300,7 @@ scene title {
 
     let loaded = parse_game(source).unwrap();
     assert!(matches!(
-        &loaded.scenes[0].components[0],
+        &loaded.scenes.iter().find(|scene| scene.name == "title").unwrap().components[0],
         SceneComponent::Text(text)
             if matches!(&text.content,
                 SceneTextContent::Expr(SceneExpr::If { then_branch, .. })
@@ -351,7 +351,7 @@ scene playing(level) {
 "##;
 
     let loaded = parse_game(source).unwrap();
-    let title = &loaded.scenes[0];
+    let title = loaded.scenes.iter().find(|scene| scene.name == "title").unwrap();
     assert!(matches!(
         title.components.first(),
         Some(SceneComponent::Choice(choice))

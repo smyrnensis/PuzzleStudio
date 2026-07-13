@@ -3,7 +3,7 @@ author = "Levels by David Skinner"
 
 theme = "puzzlescript"
 
-puzzle3 sokoban {
+puzzle sokoban {
 render {
 camera {
 	yaw = 0
@@ -15,7 +15,7 @@ camera {
 layers {
 floor = Floor
 target = Goal
-solid = Player Box Wall
+Player Box Wall
 }
 
 groups {
@@ -75,7 +75,7 @@ layout {
 }
 }
 
-levels3 microban of sokoban {
+levels microban of sokoban {
 legend {
 . = empty
 , = Floor

@@ -1144,6 +1144,34 @@ PX
     }
 
     #[test]
+    fn named_level_pack_legend_punctuation_highlights_as_valid_cells() {
+        let source = r#"levels microban of sokoban {
+legend {
+, = Floor
+# = Wall
+}
+level "microban 1" {
+##
+..
+,,
+}
+}
+"#;
+        let highlighted = highlight_source(source);
+
+        for row in ["##", "..", ",,"] {
+            assert_span(source, &highlighted, SourceHighlightKind::LevelCell, row);
+        }
+        assert!(
+            highlighted
+                .spans
+                .iter()
+                .all(|span| span.kind != SourceHighlightKind::InvalidLevelCell),
+            "reserved empty and legend-backed punctuation must not be marked as invalid level cells"
+        );
+    }
+
+    #[test]
     fn selector_parts_keep_parser_owned_semantic_kinds() {
         let source = r#"puzzle board {
 layers {

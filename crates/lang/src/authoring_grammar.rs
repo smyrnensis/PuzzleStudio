@@ -564,11 +564,6 @@ const AUTHORING_SOURCE_BLOCK_SPECS: &[AuthoringSourceBlockSpec] = &[
         role: AuthoringBlockRole::LevelEntry,
     },
     AuthoringSourceBlockSpec {
-        surface: "levels3",
-        content: None,
-        role: AuthoringBlockRole::LevelList,
-    },
-    AuthoringSourceBlockSpec {
         surface: "rules",
         content: Some(AuthoringContentKind::RuleStatements),
         role: AuthoringBlockRole::Rules,
@@ -643,6 +638,12 @@ const PUZZLE_RENDER_CONFIG_DEFINITIONS: &[DefinitionSpec] = &[
         DefinitionValueSyntax::Duration,
         AuthoringSurfaceRole::Number,
     ),
+    DefinitionSpec::value_role(
+        "shade",
+        DefinitionValueSpec::One,
+        DefinitionValueSyntax::Boolean,
+        AuthoringSurfaceRole::Literal,
+    ),
 ];
 const PUZZLE_RENDER_GRID_CONFIG_DEFINITIONS: &[DefinitionSpec] = &[DefinitionSpec::typed_domain(
     "type",
@@ -651,12 +652,20 @@ const PUZZLE_RENDER_GRID_CONFIG_DEFINITIONS: &[DefinitionSpec] = &[DefinitionSpe
     DefinitionValueDomain::Builtin(DefinitionBuiltinDomain::PuzzleRenderGridType),
     AuthoringSurfaceRole::Literal,
 )];
-const PUZZLE3_RENDER_CONFIG_DEFINITIONS: &[DefinitionSpec] = &[DefinitionSpec::value_role(
-    "shade",
-    DefinitionValueSpec::One,
-    DefinitionValueSyntax::Boolean,
-    AuthoringSurfaceRole::Literal,
-)];
+const PUZZLE3_RENDER_CONFIG_DEFINITIONS: &[DefinitionSpec] = &[
+    DefinitionSpec::value_role(
+        "shade",
+        DefinitionValueSpec::One,
+        DefinitionValueSyntax::Boolean,
+        AuthoringSurfaceRole::Literal,
+    ),
+    DefinitionSpec::value_role(
+        "shadow",
+        DefinitionValueSpec::One,
+        DefinitionValueSyntax::Boolean,
+        AuthoringSurfaceRole::Literal,
+    ),
+];
 const PUZZLE3_CAMERA_CONFIG_DEFINITIONS: &[DefinitionSpec] = &[
     DefinitionSpec::value_role(
         "yaw",
@@ -1258,6 +1267,21 @@ pub(crate) const PLACEMENT_SPECS: &[PlacementSpec] = &[
         parent: AuthoringKind::PuzzleRenderConfig,
         surface: "grid",
         child: AuthoringKind::PuzzleRenderGridConfig,
+    },
+    PlacementSpec {
+        parent: AuthoringKind::PuzzleRenderConfig,
+        surface: "camera",
+        child: AuthoringKind::Puzzle3CameraConfig,
+    },
+    PlacementSpec {
+        parent: AuthoringKind::PuzzleRenderConfig,
+        surface: "pixelate",
+        child: AuthoringKind::Puzzle3PixelateConfig,
+    },
+    PlacementSpec {
+        parent: AuthoringKind::PuzzleRenderConfig,
+        surface: "viewport",
+        child: AuthoringKind::Puzzle3ViewportConfig,
     },
     PlacementSpec {
         parent: AuthoringKind::Puzzle3Root,
@@ -2505,9 +2529,9 @@ mod tests {
     use super::{
         AuthoringContentKind, AuthoringContentRowKind, AuthoringDefinitionValueKind, AuthoringKind,
         ContentSyntax, authoring_capture_first, authoring_child_surfaces, authoring_content_syntax,
-        authoring_source_block, authoring_symbol_exports, parse_authoring_content_row,
-        parse_authoring_definition_body, parse_authoring_node_with_kind,
-        parse_placed_authoring_node, placed_authoring_kind,
+        authoring_definition_surfaces, authoring_source_block, authoring_symbol_exports,
+        parse_authoring_content_row, parse_authoring_definition_body,
+        parse_authoring_node_with_kind, parse_placed_authoring_node, placed_authoring_kind,
     };
 
     #[test]
@@ -2522,11 +2546,15 @@ mod tests {
         );
         assert_eq!(
             authoring_child_surfaces(AuthoringKind::PuzzleRenderConfig),
-            vec!["grid"]
+            vec!["grid", "camera", "pixelate", "viewport"]
         );
         assert_eq!(
             placed_authoring_kind(AuthoringKind::Puzzle3Root, "render"),
             Some(AuthoringKind::Puzzle3RenderConfig)
+        );
+        assert_eq!(
+            authoring_definition_surfaces(AuthoringKind::Puzzle3RenderConfig),
+            vec!["shade", "shadow"]
         );
         assert_eq!(
             placed_authoring_kind(AuthoringKind::Puzzle3RenderConfig, "camera"),

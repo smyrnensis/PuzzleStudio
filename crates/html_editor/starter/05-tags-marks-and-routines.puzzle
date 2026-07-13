@@ -1,0 +1,112 @@
+// TAGS, MARKS, AND ROUTINES
+// EXPECT: A key opens only the door with the same color tag.
+// TRY: Add green to the tag and level without copying the opening rules.
+
+title = "05 — Tags, Marks, and Routines"
+subtitle = "Describe variants and split a transition into named stages"
+
+puzzle keys_and_doors {
+tags {
+color = red blue
+}
+
+marks {
+opening
+}
+
+layers {
+Floor
+Key:color
+Player Door:color Wall
+}
+
+routine find_matching_door {
+for c in color {
+[ Player Key:c ] -> [ Player Key:c{opening} ]
+if some([ Key:c{opening} ]) {
+[ Door:c ] -> [ ]
+[ Key:c{opening} ] -> [ ]
+}
+}
+}
+
+rules {
+input [ Player | no Wall no Door:* ] -> [ | Player ]
+find_matching_door
+}
+
+sprites {
+Floor
+#f8fafc
+
+Player
+#111827
+.000.
+00000
+.000.
+.0.0.
+.0.0.
+
+Key:red
+#ef4444
+..0..
+0000.
+..0..
+..00.
+.....
+
+Key:blue
+#3b82f6
+..0..
+0000.
+..0..
+..00.
+.....
+
+Door:red
+#ef4444
+.000.
+.0.0.
+.0.0.
+.0.0.
+.000.
+
+Door:blue
+#3b82f6
+.000.
+.0.0.
+.0.0.
+.0.0.
+.000.
+
+Wall
+#64748b
+00000
+00000
+00000
+00000
+00000
+}
+
+on_level_start {
+[ no Floor ] -> [ Floor ]
+}
+
+levels {
+legend {
+. = empty
+# = Wall
+P = Player
+r = Key:red
+b = Key:blue
+R = Door:red
+B = Door:blue
+}
+
+level "matching colors"
+#########
+#P.r.R..#
+#..b.B..#
+#########
+}
+}

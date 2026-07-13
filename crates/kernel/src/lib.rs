@@ -542,6 +542,256 @@ pub enum RuleApplication {
     UntilStable,
 }
 
+/// Dimension-independent program structure.
+///
+/// Spatial backends own `Rule`, `Condition`, and `Frame`; the source statement
+/// boundary and its application semantics stay shared.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProgramStep<Rule, Condition, Frame> {
+    Rule(Rule),
+    ConditionalBlock {
+        condition: Condition,
+        steps: Vec<Self>,
+    },
+    ConditionalBranch {
+        condition: Condition,
+        then_steps: Vec<Self>,
+        else_steps: Vec<Self>,
+    },
+    Block {
+        application: RuleApplication,
+        stop_condition: Option<Condition>,
+        steps: Vec<Self>,
+    },
+    AfterTriggered {
+        steps: Vec<Self>,
+        then_steps: Vec<Self>,
+    },
+    LocalFrame {
+        frame: Frame,
+        steps: Vec<Self>,
+    },
+}
+
+/// Preserves one source-statement boundary across lowered alternatives.
+///
+/// Conditions are evaluated in authored alternative order and only the first
+/// matching rule is selected.
+pub fn first_matching_program_alternative<Rule, Condition, Frame>(
+    alternatives: Vec<(Condition, Rule)>,
+) -> Option<ProgramStep<Rule, Condition, Frame>> {
+    let mut else_steps = Vec::new();
+    for (condition, rule) in alternatives.into_iter().rev() {
+        else_steps = vec![ProgramStep::ConditionalBranch {
+            condition,
+            then_steps: vec![ProgramStep::Rule(rule)],
+            else_steps,
+        }];
+    }
+    else_steps.pop()
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProgramApplyOutcome {
+    pub fired: bool,
+    pub cancelled: bool,
+}
+
+impl ProgramApplyOutcome {
+    pub fn merge(&mut self, other: Self) {
+        self.fired |= other.fired;
+        self.cancelled |= other.cancelled;
+    }
+}
+
+pub trait ProgramBackend<Rule, Condition, Frame, State> {
+    type Error;
+    type Snapshot: Clone;
+
+    fn condition_accepts(
+        &mut self,
+        state: &State,
+        condition: &Condition,
+        frame: Option<&Frame>,
+    ) -> bool;
+
+    fn apply_rule(
+        &mut self,
+        state: &mut State,
+        rule: &Rule,
+        frame: Option<&Frame>,
+    ) -> Result<ProgramApplyOutcome, Self::Error>;
+
+    fn checkpoint(&self) -> Self::Snapshot;
+    fn restore(&mut self, snapshot: &Self::Snapshot);
+    fn choose_random(&self, state: &State, candidate_count: usize) -> usize;
+}
+
+pub fn execute_program<Rule, Condition, Frame, State, Backend>(
+    backend: &mut Backend,
+    state: &mut State,
+    steps: &[ProgramStep<Rule, Condition, Frame>],
+    frame: Option<&Frame>,
+    repeat_limit: usize,
+) -> Result<ProgramApplyOutcome, Backend::Error>
+where
+    State: Clone + Eq,
+    Backend: ProgramBackend<Rule, Condition, Frame, State>,
+{
+    let mut outcome = ProgramApplyOutcome::default();
+    for step in steps {
+        let step_outcome = execute_program_step(backend, state, step, frame, repeat_limit)?;
+        outcome.merge(step_outcome);
+        if outcome.cancelled {
+            break;
+        }
+    }
+    Ok(outcome)
+}
+
+fn execute_program_step<Rule, Condition, Frame, State, Backend>(
+    backend: &mut Backend,
+    state: &mut State,
+    step: &ProgramStep<Rule, Condition, Frame>,
+    frame: Option<&Frame>,
+    repeat_limit: usize,
+) -> Result<ProgramApplyOutcome, Backend::Error>
+where
+    State: Clone + Eq,
+    Backend: ProgramBackend<Rule, Condition, Frame, State>,
+{
+    match step {
+        ProgramStep::Rule(rule) => backend.apply_rule(state, rule, frame),
+        ProgramStep::ConditionalBlock { condition, steps } => {
+            if backend.condition_accepts(state, condition, frame) {
+                execute_program(backend, state, steps, frame, repeat_limit)
+            } else {
+                Ok(ProgramApplyOutcome::default())
+            }
+        }
+        ProgramStep::ConditionalBranch {
+            condition,
+            then_steps,
+            else_steps,
+        } => {
+            let selected = if backend.condition_accepts(state, condition, frame) {
+                then_steps
+            } else {
+                else_steps
+            };
+            execute_program(backend, state, selected, frame, repeat_limit)
+        }
+        ProgramStep::Block {
+            application,
+            stop_condition,
+            steps,
+        } => match application {
+            RuleApplication::Once | RuleApplication::OnceAll | RuleApplication::OncePerLevel => {
+                execute_program(backend, state, steps, frame, repeat_limit)
+            }
+            RuleApplication::Random => {
+                execute_random_program(backend, state, steps, frame, repeat_limit)
+            }
+            RuleApplication::UntilStable => execute_repeated_program(
+                backend,
+                state,
+                stop_condition.as_ref(),
+                steps,
+                frame,
+                repeat_limit,
+            ),
+        },
+        ProgramStep::AfterTriggered { steps, then_steps } => {
+            let mut outcome = execute_program(backend, state, steps, frame, repeat_limit)?;
+            if outcome.fired && !outcome.cancelled {
+                let then_outcome =
+                    execute_program(backend, state, then_steps, frame, repeat_limit)?;
+                outcome.merge(then_outcome);
+            }
+            Ok(outcome)
+        }
+        ProgramStep::LocalFrame {
+            frame: local_frame,
+            steps,
+        } => execute_program(backend, state, steps, Some(local_frame), repeat_limit),
+    }
+}
+
+fn execute_random_program<Rule, Condition, Frame, State, Backend>(
+    backend: &mut Backend,
+    state: &mut State,
+    steps: &[ProgramStep<Rule, Condition, Frame>],
+    frame: Option<&Frame>,
+    repeat_limit: usize,
+) -> Result<ProgramApplyOutcome, Backend::Error>
+where
+    State: Clone + Eq,
+    Backend: ProgramBackend<Rule, Condition, Frame, State>,
+{
+    let base_state = state.clone();
+    let base_snapshot = backend.checkpoint();
+    let mut candidates = Vec::new();
+    for step in steps {
+        *state = base_state.clone();
+        backend.restore(&base_snapshot);
+        let outcome = match execute_program_step(backend, state, step, frame, repeat_limit) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                *state = base_state;
+                backend.restore(&base_snapshot);
+                return Err(error);
+            }
+        };
+        if outcome.fired {
+            candidates.push((state.clone(), backend.checkpoint(), outcome));
+        }
+    }
+    *state = base_state;
+    backend.restore(&base_snapshot);
+    if candidates.is_empty() {
+        return Ok(ProgramApplyOutcome::default());
+    }
+    let index = backend.choose_random(state, candidates.len());
+    let (selected_state, selected_snapshot, outcome) = candidates.swap_remove(index);
+    *state = selected_state;
+    backend.restore(&selected_snapshot);
+    Ok(outcome)
+}
+
+fn execute_repeated_program<Rule, Condition, Frame, State, Backend>(
+    backend: &mut Backend,
+    state: &mut State,
+    stop_condition: Option<&Condition>,
+    steps: &[ProgramStep<Rule, Condition, Frame>],
+    frame: Option<&Frame>,
+    repeat_limit: usize,
+) -> Result<ProgramApplyOutcome, Backend::Error>
+where
+    State: Clone + Eq,
+    Backend: ProgramBackend<Rule, Condition, Frame, State>,
+{
+    let mut seen = vec![state.clone()];
+    let mut outcome = ProgramApplyOutcome::default();
+    for _ in 0..repeat_limit {
+        if stop_condition
+            .is_some_and(|condition| backend.condition_accepts(state, condition, frame))
+        {
+            break;
+        }
+        let before = state.clone();
+        let pass = execute_program(backend, state, steps, frame, repeat_limit)?;
+        outcome.merge(pass);
+        if outcome.cancelled || !pass.fired || *state == before {
+            break;
+        }
+        if seen.iter().any(|seen_state| seen_state == state) {
+            break;
+        }
+        seen.push(state.clone());
+    }
+    Ok(outcome)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ComparisonOp {
     Eq,
@@ -1382,6 +1632,60 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Copy)]
+    enum TestProgramRule {
+        Add,
+        Fail,
+    }
+
+    #[derive(Default)]
+    struct TestProgramBackend {
+        trace: i32,
+    }
+
+    impl ProgramBackend<TestProgramRule, bool, (), i32> for TestProgramBackend {
+        type Error = &'static str;
+        type Snapshot = i32;
+
+        fn condition_accepts(
+            &mut self,
+            _state: &i32,
+            condition: &bool,
+            _frame: Option<&()>,
+        ) -> bool {
+            *condition
+        }
+
+        fn apply_rule(
+            &mut self,
+            state: &mut i32,
+            rule: &TestProgramRule,
+            _frame: Option<&()>,
+        ) -> Result<ProgramApplyOutcome, Self::Error> {
+            *state += 1;
+            self.trace += 1;
+            match rule {
+                TestProgramRule::Add => Ok(ProgramApplyOutcome {
+                    fired: true,
+                    cancelled: false,
+                }),
+                TestProgramRule::Fail => Err("candidate failed"),
+            }
+        }
+
+        fn checkpoint(&self) -> Self::Snapshot {
+            self.trace
+        }
+
+        fn restore(&mut self, snapshot: &Self::Snapshot) {
+            self.trace = *snapshot;
+        }
+
+        fn choose_random(&self, _state: &i32, _candidate_count: usize) -> usize {
+            0
+        }
+    }
+
     #[test]
     fn visible_variables_update_with_checked_arithmetic() {
         let mut variables = VisibleVariables::new(vec![4]);
@@ -1573,6 +1877,51 @@ mod tests {
                 vec![(0, 1), (1, 11)],
             ]
         );
+    }
+
+    #[test]
+    fn first_matching_program_alternative_preserves_authored_order() {
+        let step: ProgramStep<&str, bool, ()> =
+            first_matching_program_alternative(vec![(false, "first"), (true, "second")]).unwrap();
+
+        let ProgramStep::ConditionalBranch {
+            condition,
+            then_steps,
+            else_steps,
+        } = step
+        else {
+            panic!("expected an alternative chain");
+        };
+        assert!(!condition);
+        assert_eq!(then_steps, vec![ProgramStep::Rule("first")]);
+        assert!(matches!(
+            else_steps.as_slice(),
+            [ProgramStep::ConditionalBranch {
+                condition: true,
+                then_steps,
+                else_steps,
+            }] if then_steps == &[ProgramStep::Rule("second")] && else_steps.is_empty()
+        ));
+    }
+
+    #[test]
+    fn random_program_restores_state_and_trace_when_a_candidate_errors() {
+        let program = vec![ProgramStep::Block {
+            application: RuleApplication::Random,
+            stop_condition: None,
+            steps: vec![
+                ProgramStep::Rule(TestProgramRule::Add),
+                ProgramStep::Rule(TestProgramRule::Fail),
+            ],
+        }];
+        let mut backend = TestProgramBackend::default();
+        let mut state = 0;
+
+        let result = execute_program(&mut backend, &mut state, &program, None, 10);
+
+        assert_eq!(result, Err("candidate failed"));
+        assert_eq!(state, 0);
+        assert_eq!(backend.trace, 0);
     }
 
     #[test]

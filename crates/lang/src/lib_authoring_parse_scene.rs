@@ -1346,21 +1346,10 @@ fn parse_scene_leaf_component_units(
             ))
         }
         ["puzzle3", source, attrs @ ..] => {
-            if !is_identifier(source) {
-                return Err(parse_error(
-                    &lines[start],
-                    "puzzle3 frame source must be an identifier",
-                ));
-            }
-            let layout = parse_scene_layout_attrs_for_line(attrs, &lines[start])?;
-            Ok((
-                vec![scene_frame_component_with_layout(
-                    "puzzle3",
-                    (*source).to_string(),
-                    layout,
-                )],
-                start + 1,
-                None,
+            let _ = (source, attrs);
+            Err(parse_error(
+                &lines[start],
+                "`puzzle3` was removed; use `puzzle <source>` in both .puzzle and .puzzle3 files",
             ))
         }
         ["heading", ..] => Ok((vec![parse_text_component(&lines[start], SceneTextRoleDef::Heading)?], start + 1, None)),

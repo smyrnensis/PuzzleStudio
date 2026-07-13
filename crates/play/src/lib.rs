@@ -5,8 +5,8 @@ use std::{
 
 use puzzle_core::{
     InputId, LayerId, ObjectId, Patch, PatchOp, ProgramContinuation, ProgramSegmentTrace, RuleId,
-    RuleStep, State as PuzzleState, TransitionCommand, TransitionError, transition_outcome,
-    transition_program, transition_program_continuation_segment_trace, transition_program_outcome,
+    RuleStep, State as PuzzleState, TransitionCommand, TransitionError, transition_program,
+    transition_program_continuation_segment_trace, transition_program_outcome,
     transition_program_segment_trace,
 };
 use puzzle_lang::{
@@ -86,6 +86,7 @@ pub fn loaded_document_scene_host_loaded_game(
             puzzle: name.clone(),
             initial_state: prototype_level.initial_state.clone(),
             regions: Vec::new(),
+            program: prototype_level.program.clone(),
             level_start_program: None,
             level_clear_program: None,
         })
@@ -780,8 +781,15 @@ impl GameSession {
         let undo_anchor = self.state.clone();
         let mut state = self.state.clone();
         self.apply_persistent_vars(game, &mut state);
-        let outcome =
-            transition_program_segment_outcome(game, game.game.program(), &state, input, None)?;
+        let level_index = self
+            .active_level_index
+            .expect("active level was checked before applying model input");
+        let program = game.program_for_level(level_index).ok_or_else(|| {
+            TransitionError::InvalidCommand(format!(
+                "active level index out of range: {level_index}"
+            ))
+        })?;
+        let outcome = transition_program_segment_outcome(game, program, &state, input, None)?;
         let cancelled = outcome.cancelled;
         let state_changed = self.replace_state_if_changed(game, outcome.next_state);
         self.sync_current_level_puzzles(game);
@@ -838,13 +846,18 @@ impl GameSession {
             return Err(invalid_puzzle_target_error(target));
         };
         self.apply_persistent_vars(game, &mut state.state);
-        let outcome = transition_program_segment_outcome(
-            game,
-            game.game.program(),
-            &state.state,
-            input,
-            Some(target),
-        )?;
+        let level_index = state.level_index.ok_or_else(|| {
+            TransitionError::InvalidCommand(format!(
+                "puzzle target has no level identity: {target}"
+            ))
+        })?;
+        let program = game.program_for_level(level_index).ok_or_else(|| {
+            TransitionError::InvalidCommand(format!(
+                "puzzle target level index out of range: {level_index}"
+            ))
+        })?;
+        let outcome =
+            transition_program_segment_outcome(game, program, &state.state, input, Some(target))?;
         let cancelled = outcome.cancelled;
         self.capture_persistent_vars(game, &outcome.next_state);
         self.animation_events.extend(outcome.animations.clone());
@@ -905,8 +918,15 @@ impl GameSession {
         let undo_anchor = self.state.clone();
         let mut state = self.state.clone();
         self.apply_persistent_vars(game, &mut state);
-        let outcome =
-            transition_program_segment_outcome(game, game.game.program(), &state, input, None)?;
+        let level_index = self
+            .active_level_index
+            .expect("active level was checked before applying model input");
+        let program = game.program_for_level(level_index).ok_or_else(|| {
+            TransitionError::InvalidCommand(format!(
+                "active level index out of range: {level_index}"
+            ))
+        })?;
+        let outcome = transition_program_segment_outcome(game, program, &state, input, None)?;
         let cancelled = outcome.cancelled;
         let state_changed = self.replace_state_if_changed(game, outcome.next_state);
         self.sync_current_level_puzzles(game);
@@ -1555,7 +1575,12 @@ impl GameSession {
         if let Some(program) = &game.level_start_program {
             self.extend_lifecycle_outcome(game, program, &mut outcome)?;
         } else if game.run_rules_on_level_start {
-            let next = transition_outcome(&game.game, &outcome.next_state, InputId(0))?;
+            let next = transition_program_outcome(
+                &game.game,
+                &game.levels[level_index].program,
+                &outcome.next_state,
+                InputId(0),
+            )?;
             outcome.next_state = next.next_state;
             outcome.cancelled |= next.cancelled;
             outcome.commands.extend(next.commands);
@@ -3434,7 +3459,15 @@ fn neutral_state(game: &LoadedGame) -> PuzzleState {
 fn initial_level_scene_name(game: &LoadedGame) -> &str {
     game.scenes
         .iter()
-        .find(|screen| scene_is_level_scene(game, &screen.name))
+        .find(|screen| {
+            scene_is_level_scene(game, &screen.name)
+                && !game.levels.iter().any(|level| level.puzzle == screen.name)
+        })
+        .or_else(|| {
+            game.scenes
+                .iter()
+                .find(|screen| scene_is_level_scene(game, &screen.name))
+        })
         .map(|screen| screen.name.as_str())
         .unwrap_or_else(|| initial_scene_name(game))
 }
@@ -4592,6 +4625,7 @@ pub fn cell_objects(state: &PuzzleState, x: u16, y: u16) -> Vec<ObjectId> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use puzzle_core::transition_outcome;
     use puzzle_lang::parse_game2d as parse_game;
 
     fn object_named(loaded: &LoadedGame, name: &str) -> ObjectId {
@@ -4608,6 +4642,47 @@ mod tests {
             .iter()
             .find_map(|(input, label)| (label == name).then_some(*input))
             .unwrap()
+    }
+
+    #[test]
+    fn session_runs_the_active_levels_effective_rules() {
+        let source = r#"
+title = play_level_rules
+puzzle board {
+  layers {
+    actor = Player
+  }
+  keys {
+    d ArrowRight -> right
+  }
+  rules {
+    input right [ Player ] -> [ Player ]
+  }
+}
+levels default of board {
+  legend {
+    . = empty
+    P = Player
+  }
+  level "local" {
+    rules before {
+      input right [ Player | no actor ] -> [ | Player ]
+    }
+    P.
+  }
+}
+"#;
+        let loaded = parse_game(source).unwrap();
+        let mut session = GameSession::new(&loaded);
+        session
+            .apply_input(&loaded, input_named(&loaded, "right"))
+            .unwrap();
+
+        assert!(
+            session
+                .state()
+                .has_object(&loaded.game, 1, 0, object_named(&loaded, "Player"))
+        );
     }
 
     #[test]
@@ -5467,6 +5542,7 @@ text "clear"
         )
         .unwrap();
         let mut session = GameSession::new(&loaded);
+        session.apply_command(&loaded, "goto playing").unwrap();
 
         session.apply_input(&loaded, InputId(0)).unwrap();
 
@@ -5670,6 +5746,7 @@ text "Menu"
         )
         .unwrap();
         let mut session = GameSession::new(&loaded);
+        session.apply_command(&loaded, "goto playing").unwrap();
         assert_eq!(session.screen(), "playing");
 
         session
@@ -5892,6 +5969,7 @@ text "moved"
         .unwrap();
         let tick = input_named(&loaded, "tick");
         let mut session = GameSession::new(&loaded);
+        session.apply_command(&loaded, "goto playing").unwrap();
 
         session.apply_input(&loaded, tick).unwrap();
 
@@ -6104,6 +6182,7 @@ step board
         )
         .unwrap();
         let mut session = GameSession::new(&loaded);
+        session.apply_command(&loaded, "goto playing").unwrap();
 
         assert_eq!(
             session.take_sound_events(),
@@ -6983,6 +7062,7 @@ message hint
         )
         .unwrap();
         let mut session = GameSession::new(&loaded);
+        session.apply_command(&loaded, "goto playing").unwrap();
 
         assert_eq!(
             session.take_message_events(),
@@ -8020,6 +8100,7 @@ step board
         )
         .unwrap();
         let mut session = GameSession::new(&loaded);
+        session.apply_command(&loaded, "goto playing").unwrap();
         let before = session
             .scene_state_for("playing")
             .unwrap()
@@ -8235,8 +8316,17 @@ step board
         let mut session = GameSession::new(&loaded);
         let player = object_named(&loaded, "Player");
 
-        assert_eq!(session.screen(), "title");
-        assert_eq!(loaded.scenes[0].transitions.len(), 0);
+        assert_eq!(session.screen(), "default");
+        assert_eq!(
+            loaded
+                .scenes
+                .iter()
+                .find(|scene| scene.name == "title")
+                .unwrap()
+                .transitions
+                .len(),
+            0
+        );
 
         session
             .apply_command(&loaded, "load play.board from play.board.levels[1]")
@@ -8332,6 +8422,7 @@ text "clear"
         .unwrap();
         let tick = input_named(&loaded, "tick");
         let mut session = GameSession::new(&loaded);
+        session.apply_command(&loaded, "goto playing").unwrap();
 
         session.apply_input(&loaded, tick).unwrap();
 
@@ -8459,6 +8550,7 @@ step board
         )
         .unwrap();
         let mut session = GameSession::new(&loaded);
+        session.apply_command(&loaded, "goto title").unwrap();
 
         session
             .apply_input(&loaded, input_named(&loaded, "open"))
@@ -8654,6 +8746,7 @@ goto hub
     fn session_advances_level_after_nonfinal_clear() {
         let loaded = transition_fixture();
         let mut session = GameSession::new(&loaded);
+        session.apply_command(&loaded, "goto playing").unwrap();
 
         for key in "ddd".bytes() {
             let input = *loaded.controls.keys.get(&key).unwrap();
@@ -8672,6 +8765,7 @@ goto hub
     fn direct_input_applies_screen_condition_transitions() {
         let loaded = transition_fixture();
         let mut session = GameSession::new(&loaded);
+        session.apply_command(&loaded, "goto playing").unwrap();
 
         for key in "ddd".bytes() {
             let input = *loaded.controls.keys.get(&key).unwrap();
@@ -8761,6 +8855,7 @@ text "done"
         )
         .unwrap();
         let mut session = GameSession::new(&loaded);
+        session.apply_command(&loaded, "goto playing").unwrap();
         let right = *loaded.controls.keys.get(&b'd').unwrap();
         let clear_mark = object_named(&loaded, "ClearMark");
         let clear_visual = object_named(&loaded, "@ClearVisual");
@@ -9184,6 +9279,7 @@ puzzle board = default
 "#;
         let loaded = parse_game(source).unwrap();
         let mut session = GameSession::new(&loaded);
+        session.apply_command(&loaded, "goto level_select").unwrap();
 
         session.apply_command(&loaded, "select").unwrap();
         assert_eq!(session.level_index(), 2);
@@ -9736,6 +9832,7 @@ text "Levels"
 "#;
         let loaded = parse_game(source).unwrap();
         let mut session = GameSession::new(&loaded);
+        session.apply_command(&loaded, "goto playing").unwrap();
 
         assert_eq!(session.screen(), "playing");
         assert_eq!(session.visible_scenes(), &["playing".to_string()]);
@@ -9796,6 +9893,7 @@ Escape -> goto playing
 "#;
         let loaded = parse_game(source).unwrap();
         let mut session = GameSession::new(&loaded);
+        session.apply_command(&loaded, "goto playing").unwrap();
 
         assert_eq!(
             session
@@ -10092,6 +10190,12 @@ step board
             r#"
 title = title_level_start_boundary
 
+scene title {
+layout {
+button "Play" -> goto playing
+}
+}
+
 puzzle board {
 layers {
 __legacy_layer_0 = Player
@@ -10113,12 +10217,6 @@ level "one" {
 message "enter one"
 P
 }
-}
-}
-
-scene title {
-layout {
-button "Play" -> goto playing
 }
 }
 

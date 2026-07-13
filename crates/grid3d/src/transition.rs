@@ -6,8 +6,9 @@ use crate::{
 use puzzle_kernel::VariableUpdateOp;
 use puzzle_kernel::{
     ComparisonOp, ComponentPlacement, FnvBuilder, GridOffset, LocalFrame, MarkValueMatch,
-    MatchPlacement, ObjectBinding, RuleApplication, TransitionOutcome as KernelTransitionOutcome,
-    bind_object, bound_object as bound_object_in_bindings,
+    MatchPlacement, ObjectBinding, ProgramApplyOutcome, ProgramBackend, ProgramStep,
+    RuleApplication, TransitionOutcome as KernelTransitionOutcome, bind_object,
+    bound_object as bound_object_in_bindings,
     collect_component_placements as collect_component_placements_shared,
     complete_component_placements as complete_component_placements_shared, fnv_mix,
     placement_object_binding, write_position as write_position_shared,
@@ -25,6 +26,7 @@ pub type PatternComponent3 = puzzle_kernel::RulePatternComponent<MatchCell3>;
 pub type Rule3 = puzzle_kernel::RuleModel<RuleId3, Guard3, Pattern3, WriteOp3, RuleEffect3>;
 pub type RuleApplication3 = RuleApplication;
 pub type RuleEffect3 = puzzle_kernel::VariableEffect<VariableId>;
+pub type RuleStep3 = ProgramStep<Rule3, RuleCondition3, LocalFrame<ObjectId>>;
 pub type WriteOp3 = puzzle_kernel::RuleWriteOp<Offset3, ObjectId, MarkId3>;
 pub type TransitionCommand3 = std::convert::Infallible;
 pub type TransitionOutcome3 =
@@ -32,7 +34,47 @@ pub type TransitionOutcome3 =
 
 const UNTIL_STABLE_REPEAT_LIMIT3: usize = 200;
 
-#[derive(Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RuleCondition3 {
+    AnyMatches(Vec<Pattern3>),
+    NoMatches(Vec<Pattern3>),
+    AnyInputMatches(Vec<(InputId, Pattern3)>),
+    NoInputMatches(Vec<(InputId, Pattern3)>),
+    RuleMatches {
+        guards: Vec<Guard3>,
+        pattern: Pattern3,
+    },
+}
+
+pub fn flattened_rules(program: &[RuleStep3]) -> Vec<Rule3> {
+    fn collect(steps: &[RuleStep3], out: &mut Vec<Rule3>) {
+        for step in steps {
+            match step {
+                RuleStep3::Rule(rule) => out.push(rule.clone()),
+                RuleStep3::ConditionalBlock { steps, .. }
+                | RuleStep3::Block { steps, .. }
+                | RuleStep3::LocalFrame { steps, .. } => collect(steps, out),
+                RuleStep3::ConditionalBranch {
+                    then_steps,
+                    else_steps,
+                    ..
+                } => {
+                    collect(then_steps, out);
+                    collect(else_steps, out);
+                }
+                RuleStep3::AfterTriggered { steps, then_steps } => {
+                    collect(steps, out);
+                    collect(then_steps, out);
+                }
+            }
+        }
+    }
+    let mut rules = Vec::new();
+    collect(program, &mut rules);
+    rules
+}
+
+#[derive(Clone, Default)]
 struct TransitionTrace3 {
     fired_rules: Vec<RuleId3>,
     patches: Vec<Patch3>,
@@ -193,80 +235,54 @@ pub fn transition_once_with_input(
 pub fn transition_program(
     game: &Game3,
     state: &State3,
-    rules: &[Rule3],
+    program: &[RuleStep3],
     input: InputId,
 ) -> Result<State3, TransitionError3> {
-    transition_program_outcome_with_local_frame(game, state, rules, input, None)
+    transition_program_outcome_with_local_frame(game, state, program, input, None)
         .map(|outcome| outcome.next_state)
 }
 
 pub fn transition_program_with_local_frame(
     game: &Game3,
     state: &State3,
-    rules: &[Rule3],
+    program: &[RuleStep3],
     input: InputId,
     local_frame: Option<&LocalFrame<ObjectId>>,
 ) -> Result<State3, TransitionError3> {
-    transition_program_outcome_with_local_frame(game, state, rules, input, local_frame)
+    transition_program_outcome_with_local_frame(game, state, program, input, local_frame)
         .map(|outcome| outcome.next_state)
 }
 
 pub fn transition_program_outcome(
     game: &Game3,
     state: &State3,
-    rules: &[Rule3],
+    program: &[RuleStep3],
     input: InputId,
 ) -> Result<TransitionOutcome3, TransitionError3> {
-    transition_program_outcome_with_local_frame(game, state, rules, input, None)
+    transition_program_outcome_with_local_frame(game, state, program, input, None)
 }
 
 pub fn transition_program_outcome_with_local_frame(
     game: &Game3,
     state: &State3,
-    rules: &[Rule3],
+    program: &[RuleStep3],
     input: InputId,
     local_frame: Option<&LocalFrame<ObjectId>>,
 ) -> Result<TransitionOutcome3, TransitionError3> {
-    transition_program_outcome_inner(game, state, rules, Some(input), local_frame)
+    transition_program_outcome_inner(game, state, program, Some(input), local_frame)
 }
 
 fn transition_program_outcome_inner(
     game: &Game3,
     state: &State3,
-    rules: &[Rule3],
+    program: &[RuleStep3],
     input: Option<InputId>,
     local_frame: Option<&LocalFrame<ObjectId>>,
 ) -> Result<TransitionOutcome3, TransitionError3> {
     let mut current = state.clone();
     current.clear_mark();
     let mut trace = TransitionTrace3::default();
-    for rule in rules {
-        if !guards_accept(rule, game, &current, input) {
-            continue;
-        }
-        current = match rule.application {
-            RuleApplication3::Once => {
-                transition_rule_once(game, &current, rule, input, local_frame, &mut trace)?
-            }
-            RuleApplication3::OnceAll => {
-                transition_rule_once_all(game, &current, rule, input, local_frame, &mut trace)?
-            }
-            RuleApplication3::OncePerLevel => transition_rule_once_per_level(
-                game,
-                &current,
-                rule,
-                input,
-                local_frame,
-                &mut trace,
-            )?,
-            RuleApplication3::UntilStable => {
-                transition_rule_repeated(game, &current, rule, input, local_frame, &mut trace)?
-            }
-            RuleApplication3::Random => {
-                transition_rule_random(game, &current, rule, input, local_frame, &mut trace)?
-            }
-        };
-    }
+    current = transition_program_steps(game, &current, program, input, local_frame, &mut trace)?;
     current.clear_mark();
     Ok(TransitionOutcome3 {
         input,
@@ -281,37 +297,166 @@ fn transition_program_outcome_inner(
 pub fn transition_program_without_input(
     game: &Game3,
     state: &State3,
-    rules: &[Rule3],
+    program: &[RuleStep3],
 ) -> Result<State3, TransitionError3> {
-    transition_program_without_input_outcome_with_local_frame(game, state, rules, None)
+    transition_program_without_input_outcome_with_local_frame(game, state, program, None)
         .map(|outcome| outcome.next_state)
 }
 
 pub fn transition_program_without_input_with_local_frame(
     game: &Game3,
     state: &State3,
-    rules: &[Rule3],
+    program: &[RuleStep3],
     local_frame: Option<&LocalFrame<ObjectId>>,
 ) -> Result<State3, TransitionError3> {
-    transition_program_without_input_outcome_with_local_frame(game, state, rules, local_frame)
+    transition_program_without_input_outcome_with_local_frame(game, state, program, local_frame)
         .map(|outcome| outcome.next_state)
 }
 
 pub fn transition_program_without_input_outcome(
     game: &Game3,
     state: &State3,
-    rules: &[Rule3],
+    program: &[RuleStep3],
 ) -> Result<TransitionOutcome3, TransitionError3> {
-    transition_program_without_input_outcome_with_local_frame(game, state, rules, None)
+    transition_program_without_input_outcome_with_local_frame(game, state, program, None)
 }
 
 pub fn transition_program_without_input_outcome_with_local_frame(
     game: &Game3,
     state: &State3,
-    rules: &[Rule3],
+    program: &[RuleStep3],
     local_frame: Option<&LocalFrame<ObjectId>>,
 ) -> Result<TransitionOutcome3, TransitionError3> {
-    transition_program_outcome_inner(game, state, rules, None, local_frame)
+    transition_program_outcome_inner(game, state, program, None, local_frame)
+}
+
+fn transition_program_steps(
+    game: &Game3,
+    state: &State3,
+    steps: &[RuleStep3],
+    input: Option<InputId>,
+    local_frame: Option<&LocalFrame<ObjectId>>,
+    trace: &mut TransitionTrace3,
+) -> Result<State3, TransitionError3> {
+    let mut current = state.clone();
+    let mut backend = ProgramBackend3 { game, input, trace };
+    puzzle_kernel::execute_program(
+        &mut backend,
+        &mut current,
+        steps,
+        local_frame,
+        UNTIL_STABLE_REPEAT_LIMIT3,
+    )?;
+    Ok(current)
+}
+
+struct ProgramBackend3<'a> {
+    game: &'a Game3,
+    input: Option<InputId>,
+    trace: &'a mut TransitionTrace3,
+}
+
+impl ProgramBackend<Rule3, RuleCondition3, LocalFrame<ObjectId>, State3> for ProgramBackend3<'_> {
+    type Error = TransitionError3;
+    type Snapshot = TransitionTrace3;
+
+    fn condition_accepts(
+        &mut self,
+        state: &State3,
+        condition: &RuleCondition3,
+        frame: Option<&LocalFrame<ObjectId>>,
+    ) -> bool {
+        rule_condition_accepts(self.game, state, condition, self.input, frame)
+    }
+
+    fn apply_rule(
+        &mut self,
+        state: &mut State3,
+        rule: &Rule3,
+        frame: Option<&LocalFrame<ObjectId>>,
+    ) -> Result<ProgramApplyOutcome, Self::Error> {
+        let fired_before = self.trace.fired_rules.len();
+        *state =
+            transition_rule_by_application(self.game, state, rule, self.input, frame, self.trace)?;
+        Ok(ProgramApplyOutcome {
+            fired: self.trace.fired_rules.len() > fired_before,
+            cancelled: false,
+        })
+    }
+
+    fn checkpoint(&self) -> Self::Snapshot {
+        self.trace.clone()
+    }
+
+    fn restore(&mut self, snapshot: &Self::Snapshot) {
+        *self.trace = snapshot.clone();
+    }
+
+    fn choose_random(&self, state: &State3, candidate_count: usize) -> usize {
+        random_choice_index(state, self.input, RuleId3(0), candidate_count)
+    }
+}
+
+fn transition_rule_by_application(
+    game: &Game3,
+    state: &State3,
+    rule: &Rule3,
+    input: Option<InputId>,
+    local_frame: Option<&LocalFrame<ObjectId>>,
+    trace: &mut TransitionTrace3,
+) -> Result<State3, TransitionError3> {
+    if !guards_accept(rule, game, state, input) {
+        return Ok(state.clone());
+    }
+    match rule.application {
+        RuleApplication3::Once => {
+            transition_rule_once(game, state, rule, input, local_frame, trace)
+        }
+        RuleApplication3::OnceAll => {
+            transition_rule_once_all(game, state, rule, input, local_frame, trace)
+        }
+        RuleApplication3::OncePerLevel => {
+            transition_rule_once_per_level(game, state, rule, input, local_frame, trace)
+        }
+        RuleApplication3::UntilStable => {
+            transition_rule_repeated(game, state, rule, input, local_frame, trace)
+        }
+        RuleApplication3::Random => {
+            transition_rule_random(game, state, rule, input, local_frame, trace)
+        }
+    }
+}
+
+fn rule_condition_accepts(
+    game: &Game3,
+    state: &State3,
+    condition: &RuleCondition3,
+    input: Option<InputId>,
+    local_frame: Option<&LocalFrame<ObjectId>>,
+) -> bool {
+    let scope = LocalFrameScope::new(state, local_frame);
+    match condition {
+        RuleCondition3::AnyMatches(patterns) => patterns
+            .iter()
+            .any(|pattern| first_match(game, state, pattern, &scope).is_some()),
+        RuleCondition3::NoMatches(patterns) => patterns
+            .iter()
+            .all(|pattern| first_match(game, state, pattern, &scope).is_none()),
+        RuleCondition3::AnyInputMatches(patterns) => input.is_some_and(|input| {
+            patterns.iter().any(|(expected, pattern)| {
+                *expected == input && first_match(game, state, pattern, &scope).is_some()
+            })
+        }),
+        RuleCondition3::NoInputMatches(patterns) => input.is_none_or(|input| {
+            patterns.iter().all(|(expected, pattern)| {
+                *expected != input || first_match(game, state, pattern, &scope).is_none()
+            })
+        }),
+        RuleCondition3::RuleMatches { guards, pattern } => {
+            guards_accept_all(guards, game, state, input)
+                && first_match(game, state, pattern, &scope).is_some()
+        }
+    }
 }
 
 fn transition_rule_once(
@@ -607,7 +752,16 @@ fn random_state_projection_hash(state: &State3) -> u64 {
 }
 
 fn guards_accept(rule: &Rule3, game: &Game3, state: &State3, input: Option<InputId>) -> bool {
-    rule.guards
+    guards_accept_all(&rule.guards, game, state, input)
+}
+
+fn guards_accept_all(
+    guards: &[Guard3],
+    game: &Game3,
+    state: &State3,
+    input: Option<InputId>,
+) -> bool {
+    guards
         .iter()
         .all(|guard| guard_accepts(guard, game, state, input))
 }
@@ -1362,9 +1516,9 @@ mod tests {
         .with_id(RuleId3(7));
         rule.application = RuleApplication3::Random;
 
-        let next = transition_program(&game, &state, &[rule.clone()], InputId(0))
+        let next = transition_program(&game, &state, &[RuleStep3::Rule(rule.clone())], InputId(0))
             .expect("random transition succeeds");
-        let repeated = transition_program(&game, &state, &[rule], InputId(0))
+        let repeated = transition_program(&game, &state, &[RuleStep3::Rule(rule)], InputId(0))
             .expect("random transition is deterministic for the same state");
 
         assert_eq!(next, repeated);
@@ -1405,8 +1559,8 @@ mod tests {
             value: 2,
         });
 
-        let next =
-            transition_program_without_input(&game, &state, &[rule]).expect("transition succeeds");
+        let next = transition_program_without_input(&game, &state, &[RuleStep3::Rule(rule)])
+            .expect("transition succeeds");
 
         assert_eq!(next.variable_value(VariableId(0)), Some(7));
     }
@@ -1437,8 +1591,8 @@ mod tests {
             value: 1,
         });
 
-        let next =
-            transition_program_without_input(&game, &state, &[rule]).expect("transition succeeds");
+        let next = transition_program_without_input(&game, &state, &[RuleStep3::Rule(rule)])
+            .expect("transition succeeds");
 
         assert_eq!(next.variable_value(VariableId(0)), Some(3));
     }

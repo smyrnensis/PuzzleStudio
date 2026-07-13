@@ -182,7 +182,8 @@ impl Puzzle3RuntimeBridge {
         program_key: &str,
         input: u16,
     ) -> Result<String, String> {
-        self.inner.transition_current_outcome_json(program_key, input)
+        self.inner
+            .transition_current_outcome_json(program_key, input)
     }
 
     pub fn is_current_complete(&self) -> Result<bool, String> {
@@ -260,7 +261,16 @@ fn selected_rule_program<'a>(
     level_index: i32,
 ) -> Result<&'a [RuleStep], AppError> {
     match program_key {
-        "main" | "run_rules_on_level_start" => Ok(loaded.game.program()),
+        "main" | "run_rules_on_level_start" => {
+            if level_index < 0 {
+                return Ok(loaded.game.program());
+            }
+            let index = usize::try_from(level_index)
+                .map_err(|_| AppError::Config("main program requires a level index".to_string()))?;
+            loaded.program_for_level(index).ok_or_else(|| {
+                AppError::Config(format!("main program level index out of range: {index}"))
+            })
+        }
         "level_start" => Ok(loaded.level_start_program.as_deref().unwrap_or(&[])),
         "display_level_start" => Ok(loaded.display_level_start_program.as_deref().unwrap_or(&[])),
         "level_clear" => Ok(loaded.level_clear_program.as_deref().unwrap_or(&[])),
@@ -344,7 +354,11 @@ fn runtime_transition_current_outcome_json(
         previous_state_handle,
         changed_cells: changed_cells_contract_2d(state, before),
         variables: state.visible_variables().to_vec(),
-        level_fired_rules: state.level_fired_rules().iter().map(|rule| rule.0).collect(),
+        level_fired_rules: state
+            .level_fired_rules()
+            .iter()
+            .map(|rule| rule.0)
+            .collect(),
     }
     .to_json_string()
     .map_err(|error| AppError::Config(error.to_string()))
@@ -383,7 +397,11 @@ fn state_contract_2d(state: &State) -> RuntimeStateSnapshot {
             })
             .collect(),
         variables: state.visible_variables().to_vec(),
-        level_fired_rules: state.level_fired_rules().iter().map(|rule| rule.0).collect(),
+        level_fired_rules: state
+            .level_fired_rules()
+            .iter()
+            .map(|rule| rule.0)
+            .collect(),
     })
 }
 
@@ -460,11 +478,7 @@ fn patch_op_contract_2d(op: &PatchOp) -> RuntimePatchOp {
             variable: variable.0,
         },
         PatchOp::SetMark {
-            x,
-            y,
-            object,
-            mark,
-            ..
+            x, y, object, mark, ..
         } => RuntimePatchOp::SetMark {
             position: RuntimeCoord { x, y, z: None },
             object_id: object.0,
@@ -497,10 +511,7 @@ fn source_looks_puzzle3d(source: &str) -> bool {
     source.lines().any(|line| {
         let trimmed = line.split("//").next().unwrap_or("").trim();
         let tokens = trimmed.split_whitespace().collect::<Vec<_>>();
-        matches!(
-            tokens.as_slice(),
-            ["puzzle3", ..] | ["levels3", ..] | ["sprites3", ..]
-        )
+        matches!(tokens.as_slice(), ["puzzle3", ..] | ["sprites3", ..])
     })
 }
 
@@ -645,12 +656,11 @@ where
             };
             let response = solve_compiled_state_with_budget_and_progress(
                 &engine,
-                serde_json::from_value(
-                    required_json_value(rules, "solverStrategy")?.clone(),
-                )
-                .map_err(|error| {
-                    AppError::Config(format!("solver task strategy is invalid: {error}"))
-                })?,
+                solver_task_level_index(target)?,
+                serde_json::from_value(required_json_value(rules, "solverStrategy")?.clone())
+                    .map_err(|error| {
+                        AppError::Config(format!("solver task strategy is invalid: {error}"))
+                    })?,
                 decode_optional_goal_expr(rules.get("goal"))?,
                 decode_optional_goal_expr(rules.get("lose"))?,
                 optional_json_bool(request.get("acceptWinCommand"), true)?,
@@ -763,6 +773,7 @@ fn solve_request2_json_from_source_inner(
         let (selector, max_results) = decode_solver_collect2(collect)?;
         let response = solve_current_state_collect_with_budget_inner(
             &loaded,
+            level_index,
             selector,
             lose,
             accept_win_command,
@@ -778,6 +789,7 @@ fn solve_request2_json_from_source_inner(
     let solver_goal = decode_optional_solver_goal2(&loaded, goal, level_index)?;
     let response = solve_current_state_with_goal_with_budget_inner(
         &loaded,
+        level_index,
         solver_goal,
         lose,
         accept_win_command,
@@ -788,9 +800,7 @@ fn solve_request2_json_from_source_inner(
     let mut out = String::new();
     match task {
         SolverRequestTask::Solve => push_solution_response(&mut out, &loaded, &response),
-        SolverRequestTask::Reachability => {
-            push_reachability_response(&mut out, &loaded, &response)
-        }
+        SolverRequestTask::Reachability => push_reachability_response(&mut out, &loaded, &response),
         SolverRequestTask::Collect => unreachable!("collect task returned before solve response"),
     }
     Ok(out)
@@ -853,9 +863,10 @@ fn decode_solver_request_task(
     let Some(value) = value else {
         return Ok(SolverRequestTask::Solve);
     };
-    match value.as_str().ok_or_else(|| {
-        AppError::Config("solver request task must be a string".to_string())
-    })? {
+    match value
+        .as_str()
+        .ok_or_else(|| AppError::Config("solver request task must be a string".to_string()))?
+    {
         "solve" => Ok(SolverRequestTask::Solve),
         "reachability" => Ok(SolverRequestTask::Reachability),
         "collect" => Ok(SolverRequestTask::Collect),
@@ -915,8 +926,16 @@ fn materialize_compiled_level_start_state(
         state = outcome.next_state;
         cancelled |= outcome.cancelled;
     } else if run_rules_on_level_start {
-        let outcome =
-            transition_program_outcome(engine.game(), engine.game().program(), &state, InputId(0))?;
+        let level_index = i32::try_from(level_index)
+            .map_err(|_| AppError::Config("solver task level index out of range".to_string()))?;
+        let program = engine
+            .program("run_rules_on_level_start", level_index)
+            .ok_or_else(|| {
+                AppError::Config(format!(
+                    "compiled solver task missing main program for level {level_index}"
+                ))
+            })?;
+        let outcome = transition_program_outcome(engine.game(), program, &state, InputId(0))?;
         state = outcome.next_state;
         cancelled |= outcome.cancelled;
     }
@@ -927,8 +946,8 @@ fn materialize_compiled_level_start_state(
             .program("level_start_local", level_index)
             .ok_or_else(|| {
                 AppError::Config(format!(
-                "compiled solver task missing local level_start program for level {level_index}"
-            ))
+                    "compiled solver task missing local level_start program for level {level_index}"
+                ))
             })?;
         if !local.is_empty() {
             let outcome = transition_program_outcome(engine.game(), local, &state, InputId(0))?;
@@ -972,7 +991,8 @@ fn decode_optional_solver_goal2(
     match required_json_string(goal, "kind")? {
         "exact-state" => {
             let state_spec = required_json_object(goal, "state")?;
-            state2_from_solver_state_spec(loaded, state_spec, level_index).map(SolverGoal2::ExactState)
+            state2_from_solver_state_spec(loaded, state_spec, level_index)
+                .map(SolverGoal2::ExactState)
         }
         other => Err(AppError::Config(format!(
             "unsupported solver goal kind {other:?}"
@@ -984,9 +1004,8 @@ fn decode_optional_solver_goal2(
 fn decode_solver_collect2(
     value: Option<&serde_json::Value>,
 ) -> Result<(SolverCollectSelector2, usize), AppError> {
-    let value = value.ok_or_else(|| {
-        AppError::Config("solver collect requests require collect".to_string())
-    })?;
+    let value = value
+        .ok_or_else(|| AppError::Config("solver collect requests require collect".to_string()))?;
     let collect = json_object(value, "solver collect")?;
     let max_results = json_usize_value(collect.get("maxResults"), "collect.maxResults")?;
     if max_results == 0 {
@@ -1324,7 +1343,7 @@ fn validate_solver_request_level3d(
     let bundle = parsed
         .level_bundle
         .as_ref()
-        .ok_or_else(|| AppError::Config("3D solver target requires levels3".to_string()))?;
+        .ok_or_else(|| AppError::Config("3D solver target requires levels".to_string()))?;
     let expected = bundle.levels.get(index).ok_or_else(|| {
         AppError::Config(format!(
             "3D solver target level index out of range: {index}"
@@ -1470,12 +1489,9 @@ fn state_from_level_ascii_json(
         .ok_or_else(|| AppError::Config("solver level-ascii lines must be an array".to_string()))?
         .iter()
         .map(|value| {
-            value
-                .as_str()
-                .map(str::to_string)
-                .ok_or_else(|| {
-                    AppError::Config("solver level-ascii line must be a string".to_string())
-                })
+            value.as_str().map(str::to_string).ok_or_else(|| {
+                AppError::Config("solver level-ascii line must be a string".to_string())
+            })
         })
         .collect::<Result<Vec<_>, _>>()?;
     let legend = json_object(
@@ -1598,10 +1614,7 @@ fn json_u64_value(value: Option<&serde_json::Value>, key: &str) -> Result<u64, A
 }
 
 #[cfg(feature = "solver")]
-fn optional_json_bool(
-    value: Option<&serde_json::Value>,
-    default: bool,
-) -> Result<bool, AppError> {
+fn optional_json_bool(value: Option<&serde_json::Value>, default: bool) -> Result<bool, AppError> {
     let Some(value) = value else {
         return Ok(default);
     };
@@ -1687,7 +1700,9 @@ fn solve_state_json_from_source_inner(
             max_duration: None,
         }
     };
-    let response = solve_current_state_with_budget(&loaded, state, budget)?;
+    let level_index = level_index_from_state_json(&loaded, state_json)
+        .ok_or_else(|| AppError::Config("solver state requires a valid levelIndex".to_string()))?;
+    let response = solve_current_state_with_budget(&loaded, level_index, state, budget)?;
     let mut out = String::new();
     push_solution_response(&mut out, &loaded, &response);
     Ok(out)
@@ -1726,7 +1741,7 @@ fn solve_state3_json_from_source_inner(
 
 #[cfg(feature = "solver")]
 fn parse_puzzle3d_for_solver(source: &str) -> Result<ParsedPuzzle3, AppError> {
-    let document = puzzle_lang::parse_game(source)?;
+    let document = puzzle_lang::parse_game_for_path(source, "solver.puzzle3")?;
     document
         .models
         .into_iter()
@@ -1821,8 +1836,10 @@ fn materialize_level_start_state(
         state = outcome.next_state;
         cancelled |= outcome.cancelled;
     } else if loaded.run_rules_on_level_start {
-        let outcome =
-            transition_program_outcome(&loaded.game, loaded.game.program(), &state, InputId(0))?;
+        let program = loaded.program_for_level(level_index).ok_or_else(|| {
+            AppError::Config(format!("level start index out of range: {level_index}"))
+        })?;
+        let outcome = transition_program_outcome(&loaded.game, program, &state, InputId(0))?;
         state = outcome.next_state;
         cancelled |= outcome.cancelled;
     }

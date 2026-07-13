@@ -372,7 +372,8 @@ pub struct Puzzle3RuntimeBridge {
 
 impl Puzzle3RuntimeBridge {
     pub fn from_source(source: &str) -> Result<Self, String> {
-        let document = puzzle_lang::parse_game(source).map_err(|error| error.to_string())?;
+        let document = puzzle_lang::parse_game_for_path(source, "runtime.puzzle3")
+            .map_err(|error| error.to_string())?;
         let animation = document.animation.clone();
         let parsed = document
             .models
@@ -2621,12 +2622,17 @@ levels main of main {
         let mut bridge =
             StandaloneSessionBridge::from_source(source, "runtime_scene_fixture.puzzle").unwrap();
 
-        let title: Value =
+        let initial: Value =
             serde_json::from_str(&bridge.request_json("GET", "/api/state").unwrap()).unwrap();
-        assert_eq!(title["currentScene"], "title");
-        assert_eq!(title["title"], "Runtime Scene Fixture");
-        assert_eq!(title["scenes"][0]["name"], "title");
-        assert_eq!(title["scenes"][0]["components"][0]["kind"], "title");
+        assert_eq!(initial["currentScene"], "board");
+        assert_eq!(initial["title"], "Runtime Scene Fixture");
+        let title = initial["scenes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|scene| scene["name"] == "title")
+            .unwrap();
+        assert_eq!(title["components"][0]["kind"], "title");
 
         let playing: Value = serde_json::from_str(
             &bridge
@@ -2968,7 +2974,7 @@ render {
   }
 }
 
-puzzle3 sokoban {
+puzzle sokoban {
 layers {
   solid = Player
 }
@@ -2978,7 +2984,7 @@ rules {
 }
 }
 
-levels3 default of sokoban {
+levels default of sokoban {
 legend {
 P = Player
 . = empty
@@ -3037,7 +3043,7 @@ render {
   }
 }
 
-puzzle3 sokoban {
+puzzle sokoban {
 layers {
   solid = Player
 }
@@ -3047,7 +3053,7 @@ rules {
 }
 }
 
-levels3 default of sokoban {
+levels default of sokoban {
 legend {
 P = Player
 . = empty
@@ -3117,7 +3123,7 @@ P.
         let source = r#"
 title = "Inline 3D"
 
-puzzle3 sokoban {
+puzzle sokoban {
 layers {
   solid = Player
 }
@@ -3131,7 +3137,7 @@ layout {
 }
 }
 
-levels3 default of sokoban {
+levels default of sokoban {
 legend {
 P = Player
 }
@@ -3143,7 +3149,7 @@ P
         let mut bridge =
             StandaloneSessionBridge::from_source(source, "inline_3d_fixture.puzzle3").unwrap();
         let snapshot: Value = serde_json::from_str(&bridge.snapshot_json()).unwrap();
-        assert_eq!(snapshot["currentScene"], json!("title"));
+        assert_eq!(snapshot["currentScene"], json!("sokoban"));
         assert_eq!(snapshot["title"], json!("Inline 3D"));
     }
 }

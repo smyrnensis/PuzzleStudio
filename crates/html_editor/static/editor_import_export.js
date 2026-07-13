@@ -322,7 +322,7 @@ async function importFilesIntoFolder(fileList, targetFolder) {
     }
   }
   if (!importedCount) {
-    setEditorStatus("No importable files", "is-error");
+    setEditorStatus("No supported files found", "is-error");
     return;
   }
   if (firstImportedPuzzleId) {
@@ -334,7 +334,7 @@ async function importFilesIntoFolder(fileList, targetFolder) {
   loadEmbeddedDocument(currentDocumentIndex);
   saveDocumentStore(false);
   const folderName = targetFolder && targetFolder !== fileTree ? folderPath(targetFolder) || targetFolder.name : "Files";
-  setEditorStatus(`Imported to ${folderName}`, "is-ok");
+  setEditorStatus(`Opened in ${folderName}`, "is-ok");
 }
 
 function importErrorMessage(error) {

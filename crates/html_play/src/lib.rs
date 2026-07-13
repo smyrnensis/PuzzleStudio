@@ -42,7 +42,7 @@ use puzzle_grid3d::{
 };
 #[cfg(feature = "solver")]
 use puzzle_grid3d::{
-    Rule3, WinCondition3, eval_condition_kind, transition_program as transition_program3,
+    RuleStep3, WinCondition3, eval_condition_kind, transition_program as transition_program3,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use puzzle_lang::AssetsDef;
@@ -413,7 +413,7 @@ levels default of board {
     #[test]
     fn stateful_puzzle3_runtime_exposes_changed_cells_without_state_payload() {
         let source = r#"
-puzzle3 board {
+puzzle board {
   layers {
     actor = Player
   }
@@ -422,7 +422,7 @@ puzzle3 board {
   }
 }
 
-levels3 default of board {
+levels default of board {
   legend {
     . = empty
     P = Player
@@ -498,6 +498,25 @@ levels3 default of board {
     fn renderer_board_floor_is_transparent_by_default() {
         assert!(RENDERER_CSS.contains("--cell-background: transparent;"));
         assert!(RENDERER_JS.contains("floorColor && floorColor !== \"transparent\""));
+    }
+
+    #[test]
+    fn puzzle3_runtime_advances_animated_sprite_frames() {
+        assert!(
+            PUZZLE3_APP_JS
+                .contains("function currentRuntimeSpriteLayers(sprite, now = performance.now())")
+        );
+        assert!(PUZZLE3_APP_JS.contains("Math.floor(now / frameDuration) % frames.length"));
+        assert!(PUZZLE3_APP_JS.contains("function hasRuntimeSpriteAnimation()"));
+        assert!(
+            PUZZLE3_APP_JS.contains(
+                "if (hasRuntimeSpriteAnimation()) {\n    scheduleViewportAnimation();\n  }"
+            )
+        );
+        assert!(
+            PUZZLE3_APP_JS
+                .contains("throw new Error(\"Puzzle3 runtime sprite frames are missing.\")")
+        );
     }
 
     #[test]
@@ -826,6 +845,8 @@ P
         assert!(APP_JS.contains(r#"slot.dataset.sceneSizing = "ratio";"#));
         assert!(APP_CSS.contains(".scene-layer.has-single-frame-component"));
         assert!(APP_CSS.contains(".scene-ratio-slot"));
+        assert!(APP_CSS.contains("grid-template-columns: minmax(0, 1fr);"));
+        assert!(APP_CSS.contains("grid-template-rows: minmax(0, 1fr);"));
         assert!(APP_CSS.contains("flex: 1 1 auto;"));
         assert!(APP_CSS.contains(".scene-flow"));
         assert!(APP_CSS.contains(".screen-view .view-row > .scene-flow"));
@@ -1662,7 +1683,7 @@ P
 }
 }
 
-puzzle3 cube {
+puzzle cube {
   layers {
     actor = Player Box Wall
   }
@@ -1676,7 +1697,7 @@ puzzle3 cube {
   }
 }
 
-levels3 cube_levels of cube {
+levels cube_levels of cube {
   legend {
     . = empty
     P = Player
@@ -1691,7 +1712,7 @@ scene mixed_play {
   layout {
     row {
       puzzle flat_board = flat
-      puzzle3 cube_board = cube
+      puzzle cube_board = cube
     }
 }
 }
@@ -1730,7 +1751,7 @@ level "microban_02" {
 }
 }
 
-puzzle3 microban3d {
+puzzle microban3d {
 layers {
 actor = Player
 }
@@ -1739,7 +1760,7 @@ rules {
 }
 }
 
-levels3 microban of microban3d {
+levels microban of microban3d {
 legend {
 . = empty
 P = Player
@@ -2193,7 +2214,7 @@ levels default of board {
         let goal = loaded.goal.as_ref().map(|goal| &goal.expr);
         let lose = loaded.lose.as_ref().map(|lose| &lose.expr);
         let (solver_game, slicer) = solver_game_and_state_slicer_for_compiled(
-            loaded.game.clone(),
+            loaded.compiled_game_for_level(0).unwrap(),
             initial,
             goal,
             lose,
@@ -2751,7 +2772,7 @@ levels default of board {
         };
         let switch = object_named("Switch");
         let battery = object_named("Battery");
-        let solver_game = loaded.solver_game();
+        let solver_game = loaded.compiled_game_for_level(0).unwrap();
         let initial = &loaded.levels[0].initial_state;
         let (solver_game, slicer) = solver_game_and_state_slicer_for_loaded(
             &loaded,
@@ -2826,7 +2847,7 @@ levels default of board {
         let initial = &loaded.levels[0].initial_state;
         let (solver_game, slicer) = solver_game_and_state_slicer_for_collect(
             &loaded,
-            loaded.solver_game(),
+            loaded.compiled_game_for_level(0).unwrap(),
             initial,
             &selector,
             None,
@@ -2905,7 +2926,7 @@ levels default of board {
         let initial = &loaded.levels[0].initial_state;
         let (solver_game, slicer) = solver_game_and_state_slicer_for_loaded(
             &loaded,
-            loaded.solver_game(),
+            loaded.compiled_game_for_level(0).unwrap(),
             initial,
             Some(&goal),
             None,
@@ -3330,6 +3351,8 @@ levels default of board {
         let loaded = parse_game(source).unwrap();
         let mut state_json = String::new();
         push_state_data(&mut state_json, &loaded.levels[0].initial_state);
+        state_json.pop();
+        write!(&mut state_json, r#","levelIndex":0}}"#).unwrap();
 
         let response =
             solve_state_json_from_source(source, "game.puzzle", &state_json, 2, 100, 0).unwrap();
@@ -3517,7 +3540,7 @@ scene playing {
 "#;
 
         let loaded = parse_game(source).unwrap();
-        let labels = solver_inputs(&loaded)
+        let labels = solver_inputs_for_program(&loaded, loaded.game.program())
             .into_iter()
             .map(|input| loaded.input_labels.get(&input).unwrap().as_str())
             .collect::<Vec<_>>();
@@ -3531,10 +3554,10 @@ scene playing {
         let source = r#"
 title = "Themed 3D Solver"
 
-puzzle3 push3 {
+puzzle push3 {
 layers {
 floor = Goal
-solid = Player Box Wall
+Player Box Wall
 }
 
 groups {
@@ -3568,7 +3591,7 @@ prefer has_box
 }
 }
 
-levels3 tiny of push3 {
+levels tiny of push3 {
 legend {
 . = empty
 P = Player
@@ -4064,6 +4087,22 @@ rules {
     }
 
     #[test]
+    fn editor_preview_does_not_restore_or_write_player_progress() {
+        assert!(STANDALONE_JS.contains(
+            "sessionProgressEnabled() {\n      return this.data?.editorPreview !== true;\n    }"
+        ));
+        assert!(STANDALONE_JS.contains(
+            "if (!this.sessionRuntime || !this.sessionProgressEnabled()) {\n        return;\n      }"
+        ));
+        assert!(STANDALONE_JS.contains(
+            "if (!this.sessionRuntime || !this.sessionProgressEnabled()) {\n        return false;\n      }"
+        ));
+        assert!(
+            STANDALONE_JS.contains("if (method === \"POST\" && this.writeSessionProgressSave()) {")
+        );
+    }
+
+    #[test]
     fn standalone_export_surfaces_display_projection_errors_without_raw_fallback() {
         let server_source = include_str!("lib_server.rs");
         assert!(server_source.contains("push_display_error_scene_object"));
@@ -4089,7 +4128,7 @@ rules {
 
         let initial = bridge.request_json("GET", "/api/state").unwrap();
         let initial: serde_json::Value = serde_json::from_str(&initial).unwrap();
-        assert_eq!(initial["currentScene"], "title");
+        assert_eq!(initial["currentScene"], "sokoban");
         assert_eq!(initial["title"], "Microban");
         let initial = initial.as_object().unwrap();
         assert!(initial.contains_key("visibleScenes"));
@@ -4256,7 +4295,7 @@ level_menu
         let mut bridge = StandaloneSessionBridge::from_source(source, "contract.puzzle").unwrap();
 
         let playing: Value = serde_json::from_str(&bridge.snapshot_json()).unwrap();
-        assert_eq!(playing["currentScene"], json!("playing"));
+        assert_eq!(playing["currentScene"], json!("default"));
         assert_eq!(playing["acceptsModelInput"], json!(true));
 
         let select: Value = serde_json::from_str(
@@ -4652,14 +4691,14 @@ rules {
         let mut bridge = StandaloneSessionBridge::from_source(source, "games/spec_3d.puzzle3")
             .expect("single puzzle3 document should have a scene host game runtime");
         let snapshot: Value = serde_json::from_str(&bridge.snapshot_json()).unwrap();
-        assert_eq!(snapshot["currentScene"], json!("title"));
+        assert_eq!(snapshot["currentScene"], json!("sokoban"));
     }
 
     #[test]
     fn puzzle3_source_free_export_embeds_local_frame_runtime_contract() {
         let source = r#"title = "Local Frame"
 
-puzzle3 cube {
+puzzle cube {
   layers {
     actor = Player
   }
@@ -4671,11 +4710,11 @@ puzzle3 cube {
 
 scene playing {
   layout {
-    puzzle3 board = cube
+    puzzle board = cube
   }
 }
 
-levels3 default of cube {
+levels default of cube {
   legend {
     P = Player
   }
@@ -4696,7 +4735,7 @@ levels3 default of cube {
     fn puzzle3_export_embeds_source_free_frame_fixture_and_path() {
         let source = r#"title = "Tiny"
 
-puzzle3 cube {
+puzzle cube {
   layers {
     actor = Player
   }
@@ -4712,11 +4751,11 @@ scene title {
 
 scene playing {
   layout {
-    puzzle3 board = cube
+    puzzle board = cube
   }
 }
 
-levels3 default of cube {
+levels default of cube {
   legend {
     P = Player
   }
@@ -4786,6 +4825,27 @@ levels3 default of cube {
         );
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("function threeBackground(THREE, value)"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("disposeScene(this.scene);"));
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("function shadowSettings(frame)"));
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("this.renderer.shadowMap.enabled = enabled;"));
+        assert!(
+            PUZZLE3_THREE_RENDERER_JS
+                .contains("this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;")
+        );
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("key.castShadow = shadow.enabled;"));
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("fill.castShadow = false;"));
+        assert!(
+            PUZZLE3_THREE_RENDERER_JS
+                .contains("function configureDirectionalShadow(light, bounds, voxels)")
+        );
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("mesh.castShadow = shadow.enabled;"));
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("mesh.receiveShadow = shadow.enabled;"));
+        assert!(
+            PUZZLE3_THREE_RENDERER_JS
+                .contains("function addShadowCatcher(THREE, scene, frame, shadow)")
+        );
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("new THREE.ShadowMaterial({"));
+        assert!(PUZZLE3_APP_JS.contains("function canvasShadowRenderError()"));
+        assert!(PUZZLE3_APP_JS.contains("Canvas renderer cannot render `shadow = true`"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("function addGrid(THREE, scene, frame)"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("function frameVisibleVoxels(frame)"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("function visibleVoxelStack(stack)"));
@@ -4937,7 +4997,7 @@ theme clean {
   background_color = #123456
 }
 
-puzzle3 cube {
+puzzle cube {
   layers {
     actor = Player
   }
@@ -4947,11 +5007,11 @@ puzzle3 cube {
 
 scene playing {
   layout {
-    puzzle3 board = cube
+    puzzle board = cube
   }
 }
 
-levels3 default of cube {
+levels default of cube {
   legend {
     P = Player
   }
@@ -4988,11 +5048,11 @@ levels3 default of cube {
     }
 
     #[test]
-    fn puzzle3_screenshot_default_scene_prefers_model_component_scene() {
+    fn puzzle3_screenshot_default_scene_uses_document_scene_order() {
         let source = r#"
 title = "Screenshot"
 
-puzzle3 cube {
+puzzle cube {
   layers {
     actor = Player
   }
@@ -5009,11 +5069,11 @@ scene title {
 
 scene playing {
   layout {
-    puzzle3 board = cube
+    puzzle board = cube
   }
 }
 
-levels3 basic of cube {
+levels basic of cube {
   legend {
     P = Player
   }
@@ -5022,10 +5082,119 @@ levels3 basic of cube {
   }
 }
 "#;
-        let document = puzzle_lang::parse_game(source).expect("parse puzzle3 document");
+        let document = puzzle_lang::parse_game_for_path(source, "screenshot.puzzle3")
+            .expect("parse puzzle3 document");
         assert_eq!(
             default_puzzle3_screenshot_scene(&document).as_deref(),
-            Some("playing")
+            Some("cube")
+        );
+    }
+
+    #[cfg(feature = "solver")]
+    #[test]
+    fn solver_request_uses_target_levels_effective_rules() {
+        let source = r#"
+title = solver_level_rules
+puzzle board {
+  layers {
+    floor = Goal
+    actor = Player
+  }
+  keys {
+    a ArrowLeft -> left
+    d ArrowRight -> right
+  }
+  rules {
+    input left [ Player ] -> [ Player ]
+  }
+  win_conditions {
+    all Goal on Player
+  }
+}
+levels default of board {
+  legend {
+    . = empty
+    P = Player
+    G = Goal
+    X = Goal Player
+  }
+  level "local" {
+    rules {
+      input right [ Player | Goal no actor ] -> [ | Goal Player ]
+    }
+    PG
+  }
+}
+"#;
+        let loaded = parse_game(source).unwrap();
+        let player = loaded
+            .object_labels
+            .iter()
+            .find_map(|(id, label)| (label == "Player").then_some(*id))
+            .unwrap();
+        let goal = loaded
+            .object_labels
+            .iter()
+            .find_map(|(id, label)| (label == "Goal").then_some(*id))
+            .unwrap();
+        let state_spec = |lines: Vec<&str>| {
+            json!({
+                "kind": "level-ascii",
+                "lifecycle": "already-materialized",
+                "data": {
+                    "empty": ".",
+                    "legend": {
+                        ".": [],
+                        "P": [player],
+                        "G": [goal],
+                        "X": [player, goal]
+                    },
+                    "lines": lines,
+                }
+            })
+        };
+        let request = json!({
+            "source": source,
+            "puzzlePath": "game.puzzle",
+            "modelKind": "2d",
+            "target": {
+                "origin": "preview-level",
+                "level": {
+                    "index": 0,
+                    "levelName": "local",
+                    "levelPuzzle": "board",
+                    "levelPack": "default"
+                },
+                "state": state_spec(vec!["PG"]),
+            },
+            "goal": {"kind": "exact-state", "state": state_spec(vec![".X"])},
+            "acceptWinCommand": false,
+            "maxDepth": 2,
+            "maxNodes": 100,
+            "maxMs": 0,
+        });
+
+        let response = solve_request_json(&request.to_string()).unwrap();
+        assert!(response.contains(r#""result":"solved""#), "{response}");
+        assert!(response.contains(r#""depth":1"#), "{response}");
+
+        let mut state_json = String::new();
+        push_state_data(&mut state_json, &loaded.levels[0].initial_state);
+        state_json.pop();
+        write!(&mut state_json, r#","levelIndex":0}}"#).unwrap();
+        let response =
+            solve_state_json_from_source(source, "game.puzzle", &state_json, 2, 100, 0).unwrap();
+        assert!(response.contains(r#""result":"solved""#), "{response}");
+        assert!(response.contains(r#""depth":1"#), "{response}");
+
+        let mut state_without_level = String::new();
+        push_state_data(&mut state_without_level, &loaded.levels[0].initial_state);
+        let error =
+            solve_state_json_from_source(source, "game.puzzle", &state_without_level, 2, 100, 0)
+                .unwrap_err();
+        assert!(
+            error.contains("solver state requires a valid levelIndex"),
+            "{error}"
         );
     }
 

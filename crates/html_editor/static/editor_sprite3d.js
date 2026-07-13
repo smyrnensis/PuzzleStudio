@@ -10,24 +10,145 @@ let sprite3dClipSelection = null;
 let sprite3dClipDrag = null;
 let sprite3dClipClipboard = null;
 let sprite3dClipFloating = null;
+let sprite3dGridVisible = true;
 const SPRITE3D_EDITOR_MAX_SIZE = 64;
+const SPRITE3D_ANIMATION_MAX_FRAMES = 24;
 const SPRITE3D_SLICE_SCRUB_STEP_PX = 18;
 const SPRITE3D_CAMERA_MIN_PITCH_DEGREES = -90;
 const SPRITE3D_CAMERA_MAX_PITCH_DEGREES = 90;
-const SPRITE3D_PREVIEW_BASE_ZOOM = 0.92;
+const SPRITE3D_PREVIEW_BASE_ZOOM = 1;
 const SPRITE3D_CAMERA_DEFAULT = {
   yawDegrees: 15,
   pitchDegrees: 30,
   zoom: 1,
 };
 
+function sprite3dFrameCellCount() {
+  return sprite3d.size * sprite3d.size * sprite3d.depth;
+}
+
+function sprite3dAxisSize(axis = sprite3d.axis) {
+  return axis === "z" ? sprite3d.depth : sprite3d.size;
+}
+
+function sprite3dPlaneSize(axis = sprite3d.axis) {
+  return axis === "z"
+    ? { width: sprite3d.size, height: sprite3d.size }
+    : { width: sprite3d.size, height: sprite3d.depth };
+}
+
+function normalizedSprite3dAnimationDuration(value = sprite3d.animationDurationMs) {
+  return Math.max(20, Math.min(5000, Math.trunc(Number(value) || 120)));
+}
+
+function normalizeSprite3dFrameCells(cells) {
+  const count = sprite3dFrameCellCount();
+  return Array.from({ length: count }, (_, index) => (
+    validSprite3dColorIndex(cells?.[index]) ? cells[index] : null
+  ));
+}
+
+function ensureSprite3dAnimationState() {
+  if (!Array.isArray(sprite3d.frames) || !sprite3d.frames.length) {
+    sprite3d.frames = [normalizeSprite3dFrameCells(sprite3d.cells)];
+  }
+  sprite3d.animationFrameCount = Math.max(
+    1,
+    Math.min(SPRITE3D_ANIMATION_MAX_FRAMES, Math.trunc(Number(sprite3d.animationFrameCount) || sprite3d.frames.length || 1)),
+  );
+  while (sprite3d.frames.length < sprite3d.animationFrameCount) {
+    sprite3d.frames.push(normalizeSprite3dFrameCells(sprite3d.frames[sprite3d.frames.length - 1]));
+  }
+  sprite3d.frames.length = sprite3d.animationFrameCount;
+  sprite3d.frames = sprite3d.frames.map(normalizeSprite3dFrameCells);
+  sprite3d.animationFrameIndex = Math.max(0, Math.min(
+    sprite3d.animationFrameCount - 1,
+    Math.trunc(Number(sprite3d.animationFrameIndex) || 0),
+  ));
+  sprite3d.animationPlaybackIndex = Math.max(0, Math.min(
+    sprite3d.animationFrameCount - 1,
+    Math.trunc(Number(sprite3d.animationPlaybackIndex) || 0),
+  ));
+  sprite3d.animationDurationMs = normalizedSprite3dAnimationDuration();
+  if (sprite3d.animationMode) {
+    sprite3d.cells = sprite3d.frames[sprite3d.animationFrameIndex];
+  }
+}
+
+function commitSprite3dActiveFrame() {
+  if (!sprite3d.animationMode) {
+    return;
+  }
+  const cells = sprite3d.cells;
+  const frameIndex = Math.max(0, Math.trunc(Number(sprite3d.animationFrameIndex) || 0));
+  ensureSprite3dAnimationState();
+  sprite3d.animationFrameIndex = Math.min(frameIndex, sprite3d.animationFrameCount - 1);
+  sprite3d.frames[sprite3d.animationFrameIndex] = normalizeSprite3dFrameCells(cells);
+  sprite3d.cells = sprite3d.frames[sprite3d.animationFrameIndex];
+}
+
+function setSprite3dAnimationMode(enabled, options = {}) {
+  sprite3d.animationMode = Boolean(enabled);
+  if (sprite3d.animationMode) {
+    ensureSprite3dAnimationState();
+  } else {
+    sprite3d.animationPlaying = false;
+  }
+  if (options.render !== false) {
+    renderSprite3dBuilder();
+  }
+  syncPreviewModeButtonState();
+}
+
+function setSprite3dAnimationFrame(index) {
+  selectSharedSpriteAnimationFrame("sprite3d", index);
+}
+
+function setSprite3dAnimationFrameCount(value) {
+  const before = visualEditSnapshot("sprite3d");
+  commitSprite3dActiveFrame();
+  sprite3d.animationFrameCount = Math.max(1, Math.min(
+    SPRITE3D_ANIMATION_MAX_FRAMES,
+    Math.trunc(Number(value) || 1),
+  ));
+  ensureSprite3dAnimationState();
+  sprite3d.animationFrameIndex = Math.min(sprite3d.animationFrameIndex, sprite3d.animationFrameCount - 1);
+  sprite3d.cells = sprite3d.frames[sprite3d.animationFrameIndex];
+  renderSprite3dBuilder();
+  pushVisualEditUndoSnapshot("sprite3d", before);
+}
+
+function moveSprite3dAnimationFrame(delta) {
+  moveSharedSpriteAnimationFrame("sprite3d", delta);
+}
+
+function insertSprite3dAnimationFrameAt(index) {
+  return insertSharedSpriteAnimationFrameAt("sprite3d", index);
+}
+
+function removeSprite3dAnimationFrameAt(index) {
+  return removeSharedSpriteAnimationFrameAt("sprite3d", index);
+}
+
+function setSprite3dAnimationDuration(value) {
+  const before = visualEditSnapshot("sprite3d");
+  sprite3d.animationDurationMs = normalizedSprite3dAnimationDuration(value);
+  renderSprite3dControls();
+  pushVisualEditUndoSnapshot("sprite3d", before);
+}
+
 function resetSprite3dBuilder(size = sprite3d.size) {
   resetSprite3dClipState({ clipboard: true });
   ensureSprite3dPalette();
   sprite3d.size = clampSprite3dSize(size);
-  sprite3d.slice = Math.max(0, Math.min(sprite3d.size - 1, Number(sprite3d.slice) || 0));
+  sprite3d.depth = clampSprite3dSize(sprite3d.depth ?? sprite3d.size);
+  sprite3d.slice = Math.max(0, Math.min(sprite3dAxisSize() - 1, Number(sprite3d.slice) || 0));
   sprite3d.hoverSlice = null;
-  sprite3d.cells = Array.from({ length: sprite3d.size * sprite3d.size * sprite3d.size }, () => null);
+  sprite3d.cells = Array.from({ length: sprite3dFrameCellCount() }, () => null);
+  sprite3d.frames = [sprite3d.cells];
+  sprite3d.animationFrameIndex = 0;
+  sprite3d.animationFrameCount = 1;
+  sprite3d.animationPlaybackIndex = 0;
   sprite3d.sourceSpatialOps = [];
   if (!validSprite3dColorIndex(sprite3d.selectedColorIndex)) {
     sprite3d.selectedColorIndex = 0;
@@ -95,22 +216,80 @@ function renderSprite3dBuilder() {
     return;
   }
   withSprite3dPaneScrollPreserved(() => {
+    mountSharedSpriteAnimationUi("3d");
+    commitSprite3dActiveFrame();
+    sprite3dBuilder.classList.toggle("is-animation-mode", Boolean(sprite3d.animationMode));
     renderSprite3dControls();
     renderSprite3dPalette();
     renderSprite3dSliceBoard();
     renderSprite3dPreview();
+    renderSprite3dAnimationFrameStrip();
+    syncSpriteAnimationPlayback();
     syncSprite3dSourceActionButtons();
+  });
+}
+
+function sprite3dAnimationFramePreview(frame) {
+  const canvas = document.createElement("canvas");
+  canvas.className = "sprite-animation-3d-preview";
+  canvas.width = 52;
+  canvas.height = 52;
+  canvas.setAttribute("aria-hidden", "true");
+  renderSprite3dPreviewCanvas(canvas, frame, { overlays: false });
+  return [canvas];
+}
+
+function renderSprite3dAnimationFrameStrip() {
+  if (!sprite3dAnimationFrameStrip || !sprite3d.animationMode) {
+    return;
+  }
+  ensureSprite3dAnimationState();
+  const plane = sprite3dPlaneSize();
+  const showInsertTargets = spriteAnimationInsertMode && sprite3d.animationFrameCount < SPRITE3D_ANIMATION_MAX_FRAMES;
+  const showRemoveTargets = spriteAnimationRemoveMode && sprite3d.animationFrameCount > 1;
+  renderSpriteAnimationFrameStripView({
+    target: sprite3dAnimationFrameStrip,
+    frameCount: sprite3d.animationFrameCount,
+    activeIndex: sprite3d.animationFrameIndex,
+    playingIndex: sprite3d.animationPlaybackIndex,
+    size: Math.max(plane.width, plane.height),
+    showInsertTargets,
+    showRemoveTargets,
+    renderCells: (index) => sprite3dAnimationFramePreview(sprite3d.frames[index]),
+    onSelect: setSprite3dAnimationFrame,
+    onRemove: removeSprite3dAnimationFrameAt,
+    renderInsertTarget: (index) => spriteAnimationInsertTargetButton(index, insertSprite3dAnimationFrameAt, "3D sprite animation"),
+    noun: "3D sprite animation",
   });
 }
 
 function renderSprite3dControls() {
   withSprite3dPaneScrollPreserved(() => {
+    renderSpriteEditorUpperControls(
+      sprite3dBuilder.querySelector(".sprite-controls"),
+      spriteEditorUpperControls3d(),
+    );
     sprite3dNameInput.value = sprite3dNameInput.value || "VoxelSprite";
+    renderSpriteShapeBindControl(sprite3dShapeField, {
+      state: sprite3d,
+      render: renderSprite3dControls,
+      onChange: () => {
+        syncSprite3dSourceActionButtons();
+        renderSprite3dBuilder();
+      },
+    });
+    if (sprite3d.animationMode) {
+      ensureSprite3dAnimationState();
+    }
     sprite3dSizeInput.value = String(sprite3d.size);
+    sprite3dDepthInput.value = String(sprite3d.depth);
     syncSprite3dBucketButton();
     syncSprite3dTranslateButton();
+    syncSpriteMarkerControl();
+    syncSprite3dGridButton();
     renderSprite3dClipActions();
     renderSprite3dScopeControl();
+    renderSprite3dEditorToolbar();
     renderSprite3dCameraControls();
     renderSpriteScaleControl({
       size: sprite3d.size,
@@ -123,30 +302,79 @@ function renderSprite3dControls() {
     });
     if (sprite3dSliceValue instanceof HTMLInputElement) {
       sprite3dSliceValue.min = "1";
-      sprite3dSliceValue.max = String(sprite3d.size);
+      sprite3dSliceValue.max = String(sprite3dAxisSize());
       sprite3dSliceValue.value = String(sprite3d.slice + 1);
     } else if (sprite3dSliceValue) {
-      sprite3dSliceValue.textContent = `${sprite3d.slice + 1} / ${sprite3d.size}`;
+      sprite3dSliceValue.textContent = `${sprite3d.slice + 1} / ${sprite3dAxisSize()}`;
     }
+    if (sprite3dAnimationDurationInput) {
+      sprite3dAnimationDurationInput.value = String(normalizedSprite3dAnimationDuration());
+    }
+    if (sprite3dAnimationFrameCountInput) {
+      sprite3dAnimationFrameCountInput.value = String(sprite3d.animationFrameCount || 1);
+    }
+    if (sprite3dAnimationFrameInput) {
+      sprite3dAnimationFrameInput.value = String((sprite3d.animationFrameIndex || 0) + 1);
+      sprite3dAnimationFrameInput.max = String(sprite3d.animationFrameCount || 1);
+    }
+    if (sprite3dAnimationFrameTotal) {
+      sprite3dAnimationFrameTotal.textContent = String(sprite3d.animationFrameCount || 1);
+    }
+    syncSharedSpriteAnimationToolbarState(sprite3d.animationFrameCount || 1, SPRITE3D_ANIMATION_MAX_FRAMES);
     const sliceTotal = document.querySelector("#sprite3dSliceTotal");
     if (sliceTotal) {
-      sliceTotal.textContent = String(sprite3d.size);
-    }
-    if (sprite3dPasteSliceButton) {
-      sprite3dPasteSliceButton.disabled = !sprite3d.sliceClipboard;
+      sliceTotal.textContent = String(sprite3dAxisSize());
     }
     if (sprite3dPreviousSliceButton) {
       sprite3dPreviousSliceButton.disabled = sprite3d.slice <= 0;
+      sprite3dPreviousSliceButton.dataset.tooltip = "Previous slice";
+      sprite3dPreviousSliceButton.dataset.shortcut = "[";
     }
     if (sprite3dNextSliceButton) {
-      sprite3dNextSliceButton.disabled = sprite3d.slice >= sprite3d.size - 1;
+      sprite3dNextSliceButton.disabled = sprite3d.slice >= sprite3dAxisSize() - 1;
+      sprite3dNextSliceButton.dataset.tooltip = "Next slice";
+      sprite3dNextSliceButton.dataset.shortcut = "]";
     }
     for (const button of sprite3dAxisButtons) {
       const active = button.dataset.sprite3dAxis === sprite3d.axis;
       button.classList.toggle("is-active", active);
       button.setAttribute("aria-pressed", String(active));
+      button.dataset.tooltip = `${button.dataset.sprite3dAxis.toUpperCase()} axis`;
+      button.dataset.shortcut = button.dataset.sprite3dAxis.toUpperCase();
     }
   });
+}
+
+function renderSprite3dEditorToolbar() {
+  renderSpriteEditorToolbar({ dimension: "3d", target: sprite3dToolbarHost });
+}
+
+function selectSprite3dBrushSize(size) {
+  spriteBrushSizePx = normalizeSpriteBrushSize(size);
+  sprite3dBucketActive = false;
+  sprite3dTranslateActive = false;
+  deactivateSprite3dClipMode({ render: false });
+  syncSpriteMarkerControl();
+  renderSprite3dBuilder();
+  setSprite3dActionStatus(`Brush: ${spriteBrushSizePx}px`, "is-ok");
+}
+
+function syncSprite3dGridButton() {
+  if (!spriteGridButton) {
+    return;
+  }
+  spriteGridButton.classList.toggle("is-active", sprite3dGridVisible);
+  spriteGridButton.setAttribute("aria-pressed", String(sprite3dGridVisible));
+  spriteGridButton.title = "Toggle grid";
+  spriteGridButton.setAttribute("aria-label", "Toggle 3D sprite slice grid");
+}
+
+function toggleSprite3dGrid() {
+  sprite3dGridVisible = !sprite3dGridVisible;
+  syncSprite3dGridButton();
+  renderSprite3dSliceBoard();
+  renderSprite3dPresentationSurfaces();
+  setSprite3dActionStatus(sprite3dGridVisible ? "3D sprite grid visible" : "3D sprite grid hidden", "is-ok");
 }
 
 function sprite3dEditScope() {
@@ -162,14 +390,14 @@ function renderSprite3dScopeControl() {
     {
       button: sprite3dScopeSliceButton,
       scope: "slice",
-      label: "Scope slice",
-      title: "Scope slice",
+      label: "Scope 2D",
+      title: "Scope 2D slice",
     },
     {
       button: sprite3dScopeAllButton,
       scope: "all",
-      label: "Scope all",
-      title: "Scope all",
+      label: "Scope 3D",
+      title: "Scope 3D volume",
     },
   ];
   for (const item of buttons) {
@@ -192,11 +420,11 @@ function updateSprite3dScopedActionLabels() {
   setSprite3dButtonLabel(sprite3dRotatePlaneRightButton, `Rotate ${target} CW`);
   setSprite3dButtonLabel(sprite3dFlipPlaneHorizontalButton, `Flip ${target} horizontally`);
   setSprite3dButtonLabel(sprite3dFlipPlaneVerticalButton, `Flip ${target} vertically`);
-  setSprite3dButtonLabel(
-    sprite3dFillButton,
-    isAll ? "Fill connected 3D component" : "Fill connected area in current slice",
-  );
-  setSprite3dButtonLabel(sprite3dClearButton, isAll ? "Clear whole sprite" : "Clear current slice");
+  setSprite3dButtonLabel(sprite3dFillButton, "Fill");
+  sprite3dFillButton.dataset.tooltip = "Fill";
+  sprite3dFillButton.dataset.shortcut = "F";
+  syncSpriteEditCommandLabels("3d");
+  renderSprite3dClipActions();
   syncSprite3dTranslateButton();
 }
 
@@ -204,11 +432,12 @@ function syncSprite3dTranslateButton() {
   if (!sprite3dTranslateButton) {
     return;
   }
-  const label = sprite3dEditScope() === "all" ? "Translate whole sprite" : "Translate current slice";
   sprite3dTranslateButton.classList.toggle("is-active", sprite3dTranslateActive);
   sprite3dTranslateButton.setAttribute("aria-pressed", String(sprite3dTranslateActive));
-  sprite3dTranslateButton.setAttribute("aria-label", sprite3dTranslateActive ? "Stop translating 3D sprite" : label);
-  sprite3dTranslateButton.title = sprite3dTranslateActive ? "Stop translating 3D sprite" : label;
+  sprite3dTranslateButton.setAttribute("aria-label", "Move");
+  sprite3dTranslateButton.title = "Move";
+  sprite3dTranslateButton.dataset.tooltip = "Move";
+  sprite3dTranslateButton.dataset.shortcut = "M";
 }
 
 function renderSprite3dClipActions() {
@@ -217,50 +446,16 @@ function renderSprite3dClipActions() {
   }
   const actions = document.createElement("span");
   actions.className = "sprite-clip-actions";
-  actions.classList.toggle("is-expanded", sprite3dClipActive);
-  actions.append(renderSpriteClipButton({
-    title: sprite3dClipActive ? "Close clip tools" : "Clip",
-    ariaLabel: sprite3dClipActive ? "Close 3D clip tools" : "Open 3D clip tools",
+  const button = renderSpriteClipButton({
+    title: "Clip",
+    ariaLabel: "Clip",
     active: sprite3dClipActive,
     onClick: toggleSprite3dClipMode,
     icon: spriteLucideIconSvg("mouse-pointer-2"),
-  }));
-  if (sprite3dClipActive) {
-    const expanded = document.createElement("span");
-    expanded.className = "sprite-clip-expanded-actions";
-    expanded.append(
-      renderSpriteClipButton({
-        title: "Copy clip",
-        ariaLabel: "Copy selected 3D sprite area",
-        disabled: !sprite3dClipSelection,
-        onClick: copySprite3dClipSelection,
-        icon: spriteLucideIconSvg("copy"),
-      }),
-      renderSpriteClipButton({
-        title: "Cut clip",
-        ariaLabel: "Cut selected 3D sprite area",
-        disabled: !sprite3dClipSelection,
-        onClick: cutSprite3dClipSelection,
-        icon: spriteLucideIconSvg("scissors"),
-      }),
-      renderSpriteClipButton({
-        title: "Paste clip",
-        ariaLabel: "Paste copied 3D sprite area",
-        disabled: !sprite3dClipClipboard,
-        onClick: pasteSprite3dClipClipboard,
-        icon: spriteLucideIconSvg("clipboard-paste"),
-      }),
-      renderSpriteClipButton({
-        title: sprite3dClipFloating ? "Discard clip preview" : "Clear clip",
-        ariaLabel: sprite3dClipFloating ? "Discard 3D clip preview" : "Clear selected 3D sprite area",
-        disabled: !sprite3dClipSelection && !sprite3dClipFloating,
-        danger: true,
-        onClick: clearSprite3dClipSelection,
-        icon: spriteLucideIconSvg("trash-2"),
-      }),
-    );
-    actions.append(expanded);
-  }
+  });
+  button.dataset.tooltip = "Clip";
+  button.dataset.shortcut = "C";
+  actions.append(button);
   sprite3dClipActions.replaceChildren(actions);
 }
 
@@ -313,7 +508,8 @@ function normalizeSprite3dClipBox(box) {
   for (const axis of ["x", "y", "z"]) {
     const min = Math.trunc(Number(box[`min${axis.toUpperCase()}`]));
     const max = Math.trunc(Number(box[`max${axis.toUpperCase()}`]));
-    if (!Number.isInteger(min) || !Number.isInteger(max) || min < 0 || max < min || max >= sprite3d.size) {
+    const limit = axis === "z" ? sprite3d.depth : sprite3d.size;
+    if (!Number.isInteger(min) || !Number.isInteger(max) || min < 0 || max < min || max >= limit) {
       return null;
     }
     next[`min${axis.toUpperCase()}`] = min;
@@ -329,6 +525,14 @@ function sprite3dClipBoxDimensions(box = sprite3dClipSelection) {
     height: normalized.maxY - normalized.minY + 1,
     depth: normalized.maxZ - normalized.minZ + 1,
   } : null;
+}
+
+function sprite3dClipBoxContainsCoords(box, coords) {
+  const normalized = normalizeSprite3dClipBox(box);
+  return Boolean(normalized && coords
+    && coords.x >= normalized.minX && coords.x <= normalized.maxX
+    && coords.y >= normalized.minY && coords.y <= normalized.maxY
+    && coords.z >= normalized.minZ && coords.z <= normalized.maxZ);
 }
 
 function sprite3dClipPlaneRect(box = sprite3dClipSelection, axis = sprite3d.axis) {
@@ -373,12 +577,12 @@ function sprite3dClipBoxFromPlaneRect(rect, options = {}) {
     sprite3dCoordsFromPlane(sprite3d.axis, sprite3d.slice, rect.x, rect.y),
     sprite3dCoordsFromPlane(sprite3d.axis, sprite3d.slice, rect.x + rect.width - 1, rect.y + rect.height - 1),
   ];
-  const box = existing || { minX: 0, maxX: sprite3d.size - 1, minY: 0, maxY: sprite3d.size - 1, minZ: 0, maxZ: sprite3d.size - 1 };
+  const box = existing || { minX: 0, maxX: sprite3d.size - 1, minY: 0, maxY: sprite3d.size - 1, minZ: 0, maxZ: sprite3d.depth - 1 };
   for (const worldAxis of ["x", "y", "z"]) {
     if (worldAxis === sprite3d.axis) {
       if (!existing) {
         box[`min${worldAxis.toUpperCase()}`] = fullDepth ? 0 : fixedStack;
-        box[`max${worldAxis.toUpperCase()}`] = fullDepth ? sprite3d.size - 1 : fixedStack;
+        box[`max${worldAxis.toUpperCase()}`] = fullDepth ? sprite3dAxisSize(worldAxis) - 1 : fixedStack;
       }
       continue;
     }
@@ -408,9 +612,10 @@ function sprite3dClipCellFromClient(clientX, clientY, geometry) {
   if (!geometry || geometry.width <= 0 || geometry.height <= 0) {
     return null;
   }
+  const plane = sprite3dPlaneSize();
   return {
-    x: Math.max(0, Math.min(sprite3d.size - 1, Math.floor(((clientX - geometry.left) / geometry.width) * sprite3d.size))),
-    y: Math.max(0, Math.min(sprite3d.size - 1, Math.floor(((clientY - geometry.top) / geometry.height) * sprite3d.size))),
+    x: Math.max(0, Math.min(plane.width - 1, Math.floor(((clientX - geometry.left) / geometry.width) * plane.width))),
+    y: Math.max(0, Math.min(plane.height - 1, Math.floor(((clientY - geometry.top) / geometry.height) * plane.height))),
   };
 }
 
@@ -449,9 +654,10 @@ function sprite3dSliceClipCells(rect = sprite3dClipPlaneRect()) {
 function sprite3dClipClipboardFromSelection(box, dimensions) {
   if (sprite3dEditScope() === "slice") {
     const rect = sprite3dClipPlaneRect(box);
-    return { scope: "slice", width: rect.width, height: rect.height, depth: 1, cells: sprite3dSliceClipCells(rect) };
+    return { dimension: "3d", scope: "slice", width: rect.width, height: rect.height, depth: 1,
+      cells: sprite3dSliceClipCells(rect), colors: sprite3dPaletteColors() };
   }
-  return { scope: "all", ...dimensions, cells: sprite3dClipCells(box) };
+  return { dimension: "3d", scope: "all", ...dimensions, cells: sprite3dClipCells(box), colors: sprite3dPaletteColors() };
 }
 
 function pasteSprite3dClipCell(index, clipboardValue) {
@@ -466,6 +672,25 @@ function pasteSprite3dClipCell(index, clipboardValue) {
   }
   sprite3d.cells[index] = clipboardValue;
   return true;
+}
+
+function sprite3dClipForCurrentPalette(clipboard) {
+  if (!Array.isArray(clipboard?.colors)) return clipboard;
+  const palette = sprite3dPaletteEntries();
+  const colorToIndex = new Map(palette.map((entry, index) => [normalizeSpriteColor(entry.color), index]));
+  const sourceToTarget = clipboard.colors.map((rawColor) => {
+    const color = normalizeSpriteColor(rawColor);
+    if (color === "#00000000") return null;
+    if (!colorToIndex.has(color)) {
+      if (palette.length >= SPRITE_COLOR_TOKENS.length) {
+        throw new Error("Paste needs more colors than the 3D sprite palette can hold");
+      }
+      colorToIndex.set(color, palette.length);
+      palette.push({ color });
+    }
+    return colorToIndex.get(color);
+  });
+  return { ...clipboard, cells: clipboard.cells.map((value) => value === null ? null : sourceToTarget[value]) };
 }
 
 function setSprite3dClipCells(box, clipboard) {
@@ -546,37 +771,7 @@ function commitSprite3dClipMutation(before, changed, message) {
   return true;
 }
 
-function copySprite3dClipSelection() {
-  const box = normalizeSprite3dClipBox(sprite3dClipSelection);
-  const dimensions = sprite3dClipBoxDimensions(box);
-  if (!box || !dimensions) {
-    setSprite3dActionStatus("No clip selection", "is-error");
-    return false;
-  }
-  sprite3dClipClipboard = sprite3dClipClipboardFromSelection(box, dimensions);
-  sprite3dClipFloating = { kind: "copy" };
-  sprite3dClipActive = true;
-  renderSprite3dBuilder();
-  setSprite3dActionStatus(`Copied ${dimensions.width}x${dimensions.height}x${dimensions.depth} clip`, "is-ok");
-  return true;
-}
-
-function cutSprite3dClipSelection() {
-  const box = normalizeSprite3dClipBox(sprite3dClipSelection);
-  const dimensions = sprite3dClipBoxDimensions(box);
-  if (!box || !dimensions) {
-    setSprite3dActionStatus("No clip selection", "is-error");
-    return false;
-  }
-  const before = visualEditSnapshot("sprite3d");
-  sprite3dClipClipboard = sprite3dClipClipboardFromSelection(box, dimensions);
-  sprite3dClipFloating = { kind: "cut" };
-  const changed = clearSprite3dClipBox(box);
-  commitSprite3dClipMutation(before, changed, `Cut ${dimensions.width}x${dimensions.height}x${dimensions.depth} clip`);
-  return true;
-}
-
-function clearSprite3dClipSelection() {
+function deleteSprite3dClipSelection() {
   if (sprite3dClipFloating) {
     sprite3dClipFloating = null;
     sprite3dClipSelection = null;
@@ -591,7 +786,7 @@ function clearSprite3dClipSelection() {
     return false;
   }
   const before = visualEditSnapshot("sprite3d");
-  return commitSprite3dClipMutation(before, clearSprite3dClipBox(box), "Cleared 3D clip");
+  return commitSprite3dClipMutation(before, clearSprite3dClipBox(box), "Deleted selected 3D area");
 }
 
 function pasteSprite3dClipClipboard() {
@@ -599,21 +794,28 @@ function pasteSprite3dClipClipboard() {
     setSprite3dActionStatus("No copied clip", "is-error");
     return false;
   }
-  if (sprite3dClipClipboard.scope === "slice") {
+  const before = visualEditSnapshot("sprite3d");
+  let clipboard;
+  try {
+    clipboard = sprite3dClipForCurrentPalette(sprite3dClipClipboard);
+  } catch (error) {
+    setSprite3dActionStatus(error?.message || String(error), "is-error");
+    return false;
+  }
+  if (clipboard.scope === "slice") {
     const baseRect = sprite3dClipPlaneRect() || { x: 0, y: 0, width: 1, height: 1 };
     const rect = {
       x: baseRect.x,
       y: baseRect.y,
-      width: sprite3dClipClipboard.width,
-      height: sprite3dClipClipboard.height,
+      width: clipboard.width,
+      height: clipboard.height,
     };
     if (rect.x + rect.width > sprite3d.size || rect.y + rect.height > sprite3d.size) {
       setSprite3dActionStatus("Copied slice clip does not fit at selection", "is-error");
       return false;
     }
     const target = sprite3dClipBoxFromPlaneRect(rect, { fullDepth: false });
-    const before = visualEditSnapshot("sprite3d");
-    const changed = setSprite3dSliceClipCells(rect, sprite3dClipClipboard);
+    const changed = setSprite3dSliceClipCells(rect, clipboard);
     sprite3dClipSelection = target;
     sprite3dClipFloating = null;
     commitSprite3dClipMutation(before, changed, `Pasted ${rect.width}x${rect.height} slice clip`);
@@ -624,23 +826,109 @@ function pasteSprite3dClipClipboard() {
   };
   const target = normalizeSprite3dClipBox({
     minX: base.minX,
-    maxX: base.minX + sprite3dClipClipboard.width - 1,
+    maxX: base.minX + clipboard.width - 1,
     minY: base.minY,
-    maxY: base.minY + sprite3dClipClipboard.height - 1,
+    maxY: base.minY + clipboard.height - 1,
     minZ: base.minZ,
-    maxZ: base.minZ + sprite3dClipClipboard.depth - 1,
+    maxZ: base.minZ + clipboard.depth - 1,
   });
   if (!target) {
     setSprite3dActionStatus("Copied clip does not fit at selection", "is-error");
     return false;
   }
-  const before = visualEditSnapshot("sprite3d");
-  const changed = setSprite3dClipCells(target, sprite3dClipClipboard);
+  const changed = setSprite3dClipCells(target, clipboard);
   sprite3dClipSelection = target;
   sprite3dClipFloating = null;
   const dimensions = sprite3dClipBoxDimensions(target);
   commitSprite3dClipMutation(before, changed, `Pasted ${dimensions.width}x${dimensions.height}x${dimensions.depth} clip`);
   return true;
+}
+
+function sprite3dWholeEditBox() {
+  if (sprite3dEditScope() === "slice") {
+    const plane = sprite3dPlaneSize();
+    return sprite3dClipBoxFromPlaneRect({ x: 0, y: 0, width: plane.width, height: plane.height }, { fullDepth: false });
+  }
+  return { minX: 0, maxX: sprite3d.size - 1, minY: 0, maxY: sprite3d.size - 1,
+    minZ: 0, maxZ: sprite3d.depth - 1 };
+}
+
+function sprite3dEditBox() {
+  return sprite3dClipActive ? normalizeSprite3dClipBox(sprite3dClipSelection) : sprite3dWholeEditBox();
+}
+
+function sprite3dClipboardSourceText(clipboard) {
+  const rows = [];
+  for (let z = 0; z < clipboard.depth; z += 1) {
+    if (z > 0) rows.push("-");
+    for (let y = 0; y < clipboard.height; y += 1) {
+      const offset = (z * clipboard.height + y) * clipboard.width;
+      rows.push(clipboard.cells.slice(offset, offset + clipboard.width)
+        .map((value) => validSprite3dColorIndex(value) ? SPRITE_COLOR_TOKENS[value] : ".").join(""));
+    }
+  }
+  return ["Sprite3dClip {", `colors = ${sprite3dPaletteSourceTokens().join(" ")}`, "shape = {", ...rows, "}", "}"].join("\n");
+}
+
+async function copySprite3dEditRegion() {
+  const box = sprite3dEditBox();
+  const dimensions = sprite3dClipBoxDimensions(box);
+  if (!box || !dimensions) return false;
+  sprite3dClipClipboard = sprite3dClipClipboardFromSelection(box, dimensions);
+  try {
+    await copyTextToClipboard(sprite3dClipboardSourceText(sprite3dClipClipboard));
+  } catch (error) {
+    setSprite3dActionStatus(`Copy failed: ${error?.message || error}`, "is-error");
+    return false;
+  }
+  renderSprite3dBuilder();
+  setSprite3dActionStatus(`Copied ${dimensions.width}x${dimensions.height}x${dimensions.depth} edit region`, "is-ok");
+  return true;
+}
+
+async function cutSprite3dEditRegion() {
+  const box = sprite3dEditBox();
+  if (!box) return false;
+  try {
+    if (!await copySprite3dEditRegion()) return false;
+  } catch (error) {
+    setSprite3dActionStatus(`Copy failed; 3D sprite was not cut: ${error?.message || error}`, "is-error");
+    return false;
+  }
+  const before = visualEditSnapshot("sprite3d");
+  return commitSprite3dClipMutation(before, clearSprite3dClipBox(box), "Cut 3D edit region");
+}
+
+function pasteSprite3dEditRegion() {
+  if (!sprite3dClipClipboard) {
+    setSprite3dActionStatus("No copied 3D sprite region", "is-error");
+    return false;
+  }
+  const previousSelection = sprite3dClipSelection;
+  if (!sprite3dClipActive) sprite3dClipSelection = sprite3dWholeEditBox();
+  const result = pasteSprite3dClipClipboard();
+  if (!sprite3dClipActive) sprite3dClipSelection = previousSelection;
+  return result;
+}
+
+function deleteSprite3dEditRegion() {
+  if (!sprite3dClipActive) {
+    deleteSprite3dScoped();
+    return true;
+  }
+  return deleteSprite3dClipSelection();
+}
+
+function runSprite3dEditCommand(command) {
+  if (sprite3dClipActive && !normalizeSprite3dClipBox(sprite3dClipSelection)) {
+    setSprite3dActionStatus("Select a clip region first", "is-error");
+    return false;
+  }
+  if (command === "copy") return copySprite3dEditRegion();
+  if (command === "cut") return cutSprite3dEditRegion();
+  if (command === "paste") return pasteSprite3dEditRegion();
+  if (command === "delete") return deleteSprite3dEditRegion();
+  throw new Error(`Unknown 3D sprite edit command ${command}`);
 }
 
 function sprite3dClipBoxShiftedInPlane(box, du, dv) {
@@ -666,9 +954,10 @@ function sprite3dClipResizeRect(origin, edge, cell) {
   let top = origin.y;
   let bottom = origin.y + origin.height - 1;
   if (edge.includes("w")) left = Math.max(0, Math.min(cell.x, right));
-  if (edge.includes("e")) right = Math.min(sprite3d.size - 1, Math.max(cell.x, left));
+  const plane = sprite3dPlaneSize();
+  if (edge.includes("e")) right = Math.min(plane.width - 1, Math.max(cell.x, left));
   if (edge.includes("n")) top = Math.max(0, Math.min(cell.y, bottom));
-  if (edge.includes("s")) bottom = Math.min(sprite3d.size - 1, Math.max(cell.y, top));
+  if (edge.includes("s")) bottom = Math.min(plane.height - 1, Math.max(cell.y, top));
   return { x: left, y: top, width: right - left + 1, height: bottom - top + 1 };
 }
 
@@ -707,21 +996,21 @@ function sprite3dPositiveModulo(value, size) {
 }
 
 function translatedSprite3dCells(originCells, du, dv, scope) {
-  const size = sprite3d.size;
+  const plane = sprite3dPlaneSize();
   const next = scope === "all"
-    ? Array.from({ length: size * size * size }, () => null)
+    ? Array.from({ length: sprite3dFrameCellCount() }, () => null)
     : [...originCells];
   const firstStack = scope === "all" ? 0 : sprite3d.slice;
-  const lastStack = scope === "all" ? size - 1 : sprite3d.slice;
+  const lastStack = scope === "all" ? sprite3dAxisSize() - 1 : sprite3d.slice;
   for (let stack = firstStack; stack <= lastStack; stack += 1) {
-    for (let v = 0; v < size; v += 1) {
-      for (let u = 0; u < size; u += 1) {
+    for (let v = 0; v < plane.height; v += 1) {
+      for (let u = 0; u < plane.width; u += 1) {
         const source = sprite3dCoordsFromPlane(sprite3d.axis, stack, u, v);
         const target = sprite3dCoordsFromPlane(
           sprite3d.axis,
           stack,
-          sprite3dPositiveModulo(u + du, size),
-          sprite3dPositiveModulo(v + dv, size),
+          sprite3dPositiveModulo(u + du, plane.width),
+          sprite3dPositiveModulo(v + dv, plane.height),
         );
         next[sprite3dCellIndex(target.x, target.y, target.z)] = originCells[sprite3dCellIndex(source.x, source.y, source.z)];
       }
@@ -756,8 +1045,9 @@ function continueSprite3dTranslate(event) {
     return false;
   }
   event.preventDefault();
-  const du = Math.round((event.clientX - sprite3dTranslateDrag.startClientX) / (sprite3dTranslateDrag.width / sprite3d.size));
-  const dv = Math.round((event.clientY - sprite3dTranslateDrag.startClientY) / (sprite3dTranslateDrag.height / sprite3d.size));
+  const plane = sprite3dPlaneSize();
+  const du = Math.round((event.clientX - sprite3dTranslateDrag.startClientX) / (sprite3dTranslateDrag.width / plane.width));
+  const dv = Math.round((event.clientY - sprite3dTranslateDrag.startClientY) / (sprite3dTranslateDrag.height / plane.height));
   sprite3d.cells = translatedSprite3dCells(
     sprite3dTranslateDrag.originCells,
     du,
@@ -872,23 +1162,47 @@ function renderSprite3dPalette() {
   withSprite3dPaneScrollPreserved(() => renderSprite3dPaletteContent());
 }
 
+function setSprite3dCurrentColorTag(index, rawName, linked = true) {
+  if (!validSprite3dColorIndex(index)) {
+    throw new Error(`Invalid 3D sprite palette index ${index}`);
+  }
+  const name = sanitizeSpriteColorAssetRef(rawName);
+  if (!name) {
+    setSprite3dActionStatus("Enter a color tag name", "is-error");
+    return false;
+  }
+  sprite3d.palette[index].bind = { type: "color", name, linked: Boolean(linked) };
+  sprite3d.colorTagPickerOpen = false;
+  syncSprite3dSourceActionButtons();
+  renderSprite3dPalette();
+  return true;
+}
+
 function renderSprite3dPaletteContent() {
   ensureSprite3dPalette();
   sprite3dPalette.replaceChildren();
   const selectedIsTransparent = sprite3d.selectedColorIndex === null;
   if (selectedIsTransparent || validSprite3dColorIndex(sprite3d.selectedColorIndex)) {
     const selected = selectedIsTransparent ? { color: "#00000000" } : sprite3dPaletteEntries()[sprite3d.selectedColorIndex];
+    const selectedBind = selectedIsTransparent ? { available: false, linked: false, name: "" } : spritePaletteEntryBindInfo(selected);
+    const selectedDisplayName = selectedBind.linked && selectedBind.name ? selectedBind.name : "";
     const currentWrap = document.createElement("span");
     currentWrap.className = "sprite-current-color-wrap";
     const currentButton = document.createElement("button");
     currentButton.type = "button";
     currentButton.className = "sprite-current-color-button";
     currentButton.classList.toggle("is-transparent", selectedIsTransparent);
+    currentButton.classList.toggle("is-bound", selectedBind.available && selectedBind.linked);
+    currentButton.classList.toggle("is-unlinked", selectedBind.available && !selectedBind.linked);
     currentButton.style.setProperty("--sprite-current-color", normalizeSpriteColor(selected.color));
-    currentButton.title = selectedIsTransparent ? "Transparent eraser cannot be edited" : "Pick selected color";
+    currentButton.title = selectedIsTransparent
+      ? "Transparent eraser cannot be edited"
+      : selectedDisplayName ? `Pick selected color ${selectedDisplayName}` : "Pick selected color";
     currentButton.setAttribute(
       "aria-label",
-      selectedIsTransparent ? "Selected transparent eraser color #00000000, not editable" : `Pick selected color ${selected.color}`,
+      selectedIsTransparent
+        ? "Selected transparent eraser color #00000000, not editable"
+        : selectedDisplayName ? `Pick selected color ${selectedDisplayName}` : `Pick selected color ${selected.color}`,
     );
     currentButton.setAttribute("aria-disabled", String(selectedIsTransparent));
     currentButton.setAttribute("aria-expanded", String(!selectedIsTransparent && sprite3d.editPaletteOpen));
@@ -915,17 +1229,24 @@ function renderSprite3dPaletteContent() {
     }
     const currentHexInput = document.createElement("input");
     currentHexInput.type = "text";
-    currentHexInput.className = "sprite-current-hex-input";
-    currentHexInput.value = selectedIsTransparent ? "#00000000" : normalizeSpriteColor(selected.color);
-    currentHexInput.placeholder = "#rrggbbaa";
+    currentHexInput.className = "sprite-current-value-input sprite-current-hex-input";
+    currentHexInput.value = selectedDisplayName || (selectedIsTransparent ? "#00000000" : normalizeSpriteColor(selected.color));
+    currentHexInput.classList.toggle("is-name-mode", Boolean(selectedDisplayName));
+    currentHexInput.placeholder = selectedDisplayName ? "color_name" : "#rrggbbaa";
     currentHexInput.spellcheck = false;
     currentHexInput.autocomplete = "off";
     currentHexInput.readOnly = selectedIsTransparent;
     currentHexInput.setAttribute(
       "aria-label",
-      selectedIsTransparent ? "Transparent 3D sprite color code" : "Selected 3D sprite color hex code",
+      selectedIsTransparent
+        ? "Transparent color code"
+        : selectedDisplayName ? "Selected color tag" : "Selected color code",
     );
     const applyCurrentHex = (options = {}) => {
+      if (currentHexInput.classList.contains("is-name-mode")) {
+        setSprite3dCurrentColorTag(sprite3d.selectedColorIndex, currentHexInput.value, true);
+        return;
+      }
       const parsed = parseSpriteHexColor(currentHexInput.value);
       if (!parsed) {
         if (options.reportError) {
@@ -963,6 +1284,45 @@ function renderSprite3dPaletteContent() {
       });
     }
     currentWrap.append(currentButton, currentHexInput);
+    if (!selectedIsTransparent) {
+      const bind = spritePaletteEntryBindInfo(selected);
+      currentWrap.append(renderSpriteCurrentColorTagButton({
+        state: sprite3d,
+        entry: selected,
+        onToggle: () => {
+          sprite3d.editPaletteOpen = false;
+          renderSprite3dPalette();
+        },
+      }));
+      if (bind.linked && bind.name) {
+        const unlink = document.createElement("button");
+        unlink.type = "button";
+        unlink.className = "sprite-current-tag-unlink-button sprite-icon-button";
+        unlink.title = `Unlink color tag ${bind.name}`;
+        unlink.setAttribute("aria-label", unlink.title);
+        unlink.innerHTML = spriteUnlinkIconSvg();
+        unlink.addEventListener("click", () => setSprite3dCurrentColorTag(sprite3d.selectedColorIndex, bind.name, false));
+        currentWrap.append(unlink);
+      }
+      if (sprite3d.colorTagPickerOpen) {
+        const colorAssets = spriteSourceColorAssets();
+        const picker = renderSpriteAssetNamePicker({
+          className: "sprite-color-tag-picker",
+          names: spriteColorAssetNames(),
+          value: bind.name || defaultSpriteAssetName("color", sprite3d.selectedColorIndex),
+          placeholder: "color_name",
+          ariaLabel: "Color tag name",
+          emptyText: "No named colors yet",
+          optionMeta: (name) => ({ color: colorAssets.get(name) }),
+          onCommit: (name) => setSprite3dCurrentColorTag(sprite3d.selectedColorIndex, name, true),
+          onCancel: () => {
+            sprite3d.colorTagPickerOpen = false;
+            renderSprite3dPalette();
+          },
+        });
+        currentWrap.append(picker);
+      }
+    }
     if (!selectedIsTransparent && sprite3d.editPaletteOpen) {
       const editorPanel = document.createElement("span");
       editorPanel.className = "sprite-current-editor-panel";
@@ -984,96 +1344,45 @@ function renderSprite3dPaletteContent() {
     }
   }
 
-  const paletteGrid = document.createElement("span");
-  paletteGrid.className = "sprite-palette-grid";
-
-  const eraseButton = document.createElement("button");
-  eraseButton.type = "button";
-  eraseButton.className = "sprite-token sprite-color-swatch sprite-token-erase";
-  eraseButton.classList.toggle("is-selected", sprite3d.selectedColorIndex === null);
-  eraseButton.dataset.colorIndex = "erase";
-  eraseButton.style.setProperty("--sprite-swatch-color", "#00000000");
-  eraseButton.title = "Paint empty voxel";
-  eraseButton.setAttribute("aria-label", "Paint empty voxel");
-  eraseButton.innerHTML = `
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"></path>
-      <path d="M22 21H7"></path>
-      <path d="m5 11 9 9"></path>
-    </svg>
-  `;
-  eraseButton.addEventListener("click", () => selectSprite3dColor(null));
-  paletteGrid.append(eraseButton);
-
-  for (const [index, entry] of sprite3dPaletteEntries().entries()) {
-    const item = document.createElement("span");
-    item.className = "sprite-token-item";
-    item.classList.toggle("is-selected", index === sprite3d.selectedColorIndex);
-
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "sprite-token sprite-color-swatch";
-    button.classList.toggle("is-selected", index === sprite3d.selectedColorIndex);
-    button.dataset.colorIndex = String(index);
-    button.style.setProperty("--sprite-swatch-color", normalizeSpriteColor(entry.color));
-    button.style.setProperty("--sprite-token-ink", readableInkForColor(entry.color));
-    button.title = `Paint ${entry.color}`;
-    button.setAttribute("aria-label", `Paint 3D sprite color ${index + 1}`);
-    button.addEventListener("click", () => selectSprite3dColor(index));
-    item.append(button);
-
-    paletteGrid.append(item);
-  }
-  const addWrap = document.createElement("span");
-  addWrap.className = "sprite-add-wrap";
-  const addButton = document.createElement("button");
-  addButton.type = "button";
-  addButton.className = "sprite-token sprite-add-color-button";
-  addButton.disabled = sprite3dPaletteEntries().length >= SPRITE_COLOR_TOKENS.length;
-  addButton.title = "Add color";
-  addButton.setAttribute("aria-label", "Add sprite color");
-  addButton.setAttribute("aria-expanded", String(sprite3d.addPaletteOpen));
-  addButton.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg>`;
-  addButton.addEventListener("click", toggleSprite3dAddPalette);
-  addWrap.append(addButton);
-  paletteGrid.append(addWrap);
-
-  const removeButton = document.createElement("button");
-  removeButton.type = "button";
-  removeButton.className = "sprite-token sprite-remove-color-button";
-  removeButton.disabled = !validSprite3dColorIndex(sprite3d.selectedColorIndex) || sprite3dPaletteEntries().length <= 1;
-  removeButton.title = "Remove selected color";
-  removeButton.setAttribute("aria-label", "Remove selected color");
-  removeButton.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"></path></svg>`;
-  removeButton.addEventListener("click", removeSprite3dColor);
-  paletteGrid.append(removeButton);
-  sprite3dPalette.append(paletteGrid);
-
-  if (sprite3d.addPaletteOpen) {
-    const draft = validSprite3dColorIndex(sprite3d.addDraftColorIndex)
-      ? sprite3dPaletteEntries()[sprite3d.addDraftColorIndex].color
-      : nextSpritePresetColor(sprite3dPaletteEntries());
-    const addMenu = renderSpriteColorMenu({
+  renderSpritePaletteGrid({
+    target: sprite3dPalette,
+    leadingControl: spriteMarkerTool,
+    entries: sprite3dPaletteEntries(),
+    selectedIndex: sprite3d.selectedColorIndex,
+    bucketActive: sprite3dBucketActive,
+    emptyTitle: "Paint empty voxel",
+    emptyAriaLabel: "Paint empty voxel",
+    colorAriaLabel: (index, name) => name
+      ? `Paint 3D sprite color ${index + 1}: ${name}`
+      : `Paint 3D sprite color ${index + 1}`,
+    onSelect: selectSprite3dColor,
+    onAdd: toggleSprite3dAddPalette,
+    onRemove: removeSprite3dColor,
+    addOpen: sprite3d.addPaletteOpen,
+    renderAddMenu: () => renderSpriteColorMenu({
       mode: "add",
-      customValue: draft,
+      customValue: validSprite3dColorIndex(sprite3d.addDraftColorIndex)
+        ? sprite3dPaletteEntries()[sprite3d.addDraftColorIndex].color
+        : nextSpritePresetColor(sprite3dPaletteEntries()),
       onDiscard: cancelSprite3dColorAdd,
       onChange: previewNewSprite3dColor,
       onPreset: previewNewSprite3dColor,
       renderPalette: renderSprite3dPalette,
-    });
-    addMenu.classList.add("is-add-menu");
-    sprite3dPalette.append(addMenu);
-    positionSpriteColorMenu(addMenu, paletteGrid, { side: "left" });
-  }
+    }),
+  });
 }
 
 function renderSprite3dSliceBoard() {
   withSprite3dPaneScrollPreserved(() => {
     sprite3dSliceBoard.replaceChildren();
+    sprite3dSliceBoard.classList.toggle("is-grid-hidden", !sprite3dGridVisible);
     sprite3dSliceBoard.classList.toggle("is-translate-active", sprite3dTranslateActive);
     sprite3dSliceBoard.classList.toggle("is-clip-active", sprite3dClipActive);
     sprite3dSliceBoard.classList.toggle("is-clip-floating", Boolean(sprite3dClipFloating));
-    sprite3dSliceBoard.style.setProperty("--sprite-size", sprite3d.size);
+    const planeSize = sprite3dPlaneSize();
+    sprite3dSliceBoard.style.setProperty("--sprite-size", Math.max(planeSize.width, planeSize.height));
+    sprite3dSliceBoard.style.setProperty("--sprite-cols", planeSize.width);
+    sprite3dSliceBoard.style.setProperty("--sprite-rows", planeSize.height);
     const selectionRect = sprite3dClipPlaneRect();
     const fixed = sprite3dPlaneWorldSlice(sprite3d.axis, sprite3d.slice);
     const normalKey = `${sprite3d.axis.toUpperCase()}`;
@@ -1082,7 +1391,7 @@ function renderSprite3dSliceBoard() {
       && fixed >= sprite3dClipSelection[`min${normalKey}`]
       && fixed <= sprite3dClipSelection[`max${normalKey}`],
     );
-    const cellCount = sprite3d.size * sprite3d.size;
+    const cellCount = planeSize.width * planeSize.height;
     for (let index = 0; index < cellCount; index += 1) {
       const coords = sprite3dCoordsFromSliceCell(index);
       const voxelIndex = sprite3dCellIndex(coords.x, coords.y, coords.z);
@@ -1197,7 +1506,21 @@ function renderSprite3dClipFloatingPreview(rect) {
 }
 
 function renderSprite3dPreview() {
-  const canvas = sprite3dPreviewCanvas;
+  renderSprite3dPreviewCanvas(sprite3dPreviewCanvas, sprite3d.cells, { overlays: true });
+  renderSprite3dCameraControls();
+}
+
+function renderSprite3dPresentationSurfaces() {
+  renderSprite3dPreview();
+  renderSprite3dAnimationFrameStrip();
+  if (sprite3d.animationMode) {
+    const context = sharedSpriteAnimationController("sprite3d");
+    const frame = context.frames[context.state.animationPlaybackIndex] || context.state.cells;
+    renderSharedSpriteAnimationPlaybackView(context, frame);
+  }
+}
+
+function renderSprite3dPreviewCanvas(canvas, cells, options = {}) {
   const rect = canvas.getBoundingClientRect();
   const width = Math.max(1, Math.round(rect.width || canvas.width || 420));
   const height = Math.max(1, Math.round(rect.height || canvas.height || 320));
@@ -1219,15 +1542,15 @@ function renderSprite3dPreview() {
   const view = sprite3dPreviewView(width, height, size);
   drawSprite3dBounds(ctx, view);
 
-  const occupied = sprite3dOccupancyMap();
+  const occupied = sprite3dOccupancyMap(cells);
   const faces = sprite3dMergedVoxelFaces(occupied, view);
   const previewOwner = sprite3dPreviewRenderOwner();
   const sceneFaces = [
     ...faces.map((face) => ({ ...face, kind: "voxel", ownerCell: previewOwner, renderPriority: 0 })),
-    ...sprite3dSliceSurfaceFaces(sprite3d.hoverSlice, view, "hover", occupied, 1)
-      .map((face) => ({ ...face, ownerCell: previewOwner })),
-    ...sprite3dSliceSurfaceFaces(sprite3d.slice, view, "active", occupied, 2)
-      .map((face) => ({ ...face, ownerCell: previewOwner })),
+    ...(options.overlays === false ? [] : sprite3dSliceSurfaceFaces(sprite3d.hoverSlice, view, "hover", occupied, 1)
+      .map((face) => ({ ...face, ownerCell: previewOwner }))),
+    ...(options.overlays === false ? [] : sprite3dSliceSurfaceFaces(sprite3d.slice, view, "active", occupied, 2)
+      .map((face) => ({ ...face, ownerCell: previewOwner }))),
   ];
   assignSprite3dPrimitiveOrder(sceneFaces);
   sceneFaces.sort(Puzzle3VisualCore.comparePrimitiveOrder);
@@ -1238,14 +1561,20 @@ function renderSprite3dPreview() {
       drawSprite3dFace(ctx, face);
     }
   }
-  drawSprite3dClipBounds(ctx, view);
-  sprite3dPreviewCanvas._sprite3dPreviewView = view;
-  renderSprite3dCameraControls();
+  if (options.overlays !== false) {
+    drawSprite3dClipBounds(ctx, view);
+    canvas._sprite3dPreviewView = view;
+  }
 }
 
 function sprite3dPreviewView(width, height, size) {
-  const padding = 22;
-  const overlayClearanceY = 0;
+  const padding = 0;
+  const overlayControlHeight = Number.parseFloat(
+    sprite3dCssVar("--sprite3d-overlay-control-height", "22"),
+  );
+  const overlaySafeInset = 8 + overlayControlHeight + 4;
+  const safeTop = overlaySafeInset;
+  const safeBottom = overlaySafeInset;
   const boundsView = {
     cellScale: 1,
     originX: 0,
@@ -1260,13 +1589,14 @@ function sprite3dPreviewView(width, height, size) {
   const projectedWidth = Math.max(1, maxX - minX);
   const projectedHeight = Math.max(1, maxY - minY);
   const availableWidth = Math.max(1, width - padding * 2);
-  const availableHeight = Math.max(1, height - padding * 2);
+  const safeHeight = Math.max(1, height - safeTop - safeBottom);
+  const availableHeight = Math.max(1, safeHeight - padding * 2);
   const scale = Math.max(4, Math.min(availableWidth / projectedWidth, availableHeight / projectedHeight) * SPRITE3D_PREVIEW_BASE_ZOOM)
     * sprite3dCamera().zoom;
   return {
     cellScale: scale,
     originX: width / 2 - ((minX + maxX) / 2) * scale,
-    originY: height / 2 - ((minY + maxY) / 2) * scale + overlayClearanceY,
+    originY: safeTop + safeHeight / 2 - ((minY + maxY) / 2) * scale,
     size,
   };
 }
@@ -1274,15 +1604,16 @@ function sprite3dPreviewView(width, height, size) {
 function sprite3dBoundsCorners(size) {
   const min = -0.5;
   const max = size - 0.5;
+  const maxDepth = sprite3d.depth - 0.5;
   return [
     { x: min, y: min, z: min },
     { x: max, y: min, z: min },
     { x: max, y: max, z: min },
     { x: min, y: max, z: min },
-    { x: min, y: min, z: max },
-    { x: max, y: min, z: max },
-    { x: max, y: max, z: max },
-    { x: min, y: max, z: max },
+    { x: min, y: min, z: maxDepth },
+    { x: max, y: min, z: maxDepth },
+    { x: max, y: max, z: maxDepth },
+    { x: min, y: max, z: maxDepth },
   ];
 }
 
@@ -1351,12 +1682,12 @@ function sprite3dClampNumber(value, min, max) {
   return Math.min(max, Math.max(min, Number.isFinite(parsed) ? parsed : fallback));
 }
 
-function sprite3dOccupancyMap() {
+function sprite3dOccupancyMap(cells = sprite3d.cells) {
   const occupied = new Map();
-  for (let z = 0; z < sprite3d.size; z += 1) {
+  for (let z = 0; z < sprite3d.depth; z += 1) {
     for (let y = 0; y < sprite3d.size; y += 1) {
       for (let x = 0; x < sprite3d.size; x += 1) {
-        const colorIndex = sprite3d.cells[sprite3dCellIndex(x, y, z)];
+        const colorIndex = cells?.[sprite3dCellIndex(x, y, z)];
         if (validSprite3dColorIndex(colorIndex)) {
           occupied.set(sprite3dVoxelKey(x, y, z), {
             colorIndex,
@@ -1447,7 +1778,7 @@ function drawSprite3dClipBounds(ctx, view) {
 
 function sprite3dSliceHitPlanes(view) {
   const hitPlanes = [];
-  for (let index = 0; index < sprite3d.size; index += 1) {
+  for (let index = 0; index < sprite3dAxisSize(); index += 1) {
     hitPlanes.push({ index, points: sprite3dSliceHitPlaneCorners(index, view) });
   }
   return hitPlanes;
@@ -1459,6 +1790,7 @@ function sprite3dSliceHitEdges(view) {
   }
   const min = -0.5;
   const max = sprite3d.size - 0.5;
+  const maxDepth = sprite3d.depth - 0.5;
   return [
     { x: min, y: min },
     { x: max, y: min },
@@ -1466,13 +1798,13 @@ function sprite3dSliceHitEdges(view) {
     { x: min, y: max },
   ].map((edge) => {
     const from = sprite3dProject({ x: edge.x, y: edge.y, z: min }, view);
-    const to = sprite3dProject({ x: edge.x, y: edge.y, z: max }, view);
+    const to = sprite3dProject({ x: edge.x, y: edge.y, z: maxDepth }, view);
     return {
       axis: "z",
       from,
       to,
       min,
-      max,
+      max: maxDepth,
       hitRadius: sprite3dClamp(view.cellScale * 0.34, 8, 18),
     };
   });
@@ -1481,21 +1813,22 @@ function sprite3dSliceHitEdges(view) {
 function sprite3dSliceHitPlaneCorners(slice, view) {
   const min = -0.5;
   const max = sprite3d.size - 0.5;
+  const maxDepth = sprite3d.depth - 0.5;
   const fixed = sprite3dPlaneWorldSlice(sprite3d.axis, slice);
   let corners = [];
   if (sprite3d.axis === "x") {
     corners = [
       { x: fixed, y: min, z: min },
-      { x: fixed, y: min, z: max },
-      { x: fixed, y: max, z: max },
+      { x: fixed, y: min, z: maxDepth },
+      { x: fixed, y: max, z: maxDepth },
       { x: fixed, y: max, z: min },
     ];
   } else if (sprite3d.axis === "y") {
     corners = [
       { x: min, y: fixed, z: min },
       { x: max, y: fixed, z: min },
-      { x: max, y: fixed, z: max },
-      { x: min, y: fixed, z: max },
+      { x: max, y: fixed, z: maxDepth },
+      { x: min, y: fixed, z: maxDepth },
     ];
   } else {
     corners = [
@@ -1515,8 +1848,9 @@ function sprite3dSliceSurfaceFaces(slice, view, mode, occupied, order = 0) {
   const groups = new Map();
   const fill = sprite3dSliceOverlayFill(mode);
   const stroke = sprite3dSliceOverlayStroke(mode);
-  for (let row = 0; row < sprite3d.size; row += 1) {
-    for (let col = 0; col < sprite3d.size; col += 1) {
+  const plane = sprite3dPlaneSize();
+  for (let row = 0; row < plane.height; row += 1) {
+    for (let col = 0; col < plane.width; col += 1) {
       const grid = sprite3dCoordsFromPlane(sprite3d.axis, slice, col, row);
       if (occupied.has(sprite3dVoxelKey(grid.x, grid.y, grid.z))) {
         continue;
@@ -1705,7 +2039,7 @@ function sprite3dGridInSliceVolume(grid, slice) {
     && grid.z >= 0
     && grid.x < sprite3d.size
     && grid.y < sprite3d.size
-    && grid.z < sprite3d.size
+    && grid.z < sprite3d.depth
     && sprite3dGridInSlice(grid, slice);
 }
 
@@ -1773,10 +2107,13 @@ function drawSprite3dSliceFace(ctx, face, mode) {
 
 function sprite3dProject(position, view) {
   const camera = sprite3dCamera();
-  const center = (view.size - 1) / 2;
   return Puzzle3VisualCore.projectOrthographic(position, {
     camera,
-    center: { x: center, y: center, z: center },
+    center: {
+      x: (sprite3d.size - 1) / 2,
+      y: (sprite3d.size - 1) / 2,
+      z: (sprite3d.depth - 1) / 2,
+    },
     origin: { x: view.originX, y: view.originY },
     scale: view.cellScale,
   });
@@ -1784,7 +2121,7 @@ function sprite3dProject(position, view) {
 
 function sprite3dMergedVoxelFaces(occupied, view) {
   const voxels = [];
-  for (let z = 0; z < sprite3d.size; z += 1) {
+  for (let z = 0; z < sprite3d.depth; z += 1) {
     for (let y = 0; y < sprite3d.size; y += 1) {
       for (let x = 0; x < sprite3d.size; x += 1) {
         const colorIndex = sprite3d.cells[sprite3dCellIndex(x, y, z)];
@@ -1921,6 +2258,11 @@ function drawSprite3dFace(ctx, face) {
   ctx.closePath();
   ctx.fillStyle = face.fill;
   ctx.fill();
+  if (sprite3dGridVisible) {
+    ctx.strokeStyle = sprite3dCssVar("--sprite3d-voxel-grid-stroke", "rgba(20, 24, 28, 0.38)");
+    ctx.lineWidth = 0.72;
+    ctx.stroke();
+  }
   for (const overlay of face.overlays || []) {
     drawSprite3dVoxelOverlayFace(ctx, overlay);
   }
@@ -2352,8 +2694,9 @@ function sprite3dCellIndex(x, y, z) {
 }
 
 function sprite3dCoordsFromSliceCell(index) {
-  const u = index % sprite3d.size;
-  const v = Math.floor(index / sprite3d.size);
+  const { width } = sprite3dPlaneSize();
+  const u = index % width;
+  const v = Math.floor(index / width);
   return sprite3dCoordsFromSliceUv(u, v);
 }
 
@@ -2367,11 +2710,13 @@ function sprite3dSliceCellIndexFromElement(element) {
     return -1;
   }
   const index = Number(cell.dataset.index);
-  return Number.isInteger(index) && index >= 0 && index < sprite3d.size * sprite3d.size ? index : -1;
+  const plane = sprite3dPlaneSize();
+  return Number.isInteger(index) && index >= 0 && index < plane.width * plane.height ? index : -1;
 }
 
 function paintSprite3dCellAtSliceIndex(index, colorIndex) {
-  if (!Number.isInteger(index) || index < 0 || index >= sprite3d.size * sprite3d.size) {
+  const plane = sprite3dPlaneSize();
+  if (!Number.isInteger(index) || index < 0 || index >= plane.width * plane.height) {
     return false;
   }
   const coords = sprite3dCoordsFromSliceCell(index);
@@ -2387,7 +2732,8 @@ function paintSprite3dCellAtSliceIndex(index, colorIndex) {
 }
 
 function floodFillSprite3dSliceComponentAtIndex(index, colorIndex) {
-  if (!Number.isInteger(index) || index < 0 || index >= sprite3d.size * sprite3d.size) {
+  const plane = sprite3dPlaneSize();
+  if (!Number.isInteger(index) || index < 0 || index >= plane.width * plane.height) {
     return 0;
   }
   const startCoords = sprite3dCoordsFromSliceCell(index);
@@ -2397,8 +2743,9 @@ function floodFillSprite3dSliceComponentAtIndex(index, colorIndex) {
   if (targetColorIndex === nextColorIndex) {
     return 0;
   }
-  const size = sprite3d.size;
-  const visited = new Uint8Array(size * size);
+  const { width, height } = plane;
+  const visited = new Uint8Array(width * height);
+  const region = sprite3dClipActive ? normalizeSprite3dClipBox(sprite3dClipSelection) : null;
   const stack = [index];
   let changed = 0;
   while (stack.length) {
@@ -2407,6 +2754,9 @@ function floodFillSprite3dSliceComponentAtIndex(index, colorIndex) {
       continue;
     }
     const coords = sprite3dCoordsFromSliceCell(current);
+    if (region && !sprite3dClipBoxContainsCoords(region, coords)) {
+      continue;
+    }
     const voxelIndex = sprite3dCellIndex(coords.x, coords.y, coords.z);
     if (normalizedSprite3dCellColorIndex(voxelIndex) !== targetColorIndex) {
       continue;
@@ -2414,26 +2764,27 @@ function floodFillSprite3dSliceComponentAtIndex(index, colorIndex) {
     visited[current] = 1;
     sprite3d.cells[voxelIndex] = nextColorIndex;
     changed += 1;
-    const u = current % size;
-    const v = Math.floor(current / size);
+    const u = current % width;
+    const v = Math.floor(current / width);
     if (u > 0) {
       stack.push(current - 1);
     }
-    if (u < size - 1) {
+    if (u < width - 1) {
       stack.push(current + 1);
     }
     if (v > 0) {
-      stack.push(current - size);
+      stack.push(current - width);
     }
-    if (v < size - 1) {
-      stack.push(current + size);
+    if (v < height - 1) {
+      stack.push(current + width);
     }
   }
   return changed;
 }
 
 function floodFillSprite3dComponentAtSliceIndex(index, colorIndex) {
-  if (!Number.isInteger(index) || index < 0 || index >= sprite3d.size * sprite3d.size) {
+  const plane = sprite3dPlaneSize();
+  if (!Number.isInteger(index) || index < 0 || index >= plane.width * plane.height) {
     return 0;
   }
   const startCoords = sprite3dCoordsFromSliceCell(index);
@@ -2445,14 +2796,18 @@ function floodFillSprite3dComponentAtSliceIndex(index, colorIndex) {
   }
   const size = sprite3d.size;
   const visited = new Uint8Array(sprite3d.cells.length);
+  const region = sprite3dClipActive ? normalizeSprite3dClipBox(sprite3dClipSelection) : null;
   const stack = [startCoords];
   let changed = 0;
   while (stack.length) {
     const current = stack.pop();
     if (
       current.x < 0 || current.y < 0 || current.z < 0
-      || current.x >= size || current.y >= size || current.z >= size
+      || current.x >= size || current.y >= size || current.z >= sprite3d.depth
     ) {
+      continue;
+    }
+    if (region && !sprite3dClipBoxContainsCoords(region, current)) {
       continue;
     }
     const voxelIndex = sprite3dCellIndex(current.x, current.y, current.z);
@@ -2475,7 +2830,17 @@ function floodFillSprite3dComponentAtSliceIndex(index, colorIndex) {
 }
 
 function bucketFillSprite3dFromSliceIndex(index) {
-  if (!Number.isInteger(index) || index < 0 || index >= sprite3d.size * sprite3d.size) {
+  const plane = sprite3dPlaneSize();
+  if (!Number.isInteger(index) || index < 0 || index >= plane.width * plane.height) {
+    return false;
+  }
+  if (sprite3dClipActive && !normalizeSprite3dClipBox(sprite3dClipSelection)) {
+    setSprite3dActionStatus("Select a clip region before bucket fill", "is-error");
+    return false;
+  }
+  const startCoords = sprite3dCoordsFromSliceCell(index);
+  if (sprite3dClipActive && !sprite3dClipBoxContainsCoords(sprite3dClipSelection, startCoords)) {
+    setSprite3dActionStatus("Bucket fill start must be inside the clip region", "is-error");
     return false;
   }
   const colorIndex = sprite3d.selectedColorIndex;
@@ -2613,7 +2978,7 @@ function stopSprite3dClip(event) {
 }
 
 function handleSprite3dClipKeyboard(event) {
-  if (currentPreviewMode !== "sprite3d" || !sprite3dClipActive || sprite3dBuilder.hidden
+  if (currentPreviewMode !== "sprite3d" || sprite3dBuilder.hidden
     || spriteClipShortcutTargetIsText(event.target)) {
     return false;
   }
@@ -2621,18 +2986,18 @@ function handleSprite3dClipKeyboard(event) {
   const modifier = (event.metaKey && !event.ctrlKey) || (event.ctrlKey && !event.metaKey);
   let handled = false;
   if (modifier && !event.altKey && !event.shiftKey && key === "c") {
-    handled = copySprite3dClipSelection();
+    handled = runSprite3dEditCommand("copy");
   } else if (modifier && !event.altKey && !event.shiftKey && key === "x") {
-    handled = cutSprite3dClipSelection();
+    handled = runSprite3dEditCommand("cut");
   } else if (modifier && !event.altKey && !event.shiftKey && key === "v") {
-    handled = pasteSprite3dClipClipboard();
+    handled = runSprite3dEditCommand("paste");
   } else if (!modifier && !event.altKey && (key === "Backspace" || key === "Delete")) {
-    handled = clearSprite3dClipSelection();
-  } else if (!modifier && !event.altKey && key === "Escape") {
+    handled = runSprite3dEditCommand("delete");
+  } else if (sprite3dClipActive && !modifier && !event.altKey && key === "Escape") {
     deactivateSprite3dClipMode();
     setSprite3dActionStatus("Brush: paint individual voxels", "is-ok");
     handled = true;
-  } else if (!modifier && !event.altKey && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(key)) {
+  } else if (sprite3dClipActive && !modifier && !event.altKey && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(key)) {
     const du = key === "ArrowLeft" ? -1 : key === "ArrowRight" ? 1 : 0;
     const dv = key === "ArrowUp" ? -1 : key === "ArrowDown" ? 1 : 0;
     const next = sprite3dClipBoxShiftedInPlane(sprite3dClipSelection, du, dv);
@@ -2726,9 +3091,27 @@ function paintSprite3dDragIndex(index) {
   if (!sprite3dPaintDrag || !Number.isInteger(index) || index < 0 || index === sprite3dPaintDrag.lastIndex) {
     return;
   }
+  const plane = sprite3dPlaneSize();
+  const centerU = (index % plane.width) + 0.5;
+  const centerV = Math.floor(index / plane.width) + 0.5;
+  const diameter = spriteBrushDiameterForSize(Math.min(plane.width, plane.height));
+  const radius = diameter / 2;
+  const minU = spriteBrushSizePx === 1 ? Math.floor(centerU) : Math.max(0, Math.floor(centerU - radius - 0.5));
+  const maxU = spriteBrushSizePx === 1 ? minU : Math.min(plane.width - 1, Math.ceil(centerU + radius - 0.5));
+  const minV = spriteBrushSizePx === 1 ? Math.floor(centerV) : Math.max(0, Math.floor(centerV - radius - 0.5));
+  const maxV = spriteBrushSizePx === 1 ? minV : Math.min(plane.height - 1, Math.ceil(centerV + radius - 0.5));
   sprite3dPaintDrag.lastIndex = index;
-  if (paintSprite3dCellAtSliceIndex(index, sprite3dPaintDrag.colorIndex)) {
-    sprite3dPaintDrag.changed = true;
+  for (let v = minV; v <= maxV; v += 1) {
+    for (let u = minU; u <= maxU; u += 1) {
+      const dx = u + 0.5 - centerU;
+      const dy = v + 0.5 - centerV;
+      if (spriteBrushSizePx !== 1 && (dx * dx) + (dy * dy) > radius * radius) {
+        continue;
+      }
+      if (paintSprite3dCellAtSliceIndex((v * plane.width) + u, sprite3dPaintDrag.colorIndex)) {
+        sprite3dPaintDrag.changed = true;
+      }
+    }
   }
 }
 
@@ -2754,6 +3137,37 @@ function updateSprite3dSize(value) {
   resetSprite3dClipState();
   sprite3d.slice = Math.min(sprite3d.slice, nextSize - 1);
   sprite3d.cells = nextCells;
+  renderSprite3dBuilder();
+  pushVisualEditUndoSnapshot("sprite3d", before);
+}
+
+function updateSprite3dDepth(value) {
+  const before = visualEditSnapshot("sprite3d");
+  commitSprite3dActiveFrame();
+  const nextDepth = clampSprite3dSize(value);
+  if (nextDepth === sprite3d.depth) {
+    renderSprite3dControls();
+    return;
+  }
+  const previousDepth = sprite3d.depth;
+  const remap = (frame) => {
+    const next = Array.from({ length: sprite3d.size * sprite3d.size * nextDepth }, () => null);
+    for (let z = 0; z < Math.min(previousDepth, nextDepth); z += 1) {
+      for (let y = 0; y < sprite3d.size; y += 1) {
+        for (let x = 0; x < sprite3d.size; x += 1) {
+          const index = ((z * sprite3d.size + y) * sprite3d.size) + x;
+          next[index] = frame[index] ?? null;
+        }
+      }
+    }
+    return next;
+  };
+  sprite3d.frames = (sprite3d.frames.length ? sprite3d.frames : [sprite3d.cells]).map(remap);
+  sprite3d.depth = nextDepth;
+  sprite3d.animationFrameCount = sprite3d.frames.length;
+  sprite3d.cells = sprite3d.frames[Math.min(sprite3d.animationFrameIndex, sprite3d.frames.length - 1)];
+  sprite3d.slice = Math.min(sprite3d.slice, sprite3dAxisSize() - 1);
+  resetSprite3dClipState();
   renderSprite3dBuilder();
   pushVisualEditUndoSnapshot("sprite3d", before);
 }
@@ -2855,12 +3269,13 @@ function setSprite3dAxis(axis) {
     sprite3dClipDrag = null;
   }
   sprite3d.axis = nextAxis;
+  sprite3d.slice = Math.min(sprite3d.slice, sprite3dAxisSize(nextAxis) - 1);
   sprite3d.hoverSlice = null;
   renderSprite3dBuilder();
 }
 
 function setSprite3dSlice(value) {
-  const nextSlice = Math.max(0, Math.min(sprite3d.size - 1, Math.trunc(Number(value) || 0)));
+  const nextSlice = Math.max(0, Math.min(sprite3dAxisSize() - 1, Math.trunc(Number(value) || 0)));
   if (sprite3dClipSelection && sprite3dEditScope() === "slice" && nextSlice !== sprite3d.slice) {
     sprite3dClipSelection = null;
     sprite3dClipFloating = null;
@@ -2946,29 +3361,30 @@ function finishSprite3dSliceScrub(pointerId = null) {
   }
 }
 
-function clearSprite3dSlice() {
+function deleteSprite3dSlice() {
   const before = visualEditSnapshot("sprite3d");
-  for (let index = 0; index < sprite3d.size * sprite3d.size; index += 1) {
+  const plane = sprite3dPlaneSize();
+  for (let index = 0; index < plane.width * plane.height; index += 1) {
     const coords = sprite3dCoordsFromSliceCell(index);
     sprite3d.cells[sprite3dCellIndex(coords.x, coords.y, coords.z)] = null;
   }
   renderSprite3dBuilder();
-  setSprite3dActionStatus("Cleared current 2D slice", "is-ok");
+  setSprite3dActionStatus("Deleted current slice contents", "is-ok");
   pushVisualEditUndoSnapshot("sprite3d", before);
 }
 
-function clearSprite3dBuilder() {
+function deleteSprite3dBuilder() {
   const before = visualEditSnapshot("sprite3d");
   resetSprite3dBuilder(sprite3d.size);
-  setSprite3dActionStatus("Cleared whole 3D sprite", "is-ok");
+  setSprite3dActionStatus("Deleted whole 3D sprite contents", "is-ok");
   pushVisualEditUndoSnapshot("sprite3d", before);
 }
 
-function clearSprite3dScoped() {
+function deleteSprite3dScoped() {
   if (sprite3dEditScope() === "all") {
-    clearSprite3dBuilder();
+    deleteSprite3dBuilder();
   } else {
-    clearSprite3dSlice();
+    deleteSprite3dSlice();
   }
 }
 
@@ -2976,8 +3392,8 @@ function transformSprite3dCells(mapper, message) {
   const before = visualEditSnapshot("sprite3d");
   const size = sprite3d.size;
   const previousCells = sprite3d.cells;
-  const nextCells = Array.from({ length: size * size * size }, () => null);
-  for (let z = 0; z < size; z += 1) {
+  const nextCells = Array.from({ length: size * size * sprite3d.depth }, () => null);
+  for (let z = 0; z < sprite3d.depth; z += 1) {
     for (let y = 0; y < size; y += 1) {
       for (let x = 0; x < size; x += 1) {
         const sourceIndex = sprite3dCellIndex(x, y, z);
@@ -3000,17 +3416,27 @@ function transformSprite3dCells(mapper, message) {
 
 function sprite3dPlaneCoordinates(axis, x, y, z) {
   const max = sprite3d.size - 1;
+  const maxDepth = sprite3d.depth - 1;
   if (axis === "x") {
-    return { stack: x, u: max - y, v: max - z };
+    return { stack: x, u: max - y, v: maxDepth - z };
   }
   if (axis === "y") {
-    return { stack: max - y, u: x, v: max - z };
+    return { stack: max - y, u: x, v: maxDepth - z };
   }
   return { stack: max - z, u: x, v: max - y };
 }
 
 function sprite3dCoordsFromPlane(axis, stack, u, v) {
-  return sprite3dCoordsFromPlaneForSize(sprite3d.size, axis, stack, u, v);
+  const max = sprite3d.size - 1;
+  const maxDepth = sprite3d.depth - 1;
+  const fixed = sprite3dPlaneWorldSlice(axis, stack);
+  if (axis === "x") {
+    return { x: fixed, y: max - u, z: maxDepth - v };
+  }
+  if (axis === "y") {
+    return { x: u, y: fixed, z: maxDepth - v };
+  }
+  return { x: u, y: max - v, z: fixed };
 }
 
 function sprite3dCoordsFromPlaneForSize(size, axis, stack, u, v) {
@@ -3026,22 +3452,24 @@ function sprite3dCoordsFromPlaneForSize(size, axis, stack, u, v) {
 }
 
 function sprite3dPlaneWorldSlice(axis, stack, size = sprite3d.size) {
-  const normalized = Math.max(0, Math.min(size - 1, Math.trunc(Number(stack) || 0)));
-  return axis === "x" ? normalized : size - 1 - normalized;
+  const axisSize = axis === "z" ? sprite3d.depth : size;
+  const normalized = Math.max(0, Math.min(axisSize - 1, Math.trunc(Number(stack) || 0)));
+  return axis === "x" ? normalized : axisSize - 1 - normalized;
 }
 
 function sprite3dCurrentSliceDescriptor() {
   return {
     axis: ["x", "y", "z"].includes(sprite3d.axis) ? sprite3d.axis : "z",
-    slice: Math.max(0, Math.min(sprite3d.size - 1, Math.trunc(Number(sprite3d.slice) || 0))),
+    slice: Math.max(0, Math.min(sprite3dAxisSize() - 1, Math.trunc(Number(sprite3d.slice) || 0))),
     size: sprite3d.size,
   };
 }
 
 function readSprite3dSliceCells(axis, slice, size = sprite3d.size) {
   const cells = [];
-  for (let v = 0; v < size; v += 1) {
-    for (let u = 0; u < size; u += 1) {
+  const plane = sprite3dPlaneSize(axis);
+  for (let v = 0; v < plane.height; v += 1) {
+    for (let u = 0; u < plane.width; u += 1) {
       const source = sprite3dCoordsFromPlane(axis, slice, u, v);
       cells.push(sprite3d.cells[sprite3dCellIndex(source.x, source.y, source.z)] ?? null);
     }
@@ -3118,9 +3546,10 @@ function sprite3dPastedSliceCells(copied, targetSize) {
 }
 
 function writeSprite3dSliceCells(axis, slice, cells) {
-  for (let v = 0; v < sprite3d.size; v += 1) {
-    for (let u = 0; u < sprite3d.size; u += 1) {
-      const colorIndex = cells[(v * sprite3d.size) + u];
+  const plane = sprite3dPlaneSize(axis);
+  for (let v = 0; v < plane.height; v += 1) {
+    for (let u = 0; u < plane.width; u += 1) {
+      const colorIndex = cells[(v * plane.width) + u];
       const target = sprite3dCoordsFromPlane(axis, slice, u, v);
       sprite3d.cells[sprite3dCellIndex(target.x, target.y, target.z)] = validSprite3dColorIndex(colorIndex)
         ? colorIndex
@@ -3131,9 +3560,10 @@ function writeSprite3dSliceCells(axis, slice, cells) {
 
 function transformSprite3dCurrentPlane(mapper, message) {
   const axis = ["x", "y", "z"].includes(sprite3d.axis) ? sprite3d.axis : "z";
+  const plane = sprite3dPlaneSize(axis);
   transformSprite3dCells((x, y, z, size) => {
     const plane = sprite3dPlaneCoordinates(axis, x, y, z);
-    const next = mapper(plane.u, plane.v, size);
+    const next = mapper(plane.u, plane.v, sprite3dPlaneSize(axis).width, sprite3dPlaneSize(axis).height);
     return sprite3dCoordsFromPlane(axis, plane.stack, next.u, next.v);
   }, `${message} all ${axis.toUpperCase()} slices`);
 }
@@ -3142,15 +3572,16 @@ function transformSprite3dCurrentSlice(mapper, message) {
   const before = visualEditSnapshot("sprite3d");
   const source = sprite3dCurrentSliceDescriptor();
   const previousCells = readSprite3dSliceCells(source.axis, source.slice, source.size);
-  const nextCells = Array.from({ length: source.size * source.size }, () => null);
-  for (let v = 0; v < source.size; v += 1) {
-    for (let u = 0; u < source.size; u += 1) {
-      const colorIndex = previousCells[(v * source.size) + u];
+  const plane = sprite3dPlaneSize(source.axis);
+  const nextCells = Array.from({ length: plane.width * plane.height }, () => null);
+  for (let v = 0; v < plane.height; v += 1) {
+    for (let u = 0; u < plane.width; u += 1) {
+      const colorIndex = previousCells[(v * plane.width) + u];
       if (!validSprite3dColorIndex(colorIndex)) {
         continue;
       }
-      const next = mapper(u, v, source.size);
-      nextCells[(next.v * source.size) + next.u] = colorIndex;
+      const next = mapper(u, v, plane.width, plane.height);
+      nextCells[(next.v * plane.width) + next.u] = colorIndex;
     }
   }
   writeSprite3dSliceCells(source.axis, source.slice, nextCells);
@@ -3170,60 +3601,29 @@ function transformSprite3dScoped(mapper, message) {
 }
 
 function rotateSprite3dPlaneLeft() {
-  transformSprite3dScoped((u, v, size) => ({ u: v, v: size - 1 - u }), "Rotated left");
+  const plane = sprite3dPlaneSize();
+  if (plane.width !== plane.height) {
+    setSprite3dActionStatus("Rotate requires a square edit plane", "is-error");
+    return;
+  }
+  transformSprite3dScoped((u, v, width) => ({ u: v, v: width - 1 - u }), "Rotated left");
 }
 
 function rotateSprite3dPlaneRight() {
-  transformSprite3dScoped((u, v, size) => ({ u: size - 1 - v, v: u }), "Rotated right");
+  const plane = sprite3dPlaneSize();
+  if (plane.width !== plane.height) {
+    setSprite3dActionStatus("Rotate requires a square edit plane", "is-error");
+    return;
+  }
+  transformSprite3dScoped((u, v, width) => ({ u: width - 1 - v, v: u }), "Rotated right");
 }
 
 function flipSprite3dPlaneHorizontal() {
-  transformSprite3dScoped((u, v, size) => ({ u: size - 1 - u, v }), "Flipped horizontal");
+  transformSprite3dScoped((u, v, width) => ({ u: width - 1 - u, v }), "Flipped horizontal");
 }
 
 function flipSprite3dPlaneVertical() {
-  transformSprite3dScoped((u, v, size) => ({ u, v: size - 1 - v }), "Flipped vertical");
-}
-
-function copySprite3dSlice() {
-  const source = sprite3dCurrentSliceDescriptor();
-  const cells = readSprite3dSliceCells(source.axis, source.slice, source.size);
-  sprite3d.sliceClipboard = {
-    ...source,
-    cells,
-    colors: sprite3dSliceCellColors(cells),
-    palette: sprite3dPaletteColors(),
-  };
-  renderSprite3dControls();
-  setSprite3dActionStatus(`Copied 2D ${source.axis.toUpperCase()} slice ${source.slice + 1}`, "is-ok");
-}
-
-function pasteSprite3dSlice() {
-  const before = visualEditSnapshot("sprite3d");
-  const copied = sprite3d.sliceClipboard;
-  if (!copied) {
-    setSprite3dActionStatus("No copied slice", "is-error");
-    return;
-  }
-  const target = sprite3dCurrentSliceDescriptor();
-  if (copied.size !== target.size || !Array.isArray(copied.cells) || copied.cells.length !== target.size * target.size) {
-    setSprite3dActionStatus(`Copied slice is ${copied.size}x${copied.size}; current sprite is ${target.size}x${target.size}`, "is-error");
-    return;
-  }
-  const pasted = sprite3dPastedSliceCells(copied, target.size);
-  if (pasted.error) {
-    setSprite3dActionStatus(pasted.error, "is-error");
-    return;
-  }
-  writeSprite3dSliceCells(target.axis, target.slice, pasted.cells);
-  sprite3d.hoverSlice = null;
-  renderSprite3dBuilder();
-  const paletteMessage = pasted.addedColors > 0 ? `, added ${pasted.addedColors} color${pasted.addedColors === 1 ? "" : "s"}` : "";
-  setSprite3dActionStatus(
-    `Pasted 2D ${copied.axis.toUpperCase()} slice ${copied.slice + 1} to ${target.axis.toUpperCase()} slice ${target.slice + 1}${paletteMessage}`,
-    "is-ok",
-  );
-  pushVisualEditUndoSnapshot("sprite3d", before);
+  transformSprite3dScoped((u, v, width, height) => ({ u, v: height - 1 - v }), "Flipped vertical");
 }
 
 function sprite3dObjectName() {
@@ -3267,7 +3667,7 @@ function sprite3dPaletteSourceToken(entry) {
 
 function sprite3dVoxelRows() {
   const rows = [];
-  for (let z = 0; z < sprite3d.size; z += 1) {
+  for (let z = 0; z < sprite3d.depth; z += 1) {
     if (z > 0) {
       rows.push("-");
     }
@@ -3285,14 +3685,16 @@ function sprite3dVoxelRows() {
 }
 
 function sprite3dEditFrames() {
+  commitSprite3dActiveFrame();
   const frames = Array.isArray(sprite3d.frames) && sprite3d.frames.length
     ? sprite3d.frames.map((frame) => Array.isArray(frame) ? frame.slice() : [])
     : [[]];
-  frames[0] = sprite3d.cells.slice();
-  return frames.map((frame) => Array.from({ length: sprite3d.size }, (_, z) =>
+  frames[sprite3d.animationMode ? sprite3d.animationFrameIndex : 0] = sprite3d.cells.slice();
+  return frames.map((frame) => Array.from({ length: sprite3d.depth }, (_, sourceZ) =>
     Array.from({ length: sprite3d.size }, (_, y) =>
       Array.from({ length: sprite3d.size }, (_, x) => {
-        const cell = frame[sprite3dCellIndex(x, y, z)];
+        const worldZ = sprite3d.depth - 1 - sourceZ;
+        const cell = frame[sprite3dCellIndex(x, y, worldZ)];
         return Number.isInteger(cell) ? cell : null;
       }))));
 }
@@ -3311,26 +3713,12 @@ function sprite3dEditMutationRequest(operation, options = {}) {
     cursor: options.cursor,
     palette: sprite3dPaletteSourceTokens(),
     frames: sprite3dEditFrames(),
-    durationMs: sprite3d.animationDurationMs,
-    frameDurationMs: sprite3d.frameDurationMs,
+    durationMs: sprite3d.animationMode ? normalizedSprite3dAnimationDuration() : null,
+    frameDurationMs: sprite3d.animationMode ? sprite3d.frameDurationMs : null,
     shapeRef: shape.linked ? shape.name : null,
     spatialOps: sprite3d.sourceSpatialOps || [],
     colorBindings,
   };
-}
-
-async function exportSprite3dSource() {
-  const text = sprite3dClipboardText();
-  try {
-    window.focus();
-    sprite3dExportButton?.focus({ preventScroll: true });
-    await copyTextToClipboard(text);
-    setSprite3dActionStatus("Copied 3D sprite", "is-ok");
-    setStatus("Copied 3D sprite", "is-ok");
-  } catch (error) {
-    setSprite3dActionStatus("Copy failed", "is-error");
-    setStatus(`Could not copy 3D sprite: ${error?.message || error}`, "is-error");
-  }
 }
 
 async function updateSprite3dInSource() {
@@ -3350,23 +3738,38 @@ async function updateSprite3dInSource() {
   syncSprite3dSourceActionButtons();
 }
 
-async function duplicateSprite3dInSource() {
+async function addSprite3dToSource() {
   let result;
   try {
     ({ result } = await commitSpriteEditorMutation({
       state: sprite3d,
-      request: () => sprite3dEditMutationRequest("duplicate"),
+      allowActiveDocument: true,
+      request: (source, document) => sprite3dEditMutationRequest(
+        canReplaceCurrentSprite3dDefinition(source) ? "duplicate" : "insert",
+        { cursor: spriteSourceCursorPosition(source, document) },
+      ),
     }));
   } catch (error) {
-    setSprite3dActionStatus("No selected 3D sprite source range", "is-error");
-    setStatus("No selected 3D sprite source range", "is-error");
     setSprite3dActionStatus(userFacingRuntimeError(error), "is-error");
     return;
   }
   sprite3dNameInput.value = result.name;
+  setSprite3dActionStatus("Added 3D sprite", "is-ok");
+  setStatus("Added 3D sprite", "is-ok");
   syncSprite3dSourceActionButtons();
-  setSprite3dActionStatus("Duplicated 3D sprite", "is-ok");
-  setStatus("Duplicated 3D sprite", "is-ok");
+}
+
+function newSprite3dDraft() {
+  const before = visualEditSnapshot("sprite3d");
+  clearSprite3dEditSource();
+  sprite3dNameInput.value = "VoxelSprite";
+  sprite3d.palette = [{ color: "#ff004d" }];
+  sprite3d.selectedColorIndex = 0;
+  sprite3d.animationMode = false;
+  sprite3d.depth = 5;
+  resetSprite3dBuilder(5);
+  setSprite3dActionStatus("Started new 3D sprite", "is-ok");
+  pushVisualEditUndoSnapshot("sprite3d", before);
 }
 
 function activeSprite3dEditDocument() {
@@ -3451,11 +3854,12 @@ function sprite3dTargetPayload(target) {
     });
   const frames = documentContract.cellsByFrame.map((layers) => layers.flat());
   const frameCellCount = width * height * depth;
-  if (width < 1 || width !== height || width !== depth || !palette.length || !frames.length || frames.some((frame) => frame.length !== frameCellCount)) {
+  if (width < 1 || depth < 1 || width !== height || !palette.length || !frames.length || frames.some((frame) => frame.length !== frameCellCount)) {
     return null;
   }
   return {
     size: width,
+    depth,
     palette,
     cells: frames[0].slice(),
     frames,
@@ -3493,8 +3897,8 @@ function syncSprite3dSourceActionButtons() {
   if (sprite3dUpdateButton) {
     sprite3dUpdateButton.disabled = !hasEditableSource;
   }
-  if (duplicateSprite3dButton) {
-    duplicateSprite3dButton.disabled = !hasEditableSource;
+  if (sprite3dInsertButton) {
+    sprite3dInsertButton.disabled = false;
   }
 }
 
@@ -3509,12 +3913,17 @@ function applyIncompleteSprite3dSourceTarget(name, target) {
   }
   sprite3dNameInput.value = name || "";
   sprite3d.size = clampSprite3dSize(sprite3d.size);
+  sprite3d.depth = clampSprite3dSize(sprite3d.depth ?? sprite3d.size);
   sprite3d.axis = "z";
   sprite3d.slice = 0;
   sprite3d.hoverSlice = null;
   sprite3d.palette = [];
-  sprite3d.cells = Array.from({ length: sprite3d.size * sprite3d.size * sprite3d.size }, () => null);
+  sprite3d.cells = Array.from({ length: sprite3dFrameCellCount() }, () => null);
   sprite3d.frames = [sprite3d.cells.slice()];
+  sprite3d.animationMode = false;
+  sprite3d.animationFrameIndex = 0;
+  sprite3d.animationFrameCount = 1;
+  sprite3d.animationPlaybackIndex = 0;
   sprite3d.animationDurationMs = null;
   sprite3d.frameDurationMs = null;
   sprite3d.shapeBind = null;
@@ -3531,12 +3940,17 @@ function applyLoadedSprite3d(name, loaded) {
   resetSprite3dClipState({ clipboard: true });
   sprite3dNameInput.value = name || "VoxelSprite";
   sprite3d.size = loaded.size;
+  sprite3d.depth = loaded.depth;
   sprite3d.axis = "z";
   sprite3d.slice = 0;
   sprite3d.hoverSlice = null;
   sprite3d.palette = loaded.palette;
   sprite3d.cells = loaded.cells;
   sprite3d.frames = loaded.frames;
+  sprite3d.animationMode = loaded.frames.length > 1 || Number.isFinite(loaded.animationDurationMs);
+  sprite3d.animationFrameIndex = 0;
+  sprite3d.animationFrameCount = Math.max(1, loaded.frames.length);
+  sprite3d.animationPlaybackIndex = 0;
   sprite3d.animationDurationMs = loaded.animationDurationMs;
   sprite3d.frameDurationMs = loaded.frameDurationMs;
   sprite3d.shapeBind = loaded.shapeBind;
@@ -3557,11 +3971,11 @@ function handleSprite3dSliceBoardShortcut(event) {
   if (key === "c") {
     event.preventDefault();
     event.stopPropagation();
-    copySprite3dSlice();
+    runSprite3dEditCommand("copy");
   } else if (key === "v") {
     event.preventDefault();
     event.stopPropagation();
-    pasteSprite3dSlice();
+    runSprite3dEditCommand("paste");
   }
 }
 
@@ -3569,7 +3983,7 @@ function resetSprite3dCamera() {
   sprite3d.camera = { ...SPRITE3D_CAMERA_DEFAULT };
   sprite3d.hoverSlice = null;
   renderSprite3dCameraControls();
-  renderSprite3dPreview();
+  renderSprite3dPresentationSurfaces();
   setSprite3dActionStatus("Reset camera", "is-ok");
 }
 
@@ -3676,7 +4090,7 @@ function setSprite3dCameraValue(kind, value) {
     camera.zoom = sprite3dClampNumber(value, 0.25, 4);
   }
   renderSprite3dCameraControls();
-  renderSprite3dPreview();
+  renderSprite3dPresentationSurfaces();
 }
 
 function sprite3dCameraScrubScale(kind) {
@@ -3814,11 +4228,12 @@ function sprite3dPreviewRay(point, view) {
   const cosPitch = Math.cos(pitch);
   const yawYAtDepthZero = -sinPitch * screenV;
   const center = (view.size - 1) / 2;
+  const centerDepth = (sprite3d.depth - 1) / 2;
   return {
     origin: {
       x: center + screenU * cosYaw + yawYAtDepthZero * sinYaw,
       y: center - screenU * sinYaw + yawYAtDepthZero * cosYaw,
-      z: center - cosPitch * screenV,
+      z: centerDepth - cosPitch * screenV,
     },
     direction: {
       x: -sinYaw * cosPitch,
@@ -3830,7 +4245,7 @@ function sprite3dPreviewRay(point, view) {
 
 function sprite3dRaycastOccupiedVoxel(ray) {
   let best = null;
-  for (let z = 0; z < sprite3d.size; z += 1) {
+  for (let z = 0; z < sprite3d.depth; z += 1) {
     for (let y = 0; y < sprite3d.size; y += 1) {
       for (let x = 0; x < sprite3d.size; x += 1) {
         if (!validSprite3dColorIndex(sprite3d.cells[sprite3dCellIndex(x, y, z)])) {
@@ -3855,7 +4270,7 @@ function sprite3dRaycastOccupiedVoxel(ray) {
 function sprite3dApproximateSliceFromRay(ray) {
   const bounds = {
     min: { x: -0.5, y: -0.5, z: -0.5 },
-    max: { x: sprite3d.size - 0.5, y: sprite3d.size - 0.5, z: sprite3d.size - 0.5 },
+    max: { x: sprite3d.size - 0.5, y: sprite3d.size - 0.5, z: sprite3d.depth - 0.5 },
   };
   const hit = sprite3dRayAabbInterval(ray, bounds);
   if (!hit) {
@@ -3897,7 +4312,7 @@ function sprite3dSliceIndexForVoxel(grid) {
 }
 
 function sprite3dSliceIndexForWorldPoint(point) {
-  const max = sprite3d.size - 1;
+  const max = sprite3dAxisSize() - 1;
   if (sprite3d.axis === "x") {
     return sprite3dClamp(Math.round(point.x), 0, max);
   }
@@ -3954,9 +4369,10 @@ function sprite3dSliceEdgeHit(point, edge) {
   if (distance > edge.hitRadius) {
     return null;
   }
-  const world = Math.max(0, Math.min(sprite3d.size - 1, Math.round(edge.min + (edge.max - edge.min) * t)));
+  const axisSize = sprite3dAxisSize();
+  const world = Math.max(0, Math.min(axisSize - 1, Math.round(edge.min + (edge.max - edge.min) * t)));
   return {
-    index: Math.max(0, Math.min(sprite3d.size - 1, sprite3d.size - 1 - world)),
+    index: Math.max(0, Math.min(axisSize - 1, axisSize - 1 - world)),
     distance,
   };
 }
@@ -3980,8 +4396,12 @@ function sprite3dPointInPolygon(point, polygon) {
 for (const input of [
   sprite3dNameInput,
   sprite3dSizeInput,
+  sprite3dDepthInput,
   sprite3dScaleInput,
   sprite3dSliceValue,
+  sprite3dAnimationDurationInput,
+  sprite3dAnimationFrameCountInput,
+  sprite3dAnimationFrameInput,
 ]) {
   installSelectAllOnFocus(input);
 }
@@ -3993,7 +4413,20 @@ sourceEditor.addEventListener("input", () => {
   invalidateSprite3dEditSourceForDocument(activeDocument());
   syncSprite3dSourceActionButtons();
 });
+sprite3dSizeInput?.addEventListener("input", () => {
+  if (sprite3dSizeInput.validity.valid && sprite3dSizeInput.value !== "") {
+    updateSprite3dSize(sprite3dSizeInput.value);
+  }
+});
 sprite3dSizeInput?.addEventListener("change", () => updateSprite3dSize(sprite3dSizeInput.value));
+sprite3dDepthInput?.addEventListener("change", () => updateSprite3dDepth(sprite3dDepthInput.value));
+sprite3dDepthInput?.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") {
+    return;
+  }
+  event.preventDefault();
+  updateSprite3dDepth(sprite3dDepthInput.value);
+});
 sprite3dSizeInput?.addEventListener("keydown", (event) => {
   if (event.key !== "Enter") {
     return;
@@ -4019,6 +4452,8 @@ sprite3dSliceValue?.addEventListener("keydown", (event) => {
   event.preventDefault();
   applySprite3dSliceInput();
 });
+sprite3dAnimationDurationInput?.addEventListener("change", () => setSprite3dAnimationDuration(sprite3dAnimationDurationInput.value));
+sprite3dAnimationFrameCountInput?.addEventListener("change", () => setSprite3dAnimationFrameCount(sprite3dAnimationFrameCountInput.value));
 const sprite3dSliceScrub = document.querySelector("[data-sprite3d-slice-scrub]");
 sprite3dSliceScrub?.addEventListener("pointerdown", startSprite3dSliceScrub);
 sprite3dSliceScrub?.addEventListener("pointermove", continueSprite3dSliceScrub);
@@ -4077,20 +4512,16 @@ sprite3dSliceBoard?.addEventListener("keydown", (event) => {
 });
 sprite3dPreviousSliceButton?.addEventListener("click", () => moveSprite3dSlice(-1));
 sprite3dNextSliceButton?.addEventListener("click", () => moveSprite3dSlice(1));
-sprite3dClearButton?.addEventListener("click", clearSprite3dScoped);
 sprite3dScaleDownButton?.addEventListener("click", scaleDownSprite3d);
 sprite3dScaleUpButton?.addEventListener("click", scaleUpSprite3d);
 sprite3dRotatePlaneLeftButton?.addEventListener("click", rotateSprite3dPlaneLeft);
 sprite3dRotatePlaneRightButton?.addEventListener("click", rotateSprite3dPlaneRight);
 sprite3dFlipPlaneHorizontalButton?.addEventListener("click", flipSprite3dPlaneHorizontal);
 sprite3dFlipPlaneVerticalButton?.addEventListener("click", flipSprite3dPlaneVertical);
-sprite3dCopySliceButton?.addEventListener("click", copySprite3dSlice);
-sprite3dPasteSliceButton?.addEventListener("click", pasteSprite3dSlice);
 sprite3dTranslateButton?.addEventListener("click", toggleSprite3dTranslateMode);
 sprite3dScopeSliceButton?.addEventListener("click", () => setSprite3dEditScope("slice"));
 sprite3dScopeAllButton?.addEventListener("click", () => setSprite3dEditScope("all"));
 sprite3dFillButton?.addEventListener("click", toggleSprite3dBucketMode);
-sprite3dExportButton?.addEventListener("click", exportSprite3dSource);
 sprite3dUpdateButton?.addEventListener("click", () => {
   updateSprite3dInSource().catch((error) => {
     console.error(error);
@@ -4098,13 +4529,11 @@ sprite3dUpdateButton?.addEventListener("click", () => {
     setStatus("3D sprite source update failed", "is-error");
   });
 });
-duplicateSprite3dButton?.addEventListener("click", () => {
-  duplicateSprite3dInSource().catch((error) => {
-    console.error(error);
-    setSprite3dActionStatus("3D sprite duplication failed", "is-error");
-    setStatus("3D sprite duplication failed", "is-error");
-  });
-});
+newSprite3dButton?.addEventListener("click", newSprite3dDraft);
+sprite3dInsertButton?.addEventListener("click", () => addSprite3dToSource().catch((error) => {
+  console.error(error);
+  setSprite3dActionStatus("Could not add 3D sprite", "is-error");
+}));
 sprite3dResetCameraButton?.addEventListener("click", resetSprite3dCamera);
 sprite3dPreviewCanvas?.addEventListener("pointerdown", startSprite3dPreviewDrag);
 sprite3dPreviewCanvas?.addEventListener("pointermove", continueSprite3dPreviewDrag);

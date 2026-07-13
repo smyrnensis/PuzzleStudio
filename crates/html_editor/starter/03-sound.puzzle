@@ -1,0 +1,62 @@
+// SOUND
+// EXPECT: Moving, clearing the level, and entering the scene sound different.
+// TRY: Change a seed, type, volume, or music bpm.
+
+title = "03 — Sound"
+subtitle = "Put sounds in the lifecycle that owns them"
+
+sounds {
+sfx step { seed = step; type = step; volume = 0.45 }
+sfx clear { seed = clear; type = jump; volume = 0.8 }
+music theme { seed = starter-theme; bpm = 105; volume = 0.35 }
+}
+
+puzzle sound_board {
+layers {
+Goal
+Player Wall
+}
+
+sounds {
+move Player -> sfx step
+}
+
+win_conditions {
+all Player on Goal
+}
+
+rules {
+input [ Player | no Wall ] -> [ | Player ]
+}
+
+on_level_clear {
+sfx clear
+wait 400ms
+goto title
+}
+
+levels {
+legend {
+. = empty
+# = Wall
+P = Player
+G = Goal
+}
+
+level "listen"
+#####
+#P.G#
+#####
+}
+}
+
+scene title {
+on_scene_start {
+play_music theme
+}
+layout {
+heading title
+choice "Play" -> goto sound_board
+caption "Music belongs to the scene; movement sound belongs to the puzzle."
+}
+}

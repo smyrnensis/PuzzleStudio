@@ -43,6 +43,14 @@ editor for the user or capture a screenshot of the relevant viewport. DOM-only
 inspection is useful for state checks, but it is a poor substitute for checking
 layout, spacing, rendering, and first-load visual behavior.
 
+## Editor UI Icons
+
+Use Lucide for general editor UI icons. Copy inline SVG from the official Lucide
+source, preserving its `viewBox`, stroke attributes, and path geometry. If
+Lucide has no semantically appropriate icon, use a clearly named custom icon
+without a `lucide-*` class. Inline SVG delivery does not require the Lucide
+runtime library.
+
 ## Editor Boundaries
 
 The HTML editor, server mode, and desktop shell should share the same editor

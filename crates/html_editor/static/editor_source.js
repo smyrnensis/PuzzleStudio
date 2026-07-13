@@ -1513,6 +1513,15 @@ async function refreshSourceOutline() {
 }
 
 function applySourceOutlinePayload(payload, source) {
+  try {
+    sourceEditor.sourceEditorPort.applyFoldRanges(source, payload);
+  } catch (error) {
+    const message = `Source folding unavailable: ${userFacingRuntimeError(error)}`;
+    if (typeof setEditorStatus === "function") {
+      setEditorStatus(message, "is-error");
+    }
+    console.warn(message);
+  }
   const nextItems = normalizeSourceOutlineItems(payload?.items, source);
   const structureChanged = sourceOutlineStructureSignature(sourceOutlineItems)
     !== sourceOutlineStructureSignature(nextItems);
@@ -1699,7 +1708,6 @@ const SOURCE_OUTLINE_KIND_ICON_NAMES = Object.freeze({
   "puzzle": "puzzle",
   "puzzle3": "puzzle",
   "levels": "map",
-  "levels3": "map",
   "level": "map",
   "sprites": "image",
   "sprite": "image",
@@ -2217,9 +2225,9 @@ async function showSourceCompletions(options = {}) {
 function filterSourceCompletionsForDocument(items, document) {
   const profile = typeof puzzleSourceProfile === "function" ? puzzleSourceProfile(document) : "";
   const hidden = profile === "puzzle3d"
-    ? new Set(["puzzle", "levels", "sprites"])
+    ? new Set(["puzzle", "sprites"])
     : profile === "puzzle2d"
-      ? new Set(["puzzle3", "levels3", "sprites"])
+      ? new Set(["puzzle3", "sprites"])
       : null;
   if (!hidden) {
     return items;

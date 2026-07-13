@@ -1,6 +1,6 @@
 title = "Microban 3D Preview Contract"
 
-puzzle3 sokoban {
+puzzle sokoban {
 render {
   camera {
     yaw = 10
@@ -12,7 +12,7 @@ render {
 layers {
   floor = Floor
   target = Goal
-  solid = Player Box Wall
+  Player Box Wall
 }
 
 groups {
@@ -25,7 +25,7 @@ rules {
 }
 }
 
-levels3 microban of sokoban {
+levels microban of sokoban {
 legend {
 . = empty
 , = Floor

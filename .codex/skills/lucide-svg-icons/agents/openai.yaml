@@ -1,0 +1,4 @@
+interface:
+  display_name: "Lucide SVG Icons"
+  short_description: "Use Lucide instead of hand-drawn SVG icons"
+  default_prompt: "Use $lucide-svg-icons to add or replace the SVG icon."

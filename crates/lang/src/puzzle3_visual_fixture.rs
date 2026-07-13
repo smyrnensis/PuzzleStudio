@@ -147,7 +147,7 @@ fn write_settings(out: &mut String, parsed: &ParsedPuzzle3, animation: VisualFix
     let pixelate = &parsed.settings.pixelate;
     let _ = writeln!(
         out,
-        "  \"settings\": {{ \"interactiveLook\": {}, \"interactiveZoom\": {}, \"grid\": {{ \"visibility\": {}, \"occupied_cells\": {} }}, \"shade\": {}, \"pixelate\": {{ \"enabled\": {}, \"scale\": {}, \"smoothing\": {} }}, \"animation\": {{ \"tween\": {{ \"enabled\": {}, \"intervalMs\": {} }} }} }},",
+        "  \"settings\": {{ \"interactiveLook\": {}, \"interactiveZoom\": {}, \"grid\": {{ \"visibility\": {}, \"occupied_cells\": {} }}, \"shade\": {}, \"shadow\": {}, \"pixelate\": {{ \"enabled\": {}, \"scale\": {}, \"smoothing\": {} }}, \"animation\": {{ \"tween\": {{ \"enabled\": {}, \"intervalMs\": {} }} }} }},",
         camera.interactive_look,
         camera.interactive_zoom,
         if parsed.settings.grid.occupied_cells {
@@ -157,6 +157,7 @@ fn write_settings(out: &mut String, parsed: &ParsedPuzzle3, animation: VisualFix
         },
         parsed.settings.grid.occupied_cells,
         parsed.settings.sprite.shade,
+        parsed.settings.shadow,
         pixelate.enabled,
         pixelate.scale,
         pixelate.smoothing,

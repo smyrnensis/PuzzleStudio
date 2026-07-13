@@ -1,10 +1,13 @@
 use crate::{object_refs, relevance::SolverRelevance};
-use puzzle_grid3d::{ConditionValueKind3, Game3, Guard3, ObjectId, Pattern3, Rule3, RuleId3};
+use puzzle_grid3d::{
+    ConditionValueKind3, Game3, Guard3, ObjectId, Pattern3, Rule3, RuleCondition3, RuleId3,
+    RuleStep3,
+};
 
 impl SolverRelevance<ObjectId> {
     pub fn from_game3_root_objects(
         game: &Game3,
-        rules: &[Rule3],
+        program: &[RuleStep3],
         roots: impl IntoIterator<Item = ObjectId>,
     ) -> Self {
         let mut analysis = Self::from_roots(roots, ObjectId::is_empty);
@@ -12,8 +15,8 @@ impl SolverRelevance<ObjectId> {
         let mut changed = true;
         while changed {
             changed = false;
-            for rule in rules {
-                changed |= analysis.propagate_rule(game, rule);
+            for step in program {
+                changed |= analysis.propagate_step(game, step);
             }
         }
 
@@ -33,6 +36,90 @@ impl SolverRelevance<ObjectId> {
         self.relevant_rule_ids().into_iter().map(RuleId3).collect()
     }
 
+    fn propagate_step(&mut self, game: &Game3, step: &RuleStep3) -> bool {
+        match step {
+            RuleStep3::Rule(rule) => self.propagate_rule(game, rule),
+            RuleStep3::ConditionalBlock { condition, steps } => {
+                let mut changed = false;
+                if steps
+                    .iter()
+                    .any(|step| step_has_relevant_write3(step, self))
+                {
+                    changed |= self.insert_condition_objects(game, condition);
+                }
+                for step in steps {
+                    changed |= self.propagate_step(game, step);
+                }
+                changed
+            }
+            RuleStep3::ConditionalBranch {
+                condition,
+                then_steps,
+                else_steps,
+            } => {
+                let mut changed = false;
+                if then_steps
+                    .iter()
+                    .chain(else_steps)
+                    .any(|step| step_has_relevant_write3(step, self))
+                {
+                    changed |= self.insert_condition_objects(game, condition);
+                }
+                for step in then_steps.iter().chain(else_steps) {
+                    changed |= self.propagate_step(game, step);
+                }
+                changed
+            }
+            RuleStep3::Block {
+                stop_condition,
+                steps,
+                ..
+            } => {
+                let mut changed = false;
+                if let Some(condition) = stop_condition
+                    && steps
+                        .iter()
+                        .any(|step| step_has_relevant_write3(step, self))
+                {
+                    changed |= self.insert_condition_objects(game, condition);
+                }
+                for step in steps {
+                    changed |= self.propagate_step(game, step);
+                }
+                changed
+            }
+            RuleStep3::AfterTriggered { steps, then_steps } => {
+                let mut changed = false;
+                if then_steps
+                    .iter()
+                    .any(|step| step_has_relevant_write3(step, self))
+                {
+                    for step in steps {
+                        changed |= self.insert_step_read_objects(game, step);
+                    }
+                }
+                for step in steps.iter().chain(then_steps) {
+                    changed |= self.propagate_step(game, step);
+                }
+                changed
+            }
+            RuleStep3::LocalFrame { frame, steps } => {
+                let mut changed = false;
+                if steps
+                    .iter()
+                    .any(|step| step_has_relevant_write3(step, self))
+                {
+                    changed |=
+                        self.insert_relevant_objects(&frame.focus_objects, &ObjectId::is_empty);
+                }
+                for step in steps {
+                    changed |= self.propagate_step(game, step);
+                }
+                changed
+            }
+        }
+    }
+
     fn propagate_rule(&mut self, game: &Game3, rule: &Rule3) -> bool {
         if !rule_has_relevant_output(rule, self) {
             return false;
@@ -44,6 +131,65 @@ impl SolverRelevance<ObjectId> {
             changed |= self.insert_guard_objects(game, guard);
         }
         changed
+    }
+
+    fn insert_step_read_objects(&mut self, game: &Game3, step: &RuleStep3) -> bool {
+        match step {
+            RuleStep3::Rule(rule) => {
+                let mut changed = self.insert_relevant_rule_id(rule.id.0);
+                changed |= self.insert_pattern_objects(&rule.pattern);
+                for guard in &rule.guards {
+                    changed |= self.insert_guard_objects(game, guard);
+                }
+                changed
+            }
+            RuleStep3::ConditionalBlock { condition, steps } => {
+                let mut changed = self.insert_condition_objects(game, condition);
+                for step in steps {
+                    changed |= self.insert_step_read_objects(game, step);
+                }
+                changed
+            }
+            RuleStep3::ConditionalBranch {
+                condition,
+                then_steps,
+                else_steps,
+            } => {
+                let mut changed = self.insert_condition_objects(game, condition);
+                for step in then_steps.iter().chain(else_steps) {
+                    changed |= self.insert_step_read_objects(game, step);
+                }
+                changed
+            }
+            RuleStep3::Block {
+                stop_condition,
+                steps,
+                ..
+            } => {
+                let mut changed = stop_condition
+                    .as_ref()
+                    .is_some_and(|condition| self.insert_condition_objects(game, condition));
+                for step in steps {
+                    changed |= self.insert_step_read_objects(game, step);
+                }
+                changed
+            }
+            RuleStep3::AfterTriggered { steps, then_steps } => {
+                let mut changed = false;
+                for step in steps.iter().chain(then_steps) {
+                    changed |= self.insert_step_read_objects(game, step);
+                }
+                changed
+            }
+            RuleStep3::LocalFrame { frame, steps } => {
+                let mut changed =
+                    self.insert_relevant_objects(&frame.focus_objects, &ObjectId::is_empty);
+                for step in steps {
+                    changed |= self.insert_step_read_objects(game, step);
+                }
+                changed
+            }
+        }
     }
 
     fn insert_guard_objects(&mut self, game: &Game3, guard: &Guard3) -> bool {
@@ -64,12 +210,55 @@ impl SolverRelevance<ObjectId> {
         }
     }
 
+    fn insert_condition_objects(&mut self, game: &Game3, condition: &RuleCondition3) -> bool {
+        match condition {
+            RuleCondition3::AnyMatches(patterns) | RuleCondition3::NoMatches(patterns) => {
+                object_refs::insert_patterns_objects(self, patterns)
+            }
+            RuleCondition3::AnyInputMatches(patterns)
+            | RuleCondition3::NoInputMatches(patterns) => object_refs::insert_patterns_objects(
+                self,
+                patterns.iter().map(|(_, pattern)| pattern),
+            ),
+            RuleCondition3::RuleMatches { guards, pattern } => {
+                let mut changed = self.insert_pattern_objects(pattern);
+                for guard in guards {
+                    changed |= self.insert_guard_objects(game, guard);
+                }
+                changed
+            }
+        }
+    }
+
     fn insert_condition_value_objects(&mut self, kind: &ConditionValueKind3) -> bool {
         object_refs::insert_condition_value_objects(self, kind)
     }
 
     fn insert_pattern_objects(&mut self, pattern: &Pattern3) -> bool {
         object_refs::insert_pattern_objects(self, pattern)
+    }
+}
+
+fn step_has_relevant_write3(step: &RuleStep3, relevance: &SolverRelevance<ObjectId>) -> bool {
+    match step {
+        RuleStep3::Rule(rule) => rule_has_relevant_output(rule, relevance),
+        RuleStep3::ConditionalBlock { steps, .. }
+        | RuleStep3::Block { steps, .. }
+        | RuleStep3::LocalFrame { steps, .. } => steps
+            .iter()
+            .any(|step| step_has_relevant_write3(step, relevance)),
+        RuleStep3::ConditionalBranch {
+            then_steps,
+            else_steps,
+            ..
+        } => then_steps
+            .iter()
+            .chain(else_steps)
+            .any(|step| step_has_relevant_write3(step, relevance)),
+        RuleStep3::AfterTriggered { steps, then_steps } => steps
+            .iter()
+            .chain(then_steps)
+            .any(|step| step_has_relevant_write3(step, relevance)),
     }
 }
 
@@ -131,16 +320,16 @@ mod tests {
             ],
         );
         let rules = vec![
-            rule(
+            RuleStep3::Rule(rule(
                 1,
                 Pattern3::new(vec![MatchCell3::new(Offset3::ZERO).require(SWITCH)]),
                 vec![add(DOOR)],
-            ),
-            rule(
+            )),
+            RuleStep3::Rule(rule(
                 2,
                 Pattern3::new(vec![MatchCell3::new(Offset3::ZERO).require(SPARKLE)]),
                 Vec::new(),
-            ),
+            )),
         ];
 
         let relevance = SolverRelevance::from_game3_root_objects(&game, &rules, [DOOR]);
@@ -172,8 +361,45 @@ mod tests {
                 value: 1,
             });
 
-        let relevance = SolverRelevance::from_game3_root_objects(&game, &[rule], []);
+        let relevance =
+            SolverRelevance::from_game3_root_objects(&game, &[RuleStep3::Rule(rule)], []);
 
+        assert!(relevance.contains_object(SWITCH));
+    }
+
+    #[test]
+    fn relevance3_keeps_objects_used_only_by_program_conditions() {
+        let game = Game3::new(
+            1,
+            vec![
+                ObjectDef3 {
+                    id: SWITCH,
+                    layer_id: LayerId(0),
+                },
+                ObjectDef3 {
+                    id: DOOR,
+                    layer_id: LayerId(0),
+                },
+                ObjectDef3 {
+                    id: SPARKLE,
+                    layer_id: LayerId(0),
+                },
+            ],
+        );
+        let program = vec![RuleStep3::ConditionalBlock {
+            condition: RuleCondition3::AnyMatches(vec![Pattern3::new(vec![
+                MatchCell3::new(Offset3::ZERO).require(SPARKLE),
+            ])]),
+            steps: vec![RuleStep3::Rule(rule(
+                1,
+                Pattern3::new(vec![MatchCell3::new(Offset3::ZERO).require(SWITCH)]),
+                vec![add(DOOR)],
+            ))],
+        }];
+
+        let relevance = SolverRelevance::from_game3_root_objects(&game, &program, [DOOR]);
+
+        assert!(relevance.contains_object(SPARKLE));
         assert!(relevance.contains_object(SWITCH));
     }
 }

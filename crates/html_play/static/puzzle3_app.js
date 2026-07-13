@@ -205,11 +205,19 @@ async function loadSnapshotData(source, options = {}) {
 }
 
 function showPuzzle3LoadError(error) {
+  showPuzzle3FatalError("fixture load failed", error);
+}
+
+function showPuzzle3RenderError(error) {
+  showPuzzle3FatalError("render failed", error);
+}
+
+function showPuzzle3FatalError(label, error) {
   console.error(error);
   const errorView = document.createElement("div");
   errorView.className = "puzzle3-load-error";
   errorView.setAttribute("role", "alert");
-  errorView.textContent = `Puzzle3 fixture load failed: ${error?.message || error || "unknown error"}`;
+  errorView.textContent = `Puzzle3 ${label}: ${error?.message || error || "unknown error"}`;
   Object.assign(errorView.style, {
     boxSizing: "border-box",
     width: "100%",
@@ -1316,6 +1324,11 @@ function draw(options = {}) {
   if (!ctx) {
     return;
   }
+  const shadowError = canvasShadowRenderError();
+  if (shadowError) {
+    showPuzzle3RenderError(shadowError);
+    return;
+  }
   const advanceViewport = options.advanceViewport !== false;
   syncCanvasSize();
   ensureProjectionFit();
@@ -1355,7 +1368,13 @@ function drawWithThree() {
     return;
   }
   const input = puzzle3RendererContractInput(width, height);
-  const result = renderer.render(input.snapshot, input.view);
+  let result;
+  try {
+    result = renderer.render(input.snapshot, input.view);
+  } catch (error) {
+    showPuzzle3RenderError(error);
+    return;
+  }
   puzzle3ThreeViewPayload = result?.view || null;
   if (result?.rendered) {
     view.viewportSnapNext = false;
@@ -1364,6 +1383,17 @@ function drawWithThree() {
     scheduleViewportAnimation();
   }
   notifyPuzzle3View(width, height);
+}
+
+function canvasShadowRenderError() {
+  const raw = snapshot.settings?.shadow;
+  if (raw === undefined || raw === false) {
+    return null;
+  }
+  if (typeof raw !== "boolean") {
+    return new Error("Puzzle3 render setting `shadow` must be boolean.");
+  }
+  return new Error("Puzzle3 shadows require the Three.js renderer; Canvas renderer cannot render `shadow = true`.");
 }
 
 function puzzle3RendererContractInput(width, height) {

@@ -43,13 +43,17 @@ class Puzzle3ThreeRenderer {
     const frame = buildPuzzleStudioThreeFrame(snapshot, { ...view, animationProgress: animation.progress });
     const scene = new THREE.Scene();
     scene.background = threeBackground(THREE, view.background);
-    addLights(THREE, scene, frame);
-    addGrid(THREE, scene, frame);
     frame.rendererViewTarget = this.viewTarget;
     frame.rendererViewDistance = this.viewDistance;
     const camera = buildCamera(THREE, frame, this.canvas);
     applyProjectedRenderCulling(THREE, frame, camera, this.canvas);
-    addMeshes(THREE, scene, frame);
+    const visible = frameVisibleVoxels(frame);
+    const shadow = shadowSettings(frame);
+    this.configureShadowMap(THREE, shadow.enabled);
+    addLights(THREE, scene, frame, visible.voxels, shadow);
+    addGrid(THREE, scene, frame);
+    addMeshes(THREE, scene, visible, shadow);
+    addShadowCatcher(THREE, scene, frame, shadow);
     this.renderer.setSize(this.canvas.clientWidth || this.canvas.width || 1, this.canvas.clientHeight || this.canvas.height || 1, false);
     this.renderer.setClearColor(0x000000, scene.background ? 1 : 0);
     disposeScene(this.scene);
@@ -99,6 +103,17 @@ class Puzzle3ThreeRenderer {
       alpha: true,
     });
     this.renderer.setPixelRatio(window.devicePixelRatio || 1);
+  }
+
+  configureShadowMap(THREE, enabled) {
+    if (enabled && THREE.PCFSoftShadowMap === undefined) {
+      throw new Error("Three.js PCFSoftShadowMap is required for Puzzle3 shadows.");
+    }
+    this.renderer.shadowMap.enabled = enabled;
+    this.renderer.shadowMap.autoUpdate = enabled;
+    if (enabled) {
+      this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    }
   }
 
   ensureThreeLoaded() {
@@ -341,15 +356,99 @@ function hasLoopingSpriteAnimation(snapshot) {
   ));
 }
 
-function addLights(THREE, scene, frame) {
-  const size = Math.max(frame.size.width, frame.size.depth, frame.size.height, 1);
+function shadowSettings(frame) {
+  const raw = frame.settings?.shadow;
+  if (raw === undefined) {
+    return { enabled: false };
+  }
+  if (typeof raw !== "boolean") {
+    throw new Error("Puzzle3 render setting `shadow` must be boolean.");
+  }
+  return { enabled: raw };
+}
+
+function addLights(THREE, scene, frame, voxels, shadow) {
+  const bounds = shadowFrameBounds(frame, voxels);
+  const center = boundsCenter(bounds);
+  const size = Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY, bounds.maxZ - bounds.minZ, 1);
   scene.add(new THREE.AmbientLight("#ffffff", 1.35));
   const key = new THREE.DirectionalLight("#ffffff", 0.72);
-  key.position.set(size * 1.2, size * 2.2, size * 0.9);
-  scene.add(key);
+  key.position.set(center.x + size * 1.2, center.y + size * 2.2, center.z + size * 0.9);
+  key.target.position.set(center.x, center.y, center.z);
+  key.castShadow = shadow.enabled;
+  if (shadow.enabled) {
+    configureDirectionalShadow(key, bounds, voxels);
+  }
+  scene.add(key, key.target);
   const fill = new THREE.DirectionalLight("#dbeafe", 0.42);
-  fill.position.set(-size * 1.5, size * 1.0, -size * 1.1);
+  fill.position.set(center.x - size * 1.5, center.y + size, center.z - size * 1.1);
+  fill.target.position.set(center.x, center.y, center.z);
+  fill.castShadow = false;
+  scene.add(fill.target);
   scene.add(fill);
+}
+
+function shadowFrameBounds(frame, voxels) {
+  if (!voxels.length) {
+    return {
+      minX: -frame.size.width / 2,
+      maxX: frame.size.width / 2,
+      minY: -frame.size.height / 2,
+      maxY: frame.size.height / 2,
+      minZ: -frame.size.depth / 2,
+      maxZ: frame.size.depth / 2,
+    };
+  }
+  const bounds = {
+    minX: Infinity,
+    maxX: -Infinity,
+    minY: Infinity,
+    maxY: -Infinity,
+    minZ: Infinity,
+    maxZ: -Infinity,
+  };
+  for (const voxel of voxels) {
+    bounds.minX = Math.min(bounds.minX, voxel.bounds.x0);
+    bounds.maxX = Math.max(bounds.maxX, voxel.bounds.x1);
+    bounds.minY = Math.min(bounds.minY, voxel.bounds.y0);
+    bounds.maxY = Math.max(bounds.maxY, voxel.bounds.y1);
+    bounds.minZ = Math.min(bounds.minZ, voxel.bounds.z0);
+    bounds.maxZ = Math.max(bounds.maxZ, voxel.bounds.z1);
+  }
+  bounds.minY = Math.min(bounds.minY, -frame.size.height / 2 - 0.02);
+  return bounds;
+}
+
+function boundsCenter(bounds) {
+  return {
+    x: (bounds.minX + bounds.maxX) / 2,
+    y: (bounds.minY + bounds.maxY) / 2,
+    z: (bounds.minZ + bounds.maxZ) / 2,
+  };
+}
+
+function configureDirectionalShadow(light, bounds, voxels) {
+  const width = Math.max(1, bounds.maxX - bounds.minX);
+  const height = Math.max(1, bounds.maxY - bounds.minY);
+  const depth = Math.max(1, bounds.maxZ - bounds.minZ);
+  const radius = Math.hypot(width, height, depth) / 2 + 0.75;
+  light.shadow.mapSize.set(1024, 1024);
+  light.shadow.camera.left = -radius;
+  light.shadow.camera.right = radius;
+  light.shadow.camera.top = radius;
+  light.shadow.camera.bottom = -radius;
+  light.shadow.camera.near = 0.1;
+  light.shadow.camera.far = radius * 8;
+  light.shadow.bias = -0.0003;
+  light.shadow.normalBias = Math.min(0.04, minimumVoxelScale(voxels) * 0.08);
+  light.shadow.camera.updateProjectionMatrix();
+}
+
+function minimumVoxelScale(voxels) {
+  const scales = voxels
+    .map((voxel) => Number(voxel.scale))
+    .filter((scale) => Number.isFinite(scale) && scale > 0);
+  return scales.length ? Math.min(...scales) : 1;
 }
 
 function addGrid(THREE, scene, frame) {
@@ -385,8 +484,8 @@ function addGrid(THREE, scene, frame) {
   scene.add(new THREE.LineSegments(geometry, material));
 }
 
-function addMeshes(THREE, scene, frame) {
-  const { voxels, occupied } = frameVisibleVoxels(frame);
+function addMeshes(THREE, scene, visible, shadow) {
+  const { voxels, occupied } = visible;
   const faces = mergedVoxelFaces(voxels, occupied);
   const opaqueGroups = new Map();
   const materialCache = new Map();
@@ -401,6 +500,8 @@ function addMeshes(THREE, scene, frame) {
       const material = faceMaterial(THREE, face.fill, materialCache);
       const mesh = new THREE.Mesh(geometry, material);
       mesh.renderOrder = 100 + Number(face.objectOrder || 0);
+      mesh.castShadow = false;
+      mesh.receiveShadow = false;
       scene.add(mesh);
       continue;
     }
@@ -414,8 +515,30 @@ function addMeshes(THREE, scene, frame) {
     const geometry = faceBufferGeometry(THREE, groupFaces);
     const material = faceMaterial(THREE, groupFaces[0].fill, materialCache);
     const mesh = new THREE.Mesh(geometry, material);
+    mesh.castShadow = shadow.enabled;
+    mesh.receiveShadow = shadow.enabled;
     scene.add(mesh);
   }
+}
+
+function addShadowCatcher(THREE, scene, frame, shadow) {
+  if (!shadow.enabled) {
+    return;
+  }
+  const geometry = new THREE.PlaneGeometry(frame.size.width + 1, frame.size.depth + 1);
+  const material = new THREE.ShadowMaterial({
+    color: 0x000000,
+    opacity: 0.28,
+    transparent: true,
+    depthWrite: false,
+  });
+  const catcher = new THREE.Mesh(geometry, material);
+  catcher.rotation.x = -Math.PI / 2;
+  catcher.position.y = -frame.size.height / 2 - 0.02;
+  catcher.castShadow = false;
+  catcher.receiveShadow = true;
+  catcher.renderOrder = -100;
+  scene.add(catcher);
 }
 
 function applyProjectedRenderCulling(THREE, frame, camera, canvas) {

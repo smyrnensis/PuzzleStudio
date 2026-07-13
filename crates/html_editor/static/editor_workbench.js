@@ -265,8 +265,7 @@ function syncToolPaneHeaderActionGroups() {
     group.hidden = !isPaneVisible("level") || (is3d ? currentLevelPaneMode !== "level3d" : currentLevelPaneMode !== "edit");
   }
   for (const group of toolPaneHeaderActionGroups("sprite")) {
-    const is3d = Boolean(group.querySelector("#sprite3dExportButton"));
-    group.hidden = !isPaneVisible("sprite") || (is3d ? currentSpritePaneMode !== "sprite3d" : currentSpritePaneMode !== "sprite");
+    group.hidden = !isPaneVisible("sprite");
   }
 }
 
@@ -291,9 +290,6 @@ function createToolPane(paneId, panel) {
   title.append(label);
   if (paneId === "level" && levelPaneModeSwitch) {
     title.append(levelPaneModeSwitch);
-  }
-  if (paneId === "sprite" && spritePaneModeSwitch) {
-    title.append(spritePaneModeSwitch);
   }
   if (paneId === "sounds" && soundsHeaderTools) {
     title.append(soundsHeaderTools);
@@ -358,9 +354,6 @@ function initializePhysicalWorkPanes() {
   }
   if (levelPaneModeSwitch) {
     levelPaneModeSwitch.hidden = true;
-  }
-  if (spritePaneModeSwitch) {
-    spritePaneModeSwitch.hidden = true;
   }
 
   for (const paneId of PREVIEW_HOST_WORK_PANE_IDS) {
@@ -568,7 +561,7 @@ function activePreviewWorkPaneId() {
 }
 
 function normalizePaneDragId(paneId) {
-  return paneId === "active-preview" ? activePreviewWorkPaneId() : normalizePaneId(paneId);
+  return normalizePaneId(paneId);
 }
 
 function workPaneElementForDragEvent(event) {
@@ -710,7 +703,7 @@ function selectFallbackPreviewPane(closedPaneId) {
 }
 
 function closeWorkPane(paneId) {
-  const normalized = paneId === "active-preview" ? activePreviewWorkPaneId() : normalizePaneId(paneId);
+  const normalized = normalizePaneId(paneId);
   const next = visibleWorkPanes.filter((candidate) => candidate !== normalized);
   if (!isWorkPaneId(normalized) || !visibleWorkPanes.includes(normalized) || !layoutPaneIdsFor(next, currentPreviewMode, { allowEmpty: true }).length) {
     return false;
@@ -876,9 +869,6 @@ function applyPaneVisibility() {
   if (levelPaneModeSwitch) {
     levelPaneModeSwitch.hidden = !isPaneVisible("level");
   }
-  if (spritePaneModeSwitch) {
-    spritePaneModeSwitch.hidden = !isPaneVisible("sprite");
-  }
   if (typeof syncPaneBindLabels === "function") {
     syncPaneBindLabels();
   }
@@ -893,18 +883,14 @@ function applyPaneVisibility() {
     button.setAttribute("aria-pressed", active ? "true" : "false");
   });
   document.querySelectorAll("[data-pane-close]").forEach((button) => {
-    const paneId = button.dataset.paneClose === "active-preview"
-      ? activePreviewWorkPaneId()
-      : normalizePaneId(button.dataset.paneClose);
+    const paneId = normalizePaneId(button.dataset.paneClose);
     const next = visibleWorkPanes.filter((candidate) => candidate !== paneId);
     const disabled = !isWorkPaneId(paneId) || !isPaneVisible(paneId) || !layoutPaneIdsFor(next, currentPreviewMode, { allowEmpty: true }).length;
     button.disabled = disabled;
     button.setAttribute("aria-disabled", String(disabled));
   });
   document.querySelectorAll("[data-pane-maximize]").forEach((button) => {
-    const paneId = button.dataset.paneMaximize === "active-preview"
-      ? activePreviewWorkPaneId()
-      : normalizePaneId(button.dataset.paneMaximize);
+    const paneId = normalizePaneId(button.dataset.paneMaximize);
     const active = Boolean(maximizedWorkPaneId) && maximizedWorkPaneId === paneId;
     const title = active ? `Restore ${toolPaneTitle(paneId)} pane` : `Maximize ${toolPaneTitle(paneId)} pane`;
     button.classList.toggle("is-active", active);
@@ -920,7 +906,7 @@ function applyPaneVisibility() {
 }
 
 function toggleWorkPaneMaximized(paneId) {
-  const normalized = paneId === "active-preview" ? activePreviewWorkPaneId() : normalizePaneId(paneId);
+  const normalized = normalizePaneId(paneId);
   if (!isWorkPaneId(normalized) || !isPaneVisible(normalized)) {
     return false;
   }

@@ -65,7 +65,6 @@
       </header>
 
       <div id="levelPaneModeSwitch" class="level-pane-mode-switch pane-bind-label" aria-label="Bound level editor dimension" hidden>Level: none</div>
-      <div id="spritePaneModeSwitch" class="sprite-pane-mode-switch pane-bind-label" aria-label="Bound sprite editor dimension" hidden>Sprite: none</div>
 
       <section class="workbench" aria-label="Puzzle editor">
         <button class="pane-restore-button pane-restore-explorer" type="button" data-pane-toggle="explorer" aria-label="Show explorer pane" title="Show explorer pane (Command+B)">
@@ -83,13 +82,34 @@
         <aside class="explorer-pane" aria-label="Explorer">
           <div class="explorer-header">
             <span>Explorer</span>
-            <div class="explorer-tools" aria-label="File actions">
-              <button id="newDocumentButton" class="icon-button" type="button" aria-label="New puzzle" title="New puzzle">
+            <button class="icon-button pane-toggle-button" type="button" data-pane-toggle="explorer" aria-label="Hide explorer pane" title="Hide explorer pane (Command+B)">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="3" y="4" width="18" height="16" rx="2"></rect>
+                <path d="M9 4v16"></path>
+              </svg>
+            </button>
+          </div>
+          <div class="explorer-sections">
+            <section class="explorer-section explorer-files-section" data-explorer-section="files" aria-label="Files">
+              <div class="explorer-section-header explorer-files-header">
+                <button class="explorer-section-toggle" type="button" data-explorer-section-toggle="files" aria-expanded="true">
+                  <svg class="explorer-section-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4"></path></svg>
+                  <span>Files</span>
+                </button>
+                <div class="explorer-tools" aria-label="File actions">
+              <button id="newDocumentButton" class="icon-button" type="button" aria-label="New file" title="New File" disabled>
                 <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-file-plus-icon lucide-file-plus">
                   <path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"></path>
                   <path d="M14 2v5a1 1 0 0 0 1 1h5"></path>
                   <path d="M9 15h6"></path>
                   <path d="M12 18v-6"></path>
+                </svg>
+              </button>
+              <button id="newFolderButton" class="icon-button" type="button" aria-label="New folder" title="New Folder" disabled>
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 10v6"></path>
+                  <path d="M9 13h6"></path>
+                  <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path>
                 </svg>
               </button>
               <button id="fileActionsButton" class="icon-button" type="button" aria-haspopup="true" aria-expanded="false" aria-label="More file actions" title="More file actions">
@@ -100,26 +120,13 @@
                 </svg>
               </button>
               <div id="fileActionsMenu" class="file-actions-menu" role="menu" hidden>
-                <button id="newFolderButton" type="button" role="menuitem">New folder</button>
-                <button id="openFileMenuButton" type="button" role="menuitem" data-open-workspace="file" hidden>Open file</button>
-                <button id="openProjectMenuButton" type="button" role="menuitem" data-open-workspace="folder" hidden>Open folder</button>
-                <button id="importButton" type="button" role="menuitem">Import files</button>
-                <button id="importFolderButton" type="button" role="menuitem">Import folder</button>
+                <button id="openFileMenuButton" type="button" role="menuitem" data-open-workspace="file" hidden disabled>Open Files</button>
+                <button id="openProjectMenuButton" type="button" role="menuitem" data-open-workspace="folder" hidden disabled>Open Folder</button>
+                <button id="importButton" type="button" role="menuitem" disabled>Open Files</button>
+                <button id="importFolderButton" type="button" role="menuitem" disabled>Open Folder</button>
               </div>
-              <button class="icon-button pane-toggle-button" type="button" data-pane-toggle="explorer" aria-label="Hide explorer pane" title="Hide explorer pane (Command+B)">
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <rect x="3" y="4" width="18" height="16" rx="2"></rect>
-                  <path d="M9 4v16"></path>
-                </svg>
-              </button>
             </div>
-          </div>
-          <div class="explorer-sections">
-            <section class="explorer-section explorer-files-section" data-explorer-section="files" aria-label="Files">
-              <button class="explorer-section-header" type="button" data-explorer-section-toggle="files" aria-expanded="true">
-                <svg class="explorer-section-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4"></path></svg>
-                <span>Files</span>
-              </button>
+              </div>
               <div id="documentList" class="document-list explorer-section-body" role="tree" aria-label="Puzzle files"></div>
             </section>
             <div id="outlineSplitter" class="outline-splitter" role="separator" aria-label="Resize outline" aria-orientation="horizontal"></div>
@@ -184,8 +191,8 @@
 
         <div id="paneSplitter" class="pane-splitter" role="separator" aria-label="Resize panes" aria-orientation="vertical"></div>
 
-        <section class="preview-pane" aria-label="Game tools" data-work-pane="active-preview">
-          <div class="pane-header" data-pane-drag-handle="active-preview" draggable="true" title="Drag header to move tool pane">
+        <section class="preview-pane" aria-label="Game tools" data-work-pane="preview">
+          <div class="pane-header" data-pane-drag-handle="preview" draggable="true" title="Drag header to move Preview pane">
             <div class="pane-title">
               <span id="gamePaneTitle">Preview</span>
               <div id="soundsHeaderTools" class="sounds-header-tools" hidden></div>
@@ -223,7 +230,7 @@
                   <path d="M18 6 6 18"></path>
                 </svg>
               </button>
-              <button class="pane-maximize-button" type="button" data-pane-maximize="active-preview" aria-label="Maximize Preview pane" aria-pressed="false" title="Maximize Preview pane">
+              <button class="pane-maximize-button" type="button" data-pane-maximize="preview" aria-label="Maximize Preview pane" aria-pressed="false" title="Maximize Preview pane">
                 <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-maximize-icon lucide-maximize">
                   <path d="M8 3H5a2 2 0 0 0-2 2v3"></path>
                   <path d="M21 8V5a2 2 0 0 0-2-2h-3"></path>
@@ -231,7 +238,7 @@
                   <path d="M16 21h3a2 2 0 0 0 2-2v-3"></path>
                 </svg>
               </button>
-              <button class="pane-close-button" type="button" data-pane-close="active-preview" aria-label="Hide current tool pane" title="Hide current tool pane">
+              <button class="pane-close-button" type="button" data-pane-close="preview" aria-label="Hide Preview pane" title="Hide Preview pane">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M18 6 6 18"></path>
                   <path d="m6 6 12 12"></path>
@@ -550,6 +557,10 @@
           </div>
           <div id="spriteBuilder" class="sprite-builder" hidden>
             <div id="spritePaneHeaderActions" class="source-action-group source-preview-actions sprite-pane-header-actions" role="group" aria-label="Sprite pane actions">
+              <span class="sprite-dimension-toggle" role="group" aria-label="Sprite dimension">
+                <button id="spriteDimension2dButton" class="source-action-button is-active" type="button" data-sprite-dimension="2d" aria-label="Edit as 2D sprite" aria-pressed="true" title="2D sprite">2D</button>
+                <button id="spriteDimension3dButton" class="source-action-button" type="button" data-sprite-dimension="3d" aria-label="Edit as 3D sprite" aria-pressed="false" title="3D sprite">3D</button>
+              </span>
               <button id="spriteAnimateModeButton" class="source-action-button" type="button" aria-label="Animate sprite" aria-pressed="false" title="Animate sprite">
                 <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-film-icon lucide-film">
                   <rect width="18" height="18" x="3" y="3" rx="2"></rect>
@@ -646,32 +657,15 @@
                   <path d="M22 12h-2"></path>
                 </svg>
               </button>
-              <button id="spriteClearButton" class="sprite-clear-button sprite-icon-button" type="button" aria-label="Clear" title="Clear">
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M3 6h18"></path>
-                  <path d="M8 6V4h8v2"></path>
-                  <path d="M19 6l-1 14H6L5 6"></path>
-                  <path d="M10 11v5"></path>
-                  <path d="M14 11v5"></path>
-                </svg>
-              </button>
               </span>
               <div id="spritePalette" class="sprite-palette" aria-label="Sprite character palette">
                 <span id="spriteMarkerTool" class="sprite-marker-tool" role="group" aria-label="Brush size">
-                  <span class="sprite-brush-size-group" role="group" aria-label="Brush size">
-                    <button class="sprite-brush-size-button" type="button" data-sprite-brush-preset="pixel" aria-label="Brush: 1px" aria-pressed="true" title="1px">
-                      <span class="sprite-brush-size-pixel" aria-hidden="true"></span>
-                    </button>
-                    <button class="sprite-brush-size-button" type="button" data-sprite-brush-preset="thin" aria-label="Brush: marker S" aria-pressed="false" title="Marker S">
-                      <span class="sprite-brush-size-dot is-thin" aria-hidden="true"></span>
-                    </button>
-                    <button class="sprite-brush-size-button" type="button" data-sprite-brush-preset="medium" aria-label="Brush: marker M" aria-pressed="false" title="Marker M">
-                      <span class="sprite-brush-size-dot is-medium" aria-hidden="true"></span>
-                    </button>
-                    <button class="sprite-brush-size-button" type="button" data-sprite-brush-preset="thick" aria-label="Brush: marker L" aria-pressed="false" title="Marker L">
-                      <span class="sprite-brush-size-dot is-thick" aria-hidden="true"></span>
-                    </button>
-                  </span>
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="sprite-marker-icon lucide lucide-highlighter-icon lucide-highlighter" aria-hidden="true">
+                    <path d="m9 11-6 6v3h9l3-3"></path>
+                    <path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"></path>
+                  </svg>
+                  <input id="spriteBrushSizeInput" class="sprite-brush-size-input" type="number" min="1" max="64" step="1" inputmode="numeric" value="1" aria-label="Brush size in pixels">
+                  <span class="sprite-brush-size-unit" aria-hidden="true">px</span>
                 </span>
                 <button id="spriteFillButton" class="sprite-token sprite-palette-fill-button sprite-fill-button sprite-icon-button sprite-paint-tool-button" type="button" aria-label="Bucket fill" aria-pressed="false" title="Bucket fill">
                   <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -689,32 +683,12 @@
                   </svg>
                 </button>
               </div>
-              <div class="source-action-group source-preview-actions sprite-source-actions sprite-header-actions" role="group" aria-label="Sprite source actions">
-                <button id="spriteUpdateButton" class="source-action-button sprite-update-source-button is-primary" type="button" aria-label="Update source" title="Update source">
-                  <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-file-pen-line-icon lucide-file-pen-line">
-                    <path d="M14.364 13.634a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506l4.013-4.009a1 1 0 0 0-3.004-3.004z"></path>
-                    <path d="M14.487 7.858A1 1 0 0 1 14 7V2"></path>
-                    <path d="M20 19.645V20a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l2.516 2.516"></path>
-                    <path d="M8 18h1"></path>
-                  </svg>
-                </button>
-                <span class="sprite-secondary-source-actions" role="group" aria-label="Sprite utility actions">
-                  <button id="duplicateSpriteButton" class="source-action-button" type="button" aria-label="Duplicate sprite" title="Duplicate sprite" disabled>
-                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="lucide lucide-copy-plus-icon lucide-copy-plus">
-                      <line x1="15" x2="15" y1="12" y2="18"></line>
-                      <line x1="12" x2="18" y1="15" y2="15"></line>
-                      <rect width="14" height="14" x="8" y="8" rx="2" ry="2"></rect>
-                      <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>
-                    </svg>
-                  </button>
-                  <button id="spriteExportButton" class="source-action-button source-copy-button" type="button" aria-label="Copy" title="Copy">
-                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                      <rect x="8" y="8" width="14" height="14" rx="2"></rect>
-                      <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>
-                    </svg>
-                  </button>
-                </span>
-              </div>
+              <div id="spriteToolbarHost" class="sprite-toolbar-host"></div>
+              <span id="spriteSourceActionBank" hidden>
+                <button id="newSpriteButton" class="source-action-button" type="button" aria-label="New sprite" title="New sprite"><svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-image-plus-icon lucide-image-plus"><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7"></path><line x1="16" x2="22" y1="5" y2="5"></line><line x1="19" x2="19" y1="2" y2="8"></line><circle cx="9" cy="9" r="2"></circle><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"></path></svg></button>
+                <button id="spriteInsertButton" class="source-action-button" type="button" aria-label="Add sprite" title="Add sprite"><svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-file-plus-corner-icon lucide-file-plus-corner"><path d="M11.35 22H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v5.35"></path><path d="M14 2v5a1 1 0 0 0 1 1h5"></path><path d="M14 19h6"></path><path d="M17 16v6"></path></svg></button>
+                <button id="spriteUpdateButton" class="source-action-button sprite-update-source-button" type="button" aria-label="Save sprite" title="Save"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8A2 2 0 0 1 21 8.8V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z"></path><path d="M17 21v-8H7v8"></path><path d="M7 3v5h8"></path></svg></button>
+              </span>
               <div class="sprite-board-wrap">
                 <div class="sprite-animation-toolbar sprite3d-slice-axis-control" role="group" aria-label="Sprite animation frame controls">
                   <span class="sprite3d-layer-axis-label">Frame</span>
@@ -770,13 +744,12 @@
           <div id="sprite3dBuilder" class="sprite-builder sprite3d-builder" hidden>
             <div class="tool-pane-scroll">
               <div class="sprite-controls">
-              <div class="source-target-control sprite-source-target">
-                <label class="sprite-name-control">
-                  <span>Name</span>
+              <div class="sprite-source-fields" aria-label="3D sprite source fields">
+                <label class="sprite-name-control sprite-source-field">
+                  <span>Sprite for</span>
                   <input id="sprite3dNameInput" type="text" value="VoxelSprite" spellcheck="false" autocomplete="off" autocapitalize="off">
                 </label>
-              </div>
-              <div class="sprite-transform-bar sprite3d-transform-bar" aria-label="3D sprite transform settings">
+              <div class="sprite-transform-bar sprite-source-field sprite3d-transform-bar" aria-label="3D sprite transform settings">
                 <label class="sprite-size-control sprite-compact-control">
                   <span>Size</span>
                   <input id="sprite3dSizeInput" type="number" min="1" max="64" value="5" inputmode="numeric">
@@ -804,52 +777,39 @@
                     </button>
                   </div>
                 </div>
+                <label class="sprite-duration-control sprite-compact-control sprite3d-animation-control">
+                  <span>Duration</span>
+                  <span class="sprite-duration-input">
+                    <input id="sprite3dAnimationDurationInput" type="number" min="20" max="5000" step="10" value="120" inputmode="numeric" aria-label="3D sprite animation loop duration in milliseconds">
+                    <span class="sprite-duration-unit" aria-hidden="true">ms</span>
+                  </span>
+                </label>
+                <label class="sprite-frame-count-control sprite-compact-control sprite3d-animation-control">
+                  <span>Frames</span>
+                  <input id="sprite3dAnimationFrameCountInput" type="number" min="1" max="24" value="1" inputmode="numeric" aria-label="3D sprite animation frame count">
+                </label>
+              </div>
+              <div id="sprite3dShapeField" class="sprite-source-field sprite-shape-field"></div>
               </div>
               </div>
+              <input id="sprite3dDepthInput" type="hidden" value="5">
               <div id="sprite3dPalette" class="sprite-palette sprite3d-palette" aria-label="3D sprite palette"></div>
-              <div class="source-action-group source-preview-actions sprite-source-actions sprite-header-actions sprite3d-source-actions" role="group" aria-label="3D sprite source actions">
-                <button id="sprite3dUpdateButton" class="source-action-button is-primary" type="button" aria-label="Update source" title="Update source">
-                  <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-file-pen-line-icon lucide-file-pen-line">
-                    <path d="M14.364 13.634a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506l4.013-4.009a1 1 0 0 0-3.004-3.004z"></path>
-                    <path d="M14.487 7.858A1 1 0 0 1 14 7V2"></path>
-                    <path d="M20 19.645V20a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l2.516 2.516"></path>
-                    <path d="M8 18h1"></path>
-                  </svg>
-                </button>
-                <span class="sprite-secondary-source-actions" role="group" aria-label="3D sprite utility actions">
-                  <button id="duplicateSprite3dButton" class="source-action-button" type="button" aria-label="Duplicate 3D sprite" title="Duplicate 3D sprite" disabled>
-                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="lucide lucide-copy-plus-icon lucide-copy-plus">
-                      <line x1="15" x2="15" y1="12" y2="18"></line>
-                      <line x1="12" x2="18" y1="15" y2="15"></line>
-                      <rect width="14" height="14" x="8" y="8" rx="2" ry="2"></rect>
-                      <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>
-                    </svg>
-                  </button>
-                  <button id="sprite3dExportButton" class="source-action-button source-copy-button" type="button" aria-label="Copy" title="Copy">
-                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                      <rect x="8" y="8" width="14" height="14" rx="2"></rect>
-                      <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>
-                    </svg>
-                  </button>
-                </span>
-              </div>
+              <div id="sprite3dToolbarHost" class="sprite-toolbar-host"></div>
+              <span id="sprite3dSourceActionBank" hidden>
+                <button id="newSprite3dButton" class="source-action-button" type="button" aria-label="New 3D sprite" title="New sprite"><svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-image-plus-icon lucide-image-plus"><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7"></path><line x1="16" x2="22" y1="5" y2="5"></line><line x1="19" x2="19" y1="2" y2="8"></line><circle cx="9" cy="9" r="2"></circle><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"></path></svg></button>
+                <button id="sprite3dInsertButton" class="source-action-button" type="button" aria-label="Add 3D sprite" title="Add sprite"><svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-file-plus-corner-icon lucide-file-plus-corner"><path d="M11.35 22H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v5.35"></path><path d="M14 2v5a1 1 0 0 0 1 1h5"></path><path d="M14 19h6"></path><path d="M17 16v6"></path></svg></button>
+                <button id="sprite3dUpdateButton" class="source-action-button sprite-update-source-button" type="button" aria-label="Save 3D sprite" title="Save"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8A2 2 0 0 1 21 8.8V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z"></path><path d="M17 21v-8H7v8"></path><path d="M7 3v5h8"></path></svg></button>
+              </span>
               <div class="sprite3d-workspace">
                 <div class="sprite-board-wrap sprite3d-slice-wrap">
                   <div id="sprite3dSliceBoard" class="sprite-board sprite3d-slice-board" aria-label="Editable 3D sprite slice"></div>
                   <div class="sprite-toolbar sprite3d-edit-actions" role="toolbar" aria-label="3D sprite edit actions">
                     <div class="sprite3d-scope-toggle" role="group" aria-label="3D sprite edit scope">
-                      <span class="sprite3d-scope-toggle-label">Scope</span>
-                      <button id="sprite3dScopeSliceButton" class="sprite3d-scope-button sprite-icon-button is-active" type="button" data-sprite3d-scope-option="slice" aria-label="Scope slice" aria-pressed="true" title="Scope slice">
-                        <svg viewBox="0 0 24 24" aria-hidden="true">
-                          <rect x="5" y="5" width="14" height="14" rx="1.8"></rect>
-                        </svg>
+                      <button id="sprite3dScopeSliceButton" class="sprite3d-scope-button sprite-icon-button is-active" type="button" data-sprite3d-scope-option="slice" aria-label="Scope 2D" aria-pressed="true" title="Scope 2D slice">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="lucide lucide-square-icon lucide-square" viewBox="0 0 24 24" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"></rect></svg>
                       </button>
-                      <button id="sprite3dScopeAllButton" class="sprite3d-scope-button sprite-icon-button" type="button" data-sprite3d-scope-option="all" aria-label="Scope all" aria-pressed="false" title="Scope all">
-                        <svg viewBox="0 0 24 24" aria-hidden="true">
-                          <path d="M12 2.8 20 7.3v9.4l-8 4.5-8-4.5V7.3Z"></path>
-                          <path d="M4 7.3 12 12l8-4.7"></path>
-                          <path d="M12 12v9.2"></path>
-                        </svg>
+                      <button id="sprite3dScopeAllButton" class="sprite3d-scope-button sprite-icon-button" type="button" data-sprite3d-scope-option="all" aria-label="Scope 3D" aria-pressed="false" title="Scope 3D volume">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="lucide lucide-box-icon lucide-box" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"></path><path d="m3.3 7 8.7 5 8.7-5"></path><path d="M12 22V12"></path></svg>
                       </button>
                     </div>
                     <div class="sprite3d-action-row" role="group" aria-label="3D sprite edit commands">
@@ -895,20 +855,6 @@
                         <path d="M22 12h-2"></path>
                       </svg>
                     </button>
-                    <button id="sprite3dCopySliceButton" class="sprite-icon-button" type="button" aria-label="Copy slice" title="Copy slice">
-                      <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <rect x="8" y="8" width="12" height="12" rx="2"></rect>
-                        <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>
-                      </svg>
-                    </button>
-                    <button id="sprite3dPasteSliceButton" class="sprite-icon-button" type="button" aria-label="Paste slice" title="Paste slice" disabled>
-                      <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
-                        <rect x="8" y="2" width="8" height="4" rx="1"></rect>
-                        <path d="M9 14h6"></path>
-                        <path d="M12 11v6"></path>
-                      </svg>
-                    </button>
                     <button id="sprite3dFillButton" class="sprite-fill-button sprite3d-fill-button sprite-icon-button" type="button" aria-label="Bucket fill" aria-pressed="false" title="Bucket fill">
                       <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path d="m19 11-8-8-8.6 8.6a2 2 0 0 0 0 2.8l5.2 5.2a2 2 0 0 0 2.8 0L19 11Z"></path>
@@ -917,48 +863,22 @@
                         <path d="M22 20a2 2 0 1 1-4 0c0-1.6 1.7-2.4 2-4 .3 1.6 2 2.4 2 4Z"></path>
                       </svg>
                     </button>
-                    <button id="sprite3dClearButton" class="sprite-clear-button sprite3d-clear-button sprite-icon-button" type="button" aria-label="Clear" title="Clear">
-                      <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M3 6h18"></path>
-                        <path d="M8 6V4h8v2"></path>
-                        <path d="M19 6l-1 14H6L5 6"></path>
-                        <path d="M10 11v5"></path>
-                        <path d="M14 11v5"></path>
-                      </svg>
-                    </button>
                     <span id="sprite3dClipActions"></span>
                     </div>
                   </div>
                 </div>
                 <div class="sprite3d-preview-column">
-                  <div class="sprite3d-preview-wrap">
+                  <div class="sprite3d-preview-stage">
+                    <div class="sprite3d-preview-wrap">
                     <div class="sprite3d-slice-axis-control" role="group" aria-label="3D sprite slice and axis">
                       <span class="sprite3d-layer-axis-label">Slices</span>
-                      <button id="sprite3dPreviousSliceButton" class="sprite-icon-button" type="button" aria-label="Move to lower slice" title="Lower slice">
-                        <svg viewBox="0 0 24 24" aria-hidden="true">
-                          <path d="M15 18l-6-6 6-6"></path>
-                        </svg>
-                      </button>
-                      <span class="sprite3d-slice-value-wrap" data-sprite3d-slice-scrub title="Adjust slice">
-                        <input id="sprite3dSliceValue" class="sprite3d-layer-axis-value" type="number" min="1" max="5" value="1" inputmode="numeric" aria-label="Current 3D sprite slice">
-                        <span class="sprite3d-slice-total-separator" aria-hidden="true">/</span>
-                        <span id="sprite3dSliceTotal" class="sprite3d-slice-total">5</span>
-                      </span>
-                      <button id="sprite3dNextSliceButton" class="sprite-icon-button" type="button" aria-label="Move to higher slice" title="Higher slice">
-                        <svg viewBox="0 0 24 24" aria-hidden="true">
-                          <path d="M9 18l6-6-6-6"></path>
-                        </svg>
-                      </button>
+                      <button id="sprite3dPreviousSliceButton" class="sprite-icon-button" type="button" aria-label="Move to lower slice" title="Lower slice"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"></path></svg></button>
+                      <span class="sprite3d-slice-value-wrap" data-sprite3d-slice-scrub title="Adjust slice"><input id="sprite3dSliceValue" class="sprite3d-layer-axis-value" type="number" min="1" max="5" value="1" inputmode="numeric" aria-label="Current 3D sprite slice"><span class="sprite3d-slice-total-separator" aria-hidden="true">/</span><span id="sprite3dSliceTotal" class="sprite3d-slice-total">5</span></span>
+                      <button id="sprite3dNextSliceButton" class="sprite-icon-button" type="button" aria-label="Move to higher slice" title="Higher slice"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18l6-6-6-6"></path></svg></button>
                       <span class="sprite3d-layer-axis-label">Axis</span>
-                      <div class="sprite3d-axis-control sprite3d-toolbar-axis" role="group" aria-label="3D sprite slice axis">
-                        <div class="sprite3d-axis-buttons">
-                          <button class="sprite3d-axis-button" type="button" data-sprite3d-axis="x" aria-pressed="false" title="Edit YZ slices">X</button>
-                          <button class="sprite3d-axis-button" type="button" data-sprite3d-axis="y" aria-pressed="false" title="Edit XZ slices">Y</button>
-                          <button class="sprite3d-axis-button is-active" type="button" data-sprite3d-axis="z" aria-pressed="true" title="Edit XY slices">Z</button>
-                        </div>
-                      </div>
+                      <div class="sprite3d-axis-control sprite3d-toolbar-axis" role="group" aria-label="3D sprite slice axis"><div class="sprite3d-axis-buttons"><button class="sprite3d-axis-button" type="button" data-sprite3d-axis="x" aria-pressed="false" title="Edit YZ slices">X</button><button class="sprite3d-axis-button" type="button" data-sprite3d-axis="y" aria-pressed="false" title="Edit XZ slices">Y</button><button class="sprite3d-axis-button is-active" type="button" data-sprite3d-axis="z" aria-pressed="true" title="Edit XY slices">Z</button></div></div>
                     </div>
-                    <canvas id="sprite3dPreviewCanvas" class="sprite3d-preview-canvas" width="360" height="320" aria-label="3D sprite preview"></canvas>
+                    <canvas id="sprite3dPreviewCanvas" class="sprite3d-preview-canvas" width="320" height="320" aria-label="3D sprite preview"></canvas>
                     <div class="sprite3d-camera-controls" aria-label="3D preview camera controls">
                       <label>
                         <span title="yaw">Y</span>
@@ -980,6 +900,7 @@
                           <path d="M6 22v-4h4"></path>
                         </svg>
                       </button>
+                    </div>
                     </div>
                   </div>
                 </div>

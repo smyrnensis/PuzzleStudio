@@ -2,7 +2,7 @@ use crate::domain::SearchDomain;
 use crate::stable_hash::{fnv_mix, fnv_seed};
 use crate::state_slicer::SolverStateSlicer;
 use puzzle_grid3d::{
-    Game3, InputId, ObjectId, Rule3, State3, TransitionError3, transition_program,
+    Game3, InputId, ObjectId, RuleStep3, State3, TransitionError3, transition_program,
 };
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -66,7 +66,7 @@ impl Hash for Puzzle3StateKey {
 
 pub struct Puzzle3Domain {
     game: Arc<Game3>,
-    rules: Arc<Vec<Rule3>>,
+    rules: Arc<Vec<RuleStep3>>,
     inputs: Vec<InputId>,
     state_slicer: SolverStateSlicer<ObjectId>,
     is_goal: Box<dyn Fn(&State3) -> bool>,
@@ -75,7 +75,7 @@ pub struct Puzzle3Domain {
 impl Puzzle3Domain {
     pub fn new(
         game: Arc<Game3>,
-        rules: Vec<Rule3>,
+        rules: Vec<RuleStep3>,
         inputs: Vec<InputId>,
         is_goal: impl Fn(&State3) -> bool + 'static,
     ) -> Self {
@@ -84,7 +84,7 @@ impl Puzzle3Domain {
 
     pub fn with_state_slicer(
         game: Arc<Game3>,
-        rules: Vec<Rule3>,
+        rules: Vec<RuleStep3>,
         inputs: Vec<InputId>,
         state_slicer: SolverStateSlicer<ObjectId>,
         is_goal: impl Fn(&State3) -> bool + 'static,
@@ -102,7 +102,7 @@ impl Puzzle3Domain {
         &self.game
     }
 
-    pub fn rules(&self) -> &[Rule3] {
+    pub fn rules(&self) -> &[RuleStep3] {
         &self.rules
     }
 
@@ -153,13 +153,11 @@ mod tests {
     #[test]
     fn solves_single_push_support_goal_level_and_replays_to_goal() {
         let source = r#"
-puzzle3 push3 {
+puzzle push3 {
 layers {
 floor = Goal
 solid = Player Box Wall
 }
-
-group solid = Player Box Wall
 
 rules {
 input right [ Player | Box | no solid ] -> [ | Player | Box ]
@@ -172,7 +170,7 @@ no down [ no Box | Goal ]
 }
 }
 
-levels3 tiny of push3 {
+levels tiny of push3 {
 legend {
 . = empty
 P = Player
@@ -220,7 +218,7 @@ PB.
     #[test]
     fn solver_state_slicer_projects_3d_states() {
         let source = r#"
-puzzle3 projection3 {
+puzzle projection3 {
 layers {
 actor = Player
 fx = Dust
@@ -235,7 +233,7 @@ input right [ Player | no Player ] -> [ | Player ]
 }
 }
 
-levels3 tiny of projection3 {
+levels tiny of projection3 {
 legend {
 . = empty
 P = Player

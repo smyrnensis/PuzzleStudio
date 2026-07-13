@@ -186,32 +186,12 @@ fn parse_levels_header(
     line: &str,
     default_puzzle: Option<&str>,
 ) -> Result<LevelsHeader, DiagnosticReport> {
-    let tokens = split_header_tokens(line);
-    match tokens.as_slice() {
-        ["levels"] => Ok(LevelsHeader {
-            pack: None,
-            puzzle: default_puzzle.map(str::to_string),
-        }),
-        ["levels", "of", puzzle] => {
-            validate_qualified_identifier(puzzle, line, "levels puzzle")?;
-            Ok(LevelsHeader {
-                pack: None,
-                puzzle: Some((*puzzle).to_string()),
-            })
-        }
-        ["levels", pack, "of", puzzle] => {
-            validate_qualified_identifier(pack, line, "levels pack")?;
-            validate_qualified_identifier(puzzle, line, "levels puzzle")?;
-            Ok(LevelsHeader {
-                pack: Some((*pack).to_string()),
-                puzzle: Some((*puzzle).to_string()),
-            })
-        }
-        _ => Err(parse_error(
-            line,
-            "levels header must be: levels, levels of <puzzle>, or levels <pack> of <puzzle>",
-        )),
-    }
+    let surface = puzzle_authoring::resource_header_surface(line, "levels")
+        .map_err(|error| parse_error(line, error.message()))?;
+    Ok(LevelsHeader {
+        pack: surface.name.map(str::to_string),
+        puzzle: surface.owner.or(default_puzzle).map(str::to_string),
+    })
 }
 
 fn resolve_level_block_puzzles(
@@ -336,17 +316,17 @@ fn parse_condition_block_entry(
             unreachable!("checked by matches");
         };
         let value_sets = catalog_value_sets(catalog);
-        let values =
-            for_expansion_values(sources, &value_sets, &catalog.numeric_variable_defaults, line)?;
+        let values = for_expansion_values(
+            sources,
+            &value_sets,
+            &catalog.numeric_variable_defaults,
+            line,
+        )?;
         validate_identifier(binding, line, "expansion binding")?;
         let (body_lines, next_i) = collect_statement_block_lines(lines, start + 1, line)?;
         for value in values {
-            let expanded_lines = expand_for_binding_lines(
-                &body_lines,
-                binding,
-                &value,
-                &catalog.maps,
-            )?;
+            let expanded_lines =
+                expand_for_binding_lines(&body_lines, binding, &value, &catalog.maps)?;
             parse_condition_rows(
                 &expanded_lines,
                 condition_name,
@@ -469,7 +449,10 @@ fn parse_puzzle_render_block(
                         "cell_size directive must be: cell_size = <pixels>",
                     ));
                 };
-                parsed.cell_size = Some(parse_puzzle_render_cell_size(value, &definition.source_line)?);
+                parsed.cell_size = Some(parse_puzzle_render_cell_size(
+                    value,
+                    &definition.source_line,
+                )?);
             }
             "tween_duration" => {
                 if definition.op != Some(authoring_grammar::AuthoringDefinitionOp::Equals) {
@@ -772,57 +755,10 @@ fn parse_condition_block_row(
     condition_name: &str,
     catalog: &Catalog,
 ) -> Result<ConditionAst, DiagnosticReport> {
-    if let Ok(condition) = parse_condition_expr(
-        line,
-        line,
-        &catalog.input_names,
-        &catalog.variable_names,
-        &catalog.condition_names,
-        &catalog.object_names,
-        &catalog.object_schemas,
-        &catalog_value_sets(catalog),
-        &catalog.maps,
-        &catalog.object_groups,
-    ) {
-        return Ok(condition);
-    }
-
-    if let Some(pattern) = line.trim().strip_prefix("some ") {
-        let pattern = pattern.trim();
-        if let Some(pattern) = parse_condition_pattern_arg(
-            pattern,
-            line,
-            &catalog.object_names,
-            &catalog.object_schemas,
-            &catalog_value_sets(catalog),
-            &catalog.maps,
-            &catalog.object_groups,
-        )? {
-            return Ok(ConditionAst::InlineConditionNonZero(
-                ConditionValueAst::ExistsMatches(pattern),
-            ));
-        }
-    }
-    if let Some(pattern) = line.trim().strip_prefix("no ") {
-        let pattern = pattern.trim();
-        if let Some(pattern) = parse_condition_pattern_arg(
-            pattern,
-            line,
-            &catalog.object_names,
-            &catalog.object_schemas,
-            &catalog_value_sets(catalog),
-            &catalog.maps,
-            &catalog.object_groups,
-        )? {
-            return Ok(ConditionAst::InlineConditionNonZero(
-                ConditionValueAst::NoneMatches(pattern),
-            ));
-        }
-    }
-
-    let tokens = split_header_tokens(line);
-    match tokens.as_slice() {
-        ["all", subject, "on", cover] => {
+    let surface = puzzle_authoring::win_condition_row_surface(line)
+        .map_err(|error| parse_error(line, error))?;
+    match surface {
+        puzzle_authoring::WinConditionRowSurface::AllOn { subject, cover } => {
             let subjects = resolve_object_selector(
                 subject,
                 line,
@@ -847,8 +783,8 @@ fn parse_condition_block_row(
             .alternatives;
             Ok(ConditionAst::AllObjectsOn { subjects, covers })
         }
-        ["some", target, "on", cover] => {
-            let expr = format!("exists([ {target} {cover} ])");
+        puzzle_authoring::WinConditionRowSurface::SomeOn { subject, cover } => {
+            let expr = format!("exists([ {subject} {cover} ])");
             parse_condition_expr(
                 &expr,
                 line,
@@ -862,8 +798,33 @@ fn parse_condition_block_row(
                 &catalog.object_groups,
             )
         }
-        ["some", target] => {
-            let expr = format!("exists({target})");
+        puzzle_authoring::WinConditionRowSurface::Query {
+            quantifier,
+            argument,
+        } => {
+            if let Some(pattern) = parse_condition_pattern_arg(
+                argument,
+                line,
+                &catalog.object_names,
+                &catalog.object_schemas,
+                &catalog_value_sets(catalog),
+                &catalog.maps,
+                &catalog.object_groups,
+            )? {
+                return Ok(ConditionAst::InlineConditionNonZero(match quantifier {
+                    puzzle_authoring::WinConditionQuantifier::Exists => {
+                        ConditionValueAst::ExistsMatches(pattern)
+                    }
+                    puzzle_authoring::WinConditionQuantifier::None => {
+                        ConditionValueAst::NoneMatches(pattern)
+                    }
+                }));
+            }
+            let function = match quantifier {
+                puzzle_authoring::WinConditionQuantifier::Exists => "exists",
+                puzzle_authoring::WinConditionQuantifier::None => "none",
+            };
+            let expr = format!("{function}({argument})");
             parse_condition_expr(
                 &expr,
                 line,
@@ -877,10 +838,9 @@ fn parse_condition_block_row(
                 &catalog.object_groups,
             )
         }
-        ["no", target] => {
-            let expr = format!("none({target})");
+        puzzle_authoring::WinConditionRowSurface::Expression(expression) => {
             parse_condition_expr(
-                &expr,
+                expression,
                 line,
                 &catalog.input_names,
                 &catalog.variable_names,
@@ -891,13 +851,15 @@ fn parse_condition_block_row(
                 &catalog.maps,
                 &catalog.object_groups,
             )
+            .map_err(|_| {
+                parse_error(
+                    line,
+                    &format!(
+                        "{condition_name} row must be a condition expression, all <object> on <object>, some/no [pattern], some <object> on <object>, or some/no <object>"
+                    ),
+                )
+            })
         }
-        _ => Err(parse_error(
-            line,
-            &format!(
-                "{condition_name} row must be a condition expression, all <object> on <object>, some/no [pattern], some <object> on <object>, or some/no <object>"
-            ),
-        )),
     }
 }
 
@@ -921,7 +883,9 @@ fn parse_named_level_body(
             i += 1;
             continue;
         }
-        if nested_blocks == 0 && let Some(parsed) = canonical_level_name_override(&lines[i])? {
+        if nested_blocks == 0
+            && let Some(parsed) = canonical_level_name_override(&lines[i])?
+        {
             if name_override.is_some() {
                 return Err(parse_error(&lines[i], "duplicate level name"));
             }
@@ -986,7 +950,9 @@ fn braced_level_name_override_or(
             i += 1;
             continue;
         }
-        if nested_blocks == 0 && let Some(parsed) = canonical_level_name_override(&lines[i])? {
+        if nested_blocks == 0
+            && let Some(parsed) = canonical_level_name_override(&lines[i])?
+        {
             if name.is_some() {
                 return Err(parse_error(&lines[i], "duplicate level name"));
             }
@@ -1057,7 +1023,15 @@ fn parse_unbraced_level_body(
 }
 
 fn is_level_body_block(tokens: &[&str]) -> bool {
-    matches!(tokens, ["legend"] | ["on_level_start"] | ["on_level_clear"])
+    matches!(
+        tokens,
+        ["legend"]
+            | ["on_level_start"]
+            | ["on_level_clear"]
+            | ["rules"]
+            | ["rules", "before"]
+            | ["rules", "after"]
+    )
 }
 
 #[derive(Clone, Debug)]
@@ -1069,6 +1043,8 @@ struct PreparedLevelBody {
     char_objects: HashMap<char, Vec<ObjectId>>,
     level_start_statements: Vec<StatementAst>,
     level_clear_statements: Vec<StatementAst>,
+    rules_before_statements: Vec<StatementAst>,
+    rules_after_statements: Vec<StatementAst>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1077,6 +1053,8 @@ struct ParsedLevelBody {
     local_char_objects: HashMap<char, Vec<ObjectId>>,
     level_start_statements: Vec<StatementAst>,
     level_clear_statements: Vec<StatementAst>,
+    rules_before_statements: Vec<StatementAst>,
+    rules_after_statements: Vec<StatementAst>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1105,6 +1083,8 @@ fn parse_level_body_with_rules(
     include_rules: bool,
 ) -> Result<ParsedLevelBody, DiagnosticReport> {
     let mut body = ParsedLevelBody::default();
+    let mut saw_rules_before = false;
+    let mut saw_rules_after = false;
     let mut saw_map_row = false;
     let mut i = 0;
     while i < level.lines.len() {
@@ -1116,6 +1096,66 @@ fn parse_level_body_with_rules(
             }
             i += 1;
             continue;
+        }
+
+        if matches!(
+            tokens.as_slice(),
+            ["rules"] | ["rules", "before"] | ["rules", "after"]
+        ) {
+            if !include_rules {
+                i = recover_after_directive_error(&level.lines, i);
+                continue;
+            }
+            let is_before = tokens.as_slice() == ["rules", "before"];
+            let duplicate = if is_before {
+                std::mem::replace(&mut saw_rules_before, true)
+            } else {
+                std::mem::replace(&mut saw_rules_after, true)
+            };
+            if duplicate {
+                return Err(parse_error(
+                    line,
+                    if is_before {
+                        "duplicate level rules before block"
+                    } else {
+                        "duplicate level rules after block (rules is the after shorthand)"
+                    },
+                ));
+            }
+            let (statements, next_i) = parse_statement_block(
+                &level.lines,
+                None,
+                i + 1,
+                &[BLOCK_CLOSE],
+                &catalog.object_names,
+                &catalog.object_schemas,
+                &catalog_value_sets(catalog),
+                &catalog.maps,
+                &catalog.object_groups,
+                &catalog.input_names,
+                &catalog.variable_names,
+                &catalog.numeric_variable_defaults,
+                &catalog.condition_names,
+                named_conditions,
+                &[],
+            )?;
+            if is_before {
+                body.rules_before_statements = statements;
+            } else {
+                body.rules_after_statements = statements;
+            }
+            i = next_i;
+            continue;
+        }
+        if tokens.first() == Some(&"rules") {
+            if !include_rules {
+                i = recover_after_directive_error(&level.lines, i);
+                continue;
+            }
+            return Err(parse_error(
+                line,
+                "level rules block header must be: rules | rules before | rules after",
+            ));
         }
 
         if matches!(tokens.as_slice(), ["on_level_start"] | ["on_level_clear"]) {
@@ -1268,7 +1308,7 @@ fn parse_level_legend_directive(
     };
 
     let ch = parse_char(tokens.get(1), line, "missing legend char")?;
-    if Some(ch) == empty_char || tokens[syntax.rhs_start..] == ["empty"] {
+    if ch == '.' || Some(ch) == empty_char || tokens[syntax.rhs_start..] == ["empty"] {
         return Err(parse_error(line, "level-local legend cannot define empty"));
     }
     let selector_sets = selector_sets(

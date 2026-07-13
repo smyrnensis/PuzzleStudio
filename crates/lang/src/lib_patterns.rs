@@ -3,6 +3,14 @@ fn wrap_rewrite_steps(application: RuleApplication, steps: Vec<RuleStep>) -> Vec
         application,
         RuleApplication::Random | RuleApplication::UntilStable
     ) {
+        let steps = if application == RuleApplication::UntilStable {
+            steps
+                .into_iter()
+                .map(|step| rewrite_step_with_application(step, RuleApplication::Once))
+                .collect()
+        } else {
+            steps
+        };
         vec![RuleStep::Block {
             application,
             stop_condition: None,
@@ -10,6 +18,38 @@ fn wrap_rewrite_steps(application: RuleApplication, steps: Vec<RuleStep>) -> Vec
         }]
     } else {
         steps
+    }
+}
+
+fn rewrite_step_with_application(step: RuleStep, application: RuleApplication) -> RuleStep {
+    match step {
+        RuleStep::Rule(mut rule) => {
+            rule.application = application;
+            RuleStep::Rule(rule)
+        }
+        RuleStep::ConditionalBlock { condition, steps } => RuleStep::ConditionalBlock {
+            condition,
+            steps: steps
+                .into_iter()
+                .map(|step| rewrite_step_with_application(step, application))
+                .collect(),
+        },
+        RuleStep::ConditionalBranch {
+            condition,
+            then_steps,
+            else_steps,
+        } => RuleStep::ConditionalBranch {
+            condition,
+            then_steps: then_steps
+                .into_iter()
+                .map(|step| rewrite_step_with_application(step, application))
+                .collect(),
+            else_steps: else_steps
+                .into_iter()
+                .map(|step| rewrite_step_with_application(step, application))
+                .collect(),
+        },
+        other => other,
     }
 }
 
@@ -1473,7 +1513,8 @@ fn parse_cell_mark_token(
 }
 
 fn anonymous_mark_for_token(token: &str) -> Option<AnonymousMark> {
-    match puzzle_authoring::mark_sugar_kind(token)? {
+    let base = token.split_once('#').map_or(token, |(base, _)| base);
+    match puzzle_authoring::mark_sugar_kind(base)? {
         puzzle_authoring::MarkSugarKind::Movement => Some(AnonymousMark::Movement),
         puzzle_authoring::MarkSugarKind::Bool => Some(AnonymousMark::Bool),
         puzzle_authoring::MarkSugarKind::Int => Some(AnonymousMark::Int),
@@ -3458,7 +3499,7 @@ fn compile_before_after_blocks(
         validate_null_component_has_anchor_cell(before_component, line)?;
         validate_null_cell_rewrite(before_component, after_component, line)?;
     }
-    let expanded_blocks = expand_movement_mark_sets(before, after);
+    let expanded_blocks = expand_movement_mark_sets(before, after, line)?;
     let mut alternatives = Vec::new();
 
     for (before, after) in expanded_blocks {
@@ -4032,32 +4073,53 @@ struct MarkSetBinding {
     values: &'static [&'static str],
 }
 
+#[derive(Clone, Debug)]
+struct MarkSetOccurrence {
+    location: String,
+    anchor: String,
+    set: String,
+    label: Option<String>,
+    values: &'static [&'static str],
+}
+
 fn expand_movement_mark_sets(
     before: &PatternBlock,
     after: &PatternBlock,
-) -> Vec<(PatternBlock, PatternBlock)> {
+    line: &str,
+) -> Result<Vec<(PatternBlock, PatternBlock)>, DiagnosticReport> {
     let before = expand_negated_movement_mark_sets(before);
     let after = expand_negated_movement_mark_sets(after);
-    let mut bindings = Vec::<MarkSetBinding>::new();
-    collect_movement_mark_set_bindings(&before, &mut bindings);
-    collect_movement_mark_set_bindings(&after, &mut bindings);
+    let before_occurrences = collect_movement_mark_set_occurrences(&before, "before", line)?;
+    let after_occurrences = collect_movement_mark_set_occurrences(&after, "after", line)?;
+    let (mut bindings, occurrence_bindings) =
+        resolve_mark_set_bindings(&before_occurrences, &after_occurrences, line)?;
     dedup_mark_set_bindings(&mut bindings);
 
     if bindings.is_empty() {
-        return vec![(before, after)];
+        return Ok(vec![(before, after)]);
     }
 
     let mut assignments = Vec::<HashMap<String, String>>::new();
     expand_mark_set_assignments(&bindings, 0, &mut HashMap::new(), &mut assignments);
-    assignments
+    Ok(assignments
         .into_iter()
         .map(|assignment| {
             (
-                apply_movement_mark_set_assignment(&before, &assignment),
-                apply_movement_mark_set_assignment(&after, &assignment),
+                apply_movement_mark_set_assignment(
+                    &before,
+                    "before",
+                    &occurrence_bindings,
+                    &assignment,
+                ),
+                apply_movement_mark_set_assignment(
+                    &after,
+                    "after",
+                    &occurrence_bindings,
+                    &assignment,
+                ),
             )
         })
-        .collect()
+        .collect())
 }
 
 fn expand_negated_movement_mark_sets(block: &PatternBlock) -> PatternBlock {
@@ -4101,7 +4163,12 @@ fn expand_negated_movement_mark_set_list(mark: &mut Vec<ParsedMark>) {
     *mark = expanded;
 }
 
-fn collect_movement_mark_set_bindings(block: &PatternBlock, bindings: &mut Vec<MarkSetBinding>) {
+fn collect_movement_mark_set_occurrences(
+    block: &PatternBlock,
+    side: &str,
+    line: &str,
+) -> Result<Vec<MarkSetOccurrence>, DiagnosticReport> {
+    let mut occurrences = Vec::new();
     let mut selector_counts = HashMap::<String, usize>::new();
     for (component_index, component) in block.components.iter().enumerate() {
         for (row_index, row) in component.rows.iter().enumerate() {
@@ -4109,47 +4176,119 @@ fn collect_movement_mark_set_bindings(block: &PatternBlock, bindings: &mut Vec<M
                 let BlockPart::Cell(cell) = part else {
                     continue;
                 };
-                collect_cell_mark_set_bindings(
+                collect_cell_mark_set_occurrences(
                     &cell.require_cell_mark,
                     format!("cell:{component_index}:{row_index}:{part_index}:require"),
-                    bindings,
-                );
-                collect_cell_mark_set_bindings(
+                    side,
+                    line,
+                    &mut occurrences,
+                )?;
+                collect_cell_mark_set_occurrences(
                     &cell.forbid_cell_mark,
                     format!("cell:{component_index}:{row_index}:{part_index}:forbid"),
-                    bindings,
-                );
+                    side,
+                    line,
+                    &mut occurrences,
+                )?;
                 for selector in &cell.require {
                     let ordinal = *selector_counts.get(&selector.token).unwrap_or(&0);
                     selector_counts.insert(selector.token.clone(), ordinal + 1);
-                    collect_cell_mark_set_bindings(
+                    collect_cell_mark_set_occurrences(
                         &selector.mark,
                         format!("object:{}:{ordinal}", selector.token),
-                        bindings,
-                    );
+                        side,
+                        line,
+                        &mut occurrences,
+                    )?;
                 }
             }
         }
     }
+    Ok(occurrences)
 }
 
-fn collect_cell_mark_set_bindings(
+fn collect_cell_mark_set_occurrences(
     mark: &[ParsedMark],
     anchor: String,
-    bindings: &mut Vec<MarkSetBinding>,
-) {
+    side: &str,
+    line: &str,
+    occurrences: &mut Vec<MarkSetOccurrence>,
+) -> Result<(), DiagnosticReport> {
     for (mark_index, mark) in mark.iter().enumerate() {
         let Some(value) = mark.value.as_deref() else {
             continue;
         };
-        let Some(values) = movement_mark_set_values(value) else {
+        let Some((set, label, values)) = movement_mark_set_reference(value, line)? else {
             continue;
         };
-        bindings.push(MarkSetBinding {
-            key: format!("{anchor}:{mark_index}:{value}"),
+        occurrences.push(MarkSetOccurrence {
+            location: format!("{side}:{anchor}:{mark_index}"),
+            anchor: anchor.clone(),
+            set: set.to_string(),
+            label,
             values,
         });
     }
+    Ok(())
+}
+
+fn resolve_mark_set_bindings(
+    before: &[MarkSetOccurrence],
+    after: &[MarkSetOccurrence],
+    line: &str,
+) -> Result<(Vec<MarkSetBinding>, HashMap<String, String>), DiagnosticReport> {
+    let mut bindings = Vec::new();
+    let mut occurrence_bindings = HashMap::new();
+
+    for occurrence in before {
+        let key = occurrence.label.as_ref().map_or_else(
+            || format!("implicit:{}:{}", occurrence.anchor, occurrence.set),
+            |label| format!("labeled:{}#{label}", occurrence.set),
+        );
+        occurrence_bindings.insert(occurrence.location.clone(), key.clone());
+        bindings.push(MarkSetBinding {
+            key,
+            values: occurrence.values,
+        });
+    }
+
+    for occurrence in after {
+        let candidates = before
+            .iter()
+            .filter(|candidate| candidate.set == occurrence.set)
+            .filter(|candidate| match &occurrence.label {
+                Some(label) => candidate.label.as_ref() == Some(label),
+                None => true,
+            })
+            .collect::<Vec<_>>();
+        let source = if occurrence.label.is_none() {
+            candidates
+                .iter()
+                .find(|candidate| candidate.anchor == occurrence.anchor)
+                .copied()
+                .or_else(|| (candidates.len() == 1).then(|| candidates[0]))
+        } else {
+            (candidates.len() == 1).then(|| candidates[0])
+        };
+        let Some(source) = source else {
+            let message = if candidates.is_empty() {
+                format!("unbound movement set reference: {}", occurrence.set)
+            } else {
+                format!(
+                    "ambiguous movement set reference `{}`; add a #label",
+                    occurrence.set
+                )
+            };
+            return Err(parse_error(line, &message));
+        };
+        let key = occurrence_bindings
+            .get(&source.location)
+            .expect("before movement binding was recorded")
+            .clone();
+        occurrence_bindings.insert(occurrence.location.clone(), key);
+    }
+
+    Ok((bindings, occurrence_bindings))
 }
 
 fn dedup_mark_set_bindings(bindings: &mut Vec<MarkSetBinding>) {
@@ -4185,6 +4324,8 @@ fn expand_mark_set_assignments(
 
 fn apply_movement_mark_set_assignment(
     block: &PatternBlock,
+    side: &str,
+    occurrence_bindings: &HashMap<String, String>,
     assignment: &HashMap<String, String>,
 ) -> PatternBlock {
     let mut block = block.clone();
@@ -4198,11 +4339,15 @@ fn apply_movement_mark_set_assignment(
                 apply_cell_mark_set_assignment(
                     &mut cell.require_cell_mark,
                     &format!("cell:{component_index}:{row_index}:{part_index}:require"),
+                    side,
+                    occurrence_bindings,
                     assignment,
                 );
                 apply_cell_mark_set_assignment(
                     &mut cell.forbid_cell_mark,
                     &format!("cell:{component_index}:{row_index}:{part_index}:forbid"),
+                    side,
+                    occurrence_bindings,
                     assignment,
                 );
                 for selector in &mut cell.require {
@@ -4211,6 +4356,8 @@ fn apply_movement_mark_set_assignment(
                     apply_cell_mark_set_assignment(
                         &mut selector.mark,
                         &format!("object:{}:{ordinal}", selector.token),
+                        side,
+                        occurrence_bindings,
                         assignment,
                     );
                 }
@@ -4223,6 +4370,8 @@ fn apply_movement_mark_set_assignment(
 fn apply_cell_mark_set_assignment(
     mark: &mut [ParsedMark],
     anchor: &str,
+    side: &str,
+    occurrence_bindings: &HashMap<String, String>,
     assignment: &HashMap<String, String>,
 ) {
     for (mark_index, mark) in mark.iter_mut().enumerate() {
@@ -4232,8 +4381,10 @@ fn apply_cell_mark_set_assignment(
         if movement_mark_set_values(value).is_none() {
             continue;
         }
-        let key = format!("{anchor}:{mark_index}:{value}");
-        if let Some(concrete) = assignment.get(&key) {
+        let location = format!("{side}:{anchor}:{mark_index}");
+        if let Some(key) = occurrence_bindings.get(&location)
+            && let Some(concrete) = assignment.get(key)
+        {
             mark.value = Some(concrete.clone());
         }
     }
@@ -4760,6 +4911,7 @@ fn parse_anonymous_movement_value(
     value: &str,
     line: &str,
 ) -> Result<MarkValueTemplate, DiagnosticReport> {
+    let value = value.split_once('#').map_or(value, |(base, _)| base);
     if let Some(relative) = parse_relative_direction_value(value) {
         return Ok(MarkValueTemplate::Relative(relative));
     }
@@ -4769,7 +4921,24 @@ fn parse_anonymous_movement_value(
 }
 
 fn movement_mark_set_values(value: &str) -> Option<&'static [&'static str]> {
+    let value = value.split_once('#').map_or(value, |(base, _)| base);
     puzzle_authoring::movement_mark_set_values(value, 2)
+}
+
+fn movement_mark_set_reference<'a>(
+    value: &'a str,
+    line: &str,
+) -> Result<Option<(&'a str, Option<String>, &'static [&'static str])>, DiagnosticReport> {
+    let (set, label) = value
+        .split_once('#')
+        .map_or((value, None), |(set, label)| (set, Some(label)));
+    let Some(values) = puzzle_authoring::movement_mark_set_values(set, 2) else {
+        return Ok(None);
+    };
+    if let Some(label) = label {
+        validate_tag_capture_label(label, line)?;
+    }
+    Ok(Some((set, label.map(str::to_string), values)))
 }
 
 fn parse_enum_mark_value(

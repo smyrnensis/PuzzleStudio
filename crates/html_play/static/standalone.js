@@ -68,8 +68,7 @@
     sessionRequestJson(method, url) {
       const raw = this.sessionRuntime.request_json(method, url);
       const next = JSON.parse(raw);
-      if (method === "POST") {
-        this.writeSessionProgressSave();
+      if (method === "POST" && this.writeSessionProgressSave()) {
         if (next && typeof next.snapshot === "object") {
           next.snapshot.has_progress_save = true;
         } else {
@@ -155,7 +154,7 @@
     }
 
     restoreSessionProgressSave() {
-      if (!this.sessionRuntime) {
+      if (!this.sessionRuntime || !this.sessionProgressEnabled()) {
         return;
       }
       let raw = this.editorPreviewProgressSave();
@@ -177,8 +176,8 @@
     }
 
     writeSessionProgressSave() {
-      if (!this.sessionRuntime) {
-        return;
+      if (!this.sessionRuntime || !this.sessionProgressEnabled()) {
+        return false;
       }
       const saveJson = this.sessionRuntime.progress_save();
       this.notifyEditorPreviewProgressSave("PuzzleStudioPreviewProgressSave", saveJson);
@@ -188,11 +187,15 @@
         // Browsers can deny storage for local files, private windows, or quota limits.
       }
       this.sessionRuntime.mark_progress_save_written();
+      return true;
     }
 
     clearSessionProgressSave() {
       if (this.sessionRuntime) {
         this.sessionRuntime.clear_progress_save();
+      }
+      if (!this.sessionProgressEnabled()) {
+        return;
       }
       this.notifyEditorPreviewProgressSave("PuzzleStudioPreviewProgressSaveClear");
       try {
@@ -200,6 +203,10 @@
       } catch (_error) {
         // Ignore storage failures; the in-memory progress was already cleared.
       }
+    }
+
+    sessionProgressEnabled() {
+      return this.data?.editorPreview !== true;
     }
   }
 

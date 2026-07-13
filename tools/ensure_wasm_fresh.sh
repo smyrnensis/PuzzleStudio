@@ -181,6 +181,25 @@ authoring_sources=(crates/authoring/Cargo.toml crates/authoring/src)
 core_sources=(crates/core/Cargo.toml crates/core/src)
 grid3d_sources=(crates/grid3d/Cargo.toml crates/grid3d/src)
 grid3d_authoring_sources=(crates/grid3d_authoring/Cargo.toml crates/grid3d_authoring/src)
+html_play_preview_sources=(
+  crates/html_play/static/index.html
+  crates/html_play/static/app.css
+  crates/html_play/static/theme_presets.css
+  crates/html_play/static/renderer.css
+  crates/html_play/static/visuals.js
+  crates/html_play/static/app.js
+  crates/html_play/static/renderer.js
+  crates/html_play/static/standalone.js
+  crates/html_play/static/puzzle3.css
+  crates/html_play/static/puzzle3_visual_core.js
+  crates/html_play/static/puzzle3_three_renderer.js
+  crates/html_play/static/puzzle3_app.js
+  crates/html_play/static/vendor/three/three.module.min.js
+  tools/music_generator/seeded_sfx.mjs
+  tools/music_generator/seeded_music.mjs
+  tools/music_generator/seeded_music_player.mjs
+  tools/music_generator/seeded_timbre_fields.mjs
+)
 kernel_sources=(crates/kernel/Cargo.toml crates/kernel/src)
 lang_sources=(crates/lang/Cargo.toml crates/lang/src)
 play_sources=(crates/play/Cargo.toml crates/play/src)
@@ -201,6 +220,7 @@ ensure_target_current \
   crates/wasm/src \
   crates/html_play/Cargo.toml \
   crates/html_play/src \
+  "${html_play_preview_sources[@]}" \
   crates/wasm_core/Cargo.toml \
   crates/wasm_core/src \
   "${authoring_sources[@]}" \

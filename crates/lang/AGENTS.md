@@ -12,6 +12,12 @@ commands, and explicit component contracts.
 `rules { ... }` is the required puzzle entrypoint. Legacy puzzle
 `transitions` / `main` blocks and `rule` declarations are rejected.
 
+Levels may attach turn rules with `rules before { ... }`, `rules after { ... }`,
+or `rules { ... }` as the `after` shorthand. Language lowering owns the
+effective per-level program in the fixed order `before`, puzzle `rules`,
+`after`; runtime and solver consumers must select that same compiled program by
+level rather than recomposing or interpreting source syntax.
+
 Direction inputs `up`, `down`, `left`, and `right` are built in, with standard
 direction mappings. Optional direction aliases should map to those semantic
 directions rather than expose numeric direction syntax as public authoring.

@@ -1,12 +1,14 @@
 use crate::session_history::SessionHistory;
+#[cfg(test)]
+use puzzle_grid3d::Rule3;
 use puzzle_grid3d::{
-    Direction3, InputId, LevelBundle3, LevelBundleError3, LocalFrame, ObjectId, Rule3, State3,
-    TransitionError3, WinCondition3, transition_program, transition_program_with_local_frame,
+    Direction3, InputId, LevelBundle3, LevelBundleError3, LocalFrame, ObjectId, RuleStep3, State3,
+    TransitionError3, WinCondition3, transition_program_with_local_frame,
     transition_program_without_input_with_local_frame,
 };
 use puzzle_runtime_contract::{LifecycleCommand, RuntimeLifecycle};
 
-type SessionLifecycle = RuntimeLifecycle<Rule3, LocalFrame<ObjectId>>;
+type SessionLifecycle = RuntimeLifecycle<RuleStep3, LocalFrame<ObjectId>>;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SessionLifecycleResult3 {
@@ -33,7 +35,7 @@ struct SessionHistoryEntry3 {
 }
 
 fn empty_lifecycle() -> SessionLifecycle {
-    RuntimeLifecycle::<Rule3, LocalFrame<ObjectId>>::new(Vec::new(), Vec::new())
+    RuntimeLifecycle::<RuleStep3, LocalFrame<ObjectId>>::new(Vec::new(), Vec::new())
 }
 
 impl GameSession3 {
@@ -127,17 +129,23 @@ impl GameSession3 {
     pub fn apply_input(
         &mut self,
         bundle: &LevelBundle3,
-        rules: &[Rule3],
+        rules: &[RuleStep3],
         input: InputId,
     ) -> Result<bool, GameSessionError3> {
-        let next = transition_program(&bundle.game, &self.current_state, rules, input)?;
+        let next = transition_program_with_local_frame(
+            &bundle.game,
+            &self.current_state,
+            rules,
+            input,
+            None,
+        )?;
         Ok(self.apply_next_state(next))
     }
 
     pub fn apply_input_with_local_frame(
         &mut self,
         bundle: &LevelBundle3,
-        rules: &[Rule3],
+        rules: &[RuleStep3],
         input: InputId,
         local_frame: Option<&LocalFrame<ObjectId>>,
     ) -> Result<bool, GameSessionError3> {
@@ -189,7 +197,7 @@ impl GameSession3 {
     pub fn apply_input_with_win_condition(
         &mut self,
         bundle: &LevelBundle3,
-        rules: &[Rule3],
+        rules: &[RuleStep3],
         input: InputId,
         win_condition: &WinCondition3,
     ) -> Result<bool, GameSessionError3> {
@@ -203,7 +211,7 @@ impl GameSession3 {
     pub fn apply_input_with_lifecycle(
         &mut self,
         bundle: &LevelBundle3,
-        rules: &[Rule3],
+        rules: &[RuleStep3],
         input: InputId,
         win_condition: &WinCondition3,
         lifecycle: &SessionLifecycle,
@@ -225,7 +233,7 @@ impl GameSession3 {
     pub fn move_direction(
         &mut self,
         bundle: &LevelBundle3,
-        rules: &[Rule3],
+        rules: &[RuleStep3],
         direction: Direction3,
     ) -> Result<bool, GameSessionError3> {
         let input = bundle
@@ -243,7 +251,7 @@ impl GameSession3 {
     pub fn move_direction_with_win_condition(
         &mut self,
         bundle: &LevelBundle3,
-        rules: &[Rule3],
+        rules: &[RuleStep3],
         direction: Direction3,
         win_condition: &WinCondition3,
     ) -> Result<bool, GameSessionError3> {
@@ -541,6 +549,10 @@ mod tests {
         .when_input(INPUT_RIGHT)
     }
 
+    fn program(rules: Vec<Rule3>) -> Vec<RuleStep3> {
+        rules.into_iter().map(RuleStep3::Rule).collect()
+    }
+
     fn support_win_condition() -> WinCondition3 {
         WinCondition3::All(vec![
             WinCondition3::SomeObject(GOAL),
@@ -615,7 +627,7 @@ mod tests {
     #[test]
     fn session_applies_input_and_records_undo_history() {
         let bundle = session_bundle();
-        let rules = vec![move_right_rule()];
+        let rules = program(vec![move_right_rule()]);
         let mut session = GameSession3::new(&bundle).unwrap();
 
         assert!(session.apply_input(&bundle, &rules, INPUT_RIGHT).unwrap());
@@ -640,7 +652,7 @@ mod tests {
     #[test]
     fn session_does_not_count_noop_input_as_move() {
         let bundle = session_bundle();
-        let rules = vec![move_right_rule()];
+        let rules = program(vec![move_right_rule()]);
         let mut session = GameSession3::new(&bundle).unwrap();
 
         assert!(!session.apply_input(&bundle, &rules, INPUT_LEFT).unwrap());
@@ -652,7 +664,7 @@ mod tests {
     #[test]
     fn session_restart_resets_state_count_completion_and_history() {
         let bundle = session_bundle();
-        let rules = vec![move_right_rule()];
+        let rules = program(vec![move_right_rule()]);
         let mut session = GameSession3::new(&bundle).unwrap();
         session.apply_input(&bundle, &rules, INPUT_RIGHT).unwrap();
         session.mark_completed();
@@ -690,7 +702,7 @@ mod tests {
     #[test]
     fn session_move_direction_resolves_directional_input() {
         let bundle = session_bundle();
-        let rules = vec![move_right_rule()];
+        let rules = program(vec![move_right_rule()]);
         let mut session = GameSession3::new(&bundle).unwrap();
 
         assert!(
@@ -709,7 +721,7 @@ mod tests {
     #[test]
     fn session_can_update_completion_from_win_condition_after_input() {
         let bundle = support_bundle();
-        let rules = vec![push_right_rule()];
+        let rules = program(vec![push_right_rule()]);
         let win = support_win_condition();
         let mut session = GameSession3::new(&bundle).unwrap();
 

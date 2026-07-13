@@ -1,0 +1,73 @@
+// ANIMATION
+// EXPECT: The player faces its movement direction, the goal loops, and movement tweens.
+// TRY: Change tween_duration or frame_duration.
+
+title = "04 — Animation"
+subtitle = "Animate presentation without changing turn-based rules"
+
+puzzle animation {
+render {
+tween = true
+tween_duration = 180ms
+}
+
+layers {
+Goal
+Player:directions Wall
+}
+
+sprites {
+Goal
+#f59e0b #fde68a
+frame_duration 180ms
+.....
+.000.
+.010.
+.000.
+.....
+>
+..0..
+.010.
+01010
+.010.
+..0..
+
+sprite {
+selector = Player:directions
+rotate directions from up
+colors #2563eb
+.000.
+00000
+.000.
+.0.0.
+.0.0.
+}
+
+Wall
+#334155
+00000
+00000
+00000
+00000
+00000
+}
+
+rules {
+input [ Player:* | no Wall ] -> [ | Player:> ]
+}
+
+levels {
+legend {
+. = empty
+# = Wall
+P = Player:up
+G = Goal
+}
+
+level "three kinds of animation"
+#######
+#P...G#
+#.....#
+#######
+}
+}

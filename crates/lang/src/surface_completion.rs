@@ -49,7 +49,7 @@ pub(crate) fn surface_completion_context_for_document(
     ) && !sounds_definition_scope
     {
         vec![SemanticCompletionSlot::MusicAssets]
-    } else if matches!(previous.as_deref(), Some("puzzle" | "puzzle3")) {
+    } else if matches!(previous.as_deref(), Some("puzzle")) {
         vec![SemanticCompletionSlot::Puzzles]
     } else {
         default_completion_slots_for_scope(scope)
@@ -825,7 +825,6 @@ const SCENE_COMPLETION_KEYWORDS: &[&str] = &[
     "on_scene_start",
     "box",
     "puzzle",
-    "puzzle3",
     "row",
     "rules",
     "scene",
@@ -871,7 +870,6 @@ const COMPLETION_KEYWORDS: &[&str] = &[
     "level",
     "level_menu",
     "levels",
-    "levels3",
     "lose_conditions",
     "map",
     "music",
@@ -885,7 +883,6 @@ const COMPLETION_KEYWORDS: &[&str] = &[
     "box",
     "persistent",
     "puzzle",
-    "puzzle3",
     "query",
     "repeat",
     "resources",

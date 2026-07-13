@@ -1,0 +1,60 @@
+// 3D
+// EXPECT: Push the box through a level that has visible depth.
+// TRY: Change camera yaw, pitch, or add a third Z layer after another `-`.
+
+title = "06 — 3D"
+subtitle = "A turn-based puzzle on a three-dimensional grid"
+
+puzzle depth {
+render {
+camera {
+yaw = 35
+pitch = 55
+zoom = 1
+}
+shadow = true
+}
+
+layers {
+floor = Floor
+target = Goal
+Player Box Wall
+}
+
+groups {
+solid = Player Box Wall
+}
+
+rules {
+input horizontal [ Player | Box | no solid ] -> [ | Player | Box ]
+input horizontal [ Player | no solid ] -> [ | Player ]
+}
+
+win_conditions {
+some Goal
+no down [ no Box | Goal ]
+}
+}
+
+levels demo of depth {
+legend {
+. = empty
+, = Floor
+G = Floor Goal
+P = Player
+B = Box
+# = Wall
+}
+
+level "depth" {
+#####
+#PB.#
+#...#
+#####
+-
+,,,,,
+,,,,,
+,,,G,
+,,,,,
+}
+}

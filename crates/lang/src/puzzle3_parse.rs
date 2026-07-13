@@ -4,7 +4,8 @@ use puzzle_grid3d::{
     ConditionValueKind3, Coord3, Direction3, DirectionSet3, FrameExpr3, FrameSet3, FrameSlot3,
     Game3, Guard3, InputDef3, InputId, LayerId, Level3, LevelBundle3, LevelCell3, LevelEntry3,
     MarkId3, MatchCell3, ObjectDef3, ObjectId, ObjectSetMarkPattern3, ObjectSetMatcher3, Offset3,
-    Pattern3, Rule3, RuleApplication3, Size3, WinCondition3, WriteOp3,
+    Pattern3, Rule3, RuleApplication3, RuleCondition3, RuleId3, RuleStep3, Size3, WinCondition3,
+    WriteOp3,
 };
 use puzzle_grid3d_authoring::{
     ConcreteObject3, DenseCell3, DensePattern3, DenseRow3, DenseRuleTemplate3, DenseSlice3,
@@ -17,31 +18,17 @@ use puzzle_kernel::{LocalFrame, LocalFrameExtent};
 use puzzle_runtime_contract::{LifecycleCommand, Puzzle3CameraEffect, RuntimeLifecycle};
 
 use crate::{
-    ModelSettings3, ParsedPuzzle3, SolverStrategy3, SolverSurfacePatternArg, SolverSurfaceQueryArg,
-    Sprite3, SpriteColor3, SpriteSet3, SpriteVoxels3, ViewportFollow3, ViewportFraming3,
-    ViewportHeight3, ViewportMode3, ViewportSettings3,
+    DiagnosticReport, ModelSettings3, ParsedPuzzle3, SolverStrategy3, SolverSurfacePatternArg,
+    SolverSurfaceQueryArg, Sprite3, SpriteColor3, SpriteSet3, SpriteVoxels3, ViewportFollow3,
+    ViewportFraming3, ViewportHeight3, ViewportMode3, ViewportSettings3,
 };
 
 const DEFAULT_LINE_GAP_LIMIT3: u16 = 64;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ParseError3 {
-    Message(String),
-    MessageAtSourceLine {
-        message: String,
-        source_line: String,
-    },
-}
+pub type ParseError3 = DiagnosticReport;
 
-impl From<puzzle_scene::SceneBlockParseError> for ParseError3 {
-    fn from(value: puzzle_scene::SceneBlockParseError) -> Self {
-        Self::Message(value.to_string())
-    }
-}
-
-pub fn parse_puzzle3d(source: &str) -> Result<ParsedPuzzle3, ParseError3> {
-    let document =
-        crate::parse_surface_compile_document(source).map_err(diagnostic_report_error3)?;
+pub fn parse_puzzle3d(source: &str) -> Result<ParsedPuzzle3, DiagnosticReport> {
+    let document = crate::parse_surface_compile_document(source)?;
     parse_puzzle3d_logical_lines(&document.logical_lines)
 }
 
@@ -56,7 +43,7 @@ struct Parser3 {
     value_sets: Vec<(String, Vec<String>)>,
     input_specs: Vec<InputSpec3>,
     layers: Vec<String>,
-    object_specs: Vec<ObjectSpec3>,
+    layer_specs: Vec<LayerSpec3>,
     group_specs: Vec<GroupSpec3>,
     legend_specs: Vec<LegendSpec3>,
     level_specs: Vec<LevelSpec3>,
@@ -81,7 +68,7 @@ impl Parser3 {
             value_sets: Vec::new(),
             input_specs: Vec::new(),
             layers: Vec::new(),
-            object_specs: Vec::new(),
+            layer_specs: Vec::new(),
             group_specs: Vec::new(),
             legend_specs: Vec::new(),
             level_specs: Vec::new(),
@@ -104,67 +91,99 @@ impl Parser3 {
         let mut index = 0;
         while index < self.lines.len() {
             let line = self.lines[index].clone();
-            if line.is_empty() {
+            if line.starts_with("puzzle3 ") {
+                return Err(message(
+                    "`puzzle3` was removed; use `puzzle <name> { ... }` in .puzzle3 files",
+                ));
+            }
+            let directive = puzzle_authoring::puzzle_directive_surface(&line);
+            if directive == puzzle_authoring::PuzzleDirectiveSurface::Empty {
                 index += 1;
-            } else if is_model3_header(&line) {
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Model
+                && is_model3_header(&line)
+            {
                 index = self.parse_model_block(index + 1)?;
-            } else if line.starts_with("model puzzle3 ") {
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::RemovedModelPrefix {
                 return Err(message(
-                    "top-level 3D puzzle definition must be: puzzle3 <name>",
+                    "top-level 3D puzzle definition must be: puzzle <name>",
                 ));
-            } else if is_document_metadata_line(&line) {
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Metadata {
                 index += 1;
-            } else if is_document_shell_block(&line) {
-                index = skip_braced_block(&self.lines, index + 1)?;
-            } else if line == "layers {" {
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::DocumentShell {
+                if line.ends_with('{') {
+                    index = skip_braced_block(&self.lines, index + 1)?;
+                } else {
+                    index += 1;
+                }
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Layers
+                && line == "layers {"
+            {
                 index = self.parse_layers_block(index + 1)?;
-            } else if line == "objects {" {
-                index = self.parse_objects_block(index + 1)?;
-            } else if line == "display_objects {" {
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Tags
+                && line == "tags {"
+            {
+                index = self.parse_tags_block(index + 1)?;
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Tags {
+                return Err(message("tags header must be: tags {"));
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Objects {
                 return Err(message(
-                    "`display_objects { ... }` was removed; use `objects { @Name layer }`",
+                    "`objects { ... }` is not shared authoring syntax; declare objects in `layers { ... }`",
                 ));
-            } else if line == "keys {" {
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::DisplayObjects {
+                return Err(message(
+                    "`display_objects { ... }` was removed; declare `@Name` in `layers { ... }`",
+                ));
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Keys
+                && line == "keys {"
+            {
                 index = self.parse_keys_block(index + 1)?;
-            } else if line == "inputs {" {
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Inputs {
                 return Err(message(
                     "`inputs { ... }` was removed; use `keys { <key...> -> <input> }`",
                 ));
-            } else if line == "groups {" {
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Groups
+                && line == "groups {"
+            {
                 index = self.parse_groups_block(index + 1)?;
-            } else if line == "group {" {
-                return Err(message("`group { ... }` was removed; use `groups { ... }`"));
-            } else if line == "legend {" {
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::SingularGroup {
+                return Err(message(
+                    "singular group syntax was removed; use `groups { name = selector... }`",
+                ));
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Legend
+                && line == "legend {"
+            {
                 index = self.parse_legend_block(index + 1)?;
-            } else if is_levels3_header(&line) {
-                let pack = parse_levels3_header(&line)?;
-                index = self.parse_levels_block(index + 1, pack.as_deref())?;
-            } else if is_sprites_header(&line) {
-                index = self.parse_sprites_block(index + 1, &line)?;
-            } else if let Some(name) = parse_scene_header(&line) {
-                let _ = name;
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Levels {
+                index = self.parse_levels_block(index)?;
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::RemovedLevels3 {
+                return Err(message("`levels3` was removed; use `levels`"));
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Sprites {
+                index = self.parse_sprites_block(index)?;
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Scene
+                && parse_scene_header(&line).is_some()
+            {
                 index = skip_braced_block(&self.lines, index + 1)?;
-            } else if let Some(block) = puzzle_authoring::rule_program_block_surface(&line) {
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::RuleProgram
+                && let Some(block) = puzzle_authoring::rule_program_block_surface(&line)
+            {
                 index = self.parse_rule_program_block(block, index + 1)?;
-            } else if line == "win_conditions {" {
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::WinConditions {
                 index = self.parse_win_conditions_block(index + 1)?;
-            } else if line.starts_with("query ") {
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Query {
                 self.parse_query_line(&line)?;
                 index += 1;
-            } else if line == "solver {" {
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Solver {
                 index = self.parse_solver_block(index)?;
-            } else if line == "render {" {
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Render {
                 index = self.parse_render_block(index + 1)?;
-            } else if let Some(rest) = line.strip_prefix("group ") {
-                self.group_specs.push(parse_group_spec(rest)?);
-                index += 1;
             } else if legacy_model_setting_name(&line).is_some() {
                 return Err(message(format!(
                     "legacy model setting is not supported: {line}"
                 )));
-            } else if line.contains('=') {
-                self.value_sets.push(parse_value_set(&line)?);
-                index += 1;
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Assignment {
+                return Err(message(
+                    "bare tag-set assignments are not shared authoring syntax; use `tags { name = value... }`",
+                ));
             } else {
                 return Err(message(format!("unknown 3D puzzle directive: {line}")));
             }
@@ -175,13 +194,49 @@ impl Parser3 {
             return Err(message("missing layers block"));
         }
 
-        let mut build = CatalogBuild3::new(self.value_sets, self.layers);
-        for spec in self.object_specs {
-            build.add_object_spec(spec)?;
+        let group_declarations = self
+            .group_specs
+            .iter()
+            .map(GroupSpec3::declaration)
+            .collect::<Vec<_>>();
+        let mut build = CatalogBuild3::new(self.value_sets, self.layers.clone());
+        for layer in &self.layer_specs {
+            let expanded =
+                puzzle_authoring::expand_layer_selectors(&layer.selectors, &group_declarations)
+                    .map_err(|error| message_at_source_line(error.message, &error.source_line))?;
+            for selector in expanded.terms {
+                build.add_object_spec(parse_layer_object_spec(&selector, &layer.name)?)?;
+            }
+        }
+        let mut group_specs = self
+            .group_specs
+            .iter()
+            .map(|group| group.expanded(&group_declarations))
+            .collect::<Result<Vec<_>, _>>()?;
+        for layer in self.layer_specs.iter().filter(|layer| layer.named) {
+            if puzzle_authoring::selector_alias_conflicts(
+                &layer.name,
+                std::iter::empty(),
+                std::iter::empty(),
+                group_specs.iter().map(|group| group.name.as_str()),
+            ) {
+                return Err(message(format!(
+                    "group name must not shadow another selector: {}",
+                    layer.name
+                )));
+            }
+            let expanded =
+                puzzle_authoring::expand_layer_selectors(&layer.selectors, &group_declarations)
+                    .map_err(|error| message_at_source_line(error.message, &error.source_line))?;
+            group_specs.push(GroupSpec3 {
+                name: layer.name.clone(),
+                selectors: expanded.terms,
+                source_line: layer.source_line.clone(),
+            });
         }
         let object_defs = build.object_defs.clone();
         let display_objects = build.display_objects.clone();
-        let catalog = build.catalog_with_groups(self.group_specs)?;
+        let catalog = build.catalog_with_groups(group_specs)?;
         let game = Game3::new_with_inputs(
             layer_count,
             object_defs,
@@ -197,16 +252,24 @@ impl Parser3 {
         let line_gap_limit = line_gap_limit_from_levels(&self.level_specs);
         let mut rules = Vec::new();
         let mut rule_camera_effects = Vec::new();
+        let mut next_main_rule_id = 0u16;
         for line in &self.rule_lines {
             let parsed = parse_rule_line(line, &catalog, &game, line_gap_limit)?;
-            rules.extend(parsed.rules);
+            rules.push(program_step_for_rule_statement(
+                parsed.rules,
+                &mut next_main_rule_id,
+            )?);
             rule_camera_effects.extend(parsed.camera_effects);
         }
         let mut on_level_start = Vec::new();
         let mut on_level_start_camera_effects = Vec::new();
+        let mut next_level_start_rule_id = 0u16;
         for line in &self.on_level_start_lines {
             let parsed = parse_rule_line(line, &catalog, &game, line_gap_limit)?;
-            on_level_start.extend(parsed.rules);
+            on_level_start.push(program_step_for_rule_statement(
+                parsed.rules,
+                &mut next_level_start_rule_id,
+            )?);
             on_level_start_camera_effects.extend(parsed.camera_effects);
         }
         let on_level_clear = self
@@ -279,55 +342,73 @@ impl Parser3 {
     fn parse_model_block(&mut self, mut index: usize) -> Result<usize, ParseError3> {
         while index < self.lines.len() {
             let line = self.lines[index].clone();
-            if line == "}" {
+            let directive = puzzle_authoring::puzzle_directive_surface(&line);
+            if directive == puzzle_authoring::PuzzleDirectiveSurface::Close {
                 return Ok(index + 1);
             }
-            if line.is_empty() {
+            if directive == puzzle_authoring::PuzzleDirectiveSurface::Empty {
                 index += 1;
-            } else if line == "layers {" {
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Layers
+                && line == "layers {"
+            {
                 index = self.parse_layers_block(index + 1)?;
-            } else if line == "objects {" {
-                index = self.parse_objects_block(index + 1)?;
-            } else if line == "display_objects {" {
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Tags
+                && line == "tags {"
+            {
+                index = self.parse_tags_block(index + 1)?;
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Tags {
+                return Err(message("tags header must be: tags {"));
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Objects {
                 return Err(message(
-                    "`display_objects { ... }` was removed; use `objects { @Name layer }`",
+                    "`objects { ... }` is not shared authoring syntax; declare objects in `layers { ... }`",
                 ));
-            } else if line == "keys {" {
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::DisplayObjects {
+                return Err(message(
+                    "`display_objects { ... }` was removed; declare `@Name` in `layers { ... }`",
+                ));
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Keys
+                && line == "keys {"
+            {
                 index = self.parse_keys_block(index + 1)?;
-            } else if line == "inputs {" {
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Inputs {
                 return Err(message(
                     "`inputs { ... }` was removed; use `keys { <key...> -> <input> }`",
                 ));
-            } else if line == "groups {" {
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Groups
+                && line == "groups {"
+            {
                 index = self.parse_groups_block(index + 1)?;
-            } else if line == "group {" {
-                return Err(message("`group { ... }` was removed; use `groups { ... }`"));
-            } else if let Some(block) = puzzle_authoring::rule_program_block_surface(&line) {
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::SingularGroup {
+                return Err(message(
+                    "singular group syntax was removed; use `groups { name = selector... }`",
+                ));
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::RuleProgram
+                && let Some(block) = puzzle_authoring::rule_program_block_surface(&line)
+            {
                 index = self.parse_rule_program_block(block, index + 1)?;
-            } else if line == "win_conditions {" {
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::WinConditions {
                 index = self.parse_win_conditions_block(index + 1)?;
-            } else if line.starts_with("query ") {
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Query {
                 self.parse_query_line(&line)?;
                 index += 1;
-            } else if line == "solver {" {
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Solver {
                 index = self.parse_solver_block(index)?;
-            } else if line == "render {" {
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Render {
                 index = self.parse_render_block(index + 1)?;
-            } else if is_sprites_header(&line) {
-                index = self.parse_sprites_block(index + 1, &line)?;
-            } else if let Some(name) = parse_scene_header(&line) {
-                let _ = name;
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Sprites {
+                index = self.parse_sprites_block(index)?;
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Scene
+                && parse_scene_header(&line).is_some()
+            {
                 index = skip_braced_block(&self.lines, index + 1)?;
-            } else if let Some(rest) = line.strip_prefix("group ") {
-                self.group_specs.push(parse_group_spec(rest)?);
-                index += 1;
             } else if legacy_model_setting_name(&line).is_some() {
                 return Err(message(format!(
                     "legacy model setting is not supported: {line}"
                 )));
-            } else if line.contains('=') {
-                self.value_sets.push(parse_value_set(&line)?);
-                index += 1;
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Assignment {
+                return Err(message(
+                    "bare tag-set assignments are not shared authoring syntax; use `tags { name = value... }`",
+                ));
             } else {
                 return Err(message(format!("unknown model directive: {line}")));
             }
@@ -344,6 +425,7 @@ impl Parser3 {
             ModelSetting3::InteractiveZoom(value) => self.settings.camera.interactive_zoom = value,
             ModelSetting3::OccupiedCellGrid => self.settings.grid.occupied_cells = true,
             ModelSetting3::SpriteShade(value) => self.settings.sprite.shade = value,
+            ModelSetting3::Shadow(value) => self.settings.shadow = value,
             ModelSetting3::PixelateEnabled(value) => self.settings.pixelate.enabled = value,
             ModelSetting3::PixelateScale(value) => self.settings.pixelate.scale = value,
             ModelSetting3::PixelateSmoothing(value) => self.settings.pixelate.smoothing = value,
@@ -442,23 +524,21 @@ impl Parser3 {
         Err(message("pixelate block missing }"))
     }
 
-    fn parse_sprites_block(
-        &mut self,
-        mut index: usize,
-        header: &str,
-    ) -> Result<usize, ParseError3> {
+    fn parse_sprites_block(&mut self, header_index: usize) -> Result<usize, ParseError3> {
         if self.sprite_set.is_some() {
             return Err(message("duplicate sprites block"));
         }
-        let (name, model) = parse_sprites_header(header)?;
-        let mut sprites = Vec::new();
+        let resource =
+            puzzle_authoring::collect_resource_block_surface(&self.lines, header_index, "sprites")
+                .map_err(|error| message(error.message()))?;
+        let name = resource.header.name.unwrap_or("default").to_string();
+        let model = resource.header.owner.map(str::to_string);
+        let mut sprites = Vec::<Sprite3>::new();
         let mut shapes = HashMap::<String, Vec<crate::sprite_authoring::SpriteFrameSyntax>>::new();
-        while index < self.lines.len() {
+        let mut attachments = Vec::new();
+        let mut index = resource.body_start;
+        while index < resource.body_end {
             let line = self.lines[index].clone();
-            if line == "}" {
-                self.sprite_set = Some(SpriteSet3::new(name, model, sprites));
-                return Ok(index + 1);
-            }
             if line.is_empty() {
                 index += 1;
                 continue;
@@ -473,27 +553,62 @@ impl Parser3 {
                 index = next;
                 continue;
             }
-            if is_sprite_entry_block_header(&line) {
-                let (next, body) = collect_sprite_block_body(&self.lines, index + 1)?;
-                let sprite = parse_sprite3_from_shared_syntax(&line, &body, &shapes)?;
-                if sprites.iter().any(|existing| existing.name == sprite.name) {
-                    return Err(message(format!("duplicate sprite: {}", sprite.name)));
-                }
-                sprites.push(sprite);
-                index = next;
-                continue;
-            }
-            return Err(message(format!(
-                "invalid sprites entry; expected `<selector> {{ ... }}` or `shapes {{ ... }}`: {line}"
-            )));
+            let attachment = crate::sprite_authoring::collect_sprite_attachment(&self.lines, index)
+                .map_err(message)?;
+            index = attachment.next_index;
+            attachments.push(attachment);
         }
-        Err(message("sprites block missing }"))
+        for attachment in attachments {
+            let sprite = parse_sprite3_from_shared_syntax(
+                &attachment.header,
+                &attachment.body_lines,
+                &shapes,
+            )?;
+            sprites.push(sprite);
+        }
+        self.sprite_set = Some(SpriteSet3::new(name, model, sprites));
+        Ok(resource.next_index)
     }
 
-    fn parse_layers_block(&mut self, mut index: usize) -> Result<usize, ParseError3> {
-        let mut has_anonymous_layer_rows = false;
-        while index < self.lines.len() {
-            let line = self.lines[index].clone();
+    fn parse_layers_block(&mut self, index: usize) -> Result<usize, ParseError3> {
+        let lines = self.lines.clone();
+        self.parse_layer_lines(&lines, index)
+    }
+
+    fn parse_tags_block(&mut self, index: usize) -> Result<usize, ParseError3> {
+        let block = puzzle_authoring::collect_row_block_surface(&self.lines, index, "tags")
+            .map_err(|error| message(error.message()))?;
+        for line in block.rows {
+            let assignment = puzzle_authoring::selector_assignment_surface(line)
+                .ok_or_else(|| message("tag row must be: <name> = <value...>"))?;
+            if !puzzle_authoring::is_identifier(assignment.name) {
+                return Err(message("tag set name must be an identifier"));
+            }
+            if crate::is_builtin_value_set(assignment.name) {
+                return Err(message("built-in tag set cannot be redefined"));
+            }
+            if self
+                .value_sets
+                .iter()
+                .any(|(name, _)| name == assignment.name)
+            {
+                return Err(message("duplicate tag set"));
+            }
+            let (values, _) =
+                crate::parse_tag_domain_values(&assignment.selectors, &HashMap::new(), line)
+                    .map_err(diagnostic_report_error3)?;
+            self.value_sets.push((assignment.name.to_string(), values));
+        }
+        Ok(block.next_index)
+    }
+
+    fn parse_layer_lines(
+        &mut self,
+        lines: &[String],
+        mut index: usize,
+    ) -> Result<usize, ParseError3> {
+        while index < lines.len() {
+            let line = lines[index].clone();
             if line == "}" {
                 return Ok(index + 1);
             }
@@ -501,116 +616,137 @@ impl Parser3 {
                 index += 1;
                 continue;
             }
-            if self.parse_layer_line(&line, has_anonymous_layer_rows)? {
-                has_anonymous_layer_rows = true;
+            let tokens = puzzle_authoring::split_header_tokens(&line);
+            if let ["for", binding, "in", sources @ ..] = tokens.as_slice() {
+                let value_sets = self.value_sets.iter().cloned().collect::<HashMap<_, _>>();
+                let values =
+                    crate::for_expansion_values(sources, &value_sets, &HashMap::new(), &line)
+                        .map_err(diagnostic_report_error3)?;
+                let (body, next_index) =
+                    crate::collect_statement_block_lines(lines, index + 1, &line)
+                        .map_err(diagnostic_report_error3)?;
+                for value in values {
+                    let mut expanded =
+                        crate::expand_for_binding_lines(&body, binding, &value, &HashMap::new())
+                            .map_err(diagnostic_report_error3)?;
+                    expanded.push("}".to_string());
+                    let parsed = self.parse_layer_lines(&expanded, 0)?;
+                    if parsed != expanded.len() {
+                        return Err(message("for expansion failed"));
+                    }
+                }
+                index = next_index;
+                continue;
             }
+            if matches!(tokens.as_slice(), ["for", ..]) {
+                return Err(message(
+                    "for directive must be: for <binding> in <source...>",
+                ));
+            }
+            self.parse_layer_line(&line)
+                .map_err(|report| report.with_fallback_source_line(&line))?;
             index += 1;
         }
         Err(message("layers block missing }"))
     }
 
-    fn parse_layer_line(
+    fn parse_layer_line(&mut self, line: &str) -> Result<(), ParseError3> {
+        let surface = puzzle_authoring::layer_row_surface(line)
+            .ok_or_else(|| message("invalid layer row"))?;
+        match surface {
+            puzzle_authoring::LayerRowSurface::Named(assignment) => {
+                self.add_layer(assignment.name, &assignment.selectors, true, line)
+            }
+            puzzle_authoring::LayerRowSurface::Anonymous { selectors } => {
+                let name = format!("__anonymous_layer_{}", self.layers.len());
+                self.add_layer(&name, &selectors, false, line)
+            }
+            puzzle_authoring::LayerRowSurface::Each { selectors } => {
+                for selector in selectors {
+                    let name = format!("__anonymous_layer_{}", self.layers.len());
+                    self.add_layer(&name, &[selector], false, line)?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn add_layer(
         &mut self,
-        line: &str,
-        has_anonymous_layer_rows: bool,
-    ) -> Result<bool, ParseError3> {
-        if let Some((layer, objects)) = line.split_once('=') {
-            if has_anonymous_layer_rows {
-                self.group_specs.push(parse_group_spec(line)?);
-                return Ok(false);
-            }
-            let layer = layer.trim();
-            if layer.is_empty() {
-                return Err(message("layer declaration must name a layer before ="));
-            }
-            reject_occurrence_label_marker_in_name(layer, "layer name")?;
-            self.layers.push(layer.to_string());
-            for object in objects.split_whitespace() {
-                self.object_specs
-                    .push(parse_layer_object_spec(object, layer)?);
-            }
-            return Ok(false);
-        }
-        for layer in line.split_whitespace() {
-            reject_occurrence_label_marker_in_name(layer, "layer name")?;
+        layer: &str,
+        selectors: &[&str],
+        named: bool,
+        source_line: &str,
+    ) -> Result<(), ParseError3> {
+        reject_occurrence_label_marker_in_name(layer, "layer name")?;
+        if !named || !self.layers.iter().any(|existing| existing == layer) {
             self.layers.push(layer.to_string());
         }
-        Ok(true)
+        self.layer_specs.push(LayerSpec3 {
+            name: layer.to_string(),
+            selectors: selectors
+                .iter()
+                .map(|selector| (*selector).to_string())
+                .collect(),
+            named,
+            source_line: source_line.to_string(),
+        });
+        Ok(())
     }
 
-    fn parse_objects_block(&mut self, mut index: usize) -> Result<usize, ParseError3> {
-        while index < self.lines.len() {
-            let line = &self.lines[index];
-            if line == "}" {
-                return Ok(index + 1);
-            }
-            if line.is_empty() {
-                index += 1;
-                continue;
-            }
-            self.object_specs.push(parse_object_spec(line)?);
-            index += 1;
+    fn parse_keys_block(&mut self, index: usize) -> Result<usize, ParseError3> {
+        let block = puzzle_authoring::collect_row_block_surface(&self.lines, index, "keys")
+            .map_err(|error| message(error.message()))?;
+        for line in block.rows {
+            self.input_specs.push(
+                input_spec_from_key_surface(line)
+                    .map_err(|report| report.with_fallback_source_line(line))?,
+            );
         }
-        Err(message("objects block missing }"))
+        Ok(block.next_index)
     }
 
-    fn parse_keys_block(&mut self, mut index: usize) -> Result<usize, ParseError3> {
-        while index < self.lines.len() {
-            let line = &self.lines[index];
-            if line == "}" {
-                return Ok(index + 1);
-            }
-            if !line.is_empty() {
-                self.input_specs.push(input_spec_from_key_surface(line)?);
-            }
-            index += 1;
+    fn parse_groups_block(&mut self, index: usize) -> Result<usize, ParseError3> {
+        let block = puzzle_authoring::collect_row_block_surface(&self.lines, index, "groups")
+            .map_err(|error| message(error.message()))?;
+        for line in block.rows {
+            self.group_specs.push(
+                parse_group_spec(line).map_err(|report| report.with_fallback_source_line(line))?,
+            );
         }
-        Err(message("keys block missing }"))
+        Ok(block.next_index)
     }
 
-    fn parse_groups_block(&mut self, mut index: usize) -> Result<usize, ParseError3> {
-        while index < self.lines.len() {
-            let line = &self.lines[index];
-            if line == "}" {
-                return Ok(index + 1);
-            }
-            if line.is_empty() {
-                index += 1;
-                continue;
-            }
-            self.group_specs.push(parse_group_spec(line)?);
-            index += 1;
+    fn parse_legend_block(&mut self, index: usize) -> Result<usize, ParseError3> {
+        let block = puzzle_authoring::collect_row_block_surface(&self.lines, index, "legend")
+            .map_err(|error| message(error.message()))?;
+        for line in block.rows {
+            self.legend_specs.push(
+                parse_legend_spec(line).map_err(|report| report.with_fallback_source_line(line))?,
+            );
         }
-        Err(message("groups block missing }"))
+        Ok(block.next_index)
     }
 
-    fn parse_legend_block(&mut self, mut index: usize) -> Result<usize, ParseError3> {
-        while index < self.lines.len() {
-            let line = &self.lines[index];
-            if line == "}" {
-                return Ok(index + 1);
-            }
-            if line.is_empty() {
-                index += 1;
-                continue;
-            }
-            self.legend_specs.push(parse_legend_spec(line)?);
-            index += 1;
-        }
-        Err(message("legend block missing }"))
-    }
-
-    fn parse_levels_block(
-        &mut self,
-        mut index: usize,
-        pack: Option<&str>,
-    ) -> Result<usize, ParseError3> {
+    fn parse_levels_block(&mut self, header_index: usize) -> Result<usize, ParseError3> {
+        let (pack, body_start, body_end, next_index) = {
+            let resource = puzzle_authoring::collect_resource_block_surface(
+                &self.lines,
+                header_index,
+                "levels",
+            )
+            .map_err(|error| message(error.message()))?;
+            (
+                resource.header.name.map(str::to_string),
+                resource.body_start,
+                resource.body_end,
+                resource.next_index,
+            )
+        };
         let mut namespace_count = 0usize;
-        while index < self.lines.len() {
+        let mut index = body_start;
+        while index < body_end {
             let line = self.lines[index].clone();
-            if line == "}" {
-                return Ok(index + 1);
-            }
             if line.is_empty() {
                 index += 1;
                 continue;
@@ -622,7 +758,7 @@ impl Parser3 {
             if puzzle_authoring::is_braced_level_header(&line) {
                 namespace_count += 1;
                 let auto_name = puzzle_authoring::namespaced_unnamed_level_name(
-                    pack,
+                    pack.as_deref(),
                     self.level_specs.len(),
                     namespace_count,
                 );
@@ -630,7 +766,7 @@ impl Parser3 {
                 let (next, rows) = self.collect_level_body(index + 1)?;
                 self.level_specs.push(LevelSpec3 {
                     name,
-                    pack: pack.map(str::to_string),
+                    pack: pack.clone(),
                     rows,
                 });
                 index = next;
@@ -639,14 +775,14 @@ impl Parser3 {
             if line == "{" {
                 namespace_count += 1;
                 let name = puzzle_authoring::namespaced_unnamed_level_name(
-                    pack,
+                    pack.as_deref(),
                     self.level_specs.len(),
                     namespace_count,
                 );
                 let (next, rows) = self.collect_level_body(index + 1)?;
                 self.level_specs.push(LevelSpec3 {
                     name,
-                    pack: pack.map(str::to_string),
+                    pack: pack.clone(),
                     rows,
                 });
                 index = next;
@@ -654,7 +790,7 @@ impl Parser3 {
             }
             if line.trim_start().starts_with("level") {
                 let auto_name = puzzle_authoring::namespaced_unnamed_level_name(
-                    pack,
+                    pack.as_deref(),
                     self.level_specs.len(),
                     namespace_count + 1,
                 );
@@ -663,20 +799,16 @@ impl Parser3 {
             }
             return Err(message(format!("unknown levels directive: {line}")));
         }
-        Err(message("levels block missing }"))
+        Ok(next_index)
     }
 
-    fn collect_level_body(&self, mut index: usize) -> Result<(usize, Vec<String>), ParseError3> {
-        let mut rows = Vec::new();
-        while index < self.lines.len() {
-            let line = &self.lines[index];
-            if line == "}" {
-                return Ok((index + 1, rows));
-            }
-            rows.push(line.clone());
-            index += 1;
-        }
-        Err(message("level block missing }"))
+    fn collect_level_body(&self, index: usize) -> Result<(usize, Vec<String>), ParseError3> {
+        let block = puzzle_authoring::collect_container_block_surface(&self.lines, index, "level")
+            .map_err(|error| message(error.message()))?;
+        Ok((
+            block.next_index,
+            self.lines[block.body_start..block.body_end].to_vec(),
+        ))
     }
 
     fn parse_rule_program_block(
@@ -781,6 +913,14 @@ struct ObjectSpec3 {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+struct LayerSpec3 {
+    name: String,
+    selectors: Vec<String>,
+    named: bool,
+    source_line: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct InputSpec3 {
     name: String,
     keys: Vec<String>,
@@ -790,6 +930,30 @@ struct InputSpec3 {
 struct GroupSpec3 {
     name: String,
     selectors: Vec<String>,
+    source_line: String,
+}
+
+impl GroupSpec3 {
+    fn declaration(&self) -> puzzle_authoring::SelectorGroupDeclaration {
+        puzzle_authoring::SelectorGroupDeclaration {
+            name: self.name.clone(),
+            selectors: self.selectors.clone(),
+            source_line: self.source_line.clone(),
+        }
+    }
+
+    fn expanded(
+        &self,
+        groups: &[puzzle_authoring::SelectorGroupDeclaration],
+    ) -> Result<Self, ParseError3> {
+        let expanded = puzzle_authoring::expand_layer_selectors(&self.selectors, groups)
+            .map_err(|error| message_at_source_line(error.message, &error.source_line))?;
+        Ok(Self {
+            name: self.name.clone(),
+            selectors: expanded.terms,
+            source_line: self.source_line.clone(),
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -887,6 +1051,12 @@ impl CatalogBuild3 {
         self,
         group_specs: Vec<GroupSpec3>,
     ) -> Result<SelectorCatalog3, ParseError3> {
+        let mut names = HashSet::new();
+        for spec in &group_specs {
+            if !names.insert(spec.name.clone()) {
+                return Err(message("duplicate group"));
+            }
+        }
         let mut groups = Vec::new();
         for spec in group_specs {
             let selectors = spec
@@ -945,23 +1115,6 @@ impl CatalogBuild3 {
     }
 }
 
-fn parse_value_set(line: &str) -> Result<(String, Vec<String>), ParseError3> {
-    let (name, values) = line
-        .split_once('=')
-        .ok_or_else(|| message("value set must be: name = value..."))?;
-    let values = match crate::frame3_literal::parse_frame3_domain(values.trim()).map_err(message)? {
-        Some(values) => values,
-        None => values
-            .split_whitespace()
-            .map(str::to_string)
-            .collect::<Vec<_>>(),
-    };
-    if values.is_empty() {
-        return Err(message("value set must contain at least one value"));
-    }
-    Ok((name.trim().to_string(), values))
-}
-
 fn legacy_model_setting_name(line: &str) -> Option<&str> {
     let (name, _) = line.split_once('=')?;
     match name.trim() {
@@ -978,6 +1131,7 @@ enum ModelSetting3 {
     InteractiveZoom(bool),
     OccupiedCellGrid,
     SpriteShade(bool),
+    Shadow(bool),
     PixelateEnabled(bool),
     PixelateScale(u16),
     PixelateSmoothing(bool),
@@ -1038,6 +1192,7 @@ fn parse_render_setting_line(line: &str) -> Result<ModelSetting3, ParseError3> {
         "shade" => Ok(ModelSetting3::SpriteShade(parse_boolean_setting(
             value, name,
         )?)),
+        "shadow" => Ok(ModelSetting3::Shadow(parse_boolean_setting(value, name)?)),
         _ => Err(message(format!("unknown render setting: {line}"))),
     }
 }
@@ -1222,27 +1377,6 @@ fn parse_zoom_milli_setting(value: &str, name: &str) -> Result<u16, ParseError3>
     Ok(milli as u16)
 }
 
-fn parse_object_spec(line: &str) -> Result<ObjectSpec3, ParseError3> {
-    let mut parts = line.split_whitespace();
-    let name = parts
-        .next()
-        .ok_or_else(|| message("object row must be: Object[:axis...] layer"))?;
-    let layer = parts
-        .next()
-        .ok_or_else(|| message("object row must be: Object[:axis...] layer"))?;
-    if parts.next().is_some() {
-        return Err(message("object row must be: Object[:axis...] layer"));
-    }
-    let (base, axes) = puzzle_authoring::split_object_spec(name)
-        .ok_or_else(|| message("object row must be: Object[:axis...] layer"))?;
-    Ok(ObjectSpec3 {
-        name: base.to_string(),
-        axes: axes.map(str::to_string).collect(),
-        layer: layer.to_string(),
-        display: false,
-    })
-}
-
 fn input_spec_from_key_surface(line: &str) -> Result<InputSpec3, ParseError3> {
     let surface =
         puzzle_authoring::key_binding_surface(line).map_err(|error| message(error.message()))?;
@@ -1268,21 +1402,19 @@ fn parse_layer_object_spec(token: &str, layer: &str) -> Result<ObjectSpec3, Pars
 }
 
 fn parse_group_spec(line: &str) -> Result<GroupSpec3, ParseError3> {
-    let (name, selectors) = line
-        .split_once('=')
+    let assignment = puzzle_authoring::selector_assignment_surface(line)
         .ok_or_else(|| message("group row must be: name = selector..."))?;
-    let selectors = puzzle_authoring::split_header_tokens(selectors)
+    let selectors = assignment
+        .selectors
         .into_iter()
         .map(str::to_string)
         .collect::<Vec<_>>();
-    if selectors.is_empty() {
-        return Err(message("group must contain at least one selector"));
-    }
-    let name = name.trim();
+    let name = assignment.name;
     reject_occurrence_label_marker_in_name(name, "group name")?;
     Ok(GroupSpec3 {
         name: name.to_string(),
         selectors,
+        source_line: line.to_string(),
     })
 }
 
@@ -1294,17 +1426,14 @@ fn reject_occurrence_label_marker_in_name(name: &str, label: &str) -> Result<(),
 }
 
 fn parse_legend_spec(line: &str) -> Result<LegendSpec3, ParseError3> {
-    let (ch, selectors) = line
-        .split_once('=')
+    let assignment = puzzle_authoring::selector_assignment_surface(line)
         .ok_or_else(|| message("legend row must be: <char> = selector..."))?;
-    let ch = parse_legend_char(ch.trim())?;
-    let selectors = puzzle_authoring::split_header_tokens(selectors)
+    let ch = parse_legend_char(assignment.name)?;
+    let selectors = assignment
+        .selectors
         .into_iter()
         .map(str::to_string)
         .collect::<Vec<_>>();
-    if selectors.is_empty() {
-        return Err(message("legend row must contain at least one selector"));
-    }
     if selectors.iter().any(|selector| selector == "empty") && selectors.len() > 1 {
         return Err(message("empty cannot be mixed with object selectors"));
     }
@@ -1336,23 +1465,8 @@ fn parse_scene_header(line: &str) -> Option<String> {
 }
 
 fn is_model3_header(line: &str) -> bool {
-    line.strip_prefix("puzzle3 ")
+    line.strip_prefix("puzzle ")
         .is_some_and(|rest| rest.ends_with('{'))
-}
-
-fn is_document_metadata_line(line: &str) -> bool {
-    line.starts_with("title ")
-        || line.starts_with("subtitle ")
-        || line.starts_with("author ")
-        || line.starts_with("homepage ")
-        || line.starts_with("default_wait_time ")
-}
-
-fn is_document_shell_block(line: &str) -> bool {
-    matches!(line, "sounds {" | "theme {" | "assets {")
-        || line
-            .strip_prefix("theme ")
-            .is_some_and(|rest| rest.ends_with('{'))
 }
 
 fn skip_braced_block(lines: &[String], mut index: usize) -> Result<usize, ParseError3> {
@@ -1369,95 +1483,9 @@ fn skip_braced_block(lines: &[String], mut index: usize) -> Result<usize, ParseE
     Err(message("document shell block missing }"))
 }
 
-fn is_levels3_header(line: &str) -> bool {
-    line == "levels3 {"
-        || line
-            .strip_prefix("levels3 ")
-            .is_some_and(|rest| rest.ends_with('{'))
-}
-
-fn parse_levels3_header(line: &str) -> Result<Option<String>, ParseError3> {
-    let header = line
-        .strip_prefix("levels3")
-        .and_then(|rest| rest.strip_suffix('{'))
-        .ok_or_else(|| message("levels3 block must end with {"))?
-        .trim();
-    if header.is_empty() {
-        return Ok(None);
-    }
-    let parts = header.split_whitespace().collect::<Vec<_>>();
-    match parts.as_slice() {
-        [name] => Ok(Some((*name).to_string())),
-        [name, "of", _model] => Ok(Some((*name).to_string())),
-        _ => Err(message(
-            "levels3 header must be: levels3 [name [of model]] {",
-        )),
-    }
-}
-
-fn is_sprites_header(line: &str) -> bool {
-    line == "sprites {"
-        || line
-            .strip_prefix("sprites ")
-            .is_some_and(|rest| rest.ends_with('{'))
-}
-
-fn parse_sprites_header(line: &str) -> Result<(String, Option<String>), ParseError3> {
-    let header = line
-        .strip_prefix("sprites")
-        .and_then(|rest| rest.strip_suffix('{'))
-        .ok_or_else(|| message("sprites block must end with {"))?
-        .trim();
-    if header.is_empty() {
-        return Ok(("default".to_string(), None));
-    }
-    let parts = header.split_whitespace().collect::<Vec<_>>();
-    match parts.as_slice() {
-        [name] => Ok(((*name).to_string(), None)),
-        [name, "of", model] => Ok(((*name).to_string(), Some((*model).to_string()))),
-        _ => Err(message(
-            "sprites header must be: sprites [name [of model]] {",
-        )),
-    }
-}
-
-fn is_sprite_entry_block_header(line: &str) -> bool {
-    let Some(header) = line.strip_suffix('{').map(str::trim) else {
-        return false;
-    };
-    let tokens = header.split_whitespace().collect::<Vec<_>>();
-    matches!(tokens.as_slice(), ["sprite"] | [_])
-}
-
-fn collect_sprite_block_body(
-    lines: &[String],
-    mut index: usize,
-) -> Result<(usize, Vec<String>), ParseError3> {
-    let mut depth = 1usize;
-    let mut body = Vec::new();
-    while index < lines.len() {
-        let line = lines[index].clone();
-        if line == "}" {
-            depth -= 1;
-            if depth == 0 {
-                return Ok((index + 1, body));
-            }
-            body.push(line);
-            index += 1;
-            continue;
-        }
-        if line.ends_with('{') {
-            depth += 1;
-        }
-        body.push(line);
-        index += 1;
-    }
-    Err(message("sprite block missing }"))
-}
-
 fn parse_sprite_shapes_block(
     lines: &[String],
-    mut index: usize,
+    index: usize,
 ) -> Result<
     (
         usize,
@@ -1465,12 +1493,12 @@ fn parse_sprite_shapes_block(
     ),
     ParseError3,
 > {
+    let block = puzzle_authoring::collect_container_block_surface(lines, index, "shapes")
+        .map_err(|error| message(error.message()))?;
     let mut shapes = HashMap::new();
-    while index < lines.len() {
+    let mut index = block.body_start;
+    while index < block.body_end {
         let line = lines[index].clone();
-        if line == "}" {
-            return Ok((index + 1, shapes));
-        }
         if line.is_empty() {
             index += 1;
             continue;
@@ -1481,25 +1509,26 @@ fn parse_sprite_shapes_block(
         if !is_canonical_sprite_name(name) {
             return Err(message(format!("invalid sprite shape name: {name}")));
         }
-        let (next, rows) = collect_sprite_block_body(lines, index + 1)?;
+        let shape = puzzle_authoring::collect_container_block_surface(lines, index + 1, "shape")
+            .map_err(|error| message(error.message()))?;
+        let rows = lines[shape.body_start..shape.body_end].to_vec();
         let mut body = Vec::with_capacity(rows.len() + 2);
         body.push("shape = {".to_string());
         body.extend(rows);
         body.push("}".to_string());
-        let syntax = crate::sprite_authoring::parse_sprite_node(None, &body);
-        if let Some(issue) = syntax.issues.first() {
-            return Err(message(issue.message));
-        }
-        let Some(crate::sprite_authoring::SpriteShapeSyntax::ExplicitInline(frames)) = syntax.shape
-        else {
+        let analyzed = crate::sprite_authoring::analyze_sprite_body(None, &body, |_| false)
+            .map_err(|error| message_at_source_line(error.message, &error.line))?;
+        let crate::sprite_authoring::ResolvedSpriteShape::Inline(frames) = analyzed.shape else {
             return Err(message(format!("sprite shape {name} requires ASCII rows")));
         };
+        crate::sprite_authoring::validate_sprite_frame_geometry(&frames)
+            .map_err(|error| message(format!("sprite shape {name}: {error}")))?;
         if shapes.insert(name.to_string(), frames).is_some() {
             return Err(message(format!("duplicate sprite shape: {name}")));
         }
-        index = next;
+        index = shape.next_index;
     }
-    Err(message("shapes block missing }"))
+    Ok((block.next_index, shapes))
 }
 
 fn parse_sprite3_from_shared_syntax(
@@ -1507,10 +1536,11 @@ fn parse_sprite3_from_shared_syntax(
     body: &[String],
     shapes: &HashMap<String, Vec<crate::sprite_authoring::SpriteFrameSyntax>>,
 ) -> Result<Sprite3, ParseError3> {
-    let syntax = crate::sprite_authoring::parse_sprite_node(Some(header), body);
-    if let Some(issue) = syntax.issues.first() {
-        return Err(message(issue.message));
-    }
+    let analyzed = crate::sprite_authoring::analyze_sprite_body(Some(header), body, |shape_name| {
+        shapes.contains_key(shape_name)
+    })
+    .map_err(|error| message_at_source_line(error.message, &error.line))?;
+    let syntax = analyzed.syntax;
     let spatial_ops = parse_sprite_spatial_ops3(&syntax)?;
     let name = syntax
         .selector
@@ -1521,10 +1551,7 @@ fn parse_sprite3_from_shared_syntax(
         .clone()
         .ok_or_else(|| message(format!("sprite {name} missing colors")))?;
     let palette = parse_canonical_sprite_palette_line(&colors.join(" "))?;
-    let resolved = crate::sprite_authoring::resolve_sprite_shape(&syntax, |shape_name| {
-        shapes.contains_key(shape_name)
-    });
-    let frames = match resolved {
+    let frames = match analyzed.shape {
         crate::sprite_authoring::ResolvedSpriteShape::Reference(reference) => shapes
             .get(&reference)
             .cloned()
@@ -1549,6 +1576,14 @@ fn parse_sprite3_from_shared_syntax(
             )));
         }
     };
+    crate::sprite_authoring::validate_sprite_frame_geometry(&frames)
+        .map_err(|error| message(format!("sprite {name}: {error}")))?;
+    let timing = crate::sprite_authoring::resolve_sprite_timing(
+        frames.len(),
+        syntax.duration.as_deref(),
+        syntax.frame_duration.as_deref(),
+    )
+    .map_err(|error| message(format!("sprite {name}: {error}")))?;
     let mut compiled_frames = Vec::with_capacity(frames.len());
     for frame in frames {
         let layers = frame
@@ -1564,33 +1599,12 @@ fn parse_sprite3_from_shared_syntax(
             .collect::<Vec<_>>();
         compiled_frames.push(parse_sprite_layers(&name, &layers, &palette)?);
     }
-    let Some(first_size) = compiled_frames.first().map(|frame| frame.size) else {
-        return Err(message(format!(
-            "sprite {name} requires at least one frame"
-        )));
-    };
-    if compiled_frames.iter().any(|frame| frame.size != first_size) {
-        return Err(message(format!(
-            "sprite {name} animation frames must have the same width, height, and Z-layer count"
-        )));
-    }
-    let duration_ms = syntax
-        .duration
-        .as_deref()
-        .map(parse_sprite_duration_ms)
-        .transpose()?;
-    let frame_duration_ms = syntax
-        .frame_duration
-        .as_deref()
-        .map(parse_sprite_duration_ms)
-        .transpose()?;
-    validate_sprite_frame_timing(&name, compiled_frames.len(), duration_ms, frame_duration_ms)?;
     let mut sprite = Sprite3::new(
         name,
         palette,
         compiled_frames,
-        duration_ms,
-        frame_duration_ms,
+        timing.duration_ms,
+        timing.frame_duration_ms,
     );
     sprite.spatial_ops = spatial_ops;
     Ok(sprite)
@@ -1609,7 +1623,17 @@ pub(crate) fn parse_sprite_spatial_ops3(
                         .map_err(|error| message(format!("{line}: {error}")))?,
                 })
             }
-            crate::sprite_authoring::SpritePropertySyntax::Rotate { space, angle, axis } => {
+            crate::sprite_authoring::SpritePropertySyntax::Rotate {
+                space,
+                angle,
+                from,
+                axis,
+            } => {
+                if from.is_some() {
+                    return Err(message(
+                        "3D sprite rotate does not accept from; use an explicit angle expression",
+                    ));
+                }
                 let axis = axis
                     .as_deref()
                     .ok_or_else(|| message("3D sprite rotate requires an axis"))?;
@@ -1706,39 +1730,6 @@ fn parse_sprite_angle3(value: &str) -> Result<f64, String> {
     parse_sprite_scalar3(degrees)
 }
 
-fn parse_sprite_duration_ms(value: &str) -> Result<u64, ParseError3> {
-    puzzle_scene::parse_wait_duration_ms_at(value, value)
-        .map_err(|error| message(error.to_string()))
-}
-
-fn validate_sprite_frame_timing(
-    name: &str,
-    frame_count: usize,
-    duration_ms: Option<u64>,
-    frame_duration_ms: Option<u64>,
-) -> Result<(), ParseError3> {
-    if frame_count <= 1 {
-        return Ok(());
-    }
-    match (duration_ms, frame_duration_ms) {
-        (None, None) => Err(message(format!(
-            "sprite {name} animation requires duration or frame_duration"
-        ))),
-        (Some(duration), Some(frame_duration)) => {
-            let expected = frame_duration
-                .checked_mul(frame_count as u64)
-                .ok_or_else(|| message(format!("sprite {name} frame duration is too large")))?;
-            if duration != expected {
-                return Err(message(format!(
-                    "sprite {name} duration must equal frame_duration multiplied by frame count"
-                )));
-            }
-            Ok(())
-        }
-        _ => Ok(()),
-    }
-}
-
 fn lower_level_bundle(
     game: Game3,
     catalog: &SelectorCatalog3,
@@ -1770,7 +1761,7 @@ fn lower_legend(
         if spec.selectors.len() == 1 && spec.selectors[0] == "empty" {
             if spec.ch != '.' {
                 return Err(message(format!(
-                    "3D levels use `.` for empty; remove `{}` = empty",
+                    "levels use `.` for empty; remove `{}` = empty",
                     spec.ch
                 )));
             }
@@ -1778,7 +1769,7 @@ fn lower_legend(
         }
         if spec.ch == '.' {
             return Err(message(
-                "3D levels reserve `.` for empty; use another legend char for objects",
+                "levels reserve `.` for empty; use another legend char for objects",
             ));
         }
         if legend.contains_key(&spec.ch) {
@@ -1962,7 +1953,21 @@ fn split_level_slices(rows: &[String]) -> Result<Vec<Vec<String>>, ParseError3> 
             }
             continue;
         }
+        if row == "-" {
+            if current.is_empty() {
+                return Err(message(
+                    "3D level slice separator requires a preceding ASCII slice",
+                ));
+            }
+            slices.push(std::mem::take(&mut current));
+            continue;
+        }
         current.push(row.clone());
+    }
+    if current.is_empty() && rows.last().is_some_and(|row| row == "-") {
+        return Err(message(
+            "3D level slice separator requires a following ASCII slice",
+        ));
     }
     if !current.is_empty() {
         slices.push(current);
@@ -2153,10 +2158,8 @@ fn apply_rule_application(
     rules: &mut [Rule3],
     application: Option<puzzle_authoring::RuleApplicationSurface>,
 ) -> Result<(), ParseError3> {
-    let Some(application) = application else {
-        return Ok(());
-    };
-    let application = match application {
+    let application = match application.unwrap_or(puzzle_authoring::RuleApplicationSurface::Repeat)
+    {
         puzzle_authoring::RuleApplicationSurface::Once => RuleApplication3::Once,
         puzzle_authoring::RuleApplicationSurface::OnceAll => RuleApplication3::OnceAll,
         puzzle_authoring::RuleApplicationSurface::OncePerLevel => RuleApplication3::OncePerLevel,
@@ -2167,6 +2170,86 @@ fn apply_rule_application(
         rule.application = application;
     }
     Ok(())
+}
+
+fn program_step_for_rule_statement(
+    mut rules: Vec<Rule3>,
+    next_rule_id: &mut u16,
+) -> Result<RuleStep3, ParseError3> {
+    if rules.is_empty() {
+        return Err(message("3D rewrite statement lowered to no alternatives"));
+    }
+    let application = rules
+        .first()
+        .map(|rule| rule.application)
+        .expect("non-empty 3D rewrite alternatives have an application");
+    if rules.iter().any(|rule| rule.application != application) {
+        return Err(message(
+            "one 3D rewrite statement lowered to mixed rule applications",
+        ));
+    }
+    for rule in &mut rules {
+        rule.id = RuleId3(*next_rule_id);
+        *next_rule_id = next_rule_id
+            .checked_add(1)
+            .ok_or_else(|| message("too many lowered 3D rules"))?;
+    }
+
+    match application {
+        RuleApplication3::Once => once_alternative_chain3(rules, application)
+            .ok_or_else(|| message("3D once statement lowered to no alternatives")),
+        RuleApplication3::OnceAll | RuleApplication3::OncePerLevel => {
+            let steps = rules
+                .into_iter()
+                .map(|mut rule| {
+                    rule.application = application;
+                    RuleStep3::Rule(rule)
+                })
+                .collect();
+            Ok(RuleStep3::Block {
+                application,
+                stop_condition: None,
+                steps,
+            })
+        }
+        RuleApplication3::Random | RuleApplication3::UntilStable => {
+            let nested_application = if application == RuleApplication3::Random {
+                RuleApplication3::Random
+            } else {
+                RuleApplication3::Once
+            };
+            let steps = rules
+                .into_iter()
+                .map(|mut rule| {
+                    rule.application = nested_application;
+                    RuleStep3::Rule(rule)
+                })
+                .collect();
+            Ok(RuleStep3::Block {
+                application,
+                stop_condition: None,
+                steps,
+            })
+        }
+    }
+}
+
+fn once_alternative_chain3(
+    rules: Vec<Rule3>,
+    application: RuleApplication3,
+) -> Option<RuleStep3> {
+    let alternatives = rules
+        .into_iter()
+        .map(|mut rule| {
+            let condition = RuleCondition3::RuleMatches {
+                guards: rule.guards.clone(),
+                pattern: rule.pattern.clone(),
+            };
+            rule.application = application;
+            (condition, rule)
+        })
+        .collect();
+    puzzle_kernel::first_matching_program_alternative(alternatives)
 }
 
 fn standard_move_rules3(game: &Game3) -> Vec<Rule3> {
@@ -2401,41 +2484,25 @@ fn parse_win_condition_line(
     catalog: &SelectorCatalog3,
     line_gap_limit: u16,
 ) -> Result<WinCondition3, ParseError3> {
-    if let Some((name, arg)) = parse_win_condition_call(line)? {
-        return match name {
-            "exists" | "some" => parse_some_condition(arg, catalog, line_gap_limit),
-            "none" => parse_no_condition(arg, catalog, line_gap_limit),
-            _ => Err(message(format!("unknown win condition function: {name}"))),
-        };
+    match puzzle_authoring::win_condition_row_surface(line).map_err(message)? {
+        puzzle_authoring::WinConditionRowSurface::Query {
+            quantifier: puzzle_authoring::WinConditionQuantifier::Exists,
+            argument,
+        } => parse_some_condition(argument, catalog, line_gap_limit),
+        puzzle_authoring::WinConditionRowSurface::Query {
+            quantifier: puzzle_authoring::WinConditionQuantifier::None,
+            argument,
+        } => parse_no_condition(argument, catalog, line_gap_limit),
+        puzzle_authoring::WinConditionRowSurface::SomeOn { subject, cover } => {
+            parse_some_condition(&format!("[ {subject} {cover} ]"), catalog, line_gap_limit)
+        }
+        puzzle_authoring::WinConditionRowSurface::AllOn { subject, cover } => {
+            parse_all_on_condition(&format!("{subject} on {cover}"), catalog)
+        }
+        puzzle_authoring::WinConditionRowSurface::Expression(_) => {
+            Err(message(format!("unknown win condition: {line}")))
+        }
     }
-    if let Some(rest) = line.strip_prefix("some ") {
-        return parse_some_condition(rest.trim(), catalog, line_gap_limit);
-    }
-    if let Some(rest) = line.strip_prefix("no ") {
-        return parse_no_condition(rest.trim(), catalog, line_gap_limit);
-    }
-    if let Some(rest) = line.strip_prefix("all ") {
-        return parse_all_on_condition(rest.trim(), catalog);
-    }
-    Err(message(format!("unknown win condition: {line}")))
-}
-
-fn parse_win_condition_call<'a>(line: &'a str) -> Result<Option<(&'a str, &'a str)>, ParseError3> {
-    let Some((name, rest)) = line.split_once('(') else {
-        return Ok(None);
-    };
-    if !name
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
-    {
-        return Ok(None);
-    }
-    let Some(arg) = rest.strip_suffix(')') else {
-        return Err(message(format!(
-            "win condition function missing closing ): {line}"
-        )));
-    };
-    Ok(Some((name, arg.trim())))
 }
 
 fn parse_some_condition(
@@ -2549,9 +2616,7 @@ fn resolve_query_selector_objects(
 }
 
 fn parse_error3_message(error: ParseError3) -> String {
-    match error {
-        ParseError3::Message(message) | ParseError3::MessageAtSourceLine { message, .. } => message,
-    }
+    diagnostic_message(&error)
 }
 
 fn resolve_single_selector_object(
@@ -2791,10 +2856,7 @@ fn lower_line_patterns(
 }
 
 fn parse_error_message(error: ParseError3) -> String {
-    match error {
-        ParseError3::Message(message) => message,
-        ParseError3::MessageAtSourceLine { message, .. } => message,
-    }
+    diagnostic_message(&error)
 }
 
 fn lower_line_rewrite(
@@ -3683,22 +3745,19 @@ fn inputs_from_specs(specs: Vec<InputSpec3>) -> Result<Vec<InputDef3>, ParseErro
 }
 
 fn message(message: impl Into<String>) -> ParseError3 {
-    ParseError3::Message(message.into())
+    DiagnosticReport::error(message)
 }
 
-fn diagnostic_report_error3(report: crate::DiagnosticReport) -> ParseError3 {
-    let Some(diagnostic) = report.diagnostics().first() else {
-        return message("3D parser received an empty diagnostic report");
-    };
-    if let Some(source_line) = diagnostic
-        .primary_span
-        .as_ref()
-        .and_then(|span| span.source_line.as_deref())
-    {
-        message_at_source_line(diagnostic.message.clone(), source_line)
-    } else {
-        message(diagnostic.message.clone())
-    }
+fn diagnostic_message(report: &DiagnosticReport) -> String {
+    report
+        .diagnostics()
+        .first()
+        .map(|diagnostic| diagnostic.message.clone())
+        .unwrap_or_else(|| "empty diagnostic report".to_string())
+}
+
+fn diagnostic_report_error3(report: DiagnosticReport) -> ParseError3 {
+    report
 }
 
 fn message_at_line(message: impl Into<String>, source_line: &str) -> ParseError3 {
@@ -3706,8 +3765,169 @@ fn message_at_line(message: impl Into<String>, source_line: &str) -> ParseError3
 }
 
 fn message_at_source_line(message: impl Into<String>, source_line: &str) -> ParseError3 {
-    ParseError3::MessageAtSourceLine {
-        message: message.into(),
-        source_line: source_line.to_string(),
+    DiagnosticReport::error_at_line(message, source_line)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn puzzle3_level_dash_separates_height_slices() {
+        let rows = ["AB", "CD", "-", "EF", "GH"].map(str::to_string);
+
+        let slices = super::split_level_slices(&rows).expect("split 3D level slices");
+
+        assert_eq!(
+            slices,
+            vec![
+                vec!["AB".to_string(), "CD".to_string()],
+                vec!["EF".to_string(), "GH".to_string()],
+            ]
+        );
+    }
+
+    #[test]
+    fn puzzle3_level_dash_requires_slices_on_both_sides() {
+        for (rows, expected) in [
+            (
+                vec!["-".to_string(), "AB".to_string()],
+                "preceding ASCII slice",
+            ),
+            (
+                vec!["AB".to_string(), "-".to_string()],
+                "following ASCII slice",
+            ),
+        ] {
+            let error = super::split_level_slices(&rows).expect_err("reject bare separator");
+            let message = error.to_string();
+            assert!(message.contains(expected), "{message}");
+        }
+    }
+
+    #[test]
+    fn puzzle3_sprite_animation_preserves_frames_and_timing() {
+        let parsed = super::parse_puzzle3d(
+            r#"
+sprites {
+Pulse {
+colors = #ff0000 transparent
+duration = 240ms
+frame_duration = 120ms
+shape = {
+0.
+..
+>
+.0
+..
+}
+}
+}
+
+puzzle board {
+layers {
+objects = Pulse
+}
+rules {
+}
+}
+
+levels demo of board {
+legend {
+. = empty
+P = Pulse
+}
+level "start" {
+P
+}
+}
+"#,
+        )
+        .expect("parse animated 3D sprite");
+
+        let fixture: serde_json::Value = serde_json::from_str(
+            &crate::export_visual_fixture_json(&parsed).expect("export animated 3D fixture"),
+        )
+        .expect("animated 3D fixture JSON");
+        assert_eq!(
+            fixture["sprites"]["Pulse"]["frames"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(fixture["sprites"]["Pulse"]["durationMs"], 240);
+        assert_eq!(fixture["sprites"]["Pulse"]["frameDurationMs"], 120);
+
+        let sprites = parsed.sprite_set.expect("sprites");
+        let sprite = sprites.sprite("Pulse").expect("Pulse sprite");
+        assert_eq!(sprite.frames.len(), 2);
+        assert_eq!(sprite.duration_ms, Some(240));
+        assert_eq!(sprite.frame_duration_ms, Some(120));
+        assert_ne!(sprite.frames[0].slices, sprite.frames[1].slices);
+        assert_eq!(sprite.frames[0].size, sprite.frames[1].size);
+    }
+
+    #[test]
+    fn puzzle3_sprite_animation_requires_timing() {
+        let error = super::parse_puzzle3d(
+            r#"
+sprites {
+Pulse {
+colors = #ff0000
+shape = {
+0
+>
+0
+}
+}
+}
+
+puzzle board {
+layers {
+objects = Pulse
+}
+rules {
+}
+}
+"#,
+        )
+        .expect_err("animated 3D sprite without timing must fail");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("sprite Pulse: sprite animation requires duration or frame_duration"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn puzzle3_accepts_the_shared_unbraced_sprite_surface() {
+        let parsed = super::parse_puzzle3d(
+            r#"
+sprites {
+Floor
+#8fcf6f
+0
+
+Floor2 {
+#0000000a
+0
+}
+}
+
+puzzle board {
+layers {
+floor = Floor Floor2
+}
+rules {
+}
+}
+"#,
+        )
+        .unwrap();
+
+        let sprites = parsed.sprite_set.expect("sprites");
+        assert_eq!(sprites.sprites.len(), 2);
+        assert_eq!(sprites.sprites[0].name, "Floor");
+        assert_eq!(sprites.sprites[1].name, "Floor2");
     }
 }

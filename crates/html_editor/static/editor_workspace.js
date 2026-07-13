@@ -49,9 +49,9 @@ function configureFolderImport() {
   importFolderInput.removeAttribute("webkitdirectory");
   importFolderInput.removeAttribute("directory");
   importFolderInput.accept = ".zip,application/zip,application/x-zip-compressed";
-  importFolderButton.title = "Import folder zip";
-  importFolderButton.setAttribute("aria-label", "Import folder zip");
-  importFolderButton.textContent = "Import folder zip";
+  importFolderButton.title = "Open folder zip";
+  importFolderButton.setAttribute("aria-label", "Open folder zip");
+  importFolderButton.textContent = "Open Folder (.zip)";
 }
 
 function configureDesktopHost() {
@@ -61,7 +61,7 @@ function configureDesktopHost() {
   }
   if (openProjectMenuButton) {
     openProjectMenuButton.hidden = !desktop;
-    openProjectMenuButton.textContent = "Open folder";
+    openProjectMenuButton.textContent = "Open Folder";
   }
   if (importButton) {
     importButton.hidden = desktop;
@@ -90,13 +90,25 @@ function setOpenProjectButtonsDisabled(disabled) {
 }
 
 function updateFileCreationAvailability() {
-  const disabled = isDesktopHost() && !hasWritableWorkspace();
+  const disabled = !fileTree || (isDesktopHost() && !hasWritableWorkspace());
   if (newDocumentButton) {
     newDocumentButton.disabled = disabled;
-    newDocumentButton.title = disabled ? "Open a workspace before creating files" : "New puzzle";
+    newDocumentButton.title = disabled ? "Open a workspace before creating files" : "New File";
   }
   if (newFolderButton) {
     newFolderButton.disabled = disabled;
+  }
+}
+
+function setWorkspaceFileActionsReady() {
+  if (!fileTree) {
+    throw new Error("workspace tree did not initialize");
+  }
+  updateFileCreationAvailability();
+  for (const button of [openFileMenuButton, openProjectMenuButton, importButton, importFolderButton]) {
+    if (button) {
+      button.disabled = false;
+    }
   }
 }
 
@@ -2186,8 +2198,12 @@ function folderIconSvg(workspace = false) {
 }
 
 function fileIconSvg(node) {
-  if (puzzleSourceProfile(node) === "puzzle3d") {
-    return `<svg xmlns="http://www.w3.org/2000/svg" class="tree-icon lucide lucide-file-box-icon lucide-file-box" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 22H18a2 2 0 0 0 2-2V8a2.4 2.4 0 0 0-.706-1.706l-3.588-3.588A2.4 2.4 0 0 0 14 2H6a2 2 0 0 0-2 2v3.8"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><path d="M11.7 14.2 7 17l-4.7-2.8"/><path d="M3 13.1a2 2 0 0 0-.999 1.76v3.24a2 2 0 0 0 .969 1.78L6 21.7a2 2 0 0 0 2.03.01L11 19.9a2 2 0 0 0 1-1.76V14.9a2 2 0 0 0-.97-1.78L8 11.3a2 2 0 0 0-2.03-.01z"/><path d="M7 17v5"/></svg>`;
+  const extension = extensionName(node?.puzzlePath || node?.name || "");
+  if (extension === "puzzle") {
+    return `<svg xmlns="http://www.w3.org/2000/svg" class="tree-icon lucide lucide-puzzle-icon lucide-puzzle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"/></svg>`;
+  }
+  if (extension === "puzzle3") {
+    return `<svg xmlns="http://www.w3.org/2000/svg" class="tree-icon lucide lucide-box-icon lucide-box" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>`;
   }
   return `<svg class="tree-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><path d="M14 2v6h6"></path></svg>`;
 }

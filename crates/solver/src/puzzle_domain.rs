@@ -281,7 +281,7 @@ PBG
         let loaded = parse_game(source).unwrap();
         let right = *loaded.controls.keys.get(&b'd').unwrap();
         let inputs = vec![right];
-        let game = Arc::new(loaded.game.clone());
+        let game = Arc::new(loaded.compiled_game_for_level(0).unwrap());
         let goal_game = loaded.clone();
         let mut domain = PuzzleDomain::new(game.clone(), inputs, move |state| {
             goal_game.is_goal_complete(state)
@@ -349,7 +349,7 @@ PBG
         let loaded = parse_game(source).unwrap();
         let right = *loaded.controls.keys.get(&b'd').unwrap();
         let inputs = vec![right];
-        let game = Arc::new(loaded.game.clone());
+        let game = Arc::new(loaded.compiled_game_for_level(0).unwrap());
         let goal_game = loaded.clone();
         let mut domain =
             PuzzleDomain::new(game, inputs, move |state| goal_game.is_goal_complete(state));
@@ -414,7 +414,7 @@ PBG
         let loaded = parse_game(source).unwrap();
         let right = *loaded.controls.keys.get(&b'd').unwrap();
         let inputs = vec![right];
-        let game = Arc::new(loaded.game.clone());
+        let game = Arc::new(loaded.compiled_game_for_level(0).unwrap());
         let goal_game = loaded.clone();
         let mut domain = PuzzleDomain::new(game.clone(), inputs, move |state| {
             goal_game.is_goal_complete(state)
@@ -476,7 +476,7 @@ PF
         let right = *loaded.controls.keys.get(&b'd').unwrap();
         let player = object_named(&loaded, "Player");
         let floor = object_named(&loaded, "Floor");
-        let game = Arc::new(loaded.game.clone());
+        let game = Arc::new(loaded.compiled_game_for_level(0).unwrap());
         let state_slicer = SolverStateSlicer::from_ignored_objects(vec![floor]);
         let mut domain =
             PuzzleDomain::with_state_slicer(game.clone(), vec![right], state_slicer, |_| false);
@@ -530,7 +530,7 @@ PE
 "#;
         let loaded = parse_game(source).unwrap();
         let right = *loaded.controls.keys.get(&b'd').unwrap();
-        let game = Arc::new(loaded.game.clone());
+        let game = Arc::new(loaded.compiled_game_for_level(0).unwrap());
         let mut domain = PuzzleDomain::new(game, vec![right], |_| false);
 
         let solved = domain
@@ -587,7 +587,7 @@ AAA
 "#;
         let loaded = parse_game(source).unwrap();
         let action = InputId(0);
-        let game = Arc::new(loaded.game.clone());
+        let game = Arc::new(loaded.compiled_game_for_level(0).unwrap());
         let goal_game = loaded.clone();
         let mut domain = PuzzleDomain::new(game, vec![action], move |state| {
             goal_game.is_goal_complete(state)

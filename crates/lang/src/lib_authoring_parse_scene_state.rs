@@ -59,7 +59,6 @@ fn parse_typed_scene_puzzle_declaration<'a>(
     let rhs_tokens = split_header_tokens(rhs);
     let (kind, name) = match lhs_tokens.as_slice() {
         ["puzzle", name] => ("puzzle", *name),
-        ["puzzle3", name] => ("puzzle3", *name),
         ["puzzle", ..] => {
             return Err(parse_error(
                 line,
@@ -69,7 +68,7 @@ fn parse_typed_scene_puzzle_declaration<'a>(
         ["puzzle3", ..] => {
             return Err(parse_error(
                 line,
-                "scene puzzle3 declaration must be: puzzle3 <slot> = <model> | puzzle3 <slot> = <model> level <level>",
+                "`puzzle3` was removed; use `puzzle <slot> = <model>` in both .puzzle and .puzzle3 files",
             ));
         }
         _ => return Ok(None),
@@ -101,7 +100,7 @@ fn parse_scene_puzzle_initializer_rhs<'a>(
         )),
         ["puzzle3", ..] => Err(parse_error(
             line,
-            "scene puzzle3 declaration must put the kind on the left: puzzle3 <slot> = <model>",
+            "`puzzle3` was removed; use `puzzle <slot> = <model>` in both .puzzle and .puzzle3 files",
         )),
         ["current_level", ..] => Err(parse_error(
             line,
@@ -142,7 +141,7 @@ fn reject_old_scene_puzzle_initializer(
         )),
         ["puzzle3", ..] => Err(parse_error(
             line,
-            "scene puzzle3 declaration must be: puzzle3 <slot> = <model>",
+            "`puzzle3` was removed; use `puzzle <slot> = <model>` in both .puzzle and .puzzle3 files",
         )),
         _ => Ok(()),
     }
@@ -365,7 +364,10 @@ fn parse_scene_var_default(
     if let Some(default) = value.strip_prefix("signal ") {
         let default = default.trim();
         if default.is_empty() {
-            return Err(parse_error(line, "signal variable must name a default value"));
+            return Err(parse_error(
+                line,
+                "signal variable must name a default value",
+            ));
         }
         return Ok((SceneVarKind::Signal, parse_scene_value(default, line)?));
     }
@@ -769,16 +771,13 @@ fn parse_model_keys_block(
     controls: &mut Controls,
 ) -> Result<usize, DiagnosticReport> {
     let mut seen_keys = HashSet::<KeyTrigger>::new();
-    let mut i = start + 1;
-    while i < lines.len() && !is_block_close_line(&lines[i]) {
-        let row = parse_keys_surface_row(&lines[i], "input", false)?;
-        lower_model_keys_row(row, &lines[i], catalog, controls, &mut seen_keys)?;
-        i += 1;
+    let block = puzzle_authoring::collect_row_block_surface(lines, start + 1, "keys")
+        .map_err(|error| parse_error(&lines[start], error.message()))?;
+    for line in block.rows {
+        let row = parse_keys_surface_row(line, "input", false)?;
+        lower_model_keys_row(row, line, catalog, controls, &mut seen_keys)?;
     }
-    if i >= lines.len() {
-        return Err(parse_error(&lines[start], "keys missing closing brace"));
-    }
-    Ok(i + 1)
+    Ok(block.next_index)
 }
 
 fn lower_model_keys_row(
