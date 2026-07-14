@@ -30,7 +30,7 @@ pub(crate) struct LogicalLine {
 }
 
 impl LogicalLine {
-    fn new(text: impl Into<String>, line: usize) -> Self {
+    pub(crate) fn new(text: impl Into<String>, line: usize) -> Self {
         Self {
             text: text.into(),
             line,
@@ -43,12 +43,26 @@ impl LogicalLine {
         self
     }
 
-    fn with_text(&self, text: impl Into<String>) -> Self {
+    pub(crate) fn with_text(&self, text: impl Into<String>) -> Self {
         Self {
             text: text.into(),
             line: self.line,
             tokens: self.tokens.clone(),
         }
+    }
+}
+
+impl std::ops::Deref for LogicalLine {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.text
+    }
+}
+
+impl AsRef<str> for LogicalLine {
+    fn as_ref(&self) -> &str {
+        &self.text
     }
 }
 
@@ -85,7 +99,22 @@ fn expand_structural_source_line(
     line: &str,
     block_stack: &mut Vec<String>,
 ) -> Result<Vec<String>, DiagnosticReport> {
-    let split_semicolons = !block_stack.iter().any(|block| ascii_sensitive_block(block));
+    let row_content_owner = block_stack.last().is_some_and(|surface| {
+        crate::authoring_grammar::authoring_source_block(surface)
+            .and_then(|block| block.content)
+            .is_some_and(|content| {
+                matches!(
+                    crate::authoring_grammar::authoring_content_syntax(content),
+                    crate::authoring_grammar::ContentSyntax::Rows(_)
+                )
+            })
+    });
+    let opens_structural_child = line
+        .find('{')
+        .is_some_and(|open| is_structural_block_open_segment(&line[..open]));
+    let split_semicolons = row_content_owner
+        || opens_structural_child
+        || !block_stack.iter().any(|block| ascii_sensitive_block(block));
     if !split_semicolons && ascii_row_contains_brace(line) {
         return Err(parse_error(line, "ASCII rows cannot contain braces"));
     }
@@ -1198,16 +1227,22 @@ fn recognize_structural_header(
         }
         return;
     }
-    for (index, token) in tokens.iter().enumerate() {
-        recognize_token(
-            recognition,
-            token,
-            if index == 0 {
-                crate::surface::SurfaceSemanticKind::Keyword
-            } else {
-                crate::surface::SurfaceSemanticKind::Binding
-            },
-        );
+    let structurally_owned = opened != SourceScope::Other
+        || tokens
+            .first()
+            .is_some_and(|token| source_scope_for_name(&token.text).is_some());
+    if structurally_owned {
+        for (index, token) in tokens.iter().enumerate() {
+            recognize_token(
+                recognition,
+                token,
+                if index == 0 {
+                    crate::surface::SurfaceSemanticKind::Keyword
+                } else {
+                    crate::surface::SurfaceSemanticKind::Binding
+                },
+            );
+        }
     }
 }
 

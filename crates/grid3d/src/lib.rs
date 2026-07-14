@@ -3,8 +3,10 @@ mod level;
 mod model;
 mod patch;
 mod state;
-mod transition;
 mod win;
+
+#[cfg(test)]
+mod transition_tests;
 
 pub use ids::{ConditionId3, InputId, LayerId, MarkId3, ObjectId, RuleId3, VariableId};
 pub use level::{Level3, LevelBundle3, LevelBundleError3, LevelCell3, LevelEntry3, LevelError3};
@@ -14,12 +16,7 @@ pub use model::{
     ObjectDef3, Offset3, Size3,
 };
 pub use patch::{Patch3, PatchError3, PatchOp3};
-pub use puzzle_kernel::{LocalFrame, LocalFrameExtent, MarkKind, MarkValueMatch, VariableUpdateOp};
-pub use state::{CellView3, SlotMark3, State3, StateError3};
-pub use transition::{
-    ConditionDef3, ConditionValueKind3, Guard3, MarkPattern3, MatchCell3, ObjectSetMarkPattern3,
-    ObjectSetMatcher3, Pattern3, PatternComponent3, Rule3, RuleApplication3, RuleCondition3,
-    RuleEffect3, RuleStep3, TransitionCommand3, TransitionError3, TransitionOutcome3, WriteOp3,
+pub use puzzle_core::grid_transition::{
     count_pattern_matches, eval_condition_kind, flattened_rules, has_pattern_match,
     transition_once, transition_once_all, transition_once_per_level, transition_once_with_input,
     transition_program, transition_program_outcome, transition_program_outcome_with_local_frame,
@@ -28,11 +25,30 @@ pub use transition::{
     transition_program_without_input_outcome_with_local_frame,
     transition_program_without_input_with_local_frame, transition_repeated,
 };
+pub use puzzle_core::{
+    GridMatchCell, GridPattern, GridRule, GridRuleCondition, GridRuleStep, GridWriteOp,
+};
+pub type ConditionDef3 = puzzle_core::GridConditionDef<3>;
+pub type ConditionValueKind3 = puzzle_core::GridConditionValueKind<3>;
+pub type Guard3 = puzzle_core::GridGuard<3>;
+pub type MarkPattern3 = puzzle_core::MarkPattern;
+pub type ObjectSetMarkPattern3 = puzzle_core::ObjectSetMarkPattern;
+pub type ObjectSetMatcher3 = puzzle_core::ObjectSetMatcher;
+pub type PatternComponent3 = puzzle_core::GridPatternComponent<3>;
+pub type RuleApplication3 = puzzle_core::RuleApplication;
+pub type RuleEffect3 = puzzle_core::Effect;
+pub type TransitionCommand3 = puzzle_core::TransitionCommand;
+pub type TransitionError3 = puzzle_core::GridTransitionError<3>;
+pub type TransitionOutcome3 = puzzle_core::grid_transition::GridTransitionOutcome<3, Size3>;
+pub use puzzle_kernel::{LocalFrame, LocalFrameExtent, MarkKind, MarkValueMatch, VariableUpdateOp};
+pub use state::{CellView3, SlotMark3, State3, StateError3};
 pub use win::WinCondition3;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    type Rule = puzzle_core::GridRule<3>;
 
     const PLAYER: ObjectId = ObjectId(1);
     const BOX: ObjectId = ObjectId(2);
@@ -89,26 +105,26 @@ mod tests {
         )
     }
 
-    fn push_rule(direction: Direction3) -> Rule3 {
+    fn push_rule(direction: Direction3) -> Rule {
         let step = direction.offset;
         let two_steps = step.scale(2);
-        Rule3::once(
-            Pattern3::new(vec![
-                MatchCell3::new(Delta3::ZERO).require(PLAYER),
-                MatchCell3::new(step).require(BOX),
-                MatchCell3::new(two_steps)
+        Rule::once(
+            GridPattern::<3>::new(vec![
+                GridMatchCell::<3>::new(Delta3::ZERO).require(PLAYER),
+                GridMatchCell::<3>::new(step).require(BOX),
+                GridMatchCell::<3>::new(two_steps)
                     .forbid(PLAYER)
                     .forbid(BOX)
                     .forbid(WALL),
             ]),
             vec![
-                WriteOp3::Move {
+                GridWriteOp::<3>::Move {
                     component: 0,
                     from_offset: step.into(),
                     to_offset: two_steps.into(),
                     object: BOX,
                 },
-                WriteOp3::Move {
+                GridWriteOp::<3>::Move {
                     component: 0,
                     from_offset: Delta3::ZERO.into(),
                     to_offset: step.into(),
@@ -118,16 +134,16 @@ mod tests {
         )
     }
 
-    fn move_rule(direction: Direction3) -> Rule3 {
-        Rule3::once(
-            Pattern3::new(vec![
-                MatchCell3::new(Delta3::ZERO).require(PLAYER),
-                MatchCell3::new(direction.offset)
+    fn move_rule(direction: Direction3) -> Rule {
+        Rule::once(
+            GridPattern::<3>::new(vec![
+                GridMatchCell::<3>::new(Delta3::ZERO).require(PLAYER),
+                GridMatchCell::<3>::new(direction.offset)
                     .forbid(PLAYER)
                     .forbid(BOX)
                     .forbid(WALL),
             ]),
-            vec![WriteOp3::Move {
+            vec![GridWriteOp::<3>::Move {
                 component: 0,
                 from_offset: Delta3::ZERO.into(),
                 to_offset: direction.offset.into(),
@@ -136,9 +152,9 @@ mod tests {
         )
     }
 
-    fn once_all_move_rule(direction: Direction3) -> Rule3 {
+    fn once_all_move_rule(direction: Direction3) -> Rule {
         let rule = move_rule(direction);
-        Rule3::once_all(rule.pattern, rule.writes)
+        Rule::once_all(rule.pattern, rule.writes)
     }
 
     #[test]
@@ -146,30 +162,35 @@ mod tests {
         let game = game();
         let mut state = empty_state(2, 1, 1);
         state
-            .place_object(&game, Coord3::new(0, 0, 0), PLAYER)
+            .place_object_at(&game, Coord3::new(0, 0, 0), PLAYER)
             .unwrap();
         let rule = move_rule(Direction3::RIGHT);
 
-        let outcome =
-            transition_program_outcome(&game, &state, &[RuleStep3::Rule(rule)], INPUT_RIGHT)
-                .unwrap();
+        let outcome = transition_program_outcome(
+            &game,
+            &state,
+            &[GridRuleStep::<3>::Rule(rule)],
+            INPUT_RIGHT,
+        )
+        .unwrap();
 
         assert_eq!(outcome.input, Some(INPUT_RIGHT));
         assert_eq!(outcome.fired_rules, vec![RuleId3(0)]);
         assert_eq!(outcome.commands, Vec::<TransitionCommand3>::new());
         assert_eq!(outcome.patches.len(), 1);
         assert_eq!(
-            outcome.patches[0].ops,
+            outcome.patches[0].ops(),
             vec![PatchOp3::Move {
-                from: Coord3::new(0, 0, 0),
-                to: Coord3::new(1, 0, 0),
+                from: Coord3::new(0, 0, 0).into(),
+                to: Coord3::new(1, 0, 0).into(),
                 object: PLAYER,
             }]
+            .as_slice()
         );
         assert_eq!(
             outcome
                 .next_state
-                .cell_view(Coord3::new(1, 0, 0))
+                .cell_view_at(Coord3::new(1, 0, 0))
                 .unwrap()
                 .objects,
             vec![PLAYER]
@@ -205,9 +226,9 @@ mod tests {
 
     #[test]
     fn pattern3_new_creates_single_core_shaped_component() {
-        let pattern = Pattern3::new(vec![
-            MatchCell3::new(Delta3::ZERO).require(PLAYER),
-            MatchCell3::new(Direction3::RIGHT.offset).require(BOX),
+        let pattern = GridPattern::<3>::new(vec![
+            GridMatchCell::<3>::new(Delta3::ZERO).require(PLAYER),
+            GridMatchCell::<3>::new(Direction3::RIGHT.offset).require(BOX),
         ]);
 
         assert_eq!(pattern.components.len(), 1);
@@ -217,9 +238,11 @@ mod tests {
 
     #[test]
     fn pattern3_components_keep_compatibility_cells_view() {
-        let pattern = Pattern3::from_components(vec![
-            PatternComponent3::new(vec![MatchCell3::new(Delta3::ZERO).require(PLAYER)]),
-            PatternComponent3::new(vec![MatchCell3::new(Direction3::RIGHT.offset).require(BOX)]),
+        let pattern = GridPattern::<3>::from_components(vec![
+            PatternComponent3::new(vec![GridMatchCell::<3>::new(Delta3::ZERO).require(PLAYER)]),
+            PatternComponent3::new(vec![
+                GridMatchCell::<3>::new(Direction3::RIGHT.offset).require(BOX),
+            ]),
         ]);
 
         assert_eq!(pattern.components.len(), 2);
@@ -560,10 +583,10 @@ mod tests {
         let game = game();
         let mut state = empty_state(2, 2, 2);
         state
-            .place_object(&game, Coord3::new(1, 0, 0), PLAYER)
+            .place_object_at(&game, Coord3::new(1, 0, 0), PLAYER)
             .unwrap();
         state
-            .place_object(&game, Coord3::new(0, 1, 1), BOX)
+            .place_object_at(&game, Coord3::new(0, 1, 1), BOX)
             .unwrap();
 
         assert_eq!(state.slots()[1], PLAYER);
@@ -583,8 +606,8 @@ mod tests {
 
         let state = level.build_state(&game).unwrap();
 
-        assert!(state.has_object(&game, Coord3::new(1, 0, 0), PLAYER));
-        assert!(state.has_object(&game, Coord3::new(2, 1, 1), BOX));
+        assert!(state.has_object_at(&game, Coord3::new(1, 0, 0), PLAYER));
+        assert!(state.has_object_at(&game, Coord3::new(2, 1, 1), BOX));
     }
 
     #[test]
@@ -601,8 +624,8 @@ mod tests {
         let bundle = LevelBundle3::checked_new(
             game.clone(),
             vec![
-                LevelEntry3::new("microban_01", first),
-                LevelEntry3::new("microban_02", second),
+                LevelEntry3::new("microban_01", first, Vec::new()),
+                LevelEntry3::new("microban_02", second, Vec::new()),
             ],
         )
         .unwrap();
@@ -612,7 +635,7 @@ mod tests {
 
         let state = bundle.build_level_state(1).unwrap();
 
-        assert!(state.has_object(&game, Coord3::new(1, 0, 0), BOX));
+        assert!(state.has_object_at(&game, Coord3::new(1, 0, 0), BOX));
     }
 
     #[test]
@@ -625,7 +648,8 @@ mod tests {
     #[test]
     fn level_bundle_rejects_empty_level_name() {
         let level = Level3::new(Size3::new(1, 1, 1), Vec::new());
-        let err = LevelBundle3::checked_new(game(), vec![LevelEntry3::new("", level)]).unwrap_err();
+        let err = LevelBundle3::checked_new(game(), vec![LevelEntry3::new("", level, Vec::new())])
+            .unwrap_err();
 
         assert_eq!(err, LevelBundleError3::EmptyLevelName { index: 0 });
     }
@@ -636,8 +660,8 @@ mod tests {
         let err = LevelBundle3::checked_new(
             game(),
             vec![
-                LevelEntry3::new("microban_01", level.clone()),
-                LevelEntry3::new("microban_01", level),
+                LevelEntry3::new("microban_01", level.clone(), Vec::new()),
+                LevelEntry3::new("microban_01", level, Vec::new()),
             ],
         )
         .unwrap_err();
@@ -657,7 +681,8 @@ mod tests {
             vec![LevelCell3::new(Coord3::new(2, 0, 0), vec![PLAYER])],
         );
         let err =
-            LevelBundle3::checked_new(game(), vec![LevelEntry3::new("bad", level)]).unwrap_err();
+            LevelBundle3::checked_new(game(), vec![LevelEntry3::new("bad", level, Vec::new())])
+                .unwrap_err();
 
         assert_eq!(
             err,
@@ -665,7 +690,7 @@ mod tests {
                 index: 0,
                 name: "bad".to_string(),
                 source: LevelError3::State(StateError3::PositionOutOfBounds {
-                    position: Coord3::new(2, 0, 0),
+                    position: Coord3::new(2, 0, 0).into(),
                 }),
             }
         );
@@ -678,6 +703,7 @@ mod tests {
             vec![LevelEntry3::new(
                 "microban_01",
                 Level3::new(Size3::new(1, 1, 1), Vec::new()),
+                Vec::new(),
             )],
         )
         .unwrap();
@@ -706,8 +732,8 @@ mod tests {
 
         let state = level.build_state(&game).unwrap();
 
-        assert!(state.has_object(&game, Coord3::new(0, 0, 0), PLAYER));
-        assert!(state.has_object(&game, Coord3::new(0, 0, 0), GOAL));
+        assert!(state.has_object_at(&game, Coord3::new(0, 0, 0), PLAYER));
+        assert!(state.has_object_at(&game, Coord3::new(0, 0, 0), GOAL));
     }
 
     #[test]
@@ -723,7 +749,7 @@ mod tests {
         assert_eq!(
             err,
             LevelError3::State(StateError3::LayerOccupied {
-                position: Coord3::new(0, 0, 0),
+                position: Coord3::new(0, 0, 0).into(),
                 layer: ACTOR,
                 existing: PLAYER,
                 attempted: BOX,
@@ -779,7 +805,7 @@ mod tests {
         assert_eq!(
             err,
             LevelError3::State(StateError3::PositionOutOfBounds {
-                position: Coord3::new(2, 0, 0),
+                position: Coord3::new(2, 0, 0).into(),
             })
         );
     }
@@ -815,17 +841,17 @@ mod tests {
         let game = game();
         let mut state = empty_state(3, 1, 1);
         state
-            .place_object(&game, Coord3::new(0, 0, 0), PLAYER)
+            .place_object_at(&game, Coord3::new(0, 0, 0), PLAYER)
             .unwrap();
         state
-            .place_object(&game, Coord3::new(1, 0, 0), BOX)
+            .place_object_at(&game, Coord3::new(1, 0, 0), BOX)
             .unwrap();
 
         let next = transition_once(&game, &state, &push_rule(Direction3::RIGHT)).unwrap();
 
-        assert!(!next.has_object(&game, Coord3::new(0, 0, 0), PLAYER));
-        assert!(next.has_object(&game, Coord3::new(1, 0, 0), PLAYER));
-        assert!(next.has_object(&game, Coord3::new(2, 0, 0), BOX));
+        assert!(!next.has_object_at(&game, Coord3::new(0, 0, 0), PLAYER));
+        assert!(next.has_object_at(&game, Coord3::new(1, 0, 0), PLAYER));
+        assert!(next.has_object_at(&game, Coord3::new(2, 0, 0), BOX));
     }
 
     #[test]
@@ -833,17 +859,17 @@ mod tests {
         let game = game();
         let mut state = empty_state(1, 3, 1);
         state
-            .place_object(&game, Coord3::new(0, 0, 0), PLAYER)
+            .place_object_at(&game, Coord3::new(0, 0, 0), PLAYER)
             .unwrap();
         state
-            .place_object(&game, Coord3::new(0, 1, 0), BOX)
+            .place_object_at(&game, Coord3::new(0, 1, 0), BOX)
             .unwrap();
 
         let next = transition_once(&game, &state, &push_rule(Direction3::FORWARD)).unwrap();
 
-        assert!(!next.has_object(&game, Coord3::new(0, 0, 0), PLAYER));
-        assert!(next.has_object(&game, Coord3::new(0, 1, 0), PLAYER));
-        assert!(next.has_object(&game, Coord3::new(0, 2, 0), BOX));
+        assert!(!next.has_object_at(&game, Coord3::new(0, 0, 0), PLAYER));
+        assert!(next.has_object_at(&game, Coord3::new(0, 1, 0), PLAYER));
+        assert!(next.has_object_at(&game, Coord3::new(0, 2, 0), BOX));
     }
 
     #[test]
@@ -851,13 +877,13 @@ mod tests {
         let game = game();
         let mut state = empty_state(1, 1, 2);
         state
-            .place_object(&game, Coord3::new(0, 0, 0), PLAYER)
+            .place_object_at(&game, Coord3::new(0, 0, 0), PLAYER)
             .unwrap();
 
         let next = transition_once(&game, &state, &move_rule(Direction3::UP)).unwrap();
 
-        assert!(!next.has_object(&game, Coord3::new(0, 0, 0), PLAYER));
-        assert!(next.has_object(&game, Coord3::new(0, 0, 1), PLAYER));
+        assert!(!next.has_object_at(&game, Coord3::new(0, 0, 0), PLAYER));
+        assert!(next.has_object_at(&game, Coord3::new(0, 0, 1), PLAYER));
     }
 
     #[test]
@@ -865,7 +891,7 @@ mod tests {
         let game = game();
         let mut state = empty_state(1, 1, 1);
         state
-            .place_object(&game, Coord3::new(0, 0, 0), PLAYER)
+            .place_object_at(&game, Coord3::new(0, 0, 0), PLAYER)
             .unwrap();
 
         let next = transition_once(&game, &state, &move_rule(Direction3::DOWN)).unwrap();
@@ -878,7 +904,7 @@ mod tests {
         let game = game();
         let mut state = empty_state(1, 1, 1);
         state
-            .place_object(&game, Coord3::new(0, 0, 0), PLAYER)
+            .place_object_at(&game, Coord3::new(0, 0, 0), PLAYER)
             .unwrap();
 
         let next = transition_once(&game, &state, &move_rule(Direction3::RIGHT)).unwrap();
@@ -891,18 +917,18 @@ mod tests {
         let game = game();
         let mut state = empty_state(3, 1, 1);
         state
-            .place_object(&game, Coord3::new(1, 0, 0), PLAYER)
+            .place_object_at(&game, Coord3::new(1, 0, 0), PLAYER)
             .unwrap();
 
         let rules = vec![
-            RuleStep3::Rule(move_rule(Direction3::LEFT).when_input(INPUT_LEFT)),
-            RuleStep3::Rule(move_rule(Direction3::RIGHT).when_input(INPUT_RIGHT)),
+            GridRuleStep::<3>::Rule(move_rule(Direction3::LEFT).when_input(INPUT_LEFT)),
+            GridRuleStep::<3>::Rule(move_rule(Direction3::RIGHT).when_input(INPUT_RIGHT)),
         ];
 
         let next = transition_program(&game, &state, &rules, INPUT_LEFT).unwrap();
 
-        assert!(!next.has_object(&game, Coord3::new(1, 0, 0), PLAYER));
-        assert!(next.has_object(&game, Coord3::new(0, 0, 0), PLAYER));
+        assert!(!next.has_object_at(&game, Coord3::new(1, 0, 0), PLAYER));
+        assert!(next.has_object_at(&game, Coord3::new(0, 0, 0), PLAYER));
     }
 
     #[test]
@@ -910,13 +936,13 @@ mod tests {
         let game = game();
         let mut state = empty_state(4, 1, 1);
         state
-            .place_object(&game, Coord3::new(0, 0, 0), PLAYER)
+            .place_object_at(&game, Coord3::new(0, 0, 0), PLAYER)
             .unwrap();
 
         let next = transition_repeated(&game, &state, &move_rule(Direction3::RIGHT)).unwrap();
 
-        assert!(!next.has_object(&game, Coord3::new(0, 0, 0), PLAYER));
-        assert!(next.has_object(&game, Coord3::new(3, 0, 0), PLAYER));
+        assert!(!next.has_object_at(&game, Coord3::new(0, 0, 0), PLAYER));
+        assert!(next.has_object_at(&game, Coord3::new(3, 0, 0), PLAYER));
     }
 
     #[test]
@@ -924,11 +950,11 @@ mod tests {
         let game = game();
         let mut state = empty_state(1, 1, 1);
         state
-            .place_object(&game, Coord3::new(0, 0, 0), PLAYER)
+            .place_object_at(&game, Coord3::new(0, 0, 0), PLAYER)
             .unwrap();
-        let no_progress = Rule3::repeated(
-            Pattern3::new(vec![MatchCell3::new(Delta3::ZERO).require(PLAYER)]),
-            vec![WriteOp3::Replace {
+        let no_progress = Rule::repeated(
+            GridPattern::<3>::new(vec![GridMatchCell::<3>::new(Delta3::ZERO).require(PLAYER)]),
+            vec![GridWriteOp::<3>::Replace {
                 component: 0,
                 offset: Delta3::ZERO.into(),
                 remove: PLAYER,
@@ -946,18 +972,18 @@ mod tests {
         let game = game();
         let mut state = empty_state(3, 1, 1);
         state
-            .place_object(&game, Coord3::new(0, 0, 0), PLAYER)
+            .place_object_at(&game, Coord3::new(0, 0, 0), PLAYER)
             .unwrap();
         state
-            .place_object(&game, Coord3::new(2, 0, 0), BOX)
+            .place_object_at(&game, Coord3::new(2, 0, 0), BOX)
             .unwrap();
 
-        let replace_second_component = Rule3::once(
-            Pattern3::from_components(vec![
-                PatternComponent3::new(vec![MatchCell3::new(Delta3::ZERO).require(PLAYER)]),
-                PatternComponent3::new(vec![MatchCell3::new(Delta3::ZERO).require(BOX)]),
+        let replace_second_component = Rule::once(
+            GridPattern::<3>::from_components(vec![
+                PatternComponent3::new(vec![GridMatchCell::<3>::new(Delta3::ZERO).require(PLAYER)]),
+                PatternComponent3::new(vec![GridMatchCell::<3>::new(Delta3::ZERO).require(BOX)]),
             ]),
-            vec![WriteOp3::Replace {
+            vec![GridWriteOp::<3>::Replace {
                 component: 1,
                 offset: Delta3::ZERO.into(),
                 remove: BOX,
@@ -967,9 +993,9 @@ mod tests {
 
         let next = transition_once(&game, &state, &replace_second_component).unwrap();
 
-        assert!(next.has_object(&game, Coord3::new(0, 0, 0), PLAYER));
-        assert!(!next.has_object(&game, Coord3::new(2, 0, 0), BOX));
-        assert!(next.has_object(&game, Coord3::new(2, 0, 0), WALL));
+        assert!(next.has_object_at(&game, Coord3::new(0, 0, 0), PLAYER));
+        assert!(!next.has_object_at(&game, Coord3::new(2, 0, 0), BOX));
+        assert!(next.has_object_at(&game, Coord3::new(2, 0, 0), WALL));
     }
 
     #[test]
@@ -977,20 +1003,20 @@ mod tests {
         let game = game();
         let mut state = empty_state(5, 1, 1);
         state
-            .place_object(&game, Coord3::new(0, 0, 0), PLAYER)
+            .place_object_at(&game, Coord3::new(0, 0, 0), PLAYER)
             .unwrap();
         state
-            .place_object(&game, Coord3::new(3, 0, 0), PLAYER)
+            .place_object_at(&game, Coord3::new(3, 0, 0), PLAYER)
             .unwrap();
 
         let next =
             transition_once_all(&game, &state, &once_all_move_rule(Direction3::RIGHT)).unwrap();
 
-        assert!(!next.has_object(&game, Coord3::new(0, 0, 0), PLAYER));
-        assert!(next.has_object(&game, Coord3::new(1, 0, 0), PLAYER));
-        assert!(!next.has_object(&game, Coord3::new(2, 0, 0), PLAYER));
-        assert!(!next.has_object(&game, Coord3::new(3, 0, 0), PLAYER));
-        assert!(next.has_object(&game, Coord3::new(4, 0, 0), PLAYER));
+        assert!(!next.has_object_at(&game, Coord3::new(0, 0, 0), PLAYER));
+        assert!(next.has_object_at(&game, Coord3::new(1, 0, 0), PLAYER));
+        assert!(!next.has_object_at(&game, Coord3::new(2, 0, 0), PLAYER));
+        assert!(!next.has_object_at(&game, Coord3::new(3, 0, 0), PLAYER));
+        assert!(next.has_object_at(&game, Coord3::new(4, 0, 0), PLAYER));
     }
 
     #[test]
@@ -998,15 +1024,15 @@ mod tests {
         let game = game();
         let mut state = empty_state(3, 1, 1);
         state
-            .place_object(&game, Coord3::new(0, 0, 0), PLAYER)
+            .place_object_at(&game, Coord3::new(0, 0, 0), PLAYER)
             .unwrap();
 
         let next =
             transition_once_all(&game, &state, &once_all_move_rule(Direction3::RIGHT)).unwrap();
 
-        assert!(!next.has_object(&game, Coord3::new(0, 0, 0), PLAYER));
-        assert!(next.has_object(&game, Coord3::new(1, 0, 0), PLAYER));
-        assert!(!next.has_object(&game, Coord3::new(2, 0, 0), PLAYER));
+        assert!(!next.has_object_at(&game, Coord3::new(0, 0, 0), PLAYER));
+        assert!(next.has_object_at(&game, Coord3::new(1, 0, 0), PLAYER));
+        assert!(!next.has_object_at(&game, Coord3::new(2, 0, 0), PLAYER));
     }
 
     #[test]
@@ -1014,28 +1040,28 @@ mod tests {
         let game = game();
         let mut state = empty_state(3, 1, 1);
         state
-            .place_object(&game, Coord3::new(0, 0, 0), PLAYER)
+            .place_object_at(&game, Coord3::new(0, 0, 0), PLAYER)
             .unwrap();
         state
-            .place_object(&game, Coord3::new(1, 0, 0), PLAYER)
+            .place_object_at(&game, Coord3::new(1, 0, 0), PLAYER)
             .unwrap();
         state
-            .place_object(&game, Coord3::new(2, 0, 0), PLAYER)
+            .place_object_at(&game, Coord3::new(2, 0, 0), PLAYER)
             .unwrap();
 
-        let consume_pair = Rule3::once_all(
-            Pattern3::new(vec![
-                MatchCell3::new(Delta3::ZERO).require(PLAYER),
-                MatchCell3::new(Direction3::RIGHT.offset).require(PLAYER),
+        let consume_pair = Rule::once_all(
+            GridPattern::<3>::new(vec![
+                GridMatchCell::<3>::new(Delta3::ZERO).require(PLAYER),
+                GridMatchCell::<3>::new(Direction3::RIGHT.offset).require(PLAYER),
             ]),
             vec![
-                WriteOp3::Replace {
+                GridWriteOp::<3>::Replace {
                     component: 0,
                     offset: Delta3::ZERO.into(),
                     remove: PLAYER,
                     add: BOX,
                 },
-                WriteOp3::Remove {
+                GridWriteOp::<3>::Remove {
                     component: 0,
                     offset: Direction3::RIGHT.offset.into(),
                     object: PLAYER,
@@ -1045,12 +1071,12 @@ mod tests {
 
         let next = transition_once_all(&game, &state, &consume_pair).unwrap();
 
-        assert!(next.has_object(&game, Coord3::new(0, 0, 0), BOX));
+        assert!(next.has_object_at(&game, Coord3::new(0, 0, 0), BOX));
         assert_eq!(
-            next.get_layer(Coord3::new(1, 0, 0), ACTOR).unwrap(),
+            next.get_layer_at(Coord3::new(1, 0, 0), ACTOR).unwrap(),
             ObjectId::EMPTY
         );
-        assert!(next.has_object(&game, Coord3::new(2, 0, 0), PLAYER));
+        assert!(next.has_object_at(&game, Coord3::new(2, 0, 0), PLAYER));
     }
 
     #[test]
@@ -1058,15 +1084,15 @@ mod tests {
         let game = game();
         let mut state = empty_state(2, 1, 1);
         state
-            .place_object(&game, Coord3::new(0, 0, 0), PLAYER)
+            .place_object_at(&game, Coord3::new(0, 0, 0), PLAYER)
             .unwrap();
         state
-            .place_object(&game, Coord3::new(1, 0, 0), PLAYER)
+            .place_object_at(&game, Coord3::new(1, 0, 0), PLAYER)
             .unwrap();
 
-        let player_to_box = Rule3::once_per_level(
-            Pattern3::new(vec![MatchCell3::new(Delta3::ZERO).require(PLAYER)]),
-            vec![WriteOp3::Replace {
+        let player_to_box = Rule::once_per_level(
+            GridPattern::<3>::new(vec![GridMatchCell::<3>::new(Delta3::ZERO).require(PLAYER)]),
+            vec![GridWriteOp::<3>::Replace {
                 component: 0,
                 offset: Delta3::ZERO.into(),
                 remove: PLAYER,
@@ -1078,20 +1104,20 @@ mod tests {
         let first = transition_program(
             &game,
             &state,
-            &[RuleStep3::Rule(player_to_box.clone())],
+            &[GridRuleStep::<3>::Rule(player_to_box.clone())],
             INPUT_RIGHT,
         )
         .unwrap();
         let second = transition_program(
             &game,
             &first,
-            &[RuleStep3::Rule(player_to_box)],
+            &[GridRuleStep::<3>::Rule(player_to_box)],
             INPUT_RIGHT,
         )
         .unwrap();
 
-        assert!(first.has_object(&game, Coord3::new(0, 0, 0), BOX));
-        assert!(first.has_object(&game, Coord3::new(1, 0, 0), PLAYER));
+        assert!(first.has_object_at(&game, Coord3::new(0, 0, 0), BOX));
+        assert!(first.has_object_at(&game, Coord3::new(1, 0, 0), PLAYER));
         assert!(first.level_rule_has_fired(RuleId3(7)));
         assert_eq!(second, first);
     }
@@ -1100,9 +1126,9 @@ mod tests {
     fn once_per_level_does_not_mark_rule_when_no_3d_match_exists() {
         let game = game();
         let state = empty_state(1, 1, 1);
-        let player_to_box = Rule3::once_per_level(
-            Pattern3::new(vec![MatchCell3::new(Delta3::ZERO).require(PLAYER)]),
-            vec![WriteOp3::Replace {
+        let player_to_box = Rule::once_per_level(
+            GridPattern::<3>::new(vec![GridMatchCell::<3>::new(Delta3::ZERO).require(PLAYER)]),
+            vec![GridWriteOp::<3>::Replace {
                 component: 0,
                 offset: Delta3::ZERO.into(),
                 remove: PLAYER,
@@ -1114,7 +1140,7 @@ mod tests {
         let next = transition_program(
             &game,
             &state,
-            &[RuleStep3::Rule(player_to_box)],
+            &[GridRuleStep::<3>::Rule(player_to_box)],
             INPUT_RIGHT,
         )
         .unwrap();
@@ -1128,23 +1154,21 @@ mod tests {
         let game = game();
         let mut state = empty_state(2, 1, 1);
         state
-            .place_object(&game, Coord3::new(0, 0, 0), PLAYER)
+            .place_object_at(&game, Coord3::new(0, 0, 0), PLAYER)
             .unwrap();
         state
-            .place_object(&game, Coord3::new(1, 0, 0), WALL)
+            .place_object_at(&game, Coord3::new(1, 0, 0), WALL)
             .unwrap();
 
-        let patch = Patch3 {
-            ops: vec![PatchOp3::Move {
-                from: Coord3::new(0, 0, 0),
-                to: Coord3::new(1, 0, 0),
-                object: PLAYER,
-            }],
-        };
+        let patch = Patch3::from_ops(vec![PatchOp3::Move {
+            from: Coord3::new(0, 0, 0).into(),
+            to: Coord3::new(1, 0, 0).into(),
+            object: PLAYER,
+        }]);
 
-        assert!(patch.apply(&game, &mut state).is_err());
-        assert!(state.has_object(&game, Coord3::new(0, 0, 0), PLAYER));
-        assert!(state.has_object(&game, Coord3::new(1, 0, 0), WALL));
+        assert!(patch.apply_in_place(&game, &mut state).is_err());
+        assert!(state.has_object_at(&game, Coord3::new(0, 0, 0), PLAYER));
+        assert!(state.has_object_at(&game, Coord3::new(1, 0, 0), WALL));
     }
 
     #[test]
@@ -1152,36 +1176,34 @@ mod tests {
         let game = game();
         let mut state = State3::empty_with_variables(Size3::new(1, 1, 1), 1, vec![2]).unwrap();
         state
-            .place_object(&game, Coord3::new(0, 0, 0), PLAYER)
+            .place_object_at(&game, Coord3::new(0, 0, 0), PLAYER)
             .unwrap();
 
-        let patch = Patch3 {
-            ops: vec![
-                PatchOp3::UpdateVariable {
-                    variable: VariableId(0),
-                    op: VariableUpdateOp::Add,
-                    value: 3,
-                },
-                PatchOp3::SetMark {
-                    position: Coord3::new(0, 0, 0),
-                    object: PLAYER,
-                    mark: MarkId3(1),
-                    value: Some(7),
-                },
-                PatchOp3::SetMark {
-                    position: Coord3::new(0, 0, 0),
-                    object: ObjectId::EMPTY,
-                    mark: MarkId3(2),
-                    value: None,
-                },
-            ],
-        };
+        let patch = Patch3::from_ops(vec![
+            PatchOp3::UpdateVariable {
+                variable: VariableId(0),
+                op: VariableUpdateOp::Add,
+                value: 3,
+            },
+            PatchOp3::SetMark {
+                position: Coord3::new(0, 0, 0).into(),
+                object: PLAYER,
+                mark: MarkId3(1),
+                value: Some(7),
+            },
+            PatchOp3::SetMark {
+                position: Coord3::new(0, 0, 0).into(),
+                object: ObjectId::EMPTY,
+                mark: MarkId3(2),
+                value: None,
+            },
+        ]);
 
-        patch.apply(&game, &mut state).unwrap();
+        patch.apply_in_place(&game, &mut state).unwrap();
 
         assert_eq!(state.variable_value(VariableId(0)), Some(5));
-        assert!(state.has_mark(&game, Coord3::new(0, 0, 0), PLAYER, MarkId3(1), Some(7)));
-        assert!(state.has_cell_mark_key(Coord3::new(0, 0, 0), MarkId3(2)));
+        assert!(state.has_mark_at(&game, Coord3::new(0, 0, 0), PLAYER, MarkId3(1), Some(7)));
+        assert!(state.has_cell_mark_key_at(Coord3::new(0, 0, 0), MarkId3(2)));
     }
 
     #[test]
@@ -1189,10 +1211,10 @@ mod tests {
         let game = game();
         let mut state = State3::empty_with_variables(Size3::new(1, 1, 1), 1, vec![2]).unwrap();
         state
-            .place_object(&game, Coord3::new(0, 0, 0), PLAYER)
+            .place_object_at(&game, Coord3::new(0, 0, 0), PLAYER)
             .unwrap();
-        let rule = Rule3::once(
-            Pattern3::new(vec![MatchCell3::new(Delta3::ZERO).require(PLAYER)]),
+        let rule = Rule::once(
+            GridPattern::<3>::new(vec![GridMatchCell::<3>::new(Delta3::ZERO).require(PLAYER)]),
             Vec::new(),
         )
         .with_effects(vec![RuleEffect3::UpdateVariable {
@@ -1211,11 +1233,11 @@ mod tests {
         let game = game();
         let mut state = empty_state(1, 1, 1);
         state
-            .place_object(&game, Coord3::new(0, 0, 0), PLAYER)
+            .place_object_at(&game, Coord3::new(0, 0, 0), PLAYER)
             .unwrap();
-        let mark_player = Rule3::once(
-            Pattern3::new(vec![MatchCell3::new(Delta3::ZERO).require(PLAYER)]),
-            vec![WriteOp3::SetMark {
+        let mark_player = Rule::once(
+            GridPattern::<3>::new(vec![GridMatchCell::<3>::new(Delta3::ZERO).require(PLAYER)]),
+            vec![GridWriteOp::<3>::SetMark {
                 component: 0,
                 offset: Delta3::ZERO.into(),
                 object: PLAYER,
@@ -1223,13 +1245,13 @@ mod tests {
                 value: Some(7),
             }],
         );
-        let consume_mark = Rule3::once(
-            Pattern3::new(vec![MatchCell3::new(Delta3::ZERO).require_mark(
+        let consume_mark = Rule::once(
+            GridPattern::<3>::new(vec![GridMatchCell::<3>::new(Delta3::ZERO).require_mark(
                 PLAYER,
                 MarkId3(1),
                 Some(7),
             )]),
-            vec![WriteOp3::Replace {
+            vec![GridWriteOp::<3>::Replace {
                 component: 0,
                 offset: Delta3::ZERO.into(),
                 remove: PLAYER,
@@ -1240,13 +1262,16 @@ mod tests {
         let next = transition_program_without_input(
             &game,
             &state,
-            &[RuleStep3::Rule(mark_player), RuleStep3::Rule(consume_mark)],
+            &[
+                GridRuleStep::<3>::Rule(mark_player),
+                GridRuleStep::<3>::Rule(consume_mark),
+            ],
         )
         .unwrap();
 
-        assert!(!next.has_object(&game, Coord3::new(0, 0, 0), PLAYER));
-        assert!(next.has_object(&game, Coord3::new(0, 0, 0), WALL));
-        assert!(!next.has_mark(&game, Coord3::new(0, 0, 0), PLAYER, MarkId3(1), Some(7)));
+        assert!(!next.has_object_at(&game, Coord3::new(0, 0, 0), PLAYER));
+        assert!(next.has_object_at(&game, Coord3::new(0, 0, 0), WALL));
+        assert!(!next.has_mark_at(&game, Coord3::new(0, 0, 0), PLAYER, MarkId3(1), Some(7)));
     }
 
     #[test]
@@ -1254,28 +1279,24 @@ mod tests {
         let game = game();
         let mut state = empty_state(4, 1, 1);
         state
-            .place_object(&game, Coord3::new(0, 0, 0), PLAYER)
+            .place_object_at(&game, Coord3::new(0, 0, 0), PLAYER)
             .unwrap();
         state
-            .place_object(&game, Coord3::new(3, 0, 0), BOX)
+            .place_object_at(&game, Coord3::new(3, 0, 0), BOX)
             .unwrap();
         let mut component = PatternComponent3::new(vec![
-            MatchCell3::new(Delta3::ZERO).require(PLAYER),
-            MatchCell3::new(Offset3::Variable {
-                base_dx: 1,
-                base_dy: 0,
-                base_dz: 0,
+            GridMatchCell::<3>::new(Delta3::ZERO).require(PLAYER),
+            GridMatchCell::<3>::new(Offset3::Variable {
+                base: [1, 0, 0].into(),
                 gap_terms: vec![GapTerm3 {
                     gap_index: 0,
-                    dx: 1,
-                    dy: 0,
-                    dz: 0,
+                    delta: [1, 0, 0].into(),
                 }],
             })
             .require(BOX),
         ]);
         component.gap_count = 1;
-        let pattern = Pattern3::from_components(vec![component]);
+        let pattern = GridPattern::<3>::from_components(vec![component]);
 
         assert_eq!(count_pattern_matches(&game, &state, &pattern), 1);
     }
@@ -1286,39 +1307,35 @@ mod tests {
         let mut state = State3::empty(Size3::new(11, 1, 1), 2).unwrap();
         for x in [0, 4] {
             state
-                .place_object(&game, Coord3::new(x, 0, 0), PLAYER)
+                .place_object_at(&game, Coord3::new(x, 0, 0), PLAYER)
                 .unwrap();
         }
         for x in [2, 6, 7, 10] {
             state
-                .place_object(&game, Coord3::new(x, 0, 0), BOX)
+                .place_object_at(&game, Coord3::new(x, 0, 0), BOX)
                 .unwrap();
         }
         let mut component = PatternComponent3::new(vec![
-            MatchCell3::new(Delta3::ZERO).require(PLAYER),
-            MatchCell3::new(Offset3::Variable {
-                base_dx: 1,
-                base_dy: 0,
-                base_dz: 0,
+            GridMatchCell::<3>::new(Delta3::ZERO).require(PLAYER),
+            GridMatchCell::<3>::new(Offset3::Variable {
+                base: [1, 0, 0].into(),
                 gap_terms: vec![GapTerm3 {
                     gap_index: 0,
-                    dx: 1,
-                    dy: 0,
-                    dz: 0,
+                    delta: [1, 0, 0].into(),
                 }],
             })
             .require(BOX),
         ]);
         component.gap_count = 1;
-        let rule = Rule3::once_all(
-            Pattern3::from_components(vec![component]),
+        let rule = Rule::once_all(
+            GridPattern::<3>::from_components(vec![component]),
             vec![
-                WriteOp3::Remove {
+                GridWriteOp::<3>::Remove {
                     component: 0,
                     offset: Delta3::new(6, 0, 0).into(),
                     object: BOX,
                 },
-                WriteOp3::Add {
+                GridWriteOp::<3>::Add {
                     component: 0,
                     offset: Delta3::ZERO.into(),
                     object: GOAL,
@@ -1328,9 +1345,9 @@ mod tests {
 
         let next = transition_once_all(&game, &state, &rule).unwrap();
 
-        assert!(next.has_object(&game, Coord3::new(0, 0, 0), GOAL));
-        assert!(!next.has_object(&game, Coord3::new(4, 0, 0), GOAL));
-        assert!(next.has_object(&game, Coord3::new(10, 0, 0), BOX));
+        assert!(next.has_object_at(&game, Coord3::new(0, 0, 0), GOAL));
+        assert!(!next.has_object_at(&game, Coord3::new(4, 0, 0), GOAL));
+        assert!(next.has_object_at(&game, Coord3::new(10, 0, 0), BOX));
     }
 
     #[test]
@@ -1338,11 +1355,11 @@ mod tests {
         let game = game();
         let mut state = empty_state(1, 1, 1);
         state
-            .place_object(&game, Coord3::new(0, 0, 0), PLAYER)
+            .place_object_at(&game, Coord3::new(0, 0, 0), PLAYER)
             .unwrap();
-        let rule = Rule3::once(
-            Pattern3::new(vec![MatchCell3::new(Delta3::ZERO).require(PLAYER)]),
-            vec![WriteOp3::Replace {
+        let rule = Rule::once(
+            GridPattern::<3>::new(vec![GridMatchCell::<3>::new(Delta3::ZERO).require(PLAYER)]),
+            vec![GridWriteOp::<3>::Replace {
                 component: 0,
                 offset: Delta3::ZERO.into(),
                 remove: PLAYER,
@@ -1351,21 +1368,24 @@ mod tests {
         )
         .with_effects(vec![RuleEffect3::Cancel, RuleEffect3::Win]);
 
-        let outcome =
-            transition_program_without_input_outcome(&game, &state, &[RuleStep3::Rule(rule)])
-                .unwrap();
+        let outcome = transition_program_without_input_outcome(
+            &game,
+            &state,
+            &[GridRuleStep::<3>::Rule(rule)],
+        )
+        .unwrap();
 
         assert!(outcome.cancelled);
         assert!(outcome.commands.is_empty());
         assert!(
             outcome
                 .next_state
-                .has_object(&game, Coord3::new(0, 0, 0), PLAYER)
+                .has_object_at(&game, Coord3::new(0, 0, 0), PLAYER)
         );
         assert!(
             !outcome
                 .next_state
-                .has_object(&game, Coord3::new(0, 0, 0), WALL)
+                .has_object_at(&game, Coord3::new(0, 0, 0), WALL)
         );
     }
 
@@ -1374,10 +1394,10 @@ mod tests {
         let game = game();
         let mut state = empty_state(1, 1, 1);
         state
-            .place_object(&game, Coord3::new(0, 0, 0), PLAYER)
+            .place_object_at(&game, Coord3::new(0, 0, 0), PLAYER)
             .unwrap();
-        let rule = Rule3::once(
-            Pattern3::new(vec![MatchCell3::new(Delta3::ZERO).require(PLAYER)]),
+        let rule = Rule::once(
+            GridPattern::<3>::new(vec![GridMatchCell::<3>::new(Delta3::ZERO).require(PLAYER)]),
             Vec::new(),
         )
         .with_effects(vec![
@@ -1389,9 +1409,12 @@ mod tests {
             RuleEffect3::ClearCheckpoint,
         ]);
 
-        let outcome =
-            transition_program_without_input_outcome(&game, &state, &[RuleStep3::Rule(rule)])
-                .unwrap();
+        let outcome = transition_program_without_input_outcome(
+            &game,
+            &state,
+            &[GridRuleStep::<3>::Rule(rule)],
+        )
+        .unwrap();
 
         assert_eq!(
             outcome.commands,
@@ -1429,31 +1452,27 @@ mod tests {
         let game = game();
         let mut state = empty_state(2, 1, 1);
         state
-            .place_object(&game, Coord3::new(0, 0, 0), PLAYER)
+            .place_object_at(&game, Coord3::new(0, 0, 0), PLAYER)
             .unwrap();
-        Patch3 {
-            ops: vec![PatchOp3::SetMark {
-                position: Coord3::new(0, 0, 0),
-                object: PLAYER,
-                mark: MarkId3(1),
-                value: Some(9),
-            }],
-        }
-        .apply(&game, &mut state)
+        Patch3::from_ops(vec![PatchOp3::SetMark {
+            position: Coord3::new(0, 0, 0).into(),
+            object: PLAYER,
+            mark: MarkId3(1),
+            value: Some(9),
+        }])
+        .apply_in_place(&game, &mut state)
         .unwrap();
 
-        Patch3 {
-            ops: vec![PatchOp3::Move {
-                from: Coord3::new(0, 0, 0),
-                to: Coord3::new(1, 0, 0),
-                object: PLAYER,
-            }],
-        }
-        .apply(&game, &mut state)
+        Patch3::from_ops(vec![PatchOp3::Move {
+            from: Coord3::new(0, 0, 0).into(),
+            to: Coord3::new(1, 0, 0).into(),
+            object: PLAYER,
+        }])
+        .apply_in_place(&game, &mut state)
         .unwrap();
 
-        assert!(!state.has_mark(&game, Coord3::new(0, 0, 0), PLAYER, MarkId3(1), Some(9)));
-        assert!(state.has_mark(&game, Coord3::new(1, 0, 0), PLAYER, MarkId3(1), Some(9)));
+        assert!(!state.has_mark_at(&game, Coord3::new(0, 0, 0), PLAYER, MarkId3(1), Some(9)));
+        assert!(state.has_mark_at(&game, Coord3::new(1, 0, 0), PLAYER, MarkId3(1), Some(9)));
     }
 
     #[test]
@@ -1461,14 +1480,14 @@ mod tests {
         let game = game();
         let mut state = empty_state(2, 1, 1);
         state
-            .place_object(&game, Coord3::new(0, 0, 0), PLAYER)
+            .place_object_at(&game, Coord3::new(0, 0, 0), PLAYER)
             .unwrap();
         state
-            .place_object(&game, Coord3::new(1, 0, 0), BOX)
+            .place_object_at(&game, Coord3::new(1, 0, 0), BOX)
             .unwrap();
-        let push_pattern = Pattern3::new(vec![
-            MatchCell3::new(Delta3::ZERO).require(PLAYER),
-            MatchCell3::new(Direction3::RIGHT.offset).require(BOX),
+        let push_pattern = GridPattern::<3>::new(vec![
+            GridMatchCell::<3>::new(Delta3::ZERO).require(PLAYER),
+            GridMatchCell::<3>::new(Direction3::RIGHT.offset).require(BOX),
         ]);
 
         assert_eq!(
@@ -1508,17 +1527,17 @@ mod tests {
         let game = game();
         let mut state = empty_state(4, 1, 3);
         state
-            .place_object(&game, Coord3::new(0, 0, 0), PLAYER)
+            .place_object_at(&game, Coord3::new(0, 0, 0), PLAYER)
             .unwrap();
         state
-            .place_object(&game, Coord3::new(1, 0, 2), BOX)
+            .place_object_at(&game, Coord3::new(1, 0, 2), BOX)
             .unwrap();
         state
-            .place_object(&game, Coord3::new(3, 0, 0), BOX)
+            .place_object_at(&game, Coord3::new(3, 0, 0), BOX)
             .unwrap();
-        let rule = Rule3::once_all(
-            Pattern3::new(vec![MatchCell3::new(Delta3::ZERO).require(BOX)]),
-            vec![WriteOp3::Replace {
+        let rule = Rule::once_all(
+            GridPattern::<3>::new(vec![GridMatchCell::<3>::new(Delta3::ZERO).require(BOX)]),
+            vec![GridWriteOp::<3>::Replace {
                 component: 0,
                 offset: Delta3::ZERO.into(),
                 remove: BOX,
@@ -1535,13 +1554,13 @@ mod tests {
         let next = transition_program_with_local_frame(
             &game,
             &state,
-            &[RuleStep3::Rule(rule)],
+            &[GridRuleStep::<3>::Rule(rule)],
             INPUT_RIGHT,
             Some(&frame),
         )
         .unwrap();
 
-        assert!(next.has_object(&game, Coord3::new(1, 0, 2), WALL));
-        assert!(next.has_object(&game, Coord3::new(3, 0, 0), BOX));
+        assert!(next.has_object_at(&game, Coord3::new(1, 0, 2), WALL));
+        assert!(next.has_object_at(&game, Coord3::new(3, 0, 0), BOX));
     }
 }

@@ -159,9 +159,7 @@ function sourceFoldRangeForLine(state, lineStart, lineEnd) {
 function sourceFoldMarkerDOM(open) {
   const marker = document.createElement("span");
   marker.className = "cm-source-fold-marker";
-  marker.innerHTML = open
-    ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>'
-    : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg>';
+  marker.innerHTML = editorIconSvg(open ? "chevron-down" : "chevron-right");
   return marker;
 }
 

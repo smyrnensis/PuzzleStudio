@@ -1,5 +1,5 @@
 fn parse_map_definition(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     value_sets: &HashMap<String, Vec<String>>,
 ) -> Result<(ValueMap, usize), DiagnosticReport> {
@@ -358,12 +358,8 @@ fn build_puzzle_catalog(
         let tokens = split_header_tokens(&entry.header.text);
         match tokens.as_slice() {
             ["slots"] => {
-                let mut lines = entry
-                    .body
-                    .iter()
-                    .map(|line| line.text.clone())
-                    .collect::<Vec<_>>();
-                lines.push(BLOCK_CLOSE.to_string());
+                let mut lines = entry.body.clone();
+                lines.push(source::LogicalLine::new(BLOCK_CLOSE, entry.header.line));
                 let next = parse_layers_block(
                     &lines,
                     0,
@@ -415,11 +411,11 @@ fn build_puzzle_catalog(
     Ok(catalog)
 }
 
-fn catalog_entry_lines(entry: &model_syntax::PuzzleEntrySyntax) -> Vec<String> {
+fn catalog_entry_lines(entry: &model_syntax::PuzzleEntrySyntax) -> Vec<source::LogicalLine> {
     let mut lines = Vec::with_capacity(entry.body.len() + 2);
-    lines.push(entry.header.text.clone());
-    lines.extend(entry.body.iter().map(|line| line.text.clone()));
-    lines.push(BLOCK_CLOSE.to_string());
+    lines.push(entry.header.clone());
+    lines.extend(entry.body.iter().cloned());
+    lines.push(source::LogicalLine::new(BLOCK_CLOSE, entry.header.line));
     lines
 }
 
@@ -470,13 +466,10 @@ fn collect_puzzle_group_declarations_from_entries(
 
 fn parser_surface_catalog_from_source_scan(
     source_scan: &source::SurfaceSourceScan,
-) -> Result<Catalog, DiagnosticReport> {
+) -> Result<crate::surface::ParseProduct<LevelEditorIntegration>, DiagnosticReport> {
     let logical_lines = source_scan.strict_logical_lines()?;
     let parts = parse_document_source_parts_from_logical_lines(logical_lines)?;
-    let model = parts.models.first().ok_or_else(|| {
-        DiagnosticReport::error("parser catalog requires a puzzle model".to_string())
-    })?;
-    build_puzzle_catalog(model)
+    integrate_level_editor_document_parts(parts)
 }
 
 /// Editor-specific integration of parser-owned authoring facts. Unlike full
@@ -498,40 +491,44 @@ pub(crate) struct LevelEditorIntegratedLevel {
     pub(crate) char_objects: HashMap<char, Vec<ObjectId>>,
 }
 
-pub(crate) fn integrate_level_editor_authoring(
-    source: &str,
-) -> Result<LevelEditorIntegration, DiagnosticReport> {
-    let parts = parse_document_source_parts(source)?;
-    integrate_level_editor_document_parts(parts)
-}
-
 fn integrate_level_editor_document_parts(
     parts: DocumentSourceParts,
-) -> Result<LevelEditorIntegration, DiagnosticReport> {
+) -> Result<crate::surface::ParseProduct<LevelEditorIntegration>, DiagnosticReport> {
+    let mut recognition = parts.recognition;
     let dimension = parts
         .models
         .first()
         .map(|model| model.dimension)
         .unwrap_or_default();
-    let lines = parts
-        .model_lines
-        .iter()
-        .map(|line| line.text.clone())
-        .collect::<Vec<_>>();
+    let lines = parts.model_lines;
     let mut catalog = Catalog::for_dimension(dimension);
-    let mut level_blocks = Vec::<LevelBlock>::new();
-    let mut pending_level_blocks = Vec::<PendingLevelBlock>::new();
+    let level_blocks = parts
+        .models
+        .iter()
+        .filter(|model| model.dimension == crate::ModelDimension::Two)
+        .flat_map(|model| model.body.levels.levels.iter().cloned())
+        .collect::<Vec<_>>();
     let mut pending_visual_blocks = Vec::<usize>::new();
     let mut render_overlays = Vec::<(Vec<ObjectId>, char)>::new();
     let mut empty_char = Some('.');
     let mut diagnostics = Vec::<String>::new();
+    for model in parts
+        .models
+        .iter()
+        .filter(|model| model.dimension == crate::ModelDimension::Three)
+    {
+        let parsed = crate::level::recognize_spatial_levels(model);
+        recognition.merge(parsed.recognition);
+        if let Err(report) = parsed.value {
+            diagnostics.push(report.to_string());
+        }
+    }
     let mut i = 0usize;
     while i < lines.len() {
         let tokens = split_header_tokens(&lines[i]);
         match tokens.as_slice() {
             ["puzzle", _] => match parse_editor_puzzle_catalog(&lines, i, &mut catalog, false) {
-                Ok((next_i, mut levels, mut visuals, _)) => {
-                    pending_level_blocks.append(&mut levels);
+                Ok((next_i, mut visuals, _)) => {
                     pending_visual_blocks.append(&mut visuals);
                     i = next_i;
                 }
@@ -541,23 +538,19 @@ fn integrate_level_editor_document_parts(
                 }
             },
             ["levels", ..] => {
-                pending_level_blocks.push(PendingLevelBlock::levels(i, None));
                 match collect_levels_authoring_entry(&lines, i) {
                     Ok((_, next_i)) => i = next_i,
                     Err(report) => {
                         diagnostics.push(report.to_string());
-                        pending_level_blocks.pop();
                         i = recover_after_directive_error(&lines, i);
                     }
                 }
             }
             ["level", ..] => {
-                pending_level_blocks.push(PendingLevelBlock::level(i, None));
                 match parse_level_block(&lines, i, 0) {
                     Ok((_, next_i)) => i = next_i,
                     Err(report) => {
                         diagnostics.push(report.to_string());
-                        pending_level_blocks.pop();
                         i = recover_after_directive_error(&lines, i);
                     }
                 }
@@ -576,21 +569,26 @@ fn integrate_level_editor_document_parts(
             _ => i += 1,
         }
     }
-    for pending in &pending_level_blocks {
-        if let Err(report) = parse_pending_level_block(
-            &lines,
-            pending,
-            &mut level_blocks,
-            &mut catalog,
-            &mut render_overlays,
-            &mut empty_char,
-        ) {
-            diagnostics.push(report.to_string());
+    if dimension == crate::ModelDimension::Two {
+        for model in &parts.models {
+            for legend in &model.body.levels.legends {
+                if let Err(report) = apply_level_resource_legend(
+                    legend,
+                    &mut catalog,
+                    &mut render_overlays,
+                    &mut empty_char,
+                    &mut recognition,
+                ) {
+                    diagnostics.push(report.to_string());
+                }
+            }
         }
     }
     let mut visuals = VisualsDef::default();
     for visual_start in pending_visual_blocks {
-        if let Err(report) = parse_visuals_block(&lines, visual_start, &catalog, &mut visuals) {
+        let parsed = parse_visuals_block(&lines, visual_start, &catalog, &mut visuals);
+        recognition.merge(parsed.recognition);
+        if let Err(report) = parsed.value {
             diagnostics.push(report.to_string());
         }
     }
@@ -609,7 +607,15 @@ fn integrate_level_editor_document_parts(
             let body = parse_level_body_for_editor(&level, &catalog, empty_char)?;
             let mut char_objects = catalog.char_objects.clone();
             char_objects.extend(body.local_char_objects);
-            let parsed = parse_level(&game, &body.lines, Some(empty_char), &char_objects, &[])?;
+            let parsed = crate::level::parse_level(
+                &game,
+                &body.lines,
+                Some(empty_char),
+                &char_objects,
+                &[],
+            );
+            recognition.merge(parsed.recognition);
+            let parsed = parsed.value?;
             Ok::<_, DiagnosticReport>(LevelEditorIntegratedLevel {
                 source_level_index,
                 name: level.name,
@@ -624,21 +630,21 @@ fn integrate_level_editor_document_parts(
             Err(report) => diagnostics.push(format!("level `{level_name}`: {report}")),
         }
     }
-    Ok(LevelEditorIntegration {
+    Ok(crate::surface::ParseProduct::new(LevelEditorIntegration {
         catalog,
         empty_char: Some(empty_char),
         visuals,
         levels,
         diagnostics,
-    })
+    }, recognition))
 }
 
 fn parse_editor_puzzle_catalog(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     catalog: &mut Catalog,
     strict: bool,
-) -> Result<(usize, Vec<PendingLevelBlock>, Vec<usize>, u16), DiagnosticReport> {
+) -> Result<(usize, Vec<usize>, u16), DiagnosticReport> {
     if let Err(error) = collect_puzzle_tag_declarations(lines, start + 1, catalog)
         && strict
     {
@@ -652,10 +658,6 @@ fn parse_editor_puzzle_catalog(
     let mut resolved_groups = HashSet::<String>::new();
     let mut named_layers = HashMap::<String, u16>::new();
     let mut layer_count = None::<u16>;
-    let puzzle_name = split_header_tokens(&lines[start])
-        .get(1)
-        .map(|name| (*name).to_string());
-    let mut pending_level_blocks = Vec::<PendingLevelBlock>::new();
     let mut pending_visual_blocks = Vec::<usize>::new();
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
@@ -723,11 +725,9 @@ fn parse_editor_puzzle_catalog(
                 }
             }
             puzzle_authoring::PuzzleDirectiveSurface::Levels => {
-                pending_level_blocks.push(PendingLevelBlock::levels(i, puzzle_name.clone()));
                 i = collect_levels_authoring_entry(lines, i)?.1;
             }
             puzzle_authoring::PuzzleDirectiveSurface::Level => {
-                pending_level_blocks.push(PendingLevelBlock::level(i, puzzle_name.clone()));
                 i = parse_level_block(lines, i, 0)?.1;
             }
             puzzle_authoring::PuzzleDirectiveSurface::Sprites => {
@@ -765,14 +765,13 @@ fn parse_editor_puzzle_catalog(
     }
     Ok((
         i.saturating_add(1),
-        pending_level_blocks,
         pending_visual_blocks,
         layer_count.unwrap_or(0),
     ))
 }
 
 fn parse_tags_block(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     catalog: &mut Catalog,
 ) -> Result<usize, DiagnosticReport> {
@@ -795,7 +794,7 @@ fn parse_tags_block(
 }
 
 fn collect_puzzle_tag_declarations(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     catalog: &mut Catalog,
 ) -> Result<(), DiagnosticReport> {
@@ -818,7 +817,7 @@ fn collect_puzzle_tag_declarations(
     Ok(())
 }
 
-fn skip_tags_block(lines: &[String], start: usize) -> Result<usize, DiagnosticReport> {
+fn skip_tags_block(lines: &[source::LogicalLine], start: usize) -> Result<usize, DiagnosticReport> {
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
         i += 1;
@@ -1404,7 +1403,7 @@ fn push_terms(objects: &mut Vec<ObjectId>, terms: &[ObjectId]) {
 }
 
 fn parse_mark_block(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     catalog: &mut Catalog,
 ) -> Result<usize, DiagnosticReport> {
@@ -1484,7 +1483,7 @@ fn parse_mark_directive(
 }
 
 fn parse_layers_block(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     named_layers: &mut HashMap<String, u16>,
     layer_count: &mut Option<u16>,
@@ -1521,7 +1520,7 @@ fn parse_layers_block(
                 for value in &values {
                     let mut expanded_lines =
                         expand_for_binding_lines(&body_lines, binding, value, &catalog.maps)?;
-                    expanded_lines.push(BLOCK_CLOSE.to_string());
+                    expanded_lines.push(source::LogicalLine::new(BLOCK_CLOSE, lines[i].line));
                     let parsed_i = parse_layers_block(
                         &expanded_lines,
                         0,
@@ -1594,7 +1593,7 @@ fn parse_layers_block(
 }
 
 fn predeclare_layer_block_objects(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     pending_groups: &[PendingGroupDefinition],
     catalog: &mut Catalog,
@@ -1614,7 +1613,7 @@ fn predeclare_layer_block_objects(
 }
 
 fn collect_layer_block_terms(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     pending_groups: &[PendingGroupDefinition],
     catalog: &Catalog,
@@ -1642,7 +1641,7 @@ fn collect_layer_block_terms(
                 for value in &values {
                     let mut expanded_lines =
                         expand_for_binding_lines(&body_lines, binding, value, &catalog.maps)?;
-                    expanded_lines.push(BLOCK_CLOSE.to_string());
+                    expanded_lines.push(source::LogicalLine::new(BLOCK_CLOSE, lines[i].line));
                     let parsed_i = collect_layer_block_terms(
                         &expanded_lines,
                         0,
@@ -2127,68 +2126,6 @@ fn selector_name_conflicts_with(
             .is_some_and(|(base, _)| conflicts(base))
 }
 
-fn parse_legend_block(
-    lines: &[String],
-    start: usize,
-    catalog: &mut Catalog,
-    render_overlays: &mut OverlayDefs,
-    empty_char: &mut Option<char>,
-) -> Result<usize, DiagnosticReport> {
-    let block = puzzle_authoring::collect_row_block_surface(lines, start + 1, "legend")
-        .map_err(|error| parse_error(&lines[start], error.message()))?;
-    for line in block.rows {
-        parse_legend_block_row(line, catalog, render_overlays, empty_char)?;
-    }
-    Ok(block.next_index)
-}
-
-fn parse_legend_block_row(
-    line: &str,
-    catalog: &mut Catalog,
-    render_overlays: &mut OverlayDefs,
-    empty_char: &mut Option<char>,
-) -> Result<(), DiagnosticReport> {
-    let Some(assignment) = puzzle_authoring::selector_assignment_surface(line) else {
-        return Err(parse_error(
-            line,
-            "legend row must be: <char> = <empty | selector...>",
-        ));
-    };
-
-    let ch = parse_char(Some(&assignment.name), line, "missing legend char")?;
-    if assignment.selectors == ["empty"] {
-        if ch != '.' {
-            return Err(parse_error(
-                line,
-                "levels use `.` for empty; remove the non-dot empty legend row",
-            ));
-        }
-        *empty_char = Some(ch);
-        return Ok(());
-    }
-    if ch == '.' {
-        return Err(parse_error(
-            line,
-            "levels reserve `.` for empty; use another legend char for objects",
-        ));
-    }
-
-    let mut directive_tokens = vec!["legend", assignment.name, "="];
-    directive_tokens.extend(assignment.selectors);
-    parse_legend_directive(
-        &directive_tokens,
-        line,
-        &catalog.object_names,
-        &catalog.object_schemas,
-        &catalog_value_sets(catalog),
-        &catalog.maps,
-        &catalog.object_groups,
-        &mut catalog.render_chars,
-        &mut catalog.char_objects,
-        render_overlays,
-    )
-}
-
 fn add_input_name(
     name: &str,
     line: &str,
@@ -2389,7 +2326,7 @@ fn directions_include_all_cardinals(
 }
 
 fn parse_command_definition(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     catalog: &mut Catalog,
 ) -> Result<(Option<Direction>, usize), DiagnosticReport> {

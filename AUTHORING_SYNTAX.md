@@ -93,6 +93,45 @@ button "Title" -> goto title
 }
 ```
 
+### Structural Conventions
+
+Blocks form an owner-scoped tree. A parent defines which child nodes, definition
+lines, and leaf-body forms it accepts. Unknown children, unsupported definitions,
+and invalid values are errors at that owner path. The containing owner, not the
+body's appearance, determines whether content is a sprite, grid, rule, or another
+leaf language.
+
+Definition lines have two structural forms:
+
+- `duration 90ms` and `colors #fff #000` are owner-defined bare settings. They
+  do not create a named slot merely by appearing in a block.
+- `yaw = 90deg` and `# = Wall` are assignment-shaped definitions. The owner
+  schema decides which namespace receives the left side and whether later syntax
+  may read or update it.
+
+Outside quoted strings, `=` is a separator token. The owner schema decides
+whether an assignment accepts one value or a value list; missing and extra
+values are errors when the schema does not allow them.
+
+A child node may be written on one line only by keeping its block boundary and
+separating internal lines with `;`:
+
+```puzzle
+A {
+  B <name> { setting = <value>; flag }
+}
+```
+
+Whitespace-only forms such as `A B <time>` or `A B=C D` are not generic inline
+nodes. Multiword directives such as `rotate from up`, ASCII sprites, rule
+patterns, level grids, and routine bodies are owner-specific leaf syntax rather
+than generic definitions. Only the owning grammar may interpret them.
+
+Declarations resolve against the complete owning scope rather than becoming
+available only after their source position. Owners whose items are ordered,
+such as levels, layout children, and rule statements, still preserve authored
+order for runtime or presentation meaning.
+
 ## Definition Syntax
 
 ### `title` / `subtitle` / `author` / `homepage`

@@ -313,6 +313,53 @@
     return faces;
   }
 
+  function averageMergedVoxels(voxels, parseColor, formatColor) {
+    const colors = voxels
+      .map((voxel) => voxel.color || parseColor(voxel.fill))
+      .filter((color) => color && color.a > 0);
+    if (!colors.length) {
+      return voxels[0];
+    }
+    const divisor = colors.length;
+    const color = colors.reduce((sum, candidate) => ({
+      r: sum.r + candidate.r,
+      g: sum.g + candidate.g,
+      b: sum.b + candidate.b,
+      a: sum.a + candidate.a,
+    }), { r: 0, g: 0, b: 0, a: 0 });
+    color.r /= divisor;
+    color.g /= divisor;
+    color.b /= divisor;
+    color.a /= divisor;
+    return {
+      ...voxels[0],
+      color,
+      fill: formatColor(color),
+      sourceKeys: voxels.flatMap((voxel) =>
+        voxel.sourceKey ? [voxel.sourceKey] : (voxel.sourceKeys || [])
+      ),
+    };
+  }
+
+  function objectPriority(order, object, fallbackIndex = 0) {
+    const name = String(object?.name || "");
+    const priority = order?.priorities?.findIndex((entry) =>
+      Array.isArray(entry.objects) && entry.objects.includes(name)
+    );
+    if (priority >= 0) {
+      return priority;
+    }
+    throw new Error(`compiled sprite order does not cover object: ${name || fallbackIndex}`);
+  }
+
+  function priorityDefinition(order, encodedPriority) {
+    const priorities = order?.priorities;
+    if (!Array.isArray(priorities) || priorities.length === 0) {
+      throw new Error("compiled sprite order contract is missing");
+    }
+    return priorities[encodedPriority % priorities.length];
+  }
+
   function rectsFromCells(cells) {
     const remaining = new Set(cells);
     const rects = [];
@@ -349,6 +396,7 @@
   }
 
   root.Puzzle3VisualCore = {
+    averageMergedVoxels,
     cameraModelFrame,
     cameraOrderKey,
     compareGridOrder,
@@ -357,6 +405,8 @@
     faceGridOrder,
     gridOrder,
     mergeVoxelFaces,
+    objectPriority,
+    priorityDefinition,
     projectOrthographic,
     rectsFromCells,
     stageFrameEdges,

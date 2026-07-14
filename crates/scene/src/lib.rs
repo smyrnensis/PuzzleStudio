@@ -1859,63 +1859,73 @@ impl std::fmt::Display for SceneBlockParseError {
 
 impl std::error::Error for SceneBlockParseError {}
 
-pub trait SceneBlockHandler {
+pub trait SceneBlockHandler<Line>
+where
+    Line: AsRef<str>,
+{
     type Error: From<SceneBlockParseError>;
 
-    fn parse_state_block(&mut self, lines: &[String], start: usize) -> Result<usize, Self::Error> {
-        let _ = lines;
-        Err(SceneBlockParseError::new(&lines[start], "unknown scene directive state").into())
-    }
-
-    fn parse_layout_block(&mut self, lines: &[String], start: usize) -> Result<usize, Self::Error>;
-
-    fn parse_inputs_block(&mut self, lines: &[String], start: usize) -> Result<usize, Self::Error> {
-        let _ = lines;
-        Err(SceneBlockParseError::new(&lines[start], "unknown scene directive inputs").into())
-    }
-
-    fn parse_keys_block(&mut self, lines: &[String], start: usize) -> Result<usize, Self::Error> {
-        let _ = lines;
-        Err(SceneBlockParseError::new(&lines[start], "unknown scene directive keys").into())
-    }
-
-    fn parse_rules_block(&mut self, lines: &[String], start: usize) -> Result<usize, Self::Error> {
-        let _ = lines;
-        Err(SceneBlockParseError::new(&lines[start], "unknown scene directive rules").into())
-    }
-
-    fn parse_scene_start_block(
-        &mut self,
-        lines: &[String],
-        start: usize,
-    ) -> Result<usize, Self::Error> {
-        let _ = lines;
+    fn parse_state_block(&mut self, lines: &[Line], start: usize) -> Result<usize, Self::Error> {
         Err(
-            SceneBlockParseError::new(&lines[start], "unknown scene directive on_scene_start")
+            SceneBlockParseError::new(lines[start].as_ref(), "unknown scene directive state")
                 .into(),
         )
     }
 
+    fn parse_layout_block(&mut self, lines: &[Line], start: usize) -> Result<usize, Self::Error>;
+
+    fn parse_inputs_block(&mut self, lines: &[Line], start: usize) -> Result<usize, Self::Error> {
+        Err(
+            SceneBlockParseError::new(lines[start].as_ref(), "unknown scene directive inputs")
+                .into(),
+        )
+    }
+
+    fn parse_keys_block(&mut self, lines: &[Line], start: usize) -> Result<usize, Self::Error> {
+        Err(SceneBlockParseError::new(lines[start].as_ref(), "unknown scene directive keys").into())
+    }
+
+    fn parse_rules_block(&mut self, lines: &[Line], start: usize) -> Result<usize, Self::Error> {
+        Err(
+            SceneBlockParseError::new(lines[start].as_ref(), "unknown scene directive rules")
+                .into(),
+        )
+    }
+
+    fn parse_scene_start_block(
+        &mut self,
+        lines: &[Line],
+        start: usize,
+    ) -> Result<usize, Self::Error> {
+        let _ = lines;
+        Err(SceneBlockParseError::new(
+            lines[start].as_ref(),
+            "unknown scene directive on_scene_start",
+        )
+        .into())
+    }
+
     fn parse_inline_directive(
         &mut self,
-        lines: &[String],
+        lines: &[Line],
         start: usize,
     ) -> Result<usize, Self::Error>;
 }
 
-pub fn parse_scene_block_with_handler<Handler>(
-    lines: &[String],
+pub fn parse_scene_block_with_handler<Line, Handler>(
+    lines: &[Line],
     start: usize,
     scene_name: &str,
     syntax: SceneBlockSyntax,
     handler: &mut Handler,
 ) -> Result<usize, Handler::Error>
 where
-    Handler: SceneBlockHandler,
+    Line: AsRef<str>,
+    Handler: SceneBlockHandler<Line>,
 {
     let mut index = start;
     while index < lines.len() {
-        let line = &lines[index];
+        let line = lines[index].as_ref();
         if line == syntax.close_token() {
             return Ok(index + 1);
         }
@@ -1967,8 +1977,8 @@ pub fn parse_scene_layout_header(
         .map_err(|error| SceneBlockParseError::new(line, error.message))
 }
 
-pub fn parse_scene_component_block<Component, Error, ParseLeaf, BuildContainer>(
-    lines: &[String],
+pub fn parse_scene_component_block<Line, Component, Error, ParseLeaf, BuildContainer>(
+    lines: &[Line],
     start: usize,
     block_name: &str,
     syntax: SceneBlockSyntax,
@@ -1977,13 +1987,14 @@ pub fn parse_scene_component_block<Component, Error, ParseLeaf, BuildContainer>(
 ) -> Result<(usize, Vec<Component>), Error>
 where
     Error: From<SceneBlockParseError>,
-    ParseLeaf: FnMut(&[String], usize) -> Result<(usize, Component), Error>,
+    Line: AsRef<str>,
+    ParseLeaf: FnMut(&[Line], usize) -> Result<(usize, Component), Error>,
     BuildContainer: Fn(SceneComponentKind, Vec<Component>, SceneLayout) -> Component,
 {
     let mut components = Vec::new();
     let mut index = start;
     while index < lines.len() {
-        let line = &lines[index];
+        let line = lines[index].as_ref();
         if line == syntax.close_token() {
             return Ok((index + 1, components));
         }
@@ -2003,8 +2014,8 @@ where
     .into())
 }
 
-pub fn parse_scene_component_at<Component, Error, ParseLeaf, BuildContainer>(
-    lines: &[String],
+pub fn parse_scene_component_at<Line, Component, Error, ParseLeaf, BuildContainer>(
+    lines: &[Line],
     index: usize,
     syntax: SceneBlockSyntax,
     parse_leaf: &mut ParseLeaf,
@@ -2012,10 +2023,11 @@ pub fn parse_scene_component_at<Component, Error, ParseLeaf, BuildContainer>(
 ) -> Result<(usize, Component), Error>
 where
     Error: From<SceneBlockParseError>,
-    ParseLeaf: FnMut(&[String], usize) -> Result<(usize, Component), Error>,
+    Line: AsRef<str>,
+    ParseLeaf: FnMut(&[Line], usize) -> Result<(usize, Component), Error>,
     BuildContainer: Fn(SceneComponentKind, Vec<Component>, SceneLayout) -> Component,
 {
-    let line = &lines[index];
+    let line = lines[index].as_ref();
     let Some(kind) = scene_container_kind_from_header(line, syntax)? else {
         return parse_leaf(lines, index);
     };

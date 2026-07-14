@@ -18,6 +18,7 @@ pub(crate) struct ParserRecognition {
     pub(crate) semantic_tokens: Vec<SurfaceSemanticToken>,
     pub(crate) display_facts: Vec<SurfaceDisplayFact>,
     pub(crate) completion_symbols: SurfaceCompletionSymbols,
+    pub(crate) visual_sprite_refs: SurfaceVisualSpriteRefs,
 }
 
 impl ParserRecognition {
@@ -28,14 +29,72 @@ impl ParserRecognition {
         }
     }
 
+    pub(crate) fn mark_assignment(
+        &mut self,
+        line: &LogicalLine,
+        name: &str,
+        name_kind: SurfaceSemanticKind,
+        value: &str,
+        value_kind: SurfaceSemanticKind,
+    ) {
+        for token in &line.tokens {
+            if token.text == name {
+                self.mark(
+                    SourceSpan {
+                        start: token.start,
+                        end: token.end,
+                    },
+                    name_kind,
+                );
+            }
+            if token.text == value {
+                self.mark(
+                    SourceSpan {
+                        start: token.start,
+                        end: token.end,
+                    },
+                    value_kind,
+                );
+            }
+            if let Some((token_name, token_value)) = token.text.split_once('=') {
+                if token_name == name {
+                    self.mark(
+                        SourceSpan {
+                            start: token.start,
+                            end: token.start + token_name.len(),
+                        },
+                        name_kind,
+                    );
+                }
+                if token_value == value {
+                    self.mark(
+                        SourceSpan {
+                            start: token.end - token_value.len(),
+                            end: token.end,
+                        },
+                        value_kind,
+                    );
+                }
+            }
+        }
+    }
+
     pub(crate) fn finish(mut self) -> Self {
         self.semantic_tokens
             .sort_by_key(|token| (token.span.start, token.span.end));
+        self.semantic_tokens.dedup();
         self.display_facts.sort_by_key(|fact| {
             let span = fact.span();
             (span.start, span.end)
         });
         self
+    }
+
+    pub(crate) fn merge(&mut self, other: ParserRecognition) {
+        self.semantic_tokens.extend(other.semantic_tokens);
+        self.display_facts.extend(other.display_facts);
+        self.completion_symbols.merge(other.completion_symbols);
+        self.visual_sprite_refs.merge(other.visual_sprite_refs);
     }
 
     pub(crate) fn shift_offsets(&mut self, threshold: usize, delta: i64) {
@@ -47,7 +106,8 @@ impl ParserRecognition {
                 SurfaceDisplayFact::LevelCell { span, .. }
                 | SurfaceDisplayFact::SpritePixel { span, .. }
                 | SurfaceDisplayFact::Color { span, .. }
-                | SurfaceDisplayFact::Separator { span } => {
+                | SurfaceDisplayFact::LevelSeparator { span }
+                | SurfaceDisplayFact::SpriteSeparator { span } => {
                     shift_span(span, threshold, delta);
                 }
             }
@@ -89,9 +149,6 @@ pub(crate) enum SurfaceSemanticKind {
     Object,
     Input,
     State,
-    Group,
-    Mark,
-    Variant,
     Condition,
     Scene,
     Theme,
@@ -199,7 +256,10 @@ pub(crate) enum SurfaceDisplayFact {
         span: SourceSpan,
         color: String,
     },
-    Separator {
+    LevelSeparator {
+        span: SourceSpan,
+    },
+    SpriteSeparator {
         span: SourceSpan,
     },
 }
@@ -210,7 +270,8 @@ impl SurfaceDisplayFact {
             Self::LevelCell { span, .. }
             | Self::SpritePixel { span, .. }
             | Self::Color { span, .. }
-            | Self::Separator { span } => *span,
+            | Self::LevelSeparator { span }
+            | Self::SpriteSeparator { span } => *span,
         }
     }
 }
@@ -307,6 +368,12 @@ impl SurfaceSink {
             .merge(recognition.completion_symbols.clone());
     }
 
+    pub(crate) fn project_parser_visual_refs(&mut self, recognition: &ParserRecognition) {
+        self.document
+            .visual_sprite_refs
+            .merge(recognition.visual_sprite_refs.clone());
+    }
+
     pub(crate) fn line(
         &mut self,
         tokens: Vec<String>,
@@ -356,10 +423,6 @@ impl SurfaceSink {
 
     pub(crate) fn set_highlight_ranges(&mut self, ranges: SurfaceHighlightRanges) {
         self.document.highlight_ranges.merge(ranges);
-    }
-
-    pub(crate) fn visual_sprite_refs_mut(&mut self) -> &mut SurfaceVisualSpriteRefs {
-        &mut self.document.visual_sprite_refs
     }
 
     pub(crate) fn into_document(mut self) -> SurfaceDocument {

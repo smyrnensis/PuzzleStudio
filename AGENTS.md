@@ -1,19 +1,20 @@
 # Agent Notes
 
-This file gives repository-wide rules for agents changing this project.
-Read `DESIGN_PRINCIPLES.md` for the project philosophy and `AGENT_HANDOFF.md`
-for the general implementation map before making changes.
+This file gives repository-wide rules for agents changing this project. Read it
+before making changes, then read the nearest `AGENTS.md` for every area you will
+touch. Area-specific guidance belongs beside its owner rather than in root docs.
 
-For area-specific rules, read the nearest `AGENTS.md` in the directory you are
-about to change. Root docs intentionally stay general; crate-, adapter-, sample-,
-and generated-artifact-specific guidance belongs beside the owner folder.
+Consult `DESIGN_PRINCIPLES.md` when work changes product semantics, authoring
+concepts, or a boundary shared by multiple owners. Consult `AGENT_HANDOFF.md`
+when you need the repository map or do not yet know which owner to inspect.
+Neither document is a mandatory pre-read for an unrelated local change.
 
 ## Read First And Stay Honest
 
-Before changing this repository, read this file, `DESIGN_PRINCIPLES.md`, and
-`AGENT_HANDOFF.md`. Then read the closest owner-specific `AGENTS.md` for the
-files you will touch. Do not claim to have read or verified something unless you
-actually did.
+Before changing this repository, read this file and the closest owner-specific
+`AGENTS.md` for the files you will touch. Read the additional documents routed
+above when the task crosses their scope. Do not claim to have read or verified
+something unless you actually did.
 
 Be explicit about capability and uncertainty:
 

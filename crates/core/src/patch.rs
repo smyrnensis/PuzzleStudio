@@ -1,85 +1,121 @@
-use crate::compiled_game::{CompiledGame, MarkValueMatch, VariableUpdateOp};
+use crate::compiled_game::{MarkValueMatch, VariableUpdateOp};
 use crate::ids::{LayerId, MarkId, ObjectId, VariableId};
-use crate::state::{State, StateError};
-use puzzle_kernel::{GridCoord, GridPatchOp};
+use crate::state::{GridSize, GridState, GridStateError};
+use puzzle_kernel::{CompiledGameModel, GridCoord, GridPatchOp};
 
-#[derive(Clone, Debug, Default)]
-pub struct Patch {
-    core: CorePatch,
-    ops: Vec<PatchOp>,
-}
-
-pub(crate) type CorePatchOp = GridPatchOp<GridCoord<2>, ObjectId, VariableId, MarkId>;
+pub type PatchOp<const D: usize = 2> = GridPatchOp<GridCoord<D>, ObjectId, VariableId, MarkId>;
+pub type Patch = GridPatch<2>;
+pub type PatchError = GridPatchError<2>;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct CorePatch {
-    pub(crate) ops: Vec<CorePatchOp>,
+pub struct GridPatch<const D: usize> {
+    ops: Vec<PatchOp<D>>,
 }
 
-impl CorePatch {
-    pub(crate) fn new() -> Self {
-        Self::default()
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GridPatchError<const D: usize> {
+    State(GridStateError<D>),
+    UnknownObject {
+        object: ObjectId,
+    },
+    ExpectedObject {
+        position: GridCoord<D>,
+        layer: LayerId,
+        expected: ObjectId,
+        found: ObjectId,
+    },
+    LayerOccupied {
+        position: GridCoord<D>,
+        layer: LayerId,
+        existing: ObjectId,
+        attempted: ObjectId,
+    },
+}
+
+impl<const D: usize> From<GridStateError<D>> for GridPatchError<D> {
+    fn from(value: GridStateError<D>) -> Self {
+        Self::State(value)
+    }
+}
+
+impl<const D: usize> GridPatch<D> {
+    pub fn new() -> Self {
+        Self { ops: Vec::new() }
     }
 
-    pub(crate) fn push(&mut self, op: CorePatchOp) {
+    pub fn from_ops(ops: Vec<PatchOp<D>>) -> Self {
+        Self { ops }
+    }
+
+    pub fn push(&mut self, op: PatchOp<D>) {
         self.ops.push(op);
     }
 
-    pub(crate) fn apply_in_place(
-        &self,
-        game: &CompiledGame,
-        state: &mut State,
-    ) -> Result<bool, PatchError> {
-        let changed = self.validate(game, state)?;
+    pub fn is_empty(&self) -> bool {
+        self.ops.is_empty()
+    }
 
+    pub fn ops(&self) -> &[PatchOp<D>] {
+        &self.ops
+    }
+
+    pub fn apply<Size, ConditionDef, Rule, Condition, Frame>(
+        &self,
+        game: &CompiledGameModel<ConditionDef, Rule, Condition, Frame>,
+        state: &GridState<D, Size>,
+    ) -> Result<GridState<D, Size>, GridPatchError<D>>
+    where
+        Size: GridSize<D>,
+    {
+        let mut next = state.clone();
+        self.apply_in_place(game, &mut next)?;
+        Ok(next)
+    }
+
+    pub fn apply_in_place<Size, ConditionDef, Rule, Condition, Frame>(
+        &self,
+        game: &CompiledGameModel<ConditionDef, Rule, Condition, Frame>,
+        state: &mut GridState<D, Size>,
+    ) -> Result<bool, GridPatchError<D>>
+    where
+        Size: GridSize<D>,
+    {
+        let changed = self.validate(game, state)?;
         apply_moves(game, state, &self.ops)?;
 
         for op in &self.ops {
             match *op {
-                CorePatchOp::Add { position, object } => {
-                    let (x, y) = coord_xy(position);
-                    apply_add(game, state, x, y, object)?;
+                PatchOp::Add { position, object } => apply_add(game, state, position, object)?,
+                PatchOp::Remove { position, object } => {
+                    apply_remove(game, state, position, object)?
                 }
-                CorePatchOp::Remove { position, object } => {
-                    let (x, y) = coord_xy(position);
-                    apply_remove(game, state, x, y, object)?;
-                }
-                CorePatchOp::Move { .. } => {}
-                CorePatchOp::Replace {
+                PatchOp::Move { .. } => {}
+                PatchOp::Replace {
                     position,
                     remove,
                     add,
                 } => {
-                    let (x, y) = coord_xy(position);
-                    apply_remove(game, state, x, y, remove)?;
-                    apply_add(game, state, x, y, add)?;
+                    apply_remove(game, state, position, remove)?;
+                    apply_add(game, state, position, add)?;
                 }
-                CorePatchOp::UpdateVariable {
+                PatchOp::UpdateVariable {
                     variable,
                     op,
                     value,
-                } => {
-                    state.update_visible_variable(variable, op, value)?;
-                }
-                CorePatchOp::SetMark {
+                } => state.update_visible_variable(variable, op, value)?,
+                PatchOp::SetMark {
                     position,
                     object,
                     mark,
                     value,
-                } => {
-                    let (x, y) = coord_xy(position);
-                    apply_set_mark(game, state, x, y, object, mark, value)?;
-                }
-                CorePatchOp::RemoveMark {
+                } => apply_set_mark(game, state, position, object, mark, value)?,
+                PatchOp::RemoveMark {
                     position,
                     object,
                     mark,
                     value,
                     match_value,
-                } => {
-                    let (x, y) = coord_xy(position);
-                    apply_remove_mark(game, state, x, y, object, mark, value, match_value)?;
-                }
+                } => apply_remove_mark(game, state, position, object, mark, value, match_value)?,
             }
         }
 
@@ -87,76 +123,70 @@ impl CorePatch {
         Ok(changed)
     }
 
-    pub(crate) fn validate(&self, game: &CompiledGame, state: &State) -> Result<bool, PatchError> {
+    pub fn validate<Size, ConditionDef, Rule, Condition, Frame>(
+        &self,
+        game: &CompiledGameModel<ConditionDef, Rule, Condition, Frame>,
+        state: &GridState<D, Size>,
+    ) -> Result<bool, GridPatchError<D>>
+    where
+        Size: GridSize<D>,
+    {
         let mut slots = SlotOverlay::new();
         validate_moves(game, state, &self.ops, &mut slots)?;
-        let mut changed = slots.changed(game, state)?;
+        let mut changed = slots.changed(state)?;
 
         for op in &self.ops {
             match *op {
-                CorePatchOp::Add { position, object } => {
-                    let (x, y) = coord_xy(position);
-                    let layer = game
-                        .object_layer(object)
-                        .ok_or(PatchError::UnknownObject { object })?;
-                    let existing = slots.get(game, state, x, y, layer)?;
+                PatchOp::Add { position, object } => {
+                    let layer = object_layer(game, object)?;
+                    let existing = slots.get(state, position, layer)?;
                     if existing == object {
                         continue;
                     }
-                    slots.set(x, y, layer, object);
+                    slots.set(position, layer, object);
                     changed = true;
                 }
-                CorePatchOp::Remove { position, object } => {
-                    let (x, y) = coord_xy(position);
-                    let layer = game
-                        .object_layer(object)
-                        .ok_or(PatchError::UnknownObject { object })?;
-                    let found = slots.get(game, state, x, y, layer)?;
+                PatchOp::Remove { position, object } => {
+                    let layer = object_layer(game, object)?;
+                    let found = slots.get(state, position, layer)?;
                     if found != object {
-                        return Err(PatchError::ExpectedObject {
-                            x,
-                            y,
+                        return Err(GridPatchError::ExpectedObject {
+                            position,
                             layer,
                             expected: object,
                             found,
                         });
                     }
-                    slots.set(x, y, layer, ObjectId::EMPTY);
+                    slots.set(position, layer, ObjectId::EMPTY);
                     changed = true;
                 }
-                CorePatchOp::Move { .. } => {}
-                CorePatchOp::Replace {
+                PatchOp::Move { .. } => {}
+                PatchOp::Replace {
                     position,
                     remove,
                     add,
                 } => {
-                    let (x, y) = coord_xy(position);
-                    let remove_layer = game
-                        .object_layer(remove)
-                        .ok_or(PatchError::UnknownObject { object: remove })?;
-                    let found = slots.get(game, state, x, y, remove_layer)?;
+                    let remove_layer = object_layer(game, remove)?;
+                    let found = slots.get(state, position, remove_layer)?;
                     if found != remove {
-                        return Err(PatchError::ExpectedObject {
-                            x,
-                            y,
+                        return Err(GridPatchError::ExpectedObject {
+                            position,
                             layer: remove_layer,
                             expected: remove,
                             found,
                         });
                     }
-                    slots.set(x, y, remove_layer, ObjectId::EMPTY);
+                    slots.set(position, remove_layer, ObjectId::EMPTY);
 
-                    let add_layer = game
-                        .object_layer(add)
-                        .ok_or(PatchError::UnknownObject { object: add })?;
-                    let existing = slots.get(game, state, x, y, add_layer)?;
+                    let add_layer = object_layer(game, add)?;
+                    let existing = slots.get(state, position, add_layer)?;
                     if existing == add {
                         continue;
                     }
-                    slots.set(x, y, add_layer, add);
+                    slots.set(position, add_layer, add);
                     changed = true;
                 }
-                CorePatchOp::UpdateVariable {
+                PatchOp::UpdateVariable {
                     variable,
                     op,
                     value,
@@ -164,73 +194,73 @@ impl CorePatch {
                     let next = validate_variable_update(state, variable, op, value)?;
                     changed |= state.variable_value(variable) != Some(next);
                 }
-                CorePatchOp::SetMark {
+                PatchOp::SetMark {
                     position,
                     object,
                     mark,
                     value,
                 } => {
-                    let (x, y) = coord_xy(position);
                     if object.is_empty() {
-                        changed |= !state.has_cell_mark(x, y, mark, value);
+                        changed |= !state.has_cell_mark_at(position, mark, value);
                     } else {
-                        let layer = expect_object_in_overlay(game, state, &slots, x, y, object)?;
+                        let layer =
+                            expect_object_in_overlay(game, state, &slots, position, object)?;
                         if state
-                            .get_layer(x, y, layer)
+                            .get_layer_at(position, layer)
                             .is_ok_and(|found| found == object)
                         {
-                            changed |= !state.has_mark(game, x, y, object, mark, value);
+                            changed |= !state.has_mark_at(game, position, object, mark, value);
                         } else {
                             changed = true;
                         }
                     }
                 }
-                CorePatchOp::RemoveMark {
+                PatchOp::RemoveMark {
                     position,
                     object,
                     mark,
                     value,
                     match_value,
                 } => {
-                    let (x, y) = coord_xy(position);
-                    let value = match match_value {
+                    let matched_value = match match_value {
                         MarkValueMatch::Any => None,
                         MarkValueMatch::Exact => value,
                     };
                     if object.is_empty() {
                         changed |= match match_value {
-                            MarkValueMatch::Any => state.has_cell_mark_key(x, y, mark),
-                            MarkValueMatch::Exact => state.has_cell_mark(x, y, mark, value),
+                            MarkValueMatch::Any => state.has_cell_mark_key_at(position, mark),
+                            MarkValueMatch::Exact => {
+                                state.has_cell_mark_at(position, mark, matched_value)
+                            }
                         };
                     } else {
-                        let layer = game
-                            .object_layer(object)
-                            .ok_or(PatchError::UnknownObject { object })?;
-                        let found = slots.get(game, state, x, y, layer)?;
+                        let layer = object_layer(game, object)?;
+                        let found = slots.get(state, position, layer)?;
                         if found != object {
                             if state
-                                .get_layer(x, y, layer)
+                                .get_layer_at(position, layer)
                                 .is_ok_and(|original| original == object)
                             {
                                 changed = true;
                                 continue;
                             }
-                            return Err(PatchError::ExpectedObject {
-                                x,
-                                y,
+                            return Err(GridPatchError::ExpectedObject {
+                                position,
                                 layer,
                                 expected: object,
                                 found,
                             });
                         }
                         if state
-                            .get_layer(x, y, layer)
+                            .get_layer_at(position, layer)
                             .is_ok_and(|found| found == object)
                         {
                             changed |= match match_value {
-                                MarkValueMatch::Any => state.has_mark_key(game, x, y, object, mark),
+                                MarkValueMatch::Any => {
+                                    state.has_mark_key_at(game, position, object, mark)
+                                }
                                 MarkValueMatch::Exact => {
-                                    state.has_mark(game, x, y, object, mark, value)
+                                    state.has_mark_at(game, position, object, mark, matched_value)
                                 }
                             };
                         } else {
@@ -241,398 +271,160 @@ impl CorePatch {
             }
         }
 
-        Ok(changed || slots.changed(game, state)?)
+        Ok(changed || slots.changed(state)?)
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum PatchOp {
-    Add {
-        x: u16,
-        y: u16,
-        object: ObjectId,
-    },
-    Remove {
-        x: u16,
-        y: u16,
-        object: ObjectId,
-    },
-    Move {
-        from_x: u16,
-        from_y: u16,
-        to_x: u16,
-        to_y: u16,
-        object: ObjectId,
-    },
-    Replace {
-        x: u16,
-        y: u16,
-        remove: ObjectId,
-        add: ObjectId,
-    },
-    UpdateVariable {
-        variable: VariableId,
-        op: VariableUpdateOp,
-        value: i64,
-    },
-    SetMark {
-        x: u16,
-        y: u16,
-        object: ObjectId,
-        mark: MarkId,
-        value: Option<i64>,
-    },
-    RemoveMark {
-        x: u16,
-        y: u16,
-        object: ObjectId,
-        mark: MarkId,
-        value: Option<i64>,
-        match_value: MarkValueMatch,
-    },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum PatchError {
-    State(StateError),
-    UnknownObject {
-        object: ObjectId,
-    },
-    ExpectedObject {
-        x: u16,
-        y: u16,
-        layer: LayerId,
-        expected: ObjectId,
-        found: ObjectId,
-    },
-    LayerOccupied {
-        x: u16,
-        y: u16,
-        layer: LayerId,
-        existing: ObjectId,
-        attempted: ObjectId,
-    },
-}
-
-impl From<StateError> for PatchError {
-    fn from(value: StateError) -> Self {
-        Self::State(value)
-    }
-}
-
-impl Patch {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn ops(&self) -> &[PatchOp] {
-        &self.ops
-    }
-
-    pub fn from_ops(ops: Vec<PatchOp>) -> Self {
-        Self {
-            core: CorePatch {
-                ops: ops.iter().cloned().map(CorePatchOp::from).collect(),
-            },
-            ops,
-        }
-    }
-
-    pub(crate) fn from_core(core: CorePatch) -> Self {
-        let ops = core.ops.iter().cloned().map(PatchOp::from).collect();
-        Self { core, ops }
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn to_core(&self) -> CorePatch {
-        self.core.clone()
-    }
-
-    pub fn apply(&self, game: &CompiledGame, state: &State) -> Result<State, PatchError> {
-        let mut next = state.clone();
-        self.apply_in_place(game, &mut next)?;
-        Ok(next)
-    }
-
-    pub(crate) fn apply_in_place(
-        &self,
-        game: &CompiledGame,
-        state: &mut State,
-    ) -> Result<bool, PatchError> {
-        self.core.apply_in_place(game, state)
-    }
-
-    pub(crate) fn validate(&self, game: &CompiledGame, state: &State) -> Result<bool, PatchError> {
-        self.core.validate(game, state)
-    }
-}
-
-impl From<CorePatchOp> for PatchOp {
-    fn from(value: CorePatchOp) -> Self {
-        match value {
-            CorePatchOp::Add { position, object } => {
-                let [x, y] = position.axes();
-                Self::Add { x, y, object }
-            }
-            CorePatchOp::Remove { position, object } => {
-                let [x, y] = position.axes();
-                Self::Remove { x, y, object }
-            }
-            CorePatchOp::Move { from, to, object } => {
-                let [from_x, from_y] = from.axes();
-                let [to_x, to_y] = to.axes();
-                Self::Move {
-                    from_x,
-                    from_y,
-                    to_x,
-                    to_y,
-                    object,
-                }
-            }
-            CorePatchOp::Replace {
-                position,
-                remove,
-                add,
-            } => {
-                let [x, y] = position.axes();
-                Self::Replace { x, y, remove, add }
-            }
-            CorePatchOp::UpdateVariable {
-                variable,
-                op,
-                value,
-            } => Self::UpdateVariable {
-                variable,
-                op,
-                value,
-            },
-            CorePatchOp::SetMark {
-                position,
-                object,
-                mark,
-                value,
-            } => {
-                let [x, y] = position.axes();
-                Self::SetMark {
-                    x,
-                    y,
-                    object,
-                    mark,
-                    value,
-                }
-            }
-            CorePatchOp::RemoveMark {
-                position,
-                object,
-                mark,
-                value,
-                match_value,
-            } => {
-                let [x, y] = position.axes();
-                Self::RemoveMark {
-                    x,
-                    y,
-                    object,
-                    mark,
-                    value,
-                    match_value,
-                }
-            }
-        }
-    }
-}
-
-impl From<PatchOp> for CorePatchOp {
-    fn from(value: PatchOp) -> Self {
-        match value {
-            PatchOp::Add { x, y, object } => Self::Add {
-                position: GridCoord::new([x, y]),
-                object,
-            },
-            PatchOp::Remove { x, y, object } => Self::Remove {
-                position: GridCoord::new([x, y]),
-                object,
-            },
-            PatchOp::Move {
-                from_x,
-                from_y,
-                to_x,
-                to_y,
-                object,
-            } => Self::Move {
-                from: GridCoord::new([from_x, from_y]),
-                to: GridCoord::new([to_x, to_y]),
-                object,
-            },
-            PatchOp::Replace { x, y, remove, add } => Self::Replace {
-                position: GridCoord::new([x, y]),
-                remove,
-                add,
-            },
-            PatchOp::UpdateVariable {
-                variable,
-                op,
-                value,
-            } => Self::UpdateVariable {
-                variable,
-                op,
-                value,
-            },
-            PatchOp::SetMark {
-                x,
-                y,
-                object,
-                mark,
-                value,
-            } => Self::SetMark {
-                position: GridCoord::new([x, y]),
-                object,
-                mark,
-                value,
-            },
-            PatchOp::RemoveMark {
-                x,
-                y,
-                object,
-                mark,
-                value,
-                match_value,
-            } => Self::RemoveMark {
-                position: GridCoord::new([x, y]),
-                object,
-                mark,
-                value,
-                match_value,
-            },
-        }
-    }
-}
-
-fn coord_xy(coord: GridCoord<2>) -> (u16, u16) {
-    let [x, y] = coord.axes();
-    (x, y)
 }
 
 #[derive(Default)]
-struct SlotOverlay {
-    slots: Vec<(u16, u16, LayerId, ObjectId)>,
+struct SlotOverlay<const D: usize> {
+    slots: Vec<(GridCoord<D>, LayerId, ObjectId)>,
 }
 
-impl SlotOverlay {
+impl<const D: usize> SlotOverlay<D> {
     fn new() -> Self {
-        Self::default()
+        Self { slots: Vec::new() }
     }
 
-    fn get(
+    fn get<Size: GridSize<D>>(
         &self,
-        _game: &CompiledGame,
-        state: &State,
-        x: u16,
-        y: u16,
+        state: &GridState<D, Size>,
+        position: GridCoord<D>,
         layer: LayerId,
-    ) -> Result<ObjectId, PatchError> {
+    ) -> Result<ObjectId, GridPatchError<D>> {
         self.slots
             .iter()
             .rev()
-            .find_map(|(slot_x, slot_y, slot_layer, object)| {
-                (*slot_x == x && *slot_y == y && *slot_layer == layer).then_some(*object)
+            .find_map(|(slot_position, slot_layer, object)| {
+                (*slot_position == position && *slot_layer == layer).then_some(*object)
             })
             .map(Ok)
-            .unwrap_or_else(|| state.get_layer(x, y, layer).map_err(PatchError::from))
+            .unwrap_or_else(|| {
+                state
+                    .get_layer_at(position, layer)
+                    .map_err(GridPatchError::from)
+            })
     }
 
-    fn set(&mut self, x: u16, y: u16, layer: LayerId, object: ObjectId) {
-        if let Some((_, _, _, existing)) =
+    fn set(&mut self, position: GridCoord<D>, layer: LayerId, object: ObjectId) {
+        if let Some((_, _, existing)) =
             self.slots
                 .iter_mut()
                 .rev()
-                .find(|(slot_x, slot_y, slot_layer, _)| {
-                    *slot_x == x && *slot_y == y && *slot_layer == layer
+                .find(|(slot_position, slot_layer, _)| {
+                    *slot_position == position && *slot_layer == layer
                 })
         {
             *existing = object;
             return;
         }
-        self.slots.push((x, y, layer, object));
+        self.slots.push((position, layer, object));
     }
 
-    fn changed(&self, _game: &CompiledGame, state: &State) -> Result<bool, PatchError> {
+    fn changed<Size: GridSize<D>>(
+        &self,
+        state: &GridState<D, Size>,
+    ) -> Result<bool, GridPatchError<D>> {
         self.slots
             .iter()
-            .try_fold(false, |changed, (x, y, layer, object)| {
-                Ok(changed || state.get_layer(*x, *y, *layer)? != *object)
+            .try_fold(false, |changed, (position, layer, object)| {
+                Ok(changed || state.get_layer_at(*position, *layer)? != *object)
             })
     }
 }
 
-fn apply_add(
-    game: &CompiledGame,
-    state: &mut State,
-    x: u16,
-    y: u16,
+fn object_layer<ConditionDef, Rule, Condition, Frame, const D: usize>(
+    game: &CompiledGameModel<ConditionDef, Rule, Condition, Frame>,
     object: ObjectId,
-) -> Result<(), PatchError> {
-    let layer = game
-        .object_layer(object)
-        .ok_or(PatchError::UnknownObject { object })?;
-    let existing = state.get_layer(x, y, layer)?;
-    if existing == object {
-        return Ok(());
-    }
+) -> Result<LayerId, GridPatchError<D>> {
+    game.object_layer(object)
+        .ok_or(GridPatchError::UnknownObject { object })
+}
 
-    state.set_slot_unchecked(x, y, layer, object);
+fn apply_add<Size, ConditionDef, Rule, Condition, Frame, const D: usize>(
+    game: &CompiledGameModel<ConditionDef, Rule, Condition, Frame>,
+    state: &mut GridState<D, Size>,
+    position: GridCoord<D>,
+    object: ObjectId,
+) -> Result<(), GridPatchError<D>>
+where
+    Size: GridSize<D>,
+{
+    let layer = object_layer(game, object)?;
+    let existing = state.get_layer_at(position, layer)?;
+    if existing != object {
+        state.set_slot_unchecked(position, layer, object);
+    }
     Ok(())
 }
 
-fn validate_moves(
-    game: &CompiledGame,
-    state: &State,
-    ops: &[CorePatchOp],
-    slots: &mut SlotOverlay,
-) -> Result<(), PatchError> {
+fn apply_remove<Size, ConditionDef, Rule, Condition, Frame, const D: usize>(
+    game: &CompiledGameModel<ConditionDef, Rule, Condition, Frame>,
+    state: &mut GridState<D, Size>,
+    position: GridCoord<D>,
+    object: ObjectId,
+) -> Result<(), GridPatchError<D>>
+where
+    Size: GridSize<D>,
+{
+    let layer = object_layer(game, object)?;
+    let found = state.get_layer_at(position, layer)?;
+    if found != object {
+        return Err(GridPatchError::ExpectedObject {
+            position,
+            layer,
+            expected: object,
+            found,
+        });
+    }
+    state.set_slot_unchecked(position, layer, ObjectId::EMPTY);
+    Ok(())
+}
+
+fn validate_moves<Size, ConditionDef, Rule, Condition, Frame, const D: usize>(
+    game: &CompiledGameModel<ConditionDef, Rule, Condition, Frame>,
+    state: &GridState<D, Size>,
+    ops: &[PatchOp<D>],
+    slots: &mut SlotOverlay<D>,
+) -> Result<(), GridPatchError<D>>
+where
+    Size: GridSize<D>,
+{
     let mut sources = Vec::new();
     let mut destinations = Vec::new();
     let mut moves = Vec::new();
 
     for op in ops {
-        let CorePatchOp::Move { from, to, object } = *op else {
+        let PatchOp::Move { from, to, object } = *op else {
             continue;
         };
-        let (from_x, from_y) = coord_xy(from);
-        let (to_x, to_y) = coord_xy(to);
-        let layer = game
-            .object_layer(object)
-            .ok_or(PatchError::UnknownObject { object })?;
-        let found = state.get_layer(from_x, from_y, layer)?;
+        let layer = object_layer(game, object)?;
+        let found = state.get_layer_at(from, layer)?;
         if found != object {
-            return Err(PatchError::ExpectedObject {
-                x: from_x,
-                y: from_y,
+            return Err(GridPatchError::ExpectedObject {
+                position: from,
                 layer,
                 expected: object,
                 found,
             });
         }
-        if destinations.contains(&(to_x, to_y, layer)) {
-            return Err(PatchError::LayerOccupied {
-                x: to_x,
-                y: to_y,
+        if destinations.contains(&(to, layer)) {
+            return Err(GridPatchError::LayerOccupied {
+                position: to,
                 layer,
                 existing: object,
                 attempted: object,
             });
         }
-        sources.push((from_x, from_y, layer));
-        destinations.push((to_x, to_y, layer));
-        moves.push((from_x, from_y, to_x, to_y, layer, object));
+        sources.push((from, layer));
+        destinations.push((to, layer));
+        moves.push((from, to, layer, object));
     }
 
-    for (_, _, to_x, to_y, layer, object) in &moves {
-        let existing = state.get_layer(*to_x, *to_y, *layer)?;
-        if !existing.is_empty() && !sources.contains(&(*to_x, *to_y, *layer)) {
-            return Err(PatchError::LayerOccupied {
-                x: *to_x,
-                y: *to_y,
+    for (_, to, layer, object) in &moves {
+        let existing = state.get_layer_at(*to, *layer)?;
+        if !existing.is_empty() && !sources.contains(&(*to, *layer)) {
+            return Err(GridPatchError::LayerOccupied {
+                position: *to,
                 layer: *layer,
                 existing,
                 attempted: *object,
@@ -640,89 +432,59 @@ fn validate_moves(
         }
     }
 
-    for (from_x, from_y, _, _, layer, _) in &moves {
-        slots.set(*from_x, *from_y, *layer, ObjectId::EMPTY);
+    for (from, _, layer, _) in &moves {
+        slots.set(*from, *layer, ObjectId::EMPTY);
     }
-    for (_, _, to_x, to_y, layer, object) in moves {
-        slots.set(to_x, to_y, layer, object);
+    for (_, to, layer, object) in moves {
+        slots.set(to, layer, object);
     }
-
     Ok(())
 }
 
-fn apply_remove(
-    game: &CompiledGame,
-    state: &mut State,
-    x: u16,
-    y: u16,
-    object: ObjectId,
-) -> Result<(), PatchError> {
-    let layer = game
-        .object_layer(object)
-        .ok_or(PatchError::UnknownObject { object })?;
-    let found = state.get_layer(x, y, layer)?;
-    if found != object {
-        return Err(PatchError::ExpectedObject {
-            x,
-            y,
-            layer,
-            expected: object,
-            found,
-        });
-    }
-
-    state.set_slot_unchecked(x, y, layer, ObjectId::EMPTY);
-    Ok(())
-}
-
-fn apply_moves(
-    game: &CompiledGame,
-    state: &mut State,
-    ops: &[CorePatchOp],
-) -> Result<(), PatchError> {
+fn apply_moves<Size, ConditionDef, Rule, Condition, Frame, const D: usize>(
+    game: &CompiledGameModel<ConditionDef, Rule, Condition, Frame>,
+    state: &mut GridState<D, Size>,
+    ops: &[PatchOp<D>],
+) -> Result<(), GridPatchError<D>>
+where
+    Size: GridSize<D>,
+{
     let mut moves = Vec::new();
     let mut sources = Vec::new();
     let mut destinations = Vec::new();
 
     for op in ops {
-        let CorePatchOp::Move { from, to, object } = *op else {
+        let PatchOp::Move { from, to, object } = *op else {
             continue;
         };
-        let (from_x, from_y) = coord_xy(from);
-        let (to_x, to_y) = coord_xy(to);
-        let layer = game
-            .object_layer(object)
-            .ok_or(PatchError::UnknownObject { object })?;
-        let found = state.get_layer(from_x, from_y, layer)?;
+        let layer = object_layer(game, object)?;
+        let found = state.get_layer_at(from, layer)?;
         if found != object {
-            return Err(PatchError::ExpectedObject {
-                x: from_x,
-                y: from_y,
+            return Err(GridPatchError::ExpectedObject {
+                position: from,
                 layer,
                 expected: object,
                 found,
             });
         }
-        if destinations.contains(&(to_x, to_y, layer)) {
-            return Err(PatchError::LayerOccupied {
-                x: to_x,
-                y: to_y,
+        if destinations.contains(&(to, layer)) {
+            return Err(GridPatchError::LayerOccupied {
+                position: to,
                 layer,
                 existing: object,
                 attempted: object,
             });
         }
-        sources.push((from_x, from_y, layer));
-        destinations.push((to_x, to_y, layer));
-        moves.push((from_x, from_y, to_x, to_y, layer, object));
+        sources.push((from, layer));
+        destinations.push((to, layer));
+        moves.push((from, to, layer, object));
     }
 
-    for (_, _, to_x, to_y, layer, object) in &moves {
-        let existing = state.get_layer(*to_x, *to_y, *layer)?;
-        if !existing.is_empty() && !sources.contains(&(*to_x, *to_y, *layer)) {
-            return Err(PatchError::LayerOccupied {
-                x: *to_x,
-                y: *to_y,
+    for (_, to, layer, object) in &moves {
+        let existing = state.get_layer_at(*to, *layer)?;
+        if !existing.is_empty() && !sources.contains(&(*to, *layer)) {
+            return Err(GridPatchError::LayerOccupied {
+                position: *to,
                 layer: *layer,
                 existing,
                 attempted: *object,
@@ -731,82 +493,78 @@ fn apply_moves(
     }
 
     let mut moved = Vec::with_capacity(moves.len());
-    for (from_x, from_y, to_x, to_y, layer, object) in moves {
-        let mark = state.take_slot_for_move_unchecked(from_x, from_y, layer);
-        moved.push((to_x, to_y, layer, object, mark));
+    for (from, to, layer, object) in moves {
+        let mark = state.take_slot_for_move_unchecked(from, layer);
+        moved.push((to, layer, object, mark));
     }
-    for (to_x, to_y, layer, object, mark) in moved {
-        state.place_moved_slot_unchecked(to_x, to_y, layer, object, mark);
+    for (to, layer, object, mark) in moved {
+        state.place_moved_slot_unchecked(to, layer, object, mark);
     }
     Ok(())
 }
 
-fn apply_set_mark(
-    game: &CompiledGame,
-    state: &mut State,
-    x: u16,
-    y: u16,
+fn apply_set_mark<Size, ConditionDef, Rule, Condition, Frame, const D: usize>(
+    game: &CompiledGameModel<ConditionDef, Rule, Condition, Frame>,
+    state: &mut GridState<D, Size>,
+    position: GridCoord<D>,
     object: ObjectId,
     mark: MarkId,
     value: Option<i64>,
-) -> Result<(), PatchError> {
+) -> Result<(), GridPatchError<D>>
+where
+    Size: GridSize<D>,
+{
     if object.is_empty() {
-        state.set_cell_mark_unchecked(x, y, mark, value);
+        state.set_cell_mark_unchecked(position, mark, value);
         return Ok(());
     }
-    let layer = expect_object_at(game, state, x, y, object)?;
-    state.set_mark_unchecked(x, y, layer, mark, value);
+    let layer = expect_object_at(game, state, position, object)?;
+    state.set_mark_unchecked(position, layer, mark, value);
     Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
-fn apply_remove_mark(
-    game: &CompiledGame,
-    state: &mut State,
-    x: u16,
-    y: u16,
+fn apply_remove_mark<Size, ConditionDef, Rule, Condition, Frame, const D: usize>(
+    game: &CompiledGameModel<ConditionDef, Rule, Condition, Frame>,
+    state: &mut GridState<D, Size>,
+    position: GridCoord<D>,
     object: ObjectId,
     mark: MarkId,
     value: Option<i64>,
     match_value: MarkValueMatch,
-) -> Result<(), PatchError> {
-    if object.is_empty() {
-        let value = match match_value {
-            MarkValueMatch::Any => None,
-            MarkValueMatch::Exact => value,
-        };
-        state.remove_cell_mark_unchecked(x, y, mark, value);
-        return Ok(());
-    }
-    let Some(layer) = game.object_layer(object) else {
-        return Err(PatchError::UnknownObject { object });
-    };
-    if state.get_layer(x, y, layer)? != object {
-        return Ok(());
-    }
+) -> Result<(), GridPatchError<D>>
+where
+    Size: GridSize<D>,
+{
     let value = match match_value {
         MarkValueMatch::Any => None,
         MarkValueMatch::Exact => value,
     };
-    state.remove_mark_unchecked(x, y, layer, mark, value);
+    if object.is_empty() {
+        state.remove_cell_mark_unchecked(position, mark, value);
+        return Ok(());
+    }
+    let layer = object_layer(game, object)?;
+    if state.get_layer_at(position, layer)? == object {
+        state.remove_mark_unchecked(position, layer, mark, value);
+    }
     Ok(())
 }
 
-fn expect_object_at(
-    game: &CompiledGame,
-    state: &State,
-    x: u16,
-    y: u16,
+fn expect_object_at<Size, ConditionDef, Rule, Condition, Frame, const D: usize>(
+    game: &CompiledGameModel<ConditionDef, Rule, Condition, Frame>,
+    state: &GridState<D, Size>,
+    position: GridCoord<D>,
     object: ObjectId,
-) -> Result<LayerId, PatchError> {
-    let layer = game
-        .object_layer(object)
-        .ok_or(PatchError::UnknownObject { object })?;
-    let found = state.get_layer(x, y, layer)?;
+) -> Result<LayerId, GridPatchError<D>>
+where
+    Size: GridSize<D>,
+{
+    let layer = object_layer(game, object)?;
+    let found = state.get_layer_at(position, layer)?;
     if found != object {
-        return Err(PatchError::ExpectedObject {
-            x,
-            y,
+        return Err(GridPatchError::ExpectedObject {
+            position,
             layer,
             expected: object,
             found,
@@ -815,22 +573,21 @@ fn expect_object_at(
     Ok(layer)
 }
 
-fn expect_object_in_overlay(
-    game: &CompiledGame,
-    state: &State,
-    slots: &SlotOverlay,
-    x: u16,
-    y: u16,
+fn expect_object_in_overlay<Size, ConditionDef, Rule, Condition, Frame, const D: usize>(
+    game: &CompiledGameModel<ConditionDef, Rule, Condition, Frame>,
+    state: &GridState<D, Size>,
+    slots: &SlotOverlay<D>,
+    position: GridCoord<D>,
     object: ObjectId,
-) -> Result<LayerId, PatchError> {
-    let layer = game
-        .object_layer(object)
-        .ok_or(PatchError::UnknownObject { object })?;
-    let found = slots.get(game, state, x, y, layer)?;
+) -> Result<LayerId, GridPatchError<D>>
+where
+    Size: GridSize<D>,
+{
+    let layer = object_layer(game, object)?;
+    let found = slots.get(state, position, layer)?;
     if found != object {
-        return Err(PatchError::ExpectedObject {
-            x,
-            y,
+        return Err(GridPatchError::ExpectedObject {
+            position,
             layer,
             expected: object,
             found,
@@ -839,15 +596,15 @@ fn expect_object_in_overlay(
     Ok(layer)
 }
 
-fn validate_variable_update(
-    state: &State,
+fn validate_variable_update<Size: GridSize<D>, const D: usize>(
+    state: &GridState<D, Size>,
     variable: VariableId,
     op: VariableUpdateOp,
     value: i64,
-) -> Result<i64, PatchError> {
+) -> Result<i64, GridPatchError<D>> {
     let current = state
         .variable_value(variable)
-        .ok_or(StateError::VariableOutOfBounds { variable })?;
+        .ok_or(GridStateError::VariableOutOfBounds { variable })?;
     let next = match op {
         VariableUpdateOp::Set => Some(value),
         VariableUpdateOp::Add => current.checked_add(value),
@@ -855,52 +612,29 @@ fn validate_variable_update(
         VariableUpdateOp::Multiply => current.checked_mul(value),
         VariableUpdateOp::Divide => {
             if value == 0 {
-                return Err(StateError::VariableDivisionByZero { variable }.into());
+                return Err(GridStateError::VariableDivisionByZero { variable }.into());
             }
             current.checked_div(value)
         }
         VariableUpdateOp::Remainder => {
             if value == 0 {
-                return Err(StateError::VariableDivisionByZero { variable }.into());
+                return Err(GridStateError::VariableDivisionByZero { variable }.into());
             }
             current.checked_rem(value)
         }
     }
-    .ok_or(StateError::VariableOverflow { variable })?;
+    .ok_or(GridStateError::VariableOverflow { variable })?;
     Ok(next)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compiled_game::ObjectDef;
+    use crate::compiled_game::{CompiledGame, ObjectDef};
+    use crate::state::State;
 
-    #[test]
-    fn patch_round_trips_through_core_patch_ops() {
-        let patch = Patch::from_ops(vec![
-            PatchOp::Move {
-                from_x: 1,
-                from_y: 2,
-                to_x: 3,
-                to_y: 4,
-                object: ObjectId(5),
-            },
-            PatchOp::RemoveMark {
-                x: 6,
-                y: 7,
-                object: ObjectId(8),
-                mark: MarkId(9),
-                value: Some(10),
-                match_value: MarkValueMatch::Exact,
-            },
-            PatchOp::UpdateVariable {
-                variable: VariableId(11),
-                op: VariableUpdateOp::Add,
-                value: 12,
-            },
-        ]);
-
-        assert_eq!(Patch::from_core(patch.to_core()).ops(), patch.ops());
+    fn position(x: u16, y: u16) -> GridCoord<2> {
+        GridCoord::new([x, y])
     }
 
     #[test]
@@ -917,13 +651,15 @@ mod tests {
         );
         let mut state = State::empty(1, 1, 1, 1).unwrap();
         state.place_object(&game, 0, 0, object).unwrap();
-        state.set_mark_unchecked(0, 0, LayerId(0), mark, Some(7));
+        state.set_mark_unchecked(position(0, 0), LayerId(0), mark, Some(7));
 
         let patch = Patch::from_ops(vec![
-            PatchOp::Remove { x: 0, y: 0, object },
+            PatchOp::Remove {
+                position: position(0, 0),
+                object,
+            },
             PatchOp::RemoveMark {
-                x: 0,
-                y: 0,
+                position: position(0, 0),
                 object,
                 mark,
                 value: Some(7),
@@ -932,7 +668,6 @@ mod tests {
         ]);
 
         let next = patch.apply(&game, &state).unwrap();
-
         assert_eq!(next.get_layer(0, 0, LayerId(0)).unwrap(), ObjectId::EMPTY);
         assert!(next.slot_mark().iter().all(Vec::is_empty));
     }
@@ -950,8 +685,7 @@ mod tests {
         );
         let state = State::empty(1, 1, 1, 1).unwrap();
         let patch = Patch::from_ops(vec![PatchOp::RemoveMark {
-            x: 0,
-            y: 0,
+            position: position(0, 0),
             object,
             mark: MarkId(0),
             value: Some(7),
@@ -961,12 +695,11 @@ mod tests {
         assert!(matches!(
             patch.validate(&game, &state),
             Err(PatchError::ExpectedObject {
-                x: 0,
-                y: 0,
+                position: found_position,
                 layer: LayerId(0),
                 expected,
                 found: ObjectId::EMPTY,
-            }) if expected == object
+            }) if found_position == position(0, 0) && expected == object
         ));
     }
 
@@ -991,15 +724,12 @@ mod tests {
         );
         let mut state = State::empty(1, 1, 1, 2).unwrap();
         state.place_object(&game, 0, 0, existing).unwrap();
-        state.set_mark_unchecked(0, 0, LayerId(0), mark, Some(7));
+        state.set_mark_unchecked(position(0, 0), LayerId(0), mark, Some(7));
 
         let patch = Patch::from_ops(vec![PatchOp::Add {
-            x: 0,
-            y: 0,
+            position: position(0, 0),
             object: added,
         }]);
-
-        assert!(patch.validate(&game, &state).unwrap());
         let next = patch.apply(&game, &state).unwrap();
 
         assert_eq!(next.get_layer(0, 0, LayerId(0)).unwrap(), added);
@@ -1022,11 +752,13 @@ mod tests {
         );
         let mut state = State::empty(1, 1, 1, 1).unwrap();
         state.place_object(&game, 0, 0, object).unwrap();
-        state.set_mark_unchecked(0, 0, LayerId(0), mark, Some(7));
+        state.set_mark_unchecked(position(0, 0), LayerId(0), mark, Some(7));
 
-        let patch = Patch::from_ops(vec![PatchOp::Add { x: 0, y: 0, object }]);
+        let patch = Patch::from_ops(vec![PatchOp::Add {
+            position: position(0, 0),
+            object,
+        }]);
         let next = patch.apply(&game, &state).unwrap();
-
         assert!(next.has_mark(&game, 0, 0, object, mark, Some(7)));
     }
 
@@ -1051,20 +783,15 @@ mod tests {
         let state = State::empty(1, 1, 1, 2).unwrap();
         let patch = Patch::from_ops(vec![
             PatchOp::Add {
-                x: 0,
-                y: 0,
+                position: position(0, 0),
                 object: first,
             },
             PatchOp::Add {
-                x: 0,
-                y: 0,
+                position: position(0, 0),
                 object: second,
             },
         ]);
-
-        assert!(patch.validate(&game, &state).unwrap());
         let next = patch.apply(&game, &state).unwrap();
-
         assert_eq!(next.get_layer(0, 0, LayerId(0)).unwrap(), second);
     }
 
@@ -1096,15 +823,11 @@ mod tests {
         state.place_object(&game, 0, 0, existing).unwrap();
 
         let patch = Patch::from_ops(vec![PatchOp::Replace {
-            x: 0,
-            y: 0,
+            position: position(0, 0),
             remove: removed,
             add: added,
         }]);
-
-        assert!(patch.validate(&game, &state).unwrap());
         let next = patch.apply(&game, &state).unwrap();
-
         assert_eq!(next.get_layer(0, 0, LayerId(0)).unwrap(), ObjectId::EMPTY);
         assert_eq!(next.get_layer(0, 0, LayerId(1)).unwrap(), added);
     }

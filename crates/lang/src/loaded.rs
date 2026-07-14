@@ -431,6 +431,13 @@ pub struct VisualSpriteDef {
     pub loop_animation: Option<VisualSpriteLoopDef>,
     #[serde(default)]
     pub pixels_per_cell: Option<VisualSpritePixelsPerCell>,
+    #[serde(default)]
+    pub spatial: Option<VisualSpriteSpatialDef>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VisualSpriteSpatialDef {
+    pub frames: Vec<Vec<Vec<String>>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -523,7 +530,11 @@ pub struct VisualColorDef {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PuzzleRenderDef {
     pub grid: PuzzleGridRenderDef,
-    pub cell_size: Option<u16>,
+    pub camera: crate::CameraSettings3,
+    pub sprite: crate::SpriteRenderSettings3,
+    pub shadow: bool,
+    pub viewport: crate::ViewportSettings3,
+    pub pixelate: crate::PixelateRenderSettings3,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

@@ -1,5 +1,5 @@
 fn parse_level_block(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     existing_count: usize,
 ) -> Result<(LevelBlock, usize), DiagnosticReport> {
@@ -7,7 +7,7 @@ fn parse_level_block(
 }
 
 fn parse_level_block_with_default_puzzle(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     existing_count: usize,
     default_puzzle: Option<&str>,
@@ -27,132 +27,126 @@ fn parse_level_block_with_default_puzzle(
     )
 }
 
-#[derive(Clone, Debug)]
-struct PendingLevelBlock {
-    start: usize,
-    default_puzzle: Option<String>,
-    kind: PendingLevelBlockKind,
-}
-
-impl PendingLevelBlock {
-    fn levels(start: usize, default_puzzle: Option<String>) -> Self {
-        Self {
-            start,
-            default_puzzle,
-            kind: PendingLevelBlockKind::Levels,
-        }
-    }
-
-    fn level(start: usize, default_puzzle: Option<String>) -> Self {
-        Self {
-            start,
-            default_puzzle,
-            kind: PendingLevelBlockKind::Level,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PendingLevelBlockKind {
-    Levels,
-    Level,
-}
-
-fn parse_pending_level_block(
-    lines: &[String],
-    pending: &PendingLevelBlock,
-    level_blocks: &mut Vec<LevelBlock>,
-    catalog: &mut Catalog,
-    render_overlays: &mut OverlayDefs,
-    empty_char: &mut Option<char>,
-) -> Result<usize, DiagnosticReport> {
-    match pending.kind {
-        PendingLevelBlockKind::Levels => parse_levels_block(
-            lines,
-            pending.start,
-            level_blocks,
-            catalog,
-            render_overlays,
-            empty_char,
-            pending.default_puzzle.as_deref(),
-        ),
-        PendingLevelBlockKind::Level => {
-            let (level, next_i) = parse_level_block_with_default_puzzle(
-                lines,
-                pending.start,
-                level_blocks.len(),
-                pending.default_puzzle.as_deref(),
-            )?;
-            level_blocks.push(level);
-            Ok(next_i)
-        }
-    }
-}
-
-fn parse_levels_block(
-    lines: &[String],
-    start: usize,
-    level_blocks: &mut Vec<LevelBlock>,
-    catalog: &mut Catalog,
-    render_overlays: &mut OverlayDefs,
-    empty_char: &mut Option<char>,
+pub(crate) fn parse_level_resource_entry(
+    entry: &crate::model_syntax::PuzzleEntrySyntax,
+    existing_count: usize,
     default_puzzle: Option<&str>,
-) -> Result<usize, DiagnosticReport> {
-    let header = parse_levels_header(&lines[start], default_puzzle)?;
+) -> Result<crate::level::LevelResourceSyntax, DiagnosticReport> {
+    match entry.directive {
+        puzzle_authoring::PuzzleDirectiveSurface::Legend => {
+            let mut resource = crate::level::LevelResourceSyntax::default();
+            for line in &entry.body {
+                if line.text.ends_with('{') {
+                    return Err(parse_error(
+                        line,
+                        "legend accepts rows, not nested blocks",
+                    ));
+                }
+                if !line.text.is_empty() {
+                    resource.legends.push(parse_level_legend_syntax(line, false)?);
+                }
+            }
+            Ok(resource)
+        }
+        puzzle_authoring::PuzzleDirectiveSurface::Level => {
+            let mut lines = Vec::with_capacity(entry.body.len() + 2);
+            lines.push(entry.header.clone());
+            lines.extend(entry.body.iter().cloned());
+            lines.push(source::LogicalLine::new(BLOCK_CLOSE, entry.header.line));
+            let (level, next) = parse_level_block_with_default_puzzle(
+                &lines,
+                0,
+                existing_count,
+                default_puzzle,
+            )?;
+            if next != lines.len() {
+                return Err(parse_error(
+                    &entry.header,
+                    "level block was not fully consumed",
+                ));
+            }
+            Ok(crate::level::LevelResourceSyntax {
+                legends: Vec::new(),
+                levels: vec![level],
+            })
+        }
+        puzzle_authoring::PuzzleDirectiveSurface::Levels => {
+            parse_levels_resource_entry(entry, existing_count, default_puzzle)
+        }
+        _ => Err(parse_error(
+            &entry.header,
+            "canonical level resource must be legend, level, or levels",
+        )),
+    }
+}
+
+fn parse_levels_resource_entry(
+    entry: &crate::model_syntax::PuzzleEntrySyntax,
+    existing_count: usize,
+    default_puzzle: Option<&str>,
+) -> Result<crate::level::LevelResourceSyntax, DiagnosticReport> {
+    let mut lines = Vec::with_capacity(entry.body.len() + 2);
+    lines.push(entry.header.clone());
+    lines.extend(entry.body.iter().cloned());
+    lines.push(source::LogicalLine::new(BLOCK_CLOSE, entry.header.line));
+    let header = parse_levels_header(&lines[0], default_puzzle)?;
+    let mut resource = crate::level::LevelResourceSyntax::default();
     let mut namespace_count = 0usize;
-    let mut i = start + 1;
-    while i < lines.len() && !is_block_close_line(&lines[i]) {
-        let tokens = split_header_tokens(&lines[i]);
+    let mut index = 1;
+    while index < lines.len() && !is_block_close_line(&lines[index]) {
+        let tokens = split_header_tokens(&lines[index]);
         match tokens.as_slice() {
             ["legend"] => {
-                i = parse_legend_block(lines, i, catalog, render_overlays, empty_char)?;
+                let block = puzzle_authoring::collect_row_block_surface(
+                    &lines,
+                    index + 1,
+                    "legend",
+                )
+                .map_err(|error| parse_error(&lines[index], error.message()))?;
+                for line in &lines[block.body_start..block.body_end] {
+                    if !line.text.is_empty() {
+                        resource.legends.push(parse_level_legend_syntax(line, false)?);
+                    }
+                }
+                index = block.next_index;
             }
             ["legend", ..] => {
-                parse_legend_directive(
-                    &tokens,
-                    &lines[i],
-                    &catalog.object_names,
-                    &catalog.object_schemas,
-                    &catalog_value_sets(catalog),
-                    &catalog.maps,
-                    &catalog.object_groups,
-                    &mut catalog.render_chars,
-                    &mut catalog.char_objects,
-                    render_overlays,
-                )?;
-                i += 1;
+                resource
+                    .legends
+                    .push(parse_level_legend_syntax(&lines[index], true)?);
+                index += 1;
             }
             ["level", ..] => {
                 namespace_count += 1;
                 let auto_name = puzzle_authoring::namespaced_unnamed_level_name(
                     header.pack.as_deref(),
-                    level_blocks.len(),
+                    existing_count + resource.levels.len(),
                     namespace_count,
                 );
-                let level_name = parse_level_header_name_or_auto(&lines[i], auto_name)?;
-                let (level, next_i) = if puzzle_authoring::is_braced_level_header(&lines[i]) {
-                    parse_named_level_body(lines, i, level_name, &header)?
+                let name = parse_level_header_name_or_auto(&lines[index], auto_name)?;
+                let (level, next) = if puzzle_authoring::is_braced_level_header(&lines[index]) {
+                    parse_named_level_body(&lines, index, name, &header)?
                 } else {
-                    parse_unbraced_level_body(lines, i + 1, level_name, &header)?
+                    parse_unbraced_level_body(&lines, index + 1, name, &header)?
                 };
-                level_blocks.push(level);
-                i = next_i;
+                resource.levels.push(level);
+                index = next;
             }
             ["{"] => {
                 namespace_count += 1;
                 let name = puzzle_authoring::namespaced_unnamed_level_name(
                     header.pack.as_deref(),
-                    level_blocks.len(),
+                    existing_count + resource.levels.len(),
                     namespace_count,
                 );
-                let (level, next_i) = parse_named_level_body(lines, i, name, &header)?;
-                level_blocks.push(level);
-                i = next_i;
+                let (level, next) = parse_named_level_body(&lines, index, name, &header)?;
+                resource.levels.push(level);
+                index = next;
             }
-            [] => i += 1,
-            _ if lines[i].trim_end().ends_with('{') => {
+            [] => index += 1,
+            _ if lines[index].trim_end().ends_with('{') => {
                 return Err(parse_error(
-                    &lines[i],
+                    &lines[index],
                     "braced level header must be `level <name> {` or `{` for an unnamed level",
                 ));
             }
@@ -160,20 +154,73 @@ fn parse_levels_block(
                 namespace_count += 1;
                 let name = puzzle_authoring::namespaced_unnamed_level_name(
                     header.pack.as_deref(),
-                    level_blocks.len(),
+                    existing_count + resource.levels.len(),
                     namespace_count,
                 );
-                let (level, next_i) = parse_unbraced_level_body(lines, i, name, &header)?;
-                level_blocks.push(level);
-                i = next_i;
+                let (level, next) = parse_unbraced_level_body(&lines, index, name, &header)?;
+                resource.levels.push(level);
+                index = next;
             }
         }
     }
-    if i >= lines.len() {
-        return Err(parse_error(&lines[start], "levels missing closing brace"));
-    }
+    Ok(resource)
+}
 
-    Ok(i + 1)
+fn apply_level_resource_legend(
+    syntax: &crate::level::LevelLegendSyntax,
+    catalog: &mut Catalog,
+    render_overlays: &mut OverlayDefs,
+    empty_char: &mut Option<char>,
+    recognition: &mut crate::surface::ParserRecognition,
+) -> Result<(), DiagnosticReport> {
+    if syntax.selectors == ["empty"] {
+        if syntax.ch != '.' {
+            return Err(parse_error(
+                &syntax.source,
+                "levels use `.` for empty; remove the non-dot empty legend row",
+            ));
+        }
+        *empty_char = Some('.');
+        for token in &syntax.source.tokens {
+            if token.text == "empty" {
+                recognition.mark(
+                    crate::surface::SourceSpan {
+                        start: token.start,
+                        end: token.end,
+                    },
+                    crate::surface::SurfaceSemanticKind::Literal,
+                );
+            }
+        }
+        return Ok(());
+    }
+    if syntax.ch == '.' {
+        return Err(parse_error(
+            &syntax.source,
+            "levels reserve `.` for empty; use another legend char for objects",
+        ));
+    }
+    if syntax.selectors.iter().any(|selector| selector == "empty") {
+        return Err(parse_error(
+            &syntax.source,
+            "empty cannot be mixed with object selectors",
+        ));
+    }
+    let mut tokens = vec!["legend".to_string(), syntax.ch.to_string(), "=".to_string()];
+    tokens.extend(syntax.selectors.iter().cloned());
+    let tokens = tokens.iter().map(String::as_str).collect::<Vec<_>>();
+    parse_legend_directive(
+        &tokens,
+        &syntax.source,
+        &catalog.object_names,
+        &catalog.object_schemas,
+        &catalog_value_sets(catalog),
+        &catalog.maps,
+        &catalog.object_groups,
+        &mut catalog.render_chars,
+        &mut catalog.char_objects,
+        render_overlays,
+    )
 }
 
 #[derive(Clone, Debug, Default)]
@@ -236,12 +283,42 @@ fn parse_level_header_name_or_auto(
 }
 
 fn parse_conditions_block(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     catalog: &Catalog,
     named_conditions: &mut HashMap<String, (String, ConditionAst)>,
 ) -> Result<usize, DiagnosticReport> {
-    let header_tokens = split_header_tokens(&lines[start]);
+    let mut end = start + 1;
+    let mut depth = 1i32;
+    while end < lines.len() {
+        depth += authoring_line_brace_delta(&lines[end]);
+        if depth == 0 {
+            break;
+        }
+        end += 1;
+    }
+    if end >= lines.len() {
+        return Err(parse_error(
+            &lines[start],
+            "condition block missing closing brace",
+        ));
+    }
+    lower_condition_block_syntax_rows(
+        &lines[start],
+        &lines[start + 1..end],
+        catalog,
+        named_conditions,
+    )?;
+    Ok(end + 1)
+}
+
+fn lower_condition_block_syntax_rows(
+    header: &source::LogicalLine,
+    lines: &[source::LogicalLine],
+    catalog: &Catalog,
+    named_conditions: &mut HashMap<String, (String, ConditionAst)>,
+) -> Result<(), DiagnosticReport> {
+    let header_tokens = split_header_tokens(header);
     let condition_name = header_tokens.first().copied().unwrap_or("win_conditions");
     let combinator = match header_tokens.as_slice() {
         [_] => ConditionBlockCombinator::All,
@@ -249,22 +326,22 @@ fn parse_conditions_block(
         [_, "any"] => ConditionBlockCombinator::Any,
         _ => {
             return Err(parse_error(
-                &lines[start],
+                header,
                 &format!("{condition_name} block must be: {condition_name} [all | any]"),
             ));
         }
     };
     if named_conditions.contains_key(condition_name) {
         return Err(parse_error(
-            &lines[start],
+            header,
             &format!("duplicate {condition_name} definition"),
         ));
     }
 
     let mut conditions = Vec::new();
     let mut descriptions = Vec::new();
-    let mut i = start + 1;
-    while i < lines.len() && !is_block_close_line(&lines[i]) {
+    let mut i = 0;
+    while i < lines.len() {
         i = parse_condition_block_entry(
             lines,
             i,
@@ -274,15 +351,9 @@ fn parse_conditions_block(
             &mut descriptions,
         )?;
     }
-    if i >= lines.len() {
-        return Err(parse_error(
-            &lines[start],
-            &format!("{condition_name} missing closing brace"),
-        ));
-    }
     if conditions.is_empty() {
         return Err(parse_error(
-            &lines[start],
+            header,
             &format!("{condition_name} requires at least one condition"),
         ));
     }
@@ -298,11 +369,11 @@ fn parse_conditions_block(
             },
         ),
     );
-    Ok(i + 1)
+    Ok(())
 }
 
 fn parse_condition_block_entry(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     condition_name: &str,
     catalog: &Catalog,
@@ -339,13 +410,13 @@ fn parse_condition_block_entry(
     }
 
     let condition = parse_condition_block_row(line, condition_name, catalog)?;
-    descriptions.push(line.clone());
+    descriptions.push(line.to_string());
     conditions.push(condition);
     Ok(start + 1)
 }
 
 fn parse_condition_rows(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     condition_name: &str,
     catalog: &Catalog,
     conditions: &mut Vec<ConditionAst>,
@@ -388,7 +459,7 @@ impl ConditionBlockCombinator {
 }
 
 fn parse_puzzle_screen_block(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     puzzle_screen: &mut PuzzleScreenDef,
 ) -> Result<usize, DiagnosticReport> {
@@ -416,44 +487,31 @@ fn parse_puzzle_screen_block(
     Ok(i + 1)
 }
 
-fn parse_puzzle_render_block(
-    lines: &[String],
-    start: usize,
+pub(crate) fn lower_puzzle_render_node(
+    node: &authoring_grammar::AuthoringNode,
+) -> Result<(PuzzleRenderDef, AnimationDef), DiagnosticReport> {
+    let mut render = PuzzleRenderDef::default();
+    let mut animation = AnimationDef::default();
+    apply_puzzle_render_node(node, &mut render, &mut animation)?;
+    Ok((render, animation))
+}
+
+fn apply_puzzle_render_node(
+    node: &authoring_grammar::AuthoringNode,
     render: &mut PuzzleRenderDef,
     animation: &mut AnimationDef,
-) -> Result<usize, DiagnosticReport> {
-    let (node, next_i) = authoring_grammar::parse_placed_authoring_node(
-        lines,
-        start,
-        authoring_grammar::AuthoringKind::Root,
-        "render block missing closing brace",
-    )?;
+) -> Result<(), DiagnosticReport> {
     if node.kind != authoring_grammar::AuthoringKind::PuzzleRenderConfig {
-        return Err(parse_error(&lines[start], "render header must be: render"));
+        return Err(parse_error(
+            &node.source_line,
+            "render header must be: render",
+        ));
     }
     let mut parsed = render.clone();
     let mut parsed_animation = animation.clone();
     let mut tween_duration_source_line = None::<String>;
     for definition in &node.definition_rows {
         match definition.key.as_str() {
-            "cell_size" => {
-                if definition.op != Some(authoring_grammar::AuthoringDefinitionOp::Equals) {
-                    return Err(parse_error(
-                        &definition.source_line,
-                        "cell_size directive must be: cell_size = <pixels>",
-                    ));
-                }
-                let Some(value) = definition.single_value() else {
-                    return Err(parse_error(
-                        &definition.source_line,
-                        "cell_size directive must be: cell_size = <pixels>",
-                    ));
-                };
-                parsed.cell_size = Some(parse_puzzle_render_cell_size(
-                    value,
-                    &definition.source_line,
-                )?);
-            }
             "tween_duration" => {
                 if definition.op != Some(authoring_grammar::AuthoringDefinitionOp::Equals) {
                     return Err(parse_error(
@@ -472,6 +530,12 @@ fn parse_puzzle_render_block(
                     ));
                 }
                 parsed_animation.tween.enabled = parse_puzzle_render_tween_enabled(definition)?;
+            }
+            "shade" => {
+                parsed.sprite.shade = render_boolean_value(definition)?;
+            }
+            "shadow" => {
+                parsed.shadow = render_boolean_value(definition)?;
             }
             other => {
                 return Err(parse_error(
@@ -494,6 +558,15 @@ fn parse_puzzle_render_block(
             authoring_grammar::AuthoringKind::PuzzleRenderGridConfig => {
                 apply_puzzle_render_grid_node(child, &mut parsed.grid)?;
             }
+            authoring_grammar::AuthoringKind::PuzzleRenderCameraConfig => {
+                apply_puzzle_render_camera_node(child, &mut parsed.camera)?;
+            }
+            authoring_grammar::AuthoringKind::PuzzleRenderPixelateConfig => {
+                apply_puzzle_render_pixelate_node(child, &mut parsed.pixelate)?;
+            }
+            authoring_grammar::AuthoringKind::PuzzleRenderViewportConfig => {
+                apply_puzzle_render_viewport_node(child, &mut parsed.viewport)?;
+            }
             _ => {
                 return Err(parse_error(
                     &child.source_line,
@@ -504,7 +577,203 @@ fn parse_puzzle_render_block(
     }
     *render = parsed;
     *animation = parsed_animation;
-    Ok(next_i)
+    Ok(())
+}
+
+fn render_definition_value(
+    definition: &authoring_grammar::AuthoringDefinitionRow,
+) -> Result<&str, DiagnosticReport> {
+    if definition.op != Some(authoring_grammar::AuthoringDefinitionOp::Equals) {
+        return Err(parse_error(
+            &definition.source_line,
+            &format!("render setting {} requires `=`", definition.key),
+        ));
+    }
+    definition.single_value().ok_or_else(|| {
+        parse_error(
+            &definition.source_line,
+            &format!("render setting {} requires one value", definition.key),
+        )
+    })
+}
+
+fn render_boolean_value(
+    definition: &authoring_grammar::AuthoringDefinitionRow,
+) -> Result<bool, DiagnosticReport> {
+    let value = render_definition_value(definition)?;
+    match value {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err(parse_error(
+            &definition.source_line,
+            &format!("{} must be true or false", definition.key),
+        )),
+    }
+}
+
+fn apply_puzzle_render_camera_node(
+    node: &authoring_grammar::AuthoringNode,
+    camera: &mut CameraSettings3,
+) -> Result<(), DiagnosticReport> {
+    for definition in &node.definition_rows {
+        let value = render_definition_value(definition)?;
+        match definition.key.as_str() {
+            "yaw" => camera.yaw_degrees = render_degrees(value, definition)?,
+            "pitch" => camera.pitch_degrees = render_degrees(value, definition)?,
+            "roll" => camera.roll_degrees = render_degrees(value, definition)?,
+            "zoom" => camera.zoom_milli = render_zoom_milli(value, definition)?,
+            "interactive_look" => camera.interactive_look = render_boolean_value(definition)?,
+            "interactive_zoom" => camera.interactive_zoom = render_boolean_value(definition)?,
+            other => {
+                return Err(parse_error(
+                    &definition.source_line,
+                    &format!("unknown camera setting: {other}"),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn apply_puzzle_render_pixelate_node(
+    node: &authoring_grammar::AuthoringNode,
+    pixelate: &mut PixelateRenderSettings3,
+) -> Result<(), DiagnosticReport> {
+    for definition in &node.definition_rows {
+        let value = render_definition_value(definition)?;
+        match definition.key.as_str() {
+            "enabled" => pixelate.enabled = render_boolean_value(definition)?,
+            "scale" => pixelate.scale = render_positive_u16(value, "pixelate scale")?,
+            "smoothing" => pixelate.smoothing = render_boolean_value(definition)?,
+            other => {
+                return Err(parse_error(
+                    &definition.source_line,
+                    &format!("unknown pixelate setting: {other}"),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn apply_puzzle_render_viewport_node(
+    node: &authoring_grammar::AuthoringNode,
+    viewport: &mut ViewportSettings3,
+) -> Result<(), DiagnosticReport> {
+    for row in &node.rows {
+        if row.kind == authoring_grammar::AuthoringRowKind::ViewportFocus {
+            viewport.focus = row
+                .single_capture("selector")
+                .ok_or_else(|| parse_error(&row.source_line, "focus requires one selector"))?
+                .to_string();
+            continue;
+        }
+        let values = row
+            .captures
+            .iter()
+            .find(|capture| capture.name == "size")
+            .map(|capture| capture.values.as_slice())
+            .unwrap_or_default();
+        let (width, depth, height) = match values {
+            [width, depth] => (width.as_str(), depth.as_str(), None),
+            [width, depth, height] => (width.as_str(), depth.as_str(), Some(height.as_str())),
+            _ => {
+                return Err(parse_error(
+                    &row.source_line,
+                    "viewport size requires width, depth, and optional height",
+                ));
+            }
+        };
+        let (mode, follow, directive) = match row.kind {
+            authoring_grammar::AuthoringRowKind::ViewportFlickscreen => {
+                (ViewportMode3::Paged, ViewportFollow3::Snap, "flickscreen")
+            }
+            authoring_grammar::AuthoringRowKind::ViewportZoomscreen => {
+                (ViewportMode3::Centered, ViewportFollow3::Snap, "zoomscreen")
+            }
+            authoring_grammar::AuthoringRowKind::ViewportSmoothscreen => (
+                ViewportMode3::Centered,
+                ViewportFollow3::Smooth,
+                "smoothscreen",
+            ),
+            _ => return Err(parse_error(&row.source_line, "unknown viewport directive")),
+        };
+        viewport.mode = mode;
+        viewport.follow = follow;
+        viewport.framing = Some(ViewportFraming3 {
+            width: render_positive_u16(width, &format!("{directive} width"))?,
+            depth: render_positive_u16(depth, &format!("{directive} depth"))?,
+            height: match height {
+                Some("full") | None => ViewportHeight3::Full,
+                Some(value) => ViewportHeight3::Size(render_positive_u16(
+                    value,
+                    "viewport height",
+                )?),
+            },
+        });
+    }
+    Ok(())
+}
+
+fn render_positive_u16(value: &str, name: &str) -> Result<u16, DiagnosticReport> {
+    let value = value
+        .parse::<u16>()
+        .map_err(|_| DiagnosticReport::error(format!("{name} must be a positive integer")))?;
+    if value == 0 {
+        return Err(DiagnosticReport::error(format!(
+            "{name} must be greater than zero"
+        )));
+    }
+    Ok(value)
+}
+
+fn render_degrees(
+    value: &str,
+    definition: &authoring_grammar::AuthoringDefinitionRow,
+) -> Result<i16, DiagnosticReport> {
+    parse_render_degrees(value, &definition.key)
+        .map_err(|error| parse_error(&definition.source_line, &error))
+}
+
+fn render_zoom_milli(
+    value: &str,
+    definition: &authoring_grammar::AuthoringDefinitionRow,
+) -> Result<u16, DiagnosticReport> {
+    parse_render_zoom_milli(value, &definition.key)
+        .map_err(|error| parse_error(&definition.source_line, &error))
+}
+
+pub(crate) fn parse_render_degrees(value: &str, name: &str) -> Result<i16, String> {
+    value
+        .parse::<i16>()
+        .map_err(|_| format!("{name} must be an integer degree value"))
+}
+
+pub(crate) fn parse_render_zoom_milli(value: &str, name: &str) -> Result<u16, String> {
+    let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
+    if whole.is_empty()
+        || !whole.chars().all(|ch| ch.is_ascii_digit())
+        || !fraction.chars().all(|ch| ch.is_ascii_digit())
+        || fraction.len() > 3
+    {
+        return Err(format!(
+            "{name} must be a positive number with at most three decimal places"
+        ));
+    }
+    let whole = whole
+        .parse::<u32>()
+        .map_err(|_| format!("{name} must be positive"))?;
+    let fraction = format!("{fraction:0<3}")
+        .parse::<u32>()
+        .map_err(|_| format!("{name} must be positive"))?;
+    let milli = whole
+        .checked_mul(1000)
+        .and_then(|value| value.checked_add(fraction))
+        .ok_or_else(|| format!("{name} is too large"))?;
+    if milli == 0 || milli > u32::from(u16::MAX) {
+        return Err(format!("{name} must be greater than 0 and not too large"));
+    }
+    Ok(milli as u16)
 }
 
 fn apply_puzzle_render_grid_node(
@@ -566,19 +835,6 @@ fn apply_puzzle_render_grid_type(
         }
     }
     Ok(())
-}
-
-fn parse_puzzle_render_cell_size(value: &str, line: &str) -> Result<u16, DiagnosticReport> {
-    let size = value
-        .parse::<u16>()
-        .map_err(|_| parse_error(line, "cell_size must be an integer from 1 to 256"))?;
-    if !(1..=256).contains(&size) {
-        return Err(parse_error(
-            line,
-            "cell_size must be an integer from 1 to 256",
-        ));
-    }
-    Ok(size)
 }
 
 fn apply_tween_duration_definition(
@@ -864,7 +1120,7 @@ fn parse_condition_block_row(
 }
 
 fn parse_named_level_body(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     name: String,
     header: &LevelsHeader,
@@ -904,12 +1160,19 @@ fn parse_named_level_body(
     }
 
     Ok((
-        LevelBlock {
+        canonicalize_level_block(LevelBlock {
             name: name_override.unwrap_or(name),
             pack: header.pack.clone(),
             puzzle: header.puzzle.clone(),
             lines: level_lines,
-        },
+            legends: Vec::new(),
+            on_level_start: Vec::new(),
+            on_level_clear: Vec::new(),
+            rules_before: None,
+            rules_after: None,
+            level_start_effect_rows: Vec::new(),
+            level_clear_effect_rows: Vec::new(),
+        })?,
         i + 1,
     ))
 }
@@ -934,7 +1197,7 @@ fn canonical_level_name_override(line: &str) -> Result<Option<String>, Diagnosti
 }
 
 fn braced_level_name_override_or(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     fallback: String,
 ) -> Result<String, DiagnosticReport> {
@@ -969,7 +1232,7 @@ fn braced_level_name_override_or(
 }
 
 fn parse_unbraced_level_body(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     name: String,
     header: &LevelsHeader,
@@ -1012,12 +1275,19 @@ fn parse_unbraced_level_body(
     }
 
     Ok((
-        LevelBlock {
+        canonicalize_level_block(LevelBlock {
             name,
             pack: header.pack.clone(),
             puzzle: header.puzzle.clone(),
             lines: level_lines,
-        },
+            legends: Vec::new(),
+            on_level_start: Vec::new(),
+            on_level_clear: Vec::new(),
+            rules_before: None,
+            rules_after: None,
+            level_start_effect_rows: Vec::new(),
+            level_clear_effect_rows: Vec::new(),
+        })?,
         i,
     ))
 }
@@ -1034,12 +1304,174 @@ fn is_level_body_block(tokens: &[&str]) -> bool {
     )
 }
 
+fn canonicalize_level_block(mut level: LevelBlock) -> Result<LevelBlock, DiagnosticReport> {
+    let source_lines = std::mem::take(&mut level.lines);
+    let mut saw_map_row = false;
+    let mut index = 0;
+    while index < source_lines.len() {
+        let line = &source_lines[index];
+        let tokens = split_header_tokens(line);
+        if tokens.is_empty() {
+            if saw_map_row {
+                level.lines.push(line.clone());
+            }
+            index += 1;
+            continue;
+        }
+
+        if matches!(
+            tokens.as_slice(),
+            ["rules"] | ["rules", "before"] | ["rules", "after"]
+        ) {
+            let before = tokens.as_slice() == ["rules", "before"];
+            let target = if before {
+                &mut level.rules_before
+            } else {
+                &mut level.rules_after
+            };
+            if target.is_some() {
+                return Err(parse_error(
+                    line,
+                    if before {
+                        "duplicate level rules before block"
+                    } else {
+                        "duplicate level rules after block (rules is the after shorthand)"
+                    },
+                ));
+            }
+            let (statements, next) =
+                puzzle_authoring::collect_rule_statement_block(&source_lines, index + 1, "level rules")
+                    .map_err(|error| {
+                        let source = error
+                            .line_index()
+                            .and_then(|line_index| source_lines.get(line_index))
+                            .unwrap_or(line);
+                        parse_error(source, &error.message())
+                    })?;
+            *target = Some(crate::model_syntax::RuleStatementsSyntax {
+                header: line.clone(),
+                modifier: before.then(|| "before".to_string()),
+                statements,
+            });
+            index = next;
+            continue;
+        }
+        if tokens.first() == Some(&"rules") {
+            return Err(parse_error(
+                line,
+                "level rules block header must be: rules | rules before | rules after",
+            ));
+        }
+
+        if matches!(tokens.as_slice(), ["on_level_start"] | ["on_level_clear"]) {
+            let (statements, next) = puzzle_authoring::collect_rule_statement_block(
+                &source_lines,
+                index + 1,
+                "level lifecycle",
+            )
+            .map_err(|error| {
+                let source = error
+                    .line_index()
+                    .and_then(|line_index| source_lines.get(line_index))
+                    .unwrap_or(line);
+                parse_error(source, &error.message())
+            })?;
+            let syntax = crate::model_syntax::RuleStatementsSyntax {
+                header: line.clone(),
+                modifier: None,
+                statements,
+            };
+            if tokens[0] == "on_level_start" {
+                level.on_level_start.push(syntax);
+            } else {
+                level.on_level_clear.push(syntax);
+            }
+            index = next;
+            continue;
+        }
+        if tokens[0] == "on_level_start" || tokens[0] == "on_level_clear" {
+            return Err(parse_error(
+                line,
+                "level lifecycle block header must be: on_level_start | on_level_clear",
+            ));
+        }
+
+        if is_level_event_sugar(line, &tokens) {
+            if saw_map_row {
+                level.level_clear_effect_rows.push(line.clone());
+            } else {
+                level.level_start_effect_rows.push(line.clone());
+            }
+            index += 1;
+            continue;
+        }
+
+        if tokens[0] != "legend" {
+            saw_map_row = true;
+            level.lines.push(line.clone());
+            index += 1;
+            continue;
+        }
+
+        if tokens.len() == 1 {
+            index += 1;
+            while index < source_lines.len() && !is_block_close_line(&source_lines[index]) {
+                if !source_lines[index].text.is_empty() {
+                    level
+                        .legends
+                        .push(parse_level_legend_syntax(&source_lines[index], false)?);
+                }
+                index += 1;
+            }
+            if index >= source_lines.len() {
+                return Err(parse_error(line, "level legend missing closing brace"));
+            }
+            index += 1;
+            continue;
+        }
+
+        level.legends.push(parse_level_legend_syntax(line, true)?);
+        index += 1;
+    }
+    Ok(level)
+}
+
+fn parse_level_legend_syntax(
+    line: &source::LogicalLine,
+    has_legend_prefix: bool,
+) -> Result<crate::level::LevelLegendSyntax, DiagnosticReport> {
+    let tokens = split_header_tokens(line);
+    let assignment = if has_legend_prefix {
+        let Some(syntax) = crate::syntax::level_legend_directive_syntax(&tokens, true) else {
+            return Err(parse_error(
+                line,
+                "level legend must be: legend <char> = <selector...>",
+            ));
+        };
+        (&tokens[1], &tokens[syntax.rhs_start..])
+    } else {
+        let Some(syntax) = crate::syntax::legend_block_row_syntax(&tokens, true) else {
+            return Err(parse_error(
+                line,
+                "level legend row must be: <char> = <selector...>",
+            ));
+        };
+        (&tokens[0], &tokens[syntax.rhs_start..])
+    };
+    let ch = parse_char(Some(assignment.0), line, "missing legend char")?;
+    Ok(crate::level::LevelLegendSyntax {
+        source: line.clone(),
+        ch,
+        selectors: assignment.1.iter().map(|selector| (*selector).to_string()).collect(),
+    })
+}
+
 #[derive(Clone, Debug)]
 struct PreparedLevelBody {
     name: String,
     pack: Option<String>,
     puzzle: String,
-    lines: Vec<String>,
+    lines: Vec<source::LogicalLine>,
     char_objects: HashMap<char, Vec<ObjectId>>,
     level_start_statements: Vec<StatementAst>,
     level_clear_statements: Vec<StatementAst>,
@@ -1049,7 +1481,7 @@ struct PreparedLevelBody {
 
 #[derive(Clone, Debug, Default)]
 struct ParsedLevelBody {
-    lines: Vec<String>,
+    lines: Vec<source::LogicalLine>,
     local_char_objects: HashMap<char, Vec<ObjectId>>,
     level_start_statements: Vec<StatementAst>,
     level_clear_statements: Vec<StatementAst>,
@@ -1082,165 +1514,61 @@ fn parse_level_body_with_rules(
     named_conditions: &HashMap<String, (String, ConditionAst)>,
     include_rules: bool,
 ) -> Result<ParsedLevelBody, DiagnosticReport> {
-    let mut body = ParsedLevelBody::default();
-    let mut saw_rules_before = false;
-    let mut saw_rules_after = false;
-    let mut saw_map_row = false;
-    let mut i = 0;
-    while i < level.lines.len() {
-        let line = &level.lines[i];
-        let tokens = split_header_tokens(line);
-        if tokens.is_empty() {
-            if saw_map_row {
-                body.lines.push(line.clone());
-            }
-            i += 1;
-            continue;
-        }
-
-        if matches!(
-            tokens.as_slice(),
-            ["rules"] | ["rules", "before"] | ["rules", "after"]
-        ) {
-            if !include_rules {
-                i = recover_after_directive_error(&level.lines, i);
-                continue;
-            }
-            let is_before = tokens.as_slice() == ["rules", "before"];
-            let duplicate = if is_before {
-                std::mem::replace(&mut saw_rules_before, true)
-            } else {
-                std::mem::replace(&mut saw_rules_after, true)
-            };
-            if duplicate {
-                return Err(parse_error(
-                    line,
-                    if is_before {
-                        "duplicate level rules before block"
-                    } else {
-                        "duplicate level rules after block (rules is the after shorthand)"
-                    },
-                ));
-            }
-            let (statements, next_i) = parse_statement_block(
-                &level.lines,
-                None,
-                i + 1,
-                &[BLOCK_CLOSE],
-                &catalog.object_names,
-                &catalog.object_schemas,
-                &catalog_value_sets(catalog),
-                &catalog.maps,
-                &catalog.object_groups,
-                &catalog.input_names,
-                &catalog.variable_names,
-                &catalog.numeric_variable_defaults,
-                &catalog.condition_names,
-                named_conditions,
-                &[],
-            )?;
-            if is_before {
-                body.rules_before_statements = statements;
-            } else {
-                body.rules_after_statements = statements;
-            }
-            i = next_i;
-            continue;
-        }
-        if tokens.first() == Some(&"rules") {
-            if !include_rules {
-                i = recover_after_directive_error(&level.lines, i);
-                continue;
-            }
-            return Err(parse_error(
-                line,
-                "level rules block header must be: rules | rules before | rules after",
-            ));
-        }
-
-        if matches!(tokens.as_slice(), ["on_level_start"] | ["on_level_clear"]) {
-            if !include_rules {
-                i = recover_after_directive_error(&level.lines, i);
-                continue;
-            }
-            let (statements, next_i) = parse_statement_block(
-                &level.lines,
-                None,
-                i + 1,
-                &[BLOCK_CLOSE],
-                &catalog.object_names,
-                &catalog.object_schemas,
-                &catalog_value_sets(catalog),
-                &catalog.maps,
-                &catalog.object_groups,
-                &catalog.input_names,
-                &catalog.variable_names,
-                &catalog.numeric_variable_defaults,
-                &catalog.condition_names,
-                named_conditions,
-                &[],
-            )?;
-            if tokens[0] == "on_level_start" {
-                body.level_start_statements.extend(statements);
-            } else {
-                body.level_clear_statements.extend(statements);
-            }
-            i = next_i;
-            continue;
-        }
-        if tokens[0] == "on_level_start" || tokens[0] == "on_level_clear" {
-            if !include_rules {
-                i = recover_after_directive_error(&level.lines, i);
-                continue;
-            }
-            return Err(parse_error(
-                line,
-                "level lifecycle block header must be: on_level_start | on_level_clear",
-            ));
-        }
-
-        if !include_rules && is_level_event_sugar(line, &tokens) {
-            i += 1;
-            continue;
-        }
-        if let Some(statement) = parse_level_event_sugar(line)? {
-            if saw_map_row {
-                body.level_clear_statements.push(statement);
-            } else {
-                body.level_start_statements.push(statement);
-            }
-            i += 1;
-            continue;
-        }
-
-        if tokens[0] != "legend" {
-            saw_map_row = true;
-            body.lines.push(line.clone());
-            i += 1;
-            continue;
-        }
-
-        if tokens.len() == 1 {
-            i += 1;
-            while i < level.lines.len() && !is_block_close_line(&level.lines[i]) {
-                parse_level_legend_block_row(
-                    &level.lines[i],
-                    catalog,
-                    empty_char,
-                    &mut body.local_char_objects,
-                )?;
-                i += 1;
-            }
-            if i >= level.lines.len() {
-                return Err(parse_error(line, "level legend missing closing brace"));
-            }
-            i += 1;
-            continue;
-        }
-
-        let (ch, objects) = parse_level_legend_directive(&tokens, line, catalog, empty_char)?;
+    let mut body = ParsedLevelBody {
+        lines: level.lines.clone(),
+        ..ParsedLevelBody::default()
+    };
+    for legend in &level.legends {
+        let mut tokens = vec!["legend".to_string(), legend.ch.to_string(), "=".to_string()];
+        tokens.extend(legend.selectors.iter().cloned());
+        let tokens = tokens.iter().map(String::as_str).collect::<Vec<_>>();
+        let (ch, objects) =
+            parse_level_legend_directive(&tokens, &legend.source, catalog, empty_char)?;
         body.local_char_objects.insert(ch, objects);
-        i += 1;
+    }
+    if !include_rules {
+        return Ok(body);
+    }
+
+    let lower = |syntax: &crate::model_syntax::RuleStatementsSyntax| {
+        lower_statement_syntax(
+            &syntax.statements,
+            &catalog.object_names,
+            &catalog.object_schemas,
+            &catalog_value_sets(catalog),
+            &catalog.maps,
+            &catalog.object_groups,
+            &catalog.input_names,
+            &catalog.variable_names,
+            &catalog.numeric_variable_defaults,
+            &catalog.condition_names,
+            named_conditions,
+            &[],
+        )
+    };
+    if let Some(syntax) = &level.rules_before {
+        body.rules_before_statements = lower(syntax)?;
+    }
+    if let Some(syntax) = &level.rules_after {
+        body.rules_after_statements = lower(syntax)?;
+    }
+    for syntax in &level.on_level_start {
+        body.level_start_statements.extend(lower(syntax)?);
+    }
+    for syntax in &level.on_level_clear {
+        body.level_clear_statements.extend(lower(syntax)?);
+    }
+    for line in &level.level_start_effect_rows {
+        body.level_start_statements.push(
+            parse_level_event_sugar(line)?
+                .expect("canonical level start effect row was classified as event sugar"),
+        );
+    }
+    for line in &level.level_clear_effect_rows {
+        body.level_clear_statements.push(
+            parse_level_event_sugar(line)?
+                .expect("canonical level clear effect row was classified as event sugar"),
+        );
     }
 
     Ok(body)
@@ -1271,27 +1599,6 @@ fn parse_level_event_sugar(line: &str) -> Result<Option<StatementAst>, Diagnosti
         source_line_number: None,
         effects,
     }))
-}
-
-fn parse_level_legend_block_row(
-    line: &str,
-    catalog: &Catalog,
-    empty_char: Option<char>,
-    local_char_objects: &mut HashMap<char, Vec<ObjectId>>,
-) -> Result<(), DiagnosticReport> {
-    let tokens = split_header_tokens(line);
-    let Some(_) = crate::syntax::legend_block_row_syntax(&tokens, true) else {
-        return Err(parse_error(
-            line,
-            "level legend row must be: <char> = <selector...>",
-        ));
-    };
-
-    let mut directive_tokens = vec!["legend"];
-    directive_tokens.extend(tokens);
-    let (ch, objects) = parse_level_legend_directive(&directive_tokens, line, catalog, empty_char)?;
-    local_char_objects.insert(ch, objects);
-    Ok(())
 }
 
 fn parse_level_legend_directive(

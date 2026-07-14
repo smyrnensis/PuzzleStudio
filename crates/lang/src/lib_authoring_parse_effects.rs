@@ -59,9 +59,6 @@ fn project_surface_semantic_kind(kind: SurfaceSemanticKind) -> semantic::Semanti
         SurfaceSemanticKind::Object => semantic::SemanticKind::Object,
         SurfaceSemanticKind::Input => semantic::SemanticKind::Input,
         SurfaceSemanticKind::State => semantic::SemanticKind::State,
-        SurfaceSemanticKind::Group => semantic::SemanticKind::Group,
-        SurfaceSemanticKind::Mark => semantic::SemanticKind::Mark,
-        SurfaceSemanticKind::Variant => semantic::SemanticKind::Variant,
         SurfaceSemanticKind::Condition => semantic::SemanticKind::Condition,
         SurfaceSemanticKind::Scene => semantic::SemanticKind::Scene,
         SurfaceSemanticKind::Theme => semantic::SemanticKind::Theme,
@@ -610,7 +607,7 @@ fn matches_rewrite_effect_command(token: &str, syntax: RewriteEffectCommandSynta
 
 fn parse_scene_effect_with_optional_block(
     value: &str,
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
 ) -> Result<(SceneEffect, usize), DiagnosticReport> {
     let line = &lines[start];

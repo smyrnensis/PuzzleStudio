@@ -2185,27 +2185,22 @@ function renderTreeNode(node, parent, depth, importTitleIndex) {
 }
 
 function folderChevronSvg(expanded) {
-  return expanded
-    ? `<svg class="tree-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4"></path></svg>`
-    : `<svg class="tree-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"></path></svg>`;
+  return editorIconSvg(expanded ? "chevron-down" : "chevron-right", { className: "tree-chevron" });
 }
 
 function folderIconSvg(workspace = false) {
-  if (workspace) {
-    return `<svg class="tree-icon lucide lucide-folder-open" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6A2 2 0 0 1 18.46 20H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2A2 2 0 0 0 12.07 6H18a2 2 0 0 1 2 2v2"></path></svg>`;
-  }
-  return `<svg class="tree-icon lucide lucide-folder" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path></svg>`;
+  return editorIconSvg(workspace ? "folder-open" : "folder", { className: "tree-icon" });
 }
 
 function fileIconSvg(node) {
   const extension = extensionName(node?.puzzlePath || node?.name || "");
   if (extension === "puzzle") {
-    return `<svg xmlns="http://www.w3.org/2000/svg" class="tree-icon lucide lucide-puzzle-icon lucide-puzzle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"/></svg>`;
+    return editorIconSvg("puzzle", { className: "tree-icon" });
   }
   if (extension === "puzzle3") {
-    return `<svg xmlns="http://www.w3.org/2000/svg" class="tree-icon lucide lucide-box-icon lucide-box" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>`;
+    return editorIconSvg("box", { className: "tree-icon" });
   }
-  return `<svg class="tree-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><path d="M14 2v6h6"></path></svg>`;
+  return editorIconSvg("file", { className: "tree-icon" });
 }
 
 function treeNameHtml(node) {
@@ -2348,15 +2343,15 @@ function treeActionsHtml(kind) {
 }
 
 function renameIconSvg() {
-  return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"></path><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"></path></svg>`;
+  return editorIconSvg("pencil");
 }
 
 function deleteIconSvg() {
-  return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"></path><path d="M8 6V4h8v2"></path><path d="M19 6l-1 14H6L5 6"></path><path d="M10 11v5"></path><path d="M14 11v5"></path></svg>`;
+  return editorIconSvg("trash-2");
 }
 
 function closeIconSvg() {
-  return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>`;
+  return editorIconSvg("x");
 }
 
 function renderDraftEntry(parentFolder, parent, depth) {
@@ -2396,9 +2391,9 @@ function renderDraftEntry(parentFolder, parent, depth) {
 
 function draftIconSvg(kind) {
   if (kind === "folder") {
-    return `<svg class="tree-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7l-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2z"></path></svg>`;
+    return editorIconSvg("folder", { className: "tree-icon" });
   }
-  return `<svg class="tree-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><path d="M14 2v6h6"></path></svg>`;
+  return editorIconSvg("file", { className: "tree-icon" });
 }
 
 function focusDraftInput() {

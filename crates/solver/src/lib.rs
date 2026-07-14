@@ -6,7 +6,6 @@ pub mod object_refs;
 pub mod puzzle3_domain;
 pub mod puzzle_domain;
 pub mod relevance;
-mod relevance3;
 pub mod report;
 pub mod slice;
 mod stable_hash;

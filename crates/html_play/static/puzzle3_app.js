@@ -58,20 +58,24 @@ function ensurePuzzle3ComponentFrame() {
 
 const fallbackSnapshot = {
   size: { width: 3, depth: 3, height: 3 },
-  camera: {
-    yawDegrees: 15,
-    pitchDegrees: 55,
-    rollDegrees: 0,
-    zoom: 1,
-  },
   view: {
     zoom: 1,
   },
-  settings: {
-    interactiveLook: false,
-    interactiveZoom: false,
+  render: {
+    camera: {
+      yawDegrees: 15,
+      pitchDegrees: 55,
+      rollDegrees: 0,
+      zoom: 1,
+      interactiveLook: false,
+      interactiveZoom: false,
+    },
     grid: { visibility: 0 },
-    shade: true,
+    sprite: { shade: true },
+    shadow: false,
+    pixelate: { enabled: false, scale: 1, smoothing: true },
+    animation: { tween: { enabled: false, intervalMs: 250 } },
+    viewport: null,
   },
   directions: {
     left: { dx: -1, dy: 0, dz: 0 },
@@ -117,7 +121,7 @@ const view = {
 let snapshot = fallbackSnapshot;
 let snapshotLoaded = false;
 let runtime = null;
-let initialCamera = cloneCamera(fallbackSnapshot.camera);
+let initialCamera = cloneCamera(fallbackSnapshot.render.camera);
 let currentSceneName = initialSceneName(fallbackSnapshot);
 let editorModelComponentPreview = null;
 let sceneEditorPreview = null;
@@ -170,6 +174,12 @@ function requirePuzzle3Snapshot(source, label = "Puzzle3 snapshot") {
   if (!source || typeof source !== "object" || Array.isArray(source)) {
     throw new Error(`${label} is missing or invalid.`);
   }
+  if (!source.render || typeof source.render !== "object" || Array.isArray(source.render)) {
+    throw new Error(`${label}.render is missing or invalid.`);
+  }
+  if (!source.render.camera || !source.render.animation?.tween) {
+    throw new Error(`${label}.render is missing camera or animation data.`);
+  }
   return source;
 }
 
@@ -196,7 +206,7 @@ async function loadSnapshotData(source, options = {}) {
   if (!inlineComponentMount) {
     applyTheme(snapshot.theme || { name: "clean" });
   }
-  initialCamera = cloneCamera(snapshot.camera || fallbackSnapshot.camera);
+  initialCamera = cloneCamera(snapshot.render.camera);
   view.projectionFitKey = "";
   resetRenderGeometryCache();
   resetViewportMotion();
@@ -361,7 +371,7 @@ class Puzzle3SessionRuntime {
     this.semanticObjectsById = runtimeSemanticObjectsById(this.runtimeGame);
     this.presentationObjectsById = runtimePresentationObjectsById(this.base.objects);
     this.coreRuntime = coreRuntime;
-    this.camera = cloneCamera(initialSnapshot.camera);
+    this.camera = cloneCamera(initialSnapshot.render.camera);
     this.levels = cloneRuntimeContractLevels(this.runtimeLevelBundle, initialSnapshot.levels || []);
     this.levelIndex = clampIndex(initialSnapshot.levelIndex || 0, this.levels.length);
     this.undoStack = [];
@@ -379,7 +389,10 @@ class Puzzle3SessionRuntime {
     return {
       ...this.base,
       size: { ...level.size },
-      camera: cloneCamera(this.camera),
+      render: {
+        ...this.base.render,
+        camera: cloneCamera(this.camera),
+      },
       cells: this.cells.map((cell) => ({
         position: { ...cell.position },
         objects: cell.objects.map((object) => ({ ...object })),
@@ -689,7 +702,7 @@ function puzzle3PreviewSnapshot(update = {}, source = requireLoadedPuzzle3Snapsh
     next.cells = JSON.parse(JSON.stringify(cells));
   }
   if (update.camera) {
-    next.camera = cloneCamera({
+    next.render.camera = cloneCamera({
       ...update.camera,
       zoom: update.camera.zoom ?? update.view?.zoom,
     });
@@ -698,7 +711,7 @@ function puzzle3PreviewSnapshot(update = {}, source = requireLoadedPuzzle3Snapsh
     next.view = clonePuzzle3PreviewView(update.view, next.size || fallbackSnapshot.size);
   }
   if (update.settings) {
-    next.settings = mergePuzzle3PreviewSettings(next.settings || {}, update.settings);
+    next.render = mergePuzzle3PreviewRender(next.render, update.settings);
   }
   return next;
 }
@@ -724,7 +737,7 @@ function applyPuzzle3PreviewResources(target, resources = {}) {
   }
 }
 
-function mergePuzzle3PreviewSettings(base, patch) {
+function mergePuzzle3PreviewRender(base, patch) {
   const next = { ...base, ...patch };
   if (base.grid || patch.grid) {
     next.grid = {
@@ -866,7 +879,7 @@ function createPuzzle3Component() {
       draw();
     },
     applyInput(input) {
-      runtime.setCamera(snapshot.camera);
+      runtime.setCamera(snapshot.render.camera);
       const beforeLevelIndex = snapshot.levelIndex || 0;
       let lifecycleEffects = [];
       if (input === "undo") {
@@ -1081,7 +1094,7 @@ function syncCanvasSize() {
 
 function updateProjectionFit(rect) {
   const size = snapshot.size || fallbackSnapshot.size;
-  const camera = snapshot.camera || fallbackSnapshot.camera;
+  const camera = snapshot.render.camera;
   if (activeViewportFocusCell()) {
     return;
   }
@@ -1114,7 +1127,7 @@ function ensureProjectionFit() {
   }
   const width = Math.max(1, Number(rect.width) || 1);
   const height = Math.max(1, Number(rect.height) || 1);
-  const key = projectionFitKey(size, snapshot.camera || fallbackSnapshot.camera);
+  const key = projectionFitKey(size, snapshot.render.camera);
   if (
     key !== view.projectionFitKey
     || Math.abs(width - view.projectionWidth) > 0.5
@@ -1233,10 +1246,10 @@ function projectScenePointUnit(position, size, camera) {
 
 function cloneCamera(camera) {
   const next = {
-    yawDegrees: Number(camera?.yawDegrees ?? fallbackSnapshot.camera.yawDegrees),
-    pitchDegrees: Number(camera?.pitchDegrees ?? fallbackSnapshot.camera.pitchDegrees),
-    rollDegrees: Number(camera?.rollDegrees ?? fallbackSnapshot.camera.rollDegrees),
-    zoom: Number(camera?.zoom ?? fallbackSnapshot.camera.zoom),
+    yawDegrees: Number(camera.yawDegrees),
+    pitchDegrees: Number(camera.pitchDegrees),
+    rollDegrees: Number(camera.rollDegrees),
+    zoom: Number(camera.zoom),
   };
   if (String(camera?.projection || "").toLowerCase() === "orthographic") {
     next.projection = "orthographic";
@@ -1245,17 +1258,17 @@ function cloneCamera(camera) {
 }
 
 function resetCamera() {
-  snapshot.camera = cloneCamera(initialCamera);
-  runtime.setCamera(snapshot.camera);
+  snapshot.render.camera = cloneCamera(initialCamera);
+  runtime.setCamera(snapshot.render.camera);
   resetViewportMotion();
 }
 
 function cameraLookEnabled() {
-  return Boolean(snapshot.settings?.interactiveLook ?? snapshot.settings?.debugCamera);
+  return Boolean(snapshot.render.camera.interactiveLook);
 }
 
 function cameraZoomEnabled() {
-  return Boolean(snapshot.settings?.interactiveZoom);
+  return Boolean(snapshot.render.camera.interactiveZoom);
 }
 
 function effectiveComponentEmbedMode() {
@@ -1274,22 +1287,22 @@ function updateCameraInteractionState() {
 }
 
 function rotateCamera(deltaX, deltaY) {
-  const camera = snapshot.camera || fallbackSnapshot.camera;
+  const camera = snapshot.render.camera;
   camera.yawDegrees = normalizeDegrees(camera.yawDegrees + deltaX * 0.35);
   camera.pitchDegrees = clamp(
     camera.pitchDegrees - deltaY * 0.25,
     PUZZLE3_APP_CAMERA_MIN_PITCH_DEGREES,
     PUZZLE3_APP_CAMERA_MAX_PITCH_DEGREES,
   );
-  snapshot.camera = camera;
+  snapshot.render.camera = camera;
   resetProjection();
 }
 
 function zoomCamera(deltaY) {
-  const camera = snapshot.camera || fallbackSnapshot.camera;
-  const currentZoom = Number(camera.zoom ?? fallbackSnapshot.camera.zoom);
+  const camera = snapshot.render.camera;
+  const currentZoom = Number(camera.zoom);
   camera.zoom = clamp(currentZoom * Math.exp(-deltaY * 0.001), 0.1, 8);
-  snapshot.camera = camera;
+  snapshot.render.camera = camera;
 }
 
 function normalizeDegrees(value) {
@@ -1301,7 +1314,7 @@ function clamp(value, min, max) {
 }
 
 function projectWithDepth(position) {
-  const camera = snapshot.camera || fallbackSnapshot.camera;
+  const camera = snapshot.render.camera;
   const size = snapshot.size || fallbackSnapshot.size;
   const previewView = puzzle3PreviewView();
   return Puzzle3VisualCore.projectOrthographic(position, {
@@ -1386,7 +1399,7 @@ function drawWithThree() {
 }
 
 function canvasShadowRenderError() {
-  const raw = snapshot.settings?.shadow;
+  const raw = snapshot.render.shadow;
   if (raw === undefined || raw === false) {
     return null;
   }
@@ -1561,7 +1574,7 @@ function smoothViewportOrigin(nextX, nextY, target) {
 }
 
 function smoothViewportMaxLag(target) {
-  const camera = snapshot.camera || fallbackSnapshot.camera;
+  const camera = snapshot.render.camera;
   return Math.max(16, target.cellScale * projectionZoom(camera) * 3.5);
 }
 
@@ -1571,7 +1584,7 @@ function viewportProjectionFitTarget(renderContext) {
     return null;
   }
   const size = snapshot.size || fallbackSnapshot.size;
-  const camera = snapshot.camera || fallbackSnapshot.camera;
+  const camera = snapshot.render.camera;
   const focus = renderContext?.focusCell || null;
   if (!focus) {
     return null;
@@ -1610,7 +1623,7 @@ function viewportFitForFrame(frame, viewportBounds, centerPoint = null, zoom = 1
 }
 
 function puzzle3ViewportSettings(source = snapshot) {
-  const raw = source?.viewport;
+  const raw = source.render.viewport;
   if (!raw || raw === true || raw === false) {
     return null;
   }
@@ -1819,7 +1832,7 @@ function fitProjectionToContent(primitives, width, height) {
 
 function fitProjectionToXYStageBounds(width, height, fit) {
   const size = snapshot.size || fallbackSnapshot.size;
-  const camera = snapshot.camera || fallbackSnapshot.camera;
+  const camera = snapshot.render.camera;
   const bounds = stageProjectionUnitBounds(size, camera, "xy");
   const effectiveScale = fitScaleForProjectedBounds({ width, height }, bounds, fit.margin);
   const nextCellScale = effectiveScale / projectionZoom(camera);
@@ -1836,7 +1849,7 @@ function fitProjectionToXYStageBounds(width, height, fit) {
 
 function fitProjectionToStageBounds(width, height, fit) {
   const size = snapshot.size || fallbackSnapshot.size;
-  const camera = snapshot.camera || fallbackSnapshot.camera;
+  const camera = snapshot.render.camera;
   const bounds = stageProjectionUnitBounds(size, camera, fit.mode);
   const effectiveScale = fitScaleForProjectedBounds({ width, height }, bounds, fit.margin);
   const nextCellScale = effectiveScale / projectionZoom(camera);
@@ -1884,7 +1897,7 @@ function stageProjectionUnitBounds(size, camera, mode = "stage") {
 }
 
 function projectionContentFitSettings() {
-  const raw = snapshot.settings?.fitContent ?? snapshot.settings?.fit_content;
+  const raw = snapshot.render.fitContent;
   if (!raw) {
     return { enabled: false };
   }
@@ -1930,7 +1943,7 @@ function puzzle3ViewPayload(width, height) {
   }
   const size = snapshot.size || fallbackSnapshot.size;
   const normalizedSize = normalizeModelSize(size);
-  const camera = snapshot.camera || fallbackSnapshot.camera;
+  const camera = snapshot.render.camera;
   const previewView = puzzle3PreviewView();
   const canvasRect = canvas.getBoundingClientRect();
   return {
@@ -1997,7 +2010,7 @@ function puzzle3InspectState() {
       originX: view.originX,
       originY: view.originY,
       cellScale: view.cellScale,
-      effectiveScale: view.cellScale * projectionZoom(snapshot.camera || fallbackSnapshot.camera),
+      effectiveScale: view.cellScale * projectionZoom(snapshot.render.camera),
     },
     renderCellCount: renderCellCandidates(renderContext).length,
     cellCount: (snapshot.cells || []).length,
@@ -2061,7 +2074,7 @@ function projectedStageCellFootprints(size) {
 }
 
 function gridSettings() {
-  const raw = snapshot.settings?.grid;
+  const raw = snapshot.render.grid;
   if (!raw || raw === false || raw === true) {
     return { visibility: 0 };
   }
@@ -2089,7 +2102,7 @@ function clamp01(value) {
 }
 
 function spriteRenderSettings() {
-  const raw = snapshot.settings?.shade ?? snapshot.settings?.sprite;
+  const raw = snapshot.render.sprite;
   if (raw === false) {
     return { shade: false };
   }
@@ -2102,7 +2115,7 @@ function spriteRenderSettings() {
 }
 
 function pixelateSettings() {
-  const raw = snapshot.settings?.pixelate ?? snapshot.settings?.pixel ?? false;
+  const raw = snapshot.render.pixelate;
   if (!raw) {
     return { enabled: false, scale: 1, smoothing: true };
   }
@@ -2351,7 +2364,7 @@ function cameraOrderKey() {
 }
 
 function puzzle3VisualView() {
-  return { camera: snapshot.camera || fallbackSnapshot.camera };
+  return { camera: snapshot.render.camera };
 }
 
 function gridStroke(kind, grid) {
@@ -2444,7 +2457,7 @@ function cellVisibleVoxels(cell) {
   const stacks = new Map();
   for (const [objectIndex, object] of cell.objects.entries()) {
     const sourceKey = `${cellKey(cell.position)}:${objectIndex}`;
-    const objectOrder = objectRenderOrder(object, objectIndex);
+    const objectOrder = Puzzle3VisualCore.objectPriority(spriteOrder(), object, objectIndex);
     for (const voxel of objectVoxels(cell.position, object, sourceKey, objectOrder)) {
       const key = voxelGeometryKey(voxel);
       const stack = stacks.get(key) || [];
@@ -2608,7 +2621,7 @@ function renderCellSignature(cell) {
   const objects = (cell?.objects || []).map((object) => [
     object?.id ?? "",
     object?.sprite ?? "",
-    objectRenderOrder(object),
+    Puzzle3VisualCore.objectPriority(spriteOrder(), object),
   ].join(":"));
   return `${cellKey(position)}|${objects.join(";")}`;
 }
@@ -2687,8 +2700,8 @@ function visibleVoxelStack(stack) {
     }
   }
   for (const group of priorities) {
-    const voxel = spriteOrderPriorityDefinition(group.order)?.merge
-      ? averageMergedVoxels(group.voxels)
+    const voxel = Puzzle3VisualCore.priorityDefinition(spriteOrder(), group.order).merge
+      ? Puzzle3VisualCore.averageMergedVoxels(group.voxels, parseColor, formatColor)
       : group.voxels[0];
     const source = voxel.color || parseColor(voxel.fill);
     if (!source || source.a <= 0) {
@@ -2709,53 +2722,12 @@ function visibleVoxelStack(stack) {
   return visible;
 }
 
-function averageMergedVoxels(voxels) {
-  const colors = voxels
-    .map((voxel) => voxel.color || parseColor(voxel.fill))
-    .filter((color) => color && color.a > 0);
-  if (!colors.length) {
-    return voxels[0];
-  }
-  const divisor = colors.length;
-  const color = colors.reduce((sum, candidate) => ({
-    r: sum.r + candidate.r,
-    g: sum.g + candidate.g,
-    b: sum.b + candidate.b,
-    a: sum.a + candidate.a,
-  }), { r: 0, g: 0, b: 0, a: 0 });
-  color.r /= divisor;
-  color.g /= divisor;
-  color.b /= divisor;
-  color.a /= divisor;
-  return {
-    ...voxels[0],
-    color,
-    fill: formatColor(color),
-    sourceKeys: voxels.flatMap((voxel) => voxel.sourceKey ? [voxel.sourceKey] : (voxel.sourceKeys || [])),
-  };
-}
-
-function objectRenderOrder(object, fallbackIndex = 0) {
-  const name = String(object?.name || "");
-  const priority = spriteOrder().priorities.findIndex((entry) =>
-    Array.isArray(entry.objects) && entry.objects.includes(name)
-  );
-  if (priority >= 0) {
-    return priority;
-  }
-  throw new Error(`compiled sprite order does not cover object: ${name || fallbackIndex}`);
-}
-
 function spriteOrder() {
   const order = snapshot.order || fallbackSnapshot.order;
   if (!order || !Array.isArray(order.direction_priority) || !Array.isArray(order.priorities)) {
     throw new Error("compiled sprite order contract is missing");
   }
   return order;
-}
-
-function spriteOrderPriorityDefinition(priority) {
-  return spriteOrder().priorities[priority] || null;
 }
 
 function objectVoxelOrder(voxel) {
@@ -3947,8 +3919,7 @@ function cloneRuntimeSnapshot(source) {
   return {
     ...source,
     size: { ...source.size },
-    camera: cloneCamera(source.camera),
-    settings: { ...(source.settings || {}) },
+    render: JSON.parse(JSON.stringify(source.render)),
     directions: cloneRuntimeRecord(source.directions || {}),
     directionSets: cloneRuntimeRecord(source.directionSets || {}),
     controls: {

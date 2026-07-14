@@ -85,7 +85,7 @@ fn occupied_cells(state: &State3) -> Vec<(Coord3, Vec<ObjectId>)> {
             for x in 0..state.size.width {
                 let position = Coord3 { x, y, z };
                 let objects = state
-                    .cell_view(position)
+                    .cell_view_at(position)
                     .expect("scan only visits positions inside the state")
                     .objects;
                 if !objects.is_empty() {
@@ -117,6 +117,28 @@ input right [ Player | no Player ] -> [ | Player ]
     .unwrap();
 
     object_id(&parsed, "@Dust");
+}
+
+#[test]
+fn routines_are_scope_wide_and_materialize_in_3d() {
+    let parsed = parse_puzzle_body3(
+        r#"
+slots {
+Player
+}
+
+rules {
+move_player
+}
+
+routine move_player once {
+right [ Player | no Player ] -> [ | Player ]
+}
+"#,
+    )
+    .unwrap();
+
+    assert_eq!(flattened_rules(parsed.game.program()).len(), 1);
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -210,7 +232,9 @@ horizontal [ Player | no solid ] -> [ | Player ]
     .unwrap()
 }
 
-fn microban_basic_rules_with_input_guards(rules: &[Rule3]) -> Vec<Rule3> {
+fn microban_basic_rules_with_input_guards(
+    rules: &[puzzle_core::GridRule<3>],
+) -> Vec<puzzle_core::GridRule<3>> {
     rules
         .iter()
         .cloned()
@@ -299,7 +323,7 @@ horizontal [ Player | no solid ] -> [ | Player ]
     );
     assert_eq!(
         flattened_rules(parsed.game.program())[1].writes,
-        vec![WriteOp3::Move {
+        vec![GridWriteOp::<3>::Move {
             component: 0,
             from_offset: Delta3::ZERO.into(),
             to_offset: Direction3::RIGHT.offset.into(),
@@ -379,13 +403,13 @@ level "start" {
     let floor = ObjectId(1);
     let occupied = (0..2)
         .flat_map(|z| (0..2).flat_map(move |y| (0..2).map(move |x| Coord3::new(x, y, z))))
-        .filter(|position| next.has_object(&parsed.game, *position, floor))
+        .filter(|position| next.has_object_at(&parsed.game, *position, floor))
         .count();
 
     assert_eq!(occupied, 8);
     assert!(matches!(
         parsed.lifecycle.on_level_start.as_slice(),
-        [RuleStep3::Block {
+        [GridRuleStep::<3>::Block {
             application: RuleApplication3::UntilStable,
             ..
         }]
@@ -428,7 +452,7 @@ level "start" {
     let floor = ObjectId(1);
     let occupied = (0..2)
         .flat_map(|y| (0..3).map(move |x| Coord3::new(x, y, 0)))
-        .filter(|position| next.has_object(&parsed.game, *position, floor))
+        .filter(|position| next.has_object_at(&parsed.game, *position, floor))
         .count();
 
     assert_eq!(occupied, 1);
@@ -472,8 +496,8 @@ level "start" {
         transition_program(&parsed.game, &initial, parsed.game.program(), INPUT_RIGHT).unwrap();
     let player = object_id(&parsed, "Player");
 
-    assert!(!next.has_object(&parsed.game, Coord3::new(1, 1, 0), player));
-    assert!(next.has_object(&parsed.game, Coord3::new(2, 1, 0), player));
+    assert!(!next.has_object_at(&parsed.game, Coord3::new(1, 1, 0), player));
+    assert!(next.has_object_at(&parsed.game, Coord3::new(2, 1, 0), player));
 }
 
 #[test]
@@ -519,8 +543,8 @@ P..G
 
     let next = transition_program(game, &state, parsed.game.program(), InputId(0)).unwrap();
 
-    assert!(!next.has_object(game, Coord3::new(0, 0, 0), ObjectId(2)));
-    assert!(next.has_object(game, Coord3::new(3, 0, 0), ObjectId(2)));
+    assert!(!next.has_object_at(game, Coord3::new(0, 0, 0), ObjectId(2)));
+    assert!(next.has_object_at(game, Coord3::new(3, 0, 0), ObjectId(2)));
 }
 
 #[test]
@@ -580,6 +604,8 @@ smoothing = true
       }
       shade = true
       shadow = true
+      tween = true
+      tween_duration = 75ms
     }
 
 slots {
@@ -590,18 +616,20 @@ Player
     )
     .unwrap();
 
-    assert_eq!(parsed.settings.camera.yaw_degrees, 90);
-    assert_eq!(parsed.settings.camera.pitch_degrees, 42);
-    assert_eq!(parsed.settings.camera.roll_degrees, 15);
-    assert_eq!(parsed.settings.camera.zoom_milli, 1250);
-    assert!(parsed.settings.camera.interactive_look);
-    assert!(parsed.settings.camera.interactive_zoom);
-    assert!(parsed.settings.grid.occupied_cells);
-    assert!(parsed.settings.sprite.shade);
-    assert!(parsed.settings.shadow);
-    assert!(parsed.settings.pixelate.enabled);
-    assert_eq!(parsed.settings.pixelate.scale, 4);
-    assert!(parsed.settings.pixelate.smoothing);
+    assert_eq!(parsed.render.camera.yaw_degrees, 90);
+    assert_eq!(parsed.render.camera.pitch_degrees, 42);
+    assert_eq!(parsed.render.camera.roll_degrees, 15);
+    assert_eq!(parsed.render.camera.zoom_milli, 1250);
+    assert!(parsed.render.camera.interactive_look);
+    assert!(parsed.render.camera.interactive_zoom);
+    assert!(parsed.render.grid.occupied_cells);
+    assert!(parsed.render.sprite.shade);
+    assert!(parsed.render.shadow);
+    assert!(parsed.animation.tween.enabled);
+    assert_eq!(parsed.animation.tween.interval_ms, 75);
+    assert!(parsed.render.pixelate.enabled);
+    assert_eq!(parsed.render.pixelate.scale, 4);
+    assert!(parsed.render.pixelate.smoothing);
 }
 
 #[test]
@@ -630,11 +658,11 @@ Player
     )
     .unwrap();
 
-    assert!(parsed.settings.camera.interactive_look);
-    assert!(parsed.settings.pixelate.enabled);
-    assert!(!parsed.settings.pixelate.smoothing);
-    assert!(!parsed.settings.sprite.shade);
-    assert!(!parsed.settings.shadow);
+    assert!(parsed.render.camera.interactive_look);
+    assert!(parsed.render.pixelate.enabled);
+    assert!(!parsed.render.pixelate.smoothing);
+    assert!(!parsed.render.sprite.shade);
+    assert!(!parsed.render.shadow);
 }
 
 #[test]
@@ -772,18 +800,18 @@ Player
     )
     .unwrap();
 
-    assert!(!parsed.settings.camera.interactive_look);
-    assert!(!parsed.settings.camera.interactive_zoom);
-    assert_eq!(parsed.settings.camera.yaw_degrees, 0);
-    assert_eq!(parsed.settings.camera.pitch_degrees, 90);
-    assert_eq!(parsed.settings.camera.roll_degrees, 0);
-    assert_eq!(parsed.settings.camera.zoom_milli, 1000);
-    assert!(!parsed.settings.grid.occupied_cells);
-    assert!(parsed.settings.sprite.shade);
-    assert!(!parsed.settings.shadow);
-    assert!(!parsed.settings.pixelate.enabled);
-    assert_eq!(parsed.settings.pixelate.scale, 4);
-    assert!(parsed.settings.pixelate.smoothing);
+    assert!(!parsed.render.camera.interactive_look);
+    assert!(!parsed.render.camera.interactive_zoom);
+    assert_eq!(parsed.render.camera.yaw_degrees, 0);
+    assert_eq!(parsed.render.camera.pitch_degrees, 90);
+    assert_eq!(parsed.render.camera.roll_degrees, 0);
+    assert_eq!(parsed.render.camera.zoom_milli, 1000);
+    assert!(!parsed.render.grid.occupied_cells);
+    assert!(parsed.render.sprite.shade);
+    assert!(!parsed.render.shadow);
+    assert!(!parsed.render.pixelate.enabled);
+    assert_eq!(parsed.render.pixelate.scale, 4);
+    assert!(parsed.render.pixelate.smoothing);
 }
 
 #[test]
@@ -807,11 +835,11 @@ Player
     )
     .unwrap();
 
-    assert_eq!(parsed.settings.viewport.mode, ViewportMode3::Centered);
-    assert_eq!(parsed.settings.viewport.follow, ViewportFollow3::Snap);
-    assert_eq!(parsed.settings.viewport.focus, "Player");
+    assert_eq!(parsed.render.viewport.mode, ViewportMode3::Centered);
+    assert_eq!(parsed.render.viewport.follow, ViewportFollow3::Snap);
+    assert_eq!(parsed.render.viewport.focus, "Player");
     assert_eq!(
-        parsed.settings.viewport.framing,
+        parsed.render.viewport.framing,
         Some(ViewportFraming3 {
             width: 7,
             depth: 5,
@@ -870,11 +898,11 @@ actor = Player Box
     )
     .unwrap();
 
-    assert_eq!(parsed.settings.viewport.mode, ViewportMode3::Centered);
-    assert_eq!(parsed.settings.viewport.follow, ViewportFollow3::Smooth);
-    assert_eq!(parsed.settings.viewport.focus, "actor");
+    assert_eq!(parsed.render.viewport.mode, ViewportMode3::Centered);
+    assert_eq!(parsed.render.viewport.follow, ViewportFollow3::Smooth);
+    assert_eq!(parsed.render.viewport.focus, "actor");
     assert_eq!(
-        parsed.settings.viewport.framing,
+        parsed.render.viewport.framing,
         Some(ViewportFraming3 {
             width: 9,
             depth: 7,
@@ -904,11 +932,11 @@ Player
     )
     .unwrap();
 
-    assert_eq!(parsed.settings.viewport.mode, ViewportMode3::Paged);
-    assert_eq!(parsed.settings.viewport.follow, ViewportFollow3::Snap);
-    assert_eq!(parsed.settings.viewport.focus, "Player");
+    assert_eq!(parsed.render.viewport.mode, ViewportMode3::Paged);
+    assert_eq!(parsed.render.viewport.follow, ViewportFollow3::Snap);
+    assert_eq!(parsed.render.viewport.focus, "Player");
     assert_eq!(
-        parsed.settings.viewport.framing,
+        parsed.render.viewport.framing,
         Some(ViewportFraming3 {
             width: 9,
             depth: 7,
@@ -1122,7 +1150,7 @@ input [ Player ] -> [ > Player ]
     assert!(flattened_rules(parsed.game.program()).iter().any(|rule| {
         rule.guards == vec![Guard3::InputIs(INPUT_RIGHT)]
             && rule.writes
-                == vec![WriteOp3::SetMark {
+                == vec![GridWriteOp::<3>::SetMark {
                     component: 0,
                     object: PLAYER,
                     offset: Delta3::ZERO.into(),
@@ -1175,13 +1203,13 @@ P....
         transition_program(&parsed.game, &initial, parsed.game.program(), INPUT_RIGHT).unwrap();
     let player = object_id(&parsed, "Player");
 
-    assert!(moved.has_object(&parsed.game, Coord3::new(1, 0, 0), player));
-    assert!(!moved.has_object(&parsed.game, Coord3::new(4, 0, 0), player));
-    assert!(!moved.has_mark(&parsed.game, Coord3::new(1, 0, 0), player, MarkId3(0), None,));
+    assert!(moved.has_object_at(&parsed.game, Coord3::new(1, 0, 0), player));
+    assert!(!moved.has_object_at(&parsed.game, Coord3::new(4, 0, 0), player));
+    assert!(!moved.has_mark_at(&parsed.game, Coord3::new(1, 0, 0), player, MarkId3(0), None,));
 }
 
 #[test]
-fn bare_move_is_not_a_3d_builtin_step() {
+fn bare_move_is_reported_as_an_unknown_scope_routine() {
     let error = parse_puzzle3d(
         r#"
 puzzle push3 {
@@ -1197,10 +1225,7 @@ move
 "#,
     )
     .unwrap_err();
-    assert!(diagnostic_contains(
-        &error,
-        "3D rule blocks do not support routine calls"
-    ));
+    assert!(diagnostic_contains(&error, "unknown routine call: move"));
 }
 
 #[test]
@@ -1249,9 +1274,9 @@ PB.
     let player = object_id(&parsed, "Player");
     let box_object = object_id(&parsed, "Box");
 
-    assert!(!moved.has_object(&parsed.game, Coord3::new(0, 0, 0), player));
-    assert!(moved.has_object(&parsed.game, Coord3::new(1, 0, 0), player));
-    assert!(moved.has_object(&parsed.game, Coord3::new(2, 0, 0), box_object));
+    assert!(!moved.has_object_at(&parsed.game, Coord3::new(0, 0, 0), player));
+    assert!(moved.has_object_at(&parsed.game, Coord3::new(1, 0, 0), player));
+    assert!(moved.has_object_at(&parsed.game, Coord3::new(2, 0, 0), box_object));
 }
 
 #[test]
@@ -1284,7 +1309,7 @@ repeat right [ Box | ] -> [ | Box ]
     );
     assert!(parsed.game.program().iter().any(|step| matches!(
         step,
-        RuleStep3::Block {
+        GridRuleStep::<3>::Block {
             application: RuleApplication3::OnceAll,
             ..
         }
@@ -1297,7 +1322,7 @@ repeat right [ Box | ] -> [ | Box ]
     for application in [RuleApplication3::Random, RuleApplication3::UntilStable] {
         assert!(parsed.game.program().iter().any(|step| matches!(
             step,
-            RuleStep3::Block {
+            GridRuleStep::<3>::Block {
                 application: actual,
                 ..
             } if *actual == application
@@ -1306,7 +1331,7 @@ repeat right [ Box | ] -> [ | Box ]
 }
 
 #[test]
-fn parser_rejects_shared_statement_surfaces_without_3d_lowering() {
+fn parser_reports_unknown_routines_and_unlowered_application_blocks() {
     let routine_call = parse_puzzle3d(
         r#"
 puzzle no_routine_calls3 {
@@ -1323,7 +1348,7 @@ push_boxes
     )
     .unwrap_err();
     assert!(
-        diagnostic_contains(&routine_call, "3D rule blocks do not support routine calls"),
+        diagnostic_contains(&routine_call, "unknown routine call: push_boxes"),
         "{routine_call:?}"
     );
 
@@ -1440,7 +1465,7 @@ directions [ Marker:* | ] -> [ | Marker:* ]
     assert!(flattened_rules(parsed.game.program()).iter().all(|rule| {
         rule.pattern.cells()[0].require_objects[0]
             == match rule.writes[0] {
-                WriteOp3::Move { object, .. } => object,
+                GridWriteOp::<3>::Move { object, .. } => object,
                 _ => ObjectId::EMPTY,
             }
     }));
@@ -1486,9 +1511,9 @@ PB.
     let next =
         transition_program_without_input(&parsed.game, &state, parsed.game.program()).unwrap();
 
-    assert!(next.has_object(&parsed.game, Coord3::new(0, 0, 0), ObjectId(1)));
-    assert!(!next.has_object(&parsed.game, Coord3::new(1, 0, 0), ObjectId(2)));
-    assert!(next.has_object(&parsed.game, Coord3::new(2, 0, 0), ObjectId(2)));
+    assert!(next.has_object_at(&parsed.game, Coord3::new(0, 0, 0), ObjectId(1)));
+    assert!(!next.has_object_at(&parsed.game, Coord3::new(1, 0, 0), ObjectId(2)));
+    assert!(next.has_object_at(&parsed.game, Coord3::new(2, 0, 0), ObjectId(2)));
 }
 
 #[test]
@@ -1535,7 +1560,7 @@ B.C
     );
     assert!(matches!(
         rule.writes.as_slice(),
-        [WriteOp3::MoveObjectSet { binding: 0, .. }]
+        [GridWriteOp::<3>::MoveObjectSet { binding: 0, .. }]
     ));
 
     let state = parsed
@@ -1546,8 +1571,8 @@ B.C
         .unwrap();
     let next =
         transition_program_without_input(&parsed.game, &state, parsed.game.program()).unwrap();
-    assert!(!next.has_object(&parsed.game, Coord3::new(0, 0, 0), ObjectId(1)));
-    assert!(next.has_object(&parsed.game, Coord3::new(1, 0, 0), ObjectId(1)));
+    assert!(!next.has_object_at(&parsed.game, Coord3::new(0, 0, 0), ObjectId(1)));
+    assert!(next.has_object_at(&parsed.game, Coord3::new(1, 0, 0), ObjectId(1)));
 }
 
 #[test]
@@ -1572,13 +1597,13 @@ right [ solid#1 | solid#2 ] -> [ solid#2 | solid#1 ]
     assert!(flattened_rules(parsed.game.program()).iter().any(|rule| {
         rule.pattern.cells()[0].require_objects == vec![ObjectId(1)]
             && rule.pattern.cells()[1].require_objects == vec![ObjectId(2)]
-            && rule.writes.contains(&WriteOp3::Move {
+            && rule.writes.contains(&GridWriteOp::<3>::Move {
                 component: 0,
                 from_offset: Delta3::ZERO.into(),
                 to_offset: Direction3::RIGHT.offset.into(),
                 object: ObjectId(1),
             })
-            && rule.writes.contains(&WriteOp3::Move {
+            && rule.writes.contains(&GridWriteOp::<3>::Move {
                 component: 0,
                 from_offset: Direction3::RIGHT.offset.into(),
                 to_offset: Delta3::ZERO.into(),
@@ -1634,7 +1659,7 @@ rules {
     );
     assert_eq!(
         flattened_rules(parsed.game.program())[0].writes[0],
-        WriteOp3::Move {
+        GridWriteOp::<3>::Move {
             component: 0,
             from_offset: Delta3::ZERO.into(),
             to_offset: Direction3::RIGHT.offset.into(),
@@ -1808,10 +1833,79 @@ level "stacked" {
 
     let state = bundle.build_level_state(0).unwrap();
 
-    assert!(state.has_object(&bundle.game, Coord3::new(1, 1, 1), ObjectId(1)));
-    assert!(state.has_object(&bundle.game, Coord3::new(1, 1, 0), ObjectId(2)));
-    assert!(state.has_object(&bundle.game, Coord3::new(2, 1, 0), ObjectId(3)));
-    assert!(state.has_object(&bundle.game, Coord3::new(0, 2, 0), ObjectId(4)));
+    assert!(state.has_object_at(&bundle.game, Coord3::new(1, 1, 1), ObjectId(1)));
+    assert!(state.has_object_at(&bundle.game, Coord3::new(1, 1, 0), ObjectId(2)));
+    assert!(state.has_object_at(&bundle.game, Coord3::new(2, 1, 0), ObjectId(3)));
+    assert!(state.has_object_at(&bundle.game, Coord3::new(0, 2, 0), ObjectId(4)));
+}
+
+#[test]
+fn parser_uses_shared_unbraced_level_syntax() {
+    let parsed = parse_puzzle_body3(
+        r#"
+slots {
+Player
+}
+
+levels {
+legend {
+P = Player
+}
+
+level "flat"
+P
+}
+"#,
+    )
+    .unwrap();
+
+    let entry = parsed
+        .level_bundle
+        .as_ref()
+        .and_then(|bundle| bundle.level(0))
+        .expect("shared unbraced level materializes");
+    assert_eq!(entry.name, "flat");
+    assert_eq!(entry.level.size, Size3::new(1, 1, 1));
+}
+
+#[test]
+fn parser_materializes_level_rules_around_the_shared_program() {
+    let parsed = parse_puzzle_body3(
+        r#"
+slots {
+Player Goal
+}
+
+rules {
+[ Player ] -> [ Player ]
+}
+
+levels {
+legend {
+P = Player
+}
+
+level "ordered" {
+rules before {
+[ Player ] -> [ Player Goal ]
+}
+P
+rules after {
+[ Player Goal ] -> [ Goal ]
+}
+}
+}
+"#,
+    )
+    .unwrap();
+
+    let entry = parsed
+        .level_bundle
+        .as_ref()
+        .and_then(|bundle| bundle.level(0))
+        .expect("level bundle exists");
+    assert_eq!(entry.program.len(), 3);
+    assert_eq!(flattened_rules(&entry.program).len(), 18);
 }
 
 #[test]
@@ -2107,9 +2201,9 @@ P.
     let bundle = parsed.level_bundle.as_ref().expect("level bundle exists");
     let state = bundle.build_level_state(0).unwrap();
 
-    assert!(state.has_object(&bundle.game, Coord3::new(0, 0, 0), ObjectId(1)));
+    assert!(state.has_object_at(&bundle.game, Coord3::new(0, 0, 0), ObjectId(1)));
     assert_eq!(
-        state.cell_view(Coord3::new(1, 0, 0)).unwrap().objects,
+        state.cell_view_at(Coord3::new(1, 0, 0)).unwrap().objects,
         Vec::<ObjectId>::new()
     );
 }
@@ -2667,24 +2761,24 @@ fn spec_3d_recreates_microban_level_1() {
         .filter(|(position, objects)| position.z == 0 && objects.contains(&ObjectId(1)))
         .count();
     assert_eq!(floor_cells, 42);
-    assert!(initial.has_object(&bundle.game, Coord3::new(0, 0, 0), ObjectId(1)));
-    assert!(initial.has_object(&bundle.game, Coord3::new(5, 0, 0), ObjectId(1)));
-    assert!(initial.has_object(&bundle.game, Coord3::new(2, 3, 0), ObjectId(1)));
-    assert!(initial.has_object(&bundle.game, Coord3::new(2, 5, 0), ObjectId(2)));
-    assert!(initial.has_object(&bundle.game, Coord3::new(1, 3, 0), ObjectId(2)));
-    assert!(initial.has_object(&bundle.game, Coord3::new(2, 3, 1), ObjectId(3)));
-    assert!(initial.has_object(&bundle.game, Coord3::new(1, 3, 1), ObjectId(4)));
-    assert!(initial.has_object(&bundle.game, Coord3::new(3, 2, 1), ObjectId(4)));
+    assert!(initial.has_object_at(&bundle.game, Coord3::new(0, 0, 0), ObjectId(1)));
+    assert!(initial.has_object_at(&bundle.game, Coord3::new(5, 0, 0), ObjectId(1)));
+    assert!(initial.has_object_at(&bundle.game, Coord3::new(2, 3, 0), ObjectId(1)));
+    assert!(initial.has_object_at(&bundle.game, Coord3::new(2, 5, 0), ObjectId(2)));
+    assert!(initial.has_object_at(&bundle.game, Coord3::new(1, 3, 0), ObjectId(2)));
+    assert!(initial.has_object_at(&bundle.game, Coord3::new(2, 3, 1), ObjectId(3)));
+    assert!(initial.has_object_at(&bundle.game, Coord3::new(1, 3, 1), ObjectId(4)));
+    assert!(initial.has_object_at(&bundle.game, Coord3::new(3, 2, 1), ObjectId(4)));
     assert!(!win.is_met(&bundle.game, &initial));
 
     let second_initial = bundle.build_level_state(1).unwrap();
-    assert!(second_initial.has_object(&bundle.game, Coord3::new(3, 4, 1), ObjectId(3)));
-    assert!(second_initial.has_object(&bundle.game, Coord3::new(2, 3, 1), ObjectId(4)));
-    assert!(second_initial.has_object(&bundle.game, Coord3::new(3, 3, 1), ObjectId(4)));
-    assert!(second_initial.has_object(&bundle.game, Coord3::new(3, 2, 1), ObjectId(4)));
-    assert!(second_initial.has_object(&bundle.game, Coord3::new(3, 3, 0), ObjectId(2)));
-    assert!(second_initial.has_object(&bundle.game, Coord3::new(2, 2, 0), ObjectId(2)));
-    assert!(second_initial.has_object(&bundle.game, Coord3::new(3, 2, 0), ObjectId(2)));
+    assert!(second_initial.has_object_at(&bundle.game, Coord3::new(3, 4, 1), ObjectId(3)));
+    assert!(second_initial.has_object_at(&bundle.game, Coord3::new(2, 3, 1), ObjectId(4)));
+    assert!(second_initial.has_object_at(&bundle.game, Coord3::new(3, 3, 1), ObjectId(4)));
+    assert!(second_initial.has_object_at(&bundle.game, Coord3::new(3, 2, 1), ObjectId(4)));
+    assert!(second_initial.has_object_at(&bundle.game, Coord3::new(3, 3, 0), ObjectId(2)));
+    assert!(second_initial.has_object_at(&bundle.game, Coord3::new(2, 2, 0), ObjectId(2)));
+    assert!(second_initial.has_object_at(&bundle.game, Coord3::new(3, 2, 0), ObjectId(2)));
 
     assert!(!flattened_rules(parsed.game.program()).is_empty());
 }
@@ -2724,7 +2818,10 @@ fn spec_3d_sokoban_can_be_authored_from_puzzle_file() {
 fn microban_basic_01_is_a_single_layer_3d_level() {
     let parsed = microban_basic_model();
     let rules = microban_basic_rules_with_input_guards(&flattened_rules(parsed.game.program()));
-    let program = rules.into_iter().map(RuleStep3::Rule).collect::<Vec<_>>();
+    let program = rules
+        .into_iter()
+        .map(GridRuleStep::<3>::Rule)
+        .collect::<Vec<_>>();
     let level = microban_basic_01_level();
 
     assert_eq!(level.size, Size3::new(6, 7, 1));
@@ -2735,20 +2832,20 @@ fn microban_basic_01_is_a_single_layer_3d_level() {
     assert_eq!(state.size, Size3::new(6, 7, 1));
     assert!(cells.iter().all(|(position, _)| position.z == 0));
     assert_eq!(cells.len(), 42);
-    assert!(state.has_object(&parsed.game, Coord3::new(1, 3, 0), MICROBAN_GOAL));
-    assert!(state.has_object(&parsed.game, Coord3::new(1, 3, 0), MICROBAN_BOX));
-    assert!(state.has_object(&parsed.game, Coord3::new(2, 3, 0), MICROBAN_PLAYER));
-    assert!(state.has_object(&parsed.game, Coord3::new(3, 4, 0), MICROBAN_BOX));
+    assert!(state.has_object_at(&parsed.game, Coord3::new(1, 3, 0), MICROBAN_GOAL));
+    assert!(state.has_object_at(&parsed.game, Coord3::new(1, 3, 0), MICROBAN_BOX));
+    assert!(state.has_object_at(&parsed.game, Coord3::new(2, 3, 0), MICROBAN_PLAYER));
+    assert!(state.has_object_at(&parsed.game, Coord3::new(3, 4, 0), MICROBAN_BOX));
 
     let moved_down = transition_program(&parsed.game, &state, &program, INPUT_FORWARD).unwrap();
     let pushed_right =
         transition_program(&parsed.game, &moved_down, &program, INPUT_RIGHT).unwrap();
 
-    assert!(pushed_right.has_object(&parsed.game, Coord3::new(3, 4, 0), MICROBAN_PLAYER));
-    assert!(pushed_right.has_object(&parsed.game, Coord3::new(4, 4, 0), MICROBAN_BOX));
-    assert!(!pushed_right.has_object(&parsed.game, Coord3::new(3, 4, 0), MICROBAN_BOX));
-    assert!(pushed_right.has_object(&parsed.game, Coord3::new(1, 3, 0), MICROBAN_GOAL));
-    assert!(pushed_right.has_object(&parsed.game, Coord3::new(1, 3, 0), MICROBAN_BOX));
+    assert!(pushed_right.has_object_at(&parsed.game, Coord3::new(3, 4, 0), MICROBAN_PLAYER));
+    assert!(pushed_right.has_object_at(&parsed.game, Coord3::new(4, 4, 0), MICROBAN_BOX));
+    assert!(!pushed_right.has_object_at(&parsed.game, Coord3::new(3, 4, 0), MICROBAN_BOX));
+    assert!(pushed_right.has_object_at(&parsed.game, Coord3::new(1, 3, 0), MICROBAN_GOAL));
+    assert!(pushed_right.has_object_at(&parsed.game, Coord3::new(1, 3, 0), MICROBAN_BOX));
 }
 
 #[test]

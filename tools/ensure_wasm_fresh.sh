@@ -150,24 +150,14 @@ ensure_game_wasm_copies_match() {
 
 ensure_static_asset_copies_match() {
   local build_cmd="tools/sync_static_assets.sh"
-  if cmp -s \
-    crates/html_play/static/renderer.js \
-    crates/html_editor/static/renderer.js \
-    && cmp -s \
-      crates/html_play/static/renderer.css \
-      crates/html_editor/static/renderer.css; then
+  if "$build_cmd" --check >/dev/null 2>&1; then
     return
   fi
 
-  echo "static: html_editor renderer copy differs; running $build_cmd" >&2
+  echo "static: generated html_editor distribution assets differ; running $build_cmd" >&2
   "$build_cmd"
-  if ! cmp -s \
-    crates/html_play/static/renderer.js \
-    crates/html_editor/static/renderer.js \
-    || ! cmp -s \
-      crates/html_play/static/renderer.css \
-      crates/html_editor/static/renderer.css; then
-    echo "static: html_editor renderer copy still differs after $build_cmd" >&2
+  if ! "$build_cmd" --check; then
+    echo "static: generated html_editor distribution assets still differ after $build_cmd" >&2
     exit 1
   fi
 }

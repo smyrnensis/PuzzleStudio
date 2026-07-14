@@ -34,7 +34,6 @@ pub struct SourceAnalysis {
     entries: OnceCell<Vec<SourceTarget>>,
     outline: OnceCell<Vec<SourceOutlineItem>>,
     folds: OnceCell<Vec<SourceFoldRange>>,
-    level_editor_integration: OnceCell<Result<crate::LevelEditorIntegration, String>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -86,7 +85,6 @@ impl SourceAnalysis {
             entries: OnceCell::new(),
             outline: OnceCell::new(),
             folds: OnceCell::new(),
-            level_editor_integration: OnceCell::new(),
         }
     }
 
@@ -135,13 +133,7 @@ impl SourceAnalysis {
     }
 
     fn level_editor_integration(&self) -> Result<&crate::LevelEditorIntegration, String> {
-        self.level_editor_integration
-            .get_or_init(|| {
-                crate::integrate_level_editor_authoring(&self.source)
-                    .map_err(|report| report.to_string())
-            })
-            .as_ref()
-            .map_err(Clone::clone)
+        self.snapshot().level_editor_integration()
     }
 
     /// Produces highlighting and outline from this analysis document.
@@ -219,7 +211,6 @@ impl SourceAnalysis {
         self.entries.take();
         self.outline.take();
         self.folds.take();
-        self.level_editor_integration.take();
         Ok(SourceAnalysisEditResult {
             rescanned_lines,
             total_lines,
@@ -563,7 +554,12 @@ mod tests {
 
     #[test]
     fn puzzle3_analysis_highlights_level_slice_separator_as_valid_structure() {
-        let source = r#"levels {
+        let source = r#"puzzle board {
+dimension = 3
+slots {
+ground = Floor
+}
+levels {
 legend {
 _ = Floor
 }
@@ -573,16 +569,21 @@ ___
 ___
 }
 }
+}
 "#;
         let separator = source.find("\n-\n").expect("slice separator") + 1;
         let highlighted =
             analyze_source_for_profile(source, PuzzleSourceProfile::Puzzle3d).highlight();
 
-        assert!(highlighted.spans.iter().any(|span| {
-            span.start == separator
-                && span.end == separator + 1
-                && span.kind == SourceHighlightKind::LevelCell
-        }));
+        assert!(
+            highlighted.spans.iter().any(|span| {
+                span.start == separator
+                    && span.end == separator + 1
+                    && span.kind == SourceHighlightKind::LevelCell
+            }),
+            "{:?}",
+            highlighted.spans
+        );
         assert!(highlighted.spans.iter().all(|span| {
             span.start != separator || span.kind != SourceHighlightKind::InvalidLevelCell
         }));
@@ -590,7 +591,8 @@ ___
 
     #[test]
     fn puzzle2d_analysis_keeps_undeclared_dash_level_cell_invalid() {
-        let source = "levels {\nlevel \"dash\" {\n-\n}\n}\n";
+        let source =
+            "puzzle default {\nslots {\nactor = Box\n}\n}\nlevels {\nlevel \"dash\" {\n-\n}\n}\n";
         let separator = source.find('-').expect("dash cell");
         let highlighted =
             analyze_source_for_profile(source, PuzzleSourceProfile::Puzzle2d).highlight();
@@ -741,7 +743,7 @@ M
 
     #[test]
     fn level_editor_manifest_keeps_parser_legend_diagnostics_without_failing_the_session() {
-        let source = "puzzle default {\nlayers {\nactor = Box\n}\n}\nlevels {\nlegend {\nX = Missing\n. = empty\n}\nlevel \"one\"\nX\n}\n";
+        let source = "puzzle default {\nslots {\nactor = Box\n}\n}\nlevels {\nlegend {\nX = Missing\n. = empty\n}\nlevel \"one\"\nX\n}\n";
         let manifest = analyze_source(source)
             .level_editor_manifest_json()
             .expect("invalid legend must remain visible to the level editor");

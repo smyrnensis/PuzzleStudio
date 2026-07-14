@@ -12,19 +12,24 @@ pub fn export_loaded_document_visual_fixture_json(
                 "failed to serialize puzzle3 document fields: {error}"
             ))
         })?;
-    export_visual_fixture_json_with_title_scenes_and_animation(
+    export_visual_fixture_json_with_title_and_scenes(
         puzzle,
         Some(&document.title),
         document_fields.as_deref(),
         &level_bundle_names,
-        VisualFixtureAnimation3 {
-            tween_enabled: document.animation.tween.enabled,
-            tween_interval_ms: document.animation.tween.interval_ms,
-        },
     )
     .map_err(|error| {
         DiagnosticReport::error(format!("failed to export puzzle3 fixture: {error:?}"))
     })
+}
+
+pub fn parse_puzzle3d(source: &str) -> Result<ParsedPuzzle3, DiagnosticReport> {
+    let document = parse_surface_compile_document(source)?;
+    let parts = parse_document_source_parts_from_surface_document(&document)?;
+    let models = parts.models.clone();
+    let catalogs = parts.model_catalogs.clone();
+    let shared = parse_game2d_from_document_parts(parts)?;
+    crate::spatial_materialize3::materialize_puzzle3(shared, &models, &catalogs)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -175,34 +180,19 @@ fn parse_puzzle2d_loaded_document(
 fn parse_puzzle3d_loaded_document(
     parts: DocumentSourceParts,
 ) -> Result<LoadedDocument, DiagnosticReport> {
-    let name =
-        first_model_name(&parts.model_source, "puzzle").unwrap_or_else(|| "default".to_string());
-    let mut scenes = parts.scenes;
-    normalize_puzzle3_scene_kinds(&mut scenes);
-    resolve_inferred_scene_puzzle_slots(&mut scenes, std::iter::once(("puzzle3", &name)))?;
-    let model = parts.models.first().expect("3D model count was validated");
-    let catalog = parts
-        .model_catalogs
+    let name = parts
+        .models
         .first()
-        .expect("every parsed model has a Catalog product");
-    let puzzle =
-        crate::puzzle3_parse::lower_puzzle3d_product(model, catalog.clone()).map_err(|report| {
-            let lines = parts
-                .model_lines
-                .iter()
-                .map(|line| line.text.clone())
-                .collect::<Vec<_>>();
-            let line_numbers = parts
-                .model_lines
-                .iter()
-                .map(|line| line.line)
-                .collect::<Vec<_>>();
-            report_with_source_line_numbers(report, &lines, &line_numbers)
-        })?;
-    let mut scenes = add_implicit_model_scenes(scenes, std::iter::once(("puzzle3", &name)));
-    resolve_scene_actions(&mut scenes, &HashMap::new())?;
+        .map(|model| model.name.clone())
+        .unwrap_or_else(|| "default".to_string());
+    let shell = parts.shell.clone();
+    let models = parts.models.clone();
+    let catalogs = parts.model_catalogs.clone();
+    let shared = parse_game2d_from_document_parts(parts)?;
+    let scenes = shared.scenes.clone();
+    let puzzle = crate::spatial_materialize3::materialize_puzzle3(shared, &models, &catalogs)?;
     Ok(loaded_document_from_shell(
-        parts.shell,
+        shell,
         scenes,
         vec![LoadedDocumentModel::Puzzle3d { name, puzzle }],
     ))
@@ -278,7 +268,8 @@ fn split_mixed_game_document_source(
     source: &str,
 ) -> Result<MixedDocumentSources, DiagnosticReport> {
     let logical_lines = source::logical_lines_with_locations(source)?;
-    let mut model_dimensions = model_syntax::parse_puzzle_model_syntax(&logical_lines)?
+    let mut model_dimensions = model_syntax::parse_puzzle_model_syntax(&logical_lines)
+        .value?
         .into_iter()
         .map(|model| model.dimension);
     let raw_lines = source.lines().collect::<Vec<_>>();
@@ -470,30 +461,6 @@ fn resolve_inferred_scene_component_frames(
                     resolve_inferred_scene_component_frames(children, puzzle_kinds);
                 }
             }
-        }
-    }
-}
-
-fn normalize_puzzle3_scene_kinds(scenes: &mut [SceneDef]) {
-    for scene in scenes {
-        for puzzle in &mut scene.state.puzzles {
-            if puzzle.kind == "puzzle" {
-                puzzle.kind = "puzzle3".to_string();
-            }
-        }
-        normalize_puzzle3_component_kinds(&mut scene.components);
-    }
-}
-
-fn normalize_puzzle3_component_kinds(components: &mut [SceneComponent]) {
-    for component in components {
-        if let SceneComponent::Frame(frame) = component {
-            if frame.kind == "puzzle" {
-                frame.kind = "puzzle3".to_string();
-            }
-        }
-        if let Some(children) = component.children_mut() {
-            normalize_puzzle3_component_kinds(children);
         }
     }
 }
@@ -714,6 +681,7 @@ struct DocumentSourceParts {
     models: Vec<model_syntax::PuzzleModelSyntax>,
     model_catalogs: Vec<Catalog>,
     scenes: Vec<SceneDef>,
+    recognition: crate::surface::ParserRecognition,
 }
 
 impl Default for DocumentShell {
@@ -1013,6 +981,7 @@ fn misplaced_puzzle_lifecycle_message(lifecycle_block: &str) -> String {
     )
 }
 
+#[cfg(test)]
 fn parse_document_source_parts(source: &str) -> Result<DocumentSourceParts, DiagnosticReport> {
     let logical_lines = logical_lines_with_locations(source)?;
     parse_document_source_parts_from_logical_lines(logical_lines)
@@ -1040,10 +1009,14 @@ fn parse_document_source_parts_from_logical_lines(
     logical_lines: Vec<source::LogicalLine>,
 ) -> Result<DocumentSourceParts, DiagnosticReport> {
     let shell = parse_document_shell_lines(&logical_lines)?;
-    let (model_lines, scenes) = split_document_scene_logical_lines(logical_lines)?;
+    let mut recognition = crate::surface::ParserRecognition::default();
+    let (model_lines, scenes) =
+        split_document_scene_logical_lines(logical_lines, &mut recognition)?;
     let model_lines = strip_document_shell_lines(&model_lines);
     let document_entries = model_syntax::parse_document_entries(&model_lines)?;
-    let models = model_syntax::parse_puzzle_models_from_document_entries(&document_entries)?;
+    let parsed_models = model_syntax::parse_puzzle_models_from_document_entries(&document_entries);
+    recognition.merge(parsed_models.recognition);
+    let models = parsed_models.value?;
     let model_catalogs = models
         .iter()
         .map(build_puzzle_catalog)
@@ -1060,6 +1033,7 @@ fn parse_document_source_parts_from_logical_lines(
         models,
         model_catalogs,
         scenes,
+        recognition,
     })
 }
 
@@ -1071,63 +1045,59 @@ fn parse_document_shell(source: &str) -> Result<DocumentShell, DiagnosticReport>
 fn parse_document_shell_lines(
     lines: &[source::LogicalLine],
 ) -> Result<DocumentShell, DiagnosticReport> {
-    let line_texts = lines
-        .iter()
-        .map(|line| line.text.clone())
-        .collect::<Vec<_>>();
     let mut shell = DocumentShell::default();
     let mut index = 0;
     while index < lines.len() {
-        let tokens = split_header_tokens(&line_texts[index]);
+        let tokens = split_header_tokens(&lines[index]);
         match tokens.as_slice() {
             [] => {
                 index += 1;
             }
             ["title", ..] => {
-                shell.title = parse_metadata_text(&line_texts[index], "title")?;
+                shell.title = parse_metadata_text(&lines[index], "title")?;
                 index += 1;
             }
             ["subtitle", ..] => {
-                shell.subtitle = Some(parse_metadata_text(&line_texts[index], "subtitle")?);
+                shell.subtitle = Some(parse_metadata_text(&lines[index], "subtitle")?);
                 index += 1;
             }
             ["author", ..] => {
-                shell.author = Some(parse_metadata_text(&line_texts[index], "author")?);
+                shell.author = Some(parse_metadata_text(&lines[index], "author")?);
                 index += 1;
             }
             ["homepage", ..] => {
-                shell.homepage = Some(parse_metadata_text(&line_texts[index], "homepage")?);
+                shell.homepage = Some(parse_metadata_text(&lines[index], "homepage")?);
                 index += 1;
             }
             ["default_wait_time", ..] => {
-                shell.default_wait_ms = parse_default_wait_time_directive(&line_texts[index])?;
+                shell.default_wait_ms = parse_default_wait_time_directive(&lines[index])?;
                 index += 1;
             }
             ["again_interval", ..] => {
-                shell.default_again_ms = parse_again_interval_directive(&line_texts[index])?;
+                shell.default_again_ms = parse_again_interval_directive(&lines[index])?;
                 index += 1;
             }
             ["input_buffer", ..] => {
-                index = parse_input_buffer_block(&line_texts, index, &mut shell.input_buffer)?;
+                index = parse_input_buffer_block(lines, index, &mut shell.input_buffer)?;
             }
             ["animation", ..] => {
                 return Err(parse_error(
-                    &line_texts[index],
+                    &lines[index],
                     "top-level animation block was removed; put tween_duration under puzzle render",
                 ));
             }
             ["sounds"] => {
-                if model_sounds_block_starts(&line_texts, index) {
-                    index = skip_logical_block(&line_texts, index);
+                if model_sounds_block_starts(lines, index) {
+                    index = skip_logical_block(lines, index);
                 } else {
-                    index = parse_sounds_block(&line_texts, index, &mut shell.sounds)?;
+                    index = parse_sounds_block(lines, index, &mut shell.sounds)?;
                 }
             }
             ["theme"] | ["theme", ..] => {
-                index = parse_theme_statement(&line_texts, index, &mut shell.theme)?;
+                index = parse_theme_statement(lines, index, &mut shell.theme)?;
             }
             ["assets"] => {
-                index = parse_assets_block(&line_texts, index, &mut shell.assets)?;
+                index = parse_assets_block(lines, index, &mut shell.assets)?;
             }
             _ => break,
         }
@@ -1310,7 +1280,7 @@ fn logical_theme_line_is_block(lines: &[source::LogicalLine], index: usize) -> b
     raw_brace_delta(trimmed) > 0
 }
 
-fn skip_logical_block(lines: &[String], start: usize) -> usize {
+fn skip_logical_block(lines: &[source::LogicalLine], start: usize) -> usize {
     let mut depth = authoring_line_brace_delta(&lines[start]);
     if depth <= 0 {
         return start + 1;
@@ -1327,7 +1297,7 @@ fn skip_logical_block(lines: &[String], start: usize) -> usize {
     index
 }
 
-fn recover_after_directive_error(lines: &[String], index: usize) -> usize {
+fn recover_after_directive_error(lines: &[source::LogicalLine], index: usize) -> usize {
     if line_opens_recovery_block(&lines[index]) {
         skip_logical_block(lines, index)
     } else {
@@ -1363,20 +1333,18 @@ fn push_raw_model_without_default_scene_layouts<'a>(
 
 fn split_document_scene_logical_lines(
     logical_lines: Vec<source::LogicalLine>,
+    recognition: &mut crate::surface::ParserRecognition,
 ) -> Result<(Vec<source::LogicalLine>, Vec<SceneDef>), DiagnosticReport> {
-    let lines = logical_lines
-        .iter()
-        .map(|line| line.text.clone())
-        .collect::<Vec<_>>();
-    let level_entries = collect_level_expansion_entries(&lines)?;
+    let level_entries = collect_level_expansion_entries(&logical_lines)?;
     let mut model_lines = Vec::new();
     let mut scenes = Vec::new();
     let mut model_scene_indices = HashMap::<String, usize>::new();
     let mut i = 0;
-    while i < lines.len() {
-        let tokens = split_header_tokens(&lines[i]);
+    while i < logical_lines.len() {
+        let tokens = split_header_tokens(&logical_lines[i]);
         if matches!(tokens.as_slice(), ["scene", ..]) {
-            let (scene, next_i) = parse_scene_definition(&lines, i, &level_entries)?;
+            let (scene, next_i) =
+                parse_scene_definition(&logical_lines, i, &level_entries, recognition)?;
             if let Some(index) = model_scene_indices.remove(&scene.name) {
                 scenes[index] = scene;
             } else {
@@ -1385,7 +1353,7 @@ fn split_document_scene_logical_lines(
             i = next_i;
         } else if let Some((kind, name)) = model_header_name(tokens.as_slice()) {
             let (entry, default_scene, next_i) =
-                extract_default_model_scene(&logical_lines, &lines, i, kind, name)?;
+                extract_default_model_scene(&logical_lines, i, kind, name)?;
             model_lines.extend(entry);
             if !scenes.iter().any(|scene| scene.name == name) {
                 let scene = default_scene.unwrap_or_else(|| implicit_model_scene(kind, name));
@@ -1402,7 +1370,7 @@ fn split_document_scene_logical_lines(
 }
 
 fn collect_level_expansion_entries(
-    lines: &[String],
+    lines: &[source::LogicalLine],
 ) -> Result<Vec<LevelExpansionEntry>, DiagnosticReport> {
     let mut entries = Vec::new();
     let mut i = 0;
@@ -1433,7 +1401,7 @@ fn collect_level_expansion_entries(
 }
 
 fn skip_logical_owner_block(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     block_name: &str,
 ) -> Result<usize, DiagnosticReport> {
@@ -1456,7 +1424,7 @@ fn skip_logical_owner_block(
 }
 
 fn collect_nested_level_expansion_entries(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     entries: &mut Vec<LevelExpansionEntry>,
 ) -> Result<usize, DiagnosticReport> {
@@ -1494,7 +1462,7 @@ fn collect_nested_level_expansion_entries(
 }
 
 fn collect_levels2_expansion_entries(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     default_puzzle: Option<&str>,
     entries: &mut Vec<LevelExpansionEntry>,
@@ -1565,7 +1533,10 @@ fn collect_levels2_expansion_entries(
     Ok(i + 1)
 }
 
-fn collect_unbraced_level_entry(lines: &[String], start: usize) -> (Vec<String>, usize) {
+fn collect_unbraced_level_entry(
+    lines: &[source::LogicalLine],
+    start: usize,
+) -> (Vec<source::LogicalLine>, usize) {
     let mut body = Vec::new();
     let mut i = start;
     while i < lines.len() {
@@ -1588,20 +1559,19 @@ fn model_header_name<'a>(tokens: &'a [&'a str]) -> Option<(&'a str, &'a str)> {
 
 fn extract_default_model_scene(
     logical_lines: &[source::LogicalLine],
-    lines: &[String],
     start: usize,
     kind: &str,
     name: &str,
 ) -> Result<(Vec<source::LogicalLine>, Option<SceneDef>, usize), DiagnosticReport> {
     let mut entry = vec![logical_lines[start].clone()];
     let mut default_scene = None;
-    let mut depth = authoring_line_brace_delta(&lines[start]);
+    let mut depth = authoring_line_brace_delta(&logical_lines[start]);
     if depth <= 0 {
         return Ok((entry, default_scene, start + 1));
     }
     let mut i = start + 1;
-    while i < lines.len() {
-        let line = &lines[i];
+    while i < logical_lines.len() {
+        let line = &logical_lines[i];
         let tokens = split_header_tokens(line);
         let next_depth = depth + authoring_line_brace_delta(line);
         if next_depth < 0 {
@@ -1619,8 +1589,8 @@ fn extract_default_model_scene(
                     "model default scene has duplicate layout block",
                 ));
             }
-            let next_i = skip_scene_layout_block(lines, i)?;
-            default_scene = Some(parse_default_model_scene(lines, i, next_i, kind, name)?);
+            let next_i = skip_scene_layout_block(logical_lines, i)?;
+            default_scene = Some(parse_default_model_scene(logical_lines, i, next_i, kind, name)?);
             i = next_i;
             continue;
         }
@@ -1631,7 +1601,10 @@ fn extract_default_model_scene(
     Ok((vec![logical_lines[start].clone()], None, start + 1))
 }
 
-fn skip_scene_layout_block(lines: &[String], start: usize) -> Result<usize, DiagnosticReport> {
+fn skip_scene_layout_block(
+    lines: &[source::LogicalLine],
+    start: usize,
+) -> Result<usize, DiagnosticReport> {
     let mut depth = authoring_line_brace_delta(&lines[start]);
     if depth <= 0 {
         return Ok(start + 1);
@@ -1653,7 +1626,7 @@ fn skip_scene_layout_block(lines: &[String], start: usize) -> Result<usize, Diag
 }
 
 fn parse_default_model_scene(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     end: usize,
     kind: &str,
@@ -1661,7 +1634,9 @@ fn parse_default_model_scene(
 ) -> Result<SceneDef, DiagnosticReport> {
     let mut layout_lines = lines[start..end].to_vec();
     rewrite_default_model_layout_components(&mut layout_lines, kind, name);
-    let (layout_block, next_i) = parse_scene_layout_block(&layout_lines, 0, &HashMap::new())?;
+    let mut recognition = crate::surface::ParserRecognition::default();
+    let (layout_block, next_i) =
+        parse_scene_layout_block(&layout_lines, 0, &HashMap::new(), &mut recognition)?;
     debug_assert_eq!(next_i, layout_lines.len());
     let mut scene = implicit_model_scene(kind, name);
     scene.layout = layout_block.layout;
@@ -1671,10 +1646,14 @@ fn parse_default_model_scene(
     Ok(scene)
 }
 
-fn rewrite_default_model_layout_components(lines: &mut [String], kind: &str, name: &str) {
+fn rewrite_default_model_layout_components(
+    lines: &mut [source::LogicalLine],
+    kind: &str,
+    name: &str,
+) {
     for line in lines {
         if split_header_tokens(line).as_slice() == [kind] {
-            *line = format!("{kind} {name}");
+            line.text = format!("{kind} {name}");
         }
     }
 }
@@ -1815,23 +1794,14 @@ mod document_surface_flow_tests {
     }
 
     #[test]
-    fn standalone_puzzle3_parser_uses_surface_compile_product() {
-        let source = include_str!("puzzle3_parse.rs");
+    fn standalone_puzzle3_parser_does_not_exist() {
+        let parser_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/puzzle3_parse.rs");
         assert!(
-            source.contains("crate::parse_surface_compile_document(source)"),
-            "public parse_puzzle3d must consume the shared surface compile product"
+            !parser_path.exists(),
+            "3D parsing must remain part of the canonical parser"
         );
-        for forbidden in [
-            "Parser3::new",
-            "preprocess_source_lines3",
-            "split_structural_line3",
-            "update_structural_block_stack3",
-        ] {
-            assert!(
-                !source.contains(forbidden),
-                "standalone puzzle3 parsing must not reintroduce raw source preprocessing via {forbidden}"
-            );
-        }
+        assert!(!include_str!("lib.rs").contains("mod puzzle3_parse"));
     }
 
     #[test]
@@ -2188,22 +2158,7 @@ fn parse_game2d_expanded_lines_with_shell(
     model_catalogs: &[Catalog],
     shell: &DocumentShell,
 ) -> Result<LoadedGame, DiagnosticReport> {
-    let line_numbers = logical_lines
-        .iter()
-        .map(|line| line.line)
-        .collect::<Vec<_>>();
-    let lines = logical_lines
-        .into_iter()
-        .map(|line| line.text)
-        .collect::<Vec<_>>();
-    parse_game2d_expanded_lines_with_shell_inner(
-        &lines,
-        &line_numbers,
-        models,
-        model_catalogs,
-        shell,
-    )
-    .map_err(|report| report_with_source_line_numbers(report, &lines, &line_numbers))
+    parse_game2d_expanded_lines_with_shell_inner(&logical_lines, models, model_catalogs, shell)
 }
 
 fn lower_win_condition_strategy(
@@ -2282,8 +2237,7 @@ fn lower_win_condition_strategy(
 }
 
 fn parse_game2d_expanded_lines_with_shell_inner(
-    lines: &[String],
-    line_numbers: &[usize],
+    lines: &[source::LogicalLine],
     models: &[model_syntax::PuzzleModelSyntax],
     model_catalogs: &[Catalog],
     shell: &DocumentShell,
@@ -2332,7 +2286,7 @@ fn parse_game2d_expanded_lines_with_shell_inner(
 
     let mut diagnostics = Vec::new();
     let mut pending_visual_blocks = Vec::<usize>::new();
-    let mut pending_level_blocks = Vec::<PendingLevelBlock>::new();
+    let mut parser_recognition = crate::surface::ParserRecognition::default();
     let mut next_model = 0usize;
     let mut i = 0;
     while i < lines.len() {
@@ -2346,7 +2300,6 @@ fn parse_game2d_expanded_lines_with_shell_inner(
         match classify_model_top_level_directive(tokens.as_slice()) {
             ModelTopLevelDirective::Puzzle => match parse_puzzle_definition(
                 &lines,
-                &line_numbers,
                 i,
                 models.get(next_model).ok_or_else(|| {
                     DiagnosticReport::error("canonical puzzle model is missing".to_string())
@@ -2382,7 +2335,8 @@ fn parse_game2d_expanded_lines_with_shell_inner(
                 &mut render,
                 &mut animation,
                 &mut puzzle_screen,
-                &mut pending_level_blocks,
+                &mut level_blocks,
+                &mut parser_recognition,
             ) {
                 Ok((next_i, puzzle_name)) => {
                     puzzle_models.push(puzzle_name);
@@ -2491,12 +2445,10 @@ fn parse_game2d_expanded_lines_with_shell_inner(
                 i = next_i;
             }
             ModelTopLevelDirective::Levels => {
-                pending_level_blocks.push(PendingLevelBlock::levels(i, None));
                 let (_, next_i) = collect_levels_authoring_entry(&lines, i)?;
                 i = next_i;
             }
             ModelTopLevelDirective::Level => {
-                pending_level_blocks.push(PendingLevelBlock::level(i, None));
                 let (_, next_i) = parse_level_block(&lines, i, 0)?;
                 i = next_i;
             }
@@ -2516,20 +2468,8 @@ fn parse_game2d_expanded_lines_with_shell_inner(
             }
         }
     }
-    for pending_level in &pending_level_blocks {
-        if let Err(report) = parse_pending_level_block(
-            &lines,
-            pending_level,
-            &mut level_blocks,
-            &mut catalog,
-            &mut render_overlays,
-            &mut empty_char,
-        ) {
-            diagnostics.extend(report.into_diagnostics());
-        }
-    }
     for visual_start in pending_visual_blocks {
-        if let Err(report) = parse_visuals_block(&lines, visual_start, &mut catalog, &mut visuals) {
+        if let Err(report) = parse_visuals_block(&lines, visual_start, &mut catalog, &mut visuals).value {
             diagnostics.extend(report.into_diagnostics());
         }
     }
@@ -2735,7 +2675,8 @@ fn parse_game2d_expanded_lines_with_shell_inner(
                 empty_char,
                 &prepared.char_objects,
                 &catalog.variable_defaults,
-            )?;
+            )
+            .value?;
             Ok(Level {
                 name: prepared.name,
                 pack: prepared.pack,
@@ -2799,54 +2740,6 @@ fn parse_game2d_expanded_lines_with_shell_inner(
         render,
         screen: puzzle_screen,
     })
-}
-
-fn report_with_source_line_numbers(
-    report: DiagnosticReport,
-    lines: &[String],
-    line_numbers: &[usize],
-) -> DiagnosticReport {
-    let mut next_search_start_by_source_line = HashMap::<String, usize>::new();
-    let diagnostics = report
-        .into_diagnostics()
-        .into_iter()
-        .map(|mut diagnostic| {
-            if let Some(span) = &mut diagnostic.primary_span
-                && span.line.is_none()
-                && let Some(source_line) = span.source_line.as_deref()
-                && let Some(line_number) = next_source_line_number(
-                    source_line,
-                    lines,
-                    line_numbers,
-                    &mut next_search_start_by_source_line,
-                )
-            {
-                span.line = Some(line_number);
-            }
-            diagnostic
-        })
-        .collect();
-    DiagnosticReport::from_diagnostics(diagnostics)
-}
-
-fn next_source_line_number(
-    source_line: &str,
-    lines: &[String],
-    line_numbers: &[usize],
-    next_search_start_by_source_line: &mut HashMap<String, usize>,
-) -> Option<usize> {
-    let start = next_search_start_by_source_line
-        .get(source_line)
-        .copied()
-        .unwrap_or(0);
-    let found = lines
-        .iter()
-        .enumerate()
-        .skip(start)
-        .find(|(_, line)| line.as_str() == source_line)
-        .map(|(index, _)| index)?;
-    next_search_start_by_source_line.insert(source_line.to_string(), found + 1);
-    line_numbers.get(found).copied()
 }
 
 fn collect_dynamic_selector_warnings(

@@ -1,11 +1,5 @@
 use std::ops::Range;
 
-mod sprite_order_surface;
-
-pub use sprite_order_surface::{
-    SpriteOrderItemSurface, SpriteOrderSurface, SpriteOrderSurfaceError, parse_sprite_order_surface,
-};
-
 pub trait VariantAxisSpec {
     fn name(&self) -> &str;
     fn allowed_values(&self, tag: &str) -> Option<Vec<String>>;
@@ -1293,14 +1287,18 @@ fn resource_header_error(message: String) -> ResourceHeaderSurfaceError {
     ResourceHeaderSurfaceError { message }
 }
 
-pub fn collect_resource_block_surface<'a>(
-    lines: &'a [String],
+pub fn collect_resource_block_surface<'a, Line>(
+    lines: &'a [Line],
     header_index: usize,
     keyword: &str,
-) -> Result<ResourceBlockSurface<'a>, ResourceHeaderSurfaceError> {
+) -> Result<ResourceBlockSurface<'a>, ResourceHeaderSurfaceError>
+where
+    Line: AsRef<str>,
+{
     let header_line = lines
         .get(header_index)
         .ok_or_else(|| resource_header_error(format!("{keyword} resource header is missing")))?;
+    let header_line = header_line.as_ref();
     if !header_line.trim_end().ends_with('{') {
         return Err(resource_header_error(format!(
             "{keyword} block must end with {{"
@@ -1379,9 +1377,10 @@ pub fn win_condition_row_surface(line: &str) -> Result<WinConditionRowSurface<'_
     })
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RowBlockSurface<'a> {
-    pub rows: Vec<&'a str>,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RowBlockSurface {
+    pub body_start: usize,
+    pub body_end: usize,
     pub next_index: usize,
 }
 
@@ -1396,17 +1395,21 @@ impl RowBlockSurfaceError {
     }
 }
 
-pub fn collect_row_block_surface<'a>(
-    lines: &'a [String],
+pub fn collect_row_block_surface<Line>(
+    lines: &[Line],
     body_start: usize,
     owner: &str,
-) -> Result<RowBlockSurface<'a>, RowBlockSurfaceError> {
-    let mut rows = Vec::new();
+) -> Result<RowBlockSurface, RowBlockSurfaceError>
+where
+    Line: AsRef<str>,
+{
     let mut index = body_start;
     while let Some(line) = lines.get(index) {
+        let line = line.as_ref();
         if line == "}" {
             return Ok(RowBlockSurface {
-                rows,
+                body_start,
+                body_end: index,
                 next_index: index + 1,
             });
         }
@@ -1414,9 +1417,6 @@ pub fn collect_row_block_surface<'a>(
             return Err(RowBlockSurfaceError {
                 message: format!("{owner} accepts rows, not nested blocks: {line}"),
             });
-        }
-        if !line.is_empty() {
-            rows.push(line.as_str());
         }
         index += 1;
     }
@@ -1432,14 +1432,18 @@ pub struct ContainerBlockSurface {
     pub next_index: usize,
 }
 
-pub fn collect_container_block_surface(
-    lines: &[String],
+pub fn collect_container_block_surface<Line>(
+    lines: &[Line],
     body_start: usize,
     owner: &str,
-) -> Result<ContainerBlockSurface, RowBlockSurfaceError> {
+) -> Result<ContainerBlockSurface, RowBlockSurfaceError>
+where
+    Line: AsRef<str>,
+{
     let mut depth = 1usize;
     let mut index = body_start;
     while let Some(line) = lines.get(index) {
+        let line = line.as_ref();
         if line == "}" {
             depth -= 1;
             if depth == 0 {
@@ -1822,23 +1826,30 @@ pub fn rule_program_block_surface(line: &str) -> Option<RuleProgramBlockSurface<
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum RuleProgramBlockBody {
-    RuleStatements(Vec<RuleStatementSyntax>),
-    LifecycleCommands(Vec<String>),
+pub enum RuleProgramBlockBody<Line> {
+    RuleStatements(Vec<RuleStatementSyntax<Line>>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum RuleStatementSyntax {
-    Line(String),
+pub struct RuleStatementLine<Line> {
+    pub source: Line,
+    pub text: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RuleStatementSyntax<Line> {
+    Line(RuleStatementLine<Line>),
     Block {
-        header: String,
-        statements: Vec<RuleStatementSyntax>,
+        header: RuleStatementLine<Line>,
+        statements: Vec<RuleStatementSyntax<Line>>,
     },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RuleProgramBlockBodyError {
     MissingClosingBrace { block_name: &'static str },
+    RewriteContinuationMustStartWithPattern { line_index: usize },
+    RewriteContinuationNestedArrow { line_index: usize },
 }
 
 impl RuleProgramBlockBodyError {
@@ -1847,6 +1858,20 @@ impl RuleProgramBlockBodyError {
             Self::MissingClosingBrace { block_name } => {
                 format!("{block_name} block missing }}")
             }
+            Self::RewriteContinuationMustStartWithPattern { .. } => {
+                "rewrite continuation after -> must start with a pattern".to_string()
+            }
+            Self::RewriteContinuationNestedArrow { .. } => {
+                "rewrite continuation rhs cannot contain another ->".to_string()
+            }
+        }
+    }
+
+    pub fn line_index(self) -> Option<usize> {
+        match self {
+            Self::MissingClosingBrace { .. } => None,
+            Self::RewriteContinuationMustStartWithPattern { line_index }
+            | Self::RewriteContinuationNestedArrow { line_index } => Some(line_index),
         }
     }
 }
@@ -1855,10 +1880,13 @@ impl RuleProgramBlockBodyError {
 ///
 /// `lines` contains only the direct body of the owning block, without its
 /// closing brace. Nested statement blocks still carry their own braces.
-pub fn collect_rule_program_entry_body(
-    lines: &[String],
+pub fn collect_rule_program_entry_body<Line>(
+    lines: &[Line],
     block: RuleProgramBlockSurface<'_>,
-) -> Result<RuleProgramBlockBody, RuleProgramBlockBodyError> {
+) -> Result<RuleProgramBlockBody<Line>, RuleProgramBlockBodyError>
+where
+    Line: AsRef<str> + Clone,
+{
     match block {
         RuleProgramBlockSurface::Rules { .. } => collect_rule_statement_entry_body(lines, "rules")
             .map(RuleProgramBlockBody::RuleStatements),
@@ -1866,12 +1894,14 @@ pub fn collect_rule_program_entry_body(
             collect_rule_statement_entry_body(lines, "on_level_start")
                 .map(RuleProgramBlockBody::RuleStatements)
         }
-        RuleProgramBlockSurface::OnLevelClear => Ok(RuleProgramBlockBody::LifecycleCommands(
-            collect_lifecycle_command_entry_body(lines),
-        )),
-        RuleProgramBlockSurface::OnLastLevelClear => Ok(RuleProgramBlockBody::LifecycleCommands(
-            collect_lifecycle_command_entry_body(lines),
-        )),
+        RuleProgramBlockSurface::OnLevelClear => {
+            collect_rule_statement_entry_body(lines, "on_level_clear")
+                .map(RuleProgramBlockBody::RuleStatements)
+        }
+        RuleProgramBlockSurface::OnLastLevelClear => {
+            collect_rule_statement_entry_body(lines, "on_last_level_clear")
+                .map(RuleProgramBlockBody::RuleStatements)
+        }
     }
 }
 
@@ -2459,10 +2489,51 @@ pub fn input_oriented_pattern_surfaces(line: &str) -> Vec<InputOrientedPatternSu
     surfaces
 }
 
-pub fn collect_rule_statement_line(lines: &[String], start: usize) -> (String, usize) {
-    let first = lines[start].trim();
-    if !looks_like_multiline_rule_line_start(first) {
-        return (first.to_string(), start + 1);
+pub fn collect_rule_statement_line<Line>(
+    lines: &[Line],
+    start: usize,
+) -> Result<(RuleStatementLine<Line>, usize), RuleProgramBlockBodyError>
+where
+    Line: AsRef<str> + Clone,
+{
+    let source = lines[start].clone();
+    let first = source.as_ref().trim().to_string();
+    if !looks_like_multiline_rule_line_start(&first) {
+        return Ok((
+            RuleStatementLine {
+                source,
+                text: first,
+            },
+            start + 1,
+        ));
+    }
+
+    if let Some(trailing) = rewrite_lhs_trailing(&first) {
+        if trailing.is_empty() {
+            if let Some(next_line) = lines.get(start + 1).map(AsRef::as_ref).map(str::trim) {
+                if let Some(rhs) = next_line.strip_prefix("->").map(str::trim_start) {
+                    validate_rewrite_rhs_continuation(rhs, start + 1)?;
+                    return Ok((
+                        RuleStatementLine {
+                            source,
+                            text: format!("{first} -> {rhs}"),
+                        },
+                        start + 2,
+                    ));
+                }
+            }
+        } else if trailing == "->" {
+            if let Some(rhs) = lines.get(start + 1).map(AsRef::as_ref).map(str::trim) {
+                validate_rewrite_rhs_continuation(rhs, start + 1)?;
+                return Ok((
+                    RuleStatementLine {
+                        source,
+                        text: format!("{first} {rhs}"),
+                    },
+                    start + 2,
+                ));
+            }
+        }
     }
 
     let mut joined = String::new();
@@ -2470,12 +2541,18 @@ pub fn collect_rule_statement_line(lines: &[String], start: usize) -> (String, u
     let mut saw_arrow = false;
     let mut index = start;
     while index < lines.len() {
-        let line = lines[index].trim();
+        let line = lines[index].as_ref().trim();
         if line == "}" {
             break;
         }
         if index > start && bracket_depth == 0 && !saw_arrow && !line.starts_with("->") {
-            return (first.to_string(), start + 1);
+            return Ok((
+                RuleStatementLine {
+                    source,
+                    text: first,
+                },
+                start + 1,
+            ));
         }
         if !joined.is_empty() {
             if bracket_depth > 0 {
@@ -2493,33 +2570,72 @@ pub fn collect_rule_statement_line(lines: &[String], start: usize) -> (String, u
         saw_arrow |= line.contains("->");
 
         if index == start && bracket_depth == 0 {
-            return (first.to_string(), start + 1);
+            return Ok((
+                RuleStatementLine {
+                    source,
+                    text: first,
+                },
+                start + 1,
+            ));
         }
         if index > start && bracket_depth == 0 && saw_arrow {
-            return (joined, index + 1);
+            let rhs = joined.split_once("->").map(|(_, rhs)| rhs.trim_start());
+            if let Some(rhs) = rhs {
+                validate_rewrite_rhs_continuation(rhs, index)?;
+            }
+            return Ok((
+                RuleStatementLine {
+                    source,
+                    text: joined,
+                },
+                index + 1,
+            ));
         }
         index += 1;
     }
 
-    (first.to_string(), start + 1)
+    Ok((
+        RuleStatementLine {
+            source,
+            text: first,
+        },
+        start + 1,
+    ))
 }
 
-fn collect_rule_statement_entry_body(
-    lines: &[String],
+fn collect_rule_statement_entry_body<Line>(
+    lines: &[Line],
     block_name: &'static str,
-) -> Result<Vec<RuleStatementSyntax>, RuleProgramBlockBodyError> {
+) -> Result<Vec<RuleStatementSyntax<Line>>, RuleProgramBlockBodyError>
+where
+    Line: AsRef<str> + Clone,
+{
     collect_rule_statement_body(lines, 0, block_name, false).map(|(body, _)| body)
 }
 
-fn collect_rule_statement_body(
-    lines: &[String],
+pub fn collect_rule_statement_block<Line>(
+    lines: &[Line],
+    body_start: usize,
+    block_name: &'static str,
+) -> Result<(Vec<RuleStatementSyntax<Line>>, usize), RuleProgramBlockBodyError>
+where
+    Line: AsRef<str> + Clone,
+{
+    collect_rule_statement_body(lines, body_start, block_name, true)
+}
+
+fn collect_rule_statement_body<Line>(
+    lines: &[Line],
     mut index: usize,
     block_name: &'static str,
     closing_brace_required: bool,
-) -> Result<(Vec<RuleStatementSyntax>, usize), RuleProgramBlockBodyError> {
+) -> Result<(Vec<RuleStatementSyntax<Line>>, usize), RuleProgramBlockBodyError>
+where
+    Line: AsRef<str> + Clone,
+{
     let mut body = Vec::new();
     while index < lines.len() {
-        let line = lines[index].trim();
+        let line = lines[index].as_ref().trim();
         if line == "}" {
             return Ok((body, index + 1));
         }
@@ -2528,18 +2644,22 @@ fn collect_rule_statement_body(
             continue;
         }
         if rule_statement_block_surface(line, true).is_some() {
-            let header = line
+            let text = line
                 .strip_suffix('{')
                 .expect("rule statement block surface requires an opening brace")
                 .trim_end()
                 .to_string();
+            let header = RuleStatementLine {
+                source: lines[index].clone(),
+                text,
+            };
             let (statements, next_index) =
                 collect_rule_statement_body(lines, index + 1, block_name, true)?;
             body.push(RuleStatementSyntax::Block { header, statements });
             index = next_index;
             continue;
         }
-        let (rule_line, next_index) = collect_rule_statement_line(lines, index);
+        let (rule_line, next_index) = collect_rule_statement_line(lines, index)?;
         body.push(RuleStatementSyntax::Line(rule_line));
         index = next_index;
     }
@@ -2550,21 +2670,80 @@ fn collect_rule_statement_body(
     }
 }
 
-fn collect_lifecycle_command_entry_body(lines: &[String]) -> Vec<String> {
-    lines
-        .iter()
-        .map(|line| line.trim())
-        .filter(|line| !line.is_empty())
-        .map(str::to_string)
-        .collect()
-}
-
 fn looks_like_multiline_rule_line_start(line: &str) -> bool {
     line.contains('[')
         && (line.starts_with("input ")
             || line
                 .split_once(' ')
                 .is_some_and(|(prefix, _)| !prefix.is_empty()))
+}
+
+fn validate_rewrite_rhs_continuation(
+    rhs: &str,
+    line_index: usize,
+) -> Result<(), RuleProgramBlockBodyError> {
+    if rhs.is_empty() || !rhs.starts_with('[') {
+        return Err(
+            RuleProgramBlockBodyError::RewriteContinuationMustStartWithPattern { line_index },
+        );
+    }
+    if rhs.contains("->") {
+        return Err(RuleProgramBlockBodyError::RewriteContinuationNestedArrow { line_index });
+    }
+    Ok(())
+}
+
+fn rewrite_lhs_trailing(line: &str) -> Option<&str> {
+    let open_index = line.find('[')?;
+    let prefix = line[..open_index].trim();
+    if !can_start_rewrite_lhs(prefix) {
+        return None;
+    }
+    let lhs_end = open_index + pattern_side_syntax_end(&line[open_index..])?;
+    Some(line[lhs_end..].trim())
+}
+
+fn can_start_rewrite_lhs(prefix: &str) -> bool {
+    let tokens = split_header_tokens(prefix);
+    match tokens.as_slice() {
+        [] => true,
+        ["input", axis] => is_identifier(axis),
+        [application] if rule_application_surface(application).is_some() => true,
+        [application, "input", axis] if rule_application_surface(application).is_some() => {
+            is_identifier(axis)
+        }
+        [application, orientation]
+            if rule_application_surface(application).is_some() && is_identifier(orientation) =>
+        {
+            true
+        }
+        [orientation]
+            if !matches!(
+                *orientation,
+                "for" | "fix" | "if" | "else" | "when" | "action" | "emit" | "do"
+            ) =>
+        {
+            is_identifier(orientation)
+        }
+        _ => false,
+    }
+}
+
+fn pattern_side_syntax_end(value: &str) -> Option<usize> {
+    let mut index = 0;
+    let mut found_block = false;
+    while index < value.len() {
+        let after_space = value[index..].trim_start();
+        index = value.len() - after_space.len();
+        if !value[index..].starts_with('[') {
+            break;
+        }
+        let after_open = index + 1;
+        let close_offset = value[after_open..].find(']')?;
+        index = after_open + close_offset + 1;
+        found_block = true;
+    }
+    found_block.then_some(index)
 }
 
 fn update_square_bracket_depth(mut depth: usize, line: &str) -> usize {
@@ -3210,6 +3389,13 @@ pub fn split_cell_tokens(cell: &str) -> Result<Vec<String>, CellTokenError> {
 mod tests {
     use super::*;
 
+    fn statement_line(source: &str, text: &str) -> RuleStatementLine<String> {
+        RuleStatementLine {
+            source: source.to_string(),
+            text: text.to_string(),
+        }
+    }
+
     #[test]
     fn selector_syntax_is_dimension_independent() {
         assert_eq!(
@@ -3504,15 +3690,18 @@ mod tests {
             "move".to_string(),
         ];
         assert_eq!(
-            collect_rule_statement_line(&multiline, 0),
+            collect_rule_statement_line(&multiline, 0).unwrap(),
             (
-                "input directions [ Player | no Wall ] -> [ | Player ]".to_string(),
+                statement_line(
+                    "input directions [ Player",
+                    "input directions [ Player | no Wall ] -> [ | Player ]",
+                ),
                 4,
             )
         );
         assert_eq!(
-            collect_rule_statement_line(&multiline, 4),
-            ("move".to_string(), 5)
+            collect_rule_statement_line(&multiline, 4).unwrap(),
+            (statement_line("move", "move"), 5)
         );
         let rule_program_lines = vec![
             "input directions [ Player".to_string(),
@@ -3528,10 +3717,11 @@ mod tests {
             )
             .unwrap(),
             RuleProgramBlockBody::RuleStatements(vec![
-                RuleStatementSyntax::Line(
-                    "input directions [ Player | no Wall ] -> [ | Player ]".to_string(),
-                ),
-                RuleStatementSyntax::Line("move".to_string()),
+                RuleStatementSyntax::Line(statement_line(
+                    "input directions [ Player",
+                    "input directions [ Player | no Wall ] -> [ | Player ]",
+                )),
+                RuleStatementSyntax::Line(statement_line("move", "move")),
             ])
         );
         let nested_rule_program_lines = vec![
@@ -3548,12 +3738,13 @@ mod tests {
             )
             .unwrap(),
             RuleProgramBlockBody::RuleStatements(vec![RuleStatementSyntax::Block {
-                header: "for h in horizontal".to_string(),
+                header: statement_line("for h in horizontal {", "for h in horizontal"),
                 statements: vec![RuleStatementSyntax::Block {
-                    header: "if input == h".to_string(),
-                    statements: vec![RuleStatementSyntax::Line(
-                        "[ TEN:horizontal ] -> [ TEN:h ]".to_string(),
-                    )],
+                    header: statement_line("if input == h {", "if input == h"),
+                    statements: vec![RuleStatementSyntax::Line(statement_line(
+                        "[ TEN:horizontal ] -> [ TEN:h ]",
+                        "[ TEN:horizontal ] -> [ TEN:h ]",
+                    ))],
                 }],
             }])
         );
@@ -3563,9 +3754,12 @@ mod tests {
             "Box ]".to_string(),
         ];
         assert_eq!(
-            collect_rule_statement_line(&dense_multiline, 0),
+            collect_rule_statement_line(&dense_multiline, 0).unwrap(),
             (
-                "(right, up) [ Player ; Box ] -> [ Player ; Box ]".to_string(),
+                statement_line(
+                    "(right, up) [ Player",
+                    "(right, up) [ Player ; Box ] -> [ Player ; Box ]",
+                ),
                 3,
             )
         );
@@ -3579,9 +3773,10 @@ mod tests {
                 RuleProgramBlockSurface::OnLevelClear,
             )
             .unwrap(),
-            RuleProgramBlockBody::LifecycleCommands(vec![
-                "if win_conditions -> next_level".to_string()
-            ])
+            RuleProgramBlockBody::RuleStatements(vec![RuleStatementSyntax::Line(statement_line(
+                "if win_conditions -> next_level",
+                "if win_conditions -> next_level",
+            ),)])
         );
         assert_eq!(
             rule_line_surface("right [ Player ] -> [ > Player ]").unwrap(),
@@ -3839,7 +4034,8 @@ mod tests {
         assert_eq!(
             collect_row_block_surface(&lines, 0, "groups").unwrap(),
             RowBlockSurface {
-                rows: vec!["A", "B"],
+                body_start: 0,
+                body_end: 3,
                 next_index: 4,
             }
         );

@@ -431,41 +431,20 @@ pub(crate) fn parse_query_definition(
     })
 }
 
-pub(crate) fn parse_solver_block(
-    lines: &[String],
-    start: usize,
-) -> Result<(usize, SolverSurfaceStrategy), DiagnosticReport> {
-    let header = split_header_tokens(&lines[start]);
-    if header.as_slice() != ["solver"] || !is_block_header_line(&lines[start]) {
-        return Err(parse_error(
-            &lines[start],
-            "solver block must be: solver { ... }",
-        ));
-    }
-
-    parse_solver_body(lines, start + 1, true, &lines[start])
-}
-
 pub(crate) fn parse_solver_entry_body(
-    lines: &[String],
+    lines: &[impl AsRef<str>],
 ) -> Result<SolverSurfaceStrategy, DiagnosticReport> {
-    parse_solver_body(lines, 0, false, "solver {").map(|(_, solver)| solver)
+    parse_solver_body(lines)
 }
 
-fn parse_solver_body(
-    lines: &[String],
-    mut i: usize,
-    closing_brace_required: bool,
-    owner_line: &str,
-) -> Result<(usize, SolverSurfaceStrategy), DiagnosticReport> {
+fn parse_solver_body(lines: &[impl AsRef<str>]) -> Result<SolverSurfaceStrategy, DiagnosticReport> {
     let mut strategy = None::<SolverSurfaceStrategy>;
     let mut deadends = Vec::new();
+    let mut i = 0;
     while i < lines.len() {
-        let line = &lines[i];
+        let line = lines[i].as_ref();
         if line == "}" {
-            let mut solver = strategy.unwrap_or_default();
-            solver.deadends = deadends;
-            return Ok((i + 1, solver));
+            return Err(parse_error(line, "solver entry has an unmatched }"));
         }
         let tokens = split_header_tokens(line);
         if tokens.is_empty() {
@@ -537,28 +516,21 @@ fn parse_solver_body(
             _ => return Err(parse_error(line, "unknown solver block row")),
         }
     }
-    if closing_brace_required {
-        Err(parse_error(
-            owner_line,
-            "solver block missing closing brace",
-        ))
-    } else {
-        let mut solver = strategy.unwrap_or_default();
-        solver.deadends = deadends;
-        Ok((i, solver))
-    }
+    let mut solver = strategy.unwrap_or_default();
+    solver.deadends = deadends;
+    Ok(solver)
 }
 
 fn parse_solver_deadend_block(
-    lines: &[String],
+    lines: &[impl AsRef<str>],
     start: usize,
     combinator: SolverSurfaceDeadendCombinator,
 ) -> Result<(usize, SolverSurfaceDeadend), DiagnosticReport> {
-    let source_line = lines[start].clone();
+    let source_line = lines[start].as_ref().to_string();
     let mut values = Vec::new();
     let mut i = start + 1;
     while i < lines.len() {
-        let line = &lines[i];
+        let line = lines[i].as_ref();
         if line == "}" {
             if values.is_empty() {
                 return Err(parse_error(
@@ -589,13 +561,13 @@ fn parse_solver_deadend_block(
 }
 
 fn parse_solver_strategy_block(
-    lines: &[String],
+    lines: &[impl AsRef<str>],
     start: usize,
 ) -> Result<(usize, SolverSurfaceStrategy), DiagnosticReport> {
     let mut terms = Vec::new();
     let mut i = start + 1;
     while i < lines.len() {
-        let line = &lines[i];
+        let line = lines[i].as_ref();
         if line == "}" {
             return Ok((
                 i + 1,
@@ -613,7 +585,7 @@ fn parse_solver_strategy_block(
         i += 1;
     }
     Err(parse_error(
-        &lines[start],
+        lines[start].as_ref(),
         "solver strategy block missing closing brace",
     ))
 }
@@ -680,9 +652,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn solver_block_parses_direct_deadend_queries() {
+    fn solver_entry_parses_direct_deadend_queries() {
         let lines = [
-            "solver {",
             "deadend blocked",
             "deadend any {",
             "blocked",
@@ -691,17 +662,13 @@ mod tests {
             "strategy {",
             "avoid blocked",
             "}",
-            "}",
         ]
         .into_iter()
         .map(str::to_string)
         .collect::<Vec<_>>();
 
-        let (next, solver) = parse_solver_block(&lines, 0).unwrap();
-        let entry_solver = parse_solver_entry_body(&lines[1..lines.len() - 1]).unwrap();
+        let solver = parse_solver_entry_body(&lines).unwrap();
 
-        assert_eq!(next, lines.len());
-        assert_eq!(entry_solver, solver);
         assert_eq!(solver.terms.len(), 1);
         assert_eq!(solver.deadends.len(), 2);
         assert!(matches!(

@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { spawnSync } from "node:child_process";
 
 const args = process.argv.slice(2);
 const enforce = args.includes("--enforce");
@@ -52,6 +53,7 @@ if (!fs.existsSync(path.join(repoRoot, "crates/html_editor/static/editor.html"))
 for (const asset of [
   "crates/html_editor/static/renderer.css",
   "crates/html_editor/static/renderer.js",
+  "crates/html_editor/static/puzzle3_visual_core.js",
   "crates/html_editor/static/wasm_game/puzzle_wasm_game.js",
   "crates/html_editor/static/wasm_game/puzzle_wasm_game_bg.wasm",
 ]) {
@@ -60,20 +62,15 @@ for (const asset of [
   }
 }
 
-for (const [source, copy] of [
-  ["crates/html_play/static/renderer.js", "crates/html_editor/static/renderer.js"],
-  ["crates/html_play/static/renderer.css", "crates/html_editor/static/renderer.css"],
-]) {
-  const sourcePath = path.join(repoRoot, source);
-  const copyPath = path.join(repoRoot, copy);
-  if (!fs.existsSync(sourcePath) || !fs.existsSync(copyPath)) {
-    continue;
-  }
-  if (fs.readFileSync(sourcePath, "utf8") !== fs.readFileSync(copyPath, "utf8")) {
-    failures.push(
-      `${copy} must be the generated distribution copy of ${source}; run tools/sync_static_assets.sh`,
-    );
-  }
+const staticAssetCheck = spawnSync("tools/sync_static_assets.sh", ["--check"], {
+  cwd: repoRoot,
+  encoding: "utf8",
+});
+if (staticAssetCheck.status !== 0) {
+  failures.push(
+    staticAssetCheck.stderr.trim() ||
+      "generated editor distribution assets failed their canonical-source check",
+  );
 }
 
 if (!hasIncludeMacros(path.join(repoRoot, "crates/html_editor/src/lib.rs"))) {

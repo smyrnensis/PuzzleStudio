@@ -1,13 +1,14 @@
 use crate::relevance::SolverRelevance;
-use puzzle_core::{MatchCell, ObjectId as ObjectId2, Pattern};
-use puzzle_grid3d::{MatchCell3, ObjectId as ObjectId3, Pattern3};
-use puzzle_kernel::{ConditionValueKind, RuleWriteOp};
+use puzzle_kernel::{
+    ConditionValueKind, LayerId, MarkId, ObjectId, RuleMatchCell, RulePattern,
+    RulePatternComponent, RuleWriteOp,
+};
 
 pub trait SolverObjectId: Copy + Ord {
     fn is_empty(self) -> bool;
 }
 
-impl SolverObjectId for ObjectId2 {
+impl SolverObjectId for ObjectId {
     fn is_empty(self) -> bool {
         self.is_empty()
     }
@@ -167,8 +168,10 @@ fn collect_patterns_roots<'a, Pattern>(
     }
 }
 
-impl SolverPatternObjectRefs for Pattern {
-    type ObjectId = ObjectId2;
+impl<Offset> SolverPatternObjectRefs
+    for RulePattern<RulePatternComponent<RuleMatchCell<Offset, ObjectId, LayerId, MarkId>>>
+{
+    type ObjectId = ObjectId;
 
     fn for_each_solver_object_ref(&self, f: &mut impl FnMut(Self::ObjectId)) {
         for cell in self
@@ -192,27 +195,10 @@ impl SolverPatternObjectRefs for Pattern {
     }
 }
 
-impl SolverPatternObjectRefs for Pattern3 {
-    type ObjectId = ObjectId3;
-
-    fn for_each_solver_object_ref(&self, f: &mut impl FnMut(Self::ObjectId)) {
-        for cell in self.cells() {
-            collect_cell3_object_refs(cell, f);
-        }
-    }
-
-    fn solver_object_set_binding_touches(
-        &self,
-        binding: u16,
-        is_relevant: &impl Fn(Self::ObjectId) -> bool,
-    ) -> bool {
-        self.cells()
-            .into_iter()
-            .any(|cell| cell3_binding_touches(cell, binding, is_relevant))
-    }
-}
-
-fn collect_cell_object_refs(cell: &MatchCell, f: &mut impl FnMut(ObjectId2)) {
+fn collect_cell_object_refs<Offset>(
+    cell: &RuleMatchCell<Offset, ObjectId, LayerId, MarkId>,
+    f: &mut impl FnMut(ObjectId),
+) {
     for object in cell.require_objects.iter().chain(&cell.forbid_objects) {
         f(*object);
     }
@@ -226,34 +212,10 @@ fn collect_cell_object_refs(cell: &MatchCell, f: &mut impl FnMut(ObjectId2)) {
     }
 }
 
-fn collect_cell3_object_refs(cell: &MatchCell3, f: &mut impl FnMut(ObjectId3)) {
-    for object in cell.require_objects.iter().chain(&cell.forbid_objects) {
-        f(*object);
-    }
-    for matcher in &cell.require_object_sets {
-        for object in &matcher.objects {
-            f(*object);
-        }
-    }
-    for mark in cell.require_mark.iter().chain(&cell.forbid_mark) {
-        f(mark.object);
-    }
-}
-
-fn cell_binding_touches(
-    cell: &MatchCell,
+fn cell_binding_touches<Offset>(
+    cell: &RuleMatchCell<Offset, ObjectId, LayerId, MarkId>,
     binding: u16,
-    is_relevant: &impl Fn(ObjectId2) -> bool,
-) -> bool {
-    cell.require_object_sets.iter().any(|matcher| {
-        matcher.binding == binding && matcher.objects.iter().copied().any(is_relevant)
-    })
-}
-
-fn cell3_binding_touches(
-    cell: &MatchCell3,
-    binding: u16,
-    is_relevant: &impl Fn(ObjectId3) -> bool,
+    is_relevant: &impl Fn(ObjectId) -> bool,
 ) -> bool {
     cell.require_object_sets.iter().any(|matcher| {
         matcher.binding == binding && matcher.objects.iter().copied().any(is_relevant)

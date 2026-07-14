@@ -186,13 +186,13 @@ function buildPuzzleStudioThreeFrame(snapshot, view = {}) {
     cells,
     objectCatalog,
     objectCount: cells.reduce((count, cell) => count + cell.objects.length, 0),
-    camera: snapshot.camera || {},
+    camera: snapshot.render.camera,
     editorView: view.editorView || snapshot.view || {},
-    settings: snapshot.settings || {},
+    settings: snapshot.render,
     order: snapshot.order,
     animationEvents: Array.isArray(snapshot.animationEvents) ? snapshot.animationEvents : [],
     animationProgress: Number.isFinite(Number(view.animationProgress)) ? Number(view.animationProgress) : 1,
-    viewport: normalizeViewport(snapshot.viewport),
+    viewport: normalizeViewport(snapshot.render.viewport),
     viewportSnapNext: view.viewportSnapNext === true,
   };
   frame.focusCell = frame.viewport ? viewportFocusCell(frame) : null;
@@ -203,7 +203,7 @@ function buildPuzzleStudioThreeFrame(snapshot, view = {}) {
 
 function threeAnimationState(snapshot) {
   const events = Array.isArray(snapshot?.animationEvents) ? snapshot.animationEvents : [];
-  const tween = snapshot?.settings?.animation?.tween || snapshot?.animation?.tween || {};
+  const tween = snapshot.render.animation.tween;
   return {
     events,
     durationMs: Math.max(1, Number(tween.intervalMs || 250)),
@@ -645,7 +645,7 @@ function cellVisibleVoxels(frame, cell) {
   const stacks = new Map();
   for (const [objectIndex, object] of (cell.objects || []).entries()) {
     const sourceKey = `${cellKey(cell.position)}:${objectIndex}`;
-    const priority = objectRenderOrder(frame, object, objectIndex);
+    const priority = Puzzle3VisualCore.objectPriority(spriteOrder(frame), object, objectIndex);
     const objectOrder = (cellRenderIndex(frame, cell.position) * spriteOrder(frame).priorities.length) + priority;
     for (const voxel of objectVoxels(frame, cell.position, object, sourceKey, objectOrder)) {
       const key = voxelGeometryKeyAt(voxel.stackPosition, voxel.scale);
@@ -695,8 +695,8 @@ function visibleVoxelStack(stack) {
   for (const group of priorities) {
     const order = frameOrder(stack);
     const priority = group.order % Math.max(1, order?.priorities?.length || 1);
-    const voxel = spriteOrderPriorityDefinition(order, priority)?.merge
-      ? averageMergedVoxels(group.voxels)
+    const voxel = Puzzle3VisualCore.priorityDefinition(order, priority).merge
+      ? Puzzle3VisualCore.averageMergedVoxels(group.voxels, parseColor, formatColor)
       : group.voxels[0];
     const source = voxel.color || parseColor(voxel.fill);
     if (source?.a <= 0) {
@@ -717,53 +717,12 @@ function visibleVoxelStack(stack) {
   return visible;
 }
 
-function averageMergedVoxels(voxels) {
-  const colors = voxels
-    .map((voxel) => voxel.color || parseColor(voxel.fill))
-    .filter((color) => color && color.a > 0);
-  if (!colors.length) {
-    return voxels[0];
-  }
-  const divisor = colors.length;
-  const color = colors.reduce((sum, candidate) => ({
-    r: sum.r + candidate.r,
-    g: sum.g + candidate.g,
-    b: sum.b + candidate.b,
-    a: sum.a + candidate.a,
-  }), { r: 0, g: 0, b: 0, a: 0 });
-  color.r /= divisor;
-  color.g /= divisor;
-  color.b /= divisor;
-  color.a /= divisor;
-  return {
-    ...voxels[0],
-    color,
-    fill: formatColor(color),
-    sourceKeys: voxels.flatMap((voxel) => voxel.sourceKey ? [voxel.sourceKey] : (voxel.sourceKeys || [])),
-  };
-}
-
-function objectRenderOrder(frame, object, fallbackIndex = 0) {
-  const name = String(object?.name || "");
-  const priority = spriteOrder(frame).priorities.findIndex((entry) =>
-    Array.isArray(entry.objects) && entry.objects.includes(name)
-  );
-  if (priority >= 0) {
-    return priority;
-  }
-  throw new Error(`compiled sprite order does not cover object: ${name || fallbackIndex}`);
-}
-
 function spriteOrder(frame) {
   const order = frame?.order;
   if (!order || !Array.isArray(order.direction_priority) || !Array.isArray(order.priorities)) {
     throw new Error("compiled sprite order contract is missing");
   }
   return order;
-}
-
-function spriteOrderPriorityDefinition(order, priority) {
-  return order?.priorities?.[priority] || null;
 }
 
 function cellRenderIndex(frame, position) {
@@ -1495,7 +1454,7 @@ function viewportFocusVisualRenderBounds(frame) {
       continue;
     }
     const sourceKey = `${cellKey(frame.focusCell.position)}:${objectIndex}`;
-    const priority = objectRenderOrder(frame, object, objectIndex);
+    const priority = Puzzle3VisualCore.objectPriority(spriteOrder(frame), object, objectIndex);
     const objectOrder = (cellRenderIndex(frame, frame.focusCell.position || {}) * spriteOrder(frame).priorities.length) + priority;
     for (const voxel of objectVoxels(frame, frame.focusCell.position || {}, object, sourceKey, objectOrder)) {
       bounds.minX = Math.min(bounds.minX, voxel.bounds.x0);

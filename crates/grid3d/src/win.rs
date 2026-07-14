@@ -1,5 +1,5 @@
 use crate::{
-    CompiledGame3, Delta3, MatchCell3, ObjectId, Pattern3, State3, count_pattern_matches,
+    CompiledGame3, Delta3, GridMatchCell, GridPattern, ObjectId, State3, count_pattern_matches,
     has_pattern_match,
 };
 use serde::{Deserialize, Serialize};
@@ -10,11 +10,11 @@ pub enum WinCondition3 {
     Any(Vec<WinCondition3>),
     SomeObject(ObjectId),
     NoObject(ObjectId),
-    SomePattern(Pattern3),
-    NoPattern(Pattern3),
+    SomePattern(GridPattern<3>),
+    NoPattern(GridPattern<3>),
     AllObjectsCoveredByPattern {
         object: ObjectId,
-        cover_pattern: Pattern3,
+        cover_pattern: GridPattern<3>,
     },
 }
 
@@ -47,8 +47,8 @@ impl WinCondition3 {
     }
 }
 
-fn single_object_pattern(object: ObjectId) -> Pattern3 {
-    Pattern3::new(vec![MatchCell3::new(Delta3::ZERO).require(object)])
+fn single_object_pattern(object: ObjectId) -> GridPattern<3> {
+    GridPattern::<3>::new(vec![GridMatchCell::<3>::new(Delta3::ZERO).require(object)])
 }
 
 #[cfg(test)]
@@ -78,10 +78,10 @@ mod tests {
         )
     }
 
-    fn box_supported_by_goal_pattern() -> Pattern3 {
-        Pattern3::new(vec![
-            MatchCell3::new(Delta3::ZERO).require(BOX),
-            MatchCell3::new(Direction3::DOWN.offset).require(GOAL),
+    fn box_supported_by_goal_pattern() -> GridPattern<3> {
+        GridPattern::<3>::new(vec![
+            GridMatchCell::<3>::new(Delta3::ZERO).require(BOX),
+            GridMatchCell::<3>::new(Direction3::DOWN.offset).require(GOAL),
         ])
     }
 
@@ -90,10 +90,10 @@ mod tests {
         let game = support_game();
         let mut state = State3::empty(Size3::new(3, 1, 2), game.layer_count).unwrap();
         state
-            .place_object(&game, Coord3::new(1, 0, 1), BOX)
+            .place_object_at(&game, Coord3::new(1, 0, 1), BOX)
             .unwrap();
         state
-            .place_object(&game, Coord3::new(1, 0, 0), GOAL)
+            .place_object_at(&game, Coord3::new(1, 0, 0), GOAL)
             .unwrap();
 
         let pattern = box_supported_by_goal_pattern();
@@ -107,10 +107,10 @@ mod tests {
         let game = support_game();
         let mut solved = State3::empty(Size3::new(3, 1, 2), game.layer_count).unwrap();
         solved
-            .place_object(&game, Coord3::new(1, 0, 1), BOX)
+            .place_object_at(&game, Coord3::new(1, 0, 1), BOX)
             .unwrap();
         solved
-            .place_object(&game, Coord3::new(1, 0, 0), GOAL)
+            .place_object_at(&game, Coord3::new(1, 0, 0), GOAL)
             .unwrap();
         let win = WinCondition3::All(vec![
             WinCondition3::SomeObject(GOAL),
@@ -124,7 +124,7 @@ mod tests {
 
         let mut unsolved = solved.clone();
         unsolved
-            .place_object(&game, Coord3::new(2, 0, 0), GOAL)
+            .place_object_at(&game, Coord3::new(2, 0, 0), GOAL)
             .unwrap();
 
         assert!(!win.is_met(&game, &unsolved));

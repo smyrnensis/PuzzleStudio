@@ -1537,18 +1537,16 @@ fn push_compact_mark_patterns(out: &mut String, mark: &[MarkPattern]) {
 fn push_compact_offset(out: &mut String, offset: &Offset) {
     out.push('[');
     match offset {
-        Offset::Fixed { dx, dy } => {
+        Offset::Fixed { delta } => {
+            let [dx, dy] = delta.axes();
             out.push('0');
             out.push(',');
             out.push_str(&dx.to_string());
             out.push(',');
             out.push_str(&dy.to_string());
         }
-        Offset::Variable {
-            base_dx,
-            base_dy,
-            gap_terms,
-        } => {
+        Offset::Variable { base, gap_terms } => {
+            let [base_dx, base_dy] = base.axes();
             out.push('1');
             out.push(',');
             out.push_str(&base_dx.to_string());
@@ -1563,9 +1561,10 @@ fn push_compact_offset(out: &mut String, offset: &Offset) {
                 out.push('[');
                 out.push_str(&term.gap_index.to_string());
                 out.push(',');
-                out.push_str(&term.dx.to_string());
+                let [term_dx, term_dy] = term.delta.axes();
+                out.push_str(&term_dx.to_string());
                 out.push(',');
-                out.push_str(&term.dy.to_string());
+                out.push_str(&term_dy.to_string());
                 out.push(']');
             }
             out.push(']');
@@ -2112,23 +2111,21 @@ fn push_offset_named(out: &mut String, key: &str, offset: &Offset) {
     out.push(':');
     out.push('{');
     match offset {
-        Offset::Fixed { dx, dy } => {
+        Offset::Fixed { delta } => {
+            let [dx, dy] = delta.axes();
             push_json_pair(out, "kind", "fixed");
             out.push(',');
-            push_json_i64(out, "dx", i64::from(*dx));
+            push_json_i64(out, "dx", i64::from(dx));
             out.push(',');
-            push_json_i64(out, "dy", i64::from(*dy));
+            push_json_i64(out, "dy", i64::from(dy));
         }
-        Offset::Variable {
-            base_dx,
-            base_dy,
-            gap_terms,
-        } => {
+        Offset::Variable { base, gap_terms } => {
+            let [base_dx, base_dy] = base.axes();
             push_json_pair(out, "kind", "variable");
             out.push(',');
-            push_json_i64(out, "baseDx", i64::from(*base_dx));
+            push_json_i64(out, "baseDx", i64::from(base_dx));
             out.push(',');
-            push_json_i64(out, "baseDy", i64::from(*base_dy));
+            push_json_i64(out, "baseDy", i64::from(base_dy));
             out.push(',');
             out.push_str("\"gapTerms\":[");
             for (index, term) in gap_terms.iter().enumerate() {
@@ -2138,9 +2135,10 @@ fn push_offset_named(out: &mut String, key: &str, offset: &Offset) {
                 out.push('{');
                 push_json_number(out, "gapIndex", term.gap_index as u64);
                 out.push(',');
-                push_json_i64(out, "dx", i64::from(term.dx));
+                let [term_dx, term_dy] = term.delta.axes();
+                push_json_i64(out, "dx", i64::from(term_dx));
                 out.push(',');
-                push_json_i64(out, "dy", i64::from(term.dy));
+                push_json_i64(out, "dy", i64::from(term_dy));
                 out.push('}');
             }
             out.push(']');

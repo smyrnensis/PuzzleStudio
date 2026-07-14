@@ -1,6 +1,8 @@
 use std::collections::BTreeSet;
 
-use crate::{CompiledGame3, CompiledGameError3, Coord3, ObjectId, Size3, State3, StateError3};
+use crate::{
+    CompiledGame3, CompiledGameError3, Coord3, GridRuleStep, ObjectId, Size3, State3, StateError3,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,7 +26,7 @@ impl Level3 {
                         position: cell.position,
                     });
                 }
-                state.place_object(game, cell.position, *object)?;
+                state.place_object_at(game, cell.position, *object)?;
             }
         }
         Ok(state)
@@ -35,13 +37,15 @@ impl Level3 {
 pub struct LevelEntry3 {
     pub name: String,
     pub level: Level3,
+    pub program: Vec<GridRuleStep<3>>,
 }
 
 impl LevelEntry3 {
-    pub fn new(name: impl Into<String>, level: Level3) -> Self {
+    pub fn new(name: impl Into<String>, level: Level3, program: Vec<GridRuleStep<3>>) -> Self {
         Self {
             name: name.into(),
             level,
+            program,
         }
     }
 }

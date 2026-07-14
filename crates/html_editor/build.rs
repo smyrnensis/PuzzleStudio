@@ -55,6 +55,7 @@ fn main() {
     println!("cargo:rerun-if-changed=docs/scene-state-effects.md");
     println!("cargo:rerun-if-changed=docs/maps-expansion.md");
     println!("cargo:rerun-if-changed=static/editor_boot.js");
+    println!("cargo:rerun-if-changed=static/editor_icons.js");
     println!("cargo:rerun-if-changed=static/editor_codemirror.js");
     println!("cargo:rerun-if-changed=static/editor_runtime.js");
     println!("cargo:rerun-if-changed=static/editor_analysis_worker.js");

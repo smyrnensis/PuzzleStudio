@@ -17,21 +17,6 @@ pub enum VisualFixtureExportError3 {
     RuntimeContract(String),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct VisualFixtureAnimation3 {
-    pub tween_enabled: bool,
-    pub tween_interval_ms: u64,
-}
-
-impl Default for VisualFixtureAnimation3 {
-    fn default() -> Self {
-        Self {
-            tween_enabled: false,
-            tween_interval_ms: 250,
-        }
-    }
-}
-
 pub fn export_visual_fixture_json(
     parsed: &ParsedPuzzle3,
 ) -> Result<String, VisualFixtureExportError3> {
@@ -50,22 +35,6 @@ pub fn export_visual_fixture_json_with_title_and_scenes(
     title: Option<&str>,
     scene_fields_json: Option<&str>,
     level_bundle_names: &[String],
-) -> Result<String, VisualFixtureExportError3> {
-    export_visual_fixture_json_with_title_scenes_and_animation(
-        parsed,
-        title,
-        scene_fields_json,
-        level_bundle_names,
-        VisualFixtureAnimation3::default(),
-    )
-}
-
-pub fn export_visual_fixture_json_with_title_scenes_and_animation(
-    parsed: &ParsedPuzzle3,
-    title: Option<&str>,
-    scene_fields_json: Option<&str>,
-    level_bundle_names: &[String],
-    animation: VisualFixtureAnimation3,
 ) -> Result<String, VisualFixtureExportError3> {
     let bundle = parsed
         .level_bundle
@@ -91,9 +60,7 @@ pub fn export_visual_fixture_json_with_title_scenes_and_animation(
     write_runtime_contract(&mut out, parsed, bundle)?;
     let _ = writeln!(out, "  \"layerCount\": {},", parsed.game.layer_count);
     write_size_field(&mut out, 1, "size", bundle.levels[0].level.size, true);
-    write_camera(&mut out, parsed);
-    write_settings(&mut out, parsed, animation);
-    write_viewport(&mut out, parsed);
+    write_render(&mut out, parsed);
     write_directions(&mut out);
     write_direction_sets(&mut out);
     write_controls(&mut out, parsed);
@@ -142,45 +109,39 @@ fn write_runtime_contract(
     Ok(())
 }
 
-fn write_camera(out: &mut String, parsed: &ParsedPuzzle3) {
-    let camera = &parsed.settings.camera;
-    let _ = writeln!(
+fn write_render(out: &mut String, parsed: &ParsedPuzzle3) {
+    let camera = &parsed.render.camera;
+    let pixelate = &parsed.render.pixelate;
+    let _ = write!(
         out,
-        "  \"camera\": {{ \"yawDegrees\": {}, \"pitchDegrees\": {}, \"rollDegrees\": {}, \"zoom\": {} }},",
+        "  \"render\": {{ \"camera\": {{ \"yawDegrees\": {}, \"pitchDegrees\": {}, \"rollDegrees\": {}, \"zoom\": {}, \"interactiveLook\": {}, \"interactiveZoom\": {} }}, ",
         camera.yaw_degrees,
         camera.pitch_degrees,
         camera.roll_degrees,
         format_zoom(camera.zoom_milli),
-    );
-}
-
-fn write_settings(out: &mut String, parsed: &ParsedPuzzle3, animation: VisualFixtureAnimation3) {
-    let camera = &parsed.settings.camera;
-    let pixelate = &parsed.settings.pixelate;
-    let _ = writeln!(
-        out,
-        "  \"settings\": {{ \"interactiveLook\": {}, \"interactiveZoom\": {}, \"grid\": {{ \"visibility\": {}, \"occupied_cells\": {} }}, \"shade\": {}, \"shadow\": {}, \"pixelate\": {{ \"enabled\": {}, \"scale\": {}, \"smoothing\": {} }}, \"animation\": {{ \"tween\": {{ \"enabled\": {}, \"intervalMs\": {} }} }} }},",
         camera.interactive_look,
         camera.interactive_zoom,
-        if parsed.settings.grid.occupied_cells {
+    );
+    let _ = write!(
+        out,
+        "\"grid\": {{ \"visibility\": {}, \"occupiedCells\": {} }}, \"sprite\": {{ \"shade\": {} }}, \"shadow\": {}, \"pixelate\": {{ \"enabled\": {}, \"scale\": {}, \"smoothing\": {} }}, \"animation\": {{ \"tween\": {{ \"enabled\": {}, \"intervalMs\": {} }} }}, \"viewport\": ",
+        if parsed.render.grid.occupied_cells {
             1
         } else {
             0
         },
-        parsed.settings.grid.occupied_cells,
-        parsed.settings.sprite.shade,
-        parsed.settings.shadow,
+        parsed.render.grid.occupied_cells,
+        parsed.render.sprite.shade,
+        parsed.render.shadow,
         pixelate.enabled,
         pixelate.scale,
         pixelate.smoothing,
-        animation.tween_enabled,
-        animation.tween_interval_ms,
+        parsed.animation.tween.enabled,
+        parsed.animation.tween.interval_ms,
     );
-}
-
-fn write_viewport(out: &mut String, parsed: &ParsedPuzzle3) {
-    let viewport = &parsed.settings.viewport;
+    let viewport = &parsed.render.viewport;
     let Some(framing) = viewport.framing else {
+        out.push_str("null },\n");
         return;
     };
     let mode = match viewport.mode {
@@ -192,7 +153,7 @@ fn write_viewport(out: &mut String, parsed: &ParsedPuzzle3) {
         ViewportFollow3::Snap => "snap",
         ViewportFollow3::Smooth => "smooth",
     };
-    out.push_str("  \"viewport\": { ");
+    out.push_str("{ ");
     let _ = write!(
         out,
         "\"mode\": {}, \"follow\": {}, \"focus\": {}, \"focusObjects\": [",
@@ -218,7 +179,7 @@ fn write_viewport(out: &mut String, parsed: &ParsedPuzzle3) {
             let _ = write!(out, "{height}");
         }
     }
-    out.push_str(" } },\n");
+    out.push_str(" } } },\n");
 }
 
 fn viewport_focus_objects(parsed: &ParsedPuzzle3) -> Vec<ObjectId> {

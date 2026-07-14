@@ -439,35 +439,25 @@ fn patches_contract_2d(patches: &[Patch]) -> Vec<Vec<RuntimePatchOp>> {
 
 fn patch_op_contract_2d(op: &PatchOp) -> RuntimePatchOp {
     match *op {
-        PatchOp::Add { x, y, object } => RuntimePatchOp::Add {
-            position: RuntimeCoord { x, y, z: None },
+        PatchOp::Add { position, object } => RuntimePatchOp::Add {
+            position: runtime_coord2(position),
             object_id: object.0,
         },
-        PatchOp::Remove { x, y, object } => RuntimePatchOp::Remove {
-            position: RuntimeCoord { x, y, z: None },
+        PatchOp::Remove { position, object } => RuntimePatchOp::Remove {
+            position: runtime_coord2(position),
             object_id: object.0,
         },
-        PatchOp::Move {
-            from_x,
-            from_y,
-            to_x,
-            to_y,
-            object,
-        } => RuntimePatchOp::Move {
-            from: RuntimeCoord {
-                x: from_x,
-                y: from_y,
-                z: None,
-            },
-            to: RuntimeCoord {
-                x: to_x,
-                y: to_y,
-                z: None,
-            },
+        PatchOp::Move { from, to, object } => RuntimePatchOp::Move {
+            from: runtime_coord2(from),
+            to: runtime_coord2(to),
             object_id: object.0,
         },
-        PatchOp::Replace { x, y, remove, add } => RuntimePatchOp::Replace {
-            position: RuntimeCoord { x, y, z: None },
+        PatchOp::Replace {
+            position,
+            remove,
+            add,
+        } => RuntimePatchOp::Replace {
+            position: runtime_coord2(position),
             remove: remove.0,
             add: add.0,
         },
@@ -475,26 +465,33 @@ fn patch_op_contract_2d(op: &PatchOp) -> RuntimePatchOp {
             variable: variable.0,
         },
         PatchOp::SetMark {
-            x, y, object, mark, ..
+            position,
+            object,
+            mark,
+            ..
         } => RuntimePatchOp::SetMark {
-            position: RuntimeCoord { x, y, z: None },
+            position: runtime_coord2(position),
             object_id: object.0,
             mark: mark.0,
         },
         PatchOp::RemoveMark {
-            x,
-            y,
+            position,
             object,
             mark,
             match_value,
             ..
         } => RuntimePatchOp::RemoveMark {
-            position: RuntimeCoord { x, y, z: None },
+            position: runtime_coord2(position),
             object_id: object.0,
             mark: mark.0,
             match_value: runtime_mark_value_match(match_value),
         },
     }
+}
+
+fn runtime_coord2(position: puzzle_core::GridCoord<2>) -> RuntimeCoord {
+    let [x, y] = position.axes();
+    RuntimeCoord { x, y, z: None }
 }
 
 fn runtime_mark_value_match(match_value: MarkValueMatch) -> RuntimeMarkValueMatch {
@@ -1206,8 +1203,11 @@ fn decode_offset(value: &serde_json::Value) -> Result<Offset, AppError> {
     let object = json_object(value, "offset")?;
     match required_json_string(object, "kind")? {
         "fixed" => Ok(Offset::Fixed {
-            dx: json_i16_value(required_json_value(object, "dx")?, "offset dx")?,
-            dy: json_i16_value(required_json_value(object, "dy")?, "offset dy")?,
+            delta: [
+                json_i16_value(required_json_value(object, "dx")?, "offset dx")?,
+                json_i16_value(required_json_value(object, "dy")?, "offset dy")?,
+            ]
+            .into(),
         }),
         other => Err(AppError::Config(format!(
             "unsupported offset kind {other:?}"
@@ -1918,7 +1918,7 @@ fn state3_from_json(game: &CompiledGame3, state_json: &str) -> Result<State3, Ap
             )));
         }
         state
-            .place_object(game, Coord3 { x, y, z }, object)
+            .place_object_at(game, Coord3 { x, y, z }, object)
             .map_err(|error| AppError::Config(format!("{error:?}")))?;
     }
     for rule in fired_rules {

@@ -56,6 +56,16 @@ let level3d = {
 };
 let level3dAutoSelectionKey = "";
 
+function level3dEditorThemeColor(name, alpha) {
+  const value = window.getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const match = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(value);
+  if (!match) {
+    throw new Error(`Editor theme color ${name} must be a six-digit hex color.`);
+  }
+  const [, red, green, blue] = match;
+  return `rgba(${Number.parseInt(red, 16)}, ${Number.parseInt(green, 16)}, ${Number.parseInt(blue, 16)}, ${alpha})`;
+}
+
 function renderLevel3dBuilder() {
   if (!level3dBuilder) {
     return;
@@ -1130,11 +1140,7 @@ function level3dLayerGridButton() {
   button.dataset.tooltip = "Toggle grid";
   button.disabled = level3dPlaytestActive;
   button.innerHTML = `
-    <svg class="level-grid-token-icon lucide lucide-grid2x2-icon lucide-grid-2x2" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      <path d="M12 3v18"></path>
-      <path d="M3 12h18"></path>
-      <rect x="3" y="3" width="18" height="18" rx="2"></rect>
-    </svg>
+    ${editorIconSvg("grid-2x2", { className: "level-grid-token-icon" })}
   `;
   button.addEventListener("click", () => {
     level3d.layerGridVisible = level3d.layerGridVisible === false;
@@ -1158,11 +1164,7 @@ function level3dLayerVisibilityControl() {
   button.dataset.tooltip = "Layer visibility";
   button.disabled = level3dPlaytestActive;
   button.innerHTML = `
-    <svg class="lucide lucide-list-filter level-layer-visibility-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M3 6h18"></path>
-      <path d="M7 12h10"></path>
-      <path d="M10 18h4"></path>
-    </svg>
+    ${editorIconSvg("list-filter", { className: "level-layer-visibility-icon" })}
   `;
   const menu = document.createElement("div");
   menu.className = "level-layer-visibility-menu";
@@ -1306,24 +1308,10 @@ function level3dLayerResizeModeButton(mode) {
   button.disabled = level3dPlaytestActive;
   button.innerHTML = mode === "expand"
     ? `
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="m15 15 6 6"></path>
-        <path d="m15 9 6-6"></path>
-        <path d="M21 16v5h-5"></path>
-        <path d="M21 8V3h-5"></path>
-        <path d="M3 16v5h5"></path>
-        <path d="m3 21 6-6"></path>
-        <path d="M3 8V3h5"></path>
-        <path d="M9 9 3 3"></path>
-      </svg>
+      ${editorIconSvg("expand")}
     `
     : `
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="m15 15 6 6m-6-6v4.8m0-4.8h4.8"></path>
-        <path d="M9 19.8V15m0 0H4.2M9 15l-6 6"></path>
-        <path d="M15 4.2V9m0 0h4.8M15 9l6-6"></path>
-        <path d="M9 4.2V9m0 0H4.2M9 9 3 3"></path>
-      </svg>
+      ${editorIconSvg("shrink")}
     `;
   button.addEventListener("click", () => {
     setLevel3dStageResizeMode(level3dStageResizeMode() === mode ? null : mode);
@@ -1342,10 +1330,7 @@ function level3dLayerTransformButton(kind) {
       label: "Rotate top-down left",
       title: "Rotate left",
       icon: `
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M3 12a9 9 0 1 0 2.64-6.36L3 8"></path>
-          <path d="M3 3v5h5"></path>
-        </svg>
+        ${editorIconSvg("rotate-ccw")}
       `,
       action: rotateLevel3dLayerLeft,
     },
@@ -1353,10 +1338,7 @@ function level3dLayerTransformButton(kind) {
       label: "Rotate top-down right",
       title: "Rotate right",
       icon: `
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"></path>
-          <path d="M21 3v5h-5"></path>
-        </svg>
+        ${editorIconSvg("rotate-cw")}
       `,
       action: rotateLevel3dLayerRight,
     },
@@ -1364,14 +1346,7 @@ function level3dLayerTransformButton(kind) {
       label: "Flip top-down horizontal",
       title: "Flip horizontal",
       icon: `
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M8 3H5a2 2 0 0 0-2 2v14c0 1.1.9 2 2 2h3"></path>
-          <path d="M16 3h3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-3"></path>
-          <path d="M12 20v2"></path>
-          <path d="M12 14v2"></path>
-          <path d="M12 8v2"></path>
-          <path d="M12 2v2"></path>
-        </svg>
+        ${editorIconSvg("flip-horizontal")}
       `,
       action: flipLevel3dLayerHorizontal,
     },
@@ -1379,14 +1354,7 @@ function level3dLayerTransformButton(kind) {
       label: "Flip top-down vertical",
       title: "Flip vertical",
       icon: `
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M21 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v3"></path>
-          <path d="M21 16v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3"></path>
-          <path d="M4 12H2"></path>
-          <path d="M10 12H8"></path>
-          <path d="M16 12h-2"></path>
-          <path d="M22 12h-2"></path>
-        </svg>
+        ${editorIconSvg("flip-vertical")}
       `,
       action: flipLevel3dLayerVertical,
     },
@@ -1417,12 +1385,7 @@ function level3dLayerFillButton() {
   button.dataset.tooltip = "Fill";
   button.disabled = level3dPlaytestActive;
   button.innerHTML = `
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="m19 11-8-8-8.6 8.6a2 2 0 0 0 0 2.8l5.2 5.2a2 2 0 0 0 2.8 0L19 11Z"></path>
-      <path d="m5 2 5 5"></path>
-      <path d="M2 13h15"></path>
-      <path d="M22 20a2 2 0 1 1-4 0c0-1.6 1.7-2.4 2-4 .3 1.6 2 2.4 2 4Z"></path>
-    </svg>
+    ${editorIconSvg("paint-bucket")}
   `;
   button.addEventListener("click", () => {
     level3d.layerFillActive = !level3d.layerFillActive;
@@ -1488,17 +1451,10 @@ function level3dEditModeButton(mode) {
   button.disabled = level3dPlaytestActive;
   button.innerHTML = mode === "add"
     ? `
-      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-square-plus-icon lucide-square-plus" aria-hidden="true">
-        <rect width="18" height="18" x="3" y="3" rx="2"></rect>
-        <path d="M8 12h8"></path>
-        <path d="M12 8v8"></path>
-      </svg>
+      ${editorIconSvg("square-plus")}
     `
     : `
-      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-square-pen-icon lucide-square-pen" aria-hidden="true">
-        <path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
-        <path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"></path>
-      </svg>
+      ${editorIconSvg("square-pen")}
     `;
   button.addEventListener("click", () => {
     setLevel3dStageResizeMode(null);
@@ -1533,11 +1489,7 @@ function level3dFrameToggleButton() {
   button.setAttribute("aria-pressed", level3d.previewFrames ? "true" : "false");
   button.disabled = level3dPlaytestActive;
   button.innerHTML = `
-    <svg class="level3d-frame-token-icon lucide lucide-grid2x2-icon lucide-grid-2x2" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      <path d="M12 3v18"></path>
-      <path d="M3 12h18"></path>
-      <rect x="3" y="3" width="18" height="18" rx="2"></rect>
-    </svg>
+    ${editorIconSvg("grid-2x2", { className: "level3d-frame-token-icon" })}
   `;
   button.addEventListener("click", () => {
     level3d.previewFrames = !level3d.previewFrames;
@@ -1556,16 +1508,7 @@ function level3dExpandModeButton() {
     label: "Expand stage",
     ariaLabel: "Toggle 3D stage expansion",
     icon: `
-      <svg class="level3d-expand-token-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <path d="m15 15 6 6"></path>
-        <path d="m15 9 6-6"></path>
-        <path d="M21 16v5h-5"></path>
-        <path d="M21 8V3h-5"></path>
-        <path d="M3 16v5h5"></path>
-        <path d="m3 21 6-6"></path>
-        <path d="M3 8V3h5"></path>
-        <path d="M9 9 3 3"></path>
-      </svg>
+      ${editorIconSvg("expand", { className: "level3d-expand-token-icon" })}
     `,
   });
 }
@@ -1577,12 +1520,7 @@ function level3dShrinkModeButton() {
     label: "Shrink stage",
     ariaLabel: "Toggle 3D stage shrinking",
     icon: `
-      <svg class="level3d-shrink-token-icon lucide lucide-shrink-icon lucide-shrink" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <path d="m15 15 6 6m-6-6v4.8m0-4.8h4.8"></path>
-        <path d="M9 19.8V15m0 0H4.2M9 15l-6 6"></path>
-        <path d="M15 4.2V9m0 0h4.8M15 9l6-6"></path>
-        <path d="M9 4.2V9m0 0H4.2M9 9 3 3"></path>
-      </svg>
+      ${editorIconSvg("shrink", { className: "level3d-shrink-token-icon" })}
     `,
   });
 }
@@ -3654,11 +3592,11 @@ function drawLevel3dLayerHover(ctx, width, height) {
   }
   ctx.save();
   ctx.fillStyle = level3dSelectedEntry()?.objects?.length
-    ? "rgba(77, 171, 218, 0.18)"
-    : "rgba(230, 96, 105, 0.16)";
+    ? level3dEditorThemeColor("--accent", 0.18)
+    : level3dEditorThemeColor("--danger", 0.16);
   ctx.strokeStyle = level3dSelectedEntry()?.objects?.length
-    ? "rgba(39, 107, 143, 0.88)"
-    : "rgba(180, 59, 67, 0.88)";
+    ? level3dEditorThemeColor("--accent", 0.88)
+    : level3dEditorThemeColor("--danger", 0.88);
   ctx.lineWidth = 2;
   ctx.beginPath();
   ctx.moveTo(points[0].x, points[0].y);
@@ -4084,11 +4022,11 @@ function renderLevel3dStageOverlay() {
   ctx.save();
   ctx.lineJoin = "round";
   ctx.fillStyle = level3dSelectedEntry()?.objects?.length
-    ? "rgba(39, 107, 143, 0.28)"
-    : "rgba(180, 59, 67, 0.24)";
+    ? level3dEditorThemeColor("--accent", 0.28)
+    : level3dEditorThemeColor("--danger", 0.24);
   ctx.strokeStyle = level3dSelectedEntry()?.objects?.length
-    ? "rgba(77, 171, 218, 0.96)"
-    : "rgba(230, 96, 105, 0.96)";
+    ? level3dEditorThemeColor("--accent", 0.96)
+    : level3dEditorThemeColor("--danger", 0.96);
   ctx.lineWidth = 2;
   drawLevel3dPolygonPath(ctx, level3dStageHit.polygon);
   ctx.fill();
@@ -5329,8 +5267,12 @@ function drawLevel3dStageResizeHint(ctx, hit, width, height) {
   const isShrink = mode === "shrink";
   ctx.save();
   ctx.lineJoin = "round";
-  ctx.fillStyle = isShrink ? "rgba(230, 96, 105, 0.14)" : "rgba(77, 171, 218, 0.12)";
-  ctx.strokeStyle = isShrink ? "rgba(230, 96, 105, 0.72)" : "rgba(77, 171, 218, 0.62)";
+  ctx.fillStyle = isShrink
+    ? level3dEditorThemeColor("--danger", 0.14)
+    : level3dEditorThemeColor("--accent", 0.12);
+  ctx.strokeStyle = isShrink
+    ? level3dEditorThemeColor("--danger", 0.72)
+    : level3dEditorThemeColor("--accent", 0.62);
   ctx.lineWidth = 1.5;
   if (ghostFace?.polygon?.length) {
     drawLevel3dPolygonPath(ctx, ghostFace.polygon);
@@ -5350,7 +5292,9 @@ function drawLevel3dStageResizeHint(ctx, hit, width, height) {
   }).sort((left, right) => level3dPrimitiveOrder(left) - level3dPrimitiveOrder(right));
   ctx.setLineDash([7, 5]);
   ctx.lineWidth = 2;
-  ctx.strokeStyle = isShrink ? "rgba(180, 59, 67, 0.82)" : "rgba(39, 107, 143, 0.72)";
+  ctx.strokeStyle = isShrink
+    ? level3dEditorThemeColor("--danger", 0.82)
+    : level3dEditorThemeColor("--accent", 0.72);
   for (const line of lines) {
     ctx.beginPath();
     ctx.moveTo(line.from.x, line.from.y);

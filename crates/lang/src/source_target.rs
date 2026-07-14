@@ -1,4 +1,3 @@
-use crate::puzzle3_parse::parse_canonical_sprite_palette_line;
 use crate::source::{SourceScope, split_header_tokens, strip_line_comment};
 use crate::surface::{SurfaceDocument, SurfaceLine, SurfaceOptionBlock, SurfaceVisualSpriteRefs};
 use crate::{PuzzleSourceProfile, SpriteColor3, SpriteVoxels3};
@@ -915,7 +914,7 @@ fn source_sprite3d_for_target(
             ..SourceSpriteTarget::default()
         });
     }
-    let Ok(spatial_ops) = crate::puzzle3_parse::parse_sprite_spatial_ops3(&syntax) else {
+    let Ok(spatial_ops) = crate::puzzle3_sprite::parse_spatial_ops(&syntax) else {
         return Some(SourceSpriteTarget {
             dimension: SourceSpriteDimension::Three,
             status: SourceSprite3dStatus::Invalid,
@@ -945,7 +944,7 @@ fn source_sprite3d_for_target(
         .map(|entry| entry.color.as_str())
         .collect::<Vec<_>>()
         .join(" ");
-    let Ok(palette_map) = parse_canonical_sprite_palette_line(&palette_line) else {
+    let Ok(palette_map) = crate::puzzle3_sprite::parse_palette_line(&palette_line) else {
         return Some(SourceSpriteTarget {
             dimension: SourceSpriteDimension::Three,
             status: SourceSprite3dStatus::Invalid,
@@ -1024,7 +1023,7 @@ fn source_sprite3d_for_target(
     let mut common_size = None;
     for frame in &frame_layers {
         let Ok(voxels) =
-            crate::puzzle3_parse::parse_sprite_layers(&target.name, frame, &palette_map)
+            crate::puzzle3_sprite::parse_voxel_layers(&target.name, frame, &palette_map)
         else {
             return Some(SourceSpriteTarget {
                 dimension: SourceSpriteDimension::Three,

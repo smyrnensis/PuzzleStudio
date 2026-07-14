@@ -286,7 +286,7 @@ pub struct Puzzle3RuntimeModel {
     pub rule_camera_effects: Vec<Vec<Puzzle3CameraEffect>>,
     pub level_bundle: LevelBundle3,
     pub win_condition: Option<WinCondition3>,
-    pub lifecycle: RuntimeLifecycle<puzzle_grid3d::RuleStep3, LocalFrame<ObjectId>>,
+    pub lifecycle: RuntimeLifecycle<puzzle_grid3d::GridRuleStep<3>, LocalFrame<ObjectId>>,
     pub on_level_start_camera_effects: Vec<Vec<Puzzle3CameraEffect>>,
 }
 
@@ -307,7 +307,7 @@ impl Puzzle3RuntimeModel {
         rule_camera_effects: Vec<Vec<Puzzle3CameraEffect>>,
         level_bundle: LevelBundle3,
         win_condition: Option<WinCondition3>,
-        lifecycle: RuntimeLifecycle<puzzle_grid3d::RuleStep3, LocalFrame<ObjectId>>,
+        lifecycle: RuntimeLifecycle<puzzle_grid3d::GridRuleStep<3>, LocalFrame<ObjectId>>,
         on_level_start_camera_effects: Vec<Vec<Puzzle3CameraEffect>>,
     ) -> Result<Self, RuntimeContractError> {
         let model = Self {
@@ -430,19 +430,19 @@ pub fn puzzle3_runtime_model_from_fixture_json(
     runtime_contract_from_fixture_json(fixture_json)?.into_puzzle3_model()
 }
 
-fn count_program_rules(steps: &[puzzle_grid3d::RuleStep3]) -> usize {
+fn count_program_rules(steps: &[puzzle_grid3d::GridRuleStep<3>]) -> usize {
     let mut rule_count = 0;
     for step in steps {
         match step {
-            puzzle_grid3d::RuleStep3::Rule(rule) => {
+            puzzle_grid3d::GridRuleStep::<3>::Rule(rule) => {
                 let _ = rule;
                 rule_count += 1;
             }
-            puzzle_grid3d::RuleStep3::ConditionalBlock { condition, steps } => {
+            puzzle_grid3d::GridRuleStep::<3>::ConditionalBlock { condition, steps } => {
                 let _ = condition;
                 rule_count += count_program_rules(steps);
             }
-            puzzle_grid3d::RuleStep3::ConditionalBranch {
+            puzzle_grid3d::GridRuleStep::<3>::ConditionalBranch {
                 condition,
                 then_steps,
                 else_steps,
@@ -451,7 +451,7 @@ fn count_program_rules(steps: &[puzzle_grid3d::RuleStep3]) -> usize {
                 rule_count += count_program_rules(then_steps);
                 rule_count += count_program_rules(else_steps);
             }
-            puzzle_grid3d::RuleStep3::Block {
+            puzzle_grid3d::GridRuleStep::<3>::Block {
                 stop_condition,
                 steps,
                 ..
@@ -459,11 +459,11 @@ fn count_program_rules(steps: &[puzzle_grid3d::RuleStep3]) -> usize {
                 let _ = stop_condition;
                 rule_count += count_program_rules(steps);
             }
-            puzzle_grid3d::RuleStep3::AfterTriggered { steps, then_steps } => {
+            puzzle_grid3d::GridRuleStep::<3>::AfterTriggered { steps, then_steps } => {
                 rule_count += count_program_rules(steps);
                 rule_count += count_program_rules(then_steps);
             }
-            puzzle_grid3d::RuleStep3::LocalFrame { steps, .. } => {
+            puzzle_grid3d::GridRuleStep::<3>::LocalFrame { steps, .. } => {
                 rule_count += count_program_rules(steps);
             }
         }
@@ -475,11 +475,13 @@ fn count_program_rules(steps: &[puzzle_grid3d::RuleStep3]) -> usize {
 mod tests {
     use super::*;
     use puzzle_grid3d::{
-        ConditionDef3, ConditionId3, ConditionValueKind3, Coord3, Delta3, Guard3, InputDef3,
-        InputId, LayerId, Level3, LevelCell3, LevelEntry3, MatchCell3, ObjectDef3, Pattern3, Rule3,
+        ConditionDef3, ConditionId3, ConditionValueKind3, Coord3, Delta3, GridMatchCell,
+        GridPattern, GridRule, Guard3, LayerId, Level3, LevelCell3, LevelEntry3, ObjectDef3,
         RuleApplication3, RuleId3, Size3,
     };
     use serde_json::json;
+
+    type Rule = GridRule<3>;
 
     const PLAYER: ObjectId = ObjectId(1);
 
@@ -506,6 +508,7 @@ mod tests {
                     Size3::new(1, 1, 1),
                     vec![LevelCell3::new(Coord3::new(0, 0, 0), vec![PLAYER])],
                 ),
+                Vec::new(),
             )],
         )
         .expect("support level bundle is valid")
@@ -520,16 +523,18 @@ mod tests {
 
     #[test]
     fn runtime_contract_round_trips_shared_guard_variants() {
-        let rule = Rule3 {
+        let rule = Rule {
             id: RuleId3(7),
             guards: vec![Guard3::ConditionNonZero(ConditionId3(0))],
             application: RuleApplication3::Once,
-            pattern: Pattern3::new(vec![MatchCell3::new(Delta3::ZERO).require(PLAYER)]),
+            pattern: GridPattern::<3>::new(vec![
+                GridMatchCell::<3>::new(Delta3::ZERO).require(PLAYER),
+            ]),
             writes: Vec::new(),
             effects: Vec::new(),
         };
-        let game =
-            support_game().clone_with_program(vec![puzzle_grid3d::RuleStep3::Rule(rule.clone())]);
+        let game = support_game()
+            .clone_with_program(vec![puzzle_grid3d::GridRuleStep::<3>::Rule(rule.clone())]);
         let model = Puzzle3RuntimeModel::checked_new(
             game.clone(),
             None,

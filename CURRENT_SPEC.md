@@ -9,7 +9,7 @@
   -> puzzle-lang parser / compiler
   -> puzzle-core CompiledGame
   -> puzzle-play session / render helpers
-  -> ascii-play / html-play
+  -> html-play
 ```
 
 `puzzle-core` は `.puzzle` 文法、表示、ファイル IO、level 管理を知らない。

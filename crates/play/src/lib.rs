@@ -288,11 +288,11 @@ struct PendingEffectContinuation {
 struct PendingProgramContinuation {
     target: Option<String>,
     input: InputId,
+    program_level_index: usize,
     wait_ms: u64,
     remaining_program: ProgramContinuation,
     effects_after_wait: Vec<QueuedRuleEffect>,
     mode: PendingProgramMode,
-    undo_anchor: Option<PuzzleState>,
     undo_base_len: usize,
 }
 
@@ -380,6 +380,7 @@ pub struct GameSession {
     animation_events: Vec<AnimationEvent>,
     pending_effect_continuation: Option<PendingEffectContinuation>,
     pending_program_continuation: Option<PendingProgramContinuation>,
+    pending_program_undo_anchor: Option<PuzzleState>,
     last_debug_transition: Option<DebugTransition>,
 }
 
@@ -413,6 +414,7 @@ impl GameSession {
             animation_events: Vec::new(),
             pending_effect_continuation: None,
             pending_program_continuation: None,
+            pending_program_undo_anchor: None,
             last_debug_transition: None,
         };
         let initial_scene = session.focused_scene.clone();
@@ -794,16 +796,18 @@ impl GameSession {
         let state_changed = self.replace_state_if_changed(game, outcome.next_state);
         self.sync_current_level_puzzles(game);
         self.animation_events.extend(outcome.animations.clone());
+        self.pending_program_undo_anchor =
+            (outcome.checkpoint.is_some() && !state_changed).then_some(undo_anchor);
         let checkpoint = outcome
             .checkpoint
             .map(|checkpoint| PendingProgramContinuation {
                 target: None,
                 input,
+                program_level_index: level_index,
                 wait_ms: checkpoint.milliseconds,
                 remaining_program: checkpoint.remaining_program,
                 effects_after_wait: checkpoint.effects_after_wait,
                 mode: PendingProgramMode::TurnCompletion,
-                undo_anchor: (!state_changed).then_some(undo_anchor),
                 undo_base_len,
             });
         Ok(ModelInputResult {
@@ -870,7 +874,7 @@ impl GameSession {
         {
             puzzle.state = next_state.clone();
         }
-        let mut undo_anchor = if initializer == ScenePuzzleInitializer::CurrentLevel
+        let undo_anchor = if initializer == ScenePuzzleInitializer::CurrentLevel
             && scene_name == self.focused_scene
         {
             let state_changed = self.replace_state_if_changed(game, outcome.next_state);
@@ -879,16 +883,21 @@ impl GameSession {
             self.sync_persistent_vars_to_scene_states(game);
             None
         };
+        self.pending_program_undo_anchor = outcome
+            .checkpoint
+            .is_some()
+            .then_some(undo_anchor)
+            .flatten();
         let checkpoint = outcome
             .checkpoint
             .map(|checkpoint| PendingProgramContinuation {
                 target: Some(target.to_string()),
                 input,
+                program_level_index: level_index,
                 wait_ms: checkpoint.milliseconds,
                 remaining_program: checkpoint.remaining_program,
                 effects_after_wait: checkpoint.effects_after_wait,
                 mode: PendingProgramMode::TurnCompletion,
-                undo_anchor: undo_anchor.take(),
                 undo_base_len,
             });
         Ok(ModelInputResult {
@@ -931,16 +940,18 @@ impl GameSession {
         let state_changed = self.replace_state_if_changed(game, outcome.next_state);
         self.sync_current_level_puzzles(game);
         self.animation_events.extend(outcome.animations.clone());
+        self.pending_program_undo_anchor =
+            (outcome.checkpoint.is_some() && !state_changed).then_some(undo_anchor);
         let checkpoint = outcome
             .checkpoint
             .map(|checkpoint| PendingProgramContinuation {
                 target: None,
                 input,
+                program_level_index: level_index,
                 wait_ms: checkpoint.milliseconds,
                 remaining_program: checkpoint.remaining_program,
                 effects_after_wait: checkpoint.effects_after_wait,
                 mode: PendingProgramMode::TurnCompletion,
-                undo_anchor: (!state_changed).then_some(undo_anchor),
                 undo_base_len,
             });
         Ok(ModelInputResult {
@@ -1116,7 +1127,7 @@ impl GameSession {
         let input = continuation.input;
         let mode = continuation.mode;
         let undo_base_len = continuation.undo_base_len;
-        let mut undo_anchor = continuation.undo_anchor;
+        let mut undo_anchor = self.pending_program_undo_anchor.take();
         let mut state = if let Some(target) = target {
             let (scene_name, puzzle_name) = self
                 .resolve_puzzle_target(game, target)
@@ -1130,8 +1141,17 @@ impl GameSession {
             self.state.clone()
         };
         self.apply_persistent_vars(game, &mut state);
+        let program = game
+            .program_for_level(continuation.program_level_index)
+            .ok_or_else(|| {
+                TransitionError::InvalidCommand(format!(
+                    "continuation level index out of range: {}",
+                    continuation.program_level_index
+                ))
+            })?;
         let outcome = transition_continuation_segment_outcome(
             game,
+            program,
             &continuation.remaining_program,
             &state,
             input,
@@ -1179,14 +1199,15 @@ impl GameSession {
         let mut effects = continuation.effects_after_wait;
         effects.extend(outcome.effects);
         if let Some(checkpoint) = outcome.checkpoint {
+            self.pending_program_undo_anchor = undo_anchor;
             self.pending_program_continuation = Some(PendingProgramContinuation {
                 target: target_name,
                 input,
+                program_level_index: continuation.program_level_index,
                 wait_ms: checkpoint.milliseconds,
                 remaining_program: checkpoint.remaining_program,
                 effects_after_wait: checkpoint.effects_after_wait,
                 mode,
-                undo_anchor,
                 undo_base_len,
             });
             self.wait_events.push(WaitEvent::ContinueEffects {
@@ -2286,6 +2307,7 @@ impl GameSession {
         self.history.clear();
         self.pending_effect_continuation = None;
         self.pending_program_continuation = None;
+        self.pending_program_undo_anchor = None;
         self.wait_events.clear();
         self.animation_events.clear();
     }
@@ -3992,6 +4014,7 @@ fn transition_program_segment_outcome(
 
 fn transition_continuation_segment_outcome(
     game: &LoadedGame,
+    program: &[RuleStep],
     continuation: &ProgramContinuation,
     state: &PuzzleState,
     input: InputId,
@@ -3999,6 +4022,7 @@ fn transition_continuation_segment_outcome(
 ) -> Result<ProgramSegmentOutcome, TransitionError> {
     let segment = transition_program_continuation_segment_trace(
         &game.game,
+        program,
         continuation,
         state,
         input,
@@ -4086,16 +4110,11 @@ pub fn animation_events_for_trace(
             match trigger {
                 RuleAnimationTrigger::Move => {
                     for op in patch.ops() {
-                        let PatchOp::Move {
-                            from_x,
-                            from_y,
-                            to_x,
-                            to_y,
-                            object,
-                        } = op
-                        else {
+                        let PatchOp::Move { from, to, object } = op else {
                             continue;
                         };
+                        let [from_x, from_y] = from.axes();
+                        let [to_x, to_y] = to.axes();
                         if objects.contains(object) {
                             push_unique_animation(
                                 &mut events,
@@ -4103,20 +4122,26 @@ pub fn animation_events_for_trace(
                                     name: name.clone(),
                                     object: *object,
                                     from_object: None,
-                                    from_x: *from_x,
-                                    from_y: *from_y,
+                                    from_x,
+                                    from_y,
                                     from_z: 0,
-                                    to_x: *to_x,
-                                    to_y: *to_y,
+                                    to_x,
+                                    to_y,
                                     to_z: 0,
                                 },
                             );
                         }
                     }
                     for op in patch.ops() {
-                        let PatchOp::Replace { x, y, remove, add } = op else {
+                        let PatchOp::Replace {
+                            position,
+                            remove,
+                            add,
+                        } = op
+                        else {
                             continue;
                         };
+                        let [x, y] = position.axes();
                         if objects.contains(add) && sprite_rotation_changes(game, *remove, *add) {
                             push_unique_animation(
                                 &mut events,
@@ -4124,11 +4149,11 @@ pub fn animation_events_for_trace(
                                     name: name.clone(),
                                     object: *add,
                                     from_object: Some(*remove),
-                                    from_x: *x,
-                                    from_y: *y,
+                                    from_x: x,
+                                    from_y: y,
                                     from_z: 0,
-                                    to_x: *x,
-                                    to_y: *y,
+                                    to_x: x,
+                                    to_y: y,
                                     to_z: 0,
                                 },
                             );
@@ -4138,11 +4163,15 @@ pub fn animation_events_for_trace(
                 RuleAnimationTrigger::CantMove => {
                     for op in patch.ops() {
                         let PatchOp::RemoveMark {
-                            x, y, object, mark, ..
+                            position,
+                            object,
+                            mark,
+                            ..
                         } = op
                         else {
                             continue;
                         };
+                        let [x, y] = position.axes();
                         if mark.0 != 0 {
                             continue;
                         }
@@ -4153,22 +4182,22 @@ pub fn animation_events_for_trace(
                                     AnimationEvent::CantMove {
                                         name: name.clone(),
                                         object: *object,
-                                        x: *x,
-                                        y: *y,
+                                        x,
+                                        y,
                                     },
                                 );
                             }
                             continue;
                         }
                         for candidate in objects {
-                            if next_state.has_object(&game.game, *x, *y, *candidate) {
+                            if next_state.has_object(&game.game, x, y, *candidate) {
                                 push_unique_animation(
                                     &mut events,
                                     AnimationEvent::CantMove {
                                         name: name.clone(),
                                         object: *candidate,
-                                        x: *x,
-                                        y: *y,
+                                        x,
+                                        y,
                                     },
                                 );
                             }
@@ -5106,16 +5135,15 @@ P
             matches!(
                 op,
                 PatchOp::Replace {
-                    x: 0,
-                    y: 0,
+                    position,
                     remove,
                     add,
-                } if *remove == from && *add == to
+                } if position.axes() == [0, 0] && *remove == from && *add == to
             )
         }));
         assert!(!patch_ops.iter().any(|op| {
-            matches!(op, PatchOp::Remove { x: 0, y: 0, object } if *object == from)
-                || matches!(op, PatchOp::Add { x: 0, y: 0, object } if *object == to)
+            matches!(op, PatchOp::Remove { position, object } if position.axes() == [0, 0] && *object == from)
+                || matches!(op, PatchOp::Add { position, object } if position.axes() == [0, 0] && *object == to)
         }));
 
         assert_eq!(

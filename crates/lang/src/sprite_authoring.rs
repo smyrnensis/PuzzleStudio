@@ -4,6 +4,7 @@ use crate::{block_header_text, is_block_header_line, source::split_header_tokens
 pub(crate) struct SpriteNodeSyntax {
     pub(crate) selector: Option<String>,
     pub(crate) colors: Option<Vec<String>>,
+    pub(crate) colors_body_line: Option<usize>,
     pub(crate) duration: Option<String>,
     pub(crate) frame_duration: Option<String>,
     pub(crate) prelude_rows: Vec<String>,
@@ -80,12 +81,20 @@ pub(crate) struct AnalyzedSpriteBody {
     pub(crate) shape: ResolvedSpriteShape,
 }
 
+#[cfg(test)]
 pub(crate) fn analyze_sprite_body(
     header: Option<&str>,
-    lines: &[String],
+    lines: &[impl AsRef<str>],
     is_known_shape: impl FnMut(&str) -> bool,
 ) -> Result<AnalyzedSpriteBody, SpriteBodyError> {
     let syntax = parse_sprite_node(header, lines);
+    analyze_sprite_syntax(syntax, is_known_shape)
+}
+
+fn analyze_sprite_syntax(
+    syntax: SpriteNodeSyntax,
+    is_known_shape: impl FnMut(&str) -> bool,
+) -> Result<AnalyzedSpriteBody, SpriteBodyError> {
     if let Some(issue) = syntax.issues.first() {
         return Err(SpriteBodyError {
             line: issue.line.clone(),
@@ -94,6 +103,21 @@ pub(crate) fn analyze_sprite_body(
     }
     let shape = resolve_sprite_shape(&syntax, is_known_shape);
     Ok(AnalyzedSpriteBody { syntax, shape })
+}
+
+pub(crate) fn analyze_sprite_body_product(
+    header: Option<&str>,
+    lines: &[crate::source::LogicalLine],
+    is_known_shape: impl FnMut(&str) -> bool,
+) -> crate::surface::ParseProduct<Result<AnalyzedSpriteBody, SpriteBodyError>> {
+    let syntax = parse_sprite_node(header, lines);
+    let value = analyze_sprite_syntax(syntax.clone(), is_known_shape);
+    let recognition = recognize_sprite_display(
+        &syntax,
+        value.as_ref().ok().map(|analyzed| &analyzed.shape),
+        lines,
+    );
+    crate::surface::ParseProduct::new(value, recognition)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -199,23 +223,26 @@ pub(crate) fn resolve_sprite_timing(
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct SpriteAttachmentSyntax {
+pub(crate) struct SpriteAttachmentSyntax<Line> {
     pub(crate) header: String,
-    pub(crate) body_lines: Vec<String>,
+    pub(crate) body_lines: Vec<Line>,
     pub(crate) next_index: usize,
 }
 
-pub(crate) fn collect_sprite_attachment(
-    lines: &[String],
+pub(crate) fn collect_sprite_attachment<Line>(
+    lines: &[Line],
     start: usize,
-) -> Result<SpriteAttachmentSyntax, &'static str> {
-    let header = lines[start].clone();
+) -> Result<SpriteAttachmentSyntax<Line>, &'static str>
+where
+    Line: AsRef<str> + Clone,
+{
+    let header = lines[start].as_ref().to_string();
     if is_block_header_line(&header) {
         let mut body_lines = Vec::new();
         let mut depth = 0usize;
         let mut index = start + 1;
         while index < lines.len() {
-            if lines[index].trim() == "}" {
+            if lines[index].as_ref().trim() == "}" {
                 if depth == 0 {
                     return Ok(SpriteAttachmentSyntax {
                         header,
@@ -229,7 +256,7 @@ pub(crate) fn collect_sprite_attachment(
                 continue;
             }
             body_lines.push(lines[index].clone());
-            if is_block_header_line(&lines[index]) {
+            if is_block_header_line(lines[index].as_ref()) {
                 depth += 1;
             }
             index += 1;
@@ -241,16 +268,16 @@ pub(crate) fn collect_sprite_attachment(
     let mut index = start + 1;
     let mut nested_depth = 0i32;
     while index < lines.len() {
-        if lines[index].trim() == "}" && nested_depth == 0 {
+        if lines[index].as_ref().trim() == "}" && nested_depth == 0 {
             break;
         }
         if nested_depth == 0
             && body_lines.len() >= 2
-            && is_tagged_sprite_attachment_header(&lines[index])
+            && is_tagged_sprite_attachment_header(lines[index].as_ref())
         {
             break;
         }
-        if split_header_tokens(&lines[index]).is_empty() {
+        if split_header_tokens(lines[index].as_ref()).is_empty() {
             if nested_depth > 0 {
                 body_lines.push(lines[index].clone());
                 index += 1;
@@ -258,11 +285,11 @@ pub(crate) fn collect_sprite_attachment(
             }
             break;
         }
-        if lines[index].trim() == "}" {
+        if lines[index].as_ref().trim() == "}" {
             nested_depth -= 1;
         }
         body_lines.push(lines[index].clone());
-        if is_block_header_line(&lines[index]) {
+        if is_block_header_line(lines[index].as_ref()) {
             nested_depth += 1;
         }
         index += 1;
@@ -281,7 +308,10 @@ fn is_tagged_sprite_attachment_header(line: &str) -> bool {
     )
 }
 
-pub(crate) fn parse_sprite_node(header: Option<&str>, lines: &[String]) -> SpriteNodeSyntax {
+pub(crate) fn parse_sprite_node(
+    header: Option<&str>,
+    lines: &[impl AsRef<str>],
+) -> SpriteNodeSyntax {
     let mut syntax = SpriteNodeSyntax {
         selector: owner_selector(header),
         ..SpriteNodeSyntax::default()
@@ -291,7 +321,7 @@ pub(crate) fn parse_sprite_node(header: Option<&str>, lines: &[String]) -> Sprit
     let mut saw_shape = false;
     let mut i = 0usize;
     while i < lines.len() {
-        let original = &lines[i];
+        let original = lines[i].as_ref();
         let line = original.trim();
         let line_index = i;
         i += 1;
@@ -303,7 +333,7 @@ pub(crate) fn parse_sprite_node(header: Option<&str>, lines: &[String]) -> Sprit
             let mut rows = Vec::new();
             let mut closed = false;
             while i < lines.len() {
-                let row = lines[i].trim();
+                let row = lines[i].as_ref().trim();
                 i += 1;
                 if row == "}" {
                     closed = true;
@@ -336,7 +366,7 @@ pub(crate) fn parse_sprite_node(header: Option<&str>, lines: &[String]) -> Sprit
             let mut closed = false;
             while i < lines.len() {
                 let row_index = i;
-                let row = lines[i].trim();
+                let row = lines[i].as_ref().trim();
                 i += 1;
                 if row == "}" {
                     closed = true;
@@ -405,6 +435,8 @@ pub(crate) fn parse_sprite_node(header: Option<&str>, lines: &[String]) -> Sprit
                 let colors = values.iter().map(|value| (*value).to_string()).collect();
                 if syntax.colors.replace(colors).is_some() {
                     issue(&mut syntax, line, "duplicate sprite colors");
+                } else {
+                    syntax.colors_body_line = Some(line_index);
                 }
             }
             ["duration", "=", value] | ["duration", value] => {
@@ -454,6 +486,7 @@ pub(crate) fn parse_sprite_node(header: Option<&str>, lines: &[String]) -> Sprit
             }
             _ if syntax.colors.is_none() && !saw_shape => {
                 syntax.colors = Some(tokens.iter().map(|value| (*value).to_string()).collect());
+                syntax.colors_body_line = Some(line_index);
             }
             [_] => {
                 saw_shape = true;
@@ -479,6 +512,88 @@ pub(crate) fn parse_sprite_node(header: Option<&str>, lines: &[String]) -> Sprit
         }
     }
     syntax
+}
+
+fn recognize_sprite_display(
+    syntax: &SpriteNodeSyntax,
+    resolved: Option<&ResolvedSpriteShape>,
+    lines: &[crate::source::LogicalLine],
+) -> crate::surface::ParserRecognition {
+    use crate::surface::{ParserRecognition, SourceSpan, SurfaceDisplayFact};
+
+    let mut recognition = ParserRecognition::default();
+    let colors = syntax.colors.as_deref().unwrap_or_default();
+    if let Some(line_index) = syntax.colors_body_line
+        && let Some(line) = lines.get(line_index)
+    {
+        for color in colors {
+            if let Some(token) = line.tokens.iter().find(|token| token.text == *color) {
+                recognition.display_facts.push(SurfaceDisplayFact::Color {
+                    span: SourceSpan {
+                        start: token.start,
+                        end: token.end,
+                    },
+                    color: color.clone(),
+                });
+            }
+        }
+    }
+    for frame in resolved_sprite_frames(resolved) {
+        for layer in &frame.layers {
+            for row in &layer.rows {
+                let Some(line) = lines.get(row.body_line) else {
+                    continue;
+                };
+                let Some(token) = line.tokens.iter().find(|token| token.text == row.text) else {
+                    continue;
+                };
+                for (byte_offset, pixel) in row.text.char_indices() {
+                    let color = if pixel == '.' {
+                        "transparent".to_string()
+                    } else {
+                        visual_color_index(pixel)
+                            .and_then(|index| colors.get(index))
+                            .cloned()
+                            .unwrap_or_else(|| "transparent".to_string())
+                    };
+                    recognition
+                        .display_facts
+                        .push(SurfaceDisplayFact::SpritePixel {
+                            span: SourceSpan {
+                                start: token.start + byte_offset,
+                                end: token.start + byte_offset + pixel.len_utf8(),
+                            },
+                            transparent: pixel == '.' || color == "transparent",
+                            color,
+                        });
+                }
+            }
+        }
+    }
+    for line_index in &syntax.separator_body_lines {
+        if let Some(token) = lines.get(*line_index).and_then(|line| line.tokens.first()) {
+            recognition
+                .display_facts
+                .push(SurfaceDisplayFact::SpriteSeparator {
+                    span: SourceSpan {
+                        start: token.start,
+                        end: token.end,
+                    },
+                });
+        }
+    }
+    recognition
+}
+
+fn resolved_sprite_frames(resolved: Option<&ResolvedSpriteShape>) -> &[SpriteFrameSyntax] {
+    match resolved {
+        Some(ResolvedSpriteShape::Inline(frames)) => frames,
+        _ => &[],
+    }
+}
+
+fn visual_color_index(token: char) -> Option<usize> {
+    (0..62).find(|index| crate::visual_color_token_for_index(*index) == Some(token))
 }
 
 fn is_removed_colon_translate_syntax(line: &str) -> bool {

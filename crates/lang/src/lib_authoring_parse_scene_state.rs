@@ -221,6 +221,12 @@ fn parse_top_level_var_directive(
         authoring_grammar::AuthoringRowKind::PersistentConstDeclaration => {
             (SceneStateLifetime::Persistent, false)
         }
+        _ => {
+            return Err(parse_error(
+                &row.source_line,
+                "top-level variable row has the wrong authoring kind",
+            ));
+        }
     };
     let Some(name) = row.single_capture("name") else {
         return Err(parse_error(&row.source_line, "variable name is missing"));
@@ -272,7 +278,7 @@ fn parse_default_wait_time_directive(line: &str) -> Result<u64, DiagnosticReport
 }
 
 fn parse_input_buffer_block(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     input_buffer: &mut InputBufferDef,
 ) -> Result<usize, DiagnosticReport> {
@@ -384,7 +390,7 @@ struct ParsedSceneRulesBlock {
 }
 
 fn parse_scene_rules_block(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
 ) -> Result<(ParsedSceneRulesBlock, usize), DiagnosticReport> {
     let mut puzzle_rule = None;
@@ -444,7 +450,7 @@ fn parse_scene_rules_block(
 }
 
 fn parse_scene_transition_row(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
 ) -> Result<(SceneTransition, usize), DiagnosticReport> {
     let line = &lines[start];
@@ -470,7 +476,7 @@ fn parse_scene_transition_row(
 }
 
 fn parse_scene_condition_block(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
 ) -> Result<(SceneTransition, usize), DiagnosticReport> {
     let line = &lines[start];
@@ -498,7 +504,7 @@ fn parse_scene_condition_block(
 }
 
 fn parse_scene_on_block(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
 ) -> Result<(SceneTransition, usize), DiagnosticReport> {
     let line = &lines[start];
@@ -526,7 +532,7 @@ fn parse_scene_on_block(
 }
 
 fn parse_scene_lifecycle_block(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
 ) -> Result<(SceneTransition, usize), DiagnosticReport> {
     let tokens = split_header_tokens(&lines[start]);
@@ -559,7 +565,7 @@ fn parse_scene_lifecycle_block(
 }
 
 fn parse_scene_routine_block(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
 ) -> Result<(SceneRoutineDef, usize), DiagnosticReport> {
     let tokens = split_header_tokens(&lines[start]);
@@ -588,14 +594,14 @@ fn parse_scene_routine_block(
 }
 
 fn parse_scene_handler_effects(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     header_line: &str,
 ) -> Result<SceneEffect, DiagnosticReport> {
     parse_scene_handler_effects_range(lines, 0, lines.len(), header_line)
 }
 
 fn parse_scene_handler_effects_range(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     end: usize,
     header_line: &str,
@@ -639,7 +645,7 @@ fn parse_scene_handler_effects_range(
 }
 
 fn matching_effect_block_end(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     end: usize,
 ) -> Result<usize, DiagnosticReport> {
@@ -668,8 +674,9 @@ fn parse_scene_condition_expr(value: &str, line: &str) -> Result<SceneExpr, Diag
 }
 
 fn parse_level_menu_component(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
+    recognition: &mut crate::surface::ParserRecognition,
 ) -> Result<(LevelMenuDef, usize), DiagnosticReport> {
     let next = start + 1;
     if !lines[start].trim_end().ends_with('{') {
@@ -680,30 +687,32 @@ fn parse_level_menu_component(
     let mut i = next;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
         let tokens = split_header_tokens(&lines[i]);
-        match tokens.as_slice() {
-            ["show_index", "=", value] => menu.show_index = parse_boolean_option(value, &lines[i])?,
-            ["show_solved", "=", value] => {
-                menu.show_cleared = parse_boolean_option(value, &lines[i])?
-            }
-            ["show_current" | "show_current_level", "=", _] => {
+        if matches!(tokens.as_slice(), ["button", ..]) {
+            let (button, next_i) = parse_button_def(lines, i)?;
+            menu.buttons.push(button);
+            i = next_i;
+            continue;
+        }
+        let Some((name, value)) = parse_assignment_row(&lines[i]) else {
+            return Err(parse_error(
+                &lines[i],
+                "level_menu option must be: show_index = <true|false> | show_solved = <true|false> | show_current_level = <true|false> | layout = list | columns = <n> | wrap = <true|false> | locked = <disabled|hidden>",
+            ));
+        };
+        match (name, value) {
+            ("show_index", value) => menu.show_index = parse_boolean_option(value, &lines[i])?,
+            ("show_solved", value) => menu.show_cleared = parse_boolean_option(value, &lines[i])?,
+            ("show_current" | "show_current_level", _) => {
                 return Err(parse_error(
                     &lines[i],
                     "level_menu no longer supports show_current_level",
                 ));
             }
-            ["layout", "=", "list"] => menu.columns = None,
-            ["columns", "=", value] => {
-                menu.columns = Some(parse_level_menu_columns(value, &lines[i])?)
-            }
-            ["wrap", "=", value] => menu.wrap = parse_boolean_option(value, &lines[i])?,
-            ["locked", "=", "disabled"] => menu.locked = LevelMenuLocked::Disabled,
-            ["locked", "=", "hidden"] => menu.locked = LevelMenuLocked::Hidden,
-            ["button", ..] => {
-                let (button, next_i) = parse_button_def(lines, i)?;
-                menu.buttons.push(button);
-                i = next_i;
-                continue;
-            }
+            ("layout", "list") => menu.columns = None,
+            ("columns", value) => menu.columns = Some(parse_level_menu_columns(value, &lines[i])?),
+            ("wrap", value) => menu.wrap = parse_boolean_option(value, &lines[i])?,
+            ("locked", "disabled") => menu.locked = LevelMenuLocked::Disabled,
+            ("locked", "hidden") => menu.locked = LevelMenuLocked::Hidden,
             _ => {
                 return Err(parse_error(
                     &lines[i],
@@ -711,6 +720,17 @@ fn parse_level_menu_component(
                 ));
             }
         }
+        let value_kind = match name {
+            "columns" => crate::surface::SurfaceSemanticKind::Number,
+            _ => crate::surface::SurfaceSemanticKind::Literal,
+        };
+        recognition.mark_assignment(
+            &lines[i],
+            name,
+            crate::surface::SurfaceSemanticKind::Setting,
+            value,
+            value_kind,
+        );
         i += 1;
     }
     if i >= lines.len() {
@@ -764,51 +784,32 @@ fn parse_key_trigger(token: &str, line: &str) -> Result<KeyTrigger, DiagnosticRe
     Ok(KeyTrigger::Named(token.to_string()))
 }
 
-fn parse_model_keys_block(
-    lines: &[String],
-    start: usize,
+fn lower_model_key_bindings(
+    bindings: &[model_syntax::ModelKeyBindingSyntax],
     catalog: &mut Catalog,
     controls: &mut Controls,
-) -> Result<usize, DiagnosticReport> {
-    let mut seen_keys = HashSet::<KeyTrigger>::new();
-    let block = puzzle_authoring::collect_row_block_surface(lines, start + 1, "keys")
-        .map_err(|error| parse_error(&lines[start], error.message()))?;
-    for line in block.rows {
-        let row = parse_keys_surface_row(line, "input", false)?;
-        lower_model_keys_row(row, line, catalog, controls, &mut seen_keys)?;
-    }
-    Ok(block.next_index)
-}
-
-fn lower_model_keys_row(
-    row: KeysSurfaceRow<'_>,
-    line: &str,
-    catalog: &mut Catalog,
-    controls: &mut Controls,
-    seen_keys: &mut HashSet<KeyTrigger>,
 ) -> Result<(), DiagnosticReport> {
-    let input_tokens = split_header_tokens(row.target);
-    let [input_name] = input_tokens.as_slice() else {
-        return Err(parse_error(line, "keys row must be: <key...> -> <input>"));
-    };
-    let input = catalog
-        .input_names
-        .get(*input_name)
-        .copied()
-        .map(Ok)
-        .unwrap_or_else(|| add_input_name(input_name, line, catalog))?;
-    for key in row.keys {
-        let trigger = parse_key_trigger(key, line)?;
-        if !seen_keys.insert(trigger.clone()) {
-            return Err(parse_error(line, "duplicate model input key"));
+    let mut seen_keys = HashSet::<KeyTrigger>::new();
+    for binding in bindings {
+        let input = catalog
+            .input_names
+            .get(&binding.target)
+            .copied()
+            .map(Ok)
+            .unwrap_or_else(|| add_input_name(&binding.target, &binding.source, catalog))?;
+        for key in &binding.keys {
+            let trigger = parse_key_trigger(key, &binding.source)?;
+            if !seen_keys.insert(trigger.clone()) {
+                return Err(parse_error(&binding.source, "duplicate model input key"));
+            }
+            add_key_trigger_to_controls(&trigger, input, controls, &binding.source)?;
         }
-        add_key_trigger_to_controls(&trigger, input, controls, line)?;
     }
     Ok(())
 }
 
 fn parse_scene_keys_block(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
 ) -> Result<(Vec<KeyBinding>, usize), DiagnosticReport> {
     let mut bindings = Vec::<KeyBinding>::new();
@@ -825,7 +826,7 @@ fn parse_scene_keys_block(
 }
 
 fn parse_scene_key_binding_at(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
 ) -> Result<(KeyBinding, usize), DiagnosticReport> {
     let row = parse_keys_surface_row(&lines[start], "scene effect-or-input", true)?;
@@ -834,7 +835,7 @@ fn parse_scene_key_binding_at(
 
 fn lower_scene_keys_row(
     row: KeysSurfaceRow<'_>,
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
 ) -> Result<(KeyBinding, usize), DiagnosticReport> {
     let mut triggers = Vec::new();

@@ -5,31 +5,28 @@ use puzzle_core::{LayerId, ObjectId};
 use crate::{Catalog, DiagnosticReport, VisualOrderDef, VisualOrderPriorityDef, parse_error};
 
 pub(crate) fn lower_sprite_order(
-    surface: Option<&puzzle_authoring::SpriteOrderSurface>,
+    node: Option<&crate::authoring_grammar::AuthoringNode>,
     catalog: &Catalog,
     source_line: &str,
 ) -> Result<VisualOrderDef, DiagnosticReport> {
-    let Some(surface) = surface else {
+    let Some(node) = node else {
         return generated_order_from_slots(catalog, source_line);
     };
+    let (direction_priority, items) = order_tree(node)?;
 
-    validate_direction_priority(&surface.priority, catalog, source_line)?;
-    if surface.items.is_empty() {
+    validate_direction_priority(&direction_priority, catalog, source_line)?;
+    if items.is_empty() {
         let mut generated = generated_order_from_slots(catalog, source_line)?;
-        if !surface.priority.is_empty() {
-            generated.direction_priority = surface.priority.clone();
+        if !direction_priority.is_empty() {
+            generated.direction_priority = direction_priority;
         }
         return Ok(generated);
     }
     let mut covered = HashSet::<ObjectId>::new();
     let mut priorities = Vec::new();
-    for item in &surface.items {
-        let (selectors, merge) = match item {
-            puzzle_authoring::SpriteOrderItemSurface::Priority(selectors) => (selectors, false),
-            puzzle_authoring::SpriteOrderItemSurface::Merge(selectors) => (selectors, true),
-        };
+    for (_, selectors, merge) in items {
         let mut objects = Vec::new();
-        for selector in selectors {
+        for selector in &selectors {
             for object in resolve_order_selector(selector, catalog, source_line)? {
                 if !objects.contains(&object) {
                     objects.push(object);
@@ -85,13 +82,91 @@ pub(crate) fn lower_sprite_order(
     }
 
     Ok(VisualOrderDef {
-        direction_priority: if surface.priority.is_empty() {
+        direction_priority: if direction_priority.is_empty() {
             default_direction_priority(catalog)
         } else {
-            surface.priority.clone()
+            direction_priority
         },
         priorities,
     })
+}
+
+fn order_tree(
+    node: &crate::authoring_grammar::AuthoringNode,
+) -> Result<(Vec<String>, Vec<(usize, Vec<String>, bool)>), DiagnosticReport> {
+    use crate::authoring_grammar::{AuthoringDefinitionOp, AuthoringKind};
+
+    let mut direction_priority = None;
+    for definition in &node.definition_rows {
+        if definition.key != "priority" || definition.op != Some(AuthoringDefinitionOp::Equals) {
+            return Err(parse_error(
+                &definition.source_line,
+                "sprite order property must be: priority = <direction...>",
+            ));
+        }
+        if direction_priority
+            .replace(definition.values.clone())
+            .is_some()
+        {
+            return Err(parse_error(
+                &definition.source_line,
+                "sprite order may declare priority only once",
+            ));
+        }
+    }
+
+    let mut items = node
+        .content_rows
+        .iter()
+        .map(|row| {
+            let merge = row.source_line.contains('+');
+            let selectors = if merge {
+                plus_operands(&row.source_line)?
+            } else {
+                order_row_selectors(row).to_vec()
+            };
+            Ok((row.source_index, selectors, merge))
+        })
+        .collect::<Result<Vec<_>, DiagnosticReport>>()?;
+    for merge in &node.children {
+        if merge.kind != AuthoringKind::SpriteMergeConfig || merge.content_rows.is_empty() {
+            return Err(parse_error(
+                &merge.source_line,
+                "sprite merge must not be empty",
+            ));
+        }
+        let selectors = merge
+            .content_rows
+            .iter()
+            .flat_map(order_row_selectors)
+            .cloned()
+            .collect();
+        items.push((merge.source_index, selectors, true));
+    }
+    items.sort_by_key(|(source_index, _, _)| *source_index);
+    Ok((direction_priority.unwrap_or_default(), items))
+}
+
+fn order_row_selectors(row: &crate::authoring_grammar::AuthoringContentRow) -> &[String] {
+    row.captures
+        .iter()
+        .find(|capture| capture.name == "selectors")
+        .map_or(&[], |capture| capture.values.as_slice())
+}
+
+fn plus_operands(line: &str) -> Result<Vec<String>, DiagnosticReport> {
+    line.split('+')
+        .map(|operand| {
+            let values = operand.split_whitespace().collect::<Vec<_>>();
+            match values.as_slice() {
+                [value] => Ok((*value).to_string()),
+                _ => Err(parse_error(
+                    line,
+                    "sprite merge + requires exactly one selector on each side",
+                )),
+            }
+        })
+        .collect()
 }
 
 fn generated_order_from_slots(

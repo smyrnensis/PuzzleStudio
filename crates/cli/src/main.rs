@@ -33,7 +33,6 @@ fn run() -> Result<(), CliError> {
         "inspect" | "list" => inspect_command(&args),
         "agent" => agent_command(&args),
         "screenshot" => screenshot_command(&args),
-        "play" => play_command(&args),
         "preview" => preview_command(&args),
         "editor" | "edit" => editor_command(&args),
         "--help" | "-h" | "help" => {
@@ -71,23 +70,6 @@ fn agent_json_lines(reader: impl BufRead, mut writer: impl Write) -> Result<(), 
         writer.flush()?;
     }
     Ok(())
-}
-
-fn play_command(args: &[String]) -> Result<(), CliError> {
-    #[cfg(feature = "play")]
-    {
-        if args.iter().any(|arg| arg == "--help" || arg == "-h") {
-            print_play_usage();
-            return Ok(());
-        }
-        ascii_play::run_terminal_from_args(args.iter().cloned())
-            .map_err(|error| CliError::Config(error.to_string()))
-    }
-    #[cfg(not(feature = "play"))]
-    {
-        let _ = args;
-        Err(disabled_adapter_command("play", "play"))
-    }
 }
 
 fn preview_command(args: &[String]) -> Result<(), CliError> {
@@ -401,7 +383,6 @@ fn push_unique(values: &mut Vec<String>, value: String) {
 }
 
 #[cfg(not(all(
-    feature = "play",
     feature = "preview",
     feature = "editor",
     feature = "export-html",
@@ -415,7 +396,6 @@ fn disabled_adapter_command(command: &str, feature: &str) -> CliError {
 }
 
 #[cfg(any(
-    feature = "play",
     feature = "preview",
     feature = "editor",
     feature = "export-html",
@@ -427,7 +407,6 @@ fn adapter_feature_note() -> &'static str {
 }
 
 #[cfg(not(any(
-    feature = "play",
     feature = "preview",
     feature = "editor",
     feature = "export-html",
@@ -774,7 +753,7 @@ fn escape_json(value: &str) -> String {
 
 fn print_usage() {
     eprintln!(
-        "usage:\n  puzzlestudio check <path> [--json]\n  puzzlestudio inspect <path>\n  puzzlestudio agent --stdio\n  puzzlestudio agent request < requests.jsonl\n  puzzlestudio play [path]\n  puzzlestudio preview [path] [--port 7878] [--solver-depth N] [--solver-nodes N] [--solver-ms N]\n  puzzlestudio editor [path] [--port 8787]\n  puzzlestudio export-html <path> -o <output.html>\n  puzzlestudio export-editor [path] -o <docs/index.html>\n  puzzlestudio screenshot <path> -o <output.png> [--scene name] [--level name-or-index] [--input name] [--inputs a,b,c] [--width 1280] [--height 720] [--browser path]\n  puzzlestudio screenshot <path> --list\n  puzzlestudio import-puzzlescript <source.txt> -o <game.puzzle>{}",
+        "usage:\n  puzzlestudio check <path> [--json]\n  puzzlestudio inspect <path>\n  puzzlestudio agent --stdio\n  puzzlestudio agent request < requests.jsonl\n  puzzlestudio preview [path] [--port 7878] [--solver-depth N] [--solver-nodes N] [--solver-ms N]\n  puzzlestudio editor [path] [--port 8787]\n  puzzlestudio export-html <path> -o <output.html>\n  puzzlestudio export-editor [path] -o <docs/index.html>\n  puzzlestudio screenshot <path> -o <output.png> [--scene name] [--level name-or-index] [--input name] [--inputs a,b,c] [--width 1280] [--height 720] [--browser path]\n  puzzlestudio screenshot <path> --list\n  puzzlestudio import-puzzlescript <source.txt> -o <game.puzzle>{}",
         adapter_feature_note()
     );
 }
@@ -800,11 +779,6 @@ fn print_export_html_usage() {
     eprintln!(
         "usage: puzzlestudio export-html <path/to/game-folder-or-game.puzzle-or-game.puzzle3> -o <output.html>"
     );
-}
-
-#[cfg(feature = "play")]
-fn print_play_usage() {
-    eprintln!("usage: puzzlestudio play [path/to/game-folder-or-game.puzzle-or-game.puzzle3]");
 }
 
 #[cfg(feature = "preview")]

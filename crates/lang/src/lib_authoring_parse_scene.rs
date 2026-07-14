@@ -30,7 +30,11 @@ impl SceneExpansionCatalog {
         &self.collections
     }
 
-    fn add_level_collections(&mut self, levels: &[LevelExpansionEntry], resources: &SceneResources) {
+    fn add_level_collections(
+        &mut self,
+        levels: &[LevelExpansionEntry],
+        resources: &SceneResources,
+    ) {
         let values = levels
             .iter()
             .enumerate()
@@ -53,7 +57,10 @@ impl SceneExpansionCatalog {
     }
 }
 
-fn resource_selection_contains_level(selection: &ResourceSelection, level: &LevelExpansionEntry) -> bool {
+fn resource_selection_contains_level(
+    selection: &ResourceSelection,
+    level: &LevelExpansionEntry,
+) -> bool {
     match selection {
         ResourceSelection::All => true,
         ResourceSelection::Named(names) => names
@@ -88,7 +95,7 @@ fn level_collection_value(
 }
 
 fn collect_scene_resources(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
 ) -> Result<SceneResources, DiagnosticReport> {
     let mut resources = SceneResources::default();
@@ -110,9 +117,10 @@ fn collect_scene_resources(
 }
 
 fn parse_scene_definition(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     level_entries: &[LevelExpansionEntry],
+    recognition: &mut crate::surface::ParserRecognition,
 ) -> Result<(SceneDef, usize), DiagnosticReport> {
     let header = split_header_tokens(&lines[start]);
     if matches!(header.as_slice(), ["scene", "level_menu", ..]) {
@@ -148,6 +156,7 @@ fn parse_scene_definition(
     let mut handler = Scene2dBlockHandler {
         scene: &mut scene,
         for_expansion_sets: &for_expansion_sets,
+        recognition,
     };
     let next = puzzle_scene::parse_scene_block_with_handler(
         lines,
@@ -284,9 +293,8 @@ fn scene_component_uses_signal_name(component: &SceneComponent, name: &str) -> b
 
 fn scene_transition_trigger_uses_signal_name(trigger: &SceneTransitionTrigger, name: &str) -> bool {
     match trigger {
-        SceneTransitionTrigger::Condition(condition) | SceneTransitionTrigger::Signal(condition) => {
-            scene_expr_uses_path_name(condition, name)
-        }
+        SceneTransitionTrigger::Condition(condition)
+        | SceneTransitionTrigger::Signal(condition) => scene_expr_uses_path_name(condition, name),
         SceneTransitionTrigger::SceneStart | SceneTransitionTrigger::LevelStart => false,
     }
 }
@@ -294,11 +302,13 @@ fn scene_transition_trigger_uses_signal_name(trigger: &SceneTransitionTrigger, n
 fn scene_effect_uses_signal_name(effect: &SceneEffect, name: &str) -> bool {
     match effect {
         SceneEffect::Input(_) => name == "input",
-        SceneEffect::SetVariable { name: target, value } => {
-            target == name || scene_expr_uses_path_name(value, name)
-        }
+        SceneEffect::SetVariable {
+            name: target,
+            value,
+        } => target == name || scene_expr_uses_path_name(value, name),
         SceneEffect::Conditional { condition, effect } => {
-            scene_expr_uses_path_name(condition, name) || scene_effect_uses_signal_name(effect, name)
+            scene_expr_uses_path_name(condition, name)
+                || scene_effect_uses_signal_name(effect, name)
         }
         SceneEffect::Sequence { effects } => effects
             .iter()
@@ -310,7 +320,9 @@ fn scene_effect_uses_signal_name(effect: &SceneEffect, name: &str) -> bool {
         SceneEffect::SetLevelCleared { level, .. } => level
             .as_ref()
             .is_some_and(|level| scene_expr_uses_path_name(level, name)),
-        SceneEffect::Apply { args, .. } => args.iter().any(|arg| scene_expr_uses_path_name(arg, name)),
+        SceneEffect::Apply { args, .. } => {
+            args.iter().any(|arg| scene_expr_uses_path_name(arg, name))
+        }
         SceneEffect::RoutineCall(_)
         | SceneEffect::ComponentEffect(_)
         | SceneEffect::Wait { .. }
@@ -344,9 +356,7 @@ fn scene_effect_uses_signal_name(effect: &SceneEffect, name: &str) -> bool {
 fn scene_expr_uses_path_name(expr: &SceneExpr, name: &str) -> bool {
     match expr {
         SceneExpr::Path(path) => path.len() == 1 && path[0] == name,
-        SceneExpr::Call { args, .. } => args
-            .iter()
-            .any(|arg| scene_expr_uses_path_name(arg, name)),
+        SceneExpr::Call { args, .. } => args.iter().any(|arg| scene_expr_uses_path_name(arg, name)),
         SceneExpr::LevelSelector { .. } => false,
         SceneExpr::Binary { left, right, .. } => {
             scene_expr_uses_path_name(left, name) || scene_expr_uses_path_name(right, name)
@@ -825,14 +835,15 @@ fn collect_scene_effect_routine_calls<'a>(effect: &'a SceneEffect, calls: &mut V
 struct Scene2dBlockHandler<'a> {
     scene: &'a mut SceneDef,
     for_expansion_sets: &'a HashMap<String, Vec<ForExpansionValue>>,
+    recognition: &'a mut crate::surface::ParserRecognition,
 }
 
-impl puzzle_scene::SceneBlockHandler for Scene2dBlockHandler<'_> {
+impl puzzle_scene::SceneBlockHandler<source::LogicalLine> for Scene2dBlockHandler<'_> {
     type Error = DiagnosticReport;
 
     fn parse_state_block(
         &mut self,
-        lines: &[String],
+        lines: &[source::LogicalLine],
         start: usize,
     ) -> Result<usize, DiagnosticReport> {
         Err(parse_error(
@@ -843,11 +854,15 @@ impl puzzle_scene::SceneBlockHandler for Scene2dBlockHandler<'_> {
 
     fn parse_layout_block(
         &mut self,
-        lines: &[String],
+        lines: &[source::LogicalLine],
         start: usize,
     ) -> Result<usize, DiagnosticReport> {
-        let (layout_block, next_i) =
-            parse_scene_layout_block(lines, start, self.for_expansion_sets)?;
+        let (layout_block, next_i) = parse_scene_layout_block(
+            lines,
+            start,
+            self.for_expansion_sets,
+            self.recognition,
+        )?;
         self.scene.layout = layout_block.layout;
         self.scene
             .state
@@ -860,7 +875,7 @@ impl puzzle_scene::SceneBlockHandler for Scene2dBlockHandler<'_> {
 
     fn parse_inputs_block(
         &mut self,
-        lines: &[String],
+        lines: &[source::LogicalLine],
         start: usize,
     ) -> Result<usize, DiagnosticReport> {
         Err(parse_error(
@@ -871,7 +886,7 @@ impl puzzle_scene::SceneBlockHandler for Scene2dBlockHandler<'_> {
 
     fn parse_keys_block(
         &mut self,
-        lines: &[String],
+        lines: &[source::LogicalLine],
         start: usize,
     ) -> Result<usize, DiagnosticReport> {
         let (bindings, next_i) = parse_scene_keys_block(lines, start)?;
@@ -881,7 +896,7 @@ impl puzzle_scene::SceneBlockHandler for Scene2dBlockHandler<'_> {
 
     fn parse_rules_block(
         &mut self,
-        lines: &[String],
+        lines: &[source::LogicalLine],
         start: usize,
     ) -> Result<usize, DiagnosticReport> {
         let (block, next_i) = parse_scene_rules_block(lines, start)?;
@@ -894,7 +909,7 @@ impl puzzle_scene::SceneBlockHandler for Scene2dBlockHandler<'_> {
 
     fn parse_scene_start_block(
         &mut self,
-        lines: &[String],
+        lines: &[source::LogicalLine],
         start: usize,
     ) -> Result<usize, DiagnosticReport> {
         let (transition, next_i) = parse_scene_lifecycle_block(lines, start)?;
@@ -904,7 +919,7 @@ impl puzzle_scene::SceneBlockHandler for Scene2dBlockHandler<'_> {
 
     fn parse_inline_directive(
         &mut self,
-        lines: &[String],
+        lines: &[source::LogicalLine],
         start: usize,
     ) -> Result<usize, DiagnosticReport> {
         let tokens = split_header_tokens(&lines[start]);
@@ -949,6 +964,7 @@ impl puzzle_scene::SceneBlockHandler for Scene2dBlockHandler<'_> {
                 {
                     return Err(parse_error(&lines[start], "duplicate scene routine"));
                 }
+                mark_scene_routine_header(self.recognition, &lines[start]);
                 self.scene.routines.push(routine);
                 Ok(next_i)
             }
@@ -975,8 +991,32 @@ impl puzzle_scene::SceneBlockHandler for Scene2dBlockHandler<'_> {
     }
 }
 
+fn mark_scene_routine_header(
+    recognition: &mut crate::surface::ParserRecognition,
+    line: &source::LogicalLine,
+) {
+    for (index, token) in line
+        .tokens
+        .iter()
+        .filter(|token| token.text != "{" && token.text != "}")
+        .enumerate()
+    {
+        recognition.mark(
+            crate::surface::SourceSpan {
+                start: token.start,
+                end: token.end,
+            },
+            match index {
+                0 => crate::surface::SurfaceSemanticKind::Keyword,
+                1 => crate::surface::SurfaceSemanticKind::Binding,
+                _ => crate::surface::SurfaceSemanticKind::Keyword,
+            },
+        );
+    }
+}
+
 fn parse_scene_resources_block(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     resources: &mut SceneResources,
 ) -> Result<usize, DiagnosticReport> {
@@ -1039,18 +1079,20 @@ struct ParsedSceneLayoutBlock {
 }
 
 fn parse_scene_layout_block(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     for_expansion_sets: &HashMap<String, Vec<ForExpansionValue>>,
+    recognition: &mut crate::surface::ParserRecognition,
 ) -> Result<(ParsedSceneLayoutBlock, usize), DiagnosticReport> {
-    parse_scene_view_like_block(lines, start, "layout", for_expansion_sets)
+    parse_scene_view_like_block(lines, start, "layout", for_expansion_sets, recognition)
 }
 
 fn parse_scene_view_like_block(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     block_name: &str,
     for_expansion_sets: &HashMap<String, Vec<ForExpansionValue>>,
+    recognition: &mut crate::surface::ParserRecognition,
 ) -> Result<(ParsedSceneLayoutBlock, usize), DiagnosticReport> {
     let layout = parse_scene_layout_from_header(&lines[start], block_name)?;
     let mut variables = Vec::new();
@@ -1083,13 +1125,15 @@ fn parse_scene_view_like_block(
             return Err(parse_error(&lines[i], "unknown layout directive panel"));
         }
         if matches!(tokens.as_slice(), ["if", ..]) {
-            let (component, next_i) = parse_view_if_component(lines, i, for_expansion_sets)?;
+            let (component, next_i) =
+                parse_view_if_component(lines, i, for_expansion_sets, recognition)?;
             components.push(component);
             i = next_i;
             continue;
         }
         if matches!(tokens.as_slice(), ["for", ..]) {
-            let (expanded, next_i) = parse_for_components(lines, i, for_expansion_sets)?;
+            let (expanded, next_i) =
+                parse_for_components(lines, i, for_expansion_sets, recognition)?;
             components.extend(expanded);
             i = next_i;
             continue;
@@ -1101,6 +1145,7 @@ fn parse_scene_view_like_block(
                     i,
                     SceneStateLifetime::Instance,
                     for_expansion_sets,
+                    recognition,
                 )?;
             components.extend(parsed_components);
             puzzles.extend(nested_puzzles);
@@ -1146,13 +1191,13 @@ fn parse_scene_view_like_block(
             continue;
         }
 
-        let (parsed_components, next_i, nested_puzzles) =
-            parse_scene_component_units_with_puzzles(
-                lines,
-                i,
-                SceneStateLifetime::Instance,
-                for_expansion_sets,
-            )?;
+        let (parsed_components, next_i, nested_puzzles) = parse_scene_component_units_with_puzzles(
+            lines,
+            i,
+            SceneStateLifetime::Instance,
+            for_expansion_sets,
+            recognition,
+        )?;
         components.extend(parsed_components);
         puzzles.extend(nested_puzzles);
         i = next_i;
@@ -1235,21 +1280,29 @@ fn scene_puzzle_component_source(component: &SceneComponent) -> Option<&str> {
 }
 
 fn parse_scene_component_units_with_puzzles(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     lifetime: SceneStateLifetime,
     for_expansion_sets: &HashMap<String, Vec<ForExpansionValue>>,
+    recognition: &mut crate::surface::ParserRecognition,
 ) -> Result<(Vec<SceneComponent>, usize, Vec<ScenePuzzleDef>), DiagnosticReport> {
     let nested_puzzles = std::cell::RefCell::new(Vec::<ScenePuzzleDef>::new());
-    let mut parse_leaf =
-        |lines: &[String], index: usize| -> Result<(usize, Vec<SceneComponent>), DiagnosticReport> {
-            let (components, next, puzzle) =
-                parse_scene_leaf_component_units(lines, index, lifetime, for_expansion_sets)?;
-            if let Some(puzzle) = puzzle {
-                nested_puzzles.borrow_mut().push(puzzle);
-            }
-            Ok((next, components))
-        };
+    let mut parse_leaf = |lines: &[source::LogicalLine],
+                          index: usize|
+     -> Result<(usize, Vec<SceneComponent>), DiagnosticReport> {
+        let (components, next, puzzle) =
+            parse_scene_leaf_component_units(
+                lines,
+                index,
+                lifetime,
+                for_expansion_sets,
+                recognition,
+            )?;
+        if let Some(puzzle) = puzzle {
+            nested_puzzles.borrow_mut().push(puzzle);
+        }
+        Ok((next, components))
+    };
     let (next, components) = puzzle_scene::parse_scene_component_at(
         lines,
         start,
@@ -1282,10 +1335,11 @@ fn build_scene_container_component_unit(
 }
 
 fn parse_scene_leaf_component_units(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     lifetime: SceneStateLifetime,
     for_expansion_sets: &HashMap<String, Vec<ForExpansionValue>>,
+    recognition: &mut crate::surface::ParserRecognition,
 ) -> Result<(Vec<SceneComponent>, usize, Option<ScenePuzzleDef>), DiagnosticReport> {
     if let Some(declaration) = parse_scene_puzzle_layout_declaration(&lines[start], lifetime)? {
         return Ok((
@@ -1352,10 +1406,35 @@ fn parse_scene_leaf_component_units(
                 "`puzzle3` was removed; use `puzzle <source>` in both .puzzle and .puzzle3 files",
             ))
         }
-        ["heading", ..] => Ok((vec![parse_text_component(&lines[start], SceneTextRoleDef::Heading)?], start + 1, None)),
-        ["subheading", ..] => Ok((vec![parse_text_component(&lines[start], SceneTextRoleDef::Subheading)?], start + 1, None)),
-        ["text", ..] => Ok((vec![parse_text_component(&lines[start], SceneTextRoleDef::Body)?], start + 1, None)),
-        ["caption", ..] => Ok((vec![parse_text_component(&lines[start], SceneTextRoleDef::Caption)?], start + 1, None)),
+        ["heading", ..] => Ok((
+            vec![parse_text_component(
+                &lines[start],
+                SceneTextRoleDef::Heading,
+            )?],
+            start + 1,
+            None,
+        )),
+        ["subheading", ..] => Ok((
+            vec![parse_text_component(
+                &lines[start],
+                SceneTextRoleDef::Subheading,
+            )?],
+            start + 1,
+            None,
+        )),
+        ["text", ..] => Ok((
+            vec![parse_text_component(&lines[start], SceneTextRoleDef::Body)?],
+            start + 1,
+            None,
+        )),
+        ["caption", ..] => Ok((
+            vec![parse_text_component(
+                &lines[start],
+                SceneTextRoleDef::Caption,
+            )?],
+            start + 1,
+            None,
+        )),
         ["button", ..] => {
             let (component, next) = parse_button_component(lines, start)?;
             Ok((vec![component], next, None))
@@ -1365,15 +1444,17 @@ fn parse_scene_leaf_component_units(
             Ok((vec![component], next, None))
         }
         ["if", ..] => {
-            let (component, next) = parse_view_if_component(lines, start, for_expansion_sets)?;
+            let (component, next) =
+                parse_view_if_component(lines, start, for_expansion_sets, recognition)?;
             Ok((vec![component], next, None))
         }
         ["for", ..] => {
-            let (components, next) = parse_for_components(lines, start, for_expansion_sets)?;
+            let (components, next) =
+                parse_for_components(lines, start, for_expansion_sets, recognition)?;
             Ok((components, next, None))
         }
         ["level_menu"] => {
-            let (menu, next_i) = parse_level_menu_component(lines, start)?;
+            let (menu, next_i) = parse_level_menu_component(lines, start, recognition)?;
             Ok((vec![SceneComponent::LevelMenu(menu)], next_i, None))
         }
         ["level_menu", ..] => Err(parse_error(
@@ -1400,7 +1481,10 @@ fn parse_scene_layout_attrs_for_line(
     puzzle_scene::parse_scene_layout_attrs(attrs).map_err(|error| parse_error(line, &error.message))
 }
 
-fn parse_text_component(line: &str, role: SceneTextRoleDef) -> Result<SceneComponent, DiagnosticReport> {
+fn parse_text_component(
+    line: &str,
+    role: SceneTextRoleDef,
+) -> Result<SceneComponent, DiagnosticReport> {
     let keyword = match role {
         SceneTextRoleDef::Heading => "heading",
         SceneTextRoleDef::Subheading => "subheading",
@@ -1439,7 +1523,7 @@ fn parse_text_component(line: &str, role: SceneTextRoleDef) -> Result<SceneCompo
 }
 
 fn parse_button_like_def(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     keyword: &str,
 ) -> Result<(SceneButtonDef, usize), DiagnosticReport> {
@@ -1483,14 +1567,14 @@ fn parse_button_like_def(
 }
 
 fn parse_button_def(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
 ) -> Result<(SceneButtonDef, usize), DiagnosticReport> {
     parse_button_like_def(lines, start, "button")
 }
 
 fn parse_button_component(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
 ) -> Result<(SceneComponent, usize), DiagnosticReport> {
     let (button, next_i) = parse_button_def(lines, start)?;
@@ -1498,7 +1582,7 @@ fn parse_button_component(
 }
 
 fn parse_choice_component(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
 ) -> Result<(SceneComponent, usize), DiagnosticReport> {
     let (choice, next_i) = parse_button_like_def(lines, start, "choice")?;
@@ -1506,9 +1590,10 @@ fn parse_choice_component(
 }
 
 fn parse_view_if_component(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     for_expansion_sets: &HashMap<String, Vec<ForExpansionValue>>,
+    recognition: &mut crate::surface::ParserRecognition,
 ) -> Result<(SceneComponent, usize), DiagnosticReport> {
     let line = &lines[start];
     let condition = block_header_text(line)
@@ -1526,11 +1611,11 @@ fn parse_view_if_component(
             "layout condition requires at least one component",
         ));
     }
-    let children = parse_scene_component_body(body, "if", for_expansion_sets)?;
+    let children = parse_scene_component_body(body, "if", for_expansion_sets, recognition)?;
     let else_children = if else_body.is_empty() {
         Vec::new()
     } else {
-        parse_scene_component_body(&else_body, "else", for_expansion_sets)?
+        parse_scene_component_body(&else_body, "else", for_expansion_sets, recognition)?
     };
     Ok((
         SceneComponent::Conditional(SceneConditionalDef {
@@ -1543,10 +1628,10 @@ fn parse_view_if_component(
 }
 
 fn collect_view_else_body(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     header_line: &str,
-) -> Result<(Vec<String>, usize), DiagnosticReport> {
+) -> Result<(Vec<source::LogicalLine>, usize), DiagnosticReport> {
     if !next_line_is_else(lines, start) {
         return Ok((Vec::new(), start));
     }
@@ -1560,22 +1645,26 @@ fn collect_view_else_body(
 }
 
 fn parse_scene_component_body(
-    body: &[String],
+    body: &[source::LogicalLine],
     block_name: &str,
     for_expansion_sets: &HashMap<String, Vec<ForExpansionValue>>,
+    recognition: &mut crate::surface::ParserRecognition,
 ) -> Result<Vec<SceneComponent>, DiagnosticReport> {
     let mut lines = body.to_vec();
-    lines.push(BLOCK_CLOSE.to_string());
-    let mut parse_leaf =
-        |lines: &[String], index: usize| -> Result<(usize, Vec<SceneComponent>), DiagnosticReport> {
-            let (components, next, _) = parse_scene_leaf_component_units(
-                lines,
-                index,
-                SceneStateLifetime::Instance,
-                for_expansion_sets,
-            )?;
-            Ok((next, components))
-        };
+    let line_number = lines.last().map_or(1, |line| line.line);
+    lines.push(source::LogicalLine::new(BLOCK_CLOSE, line_number));
+    let mut parse_leaf = |lines: &[source::LogicalLine],
+                          index: usize|
+     -> Result<(usize, Vec<SceneComponent>), DiagnosticReport> {
+        let (components, next, _) = parse_scene_leaf_component_units(
+            lines,
+            index,
+            SceneStateLifetime::Instance,
+            for_expansion_sets,
+            recognition,
+        )?;
+        Ok((next, components))
+    };
     let (next, component_units) = puzzle_scene::parse_scene_component_block(
         &lines,
         0,
@@ -1589,9 +1678,10 @@ fn parse_scene_component_body(
 }
 
 fn parse_for_components(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     for_expansion_sets: &HashMap<String, Vec<ForExpansionValue>>,
+    recognition: &mut crate::surface::ParserRecognition,
 ) -> Result<(Vec<SceneComponent>, usize), DiagnosticReport> {
     let tokens = split_header_tokens(&lines[start]);
     let ["for", binding, "in", sources @ ..] = tokens.as_slice() else {
@@ -1622,6 +1712,7 @@ fn parse_for_components(
             &expanded_lines,
             "for",
             for_expansion_sets,
+            recognition,
         )?);
     }
     Ok((components, next_i))
