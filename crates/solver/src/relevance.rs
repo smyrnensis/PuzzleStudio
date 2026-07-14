@@ -1,8 +1,32 @@
-use crate::object_refs;
-use puzzle_core::{
-    CompiledGame, ConditionValueKind, Effect, Guard, ObjectId as ObjectId2, Rule, RuleId, RuleStep,
+use crate::object_refs::{self, SolverPatternObjectRefs};
+use puzzle_core::{CompiledGame, ObjectId as ObjectId2};
+use puzzle_grid3d::{CompiledGame3, GridPattern, GridRuleStep, Offset3};
+use puzzle_kernel::{
+    CompiledGameModel, ConditionId, ConditionValueKind, InputId, LocalFrame, MarkId, ObjectId,
+    ProgramCondition, ProgramStep, RuleConditionDef, RuleEffect, RuleGuard, RuleId, RuleModel,
+    RuleWriteOp, VariableId,
 };
 use std::collections::BTreeSet;
+
+type RelevanceConditionValue<Pattern> = ConditionValueKind<ObjectId, Pattern, InputId>;
+type RelevanceGuard<Pattern> =
+    RuleGuard<VariableId, ConditionId, RelevanceConditionValue<Pattern>, InputId>;
+type RelevanceCondition<Pattern> = ProgramCondition<Pattern, RelevanceGuard<Pattern>>;
+type RelevanceRule<Pattern, Offset> = RuleModel<
+    RuleId,
+    RelevanceGuard<Pattern>,
+    Pattern,
+    RuleWriteOp<Offset, ObjectId, MarkId>,
+    RuleEffect,
+>;
+type RelevanceStep<Pattern, Offset> =
+    ProgramStep<RelevanceRule<Pattern, Offset>, RelevanceCondition<Pattern>, LocalFrame<ObjectId>>;
+type RelevanceGame<Pattern, Offset> = CompiledGameModel<
+    RuleConditionDef<ConditionId, RelevanceConditionValue<Pattern>>,
+    RelevanceRule<Pattern, Offset>,
+    RelevanceCondition<Pattern>,
+    LocalFrame<ObjectId>,
+>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SolverRelevance<ObjectId = ObjectId2> {
@@ -76,17 +100,7 @@ impl SolverRelevance<ObjectId2> {
         game: &CompiledGame,
         roots: impl IntoIterator<Item = ObjectId2>,
     ) -> Self {
-        let mut analysis = Self::from_roots(roots, ObjectId2::is_empty);
-
-        let mut changed = true;
-        while changed {
-            changed = false;
-            for step in game.program() {
-                changed |= analysis.propagate_step(game, step);
-            }
-        }
-
-        analysis
+        Self::from_game_program(game, game.program(), roots)
     }
 
     pub fn ignored_objects_for_game(&self, game: &CompiledGame) -> Vec<ObjectId2> {
@@ -102,10 +116,67 @@ impl SolverRelevance<ObjectId2> {
         self.relevant_rule_ids().into_iter().map(RuleId).collect()
     }
 
-    fn propagate_step(&mut self, game: &CompiledGame, step: &RuleStep) -> bool {
+    pub fn from_game3_root_objects(
+        game: &CompiledGame3,
+        program: &[GridRuleStep<3>],
+        roots: impl IntoIterator<Item = ObjectId>,
+    ) -> Self {
+        Self::from_game_program::<GridPattern<3>, Offset3>(game, program, roots)
+    }
+
+    pub fn ignored_objects_for_game3(&self, game: &CompiledGame3) -> Vec<ObjectId> {
+        self.ignored_objects(game)
+    }
+
+    pub fn relevant_rules3(&self) -> Vec<RuleId> {
+        self.relevant_rules()
+    }
+
+    fn from_game_program<Pattern, Offset>(
+        game: &RelevanceGame<Pattern, Offset>,
+        program: &[RelevanceStep<Pattern, Offset>],
+        roots: impl IntoIterator<Item = ObjectId>,
+    ) -> Self
+    where
+        Pattern: SolverPatternObjectRefs<ObjectId = ObjectId>,
+    {
+        let mut analysis = Self::from_roots(roots, ObjectId::is_empty);
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for step in program {
+                changed |= analysis.propagate_step(game, step);
+            }
+        }
+        analysis
+    }
+
+    fn ignored_objects<Pattern, Offset>(
+        &self,
+        game: &RelevanceGame<Pattern, Offset>,
+    ) -> Vec<ObjectId>
+    where
+        Pattern: SolverPatternObjectRefs<ObjectId = ObjectId>,
+    {
+        game.objects()
+            .iter()
+            .filter_map(|object| {
+                (!object.id.is_empty() && !self.contains_object(object.id)).then_some(object.id)
+            })
+            .collect()
+    }
+
+    fn propagate_step<Pattern, Offset>(
+        &mut self,
+        game: &RelevanceGame<Pattern, Offset>,
+        step: &RelevanceStep<Pattern, Offset>,
+    ) -> bool
+    where
+        Pattern: SolverPatternObjectRefs<ObjectId = ObjectId>,
+    {
         match step {
-            RuleStep::Rule(rule) => self.propagate_rule(game, rule),
-            RuleStep::ConditionalBlock { condition, steps } => {
+            ProgramStep::Rule(rule) => self.propagate_rule(game, rule),
+            ProgramStep::ConditionalBlock { condition, steps } => {
                 let mut changed = false;
                 if steps.iter().any(|step| step_has_relevant_write(step, self)) {
                     changed |= self.insert_condition_objects(game, condition);
@@ -115,7 +186,7 @@ impl SolverRelevance<ObjectId2> {
                 }
                 changed
             }
-            RuleStep::ConditionalBranch {
+            ProgramStep::ConditionalBranch {
                 condition,
                 then_steps,
                 else_steps,
@@ -133,7 +204,7 @@ impl SolverRelevance<ObjectId2> {
                 }
                 changed
             }
-            RuleStep::Block {
+            ProgramStep::Block {
                 stop_condition,
                 steps,
                 ..
@@ -149,7 +220,7 @@ impl SolverRelevance<ObjectId2> {
                 }
                 changed
             }
-            RuleStep::AfterTriggered { steps, then_steps } => {
+            ProgramStep::AfterTriggered { steps, then_steps } => {
                 let mut changed = false;
                 if then_steps
                     .iter()
@@ -164,11 +235,11 @@ impl SolverRelevance<ObjectId2> {
                 }
                 changed
             }
-            RuleStep::LocalFrame { frame, steps } => {
+            ProgramStep::LocalFrame { frame, steps } => {
                 let mut changed = false;
                 if steps.iter().any(|step| step_has_relevant_write(step, self)) {
                     changed |=
-                        self.insert_relevant_objects(&frame.focus_objects, &ObjectId2::is_empty);
+                        self.insert_relevant_objects(&frame.focus_objects, &ObjectId::is_empty);
                 }
                 for step in steps {
                     changed |= self.propagate_step(game, step);
@@ -178,7 +249,14 @@ impl SolverRelevance<ObjectId2> {
         }
     }
 
-    fn propagate_rule(&mut self, game: &CompiledGame, rule: &Rule) -> bool {
+    fn propagate_rule<Pattern, Offset>(
+        &mut self,
+        game: &RelevanceGame<Pattern, Offset>,
+        rule: &RelevanceRule<Pattern, Offset>,
+    ) -> bool
+    where
+        Pattern: SolverPatternObjectRefs<ObjectId = ObjectId>,
+    {
         if !rule_has_relevant_output(rule, self) {
             return false;
         }
@@ -191,9 +269,16 @@ impl SolverRelevance<ObjectId2> {
         changed
     }
 
-    fn insert_step_read_objects(&mut self, game: &CompiledGame, step: &RuleStep) -> bool {
+    fn insert_step_read_objects<Pattern, Offset>(
+        &mut self,
+        game: &RelevanceGame<Pattern, Offset>,
+        step: &RelevanceStep<Pattern, Offset>,
+    ) -> bool
+    where
+        Pattern: SolverPatternObjectRefs<ObjectId = ObjectId>,
+    {
         match step {
-            RuleStep::Rule(rule) => {
+            ProgramStep::Rule(rule) => {
                 let mut changed = self.insert_relevant_rule_id(rule.id.0);
                 changed |= self.insert_pattern_objects(&rule.pattern);
                 for guard in &rule.guards {
@@ -201,14 +286,14 @@ impl SolverRelevance<ObjectId2> {
                 }
                 changed
             }
-            RuleStep::ConditionalBlock { condition, steps } => {
+            ProgramStep::ConditionalBlock { condition, steps } => {
                 let mut changed = self.insert_condition_objects(game, condition);
                 for step in steps {
                     changed |= self.insert_step_read_objects(game, step);
                 }
                 changed
             }
-            RuleStep::ConditionalBranch {
+            ProgramStep::ConditionalBranch {
                 condition,
                 then_steps,
                 else_steps,
@@ -219,7 +304,7 @@ impl SolverRelevance<ObjectId2> {
                 }
                 changed
             }
-            RuleStep::Block {
+            ProgramStep::Block {
                 stop_condition,
                 steps,
                 ..
@@ -232,16 +317,16 @@ impl SolverRelevance<ObjectId2> {
                 }
                 changed
             }
-            RuleStep::AfterTriggered { steps, then_steps } => {
+            ProgramStep::AfterTriggered { steps, then_steps } => {
                 let mut changed = false;
                 for step in steps.iter().chain(then_steps) {
                     changed |= self.insert_step_read_objects(game, step);
                 }
                 changed
             }
-            RuleStep::LocalFrame { frame, steps } => {
+            ProgramStep::LocalFrame { frame, steps } => {
                 let mut changed =
-                    self.insert_relevant_objects(&frame.focus_objects, &ObjectId2::is_empty);
+                    self.insert_relevant_objects(&frame.focus_objects, &ObjectId::is_empty);
                 for step in steps {
                     changed |= self.insert_step_read_objects(game, step);
                 }
@@ -250,42 +335,49 @@ impl SolverRelevance<ObjectId2> {
         }
     }
 
-    fn insert_guard_objects(&mut self, game: &CompiledGame, guard: &Guard) -> bool {
+    fn insert_guard_objects<Pattern, Offset>(
+        &mut self,
+        game: &RelevanceGame<Pattern, Offset>,
+        guard: &RelevanceGuard<Pattern>,
+    ) -> bool
+    where
+        Pattern: SolverPatternObjectRefs<ObjectId = ObjectId>,
+    {
         match guard {
-            Guard::ConditionEquals { condition, .. }
-            | Guard::ConditionNonZero(condition)
-            | Guard::ConditionCompare { condition, .. } => game
+            RuleGuard::ConditionEquals { condition, .. }
+            | RuleGuard::ConditionNonZero(condition)
+            | RuleGuard::ConditionCompare { condition, .. } => game
                 .condition_def(*condition)
                 .is_some_and(|condition| self.insert_condition_value_objects(&condition.kind)),
-            Guard::InlineConditionValue { kind, .. }
-            | Guard::InlineConditionNonZero(kind)
-            | Guard::InlineConditionCompare { kind, .. } => {
+            RuleGuard::InlineConditionValue { kind, .. }
+            | RuleGuard::InlineConditionNonZero(kind)
+            | RuleGuard::InlineConditionCompare { kind, .. } => {
                 self.insert_condition_value_objects(kind)
             }
-            Guard::InputIs(_) | Guard::VariableEquals { .. } | Guard::VariableCompare { .. } => {
-                false
-            }
+            RuleGuard::InputIs(_)
+            | RuleGuard::VariableEquals { .. }
+            | RuleGuard::VariableCompare { .. } => false,
         }
     }
 
-    fn insert_condition_objects(
+    fn insert_condition_objects<Pattern, Offset>(
         &mut self,
-        game: &CompiledGame,
-        condition: &puzzle_core::RuleCondition,
-    ) -> bool {
+        game: &RelevanceGame<Pattern, Offset>,
+        condition: &RelevanceCondition<Pattern>,
+    ) -> bool
+    where
+        Pattern: SolverPatternObjectRefs<ObjectId = ObjectId>,
+    {
         match condition {
-            puzzle_core::RuleCondition::AnyMatches(patterns)
-            | puzzle_core::RuleCondition::NoMatches(patterns) => {
+            ProgramCondition::AnyMatches(patterns) | ProgramCondition::NoMatches(patterns) => {
                 object_refs::insert_patterns_objects(self, patterns)
             }
-            puzzle_core::RuleCondition::AnyInputMatches(patterns)
-            | puzzle_core::RuleCondition::NoInputMatches(patterns) => {
-                object_refs::insert_patterns_objects(
-                    self,
-                    patterns.iter().map(|(_, pattern)| pattern),
-                )
-            }
-            puzzle_core::RuleCondition::GuardBranches(branches) => {
+            ProgramCondition::AnyInputMatches(patterns)
+            | ProgramCondition::NoInputMatches(patterns) => object_refs::insert_patterns_objects(
+                self,
+                patterns.iter().map(|(_, pattern)| pattern),
+            ),
+            ProgramCondition::GuardBranches(branches) => {
                 let mut changed = false;
                 for guard in branches.iter().flatten() {
                     changed |= self.insert_guard_objects(game, guard);
@@ -295,24 +387,39 @@ impl SolverRelevance<ObjectId2> {
         }
     }
 
-    fn insert_condition_value_objects(&mut self, kind: &ConditionValueKind) -> bool {
+    fn insert_condition_value_objects<Pattern>(
+        &mut self,
+        kind: &RelevanceConditionValue<Pattern>,
+    ) -> bool
+    where
+        Pattern: SolverPatternObjectRefs<ObjectId = ObjectId>,
+    {
         object_refs::insert_condition_value_objects(self, kind)
     }
 
-    fn insert_pattern_objects(&mut self, pattern: &puzzle_core::Pattern) -> bool {
+    fn insert_pattern_objects<Pattern>(&mut self, pattern: &Pattern) -> bool
+    where
+        Pattern: SolverPatternObjectRefs<ObjectId = ObjectId>,
+    {
         object_refs::insert_pattern_objects(self, pattern)
     }
 }
 
-fn step_has_relevant_write(step: &RuleStep, relevance: &SolverRelevance) -> bool {
+fn step_has_relevant_write<Pattern, Offset>(
+    step: &RelevanceStep<Pattern, Offset>,
+    relevance: &SolverRelevance,
+) -> bool
+where
+    Pattern: SolverPatternObjectRefs<ObjectId = ObjectId>,
+{
     match step {
-        RuleStep::Rule(rule) => rule_has_relevant_output(rule, relevance),
-        RuleStep::ConditionalBlock { steps, .. }
-        | RuleStep::Block { steps, .. }
-        | RuleStep::LocalFrame { steps, .. } => steps
+        ProgramStep::Rule(rule) => rule_has_relevant_output(rule, relevance),
+        ProgramStep::ConditionalBlock { steps, .. }
+        | ProgramStep::Block { steps, .. }
+        | ProgramStep::LocalFrame { steps, .. } => steps
             .iter()
             .any(|step| step_has_relevant_write(step, relevance)),
-        RuleStep::ConditionalBranch {
+        ProgramStep::ConditionalBranch {
             then_steps,
             else_steps,
             ..
@@ -320,32 +427,24 @@ fn step_has_relevant_write(step: &RuleStep, relevance: &SolverRelevance) -> bool
             .iter()
             .chain(else_steps)
             .any(|step| step_has_relevant_write(step, relevance)),
-        RuleStep::AfterTriggered { steps, then_steps } => steps
+        ProgramStep::AfterTriggered { steps, then_steps } => steps
             .iter()
             .chain(then_steps)
             .any(|step| step_has_relevant_write(step, relevance)),
     }
 }
 
-fn rule_has_relevant_output(rule: &Rule, relevance: &SolverRelevance) -> bool {
-    rule.effects.iter().any(effect_is_solver_visible)
+fn rule_has_relevant_output<Pattern, Offset>(
+    rule: &RelevanceRule<Pattern, Offset>,
+    relevance: &SolverRelevance,
+) -> bool
+where
+    Pattern: SolverPatternObjectRefs<ObjectId = ObjectId>,
+{
+    !rule.effects.is_empty()
         || rule.writes.iter().any(|write| {
             object_refs::write_touches_relevant_object(write, &rule.pattern, relevance)
         })
-}
-
-fn effect_is_solver_visible(effect: &Effect) -> bool {
-    matches!(
-        effect,
-        Effect::Cancel
-            | Effect::Win
-            | Effect::Restart
-            | Effect::NextLevel
-            | Effect::Again
-            | Effect::Checkpoint
-            | Effect::ClearCheckpoint
-            | Effect::UpdateVariable { .. }
-    )
 }
 
 #[cfg(test)]
@@ -353,8 +452,8 @@ mod tests {
     use super::*;
     use puzzle_core::{
         ConditionDef, ConditionId, Effect, Guard, LayerId, MatchCell, ObjectDef, ObjectId,
-        ObjectSetMatcher, Offset, Pattern, PatternComponent, RuleApplication, RuleCondition,
-        RuleId, WriteOp,
+        ObjectSetMatcher, Offset, Pattern, PatternComponent, Rule, RuleApplication, RuleCondition,
+        RuleId, RuleStep, WriteOp,
     };
     use puzzle_lang::{LoadedGame, parse_game2d as parse_game};
 
@@ -377,7 +476,9 @@ mod tests {
     }
 
     fn fixed(dx: i16, dy: i16) -> Offset {
-        Offset::Fixed { dx, dy }
+        Offset::Fixed {
+            delta: [dx, dy].into(),
+        }
     }
 
     fn cell(require_objects: Vec<ObjectId>, forbid_objects: Vec<ObjectId>) -> MatchCell {

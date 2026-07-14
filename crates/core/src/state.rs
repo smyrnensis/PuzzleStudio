@@ -1,15 +1,146 @@
 use crate::compiled_game::{CompiledGame, VariableUpdateOp};
 use crate::ids::{LayerId, MarkId, ObjectId, RuleId, VariableId};
 use puzzle_kernel::{
-    GridCoord, GridShape, MarkSpace, ObjectCellMask, VariableValueError, VisibleVariables, fnv_mix,
+    CompiledGameModel, GridCoord, GridOffset, GridShape, MarkSpace, ObjectCellMask,
+    VariableValueError, VisibleVariables, fnv_mix,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeMap;
+use std::ops::Deref;
 
-#[derive(Clone, Debug, Serialize)]
-pub struct State {
+pub trait GridSize<const D: usize>: Copy + Eq {
+    fn axes(self) -> [u16; D];
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Size2 {
     pub width: u16,
     pub height: u16,
+}
+
+impl Size2 {
+    pub const fn new(width: u16, height: u16) -> Self {
+        Self { width, height }
+    }
+}
+
+impl GridSize<2> for Size2 {
+    fn axes(self) -> [u16; 2] {
+        [self.width, self.height]
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Size3 {
+    pub width: u16,
+    pub depth: u16,
+    pub height: u16,
+}
+
+impl Size3 {
+    pub const fn new(width: u16, depth: u16, height: u16) -> Self {
+        Self {
+            width,
+            depth,
+            height,
+        }
+    }
+}
+
+impl GridSize<3> for Size3 {
+    fn axes(self) -> [u16; 3] {
+        [self.width, self.depth, self.height]
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Coord3 {
+    pub x: u16,
+    pub y: u16,
+    pub z: u16,
+}
+
+impl Coord3 {
+    pub const fn new(x: u16, y: u16, z: u16) -> Self {
+        Self { x, y, z }
+    }
+
+    pub fn from_standard_text_position(size: Size3, column: u16, row: u16, slice: u16) -> Self {
+        Self {
+            x: column,
+            y: size.depth - 1 - row,
+            z: size.height - 1 - slice,
+        }
+    }
+
+    pub fn checked_offset(self, offset: Delta3) -> Option<Self> {
+        GridCoord::<3>::from(self)
+            .checked_offset(offset.into())
+            .map(Self::from)
+    }
+}
+
+impl From<Coord3> for GridCoord<3> {
+    fn from(value: Coord3) -> Self {
+        Self::new([value.x, value.y, value.z])
+    }
+}
+
+impl From<GridCoord<3>> for Coord3 {
+    fn from(value: GridCoord<3>) -> Self {
+        let [x, y, z] = value.axes();
+        Self { x, y, z }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Delta3 {
+    pub dx: i16,
+    pub dy: i16,
+    pub dz: i16,
+}
+
+impl Delta3 {
+    pub const ZERO: Self = Self::new(0, 0, 0);
+
+    pub const fn new(dx: i16, dy: i16, dz: i16) -> Self {
+        Self { dx, dy, dz }
+    }
+
+    pub const fn scale(self, factor: i16) -> Self {
+        Self::new(self.dx * factor, self.dy * factor, self.dz * factor)
+    }
+
+    pub const fn add(self, other: Self) -> Self {
+        Self::new(self.dx + other.dx, self.dy + other.dy, self.dz + other.dz)
+    }
+}
+
+impl From<Delta3> for GridOffset<3> {
+    fn from(value: Delta3) -> Self {
+        Self::new([value.dx, value.dy, value.dz])
+    }
+}
+
+impl From<GridOffset<3>> for Delta3 {
+    fn from(value: GridOffset<3>) -> Self {
+        let [dx, dy, dz] = value.deltas();
+        Self { dx, dy, dz }
+    }
+}
+
+impl From<Delta3> for puzzle_kernel::SpatialOffset<3> {
+    fn from(value: Delta3) -> Self {
+        Self::Fixed {
+            delta: puzzle_kernel::SpatialVector::new([value.dx, value.dy, value.dz]),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct GridState<const D: usize, Size: GridSize<D>> {
+    #[serde(flatten)]
+    pub size: Size,
     pub layer_count: u16,
     slots: Vec<ObjectId>,
     mark: MarkSpace<MarkId>,
@@ -19,6 +150,16 @@ pub struct State {
     derived_cache: DerivedCache,
     #[serde(skip)]
     hash: u64,
+}
+
+pub type State = GridState<2, Size2>;
+
+impl<const D: usize, Size: GridSize<D>> Deref for GridState<D, Size> {
+    type Target = Size;
+
+    fn deref(&self) -> &Self::Target {
+        &self.size
+    }
 }
 
 pub type SlotMark = puzzle_kernel::MarkValue<MarkId>;
@@ -57,8 +198,7 @@ impl<'de> Deserialize<'de> for State {
 
         let data = StateData::deserialize(deserializer)?;
         let mut state = State {
-            width: data.width,
-            height: data.height,
+            size: Size2::new(data.width, data.height),
             layer_count: data.layer_count,
             slots: data.slots,
             mark: data.mark,
@@ -74,11 +214,10 @@ impl<'de> Deserialize<'de> for State {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum StateError {
+pub enum GridStateError<const D: usize> {
     InvalidDimensions,
     PositionOutOfBounds {
-        x: u16,
-        y: u16,
+        position: GridCoord<D>,
     },
     LayerOutOfBounds {
         layer: LayerId,
@@ -87,8 +226,7 @@ pub enum StateError {
         object: ObjectId,
     },
     LayerOccupied {
-        x: u16,
-        y: u16,
+        position: GridCoord<D>,
         layer: LayerId,
         existing: ObjectId,
         attempted: ObjectId,
@@ -102,41 +240,45 @@ pub enum StateError {
     VariableDivisionByZero {
         variable: VariableId,
     },
+    ObjectNotPresent {
+        position: GridCoord<D>,
+        object: ObjectId,
+    },
 }
+
+pub type StateError = GridStateError<2>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CellView {
     pub objects: Vec<ObjectId>,
 }
 
-impl State {
-    pub fn empty(
-        width: u16,
-        height: u16,
+impl<const D: usize, Size: GridSize<D>> GridState<D, Size> {
+    pub fn empty_sized(
+        size: Size,
         layer_count: u16,
         object_count: usize,
-    ) -> Result<Self, StateError> {
-        Self::empty_with_variables(width, height, layer_count, object_count, Vec::new())
+    ) -> Result<Self, GridStateError<D>> {
+        Self::empty_sized_with_variables(size, layer_count, object_count, Vec::new())
     }
 
-    pub fn empty_with_variables(
-        width: u16,
-        height: u16,
+    pub fn empty_sized_with_variables(
+        size: Size,
         layer_count: u16,
         object_count: usize,
         visible_variables: Vec<i64>,
-    ) -> Result<Self, StateError> {
-        let shape = GridShape::<2>::new([width, height], layer_count)
-            .ok_or(StateError::InvalidDimensions)?;
-        let slot_count = shape.slot_count().ok_or(StateError::InvalidDimensions)?;
-        let cell_count = shape.cell_count().ok_or(StateError::InvalidDimensions)?;
-        if width == 0 || height == 0 || layer_count == 0 {
-            return Err(StateError::InvalidDimensions);
-        }
+    ) -> Result<Self, GridStateError<D>> {
+        let shape = GridShape::<D>::new(size.axes(), layer_count)
+            .ok_or(GridStateError::InvalidDimensions)?;
+        let slot_count = shape
+            .slot_count()
+            .ok_or(GridStateError::InvalidDimensions)?;
+        let cell_count = shape
+            .cell_count()
+            .ok_or(GridStateError::InvalidDimensions)?;
 
         let mut state = Self {
-            width,
-            height,
+            size,
             layer_count,
             slots: vec![ObjectId::EMPTY; slot_count],
             mark: MarkSpace::new(cell_count, slot_count),
@@ -157,6 +299,38 @@ impl State {
     #[inline]
     pub fn hash(&self) -> u64 {
         self.hash
+    }
+
+    pub(crate) fn program_state_key(&self) -> puzzle_kernel::ProgramStateKey {
+        let mut words =
+            Vec::with_capacity(self.slots.len() + self.visible_variables.as_slice().len() + 16);
+        words.extend(self.size.axes().into_iter().map(u64::from));
+        words.push(u64::from(self.layer_count));
+        words.push(self.slots.len() as u64);
+        words.extend(self.slots.iter().map(|object| u64::from(object.0)));
+        for values in [self.mark.cell_values(), self.mark.slot_values()] {
+            words.push(values.len() as u64);
+            for marks in values {
+                words.push(marks.len() as u64);
+                for mark in marks {
+                    words.push(u64::from(mark.mark.0));
+                    words.push(u64::from(mark.value.is_some()));
+                    if let Some(value) = mark.value {
+                        words.push(value as u64);
+                    }
+                }
+            }
+        }
+        words.push(self.visible_variables.as_slice().len() as u64);
+        words.extend(
+            self.visible_variables
+                .as_slice()
+                .iter()
+                .map(|value| *value as u64),
+        );
+        words.push(self.level_fired_rules.len() as u64);
+        words.extend(self.level_fired_rules.iter().map(|rule| u64::from(rule.0)));
+        puzzle_kernel::ProgramStateKey::from_words(words)
     }
 
     #[inline]
@@ -239,10 +413,10 @@ impl State {
         &mut self,
         variable: VariableId,
         value: i64,
-    ) -> Result<(), StateError> {
+    ) -> Result<(), GridStateError<D>> {
         self.visible_variables
             .set(variable, value)
-            .map_err(map_variable_error)?;
+            .map_err(map_variable_error::<D>)?;
         self.recompute_hash();
         Ok(())
     }
@@ -252,10 +426,10 @@ impl State {
         variable: VariableId,
         op: VariableUpdateOp,
         value: i64,
-    ) -> Result<(), StateError> {
+    ) -> Result<(), GridStateError<D>> {
         self.visible_variables
             .update(variable, op, value)
-            .map_err(map_variable_error)?;
+            .map_err(map_variable_error::<D>)?;
         self.recompute_hash();
         Ok(())
     }
@@ -279,25 +453,21 @@ impl State {
     }
 
     #[inline]
-    pub fn slot_position(&self, index: usize) -> Option<(u16, u16)> {
+    pub fn slot_coord(&self, index: usize) -> Option<GridCoord<D>> {
         if index >= self.slots.len() {
             return None;
         }
         let cell = index / usize::from(self.layer_count);
-        let x = cell % usize::from(self.width);
-        let y = cell / usize::from(self.width);
-        Some((u16::try_from(x).ok()?, u16::try_from(y).ok()?))
+        self.coord_from_cell_index(cell)
     }
 
     #[inline]
-    pub fn cell_position(&self, index: usize) -> Option<(u16, u16)> {
-        let cell_count = usize::from(self.width) * usize::from(self.height);
+    pub fn cell_coord(&self, index: usize) -> Option<GridCoord<D>> {
+        let cell_count = self.shape().cell_count()?;
         if index >= cell_count {
             return None;
         }
-        let x = index % usize::from(self.width);
-        let y = index / usize::from(self.width);
-        Some((u16::try_from(x).ok()?, u16::try_from(y).ok()?))
+        self.coord_from_cell_index(index)
     }
 
     #[inline]
@@ -314,12 +484,16 @@ impl State {
             .unwrap_or(&[])
     }
 
-    pub fn cell_view(&self, x: u16, y: u16) -> Result<CellView, StateError> {
-        self.check_pos(x, y)?;
+    pub fn cell_view_at(
+        &self,
+        position: impl Into<GridCoord<D>>,
+    ) -> Result<CellView, GridStateError<D>> {
+        let position = position.into();
+        self.check_pos(position)?;
 
         let mut objects = Vec::new();
         for layer in 0..self.layer_count {
-            let object = self.slots[self.slot_index_unchecked(x, y, LayerId(layer))];
+            let object = self.slots[self.slot_index_unchecked(position, LayerId(layer))];
             if !object.is_empty() {
                 objects.push(object);
             }
@@ -328,96 +502,120 @@ impl State {
         Ok(CellView { objects })
     }
 
-    pub fn get_layer(&self, x: u16, y: u16, layer: LayerId) -> Result<ObjectId, StateError> {
-        let index = self.slot_index(x, y, layer)?;
+    pub fn get_layer_at(
+        &self,
+        position: impl Into<GridCoord<D>>,
+        layer: LayerId,
+    ) -> Result<ObjectId, GridStateError<D>> {
+        let index = self.slot_index(position.into(), layer)?;
         Ok(self.slots[index])
     }
 
-    pub fn has_object(&self, game: &CompiledGame, x: u16, y: u16, object: ObjectId) -> bool {
+    pub fn has_object_at<ConditionDef, Rule, Condition, Frame>(
+        &self,
+        game: &CompiledGameModel<ConditionDef, Rule, Condition, Frame>,
+        position: impl Into<GridCoord<D>>,
+        object: ObjectId,
+    ) -> bool {
         let Some(layer) = game.object_layer(object) else {
             return false;
         };
-        self.get_layer(x, y, layer)
+        self.get_layer_at(position, layer)
             .is_ok_and(|found| found == object)
     }
 
     #[inline]
-    pub(crate) fn cell_has_object_masked(&self, x: u16, y: u16, object: ObjectId) -> Option<bool> {
-        let index = self.cell_index(x, y).ok()?;
+    pub fn cell_has_object_masked_at(
+        &self,
+        position: impl Into<GridCoord<D>>,
+        object: ObjectId,
+    ) -> Option<bool> {
+        let index = self.cell_index(position.into()).ok()?;
         self.derived_cache.cell_object_masks[index].contains_raw(object.0)
     }
 
-    pub fn has_mark(
+    pub fn object_count_masked(&self, object: ObjectId) -> Option<u32> {
+        self.derived_cache
+            .object_counts
+            .get(usize::from(object.0))
+            .copied()
+    }
+
+    pub fn has_mark_at<ConditionDef, Rule, Condition, Frame>(
         &self,
-        game: &CompiledGame,
-        x: u16,
-        y: u16,
+        game: &CompiledGameModel<ConditionDef, Rule, Condition, Frame>,
+        position: impl Into<GridCoord<D>>,
         object: ObjectId,
         mark: MarkId,
         value: Option<i64>,
     ) -> bool {
+        let position = position.into();
         if object.is_empty() {
-            return self.has_cell_mark(x, y, mark, value);
+            return self.has_cell_mark_at(position, mark, value);
         }
         let Some(layer) = game.object_layer(object) else {
             return false;
         };
-        let Ok(index) = self.slot_index(x, y, layer) else {
+        let Ok(index) = self.slot_index(position, layer) else {
             return false;
         };
         self.slots[index] == object && self.mark.has_slot(index, mark, value)
     }
 
-    pub fn has_mark_key(
+    pub fn has_mark_key_at<ConditionDef, Rule, Condition, Frame>(
         &self,
-        game: &CompiledGame,
-        x: u16,
-        y: u16,
+        game: &CompiledGameModel<ConditionDef, Rule, Condition, Frame>,
+        position: impl Into<GridCoord<D>>,
         object: ObjectId,
         mark: MarkId,
     ) -> bool {
+        let position = position.into();
         if object.is_empty() {
-            return self.has_cell_mark_key(x, y, mark);
+            return self.has_cell_mark_key_at(position, mark);
         }
         let Some(layer) = game.object_layer(object) else {
             return false;
         };
-        let Ok(index) = self.slot_index(x, y, layer) else {
+        let Ok(index) = self.slot_index(position, layer) else {
             return false;
         };
         self.slots[index] == object && self.mark.has_slot_key(index, mark)
     }
 
-    pub fn has_cell_mark(&self, x: u16, y: u16, mark: MarkId, value: Option<i64>) -> bool {
-        let Ok(index) = self.cell_index(x, y) else {
+    pub fn has_cell_mark_at(
+        &self,
+        position: impl Into<GridCoord<D>>,
+        mark: MarkId,
+        value: Option<i64>,
+    ) -> bool {
+        let Ok(index) = self.cell_index(position.into()) else {
             return false;
         };
         self.mark.has_cell(index, mark, value)
     }
 
-    pub fn has_cell_mark_key(&self, x: u16, y: u16, mark: MarkId) -> bool {
-        let Ok(index) = self.cell_index(x, y) else {
+    pub fn has_cell_mark_key_at(&self, position: impl Into<GridCoord<D>>, mark: MarkId) -> bool {
+        let Ok(index) = self.cell_index(position.into()) else {
             return false;
         };
         self.mark.has_cell_key(index, mark)
     }
 
-    pub fn place_object(
+    pub fn place_object_at<ConditionDef, Rule, Condition, Frame>(
         &mut self,
-        game: &CompiledGame,
-        x: u16,
-        y: u16,
+        game: &CompiledGameModel<ConditionDef, Rule, Condition, Frame>,
+        position: impl Into<GridCoord<D>>,
         object: ObjectId,
-    ) -> Result<(), StateError> {
+    ) -> Result<(), GridStateError<D>> {
+        let position = position.into();
         let layer = game
             .object_layer(object)
-            .ok_or(StateError::UnknownObject { object })?;
-        let index = self.slot_index(x, y, layer)?;
+            .ok_or(GridStateError::UnknownObject { object })?;
+        let index = self.slot_index(position, layer)?;
         let existing = self.slots[index];
         if !existing.is_empty() {
-            return Err(StateError::LayerOccupied {
-                x,
-                y,
+            return Err(GridStateError::LayerOccupied {
+                position,
                 layer,
                 existing,
                 attempted: object,
@@ -431,8 +629,34 @@ impl State {
         Ok(())
     }
 
-    pub(crate) fn set_slot_unchecked(&mut self, x: u16, y: u16, layer: LayerId, object: ObjectId) {
-        let index = self.slot_index_unchecked(x, y, layer);
+    pub fn remove_object_at<ConditionDef, Rule, Condition, Frame>(
+        &mut self,
+        game: &CompiledGameModel<ConditionDef, Rule, Condition, Frame>,
+        position: impl Into<GridCoord<D>>,
+        object: ObjectId,
+    ) -> Result<(), GridStateError<D>> {
+        let position = position.into();
+        let layer = game
+            .object_layer(object)
+            .ok_or(GridStateError::UnknownObject { object })?;
+        let index = self.slot_index(position, layer)?;
+        if self.slots[index] != object {
+            return Err(GridStateError::ObjectNotPresent { position, object });
+        }
+        self.set_slot_index_unchecked(index, ObjectId::EMPTY);
+        self.clear_slot_mark_positions(index, object);
+        self.mark.clear_slot(index);
+        self.recompute_hash();
+        Ok(())
+    }
+
+    pub(crate) fn set_slot_unchecked(
+        &mut self,
+        position: GridCoord<D>,
+        layer: LayerId,
+        object: ObjectId,
+    ) {
+        let index = self.slot_index_unchecked(position, layer);
         let existing = self.slots[index];
         if existing != object {
             self.clear_slot_mark_positions(index, existing);
@@ -443,11 +667,10 @@ impl State {
 
     pub(crate) fn take_slot_for_move_unchecked(
         &mut self,
-        x: u16,
-        y: u16,
+        position: GridCoord<D>,
         layer: LayerId,
     ) -> Vec<SlotMark> {
-        let index = self.slot_index_unchecked(x, y, layer);
+        let index = self.slot_index_unchecked(position, layer);
         let object = self.slots[index];
         self.clear_slot_mark_positions(index, object);
         self.set_slot_index_unchecked(index, ObjectId::EMPTY);
@@ -456,13 +679,12 @@ impl State {
 
     pub(crate) fn place_moved_slot_unchecked(
         &mut self,
-        x: u16,
-        y: u16,
+        position: GridCoord<D>,
         layer: LayerId,
         object: ObjectId,
         mark: Vec<SlotMark>,
     ) {
-        let index = self.slot_index_unchecked(x, y, layer);
+        let index = self.slot_index_unchecked(position, layer);
         let existing = self.slots[index];
         self.clear_slot_mark_positions(index, existing);
         self.set_slot_index_unchecked(index, object);
@@ -472,13 +694,12 @@ impl State {
 
     pub(crate) fn set_mark_unchecked(
         &mut self,
-        x: u16,
-        y: u16,
+        position: GridCoord<D>,
         layer: LayerId,
         mark: MarkId,
         value: Option<i64>,
     ) {
-        let index = self.slot_index_unchecked(x, y, layer);
+        let index = self.slot_index_unchecked(position, layer);
         let object = self.slots[index];
         self.remove_slot_mark_key_positions(index, object, mark);
         self.mark.set_slot(index, mark, value);
@@ -487,12 +708,11 @@ impl State {
 
     pub(crate) fn set_cell_mark_unchecked(
         &mut self,
-        x: u16,
-        y: u16,
+        position: GridCoord<D>,
         mark: MarkId,
         value: Option<i64>,
     ) {
-        let index = self.cell_index_unchecked(x, y);
+        let index = self.cell_index_unchecked(position);
         self.remove_cell_mark_key_positions(index, mark);
         self.mark.set_cell(index, mark, value);
         self.add_mark_position(ObjectId::EMPTY, mark, value, index);
@@ -500,13 +720,12 @@ impl State {
 
     pub(crate) fn remove_mark_unchecked(
         &mut self,
-        x: u16,
-        y: u16,
+        position: GridCoord<D>,
         layer: LayerId,
         mark: MarkId,
         value: Option<i64>,
     ) {
-        let index = self.slot_index_unchecked(x, y, layer);
+        let index = self.slot_index_unchecked(position, layer);
         let object = self.slots[index];
         self.remove_matching_slot_mark_positions(index, object, mark, value);
         self.mark.remove_slot(index, mark, value);
@@ -514,12 +733,11 @@ impl State {
 
     pub(crate) fn remove_cell_mark_unchecked(
         &mut self,
-        x: u16,
-        y: u16,
+        position: GridCoord<D>,
         mark: MarkId,
         value: Option<i64>,
     ) {
-        let index = self.cell_index_unchecked(x, y);
+        let index = self.cell_index_unchecked(position);
         self.remove_matching_cell_mark_positions(index, mark, value);
         self.mark.remove_cell(index, mark, value);
     }
@@ -567,7 +785,10 @@ impl State {
             .map(|object| usize::from(object.0))
             .max()
             .unwrap_or(0);
-        let cell_count = usize::from(self.width) * usize::from(self.height);
+        let cell_count = self
+            .shape()
+            .cell_count()
+            .expect("state dimensions are validated at construction");
         self.derived_cache = DerivedCache {
             object_counts: vec![0; object_count + 1],
             object_positions: vec![Vec::new(); object_count + 1],
@@ -734,8 +955,9 @@ impl State {
 
     pub(crate) fn recompute_hash(&mut self) {
         let mut hash = puzzle_kernel::FnvBuilder::OFFSET;
-        hash = fnv_mix(hash, u64::from(self.width));
-        hash = fnv_mix(hash, u64::from(self.height));
+        for axis in self.size.axes() {
+            hash = fnv_mix(hash, u64::from(axis));
+        }
         hash = fnv_mix(hash, u64::from(self.layer_count));
         for object in &self.slots {
             hash = fnv_mix(hash, u64::from(object.0));
@@ -751,61 +973,181 @@ impl State {
         self.hash = hash;
     }
 
-    pub(crate) fn check_pos(&self, x: u16, y: u16) -> Result<(), StateError> {
-        if !self.shape().contains(GridCoord::new([x, y])) {
-            return Err(StateError::PositionOutOfBounds { x, y });
+    pub(crate) fn check_pos(&self, position: GridCoord<D>) -> Result<(), GridStateError<D>> {
+        if !self.shape().contains(position) {
+            return Err(GridStateError::PositionOutOfBounds { position });
         }
         Ok(())
     }
 
-    pub(crate) fn slot_index(&self, x: u16, y: u16, layer: LayerId) -> Result<usize, StateError> {
-        self.check_pos(x, y)?;
+    pub(crate) fn slot_index(
+        &self,
+        position: GridCoord<D>,
+        layer: LayerId,
+    ) -> Result<usize, GridStateError<D>> {
+        self.check_pos(position)?;
         if layer.0 >= self.layer_count {
-            return Err(StateError::LayerOutOfBounds { layer });
+            return Err(GridStateError::LayerOutOfBounds { layer });
         }
         self.shape()
-            .slot_index(GridCoord::new([x, y]), layer.0)
-            .ok_or(StateError::LayerOutOfBounds { layer })
+            .slot_index(position, layer.0)
+            .ok_or(GridStateError::LayerOutOfBounds { layer })
     }
 
-    pub(crate) fn cell_index(&self, x: u16, y: u16) -> Result<usize, StateError> {
-        self.check_pos(x, y)?;
-        Ok(self.shape().cell_index_unchecked(GridCoord::new([x, y])))
-    }
-
-    #[inline]
-    pub(crate) fn cell_index_unchecked(&self, x: u16, y: u16) -> usize {
-        self.shape().cell_index_unchecked(GridCoord::new([x, y]))
+    pub(crate) fn cell_index(&self, position: GridCoord<D>) -> Result<usize, GridStateError<D>> {
+        self.check_pos(position)?;
+        Ok(self.shape().cell_index_unchecked(position))
     }
 
     #[inline]
-    pub(crate) fn slot_index_unchecked(&self, x: u16, y: u16, layer: LayerId) -> usize {
-        self.shape()
-            .slot_index_unchecked(GridCoord::new([x, y]), layer.0)
+    pub(crate) fn cell_index_unchecked(&self, position: GridCoord<D>) -> usize {
+        self.shape().cell_index_unchecked(position)
     }
 
-    fn shape(&self) -> GridShape<2> {
-        GridShape::new([self.width, self.height], self.layer_count)
+    #[inline]
+    pub(crate) fn slot_index_unchecked(&self, position: GridCoord<D>, layer: LayerId) -> usize {
+        self.shape().slot_index_unchecked(position, layer.0)
+    }
+
+    pub fn shape(&self) -> GridShape<D> {
+        GridShape::new(self.size.axes(), self.layer_count)
             .expect("state dimensions are validated at construction")
     }
+
+    fn coord_from_cell_index(&self, mut index: usize) -> Option<GridCoord<D>> {
+        let axes = self.size.axes();
+        let mut coord = [0u16; D];
+        for axis in 0..D {
+            let limit = usize::from(axes[axis]);
+            coord[axis] = u16::try_from(index % limit).ok()?;
+            index /= limit;
+        }
+        (index == 0).then_some(GridCoord::new(coord))
+    }
 }
 
-fn map_variable_error(error: VariableValueError<VariableId>) -> StateError {
+impl GridState<2, Size2> {
+    pub fn empty(
+        width: u16,
+        height: u16,
+        layer_count: u16,
+        object_count: usize,
+    ) -> Result<Self, StateError> {
+        Self::empty_sized(Size2::new(width, height), layer_count, object_count)
+    }
+
+    pub fn empty_with_variables(
+        width: u16,
+        height: u16,
+        layer_count: u16,
+        object_count: usize,
+        visible_variables: Vec<i64>,
+    ) -> Result<Self, StateError> {
+        Self::empty_sized_with_variables(
+            Size2::new(width, height),
+            layer_count,
+            object_count,
+            visible_variables,
+        )
+    }
+
+    pub fn slot_position(&self, index: usize) -> Option<(u16, u16)> {
+        self.slot_coord(index).map(|position| {
+            let [x, y] = position.axes();
+            (x, y)
+        })
+    }
+
+    pub fn cell_position(&self, index: usize) -> Option<(u16, u16)> {
+        self.cell_coord(index).map(|position| {
+            let [x, y] = position.axes();
+            (x, y)
+        })
+    }
+
+    pub fn cell_view(&self, x: u16, y: u16) -> Result<CellView, StateError> {
+        self.cell_view_at(GridCoord::new([x, y]))
+    }
+
+    pub fn get_layer(&self, x: u16, y: u16, layer: LayerId) -> Result<ObjectId, StateError> {
+        self.get_layer_at(GridCoord::new([x, y]), layer)
+    }
+
+    pub fn has_object(&self, game: &CompiledGame, x: u16, y: u16, object: ObjectId) -> bool {
+        self.has_object_at(game, GridCoord::new([x, y]), object)
+    }
+
+    pub fn has_mark(
+        &self,
+        game: &CompiledGame,
+        x: u16,
+        y: u16,
+        object: ObjectId,
+        mark: MarkId,
+        value: Option<i64>,
+    ) -> bool {
+        self.has_mark_at(game, GridCoord::new([x, y]), object, mark, value)
+    }
+
+    pub fn has_mark_key(
+        &self,
+        game: &CompiledGame,
+        x: u16,
+        y: u16,
+        object: ObjectId,
+        mark: MarkId,
+    ) -> bool {
+        self.has_mark_key_at(game, GridCoord::new([x, y]), object, mark)
+    }
+
+    pub fn has_cell_mark(&self, x: u16, y: u16, mark: MarkId, value: Option<i64>) -> bool {
+        self.has_cell_mark_at(GridCoord::new([x, y]), mark, value)
+    }
+
+    pub fn has_cell_mark_key(&self, x: u16, y: u16, mark: MarkId) -> bool {
+        self.has_cell_mark_key_at(GridCoord::new([x, y]), mark)
+    }
+
+    pub fn place_object(
+        &mut self,
+        game: &CompiledGame,
+        x: u16,
+        y: u16,
+        object: ObjectId,
+    ) -> Result<(), StateError> {
+        self.place_object_at(game, GridCoord::new([x, y]), object)
+    }
+}
+
+impl GridState<3, Size3> {
+    pub fn empty(size: Size3, layer_count: u16) -> Result<Self, GridStateError<3>> {
+        Self::empty_sized(size, layer_count, 0)
+    }
+
+    pub fn empty_with_variables(
+        size: Size3,
+        layer_count: u16,
+        visible_variables: Vec<i64>,
+    ) -> Result<Self, GridStateError<3>> {
+        Self::empty_sized_with_variables(size, layer_count, 0, visible_variables)
+    }
+}
+
+fn map_variable_error<const D: usize>(error: VariableValueError<VariableId>) -> GridStateError<D> {
     match error {
         VariableValueError::OutOfBounds { variable } => {
-            StateError::VariableOutOfBounds { variable }
+            GridStateError::VariableOutOfBounds { variable }
         }
-        VariableValueError::Overflow { variable } => StateError::VariableOverflow { variable },
+        VariableValueError::Overflow { variable } => GridStateError::VariableOverflow { variable },
         VariableValueError::DivisionByZero { variable } => {
-            StateError::VariableDivisionByZero { variable }
+            GridStateError::VariableDivisionByZero { variable }
         }
     }
 }
 
-impl PartialEq for State {
+impl<const D: usize, Size: GridSize<D>> PartialEq for GridState<D, Size> {
     fn eq(&self, other: &Self) -> bool {
-        self.width == other.width
-            && self.height == other.height
+        self.size == other.size
             && self.layer_count == other.layer_count
             && self.slots == other.slots
             && self.mark == other.mark
@@ -814,4 +1156,4 @@ impl PartialEq for State {
     }
 }
 
-impl Eq for State {}
+impl<const D: usize, Size: GridSize<D>> Eq for GridState<D, Size> {}

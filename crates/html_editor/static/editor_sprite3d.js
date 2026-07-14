@@ -24,17 +24,19 @@ const SPRITE3D_CAMERA_DEFAULT = {
 };
 
 function sprite3dFrameCellCount() {
-  return sprite3d.size * sprite3d.size * sprite3d.depth;
+  return sprite3d.width * sprite3d.height * sprite3d.depth;
 }
 
 function sprite3dAxisSize(axis = sprite3d.axis) {
-  return axis === "z" ? sprite3d.depth : sprite3d.size;
+  if (axis === "x") return sprite3d.width;
+  if (axis === "y") return sprite3d.height;
+  return sprite3d.depth;
 }
 
 function sprite3dPlaneSize(axis = sprite3d.axis) {
-  return axis === "z"
-    ? { width: sprite3d.size, height: sprite3d.size }
-    : { width: sprite3d.size, height: sprite3d.depth };
+  if (axis === "x") return { width: sprite3d.height, height: sprite3d.depth };
+  if (axis === "y") return { width: sprite3d.width, height: sprite3d.depth };
+  return { width: sprite3d.width, height: sprite3d.height };
 }
 
 function normalizedSprite3dAnimationDuration(value = sprite3d.animationDurationMs) {
@@ -137,11 +139,16 @@ function setSprite3dAnimationDuration(value) {
   pushVisualEditUndoSnapshot("sprite3d", before);
 }
 
-function resetSprite3dBuilder(size = sprite3d.size) {
+function resetSprite3dBuilder(
+  width = sprite3d.width,
+  height = sprite3d.height,
+  depth = sprite3d.depth,
+) {
   resetSprite3dClipState({ clipboard: true });
   ensureSprite3dPalette();
-  sprite3d.size = clampSprite3dSize(size);
-  sprite3d.depth = clampSprite3dSize(sprite3d.depth ?? sprite3d.size);
+  sprite3d.width = clampSprite3dSize(width);
+  sprite3d.height = clampSprite3dSize(height);
+  sprite3d.depth = clampSprite3dSize(depth);
   sprite3d.slice = Math.max(0, Math.min(sprite3dAxisSize() - 1, Number(sprite3d.slice) || 0));
   sprite3d.hoverSlice = null;
   sprite3d.cells = Array.from({ length: sprite3dFrameCellCount() }, () => null);
@@ -235,7 +242,8 @@ function renderSprite3dControls() {
     if (sprite3d.animationMode) {
       ensureSprite3dAnimationState();
     }
-    sprite3dSizeInput.value = String(sprite3d.size);
+    sprite3dWidthInput.value = String(sprite3d.width);
+    sprite3dHeightInput.value = String(sprite3d.height);
     sprite3dDepthInput.value = String(sprite3d.depth);
     syncSprite3dBucketButton();
     syncSprite3dTranslateButton();
@@ -246,7 +254,7 @@ function renderSprite3dControls() {
     renderSprite3dEditorToolbar();
     renderSprite3dCameraControls();
     renderSpriteScaleControl({
-      size: sprite3d.size,
+      size: Math.max(sprite3d.width, sprite3d.height, sprite3d.depth),
       maxSize: SPRITE3D_EDITOR_MAX_SIZE,
       scaleInput: sprite3dScaleInput,
       scaleUpButton: sprite3dScaleUpButton,
@@ -462,7 +470,7 @@ function normalizeSprite3dClipBox(box) {
   for (const axis of ["x", "y", "z"]) {
     const min = Math.trunc(Number(box[`min${axis.toUpperCase()}`]));
     const max = Math.trunc(Number(box[`max${axis.toUpperCase()}`]));
-    const limit = axis === "z" ? sprite3d.depth : sprite3d.size;
+    const limit = sprite3dAxisSize(axis);
     if (!Number.isInteger(min) || !Number.isInteger(max) || min < 0 || max < min || max >= limit) {
       return null;
     }
@@ -531,7 +539,11 @@ function sprite3dClipBoxFromPlaneRect(rect, options = {}) {
     sprite3dCoordsFromPlane(sprite3d.axis, sprite3d.slice, rect.x, rect.y),
     sprite3dCoordsFromPlane(sprite3d.axis, sprite3d.slice, rect.x + rect.width - 1, rect.y + rect.height - 1),
   ];
-  const box = existing || { minX: 0, maxX: sprite3d.size - 1, minY: 0, maxY: sprite3d.size - 1, minZ: 0, maxZ: sprite3d.depth - 1 };
+  const box = existing || {
+    minX: 0, maxX: sprite3d.width - 1,
+    minY: 0, maxY: sprite3d.height - 1,
+    minZ: 0, maxZ: sprite3d.depth - 1,
+  };
   for (const worldAxis of ["x", "y", "z"]) {
     if (worldAxis === sprite3d.axis) {
       if (!existing) {
@@ -764,7 +776,8 @@ function pasteSprite3dClipClipboard() {
       width: clipboard.width,
       height: clipboard.height,
     };
-    if (rect.x + rect.width > sprite3d.size || rect.y + rect.height > sprite3d.size) {
+    const plane = sprite3dPlaneSize();
+    if (rect.x + rect.width > plane.width || rect.y + rect.height > plane.height) {
       setSprite3dActionStatus("Copied slice clip does not fit at selection", "is-error");
       return false;
     }
@@ -803,7 +816,7 @@ function sprite3dWholeEditBox() {
     const plane = sprite3dPlaneSize();
     return sprite3dClipBoxFromPlaneRect({ x: 0, y: 0, width: plane.width, height: plane.height }, { fullDepth: false });
   }
-  return { minX: 0, maxX: sprite3d.size - 1, minY: 0, maxY: sprite3d.size - 1,
+  return { minX: 0, maxX: sprite3d.width - 1, minY: 0, maxY: sprite3d.height - 1,
     minZ: 0, maxZ: sprite3d.depth - 1 };
 }
 
@@ -892,8 +905,8 @@ function sprite3dClipBoxShiftedInPlane(box, du, dv) {
   }
   const targetRect = { ...rect, x: rect.x + du, y: rect.y + dv };
   if (targetRect.x < 0 || targetRect.y < 0
-    || targetRect.x + targetRect.width > sprite3d.size
-    || targetRect.y + targetRect.height > sprite3d.size) {
+    || targetRect.x + targetRect.width > sprite3dPlaneSize().width
+    || targetRect.y + targetRect.height > sprite3dPlaneSize().height) {
     return null;
   }
   return sprite3dClipBoxFromPlaneRect(targetRect, { base: box });
@@ -1049,19 +1062,13 @@ function setSprite3dButtonLabel(button, label) {
 
 function sprite3dSquareIconSvg() {
   return `
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <rect x="5" y="5" width="14" height="14" rx="1.8"></rect>
-    </svg>
+    ${editorIconSvg("square")}
   `;
 }
 
 function sprite3dCubeIconSvg() {
   return `
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M12 2.8 20 7.3v9.4l-8 4.5-8-4.5V7.3Z"></path>
-      <path d="M4 7.3 12 12l8-4.7"></path>
-      <path d="M12 12v9.2"></path>
-    </svg>
+    ${editorIconSvg("box")}
   `;
 }
 
@@ -1164,20 +1171,13 @@ function renderSprite3dPaletteContent() {
     if (selectedIsTransparent) {
       currentButton.insertAdjacentHTML("beforeend", `
         <span class="sprite-current-transparent-icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24">
-            <path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"></path>
-            <path d="M22 21H7"></path>
-            <path d="m5 11 9 9"></path>
-          </svg>
+          ${editorIconSvg("eraser")}
         </span>
       `);
     } else {
       currentButton.insertAdjacentHTML("beforeend", `
         <span class="sprite-current-edit-icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24">
-            <path d="M12 20h9"></path>
-            <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"></path>
-          </svg>
+          ${editorIconSvg("pencil")}
         </span>
       `);
     }
@@ -1292,6 +1292,7 @@ function renderSprite3dPaletteContent() {
       currentWrap.append(editorPanel);
       pendingEditMenu = editMenu;
     }
+    currentWrap.append(sprite3dShapeField);
     sprite3dPalette.append(currentWrap);
     if (pendingEditMenu) {
       positionSpriteColorMenu(pendingEditMenu, currentButton, { side: "left" });
@@ -1356,8 +1357,8 @@ function renderSprite3dSliceBoard() {
       button.dataset.index = String(index);
       button.dataset.voxelIndex = String(voxelIndex);
       button.dataset.colorIndex = colorIndex === null ? "erase" : String(colorIndex);
-      const u = index % sprite3d.size;
-      const v = Math.floor(index / sprite3d.size);
+      const u = index % planeSize.width;
+      const v = Math.floor(index / planeSize.width);
       button.classList.toggle("is-clip-selected", Boolean(
         selectionIntersectsSlice
         && selectionRect
@@ -1492,8 +1493,7 @@ function renderSprite3dPreviewCanvas(canvas, cells, options = {}) {
   ctx.fillStyle = sprite3dCssVar("--sprite3d-preview-bg", "#1d2023");
   ctx.fillRect(0, 0, width, height);
 
-  const size = sprite3d.size;
-  const view = sprite3dPreviewView(width, height, size);
+  const view = sprite3dPreviewView(width, height);
   drawSprite3dBounds(ctx, view);
 
   const occupied = sprite3dOccupancyMap(cells);
@@ -1521,7 +1521,7 @@ function renderSprite3dPreviewCanvas(canvas, cells, options = {}) {
   }
 }
 
-function sprite3dPreviewView(width, height, size) {
+function sprite3dPreviewView(width, height) {
   const padding = 0;
   const overlayControlHeight = Number.parseFloat(
     sprite3dCssVar("--sprite3d-overlay-control-height", "22"),
@@ -1533,9 +1533,8 @@ function sprite3dPreviewView(width, height, size) {
     cellScale: 1,
     originX: 0,
     originY: 0,
-    size,
   };
-  const points = sprite3dBoundsCorners(size).map((corner) => sprite3dProject(corner, boundsView));
+  const points = sprite3dBoundsCorners().map((corner) => sprite3dProject(corner, boundsView));
   const minX = Math.min(...points.map((point) => point.x));
   const maxX = Math.max(...points.map((point) => point.x));
   const minY = Math.min(...points.map((point) => point.y));
@@ -1551,23 +1550,23 @@ function sprite3dPreviewView(width, height, size) {
     cellScale: scale,
     originX: width / 2 - ((minX + maxX) / 2) * scale,
     originY: safeTop + safeHeight / 2 - ((minY + maxY) / 2) * scale,
-    size,
   };
 }
 
-function sprite3dBoundsCorners(size) {
+function sprite3dBoundsCorners() {
   const min = -0.5;
-  const max = size - 0.5;
+  const maxX = sprite3d.width - 0.5;
+  const maxY = sprite3d.height - 0.5;
   const maxDepth = sprite3d.depth - 0.5;
   return [
     { x: min, y: min, z: min },
-    { x: max, y: min, z: min },
-    { x: max, y: max, z: min },
-    { x: min, y: max, z: min },
+    { x: maxX, y: min, z: min },
+    { x: maxX, y: maxY, z: min },
+    { x: min, y: maxY, z: min },
     { x: min, y: min, z: maxDepth },
-    { x: max, y: min, z: maxDepth },
-    { x: max, y: max, z: maxDepth },
-    { x: min, y: max, z: maxDepth },
+    { x: maxX, y: min, z: maxDepth },
+    { x: maxX, y: maxY, z: maxDepth },
+    { x: min, y: maxY, z: maxDepth },
   ];
 }
 
@@ -1639,8 +1638,8 @@ function sprite3dClampNumber(value, min, max) {
 function sprite3dOccupancyMap(cells = sprite3d.cells) {
   const occupied = new Map();
   for (let z = 0; z < sprite3d.depth; z += 1) {
-    for (let y = 0; y < sprite3d.size; y += 1) {
-      for (let x = 0; x < sprite3d.size; x += 1) {
+    for (let y = 0; y < sprite3d.height; y += 1) {
+      for (let x = 0; x < sprite3d.width; x += 1) {
         const colorIndex = cells?.[sprite3dCellIndex(x, y, z)];
         if (validSprite3dColorIndex(colorIndex)) {
           occupied.set(sprite3dVoxelKey(x, y, z), {
@@ -1663,9 +1662,9 @@ function drawSprite3dBounds(ctx, view) {
   const z = -0.5;
   const corners = [
     sprite3dProject({ x: -0.5, y: -0.5, z }, view),
-    sprite3dProject({ x: view.size - 0.5, y: -0.5, z }, view),
-    sprite3dProject({ x: view.size - 0.5, y: view.size - 0.5, z }, view),
-    sprite3dProject({ x: -0.5, y: view.size - 0.5, z }, view),
+    sprite3dProject({ x: sprite3d.width - 0.5, y: -0.5, z }, view),
+    sprite3dProject({ x: sprite3d.width - 0.5, y: sprite3d.height - 0.5, z }, view),
+    sprite3dProject({ x: -0.5, y: sprite3d.height - 0.5, z }, view),
   ];
   ctx.fillStyle = sprite3dCssVar("--sprite3d-frame-fill", "rgba(137, 148, 158, 0.10)");
   ctx.strokeStyle = sprite3dCssVar("--sprite3d-frame-stroke", "rgba(137, 148, 158, 0.38)");
@@ -1743,13 +1742,14 @@ function sprite3dSliceHitEdges(view) {
     return [];
   }
   const min = -0.5;
-  const max = sprite3d.size - 0.5;
+  const maxX = sprite3d.width - 0.5;
+  const maxY = sprite3d.height - 0.5;
   const maxDepth = sprite3d.depth - 0.5;
   return [
     { x: min, y: min },
-    { x: max, y: min },
-    { x: max, y: max },
-    { x: min, y: max },
+    { x: maxX, y: min },
+    { x: maxX, y: maxY },
+    { x: min, y: maxY },
   ].map((edge) => {
     const from = sprite3dProject({ x: edge.x, y: edge.y, z: min }, view);
     const to = sprite3dProject({ x: edge.x, y: edge.y, z: maxDepth }, view);
@@ -1766,7 +1766,8 @@ function sprite3dSliceHitEdges(view) {
 
 function sprite3dSliceHitPlaneCorners(slice, view) {
   const min = -0.5;
-  const max = sprite3d.size - 0.5;
+  const maxX = sprite3d.width - 0.5;
+  const maxY = sprite3d.height - 0.5;
   const maxDepth = sprite3d.depth - 0.5;
   const fixed = sprite3dPlaneWorldSlice(sprite3d.axis, slice);
   let corners = [];
@@ -1774,22 +1775,22 @@ function sprite3dSliceHitPlaneCorners(slice, view) {
     corners = [
       { x: fixed, y: min, z: min },
       { x: fixed, y: min, z: maxDepth },
-      { x: fixed, y: max, z: maxDepth },
-      { x: fixed, y: max, z: min },
+      { x: fixed, y: maxY, z: maxDepth },
+      { x: fixed, y: maxY, z: min },
     ];
   } else if (sprite3d.axis === "y") {
     corners = [
       { x: min, y: fixed, z: min },
-      { x: max, y: fixed, z: min },
-      { x: max, y: fixed, z: maxDepth },
+      { x: maxX, y: fixed, z: min },
+      { x: maxX, y: fixed, z: maxDepth },
       { x: min, y: fixed, z: maxDepth },
     ];
   } else {
     corners = [
       { x: min, y: min, z: fixed },
-      { x: max, y: min, z: fixed },
-      { x: max, y: max, z: fixed },
-      { x: min, y: max, z: fixed },
+      { x: maxX, y: min, z: fixed },
+      { x: maxX, y: maxY, z: fixed },
+      { x: min, y: maxY, z: fixed },
     ];
   }
   return corners.map((corner) => sprite3dProject(corner, view));
@@ -1991,8 +1992,8 @@ function sprite3dGridInSliceVolume(grid, slice) {
   return grid.x >= 0
     && grid.y >= 0
     && grid.z >= 0
-    && grid.x < sprite3d.size
-    && grid.y < sprite3d.size
+    && grid.x < sprite3d.width
+    && grid.y < sprite3d.height
     && grid.z < sprite3d.depth
     && sprite3dGridInSlice(grid, slice);
 }
@@ -2064,8 +2065,8 @@ function sprite3dProject(position, view) {
   return Puzzle3VisualCore.projectOrthographic(position, {
     camera,
     center: {
-      x: (sprite3d.size - 1) / 2,
-      y: (sprite3d.size - 1) / 2,
+      x: (sprite3d.width - 1) / 2,
+      y: (sprite3d.height - 1) / 2,
       z: (sprite3d.depth - 1) / 2,
     },
     origin: { x: view.originX, y: view.originY },
@@ -2076,8 +2077,8 @@ function sprite3dProject(position, view) {
 function sprite3dMergedVoxelFaces(occupied, view) {
   const voxels = [];
   for (let z = 0; z < sprite3d.depth; z += 1) {
-    for (let y = 0; y < sprite3d.size; y += 1) {
-      for (let x = 0; x < sprite3d.size; x += 1) {
+    for (let y = 0; y < sprite3d.height; y += 1) {
+      for (let x = 0; x < sprite3d.width; x += 1) {
         const colorIndex = sprite3d.cells[sprite3dCellIndex(x, y, z)];
         if (validSprite3dColorIndex(colorIndex)) {
           voxels.push({ x, y, z, colorIndex });
@@ -2644,7 +2645,7 @@ function ensureSprite3dPalette() {
 }
 
 function sprite3dCellIndex(x, y, z) {
-  return ((z * sprite3d.size + y) * sprite3d.size) + x;
+  return ((z * sprite3d.height + y) * sprite3d.width) + x;
 }
 
 function sprite3dCoordsFromSliceCell(index) {
@@ -2748,7 +2749,6 @@ function floodFillSprite3dComponentAtSliceIndex(index, colorIndex) {
   if (targetColorIndex === nextColorIndex) {
     return 0;
   }
-  const size = sprite3d.size;
   const visited = new Uint8Array(sprite3d.cells.length);
   const region = sprite3dClipActive ? normalizeSprite3dClipBox(sprite3dClipSelection) : null;
   const stack = [startCoords];
@@ -2757,7 +2757,7 @@ function floodFillSprite3dComponentAtSliceIndex(index, colorIndex) {
     const current = stack.pop();
     if (
       current.x < 0 || current.y < 0 || current.z < 0
-      || current.x >= size || current.y >= size || current.z >= sprite3d.depth
+      || current.x >= sprite3d.width || current.y >= sprite3d.height || current.z >= sprite3d.depth
     ) {
       continue;
     }
@@ -3069,61 +3069,68 @@ function paintSprite3dDragIndex(index) {
   }
 }
 
-function updateSprite3dSize(value) {
+function updateSprite3dDimension(axis, value) {
   const before = visualEditSnapshot("sprite3d");
-  const nextSize = clampSprite3dSize(value);
-  if (nextSize === sprite3d.size) {
+  const nextValue = clampSprite3dSize(value);
+  const next = sprite3d.sizeBound
+    ? { width: nextValue, height: nextValue, depth: nextValue }
+    : {
+        width: axis === "width" ? nextValue : sprite3d.width,
+        height: axis === "height" ? nextValue : sprite3d.height,
+        depth: axis === "depth" ? nextValue : sprite3d.depth,
+      };
+  if (next.width === sprite3d.width
+    && next.height === sprite3d.height
+    && next.depth === sprite3d.depth) {
     renderSprite3dControls();
     return;
   }
-  const previousSize = sprite3d.size;
-  const previousCells = sprite3d.cells;
-  const nextCells = Array.from({ length: nextSize * nextSize * nextSize }, () => null);
-  const copySize = Math.min(previousSize, nextSize);
-  for (let z = 0; z < copySize; z += 1) {
-    for (let y = 0; y < copySize; y += 1) {
-      for (let x = 0; x < copySize; x += 1) {
-        nextCells[((z * nextSize + y) * nextSize) + x] = previousCells[((z * previousSize + y) * previousSize) + x];
-      }
-    }
-  }
-  sprite3d.size = nextSize;
+  remapSprite3dFrames(next, (x, y, z) => ({ x, y, z }));
   resetSprite3dClipState();
-  sprite3d.slice = Math.min(sprite3d.slice, nextSize - 1);
-  sprite3d.cells = nextCells;
+  sprite3d.slice = Math.min(sprite3d.slice, sprite3dAxisSize() - 1);
   renderSprite3dBuilder();
   pushVisualEditUndoSnapshot("sprite3d", before);
 }
 
-function updateSprite3dDepth(value) {
-  const before = visualEditSnapshot("sprite3d");
+function remapSprite3dFrames(nextExtent, sourceCoordinates) {
   commitSprite3dActiveFrame();
-  const nextDepth = clampSprite3dSize(value);
-  if (nextDepth === sprite3d.depth) {
-    renderSprite3dControls();
-    return;
-  }
-  const previousDepth = sprite3d.depth;
+  const previous = {
+    width: sprite3d.width,
+    height: sprite3d.height,
+    depth: sprite3d.depth,
+  };
   const remap = (frame) => {
-    const next = Array.from({ length: sprite3d.size * sprite3d.size * nextDepth }, () => null);
-    for (let z = 0; z < Math.min(previousDepth, nextDepth); z += 1) {
-      for (let y = 0; y < sprite3d.size; y += 1) {
-        for (let x = 0; x < sprite3d.size; x += 1) {
-          const index = ((z * sprite3d.size + y) * sprite3d.size) + x;
-          next[index] = frame[index] ?? null;
+    const next = Array.from({ length: nextExtent.width * nextExtent.height * nextExtent.depth }, () => null);
+    for (let z = 0; z < nextExtent.depth; z += 1) {
+      for (let y = 0; y < nextExtent.height; y += 1) {
+        for (let x = 0; x < nextExtent.width; x += 1) {
+          const source = sourceCoordinates(x, y, z);
+          if (!source || source.x < 0 || source.x >= previous.width
+            || source.y < 0 || source.y >= previous.height
+            || source.z < 0 || source.z >= previous.depth) {
+            continue;
+          }
+          const sourceIndex = ((source.z * previous.height + source.y) * previous.width) + source.x;
+          const colorIndex = frame[sourceIndex];
+          next[((z * nextExtent.height + y) * nextExtent.width) + x] = validSprite3dColorIndex(colorIndex)
+            ? colorIndex
+            : null;
         }
       }
     }
     return next;
   };
-  sprite3d.frames = (sprite3d.frames.length ? sprite3d.frames : [sprite3d.cells]).map(remap);
-  sprite3d.depth = nextDepth;
+  const frames = sprite3d.animationMode && sprite3d.frames.length
+    ? sprite3d.frames
+    : [sprite3d.cells];
+  sprite3d.frames = frames.map(remap);
+  sprite3d.width = nextExtent.width;
+  sprite3d.height = nextExtent.height;
+  sprite3d.depth = nextExtent.depth;
   sprite3d.animationFrameCount = sprite3d.frames.length;
-  sprite3d.cells = sprite3d.frames[Math.min(sprite3d.animationFrameIndex, sprite3d.frames.length - 1)];
-  sprite3d.slice = Math.min(sprite3d.slice, sprite3dAxisSize() - 1);
-  resetSprite3dClipState();
-  renderSprite3dBuilder();
-  pushVisualEditUndoSnapshot("sprite3d", before);
+  sprite3d.animationFrameIndex = Math.min(sprite3d.animationFrameIndex, sprite3d.frames.length - 1);
+  sprite3d.animationPlaybackIndex = Math.min(sprite3d.animationPlaybackIndex, sprite3d.frames.length - 1);
+  sprite3d.cells = sprite3d.frames[sprite3d.animationFrameIndex];
 }
 
 function sprite3dScaleFactor() {
@@ -3131,52 +3138,41 @@ function sprite3dScaleFactor() {
 }
 
 function canScaleDownSprite3d(factor = sprite3dScaleFactor()) {
-  return factor > 1 && sprite3d.size >= factor && sprite3d.size % factor === 0;
+  return factor > 1
+    && sprite3d.width >= factor
+    && sprite3d.height >= factor
+    && sprite3d.depth >= factor
+    && sprite3d.width % factor === 0
+    && sprite3d.height % factor === 0
+    && sprite3d.depth % factor === 0;
 }
 
 function scaleUpSprite3d() {
   const before = visualEditSnapshot("sprite3d");
   const factor = sprite3dScaleFactor();
-  const previousSize = sprite3d.size;
-  const nextSize = previousSize * factor;
-  if (nextSize > SPRITE3D_EDITOR_MAX_SIZE) {
+  const next = {
+    width: sprite3d.width * factor,
+    height: sprite3d.height * factor,
+    depth: sprite3d.depth * factor,
+  };
+  if (Math.max(next.width, next.height, next.depth) > SPRITE3D_EDITOR_MAX_SIZE) {
     setSprite3dActionStatus(`3D sprite size limit is ${SPRITE3D_EDITOR_MAX_SIZE}`, "is-error");
     renderSprite3dControls();
     return;
   }
 
-  const previousCells = sprite3d.cells;
-  const nextCells = Array.from({ length: nextSize * nextSize * nextSize }, () => null);
-  for (let z = 0; z < previousSize; z += 1) {
-    for (let y = 0; y < previousSize; y += 1) {
-      for (let x = 0; x < previousSize; x += 1) {
-        const sourceIndex = ((z * previousSize + y) * previousSize) + x;
-        const colorIndex = validSprite3dColorIndex(previousCells[sourceIndex])
-          ? previousCells[sourceIndex]
-          : null;
-        const nextX = x * factor;
-        const nextY = y * factor;
-        const nextZ = z * factor;
-        for (let dz = 0; dz < factor; dz += 1) {
-          for (let dy = 0; dy < factor; dy += 1) {
-            for (let dx = 0; dx < factor; dx += 1) {
-              nextCells[(((nextZ + dz) * nextSize + (nextY + dy)) * nextSize) + nextX + dx] = colorIndex;
-            }
-          }
-        }
-      }
-    }
-  }
-
-  sprite3d.size = nextSize;
+  remapSprite3dFrames(next, (x, y, z) => ({
+    x: Math.floor(x / factor),
+    y: Math.floor(y / factor),
+    z: Math.floor(z / factor),
+  }));
   resetSprite3dClipState();
-  sprite3d.slice = Math.min(sprite3d.slice * factor, nextSize - 1);
+  sprite3d.slice = Math.min(sprite3d.slice * factor, sprite3dAxisSize() - 1);
   sprite3d.hoverSlice = null;
-  sprite3d.cells = nextCells;
   renderSprite3dBuilder();
-  const message = `Scaled ${factor}x to ${nextSize}x${nextSize}x${nextSize}`;
+  const message = `Scaled ${factor}x to ${next.width}x${next.height}x${next.depth}`;
   setSprite3dActionStatus(message, "is-ok");
-  setStatus(`Scaled 3D sprite ${factor}x to ${nextSize}x${nextSize}x${nextSize}`, "is-ok");
+  setStatus(`Scaled 3D sprite ${factor}x to ${next.width}x${next.height}x${next.depth}`, "is-ok");
   pushVisualEditUndoSnapshot("sprite3d", before);
 }
 
@@ -3184,34 +3180,28 @@ function scaleDownSprite3d() {
   const before = visualEditSnapshot("sprite3d");
   const factor = sprite3dScaleFactor();
   if (!canScaleDownSprite3d(factor)) {
-    setSprite3dActionStatus(`Size ${sprite3d.size} is not divisible by ${factor}`, "is-error");
+    setSprite3dActionStatus(`Dimensions ${sprite3d.width}x${sprite3d.height}x${sprite3d.depth} are not divisible by ${factor}`, "is-error");
     renderSprite3dControls();
     return;
   }
 
-  const previousSize = sprite3d.size;
-  const nextSize = previousSize / factor;
-  const previousCells = sprite3d.cells;
-  const nextCells = Array.from({ length: nextSize * nextSize * nextSize }, () => null);
-  for (let z = 0; z < nextSize; z += 1) {
-    for (let y = 0; y < nextSize; y += 1) {
-      for (let x = 0; x < nextSize; x += 1) {
-        const sourceIndex = (((z * factor) * previousSize + (y * factor)) * previousSize) + (x * factor);
-        const colorIndex = previousCells[sourceIndex];
-        nextCells[((z * nextSize + y) * nextSize) + x] = validSprite3dColorIndex(colorIndex) ? colorIndex : null;
-      }
-    }
-  }
-
-  sprite3d.size = nextSize;
+  const next = {
+    width: sprite3d.width / factor,
+    height: sprite3d.height / factor,
+    depth: sprite3d.depth / factor,
+  };
+  remapSprite3dFrames(next, (x, y, z) => ({
+    x: x * factor,
+    y: y * factor,
+    z: z * factor,
+  }));
   resetSprite3dClipState();
-  sprite3d.slice = Math.min(Math.floor(sprite3d.slice / factor), nextSize - 1);
+  sprite3d.slice = Math.min(Math.floor(sprite3d.slice / factor), sprite3dAxisSize() - 1);
   sprite3d.hoverSlice = null;
-  sprite3d.cells = nextCells;
   renderSprite3dBuilder();
-  const message = `Scaled down ${factor}x to ${nextSize}x${nextSize}x${nextSize}`;
+  const message = `Scaled down ${factor}x to ${next.width}x${next.height}x${next.depth}`;
   setSprite3dActionStatus(message, "is-ok");
-  setStatus(`Scaled 3D sprite down ${factor}x to ${nextSize}x${nextSize}x${nextSize}`, "is-ok");
+  setStatus(`Scaled 3D sprite down ${factor}x to ${next.width}x${next.height}x${next.depth}`, "is-ok");
   pushVisualEditUndoSnapshot("sprite3d", before);
 }
 
@@ -3329,7 +3319,7 @@ function deleteSprite3dSlice() {
 
 function deleteSprite3dBuilder() {
   const before = visualEditSnapshot("sprite3d");
-  resetSprite3dBuilder(sprite3d.size);
+  resetSprite3dBuilder();
   setSprite3dActionStatus("Deleted whole 3D sprite contents", "is-ok");
   pushVisualEditUndoSnapshot("sprite3d", before);
 }
@@ -3344,18 +3334,17 @@ function deleteSprite3dScoped() {
 
 function transformSprite3dCells(mapper, message) {
   const before = visualEditSnapshot("sprite3d");
-  const size = sprite3d.size;
   const previousCells = sprite3d.cells;
-  const nextCells = Array.from({ length: size * size * sprite3d.depth }, () => null);
+  const nextCells = Array.from({ length: sprite3dFrameCellCount() }, () => null);
   for (let z = 0; z < sprite3d.depth; z += 1) {
-    for (let y = 0; y < size; y += 1) {
-      for (let x = 0; x < size; x += 1) {
+    for (let y = 0; y < sprite3d.height; y += 1) {
+      for (let x = 0; x < sprite3d.width; x += 1) {
         const sourceIndex = sprite3dCellIndex(x, y, z);
         const colorIndex = previousCells[sourceIndex];
         if (!validSprite3dColorIndex(colorIndex)) {
           continue;
         }
-        const target = mapper(x, y, z, size);
+        const target = mapper(x, y, z);
         nextCells[sprite3dCellIndex(target.x, target.y, target.z)] = colorIndex;
       }
     }
@@ -3369,44 +3358,32 @@ function transformSprite3dCells(mapper, message) {
 }
 
 function sprite3dPlaneCoordinates(axis, x, y, z) {
-  const max = sprite3d.size - 1;
-  const maxDepth = sprite3d.depth - 1;
+  const maxY = sprite3d.height - 1;
+  const maxZ = sprite3d.depth - 1;
   if (axis === "x") {
-    return { stack: x, u: max - y, v: maxDepth - z };
+    return { stack: x, u: maxY - y, v: maxZ - z };
   }
   if (axis === "y") {
-    return { stack: max - y, u: x, v: maxDepth - z };
+    return { stack: maxY - y, u: x, v: maxZ - z };
   }
-  return { stack: max - z, u: x, v: max - y };
+  return { stack: maxZ - z, u: x, v: maxY - y };
 }
 
 function sprite3dCoordsFromPlane(axis, stack, u, v) {
-  const max = sprite3d.size - 1;
-  const maxDepth = sprite3d.depth - 1;
+  const maxY = sprite3d.height - 1;
+  const maxZ = sprite3d.depth - 1;
   const fixed = sprite3dPlaneWorldSlice(axis, stack);
   if (axis === "x") {
-    return { x: fixed, y: max - u, z: maxDepth - v };
+    return { x: fixed, y: maxY - u, z: maxZ - v };
   }
   if (axis === "y") {
-    return { x: u, y: fixed, z: maxDepth - v };
+    return { x: u, y: fixed, z: maxZ - v };
   }
-  return { x: u, y: max - v, z: fixed };
+  return { x: u, y: maxY - v, z: fixed };
 }
 
-function sprite3dCoordsFromPlaneForSize(size, axis, stack, u, v) {
-  const max = size - 1;
-  const fixed = sprite3dPlaneWorldSlice(axis, stack, size);
-  if (axis === "x") {
-    return { x: fixed, y: max - u, z: max - v };
-  }
-  if (axis === "y") {
-    return { x: u, y: fixed, z: max - v };
-  }
-  return { x: u, y: max - v, z: fixed };
-}
-
-function sprite3dPlaneWorldSlice(axis, stack, size = sprite3d.size) {
-  const axisSize = axis === "z" ? sprite3d.depth : size;
+function sprite3dPlaneWorldSlice(axis, stack) {
+  const axisSize = sprite3dAxisSize(axis);
   const normalized = Math.max(0, Math.min(axisSize - 1, Math.trunc(Number(stack) || 0)));
   return axis === "x" ? normalized : axisSize - 1 - normalized;
 }
@@ -3415,11 +3392,10 @@ function sprite3dCurrentSliceDescriptor() {
   return {
     axis: ["x", "y", "z"].includes(sprite3d.axis) ? sprite3d.axis : "z",
     slice: Math.max(0, Math.min(sprite3dAxisSize() - 1, Math.trunc(Number(sprite3d.slice) || 0))),
-    size: sprite3d.size,
   };
 }
 
-function readSprite3dSliceCells(axis, slice, size = sprite3d.size) {
+function readSprite3dSliceCells(axis, slice) {
   const cells = [];
   const plane = sprite3dPlaneSize(axis);
   for (let v = 0; v < plane.height; v += 1) {
@@ -3515,7 +3491,7 @@ function writeSprite3dSliceCells(axis, slice, cells) {
 function transformSprite3dCurrentPlane(mapper, message) {
   const axis = ["x", "y", "z"].includes(sprite3d.axis) ? sprite3d.axis : "z";
   const plane = sprite3dPlaneSize(axis);
-  transformSprite3dCells((x, y, z, size) => {
+  transformSprite3dCells((x, y, z) => {
     const plane = sprite3dPlaneCoordinates(axis, x, y, z);
     const next = mapper(plane.u, plane.v, sprite3dPlaneSize(axis).width, sprite3dPlaneSize(axis).height);
     return sprite3dCoordsFromPlane(axis, plane.stack, next.u, next.v);
@@ -3525,7 +3501,7 @@ function transformSprite3dCurrentPlane(mapper, message) {
 function transformSprite3dCurrentSlice(mapper, message) {
   const before = visualEditSnapshot("sprite3d");
   const source = sprite3dCurrentSliceDescriptor();
-  const previousCells = readSprite3dSliceCells(source.axis, source.slice, source.size);
+  const previousCells = readSprite3dSliceCells(source.axis, source.slice);
   const plane = sprite3dPlaneSize(source.axis);
   const nextCells = Array.from({ length: plane.width * plane.height }, () => null);
   for (let v = 0; v < plane.height; v += 1) {
@@ -3625,9 +3601,9 @@ function sprite3dVoxelRows() {
     if (z > 0) {
       rows.push("-");
     }
-    for (let y = 0; y < sprite3d.size; y += 1) {
+    for (let y = 0; y < sprite3d.height; y += 1) {
       const row = [];
-      for (let x = 0; x < sprite3d.size; x += 1) {
+      for (let x = 0; x < sprite3d.width; x += 1) {
         const coords = sprite3dCoordsFromPlane("z", z, x, y);
         const colorIndex = sprite3d.cells[sprite3dCellIndex(coords.x, coords.y, coords.z)];
         row.push(validSprite3dColorIndex(colorIndex) ? SPRITE_COLOR_TOKENS[colorIndex] : ".");
@@ -3645,8 +3621,8 @@ function sprite3dEditFrames() {
     : [[]];
   frames[sprite3d.animationMode ? sprite3d.animationFrameIndex : 0] = sprite3d.cells.slice();
   return frames.map((frame) => Array.from({ length: sprite3d.depth }, (_, sourceZ) =>
-    Array.from({ length: sprite3d.size }, (_, y) =>
-      Array.from({ length: sprite3d.size }, (_, x) => {
+    Array.from({ length: sprite3d.height }, (_, y) =>
+      Array.from({ length: sprite3d.width }, (_, x) => {
         const worldZ = sprite3d.depth - 1 - sourceZ;
         const cell = frame[sprite3dCellIndex(x, y, worldZ)];
         return Number.isInteger(cell) ? cell : null;
@@ -3720,8 +3696,7 @@ function newSprite3dDraft() {
   sprite3d.palette = [{ color: "#ff004d" }];
   sprite3d.selectedColorIndex = 0;
   sprite3d.animationMode = false;
-  sprite3d.depth = 5;
-  resetSprite3dBuilder(5);
+  resetSprite3dBuilder(5, 5, 5);
   setSprite3dActionStatus("Started new 3D sprite", "is-ok");
   pushVisualEditUndoSnapshot("sprite3d", before);
 }
@@ -3808,11 +3783,12 @@ function sprite3dTargetPayload(target) {
     });
   const frames = documentContract.cellsByFrame.map((layers) => layers.flat());
   const frameCellCount = width * height * depth;
-  if (width < 1 || depth < 1 || width !== height || !palette.length || !frames.length || frames.some((frame) => frame.length !== frameCellCount)) {
+  if (width < 1 || height < 1 || depth < 1 || !palette.length || !frames.length || frames.some((frame) => frame.length !== frameCellCount)) {
     return null;
   }
   return {
-    size: width,
+    width,
+    height,
     depth,
     palette,
     cells: frames[0].slice(),
@@ -3866,8 +3842,9 @@ function applyIncompleteSprite3dSourceTarget(name, target) {
     setSprite3dEditSource(target, activeDocument());
   }
   sprite3dNameInput.value = name || "";
-  sprite3d.size = clampSprite3dSize(sprite3d.size);
-  sprite3d.depth = clampSprite3dSize(sprite3d.depth ?? sprite3d.size);
+  sprite3d.width = clampSprite3dSize(sprite3d.width);
+  sprite3d.height = clampSprite3dSize(sprite3d.height);
+  sprite3d.depth = clampSprite3dSize(sprite3d.depth);
   sprite3d.axis = "z";
   sprite3d.slice = 0;
   sprite3d.hoverSlice = null;
@@ -3893,7 +3870,8 @@ function applyIncompleteSprite3dSourceTarget(name, target) {
 function applyLoadedSprite3d(name, loaded) {
   resetSprite3dClipState({ clipboard: true });
   sprite3dNameInput.value = name || "VoxelSprite";
-  sprite3d.size = loaded.size;
+  sprite3d.width = loaded.width;
+  sprite3d.height = loaded.height;
   sprite3d.depth = loaded.depth;
   sprite3d.axis = "z";
   sprite3d.slice = 0;
@@ -4160,7 +4138,7 @@ function sprite3dSliceFromPreviewEvent(event) {
   const y = event.clientY - rect.top;
   const point = { x, y };
   const view = sprite3dPreviewCanvas._sprite3dPreviewView
-    || sprite3dPreviewView(Math.max(1, Math.round(rect.width)), Math.max(1, Math.round(rect.height)), sprite3d.size);
+    || sprite3dPreviewView(Math.max(1, Math.round(rect.width)), Math.max(1, Math.round(rect.height)));
   const ray = sprite3dPreviewRay(point, view);
   const voxelHit = sprite3dRaycastOccupiedVoxel(ray);
   if (voxelHit) {
@@ -4181,12 +4159,13 @@ function sprite3dPreviewRay(point, view) {
   const sinPitch = Math.sin(pitch);
   const cosPitch = Math.cos(pitch);
   const yawYAtDepthZero = -sinPitch * screenV;
-  const center = (view.size - 1) / 2;
+  const centerX = (sprite3d.width - 1) / 2;
+  const centerY = (sprite3d.height - 1) / 2;
   const centerDepth = (sprite3d.depth - 1) / 2;
   return {
     origin: {
-      x: center + screenU * cosYaw + yawYAtDepthZero * sinYaw,
-      y: center - screenU * sinYaw + yawYAtDepthZero * cosYaw,
+      x: centerX + screenU * cosYaw + yawYAtDepthZero * sinYaw,
+      y: centerY - screenU * sinYaw + yawYAtDepthZero * cosYaw,
       z: centerDepth - cosPitch * screenV,
     },
     direction: {
@@ -4200,8 +4179,8 @@ function sprite3dPreviewRay(point, view) {
 function sprite3dRaycastOccupiedVoxel(ray) {
   let best = null;
   for (let z = 0; z < sprite3d.depth; z += 1) {
-    for (let y = 0; y < sprite3d.size; y += 1) {
-      for (let x = 0; x < sprite3d.size; x += 1) {
+    for (let y = 0; y < sprite3d.height; y += 1) {
+      for (let x = 0; x < sprite3d.width; x += 1) {
         if (!validSprite3dColorIndex(sprite3d.cells[sprite3dCellIndex(x, y, z)])) {
           continue;
         }
@@ -4224,7 +4203,7 @@ function sprite3dRaycastOccupiedVoxel(ray) {
 function sprite3dApproximateSliceFromRay(ray) {
   const bounds = {
     min: { x: -0.5, y: -0.5, z: -0.5 },
-    max: { x: sprite3d.size - 0.5, y: sprite3d.size - 0.5, z: sprite3d.depth - 0.5 },
+    max: { x: sprite3d.width - 0.5, y: sprite3d.height - 0.5, z: sprite3d.depth - 0.5 },
   };
   const hit = sprite3dRayAabbInterval(ray, bounds);
   if (!hit) {
@@ -4349,7 +4328,8 @@ function sprite3dPointInPolygon(point, polygon) {
 
 for (const input of [
   sprite3dNameInput,
-  sprite3dSizeInput,
+  sprite3dWidthInput,
+  sprite3dHeightInput,
   sprite3dDepthInput,
   sprite3dScaleInput,
   sprite3dSliceValue,
@@ -4367,27 +4347,22 @@ sourceEditor.addEventListener("input", () => {
   invalidateSprite3dEditSourceForDocument(activeDocument());
   syncSprite3dSourceActionButtons();
 });
-sprite3dSizeInput?.addEventListener("input", () => {
-  if (sprite3dSizeInput.validity.valid && sprite3dSizeInput.value !== "") {
-    updateSprite3dSize(sprite3dSizeInput.value);
-  }
-});
-sprite3dSizeInput?.addEventListener("change", () => updateSprite3dSize(sprite3dSizeInput.value));
-sprite3dDepthInput?.addEventListener("change", () => updateSprite3dDepth(sprite3dDepthInput.value));
-sprite3dDepthInput?.addEventListener("keydown", (event) => {
-  if (event.key !== "Enter") {
-    return;
-  }
-  event.preventDefault();
-  updateSprite3dDepth(sprite3dDepthInput.value);
-});
-sprite3dSizeInput?.addEventListener("keydown", (event) => {
-  if (event.key !== "Enter") {
-    return;
-  }
-  event.preventDefault();
-  updateSprite3dSize(sprite3dSizeInput.value);
-});
+function bindSprite3dDimensionInput(input, axis) {
+  input?.addEventListener("input", () => {
+    if (input.validity.valid && input.value !== "") {
+      updateSprite3dDimension(axis, input.value);
+    }
+  });
+  input?.addEventListener("change", () => updateSprite3dDimension(axis, input.value));
+  input?.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    updateSprite3dDimension(axis, input.value);
+  });
+}
+bindSprite3dDimensionInput(sprite3dWidthInput, "width");
+bindSprite3dDimensionInput(sprite3dHeightInput, "height");
+bindSprite3dDimensionInput(sprite3dDepthInput, "depth");
 sprite3dScaleInput?.addEventListener("input", () => {
   clearSprite3dActionError();
   renderSprite3dControls();

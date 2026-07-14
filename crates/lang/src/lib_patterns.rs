@@ -5714,23 +5714,20 @@ fn resolve_offset(
     )?;
     if offset.gap_terms.is_empty() {
         return Ok(Offset::Fixed {
-            dx: base_dx,
-            dy: base_dy,
+            delta: [base_dx, base_dy].into(),
         });
     }
 
     let (step_dx, step_dy) = resolve_oriented_xy(1, 0, direction, direction_expanded, line)?;
     Ok(Offset::Variable {
-        base_dx,
-        base_dy,
+        base: [base_dx, base_dy].into(),
         gap_terms: offset
             .gap_terms
             .iter()
             .copied()
             .map(|gap_index| GapTerm {
                 gap_index,
-                dx: step_dx,
-                dy: step_dy,
+                delta: [step_dx, step_dy].into(),
             })
             .collect(),
     })

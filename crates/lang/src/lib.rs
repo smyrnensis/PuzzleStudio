@@ -11,7 +11,7 @@ mod lib_authoring_parse_order;
 mod loaded;
 mod model_syntax;
 mod puzzle3_model;
-mod puzzle3_parse;
+mod spatial_materialize3;
 mod puzzle3_sprite;
 mod puzzle3_visual_fixture;
 mod puzzlescript;
@@ -73,7 +73,8 @@ pub use loaded::{
     TriggerAnimationKind, TweenAnimationDef, ViewportModeDef, ViewportSizeDef, VisualAliasDef,
     VisualColorDef, VisualOrderDef, VisualOrderPriorityDef, VisualSpriteDef, VisualSpriteFit,
     VisualSpriteFitMode, VisualSpriteKind, VisualSpriteLoopDef, VisualSpritePixelsPerCell,
-    VisualSpriteSampling, VisualSpriteSpace, VisualSpriteTransform, VisualsDef,
+    VisualSpriteSampling, VisualSpriteSpace, VisualSpriteSpatialDef, VisualSpriteTransform,
+    VisualsDef,
 };
 pub use model_syntax::ModelDimension;
 
@@ -101,18 +102,16 @@ use puzzle_core::{
     VariableId, VariableUpdateOp, WriteOp,
 };
 pub use puzzle3_model::{
-    CameraSettings3, GridSettings3, ModelSettings3, ParsedPuzzle3, PixelateRenderSettings3,
-    SpriteRenderSettings3, ViewportFollow3, ViewportFraming3, ViewportHeight3, ViewportMode3,
-    ViewportSettings3,
+    CameraSettings3, ParsedPuzzle3, PixelateRenderSettings3, SpriteRenderSettings3,
+    ViewportFollow3, ViewportFraming3, ViewportHeight3, ViewportMode3, ViewportSettings3,
 };
-pub use puzzle3_parse::{ParseError3, parse_puzzle3d};
+pub type ParseError3 = DiagnosticReport;
 pub use puzzle3_sprite::{
     Sprite3, SpriteColor3, SpriteSet3, SpriteSpace3, SpriteSpatialOp3, SpriteVoxels3,
 };
 pub use puzzle3_visual_fixture::{
-    VisualFixtureAnimation3, VisualFixtureExportError3, export_visual_fixture_json,
-    export_visual_fixture_json_with_title, export_visual_fixture_json_with_title_and_scenes,
-    export_visual_fixture_json_with_title_scenes_and_animation,
+    VisualFixtureExportError3, export_visual_fixture_json, export_visual_fixture_json_with_title,
+    export_visual_fixture_json_with_title_and_scenes,
 };
 pub use puzzlescript::translate_puzzlescript_to_canonical;
 pub use semantic::{SemanticKind, SemanticToken, semantic_tokens};
@@ -129,7 +128,12 @@ pub fn parse_level_ascii_state(
     char_objects: &HashMap<char, Vec<ObjectId>>,
     variable_defaults: &[i64],
 ) -> Result<(State, Vec<LevelRegionDef>), DiagnosticReport> {
-    let parsed = parse_level(game, lines, Some(empty), char_objects, variable_defaults)?;
+    let lines = lines
+        .iter()
+        .enumerate()
+        .map(|(index, line)| source::LogicalLine::new(line, index + 1))
+        .collect::<Vec<_>>();
+    let parsed = parse_level(game, &lines, Some(empty), char_objects, variable_defaults).value?;
     Ok((parsed.state, parsed.regions))
 }
 pub use source_analysis::{
@@ -149,7 +153,7 @@ use surface::{
     SourceSpan, SurfaceDisplayFact, SurfaceDocument, SurfaceHighlightRanges, SurfaceNodeKind,
     SurfaceOptionBlock, SurfaceOutlineBlock, SurfaceRewriteEffect, SurfaceSceneEffect,
     SurfaceSemanticKind, SurfaceSemanticToken, SurfaceSink, SurfaceStructuralBlock,
-    SurfaceStructuralBlockRole, SurfaceVisualSpriteRefs,
+    SurfaceStructuralBlockRole,
 };
 use syntax::puzzle_lifecycle_event;
 

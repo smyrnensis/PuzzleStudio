@@ -688,7 +688,7 @@ slots {
 actor = Player
 }
 render {
-cell_size = 64
+tween_duration = 64ms
 grid {
 type = "all_cells"
 }
@@ -750,8 +750,8 @@ smoothing = false
         assert!(has("queue_during_wait", SemanticKind::Setting));
         assert!(has("false", SemanticKind::Literal));
         assert!(has("game.css", SemanticKind::String));
-        assert!(has("cell_size", SemanticKind::Setting));
-        assert!(has("64", SemanticKind::Number));
+        assert!(has("tween_duration", SemanticKind::Setting));
+        assert!(has("64ms", SemanticKind::Number));
         assert!(has("type", SemanticKind::Setting));
         assert!(has("all_cells", SemanticKind::Literal));
         assert!(has("shade", SemanticKind::Setting));

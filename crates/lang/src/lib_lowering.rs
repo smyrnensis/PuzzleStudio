@@ -1221,7 +1221,9 @@ fn lower_goal_expr(
                 .iter()
                 .map(|subject| Pattern {
                     components: vec![PatternComponent::new(vec![MatchCell {
-                        offset: Offset::Fixed { dx: 0, dy: 0 },
+                        offset: Offset::Fixed {
+                            delta: [0, 0].into(),
+                        },
                         require_null: false,
                         require_objects: vec![*subject],
                         require_object_sets: Vec::new(),

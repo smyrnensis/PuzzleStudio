@@ -508,7 +508,7 @@ fn push_state3_scene(out: &mut String, parsed: &ParsedPuzzle3, state: &State3) {
         for y in 0..state.size.depth {
             for x in 0..state.size.width {
                 let position = Coord3 { x, y, z };
-                let Ok(view) = state.cell_view(position) else {
+                let Ok(view) = state.cell_view_at(position) else {
                     continue;
                 };
                 if view.objects.is_empty() {
@@ -995,11 +995,7 @@ fn push_scene_object_body(
 
 fn push_puzzle_settings(out: &mut String, loaded: &LoadedGame) {
     out.push_str("\"settings\":{");
-    out.push_str("\"render\":{");
-    if let Some(cell_size) = loaded.render.cell_size {
-        push_json_number(out, "cellSize", u64::from(cell_size));
-    }
-    out.push('}');
+    out.push_str("\"render\":{}");
     out.push(',');
     out.push_str("\"grid\":{");
     let occupied_cells = loaded.render.grid.occupied_cells;

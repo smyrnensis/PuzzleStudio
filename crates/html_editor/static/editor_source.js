@@ -1704,8 +1704,9 @@ function renderSourceOutlineEmpty(message) {
 }
 
 function sourceOutlineChevronSvg(expanded) {
-  const path = expanded ? "M4 6l4 4 4-4" : "M6 4l4 4-4 4";
-  return `<svg class="source-outline-chevron-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="${path}"></path></svg>`;
+  return editorIconSvg(expanded ? "chevron-down" : "chevron-right", {
+    className: "source-outline-chevron-icon",
+  });
 }
 
 const SOURCE_OUTLINE_KIND_ICON_NAMES = Object.freeze({
@@ -1761,6 +1762,7 @@ const SOURCE_OUTLINE_KIND_ICON_NAMES = Object.freeze({
   "layers": "layers",
   "collision_layers": "layers",
   "metadata": "info",
+  "slots": "square-dashed",
   "fix": "wrench",
 });
 
@@ -1779,240 +1781,9 @@ function sourceOutlineKindIconName(kind) {
 }
 
 function sourceOutlineKindIconSvg(kind) {
-  const name = sourceOutlineKindIconName(kind);
-  const icons = {
-    puzzle: `
-      <path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"></path>
-    `,
-    map: `
-      <path d="M14.106 5.553a2 2 0 0 0 1.788 0l3.659-1.83A1 1 0 0 1 21 4.619v12.764a1 1 0 0 1-.553.894l-4.553 2.277a2 2 0 0 1-1.788 0l-4.212-2.106a2 2 0 0 0-1.788 0l-3.659 1.83A1 1 0 0 1 3 19.381V6.618a1 1 0 0 1 .553-.894l4.553-2.277a2 2 0 0 1 1.788 0z"></path>
-      <path d="M15 5.764v15"></path>
-      <path d="M9 3.236v15"></path>
-    `,
-    box: `
-      <path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"></path>
-      <path d="m3.3 7 8.7 5 8.7-5"></path>
-      <path d="M12 22V12"></path>
-    `,
-    boxes: `
-      <path d="M2.97 12.92A2 2 0 0 0 2 14.63v3.24a2 2 0 0 0 .97 1.71l3 1.8a2 2 0 0 0 2.06 0L12 19v-5.5l-5-3-4.03 2.42Z"></path>
-      <path d="m7 16.5-4.74-2.85"></path>
-      <path d="m7 16.5 5-3"></path>
-      <path d="M7 16.5v5.17"></path>
-      <path d="M12 13.5V19l3.97 2.38a2 2 0 0 0 2.06 0l3-1.8a2 2 0 0 0 .97-1.71v-3.24a2 2 0 0 0-.97-1.71L17 10.5l-5 3Z"></path>
-      <path d="m17 16.5-5-3"></path>
-      <path d="m17 16.5 4.74-2.85"></path>
-      <path d="M17 16.5v5.17"></path>
-      <path d="M7.97 4.42A2 2 0 0 0 7 6.13v4.37l5 3 5-3V6.13a2 2 0 0 0-.97-1.71l-3-1.8a2 2 0 0 0-2.06 0l-3 1.8Z"></path>
-      <path d="M12 8 7.26 5.15"></path>
-      <path d="m12 8 4.74-2.85"></path>
-      <path d="M12 13.5V8"></path>
-    `,
-    image: `
-      <rect width="18" height="18" x="3" y="3" rx="2" ry="2"></rect>
-      <circle cx="9" cy="9" r="2"></circle>
-      <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"></path>
-    `,
-    group: `
-      <path d="M3 7V5c0-1.1.9-2 2-2h2"></path>
-      <path d="M17 3h2c1.1 0 2 .9 2 2v2"></path>
-      <path d="M21 17v2c0 1.1-.9 2-2 2h-2"></path>
-      <path d="M7 21H5c-1.1 0-2-.9-2-2v-2"></path>
-      <rect width="7" height="5" x="7" y="7" rx="1"></rect>
-      <rect width="7" height="5" x="10" y="12" rx="1"></rect>
-    `,
-    tag: `
-      <path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z"></path>
-      <circle cx="7.5" cy="7.5" r=".5" fill="currentColor"></circle>
-    `,
-    bookmark: `
-      <path d="M17 3a2 2 0 0 1 2 2v15a1 1 0 0 1-1.496.868l-4.512-2.578a2 2 0 0 0-1.984 0l-4.512 2.578A1 1 0 0 1 5 20V5a2 2 0 0 1 2-2z"></path>
-    `,
-    "scan-eye": `
-      <path d="M3 7V5a2 2 0 0 1 2-2h2"></path>
-      <path d="M17 3h2a2 2 0 0 1 2 2v2"></path>
-      <path d="M21 17v2a2 2 0 0 1-2 2h-2"></path>
-      <path d="M7 21H5a2 2 0 0 1-2-2v-2"></path>
-      <circle cx="12" cy="12" r="1"></circle>
-      <path d="M18.944 12.33a1 1 0 0 0 0-.66 7.5 7.5 0 0 0-13.888 0 1 1 0 0 0 0 .66 7.5 7.5 0 0 0 13.888 0"></path>
-    `,
-    camera: `
-      <path d="M13.997 4a2 2 0 0 1 1.76 1.05l.486.9A2 2 0 0 0 18.003 7H20a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h1.997a2 2 0 0 0 1.759-1.048l.489-.904A2 2 0 0 1 10.004 4z"></path>
-      <circle cx="12" cy="13" r="3"></circle>
-    `,
-    "chart-spline": `
-      <path d="M3 3v16a2 2 0 0 0 2 2h16"></path>
-      <path d="M7 16c.5-2 1.5-7 4-7 2 0 2 3 4 3 2.5 0 4.5-5 5-7"></path>
-    `,
-    "circle-play": `
-      <path d="M9 9.003a1 1 0 0 1 1.517-.859l4.997 2.997a1 1 0 0 1 0 1.718l-4.997 2.997A1 1 0 0 1 9 14.996z"></path>
-      <circle cx="12" cy="12" r="10"></circle>
-    `,
-    "rows-3": `
-      <rect width="18" height="18" x="3" y="3" rx="2"></rect>
-      <path d="M21 9H3"></path>
-      <path d="M21 15H3"></path>
-    `,
-    "columns-3": `
-      <rect width="18" height="18" x="3" y="3" rx="2"></rect>
-      <path d="M9 3v18"></path>
-      <path d="M15 3v18"></path>
-    `,
-    "mouse-pointer-click": `
-      <path d="M14 4.1 12 6"></path>
-      <path d="m5.1 8-2.9-.8"></path>
-      <path d="m6 12-1.9 2"></path>
-      <path d="M7.2 2.2 8 5.1"></path>
-      <path d="M9.037 9.69a.498.498 0 0 1 .653-.653l11 4.5a.5.5 0 0 1-.074.949l-4.349 1.041a1 1 0 0 0-.74.739l-1.04 4.35a.5.5 0 0 1-.95.074z"></path>
-    `,
-    "square-mouse-pointer": `
-      <path d="M12.034 12.681a.498.498 0 0 1 .647-.647l9 3.5a.5.5 0 0 1-.033.943l-3.444 1.068a1 1 0 0 0-.66.66l-1.067 3.443a.5.5 0 0 1-.943.033z"></path>
-      <path d="M21 11V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h6"></path>
-    `,
-    "message-square": `
-      <path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"></path>
-    `,
-    "file-text": `
-      <path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"></path>
-      <path d="M14 2v5a1 1 0 0 0 1 1h5"></path>
-      <path d="M10 9H8"></path>
-      <path d="M16 13H8"></path>
-      <path d="M16 17H8"></path>
-    `,
-    "import": `
-      <path d="M12 3v12"></path>
-      <path d="m8 11 4 4 4-4"></path>
-      <path d="M8 5H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-4"></path>
-    `,
-    "list-checks": `
-      <path d="M13 5h8"></path>
-      <path d="M13 12h8"></path>
-      <path d="M13 19h8"></path>
-      <path d="m3 17 2 2 4-4"></path>
-      <path d="m3 7 2 2 4-4"></path>
-    `,
-    workflow: `
-      <rect width="8" height="8" x="3" y="3" rx="2"></rect>
-      <path d="M7 11v4a2 2 0 0 0 2 2h4"></path>
-      <rect width="8" height="8" x="13" y="13" rx="2"></rect>
-    `,
-    flag: `
-      <path d="M4 22V4a1 1 0 0 1 .4-.8A6 6 0 0 1 8 2c3 0 5 2 7.333 2q2 0 3.067-.8A1 1 0 0 1 20 4v10a1 1 0 0 1-.4.8A6 6 0 0 1 16 16c-3 0-5-2-8-2a6 6 0 0 0-4 1.528"></path>
-    `,
-    "flag-off": `
-      <path d="M16 16c-3 0-5-2-8-2a6 6 0 0 0-4 1.528"></path>
-      <path d="m2 2 20 20"></path>
-      <path d="M4 22V4"></path>
-      <path d="M7.656 2H8c3 0 5 2 7.333 2q2 0 3.067-.8A1 1 0 0 1 20 4v10.347"></path>
-    `,
-    "panels-top-left": `
-      <rect width="18" height="18" x="3" y="3" rx="2"></rect>
-      <path d="M3 9h18"></path>
-      <path d="M9 21V9"></path>
-    `,
-    clapperboard: `
-      <path d="m12.296 3.464 3.02 3.956"></path>
-      <path d="M20.2 6 3 11l-.9-2.4c-.3-1.1.3-2.2 1.3-2.5l13.5-4c1.1-.3 2.2.3 2.5 1.3z"></path>
-      <path d="M3 11h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
-      <path d="m6.18 5.276 3.1 3.899"></path>
-    `,
-    package: `
-      <path d="m7.5 4.27 9 5.15"></path>
-      <path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"></path>
-      <path d="m3.3 7 8.7 5 8.7-5"></path>
-      <path d="M12 22V12"></path>
-    `,
-    palette: `
-      <circle cx="13.5" cy="6.5" r=".5" fill="currentColor"></circle>
-      <circle cx="17.5" cy="10.5" r=".5" fill="currentColor"></circle>
-      <circle cx="8.5" cy="7.5" r=".5" fill="currentColor"></circle>
-      <circle cx="6.5" cy="12.5" r=".5" fill="currentColor"></circle>
-      <path d="M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10c0 1.657-1.343 3-3 3h-1.5a2.5 2.5 0 0 0 0 5H19a3 3 0 0 1-3 3z"></path>
-    `,
-    "swatch-book": `
-      <path d="M11 17a4 4 0 0 1-8 0V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2Z"></path>
-      <path d="M16.7 13H19a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H7"></path>
-      <path d="M 7 17h.01"></path>
-      <path d="m11 8 2.3-2.3a2.4 2.4 0 0 1 3.404.004L18.6 7.6a2.4 2.4 0 0 1 .026 3.434L9.9 19.8"></path>
-    `,
-    shapes: `
-      <path d="M8.3 10a.7.7 0 0 1-.626-1.079L11.4 3a.7.7 0 0 1 1.198-.043L16.3 8.9a.7.7 0 0 1-.572 1.1Z"></path>
-      <rect x="3" y="14" width="7" height="7" rx="1"></rect>
-      <circle cx="17.5" cy="17.5" r="3.5"></circle>
-    `,
-    "move-horizontal": `
-      <path d="m18 8 4 4-4 4"></path>
-      <path d="M2 12h20"></path>
-      <path d="m6 8-4 4 4 4"></path>
-    `,
-    "arrow-right": `
-      <path d="M5 12h14"></path>
-      <path d="m12 5 7 7-7 7"></path>
-    `,
-    "grid-2x2": `
-      <path d="M12 3v18"></path>
-      <path d="M3 12h18"></path>
-      <rect x="3" y="3" width="18" height="18" rx="2"></rect>
-    `,
-    view: `
-      <path d="M21 17v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-2"></path>
-      <path d="M21 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v2"></path>
-      <circle cx="12" cy="12" r="1"></circle>
-      <path d="M18.944 12.33a1 1 0 0 0 0-.66 7.5 7.5 0 0 0-13.888 0 1 1 0 0 0 0 .66 7.5 7.5 0 0 0 13.888 0"></path>
-    `,
-    database: `
-      <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
-      <path d="M3 5V19A9 3 0 0 0 21 19V5"></path>
-      <path d="M3 12A9 3 0 0 0 21 12"></path>
-    `,
-    "volume-2": `
-      <path d="M11 4.702a1 1 0 0 0-1.664-.747L5.23 7.5H3a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h2.23l4.106 3.545A1 1 0 0 0 11 19.298z"></path>
-      <path d="M16 9a5 5 0 0 1 0 6"></path>
-      <path d="M19.364 18.364a9 9 0 0 0 0-12.728"></path>
-    `,
-    keyboard: `
-      <path d="M10 8h.01"></path>
-      <path d="M12 12h.01"></path>
-      <path d="M14 8h.01"></path>
-      <path d="M16 12h.01"></path>
-      <path d="M18 8h.01"></path>
-      <path d="M6 8h.01"></path>
-      <path d="M7 16h10"></path>
-      <path d="M8 12h.01"></path>
-      <rect width="20" height="16" x="2" y="4" rx="2"></rect>
-    `,
-    layers: `
-      <path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z"></path>
-      <path d="m22 12.5-9.17 4.18a2 2 0 0 1-1.66 0L2 12.5"></path>
-      <path d="m22 17.5-9.17 4.18a2 2 0 0 1-1.66 0L2 17.5"></path>
-    `,
-    info: `
-      <circle cx="12" cy="12" r="10"></circle>
-      <path d="M12 16v-4"></path>
-      <path d="M12 8h.01"></path>
-    `,
-    wrench: `
-      <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94z"></path>
-    `,
-    zap: `
-      <path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"></path>
-    `,
-    "file-code-2": `
-      <path d="M4 22h14a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v4"></path>
-      <path d="M14 2v4a2 2 0 0 0 2 2h4"></path>
-      <path d="m5 12-3 3 3 3"></path>
-      <path d="m9 18 3-3-3-3"></path>
-    `,
-  };
-  const paths = icons[name];
-  if (!paths) {
-    throw new Error(`Unknown source outline lucide icon ${name}`);
-  }
-  return `
-    <svg xmlns="http://www.w3.org/2000/svg" class="source-outline-icon lucide lucide-${name}-icon lucide-${name}" viewBox="0 0 24 24" aria-hidden="true">
-      ${paths}
-    </svg>
-  `;
+  return editorIconSvg(sourceOutlineKindIconName(kind), {
+    className: "source-outline-icon",
+  });
 }
 
 function toggleSourceOutlineItem(itemId, expanded = null) {
@@ -2154,22 +1925,22 @@ function createSourceFindPanel() {
       <input class="source-find-input" data-source-find-input type="search" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Find" aria-label="Find in source">
       <button class="source-find-icon-button" data-source-find-case type="button" aria-label="Match case" title="Match case" aria-pressed="false">Aa</button>
       <button class="source-find-icon-button" data-source-find-previous type="button" aria-label="Previous match" title="Previous match">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m18 15-6-6-6 6"></path></svg>
+        ${editorIconSvg("chevron-up")}
       </button>
       <button class="source-find-icon-button" data-source-find-next type="button" aria-label="Next match" title="Next match">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+        ${editorIconSvg("chevron-down")}
       </button>
       <button class="source-find-icon-button" data-source-find-close type="button" aria-label="Close find" title="Close">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>
+        ${editorIconSvg("x")}
       </button>
     </div>
     <div class="source-find-row source-replace-row">
       <input class="source-find-input" data-source-replace-input type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Replace" aria-label="Replace with">
       <button class="source-find-icon-button" data-source-replace-current type="button" aria-label="Replace" title="Replace">
-        <svg class="lucide lucide-replace" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4a1 1 0 0 1 1-1"></path><path d="M15 10a1 1 0 0 1-1-1"></path><path d="M21 4a1 1 0 0 0-1-1"></path><path d="M21 9a1 1 0 0 1-1 1"></path><path d="m3 7 3 3 3-3"></path><path d="M6 10V5a2 2 0 0 1 2-2h2"></path><rect x="3" y="14" width="7" height="7" rx="1"></rect></svg>
+        ${editorIconSvg("replace")}
       </button>
       <button class="source-find-icon-button" data-source-replace-all type="button" aria-label="Replace all" title="Replace all">
-        <svg class="lucide lucide-replace-all" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 14a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1"></path><path d="M14 4a1 1 0 0 1 1-1"></path><path d="M15 10a1 1 0 0 1-1-1"></path><path d="M19 14a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1"></path><path d="M21 4a1 1 0 0 0-1-1"></path><path d="M21 9a1 1 0 0 1-1 1"></path><path d="m3 7 3 3 3-3"></path><path d="M6 10V5a2 2 0 0 1 2-2h2"></path><rect x="3" y="14" width="7" height="7" rx="1"></rect></svg>
+        ${editorIconSvg("replace-all")}
       </button>
     </div>
     <div class="source-find-status" data-source-find-status aria-live="polite">No query</div>

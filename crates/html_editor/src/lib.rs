@@ -107,6 +107,8 @@ const EDITOR_ANALYSIS_WORKER_JS: &str = include_str!("../static/editor_analysis_
 #[cfg(feature = "embedded-assets")]
 const EDITOR_BOOT_JS: &str = include_str!("../static/editor_boot.js");
 #[cfg(feature = "embedded-assets")]
+const EDITOR_ICONS_JS: &str = include_str!("../static/editor_icons.js");
+#[cfg(feature = "embedded-assets")]
 const EDITOR_CODEMIRROR_JS: &str = include_str!("../static/editor_codemirror.js");
 #[cfg(test)]
 const EDITOR_CODEMIRROR_SOURCE_JS: &str = include_str!("../web/src/editor_codemirror.js");
@@ -1427,6 +1429,7 @@ fn route(request: &HttpRequest, service: &EditorService) -> Vec<u8> {
         ("GET", "/renderer.css") => http_ok("text/css; charset=utf-8", RENDERER_CSS),
         ("GET", "/game.css") => http_ok("text/css; charset=utf-8", &service.state().game_css),
         ("GET", "/editor_boot.js") => http_ok("text/javascript; charset=utf-8", EDITOR_BOOT_JS),
+        ("GET", "/editor_icons.js") => http_ok("text/javascript; charset=utf-8", EDITOR_ICONS_JS),
         ("GET", "/editor_codemirror.js") => {
             http_ok("text/javascript; charset=utf-8", EDITOR_CODEMIRROR_JS)
         }
@@ -2136,6 +2139,7 @@ fn write_pages_editor_site(output_path: &Path, html: String) -> Result<(), AppEr
         EDITOR_ANALYSIS_WORKER_JS,
     )?;
     write_text_asset(output_dir, "editor_boot.js", EDITOR_BOOT_JS)?;
+    write_text_asset(output_dir, "editor_icons.js", EDITOR_ICONS_JS)?;
     write_text_asset(output_dir, "editor_codemirror.js", EDITOR_CODEMIRROR_JS)?;
     write_text_asset(output_dir, "editor_dom.js", EDITOR_DOM_JS)?;
     write_text_asset(output_dir, "editor_workspace.js", &editor_workspace_js())?;
@@ -3296,16 +3300,16 @@ mod tests {
     }
 
     fn source_outline_icon_names() -> HashSet<String> {
-        let marker = "  const icons = {\n";
-        let start = EDITOR_SOURCE_JS
+        let marker = "  const EDITOR_ICON_GEOMETRY = Object.freeze({\n";
+        let start = EDITOR_ICONS_JS
             .find(marker)
-            .expect("find outline icon registry")
+            .expect("find shared editor icon registry")
             + marker.len();
-        let end = EDITOR_SOURCE_JS[start..]
-            .find("\n  };\n  const paths")
+        let end = EDITOR_ICONS_JS[start..]
+            .find("\n  });")
             .map(|offset| start + offset)
-            .expect("find outline icon registry end");
-        EDITOR_SOURCE_JS[start..end]
+            .expect("find shared editor icon registry end");
+        EDITOR_ICONS_JS[start..end]
             .lines()
             .filter_map(|line| {
                 let trimmed = line.trim();
@@ -4891,7 +4895,7 @@ levels demo of push3 {
         assert!(!EDITOR_HTML.contains(r#"id="psImportConvertButton""#));
         assert!(!EDITOR_DOM_JS.contains("psImportConvertButton"));
         assert!(!EDITOR_JS.contains("Generate .puzzle translation"));
-        assert!(EDITOR_HTML.contains("lucide-file-plus-icon lucide-file-plus"));
+        assert!(EDITOR_HTML.contains(r#"data-editor-icon="file-plus""#));
         assert!(EDITOR_HTML.contains("ps-import-output-actions"));
         assert!(EDITOR_IMPORT_EXPORT_JS.contains("function resetPuzzleScriptImportConversion()"));
         assert!(
@@ -5870,7 +5874,7 @@ levels demo of push3 {
     #[test]
     fn preview_edit_opens_runtime_current_level() {
         assert!(EDITOR_HTML.contains(r#"id="previewEditButton""#));
-        assert!(EDITOR_HTML.contains("lucide-pencil"));
+        assert!(EDITOR_HTML.contains(r#"data-editor-icon="pencil""#));
         assert!(EDITOR_DOM_JS.contains("const previewEditButton = document.querySelector"));
         assert!(EDITOR_JS.contains("function currentPreviewRuntimeLevelIndex("));
         assert!(EDITOR_JS.contains("function currentLevel3dSourceLocationForIndex("));
@@ -5895,7 +5899,7 @@ levels demo of push3 {
         assert!(
             EDITOR_HTML.contains(r#"class="pane-header-icon-button preview-debug-toggle-button""#)
         );
-        assert!(EDITOR_HTML.contains("lucide lucide-bug-icon lucide-bug"));
+        assert!(EDITOR_HTML.contains(r#"data-editor-icon="bug""#));
         assert!(
             EDITOR_HTML
                 .contains(r#"id="previewDebugControls" class="preview-debug-controls" hidden"#)
@@ -5933,10 +5937,12 @@ levels demo of push3 {
         assert!(EDITOR_WORKBENCH_JS.contains("let maximizedWorkPaneId = \"\";"));
         assert!(EDITOR_WORKBENCH_JS.contains("function toggleWorkPaneMaximized(paneId)"));
         assert!(EDITOR_WORKBENCH_JS.contains("function isPaneDisplayed(paneId)"));
-        assert!(EDITOR_HTML.contains("lucide-maximize-icon lucide-maximize"));
-        assert!(EDITOR_WORKBENCH_JS.contains("lucide-maximize-icon lucide-maximize"));
-        assert!(!EDITOR_WORKBENCH_JS.contains("lucide-maximize-2-icon lucide-maximize-2"));
-        assert!(EDITOR_WORKBENCH_JS.contains("<path d=\"M8 3H5a2 2 0 0 0-2 2v3\"></path>"));
+        assert!(EDITOR_HTML.contains(r#"data-editor-icon="maximize""#));
+        assert!(
+            EDITOR_WORKBENCH_JS
+                .contains("return editorIconSvg(isRestore ? \"minimize\" : \"maximize\");")
+        );
+        assert!(EDITOR_ICONS_JS.contains(r#""maximize": `"#));
         assert!(EDITOR_WORKBENCH_JS.contains("return [maximizedWorkPaneId];"));
         assert!(
             EDITOR_WORKBENCH_JS
@@ -5979,11 +5985,7 @@ levels demo of push3 {
         assert!(EDITOR_SOURCE_JS.contains("chevron.dataset.sourceOutlineToggle = item.id;"));
         assert!(EDITOR_SOURCE_JS.contains("\"ArrowRight\", \"ArrowLeft\""));
         assert!(EDITOR_SOURCE_JS.contains("kind.innerHTML = sourceOutlineKindIconSvg(item.kind);"));
-        assert!(
-            EDITOR_SOURCE_JS.contains(
-                "class=\"source-outline-icon lucide lucide-${name}-icon lucide-${name}\""
-            )
-        );
+        assert!(EDITOR_SOURCE_JS.contains("editorIconSvg(sourceOutlineKindIconName(kind)"));
         assert!(!EDITOR_SOURCE_JS.contains("function sourceOutlineKindInitial(kind)"));
         assert!(
             !EDITOR_SOURCE_JS.contains("kind.textContent = sourceOutlineKindInitial(item.kind);")
@@ -6027,15 +6029,6 @@ levels demo of push3 {
         assert!(
             missing_icons.is_empty(),
             "source outline icon mapping references missing SVG definitions: {missing_icons:?}"
-        );
-
-        let unused_icons = icon_names
-            .difference(&used_icons)
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        assert!(
-            unused_icons.is_empty(),
-            "source outline SVG definitions are not reachable from kind mapping: {unused_icons:?}"
         );
 
         assert_eq!(kind_icons.get("puzzle").map(String::as_str), Some("puzzle"));
@@ -6092,6 +6085,40 @@ levels demo of push3 {
             kind_icons.get("screen").map(String::as_str),
             Some("panels-top-left")
         );
+    }
+
+    #[test]
+    fn editor_ui_icons_use_one_shared_lucide_geometry_registry() {
+        assert!(EDITOR_ICONS_JS.contains("lucide-static@1.24.0"));
+        assert!(EDITOR_ICONS_JS.contains("const EDITOR_ICON_GEOMETRY = Object.freeze({"));
+        assert!(EDITOR_ICONS_JS.contains("throw new Error(`Unknown editor Lucide icon: ${name}`)"));
+        assert_eq!(
+            EDITOR_HTML.matches("<path").count(),
+            1,
+            "only the brand mark stays inline"
+        );
+        assert!(EDITOR_HTML.contains(r#"<script src="editor_icons.js"></script>"#));
+        assert!(EDITOR_ICONS_JS.contains("hydrateEditorIcons();"));
+        assert!(
+            EDITOR_HTML.find("editor_icons.js").unwrap()
+                < EDITOR_HTML.find("editor_codemirror.js").unwrap()
+        );
+        for source in [
+            EDITOR_CODEMIRROR_SOURCE_JS,
+            EDITOR_WORKSPACE_JS,
+            EDITOR_SOURCE_JS,
+            EDITOR_LEVEL3D_JS,
+            EDITOR_WORKBENCH_JS,
+            EDITOR_JS,
+            EDITOR_SPRITE_JS,
+            EDITOR_SPRITE3D_JS,
+            EDITOR_SOUNDS_JS,
+        ] {
+            assert!(
+                !source.contains("<svg"),
+                "editor UI geometry must stay in editor_icons.js"
+            );
+        }
     }
 
     #[test]
@@ -6653,10 +6680,8 @@ move
         assert!(EDITOR_HTML.contains(r#"id="spriteInsertButton""#));
         assert!(EDITOR_HTML.contains(r#"id="spriteUpdateButton""#));
         assert!(!EDITOR_HTML.contains("duplicateSpriteButton"));
-        assert!(EDITOR_HTML.contains("lucide lucide-image-plus-icon lucide-image-plus"));
-        assert!(
-            EDITOR_HTML.contains("lucide lucide-file-plus-corner-icon lucide-file-plus-corner")
-        );
+        assert!(EDITOR_HTML.contains(r#"data-editor-icon="image-plus""#));
+        assert!(EDITOR_HTML.contains(r#"data-editor-icon="file-plus-corner""#));
         assert!(
             EDITOR_DOM_JS
                 .contains("const newSpriteButton = document.querySelector(\"#newSpriteButton\");")
@@ -6668,7 +6693,9 @@ move
             EDITOR_SPRITE_JS
                 .contains("canReplaceCurrentSpriteDefinition(source) ? \"duplicate\" : \"insert\"")
         );
-        assert!(EDITOR_SPRITE_JS.contains("nameRow.append(labeledControl(\"Sprite for\""));
+        assert!(EDITOR_SPRITE_JS.contains(
+            "labeledControl(\"Sprite for\", controls.nameInput, \"sprite-name-control\"),\n    labeledControl(\"Size\", sizeEditor, \"sprite-size-control\"),\n    sourceActions,"
+        ));
         assert!(EDITOR_SPRITE_JS.contains(
             "sourceActions.append(controls.newButton, controls.addButton, controls.saveButton);"
         ));
@@ -6829,6 +6856,37 @@ move
         assert!(EDITOR_SPRITE3D_JS.contains(
             "if (rawIndex === undefined) {\n    return;\n  }\n  event.preventDefault();"
         ));
+    }
+
+    #[test]
+    fn sprite_palette_uses_dot_for_eraser_and_zero_through_nine_for_colors() {
+        assert!(
+            EDITOR_COMMANDS_JS
+                .contains(r#"shortcut: { key: spriteExportCharForColorIndex(null) },"#)
+        );
+        assert!(EDITOR_COMMANDS_JS.contains(r#"for (let index = 0; index < 10; index += 1) {"#));
+        assert!(EDITOR_COMMANDS_JS.contains(r#"shortcut: { key: SPRITE_COLOR_TOKENS[index] },"#));
+        assert!(EDITOR_COMMANDS_JS.contains("shortcutOnly: true,"));
+        assert!(EDITOR_JS.contains(r#"if (element?.dataset?.shortcutOnly === "true") {"#));
+        assert!(EDITOR_JS.contains("if (!text && !shortcut) {"));
+        assert!(
+            !EDITOR_SPRITE_JS.contains(r#"setEditorShortcutHint(leadingControl, { key: "b" });"#)
+        );
+        assert!(!EDITOR_SPRITE_JS.contains(r#"leadingControl.dataset.tooltip = "Brush";"#));
+        assert!(
+            !EDITOR_SPRITE_JS
+                .contains(r#"if (key === "b") activateSpriteBrushShortcut(dimension);"#)
+        );
+        assert!(!EDITOR_SPRITE_JS.contains("selectSpritePaletteShortcut"));
+        assert!(!EDITOR_SPRITE_JS.contains(
+            r#"button.title = displayName ? `Paint ${displayName} (${entry.color})` : `Paint ${entry.color}`;"#
+        ));
+    }
+
+    #[test]
+    fn sprite_brush_size_omits_px_unit() {
+        assert!(!EDITOR_HTML.contains("sprite-brush-size-unit"));
+        assert!(!EDITOR_CSS.contains(".sprite-brush-size-unit"));
     }
 
     #[test]
@@ -7093,12 +7151,16 @@ move
         );
         assert!(
             EDITOR_SPRITE_JS
-                .contains("root.append(nameRow, controls.shapeField, geometry, animation);")
+                .contains("root.append(nameRow, geometry, animation);")
         );
-        assert!(EDITOR_CSS.contains(".sprite-editor-name-row {\n  flex: 0 1 330px;"));
+        assert!(EDITOR_SPRITE_JS.contains("currentWrap.append(spriteShapeField);"));
+        assert!(EDITOR_SPRITE3D_JS.contains("currentWrap.append(sprite3dShapeField);"));
+        assert_eq!(EDITOR_SPRITE_JS.matches("input.placeholder = \"shape\";").count(), 2);
+        assert!(!EDITOR_SPRITE_JS.contains("sprite-shape-bind-label"));
+        assert!(EDITOR_CSS.contains(".sprite-editor-name-row {\n  flex: 0 1 470px;"));
         assert!(
             EDITOR_CSS.contains(
-                ".sprite-editor-upper-controls > .sprite-shape-field {\n  flex: 0 1 200px;"
+                ".sprite-current-color-wrap > .sprite-shape-field {\n  flex: 0 0 auto;"
             )
         );
         assert!(EDITOR_SPRITE3D_JS.contains("function newSprite3dDraft()"));
@@ -7112,12 +7174,23 @@ move
 
     #[test]
     fn sprite_size_inputs_refresh_the_preview_while_editing() {
+        assert!(EDITOR_HTML.contains(r#"id="spriteWidthInput" type="number""#));
+        assert!(EDITOR_HTML.contains(r#"id="spriteHeightInput" type="number""#));
+        assert!(EDITOR_SPRITE_JS.contains("function bindSpriteDimensionInput(input, axis)"));
         assert!(EDITOR_SPRITE_JS.contains(
-            "spriteSizeInput.addEventListener(\"input\", () => {\n  if (spriteSizeInput.validity.valid && spriteSizeInput.value !== \"\") {\n    updateSpriteSize(spriteSizeInput.value);"
+            "bindSpriteDimensionInput(spriteWidthInput, \"width\");\nbindSpriteDimensionInput(spriteHeightInput, \"height\");"
         ));
+        assert!(EDITOR_SPRITE3D_JS.contains("function bindSprite3dDimensionInput(input, axis)"));
         assert!(EDITOR_SPRITE3D_JS.contains(
-            "sprite3dSizeInput?.addEventListener(\"input\", () => {\n  if (sprite3dSizeInput.validity.valid && sprite3dSizeInput.value !== \"\") {\n    updateSprite3dSize(sprite3dSizeInput.value);"
+            "bindSprite3dDimensionInput(sprite3dWidthInput, \"width\");\nbindSprite3dDimensionInput(sprite3dHeightInput, \"height\");\nbindSprite3dDimensionInput(sprite3dDepthInput, \"depth\");"
         ));
+        assert!(EDITOR_SPRITE_JS.contains("sizeBindButton.innerHTML = spriteLucideIconSvg(\"link-2\");"));
+        assert!(EDITOR_SPRITE_JS.contains("sprite.sizeBound = !sprite.sizeBound;"));
+        assert!(EDITOR_SPRITE_JS.contains("sprite3d.sizeBound = !sprite3d.sizeBound;"));
+        assert!(EDITOR_CSS.contains(
+            ".sprite-editor-name-row .sprite-size-control .sprite-extent-inputs input,\n.sprite-editor-name-row .sprite-size-control .sprite3d-extent-inputs input {\n  width: 24px;"
+        ));
+        assert!(EDITOR_CSS.contains("  border: 0;\n  border-radius: 0;\n  background: transparent;"));
     }
 
     #[test]
@@ -7138,19 +7211,14 @@ move
         assert!(EDITOR_SPRITE_JS.contains("let spriteBrushSizePx = 1;"));
         assert!(EDITOR_HTML.contains(r#"id="spriteBrushSizeInput" class="sprite-brush-size-input" type="number" min="1" max="64" step="1""#));
         assert!(EDITOR_HTML.contains(
-            r#"xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="sprite-marker-icon lucide lucide-highlighter-icon lucide-highlighter""#
+            r#"data-editor-icon="highlighter" class="sprite-marker-icon""#
         ));
-        assert!(EDITOR_HTML.contains(r#"<path d="m9 11-6 6v3h9l3-3"></path>"#));
-        assert!(EDITOR_HTML.contains(
-            r#"<path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"></path>"#
-        ));
-        assert!(!EDITOR_HTML.contains(r#"<path d="m14 4 6 6"></path>"#));
-        assert!(!EDITOR_HTML.contains(r#"<path d="m5 17 4 4"></path>"#));
+        assert!(EDITOR_ICONS_JS.contains(r#""highlighter": `"#));
         assert!(!EDITOR_HTML.contains("data-sprite-brush-preset"));
         assert!(EDITOR_SPRITE_JS.contains(
             "if (spriteBrushSizePx === 1) {\n    const index = spriteCellIndexFromPoint(point);\n    return index >= 0 ? [index] : [];\n  }"
         ));
-        assert!(EDITOR_SPRITE_JS.contains("return Math.min(sprite.size, spriteBrushSizePx);"));
+        assert!(EDITOR_SPRITE_JS.contains("return Math.min(Math.max(sprite.width, sprite.height), spriteBrushSizePx);"));
         assert!(EDITOR_SPRITE_JS.contains("return Math.min(size, spriteBrushSizePx);"));
         assert!(EDITOR_SPRITE_JS.contains("function renderSpriteCellsAtIndices(indices)"));
         assert!(EDITOR_SPRITE_JS.contains("finishSpritePaintMutation(changedIndices);"));
@@ -7254,8 +7322,8 @@ move
         assert!(EDITOR_CSS.contains(".sprite-editor-toolbar {\n  align-items: flex-start;\n  flex-direction: column;\n  flex-wrap: nowrap;\n  gap: 10px;"));
         assert!(EDITOR_CSS.contains(".sprite-toolbar-context-row {\n  gap: 10px;"));
         assert!(EDITOR_CSS.contains(".sprite-toolbar-operation-row {\n  gap: 12px;"));
-        assert!(EDITOR_HTML.contains("lucide lucide-square-icon lucide-square"));
-        assert!(EDITOR_HTML.contains("lucide lucide-box-icon lucide-box"));
+        assert!(EDITOR_HTML.contains(r#"data-editor-icon="square""#));
+        assert!(EDITOR_HTML.contains(r#"data-editor-icon="box""#));
         assert!(!EDITOR_HTML.contains("sprite3d-scope-toggle-label"));
         assert!(
             EDITOR_CSS
@@ -7313,7 +7381,7 @@ move
         ));
         assert!(
             EDITOR_CSS
-                .contains(".sprite-editor-name-row {\n  flex: 0 1 330px;\n  flex-wrap: nowrap;")
+                .contains(".sprite-editor-name-row {\n  flex: 0 1 470px;\n  flex-wrap: nowrap;")
         );
         assert!(
             EDITOR_CSS.contains(
@@ -7346,22 +7414,26 @@ move
         let controls_3d = EDITOR_HTML[..palette_3d]
             .rfind(r#"<div class="sprite-controls">"#)
             .expect("3D sprite controls");
-        let depth_state_3d = EDITOR_HTML
-            .find(r#"id="sprite3dDepthInput" type="hidden""#)
-            .expect("3D depth state");
-        assert!(controls_3d < depth_state_3d);
-        assert!(depth_state_3d < palette_3d);
-        assert!(
-            EDITOR_HTML[controls_3d..depth_state_3d]
-                .ends_with("              </div>\n              <input ")
-        );
+        let width_input_3d = EDITOR_HTML
+            .find(r#"id="sprite3dWidthInput" type="number""#)
+            .expect("3D width input");
+        let height_input_3d = EDITOR_HTML
+            .find(r#"id="sprite3dHeightInput" type="number""#)
+            .expect("3D height input");
+        let depth_input_3d = EDITOR_HTML
+            .find(r#"id="sprite3dDepthInput" type="number""#)
+            .expect("3D depth input");
+        assert!(controls_3d < width_input_3d);
+        assert!(width_input_3d < height_input_3d);
+        assert!(height_input_3d < depth_input_3d);
+        assert!(depth_input_3d < palette_3d);
         assert!(toolbar_2d < source_2d);
         assert!(toolbar_3d < source_3d);
         assert!(EDITOR_HTML.contains(
             r#"id="sprite3dUpdateButton" class="source-action-button sprite-update-source-button""#
         ));
         assert!(EDITOR_CSS.contains(".sprite-editor-source-actions .source-action-button {\n  width: var(--icon-button-size);"));
-        assert!(EDITOR_CSS.contains(".sprite-controls .sprite-shape-name-input {"));
+        assert!(EDITOR_CSS.contains(".sprite-builder .sprite-shape-name-input {"));
         assert!(EDITOR_CSS.contains("font: inherit;\n  font-size: 13px;\n  font-weight: 800;"));
         let board_3d = EDITOR_HTML
             .find(r#"id="sprite3dSliceBoard""#)
@@ -7396,16 +7468,46 @@ move
 
     #[test]
     fn sprite3d_editor_accepts_depth_one_and_animation_frames() {
-        assert!(EDITOR_HTML.contains(r#"id="sprite3dDepthInput" type="hidden""#));
+        assert!(EDITOR_HTML.contains(r#"id="sprite3dWidthInput" type="number""#));
+        assert!(EDITOR_HTML.contains(r#"id="sprite3dHeightInput" type="number""#));
+        assert!(EDITOR_HTML.contains(r#"id="sprite3dDepthInput" type="number""#));
         assert!(
-            EDITOR_SPRITE3D_JS.contains("return sprite3d.size * sprite3d.size * sprite3d.depth;")
+            EDITOR_SPRITE3D_JS.contains("return sprite3d.width * sprite3d.height * sprite3d.depth;")
         );
-        assert!(EDITOR_SPRITE3D_JS.contains("if (width < 1 || depth < 1 || width !== height"));
+        assert!(EDITOR_SPRITE3D_JS.contains("if (width < 1 || height < 1 || depth < 1"));
+        assert!(!EDITOR_SPRITE3D_JS.contains("width !== height"));
         assert!(EDITOR_SPRITE3D_JS.contains("sprite3d.animationMode = loaded.frames.length > 1"));
         assert!(EDITOR_SPRITE3D_JS.contains("function setSprite3dAnimationFrame(index)"));
         assert!(EDITOR_SPRITE3D_JS.contains(
             "durationMs: sprite3d.animationMode ? normalizedSprite3dAnimationDuration() : null"
         ));
+    }
+
+    #[test]
+    fn sprite3d_size_and_scale_remap_all_frames_with_explicit_dimensions() {
+        assert!(EDITOR_SPRITE3D_JS.contains(
+            "function remapSprite3dFrames(nextExtent, sourceCoordinates)"
+        ));
+        assert!(EDITOR_SPRITE3D_JS.contains(
+            "sprite3d.frames = frames.map(remap);"
+        ));
+        assert!(EDITOR_SPRITE3D_JS.contains(
+            "height: axis === \"height\" ? nextValue : sprite3d.height,"
+        ));
+        assert!(EDITOR_SPRITE3D_JS.contains(
+            "height: sprite3d.height * factor,"
+        ));
+        assert!(EDITOR_SPRITE3D_JS.contains(
+            "height: sprite3d.height / factor,"
+        ));
+        assert!(EDITOR_SPRITE3D_JS.contains(
+            "size: Math.max(sprite3d.width, sprite3d.height, sprite3d.depth),"
+        ));
+        assert!(EDITOR_JS.contains(
+            "sprite3d.slice = Math.max(0, Math.min(sprite3dAxisSize() - 1"
+        ));
+        assert!(!EDITOR_SPRITE3D_JS.contains("sprite3d.size ="));
+        assert!(!EDITOR_SPRITE3D_JS.contains("sprite3d.size *"));
     }
 
     #[test]

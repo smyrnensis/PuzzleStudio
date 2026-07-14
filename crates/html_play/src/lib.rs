@@ -548,10 +548,10 @@ levels default of board {
         assert!(RENDERER_JS.contains("const staticItems = [];"));
         assert!(RENDERER_JS.contains("const animatedItems = [];"));
         assert!(RENDERER_JS.contains("let order = 0;"));
-        assert!(RENDERER_JS.contains("layerOrder: Number(layer.layer) || 0,"));
+        assert!(RENDERER_JS.contains("layerOrder: this.spriteRenderPriority(layer),"));
         assert!(!RENDERER_JS.contains("canvasSurfaceItemForLayer("));
         assert!(RENDERER_JS.contains(
-            "const compare = (a, b) => a.layerOrder - b.layerOrder || a.order - b.order;"
+            "const compare = (a, b) => a.cellOrder - b.cellOrder || a.layerOrder - b.layerOrder || a.order - b.order;"
         ));
         assert!(
             RENDERER_JS
@@ -1380,7 +1380,7 @@ scene playing {
         ));
         assert!(PUZZLE3_APP_JS.contains("modelComponentPreview: {"));
         assert!(PUZZLE3_APP_JS.contains("if (editorModelComponentPreview)"));
-        assert!(PUZZLE3_APP_JS.contains("mergePuzzle3PreviewSettings"));
+        assert!(PUZZLE3_APP_JS.contains("mergePuzzle3PreviewRender"));
         assert!(
             PUZZLE3_APP_JS
                 .contains("applyPuzzle3PreviewResources(next, update.resources || update)")
@@ -1393,7 +1393,7 @@ scene playing {
         assert!(PUZZLE3_APP_JS.contains("next.levels[levelIndex]"));
         assert!(APP_JS.contains("zoom: view.zoom,"));
         assert!(PUZZLE3_APP_JS.contains("zoom: update.camera.zoom ?? update.view?.zoom,"));
-        assert!(PUZZLE3_APP_JS.contains("next.settings = mergePuzzle3PreviewSettings"));
+        assert!(PUZZLE3_APP_JS.contains("next.render = mergePuzzle3PreviewRender"));
         assert!(PUZZLE3_APP_JS.contains(r#"coordinateSpace: "canvas-css-px""#));
         assert!(PUZZLE3_APP_JS.contains(
             "const target = source?.target || source?.origin || modelCenterForSize(size);"
@@ -1873,7 +1873,7 @@ text level.title
         assert!(PUZZLE3_APP_JS.contains("applyPixelatePostprocess();"));
         assert!(PUZZLE3_APP_JS.contains("function pixelateSettings()"));
         assert!(PUZZLE3_APP_JS.contains(
-            "const raw = snapshot.settings?.pixelate ?? snapshot.settings?.pixel ?? false;"
+            "const raw = snapshot.render.pixelate;"
         ));
         assert!(PUZZLE3_APP_JS.contains("function applyPixelatePostprocess()"));
         assert!(PUZZLE3_APP_JS.contains("bufferCtx.imageSmoothingEnabled = settings.smoothing;"));
@@ -4208,7 +4208,10 @@ levels main of main {
         let playing: serde_json::Value = serde_json::from_str(&playing).unwrap();
 
         assert_eq!(playing["currentScene"], "playing");
-        assert_eq!(playing["scene"]["settings"]["render"]["cellSize"], 40);
+        assert_eq!(
+            playing["scene"]["settings"]["render"],
+            serde_json::json!({})
+        );
         assert_eq!(playing["scene"]["settings"]["inputBuffer"]["minWaitMs"], 50);
         assert_eq!(
             playing["scene"]["settings"]["animation"]["tween"]["intervalMs"],
@@ -4911,8 +4914,8 @@ levels default of cube {
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("x: (voxel.x + 0.5 - size.width / 2) * step"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("y: (voxel.y + 0.5 - size.depth / 2) * step"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("z: (voxel.z + 0.5 - size.height / 2) * step"));
-        assert!(PUZZLE3_THREE_RENDERER_JS.contains("const layerY = object.layer * 0.08;"));
-        assert!(PUZZLE3_THREE_RENDERER_JS.contains("y: base.y + layerY + local.z"));
+        assert!(!PUZZLE3_THREE_RENDERER_JS.contains("const layerY = object.layer * 0.08;"));
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("y: base.y + local.z"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("z: base.z - local.y"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("function viewportRanges(frame)"));
         assert!(

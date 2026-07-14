@@ -1838,7 +1838,7 @@ fn selector_object_positions3(
                 let position = Coord3::new(x, y, z);
                 if objects
                     .iter()
-                    .any(|object| state.has_object(game, position, *object))
+                    .any(|object| state.has_object_at(game, position, *object))
                     && !positions.contains(&position)
                 {
                     positions.push(position);
@@ -1882,14 +1882,16 @@ fn same_cell_all_objects_on_score3(
     game: &CompiledGame3,
     state: &State3,
     subject: ObjectId3,
-    cover_pattern: &puzzle_grid3d::Pattern3,
+    cover_pattern: &puzzle_grid3d::GridPattern<3>,
 ) -> Option<i64> {
     let cells = cover_pattern.cells();
     let [cell] = cells.as_slice() else {
         return None;
     };
-    if cell.offset != puzzle_grid3d::Delta3::ZERO
-        || !cell.require_objects.contains(&subject)
+    if !matches!(
+        &cell.offset,
+        puzzle_grid3d::Offset3::Fixed { delta } if delta.axes() == [0, 0, 0]
+    ) || !cell.require_objects.contains(&subject)
         || !cell.require_object_sets.is_empty()
         || !cell.forbid_objects.is_empty()
         || !cell.require_mark.is_empty()
@@ -1917,7 +1919,7 @@ fn same_cell_all_objects_on_score3(
             .filter(|position| {
                 !covers
                     .iter()
-                    .any(|cover| state.has_object(game, *position, *cover))
+                    .any(|cover| state.has_object_at(game, *position, *cover))
             })
             .map(|position| {
                 cover_positions

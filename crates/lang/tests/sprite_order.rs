@@ -56,8 +56,18 @@ Box
     );
 
     let loaded = parse_game2d(&source).expect("explicit sprite order");
+    let canonical = parse_game2d(&game_with_slots(
+        r#"order {
+priority = down right
+Floor
+merge { Player; Goal }
+Box
+}"#,
+    ))
+    .expect("canonical merge node");
 
     assert_eq!(loaded.visuals.order.direction_priority, ["down", "right"]);
+    assert_eq!(loaded.visuals.order, canonical.visuals.order);
     assert_eq!(
         loaded.visuals.order.priorities,
         [

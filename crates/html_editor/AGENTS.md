@@ -5,6 +5,14 @@ highlighting integration, workspace behavior, and editor-owned layout.
 
 ## Generated Output
 
+`static/renderer.js`, `static/renderer.css`, and
+`static/puzzle3_visual_core.js` are generated Tauri `frontendDist` copies. Their
+only source owners are the same-named files under `../html_play/static/`. Never
+edit the editor copies directly. Run `tools/sync_static_assets.sh` to regenerate
+them, or `tools/sync_static_assets.sh --check` to verify freshness. Adding a new
+shared desktop distribution asset requires adding its mapping only to that sync
+script; freshness and desktop-boundary checks consume the script's check mode.
+
 `static/editor_codemirror.js` is generated from `web/src/editor_codemirror.js`
 and the locked npm dependencies under `web/`. Do not edit the bundle directly.
 Install dependencies with `npm ci` in `crates/html_editor/web`, then regenerate
@@ -45,11 +53,15 @@ layout, spacing, rendering, and first-load visual behavior.
 
 ## Editor UI Icons
 
-Use Lucide for general editor UI icons. Copy inline SVG from the official Lucide
-source, preserving its `viewBox`, stroke attributes, and path geometry. If
-Lucide has no semantically appropriate icon, use a clearly named custom icon
-without a `lucide-*` class. Inline SVG delivery does not require the Lucide
-runtime library.
+Use Lucide for general editor UI icons. `static/editor_icons.js` is the single
+owner of Lucide SVG geometry. HTML uses `data-editor-icon` placeholders and
+JavaScript consumers call the registry helpers; do not copy SVG paths into
+feature files. Feature owners still own the semantic mapping from their state or
+action to an icon name. Missing registry names must fail visibly rather than
+falling back to another icon.
+
+Keep brand marks, favicons, CSS patterns, game-authored SVG assets, and generated
+`html_play` copies outside this UI icon registry.
 
 ## Editor Boundaries
 

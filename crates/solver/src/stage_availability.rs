@@ -190,7 +190,9 @@ mod tests {
     }
 
     fn fixed(dx: i16, dy: i16) -> Offset {
-        Offset::Fixed { dx, dy }
+        Offset::Fixed {
+            delta: [dx, dy].into(),
+        }
     }
 
     fn cell(require_objects: Vec<ObjectId>) -> MatchCell {

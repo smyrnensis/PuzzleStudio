@@ -1,5 +1,5 @@
 fn parse_sounds_block(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     sounds: &mut SoundsDef,
 ) -> Result<usize, DiagnosticReport> {
@@ -73,7 +73,10 @@ fn apply_music_sound_node(
     let name = sound_node_name(node, "music")?;
     validate_qualified_identifier(name, &node.source_line, "music sounds name")?;
     if sounds.music.iter().any(|entry| entry.name == name) {
-        return Err(parse_error(&node.source_line, "duplicate music sounds name"));
+        return Err(parse_error(
+            &node.source_line,
+            "duplicate music sounds name",
+        ));
     }
     let seed = required_sound_setting(node, "seed")?;
     validate_sound_atom(seed, &node.source_line, "music seed")?;
@@ -163,15 +166,14 @@ fn optional_sound_setting<'a>(
     node: &'a authoring_grammar::AuthoringNode,
     key: &str,
 ) -> Result<Option<&'a str>, DiagnosticReport> {
-    let Some(row) = node
-        .definition_rows
-        .iter()
-        .find(|row| row.key == key)
-    else {
+    let Some(row) = node.definition_rows.iter().find(|row| row.key == key) else {
         return Ok(None);
     };
     row.single_value().map(Some).ok_or_else(|| {
-        parse_error(&row.source_line, "sound setting must have exactly one value")
+        parse_error(
+            &row.source_line,
+            "sound setting must have exactly one value",
+        )
     })
 }
 
@@ -201,7 +203,7 @@ enum ModelSoundTriggerKind {
     Move,
 }
 
-fn model_sounds_block_starts(lines: &[String], start: usize) -> bool {
+fn model_sounds_block_starts(lines: &[source::LogicalLine], start: usize) -> bool {
     lines.get(start + 1).is_some_and(|first| {
         matches!(
             split_header_tokens(first).as_slice(),
@@ -211,7 +213,7 @@ fn model_sounds_block_starts(lines: &[String], start: usize) -> bool {
 }
 
 fn parse_model_sounds_block(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     triggers: &mut Vec<ModelSoundTriggerSpec>,
     operation_sounds: &mut Vec<ModelOperationSoundSpec>,
@@ -248,7 +250,7 @@ fn parse_model_sounds_block(
                     kind,
                     selector: (*selector).to_string(),
                     sfx_name: (*name).to_string(),
-                    line: line.clone(),
+                    line: line.to_string(),
                 });
             }
             (_, Some(operation), [_, "->", "sfx", name]) if allow_operation_sounds => {

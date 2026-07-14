@@ -37,6 +37,19 @@ function solverCommandActive() {
   return currentPreviewMode === "solver" && solverPanel && !solverPanel.hidden && Boolean(levelSolutionPreview);
 }
 
+function spriteCommandActive() {
+  return Boolean(spritePaneShortcutDimension());
+}
+
+function selectSpriteCommandColor(index) {
+  const dimension = spritePaneShortcutDimension();
+  const entries = dimension === "3d" ? sprite3dPaletteEntries() : sprite.palette;
+  if (!dimension || (index !== null && (index < 0 || index >= entries.length))) return false;
+  if (dimension === "3d") selectSprite3dColor(index);
+  else selectSpriteColor(index);
+  return true;
+}
+
 function soundCommandKind(event) {
   const target = event?.target instanceof Element ? event.target : null;
   if (target?.closest("#soundsMusicPanel")) return "music";
@@ -180,6 +193,17 @@ const editorCommandDatabase = [
     elements: editorCommandElements("#solutionPrevButton"),
     available: solverCommandActive,
     run: () => (setSolutionStep(levelSolutionPreview.index - 1), true),
+  },
+  {
+    id: "sprite.palette.eraser",
+    group: "sprite",
+    label: "Eraser",
+    shortcut: { key: spriteExportCharForColorIndex(null) },
+    elements: editorCommandElements(
+      "#spritePalette .sprite-token-erase, #sprite3dPalette .sprite-token-erase",
+    ),
+    available: spriteCommandActive,
+    run: () => selectSpriteCommandColor(null),
   },
   {
     id: "solver.next",
@@ -327,6 +351,21 @@ for (let index = 0; index < 9; index += 1) {
   });
 }
 
+for (let index = 0; index < 10; index += 1) {
+  editorCommandDatabase.push({
+    id: `sprite.palette.${SPRITE_COLOR_TOKENS[index]}`,
+    group: "sprite",
+    label: `Paint color ${SPRITE_COLOR_TOKENS[index]}`,
+    shortcut: { key: SPRITE_COLOR_TOKENS[index] },
+    shortcutOnly: true,
+    elements: editorCommandElements(
+      `#spritePalette .sprite-color-swatch[data-color-index="${index}"], #sprite3dPalette .sprite-color-swatch[data-color-index="${index}"]`,
+    ),
+    available: spriteCommandActive,
+    run: () => selectSpriteCommandColor(index),
+  });
+}
+
 const editorCommandById = new Map(editorCommandDatabase.map((command) => [command.id, command]));
 
 function resolvedEditorCommandValue(command, key, element = null) {
@@ -356,6 +395,8 @@ function bindEditorCommandElement(element, command) {
   const shortcut = resolvedEditorCommandValue(command, "shortcut", element);
   element.dataset.editorCommand = command.id;
   element.dataset.tooltip = label;
+  if (command.shortcutOnly) element.dataset.shortcutOnly = "true";
+  else delete element.dataset.shortcutOnly;
   setEditorShortcutHint(element, shortcut);
   element.setAttribute("aria-keyshortcuts", editorCommandAriaShortcut(shortcut));
 }

@@ -19,6 +19,8 @@ pub(crate) enum AuthoringKind {
     ThemeConfig,
     AssetsConfig,
     SpritesConfig,
+    SpriteOrderConfig,
+    SpriteMergeConfig,
     SpriteConfig,
     LevelsConfig,
     LevelConfig,
@@ -30,6 +32,10 @@ pub(crate) enum AuthoringRowKind {
     ConstDeclaration,
     PersistentVarDeclaration,
     PersistentConstDeclaration,
+    ViewportFlickscreen,
+    ViewportZoomscreen,
+    ViewportSmoothscreen,
+    ViewportFocus,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,6 +48,7 @@ pub(crate) enum AuthoringBody {
 pub(crate) enum AuthoringContentKind {
     AssetsEntries,
     SpriteEntries,
+    SpriteOrderEntries,
     LevelEntries,
     Level3Entries,
     RuleStatements,
@@ -50,6 +57,7 @@ pub(crate) enum AuthoringContentKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AuthoringContentRowKind {
     AssetPath,
+    SpriteOrderPriority,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -322,6 +330,7 @@ pub(crate) struct AuthoringContentRow {
     pub(crate) kind: AuthoringContentRowKind,
     pub(crate) captures: Vec<AuthoringRowCapture>,
     pub(crate) source_line: String,
+    pub(crate) source_index: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -414,6 +423,7 @@ pub(crate) struct AuthoringNode {
     pub(crate) children: Vec<AuthoringNode>,
     pub(crate) content_rows: Vec<AuthoringContentRow>,
     pub(crate) source_line: String,
+    pub(crate) source_index: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -507,6 +517,44 @@ const ROOT_ROWS: &[RowSpec] = &[
         usage: "persistent const <name> = <literal>",
     },
 ];
+const VIEWPORT_SIZE_ROW_PARTS: &[RowPartSpec] = &[
+    row_keyword("flickscreen"),
+    row_rest("size", AuthoringSurfaceRole::Number),
+];
+const VIEWPORT_ZOOM_ROW_PARTS: &[RowPartSpec] = &[
+    row_keyword("zoomscreen"),
+    row_rest("size", AuthoringSurfaceRole::Number),
+];
+const VIEWPORT_SMOOTH_ROW_PARTS: &[RowPartSpec] = &[
+    row_keyword("smoothscreen"),
+    row_rest("size", AuthoringSurfaceRole::Number),
+];
+const VIEWPORT_FOCUS_ROW_PARTS: &[RowPartSpec] = &[
+    row_keyword("focus"),
+    row_slot("selector", AuthoringSurfaceRole::Object),
+];
+const PUZZLE_RENDER_VIEWPORT_ROWS: &[RowSpec] = &[
+    RowSpec {
+        kind: AuthoringRowKind::ViewportFlickscreen,
+        parts: VIEWPORT_SIZE_ROW_PARTS,
+        usage: "flickscreen <width> <depth> [height]",
+    },
+    RowSpec {
+        kind: AuthoringRowKind::ViewportZoomscreen,
+        parts: VIEWPORT_ZOOM_ROW_PARTS,
+        usage: "zoomscreen <width> <depth> [height]",
+    },
+    RowSpec {
+        kind: AuthoringRowKind::ViewportSmoothscreen,
+        parts: VIEWPORT_SMOOTH_ROW_PARTS,
+        usage: "smoothscreen <width> <depth> [height]",
+    },
+    RowSpec {
+        kind: AuthoringRowKind::ViewportFocus,
+        parts: VIEWPORT_FOCUS_ROW_PARTS,
+        usage: "focus <selector>",
+    },
+];
 const ASSETS_PATH_ROW_PARTS: &[RowPartSpec] = &[RowPartSpec::Slot {
     name: "path",
     role: AuthoringSurfaceRole::String,
@@ -516,6 +564,11 @@ const ASSETS_ENTRY_ROWS: &[ContentRowSpec] = &[ContentRowSpec {
     parts: ASSETS_PATH_ROW_PARTS,
     usage: "<string>",
 }];
+const SPRITE_ORDER_ENTRY_ROWS: &[ContentRowSpec] = &[ContentRowSpec {
+    kind: AuthoringContentRowKind::SpriteOrderPriority,
+    parts: &[row_rest("selectors", AuthoringSurfaceRole::Object)],
+    usage: "<object-or-slot...>",
+}];
 const CONTENT_SPECS: &[ContentSpec] = &[
     ContentSpec {
         kind: AuthoringContentKind::AssetsEntries,
@@ -524,6 +577,10 @@ const CONTENT_SPECS: &[ContentSpec] = &[
     ContentSpec {
         kind: AuthoringContentKind::SpriteEntries,
         syntax: ContentSyntax::Attachment(ContentAttachment::SpriteEntries),
+    },
+    ContentSpec {
+        kind: AuthoringContentKind::SpriteOrderEntries,
+        syntax: ContentSyntax::Rows(SPRITE_ORDER_ENTRY_ROWS),
     },
     ContentSpec {
         kind: AuthoringContentKind::LevelEntries,
@@ -547,6 +604,16 @@ const AUTHORING_SOURCE_BLOCK_SPECS: &[AuthoringSourceBlockSpec] = &[
     AuthoringSourceBlockSpec {
         surface: "sprite",
         content: None,
+        role: AuthoringBlockRole::Visuals,
+    },
+    AuthoringSourceBlockSpec {
+        surface: "order",
+        content: Some(AuthoringContentKind::SpriteOrderEntries),
+        role: AuthoringBlockRole::Visuals,
+    },
+    AuthoringSourceBlockSpec {
+        surface: "merge",
+        content: Some(AuthoringContentKind::SpriteOrderEntries),
         role: AuthoringBlockRole::Visuals,
     },
     AuthoringSourceBlockSpec {
@@ -616,12 +683,6 @@ const ROOT_DEFINITIONS: &[DefinitionSpec] = &[
     ),
 ];
 const PUZZLE_RENDER_CONFIG_DEFINITIONS: &[DefinitionSpec] = &[
-    DefinitionSpec::value_role(
-        "cell_size",
-        DefinitionValueSpec::One,
-        DefinitionValueSyntax::Number,
-        AuthoringSurfaceRole::Number,
-    ),
     DefinitionSpec::value_role(
         "tween",
         DefinitionValueSpec::One,
@@ -976,12 +1037,30 @@ const SPRITES_HEADER: HeaderSpec = HeaderSpec {
     usage: "sprites",
     arg_roles: NO_HEADER_ARGS,
 };
+const SPRITE_ORDER_HEADER: HeaderSpec = HeaderSpec {
+    min_args: 0,
+    max_args: 0,
+    usage: "order",
+    arg_roles: NO_HEADER_ARGS,
+};
+const SPRITE_MERGE_HEADER: HeaderSpec = HeaderSpec {
+    min_args: 0,
+    max_args: 0,
+    usage: "merge",
+    arg_roles: NO_HEADER_ARGS,
+};
 const SPRITE_HEADER: HeaderSpec = HeaderSpec {
     min_args: 0,
     max_args: 0,
     usage: "sprite",
     arg_roles: NO_HEADER_ARGS,
 };
+const SPRITE_ORDER_DEFINITIONS: &[DefinitionSpec] = &[DefinitionSpec::value_role(
+    "priority",
+    DefinitionValueSpec::Many,
+    DefinitionValueSyntax::Any,
+    AuthoringSurfaceRole::Literal,
+)];
 const LEVELS_HEADER: HeaderSpec = HeaderSpec {
     min_args: 0,
     max_args: 0,
@@ -1060,7 +1139,7 @@ pub(crate) const KIND_SPECS: &[KindSpec] = &[
         kind: AuthoringKind::PuzzleRenderViewportConfig,
         header: PUZZLE_RENDER_VIEWPORT_HEADER,
         definitions: NO_DEFINITIONS,
-        rows: NO_ROWS,
+        rows: PUZZLE_RENDER_VIEWPORT_ROWS,
         body: AuthoringBody::None,
         symbol_exports: NO_SYMBOL_EXPORTS,
         block_role: None,
@@ -1151,6 +1230,30 @@ pub(crate) const KIND_SPECS: &[KindSpec] = &[
         keyword_role: AuthoringSurfaceRole::Keyword,
         outline_policy: AuthoringOutlinePolicy::Visible,
         missing_close_message: "sprites missing closing brace",
+    },
+    KindSpec {
+        kind: AuthoringKind::SpriteOrderConfig,
+        header: SPRITE_ORDER_HEADER,
+        definitions: SPRITE_ORDER_DEFINITIONS,
+        rows: NO_ROWS,
+        body: AuthoringBody::Content(AuthoringContentKind::SpriteOrderEntries),
+        symbol_exports: NO_SYMBOL_EXPORTS,
+        block_role: Some(AuthoringBlockRole::Visuals),
+        keyword_role: AuthoringSurfaceRole::Keyword,
+        outline_policy: AuthoringOutlinePolicy::Visible,
+        missing_close_message: "order missing closing brace",
+    },
+    KindSpec {
+        kind: AuthoringKind::SpriteMergeConfig,
+        header: SPRITE_MERGE_HEADER,
+        definitions: NO_DEFINITIONS,
+        rows: NO_ROWS,
+        body: AuthoringBody::Content(AuthoringContentKind::SpriteOrderEntries),
+        symbol_exports: NO_SYMBOL_EXPORTS,
+        block_role: Some(AuthoringBlockRole::Visuals),
+        keyword_role: AuthoringSurfaceRole::Keyword,
+        outline_policy: AuthoringOutlinePolicy::Visible,
+        missing_close_message: "merge missing closing brace",
     },
     KindSpec {
         kind: AuthoringKind::SpriteConfig,
@@ -1250,6 +1353,16 @@ pub(crate) const PLACEMENT_SPECS: &[PlacementSpec] = &[
         parent: AuthoringKind::Root,
         surface: "sprites",
         child: AuthoringKind::SpritesConfig,
+    },
+    PlacementSpec {
+        parent: AuthoringKind::SpritesConfig,
+        surface: "order",
+        child: AuthoringKind::SpriteOrderConfig,
+    },
+    PlacementSpec {
+        parent: AuthoringKind::SpriteOrderConfig,
+        surface: "merge",
+        child: AuthoringKind::SpriteMergeConfig,
     },
     PlacementSpec {
         parent: AuthoringKind::SpritesConfig,
@@ -1871,7 +1984,7 @@ pub(crate) fn placed_authoring_kind(parent: AuthoringKind, surface: &str) -> Opt
 }
 
 pub(crate) fn parse_placed_authoring_node(
-    lines: &[String],
+    lines: &[crate::source::LogicalLine],
     start: usize,
     parent: AuthoringKind,
     missing_close_message: &str,
@@ -1879,19 +1992,22 @@ pub(crate) fn parse_placed_authoring_node(
     let line = &lines[start];
     let header = split_authoring_tokens(block_header_text(line));
     let Some(surface) = header.first().map(String::as_str) else {
-        return Err(DiagnosticReport::error_at_line("empty block header", line));
+        return Err(DiagnosticReport::error_at_line(
+            "empty block header",
+            line.as_ref(),
+        ));
     };
     let Some(kind) = placed_authoring_kind(parent, surface) else {
         return Err(DiagnosticReport::error_at_line(
             format!("unknown authoring directive {surface}"),
-            line,
+            line.as_ref(),
         ));
     };
     parse_authoring_node_with_kind(lines, start, kind, missing_close_message)
 }
 
 pub(crate) fn parse_authoring_node_with_kind(
-    lines: &[String],
+    lines: &[crate::source::LogicalLine],
     start: usize,
     kind: AuthoringKind,
     missing_close_message: &str,
@@ -1899,7 +2015,10 @@ pub(crate) fn parse_authoring_node_with_kind(
     let line = &lines[start];
     let header = split_authoring_tokens(block_header_text(line));
     let Some(surface) = header.first().map(String::as_str) else {
-        return Err(DiagnosticReport::error_at_line("empty block header", line));
+        return Err(DiagnosticReport::error_at_line(
+            "empty block header",
+            line.as_ref(),
+        ));
     };
     let mut node = AuthoringNode {
         kind,
@@ -1909,13 +2028,14 @@ pub(crate) fn parse_authoring_node_with_kind(
         rows: Vec::new(),
         children: Vec::new(),
         content_rows: Vec::new(),
-        source_line: line.clone(),
+        source_line: line.text.clone(),
+        source_index: start,
     };
 
     if !is_block_header_line(line) {
         return Err(DiagnosticReport::error_at_line(
             format!("{} must use block form", node.surface),
-            line,
+            line.as_ref(),
         ));
     }
 
@@ -1963,15 +2083,10 @@ pub(crate) fn parse_authoring_node_with_kind(
                 }
                 return Err(DiagnosticReport::error_at_line(
                     format!("unknown {} directive {}", node.surface, tokens[0]),
-                    line,
+                    line.as_ref(),
                 ));
             }
             AuthoringBody::Content(content) => {
-                if let Some(content_row) = parse_authoring_content_row(content, line)? {
-                    node.content_rows.push(content_row);
-                    i += 1;
-                    continue;
-                }
                 if let Some((definition, next_i)) =
                     parse_authoring_definition_block(kind, lines, i)?
                 {
@@ -1979,16 +2094,22 @@ pub(crate) fn parse_authoring_node_with_kind(
                     i = next_i;
                     continue;
                 }
+                if let Some(mut content_row) = parse_authoring_content_row(content, line)? {
+                    content_row.source_index = i;
+                    node.content_rows.push(content_row);
+                    i += 1;
+                    continue;
+                }
                 return Err(DiagnosticReport::error_at_line(
                     format!("unknown {} directive {}", node.surface, tokens[0]),
-                    line,
+                    line.as_ref(),
                 ));
             }
         }
     }
     Err(DiagnosticReport::error_at_line(
         missing_close_message,
-        &lines[start],
+        lines[start].as_ref(),
     ))
 }
 
@@ -1996,10 +2117,7 @@ pub(crate) fn parse_authoring_node_source(
     source: &str,
     kind: AuthoringKind,
 ) -> Result<AuthoringNode, DiagnosticReport> {
-    let lines = crate::source::logical_lines_with_locations(source)?
-        .into_iter()
-        .map(|line| line.text)
-        .collect::<Vec<_>>();
+    let lines = crate::source::logical_lines_with_locations(source)?;
     if lines.is_empty() {
         return Err(DiagnosticReport::error_at_line(
             "authoring node source is empty",
@@ -2013,7 +2131,7 @@ pub(crate) fn parse_authoring_node_source(
     } else {
         Err(DiagnosticReport::error_at_line(
             "authoring node source must contain one node",
-            &lines[next_i],
+            lines[next_i].as_ref(),
         ))
     }
 }
@@ -2080,6 +2198,7 @@ pub(crate) fn parse_authoring_content_row(
                 kind: spec.kind,
                 captures,
                 source_line: line.to_string(),
+                source_index: 0,
             }));
         }
     }
@@ -2198,6 +2317,11 @@ pub(crate) fn parse_authoring_definition_body(
     kind: AuthoringKind,
     lines: &[String],
 ) -> Result<Vec<AuthoringDefinitionRow>, DiagnosticReport> {
+    let lines = lines
+        .iter()
+        .enumerate()
+        .map(|(index, line)| crate::source::LogicalLine::new(line, index + 1))
+        .collect::<Vec<_>>();
     let mut rows = Vec::<AuthoringDefinitionRow>::new();
     let mut i = 0;
     while i < lines.len() {
@@ -2205,7 +2329,7 @@ pub(crate) fn parse_authoring_definition_body(
             i += 1;
             continue;
         }
-        if let Some((row, next_i)) = parse_authoring_definition_block(kind, lines, i)? {
+        if let Some((row, next_i)) = parse_authoring_definition_block(kind, &lines, i)? {
             rows.push(row);
             i = next_i;
             continue;
@@ -2215,7 +2339,7 @@ pub(crate) fn parse_authoring_definition_body(
                 "unknown {} property",
                 authoring_kind_spec(kind).header.usage
             ),
-            &lines[i],
+            lines[i].as_ref(),
         ));
     }
     Ok(rows)
@@ -2223,7 +2347,7 @@ pub(crate) fn parse_authoring_definition_body(
 
 pub(crate) fn parse_authoring_definition_block(
     kind: AuthoringKind,
-    lines: &[String],
+    lines: &[crate::source::LogicalLine],
     start: usize,
 ) -> Result<Option<(AuthoringDefinitionRow, usize)>, DiagnosticReport> {
     let line = &lines[start];
@@ -2254,7 +2378,7 @@ pub(crate) fn parse_authoring_definition_block(
         let mut multiline_values = Vec::<String>::new();
         while next_i < lines.len() && !starts_authoring_definition_block(kind, &lines[next_i]) {
             if !split_authoring_tokens(&lines[next_i]).is_empty() {
-                multiline_values.push(lines[next_i].clone());
+                multiline_values.push(lines[next_i].text.clone());
             }
             next_i += 1;
         }
@@ -2311,7 +2435,7 @@ pub(crate) fn parse_authoring_definition_row(
     kind: AuthoringKind,
     line: &str,
 ) -> Result<Option<AuthoringDefinitionRow>, DiagnosticReport> {
-    let lines = [line.to_string()];
+    let lines = [crate::source::LogicalLine::new(line, 1)];
     parse_authoring_definition_block(kind, &lines, 0).map(|parsed| parsed.map(|(row, _)| row))
 }
 
@@ -2471,6 +2595,14 @@ mod tests {
         parse_authoring_node_with_kind, parse_placed_authoring_node, placed_authoring_kind,
     };
 
+    fn logical_test_lines(lines: Vec<String>) -> Vec<crate::source::LogicalLine> {
+        lines
+            .into_iter()
+            .enumerate()
+            .map(|(index, line)| crate::source::LogicalLine::new(line, index + 1))
+            .collect()
+    }
+
     #[test]
     fn render_placement_is_data_driven() {
         assert_eq!(
@@ -2487,7 +2619,7 @@ mod tests {
         );
         assert_eq!(
             authoring_definition_surfaces(AuthoringKind::PuzzleRenderConfig),
-            vec!["cell_size", "tween", "tween_duration", "shade", "shadow"]
+            vec!["tween", "tween_duration", "shade", "shadow"]
         );
         assert_eq!(
             placed_authoring_kind(AuthoringKind::PuzzleRenderConfig, "camera"),
@@ -2547,6 +2679,7 @@ mod tests {
             "tween_duration = 90ms".to_string(),
             "}".to_string(),
         ];
+        let lines = logical_test_lines(lines);
         let (node, next_i) = parse_placed_authoring_node(
             &lines,
             0,
@@ -2575,6 +2708,7 @@ mod tests {
             "}".to_string(),
             "}".to_string(),
         ];
+        let lines = logical_test_lines(lines);
         let (node, _) = parse_placed_authoring_node(
             &lines,
             0,
@@ -2597,12 +2731,13 @@ mod tests {
     fn parses_equals_as_delimiter_outside_quotes() {
         let lines = vec![
             "render {".to_string(),
-            "cell_size= 64".to_string(),
+            "tween_duration= 64ms".to_string(),
             "grid {".to_string(),
             "type = \"all_cells\"".to_string(),
             "}".to_string(),
             "}".to_string(),
         ];
+        let lines = logical_test_lines(lines);
         let (node, _) = parse_placed_authoring_node(
             &lines,
             0,
@@ -2611,12 +2746,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(node.kind, AuthoringKind::PuzzleRenderConfig);
-        assert_eq!(node.definition_rows[0].key, "cell_size");
+        assert_eq!(node.definition_rows[0].key, "tween_duration");
         assert_eq!(
             node.definition_rows[0].op,
             Some(super::AuthoringDefinitionOp::Equals)
         );
-        assert_eq!(node.definition_rows[0].values, vec!["64"]);
+        assert_eq!(node.definition_rows[0].values, vec!["64ms"]);
         assert_eq!(node.children[0].kind, AuthoringKind::PuzzleRenderGridConfig);
         assert_eq!(node.children[0].definition_rows[0].key, "type");
         assert_eq!(
@@ -2639,6 +2774,7 @@ mod tests {
             "}".to_string(),
             "}".to_string(),
         ];
+        let lines = logical_test_lines(lines);
         let (node, _) = parse_placed_authoring_node(
             &lines,
             0,
@@ -2690,6 +2826,7 @@ mod tests {
             "\"sprites/player.png\"".to_string(),
             "}".to_string(),
         ];
+        let lines = logical_test_lines(lines);
         let (node, next_i) = parse_placed_authoring_node(
             &lines,
             0,
@@ -2814,6 +2951,7 @@ mod tests {
             "background_color = #123456".to_string(),
             "}".to_string(),
         ];
+        let lines = logical_test_lines(lines);
         let (node, next_i) = parse_placed_authoring_node(
             &lines,
             0,
@@ -2915,6 +3053,7 @@ mod tests {
             "preset = clean".to_string(),
             "}".to_string(),
         ];
+        let lines = logical_test_lines(lines);
         let error = parse_placed_authoring_node(
             &lines,
             0,
@@ -2929,6 +3068,7 @@ mod tests {
     #[test]
     fn rejects_whitespace_only_inline_node() {
         let lines = vec!["sfx effect seed=1".to_string()];
+        let lines = logical_test_lines(lines);
         let error =
             parse_authoring_node_with_kind(&lines, 0, AuthoringKind::SfxSoundConfig, "missing")
                 .unwrap_err()

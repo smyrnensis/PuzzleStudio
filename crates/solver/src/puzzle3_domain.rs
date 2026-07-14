@@ -2,7 +2,7 @@ use crate::domain::SearchDomain;
 use crate::stable_hash::{fnv_mix, fnv_seed};
 use crate::state_slicer::SolverStateSlicer;
 use puzzle_grid3d::{
-    CompiledGame3, InputId, ObjectId, RuleStep3, State3, TransitionError3, transition_program,
+    CompiledGame3, GridRuleStep, InputId, ObjectId, State3, TransitionError3, transition_program,
 };
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -98,7 +98,7 @@ impl Puzzle3Domain {
         &self.game
     }
 
-    pub fn rules(&self) -> &[RuleStep3] {
+    pub fn rules(&self) -> &[GridRuleStep<3>] {
         self.game.program()
     }
 
@@ -256,7 +256,7 @@ PD
             .iter()
             .find_map(|(object, label)| (label == "Dust").then_some(*object))
             .unwrap();
-        assert!(initial.has_object(&parsed.game, Coord3::new(1, 0, 0), dust));
+        assert!(initial.has_object_at(&parsed.game, Coord3::new(1, 0, 0), dust));
 
         let game = Arc::new(parsed.game.clone());
         let state_slicer = SolverStateSlicer::from_ignored_objects(vec![dust]);
@@ -264,14 +264,14 @@ PD
             game.clone(),
             vec![right],
             state_slicer,
-            move |state| state.has_object(&game, Coord3::new(1, 0, 0), player),
+            move |state| state.has_object_at(&game, Coord3::new(1, 0, 0), player),
         );
 
         let solver_initial = domain.initial_state(initial);
         let next = domain.step(&solver_initial, &right).unwrap();
 
-        assert!(next.has_object(&parsed.game, Coord3::new(1, 0, 0), player));
-        assert!(!next.has_object(&parsed.game, Coord3::new(1, 0, 0), dust));
+        assert!(next.has_object_at(&parsed.game, Coord3::new(1, 0, 0), player));
+        assert!(!next.has_object_at(&parsed.game, Coord3::new(1, 0, 0), dust));
     }
 
     #[test]

@@ -666,7 +666,7 @@ P
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
 
     assert!(
-        translated.contains("puzzle main {\nflickscreen 13 13\nscreen_focus Player\n\nlayers {")
+        translated.contains("puzzle main {\nflickscreen 13 13\nscreen_focus Player\n\nslots {")
     );
     assert!(translated.contains("layout {\npuzzle board = main\n}"));
     assert!(translated.contains("rules {\nstep board\n}"));

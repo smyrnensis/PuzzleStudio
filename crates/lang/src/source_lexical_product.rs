@@ -195,7 +195,10 @@ fn append_owner_display_facts(
                 color: Some(color.clone()),
                 transparent: false,
             }),
-            crate::SurfaceDisplayFact::Separator { span } => {
+            crate::SurfaceDisplayFact::LevelSeparator { span } => {
+                push_span(spans, span.start, span.end, SourceHighlightKind::LevelCell)
+            }
+            crate::SurfaceDisplayFact::SpriteSeparator { span } => {
                 push_span(spans, span.start, span.end, SourceHighlightKind::Arrow)
             }
         }
@@ -303,9 +306,6 @@ fn highlight_kind(kind: SurfaceSemanticKind) -> SourceHighlightKind {
         SurfaceSemanticKind::Object => SourceHighlightKind::Object,
         SurfaceSemanticKind::Input => SourceHighlightKind::Input,
         SurfaceSemanticKind::State => SourceHighlightKind::State,
-        SurfaceSemanticKind::Group => SourceHighlightKind::Group,
-        SurfaceSemanticKind::Mark => SourceHighlightKind::Mark,
-        SurfaceSemanticKind::Variant => SourceHighlightKind::Variant,
         SurfaceSemanticKind::Condition => SourceHighlightKind::Condition,
         SurfaceSemanticKind::Scene => SourceHighlightKind::Scene,
         SurfaceSemanticKind::Theme => SourceHighlightKind::Theme,
@@ -441,7 +441,7 @@ mod tests {
 
     #[test]
     fn parser_fact_boundaries_preserve_prefixes_selectors_and_invalid_braces() {
-        let source = "puzzle board {\nlayers { objects = @Box }\nrules {\n[ Box:1{checked} ] -> [ @Box ]\n}\n}\n}\n";
+        let source = "puzzle board {\nslots { objects = @Box }\nrules {\n[ Box:1{checked} ] -> [ @Box ]\n}\n}\n}\n";
         let highlighted = highlight_source(source);
         assert!(has_span(
             source,
@@ -489,7 +489,7 @@ mod tests {
 
     #[test]
     fn owner_ranges_override_lexical_facts_with_pixel_data() {
-        let source = "puzzle board {\nlayers { objects = Box }\nsprites {\nBox {\n#fff #000\n01\n}\n}\nrules {\n}\n}\n";
+        let source = "puzzle board {\nslots { objects = Box }\nsprites {\nBox {\n#fff #000\n01\n}\n}\nrules {\n}\n}\n";
         let highlighted = highlight_source(source);
         let pixels = highlighted
             .spans

@@ -25,33 +25,6 @@ fn parse_rule_name_and_params(
     Ok((name.to_string(), params))
 }
 
-fn parse_lifecycle_block(
-    lines: &[String],
-    line_numbers: Option<&[usize]>,
-    start: usize,
-    event: &str,
-    catalog: &Catalog,
-) -> Result<(String, Vec<StatementAst>, usize), DiagnosticReport> {
-    let (statements, next_i) = parse_statement_block(
-        lines,
-        line_numbers,
-        start + 1,
-        &[BLOCK_CLOSE],
-        &catalog.object_names,
-        &catalog.object_schemas,
-        &catalog_value_sets(catalog),
-        &catalog.maps,
-        &catalog.object_groups,
-        &catalog.input_names,
-        &catalog.variable_names,
-        &catalog.numeric_variable_defaults,
-        &catalog.condition_names,
-        &HashMap::new(),
-        &[],
-    )?;
-    Ok((event.to_string(), statements, next_i))
-}
-
 fn parse_rule_application(
     tokens: &[&str],
     declaration: &str,
@@ -120,17 +93,16 @@ fn parse_fix_defaults(
 }
 
 fn collect_statement_block_lines(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     line: &str,
-) -> Result<(Vec<String>, usize), DiagnosticReport> {
+) -> Result<(Vec<source::LogicalLine>, usize), DiagnosticReport> {
     let mut body = Vec::new();
     let mut depth = 1i32;
     let mut i = start;
     while i < lines.len() {
         let nested_line = &lines[i];
-        let delta = statement_block_line_delta(nested_line);
-        let next_depth = depth + delta;
+        let next_depth = depth + raw_brace_delta(strip_line_comment(nested_line));
         if next_depth == 0 {
             return Ok((body, i + 1));
         }
@@ -145,45 +117,6 @@ fn collect_statement_block_lines(
         i += 1;
     }
     Err(parse_error(line, "for block missing closing brace"))
-}
-
-fn collect_statement_block_lines_with_numbers(
-    lines: &[String],
-    line_numbers: Option<&[usize]>,
-    start: usize,
-    line: &str,
-) -> Result<(Vec<String>, Option<Vec<usize>>, usize), DiagnosticReport> {
-    let mut body = Vec::new();
-    let mut body_numbers = line_numbers.map(|_| Vec::new());
-    let mut depth = 1i32;
-    let mut i = start;
-    while i < lines.len() {
-        let nested_line = &lines[i];
-        let delta = statement_block_line_delta(nested_line);
-        let next_depth = depth + delta;
-        if next_depth == 0 {
-            return Ok((body, body_numbers, i + 1));
-        }
-        if next_depth < 0 {
-            return Err(parse_error(
-                line,
-                "for block has an unmatched closing brace",
-            ));
-        }
-        body.push(nested_line.clone());
-        if let (Some(line_numbers), Some(body_numbers)) = (line_numbers, &mut body_numbers) {
-            if let Some(line_number) = line_numbers.get(i).copied() {
-                body_numbers.push(line_number);
-            }
-        }
-        depth = next_depth;
-        i += 1;
-    }
-    Err(parse_error(line, "for block missing closing brace"))
-}
-
-fn statement_block_line_delta(line: &str) -> i32 {
-    raw_brace_delta(strip_line_comment(line))
 }
 
 fn parse_if_condition_block_header(
@@ -203,9 +136,8 @@ fn parse_if_condition_block_header(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn parse_statement_condition_block(
-    lines: &[String],
-    start: usize,
+fn lower_statement_condition_syntax(
+    syntax: &[puzzle_authoring::RuleStatementSyntax<source::LogicalLine>],
     combinator: ConditionBlockCombinator,
     input_names: &HashMap<String, InputId>,
     variable_names: &HashMap<String, VariableId>,
@@ -216,13 +148,18 @@ fn parse_statement_condition_block(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
-) -> Result<(ConditionAst, usize), DiagnosticReport> {
+) -> Result<ConditionAst, DiagnosticReport> {
     let mut conditions = Vec::new();
-    let mut i = start + 1;
-    while i < lines.len() && !is_block_close_line(&lines[i]) {
-        let condition = parse_statement_condition(
-            &lines[i],
-            &lines[i],
+    for statement in syntax {
+        let puzzle_authoring::RuleStatementSyntax::Line(line) = statement else {
+            return Err(parse_error(
+                rule_statement_source(statement),
+                "if condition block accepts condition rows, not nested blocks",
+            ));
+        };
+        conditions.push(parse_statement_condition(
+            &line.text,
+            &line.source,
             input_names,
             variable_names,
             condition_names,
@@ -232,35 +169,24 @@ fn parse_statement_condition_block(
             value_sets,
             maps,
             object_groups,
-        )?;
-        conditions.push(condition);
-        i += 1;
-    }
-    if i >= lines.len() {
-        return Err(parse_error(
-            &lines[start],
-            "if condition block missing closing brace",
-        ));
+        )?);
     }
     if conditions.is_empty() {
         return Err(parse_error(
-            &lines[start],
+            "if",
             "if condition block requires at least one condition",
         ));
     }
-    let condition = if conditions.len() == 1 {
+    Ok(if conditions.len() == 1 {
         conditions.remove(0)
     } else {
         combinator.combine(conditions)
-    };
-    Ok((condition, i + 1))
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
-fn parse_statement_arrow_consequence(
-    lines: &[String],
-    line_numbers: Option<&[usize]>,
-    start: usize,
+fn lower_statement_arrow_syntax(
+    statement: &puzzle_authoring::RuleStatementSyntax<source::LogicalLine>,
     header_line: &str,
     object_names: &HashMap<String, ObjectId>,
     object_schemas: &HashMap<String, ObjectSchema>,
@@ -273,31 +199,29 @@ fn parse_statement_arrow_consequence(
     condition_names: &HashMap<String, ConditionId>,
     named_conditions: &HashMap<String, (String, ConditionAst)>,
     rule_params: &[String],
-) -> Result<(Vec<StatementAst>, usize), DiagnosticReport> {
-    let Some(line) = lines.get(start) else {
-        return Err(parse_error(
-            header_line,
-            "if condition block must be followed by ->",
-        ));
+) -> Result<Vec<StatementAst>, DiagnosticReport> {
+    let (line, nested) = match statement {
+        puzzle_authoring::RuleStatementSyntax::Line(line) => (line, None),
+        puzzle_authoring::RuleStatementSyntax::Block { header, statements } => {
+            (header, Some(statements.as_slice()))
+        }
     };
-    let header = block_header_text(line);
-    let Some((_, effect_text)) = header.split_once("->") else {
+    let Some((_, effect_text)) = line.text.split_once("->") else {
         return Err(parse_error(
-            line,
+            &line.source,
             "if condition block must be followed by ->",
         ));
     };
     let effect_text = effect_text.trim();
-
-    if line.trim_end().ends_with('{') {
+    if let Some(nested) = nested {
         if !effect_text.is_empty() {
-            return Err(parse_error(line, "if -> block header must be: -> {"));
+            return Err(parse_error(
+                &line.source,
+                "if -> block header must be: -> {",
+            ));
         }
-        return parse_statement_block(
-            lines,
-            line_numbers,
-            start + 1,
-            &["else", BLOCK_CLOSE],
+        return lower_statement_syntax(
+            nested,
             object_names,
             object_schemas,
             value_sets,
@@ -311,73 +235,24 @@ fn parse_statement_arrow_consequence(
             rule_params,
         );
     }
-
     if effect_text.is_empty() {
         return Err(parse_error(
-            line,
+            &line.source,
             "if -> must be followed by an effect or block",
         ));
     }
     if is_qualified_identifier(effect_text) && !is_builtin_rewrite_effect_text(effect_text) {
-        return Ok((
-            vec![StatementAst::Call {
-                name: effect_text.to_string(),
-                source_line: line.to_string(),
-                source_line_number: line_numbers
-                    .and_then(|line_numbers| line_numbers.get(start).copied()),
-            }],
-            start + 1,
-        ));
+        return Ok(vec![StatementAst::Call {
+            name: effect_text.to_string(),
+            source_line: line.text.clone(),
+            source_line_number: Some(line.source.line),
+        }]);
     }
-    let effects = parse_rewrite_effect(effect_text, line)?;
-    Ok((
-        vec![StatementAst::Effect {
-            source_line: line.to_string(),
-            source_line_number: line_numbers
-                .and_then(|line_numbers| line_numbers.get(start).copied()),
-            effects,
-        }],
-        start + 1,
-    ))
-}
-
-#[allow(clippy::too_many_arguments)]
-fn parse_optional_else_statement_block(
-    lines: &[String],
-    line_numbers: Option<&[usize]>,
-    next_i: usize,
-    object_names: &HashMap<String, ObjectId>,
-    object_schemas: &HashMap<String, ObjectSchema>,
-    value_sets: &HashMap<String, Vec<String>>,
-    maps: &HashMap<String, ValueMap>,
-    object_groups: &HashMap<String, Vec<ObjectId>>,
-    input_names: &HashMap<String, InputId>,
-    variable_names: &HashMap<String, VariableId>,
-    numeric_variables: &HashMap<String, i64>,
-    condition_names: &HashMap<String, ConditionId>,
-    named_conditions: &HashMap<String, (String, ConditionAst)>,
-    rule_params: &[String],
-) -> Result<(Vec<StatementAst>, usize), DiagnosticReport> {
-    let Some(else_start) = else_block_start(lines, next_i) else {
-        return Ok((Vec::new(), next_i));
-    };
-    parse_statement_block(
-        lines,
-        line_numbers,
-        else_start,
-        &[BLOCK_CLOSE],
-        object_names,
-        object_schemas,
-        value_sets,
-        maps,
-        object_groups,
-        input_names,
-        variable_names,
-        numeric_variables,
-        condition_names,
-        named_conditions,
-        rule_params,
-    )
+    Ok(vec![StatementAst::Effect {
+        source_line: line.text.clone(),
+        source_line_number: Some(line.source.line),
+        effects: parse_rewrite_effect(effect_text, header_line)?,
+    }])
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -518,15 +393,45 @@ fn value_expr_result_axis(
     }
 }
 
-fn expand_for_binding_lines(
-    lines: &[String],
+fn expand_for_binding_syntax(
+    syntax: &[puzzle_authoring::RuleStatementSyntax<source::LogicalLine>],
     binding: &str,
     value: &ForExpansionValue,
     maps: &HashMap<String, ValueMap>,
-) -> Result<Vec<String>, DiagnosticReport> {
+) -> Result<Vec<puzzle_authoring::RuleStatementSyntax<source::LogicalLine>>, DiagnosticReport> {
+    syntax
+        .iter()
+        .map(|statement| match statement {
+            puzzle_authoring::RuleStatementSyntax::Line(line) => Ok(
+                puzzle_authoring::RuleStatementSyntax::Line(puzzle_authoring::RuleStatementLine {
+                    source: line.source.clone(),
+                    text: expand_for_binding_line(&line.text, binding, value, maps)?,
+                }),
+            ),
+            puzzle_authoring::RuleStatementSyntax::Block { header, statements } => {
+                Ok(puzzle_authoring::RuleStatementSyntax::Block {
+                    header: puzzle_authoring::RuleStatementLine {
+                        source: header.source.clone(),
+                        text: expand_for_binding_line(&header.text, binding, value, maps)?,
+                    },
+                    statements: expand_for_binding_syntax(statements, binding, value, maps)?,
+                })
+            }
+        })
+        .collect()
+}
+
+fn expand_for_binding_lines(
+    lines: &[source::LogicalLine],
+    binding: &str,
+    value: &ForExpansionValue,
+    maps: &HashMap<String, ValueMap>,
+) -> Result<Vec<source::LogicalLine>, DiagnosticReport> {
     lines
         .iter()
-        .map(|line| expand_for_binding_line(line, binding, value, maps))
+        .map(|line| {
+            expand_for_binding_line(line, binding, value, maps).map(|text| line.with_text(text))
+        })
         .collect()
 }
 
@@ -582,10 +487,6 @@ pub(crate) struct ForExpansionValue {
 }
 
 impl ForExpansionValue {
-    pub(crate) fn value(&self) -> &str {
-        &self.value
-    }
-
     fn atom(value: impl Into<String>) -> Self {
         Self {
             value: value.into(),
@@ -744,216 +645,8 @@ fn parse_numeric_range_endpoint(
     })
 }
 
-fn collect_multiline_rewrite_statement(
-    lines: &[String],
-    start: usize,
-) -> Result<Option<(String, usize)>, DiagnosticReport> {
-    let line = lines[start].trim();
-    if let Some(collected) = collect_bracket_multiline_rewrite_statement(lines, start, line)? {
-        return Ok(Some(collected));
-    }
-
-    let Some(trailing) = rewrite_lhs_trailing(line) else {
-        return Ok(None);
-    };
-
-    if trailing.is_empty() {
-        let Some(next_line) = lines.get(start + 1).map(|line| line.trim()) else {
-            return Ok(None);
-        };
-        let Some(rhs) = next_line.strip_prefix("->").map(str::trim_start) else {
-            return Ok(None);
-        };
-        validate_rewrite_rhs_continuation(rhs, next_line)?;
-        return Ok(Some((format!("{line} -> {rhs}"), start + 2)));
-    }
-
-    if trailing == "->" {
-        let Some(rhs) = lines.get(start + 1).map(|line| line.trim()) else {
-            return Ok(None);
-        };
-        validate_rewrite_rhs_continuation(rhs, line)?;
-        return Ok(Some((format!("{line} {rhs}"), start + 2)));
-    }
-
-    Ok(None)
-}
-
-fn collect_bracket_multiline_rewrite_statement(
-    lines: &[String],
-    start: usize,
-    first_line: &str,
-) -> Result<Option<(String, usize)>, DiagnosticReport> {
-    let Some(open_index) = first_line.find('[') else {
-        return Ok(None);
-    };
-    let prefix = first_line[..open_index].trim();
-    if !can_start_rewrite_lhs(prefix) {
-        return Ok(None);
-    }
-
-    let mut joined = String::new();
-    let mut bracket_depth = 0usize;
-    let mut saw_arrow = false;
-    let mut i = start;
-    while i < lines.len() {
-        let line = lines[i].trim();
-        if i > start && bracket_depth == 0 && !saw_arrow && !line.starts_with("->") {
-            return Ok(None);
-        }
-        if !joined.is_empty() {
-            if bracket_depth > 0 {
-                joined.push_str("; ");
-            } else {
-                joined.push(' ');
-            }
-        }
-        joined.push_str(line);
-        bracket_depth = update_square_bracket_depth(bracket_depth, line);
-        saw_arrow |= line.contains("->");
-
-        if i == start && bracket_depth == 0 {
-            return Ok(None);
-        }
-        if i > start && bracket_depth == 0 && saw_arrow {
-            validate_rewrite_rhs_continuation_after_join(&joined)?;
-            return Ok(Some((joined, i + 1)));
-        }
-        i += 1;
-    }
-
-    Ok(None)
-}
-
-fn update_square_bracket_depth(mut depth: usize, line: &str) -> usize {
-    let mut in_string = false;
-    let mut escaped = false;
-    for ch in line.chars() {
-        if in_string {
-            if escaped {
-                escaped = false;
-            } else if ch == '\\' {
-                escaped = true;
-            } else if ch == '"' {
-                in_string = false;
-            }
-            continue;
-        }
-        match ch {
-            '"' => in_string = true,
-            '[' => depth += 1,
-            ']' => depth = depth.saturating_sub(1),
-            _ => {}
-        }
-    }
-    depth
-}
-
-fn validate_rewrite_rhs_continuation_after_join(line: &str) -> Result<(), DiagnosticReport> {
-    let Some((_, rhs)) = line.split_once("->") else {
-        return Ok(());
-    };
-    validate_rewrite_rhs_continuation(rhs.trim_start(), line)
-}
-
-fn validate_rewrite_rhs_continuation(rhs: &str, line: &str) -> Result<(), DiagnosticReport> {
-    if rhs.is_empty() || !rhs.starts_with('[') {
-        return Err(parse_error(
-            line,
-            "rewrite continuation after -> must start with a pattern",
-        ));
-    }
-    if rhs.contains("->") {
-        return Err(parse_error(
-            line,
-            "rewrite continuation rhs cannot contain another ->",
-        ));
-    }
-    Ok(())
-}
-
-fn rewrite_lhs_trailing(line: &str) -> Option<&str> {
-    let open_index = line.find('[')?;
-    let prefix = line[..open_index].trim();
-    if !can_start_rewrite_lhs(prefix) {
-        return None;
-    }
-    let lhs_end = open_index + pattern_side_syntax_end(&line[open_index..])?;
-    Some(line[lhs_end..].trim())
-}
-
-fn can_start_rewrite_lhs(prefix: &str) -> bool {
-    let tokens = split_header_tokens(prefix);
-    match tokens.as_slice() {
-        [] => true,
-        ["input", axis] => is_identifier(axis),
-        [application] if is_rewrite_application_prefix(application) => true,
-        [application, "input", axis] if is_rewrite_application_prefix(application) => {
-            is_identifier(axis)
-        }
-        [application, orientation]
-            if is_rewrite_application_prefix(application) && is_identifier(orientation) =>
-        {
-            true
-        }
-        [orientation] if !is_non_rewrite_statement_prefix(orientation) => {
-            is_identifier(orientation)
-        }
-        _ => false,
-    }
-}
-
-fn is_rewrite_application_prefix(token: &str) -> bool {
-    puzzle_authoring::rule_application_surface(token).is_some()
-}
-
-fn is_non_rewrite_statement_prefix(token: &str) -> bool {
-    matches!(
-        token,
-        "for" | "fix" | "if" | "else" | "when" | "action" | "emit" | "do"
-    )
-}
-
-fn pattern_side_syntax_end(value: &str) -> Option<usize> {
-    let mut index = 0;
-    let mut found_block = false;
-    while index < value.len() {
-        let after_space = value[index..].trim_start();
-        index = value.len() - after_space.len();
-        if !value[index..].starts_with('[') {
-            break;
-        }
-        let after_open = index + 1;
-        let close_offset = value[after_open..].find(']')?;
-        index = after_open + close_offset + 1;
-        found_block = true;
-    }
-    found_block.then_some(index)
-}
-
-fn else_block_start(lines: &[String], next_i: usize) -> Option<usize> {
-    if next_i > 0 && is_else_block_marker(&lines[next_i - 1]) {
-        Some(next_i)
-    } else if next_i < lines.len() && is_else_block_marker(&lines[next_i]) {
-        Some(next_i + 1)
-    } else {
-        None
-    }
-}
-
-fn is_else_block_marker(line: &str) -> bool {
-    line == "else" || line == "else {"
-}
-
-fn statement_block_terminator_matches(line: &str, terminators: &[&str]) -> bool {
-    terminators.contains(&line) || (terminators.contains(&"else") && is_else_block_marker(line))
-}
-
-fn parse_statement_block(
-    lines: &[String],
-    line_numbers: Option<&[usize]>,
-    start: usize,
-    terminators: &[&str],
+fn lower_statement_syntax(
+    syntax: &[puzzle_authoring::RuleStatementSyntax<source::LogicalLine>],
     object_names: &HashMap<String, ObjectId>,
     object_schemas: &HashMap<String, ObjectSchema>,
     value_sets: &HashMap<String, Vec<String>>,
@@ -965,61 +658,104 @@ fn parse_statement_block(
     condition_names: &HashMap<String, ConditionId>,
     named_conditions: &HashMap<String, (String, ConditionAst)>,
     rule_params: &[String],
-) -> Result<(Vec<StatementAst>, usize), DiagnosticReport> {
+) -> Result<Vec<StatementAst>, DiagnosticReport> {
     let mut statements = Vec::new();
     let mut diagnostics = Vec::new();
     let mut local_routine_names = HashSet::<String>::new();
-    let mut i = start;
+    let mut i = 0;
     macro_rules! recover_current_statement {
         ($result:expr) => {
             match $result {
                 Ok(value) => value,
                 Err(report) => {
-                    let report_line = lines.get(i).map(String::as_str).unwrap_or("");
-                    let report_line_number =
-                        line_numbers.and_then(|line_numbers| line_numbers.get(i).copied());
+                    let report_line = syntax
+                        .get(i)
+                        .map(rule_statement_source)
+                        .map(AsRef::as_ref)
+                        .unwrap_or("");
+                    let report_line_number = syntax
+                        .get(i)
+                        .map(rule_statement_source)
+                        .map(|line| line.line);
                     diagnostics.extend(
                         report_with_source_line_number(report, report_line, report_line_number)
                             .into_diagnostics(),
                     );
-                    i = recover_after_directive_error(lines, i);
+                    i += 1;
                     continue;
                 }
             }
         };
     }
-
-    while i < lines.len() {
-        let source_line = &lines[i];
-        let source_line_number = line_numbers.and_then(|line_numbers| line_numbers.get(i).copied());
-        if statement_block_terminator_matches(source_line, terminators) {
-            return if diagnostics.is_empty() {
-                Ok((statements, i + 1))
-            } else {
-                Err(DiagnosticReport::from_diagnostics(diagnostics))
-            };
-        }
-
-        let mut next_statement_i = i + 1;
-        let joined_line;
-        let line = match collect_multiline_rewrite_statement(lines, i) {
-            Ok(Some((joined, next_i))) => {
-                next_statement_i = next_i;
-                joined_line = joined;
-                joined_line.as_str()
+    macro_rules! lower_nested_statement {
+        ($nested:expr, $line:expr, $index:expr) => {{
+            $nested
+                .ok_or_else(|| parse_error($line, "statement block must use `{ ... }`"))
+                .and_then(|nested| {
+                    lower_statement_syntax(
+                        nested,
+                        object_names,
+                        object_schemas,
+                        value_sets,
+                        maps,
+                        object_groups,
+                        input_names,
+                        variable_names,
+                        numeric_variables,
+                        condition_names,
+                        named_conditions,
+                        rule_params,
+                    )
+                })
+                .map(|nested| (nested, $index + 1))
+        }};
+    }
+    macro_rules! lower_statements {
+        ($nested:expr) => {{
+            lower_statement_syntax(
+                $nested,
+                object_names,
+                object_schemas,
+                value_sets,
+                maps,
+                object_groups,
+                input_names,
+                variable_names,
+                numeric_variables,
+                condition_names,
+                named_conditions,
+                rule_params,
+            )
+        }};
+    }
+    macro_rules! lower_optional_else {
+        ($next:expr) => {{
+            match syntax.get($next) {
+                Some(puzzle_authoring::RuleStatementSyntax::Block { header, statements })
+                    if header.text == "else" =>
+                {
+                    lower_statements!(statements).map(|lowered| (lowered, $next + 1))
+                }
+                Some(puzzle_authoring::RuleStatementSyntax::Line(line)) if line.text == "else" => {
+                    Err(parse_error(&line.source, "else block must use `{ ... }`"))
+                }
+                _ => Ok((Vec::new(), $next)),
             }
-            Ok(None) => source_line.as_str(),
-            Err(report) => {
-                diagnostics.extend(
-                    report_with_source_line_number(report, source_line, source_line_number)
-                        .into_diagnostics(),
-                );
-                i += 1;
-                continue;
+        }};
+    }
+
+    while i < syntax.len() {
+        let (statement_line, nested_syntax) = match &syntax[i] {
+            puzzle_authoring::RuleStatementSyntax::Line(line) => (line, None),
+            puzzle_authoring::RuleStatementSyntax::Block { header, statements } => {
+                (header, Some(statements.as_slice()))
             }
         };
-        let opens_block = line.trim_end().ends_with('{');
-        let line = block_header_text(line);
+        let source_line = &statement_line.source;
+        let source_line_number = Some(source_line.line);
+        let next_statement_i = i + 1;
+        let line = statement_line.text.as_str();
+        let opens_block = nested_syntax.is_some();
         let tokens = split_header_tokens(line);
         match tokens.first().copied() {
             Some("routine") => {
@@ -1033,10 +769,9 @@ fn parse_statement_block(
                     i += 1;
                     continue;
                 }
-                let (definition, next_i) = recover_current_statement!(parse_rule_definition(
-                    lines,
-                    line_numbers,
-                    i,
+                let definition = recover_current_statement!(lower_rule_definition_syntax(
+                    statement_line,
+                    nested_syntax.expect("checked block syntax"),
                     object_names,
                     object_schemas,
                     value_sets,
@@ -1055,7 +790,7 @@ fn parse_statement_block(
                         line,
                         source_line_number,
                     );
-                    i = next_i;
+                    i += 1;
                     continue;
                 }
                 statements.push(StatementAst::LocalRoutine {
@@ -1063,7 +798,7 @@ fn parse_statement_block(
                     source_line: line.to_string(),
                     source_line_number,
                 });
-                i = next_i;
+                i += 1;
             }
             Some("for") => {
                 if !opens_block {
@@ -1092,12 +827,10 @@ fn parse_statement_block(
                     numeric_variables,
                     line
                 ));
-                let (body_lines, body_line_numbers, next_i) = recover_current_statement!(
-                    collect_statement_block_lines_with_numbers(lines, line_numbers, i + 1, line)
-                );
+                let body_syntax = nested_syntax.expect("checked block syntax");
                 for value in &values {
-                    let mut expanded_lines = match expand_for_binding_lines(
-                        &body_lines,
+                    let expanded_syntax = match expand_for_binding_syntax(
+                        body_syntax,
                         &for_syntax.binding,
                         value,
                         maps,
@@ -1113,25 +846,8 @@ fn parse_statement_block(
                             continue;
                         }
                     };
-                    let mut expanded_line_numbers = body_line_numbers.clone();
-                    expanded_lines.push(BLOCK_CLOSE.to_string());
-                    if let Some(line_numbers) = &mut expanded_line_numbers {
-                        let Some(source_line_number) = source_line_number else {
-                            diagnostics.extend(
-                                DiagnosticReport::error(
-                                    "internal statement source line number missing",
-                                )
-                                .into_diagnostics(),
-                            );
-                            continue;
-                        };
-                        line_numbers.push(source_line_number);
-                    }
-                    let (nested, parsed_i) = match parse_statement_block(
-                        &expanded_lines,
-                        expanded_line_numbers.as_deref(),
-                        0,
-                        &[BLOCK_CLOSE],
+                    let nested = match lower_statement_syntax(
+                        &expanded_syntax,
                         object_names,
                         object_schemas,
                         value_sets,
@@ -1150,40 +866,16 @@ fn parse_statement_block(
                             continue;
                         }
                     };
-                    if parsed_i != expanded_lines.len() {
-                        extend_report_with_source_line_number(
-                            &mut diagnostics,
-                            parse_error(line, "for expansion failed"),
-                            line,
-                            source_line_number,
-                        );
-                        continue;
-                    }
                     statements.extend(nested);
                 }
-                i = next_i;
+                i += 1;
                 continue;
             }
             Some("fix") => {
                 let defaults =
                     recover_current_statement!(parse_fix_defaults(&tokens, line, rule_params));
-                let (nested, next_i) = recover_current_statement!(parse_statement_block(
-                    lines,
-                    line_numbers,
-                    i + 1,
-                    &[BLOCK_CLOSE],
-                    object_names,
-                    object_schemas,
-                    value_sets,
-                    maps,
-                    object_groups,
-                    input_names,
-                    variable_names,
-                    numeric_variables,
-                    condition_names,
-                    named_conditions,
-                    rule_params,
-                ));
+                let (nested, next_i) =
+                    recover_current_statement!(lower_nested_statement!(nested_syntax, line, i));
                 statements.push(StatementAst::Fix {
                     defaults,
                     statements: nested,
@@ -1194,56 +886,42 @@ fn parse_statement_block(
                 if let Some(combinator) =
                     recover_current_statement!(parse_if_condition_block_header(line))
                 {
-                    let (condition, arrow_i) =
-                        recover_current_statement!(parse_statement_condition_block(
-                            lines,
-                            i,
-                            combinator,
-                            input_names,
-                            variable_names,
-                            condition_names,
-                            named_conditions,
-                            object_names,
-                            object_schemas,
-                            value_sets,
-                            maps,
-                            object_groups,
-                        ));
-                    let (then_statements, next_i) =
-                        recover_current_statement!(parse_statement_arrow_consequence(
-                            lines,
-                            line_numbers,
-                            arrow_i,
-                            line,
-                            object_names,
-                            object_schemas,
-                            value_sets,
-                            maps,
-                            object_groups,
-                            input_names,
-                            variable_names,
-                            numeric_variables,
-                            condition_names,
-                            named_conditions,
-                            rule_params,
-                        ));
+                    let condition = recover_current_statement!(lower_statement_condition_syntax(
+                        nested_syntax.ok_or_else(|| {
+                            parse_error(line, "if condition block must use `{ ... }`")
+                        })?,
+                        combinator,
+                        input_names,
+                        variable_names,
+                        condition_names,
+                        named_conditions,
+                        object_names,
+                        object_schemas,
+                        value_sets,
+                        maps,
+                        object_groups,
+                    ));
+                    let arrow_i = i + 1;
+                    let arrow = recover_current_statement!(syntax.get(arrow_i).ok_or_else(|| {
+                        parse_error(line, "if condition block must be followed by ->")
+                    }));
+                    let then_statements = recover_current_statement!(lower_statement_arrow_syntax(
+                        arrow,
+                        line,
+                        object_names,
+                        object_schemas,
+                        value_sets,
+                        maps,
+                        object_groups,
+                        input_names,
+                        variable_names,
+                        numeric_variables,
+                        condition_names,
+                        named_conditions,
+                        rule_params,
+                    ));
                     let (else_statements, next_i) =
-                        recover_current_statement!(parse_optional_else_statement_block(
-                            lines,
-                            line_numbers,
-                            next_i,
-                            object_names,
-                            object_schemas,
-                            value_sets,
-                            maps,
-                            object_groups,
-                            input_names,
-                            variable_names,
-                            numeric_variables,
-                            condition_names,
-                            named_conditions,
-                            rule_params,
-                        ));
+                        recover_current_statement!(lower_optional_else!(arrow_i + 1));
                     statements.push(StatementAst::If {
                         source_line: line.to_string(),
                         source_line_number,
@@ -1266,47 +944,14 @@ fn parse_statement_block(
                     ))
                 {
                     if trailing.is_empty() {
-                        let (nested, next_i) = recover_current_statement!(parse_statement_block(
-                            lines,
-                            line_numbers,
-                            i + 1,
-                            &["else", BLOCK_CLOSE],
-                            object_names,
-                            object_schemas,
-                            value_sets,
-                            maps,
-                            object_groups,
-                            input_names,
-                            variable_names,
-                            numeric_variables,
-                            condition_names,
-                            named_conditions,
-                            rule_params,
-                        ));
-                        let (then_statements, else_statements, after_i) =
-                            if let Some(else_start) = else_block_start(lines, next_i) {
-                                let (else_statements, after_else_i) =
-                                    recover_current_statement!(parse_statement_block(
-                                        lines,
-                                        line_numbers,
-                                        else_start,
-                                        &[BLOCK_CLOSE],
-                                        object_names,
-                                        object_schemas,
-                                        value_sets,
-                                        maps,
-                                        object_groups,
-                                        input_names,
-                                        variable_names,
-                                        numeric_variables,
-                                        condition_names,
-                                        named_conditions,
-                                        rule_params,
-                                    ));
-                                (nested, else_statements, after_else_i)
-                            } else {
-                                (nested, Vec::new(), next_i)
-                            };
+                        let then_statements = recover_current_statement!(lower_nested_statement!(
+                            nested_syntax,
+                            line,
+                            i
+                        ))
+                        .0;
+                        let (else_statements, after_i) =
+                            recover_current_statement!(lower_optional_else!(i + 1));
                         statements.push(StatementAst::Conditional {
                             source_line: line.to_string(),
                             source_line_number,
@@ -1355,41 +1000,23 @@ fn parse_statement_block(
                         maps,
                         object_groups,
                     ));
-                    let (then_statements, next_i) =
-                        recover_current_statement!(parse_statement_arrow_consequence(
-                            lines,
-                            line_numbers,
-                            i,
-                            line,
-                            object_names,
-                            object_schemas,
-                            value_sets,
-                            maps,
-                            object_groups,
-                            input_names,
-                            variable_names,
-                            numeric_variables,
-                            condition_names,
-                            named_conditions,
-                            rule_params,
-                        ));
+                    let then_statements = recover_current_statement!(lower_statement_arrow_syntax(
+                        &syntax[i],
+                        line,
+                        object_names,
+                        object_schemas,
+                        value_sets,
+                        maps,
+                        object_groups,
+                        input_names,
+                        variable_names,
+                        numeric_variables,
+                        condition_names,
+                        named_conditions,
+                        rule_params,
+                    ));
                     let (else_statements, next_i) =
-                        recover_current_statement!(parse_optional_else_statement_block(
-                            lines,
-                            line_numbers,
-                            next_i,
-                            object_names,
-                            object_schemas,
-                            value_sets,
-                            maps,
-                            object_groups,
-                            input_names,
-                            variable_names,
-                            numeric_variables,
-                            condition_names,
-                            named_conditions,
-                            rule_params,
-                        ));
+                        recover_current_statement!(lower_optional_else!(i + 1));
                     statements.push(StatementAst::If {
                         source_line: line.to_string(),
                         source_line_number,
@@ -1413,50 +1040,10 @@ fn parse_statement_block(
                     maps,
                     object_groups,
                 ));
-                let (then_statements, next_i) = recover_current_statement!(parse_statement_block(
-                    lines,
-                    line_numbers,
-                    i + 1,
-                    &["else", BLOCK_CLOSE],
-                    object_names,
-                    object_schemas,
-                    value_sets,
-                    maps,
-                    object_groups,
-                    input_names,
-                    variable_names,
-                    numeric_variables,
-                    condition_names,
-                    named_conditions,
-                    rule_params,
-                ));
-                if next_i == 0 {
-                    extend_report_with_source_line_number(
-                        &mut diagnostics,
-                        parse_error(line, "if block missing closing brace"),
-                        line,
-                        source_line_number,
-                    );
-                    i = recover_after_directive_error(lines, i);
-                    continue;
-                }
+                let then_statements =
+                    recover_current_statement!(lower_nested_statement!(nested_syntax, line, i)).0;
                 let (else_statements, next_i) =
-                    recover_current_statement!(parse_optional_else_statement_block(
-                        lines,
-                        line_numbers,
-                        next_i,
-                        object_names,
-                        object_schemas,
-                        value_sets,
-                        maps,
-                        object_groups,
-                        input_names,
-                        variable_names,
-                        numeric_variables,
-                        condition_names,
-                        named_conditions,
-                        rule_params,
-                    ));
+                    recover_current_statement!(lower_optional_else!(i + 1));
                 statements.push(StatementAst::If {
                     source_line: line.to_string(),
                     source_line_number,
@@ -1534,23 +1121,7 @@ fn parse_statement_block(
                 let effect_text = effect_text.trim();
                 if effect_text.is_empty() || effect_text == "{" {
                     let (then_statements, next_i) =
-                        recover_current_statement!(parse_statement_block(
-                            lines,
-                            line_numbers,
-                            i + 1,
-                            &[BLOCK_CLOSE],
-                            object_names,
-                            object_schemas,
-                            value_sets,
-                            maps,
-                            object_groups,
-                            input_names,
-                            variable_names,
-                            numeric_variables,
-                            condition_names,
-                            named_conditions,
-                            rule_params,
-                        ));
+                        recover_current_statement!(lower_nested_statement!(nested_syntax, line, i));
                     statements.push(StatementAst::If {
                         source_line: line.to_string(),
                         source_line_number,
@@ -1650,23 +1221,8 @@ fn parse_statement_block(
             }
             Some("once") => {
                 if tokens.len() == 1 {
-                    let (nested, next_i) = recover_current_statement!(parse_statement_block(
-                        lines,
-                        line_numbers,
-                        i + 1,
-                        &[BLOCK_CLOSE],
-                        object_names,
-                        object_schemas,
-                        value_sets,
-                        maps,
-                        object_groups,
-                        input_names,
-                        variable_names,
-                        numeric_variables,
-                        condition_names,
-                        named_conditions,
-                        rule_params,
-                    ));
+                    let (nested, next_i) =
+                        recover_current_statement!(lower_nested_statement!(nested_syntax, line, i));
                     statements.push(StatementAst::Block {
                         application: RuleApplication::Once,
                         statements: nested,
@@ -1700,23 +1256,8 @@ fn parse_statement_block(
             }
             Some("once_all") => {
                 if tokens.len() == 1 {
-                    let (nested, next_i) = recover_current_statement!(parse_statement_block(
-                        lines,
-                        line_numbers,
-                        i + 1,
-                        &[BLOCK_CLOSE],
-                        object_names,
-                        object_schemas,
-                        value_sets,
-                        maps,
-                        object_groups,
-                        input_names,
-                        variable_names,
-                        numeric_variables,
-                        condition_names,
-                        named_conditions,
-                        rule_params,
-                    ));
+                    let (nested, next_i) =
+                        recover_current_statement!(lower_nested_statement!(nested_syntax, line, i));
                     statements.push(StatementAst::Block {
                         application: RuleApplication::OnceAll,
                         statements: nested,
@@ -1750,23 +1291,8 @@ fn parse_statement_block(
             }
             Some("once_per_level") => {
                 if tokens.len() == 1 {
-                    let (nested, next_i) = recover_current_statement!(parse_statement_block(
-                        lines,
-                        line_numbers,
-                        i + 1,
-                        &[BLOCK_CLOSE],
-                        object_names,
-                        object_schemas,
-                        value_sets,
-                        maps,
-                        object_groups,
-                        input_names,
-                        variable_names,
-                        numeric_variables,
-                        condition_names,
-                        named_conditions,
-                        rule_params,
-                    ));
+                    let (nested, next_i) =
+                        recover_current_statement!(lower_nested_statement!(nested_syntax, line, i));
                     statements.push(StatementAst::Block {
                         application: RuleApplication::OncePerLevel,
                         statements: nested,
@@ -1800,23 +1326,8 @@ fn parse_statement_block(
             }
             Some("random") => {
                 if tokens.len() == 1 {
-                    let (nested, next_i) = recover_current_statement!(parse_statement_block(
-                        lines,
-                        line_numbers,
-                        i + 1,
-                        &[BLOCK_CLOSE],
-                        object_names,
-                        object_schemas,
-                        value_sets,
-                        maps,
-                        object_groups,
-                        input_names,
-                        variable_names,
-                        numeric_variables,
-                        condition_names,
-                        named_conditions,
-                        rule_params,
-                    ));
+                    let (nested, next_i) =
+                        recover_current_statement!(lower_nested_statement!(nested_syntax, line, i));
                     statements.push(StatementAst::Block {
                         application: RuleApplication::Random,
                         statements: nested,
@@ -1850,23 +1361,8 @@ fn parse_statement_block(
             }
             Some("repeat") => {
                 if tokens.len() == 1 {
-                    let (nested, next_i) = recover_current_statement!(parse_statement_block(
-                        lines,
-                        line_numbers,
-                        i + 1,
-                        &[BLOCK_CLOSE],
-                        object_names,
-                        object_schemas,
-                        value_sets,
-                        maps,
-                        object_groups,
-                        input_names,
-                        variable_names,
-                        numeric_variables,
-                        condition_names,
-                        named_conditions,
-                        rule_params,
-                    ));
+                    let (nested, next_i) =
+                        recover_current_statement!(lower_nested_statement!(nested_syntax, line, i));
                     statements.push(StatementAst::Block {
                         application: RuleApplication::UntilStable,
                         statements: nested,
@@ -1904,23 +1400,8 @@ fn parse_statement_block(
                         maps,
                         object_groups,
                     ));
-                    let (nested, next_i) = recover_current_statement!(parse_statement_block(
-                        lines,
-                        line_numbers,
-                        i + 1,
-                        &[BLOCK_CLOSE],
-                        object_names,
-                        object_schemas,
-                        value_sets,
-                        maps,
-                        object_groups,
-                        input_names,
-                        variable_names,
-                        numeric_variables,
-                        condition_names,
-                        named_conditions,
-                        rule_params,
-                    ));
+                    let (nested, next_i) =
+                        recover_current_statement!(lower_nested_statement!(nested_syntax, line, i));
                     statements.push(StatementAst::RepeatUntil {
                         source_line: line.to_string(),
                         source_line_number,
@@ -2006,23 +1487,8 @@ fn parse_statement_block(
             }
             Some("display") => {
                 if tokens.len() == 1 {
-                    let (_, next_i) = recover_current_statement!(parse_statement_block(
-                        lines,
-                        line_numbers,
-                        i + 1,
-                        &[BLOCK_CLOSE],
-                        object_names,
-                        object_schemas,
-                        value_sets,
-                        maps,
-                        object_groups,
-                        input_names,
-                        variable_names,
-                        numeric_variables,
-                        condition_names,
-                        named_conditions,
-                        rule_params,
-                    ));
+                    let (_, next_i) =
+                        recover_current_statement!(lower_nested_statement!(nested_syntax, line, i));
                     extend_report_with_source_line_number(
                         &mut diagnostics,
                         parse_error(
@@ -2146,10 +1612,16 @@ fn parse_statement_block(
     if !diagnostics.is_empty() {
         Err(DiagnosticReport::from_diagnostics(diagnostics))
     } else {
-        Err(parse_error(
-            &lines[start],
-            "statement block missing closing brace",
-        ))
+        Ok(statements)
+    }
+}
+
+fn rule_statement_source(
+    statement: &puzzle_authoring::RuleStatementSyntax<source::LogicalLine>,
+) -> &source::LogicalLine {
+    match statement {
+        puzzle_authoring::RuleStatementSyntax::Line(line) => &line.source,
+        puzzle_authoring::RuleStatementSyntax::Block { header, .. } => &header.source,
     }
 }
 

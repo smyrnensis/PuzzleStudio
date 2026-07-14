@@ -285,14 +285,7 @@ function createEditorShortcutHint(shortcut) {
   const keycap = document.createElement("kbd");
   keycap.className = "editor-hover-shortcut";
   if (normalized.modifiers.includes("primary")) {
-    const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    icon.setAttribute("class", "lucide lucide-command-icon lucide-command");
-    icon.setAttribute("viewBox", "0 0 24 24");
-    icon.setAttribute("aria-hidden", "true");
-    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    path.setAttribute("d", "M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3");
-    icon.append(path);
-    keycap.append(icon);
+    keycap.append(editorIconElement("command"));
   }
   const key = document.createElement("span");
   key.textContent = editorShortcutKeyLabel(normalized.keys[0]);
@@ -419,6 +412,9 @@ function compactEditorTooltipText(text) {
 }
 
 function editorTooltipText(element) {
+  if (element?.dataset?.shortcutOnly === "true") {
+    return "";
+  }
   return compactEditorTooltipText(
     element?.dataset?.tooltip
       || element?.getAttribute("title")
@@ -476,7 +472,8 @@ function positionEditorHoverTooltip() {
 
 function showEditorHoverTooltip(element) {
   const text = editorTooltipText(element);
-  if (!text) {
+  const shortcut = String(element.dataset.shortcut || "").trim();
+  if (!text && !shortcut) {
     hideEditorHoverTooltip(element);
     return;
   }
@@ -486,8 +483,10 @@ function showEditorHoverTooltip(element) {
     element.removeAttribute("title");
   }
   const tooltip = ensureEditorHoverTooltip();
-  tooltip.replaceChildren(document.createTextNode(text));
-  const shortcut = String(element.dataset.shortcut || "").trim();
+  tooltip.replaceChildren();
+  if (text) {
+    tooltip.append(document.createTextNode(text));
+  }
   if (shortcut) {
     tooltip.append(createEditorShortcutHint(JSON.parse(shortcut)));
   }
@@ -658,7 +657,9 @@ let levelDisplayCells = null;
 let levelLayerInsertMode = false;
 let levelLayerRemoveMode = false;
 let sprite = {
-  size: 5,
+  width: 5,
+  height: 5,
+  sizeBound: true,
   editDocumentId: null,
   editSourceStart: null,
   editSourceEnd: null,
@@ -690,8 +691,10 @@ let sprite = {
   ],
 };
 let sprite3d = {
-  size: 5,
+  width: 5,
+  height: 5,
   depth: 5,
+  sizeBound: true,
   editDocumentId: null,
   editSourceStart: null,
   editSourceEnd: null,
@@ -807,7 +810,8 @@ function visualEditSnapshot(kind) {
     return {
       ...base,
       state: {
-        size: sprite.size,
+        width: sprite.width,
+        height: sprite.height,
         palette: cloneVisualEditValue(sprite.palette || []),
         cells: cloneVisualEditValue(sprite.cells || []),
         paletteBind: cloneVisualEditValue(sprite.paletteBind || null),
@@ -828,7 +832,8 @@ function visualEditSnapshot(kind) {
     return {
       ...base,
       state: {
-        size: sprite3d.size,
+        width: sprite3d.width,
+        height: sprite3d.height,
         depth: sprite3d.depth,
         editDocumentId: sprite3d.editDocumentId,
         editSourceStart: sprite3d.editSourceStart,
@@ -934,7 +939,8 @@ function restoreVisualEditSnapshot(snapshot) {
     sendLevel3dSnapshotToRuntime();
     sendLevel3dLayerSnapshotToRuntime();
   } else if (snapshot.kind === "sprite") {
-    sprite.size = clampSpriteSize(state.size);
+    sprite.width = clampSpriteSize(state.width);
+    sprite.height = clampSpriteSize(state.height);
     sprite.palette = cloneVisualEditValue(state.palette || [{ color: "#ff004d" }]);
     sprite.cells = cloneVisualEditValue(state.cells || []);
     sprite.paletteBind = cloneVisualEditValue(state.paletteBind || null);
@@ -969,8 +975,9 @@ function restoreVisualEditSnapshot(snapshot) {
       syncSpriteAnimationInputValues();
     }
   } else if (snapshot.kind === "sprite3d") {
-    sprite3d.size = clampSprite3dSize(state.size);
-    sprite3d.depth = clampSprite3dSize(state.depth ?? state.size);
+    sprite3d.width = clampSprite3dSize(state.width);
+    sprite3d.height = clampSprite3dSize(state.height);
+    sprite3d.depth = clampSprite3dSize(state.depth);
     sprite3d.editDocumentId = state.editDocumentId || null;
     sprite3d.editSourceStart = Number.isInteger(state.editSourceStart) ? state.editSourceStart : null;
     sprite3d.editSourceEnd = Number.isInteger(state.editSourceEnd) ? state.editSourceEnd : null;
@@ -979,7 +986,7 @@ function restoreVisualEditSnapshot(snapshot) {
     sprite3d.editSourceName = state.editSourceName || "";
     sprite3d.sourceSpriteContract = cloneVisualEditValue(state.sourceSpriteContract || null);
     sprite3d.axis = ["x", "y", "z"].includes(state.axis) ? state.axis : "z";
-    sprite3d.slice = Math.max(0, Math.min(sprite3d.size - 1, Math.trunc(Number(state.slice) || 0)));
+    sprite3d.slice = Math.max(0, Math.min(sprite3dAxisSize() - 1, Math.trunc(Number(state.slice) || 0)));
     sprite3d.editScope = state.editScope === "all" ? "all" : "slice";
     sprite3d.palette = cloneVisualEditValue(state.palette || [{ color: "#ff004d" }]);
     sprite3d.cells = cloneVisualEditValue(state.cells || []);
@@ -1496,19 +1503,23 @@ function editorPreviewTheme() {
   const light = normalizeTheme(document.documentElement.dataset.theme) === "light";
   return {
     colorScheme: light ? "light" : "dark",
-    bg: editorCssVariable("--workspace-bg", light ? "#edf2f6" : "#1e1e1e"),
-    ink: editorCssVariable("--ink", light ? "#20272e" : "#d4d4d4"),
-    muted: editorCssVariable("--muted", light ? "#65727d" : "#9da3aa"),
-    line: editorCssVariable("--line", light ? "#d6dde3" : "#3c3c3c"),
-    accent: editorCssVariable("--accent", "#276b8f"),
-    danger: editorCssVariable("--danger", light ? "#b32634" : "#b43b43"),
-    panelBg: editorCssVariable("--side-bg", light ? "#f8fafc" : "#181818"),
-    background: editorCssVariable("--workspace-bg", light ? "#edf2f6" : "#1e1e1e"),
+    bg: editorCssVariable("--workspace-bg"),
+    ink: editorCssVariable("--ink"),
+    muted: editorCssVariable("--muted"),
+    line: editorCssVariable("--line"),
+    accent: editorCssVariable("--accent"),
+    danger: editorCssVariable("--danger"),
+    panelBg: editorCssVariable("--side-bg"),
+    background: editorCssVariable("--workspace-bg"),
   };
 }
 
-function editorCssVariable(name, fallback) {
-  return window.getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+function editorCssVariable(name) {
+  const value = window.getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  if (!value) {
+    throw new Error(`Required editor theme variable ${name} is missing.`);
+  }
+  return value;
 }
 
 function resolvePreviewTheme(theme) {
@@ -4772,88 +4783,6 @@ function layerCount(exportData = currentLevelExportData()) {
     || 1;
 }
 
-function sourceLayerNameEntries(source = levelReferenceSource(), exportData = currentLevelExportData()) {
-  const objectsByName = new Map(engineObjects(exportData).map((object) => [object.name, object]));
-  const namesByLayer = new Map();
-  for (const row of sourceLayerRows(source)) {
-    const match = String(row || "").match(/^\s*(@?[_A-Za-z][_A-Za-z0-9]*)\s*=\s*(.+?)\s*$/);
-    if (!match) {
-      continue;
-    }
-    const [, name, expression] = match;
-    for (const objectName of expression.trim().split(/\s+/)) {
-      const object = objectsByName.get(objectName);
-      if (object && Number.isInteger(object.layer) && !namesByLayer.has(object.layer)) {
-        namesByLayer.set(object.layer, name);
-      }
-    }
-  }
-  return namesByLayer;
-}
-
-function sourceLayerRows(source) {
-  const lines = sourceLinesWithOffsets(source);
-  const rawLines = lines.map((line) => line.raw);
-  const rows = [];
-
-  for (let index = 0; index < lines.length; index += 1) {
-    const section = sectionHeaderAtForWasm(rawLines, index);
-    if (section?.block === "layers") {
-      const result = collectSectionLayerRows(lines, rawLines, index + 3);
-      rows.push(...result.rows);
-      index = result.endIndex;
-      continue;
-    }
-
-    const code = levelScannerCode(lines[index].raw);
-    const tokens = splitLevelTokens(code);
-    if (tokens[0] === "layers" && tokens.at(-1) === "{") {
-      const result = collectLayerBlockRows(lines, index + 1);
-      rows.push(...result.rows);
-      index = result.endIndex;
-    }
-  }
-
-  return rows;
-}
-
-function collectSectionLayerRows(lines, rawLines, startIndex) {
-  const rows = [];
-  let endIndex = startIndex - 1;
-  for (let index = startIndex; index < lines.length; index += 1) {
-    if (sectionHeaderAtForWasm(rawLines, index)) {
-      break;
-    }
-    const code = levelScannerCode(lines[index].raw);
-    const tokens = splitLevelTokens(code);
-    if (code && sectionBoundaryForWasm("layers", tokens)) {
-      break;
-    }
-    if (code) {
-      rows.push(code);
-    }
-    endIndex = index;
-  }
-  return { rows, endIndex };
-}
-
-function collectLayerBlockRows(lines, startIndex) {
-  const rows = [];
-  let endIndex = startIndex - 1;
-  for (let index = startIndex; index < lines.length; index += 1) {
-    const code = levelScannerCode(lines[index].raw);
-    if (code === "}" || code === "end") {
-      endIndex = index;
-      break;
-    }
-    if (code) {
-      rows.push(code);
-    }
-    endIndex = index;
-  }
-  return { rows, endIndex };
-}
-
 function initialLevelSize(exportData = currentPreviewExportData()) {
   const state = exportData?.levels?.[currentEditableLevelIndex(exportData)]?.initialState;
   if (state?.width && state?.height) {
@@ -6798,13 +6727,7 @@ function levelLayersModeButton() {
   button.title = "Level layers";
   button.dataset.tooltip = button.title;
   button.disabled = levelPlaytestActive;
-  button.innerHTML = `
-    <svg class="lucide lucide-layers-icon lucide-layers" viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z"></path>
-      <path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12"></path>
-      <path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17"></path>
-    </svg>
-  `;
+  button.innerHTML = editorIconSvg("layers");
   button.addEventListener("click", () => {
     setLevelLayerMode(!level.layerMode);
   });
@@ -6821,15 +6744,7 @@ function levelLayerAddButton() {
   button.title = levelLayerInsertMode ? "Cancel add layer" : "Add layer";
   button.dataset.tooltip = "Add layer";
   button.disabled = levelPlaytestActive;
-  button.innerHTML = `
-    <svg class="lucide lucide-layers-plus-icon lucide-layers-plus" viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 .83.18 2 2 0 0 0 .83-.18l8.58-3.9a1 1 0 0 0 0-1.831z"></path>
-      <path d="M16 17h6"></path>
-      <path d="M19 14v6"></path>
-      <path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 .825.178"></path>
-      <path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l2.116-.962"></path>
-    </svg>
-  `;
+  button.innerHTML = editorIconSvg("layers-plus");
   button.addEventListener("click", toggleLevelLayerInsertMode);
   return button;
 }
@@ -6844,15 +6759,7 @@ function levelLayerRemoveButton() {
   button.title = levelLayerRemoveMode ? "Cancel remove layer" : "Remove layer";
   button.dataset.tooltip = "Remove layer";
   button.disabled = levelPlaytestActive || levelLayerCount2d() <= 1;
-  button.innerHTML = `
-    <svg class="lucide lucide-layers-minus-icon lucide-layers-minus" viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 .83.18 2 2 0 0 0 .83-.18l8.58-3.9a1 1 0 0 0 0-1.832z"></path>
-      <path d="M16 19h6"></path>
-      <path d="M2.003 11.995a1 1 0 0 0 .597.915l8.58 3.91a2 2 0 0 0 .83.18"></path>
-      <path d="M2.003 16.995a1 1 0 0 0 .597.915l8.58 3.91a2 2 0 0 0 .83.18 2 2 0 0 0 .83-.18l2.11-.96"></path>
-      <path d="M22.018 12.004a1 1 0 0 1-.598.916l-.177.08"></path>
-    </svg>
-  `;
+  button.innerHTML = editorIconSvg("layers-minus");
   button.addEventListener("click", toggleLevelLayerRemoveMode);
   return button;
 }
@@ -7066,12 +6973,7 @@ function renderLevelAddLegendButton() {
   button.setAttribute("aria-expanded", String(level.addPaletteOpen && candidates.length > 0));
   button.title = candidates.length ? "Add tile legend" : "No unlisted objects";
   button.dataset.tooltip = button.title;
-  button.innerHTML = `
-    <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-plus-icon lucide-plus">
-      <path d="M5 12h14"></path>
-      <path d="M12 5v14"></path>
-    </svg>
-  `;
+  button.innerHTML = editorIconSvg("plus");
   button.addEventListener("click", () => {
     if (!candidates.length) {
       return;
@@ -7487,30 +7389,11 @@ function renderLevelEraserPreview() {
 }
 
 function renderLevelEraserIcon() {
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("class", "level-token-eraser");
-  svg.setAttribute("viewBox", "0 0 24 24");
-  svg.setAttribute("aria-hidden", "true");
-  for (const d of [
-    "m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21",
-    "M22 21H7",
-    "m5 11 9 9",
-  ]) {
-    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    path.setAttribute("d", d);
-    svg.append(path);
-  }
-  return svg;
+  return editorIconElement("eraser", { className: "level-token-eraser" });
 }
 
 function levelListFilterIconSvg() {
-  return `
-    <svg class="lucide lucide-list-filter level-layer-visibility-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M3 6h18"></path>
-      <path d="M7 12h10"></path>
-      <path d="M10 18h4"></path>
-    </svg>
-  `;
+  return editorIconSvg("list-filter", { className: "level-layer-visibility-icon" });
 }
 
 function levelCompositeLayersButton() {
@@ -7523,12 +7406,7 @@ function levelCompositeLayersButton() {
   button.title = level.showCompositeLayers ? "Show active layer" : "Show composite";
   button.dataset.tooltip = button.title;
   button.disabled = levelPlaytestActive;
-  button.innerHTML = `
-    <svg class="lucide lucide-eye-icon lucide-eye" viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"></path>
-      <circle cx="12" cy="12" r="3"></circle>
-    </svg>
-  `;
+  button.innerHTML = editorIconSvg("eye");
   button.addEventListener("click", () => {
     level.showCompositeLayers = !level.showCompositeLayers;
     renderLevelPalette();

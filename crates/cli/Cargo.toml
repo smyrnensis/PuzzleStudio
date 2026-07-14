@@ -6,20 +6,18 @@ license.workspace = true
 
 [features]
 default = []
-play = ["dep:ascii-play"]
 preview = ["dep:html-play"]
 editor = ["dep:html-editor"]
 export-html = ["dep:html-play"]
 export-editor = ["dep:html-editor"]
 screenshot = ["dep:html-play"]
-adapters = ["play", "preview", "editor", "export-html", "export-editor", "screenshot"]
+adapters = ["preview", "editor", "export-html", "export-editor", "screenshot"]
 
 [[bin]]
 name = "puzzlestudio"
 path = "src/main.rs"
 
 [dependencies]
-ascii-play = { path = "../ascii_play", optional = true }
 html-editor = { path = "../html_editor", optional = true }
 html-play = { path = "../html_play", optional = true }
 puzzle-agent-runtime = { path = "../agent_runtime" }

@@ -1,5 +1,5 @@
 fn parse_theme_block(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     theme: &mut ThemeDef,
 ) -> Result<usize, DiagnosticReport> {
@@ -39,7 +39,7 @@ fn parse_theme_block(
 }
 
 fn parse_theme_statement(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     theme: &mut ThemeDef,
 ) -> Result<usize, DiagnosticReport> {
@@ -57,7 +57,10 @@ fn parse_theme_statement(
         ));
     };
     if definition.key != "theme" {
-        return Err(parse_error(&lines[start], "theme directive has the wrong keyword"));
+        return Err(parse_error(
+            &lines[start],
+            "theme directive has the wrong keyword",
+        ));
     }
     if definition.op != Some(authoring_grammar::AuthoringDefinitionOp::Equals) {
         return Err(parse_error(&lines[start], "theme must use `=`"));
@@ -87,7 +90,7 @@ fn set_theme_preset_from_spec(
 }
 
 fn parse_assets_block(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     assets: &mut AssetsDef,
 ) -> Result<usize, DiagnosticReport> {
@@ -150,7 +153,10 @@ fn parse_metadata_text(line: &str, keyword: &str) -> Result<String, DiagnosticRe
         ));
     };
     if definition.key != keyword {
-        return Err(parse_error(line, "metadata directive has the wrong keyword"));
+        return Err(parse_error(
+            line,
+            "metadata directive has the wrong keyword",
+        ));
     }
     if definition.op != Some(authoring_grammar::AuthoringDefinitionOp::Equals) {
         return Err(parse_error(

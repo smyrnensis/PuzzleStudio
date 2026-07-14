@@ -48,16 +48,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
-name = "ascii-play"
-version = "0.1.0"
-dependencies = [
- "puzzle-core",
- "puzzle-grid3d",
- "puzzle-lang",
- "puzzle-play",
-]
-
-[[package]]
 name = "atk"
 version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2367,7 +2357,6 @@ version = "0.1.0"
 dependencies = [
  "puzzle-core",
  "puzzle-grid3d",
- "puzzle-grid3d-authoring",
  "puzzle-lang",
  "puzzle-play",
  "puzzle-runtime-contract",
@@ -2378,17 +2367,9 @@ dependencies = [
 name = "puzzle-grid3d"
 version = "0.1.0"
 dependencies = [
+ "puzzle-core",
  "puzzle-kernel",
  "serde",
-]
-
-[[package]]
-name = "puzzle-grid3d-authoring"
-version = "0.1.0"
-dependencies = [
- "puzzle-authoring",
- "puzzle-grid3d",
- "puzzle-kernel",
 ]
 
 [[package]]
@@ -2405,7 +2386,6 @@ dependencies = [
  "puzzle-authoring",
  "puzzle-core",
  "puzzle-grid3d",
- "puzzle-grid3d-authoring",
  "puzzle-kernel",
  "puzzle-runtime-contract",
  "puzzle-scene",
@@ -2495,7 +2475,6 @@ dependencies = [
 name = "puzzlestudio"
 version = "0.1.0"
 dependencies = [
- "ascii-play",
  "html-editor",
  "html-play",
  "puzzle-agent-runtime",

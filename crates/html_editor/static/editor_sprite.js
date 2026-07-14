@@ -23,9 +23,14 @@ const SPRITE_ANIMATION_MAX_FRAMES = 24;
 const SPRITE_ANIMATION_MIN_DURATION_MS = 20;
 const SPRITE_ANIMATION_MAX_DURATION_MS = 5000;
 
-function resetSpriteBuilder(size = sprite.size) {
-  sprite.size = clampSpriteSize(size);
-  sprite.cells = Array.from({ length: sprite.size * sprite.size }, () => null);
+function spriteFrameCellCount() {
+  return sprite.width * sprite.height;
+}
+
+function resetSpriteBuilder(width = sprite.width, height = sprite.height) {
+  sprite.width = clampSpriteSize(width);
+  sprite.height = clampSpriteSize(height);
+  sprite.cells = Array.from({ length: spriteFrameCellCount() }, () => null);
   resetSpriteAnimationFramesFromCurrentCells();
   sprite.shapeBind = null;
   sprite.solidSource = false;
@@ -120,7 +125,7 @@ function resetSpriteAnimationFramesFromCurrentCells() {
 }
 
 function cloneSpriteCells(cells = sprite.cells) {
-  const length = sprite.size * sprite.size;
+  const length = spriteFrameCellCount();
   return Array.from({ length }, (_, index) => {
     const colorIndex = cells[index];
     return validSpriteColorIndex(colorIndex) ? colorIndex : null;
@@ -162,26 +167,27 @@ function ensureSpriteAnimationFrames() {
 }
 
 function normalizeSpriteAnimationFrameCells(cells) {
-  const length = sprite.size * sprite.size;
+  const length = spriteFrameCellCount();
   return Array.from({ length }, (_, index) => {
     const colorIndex = Array.isArray(cells) ? cells[index] : null;
     return validSpriteColorIndex(colorIndex) ? colorIndex : null;
   });
 }
 
-function resizeSpriteAnimationCells(cells, previousSize, nextSize) {
-  const nextCells = Array.from({ length: nextSize * nextSize }, () => null);
-  const copySize = Math.min(previousSize, nextSize);
-  for (let y = 0; y < copySize; y += 1) {
-    for (let x = 0; x < copySize; x += 1) {
-      const colorIndex = cells[y * previousSize + x];
-      nextCells[y * nextSize + x] = validSpriteColorIndex(colorIndex) ? colorIndex : null;
+function resizeSpriteAnimationCells(cells, previous, next) {
+  const nextCells = Array.from({ length: next.width * next.height }, () => null);
+  const copyWidth = Math.min(previous.width, next.width);
+  const copyHeight = Math.min(previous.height, next.height);
+  for (let y = 0; y < copyHeight; y += 1) {
+    for (let x = 0; x < copyWidth; x += 1) {
+      const colorIndex = cells[y * previous.width + x];
+      nextCells[y * next.width + x] = validSpriteColorIndex(colorIndex) ? colorIndex : null;
     }
   }
   return nextCells;
 }
 
-function syncSpriteAnimationFramesAfterSizeChange(previousSize, nextSize, activeCells) {
+function syncSpriteAnimationFramesAfterSizeChange(previous, next, activeCells) {
   if (!sprite.animationMode) {
     resetSpriteAnimationFramesFromCurrentCells();
     return;
@@ -190,7 +196,7 @@ function syncSpriteAnimationFramesAfterSizeChange(previousSize, nextSize, active
   sprite.animationFrames = sprite.animationFrames.map((cells, index) => (
     index === sprite.animationFrameIndex
       ? cloneSpriteCells(activeCells)
-      : resizeSpriteAnimationCells(cells, previousSize, nextSize)
+      : resizeSpriteAnimationCells(cells, previous, next)
   ));
   sprite.cells = sprite.animationFrames[sprite.animationFrameIndex];
 }
@@ -301,7 +307,7 @@ function renderSpriteAnimationPlaybackView(cells) {
 }
 
 function spriteAnimationFrameCells(cells) {
-  return Array.from({ length: sprite.size * sprite.size }, (_, index) => {
+  return Array.from({ length: spriteFrameCellCount() }, (_, index) => {
     const colorIndex = validSpriteColorIndex(cells?.[index]) ? cells[index] : null;
     const cell = document.createElement("span");
     cell.className = "sprite-animation-frame-cell";
@@ -321,7 +327,9 @@ function renderSpriteAnimationFrameStrip() {
     frameCount: sprite.animationFrameCount,
     activeIndex: sprite.animationFrameIndex,
     playingIndex: sprite.animationPlaybackIndex,
-    size: sprite.size,
+    size: Math.max(sprite.width, sprite.height),
+    columns: sprite.width,
+    rows: sprite.height,
     showInsertTargets,
     showRemoveTargets,
     renderCells: (index) => spriteAnimationFrameCells(sprite.animationFrames[index]),
@@ -624,7 +632,12 @@ function renderSharedSpriteAnimationPlaybackView(context, frame) {
     return;
   }
   spriteAnimationPlaybackView.classList.toggle("is-sprite3d", context.dimension === "sprite3d");
-  spriteAnimationPlaybackView.style.setProperty("--sprite-size", context.state.size);
+  spriteAnimationPlaybackView.style.setProperty(
+    "--sprite-size",
+    Math.max(context.state.width, context.state.height),
+  );
+  spriteAnimationPlaybackView.style.setProperty("--sprite-preview-cols", context.state.width);
+  spriteAnimationPlaybackView.style.setProperty("--sprite-preview-rows", context.state.height);
   spriteAnimationPlaybackView.replaceChildren(...context.renderPlaybackFrame(frame));
 }
 
@@ -653,19 +666,33 @@ function renderSpriteEditorUpperControls(target, controls) {
   sourceActions.setAttribute("role", "group");
   sourceActions.setAttribute("aria-label", `${controls.dimension.toUpperCase()} sprite source actions`);
   sourceActions.append(controls.newButton, controls.addButton, controls.saveButton);
-  nameRow.append(labeledControl("Sprite for", controls.nameInput, "sprite-name-control"), sourceActions);
+  const sizeControl = controls.extentInputs;
+  const sizeEditor = document.createElement("span");
+  sizeEditor.className = "sprite-size-editor";
+  const sizeBindButton = document.createElement("button");
+  sizeBindButton.type = "button";
+  sizeBindButton.className = "sprite-size-bind-button sprite-icon-button";
+  sizeBindButton.classList.toggle("is-active", controls.sizeBound);
+  sizeBindButton.setAttribute("aria-label", controls.sizeBound ? "Unbind size axes" : "Bind size axes");
+  sizeBindButton.setAttribute("aria-pressed", String(controls.sizeBound));
+  sizeBindButton.dataset.tooltip = controls.sizeBound ? "Size axes bound" : "Bind size axes";
+  sizeBindButton.innerHTML = spriteLucideIconSvg("link-2");
+  sizeBindButton.addEventListener("click", controls.toggleSizeBound);
+  sizeEditor.append(sizeControl, sizeBindButton);
+  nameRow.append(
+    labeledControl("Sprite for", controls.nameInput, "sprite-name-control"),
+    labeledControl("Size", sizeEditor, "sprite-size-control"),
+    sourceActions,
+  );
 
   const geometry = document.createElement("div");
   geometry.className = "sprite-editor-geometry-group";
-  geometry.append(labeledControl("Size", controls.sizeInput, "sprite-size-control"));
 
   const scale = document.createElement("div");
   scale.className = "sprite-scale-control sprite-compact-control";
   scale.setAttribute("role", "group");
   scale.setAttribute("aria-label", "Sprite scale");
-  const scaleLabel = document.createElement("span");
-  scaleLabel.className = "sprite-control-label";
-  scaleLabel.textContent = "Scale";
+  scale.dataset.tooltip = "Uniform scale";
   const scaleGroup = document.createElement("div");
   scaleGroup.className = "sprite-scale-group";
   const scalePrefix = document.createElement("span");
@@ -678,7 +705,7 @@ function renderSpriteEditorUpperControls(target, controls) {
     controls.scaleDownButton,
     controls.scaleUpButton,
   );
-  scale.append(scaleLabel, scaleGroup);
+  scale.append(scaleGroup);
   geometry.append(scale);
 
   const animation = document.createElement("div");
@@ -695,7 +722,7 @@ function renderSpriteEditorUpperControls(target, controls) {
     labeledControl("Frames", controls.frameCountInput, "sprite-frame-count-control"),
   );
 
-  root.append(nameRow, controls.shapeField, geometry, animation);
+  root.append(nameRow, geometry, animation);
   target.replaceChildren(root);
 }
 
@@ -703,7 +730,9 @@ function spriteEditorUpperControls2d() {
   return {
     dimension: "2d",
     nameInput: spriteNameInput,
-    sizeInput: spriteSizeInput,
+    extentInputs: spriteWidthInput.closest(".sprite-extent-inputs"),
+    sizeBound: sprite.sizeBound,
+    toggleSizeBound: toggleSpriteSizeBound,
     scaleInput: spriteScaleInput,
     scaleDownButton: spriteScaleDownButton,
     scaleUpButton: spriteScaleUpButton,
@@ -720,7 +749,9 @@ function spriteEditorUpperControls3d() {
   return {
     dimension: "3d",
     nameInput: sprite3dNameInput,
-    sizeInput: sprite3dSizeInput,
+    extentInputs: sprite3dWidthInput.closest(".sprite3d-extent-inputs"),
+    sizeBound: sprite3d.sizeBound,
+    toggleSizeBound: toggleSprite3dSizeBound,
     scaleInput: sprite3dScaleInput,
     scaleDownButton: sprite3dScaleDownButton,
     scaleUpButton: sprite3dScaleUpButton,
@@ -733,6 +764,18 @@ function spriteEditorUpperControls3d() {
   };
 }
 
+function toggleSpriteSizeBound() {
+  sprite.sizeBound = !sprite.sizeBound;
+  renderSpriteControls();
+  setSpriteActionStatus(sprite.sizeBound ? "Size axes bound" : "Size axes independent", "is-ok");
+}
+
+function toggleSprite3dSizeBound() {
+  sprite3d.sizeBound = !sprite3d.sizeBound;
+  renderSprite3dControls();
+  setSprite3dActionStatus(sprite3d.sizeBound ? "Size axes bound" : "Size axes independent", "is-ok");
+}
+
 function renderSpriteControls() {
   withSprite2dPaneScrollPreserved(() => renderSpriteControlsContent());
 }
@@ -742,7 +785,8 @@ function renderSpriteControlsContent() {
     spriteBuilder.querySelector(".sprite-controls"),
     spriteEditorUpperControls2d(),
   );
-  spriteSizeInput.value = String(sprite.size);
+  spriteWidthInput.value = String(sprite.width);
+  spriteHeightInput.value = String(sprite.height);
   syncSpritePaintToolControls();
   syncSpriteGridButton();
   renderSpriteShapeBindControl(spriteShapeField, {
@@ -759,7 +803,7 @@ function renderSpriteControlsContent() {
     },
   });
   renderSpriteScaleControl({
-    size: sprite.size,
+    size: Math.max(sprite.width, sprite.height),
     maxSize: SPRITE_EDITOR_MAX_SIZE,
     scaleInput: spriteScaleInput,
     scaleUpButton: spriteScaleUpButton,
@@ -904,8 +948,6 @@ function renderSpritePaletteGrid({
   const paletteGrid = document.createElement("span");
   paletteGrid.className = "sprite-palette-grid";
   if (leadingControl) {
-    leadingControl.dataset.tooltip = "Brush";
-    setEditorShortcutHint(leadingControl, { key: "b" });
     paletteGrid.append(leadingControl);
   }
   const eraseButton = document.createElement("button");
@@ -917,11 +959,7 @@ function renderSpritePaletteGrid({
   eraseButton.title = emptyTitle;
   eraseButton.setAttribute("aria-label", emptyAriaLabel);
   eraseButton.innerHTML = `
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"></path>
-      <path d="M22 21H7"></path>
-      <path d="m5 11 9 9"></path>
-    </svg>
+    ${editorIconSvg("eraser")}
   `;
   eraseButton.addEventListener("click", () => onSelect(null));
   paletteGrid.append(eraseButton);
@@ -941,10 +979,6 @@ function renderSpritePaletteGrid({
     button.classList.toggle("is-bound", bind.available && bind.linked);
     button.classList.toggle("is-unlinked", bind.available && !bind.linked);
     const displayName = bind.linked && bind.name ? bind.name : "";
-    button.title = displayName ? `Paint ${displayName} (${entry.color})` : `Paint ${entry.color}`;
-    if (index < 9) {
-      setEditorShortcutHint(button, { key: String(index + 1) });
-    }
     button.setAttribute("aria-label", colorAriaLabel(index, displayName));
     button.addEventListener("click", () => onSelect(index));
     item.append(button);
@@ -964,7 +998,7 @@ function renderSpritePaletteGrid({
   addButton.title = "Add color";
   addButton.setAttribute("aria-label", "Add sprite color");
   addButton.setAttribute("aria-expanded", String(addOpen));
-  addButton.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg>`;
+  addButton.innerHTML = `${editorIconSvg("plus")}`;
   addButton.addEventListener("click", onAdd);
   addWrap.append(addButton);
   paletteGrid.append(addWrap);
@@ -975,7 +1009,7 @@ function renderSpritePaletteGrid({
   removeButton.disabled = !Number.isInteger(selectedIndex) || entries.length <= 1;
   removeButton.title = "Remove selected color";
   removeButton.setAttribute("aria-label", "Remove selected color");
-  removeButton.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"></path></svg>`;
+  removeButton.innerHTML = `${editorIconSvg("minus")}`;
   removeButton.addEventListener("click", onRemove);
   paletteGrid.append(removeButton);
   target.append(paletteGrid);
@@ -1025,20 +1059,13 @@ function renderSpritePaletteContent() {
     if (selectedIsTransparent) {
       currentButton.insertAdjacentHTML("beforeend", `
         <span class="sprite-current-transparent-icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24">
-            <path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"></path>
-            <path d="M22 21H7"></path>
-            <path d="m5 11 9 9"></path>
-          </svg>
+          ${editorIconSvg("eraser")}
         </span>
       `);
     } else {
       currentButton.insertAdjacentHTML("beforeend", `
         <span class="sprite-current-edit-icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24">
-            <path d="M12 20h9"></path>
-            <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"></path>
-          </svg>
+          ${editorIconSvg("pencil")}
         </span>
       `);
     }
@@ -1191,6 +1218,7 @@ function renderSpritePaletteContent() {
       currentWrap.append(editorPanel);
       pendingEditMenu = editMenu;
     }
+    currentWrap.append(spriteShapeField);
     spritePalette.append(currentWrap);
     if (pendingEditMenu) {
       positionSpriteColorMenu(pendingEditMenu, currentButton, { side: "left" });
@@ -1990,29 +2018,19 @@ function activeSpriteEditSource() {
 
 function spriteLinkIconSvg() {
   return `
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M10 13a5 5 0 0 0 7.1.1l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1"></path>
-      <path d="M14 11a5 5 0 0 0-7.1-.1l-2 2a5 5 0 0 0 7.1 7.1l1.1-1.1"></path>
-    </svg>
+    ${editorIconSvg("link")}
   `;
 }
 
 function spriteUnlinkIconSvg() {
   return `
-    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      <path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z"></path>
-      <circle cx="7.5" cy="7.5" r=".5" fill="currentColor"></circle>
-      <path d="M3 21 21 3"></path>
-    </svg>
+    ${editorIconSvg("tag-x")}
   `;
 }
 
 function spriteTagIconSvg() {
   return `
-    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-tag-icon lucide-tag" aria-hidden="true">
-      <path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z"></path>
-      <circle cx="7.5" cy="7.5" r=".5" fill="currentColor"></circle>
-    </svg>
+    ${editorIconSvg("tag")}
   `;
 }
 
@@ -2124,64 +2142,12 @@ function renderSpriteColorMenu({
 
 function spriteTrashIconSvg() {
   return `
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M3 6h18"></path>
-      <path d="M8 6V4h8v2"></path>
-      <path d="M6 6l1 15h10l1-15"></path>
-      <path d="M10 11v6"></path>
-      <path d="M14 11v6"></path>
-    </svg>
+    ${editorIconSvg("trash-2")}
   `;
 }
 
 function spriteLucideIconSvg(name) {
-  const icons = {
-    "mouse-pointer-2": `
-      <path d="M4.037 4.688a.495.495 0 0 1 .651-.651l16 6.5a.5.5 0 0 1-.063.947l-6.124 1.58a2 2 0 0 0-1.438 1.435l-1.579 6.126a.5.5 0 0 1-.947.063z"></path>
-    `,
-    move: `
-      <path d="M12 2v20"></path>
-      <path d="m15 5-3-3-3 3"></path>
-      <path d="m19 9 3 3-3 3"></path>
-      <path d="M2 12h20"></path>
-      <path d="m5 9-3 3 3 3"></path>
-      <path d="m9 19 3 3 3-3"></path>
-    `,
-    copy: `
-      <rect width="14" height="14" x="8" y="8" rx="2" ry="2"></rect>
-      <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>
-    `,
-    scissors: `
-      <circle cx="6" cy="6" r="3"></circle>
-      <path d="M8.12 8.12 12 12"></path>
-      <path d="M20 4 8.12 15.88"></path>
-      <circle cx="6" cy="18" r="3"></circle>
-      <path d="M14.47 14.48 20 20"></path>
-    `,
-    "clipboard-paste": `
-      <path d="M15 2H9a1 1 0 0 0-1 1v2c0 .6.4 1 1 1h6c.6 0 1-.4 1-1V3c0-.6-.4-1-1-1Z"></path>
-      <path d="M8 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"></path>
-      <path d="M16 4h2a2 2 0 0 1 2 2v4"></path>
-      <path d="M21 14H11"></path>
-      <path d="m15 10-4 4 4 4"></path>
-    `,
-    "trash-2": `
-      <path d="M3 6h18"></path>
-      <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path>
-      <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path>
-      <line x1="10" x2="10" y1="11" y2="17"></line>
-      <line x1="14" x2="14" y1="11" y2="17"></line>
-    `,
-  };
-  const paths = icons[name];
-  if (!paths) {
-    throw new Error(`Unknown sprite lucide icon ${name}`);
-  }
-  return `
-    <svg xmlns="http://www.w3.org/2000/svg" class="lucide lucide-${name}-icon lucide-${name}" viewBox="0 0 24 24" aria-hidden="true">
-      ${paths}
-    </svg>
-  `;
+  return editorIconSvg(name);
 }
 
 function toggleSpriteTranslateMode() {
@@ -2216,13 +2182,12 @@ function spritePositiveModulo(value, size) {
 }
 
 function translatedSpriteCells(cells, dx, dy) {
-  const size = sprite.size;
-  const next = Array.from({ length: size * size }, () => null);
-  for (let y = 0; y < size; y += 1) {
-    for (let x = 0; x < size; x += 1) {
-      const targetX = spritePositiveModulo(x + dx, size);
-      const targetY = spritePositiveModulo(y + dy, size);
-      next[targetY * size + targetX] = cells[y * size + x];
+  const next = Array.from({ length: spriteFrameCellCount() }, () => null);
+  for (let y = 0; y < sprite.height; y += 1) {
+    for (let x = 0; x < sprite.width; x += 1) {
+      const targetX = spritePositiveModulo(x + dx, sprite.width);
+      const targetY = spritePositiveModulo(y + dy, sprite.height);
+      next[targetY * sprite.width + targetX] = cells[y * sprite.width + x];
     }
   }
   return next;
@@ -2251,8 +2216,8 @@ function continueSpriteTranslate(event) {
     return false;
   }
   event.preventDefault();
-  const cellWidth = spriteTranslateDrag.geometry.width / sprite.size;
-  const cellHeight = spriteTranslateDrag.geometry.height / sprite.size;
+  const cellWidth = spriteTranslateDrag.geometry.width / sprite.width;
+  const cellHeight = spriteTranslateDrag.geometry.height / sprite.height;
   const dx = Math.round((event.clientX - spriteTranslateDrag.startClientX) / cellWidth);
   const dy = Math.round((event.clientY - spriteTranslateDrag.startClientY) / cellHeight);
   sprite.cells = translatedSpriteCells(spriteTranslateDrag.originCells, dx, dy);
@@ -2342,7 +2307,7 @@ function normalizeSpriteClipRect(rect) {
   if (width <= 0 || height <= 0) {
     return null;
   }
-  if (x < 0 || y < 0 || x + width > sprite.size || y + height > sprite.size) {
+  if (x < 0 || y < 0 || x + width > sprite.width || y + height > sprite.height) {
     return null;
   }
   return { x, y, width, height };
@@ -2374,8 +2339,8 @@ function spriteClipRectContainsIndex(rect, index) {
   if (!normalized || !Number.isInteger(index) || index < 0) {
     return false;
   }
-  const x = index % sprite.size;
-  const y = Math.floor(index / sprite.size);
+  const x = index % sprite.width;
+  const y = Math.floor(index / sprite.width);
   return x >= normalized.x
     && x < normalized.x + normalized.width
     && y >= normalized.y
@@ -2387,8 +2352,8 @@ function spriteClipCellFromClient(clientX, clientY, geometry = spriteBoardGeomet
     return null;
   }
   return {
-    x: Math.max(0, Math.min(sprite.size - 1, Math.floor(((clientX - geometry.left) / geometry.width) * geometry.size))),
-    y: Math.max(0, Math.min(sprite.size - 1, Math.floor(((clientY - geometry.top) / geometry.height) * geometry.size))),
+    x: Math.max(0, Math.min(sprite.width - 1, Math.floor(((clientX - geometry.left) / geometry.width) * geometry.columns))),
+    y: Math.max(0, Math.min(sprite.height - 1, Math.floor(((clientY - geometry.top) / geometry.height) * geometry.rows))),
   };
 }
 
@@ -2400,7 +2365,7 @@ function spriteClipRectCells(rect) {
   const cells = [];
   for (let y = 0; y < normalized.height; y += 1) {
     for (let x = 0; x < normalized.width; x += 1) {
-      const index = (normalized.y + y) * sprite.size + normalized.x + x;
+      const index = (normalized.y + y) * sprite.width + normalized.x + x;
       const colorIndex = sprite.cells[index];
       cells.push(validSpriteColorIndex(colorIndex) ? colorIndex : null);
     }
@@ -2444,7 +2409,7 @@ function setSpriteClipRectCells(rect, cells) {
   const changedIndices = [];
   for (let y = 0; y < normalized.height; y += 1) {
     for (let x = 0; x < normalized.width; x += 1) {
-      const index = (normalized.y + y) * sprite.size + normalized.x + x;
+      const index = (normalized.y + y) * sprite.width + normalized.x + x;
       const next = cells[y * normalized.width + x];
       if (pasteSpriteClipCell(index, next)) {
         changedIndices.push(index);
@@ -2462,7 +2427,7 @@ function clearSpriteClipRect(rect) {
   const changedIndices = [];
   for (let y = normalized.y; y < normalized.y + normalized.height; y += 1) {
     for (let x = normalized.x; x < normalized.x + normalized.width; x += 1) {
-      const index = y * sprite.size + x;
+      const index = y * sprite.width + x;
       if (setSpriteCellColorAtIndex(index, null)) {
         changedIndices.push(index);
       }
@@ -2511,7 +2476,7 @@ function pasteSpriteClipClipboard() {
     setSpriteActionStatus("No copied clip", "is-error");
     return false;
   }
-  if (spriteClipClipboard.width > sprite.size || spriteClipClipboard.height > sprite.size) {
+  if (spriteClipClipboard.width > sprite.width || spriteClipClipboard.height > sprite.height) {
     setSpriteActionStatus("Copied clip is larger than sprite", "is-error");
     return false;
   }
@@ -2544,7 +2509,7 @@ function pasteSpriteClipClipboard() {
 }
 
 function spriteWholeEditRect() {
-  return { x: 0, y: 0, width: sprite.size, height: sprite.size };
+  return { x: 0, y: 0, width: sprite.width, height: sprite.height };
 }
 
 function spriteEditRect() {
@@ -2636,11 +2601,11 @@ function spriteClipFloatingRectAtCell(cell) {
   if (!cell || !spriteClipClipboard) {
     return null;
   }
-  const width = Math.min(sprite.size, spriteClipClipboard.width);
-  const height = Math.min(sprite.size, spriteClipClipboard.height);
+  const width = Math.min(sprite.width, spriteClipClipboard.width);
+  const height = Math.min(sprite.height, spriteClipClipboard.height);
   return normalizeSpriteClipRect({
-    x: Math.max(0, Math.min(sprite.size - width, cell.x)),
-    y: Math.max(0, Math.min(sprite.size - height, cell.y)),
+    x: Math.max(0, Math.min(sprite.width - width, cell.x)),
+    y: Math.max(0, Math.min(sprite.height - height, cell.y)),
     width,
     height,
   });
@@ -2665,7 +2630,9 @@ function renderSpriteBoard() {
 }
 
 function renderSpriteBoardContent() {
-  spriteBoard.style.setProperty("--sprite-size", sprite.size);
+  spriteBoard.style.setProperty("--sprite-size", Math.max(sprite.width, sprite.height));
+  spriteBoard.style.setProperty("--sprite-cols", sprite.width);
+  spriteBoard.style.setProperty("--sprite-rows", sprite.height);
   spriteBoard.classList.toggle("is-translate-active", spriteTranslateActive);
   syncSpriteGridVisibility();
   spriteBoard.classList.toggle("is-clip-active", spriteClipActive);
@@ -3164,28 +3131,52 @@ function readableInkForColor(color) {
   return luminance > 150 ? "#1d242b" : "#ffffff";
 }
 
-function updateSpriteSize(value) {
+function updateSpriteDimension(axis, value) {
   const before = visualEditSnapshot("sprite");
-  const previousSize = sprite.size;
-  const nextSize = clampSpriteSize(value);
-  if (nextSize === sprite.size) {
+  const nextValue = clampSpriteSize(value);
+  const next = sprite.sizeBound
+    ? { width: nextValue, height: nextValue }
+    : {
+        width: axis === "width" ? nextValue : sprite.width,
+        height: axis === "height" ? nextValue : sprite.height,
+      };
+  if (next.width === sprite.width && next.height === sprite.height) {
     renderSpriteControls();
     return;
   }
-  const nextCells = Array.from({ length: nextSize * nextSize }, () => null);
-  const copySize = Math.min(sprite.size, nextSize);
-  for (let y = 0; y < copySize; y += 1) {
-    for (let x = 0; x < copySize; x += 1) {
-      const value = sprite.cells[y * sprite.size + x];
-      nextCells[y * nextSize + x] = validSpriteColorIndex(value) ? value : null;
-    }
-  }
-  sprite.size = nextSize;
-  sprite.cells = nextCells;
-  syncSpriteAnimationFramesAfterSizeChange(previousSize, nextSize, nextCells);
+  remapSpriteFrames(next, (x, y) => ({ x, y }));
   updateSpriteBoundShapeDefinition();
   renderSpriteBuilder();
   pushVisualEditUndoSnapshot("sprite", before);
+}
+
+function remapSpriteFrames(next, sourceCoordinates) {
+  const previous = { width: sprite.width, height: sprite.height };
+  const remap = (cells) => {
+    const nextCells = Array.from({ length: next.width * next.height }, () => null);
+    for (let y = 0; y < next.height; y += 1) {
+      for (let x = 0; x < next.width; x += 1) {
+        const source = sourceCoordinates(x, y, previous, next);
+        if (!source || source.x < 0 || source.x >= previous.width
+          || source.y < 0 || source.y >= previous.height) {
+          continue;
+        }
+        const colorIndex = cells[source.y * previous.width + source.x];
+        nextCells[y * next.width + x] = validSpriteColorIndex(colorIndex) ? colorIndex : null;
+      }
+    }
+    return nextCells;
+  };
+  const frames = sprite.animationMode && sprite.animationFrames.length
+    ? sprite.animationFrames
+    : [sprite.cells];
+  sprite.animationFrames = frames.map(remap);
+  sprite.width = next.width;
+  sprite.height = next.height;
+  sprite.animationFrameCount = sprite.animationFrames.length;
+  sprite.animationFrameIndex = Math.min(sprite.animationFrameIndex, sprite.animationFrames.length - 1);
+  sprite.animationPlaybackIndex = Math.min(sprite.animationPlaybackIndex, sprite.animationFrames.length - 1);
+  sprite.cells = sprite.animationFrames[sprite.animationFrameIndex];
 }
 
 function spriteScaleFactor() {
@@ -3193,44 +3184,35 @@ function spriteScaleFactor() {
 }
 
 function canScaleDownSprite(factor = spriteScaleFactor()) {
-  return factor > 1 && sprite.size >= factor && sprite.size % factor === 0;
+  return factor > 1
+    && sprite.width >= factor
+    && sprite.height >= factor
+    && sprite.width % factor === 0
+    && sprite.height % factor === 0;
 }
 
 function scaleUpSprite() {
   const before = visualEditSnapshot("sprite");
   const factor = spriteScaleFactor();
-  const previousSize = sprite.size;
-  const nextSize = sprite.size * factor;
-  if (nextSize > SPRITE_EDITOR_MAX_SIZE) {
+  const next = {
+    width: sprite.width * factor,
+    height: sprite.height * factor,
+  };
+  if (Math.max(next.width, next.height) > SPRITE_EDITOR_MAX_SIZE) {
     setSpriteActionStatus(`Sprite size limit is ${SPRITE_EDITOR_MAX_SIZE}`, "is-error");
     renderSpriteControls();
     return;
   }
 
-  const nextCells = Array.from({ length: nextSize * nextSize }, () => null);
-  for (let y = 0; y < sprite.size; y += 1) {
-    for (let x = 0; x < sprite.size; x += 1) {
-      const colorIndex = validSpriteColorIndex(sprite.cells[y * sprite.size + x])
-        ? sprite.cells[y * sprite.size + x]
-        : null;
-      const nextX = x * factor;
-      const nextY = y * factor;
-      for (let dy = 0; dy < factor; dy += 1) {
-        for (let dx = 0; dx < factor; dx += 1) {
-          nextCells[(nextY + dy) * nextSize + nextX + dx] = colorIndex;
-        }
-      }
-    }
-  }
-
-  sprite.size = nextSize;
-  sprite.cells = nextCells;
-  syncSpriteAnimationFramesAfterSizeChange(previousSize, nextSize, nextCells);
+  remapSpriteFrames(next, (x, y) => ({
+    x: Math.floor(x / factor),
+    y: Math.floor(y / factor),
+  }));
   updateSpriteBoundShapeDefinition();
   renderSpriteBuilder();
-  const message = `Scaled ${factor}x to ${nextSize}x${nextSize}`;
+  const message = `Scaled ${factor}x to ${next.width}x${next.height}`;
   setSpriteActionStatus(message, "is-ok");
-  setStatus(`Scaled sprite ${factor}x to ${nextSize}x${nextSize}`, "is-ok");
+  setStatus(`Scaled sprite ${factor}x to ${next.width}x${next.height}`, "is-ok");
   pushVisualEditUndoSnapshot("sprite", before);
 }
 
@@ -3238,50 +3220,27 @@ function scaleDownSprite() {
   const before = visualEditSnapshot("sprite");
   const factor = spriteScaleFactor();
   if (!canScaleDownSprite(factor)) {
-    setSpriteActionStatus(`Size ${sprite.size} is not divisible by ${factor}`, "is-error");
+    setSpriteActionStatus(`Dimensions ${sprite.width}x${sprite.height} are not divisible by ${factor}`, "is-error");
     renderSpriteControls();
     return;
   }
 
-  const previousSize = sprite.size;
-  const nextSize = sprite.size / factor;
-  const nextCells = Array.from({ length: nextSize * nextSize }, () => null);
-  for (let y = 0; y < nextSize; y += 1) {
-    for (let x = 0; x < nextSize; x += 1) {
-      nextCells[y * nextSize + x] = validSpriteColorIndex(sprite.cells[(y * factor) * sprite.size + (x * factor)])
-        ? sprite.cells[(y * factor) * sprite.size + (x * factor)]
-        : null;
-    }
-  }
-
-  sprite.size = nextSize;
-  sprite.cells = nextCells;
-  syncSpriteAnimationFramesAfterSizeChange(previousSize, nextSize, nextCells);
+  const next = {
+    width: sprite.width / factor,
+    height: sprite.height / factor,
+  };
+  remapSpriteFrames(next, (x, y) => ({ x: x * factor, y: y * factor }));
   updateSpriteBoundShapeDefinition();
   renderSpriteBuilder();
-  const message = `Scaled down ${factor}x to ${nextSize}x${nextSize}`;
+  const message = `Scaled down ${factor}x to ${next.width}x${next.height}`;
   setSpriteActionStatus(message, "is-ok");
-  setStatus(`Scaled sprite down ${factor}x to ${nextSize}x${nextSize}`, "is-ok");
+  setStatus(`Scaled sprite down ${factor}x to ${next.width}x${next.height}`, "is-ok");
   pushVisualEditUndoSnapshot("sprite", before);
 }
 
-function transformSpriteCells(mapper, message) {
+function transformSpriteCells(next, sourceCoordinates, message) {
   const before = visualEditSnapshot("sprite");
-  const size = sprite.size;
-  const previousCells = sprite.cells;
-  const nextCells = Array.from({ length: size * size }, () => null);
-  for (let y = 0; y < size; y += 1) {
-    for (let x = 0; x < size; x += 1) {
-      const source = mapper(x, y, size);
-      const colorIndex = previousCells[source.y * size + source.x];
-      nextCells[y * size + x] = validSpriteColorIndex(colorIndex) ? colorIndex : null;
-    }
-  }
-  sprite.cells = nextCells;
-  if (sprite.animationMode) {
-    ensureSpriteAnimationFrames();
-    sprite.animationFrames[sprite.animationFrameIndex] = sprite.cells;
-  }
+  remapSpriteFrames(next, sourceCoordinates);
   sprite.addPaletteOpen = false;
   sprite.editPaletteOpen = false;
   sprite.customColorOpen = false;
@@ -3294,19 +3253,35 @@ function transformSpriteCells(mapper, message) {
 }
 
 function rotateSpriteLeft() {
-  transformSpriteCells((x, y, size) => ({ x: size - 1 - y, y: x }), "Rotated left");
+  transformSpriteCells(
+    { width: sprite.height, height: sprite.width },
+    (x, y, previous) => ({ x: previous.width - 1 - y, y: x }),
+    "Rotated left",
+  );
 }
 
 function rotateSpriteRight() {
-  transformSpriteCells((x, y, size) => ({ x: y, y: size - 1 - x }), "Rotated right");
+  transformSpriteCells(
+    { width: sprite.height, height: sprite.width },
+    (x, y, previous) => ({ x: y, y: previous.height - 1 - x }),
+    "Rotated right",
+  );
 }
 
 function flipSpriteHorizontal() {
-  transformSpriteCells((x, y, size) => ({ x: size - 1 - x, y }), "Flipped horizontal");
+  transformSpriteCells(
+    { width: sprite.width, height: sprite.height },
+    (x, y, previous) => ({ x: previous.width - 1 - x, y }),
+    "Flipped horizontal",
+  );
 }
 
 function flipSpriteVertical() {
-  transformSpriteCells((x, y, size) => ({ x, y: size - 1 - y }), "Flipped vertical");
+  transformSpriteCells(
+    { width: sprite.width, height: sprite.height },
+    (x, y, previous) => ({ x, y: previous.height - 1 - y }),
+    "Flipped vertical",
+  );
 }
 
 function normalizedSpriteCellColorIndex(index) {
@@ -3323,7 +3298,6 @@ function floodFillSpriteComponentAtIndex(index, colorIndex) {
   if (targetColorIndex === nextColorIndex) {
     return 0;
   }
-  const size = sprite.size;
   const visited = new Uint8Array(sprite.cells.length);
   const region = spriteClipActive ? normalizeSpriteClipRect(spriteClipSelection) : spriteWholeEditRect();
   if (!region || !spriteClipRectContainsIndex(region, index)) {
@@ -3340,19 +3314,19 @@ function floodFillSpriteComponentAtIndex(index, colorIndex) {
     visited[current] = 1;
     sprite.cells[current] = nextColorIndex;
     changed += 1;
-    const x = current % size;
-    const y = Math.floor(current / size);
+    const x = current % sprite.width;
+    const y = Math.floor(current / sprite.width);
     if (x > 0) {
       stack.push(current - 1);
     }
-    if (x < size - 1) {
+    if (x < sprite.width - 1) {
       stack.push(current + 1);
     }
     if (y > 0) {
-      stack.push(current - size);
+      stack.push(current - sprite.width);
     }
-    if (y < size - 1) {
-      stack.push(current + size);
+    if (y < sprite.height - 1) {
+      stack.push(current + sprite.width);
     }
   }
   if (!changed) {
@@ -3415,8 +3389,8 @@ function spritePointForCellIndex(index) {
     return null;
   }
   return {
-    x: (index % sprite.size) + 0.5,
-    y: Math.floor(index / sprite.size) + 0.5,
+    x: (index % sprite.width) + 0.5,
+    y: Math.floor(index / sprite.width) + 0.5,
   };
 }
 
@@ -3477,7 +3451,8 @@ function spriteBoardGeometry() {
     bottom: rect.bottom,
     width: rect.width,
     height: rect.height,
-    size: sprite.size,
+    columns: sprite.width,
+    rows: sprite.height,
   };
 }
 
@@ -3493,8 +3468,8 @@ function spriteBoardPointFromClient(clientX, clientY, geometry = spriteBoardGeom
     return null;
   }
   return {
-    x: ((clientX - geometry.left) / geometry.width) * geometry.size,
-    y: ((clientY - geometry.top) / geometry.height) * geometry.size,
+    x: ((clientX - geometry.left) / geometry.width) * geometry.columns,
+    y: ((clientY - geometry.top) / geometry.height) * geometry.rows,
   };
 }
 
@@ -3504,14 +3479,14 @@ function spriteCellIndexFromPoint(point) {
   }
   const x = Math.floor(point.x);
   const y = Math.floor(point.y);
-  if (x < 0 || x >= sprite.size || y < 0 || y >= sprite.size) {
+  if (x < 0 || x >= sprite.width || y < 0 || y >= sprite.height) {
     return -1;
   }
-  return y * sprite.size + x;
+  return y * sprite.width + x;
 }
 
 function spriteBrushDiameterCells() {
-  return Math.min(sprite.size, spriteBrushSizePx);
+  return Math.min(Math.max(sprite.width, sprite.height), spriteBrushSizePx);
 }
 
 function spriteBrushDiameterForSize(size) {
@@ -3529,16 +3504,16 @@ function spritePaintIndicesForPoint(point) {
   const diameter = spriteBrushDiameterCells();
   const radius = diameter / 2;
   const minX = Math.max(0, Math.floor(point.x - radius - 0.5));
-  const maxX = Math.min(sprite.size - 1, Math.ceil(point.x + radius - 0.5));
+  const maxX = Math.min(sprite.width - 1, Math.ceil(point.x + radius - 0.5));
   const minY = Math.max(0, Math.floor(point.y - radius - 0.5));
-  const maxY = Math.min(sprite.size - 1, Math.ceil(point.y + radius - 0.5));
+  const maxY = Math.min(sprite.height - 1, Math.ceil(point.y + radius - 0.5));
   const indices = [];
   for (let y = minY; y <= maxY; y += 1) {
     for (let x = minX; x <= maxX; x += 1) {
       const dx = x + 0.5 - point.x;
       const dy = y + 0.5 - point.y;
       if ((dx * dx) + (dy * dy) <= radius * radius) {
-        indices.push(y * sprite.size + x);
+        indices.push(y * sprite.width + x);
       }
     }
   }
@@ -3660,8 +3635,8 @@ function continueSpriteClip(event) {
     const origin = spriteClipDrag.origin;
     const dx = cell.x - spriteClipDrag.startCell.x;
     const dy = cell.y - spriteClipDrag.startCell.y;
-    const nextX = Math.max(0, Math.min(sprite.size - origin.width, origin.x + dx));
-    const nextY = Math.max(0, Math.min(sprite.size - origin.height, origin.y + dy));
+    const nextX = Math.max(0, Math.min(sprite.width - origin.width, origin.x + dx));
+    const nextY = Math.max(0, Math.min(sprite.height - origin.height, origin.y + dy));
     const next = normalizeSpriteClipRect({ ...origin, x: nextX, y: nextY });
     if (next && (!spriteClipDrag.preview || next.x !== spriteClipDrag.preview.x || next.y !== spriteClipDrag.preview.y)) {
       spriteClipSelection = next;
@@ -3723,13 +3698,13 @@ function spriteClipResizeRect(origin, edge, cell) {
     left = Math.max(0, Math.min(cell.x, right));
   }
   if (edge.includes("e")) {
-    right = Math.min(sprite.size - 1, Math.max(cell.x, left));
+    right = Math.min(sprite.width - 1, Math.max(cell.x, left));
   }
   if (edge.includes("n")) {
     top = Math.max(0, Math.min(cell.y, bottom));
   }
   if (edge.includes("s")) {
-    bottom = Math.min(sprite.size - 1, Math.max(cell.y, top));
+    bottom = Math.min(sprite.height - 1, Math.max(cell.y, top));
   }
   return normalizeSpriteClipRect({
     x: left,
@@ -3808,19 +3783,6 @@ function spritePaneShortcutDimension() {
   return "";
 }
 
-function activateSpriteBrushShortcut(dimension) {
-  if (dimension === "3d") selectSprite3dBrushSize(spriteBrushSizeInput.value);
-  else selectSpriteBrushSize(spriteBrushSizeInput.value);
-}
-
-function selectSpritePaletteShortcut(dimension, index) {
-  const entries = dimension === "3d" ? sprite3dPaletteEntries() : sprite.palette;
-  if (index < 0 || index >= entries.length) return false;
-  if (dimension === "3d") selectSprite3dColor(index);
-  else selectSpriteColor(index);
-  return true;
-}
-
 function cancelSpritePaneToolShortcut(dimension) {
   if (dimension === "3d") {
     if (sprite3dClipActive) deactivateSprite3dClipMode();
@@ -3845,11 +3807,9 @@ function handleSpritePaneCommandShortcut(event) {
   }
   const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
   let handled = true;
-  if (key === "b") activateSpriteBrushShortcut(dimension);
-  else if (key === "f") dimension === "3d" ? toggleSprite3dBucketMode() : toggleSpriteBucketMode();
+  if (key === "f") dimension === "3d" ? toggleSprite3dBucketMode() : toggleSpriteBucketMode();
   else if (key === "m") dimension === "3d" ? toggleSprite3dTranslateMode() : toggleSpriteTranslateMode();
   else if (key === "c") dimension === "3d" ? toggleSprite3dClipMode() : toggleSpriteClipMode();
-  else if (/^[1-9]$/.test(key)) handled = selectSpritePaletteShortcut(dimension, Number(key) - 1);
   else if (dimension === "3d" && ["x", "y", "z"].includes(key)) setSprite3dAxis(key);
   else if (dimension === "3d" && key === "[") moveSprite3dSlice(-1);
   else if (dimension === "3d" && key === "]") moveSprite3dSlice(1);
@@ -3958,10 +3918,10 @@ function paintSpriteDragPoint(point) {
 
 function spriteAscii() {
   const rows = [];
-  for (let y = 0; y < sprite.size; y += 1) {
+  for (let y = 0; y < sprite.height; y += 1) {
     const row = [];
-    for (let x = 0; x < sprite.size; x += 1) {
-      row.push(spriteExportCharForColorIndex(sprite.cells[y * sprite.size + x]));
+    for (let x = 0; x < sprite.width; x += 1) {
+      row.push(spriteExportCharForColorIndex(sprite.cells[y * sprite.width + x]));
     }
     rows.push(row.join(""));
   }
@@ -3994,14 +3954,11 @@ function renderSpriteShapeBindRow(target) {
   const row = document.createElement("div");
   row.className = "sprite-shape-bind-row";
   row.classList.toggle("has-unlink", info.linked && info.name);
-  const label = document.createElement("span");
-  label.className = "sprite-shape-bind-label";
-  label.textContent = "Shape";
   const input = document.createElement("input");
   input.type = "text";
   input.className = "sprite-shape-name-input";
   input.value = info.name || "";
-  input.placeholder = "";
+  input.placeholder = "shape";
   input.spellcheck = false;
   input.autocomplete = "off";
   input.setAttribute("aria-label", "Shape name");
@@ -4041,7 +3998,7 @@ function renderSpriteShapeBindRow(target) {
     sprite.shapeTagPickerOpen = opening;
     renderSpriteControls();
   });
-  row.append(label, input, tagButton);
+  row.append(input, tagButton);
   if (info.linked && info.name) {
     row.append(renderSpriteShapeUnlinkButton(info));
   }
@@ -4088,13 +4045,11 @@ function renderSpriteShapeBindControl(target, options) {
   const row = document.createElement("div");
   row.className = "sprite-shape-bind-row";
   row.classList.toggle("has-unlink", info.linked && info.name);
-  const label = document.createElement("span");
-  label.className = "sprite-shape-bind-label";
-  label.textContent = "Shape";
   const input = document.createElement("input");
   input.type = "text";
   input.className = "sprite-shape-name-input";
   input.value = info.name || "";
+  input.placeholder = "shape";
   input.spellcheck = false;
   input.autocomplete = "off";
   input.setAttribute("aria-label", "Shape name");
@@ -4129,7 +4084,7 @@ function renderSpriteShapeBindControl(target, options) {
     }
     options.render();
   });
-  row.append(label, input, tagButton);
+  row.append(input, tagButton);
   if (info.linked && info.name) {
     const unlink = document.createElement("button");
     unlink.type = "button";
@@ -4225,7 +4180,8 @@ function setSpriteShapeSync(sync, rawName) {
       setSpriteActionStatus(`Cannot use shape ${name}`, "is-error");
       return false;
     }
-    sprite.size = parsed.size;
+    sprite.width = parsed.width;
+    sprite.height = parsed.height;
     sprite.cells = parsed.cells;
   } else {
     status = `Tagged shape ${name}`;
@@ -4242,18 +4198,19 @@ function spriteCellsFromAsciiRows(rows, paletteLength) {
   }
   const width = Math.max(...rows.map((row) => row.length));
   const height = rows.length;
-  const size = clampSpriteSize(Math.max(width, height));
-  const cells = Array.from({ length: size * size }, () => null);
-  for (let y = 0; y < Math.min(height, size); y += 1) {
-    for (let x = 0; x < Math.min(rows[y].length, size); x += 1) {
+  const clampedWidth = clampSpriteSize(width);
+  const clampedHeight = clampSpriteSize(height);
+  const cells = Array.from({ length: clampedWidth * clampedHeight }, () => null);
+  for (let y = 0; y < clampedHeight; y += 1) {
+    for (let x = 0; x < Math.min(rows[y].length, clampedWidth); x += 1) {
       const colorIndex = spriteColorIndexForPaletteChar(rows[y][x], paletteLength);
       if (colorIndex === undefined) {
         return null;
       }
-      cells[y * size + x] = colorIndex;
+      cells[y * clampedWidth + x] = colorIndex;
     }
   }
-  return { size, cells };
+  return { width: clampedWidth, height: clampedHeight, cells };
 }
 
 function loadSpriteSourceTarget(target, options = {}) {
@@ -4295,7 +4252,8 @@ function loadSpriteSourceTarget(target, options = {}) {
   }
   spriteNameInput.value = targetName || "Sprite";
   setSpriteEditSource(target, activeDocument());
-  sprite.size = loaded.size;
+  sprite.width = loaded.width;
+  sprite.height = loaded.height;
   sprite.palette = loaded.palette;
   sprite.shapeBind = loaded.shapeBind || null;
   sprite.solidSource = Boolean(loaded.solid);
@@ -4340,14 +4298,15 @@ function applyIncompleteSpriteSourceTarget(name, target) {
     setSpriteEditSource(target, activeDocument());
   }
   spriteNameInput.value = name || "";
-  sprite.size = clampSpriteSize(sprite.size);
+  sprite.width = clampSpriteSize(sprite.width);
+  sprite.height = clampSpriteSize(sprite.height);
   sprite.palette = [];
   sprite.shapeBind = null;
   sprite.solidSource = false;
   sprite.sourcePreludeRows = [];
   sprite.sourceSpatialOps = [];
   sprite.animationMode = false;
-  sprite.cells = Array.from({ length: sprite.size * sprite.size }, () => null);
+  sprite.cells = Array.from({ length: spriteFrameCellCount() }, () => null);
   resetSpriteAnimationFramesFromCurrentCells();
   sprite.selectedColorIndex = null;
   sprite.addPaletteOpen = false;
@@ -4400,19 +4359,20 @@ function parseSpriteDefinitionSource(contract, selectorName = "") {
   if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0 || depth !== 1 || !semanticFrames.length) {
     return null;
   }
-  const size = clampSpriteSize(Math.max(width, height));
+  const parsedWidth = clampSpriteSize(width);
+  const parsedHeight = clampSpriteSize(height);
   const parsedFrames = semanticFrames.map((frame) => {
     const cells = frame?.layers?.[0]?.cells;
     if (!Array.isArray(cells) || cells.length !== width * height) return null;
-    const padded = Array.from({ length: size * size }, () => null);
-    for (let y = 0; y < height; y += 1) {
-      for (let x = 0; x < width; x += 1) {
+    const parsed = Array.from({ length: parsedWidth * parsedHeight }, () => null);
+    for (let y = 0; y < parsedHeight; y += 1) {
+      for (let x = 0; x < parsedWidth; x += 1) {
         const cell = cells[y * width + x];
         if (cell !== null && (!Number.isInteger(cell) || cell < 0 || cell >= palette.length)) return null;
-        padded[y * size + x] = cell;
+        parsed[y * parsedWidth + x] = cell;
       }
     }
-    return padded;
+    return parsed;
   });
   if (parsedFrames.some((frame) => !frame)) return null;
   if (parsedFrames.length >= 2) {
@@ -4423,7 +4383,8 @@ function parseSpriteDefinitionSource(contract, selectorName = "") {
       ? normalizedSpriteAnimationDuration(contract.durationMs)
       : normalizedSpriteAnimationDuration(frameDurationMs === null ? undefined : frameDurationMs * parsedFrames.length);
     return {
-      size,
+      width: parsedWidth,
+      height: parsedHeight,
       palette,
       shapeBind: null,
       sourcePreludeRows,
@@ -4436,7 +4397,8 @@ function parseSpriteDefinitionSource(contract, selectorName = "") {
     };
   }
   return {
-    size,
+    width: parsedWidth,
+    height: parsedHeight,
     palette,
     shapeBind,
     sourcePreludeRows,
@@ -4662,9 +4624,9 @@ function spriteEditFrames() {
   const frames = sprite.animationMode
     ? sprite.animationFrames.slice(0, sprite.animationFrameCount)
     : [sprite.cells];
-  return frames.map((cells) => [Array.from({ length: sprite.size }, (_, y) => (
-    Array.from({ length: sprite.size }, (_, x) => {
-      const cell = Array.isArray(cells) ? cells[y * sprite.size + x] : null;
+  return frames.map((cells) => [Array.from({ length: sprite.height }, (_, y) => (
+    Array.from({ length: sprite.width }, (_, x) => {
+      const cell = Array.isArray(cells) ? cells[y * sprite.width + x] : null;
       return Number.isInteger(cell) ? cell : null;
     })
   ))]);
@@ -4719,7 +4681,7 @@ function newSpriteDraft() {
   sprite.palette = [{ color: "#ff004d" }];
   sprite.selectedColorIndex = 0;
   sprite.animationMode = false;
-  resetSpriteBuilder(5);
+  resetSpriteBuilder(5, 5);
   setSpriteActionStatus("Started new sprite", "is-ok");
   pushVisualEditUndoSnapshot("sprite", before);
 }
@@ -4771,7 +4733,7 @@ function deleteWholeSpriteRegion() {
   const before = visualEditSnapshot("sprite");
   if (sprite.animationMode) {
     ensureSpriteAnimationFrames();
-    sprite.cells = Array.from({ length: sprite.size * sprite.size }, () => null);
+    sprite.cells = Array.from({ length: spriteFrameCellCount() }, () => null);
     sprite.animationFrames[sprite.animationFrameIndex] = sprite.cells;
     updateSpriteBoundShapeDefinition();
     renderSpriteBuilder();
@@ -4779,7 +4741,7 @@ function deleteWholeSpriteRegion() {
     pushVisualEditUndoSnapshot("sprite", before);
     return;
   }
-  resetSpriteBuilder(sprite.size);
+  resetSpriteBuilder();
   setSpriteActionStatus("Deleted whole sprite contents", "is-ok");
   pushVisualEditUndoSnapshot("sprite", before);
 }
@@ -5416,9 +5378,9 @@ function spriteAnimationSourceFrames() {
 }
 
 function spriteAsciiFromCells(cells) {
-  return Array.from({ length: sprite.size }, (_, y) => (
-    Array.from({ length: sprite.size }, (_, x) => {
-      const cell = Array.isArray(cells) ? cells[y * sprite.size + x] : null;
+  return Array.from({ length: sprite.height }, (_, y) => (
+    Array.from({ length: sprite.width }, (_, x) => {
+      const cell = Array.isArray(cells) ? cells[y * sprite.width + x] : null;
       return spriteExportCharForColorIndex(cell);
     }).join("")
   )).join("\n");
@@ -5468,7 +5430,8 @@ function topLevelDepthAt(text, endIndex) {
 
 for (const input of [
   spriteNameInput,
-  spriteSizeInput,
+  spriteWidthInput,
+  spriteHeightInput,
   spriteScaleInput,
   spriteAnimationDurationInput,
   spriteAnimationFrameCountInput,
@@ -5478,19 +5441,21 @@ for (const input of [
     installSelectAllOnFocus(input);
   }
 }
-spriteSizeInput.addEventListener("input", () => {
-  if (spriteSizeInput.validity.valid && spriteSizeInput.value !== "") {
-    updateSpriteSize(spriteSizeInput.value);
-  }
-});
-spriteSizeInput.addEventListener("change", () => updateSpriteSize(spriteSizeInput.value));
-spriteSizeInput.addEventListener("keydown", (event) => {
-  if (event.key !== "Enter") {
-    return;
-  }
-  event.preventDefault();
-  updateSpriteSize(spriteSizeInput.value);
-});
+function bindSpriteDimensionInput(input, axis) {
+  input.addEventListener("input", () => {
+    if (input.validity.valid && input.value !== "") {
+      updateSpriteDimension(axis, input.value);
+    }
+  });
+  input.addEventListener("change", () => updateSpriteDimension(axis, input.value));
+  input.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    updateSpriteDimension(axis, input.value);
+  });
+}
+bindSpriteDimensionInput(spriteWidthInput, "width");
+bindSpriteDimensionInput(spriteHeightInput, "height");
 spriteScaleInput.addEventListener("input", () => {
   clearSpriteActionError();
   renderSpriteControls();

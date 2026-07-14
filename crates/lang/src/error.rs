@@ -141,16 +141,6 @@ impl DiagnosticReport {
     pub fn into_diagnostics(self) -> Vec<Diagnostic> {
         self.diagnostics
     }
-
-    pub(crate) fn with_fallback_source_line(mut self, source_line: impl Into<String>) -> Self {
-        let source_line = source_line.into();
-        for diagnostic in &mut self.diagnostics {
-            if diagnostic.primary_span.is_none() {
-                diagnostic.primary_span = Some(DiagnosticSpan::source_line(source_line.clone()));
-            }
-        }
-        self
-    }
 }
 
 impl From<puzzle_core::StateError> for DiagnosticReport {

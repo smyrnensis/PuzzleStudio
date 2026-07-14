@@ -2,36 +2,39 @@
 
 この文書は、PuzzleStudio CLI の目的、責務境界、初期コマンド、実装順をまとめる。
 
-Status: 一部実装済み。`check`、`play`、`preview`、`editor`、`export-html`、
-`export-editor`、`import-puzzlescript` は `puzzlestudio` binary から呼べる。
-`simulate`、`test`、`format`、`new` はまだ計画段階。
+Status: 一部実装済み。`check`、`inspect`、`agent --stdio`、`preview`、
+`editor`、`export-html`、`export-editor`、`import-puzzlescript` は
+`puzzlestudio` binary から呼べる。`simulate`、`trace`、`test`、`format`、
+`new` はまだ計画段階。
 
 ## 1. Purpose
 
-CLI の目的は、ローカルファイルを中心にした制作ループを、AI エージェント、CI、シェル、自動化から扱いやすくすることである。
+CLI の第一目的は、AI エージェントがcanonical systemを非対話的に操作し、errorや実行結果を再現可能な形で調査できるfeedback経路を提供することである。CI、shell、自動化も同じcontractを利用する。
 
 PuzzleStudio の中心価値は、意図、`.puzzle` source、決定論的実行、検証結果の間の短いフィードバックループにある。CLI はそのループを GUI なしで回すための入口になる。
 
 ```txt
 human / AI edits .puzzle
   -> puzzlestudio check
-  -> puzzlestudio preview / export-html
-  -> puzzlestudio simulate / test
-  -> human / AI fixes source
+  -> puzzlestudio inspect / simulate / trace
+  -> structured diagnostics / state diff / fired rules
+  -> AI explains or fixes source
 ```
 
 CLI が特に支える対象:
 
-- Codex / Claude Code などのローカルエージェント
+- Codex / Claude Code など、errorを再現・診断するローカルエージェント
 - GitHub Actions などの CI
-- shell script による一括変換や検証
-- GUI を開かずに行う authoring / export / regression check
+- shell script による一括検証
+- GUI を開かずに行うcompile、simulation、trace、regression check
 
-CLI は唯一の入口ではない。`ascii-play`、`html-play`、`html-editor` などの
+CLIは人間向けinteractive playerではない。人間がゲームを操作し、視覚・音・layoutを確認する経路はbrowser/editor adapterが所有する。CLIにraw key handling、terminal UI、独自scene rendererを持たせない。
+
+CLI は唯一の入口ではない。`html-play`、`html-editor` などの
 adapter binary は、各 adapter の開発・表示確認・static asset 変更確認における
 first-class entry であり続ける。
 
-CLI は product / automation 向けの安定 façade である。adapter の内部挙動、
+CLI は diagnostic / automation 向けの安定 façade である。adapter の内部挙動、
 CSS、JS、WASM、server behavior を検査するときに、CLI 経由で包む必要はない。
 むしろ owner が adapter にある変更では、その adapter の直コマンドを使うほうが
 正しい。
@@ -53,14 +56,16 @@ CLI が所有してよいもの:
 - command naming and argument parsing
 - shell / CI 向けの exit code
 - human-readable diagnostics と `--json` output contract
+- ownerが返すtyped resultを安定したmachine-readable schemaへ直列化すること
 - explicit output path policy and accidental-write prevention
 - batch traversal and report aggregation
 
 CLI が所有してはいけないもの:
 
 - parser/compiler/runtime の意味
+- runtime resultから別の意味を推測することや、trace/state diffを再計算すること
 - `html-play` / `html-editor` の layout、theme、asset embedding、server behavior
-- terminal adapter の key handling / rendering semantics
+- interactive play、raw key handling、terminal rendering
 - editor service の workspace root、save、preview、highlight semantics
 - adapter 開発時の canonical verification path
 
@@ -72,11 +77,11 @@ CLI が所有してはいけないもの:
 - source tree に対する確認は、必要な package を rebuild する `cargo run -p ... -- ...`
   か、明示的に rebuild 済みの binary で行う。
 - `cargo run -p puzzlestudio -- check ...` は既定で adapter crate をビルドしない。
-  terminal / browser adapter のビルド失敗で syntax / validation check が止まってはいけない。
+  browser adapter のビルド失敗で syntax / validation check が止まってはいけない。
   CLI adapter façade 自体を確認するときは `cargo run -p puzzlestudio --features adapters -- ...`
   を使う。
 - adapter 変更の smoke test は `cargo run -p html-play -- ...`、
-  `cargo run -p html-editor -- ...`、`cargo run -p ascii-play -- ...` を優先してよい。
+  `cargo run -p html-editor -- ...` を優先してよい。
 - CLI の smoke test は、CLI façade 自体の contract を確認したいときに行う。
 
 ## 3. Proposed Package
@@ -95,11 +100,11 @@ Binary name:
 puzzlestudio
 ```
 
-既存の `ascii-play`、`html-play`、`html-editor` binary は当面残す。CLI が安定した後、共通コマンドからそれらの体験を呼べるようにしてもよい。
+既存の `html-play`、`html-editor` binary はowner-local entryとして残す。CLIは共通commandからそれらの体験を呼べる。
 
 既定の `puzzlestudio` build は `check` / `import-puzzlescript` を parser / import
 owner だけで実行できるようにし、adapter crate へ静的依存しない。
-`puzzlestudio play` / `preview` / `editor` / export 系は `--features adapters`
+`puzzlestudio preview` / `editor` / export 系は `--features adapters`
 で有効化したときだけ既存 adapter の実装を薄く呼び出す。既存 binary は開発・後方互換用に残す。
 
 CLI が安定しても、既存 binary は「古い入口」ではなく owner-local entry として残す。
@@ -165,25 +170,6 @@ Development note:
 - Browser player の layout、theme、input dispatch、server route を調べる場合は、
   `cargo run -p html-play -- <path> --serve` が owner-local verification path である。
 
-### `puzzlestudio play`
-
-terminal player を起動する。
-
-```bash
-puzzlestudio play games/spec_2d.puzzle
-```
-
-Expected behavior:
-
-- 既存の `ascii-play` terminal runtime を共有する
-- 2D / prototype 3D document の single model を実行する
-- terminal 固有の key handling と表示だけを adapter が所有する
-
-Development note:
-
-- terminal adapter の表示や input を変更した場合は、
-  `cargo run -p ascii-play -- <path>` を優先する。
-
 ### `puzzlestudio editor`
 
 local editor server を起動する。
@@ -217,6 +203,21 @@ Expected behavior:
 - `puzzle-play` の session lifecycle を通す
 - `on_level_start`、clear 判定、level navigation command の扱いが runtime と一致する
 - AI 向けには `--json` で level、turn count、cleared、commands、state summary を返す
+
+### `puzzlestudio trace`
+
+compileまたはtransitionの原因を追跡するため、ownerが生成したtraceを順序とsource locationを保って返す。
+
+```bash
+puzzlestudio trace games/spec_2d.puzzle --level first --inputs right,right --json
+```
+
+Expected behavior:
+
+- parser/lowering/runtimeが所有するtrace productをそのまま直列化する
+- fired rule、patch、state diff、command、diagnostic locationの対応を保持する
+- CLIがrule適用理由やstate diffを再計算しない
+- required trace productが存在しなければ、推測出力ではなくowner contractの不足として失敗する
 
 ### `puzzlestudio test`
 
@@ -288,7 +289,7 @@ Expected behavior:
 
 ## 5. Output Contract
 
-AI / CI との相性を考えると、human-readable output と machine-readable output を両方持つ必要がある。
+AIによる原因調査を主用途とし、machine-readable outputをcanonical feedback contractとする。human-readable outputは同じtyped resultの表示であり、別の意味を持たせない。
 
 Human output:
 
@@ -319,6 +320,8 @@ Rules:
 - `--json` must not mix progress text into stdout
 - human-readable diagnostics may go to stderr
 - JSON result should go to stdout
+- JSON must preserve owner-provided locations, IDs, state differences, and trace order
+- missing feedback fields must fail visibly or require the owning contract to be extended; CLI must not infer them
 - command failure should use non-zero exit codes
 - paths should be stable and preferably relative to cwd when invoked with relative input
 
@@ -330,10 +333,10 @@ Rules:
 4. Add `--json` diagnostics
 5. Add `export-html` by sharing existing HTML export code
 6. Add `preview`
-7. Add `play`
-8. Add `editor`
-9. Add `export-editor`
-10. Add `simulate --json`
+7. Add `editor`
+8. Add `export-editor`
+9. Add `simulate --json`
+10. Add `trace --json`
 11. Add `import-puzzlescript`
 12. Add `test`
 13. Add `format`

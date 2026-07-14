@@ -11366,16 +11366,16 @@ level "start" {
         .filter_map(|rule| {
             rule.writes.iter().find_map(|write| match write {
                 WriteOp::Move {
-                    to_offset: Offset::Fixed { dx, dy },
+                    to_offset: Offset::Fixed { delta },
                     ..
-                } => Some((*dx, *dy)),
+                } => Some(delta.axes()),
                 _ => None,
             })
         })
         .collect::<Vec<_>>();
     offsets.sort();
 
-    assert_eq!(offsets, vec![(-1, 0), (0, -1), (0, 1), (1, 0)]);
+    assert_eq!(offsets, vec![[-1, 0], [0, -1], [0, 1], [1, 0]]);
 }
 
 #[test]
@@ -17276,7 +17276,7 @@ level "start" {
 }
 
 #[test]
-fn puzzle_render_parses_cell_size() {
+fn puzzle_render_rejects_removed_cell_size() {
     let source = r#"
 title = cell_size_render
 
@@ -17297,63 +17297,9 @@ level "start" {
 }
 }
 "#;
-    let loaded = parse_game(source).unwrap();
-
-    assert_eq!(loaded.render.cell_size, Some(64));
-}
-
-#[test]
-fn puzzle_render_rejects_invalid_cell_size() {
-    let source = r#"
-title = cell_size_render
-
-puzzle default {
-slots 1
-empty .
-
-render {
-cell_size = 0
-}
-
-rules {
-
-}
-
-level "start" {
-.
-}
-}
-"#;
     let err = parse_game(source).unwrap_err().to_string();
 
-    assert!(err.contains("cell_size must be an integer from 1 to 256"));
-}
-
-#[test]
-fn puzzle_render_rejects_old_cell_size_value_syntax() {
-    let source = r#"
-title = cell_size_render
-
-puzzle default {
-slots 1
-empty .
-
-render {
-cell_size 64
-}
-
-rules {
-
-}
-
-level "start" {
-.
-}
-}
-"#;
-    let err = parse_game(source).unwrap_err().to_string();
-
-    assert!(err.contains("cell_size directive must be: cell_size = <pixels>"));
+    assert!(err.contains("cell_size"));
 }
 
 #[test]

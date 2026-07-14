@@ -176,34 +176,12 @@ function createPaneCloseButton(paneId) {
   button.dataset.paneClose = paneId;
   button.setAttribute("aria-label", `Hide ${toolPaneTitle(paneId)} pane`);
   button.title = `Hide ${toolPaneTitle(paneId)} pane`;
-  button.innerHTML = `
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M18 6 6 18"></path>
-      <path d="m6 6 12 12"></path>
-    </svg>
-  `;
+  button.innerHTML = editorIconSvg("x");
   return button;
 }
 
 function paneMaximizeIconSvg(isRestore) {
-  if (isRestore) {
-    return `
-      <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-minimize-icon lucide-minimize">
-        <path d="M8 3v3a2 2 0 0 1-2 2H3"></path>
-        <path d="M21 8h-3a2 2 0 0 1-2-2V3"></path>
-        <path d="M3 16h3a2 2 0 0 1 2 2v3"></path>
-        <path d="M16 21v-3a2 2 0 0 1 2-2h3"></path>
-      </svg>
-    `;
-  }
-  return `
-    <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-maximize-icon lucide-maximize">
-      <path d="M8 3H5a2 2 0 0 0-2 2v3"></path>
-      <path d="M21 8V5a2 2 0 0 0-2-2h-3"></path>
-      <path d="M3 16v3a2 2 0 0 0 2 2h3"></path>
-      <path d="M16 21h3a2 2 0 0 0 2-2v-3"></path>
-    </svg>
-  `;
+  return editorIconSvg(isRestore ? "minimize" : "maximize");
 }
 
 function setPaneMaximizeButtonIcon(button, isRestore) {
@@ -336,12 +314,7 @@ function initializePhysicalWorkPanes() {
     previewClose.dataset.paneClose = PREVIEW_WORK_PANE_ID;
     previewClose.setAttribute("aria-label", "Hide Preview pane");
     previewClose.title = "Hide Preview pane";
-    previewClose.innerHTML = `
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M18 6 6 18"></path>
-        <path d="m6 6 12 12"></path>
-      </svg>
-    `;
+    previewClose.innerHTML = editorIconSvg("x");
   }
   if (gamePaneTitle) {
     gamePaneTitle.textContent = toolPaneTitle(PREVIEW_WORK_PANE_ID);

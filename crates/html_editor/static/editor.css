@@ -999,7 +999,7 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 
 .document-list.is-drop-target,
 .tree-row.is-drop-target {
-  background: rgba(39, 107, 143, 0.22);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
   outline: 1px solid var(--accent);
   outline-offset: -1px;
 }
@@ -1061,7 +1061,7 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 .tree-row.is-active-tree {
   border-left-color: var(--accent);
   background: var(--tree-focus-bg);
-  box-shadow: inset 0 0 0 1px rgba(0, 122, 204, 0.28);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
 .tree-row.is-active-tree .tree-icon,
@@ -4637,7 +4637,7 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 }
 
 .sprite-editor-name-row {
-  flex: 0 1 330px;
+  flex: 0 1 470px;
   flex-wrap: nowrap;
 }
 
@@ -4658,11 +4658,6 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   width: var(--icon-button-size);
   min-width: var(--icon-button-size);
   padding: 0;
-}
-
-.sprite-editor-upper-controls > .sprite-shape-field {
-  flex: 0 1 200px;
-  min-width: 150px;
 }
 
 .sprite-editor-geometry-group,
@@ -4768,7 +4763,7 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   field-sizing: content;
 }
 
-.sprite-builder .sprite-controls .sprite-shape-field {
+.sprite-builder .sprite-shape-field {
   width: auto;
   min-width: 0;
   max-width: none;
@@ -5017,7 +5012,8 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 }
 
 .sprite-controls .sprite-scale-control {
-  width: 128px;
+  width: max-content;
+  align-self: end;
 }
 
 .sprite-controls .sprite-transform-control {
@@ -5084,44 +5080,43 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 }
 
 .sprite-scale-group {
-  height: var(--icon-button-size);
-  min-height: var(--icon-button-size);
+  height: 26px;
+  min-height: 26px;
   display: grid;
-  grid-template-columns: 16px minmax(0, 1fr) var(--icon-button-size) var(--icon-button-size);
+  grid-template-columns: 12px 22px 24px 24px;
   align-items: center;
-  overflow: hidden;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--icon-button-radius);
-  background: var(--input-bg);
+  gap: 1px;
+  border: 0;
+  background: transparent;
 }
 
 .sprite-scale-group:focus-within {
-  border-color: var(--accent);
-  outline: 2px solid color-mix(in srgb, var(--accent) 35%, transparent);
-  outline-offset: 1px;
+  outline: 0;
 }
 
 .sprite-scale-prefix {
-  height: var(--icon-button-size);
+  height: 26px;
   display: flex;
   align-items: center;
   justify-content: flex-end;
   color: var(--muted);
   font-size: 13px;
   font-weight: 800;
-  line-height: var(--icon-button-size);
+  line-height: 26px;
 }
 
 .sprite-scale-step-button {
-  min-width: 0;
-  min-height: var(--icon-button-size);
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  min-height: 24px;
   padding: 0;
   display: grid;
   place-items: center;
   align-self: stretch;
   border: 0;
-  border-radius: 0;
-  background: var(--control-bg);
+  border-radius: 4px;
+  background: transparent;
   box-shadow: none;
   color: var(--ink);
   text-transform: none;
@@ -5135,10 +5130,6 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   stroke-width: 2;
   stroke-linecap: round;
   stroke-linejoin: round;
-}
-
-.sprite-scale-step-button + .sprite-scale-step-button {
-  border-left: 1px solid var(--line);
 }
 
 .sprite-scale-step-button:hover:not(:disabled) {
@@ -5160,24 +5151,94 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 }
 
 .sprite-scale-group input {
-  height: var(--icon-button-size);
-  min-height: var(--icon-button-size);
+  width: 22px;
+  height: 26px;
+  min-height: 26px;
   display: block;
-  padding: 0 5px 0 0;
+  padding: 0;
   border: 0;
-  border-right: 1px solid var(--line);
   border-radius: 0;
+  background: transparent;
   outline: 0;
-  line-height: var(--icon-button-size);
-  text-align: left;
+  line-height: 26px;
+  text-align: center;
 }
 
-.sprite-editor-geometry-group .sprite-size-control {
-  width: 44px;
+.sprite-editor-name-row .sprite-size-control {
+  width: auto;
 }
 
-.sprite-editor-geometry-group .sprite-size-control input {
-  width: 44px;
+.sprite-size-editor,
+.sprite-extent-inputs,
+.sprite3d-extent-inputs {
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--muted);
+  font: 800 11px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+.sprite-size-editor {
+  gap: 2px;
+}
+
+.sprite-editor-name-row .sprite-size-control .sprite-extent-inputs input,
+.sprite-editor-name-row .sprite-size-control .sprite3d-extent-inputs input {
+  width: 24px;
+  height: 26px;
+  min-height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  outline: 0;
+  color: var(--ink);
+  text-align: center;
+}
+
+.sprite-editor-name-row .sprite-size-control .sprite-extent-inputs input:focus,
+.sprite-editor-name-row .sprite-size-control .sprite3d-extent-inputs input:focus,
+.sprite-controls .sprite-scale-control .sprite-scale-group input:focus {
+  border: 0;
+  outline: 0;
+  box-shadow: inset 0 -1px 0 var(--accent);
+}
+
+.sprite-size-bind-button {
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  min-height: 24px;
+  border-radius: 4px;
+}
+
+.sprite-size-bind-button svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sprite-controls .sprite-scale-control .sprite-scale-group {
+  min-height: 26px;
+  align-items: center;
+}
+
+.sprite-controls .sprite-scale-control .sprite-scale-group input {
+  width: 22px;
+  padding: 0;
+  text-align: center;
+}
+
+.sprite-controls .sprite-scale-control .sprite-scale-prefix {
+  height: 26px;
+  display: inline-grid;
+  place-items: center;
+  line-height: 1;
 }
 
 .sprite-controls input[type="number"],
@@ -5229,7 +5290,7 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 }
 
 .sprite-transform-bar .sprite-scale-control {
-  width: 128px;
+  width: max-content;
 }
 
 .sprite-clear-button {
@@ -5379,12 +5440,6 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 .sprite-brush-size-input:focus {
   background: var(--input-bg);
   outline: none;
-}
-
-.sprite-brush-size-unit {
-  color: var(--muted);
-  font: 800 11px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-  line-height: 1;
 }
 
 .sprite-palette-actions {
@@ -5618,13 +5673,18 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 
 .sprite-current-color-wrap {
   position: relative;
-  width: min(100%, var(--sprite3d-slice-size, 320px));
+  width: 100%;
   min-width: 0;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   margin: 0 0 4px;
+}
+
+.sprite-current-color-wrap > .sprite-shape-field {
+  flex: 0 0 auto;
+  min-width: 0;
 }
 
 .sprite-current-color-button {
@@ -6026,11 +6086,14 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 
 .sprite-board {
   --sprite-size: 5;
+  --sprite-cols: var(--sprite-size);
+  --sprite-rows: var(--sprite-size);
   --sprite-cell: clamp(14px, calc(100cqw / var(--sprite-size)), 34px);
   --sprite-puzzle-line: #1d242b;
   position: relative;
   display: grid;
-  grid-template-columns: repeat(var(--sprite-size), var(--sprite-cell));
+  grid-template-columns: repeat(var(--sprite-cols), var(--sprite-cell));
+  grid-template-rows: repeat(var(--sprite-rows), var(--sprite-cell));
   width: max-content;
   border: 0;
   background-color: var(--sprite-swatch-bg);
@@ -6872,15 +6935,8 @@ html.is-sprite3d-slice-scrubbing * {
   grid-template-columns: minmax(0, 72px) repeat(2, var(--icon-button-size));
 }
 
-.sprite-shape-bind-label {
-  grid-column: 1 / -1;
-  min-height: 14px;
-  font-size: 12px;
-  font-weight: 800;
-  text-transform: uppercase;
-}
-
-.sprite-controls .sprite-shape-name-input {
+.sprite-builder .sprite-shape-name-input {
+  grid-column: 1;
   width: 100%;
   min-width: 0;
   height: var(--icon-button-size);
@@ -6895,7 +6951,7 @@ html.is-sprite3d-slice-scrubbing * {
   font-weight: 800;
 }
 
-.sprite-controls .sprite-shape-name-input:focus {
+.sprite-builder .sprite-shape-name-input:focus {
   border-color: var(--accent);
   outline: 2px solid color-mix(in srgb, var(--accent) 35%, transparent);
   outline-offset: 1px;

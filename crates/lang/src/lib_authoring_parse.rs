@@ -49,10 +49,10 @@ impl AuthoringEntryOwner {
 }
 
 fn collect_authoring_entry(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     owner: AuthoringEntryOwner,
-) -> Result<(Vec<String>, usize), DiagnosticReport> {
+) -> Result<(Vec<source::LogicalLine>, usize), DiagnosticReport> {
     let first = &lines[start];
     let mut depth = authoring_line_brace_delta(first);
     if depth <= 0 {
@@ -81,18 +81,18 @@ fn authoring_line_brace_delta(line: &str) -> i32 {
     raw_brace_delta(strip_line_comment(line))
 }
 
-fn next_line_is_else(lines: &[String], index: usize) -> bool {
+fn next_line_is_else(lines: &[source::LogicalLine], index: usize) -> bool {
     lines
         .get(index)
         .is_some_and(|line| matches!(split_header_tokens(line).as_slice(), ["else"]))
 }
 
 fn collect_braced_body_until_close(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     header_line: &str,
     missing_close_message: &str,
-) -> Result<(Vec<String>, usize), DiagnosticReport> {
+) -> Result<(Vec<source::LogicalLine>, usize), DiagnosticReport> {
     let mut body = Vec::new();
     let mut depth = 1i32;
     let mut i = start;
@@ -113,9 +113,9 @@ fn collect_braced_body_until_close(
 }
 
 fn collect_levels_authoring_entry(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
-) -> Result<(Vec<String>, usize), DiagnosticReport> {
+) -> Result<(Vec<source::LogicalLine>, usize), DiagnosticReport> {
     let first = &lines[start];
     let mut entry = vec![first.clone()];
     let mut depth = authoring_line_brace_delta(first);
@@ -140,10 +140,35 @@ fn collect_levels_authoring_entry(
     Err(parse_error(first, "levels block missing closing brace"))
 }
 
+fn lower_model_statement_block(
+    syntax: &model_syntax::RuleStatementsSyntax,
+    catalog: &Catalog,
+    named_conditions: &HashMap<String, (String, ConditionAst)>,
+) -> Result<(Vec<StatementAst>, Option<LocalFrame<ObjectId>>), DiagnosticReport> {
+    let modifier = syntax.modifier.as_deref().unwrap_or("");
+    let modifier_tokens = split_header_tokens(modifier);
+    let local_frame =
+        parse_program_local_frame_modifier(&modifier_tokens, &syntax.header, catalog)?;
+    let statements = lower_statement_syntax(
+        &syntax.statements,
+        &catalog.object_names,
+        &catalog.object_schemas,
+        &catalog_value_sets(catalog),
+        &catalog.maps,
+        &catalog.object_groups,
+        &catalog.input_names,
+        &catalog.variable_names,
+        &catalog.numeric_variable_defaults,
+        &catalog.condition_names,
+        named_conditions,
+        &[],
+    )?;
+    Ok((statements, local_frame))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn parse_puzzle_definition(
-    lines: &[String],
-    line_numbers: &[usize],
+    lines: &[source::LogicalLine],
     start: usize,
     model: &model_syntax::PuzzleModelSyntax,
     catalog_product: &Catalog,
@@ -175,7 +200,8 @@ fn parse_puzzle_definition(
     render: &mut PuzzleRenderDef,
     animation: &mut AnimationDef,
     puzzle_screen: &mut PuzzleScreenDef,
-    pending_level_blocks: &mut Vec<PendingLevelBlock>,
+    level_blocks: &mut Vec<LevelBlock>,
+    recognition: &mut crate::surface::ParserRecognition,
 ) -> Result<(usize, String), DiagnosticReport> {
     let header = split_header_tokens(&lines[start]);
     let name = crate::syntax::named_block_declaration_syntax(&header, "puzzle")
@@ -191,9 +217,124 @@ fn parse_puzzle_definition(
     *catalog = catalog_product.clone();
     *layer_count = catalog.layer_count;
     *named_layers = catalog.named_layers.clone();
+    for legend in &model.body.levels.legends {
+        apply_level_resource_legend(
+            legend,
+            catalog,
+            render_overlays,
+            empty_char,
+            recognition,
+        )?;
+    }
+    level_blocks.extend(model.body.levels.levels.iter().cloned());
+    lower_model_key_bindings(&model.body.keys, catalog, controls)?;
+
+    let mut diagnostics = Vec::new();
+    for entry in &model.entries {
+        let tokens = split_header_tokens(&entry.header.text);
+        match tokens.as_slice() {
+            ["var" | "const" | "persistent", ..] => parse_variable_directive(
+                &tokens,
+                &entry.header,
+                &mut catalog.variable_names,
+                &mut catalog.variable_labels,
+                &mut catalog.variable_defaults,
+                &mut catalog.numeric_variable_defaults,
+                &mut catalog.persistent_vars,
+                &mut catalog.constant_variables,
+            )?,
+            [name, "=", ..] if *name != "dimension" => {
+                parse_assignment_directive(name, &entry.header, catalog, named_conditions)?;
+            }
+            _ => {}
+        }
+    }
+    for query in &model.body.queries {
+        let (query, core_definition) = lower_query_definition_syntax(
+            &query.definition,
+            &query.source,
+            &catalog.object_names,
+            &catalog.object_schemas,
+            &catalog_value_sets(catalog),
+            &catalog.maps,
+            &catalog.object_groups,
+            &catalog.variable_names,
+            query_names,
+            &mut catalog.condition_names,
+            &mut catalog.condition_labels,
+        )?;
+        query_definitions.push(query);
+        if let Some(definition) = core_definition {
+            condition_definitions.push(definition);
+        }
+    }
+    if let Some(win_conditions) = &model.body.win_conditions {
+        lower_condition_block_syntax_rows(
+            &win_conditions.header,
+            &win_conditions.rows,
+            catalog,
+            named_conditions,
+        )?;
+    }
+    if let Some(product) = &model.body.render {
+        *render = product.render.clone();
+        *animation = product.animation.clone();
+    }
+    for syntax in &model.body.routines {
+        let header = puzzle_authoring::RuleStatementLine {
+            source: syntax.header.clone(),
+            text: syntax
+                .header
+                .text
+                .strip_suffix('{')
+                .unwrap_or(&syntax.header.text)
+                .trim_end()
+                .to_string(),
+        };
+        match lower_rule_definition_syntax(
+            &header,
+            &syntax.statements,
+            &catalog.object_names,
+            &catalog.object_schemas,
+            &catalog_value_sets(catalog),
+            &catalog.maps,
+            &catalog.object_groups,
+            &catalog.input_names,
+            &catalog.variable_names,
+            &catalog.numeric_variable_defaults,
+            &catalog.condition_names,
+            named_conditions,
+        ) {
+            Ok(definition) => rule_definitions.push(definition),
+            Err(report) => diagnostics.extend(report.into_diagnostics()),
+        }
+    }
+    if let Some(syntax) = &model.body.rules {
+        let (statements, local_frame) =
+            lower_model_statement_block(syntax, catalog, named_conditions)?;
+        *main_statements = Some(statements);
+        *main_local_frame = local_frame;
+    }
+    if let Some(syntax) = &model.body.on_level_start {
+        let (statements, local_frame) =
+            lower_model_statement_block(syntax, catalog, named_conditions)?;
+        *level_start_statements = Some(statements);
+        *level_start_local_frame = local_frame;
+    }
+    if let Some(syntax) = &model.body.on_level_clear {
+        let (statements, local_frame) =
+            lower_model_statement_block(syntax, catalog, named_conditions)?;
+        *level_clear_statements = Some(statements);
+        *level_clear_local_frame = local_frame;
+    }
+    if let Some(syntax) = &model.body.on_last_level_clear {
+        let (statements, local_frame) =
+            lower_model_statement_block(syntax, catalog, named_conditions)?;
+        *last_level_clear_statements = Some(statements);
+        *last_level_clear_local_frame = local_frame;
+    }
 
     let mut i = start + 1;
-    let mut diagnostics = Vec::new();
     let mut pending_visual_blocks = Vec::<usize>::new();
     while i < lines.len() && !is_block_close_line(&lines[i]) {
         let line = &lines[i];
@@ -204,17 +345,19 @@ fn parse_puzzle_definition(
         }
 
         match tokens[0] {
-            "dimension" if tokens.as_slice() == ["dimension", "=", "2"] => {
+            "dimension"
+                if tokens.as_slice()
+                    == ["dimension", "=", model.dimension.number().to_string().as_str()] =>
+            {
                 i += 1;
             }
             "dimension" => {
                 return Err(parse_error(
                     line,
-                    "2D lowering requires `dimension = 2` or an omitted dimension",
+                    "puzzle dimension does not match the canonical model",
                 ));
             }
-            assignment_name if tokens.get(1).copied() == Some("=") => {
-                parse_assignment_directive(assignment_name, line, catalog, named_conditions)?;
+            _assignment_name if tokens.get(1).copied() == Some("=") => {
                 i += 1;
             }
             "tags" => {
@@ -237,60 +380,7 @@ fn parse_puzzle_definition(
                 i += 1;
             }
             lifecycle_block if puzzle_lifecycle_event(lifecycle_block).is_some() => {
-                let local_frame = parse_program_local_frame_modifier(&tokens[1..], line, catalog)?;
-                let lifecycle = puzzle_lifecycle_event(lifecycle_block).unwrap();
-                let (event, statements, next_i) =
-                    match parse_lifecycle_block(lines, Some(line_numbers), i, lifecycle, catalog) {
-                        Ok(parsed) => parsed,
-                        Err(report) => {
-                            diagnostics.extend(report.into_diagnostics());
-                            i = recover_after_directive_error(lines, i);
-                            continue;
-                        }
-                    };
-                match event.as_str() {
-                    "level_start" => {
-                        if level_start_statements.is_some() {
-                            diagnostics.extend(
-                                parse_error(line, "multiple level_start blocks are not supported")
-                                    .into_diagnostics(),
-                            );
-                            i = recover_after_directive_error(lines, i);
-                            continue;
-                        }
-                        *level_start_statements = Some(statements);
-                        *level_start_local_frame = local_frame;
-                    }
-                    "level_clear" => {
-                        if level_clear_statements.is_some() {
-                            diagnostics.extend(
-                                parse_error(line, "multiple level_clear blocks are not supported")
-                                    .into_diagnostics(),
-                            );
-                            i = recover_after_directive_error(lines, i);
-                            continue;
-                        }
-                        *level_clear_statements = Some(statements);
-                        *level_clear_local_frame = local_frame;
-                    }
-                    "last_level_clear" => {
-                        if last_level_clear_statements.is_some() {
-                            diagnostics.extend(
-                                parse_error(
-                                    line,
-                                    "multiple last_level_clear blocks are not supported",
-                                )
-                                .into_diagnostics(),
-                            );
-                            i = recover_after_directive_error(lines, i);
-                            continue;
-                        }
-                        *last_level_clear_statements = Some(statements);
-                        *last_level_clear_local_frame = local_frame;
-                    }
-                    _ => unreachable!("matched lifecycle event"),
-                }
-                i = next_i;
+                i = skip_logical_block(lines, i);
             }
             "slots" if tokens.len() == 1 => {
                 i = skip_logical_block(lines, i);
@@ -334,19 +424,9 @@ fn parse_puzzle_definition(
                 i = recover_after_directive_error(lines, i);
             }
             "keys" => {
-                i = parse_model_keys_block(lines, i, catalog, controls)?;
+                i = skip_logical_block(lines, i);
             }
             "var" | "const" | "persistent" => {
-                parse_variable_directive(
-                    &tokens,
-                    line,
-                    &mut catalog.variable_names,
-                    &mut catalog.variable_labels,
-                    &mut catalog.variable_defaults,
-                    &mut catalog.numeric_variable_defaults,
-                    &mut catalog.persistent_vars,
-                    &mut catalog.constant_variables,
-                )?;
                 i += 1;
             }
             "variable" => {
@@ -363,32 +443,11 @@ fn parse_puzzle_definition(
                 i += 1;
             }
             "query" => {
-                let (query, core_definition) = parse_query_directive(
-                    &tokens,
-                    line,
-                    &catalog.object_names,
-                    &catalog.object_schemas,
-                    &catalog_value_sets(&catalog),
-                    &catalog.maps,
-                    &catalog.object_groups,
-                    &catalog.variable_names,
-                    query_names,
-                    &mut catalog.condition_names,
-                    &mut catalog.condition_labels,
-                )?;
-                query_definitions.push(query);
-                if let Some(definition) = core_definition {
-                    condition_definitions.push(definition);
-                }
                 i += 1;
             }
             "solver" => {
-                if solver_strategy.is_some() {
-                    return Err(parse_error(line, "duplicate solver block"));
-                }
-                let (next_i, parsed_strategy) = parse_solver_block(lines, i)?;
-                *solver_strategy = Some(parsed_strategy);
-                i = next_i;
+                *solver_strategy = model.body.solver.clone();
+                i = skip_logical_block(lines, i);
             }
             "effect" => {
                 diagnostics.extend(
@@ -442,7 +501,10 @@ fn parse_puzzle_definition(
                 }
                 i += 1;
             }
-            "win_conditions" | "lose_conditions" => {
+            "win_conditions" => {
+                i = skip_logical_block(lines, i);
+            }
+            "lose_conditions" => {
                 i = parse_conditions_block(lines, i, catalog, named_conditions)?;
             }
             "sprites" => {
@@ -452,7 +514,7 @@ fn parse_puzzle_definition(
                 i = next_i;
             }
             "render" => {
-                i = parse_puzzle_render_block(lines, i, render, animation)?;
+                i = skip_logical_block(lines, i);
             }
             "sounds" => {
                 i = parse_model_sounds_block(
@@ -478,30 +540,7 @@ fn parse_puzzle_definition(
                 i += 1;
             }
             "routine" => {
-                match parse_rule_definition(
-                    lines,
-                    Some(line_numbers),
-                    i,
-                    &catalog.object_names,
-                    &catalog.object_schemas,
-                    &catalog_value_sets(catalog),
-                    &catalog.maps,
-                    &catalog.object_groups,
-                    &catalog.input_names,
-                    &catalog.variable_names,
-                    &catalog.numeric_variable_defaults,
-                    &catalog.condition_names,
-                    named_conditions,
-                ) {
-                    Ok((definition, next_i)) => {
-                        rule_definitions.push(definition);
-                        i = next_i;
-                    }
-                    Err(report) => {
-                        diagnostics.extend(report.into_diagnostics());
-                        i = recover_after_directive_error(lines, i);
-                    }
-                }
+                i = skip_logical_block(lines, i);
             }
             "rule" => {
                 diagnostics.extend(
@@ -510,42 +549,7 @@ fn parse_puzzle_definition(
                 i = recover_after_directive_error(lines, i);
             }
             "rules" => {
-                let local_frame = parse_program_local_frame_modifier(&tokens[1..], line, catalog)?;
-                if main_statements.is_some() {
-                    diagnostics.extend(
-                        parse_error(line, "multiple puzzle rules blocks are not supported")
-                            .into_diagnostics(),
-                    );
-                    i = recover_after_directive_error(lines, i);
-                    continue;
-                }
-                match parse_statement_block(
-                    lines,
-                    Some(line_numbers),
-                    i + 1,
-                    &[BLOCK_CLOSE],
-                    &catalog.object_names,
-                    &catalog.object_schemas,
-                    &catalog_value_sets(catalog),
-                    &catalog.maps,
-                    &catalog.object_groups,
-                    &catalog.input_names,
-                    &catalog.variable_names,
-                    &catalog.numeric_variable_defaults,
-                    &catalog.condition_names,
-                    named_conditions,
-                    &[],
-                ) {
-                    Ok((statements, next_i)) => {
-                        *main_statements = Some(statements);
-                        *main_local_frame = local_frame;
-                        i = next_i;
-                    }
-                    Err(report) => {
-                        diagnostics.extend(report.into_diagnostics());
-                        i = recover_after_directive_error(lines, i);
-                    }
-                }
+                i = skip_logical_block(lines, i);
             }
             "main" => {
                 diagnostics.extend(
@@ -554,12 +558,10 @@ fn parse_puzzle_definition(
                 i = recover_after_directive_error(lines, i);
             }
             "levels" => {
-                pending_level_blocks.push(PendingLevelBlock::levels(i, Some(name.to_string())));
                 let (_, next_i) = collect_levels_authoring_entry(lines, i)?;
                 i = next_i;
             }
             "level" => {
-                pending_level_blocks.push(PendingLevelBlock::level(i, Some(name.to_string())));
                 let (_, next_i) = parse_level_block(lines, i, 0)?;
                 i = next_i;
             }
@@ -576,7 +578,7 @@ fn parse_puzzle_definition(
         return Err(parse_error(&lines[start], "puzzle missing closing brace"));
     }
     for visual_start in pending_visual_blocks {
-        if let Err(report) = parse_visuals_block(lines, visual_start, catalog, visuals) {
+        if let Err(report) = parse_visuals_block(lines, visual_start, catalog, visuals).value {
             diagnostics.extend(report.into_diagnostics());
         }
     }

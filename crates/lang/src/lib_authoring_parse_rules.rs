@@ -50,7 +50,7 @@ fn parse_group_definition(
 type PendingGroupDefinition = puzzle_authoring::SelectorGroupDeclaration;
 
 fn collect_puzzle_group_declarations(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
 ) -> Result<Vec<PendingGroupDefinition>, DiagnosticReport> {
     let mut groups = Vec::new();
@@ -81,14 +81,17 @@ fn collect_puzzle_group_declarations(
 }
 
 fn collect_pending_group_block(
-    lines: &[String],
+    lines: &[source::LogicalLine],
     start: usize,
     groups: &mut Vec<PendingGroupDefinition>,
     names: &mut HashSet<String>,
 ) -> Result<usize, DiagnosticReport> {
     let block = puzzle_authoring::collect_row_block_surface(lines, start + 1, "groups")
         .map_err(|error| parse_error(&lines[start], error.message()))?;
-    for line in block.rows {
+    for line in &lines[block.body_start..block.body_end] {
+        if line.trim().is_empty() {
+            continue;
+        }
         let Some(assignment) = puzzle_authoring::selector_assignment_surface(line) else {
             return Err(parse_error(
                 line,
@@ -425,9 +428,9 @@ fn parse_variable_directive(
     }
 }
 
-fn parse_query_directive(
-    _tokens: &[&str],
-    line: &str,
+fn lower_query_definition_syntax(
+    surface: &crate::solver_surface::SolverSurfaceQueryDefinition,
+    source: &source::LogicalLine,
     object_names: &HashMap<String, ObjectId>,
     object_schemas: &HashMap<String, ObjectSchema>,
     value_sets: &HashMap<String, Vec<String>>,
@@ -438,10 +441,9 @@ fn parse_query_directive(
     condition_names: &mut HashMap<String, ConditionId>,
     condition_labels: &mut HashMap<ConditionId, String>,
 ) -> Result<(QueryDefinitionAst, Option<ConditionDefinitionAst>), DiagnosticReport> {
-    let surface = crate::solver_surface::parse_query_definition(line)?;
     let name = surface.name.as_str();
     if query_names.contains(name) || variable_names.contains_key(name) {
-        return Err(parse_error(line, "duplicate query"));
+        return Err(parse_error(source, "duplicate query"));
     }
     query_names.insert(name.to_string());
     let core_definition = match &surface.expr {
@@ -465,14 +467,7 @@ fn parse_query_directive(
         }
         _ => None,
     };
-    Ok((surface, core_definition))
-}
-
-fn parse_solver_block(
-    lines: &[String],
-    start: usize,
-) -> Result<(usize, SolverStrategyAst), DiagnosticReport> {
-    crate::solver_surface::parse_solver_block(lines, start)
+    Ok((surface.clone(), core_definition))
 }
 
 fn parse_condition_value_expr(
@@ -839,10 +834,10 @@ fn default_cardinal_directions(input_names: &HashMap<String, InputId>) -> Vec<Di
     ]
 }
 
-fn parse_rule_definition(
-    lines: &[String],
-    line_numbers: Option<&[usize]>,
-    start: usize,
+#[allow(clippy::too_many_arguments)]
+fn lower_rule_definition_syntax(
+    header: &puzzle_authoring::RuleStatementLine<source::LogicalLine>,
+    statements: &[puzzle_authoring::RuleStatementSyntax<source::LogicalLine>],
     object_names: &HashMap<String, ObjectId>,
     object_schemas: &HashMap<String, ObjectSchema>,
     value_sets: &HashMap<String, Vec<String>>,
@@ -853,23 +848,14 @@ fn parse_rule_definition(
     numeric_variables: &HashMap<String, i64>,
     condition_names: &HashMap<String, ConditionId>,
     named_conditions: &HashMap<String, (String, ConditionAst)>,
-) -> Result<(RuleDefinitionAst, usize), DiagnosticReport> {
-    let header = split_header_tokens(&lines[start]);
-    let declaration = header.first().copied().unwrap_or("routine");
-    let name_index = 1;
-    let name_spec = expect(
-        header.get(name_index),
-        &lines[start],
-        "missing routine name",
-    )?;
-    let (name, params) = parse_rule_name_and_params(name_spec, &lines[start])?;
-    let application = parse_rule_application(&header, declaration, &lines[start])?;
-
-    let (statements, next_i) = parse_statement_block(
-        lines,
-        line_numbers,
-        start + 1,
-        &[BLOCK_CLOSE],
+) -> Result<RuleDefinitionAst, DiagnosticReport> {
+    let tokens = split_header_tokens(&header.text);
+    let declaration = tokens.first().copied().unwrap_or("routine");
+    let name_spec = expect(tokens.get(1), &header.source, "missing routine name")?;
+    let (name, params) = parse_rule_name_and_params(name_spec, &header.source)?;
+    let application = parse_rule_application(&tokens, declaration, &header.source)?;
+    let statements = lower_statement_syntax(
+        statements,
         object_names,
         object_schemas,
         value_sets,
@@ -882,13 +868,9 @@ fn parse_rule_definition(
         named_conditions,
         &params,
     )?;
-
-    Ok((
-        RuleDefinitionAst {
-            name,
-            application,
-            statements,
-        },
-        next_i,
-    ))
+    Ok(RuleDefinitionAst {
+        name,
+        application,
+        statements,
+    })
 }

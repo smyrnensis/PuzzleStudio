@@ -286,7 +286,7 @@ class PuzzleRenderer {
   renderCanvas(scene, frame) {
     const canvas = document.createElement("canvas");
     canvas.className = "board-canvas";
-    const presentationUnit = this.canvasPresentationCellUnit(scene);
+    const presentationUnit = this.canvasPresentationCellUnit();
     canvas.width = Math.max(1, Math.ceil(frame.width * presentationUnit));
     canvas.height = Math.max(1, Math.ceil(frame.height * presentationUnit));
     canvas.setAttribute("aria-label", this.boardLabel(scene, frame));
@@ -1054,7 +1054,7 @@ class PuzzleRenderer {
 
   canvasMetrics(canvas, scene, frame) {
     const rect = canvas.getBoundingClientRect();
-    const presentationUnit = this.canvasPresentationCellUnit(scene);
+    const presentationUnit = this.canvasPresentationCellUnit();
     const cssWidth = rect.width > 0 ? rect.width : frame.width * presentationUnit;
     const cssHeight = rect.height > 0 ? rect.height : frame.height * presentationUnit;
     if (cssWidth <= 0 || cssHeight <= 0) {
@@ -1078,11 +1078,7 @@ class PuzzleRenderer {
     };
   }
 
-  canvasPresentationCellUnit(scene) {
-    const configured = Number(scene?.settings?.render?.cellSize);
-    if (Number.isFinite(configured) && configured > 0) {
-      return configured;
-    }
+  canvasPresentationCellUnit() {
     const cssValue = getComputedStyle(this.root).getPropertyValue("--cell-size").trim();
     const parsed = Number.parseFloat(cssValue);
     if (Number.isFinite(parsed) && parsed > 0) {
@@ -1241,18 +1237,19 @@ class PuzzleRenderer {
   cellRenderIndex(cell, scene) {
     const width = Math.max(1, Number(scene?.width) || 1);
     const height = Math.max(1, Number(scene?.height) || 1);
+    const coordinates = {
+      right: [Number(cell.x), width],
+      left: [width - 1 - Number(cell.x), width],
+      down: [Number(cell.y), height],
+      up: [height - 1 - Number(cell.y), height],
+    };
     let index = 0;
     for (const direction of this.spriteOrder().direction_priority) {
-      let value;
-      let span;
-      switch (direction) {
-        case "right": value = Number(cell.x); span = width; break;
-        case "left": value = width - 1 - Number(cell.x); span = width; break;
-        case "down": value = Number(cell.y); span = height; break;
-        case "up": value = height - 1 - Number(cell.y); span = height; break;
-        default: throw new Error(`invalid 2D sprite order direction: ${direction}`);
+      const coordinate = coordinates[direction];
+      if (!coordinate) {
+        throw new Error(`invalid 2D sprite order direction: ${direction}`);
       }
-      index = (index * span) + value;
+      index = (index * coordinate[1]) + coordinate[0];
     }
     return index;
   }

@@ -1,13 +1,13 @@
 use puzzle_core::{
-    CompiledGame, InputId, MarkId, MarkValueMatch as CoreMarkValueMatch, ObjectId, Patch, PatchOp,
-    RuleId, State as PuzzleState, TransitionCommand, VariableId, VariableUpdateOp,
+    CompiledGame, GridCoord, InputId, MarkId, MarkValueMatch as CoreMarkValueMatch, ObjectId,
+    Patch, PatchOp, RuleId, State as PuzzleState, TransitionCommand, VariableId, VariableUpdateOp,
 };
 use puzzle_grid3d::{
     CompiledGame3, Coord3, LevelBundle3, MarkValueMatch, ObjectId as ObjectId3, Patch3, PatchOp3,
     RuleId3, Size3, State3, TransitionCommand3, TransitionOutcome3,
 };
 use puzzle_lang::{
-    ArrowKey, KeyTrigger, Level, LoadedDocumentModel, LoadedGame, ModelSettings3, ParsedPuzzle3,
+    ArrowKey, KeyTrigger, Level, LoadedDocumentModel, LoadedGame, ParsedPuzzle3, PuzzleRenderDef,
     ResourceSelection, SceneAlignDef, SceneBinaryOp, SceneComponent, SceneDef,
     SceneDistributionDef, SceneEffect, SceneEffectParam, SceneExpr, SceneLayoutDef, SceneLevelKey,
     ScenePuzzleInitializer, SceneSpaceDef, SceneStateLifetime, SceneTextContent, SceneTextRoleDef,
@@ -363,7 +363,6 @@ fn u16_value(value: &Value, name: &str) -> Result<u16, String> {
 
 pub struct Puzzle3RuntimeBridge {
     parsed: ParsedPuzzle3,
-    animation: puzzle_lang::AnimationDef,
     session: Option<GameSession3>,
     saved_states: SavedStateStore<State3>,
 }
@@ -372,7 +371,6 @@ impl Puzzle3RuntimeBridge {
     pub fn from_source(source: &str) -> Result<Self, String> {
         let document = puzzle_lang::parse_game_for_path(source, "runtime.puzzle3")
             .map_err(|error| error.to_string())?;
-        let animation = document.animation.clone();
         let parsed = document
             .models
             .iter()
@@ -383,7 +381,6 @@ impl Puzzle3RuntimeBridge {
             .ok_or_else(|| "3D runtime source does not contain a puzzle3 model".to_string())?;
         Ok(Self {
             parsed,
-            animation,
             session: None,
             saved_states: SavedStateStore::new(),
         })
@@ -392,10 +389,8 @@ impl Puzzle3RuntimeBridge {
     pub fn from_visual_fixture_json(fixture_json: &str) -> Result<Self, String> {
         let value: Value = serde_json::from_str(fixture_json).map_err(|error| error.to_string())?;
         let parsed = parsed_puzzle3_from_fixture(&value)?;
-        let animation = animation_def_from_fixture(&value)?;
         Ok(Self {
             parsed,
-            animation,
             session: None,
             saved_states: SavedStateStore::new(),
         })
@@ -418,8 +413,13 @@ impl Puzzle3RuntimeBridge {
         input: u16,
     ) -> Result<String, String> {
         let state = state3_from_json(&self.parsed.game, state_json)?;
-        let outcome =
-            transition_selected_program3(&self.parsed, program_key, &state, InputId(input))?;
+        let outcome = transition_selected_program3(
+            &self.parsed,
+            self.parsed.game.program(),
+            program_key,
+            &state,
+            InputId(input),
+        )?;
         let next_state = &outcome.next_state;
         let completed = self
             .parsed
@@ -433,7 +433,11 @@ impl Puzzle3RuntimeBridge {
             commands: commands3_contract(&outcome.commands),
             fired_rules: outcome.fired_rules.iter().map(|rule| rule.0).collect(),
             patches: patches3_contract(&outcome.patches),
-            animation_events: animation_events3_contract(&self.animation, &state, next_state),
+            animation_events: animation_events3_contract(
+                &self.parsed.animation,
+                &state,
+                next_state,
+            ),
         }
         .to_json_string()
         .map_err(|error| error.to_string())
@@ -483,8 +487,19 @@ impl Puzzle3RuntimeBridge {
         input: u16,
     ) -> Result<String, String> {
         let before = self.current_state()?.clone();
-        let outcome =
-            transition_selected_program3(&self.parsed, program_key, &before, InputId(input))?;
+        let current_level_index = self.session()?.current_level_index();
+        let main_program = &self
+            .level_bundle()?
+            .level(current_level_index)
+            .ok_or_else(|| format!("3D runtime level index out of bounds: {current_level_index}"))?
+            .program;
+        let outcome = transition_selected_program3(
+            &self.parsed,
+            main_program,
+            program_key,
+            &before,
+            InputId(input),
+        )?;
         let next_state = outcome.next_state.clone();
         self.session_mut()?
             .replace_current_state(next_state.clone());
@@ -506,7 +521,11 @@ impl Puzzle3RuntimeBridge {
             commands: commands3_contract(&outcome.commands),
             fired_rules: outcome.fired_rules.iter().map(|rule| rule.0).collect(),
             patches: patches3_contract(&outcome.patches),
-            animation_events: animation_events3_contract(&self.animation, &before, &next_state),
+            animation_events: animation_events3_contract(
+                &self.parsed.animation,
+                &before,
+                &next_state,
+            ),
             state_hash: next_state.hash(),
             state_hash_key: next_state.hash().to_string(),
             previous_state_handle,
@@ -548,6 +567,7 @@ impl Puzzle3RuntimeBridge {
 
 fn transition_selected_program3(
     parsed: &ParsedPuzzle3,
+    main_program: &[puzzle_grid3d::GridRuleStep<3>],
     program_key: &str,
     state: &State3,
     input: InputId,
@@ -556,7 +576,7 @@ fn transition_selected_program3(
         "main" => puzzle_grid3d::transition_program_outcome_with_local_frame(
             &parsed.game,
             state,
-            parsed.game.program(),
+            main_program,
             input,
             parsed.local_frame.as_ref(),
         ),
@@ -575,12 +595,14 @@ fn parsed_puzzle3_from_fixture(value: &Value) -> Result<ParsedPuzzle3, String> {
     let model = puzzle_runtime_contract::puzzle3_runtime_model_from_fixture_value(value)
         .map_err(|error| error.to_string())?;
     let game = model.game;
+    let animation = animation_def_from_fixture(value)?;
     Ok(ParsedPuzzle3 {
         game,
         inputs: Vec::new(),
         object_labels: std::collections::HashMap::new(),
         viewport_focus_objects: Vec::new(),
-        settings: ModelSettings3::default(),
+        animation,
+        render: PuzzleRenderDef::default(),
         local_frame: model.local_frame,
         rule_camera_effects: model.rule_camera_effects,
         level_bundle: Some(model.level_bundle),
@@ -597,8 +619,8 @@ fn parsed_puzzle3_from_fixture(value: &Value) -> Result<ParsedPuzzle3, String> {
 fn animation_def_from_fixture(value: &Value) -> Result<puzzle_lang::AnimationDef, String> {
     let mut animation = puzzle_lang::AnimationDef::default();
     let Some(tween) = value
-        .get("settings")
-        .and_then(|settings| settings.get("animation"))
+        .get("render")
+        .and_then(|render| render.get("animation"))
         .and_then(|animation| animation.get("tween"))
     else {
         return Ok(animation);
@@ -1362,34 +1384,32 @@ fn debug_patch_value(loaded: &LoadedGame, patch: &Patch) -> Vec<Value> {
 
 fn debug_patch_op_value(loaded: &LoadedGame, op: &PatchOp) -> Value {
     match op {
-        PatchOp::Add { x, y, object } => json!({
+        PatchOp::Add { position, object } => json!({
             "kind": "add",
-            "position": position2_value(*x, *y),
+            "position": position2_value_from_grid(*position),
             "objectId": object.0,
             "object": object_name(loaded, *object),
         }),
-        PatchOp::Remove { x, y, object } => json!({
+        PatchOp::Remove { position, object } => json!({
             "kind": "remove",
-            "position": position2_value(*x, *y),
+            "position": position2_value_from_grid(*position),
             "objectId": object.0,
             "object": object_name(loaded, *object),
         }),
-        PatchOp::Move {
-            from_x,
-            from_y,
-            to_x,
-            to_y,
-            object,
-        } => json!({
+        PatchOp::Move { from, to, object } => json!({
             "kind": "move",
-            "from": position2_value(*from_x, *from_y),
-            "to": position2_value(*to_x, *to_y),
+            "from": position2_value_from_grid(*from),
+            "to": position2_value_from_grid(*to),
             "objectId": object.0,
             "object": object_name(loaded, *object),
         }),
-        PatchOp::Replace { x, y, remove, add } => json!({
+        PatchOp::Replace {
+            position,
+            remove,
+            add,
+        } => json!({
             "kind": "replace",
-            "position": position2_value(*x, *y),
+            "position": position2_value_from_grid(*position),
             "remove": remove.0,
             "add": add.0,
             "removeObject": object_name(loaded, *remove),
@@ -1414,14 +1434,13 @@ fn debug_patch_op_value(loaded: &LoadedGame, op: &PatchOp) -> Value {
             "value": value,
         }),
         PatchOp::SetMark {
-            x,
-            y,
+            position,
             object,
             mark,
             value,
         } => json!({
             "kind": "set_mark",
-            "position": position2_value(*x, *y),
+            "position": position2_value_from_grid(*position),
             "objectId": object.0,
             "object": object_name(loaded, *object),
             "mark": mark.0,
@@ -1429,15 +1448,14 @@ fn debug_patch_op_value(loaded: &LoadedGame, op: &PatchOp) -> Value {
             "value": value,
         }),
         PatchOp::RemoveMark {
-            x,
-            y,
+            position,
             object,
             mark,
             value,
             match_value,
         } => json!({
             "kind": "remove_mark",
-            "position": position2_value(*x, *y),
+            "position": position2_value_from_grid(*position),
             "objectId": object.0,
             "object": object_name(loaded, *object),
             "mark": mark.0,
@@ -1453,6 +1471,11 @@ fn debug_patch_op_value(loaded: &LoadedGame, op: &PatchOp) -> Value {
 
 fn position2_value(x: u16, y: u16) -> Value {
     json!({ "x": x, "y": y })
+}
+
+fn position2_value_from_grid(position: GridCoord<2>) -> Value {
+    let [x, y] = position.axes();
+    position2_value(x, y)
 }
 
 fn object_name(loaded: &LoadedGame, object: ObjectId) -> String {
@@ -1509,12 +1532,8 @@ fn animation_value(loaded: &LoadedGame) -> Value {
 }
 
 fn puzzle_settings_value(loaded: &LoadedGame) -> Value {
-    let mut render = serde_json::Map::new();
-    if let Some(cell_size) = loaded.render.cell_size {
-        render.insert("cellSize".to_string(), json!(cell_size));
-    }
     json!({
-        "render": Value::Object(render),
+        "render": {},
         "grid": {
             "visibility": loaded.render.grid.occupied_cells || loaded.render.grid.all_cells,
             "occupied_cells": loaded.render.grid.occupied_cells,
@@ -1962,7 +1981,7 @@ fn state3_from_json(game: &CompiledGame3, state_json: &str) -> Result<State3, St
             ));
         }
         state
-            .place_object(game, Coord3 { x, y, z }, object)
+            .place_object_at(game, Coord3 { x, y, z }, object)
             .map_err(|error| format!("{error:?}"))?;
     }
     if let Some(fired_rules) = value.get("levelFiredRules").and_then(Value::as_array) {
@@ -2116,23 +2135,23 @@ fn changed_cells3_contract(state: &State3, before: Option<&State3>) -> Vec<Runti
 fn patches3_contract(patches: &[Patch3]) -> Vec<Vec<RuntimePatchOp>> {
     patches
         .iter()
-        .map(|patch| patch.ops.iter().map(patch_op3_contract).collect())
+        .map(|patch| patch.ops().iter().map(patch_op3_contract).collect())
         .collect()
 }
 
 fn patch_op3_contract(op: &PatchOp3) -> RuntimePatchOp {
     match *op {
         PatchOp3::Add { position, object } => RuntimePatchOp::Add {
-            position: runtime_coord3(position),
+            position: runtime_coord3(position.into()),
             object_id: object.0,
         },
         PatchOp3::Remove { position, object } => RuntimePatchOp::Remove {
-            position: runtime_coord3(position),
+            position: runtime_coord3(position.into()),
             object_id: object.0,
         },
         PatchOp3::Move { from, to, object } => RuntimePatchOp::Move {
-            from: runtime_coord3(from),
-            to: runtime_coord3(to),
+            from: runtime_coord3(from.into()),
+            to: runtime_coord3(to.into()),
             object_id: object.0,
         },
         PatchOp3::Replace {
@@ -2140,7 +2159,7 @@ fn patch_op3_contract(op: &PatchOp3) -> RuntimePatchOp {
             remove,
             add,
         } => RuntimePatchOp::Replace {
-            position: runtime_coord3(position),
+            position: runtime_coord3(position.into()),
             remove: remove.0,
             add: add.0,
         },
@@ -2153,7 +2172,7 @@ fn patch_op3_contract(op: &PatchOp3) -> RuntimePatchOp {
             mark,
             ..
         } => RuntimePatchOp::SetMark {
-            position: runtime_coord3(position),
+            position: runtime_coord3(position.into()),
             object_id: object.0,
             mark: mark.0,
         },
@@ -2164,7 +2183,7 @@ fn patch_op3_contract(op: &PatchOp3) -> RuntimePatchOp {
             match_value,
             ..
         } => RuntimePatchOp::RemoveMark {
-            position: runtime_coord3(position),
+            position: runtime_coord3(position.into()),
             object_id: object.0,
             mark: mark.0,
             match_value: runtime_mark_value_match3(match_value),
@@ -2874,13 +2893,14 @@ scene = playing {
         let source = r#"
 title = "3D Tween"
 
+puzzle sokoban {
+dimension = 3
+
 render {
-  tween {
-    duration = 300ms
-  }
+  tween = true
+  tween_duration = 300ms
 }
 
-puzzle sokoban {
 slots {
   solid = Player
 }
@@ -2934,7 +2954,7 @@ P.
         let program_outcome: RuntimeTransitionProgramOutcome =
             serde_json::from_str(&program_outcome).unwrap();
         assert!(!program_outcome.completed);
-        assert_eq!(program_outcome.fired_rules, vec![0]);
+        assert_eq!(program_outcome.fired_rules, vec![1]);
         assert_eq!(program_outcome.patches.len(), 1);
     }
 
@@ -2943,13 +2963,14 @@ P.
         let source = r#"
 title = "3D Fixture Runtime"
 
+puzzle sokoban {
+dimension = 3
+
 render {
-  tween {
-    duration = 300ms
-  }
+  tween = true
+  tween_duration = 300ms
 }
 
-puzzle sokoban {
 slots {
   solid = Player
 }

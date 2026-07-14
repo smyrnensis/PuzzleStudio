@@ -493,20 +493,22 @@ fn decode_compact_offset(value: &Value) -> Result<Offset, String> {
     let items = value_array(value, "offset")?;
     match tag_at(items, 0, "offset tag")? {
         0 => Ok(Offset::Fixed {
-            dx: i16_at(items, 1, "dx")?,
-            dy: i16_at(items, 2, "dy")?,
+            delta: [i16_at(items, 1, "dx")?, i16_at(items, 2, "dy")?].into(),
         }),
         1 => Ok(Offset::Variable {
-            base_dx: i16_at(items, 1, "base dx")?,
-            base_dy: i16_at(items, 2, "base dy")?,
+            base: [
+                i16_at(items, 1, "base dx")?,
+                i16_at(items, 2, "base dy")?,
+            ]
+            .into(),
             gap_terms: value_array(value_at(items, 3, "gap terms")?, "gap terms")?
                 .iter()
                 .map(|term| {
                     let term = value_array(term, "gap term")?;
                     Ok(GapTerm {
                         gap_index: u16_at(term, 0, "gap index")?,
-                        dx: i16_at(term, 1, "dx")?,
-                        dy: i16_at(term, 2, "dy")?,
+                        delta: [i16_at(term, 1, "dx")?, i16_at(term, 2, "dy")?]
+                            .into(),
                     })
                 })
                 .collect::<Result<Vec<_>, String>>()?,

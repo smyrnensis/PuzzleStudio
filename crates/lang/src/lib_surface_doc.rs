@@ -74,7 +74,7 @@ impl SurfaceDocumentProducts {
     };
 
     fn needs_parser_catalog(self) -> bool {
-        self.semantic_tokens || self.completion_symbols
+        self.semantic_tokens || self.completion_symbols || self.visual_sprite_refs
     }
 }
 
@@ -83,7 +83,8 @@ impl SurfaceDocumentProducts {
 /// this single authority so they cannot be cached or advanced independently.
 pub(crate) struct ParseSnapshot {
     source_scan: source::SurfaceSourceScan,
-    parser_catalog: Option<Result<Catalog, DiagnosticReport>>,
+    parser_catalog:
+        Option<Result<crate::surface::ParseProduct<LevelEditorIntegration>, DiagnosticReport>>,
     document: SurfaceDocument,
     strict_diagnostic: Option<DiagnosticReport>,
 }
@@ -92,25 +93,28 @@ impl ParseSnapshot {
     pub(crate) fn parse(source: &str, source_profile: Option<PuzzleSourceProfile>) -> Self {
         let source_scan = source::scan_surface_source(source);
         let parser_catalog = Some(parser_surface_catalog_from_source_scan(&source_scan));
-        Self::from_scan(source, source_profile, source_scan, parser_catalog)
+        Self::from_scan(source_profile, source_scan, parser_catalog)
     }
 
     fn parse_for_compile(source: &str) -> Self {
         let source_scan = source::scan_surface_source(source);
-        Self::from_scan(source, None, source_scan, None)
+        Self::from_scan(None, source_scan, None)
     }
 
     fn from_scan(
-        source: &str,
         source_profile: Option<PuzzleSourceProfile>,
         source_scan: source::SurfaceSourceScan,
-        parser_catalog: Option<Result<Catalog, DiagnosticReport>>,
+        parser_catalog:
+            Option<Result<crate::surface::ParseProduct<LevelEditorIntegration>, DiagnosticReport>>,
     ) -> Self {
-        let catalog = parser_catalog
+        let parser_product = parser_catalog
             .as_ref()
             .and_then(|product| product.as_ref().ok());
-        let mut document =
-            build_surface_document_from_source_scan(source, &source_scan, catalog, source_profile);
+        let mut document = build_surface_document_from_source_scan(
+            &source_scan,
+            parser_product,
+            source_profile,
+        );
         let strict_diagnostic = match source_scan.strict_logical_lines() {
             Ok(logical_lines) => {
                 document.logical_lines = logical_lines;
@@ -133,6 +137,15 @@ impl ParseSnapshot {
 
     pub(crate) fn document(&self) -> &SurfaceDocument {
         &self.document
+    }
+
+    pub(crate) fn level_editor_integration(&self) -> Result<&LevelEditorIntegration, String> {
+        self.parser_catalog
+            .as_ref()
+            .expect("source analysis snapshot requires parser product")
+            .as_ref()
+            .map(|product| &product.value)
+            .map_err(ToString::to_string)
     }
 
     fn into_strict_document(self) -> Result<SurfaceDocument, DiagnosticReport> {
@@ -161,7 +174,7 @@ impl ParseSnapshot {
         } else {
             Some(parser_surface_catalog_from_source_scan(&source_scan))
         };
-        *self = Self::from_scan(new_source, source_profile, source_scan, parser_catalog);
+        *self = Self::from_scan(source_profile, source_scan, parser_catalog);
         (rescanned_lines, parser_catalog_reused)
     }
 
@@ -249,7 +262,6 @@ fn try_build_surface_document(
         .needs_parser_catalog()
         .then(|| parser_surface_catalog_from_source_scan(&source_scan));
     let mut document = try_build_surface_document_from_scan(
-        source,
         &source_scan,
         products,
         parser_catalog
@@ -264,10 +276,9 @@ fn try_build_surface_document(
 }
 
 fn try_build_surface_document_from_scan(
-    source: &str,
     scan: &source::SurfaceSourceScan,
     products: SurfaceDocumentProducts,
-    parser_catalog: Option<&Catalog>,
+    parser_catalog: Option<&crate::surface::ParseProduct<LevelEditorIntegration>>,
     source_profile: Option<PuzzleSourceProfile>,
 ) -> Result<SurfaceDocument, DiagnosticReport> {
     let mut sink = SurfaceSink::default();
@@ -304,21 +315,20 @@ fn try_build_surface_document_from_scan(
             }
         }
     }
-    if let Some(catalog) = parser_catalog {
+    if let Some(parser_product) = parser_catalog {
+        if products.semantic_tokens {
+            sink.project_parser_recognition(&parser_product.recognition);
+        }
+        if products.visual_sprite_refs {
+            sink.project_parser_visual_refs(&parser_product.recognition);
+        }
+        let catalog = &parser_product.value.catalog;
         if products.completion_symbols {
             record_parser_catalog_completion_symbols(catalog, &mut sink);
         }
     }
-    let visual_sprite_refs = products
-        .visual_sprite_refs
-        .then(|| surface_visual_sprite_refs(source, &scan));
     if products.highlight_ranges {
         sink.set_highlight_ranges(surface_highlight_ranges(&scan));
-    }
-    if products.visual_sprite_refs {
-        sink.visual_sprite_refs_mut().merge(
-            visual_sprite_refs.expect("visual sprite refs were requested by the product set"),
-        );
     }
     if products.completion_symbols {
         normalize_surface_completion_symbols(&mut sink);
@@ -329,13 +339,11 @@ fn try_build_surface_document_from_scan(
 }
 
 pub(crate) fn build_surface_document_from_source_scan(
-    source: &str,
     source_scan: &source::SurfaceSourceScan,
-    parser_catalog: Option<&Catalog>,
+    parser_catalog: Option<&crate::surface::ParseProduct<LevelEditorIntegration>>,
     source_profile: Option<PuzzleSourceProfile>,
 ) -> SurfaceDocument {
     try_build_surface_document_from_scan(
-        source,
         source_scan,
         SurfaceDocumentProducts::FULL,
         parser_catalog,
@@ -538,266 +546,6 @@ fn surface_highlight_ranges(scan: &source::SurfaceSourceScan) -> SurfaceHighligh
     }
 }
 
-fn surface_visual_sprite_refs(
-    source: &str,
-    scan: &source::SurfaceSourceScan,
-) -> SurfaceVisualSpriteRefs {
-    let mut refs = SurfaceVisualSpriteRefs::default();
-    for line in &scan.lines {
-        let Some(kind) = line.tokens.first().map(String::as_str) else {
-            continue;
-        };
-        if !matches!(
-            (kind, line.scope),
-            (
-                "palette",
-                Some(SourceScope::Visuals | SourceScope::VisualColorTable)
-            ) | (
-                "shapes",
-                Some(SourceScope::Visuals | SourceScope::VisualShapeTable)
-            )
-        ) {
-            continue;
-        }
-        let line_end = surface_scan_line_end(line);
-        let Some(open_index) = source[line.start..line_end]
-            .find('{')
-            .map(|offset| line.start + offset)
-        else {
-            continue;
-        };
-        let Some(close_index) = surface_find_matching_brace(source, open_index) else {
-            continue;
-        };
-        match kind {
-            "palette" => {
-                collect_surface_visual_flat_asset_names(scan, open_index, close_index, &mut refs)
-            }
-            "shapes" => {
-                collect_surface_visual_shape_names(scan, open_index, close_index, &mut refs)
-            }
-            _ => {}
-        }
-    }
-    refs
-}
-
-fn collect_surface_visual_flat_asset_names(
-    scan: &source::SurfaceSourceScan,
-    open_index: usize,
-    close_index: usize,
-    refs: &mut SurfaceVisualSpriteRefs,
-) {
-    for line in &scan.lines {
-        if line.start <= open_index || line.start >= close_index {
-            continue;
-        }
-        if surface_visual_asset_depth_at_line(scan, open_index, line.start) != 0 {
-            continue;
-        }
-        match line.tokens.as_slice() {
-            [name, equals, ..] if equals == "=" && surface_identifier_token(name) => {
-                refs.color_names.insert(name.clone());
-                if let Some(color) = surface_visual_color_assignment_value(&line.content) {
-                    refs.color_assets.insert(name.clone(), color);
-                }
-            }
-            [name]
-                if line.scope == Some(SourceScope::VisualColorTable)
-                    && surface_identifier_token(name) =>
-            {
-                refs.color_names.insert(name.clone());
-                if let Some(color) = surface_visual_color_assignment_value(&line.content) {
-                    refs.color_assets.insert(name.clone(), color);
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-fn collect_surface_visual_shape_names(
-    scan: &source::SurfaceSourceScan,
-    open_index: usize,
-    close_index: usize,
-    refs: &mut SurfaceVisualSpriteRefs,
-) {
-    for line in &scan.lines {
-        if line.start <= open_index || line.start >= close_index {
-            continue;
-        }
-        if surface_visual_asset_depth_at_line(scan, open_index, line.start) != 0 {
-            continue;
-        }
-        let Some(first) = line.tokens.first() else {
-            continue;
-        };
-        if first == "shape" {
-            if let Some(name) = line.tokens.get(1) {
-                refs.shape_names.insert(name.clone());
-                if let Some(rows) = surface_visual_plain_shape_rows(scan, line, close_index) {
-                    refs.shape_assets.insert(name.clone(), rows);
-                }
-            }
-        } else if surface_visual_shape_ref_token(first) {
-            refs.shape_names.insert(first.clone());
-            if let Some(rows) = surface_visual_plain_shape_rows(scan, line, close_index) {
-                refs.shape_assets.insert(first.clone(), rows);
-            }
-        }
-    }
-}
-
-fn surface_visual_color_assignment_value(line: &str) -> Option<String> {
-    let (_, value) = strip_line_comment(line).split_once('=')?;
-    let value = value.trim().split_whitespace().next()?.trim();
-    (!value.is_empty()).then(|| value.to_string())
-}
-
-fn surface_visual_plain_shape_rows(
-    scan: &source::SurfaceSourceScan,
-    header: &source::SurfaceSourceLine,
-    close_index: usize,
-) -> Option<Vec<String>> {
-    let mut rows = Vec::new();
-    for line in scan
-        .lines
-        .iter()
-        .filter(|line| line.start > header.start && line.start < close_index)
-    {
-        let row = surface_code_trim(&line.content);
-        if row.is_empty() {
-            if rows.is_empty() {
-                continue;
-            }
-            break;
-        }
-        if row == "}" {
-            break;
-        }
-        if !rows.is_empty() && surface_visual_shape_ref_token(row) {
-            break;
-        }
-        rows.push(row.to_string());
-    }
-    (!rows.is_empty()).then_some(rows)
-}
-
-fn surface_visual_asset_depth_at_line(
-    scan: &source::SurfaceSourceScan,
-    open_index: usize,
-    line_start: usize,
-) -> usize {
-    let mut depth = 0usize;
-    for line in &scan.lines {
-        if line.start <= open_index || line.start >= line_start {
-            continue;
-        }
-        let trimmed = surface_code_trim(&line.content);
-        if trimmed == "}" {
-            depth = depth.saturating_sub(1);
-        }
-        if trimmed.ends_with('{') {
-            depth += 1;
-        }
-    }
-    depth
-}
-
-fn surface_visual_shape_ref_token(value: &str) -> bool {
-    if surface_visual_shape_name_token(value) {
-        return true;
-    }
-    let Some((table, value)) = value.split_once(':') else {
-        return false;
-    };
-    surface_identifier_token(table)
-        && !value.is_empty()
-        && value
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '+' | '*' | '(' | ')'))
-}
-
-fn surface_visual_shape_name_token(value: &str) -> bool {
-    if matches!(
-        value,
-        "shape" | "shapes" | "palette" | "colors" | "ascii" | "sprites"
-    ) {
-        return false;
-    }
-    let Some(first) = value.chars().next() else {
-        return false;
-    };
-    (first.is_ascii_alphabetic() || first == '_')
-        && value
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '+' | '*' | '(' | ')'))
-}
-
-fn surface_identifier_token(value: &str) -> bool {
-    let Some(first) = value.chars().next() else {
-        return false;
-    };
-    (first.is_ascii_alphabetic() || first == '_')
-        && value
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
-}
-
-fn surface_scan_line_end(line: &source::SurfaceSourceLine) -> usize {
-    line.start + line.content.len()
-}
-
-fn surface_code_trim(line: &str) -> &str {
-    strip_line_comment(line).trim()
-}
-
-fn surface_find_matching_brace(source: &str, open_index: usize) -> Option<usize> {
-    let mut depth = 0usize;
-    let mut quote = None::<char>;
-    let mut escaped = false;
-    let mut in_comment = false;
-    let mut iter = source[open_index..].char_indices().peekable();
-    while let Some((relative, ch)) = iter.next() {
-        let index = open_index + relative;
-        if in_comment {
-            if ch == '\n' {
-                in_comment = false;
-            }
-            continue;
-        }
-        if let Some(active_quote) = quote {
-            if escaped {
-                escaped = false;
-            } else if ch == '\\' {
-                escaped = true;
-            } else if ch == active_quote {
-                quote = None;
-            }
-            continue;
-        }
-        if ch == '/' && iter.peek().is_some_and(|(_, next)| *next == '/') {
-            in_comment = true;
-            continue;
-        }
-        if ch == '"' || ch == '\'' {
-            quote = Some(ch);
-            continue;
-        }
-        match ch {
-            '{' => depth += 1,
-            '}' => {
-                depth = depth.saturating_sub(1);
-                if depth == 0 {
-                    return Some(index);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
 pub(crate) struct SurfaceDocumentSemantics {
     pub(crate) tokens: Vec<semantic::SemanticToken>,
 }
@@ -873,6 +621,81 @@ B
             }),
             "shape references must not be projected as inline pixel rows"
         );
+    }
+
+    #[test]
+    fn canonical_sprite_parser_projects_palette_and_pixel_facts() {
+        let source = r##"
+puzzle board {
+slots {
+actors = Box
+}
+sprites {
+Box
+#111 #eee
+01.
+}
+}
+"##;
+        let document = parse_surface_document(source);
+        let color_start = source.find("#111").unwrap();
+        let row_start = source.find("01.").unwrap();
+
+        assert!(document.highlight_ranges.display_facts.contains(
+            &crate::SurfaceDisplayFact::Color {
+                span: crate::surface::SourceSpan {
+                    start: color_start,
+                    end: color_start + 4,
+                },
+                color: "#111".to_string(),
+            }
+        ), "facts={:?} diagnostics={:?}", document.highlight_ranges.display_facts, document.diagnostics);
+        assert!(document.highlight_ranges.display_facts.contains(
+            &crate::SurfaceDisplayFact::SpritePixel {
+                span: crate::surface::SourceSpan {
+                    start: row_start + 1,
+                    end: row_start + 2,
+                },
+                color: "#eee".to_string(),
+                transparent: false,
+            }
+        ));
+        assert!(document.highlight_ranges.display_facts.contains(
+            &crate::SurfaceDisplayFact::SpritePixel {
+                span: crate::surface::SourceSpan {
+                    start: row_start + 2,
+                    end: row_start + 3,
+                },
+                color: "transparent".to_string(),
+                transparent: true,
+            }
+        ));
+    }
+
+    #[test]
+    fn canonical_level_parser_projects_cell_display_facts() {
+        let source = "puzzle default {\nslots {\nactor = Box\n}\n}\nlevels {\nlegend {\nB = Box\n. = empty\n}\nlevel \"one\"\nB?\n}\n";
+        let document = parse_surface_document(source);
+        let row_start = source.find("B?\n").unwrap();
+
+        assert!(document.highlight_ranges.display_facts.contains(
+            &crate::SurfaceDisplayFact::LevelCell {
+                span: crate::surface::SourceSpan {
+                    start: row_start,
+                    end: row_start + 1,
+                },
+                known: true,
+            }
+        ), "facts={:?} diagnostics={:?}", document.highlight_ranges.display_facts, document.diagnostics);
+        assert!(document.highlight_ranges.display_facts.contains(
+            &crate::SurfaceDisplayFact::LevelCell {
+                span: crate::surface::SourceSpan {
+                    start: row_start + 1,
+                    end: row_start + 2,
+                },
+                known: false,
+            }
+        ));
     }
 
     #[test]
@@ -963,8 +786,8 @@ puzzle board {
             "surface products must consume the canonical source scan directly"
         );
         assert!(
-            !surface_doc.contains("SurfaceVisualScope")
-                && !surface_doc.contains("recognize_surface_scan_lines"),
+            !surface_doc.contains(concat!("Surface", "VisualScope"))
+                && !surface_doc.contains(concat!("recognize_", "surface_scan_lines")),
             "surface products must not rebuild parser-owned visual scope"
         );
     }
@@ -977,9 +800,9 @@ puzzle board {
             "semantic tokens must project the parser product"
         );
         assert!(
-            !surface_doc_source.contains("record_structural_block_surface_tokens")
-                && !surface_doc_source.contains("record_surface_document_line")
-                && !surface_doc_source.contains("scan_level_ascii_surface_ranges"),
+            !surface_doc_source.contains(concat!("record_structural_block_", "surface_tokens"))
+                && !surface_doc_source.contains(concat!("record_", "surface_document_line"))
+                && !surface_doc_source.contains(concat!("scan_level_ascii_", "surface_ranges")),
             "surface documents must not retain grammar recognizers"
         );
         let source_scanner_source = include_str!("source.rs");
@@ -1262,7 +1085,7 @@ __invalid_unowned_surface_node__ {
         assert!(
             error
                 .to_string()
-                .contains("unowned structural block header `__invalid_unowned_surface_node__`"),
+                .contains("without a syntax disposition"),
             "{error}"
         );
     }

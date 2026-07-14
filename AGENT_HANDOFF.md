@@ -1,155 +1,66 @@
 # Agent Handoff
 
-This document is the general handoff for later agents. It intentionally avoids
-deep folder-specific notes. For concrete implementation details, read the nearest
-`AGENTS.md` in the folder you are changing.
+This is a routing map for agents that do not yet know which part of the
+repository owns a change. It is not a status report, command reference, or
+second copy of design rules. After locating the owner, read the nearest
+`AGENTS.md` and continue from there.
 
-## Current Goal
-
-The project is growing a lightweight environment for turn-based, grid-based,
-rule-driven puzzle games while keeping deterministic transition logic separate
-from `.puzzle` language processing, play/session behavior, adapters, and editor
-hosts.
+## System Flow
 
 ```txt
-.puzzle file
-  -> language parser/compiler
-  -> deterministic compiled game/state model
-  -> play/session helpers
-  -> adapter/editor presentation
+.puzzle source
+  -> language parsing, validation, and lowering
+  -> deterministic model and transition logic
+  -> play/session and runtime contracts
+  -> browser, WASM, CLI, and desktop adapters
 ```
 
-## Repository Context
+Presentation and editor hosts consume explicit contracts from these owners.
+They do not reinterpret source syntax or deterministic model internals.
 
-This checkout contains large generated artifacts and build outputs. Do not start
-by reading raw file contents across the tree. First identify the owner boundary,
-then read the smallest source files and that folder's `AGENTS.md`.
+## Owner Routing
 
-Measured on 2026-05-28:
+- Rust package boundaries and the current crate map: `crates/AGENTS.md`
+- `.puzzle` syntax, validation, source analysis, and lowering:
+  `crates/lang/AGENTS.md`
+- Deterministic 2D state and transitions: `crates/core/AGENTS.md`
+- Deterministic spatial/3D mechanics: `crates/grid3d/AGENTS.md`
+- Session lifecycle, undo, restart, and level flow: `crates/play/AGENTS.md`
+- Shared scene and component contracts: `crates/scene/AGENTS.md`
+- Source-free adapter/runtime schemas: `crates/runtime_contract/AGENTS.md`
+- Browser player and standalone export: `crates/html_play/AGENTS.md`
+- Browser editor, preview, and generated Pages assets:
+  `crates/html_editor/AGENTS.md`
+- CLI and agent-facing facades: `crates/cli/AGENTS.md` and
+  `crates/agent_runtime/AGENTS.md`
+- Desktop host and filesystem boundary: `src-tauri/AGENTS.md`
+- Samples and generated game exports: `games/AGENTS.md`
+- Generated documentation release: `docs/AGENTS.md`
+- Generated WebAssembly outputs: `wasm/AGENTS.md`
 
-- Whole checkout: about `11G`
-- `.git`: about `9.0G`
-- root build output: about `1.1G`
-- some nested test/build outputs are large enough to distort context selection
-- Files excluding version-control and build outputs: `661`
+If a folder has no local `AGENTS.md`, use the closest ancestor guidance. Do not
+turn this list into an exhaustive inventory of every crate; the owner-level maps
+are authoritative for their subtree.
 
-Largest context traps are generated exports, generated documentation,
-WebAssembly binaries, legacy archives, and build caches. Do not patch generated
-outputs directly. Patch the source owner and regenerate only when that is the
-explicit intent.
+## Reference Routing
 
-## Owner Map
+- Long-lived product and design principles: `DESIGN_PRINCIPLES.md`
+- Canonical authoring syntax: `AUTHORING_SYNTAX.md`
+- Current execution semantics: `CURRENT_SPEC.md`
+- Parser/editor source-analysis boundary: `SOURCE_ANALYSIS_CONTRACT.md`
+- Development and generation commands: `DEV_COMMANDS.md`
 
-Read the corresponding folder `AGENTS.md` before editing these areas:
-
-- `crates/`: shared crate boundaries and package-level commands.
-- `crates/core/`: deterministic state, patches, guards, transition application.
-- `crates/grid3d/`: deterministic 3D grid primitives, state, patches, levels,
-  win checks, and transition application.
-- `crates/lang/`: `.puzzle` parsing, validation, authoring syntax, lowering,
-  semantic highlighting, and import compatibility.
-- `crates/play/`: loaded-game session mechanics, undo/restart/level flow, and
-  display helpers.
-- `crates/scene/`: shared scene/presentation metadata and component layout
-  contracts.
-- `crates/html_play/`: browser runtime, standalone export behavior, screenshots,
-  themes, audio, and generated HTML runtime surfaces.
-- `crates/html_editor/`: browser editor service/UI, preview compilation,
-  highlighting, workspace behavior, and editor-owned layout.
-- `crates/ascii_play/`: terminal adapter behavior.
-- `crates/cli/`: product/automation facade and command routing.
-- `src-tauri/`: desktop shell and host filesystem boundary.
-- `games/`: sample authoring inputs and generated standalone game exports.
-- `docs/`: generated web documentation exports and documentation source policy.
-- `archive/`: legacy/reference material.
-- `wasm/`: generated WebAssembly artifacts.
-
-## General Run / Test
-
-Use owner-local commands whenever possible. Broad commands are useful only when
-their full blast radius is intended.
-
-```bash
-cargo test
-cargo run -p puzzlestudio -- check games/spec_2d.puzzle
-```
-
-For generated web artifacts, use the wrapper that matches the intended audience
-instead of calling the crate directly:
-
-```bash
-tools/dev_export_html.sh games/fixban_tween.puzzle -o games/fixban_tween.html
-tools/generate_web_editor.sh games/fixban_tween.puzzle -o docs/index.html
-```
-
-`dev_export_html.sh` rebuilds WASM before game HTML export so local developer
-checks see the current Rust implementation. `generate_web_editor.sh` produces
-the GitHub Pages editor release as `docs/index.html` plus static JS, CSS, and
-WASM assets. Rebuild editor/core/game WASM explicitly with
-`tools/build_wasm_editor.sh`, `tools/build_wasm_core.sh`, and
-`tools/build_wasm_game.sh` when Rust/WASM changes are meant to appear in the
-Pages release.
-
-Use `tools/serve_web_editor.sh` to open the normal local web editor through the
-Rust editor server. On macOS, `tools/open_web_editor.command` is the
-double-click entry point. Use `tools/serve_web_editor.sh --pages` only when the
-intended check is the generated GitHub Pages site under `docs/`; that static
-mode does not provide Rust editor API routes such as `/api/highlight`. Do not
-use `file://` as a supported editor release surface.
-
-Do not reintroduce a root single-file `editor.html` release path. GitHub Pages is
-the web release surface, and it should stay a multi-file static site.
-
-Adapter checks, editor checks, screenshots, and desktop builds have
-owner-specific caveats; read the relevant folder `AGENTS.md` before treating a
-command as authoritative.
-
-## General Design Boundaries
-
-Core logic must stay deterministic and independent from file IO, parser
-concerns, rendering, sound playback, browser timers, terminal rendering, and
-game-specific UI behavior.
-
-Language processing owns surface syntax and lowering. Runtime/session layers
-should consume checked/compiled structures rather than reinterpreting source
-syntax.
-
-Play/session logic owns loaded-game mechanics such as undo, restart, level
-advance, screen flow, component dispatch, and post-turn lifecycle behavior.
-
-Adapters own presentation and host integration. They should not become the
-source of parser/compiler semantics.
-
-Shared scene metadata is presentation/flow structure, not ownership of 2D or 3D
-model internals. Components and model windows define their own behavior behind
-clear contracts.
-
-Editor and desktop hosts should share service behavior as much as possible.
-Platform divergence should happen at the host adapter/file-access boundary, not
-by forking parser, compile, preview, or highlighting logic.
-
-## Documentation Split
-
-Top-level docs are split by audience:
-
-- User-facing docs explain how authors write and run `.puzzle` projects.
-- Developer-facing docs explain ownership boundaries, syntax decisions,
-  lowering/runtime constraints, and implementation plans.
-- Folder `AGENTS.md` files carry operational handoff details for each owner.
-
-The canonical parser/editor source-analysis boundary is specified in
-`SOURCE_ANALYSIS_CONTRACT.md`. Read it before changing `SurfaceDocument`,
+Read only the references whose contract the task can change. In particular,
+read `SOURCE_ANALYSIS_CONTRACT.md` before changing `SurfaceDocument`,
 `SourceAnalysis`, analysis profiles, source offsets, or language-aware editor
 integration.
 
-When a feature changes, update the user-facing explanation, developer-facing
-principle/spec, or owner-specific agent handoff according to the audience that
-needs the information.
+## Context Traps
 
-## Known General Gaps
+This checkout may contain large version-control history, build outputs,
+generated exports, documentation releases, WebAssembly binaries, and legacy
+archives. Locate the source owner before opening a generated artifact. Patch and
+regenerate generated output only when regeneration is explicitly in scope.
 
-- Some language/import compatibility paths are intentionally partial.
-- Solver work is still limited compared with parser/runtime/editor work.
-- Transition hot paths still have optimization opportunities.
-- Trace output is useful but not yet a complete debugging model.
-- Several adapter surfaces are still converging on shared contracts.
+Use owner-local tests and commands first. Use repository-wide commands only when
+their full blast radius is part of the intended verification.
