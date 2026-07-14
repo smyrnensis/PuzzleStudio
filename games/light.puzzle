@@ -8,7 +8,7 @@ text_color = #000
 
 puzzle main {
 
-layers {
+slots {
 @base = @Floor
 solid = Wall Player Crate Box Lump
 effect = Light Dark

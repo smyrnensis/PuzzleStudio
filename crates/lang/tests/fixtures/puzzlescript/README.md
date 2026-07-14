@@ -9,7 +9,7 @@ Current vanilla PuzzleScript import scope:
 - `LEGEND` rows become canonical `levels { legend { ... } }` rows. `and` becomes a same-cell object list.
 - `LEGEND` property aliases such as `crate = crate1 or crate2 or crate3` become canonical `group` rows.
 - A PuzzleScript object named `Background` is treated as PS's special background object: it remains a normal canonical object/sprite, and the importer adds `on_level_start { once_all [ no Background ] -> [ Background ] }` so every level cell gets background on load.
-- `COLLISIONLAYERS` rows become canonical `layers`; generated output does not use `objects {}`.
+- `COLLISIONLAYERS` rows become canonical `slots`; generated output does not use `objects {}`.
 - `COLLISIONLAYERS` property aliases are expanded to their concrete objects.
 - `WINCONDITIONS` rows preserve PuzzleScript `all Target on Crate` as canonical `all Target on Crate`, so the solver can derive its subject-to-cover distance strategy. General pattern conditions such as `no [ Target no Crate ]` remain general conditions and do not imply that strategy.
 - Empty PS `WINCONDITIONS` sections are omitted from canonical output.

@@ -1,5 +1,11 @@
 use std::ops::Range;
 
+mod sprite_order_surface;
+
+pub use sprite_order_surface::{
+    SpriteOrderItemSurface, SpriteOrderSurface, SpriteOrderSurfaceError, parse_sprite_order_surface,
+};
+
 pub trait VariantAxisSpec {
     fn name(&self) -> &str;
     fn allowed_values(&self, tag: &str) -> Option<Vec<String>>;
@@ -16,6 +22,84 @@ pub trait VariantAxisSpec {
     }
 }
 
+/// A direction relative to the spatial orientation of the rule currently
+/// being lowered. It is language semantics, not a 2D or 3D catalog alias.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RelativeDirection {
+    Forward,
+    Backward,
+    Left,
+    Right,
+}
+
+pub fn relative_direction(value: &str) -> Option<RelativeDirection> {
+    match value {
+        ">" => Some(RelativeDirection::Forward),
+        "<" => Some(RelativeDirection::Backward),
+        "^" => Some(RelativeDirection::Left),
+        "v" => Some(RelativeDirection::Right),
+        _ => None,
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VariantAxis {
+    pub name: String,
+    values: Vec<String>,
+    aliases: Vec<(String, Vec<String>)>,
+}
+
+impl VariantAxis {
+    pub fn named(name: impl Into<String>, values: Vec<impl Into<String>>) -> Self {
+        let values = values.into_iter().map(Into::into).collect::<Vec<_>>();
+        let aliases = values
+            .iter()
+            .map(|value| (value.clone(), vec![value.clone()]))
+            .collect();
+        Self {
+            name: name.into(),
+            values,
+            aliases,
+        }
+    }
+
+    pub fn with_aliases(
+        name: impl Into<String>,
+        values: Vec<String>,
+        mut aliases: Vec<(String, Vec<String>)>,
+    ) -> Self {
+        for value in &values {
+            if !aliases.iter().any(|(alias, _)| alias == value) {
+                aliases.push((value.clone(), vec![value.clone()]));
+            }
+        }
+        Self {
+            name: name.into(),
+            values,
+            aliases,
+        }
+    }
+}
+
+impl VariantAxisSpec for VariantAxis {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn allowed_values(&self, tag: &str) -> Option<Vec<String>> {
+        let requested = self
+            .aliases
+            .iter()
+            .find_map(|(alias, values)| (alias == tag).then_some(values))?;
+        let values = requested
+            .iter()
+            .filter(|value| self.values.contains(value))
+            .cloned()
+            .collect::<Vec<_>>();
+        (!values.is_empty()).then_some(values)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SelectorCatalog<ObjectId, LayerId, Axis, Mark> {
     pub objects: Vec<ConcreteObject<ObjectId>>,
@@ -23,6 +107,9 @@ pub struct SelectorCatalog<ObjectId, LayerId, Axis, Mark> {
     pub groups: Vec<SelectorGroup<ObjectSelector<Mark>>>,
     object_layers: Vec<(ObjectId, LayerId)>,
 }
+
+pub type ModelCatalog =
+    SelectorCatalog<puzzle_kernel::ObjectId, puzzle_kernel::LayerId, VariantAxis, SelectorMark>;
 
 impl<ObjectId, LayerId, Axis, Mark> SelectorCatalog<ObjectId, LayerId, Axis, Mark>
 where
@@ -221,6 +308,343 @@ pub struct SelectorMark {
     pub name: String,
     pub value: Option<String>,
     pub negated: bool,
+}
+
+/// Dimension-independent syntax of an object selector.
+///
+/// This deliberately stops before catalog lookup.  A 2D or 3D lowerer may
+/// assign different spatial meaning to tag expressions, but labels and marks
+/// are part of the authoring language and must be parsed identically.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SelectorSyntax {
+    pub selector: String,
+    pub base: String,
+    pub tags: Vec<String>,
+    pub occurrence_label: Option<String>,
+    pub marks: Vec<SelectorMark>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SelectorSyntaxError {
+    MarkMustEndWithBrace,
+    MarkMissingSelector,
+    NoMissingMark,
+    InvalidMarkName,
+    EmptyMarkValue,
+    InvalidOccurrenceLabel,
+}
+
+impl SelectorSyntaxError {
+    pub const fn message(self) -> &'static str {
+        match self {
+            Self::MarkMustEndWithBrace => "mark selector must end with }",
+            Self::MarkMissingSelector => "mark selector must attach to an object",
+            Self::NoMissingMark => "`no` must be followed by a mark",
+            Self::InvalidMarkName => {
+                "mark name must start with an identifier and may use :value parts"
+            }
+            Self::EmptyMarkValue => "mark value must not be empty",
+            Self::InvalidOccurrenceLabel => {
+                "selector occurrence label must be: selector#label using only letters, numbers, and _"
+            }
+        }
+    }
+}
+
+pub fn parse_selector_syntax(token: &str) -> Result<SelectorSyntax, SelectorSyntaxError> {
+    let (selector, marks) = parse_selector_marks_syntax(token)?;
+    let (selector, occurrence_label) = parse_selector_occurrence_label_syntax(selector)?;
+    let mut parts = selector.split(':');
+    let base = parts.next().unwrap_or_default().to_string();
+    let tags = parts.map(str::to_string).collect();
+    Ok(SelectorSyntax {
+        selector,
+        base,
+        tags,
+        occurrence_label,
+        marks,
+    })
+}
+
+fn parse_selector_marks_syntax(
+    selector: &str,
+) -> Result<(&str, Vec<SelectorMark>), SelectorSyntaxError> {
+    let Some(open_index) = selector.find('{') else {
+        return Ok((selector, Vec::new()));
+    };
+    let base = &selector[..open_index];
+    let attrs = selector[open_index + 1..]
+        .strip_suffix('}')
+        .ok_or(SelectorSyntaxError::MarkMustEndWithBrace)?;
+    if base.is_empty() {
+        return Err(SelectorSyntaxError::MarkMissingSelector);
+    }
+
+    let mut marks = Vec::new();
+    let mut tokens = attrs.split_whitespace().peekable();
+    while let Some(token) = tokens.next() {
+        let (negated, spec) = if token == "no" {
+            (
+                true,
+                tokens.next().ok_or(SelectorSyntaxError::NoMissingMark)?,
+            )
+        } else {
+            (false, token)
+        };
+        if mark_sugar_kind(spec).is_some() {
+            marks.push(SelectorMark {
+                name: String::new(),
+                value: Some(spec.to_string()),
+                negated,
+            });
+            continue;
+        }
+        let (name, value) = spec
+            .split_once('=')
+            .map_or((spec, None), |(name, value)| (name, Some(value)));
+        let mut name_parts = name.split(':');
+        let valid_name = name_parts.next().is_some_and(is_identifier)
+            && name_parts.all(|part| {
+                !part.is_empty()
+                    && (matches!(part, ">" | "<" | "^" | "v")
+                        || part
+                            .chars()
+                            .all(|ch| ch == '_' || ch.is_ascii_alphanumeric()))
+            });
+        if !valid_name {
+            return Err(SelectorSyntaxError::InvalidMarkName);
+        }
+        if value.is_some_and(str::is_empty) {
+            return Err(SelectorSyntaxError::EmptyMarkValue);
+        }
+        marks.push(SelectorMark {
+            name: name.to_string(),
+            value: value.map(str::to_string),
+            negated,
+        });
+    }
+    Ok((base, marks))
+}
+
+fn parse_selector_occurrence_label_syntax(
+    selector: &str,
+) -> Result<(String, Option<String>), SelectorSyntaxError> {
+    let (head, suffix) = selector.find(':').map_or((selector, ""), |colon| {
+        (&selector[..colon], &selector[colon..])
+    });
+    let Some((base, label)) = head.split_once('#') else {
+        return Ok((selector.to_string(), None));
+    };
+    if base.is_empty()
+        || label.is_empty()
+        || label.contains('#')
+        || !label
+            .chars()
+            .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+    {
+        return Err(SelectorSyntaxError::InvalidOccurrenceLabel);
+    }
+    Ok((format!("{base}{suffix}"), Some(label.to_string())))
+}
+
+/// Dimension-independent semantic occurrence used to lower a rewrite.
+///
+/// Spatial frontends own `Position`; selector resolution owns `Subject` and
+/// `Mark`.  Presence, movement, and mark deltas are shared authoring semantics
+/// and must not be reimplemented by a 2D or 3D frontend.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RewriteOccurrence<Key, Position, Subject, Mark> {
+    pub key: Key,
+    pub position: Position,
+    pub subject: Subject,
+    pub require_marks: Vec<Mark>,
+    pub forbid_marks: Vec<Mark>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RewriteOccurrenceDelta<Position, Subject, Mark> {
+    Add {
+        at: Position,
+        subject: Subject,
+    },
+    Remove {
+        at: Position,
+        subject: Subject,
+    },
+    Move {
+        from: Position,
+        to: Position,
+        subject: Subject,
+    },
+    SetMark {
+        at: Position,
+        subject: Subject,
+        mark: Mark,
+    },
+    RemoveMark {
+        at: Position,
+        subject: Subject,
+        mark: Mark,
+    },
+}
+
+/// Computes the complete semantic delta between the two sides of a rewrite.
+///
+/// Direction expansion and rotation happen outside this function. Every
+/// dimension must use this function after assigning stable occurrence keys.
+pub fn diff_rewrite_occurrences<Key, Position, Subject, Mark, MarksEqual>(
+    before: &[RewriteOccurrence<Key, Position, Subject, Mark>],
+    after: &[RewriteOccurrence<Key, Position, Subject, Mark>],
+    marks_equal: MarksEqual,
+) -> Vec<RewriteOccurrenceDelta<Position, Subject, Mark>>
+where
+    Key: Eq,
+    Position: Clone + Eq,
+    Subject: Clone + Eq,
+    Mark: Clone,
+    MarksEqual: Fn(&Mark, &Mark) -> bool,
+{
+    let mut deltas = Vec::new();
+
+    for before_occurrence in before {
+        let Some(after_occurrence) = after
+            .iter()
+            .find(|after_occurrence| after_occurrence.key == before_occurrence.key)
+        else {
+            deltas.push(RewriteOccurrenceDelta::Remove {
+                at: before_occurrence.position.clone(),
+                subject: before_occurrence.subject.clone(),
+            });
+            continue;
+        };
+
+        if before_occurrence.subject != after_occurrence.subject {
+            deltas.push(RewriteOccurrenceDelta::Remove {
+                at: before_occurrence.position.clone(),
+                subject: before_occurrence.subject.clone(),
+            });
+            deltas.push(RewriteOccurrenceDelta::Add {
+                at: after_occurrence.position.clone(),
+                subject: after_occurrence.subject.clone(),
+            });
+            continue;
+        }
+
+        if before_occurrence.position != after_occurrence.position {
+            deltas.push(RewriteOccurrenceDelta::Move {
+                from: before_occurrence.position.clone(),
+                to: after_occurrence.position.clone(),
+                subject: before_occurrence.subject.clone(),
+            });
+        }
+
+        for mark in &after_occurrence.require_marks {
+            if !before_occurrence
+                .require_marks
+                .iter()
+                .any(|before_mark| marks_equal(before_mark, mark))
+            {
+                deltas.push(RewriteOccurrenceDelta::SetMark {
+                    at: after_occurrence.position.clone(),
+                    subject: after_occurrence.subject.clone(),
+                    mark: mark.clone(),
+                });
+            }
+        }
+        for mark in &before_occurrence.require_marks {
+            if !after_occurrence
+                .require_marks
+                .iter()
+                .any(|after_mark| marks_equal(mark, after_mark))
+            {
+                deltas.push(RewriteOccurrenceDelta::RemoveMark {
+                    at: after_occurrence.position.clone(),
+                    subject: after_occurrence.subject.clone(),
+                    mark: mark.clone(),
+                });
+            }
+        }
+        for mark in &after_occurrence.forbid_marks {
+            deltas.push(RewriteOccurrenceDelta::RemoveMark {
+                at: after_occurrence.position.clone(),
+                subject: after_occurrence.subject.clone(),
+                mark: mark.clone(),
+            });
+        }
+    }
+
+    for after_occurrence in after {
+        if before
+            .iter()
+            .any(|before_occurrence| before_occurrence.key == after_occurrence.key)
+        {
+            continue;
+        }
+        deltas.push(RewriteOccurrenceDelta::Add {
+            at: after_occurrence.position.clone(),
+            subject: after_occurrence.subject.clone(),
+        });
+        for mark in &after_occurrence.require_marks {
+            deltas.push(RewriteOccurrenceDelta::SetMark {
+                at: after_occurrence.position.clone(),
+                subject: after_occurrence.subject.clone(),
+                mark: mark.clone(),
+            });
+        }
+    }
+
+    deltas
+}
+
+/// Builds stable rewrite occurrences for the shared selector representation.
+/// Dimension-specific lowering supplies positions only.
+pub fn selector_rewrite_occurrences<'a, Position: Clone>(
+    cells: impl IntoIterator<Item = (Position, &'a [ObjectSelector<SelectorMark>])>,
+) -> Vec<RewriteOccurrence<(String, usize), Position, ObjectSelector<SelectorMark>, SelectorMark>> {
+    let mut ordinals = Vec::<(String, usize)>::new();
+    let mut occurrences = Vec::new();
+    for (position, selectors) in cells {
+        for selector in selectors {
+            let token = selector.token();
+            let ordinal = if let Some((_, ordinal)) =
+                ordinals.iter_mut().find(|(existing, _)| existing == &token)
+            {
+                let current = *ordinal;
+                *ordinal += 1;
+                current
+            } else {
+                ordinals.push((token.clone(), 1));
+                0
+            };
+            let marks = selector.mark();
+            occurrences.push(RewriteOccurrence {
+                key: (token, ordinal),
+                position: position.clone(),
+                subject: selector_without_marks(selector),
+                require_marks: marks.iter().filter(|mark| !mark.negated).cloned().collect(),
+                forbid_marks: marks
+                    .iter()
+                    .filter(|mark| mark.negated)
+                    .map(|mark| SelectorMark {
+                        name: mark.name.clone(),
+                        value: mark.value.clone(),
+                        negated: false,
+                    })
+                    .collect(),
+            });
+        }
+    }
+    occurrences
+}
+
+fn selector_without_marks(selector: &ObjectSelector<SelectorMark>) -> ObjectSelector<SelectorMark> {
+    match selector {
+        ObjectSelector::WithMark { selector, .. } => selector_without_marks(selector),
+        ObjectSelector::Labeled { token, selector } => {
+            ObjectSelector::labeled(token.clone(), selector_without_marks(selector))
+        }
+        _ => selector.clone(),
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -688,23 +1112,23 @@ pub fn selector_assignment_surface(line: &str) -> Option<SelectorAssignmentSurfa
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum LayerRowSurface<'a> {
+pub enum SlotRowSurface<'a> {
     Anonymous { selectors: Vec<&'a str> },
     Named(SelectorAssignmentSurface<'a>),
     Each { selectors: Vec<&'a str> },
 }
 
-pub fn layer_row_surface(line: &str) -> Option<LayerRowSurface<'_>> {
+pub fn slot_row_surface(line: &str) -> Option<SlotRowSurface<'_>> {
     if let Some(assignment) = selector_assignment_surface(line) {
-        return Some(LayerRowSurface::Named(assignment));
+        return Some(SlotRowSurface::Named(assignment));
     }
     let tokens = split_header_tokens(line);
     match tokens.as_slice() {
         [] | ["each"] => None,
-        ["each", selectors @ ..] => Some(LayerRowSurface::Each {
+        ["each", selectors @ ..] => Some(SlotRowSurface::Each {
             selectors: selectors.to_vec(),
         }),
-        selectors => Some(LayerRowSurface::Anonymous {
+        selectors => Some(SlotRowSurface::Anonymous {
             selectors: selectors.to_vec(),
         }),
     }
@@ -731,10 +1155,11 @@ pub enum PuzzleDirectiveSurface {
     RemovedModelPrefix,
     Metadata,
     DocumentShell,
-    Layers,
+    Slots,
+    Marks,
     Tags,
+    Map,
     Objects,
-    DisplayObjects,
     Keys,
     Inputs,
     Groups,
@@ -752,6 +1177,15 @@ pub enum PuzzleDirectiveSurface {
     Render,
     Assignment,
     Unknown,
+}
+
+impl PuzzleDirectiveSurface {
+    pub const fn is_catalog_owned(self) -> bool {
+        matches!(
+            self,
+            Self::Slots | Self::Marks | Self::Tags | Self::Map | Self::Groups
+        )
+    }
 }
 
 pub fn puzzle_directive_surface(line: &str) -> PuzzleDirectiveSurface {
@@ -777,10 +1211,11 @@ pub fn puzzle_directive_surface(line: &str) -> PuzzleDirectiveSurface {
         }
         "theme" if parse_assignment_row(line).is_some() => PuzzleDirectiveSurface::Metadata,
         "sounds" | "theme" | "assets" => PuzzleDirectiveSurface::DocumentShell,
-        "layers" => PuzzleDirectiveSurface::Layers,
+        "slots" => PuzzleDirectiveSurface::Slots,
+        "marks" => PuzzleDirectiveSurface::Marks,
         "tags" => PuzzleDirectiveSurface::Tags,
+        "map" => PuzzleDirectiveSurface::Map,
         "objects" => PuzzleDirectiveSurface::Objects,
-        "display_objects" => PuzzleDirectiveSurface::DisplayObjects,
         "keys" => PuzzleDirectiveSurface::Keys,
         "inputs" => PuzzleDirectiveSurface::Inputs,
         "groups" => PuzzleDirectiveSurface::Groups,
@@ -1388,8 +1823,17 @@ pub fn rule_program_block_surface(line: &str) -> Option<RuleProgramBlockSurface<
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RuleProgramBlockBody {
-    RuleStatements(Vec<String>),
+    RuleStatements(Vec<RuleStatementSyntax>),
     LifecycleCommands(Vec<String>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RuleStatementSyntax {
+    Line(String),
+    Block {
+        header: String,
+        statements: Vec<RuleStatementSyntax>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1407,28 +1851,27 @@ impl RuleProgramBlockBodyError {
     }
 }
 
-pub fn collect_rule_program_block_body(
+/// Collects a rule-program body whose owner boundary has already been parsed.
+///
+/// `lines` contains only the direct body of the owning block, without its
+/// closing brace. Nested statement blocks still carry their own braces.
+pub fn collect_rule_program_entry_body(
     lines: &[String],
-    start: usize,
     block: RuleProgramBlockSurface<'_>,
-) -> Result<(RuleProgramBlockBody, usize), RuleProgramBlockBodyError> {
+) -> Result<RuleProgramBlockBody, RuleProgramBlockBodyError> {
     match block {
-        RuleProgramBlockSurface::Rules { .. } => {
-            collect_rule_statement_block_body(lines, start, "rules")
-                .map(|(body, next)| (RuleProgramBlockBody::RuleStatements(body), next))
-        }
+        RuleProgramBlockSurface::Rules { .. } => collect_rule_statement_entry_body(lines, "rules")
+            .map(RuleProgramBlockBody::RuleStatements),
         RuleProgramBlockSurface::OnLevelStart { .. } => {
-            collect_rule_statement_block_body(lines, start, "on_level_start")
-                .map(|(body, next)| (RuleProgramBlockBody::RuleStatements(body), next))
+            collect_rule_statement_entry_body(lines, "on_level_start")
+                .map(RuleProgramBlockBody::RuleStatements)
         }
-        RuleProgramBlockSurface::OnLevelClear => {
-            collect_lifecycle_command_block_body(lines, start, "on_level_clear")
-                .map(|(body, next)| (RuleProgramBlockBody::LifecycleCommands(body), next))
-        }
-        RuleProgramBlockSurface::OnLastLevelClear => {
-            collect_lifecycle_command_block_body(lines, start, "on_last_level_clear")
-                .map(|(body, next)| (RuleProgramBlockBody::LifecycleCommands(body), next))
-        }
+        RuleProgramBlockSurface::OnLevelClear => Ok(RuleProgramBlockBody::LifecycleCommands(
+            collect_lifecycle_command_entry_body(lines),
+        )),
+        RuleProgramBlockSurface::OnLastLevelClear => Ok(RuleProgramBlockBody::LifecycleCommands(
+            collect_lifecycle_command_entry_body(lines),
+        )),
     }
 }
 
@@ -1436,7 +1879,6 @@ pub fn collect_rule_program_block_body(
 pub enum RuleStatementBlockSurface<'a> {
     Program(RuleProgramBlockSurface<'a>),
     Routine,
-    DisplayHook,
     Nested,
 }
 
@@ -1481,7 +1923,6 @@ pub fn rule_statement_block_surface(
     let tokens = split_header_tokens(trimmed);
     match tokens.first().copied()? {
         "routine" => Some(RuleStatementBlockSurface::Routine),
-        "on_display" => Some(RuleStatementBlockSurface::DisplayHook),
         _ if parent_is_statement_block && nested_rule_statement_block_surface(trimmed, &tokens) => {
             Some(RuleStatementBlockSurface::Nested)
         }
@@ -1512,20 +1953,6 @@ fn named_block_header_modifier<'a>(line: &'a str, keyword: &str) -> Option<&'a s
         return Some("");
     }
     rest.strip_prefix(' ').map(str::trim)
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum StandardRuleStepSurface {
-    Move,
-}
-
-pub const STANDARD_RULE_STEP_NAMES: &[&str] = &["move"];
-
-pub fn standard_rule_step_surface(line: &str) -> Option<StandardRuleStepSurface> {
-    match line.trim() {
-        "move" => Some(StandardRuleStepSurface::Move),
-        _ => None,
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1577,10 +2004,7 @@ pub fn rule_statement_surface(
     {
         return Ok(RuleStatementSurface::ApplicationBlock { application });
     }
-    if tokens.len() == 1
-        && is_qualified_identifier(tokens[0])
-        && standard_rule_step_surface(line).is_none()
-    {
+    if tokens.len() == 1 && is_qualified_identifier(tokens[0]) {
         return Ok(RuleStatementSurface::Call { name: tokens[0] });
     }
     rule_line_surface(line).map(RuleStatementSurface::RuleLine)
@@ -1588,7 +2012,6 @@ pub fn rule_statement_surface(
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RuleLineSurface<'a> {
-    StandardStep(StandardRuleStepSurface),
     InputRewrite {
         application: Option<RuleApplicationSurface>,
         surface: InputRewriteSurface<'a>,
@@ -1619,10 +2042,6 @@ pub struct InputRewriteSurfaceSpans {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RuleLineSurfaceSpans {
-    StandardStep {
-        step: StandardRuleStepSurface,
-        span: Range<usize>,
-    },
     InputRewrite {
         application: Option<RuleApplicationSurfaceSpan>,
         surface: InputRewriteSurfaceSpans,
@@ -1672,7 +2091,6 @@ impl RuleLineSurfaceError {
 
 pub fn rule_line_surface(line: &str) -> Result<RuleLineSurface<'_>, RuleLineSurfaceError> {
     Ok(match rule_line_surface_spans(line)? {
-        RuleLineSurfaceSpans::StandardStep { step, .. } => RuleLineSurface::StandardStep(step),
         RuleLineSurfaceSpans::InputRewrite {
             application,
             surface,
@@ -1704,13 +2122,6 @@ pub fn rule_line_surface(line: &str) -> Result<RuleLineSurface<'_>, RuleLineSurf
 
 pub fn rule_line_surface_spans(line: &str) -> Result<RuleLineSurfaceSpans, RuleLineSurfaceError> {
     let line_range = trimmed_range(line);
-    let line_text = &line[line_range.clone()];
-    if let Some(step) = standard_rule_step_surface(line_text) {
-        return Ok(RuleLineSurfaceSpans::StandardStep {
-            step,
-            span: line_range,
-        });
-    }
     let (application, rest) = split_rule_application_prefix_spans(line, line_range)?;
     if let Some(surface) =
         input_rewrite_surface_spans_in(line, rest.clone()).map_err(RuleLineSurfaceError::Input)?
@@ -1750,7 +2161,6 @@ pub fn rule_line_semantic_surface_spans(
 ) -> Result<Vec<RuleSemanticSurfaceSpan>, RuleLineSurfaceError> {
     let mut spans = Vec::new();
     match rule_line_surface_spans(line)? {
-        RuleLineSurfaceSpans::StandardStep { .. } => {}
         RuleLineSurfaceSpans::InputRewrite { surface, .. } => {
             add_rule_rewrite_semantic_surface_spans(line, surface.rewrite, &mut spans);
         }
@@ -1881,7 +2291,15 @@ fn add_rule_cell_token_semantic_surface_spans(
     if let Some(open) = mark_start
         && line[token.clone()].ends_with('}')
     {
+        spans.push(RuleSemanticSurfaceSpan {
+            kind: RuleSemanticSurfaceKind::Mark,
+            span: open..open + 1,
+        });
         add_rule_mark_block_semantic_surface_spans(line, open + 1..token.end - 1, spans);
+        spans.push(RuleSemanticSurfaceSpan {
+            kind: RuleSemanticSurfaceKind::Mark,
+            span: token.end - 1..token.end,
+        });
     }
 }
 
@@ -2086,11 +2504,19 @@ pub fn collect_rule_statement_line(lines: &[String], start: usize) -> (String, u
     (first.to_string(), start + 1)
 }
 
-fn collect_rule_statement_block_body(
+fn collect_rule_statement_entry_body(
+    lines: &[String],
+    block_name: &'static str,
+) -> Result<Vec<RuleStatementSyntax>, RuleProgramBlockBodyError> {
+    collect_rule_statement_body(lines, 0, block_name, false).map(|(body, _)| body)
+}
+
+fn collect_rule_statement_body(
     lines: &[String],
     mut index: usize,
     block_name: &'static str,
-) -> Result<(Vec<String>, usize), RuleProgramBlockBodyError> {
+    closing_brace_required: bool,
+) -> Result<(Vec<RuleStatementSyntax>, usize), RuleProgramBlockBodyError> {
     let mut body = Vec::new();
     while index < lines.len() {
         let line = lines[index].trim();
@@ -2099,34 +2525,38 @@ fn collect_rule_statement_block_body(
         }
         if line.is_empty() {
             index += 1;
+            continue;
+        }
+        if rule_statement_block_surface(line, true).is_some() {
+            let header = line
+                .strip_suffix('{')
+                .expect("rule statement block surface requires an opening brace")
+                .trim_end()
+                .to_string();
+            let (statements, next_index) =
+                collect_rule_statement_body(lines, index + 1, block_name, true)?;
+            body.push(RuleStatementSyntax::Block { header, statements });
+            index = next_index;
             continue;
         }
         let (rule_line, next_index) = collect_rule_statement_line(lines, index);
-        body.push(rule_line);
+        body.push(RuleStatementSyntax::Line(rule_line));
         index = next_index;
     }
-    Err(RuleProgramBlockBodyError::MissingClosingBrace { block_name })
+    if closing_brace_required {
+        Err(RuleProgramBlockBodyError::MissingClosingBrace { block_name })
+    } else {
+        Ok((body, index))
+    }
 }
 
-fn collect_lifecycle_command_block_body(
-    lines: &[String],
-    mut index: usize,
-    block_name: &'static str,
-) -> Result<(Vec<String>, usize), RuleProgramBlockBodyError> {
-    let mut body = Vec::new();
-    while index < lines.len() {
-        let line = lines[index].trim();
-        if line == "}" {
-            return Ok((body, index + 1));
-        }
-        if line.is_empty() {
-            index += 1;
-            continue;
-        }
-        body.push(line.to_string());
-        index += 1;
-    }
-    Err(RuleProgramBlockBodyError::MissingClosingBrace { block_name })
+fn collect_lifecycle_command_entry_body(lines: &[String]) -> Vec<String> {
+    lines
+        .iter()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 fn looks_like_multiline_rule_line_start(line: &str) -> bool {
@@ -2327,46 +2757,404 @@ pub fn movement_mark_set_values(value: &str, dimensions: u8) -> Option<&'static 
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StandardMoveObject {
-    pub object: u16,
-    pub layer: u16,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StandardMoveRulePlan {
-    pub object: u16,
-    pub direction_index: u16,
-    pub layer_objects: Vec<u16>,
-}
-
-pub fn standard_move_rule_plans(
-    objects: impl IntoIterator<Item = StandardMoveObject>,
-    direction_count: u16,
-) -> Vec<StandardMoveRulePlan> {
-    let objects = objects.into_iter().collect::<Vec<_>>();
-    let mut plans = Vec::new();
-    for object in &objects {
-        let layer_objects = objects
-            .iter()
-            .filter_map(|candidate| (candidate.layer == object.layer).then_some(candidate.object))
-            .collect::<Vec<_>>();
-        for direction_index in 0..direction_count {
-            plans.push(StandardMoveRulePlan {
-                object: object.object,
-                direction_index,
-                layer_objects: layer_objects.clone(),
-            });
-        }
-    }
-    plans
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CellTokenError {
     UnmatchedCloseBrace,
     MissingCloseBrace,
     UnmatchedCloseParen,
     MissingCloseParen,
+}
+
+/// Catalog-independent syntax shared by every spatial rule lowerer.
+///
+/// A semicolon is exactly a source newline. Consecutive separators therefore
+/// produce `Blank` lines; dimensional lowering may assign spatial meaning to
+/// those blank lines, but parsing them is part of the common language.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnresolvedPatternSyntax {
+    pub components: Vec<UnresolvedPatternComponentSyntax>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnresolvedPatternComponentSyntax {
+    pub lines: Vec<UnresolvedPatternLineSyntax>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UnresolvedPatternLineSyntax {
+    Cells(Vec<UnresolvedPatternPartSyntax>),
+    Blank,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UnresolvedPatternPartSyntax {
+    Cell(UnresolvedCellSyntax),
+    Ellipsis,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct UnresolvedCellSyntax {
+    pub keep: bool,
+    pub require_null: bool,
+    pub require: Vec<UnresolvedCellSubjectSyntax>,
+    pub forbid: Vec<UnresolvedCellSubjectSyntax>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UnresolvedCellSubjectSyntax {
+    Selector(SelectorSyntax),
+    CellMarks(Vec<SelectorMark>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnresolvedRewriteSyntax {
+    pub before: UnresolvedPatternSyntax,
+    pub after: Option<UnresolvedPatternSyntax>,
+    pub suffix: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UnresolvedPatternSyntaxError {
+    RewriteMissingArrow,
+    PatternMustStartWithBlock,
+    PatternBlockMissingClose,
+    PatternMustContainBlock,
+    EmptyLine,
+    KeepOnlyOnAfter,
+    KeepWithOtherTokens,
+    RewriteLayoutMismatch,
+    CellPattern(CellPatternError),
+    Selector(SelectorSyntaxError),
+}
+
+impl UnresolvedPatternSyntaxError {
+    pub const fn message(&self) -> &'static str {
+        match self {
+            Self::RewriteMissingArrow => "inline rewrite must contain ->",
+            Self::PatternMustStartWithBlock => "pattern side must contain bracketed blocks",
+            Self::PatternBlockMissingClose => "pattern block missing ]",
+            Self::PatternMustContainBlock => "pattern side must contain at least one block",
+            Self::EmptyLine => "pattern line must contain at least one cell",
+            Self::KeepOnlyOnAfter => "`=` is only valid as a RHS cell",
+            Self::KeepWithOtherTokens => "`=` RHS cell cannot contain other tokens",
+            Self::RewriteLayoutMismatch => {
+                "before and after blocks must have matching cell, ellipsis, and blank-line layout"
+            }
+            Self::CellPattern(error) => error.message(),
+            Self::Selector(error) => error.message(),
+        }
+    }
+}
+
+pub fn parse_unresolved_rewrite_syntax(
+    source: &str,
+) -> Result<UnresolvedRewriteSyntax, UnresolvedPatternSyntaxError> {
+    let (before, after) = source
+        .split_once("->")
+        .ok_or(UnresolvedPatternSyntaxError::RewriteMissingArrow)?;
+    let (before, before_suffix) = parse_unresolved_pattern_prefix(before, false)?;
+    if !before_suffix.is_empty() {
+        return Err(UnresolvedPatternSyntaxError::PatternMustStartWithBlock);
+    }
+    let after = after.trim();
+    if after.starts_with('[') {
+        let (mut after, suffix) = parse_unresolved_pattern_prefix(after, true)?;
+        normalize_unresolved_keep_cells(&before, &mut after)?;
+        Ok(UnresolvedRewriteSyntax {
+            before,
+            after: Some(after),
+            suffix: suffix.to_string(),
+        })
+    } else {
+        Ok(UnresolvedRewriteSyntax {
+            before,
+            after: None,
+            suffix: after.to_string(),
+        })
+    }
+}
+
+fn normalize_unresolved_keep_cells(
+    before: &UnresolvedPatternSyntax,
+    after: &mut UnresolvedPatternSyntax,
+) -> Result<(), UnresolvedPatternSyntaxError> {
+    for (component_index, after_component) in after.components.iter_mut().enumerate() {
+        for (line_index, after_line) in after_component.lines.iter_mut().enumerate() {
+            let UnresolvedPatternLineSyntax::Cells(after_parts) = after_line else {
+                continue;
+            };
+            for (part_index, after_part) in after_parts.iter_mut().enumerate() {
+                let UnresolvedPatternPartSyntax::Cell(after_cell) = after_part else {
+                    continue;
+                };
+                if !after_cell.keep {
+                    continue;
+                }
+                let Some(UnresolvedPatternPartSyntax::Cell(before_cell)) = before
+                    .components
+                    .get(component_index)
+                    .and_then(|component| component.lines.get(line_index))
+                    .and_then(|line| match line {
+                        UnresolvedPatternLineSyntax::Cells(parts) => parts.get(part_index),
+                        UnresolvedPatternLineSyntax::Blank => None,
+                    })
+                else {
+                    return Err(UnresolvedPatternSyntaxError::RewriteLayoutMismatch);
+                };
+                *after_cell = before_cell.clone();
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn parse_unresolved_pattern_syntax(
+    source: &str,
+) -> Result<UnresolvedPatternSyntax, UnresolvedPatternSyntaxError> {
+    let (pattern, suffix) = parse_unresolved_pattern_prefix(source, false)?;
+    if !suffix.is_empty() {
+        return Err(UnresolvedPatternSyntaxError::PatternMustStartWithBlock);
+    }
+    Ok(pattern)
+}
+
+fn parse_unresolved_pattern_prefix(
+    source: &str,
+    allow_keep: bool,
+) -> Result<(UnresolvedPatternSyntax, &str), UnresolvedPatternSyntaxError> {
+    let mut components = Vec::new();
+    let mut rest = source.trim();
+    while let Some(inner) = rest.strip_prefix('[') {
+        let close = inner
+            .find(']')
+            .ok_or(UnresolvedPatternSyntaxError::PatternBlockMissingClose)?;
+        components.push(parse_unresolved_pattern_component(
+            &inner[..close],
+            allow_keep,
+        )?);
+        rest = inner[close + 1..].trim_start();
+    }
+    if components.is_empty() {
+        return Err(UnresolvedPatternSyntaxError::PatternMustContainBlock);
+    }
+    Ok((UnresolvedPatternSyntax { components }, rest.trim()))
+}
+
+fn parse_unresolved_pattern_component(
+    source: &str,
+    allow_keep: bool,
+) -> Result<UnresolvedPatternComponentSyntax, UnresolvedPatternSyntaxError> {
+    let source = source.trim();
+    if source.is_empty() {
+        return Ok(UnresolvedPatternComponentSyntax {
+            lines: vec![UnresolvedPatternLineSyntax::Cells(vec![
+                UnresolvedPatternPartSyntax::Cell(UnresolvedCellSyntax::default()),
+            ])],
+        });
+    }
+    let mut lines = Vec::new();
+    for line in source.split([';', '\n']) {
+        let line = line.trim().trim_end_matches('\r').trim();
+        if line.is_empty() {
+            lines.push(UnresolvedPatternLineSyntax::Blank);
+            continue;
+        }
+        let parts = line
+            .split('|')
+            .map(str::trim)
+            .map(|cell| {
+                if cell == "..." {
+                    Ok(UnresolvedPatternPartSyntax::Ellipsis)
+                } else {
+                    parse_unresolved_cell_syntax(cell, allow_keep)
+                        .map(UnresolvedPatternPartSyntax::Cell)
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if parts.is_empty() {
+            return Err(UnresolvedPatternSyntaxError::EmptyLine);
+        }
+        lines.push(UnresolvedPatternLineSyntax::Cells(parts));
+    }
+    if lines.is_empty() {
+        return Err(UnresolvedPatternSyntaxError::EmptyLine);
+    }
+    Ok(UnresolvedPatternComponentSyntax { lines })
+}
+
+fn parse_unresolved_cell_syntax(
+    source: &str,
+    allow_keep: bool,
+) -> Result<UnresolvedCellSyntax, UnresolvedPatternSyntaxError> {
+    let tokens = split_cell_tokens(source)
+        .map_err(CellPatternError::Token)
+        .map_err(UnresolvedPatternSyntaxError::CellPattern)?;
+    if tokens.iter().any(|token| token == "=") {
+        if !allow_keep {
+            return Err(UnresolvedPatternSyntaxError::KeepOnlyOnAfter);
+        }
+        if tokens.len() != 1 {
+            return Err(UnresolvedPatternSyntaxError::KeepWithOtherTokens);
+        }
+        return Ok(UnresolvedCellSyntax {
+            keep: true,
+            ..UnresolvedCellSyntax::default()
+        });
+    }
+
+    let mut cell = UnresolvedCellSyntax::default();
+    let mut index = 0;
+    while index < tokens.len() {
+        let token = &tokens[index];
+        if token == "no" {
+            let subject = tokens
+                .get(index + 1)
+                .ok_or(CellPatternError::MissingForbiddenSelector)
+                .map_err(UnresolvedPatternSyntaxError::CellPattern)?;
+            if subject == "no" {
+                return Err(UnresolvedPatternSyntaxError::CellPattern(
+                    CellPatternError::RepeatedNo,
+                ));
+            }
+            if subject == "null" {
+                return Err(UnresolvedPatternSyntaxError::CellPattern(
+                    CellPatternError::ForbidNull,
+                ));
+            }
+            cell.forbid.push(parse_unresolved_cell_subject(subject)?);
+            index += 2;
+            continue;
+        }
+        if mark_sugar_kind(token).is_some() {
+            let subject = tokens
+                .get(index + 1)
+                .ok_or(CellPatternError::MissingMarkSugarSelector)
+                .map_err(UnresolvedPatternSyntaxError::CellPattern)?;
+            if subject == "no" || mark_sugar_kind(subject).is_some() {
+                return Err(UnresolvedPatternSyntaxError::CellPattern(
+                    CellPatternError::InvalidMarkSugarSelector,
+                ));
+            }
+            if subject == "null" {
+                return Err(UnresolvedPatternSyntaxError::CellPattern(
+                    CellPatternError::NullMixedWithOtherTokens,
+                ));
+            }
+            let mut selector =
+                parse_selector_syntax(subject).map_err(UnresolvedPatternSyntaxError::Selector)?;
+            selector.marks.push(SelectorMark {
+                name: String::new(),
+                value: Some(token.clone()),
+                negated: false,
+            });
+            cell.require
+                .push(UnresolvedCellSubjectSyntax::Selector(selector));
+            index += 2;
+            continue;
+        }
+        if token == "null" {
+            if tokens.len() != 1 {
+                return Err(UnresolvedPatternSyntaxError::CellPattern(
+                    CellPatternError::NullMixedWithOtherTokens,
+                ));
+            }
+            cell.require_null = true;
+        } else {
+            cell.require.push(parse_unresolved_cell_subject(token)?);
+        }
+        index += 1;
+    }
+    Ok(cell)
+}
+
+fn parse_unresolved_cell_subject(
+    source: &str,
+) -> Result<UnresolvedCellSubjectSyntax, UnresolvedPatternSyntaxError> {
+    if source.starts_with('{') {
+        let synthetic = format!("__cell{source}");
+        let syntax =
+            parse_selector_syntax(&synthetic).map_err(UnresolvedPatternSyntaxError::Selector)?;
+        return Ok(UnresolvedCellSubjectSyntax::CellMarks(syntax.marks));
+    }
+    parse_selector_syntax(source)
+        .map(UnresolvedCellSubjectSyntax::Selector)
+        .map_err(UnresolvedPatternSyntaxError::Selector)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CellPatternError {
+    Token(CellTokenError),
+    MissingForbiddenSelector,
+    RepeatedNo,
+    ForbidNull,
+    MissingMarkSugarSelector,
+    InvalidMarkSugarSelector,
+    NullMixedWithOtherTokens,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NullCellPatternError {
+    IntroducedOnRewrite,
+    WriteToNull,
+    MissingAnchor,
+}
+
+impl NullCellPatternError {
+    pub const fn message(self) -> &'static str {
+        match self {
+            Self::IntroducedOnRewrite => {
+                "`null` can only be matched on the before side of a rewrite"
+            }
+            Self::WriteToNull => "`null` matched cells cannot be written to",
+            Self::MissingAnchor => "`null` patterns must include at least one non-null cell",
+        }
+    }
+}
+
+pub fn validate_null_pattern_cells(
+    require_null: impl IntoIterator<Item = bool>,
+) -> Result<(), NullCellPatternError> {
+    let mut has_null = false;
+    let mut has_non_null = false;
+    for require_null in require_null {
+        has_null |= require_null;
+        has_non_null |= !require_null;
+    }
+    if has_null && !has_non_null {
+        return Err(NullCellPatternError::MissingAnchor);
+    }
+    Ok(())
+}
+
+pub fn validate_null_rewrite_cell(
+    before_null: bool,
+    after_null: bool,
+    after_empty: bool,
+) -> Result<(), NullCellPatternError> {
+    if after_null && !before_null {
+        return Err(NullCellPatternError::IntroducedOnRewrite);
+    }
+    if before_null && !after_empty {
+        return Err(NullCellPatternError::WriteToNull);
+    }
+    Ok(())
+}
+
+impl CellPatternError {
+    pub const fn message(&self) -> &'static str {
+        match self {
+            Self::Token(CellTokenError::UnmatchedCloseBrace) => "mark block has unmatched }",
+            Self::Token(CellTokenError::MissingCloseBrace) => "mark block missing }",
+            Self::Token(CellTokenError::UnmatchedCloseParen) => "cell selector has unmatched )",
+            Self::Token(CellTokenError::MissingCloseParen) => "cell selector missing )",
+            Self::MissingForbiddenSelector => "`no` must be followed by a selector",
+            Self::RepeatedNo => "`no no` is not a valid cell pattern",
+            Self::ForbidNull => "`no null` is not a valid cell pattern",
+            Self::MissingMarkSugarSelector | Self::InvalidMarkSugarSelector => {
+                "mark sugar must be followed by a selector"
+            }
+            Self::NullMixedWithOtherTokens => "`null` cell pattern cannot contain other tokens",
+        }
+    }
 }
 
 pub fn split_cell_tokens(cell: &str) -> Result<Vec<String>, CellTokenError> {
@@ -2423,6 +3211,61 @@ mod tests {
     use super::*;
 
     #[test]
+    fn selector_syntax_is_dimension_independent() {
+        assert_eq!(
+            parse_selector_syntax("TEN#moving:>{right no active}").unwrap(),
+            SelectorSyntax {
+                selector: "TEN:>".to_string(),
+                base: "TEN".to_string(),
+                tags: vec![">".to_string()],
+                occurrence_label: Some("moving".to_string()),
+                marks: vec![
+                    SelectorMark {
+                        name: String::new(),
+                        value: Some("right".to_string()),
+                        negated: false,
+                    },
+                    SelectorMark {
+                        name: "active".to_string(),
+                        value: None,
+                        negated: true,
+                    },
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn pattern_lines_treat_semicolon_as_newline_and_preserve_blank_lines() {
+        let semicolons = parse_unresolved_pattern_syntax("[A;B;;C]").unwrap();
+        let newlines = parse_unresolved_pattern_syntax("[A\nB\n\nC]").unwrap();
+        assert_eq!(semicolons, newlines);
+        assert!(matches!(
+            semicolons.components[0].lines[2],
+            UnresolvedPatternLineSyntax::Blank
+        ));
+    }
+
+    #[test]
+    fn unresolved_rewrite_owns_cells_selectors_and_keep_normalization() {
+        let rewrite = parse_unresolved_rewrite_syntax(
+            "[TEN#moving:>{right} | no Wall] -> [= | TEN#moving:>] camera_follow",
+        )
+        .unwrap();
+        assert_eq!(rewrite.suffix, "camera_follow");
+        let after = rewrite.after.unwrap();
+        let UnresolvedPatternLineSyntax::Cells(parts) = &after.components[0].lines[0] else {
+            panic!("expected cell line");
+        };
+        let UnresolvedPatternLineSyntax::Cells(before_parts) =
+            &rewrite.before.components[0].lines[0]
+        else {
+            panic!("expected before cell line");
+        };
+        assert_eq!(parts[0], before_parts[0]);
+    }
+
+    #[test]
     fn split_header_tokens_keeps_parenthesized_values_together() {
         assert_eq!(
             split_header_tokens("legend b = Ball:(0, 1):red"),
@@ -2439,7 +3282,7 @@ mod tests {
         assert!(!source.contains("puzzle main {"));
         assert!(!source.contains("levels "));
         assert!(!source.contains("keys {"));
-        assert!(!source.contains("layers"));
+        assert!(!source.contains("slots"));
         assert!(!source.contains("base ="));
         assert!(!source.contains("floor ="));
         assert!(!source.contains("solid ="));
@@ -2544,12 +3387,8 @@ mod tests {
         );
         assert_eq!(rule_statement_block_surface("render {", true), None);
         assert_eq!(
-            standard_rule_step_surface("move"),
-            Some(StandardRuleStepSurface::Move)
-        );
-        assert_eq!(
-            rule_line_surface("move").unwrap(),
-            RuleLineSurface::StandardStep(StandardRuleStepSurface::Move)
+            rule_statement_surface("move").unwrap(),
+            RuleStatementSurface::Call { name: "move" }
         );
         assert_eq!(
             rule_statement_surface("once {").unwrap(),
@@ -2681,22 +3520,42 @@ mod tests {
             "-> [".to_string(),
             "| Player ]".to_string(),
             "move".to_string(),
-            "}".to_string(),
         ];
         assert_eq!(
-            collect_rule_program_block_body(
+            collect_rule_program_entry_body(
                 &rule_program_lines,
-                0,
                 RuleProgramBlockSurface::Rules { modifier: "" },
             )
             .unwrap(),
-            (
-                RuleProgramBlockBody::RuleStatements(vec![
+            RuleProgramBlockBody::RuleStatements(vec![
+                RuleStatementSyntax::Line(
                     "input directions [ Player | no Wall ] -> [ | Player ]".to_string(),
-                    "move".to_string(),
-                ]),
-                6,
+                ),
+                RuleStatementSyntax::Line("move".to_string()),
+            ])
+        );
+        let nested_rule_program_lines = vec![
+            "for h in horizontal {".to_string(),
+            "if input == h {".to_string(),
+            "[ TEN:horizontal ] -> [ TEN:h ]".to_string(),
+            "}".to_string(),
+            "}".to_string(),
+        ];
+        assert_eq!(
+            collect_rule_program_entry_body(
+                &nested_rule_program_lines,
+                RuleProgramBlockSurface::Rules { modifier: "" },
             )
+            .unwrap(),
+            RuleProgramBlockBody::RuleStatements(vec![RuleStatementSyntax::Block {
+                header: "for h in horizontal".to_string(),
+                statements: vec![RuleStatementSyntax::Block {
+                    header: "if input == h".to_string(),
+                    statements: vec![RuleStatementSyntax::Line(
+                        "[ TEN:horizontal ] -> [ TEN:h ]".to_string(),
+                    )],
+                }],
+            }])
         );
         let dense_multiline = vec![
             "(right, up) [ Player".to_string(),
@@ -2713,21 +3572,16 @@ mod tests {
         let lifecycle_lines = vec![
             "".to_string(),
             "if win_conditions -> next_level".to_string(),
-            "}".to_string(),
         ];
         assert_eq!(
-            collect_rule_program_block_body(
+            collect_rule_program_entry_body(
                 &lifecycle_lines,
-                0,
                 RuleProgramBlockSurface::OnLevelClear,
             )
             .unwrap(),
-            (
-                RuleProgramBlockBody::LifecycleCommands(vec![
-                    "if win_conditions -> next_level".to_string()
-                ]),
-                3,
-            )
+            RuleProgramBlockBody::LifecycleCommands(vec![
+                "if win_conditions -> next_level".to_string()
+            ])
         );
         assert_eq!(
             rule_line_surface("right [ Player ] -> [ > Player ]").unwrap(),
@@ -2819,7 +3673,9 @@ mod tests {
 
         assert!(projected.contains(&(RuleSemanticSurfaceKind::Direction, ">")));
         assert!(projected.contains(&(RuleSemanticSurfaceKind::Object, "Player")));
+        assert!(projected.contains(&(RuleSemanticSurfaceKind::Mark, "{")));
         assert!(projected.contains(&(RuleSemanticSurfaceKind::Mark, "mark")));
+        assert!(projected.contains(&(RuleSemanticSurfaceKind::Mark, "}")));
     }
 
     #[test]
@@ -2833,21 +3689,21 @@ mod tests {
     #[test]
     fn shared_layer_rows_distinguish_anonymous_named_and_each_forms() {
         assert_eq!(
-            layer_row_surface("Player Box"),
-            Some(LayerRowSurface::Anonymous {
+            slot_row_surface("Player Box"),
+            Some(SlotRowSurface::Anonymous {
                 selectors: vec!["Player", "Box"],
             })
         );
         assert_eq!(
-            layer_row_surface("solid = Player Box"),
-            Some(LayerRowSurface::Named(SelectorAssignmentSurface {
+            slot_row_surface("solid = Player Box"),
+            Some(SlotRowSurface::Named(SelectorAssignmentSurface {
                 name: "solid",
                 selectors: vec!["Player", "Box"],
             }))
         );
         assert_eq!(
-            layer_row_surface("each Player Box"),
-            Some(LayerRowSurface::Each {
+            slot_row_surface("each Player Box"),
+            Some(SlotRowSurface::Each {
                 selectors: vec!["Player", "Box"],
             })
         );
@@ -2875,13 +3731,22 @@ mod tests {
     #[test]
     fn shared_puzzle_directive_surface_classifies_dimension_independent_heads() {
         assert_eq!(
-            puzzle_directive_surface("puzzle3 board {"),
+            puzzle_directive_surface("puzzle board {"),
             PuzzleDirectiveSurface::Model
         );
         assert_eq!(
-            puzzle_directive_surface("layers {"),
-            PuzzleDirectiveSurface::Layers
+            puzzle_directive_surface("puzzle3 board {"),
+            PuzzleDirectiveSurface::Unknown
         );
+        assert_eq!(
+            puzzle_directive_surface("slots {"),
+            PuzzleDirectiveSurface::Slots
+        );
+        assert_eq!(
+            puzzle_directive_surface("map turn axis {"),
+            PuzzleDirectiveSurface::Map
+        );
+        assert!(puzzle_directive_surface("map turn axis {").is_catalog_owned());
         assert_eq!(
             puzzle_directive_surface("on_level_start {"),
             PuzzleDirectiveSurface::RuleProgram
@@ -2935,8 +3800,9 @@ mod tests {
             }
         );
         assert!(resource_header_surface("levels bad name {", "levels").is_err());
-        assert!(collect_resource_block_surface(&["sprites demo".to_string()], 0, "sprites")
-            .is_err());
+        assert!(
+            collect_resource_block_surface(&["sprites demo".to_string()], 0, "sprites").is_err()
+        );
 
         let lines = [
             "sprites icons of board {",
@@ -3065,57 +3931,59 @@ mod tests {
     }
 
     #[test]
-    fn standard_move_plan_expands_objects_by_layer_and_direction() {
-        let plans = standard_move_rule_plans(
-            [
-                StandardMoveObject {
-                    object: 1,
-                    layer: 0,
-                },
-                StandardMoveObject {
-                    object: 2,
-                    layer: 0,
-                },
-                StandardMoveObject {
-                    object: 3,
-                    layer: 1,
-                },
-            ],
-            2,
+    fn unresolved_pattern_owns_null_syntax() {
+        parse_unresolved_pattern_syntax("[null | Player]").unwrap();
+        assert_eq!(
+            parse_unresolved_pattern_syntax("[no null]").unwrap_err(),
+            UnresolvedPatternSyntaxError::CellPattern(CellPatternError::ForbidNull)
         );
+        assert_eq!(
+            parse_unresolved_pattern_syntax("[Player null]").unwrap_err(),
+            UnresolvedPatternSyntaxError::CellPattern(CellPatternError::NullMixedWithOtherTokens)
+        );
+        assert_eq!(
+            validate_null_pattern_cells([true]).unwrap_err(),
+            NullCellPatternError::MissingAnchor
+        );
+        assert_eq!(
+            validate_null_rewrite_cell(false, true, true).unwrap_err(),
+            NullCellPatternError::IntroducedOnRewrite
+        );
+        assert_eq!(
+            validate_null_rewrite_cell(true, false, false).unwrap_err(),
+            NullCellPatternError::WriteToNull
+        );
+    }
+
+    #[test]
+    fn shared_rewrite_occurrence_diff_moves_subject_and_removes_absent_mark() {
+        let before = vec![RewriteOccurrence {
+            key: ("Player", 0),
+            position: 0,
+            subject: "Player",
+            require_marks: vec!["right"],
+            forbid_marks: Vec::new(),
+        }];
+        let after = vec![RewriteOccurrence {
+            key: ("Player", 0),
+            position: 1,
+            subject: "Player",
+            require_marks: Vec::new(),
+            forbid_marks: Vec::new(),
+        }];
 
         assert_eq!(
-            plans,
+            diff_rewrite_occurrences(&before, &after, |left, right| left == right),
             vec![
-                StandardMoveRulePlan {
-                    object: 1,
-                    direction_index: 0,
-                    layer_objects: vec![1, 2],
+                RewriteOccurrenceDelta::Move {
+                    from: 0,
+                    to: 1,
+                    subject: "Player",
                 },
-                StandardMoveRulePlan {
-                    object: 1,
-                    direction_index: 1,
-                    layer_objects: vec![1, 2],
-                },
-                StandardMoveRulePlan {
-                    object: 2,
-                    direction_index: 0,
-                    layer_objects: vec![1, 2],
-                },
-                StandardMoveRulePlan {
-                    object: 2,
-                    direction_index: 1,
-                    layer_objects: vec![1, 2],
-                },
-                StandardMoveRulePlan {
-                    object: 3,
-                    direction_index: 0,
-                    layer_objects: vec![3],
-                },
-                StandardMoveRulePlan {
-                    object: 3,
-                    direction_index: 1,
-                    layer_objects: vec![3],
+                RewriteOccurrenceDelta::RemoveMark {
+                    at: 1,
+                    subject: "Player",
+                    mark: "right",
                 },
             ]
         );

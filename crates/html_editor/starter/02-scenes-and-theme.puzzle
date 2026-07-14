@@ -13,7 +13,7 @@ text_color = #292524
 }
 
 puzzle board {
-layers {
+slots {
 Player Wall
 }
 

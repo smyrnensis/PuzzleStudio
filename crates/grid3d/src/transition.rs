@@ -1,6 +1,6 @@
 use crate::{
-    ConditionId3, Coord3, Game3, InputId, LayerId, MarkId3, ObjectId, Offset3, Patch3, PatchError3,
-    PatchOp3, RuleId3, State3, StateError3, VariableId,
+    CompiledGame3, ConditionId3, Coord3, InputId, LayerId, MarkId3, ObjectId, Offset3, Patch3,
+    PatchError3, PatchOp3, RuleId3, State3, StateError3, VariableId,
 };
 #[cfg(test)]
 use puzzle_kernel::VariableUpdateOp;
@@ -23,12 +23,35 @@ pub type MarkPattern3 = puzzle_kernel::RuleMarkPattern<ObjectId, MarkId3>;
 pub type ObjectSetMatcher3 = puzzle_kernel::ObjectSetMatcher<ObjectId, LayerId>;
 pub type ObjectSetMarkPattern3 = puzzle_kernel::ObjectSetMarkPattern<MarkId3>;
 pub type PatternComponent3 = puzzle_kernel::RulePatternComponent<MatchCell3>;
+pub type MatchCell3 = puzzle_kernel::RuleMatchCell<Offset3, ObjectId, LayerId, MarkId3>;
 pub type Rule3 = puzzle_kernel::RuleModel<RuleId3, Guard3, Pattern3, WriteOp3, RuleEffect3>;
 pub type RuleApplication3 = RuleApplication;
-pub type RuleEffect3 = puzzle_kernel::VariableEffect<VariableId>;
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RuleEffect3 {
+    Cancel,
+    Win,
+    Restart,
+    NextLevel,
+    Again,
+    Checkpoint,
+    ClearCheckpoint,
+    UpdateVariable {
+        variable: VariableId,
+        op: puzzle_kernel::VariableUpdateOp,
+        value: i64,
+    },
+}
 pub type RuleStep3 = ProgramStep<Rule3, RuleCondition3, LocalFrame<ObjectId>>;
 pub type WriteOp3 = puzzle_kernel::RuleWriteOp<Offset3, ObjectId, MarkId3>;
-pub type TransitionCommand3 = std::convert::Infallible;
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TransitionCommand3 {
+    Win,
+    Restart,
+    NextLevel,
+    Again,
+    Checkpoint,
+    ClearCheckpoint,
+}
 pub type TransitionOutcome3 =
     KernelTransitionOutcome<Option<InputId>, State3, TransitionCommand3, RuleId3, Patch3>;
 
@@ -40,10 +63,7 @@ pub enum RuleCondition3 {
     NoMatches(Vec<Pattern3>),
     AnyInputMatches(Vec<(InputId, Pattern3)>),
     NoInputMatches(Vec<(InputId, Pattern3)>),
-    RuleMatches {
-        guards: Vec<Guard3>,
-        pattern: Pattern3,
-    },
+    GuardBranches(Vec<Vec<Guard3>>),
 }
 
 pub fn flattened_rules(program: &[RuleStep3]) -> Vec<Rule3> {
@@ -78,96 +98,42 @@ pub fn flattened_rules(program: &[RuleStep3]) -> Vec<Rule3> {
 struct TransitionTrace3 {
     fired_rules: Vec<RuleId3>,
     patches: Vec<Patch3>,
+    commands: Vec<TransitionCommand3>,
+    cancelled: bool,
 }
 
 impl TransitionTrace3 {
-    fn record(&mut self, rule: RuleId3, patch: Patch3) {
-        self.fired_rules.push(rule);
+    fn record(&mut self, rule: &Rule3, patch: Patch3) {
+        self.fired_rules.push(rule.id);
         self.patches.push(patch);
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MatchCell3 {
-    pub offset: Offset3,
-    pub require_objects: Vec<ObjectId>,
-    pub require_object_sets: Vec<ObjectSetMatcher3>,
-    pub forbid_objects: Vec<ObjectId>,
-    pub require_mark: Vec<MarkPattern3>,
-    pub require_object_set_mark: Vec<ObjectSetMarkPattern3>,
-    pub forbid_mark: Vec<MarkPattern3>,
-    pub forbid_object_set_mark: Vec<ObjectSetMarkPattern3>,
-}
-
-impl MatchCell3 {
-    pub fn new(offset: Offset3) -> Self {
-        Self {
-            offset,
-            require_objects: Vec::new(),
-            require_object_sets: Vec::new(),
-            forbid_objects: Vec::new(),
-            require_mark: Vec::new(),
-            require_object_set_mark: Vec::new(),
-            forbid_mark: Vec::new(),
-            forbid_object_set_mark: Vec::new(),
+        if rule
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, RuleEffect3::Cancel))
+        {
+            self.cancelled = true;
+            return;
         }
-    }
-
-    pub fn require(mut self, object: ObjectId) -> Self {
-        self.require_objects.push(object);
-        self
-    }
-
-    pub fn forbid(mut self, object: ObjectId) -> Self {
-        self.forbid_objects.push(object);
-        self
-    }
-
-    pub fn require_mark(mut self, object: ObjectId, mark: MarkId3, value: Option<i64>) -> Self {
-        self.require_mark.push(MarkPattern3 {
-            object,
-            mark,
-            value,
-            match_value: MarkValueMatch::Exact,
-        });
-        self
-    }
-
-    pub fn require_mark_key(mut self, object: ObjectId, mark: MarkId3) -> Self {
-        self.require_mark.push(MarkPattern3 {
-            object,
-            mark,
-            value: None,
-            match_value: MarkValueMatch::Any,
-        });
-        self
-    }
-
-    pub fn forbid_mark(mut self, object: ObjectId, mark: MarkId3, value: Option<i64>) -> Self {
-        self.forbid_mark.push(MarkPattern3 {
-            object,
-            mark,
-            value,
-            match_value: MarkValueMatch::Exact,
-        });
-        self
-    }
-
-    pub fn forbid_mark_key(mut self, object: ObjectId, mark: MarkId3) -> Self {
-        self.forbid_mark.push(MarkPattern3 {
-            object,
-            mark,
-            value: None,
-            match_value: MarkValueMatch::Any,
-        });
-        self
+        for effect in &rule.effects {
+            match effect {
+                RuleEffect3::Cancel => unreachable!("cancel handled before command emission"),
+                RuleEffect3::Win => self.commands.push(TransitionCommand3::Win),
+                RuleEffect3::Restart => self.commands.push(TransitionCommand3::Restart),
+                RuleEffect3::NextLevel => self.commands.push(TransitionCommand3::NextLevel),
+                RuleEffect3::Again => self.commands.push(TransitionCommand3::Again),
+                RuleEffect3::Checkpoint => self.commands.push(TransitionCommand3::Checkpoint),
+                RuleEffect3::ClearCheckpoint => {
+                    self.commands.push(TransitionCommand3::ClearCheckpoint)
+                }
+                RuleEffect3::UpdateVariable { .. } => {}
+            }
+        }
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Pattern3 {
     pub components: Vec<PatternComponent3>,
-    pub cells: Vec<MatchCell3>,
 }
 
 impl Pattern3 {
@@ -176,15 +142,14 @@ impl Pattern3 {
     }
 
     pub fn from_components(components: Vec<PatternComponent3>) -> Self {
-        let cells = components
-            .iter()
-            .flat_map(|component| component.cells.iter().cloned())
-            .collect();
-        Self { components, cells }
+        Self { components }
     }
 
-    pub fn cells(&self) -> &[MatchCell3] {
-        &self.cells
+    pub fn cells(&self) -> Vec<&MatchCell3> {
+        self.components
+            .iter()
+            .flat_map(|component| &component.cells)
+            .collect()
     }
 
     pub fn components(&self) -> &[PatternComponent3] {
@@ -206,7 +171,7 @@ impl From<PatchError3> for TransitionError3 {
 }
 
 pub fn transition_once(
-    game: &Game3,
+    game: &CompiledGame3,
     state: &State3,
     rule: &Rule3,
 ) -> Result<State3, TransitionError3> {
@@ -219,7 +184,7 @@ pub fn transition_once(
 }
 
 pub fn transition_once_with_input(
-    game: &Game3,
+    game: &CompiledGame3,
     state: &State3,
     rule: &Rule3,
     input: InputId,
@@ -233,7 +198,7 @@ pub fn transition_once_with_input(
 }
 
 pub fn transition_program(
-    game: &Game3,
+    game: &CompiledGame3,
     state: &State3,
     program: &[RuleStep3],
     input: InputId,
@@ -243,7 +208,7 @@ pub fn transition_program(
 }
 
 pub fn transition_program_with_local_frame(
-    game: &Game3,
+    game: &CompiledGame3,
     state: &State3,
     program: &[RuleStep3],
     input: InputId,
@@ -254,7 +219,7 @@ pub fn transition_program_with_local_frame(
 }
 
 pub fn transition_program_outcome(
-    game: &Game3,
+    game: &CompiledGame3,
     state: &State3,
     program: &[RuleStep3],
     input: InputId,
@@ -263,7 +228,7 @@ pub fn transition_program_outcome(
 }
 
 pub fn transition_program_outcome_with_local_frame(
-    game: &Game3,
+    game: &CompiledGame3,
     state: &State3,
     program: &[RuleStep3],
     input: InputId,
@@ -273,7 +238,7 @@ pub fn transition_program_outcome_with_local_frame(
 }
 
 fn transition_program_outcome_inner(
-    game: &Game3,
+    game: &CompiledGame3,
     state: &State3,
     program: &[RuleStep3],
     input: Option<InputId>,
@@ -287,15 +252,15 @@ fn transition_program_outcome_inner(
     Ok(TransitionOutcome3 {
         input,
         next_state: current,
-        cancelled: false,
-        commands: Vec::new(),
+        cancelled: trace.cancelled,
+        commands: trace.commands,
         fired_rules: trace.fired_rules,
         patches: trace.patches,
     })
 }
 
 pub fn transition_program_without_input(
-    game: &Game3,
+    game: &CompiledGame3,
     state: &State3,
     program: &[RuleStep3],
 ) -> Result<State3, TransitionError3> {
@@ -304,7 +269,7 @@ pub fn transition_program_without_input(
 }
 
 pub fn transition_program_without_input_with_local_frame(
-    game: &Game3,
+    game: &CompiledGame3,
     state: &State3,
     program: &[RuleStep3],
     local_frame: Option<&LocalFrame<ObjectId>>,
@@ -314,7 +279,7 @@ pub fn transition_program_without_input_with_local_frame(
 }
 
 pub fn transition_program_without_input_outcome(
-    game: &Game3,
+    game: &CompiledGame3,
     state: &State3,
     program: &[RuleStep3],
 ) -> Result<TransitionOutcome3, TransitionError3> {
@@ -322,7 +287,7 @@ pub fn transition_program_without_input_outcome(
 }
 
 pub fn transition_program_without_input_outcome_with_local_frame(
-    game: &Game3,
+    game: &CompiledGame3,
     state: &State3,
     program: &[RuleStep3],
     local_frame: Option<&LocalFrame<ObjectId>>,
@@ -331,7 +296,7 @@ pub fn transition_program_without_input_outcome_with_local_frame(
 }
 
 fn transition_program_steps(
-    game: &Game3,
+    game: &CompiledGame3,
     state: &State3,
     steps: &[RuleStep3],
     input: Option<InputId>,
@@ -351,7 +316,7 @@ fn transition_program_steps(
 }
 
 struct ProgramBackend3<'a> {
-    game: &'a Game3,
+    game: &'a CompiledGame3,
     input: Option<InputId>,
     trace: &'a mut TransitionTrace3,
 }
@@ -376,11 +341,12 @@ impl ProgramBackend<Rule3, RuleCondition3, LocalFrame<ObjectId>, State3> for Pro
         frame: Option<&LocalFrame<ObjectId>>,
     ) -> Result<ProgramApplyOutcome, Self::Error> {
         let fired_before = self.trace.fired_rules.len();
+        let cancelled_before = self.trace.cancelled;
         *state =
             transition_rule_by_application(self.game, state, rule, self.input, frame, self.trace)?;
         Ok(ProgramApplyOutcome {
             fired: self.trace.fired_rules.len() > fired_before,
-            cancelled: false,
+            cancelled: !cancelled_before && self.trace.cancelled,
         })
     }
 
@@ -398,14 +364,14 @@ impl ProgramBackend<Rule3, RuleCondition3, LocalFrame<ObjectId>, State3> for Pro
 }
 
 fn transition_rule_by_application(
-    game: &Game3,
+    game: &CompiledGame3,
     state: &State3,
     rule: &Rule3,
     input: Option<InputId>,
     local_frame: Option<&LocalFrame<ObjectId>>,
     trace: &mut TransitionTrace3,
 ) -> Result<State3, TransitionError3> {
-    if !guards_accept(rule, game, state, input) {
+    if !guards_accept(rule, game, state, input, local_frame) {
         return Ok(state.clone());
     }
     match rule.application {
@@ -428,7 +394,7 @@ fn transition_rule_by_application(
 }
 
 fn rule_condition_accepts(
-    game: &Game3,
+    game: &CompiledGame3,
     state: &State3,
     condition: &RuleCondition3,
     input: Option<InputId>,
@@ -452,15 +418,14 @@ fn rule_condition_accepts(
                 *expected != input || first_match(game, state, pattern, &scope).is_none()
             })
         }),
-        RuleCondition3::RuleMatches { guards, pattern } => {
-            guards_accept_all(guards, game, state, input)
-                && first_match(game, state, pattern, &scope).is_some()
-        }
+        RuleCondition3::GuardBranches(branches) => branches
+            .iter()
+            .any(|branch| guards_accept_all(branch, game, state, input, local_frame)),
     }
 }
 
 fn transition_rule_once(
-    game: &Game3,
+    game: &CompiledGame3,
     state: &State3,
     rule: &Rule3,
     input: Option<InputId>,
@@ -468,7 +433,7 @@ fn transition_rule_once(
     trace: &mut TransitionTrace3,
 ) -> Result<State3, TransitionError3> {
     let mut next = state.clone();
-    if !guards_accept(rule, game, state, input) {
+    if !guards_accept(rule, game, state, input, local_frame) {
         return Ok(next);
     }
     let scope = LocalFrameScope::new(state, local_frame);
@@ -479,13 +444,17 @@ fn transition_rule_once(
         return Ok(next);
     }
     let patch = build_patch(rule, &placement)?;
-    patch.apply_in_place(game, &mut next)?;
-    trace.record(rule.id, patch);
+    if rule_cancels(rule) {
+        patch.validate(game, &next)?;
+    } else {
+        patch.apply_in_place(game, &mut next)?;
+    }
+    trace.record(rule, patch);
     Ok(next)
 }
 
 fn transition_rule_random(
-    game: &Game3,
+    game: &CompiledGame3,
     state: &State3,
     rule: &Rule3,
     input: Option<InputId>,
@@ -493,7 +462,7 @@ fn transition_rule_random(
     trace: &mut TransitionTrace3,
 ) -> Result<State3, TransitionError3> {
     let mut next = state.clone();
-    if !guards_accept(rule, game, state, input) {
+    if !guards_accept(rule, game, state, input, local_frame) {
         return Ok(next);
     }
     let scope = LocalFrameScope::new(state, local_frame);
@@ -507,13 +476,17 @@ fn transition_rule_random(
         return Ok(next);
     }
     let patch = build_patch(rule, placement)?;
-    patch.apply_in_place(game, &mut next)?;
-    trace.record(rule.id, patch);
+    if rule_cancels(rule) {
+        patch.validate(game, &next)?;
+    } else {
+        patch.apply_in_place(game, &mut next)?;
+    }
+    trace.record(rule, patch);
     Ok(next)
 }
 
 pub fn transition_once_all(
-    game: &Game3,
+    game: &CompiledGame3,
     state: &State3,
     rule: &Rule3,
 ) -> Result<State3, TransitionError3> {
@@ -526,7 +499,7 @@ pub fn transition_once_all(
 }
 
 pub fn transition_once_per_level(
-    game: &Game3,
+    game: &CompiledGame3,
     state: &State3,
     rule: &Rule3,
 ) -> Result<State3, TransitionError3> {
@@ -539,14 +512,14 @@ pub fn transition_once_per_level(
 }
 
 fn transition_rule_once_all(
-    game: &Game3,
+    game: &CompiledGame3,
     state: &State3,
     rule: &Rule3,
     input: Option<InputId>,
     local_frame: Option<&LocalFrame<ObjectId>>,
     trace: &mut TransitionTrace3,
 ) -> Result<State3, TransitionError3> {
-    if !guards_accept(rule, game, state, input) {
+    if !guards_accept(rule, game, state, input, local_frame) {
         return Ok(state.clone());
     }
 
@@ -567,9 +540,14 @@ fn transition_rule_once_all(
         };
 
         let patch = build_patch(rule, &placement)?;
+        if rule_cancels(rule) {
+            patch.validate(game, &current)?;
+            trace.record(rule, patch);
+            return Ok(state.clone());
+        }
         match patch.apply_in_place(game, &mut current) {
             Ok(_) => {
-                trace.record(rule.id, patch);
+                trace.record(rule, patch);
                 current_scope = LocalFrameScope::new(&current, local_frame);
             }
             Err(error) if once_all_patch_became_stale(&error) => {}
@@ -580,7 +558,7 @@ fn transition_rule_once_all(
 }
 
 fn transition_rule_once_per_level(
-    game: &Game3,
+    game: &CompiledGame3,
     state: &State3,
     rule: &Rule3,
     input: Option<InputId>,
@@ -588,7 +566,7 @@ fn transition_rule_once_per_level(
     trace: &mut TransitionTrace3,
 ) -> Result<State3, TransitionError3> {
     let mut next = state.clone();
-    if next.level_rule_has_fired(rule.id) || !guards_accept(rule, game, state, input) {
+    if next.level_rule_has_fired(rule.id) || !guards_accept(rule, game, state, input, local_frame) {
         return Ok(next);
     }
     let scope = LocalFrameScope::new(state, local_frame);
@@ -599,14 +577,20 @@ fn transition_rule_once_per_level(
         return Ok(next);
     }
     let patch = build_patch(rule, &placement)?;
-    patch.apply_in_place(game, &mut next)?;
-    trace.record(rule.id, patch);
-    next.mark_level_rule_fired(rule.id);
+    if rule_cancels(rule) {
+        patch.validate(game, &next)?;
+    } else {
+        patch.apply_in_place(game, &mut next)?;
+    }
+    trace.record(rule, patch);
+    if !rule_cancels(rule) {
+        next.mark_level_rule_fired(rule.id);
+    }
     Ok(next)
 }
 
 pub fn transition_repeated(
-    game: &Game3,
+    game: &CompiledGame3,
     state: &State3,
     rule: &Rule3,
 ) -> Result<State3, TransitionError3> {
@@ -618,22 +602,24 @@ pub fn transition_repeated(
     Ok(next)
 }
 
-pub fn count_pattern_matches(game: &Game3, state: &State3, pattern: &Pattern3) -> u32 {
+pub fn count_pattern_matches(game: &CompiledGame3, state: &State3, pattern: &Pattern3) -> u32 {
     let scope = LocalFrameScope::new(state, None);
     all_matches(game, state, pattern, &scope).len() as u32
 }
 
-pub fn has_pattern_match(game: &Game3, state: &State3, pattern: &Pattern3) -> bool {
+pub fn has_pattern_match(game: &CompiledGame3, state: &State3, pattern: &Pattern3) -> bool {
     let scope = LocalFrameScope::new(state, None);
     first_match(game, state, pattern, &scope).is_some()
 }
 
 pub fn eval_condition_kind(
-    game: &Game3,
+    game: &CompiledGame3,
     state: &State3,
     kind: &ConditionValueKind3,
     input: Option<InputId>,
+    local_frame: Option<&LocalFrame<ObjectId>>,
 ) -> i64 {
+    let scope = LocalFrameScope::new(state, local_frame);
     match kind {
         ConditionValueKind3::CountObjects(objects) => objects
             .iter()
@@ -649,41 +635,41 @@ pub fn eval_condition_kind(
             as i64,
         ConditionValueKind3::CountMatches(patterns) => patterns
             .iter()
-            .map(|pattern| count_pattern_matches(game, state, pattern))
+            .map(|pattern| all_matches(game, state, pattern, &scope).len() as u32)
             .sum::<u32>() as i64,
         ConditionValueKind3::ExistsMatches(patterns) => patterns
             .iter()
-            .any(|pattern| has_pattern_match(game, state, pattern))
+            .any(|pattern| first_match(game, state, pattern, &scope).is_some())
             as i64,
         ConditionValueKind3::NoneMatches(patterns) => patterns
             .iter()
-            .all(|pattern| !has_pattern_match(game, state, pattern))
+            .all(|pattern| first_match(game, state, pattern, &scope).is_none())
             as i64,
         ConditionValueKind3::CountInputMatches(patterns) => input
             .map(|input| {
                 patterns
                     .iter()
                     .filter(|(expected, _)| *expected == input)
-                    .map(|(_, pattern)| count_pattern_matches(game, state, pattern))
+                    .map(|(_, pattern)| all_matches(game, state, pattern, &scope).len() as u32)
                     .sum::<u32>() as i64
             })
             .unwrap_or(0),
         ConditionValueKind3::ExistsInputMatches(patterns) => input.is_some_and(|input| {
             patterns.iter().any(|(expected, pattern)| {
-                *expected == input && has_pattern_match(game, state, pattern)
+                *expected == input && first_match(game, state, pattern, &scope).is_some()
             })
         }) as i64,
         ConditionValueKind3::NoneInputMatches(patterns) => input.is_some_and(|input| {
             patterns
                 .iter()
                 .filter(|(expected, _)| *expected == input)
-                .all(|(_, pattern)| !has_pattern_match(game, state, pattern))
+                .all(|(_, pattern)| first_match(game, state, pattern, &scope).is_none())
         }) as i64,
     }
 }
 
 fn transition_rule_repeated(
-    game: &Game3,
+    game: &CompiledGame3,
     state: &State3,
     rule: &Rule3,
     input: Option<InputId>,
@@ -751,22 +737,35 @@ fn random_state_projection_hash(state: &State3) -> u64 {
     hash
 }
 
-fn guards_accept(rule: &Rule3, game: &Game3, state: &State3, input: Option<InputId>) -> bool {
-    guards_accept_all(&rule.guards, game, state, input)
+fn guards_accept(
+    rule: &Rule3,
+    game: &CompiledGame3,
+    state: &State3,
+    input: Option<InputId>,
+    local_frame: Option<&LocalFrame<ObjectId>>,
+) -> bool {
+    guards_accept_all(&rule.guards, game, state, input, local_frame)
 }
 
 fn guards_accept_all(
     guards: &[Guard3],
-    game: &Game3,
+    game: &CompiledGame3,
     state: &State3,
     input: Option<InputId>,
+    local_frame: Option<&LocalFrame<ObjectId>>,
 ) -> bool {
     guards
         .iter()
-        .all(|guard| guard_accepts(guard, game, state, input))
+        .all(|guard| guard_accepts(guard, game, state, input, local_frame))
 }
 
-fn guard_accepts(guard: &Guard3, game: &Game3, state: &State3, input: Option<InputId>) -> bool {
+fn guard_accepts(
+    guard: &Guard3,
+    game: &CompiledGame3,
+    state: &State3,
+    input: Option<InputId>,
+    local_frame: Option<&LocalFrame<ObjectId>>,
+) -> bool {
     match guard {
         Guard3::InputIs(expected) => input.is_some_and(|actual| actual == *expected),
         Guard3::VariableEquals { variable, value } => {
@@ -780,35 +779,47 @@ fn guard_accepts(guard: &Guard3, game: &Game3, state: &State3, input: Option<Inp
             .variable_value(*variable)
             .is_some_and(|found| compare_i64(found, *op, *value)),
         Guard3::ConditionEquals { condition, value } => {
-            eval_condition_def(game, state, *condition, input) == Some(*value)
+            eval_condition_def(game, state, *condition, input, local_frame) == Some(*value)
         }
         Guard3::ConditionNonZero(condition) => {
-            eval_condition_def(game, state, *condition, input).is_some_and(|value| value != 0)
+            eval_condition_def(game, state, *condition, input, local_frame)
+                .is_some_and(|value| value != 0)
         }
         Guard3::ConditionCompare {
             condition,
             op,
             value,
-        } => eval_condition_def(game, state, *condition, input)
+        } => eval_condition_def(game, state, *condition, input, local_frame)
             .is_some_and(|found| compare_i64(found, *op, *value)),
         Guard3::InlineConditionValue { kind, value } => {
-            eval_condition_kind(game, state, kind, input) == *value
+            eval_condition_kind(game, state, kind, input, local_frame) == *value
         }
-        Guard3::InlineConditionNonZero(kind) => eval_condition_kind(game, state, kind, input) != 0,
-        Guard3::InlineConditionCompare { kind, op, value } => {
-            compare_i64(eval_condition_kind(game, state, kind, input), *op, *value)
+        Guard3::InlineConditionNonZero(kind) => {
+            eval_condition_kind(game, state, kind, input, local_frame) != 0
         }
+        Guard3::InlineConditionCompare { kind, op, value } => compare_i64(
+            eval_condition_kind(game, state, kind, input, local_frame),
+            *op,
+            *value,
+        ),
     }
 }
 
 fn eval_condition_def(
-    game: &Game3,
+    game: &CompiledGame3,
     state: &State3,
     condition: ConditionId3,
     input: Option<InputId>,
+    local_frame: Option<&LocalFrame<ObjectId>>,
 ) -> Option<i64> {
     let condition = game.condition_def(condition)?;
-    Some(eval_condition_kind(game, state, &condition.kind, input))
+    Some(eval_condition_kind(
+        game,
+        state,
+        &condition.kind,
+        input,
+        local_frame,
+    ))
 }
 
 fn compare_i64(left: i64, op: ComparisonOp, right: i64) -> bool {
@@ -908,7 +919,7 @@ fn writes_within_local_frame(
         return Ok(true);
     }
     for write in writes {
-        match *write {
+        match write.clone() {
             WriteOp3::Add {
                 component, offset, ..
             }
@@ -968,7 +979,7 @@ type MatchPlacement3 = MatchPlacement<3, ObjectId>;
 type ComponentPlacement3 = ComponentPlacement<3, ObjectId>;
 
 fn first_match(
-    game: &Game3,
+    game: &CompiledGame3,
     state: &State3,
     pattern: &Pattern3,
     scope: &LocalFrameScope<'_>,
@@ -997,7 +1008,7 @@ fn first_match(
 }
 
 fn all_matches(
-    game: &Game3,
+    game: &CompiledGame3,
     state: &State3,
     pattern: &Pattern3,
     scope: &LocalFrameScope<'_>,
@@ -1042,7 +1053,7 @@ fn all_matches(
 }
 
 fn pattern_placement_from_first_origin(
-    game: &Game3,
+    game: &CompiledGame3,
     state: &State3,
     pattern: &Pattern3,
     origin: Coord3,
@@ -1055,7 +1066,7 @@ fn pattern_placement_from_first_origin(
 }
 
 fn complete_component_placements(
-    game: &Game3,
+    game: &CompiledGame3,
     state: &State3,
     pattern: &Pattern3,
     component_index: usize,
@@ -1077,7 +1088,7 @@ fn complete_component_placements(
 }
 
 fn collect_component_placements(
-    game: &Game3,
+    game: &CompiledGame3,
     state: &State3,
     pattern: &Pattern3,
     component_index: usize,
@@ -1122,20 +1133,96 @@ fn component_origin_candidates(state: &State3, scope: &LocalFrameScope<'_>) -> V
 }
 
 fn component_placement_at(
-    game: &Game3,
+    game: &CompiledGame3,
     state: &State3,
     component: &PatternComponent3,
     origin: Coord3,
     scope: &LocalFrameScope<'_>,
 ) -> Option<ComponentPlacement3> {
+    if component.gap_count == 0 {
+        let gaps = Vec::new();
+        let object_bindings =
+            component_matches_with_gaps(game, state, component, origin, &gaps, scope)?;
+        return Some(ComponentPlacement3::new(
+            origin.into(),
+            gaps,
+            object_bindings,
+        ));
+    }
+
+    let max_gap = state
+        .size
+        .width
+        .max(state.size.depth)
+        .max(state.size.height);
+    for total_gap in 0..=max_gap.saturating_mul(component.gap_count) {
+        let mut gaps = Vec::with_capacity(usize::from(component.gap_count));
+        if let Some(object_bindings) = find_gap_assignment(
+            game, state, component, origin, max_gap, total_gap, &mut gaps, scope,
+        ) {
+            return Some(ComponentPlacement3::new(
+                origin.into(),
+                gaps,
+                object_bindings,
+            ));
+        }
+    }
+    None
+}
+
+fn find_gap_assignment(
+    game: &CompiledGame3,
+    state: &State3,
+    component: &PatternComponent3,
+    origin: Coord3,
+    max_gap: u16,
+    remaining_total: u16,
+    gaps: &mut Vec<u16>,
+    scope: &LocalFrameScope<'_>,
+) -> Option<Vec<ObjectBinding<ObjectId>>> {
+    if gaps.len() == usize::from(component.gap_count) {
+        return (remaining_total == 0)
+            .then(|| component_matches_with_gaps(game, state, component, origin, gaps, scope))
+            .flatten();
+    }
+    for gap in 0..=max_gap.min(remaining_total) {
+        gaps.push(gap);
+        if let Some(bindings) = find_gap_assignment(
+            game,
+            state,
+            component,
+            origin,
+            max_gap,
+            remaining_total - gap,
+            gaps,
+            scope,
+        ) {
+            return Some(bindings);
+        }
+        gaps.pop();
+    }
+    None
+}
+
+fn component_matches_with_gaps(
+    game: &CompiledGame3,
+    state: &State3,
+    component: &PatternComponent3,
+    origin: Coord3,
+    gaps: &[u16],
+    scope: &LocalFrameScope<'_>,
+) -> Option<Vec<ObjectBinding<ObjectId>>> {
     let mut object_bindings = Vec::new();
     for cell in &component.cells {
-        let Some(position) = offset_pos(origin, cell.offset) else {
-            return None;
-        };
-        if state.check_pos(position).is_err() {
-            return None;
+        let position = resolve_offset(&cell.offset, gaps)
+            .and_then(|offset| offset_pos(origin, offset))
+            .filter(|position| state.check_pos(*position).is_ok());
+        match puzzle_kernel::match_cell_bounds(cell.require_null, position.is_some()) {
+            puzzle_kernel::CellBoundsMatch::MatchedNull => continue,
+            puzzle_kernel::CellBoundsMatch::Rejected => return None,
+            puzzle_kernel::CellBoundsMatch::Continue => {}
         }
+        let position = position.expect("in-bounds cell decision preserves its position");
         if !scope.contains_coord(position) {
             return None;
         }
@@ -1185,15 +1272,11 @@ fn component_placement_at(
             return None;
         }
     }
-    Some(ComponentPlacement3::new(
-        origin.into(),
-        Vec::new(),
-        object_bindings,
-    ))
+    Some(object_bindings)
 }
 
 fn placement_still_valid(
-    game: &Game3,
+    game: &CompiledGame3,
     state: &State3,
     pattern: &Pattern3,
     placement: &MatchPlacement3,
@@ -1201,16 +1284,31 @@ fn placement_still_valid(
 ) -> bool {
     pattern.components.iter().zip(&placement.components).all(
         |(pattern_component, placed_component)| {
-            component_placement_at(
+            component_matches_with_gaps(
                 game,
                 state,
                 pattern_component,
                 placed_component.origin.into(),
+                &placed_component.gaps,
                 scope,
             )
-            .is_some_and(|current| current.object_bindings == placed_component.object_bindings)
+            .is_some_and(|bindings| {
+                object_bindings_match3(&bindings, &placed_component.object_bindings)
+            })
         },
     )
+}
+
+fn object_bindings_match3(
+    left: &[ObjectBinding<ObjectId>],
+    right: &[ObjectBinding<ObjectId>],
+) -> bool {
+    left.len() == right.len()
+        && left.iter().all(|binding| {
+            right.iter().any(|existing| {
+                existing.binding == binding.binding && existing.object == binding.object
+            })
+        })
 }
 
 fn bound_object(placement: &MatchPlacement3, binding: u16) -> Option<ObjectId> {
@@ -1225,7 +1323,7 @@ fn bound_object_in_component(
 }
 
 fn mark_pattern_matches(
-    game: &Game3,
+    game: &CompiledGame3,
     state: &State3,
     position: Coord3,
     object: ObjectId,
@@ -1238,7 +1336,7 @@ fn mark_pattern_matches(
 }
 
 fn mark_pattern_matches_bound(
-    game: &Game3,
+    game: &CompiledGame3,
     state: &State3,
     position: Coord3,
     object: ObjectId,
@@ -1250,21 +1348,31 @@ fn mark_pattern_matches_bound(
     }
 }
 
-fn cell_requires_object(game: &Game3, state: &State3, position: Coord3, object: ObjectId) -> bool {
+fn cell_requires_object(
+    game: &CompiledGame3,
+    state: &State3,
+    position: Coord3,
+    object: ObjectId,
+) -> bool {
     match state.cell_has_object_masked(position, object) {
         Some(found) => found,
         None => state.has_object(game, position, object),
     }
 }
 
-fn cell_forbids_object(game: &Game3, state: &State3, position: Coord3, object: ObjectId) -> bool {
+fn cell_forbids_object(
+    game: &CompiledGame3,
+    state: &State3,
+    position: Coord3,
+    object: ObjectId,
+) -> bool {
     match state.cell_has_object_masked(position, object) {
         Some(found) => !found,
         None => !state.has_object(game, position, object),
     }
 }
 
-fn count_object(game: &Game3, state: &State3, object: ObjectId) -> u32 {
+fn count_object(game: &CompiledGame3, state: &State3, object: ObjectId) -> u32 {
     if let Some(count) = state.object_count_masked(object) {
         return count;
     }
@@ -1285,7 +1393,7 @@ fn count_object(game: &Game3, state: &State3, object: ObjectId) -> u32 {
 fn build_patch(rule: &Rule3, placement: &MatchPlacement3) -> Result<Patch3, TransitionError3> {
     let mut patch = Patch3::new();
     for write in &rule.writes {
-        match *write {
+        match write.clone() {
             WriteOp3::Add {
                 component,
                 offset,
@@ -1442,9 +1550,22 @@ fn build_patch(rule: &Rule3, placement: &MatchPlacement3) -> Result<Patch3, Tran
                     value: *value,
                 });
             }
+            RuleEffect3::Cancel
+            | RuleEffect3::Win
+            | RuleEffect3::Restart
+            | RuleEffect3::NextLevel
+            | RuleEffect3::Again
+            | RuleEffect3::Checkpoint
+            | RuleEffect3::ClearCheckpoint => {}
         }
     }
     Ok(patch)
+}
+
+fn rule_cancels(rule: &Rule3) -> bool {
+    rule.effects
+        .iter()
+        .any(|effect| matches!(effect, RuleEffect3::Cancel))
 }
 
 fn write_position(
@@ -1456,10 +1577,41 @@ fn write_position(
         placement,
         component,
         &offset,
-        |offset, _gaps| Some(GridOffset::from(*offset)),
+        |offset, gaps| resolve_grid_offset(offset, gaps),
         || TransitionError3::OffsetOutOfBounds,
     )
     .map(Coord3::from)
+}
+
+fn resolve_grid_offset(offset: &Offset3, gaps: &[u16]) -> Option<GridOffset<3>> {
+    resolve_offset(offset, gaps).map(GridOffset::from)
+}
+
+fn resolve_offset(offset: &Offset3, gaps: &[u16]) -> Option<crate::Delta3> {
+    match offset {
+        Offset3::Fixed { dx, dy, dz } => Some(crate::Delta3::new(*dx, *dy, *dz)),
+        Offset3::Variable {
+            base_dx,
+            base_dy,
+            base_dz,
+            gap_terms,
+        } => {
+            let mut dx = i32::from(*base_dx);
+            let mut dy = i32::from(*base_dy);
+            let mut dz = i32::from(*base_dz);
+            for term in gap_terms {
+                let gap = i32::from(*gaps.get(usize::from(term.gap_index))?);
+                dx += i32::from(term.dx) * gap;
+                dy += i32::from(term.dy) * gap;
+                dz += i32::from(term.dz) * gap;
+            }
+            Some(crate::Delta3::new(
+                i16::try_from(dx).ok()?,
+                i16::try_from(dy).ok()?,
+                i16::try_from(dz).ok()?,
+            ))
+        }
+    }
 }
 
 fn once_all_patch_became_stale(error: &PatchError3) -> bool {
@@ -1470,20 +1622,47 @@ fn once_all_patch_became_stale(error: &PatchError3) -> bool {
     )
 }
 
-fn offset_pos(origin: Coord3, offset: Offset3) -> Option<Coord3> {
+fn offset_pos(origin: Coord3, offset: crate::Delta3) -> Option<Coord3> {
     origin.checked_offset(offset)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ConditionDef3, ConditionId3, ObjectDef3, Size3};
+    use crate::{ConditionDef3, ConditionId3, Delta3, ObjectDef3, Size3};
+
+    #[test]
+    fn null_cell_uses_the_shared_out_of_bounds_match_contract() {
+        let player = ObjectId(1);
+        let game = CompiledGame3::checked_new(
+            1,
+            vec![ObjectDef3 {
+                id: player,
+                layer_id: LayerId(0),
+            }],
+        )
+        .expect("valid game");
+        let mut state = State3::empty(Size3::new(1, 1, 1), 1).expect("valid empty state");
+        state
+            .place_object(&game, Coord3::new(0, 0, 0), player)
+            .expect("place player");
+
+        let mut outside = MatchCell3::new(Delta3::new(0, -1, 0));
+        outside.require_null = true;
+        let boundary = Pattern3::new(vec![MatchCell3::new(Delta3::ZERO).require(player), outside]);
+        assert!(has_pattern_match(&game, &state, &boundary));
+
+        let mut inside = MatchCell3::new(Delta3::ZERO);
+        inside.require_null = true;
+        let impossible = Pattern3::new(vec![inside]);
+        assert!(!has_pattern_match(&game, &state, &impossible));
+    }
 
     #[test]
     fn transition_accepts_shared_random_application() {
         let player = ObjectId(1);
         let crate_object = ObjectId(2);
-        let game = Game3::checked_new(
+        let game = CompiledGame3::checked_new(
             1,
             vec![
                 ObjectDef3 {
@@ -1505,10 +1684,10 @@ mod tests {
             .place_object(&game, Coord3::new(1, 0, 0), player)
             .expect("place second player");
         let mut rule = Rule3::once(
-            Pattern3::new(vec![MatchCell3::new(Offset3::ZERO).require(player)]),
+            Pattern3::new(vec![MatchCell3::new(Delta3::ZERO).require(player)]),
             vec![WriteOp3::Replace {
                 component: 0,
-                offset: Offset3::ZERO,
+                offset: Delta3::ZERO.into(),
                 remove: player,
                 add: crate_object,
             }],
@@ -1544,7 +1723,7 @@ mod tests {
 
     #[test]
     fn transition_accepts_shared_variable_guard() {
-        let game = Game3::checked_new(1, Vec::new()).expect("valid empty game");
+        let game = CompiledGame3::checked_new(1, Vec::new()).expect("valid empty game");
         let state = State3::empty_with_variables(Size3::new(1, 1, 1), 1, vec![2])
             .expect("valid empty state");
         let mut rule = Rule3::once(Pattern3::new(Vec::new()), Vec::new()).with_effects(vec![
@@ -1568,9 +1747,8 @@ mod tests {
     #[test]
     fn transition_accepts_shared_named_condition_guard() {
         let condition = ConditionId3(0);
-        let game = Game3::new_with_condition_defs(
+        let game = CompiledGame3::new_with_condition_defs(
             1,
-            Vec::new(),
             Vec::new(),
             vec![ConditionDef3 {
                 id: condition,

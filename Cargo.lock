@@ -2349,6 +2349,9 @@ dependencies = [
 [[package]]
 name = "puzzle-authoring"
 version = "0.1.0"
+dependencies = [
+ "puzzle-kernel",
+]
 
 [[package]]
 name = "puzzle-core"

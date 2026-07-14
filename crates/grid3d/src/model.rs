@@ -1,5 +1,5 @@
-use crate::{ConditionDef3, ConditionId3};
-use crate::{InputId, LayerId, ObjectId};
+use crate::{ConditionDef3, ConditionId3, Rule3, RuleStep3};
+use crate::{InputId, LayerId, MarkId3, ObjectId};
 use puzzle_kernel::{GridCoord, GridOffset};
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -28,7 +28,7 @@ impl Coord3 {
         }
     }
 
-    pub fn checked_offset(self, offset: Offset3) -> Option<Self> {
+    pub fn checked_offset(self, offset: Delta3) -> Option<Self> {
         GridCoord::<3>::from(self)
             .checked_offset(offset.into())
             .map(Self::from)
@@ -49,13 +49,13 @@ impl From<GridCoord<3>> for Coord3 {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct Offset3 {
+pub struct Delta3 {
     pub dx: i16,
     pub dy: i16,
     pub dz: i16,
 }
 
-impl Offset3 {
+impl Delta3 {
     pub const ZERO: Self = Self {
         dx: 0,
         dy: 0,
@@ -83,17 +83,50 @@ impl Offset3 {
     }
 }
 
-impl From<Offset3> for GridOffset<3> {
-    fn from(value: Offset3) -> Self {
+impl From<Delta3> for GridOffset<3> {
+    fn from(value: Delta3) -> Self {
         Self::new([value.dx, value.dy, value.dz])
     }
 }
 
-impl From<GridOffset<3>> for Offset3 {
+impl From<GridOffset<3>> for Delta3 {
     fn from(value: GridOffset<3>) -> Self {
         let [dx, dy, dz] = value.deltas();
         Self { dx, dy, dz }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Offset3 {
+    Fixed {
+        dx: i16,
+        dy: i16,
+        dz: i16,
+    },
+    Variable {
+        base_dx: i16,
+        base_dy: i16,
+        base_dz: i16,
+        gap_terms: Vec<GapTerm3>,
+    },
+}
+
+impl From<Delta3> for Offset3 {
+    fn from(value: Delta3) -> Self {
+        Self::Fixed {
+            dx: value.dx,
+            dy: value.dy,
+            dz: value.dz,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GapTerm3 {
+    pub gap_index: u16,
+    pub dx: i16,
+    pub dy: i16,
+    pub dz: i16,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -119,7 +152,7 @@ impl Size3 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Direction3 {
     pub name: &'static str,
-    pub offset: Offset3,
+    pub offset: Delta3,
 }
 
 impl Serialize for Direction3 {
@@ -153,27 +186,27 @@ impl<'de> Deserialize<'de> for Direction3 {
 impl Direction3 {
     pub const UP: Self = Self {
         name: "up",
-        offset: Offset3::new(0, 0, 1),
+        offset: Delta3::new(0, 0, 1),
     };
     pub const DOWN: Self = Self {
         name: "down",
-        offset: Offset3::new(0, 0, -1),
+        offset: Delta3::new(0, 0, -1),
     };
     pub const LEFT: Self = Self {
         name: "left",
-        offset: Offset3::new(-1, 0, 0),
+        offset: Delta3::new(-1, 0, 0),
     };
     pub const RIGHT: Self = Self {
         name: "right",
-        offset: Offset3::new(1, 0, 0),
+        offset: Delta3::new(1, 0, 0),
     };
     pub const FORWARD: Self = Self {
         name: "front",
-        offset: Offset3::new(0, 1, 0),
+        offset: Delta3::new(0, 1, 0),
     };
     pub const BACKWARD: Self = Self {
         name: "back",
-        offset: Offset3::new(0, -1, 0),
+        offset: Delta3::new(0, -1, 0),
     };
 
     pub const fn directions() -> [Self; 6] {
@@ -318,7 +351,7 @@ impl Frame3 {
         canonical_depth(self.primary, self.secondary).is_ok_and(|depth| depth == self.depth)
     }
 
-    pub fn to_world_offset(self, local: Offset3) -> Offset3 {
+    pub fn to_world_offset(self, local: Delta3) -> Delta3 {
         self.primary
             .offset
             .scale(local.dx)
@@ -474,8 +507,8 @@ fn canonical_depth(primary: Direction3, secondary: Direction3) -> Result<Directi
     Ok(depth)
 }
 
-fn cross(a: Offset3, b: Offset3) -> Offset3 {
-    Offset3::new(
+fn cross(a: Delta3, b: Delta3) -> Delta3 {
+    Delta3::new(
         (a.dy * b.dz) - (a.dz * b.dy),
         (a.dz * b.dx) - (a.dx * b.dz),
         (a.dx * b.dy) - (a.dy * b.dx),
@@ -578,6 +611,13 @@ pub struct ObjectDef3 {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MarkDef3 {
+    pub id: MarkId3,
+    pub kind: crate::MarkKind,
+    pub values: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InputDef3 {
     pub id: InputId,
     pub name: String,
@@ -611,94 +651,135 @@ impl InputDef3 {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Game3 {
+pub struct CompiledGame3 {
     pub layer_count: u16,
-    pub objects: Vec<ObjectDef3>,
-    pub inputs: Vec<InputDef3>,
+    objects: Vec<ObjectDef3>,
+    mark: Vec<MarkDef3>,
     condition_defs: Vec<ConditionDef3>,
+    rules: Vec<Rule3>,
+    program: Vec<RuleStep3>,
 }
 
-impl Game3 {
-    pub fn new(layer_count: u16, objects: Vec<ObjectDef3>) -> Self {
+impl CompiledGame3 {
+    pub fn new(layer_count: u16, objects: Vec<ObjectDef3>, rules: Vec<Rule3>) -> Self {
+        let program = rules.iter().cloned().map(RuleStep3::Rule).collect();
         Self {
             layer_count,
             objects,
-            inputs: Vec::new(),
+            mark: Vec::new(),
             condition_defs: Vec::new(),
+            rules,
+            program,
         }
     }
 
-    pub fn new_with_inputs(
+    pub fn new_with_program(
         layer_count: u16,
         objects: Vec<ObjectDef3>,
-        inputs: Vec<InputDef3>,
+        program: Vec<RuleStep3>,
     ) -> Self {
-        Self {
-            layer_count,
-            objects,
-            inputs,
-            condition_defs: Vec::new(),
-        }
+        Self::new_with_condition_defs_and_program(layer_count, objects, Vec::new(), program)
     }
 
     pub fn new_with_condition_defs(
         layer_count: u16,
         objects: Vec<ObjectDef3>,
-        inputs: Vec<InputDef3>,
         condition_defs: Vec<ConditionDef3>,
     ) -> Self {
+        Self::new_with_condition_defs_and_program(layer_count, objects, condition_defs, Vec::new())
+    }
+
+    pub fn new_with_condition_defs_and_program(
+        layer_count: u16,
+        objects: Vec<ObjectDef3>,
+        condition_defs: Vec<ConditionDef3>,
+        program: Vec<RuleStep3>,
+    ) -> Self {
+        Self::new_with_mark_condition_defs_and_program(
+            layer_count,
+            objects,
+            Vec::new(),
+            condition_defs,
+            program,
+        )
+    }
+
+    pub fn new_with_mark_condition_defs_and_program(
+        layer_count: u16,
+        objects: Vec<ObjectDef3>,
+        mark: Vec<MarkDef3>,
+        condition_defs: Vec<ConditionDef3>,
+        program: Vec<RuleStep3>,
+    ) -> Self {
+        let rules = crate::flattened_rules(&program);
         Self {
             layer_count,
             objects,
-            inputs,
+            mark,
             condition_defs,
+            rules,
+            program,
         }
     }
 
-    pub fn checked_new(layer_count: u16, objects: Vec<ObjectDef3>) -> Result<Self, GameError3> {
-        Self::checked_new_with_inputs(layer_count, objects, Vec::new())
+    pub fn clone_with_program(&self, program: Vec<RuleStep3>) -> Self {
+        Self::new_with_mark_condition_defs_and_program(
+            self.layer_count,
+            self.objects.clone(),
+            self.mark.clone(),
+            self.condition_defs.clone(),
+            program,
+        )
     }
 
-    pub fn checked_new_with_inputs(
+    #[inline]
+    pub fn rules(&self) -> &[Rule3] {
+        &self.rules
+    }
+
+    pub fn object_count(&self) -> usize {
+        self.objects.len()
+    }
+
+    pub fn objects(&self) -> &[ObjectDef3] {
+        &self.objects
+    }
+
+    pub fn mark(&self) -> &[MarkDef3] {
+        &self.mark
+    }
+
+    #[inline]
+    pub fn program(&self) -> &[RuleStep3] {
+        &self.program
+    }
+
+    pub fn checked_new(
         layer_count: u16,
         objects: Vec<ObjectDef3>,
-        inputs: Vec<InputDef3>,
-    ) -> Result<Self, GameError3> {
-        let game = Self::new_with_inputs(layer_count, objects, inputs);
+    ) -> Result<Self, CompiledGameError3> {
+        let game = Self::new(layer_count, objects, Vec::new());
         game.validate()?;
         Ok(game)
     }
 
-    pub fn validate(&self) -> Result<(), GameError3> {
+    pub fn validate(&self) -> Result<(), CompiledGameError3> {
         if self.layer_count == 0 {
-            return Err(GameError3::InvalidLayerCount);
+            return Err(CompiledGameError3::InvalidLayerCount);
         }
 
         let mut object_ids = BTreeSet::new();
         for object in &self.objects {
             if object.id.is_empty() {
-                return Err(GameError3::EmptyObjectId);
+                return Err(CompiledGameError3::EmptyObjectId);
             }
             if !object_ids.insert(object.id) {
-                return Err(GameError3::DuplicateObjectId { object: object.id });
+                return Err(CompiledGameError3::DuplicateObjectId { object: object.id });
             }
             if object.layer_id.0 >= self.layer_count {
-                return Err(GameError3::ObjectLayerOutOfBounds {
+                return Err(CompiledGameError3::ObjectLayerOutOfBounds {
                     object: object.id,
                     layer: object.layer_id,
-                });
-            }
-        }
-
-        let mut input_ids = BTreeSet::new();
-        let mut input_names = BTreeSet::new();
-        for input in &self.inputs {
-            if !input_ids.insert(input.id) {
-                return Err(GameError3::DuplicateInputId { input: input.id });
-            }
-            if !input_names.insert(input.name.clone()) {
-                return Err(GameError3::DuplicateInputName {
-                    name: input.name.clone(),
                 });
             }
         }
@@ -706,7 +787,7 @@ impl Game3 {
         let mut condition_ids = BTreeSet::new();
         for condition in &self.condition_defs {
             if !condition_ids.insert(condition.id) {
-                return Err(GameError3::DuplicateConditionId {
+                return Err(CompiledGameError3::DuplicateConditionId {
                     condition: condition.id,
                 });
             }
@@ -725,14 +806,6 @@ impl Game3 {
             .map(|def| def.layer_id)
     }
 
-    pub fn input(&self, input: InputId) -> Option<&InputDef3> {
-        self.inputs.iter().find(|def| def.id == input)
-    }
-
-    pub fn input_by_name(&self, name: &str) -> Option<&InputDef3> {
-        self.inputs.iter().find(|def| def.name == name)
-    }
-
     pub fn condition_defs(&self) -> &[ConditionDef3] {
         &self.condition_defs
     }
@@ -740,19 +813,13 @@ impl Game3 {
     pub fn condition_def(&self, condition: ConditionId3) -> Option<&ConditionDef3> {
         self.condition_defs.get(usize::from(condition.0))
     }
-
-    pub fn direction_for_input(&self, input: InputId) -> Option<Direction3> {
-        self.input(input).and_then(|def| def.direction)
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum GameError3 {
+pub enum CompiledGameError3 {
     InvalidLayerCount,
     EmptyObjectId,
     DuplicateObjectId { object: ObjectId },
     ObjectLayerOutOfBounds { object: ObjectId, layer: LayerId },
-    DuplicateInputId { input: InputId },
-    DuplicateInputName { name: String },
     DuplicateConditionId { condition: ConditionId3 },
 }

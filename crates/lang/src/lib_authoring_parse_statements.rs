@@ -55,12 +55,11 @@ fn parse_lifecycle_block(
 fn parse_rule_application(
     tokens: &[&str],
     declaration: &str,
-    role: RuleRole,
     line: &str,
 ) -> Result<RuleApplication, DiagnosticReport> {
-    match (role, tokens) {
-        (RuleRole::Main, [kind, _]) if *kind == declaration => Ok(RuleApplication::Once),
-        (RuleRole::Main, [kind, _, application]) if *kind == declaration => {
+    match tokens {
+        [kind, _] if *kind == declaration => Ok(RuleApplication::Once),
+        [kind, _, application] if *kind == declaration => {
             parse_application_keyword(application, line)
         }
         _ => Err(parse_error(
@@ -553,109 +552,40 @@ fn replace_for_tokens(
     env: &ValueEnv,
     maps: &HashMap<String, ValueMap>,
 ) -> Result<String, DiagnosticReport> {
-    let mut out = String::with_capacity(line.len());
-    let chars = line.chars().collect::<Vec<_>>();
-    let mut i = 0usize;
-    while i < chars.len() {
-        if chars[i] == '"' {
-            copy_quoted_segment(&chars, &mut i, &mut out);
-            continue;
-        }
-        if chars[i] == '/' && chars.get(i + 1) == Some(&'/') {
-            out.extend(chars[i..].iter());
-            break;
-        }
-        if is_identifier_start(chars[i]) {
-            let name_start = i;
-            i += 1;
-            while i < chars.len() && is_identifier_continue(chars[i]) {
-                i += 1;
+    crate::rule_syntax::substitute_rule_binding_line(
+        line,
+        binding,
+        |projection| match projection {
+            None => Ok(value.value.clone()),
+            Some(attr) => value.attrs.get(attr).cloned().ok_or_else(|| {
+                parse_error(line, &format!("unknown for projection `{binding}.{attr}`"))
+            }),
+        },
+        |name, arg| {
+            if !maps.contains_key(name) {
+                return Ok(None);
             }
-            if i < chars.len() && chars[i] == '(' {
-                let arg_start = i + 1;
-                let mut arg_end = arg_start;
-                while arg_end < chars.len() && is_identifier_continue(chars[arg_end]) {
-                    arg_end += 1;
-                }
-                if arg_end > arg_start && arg_end < chars.len() && chars[arg_end] == ')' {
-                    let name = chars[name_start..i].iter().collect::<String>();
-                    let arg = chars[arg_start..arg_end].iter().collect::<String>();
-                    if maps.contains_key(&name) {
-                        let expr = ValueExpr::MapCall { name, arg };
-                        out.push_str(&eval_bound_value_expr(&expr, env, maps, line)?);
-                        i = arg_end + 1;
-                        continue;
-                    }
-                }
-            }
-            let name = chars[name_start..i].iter().collect::<String>();
-            if name == binding {
-                if i < chars.len() && chars[i] == '.' {
-                    let attr_start = i + 1;
-                    let mut attr_end = attr_start;
-                    if attr_end < chars.len() && is_identifier_start(chars[attr_end]) {
-                        attr_end += 1;
-                        while attr_end < chars.len() && is_identifier_continue(chars[attr_end]) {
-                            attr_end += 1;
-                        }
-                        let attr = chars[attr_start..attr_end].iter().collect::<String>();
-                        let Some(projected) = value.attrs.get(&attr) else {
-                            return Err(parse_error(
-                                line,
-                                &format!("unknown for projection `{binding}.{attr}`"),
-                            ));
-                        };
-                        out.push_str(projected);
-                        i = attr_end;
-                        continue;
-                    }
-                }
-                out.push_str(&value.value);
-                continue;
-            }
-            out.extend(chars[name_start..i].iter());
-            continue;
-        }
-        out.push(chars[i]);
-        i += 1;
-    }
-    Ok(out)
-}
-
-fn copy_quoted_segment(chars: &[char], i: &mut usize, out: &mut String) {
-    out.push(chars[*i]);
-    *i += 1;
-    let mut escaped = false;
-    while *i < chars.len() {
-        let ch = chars[*i];
-        out.push(ch);
-        *i += 1;
-        if escaped {
-            escaped = false;
-        } else if ch == '\\' {
-            escaped = true;
-        } else if ch == '"' {
-            break;
-        }
-    }
-}
-
-fn is_identifier_start(ch: char) -> bool {
-    ch == '_' || ch.is_ascii_alphabetic()
-}
-
-fn is_identifier_continue(ch: char) -> bool {
-    ch == '_' || ch.is_ascii_alphanumeric()
+            let expr = ValueExpr::MapCall {
+                name: name.to_string(),
+                arg: arg.to_string(),
+            };
+            eval_bound_value_expr(&expr, env, maps, line).map(Some)
+        },
+    )
 }
 
 #[derive(Clone, Debug)]
-struct ForExpansionValue {
+pub(crate) struct ForExpansionValue {
     value: String,
     axis: Option<String>,
     attrs: HashMap<String, String>,
 }
 
 impl ForExpansionValue {
+    pub(crate) fn value(&self) -> &str {
+        &self.value
+    }
+
     fn atom(value: impl Into<String>) -> Self {
         Self {
             value: value.into(),
@@ -673,13 +603,19 @@ impl ForExpansionValue {
     }
 }
 
-fn for_expansion_values(
+pub(crate) fn for_expansion_values(
     sources: &[&str],
     value_sets: &HashMap<String, Vec<String>>,
     numeric_variables: &HashMap<String, i64>,
     line: &str,
 ) -> Result<Vec<ForExpansionValue>, DiagnosticReport> {
-    for_expansion_values_with_sets(sources, value_sets, numeric_variables, &HashMap::new(), line)
+    for_expansion_values_with_sets(
+        sources,
+        value_sets,
+        numeric_variables,
+        &HashMap::new(),
+        line,
+    )
 }
 
 fn for_expansion_values_with_sets(
@@ -1140,30 +1076,29 @@ fn parse_statement_block(
                     i += 1;
                     continue;
                 }
-                let ["for", binding, "in", sources @ ..] = tokens.as_slice() else {
-                    extend_report_with_source_line_number(
-                        &mut diagnostics,
-                        parse_error(line, "for directive must be: for <binding> in <source...>"),
-                        line,
-                        source_line_number,
-                    );
-                    i = recover_after_directive_error(lines, i);
-                    continue;
-                };
+                let for_syntax = recover_current_statement!(
+                    crate::rule_syntax::parse_rule_for_syntax(line)
+                        .map_err(|error| parse_error(line, error))?
+                        .ok_or_else(|| parse_error(line, "expected for rule syntax"))
+                );
+                let source_refs = for_syntax
+                    .sources
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>();
                 let values = recover_current_statement!(for_expansion_values(
-                    sources,
+                    &source_refs,
                     value_sets,
                     numeric_variables,
                     line
                 ));
-                recover_current_statement!(validate_identifier(binding, line, "expansion binding"));
                 let (body_lines, body_line_numbers, next_i) = recover_current_statement!(
                     collect_statement_block_lines_with_numbers(lines, line_numbers, i + 1, line)
                 );
                 for value in &values {
                     let mut expanded_lines = match expand_for_binding_lines(
                         &body_lines,
-                        binding,
+                        &for_syntax.binding,
                         value,
                         maps,
                     ) {
@@ -2163,14 +2098,6 @@ fn parse_statement_block(
                 }
                 i = next_statement_i;
             }
-            Some("move") if is_shared_standard_move_statement(line) => {
-                statements.push(StatementAst::Call {
-                    name: "move".to_string(),
-                    source_line: line.to_string(),
-                    source_line_number,
-                });
-                i += 1;
-            }
             Some(call) if tokens.len() == 1 && is_shared_rule_call_statement(line, call) => {
                 statements.push(StatementAst::Call {
                     name: call.to_string(),
@@ -2224,17 +2151,6 @@ fn parse_statement_block(
             "statement block missing closing brace",
         ))
     }
-}
-
-fn is_shared_standard_move_statement(line: &str) -> bool {
-    matches!(
-        puzzle_authoring::rule_statement_surface(line),
-        Ok(puzzle_authoring::RuleStatementSurface::RuleLine(
-            puzzle_authoring::RuleLineSurface::StandardStep(
-                puzzle_authoring::StandardRuleStepSurface::Move
-            )
-        ))
-    )
 }
 
 fn is_shared_rule_call_statement(line: &str, expected_name: &str) -> bool {
@@ -2409,15 +2325,15 @@ fn parse_pattern_condition(
     Ok(PatternConditionAst {
         predicate,
         orientation,
-        pattern: parse_pattern_side(
+        pattern: lower_pattern_source(
             &pattern,
+            line,
             object_names,
             object_schemas,
             value_sets,
             maps,
             object_groups,
             &HashMap::new(),
-            false,
         )?,
     })
 }
@@ -2581,9 +2497,6 @@ fn parse_rule_line_rewrite_statement(
             application.map(rule_application_from_surface),
             rewrite,
         ),
-        puzzle_authoring::RuleLineSurface::StandardStep(_) => {
-            return Err(parse_error(line, "expected a rewrite statement"));
-        }
     };
     let (before, after, effects, after_effects, after_call) = parse_inline_rewrite(
         rewrite,

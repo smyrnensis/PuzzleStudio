@@ -633,6 +633,26 @@ fn property_syntax(tokens: &[&str]) -> Option<SpritePropertySyntax> {
                 axis: None,
             }
         }
+        ["rotate", angle, "from", from, "around", axis] => SpritePropertySyntax::Rotate {
+            space: SpriteSpaceSyntax::World,
+            angle: (*angle).to_string(),
+            from: Some((*from).to_string()),
+            axis: Some((*axis).to_string()),
+        },
+        [
+            "rotate",
+            space @ ("world" | "local"),
+            angle,
+            "from",
+            from,
+            "around",
+            axis,
+        ] => SpritePropertySyntax::Rotate {
+            space: parse_space(space),
+            angle: (*angle).to_string(),
+            from: Some((*from).to_string()),
+            axis: Some((*axis).to_string()),
+        },
         ["rotate", angle, "around", axis] => SpritePropertySyntax::Rotate {
             space: SpriteSpaceSyntax::World,
             angle: (*angle).to_string(),
@@ -809,7 +829,6 @@ mod tests {
         assert_eq!(braced.header, "Wall {");
         assert_eq!(braced.body_lines, ["#333", "0"]);
         assert_eq!(braced.next_index, 8);
-
     }
 
     #[test]
@@ -953,6 +972,26 @@ mod tests {
         assert!(syntax.issues.is_empty(), "{:?}", syntax.issues);
         assert!(
             matches!(&syntax.properties[0].0, SpritePropertySyntax::Rotate { space: SpriteSpaceSyntax::Local, angle, from: Some(from), axis: None } if angle == "directions" && from == "up")
+        );
+    }
+
+    #[test]
+    fn rotate_from_can_name_an_explicit_axis() {
+        let syntax = parse_sprite_node(
+            Some("Player:horizontal {"),
+            &[
+                "colors = red",
+                "rotate local horizontal from front around up",
+                "shape = {",
+                "0",
+                "}",
+            ]
+            .map(str::to_string),
+        );
+
+        assert!(syntax.issues.is_empty(), "{:?}", syntax.issues);
+        assert!(
+            matches!(&syntax.properties[0].0, SpritePropertySyntax::Rotate { space: SpriteSpaceSyntax::Local, angle, from: Some(from), axis: Some(axis) } if angle == "horizontal" && from == "front" && axis == "up")
         );
     }
 

@@ -9,12 +9,9 @@ pub(crate) enum AuthoringKind {
     Root,
     PuzzleRenderConfig,
     PuzzleRenderGridConfig,
-    Puzzle3Root,
-    Puzzle3RenderConfig,
-    Puzzle3CameraConfig,
-    Puzzle3GridConfig,
-    Puzzle3PixelateConfig,
-    Puzzle3ViewportConfig,
+    PuzzleRenderCameraConfig,
+    PuzzleRenderPixelateConfig,
+    PuzzleRenderViewportConfig,
     SoundsConfig,
     SfxSoundConfig,
     MusicSoundConfig,
@@ -336,7 +333,7 @@ pub(crate) enum AuthoringOutlinePolicy {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct AuthoringSurfaceSpan {
+pub(crate) struct AuthoringRecognition {
     pub(crate) span: SourceSpan,
     pub(crate) role: AuthoringSurfaceRole,
 }
@@ -390,7 +387,6 @@ pub(crate) enum DefinitionValueDomain {
 pub(crate) enum DefinitionBuiltinDomain {
     ThemePreset,
     PuzzleRenderGridType,
-    Puzzle3GridType,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -644,6 +640,12 @@ const PUZZLE_RENDER_CONFIG_DEFINITIONS: &[DefinitionSpec] = &[
         DefinitionValueSyntax::Boolean,
         AuthoringSurfaceRole::Literal,
     ),
+    DefinitionSpec::value_role(
+        "shadow",
+        DefinitionValueSpec::One,
+        DefinitionValueSyntax::Boolean,
+        AuthoringSurfaceRole::Literal,
+    ),
 ];
 const PUZZLE_RENDER_GRID_CONFIG_DEFINITIONS: &[DefinitionSpec] = &[DefinitionSpec::typed_domain(
     "type",
@@ -652,21 +654,7 @@ const PUZZLE_RENDER_GRID_CONFIG_DEFINITIONS: &[DefinitionSpec] = &[DefinitionSpe
     DefinitionValueDomain::Builtin(DefinitionBuiltinDomain::PuzzleRenderGridType),
     AuthoringSurfaceRole::Literal,
 )];
-const PUZZLE3_RENDER_CONFIG_DEFINITIONS: &[DefinitionSpec] = &[
-    DefinitionSpec::value_role(
-        "shade",
-        DefinitionValueSpec::One,
-        DefinitionValueSyntax::Boolean,
-        AuthoringSurfaceRole::Literal,
-    ),
-    DefinitionSpec::value_role(
-        "shadow",
-        DefinitionValueSpec::One,
-        DefinitionValueSyntax::Boolean,
-        AuthoringSurfaceRole::Literal,
-    ),
-];
-const PUZZLE3_CAMERA_CONFIG_DEFINITIONS: &[DefinitionSpec] = &[
+const PUZZLE_RENDER_CAMERA_CONFIG_DEFINITIONS: &[DefinitionSpec] = &[
     DefinitionSpec::value_role(
         "yaw",
         DefinitionValueSpec::One,
@@ -675,6 +663,12 @@ const PUZZLE3_CAMERA_CONFIG_DEFINITIONS: &[DefinitionSpec] = &[
     ),
     DefinitionSpec::value_role(
         "pitch",
+        DefinitionValueSpec::One,
+        DefinitionValueSyntax::Number,
+        AuthoringSurfaceRole::Number,
+    ),
+    DefinitionSpec::value_role(
+        "roll",
         DefinitionValueSpec::One,
         DefinitionValueSyntax::Number,
         AuthoringSurfaceRole::Number,
@@ -698,14 +692,7 @@ const PUZZLE3_CAMERA_CONFIG_DEFINITIONS: &[DefinitionSpec] = &[
         AuthoringSurfaceRole::Literal,
     ),
 ];
-const PUZZLE3_GRID_CONFIG_DEFINITIONS: &[DefinitionSpec] = &[DefinitionSpec::typed_domain(
-    "type",
-    DefinitionValueSpec::One,
-    DefinitionValueSyntax::QuotedString,
-    DefinitionValueDomain::Builtin(DefinitionBuiltinDomain::Puzzle3GridType),
-    AuthoringSurfaceRole::Literal,
-)];
-const PUZZLE3_PIXELATE_CONFIG_DEFINITIONS: &[DefinitionSpec] = &[
+const PUZZLE_RENDER_PIXELATE_CONFIG_DEFINITIONS: &[DefinitionSpec] = &[
     DefinitionSpec::value_role(
         "enabled",
         DefinitionValueSpec::One,
@@ -929,37 +916,19 @@ const PUZZLE_RENDER_GRID_HEADER: HeaderSpec = HeaderSpec {
     usage: "grid",
     arg_roles: NO_HEADER_ARGS,
 };
-const PUZZLE3_ROOT_HEADER: HeaderSpec = HeaderSpec {
-    min_args: 0,
-    max_args: 0,
-    usage: "puzzle3",
-    arg_roles: NO_HEADER_ARGS,
-};
-const PUZZLE3_RENDER_HEADER: HeaderSpec = HeaderSpec {
-    min_args: 0,
-    max_args: 0,
-    usage: "render",
-    arg_roles: NO_HEADER_ARGS,
-};
-const PUZZLE3_CAMERA_HEADER: HeaderSpec = HeaderSpec {
+const PUZZLE_RENDER_CAMERA_HEADER: HeaderSpec = HeaderSpec {
     min_args: 0,
     max_args: 0,
     usage: "camera",
     arg_roles: NO_HEADER_ARGS,
 };
-const PUZZLE3_GRID_HEADER: HeaderSpec = HeaderSpec {
-    min_args: 0,
-    max_args: 0,
-    usage: "grid",
-    arg_roles: NO_HEADER_ARGS,
-};
-const PUZZLE3_PIXELATE_HEADER: HeaderSpec = HeaderSpec {
+const PUZZLE_RENDER_PIXELATE_HEADER: HeaderSpec = HeaderSpec {
     min_args: 0,
     max_args: 0,
     usage: "pixelate",
     arg_roles: NO_HEADER_ARGS,
 };
-const PUZZLE3_VIEWPORT_HEADER: HeaderSpec = HeaderSpec {
+const PUZZLE_RENDER_VIEWPORT_HEADER: HeaderSpec = HeaderSpec {
     min_args: 0,
     max_args: 0,
     usage: "viewport",
@@ -1064,33 +1033,9 @@ pub(crate) const KIND_SPECS: &[KindSpec] = &[
         missing_close_message: "grid block missing closing brace",
     },
     KindSpec {
-        kind: AuthoringKind::Puzzle3Root,
-        header: PUZZLE3_ROOT_HEADER,
-        definitions: NO_DEFINITIONS,
-        rows: NO_ROWS,
-        body: AuthoringBody::None,
-        symbol_exports: NO_SYMBOL_EXPORTS,
-        block_role: None,
-        keyword_role: AuthoringSurfaceRole::Keyword,
-        outline_policy: AuthoringOutlinePolicy::Hidden,
-        missing_close_message: "puzzle3 block missing closing brace",
-    },
-    KindSpec {
-        kind: AuthoringKind::Puzzle3RenderConfig,
-        header: PUZZLE3_RENDER_HEADER,
-        definitions: PUZZLE3_RENDER_CONFIG_DEFINITIONS,
-        rows: NO_ROWS,
-        body: AuthoringBody::None,
-        symbol_exports: NO_SYMBOL_EXPORTS,
-        block_role: None,
-        keyword_role: AuthoringSurfaceRole::Keyword,
-        outline_policy: AuthoringOutlinePolicy::Visible,
-        missing_close_message: "render block missing closing brace",
-    },
-    KindSpec {
-        kind: AuthoringKind::Puzzle3CameraConfig,
-        header: PUZZLE3_CAMERA_HEADER,
-        definitions: PUZZLE3_CAMERA_CONFIG_DEFINITIONS,
+        kind: AuthoringKind::PuzzleRenderCameraConfig,
+        header: PUZZLE_RENDER_CAMERA_HEADER,
+        definitions: PUZZLE_RENDER_CAMERA_CONFIG_DEFINITIONS,
         rows: NO_ROWS,
         body: AuthoringBody::None,
         symbol_exports: NO_SYMBOL_EXPORTS,
@@ -1100,21 +1045,9 @@ pub(crate) const KIND_SPECS: &[KindSpec] = &[
         missing_close_message: "camera block missing closing brace",
     },
     KindSpec {
-        kind: AuthoringKind::Puzzle3GridConfig,
-        header: PUZZLE3_GRID_HEADER,
-        definitions: PUZZLE3_GRID_CONFIG_DEFINITIONS,
-        rows: NO_ROWS,
-        body: AuthoringBody::None,
-        symbol_exports: NO_SYMBOL_EXPORTS,
-        block_role: None,
-        keyword_role: AuthoringSurfaceRole::Keyword,
-        outline_policy: AuthoringOutlinePolicy::Visible,
-        missing_close_message: "grid block missing closing brace",
-    },
-    KindSpec {
-        kind: AuthoringKind::Puzzle3PixelateConfig,
-        header: PUZZLE3_PIXELATE_HEADER,
-        definitions: PUZZLE3_PIXELATE_CONFIG_DEFINITIONS,
+        kind: AuthoringKind::PuzzleRenderPixelateConfig,
+        header: PUZZLE_RENDER_PIXELATE_HEADER,
+        definitions: PUZZLE_RENDER_PIXELATE_CONFIG_DEFINITIONS,
         rows: NO_ROWS,
         body: AuthoringBody::None,
         symbol_exports: NO_SYMBOL_EXPORTS,
@@ -1124,8 +1057,8 @@ pub(crate) const KIND_SPECS: &[KindSpec] = &[
         missing_close_message: "pixelate block missing closing brace",
     },
     KindSpec {
-        kind: AuthoringKind::Puzzle3ViewportConfig,
-        header: PUZZLE3_VIEWPORT_HEADER,
+        kind: AuthoringKind::PuzzleRenderViewportConfig,
+        header: PUZZLE_RENDER_VIEWPORT_HEADER,
         definitions: NO_DEFINITIONS,
         rows: NO_ROWS,
         body: AuthoringBody::None,
@@ -1271,42 +1204,17 @@ pub(crate) const PLACEMENT_SPECS: &[PlacementSpec] = &[
     PlacementSpec {
         parent: AuthoringKind::PuzzleRenderConfig,
         surface: "camera",
-        child: AuthoringKind::Puzzle3CameraConfig,
+        child: AuthoringKind::PuzzleRenderCameraConfig,
     },
     PlacementSpec {
         parent: AuthoringKind::PuzzleRenderConfig,
         surface: "pixelate",
-        child: AuthoringKind::Puzzle3PixelateConfig,
+        child: AuthoringKind::PuzzleRenderPixelateConfig,
     },
     PlacementSpec {
         parent: AuthoringKind::PuzzleRenderConfig,
         surface: "viewport",
-        child: AuthoringKind::Puzzle3ViewportConfig,
-    },
-    PlacementSpec {
-        parent: AuthoringKind::Puzzle3Root,
-        surface: "render",
-        child: AuthoringKind::Puzzle3RenderConfig,
-    },
-    PlacementSpec {
-        parent: AuthoringKind::Puzzle3RenderConfig,
-        surface: "camera",
-        child: AuthoringKind::Puzzle3CameraConfig,
-    },
-    PlacementSpec {
-        parent: AuthoringKind::Puzzle3RenderConfig,
-        surface: "grid",
-        child: AuthoringKind::Puzzle3GridConfig,
-    },
-    PlacementSpec {
-        parent: AuthoringKind::Puzzle3RenderConfig,
-        surface: "pixelate",
-        child: AuthoringKind::Puzzle3PixelateConfig,
-    },
-    PlacementSpec {
-        parent: AuthoringKind::Puzzle3RenderConfig,
-        surface: "viewport",
-        child: AuthoringKind::Puzzle3ViewportConfig,
+        child: AuthoringKind::PuzzleRenderViewportConfig,
     },
     PlacementSpec {
         parent: AuthoringKind::Root,
@@ -1383,12 +1291,6 @@ pub(crate) fn authoring_row_specs(kind: AuthoringKind) -> &'static [RowSpec] {
     authoring_kind_spec(kind).rows
 }
 
-pub(crate) fn authoring_symbol_exports(
-    kind: AuthoringKind,
-) -> &'static [AuthoringSymbolExportSpec] {
-    authoring_kind_spec(kind).symbol_exports
-}
-
 pub(crate) fn authoring_block_role(kind: AuthoringKind) -> Option<AuthoringBlockRole> {
     authoring_kind_spec(kind).block_role
 }
@@ -1440,6 +1342,12 @@ pub(crate) fn authoring_source_block(surface: &str) -> Option<&'static Authoring
     AUTHORING_SOURCE_BLOCK_SPECS
         .iter()
         .find(|spec| spec.surface == surface)
+}
+
+pub(crate) fn authoring_symbol_exports(
+    kind: AuthoringKind,
+) -> &'static [AuthoringSymbolExportSpec] {
+    authoring_kind_spec(kind).symbol_exports
 }
 
 pub(crate) fn authoring_content_row_specs(
@@ -1599,21 +1507,21 @@ pub(crate) fn definition_value_role(spec: &DefinitionSpec) -> Option<AuthoringSu
     definition_value_target(spec).value_role
 }
 
-pub(crate) fn project_authoring_header_surface(
+pub(crate) fn recognize_authoring_header(
     kind: AuthoringKind,
     tokens: &[SourceToken],
-) -> Vec<AuthoringSurfaceSpan> {
+) -> Vec<AuthoringRecognition> {
     let spec = authoring_kind_spec(kind);
-    let mut spans = Vec::<AuthoringSurfaceSpan>::new();
+    let mut spans = Vec::<AuthoringRecognition>::new();
     if let Some(keyword) = tokens.first() {
-        spans.push(AuthoringSurfaceSpan {
+        spans.push(AuthoringRecognition {
             span: token_span(keyword),
             role: spec.keyword_role,
         });
     }
     for (index, role) in spec.header.arg_roles.iter().enumerate() {
         if let Some(token) = tokens.get(index + 1) {
-            spans.push(AuthoringSurfaceSpan {
+            spans.push(AuthoringRecognition {
                 span: token_span(token),
                 role: *role,
             });
@@ -1622,10 +1530,10 @@ pub(crate) fn project_authoring_header_surface(
     spans
 }
 
-pub(crate) fn project_authoring_definition_surface(
+pub(crate) fn recognize_authoring_definition(
     kind: AuthoringKind,
     tokens: &[SourceToken],
-) -> Vec<AuthoringSurfaceSpan> {
+) -> Vec<AuthoringRecognition> {
     let Some((key_index, key_surface, key_start, key_end)) =
         authoring_definition_key_surface(tokens)
     else {
@@ -1634,7 +1542,7 @@ pub(crate) fn project_authoring_definition_surface(
     let Some(spec) = authoring_definition_spec(kind, key_surface) else {
         return Vec::new();
     };
-    let mut spans = vec![AuthoringSurfaceSpan {
+    let mut spans = vec![AuthoringRecognition {
         span: SourceSpan {
             start: key_start,
             end: key_end,
@@ -1645,7 +1553,7 @@ pub(crate) fn project_authoring_definition_surface(
         return spans;
     };
     for span in authoring_definition_value_spans(tokens, key_index, key_surface, spec) {
-        spans.push(AuthoringSurfaceSpan {
+        spans.push(AuthoringRecognition {
             span,
             role: value_role,
         });
@@ -1653,27 +1561,27 @@ pub(crate) fn project_authoring_definition_surface(
     spans
 }
 
-pub(crate) fn project_authoring_row_surface(
+pub(crate) fn recognize_authoring_row(
     kind: AuthoringKind,
     tokens: &[SourceToken],
-) -> Vec<AuthoringSurfaceSpan> {
+) -> Vec<AuthoringRecognition> {
     let units = surface_units(tokens);
     let texts = units
         .iter()
         .map(|unit| unit.text.as_str())
         .collect::<Vec<_>>();
     for spec in authoring_row_specs(kind) {
-        if let Some(spans) = project_row_spec_surface(spec, &texts, &units) {
+        if let Some(spans) = recognize_row_spec(spec, &texts, &units) {
             return spans;
         }
     }
     Vec::new()
 }
 
-pub(crate) fn project_authoring_content_surface(
+pub(crate) fn recognize_authoring_content(
     content: AuthoringContentKind,
     tokens: &[SourceToken],
-) -> Vec<AuthoringSurfaceSpan> {
+) -> Vec<AuthoringRecognition> {
     let Some(rows) = authoring_content_row_specs(content) else {
         return Vec::new();
     };
@@ -1683,11 +1591,41 @@ pub(crate) fn project_authoring_content_surface(
         .map(|unit| unit.text.as_str())
         .collect::<Vec<_>>();
     for spec in rows {
-        if let Some(spans) = project_row_parts_surface(spec.parts, &texts, &units) {
+        if let Some(spans) = recognize_row_parts(spec.parts, &texts, &units) {
             return spans;
         }
     }
     Vec::new()
+}
+
+/// Parses one authoring-owned line and returns the semantic facts declared by
+/// the same schema that owns strict row, definition, child, and content parsing.
+/// Consumers must not reproduce this precedence or recognize these forms.
+pub(crate) fn recognize_authoring_line(
+    parent: AuthoringKind,
+    tokens: &[SourceToken],
+) -> Vec<AuthoringRecognition> {
+    if !tokens
+        .iter()
+        .any(|token| token.text == "=" || token.text.contains('='))
+        && let Some(first) = tokens.first()
+        && let Some(child) = placed_authoring_kind(parent, first.text.as_str())
+    {
+        return recognize_authoring_header(child, tokens);
+    }
+
+    let row = recognize_authoring_row(parent, tokens);
+    if !row.is_empty() {
+        return row;
+    }
+    let definition = recognize_authoring_definition(parent, tokens);
+    if !definition.is_empty() {
+        return definition;
+    }
+    let AuthoringBody::Content(content) = authoring_kind_spec(parent).body else {
+        return Vec::new();
+    };
+    recognize_authoring_content(content, tokens)
 }
 
 fn authoring_definition_key_surface(tokens: &[SourceToken]) -> Option<(usize, &str, usize, usize)> {
@@ -1814,26 +1752,26 @@ fn surface_units(tokens: &[SourceToken]) -> Vec<SurfaceUnit> {
     out
 }
 
-fn project_row_spec_surface(
+fn recognize_row_spec(
     spec: &RowSpec,
     texts: &[&str],
     units: &[SurfaceUnit],
-) -> Option<Vec<AuthoringSurfaceSpan>> {
-    project_row_parts_surface(spec.parts, texts, units)
+) -> Option<Vec<AuthoringRecognition>> {
+    recognize_row_parts(spec.parts, texts, units)
 }
 
-fn project_row_parts_surface(
+fn recognize_row_parts(
     parts: &[RowPartSpec],
     texts: &[&str],
     units: &[SurfaceUnit],
-) -> Option<Vec<AuthoringSurfaceSpan>> {
-    let mut spans = Vec::<AuthoringSurfaceSpan>::new();
+) -> Option<Vec<AuthoringRecognition>> {
+    let mut spans = Vec::<AuthoringRecognition>::new();
     for row_match in match_row_parts(parts, texts)? {
         match row_match.part {
             RowPartSpec::Keyword { surface, role } => {
                 let unit = units.get(row_match.start)?;
                 debug_assert_eq!(unit.text, surface);
-                spans.push(AuthoringSurfaceSpan {
+                spans.push(AuthoringRecognition {
                     span: unit.span,
                     role,
                 });
@@ -1848,12 +1786,12 @@ fn project_row_parts_surface(
                 } else {
                     unit.span
                 };
-                spans.push(AuthoringSurfaceSpan { span, role });
+                spans.push(AuthoringRecognition { span, role });
             }
             RowPartSpec::Equals => {}
             RowPartSpec::Rest { role, .. } => {
                 for unit in &units[row_match.start..row_match.end] {
-                    spans.push(AuthoringSurfaceSpan {
+                    spans.push(AuthoringRecognition {
                         span: unit.span,
                         role,
                     });
@@ -1880,7 +1818,6 @@ pub(crate) fn definition_builtin_domain_values(
 ) -> &'static [&'static str] {
     match domain {
         DefinitionBuiltinDomain::PuzzleRenderGridType => &["occupied_cells", "all_cells"],
-        DefinitionBuiltinDomain::Puzzle3GridType => &["occupied_cells"],
         DefinitionBuiltinDomain::ThemePreset => crate::THEME_PRESET_NAMES,
     }
 }
@@ -2549,28 +2486,20 @@ mod tests {
             vec!["grid", "camera", "pixelate", "viewport"]
         );
         assert_eq!(
-            placed_authoring_kind(AuthoringKind::Puzzle3Root, "render"),
-            Some(AuthoringKind::Puzzle3RenderConfig)
+            authoring_definition_surfaces(AuthoringKind::PuzzleRenderConfig),
+            vec!["cell_size", "tween", "tween_duration", "shade", "shadow"]
         );
         assert_eq!(
-            authoring_definition_surfaces(AuthoringKind::Puzzle3RenderConfig),
-            vec!["shade", "shadow"]
+            placed_authoring_kind(AuthoringKind::PuzzleRenderConfig, "camera"),
+            Some(AuthoringKind::PuzzleRenderCameraConfig)
         );
         assert_eq!(
-            placed_authoring_kind(AuthoringKind::Puzzle3RenderConfig, "camera"),
-            Some(AuthoringKind::Puzzle3CameraConfig)
+            placed_authoring_kind(AuthoringKind::PuzzleRenderConfig, "pixelate"),
+            Some(AuthoringKind::PuzzleRenderPixelateConfig)
         );
         assert_eq!(
-            placed_authoring_kind(AuthoringKind::Puzzle3RenderConfig, "grid"),
-            Some(AuthoringKind::Puzzle3GridConfig)
-        );
-        assert_eq!(
-            placed_authoring_kind(AuthoringKind::Puzzle3RenderConfig, "pixelate"),
-            Some(AuthoringKind::Puzzle3PixelateConfig)
-        );
-        assert_eq!(
-            placed_authoring_kind(AuthoringKind::Puzzle3RenderConfig, "viewport"),
-            Some(AuthoringKind::Puzzle3ViewportConfig)
+            placed_authoring_kind(AuthoringKind::PuzzleRenderConfig, "viewport"),
+            Some(AuthoringKind::PuzzleRenderViewportConfig)
         );
         assert_eq!(
             placed_authoring_kind(AuthoringKind::Root, "sounds"),

@@ -1,4 +1,3 @@
-use crate::catalog::Catalog;
 use crate::completion::{
     CompletionList, completion_context_requires_symbols, completion_list_from_context,
     completion_list_json,
@@ -10,9 +9,8 @@ use crate::highlight::{
 use crate::level_editor_source::{
     level_editor_level_slots, level_editor_manifest_json, level_editor_sprite_payload_json,
 };
-use crate::source::SurfaceSourceScan;
 use crate::source_folding::{SourceFoldRange, source_fold_ranges_from_document};
-use crate::source_outline::{SourceOutlineItem, source_outline_from_document};
+use crate::source_outline::SourceOutlineItem;
 use crate::source_target::{
     SourceTarget, resolve_source_entries_from_document, resolve_source_target_from_entries,
     source_entries_json_from_entries, source_target_json,
@@ -30,9 +28,8 @@ use std::fmt;
 /// independent documents per query.
 pub struct SourceAnalysis {
     source: String,
-    source_scan: OnceCell<SurfaceSourceScan>,
-    parser_catalog: OnceCell<Option<Catalog>>,
-    document: OnceCell<SurfaceDocument>,
+    source_profile: Option<crate::PuzzleSourceProfile>,
+    snapshot: OnceCell<crate::ParseSnapshot>,
     highlighted_source: OnceCell<HighlightedSource>,
     entries: OnceCell<Vec<SourceTarget>>,
     outline: OnceCell<Vec<SourceOutlineItem>>,
@@ -57,7 +54,7 @@ impl Clone for SourceAnalysis {
     fn clone(&self) -> Self {
         // Cached parser products are implementation detail; cloning preserves the
         // source snapshot while keeping each analysis cache independently lazy.
-        Self::new(&self.source)
+        Self::new_for_profile(&self.source, self.source_profile)
     }
 }
 
@@ -73,11 +70,18 @@ impl fmt::Debug for SourceAnalysis {
 impl SourceAnalysis {
     /// Builds the shared source analysis for one exact source snapshot.
     pub fn new(source: &str) -> Self {
+        Self::new_for_profile(source, None)
+    }
+
+    /// Builds the shared source analysis for one exact source snapshot and source profile.
+    pub fn new_for_profile(
+        source: &str,
+        source_profile: Option<crate::PuzzleSourceProfile>,
+    ) -> Self {
         Self {
             source: source.to_string(),
-            source_scan: OnceCell::new(),
-            parser_catalog: OnceCell::new(),
-            document: OnceCell::new(),
+            source_profile,
+            snapshot: OnceCell::new(),
             highlighted_source: OnceCell::new(),
             entries: OnceCell::new(),
             outline: OnceCell::new(),
@@ -91,27 +95,23 @@ impl SourceAnalysis {
         &self.source
     }
 
-    fn source_scan(&self) -> &SurfaceSourceScan {
-        self.source_scan
-            .get_or_init(|| crate::source::scan_surface_source(&self.source))
+    /// Returns the source profile that owns dimension-specific surface syntax.
+    pub fn source_profile(&self) -> Option<crate::PuzzleSourceProfile> {
+        self.source_profile
+    }
+
+    fn snapshot(&self) -> &crate::ParseSnapshot {
+        self.snapshot
+            .get_or_init(|| crate::ParseSnapshot::parse(&self.source, self.source_profile))
     }
 
     fn document(&self) -> &SurfaceDocument {
-        self.document.get_or_init(|| {
-            let parser_catalog = self
-                .parser_catalog
-                .get_or_init(|| crate::parser_surface_catalog(&self.source));
-            crate::build_surface_document_from_source_scan(
-                &self.source,
-                self.source_scan(),
-                parser_catalog.as_ref(),
-            )
-        })
+        self.snapshot().document()
     }
 
     fn highlighted_source(&self) -> &HighlightedSource {
         self.highlighted_source
-            .get_or_init(|| highlight_source_with_document(&self.source, self.document()))
+            .get_or_init(|| highlight_source_with_document(self.document()))
     }
 
     fn entries(&self) -> &[SourceTarget] {
@@ -122,7 +122,9 @@ impl SourceAnalysis {
 
     fn outline(&self) -> &[SourceOutlineItem] {
         self.outline
-            .get_or_init(|| source_outline_from_document(self.document()))
+            .get_or_init(|| {
+                crate::source::outline_product::build_surface_outline_items(self.document())
+            })
             .as_slice()
     }
 
@@ -148,6 +150,16 @@ impl SourceAnalysis {
             highlighted: self.highlighted_source().clone(),
             outline: self.outline().to_vec(),
         }
+    }
+
+    /// Projects highlighting without constructing the lazy outline product.
+    pub fn highlight(&self) -> HighlightedSource {
+        self.highlighted_source().clone()
+    }
+
+    /// Projects the revision-local parser-owned outline product.
+    pub fn outline_items(&self) -> Vec<SourceOutlineItem> {
+        self.outline().to_vec()
     }
 
     /// Produces completions from this analysis document.
@@ -187,33 +199,27 @@ impl SourceAnalysis {
         }
 
         let old_source = self.source.clone();
-        let parser_catalog_reused =
-            comment_only_source_edit(&old_source, edit.start, edit.end, insert);
-        self.source_scan();
+        self.snapshot();
         self.source.replace_range(edit.start..edit.end, insert);
-        let scan = self
-            .source_scan
+        let snapshot = self
+            .snapshot
             .get_mut()
-            .expect("source scan initialized before edit");
-        let rescanned_lines = scan.apply_edit(
+            .expect("parse snapshot initialized before edit");
+        let (rescanned_lines, parser_catalog_reused) = snapshot.apply_edit(
             &old_source,
             &self.source,
+            self.source_profile,
             edit.start,
             edit.end,
             insert.len(),
         );
-        let total_lines = scan.line_count();
+        let total_lines = snapshot.line_count();
 
-        self.document.take();
         self.highlighted_source.take();
         self.entries.take();
         self.outline.take();
         self.folds.take();
         self.level_editor_integration.take();
-        if !parser_catalog_reused {
-            self.parser_catalog.take();
-        }
-
         Ok(SourceAnalysisEditResult {
             rescanned_lines,
             total_lines,
@@ -251,8 +257,7 @@ impl SourceAnalysis {
                 include_outline.then(|| (self.outline(), self.folds())),
             );
         }
-        let highlighted =
-            highlight_source_range_with_document(&self.source, self.document(), start, end);
+        let highlighted = highlight_source_range_with_document(self.document(), start, end);
         highlighted_source_json(
             self.source.len(),
             &highlighted,
@@ -315,29 +320,17 @@ impl SourceAnalysis {
     }
 }
 
-fn comment_only_source_edit(source: &str, start: usize, end: usize, insert: &str) -> bool {
-    if insert.contains(['\n', '\r']) || source[start..end].contains(['\n', '\r']) {
-        return false;
-    }
-    let line_start = source[..start].rfind('\n').map_or(0, |index| index + 1);
-    let line_end = source[end..]
-        .find('\n')
-        .map_or(source.len(), |offset| end + offset);
-    let old_line = &source[line_start..line_end];
-    let relative_start = start - line_start;
-    let relative_end = end - line_start;
-    let old_code = crate::source::strip_line_comment(old_line);
-    if old_code.len() == old_line.len() || relative_start < old_code.len() + 2 {
-        return false;
-    }
-    let mut new_line = old_line.to_string();
-    new_line.replace_range(relative_start..relative_end, insert);
-    crate::source::strip_line_comment(&new_line) == old_code
-}
-
 /// Builds a parser-owned source analysis for one exact source snapshot.
 pub fn analyze_source(source: &str) -> SourceAnalysis {
     SourceAnalysis::new(source)
+}
+
+/// Builds a parser-owned source analysis with dimension-specific surface syntax.
+pub fn analyze_source_for_profile(
+    source: &str,
+    profile: crate::PuzzleSourceProfile,
+) -> SourceAnalysis {
+    SourceAnalysis::new_for_profile(source, Some(profile))
 }
 
 /// Builds and emits shared editor analysis JSON for one exact source snapshot.
@@ -549,8 +542,65 @@ fn push_json_string_value(out: &mut String, value: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{SourceAnalysisEdit, analyze_source};
-    use crate::SourceTargetKind;
+    use super::{SourceAnalysisEdit, analyze_source, analyze_source_for_profile};
+    use crate::{PuzzleSourceProfile, SourceHighlightKind, SourceTargetKind};
+
+    #[test]
+    fn highlight_only_query_does_not_construct_the_lazy_outline_product() {
+        let source = "puzzle board {\nrules {\n}\n}\n";
+        let analysis = analyze_source_for_profile(source, PuzzleSourceProfile::Puzzle2d);
+
+        assert!(analysis.outline.get().is_none());
+        let _ = analysis.highlight_range_json(0, source.len(), false);
+        assert!(
+            analysis.outline.get().is_none(),
+            "viewport highlighting must not walk or cache the outline tree"
+        );
+        let first = analysis.outline_items();
+        assert!(analysis.outline.get().is_some());
+        assert_eq!(analysis.outline_items(), first);
+    }
+
+    #[test]
+    fn puzzle3_analysis_highlights_level_slice_separator_as_valid_structure() {
+        let source = r#"levels {
+legend {
+_ = Floor
+}
+level "stacked" {
+___
+-
+___
+}
+}
+"#;
+        let separator = source.find("\n-\n").expect("slice separator") + 1;
+        let highlighted =
+            analyze_source_for_profile(source, PuzzleSourceProfile::Puzzle3d).highlight();
+
+        assert!(highlighted.spans.iter().any(|span| {
+            span.start == separator
+                && span.end == separator + 1
+                && span.kind == SourceHighlightKind::LevelCell
+        }));
+        assert!(highlighted.spans.iter().all(|span| {
+            span.start != separator || span.kind != SourceHighlightKind::InvalidLevelCell
+        }));
+    }
+
+    #[test]
+    fn puzzle2d_analysis_keeps_undeclared_dash_level_cell_invalid() {
+        let source = "levels {\nlevel \"dash\" {\n-\n}\n}\n";
+        let separator = source.find('-').expect("dash cell");
+        let highlighted =
+            analyze_source_for_profile(source, PuzzleSourceProfile::Puzzle2d).highlight();
+
+        assert!(highlighted.spans.iter().any(|span| {
+            span.start == separator
+                && span.end == separator + 1
+                && span.kind == SourceHighlightKind::InvalidLevelCell
+        }));
+    }
 
     #[test]
     fn source_analysis_reuses_document_for_authoring_completion() {
@@ -627,7 +677,7 @@ mod tests {
 title = move_requires_explicit_routine
 
 puzzle default {
-layers {
+slots {
 actor = Box
 marker = Marker
 }
@@ -706,7 +756,7 @@ M
     fn level_editor_manifest_keeps_levels_when_a_sprite_is_invalid() {
         let source = r#"
 puzzle default {
-layers {
+slots {
 actor = Box
 }
 rules {
@@ -828,6 +878,25 @@ B
     }
 
     #[test]
+    fn source_analysis_preserves_unavailable_catalog_diagnostics() {
+        let source = "title = \"unfinished\npuzzle board {\n}\n";
+        let analysis = analyze_source(source);
+        let diagnostics = &analysis.snapshot().document().diagnostics;
+
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("string literal is missing closing quote")
+        }));
+        assert!(
+            crate::parse_surface_compile_document(source)
+                .unwrap_err()
+                .to_string()
+                .contains("string literal is missing closing quote")
+        );
+    }
+
+    #[test]
     fn source_analysis_owns_one_shared_surface_document() {
         let implementation = include_str!("source_analysis.rs");
         let production = implementation
@@ -835,7 +904,13 @@ B
             .next()
             .expect("production source");
 
-        assert_eq!(production.matches("OnceCell<SurfaceDocument>").count(), 1);
+        assert_eq!(
+            production.matches("OnceCell<crate::ParseSnapshot>").count(),
+            1
+        );
+        assert!(!production.contains("OnceCell<SurfaceDocument>"));
+        assert!(!production.contains("OnceCell<SurfaceSourceScan>"));
+        assert!(!production.contains("OnceCell<Option<Catalog>>"));
         assert!(!production.contains("parse_surface_completion_context_document"));
         assert!(!production.contains("parse_surface_source_target_document"));
         assert!(!production.contains("parse_surface_completion_symbols_document"));

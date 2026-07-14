@@ -145,6 +145,8 @@ fn parse_puzzle_definition(
     lines: &[String],
     line_numbers: &[usize],
     start: usize,
+    model: &model_syntax::PuzzleModelSyntax,
+    catalog_product: &Catalog,
     layer_count: &mut Option<u16>,
     empty_char: &mut Option<char>,
     named_layers: &mut HashMap<String, u16>,
@@ -163,7 +165,6 @@ fn parse_puzzle_definition(
     level_clear_local_frame: &mut Option<LocalFrame<ObjectId>>,
     last_level_clear_statements: &mut Option<Vec<StatementAst>>,
     last_level_clear_local_frame: &mut Option<LocalFrame<ObjectId>>,
-    _display_statements: &mut Option<Vec<StatementAst>>,
     render_overlays: &mut OverlayDefs,
     model_sound_triggers: &mut Vec<ModelSoundTriggerSpec>,
     model_operation_sounds: &mut Vec<ModelOperationSoundSpec>,
@@ -181,10 +182,15 @@ fn parse_puzzle_definition(
         .ok_or_else(|| parse_error(&lines[start], "puzzle header must be: puzzle <name>"))?
         .name;
     validate_qualified_identifier(name, &lines[start], "puzzle name")?;
-
-    collect_puzzle_tag_declarations(lines, start + 1, catalog)?;
-    let pending_groups = collect_puzzle_group_declarations(lines, start + 1)?;
-    let mut resolved_groups = HashSet::<String>::new();
+    if model.name != name {
+        return Err(parse_error(
+            &lines[start],
+            "canonical puzzle model does not match the lowering entry",
+        ));
+    }
+    *catalog = catalog_product.clone();
+    *layer_count = catalog.layer_count;
+    *named_layers = catalog.named_layers.clone();
 
     let mut i = start + 1;
     let mut diagnostics = Vec::new();
@@ -198,13 +204,16 @@ fn parse_puzzle_definition(
         }
 
         match tokens[0] {
+            "dimension" if tokens.as_slice() == ["dimension", "=", "2"] => {
+                i += 1;
+            }
+            "dimension" => {
+                return Err(parse_error(
+                    line,
+                    "2D lowering requires `dimension = 2` or an omitted dimension",
+                ));
+            }
             assignment_name if tokens.get(1).copied() == Some("=") => {
-                resolve_groups_after_layers(
-                    *layer_count,
-                    &pending_groups,
-                    &mut resolved_groups,
-                    catalog,
-                )?;
                 parse_assignment_directive(assignment_name, line, catalog, named_conditions)?;
                 i += 1;
             }
@@ -215,12 +224,7 @@ fn parse_puzzle_definition(
                 i = skip_tags_block(lines, i)?;
             }
             "map" => {
-                let value_sets = catalog_value_sets(catalog);
-                let (map, next_i) = parse_map_definition(lines, i, &value_sets)?;
-                if catalog.maps.insert(map.name.clone(), map).is_some() {
-                    return Err(parse_error(line, "duplicate map"));
-                }
-                i = next_i;
+                i = skip_logical_block(lines, i);
             }
             "run_rules_on_level_start" => {
                 if tokens.len() != 1 {
@@ -233,12 +237,6 @@ fn parse_puzzle_definition(
                 i += 1;
             }
             lifecycle_block if puzzle_lifecycle_event(lifecycle_block).is_some() => {
-                resolve_groups_after_layers(
-                    *layer_count,
-                    &pending_groups,
-                    &mut resolved_groups,
-                    catalog,
-                )?;
                 let local_frame = parse_program_local_frame_modifier(&tokens[1..], line, catalog)?;
                 let lifecycle = puzzle_lifecycle_event(lifecycle_block).unwrap();
                 let (event, statements, next_i) =
@@ -294,25 +292,15 @@ fn parse_puzzle_definition(
                 }
                 i = next_i;
             }
-            "layers" if tokens.len() == 1 => {
-                i = parse_layers_block(
-                    lines,
-                    i + 1,
-                    named_layers,
-                    layer_count,
-                    catalog,
-                    &pending_groups,
-                    &mut resolved_groups,
-                )?;
-                refresh_layer_tags_and_value_sets(named_layers, catalog);
+            "slots" if tokens.len() == 1 => {
+                i = skip_logical_block(lines, i);
             }
-            "layers" => {
-                *layer_count = Some(parse_u16(tokens.get(1), line, "missing layer count")?);
+            "slots" => {
                 i += 1;
             }
             "collision_layers" => {
                 diagnostics.extend(
-                    parse_error(line, "`collision_layers` was removed; use `layers { ... }`")
+                    parse_error(line, "`collision_layers` was removed; use `slots { ... }`")
                         .into_diagnostics(),
                 );
                 i = recover_after_directive_error(lines, i);
@@ -326,7 +314,7 @@ fn parse_puzzle_definition(
                 i += 1;
             }
             "marks" => {
-                i = parse_mark_block(lines, i, catalog)?;
+                i = skip_logical_block(lines, i);
             }
             "input" => {
                 let (direction, next_i) = parse_command_definition(lines, i, catalog)?;
@@ -375,12 +363,6 @@ fn parse_puzzle_definition(
                 i += 1;
             }
             "query" => {
-                resolve_groups_after_layers(
-                    *layer_count,
-                    &pending_groups,
-                    &mut resolved_groups,
-                    catalog,
-                )?;
                 let (query, core_definition) = parse_query_directive(
                     &tokens,
                     line,
@@ -401,12 +383,6 @@ fn parse_puzzle_definition(
                 i += 1;
             }
             "solver" => {
-                resolve_groups_after_layers(
-                    *layer_count,
-                    &pending_groups,
-                    &mut resolved_groups,
-                    catalog,
-                )?;
                 if solver_strategy.is_some() {
                     return Err(parse_error(line, "duplicate solver block"));
                 }
@@ -423,15 +399,7 @@ fn parse_puzzle_definition(
             }
             "groups" => {
                 if tokens.len() == 1 {
-                    let (_, next_i) =
-                        collect_authoring_entry(lines, i, AuthoringEntryOwner::PuzzleGroups)?;
-                    i = next_i;
-                    resolve_groups_after_layers(
-                        *layer_count,
-                        &pending_groups,
-                        &mut resolved_groups,
-                        catalog,
-                    )?;
+                    i = skip_logical_block(lines, i);
                 } else {
                     return Err(parse_error(line, "groups block must be: groups { ... }"));
                 }
@@ -459,12 +427,6 @@ fn parse_puzzle_definition(
                 i = recover_after_directive_error(lines, i);
             }
             "render_overlay" => {
-                resolve_groups_after_layers(
-                    *layer_count,
-                    &pending_groups,
-                    &mut resolved_groups,
-                    catalog,
-                )?;
                 let (overlays, level_objects, ch) = parse_render_overlay(
                     &tokens,
                     line,
@@ -481,12 +443,6 @@ fn parse_puzzle_definition(
                 i += 1;
             }
             "win_conditions" | "lose_conditions" => {
-                resolve_groups_after_layers(
-                    *layer_count,
-                    &pending_groups,
-                    &mut resolved_groups,
-                    catalog,
-                )?;
                 i = parse_conditions_block(lines, i, catalog, named_conditions)?;
             }
             "sprites" => {
@@ -522,12 +478,6 @@ fn parse_puzzle_definition(
                 i += 1;
             }
             "routine" => {
-                resolve_groups_after_layers(
-                    *layer_count,
-                    &pending_groups,
-                    &mut resolved_groups,
-                    catalog,
-                )?;
                 match parse_rule_definition(
                     lines,
                     Some(line_numbers),
@@ -560,12 +510,6 @@ fn parse_puzzle_definition(
                 i = recover_after_directive_error(lines, i);
             }
             "rules" => {
-                resolve_groups_after_layers(
-                    *layer_count,
-                    &pending_groups,
-                    &mut resolved_groups,
-                    catalog,
-                )?;
                 let local_frame = parse_program_local_frame_modifier(&tokens[1..], line, catalog)?;
                 if main_statements.is_some() {
                     diagnostics.extend(
@@ -609,19 +553,6 @@ fn parse_puzzle_definition(
                 );
                 i = recover_after_directive_error(lines, i);
             }
-            "on_display" => {
-                diagnostics.extend(
-                    parse_error(line, "`on_display` was removed").into_diagnostics(),
-                );
-                i = recover_after_directive_error(lines, i);
-            }
-            "display" => {
-                diagnostics.extend(parse_error(
-                    line,
-                    "`display ...` syntax was removed",
-                ).into_diagnostics());
-                i = recover_after_directive_error(lines, i);
-            }
             "levels" => {
                 pending_level_blocks.push(PendingLevelBlock::levels(i, Some(name.to_string())));
                 let (_, next_i) = collect_levels_authoring_entry(lines, i)?;
@@ -644,11 +575,6 @@ fn parse_puzzle_definition(
     if i >= lines.len() {
         return Err(parse_error(&lines[start], "puzzle missing closing brace"));
     }
-    if let Err(report) =
-        resolve_pending_group_definitions(&pending_groups, None, &mut resolved_groups, catalog)
-    {
-        diagnostics.extend(report.into_diagnostics());
-    }
     for visual_start in pending_visual_blocks {
         if let Err(report) = parse_visuals_block(lines, visual_start, catalog, visuals) {
             diagnostics.extend(report.into_diagnostics());
@@ -660,18 +586,6 @@ fn parse_puzzle_definition(
     validate_puzzle_screen(puzzle_screen, &lines[start])?;
 
     Ok((i + 1, name.to_string()))
-}
-
-fn resolve_groups_after_layers(
-    layer_count: Option<u16>,
-    pending_groups: &[PendingGroupDefinition],
-    resolved_groups: &mut HashSet<String>,
-    catalog: &mut Catalog,
-) -> Result<(), DiagnosticReport> {
-    if layer_count.is_some() {
-        resolve_pending_group_definitions(pending_groups, None, resolved_groups, catalog)?;
-    }
-    Ok(())
 }
 
 fn parse_program_local_frame_modifier(

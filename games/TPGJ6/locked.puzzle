@@ -49,7 +49,7 @@ restart -> sfx restart
 undo -> sfx undo
 }
 
-layers {
+slots {
 @Floor @Floor2
 @Lock
 room = Room Room:state

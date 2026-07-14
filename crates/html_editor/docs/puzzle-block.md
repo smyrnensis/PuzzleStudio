@@ -3,7 +3,7 @@ Use a `puzzle` block for one playable ruleset.
 
 ```puzzle
 puzzle sokoban {
-layers {
+slots {
 Goal
 Player Box Wall
 }

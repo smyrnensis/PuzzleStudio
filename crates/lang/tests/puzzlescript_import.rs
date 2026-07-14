@@ -478,7 +478,7 @@ fn group_selector_intersection_filters_impossible_same_layer_tuples() {
 title = "Group Intersection"
 
 puzzle main {
-layers {
+slots {
   floor = Background
   actor = A B
   payload = C
@@ -837,7 +837,7 @@ fn routine_once_does_not_force_inner_rewrites_to_once() {
 title = routine_once_repeat_fixture
 
 puzzle main {
-layers {
+slots {
   layer_1 = A
 }
 
@@ -882,7 +882,12 @@ fn translated_basic_vanilla_puzzlescript_uses_player_move_bridge() {
     assert!(translated.contains("layer1 = Background"));
     assert!(translated.contains("for l in layer1 layer2 layer3 {"));
     let loaded = parse_game(&translated).unwrap();
-    assert!(loaded.scenes.iter().any(|scene| !scene.key_bindings.is_empty()));
+    assert!(
+        loaded
+            .scenes
+            .iter()
+            .any(|scene| !scene.key_bindings.is_empty())
+    );
     let right = input_named(&loaded, "right");
     let player = object_named(&loaded, "Player");
 
@@ -1337,7 +1342,7 @@ fn imports_puzzlescript_next_teneten_sample_as_current_canonical_syntax() {
         .expect("TENETEN should import from PuzzleScript Next syntax");
 
     assert!(translated.contains("title = \"TENETEN\""));
-    assert!(translated.contains("layers {\nlayer1 = Background\n"));
+    assert!(translated.contains("slots {\nlayer1 = Background\n"));
     assert!(translated.contains("all TargetCrate on crate"));
     assert!(translated.contains("level \"1\""));
     assert!(translated.lines().any(|line| line == "message \"1\""));

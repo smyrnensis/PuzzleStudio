@@ -5,7 +5,7 @@ use std::{
 
 use puzzle_core::{
     InputId, LayerId, ObjectId, Patch, PatchOp, ProgramContinuation, ProgramSegmentTrace, RuleId,
-    RuleStep, State as PuzzleState, TransitionCommand, TransitionError, transition_program,
+    RuleStep, State as PuzzleState, TransitionCommand, TransitionError,
     transition_program_continuation_segment_trace, transition_program_outcome,
     transition_program_segment_trace,
 };
@@ -1743,12 +1743,6 @@ impl GameSession {
                     &outcome.fired_rules,
                 ));
             }
-        }
-        if let Some(display_program) = &game.display_level_clear_program {
-            let mut state = self.state.clone();
-            self.apply_persistent_vars(game, &mut state);
-            self.state = transition_program(&game.game, display_program, &state, InputId(0))?;
-            self.capture_persistent_vars(game, &self.state.clone());
         }
         self.sync_persistent_vars_to_scene_states(game);
         self.sync_current_level_puzzles(game);
@@ -4649,7 +4643,7 @@ mod tests {
         let source = r#"
 title = play_level_rules
 puzzle board {
-  layers {
+  slots {
     actor = Player
   }
   keys {
@@ -4709,7 +4703,7 @@ render {
 tween = true
 tween_duration = 75ms
 }
-layers {
+slots {
 actor = Player
 }
 rules {
@@ -4790,7 +4784,7 @@ puzzle board
             r#"
 title = again_runtime
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Before After
 }
 empty .
@@ -4832,7 +4826,7 @@ B
             r#"
 title = again_undo_boundary
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = A B C
 }
 empty .
@@ -4881,7 +4875,7 @@ A
             r#"
 title = again_effect
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Before After
 }
 empty .
@@ -4912,7 +4906,7 @@ A
             r#"
 title = checkpoint_runtime
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -4981,7 +4975,7 @@ P..
             r#"
 title = win_effect
 puzzle default {
-layers {
+slots {
 floor = Exit
 actor = Player
 }
@@ -5018,7 +5012,7 @@ duration = 80ms
 }
 
 puzzle default {
-layers {
+slots {
 actor = Player
 }
 rules {
@@ -5070,7 +5064,7 @@ render {
 tween = true
 tween_duration = 80ms
 }
-layers {
+slots {
 actor = Player:directions
 }
 sprites {
@@ -5151,7 +5145,7 @@ render {
 tween = true
 tween_duration = 80ms
 }
-layers {
+slots {
 actor = A B
 }
 sprites {
@@ -5199,7 +5193,7 @@ puzzle default {
 tags {
 facing = 0deg 360deg
 }
-layers {
+slots {
 actor = Player:facing
 }
 sprites {
@@ -5236,7 +5230,7 @@ P
             r#"
 title = rotation_tween_contract
 puzzle default {
-layers {
+slots {
 actor = Player:directions
 }
 rules {
@@ -5289,7 +5283,7 @@ P
             r#"
 title = rotation_tween_missing_label
 puzzle default {
-layers {
+slots {
 actor = Player
 }
 rules {
@@ -5329,7 +5323,7 @@ P
             r#"
 title = win_effect_runtime
 puzzle default {
-layers {
+slots {
 floor = Exit
 marker = Cleared
 actor = Player
@@ -5372,7 +5366,7 @@ P
             r#"
 title = lose_blocks_clear
 puzzle default {
-layers {
+slots {
 actor = Player
 }
 win_conditions {
@@ -5418,7 +5412,7 @@ level "two" {
             r#"
 title = lose_blocks_win_effect
 puzzle default {
-layers {
+slots {
 actor = Player
 }
 lose_conditions {
@@ -5460,7 +5454,7 @@ level "two" {
             r#"
 title = lose_allows_next_level
 puzzle default {
-layers {
+slots {
 actor = Player
 }
 win_conditions {
@@ -5502,7 +5496,7 @@ level "two" {
             r#"
 title = lose_blocks_scene_win_condition
 puzzle board {
-layers {
+slots {
 actor = Player
 }
 win_conditions {
@@ -5556,7 +5550,7 @@ text "clear"
             r#"
 title = conditional_win_effect_runtime
 puzzle default {
-layers {
+slots {
 floor = Exit
 marker = Cleared
 actor = Player
@@ -5600,7 +5594,7 @@ P
             r#"
 title = targeted_conditional_win_effect_runtime
 puzzle board {
-layers {
+slots {
 floor = Exit
 marker = Cleared
 actor = Player
@@ -5656,7 +5650,7 @@ step board
             r#"
 title = conditional_win_effect_scene_transition
 puzzle board {
-layers {
+slots {
 floor = Exit
 actor = Player
 }
@@ -5712,7 +5706,7 @@ text "clear"
             r#"
 title = puzzle_rule_goto_runtime
 puzzle default {
-layers {
+slots {
 actor = Player
 }
 input open
@@ -5761,7 +5755,7 @@ text "Menu"
             r#"
 title = transition_fixture
 puzzle sokoban {
-layers {
+slots {
 floor = Goal
 actor = Player Box Wall
 }
@@ -5845,7 +5839,7 @@ title = scene_local_puzzle_fixture
 puzzle sokoban {
 var portal_entered = false
 
-layers {
+slots {
 trigger = Portal
 solid = Player Wall
 }
@@ -5927,7 +5921,7 @@ step spec_board
 title = scene_var_condition
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_1 = Player
 }
 empty .
@@ -5984,7 +5978,7 @@ title = scene_start_fixture
 puzzle default {
 persistent var moves = 0
 
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -6039,7 +6033,7 @@ sounds {
 sfx push seed=push01 type=jump
 }
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -6086,7 +6080,7 @@ sounds {
 undo -> sfx undo_tick
 restart -> sfx restart_tick
 }
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -6143,7 +6137,7 @@ puzzle default {
 sounds {
 restart -> sfx restart_tick
 }
-layers {
+slots {
 actor = Player
 marker = Started
 }
@@ -6286,7 +6280,7 @@ sounds {
 music locked_room seed=room01
 }
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -6328,7 +6322,7 @@ sounds {
 sfx push seed=push01 type=jump
 }
 puzzle default {
-layers {
+slots {
 actor = Player Box
 }
 sounds {
@@ -6373,7 +6367,7 @@ sounds {
 sfx bump { seed = bump01; type = hit }
 }
 puzzle default {
-layers {
+slots {
 actor = A
 }
 sounds {
@@ -6411,7 +6405,7 @@ sounds {
 sfx push seed=push01 type=jump
 }
 puzzle default {
-layers {
+slots {
 actor = Box
 }
 rules {
@@ -6452,7 +6446,7 @@ sounds {
 sfx push seed=push01 type=jump
 }
 puzzle default {
-layers {
+slots {
 actor = Box
 }
 rules {
@@ -6498,7 +6492,7 @@ sounds {
 sfx tick seed=tick01 type=jump
 }
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -6538,7 +6532,7 @@ P
 title = rule_wait_fixture
 default_wait_time = 300ms
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -6586,7 +6580,7 @@ duration = 80ms
 }
 }
 puzzle default {
-layers {
+slots {
 actor = Player
 marker = Marker
 }
@@ -6656,7 +6650,7 @@ duration = 80ms
 }
 }
 puzzle default {
-layers {
+slots {
 actor = Player
 marker = Marker
 }
@@ -6728,7 +6722,7 @@ duration = 80ms
 }
 }
 puzzle default {
-layers {
+slots {
 actor = Player
 marker = Marker
 }
@@ -6790,7 +6784,7 @@ duration = 80ms
 }
 }
 puzzle default {
-layers {
+slots {
 actor = Player Box
 marker = Marker
 }
@@ -6886,7 +6880,7 @@ duration = 80ms
 }
 }
 puzzle default {
-layers {
+slots {
 actor = Player Box
 marker = Marker
 }
@@ -6939,7 +6933,7 @@ PB.
             r#"
 title = rewrite_suffix_wait_duration_fixture
 puzzle default {
-layers {
+slots {
 actor = A
 box_layer = B
 marker = Marker
@@ -6993,7 +6987,7 @@ AA
             r#"
 title = wait_animation_noop_fixture
 puzzle default {
-layers {
+slots {
 actor = Player
 marker = Marker
 }
@@ -7033,7 +7027,7 @@ title = scene_message_fixture
 default_wait_time = 350ms
 var hint = "Push the box"
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -7083,7 +7077,7 @@ message hint
 title = level_name_condition_message
 var hint = "First level only"
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -7132,7 +7126,7 @@ title = puzzle_message_fixture
 default_wait_time = 400ms
 var hint = "Found"
 puzzle default {
-layers {
+slots {
 actor = Player
 floor = Goal
 }
@@ -7181,7 +7175,7 @@ level "start" {
 title = message_rule_segment_wait
 default_wait_time = 450ms
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = A B C
 }
 empty .
@@ -7238,7 +7232,7 @@ sounds {
 sfx fall seed=fall type=hit
 }
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = A B C
 }
 empty .
@@ -7305,7 +7299,7 @@ A
             r#"
 title = wait_anchor_segments
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = A B
 }
 empty .
@@ -7375,7 +7369,7 @@ A
             r#"
 title = overlap_render
 puzzle default {
-layers {
+slots {
 floor = Floor
 target = Goal
 solid = Box
@@ -7445,7 +7439,7 @@ B = Box
 title = editor_state_start
 
 puzzle board {
-layers {
+slots {
 actor = Player
 }
 empty .
@@ -7514,7 +7508,7 @@ title = progress_fixture
 puzzle default {
 persistent var moves = 0
 
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -7636,7 +7630,7 @@ P
 title = dotted_level
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -7681,7 +7675,7 @@ step board
 title = quoted_level
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -7725,7 +7719,7 @@ step board
 title = omitted_level_collection
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -7766,7 +7760,7 @@ puzzle board = default
 title = named_level_collection
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -7814,7 +7808,7 @@ title = progress_effects
 puzzle default {
 persistent var score = 5
 
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -7879,7 +7873,7 @@ var num = 0
 var num_run = 7
 
 puzzle default {
-layers {
+slots {
 actor = Player
 }
 empty .
@@ -7944,7 +7938,7 @@ title = explicit_target_error
 puzzle board {
 input right
 
-layers {
+slots {
 actor = Player
 }
 empty .
@@ -8003,7 +7997,7 @@ default_wait_time = 100ms
 puzzle board {
 input right
 
-layers {
+slots {
 actor = Player
 }
 empty .
@@ -8069,7 +8063,7 @@ title = signal_input_handler
 puzzle board {
 input right
 
-layers {
+slots {
 actor = Player Marker
 }
 empty .
@@ -8137,7 +8131,7 @@ step board
 title = next_level_target_scene
 
 puzzle board {
-layers {
+slots {
 floor = Goal
 actor = Box Player
 }
@@ -8210,7 +8204,7 @@ title = persistent_history
 puzzle default {
 persistent var cleared = false
 
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -8269,7 +8263,7 @@ step board
 title = puzzle_load_reset
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_1 = Player
 }
 empty .
@@ -8377,7 +8371,7 @@ step board
 title = cancel_screen_transition
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_1 = A
 }
 empty .
@@ -8454,7 +8448,7 @@ sounds {
 sfx step seed=step type=jump
 }
 puzzle default {
-layers {
+slots {
 actor = Player
 }
 empty .
@@ -8514,7 +8508,7 @@ level_menu
             r#"
 title = scene_input_focus
 puzzle default {
-layers {
+slots {
 actor = Player
 }
 empty .
@@ -8675,7 +8669,7 @@ title = sequence_saved_puzzle
 puzzle default {
 var marks = 0
 
-layers {
+slots {
 actor = Player
 }
 
@@ -8801,7 +8795,7 @@ goto hub
             r#"
 title = level_clear_hook
 puzzle sokoban {
-layers {
+slots {
 floor = Goal
 actor = Player Box Wall
 marker = ClearMark
@@ -8873,7 +8867,7 @@ text "done"
             r#"
 title = wait_clear_snapshot
 puzzle sokoban {
-layers {
+slots {
 floor = Goal
 actor = Player Box Wall
 }
@@ -8950,7 +8944,7 @@ step board
             r#"
 title = wait_statement_segments
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = A B C
 }
 empty .
@@ -8999,7 +8993,7 @@ A
 title = level_select_payload
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -9050,7 +9044,7 @@ level_menu
 title = level_menu_position_restart
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -9115,7 +9109,7 @@ level_menu
             r#"
 title = scene_level_commands
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -9181,7 +9175,7 @@ rules {
 title = level_menu_commands
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -9233,7 +9227,7 @@ level_menu
 title = scene_level_resources
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -9307,7 +9301,7 @@ puzzle board = default
 title = level_menu_matrix
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -9375,7 +9369,7 @@ wrap = true
 title = level_menu_default_select
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -9426,7 +9420,7 @@ level_menu
 title = level_menu_buttons
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -9483,7 +9477,7 @@ button "Title" -> goto title
         let source = r#"
 title = screen_history
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -9548,7 +9542,7 @@ text "C"
         let source = r#"
 title = persistent_scene_var
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -9607,7 +9601,7 @@ text tab
         let source = r#"
 title = scene_param_rejection
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -9658,7 +9652,7 @@ text tab
         let source = r#"
 title = scene_state_words
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -9732,7 +9726,7 @@ text "Menu"
         let source = r#"
 title = level_ref_params
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -9795,7 +9789,7 @@ text selected.solved
         let source = r#"
 title = screen_focus
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -9851,7 +9845,7 @@ text "Levels"
         let source = r#"
 title = scene_state
 puzzle default {
-layers {
+slots {
 actor = Player
 }
 
@@ -9935,7 +9929,7 @@ Escape -> goto playing
 title = rule_next_level
 
 puzzle board {
-layers {
+slots {
 floor = Goal
 actor = Box Player
 }
@@ -9993,7 +9987,7 @@ step board
 title = condition_next_level
 
 puzzle board {
-layers {
+slots {
 floor = Goal
 actor = Box Player
 }
@@ -10056,7 +10050,7 @@ step board
 title = runtime_level_start
 
 puzzle board {
-layers {
+slots {
 __legacy_layer_0 = Player
 __legacy_layer_1 = Started
 }
@@ -10122,7 +10116,7 @@ step board
 title = level_message_sugar
 
 puzzle board {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -10197,7 +10191,7 @@ button "Play" -> goto playing
 }
 
 puzzle board {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -10257,7 +10251,7 @@ title = rule_next_level_turn_completion
 puzzle board {
 persistent var clear_seen = false
 
-layers {
+slots {
 floor = Goal
 actor = Box Player
 }

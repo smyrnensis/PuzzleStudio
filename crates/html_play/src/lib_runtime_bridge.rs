@@ -272,10 +272,7 @@ fn selected_rule_program<'a>(
             })
         }
         "level_start" => Ok(loaded.level_start_program.as_deref().unwrap_or(&[])),
-        "display_level_start" => Ok(loaded.display_level_start_program.as_deref().unwrap_or(&[])),
         "level_clear" => Ok(loaded.level_clear_program.as_deref().unwrap_or(&[])),
-        "display_level_clear" => Ok(loaded.display_level_clear_program.as_deref().unwrap_or(&[])),
-        "display" => Ok(loaded.display_program.as_deref().unwrap_or(&[])),
         "level_start_local" => {
             let index = usize::try_from(level_index).map_err(|_| {
                 AppError::Config("level_start_local requires a level index".to_string())
@@ -1856,7 +1853,7 @@ fn materialize_level_start_state(
     Ok(state)
 }
 
-fn state3_from_json(game: &Game3, state_json: &str) -> Result<State3, AppError> {
+fn state3_from_json(game: &CompiledGame3, state_json: &str) -> Result<State3, AppError> {
     let width = json_u64_field(state_json, "width")
         .ok_or_else(|| AppError::Config("3D solver state missing width".to_string()))?
         .try_into()

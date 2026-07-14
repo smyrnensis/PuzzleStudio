@@ -10,6 +10,7 @@ pub type MarkPattern = puzzle_kernel::RuleMarkPattern<ObjectId, MarkId>;
 pub type ObjectSetMatcher = puzzle_kernel::ObjectSetMatcher<ObjectId, LayerId>;
 pub type ObjectSetMarkPattern = puzzle_kernel::ObjectSetMarkPattern<MarkId>;
 pub type PatternComponent = puzzle_kernel::RulePatternComponent<MatchCell>;
+pub type MatchCell = puzzle_kernel::RuleMatchCell<Offset, ObjectId, LayerId, MarkId>;
 pub type Rule = puzzle_kernel::RuleModel<RuleId, Guard, Pattern, WriteOp, Effect>;
 pub type RuleStep = puzzle_kernel::ProgramStep<Rule, RuleCondition, LocalFrame<ObjectId>>;
 pub type WriteOp = puzzle_kernel::RuleWriteOp<Offset, ObjectId, MarkId>;
@@ -222,19 +223,6 @@ pub type Pattern2 = Pattern;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Pattern {
     pub components: Vec<PatternComponent>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct MatchCell {
-    pub offset: Offset,
-    pub require_null: bool,
-    pub require_objects: Vec<ObjectId>,
-    pub require_object_sets: Vec<ObjectSetMatcher>,
-    pub forbid_objects: Vec<ObjectId>,
-    pub require_mark: Vec<MarkPattern>,
-    pub require_object_set_mark: Vec<ObjectSetMarkPattern>,
-    pub forbid_mark: Vec<MarkPattern>,
-    pub forbid_object_set_mark: Vec<ObjectSetMarkPattern>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

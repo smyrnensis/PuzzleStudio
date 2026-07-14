@@ -25,10 +25,9 @@ author = "Puzzle Author"
 homepage = "https://example.com"
 
 puzzle sokoban {
-layers {
+slots {
 floor = Goal Button
 actor = Player Box Wall
-@overlay = @Cursor @Hint
 }
 
 groups {
@@ -123,9 +122,9 @@ tag value list の中の `<start>...<end>` は inclusive numeric range として
 
 `directions` は組み込み tag set で、常に `up down left right` を表す。`horizontal` は `left right`、`vertical` は `up down` を表す。これらは object schema、`map`、visual `shape` / `palette`、`for` の展開元で同じように使える。再定義はできない。
 
-`layers` は object 定義から作られる組み込み tag set。名前付き layer はその名前、匿名 layer は内部名で展開される。各 layer 名は同じ layer に属する object group としても登録される。
+`slots` は object 定義から作られる組み込み tag set。名前付き layer はその名前、匿名 layer は内部名で展開される。各 layer 名は同じ layer に属する object group としても登録される。
 
-tag set を使った object schema は、`layers` の右辺で concrete object に展開される。たとえば `Box:color` は `Box:red` / `Box:blue` のような object identity を作る。
+tag set を使った object schema は、`slots` の右辺で concrete object に展開される。たとえば `Box:color` は `Box:red` / `Box:blue` のような object identity を作る。
 
 tag set の値が object family 名を表す場合、tag set 名に suffix を付けた selector は各 object-name atom に同じ suffix を機械的に付けて解決する。
 
@@ -134,7 +133,7 @@ tags {
 kind = a b
 pair = A B
 }
-layers {
+slots {
 actor = A:kind B:kind C:kind
 }
 
@@ -144,7 +143,7 @@ win_conditions = count(pair:a) == 2
 この `pair:a` は `A:a B:a` と同じ selector 集合として扱われる。`pair:a` の展開先に存在しない selector が含まれる場合は error になる。
 
 ```txt
-layers {
+slots {
 actor = player:color box:color
 marker = marker:directions
 }
@@ -174,7 +173,7 @@ tags {
 num = 1 2 3
 }
 
-layers {
+slots {
 actor = Box:num
 }
 
@@ -336,7 +335,7 @@ once [ box:color ] -> [ box:revert(color) ]
 
 ```txt
 for d in directions {
-@Edge:rotate(d) {
+Edge:rotate(d) {
 edge:d
 }
 }
@@ -356,58 +355,73 @@ once [ box:red ] -> [ box:blue ]
 once [ box:blue ] -> [ box:red ]
 ```
 
-### `layers`
+### `slots`
 
 ```txt
-layers {
+slots {
 floor = Goal Button
 actor = Player Box Wall
-@overlay = @Cursor @Hint
 }
 
 groups {
 solid = actor
-@hints = @overlay
 }
 ```
 
-`layers` は位置を持つ main object、display object、layer assignment をまとめる canonical authoring block。object / schema を生成できる owner は `layers` だけで、独立した object 宣言 block はない。
+`slots` は位置を持つ object と state slot assignment をまとめる canonical authoring block。object / schema を生成できる owner は `slots` だけで、独立した object 宣言 block はない。
 
-`sprites` は object の見た目を補完する block であり、位置を持つ object と layer order の所有者は `layers`。
+`sprites` は object の見た目と描画順を所有する。state slot の宣言順は、`sprites { order { ... } }` を省略した場合の描画順生成にだけ使われる。
 
 `<name> = <object-or-selector...>` は「同じ cell に同居できない object 群」を表す。たとえば `actor = Player Box Wall` と書くと、`Player` / `Box` / `Wall` は同じ cell に同時に 1 つしか入れない。
 
-layer 名はそのまま tag selector として使える。たとえば `floor = Goal Button` と書いた後は、rule や legend や condition で `floor` が `Goal Button` の selector として解決される。
+slot 名はそのまま tag selector として使える。たとえば `floor = Goal Button` と書いた後は、rule や legend や condition で `floor` が `Goal Button` の selector として解決される。
 
-右辺は、未知の名前なら新しい object / schema として作られ、既存の object / schema / group / layer tag ならその selector をその layer に割り当てる。
+右辺は、未知の名前なら新しい object / schema として作られ、既存の object / schema / group / slot tag ならその selector をその slot に割り当てる。
 
 schema family の base 名と同じ単体 object は定義できる。たとえば `Room Room:state` と書いた場合、`Room` は単体 object、`Room:open` / `Room:close` は family variant を指す。`Room` は family 全体の省略形にはならない。family 全体を選ぶときは `Room:*`、特定 variant を選ぶときは `Room:open` のように明示する。`Room` という単体 object が定義されていない場合、裸の `Room` selector は error。
 
-puzzle 直下の declaration/use block は同じ puzzle scope の catalog に対して解決される。したがって `sounds`、`rules`、`win_conditions`、`legend` などの object selector は、同じ puzzle 内の `layers` が作る最終 catalog を見る。block のテキスト順は、statement list や layout child のように順序そのものを表す構文でだけ意味を持つ。
-
-`@Name` は display object を表す。display object は main object と同じ layer order 上に並ぶが、main object と同じ storage layer には入れない。`display @Name` も互換・明示形として読める。`@layer_name = ...` と `@group_name = ...` は display-only の alias であり、右辺に main object を含められない。`@` なしの layer / group は display object を含められない。
+puzzle 直下の declaration/use block は同じ puzzle scope の catalog に対して解決される。したがって `sounds`、`rules`、`win_conditions`、`legend` などの object selector は、同じ puzzle 内の `slots` が作る最終 catalog を見る。block のテキスト順は、statement list や layout child のように順序そのものを表す構文でだけ意味を持つ。
 
 ```txt
 color = red blue
 
-layers {
+slots {
 floor = Goal Button
 actor = Player Box Wall
 paint = Blob:color
-@overlay = @Cursor:color
 }
 
 groups {
 solid = actor
-@cursor_marks = @overlay
 }
 ```
 
-level 文字と表示文字は `levels { legend { ... } }` に書く。`layers` は object identity と storage layer を作るだけで、level 文字は作らない。
+level 文字と表示文字は `levels { legend { ... } }` に書く。`slots` は object identity と storage slot を作るだけで、level 文字や描画順は作らない。
 
-semantic selector は layer declaration とは別責務なので、canonical では group row を `groups { ... }` の中に集める。
+semantic selector は slot declaration とは別責務なので、canonical では group row を `groups { ... }` の中に集める。
 
-同じセルの同じ layer には最大 1 object しか入れない。
+同じセルの同じ slot には最大 1 object しか入れない。
+
+### `sprites.order`
+
+```txt
+sprites {
+order {
+priority = down right
+Floor
+Player + Goal
+Box
+}
+}
+```
+
+order の各通常行は背面から前面への1つの描画 priority。slot 名、object 名、group を参照できる。通常行に複数 object が展開される場合、それらは同じ state slot に属していなければならない。同じ slot の object を複数行へ分け、その間に別 slot の object を挟める。
+
+`A + B` は unordered merge の authoring sugar で、canonical universal tree は `merge { A; B }`。merge 内部には順序がなく、異なる slot の object や group を集められる。同じ pixel / voxel に色が存在するときは、透明な sample を除く各 RGBA channel の単純算術平均で合成する。operand の記述順は結果に影響しない。
+
+`priority = <direction...>` は、異なる cell に属するはみ出し sprite の座標比較順を定義する。左から辞書式に比較し、最初に差が出た `<direction>` 側の cell を前に描画する。2D は2軸を1回ずつ、3D は3軸を1回ずつ必須とする。省略時は2Dが `down right`、3Dが `down right front`。
+
+order block 自体を省略した場合、object priority は slot 宣言順から生成される。order を明示して object 行を1つでも書いた場合は全 object をちょうど1回含めなければならず、未記載 object の暗黙追記はしない。
 
 ### `groups`
 
@@ -446,7 +460,7 @@ armed = bool
 }
 ```
 
-`marks` は rule chain の中だけで使う transition-local な一時 fact を宣言する block。mark は `State` に保存されず、level / undo / solver key / renderer には残らない。通常 transition、`level_start`、display lifecycle の各実行が終わるとすべて消える。
+`marks` は rule chain の中だけで使う transition-local な一時 fact を宣言する block。mark は `State` に保存されず、level / undo / solver key / renderer には残らない。通常 transition と lifecycle program の各実行が終わるとすべて消える。
 
 mark は宣言時に cell 用 / object 用を分けない。書いた位置が anchor を決める。
 
@@ -779,7 +793,7 @@ P = Player
 }
 ```
 
-見出し名は英数字、空白、`_`、`-` からなる名前を lowercase snake_case に正規化し、既存 block 名に対応する場合だけ section として扱う。たとえば `RULES` は `rules`、`ON DISPLAY` は `on_display`、`LAYERS` は `layers`、`LEGENDS` は `legend` になる。`TRANSITIONS` は canonical section ではない。未知の見出しは section sugar ではなく通常行として扱われる。
+見出し名は英数字、空白、`_`、`-` からなる名前を lowercase snake_case に正規化し、既存 block 名に対応する場合だけ section として扱う。たとえば `RULES` は `rules`、`ON LEVEL START` は `on_level_start`、`LAYERS` は `slots`、`LEGENDS` は `legend` になる。`TRANSITIONS` は canonical section ではない。未知の見出しは section sugar ではなく通常行として扱われる。
 
 ### Imports
 
@@ -791,7 +805,7 @@ P = Player
 
 ```txt
 puzzle sokoban {
-layers { ... }
+slots { ... }
 rules { ... }
 import "levels.puzzle"
 }
@@ -839,8 +853,6 @@ move
 ```
 
 `routine` は名前付き statement list。定義しただけでは実行されない。puzzle `rules` や他の routine から名前を書いて呼び出す。旧 `rule` declaration は読まない。
-
-`routine @name` は display-only assertion 付き routine を定義する。中に normal rule や normal rule with display effect が混ざるとエラーになる。`routine display <name>` は同じ意味の明示形。旧 `rule @name` / `rule display <name>` は読まない。
 
 routine block の application はデフォルトで `once`。
 
@@ -1065,7 +1077,7 @@ input horizontal [ Cursor | ] -> [ | Cursor ]
 
 ### Direction Expansion Trigger
 
-`for <binding> in <source...>` は、有限で順序を持つ source の各 item へ statement list を展開する。source には `directions` / `horizontal` / `vertical` / `layers`、author-defined tag set、numeric range、または inline value list を使える。
+`for <binding> in <source...>` は、有限で順序を持つ source の各 item へ statement list を展開する。source には `directions` / `horizontal` / `vertical` / `slots`、author-defined tag set、numeric range、または inline value list を使える。
 
 よく使う軸:
 
@@ -1073,7 +1085,7 @@ input horizontal [ Cursor | ] -> [ | Cursor ]
 for d in directions
 for h in horizontal
 for v in vertical
-for l in layers
+for s in slots
 for i in 1...3
 for i in 1...L
 for object in Box Wall Player
@@ -1096,9 +1108,9 @@ d [ B | ] -> [ | B ]
 }
 ```
 
-`layers` は layer group 名へ展開されるため、`no l` は展開後のその layer group 全体の不存在条件になる。他の layer の object は禁止しない。
+`slots` は layer group 名へ展開されるため、`no s` は展開後のその layer group 全体の不存在条件になる。他の layer の object は禁止しない。
 
-標準 rule `move` はユーザーが同名 rule を定義していない場合に用意される。対象は display object を除いた gameplay object の layer。概念的には次の rule と同じ。
+標準 rule `move` はユーザーが同名 rule を定義していない場合に用意される。概念的には次の rule と同じ。
 
 ```txt
 rule move repeat {
@@ -1219,7 +1231,6 @@ rules {
 input [ Player ] -> [ > Player ]
 move
 wait animation
-@refresh_board
 }
 ```
 
@@ -1369,96 +1380,26 @@ move
 
 ## Visual Syntax
 
-### Display Objects
+### Layer Order
 
-```txt
-layers {
-actor = Player Box
-@overlay = @Shadow @Glow
-@edge = @Edge:directions
-}
-```
+描画順は layer の宣言順で決まる。
 
-`@Name` は表示・読みやすさ・派生描画用の display object を定義または参照する。display object は solver から除外される。
+`slots` の `each <selector...>` 行は、selector の concrete alternatives をそれぞれ別の通常 layer に展開する。これは collision しない特殊 layer ではない。作られた各 layer は通常どおり collision layer であり、宣言順の表示順も持つ。
 
-main object と display object は同じ layer order に並ぶ。描画順は layer の宣言順で決まる。ただし、同じ storage layer に main object と display object を混ぜることはできない。
-
-```txt
-layers {
-floor = Goal
-@floor_overlay = @Shadow @Glow
-actor = Player Box Wall
-@edge = @Edge:directions
-}
-```
-
-`layers` の `each <selector...>` 行は、selector の concrete alternatives をそれぞれ別の通常 layer に展開する。これは collision しない特殊 layer ではない。作られた各 layer は通常どおり collision layer であり、宣言順の表示順も持つ。
-
-`layers` 内でも `for <binding> in <tag_set> { ... }` を使える。これは layer row を parse する前に token 展開される sugar なので、selector 側だけでなく layer 名側にも効く。
+`slots` 内でも `for <binding> in <tag_set> { ... }` を使える。これは layer row を parse する前に token 展開される sugar なので、selector 側だけでなく layer 名側にも効く。
 
 ```txt
 tags {
 kind = red blue
 }
-layers {
+slots {
 for k in kind {
 k = A:k B:k
 }
 }
 ```
 
-これは `red = A:red B:red` / `blue = A:blue B:blue` と同じ。`A:k` のように concrete value へ展開する場合、schema は同じ `layers` block 内の展開後の右辺から生成される。
-
-display object は通常プレイでは state に存在できるが、solver の state key と solver transition からは除外される。ASCII 表示でも既定では無視される。
-
-display object は `layers { @overlay = @Name }` のように layer assignment と同時に宣言する。
-
-### `display`
-
-```txt
-routine @refresh_board once {
-repeat [ @Light ] -> []
-[ Player no @Light ] -> [ Player @Light ]
-}
-
-rules {
-move
-@refresh_board
-display [ Box no @Light ] -> [ Box @Light ]
-display {
-[ Goal no @Light ] -> [ Goal @Light ]
-}
-}
-```
-
-`@routine` は display-only assertion 付き routine をその場で実行する statement。`display @routine` / `display <routine>` は互換・明示形として読める。`display [ ... ] -> ...` は宣言なしの一行 display rewrite。`display { ... }` は宣言なしの複数行 display block。いずれも `rules`、`on_level_start`、`on_level_clear` などの statement block の中に置き、置いた位置で実行される。
-
-display statement は main object を pattern / condition で読める。ただし write できる object は `@Name` display object だけ。通常入力の transition 中に実行される display statement は、同じ transition context の `input` orientation や `if input == ...` を使える。`cancel` や var update などの effect は使えない。
-
-rule の role は routine 単位ではなく rewrite 単位で決まる。match に display object があり normal state を変えない rule、または match に display object がなく display object だけを書く rule は display rule。match に display object がある rule が normal state を変えようとするとエラー。match に display object がなく、normal state と display object を同時に変える rule は normal rule with display effect になる。
-
-puzzle `rules`、`on_level_start`、`on_level_clear`、goal / condition などの gameplay 側は display object を読めない。display object に依存する派生表示は display rule 側に閉じる。normal routine から display routine を bare call してもよい。
-
-solver は display statement 由来の rule を実行せず、display object を state key からも外す。
-
-`on_level_start` / `on_level_clear` の中でも display statement は使える。ただし lifecycle block は通常入力ではないため、その中の display statement は `input` orientation や `if input == ...` を使えない。
-
-### `on_display`
-
-```txt
-routine @paint once {
-repeat [ @Glow ] -> []
-[ Goal no @Glow ] -> [ Goal @Glow ]
-}
-
-on_display {
-@paint
-}
-```
-
-`on_display` は表示 snapshot を作る直前に走る display-only hook。renderer、editor、preview は raw gameplay state を表示する前にこの hook を適用できる。`rules` の途中に置く `display paint` は call-site のアニメーション境界として残し、`on_display` は editor の直接編集、restart、undo、level load など turn を通らない状態にも同じ visual derivation をかけるために使う。
-
-`on_display` の中には display statement だけを書ける。`on_display` は通常入力ではないため、`input` orientation や `if input == ...` は使えない。
+これは `red = A:red B:red` / `blue = A:blue B:blue` と同じ。`A:k` のように concrete value へ展開する場合、schema は同じ `slots` block 内の展開後の右辺から生成される。
 
 ### `sprites`
 
@@ -1542,7 +1483,7 @@ sprite entry は、selector block の中に色行、空間操作、ASCII pattern
 
 shape lookup は value expression を読める。たとえば `edge:rotate(directions)` は、selector で bind された `directions` 値を `rotate` map で置換してから shape table を引く。再利用したい pattern は `shape` と object block 内の色行 + `shape <ref>` で分けて書く。
 
-2D translateはvec2、3D translateはvec3を要求する。2D rotate は `rotate [world|local] <angle> [from <angle>]` を使う。`from` は主 angle が必須なので、旧 `rotate from <angle>` は受理しない。3D rotateは`rotate [world|local] <angle> around <direction-or-vec3>`でaxisを必須にし、`from` は受理しない。操作はsource順のaffine列で、world操作は左合成、local操作は右合成する。旧`offset`、`rotate using`、包括的な`transform` nodeは受理しない。
+2D translateはvec2、3D translateはvec3を要求する。2D rotateは`rotate [world|local] <angle> [from <angle>]`、3D rotateは`rotate [world|local] <angle> [from <angle>] [around <direction-or-vec3>]`を使う。`from`は主angleから基準angleを引くsugarなので、旧`rotate from <angle>`は受理しない。3Dでaxisを省略した2D形は+Z（`up`）axisとして扱う。4方向のvariant spriteは`Arrow:horizontal { rotate horizontal from front }`と書けば、frontを0度としてright/front/left/backが-90/0/90/-180度へ展開される。操作はsource順のaffine列で、world操作は左合成、local操作は右合成する。旧`offset`、`rotate using`、包括的な`transform` nodeは受理しない。
 
 `sprites` はsprite alias、palette、shape、空間操作を定義する。`shapes`はvisual dataだけを所有し、rotation派生を所有しない。同じnamed shapeを異なる姿勢で使う場合は各sprite参照側へ`rotate`を書く。
 
@@ -1567,7 +1508,7 @@ legend {
 
 すべての `levels` で `.` は empty 文字として予約されているので `legend` に書かなくてよい。`. = empty` は同じ契約を明示する表記として受け入れる。`_ = empty` のように別文字を empty にする書き方や、`. = Floor` のように `.` を object に割り当てる書き方は使わない。floor などの実体 object は `, = Floor` のように別の文字へ割り当てる。
 
-右辺は既存の object / schema / group / layer tag selector に解決される必要がある。`legend` は新しい object を定義しない。未知の名前は parse error。
+右辺は既存の object / schema / group / slot tag selector に解決される必要がある。`legend` は新しい object を定義しない。未知の名前は parse error。
 
 複数 object を右辺に書くと overlay 表示になる。
 
@@ -1730,13 +1671,13 @@ undo -> sfx back
 restart -> sfx reset
 }
 
-layers {
+slots {
 actor = Player Box
 }
 }
 ```
 
-`move <selector> -> sfx <name>` の `<selector>` は通常の object selector / group / schema selector。`sounds` が `layers` より前にあっても、同じ puzzle scope の最終 catalog に対して解決する。これは runtime event watcher ではなく lowering sugar で、rewrite alternative が対象 object の lower-level `Move` write を持つときだけ、その rule に `sfx` emission を付ける。remove+add として書かれた変化は move ではないので対象外。canonical syntax は blocked move を推測する `cantmove` sound trigger を持たない。
+`move <selector> -> sfx <name>` の `<selector>` は通常の object selector / group / schema selector。`sounds` が `slots` より前にあっても、同じ puzzle scope の最終 catalog に対して解決する。これは runtime event watcher ではなく lowering sugar で、rewrite alternative が対象 object の lower-level `Move` write を持つときだけ、その rule に `sfx` emission を付ける。remove+add として書かれた変化は move ではないので対象外。canonical syntax は blocked move を推測する `cantmove` sound trigger を持たない。
 
 `undo -> sfx <name>` / `restart -> sfx <name>` は、同じ model の session 操作が成功したときに one-shot SFX を鳴らす。これは rule input ではなく play/session 操作の presentation event なので、undo stack が空の undo では鳴らず、active puzzle がない restart でも鳴らない。top-level `sounds` は音源定義だけを持つため、これらの操作割り当ては puzzle 内の `sounds` に書く。
 
@@ -1900,7 +1841,7 @@ frame inventory space fill 1 aspect 1 1
 
 `align` は container の cross axis、`distribute` は main axis にだけ作用する。文字列自体の揃えは text role/theme の責任であり、container alignment と混同しない。
 
-`scene puzzle [name]` は puzzle state を主モデルに持つ playable scene を定義する。`name` を省略すると `playing` になる。中の `layers` は board/object layer、`layout` は画面配置を意味する。scene-local な puzzle slot を明示しない場合は、`<name>` state slot が暗黙に `puzzle <name>` として用意される。`board` は予約 slot 名ではない。明示した slot がある場合はそれが primary puzzle slot になり、`update <slot>` で現在 input をその puzzle transition に渡せる。
+`scene puzzle [name]` は puzzle state を主モデルに持つ playable scene を定義する。`name` を省略すると `playing` になる。中の `slots` は board/object layer、`layout` は画面配置を意味する。scene-local な puzzle slot を明示しない場合は、`<name>` state slot が暗黙に `puzzle <name>` として用意される。`board` は予約 slot 名ではない。明示した slot がある場合はそれが primary puzzle slot になり、`update <slot>` で現在 input をその puzzle transition に渡せる。
 
 ```txt
 scene puzzle {
@@ -1908,7 +1849,7 @@ layout {
 puzzle playing
 }
 
-layers {
+slots {
 actor = Player Box Wall
 floor = Goal
 }

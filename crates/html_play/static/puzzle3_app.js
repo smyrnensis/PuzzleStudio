@@ -61,6 +61,7 @@ const fallbackSnapshot = {
   camera: {
     yawDegrees: 15,
     pitchDegrees: 55,
+    rollDegrees: 0,
     zoom: 1,
   },
   view: {
@@ -1141,6 +1142,7 @@ function projectionFitKey(size, camera) {
     Math.max(1, Number(size?.height) || 1),
     Number(camera?.yawDegrees ?? 0),
     Number(camera?.pitchDegrees ?? 35),
+    Number(camera?.rollDegrees ?? 0),
   ].join(":");
 }
 
@@ -1214,8 +1216,7 @@ function normalizeModelSize(size) {
 }
 
 function projectScenePointUnit(position, size, camera) {
-  const yaw = degreesToRadians(camera.yawDegrees ?? 0);
-  const pitch = degreesToRadians(camera.pitchDegrees ?? 35);
+  const frame = Puzzle3VisualCore.cameraModelFrame(camera);
   const center = {
     x: (size.width - 1) / 2,
     y: (size.depth - 1) / 2,
@@ -1224,11 +1225,9 @@ function projectScenePointUnit(position, size, camera) {
   const x = position.x - center.x;
   const y = position.y - center.y;
   const z = position.z - center.z;
-  const yawX = x * Math.cos(yaw) - y * Math.sin(yaw);
-  const yawY = x * Math.sin(yaw) + y * Math.cos(yaw);
   return {
-    x: yawX,
-    y: -yawY * Math.sin(pitch) - z * Math.cos(pitch),
+    x: x * frame.right.x + y * frame.right.y + z * frame.right.z,
+    y: x * frame.up.x + y * frame.up.y + z * frame.up.z,
   };
 }
 
@@ -1236,6 +1235,7 @@ function cloneCamera(camera) {
   const next = {
     yawDegrees: Number(camera?.yawDegrees ?? fallbackSnapshot.camera.yawDegrees),
     pitchDegrees: Number(camera?.pitchDegrees ?? fallbackSnapshot.camera.pitchDegrees),
+    rollDegrees: Number(camera?.rollDegrees ?? fallbackSnapshot.camera.rollDegrees),
     zoom: Number(camera?.zoom ?? fallbackSnapshot.camera.zoom),
   };
   if (String(camera?.projection || "").toLowerCase() === "orthographic") {
@@ -2676,7 +2676,20 @@ function cellVisibleVoxelsForRender(cell, renderContext = null) {
 function visibleVoxelStack(stack) {
   const visible = [];
   const ordered = [...stack].sort((left, right) => objectVoxelOrder(left) - objectVoxelOrder(right));
+  const priorities = [];
   for (const voxel of ordered) {
+    const order = objectVoxelOrder(voxel);
+    const group = priorities.at(-1);
+    if (group && group.order === order) {
+      group.voxels.push(voxel);
+    } else {
+      priorities.push({ order, voxels: [voxel] });
+    }
+  }
+  for (const group of priorities) {
+    const voxel = spriteOrderPriorityDefinition(group.order)?.merge
+      ? averageMergedVoxels(group.voxels)
+      : group.voxels[0];
     const source = voxel.color || parseColor(voxel.fill);
     if (!source || source.a <= 0) {
       continue;
@@ -2696,12 +2709,53 @@ function visibleVoxelStack(stack) {
   return visible;
 }
 
-function objectRenderOrder(object, fallbackIndex = 0) {
-  const layer = Number(object?.layer);
-  if (Number.isFinite(layer)) {
-    return layer;
+function averageMergedVoxels(voxels) {
+  const colors = voxels
+    .map((voxel) => voxel.color || parseColor(voxel.fill))
+    .filter((color) => color && color.a > 0);
+  if (!colors.length) {
+    return voxels[0];
   }
-  return Number(fallbackIndex) || 0;
+  const divisor = colors.length;
+  const color = colors.reduce((sum, candidate) => ({
+    r: sum.r + candidate.r,
+    g: sum.g + candidate.g,
+    b: sum.b + candidate.b,
+    a: sum.a + candidate.a,
+  }), { r: 0, g: 0, b: 0, a: 0 });
+  color.r /= divisor;
+  color.g /= divisor;
+  color.b /= divisor;
+  color.a /= divisor;
+  return {
+    ...voxels[0],
+    color,
+    fill: formatColor(color),
+    sourceKeys: voxels.flatMap((voxel) => voxel.sourceKey ? [voxel.sourceKey] : (voxel.sourceKeys || [])),
+  };
+}
+
+function objectRenderOrder(object, fallbackIndex = 0) {
+  const name = String(object?.name || "");
+  const priority = spriteOrder().priorities.findIndex((entry) =>
+    Array.isArray(entry.objects) && entry.objects.includes(name)
+  );
+  if (priority >= 0) {
+    return priority;
+  }
+  throw new Error(`compiled sprite order does not cover object: ${name || fallbackIndex}`);
+}
+
+function spriteOrder() {
+  const order = snapshot.order || fallbackSnapshot.order;
+  if (!order || !Array.isArray(order.direction_priority) || !Array.isArray(order.priorities)) {
+    throw new Error("compiled sprite order contract is missing");
+  }
+  return order;
+}
+
+function spriteOrderPriorityDefinition(priority) {
+  return spriteOrder().priorities[priority] || null;
 }
 
 function objectVoxelOrder(voxel) {
@@ -3137,6 +3191,7 @@ function cellKey(position) {
 function cellRenderOwner(position) {
   return {
     key: cellKey(position),
+    directionPriority: cellDirectionPriority(position),
     order: gridOrder(position),
     depth: projectWithDepth(position).depth,
   };
@@ -3162,9 +3217,24 @@ function projectCellRenderOwner(ownerCell) {
   }
   return {
     key: ownerCell.key,
+    directionPriority: cellDirectionPriority(ownerCell.position),
     order: gridOrder(ownerCell.position),
     depth: projectWithDepth(ownerCell.position).depth,
   };
+}
+
+function cellDirectionPriority(position) {
+  return spriteOrder().direction_priority.map((direction) => {
+    switch (direction) {
+      case "right": return Number(position.x) || 0;
+      case "left": return -(Number(position.x) || 0);
+      case "front": return Number(position.y) || 0;
+      case "back": return -(Number(position.y) || 0);
+      case "up": return Number(position.z) || 0;
+      case "down": return -(Number(position.z) || 0);
+      default: throw new Error(`invalid 3D sprite order direction: ${direction}`);
+    }
+  });
 }
 
 function currentRuntimeSpriteLayers(sprite, now = performance.now()) {
@@ -4115,11 +4185,11 @@ function runtimePresentationObjectsById(objects) {
   const map = new Map();
   for (const [name, object] of Object.entries(objects || {})) {
     if (!object || typeof object !== "object" || Array.isArray(object)) {
-      throw new Error(`Puzzle3 visual object metadata for ${name} is invalid.`);
+      throw new Error(`Puzzle3 sprite object metadata for ${name} is invalid.`);
     }
-    const id = runtimeObjectId(object.id, `visual object ${name}.id`);
+    const id = runtimeObjectId(object.id, `sprite object ${name}.id`);
     if (map.has(id)) {
-      throw new Error(`Puzzle3 visual object metadata contains duplicate object id ${id}.`);
+      throw new Error(`Puzzle3 sprite object metadata contains duplicate object id ${id}.`);
     }
     map.set(id, { ...object });
   }

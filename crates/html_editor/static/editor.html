@@ -964,8 +964,8 @@
               </div>
               </div>
               <div class="level3d-view-toggle" role="group" aria-label="3D level editor view">
-                <button id="level3dStageViewButton" class="editor-dimension-button is-active" type="button" data-level3d-view="stage" aria-pressed="true">3D</button>
-                <button id="level3dLayerViewButton" class="editor-dimension-button" type="button" data-level3d-view="layer" aria-pressed="false">Layer</button>
+                <button id="level3dStageViewButton" class="editor-dimension-button is-active" type="button" data-level3d-view="stage" aria-label="3D View" aria-pressed="true">3D</button>
+                <button id="level3dLayerViewButton" class="editor-dimension-button" type="button" data-level3d-view="layer" aria-label="Layer View" aria-pressed="false">Layer</button>
               </div>
               <div class="level3d-workspace is-view-stage">
                 <div class="level3d-runtime-wrap">
@@ -995,6 +995,10 @@
                         <label>
                           <span title="pitch">P</span>
                           <button id="level3dCameraPitchScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="pitch" aria-label="Adjust pitch" title="Pitch">55</button>
+                        </label>
+                        <label>
+                          <span title="roll">R</span>
+                          <button id="level3dCameraRollScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="roll" aria-label="Adjust roll" title="Roll">0</button>
                         </label>
                         <label>
                           <span title="zoom">Z</span>
@@ -1267,5 +1271,6 @@
     <script src="editor_sprite.js"></script>
     <script src="editor_sprite3d.js?v=sprite3d-preview-base-zoom"></script>
     <script src="editor_sounds.js"></script>
+    <script src="editor_commands.js"></script>
   </body>
 </html>

@@ -513,7 +513,7 @@ mod tests {
 
     #[test]
     fn mutation_serializes_common_3d_layers_in_rust() {
-        let source = "puzzle3 world {\n  layers { solid = Box }\n}\n\nsprites art of world {\nBox {\ncolors = red\nshape = {\n0\n}\n}\n}\n";
+        let source = "puzzle3 world {\n  slots { solid = Box }\n}\n\nsprites art of world {\nBox {\ncolors = red\nshape = {\n0\n}\n}\n}\n";
         let request = serde_json::json!({
             "operation": "update",
             "dimension": "3d",

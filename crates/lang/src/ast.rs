@@ -16,16 +16,8 @@ pub(crate) enum OrientationExpr {
 #[derive(Clone, Debug)]
 pub(crate) struct RuleDefinitionAst {
     pub(crate) name: String,
-    pub(crate) role: RuleRole,
     pub(crate) application: RuleApplication,
     pub(crate) statements: Vec<StatementAst>,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum RuleRole {
-    #[default]
-    Main,
-    Visual,
 }
 
 #[derive(Clone, Debug)]

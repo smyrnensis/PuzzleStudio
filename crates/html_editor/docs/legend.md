@@ -20,6 +20,6 @@ written explicitly, but `.` cannot be remapped and another character cannot be
 assigned to `empty`.
 
 The right side must resolve to objects or selectors already declared by
-`layers`; a legend entry never creates an object.
+`slots`; a legend entry never creates an object.
 
 One character can place multiple objects in the same cell, such as `Goal Box`.

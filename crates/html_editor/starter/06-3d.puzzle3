@@ -6,6 +6,7 @@ title = "06 — 3D"
 subtitle = "A turn-based puzzle on a three-dimensional grid"
 
 puzzle depth {
+dimension = 3
 render {
 camera {
 yaw = 35
@@ -15,7 +16,7 @@ zoom = 1
 shadow = true
 }
 
-layers {
+slots {
 floor = Floor
 target = Goal
 Player Box Wall

@@ -35,7 +35,6 @@ const WASM_SECTION_BLOCK_NAMES = Object.freeze({
   transitions: "transitions",
   level: "levels",
   levels: "levels",
-  on_display: "on_display",
   level_start: "on_level_start",
   on_level_start: "on_level_start",
   level_clear: "on_level_clear",
@@ -54,7 +53,6 @@ const WASM_SECTION_BOUNDARY_BLOCKS = new Set([
   "map",
   "on_level_start",
   "on_level_clear",
-  "on_display",
   "marks",
   "group",
   "layers",
@@ -226,6 +224,81 @@ function renderSpriteScaleControl({
 const editorHoverTooltipSelector = "button, [data-tooltip]";
 let editorHoverTooltip = null;
 let editorHoverTooltipTarget = null;
+
+function normalizeEditorShortcut(shortcut) {
+  if (!shortcut || typeof shortcut !== "object") {
+    throw new Error("Editor shortcut must be a structured definition.");
+  }
+  const keys = Array.isArray(shortcut.keys) ? shortcut.keys : [shortcut.key];
+  if (!keys.length || keys.some((key) => (
+    typeof key !== "string" || (key !== " " && !key.trim())
+  ))) {
+    throw new Error("Editor shortcut requires at least one key.");
+  }
+  const modifiers = Array.isArray(shortcut.modifiers) ? shortcut.modifiers : [];
+  if (modifiers.some((modifier) => modifier !== "primary")) {
+    throw new Error(`Unsupported editor shortcut modifier: ${modifiers.join(", ")}`);
+  }
+  return {
+    keys: keys.map((key) => key === " " ? key : key.trim()),
+    modifiers: [...new Set(modifiers)],
+  };
+}
+
+function setEditorShortcutHint(element, shortcut) {
+  if (!element) {
+    throw new Error("Editor shortcut hint requires an element.");
+  }
+  element.dataset.shortcut = JSON.stringify(normalizeEditorShortcut(shortcut));
+}
+
+function editorShortcutMatches(event, shortcut) {
+  const normalized = normalizeEditorShortcut(shortcut);
+  const expectsPrimary = normalized.modifiers.includes("primary");
+  const hasPrimary = (event.metaKey && !event.ctrlKey) || (event.ctrlKey && !event.metaKey);
+  if (hasPrimary !== expectsPrimary || event.altKey || event.shiftKey) {
+    return false;
+  }
+  const eventKey = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+  return normalized.keys.some((key) => (
+    (key.length === 1 ? key.toLowerCase() : key) === eventKey
+  ));
+}
+
+function editorShortcutKeyLabel(key) {
+  const labels = {
+    " ": "Space",
+    ArrowLeft: "←",
+    ArrowRight: "→",
+    ArrowUp: "↑",
+    ArrowDown: "↓",
+    Escape: "Esc",
+  };
+  if (labels[key]) {
+    return labels[key];
+  }
+  return key.length === 1 ? key.toUpperCase() : key;
+}
+
+function createEditorShortcutHint(shortcut) {
+  const normalized = normalizeEditorShortcut(shortcut);
+  const keycap = document.createElement("kbd");
+  keycap.className = "editor-hover-shortcut";
+  if (normalized.modifiers.includes("primary")) {
+    const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    icon.setAttribute("class", "lucide lucide-command-icon lucide-command");
+    icon.setAttribute("viewBox", "0 0 24 24");
+    icon.setAttribute("aria-hidden", "true");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", "M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3");
+    icon.append(path);
+    keycap.append(icon);
+  }
+  const key = document.createElement("span");
+  key.textContent = editorShortcutKeyLabel(normalized.keys[0]);
+  keycap.append(key);
+  return keycap;
+}
 
 function editorTooltipTargetFromEventTarget(target) {
   const element = target instanceof Element ? target.closest(editorHoverTooltipSelector) : null;
@@ -416,10 +489,7 @@ function showEditorHoverTooltip(element) {
   tooltip.replaceChildren(document.createTextNode(text));
   const shortcut = String(element.dataset.shortcut || "").trim();
   if (shortcut) {
-    const keycap = document.createElement("kbd");
-    keycap.className = "editor-hover-shortcut";
-    keycap.textContent = shortcut;
-    tooltip.append(keycap);
+    tooltip.append(createEditorShortcutHint(JSON.parse(shortcut)));
   }
   tooltip.hidden = false;
   positionEditorHoverTooltip();
@@ -1944,7 +2014,7 @@ function sectionBoundaryForWasm(block, tokens) {
   if (block === "legend") {
     return !isLegendRowForWasm(tokens);
   }
-  if (["marks", "group", "layers", "collision_layers", "win_conditions", "lose_conditions", "transitions", "levels", "sprites", "assets", "on_display"].includes(block)) {
+  if (["marks", "group", "layers", "collision_layers", "win_conditions", "lose_conditions", "transitions", "levels", "sprites", "assets"].includes(block)) {
     return startsPuzzleSectionForWasm(tokens);
   }
   return false;
@@ -4696,17 +4766,6 @@ function engineObjectById(objectId, exportData = currentLevelExportData()) {
   return (exportData?.engine?.objects || []).find((object) => object.id === objectId) || null;
 }
 
-function isVisualObject(object, exportData = currentLevelExportData()) {
-  return (exportData?.engine?.visualObjects || []).includes(object.id);
-}
-
-function visualObjectNameSet(exportData = currentLevelExportData()) {
-  const visualIds = new Set(exportData?.engine?.visualObjects || []);
-  return new Set((exportData?.engine?.objects || [])
-    .filter((object) => visualIds.has(object.id))
-    .map((object) => object.name));
-}
-
 function layerCount(exportData = currentLevelExportData()) {
   return exportData?.engine?.layerCount
     || exportData?.levels?.[0]?.initialState?.layerCount
@@ -5386,7 +5445,7 @@ function levelEditorSourceExportData(source) {
     || new Set(objects.map((object) => object.id)).size !== objects.length) {
     throw new Error("Level editor source contract contains invalid object identities");
   }
-  const visualObjectIds = applyLevelEditorContractVisuals(session, objects);
+  applyLevelEditorContractSprites(session, objects);
   return {
     __kind: "puzzle2d",
     source,
@@ -5394,7 +5453,6 @@ function levelEditorSourceExportData(source) {
     editorSourceSession: session,
     engine: {
       objects,
-      visualObjects: visualObjectIds,
       layerCount: Math.max(1, ...objects.map((object) => object.layer + 1)),
     },
     levels: Array.isArray(contract.levels)
@@ -5425,11 +5483,10 @@ function levelEditorContractState(level, slots) {
   };
 }
 
-function applyLevelEditorContractVisuals(session, objects) {
+function applyLevelEditorContractSprites(session, objects) {
   ensureGameVisualsRuntime();
   const aliases = {};
   const sprites = {};
-  const visualObjectIds = [];
   for (const object of objects) {
     const payload = session.sprite(object.id);
     if (!payload) {
@@ -5438,11 +5495,9 @@ function applyLevelEditorContractVisuals(session, objects) {
     const spriteName = `object:${object.id}`;
     aliases[object.name] = spriteName;
     sprites[spriteName] = payload;
-    visualObjectIds.push(object.id);
   }
   window.PuzzleStudio.disposeAssetScripts();
   window.GameVisuals = window.PuzzleSpriteRegistry.create({ aliases, sprites });
-  return visualObjectIds;
 }
 
 function loadLevelSourceEntryWithExportData(source, entry, exportData, options = {}) {
@@ -6709,10 +6764,8 @@ function renderLevelPalette() {
   const eraserButton = renderLevelEraserButton();
   levelPalette.replaceChildren(...[levelFillButton, eraserButton].filter(Boolean));
   levelPalette.classList.add("is-sprite-only");
-  const mainObjects = level.palette.filter((object) => object.id !== 0 && !isVisualObject(object));
-  const visualObjects = level.palette.filter((object) => object.id !== 0 && isVisualObject(object));
-  renderLevelPaletteGroup("", mainObjects);
-  renderLevelPaletteGroup("", visualObjects);
+  const objects = level.palette.filter((object) => object.id !== 0);
+  renderLevelPaletteGroup("", objects);
   levelPalette.append(renderLevelAddLegendButton());
   renderLevelLayerControls();
   renderLevelLayerPreviews();
@@ -9047,17 +9100,9 @@ function copyTextWithSelection(text) {
 }
 
 function handleSolutionKey(event) {
-  if (!levelSolutionPreview) {
-    return false;
-  }
-  const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
-  if (key !== "r") {
-    return false;
-  }
-  resetSolutionPreview();
-  event.preventDefault();
-  event.stopPropagation();
-  return true;
+  return typeof dispatchEditorCommandEvent === "function"
+    ? dispatchEditorCommandEvent(event, { group: "solver" })
+    : false;
 }
 
 function formatNumber(value) {
@@ -9847,7 +9892,6 @@ function levelSourceData(source = currentLevelAuthoringSource(), exportData = cu
   ensureLevelLayerMaps(exportData);
   const charEntries = sourceCharEntries(source, exportData);
   const allocator = createLevelLegendAllocator(charEntries, sourceReservedLegendChars(source));
-  const visualObjects = visualObjectNameSet(exportData);
   const rows = [];
   const regions = levelRegions();
   for (const [regionIndex, region] of regions.entries()) {
@@ -9862,7 +9906,7 @@ function levelSourceData(source = currentLevelAuthoringSource(), exportData = cu
       for (let y = region.y; y < region.y + region.height; y += 1) {
         const row = [];
         for (let x = region.x; x < region.x + region.width; x += 1) {
-          row.push(charForSourceCell(layerCells[y * level.width + x], charEntries, allocator, exportData, visualObjects));
+          row.push(charForSourceCell(layerCells[y * level.width + x], charEntries, allocator, exportData));
         }
         rows.push(row.join(""));
       }
@@ -9923,7 +9967,7 @@ function levelLegendCandidateChars() {
   return [...new Set([...ascii, ...generated])].filter((char) => /\S/u.test(char));
 }
 
-function charForSourceCell(slots, entries, allocator, exportData = currentLevelExportData(), _visualObjects = visualObjectNameSet(exportData)) {
+function charForSourceCell(slots, entries, allocator, exportData = currentLevelExportData()) {
   const objects = objectNamesForSlots(slots, exportData);
   const exact = exactCharForObjects(objects, entries);
   if (exact) {

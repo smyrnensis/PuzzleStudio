@@ -31,16 +31,22 @@ impl SourceAnalysisStore {
         revision
     }
 
-    fn activate(&mut self, source: &str) -> SourceAnalysisRevision {
+    fn activate(
+        &mut self,
+        source: &str,
+        source_profile: Option<puzzle_lang::PuzzleSourceProfile>,
+    ) -> SourceAnalysisRevision {
         if let Some(active) = &self.active {
-            if active.analysis.source() == source {
+            if active.analysis.source() == source
+                && active.analysis.source_profile() == source_profile
+            {
                 return active.revision;
             }
         }
         let revision = self.allocate_revision();
         self.active = Some(ActiveSourceAnalysis {
             revision,
-            analysis: puzzle_lang::analyze_source(source),
+            analysis: puzzle_lang::SourceAnalysis::new_for_profile(source, source_profile),
         });
         revision
     }
@@ -151,7 +157,24 @@ fn source_target_with_utf16_offsets(
 
 #[wasm_bindgen]
 pub fn activate_source_analysis(source: &str) -> SourceAnalysisRevision {
-    SOURCE_ANALYSES.with(|store| store.borrow_mut().activate(source))
+    SOURCE_ANALYSES.with(|store| store.borrow_mut().activate(source, None))
+}
+
+#[wasm_bindgen]
+pub fn activate_source_analysis_with_profile(
+    source: &str,
+    source_profile: &str,
+) -> Result<SourceAnalysisRevision, JsValue> {
+    let profile = match source_profile {
+        "puzzle2d" => puzzle_lang::PuzzleSourceProfile::Puzzle2d,
+        "puzzle3d" => puzzle_lang::PuzzleSourceProfile::Puzzle3d,
+        _ => {
+            return Err(JsValue::from_str(
+                "source analysis profile must be `puzzle2d` or `puzzle3d`",
+            ));
+        }
+    };
+    Ok(SOURCE_ANALYSES.with(|store| store.borrow_mut().activate(source, Some(profile))))
 }
 
 #[wasm_bindgen]
@@ -711,7 +734,7 @@ mod tests {
 title display_object_single_color_preview
 
 puzzle default {
-layers {
+slots {
 @display_floor = @Floor
 }
 sprites {

@@ -22,35 +22,41 @@ One source revision must have one canonical surface interpretation. Different
 editor features are projections of that interpretation, not independent
 opportunities to reinterpret the source.
 
-The contract separates four concerns:
+The contract separates six concerns:
 
 1. capturing the exact source revision;
-2. recognizing its lossless surface structure;
-3. deriving typed products for individual consumers;
-4. applying consumer-specific policy to incomplete, ambiguous, or invalid
-   structure.
+2. lexing lossless tokens and trivia;
+3. parsing those tokens into owner-scoped syntax;
+4. resolving declarations and references;
+5. lowering valid syntax into runtime models;
+6. projecting already-recognized facts for editor consumers.
 
 Consumer policy may differ. Surface interpretation must not.
+
+The governing rule is stronger than sharing a cache: every source spelling that
+the compiler accepts must be recognized by exactly one parser-owned operation.
+Highlighting, completion, outline, source targeting, and strict compilation may
+select or reject parser facts, but none may recognize the spelling again.
 
 ## Terms
 
 ### Source revision
 
-A source revision is an immutable pair of a revision identity and the exact
-source text that identity denotes. A service may reuse an existing revision
-identity only when the source text is byte-for-byte identical. Any textual
-change creates a different revision before new analysis products are exposed.
+A source revision is an immutable revision identity plus the exact source text
+and source profile (`.puzzle` or `.puzzle3`) that identity denotes. A service may
+reuse an existing revision identity only when both the source text is
+byte-for-byte identical and the source profile is unchanged. Any textual or
+profile change creates a different revision before new analysis products are
+exposed.
 
 Revision numbers are coordination metadata, not source semantics. The language
 crate may represent a revision as an immutable `SourceAnalysis` value while a
 host or adapter assigns the externally visible revision number.
 
-### Canonical surface document
+### Current surface document
 
-The canonical surface document is the one parser-owned representation of the
-source revision's editor-facing syntax. It preserves enough source facts to
-derive all products in this contract without rescanning or reparsing the source.
-At minimum those facts include:
+The current `SurfaceDocument` is a migration-era representation of
+editor-facing syntax. Useful fields include:
 
 - physical lines and their source locations;
 - tokens and half-open source spans;
@@ -58,14 +64,14 @@ At minimum those facts include:
 - recognized leaf or owner roles needed by downstream products;
 - recoveries or errors that affect the interpretation of those facts.
 
-The current `SurfaceDocument` is the implementation candidate for this role.
-This document specifies the role, not that the current fields are already
-complete.
+It is not the target authority because strict parsing and several owner-specific
+recognizers still operate beside it. The canonical target is the parse snapshot
+defined below.
 
 ### Product and projection
 
-A product is typed information stored in or derived from the canonical surface
-document, such as semantic tokens or completion symbols. A projection is a
+A product is typed information stored in or derived from the canonical parse
+snapshot, such as semantic tokens or completion symbols. A projection is a
 consumer-facing view derived from canonical products, such as an outline tree or
 the source target containing a cursor offset.
 
@@ -79,22 +85,119 @@ request. A profile is not a grammar mode. It must not change token boundaries,
 block ownership, nesting, recovery, or the meaning of any product it does
 produce.
 
+## Target Parser Architecture
+
+### Canonical parse snapshot
+
+The target authority is a lossless parser-frontend product named here
+`ParseSnapshot`. It represents one exact source revision and is consumed by both
+editor services and strict compilation. It is not an editor approximation of a
+separate strict parse.
+
+The snapshot contains:
+
+- lossless tokens, trivia, and half-open spans covering every source byte;
+- a recovered concrete syntax tree with owner-scoped nodes and parent links;
+- one terminal disposition for every non-whitespace token: recognized syntax
+  role, owner payload role, trivia, or explicit error;
+- typed declarations, references, display facts, and diagnostics emitted by the
+  parser operation that recognized them;
+- stable node identities or fingerprints for incremental reuse.
+
+`SurfaceDocument` and `SurfaceSourceScan` are migration structures. They do not
+satisfy this authority while strict parsing, owner-specific surface recognition,
+or highlighting can reinterpret source text outside the canonical frontend.
+
+### Recognition and grammar ownership
+
+The parser frontend has four recognition stages:
+
+1. A lossless lexer emits only context-free classes such as whitespace,
+   comment, quoted string, delimiter, and bare atom.
+2. The structural parser assigns ownership and builds recovered syntax nodes.
+3. The parser for each owner consumes its token slice and emits contextual
+   syntax roles, owner payload facts, and diagnostics.
+4. Semantic resolution joins declarations and references without recognizing
+   their spelling again.
+
+Generic document structure, authoring rows, rules, levels, sprites, scenes, and
+other leaf languages may have distinct owners. An owner receives lexer tokens or
+an explicitly opaque token slice from its parent. It may inspect those token
+payloads but must not scan the whole source independently.
+
+The executable grammar operation that accepts a token must also attach its role.
+Declarative grammar tables are allowed only when parsing, completion
+expectations, and syntax roles are derived from the same table. Parallel keyword
+lists, `record_*_surface` functions, `scan_*_surface_ranges` functions, and
+post-parse spelling classification are forbidden even in parser-named modules.
+
+Contextual classes such as selector marks, directions, declaration names, level
+cells, sprite pixels, and references are parser facts, not lexical guesses.
+Highlighting is a total exhaustive mapping from dispositions and resolved facts
+to display kinds. A highlight-only "canonical lexer" that strict parsing does
+not consume remains a second grammar implementation.
+
+### Tolerant and strict policy
+
+The frontend always returns a recovered snapshot and diagnostics. Editing may
+project useful facts from incomplete nodes. Strict compilation rejects blocking
+diagnostics and requires complete typed owner products before lowering. These
+are policies over the same parse result, not separate grammar modes.
+
+Parser failure is data, not absence. Lazy products return facts plus diagnostics
+or a typed unavailable reason. They must not use `.ok()?`, `Option<Catalog>`, an
+empty collection, or a default dimension to hide failed recognition.
+
+### Incremental computation
+
+The editor owns one mutable analysis session. Each ordered edit publishes a new
+immutable snapshot which may share unchanged token and syntax storage with its
+predecessor. A query observes one complete revision or fails as stale.
+
+Recalculation follows grammar dependencies:
+
+1. Relex from the first affected checkpoint until both token sequence and lexer
+   state converge with an unchanged suffix.
+2. Reparse the smallest enclosing owner whose input token slice changed. If its
+   ownership boundary changes, expand to parents until boundaries stabilize.
+3. Re-resolve only symbols and owner products whose dependency keys changed.
+4. Re-lower only changed runtime models and their dependents.
+5. Reuse projection indexes for unchanged stable node identities.
+
+Whole-document work is allowed when an edit changes global ownership or symbol
+meaning. It must be visible in counters rather than hidden behind stale reuse.
+Comment-only reuse is proven by an unchanged non-trivia token fingerprint, not
+by checking whether edited text appears after `//`.
+
+Tokens, diagnostics, and display facts remain source-sorted in compact arenas or
+equivalent contiguous storage. Syntax nodes refer to token ranges rather than
+cloning normalized line strings. Owner products are keyed by stable node
+identity and input fingerprint.
+
+Viewport highlighting binary-searches ordered disposition and display-fact
+indexes and maps only intersecting facts. Its expected cost is `O(log n + k)`;
+it never constructs a whole-document highlight result first. Outline, fold,
+completion-symbol, target, and semantic indexes may be lazy, but each is built
+at most once per snapshot and invalidated by explicit node or symbol
+dependencies.
+
 ## Canonical Parse Requirements
 
 ### One interpretation per revision
 
 For one active source revision, `SourceAnalysis` must own or reference one
-canonical surface document. Highlighting, outline, target resolution, and
-completion must query that document or lazily derived products attached to it.
-They must not each call a source-to-`SurfaceDocument` entrypoint.
+canonical parse snapshot. Highlighting, outline, target resolution, completion,
+strict validation, and lowering query that snapshot or lazily derived products
+attached to it. They must not each call a source-to-document entrypoint.
 
-"One parse" here means one construction of the canonical editor-facing surface
-document. It does not mean that every projection must be eagerly calculated, or
-that semantic validation and runtime lowering are part of the same operation.
+"One parse" means one recognition of authored spelling. It does not mean every
+projection is eager or that semantic resolution and runtime lowering run when a
+caller requests only lexical display facts. Laziness may postpone products; it
+may not create another recognizer.
 
 ### Total analysis for editing states
 
-Canonical surface construction must return a document for every source string,
+Canonical frontend parsing must return a snapshot for every source string,
 including empty source and incomplete text produced between keystrokes. It must
 not require the source to compile successfully.
 
@@ -126,10 +229,10 @@ leaf's authored span.
 
 ### Determinism and ordering
 
-The same source bytes and the same language version must produce equal canonical
-facts and equal projections. Authored order must be preserved for ordered
-constructs. Sets or maps used only for lookup must not make serialized product
-order nondeterministic.
+The same source bytes, source profile, and language version must produce equal
+canonical facts and equal projections. Authored order must be preserved for
+ordered constructs. Sets or maps used only for lookup must not make serialized
+product order nondeterministic.
 
 ## Offset Contract
 
@@ -185,21 +288,43 @@ updating the parser-owned source. Ordinary typing must not reactivate analysis
 from a newly transferred full source string. Each accepted edit advances the
 analysis revision, and queries against an earlier revision fail visibly.
 
-One revision owns one full `SurfaceDocument`. Highlight, outline, completion,
-entries, and target projections must consume that document rather than building
-product-specific surface documents. The line scanner preserves the prefix before
-the first changed line and rescans the structurally dependent suffix. Parser
-catalog data may survive only when the edit is proven to affect comment text
-alone; otherwise it is invalidated explicitly.
+One revision owns one canonical parse snapshot. Highlight, outline, completion,
+entries, targets, and strict compilation consume that snapshot rather than
+building product-specific documents. Incremental lexer, owner, symbol, and
+lowering products may survive only when their recorded input fingerprints and
+dependencies are unchanged; otherwise they are invalidated explicitly.
 
 Highlighting may display recovered or incomplete tokens. It must not claim that
 their enclosing construct is valid merely because it can assign a color.
+
+The Rust highlight module is a projection consumer. It must not scan source
+characters or own token, comment, quote, brace, selector, or owner-leaf
+recognition. The parser frontend stores lossless token dispositions, semantic
+facts, and owner-produced display facts on the snapshot. The typed highlight
+product may only map those facts. Its API must not accept source text.
+
+Range highlighting must locate intersecting lines, facts, semantic tokens, and
+owner ranges through source-sorted indexes and map only that window. It must not
+build, scan, or filter a whole-document highlight span product for a viewport
+query. A missing display fact is therefore a missing canonical surface contract,
+not permission to add a recognizer to highlighting.
 
 ### Outline
 
 Outline items must derive labels, kinds, hierarchy, and source spans from
 canonical structural blocks. Outline generation must not rescan brace lines or
 reconstruct ownership from highlighted HTML.
+
+The Rust outline module is a projection consumer and must not inspect source
+text, block headers, physical line content, grammar tables, scopes, or syntax
+word lists. The parser's existing structural pass must attach typed outline kind,
+label, and child policy to canonical blocks without adding another full-source
+pass. A parser-owned outline product may then assemble those facts lazily and be
+cached on the active `SourceAnalysis` revision. That lazy product must be built
+at most once per revision, only when outline is requested; highlight-only and
+other non-outline queries must not construct it. An editor outline request must
+query the already-active profile-aware analysis revision rather than submitting
+the source to a separate outline parser.
 
 An outline item may be omitted when its owner or label is ambiguous. Items after
 a recoverable local error should remain available when their canonical blocks
@@ -270,20 +395,19 @@ Exact source equality may reuse the same immutable analysis.
 
 ## Strict Compile Boundary
 
-The canonical surface document is authoritative for editor-facing surface
-facts. It is not by itself proof that the game compiles or that a recovered node
-has runtime meaning.
+The canonical parse snapshot is authoritative for syntax recognition, but a
+recovered snapshot is not proof that the game compiles or has runtime meaning.
+Strict compilation is a policy and lowering pipeline over that snapshot:
 
-Strict validation, owner-specific parsing, semantic resolution, lowering, and
-runtime model construction remain owned by their existing language and compiler
-boundaries. They may reject a source for which tolerant surface analysis returned
-useful editor products.
+1. reject every blocking lexical, syntax, ambiguity, and resolution diagnostic;
+2. require the complete typed owner products needed by the runtime target;
+3. lower those products into runtime models.
 
-Where strict compilation and surface analysis recognize the same syntax fact,
-they should converge on the canonical product rather than maintain divergent
-grammars. This contract does not require immediate replacement of every existing
-strict parser with `SurfaceDocument`; such a migration requires a separate
-owner-by-owner specification and equivalence proof.
+Strict compilation must not accept source text after snapshot construction and
+must not invoke a second lexer, structural normalizer, owner parser, or catalog
+parser. Tolerant editing and strict compilation differ only in what diagnostics
+and incomplete products they permit downstream; they do not differ in grammar
+recognition.
 
 The editor must not treat surface recovery as a compatibility path around strict
 compile failure. Preview and export must continue to fail visibly with the strict
@@ -346,6 +470,19 @@ when they do not assert those contracts explicitly.
 - Editor JavaScript does not implement a second source grammar.
 - Presentation helpers do not become canonical language products.
 - Tolerant analysis does not let preview or export bypass strict diagnostics.
+- Every accepted non-whitespace token has exactly one parser-owned disposition.
+- Strict compiler entrypoints consume a parse snapshot and cannot access source
+  text.
+- Highlight, outline, and fold modules cannot access source text or raw token
+  payloads through their APIs. Completion and target projections may read
+  authored text only through typed tokens; they cannot split or classify it.
+- Adding a grammar rule without a syntax disposition fails a grammar coverage
+  test or an exhaustive type check.
+- Editing one owner body reparses that owner and its proven dependents, not
+  unrelated sibling owners.
+- Performance benchmarks record relexed tokens, reparsed owner nodes,
+  re-resolved symbols, lowered models, and returned projection facts rather than
+  only wall-clock time.
 
 ## Migration Gate For The Source Editor
 
@@ -359,3 +496,54 @@ must consume typed projections satisfying this contract. The old textarea
 overlay and the new editor must not remain as long-lived runtime alternatives;
 the final cutover must delete the old source-rendering, undo, folding, and caret
 geometry paths once feature and performance gates pass.
+
+Parser migration is performed as atomic owner slices, not by adding a new global
+surface layer beside the old parser. For one owner at a time, the same change
+must:
+
+1. make the canonical frontend produce its typed nodes, dispositions, display
+   facts, and diagnostics;
+2. make strict validation/lowering and editor projections consume those facts;
+3. delete the corresponding raw-source parser, `record_*_surface`,
+   `scan_*_surface_ranges`, keyword list, and compatibility path;
+4. add specification fixtures and incremental invalidation tests;
+5. show that production recognition code did not preserve the replaced
+   recognizer under a new name.
+
+A migration slice is incomplete when production recognition code is net-added
+without deleting the prior owner implementation. Net growth is allowed only for
+new information that had no previous owner, such as stable node identity or a
+dependency index, and review must identify that information explicitly.
+
+Recommended execution order:
+
+1. Replace structural normalization and the editor line scanner with the
+   lossless lexer plus recovered document tree. Keep full owner reparsing at
+   first, but retain lexical checkpoint convergence. Delete both old structural
+   implementations in this slice.
+2. Move declarative authoring blocks to executable grammar descriptors that emit
+   nodes, dispositions, completion expectations, and diagnostics. Delete their
+   surface projection recognizers.
+3. Move rule syntax, including patterns and control flow, and make 2D/3D lowering
+   consume the shared typed rule product.
+4. Move levels and legends, then sprites and visuals. These owners justify opaque
+   token slices and owner-local incremental parsers because their ASCII bodies
+   have different lexical meaning.
+5. Move scenes, metadata, imports, and remaining leaf owners; then delete the
+   generic surface-recognition layer.
+6. Add owner-subtree and symbol-dependency reuse only after each owner has one
+   authoritative parse. Optimization must not cache a duplicate recognizer.
+
+Each step first proves a full-parse result from the new authority, then enables
+incremental reuse for that same result. This separates semantic equivalence from
+cache correctness and prevents a stale cache from making two parsers appear
+equivalent.
+
+The migration finishes only when:
+
+- `source_canonical_lexical.rs` or any equivalent highlight-only lexer is gone;
+- `lib_surface_doc.rs` contains projections/builders but no source recognizers;
+- strict compile accepts a parse snapshot rather than source text;
+- optional parser catalogs and raw-source rescans are gone;
+- a repository search finds one executable grammar owner for every syntax
+  family and zero grammar recognizers in projections or adapters.

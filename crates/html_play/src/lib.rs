@@ -31,18 +31,18 @@ use puzzle_core::transition_state;
 use puzzle_core::{
     ComparisonOp, CompiledGame, ConditionValueKind, Effect, Guard, InputId, LayerId, MarkPattern,
     MarkValueMatch, ObjectId, Offset, Patch, PatchOp, Pattern, Rule, RuleApplication,
-    RuleCondition, RuleId, RuleStep, State, TransitionCommand, TransitionError, VariableUpdateOp,
-    WriteOp, transition_program, transition_program_outcome, transition_program_trace,
+    RuleCondition, RuleId, RuleStep, State, TransitionCommand, VariableUpdateOp, WriteOp,
+    transition_program, transition_program_outcome, transition_program_trace,
 };
 #[cfg(feature = "solver")]
 use puzzle_core::{ConditionId, MarkId, MatchCell, PatternComponent, VariableId};
 use puzzle_grid3d::{
-    Coord3, Game3, ObjectId as ObjectId3, RuleId3, Size3, State3,
+    CompiledGame3, Coord3, ObjectId as ObjectId3, RuleId3, Size3, State3,
     transition_program_without_input_with_local_frame,
 };
 #[cfg(feature = "solver")]
 use puzzle_grid3d::{
-    RuleStep3, WinCondition3, eval_condition_kind, transition_program as transition_program3,
+    WinCondition3, eval_condition_kind, transition_program as transition_program3,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use puzzle_lang::AssetsDef;
@@ -149,7 +149,7 @@ mod tests {
         cell.get("layers")
             .and_then(Value::as_array)
             .is_some_and(|layers| {
-                layers
+                slots
                     .iter()
                     .any(|layer| layer.get("object").and_then(Value::as_str) == Some(object))
             })
@@ -162,7 +162,7 @@ mod tests {
 title = solver_strategy_score
 
 puzzle default {
-layers {
+slots {
 floor = Goal
 actor = Player Box
 }
@@ -290,7 +290,7 @@ file "sprites/player.svg"
 }
 
 puzzle default {
-layers {
+slots {
 actor = Player
 }
 rules {
@@ -333,7 +333,7 @@ puzzle board {
   render {
     tween
   }
-  layers {
+  slots {
     actor = Player
   }
   empty .
@@ -414,7 +414,7 @@ levels default of board {
     fn stateful_puzzle3_runtime_exposes_changed_cells_without_state_payload() {
         let source = r#"
 puzzle board {
-  layers {
+  slots {
     actor = Player
   }
   rules {
@@ -616,7 +616,7 @@ levels default of board {
         let source = r#"
 title = sprite_translate
 puzzle default {
-layers {
+slots {
 actor = Player
 }
 sprites {
@@ -726,7 +726,7 @@ P
         let source = r#"
 title = grid_render
 puzzle default {
-layers {
+slots {
 actor = Player
 }
 render {
@@ -1223,7 +1223,7 @@ sounds {
 }
 
 puzzle board {
-  layers {
+  slots {
     tiles = Player
   }
   empty .
@@ -1665,7 +1665,7 @@ scene playing {
 title = Mixed Game
 
 puzzle flat {
-layers {
+slots {
 actor = Player
 }
 rules {
@@ -1684,7 +1684,7 @@ P
 }
 
 puzzle cube {
-  layers {
+  slots {
     actor = Player Box Wall
   }
 
@@ -1728,7 +1728,7 @@ scene mixed_play {
 title = Mixed Microban
 
 puzzle microban2d {
-layers {
+slots {
 actor = Player
 }
 rules {
@@ -1752,7 +1752,7 @@ level "microban_02" {
 }
 
 puzzle microban3d {
-layers {
+slots {
 actor = Player
 }
 rules {
@@ -1969,7 +1969,7 @@ text level.title
 title = solver_task_compiled
 
 puzzle board {
-  layers {
+  slots {
     floor = Goal
     actor = Player Box Wall
   }
@@ -2170,7 +2170,7 @@ levels default of board {
 title = solver_compiled_stage_availability
 
 puzzle board {
-  layers {
+  slots {
     floor = Goal
     actor = Player Box
     item = Battery Door
@@ -2248,7 +2248,7 @@ levels default of board {
 title = solver_task_win_command
 
 puzzle board {
-  layers {
+  slots {
     actor = Player Exit
   }
   keys {
@@ -2369,7 +2369,7 @@ levels default of board {
 title = solver_level_start
 
 puzzle board {
-  layers {
+  slots {
     floor = Goal
     actor = Player
   }
@@ -2427,7 +2427,7 @@ scene playing {
 title = solver_request_level_start
 
 puzzle board {
-  layers {
+  slots {
     floor = Goal
     actor = Player
   }
@@ -2501,7 +2501,7 @@ levels default of board {
 title = solver_request_level_ascii
 
 puzzle board {
-  layers {
+  slots {
     floor = Goal
     actor = Player Box Wall
   }
@@ -2584,7 +2584,7 @@ levels default of board {
 title = solver_request_exact_state_goal
 
 puzzle board {
-  layers {
+  slots {
     actor = Player
   }
   keys {
@@ -2678,7 +2678,7 @@ levels default of board {
 title = solver_exact_state_heuristic
 
 puzzle board {
-  layers {
+  slots {
     actor = Player
   }
   keys {
@@ -2736,7 +2736,7 @@ levels default of board {
 title = solver_stage_availability
 
 puzzle board {
-  layers {
+  slots {
     actor = Player
     item = Switch Battery Door
   }
@@ -2807,7 +2807,7 @@ levels default of board {
 title = solver_collect_stage_availability
 
 puzzle board {
-  layers {
+  slots {
     actor = Player
     item = Switch Battery Door
   }
@@ -2877,7 +2877,7 @@ levels default of board {
 title = solver_exact_stage_availability
 
 puzzle board {
-  layers {
+  slots {
     actor = Player
     item = Battery Door
   }
@@ -2956,7 +2956,7 @@ levels default of board {
 title = solver_request_reachability
 
 puzzle board {
-  layers {
+  slots {
     actor = Player
   }
   keys {
@@ -3051,7 +3051,7 @@ levels default of board {
 title = solver_request_reachability_requires_goal
 
 puzzle board {
-  layers {
+  slots {
     actor = Player
   }
   keys {
@@ -3124,7 +3124,7 @@ levels default of board {
 title = solver_request_collect_predicate
 
 puzzle board {
-  layers {
+  slots {
     floor = Trail
     actor = Player
   }
@@ -3229,7 +3229,7 @@ levels default of board {
 title = solver_request_collect_maximize
 
 puzzle board {
-  layers {
+  slots {
     floor = Trail
     actor = Player
   }
@@ -3324,7 +3324,7 @@ levels default of board {
 title = solver_win_command
 
 puzzle board {
-  layers {
+  slots {
     actor = Player Exit
   }
   keys {
@@ -3368,7 +3368,7 @@ levels default of board {
 title = solver_explicit_goal_without_win
 
 puzzle board {
-  layers {
+  slots {
     floor = Flag
     actor = Player Exit
   }
@@ -3482,7 +3482,7 @@ levels default of board {
 title = solver_input_scope
 
 puzzle board {
-  layers {
+  slots {
     floor = Goal
     actor = Player Box Wall
   }
@@ -3555,7 +3555,7 @@ scene playing {
 title = "Themed 3D Solver"
 
 puzzle push3 {
-layers {
+slots {
 floor = Goal
 Player Box Wall
 }
@@ -3646,7 +3646,7 @@ PB.
 title = once_all_overlap
 
 puzzle board {
-  layers {
+  slots {
     tiles = A B
   }
   empty .
@@ -3690,7 +3690,7 @@ scene playing {
 again_interval = 90ms
 
 puzzle board {
-  layers {
+  slots {
     tiles = Player
   }
   empty .
@@ -3792,7 +3792,7 @@ scene playing {
 title = Scene Input Runtime Bundle
 
 puzzle board {
-  layers {
+  slots {
     tiles = Player
   }
   empty .
@@ -3843,7 +3843,7 @@ scene playing {
 title = Browser Supplied Runtime
 
 puzzle board {
-  layers {
+  slots {
     tiles = Player
   }
   empty .
@@ -3891,7 +3891,7 @@ scene playing {
 title = Editor Preview Export
 
 puzzle board {
-  layers {
+  slots {
     tiles = Player
   }
   empty .
@@ -3968,7 +3968,7 @@ scene playing {
 title = Export Test
 
 puzzle default {
-layers {
+slots {
 actor = Player
 }
 
@@ -4025,7 +4025,7 @@ title = Progress Export
 puzzle default {
 persistent var bonus = 0
 
-layers {
+slots {
 actor = Player
 }
 
@@ -4155,7 +4155,7 @@ rules {
 title = "Debug Trace"
 
 puzzle main {
-  layers {
+  slots {
     actor = Player
   }
 
@@ -4258,7 +4258,7 @@ levels main of main {
 title = level_select_input_contract
 
 puzzle default {
-layers {
+slots {
 actor = Player
 }
 empty .
@@ -4320,7 +4320,7 @@ level_menu
 title = level_menu_position_restart
 
 puzzle default {
-layers {
+slots {
 actor = Player
 }
 empty .
@@ -4404,7 +4404,7 @@ puzzle board {
     tween = true
     tween_duration = 300ms
   }
-  layers {
+  slots {
     actor = Player
   }
   rules {
@@ -4474,7 +4474,7 @@ puzzle board {
     tween = true
     tween_duration = 80ms
   }
-  layers {
+  slots {
     solid = Player
     marker = Done
   }
@@ -4573,7 +4573,7 @@ scene playing {
 title = Flickscreen Focus
 
 puzzle default {
-layers {
+slots {
   floor = Background
   actor = Player1 Player2
 }
@@ -4623,7 +4623,7 @@ theme noir {
 }
 
 puzzle default {
-layers {
+slots {
 actor = Player
 }
 
@@ -4699,7 +4699,7 @@ rules {
         let source = r#"title = "Local Frame"
 
 puzzle cube {
-  layers {
+  slots {
     actor = Player
   }
 
@@ -4732,11 +4732,25 @@ levels default of cube {
     }
 
     #[test]
+    fn puzzle3_three_camera_frame_preserves_vertical_yaw_and_roll() {
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("function cameraRenderFrame(cameraSettings)"));
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("cameraSettings.rollDegrees ?? 0"));
+        assert!(
+            PUZZLE3_THREE_RENDERER_JS
+                .contains("camera.up.set(cameraFrame.up.x, cameraFrame.up.y, cameraFrame.up.z);")
+        );
+        assert!(
+            !PUZZLE3_THREE_RENDERER_JS
+                .contains("camera.up.set(0, 0, -Math.sign(Math.sin(pitch)) || -1);")
+        );
+    }
+
+    #[test]
     fn puzzle3_export_embeds_source_free_frame_fixture_and_path() {
         let source = r#"title = "Tiny"
 
 puzzle cube {
-  layers {
+  slots {
     actor = Player
   }
   rules {
@@ -4813,7 +4827,10 @@ levels default of cube {
                 .contains("const yaw = degreesToRadians(cameraSettings.yawDegrees ?? 0);")
         );
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("const pitch = degreesToRadians(clamp(Number(cameraSettings.pitchDegrees ?? 35) || 35, -90, 90));"));
-        assert!(PUZZLE3_THREE_RENDERER_JS.contains("camera.up.set(0, 1, 0);"));
+        assert!(
+            PUZZLE3_THREE_RENDERER_JS
+                .contains("camera.up.set(cameraFrame.up.x, cameraFrame.up.y, cameraFrame.up.z);")
+        );
         assert!(
             PUZZLE3_THREE_RENDERER_JS
                 .contains("targetPoint.x - Math.sin(yaw) * horizontal * distance")
@@ -4998,7 +5015,7 @@ theme clean {
 }
 
 puzzle cube {
-  layers {
+  slots {
     actor = Player
   }
   rules {
@@ -5053,7 +5070,7 @@ levels default of cube {
 title = "Screenshot"
 
 puzzle cube {
-  layers {
+  slots {
     actor = Player
   }
   rules {
@@ -5096,7 +5113,7 @@ levels basic of cube {
         let source = r#"
 title = solver_level_rules
 puzzle board {
-  layers {
+  slots {
     floor = Goal
     actor = Player
   }

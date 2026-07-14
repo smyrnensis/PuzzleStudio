@@ -119,6 +119,7 @@ const level3dSizeLabel = document.querySelector("#level3dSizeLabel");
 const level3dResetPreviewButton = document.querySelector("#level3dResetPreviewButton");
 const level3dCameraYawScrub = document.querySelector("#level3dCameraYawScrub");
 const level3dCameraPitchScrub = document.querySelector("#level3dCameraPitchScrub");
+const level3dCameraRollScrub = document.querySelector("#level3dCameraRollScrub");
 const level3dCameraZoomScrub = document.querySelector("#level3dCameraZoomScrub");
 const level3dOriginXScrub = document.querySelector("#level3dOriginXScrub");
 const level3dOriginYScrub = document.querySelector("#level3dOriginYScrub");

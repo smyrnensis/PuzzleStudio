@@ -349,9 +349,8 @@ fn is_solver_control_input(name: &str) -> bool {
 }
 
 #[cfg(feature = "solver")]
-fn solver_inputs3(game: &Game3) -> Vec<InputId> {
-    let mut inputs = game
-        .inputs
+fn solver_inputs3(inputs: &[puzzle_grid3d::InputDef3]) -> Vec<InputId> {
+    let mut inputs = inputs
         .iter()
         .filter(|input| !is_solver_control_input(&input.name))
         .map(|input| input.id)
@@ -464,7 +463,7 @@ fn push_input_move(out: &mut String, loaded: &LoadedGame, input: InputId) {
 
 fn push_input_move3(out: &mut String, parsed: &ParsedPuzzle3, input: InputId) {
     out.push('{');
-    let input_def = parsed.game.input(input);
+    let input_def = parsed.input(input);
     let name = input_def
         .map(|input| input.name.as_str())
         .unwrap_or_else(|| panic!("compiled 3D input {} is missing its definition", input.0));
@@ -561,13 +560,12 @@ fn push_object3(out: &mut String, parsed: &ParsedPuzzle3, object: ObjectId3) {
     push_json_number(out, "id", object.0 as u64);
     out.push(',');
     let name = parsed
-        .catalog
-        .objects
-        .iter()
-        .find_map(|entry| (entry.id == object).then_some(entry.name.as_str()))
+        .object_labels
+        .get(&object)
+        .map(String::as_str)
         .unwrap_or_else(|| {
             panic!(
-                "compiled 3D object {} is missing its required catalog entry",
+                "compiled 3D object {} is missing its required label",
                 object.0
             )
         });
@@ -971,14 +969,6 @@ fn push_scene_object_body(
     level: Option<&Level>,
     resources: Option<&puzzle_lang::SceneResources>,
 ) {
-    let display_state = match materialize_display_state(loaded, state) {
-        Ok(display_state) => display_state,
-        Err(error) => {
-            push_display_error_scene_object_body(out, loaded, state, level, resources, &error);
-            return;
-        }
-    };
-    let state = display_state.as_ref().unwrap_or(state);
     push_json_number(out, "width", state.width as u64);
     out.push(',');
     push_json_number(out, "height", state.height as u64);
@@ -1001,39 +991,6 @@ fn push_scene_object_body(
     push_scene_regions(out, level);
     out.push(',');
     push_cells(out, loaded, state);
-}
-
-fn push_display_error_scene_object_body(
-    out: &mut String,
-    loaded: &LoadedGame,
-    state: &puzzle_core::State,
-    level: Option<&Level>,
-    resources: Option<&puzzle_lang::SceneResources>,
-    error: &TransitionError,
-) {
-    push_json_number(out, "width", state.width as u64);
-    out.push(',');
-    push_json_number(out, "height", state.height as u64);
-    out.push(',');
-    push_json_number(out, "layerCount", state.layer_count as u64);
-    out.push(',');
-    push_puzzle_settings(out, loaded);
-    out.push(',');
-    push_puzzle_screen(out, loaded);
-    out.push(',');
-    out.push_str("\"resources\":");
-    if let Some(resources) = resources {
-        out.push('{');
-        push_scene_resources_object(out, resources);
-        out.push('}');
-    } else {
-        out.push_str("null");
-    }
-    out.push(',');
-    push_scene_regions(out, level);
-    out.push(',');
-    out.push_str("\"cells\":[],\"displayError\":");
-    push_json_string(out, &format!("Display program failed: {error:?}"));
 }
 
 fn push_puzzle_settings(out: &mut String, loaded: &LoadedGame) {
@@ -1078,16 +1035,6 @@ fn push_puzzle_settings(out: &mut String, loaded: &LoadedGame) {
     out.push('}');
     out.push('}');
     out.push('}');
-}
-
-fn materialize_display_state(
-    loaded: &LoadedGame,
-    state: &puzzle_core::State,
-) -> Result<Option<State>, TransitionError> {
-    let Some(program) = loaded.display_program.as_deref() else {
-        return Ok(None);
-    };
-    transition_program(&loaded.game, program, state, InputId(0)).map(Some)
 }
 
 fn push_puzzle_screen(out: &mut String, loaded: &LoadedGame) {

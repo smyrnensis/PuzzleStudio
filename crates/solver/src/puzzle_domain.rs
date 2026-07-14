@@ -246,7 +246,7 @@ mod tests {
 title = solver_push_goal
 
 puzzle default {
-layers {
+slots {
 floor = Goal
 actor = Player Box Wall
 }
@@ -314,7 +314,7 @@ PBG
 title = solver_depth_budget
 
 puzzle default {
-layers {
+slots {
 floor = Goal
 actor = Player Box
 }
@@ -374,7 +374,7 @@ PBG
 title = mark_solver
 
 puzzle default {
-layers {
+slots {
 floor = Goal
 actor = Player Box Wall
 }
@@ -447,7 +447,7 @@ PBG
 title = solver_state_slicer
 
 puzzle default {
-layers {
+slots {
 actor = Player Floor
 }
 
@@ -502,7 +502,7 @@ PF
 title = win_solver
 
 puzzle board {
-layers {
+slots {
 actor = Player Exit
 }
 
@@ -559,7 +559,7 @@ PE
 title = random_solver
 
 puzzle default {
-layers {
+slots {
 actor = A B
 }
 empty .

@@ -34,6 +34,23 @@ impl KernelId for VariableId {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct InputId(pub u16);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct ObjectId(pub u16);
+
+impl ObjectId {
+    pub const EMPTY: Self = Self(0);
+
+    #[inline]
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+}
+
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
+)]
+pub struct LayerId(pub u16);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct GridCoord<const D: usize> {
     axes: [u16; D],
@@ -1035,6 +1052,100 @@ pub struct RuleMarkPattern<ObjectId, MarkId> {
     pub mark: MarkId,
     pub value: Option<i64>,
     pub match_value: MarkValueMatch,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuleMatchCell<Offset, ObjectId, LayerId, MarkId> {
+    pub offset: Offset,
+    pub require_null: bool,
+    pub require_objects: Vec<ObjectId>,
+    pub require_object_sets: Vec<ObjectSetMatcher<ObjectId, LayerId>>,
+    pub forbid_objects: Vec<ObjectId>,
+    pub require_mark: Vec<RuleMarkPattern<ObjectId, MarkId>>,
+    pub require_object_set_mark: Vec<ObjectSetMarkPattern<MarkId>>,
+    pub forbid_mark: Vec<RuleMarkPattern<ObjectId, MarkId>>,
+    pub forbid_object_set_mark: Vec<ObjectSetMarkPattern<MarkId>>,
+}
+
+impl<Offset, ObjectId, LayerId, MarkId> RuleMatchCell<Offset, ObjectId, LayerId, MarkId> {
+    pub fn new(offset: impl Into<Offset>) -> Self {
+        Self {
+            offset: offset.into(),
+            require_null: false,
+            require_objects: Vec::new(),
+            require_object_sets: Vec::new(),
+            forbid_objects: Vec::new(),
+            require_mark: Vec::new(),
+            require_object_set_mark: Vec::new(),
+            forbid_mark: Vec::new(),
+            forbid_object_set_mark: Vec::new(),
+        }
+    }
+
+    pub fn require(mut self, object: ObjectId) -> Self {
+        self.require_objects.push(object);
+        self
+    }
+
+    pub fn forbid(mut self, object: ObjectId) -> Self {
+        self.forbid_objects.push(object);
+        self
+    }
+
+    pub fn require_mark(mut self, object: ObjectId, mark: MarkId, value: Option<i64>) -> Self {
+        self.require_mark.push(RuleMarkPattern {
+            object,
+            mark,
+            value,
+            match_value: MarkValueMatch::Exact,
+        });
+        self
+    }
+
+    pub fn require_mark_key(mut self, object: ObjectId, mark: MarkId) -> Self {
+        self.require_mark.push(RuleMarkPattern {
+            object,
+            mark,
+            value: None,
+            match_value: MarkValueMatch::Any,
+        });
+        self
+    }
+
+    pub fn forbid_mark(mut self, object: ObjectId, mark: MarkId, value: Option<i64>) -> Self {
+        self.forbid_mark.push(RuleMarkPattern {
+            object,
+            mark,
+            value,
+            match_value: MarkValueMatch::Exact,
+        });
+        self
+    }
+
+    pub fn forbid_mark_key(mut self, object: ObjectId, mark: MarkId) -> Self {
+        self.forbid_mark.push(RuleMarkPattern {
+            object,
+            mark,
+            value: None,
+            match_value: MarkValueMatch::Any,
+        });
+        self
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CellBoundsMatch {
+    Continue,
+    MatchedNull,
+    Rejected,
+}
+
+pub const fn match_cell_bounds(require_null: bool, in_bounds: bool) -> CellBoundsMatch {
+    match (require_null, in_bounds) {
+        (false, true) => CellBoundsMatch::Continue,
+        (true, false) => CellBoundsMatch::MatchedNull,
+        _ => CellBoundsMatch::Rejected,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

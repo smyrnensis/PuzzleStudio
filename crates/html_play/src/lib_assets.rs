@@ -263,7 +263,10 @@ fn base64_encode(bytes: &[u8]) -> String {
 }
 
 fn generated_visuals_js(loaded: &LoadedGame) -> String {
-    if loaded.visuals.aliases.is_empty() && loaded.visuals.sprites.is_empty() {
+    if loaded.visuals.aliases.is_empty()
+        && loaded.visuals.sprites.is_empty()
+        && loaded.visuals.order.priorities.is_empty()
+    {
         return String::new();
     }
 
@@ -290,9 +293,11 @@ fn generated_visuals_js(loaded: &LoadedGame) -> String {
         push_visual_sprite(&mut sprites, sprite);
     }
     sprites.push('}');
+    let order = serde_json::to_string(&loaded.visuals.order)
+        .expect("compiled sprite order serialization must succeed");
 
     format!(
-        "(() => {{\n  const previous = window.GameVisuals || {{}};\n  const createVisuals = window.PuzzleSpriteRegistry?.create || ((config = {{}}) => ({{\n    aliases: {{ ...(config.aliases || {{}}) }},\n    sprites: {{ ...(config.sprites || {{}}) }},\n    boardClass: config.boardClass || \"\",\n    themeClass: config.themeClass || \"\",\n    editorPuzzle: {{ ...(config.editorPuzzle || {{}}) }},\n    autoAdvanceDelayMs: config.autoAdvanceDelayMs,\n  }}));\n  window.GameVisuals = createVisuals({{\n    ...previous,\n    aliases: {{ ...(previous.aliases || {{}}), ...{aliases} }},\n    sprites: {{ ...(previous.sprites || {{}}), ...{sprites} }},\n  }});\n}})();"
+        "(() => {{\n  const previous = window.GameVisuals || {{}};\n  const createVisuals = window.PuzzleSpriteRegistry?.create || ((config = {{}}) => ({{\n    aliases: {{ ...(config.aliases || {{}}) }},\n    sprites: {{ ...(config.sprites || {{}}) }},\n    order: {{ direction_priority: [...(config.order?.direction_priority || [])], priorities: [...(config.order?.priorities || [])] }},\n    boardClass: config.boardClass || \"\",\n    themeClass: config.themeClass || \"\",\n    editorPuzzle: {{ ...(config.editorPuzzle || {{}}) }},\n    autoAdvanceDelayMs: config.autoAdvanceDelayMs,\n  }}));\n  window.GameVisuals = createVisuals({{\n    ...previous,\n    aliases: {{ ...(previous.aliases || {{}}), ...{aliases} }},\n    sprites: {{ ...(previous.sprites || {{}}), ...{sprites} }},\n    order: {order},\n  }});\n}})();"
     )
 }
 

@@ -16,6 +16,11 @@ if ! grep -q "export function activate_source_analysis" crates/html_editor/stati
   exit 1
 fi
 
+if ! grep -q "export function activate_source_analysis_with_profile" crates/html_editor/static/wasm/puzzle_wasm.js; then
+  echo "generated WASM bindings are missing activate_source_analysis_with_profile" >&2
+  exit 1
+fi
+
 if ! grep -q "export function active_source_analysis_highlight_range_json" crates/html_editor/static/wasm/puzzle_wasm.js; then
   echo "generated WASM bindings are missing active_source_analysis_highlight_range_json" >&2
   exit 1

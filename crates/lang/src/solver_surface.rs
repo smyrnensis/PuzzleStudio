@@ -443,9 +443,23 @@ pub(crate) fn parse_solver_block(
         ));
     }
 
+    parse_solver_body(lines, start + 1, true, &lines[start])
+}
+
+pub(crate) fn parse_solver_entry_body(
+    lines: &[String],
+) -> Result<SolverSurfaceStrategy, DiagnosticReport> {
+    parse_solver_body(lines, 0, false, "solver {").map(|(_, solver)| solver)
+}
+
+fn parse_solver_body(
+    lines: &[String],
+    mut i: usize,
+    closing_brace_required: bool,
+    owner_line: &str,
+) -> Result<(usize, SolverSurfaceStrategy), DiagnosticReport> {
     let mut strategy = None::<SolverSurfaceStrategy>;
     let mut deadends = Vec::new();
-    let mut i = start + 1;
     while i < lines.len() {
         let line = &lines[i];
         if line == "}" {
@@ -523,10 +537,16 @@ pub(crate) fn parse_solver_block(
             _ => return Err(parse_error(line, "unknown solver block row")),
         }
     }
-    Err(parse_error(
-        &lines[start],
-        "solver block missing closing brace",
-    ))
+    if closing_brace_required {
+        Err(parse_error(
+            owner_line,
+            "solver block missing closing brace",
+        ))
+    } else {
+        let mut solver = strategy.unwrap_or_default();
+        solver.deadends = deadends;
+        Ok((i, solver))
+    }
 }
 
 fn parse_solver_deadend_block(
@@ -678,8 +698,10 @@ mod tests {
         .collect::<Vec<_>>();
 
         let (next, solver) = parse_solver_block(&lines, 0).unwrap();
+        let entry_solver = parse_solver_entry_body(&lines[1..lines.len() - 1]).unwrap();
 
         assert_eq!(next, lines.len());
+        assert_eq!(entry_solver, solver);
         assert_eq!(solver.terms.len(), 1);
         assert_eq!(solver.deadends.len(), 2);
         assert!(matches!(

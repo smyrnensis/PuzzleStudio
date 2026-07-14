@@ -8,7 +8,7 @@ tags {
 state = norm poss
 }
 
-layers {
+slots {
 @Floor @Floor2
 Wall Alien Crab:state
 each @LockedFrame:directions @LockedCorner:directions

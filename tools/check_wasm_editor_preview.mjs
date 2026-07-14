@@ -2,6 +2,8 @@ import { readFile } from "node:fs/promises";
 
 import init, {
   activate_source_analysis,
+  activate_source_analysis_with_profile,
+  active_source_analysis_highlight_range_json,
   active_source_analysis_level_editor_level_slots,
   active_source_analysis_level_editor_manifest_json,
   active_source_analysis_level_editor_sprite_json,
@@ -10,6 +12,34 @@ import init, {
 
 const wasm = await readFile("crates/html_editor/static/wasm/puzzle_wasm_bg.wasm");
 await init({ module_or_path: wasm });
+
+const profiledHighlightSource = `levels {
+legend {
+_ = Floor
+}
+level "stacked" {
+___
+-
+___
+}
+}
+`;
+const profiledRevision = activate_source_analysis_with_profile(
+  profiledHighlightSource,
+  "puzzle3d",
+);
+const profiledHighlight = JSON.parse(active_source_analysis_highlight_range_json(
+  profiledRevision,
+  0,
+  profiledHighlightSource.length,
+  false,
+));
+const invalidProfiledText = profiledHighlight.spans
+  .filter((span) => span.kind === "level-cell-invalid")
+  .map((span) => profiledHighlightSource.slice(span.start, span.end));
+if (invalidProfiledText.includes("_") || invalidProfiledText.includes("-")) {
+  throw new Error(`profiled level highlighting rejected declared cells or slice separators: ${invalidProfiledText}`);
+}
 
 const source = `
 title = "Editor Preview Contract"

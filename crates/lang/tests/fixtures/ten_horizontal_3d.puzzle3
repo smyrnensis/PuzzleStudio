@@ -1,0 +1,29 @@
+puzzle ten_horizontal {
+dimension = 3
+
+slots {
+solid = TEN:horizontal
+}
+
+rules {
+input [ TEN:horizontal ] -> [ > TEN:horizontal ]
+for h in horizontal {
+if input == h {
+[ > TEN:horizontal ] -> [ > TEN:h ]
+}
+}
+[ > TEN:horizontal | ] -> [ | TEN:horizontal ]
+}
+}
+
+levels {
+legend {
+T = TEN:front
+}
+
+level "first" {
+...
+.T.
+...
+}
+}

@@ -1432,9 +1432,10 @@ fn level3d_blocks(source: &str, context: &SurfaceDocument) -> Vec<Level3dBlock> 
             _ => None,
         })
         .collect::<HashSet<_>>();
-    let has_model2 = !is_puzzle3 && context.lines.iter().any(|line| {
-        line.scope.is_none() && matches!(line.tokens.as_slice(), [kind, ..] if kind == "puzzle")
-    });
+    let has_model2 = !is_puzzle3
+        && context.lines.iter().any(|line| {
+            line.scope.is_none() && matches!(line.tokens.as_slice(), [kind, ..] if kind == "puzzle")
+        });
     context
         .lines
         .iter()
@@ -2047,7 +2048,7 @@ mod tests {
 title = source_entries
 
 puzzle board {
-layers {
+slots {
 Player
 }
 sprites {
@@ -2087,9 +2088,9 @@ level "three" {
         let entries = resolve_source_entries_from_document(source, &document);
 
         assert!(
-            entries
-                .iter()
-                .any(|entry| { entry.kind == SourceTargetKind::Sprite3d && entry.name == "Player" })
+            entries.iter().any(|entry| {
+                entry.kind == SourceTargetKind::Sprite3d && entry.name == "Player"
+            })
         );
         assert!(entries.iter().any(|entry| {
             entry.kind == SourceTargetKind::Level3d
@@ -2160,7 +2161,7 @@ PP
     fn resolves_levels_body_to_3d_level() {
         let source = r#"
 puzzle push3d {
-layers {
+slots {
 Player
 }
 rules {
@@ -2175,12 +2176,9 @@ _P_
 }
 "#;
         let cursor = source.find("_P_").unwrap();
-        let target = resolve_source_target_for_profile(
-            source,
-            cursor,
-            PuzzleSourceProfile::Puzzle3d,
-        )
-        .unwrap();
+        let target =
+            resolve_source_target_for_profile(source, cursor, PuzzleSourceProfile::Puzzle3d)
+                .unwrap();
 
         assert_eq!(target.kind, SourceTargetKind::Level3d);
         assert_eq!(target.name, "push3d_01");
@@ -2550,7 +2548,7 @@ GoalCount
     fn sprite_source_contract_resolves_palette_from_parser_visuals() {
         let source = r##"
 puzzle main {
-layers {
+slots {
 Player
 }
 
@@ -2602,7 +2600,7 @@ shape = {
     #[test]
     fn sprite_edit_contract_distinguishes_transparent_color_from_empty_cell() {
         let source = r#"
-puzzle world { layers { actor = Player } }
+puzzle world { slots { actor = Player } }
 sprites art of world {
 Player {
 colors = transparent red
@@ -2623,7 +2621,7 @@ shape = {
     fn sprite_source_contract_preserves_selector_and_duration_rows() {
         let source = r##"
 puzzle main {
-layers {
+slots {
 Player
 }
 
@@ -2673,7 +2671,7 @@ colors accent
     fn sprite_source_contract_exposes_animation_frames() {
         let source = r##"
 puzzle main {
-layers {
+slots {
 Player
 }
 
@@ -3199,12 +3197,9 @@ shape = {
 }
 "##;
         let cursor = source.find("..0..").unwrap();
-        let target = resolve_source_target_for_profile(
-            source,
-            cursor,
-            PuzzleSourceProfile::Puzzle3d,
-        )
-        .unwrap();
+        let target =
+            resolve_source_target_for_profile(source, cursor, PuzzleSourceProfile::Puzzle3d)
+                .unwrap();
 
         assert_eq!(target.kind, SourceTargetKind::Sprite3d);
         assert_eq!(target.name, "Floor");
@@ -3247,12 +3242,9 @@ shape = pulse
 }
 "#;
         let cursor = source.find("duration = 200ms").unwrap();
-        let target = resolve_source_target_for_profile(
-            source,
-            cursor,
-            PuzzleSourceProfile::Puzzle3d,
-        )
-        .unwrap();
+        let target =
+            resolve_source_target_for_profile(source, cursor, PuzzleSourceProfile::Puzzle3d)
+                .unwrap();
         let sprite = target.source_sprite.unwrap();
 
         assert_eq!(sprite.status, SourceSprite3dStatus::Complete);
@@ -3306,12 +3298,9 @@ shape = {
 }
 "##;
         let cursor = source.find(".000.").unwrap();
-        let target = resolve_source_target_for_profile(
-            source,
-            cursor,
-            PuzzleSourceProfile::Puzzle3d,
-        )
-        .unwrap();
+        let target =
+            resolve_source_target_for_profile(source, cursor, PuzzleSourceProfile::Puzzle3d)
+                .unwrap();
 
         assert_eq!(target.kind, SourceTargetKind::Sprite3d);
         assert_eq!(target.name, "Goal");
@@ -3328,12 +3317,9 @@ Floor {
 }
 "#;
         let cursor = source.find("Floor").unwrap() + "Floor".len();
-        let target = resolve_source_target_for_profile(
-            source,
-            cursor,
-            PuzzleSourceProfile::Puzzle3d,
-        )
-        .unwrap();
+        let target =
+            resolve_source_target_for_profile(source, cursor, PuzzleSourceProfile::Puzzle3d)
+                .unwrap();
 
         assert_eq!(target.kind, SourceTargetKind::Sprite3d);
         assert_eq!(target.name, "Floor");
@@ -3361,12 +3347,9 @@ Goal {
 }
 "#;
         let cursor = source.find("Goal").unwrap();
-        let target = resolve_source_target_for_profile(
-            source,
-            cursor,
-            PuzzleSourceProfile::Puzzle3d,
-        )
-        .unwrap();
+        let target =
+            resolve_source_target_for_profile(source, cursor, PuzzleSourceProfile::Puzzle3d)
+                .unwrap();
 
         assert_eq!(target.kind, SourceTargetKind::Sprite3d);
         assert_eq!(target.name, "Goal");

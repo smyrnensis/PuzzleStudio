@@ -20,7 +20,7 @@ sfx endlevel { seed = 98393900; type = puzzlescript }
 }
 
 puzzle main {
-layers {
+slots {
 layer1 = BlackFloor OrangeFloor PurpleFloor GreenFloor BrownFloor WhiteFloor
 layer2 = BlackButton OrangeButton PurpleButton GreenButton BrownButton Crack Water
 layer3 = WaterEdge FloorEdge WallEdge

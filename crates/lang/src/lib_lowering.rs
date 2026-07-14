@@ -5,16 +5,13 @@ struct ProgramLowerer<'a> {
     variable_names: &'a HashMap<String, VariableId>,
     constant_variables: &'a [VariableId],
     condition_names: &'a HashMap<String, ConditionId>,
-    visual_condition_reads: &'a HashSet<ConditionId>,
     mark_names: &'a HashMap<String, MarkDef>,
     model_sound_triggers: &'a [ModelSoundTrigger],
     animation: &'a AnimationDef,
     value_sets: &'a HashMap<String, Vec<String>>,
     maps: &'a HashMap<String, ValueMap>,
     directions: &'a [Direction],
-    visual_objects: &'a [ObjectId],
     next_rule_id: u16,
-    visual_rules: Vec<RuleId>,
     rule_animations: HashMap<RuleId, Vec<RuleAnimation>>,
     rule_effects: HashMap<RuleId, Vec<RuleEffect>>,
     rule_debug_info: HashMap<RuleId, RuleDebugInfo>,
@@ -29,7 +26,6 @@ struct StatementLoweringContext {
     orientation: Option<OrientationExpr>,
     input_allowed: bool,
     input_forbidden_context: Option<&'static str>,
-    role: RuleRole,
     local_definitions: Vec<HashMap<String, RuleDefinitionAst>>,
 }
 
@@ -47,8 +43,6 @@ struct LoweredPrograms {
     level_starts: Vec<Option<Vec<RuleStep>>>,
     level_clears: Vec<Option<Vec<RuleStep>>>,
     level_programs: Vec<Vec<RuleStep>>,
-    display: Option<Vec<RuleStep>>,
-    visual_rules: Vec<RuleId>,
     rule_animations: HashMap<RuleId, Vec<RuleAnimation>>,
     rule_effects: HashMap<RuleId, Vec<RuleEffect>>,
     rule_debug_info: HashMap<RuleId, RuleDebugInfo>,
@@ -58,12 +52,6 @@ struct LoweredPrograms {
 struct LoweredEffects {
     core: Vec<Effect>,
     ordered: Vec<RuleEffect>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ClassifiedRuleRole {
-    Main,
-    Visual,
 }
 
 fn lower_programs(
@@ -76,15 +64,12 @@ fn lower_programs(
     level_clear_local_frame: Option<LocalFrame<ObjectId>>,
     last_level_clear_statements: Option<Vec<StatementAst>>,
     last_level_clear_local_frame: Option<LocalFrame<ObjectId>>,
-    display_statements: Option<Vec<StatementAst>>,
     level_bodies: &[PreparedLevelBody],
     object_layers: &HashMap<ObjectId, LayerId>,
-    visual_objects: &[ObjectId],
     input_names: &HashMap<String, InputId>,
     variable_names: &HashMap<String, VariableId>,
     constant_variables: &[VariableId],
     condition_names: &HashMap<String, ConditionId>,
-    visual_condition_reads: &HashSet<ConditionId>,
     mark_names: &HashMap<String, MarkDef>,
     model_sound_triggers: &[ModelSoundTrigger],
     animation: &AnimationDef,
@@ -106,16 +91,12 @@ fn lower_programs(
     let Some(main_statements) = main_statements else {
         return Err(DiagnosticReport::error("missing puzzle rules".to_string()));
     };
-    if display_statements.is_some() {
-        return Err(DiagnosticReport::error("`on_display` was removed".to_string()));
-    }
     let mut diagnostics = collect_program_reference_diagnostics(
         &definitions_by_name,
         &main_statements,
         level_start_statements.as_deref(),
         level_clear_statements.as_deref(),
         last_level_clear_statements.as_deref(),
-        None,
         level_bodies,
     );
     dedup_diagnostics(&mut diagnostics);
@@ -130,16 +111,13 @@ fn lower_programs(
         variable_names,
         constant_variables,
         condition_names,
-        visual_condition_reads,
         mark_names,
         model_sound_triggers,
         animation,
         value_sets,
         maps,
         directions,
-        visual_objects,
         next_rule_id: 1,
-        visual_rules: Vec::new(),
         rule_animations: HashMap::new(),
         rule_effects: HashMap::new(),
         rule_debug_info: HashMap::new(),
@@ -199,7 +177,6 @@ fn lower_programs(
     } else {
         None
     };
-    let display = None;
     let mut level_starts = Vec::with_capacity(level_bodies.len());
     let mut level_clears = Vec::with_capacity(level_bodies.len());
     let mut level_programs = Vec::with_capacity(level_bodies.len());
@@ -268,8 +245,6 @@ fn lower_programs(
         level_starts,
         level_clears,
         level_programs,
-        display,
-        visual_rules: lowerer.visual_rules,
         rule_animations: lowerer.rule_animations,
         rule_effects: lowerer.rule_effects,
         rule_debug_info: lowerer.rule_debug_info,
@@ -292,7 +267,6 @@ fn collect_program_reference_diagnostics(
     level_start_statements: Option<&[StatementAst]>,
     level_clear_statements: Option<&[StatementAst]>,
     last_level_clear_statements: Option<&[StatementAst]>,
-    display_statements: Option<&[StatementAst]>,
     level_bodies: &[PreparedLevelBody],
 ) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
@@ -314,7 +288,6 @@ fn collect_program_reference_diagnostics(
         level_start_statements,
         level_clear_statements,
         last_level_clear_statements,
-        display_statements,
     ]
     .into_iter()
     .flatten()
@@ -964,9 +937,7 @@ fn lower_goal_condition(
     object_layers: &HashMap<ObjectId, LayerId>,
     variable_names: &HashMap<String, VariableId>,
     condition_names: &HashMap<String, ConditionId>,
-    visual_condition_reads: &HashSet<ConditionId>,
     mark_names: &HashMap<String, MarkDef>,
-    visual_objects: &[ObjectId],
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     input_names: &HashMap<String, InputId>,
@@ -979,9 +950,7 @@ fn lower_goal_condition(
             object_layers,
             variable_names,
             condition_names,
-            visual_condition_reads,
             mark_names,
-            visual_objects,
             value_sets,
             maps,
             input_names,
@@ -999,7 +968,6 @@ fn lower_query_definitions(
     variable_names: &HashMap<String, VariableId>,
     object_layers: &HashMap<ObjectId, LayerId>,
     mark_names: &HashMap<String, MarkDef>,
-    visual_objects: &[ObjectId],
     value_sets: &HashMap<String, Vec<String>>,
     input_names: &HashMap<String, InputId>,
     directions: &[Direction],
@@ -1012,7 +980,6 @@ fn lower_query_definitions(
         variable_names,
         object_layers,
         mark_names,
-        visual_objects,
         value_sets,
         input_names,
         directions,
@@ -1031,7 +998,6 @@ struct QueryLoweringContext<'a> {
     variable_names: &'a HashMap<String, VariableId>,
     object_layers: &'a HashMap<ObjectId, LayerId>,
     mark_names: &'a HashMap<String, MarkDef>,
-    visual_objects: &'a [ObjectId],
     value_sets: &'a HashMap<String, Vec<String>>,
     input_names: &'a HashMap<String, InputId>,
     directions: &'a [Direction],
@@ -1092,7 +1058,7 @@ impl<'a> crate::solver_surface::SolverQueryLoweringAdapter<QueryLoweringContext<
     fn lower_pattern_query_value(
         kind: crate::solver_surface::SolverQueryCallKind,
         pattern: &SolverSurfacePatternArg,
-        source_line: &str,
+        _source_line: &str,
         context: &QueryLoweringContext<'a>,
     ) -> Result<Self::Value, Self::Error> {
         let pattern = lower_condition_pattern_arg2d(pattern, context)?;
@@ -1107,9 +1073,6 @@ impl<'a> crate::solver_surface::SolverQueryLoweringAdapter<QueryLoweringContext<
                 ConditionValueAst::NoneMatches(pattern)
             }
         };
-        if condition_value_reads_visual_object(&kind, context.visual_objects) {
-            return Err(main_visual_object_error("query", Some(source_line)));
-        }
         lower_condition_value_kind(
             &kind,
             context.input_names,
@@ -1159,7 +1122,7 @@ fn lower_query_selector2d(
     source_line: &str,
     context: &QueryLoweringContext<'_>,
 ) -> Result<Vec<ObjectId>, DiagnosticReport> {
-    let objects = resolve_object_selector(
+    Ok(resolve_object_selector(
         selector,
         source_line,
         context.object_names,
@@ -1169,14 +1132,7 @@ fn lower_query_selector2d(
         context.object_groups,
         &HashMap::new(),
     )?
-    .alternatives;
-    if objects
-        .iter()
-        .any(|object| object_is_visual(*object, context.visual_objects))
-    {
-        return Err(main_visual_object_error("query", Some(source_line)));
-    }
-    Ok(objects)
+    .alternatives)
 }
 
 fn lower_solver_strategy(
@@ -1189,7 +1145,6 @@ fn lower_solver_strategy(
     variable_names: &HashMap<String, VariableId>,
     object_layers: &HashMap<ObjectId, LayerId>,
     mark_names: &HashMap<String, MarkDef>,
-    visual_objects: &[ObjectId],
     value_sets: &HashMap<String, Vec<String>>,
     input_names: &HashMap<String, InputId>,
     directions: &[Direction],
@@ -1202,7 +1157,6 @@ fn lower_solver_strategy(
         variable_names,
         object_layers,
         mark_names,
-        visual_objects,
         value_sets,
         input_names,
         directions,
@@ -1219,9 +1173,7 @@ fn lower_goal_expr(
     object_layers: &HashMap<ObjectId, LayerId>,
     variable_names: &HashMap<String, VariableId>,
     condition_names: &HashMap<String, ConditionId>,
-    visual_condition_reads: &HashSet<ConditionId>,
     mark_names: &HashMap<String, MarkDef>,
-    visual_objects: &[ObjectId],
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     input_names: &HashMap<String, InputId>,
@@ -1237,9 +1189,7 @@ fn lower_goal_expr(
                         object_layers,
                         variable_names,
                         condition_names,
-                        visual_condition_reads,
                         mark_names,
-                        visual_objects,
                         value_sets,
                         maps,
                         input_names,
@@ -1257,9 +1207,7 @@ fn lower_goal_expr(
                         object_layers,
                         variable_names,
                         condition_names,
-                        visual_condition_reads,
                         mark_names,
-                        visual_objects,
                         value_sets,
                         maps,
                         input_names,
@@ -1302,34 +1250,21 @@ fn lower_goal_expr(
             expected: *value,
         })),
         ConditionAst::ConditionEquals { name, value } => Ok(GoalExpr::Clause(GoalClause {
-            value: GoalValue::Condition(resolve_non_visual_condition_for_goal(
-                name,
-                condition_names,
-                visual_condition_reads,
-            )?),
+            value: GoalValue::Condition(resolve_condition_for_goal(name, condition_names)?),
             op: ComparisonOp::Eq,
             expected: *value,
         })),
         ConditionAst::ConditionNonZero(name) => Ok(GoalExpr::Clause(GoalClause {
-            value: GoalValue::Condition(resolve_non_visual_condition_for_goal(
-                name,
-                condition_names,
-                visual_condition_reads,
-            )?),
+            value: GoalValue::Condition(resolve_condition_for_goal(name, condition_names)?),
             op: ComparisonOp::NotEq,
             expected: 0,
         })),
         ConditionAst::ConditionCompare { name, op, value } => Ok(GoalExpr::Clause(GoalClause {
-            value: GoalValue::Condition(resolve_non_visual_condition_for_goal(
-                name,
-                condition_names,
-                visual_condition_reads,
-            )?),
+            value: GoalValue::Condition(resolve_condition_for_goal(name, condition_names)?),
             op: *op,
             expected: *value,
         })),
         ConditionAst::InlineConditionValueEquals { kind, value } => {
-            validate_non_visual_condition_value(kind, visual_objects, None)?;
             let kind = lower_condition_value_kind(
                 kind,
                 input_names,
@@ -1346,7 +1281,6 @@ fn lower_goal_expr(
             }))
         }
         ConditionAst::InlineConditionNonZero(kind) => {
-            validate_non_visual_condition_value(kind, visual_objects, None)?;
             let kind = lower_condition_value_kind(
                 kind,
                 input_names,
@@ -1363,7 +1297,6 @@ fn lower_goal_expr(
             }))
         }
         ConditionAst::InlineConditionCompare { kind, op, value } => {
-            validate_non_visual_condition_value(kind, visual_objects, None)?;
             let kind = lower_condition_value_kind(
                 kind,
                 input_names,
@@ -1395,288 +1328,14 @@ fn resolve_variable_for_goal(
         .ok_or_else(|| DiagnosticReport::error(format!("unknown variable in goal: {name}")))
 }
 
-fn resolve_non_visual_condition_for_goal(
+fn resolve_condition_for_goal(
     name: &str,
     condition_names: &HashMap<String, ConditionId>,
-    visual_condition_reads: &HashSet<ConditionId>,
 ) -> Result<ConditionId, DiagnosticReport> {
-    let condition = condition_names
+    condition_names
         .get(name)
         .copied()
-        .ok_or_else(|| DiagnosticReport::error(format!("unknown condition in goal: {name}")))?;
-    ensure_non_visual_condition_def(condition, visual_condition_reads, None)?;
-    Ok(condition)
-}
-
-fn visual_condition_reads(
-    condition_defs: &[ConditionDefinitionAst],
-    visual_objects: &[ObjectId],
-) -> HashSet<ConditionId> {
-    condition_defs
-        .iter()
-        .filter_map(|condition| {
-            condition_value_reads_visual_object(&condition.kind, visual_objects)
-                .then_some(condition.id)
-        })
-        .collect()
-}
-
-fn ensure_non_visual_condition_def(
-    condition: ConditionId,
-    visual_condition_reads: &HashSet<ConditionId>,
-    source_line: Option<&str>,
-) -> Result<(), DiagnosticReport> {
-    if visual_condition_reads.contains(&condition) {
-        return Err(main_visual_object_error("condition", source_line));
-    }
-    Ok(())
-}
-
-fn validate_non_visual_condition_value(
-    kind: &ConditionValueAst,
-    visual_objects: &[ObjectId],
-    source_line: Option<&str>,
-) -> Result<(), DiagnosticReport> {
-    if condition_value_reads_visual_object(kind, visual_objects) {
-        return Err(main_visual_object_error("condition", source_line));
-    }
-    Ok(())
-}
-
-fn condition_value_reads_visual_object(
-    kind: &ConditionValueAst,
-    visual_objects: &[ObjectId],
-) -> bool {
-    match kind {
-        ConditionValueAst::CountObjects(objects)
-        | ConditionValueAst::ExistsObjects(objects)
-        | ConditionValueAst::NoneObjects(objects) => objects
-            .iter()
-            .any(|object| object_is_visual(*object, visual_objects)),
-        ConditionValueAst::CountMatches(pattern)
-        | ConditionValueAst::ExistsMatches(pattern)
-        | ConditionValueAst::NoneMatches(pattern) => {
-            pattern_block_reads_visual_object(&pattern.pattern, visual_objects)
-        }
-    }
-}
-
-fn validate_non_visual_pattern_block(
-    pattern: &PatternBlock,
-    visual_objects: &[ObjectId],
-    source_line: &str,
-) -> Result<(), DiagnosticReport> {
-    if pattern_block_reads_visual_object(pattern, visual_objects) {
-        return Err(main_visual_object_error("pattern", Some(source_line)));
-    }
-    Ok(())
-}
-
-fn pattern_block_reads_visual_object(pattern: &PatternBlock, visual_objects: &[ObjectId]) -> bool {
-    pattern.components.iter().any(|component| {
-        component.rows.iter().flatten().any(|part| match part {
-            BlockPart::Cell(cell) => {
-                selectors_read_visual_object(&cell.require, visual_objects)
-                    || selectors_read_visual_object(&cell.forbid, visual_objects)
-            }
-            BlockPart::Ellipsis => false,
-        })
-    })
-}
-
-fn selectors_read_visual_object(selectors: &[ObjectSelector], visual_objects: &[ObjectId]) -> bool {
-    selectors.iter().any(|selector| {
-        selector
-            .alternatives
-            .iter()
-            .any(|object| object_is_visual(*object, visual_objects))
-    })
-}
-
-fn object_is_visual(object: ObjectId, visual_objects: &[ObjectId]) -> bool {
-    visual_objects.contains(&object)
-}
-
-fn main_visual_object_error(context: &str, source_line: Option<&str>) -> DiagnosticReport {
-    let message =
-        format!("main rules and conditions cannot read or write display objects ({context})");
-    match source_line {
-        Some(source_line) if !source_line.trim().is_empty() => {
-            DiagnosticReport::error_at_line(message, source_line)
-        }
-        _ => DiagnosticReport::error(message),
-    }
-}
-
-fn classify_rewrite_role(
-    before: &PatternBlock,
-    alternatives: &[RuleBodyAlternative],
-    effects: &LoweredEffects,
-    visual_objects: &[ObjectId],
-    context: &StatementLoweringContext,
-    source_line: &str,
-    source_line_number: Option<usize>,
-) -> Result<ClassifiedRuleRole, DiagnosticReport> {
-    let reads_visual = pattern_block_reads_visual_object(before, visual_objects);
-    let writes_visual = alternatives_write_visual_objects(alternatives, visual_objects);
-    let writes_main = alternatives_write_main_state(alternatives, visual_objects);
-    let has_gameplay_effects = lowered_effects_change_gameplay(effects);
-
-    if reads_visual && (writes_main || has_gameplay_effects) {
-        return Err(report_at_source_line_number(
-            "display object matches cannot cause gameplay changes",
-            source_line,
-            source_line_number,
-        ));
-    }
-
-    let role = if reads_visual {
-        ClassifiedRuleRole::Visual
-    } else if writes_main || has_gameplay_effects {
-        ClassifiedRuleRole::Main
-    } else if writes_visual {
-        ClassifiedRuleRole::Visual
-    } else {
-        ClassifiedRuleRole::Main
-    };
-
-    if context.role == RuleRole::Visual && role == ClassifiedRuleRole::Main {
-        return Err(report_at_source_line_number(
-            "display routines and display blocks can only contain display rules",
-            source_line,
-            source_line_number,
-        ));
-    }
-
-    Ok(role)
-}
-
-fn alternatives_write_visual_objects(
-    alternatives: &[RuleBodyAlternative],
-    visual_objects: &[ObjectId],
-) -> bool {
-    alternatives.iter().any(|alternative| {
-        alternative
-            .writes
-            .iter()
-            .any(|write| write_template_touches_visual_object(write, alternative, visual_objects))
-    })
-}
-
-fn alternatives_write_main_state(
-    alternatives: &[RuleBodyAlternative],
-    visual_objects: &[ObjectId],
-) -> bool {
-    alternatives.iter().any(|alternative| {
-        alternative
-            .writes
-            .iter()
-            .any(|write| write_template_touches_main_state(write, alternative, visual_objects))
-    })
-}
-
-fn write_template_touches_visual_object(
-    write: &WriteOpTemplate,
-    alternative: &RuleBodyAlternative,
-    visual_objects: &[ObjectId],
-) -> bool {
-    match write {
-        WriteOpTemplate::Add { object, .. }
-        | WriteOpTemplate::Remove { object, .. }
-        | WriteOpTemplate::Move { object, .. } => object_is_visual(*object, visual_objects),
-        WriteOpTemplate::Replace { remove, add, .. } => {
-            object_is_visual(*remove, visual_objects) || object_is_visual(*add, visual_objects)
-        }
-        WriteOpTemplate::MoveObjectSet { objects, .. } => objects
-            .iter()
-            .any(|object| object_is_visual(*object, visual_objects)),
-        WriteOpTemplate::AddObjectSet { objects, .. }
-        | WriteOpTemplate::RemoveObjectSet { objects, .. } => objects
-            .iter()
-            .any(|object| object_is_visual(*object, visual_objects)),
-        WriteOpTemplate::SetObjectSetMark { binding, .. }
-        | WriteOpTemplate::RemoveObjectSetMark { binding, .. } => {
-            object_set_binding_touches_visual_object(*binding, alternative, visual_objects)
-        }
-        WriteOpTemplate::SetMark { object, .. } | WriteOpTemplate::RemoveMark { object, .. } => {
-            !object.is_empty() && object_is_visual(*object, visual_objects)
-        }
-    }
-}
-
-fn write_template_touches_main_state(
-    write: &WriteOpTemplate,
-    alternative: &RuleBodyAlternative,
-    visual_objects: &[ObjectId],
-) -> bool {
-    match write {
-        WriteOpTemplate::Add { object, .. }
-        | WriteOpTemplate::Remove { object, .. }
-        | WriteOpTemplate::Move { object, .. } => !object_is_visual(*object, visual_objects),
-        WriteOpTemplate::Replace { remove, add, .. } => {
-            !object_is_visual(*remove, visual_objects) || !object_is_visual(*add, visual_objects)
-        }
-        WriteOpTemplate::MoveObjectSet { objects, .. } => objects
-            .iter()
-            .any(|object| !object_is_visual(*object, visual_objects)),
-        WriteOpTemplate::AddObjectSet { objects, .. }
-        | WriteOpTemplate::RemoveObjectSet { objects, .. } => objects
-            .iter()
-            .any(|object| !object_is_visual(*object, visual_objects)),
-        WriteOpTemplate::SetObjectSetMark { binding, .. }
-        | WriteOpTemplate::RemoveObjectSetMark { binding, .. } => {
-            object_set_binding_touches_main_state(*binding, alternative, visual_objects)
-        }
-        WriteOpTemplate::SetMark { object, .. } | WriteOpTemplate::RemoveMark { object, .. } => {
-            object.is_empty() || !object_is_visual(*object, visual_objects)
-        }
-    }
-}
-
-fn object_set_binding_objects(
-    binding: u16,
-    alternative: &RuleBodyAlternative,
-) -> Option<Vec<ObjectId>> {
-    let mut objects = Vec::new();
-    for component in &alternative.components {
-        for cell in &component.cells {
-            for matcher in &cell.require_object_sets {
-                if matcher.binding != binding {
-                    continue;
-                }
-                for object in &matcher.objects {
-                    if !objects.contains(object) {
-                        objects.push(*object);
-                    }
-                }
-            }
-        }
-    }
-    (!objects.is_empty()).then_some(objects)
-}
-
-fn object_set_binding_touches_visual_object(
-    binding: u16,
-    alternative: &RuleBodyAlternative,
-    visual_objects: &[ObjectId],
-) -> bool {
-    object_set_binding_objects(binding, alternative).map_or(true, |objects| {
-        objects
-            .iter()
-            .any(|object| object_is_visual(*object, visual_objects))
-    })
-}
-
-fn object_set_binding_touches_main_state(
-    binding: u16,
-    alternative: &RuleBodyAlternative,
-    visual_objects: &[ObjectId],
-) -> bool {
-    object_set_binding_objects(binding, alternative).map_or(true, |objects| {
-        objects
-            .iter()
-            .any(|object| !object_is_visual(*object, visual_objects))
-    })
+        .ok_or_else(|| DiagnosticReport::error(format!("unknown condition in goal: {name}")))
 }
 
 impl<'a> ProgramLowerer<'a> {
@@ -1775,14 +1434,8 @@ impl<'a> ProgramLowerer<'a> {
         context: &StatementLoweringContext,
     ) -> Result<Vec<RuleStep>, DiagnosticReport> {
         let effects = self.lower_effects(effects)?;
-        if context.role == RuleRole::Visual {
-            validate_visual_effects(&effects, source_line)?;
-        }
         let id = RuleId(self.next_rule_id);
         self.next_rule_id += 1;
-        if context.role == RuleRole::Visual {
-            self.visual_rules.push(id);
-        }
         if !effects.ordered.is_empty() {
             self.rule_effects.insert(id, effects.ordered.clone());
         }
@@ -1913,9 +1566,6 @@ impl<'a> ProgramLowerer<'a> {
         if !resolved.is_local {
             nested_context.local_definitions.clear();
         }
-        if context.role == RuleRole::Visual || definition.role == RuleRole::Visual {
-            nested_context.role = RuleRole::Visual;
-        }
         nested_context.call_stack.push(name.to_string());
         nested_context.application = if definition.application == RuleApplication::Random {
             RuleApplication::Once
@@ -1970,13 +1620,6 @@ impl<'a> ProgramLowerer<'a> {
         source_line: &str,
         source_line_number: Option<usize>,
     ) -> Result<RuleCondition, DiagnosticReport> {
-        if context.role == RuleRole::Main {
-            validate_non_visual_pattern_block(
-                &condition.pattern,
-                self.visual_objects,
-                source_line,
-            )?;
-        }
         let orientation = if matches!(condition.orientation, OrientationExpr::Neutral) {
             context
                 .orientation
@@ -2352,13 +1995,6 @@ impl<'a> ProgramLowerer<'a> {
                         source_line_number,
                     )
                 })?;
-                if context.role == RuleRole::Main {
-                    ensure_non_visual_condition_def(
-                        condition,
-                        self.visual_condition_reads,
-                        Some(source_line),
-                    )?;
-                }
                 Ok(Guard::ConditionEquals {
                     condition,
                     value: *value,
@@ -2372,13 +2008,6 @@ impl<'a> ProgramLowerer<'a> {
                         source_line_number,
                     )
                 })?;
-                if context.role == RuleRole::Main {
-                    ensure_non_visual_condition_def(
-                        condition,
-                        self.visual_condition_reads,
-                        Some(source_line),
-                    )?;
-                }
                 Ok(Guard::ConditionNonZero(condition))
             }
             ConditionAst::ConditionCompare { name, op, value } => {
@@ -2389,13 +2018,6 @@ impl<'a> ProgramLowerer<'a> {
                         source_line_number,
                     )
                 })?;
-                if context.role == RuleRole::Main {
-                    ensure_non_visual_condition_def(
-                        condition,
-                        self.visual_condition_reads,
-                        Some(source_line),
-                    )?;
-                }
                 Ok(Guard::ConditionCompare {
                     condition,
                     op: *op,
@@ -2403,13 +2025,6 @@ impl<'a> ProgramLowerer<'a> {
                 })
             }
             ConditionAst::InlineConditionValueEquals { kind, value } => {
-                if context.role == RuleRole::Main {
-                    validate_non_visual_condition_value(
-                        kind,
-                        self.visual_objects,
-                        Some(source_line),
-                    )?;
-                }
                 let kind = lower_condition_value_kind(
                     kind,
                     self.input_names,
@@ -2425,13 +2040,6 @@ impl<'a> ProgramLowerer<'a> {
                 })
             }
             ConditionAst::InlineConditionNonZero(kind) => {
-                if context.role == RuleRole::Main {
-                    validate_non_visual_condition_value(
-                        kind,
-                        self.visual_objects,
-                        Some(source_line),
-                    )?;
-                }
                 let kind = lower_condition_value_kind(
                     kind,
                     self.input_names,
@@ -2444,13 +2052,6 @@ impl<'a> ProgramLowerer<'a> {
                 Ok(Guard::InlineConditionNonZero(kind))
             }
             ConditionAst::InlineConditionCompare { kind, op, value } => {
-                if context.role == RuleRole::Main {
-                    validate_non_visual_condition_value(
-                        kind,
-                        self.visual_objects,
-                        Some(source_line),
-                    )?;
-                }
                 let kind = lower_condition_value_kind(
                     kind,
                     self.input_names,
@@ -2648,7 +2249,7 @@ impl<'a> ProgramLowerer<'a> {
         direction_expanded: bool,
         guards: Vec<Guard>,
     ) -> Result<Vec<RuleStep>, DiagnosticReport> {
-        let (before, alternatives) = compile_before_after_blocks_for_direction(
+        let (_before, alternatives) = compile_before_after_blocks_for_direction(
             &rewrite.before,
             &rewrite.after,
             self.object_layers,
@@ -2660,24 +2261,6 @@ impl<'a> ProgramLowerer<'a> {
             &rewrite.source_line,
             rewrite.source_line_number,
         )?;
-        let role_effects = match alternatives.first() {
-            Some(alternative) => {
-                self.lower_effects_for_rewrite(effects, &alternative.tag_captures)?
-            }
-            None => self.lower_effects(effects)?,
-        };
-        let role = classify_rewrite_role(
-            &before,
-            &alternatives,
-            &role_effects,
-            self.visual_objects,
-            context,
-            &rewrite.source_line,
-            rewrite.source_line_number,
-        )?;
-        if role == ClassifiedRuleRole::Visual {
-            validate_visual_effects(&role_effects, &rewrite.source_line)?;
-        }
         self.rules_from_alternatives(
             alternatives,
             direction,
@@ -2685,7 +2268,6 @@ impl<'a> ProgramLowerer<'a> {
             guards,
             effects,
             application,
-            role,
             &rewrite.source_line,
             rewrite.source_line_number,
             context,
@@ -2839,7 +2421,6 @@ impl<'a> ProgramLowerer<'a> {
         guards: Vec<Guard>,
         effects: &[EffectAst],
         application: RuleApplication,
-        role: ClassifiedRuleRole,
         source_line: &str,
         source_line_number: Option<usize>,
         context: &StatementLoweringContext,
@@ -2883,13 +2464,11 @@ impl<'a> ProgramLowerer<'a> {
                 &mut rule_effects,
             );
             let mut rule_animations = Vec::new();
-            if role != ClassifiedRuleRole::Visual {
-                append_tween_rule_animations(
-                    &alternative.writes,
-                    self.animation,
-                    &mut rule_animations,
-                );
-            }
+            append_tween_rule_animations(
+                &alternative.writes,
+                self.animation,
+                &mut rule_animations,
+            );
             let compiled_components = alternative
                 .components
                 .iter()
@@ -2947,15 +2526,8 @@ impl<'a> ProgramLowerer<'a> {
                 .iter()
                 .map(|write| resolve_write(write, direction, direction_expanded, "statement"))
                 .collect::<Result<Vec<_>, DiagnosticReport>>()?;
-            if role == ClassifiedRuleRole::Visual {
-                validate_visual_writes(&compiled_writes, self.visual_objects)?;
-            }
-
             let id = RuleId(self.next_rule_id);
             self.next_rule_id += 1;
-            if role == ClassifiedRuleRole::Visual {
-                self.visual_rules.push(id);
-            }
             if !rule_animations.is_empty() {
                 self.rule_animations.insert(id, rule_animations);
             }

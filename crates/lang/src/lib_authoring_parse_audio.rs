@@ -311,16 +311,6 @@ fn resolve_model_sound_triggers(
                 &HashMap::new(),
             )
             .map_err(|error| model_sound_selector_error(error, spec))?;
-            if selector
-                .alternatives
-                .iter()
-                .any(|object| catalog.visual_objects.contains(object))
-            {
-                return Err(parse_error(
-                    &spec.line,
-                    "model sound triggers cannot target display objects",
-                ));
-            }
             Ok(ModelSoundTrigger {
                 kind: spec.kind,
                 objects: selector.alternatives,

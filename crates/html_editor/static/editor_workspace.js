@@ -3583,7 +3583,11 @@ function uniqueChildNameExcept(folder, name, ignoredId) {
   return `${base}-${Date.now()}${ext}`;
 }
 function handleSaveShortcut(event) {
-  if (!((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s")) {
+  if (
+    event.defaultPrevented
+    || typeof editorCommandMatches !== "function"
+    || !editorCommandMatches("workspace.save", event)
+  ) {
     return false;
   }
   if (typeof handleToolPaneSaveShortcut === "function" && handleToolPaneSaveShortcut(event)) {

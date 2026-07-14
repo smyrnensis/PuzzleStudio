@@ -749,7 +749,6 @@ impl CompiledSession {
                     "id": id.0,
                     "name": name,
                     "layer": self.game.game.object_layer(*id).map(|layer| layer.0),
-                    "display": self.game.is_display_object(*id),
                 })
             })
             .collect::<Vec<_>>();
@@ -2697,7 +2696,7 @@ mod tests {
 title = agent_session
 
 puzzle board {
-layers {
+slots {
 floor = Goal Trail
 actor = Player
 }

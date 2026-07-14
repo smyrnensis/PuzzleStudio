@@ -9,7 +9,7 @@ sfx crate_move { seed = 36772507; type = puzzlescript }
 }
 
 puzzle main {
-layers {
+slots {
 layer1 = Background
 layer2 = Target
 layer3 = Player Wall Crate1 Crate2 Crate3

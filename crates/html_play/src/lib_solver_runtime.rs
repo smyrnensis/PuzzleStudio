@@ -905,10 +905,10 @@ fn solver_state_slicer_for_puzzle3(
     }
     let relevance = puzzle_solver::SolverRelevance::<ObjectId3>::from_game3_root_objects(
         &parsed.game,
-        &parsed.rules,
+        parsed.game.program(),
         roots,
     );
-    puzzle_solver::SolverStateSlicer::<ObjectId3>::from_relevance(&parsed.game, &relevance)
+    puzzle_solver::SolverStateSlicer::<ObjectId3>::from_relevance3(&parsed.game, &relevance)
 }
 
 #[cfg(feature = "solver")]
@@ -1534,7 +1534,7 @@ fn solve_current_state3_with_budget_inner<O>(
 where
     O: FnMut(&State3, SearchProgress),
 {
-    let inputs = solver_inputs3(&parsed.game);
+    let inputs = solver_inputs3(&parsed.inputs);
     if inputs.is_empty() {
         return Err(AppError::Config("no 3D model inputs available".to_string()));
     }
@@ -1544,13 +1544,11 @@ where
         .ok_or_else(|| AppError::Config("3D solver requires win_conditions".to_string()))?;
 
     let game = Arc::new(parsed.game.clone());
-    let rules = parsed.rules.clone();
     let goal_game = Arc::clone(&game);
     let score_win_condition = win_condition.clone();
     let state_slicer = solver_state_slicer_for_puzzle3(parsed);
     let mut domain = Puzzle3Domain::with_state_slicer(
         Arc::clone(&game),
-        rules.clone(),
         inputs,
         state_slicer,
         move |state: &State3| win_condition.is_met(&goal_game, state),
@@ -1575,7 +1573,6 @@ where
         move |solution_inputs| {
             solution_steps3(
                 &game,
-                &rules,
                 parsed.win_condition.as_ref(),
                 replay_initial,
                 solution_inputs,
@@ -1586,8 +1583,7 @@ where
 
 #[cfg(feature = "solver")]
 fn solution_steps3(
-    game: &Game3,
-    rules: &[RuleStep3],
+    game: &CompiledGame3,
     win_condition: Option<&WinCondition3>,
     mut state: State3,
     inputs: &[InputId],
@@ -1601,7 +1597,7 @@ fn solution_steps3(
     });
 
     for (index, input) in inputs.iter().enumerate() {
-        state = transition_program3(game, &state, rules, *input)
+        state = transition_program3(game, &state, game.program(), *input)
             .map_err(|error| AppError::Config(format!("{error:?}")))?;
         steps.push(SolutionStep {
             index: index + 1,
@@ -1704,14 +1700,14 @@ fn selector_object_positions(
 }
 
 #[cfg(feature = "solver")]
-fn solver_strategy_score3(game: &Game3, strategy: &SolverStrategy3, state: &State3) -> i64 {
+fn solver_strategy_score3(game: &CompiledGame3, strategy: &SolverStrategy3, state: &State3) -> i64 {
     solver_strategy_score_with(strategy, |value| {
         solver_query_expr_value3(game, state, value)
     })
 }
 
 #[cfg(feature = "solver")]
-fn solver_has_deadend3(game: &Game3, strategy: &SolverStrategy3, state: &State3) -> bool {
+fn solver_has_deadend3(game: &CompiledGame3, strategy: &SolverStrategy3, state: &State3) -> bool {
     strategy.has_deadend_with(|query| solver_query_expr_value3(game, state, query) != 0)
 }
 
@@ -1756,7 +1752,7 @@ fn solver_strategy_term_score(direction: SolverStrategyDirection, weight: i64, v
 }
 
 #[cfg(feature = "solver")]
-fn solver_query_expr_value3(game: &Game3, state: &State3, value: &QueryExpr3) -> i64 {
+fn solver_query_expr_value3(game: &CompiledGame3, state: &State3, value: &QueryExpr3) -> i64 {
     solver_query_expr_value_with(
         value,
         &mut |variable| {
@@ -1764,7 +1760,7 @@ fn solver_query_expr_value3(game: &Game3, state: &State3, value: &QueryExpr3) ->
                 .variable_value(variable)
                 .expect("query variable was resolved during lowering")
         },
-        &mut |kind| eval_condition_kind(game, state, kind, None),
+        &mut |kind| eval_condition_kind(game, state, kind, None, None),
         &mut |from, to| solver_strategy_distance3(game, state, from, to),
         &mut |from, to| solver_strategy_distance3(game, state, from, to),
     )
@@ -1813,7 +1809,7 @@ where
 
 #[cfg(feature = "solver")]
 fn solver_strategy_distance3(
-    game: &Game3,
+    game: &CompiledGame3,
     state: &State3,
     from: &[ObjectId3],
     to: &[ObjectId3],
@@ -1830,7 +1826,11 @@ fn solver_strategy_distance3(
 }
 
 #[cfg(feature = "solver")]
-fn selector_object_positions3(game: &Game3, state: &State3, objects: &[ObjectId3]) -> Vec<Coord3> {
+fn selector_object_positions3(
+    game: &CompiledGame3,
+    state: &State3,
+    objects: &[ObjectId3],
+) -> Vec<Coord3> {
     let mut positions = Vec::new();
     for z in 0..state.size.height {
         for y in 0..state.size.depth {
@@ -1855,7 +1855,7 @@ fn manhattan3(a: Coord3, b: Coord3) -> i64 {
 }
 
 #[cfg(feature = "solver")]
-fn win_condition3_score(game: &Game3, state: &State3, condition: &WinCondition3) -> i64 {
+fn win_condition3_score(game: &CompiledGame3, state: &State3, condition: &WinCondition3) -> i64 {
     match condition {
         WinCondition3::All(conditions) => conditions
             .iter()
@@ -1879,15 +1879,16 @@ fn win_condition3_score(game: &Game3, state: &State3, condition: &WinCondition3)
 
 #[cfg(feature = "solver")]
 fn same_cell_all_objects_on_score3(
-    game: &Game3,
+    game: &CompiledGame3,
     state: &State3,
     subject: ObjectId3,
     cover_pattern: &puzzle_grid3d::Pattern3,
 ) -> Option<i64> {
-    let [cell] = cover_pattern.cells() else {
+    let cells = cover_pattern.cells();
+    let [cell] = cells.as_slice() else {
         return None;
     };
-    if cell.offset != puzzle_grid3d::Offset3::ZERO
+    if cell.offset != puzzle_grid3d::Delta3::ZERO
         || !cell.require_objects.contains(&subject)
         || !cell.require_object_sets.is_empty()
         || !cell.forbid_objects.is_empty()
@@ -2236,7 +2237,7 @@ mod solver_goal_score_tests {
 title = no_pattern_score
 
 puzzle board {
-layers {
+slots {
 floor = Goal
 actor = Box Player
 }
@@ -2275,7 +2276,7 @@ B.BG
 title = all_on_score
 
 puzzle board {
-layers {
+slots {
 floor = Goal
 actor = Box
 }
@@ -2314,7 +2315,7 @@ G..B
         let parsed = parse_puzzle3d_for_solver(
             r#"
 puzzle board {
-layers {
+slots {
 floor = Goal
 actor = Box
 }

@@ -6,7 +6,7 @@ fn deadend_queries_lower_from_the_solver_block() {
 title = solver_deadend
 
 puzzle default {
-layers {
+slots {
 floor = Goal
 actor = Box
 }
@@ -54,7 +54,7 @@ level "start" {
 fn deadend_queries_lower_for_puzzle3d() {
     let source = r#"
 puzzle default {
-layers {
+slots {
 floor = Goal
 actor = Box
 }

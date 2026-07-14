@@ -104,9 +104,6 @@ pub struct CompiledEngine {
     game: CompiledGame,
     level_start_program: Vec<RuleStep>,
     level_clear_program: Vec<RuleStep>,
-    display_level_start_program: Vec<RuleStep>,
-    display_level_clear_program: Vec<RuleStep>,
-    display_program: Vec<RuleStep>,
     level_start_programs: Vec<Vec<RuleStep>>,
     level_clear_programs: Vec<Vec<RuleStep>>,
     level_main_programs: Vec<Vec<RuleStep>>,
@@ -131,9 +128,6 @@ impl CompiledEngine {
             "main" | "run_rules_on_level_start" => Some(self.game.program()),
             "level_start" => Some(&self.level_start_program),
             "level_clear" => Some(&self.level_clear_program),
-            "display_level_start" => Some(&self.display_level_start_program),
-            "display_level_clear" => Some(&self.display_level_clear_program),
-            "display" => Some(&self.display_program),
             "level_start_local" => level_program(&self.level_start_programs, level_index),
             "level_clear_local" => level_program(&self.level_clear_programs, level_index),
             _ => None,
@@ -171,6 +165,12 @@ fn decode_engine(source: &str) -> Result<CompiledEngine, String> {
 }
 
 pub fn decode_compiled_play(value: &Value) -> Result<CompiledEngine, String> {
+    let version = object_field(value, "version")?
+        .as_u64()
+        .ok_or_else(|| "compiled play version must be an unsigned integer".to_string())?;
+    if version != 2 {
+        return Err(format!("unsupported compiled play version: {version}"));
+    }
     let model = string_field(value, "model")?;
     if model != "grid2" {
         return Err(format!("unsupported compiled play model: {model}"));
@@ -188,11 +188,7 @@ pub fn decode_compiled_play(value: &Value) -> Result<CompiledEngine, String> {
         .iter()
         .map(decode_compact_condition)
         .collect::<Result<Vec<_>, _>>()?;
-    let _visual_objects = array_at(data, 3, "transition visual objects")?
-        .iter()
-        .map(|item| Ok(ObjectId(u16_value(item, "visual object")?)))
-        .collect::<Result<Vec<_>, String>>()?;
-    let programs = array_at(data, 4, "transition programs")?;
+    let programs = array_at(data, 3, "transition programs")?;
     let program = decode_compact_program(value_at(programs, 0, "main program")?)?;
     let game = CompiledGame::new_with_mark_condition_defs_and_program(
         layer_count,
@@ -201,7 +197,7 @@ pub fn decode_compiled_play(value: &Value) -> Result<CompiledEngine, String> {
         queries,
         program,
     );
-    let level_programs = array_at(data, 5, "transition level programs")?;
+    let level_programs = array_at(data, 4, "transition level programs")?;
     let mut level_start_programs = Vec::with_capacity(level_programs.len());
     let mut level_clear_programs = Vec::with_capacity(level_programs.len());
     let mut level_main_programs = Vec::with_capacity(level_programs.len());
@@ -227,17 +223,6 @@ pub fn decode_compiled_play(value: &Value) -> Result<CompiledEngine, String> {
         game,
         level_start_program: decode_compact_program(value_at(programs, 1, "level start program")?)?,
         level_clear_program: decode_compact_program(value_at(programs, 2, "level clear program")?)?,
-        display_level_start_program: decode_compact_program(value_at(
-            programs,
-            3,
-            "display level start program",
-        )?)?,
-        display_level_clear_program: decode_compact_program(value_at(
-            programs,
-            4,
-            "display level clear program",
-        )?)?,
-        display_program: decode_compact_program(value_at(programs, 5, "display program")?)?,
         level_start_programs,
         level_clear_programs,
         level_main_programs,

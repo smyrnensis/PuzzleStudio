@@ -60,7 +60,7 @@ fn level_rules_compose_before_global_and_after_in_one_program() {
 title = level_rules_order
 
 puzzle board {
-  layers {
+  slots {
     item = A B C D
   }
   rules {
@@ -118,7 +118,7 @@ fn level_rules_reject_duplicate_after_slot() {
     let source = r#"
 title = duplicate_level_rules
 puzzle board {
-  layers {
+  slots {
     item = A
   }
   rules {
@@ -157,7 +157,7 @@ fn solver_strategy_lowers_query_variable_and_distance_terms() {
 title = solver_strategy_terms
 
 puzzle default {
-layers {
+slots {
 floor = Goal
 actor = Player Box
 }
@@ -288,7 +288,7 @@ fn modernize_test_source(source: &str) -> String {
 
         match tokens.as_slice() {
             ["puzzle", name] if !in_scene && is_identifier(name) => {
-                out.push(format!("puzzle {name}"));
+                out.push(line.clone());
             }
             ["render_overlay", rest @ ..] if rest.len() >= 3 => {
                 let ch = rest[rest.len() - 1];
@@ -307,7 +307,7 @@ fn modernize_test_source(source: &str) -> String {
                 out.append(&mut pending_level_legend);
             }
             ["level", name, ..] => {
-                out.push("levels".to_string());
+                out.push("levels {".to_string());
                 out.append(&mut pending_level_legend);
                 let braced_level = line.trim_end().ends_with('{');
                 if braced_level {
@@ -353,11 +353,11 @@ fn collect_test_legend_entry(lines: &[String], start: usize) -> (Vec<String>, us
 
 fn modern_scene_header(tokens: &[&str]) -> Option<String> {
     match tokens {
-        ["scene", "puzzle", name] => Some(format!("scene {name}")),
-        ["scene", "puzzle"] => Some("scene puzzle".to_string()),
-        ["scene", "menu", name] => Some(format!("scene {name}")),
-        ["scene", "menu"] => Some("scene menu".to_string()),
-        ["scene", name] => Some(format!("scene {name}")),
+        ["scene", "puzzle", name] => Some(format!("scene {name} {{")),
+        ["scene", "puzzle"] => Some("scene puzzle {".to_string()),
+        ["scene", "menu", name] => Some(format!("scene {name} {{")),
+        ["scene", "menu"] => Some("scene menu {".to_string()),
+        ["scene", name] => Some(format!("scene {name} {{")),
         _ => None,
     }
 }
@@ -365,7 +365,7 @@ fn modern_scene_header(tokens: &[&str]) -> Option<String> {
 fn test_starts_block(tokens: &[&str]) -> bool {
     matches!(
         tokens,
-        ["layers"]
+        ["slots"]
             | ["rules"]
             | ["legend"]
             | ["win_conditions", ..]
@@ -393,13 +393,6 @@ fn object_named(loaded: &LoadedGame, name: &str) -> ObjectId {
         .object_labels
         .iter()
         .find_map(|(object, label)| (label == name).then_some(*object))
-        .or_else(|| {
-            let display_name = format!("@{name}");
-            loaded
-                .object_labels
-                .iter()
-                .find_map(|(object, label)| (label == &display_name).then_some(*object))
-        })
         .unwrap()
 }
 
@@ -427,7 +420,7 @@ fn rules_local_frame_limits_main_transition_matching_to_player_frame() {
         r#"
 title = local frame
 puzzle main {
-layers {
+slots {
 actor = Player A B
 }
 levels {
@@ -463,7 +456,7 @@ fn rules_local_radius_lowers_to_radius_extent() {
         r#"
 title = local radius
 puzzle main {
-layers {
+slots {
 actor = Player A B
 }
 levels {
@@ -535,7 +528,7 @@ fn inline_braced_blocks_accept_semicolon_rows() {
 title = inline_blocks
 
 puzzle board {
-layers { actor = Player Box Wall; floor = Goal }
+slots { actor = Player Box Wall; floor = Goal }
 groups { solid = Box Wall; pushable = Box }
 legend { . = empty; P = Player; B = Box; W = Wall; G = Goal }
 rules { once [ Player | ] -> [ | Player ] }
@@ -561,7 +554,7 @@ fn null_pattern_matches_outside_board_cell() {
 title = null_pattern
 
 puzzle board {
-layers { mark = Edge }
+slots { mark = Edge }
 legend { . = empty; E = Edge }
 rules { once right [ no Edge | null ] -> [ Edge | ] }
 levels {
@@ -586,7 +579,7 @@ fn no_null_pattern_is_rejected() {
 title = no_null_pattern
 
 puzzle board {
-layers { mark = Edge }
+slots { mark = Edge }
 legend { . = empty; E = Edge }
 rules { once right [ no null | null ] -> [ Edge | ] }
 levels {
@@ -608,7 +601,7 @@ fn rhs_only_null_pattern_is_rejected() {
 title = rhs_only_null_pattern
 
 puzzle board {
-layers { mark = Edge }
+slots { mark = Edge }
 legend { . = empty; E = Edge }
 rules { once right [ no Edge | ] -> [ Edge | null ] }
 levels {
@@ -630,7 +623,7 @@ fn pattern_rows_accept_physical_line_breaks() {
 title = pattern_newlines
 
 puzzle board {
-layers { actor = A B C }
+slots { actor = A B C }
 legend { . = empty; A = A; B = B; C = C }
 rules {
 once [ A
@@ -661,7 +654,7 @@ fn at_prefixed_objects_and_routines_use_normal_gameplay_semantics() {
 title = at_display
 
 puzzle board {
-layers {
+slots {
 actor = Player
 @cursor = @Cursor
 @hint = @Hint
@@ -692,8 +685,6 @@ P
     let hint = object_named(&loaded, "@Hint");
     let initial = &loaded.levels[0].initial_state;
 
-    assert!(!loaded.is_display_object(cursor));
-    assert!(!loaded.is_display_object(hint));
     assert!(!initial.has_object(&loaded.game, 0, 0, cursor));
 
     let stepped = transition_state(&loaded.game, initial, InputId(0)).unwrap();
@@ -707,7 +698,7 @@ fn legend_does_not_define_unknown_objects() {
 title = legend_unknown
 
 puzzle board {
-layers {
+slots {
 actor = Player
 }
 
@@ -739,7 +730,7 @@ fn level_local_legend_does_not_define_unknown_objects() {
 title = level_legend_unknown
 
 puzzle board {
-layers {
+slots {
 actor = Player
 }
 
@@ -775,7 +766,7 @@ fn layers_define_objects_even_when_sprites_are_omitted() {
 title = sprite_omitted_is_transparent
 
 puzzle board {
-layers {
+slots {
 actor = Player Hidden
 }
 
@@ -816,7 +807,7 @@ fn layers_schema_terms_can_use_later_tag_sets() {
 title = layers_schema_later_tags
 
 puzzle board {
-layers {
+slots {
 solid = Wall Alien Crab:state
 }
 
@@ -864,7 +855,7 @@ music loop { seed = 123456; bars = 16; height = 0.62; bpm = 104; volume = 0.8 }
 }
 
 puzzle board {
-layers {
+slots {
 background = Player
 }
 
@@ -909,7 +900,7 @@ sfx effect { seed = 746670; type = jump }
 }
 
 puzzle board {
-layers {
+slots {
 background = Player
 }
 
@@ -944,7 +935,7 @@ music loop { seed = 123456; bars = 16; height = 0.62; bpm = 104; volume = 1.25 }
 }
 
 puzzle board {
-layers {
+slots {
 background = Player
 }
 
@@ -979,7 +970,7 @@ sfx effect { seed = 746670; type = jump; volume = -0.1 }
 }
 
 puzzle board {
-layers {
+slots {
 background = Player
 }
 
@@ -1013,7 +1004,7 @@ music loop { seed = 123456; bars = 16; height = 0.62; bpm = 104; volume = -0.1 }
 }
 
 puzzle board {
-layers {
+slots {
 background = Player
 }
 
@@ -1054,7 +1045,7 @@ sounds {
 move Box -> sfx push
 }
 
-layers {
+slots {
 actor = Player Box
 }
 
@@ -1095,7 +1086,7 @@ undo -> sfx back
 restart -> sfx reset
 }
 
-layers {
+slots {
 actor = Player
 }
 
@@ -1145,7 +1136,7 @@ sounds {
 move Ghost -> sfx push
 }
 
-layers {
+slots {
 actor = Player Box
 }
 
@@ -1223,7 +1214,7 @@ fn scene_lifecycle_blocks_lower_to_lifecycle_transitions() {
 title = scene_lifecycle_blocks
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 legend P = Player
@@ -1250,7 +1241,11 @@ stop_music music_name
 "#;
 
     let loaded = parse_game(source).unwrap();
-    let scene = loaded.scenes.iter().find(|scene| scene.name == "playing").unwrap();
+    let scene = loaded
+        .scenes
+        .iter()
+        .find(|scene| scene.name == "playing")
+        .unwrap();
     let scene_start = scene
         .transitions
         .iter()
@@ -1268,7 +1263,7 @@ fn scene_lifecycle_accepts_bare_next_level_effect() {
 title = scene_next_level_effect
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 legend P = Player
@@ -1294,7 +1289,11 @@ next_level
 "#;
 
     let loaded = parse_game(source).unwrap();
-    let scene_start = loaded.scenes.iter().find(|scene| scene.name == "playing").unwrap()
+    let scene_start = loaded
+        .scenes
+        .iter()
+        .find(|scene| scene.name == "playing")
+        .unwrap()
         .transitions
         .iter()
         .find(|transition| transition.trigger == SceneTransitionTrigger::SceneStart)
@@ -1312,7 +1311,7 @@ title = scene_message_effect
 var hint = "Push the box"
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 legend P = Player
@@ -1340,7 +1339,11 @@ message hint
 "#;
 
     let loaded = parse_game(source).unwrap();
-    let scene_start = loaded.scenes.iter().find(|scene| scene.name == "playing").unwrap()
+    let scene_start = loaded
+        .scenes
+        .iter()
+        .find(|scene| scene.name == "playing")
+        .unwrap()
         .transitions
         .iter()
         .find(|transition| transition.trigger == SceneTransitionTrigger::SceneStart)
@@ -1366,7 +1369,7 @@ title = again_interval_fixture
 again_interval = 75ms
 
 puzzle main {
-layers {
+slots {
 actor = Player
 }
 rules {
@@ -1396,7 +1399,7 @@ title = again_interval_seconds_fixture
 again_interval 0.1
 
 puzzle main {
-layers {
+slots {
 actor = Player
 }
 rules {
@@ -1426,7 +1429,7 @@ fn top_level_metadata_requires_assignment_syntax() {
 title "Old Metadata"
 
 puzzle main {
-layers {
+slots {
 actor = Player
 }
 rules {
@@ -1459,7 +1462,7 @@ render {
 tween = true
 tween_duration = 90ms
 }
-layers {
+slots {
 actor = Player
 }
 rules {
@@ -1492,7 +1495,7 @@ puzzle main {
 render {
 tween_duration = 90ms
 }
-layers {
+slots {
 actor = Player
 }
 rules {
@@ -1525,7 +1528,7 @@ puzzle main {
 render {
 tween duration 90ms
 }
-layers {
+slots {
 actor = Player
 }
 rules {
@@ -1559,7 +1562,7 @@ tween_duration = 90ms
 }
 
 puzzle main {
-layers {
+slots {
 actor = Player
 }
 rules {
@@ -1594,7 +1597,7 @@ min_wait = 75ms
 }
 
 puzzle main {
-layers {
+slots {
 actor = Player
 }
 rules {
@@ -1629,7 +1632,7 @@ tween {
 duration = 80ms
 }
 }
-layers {
+slots {
 actor = Player
 }
 rules {
@@ -1661,7 +1664,7 @@ render {
 tween = true
 tween_duration = 80ms
 }
-layers {
+slots {
 actor = Player
 }
 rules {
@@ -1696,7 +1699,7 @@ fn scene_on_level_start_is_rejected() {
 title = scene_level_lifecycle
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 legend P = Player
@@ -1733,7 +1736,7 @@ fn scene_current_level_syntax_is_rejected() {
 title = current_level_syntax
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 legend P = Player
@@ -1767,7 +1770,7 @@ fn puzzle_presentation_message_parses_literal_and_path() {
 title = rewrite_message_effect
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 __legacy_layer_1 = Goal
 }
@@ -1812,7 +1815,7 @@ title = puzzle_presentation_effect
 default_wait_time = 350ms
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 legend P = Player
@@ -1859,7 +1862,7 @@ fn rewrite_suffix_wait_lowers_to_after_triggered_animation_barrier() {
 title = rewrite_wait_suffix
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player Goal
 }
 legend {
@@ -1903,7 +1906,7 @@ fn rule_condition_can_emit_win_effect() {
 title = rule_condition_win_effect
 
 puzzle default {
-layers {
+slots {
 actor = Player
 }
 input clear
@@ -1942,7 +1945,7 @@ fn puzzle_rule_effect_accepts_goto_scene() {
 title = puzzle_rule_goto_effect
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 input open
@@ -1985,7 +1988,7 @@ fn puzzle_wait_animation_lowers_to_ordered_boundary_effect() {
 title = puzzle_wait_animation_effect
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 legend P = Player
@@ -2016,7 +2019,7 @@ fn puzzle_emit_is_rejected() {
 title = puzzle_emit_rejected
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 legend P = Player
@@ -2044,7 +2047,7 @@ fn puzzle_emit_is_rejected_for_state_mutating_effects() {
 title = puzzle_emit_rejects_state_mutation
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 legend P = Player
@@ -2073,7 +2076,7 @@ fn do_statement_is_rejected() {
 title = do_statement_rejected
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 legend P = Player
@@ -2101,7 +2104,7 @@ fn routine_can_group_effect_statements() {
 title = routine_effect_statements
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 legend P = Player
@@ -2167,7 +2170,7 @@ fn effect_definition_is_rejected() {
 title = effect_definition_rejected
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 legend P = Player
@@ -2194,7 +2197,7 @@ fn scene_input_handler_requires_arrow_block_syntax() {
 title = old_scene_input_handler
 
 puzzle board {
-layers {
+slots {
 actor = Player
 }
 rules {
@@ -2230,7 +2233,7 @@ fn scene_template_rejects_using_keyword() {
 title = old_using_scene
 
 puzzle board {
-layers {
+slots {
 actor = Player
 }
 rules {
@@ -2263,7 +2266,7 @@ fn scene_header_rejects_assignment_form() {
 title = scene_assignment_header
 
 puzzle board {
-layers {
+slots {
 actor = Player
 }
 rules {
@@ -2284,7 +2287,7 @@ fn scene_key_command_assignment_can_feed_input_rule() {
 title = scene_key_command_assignment
 
 puzzle board {
-layers {
+slots {
 actor = Player
 }
 input escape
@@ -2311,7 +2314,11 @@ goto title
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let scene = loaded.scenes.iter().find(|scene| scene.name == "playing").unwrap();
+    let scene = loaded
+        .scenes
+        .iter()
+        .find(|scene| scene.name == "playing")
+        .unwrap();
     let SceneEffect::Input(action) = &scene.key_bindings[0].effect else {
         panic!("expected key assignment to emit an input action");
     };
@@ -2328,7 +2335,7 @@ fn scene_keys_accept_routine_target() {
 title = input_sugar
 
 puzzle board {
-layers {
+slots {
 actor = Player
 }
 legend {
@@ -2353,7 +2360,11 @@ goto level_select
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let scene = loaded.scenes.iter().find(|scene| scene.name == "title").unwrap();
+    let scene = loaded
+        .scenes
+        .iter()
+        .find(|scene| scene.name == "title")
+        .unwrap();
     assert!(
         matches!(&scene.key_bindings[0].effect, SceneEffect::RoutineCall(name) if name == "level_select")
     );
@@ -2369,7 +2380,7 @@ fn scene_rules_accept_condition_arrow_effect_rows() {
 title = scene_condition_block_arrow
 
 puzzle board {
-layers {
+slots {
 actor = Player
 }
 legend {
@@ -2400,7 +2411,11 @@ text "Playing"
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let scene = loaded.scenes.iter().find(|scene| scene.name == "title").unwrap();
+    let scene = loaded
+        .scenes
+        .iter()
+        .find(|scene| scene.name == "title")
+        .unwrap();
     let SceneTransitionTrigger::Condition(condition) = &scene.transitions[0].trigger else {
         panic!("expected rules row to lower to condition transition");
     };
@@ -2425,7 +2440,7 @@ fn scene_if_block_lowers_to_condition_transition() {
 title = scene_if_block
 
 puzzle board {
-layers {
+slots {
 actor = Player
 }
 legend {
@@ -2453,7 +2468,11 @@ text "Playing"
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let scene = loaded.scenes.iter().find(|scene| scene.name == "title").unwrap();
+    let scene = loaded
+        .scenes
+        .iter()
+        .find(|scene| scene.name == "title")
+        .unwrap();
     let SceneTransitionTrigger::Condition(condition) = &scene.transitions[0].trigger else {
         panic!("expected condition block to lower to condition transition");
     };
@@ -2478,7 +2497,7 @@ fn layout_if_keeps_structural_block_syntax() {
 title = layout_if_block
 
 puzzle board {
-layers {
+slots {
 actor = Player
 }
 legend {
@@ -2504,7 +2523,11 @@ button "New Game" -> input new_game
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let scene = loaded.scenes.iter().find(|scene| scene.name == "title").unwrap();
+    let scene = loaded
+        .scenes
+        .iter()
+        .find(|scene| scene.name == "title")
+        .unwrap();
     let Some(SceneComponent::Conditional(conditional)) = scene.components.first() else {
         panic!("expected layout if to lower to a conditional component");
     };
@@ -2525,7 +2548,7 @@ fn scene_keys_accept_arrow_to_input_or_effect() {
 title = keys_arrow
 
 puzzle board {
-layers {
+slots {
 actor = Player
 }
 legend {
@@ -2552,7 +2575,11 @@ goto level_select
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let scene = loaded.scenes.iter().find(|scene| scene.name == "title").unwrap();
+    let scene = loaded
+        .scenes
+        .iter()
+        .find(|scene| scene.name == "title")
+        .unwrap();
     assert!(matches!(
         &scene.key_bindings[0].effect,
         SceneEffect::RoutineCall(input) if input == "level_select"
@@ -2574,7 +2601,7 @@ fn scene_keys_accept_multiline_effect_block() {
 title = keys_effect_block
 
 puzzle board {
-layers {
+slots {
 actor = Player
 }
 legend {
@@ -2599,7 +2626,11 @@ goto playing
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let scene = loaded.scenes.iter().find(|scene| scene.name == "title").unwrap();
+    let scene = loaded
+        .scenes
+        .iter()
+        .find(|scene| scene.name == "title")
+        .unwrap();
     assert!(matches!(
         &scene.key_bindings[0].effect,
         SceneEffect::Sequence { effects }
@@ -2619,7 +2650,7 @@ fn scene_effect_blocks_share_nested_if_parsing() {
 title = keys_nested_effect_block
 
 puzzle board {
-layers {
+slots {
 actor = Player
 }
 legend {
@@ -2646,7 +2677,11 @@ goto title
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let scene = loaded.scenes.iter().find(|scene| scene.name == "title").unwrap();
+    let scene = loaded
+        .scenes
+        .iter()
+        .find(|scene| scene.name == "title")
+        .unwrap();
     let SceneEffect::Sequence { effects } = &scene.key_bindings[0].effect else {
         panic!("expected key effect block to parse as sequence");
     };
@@ -2669,7 +2704,7 @@ fn scene_keys_reject_equals_assignment() {
 title = keys_equals
 
 puzzle board {
-layers {
+slots {
 actor = Player
 }
 legend {
@@ -2703,7 +2738,7 @@ fn puzzle_default_scene_keys_accept_scene_effects_without_stealing_model_inputs(
 title = model_keys_scene_effect
 
 puzzle board {
-layers {
+slots {
 actor = Player
 }
 legend {
@@ -2759,7 +2794,7 @@ fn bare_scene_key_action_rejects_input_routine_ambiguity() {
 title = ambiguous_key_action
 
 puzzle board {
-layers {
+slots {
 actor = Player
 }
 input open
@@ -2795,7 +2830,7 @@ fn scene_keys_accept_multiple_keys_per_row() {
 title = keys_multiple
 
 puzzle board {
-layers {
+slots {
 actor = Player
 }
 legend {
@@ -2820,7 +2855,11 @@ goto level_select
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let scene = loaded.scenes.iter().find(|scene| scene.name == "title").unwrap();
+    let scene = loaded
+        .scenes
+        .iter()
+        .find(|scene| scene.name == "title")
+        .unwrap();
     assert_eq!(scene.key_bindings[0].keys.len(), 2);
     assert!(matches!(
         &scene.key_bindings[0].effect,
@@ -2837,7 +2876,7 @@ author = "Display Author"
 homepage = "https://example.com"
 
 puzzle board {
-layers {
+slots {
 actor = Player
 }
 legend {
@@ -2862,7 +2901,11 @@ caption homepage
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let scene = loaded.scenes.iter().find(|scene| scene.name == "title").unwrap();
+    let scene = loaded
+        .scenes
+        .iter()
+        .find(|scene| scene.name == "title")
+        .unwrap();
     assert!(matches!(
         &scene.components[0],
         SceneComponent::Text(text)
@@ -2895,7 +2938,7 @@ fn scene_can_use_model_name_as_default_puzzle_slot() {
 title = default_slot
 
 puzzle sokoban {
-layers {
+slots {
 actor = Player
 }
 legend {
@@ -2920,7 +2963,11 @@ step sokoban
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let scene = loaded.scenes.iter().find(|scene| scene.name == "playing").unwrap();
+    let scene = loaded
+        .scenes
+        .iter()
+        .find(|scene| scene.name == "playing")
+        .unwrap();
     assert_eq!(scene.state.puzzles[0].name, "sokoban");
     assert!(matches!(
         &scene.components[0],
@@ -2939,7 +2986,7 @@ title = signal_handler_step
 
 puzzle board {
 input right
-layers {
+slots {
 actor = Player
 }
 legend {
@@ -2968,7 +3015,11 @@ step board
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let scene = loaded.scenes.iter().find(|scene| scene.name == "playing").unwrap();
+    let scene = loaded
+        .scenes
+        .iter()
+        .find(|scene| scene.name == "playing")
+        .unwrap();
     assert!(scene.state.variables.iter().any(|variable| {
         variable.name == "input"
             && variable.kind == SceneVarKind::Signal
@@ -3001,7 +3052,7 @@ fn scene_rules_reject_component_rules_path() {
 title = old_component_rules_path
 
 puzzle board {
-layers {
+slots {
 actor = Player
 }
 legend {
@@ -3035,7 +3086,7 @@ fn scene_frame_component_places_content_slot_without_model_kind() {
 title = frame_slot
 
 puzzle board {
-layers {
+slots {
 actor = Player
 }
 legend {
@@ -3071,7 +3122,7 @@ fn scene_rejects_old_rhs_puzzle_slot_declaration() {
 title = old_rhs_puzzle_slot
 
 puzzle default {
-layers {
+slots {
 actor = Player
 }
 legend {
@@ -3104,7 +3155,7 @@ fn scene_can_still_name_multiple_puzzle_slots_explicitly() {
 title = named_slots
 
 puzzle sokoban {
-layers {
+slots {
 actor = Player
 }
 legend {
@@ -3130,7 +3181,11 @@ step sokoban1
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let scene = loaded.scenes.iter().find(|scene| scene.name == "playing").unwrap();
+    let scene = loaded
+        .scenes
+        .iter()
+        .find(|scene| scene.name == "playing")
+        .unwrap();
     assert_eq!(scene.state.puzzles[0].name, "sokoban1");
     assert_eq!(scene.state.puzzles[1].name, "sokoban2");
     assert!(matches!(
@@ -3145,7 +3200,7 @@ fn input_declaration_defines_direction_input() {
 title = command_direction
 
 puzzle board {
-layers {
+slots {
 actor = Player
 }
 input right direction right
@@ -3172,7 +3227,7 @@ fn scene_inputs_reject_equals_assignment_syntax() {
 title = old_scene_inputs
 
 puzzle board {
-layers {
+slots {
 actor = Player
 }
 rules {
@@ -3211,7 +3266,7 @@ fn button_action_assignment_uses_equals() {
 title = button_action_assignment
 
 puzzle board {
-layers {
+slots {
 actor = Player
 }
 rules {
@@ -3237,7 +3292,11 @@ button "Resume" -> input resume
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let scene = loaded.scenes.iter().find(|scene| scene.name == "menu").unwrap();
+    let scene = loaded
+        .scenes
+        .iter()
+        .find(|scene| scene.name == "menu")
+        .unwrap();
     let SceneComponent::Button(button) = &scene.components[0] else {
         panic!("expected button component");
     };
@@ -3250,7 +3309,7 @@ fn scene_box_is_layout_container_and_panel_is_not_scene_syntax() {
 title = scene_box_layout
 
 puzzle board {
-layers {
+slots {
 actor = Player
 }
 rules {
@@ -3279,7 +3338,13 @@ text "Ready"
 "#;
     let loaded = parse_game(source).unwrap();
     assert_eq!(
-        loaded.scenes.iter().find(|scene| scene.name == "menu").unwrap().layout.space,
+        loaded
+            .scenes
+            .iter()
+            .find(|scene| scene.name == "menu")
+            .unwrap()
+            .layout
+            .space,
         SceneSpaceDef::Fill { weight: 2 }
     );
     assert!(matches!(
@@ -3308,7 +3373,7 @@ fn explicit_scene_input_and_component_effect_parse_separately() {
 title = explicit_scene_input_effects
 
 puzzle board {
-layers {
+slots {
 actor = Player
 }
 legend {
@@ -3337,7 +3402,11 @@ r -> board.restart
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let scene = loaded.scenes.iter().find(|scene| scene.name == "playing").unwrap();
+    let scene = loaded
+        .scenes
+        .iter()
+        .find(|scene| scene.name == "playing")
+        .unwrap();
     assert!(matches!(&scene.key_bindings[0].effect, SceneEffect::Input(input) if input == "right"));
     assert!(
         matches!(&scene.key_bindings[1].effect, SceneEffect::ComponentEffect(effect) if effect == "down")
@@ -3358,7 +3427,7 @@ fn scene_effect_wrapper_marks_scene_commands_explicitly() {
 title = scene_effect_wrapper
 
 puzzle board {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 legend P = Player
@@ -3397,7 +3466,7 @@ fn button_arrow_rejects_plain_action_rhs() {
 title = old_button_action_arrow
 
 puzzle board {
-layers {
+slots {
 actor = Player
 }
 legend {
@@ -3430,7 +3499,7 @@ fn layout_for_can_project_levels_into_scrollable_column() {
 title = level_projection_view
 
 puzzle board {
-layers {
+slots {
 actor = Player
 }
 legend {
@@ -3462,7 +3531,13 @@ button join(level.num, ". ", level.title, " ", level.solved) -> goto playing(lev
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let SceneComponent::Column(column) = &loaded.scenes.iter().find(|scene| scene.name == "level_select").unwrap().components[0] else {
+    let SceneComponent::Column(column) = &loaded
+        .scenes
+        .iter()
+        .find(|scene| scene.name == "level_select")
+        .unwrap()
+        .components[0]
+    else {
         panic!("expected scrollable column");
     };
     assert!(column.layout.scroll);
@@ -3494,7 +3569,7 @@ fn layout_for_can_project_levels_with_author_chosen_binding_name() {
 title = level_projection_binding
 
 puzzle board {
-layers {
+slots {
 actor = Player
 }
 legend {
@@ -3520,7 +3595,13 @@ button join(l.num, ". ", l.title) -> goto playing(l)
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let SceneComponent::Button(button) = &loaded.scenes.iter().find(|scene| scene.name == "level_select").unwrap().components[0] else {
+    let SceneComponent::Button(button) = &loaded
+        .scenes
+        .iter()
+        .find(|scene| scene.name == "level_select")
+        .unwrap()
+        .components[0]
+    else {
         panic!("expected level button");
     };
     assert!(matches!(&button.label, SceneExpr::Call { name, args }
@@ -3544,7 +3625,7 @@ fn layout_for_levels_respects_scene_resources_declared_after_layout() {
 title = level_projection_resources
 
 puzzle board {
-layers {
+slots {
 actor = Player
 }
 legend {
@@ -3576,7 +3657,11 @@ levels second
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let level_select = loaded.scenes.iter().find(|scene| scene.name == "level_select").unwrap();
+    let level_select = loaded
+        .scenes
+        .iter()
+        .find(|scene| scene.name == "level_select")
+        .unwrap();
     assert_eq!(level_select.components.len(), 1);
     let SceneComponent::Button(button) = &level_select.components[0] else {
         panic!("expected one expanded level button");
@@ -3594,7 +3679,7 @@ fn layout_for_does_not_replace_binding_inside_quoted_text() {
 title = level_projection_quotes
 
 puzzle board {
-layers {
+slots {
 actor = Player
 }
 legend {
@@ -3618,7 +3703,13 @@ button "level.title" -> goto playing(level)
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let SceneComponent::Button(button) = &loaded.scenes.iter().find(|scene| scene.name == "level_select").unwrap().components[0] else {
+    let SceneComponent::Button(button) = &loaded
+        .scenes
+        .iter()
+        .find(|scene| scene.name == "level_select")
+        .unwrap()
+        .components[0]
+    else {
         panic!("expected expanded level button");
     };
     assert!(matches!(&button.label, SceneExpr::Text(value) if value == "level.title"));
@@ -3636,7 +3727,7 @@ fn level_menu_component_accepts_canonical_options() {
 title = typed_level_menu
 
 puzzle board {
-layers {
+slots {
 actor = Player
 }
 legend {
@@ -3665,7 +3756,11 @@ wrap = true
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let scene = loaded.scenes.iter().find(|scene| scene.name == "level_select").unwrap();
+    let scene = loaded
+        .scenes
+        .iter()
+        .find(|scene| scene.name == "level_select")
+        .unwrap();
     assert_eq!(scene.name, "level_select");
     let SceneComponent::LevelMenu(menu) = &scene.components[0] else {
         panic!("expected level menu component");
@@ -3686,7 +3781,7 @@ fn bare_level_menu_does_not_capture_following_button() {
 title = bare_level_menu_button_boundary
 
 puzzle board {
-layers {
+slots {
 actor = Player
 }
 empty .
@@ -3708,7 +3803,11 @@ button "Back" -> goto title
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let scene = loaded.scenes.iter().find(|scene| scene.name == "level_select").unwrap();
+    let scene = loaded
+        .scenes
+        .iter()
+        .find(|scene| scene.name == "level_select")
+        .unwrap();
     let [
         SceneComponent::LevelMenu(menu),
         SceneComponent::Button(button),
@@ -3729,7 +3828,7 @@ fn typed_level_menu_scene_is_rejected() {
 title = old_level_menu_scene
 
 puzzle board {
-layers {
+slots {
 actor = Player
 }
 legend {
@@ -3760,7 +3859,7 @@ fn level_menu_rejects_on_off_option_aliases() {
 title = old_level_menu_options
 
 puzzle board {
-layers {
+slots {
 actor = Player
 }
 legend {
@@ -3794,7 +3893,7 @@ fn level_menu_rejects_inline_source_and_effect() {
 title = old_level_menu_inline
 
 puzzle sokoban {
-layers {
+slots {
 actor = Player
 }
 legend {
@@ -3852,7 +3951,7 @@ fn title_scene_keeps_layout_buttons_and_rules_explicit() {
 title = title_scene
 
 puzzle default {
-layers {
+slots {
 actor = Player
 }
 
@@ -3887,7 +3986,11 @@ puzzle board = default
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let title = loaded.scenes.iter().find(|scene| scene.name == "title").unwrap();
+    let title = loaded
+        .scenes
+        .iter()
+        .find(|scene| scene.name == "title")
+        .unwrap();
     assert_eq!(title.name, "title");
     assert_eq!(title.components.len(), 4);
     assert!(title.key_bindings.is_empty());
@@ -3903,7 +4006,7 @@ author = "Puzzle Person"
 homepage = "https://example.com/puzzle"
 
 puzzle default {
-layers {
+slots {
 actor = Player
 }
 
@@ -3947,7 +4050,7 @@ fn top_level_name_metadata_is_rejected() {
 name Old Metadata
 
 puzzle default {
-layers {
+slots {
 actor = Player
 }
 
@@ -4017,7 +4120,7 @@ fn occurrence_mark_supports_multiple_marks_direction_and_int_values() {
 title = mark_marks
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Marker
 __legacy_layer_1 = Box
 }
@@ -4057,7 +4160,7 @@ fn bool_mark_uses_presence_and_no_syntax() {
 title = bool_mark
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Marker
 __legacy_layer_1 = Box
 }
@@ -4095,7 +4198,7 @@ fn colon_mark_name_does_not_mean_value_assignment() {
 title = mark_colon
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Box
 }
 empty .
@@ -4125,7 +4228,7 @@ fn mark_names_can_use_numeric_colon_parts() {
 title = numeric_qualified_mark
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Marker
 __legacy_layer_1 = Box
 }
@@ -4162,7 +4265,7 @@ fn mark_names_can_use_direction_glyph_colon_parts() {
 title = glyph_qualified_mark
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Marker
 __legacy_layer_1 = Box
 }
@@ -4202,7 +4305,7 @@ fn qualified_mark_names_can_use_colons() {
 title = qualified_mark
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Marker
 __legacy_layer_1 = Box
 }
@@ -4240,7 +4343,7 @@ fn unmentioned_occurrence_mark_is_preserved_when_same_occurrence_moves() {
 title = moving_mark
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Marker
 __legacy_layer_1 = Box
 }
@@ -4278,7 +4381,7 @@ fn omitted_rhs_mark_removes_explicit_lhs_mark_on_moved_occurrence() {
 title = moving_mark_remove
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_1 = Box
 }
 empty .
@@ -4313,7 +4416,7 @@ fn same_cell_occurrence_is_preserved_before_move_inference() {
 title = same_cell_preserve
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Marker
 __legacy_layer_1 = Box
 }
@@ -4354,7 +4457,7 @@ fn group_selectors_accept_mark_blocks() {
 title = group_mark
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Marker
 __legacy_layer_1 = Box Crate
 }
@@ -4394,7 +4497,7 @@ fn group_selector_removal_also_removes_movement_mark() {
 title = group_remove_movement_mark
 
 puzzle default {
-layers {
+slots {
   floor = Background
   actor = Player Key Lock
 }
@@ -4438,7 +4541,7 @@ fn cell_and_occurrence_mark_share_names_but_have_distinct_anchors() {
 title = cell_mark
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Marker
 __legacy_layer_1 = Box
 }
@@ -4490,7 +4593,7 @@ fn rewrite_rejects_same_layer_rhs_cell_conflict_with_author_message() {
 title = rhs_layer_conflict
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player Box
 }
 empty .
@@ -4520,7 +4623,7 @@ fn movement_mark_prefix_and_legacy_inline_sugar_work_with_transition_local_lifet
 title = anonymous_mark
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Marker
 __legacy_layer_1 = Box
 }
@@ -4558,12 +4661,45 @@ B
 }
 
 #[test]
+fn default_repeat_rewrite_stops_after_rhs_removes_movement_mark_in_2d() {
+    let source = r#"
+title = move_once
+
+puzzle default {
+slots {
+actor = Player
+}
+empty .
+
+legend P = Player
+
+rules {
+once right [ Player ] -> [ > Player ]
+right [ > Player | ] -> [ | Player ]
+}
+
+level "start" {
+P....
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let moved =
+        transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+    let player = object_named(&loaded, "Player");
+
+    assert!(moved.has_object(&loaded.game, 1, 0, player));
+    assert!(!moved.has_object(&loaded.game, 4, 0, player));
+    assert!(moved.slot_mark().iter().all(Vec::is_empty));
+}
+
+#[test]
 fn action_statement_is_rejected() {
     let source = r#"
 title = action_button
 
 puzzle board {
-layers {
+slots {
 floor = Target Open
 actor = Player
 }
@@ -4602,7 +4738,7 @@ fn move_call_without_explicit_routine_reports_unknown_routine() {
 title = move_requires_explicit_routine
 
 puzzle default {
-layers {
+slots {
 actor = Box
 marker = Marker
 }
@@ -4633,7 +4769,7 @@ fn explicit_move_routine_remains_callable() {
 title = explicit_move_routine
 
 puzzle default {
-layers {
+slots {
 actor = Box
 marker = Marker
 }
@@ -4677,7 +4813,7 @@ fn directions_mark_sugar_matches_any_movement_value() {
 title = directions_sugar
 
 puzzle default {
-layers {
+slots {
 actor = Box
 floor = Marker
 }
@@ -4722,7 +4858,7 @@ fn prefix_movement_mark_sugar_matches_braced_selector_mark() {
 title = prefix_movement_mark_sugar
 
 puzzle default {
-layers {
+slots {
 actor = Player
 floor = Marker
 }
@@ -4764,7 +4900,7 @@ fn prefix_directions_mark_sugar_matches_any_movement_value() {
 title = prefix_directions_mark_sugar
 
 puzzle default {
-layers {
+slots {
 actor = Player
 floor = Marker
 }
@@ -4806,7 +4942,7 @@ fn no_directions_mark_sugar_forbids_any_movement_value() {
 title = no_directions_sugar
 
 puzzle default {
-layers {
+slots {
 actor = Box
 floor = Marker
 }
@@ -4848,7 +4984,7 @@ fn parallel_and_perpendicular_mark_sets_expand_relative_to_rule_orientation() {
 title = relative_movement_sets
 
 puzzle default {
-layers {
+slots {
 actor = Box Crate
 floor = ParallelMarker PerpendicularMarker
 }
@@ -4894,7 +5030,7 @@ fn parallel_mark_prefix_sugar_matches_object_movement_set() {
 title = parallel_prefix_sugar
 
 puzzle default {
-layers {
+slots {
 actor = Box
 floor = Marker
 }
@@ -4933,7 +5069,7 @@ fn prefixless_parallel_mark_pattern_expands_cardinal_directions() {
 title = prefixless_parallel
 
 puzzle default {
-layers {
+slots {
 actor = Box
 floor = Marker
 }
@@ -4972,7 +5108,7 @@ fn variant_axis_values_can_define_mark_without_becoming_value_sets() {
 title = variant_mark
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Marker
 __legacy_layer_1 = Box
 }
@@ -5014,7 +5150,7 @@ fn level_start_keeps_raw_initial_state_and_keeps_runtime_program() {
 title = level_start
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Source
 __legacy_layer_1 = Marker
 }
@@ -5052,7 +5188,7 @@ fn rules_block_accepts_scope_local_routine() {
 title = local_rules_routine
 
 puzzle default {
-layers {
+slots {
 base = Player
 marker = Marker
 }
@@ -5087,7 +5223,7 @@ fn level_start_accepts_scope_local_routine() {
 title = local_level_start_routine
 
 puzzle default {
-layers {
+slots {
 base = Source
 marker = Marker
 }
@@ -5133,7 +5269,7 @@ fn scope_local_routine_does_not_leak_to_lifecycle_block() {
 title = local_routine_no_leak
 
 puzzle default {
-layers {
+slots {
 base = Source
 marker = Marker
 }
@@ -5167,7 +5303,7 @@ fn variable_routine_does_not_capture_caller_local_routine() {
 title = local_routine_lexical_scope
 
 puzzle default {
-layers {
+slots {
 base = Source
 marker = Marker
 }
@@ -5203,10 +5339,10 @@ fn level_start_rejects_input_dependent_rules() {
 title = level_start_input
 
 puzzle default {
-layers {
+slots {
 actor = Player
 }
-layers {
+slots {
 __legacy_layer_0 = Player actor
 }
 legend {
@@ -5238,10 +5374,10 @@ fn level_start_rejects_input_dependent_local_routine() {
 title = level_start_local_input
 
 puzzle default {
-layers {
+slots {
 actor = Player
 }
-layers {
+slots {
 __legacy_layer_0 = Player actor
 }
 legend {
@@ -5274,15 +5410,15 @@ P.
 #[test]
 fn at_prefixed_level_start_routine_uses_normal_runtime_program() {
     let source = r#"
-title = display_level_start
+title = at_prefixed_level_start
 
 puzzle default {
-layers {
+slots {
 @__legacy_layer_1 = @Marker
 }
 empty .
 
-layers {
+slots {
 __legacy_layer_0 = Source
 }
 
@@ -5307,9 +5443,8 @@ S
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let marker = object_named(&loaded, "Marker");
+    let marker = object_named(&loaded, "@Marker");
 
-    assert!(!loaded.is_display_object(marker));
     assert!(
         !loaded.levels[0]
             .initial_state
@@ -5319,17 +5454,17 @@ S
 }
 
 #[test]
-fn display_level_start_rejects_input_dependent_rules() {
+fn at_prefixed_level_start_rejects_input_dependent_rules() {
     let source = r#"
-title = display_level_start_input
+title = at_prefixed_level_start_input
 
 puzzle default {
-layers {
+slots {
 @__legacy_layer_1 = @Marker
 }
 empty .
 
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 
@@ -5361,15 +5496,15 @@ P.
 #[test]
 fn at_prefixed_level_start_routine_accepts_normal_object_writes() {
     let source = r#"
-title = display_level_start_main_write
+title = at_prefixed_level_start_main_write
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_1 = Player
 }
 empty .
 
-layers {
+slots {
 __legacy_layer_0 = Source
 __legacy_layer_1 = Marker
 }
@@ -5402,10 +5537,10 @@ fn level_clear_rejects_input_dependent_rules() {
 title = level_clear_input
 
 puzzle default {
-layers {
+slots {
 actor = Player
 }
-layers {
+slots {
 __legacy_layer_0 = Player actor
 }
 legend {
@@ -5437,10 +5572,10 @@ fn independent_lifecycle_lowering_errors_are_reported_together() {
 title = multiple_lifecycle_errors
 
 puzzle default {
-layers {
+slots {
 actor = Player
 }
-layers {
+slots {
 __legacy_layer_0 = Player actor
 }
 legend {
@@ -5488,7 +5623,7 @@ fn independent_statement_parse_errors_are_reported_together() {
 title = multiple_statement_parse_errors
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 
@@ -5537,7 +5672,7 @@ fn sibling_statement_blocks_are_parsed_after_inner_errors() {
 title = sibling_statement_block_errors
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 
@@ -5592,7 +5727,7 @@ fn old_on_level_start_syntax_is_rejected() {
 title = old_on_level_start
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -5621,7 +5756,7 @@ fn conditional_rule_call_short_form_runs_named_rule_when_pattern_matches() {
 title = conditional_short
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_1 = Player Wall Flag
 }
 empty .
@@ -5657,7 +5792,7 @@ fn conditional_rule_call_accepts_some_and_none_forms() {
 title = conditional_some_none
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_1 = Player Wall Flag
 }
 empty .
@@ -5693,7 +5828,7 @@ fn pattern_condition_block_accepts_else() {
 title = pattern_condition_else
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_1 = Player Box Flag Wall
 }
 empty .
@@ -5730,7 +5865,7 @@ fn unknown_directive_is_rejected() {
 title = old_keyword
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_1 = Player
 }
 thing Player 1
@@ -5761,7 +5896,7 @@ fn singular_group_block_is_rejected() {
 title = old_group_block
 
 puzzle default {
-layers {
+slots {
 actor = Player Wall
 }
 group {
@@ -5780,7 +5915,7 @@ fn singular_group_directive_is_rejected() {
 title = old_group_directive
 
 puzzle default {
-layers {
+slots {
 actor = Player Wall
 }
 group solid = Wall
@@ -5797,7 +5932,7 @@ fn group_aliases_named_like_layout_keywords_stay_in_group_scope() {
 title = group_alias_layout_keywords
 
 puzzle main {
-layers {
+slots {
 Player Box
 }
 
@@ -5836,7 +5971,7 @@ fn domain_keyword_is_not_part_of_public_syntax() {
 title = old_domain
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_1 = Box
 }
 empty .
@@ -5864,7 +5999,7 @@ fn end_is_allowed_as_user_defined_object_name() {
 title = end_name
 
 puzzle default {
-layers {
+slots {
 end
 }
 rules {
@@ -5895,7 +6030,7 @@ fn layer_is_allowed_as_user_defined_object_name() {
 title = layer_name
 
 puzzle default {
-layers {
+slots {
 floor = layer
 }
 rules {
@@ -5926,7 +6061,7 @@ fn bare_tag_set_assignment_is_not_canonical_syntax() {
 title = old_tag_assignment
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_1 = Box
 }
 empty .
@@ -5958,7 +6093,7 @@ fn directions_directive_is_not_part_of_public_syntax() {
 title = old_directions
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 legend P = Player
@@ -5992,7 +6127,7 @@ assets {
 }
 
 puzzle sokoban {
-layers {
+slots {
 solid = Player
 }
 legend {
@@ -6029,7 +6164,7 @@ css "game.css"
 }
 
 puzzle sokoban {
-layers {
+slots {
 solid = Player
 }
 legend {
@@ -6054,7 +6189,7 @@ fn top_level_levels_and_sprites_are_canonical_resources() {
 title = top_resources
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -6097,7 +6232,7 @@ fn top_level_sprites_with_nested_tables_do_not_leak_after_prior_model_error() {
 title = recovered_sprites_scope
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -6172,7 +6307,7 @@ puzzle default {
 tags {
 state = open close
 }
-layers {
+slots {
 __legacy_layer_0 = Player Gate:state Box:state Goal:state
 }
 rules {
@@ -6234,7 +6369,7 @@ fn scene_resources_can_select_level_and_sprite_sets() {
 title = scene_resources
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player Box
 }
 empty .
@@ -6301,7 +6436,7 @@ fn game_file_can_declare_theme_metadata() {
 title = themed
 
 puzzle default {
-layers {
+slots {
 actor = Player
 }
 rules {
@@ -6355,7 +6490,7 @@ fn game_file_import_expansion_preserves_top_level_resource_braces() {
 title = file_resources
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 rules {
@@ -6416,7 +6551,7 @@ preset = "puzzlescript"
 background = #123456
 }
 puzzle default {
-layers {
+slots {
 actor = Player
 }
 legend {
@@ -6489,7 +6624,7 @@ fn theme_preset_can_be_selected_without_block() {
 title = themed
 theme = "pixel"
 puzzle default {
-layers {
+slots {
 actor = Player
 }
 legend {
@@ -6522,7 +6657,7 @@ background_color = #123456
 accent_color = #abcdef
 }
 puzzle default {
-layers {
+slots {
 actor = Player
 }
 legend {
@@ -6571,7 +6706,7 @@ preset = "clean"
 board_color = #edf1f2
 }
 puzzle default {
-layers {
+slots {
 actor = Player
 }
 legend {
@@ -6605,7 +6740,7 @@ preset = "clean"
 ui_font = Inter
 }
 puzzle default {
-layers {
+slots {
 actor = Player
 }
 legend {
@@ -6642,7 +6777,7 @@ theme {
 preset = pixel
 }
 puzzle default {
-layers {
+slots {
 actor = Player
 }
 legend {
@@ -6717,7 +6852,7 @@ fn game_entry_resolution_accepts_puzzle3_extension() {
 title = "3D Entry"
 
 puzzle cube {
-  layers {
+  slots {
     actor = Player
   }
   rules {
@@ -6744,7 +6879,7 @@ fn parse_game_file_rejects_removed_puzzle3_keyword() {
 title = "Wrong Extension"
 
 puzzle3 cube {
-  layers {
+  slots {
     actor = Player
   }
   rules {
@@ -6756,7 +6891,7 @@ puzzle3 cube {
 
     let error = super::parse_game_file(&game_path).unwrap_err().to_string();
     assert!(error.contains("`puzzle3` was removed"));
-    assert!(error.contains("use `puzzle <name> { ... }`"));
+    assert!(error.contains("use `puzzle <name> { dimension = 3 ... }`"));
 }
 
 #[test]
@@ -6773,7 +6908,8 @@ fn parse_game_file_accepts_puzzle_keyword_in_puzzle3_file() {
 title = "Wrong Extension"
 
 puzzle board {
-  layers {
+  dimension = 3
+  slots {
     actor = Player
   }
   rules {
@@ -6812,13 +6948,6 @@ fn folder_without_puzzle_model_is_not_auto_resolved() {
 }
 
 #[test]
-fn parses_display_floor_projection_object() {
-    let loaded = parse_game(display_floor_projection_source()).unwrap();
-
-    assert!(loaded.object_labels.values().any(|label| label == "@Floor"));
-}
-
-#[test]
 fn puzzle_sprites_expand_schema_tables() {
     let source = r#"
 title = sprite_schema
@@ -6827,7 +6956,7 @@ puzzle default {
 tags {
 kind = A B
 }
-layers {
+slots {
 __legacy_layer_0 = Target:kind Target:A Target:B
 __legacy_layer_1 = Box:kind Box:A Box:B Wall
 }
@@ -6918,7 +7047,7 @@ fn puzzle_sprites_accept_braced_inline_ascii_sprite() {
 title = braced_inline_ascii_sprite
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 legend P = Player
@@ -6978,7 +7107,7 @@ fn puzzle_sprites_accept_line_style_solid_sprite() {
 title = line_style_solid_sprite
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Box
 }
 legend B = Box
@@ -7021,7 +7150,7 @@ fn puzzle_sprites_accept_display_object_single_color_solid_sprite() {
 title = display_object_single_color_solid_sprite
 
 puzzle default {
-layers {
+slots {
 @display_floor = @Floor
 }
 legend {
@@ -7069,7 +7198,7 @@ selector = @Floor
 colors = #eeeeee
 }
 }
-layers {
+slots {
 @display_floor = @Floor
 }
 legend {
@@ -7115,7 +7244,7 @@ P
 level "second"
 B
 }
-layers {
+slots {
 actor = Player Box
 }
 rules {
@@ -7161,7 +7290,7 @@ B
 }
 
 puzzle default {
-layers {
+slots {
 actor = Player Box
 }
 rules {
@@ -7194,7 +7323,7 @@ fn puzzle_sprites_accept_display_object_after_another_line_style_sprite() {
 title = display_object_after_sprite
 
 puzzle default {
-layers {
+slots {
 solid = Player
 @display_floor = @Floor
 }
@@ -7251,7 +7380,7 @@ fn puzzle_sprites_report_unknown_display_selector_instead_of_shape_error() {
 title = unknown_display_sprite_selector
 
 puzzle default {
-layers {
+slots {
 solid = Player
 }
 legend P = Player
@@ -7279,7 +7408,7 @@ P
 "##;
     let error = parse_game(source).unwrap_err().to_string();
 
-    assert!(error.contains("unknown visual object selector"), "{error}");
+    assert!(error.contains("unknown sprite object selector"), "{error}");
     assert!(
         !error.contains("visual shape rows must be equal-width ascii"),
         "{error}"
@@ -7292,7 +7421,7 @@ fn puzzle_sprites_accept_sprite_names_that_are_css_color_names() {
 title = color_named_sprites
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = red blue
 }
 legend r = red
@@ -7352,7 +7481,7 @@ puzzle default {
 tags {
 kind = A B
 }
-layers {
+slots {
 __legacy_layer_0 = Light:kind
 }
 legend L = Light:kind
@@ -7401,7 +7530,7 @@ fn puzzle_sprites_accept_line_style_ascii_sprite() {
 title = line_style_ascii_sprite
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Box Wall
 }
 legend B = Box
@@ -7484,7 +7613,7 @@ puzzle default {
 tags {
 state = open close
 }
-layers {
+slots {
 __legacy_layer_0 = Hole Box:state
 }
 legend H = Hole
@@ -7569,7 +7698,7 @@ fn puzzle_sprites_warn_when_generated_sprite_key_is_overwritten() {
 title = duplicate_sprite_visual
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Crack
 }
 legend C = Crack
@@ -7629,7 +7758,7 @@ fn puzzle_sprites_warn_when_sprite_grid_does_not_divide_largest_grid() {
 title = sprite_grid_warning
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Box Pull
 }
 legend B = Box
@@ -7681,7 +7810,7 @@ fn puzzle_sprites_do_not_warn_when_sprite_grid_divides_largest_grid() {
 title = sprite_grid_divides
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Box Pull
 }
 legend B = Box
@@ -7737,7 +7866,7 @@ puzzle default {
 tags {
 state = base movable
 }
-layers {
+slots {
 __legacy_layer_0 = Box:state
 }
 legend B = Box:base
@@ -7798,7 +7927,7 @@ puzzle default {
 tags {
 num = 1 2
 }
-layers {
+slots {
 __legacy_layer_0 = Gate:num
 }
 legend 1 = Gate:1
@@ -7863,7 +7992,7 @@ puzzle default {
 tags {
 state = base
 }
-layers {
+slots {
 __legacy_layer_0 = Box:state
 }
 legend B = Box:base
@@ -7900,7 +8029,7 @@ fn puzzle_sprites_reject_braces_in_ascii_rows() {
 title = sprite_ascii_braces
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Box
 }
 legend B = Box
@@ -7935,7 +8064,7 @@ fn puzzle_sprites_reject_translate_transform_offset() {
 title = translated_sprite_removed
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 legend P = Player
@@ -7978,7 +8107,7 @@ fn puzzle_sprites_reject_malformed_translate_transform() {
 title = malformed_translated_sprite
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 legend P = Player
@@ -8017,7 +8146,7 @@ fn puzzle_sprites_accept_line_style_color_and_shape_refs() {
 title = line_style_color_shape_refs
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Box
 }
 legend B = Box
@@ -8073,7 +8202,7 @@ fn puzzle_sprites_accept_bare_shape_reference_after_colors() {
 title = bare_shape_reference
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Box
 }
 sprites {
@@ -8126,7 +8255,7 @@ fn unbraced_sprite_attachment_colors_property_does_not_enter_palette() {
 title = unbraced_sprite_colors_property
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 sprites {
@@ -8177,7 +8306,7 @@ fn puzzle_sprites_accept_unbraced_shorthand_animation_body() {
 title = shorthand_animation_sprite
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Background
 }
 
@@ -8252,7 +8381,7 @@ fn puzzle_sprites_accept_explicit_braced_inline_shape() {
 title = explicit_braced_inline_shape
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 sprites {
@@ -8299,7 +8428,7 @@ fn puzzle_sprites_reject_legacy_unbraced_shape_marker() {
 title = reject_legacy_unbraced_shape_marker
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 sprites {
@@ -8337,7 +8466,7 @@ fn puzzle_sprites_accept_frame_duration_for_animation_body() {
 title = frame_duration_animation_sprite
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Background
 }
 legend {
@@ -8396,7 +8525,7 @@ fn puzzle_sprites_reject_conflicting_duration_and_frame_duration() {
 title = conflicting_duration_animation_sprite
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Background
 }
 legend {
@@ -8448,7 +8577,7 @@ puzzle default {
 tags {
 kind = A B
 }
-layers {
+slots {
 __legacy_layer_0 = Box:kind
 each @Floor
 }
@@ -8537,7 +8666,7 @@ puzzle default {
 tags {
 kind = A B
 }
-layers {
+slots {
 __legacy_layer_0 = Box:kind
 }
 legend B = Box:B
@@ -8593,7 +8722,7 @@ fn puzzle_sprites_accept_terminal_unbraced_shape_block_before_colors() {
 title = terminal_unbraced_shape_block_before_colors
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Box
 }
 legend B = Box
@@ -8661,7 +8790,7 @@ fn puzzle_sprites_accept_multiple_unbraced_shapes_in_one_shapes_block() {
 title = multiple_unbraced_shapes
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Box Pull
 }
 legend B = Box
@@ -8743,7 +8872,7 @@ fn puzzle_sprites_do_not_extend_unbraced_shape_by_row_width() {
 title = unbraced_shape_boundary
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Box Pad
 }
 legend B = Box
@@ -8823,7 +8952,7 @@ puzzle default {
 tags {
 kind = A B
 }
-layers {
+slots {
 __legacy_layer_0 = Box
 }
 legend B = Box
@@ -8886,7 +9015,7 @@ fn puzzle_sprites_accept_blank_separated_sprite_attachment() {
 title = blank_separated_sprite_attachment
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Box
 }
 legend B = Box
@@ -8927,7 +9056,7 @@ fn puzzle_sprites_reject_same_line_sprite_attachment_body() {
 title = image_sprite_ref
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Box
 }
 legend B = Box
@@ -8956,7 +9085,7 @@ fn puzzle_sprites_accept_braced_sprite_attachment_properties() {
 title = braced_sprite_attachment
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Box
 }
 legend B = Box
@@ -9009,7 +9138,7 @@ fn puzzle_sprites_accept_sprite_node_image_properties() {
 title = sprite_node_image_ref
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Box
 }
 legend B = Box
@@ -9064,7 +9193,7 @@ fn puzzle_sprites_reject_removed_offset_property() {
 title = removed_sprite_offset
 
 puzzle default {
-layers {
+slots {
 actor = Box
 }
 sprites {
@@ -9091,7 +9220,7 @@ fn puzzle_sprites_reject_gif_image_sprite_refs() {
 title = image_sprite_ref
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Box
 }
 legend B = Box
@@ -9123,7 +9252,7 @@ fn puzzle_sprites_accept_more_than_ten_inline_colors() {
 title = inline_sprite_many_colors
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 legend P = Player
@@ -9174,7 +9303,7 @@ fn puzzle_sprites_accept_alpha_hex_colors() {
 title = inline_sprite_alpha_colors
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 legend P = Player
@@ -9230,7 +9359,7 @@ fn puzzle_sprites_count_leading_alpha_hex_transparent_as_palette_color() {
 title = leading_alpha_transparent_palette_color
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 legend P = Player
@@ -9287,7 +9416,7 @@ fn puzzle_sprites_count_transparent_as_palette_color() {
 title = transparent_palette_color
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 legend P = Player
@@ -9344,7 +9473,7 @@ fn puzzle_sprites_reject_pattern_colors_outside_palette() {
 title = sprite_palette_overflow
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 legend P = Player
@@ -9379,7 +9508,7 @@ fn puzzle_sprites_accept_bare_reusable_shape_ref() {
 title = bare_reusable_shape_ref
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 legend P = Player
@@ -9433,7 +9562,7 @@ fn puzzle_sprites_reject_old_ascii_sprite_syntax() {
 title = old_sprite_syntax
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 legend P = Player
@@ -9475,7 +9604,7 @@ fn puzzle_sprites_reject_legacy_palettes_block() {
 title = legacy_palettes_block
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 legend P = Player
@@ -9512,7 +9641,7 @@ fn puzzle_sprites_reject_legacy_colors_block_for_palette_defs() {
 title = legacy_colors_block
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 legend P = Player
@@ -9549,7 +9678,7 @@ fn directions_is_builtin_value_set_for_objects_sprites_and_for() {
 title = directions_value_set
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 __legacy_layer_1 = Boundary:directions
 }
@@ -9636,7 +9765,7 @@ puzzle default {
 tags {
 count = 1...10
 }
-layers {
+slots {
 __legacy_layer_0 = Box:count
 }
 legend B = Box:10
@@ -9681,7 +9810,7 @@ right -> down
 down -> left
 left -> up
 }
-layers {
+slots {
 __legacy_layer_0 = Boundary:directions
 }
 legend {
@@ -9766,7 +9895,7 @@ right -> down
 down -> left
 left -> up
 }
-layers {
+slots {
 __legacy_layer_0 = Boundary:directions
 }
 legend {
@@ -9845,7 +9974,7 @@ fn unbraced_display_sprite_entry_can_use_direction_shape_table() {
 title = unbraced_display_rotated_sprite_header
 
 puzzle default {
-layers {
+slots {
 each @WallFrame:directions
 }
 sprites {
@@ -9969,7 +10098,7 @@ left -> up
 tags {
 state = open close
 }
-layers {
+slots {
 each @Boundary:directions
 each @Corner:directions
 actor = Goal:state
@@ -10091,7 +10220,7 @@ left -> up
 tags {
 state = open close
 }
-layers {
+slots {
 actor = Goal:state
 each @LockedFrame:directions
 }
@@ -10175,7 +10304,7 @@ right -> down
 down -> left
 left -> up
 }
-layers {
+slots {
 __legacy_layer_0 = Boundary:directions
 }
 legend {
@@ -10246,7 +10375,7 @@ fn sprite_entry_accepts_canonical_metadata_colors_and_ascii_order() {
 title = canonical_sprite_metadata
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 legend P = Player
@@ -10319,7 +10448,7 @@ fn sprite_entry_accepts_canonical_selector_block() {
 title = canonical_sprite_selector
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 legend P = Player
@@ -10379,7 +10508,7 @@ fn sprite_entry_accepts_canonical_property_shape_block() {
 title = canonical_sprite_property_shape
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 legend P = Player
@@ -10439,7 +10568,7 @@ fn sprite_entry_accepts_explicit_shape_reference_property() {
 title = canonical_sprite_shape_ref
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 legend P = Player
@@ -10494,7 +10623,7 @@ fn sprite_entry_can_rotate_inline_ascii_from_selector_axis() {
 title = inline_rotated_sprite
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Boundary:directions
 }
 legend {
@@ -10565,7 +10694,7 @@ map rotate state {
 open -> close
 close -> open
 }
-layers {
+slots {
 __legacy_layer_0 = Boundary:directions
 }
 legend {
@@ -10619,7 +10748,7 @@ left -> down
 down -> right
 right -> up
 }
-layers {
+slots {
 __legacy_layer_0 = Boundary:directions
 }
 legend {
@@ -10673,7 +10802,7 @@ right -> down
 down -> left
 left -> up
 }
-layers {
+slots {
 __legacy_layer_0 = Boundary:directions
 }
 legend {
@@ -10758,7 +10887,7 @@ right -> down
 down -> left
 left -> up
 }
-layers {
+slots {
 __legacy_layer_0 = Boundary:directions
 }
 legend {
@@ -10837,7 +10966,7 @@ fn input_in_directions_scopes_input_oriented_rewrite() {
 title = input_in_directions
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 legend P = Player
@@ -10869,7 +10998,7 @@ fn horizontal_orientation_set_expands_rewrite() {
 title = horizontal_orientation_set
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player Wall OpenWall
 }
 legend P = Player
@@ -10904,7 +11033,7 @@ fn directions_orientation_set_expands_rewrite() {
 title = directions_orientation_set
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player Wall OpenWall
 }
 legend P = Player
@@ -10939,7 +11068,7 @@ fn vertical_orientation_set_expands_condition_pattern() {
 title = vertical_orientation_set_condition
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player Wall Door OpenDoor
 }
 legend P = Player
@@ -10976,7 +11105,7 @@ fn input_horizontal_rewrite_adds_input_guard_and_expands_orientation() {
 title = input_horizontal_rewrite
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 legend P = Player
@@ -11015,7 +11144,7 @@ fn input_prefix_without_set_is_directions_sugar() {
 title = input_directions_sugar
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 legend P = Player
@@ -11045,7 +11174,7 @@ fn input_directions_condition_pattern_adds_input_guard_and_expands_orientation()
 title = input_directions_condition
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player Wall Door OpenDoor
 }
 legend P = Player
@@ -11086,7 +11215,7 @@ fn input_condition_pattern_without_set_is_directions_sugar() {
 title = input_condition_directions_sugar
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player Wall Door OpenDoor
 }
 legend P = Player
@@ -11131,7 +11260,7 @@ right -> down
 down -> left
 left -> up
 }
-layers {
+slots {
 __legacy_layer_0 = Player Marker
 }
 legend P = Player
@@ -11178,7 +11307,7 @@ a -> b
 b -> a
 c -> c
 }
-layers {
+slots {
 __legacy_layer_0 = Obj:tag
 }
 legend a = Obj:a
@@ -11213,7 +11342,7 @@ fn prefixless_spatial_rewrite_expands_to_cardinal_directions() {
 title = implicit_cardinal_rewrite
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_1 = A
 }
 empty .
@@ -11255,7 +11384,7 @@ fn rewrite_allows_lhs_and_rhs_pattern_line_breaks() {
 title = multiline_rewrite
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_1 = A B C
 }
 empty .
@@ -11290,7 +11419,7 @@ fn multiline_rewrite_rejects_rhs_with_nested_arrow() {
 title = multiline_rewrite_nested_arrow
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_1 = A B C
 }
 empty .
@@ -11318,7 +11447,7 @@ fn prefixless_pattern_condition_expands_to_cardinal_directions() {
 title = implicit_cardinal_condition
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_1 = Player Wall Flag
 }
 empty .
@@ -11354,7 +11483,7 @@ fn named_query_patterns_expand_to_cardinal_directions() {
 title = implicit_cardinal_condition
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_1 = Player Wall Flag
 }
 empty .
@@ -11390,7 +11519,7 @@ fn condition_declaration_is_rejected() {
 title = old_condition_declaration
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player Wall
 }
 empty .
@@ -11417,7 +11546,7 @@ fn if_condition_block_arrow_accepts_mixed_rule_body() {
 title = if_condition_block_arrow
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_1 = Player Wall
 __legacy_layer_2 = Flag
 }
@@ -11455,7 +11584,7 @@ fn if_condition_arrow_block_accepts_rule_body() {
 title = if_condition_arrow_block
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_1 = Player
 __legacy_layer_2 = Flag
 }
@@ -11489,7 +11618,7 @@ fn fix_once_sets_default_rewrite_application_for_nested_lines() {
 title = fix_once
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_1 = A
 }
 empty .
@@ -11523,7 +11652,7 @@ fn explicit_rewrite_prefix_overrides_fix_default() {
 title = fix_explicit_override
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_1 = A
 }
 empty .
@@ -11563,7 +11692,7 @@ fn once_all_rewrite_applies_to_all_current_matches() {
 title = once_all_rewrite
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_1 = A B
 }
 empty .
@@ -11597,7 +11726,7 @@ fn random_rewrite_applies_to_one_current_match() {
 title = random_rewrite
 
 puzzle default {
-layers {
+slots {
 actor = A B
 }
 empty .
@@ -11631,7 +11760,7 @@ fn random_block_applies_one_firing_statement() {
 title = random_block
 
 puzzle default {
-layers {
+slots {
 actor = A B
 }
 empty .
@@ -11667,7 +11796,7 @@ fn random_routine_applies_one_firing_statement() {
 title = random_routine
 
 puzzle default {
-layers {
+slots {
 actor = A B
 }
 empty .
@@ -11705,7 +11834,7 @@ fn once_per_level_rewrite_fires_only_once_for_current_level_state() {
 title = once_per_level_rewrite
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_1 = A
 }
 empty .
@@ -11742,7 +11871,7 @@ fn routine_default_application_runs_effect_statement_once() {
 title = routine_default_once
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_1 = A
 }
 empty .
@@ -11776,7 +11905,7 @@ fn routine_default_application_runs_statement_list_once() {
 title = routine_default_statement_list_once
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_1 = A B C
 }
 empty .
@@ -11814,7 +11943,7 @@ fn explicit_routine_repeat_runs_block_until_stable() {
 title = explicit_routine_repeat
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_1 = A B C
 }
 empty .
@@ -11850,7 +11979,7 @@ fn rewrite_suffix_calls_routine_after_rewrite_statement_triggers() {
 title = rewrite_suffix_after_call
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = A B C D
 }
 empty .
@@ -11888,7 +12017,7 @@ fn rewrite_suffix_after_call_uses_lhs_match_not_rhs_change() {
 title = rewrite_suffix_after_lhs_match
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = A
 }
 empty .
@@ -11922,7 +12051,7 @@ fn directional_condition_call_binds_move_mark_and_offset_to_same_direction() {
 title = directional_condition_call
 
 puzzle main {
-layers {
+slots {
 Background
 Player Wall
 Marker
@@ -11990,7 +12119,7 @@ fn pattern_condition_preserves_embedded_move_mark_as_mark() {
 title = directional_pattern_condition
 
 puzzle main {
-layers {
+slots {
 Background
 Player Wall
 Marker
@@ -12056,7 +12185,7 @@ fn embedded_move_mark_condition_uses_relative_direction() {
 title = relative_embedded_move_mark_condition
 
 puzzle main {
-layers {
+slots {
 Background
 Player Wall
 Marker
@@ -12119,7 +12248,7 @@ fn rhs_keep_marker_preserves_matching_cell() {
 title = rhs_keep_marker
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_1 = A B C
 }
 empty .
@@ -12154,7 +12283,7 @@ fn keep_marker_is_only_valid_as_whole_rhs_cell() {
 title = rhs_keep_marker_lhs_reject
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_1 = A B
 }
 empty .
@@ -12175,7 +12304,7 @@ AB
 title = rhs_keep_marker_mixed_reject
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_1 = A B
 }
 empty .
@@ -12199,7 +12328,7 @@ fn fix_default_applies_through_nested_blocks() {
 title = fix_nested_block
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_1 = A
 }
 empty .
@@ -12234,7 +12363,7 @@ fn fix_does_not_prefix_top_level_directives() {
 title = fix_input
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Marker
 __legacy_layer_1 = Box
 }
@@ -12265,10 +12394,10 @@ fn scene_keys_define_action_bindings_and_puzzle_controls() {
 title = scene_keys
 
 puzzle default {
-layers {
+slots {
 actor = Player
 }
-layers {
+slots {
 __legacy_layer_0 = Player actor
 }
 legend {
@@ -12322,15 +12451,16 @@ show_solved = true
                 && level_select.name == "level_select"
                 && default.name == "default")
     );
-    let playing = loaded.scenes.iter().find(|scene| scene.name == "playing").unwrap();
+    let playing = loaded
+        .scenes
+        .iter()
+        .find(|scene| scene.name == "playing")
+        .unwrap();
     assert_eq!(playing.state.puzzles.len(), 1);
     assert_eq!(playing.state.puzzles[0].name, "board");
     assert_eq!(playing.state.variables.len(), 4);
     assert_eq!(playing.state.variables[0].name, "message_visible");
-    assert_eq!(
-        playing.state.variables[0].default,
-        SceneValue::Bool(false)
-    );
+    assert_eq!(playing.state.variables[0].default, SceneValue::Bool(false));
     assert_eq!(
         playing.state.variables[2].default,
         SceneValue::Text("Push the box".to_string())
@@ -12347,7 +12477,13 @@ show_solved = true
     );
     assert!(loaded.controls.keys.get(&b'q').is_none());
 
-    let SceneComponent::LevelMenu(menu) = &loaded.scenes.iter().find(|scene| scene.name == "level_select").unwrap().components[0] else {
+    let SceneComponent::LevelMenu(menu) = &loaded
+        .scenes
+        .iter()
+        .find(|scene| scene.name == "level_select")
+        .unwrap()
+        .components[0]
+    else {
         panic!("expected level menu component");
     };
     assert!(menu.show_index);
@@ -12360,7 +12496,7 @@ fn scene_effects_parse_targeted_goto_level_paths() {
 title = goto_effects
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -12398,7 +12534,11 @@ puzzle board = default
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let select = loaded.scenes.iter().find(|scene| scene.name == "select").unwrap();
+    let select = loaded
+        .scenes
+        .iter()
+        .find(|scene| scene.name == "select")
+        .unwrap();
     let column = select
         .components
         .iter()
@@ -12446,7 +12586,7 @@ fn scene_effects_parse_targeted_restart() {
 title = targeted_restart
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -12470,7 +12610,11 @@ button "Restart Board" -> board.restart
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let playing = loaded.scenes.iter().find(|scene| scene.name == "playing").unwrap();
+    let playing = loaded
+        .scenes
+        .iter()
+        .find(|scene| scene.name == "playing")
+        .unwrap();
     let SceneComponent::Button(scene_button) = &playing.components[1] else {
         panic!("expected scene restart button");
     };
@@ -12499,7 +12643,7 @@ sfx click { seed = 746670; type = jump }
 }
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -12531,7 +12675,11 @@ puzzle board = default
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let title = loaded.scenes.iter().find(|scene| scene.name == "title").unwrap();
+    let title = loaded
+        .scenes
+        .iter()
+        .find(|scene| scene.name == "title")
+        .unwrap();
     let SceneComponent::Button(new_game) = &title.components[0] else {
         panic!("expected new game button");
     };
@@ -12588,7 +12736,7 @@ puzzle board = default
 }
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -12616,7 +12764,7 @@ fn scene_effects_reject_start_level_scene_commands() {
 title = start_level_scene
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -12975,7 +13123,7 @@ puzzle default {
 var moved = false
 persistent var cleared = false
 
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 legend P = Player
@@ -13020,7 +13168,11 @@ puzzle board = default
             .any(|name| name == "cleared")
     );
     assert_eq!(loaded.persistent_vars.len(), 1);
-    let playing = loaded.scenes.iter().find(|scene| scene.name == "playing").unwrap();
+    let playing = loaded
+        .scenes
+        .iter()
+        .find(|scene| scene.name == "playing")
+        .unwrap();
     assert_eq!(playing.state.variables.len(), 2);
     assert_eq!(playing.state.variables[1].name, "last_tab");
     assert_eq!(
@@ -13035,7 +13187,7 @@ fn layers_and_legend_use_reserved_dot_empty_without_a_declaration() {
 title = object_blocks
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Goal
 __legacy_layer_1 = Player Box Wall
 }
@@ -13085,7 +13237,7 @@ fn levels_reject_object_and_non_dot_empty_redefinitions_of_reserved_dot() {
     let source = |legend_row: &str| {
         format!(
             r#"puzzle default {{
-layers {{
+slots {{
 actor = Player
 }}
 rules {{
@@ -13117,7 +13269,7 @@ fn level_body_legend_adds_level_local_chars() {
 title = level_local_legend
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Goal
 __legacy_layer_1 = Box Player
 }
@@ -13173,7 +13325,7 @@ fn level_body_legend_does_not_leak_to_other_levels() {
 title = level_local_legend_no_leak
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Goal
 __legacy_layer_1 = Box
 }
@@ -13206,7 +13358,7 @@ fn detects_goal_completion_after_solving_sample_game() {
     let source = r#"
 title = goal_fixture
 puzzle sokoban {
-layers {
+slots {
 __legacy_layer_0 = Goal
 __legacy_layer_1 = Player Box Wall
 }
@@ -13258,7 +13410,7 @@ fn detects_goal_completion_on_second_stage() {
     let source = r#"
 title = goal_fixture
 puzzle sokoban {
-layers {
+slots {
 __legacy_layer_0 = Goal
 __legacy_layer_1 = Player Box Wall
 }
@@ -13310,7 +13462,7 @@ fn parses_lose_conditions_with_some_pattern_row() {
     let source = r#"
 title = lose_fixture
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Box Wall
 }
 legend B = Box
@@ -13347,7 +13499,7 @@ fn parses_lose_conditions_with_exists_pattern_expr() {
     let source = r#"
 title = lose_fixture
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Box Wall
 }
 legend B = Box
@@ -13381,7 +13533,7 @@ fn condition_prefix_patterns_accept_wrapping_parentheses() {
     let source = r#"
 title = condition_prefix_pattern_parens
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Goal
 __legacy_layer_1 = Box
 }
@@ -13415,7 +13567,7 @@ puzzle default {
 tags {
 state = open close
 }
-layers {
+slots {
 __legacy_layer_0 = Door:state Switch:state
 }
 legend d = Door:open
@@ -13444,7 +13596,7 @@ fn no_function_alias_accepts_pattern_conditions() {
     let source = r#"
 title = no_function_pattern_alias
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Goal
 }
 legend {
@@ -13470,7 +13622,7 @@ fn condition_blocks_accept_explicit_any_combinator() {
     let source = r#"
 title = condition_any_fixture
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Goal
 __legacy_layer_1 = Box Wall
 }
@@ -13512,7 +13664,7 @@ puzzle default {
 tags {
 kind = A B
 }
-layers {
+slots {
 __legacy_layer_0 = Goal:kind
 __legacy_layer_1 = Box:kind
 }
@@ -13556,7 +13708,7 @@ kind = A B
 tags {
 direction_side = up down
 }
-layers {
+slots {
 __legacy_layer_0 = Box:kind
 __legacy_layer_1 = Edge:direction_side
 __legacy_layer_2 = Found:kind:direction_side
@@ -13594,7 +13746,7 @@ fn rules_expand_for_in_inclusive_numeric_range() {
 title = numeric_for_range
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Marker
 __legacy_layer_1 = Box
 }
@@ -13632,7 +13784,7 @@ fn rules_expand_for_in_numeric_range_with_integer_var_endpoint() {
 title = numeric_for_var_range
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Marker
 __legacy_layer_1 = Box
 }
@@ -13672,7 +13824,7 @@ fn rules_expand_for_inline_value_list_as_object_tokens() {
 title = inline_for_objects
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Marker
 __legacy_layer_1 = Box Wall Player
 }
@@ -13712,7 +13864,7 @@ puzzle default {
 tags {
 kind = tag_1 tag_2 tag_3 tag_4
 }
-layers {
+slots {
 __legacy_layer_0 = Marker
 __legacy_layer_1 = Box:kind
 }
@@ -13756,7 +13908,7 @@ marks {
 checked
 }
 var locked_room_count = 1
-layers {
+slots {
 gate = Gate:gate_no
 }
 empty .
@@ -13795,7 +13947,7 @@ title = inclusive_compare_if
 
 puzzle default {
 var count = 2
-layers {
+slots {
 __legacy_layer_0 = Marker
 __legacy_layer_1 = Flag
 __legacy_layer_2 = Box
@@ -13845,7 +13997,7 @@ marks {
 checked
 }
 var locked_room_count = 1
-layers {
+slots {
 gate = Gate:gate_no
 }
 empty .
@@ -13901,7 +14053,7 @@ marks {
 checked
 }
 var locked_room_count = 1
-layers {
+slots {
 gate = Gate:gate_no
 @count = @Count:count_value
 }
@@ -13961,7 +14113,7 @@ marks {
 checked
 }
 var locked_room_count = 2
-layers {
+slots {
 gate = Gate:gate_no
 @count = @Count:count_value
 }
@@ -14024,7 +14176,7 @@ marks {
 checked
 }
 var locked_room_count = 0
-layers {
+slots {
 gate = Gate:gate_no
 }
 empty .
@@ -14079,7 +14231,7 @@ tags {
 num = 1 2 3
 }
 
-layers {
+slots {
 __legacy_layer_0 = Marker
 __legacy_layer_1 = Box:num
 }
@@ -14122,7 +14274,7 @@ tags {
 kind = 1 2 3
 }
 
-layers {
+slots {
 floor = Detector
 actor = Obj:kind
 }
@@ -14160,7 +14312,7 @@ tags {
 kind = 1 2 3
 }
 
-layers {
+slots {
 actor = Obj:kind
 }
 empty .
@@ -14198,7 +14350,7 @@ map flip kind {
 1 -> 2
 2 -> 1
 }
-layers {
+slots {
 actor = Obj:kind
 }
 empty .
@@ -14236,7 +14388,7 @@ tags {
 kind = 1 2 3
 }
 
-layers {
+slots {
 actor = Obj:kind
 }
 empty .
@@ -14273,7 +14425,7 @@ tags {
 kind = 1 2 3
 }
 
-layers {
+slots {
 actor = Obj:kind
 }
 empty .
@@ -14310,7 +14462,7 @@ tags {
 kind = 1 2
 }
 
-layers {
+slots {
 a = A:kind
 b = B:kind
 }
@@ -14348,7 +14500,7 @@ tags {
 kind = 1 2
 }
 
-layers {
+slots {
 actor = Obj:kind
 }
 empty .
@@ -14384,7 +14536,7 @@ tags {
 color = red blue
 }
 
-layers {
+slots {
 actor = Obj:color
 }
 empty .
@@ -14420,7 +14572,7 @@ tags {
 num = 1 2 3
 }
 
-layers {
+slots {
 __legacy_layer_0 = Flag
 __legacy_layer_1 = Box:num
 }
@@ -14470,7 +14622,7 @@ tags {
 num = 0 1 2
 }
 
-layers {
+slots {
 __legacy_layer_1 = Count:num
 }
 empty .
@@ -14512,7 +14664,7 @@ tags {
 num = 0 1 2
 }
 
-layers {
+slots {
 __legacy_layer_1 = Count:num
 }
 empty .
@@ -14554,7 +14706,7 @@ tags {
 num = 0 1 2
 }
 
-layers {
+slots {
 __legacy_layer_1 = Count:num
 }
 empty .
@@ -14595,7 +14747,7 @@ tags {
 num = 0 1 2
 }
 
-layers {
+slots {
 __legacy_layer_1 = Count:num
 }
 empty .
@@ -14636,7 +14788,7 @@ tags {
 num = 0 1 2
 }
 
-layers {
+slots {
 __legacy_layer_1 = Count:num
 }
 empty .
@@ -14697,7 +14849,7 @@ tags {
 num = 0 1 2
 }
 
-layers {
+slots {
 __legacy_layer_1 = Count:num
 }
 empty .
@@ -14738,7 +14890,7 @@ tags {
 num = 1 2 3
 }
 
-layers {
+slots {
 __legacy_layer_0 = Flag
 __legacy_layer_1 = Box:num
 }
@@ -14782,7 +14934,7 @@ tags {
 num = 1 2 3
 }
 
-layers {
+slots {
 __legacy_layer_0 = Marker
 __legacy_layer_1 = Box:num
 }
@@ -14821,7 +14973,7 @@ tags {
 count = 1 2 3
 }
 
-layers {
+slots {
 __legacy_layer_1 = Box:count
 }
 empty .
@@ -14857,7 +15009,7 @@ tags {
 num = count 2 3
 }
 
-layers {
+slots {
 __legacy_layer_1 = Box:num
 }
 empty .
@@ -14886,7 +15038,7 @@ fn condition_blocks_accept_no_pattern_all_on_and_count_compare() {
     let source = r#"
 title = condition_fixture
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Goal
 __legacy_layer_1 = Box Wall
 }
@@ -14924,7 +15076,7 @@ fn condition_blocks_lower_none_function_to_short_circuit_condition_def() {
     let source = r#"
 title = none_condition_fixture
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Goal
 __legacy_layer_1 = Box
 }
@@ -14973,7 +15125,7 @@ fn all_on_lowers_to_generic_goal_and_generates_solver_strategy() {
 title = all_on_semantics
 puzzle default {
 empty .
-layers {
+slots {
 floor = Goal
 actor = Box
 }
@@ -15023,7 +15175,7 @@ tags {
 kindprime = A B C
 }
 
-layers {
+slots {
 __legacy_layer_1 = Target:kind
 }
 
@@ -15063,7 +15215,7 @@ tags {
 kindprime = A B X
 }
 
-layers {
+slots {
 __legacy_layer_1 = Target:kind
 }
 
@@ -15098,7 +15250,7 @@ tags {
 kind = directions A
 }
 
-layers {
+slots {
 __legacy_layer_1 = Target:kind
 }
 
@@ -15129,7 +15281,7 @@ title = relative_direction_selector
 puzzle default {
 empty .
 
-layers {
+slots {
 actor = Marker:directions
 }
 
@@ -15176,7 +15328,7 @@ tags {
 stateprime = on
 }
 
-layers {
+slots {
 __legacy_layer_1 = Target:kind:state
 }
 
@@ -15219,7 +15371,7 @@ tags {
 stateprime = on
 }
 
-layers {
+slots {
 __legacy_layer_1 = Target:kind:state
 }
 
@@ -15254,7 +15406,7 @@ tags {
 facing = left right
 }
 
-layers {
+slots {
 __legacy_layer_1 = player:facing
 }
 
@@ -15296,7 +15448,7 @@ tags {
 kind = A B
 }
 
-layers {
+slots {
 target = Target:kind Target:Z
 }
 
@@ -15328,7 +15480,7 @@ title = layer_rejects_undeclared_tag_set
 puzzle default {
 empty .
 
-layers {
+slots {
 target = Target:missing_axis
 }
 
@@ -15359,7 +15511,7 @@ tags {
 kind = A B
 }
 
-layers {
+slots {
 target = specials Target:kind
 }
 
@@ -15399,7 +15551,7 @@ tags {
 kind = A B
 }
 
-layers {
+slots {
 target = Target:kind
 }
 
@@ -15439,7 +15591,7 @@ tags {
 state = on off
 }
 
-layers {
+slots {
 __legacy_layer_1 = Player Box:state
 }
 
@@ -15483,7 +15635,7 @@ facing = 0deg..<360deg step 90deg
 offset = (0..<1 step 1/2, 0..<1 step 1/2)
 }
 
-layers {
+slots {
 __legacy_layer_1 = Box:facing:color Ball:offset:color
 }
 
@@ -15517,7 +15669,7 @@ tags {
 pose = right, front front, left
 }
 
-layers {
+slots {
 actors = Die:pose
 }
 
@@ -15550,7 +15702,7 @@ tags {
 pose = right, front
 }
 
-layers {
+slots {
 actors = Die:pose
 }
 
@@ -15593,7 +15745,7 @@ tags {
 hor = 0..<1 step 0.5
 }
 
-layers {
+slots {
 actors = Player:directions:hor
 }
 
@@ -15706,7 +15858,7 @@ tags {
 reversed = false true
 }
 
-layers {
+slots {
 actors = Player:reversed
 }
 
@@ -15765,7 +15917,7 @@ tags {
 offset = (0, -1) (0..<1 step 0.5, 0..<1 step 1/2)
 }
 
-layers {
+slots {
 actors = Ball:offset
 }
 
@@ -15799,7 +15951,7 @@ color = red blue
 facing = 0deg..<360deg step 90deg
 }
 
-layers {
+slots {
 __legacy_layer_1 = Box:facing:color
 }
 
@@ -15838,7 +15990,7 @@ offset = (0..<1 step 1/2, 0..<1 step 1/2)
 facing = 0deg..<360deg step 90deg
 }
 
-layers {
+slots {
 __legacy_layer_1 = Ball:offset Arrow:facing:offset
 }
 
@@ -15880,7 +16032,7 @@ tags {
 offset = (0...1/2 step 1/2, 0...1/2 step 1/2)
 }
 
-layers {
+slots {
 __legacy_layer_1 = Ball:offset
 }
 
@@ -15912,7 +16064,7 @@ tags {
 facing = 0deg 90deg
 }
 
-layers {
+slots {
 actor = Player:facing
 }
 
@@ -15943,7 +16095,7 @@ tags {
 facing = rotation step 90deg
 }
 
-layers {
+slots {
 actor = Player:facing
 }
 
@@ -15973,7 +16125,7 @@ tags {
 offset = (0..<1 step 1/2, 0..<1 step 1/2)
 }
 
-layers {
+slots {
 actor = Ball:offset
 }
 
@@ -16005,7 +16157,7 @@ tags {
 facing = left right
 }
 
-layers {
+slots {
 __legacy_layer_1 = player:facing
 }
 
@@ -16040,7 +16192,7 @@ tags {
 facing = left right
 }
 
-layers {
+slots {
 __legacy_layer_1 = player:facing
 }
 
@@ -16077,7 +16229,7 @@ tags {
 state = on off
 }
 
-layers {
+slots {
 __legacy_layer_1 = Target:kind:state
 }
 
@@ -16113,7 +16265,7 @@ tags {
 state = on off
 }
 
-layers {
+slots {
 __legacy_layer_1 = Door:state Switch:state
 }
 
@@ -16149,7 +16301,7 @@ tags {
 state = A B
 }
 
-layers {
+slots {
 __legacy_layer_1 = Door:state Switch:state
 }
 
@@ -16186,7 +16338,7 @@ tags {
 state = stack movable
 }
 
-layers {
+slots {
 __legacy_layer_1 = Crate:state
 }
 
@@ -16225,7 +16377,7 @@ kind = a b
 pair = A B
 }
 
-layers {
+slots {
 __legacy_layer_1 = A:kind B:kind C:kind
 }
 
@@ -16262,7 +16414,7 @@ tags {
 kind = a b
 }
 
-layers {
+slots {
 __legacy_layer_1 = A:kind B:kind
 }
 
@@ -16301,7 +16453,7 @@ kind = a b
 pair = A B
 }
 
-layers {
+slots {
 __legacy_layer_1 = A:kind B:kind C:kind
 }
 
@@ -16342,7 +16494,7 @@ kind = a b
 pair = A B
 }
 
-layers {
+slots {
 __legacy_layer_1 = A:kind B:kind
 }
 
@@ -16380,7 +16532,7 @@ kind = a b
 mixed = A Wall
 }
 
-layers {
+slots {
 __legacy_layer_1 = A:kind Wall
 }
 
@@ -16415,7 +16567,7 @@ tags {
 kind = a b
 }
 
-layers {
+slots {
 __legacy_layer_1 = A:kind B:kind
 }
 
@@ -16451,7 +16603,7 @@ tags {
 state = open close
 }
 
-layers {
+slots {
 room = Room Room:state
 marker = Marker:state Marker
 }
@@ -16504,7 +16656,7 @@ tags {
 color = red blue
 }
 
-layers {
+slots {
 base = marker:color
 }
 
@@ -16533,7 +16685,7 @@ fn blank_lines_split_level_into_auto_placed_regions() {
 title = region_level
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_1 = Player Box
 }
 empty .
@@ -16581,7 +16733,7 @@ fn levels_block_accepts_unbraced_named_levels_split_by_blank_lines() {
 title = unbraced_named_levels
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player Box
 }
 empty .
@@ -16612,7 +16764,7 @@ fn levels_block_accepts_unnamed_levels_split_by_blank_lines() {
 title = unnamed_levels
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player Box
 }
 empty .
@@ -16641,7 +16793,7 @@ fn levels_block_accepts_braced_unnamed_multi_region_level() {
 title = unnamed_multi_region
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player Box
 }
 empty .
@@ -16672,7 +16824,7 @@ fn levels_block_accepts_canonical_level_name_definition() {
 title = canonical_level_name
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -16700,7 +16852,7 @@ fn levels_block_rejects_legacy_braced_name_without_level_keyword() {
 title = legacy_braced_level_name
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -16725,7 +16877,7 @@ fn levels_block_rejects_braces_in_ascii_rows() {
 title = level_ascii_braces
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -16750,7 +16902,7 @@ fn level_ascii_layers_overlay_empty_cells_as_transparent() {
 title = level_ascii_layers
 
 puzzle default {
-layers {
+slots {
 terrain = Floor
 actor = Player
 }
@@ -16791,7 +16943,7 @@ fn level_ascii_layers_reject_different_sizes_in_same_region() {
 title = level_ascii_layer_size
 
 puzzle default {
-layers {
+slots {
 actor = Player
 }
 empty .
@@ -16818,7 +16970,7 @@ fn level_ascii_layers_reject_separator_without_following_layer() {
 title = level_ascii_layer_separator
 
 puzzle default {
-layers {
+slots {
 actor = Player
 }
 empty .
@@ -16844,7 +16996,7 @@ fn level_ascii_layers_preserve_blank_line_region_split() {
 title = level_ascii_layer_regions
 
 puzzle default {
-layers {
+slots {
 terrain = Floor
 actor = Player Box
 }
@@ -16895,7 +17047,7 @@ fn level_ascii_layers_prefer_upper_object_on_same_core_layer() {
 title = level_ascii_layer_priority
 
 puzzle default {
-layers {
+slots {
 actor = Player Box
 }
 empty .
@@ -16927,7 +17079,7 @@ fn puzzle_view_parses_flickscreen_viewport_controls() {
 title = frame_view
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_1 = Player
 }
 empty .
@@ -16966,7 +17118,7 @@ fn puzzle_view_parses_full_flickscreen() {
 title = full_frame
 
 puzzle default {
-layers 1
+slots 1
 empty .
 
 flickscreen full
@@ -16990,7 +17142,7 @@ fn puzzle_view_rejects_removed_frame_size_syntax() {
 title = region_frame
 
 puzzle default {
-layers 1
+slots 1
 empty .
 
 frame_size region
@@ -17014,7 +17166,7 @@ fn puzzle_view_rejects_removed_frame_focus_syntax() {
 title = region_frame
 
 puzzle default {
-layers 1
+slots 1
 empty .
 
 frame_focus Player
@@ -17038,7 +17190,7 @@ fn puzzle_view_parses_zoomscreen_as_centered_viewport() {
 title = zoom_view
 
 puzzle default {
-layers 1
+slots 1
 empty .
 
 zoomscreen 5 3
@@ -17069,7 +17221,7 @@ fn puzzle_render_parses_grid_type_all_cells() {
 title = grid_render
 
 puzzle default {
-layers 1
+slots 1
 empty .
 
 render {
@@ -17099,7 +17251,7 @@ fn puzzle_render_parses_grid_type_occupied_cells() {
 title = grid_render
 
 puzzle default {
-layers 1
+slots 1
 empty .
 
 render {
@@ -17129,7 +17281,7 @@ fn puzzle_render_parses_cell_size() {
 title = cell_size_render
 
 puzzle default {
-layers 1
+slots 1
 empty .
 
 render {
@@ -17156,7 +17308,7 @@ fn puzzle_render_rejects_invalid_cell_size() {
 title = cell_size_render
 
 puzzle default {
-layers 1
+slots 1
 empty .
 
 render {
@@ -17183,7 +17335,7 @@ fn puzzle_render_rejects_old_cell_size_value_syntax() {
 title = cell_size_render
 
 puzzle default {
-layers 1
+slots 1
 empty .
 
 render {
@@ -17210,7 +17362,7 @@ fn puzzle_render_rejects_old_boolean_grid_assignments() {
 title = grid_render
 
 puzzle default {
-layers 1
+slots 1
 empty .
 
 render {
@@ -17238,7 +17390,7 @@ fn puzzle_render_rejects_old_bare_grid_type_rows() {
 title = grid_render
 
 puzzle default {
-layers 1
+slots 1
 empty .
 
 render {
@@ -17266,7 +17418,7 @@ fn repeated_group_selector_expands_independently_and_preserves_occurrence_order(
 title = repeated_group_selector
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_1 = Box Crate
 }
 empty .
@@ -17304,7 +17456,7 @@ fn selector_occurrence_labels_can_swap_group_members() {
 title = selector_occurrence_labels
 
 puzzle swap {
-layers {
+slots {
 actor = Box Crate
 }
 groups {
@@ -17340,7 +17492,7 @@ fn selector_occurrence_labels_can_duplicate_group_members_on_rhs() {
 title = duplicate_selector_occurrence_label_rhs
 
 puzzle copy {
-layers {
+slots {
 actor = Box Crate
 }
 groups {
@@ -17377,7 +17529,7 @@ fn single_group_occurrence_duplicates_to_multiple_rhs_cells() {
 title = duplicate_single_group_occurrence_rhs
 
 puzzle copy {
-layers {
+slots {
 actor = Box Crate
 }
 groups {
@@ -17414,7 +17566,7 @@ fn repeated_group_occurrences_do_not_allow_extra_unlabeled_rhs_copy() {
 title = reject_ambiguous_extra_group_rhs
 
 puzzle copy {
-layers {
+slots {
 actor = Box Crate
 }
 groups {
@@ -17445,7 +17597,7 @@ fn selector_occurrence_labels_must_be_unique_in_before_pattern() {
 title = duplicate_selector_occurrence_label
 
 puzzle swap {
-layers {
+slots {
 actor = Box Crate
 }
 groups {
@@ -17475,7 +17627,7 @@ fn object_occurrence_labels_swap_occurrence_mark() {
 title = object_occurrence_label_mark_swap
 
 puzzle swap {
-layers {
+slots {
 marker = HotMarker ColdMarker
 actor = Box
 }
@@ -17521,7 +17673,7 @@ tags {
 color = red blue
 }
 
-layers {
+slots {
 __legacy_layer_1 = box:color
 }
 
@@ -17556,7 +17708,7 @@ title = set_prefix_math_effects
 puzzle default {
 var count = 2
 
-layers {
+slots {
 __legacy_layer_0 = Button
 }
 empty .
@@ -17592,7 +17744,7 @@ fn none_query_is_first_class_boolean_guard() {
 title = none_condition
 
 puzzle default {
-layers {
+slots {
 floor = Button
 solid = Box Door OpenDoor
 }
@@ -17631,7 +17783,7 @@ fn win_conditions_accept_exists_and_none_as_canonical_query_functions() {
 title = canonical_condition_goal
 
 puzzle default {
-layers {
+slots {
 target = Goal
 solid = Box
 }
@@ -17666,7 +17818,7 @@ fn count_matches_is_no_longer_accepted() {
 title = old_condition_name
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Button
 __legacy_layer_1 = Box
 __legacy_layer_2 = Door
@@ -17697,12 +17849,12 @@ fn at_prefixed_routine_is_part_of_the_normal_game_program() {
 title = display_split
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 
 
-layers {
+slots {
 actor = Player
 @marker = @Trail
 }
@@ -17734,7 +17886,7 @@ P.
 "#;
     let loaded = parse_game(source).unwrap();
     let player = object_named(&loaded, "Player");
-    let trail = object_named(&loaded, "Trail");
+    let trail = object_named(&loaded, "@Trail");
     let right = input_named(&loaded, "right");
     let initial = &loaded.levels[0].initial_state;
 
@@ -17753,13 +17905,13 @@ P.
 }
 
 #[test]
-fn at_prefixed_layer_objects_are_not_display_objects() {
+fn at_prefixed_layer_objects_use_regular_layers() {
     let source = r#"
 title = unified_objects
 
 puzzle default {
 
-layers {
+slots {
 actor = Player
 @marker = @Trail
 }
@@ -17780,63 +17932,35 @@ rules {
 }
 "#;
     let loaded = super::parse_game2d(source).unwrap();
-    let player = object_named(&loaded, "Player");
-    let trail = object_named(&loaded, "Trail");
-
-    assert!(!loaded.is_display_object(player));
-    assert!(!loaded.is_display_object(trail));
+    assert!(
+        loaded
+            .game
+            .object_layer(object_named(&loaded, "Player"))
+            .is_some()
+    );
+    assert!(
+        loaded
+            .game
+            .object_layer(object_named(&loaded, "@Trail"))
+            .is_some()
+    );
 }
 
 #[test]
-fn on_display_is_removed() {
-    let source = r#"
-title = display_removed
+fn at_prefixed_object_is_a_normal_object() {
+    let loaded = parse_game(at_prefixed_object_source()).unwrap();
+    let floor = object_named(&loaded, "@Floor");
 
-puzzle default {
-layers {
-actor = Player
+    assert!(loaded.game.object_layer(floor).is_some());
 }
 
-legend {
-. = empty
-P = Player
-}
-
-on_display {
-[ Player ] -> [ Player ]
-}
-
-rules {
-
-}
-
-levels {
-level "start"
-P
-}
-}
-"#;
-    let error = parse_game(source).unwrap_err().to_string();
-
-    assert!(error.contains("`on_display` was removed"));
-}
-
-#[test]
-fn at_prefixed_projection_object_is_a_normal_object() {
-    let loaded = parse_game(display_floor_projection_source()).unwrap();
-    let floor = object_named(&loaded, "Floor");
-
-    assert!(!loaded.is_display_object(floor));
-    assert!(loaded.display_program.is_none());
-}
-
-fn display_floor_projection_source() -> &'static str {
+fn at_prefixed_object_source() -> &'static str {
     r#"
-title = display_floor_projection
+title = at_prefixed_object
 
 puzzle default {
-layers {
-@display_floor = @Floor
+slots {
+@floor = @Floor
 target = Goal
 }
 
@@ -17860,96 +17984,17 @@ level "start" {
 }
 
 #[test]
-fn removed_on_display_rejects_input_dependent_display_rules_before_lowering() {
-    let source = r#"
-title = display_snapshot_input
-
-puzzle default {
-layers {
-__legacy_layer_0 = Player
-}
-
-
-layers {
-actor = Player
-@marker = @Trail
-}
-
-legend {
-. = empty
-P = Player
-}
-
-routine @paint once {
-input directions [ Player no @Trail | ] -> [ Player @Trail | ]
-}
-
-on_display {
-@paint
-}
-
-rules {
-
-}
-
-levels {
-level "start"
-P.
-}
-}
-"#;
-    let error = parse_game(source).unwrap_err().to_string();
-
-    assert!(error.contains("`on_display` was removed"));
-}
-
-#[test]
-fn removed_on_display_rejects_main_statements_before_lowering() {
-    let source = r#"
-title = display_snapshot_main_statement
-
-puzzle default {
-
-layers {
-actor = Player
-}
-
-legend {
-. = empty
-P = Player
-}
-
-on_display {
-[ Player ] -> [ ]
-}
-
-rules {
-
-}
-
-levels {
-level "start"
-P
-}
-}
-"#;
-    let error = parse_game(source).unwrap_err().to_string();
-
-    assert!(error.contains("`on_display` was removed"));
-}
-
-#[test]
 fn main_program_can_call_at_prefixed_routine() {
     let source = r#"
 title = display_call_site_guard
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 
 
-layers {
+slots {
 actor = Player
 @marker = @Trail
 }
@@ -17974,7 +18019,7 @@ P
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let trail = object_named(&loaded, "Trail");
+    let trail = object_named(&loaded, "@Trail");
     let right = input_named(&loaded, "right");
     let initial = &loaded.levels[0].initial_state;
 
@@ -17992,12 +18037,12 @@ fn at_prefixed_routine_can_write_any_normal_object() {
 title = display_write_guard
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 
 
-layers {
+slots {
 actor = Player
 @marker = @Trail
 }
@@ -18030,12 +18075,12 @@ fn at_prefixed_object_match_can_change_other_objects() {
 title = main_display_read_guard
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 
 
-layers {
+slots {
 actor = Player
 @marker = @Trail
 }
@@ -18064,7 +18109,7 @@ fn display_match_can_emit_sfx_without_rhs_block() {
 title = display_match_sfx
 
 puzzle default {
-layers {
+slots {
 actor = Player
 @ui = @Check
 }
@@ -18114,7 +18159,7 @@ fn at_prefixed_object_match_can_emit_gameplay_effect_without_rhs_block() {
 title = display_match_gameplay_effect_guard
 
 puzzle default {
-layers {
+slots {
 actor = Player
 @ui = @Check
 }
@@ -18151,7 +18196,7 @@ tags {
 kind = A B
 }
 
-layers {
+slots {
 @light = @LightBase @Light:kind
 solid = Box:kind
 }
@@ -18182,12 +18227,12 @@ fn normal_routine_can_write_at_prefixed_object() {
 title = bare_display_rule
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 
 
-layers {
+slots {
 actor = Player
 @marker = @Trail
 }
@@ -18212,7 +18257,7 @@ P
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let trail = object_named(&loaded, "Trail");
+    let trail = object_named(&loaded, "@Trail");
     let right = input_named(&loaded, "right");
     let initial = &loaded.levels[0].initial_state;
 
@@ -18230,12 +18275,12 @@ fn normal_rule_can_write_at_prefixed_object() {
 title = composite_display_effect
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 
 
-layers {
+slots {
 actor = Player
 @marker = @Trail
 }
@@ -18263,7 +18308,7 @@ P.
 "#;
     let loaded = parse_game(source).unwrap();
     let player = object_named(&loaded, "Player");
-    let trail = object_named(&loaded, "Trail");
+    let trail = object_named(&loaded, "@Trail");
     let right = input_named(&loaded, "right");
     let initial = &loaded.levels[0].initial_state;
 
@@ -18283,12 +18328,12 @@ fn at_prefixed_routine_accepts_composite_normal_rule() {
 title = display_routine_composite_guard
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 
 
-layers {
+slots {
 actor = Player
 @marker = @Trail
 }
@@ -18321,12 +18366,12 @@ fn main_block_can_read_at_prefixed_objects_through_query_defs() {
 title = main_display_condition_guard
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 
 
-layers {
+slots {
 actor = Player
 @marker = @Trail
 }
@@ -18354,15 +18399,8 @@ P
 }
 
 #[test]
-fn non_canonical_display_aliases_are_rejected() {
-    for header in [
-        "main_objects",
-        "main objects",
-        "objects",
-        "visual_objects",
-        "visuals",
-        "visual",
-    ] {
+fn unsupported_object_block_aliases_are_rejected() {
+    for header in ["main_objects", "main objects", "objects"] {
         let source = format!(
             r#"
 title = alias_rejection
@@ -18391,46 +18429,12 @@ level "start"
 }
 
 #[test]
-fn legacy_display_keyword_syntax_is_rejected() {
-    for legacy in [
-        "layers {\nactor = Player\n@marker = @Trail\n}\nroutine display paint once {\n[ Player no @Trail ] -> [ Player @Trail ]\n}\nrules {\n}",
-        "layers {\nactor = Player\n@marker = @Trail\n}\nroutine @paint once {\n[ Player no @Trail ] -> [ Player @Trail ]\n}\nrules {\ndisplay @paint\n}",
-        "layers {\nactor = Player\n@marker = @Trail\n}\nrules {\ndisplay [ Player no @Trail ] -> [ Player @Trail ]\n}",
-    ] {
-        let source = format!(
-            r#"
-title = legacy_display_keyword_rejection
-
-puzzle default {{
-{legacy}
-
-legend {{
-. = empty
-P = Player
-}}
-
-levels {{
-level "start"
-P
-}}
-}}
-"#
-        );
-
-        assert!(
-            parse_game(&source).is_err(),
-            "{legacy} should not be accepted as canonical syntax"
-        );
-    }
-}
-
-#[test]
 fn main_and_display_object_layers_keep_separate_storage_slots() {
     let source = r#"
 title = mixed_layers
 
 puzzle default {
-layers {
+slots {
 floor = Floor
 @floor_visual = @Shadow @Glow
 actor = Player
@@ -18489,7 +18493,7 @@ fn layer_can_mix_prefixed_and_unprefixed_objects() {
 title = mixed_layer_rejected
 
 puzzle default {
-layers {
+slots {
 floor = Floor @Shadow
 actor = Player
 }
@@ -18518,7 +18522,7 @@ fn display_groups_can_use_at_names() {
 title = display_group
 
 puzzle default {
-layers {
+slots {
 floor = Floor
 @marks = @Shadow @Glow
 actor = Player
@@ -18553,7 +18557,7 @@ fn at_prefixed_layer_name_can_contain_any_objects() {
 title = display_layer_rejected
 
 puzzle default {
-layers {
+slots {
 @marks = Player @Shadow
 }
 
@@ -18581,7 +18585,7 @@ fn unprefixed_layer_name_can_contain_at_prefixed_objects() {
 title = main_layer_rejected
 
 puzzle default {
-layers {
+slots {
 marks = @Shadow
 actor = Player
 }
@@ -18610,7 +18614,7 @@ fn at_prefixed_group_name_can_contain_any_objects() {
 title = display_group_rejected
 
 puzzle default {
-layers {
+slots {
 floor = Floor
 @marks = @Shadow
 actor = Player
@@ -18644,7 +18648,7 @@ fn unprefixed_group_name_can_contain_at_prefixed_objects() {
 title = main_group_rejected
 
 puzzle default {
-layers {
+slots {
 floor = Floor
 @marks = @Shadow
 actor = Player
@@ -18678,7 +18682,7 @@ fn each_layer_row_expands_selector_alternatives_to_ordered_layers() {
 title = each_layers
 
 puzzle default {
-layers {
+slots {
 actor = Wall
 each @Boundary:directions
 each @Corner:directions
@@ -18729,7 +18733,8 @@ fn puzzle3_parser_is_available_through_lang_crate() {
     let parsed = crate::parse_puzzle3d(
         r#"
 puzzle push3 {
-  layers {
+  dimension = 3
+  slots {
     floor = Floor
     actor = Player Box Wall
   }
@@ -18764,14 +18769,20 @@ levels demo of push3 {
     )
     .unwrap();
 
-    assert_eq!(parsed.rules.len(), 2);
-    assert_eq!(puzzle_grid3d::flattened_rules(&parsed.rules).len(), 8);
+    assert_eq!(parsed.game.program().len(), 2);
+    assert_eq!(
+        puzzle_grid3d::flattened_rules(parsed.game.program()).len(),
+        8
+    );
     assert_eq!(parsed.level_bundle.as_ref().unwrap().level_count(), 1);
     let fixture_json = crate::export_visual_fixture_json(&parsed).unwrap();
     let contract =
         puzzle_runtime_contract::puzzle3_runtime_model_from_fixture_json(&fixture_json).unwrap();
-    assert_eq!(contract.rules.len(), parsed.rules.len());
-    assert_eq!(puzzle_grid3d::flattened_rules(&contract.rules).len(), 8);
+    assert_eq!(contract.game.program().len(), parsed.game.program().len());
+    assert_eq!(
+        puzzle_grid3d::flattened_rules(contract.game.program()).len(),
+        8
+    );
     assert!(!fixture_json.contains("pushableObjectIds"));
     assert!(!fixture_json.contains("blocksMovement"));
 }
@@ -18786,7 +18797,7 @@ author = Tester
 homepage = "https://example.com/2d"
 
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -18846,7 +18857,7 @@ render {
   tween = true
   tween_duration = 30ms
 }
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -18876,12 +18887,19 @@ scene title {
     );
 
     let parts = super::parse_document_source_parts(source).unwrap();
-    assert!(matches!(parts.scenes.as_slice(), [default, title] if default.name == "default" && title.name == "title"));
+    assert!(
+        matches!(parts.scenes.as_slice(), [default, title] if default.name == "default" && title.name == "title")
+    );
     assert!(!parts.model_source.contains("scene title"));
     assert!(!parts.model_source.contains("title \"Two Dee\""));
     assert!(!parts.model_source.contains("sfx push"));
-    let model_game =
-        super::parse_game2d_expanded_lines_with_shell(parts.model_lines, &parts.shell).unwrap();
+    let model_game = super::parse_game2d_expanded_lines_with_shell(
+        parts.model_lines,
+        &parts.models,
+        &parts.model_catalogs,
+        &parts.shell,
+    )
+    .unwrap();
     assert!(model_game.scenes.is_empty());
 }
 
@@ -18892,7 +18910,7 @@ fn explicit_model_named_scene_overrides_implicit_scene_sugar() {
 title = explicit_scene_override
 
 puzzle sokoban {
-layers {
+slots {
 actor = Player
 }
 rules {
@@ -18914,7 +18932,11 @@ scene sokoban {
     .unwrap();
 
     assert!(matches!(loaded.scenes.as_slice(), [scene] if scene.name == "sokoban"));
-    let scene = loaded.scenes.iter().find(|scene| scene.name == "sokoban").unwrap();
+    let scene = loaded
+        .scenes
+        .iter()
+        .find(|scene| scene.name == "sokoban")
+        .unwrap();
     assert!(scene.state.puzzles.is_empty());
     assert!(scene.components.is_empty());
     assert!(scene.puzzle_rule.is_none());
@@ -18925,7 +18947,7 @@ fn puzzle_default_scene_participates_in_document_scene_order() {
     let puzzle_first = super::parse_game2d(
         r#"
 puzzle board {
-layers {
+slots {
 actor = Player
 }
 rules {
@@ -18956,7 +18978,7 @@ scene title {
 }
 
 puzzle board {
-layers {
+slots {
 actor = Player
 }
 rules {
@@ -18986,7 +19008,7 @@ fn puzzle_model_layout_block_lowers_to_default_scene() {
 title = Inline Scene
 
 puzzle sokoban {
-layers {
+slots {
 actor = Player
 }
 rules {
@@ -19054,7 +19076,8 @@ assets {
 }
 
 puzzle push3 {
-  layers {
+  dimension = 3
+  slots {
     floor = Floor
     actor = Player Box Wall
   }
@@ -19134,8 +19157,8 @@ scene level_select {
                 && matches!(&push3.puzzle_rule, Some(ScenePuzzleRule { target, rule }) if target == "push3" && rule == "rules")
     ));
     assert_eq!(name, "push3");
-    assert_eq!(puzzle.rules.len(), 2);
-    assert_eq!(puzzle_grid3d::flattened_rules(&puzzle.rules).len(), 8);
+    assert_eq!(puzzle.game.program().len(), 2);
+    assert_eq!(puzzle.game.rules().len(), 8);
     assert_eq!(puzzle.level_bundle.as_ref().unwrap().level_count(), 1);
     let fixture_json = crate::export_loaded_document_visual_fixture_json(&document).unwrap();
     assert!(fixture_json.contains("\"title\": \"Three Dee\""));
@@ -19157,7 +19180,8 @@ fn parse_game_accepts_3d_input_rule_without_orientation_set() {
 title = "Bare 3D Input"
 
 puzzle push3 {
-  layers {
+  dimension = 3
+  slots {
     actor = Player
   }
 
@@ -19184,8 +19208,8 @@ levels demo of push3 {
     let Some(LoadedDocumentModel::Puzzle3d { puzzle, .. }) = document.single_model() else {
         panic!("expected one 3D puzzle model");
     };
-    assert_eq!(puzzle.rules.len(), 1);
-    assert_eq!(puzzle_grid3d::flattened_rules(&puzzle.rules).len(), 6);
+    assert_eq!(puzzle.game.program().len(), 1);
+    assert_eq!(puzzle.game.rules().len(), 6);
 }
 
 #[test]
@@ -19196,7 +19220,8 @@ title = "Themed 3D"
 theme = "puzzlescript"
 
 puzzle push3 {
-  layers {
+  dimension = 3
+  slots {
     actor = Player
   }
   rules {
@@ -19225,13 +19250,13 @@ levels demo of push3 {
 }
 
 #[test]
-fn document_runtime_sources_do_not_infer_3d_from_unified_puzzle_keyword() {
+fn document_runtime_sources_route_puzzles_by_owner_dimension() {
     let source = r#"
 title = "Mixed Runtime"
 theme = "puzzlescript"
 
 puzzle flat {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -19247,7 +19272,8 @@ P
 }
 
 puzzle cube {
-layers {
+dimension = 3
+slots {
 actor = Player
 }
 rules {
@@ -19278,8 +19304,10 @@ puzzle cube_board = cube
     assert!(sources.model_2d.contains("puzzle flat"));
     assert!(sources.model_2d.contains("levels flat_levels"));
     assert!(!sources.model_2d.contains("scene mixed_play"));
-    assert!(sources.model_2d.contains("puzzle cube {"));
+    assert!(!sources.model_2d.contains("puzzle cube {"));
     assert!(sources.model_2d.contains("levels cube_levels"));
+    assert!(sources.model_3d.contains("puzzle cube {"));
+    assert!(!sources.model_3d.contains("puzzle flat {"));
 }
 
 #[test]
@@ -19289,7 +19317,8 @@ fn puzzle3_model_layout_block_lowers_to_default_scene() {
 title = Inline Scene 3D
 
 puzzle push3 {
-layers {
+dimension = 3
+slots {
 actor = Player
 }
 rules {
@@ -19342,12 +19371,11 @@ P
 
 #[test]
 fn spec_3d_exports_playable_puzzle_scene() {
-    let document =
-        super::parse_game_for_path(
-            include_str!("../tests/fixtures/spec_3d_full.puzzle3"),
-            "spec_3d_full.puzzle3",
-        )
-        .unwrap();
+    let document = super::parse_game_for_path(
+        include_str!("../tests/fixtures/spec_3d_full.puzzle3"),
+        "spec_3d_full.puzzle3",
+    )
+    .unwrap();
     let fixture_json = crate::export_loaded_document_visual_fixture_json(&document).unwrap();
 
     assert!(fixture_json.contains("\"currentScene\": \"sokoban\""));
@@ -19368,7 +19396,8 @@ fn puzzle3_lifecycle_diagnostic_uses_shared_source_line_mapping() {
     let source = r#"title = = "Line Probe"
 
 puzzle lifecycle {
-layers {
+dimension = 3
+slots {
 actor = Player
 }
 
@@ -19408,7 +19437,7 @@ fn scene_state_implicit_puzzle_slots_resolve_against_model_kind() {
 title = Implicit Flat Slot
 
 puzzle flat {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -19450,7 +19479,8 @@ flat
 title = Implicit Cube Slot
 
 puzzle cube {
-layers {
+dimension = 3
+slots {
 actor = Player
 }
 rules {
@@ -19508,7 +19538,8 @@ fn puzzle3_level_menu_fixture_uses_goto_level_action_not_start_levels() {
 title = Level Menu 3D
 
 puzzle demo {
-layers {
+dimension = 3
+slots {
   floor = Floor
   actor = Player
 }
@@ -19570,7 +19601,8 @@ fn puzzle3_fixture_serializes_shared_scene_effects() {
 title = Shared Effects 3D
 
 puzzle demo {
-layers {
+dimension = 3
+slots {
   actor = Player
 }
 
@@ -19617,7 +19649,7 @@ fn parse_game_rejects_old_model_prefix_for_2d_puzzles() {
 title = Old Model Prefix
 
 model puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 
@@ -19641,7 +19673,7 @@ fn puzzle3_parser_rejects_old_model_prefix() {
     let error = crate::parse_puzzle3d(
         r#"
 model puzzle3 push3 {
-  layers {
+  slots {
     actor = Player
   }
 
@@ -19655,7 +19687,7 @@ model puzzle3 push3 {
     assert!(
         error
             .to_string()
-            .contains("top-level 3D puzzle definition must be: puzzle <name>")
+            .contains("3D lowering requires exactly one `puzzle <name> { ... }` declaration")
     );
 }
 
@@ -19666,7 +19698,7 @@ fn parse_game_for_path_rejects_removed_puzzle3_keyword() {
 title = Mixed Game
 
 puzzle flat {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -19683,7 +19715,7 @@ P
 }
 
 puzzle3 cube {
-  layers {
+  slots {
     actor = Player Box Wall
   }
 
@@ -19749,7 +19781,7 @@ fn music_effect_in_puzzle_statement_lowers_to_rule_effect() {
 title = music_effect_in_puzzle_statement
 
 puzzle main {
-layers {
+slots {
 base = Player
 }
 rules {
@@ -19786,7 +19818,7 @@ fn parse_game_reports_sibling_unknown_routine_calls() {
 title = "Multi Error Probe"
 
 puzzle main {
-layers {
+slots {
 base = Floor
 }
 
@@ -19841,7 +19873,7 @@ fn diagnostic_source_location_resolves_split_structural_line() {
     let source = r#"title = probe
 
 puzzle main {
-layers {
+slots {
 base = Floor
 }
 
@@ -19886,7 +19918,7 @@ fn split_rewrite_selector_diagnostic_keeps_source_line_and_dedupes_calls() {
     let source = r#"title = split_selector_diagnostic
 
 puzzle main {
-layers {
+slots {
 actor = Box Crate
 }
 groups {
@@ -19943,7 +19975,7 @@ fn diagnostic_source_location_uses_statement_line_for_duplicate_lines() {
     let source = r#"title = probe
 
 puzzle main {
-layers {
+slots {
 base = Floor
 }
 
@@ -19984,7 +20016,7 @@ fn statement_parse_diagnostic_carries_source_line_number() {
     let source = r#"title = probe
 
 puzzle main {
-layers {
+slots {
 base = Floor
 }
 
@@ -20032,7 +20064,7 @@ fn parser_boundary_resolves_source_line_only_diagnostic_line_number() {
 unknown_top_level
 
 puzzle main {
-layers {
+slots {
 base = Floor
 }
 

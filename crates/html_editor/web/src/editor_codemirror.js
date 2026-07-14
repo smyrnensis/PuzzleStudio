@@ -100,7 +100,13 @@ const sourceHighlightDecorations = StateField.define({
     for (const effect of transaction.effects) {
       if (effect.is(replaceSourceHighlightRange)) {
         const replacement = effect.value;
-        next = Decoration.set(replacement.decorations, true);
+        next = next.update({
+          add: replacement.decorations,
+          sort: true,
+          filterFrom: replacement.from,
+          filterTo: replacement.to,
+          filter: (from, to) => to <= replacement.from || from >= replacement.to,
+        });
       } else if (effect.is(clearSourceHighlightDecorations)) {
         next = Decoration.none;
       }
@@ -204,11 +210,10 @@ function sourceOffsetMaps(source) {
   return { utf16ByUtf8, utf8ByUtf16, byteLength: byteOffset };
 }
 
-function highlightDecorations(source, request, payload) {
+function highlightDecorations(source, request, payload, offsets = sourceOffsetMaps(source)) {
   if (payload?.version !== 3 || payload?.offsetEncoding !== "utf8" || !Array.isArray(payload?.spans)) {
     throw new Error("Unsupported Rust source highlight span contract.");
   }
-  const offsets = sourceOffsetMaps(source);
   const expectedStart = offsets.utf8ByUtf16.get(request.from);
   const expectedEnd = offsets.utf8ByUtf16.get(request.to);
   if (
@@ -383,6 +388,17 @@ export function createSourceEditor(parent) {
   const nativeAddEventListener = content.addEventListener.bind(content);
   const nativeRemoveEventListener = content.removeEventListener.bind(content);
   let readOnly = false;
+  let offsetMapSource = null;
+  let offsetMaps = null;
+
+  const offsetsForSource = (source) => {
+    const expected = String(source || "");
+    if (offsetMapSource !== expected || offsetMaps === null) {
+      offsetMapSource = expected;
+      offsetMaps = sourceOffsetMaps(expected);
+    }
+    return offsetMaps;
+  };
 
   content.id = "sourceEditor";
   // This adapter is the migration boundary for existing editor consumers. It
@@ -397,6 +413,8 @@ export function createSourceEditor(parent) {
         return;
       }
       const selection = options.selection || { anchor: 0, head: 0 };
+      offsetMapSource = null;
+      offsetMaps = null;
       view.setState(createState(next, readOnlyCompartment, readOnly, inputListeners));
       const anchor = clampOffset(view, selection.anchor);
       const head = clampOffset(view, selection.head ?? selection.anchor);
@@ -419,7 +437,12 @@ export function createSourceEditor(parent) {
         effects: replaceSourceHighlightRange.of({
           from: request.from,
           to: request.to,
-          decorations: highlightDecorations(expected, request, payload),
+          decorations: highlightDecorations(
+            expected,
+            request,
+            payload,
+            offsetsForSource(expected),
+          ),
         }),
       });
     },
@@ -439,7 +462,7 @@ export function createSourceEditor(parent) {
       ) {
         throw new Error("Unsupported Rust source folding range contract.");
       }
-      const offsets = sourceOffsetMaps(expected);
+      const offsets = offsetsForSource(expected);
       const ranges = payload.folds.map((range) => {
         const from = offsets.utf16ByUtf8.get(Number(range?.from));
         const to = offsets.utf16ByUtf8.get(Number(range?.to));

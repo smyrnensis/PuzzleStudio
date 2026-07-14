@@ -5,6 +5,7 @@ const versioned = (path) => assetVersion
 
 let wasmModulePromise = null;
 let activeSource = null;
+let activeSourceProfile = null;
 let activeRevision = 0;
 
 function loadWasmModule() {
@@ -28,15 +29,24 @@ function requiredFunction(module, name) {
   return fn;
 }
 
-function activateSource(module, source) {
-  if (activeSource === source && Number.isInteger(activeRevision) && activeRevision > 0) {
+function activateSource(module, source, sourceProfile) {
+  if (
+    activeSource === source
+    && activeSourceProfile === sourceProfile
+    && Number.isInteger(activeRevision)
+    && activeRevision > 0
+  ) {
     return activeRevision;
   }
-  const revision = requiredFunction(module, "activate_source_analysis")(source);
+  const revision = requiredFunction(module, "activate_source_analysis_with_profile")(
+    source,
+    sourceProfile,
+  );
   if (!Number.isInteger(revision) || revision <= 0) {
     throw new Error(`Editor analysis WASM returned an invalid revision: ${revision}`);
   }
   activeSource = source;
+  activeSourceProfile = sourceProfile;
   activeRevision = revision;
   return revision;
 }
@@ -45,7 +55,11 @@ async function queryAnalysis(request) {
   const module = await loadWasmModule();
   if (request.method === "reset") {
     const source = typeof request.source === "string" ? request.source : "";
-    const revision = activateSource(module, source);
+    const sourceProfile = request.sourceProfile;
+    if (sourceProfile !== "puzzle2d" && sourceProfile !== "puzzle3d") {
+      throw new Error("Editor source analysis requires a puzzle2d or puzzle3d source profile.");
+    }
+    const revision = activateSource(module, source, sourceProfile);
     return { revision, sourceLength: source.length };
   }
   if (request.method === "edit") {

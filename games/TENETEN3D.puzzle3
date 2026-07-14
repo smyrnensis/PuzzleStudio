@@ -1,4 +1,10 @@
 title = "TENETEN"
+
+theme {
+preset =  "puzzlescript"
+background_color = #8fcf6f
+}
+
 sprites {
 Floor {
 #8fcf6f
@@ -10,9 +16,9 @@ Floor2 {
 0
 }
 
-TEN {
+TEN:horizontal {
 colors = #ffffff #282828
-shape = {
+rotate horizontal from front
 .......
 .......
 .......
@@ -69,39 +75,49 @@ shape = {
 .......
 .......
 }
-}
 
 }
 
 puzzle TENETEN {
+dimension = 3
 
-layers {
+render {
+camera {
+yaw = 0
+pitch = 90
+zoom = 1
+}
+shadow = true
+}
+
+slots {
 floor = Floor Floor2
-solid = TEN
+solid = TEN:horizontal
 }
 
-on_level_start {
-down [ no Floor | null ] -> [ Floor | ]
-}
 
 rules {
-input [ TEN ] -> [ > TEN ]
-[ > TEN | ] -> [  | TEN ]
+input [ TEN:horizontal ] -> [ > TEN:horizontal ]
+for h in horizontal {
+if input == h {
+[ > TEN:horizontal ] -> [ > TEN:h ]
+}
+}
+[ > TEN:horizontal | ] -> [  | TEN:horizontal ]
 }
 }
 
 levels {
 legend {
-T = TEN
+T = TEN:front
 . = empty
-_ = Floor
+F = Floor
 }
 
 level "first" {
 .....
 ...T.
 .....
-
 .....
 .....
 .....

@@ -1,0 +1,156 @@
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RuleForSyntax {
+    pub(crate) binding: String,
+    pub(crate) sources: Vec<String>,
+}
+
+pub(crate) fn parse_rule_for_syntax(line: &str) -> Result<Option<RuleForSyntax>, &'static str> {
+    let tokens = crate::split_header_tokens(line);
+    if tokens.first().copied() != Some("for") {
+        return Ok(None);
+    }
+    let ["for", binding, "in", sources @ ..] = tokens.as_slice() else {
+        return Err("for directive must be: for <binding> in <source...>");
+    };
+    if sources.is_empty() {
+        return Err("for directive must be: for <binding> in <source...>");
+    }
+    if !puzzle_authoring::is_identifier(binding) {
+        return Err("for expansion binding must be an identifier");
+    }
+    Ok(Some(RuleForSyntax {
+        binding: (*binding).to_string(),
+        sources: sources.iter().map(|source| (*source).to_string()).collect(),
+    }))
+}
+
+/// Canonical rule-binding substitution, promoted from the original 2D parser.
+///
+/// It owns lexical behavior (identifiers, quoted text, comments, projections,
+/// and call boundaries). Lowerers provide only the meaning of a binding
+/// projection and a named call.
+pub(crate) fn substitute_rule_binding_line<E>(
+    line: &str,
+    binding: &str,
+    mut binding_value: impl FnMut(Option<&str>) -> Result<String, E>,
+    mut call_value: impl FnMut(&str, &str) -> Result<Option<String>, E>,
+) -> Result<String, E> {
+    let mut out = String::with_capacity(line.len());
+    let chars = line.chars().collect::<Vec<_>>();
+    let mut i = 0usize;
+    while i < chars.len() {
+        if chars[i] == '"' {
+            copy_quoted_segment(&chars, &mut i, &mut out);
+            continue;
+        }
+        if chars[i] == '/' && chars.get(i + 1) == Some(&'/') {
+            out.extend(chars[i..].iter());
+            break;
+        }
+        if is_identifier_start(chars[i]) {
+            let name_start = i;
+            i += 1;
+            while i < chars.len() && is_identifier_continue(chars[i]) {
+                i += 1;
+            }
+            if i < chars.len() && chars[i] == '(' {
+                let arg_start = i + 1;
+                let mut arg_end = arg_start;
+                while arg_end < chars.len() && is_identifier_continue(chars[arg_end]) {
+                    arg_end += 1;
+                }
+                if arg_end > arg_start && arg_end < chars.len() && chars[arg_end] == ')' {
+                    let name = chars[name_start..i].iter().collect::<String>();
+                    let arg = chars[arg_start..arg_end].iter().collect::<String>();
+                    if let Some(value) = call_value(&name, &arg)? {
+                        out.push_str(&value);
+                        i = arg_end + 1;
+                        continue;
+                    }
+                }
+            }
+            let name = chars[name_start..i].iter().collect::<String>();
+            if name == binding {
+                if i < chars.len() && chars[i] == '.' {
+                    let attr_start = i + 1;
+                    let mut attr_end = attr_start;
+                    if attr_end < chars.len() && is_identifier_start(chars[attr_end]) {
+                        attr_end += 1;
+                        while attr_end < chars.len() && is_identifier_continue(chars[attr_end]) {
+                            attr_end += 1;
+                        }
+                        let attr = chars[attr_start..attr_end].iter().collect::<String>();
+                        out.push_str(&binding_value(Some(&attr))?);
+                        i = attr_end;
+                        continue;
+                    }
+                }
+                out.push_str(&binding_value(None)?);
+                continue;
+            }
+            out.extend(chars[name_start..i].iter());
+            continue;
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    Ok(out)
+}
+
+fn copy_quoted_segment(chars: &[char], i: &mut usize, out: &mut String) {
+    out.push(chars[*i]);
+    *i += 1;
+    let mut escaped = false;
+    while *i < chars.len() {
+        let ch = chars[*i];
+        out.push(ch);
+        *i += 1;
+        if escaped {
+            escaped = false;
+        } else if ch == '\\' {
+            escaped = true;
+        } else if ch == '"' {
+            break;
+        }
+    }
+}
+
+fn is_identifier_start(ch: char) -> bool {
+    ch == '_' || ch.is_ascii_alphabetic()
+}
+
+fn is_identifier_continue(ch: char) -> bool {
+    ch == '_' || ch.is_ascii_alphanumeric()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn canonical_for_syntax_is_dimension_independent() {
+        assert_eq!(
+            parse_rule_for_syntax("for h in horizontal {").unwrap(),
+            Some(RuleForSyntax {
+                binding: "h".to_string(),
+                sources: vec!["horizontal".to_string()],
+            })
+        );
+    }
+
+    #[test]
+    fn canonical_binding_substitution_preserves_strings_and_comments() {
+        let expanded = substitute_rule_binding_line(
+            r#"TEN:h message \"h\" // h"#,
+            "h",
+            |projection| {
+                assert!(projection.is_none());
+                Ok::<_, ()>("right".to_string())
+            },
+            |_, _| Ok(None),
+        )
+        .unwrap();
+
+        assert_eq!(expanded, r#"TEN:right message \"h\" // h"#);
+    }
+}

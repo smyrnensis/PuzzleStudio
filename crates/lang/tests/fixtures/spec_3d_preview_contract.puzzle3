@@ -1,15 +1,17 @@
 title = "Microban 3D Preview Contract"
 
 puzzle sokoban {
+dimension = 3
 render {
   camera {
     yaw = 10
     pitch = 55
+    roll = 20
     zoom = 1.1
   }
 }
 
-layers {
+slots {
   floor = Floor
   target = Goal
   Player Box Wall

@@ -2,7 +2,7 @@ use crate::domain::SearchDomain;
 use crate::stable_hash::{fnv_mix, fnv_seed};
 use crate::state_slicer::SolverStateSlicer;
 use puzzle_grid3d::{
-    Game3, InputId, ObjectId, RuleStep3, State3, TransitionError3, transition_program,
+    CompiledGame3, InputId, ObjectId, RuleStep3, State3, TransitionError3, transition_program,
 };
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -65,8 +65,7 @@ impl Hash for Puzzle3StateKey {
 }
 
 pub struct Puzzle3Domain {
-    game: Arc<Game3>,
-    rules: Arc<Vec<RuleStep3>>,
+    game: Arc<CompiledGame3>,
     inputs: Vec<InputId>,
     state_slicer: SolverStateSlicer<ObjectId>,
     is_goal: Box<dyn Fn(&State3) -> bool>,
@@ -74,36 +73,33 @@ pub struct Puzzle3Domain {
 
 impl Puzzle3Domain {
     pub fn new(
-        game: Arc<Game3>,
-        rules: Vec<RuleStep3>,
+        game: Arc<CompiledGame3>,
         inputs: Vec<InputId>,
         is_goal: impl Fn(&State3) -> bool + 'static,
     ) -> Self {
-        Self::with_state_slicer(game, rules, inputs, SolverStateSlicer::new(), is_goal)
+        Self::with_state_slicer(game, inputs, SolverStateSlicer::new(), is_goal)
     }
 
     pub fn with_state_slicer(
-        game: Arc<Game3>,
-        rules: Vec<RuleStep3>,
+        game: Arc<CompiledGame3>,
         inputs: Vec<InputId>,
         state_slicer: SolverStateSlicer<ObjectId>,
         is_goal: impl Fn(&State3) -> bool + 'static,
     ) -> Self {
         Self {
             game,
-            rules: Arc::new(rules),
             inputs,
             state_slicer,
             is_goal: Box::new(is_goal),
         }
     }
 
-    pub fn game(&self) -> &Game3 {
+    pub fn game(&self) -> &CompiledGame3 {
         &self.game
     }
 
     pub fn rules(&self) -> &[RuleStep3] {
-        &self.rules
+        self.game.program()
     }
 
     pub fn initial_state(&self, state: State3) -> State3 {
@@ -131,7 +127,7 @@ impl SearchDomain for Puzzle3Domain {
         action: &Self::Action,
     ) -> Result<Self::State, Self::Error> {
         let solver_state = self.state_slicer.project_state(state);
-        transition_program(&self.game, &solver_state, &self.rules, *action)
+        transition_program(&self.game, &solver_state, self.game.program(), *action)
             .map(|state| self.state_slicer.project_state(&state))
     }
 
@@ -154,7 +150,8 @@ mod tests {
     fn solves_single_push_support_goal_level_and_replays_to_goal() {
         let source = r#"
 puzzle push3 {
-layers {
+dimension = 3
+slots {
 floor = Goal
 solid = Player Box Wall
 }
@@ -188,13 +185,12 @@ PB.
         let parsed = parse_puzzle3d(source).unwrap();
         let bundle = parsed.level_bundle.clone().unwrap();
         let initial = bundle.build_level_state(0).unwrap();
-        let right = parsed.game.input_by_name("right").unwrap().id;
+        let right = parsed.input_by_name("right").unwrap().id;
         let inputs = vec![right];
         let game = Arc::new(parsed.game.clone());
-        let rules = parsed.rules.clone();
         let win = parsed.win_condition.clone().unwrap();
         let goal_game = game.clone();
-        let mut domain = Puzzle3Domain::new(game.clone(), rules.clone(), inputs, move |state| {
+        let mut domain = Puzzle3Domain::new(game.clone(), inputs, move |state| {
             win.is_met(&goal_game, state)
         });
 
@@ -210,7 +206,7 @@ PB.
 
         let mut state = initial;
         for action in witness.actions {
-            state = transition_program(&game, &state, &rules, action).unwrap();
+            state = transition_program(&game, &state, game.program(), action).unwrap();
         }
         assert!(parsed.win_condition.unwrap().is_met(&game, &state));
     }
@@ -219,7 +215,8 @@ PB.
     fn solver_state_slicer_projects_3d_states() {
         let source = r#"
 puzzle projection3 {
-layers {
+dimension = 3
+slots {
 actor = Player
 fx = Dust
 }
@@ -248,18 +245,16 @@ PD
         let parsed = parse_puzzle3d(source).unwrap();
         let bundle = parsed.level_bundle.clone().unwrap();
         let initial = bundle.build_level_state(0).unwrap();
-        let right = parsed.game.input_by_name("right").unwrap().id;
+        let right = parsed.input_by_name("right").unwrap().id;
         let player = parsed
-            .catalog
-            .objects
+            .object_labels
             .iter()
-            .find_map(|object| (object.name == "Player").then_some(object.id))
+            .find_map(|(object, label)| (label == "Player").then_some(*object))
             .unwrap();
         let dust = parsed
-            .catalog
-            .objects
+            .object_labels
             .iter()
-            .find_map(|object| (object.name == "Dust").then_some(object.id))
+            .find_map(|(object, label)| (label == "Dust").then_some(*object))
             .unwrap();
         assert!(initial.has_object(&parsed.game, Coord3::new(1, 0, 0), dust));
 
@@ -267,7 +262,6 @@ PD
         let state_slicer = SolverStateSlicer::from_ignored_objects(vec![dust]);
         let mut domain = Puzzle3Domain::with_state_slicer(
             game.clone(),
-            parsed.rules.clone(),
             vec![right],
             state_slicer,
             move |state| state.has_object(&game, Coord3::new(1, 0, 0), player),

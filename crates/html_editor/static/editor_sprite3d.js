@@ -161,54 +161,8 @@ function clampSprite3dSize(value) {
   return Math.max(1, Math.min(SPRITE3D_EDITOR_MAX_SIZE, size));
 }
 
-function sprite3dPaneScrollElement() {
-  return sprite3dBuilder?.querySelector(":scope > .tool-pane-scroll") || null;
-}
-
-function shouldPreserveSprite3dPaneScroll() {
-  if (!sprite3dBuilder || sprite3dBuilder.hidden) {
-    return false;
-  }
-  const active = document.activeElement;
-  return Boolean(
-    (active && sprite3dBuilder.contains(active))
-    || sprite3dPaintDrag
-    || sprite3dTranslateDrag
-    || sprite3dPreviewDrag
-    || sprite3dCameraScrubDrag
-    || sprite3dSliceScrubDrag
-  );
-}
-
-function captureSprite3dPaneScroll() {
-  if (!shouldPreserveSprite3dPaneScroll()) {
-    return null;
-  }
-  const scroll = sprite3dPaneScrollElement();
-  return scroll ? { top: scroll.scrollTop, left: scroll.scrollLeft } : null;
-}
-
-function restoreSprite3dPaneScroll(state) {
-  if (!state) {
-    return;
-  }
-  const apply = () => {
-    const scroll = sprite3dPaneScrollElement();
-    if (!scroll) {
-      return;
-    }
-    scroll.scrollTop = Math.max(0, Math.min(state.top, scroll.scrollHeight - scroll.clientHeight));
-    scroll.scrollLeft = Math.max(0, Math.min(state.left, scroll.scrollWidth - scroll.clientWidth));
-  };
-  apply();
-  window.requestAnimationFrame?.(apply);
-}
-
 function withSprite3dPaneScrollPreserved(render) {
-  const scroll = captureSprite3dPaneScroll();
-  const result = render();
-  restoreSprite3dPaneScroll(scroll);
-  return result;
+  return withSpritePaneScrollPreserved(sprite3dBuilder, render);
 }
 
 function renderSprite3dBuilder() {
@@ -328,19 +282,19 @@ function renderSprite3dControls() {
     if (sprite3dPreviousSliceButton) {
       sprite3dPreviousSliceButton.disabled = sprite3d.slice <= 0;
       sprite3dPreviousSliceButton.dataset.tooltip = "Previous slice";
-      sprite3dPreviousSliceButton.dataset.shortcut = "[";
+      setEditorShortcutHint(sprite3dPreviousSliceButton, { key: "[" });
     }
     if (sprite3dNextSliceButton) {
       sprite3dNextSliceButton.disabled = sprite3d.slice >= sprite3dAxisSize() - 1;
       sprite3dNextSliceButton.dataset.tooltip = "Next slice";
-      sprite3dNextSliceButton.dataset.shortcut = "]";
+      setEditorShortcutHint(sprite3dNextSliceButton, { key: "]" });
     }
     for (const button of sprite3dAxisButtons) {
       const active = button.dataset.sprite3dAxis === sprite3d.axis;
       button.classList.toggle("is-active", active);
       button.setAttribute("aria-pressed", String(active));
       button.dataset.tooltip = `${button.dataset.sprite3dAxis.toUpperCase()} axis`;
-      button.dataset.shortcut = button.dataset.sprite3dAxis.toUpperCase();
+      setEditorShortcutHint(button, { key: button.dataset.sprite3dAxis });
     }
   });
 }
@@ -422,7 +376,7 @@ function updateSprite3dScopedActionLabels() {
   setSprite3dButtonLabel(sprite3dFlipPlaneVerticalButton, `Flip ${target} vertically`);
   setSprite3dButtonLabel(sprite3dFillButton, "Fill");
   sprite3dFillButton.dataset.tooltip = "Fill";
-  sprite3dFillButton.dataset.shortcut = "F";
+  setEditorShortcutHint(sprite3dFillButton, { key: "f" });
   syncSpriteEditCommandLabels("3d");
   renderSprite3dClipActions();
   syncSprite3dTranslateButton();
@@ -437,7 +391,7 @@ function syncSprite3dTranslateButton() {
   sprite3dTranslateButton.setAttribute("aria-label", "Move");
   sprite3dTranslateButton.title = "Move";
   sprite3dTranslateButton.dataset.tooltip = "Move";
-  sprite3dTranslateButton.dataset.shortcut = "M";
+  setEditorShortcutHint(sprite3dTranslateButton, { key: "m" });
 }
 
 function renderSprite3dClipActions() {
@@ -454,7 +408,7 @@ function renderSprite3dClipActions() {
     icon: spriteLucideIconSvg("mouse-pointer-2"),
   });
   button.dataset.tooltip = "Clip";
-  button.dataset.shortcut = "C";
+  setEditorShortcutHint(button, { key: "c" });
   actions.append(button);
   sprite3dClipActions.replaceChildren(actions);
 }
