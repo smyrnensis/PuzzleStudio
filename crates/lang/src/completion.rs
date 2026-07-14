@@ -598,7 +598,7 @@ fn remove_current_token_symbols(symbols: &mut SurfaceCompletionSymbols, token: &
 
 fn keyword_insert_text(keyword: &str) -> &str {
     match keyword {
-        "layers"
+        "slots"
         | "groups"
         | "marks"
         | "legend"
@@ -671,7 +671,7 @@ puzzle board {
 tags {
 kind = A B
 }
-layers {
+slots {
 __legacy_layer_0 = Player
 __legacy_layer_1 = Box:kind
 }
@@ -691,7 +691,7 @@ rules {
         let source = r#"
 title = complete_selector_rhs
 puzzle board {
-layers {
+slots {
 __legacy_layer_0 = Player
 __legacy_layer_1 = Box
 }
@@ -753,11 +753,11 @@ B = Pl
     }
 
     #[test]
-    fn suggests_display_objects_from_unparsed_layer_rows() {
+    fn suggests_at_prefixed_objects_from_unparsed_layer_rows() {
         let source = r#"
-title = complete_display_objects
+title = complete_at_prefixed_objects
 puzzle board {
-layers {
+slots {
 @Count
 @Badge
 each @Spark @Flash
@@ -787,7 +787,7 @@ rules {
         let source = r#"
 title = complete_group_objects
 puzzle board {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 groups {
@@ -812,7 +812,7 @@ Actors = Pl
         let source = r#"
 title = complete_object_definitions
 puzzle board {
-layers {
+slots {
 __legacy_layer_0 = Player
 __legacy_layer_1 = Pl
 }
@@ -835,7 +835,7 @@ __legacy_layer_1 = Pl
         let source = r#"
 title = complete_layer_definitions
 puzzle board {
-layers {
+slots {
 actor = Player
 Pl
 }
@@ -861,7 +861,7 @@ puzzle board {
 tags {
 kind = A B
 }
-layers {
+slots {
 __legacy_layer_0 = Box:kind
 }
 rules {
@@ -885,7 +885,7 @@ puzzle board {
 tags {
 kind = Alpha Beta
 }
-layers {
+slots {
 __legacy_layer_0 = Box:kind
 }
 rules {
@@ -911,7 +911,7 @@ puzzle board {
 tags {
 kind = tag other
 }
-layers {
+slots {
 base = object:kind
 }
 rules {
@@ -945,7 +945,7 @@ rules {
         let source = r#"
 title = complete_current_variant
 puzzle board {
-layers {
+slots {
 actor = Box:state
 }
 tags {
@@ -1011,7 +1011,7 @@ rules {
         let source = r#"
 title = complete_current_axis
 puzzle board {
-layers {
+slots {
 actor = obj:dir
 }
 rules {
@@ -1041,7 +1041,7 @@ puzzle board {
 tags {
 color = red blue
 }
-layers {
+slots {
 __legacy_layer_0 = Box:color
 }
 rules {
@@ -1080,7 +1080,7 @@ for c in co
         let source = r#"
 title = complete_contextual_axes
 puzzle board {
-layers {
+slots {
 __legacy_layer_0 = Player
 __legacy_layer_1 = Box:directions
 }
@@ -1198,7 +1198,7 @@ button "New Game" -> go
         let source = r#"
 title = complete_line_head
 puzzle board {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 routine refresh once {
@@ -1324,7 +1324,7 @@ once_
         let source = r#"
 title = complete_arrow_position
 puzzle board {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 rules {
@@ -1385,7 +1385,7 @@ for item in
         let source = r#"
 title = complete_effect_scope
 puzzle board {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 keys {
@@ -1510,10 +1510,10 @@ sfx c
         let source = r#"
 title = complete_3d_render_options
 puzzle board {
-layers {
+slots {
 actor
 }
-layers {
+slots {
 __legacy_layer_0 = Player actor
 }
 render {
@@ -1736,7 +1736,7 @@ preset = "clean"
         let source = r#"
 title = complete_sprite_colors
 puzzle board {
-layers {
+slots {
 __legacy_layer_0 = Box
 }
 }
@@ -1767,7 +1767,7 @@ puzzle board {
 tags {
 kind = A B
 }
-layers {
+slots {
 __legacy_layer_0 = Box:kind
 }
 }
@@ -1800,7 +1800,7 @@ assets {
 "sprites/box.png"
 }
 puzzle board {
-layers {
+slots {
 __legacy_layer_0 = Box
 }
 }
@@ -1826,7 +1826,7 @@ puzzle board {
 tags {
 kind = Red Blue
 }
-layers {
+slots {
 __legacy_layer_0 = Player
 __legacy_layer_1 = Box:kind
 }
@@ -1883,7 +1883,7 @@ sprites {
         let source = r#"
 title = complete_canonical_sprite_selector
 puzzle board {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 }
@@ -1986,7 +1986,7 @@ win -> s
         let source = r#"
 title = complete_effects
 puzzle board {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 rules {
@@ -2087,7 +2087,7 @@ g
         let source = r#"
 title = complete_layer_object
 puzzle board {
-layers {
+slots {
 floor = layer
 }
 rules {
@@ -2216,7 +2216,7 @@ puzzle sokoban {
 tags {
 kind = A B
 }
-layers {
+slots {
 __legacy_layer_0 = Box:kind
 }
 rules {
@@ -2253,7 +2253,7 @@ puzzle board = so
         let source = r#"
 title = complete_layer_selectors
 puzzle board {
-layers {
+slots {
 floor = Goal
 actor = Player
 }

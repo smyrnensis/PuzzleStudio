@@ -23,7 +23,7 @@ shape = arrow
 ```
 
 `shapes` owns visual data only. Object identity and collision still come from
-`layers`. Use `shape = <name>` when a bare row could also be valid ASCII and
+`slots`. Use `shape = <name>` when a bare row could also be valid ASCII and
 would therefore be ambiguous.
 
 ## Frames And Voxel Layers
@@ -62,6 +62,10 @@ translate local (0, -0.25)
 }
 ```
 
-2D rotation is `rotate [world|local] <angle> [from <angle>]`. 3D rotation
-requires `around <axis>`. Operations run in source order; put a transform on the
-sprite reference that needs it rather than deriving rotated shapes globally.
+Rotation is `rotate [world|local] <angle> [from <angle>]`. In 3D, the same
+axis-less form rotates around +Z (`up`); append `around <axis>` to select
+another axis. Operations run in source order; put a transform on the sprite
+reference that needs it rather than deriving rotated shapes globally.
+For a four-way 3D sprite authored facing front,
+`Arrow:horizontal { rotate horizontal from front }` expands the variants around
+Z with front as the zero rotation.

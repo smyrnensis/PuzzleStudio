@@ -366,7 +366,6 @@ fn inspect_document_text(document: &LoadedDocument) -> String {
                     out.push_str(&format!("  {name}:\n"));
                 }
                 let mut inputs = puzzle
-                    .game
                     .inputs
                     .iter()
                     .map(|input| (input.id.0, input.name.as_str()))

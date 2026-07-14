@@ -18,7 +18,7 @@ fn main() {
     println!("cargo:rerun-if-changed=docs/editor.md");
     println!("cargo:rerun-if-changed=docs/metadata.md");
     println!("cargo:rerun-if-changed=docs/puzzle-block.md");
-    println!("cargo:rerun-if-changed=docs/layers.md");
+    println!("cargo:rerun-if-changed=docs/slots.md");
     println!("cargo:rerun-if-changed=docs/groups.md");
     println!("cargo:rerun-if-changed=docs/tags.md");
     println!("cargo:rerun-if-changed=docs/legend.md");

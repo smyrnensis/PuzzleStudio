@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use crate::{Coord3, Game3, GameError3, ObjectId, Size3, State3, StateError3};
+use crate::{CompiledGame3, CompiledGameError3, Coord3, ObjectId, Size3, State3, StateError3};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -14,7 +14,7 @@ impl Level3 {
         Self { size, cells }
     }
 
-    pub fn build_state(&self, game: &Game3) -> Result<State3, LevelError3> {
+    pub fn build_state(&self, game: &CompiledGame3) -> Result<State3, LevelError3> {
         game.validate()?;
         let mut state = State3::empty(self.size, game.layer_count)?;
         for cell in &self.cells {
@@ -48,16 +48,19 @@ impl LevelEntry3 {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LevelBundle3 {
-    pub game: Game3,
+    pub game: CompiledGame3,
     pub levels: Vec<LevelEntry3>,
 }
 
 impl LevelBundle3 {
-    pub fn new(game: Game3, levels: Vec<LevelEntry3>) -> Self {
+    pub fn new(game: CompiledGame3, levels: Vec<LevelEntry3>) -> Self {
         Self { game, levels }
     }
 
-    pub fn checked_new(game: Game3, levels: Vec<LevelEntry3>) -> Result<Self, LevelBundleError3> {
+    pub fn checked_new(
+        game: CompiledGame3,
+        levels: Vec<LevelEntry3>,
+    ) -> Result<Self, LevelBundleError3> {
         let bundle = Self::new(game, levels);
         bundle.validate()?;
         Ok(bundle)
@@ -144,14 +147,14 @@ impl LevelCell3 {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LevelError3 {
-    Game(GameError3),
+    CompiledGame(CompiledGameError3),
     State(StateError3),
     EmptyObject { position: Coord3 },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LevelBundleError3 {
-    Game(GameError3),
+    CompiledGame(CompiledGameError3),
     EmptyLevels,
     EmptyLevelName {
         index: usize,
@@ -170,15 +173,15 @@ pub enum LevelBundleError3 {
     },
 }
 
-impl From<GameError3> for LevelError3 {
-    fn from(value: GameError3) -> Self {
-        Self::Game(value)
+impl From<CompiledGameError3> for LevelError3 {
+    fn from(value: CompiledGameError3) -> Self {
+        Self::CompiledGame(value)
     }
 }
 
-impl From<GameError3> for LevelBundleError3 {
-    fn from(value: GameError3) -> Self {
-        Self::Game(value)
+impl From<CompiledGameError3> for LevelBundleError3 {
+    fn from(value: CompiledGameError3) -> Self {
+        Self::CompiledGame(value)
     }
 }
 

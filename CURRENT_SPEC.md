@@ -41,18 +41,12 @@ parser restriction ではない。
 
 ## Execution Model
 
-`rules` は必須の puzzle gameplay entrypoint。旧 `transitions` / `main` block は読まない。表示用の派生処理は `routine @name` で宣言し、`@name` statement を置いた位置で実行する。
+`rules` は必須の puzzle gameplay entrypoint。旧 `transitions` / `main` block は読まない。
 
 ```txt
 rules {
 push
-@refresh_board
 move
-}
-
-routine @refresh_board once {
-repeat [ @Light ] -> []
-[ Player no @Light ] -> [ Player @Light ]
 }
 ```
 
@@ -69,23 +63,9 @@ routine の application はデフォルトで `once`。
 
 `random` は rule application keyword。`random [ ... ] -> [ ... ]` は適用可能な match のうち1つだけを選ぶ。`random { ... }` と `routine name random { ... }` は発火可能な statement のうち1つだけを選ぶ。選択は hidden RNG ではなく、compiled game、rule、input、solver-visible state、候補数から決まる deterministic tie-breaker であり、同じ state と input では同じ next state になる。確率的に毎回違う結果を得る機能ではない。
 
-`routine @name` は display-only assertion 付き routine を定義する。中に書けるのは display rule だけで、normal rule や normal rule with display effect が混ざるとエラーになる。`routine display <name>` は旧構文であり読まない。
+`slots { each A:tag_set }` は selector alternatives を別々の通常 layer に展開する。これは collisionless layer ではなく、各 variant が表示順つきの通常 collision layer を得るための短縮文法。
 
-短い表示派生は routine 宣言なしで `[ ... ] -> ...` と書く。rule の match または write に `@Name` などの display object が現れることで display rule と認識される。`display [ ... ] -> ...` や `display { ... }` は旧構文であり読まない。
-
-rule の role は routine 単位ではなく rewrite 単位で決まる。match に display object があり normal state を変えない rule、または match に display object がなく display object だけを書く rule は display rule になる。match に display object がある rule が normal state を変えようとするとエラー。match に display object がなく、normal state と display object を同時に変える rule は normal rule with display effect として扱う。normal routine から display routine を bare call してもよい。
-
-main rules と gameplay condition は display object を読めない。display object に依存する見た目は display rule に閉じ、gameplay / solver の因果には入れない。solver は display rule を実行せず、display object を state key から外す。
-
-`on_level_start` / `on_level_clear` でも `@routine` を書ける。ただし lifecycle block は通常入力ではないため、そこで呼ばれた display routine は `input` orientation / `if input == ...` を使えない。
-
-`on_display { ... }` は廃止済みであり読まない。表示用の派生を gameplay とは別 hook として authoring surface に残さない。`display <routine>`、`display <rewrite>`、`display { ... }` も旧構文であり読まない。
-
-main object と display object は layer order 上は同じ列に並ぶが、同じ storage layer には入れない。1つの layer row は gameplay object だけ、または display object だけを含む。`@Name` は display object を表し、object vocabulary は `layers` の右辺だけが作る。`@overlay = @Name ...` のような display 専用 layer 名も使える。`@group = ...` も display-only alias であり、右辺に main object を含められない。逆に `@` なしの layer / group は display object を含められない。
-
-`layers { each A:tag_set }` は selector alternatives を別々の通常 layer に展開する。これは collisionless layer ではなく、各 variant が表示順つきの通常 collision layer を得るための短縮文法。
-
-`layers` 内の `for <binding> in <source...> { ... }` は layer row の parse 前に展開される。source は named value set、numeric range、または inline value list。`for k in kind { k = A:k B:k }` は、`A:kind` / `B:kind` が宣言済みなら `red = A:red B:red` のような名前付き layer 行へ展開できる。`for object in Box Wall { ... }` のような inline list は token 置換だけを行い、展開後の body 側構文が object selector や tag value として解釈する。
+`slots` 内の `for <binding> in <source...> { ... }` は layer row の parse 前に展開される。source は named value set、numeric range、または inline value list。`for k in kind { k = A:k B:k }` は、`A:kind` / `B:kind` が宣言済みなら `red = A:red B:red` のような名前付き layer 行へ展開できる。`for object in Box Wall { ... }` のような inline list は token 置換だけを行い、展開後の body 側構文が object selector や tag value として解釈する。
 
 ```txt
 routine slide {
@@ -340,7 +320,7 @@ right [ B | ] -> [ | B ]
 directions
 horizontal
 vertical
-layers
+slots
 1...3
 1...L
 Box Wall Player
@@ -354,7 +334,7 @@ inline value list は `for object in Box Wall Player` や `for tag in tag_1 tag_
 
 `directions` は組み込み tag set であり、常に `up` / `down` / `left` / `right` の4値を表す。`horizontal` は `left` / `right`、`vertical` は `up` / `down`。object schema、`map`、visual table、`for` で同じ集合として使える。
 
-`layers` は layer 定義から作られる tag set。展開値は layer group 名で、名前付き layer はその名前、匿名 layer は内部名を使う。標準 `move` rule はユーザーが同名 rule を定義していない場合に用意される。対象は display object を除いた gameplay object の layer で、概念的には次の rule と同じ。
+`slots` は layer 定義から作られる tag set。展開値は layer group 名で、名前付き layer はその名前、匿名 layer は内部名を使う。標準 `move` rule はユーザーが同名 rule を定義していない場合に用意される。概念的には次の rule と同じ。
 
 ```txt
 rule move repeat {
@@ -572,7 +552,7 @@ sprite は2D/3D共通の時間 × Z × Y × X model を持つ。2D sprite は de
 
 pointer drag の所有者は開始点で決まる。pointer down が `puzzle` の box 内なら、release/cancel まではその component が gesture を capture してよく、途中で pointer が box 外へ出ても同じ drag として継続する。例外は modal、disabled component、overlay、明示的な pointer capture、scene-level gesture など、より具体的な所有者がある場合だけである。
 
-`scene puzzle [name]` は puzzle state を主モデルに持つ playable scene。`name` 省略時は `playing`。中の `layers` は board/object layer、`layout` は画面配置を表す。scene-local な puzzle slot を明示しない場合は、`<name>` slot が暗黙に `puzzle <name>` として用意される。`board` は予約 slot 名ではない。`input <name...> { update <slot> }` は各 semantic input をその puzzle slot の transition に適用する scene transition へ lowering する。`if win_conditions { ... }` のような unqualified condition は primary puzzle slot の `<slot>.win_conditions` として解決できるが、通常の level progression には使わない。scene transition の `<slot>.<name>` は named condition を先に見て、存在しなければ `<slot>` の var `<name>` を truthy 判定する。
+`scene puzzle [name]` は puzzle state を主モデルに持つ playable scene。`name` 省略時は `playing`。中の `slots` は board/object layer、`layout` は画面配置を表す。scene-local な puzzle slot を明示しない場合は、`<name>` slot が暗黙に `puzzle <name>` として用意される。`board` は予約 slot 名ではない。`input <name...> { update <slot> }` は各 semantic input をその puzzle slot の transition に適用する scene transition へ lowering する。`if win_conditions { ... }` のような unqualified condition は primary puzzle slot の `<slot>.win_conditions` として解決できるが、通常の level progression には使わない。scene transition の `<slot>.<name>` は named condition を先に見て、存在しなければ `<slot>` の var `<name>` を truthy 判定する。
 
 `scene level_menu [name]` の typed scene template は読まない。level list は通常 scene の `layout` 内に `level_menu` component として置く。`show_index = <true|false>`、`show_solved = <true|false>`、`layout = list`、`columns = <n>`、`wrap = <true|false>`、`locked = disabled|hidden`、`button ...` などの option は `level_menu { ... }` 内に書く。matrix では `left` / `right` が隣の item、`up` / `down` が列数ぶん前後の item に移動する。
 
@@ -776,21 +756,19 @@ edge:directions
 ## Layers And Objects
 
 ```txt
-layers {
+slots {
 floor = Goal Button
 actor = Player Box Wall
-@overlay = @Cursor @Hint
 }
 
 group {
 solid = actor
-@hints = @overlay
 }
 ```
 
-`layers` は位置を持つ main object、display object、layer assignment をまとめる canonical block。main object と display object を同じ layer row に混ぜることはできない。
+`slots` は位置を持つ object と slot assignment をまとめる canonical block。
 
-`sprites [name] [of namespace]` は object の見た目を補完する resource block であり、位置を持つ object と layer order の所有者は `layers`。
+`sprites [name] [of namespace]` は object の見た目を補完する resource block であり、位置を持つ object と layer order の所有者は `slots`。
 
 単純な sprite は `sprites` 内で block braces なしでも書ける。`Box` の次に `#aaa` だけを書くと cell 全体の単色塗りつぶしになる。これは `Background` の次に `#9CBD0F` だけを書くような PuzzleScript 由来の色だけ sprite でも同じで、ASCII pattern 行は省略できる。続けて `00000` などの ASCII pattern 行を書くと、その行数・列数が sprite pixel grid になる。`pixels_per_cell <w> <h>` を省略した場合は pattern の幅・高さが 1 cell の pixel grid になり、明示した場合は pattern が cell grid より大きくても描画は overflow できる。外部画像は `Box sprites/box.png` のように selector と画像パスを 1 行に書き、パスは game folder からの相対参照として HTML renderer に渡される。
 
@@ -829,15 +807,15 @@ shape mark:kind
 }
 ```
 
-2Dは`translate [world|local] <vec2>`と`rotate [world|local] <angle> [from <angle>]`、3Dは`translate [world|local] <vec3>`と`rotate [world|local] <angle> around <direction-or-vec3>`を使う。2D の `from` は左側の angle expression から基準 angle を引く sugar で、`rotate directions from up` は `rotate (directions - up)` と同じ。world操作はaffine変換へ左合成、local操作は右合成する。主 angle を欠く旧`rotate from <angle>`、旧`rotate using`、`offset`、`transform` nodeは受理しない。
+2Dは`translate [world|local] <vec2>`と`rotate [world|local] <angle> [from <angle>]`、3Dは`translate [world|local] <vec3>`と`rotate [world|local] <angle> [from <angle>] [around <direction-or-vec3>]`を使う。3Dで`around`を省略した2D形は、XY平面の回転としてaxisを+Z（`up`）に既定する。`from`は左側のangle expressionから基準angleを引くsugarで、3Dの`Arrow:horizontal { rotate horizontal from front }`はfrontを0度としてright/front/left/backを-90/0/90/-180度へ展開する。2Dの`rotate directions from up`も同じく`rotate (directions - up)`と同じ。world操作はaffine変換へ左合成、local操作は右合成する。主angleを欠く旧`rotate from <angle>`、旧`rotate using`、`offset`、`transform` nodeは受理しない。
 
-cell は visible objects の有限集合。実装は layer-slot 方式。
+cell は visible objects の有限集合。実装は state-slot 方式。
 
-同じ cell の同じ layer には最大 1 object しか存在できない。
+同じ cell の同じ slot には最大 1 object しか存在できない。
 
-`<layer_name> = <object-or-selector...>` は名前付き layer を定義する。右辺が未知の名前なら object / schema として作り、既存の object / schema / group / layer tag ならその selector をその layer へ割り当てる。layer 名はそのまま selector tag になり、`floor` は `Goal Button` のように使える。匿名 layer も内部 group 名を持ち、`layers` 展開で利用できる。
+`<slot_name> = <object-or-selector...>` は名前付き state slot を定義する。右辺が未知の名前なら object / schema として作り、既存の object / schema / group / slot tag ならその selector をその slot へ割り当てる。slot 名はそのまま selector tag になり、`floor` は `Goal Button` のように使える。名前を省略した `Goal` も通常の匿名 slot 宣言である。
 
-object vocabulary は `layers { ... }` の右辺から作る。`@Name` は display object、`Name` は main object を表す。level 文字と表示文字は `levels { legend { ... } }` で宣言する。独立した object 宣言ブロックは public syntax ではない。
+object vocabulary は `slots { ... }` の右辺から作る。level 文字は `levels { legend { ... } }` で宣言する。独立した object 宣言ブロックは public syntax ではない。
 
 rewrite cell の空欄は「未指定」。何も object がないことは意味しない。
 
@@ -858,7 +836,9 @@ blocked = Wall Box
 input [ Player | no blocked ] -> [ | Player ]
 ```
 
-右辺で object を追加するセルは、その object の layer が空いていることを暗黙に要求する。
+右辺で object を追加するセルは、その object の state slot が空いていることを暗黙に要求する。
+
+`sprites { order { ... } }` が描画順を所有する。`priority = down right`（3D は3方向）は cell 座標の辞書式比較列で、最初に差が出た方向側を前に描く。通常行は object priority、`A + B` は canonical `merge { A; B }` へ正規化される unordered merge。merge の重複 pixel / voxel は透明 sample を除いて RGBA channel ごとに単純平均する。order 省略時だけ state slot 宣言順から object priority を生成する。
 
 ## Tags And Schemas
 
@@ -875,10 +855,10 @@ tag value list の中の `<start>...<end>` は inclusive numeric range として
 
 この名前は `for` や schema tag slot に渡せる tag set である。bare `color = red blue`、単数 `tag ...`、古い `domain <name> ...` 形は public syntax ではない。
 
-schema object は `layers` の右辺で宣言する:
+schema object は `slots` の右辺で宣言する:
 
 ```txt
-layers {
+slots {
 actor = player:color
 }
 ```
@@ -900,10 +880,10 @@ pattern では selector を使える。
 
 schema selector の slot が同じ puzzle 内の `var` / `const` 名であり、tag value や
 tag set 名と衝突しない場合、その slot は dynamic selector になる。たとえば
-`var count = 2`、`tags { num = 1 2 3 }`、`layers { actor = Box:num }` の
+`var count = 2`、`tags { num = 1 2 3 }`、`slots { actor = Box:num }` の
 `Box:count` は、runtime の現在の `count` 値と同じ tag を持つ variant を選ぶ。
 `count == 2` なら `Box:2`、`count == 4` なら `num` 外なので match しない。
-これは object schema を作る syntax ではないため、`layers` の右辺で `Box:count`
+これは object schema を作る syntax ではないため、`slots` の右辺で `Box:count`
 を使って variants を宣言することはしない。
 
 dynamic selector は lowering 時に tag value ごとの guarded static selector へ展開する。
@@ -985,7 +965,7 @@ PuzzleScript 風の section header は canonical `.puzzle` 構文では読まな
 
 ```txt
 puzzle sokoban {
-layers { ... }
+slots { ... }
 rules { ... }
 import "levels.puzzle"
 }

@@ -4,10 +4,79 @@ use crate::ast::EffectAst;
 use crate::loaded::SceneEffect;
 use crate::source::{LogicalLine, SourceScope, SourceToken};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct SourceSpan {
     pub(crate) start: usize,
     pub(crate) end: usize,
+}
+
+/// Facts emitted while the canonical parser accepts syntax. Parser functions
+/// return these facts with their semantic value; editor products only project
+/// them and never recognize source text independently.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ParserRecognition {
+    pub(crate) semantic_tokens: Vec<SurfaceSemanticToken>,
+    pub(crate) display_facts: Vec<SurfaceDisplayFact>,
+    pub(crate) completion_symbols: SurfaceCompletionSymbols,
+}
+
+impl ParserRecognition {
+    pub(crate) fn mark(&mut self, span: SourceSpan, kind: SurfaceSemanticKind) {
+        if span.start < span.end {
+            self.semantic_tokens
+                .push(SurfaceSemanticToken { span, kind });
+        }
+    }
+
+    pub(crate) fn finish(mut self) -> Self {
+        self.semantic_tokens
+            .sort_by_key(|token| (token.span.start, token.span.end));
+        self.display_facts.sort_by_key(|fact| {
+            let span = fact.span();
+            (span.start, span.end)
+        });
+        self
+    }
+
+    pub(crate) fn shift_offsets(&mut self, threshold: usize, delta: i64) {
+        for token in &mut self.semantic_tokens {
+            shift_span(&mut token.span, threshold, delta);
+        }
+        for fact in &mut self.display_facts {
+            match fact {
+                SurfaceDisplayFact::LevelCell { span, .. }
+                | SurfaceDisplayFact::SpritePixel { span, .. }
+                | SurfaceDisplayFact::Color { span, .. }
+                | SurfaceDisplayFact::Separator { span } => {
+                    shift_span(span, threshold, delta);
+                }
+            }
+        }
+    }
+}
+
+fn shift_span(span: &mut SourceSpan, threshold: usize, delta: i64) {
+    if span.start >= threshold {
+        span.start = usize::try_from(span.start as i64 + delta)
+            .expect("incremental parser span start underflow");
+        span.end = usize::try_from(span.end as i64 + delta)
+            .expect("incremental parser span end underflow");
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ParseProduct<T> {
+    pub(crate) value: T,
+    pub(crate) recognition: ParserRecognition,
+}
+
+impl<T> ParseProduct<T> {
+    pub(crate) fn new(value: T, recognition: ParserRecognition) -> Self {
+        Self {
+            value,
+            recognition: recognition.finish(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,9 +128,11 @@ pub(crate) struct SurfaceDocument {
     pub(crate) structural_blocks: Vec<SurfaceStructuralBlock>,
     pub(crate) nodes: Vec<SurfaceNode>,
     pub(crate) semantic_tokens: Vec<SurfaceSemanticToken>,
+    pub(crate) unmatched_open_braces: BTreeSet<usize>,
     pub(crate) completion_symbols: SurfaceCompletionSymbols,
     pub(crate) highlight_ranges: SurfaceHighlightRanges,
     pub(crate) visual_sprite_refs: SurfaceVisualSpriteRefs,
+    pub(crate) diagnostics: Vec<crate::Diagnostic>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -72,6 +143,7 @@ pub(crate) struct SurfaceLine {
     pub(crate) start: usize,
     pub(crate) line: usize,
     pub(crate) content: String,
+    pub(crate) lexical_facts: Vec<crate::source::lexer::SourceLexicalFact>,
     pub(crate) option_block: Option<SurfaceOptionBlock>,
 }
 
@@ -82,12 +154,20 @@ pub(crate) enum SurfaceStructuralBlockRole {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SurfaceOutlineBlock {
+    pub(crate) kind: String,
+    pub(crate) label: String,
+    pub(crate) suppress_children: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SurfaceStructuralBlock {
     pub(crate) header: String,
     pub(crate) scope: SourceScope,
     pub(crate) role: SurfaceStructuralBlockRole,
     pub(crate) authoring_kind: Option<crate::authoring_grammar::AuthoringKind>,
     pub(crate) authoring_content: Option<crate::authoring_grammar::AuthoringContentKind>,
+    pub(crate) outline: Option<SurfaceOutlineBlock>,
     pub(crate) virtual_braces: bool,
     pub(crate) open_brace: Option<usize>,
     pub(crate) close_brace: Option<usize>,
@@ -101,43 +181,38 @@ pub(crate) struct SurfaceStructuralBlock {
 pub(crate) struct SurfaceHighlightRanges {
     pub(crate) raw_ranges: Vec<SourceSpan>,
     pub(crate) plain_ranges: Vec<SourceSpan>,
-    pub(crate) level_ascii_ranges: Vec<SurfaceAsciiRange>,
-    pub(crate) visual_ascii_color_ranges: Vec<SurfaceVisualAsciiColorRange>,
-    pub(crate) visual_named_color_ranges: Vec<SurfaceVisualNamedColorRange>,
-    pub(crate) visual_separator_ranges: Vec<SourceSpan>,
-}
-
-impl SurfaceHighlightRanges {
-    pub(crate) fn raw_range_starting_at(&self, start: usize) -> Option<usize> {
-        self.raw_ranges
-            .iter()
-            .find_map(|range| (range.start == start).then_some(range.end))
-    }
-
-    pub(crate) fn is_plain_range(&self, start: usize, end: usize) -> bool {
-        self.plain_ranges
-            .iter()
-            .any(|range| start >= range.start && end <= range.end)
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct SurfaceAsciiRange {
-    pub(crate) span: SourceSpan,
-    pub(crate) known: bool,
+    pub(crate) display_facts: Vec<SurfaceDisplayFact>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct SurfaceVisualAsciiColorRange {
-    pub(crate) span: SourceSpan,
-    pub(crate) color: String,
-    pub(crate) transparent: bool,
+pub(crate) enum SurfaceDisplayFact {
+    LevelCell {
+        span: SourceSpan,
+        known: bool,
+    },
+    SpritePixel {
+        span: SourceSpan,
+        color: String,
+        transparent: bool,
+    },
+    Color {
+        span: SourceSpan,
+        color: String,
+    },
+    Separator {
+        span: SourceSpan,
+    },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct SurfaceVisualNamedColorRange {
-    pub(crate) span: SourceSpan,
-    pub(crate) color: String,
+impl SurfaceDisplayFact {
+    pub(crate) fn span(&self) -> SourceSpan {
+        match self {
+            Self::LevelCell { span, .. }
+            | Self::SpritePixel { span, .. }
+            | Self::Color { span, .. }
+            | Self::Separator { span } => *span,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -216,6 +291,22 @@ pub(crate) struct SurfaceSink {
 }
 
 impl SurfaceSink {
+    pub(crate) fn project_parser_recognition(&mut self, recognition: &ParserRecognition) {
+        self.document
+            .semantic_tokens
+            .extend(recognition.semantic_tokens.iter().cloned());
+        self.document
+            .highlight_ranges
+            .display_facts
+            .extend(recognition.display_facts.iter().cloned());
+    }
+
+    pub(crate) fn project_parser_completion(&mut self, recognition: &ParserRecognition) {
+        self.document
+            .completion_symbols
+            .merge(recognition.completion_symbols.clone());
+    }
+
     pub(crate) fn line(
         &mut self,
         tokens: Vec<String>,
@@ -224,6 +315,7 @@ impl SurfaceSink {
         start: usize,
         line: usize,
         content: String,
+        lexical_facts: Vec<crate::source::lexer::SourceLexicalFact>,
         option_block: Option<SurfaceOptionBlock>,
     ) {
         self.document.lines.push(SurfaceLine {
@@ -233,6 +325,7 @@ impl SurfaceSink {
             start,
             line,
             content,
+            lexical_facts,
             option_block,
         });
     }
@@ -243,6 +336,10 @@ impl SurfaceSink {
 
     pub(crate) fn set_structural_blocks(&mut self, blocks: Vec<SurfaceStructuralBlock>) {
         self.document.structural_blocks = blocks;
+    }
+
+    pub(crate) fn set_unmatched_open_braces(&mut self, braces: BTreeSet<usize>) {
+        self.document.unmatched_open_braces = braces;
     }
 
     pub(crate) fn mark(&mut self, span: SourceSpan, kind: SurfaceSemanticKind) {
@@ -258,14 +355,18 @@ impl SurfaceSink {
     }
 
     pub(crate) fn set_highlight_ranges(&mut self, ranges: SurfaceHighlightRanges) {
-        self.document.highlight_ranges = ranges;
+        self.document.highlight_ranges.merge(ranges);
     }
 
     pub(crate) fn visual_sprite_refs_mut(&mut self) -> &mut SurfaceVisualSpriteRefs {
         &mut self.document.visual_sprite_refs
     }
 
-    pub(crate) fn into_document(self) -> SurfaceDocument {
+    pub(crate) fn into_document(mut self) -> SurfaceDocument {
+        self.document
+            .semantic_tokens
+            .sort_by_key(|token| (token.span.start, token.span.end));
+        self.document.highlight_ranges.sort_by_source();
         self.document
     }
 
@@ -283,6 +384,9 @@ impl SurfaceSink {
             .semantic_tokens
             .extend(document.semantic_tokens);
         self.document
+            .unmatched_open_braces
+            .extend(document.unmatched_open_braces);
+        self.document
             .completion_symbols
             .merge(document.completion_symbols);
         self.document
@@ -295,16 +399,21 @@ impl SurfaceSink {
 }
 
 impl SurfaceHighlightRanges {
+    fn sort_by_source(&mut self) {
+        self.raw_ranges
+            .sort_by_key(|range| (range.start, range.end));
+        self.plain_ranges
+            .sort_by_key(|range| (range.start, range.end));
+        self.display_facts.sort_by_key(|fact| {
+            let span = fact.span();
+            (span.start, span.end)
+        });
+    }
+
     pub(crate) fn merge(&mut self, other: SurfaceHighlightRanges) {
         self.raw_ranges.extend(other.raw_ranges);
         self.plain_ranges.extend(other.plain_ranges);
-        self.level_ascii_ranges.extend(other.level_ascii_ranges);
-        self.visual_ascii_color_ranges
-            .extend(other.visual_ascii_color_ranges);
-        self.visual_named_color_ranges
-            .extend(other.visual_named_color_ranges);
-        self.visual_separator_ranges
-            .extend(other.visual_separator_ranges);
+        self.display_facts.extend(other.display_facts);
     }
 }
 

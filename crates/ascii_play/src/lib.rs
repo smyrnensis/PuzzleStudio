@@ -5,13 +5,13 @@ use std::io::{self, IsTerminal, Read, Write};
 use std::path::PathBuf;
 use std::process::Command;
 
-use puzzle_core::{InputId, State as PuzzleState, transition_program};
+use puzzle_core::InputId;
 use puzzle_grid3d::{Coord3, InputDef3, ObjectId as ObjectId3, State3};
 use puzzle_lang::{
     ArrowKey, DiagnosticReport, ForSource, KeyTrigger, LoadedDocumentModel, LoadedGame,
     ParsedPuzzle3, ResourceSelection, SceneBinaryOp, SceneComponent, SceneEffect, SceneExpr,
-    SceneTextContent, SceneValue, VisualSpriteKind, discover_game_entries, parse_game_file,
-    resolve_game_entry,
+    SceneTextContent, SceneValue, VisualOrderDef, VisualSpriteKind, discover_game_entries,
+    parse_game_file, resolve_game_entry,
 };
 use puzzle_play::{
     GameSession, GameSession3, GameSessionError3, MessageEvent, SessionLifecycleResult3,
@@ -360,7 +360,7 @@ fn render_colored_ascii_top(
     state: &puzzle_play::ScenePuzzleRuntimeState,
 ) -> String {
     let color_table = AsciiSpriteColorTable::from_loaded(loaded);
-    let display_state = ascii_display_state(loaded, state);
+    let display_state = &state.state;
     let mut out = String::new();
 
     for y in 0..display_state.height {
@@ -388,17 +388,6 @@ fn render_colored_ascii_top(
     }
 
     out
-}
-
-fn ascii_display_state(
-    loaded: &LoadedGame,
-    state: &puzzle_play::ScenePuzzleRuntimeState,
-) -> PuzzleState {
-    let Some(program) = &loaded.display_program else {
-        return state.state.clone();
-    };
-    transition_program(&loaded.game, program, &state.state, InputId(0))
-        .unwrap_or_else(|_| state.state.clone())
 }
 
 #[derive(Clone, Debug)]
@@ -473,7 +462,7 @@ impl Puzzle3TerminalSession {
             self.session
                 .apply_input_with_lifecycle(
                     bundle,
-                    &parsed.rules,
+                    parsed.game.program(),
                     input,
                     win_condition,
                     &parsed.lifecycle,
@@ -482,7 +471,7 @@ impl Puzzle3TerminalSession {
         } else {
             let changed = self
                 .session
-                .apply_input(bundle, &parsed.rules, input)
+                .apply_input(bundle, parsed.game.program(), input)
                 .map_err(AppError::from)?;
             SessionLifecycleResult3 {
                 changed,
@@ -557,6 +546,7 @@ fn object3_ascii_char(parsed: &ParsedPuzzle3, object: ObjectId3) -> char {
 struct AsciiSpriteColorTable {
     aliases: HashMap<String, String>,
     sprites: HashMap<String, SpriteSample>,
+    order: VisualOrderDef,
 }
 
 impl AsciiSpriteColorTable {
@@ -575,17 +565,33 @@ impl AsciiSpriteColorTable {
                 sprite_sample(&sprite.kind).map(|sample| (sprite.name.clone(), sample))
             })
             .collect();
-        Self { aliases, sprites }
+        Self {
+            aliases,
+            sprites,
+            order: loaded.visuals.order.clone(),
+        }
     }
 
     fn composited_color_for_object_names<'a>(
         &self,
         object_names: impl Iterator<Item = &'a str>,
     ) -> Option<Rgb> {
-        let sprites = object_names
-            .filter_map(|object_name| self.sprite_for_object_name(object_name))
+        let object_names = object_names.collect::<Vec<_>>();
+        let priorities = self
+            .order
+            .priorities
+            .iter()
+            .filter_map(|priority| {
+                let sprites = priority
+                    .objects
+                    .iter()
+                    .filter(|object| object_names.contains(&object.as_str()))
+                    .filter_map(|object| self.sprite_for_object_name(object))
+                    .collect::<Vec<_>>();
+                (!sprites.is_empty()).then_some((priority.merge, sprites))
+            })
             .collect::<Vec<_>>();
-        composite_sprite_samples(&sprites)
+        composite_sprite_priorities(&priorities)
     }
 
     fn sprite_for_object_name(&self, object_name: &str) -> Option<&SpriteSample> {
@@ -681,13 +687,19 @@ fn sprite_color_sample(kind: &VisualSpriteKind) -> Option<ColorSample> {
 }
 
 fn composite_sprite_samples(sprites: &[&SpriteSample]) -> Option<Rgb> {
-    let width = sprites
+    composite_sprite_priorities(&[(false, sprites.to_vec())])
+}
+
+fn composite_sprite_priorities(priorities: &[(bool, Vec<&SpriteSample>)]) -> Option<Rgb> {
+    let width = priorities
         .iter()
+        .flat_map(|(_, sprites)| sprites.iter())
         .map(|sprite| sprite.width())
         .max()
         .unwrap_or(0);
-    let height = sprites
+    let height = priorities
         .iter()
+        .flat_map(|(_, sprites)| sprites.iter())
         .map(|sprite| sprite.height())
         .max()
         .unwrap_or(0);
@@ -699,8 +711,13 @@ fn composite_sprite_samples(sprites: &[&SpriteSample]) -> Option<Rgb> {
     for y in 0..height {
         for x in 0..width {
             let mut dst = PremultipliedRgba::default();
-            for sprite in sprites {
-                if let Some(src) = sprite.pixel_at(x, y) {
+            for (merge, sprites) in priorities {
+                let src = if *merge {
+                    average_rgba(sprites.iter().filter_map(|sprite| sprite.pixel_at(x, y)))
+                } else {
+                    sprites.iter().find_map(|sprite| sprite.pixel_at(x, y))
+                };
+                if let Some(src) = src {
                     dst = dst.over(src);
                 }
             }
@@ -710,6 +727,27 @@ fn composite_sprite_samples(sprites: &[&SpriteSample]) -> Option<Rgb> {
         }
     }
     total.average()
+}
+
+fn average_rgba(colors: impl Iterator<Item = Rgba>) -> Option<Rgba> {
+    let mut count = 0u64;
+    let mut r = 0u64;
+    let mut g = 0u64;
+    let mut b = 0u64;
+    let mut a = 0u64;
+    for color in colors {
+        count += 1;
+        r += u64::from(color.r);
+        g += u64::from(color.g);
+        b += u64::from(color.b);
+        a += u64::from(color.a);
+    }
+    (count > 0).then(|| Rgba {
+        r: ((r + count / 2) / count) as u8,
+        g: ((g + count / 2) / count) as u8,
+        b: ((b + count / 2) / count) as u8,
+        a: ((a + count / 2) / count) as u8,
+    })
 }
 
 #[cfg(test)]
@@ -1262,7 +1300,6 @@ fn command_for_key(
 
 fn input3_for_key<'a>(parsed: &'a ParsedPuzzle3, key: &TerminalKey) -> Option<&'a InputDef3> {
     parsed
-        .game
         .inputs
         .iter()
         .find(|input| {
@@ -1273,7 +1310,7 @@ fn input3_for_key<'a>(parsed: &'a ParsedPuzzle3, key: &TerminalKey) -> Option<&'
         })
         .or_else(|| {
             let name = default_input3_name_for_key(key)?;
-            parsed.game.input_by_name(name)
+            parsed.input_by_name(name)
         })
 }
 
@@ -1880,7 +1917,7 @@ mod tests {
 title colored_ascii
 
 puzzle default {
-layers {
+slots {
 solid = Player
 }
 sprites {
@@ -1933,13 +1970,42 @@ P
     }
 
     #[test]
+    fn merge_averages_overlapping_hex_channels_without_operand_order() {
+        let red = SpriteSample::Solid(Rgba {
+            r: 255,
+            g: 0,
+            b: 0,
+            a: 255,
+        });
+        let blue = SpriteSample::Solid(Rgba {
+            r: 0,
+            g: 0,
+            b: 255,
+            a: 255,
+        });
+
+        let forward = composite_sprite_priorities(&[(true, vec![&red, &blue])]);
+        let reverse = composite_sprite_priorities(&[(true, vec![&blue, &red])]);
+
+        assert_eq!(
+            forward,
+            Some(Rgb {
+                r: 128,
+                g: 0,
+                b: 128
+            })
+        );
+        assert_eq!(forward, reverse);
+    }
+
+    #[test]
     fn overlap_text_uses_top_layer_and_color_uses_composited_sprite() {
         let loaded = parse_game(
             r##"
 title overlap_color
 
 puzzle default {
-layers {
+slots {
 target = Goal
 solid = Box
 }
@@ -1976,51 +2042,10 @@ level "start"
     }
 
     #[test]
-    fn empty_char_ignores_unlegended_display_floor_color() {
-        let loaded = parse_game(
-            r##"
-title floor_dot_color
-
-puzzle default {
-layers {
-@display_floor = @Floor
-solid = Player
-}
-sprites {
-@Floor #00ff00
-Player #ff0000
-}
-routine @fill_floor repeat {
-[ no @Floor ] -> [ @Floor ]
-}
-on_display {
-@fill_floor
-}
-rules {
-}
-levels {
-legend {
-. = empty
-P = Player
-}
-level "start"
-.
-}
-}
-"##,
-        )
-        .unwrap();
-        let session = GameSession::new(&loaded);
-        let state = &session.scene_state().unwrap().puzzles["default"];
-
-        assert_eq!(render_colored_ascii_top(&loaded, state), ". ");
-    }
-
-    #[test]
     fn puzzle3_ascii_renders_z_slices_from_top_to_bottom() {
         let parsed = puzzle_lang::parse_puzzle3d(
             r#"
-layers {
+slots {
 actor = Top Bottom
 }
 

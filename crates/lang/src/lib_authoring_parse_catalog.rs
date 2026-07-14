@@ -65,98 +65,7 @@ fn parse_map_definition(
     ))
 }
 
-fn record_authoring_declaration_surface_tokens(
-    scope: Option<SourceScope>,
-    tokens: &[SourceToken],
-    sink: &mut SurfaceSink,
-) {
-    match scope {
-        Some(SourceScope::Tags) => record_tag_declaration_surface_tokens(tokens, sink),
-        Some(SourceScope::Layers) => record_layer_declaration_surface_tokens(tokens, sink),
-        Some(SourceScope::Group) => record_group_declaration_surface_tokens(tokens, sink),
-        Some(SourceScope::Mark) => record_mark_declaration_surface_tokens(tokens, sink),
-        _ => {}
-    }
-}
-
-fn record_tag_declaration_surface_tokens(tokens: &[SourceToken], sink: &mut SurfaceSink) {
-    let [name, separator, values @ ..] = tokens else {
-        return;
-    };
-    if separator.text != "=" || values.is_empty() {
-        return;
-    }
-    add_surface_symbol(sink, name, SurfaceSemanticKind::Group);
-    for value in values {
-        add_surface_symbol(sink, value, SurfaceSemanticKind::Variant);
-    }
-}
-
-fn record_layer_declaration_surface_tokens(tokens: &[SourceToken], sink: &mut SurfaceSink) {
-    if tokens
-        .first()
-        .is_some_and(|token| matches!(token.text.as_str(), "for" | "}"))
-    {
-        return;
-    }
-    let selector_start = usize::from(tokens.first().is_some_and(|token| token.text == "each"));
-    let selector_tokens = if let Some(separator) = tokens.iter().position(|token| token.text == "=")
-    {
-        if separator > 0 {
-            add_surface_symbol(sink, &tokens[0], SurfaceSemanticKind::Group);
-        }
-        &tokens[separator + 1..]
-    } else {
-        &tokens[selector_start..]
-    };
-    for token in selector_tokens {
-        add_selector_head_surface_symbol(sink, token, SurfaceSemanticKind::Object);
-    }
-}
-
-fn record_group_declaration_surface_tokens(tokens: &[SourceToken], sink: &mut SurfaceSink) {
-    let Some(separator) = tokens.iter().position(|token| token.text == "=") else {
-        return;
-    };
-    if separator > 0 {
-        add_surface_symbol(sink, &tokens[0], SurfaceSemanticKind::Group);
-    }
-}
-
-fn record_mark_declaration_surface_tokens(tokens: &[SourceToken], sink: &mut SurfaceSink) {
-    let Some(name) = tokens.first() else {
-        return;
-    };
-    if matches!(name.text.as_str(), "}" | "for") {
-        return;
-    }
-    add_selector_head_surface_symbol(sink, name, SurfaceSemanticKind::Mark);
-}
-
-fn add_selector_head_surface_symbol(
-    sink: &mut SurfaceSink,
-    token: &SourceToken,
-    kind: SurfaceSemanticKind,
-) {
-    let Some((start, end)) = surface_identifier_bounds(&token.text) else {
-        return;
-    };
-    let span = SourceSpan {
-        start: token.start + start,
-        end: token.start + end,
-    };
-    sink.mark(span, kind);
-}
-
-fn add_surface_symbol(sink: &mut SurfaceSink, token: &SourceToken, kind: SurfaceSemanticKind) {
-    let span = SourceSpan {
-        start: token.start,
-        end: token.end,
-    };
-    sink.mark(span, kind);
-}
-
-fn record_surface_builtin_completion_symbols(sink: &mut SurfaceSink) {
+fn project_builtin_completion_symbols(sink: &mut SurfaceSink) {
     let symbols = sink.completion_symbols_mut();
     for (name, values) in [
         ("directions", vec!["up", "down", "left", "right"]),
@@ -193,323 +102,6 @@ fn record_surface_builtin_completion_symbols(sink: &mut SurfaceSink) {
         &mut symbols.scene_effects,
         &mut symbols.emissions,
     );
-}
-
-fn record_surface_completion_value_sets(scan: &SurfaceScan, sink: &mut SurfaceSink) {
-    for line in &scan.lines {
-        if line.scope != Some(SourceScope::Tags) {
-            continue;
-        }
-        let tokens = line
-            .structural_token_spans
-            .iter()
-            .map(|token| token.text.as_str())
-            .collect::<Vec<_>>();
-        let [name, separator, values @ ..] = tokens.as_slice() else {
-            continue;
-        };
-        if *separator != "=" || !surface_completion_tag_set_tokens(name, values) {
-            continue;
-        }
-        record_surface_completion_value_set(name, values, sink);
-    }
-}
-
-fn record_surface_completion_value_set(name: &str, values: &[&str], sink: &mut SurfaceSink) {
-    let symbols = sink.completion_symbols_mut();
-    symbols.value_set_names.insert(name.to_string());
-    let values = values
-        .iter()
-        .filter(|value| surface_catalog_identifier(value))
-        .map(|value| (*value).to_string())
-        .collect::<Vec<_>>();
-    if values
-        .iter()
-        .all(|value| surface_completion_direction_value(value))
-    {
-        symbols.direction_sets.insert(name.to_string());
-    }
-    symbols.object_name_atoms.extend(values.iter().cloned());
-    symbols.value_sets.insert(name.to_string(), values);
-}
-
-fn record_surface_completion_line(
-    option_block: Option<SurfaceOptionBlock>,
-    scope: Option<SourceScope>,
-    tokens: &[SourceToken],
-    sink: &mut SurfaceSink,
-) {
-    if record_authoring_content_completion_line(option_block, tokens, sink) {
-        return;
-    }
-    if record_authoring_child_completion_line(option_block, tokens, sink) {
-        return;
-    }
-    let token_texts = tokens
-        .iter()
-        .map(|token| token.text.as_str())
-        .collect::<Vec<_>>();
-    match token_texts.as_slice() {
-        ["puzzle", name, ..] if scope.is_none() => {
-            insert_surface_completion_identifier(&mut sink.completion_symbols_mut().puzzles, name);
-        }
-        ["scene", name, ..] => {
-            insert_surface_completion_identifier(&mut sink.completion_symbols_mut().scenes, name);
-        }
-        ["level", name, ..] => {
-            insert_surface_completion_identifier(&mut sink.completion_symbols_mut().levels, name);
-        }
-        ["routine", name, ..] => {
-            insert_surface_completion_identifier(&mut sink.completion_symbols_mut().routines, name);
-        }
-        ["input", name, ..] | ["direction", name, ..] => {
-            insert_surface_completion_identifier(&mut sink.completion_symbols_mut().inputs, name);
-        }
-        ["query", name, ..] => {
-            insert_surface_completion_identifier(
-                &mut sink.completion_symbols_mut().condition_defs,
-                name,
-            );
-        }
-        ["shape", table, ..] if scope == Some(SourceScope::Visuals) => {
-            record_surface_completion_visual_table_ref(table, true, sink);
-        }
-        ["colors", table, ..] if scope == Some(SourceScope::Visuals) => {
-            record_surface_completion_visual_color_ref(table, sink);
-        }
-        [name, "=", ..] if scope == Some(SourceScope::VisualColorTable) => {
-            insert_surface_completion_identifier(&mut sink.completion_symbols_mut().colors, name);
-        }
-        [table_ref] if scope == Some(SourceScope::VisualColorTable) => {
-            record_surface_completion_visual_color_ref(table_ref, sink);
-        }
-        [name] if scope == Some(SourceScope::VisualShapeTable) => {
-            record_surface_completion_visual_table_ref(name, true, sink);
-        }
-        ["var" | "const", name, ..]
-        | ["persistent", "var" | "const", name, ..]
-        | ["persistent", name, ..] => {
-            insert_surface_completion_identifier(&mut sink.completion_symbols_mut().states, name);
-        }
-        ["puzzle", name, "=", ..]
-            if matches!(
-                scope,
-                Some(SourceScope::SceneLayout | SourceScope::SceneState)
-            ) =>
-        {
-            insert_surface_completion_identifier(&mut sink.completion_symbols_mut().states, name);
-        }
-        [name, "=", ..]
-            if matches!(
-                scope,
-                Some(SourceScope::SceneLayout | SourceScope::SceneState)
-            ) =>
-        {
-            insert_surface_completion_identifier(&mut sink.completion_symbols_mut().states, name);
-        }
-        [name, "=", selectors @ ..] if scope == Some(SourceScope::Group) => {
-            insert_surface_completion_identifier(&mut sink.completion_symbols_mut().groups, name);
-            record_surface_completion_selector_specs(selectors, sink);
-        }
-        [..] if scope == Some(SourceScope::Layers) => {
-            record_surface_completion_layer_row(&token_texts, sink);
-        }
-        [name, "=", ty] if scope == Some(SourceScope::Mark) => {
-            record_surface_completion_mark_spec(name, Some(*ty), sink);
-        }
-        [spec] if scope == Some(SourceScope::Mark) => {
-            let cleaned = surface_completion_clean_spec(spec);
-            let (name, ty) = cleaned
-                .split_once('=')
-                .map_or((cleaned, None), |(name, ty)| (name, Some(ty)));
-            record_surface_completion_mark_spec(name, ty, sink);
-        }
-        [..] if scope == Some(SourceScope::Keys) => {
-            record_surface_completion_keys(&token_texts, sink);
-        }
-        _ => {}
-    }
-}
-
-fn record_authoring_content_completion_line(
-    option_block: Option<SurfaceOptionBlock>,
-    tokens: &[SourceToken],
-    sink: &mut SurfaceSink,
-) -> bool {
-    let Some(SurfaceOptionBlock::Authoring(kind)) = option_block else {
-        return false;
-    };
-    let crate::authoring_grammar::AuthoringBody::Content(content) =
-        crate::authoring_grammar::authoring_kind_spec(kind).body
-    else {
-        return false;
-    };
-    let line = tokens
-        .iter()
-        .map(|token| token.text.as_str())
-        .collect::<Vec<_>>()
-        .join(" ");
-    let Ok(Some(row)) = crate::authoring_grammar::parse_authoring_content_row(content, &line)
-    else {
-        return false;
-    };
-    if let Some(values) = crate::authoring_grammar::authoring_capture_values(&row.captures, "path")
-    {
-        for value in values {
-            insert_surface_completion_path_like(&mut sink.completion_symbols_mut().assets, value);
-        }
-    }
-    true
-}
-
-fn record_authoring_child_completion_line(
-    option_block: Option<SurfaceOptionBlock>,
-    tokens: &[SourceToken],
-    sink: &mut SurfaceSink,
-) -> bool {
-    let Some(SurfaceOptionBlock::Authoring(parent)) = option_block else {
-        return false;
-    };
-    let [surface, ..] = tokens else {
-        return false;
-    };
-    let Some(child) = crate::authoring_grammar::placed_authoring_kind(parent, &surface.text) else {
-        return false;
-    };
-    let mut recorded = false;
-    for export in crate::authoring_grammar::authoring_symbol_exports(child) {
-        let Some(value) = authoring_symbol_export_value(export.source, tokens) else {
-            continue;
-        };
-        record_authoring_symbol_export(export.target, value, sink);
-        recorded = true;
-    }
-    recorded
-}
-
-fn authoring_symbol_export_value(
-    source: crate::authoring_grammar::AuthoringSymbolExportSource,
-    tokens: &[SourceToken],
-) -> Option<&str> {
-    match source {
-        crate::authoring_grammar::AuthoringSymbolExportSource::HeaderArg(index) => {
-            tokens.get(index + 1).map(|token| token.text.as_str())
-        }
-    }
-}
-
-fn record_authoring_symbol_export(
-    target: crate::authoring_grammar::AuthoringSymbolExportTarget,
-    value: &str,
-    sink: &mut SurfaceSink,
-) {
-    match target {
-        crate::authoring_grammar::AuthoringSymbolExportTarget::Sfx => {
-            insert_surface_completion_identifier(&mut sink.completion_symbols_mut().sfx, value);
-        }
-        crate::authoring_grammar::AuthoringSymbolExportTarget::Music => {
-            insert_surface_completion_identifier(&mut sink.completion_symbols_mut().music, value);
-        }
-    }
-}
-
-fn record_surface_completion_layer_row(tokens: &[&str], sink: &mut SurfaceSink) {
-    match tokens {
-        [] => {}
-        [name, "=", selectors @ ..] => {
-            insert_surface_completion_identifier(&mut sink.completion_symbols_mut().groups, name);
-            record_surface_completion_selector_specs(selectors, sink);
-        }
-        ["each", selectors @ ..] => {
-            record_surface_completion_selector_specs(selectors, sink);
-        }
-        ["for", ..] => {}
-        [selectors @ ..] => {
-            record_surface_completion_selector_specs(selectors, sink);
-        }
-    }
-}
-
-fn record_surface_completion_selector_specs(specs: &[&str], sink: &mut SurfaceSink) {
-    for spec in specs {
-        if matches!(*spec, "=" | "each" | "for") {
-            continue;
-        }
-        record_surface_completion_object_spec(spec, sink);
-    }
-}
-
-fn record_surface_completion_object_spec(spec: &str, sink: &mut SurfaceSink) {
-    let cleaned = surface_completion_clean_spec(spec);
-    let parts = cleaned.split(':').collect::<Vec<_>>();
-    let Some(base) = parts.first().copied() else {
-        return;
-    };
-    insert_surface_completion_identifier(&mut sink.completion_symbols_mut().objects, base);
-    let value_set_names = sink.completion_symbols_mut().value_set_names.clone();
-    if parts.len() > 1
-        && parts[1..]
-            .iter()
-            .all(|part| value_set_names.contains(*part))
-    {
-        sink.completion_symbols_mut()
-            .object_axes
-            .entry(base.to_string())
-            .or_insert_with(|| parts[1..].iter().map(|part| (*part).to_string()).collect());
-    }
-    sink.completion_symbols_mut()
-        .object_name_atoms
-        .extend(parts[1..].iter().map(|part| (*part).to_string()));
-}
-
-fn record_surface_completion_mark_spec(name: &str, ty: Option<&str>, sink: &mut SurfaceSink) {
-    insert_surface_completion_identifier(&mut sink.completion_symbols_mut().markes, name);
-    if let Some(ty) = ty.filter(|ty| !matches!(*ty, "bool" | "int")) {
-        insert_surface_completion_identifier(
-            &mut sink.completion_symbols_mut().object_name_atoms,
-            ty,
-        );
-    }
-}
-
-fn record_surface_completion_keys(tokens: &[&str], sink: &mut SurfaceSink) {
-    let Some(separator) = tokens.iter().position(|token| matches!(*token, "=" | "->")) else {
-        return;
-    };
-    for token in &tokens[..separator] {
-        insert_surface_completion_identifier(&mut sink.completion_symbols_mut().inputs, token);
-    }
-    if let Some(command) = tokens.get(separator + 1) {
-        insert_surface_completion_identifier(&mut sink.completion_symbols_mut().commands, command);
-    }
-}
-
-fn record_surface_completion_visual_table_ref(
-    table: &str,
-    shape_table: bool,
-    sink: &mut SurfaceSink,
-) {
-    if let Some((name, axis)) = table.split_once(':') {
-        if shape_table {
-            insert_surface_completion_identifier(&mut sink.completion_symbols_mut().shapes, name);
-        }
-        insert_surface_completion_identifier(
-            &mut sink.completion_symbols_mut().object_name_atoms,
-            axis,
-        );
-    } else if shape_table {
-        insert_surface_completion_identifier(&mut sink.completion_symbols_mut().shapes, table);
-    }
-}
-
-fn record_surface_completion_visual_color_ref(table: &str, sink: &mut SurfaceSink) {
-    if let Some((name, axis)) = table.split_once(':') {
-        insert_surface_completion_identifier(&mut sink.completion_symbols_mut().colors, name);
-        insert_surface_completion_identifier(
-            &mut sink.completion_symbols_mut().object_name_atoms,
-            axis,
-        );
-    }
 }
 
 fn record_parser_catalog_completion_symbols(catalog: &Catalog, sink: &mut SurfaceSink) {
@@ -557,6 +149,10 @@ fn record_parser_catalog_completion_symbols(catalog: &Catalog, sink: &mut Surfac
             symbols.markes.insert(name.clone());
         }
     }
+}
+
+fn surface_completion_direction_value(value: &str) -> bool {
+    matches!(value, "up" | "down" | "left" | "right")
 }
 
 fn normalize_surface_completion_symbols(sink: &mut SurfaceSink) {
@@ -710,155 +306,177 @@ fn surface_scene_effect_commands_for_catalog() -> Vec<(&'static str, SemanticKin
     .collect()
 }
 
-fn surface_completion_tag_set_tokens(name: &str, values: &[&str]) -> bool {
-    surface_catalog_identifier(name)
-        && !values.is_empty()
-        && values.iter().all(|value| surface_catalog_identifier(value))
-}
+fn build_puzzle_catalog(
+    model: &model_syntax::PuzzleModelSyntax,
+) -> Result<Catalog, DiagnosticReport> {
+    let mut catalog = Catalog::for_dimension(model.dimension);
+    let mut named_layers = HashMap::<String, u16>::new();
+    let mut layer_count = None::<u16>;
 
-fn surface_completion_direction_value(value: &str) -> bool {
-    matches!(value, "up" | "down" | "left" | "right")
-}
-
-fn surface_completion_clean_spec(spec: &str) -> &str {
-    let spec = spec.trim_matches(|ch: char| matches!(ch, '[' | ']' | '(' | ')' | '|'));
-    spec.split_once('{').map_or(spec, |(head, _)| head)
-}
-
-fn insert_surface_completion_identifier(target: &mut BTreeSet<String>, value: &str) {
-    if surface_catalog_identifier(value) {
-        target.insert(value.to_string());
-    }
-}
-
-fn insert_surface_completion_path_like(target: &mut BTreeSet<String>, value: &str) {
-    let cleaned = value.trim_matches('"');
-    if !cleaned.is_empty() {
-        target.insert(cleaned.to_string());
-    }
-}
-
-fn surface_catalog_identifier(value: &str) -> bool {
-    let mut chars = value.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    (first == '@' || first == '_' || first.is_ascii_alphabetic())
-        && chars.all(|ch| {
-            ch == '_' || ch == ':' || ch == '.' || ch == '-' || ch.is_ascii_alphanumeric()
-        })
-}
-
-fn record_parser_resolved_surface_tokens(
-    scan: &SurfaceScan,
-    catalog: &Catalog,
-    sink: &mut SurfaceSink,
-) {
-    let value_sets = catalog_value_sets(catalog);
-    let mut current_map_axis = None::<String>;
-    for line in &scan.lines {
-        if let Some(axis) = parser_surface_map_axis(line) {
-            current_map_axis = Some(axis);
+    for entry in &model.catalog_entries {
+        let tokens = split_header_tokens(&entry.header.text);
+        if tokens.as_slice() != ["tags"] {
+            continue;
         }
-        record_parser_resolved_layer_surface_tokens(line, catalog, sink);
-        record_parser_resolved_group_surface_tokens(line, catalog, sink);
-        record_parser_resolved_legend_surface_tokens(line, catalog, sink);
-        record_parser_resolved_map_surface_tokens(
-            line,
-            current_map_axis.as_deref(),
-            &value_sets,
-            sink,
-        );
-        record_parser_resolved_for_expansion_surface_tokens(line, catalog, sink);
-        record_parser_resolved_rule_surface_tokens(line, catalog, sink);
-        record_parser_resolved_condition_surface_tokens(line, catalog, sink);
-        if line.scope == Some(SourceScope::Map)
-            && line
-                .structural_token_spans
-                .first()
-                .is_some_and(|token| token.text == "}")
-        {
-            current_map_axis = None;
+        for line in &entry.body {
+            if line.text.trim().is_empty() {
+                continue;
+            }
+            let assignment = puzzle_authoring::selector_assignment_surface(&line.text)
+                .ok_or_else(|| parse_error(&line.text, "tag row must be: <name> = <value...>"))?;
+            parse_tag_set_directive(
+                assignment.name,
+                &assignment.selectors,
+                &line.text,
+                &mut catalog,
+            )?;
         }
     }
-}
 
-fn record_parser_resolved_condition_surface_tokens(
-    line: &SurfaceScanLine,
-    catalog: &Catalog,
-    sink: &mut SurfaceSink,
-) {
-    if line.scope != Some(SourceScope::Condition) {
-        return;
-    }
-    let [all, subject, on, cover] = line.structural_token_spans.as_slice() else {
-        return;
-    };
-    if all.text != "all" || on.text != "on" {
-        return;
-    }
-    record_resolved_object_selector_surface_token(subject, &line.content, catalog, sink);
-    record_resolved_object_selector_surface_token(cover, &line.content, catalog, sink);
-}
-
-fn record_parser_resolved_for_expansion_surface_tokens(
-    line: &SurfaceScanLine,
-    catalog: &Catalog,
-    sink: &mut SurfaceSink,
-) {
-    if line.scope != Some(SourceScope::Other) {
-        return;
-    }
-    let tokens = &line.structural_token_spans;
-    let [for_keyword, binding, in_keyword, sources @ ..] = tokens.as_slice() else {
-        return;
-    };
-    if for_keyword.text != "for" || in_keyword.text != "in" || sources.is_empty() {
-        return;
-    }
-
-    add_surface_symbol(sink, for_keyword, SurfaceSemanticKind::Keyword);
-    add_surface_symbol(sink, binding, SurfaceSemanticKind::Binding);
-    add_surface_symbol(sink, in_keyword, SurfaceSemanticKind::Keyword);
-    for source in sources {
-        if catalog_value_set(catalog, &source.text).is_some()
-            || catalog.object_groups.contains_key(&source.text)
-        {
-            add_surface_symbol(sink, source, SurfaceSemanticKind::Group);
-        } else {
-            record_resolved_object_selector_surface_token(source, &line.content, catalog, sink);
+    for entry in &model.catalog_entries {
+        let tokens = split_header_tokens(&entry.header.text);
+        if tokens.first().copied() != Some("map") {
+            continue;
+        }
+        let lines = catalog_entry_lines(entry);
+        let value_sets = catalog_value_sets(&catalog);
+        let (map, next) = parse_map_definition(&lines, 0, &value_sets)?;
+        if next != lines.len() {
+            return Err(parse_error(
+                &entry.header.text,
+                "map block was not fully consumed",
+            ));
+        }
+        if catalog.maps.insert(map.name.clone(), map).is_some() {
+            return Err(parse_error(&entry.header.text, "duplicate map"));
         }
     }
-}
 
-fn parser_surface_map_axis(line: &SurfaceScanLine) -> Option<String> {
-    let tokens = &line.structural_token_spans;
-    let [keyword, _name, axis, ..] = tokens.as_slice() else {
-        return None;
-    };
-    (keyword.text == "map").then(|| axis.text.clone())
-}
-
-fn parser_surface_catalog(source: &str) -> Option<Catalog> {
-    let parts = parse_document_source_parts(source).ok()?;
-    let lines = parts
-        .model_lines
-        .iter()
-        .map(|line| line.text.clone())
-        .collect::<Vec<_>>();
-    let mut catalog = Catalog::default();
-    let mut i = 0usize;
-    while i < lines.len() {
-        let tokens = split_header_tokens(&lines[i]);
-        if matches!(tokens.as_slice(), ["puzzle", _]) {
-            i = record_parser_surface_puzzle_catalog(&lines, i, &mut catalog, false)
-                .ok()?
-                .0;
-        } else {
-            i += 1;
+    let pending_groups = collect_puzzle_group_declarations_from_entries(&model.catalog_entries)?;
+    let mut resolved_groups = HashSet::<String>::new();
+    for entry in &model.catalog_entries {
+        let tokens = split_header_tokens(&entry.header.text);
+        match tokens.as_slice() {
+            ["slots"] => {
+                let mut lines = entry
+                    .body
+                    .iter()
+                    .map(|line| line.text.clone())
+                    .collect::<Vec<_>>();
+                lines.push(BLOCK_CLOSE.to_string());
+                let next = parse_layers_block(
+                    &lines,
+                    0,
+                    &mut named_layers,
+                    &mut layer_count,
+                    &mut catalog,
+                    &pending_groups,
+                    &mut resolved_groups,
+                )?;
+                if next != lines.len() {
+                    return Err(parse_error(
+                        &entry.header.text,
+                        "slots block was not fully consumed",
+                    ));
+                }
+                refresh_layer_tags_and_value_sets(&named_layers, &mut catalog);
+            }
+            ["slots", count] => {
+                layer_count = Some(parse_u16(
+                    Some(count),
+                    &entry.header.text,
+                    "missing layer count",
+                )?);
+            }
+            ["slots", ..] => {
+                return Err(parse_error(&entry.header.text, "slots header is malformed"));
+            }
+            _ => {}
         }
     }
-    Some(catalog)
+    resolve_pending_group_definitions(&pending_groups, None, &mut resolved_groups, &mut catalog)?;
+
+    for entry in &model.catalog_entries {
+        if split_header_tokens(&entry.header.text).as_slice() != ["marks"] {
+            continue;
+        }
+        let lines = catalog_entry_lines(entry);
+        let next = parse_mark_block(&lines, 0, &mut catalog)?;
+        if next != lines.len() {
+            return Err(parse_error(
+                &entry.header.text,
+                "marks block was not fully consumed",
+            ));
+        }
+    }
+
+    catalog.layer_count = layer_count;
+    catalog.named_layers = named_layers;
+    Ok(catalog)
+}
+
+fn catalog_entry_lines(entry: &model_syntax::PuzzleEntrySyntax) -> Vec<String> {
+    let mut lines = Vec::with_capacity(entry.body.len() + 2);
+    lines.push(entry.header.text.clone());
+    lines.extend(entry.body.iter().map(|line| line.text.clone()));
+    lines.push(BLOCK_CLOSE.to_string());
+    lines
+}
+
+fn collect_puzzle_group_declarations_from_entries(
+    entries: &[model_syntax::PuzzleEntrySyntax],
+) -> Result<Vec<PendingGroupDefinition>, DiagnosticReport> {
+    let mut groups = Vec::new();
+    let mut names = HashSet::<String>::new();
+    for entry in entries {
+        let tokens = split_header_tokens(&entry.header.text);
+        match tokens.as_slice() {
+            ["groups"] => {}
+            ["groups", ..] => {
+                return Err(parse_error(
+                    &entry.header.text,
+                    "groups block must be: groups { ... }",
+                ));
+            }
+            _ => continue,
+        }
+        for line in &entry.body {
+            if line.text.trim().is_empty() {
+                continue;
+            }
+            let Some(assignment) = puzzle_authoring::selector_assignment_surface(&line.text) else {
+                return Err(parse_error(
+                    &line.text,
+                    "group row must be: <name> = <selector...>",
+                ));
+            };
+            validate_selector_alias_name(assignment.name, &line.text, "group name")?;
+            if !names.insert(assignment.name.to_string()) {
+                return Err(parse_error(&line.text, "duplicate group"));
+            }
+            groups.push(PendingGroupDefinition {
+                name: assignment.name.to_string(),
+                selectors: assignment
+                    .selectors
+                    .iter()
+                    .map(|selector| (*selector).to_string())
+                    .collect(),
+                source_line: line.text.clone(),
+            });
+        }
+    }
+    Ok(groups)
+}
+
+fn parser_surface_catalog_from_source_scan(
+    source_scan: &source::SurfaceSourceScan,
+) -> Result<Catalog, DiagnosticReport> {
+    let logical_lines = source_scan.strict_logical_lines()?;
+    let parts = parse_document_source_parts_from_logical_lines(logical_lines)?;
+    let model = parts.models.first().ok_or_else(|| {
+        DiagnosticReport::error("parser catalog requires a puzzle model".to_string())
+    })?;
+    build_puzzle_catalog(model)
 }
 
 /// Editor-specific integration of parser-owned authoring facts. Unlike full
@@ -884,12 +502,23 @@ pub(crate) fn integrate_level_editor_authoring(
     source: &str,
 ) -> Result<LevelEditorIntegration, DiagnosticReport> {
     let parts = parse_document_source_parts(source)?;
+    integrate_level_editor_document_parts(parts)
+}
+
+fn integrate_level_editor_document_parts(
+    parts: DocumentSourceParts,
+) -> Result<LevelEditorIntegration, DiagnosticReport> {
+    let dimension = parts
+        .models
+        .first()
+        .map(|model| model.dimension)
+        .unwrap_or_default();
     let lines = parts
         .model_lines
         .iter()
         .map(|line| line.text.clone())
         .collect::<Vec<_>>();
-    let mut catalog = Catalog::default();
+    let mut catalog = Catalog::for_dimension(dimension);
     let mut level_blocks = Vec::<LevelBlock>::new();
     let mut pending_level_blocks = Vec::<PendingLevelBlock>::new();
     let mut pending_visual_blocks = Vec::<usize>::new();
@@ -900,19 +529,17 @@ pub(crate) fn integrate_level_editor_authoring(
     while i < lines.len() {
         let tokens = split_header_tokens(&lines[i]);
         match tokens.as_slice() {
-            ["puzzle", _] => {
-                match record_parser_surface_puzzle_catalog(&lines, i, &mut catalog, false) {
-                    Ok((next_i, mut levels, mut visuals)) => {
-                        pending_level_blocks.append(&mut levels);
-                        pending_visual_blocks.append(&mut visuals);
-                        i = next_i;
-                    }
-                    Err(report) => {
-                        diagnostics.push(report.to_string());
-                        i = recover_after_directive_error(&lines, i);
-                    }
+            ["puzzle", _] => match parse_editor_puzzle_catalog(&lines, i, &mut catalog, false) {
+                Ok((next_i, mut levels, mut visuals, _)) => {
+                    pending_level_blocks.append(&mut levels);
+                    pending_visual_blocks.append(&mut visuals);
+                    i = next_i;
                 }
-            }
+                Err(report) => {
+                    diagnostics.push(report.to_string());
+                    i = recover_after_directive_error(&lines, i);
+                }
+            },
             ["levels", ..] => {
                 pending_level_blocks.push(PendingLevelBlock::levels(i, None));
                 match collect_levels_authoring_entry(&lines, i) {
@@ -1006,12 +633,12 @@ pub(crate) fn integrate_level_editor_authoring(
     })
 }
 
-fn record_parser_surface_puzzle_catalog(
+fn parse_editor_puzzle_catalog(
     lines: &[String],
     start: usize,
     catalog: &mut Catalog,
     strict: bool,
-) -> Result<(usize, Vec<PendingLevelBlock>, Vec<usize>), DiagnosticReport> {
+) -> Result<(usize, Vec<PendingLevelBlock>, Vec<usize>, u16), DiagnosticReport> {
     if let Err(error) = collect_puzzle_tag_declarations(lines, start + 1, catalog)
         && strict
     {
@@ -1046,8 +673,8 @@ fn record_parser_surface_puzzle_catalog(
                     i = skip_tags_block(lines, i).unwrap_or(i + 1);
                 }
             }
-            puzzle_authoring::PuzzleDirectiveSurface::Layers => match tokens.as_slice() {
-                ["layers"] => {
+            puzzle_authoring::PuzzleDirectiveSurface::Slots => match tokens.as_slice() {
+                ["slots"] => {
                     let parsed = parse_layers_block(
                         lines,
                         i + 1,
@@ -1064,7 +691,7 @@ fn record_parser_surface_puzzle_catalog(
                     };
                     refresh_layer_tags_and_value_sets(&named_layers, catalog);
                 }
-                ["layers", count] => {
+                ["slots", count] => {
                     match parse_u16(Some(count), &lines[i], "missing layer count") {
                         Ok(count) => layer_count = Some(count),
                         Err(error) if strict => return Err(error),
@@ -1073,7 +700,7 @@ fn record_parser_surface_puzzle_catalog(
                     i += 1;
                 }
                 _ if strict => {
-                    return Err(parse_error(&lines[i], "layers header is malformed"));
+                    return Err(parse_error(&lines[i], "slots header is malformed"));
                 }
                 _ => i = recover_after_directive_error(lines, i),
             },
@@ -1140,143 +767,8 @@ fn record_parser_surface_puzzle_catalog(
         i.saturating_add(1),
         pending_level_blocks,
         pending_visual_blocks,
+        layer_count.unwrap_or(0),
     ))
-}
-
-fn record_parser_resolved_layer_surface_tokens(
-    line: &SurfaceScanLine,
-    catalog: &Catalog,
-    sink: &mut SurfaceSink,
-) {
-    if line.scope != Some(SourceScope::Layers) {
-        return;
-    }
-    let tokens = &line.structural_token_spans;
-    if tokens
-        .first()
-        .is_some_and(|token| matches!(token.text.as_str(), "for" | "}"))
-    {
-        return;
-    }
-    let selector_start = usize::from(tokens.first().is_some_and(|token| token.text == "each"));
-    if selector_start == 1
-        && let Some(each) = tokens.first()
-    {
-        sink.mark(
-            SourceSpan {
-                start: each.start,
-                end: each.end,
-            },
-            SurfaceSemanticKind::Keyword,
-        );
-    }
-    let selector_tokens = if let Some(separator) = tokens.iter().position(|token| token.text == "=")
-    {
-        &tokens[separator + 1..]
-    } else {
-        &tokens[selector_start..]
-    };
-    for token in selector_tokens {
-        record_resolved_object_selector_surface_token(token, &line.content, catalog, sink);
-    }
-}
-
-fn record_parser_resolved_group_surface_tokens(
-    line: &SurfaceScanLine,
-    catalog: &Catalog,
-    sink: &mut SurfaceSink,
-) {
-    if line.scope != Some(SourceScope::Group) {
-        return;
-    }
-    let tokens = &line.structural_token_spans;
-    let Some(separator) = tokens.iter().position(|token| token.text == "=") else {
-        return;
-    };
-    for token in &tokens[separator + 1..] {
-        record_resolved_object_selector_surface_token(token, &line.content, catalog, sink);
-    }
-}
-
-fn record_parser_resolved_legend_surface_tokens(
-    line: &SurfaceScanLine,
-    catalog: &Catalog,
-    sink: &mut SurfaceSink,
-) {
-    let tokens = &line.structural_token_spans;
-    let selector_start = match line.scope {
-        Some(SourceScope::Legend) => tokens
-            .iter()
-            .position(|token| token.text == "=")
-            .map(|separator| separator + 1),
-        Some(SourceScope::Level | SourceScope::UnbracedLevel)
-            if tokens.first().is_some_and(|token| token.text == "legend") =>
-        {
-            tokens
-                .iter()
-                .position(|token| token.text == "=")
-                .map(|separator| separator + 1)
-        }
-        _ => None,
-    };
-    let Some(selector_start) = selector_start else {
-        return;
-    };
-    for token in &tokens[selector_start..] {
-        record_resolved_object_selector_surface_token(token, &line.content, catalog, sink);
-    }
-}
-
-fn record_parser_resolved_map_surface_tokens(
-    line: &SurfaceScanLine,
-    axis: Option<&str>,
-    value_sets: &HashMap<String, Vec<String>>,
-    sink: &mut SurfaceSink,
-) {
-    if line.scope != Some(SourceScope::Map) {
-        return;
-    }
-    let Some(axis) = axis else {
-        return;
-    };
-    let Some(values) = value_sets.get(axis) else {
-        return;
-    };
-    let tokens = &line.structural_token_spans;
-    let [from, arrow, to] = tokens.as_slice() else {
-        return;
-    };
-    if arrow.text != "->" {
-        return;
-    }
-    if values.iter().any(|value| value == &from.text) {
-        add_surface_symbol(sink, from, SurfaceSemanticKind::Variant);
-    }
-    if values.iter().any(|value| value == &to.text) {
-        add_surface_symbol(sink, to, SurfaceSemanticKind::Variant);
-    }
-}
-
-fn record_parser_resolved_rule_surface_tokens(
-    line: &SurfaceScanLine,
-    catalog: &Catalog,
-    sink: &mut SurfaceSink,
-) {
-    if line.scope != Some(SourceScope::Other)
-        || puzzle_authoring::rule_line_surface_spans(strip_line_comment(&line.content)).is_err()
-    {
-        return;
-    }
-    let mut bracket_depth = 0usize;
-    for token in &line.token_spans {
-        let opens = token.text.chars().filter(|ch| *ch == '[').count();
-        let closes = token.text.chars().filter(|ch| *ch == ']').count();
-        bracket_depth = bracket_depth.saturating_add(opens);
-        if bracket_depth > 0 {
-            record_resolved_object_selector_surface_token(token, &line.content, catalog, sink);
-        }
-        bracket_depth = bracket_depth.saturating_sub(closes);
-    }
 }
 
 fn parse_tags_block(
@@ -1810,7 +1302,7 @@ fn catalog_value_set<'a>(catalog: &'a Catalog, name: &str) -> Option<&'a Vec<Str
 }
 
 fn is_builtin_value_set(name: &str) -> bool {
-    matches!(name, "directions" | "horizontal" | "vertical" | "layers")
+    matches!(name, "directions" | "horizontal" | "vertical" | "slots")
 }
 
 fn looks_like_condition_expr(expr: &str) -> bool {
@@ -1860,7 +1352,6 @@ fn parse_layer_term(
     term: &str,
     line: &str,
     layer: u16,
-    visual: bool,
     catalog: &mut Catalog,
 ) -> Result<Vec<ObjectId>, DiagnosticReport> {
     let declared = if is_known_object_selector(
@@ -1903,7 +1394,6 @@ fn parse_layer_term(
             &mut catalog.char_objects,
         )?
     };
-    mark_visual_objects(&declared, visual, catalog);
     Ok(declared)
 }
 
@@ -2054,18 +1544,17 @@ fn parse_layers_block(
                     "for directive must be: for <binding> in <source...>",
                 ));
             }
-            _ => match puzzle_authoring::layer_row_surface(&lines[i]) {
-                Some(puzzle_authoring::LayerRowSurface::Each { selectors }) => {
+            _ => match puzzle_authoring::slot_row_surface(&lines[i]) {
+                Some(puzzle_authoring::SlotRowSurface::Each { selectors }) => {
                     assign_selectors_to_separate_layers(
                         &selectors,
                         &lines[i],
                         named_layers,
                         layer_count,
                         catalog,
-                        false,
                     )?;
                 }
-                Some(puzzle_authoring::LayerRowSurface::Named(assignment)) => {
+                Some(puzzle_authoring::SlotRowSurface::Named(assignment)) => {
                     let layer = layer_id_for_name(
                         assignment.name,
                         &lines[i],
@@ -2078,11 +1567,10 @@ fn parse_layers_block(
                         &lines[i],
                         layer,
                         catalog,
-                        false,
                     )?;
                     register_layer_tag_from_layer(assignment.name, layer, catalog);
                 }
-                Some(puzzle_authoring::LayerRowSurface::Anonymous { selectors }) => {
+                Some(puzzle_authoring::SlotRowSurface::Anonymous { selectors }) => {
                     assign_selectors_to_anonymous_layer(
                         &selectors,
                         &lines[i],
@@ -2099,7 +1587,7 @@ fn parse_layers_block(
     if i >= lines.len() {
         return Err(parse_error(
             &lines[start - 1],
-            "layers missing closing brace",
+            "slots missing closing brace",
         ));
     }
     Ok(i + 1)
@@ -2177,10 +1665,10 @@ fn collect_layer_block_terms(
                 ));
             }
             _ => {
-                let selectors = match puzzle_authoring::layer_row_surface(&lines[i]) {
-                    Some(puzzle_authoring::LayerRowSurface::Each { selectors })
-                    | Some(puzzle_authoring::LayerRowSurface::Anonymous { selectors }) => selectors,
-                    Some(puzzle_authoring::LayerRowSurface::Named(assignment)) => {
+                let selectors = match puzzle_authoring::slot_row_surface(&lines[i]) {
+                    Some(puzzle_authoring::SlotRowSurface::Each { selectors })
+                    | Some(puzzle_authoring::SlotRowSurface::Anonymous { selectors }) => selectors,
+                    Some(puzzle_authoring::SlotRowSurface::Named(assignment)) => {
                         assignment.selectors
                     }
                     None => return Err(parse_error(&lines[i], "invalid layer row")),
@@ -2193,7 +1681,7 @@ fn collect_layer_block_terms(
     if i >= lines.len() {
         return Err(parse_error(
             &lines[start - 1],
-            "layers missing closing brace",
+            "slots missing closing brace",
         ));
     }
     Ok(i + 1)
@@ -2384,7 +1872,6 @@ fn define_or_assign_terms_to_layer(
     line: &str,
     layer: u16,
     catalog: &mut Catalog,
-    visual: bool,
 ) -> Result<Vec<ObjectId>, DiagnosticReport> {
     if terms.is_empty() {
         return Err(parse_error(
@@ -2397,7 +1884,7 @@ fn define_or_assign_terms_to_layer(
     let mut i = 0;
     while i < terms.len() {
         let term = terms[i];
-        let declared = parse_layer_term(term, line, layer, visual, catalog)?;
+        let declared = parse_layer_term(term, line, layer, catalog)?;
         push_terms(&mut objects, &declared);
         i += 1;
     }
@@ -2429,7 +1916,6 @@ fn assign_selectors_to_separate_layers(
     named_layers: &mut HashMap<String, u16>,
     layer_count: &mut Option<u16>,
     catalog: &mut Catalog,
-    visual: bool,
 ) -> Result<Vec<ObjectId>, DiagnosticReport> {
     if selectors.is_empty() {
         return Err(parse_error(
@@ -2439,7 +1925,7 @@ fn assign_selectors_to_separate_layers(
     }
     let selector_sets = selectors
         .iter()
-        .map(|selector| resolve_or_declare_layer_selector(selector, line, visual, catalog))
+        .map(|selector| resolve_or_declare_layer_selector(selector, line, catalog))
         .collect::<Result<Vec<_>, _>>()?;
     let mut objects = Vec::new();
     for selector_set in selector_sets {
@@ -2455,7 +1941,6 @@ fn assign_selectors_to_separate_layers(
 fn resolve_or_declare_layer_selector(
     selector: &str,
     line: &str,
-    visual: bool,
     catalog: &mut Catalog,
 ) -> Result<Vec<ObjectId>, DiagnosticReport> {
     let declared = if is_known_object_selector(
@@ -2495,7 +1980,6 @@ fn resolve_or_declare_layer_selector(
             &mut catalog.char_objects,
         )?
     };
-    mark_visual_objects(&declared, visual, catalog);
     Ok(declared)
 }
 
@@ -2507,21 +1991,12 @@ fn assign_selectors_to_anonymous_layer(
     catalog: &mut Catalog,
 ) -> Result<Vec<ObjectId>, DiagnosticReport> {
     let layer = anonymous_layer_id(named_layers, layer_count);
-    define_or_assign_terms_to_layer(selectors, line, layer, catalog, false)
+    define_or_assign_terms_to_layer(selectors, line, layer, catalog)
 }
 
 fn push_unique_object(objects: &mut Vec<ObjectId>, object: ObjectId) {
     if !objects.contains(&object) {
         objects.push(object);
-    }
-}
-
-fn mark_visual_objects(objects: &[ObjectId], visual: bool, catalog: &mut Catalog) {
-    if !visual {
-        return;
-    }
-    for object in objects {
-        push_unique_object(&mut catalog.visual_objects, *object);
     }
 }
 
@@ -2582,7 +2057,7 @@ fn refresh_layer_tags_and_value_sets(named_layers: &HashMap<String, u16>, catalo
     }
     catalog
         .value_sets
-        .insert("layers".to_string(), values.clone());
+        .insert("slots".to_string(), values.clone());
 }
 
 fn internal_layer_group_name(layer: u16) -> String {
@@ -2737,7 +2212,6 @@ fn add_implicit_input_guards_to_catalog(
     main_statements: Option<&[StatementAst]>,
     level_start_statements: Option<&[StatementAst]>,
     level_clear_statements: Option<&[StatementAst]>,
-    display_statements: Option<&[StatementAst]>,
     level_bodies: &[PreparedLevelBody],
     named_conditions: &HashMap<String, (String, ConditionAst)>,
     catalog: &mut Catalog,
@@ -2750,7 +2224,6 @@ fn add_implicit_input_guards_to_catalog(
         main_statements,
         level_start_statements,
         level_clear_statements,
-        display_statements,
     ]
     .into_iter()
     .flatten()

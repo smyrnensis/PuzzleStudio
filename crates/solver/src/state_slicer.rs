@@ -1,6 +1,6 @@
 use crate::relevance::SolverRelevance;
 use puzzle_core::{CompiledGame, ObjectId as ObjectId2, State};
-use puzzle_grid3d::{Game3, ObjectId as ObjectId3, State3};
+use puzzle_grid3d::{CompiledGame3, ObjectId as ObjectId3, State3};
 use std::collections::BTreeSet;
 
 pub trait SolverStateProjection: Sized {
@@ -70,9 +70,9 @@ impl SolverStateSlicer<ObjectId2> {
 }
 
 impl SolverStateSlicer<ObjectId3> {
-    pub fn from_kept_objects(game: &Game3, kept_objects: &BTreeSet<ObjectId3>) -> Self {
+    pub fn from_kept_objects3(game: &CompiledGame3, kept_objects: &BTreeSet<ObjectId3>) -> Self {
         Self::from_ignored_objects(
-            game.objects
+            game.objects()
                 .iter()
                 .filter_map(|object| {
                     (!object.id.is_empty() && !kept_objects.contains(&object.id))
@@ -82,7 +82,7 @@ impl SolverStateSlicer<ObjectId3> {
         )
     }
 
-    pub fn from_relevance(game: &Game3, relevance: &SolverRelevance<ObjectId3>) -> Self {
-        Self::from_kept_objects(game, &relevance.relevant_objects().into_iter().collect())
+    pub fn from_relevance3(game: &CompiledGame3, relevance: &SolverRelevance<ObjectId3>) -> Self {
+        Self::from_kept_objects3(game, &relevance.relevant_objects().into_iter().collect())
     }
 }

@@ -13,12 +13,6 @@ impl SolverObjectId for ObjectId2 {
     }
 }
 
-impl SolverObjectId for ObjectId3 {
-    fn is_empty(self) -> bool {
-        self.is_empty()
-    }
-}
-
 pub trait SolverPatternObjectRefs {
     type ObjectId: SolverObjectId;
 
@@ -213,7 +207,7 @@ impl SolverPatternObjectRefs for Pattern3 {
         is_relevant: &impl Fn(Self::ObjectId) -> bool,
     ) -> bool {
         self.cells()
-            .iter()
+            .into_iter()
             .any(|cell| cell3_binding_touches(cell, binding, is_relevant))
     }
 }

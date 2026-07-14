@@ -4,7 +4,7 @@ author = "Levels by David Skinner"
 theme = "puzzlescript"
 
 puzzle sokoban {
-layers {
+slots {
 Background
 Goal
 solid = Player Box Wall

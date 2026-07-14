@@ -189,6 +189,7 @@ function buildPuzzleStudioThreeFrame(snapshot, view = {}) {
     camera: snapshot.camera || {},
     editorView: view.editorView || snapshot.view || {},
     settings: snapshot.settings || {},
+    order: snapshot.order,
     animationEvents: Array.isArray(snapshot.animationEvents) ? snapshot.animationEvents : [],
     animationProgress: Number.isFinite(Number(view.animationProgress)) ? Number(view.animationProgress) : 1,
     viewport: normalizeViewport(snapshot.viewport),
@@ -584,14 +585,10 @@ function cellCoordinateRenderBounds(frame, cell, extent = conservativeCellRender
 }
 
 function conservativeCellRenderExtent(frame) {
-  const maxLayer = Math.max(
-    0,
-    ...Array.from(frame.objectCatalog?.values?.() || [], (object) => Number(object.layer) || 0),
-  );
   return {
     x: 0.65,
     yBelow: 0.65,
-    yAbove: 0.65 + maxLayer * 0.08,
+    yAbove: 0.65,
     z: 0.65,
   };
 }
@@ -648,7 +645,8 @@ function cellVisibleVoxels(frame, cell) {
   const stacks = new Map();
   for (const [objectIndex, object] of (cell.objects || []).entries()) {
     const sourceKey = `${cellKey(cell.position)}:${objectIndex}`;
-    const objectOrder = objectRenderOrder(object, objectIndex);
+    const priority = objectRenderOrder(frame, object, objectIndex);
+    const objectOrder = (cellRenderIndex(frame, cell.position) * spriteOrder(frame).priorities.length) + priority;
     for (const voxel of objectVoxels(frame, cell.position, object, sourceKey, objectOrder)) {
       const key = voxelGeometryKeyAt(voxel.stackPosition, voxel.scale);
       const stack = stacks.get(key) || [];
@@ -684,7 +682,22 @@ function emptyVoxelOccupancy() {
 function visibleVoxelStack(stack) {
   const visible = [];
   const ordered = [...stack].sort((left, right) => objectVoxelOrder(left) - objectVoxelOrder(right));
+  const priorities = [];
   for (const voxel of ordered) {
+    const order = objectVoxelOrder(voxel);
+    const group = priorities.at(-1);
+    if (group && group.order === order) {
+      group.voxels.push(voxel);
+    } else {
+      priorities.push({ order, voxels: [voxel] });
+    }
+  }
+  for (const group of priorities) {
+    const order = frameOrder(stack);
+    const priority = group.order % Math.max(1, order?.priorities?.length || 1);
+    const voxel = spriteOrderPriorityDefinition(order, priority)?.merge
+      ? averageMergedVoxels(group.voxels)
+      : group.voxels[0];
     const source = voxel.color || parseColor(voxel.fill);
     if (source?.a <= 0) {
       continue;
@@ -704,9 +717,81 @@ function visibleVoxelStack(stack) {
   return visible;
 }
 
-function objectRenderOrder(object, fallbackIndex = 0) {
-  const layer = Number(object?.layer);
-  return Number.isFinite(layer) ? layer : Number(fallbackIndex) || 0;
+function averageMergedVoxels(voxels) {
+  const colors = voxels
+    .map((voxel) => voxel.color || parseColor(voxel.fill))
+    .filter((color) => color && color.a > 0);
+  if (!colors.length) {
+    return voxels[0];
+  }
+  const divisor = colors.length;
+  const color = colors.reduce((sum, candidate) => ({
+    r: sum.r + candidate.r,
+    g: sum.g + candidate.g,
+    b: sum.b + candidate.b,
+    a: sum.a + candidate.a,
+  }), { r: 0, g: 0, b: 0, a: 0 });
+  color.r /= divisor;
+  color.g /= divisor;
+  color.b /= divisor;
+  color.a /= divisor;
+  return {
+    ...voxels[0],
+    color,
+    fill: formatColor(color),
+    sourceKeys: voxels.flatMap((voxel) => voxel.sourceKey ? [voxel.sourceKey] : (voxel.sourceKeys || [])),
+  };
+}
+
+function objectRenderOrder(frame, object, fallbackIndex = 0) {
+  const name = String(object?.name || "");
+  const priority = spriteOrder(frame).priorities.findIndex((entry) =>
+    Array.isArray(entry.objects) && entry.objects.includes(name)
+  );
+  if (priority >= 0) {
+    return priority;
+  }
+  throw new Error(`compiled sprite order does not cover object: ${name || fallbackIndex}`);
+}
+
+function spriteOrder(frame) {
+  const order = frame?.order;
+  if (!order || !Array.isArray(order.direction_priority) || !Array.isArray(order.priorities)) {
+    throw new Error("compiled sprite order contract is missing");
+  }
+  return order;
+}
+
+function spriteOrderPriorityDefinition(order, priority) {
+  return order?.priorities?.[priority] || null;
+}
+
+function cellRenderIndex(frame, position) {
+  const spans = {
+    x: Math.max(1, Number(frame?.size?.width) || 1),
+    y: Math.max(1, Number(frame?.size?.depth) || 1),
+    z: Math.max(1, Number(frame?.size?.height) || 1),
+  };
+  let index = 0;
+  for (const direction of spriteOrder(frame).direction_priority) {
+    let value;
+    let span;
+    switch (direction) {
+      case "right": value = Number(position.x) || 0; span = spans.x; break;
+      case "left": value = spans.x - 1 - (Number(position.x) || 0); span = spans.x; break;
+      case "front": value = Number(position.y) || 0; span = spans.y; break;
+      case "back": value = spans.y - 1 - (Number(position.y) || 0); span = spans.y; break;
+      case "up": value = Number(position.z) || 0; span = spans.z; break;
+      case "down": value = spans.z - 1 - (Number(position.z) || 0); span = spans.z; break;
+      default: throw new Error(`invalid 3D sprite order direction: ${direction}`);
+    }
+    index = (index * span) + value;
+  }
+  return index;
+}
+
+function frameOrder(stack) {
+  return stack[0]?.frameOrder;
 }
 
 function objectVoxelOrder(voxel) {
@@ -733,10 +818,9 @@ function voxelInstances(frame, position, object, sourceKey, objectOrder = 0) {
   base.z += offset.z;
   return visual.voxels.map((voxel) => {
     const local = spriteVoxelLocalPosition(voxel, size, step);
-    const layerY = object.layer * 0.08;
     const renderPosition = {
       x: base.x + local.x,
-      y: base.y + layerY + local.z,
+      y: base.y + local.z,
       z: base.z - local.y,
     };
     const stackPosition = {
@@ -755,6 +839,7 @@ function voxelInstances(frame, position, object, sourceKey, objectOrder = 0) {
       bounds: voxelBounds(renderPosition, step),
       sourceKey,
       objectOrder,
+      frameOrder: frame.order,
     };
   });
 }
@@ -1212,23 +1297,18 @@ function buildCamera(THREE, frame, canvas) {
   const view = cameraViewForFrame(frame, aspect, zoom);
   const targetPoint = new THREE.Vector3(view.target.x, view.target.y, view.target.z);
   const distance = view.distance;
-  const yaw = degreesToRadians(cameraSettings.yawDegrees ?? 0);
-  const pitch = degreesToRadians(clamp(Number(cameraSettings.pitchDegrees ?? 35) || 35, -90, 90));
-  const horizontal = Math.cos(pitch);
+  const cameraFrame = cameraRenderFrame(cameraSettings);
   const projection = String(cameraSettings.projection || "").toLowerCase();
   const near = 0.1;
   const far = Math.max(1000, distance * 4);
   const camera = projection === "orthographic"
     ? buildOrthographicCamera(THREE, aspect, view.visibleHeight, near, far)
     : new THREE.PerspectiveCamera(34, aspect, near, far);
-  camera.up.set(0, 1, 0);
-  if (Math.abs(Math.cos(pitch)) < 0.001) {
-    camera.up.set(0, 0, -Math.sign(Math.sin(pitch)) || -1);
-  }
+  camera.up.set(cameraFrame.up.x, cameraFrame.up.y, cameraFrame.up.z);
   camera.position.set(
-    targetPoint.x - Math.sin(yaw) * horizontal * distance,
-    targetPoint.y + Math.sin(pitch) * distance,
-    targetPoint.z + Math.cos(yaw) * horizontal * distance,
+    targetPoint.x - cameraFrame.forward.x * distance,
+    targetPoint.y - cameraFrame.forward.y * distance,
+    targetPoint.z - cameraFrame.forward.z * distance,
   );
   camera.lookAt(targetPoint);
   return camera;
@@ -1258,6 +1338,7 @@ function threeViewPayload(frame, camera, canvas) {
     camera: {
       yawDegrees: Number(frame.camera?.yawDegrees ?? 0),
       pitchDegrees: Number(frame.camera?.pitchDegrees ?? 35),
+      rollDegrees: Number(frame.camera?.rollDegrees ?? 0),
       zoom: Number(frame.camera?.zoom ?? frame.editorView?.zoom ?? 1) || 1,
       projection: String(frame.camera?.projection || "").toLowerCase() === "orthographic" ? "orthographic" : "",
     },
@@ -1414,7 +1495,8 @@ function viewportFocusVisualRenderBounds(frame) {
       continue;
     }
     const sourceKey = `${cellKey(frame.focusCell.position)}:${objectIndex}`;
-    const objectOrder = objectRenderOrder(object, objectIndex);
+    const priority = objectRenderOrder(frame, object, objectIndex);
+    const objectOrder = (cellRenderIndex(frame, frame.focusCell.position || {}) * spriteOrder(frame).priorities.length) + priority;
     for (const voxel of objectVoxels(frame, frame.focusCell.position || {}, object, sourceKey, objectOrder)) {
       bounds.minX = Math.min(bounds.minX, voxel.bounds.x0);
       bounds.maxX = Math.max(bounds.maxX, voxel.bounds.x1);
@@ -1465,23 +1547,45 @@ function viewportProjectedBounds(frame) {
 }
 
 function projectRenderPointForCamera(point, cameraSettings) {
+  const frame = cameraRenderFrame(cameraSettings);
+  return {
+    x: point.x * frame.right.x + point.y * frame.right.y + point.z * frame.right.z,
+    y: point.x * frame.up.x + point.y * frame.up.y + point.z * frame.up.z,
+  };
+}
+
+function cameraRenderFrame(cameraSettings) {
   const yaw = degreesToRadians(cameraSettings.yawDegrees ?? 0);
   const pitch = degreesToRadians(clamp(Number(cameraSettings.pitchDegrees ?? 35) || 35, -90, 90));
+  const roll = degreesToRadians(cameraSettings.rollDegrees ?? 0);
   const horizontal = Math.cos(pitch);
-  const right = { x: Math.cos(yaw), y: 0, z: Math.sin(yaw) };
+  const baseRight = { x: Math.cos(yaw), y: 0, z: Math.sin(yaw) };
   const forward = {
     x: Math.sin(yaw) * horizontal,
     y: -Math.sin(pitch),
     z: -Math.cos(yaw) * horizontal,
   };
+  const baseUp = {
+    x: baseRight.y * forward.z - baseRight.z * forward.y,
+    y: baseRight.z * forward.x - baseRight.x * forward.z,
+    z: baseRight.x * forward.y - baseRight.y * forward.x,
+  };
+  const cosRoll = Math.cos(roll);
+  const sinRoll = Math.sin(roll);
+  const right = {
+    x: baseRight.x * cosRoll + baseUp.x * sinRoll,
+    y: baseRight.y * cosRoll + baseUp.y * sinRoll,
+    z: baseRight.z * cosRoll + baseUp.z * sinRoll,
+  };
   const up = {
-    x: right.y * forward.z - right.z * forward.y,
-    y: right.z * forward.x - right.x * forward.z,
-    z: right.x * forward.y - right.y * forward.x,
+    x: -baseRight.x * sinRoll + baseUp.x * cosRoll,
+    y: -baseRight.y * sinRoll + baseUp.y * cosRoll,
+    z: -baseRight.z * sinRoll + baseUp.z * cosRoll,
   };
   return {
-    x: point.x * right.x + point.y * right.y + point.z * right.z,
-    y: point.x * up.x + point.y * up.y + point.z * up.z,
+    right,
+    up,
+    forward,
   };
 }
 

@@ -11,7 +11,7 @@ tween = true
 tween_duration = 180ms
 }
 
-layers {
+slots {
 Goal
 Player:directions Wall
 }

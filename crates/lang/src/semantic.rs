@@ -219,7 +219,7 @@ score = 1
         let source = r#"
 title = rewrite_selector_semantics
 puzzle board {
-layers {
+slots {
 actor = Player Box
 }
 rules {
@@ -249,7 +249,7 @@ rules {
 title = implicit_level_event_semantics
 
 puzzle board {
-layers {
+slots {
 actor = Player
 }
 legend P = Player
@@ -287,7 +287,7 @@ P
 title = standard_move_semantics
 
 puzzle board {
-layers {
+slots {
 actor = Player
 }
 rules {
@@ -311,7 +311,7 @@ move
 title = routine_call_semantics
 
 puzzle board {
-layers {
+slots {
 actor = Player Wall
 }
 routine push_player once {
@@ -440,7 +440,7 @@ P
 title = rewrite_prefix_semantics
 
 puzzle board {
-layers {
+slots {
 actor = Player Wall
 }
 rules {
@@ -506,7 +506,7 @@ routine push_player {
 title = surface_semantic_projection
 
 puzzle board {
-layers {
+slots {
 actor = Player Wall
 }
 rules {
@@ -548,7 +548,7 @@ routine push_player {
 title = anonymous_layer_semantics
 
 puzzle board {
-layers {
+slots {
 Floor
 Goal
 solid = Player Box Wall
@@ -684,7 +684,7 @@ assets {
 }
 
 puzzle board {
-layers {
+slots {
 actor = Player
 }
 render {
@@ -834,7 +834,7 @@ puzzle board {
 tags {
 kind = A B
 }
-layers {
+slots {
 actor = Block:kind
 }
 sprites {
@@ -888,7 +888,7 @@ shape Block:kind
 title = sprite_property_semantics
 
 puzzle board {
-layers {
+slots {
 objects = Box
 }
 sprites {
@@ -933,12 +933,144 @@ frame_duration = 60ms
     }
 
     #[test]
+    fn classifies_sprite_property_values_from_sprite_grammar() {
+        let source = r#"
+puzzle board {
+slots {
+objects = Arrow
+}
+sprites {
+sprite {
+selector = Arrow:horizontal
+colors = #fff ink
+shape = arrow_shape:horizontal
+sampling = pixelated
+duration = 120ms
+translate world offset
+rotate local horizontal from front around up
+flip mirrored
+}
+}
+}
+"#;
+        let tokens = semantic_tokens(source);
+        let find = |needle: &str| source.find(needle).unwrap();
+
+        assert_semantic_token(
+            source,
+            &tokens,
+            find("selector ="),
+            "selector",
+            SemanticKind::Setting,
+        );
+        assert_semantic_token(
+            source,
+            &tokens,
+            find("Arrow:horizontal"),
+            "Arrow",
+            SemanticKind::Object,
+        );
+        assert_semantic_token(
+            source,
+            &tokens,
+            find("Arrow:horizontal") + "Arrow:".len(),
+            "horizontal",
+            SemanticKind::Variant,
+        );
+        assert_semantic_token(source, &tokens, find("ink"), "ink", SemanticKind::Color);
+        assert_semantic_token(
+            source,
+            &tokens,
+            find("arrow_shape:horizontal"),
+            "arrow_shape",
+            SemanticKind::Asset,
+        );
+        assert_semantic_token(
+            source,
+            &tokens,
+            find("arrow_shape:horizontal") + "arrow_shape:".len(),
+            "horizontal",
+            SemanticKind::Variant,
+        );
+        assert_semantic_token(
+            source,
+            &tokens,
+            find("pixelated"),
+            "pixelated",
+            SemanticKind::Literal,
+        );
+        assert_semantic_token(
+            source,
+            &tokens,
+            find("120ms"),
+            "120ms",
+            SemanticKind::Number,
+        );
+        assert_semantic_token(
+            source,
+            &tokens,
+            find("world offset"),
+            "world",
+            SemanticKind::Keyword,
+        );
+        assert_semantic_token(
+            source,
+            &tokens,
+            find("world offset") + "world ".len(),
+            "offset",
+            SemanticKind::Binding,
+        );
+        let rotate = find("rotate local horizontal from front around up");
+        for (offset, text) in [
+            ("rotate ".len(), "local"),
+            ("rotate local horizontal ".len(), "from"),
+            ("rotate local horizontal from front ".len(), "around"),
+        ] {
+            assert_semantic_token(
+                source,
+                &tokens,
+                rotate + offset,
+                text,
+                SemanticKind::Keyword,
+            );
+        }
+        assert_semantic_token(
+            source,
+            &tokens,
+            rotate + "rotate local ".len(),
+            "horizontal",
+            SemanticKind::Binding,
+        );
+        assert_semantic_token(
+            source,
+            &tokens,
+            rotate + "rotate local horizontal from ".len(),
+            "front",
+            SemanticKind::Variant,
+        );
+        assert_semantic_token(
+            source,
+            &tokens,
+            rotate + "rotate local horizontal from front around ".len(),
+            "up",
+            SemanticKind::Variant,
+        );
+        assert_semantic_token(
+            source,
+            &tokens,
+            find("mirrored"),
+            "mirrored",
+            SemanticKind::Binding,
+        );
+    }
+
+    #[test]
     fn classifies_rule_selectors_from_parser_resolved_surface_tokens() {
         let source = r#"
 title = selector_parser_resolved_surface_tokens
 
 puzzle board {
-layers {
+slots {
 each A:directions
 }
 groups {
@@ -1002,7 +1134,7 @@ level "start" {
     fn classifies_rule_for_expansion_header_from_parser_resolved_surface_tokens() {
         let source = r#"
 puzzle board {
-layers {
+slots {
 layer1 = Background
 layer2 = Wall
 each Boundary:directions
@@ -1070,7 +1202,7 @@ map D_rev D {
 F -> B
 B -> F
 }
-layers {
+slots {
 You:D Count:N
 }
 rules {
@@ -1110,7 +1242,7 @@ puzzle board {
 tags {
 D = F B
 }
-layers {
+slots {
 You:D Crate
 }
 groups {
@@ -1165,7 +1297,7 @@ puzzle board {
 tags {
 D = F B
 }
-layers {
+slots {
 You:D Crate
 }
 groups {
@@ -1257,7 +1389,7 @@ puzzle board {
 tags {
 T = A
 }
-layers {
+slots {
 Player
 }
 groups {
@@ -1291,7 +1423,7 @@ heading "Title"
         for (needle, text) in [
             ("puzzle board", "puzzle"),
             ("tags {", "tags"),
-            ("layers {", "layers"),
+            ("slots {", "slots"),
             ("groups {", "groups"),
             ("rules {", "rules"),
             ("on_level_start {", "on_level_start"),
@@ -1320,7 +1452,7 @@ marks {
 flag = bool
 tint = color
 }
-layers {
+slots {
 actor = Player
 }
 rules {
@@ -1379,7 +1511,7 @@ puzzle board {
 marks {
 mark = bool
 }
-layers {
+slots {
 actor = Player
 }
 rules {
@@ -1430,7 +1562,7 @@ map flip kind {
 a -> b
 b -> a
 }
-layers {
+slots {
 Background
 Background2
 Count:kind Ink:kind

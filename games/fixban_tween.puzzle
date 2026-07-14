@@ -26,7 +26,7 @@ down -> left
 left -> up
 }
 
-layers {
+slots {
 @Floor
 @Shade
 target = Target:kind

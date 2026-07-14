@@ -14,7 +14,7 @@ marks {
 opening
 }
 
-layers {
+slots {
 Floor
 Key:color
 Player Door:color Wall

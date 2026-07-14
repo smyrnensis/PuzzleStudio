@@ -330,6 +330,7 @@ fn parse_visuals_block(
     let mut color_aliases = HashMap::<String, String>::new();
     let mut colors = HashMap::<String, VisualColorTable>::new();
     let mut sprite_entries = Vec::<crate::sprite_authoring::SpriteAttachmentSyntax>::new();
+    let mut order = None::<puzzle_authoring::SpriteOrderSurface>;
     let mut i = resource.body_start;
 
     while i < resource.body_end {
@@ -424,6 +425,15 @@ fn parse_visuals_block(
                     "colors table was renamed to palette; sprite color rows still use colors",
                 ));
             }
+            ["order"] => {
+                if order.is_some() {
+                    return Err(parse_error(line, "duplicate sprite order block"));
+                }
+                let (parsed, next) = puzzle_authoring::parse_sprite_order_surface(lines, i)
+                    .map_err(|error| parse_error(line, error.message()))?;
+                order = Some(parsed);
+                i = next;
+            }
             ["sprite"] if is_block_header_line(line) => {
                 let entry = collect_sprite_attachment_entry(lines, i)?;
                 i = entry.next_index;
@@ -457,6 +467,11 @@ fn parse_visuals_block(
             visuals,
         )?;
     }
+    visuals.order = crate::lib_authoring_parse_order::lower_sprite_order(
+        order.as_ref(),
+        catalog,
+        &lines[start],
+    )?;
     Ok(resource.next_index)
 }
 
@@ -2174,12 +2189,12 @@ fn expand_visual_selector(
 
     let parts = selector.split(':').collect::<Vec<_>>();
     let Some(schema) = catalog.object_schemas.get(parts[0]) else {
-        return Err(parse_error(line, "unknown visual object selector"));
+        return Err(parse_error(line, "unknown sprite object selector"));
     };
     if parts.len() - 1 > schema.axes.len() {
         return Err(parse_error(
             line,
-            "visual object selector has too many tags",
+            "sprite object selector has too many tags",
         ));
     }
 
@@ -2191,19 +2206,19 @@ fn expand_visual_selector(
             .variants
             .iter()
             .find(|variant| variant.values == target_values)
-            .ok_or_else(|| parse_error(line, "visual object selector target not found"))?;
+            .ok_or_else(|| parse_error(line, "sprite object selector target not found"))?;
         let object_name = catalog
             .object_labels
             .get(&variant.object)
             .cloned()
-            .ok_or_else(|| parse_error(line, "visual object label missing"))?;
+            .ok_or_else(|| parse_error(line, "sprite object label missing"))?;
         if targets
             .iter()
             .any(|target: &VisualSelectorTarget| target.object_name == object_name)
         {
             return Err(parse_error(
                 line,
-                "visual object selector maps multiple bindings to one object",
+                "sprite object selector maps multiple bindings to one object",
             ));
         }
         targets.push(VisualSelectorTarget {
@@ -2214,7 +2229,7 @@ fn expand_visual_selector(
     if targets.is_empty() {
         return Err(parse_error(
             line,
-            "visual object selector matched no objects",
+            "sprite object selector matched no objects",
         ));
     }
     Ok(targets)
@@ -2304,7 +2319,7 @@ fn visual_selector_assignments(
                 if !schema_axis_values(schema, index)?.contains(&target_value) {
                     return Err(parse_error(
                         line,
-                        "visual object selector target value is not in tag slot",
+                        "sprite object selector target value is not in tag slot",
                     ));
                 }
                 let mut target_values = target_prefix.clone();

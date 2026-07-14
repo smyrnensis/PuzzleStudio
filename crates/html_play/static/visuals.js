@@ -4,6 +4,10 @@
       return {
         aliases: { ...(config.aliases || {}) },
         sprites: { ...(config.sprites || {}) },
+        order: {
+          direction_priority: [...(config.order?.direction_priority || [])],
+          priorities: [...(config.order?.priorities || [])],
+        },
         animations: { ...(config.animations || {}) },
         triggers: { ...(config.triggers || {}) },
         animationDefaults: { ...(config.animationDefaults || {}) },

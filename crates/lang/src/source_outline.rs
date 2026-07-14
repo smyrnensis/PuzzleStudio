@@ -1,15 +1,3 @@
-use crate::{
-    authoring_grammar::{self, AuthoringKind, AuthoringOutlinePolicy},
-    surface::{SurfaceDocument, SurfaceStructuralBlock, SurfaceStructuralBlockRole},
-};
-use std::collections::HashMap;
-
-#[derive(Clone, Debug)]
-struct OutlineStackEntry {
-    id: Option<String>,
-    suppress_children: bool,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SourceOutlineItem {
     pub id: String,
@@ -21,93 +9,14 @@ pub struct SourceOutlineItem {
     pub parent: Option<String>,
 }
 
-pub fn source_outline(source: &str) -> Vec<SourceOutlineItem> {
-    let document = crate::parse_surface_structure_document(source);
-    source_outline_from_document(&document)
+/// Builds a profile-aware canonical analysis and projects its cached outline product.
+pub fn source_outline(source: &str, profile: crate::PuzzleSourceProfile) -> Vec<SourceOutlineItem> {
+    crate::analyze_source_for_profile(source, profile).outline_items()
 }
 
-pub(crate) fn source_outline_from_document(document: &SurfaceDocument) -> Vec<SourceOutlineItem> {
-    let mut items = Vec::new();
-    let mut stack = Vec::<OutlineStackEntry>::new();
-    let mut ids_by_item_key = HashMap::<(usize, String, String), String>::new();
-    let mut next_id = 0usize;
-
-    for (block_index, block) in document
-        .structural_blocks
-        .iter()
-        .enumerate()
-        .filter(|(_, block)| matches!(block.role, SurfaceStructuralBlockRole::SourceTree))
-    {
-        while stack.len() > block.depth {
-            stack.pop();
-        }
-        if source_outline_suppresses_children(&stack) {
-            stack.push(OutlineStackEntry {
-                id: None,
-                suppress_children: true,
-            });
-            continue;
-        }
-        let Some(policy) = outline_block_policy(block) else {
-            stack.push(OutlineStackEntry {
-                id: None,
-                suppress_children: true,
-            });
-            continue;
-        };
-        let suppress_children = matches!(policy, AuthoringOutlinePolicy::CollapseChildren)
-            || outline_block_suppresses_children(block);
-        let id = push_source_outline_item(
-            &mut items,
-            &mut ids_by_item_key,
-            &stack,
-            &mut next_id,
-            block.start,
-            block.end,
-            outline_block_kind(document, block_index),
-            outline_block_label(document, block_index),
-        );
-        stack.push(OutlineStackEntry {
-            id: Some(id),
-            suppress_children,
-        });
-    }
-
-    items
-}
-
-fn push_source_outline_item(
-    items: &mut Vec<SourceOutlineItem>,
-    ids_by_item_key: &mut HashMap<(usize, String, String), String>,
-    stack: &[OutlineStackEntry],
-    next_id: &mut usize,
-    start: usize,
-    end: usize,
-    kind: String,
-    label: String,
-) -> String {
-    let key = (start, kind.clone(), label.clone());
-    if let Some(id) = ids_by_item_key.get(&key) {
-        return id.clone();
-    }
-    let id = format!("outline-{next_id}");
-    *next_id += 1;
-    let parent = stack.iter().rev().find_map(|entry| entry.id.clone());
-    items.push(SourceOutlineItem {
-        id: id.clone(),
-        kind,
-        label,
-        start,
-        end,
-        depth: stack.iter().filter(|entry| entry.id.is_some()).count(),
-        parent,
-    });
-    ids_by_item_key.insert(key, id.clone());
-    id
-}
-
-pub fn source_outline_json(source: &str) -> String {
-    let items = source_outline(source);
+/// Serializes the profile-aware cached outline projection.
+pub fn source_outline_json(source: &str, profile: crate::PuzzleSourceProfile) -> String {
+    let items = source_outline(source, profile);
     let mut out = String::from("{\"items\":[");
     for (index, item) in items.iter().enumerate() {
         if index > 0 {
@@ -117,108 +26,6 @@ pub fn source_outline_json(source: &str) -> String {
     }
     out.push_str("]}");
     out
-}
-
-fn source_outline_suppresses_children(stack: &[OutlineStackEntry]) -> bool {
-    stack.iter().any(|entry| entry.suppress_children)
-}
-
-fn outline_block_suppresses_children(block: &SurfaceStructuralBlock) -> bool {
-    if block.authoring_kind.is_some() {
-        return false;
-    }
-    let first = outline_block_header_kind(block);
-    matches!(
-        first.as_str(),
-        "keys" | "inputs" | "routine" | "query" | "fix"
-    ) || first.starts_with("on_")
-        || block.virtual_braces
-}
-
-fn outline_block_kind(document: &SurfaceDocument, block_index: usize) -> String {
-    let block = &document.structural_blocks[block_index];
-    if is_sprite_outline_entry(document, block_index) {
-        return "sprite".to_string();
-    }
-    outline_block_header_kind(block)
-}
-
-fn outline_block_header_kind(block: &SurfaceStructuralBlock) -> String {
-    if let Some(kind) = block.authoring_kind {
-        return authoring_grammar::authoring_kind_spec(kind)
-            .header
-            .usage
-            .split_whitespace()
-            .next()
-            .unwrap_or("")
-            .to_string();
-    }
-    block
-        .header
-        .split_whitespace()
-        .next()
-        .unwrap_or("")
-        .to_string()
-}
-
-fn outline_block_label(document: &SurfaceDocument, block_index: usize) -> String {
-    let block = &document.structural_blocks[block_index];
-    if block.authoring_kind == Some(AuthoringKind::SpriteConfig) {
-        return explicit_sprite_selector(document, block_index)
-            .unwrap_or_else(|| block.header.clone());
-    }
-    if is_sprite_outline_entry(document, block_index) {
-        return block
-            .header
-            .split_whitespace()
-            .next()
-            .unwrap_or("")
-            .to_string();
-    }
-    block.header.clone()
-}
-
-fn is_sprite_outline_entry(document: &SurfaceDocument, block_index: usize) -> bool {
-    let block = &document.structural_blocks[block_index];
-    block.authoring_kind == Some(AuthoringKind::SpriteConfig)
-        || (block.scope == crate::source::SourceScope::VisualShapeEntry
-            && block
-                .parent
-                .and_then(|parent| document.structural_blocks.get(parent))
-                .is_some_and(|parent| parent.authoring_kind == Some(AuthoringKind::SpritesConfig)))
-}
-
-fn explicit_sprite_selector(document: &SurfaceDocument, block_index: usize) -> Option<String> {
-    let block = &document.structural_blocks[block_index];
-    let sibling_start = document
-        .structural_blocks
-        .iter()
-        .skip(block_index + 1)
-        .filter(|candidate| candidate.parent == block.parent)
-        .map(|candidate| candidate.start)
-        .next()
-        .unwrap_or(usize::MAX);
-    document
-        .lines
-        .iter()
-        .filter(|line| line.start > block.end && line.start < sibling_start)
-        .find_map(|line| {
-            authoring_grammar::authoring_definition_single_value(
-                AuthoringKind::SpriteConfig,
-                "selector",
-                &line.content,
-            )
-            .ok()
-            .flatten()
-        })
-}
-
-fn outline_block_policy(block: &SurfaceStructuralBlock) -> Option<AuthoringOutlinePolicy> {
-    let policy = block
-        .authoring_kind
-        .map(|kind| authoring_grammar::authoring_kind_spec(kind).outline_policy)
-        .unwrap_or(AuthoringOutlinePolicy::Visible);
-    (policy != AuthoringOutlinePolicy::Hidden).then_some(policy)
 }
 
 fn push_item_json(out: &mut String, item: &SourceOutlineItem) {
@@ -272,9 +79,22 @@ fn push_json_string_value(out: &mut String, value: &str) {
 
 #[cfg(test)]
 mod tests {
-    use crate::{authoring_grammar::AuthoringKind, parse_surface_structure_document};
+    use crate::{
+        PuzzleSourceProfile, authoring_grammar::AuthoringKind, parse_surface_structure_document,
+    };
 
-    use super::{source_outline, source_outline_from_document, source_outline_json};
+    use super::{
+        SourceOutlineItem, source_outline as source_outline_for_profile,
+        source_outline_json as source_outline_json_for_profile,
+    };
+
+    fn source_outline(source: &str) -> Vec<SourceOutlineItem> {
+        source_outline_for_profile(source, PuzzleSourceProfile::Puzzle2d)
+    }
+
+    fn source_outline_json(source: &str) -> String {
+        source_outline_json_for_profile(source, PuzzleSourceProfile::Puzzle2d)
+    }
 
     #[test]
     fn source_outline_keeps_author_source_order() {
@@ -376,6 +196,34 @@ Light
                 (1, "sprite".to_string(), "Crate".to_string()),
                 (1, "sprite".to_string(), "Light".to_string()),
             ]
+        );
+    }
+
+    #[test]
+    fn author_chosen_shape_names_never_become_outline_kinds() {
+        let source = r#"
+shapes {
+  arrow {
+    0
+  }
+  author_chosen_shape_name {
+    0
+  }
+}
+"#;
+        let items = source_outline(source)
+            .into_iter()
+            .filter(|item| item.depth == 1)
+            .map(|item| (item.kind, item.label))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            items,
+            vec![
+                ("shape".to_string(), "arrow".to_string()),
+                ("shape".to_string(), "author_chosen_shape_name".to_string(),),
+            ],
+            "author-selected shape labels must not create new outline kinds or icon requirements"
         );
     }
 
@@ -521,7 +369,7 @@ sounds {
             vec![AuthoringKind::SoundsConfig, AuthoringKind::SfxSoundConfig]
         );
 
-        let labels = source_outline_from_document(&document)
+        let labels = source_outline(source)
             .into_iter()
             .map(|item| (item.depth, item.kind, item.label))
             .collect::<Vec<_>>();
@@ -605,26 +453,37 @@ puzzle board {
     }
 
     #[test]
-    fn source_outline_consumes_surface_structure_document() {
+    fn source_outline_projection_contains_no_source_recognizer() {
         let source = include_str!("source_outline.rs");
-        let required = "parse_surface_structure_document";
-        assert!(
-            source.contains(required),
-            "source_outline should consume the parser-owned thin structure product"
+        let production = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("outline production source");
+        assert_eq!(
+            production
+                .matches("profile: crate::PuzzleSourceProfile")
+                .count(),
+            2,
+            "public outline entrypoints must require an explicit source profile"
         );
-        let forbidden_fragments = [
-            ["scan_source", "_context"],
-            ["Source", "Context"],
-            ["SourceStructure", "Event"],
-            ["SourceBlock", "Role"],
-            ["outline", "_header"],
-            ["level", "_name"],
-        ];
-        for parts in forbidden_fragments {
-            let forbidden = parts.concat();
+        for forbidden in [
+            "SurfaceDocument",
+            "structural_blocks",
+            ".header",
+            ".lines",
+            ".content",
+            "split_whitespace",
+            "starts_with",
+            "authoring_grammar",
+            "AuthoringKind",
+            "SourceScope",
+            "scan_",
+            "parse_surface",
+            "build_surface_outline_items",
+        ] {
             assert!(
-                !source.contains(&forbidden),
-                "source_outline must not rebuild grammar or scanner products via {forbidden}"
+                !production.contains(forbidden),
+                "outline projection must consume parser-owned items, not recognize source via {forbidden}"
             );
         }
     }

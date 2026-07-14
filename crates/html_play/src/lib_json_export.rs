@@ -568,15 +568,6 @@ fn push_export_engine(out: &mut String, loaded: &LoadedGame) {
     out.push(',');
     push_export_queries(out, &loaded.game);
     out.push(',');
-    out.push_str("\"visualObjects\":[");
-    for (index, object) in loaded.display_objects.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        out.push_str(&object.0.to_string());
-    }
-    out.push(']');
-    out.push(',');
     out.push_str("\"persistentVars\":[");
     for (index, var) in loaded.persistent_vars.iter().enumerate() {
         if index > 0 {
@@ -602,23 +593,14 @@ fn push_export_engine(out: &mut String, loaded: &LoadedGame) {
         "false"
     });
     out.push(',');
-    out.push_str("\"displayLevelStartProgram\":");
-    push_empty_rule_program(out);
-    out.push(',');
     out.push_str("\"levelClearProgram\":");
-    push_empty_rule_program(out);
-    out.push(',');
-    out.push_str("\"displayLevelClearProgram\":");
-    push_empty_rule_program(out);
-    out.push(',');
-    out.push_str("\"displayProgram\":");
     push_empty_rule_program(out);
     out.push('}');
 }
 
 fn push_compiled_play_bundle(out: &mut String, loaded: &LoadedGame) {
     out.push_str("\"compiledPlay\":{");
-    push_json_number(out, "version", 1);
+    push_json_number(out, "version", 2);
     out.push(',');
     push_json_pair(out, "model", "grid2");
     out.push(',');
@@ -629,15 +611,6 @@ fn push_compiled_play_bundle(out: &mut String, loaded: &LoadedGame) {
     push_compact_objects(out, loaded);
     out.push(',');
     push_compact_queries(out, &loaded.game);
-    out.push(',');
-    out.push('[');
-    for (index, object) in loaded.display_objects.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        out.push_str(&object.0.to_string());
-    }
-    out.push(']');
     out.push(',');
     push_compact_transition_programs(out, loaded);
     out.push(',');
@@ -813,7 +786,7 @@ fn push_rule_animation(out: &mut String, animation: &RuleAnimation) {
 
 fn push_runtime_loaded_game_bundle(out: &mut String, loaded: &LoadedGame) {
     out.push_str("\"runtimeLoadedGame\":{");
-    push_json_number(out, "version", 1);
+    push_json_number(out, "version", 2);
     out.push_str(",\"loaded\":");
     let loaded_json =
         runtime_loaded_game_json(loaded).expect("runtime loaded game bundle should serialize");
@@ -872,12 +845,6 @@ fn push_compact_transition_programs(out: &mut String, loaded: &LoadedGame) {
     push_compact_optional_rule_program(out, loaded.level_start_program.as_deref());
     out.push(',');
     push_compact_optional_rule_program(out, loaded.level_clear_program.as_deref());
-    out.push(',');
-    push_compact_optional_rule_program(out, loaded.display_level_start_program.as_deref());
-    out.push(',');
-    push_compact_optional_rule_program(out, loaded.display_level_clear_program.as_deref());
-    out.push(',');
-    push_compact_optional_rule_program(out, loaded.display_program.as_deref());
     out.push(']');
 }
 

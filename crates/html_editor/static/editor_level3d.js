@@ -235,6 +235,7 @@ function renderLevel3dPreviewControls() {
   const camera = level3dPreviewCamera();
   renderLevel3dPreviewScrub(level3dCameraYawScrub, Math.round(camera.yawDegrees));
   renderLevel3dPreviewScrub(level3dCameraPitchScrub, Math.round(camera.pitchDegrees));
+  renderLevel3dPreviewScrub(level3dCameraRollScrub, Math.round(camera.rollDegrees));
   renderLevel3dPreviewScrub(level3dCameraZoomScrub, Number(camera.zoom.toFixed(2)));
   const origin = level3dPreviewOriginState();
   renderLevel3dPreviewScrub(level3dOriginXScrub, level3dFormatPreviewDecimal(origin.x));
@@ -3138,6 +3139,7 @@ function updateLevel3dPlaytestControls() {
     updateLevel3dButton,
     level3dCameraYawScrub,
     level3dCameraPitchScrub,
+    level3dCameraRollScrub,
     level3dCameraZoomScrub,
     level3dOriginXScrub,
     level3dOriginYScrub,
@@ -3329,6 +3331,7 @@ function level3dRuntimePreviewCamera(source) {
   return {
     yawDegrees: camera.yawDegrees,
     pitchDegrees: camera.pitchDegrees,
+    rollDegrees: camera.rollDegrees,
     zoom: camera.zoom,
   };
 }
@@ -3593,7 +3596,7 @@ function level3dObjectIsVisible(object, exportData = previewExport) {
 }
 
 function level3dLayerCamera() {
-  return { yawDegrees: 0, pitchDegrees: 90, zoom: 1, projection: "orthographic" };
+  return { yawDegrees: 0, pitchDegrees: 90, rollDegrees: 0, zoom: 1, projection: "orthographic" };
 }
 
 function level3dLayerSettings(settings = {}) {
@@ -3951,6 +3954,7 @@ function level3dNormalizeRuntimeProjectionView(view) {
     camera: {
       yawDegrees: Number(view.camera?.yawDegrees ?? 0),
       pitchDegrees: Number(view.camera?.pitchDegrees ?? 35),
+      rollDegrees: Number(view.camera?.rollDegrees ?? 0),
       zoom: 1,
     },
     threeProjection: level3dNormalizeThreeProjection(view.threeProjection),
@@ -5549,6 +5553,7 @@ function level3dPreviewCamera(source) {
     LEVEL3D_CAMERA_MIN_PITCH_DEGREES,
     LEVEL3D_CAMERA_MAX_PITCH_DEGREES,
   );
+  level3dPreviewCameraState.rollDegrees = level3dNormalizeDegrees(level3dPreviewCameraState.rollDegrees ?? 0);
   level3dPreviewCameraState.zoom = level3dClampNumber(level3dPreviewCameraState.zoom, 0.25, 4);
   return level3dPreviewCameraState;
 }
@@ -5558,6 +5563,7 @@ function level3dBasePreviewCamera(source) {
   return {
     yawDegrees: Number(camera.yawDegrees ?? 15),
     pitchDegrees: Number(camera.pitchDegrees ?? 55),
+    rollDegrees: Number(camera.rollDegrees ?? 0),
     zoom: Number(camera.zoom ?? 1),
   };
 }
@@ -5607,20 +5613,10 @@ function level3dProjectPoint(position, view) {
   if (level3dUsesRuntimeProjectionView(view)) {
     return level3dProjectRuntimeSurfacePoint(position, view);
   }
-  const yaw = level3dDegreesToRadians(view.camera?.yawDegrees ?? 0);
-  const pitch = level3dDegreesToRadians(view.camera?.pitchDegrees ?? 35);
-  const zoom = view.camera?.zoom ?? 1;
-  const x = position.x - view.center.x;
-  const y = position.y - view.center.y;
-  const z = position.z - view.center.z;
-  const yawX = x * Math.cos(yaw) - y * Math.sin(yaw);
-  const yawY = x * Math.sin(yaw) + y * Math.cos(yaw);
-  const scale = view.scale * zoom;
-  return {
-    x: view.origin.x + yawX * scale,
-    y: view.origin.y + (-yawY * Math.sin(pitch) - z * Math.cos(pitch)) * scale,
-    depth: -yawY * Math.cos(pitch) + z * Math.sin(pitch),
-  };
+  if (!window.Puzzle3VisualCore?.projectOrthographic) {
+    throw new Error("3D level projection requires Puzzle3VisualCore.projectOrthographic");
+  }
+  return Puzzle3VisualCore.projectOrthographic(position, view);
 }
 
 function level3dProjectThreeSurfacePoint(position, view) {
@@ -5633,39 +5629,26 @@ function level3dProjectThreeCanvasPoint(position, view) {
   const size = projection.size || { width: 1, depth: 1, height: 1 };
   const camera = view.camera || {};
   const target = projection.target || { x: 0, y: 0, z: 0 };
-  const yaw = level3dDegreesToRadians(camera.yawDegrees ?? 0);
-  const pitch = level3dDegreesToRadians(camera.pitchDegrees ?? 35);
+  const cameraFrame = level3dCameraRenderFrame(camera);
   const distance = Math.max(0.0001, Number(projection.distance) || 1);
-  const horizontal = Math.cos(pitch);
   const cameraPosition = {
-    x: target.x - Math.sin(yaw) * horizontal * distance,
-    y: target.y + Math.sin(pitch) * distance,
-    z: target.z + Math.cos(yaw) * horizontal * distance,
+    x: target.x - cameraFrame.forward.x * distance,
+    y: target.y - cameraFrame.forward.y * distance,
+    z: target.z - cameraFrame.forward.z * distance,
   };
   const world = {
     x: Number(position.x) - (Math.max(1, Number(size.width) || 1) - 1) / 2,
     y: Number(position.z) - (Math.max(1, Number(size.height) || 1) - 1) / 2,
     z: (Math.max(1, Number(size.depth) || 1) - 1) / 2 - Number(position.y),
   };
-  const forward = level3dNormalizeVector({
-    x: target.x - cameraPosition.x,
-    y: target.y - cameraPosition.y,
-    z: target.z - cameraPosition.z,
-  });
-  let upSeed = { x: 0, y: 1, z: 0 };
-  if (Math.abs(Math.cos(pitch)) < 0.001) {
-    upSeed = { x: 0, y: 0, z: -Math.sign(Math.sin(pitch)) || -1 };
-  }
-  const right = level3dNormalizeVector(level3dCrossVector(forward, upSeed));
-  const up = level3dNormalizeVector(level3dCrossVector(right, forward));
   const relative = {
     x: world.x - cameraPosition.x,
     y: world.y - cameraPosition.y,
     z: world.z - cameraPosition.z,
   };
-  const cameraX = level3dDotVector(relative, right);
-  const cameraY = level3dDotVector(relative, up);
-  const cameraDepth = Math.max(0.0001, level3dDotVector(relative, forward));
+  const cameraX = level3dDotVector(relative, cameraFrame.right);
+  const cameraY = level3dDotVector(relative, cameraFrame.up);
+  const cameraDepth = Math.max(0.0001, level3dDotVector(relative, cameraFrame.forward));
   const width = Math.max(1, Number(view.width) || 1);
   const height = Math.max(1, Number(view.height) || 1);
   const aspect = Math.max(0.01, Number(projection.aspect) || width / height);
@@ -5688,12 +5671,32 @@ function level3dProjectThreeCanvasPoint(position, view) {
   };
 }
 
-function level3dNormalizeVector(vector) {
-  const length = Math.hypot(Number(vector.x) || 0, Number(vector.y) || 0, Number(vector.z) || 0) || 1;
+function level3dCameraRenderFrame(camera) {
+  const yaw = level3dDegreesToRadians(camera.yawDegrees ?? 0);
+  const pitch = level3dDegreesToRadians(camera.pitchDegrees ?? 35);
+  const roll = level3dDegreesToRadians(camera.rollDegrees ?? 0);
+  const horizontal = Math.cos(pitch);
+  const baseRight = { x: Math.cos(yaw), y: 0, z: Math.sin(yaw) };
+  const forward = {
+    x: Math.sin(yaw) * horizontal,
+    y: -Math.sin(pitch),
+    z: -Math.cos(yaw) * horizontal,
+  };
+  const baseUp = level3dCrossVector(baseRight, forward);
+  const cosRoll = Math.cos(roll);
+  const sinRoll = Math.sin(roll);
   return {
-    x: (Number(vector.x) || 0) / length,
-    y: (Number(vector.y) || 0) / length,
-    z: (Number(vector.z) || 0) / length,
+    right: {
+      x: baseRight.x * cosRoll + baseUp.x * sinRoll,
+      y: baseRight.y * cosRoll + baseUp.y * sinRoll,
+      z: baseRight.z * cosRoll + baseUp.z * sinRoll,
+    },
+    up: {
+      x: -baseRight.x * sinRoll + baseUp.x * cosRoll,
+      y: -baseRight.y * sinRoll + baseUp.y * cosRoll,
+      z: -baseRight.z * sinRoll + baseUp.z * cosRoll,
+    },
+    forward,
   };
 }
 
@@ -5723,6 +5726,7 @@ function level3dProjectRuntimeCanvasPoint(position, view) {
     camera: {
       yawDegrees: Number(view.camera?.yawDegrees ?? 0),
       pitchDegrees: Number(view.camera?.pitchDegrees ?? 35),
+      rollDegrees: Number(view.camera?.rollDegrees ?? 0),
       zoom: 1,
     },
     center: view.center || { x: 0, y: 0, z: 0 },
@@ -5732,21 +5736,10 @@ function level3dProjectRuntimeCanvasPoint(position, view) {
     },
     scale: Math.max(0.0001, Number(view.scale) || 1),
   };
-  if (window.Puzzle3VisualCore?.projectOrthographic) {
-    return Puzzle3VisualCore.projectOrthographic(position, projectionView);
+  if (!window.Puzzle3VisualCore?.projectOrthographic) {
+    throw new Error("3D runtime projection requires Puzzle3VisualCore.projectOrthographic");
   }
-  const yaw = level3dDegreesToRadians(projectionView.camera.yawDegrees);
-  const pitch = level3dDegreesToRadians(projectionView.camera.pitchDegrees);
-  const x = position.x - projectionView.center.x;
-  const y = position.y - projectionView.center.y;
-  const z = position.z - projectionView.center.z;
-  const yawX = x * Math.cos(yaw) - y * Math.sin(yaw);
-  const yawY = x * Math.sin(yaw) + y * Math.cos(yaw);
-  return {
-    x: projectionView.origin.x + yawX * projectionView.scale,
-    y: projectionView.origin.y + (-yawY * Math.sin(pitch) - z * Math.cos(pitch)) * projectionView.scale,
-    depth: -yawY * Math.cos(pitch) + z * Math.sin(pitch),
-  };
+  return Puzzle3VisualCore.projectOrthographic(position, projectionView);
 }
 
 function level3dRuntimeCanvasPointToSurface(point, view) {
@@ -6139,6 +6132,9 @@ function level3dPreviewValue(kind) {
   if (kind === "pitch") {
     return camera.pitchDegrees;
   }
+  if (kind === "roll") {
+    return camera.rollDegrees;
+  }
   if (kind === "zoom") {
     return camera.zoom;
   }
@@ -6180,6 +6176,8 @@ function setLevel3dPreviewValue(kind, value, options = {}) {
       LEVEL3D_CAMERA_MIN_PITCH_DEGREES,
       LEVEL3D_CAMERA_MAX_PITCH_DEGREES,
     );
+  } else if (kind === "roll") {
+    camera.rollDegrees = level3dNormalizeDegrees(value);
   } else if (kind === "zoom") {
     camera.zoom = level3dClampNumber(value, 0.25, 4);
   } else if (kind === "originX") {
@@ -6293,6 +6291,7 @@ level3dHeightInput?.addEventListener("change", () => {
 for (const scrub of [
   level3dCameraYawScrub,
   level3dCameraPitchScrub,
+  level3dCameraRollScrub,
   level3dCameraZoomScrub,
   level3dOriginXScrub,
   level3dOriginYScrub,

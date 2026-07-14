@@ -44,10 +44,59 @@ the typed `puzzle-scene` contract; it must not encode CSS or adapter sizing.
 Highlighting should remain Rust-owned. Browser/editor fallbacks may escape text,
 but must not grow a second JavaScript `.puzzle` grammar.
 
-The surface document path is moving toward typed `SurfaceDocument` /
-`SurfaceNode` / `SurfaceSink` data. Continue migrating parser, highlight, and
-completion behavior toward the shared token/span pipeline instead of duplicating
-effect vocabularies.
+`highlight.rs` is a projection boundary, not a lexer or tolerant parser. It may
+construct a profile-aware `SourceAnalysis` and request a typed full or range
+product. It must not inspect source characters, split tokens, recognize comments
+or quotes, match braces, infer selector punctuation, or classify owner-specific
+leaf content.
+
+The parser frontend owns one lossless `ParseSnapshot` per source revision. Its
+lexer may classify only context-free spelling. The structural and owner parsers
+that accept contextual syntax must attach token dispositions, diagnostics, and
+display facts during that same parse operation. Strict compile and editor
+products consume this same snapshot; neither may parse source text again.
+
+`source_lexical_product.rs` may exhaustively map parser-owned dispositions,
+semantic facts, and owner-produced display facts to colors. Source text and raw
+token payloads are deliberately absent from its function signatures. A viewport
+request must use binary range windows; it must not build or filter a
+whole-document highlight product first.
+
+If highlighting lacks a fact, extend the grammar owner that already accepts the
+syntax. Do not add a recognizer, source string, regex, syntax word list, or
+fallback to `highlight.rs`, `source_lexical_product.rs`, a surface scanner, or a
+parser-named highlight lexer. New disposition or semantic variants must make the
+display mapping fail to compile until mapping is explicit.
+
+Public and host highlighting entrypoints require an explicit `.puzzle` or
+`.puzzle3` profile. Do not restore a profile-free overload or infer a default
+dimension from source text.
+
+`source_outline.rs` is likewise a projection and wire-format boundary. It may
+create a profile-aware `SourceAnalysis`, clone the revision-local cached outline
+items, and serialize them. It must not inspect `SurfaceDocument` blocks, headers,
+lines, source characters, authoring grammar, scope names, or fixed syntax-word
+lists. Canonical block construction must attach typed outline kind, label, and
+child-suppression facts to each `SurfaceStructuralBlock` during the parser's
+existing structural pass. The parser-owned `source::outline_product` module in
+`source_outline_product.rs` may only assemble those typed facts into items; it
+must not inspect headers or line content either. Keep its builder call confined
+to the lazy `SourceAnalysis` outline cache. This laziness is required: viewport
+highlighting and other queries that do not request outline must not construct the
+outline product or walk the whole structural tree. Public and host outline
+entrypoints require an explicit source profile, and the editor must query the
+already-active analysis revision rather than parse a second source snapshot.
+
+`SurfaceDocument`, `SurfaceSourceScan`, and `SurfaceSink` are projections, not
+grammar authorities. Establish the lossless `ParseProduct<T>` contract before
+migrating owner behavior: every accepted logical piece retains original token
+identity and returns dispositions and display facts with its semantic value.
+Do not run an owner parser over `Vec<String>` and reconstruct positions later.
+Do not keep an owner-by-owner surface recognizer beside the new contract.
+`record_*_surface`, `scan_*_surface_ranges`, raw-source recognition, and any
+renamed equivalent must be deleted when the common contract is introduced.
+Missing facts must remain visible until the accepting parser emits them; a
+temporary legacy projector is not an allowed migration bridge.
 
 Sprite body parsing must preserve the distinction between explicit properties and
 owner-resolved bare content. A bare row after colors may be inline ASCII or a

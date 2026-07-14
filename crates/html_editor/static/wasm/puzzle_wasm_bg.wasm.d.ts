@@ -2,6 +2,7 @@
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
 export const activate_source_analysis: (a: number, b: number) => number;
+export const activate_source_analysis_with_profile: (a: number, b: number, c: number, d: number) => [number, number, number];
 export const active_source_analysis_entries_json: (a: number) => [number, number, number, number];
 export const active_source_analysis_highlight_range_json: (a: number, b: number, c: number, d: number) => [number, number, number, number];
 export const active_source_analysis_import_at_json: (a: number, b: number, c: number, d: number) => [number, number, number, number];

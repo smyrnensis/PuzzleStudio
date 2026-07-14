@@ -9,6 +9,7 @@
   let nextAnalysisWorkerRequestId = 1;
   const analysisWorkerRequests = new Map();
   let analysisWorkerSource = null;
+  let analysisWorkerSourceProfile = null;
   let analysisWorkerMutation = Promise.resolve();
 
   function runtimeUnavailable(message) {
@@ -77,11 +78,17 @@
     });
   }
 
-  function resetAnalysisWorkerSource(source) {
+  function resetAnalysisWorkerSource(source, sourceProfile) {
     const text = asString(source);
+    const profile = asString(sourceProfile);
+    if (profile !== "puzzle2d" && profile !== "puzzle3d") {
+      throw runtimeUnavailable("Editor source analysis requires a puzzle2d or puzzle3d source profile.");
+    }
     analysisWorkerSource = text;
+    analysisWorkerSourceProfile = profile;
     analysisWorkerMutation = analysisWorkerMutation.then(() => postAnalysisWorker("reset", {
       source: text,
+      sourceProfile: profile,
     }));
     return analysisWorkerMutation;
   }
@@ -122,8 +129,12 @@
 
   async function querySynchronizedAnalysisWorker(method, source, payload = {}) {
     const expected = asString(source);
+    const expectedProfile = asString(payload.sourceProfile);
     if (analysisWorkerSource !== expected) {
       throw runtimeUnavailable("Editor source analysis is not synchronized with CodeMirror.");
+    }
+    if (expectedProfile && analysisWorkerSourceProfile !== expectedProfile) {
+      throw runtimeUnavailable("Editor source analysis profile is not synchronized with the active document.");
     }
     await analysisWorkerMutation;
     if (analysisWorkerSource !== expected) {
@@ -278,12 +289,15 @@
         rangeStart,
         rangeEnd,
         includeOutline: Boolean(payload.includeOutline),
+        sourceProfile: asString(payload.sourceProfile),
       });
     },
 
     async sourceOutline(payload = {}) {
       const source = asString(payload.source);
-      return querySynchronizedAnalysisWorker("outline", source);
+      return querySynchronizedAnalysisWorker("outline", source, {
+        sourceProfile: asString(payload.sourceProfile),
+      });
     },
 
     async translatePuzzleScript(source) {
@@ -379,8 +393,8 @@
       return analysis.payload;
     },
 
-    resetSourceAnalysis(source) {
-      return resetAnalysisWorkerSource(source);
+    resetSourceAnalysis(source, sourceProfile) {
+      return resetAnalysisWorkerSource(source, sourceProfile);
     },
 
     applySourceAnalysisEdits(changes, source) {

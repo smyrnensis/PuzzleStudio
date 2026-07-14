@@ -9,8 +9,9 @@ mod win;
 pub use ids::{ConditionId3, InputId, LayerId, MarkId3, ObjectId, RuleId3, VariableId};
 pub use level::{Level3, LevelBundle3, LevelBundleError3, LevelCell3, LevelEntry3, LevelError3};
 pub use model::{
-    Axis3, Coord3, Direction3, DirectionSet3, Frame3, FrameChirality3, FrameError3, FrameExpr3,
-    FrameSet3, FrameSlot3, Game3, GameError3, InputDef3, ObjectDef3, Offset3, Size3,
+    Axis3, CompiledGame3, CompiledGameError3, Coord3, Delta3, Direction3, DirectionSet3, Frame3,
+    FrameChirality3, FrameError3, FrameExpr3, FrameSet3, FrameSlot3, GapTerm3, InputDef3, MarkDef3,
+    ObjectDef3, Offset3, Size3,
 };
 pub use patch::{Patch3, PatchError3, PatchOp3};
 pub use puzzle_kernel::{LocalFrame, LocalFrameExtent, MarkKind, MarkValueMatch, VariableUpdateOp};
@@ -41,11 +42,9 @@ mod tests {
     const FLOOR: LayerId = LayerId(1);
     const INPUT_LEFT: InputId = InputId(0);
     const INPUT_RIGHT: InputId = InputId(1);
-    const INPUT_UP: InputId = InputId(2);
-    const INPUT_BACKWARD: InputId = InputId(5);
 
-    fn game() -> Game3 {
-        Game3::new_with_inputs(
+    fn game() -> CompiledGame3 {
+        CompiledGame3::new(
             1,
             vec![
                 ObjectDef3 {
@@ -61,15 +60,7 @@ mod tests {
                     layer_id: ACTOR,
                 },
             ],
-            vec![
-                InputDef3::directional(INPUT_LEFT, "left", Direction3::LEFT),
-                InputDef3::directional(INPUT_RIGHT, "right", Direction3::RIGHT),
-                InputDef3::directional(INPUT_UP, "up", Direction3::UP),
-                InputDef3::directional(InputId(3), "down", Direction3::DOWN),
-                InputDef3::directional(InputId(4), "front", Direction3::FORWARD),
-                InputDef3::directional(INPUT_BACKWARD, "back", Direction3::BACKWARD),
-                InputDef3::action(InputId(6), "restart"),
-            ],
+            Vec::new(),
         )
     }
 
@@ -77,8 +68,8 @@ mod tests {
         State3::empty(Size3::new(width, depth, height), 1).unwrap()
     }
 
-    fn layered_game() -> Game3 {
-        Game3::new(
+    fn layered_game() -> CompiledGame3 {
+        CompiledGame3::new(
             2,
             vec![
                 ObjectDef3 {
@@ -94,6 +85,7 @@ mod tests {
                     layer_id: FLOOR,
                 },
             ],
+            Vec::new(),
         )
     }
 
@@ -102,7 +94,7 @@ mod tests {
         let two_steps = step.scale(2);
         Rule3::once(
             Pattern3::new(vec![
-                MatchCell3::new(Offset3::ZERO).require(PLAYER),
+                MatchCell3::new(Delta3::ZERO).require(PLAYER),
                 MatchCell3::new(step).require(BOX),
                 MatchCell3::new(two_steps)
                     .forbid(PLAYER)
@@ -112,14 +104,14 @@ mod tests {
             vec![
                 WriteOp3::Move {
                     component: 0,
-                    from_offset: step,
-                    to_offset: two_steps,
+                    from_offset: step.into(),
+                    to_offset: two_steps.into(),
                     object: BOX,
                 },
                 WriteOp3::Move {
                     component: 0,
-                    from_offset: Offset3::ZERO,
-                    to_offset: step,
+                    from_offset: Delta3::ZERO.into(),
+                    to_offset: step.into(),
                     object: PLAYER,
                 },
             ],
@@ -129,7 +121,7 @@ mod tests {
     fn move_rule(direction: Direction3) -> Rule3 {
         Rule3::once(
             Pattern3::new(vec![
-                MatchCell3::new(Offset3::ZERO).require(PLAYER),
+                MatchCell3::new(Delta3::ZERO).require(PLAYER),
                 MatchCell3::new(direction.offset)
                     .forbid(PLAYER)
                     .forbid(BOX)
@@ -137,8 +129,8 @@ mod tests {
             ]),
             vec![WriteOp3::Move {
                 component: 0,
-                from_offset: Offset3::ZERO,
-                to_offset: direction.offset,
+                from_offset: Delta3::ZERO.into(),
+                to_offset: direction.offset.into(),
                 object: PLAYER,
             }],
         )
@@ -191,12 +183,12 @@ mod tests {
             directions.map(|direction| direction.name),
             ["up", "down", "left", "right", "front", "back"]
         );
-        assert_eq!(Direction3::UP.offset, Offset3::new(0, 0, 1));
-        assert_eq!(Direction3::DOWN.offset, Offset3::new(0, 0, -1));
-        assert_eq!(Direction3::LEFT.offset, Offset3::new(-1, 0, 0));
-        assert_eq!(Direction3::RIGHT.offset, Offset3::new(1, 0, 0));
-        assert_eq!(Direction3::FORWARD.offset, Offset3::new(0, 1, 0));
-        assert_eq!(Direction3::BACKWARD.offset, Offset3::new(0, -1, 0));
+        assert_eq!(Direction3::UP.offset, Delta3::new(0, 0, 1));
+        assert_eq!(Direction3::DOWN.offset, Delta3::new(0, 0, -1));
+        assert_eq!(Direction3::LEFT.offset, Delta3::new(-1, 0, 0));
+        assert_eq!(Direction3::RIGHT.offset, Delta3::new(1, 0, 0));
+        assert_eq!(Direction3::FORWARD.offset, Delta3::new(0, 1, 0));
+        assert_eq!(Direction3::BACKWARD.offset, Delta3::new(0, -1, 0));
 
         assert_eq!(
             Direction3::horizontal().map(|direction| direction.name),
@@ -214,26 +206,26 @@ mod tests {
     #[test]
     fn pattern3_new_creates_single_core_shaped_component() {
         let pattern = Pattern3::new(vec![
-            MatchCell3::new(Offset3::ZERO).require(PLAYER),
+            MatchCell3::new(Delta3::ZERO).require(PLAYER),
             MatchCell3::new(Direction3::RIGHT.offset).require(BOX),
         ]);
 
         assert_eq!(pattern.components.len(), 1);
         assert_eq!(pattern.components[0].gap_count, 0);
-        assert_eq!(pattern.components[0].cells, pattern.cells);
+        assert_eq!(pattern.components[0].cells.len(), pattern.cells().len());
     }
 
     #[test]
     fn pattern3_components_keep_compatibility_cells_view() {
         let pattern = Pattern3::from_components(vec![
-            PatternComponent3::new(vec![MatchCell3::new(Offset3::ZERO).require(PLAYER)]),
+            PatternComponent3::new(vec![MatchCell3::new(Delta3::ZERO).require(PLAYER)]),
             PatternComponent3::new(vec![MatchCell3::new(Direction3::RIGHT.offset).require(BOX)]),
         ]);
 
         assert_eq!(pattern.components.len(), 2);
-        assert_eq!(pattern.cells.len(), 2);
-        assert_eq!(pattern.cells[0].require_objects, vec![PLAYER]);
-        assert_eq!(pattern.cells[1].require_objects, vec![BOX]);
+        assert_eq!(pattern.cells().len(), 2);
+        assert_eq!(pattern.cells()[0].require_objects, vec![PLAYER]);
+        assert_eq!(pattern.cells()[1].require_objects, vec![BOX]);
     }
 
     #[test]
@@ -283,8 +275,8 @@ mod tests {
 
         assert!(!anti.is_canonical_chiral());
         assert_eq!(
-            anti.to_world_offset(Offset3::new(1, 1, 1)),
-            Offset3::new(1, 1, 1)
+            anti.to_world_offset(Delta3::new(1, 1, 1)),
+            Delta3::new(1, 1, 1)
         );
     }
 
@@ -329,20 +321,20 @@ mod tests {
         let frame = Frame3::canonical(Direction3::FORWARD, Direction3::UP).unwrap();
 
         assert_eq!(
-            frame.to_world_offset(Offset3::new(1, 0, 0)),
+            frame.to_world_offset(Delta3::new(1, 0, 0)),
             Direction3::FORWARD.offset
         );
         assert_eq!(
-            frame.to_world_offset(Offset3::new(0, 1, 0)),
+            frame.to_world_offset(Delta3::new(0, 1, 0)),
             Direction3::UP.offset
         );
         assert_eq!(
-            frame.to_world_offset(Offset3::new(0, 0, 1)),
+            frame.to_world_offset(Delta3::new(0, 0, 1)),
             Direction3::RIGHT.offset
         );
         assert_eq!(
-            frame.to_world_offset(Offset3::new(2, 1, 3)),
-            Offset3::new(3, 2, 1)
+            frame.to_world_offset(Delta3::new(2, 1, 3)),
+            Delta3::new(3, 2, 1)
         );
     }
 
@@ -480,7 +472,7 @@ mod tests {
 
     #[test]
     fn game_validation_accepts_well_formed_definitions() {
-        let game = Game3::checked_new_with_inputs(
+        let game = CompiledGame3::checked_new(
             2,
             vec![
                 ObjectDef3 {
@@ -492,28 +484,23 @@ mod tests {
                     layer_id: FLOOR,
                 },
             ],
-            vec![
-                InputDef3::directional(INPUT_LEFT, "left", Direction3::LEFT),
-                InputDef3::action(InputId(6), "restart"),
-            ],
         )
         .unwrap();
 
         assert_eq!(game.layer_count, 2);
-        assert_eq!(game.objects.len(), 2);
-        assert_eq!(game.inputs.len(), 2);
+        assert_eq!(game.objects().len(), 2);
     }
 
     #[test]
     fn game_validation_rejects_zero_layers() {
-        let err = Game3::checked_new(0, Vec::new()).unwrap_err();
+        let err = CompiledGame3::checked_new(0, Vec::new()).unwrap_err();
 
-        assert_eq!(err, GameError3::InvalidLayerCount);
+        assert_eq!(err, CompiledGameError3::InvalidLayerCount);
     }
 
     #[test]
     fn game_validation_rejects_empty_object_id() {
-        let err = Game3::checked_new(
+        let err = CompiledGame3::checked_new(
             1,
             vec![ObjectDef3 {
                 id: ObjectId::EMPTY,
@@ -522,12 +509,12 @@ mod tests {
         )
         .unwrap_err();
 
-        assert_eq!(err, GameError3::EmptyObjectId);
+        assert_eq!(err, CompiledGameError3::EmptyObjectId);
     }
 
     #[test]
     fn game_validation_rejects_duplicate_object_ids() {
-        let err = Game3::checked_new(
+        let err = CompiledGame3::checked_new(
             1,
             vec![
                 ObjectDef3 {
@@ -542,12 +529,15 @@ mod tests {
         )
         .unwrap_err();
 
-        assert_eq!(err, GameError3::DuplicateObjectId { object: PLAYER });
+        assert_eq!(
+            err,
+            CompiledGameError3::DuplicateObjectId { object: PLAYER }
+        );
     }
 
     #[test]
     fn game_validation_rejects_object_layer_outside_layer_count() {
-        let err = Game3::checked_new(
+        let err = CompiledGame3::checked_new(
             1,
             vec![ObjectDef3 {
                 id: PLAYER,
@@ -558,50 +548,9 @@ mod tests {
 
         assert_eq!(
             err,
-            GameError3::ObjectLayerOutOfBounds {
+            CompiledGameError3::ObjectLayerOutOfBounds {
                 object: PLAYER,
                 layer: FLOOR,
-            }
-        );
-    }
-
-    #[test]
-    fn game_validation_rejects_duplicate_input_ids() {
-        let err = Game3::checked_new_with_inputs(
-            1,
-            vec![ObjectDef3 {
-                id: PLAYER,
-                layer_id: ACTOR,
-            }],
-            vec![
-                InputDef3::directional(INPUT_LEFT, "left", Direction3::LEFT),
-                InputDef3::directional(INPUT_LEFT, "west", Direction3::LEFT),
-            ],
-        )
-        .unwrap_err();
-
-        assert_eq!(err, GameError3::DuplicateInputId { input: INPUT_LEFT });
-    }
-
-    #[test]
-    fn game_validation_rejects_duplicate_input_names() {
-        let err = Game3::checked_new_with_inputs(
-            1,
-            vec![ObjectDef3 {
-                id: PLAYER,
-                layer_id: ACTOR,
-            }],
-            vec![
-                InputDef3::directional(INPUT_LEFT, "left", Direction3::LEFT),
-                InputDef3::directional(INPUT_RIGHT, "left", Direction3::RIGHT),
-            ],
-        )
-        .unwrap_err();
-
-        assert_eq!(
-            err,
-            GameError3::DuplicateInputName {
-                name: "left".to_string(),
             }
         );
     }
@@ -837,12 +786,13 @@ mod tests {
 
     #[test]
     fn level_rejects_object_layer_outside_game_layer_count() {
-        let game = Game3::new(
+        let game = CompiledGame3::new(
             1,
             vec![ObjectDef3 {
                 id: PLAYER,
                 layer_id: FLOOR,
             }],
+            Vec::new(),
         );
         let level = Level3::new(
             Size3::new(2, 1, 1),
@@ -853,7 +803,7 @@ mod tests {
 
         assert_eq!(
             err,
-            LevelError3::Game(GameError3::ObjectLayerOutOfBounds {
+            LevelError3::CompiledGame(CompiledGameError3::ObjectLayerOutOfBounds {
                 object: PLAYER,
                 layer: FLOOR,
             })
@@ -977,10 +927,10 @@ mod tests {
             .place_object(&game, Coord3::new(0, 0, 0), PLAYER)
             .unwrap();
         let no_progress = Rule3::repeated(
-            Pattern3::new(vec![MatchCell3::new(Offset3::ZERO).require(PLAYER)]),
+            Pattern3::new(vec![MatchCell3::new(Delta3::ZERO).require(PLAYER)]),
             vec![WriteOp3::Replace {
                 component: 0,
-                offset: Offset3::ZERO,
+                offset: Delta3::ZERO.into(),
                 remove: PLAYER,
                 add: PLAYER,
             }],
@@ -1004,12 +954,12 @@ mod tests {
 
         let replace_second_component = Rule3::once(
             Pattern3::from_components(vec![
-                PatternComponent3::new(vec![MatchCell3::new(Offset3::ZERO).require(PLAYER)]),
-                PatternComponent3::new(vec![MatchCell3::new(Offset3::ZERO).require(BOX)]),
+                PatternComponent3::new(vec![MatchCell3::new(Delta3::ZERO).require(PLAYER)]),
+                PatternComponent3::new(vec![MatchCell3::new(Delta3::ZERO).require(BOX)]),
             ]),
             vec![WriteOp3::Replace {
                 component: 1,
-                offset: Offset3::ZERO,
+                offset: Delta3::ZERO.into(),
                 remove: BOX,
                 add: WALL,
             }],
@@ -1075,19 +1025,19 @@ mod tests {
 
         let consume_pair = Rule3::once_all(
             Pattern3::new(vec![
-                MatchCell3::new(Offset3::ZERO).require(PLAYER),
+                MatchCell3::new(Delta3::ZERO).require(PLAYER),
                 MatchCell3::new(Direction3::RIGHT.offset).require(PLAYER),
             ]),
             vec![
                 WriteOp3::Replace {
                     component: 0,
-                    offset: Offset3::ZERO,
+                    offset: Delta3::ZERO.into(),
                     remove: PLAYER,
                     add: BOX,
                 },
                 WriteOp3::Remove {
                     component: 0,
-                    offset: Direction3::RIGHT.offset,
+                    offset: Direction3::RIGHT.offset.into(),
                     object: PLAYER,
                 },
             ],
@@ -1115,10 +1065,10 @@ mod tests {
             .unwrap();
 
         let player_to_box = Rule3::once_per_level(
-            Pattern3::new(vec![MatchCell3::new(Offset3::ZERO).require(PLAYER)]),
+            Pattern3::new(vec![MatchCell3::new(Delta3::ZERO).require(PLAYER)]),
             vec![WriteOp3::Replace {
                 component: 0,
-                offset: Offset3::ZERO,
+                offset: Delta3::ZERO.into(),
                 remove: PLAYER,
                 add: BOX,
             }],
@@ -1151,10 +1101,10 @@ mod tests {
         let game = game();
         let state = empty_state(1, 1, 1);
         let player_to_box = Rule3::once_per_level(
-            Pattern3::new(vec![MatchCell3::new(Offset3::ZERO).require(PLAYER)]),
+            Pattern3::new(vec![MatchCell3::new(Delta3::ZERO).require(PLAYER)]),
             vec![WriteOp3::Replace {
                 component: 0,
-                offset: Offset3::ZERO,
+                offset: Delta3::ZERO.into(),
                 remove: PLAYER,
                 add: BOX,
             }],
@@ -1242,7 +1192,7 @@ mod tests {
             .place_object(&game, Coord3::new(0, 0, 0), PLAYER)
             .unwrap();
         let rule = Rule3::once(
-            Pattern3::new(vec![MatchCell3::new(Offset3::ZERO).require(PLAYER)]),
+            Pattern3::new(vec![MatchCell3::new(Delta3::ZERO).require(PLAYER)]),
             Vec::new(),
         )
         .with_effects(vec![RuleEffect3::UpdateVariable {
@@ -1264,24 +1214,24 @@ mod tests {
             .place_object(&game, Coord3::new(0, 0, 0), PLAYER)
             .unwrap();
         let mark_player = Rule3::once(
-            Pattern3::new(vec![MatchCell3::new(Offset3::ZERO).require(PLAYER)]),
+            Pattern3::new(vec![MatchCell3::new(Delta3::ZERO).require(PLAYER)]),
             vec![WriteOp3::SetMark {
                 component: 0,
-                offset: Offset3::ZERO,
+                offset: Delta3::ZERO.into(),
                 object: PLAYER,
                 mark: MarkId3(1),
                 value: Some(7),
             }],
         );
         let consume_mark = Rule3::once(
-            Pattern3::new(vec![MatchCell3::new(Offset3::ZERO).require_mark(
+            Pattern3::new(vec![MatchCell3::new(Delta3::ZERO).require_mark(
                 PLAYER,
                 MarkId3(1),
                 Some(7),
             )]),
             vec![WriteOp3::Replace {
                 component: 0,
-                offset: Offset3::ZERO,
+                offset: Delta3::ZERO.into(),
                 remove: PLAYER,
                 add: WALL,
             }],
@@ -1297,6 +1247,181 @@ mod tests {
         assert!(!next.has_object(&game, Coord3::new(0, 0, 0), PLAYER));
         assert!(next.has_object(&game, Coord3::new(0, 0, 0), WALL));
         assert!(!next.has_mark(&game, Coord3::new(0, 0, 0), PLAYER, MarkId3(1), Some(7)));
+    }
+
+    #[test]
+    fn variable_offset3_resolves_against_runtime_gap_assignment() {
+        let game = game();
+        let mut state = empty_state(4, 1, 1);
+        state
+            .place_object(&game, Coord3::new(0, 0, 0), PLAYER)
+            .unwrap();
+        state
+            .place_object(&game, Coord3::new(3, 0, 0), BOX)
+            .unwrap();
+        let mut component = PatternComponent3::new(vec![
+            MatchCell3::new(Delta3::ZERO).require(PLAYER),
+            MatchCell3::new(Offset3::Variable {
+                base_dx: 1,
+                base_dy: 0,
+                base_dz: 0,
+                gap_terms: vec![GapTerm3 {
+                    gap_index: 0,
+                    dx: 1,
+                    dy: 0,
+                    dz: 0,
+                }],
+            })
+            .require(BOX),
+        ]);
+        component.gap_count = 1;
+        let pattern = Pattern3::from_components(vec![component]);
+
+        assert_eq!(count_pattern_matches(&game, &state, &pattern), 1);
+    }
+
+    #[test]
+    fn once_all_revalidates_the_saved_gap_assignment() {
+        let game = layered_game();
+        let mut state = State3::empty(Size3::new(11, 1, 1), 2).unwrap();
+        for x in [0, 4] {
+            state
+                .place_object(&game, Coord3::new(x, 0, 0), PLAYER)
+                .unwrap();
+        }
+        for x in [2, 6, 7, 10] {
+            state
+                .place_object(&game, Coord3::new(x, 0, 0), BOX)
+                .unwrap();
+        }
+        let mut component = PatternComponent3::new(vec![
+            MatchCell3::new(Delta3::ZERO).require(PLAYER),
+            MatchCell3::new(Offset3::Variable {
+                base_dx: 1,
+                base_dy: 0,
+                base_dz: 0,
+                gap_terms: vec![GapTerm3 {
+                    gap_index: 0,
+                    dx: 1,
+                    dy: 0,
+                    dz: 0,
+                }],
+            })
+            .require(BOX),
+        ]);
+        component.gap_count = 1;
+        let rule = Rule3::once_all(
+            Pattern3::from_components(vec![component]),
+            vec![
+                WriteOp3::Remove {
+                    component: 0,
+                    offset: Delta3::new(6, 0, 0).into(),
+                    object: BOX,
+                },
+                WriteOp3::Add {
+                    component: 0,
+                    offset: Delta3::ZERO.into(),
+                    object: GOAL,
+                },
+            ],
+        );
+
+        let next = transition_once_all(&game, &state, &rule).unwrap();
+
+        assert!(next.has_object(&game, Coord3::new(0, 0, 0), GOAL));
+        assert!(!next.has_object(&game, Coord3::new(4, 0, 0), GOAL));
+        assert!(next.has_object(&game, Coord3::new(10, 0, 0), BOX));
+    }
+
+    #[test]
+    fn cancel_effect_validates_but_does_not_apply_patch_or_emit_commands() {
+        let game = game();
+        let mut state = empty_state(1, 1, 1);
+        state
+            .place_object(&game, Coord3::new(0, 0, 0), PLAYER)
+            .unwrap();
+        let rule = Rule3::once(
+            Pattern3::new(vec![MatchCell3::new(Delta3::ZERO).require(PLAYER)]),
+            vec![WriteOp3::Replace {
+                component: 0,
+                offset: Delta3::ZERO.into(),
+                remove: PLAYER,
+                add: WALL,
+            }],
+        )
+        .with_effects(vec![RuleEffect3::Cancel, RuleEffect3::Win]);
+
+        let outcome =
+            transition_program_without_input_outcome(&game, &state, &[RuleStep3::Rule(rule)])
+                .unwrap();
+
+        assert!(outcome.cancelled);
+        assert!(outcome.commands.is_empty());
+        assert!(
+            outcome
+                .next_state
+                .has_object(&game, Coord3::new(0, 0, 0), PLAYER)
+        );
+        assert!(
+            !outcome
+                .next_state
+                .has_object(&game, Coord3::new(0, 0, 0), WALL)
+        );
+    }
+
+    #[test]
+    fn rule_effect3_emits_the_same_runtime_commands_as_effect() {
+        let game = game();
+        let mut state = empty_state(1, 1, 1);
+        state
+            .place_object(&game, Coord3::new(0, 0, 0), PLAYER)
+            .unwrap();
+        let rule = Rule3::once(
+            Pattern3::new(vec![MatchCell3::new(Delta3::ZERO).require(PLAYER)]),
+            Vec::new(),
+        )
+        .with_effects(vec![
+            RuleEffect3::Win,
+            RuleEffect3::Restart,
+            RuleEffect3::NextLevel,
+            RuleEffect3::Again,
+            RuleEffect3::Checkpoint,
+            RuleEffect3::ClearCheckpoint,
+        ]);
+
+        let outcome =
+            transition_program_without_input_outcome(&game, &state, &[RuleStep3::Rule(rule)])
+                .unwrap();
+
+        assert_eq!(
+            outcome.commands,
+            vec![
+                TransitionCommand3::Win,
+                TransitionCommand3::Restart,
+                TransitionCommand3::NextLevel,
+                TransitionCommand3::Again,
+                TransitionCommand3::Checkpoint,
+                TransitionCommand3::ClearCheckpoint,
+            ]
+        );
+    }
+
+    #[test]
+    fn compiled_game3_owns_mark_definitions_like_compiled_game() {
+        let game = CompiledGame3::new_with_mark_condition_defs_and_program(
+            1,
+            Vec::new(),
+            vec![MarkDef3 {
+                id: MarkId3(7),
+                kind: MarkKind::Enum,
+                values: vec!["open".to_string(), "closed".to_string()],
+            }],
+            Vec::new(),
+            Vec::new(),
+        );
+
+        assert_eq!(game.mark().len(), 1);
+        assert_eq!(game.mark()[0].id, MarkId3(7));
     }
 
     #[test]
@@ -1342,7 +1467,7 @@ mod tests {
             .place_object(&game, Coord3::new(1, 0, 0), BOX)
             .unwrap();
         let push_pattern = Pattern3::new(vec![
-            MatchCell3::new(Offset3::ZERO).require(PLAYER),
+            MatchCell3::new(Delta3::ZERO).require(PLAYER),
             MatchCell3::new(Direction3::RIGHT.offset).require(BOX),
         ]);
 
@@ -1351,7 +1476,8 @@ mod tests {
                 &game,
                 &state,
                 &ConditionValueKind3::CountObjects(vec![PLAYER, BOX]),
-                None
+                None,
+                None,
             ),
             2
         );
@@ -1360,7 +1486,8 @@ mod tests {
                 &game,
                 &state,
                 &ConditionValueKind3::ExistsMatches(vec![push_pattern.clone()]),
-                None
+                None,
+                None,
             ),
             1
         );
@@ -1369,25 +1496,11 @@ mod tests {
                 &game,
                 &state,
                 &ConditionValueKind3::CountInputMatches(vec![(INPUT_RIGHT, push_pattern)]),
-                Some(INPUT_RIGHT)
+                Some(INPUT_RIGHT),
+                None,
             ),
             1
         );
-    }
-
-    #[test]
-    fn semantic_inputs_can_resolve_to_absolute_directions() {
-        let game = game();
-
-        assert_eq!(
-            game.input_by_name("right").map(|input| input.id),
-            Some(INPUT_RIGHT)
-        );
-        assert_eq!(
-            game.direction_for_input(INPUT_RIGHT),
-            Some(Direction3::RIGHT)
-        );
-        assert_eq!(game.direction_for_input(InputId(6)), None);
     }
 
     #[test]
@@ -1404,10 +1517,10 @@ mod tests {
             .place_object(&game, Coord3::new(3, 0, 0), BOX)
             .unwrap();
         let rule = Rule3::once_all(
-            Pattern3::new(vec![MatchCell3::new(Offset3::ZERO).require(BOX)]),
+            Pattern3::new(vec![MatchCell3::new(Delta3::ZERO).require(BOX)]),
             vec![WriteOp3::Replace {
                 component: 0,
-                offset: Offset3::ZERO,
+                offset: Delta3::ZERO.into(),
                 remove: BOX,
                 add: WALL,
             }],

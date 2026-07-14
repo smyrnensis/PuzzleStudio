@@ -9,7 +9,7 @@ sfx sumo_move { seed = 48878907; type = puzzlescript }
 }
 
 puzzle main {
-layers {
+slots {
 layer1 = Background
 layer2 = Player Wall Sumo
 }

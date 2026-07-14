@@ -588,7 +588,9 @@ fn add_simple_rewrite_effect_surface_tokens(
                 }
                 parsed_any = true;
             }
-            _ if index + 2 < tokens.len() && is_variable_update_operator(&tokens[index + 1].text) => {
+            _ if index + 2 < tokens.len()
+                && is_variable_update_operator(&tokens[index + 1].text) =>
+            {
                 add_scene_effect_token_range(sink, &tokens[index], SurfaceSemanticKind::State);
                 add_scene_effect_token_range(sink, &tokens[index + 2], SurfaceSemanticKind::Number);
                 index += 3;
@@ -604,95 +606,6 @@ fn add_simple_rewrite_effect_surface_tokens(
 
 fn matches_rewrite_effect_command(token: &str, syntax: RewriteEffectCommandSyntax) -> bool {
     rewrite_effect_command_syntax(&token.to_ascii_lowercase()) == Some(syntax)
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum MapHeaderTokenSyntax {
-    Keyword,
-    Name,
-    Axis,
-}
-
-pub(crate) fn map_header_token_syntax(
-    tokens: &[&str],
-    index: usize,
-) -> Option<MapHeaderTokenSyntax> {
-    if !matches!(tokens, ["map", _, _]) {
-        return None;
-    }
-    match index {
-        0 => Some(MapHeaderTokenSyntax::Keyword),
-        1 => Some(MapHeaderTokenSyntax::Name),
-        2 => Some(MapHeaderTokenSyntax::Axis),
-        _ => None,
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SceneStateLhsSyntax {
-    PuzzleSlot,
-    Variable,
-}
-
-pub(crate) fn scene_state_lhs_syntax(tokens: &[&str]) -> Option<(usize, SceneStateLhsSyntax)> {
-    match tokens {
-        ["puzzle", name, "=", ..] if is_identifier(name) => {
-            Some((1, SceneStateLhsSyntax::PuzzleSlot))
-        }
-        ["var" | "const", name, "=", ..] if is_identifier(name) => {
-            Some((1, SceneStateLhsSyntax::Variable))
-        }
-        ["persistent", "var" | "const", name, "=", ..] if is_identifier(name) => {
-            Some((2, SceneStateLhsSyntax::Variable))
-        }
-        ["persistent", name, "=", ..] if is_identifier(name) => {
-            Some((1, SceneStateLhsSyntax::Variable))
-        }
-        [name, "=", ..] if is_identifier(name) => Some((0, SceneStateLhsSyntax::Variable)),
-        _ => None,
-    }
-}
-
-pub(crate) fn metadata_directive_value_token_index(tokens: &[&str]) -> Option<usize> {
-    matches!(
-        tokens,
-        ["title" | "subtitle" | "author" | "homepage", _, ..]
-    )
-    .then_some(1)
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum LevelPathPartSyntax {
-    Owner,
-    TextProperty,
-    NumberProperty,
-    ConditionProperty,
-}
-
-pub(crate) fn level_path_part_syntax(parts: &[&str], index: usize) -> Option<LevelPathPartSyntax> {
-    match parts {
-        ["level", property] => match index {
-            0 => None,
-            1 => level_property_syntax(property),
-            _ => None,
-        },
-        [_, "level", property] => match index {
-            0 => Some(LevelPathPartSyntax::Owner),
-            1 => None,
-            2 => level_property_syntax(property),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
-fn level_property_syntax(property: &str) -> Option<LevelPathPartSyntax> {
-    match property {
-        "name" | "label" | "title" => Some(LevelPathPartSyntax::TextProperty),
-        "index" | "num" => Some(LevelPathPartSyntax::NumberProperty),
-        "cleared" | "solved" | "last" | "has_next" => Some(LevelPathPartSyntax::ConditionProperty),
-        _ => None,
-    }
 }
 
 fn parse_scene_effect_with_optional_block(

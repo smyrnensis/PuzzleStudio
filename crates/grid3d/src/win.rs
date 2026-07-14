@@ -1,5 +1,5 @@
 use crate::{
-    Game3, MatchCell3, ObjectId, Offset3, Pattern3, State3, count_pattern_matches,
+    CompiledGame3, Delta3, MatchCell3, ObjectId, Pattern3, State3, count_pattern_matches,
     has_pattern_match,
 };
 use serde::{Deserialize, Serialize};
@@ -19,7 +19,7 @@ pub enum WinCondition3 {
 }
 
 impl WinCondition3 {
-    pub fn is_met(&self, game: &Game3, state: &State3) -> bool {
+    pub fn is_met(&self, game: &CompiledGame3, state: &State3) -> bool {
         match self {
             Self::All(conditions) => conditions
                 .iter()
@@ -48,7 +48,7 @@ impl WinCondition3 {
 }
 
 fn single_object_pattern(object: ObjectId) -> Pattern3 {
-    Pattern3::new(vec![MatchCell3::new(Offset3::ZERO).require(object)])
+    Pattern3::new(vec![MatchCell3::new(Delta3::ZERO).require(object)])
 }
 
 #[cfg(test)]
@@ -61,8 +61,8 @@ mod tests {
     const ACTOR: LayerId = LayerId(0);
     const FLOOR: LayerId = LayerId(1);
 
-    fn support_game() -> Game3 {
-        Game3::new(
+    fn support_game() -> CompiledGame3 {
+        CompiledGame3::new(
             2,
             vec![
                 ObjectDef3 {
@@ -74,12 +74,13 @@ mod tests {
                     layer_id: FLOOR,
                 },
             ],
+            Vec::new(),
         )
     }
 
     fn box_supported_by_goal_pattern() -> Pattern3 {
         Pattern3::new(vec![
-            MatchCell3::new(Offset3::ZERO).require(BOX),
+            MatchCell3::new(Delta3::ZERO).require(BOX),
             MatchCell3::new(Direction3::DOWN.offset).require(GOAL),
         ])
     }

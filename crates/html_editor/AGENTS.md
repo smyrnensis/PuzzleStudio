@@ -79,6 +79,13 @@ unavailable, show plain escaped text and surface the reason visibly enough for
 debugging. Do not fall back to a second highlighter path such as WASM or a
 JavaScript `.puzzle` grammar.
 
+CodeMirror highlighting is a range projection of typed Rust spans. Map existing
+decorations through edits, remove only decorations intersecting the returned
+viewport range, and retain decorations outside that range. Do not replace the
+whole decoration set for a range response. UTF-8/UTF-16 offset conversion is an
+adapter responsibility and may be cached for one exact source snapshot; it must
+not classify source text or infer syntax while constructing that map.
+
 ### Source Editor And CodeMirror
 
 CodeMirror owns the generic editing mechanism: the text buffer, selection,

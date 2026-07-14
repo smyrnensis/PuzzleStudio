@@ -1,6 +1,4 @@
-use puzzle_grid3d::{
-    ConditionValueKind3, Game3, LevelBundle3, LocalFrame, ObjectId, Pattern3, Rule3, WinCondition3,
-};
+use puzzle_grid3d::{CompiledGame3, LevelBundle3, LocalFrame, ObjectId, WinCondition3};
 pub use puzzle_scene::SceneEffect as LifecycleCommand;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -283,10 +281,8 @@ impl RuntimeModelContract {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Puzzle3RuntimeModel {
-    pub game: Game3,
+    pub game: CompiledGame3,
     pub local_frame: Option<LocalFrame<ObjectId>>,
-    pub rules: Vec<puzzle_grid3d::RuleStep3>,
-    pub display_objects: Vec<ObjectId>,
     pub rule_camera_effects: Vec<Vec<Puzzle3CameraEffect>>,
     pub level_bundle: LevelBundle3,
     pub win_condition: Option<WinCondition3>,
@@ -299,16 +295,15 @@ pub struct Puzzle3RuntimeModel {
 pub enum Puzzle3CameraEffect {
     SetYaw(i16),
     SetPitch(i16),
+    SetRoll(i16),
     SetZoom(u16),
     Reset,
 }
 
 impl Puzzle3RuntimeModel {
     pub fn checked_new(
-        game: Game3,
+        game: CompiledGame3,
         local_frame: Option<LocalFrame<ObjectId>>,
-        rules: Vec<puzzle_grid3d::RuleStep3>,
-        display_objects: Vec<ObjectId>,
         rule_camera_effects: Vec<Vec<Puzzle3CameraEffect>>,
         level_bundle: LevelBundle3,
         win_condition: Option<WinCondition3>,
@@ -318,8 +313,6 @@ impl Puzzle3RuntimeModel {
         let model = Self {
             game,
             local_frame,
-            rules,
-            display_objects,
             rule_camera_effects,
             level_bundle,
             win_condition,
@@ -342,17 +335,8 @@ impl Puzzle3RuntimeModel {
         self.level_bundle
             .validate()
             .map_err(|error| RuntimeContractError::InvalidLevelBundle(format!("{error:?}")))?;
-        let rule_count = validate_program("rules", &self.rules)?;
-        for object in &self.display_objects {
-            if self.game.object_layer(*object).is_none() {
-                return Err(RuntimeContractError::InvalidGame(format!(
-                    "display object {} is not defined in game",
-                    object.0
-                )));
-            }
-        }
-        let level_start_rule_count =
-            validate_program("lifecycle.onLevelStart", &self.lifecycle.on_level_start)?;
+        let rule_count = count_program_rules(self.game.program());
+        let level_start_rule_count = count_program_rules(&self.lifecycle.on_level_start);
         if self.rule_camera_effects.len() != rule_count {
             return Err(RuntimeContractError::InvalidPresentationEffects {
                 owner: "ruleCameraEffects".to_string(),
@@ -362,15 +346,6 @@ impl Puzzle3RuntimeModel {
             return Err(RuntimeContractError::InvalidPresentationEffects {
                 owner: "onLevelStartCameraEffects".to_string(),
             });
-        }
-        for condition in self.game.condition_defs() {
-            validate_condition_kind(
-                &format!("conditionDefs[{}]", condition.id.0),
-                &condition.kind,
-            )?;
-        }
-        if let Some(condition) = self.win_condition.as_ref() {
-            validate_win_condition("winCondition", condition)?;
         }
         Ok(())
     }
@@ -384,7 +359,6 @@ pub enum RuntimeContractError {
     UnsupportedModelKind(String),
     InvalidGame(String),
     InvalidLevelBundle(String),
-    InvalidPatternCache { owner: String },
     InvalidPresentationEffects { owner: String },
 }
 
@@ -408,9 +382,6 @@ impl std::fmt::Display for RuntimeContractError {
             }
             Self::InvalidLevelBundle(error) => {
                 write!(f, "invalid runtimeContract model level bundle: {error}")
-            }
-            Self::InvalidPatternCache { owner } => {
-                write!(f, "invalid runtimeContract pattern cache at {owner}")
             }
             Self::InvalidPresentationEffects { owner } => {
                 write!(f, "invalid runtimeContract presentation effects at {owner}")
@@ -459,199 +430,66 @@ pub fn puzzle3_runtime_model_from_fixture_json(
     runtime_contract_from_fixture_json(fixture_json)?.into_puzzle3_model()
 }
 
-fn validate_rules(owner: &str, rules: &[Rule3]) -> Result<(), RuntimeContractError> {
-    for rule in rules {
-        validate_rule_parts(
-            &format!("{owner}[{}]", rule.id.0),
-            &rule.pattern,
-            &rule.guards,
-        )?;
-    }
-    Ok(())
-}
-
-fn validate_rule_parts(
-    owner: &str,
-    pattern: &puzzle_grid3d::Pattern3,
-    guards: &[puzzle_grid3d::Guard3],
-) -> Result<(), RuntimeContractError> {
-    validate_pattern(&format!("{owner}.pattern"), pattern)?;
-    for (index, guard) in guards.iter().enumerate() {
-        match guard {
-            puzzle_grid3d::Guard3::InlineConditionValue { kind, .. }
-            | puzzle_grid3d::Guard3::InlineConditionCompare { kind, .. } => {
-                validate_condition_kind(&format!("{owner}.guards[{index}]"), kind)?;
-            }
-            puzzle_grid3d::Guard3::InlineConditionNonZero(kind) => {
-                validate_condition_kind(&format!("{owner}.guards[{index}]"), kind)?;
-            }
-            puzzle_grid3d::Guard3::InputIs(_)
-            | puzzle_grid3d::Guard3::VariableEquals { .. }
-            | puzzle_grid3d::Guard3::VariableCompare { .. }
-            | puzzle_grid3d::Guard3::ConditionEquals { .. }
-            | puzzle_grid3d::Guard3::ConditionNonZero(_)
-            | puzzle_grid3d::Guard3::ConditionCompare { .. } => {}
-        }
-    }
-    Ok(())
-}
-
-fn validate_program(
-    owner: &str,
-    steps: &[puzzle_grid3d::RuleStep3],
-) -> Result<usize, RuntimeContractError> {
+fn count_program_rules(steps: &[puzzle_grid3d::RuleStep3]) -> usize {
     let mut rule_count = 0;
-    for (index, step) in steps.iter().enumerate() {
-        let step_owner = format!("{owner}[{index}]");
+    for step in steps {
         match step {
             puzzle_grid3d::RuleStep3::Rule(rule) => {
-                validate_rules(&step_owner, std::slice::from_ref(rule))?;
+                let _ = rule;
                 rule_count += 1;
             }
             puzzle_grid3d::RuleStep3::ConditionalBlock { condition, steps } => {
-                validate_rule_condition(&format!("{step_owner}.condition"), condition)?;
-                rule_count += validate_program(&format!("{step_owner}.steps"), steps)?;
+                let _ = condition;
+                rule_count += count_program_rules(steps);
             }
             puzzle_grid3d::RuleStep3::ConditionalBranch {
                 condition,
                 then_steps,
                 else_steps,
             } => {
-                validate_rule_condition(&format!("{step_owner}.condition"), condition)?;
-                rule_count += validate_program(&format!("{step_owner}.thenSteps"), then_steps)?;
-                rule_count += validate_program(&format!("{step_owner}.elseSteps"), else_steps)?;
+                let _ = condition;
+                rule_count += count_program_rules(then_steps);
+                rule_count += count_program_rules(else_steps);
             }
             puzzle_grid3d::RuleStep3::Block {
                 stop_condition,
                 steps,
                 ..
             } => {
-                if let Some(condition) = stop_condition {
-                    validate_rule_condition(&format!("{step_owner}.stopCondition"), condition)?;
-                }
-                rule_count += validate_program(&format!("{step_owner}.steps"), steps)?;
+                let _ = stop_condition;
+                rule_count += count_program_rules(steps);
             }
             puzzle_grid3d::RuleStep3::AfterTriggered { steps, then_steps } => {
-                rule_count += validate_program(&format!("{step_owner}.steps"), steps)?;
-                rule_count += validate_program(&format!("{step_owner}.thenSteps"), then_steps)?;
+                rule_count += count_program_rules(steps);
+                rule_count += count_program_rules(then_steps);
             }
             puzzle_grid3d::RuleStep3::LocalFrame { steps, .. } => {
-                rule_count += validate_program(&format!("{step_owner}.steps"), steps)?;
+                rule_count += count_program_rules(steps);
             }
         }
     }
-    Ok(rule_count)
-}
-
-fn validate_rule_condition(
-    owner: &str,
-    condition: &puzzle_grid3d::RuleCondition3,
-) -> Result<(), RuntimeContractError> {
-    let patterns = match condition {
-        puzzle_grid3d::RuleCondition3::AnyMatches(patterns)
-        | puzzle_grid3d::RuleCondition3::NoMatches(patterns) => {
-            return patterns
-                .iter()
-                .enumerate()
-                .try_for_each(|(index, pattern)| {
-                    validate_pattern(&format!("{owner}.patterns[{index}]"), pattern)
-                });
-        }
-        puzzle_grid3d::RuleCondition3::AnyInputMatches(patterns)
-        | puzzle_grid3d::RuleCondition3::NoInputMatches(patterns) => patterns,
-        puzzle_grid3d::RuleCondition3::RuleMatches { guards, pattern } => {
-            return validate_rule_parts(owner, pattern, guards);
-        }
-    };
-    patterns
-        .iter()
-        .enumerate()
-        .try_for_each(|(index, (_, pattern))| {
-            validate_pattern(&format!("{owner}.patterns[{index}]"), pattern)
-        })
-}
-
-fn validate_condition_kind(
-    owner: &str,
-    kind: &ConditionValueKind3,
-) -> Result<(), RuntimeContractError> {
-    match kind {
-        ConditionValueKind3::CountMatches(patterns)
-        | ConditionValueKind3::ExistsMatches(patterns)
-        | ConditionValueKind3::NoneMatches(patterns) => {
-            for (index, pattern) in patterns.iter().enumerate() {
-                validate_pattern(&format!("{owner}.patterns[{index}]"), pattern)?;
-            }
-        }
-        ConditionValueKind3::CountInputMatches(patterns)
-        | ConditionValueKind3::ExistsInputMatches(patterns)
-        | ConditionValueKind3::NoneInputMatches(patterns) => {
-            for (index, (_, pattern)) in patterns.iter().enumerate() {
-                validate_pattern(&format!("{owner}.patterns[{index}].pattern"), pattern)?;
-            }
-        }
-        ConditionValueKind3::CountObjects(_)
-        | ConditionValueKind3::ExistsObjects(_)
-        | ConditionValueKind3::NoneObjects(_) => {}
-    }
-    Ok(())
-}
-
-fn validate_win_condition(
-    owner: &str,
-    condition: &WinCondition3,
-) -> Result<(), RuntimeContractError> {
-    match condition {
-        WinCondition3::All(conditions) | WinCondition3::Any(conditions) => {
-            for (index, condition) in conditions.iter().enumerate() {
-                validate_win_condition(&format!("{owner}.conditions[{index}]"), condition)?;
-            }
-        }
-        WinCondition3::SomePattern(pattern) | WinCondition3::NoPattern(pattern) => {
-            validate_pattern(&format!("{owner}.pattern"), pattern)?;
-        }
-        WinCondition3::AllObjectsCoveredByPattern { cover_pattern, .. } => {
-            validate_pattern(&format!("{owner}.coverPattern"), cover_pattern)?;
-        }
-        WinCondition3::SomeObject(_) | WinCondition3::NoObject(_) => {}
-    }
-    Ok(())
-}
-
-fn validate_pattern(owner: &str, pattern: &Pattern3) -> Result<(), RuntimeContractError> {
-    let cells = pattern
-        .components
-        .iter()
-        .flat_map(|component| component.cells.iter().cloned())
-        .collect::<Vec<_>>();
-    if cells != pattern.cells {
-        return Err(RuntimeContractError::InvalidPatternCache {
-            owner: owner.to_string(),
-        });
-    }
-    Ok(())
+    rule_count
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use puzzle_grid3d::{
-        ConditionDef3, ConditionId3, ConditionValueKind3, Coord3, Guard3, InputDef3, InputId,
-        LayerId, Level3, LevelCell3, LevelEntry3, MatchCell3, ObjectDef3, Offset3,
+        ConditionDef3, ConditionId3, ConditionValueKind3, Coord3, Delta3, Guard3, InputDef3,
+        InputId, LayerId, Level3, LevelCell3, LevelEntry3, MatchCell3, ObjectDef3, Pattern3, Rule3,
         RuleApplication3, RuleId3, Size3,
     };
     use serde_json::json;
 
     const PLAYER: ObjectId = ObjectId(1);
 
-    fn support_game() -> Game3 {
-        Game3::new_with_condition_defs(
+    fn support_game() -> CompiledGame3 {
+        CompiledGame3::new_with_condition_defs(
             1,
             vec![ObjectDef3 {
                 id: PLAYER,
                 layer_id: LayerId(0),
             }],
-            vec![InputDef3::action(InputId(0), "wait")],
             vec![ConditionDef3 {
                 id: ConditionId3(0),
                 kind: ConditionValueKind3::ExistsObjects(vec![PLAYER]),
@@ -659,7 +497,7 @@ mod tests {
         )
     }
 
-    fn support_level_bundle(game: &Game3) -> LevelBundle3 {
+    fn support_level_bundle(game: &CompiledGame3) -> LevelBundle3 {
         LevelBundle3::checked_new(
             game.clone(),
             vec![LevelEntry3::new(
@@ -682,20 +520,19 @@ mod tests {
 
     #[test]
     fn runtime_contract_round_trips_shared_guard_variants() {
-        let game = support_game();
         let rule = Rule3 {
             id: RuleId3(7),
             guards: vec![Guard3::ConditionNonZero(ConditionId3(0))],
             application: RuleApplication3::Once,
-            pattern: Pattern3::new(vec![MatchCell3::new(Offset3::ZERO).require(PLAYER)]),
+            pattern: Pattern3::new(vec![MatchCell3::new(Delta3::ZERO).require(PLAYER)]),
             writes: Vec::new(),
             effects: Vec::new(),
         };
+        let game =
+            support_game().clone_with_program(vec![puzzle_grid3d::RuleStep3::Rule(rule.clone())]);
         let model = Puzzle3RuntimeModel::checked_new(
             game.clone(),
             None,
-            vec![puzzle_grid3d::RuleStep3::Rule(rule.clone())],
-            Vec::new(),
             vec![Vec::new()],
             support_level_bundle(&game),
             None,
@@ -712,10 +549,7 @@ mod tests {
         let decoded =
             puzzle3_runtime_model_from_fixture_value(&fixture).expect("runtime contract decodes");
 
-        assert_eq!(
-            puzzle_grid3d::flattened_rules(&decoded.rules)[0].guards,
-            rule.guards
-        );
+        assert_eq!(decoded.game.rules()[0].guards, rule.guards);
     }
 
     #[test]

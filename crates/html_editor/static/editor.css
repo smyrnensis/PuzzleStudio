@@ -2131,18 +2131,16 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 
 .source-find-panel {
   position: absolute;
-  top: 8px;
-  right: 10px;
+  inset: 0 0 auto;
   z-index: 8;
-  width: min(520px, calc(100% - 20px));
-  padding: 7px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 6px;
-  border: 1px solid var(--line-strong);
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--panel) 96%, var(--code-bg));
-  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.32);
+  border-bottom: 1px solid var(--line-strong);
+  background: var(--panel);
 }
 
 .source-find-panel[hidden] {
@@ -2814,7 +2812,10 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   min-width: 16px;
   margin-left: 7px;
   padding: 1px 4px;
-  display: inline-block;
+  display: inline-flex;
+  gap: 2px;
+  align-items: center;
+  justify-content: center;
   border: 1px solid var(--line-strong);
   border-radius: 3px;
   background: var(--control-bg);
@@ -2822,6 +2823,16 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   font: 800 10px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   text-align: center;
   vertical-align: 1px;
+}
+
+.editor-hover-shortcut svg {
+  width: 11px;
+  height: 11px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .level-playtest-button .level-stop-icon rect {

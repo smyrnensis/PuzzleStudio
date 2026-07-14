@@ -6,7 +6,7 @@ title = "01 — Basic"
 subtitle = "Rules, collision, winning, sprites, and levels"
 
 puzzle basic {
-layers {
+slots {
 Floor
 Goal
 Player Box Wall

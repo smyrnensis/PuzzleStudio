@@ -1,18 +1,18 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use puzzle_grid3d::{
-    ConditionValueKind3, Coord3, Direction3, DirectionSet3, FrameExpr3, FrameSet3, FrameSlot3,
-    Game3, Guard3, InputDef3, InputId, LayerId, Level3, LevelBundle3, LevelCell3, LevelEntry3,
-    MarkId3, MatchCell3, ObjectDef3, ObjectId, ObjectSetMarkPattern3, ObjectSetMatcher3, Offset3,
-    Pattern3, Rule3, RuleApplication3, RuleCondition3, RuleId3, RuleStep3, Size3, WinCondition3,
-    WriteOp3,
+    CompiledGame3, ConditionValueKind3, Coord3, Delta3, Direction3, DirectionSet3, FrameExpr3,
+    FrameSet3, FrameSlot3, Guard3, InputDef3, InputId, Level3, LevelBundle3, LevelCell3,
+    LevelEntry3, MarkDef3, MatchCell3, ObjectDef3, ObjectId, Pattern3, Rule3, RuleApplication3,
+    RuleCondition3, RuleId3, RuleStep3, Size3, WinCondition3,
 };
 use puzzle_grid3d_authoring::{
-    ConcreteObject3, DenseCell3, DensePattern3, DenseRow3, DenseRuleTemplate3, DenseSlice3,
-    FrameOrientation3, LineMatchCellTemplate3, LineOrientation3, LinePatternTemplate3,
-    LineRuleTemplate3, LineWriteOpTemplate3, LocalWriteOpTemplate3, ObjectFamily3, ObjectSelector3,
-    ObjectVariant3, SelectorCatalog3, SelectorGroup3, SelectorMark3, SelectorTag3, VariantAxis3,
-    lower_dense_rule_template, lower_line_rule_template,
+    DenseCell3, DensePattern3, DenseRow3, DenseRuleTemplate3, DenseSlice3, FrameOrientation3,
+    LineMatchCellTemplate3, LineOffsetTemplate3, LineOrientation3, LinePatternTemplate3,
+    LineRuleTemplate3, LineWriteOpTemplate3, LocalWriteOpTemplate3, MatchCellTemplate3,
+    ObjectSelector3, PatternTemplate3, ResolvedObjectSelector3, ResolvedSelectorMark3,
+    RuleTemplate3, SelectorMark3, SelectorTag3, WriteOpTemplate3, lower_rule_template,
+    project_dense_rule_template, project_line_rule_template,
 };
 use puzzle_kernel::{LocalFrame, LocalFrameExtent};
 use puzzle_runtime_contract::{LifecycleCommand, Puzzle3CameraEffect, RuntimeLifecycle};
@@ -29,27 +29,49 @@ pub type ParseError3 = DiagnosticReport;
 
 pub fn parse_puzzle3d(source: &str) -> Result<ParsedPuzzle3, DiagnosticReport> {
     let document = crate::parse_surface_compile_document(source)?;
-    parse_puzzle3d_logical_lines(&document.logical_lines)
+    let parts = crate::parse_document_source_parts_from_surface_document(&document)?;
+    let [model] = parts.models.as_slice() else {
+        return Err(message(
+            "3D lowering requires exactly one `puzzle <name> { ... }` declaration",
+        ));
+    };
+    let [catalog] = parts.model_catalogs.as_slice() else {
+        return Err(message("3D lowering requires exactly one Catalog product"));
+    };
+    lower_puzzle3d_product(model, catalog.clone())
 }
 
-pub(crate) fn parse_puzzle3d_logical_lines(
-    lines: &[crate::source::LogicalLine],
+pub(crate) fn lower_puzzle3d_product(
+    model: &crate::model_syntax::PuzzleModelSyntax,
+    catalog: crate::Catalog,
 ) -> Result<ParsedPuzzle3, ParseError3> {
-    Parser3::from_lines(lines.iter().map(|line| line.text.clone()).collect()).parse()
+    if model.dimension != crate::ModelDimension::Three || !model.dimension_is_explicit {
+        return Err(message(format!(
+            "puzzle `{}` must explicitly declare `dimension = 3`",
+            model.name
+        )));
+    }
+    let layer_count = catalog.layer_count.unwrap_or(0);
+    let mut lowering = Puzzle3Lowering::new(model.entries.clone(), catalog, layer_count);
+    for entry in &model.level_resources {
+        lowering.parse_levels_entry(entry)?;
+    }
+    for entry in &model.sprite_resources {
+        lowering.parse_sprites_entry(entry)?;
+    }
+    lowering.lower()
 }
 
-struct Parser3 {
-    lines: Vec<String>,
-    value_sets: Vec<(String, Vec<String>)>,
+struct Puzzle3Lowering {
+    model_entries: Vec<crate::model_syntax::PuzzleEntrySyntax>,
+    catalog: crate::Catalog,
+    layer_count: u16,
     input_specs: Vec<InputSpec3>,
-    layers: Vec<String>,
-    layer_specs: Vec<LayerSpec3>,
-    group_specs: Vec<GroupSpec3>,
     legend_specs: Vec<LegendSpec3>,
     level_specs: Vec<LevelSpec3>,
-    rule_lines: Vec<String>,
+    rule_lines: Vec<puzzle_authoring::RuleStatementSyntax>,
     local_frame_modifier: Option<String>,
-    on_level_start_lines: Vec<String>,
+    on_level_start_lines: Vec<puzzle_authoring::RuleStatementSyntax>,
     on_level_start_local_frame_modifier: Option<String>,
     on_level_clear_lines: Vec<String>,
     on_last_level_clear_lines: Option<Vec<String>>,
@@ -58,18 +80,28 @@ struct Parser3 {
     query_names: HashSet<String>,
     solver_strategy: Option<crate::solver_surface::SolverSurfaceStrategy>,
     settings: ModelSettings3,
-    sprite_set: Option<SpriteSet3>,
+    sprite_resource: Option<SpriteResourceSyntax3>,
 }
 
-impl Parser3 {
-    fn from_lines(lines: Vec<String>) -> Self {
+struct SpriteResourceSyntax3 {
+    name: String,
+    model: Option<String>,
+    shapes: HashMap<String, Vec<crate::sprite_authoring::SpriteFrameSyntax>>,
+    attachments: Vec<crate::sprite_authoring::SpriteAttachmentSyntax>,
+    order: Option<puzzle_authoring::SpriteOrderSurface>,
+}
+
+impl Puzzle3Lowering {
+    fn new(
+        model_entries: Vec<crate::model_syntax::PuzzleEntrySyntax>,
+        catalog: crate::Catalog,
+        layer_count: u16,
+    ) -> Self {
         Self {
-            lines,
-            value_sets: Vec::new(),
+            model_entries,
+            catalog,
+            layer_count,
             input_specs: Vec::new(),
-            layers: Vec::new(),
-            layer_specs: Vec::new(),
-            group_specs: Vec::new(),
             legend_specs: Vec::new(),
             level_specs: Vec::new(),
             rule_lines: Vec::new(),
@@ -83,189 +115,92 @@ impl Parser3 {
             query_names: HashSet::new(),
             solver_strategy: None,
             settings: ModelSettings3::default(),
-            sprite_set: None,
+            sprite_resource: None,
         }
     }
 
-    fn parse(mut self) -> Result<ParsedPuzzle3, ParseError3> {
-        let mut index = 0;
-        while index < self.lines.len() {
-            let line = self.lines[index].clone();
-            if line.starts_with("puzzle3 ") {
-                return Err(message(
-                    "`puzzle3` was removed; use `puzzle <name> { ... }` in .puzzle3 files",
-                ));
-            }
-            let directive = puzzle_authoring::puzzle_directive_surface(&line);
-            if directive == puzzle_authoring::PuzzleDirectiveSurface::Empty {
-                index += 1;
-            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Model
-                && is_model3_header(&line)
-            {
-                index = self.parse_model_block(index + 1)?;
-            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::RemovedModelPrefix {
-                return Err(message(
-                    "top-level 3D puzzle definition must be: puzzle <name>",
-                ));
-            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Metadata {
-                index += 1;
-            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::DocumentShell {
-                if line.ends_with('{') {
-                    index = skip_braced_block(&self.lines, index + 1)?;
-                } else {
-                    index += 1;
-                }
-            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Layers
-                && line == "layers {"
-            {
-                index = self.parse_layers_block(index + 1)?;
-            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Tags
-                && line == "tags {"
-            {
-                index = self.parse_tags_block(index + 1)?;
-            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Tags {
-                return Err(message("tags header must be: tags {"));
-            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Objects {
-                return Err(message(
-                    "`objects { ... }` is not shared authoring syntax; declare objects in `layers { ... }`",
-                ));
-            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::DisplayObjects {
-                return Err(message(
-                    "`display_objects { ... }` was removed; declare `@Name` in `layers { ... }`",
-                ));
-            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Keys
-                && line == "keys {"
-            {
-                index = self.parse_keys_block(index + 1)?;
-            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Inputs {
-                return Err(message(
-                    "`inputs { ... }` was removed; use `keys { <key...> -> <input> }`",
-                ));
-            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Groups
-                && line == "groups {"
-            {
-                index = self.parse_groups_block(index + 1)?;
-            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::SingularGroup {
-                return Err(message(
-                    "singular group syntax was removed; use `groups { name = selector... }`",
-                ));
-            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Legend
-                && line == "legend {"
-            {
-                index = self.parse_legend_block(index + 1)?;
-            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Levels {
-                index = self.parse_levels_block(index)?;
-            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::RemovedLevels3 {
-                return Err(message("`levels3` was removed; use `levels`"));
-            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Sprites {
-                index = self.parse_sprites_block(index)?;
-            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Scene
-                && parse_scene_header(&line).is_some()
-            {
-                index = skip_braced_block(&self.lines, index + 1)?;
-            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::RuleProgram
-                && let Some(block) = puzzle_authoring::rule_program_block_surface(&line)
-            {
-                index = self.parse_rule_program_block(block, index + 1)?;
-            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::WinConditions {
-                index = self.parse_win_conditions_block(index + 1)?;
-            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Query {
-                self.parse_query_line(&line)?;
-                index += 1;
-            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Solver {
-                index = self.parse_solver_block(index)?;
-            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Render {
-                index = self.parse_render_block(index + 1)?;
-            } else if legacy_model_setting_name(&line).is_some() {
-                return Err(message(format!(
-                    "legacy model setting is not supported: {line}"
-                )));
-            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Assignment {
-                return Err(message(
-                    "bare tag-set assignments are not shared authoring syntax; use `tags { name = value... }`",
-                ));
-            } else {
-                return Err(message(format!("unknown 3D puzzle directive: {line}")));
-            }
-        }
+    fn lower(mut self) -> Result<ParsedPuzzle3, ParseError3> {
+        self.lower_model_entries()?;
 
-        let layer_count = self.layers.len() as u16;
-        if layer_count == 0 {
-            return Err(message("missing layers block"));
+        if self.layer_count == 0 {
+            return Err(message("missing slots block"));
         }
-
-        let group_declarations = self
-            .group_specs
+        let object_defs = self
+            .catalog
+            .object_defs
             .iter()
-            .map(GroupSpec3::declaration)
-            .collect::<Vec<_>>();
-        let mut build = CatalogBuild3::new(self.value_sets, self.layers.clone());
-        for layer in &self.layer_specs {
-            let expanded =
-                puzzle_authoring::expand_layer_selectors(&layer.selectors, &group_declarations)
-                    .map_err(|error| message_at_source_line(error.message, &error.source_line))?;
-            for selector in expanded.terms {
-                build.add_object_spec(parse_layer_object_spec(&selector, &layer.name)?)?;
-            }
-        }
-        let mut group_specs = self
-            .group_specs
+            .map(|object| ObjectDef3 {
+                id: object.id,
+                layer_id: object.layer_id,
+            })
+            .collect();
+        let sprite_set = self
+            .sprite_resource
+            .as_ref()
+            .map(|resource| lower_sprite_resource3(resource, &self.catalog))
+            .transpose()?;
+        let visual_order = crate::lib_authoring_parse_order::lower_sprite_order(
+            self.sprite_resource
+                .as_ref()
+                .and_then(|resource| resource.order.as_ref()),
+            &self.catalog,
+            "sprites order",
+        )?;
+        let mark_defs = self
+            .catalog
+            .mark_defs
             .iter()
-            .map(|group| group.expanded(&group_declarations))
-            .collect::<Result<Vec<_>, _>>()?;
-        for layer in self.layer_specs.iter().filter(|layer| layer.named) {
-            if puzzle_authoring::selector_alias_conflicts(
-                &layer.name,
-                std::iter::empty(),
-                std::iter::empty(),
-                group_specs.iter().map(|group| group.name.as_str()),
-            ) {
-                return Err(message(format!(
-                    "group name must not shadow another selector: {}",
-                    layer.name
-                )));
-            }
-            let expanded =
-                puzzle_authoring::expand_layer_selectors(&layer.selectors, &group_declarations)
-                    .map_err(|error| message_at_source_line(error.message, &error.source_line))?;
-            group_specs.push(GroupSpec3 {
-                name: layer.name.clone(),
-                selectors: expanded.terms,
-                source_line: layer.source_line.clone(),
-            });
-        }
-        let object_defs = build.object_defs.clone();
-        let display_objects = build.display_objects.clone();
-        let catalog = build.catalog_with_groups(group_specs)?;
-        let game = Game3::new_with_inputs(
-            layer_count,
+            .map(|mark| MarkDef3 {
+                id: puzzle_grid3d::MarkId3(mark.id.0),
+                kind: mark.kind,
+                values: mark.values.clone(),
+            })
+            .collect();
+        let inputs = inputs_from_specs(self.input_specs)?;
+        let game = CompiledGame3::new_with_mark_condition_defs_and_program(
+            self.layer_count,
             object_defs,
-            inputs_from_specs(self.input_specs)?,
+            mark_defs,
+            Vec::new(),
+            Vec::new(),
         );
-        let local_frame =
-            parse_optional_program_local_frame(self.local_frame_modifier.as_deref(), &catalog)?;
+        let local_frame = parse_optional_program_local_frame(
+            self.local_frame_modifier.as_deref(),
+            &self.catalog,
+        )?;
         let on_level_start_local_frame = parse_optional_program_local_frame(
             self.on_level_start_local_frame_modifier.as_deref(),
-            &catalog,
+            &self.catalog,
         )?;
 
         let line_gap_limit = line_gap_limit_from_levels(&self.level_specs);
         let mut rules = Vec::new();
         let mut rule_camera_effects = Vec::new();
         let mut next_main_rule_id = 0u16;
-        for line in &self.rule_lines {
-            let parsed = parse_rule_line(line, &catalog, &game, line_gap_limit)?;
+        for parsed in lower_rule_statement_syntax3(
+            &self.rule_lines,
+            &self.catalog,
+            line_gap_limit,
+            None,
+            &[],
+        )? {
             rules.push(program_step_for_rule_statement(
                 parsed.rules,
                 &mut next_main_rule_id,
             )?);
             rule_camera_effects.extend(parsed.camera_effects);
         }
+        let game = game.clone_with_program(rules);
         let mut on_level_start = Vec::new();
         let mut on_level_start_camera_effects = Vec::new();
         let mut next_level_start_rule_id = 0u16;
-        for line in &self.on_level_start_lines {
-            let parsed = parse_rule_line(line, &catalog, &game, line_gap_limit)?;
+        for parsed in lower_rule_statement_syntax3(
+            &self.on_level_start_lines,
+            &self.catalog,
+            line_gap_limit,
+            None,
+            &[],
+        )? {
             on_level_start.push(program_step_for_rule_statement(
                 parsed.rules,
                 &mut next_level_start_rule_id,
@@ -294,7 +229,7 @@ impl Parser3 {
             None
         } else {
             Some(lower_win_conditions(
-                &catalog,
+                &self.catalog,
                 &self.win_condition_lines,
                 line_gap_limit,
             )?)
@@ -304,26 +239,32 @@ impl Parser3 {
         } else {
             Some(lower_level_bundle(
                 game.clone(),
-                &catalog,
+                &self.catalog,
                 &self.legend_specs,
                 &self.level_specs,
             )?)
         };
-        validate_query_definitions3(&self.query_definitions, &catalog, line_gap_limit)?;
+        validate_query_definitions3(&self.query_definitions, &self.catalog, line_gap_limit)?;
         let solver_strategy = lower_solver_strategy3(
             self.solver_strategy.clone(),
             &self.query_definitions,
-            &catalog,
+            &self.catalog,
             line_gap_limit,
         )?;
+        let object_labels = self.catalog.object_labels.clone();
+        let viewport_focus_objects = if self.settings.viewport.mode == ViewportMode3::Full {
+            Vec::new()
+        } else {
+            resolve_named_selector_objects3(&self.settings.viewport.focus, &self.catalog)?
+        };
 
         Ok(ParsedPuzzle3 {
             game,
-            catalog,
+            inputs,
+            object_labels,
+            viewport_focus_objects,
             settings: self.settings,
             local_frame,
-            rules,
-            display_objects,
             rule_camera_effects,
             level_bundle,
             level_packs: self
@@ -335,77 +276,67 @@ impl Parser3 {
             solver_strategy,
             lifecycle,
             on_level_start_camera_effects,
-            sprite_set: self.sprite_set,
+            sprite_set,
+            visual_order,
         })
     }
 
-    fn parse_model_block(&mut self, mut index: usize) -> Result<usize, ParseError3> {
-        while index < self.lines.len() {
-            let line = self.lines[index].clone();
-            let directive = puzzle_authoring::puzzle_directive_surface(&line);
-            if directive == puzzle_authoring::PuzzleDirectiveSurface::Close {
-                return Ok(index + 1);
-            }
+    fn lower_model_entries(&mut self) -> Result<(), ParseError3> {
+        for entry in self.model_entries.clone() {
+            let line = entry.header.text.clone();
+            let directive = entry.directive;
             if directive == puzzle_authoring::PuzzleDirectiveSurface::Empty {
-                index += 1;
-            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Layers
-                && line == "layers {"
-            {
-                index = self.parse_layers_block(index + 1)?;
-            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Tags
-                && line == "tags {"
-            {
-                index = self.parse_tags_block(index + 1)?;
-            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Tags {
-                return Err(message("tags header must be: tags {"));
+                continue;
             } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Objects {
                 return Err(message(
-                    "`objects { ... }` is not shared authoring syntax; declare objects in `layers { ... }`",
-                ));
-            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::DisplayObjects {
-                return Err(message(
-                    "`display_objects { ... }` was removed; declare `@Name` in `layers { ... }`",
+                    "`objects { ... }` is not shared authoring syntax; declare objects in `slots { ... }`",
                 ));
             } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Keys
                 && line == "keys {"
             {
-                index = self.parse_keys_block(index + 1)?;
+                self.parse_keys_entry(&entry)?;
             } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Inputs {
                 return Err(message(
                     "`inputs { ... }` was removed; use `keys { <key...> -> <input> }`",
                 ));
-            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Groups
-                && line == "groups {"
-            {
-                index = self.parse_groups_block(index + 1)?;
             } else if directive == puzzle_authoring::PuzzleDirectiveSurface::SingularGroup {
                 return Err(message(
                     "singular group syntax was removed; use `groups { name = selector... }`",
                 ));
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Legend
+                && line == "legend {"
+            {
+                self.parse_legend_entry(&entry)?;
+            } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Levels {
+                self.parse_levels_entry(&entry)?;
             } else if directive == puzzle_authoring::PuzzleDirectiveSurface::RuleProgram
                 && let Some(block) = puzzle_authoring::rule_program_block_surface(&line)
             {
-                index = self.parse_rule_program_block(block, index + 1)?;
+                self.parse_rule_program_entry(block, &entry)?;
             } else if directive == puzzle_authoring::PuzzleDirectiveSurface::WinConditions {
-                index = self.parse_win_conditions_block(index + 1)?;
+                self.parse_win_conditions_entry(&entry);
             } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Query {
                 self.parse_query_line(&line)?;
-                index += 1;
             } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Solver {
-                index = self.parse_solver_block(index)?;
+                self.parse_solver_entry(&entry)?;
             } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Render {
-                index = self.parse_render_block(index + 1)?;
+                self.parse_render_entry(&entry)?;
             } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Sprites {
-                index = self.parse_sprites_block(index)?;
+                self.parse_sprites_entry(&entry)?;
             } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Scene
                 && parse_scene_header(&line).is_some()
             {
-                index = skip_braced_block(&self.lines, index + 1)?;
+                continue;
             } else if legacy_model_setting_name(&line).is_some() {
                 return Err(message(format!(
                     "legacy model setting is not supported: {line}"
                 )));
             } else if directive == puzzle_authoring::PuzzleDirectiveSurface::Assignment {
+                if puzzle_authoring::parse_assignment_row(&line)
+                    .is_some_and(|(name, _)| name == "dimension")
+                {
+                    continue;
+                }
                 return Err(message(
                     "bare tag-set assignments are not shared authoring syntax; use `tags { name = value... }`",
                 ));
@@ -413,13 +344,14 @@ impl Parser3 {
                 return Err(message(format!("unknown model directive: {line}")));
             }
         }
-        Err(message("model block missing }"))
+        Ok(())
     }
 
     fn apply_model_setting(&mut self, setting: ModelSetting3) {
         match setting {
             ModelSetting3::CameraYaw(value) => self.settings.camera.yaw_degrees = value,
             ModelSetting3::CameraPitch(value) => self.settings.camera.pitch_degrees = value,
+            ModelSetting3::CameraRoll(value) => self.settings.camera.roll_degrees = value,
             ModelSetting3::CameraZoom(value) => self.settings.camera.zoom_milli = value,
             ModelSetting3::InteractiveLook(value) => self.settings.camera.interactive_look = value,
             ModelSetting3::InteractiveZoom(value) => self.settings.camera.interactive_zoom = value,
@@ -432,119 +364,98 @@ impl Parser3 {
         }
     }
 
-    fn parse_render_block(&mut self, mut index: usize) -> Result<usize, ParseError3> {
-        while index < self.lines.len() {
-            let line = self.lines[index].clone();
-            if line == "}" {
-                return Ok(index + 1);
-            }
-            if line.is_empty() {
-                index += 1;
-            } else if line == "camera {" {
-                index = self.parse_camera_block(index + 1)?;
-            } else if line == "grid {" {
-                index = self.parse_grid_block(index + 1)?;
-            } else if line == "pixelate {" {
-                index = self.parse_pixelate_block(index + 1)?;
-            } else if line == "viewport {" {
-                index = self.parse_viewport_block(index + 1)?;
-            } else {
-                let setting = parse_render_setting_line(&line)?;
-                self.apply_model_setting(setting);
-                index += 1;
+    fn parse_render_entry(
+        &mut self,
+        entry: &crate::model_syntax::PuzzleEntrySyntax,
+    ) -> Result<(), ParseError3> {
+        for child in crate::model_syntax::parse_child_entries(entry)? {
+            match child.header.text.as_str() {
+                "camera {" => self.parse_camera_entry(&child)?,
+                "grid {" => self.parse_grid_entry(&child)?,
+                "pixelate {" => self.parse_pixelate_entry(&child)?,
+                "viewport {" => self.parse_viewport_entry(&child)?,
+                line if child.body.is_empty() => {
+                    let setting = parse_render_setting_line(line)?;
+                    self.apply_model_setting(setting);
+                }
+                line => return Err(message(format!("unknown render directive: {line}"))),
             }
         }
-        Err(message("render block missing }"))
+        Ok(())
     }
 
-    fn parse_camera_block(&mut self, mut index: usize) -> Result<usize, ParseError3> {
-        while index < self.lines.len() {
-            let line = self.lines[index].clone();
-            if line == "}" {
-                return Ok(index + 1);
-            }
-            if line.is_empty() {
-                index += 1;
-                continue;
-            }
-            let setting = parse_camera_setting_line(&line)?;
+    fn parse_camera_entry(
+        &mut self,
+        entry: &crate::model_syntax::PuzzleEntrySyntax,
+    ) -> Result<(), ParseError3> {
+        for line in entry.body.iter().map(|line| line.text.as_str()) {
+            let setting = parse_camera_setting_line(line)?;
             self.apply_model_setting(setting);
-            index += 1;
         }
-        Err(message("camera block missing }"))
+        Ok(())
     }
 
-    fn parse_viewport_block(&mut self, mut index: usize) -> Result<usize, ParseError3> {
-        while index < self.lines.len() {
-            let line = self.lines[index].clone();
-            if line == "}" {
-                return Ok(index + 1);
-            }
-            if line.is_empty() {
-                index += 1;
-                continue;
-            }
-            parse_viewport_directive(&line, &mut self.settings.viewport)?;
-            index += 1;
+    fn parse_viewport_entry(
+        &mut self,
+        entry: &crate::model_syntax::PuzzleEntrySyntax,
+    ) -> Result<(), ParseError3> {
+        for line in entry.body.iter().map(|line| line.text.as_str()) {
+            parse_viewport_directive(line, &mut self.settings.viewport)?;
         }
-        Err(message("viewport block missing }"))
+        Ok(())
     }
 
-    fn parse_grid_block(&mut self, mut index: usize) -> Result<usize, ParseError3> {
-        while index < self.lines.len() {
-            let line = self.lines[index].clone();
-            if line == "}" {
-                return Ok(index + 1);
-            }
-            if line.is_empty() {
-                index += 1;
-                continue;
-            }
-            let setting = parse_grid_setting_line(&line)?;
+    fn parse_grid_entry(
+        &mut self,
+        entry: &crate::model_syntax::PuzzleEntrySyntax,
+    ) -> Result<(), ParseError3> {
+        for line in entry.body.iter().map(|line| line.text.as_str()) {
+            let setting = parse_grid_setting_line(line)?;
             self.apply_model_setting(setting);
-            index += 1;
         }
-        Err(message("grid block missing }"))
+        Ok(())
     }
 
-    fn parse_pixelate_block(&mut self, mut index: usize) -> Result<usize, ParseError3> {
-        while index < self.lines.len() {
-            let line = self.lines[index].clone();
-            if line == "}" {
-                return Ok(index + 1);
-            }
-            if line.is_empty() {
-                index += 1;
-                continue;
-            }
-            let setting = parse_pixelate_setting_line(&line)?;
+    fn parse_pixelate_entry(
+        &mut self,
+        entry: &crate::model_syntax::PuzzleEntrySyntax,
+    ) -> Result<(), ParseError3> {
+        for line in entry.body.iter().map(|line| line.text.as_str()) {
+            let setting = parse_pixelate_setting_line(line)?;
             self.apply_model_setting(setting);
-            index += 1;
         }
-        Err(message("pixelate block missing }"))
+        Ok(())
     }
 
-    fn parse_sprites_block(&mut self, header_index: usize) -> Result<usize, ParseError3> {
-        if self.sprite_set.is_some() {
+    fn parse_sprites_entry(
+        &mut self,
+        entry: &crate::model_syntax::PuzzleEntrySyntax,
+    ) -> Result<(), ParseError3> {
+        if self.sprite_resource.is_some() {
             return Err(message("duplicate sprites block"));
         }
-        let resource =
-            puzzle_authoring::collect_resource_block_surface(&self.lines, header_index, "sprites")
-                .map_err(|error| message(error.message()))?;
-        let name = resource.header.name.unwrap_or("default").to_string();
-        let model = resource.header.owner.map(str::to_string);
-        let mut sprites = Vec::<Sprite3>::new();
+        let header = puzzle_authoring::resource_header_surface(&entry.header.text, "sprites")
+            .map_err(|error| message(error.message()))?;
+        let name = header.name.unwrap_or("default").to_string();
+        let model = header.owner.map(str::to_string);
         let mut shapes = HashMap::<String, Vec<crate::sprite_authoring::SpriteFrameSyntax>>::new();
         let mut attachments = Vec::new();
-        let mut index = resource.body_start;
-        while index < resource.body_end {
-            let line = self.lines[index].clone();
+        let mut order = None;
+        let lines = entry
+            .body
+            .iter()
+            .map(|line| line.text.clone())
+            .collect::<Vec<_>>();
+        let mut index = 0;
+        while index < lines.len() {
+            let line = lines[index].clone();
             if line.is_empty() {
                 index += 1;
                 continue;
             }
             if line == "shapes {" {
-                let (next, parsed_shapes) = parse_sprite_shapes_block(&self.lines, index + 1)?;
+                let (shapes_entry, next) = crate::model_syntax::parse_child_entry_at(entry, index)?;
+                let parsed_shapes = parse_sprite_shapes_entry(&shapes_entry)?;
                 for (shape_name, shape) in parsed_shapes {
                     if shapes.insert(shape_name.clone(), shape).is_some() {
                         return Err(message(format!("duplicate sprite shape: {shape_name}")));
@@ -553,206 +464,85 @@ impl Parser3 {
                 index = next;
                 continue;
             }
-            let attachment = crate::sprite_authoring::collect_sprite_attachment(&self.lines, index)
+            if line == "order {" {
+                if order.is_some() {
+                    return Err(message("duplicate sprite order block"));
+                }
+                let (parsed, next) = puzzle_authoring::parse_sprite_order_surface(&lines, index)
+                    .map_err(|error| message(error.message()))?;
+                order = Some(parsed);
+                index = next;
+                continue;
+            }
+            let attachment = crate::sprite_authoring::collect_sprite_attachment(&lines, index)
                 .map_err(message)?;
             index = attachment.next_index;
             attachments.push(attachment);
         }
-        for attachment in attachments {
-            let sprite = parse_sprite3_from_shared_syntax(
-                &attachment.header,
-                &attachment.body_lines,
-                &shapes,
-            )?;
-            sprites.push(sprite);
-        }
-        self.sprite_set = Some(SpriteSet3::new(name, model, sprites));
-        Ok(resource.next_index)
-    }
-
-    fn parse_layers_block(&mut self, index: usize) -> Result<usize, ParseError3> {
-        let lines = self.lines.clone();
-        self.parse_layer_lines(&lines, index)
-    }
-
-    fn parse_tags_block(&mut self, index: usize) -> Result<usize, ParseError3> {
-        let block = puzzle_authoring::collect_row_block_surface(&self.lines, index, "tags")
-            .map_err(|error| message(error.message()))?;
-        for line in block.rows {
-            let assignment = puzzle_authoring::selector_assignment_surface(line)
-                .ok_or_else(|| message("tag row must be: <name> = <value...>"))?;
-            if !puzzle_authoring::is_identifier(assignment.name) {
-                return Err(message("tag set name must be an identifier"));
-            }
-            if crate::is_builtin_value_set(assignment.name) {
-                return Err(message("built-in tag set cannot be redefined"));
-            }
-            if self
-                .value_sets
-                .iter()
-                .any(|(name, _)| name == assignment.name)
-            {
-                return Err(message("duplicate tag set"));
-            }
-            let (values, _) =
-                crate::parse_tag_domain_values(&assignment.selectors, &HashMap::new(), line)
-                    .map_err(diagnostic_report_error3)?;
-            self.value_sets.push((assignment.name.to_string(), values));
-        }
-        Ok(block.next_index)
-    }
-
-    fn parse_layer_lines(
-        &mut self,
-        lines: &[String],
-        mut index: usize,
-    ) -> Result<usize, ParseError3> {
-        while index < lines.len() {
-            let line = lines[index].clone();
-            if line == "}" {
-                return Ok(index + 1);
-            }
-            if line.is_empty() {
-                index += 1;
-                continue;
-            }
-            let tokens = puzzle_authoring::split_header_tokens(&line);
-            if let ["for", binding, "in", sources @ ..] = tokens.as_slice() {
-                let value_sets = self.value_sets.iter().cloned().collect::<HashMap<_, _>>();
-                let values =
-                    crate::for_expansion_values(sources, &value_sets, &HashMap::new(), &line)
-                        .map_err(diagnostic_report_error3)?;
-                let (body, next_index) =
-                    crate::collect_statement_block_lines(lines, index + 1, &line)
-                        .map_err(diagnostic_report_error3)?;
-                for value in values {
-                    let mut expanded =
-                        crate::expand_for_binding_lines(&body, binding, &value, &HashMap::new())
-                            .map_err(diagnostic_report_error3)?;
-                    expanded.push("}".to_string());
-                    let parsed = self.parse_layer_lines(&expanded, 0)?;
-                    if parsed != expanded.len() {
-                        return Err(message("for expansion failed"));
-                    }
-                }
-                index = next_index;
-                continue;
-            }
-            if matches!(tokens.as_slice(), ["for", ..]) {
-                return Err(message(
-                    "for directive must be: for <binding> in <source...>",
-                ));
-            }
-            self.parse_layer_line(&line)
-                .map_err(|report| report.with_fallback_source_line(&line))?;
-            index += 1;
-        }
-        Err(message("layers block missing }"))
-    }
-
-    fn parse_layer_line(&mut self, line: &str) -> Result<(), ParseError3> {
-        let surface = puzzle_authoring::layer_row_surface(line)
-            .ok_or_else(|| message("invalid layer row"))?;
-        match surface {
-            puzzle_authoring::LayerRowSurface::Named(assignment) => {
-                self.add_layer(assignment.name, &assignment.selectors, true, line)
-            }
-            puzzle_authoring::LayerRowSurface::Anonymous { selectors } => {
-                let name = format!("__anonymous_layer_{}", self.layers.len());
-                self.add_layer(&name, &selectors, false, line)
-            }
-            puzzle_authoring::LayerRowSurface::Each { selectors } => {
-                for selector in selectors {
-                    let name = format!("__anonymous_layer_{}", self.layers.len());
-                    self.add_layer(&name, &[selector], false, line)?;
-                }
-                Ok(())
-            }
-        }
-    }
-
-    fn add_layer(
-        &mut self,
-        layer: &str,
-        selectors: &[&str],
-        named: bool,
-        source_line: &str,
-    ) -> Result<(), ParseError3> {
-        reject_occurrence_label_marker_in_name(layer, "layer name")?;
-        if !named || !self.layers.iter().any(|existing| existing == layer) {
-            self.layers.push(layer.to_string());
-        }
-        self.layer_specs.push(LayerSpec3 {
-            name: layer.to_string(),
-            selectors: selectors
-                .iter()
-                .map(|selector| (*selector).to_string())
-                .collect(),
-            named,
-            source_line: source_line.to_string(),
+        self.sprite_resource = Some(SpriteResourceSyntax3 {
+            name,
+            model,
+            shapes,
+            attachments,
+            order,
         });
         Ok(())
     }
 
-    fn parse_keys_block(&mut self, index: usize) -> Result<usize, ParseError3> {
-        let block = puzzle_authoring::collect_row_block_surface(&self.lines, index, "keys")
-            .map_err(|error| message(error.message()))?;
-        for line in block.rows {
+    fn parse_keys_entry(
+        &mut self,
+        entry: &crate::model_syntax::PuzzleEntrySyntax,
+    ) -> Result<(), ParseError3> {
+        for line in entry.body.iter().map(|line| line.text.as_str()) {
+            if line.ends_with('{') {
+                return Err(message(format!(
+                    "keys accepts rows, not nested blocks: {line}"
+                )));
+            }
             self.input_specs.push(
                 input_spec_from_key_surface(line)
                     .map_err(|report| report.with_fallback_source_line(line))?,
             );
         }
-        Ok(block.next_index)
+        Ok(())
     }
 
-    fn parse_groups_block(&mut self, index: usize) -> Result<usize, ParseError3> {
-        let block = puzzle_authoring::collect_row_block_surface(&self.lines, index, "groups")
-            .map_err(|error| message(error.message()))?;
-        for line in block.rows {
-            self.group_specs.push(
-                parse_group_spec(line).map_err(|report| report.with_fallback_source_line(line))?,
-            );
-        }
-        Ok(block.next_index)
-    }
-
-    fn parse_legend_block(&mut self, index: usize) -> Result<usize, ParseError3> {
-        let block = puzzle_authoring::collect_row_block_surface(&self.lines, index, "legend")
-            .map_err(|error| message(error.message()))?;
-        for line in block.rows {
+    fn parse_legend_entry(
+        &mut self,
+        entry: &crate::model_syntax::PuzzleEntrySyntax,
+    ) -> Result<(), ParseError3> {
+        for line in entry.body.iter().map(|line| line.text.as_str()) {
+            if line.ends_with('{') {
+                return Err(message(format!(
+                    "legend accepts rows, not nested blocks: {line}"
+                )));
+            }
             self.legend_specs.push(
                 parse_legend_spec(line).map_err(|report| report.with_fallback_source_line(line))?,
             );
         }
-        Ok(block.next_index)
+        Ok(())
     }
 
-    fn parse_levels_block(&mut self, header_index: usize) -> Result<usize, ParseError3> {
-        let (pack, body_start, body_end, next_index) = {
-            let resource = puzzle_authoring::collect_resource_block_surface(
-                &self.lines,
-                header_index,
-                "levels",
-            )
+    fn parse_levels_entry(
+        &mut self,
+        entry: &crate::model_syntax::PuzzleEntrySyntax,
+    ) -> Result<(), ParseError3> {
+        let header = puzzle_authoring::resource_header_surface(&entry.header.text, "levels")
             .map_err(|error| message(error.message()))?;
-            (
-                resource.header.name.map(str::to_string),
-                resource.body_start,
-                resource.body_end,
-                resource.next_index,
-            )
-        };
+        let pack = header.name.map(str::to_string);
         let mut namespace_count = 0usize;
-        let mut index = body_start;
-        while index < body_end {
-            let line = self.lines[index].clone();
+        let mut index = 0;
+        while index < entry.body.len() {
+            let line = entry.body[index].text.clone();
             if line.is_empty() {
                 index += 1;
                 continue;
             }
             if line == "legend {" {
-                index = self.parse_legend_block(index + 1)?;
+                let (child, next) = crate::model_syntax::parse_child_entry_at(entry, index)?;
+                self.parse_legend_entry(&child)?;
+                index = next;
                 continue;
             }
             if puzzle_authoring::is_braced_level_header(&line) {
@@ -763,11 +553,11 @@ impl Parser3 {
                     namespace_count,
                 );
                 let name = parse_level_header(&line, auto_name)?;
-                let (next, rows) = self.collect_level_body(index + 1)?;
+                let (child, next) = crate::model_syntax::parse_child_entry_at(entry, index)?;
                 self.level_specs.push(LevelSpec3 {
                     name,
                     pack: pack.clone(),
-                    rows,
+                    rows: child.body.into_iter().map(|line| line.text).collect(),
                 });
                 index = next;
                 continue;
@@ -779,11 +569,11 @@ impl Parser3 {
                     self.level_specs.len(),
                     namespace_count,
                 );
-                let (next, rows) = self.collect_level_body(index + 1)?;
+                let (child, next) = crate::model_syntax::parse_child_entry_at(entry, index)?;
                 self.level_specs.push(LevelSpec3 {
                     name,
                     pack: pack.clone(),
-                    rows,
+                    rows: child.body.into_iter().map(|line| line.text).collect(),
                 });
                 index = next;
                 continue;
@@ -799,23 +589,14 @@ impl Parser3 {
             }
             return Err(message(format!("unknown levels directive: {line}")));
         }
-        Ok(next_index)
+        Ok(())
     }
 
-    fn collect_level_body(&self, index: usize) -> Result<(usize, Vec<String>), ParseError3> {
-        let block = puzzle_authoring::collect_container_block_surface(&self.lines, index, "level")
-            .map_err(|error| message(error.message()))?;
-        Ok((
-            block.next_index,
-            self.lines[block.body_start..block.body_end].to_vec(),
-        ))
-    }
-
-    fn parse_rule_program_block(
+    fn parse_rule_program_entry(
         &mut self,
         block: puzzle_authoring::RuleProgramBlockSurface<'_>,
-        start: usize,
-    ) -> Result<usize, ParseError3> {
+        entry: &crate::model_syntax::PuzzleEntrySyntax,
+    ) -> Result<(), ParseError3> {
         if matches!(
             block,
             puzzle_authoring::RuleProgramBlockSurface::OnLastLevelClear
@@ -826,9 +607,13 @@ impl Parser3 {
             ));
         }
 
-        let (body, next_index) =
-            puzzle_authoring::collect_rule_program_block_body(&self.lines, start, block)
-                .map_err(|error| message(error.message()))?;
+        let lines = entry
+            .body
+            .iter()
+            .map(|line| line.text.clone())
+            .collect::<Vec<_>>();
+        let body = puzzle_authoring::collect_rule_program_entry_body(&lines, block)
+            .map_err(|error| message(error.message()))?;
 
         match block {
             puzzle_authoring::RuleProgramBlockSurface::Rules { modifier } => {
@@ -861,23 +646,13 @@ impl Parser3 {
             }
         }
 
-        Ok(next_index)
+        Ok(())
     }
 
-    fn parse_win_conditions_block(&mut self, mut index: usize) -> Result<usize, ParseError3> {
-        while index < self.lines.len() {
-            let line = &self.lines[index];
-            if line == "}" {
-                return Ok(index + 1);
-            }
-            if line.is_empty() {
-                index += 1;
-                continue;
-            }
-            self.win_condition_lines.push(line.clone());
-            index += 1;
+    fn parse_win_conditions_entry(&mut self, entry: &crate::model_syntax::PuzzleEntrySyntax) {
+        for line in &entry.body {
+            self.win_condition_lines.push(line.text.clone());
         }
-        Err(message("win_conditions block missing }"))
     }
 
     fn parse_query_line(&mut self, line: &str) -> Result<(), ParseError3> {
@@ -890,70 +665,309 @@ impl Parser3 {
         Ok(())
     }
 
-    fn parse_solver_block(&mut self, index: usize) -> Result<usize, ParseError3> {
+    fn parse_solver_entry(
+        &mut self,
+        entry: &crate::model_syntax::PuzzleEntrySyntax,
+    ) -> Result<(), ParseError3> {
         if self.solver_strategy.is_some() {
             return Err(message_at_line(
                 "duplicate solver block",
-                &self.lines[index],
+                &entry.header.text,
             ));
         }
-        let (next_index, strategy) = crate::solver_surface::parse_solver_block(&self.lines, index)
+        let lines = entry
+            .body
+            .iter()
+            .map(|line| line.text.clone())
+            .collect::<Vec<_>>();
+        let strategy = crate::solver_surface::parse_solver_entry_body(&lines)
             .map_err(diagnostic_report_error3)?;
         self.solver_strategy = Some(strategy);
-        Ok(next_index)
+        Ok(())
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct ObjectSpec3 {
-    name: String,
-    axes: Vec<String>,
-    layer: String,
-    display: bool,
+fn resolve_named_selector_objects3(
+    focus: &str,
+    catalog: &crate::Catalog,
+) -> Result<Vec<ObjectId>, ParseError3> {
+    let mut objects = resolve_shared_selector_objects3(catalog, focus, "viewport focus")?;
+    objects.sort_by_key(|object| object.0);
+    objects.dedup();
+    Ok(objects)
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct LayerSpec3 {
-    name: String,
-    selectors: Vec<String>,
-    named: bool,
-    source_line: String,
+fn resolve_shared_selector_objects3(
+    catalog: &crate::Catalog,
+    token: &str,
+    context: &str,
+) -> Result<Vec<ObjectId>, ParseError3> {
+    crate::resolve_object_selector(
+        token,
+        token,
+        &catalog.object_names,
+        &catalog.object_schemas,
+        &crate::catalog_value_sets(catalog),
+        &catalog.maps,
+        &catalog.object_groups,
+        &catalog.variable_names,
+    )
+    .map(|selector| selector.alternatives)
+    .map_err(|error| {
+        message(format!(
+            "invalid {context} selector: {}",
+            diagnostic_message(&error)
+        ))
+    })
+}
+
+fn resolve_pattern_selector3(
+    catalog: &crate::Catalog,
+    selector: &ObjectSelector3,
+) -> Result<ResolvedObjectSelector3, ParseError3> {
+    let token = selector.token();
+    let alternatives = resolve_shared_selector_objects3(catalog, &token, "pattern")?;
+    let base_token = token
+        .split_once('#')
+        .map_or(token.as_str(), |(base, _)| base);
+    let runtime_object_set_layer = if !selector.has_occurrence_label()
+        && catalog.object_groups.contains_key(base_token)
+        && alternatives.len() > 1
+    {
+        let mut layers = alternatives
+            .iter()
+            .filter_map(|object| catalog.object_layers.get(object).copied());
+        let layer = layers.next();
+        layer.filter(|layer| layers.all(|candidate| candidate == *layer))
+    } else {
+        None
+    };
+    Ok(ResolvedObjectSelector3 {
+        token,
+        alternatives,
+        mark: selector
+            .mark()
+            .iter()
+            .map(|mark| resolve_selector_mark3(catalog, mark))
+            .collect::<Result<Vec<_>, _>>()?,
+        occurrence_labeled: selector.has_occurrence_label(),
+        runtime_object_set_layer,
+    })
+}
+
+fn resolve_selector_mark3(
+    catalog: &crate::Catalog,
+    mark: &SelectorMark3,
+) -> Result<ResolvedSelectorMark3, ParseError3> {
+    let (id, kind, values) = if mark.name.is_empty() {
+        let value = mark.value.as_deref().unwrap_or_default();
+        let index = match puzzle_authoring::mark_sugar_kind(value) {
+            Some(puzzle_authoring::MarkSugarKind::Movement) => 0,
+            None if value == "directions" => 0,
+            Some(puzzle_authoring::MarkSugarKind::Bool) => 1,
+            Some(puzzle_authoring::MarkSugarKind::Int) => 2,
+            _ => return Err(message(format!("unknown anonymous mark value: {value}"))),
+        };
+        let def = catalog
+            .mark_defs
+            .get(index)
+            .ok_or_else(|| message("canonical anonymous mark definition is missing"))?;
+        (def.id, def.kind, def.values.as_slice())
+    } else {
+        let def = catalog
+            .mark_names
+            .get(&mark.name)
+            .ok_or_else(|| message(format!("unknown mark: {}", mark.name)))?;
+        (def.id, def.kind, def.values.as_slice())
+    };
+    let value = match kind {
+        puzzle_core::MarkKind::Flag => {
+            if mark.value.is_some() {
+                return Err(message("flag mark cannot have a value"));
+            }
+            None
+        }
+        puzzle_core::MarkKind::Bool if mark.name.is_empty() => {
+            Some(i64::from(mark.value.as_deref() == Some("true")))
+        }
+        puzzle_core::MarkKind::Bool => {
+            if mark.value.is_some() {
+                return Err(message(
+                    "bool mark uses presence syntax; write `flag` or `no flag`",
+                ));
+            }
+            Some(1)
+        }
+        puzzle_core::MarkKind::Int => mark
+            .value
+            .as_deref()
+            .map(|value| {
+                value
+                    .parse::<i64>()
+                    .map_err(|_| message("expected integer mark value"))
+            })
+            .transpose()?,
+        puzzle_core::MarkKind::Enum => mark
+            .value
+            .as_deref()
+            .map(|value| {
+                values
+                    .iter()
+                    .position(|candidate| candidate == value)
+                    .and_then(|index| i64::try_from(index).ok())
+                    .ok_or_else(|| message(format!("unknown enum mark value: {value}")))
+            })
+            .transpose()?,
+    };
+    Ok(ResolvedSelectorMark3 {
+        id: puzzle_grid3d::MarkId3(id.0),
+        value,
+        match_value: if value.is_some() {
+            puzzle_grid3d::MarkValueMatch::Exact
+        } else {
+            puzzle_grid3d::MarkValueMatch::Any
+        },
+        negated: mark.negated,
+    })
+}
+
+fn resolve_pattern_template3(
+    catalog: &crate::Catalog,
+    pattern: PatternTemplate3,
+) -> Result<PatternTemplate3<ResolvedObjectSelector3, ResolvedSelectorMark3>, ParseError3> {
+    let gap_count = pattern.gap_count;
+    Ok(PatternTemplate3::new(
+        pattern
+            .cells
+            .into_iter()
+            .map(|cell| {
+                Ok(MatchCellTemplate3 {
+                    offset: cell.offset,
+                    require_null: cell.require_null,
+                    require: cell
+                        .require
+                        .iter()
+                        .map(|selector| resolve_pattern_selector3(catalog, selector))
+                        .collect::<Result<Vec<_>, _>>()?,
+                    forbid: cell
+                        .forbid
+                        .iter()
+                        .map(|selector| resolve_pattern_selector3(catalog, selector))
+                        .collect::<Result<Vec<_>, _>>()?,
+                    require_cell_mark: cell
+                        .require_cell_mark
+                        .iter()
+                        .map(|mark| resolve_selector_mark3(catalog, mark))
+                        .collect::<Result<Vec<_>, _>>()?,
+                    forbid_cell_mark: cell
+                        .forbid_cell_mark
+                        .iter()
+                        .map(|mark| resolve_selector_mark3(catalog, mark))
+                        .collect::<Result<Vec<_>, _>>()?,
+                })
+            })
+            .collect::<Result<Vec<_>, ParseError3>>()?,
+    )
+    .with_gap_count(gap_count))
+}
+
+fn resolve_write_template3(
+    catalog: &crate::Catalog,
+    write: WriteOpTemplate3,
+) -> Result<WriteOpTemplate3<ResolvedObjectSelector3, ResolvedSelectorMark3>, ParseError3> {
+    Ok(match write {
+        WriteOpTemplate3::Add { offset, object } => WriteOpTemplate3::Add {
+            offset,
+            object: resolve_pattern_selector3(catalog, &object)?,
+        },
+        WriteOpTemplate3::Remove { offset, object } => WriteOpTemplate3::Remove {
+            offset,
+            object: resolve_pattern_selector3(catalog, &object)?,
+        },
+        WriteOpTemplate3::Replace {
+            offset,
+            remove,
+            add,
+        } => WriteOpTemplate3::Replace {
+            offset,
+            remove: resolve_pattern_selector3(catalog, &remove)?,
+            add: resolve_pattern_selector3(catalog, &add)?,
+        },
+        WriteOpTemplate3::Move {
+            from_offset,
+            to_offset,
+            object,
+        } => WriteOpTemplate3::Move {
+            from_offset,
+            to_offset,
+            object: resolve_pattern_selector3(catalog, &object)?,
+        },
+        WriteOpTemplate3::SetMark {
+            offset,
+            object,
+            mark,
+        } => WriteOpTemplate3::SetMark {
+            offset,
+            object: resolve_pattern_selector3(catalog, &object)?,
+            mark: resolve_selector_mark3(catalog, &mark)?,
+        },
+        WriteOpTemplate3::RemoveMark {
+            offset,
+            object,
+            mark,
+        } => WriteOpTemplate3::RemoveMark {
+            offset,
+            object: resolve_pattern_selector3(catalog, &object)?,
+            mark: resolve_selector_mark3(catalog, &mark)?,
+        },
+    })
+}
+
+fn lower_projected_rule_template3(
+    catalog: &crate::Catalog,
+    rule: RuleTemplate3,
+) -> Result<Vec<Rule3>, ParseError3> {
+    let rule = RuleTemplate3 {
+        id: rule.id,
+        guards: rule.guards,
+        application: rule.application,
+        pattern: resolve_pattern_template3(catalog, rule.pattern)?,
+        writes: rule
+            .writes
+            .into_iter()
+            .map(|write| resolve_write_template3(catalog, write))
+            .collect::<Result<Vec<_>, _>>()?,
+    };
+    lower_rule_template(&rule)
+        .map_err(|error| message(format!("failed to lower resolved 3D rule: {error:?}")))
+}
+
+fn lower_line_rule_template3(
+    catalog: &crate::Catalog,
+    rule: &LineRuleTemplate3,
+) -> Result<Vec<Rule3>, ParseError3> {
+    project_line_rule_template(rule)
+        .into_iter()
+        .map(|rule| lower_projected_rule_template3(catalog, rule))
+        .collect::<Result<Vec<_>, _>>()
+        .map(|rules| rules.into_iter().flatten().collect())
+}
+
+fn lower_dense_rule_template3(
+    catalog: &crate::Catalog,
+    rule: &DenseRuleTemplate3,
+) -> Result<Vec<Rule3>, ParseError3> {
+    project_dense_rule_template(rule)
+        .into_iter()
+        .map(|rule| lower_projected_rule_template3(catalog, rule))
+        .collect::<Result<Vec<_>, _>>()
+        .map(|rules| rules.into_iter().flatten().collect())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct InputSpec3 {
     name: String,
     keys: Vec<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct GroupSpec3 {
-    name: String,
-    selectors: Vec<String>,
-    source_line: String,
-}
-
-impl GroupSpec3 {
-    fn declaration(&self) -> puzzle_authoring::SelectorGroupDeclaration {
-        puzzle_authoring::SelectorGroupDeclaration {
-            name: self.name.clone(),
-            selectors: self.selectors.clone(),
-            source_line: self.source_line.clone(),
-        }
-    }
-
-    fn expanded(
-        &self,
-        groups: &[puzzle_authoring::SelectorGroupDeclaration],
-    ) -> Result<Self, ParseError3> {
-        let expanded = puzzle_authoring::expand_layer_selectors(&self.selectors, groups)
-            .map_err(|error| message_at_source_line(error.message, &error.source_line))?;
-        Ok(Self {
-            name: self.name.clone(),
-            selectors: expanded.terms,
-            source_line: self.source_line.clone(),
-        })
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -984,141 +998,12 @@ fn line_gap_limit_from_levels(level_specs: &[LevelSpec3]) -> u16 {
         .unwrap_or(DEFAULT_LINE_GAP_LIMIT3)
 }
 
-struct CatalogBuild3 {
-    value_sets: Vec<(String, Vec<String>)>,
-    layers: Vec<String>,
-    next_object: u16,
-    concrete: Vec<ConcreteObject3>,
-    families: Vec<ObjectFamily3>,
-    object_defs: Vec<ObjectDef3>,
-    display_objects: Vec<ObjectId>,
-}
-
-impl CatalogBuild3 {
-    fn new(value_sets: Vec<(String, Vec<String>)>, layers: Vec<String>) -> Self {
-        Self {
-            value_sets,
-            layers,
-            next_object: 1,
-            concrete: Vec::new(),
-            families: Vec::new(),
-            object_defs: Vec::new(),
-            display_objects: Vec::new(),
-        }
-    }
-
-    fn add_object_spec(&mut self, spec: ObjectSpec3) -> Result<(), ParseError3> {
-        let layer = self.layer_id(&spec.layer)?;
-        if spec.axes.is_empty() {
-            let id = self.alloc_object();
-            self.concrete.push(ConcreteObject3::new(id, spec.name));
-            self.object_defs.push(ObjectDef3 {
-                id,
-                layer_id: layer,
-            });
-            if spec.display {
-                push_unique_object(&mut self.display_objects, id);
-            }
-            return Ok(());
-        }
-
-        let mut axes = Vec::new();
-        let mut axis_values = Vec::new();
-        for axis in &spec.axes {
-            let (axis_def, values) = self.axis_def(axis)?;
-            axes.push(axis_def);
-            axis_values.push(values);
-        }
-
-        let mut variants = Vec::new();
-        for values in cartesian_values(&axis_values) {
-            let id = self.alloc_object();
-            variants.push(ObjectVariant3::new(id, values.clone()));
-            self.object_defs.push(ObjectDef3 {
-                id,
-                layer_id: layer,
-            });
-            if spec.display {
-                push_unique_object(&mut self.display_objects, id);
-            }
-        }
-        self.families
-            .push(ObjectFamily3::new(spec.name, axes, variants));
-        Ok(())
-    }
-
-    fn catalog_with_groups(
-        self,
-        group_specs: Vec<GroupSpec3>,
-    ) -> Result<SelectorCatalog3, ParseError3> {
-        let mut names = HashSet::new();
-        for spec in &group_specs {
-            if !names.insert(spec.name.clone()) {
-                return Err(message("duplicate group"));
-            }
-        }
-        let mut groups = Vec::new();
-        for spec in group_specs {
-            let selectors = spec
-                .selectors
-                .iter()
-                .map(|selector| parse_selector(selector, &self.families, &groups))
-                .collect::<Result<Vec<_>, _>>()?;
-            groups.push(SelectorGroup3::new(spec.name, selectors));
-        }
-        let object_layers = self
-            .object_defs
-            .iter()
-            .map(|def| (def.id, def.layer_id))
-            .collect();
-        SelectorCatalog3::checked_new(self.concrete, self.families, groups, object_layers)
-            .map_err(|error| message(format!("invalid selector catalog: {error:?}")))
-    }
-
-    fn alloc_object(&mut self) -> ObjectId {
-        let id = ObjectId(self.next_object);
-        self.next_object += 1;
-        id
-    }
-
-    fn layer_id(&self, name: &str) -> Result<LayerId, ParseError3> {
-        self.layers
-            .iter()
-            .position(|layer| layer == name)
-            .map(|index| LayerId(index as u16))
-            .ok_or_else(|| message(format!("unknown layer: {name}")))
-    }
-
-    fn axis_def(&self, axis: &str) -> Result<(VariantAxis3, Vec<String>), ParseError3> {
-        match axis {
-            "directions" => Ok((
-                VariantAxis3::directions(axis, DirectionSet3::Directions),
-                direction_names(DirectionSet3::Directions),
-            )),
-            "horizontal" => Ok((
-                VariantAxis3::directions(axis, DirectionSet3::Horizontal),
-                direction_names(DirectionSet3::Horizontal),
-            )),
-            "vertical" => Ok((
-                VariantAxis3::directions(axis, DirectionSet3::Vertical),
-                direction_names(DirectionSet3::Vertical),
-            )),
-            _ => {
-                let values = self
-                    .value_sets
-                    .iter()
-                    .find_map(|(name, values)| (name == axis).then_some(values.clone()))
-                    .ok_or_else(|| message(format!("unknown object axis: {axis}")))?;
-                Ok((VariantAxis3::named(axis, values.clone()), values))
-            }
-        }
-    }
-}
-
 fn legacy_model_setting_name(line: &str) -> Option<&str> {
     let (name, _) = line.split_once('=')?;
     match name.trim() {
-        "debug_camera" | "camera_yaw" | "camera_pitch" | "camera_zoom" => Some(name.trim()),
+        "debug_camera" | "camera_yaw" | "camera_pitch" | "camera_roll" | "camera_zoom" => {
+            Some(name.trim())
+        }
         _ => None,
     }
 }
@@ -1126,6 +1011,7 @@ fn legacy_model_setting_name(line: &str) -> Option<&str> {
 enum ModelSetting3 {
     CameraYaw(i16),
     CameraPitch(i16),
+    CameraRoll(i16),
     CameraZoom(u16),
     InteractiveLook(bool),
     InteractiveZoom(bool),
@@ -1146,6 +1032,9 @@ fn parse_camera_setting_line(line: &str) -> Result<ModelSetting3, ParseError3> {
             value, name,
         )?)),
         "pitch" => Ok(ModelSetting3::CameraPitch(parse_degrees_setting(
+            value, name,
+        )?)),
+        "roll" => Ok(ModelSetting3::CameraRoll(parse_degrees_setting(
             value, name,
         )?)),
         "zoom" => Ok(ModelSetting3::CameraZoom(parse_zoom_milli_setting(
@@ -1386,45 +1275,6 @@ fn input_spec_from_key_surface(line: &str) -> Result<InputSpec3, ParseError3> {
     })
 }
 
-fn parse_layer_object_spec(token: &str, layer: &str) -> Result<ObjectSpec3, ParseError3> {
-    if token == "empty" {
-        return Err(message("empty cannot be generated as a layer object"));
-    }
-    let (base, axes) = puzzle_authoring::split_object_spec(token)
-        .ok_or_else(|| message("layer object must be Object[:axis...]"))?;
-    reject_occurrence_label_marker_in_name(base, "object name")?;
-    Ok(ObjectSpec3 {
-        name: base.to_string(),
-        axes: axes.map(str::to_string).collect(),
-        layer: layer.to_string(),
-        display: false,
-    })
-}
-
-fn parse_group_spec(line: &str) -> Result<GroupSpec3, ParseError3> {
-    let assignment = puzzle_authoring::selector_assignment_surface(line)
-        .ok_or_else(|| message("group row must be: name = selector..."))?;
-    let selectors = assignment
-        .selectors
-        .into_iter()
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    let name = assignment.name;
-    reject_occurrence_label_marker_in_name(name, "group name")?;
-    Ok(GroupSpec3 {
-        name: name.to_string(),
-        selectors,
-        source_line: line.to_string(),
-    })
-}
-
-fn reject_occurrence_label_marker_in_name(name: &str, label: &str) -> Result<(), ParseError3> {
-    if name.contains('#') {
-        return Err(message(format!("{label} must not contain #")));
-    }
-    Ok(())
-}
-
 fn parse_legend_spec(line: &str) -> Result<LegendSpec3, ParseError3> {
     let assignment = puzzle_authoring::selector_assignment_surface(line)
         .ok_or_else(|| message("legend row must be: <char> = selector..."))?;
@@ -1464,41 +1314,13 @@ fn parse_scene_header(line: &str) -> Option<String> {
     (!name.is_empty()).then(|| name.to_string())
 }
 
-fn is_model3_header(line: &str) -> bool {
-    line.strip_prefix("puzzle ")
-        .is_some_and(|rest| rest.ends_with('{'))
-}
-
-fn skip_braced_block(lines: &[String], mut index: usize) -> Result<usize, ParseError3> {
-    let mut depth = 1i32;
-    while index < lines.len() {
-        let line = &lines[index];
-        depth += line.chars().filter(|ch| *ch == '{').count() as i32;
-        depth -= line.chars().filter(|ch| *ch == '}').count() as i32;
-        index += 1;
-        if depth == 0 {
-            return Ok(index);
-        }
-    }
-    Err(message("document shell block missing }"))
-}
-
-fn parse_sprite_shapes_block(
-    lines: &[String],
-    index: usize,
-) -> Result<
-    (
-        usize,
-        HashMap<String, Vec<crate::sprite_authoring::SpriteFrameSyntax>>,
-    ),
-    ParseError3,
-> {
-    let block = puzzle_authoring::collect_container_block_surface(lines, index, "shapes")
-        .map_err(|error| message(error.message()))?;
+fn parse_sprite_shapes_entry(
+    entry: &crate::model_syntax::PuzzleEntrySyntax,
+) -> Result<HashMap<String, Vec<crate::sprite_authoring::SpriteFrameSyntax>>, ParseError3> {
     let mut shapes = HashMap::new();
-    let mut index = block.body_start;
-    while index < block.body_end {
-        let line = lines[index].clone();
+    let mut index = 0;
+    while index < entry.body.len() {
+        let line = entry.body[index].text.clone();
         if line.is_empty() {
             index += 1;
             continue;
@@ -1509,9 +1331,12 @@ fn parse_sprite_shapes_block(
         if !is_canonical_sprite_name(name) {
             return Err(message(format!("invalid sprite shape name: {name}")));
         }
-        let shape = puzzle_authoring::collect_container_block_surface(lines, index + 1, "shape")
-            .map_err(|error| message(error.message()))?;
-        let rows = lines[shape.body_start..shape.body_end].to_vec();
+        let (shape, next) = crate::model_syntax::parse_child_entry_at(entry, index)?;
+        let rows = shape
+            .body
+            .into_iter()
+            .map(|line| line.text)
+            .collect::<Vec<_>>();
         let mut body = Vec::with_capacity(rows.len() + 2);
         body.push("shape = {".to_string());
         body.extend(rows);
@@ -1526,26 +1351,110 @@ fn parse_sprite_shapes_block(
         if shapes.insert(name.to_string(), frames).is_some() {
             return Err(message(format!("duplicate sprite shape: {name}")));
         }
-        index = shape.next_index;
+        index = next;
     }
-    Ok((block.next_index, shapes))
+    Ok(shapes)
+}
+
+fn lower_sprite_resource3(
+    resource: &SpriteResourceSyntax3,
+    catalog: &crate::Catalog,
+) -> Result<SpriteSet3, ParseError3> {
+    let mut sprites = Vec::new();
+    let mut names = HashSet::new();
+    for attachment in &resource.attachments {
+        let syntax = crate::sprite_authoring::parse_sprite_node(
+            Some(&attachment.header),
+            &attachment.body_lines,
+        );
+        let selector = syntax
+            .selector
+            .as_deref()
+            .ok_or_else(|| message("sprite entry missing selector"))?;
+        for target in expand_sprite_selector3(selector, catalog)? {
+            if !names.insert(target.name.clone()) {
+                return Err(message(format!(
+                    "multiple sprite selectors resolve to {}",
+                    target.name
+                )));
+            }
+            sprites.push(parse_sprite3_from_shared_syntax(
+                &attachment.header,
+                &attachment.body_lines,
+                &resource.shapes,
+                &target,
+            )?);
+        }
+    }
+    Ok(SpriteSet3::new(
+        &resource.name,
+        resource.model.clone(),
+        sprites,
+    ))
+}
+
+struct SpriteSelectorTarget3 {
+    name: String,
+    bindings: HashMap<String, String>,
+}
+
+fn expand_sprite_selector3(
+    selector: &str,
+    catalog: &crate::Catalog,
+) -> Result<Vec<SpriteSelectorTarget3>, ParseError3> {
+    resolve_shared_selector_objects3(catalog, selector, "sprite")?
+        .into_iter()
+        .map(|object| sprite_selector_target3(object, catalog))
+        .collect()
+}
+
+fn sprite_selector_target3(
+    object: ObjectId,
+    catalog: &crate::Catalog,
+) -> Result<SpriteSelectorTarget3, ParseError3> {
+    for (family_name, family) in &catalog.object_schemas {
+        let Some(variant) = family
+            .variants
+            .iter()
+            .find(|candidate| candidate.object == object)
+        else {
+            continue;
+        };
+        let bindings = family
+            .axes
+            .iter()
+            .zip(&variant.values)
+            .map(|(axis, value)| (axis.clone(), value.clone()))
+            .collect();
+        return Ok(SpriteSelectorTarget3 {
+            name: format!("{family_name}:{}", variant.values.join(":")),
+            bindings,
+        });
+    }
+    catalog
+        .object_labels
+        .get(&object)
+        .cloned()
+        .map(|name| SpriteSelectorTarget3 {
+            name,
+            bindings: HashMap::new(),
+        })
+        .ok_or_else(|| message("sprite selector resolved to an unknown object"))
 }
 
 fn parse_sprite3_from_shared_syntax(
     header: &str,
     body: &[String],
     shapes: &HashMap<String, Vec<crate::sprite_authoring::SpriteFrameSyntax>>,
+    target: &SpriteSelectorTarget3,
 ) -> Result<Sprite3, ParseError3> {
     let analyzed = crate::sprite_authoring::analyze_sprite_body(Some(header), body, |shape_name| {
         shapes.contains_key(shape_name)
     })
     .map_err(|error| message_at_source_line(error.message, &error.line))?;
     let syntax = analyzed.syntax;
-    let spatial_ops = parse_sprite_spatial_ops3(&syntax)?;
-    let name = syntax
-        .selector
-        .clone()
-        .ok_or_else(|| message("sprite entry missing selector"))?;
+    let spatial_ops = parse_sprite_spatial_ops3_with_bindings(&syntax, &target.bindings)?;
+    let name = target.name.clone();
     let colors = syntax
         .colors
         .clone()
@@ -1613,6 +1522,13 @@ fn parse_sprite3_from_shared_syntax(
 pub(crate) fn parse_sprite_spatial_ops3(
     syntax: &crate::sprite_authoring::SpriteNodeSyntax,
 ) -> Result<Vec<crate::SpriteSpatialOp3>, ParseError3> {
+    parse_sprite_spatial_ops3_with_bindings(syntax, &HashMap::new())
+}
+
+fn parse_sprite_spatial_ops3_with_bindings(
+    syntax: &crate::sprite_authoring::SpriteNodeSyntax,
+    bindings: &HashMap<String, String>,
+) -> Result<Vec<crate::SpriteSpatialOp3>, ParseError3> {
     let mut ops = Vec::new();
     for (property, line) in &syntax.properties {
         match property {
@@ -1629,25 +1545,25 @@ pub(crate) fn parse_sprite_spatial_ops3(
                 from,
                 axis,
             } => {
-                if from.is_some() {
-                    return Err(message(
-                        "3D sprite rotate does not accept from; use an explicit angle expression",
-                    ));
+                // The axis-less surface is the shared 2D form. In a 3D sprite it
+                // means a rotation in the XY plane, whose normal is +Z (`up`).
+                let axis = axis.as_deref().unwrap_or("up");
+                let mut degrees = parse_sprite_angle3(angle, bindings)
+                    .map_err(|error| message(format!("{line}: {error}")))?;
+                if let Some(from) = from {
+                    degrees -= parse_sprite_angle3(from, bindings)
+                        .map_err(|error| message(format!("{line}: {error}")))?;
                 }
-                let axis = axis
-                    .as_deref()
-                    .ok_or_else(|| message("3D sprite rotate requires an axis"))?;
                 ops.push(crate::SpriteSpatialOp3::Rotate {
                     space: sprite_space3(*space),
                     axis: parse_sprite_axis3(axis)
                         .map_err(|error| message(format!("{line}: {error}")))?,
-                    degrees: parse_sprite_angle3(angle)
-                        .map_err(|error| message(format!("{line}: {error}")))?,
+                    degrees,
                 });
             }
             crate::sprite_authoring::SpritePropertySyntax::Unknown(name) if name == "rotate" => {
                 return Err(message(
-                    "removed sprite rotation syntax; use rotate [world|local] <angle> around <axis>",
+                    "removed sprite rotation syntax; use rotate [world|local] <angle> [from <angle>] [around <axis>]",
                 ));
             }
             _ => {
@@ -1722,17 +1638,31 @@ fn parse_sprite_axis3(value: &str) -> Result<[f64; 3], String> {
     Ok([axis[0] / length, axis[1] / length, axis[2] / length])
 }
 
-fn parse_sprite_angle3(value: &str) -> Result<f64, String> {
-    let degrees = value
-        .trim()
-        .strip_suffix("deg")
-        .ok_or_else(|| "3D sprite rotate angle must use deg".to_string())?;
+fn parse_sprite_angle3(value: &str, bindings: &HashMap<String, String>) -> Result<f64, String> {
+    let value = value.trim();
+    let value = bindings.get(value).map(String::as_str).unwrap_or(value);
+    if let Some(degrees) = sprite_horizontal_direction_degrees3(value) {
+        return Ok(degrees);
+    }
+    let degrees = value.strip_suffix("deg").ok_or_else(|| {
+        "3D sprite rotate expression must resolve to an angle or horizontal direction".to_string()
+    })?;
     parse_sprite_scalar3(degrees)
 }
 
+fn sprite_horizontal_direction_degrees3(value: &str) -> Option<f64> {
+    Some(match value {
+        "right" => 0.0,
+        "front" => 90.0,
+        "left" => 180.0,
+        "back" => -90.0,
+        _ => return None,
+    })
+}
+
 fn lower_level_bundle(
-    game: Game3,
-    catalog: &SelectorCatalog3,
+    game: CompiledGame3,
+    catalog: &crate::Catalog,
     legend_specs: &[LegendSpec3],
     level_specs: &[LevelSpec3],
 ) -> Result<LevelBundle3, ParseError3> {
@@ -1751,7 +1681,7 @@ fn lower_level_bundle(
 }
 
 fn lower_legend(
-    catalog: &SelectorCatalog3,
+    catalog: &crate::Catalog,
     specs: &[LegendSpec3],
 ) -> Result<BTreeMap<char, Vec<ObjectId>>, ParseError3> {
     let mut legend = BTreeMap::new();
@@ -1776,11 +1706,7 @@ fn lower_legend(
             return Err(message(format!("duplicate legend char: {}", spec.ch)));
         } else {
             for token in &spec.selectors {
-                let selector = parse_selector(token, &catalog.families, &catalog.groups)?;
-                let resolved = catalog
-                    .resolve(&selector)
-                    .map_err(|error| message(format!("invalid legend selector: {error:?}")))?;
-                for object in resolved.alternatives {
+                for object in resolve_shared_selector_objects3(catalog, token, "legend")? {
                     push_unique_object(&mut objects, object);
                 }
             }
@@ -1991,7 +1917,7 @@ fn parse_lifecycle_command_line(line: &str) -> Result<LifecycleCommand, ParseErr
 
 fn parse_optional_program_local_frame(
     modifier: Option<&str>,
-    catalog: &SelectorCatalog3,
+    catalog: &crate::Catalog,
 ) -> Result<Option<LocalFrame<ObjectId>>, ParseError3> {
     let Some(modifier) = modifier else {
         return Ok(None);
@@ -2034,11 +1960,11 @@ fn parse_u16_token(token: &str, context: &str) -> Result<u16, ParseError3> {
 }
 
 fn default_local_frame_focus_objects(
-    catalog: &SelectorCatalog3,
+    catalog: &crate::Catalog,
 ) -> Result<Vec<ObjectId>, ParseError3> {
     for name in ["Player", "player"] {
-        if let Some(object) = catalog.objects.iter().find(|object| object.name == name) {
-            return Ok(vec![object.id]);
+        if let Some(object) = catalog.object_names.get(name) {
+            return Ok(vec![*object]);
         }
     }
     Err(message(
@@ -2061,10 +1987,104 @@ impl ParsedRuleLine3 {
     }
 }
 
+fn lower_rule_statement_syntax3(
+    statements: &[puzzle_authoring::RuleStatementSyntax],
+    catalog: &crate::Catalog,
+    line_gap_limit: u16,
+    input_guard: Option<&str>,
+    bindings: &[(String, String)],
+) -> Result<Vec<ParsedRuleLine3>, ParseError3> {
+    let mut lowered = Vec::new();
+    for statement in statements {
+        match statement {
+            puzzle_authoring::RuleStatementSyntax::Line(line) => {
+                let line = substitute_rule_bindings3(line, bindings)?;
+                let guarded;
+                let line = if let Some(input) = input_guard {
+                    guarded = format!("input {input} {line}");
+                    guarded.as_str()
+                } else {
+                    line.as_str()
+                };
+                lowered.push(parse_rule_line(line, catalog, line_gap_limit)?);
+            }
+            puzzle_authoring::RuleStatementSyntax::Block { header, statements } => {
+                let header = substitute_rule_bindings3(header, bindings)?;
+                if let Some(for_syntax) =
+                    crate::rule_syntax::parse_rule_for_syntax(&header).map_err(message)?
+                {
+                    let source_refs = for_syntax
+                        .sources
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>();
+                    let values = crate::for_expansion_values(
+                        &source_refs,
+                        &crate::catalog_value_sets(catalog),
+                        &catalog.numeric_variable_defaults,
+                        &header,
+                    )?;
+                    for value in values {
+                        let mut nested_bindings = bindings.to_vec();
+                        nested_bindings
+                            .push((for_syntax.binding.clone(), value.value().to_string()));
+                        lowered.extend(lower_rule_statement_syntax3(
+                            statements,
+                            catalog,
+                            line_gap_limit,
+                            input_guard,
+                            &nested_bindings,
+                        )?);
+                    }
+                    continue;
+                }
+                let tokens = puzzle_authoring::split_header_tokens(&header);
+                match tokens.as_slice() {
+                    ["if", "input", "==", input] => {
+                        lowered.extend(lower_rule_statement_syntax3(
+                            statements,
+                            catalog,
+                            line_gap_limit,
+                            Some(input),
+                            bindings,
+                        )?);
+                    }
+                    _ => {
+                        return Err(message(format!(
+                            "3D lowering does not support rule block `{header}`"
+                        )));
+                    }
+                }
+            }
+        }
+    }
+    Ok(lowered)
+}
+
+fn substitute_rule_bindings3(
+    line: &str,
+    bindings: &[(String, String)],
+) -> Result<String, ParseError3> {
+    let mut expanded = line.to_string();
+    for (binding, value) in bindings {
+        expanded = crate::rule_syntax::substitute_rule_binding_line(
+            &expanded,
+            binding,
+            |projection| match projection {
+                None => Ok(value.clone()),
+                Some(attr) => Err(message(format!(
+                    "3D rule expansion does not define projection `{binding}.{attr}`"
+                ))),
+            },
+            |_, _| Ok(None),
+        )?;
+    }
+    Ok(expanded)
+}
+
 fn parse_rule_line(
     line: &str,
-    catalog: &SelectorCatalog3,
-    game: &Game3,
+    catalog: &crate::Catalog,
     line_gap_limit: u16,
 ) -> Result<ParsedRuleLine3, ParseError3> {
     if let Some(effect) = parse_camera_rule_effect_line(line)? {
@@ -2088,13 +2108,6 @@ fn parse_rule_line(
         }
     };
     let (application, prefix, rest) = match surface {
-        puzzle_authoring::RuleLineSurface::StandardStep(
-            puzzle_authoring::StandardRuleStepSurface::Move,
-        ) => {
-            return Ok(parsed_rules_without_camera_effects(standard_move_rules3(
-                game,
-            )));
-        }
         puzzle_authoring::RuleLineSurface::InputRewrite {
             application,
             surface,
@@ -2103,29 +2116,30 @@ fn parse_rule_line(
                 Some(orientation) => parse_line_orientation(orientation)?,
                 None => LineOrientation3::DirectionSet(DirectionSet3::Directions),
             };
-            let (lhs, rhs, effects) = parse_rewrite(surface.rewrite)?;
+            let (lhs, rhs, effects) = unresolved_rewrite3(surface.rewrite, catalog)?;
             let mut rules =
-                lower_input_line_rewrite(catalog, orientation, lhs, rhs, line_gap_limit).map_err(
-                    |error| message(format!("failed to lower input line rule: {error}")),
-                )?;
+                lower_input_line_rewrite(catalog, orientation, &lhs, &rhs, line_gap_limit)
+                    .map_err(|error| {
+                        message(format!("failed to lower input line rule: {error}"))
+                    })?;
             apply_rule_application(&mut rules, application)?;
-            return Ok(parsed_rules_with_camera_effects(rules, &effects));
+            return Ok(parsed_rules_with_effects(rules, &effects));
         }
         puzzle_authoring::RuleLineSurface::NeutralRewrite {
             application,
             rewrite,
         } => {
-            let (lhs, rhs, effects) = parse_rewrite(rewrite)?;
+            let (lhs, rhs, effects) = unresolved_rewrite3(rewrite, catalog)?;
             let mut rules = lower_line_rewrite(
                 catalog,
                 LineOrientation3::DirectionSet(DirectionSet3::Directions),
-                lhs,
-                rhs,
+                &lhs,
+                &rhs,
                 line_gap_limit,
             )
             .map_err(|error| message(format!("failed to lower line rule: {error}")))?;
             apply_rule_application(&mut rules, application)?;
-            return Ok(parsed_rules_with_camera_effects(rules, &effects));
+            return Ok(parsed_rules_with_effects(rules, &effects));
         }
         puzzle_authoring::RuleLineSurface::OrientedRewrite {
             application,
@@ -2133,25 +2147,24 @@ fn parse_rule_line(
             rewrite,
         } => (application, orientation, rewrite),
     };
-    let (lhs, rhs, effects) = parse_rewrite(rest)?;
+    let (lhs, rhs, effects) = unresolved_rewrite3(rest, catalog)?;
     if prefix.contains(',') || matches!(prefix, "frames" | "canonical" | "mirrored") {
         let orientation = parse_frame_orientation(prefix)?;
         let rule = DenseRuleTemplate3::once(
             orientation,
-            parse_dense_pattern(lhs, catalog)?,
-            infer_dense_writes(lhs, rhs, catalog)?,
+            materialize_dense_pattern3(&lhs, catalog)?,
+            infer_dense_writes(&lhs, &rhs, catalog)?,
         );
-        let mut rules = lower_dense_rule_template(catalog, &rule)
-            .map_err(|error| message(format!("failed to lower dense rule: {error:?}")))?;
+        let mut rules = lower_dense_rule_template3(catalog, &rule)?;
         apply_rule_application(&mut rules, application)?;
-        return Ok(parsed_rules_with_camera_effects(rules, &effects));
+        return Ok(parsed_rules_with_effects(rules, &effects));
     }
 
     let orientation = parse_line_orientation(prefix)?;
-    let mut rules = lower_line_rewrite(catalog, orientation, lhs, rhs, line_gap_limit)
+    let mut rules = lower_line_rewrite(catalog, orientation, &lhs, &rhs, line_gap_limit)
         .map_err(|error| message(format!("failed to lower line rule: {error}")))?;
     apply_rule_application(&mut rules, application)?;
-    Ok(parsed_rules_with_camera_effects(rules, &effects))
+    Ok(parsed_rules_with_effects(rules, &effects))
 }
 
 fn apply_rule_application(
@@ -2234,78 +2247,20 @@ fn program_step_for_rule_statement(
     }
 }
 
-fn once_alternative_chain3(
-    rules: Vec<Rule3>,
-    application: RuleApplication3,
-) -> Option<RuleStep3> {
+fn once_alternative_chain3(rules: Vec<Rule3>, application: RuleApplication3) -> Option<RuleStep3> {
     let alternatives = rules
         .into_iter()
         .map(|mut rule| {
-            let condition = RuleCondition3::RuleMatches {
-                guards: rule.guards.clone(),
-                pattern: rule.pattern.clone(),
-            };
+            let mut guards = rule.guards.clone();
+            guards.push(Guard3::InlineConditionNonZero(
+                ConditionValueKind3::ExistsMatches(vec![rule.pattern.clone()]),
+            ));
+            let condition = RuleCondition3::GuardBranches(vec![guards]);
             rule.application = application;
             (condition, rule)
         })
         .collect();
     puzzle_kernel::first_matching_program_alternative(alternatives)
-}
-
-fn standard_move_rules3(game: &Game3) -> Vec<Rule3> {
-    let mut rules = Vec::new();
-    let directions = Direction3::directions();
-    let mut layer_objects = HashMap::<LayerId, Vec<ObjectId>>::new();
-    for object in &game.objects {
-        layer_objects
-            .entry(object.layer_id)
-            .or_default()
-            .push(object.id);
-    }
-    for (layer, objects) in layer_objects {
-        if objects.is_empty() {
-            continue;
-        }
-        for (direction_index, direction) in directions.iter().enumerate() {
-            let binding = 0;
-            let mut cell = MatchCell3::new(Offset3::ZERO);
-            cell.require_object_sets.push(ObjectSetMatcher3 {
-                binding,
-                layer,
-                objects: objects.clone(),
-            });
-            cell.require_object_set_mark.push(ObjectSetMarkPattern3 {
-                binding,
-                mark: MarkId3(puzzle_authoring::ANONYMOUS_MOVEMENT_MARK_INDEX),
-                value: Some(direction_index as i64),
-                match_value: puzzle_kernel::MarkValueMatch::Exact,
-            });
-            let mut destination = MatchCell3::new(direction.offset);
-            for layer_object in &objects {
-                destination = destination.forbid(*layer_object);
-            }
-            rules.push(Rule3::repeated(
-                Pattern3::new(vec![cell, destination]),
-                vec![
-                    WriteOp3::MoveObjectSet {
-                        component: 0,
-                        from_offset: Offset3::ZERO,
-                        to_offset: direction.offset,
-                        binding,
-                    },
-                    WriteOp3::RemoveObjectSetMark {
-                        component: 0,
-                        offset: direction.offset,
-                        binding,
-                        mark: MarkId3(puzzle_authoring::ANONYMOUS_MOVEMENT_MARK_INDEX),
-                        value: None,
-                        match_value: puzzle_kernel::MarkValueMatch::Any,
-                    },
-                ],
-            ));
-        }
-    }
-    rules
 }
 
 fn parsed_rules_without_camera_effects(rules: Vec<Rule3>) -> ParsedRuleLine3 {
@@ -2324,6 +2279,13 @@ fn parsed_rules_with_camera_effects(
     ParsedRuleLine3::new(rules, camera_effects)
 }
 
+fn parsed_rules_with_effects(mut rules: Vec<Rule3>, effects: &RuleEffects3) -> ParsedRuleLine3 {
+    for rule in &mut rules {
+        rule.effects.extend(effects.core.iter().cloned());
+    }
+    parsed_rules_with_camera_effects(rules, &effects.camera)
+}
+
 fn input_for_direction(direction: Direction3) -> InputId {
     match direction.name {
         "left" => InputId(0),
@@ -2337,13 +2299,13 @@ fn input_for_direction(direction: Direction3) -> InputId {
 }
 
 struct QueryLoweringContext3d<'a> {
-    catalog: &'a SelectorCatalog3,
+    catalog: &'a crate::Catalog,
     line_gap_limit: u16,
 }
 
 fn validate_query_definitions3(
     definitions: &[crate::solver_surface::SolverSurfaceQueryDefinition],
-    catalog: &SelectorCatalog3,
+    catalog: &crate::Catalog,
     line_gap_limit: u16,
 ) -> Result<(), ParseError3> {
     let context = QueryLoweringContext3d {
@@ -2360,7 +2322,7 @@ fn validate_query_definitions3(
 fn lower_solver_strategy3(
     strategy: Option<crate::solver_surface::SolverSurfaceStrategy>,
     query_definitions: &[crate::solver_surface::SolverSurfaceQueryDefinition],
-    catalog: &SelectorCatalog3,
+    catalog: &crate::Catalog,
     line_gap_limit: u16,
 ) -> Result<SolverStrategy3, ParseError3> {
     let context = QueryLoweringContext3d {
@@ -2459,7 +2421,7 @@ impl<'a> crate::solver_surface::SolverQueryLoweringAdapter<QueryLoweringContext3
 }
 
 fn lower_win_conditions(
-    catalog: &SelectorCatalog3,
+    catalog: &crate::Catalog,
     lines: &[String],
     line_gap_limit: u16,
 ) -> Result<WinCondition3, ParseError3> {
@@ -2481,7 +2443,7 @@ fn lower_win_conditions(
 
 fn parse_win_condition_line(
     line: &str,
-    catalog: &SelectorCatalog3,
+    catalog: &crate::Catalog,
     line_gap_limit: u16,
 ) -> Result<WinCondition3, ParseError3> {
     match puzzle_authoring::win_condition_row_surface(line).map_err(message)? {
@@ -2507,31 +2469,31 @@ fn parse_win_condition_line(
 
 fn parse_some_condition(
     rest: &str,
-    catalog: &SelectorCatalog3,
+    catalog: &crate::Catalog,
     line_gap_limit: u16,
 ) -> Result<WinCondition3, ParseError3> {
     if rest.contains('[') {
         return pattern_conditions(rest, catalog, line_gap_limit, WinCondition3::SomePattern);
     }
-    let objects = resolve_selector_objects(catalog, rest)?;
+    let objects = resolve_shared_selector_objects3(catalog, rest, "win")?;
     Ok(any_object_condition(objects, WinCondition3::SomeObject))
 }
 
 fn parse_no_condition(
     rest: &str,
-    catalog: &SelectorCatalog3,
+    catalog: &crate::Catalog,
     line_gap_limit: u16,
 ) -> Result<WinCondition3, ParseError3> {
     if rest.contains('[') {
         return pattern_conditions(rest, catalog, line_gap_limit, WinCondition3::NoPattern);
     }
-    let objects = resolve_selector_objects(catalog, rest)?;
+    let objects = resolve_shared_selector_objects3(catalog, rest, "win")?;
     Ok(all_object_condition(objects, WinCondition3::NoObject))
 }
 
 fn parse_all_on_condition(
     rest: &str,
-    catalog: &SelectorCatalog3,
+    catalog: &crate::Catalog,
 ) -> Result<WinCondition3, ParseError3> {
     let (object_selector, cover) = rest
         .split_once(" on ")
@@ -2546,7 +2508,7 @@ fn parse_all_on_condition(
     Ok(WinCondition3::AllObjectsCoveredByPattern {
         object,
         cover_pattern: Pattern3::new(vec![
-            MatchCell3::new(Offset3::ZERO)
+            MatchCell3::new(Delta3::ZERO)
                 .require(object)
                 .require(cover_object),
         ]),
@@ -2555,7 +2517,7 @@ fn parse_all_on_condition(
 
 fn pattern_conditions(
     rest: &str,
-    catalog: &SelectorCatalog3,
+    catalog: &crate::Catalog,
     line_gap_limit: u16,
     wrap: fn(Pattern3) -> WinCondition3,
 ) -> Result<WinCondition3, ParseError3> {
@@ -2589,41 +2551,20 @@ fn all_object_condition(
     }
 }
 
-fn resolve_selector_objects(
-    catalog: &SelectorCatalog3,
-    token: &str,
-) -> Result<Vec<ObjectId>, ParseError3> {
-    let selector = parse_selector(token, &catalog.families, &catalog.groups)?;
-    catalog
-        .resolve(&selector)
-        .map(|resolved| resolved.alternatives)
-        .map_err(|error| message(format!("invalid win selector: {error:?}")))
-}
-
 fn resolve_query_selector_objects(
-    catalog: &SelectorCatalog3,
+    catalog: &crate::Catalog,
     token: &str,
     source_line: &str,
 ) -> Result<Vec<ObjectId>, ParseError3> {
-    let selector = parse_selector(token, &catalog.families, &catalog.groups)
-        .map_err(|error| message_at_source_line(parse_error3_message(error), source_line))?;
-    catalog
-        .resolve(&selector)
-        .map(|resolved| resolved.alternatives)
-        .map_err(|error| {
-            message_at_source_line(format!("invalid query selector: {error:?}"), source_line)
-        })
-}
-
-fn parse_error3_message(error: ParseError3) -> String {
-    diagnostic_message(&error)
+    resolve_shared_selector_objects3(catalog, token, "query")
+        .map_err(|error| message_at_source_line(diagnostic_message(&error), source_line))
 }
 
 fn resolve_single_selector_object(
-    catalog: &SelectorCatalog3,
+    catalog: &crate::Catalog,
     token: &str,
 ) -> Result<ObjectId, ParseError3> {
-    let objects = resolve_selector_objects(catalog, token)?;
+    let objects = resolve_shared_selector_objects3(catalog, token, "win")?;
     if objects.len() != 1 {
         return Err(message(format!(
             "win selector must resolve to one object: {token}"
@@ -2634,7 +2575,7 @@ fn resolve_single_selector_object(
 
 fn parse_oriented_patterns(
     value: &str,
-    catalog: &SelectorCatalog3,
+    catalog: &crate::Catalog,
     line_gap_limit: u16,
 ) -> Result<Vec<Pattern3>, ParseError3> {
     let Some(surface) = crate::solver_surface::oriented_pattern_arg_surface(value, value)
@@ -2666,15 +2607,16 @@ fn parse_oriented_patterns(
 
 fn lower_surface_pattern_arg3d(
     pattern: &SolverSurfacePatternArg,
-    catalog: &SelectorCatalog3,
+    catalog: &crate::Catalog,
     line_gap_limit: u16,
 ) -> Result<Vec<Pattern3>, ParseError3> {
-    let inner = parse_bracketed(pattern.pattern.trim())?;
+    let syntax = puzzle_authoring::parse_unresolved_pattern_syntax(pattern.pattern.trim())
+        .map_err(|error| message(error.message()))?;
     let Some(orientation) = surface_pattern_orientation3d(pattern)? else {
         return lower_line_patterns(
             catalog,
             LineOrientation3::DirectionSet(DirectionSet3::Directions),
-            inner,
+            &syntax,
             line_gap_limit,
         )
         .map(|rules| rules.into_iter().map(|rule| rule.pattern).collect())
@@ -2686,15 +2628,15 @@ fn lower_surface_pattern_arg3d(
         let orientation = parse_frame_orientation(&orientation)?;
         let rule = DenseRuleTemplate3::once(
             orientation,
-            parse_dense_pattern(inner, catalog)?,
+            materialize_dense_pattern3(&syntax, catalog)?,
             Vec::new(),
         );
-        return lower_dense_rule_template(catalog, &rule)
+        return lower_dense_rule_template3(catalog, &rule)
             .map(|rules| rules.into_iter().map(|rule| rule.pattern).collect())
             .map_err(|error| message(format!("failed to lower pattern: {error:?}")));
     }
     let orientation = parse_line_orientation(&orientation)?;
-    lower_line_patterns(catalog, orientation, inner, line_gap_limit)
+    lower_line_patterns(catalog, orientation, &syntax, line_gap_limit)
         .map(|rules| rules.into_iter().map(|rule| rule.pattern).collect())
         .map_err(|error| message(format!("failed to lower pattern: {error}")))
 }
@@ -2713,42 +2655,103 @@ fn surface_pattern_orientation3d(
     }
 }
 
-fn parse_rewrite(rest: &str) -> Result<(&str, &str, Vec<Puzzle3CameraEffect>), ParseError3> {
-    let (lhs, rhs) = rest
-        .split_once("->")
-        .ok_or_else(|| message("rewrite missing ->"))?;
-    let (rhs, suffix) = parse_bracketed_with_suffix(rhs.trim())?;
-    let effects = parse_rule_effect_suffix(suffix)?;
-    Ok((parse_bracketed(lhs.trim())?, rhs, effects))
+fn unresolved_rewrite3(
+    source: &str,
+    catalog: &crate::Catalog,
+) -> Result<
+    (
+        puzzle_authoring::UnresolvedPatternSyntax,
+        puzzle_authoring::UnresolvedPatternSyntax,
+        RuleEffects3,
+    ),
+    ParseError3,
+> {
+    let syntax = puzzle_authoring::parse_unresolved_rewrite_syntax(source)
+        .map_err(|error| message(error.message()))?;
+    let effects = parse_rule_effect_suffix(&syntax.suffix, catalog)?;
+    let after = syntax.after.unwrap_or_else(|| syntax.before.clone());
+    Ok((syntax.before, after, effects))
 }
 
-fn parse_bracketed(value: &str) -> Result<&str, ParseError3> {
-    value
-        .strip_prefix('[')
-        .and_then(|value| value.strip_suffix(']'))
-        .map(str::trim)
-        .ok_or_else(|| message("pattern must be enclosed in [ ]"))
+#[derive(Clone, Debug, Default)]
+struct RuleEffects3 {
+    core: Vec<puzzle_grid3d::RuleEffect3>,
+    camera: Vec<Puzzle3CameraEffect>,
 }
 
-fn parse_bracketed_with_suffix(value: &str) -> Result<(&str, &str), ParseError3> {
-    let value = value.trim();
-    let Some(rest) = value.strip_prefix('[') else {
-        return Err(message("pattern must be enclosed in [ ]"));
-    };
-    let Some(end) = rest.find(']') else {
-        return Err(message("pattern must be enclosed in [ ]"));
-    };
-    Ok((rest[..end].trim(), rest[end + 1..].trim()))
-}
-
-fn parse_rule_effect_suffix(suffix: &str) -> Result<Vec<Puzzle3CameraEffect>, ParseError3> {
+fn parse_rule_effect_suffix(
+    suffix: &str,
+    catalog: &crate::Catalog,
+) -> Result<RuleEffects3, ParseError3> {
     if suffix.is_empty() {
-        return Ok(Vec::new());
+        return Ok(RuleEffects3::default());
     }
-    let Some(effect) = parse_camera_rule_effect_line(suffix)? else {
-        return Err(message(format!("unknown 3D rule effect: {suffix}")));
-    };
-    Ok(vec![effect])
+    if let Some(effect) = parse_camera_rule_effect_line(suffix)? {
+        return Ok(RuleEffects3 {
+            camera: vec![effect],
+            ..RuleEffects3::default()
+        });
+    }
+    let effects =
+        crate::parse_rewrite_effect(suffix, suffix).map_err(|error| message(error.to_string()))?;
+    let core = effects
+        .into_iter()
+        .map(|effect| lower_rule_effect3(effect, catalog))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(RuleEffects3 {
+        core,
+        camera: Vec::new(),
+    })
+}
+
+fn lower_rule_effect3(
+    effect: crate::EffectAst,
+    catalog: &crate::Catalog,
+) -> Result<puzzle_grid3d::RuleEffect3, ParseError3> {
+    use crate::{EffectAst, VariableValueAst};
+    use puzzle_grid3d::RuleEffect3;
+    Ok(match effect {
+        EffectAst::Cancel => RuleEffect3::Cancel,
+        EffectAst::Win => RuleEffect3::Win,
+        EffectAst::Restart => RuleEffect3::Restart,
+        EffectAst::NextLevel => RuleEffect3::NextLevel,
+        EffectAst::Again => RuleEffect3::Again,
+        EffectAst::Checkpoint => RuleEffect3::Checkpoint,
+        EffectAst::ClearCheckpoint => RuleEffect3::ClearCheckpoint,
+        EffectAst::UpdateVariable { name, op, value } => {
+            let variable = catalog
+                .variable_names
+                .get(&name)
+                .copied()
+                .ok_or_else(|| message(format!("unknown variable in effect: {name}")))?;
+            if catalog.constant_variables.contains(&variable) {
+                return Err(message(format!("cannot update const: {name}")));
+            }
+            let VariableValueAst::Literal(value) = value else {
+                return Err(message(
+                    "tag capture values require canonical rewrite capture lowering",
+                ));
+            };
+            RuleEffect3::UpdateVariable {
+                variable: puzzle_grid3d::VariableId(variable.0),
+                op,
+                value,
+            }
+        }
+        EffectAst::PlaySfx { .. }
+        | EffectAst::PlayMusic { .. }
+        | EffectAst::PauseMusic { .. }
+        | EffectAst::ResumeMusic { .. }
+        | EffectAst::StopMusic { .. }
+        | EffectAst::Wait { .. }
+        | EffectAst::WaitAnimation
+        | EffectAst::Message { .. }
+        | EffectAst::Scene(_) => {
+            return Err(message(
+                "presentation effects require the shared ordered-effect contract",
+            ));
+        }
+    })
 }
 
 fn parse_camera_rule_effect_line(line: &str) -> Result<Option<Puzzle3CameraEffect>, ParseError3> {
@@ -2764,6 +2767,9 @@ fn parse_camera_rule_effect_line(line: &str) -> Result<Option<Puzzle3CameraEffec
             value, name,
         )?))),
         "pitch" => Ok(Some(Puzzle3CameraEffect::SetPitch(parse_degrees_setting(
+            value, name,
+        )?))),
+        "roll" => Ok(Some(Puzzle3CameraEffect::SetRoll(parse_degrees_setting(
             value, name,
         )?))),
         "zoom" => Ok(Some(Puzzle3CameraEffect::SetZoom(
@@ -2835,24 +2841,16 @@ fn parse_direction_set(value: &str) -> Result<DirectionSet3, ParseError3> {
 }
 
 fn lower_line_patterns(
-    catalog: &SelectorCatalog3,
+    catalog: &crate::Catalog,
     orientation: LineOrientation3,
-    inner: &str,
-    line_gap_limit: u16,
+    pattern: &puzzle_authoring::UnresolvedPatternSyntax,
+    _line_gap_limit: u16,
 ) -> Result<Vec<Rule3>, String> {
-    let pattern = parse_line_pattern_with_gaps(inner, catalog).map_err(parse_error_message)?;
-    let mut rules = Vec::new();
-    for gaps in line_gap_assignments(pattern.gap_count, line_gap_limit) {
-        let rule = LineRuleTemplate3::once(
-            orientation.clone(),
-            pattern.materialize(&gaps).map_err(parse_error_message)?,
-            Vec::new(),
-        );
-        rules.extend(
-            lower_line_rule_template(catalog, &rule).map_err(|error| format!("{error:?}"))?,
-        );
-    }
-    Ok(rules)
+    let pattern =
+        materialize_line_pattern_with_gaps3(pattern, catalog).map_err(parse_error_message)?;
+    validate_line_null_pattern(&pattern)?;
+    let rule = LineRuleTemplate3::once(orientation, pattern.lower(), Vec::new());
+    lower_line_rule_template3(catalog, &rule).map_err(parse_error_message)
 }
 
 fn parse_error_message(error: ParseError3) -> String {
@@ -2860,64 +2858,60 @@ fn parse_error_message(error: ParseError3) -> String {
 }
 
 fn lower_line_rewrite(
-    catalog: &SelectorCatalog3,
+    catalog: &crate::Catalog,
     orientation: LineOrientation3,
-    lhs: &str,
-    rhs: &str,
-    line_gap_limit: u16,
+    lhs: &puzzle_authoring::UnresolvedPatternSyntax,
+    rhs: &puzzle_authoring::UnresolvedPatternSyntax,
+    _line_gap_limit: u16,
 ) -> Result<Vec<Rule3>, String> {
-    let before = parse_line_pattern_with_gaps(lhs, catalog).map_err(parse_error_message)?;
-    let after = parse_line_pattern_with_gaps(rhs, catalog).map_err(parse_error_message)?;
+    let before = materialize_line_pattern_with_gaps3(lhs, catalog).map_err(parse_error_message)?;
+    let after = materialize_line_pattern_with_gaps3(rhs, catalog).map_err(parse_error_message)?;
+    validate_line_null_rewrite(&before, &after)?;
     if before.gap_count != after.gap_count {
         return Err("line rewrite sides must contain the same number of ... gaps".to_string());
     }
     let mut rules = Vec::new();
     for (before, after) in expand_line_movement_mark_sets3(&before, &after) {
         let writes = infer_line_writes_from_patterns(&before, &after);
-        for gaps in line_gap_assignments(before.gap_count, line_gap_limit) {
-            let rule = LineRuleTemplate3::once(
-                orientation.clone(),
-                before.materialize(&gaps).map_err(parse_error_message)?,
-                materialize_line_writes(&writes, &gaps).map_err(parse_error_message)?,
-            );
-            rules.extend(
-                lower_line_rule_template(catalog, &rule).map_err(|error| format!("{error:?}"))?,
-            );
-        }
+        let rule = LineRuleTemplate3::once(
+            orientation.clone(),
+            before.lower(),
+            lower_line_writes(&writes),
+        );
+        rules.extend(lower_line_rule_template3(catalog, &rule).map_err(parse_error_message)?);
     }
     Ok(rules)
 }
 
 fn lower_input_line_rewrite(
-    catalog: &SelectorCatalog3,
+    catalog: &crate::Catalog,
     orientation: LineOrientation3,
-    lhs: &str,
-    rhs: &str,
-    line_gap_limit: u16,
+    lhs: &puzzle_authoring::UnresolvedPatternSyntax,
+    rhs: &puzzle_authoring::UnresolvedPatternSyntax,
+    _line_gap_limit: u16,
 ) -> Result<Vec<Rule3>, String> {
-    let before = parse_line_pattern_with_gaps(lhs, catalog).map_err(parse_error_message)?;
-    let after = parse_line_pattern_with_gaps(rhs, catalog).map_err(parse_error_message)?;
+    let before = materialize_line_pattern_with_gaps3(lhs, catalog).map_err(parse_error_message)?;
+    let after = materialize_line_pattern_with_gaps3(rhs, catalog).map_err(parse_error_message)?;
+    validate_line_null_rewrite(&before, &after)?;
     if before.gap_count != after.gap_count {
         return Err("line rewrite sides must contain the same number of ... gaps".to_string());
     }
     let mut rules = Vec::new();
     for (before, after) in expand_line_movement_mark_sets3(&before, &after) {
         let writes = infer_line_writes_from_patterns(&before, &after);
-        for gaps in line_gap_assignments(before.gap_count, line_gap_limit) {
-            for direction in directions_for_line_orientation(orientation.clone()) {
-                let rule = LineRuleTemplate3::once(
-                    LineOrientation3::Direction(direction),
-                    before.materialize(&gaps).map_err(parse_error_message)?,
-                    materialize_line_writes(&writes, &gaps).map_err(parse_error_message)?,
-                );
-                let input = input_for_direction(direction);
-                let mut lowered = lower_line_rule_template(catalog, &rule)
-                    .map_err(|error| format!("{error:?}"))?;
-                for rule in &mut lowered {
-                    rule.guards.push(Guard3::InputIs(input));
-                }
-                rules.extend(lowered);
+        for direction in directions_for_line_orientation(orientation.clone()) {
+            let rule = LineRuleTemplate3::once(
+                LineOrientation3::Direction(direction),
+                before.lower(),
+                lower_line_writes(&writes),
+            );
+            let input = input_for_direction(direction);
+            let mut lowered =
+                lower_line_rule_template3(catalog, &rule).map_err(parse_error_message)?;
+            for rule in &mut lowered {
+                rule.guards.push(Guard3::InputIs(input));
             }
+            rules.extend(lowered);
         }
     }
     Ok(rules)
@@ -3127,70 +3121,76 @@ struct LinePatternWithGaps3 {
 }
 
 impl LinePatternWithGaps3 {
-    fn materialize(&self, gaps: &[u16]) -> Result<LinePatternTemplate3, ParseError3> {
-        Ok(LinePatternTemplate3::new(
+    fn lower(&self) -> LinePatternTemplate3 {
+        LinePatternTemplate3::new(
             self.cells
                 .iter()
-                .map(|cell| {
-                    Ok(LineMatchCellTemplate3 {
-                        step: cell.step.materialize(gaps)?,
-                        require: cell.require.clone(),
-                        forbid: cell.forbid.clone(),
-                    })
+                .map(|cell| LineMatchCellTemplate3 {
+                    step: cell.step.clone(),
+                    require_null: cell.require_null,
+                    require: cell.require.clone(),
+                    forbid: cell.forbid.clone(),
+                    require_cell_mark: cell.require_cell_mark.clone(),
+                    forbid_cell_mark: cell.forbid_cell_mark.clone(),
                 })
-                .collect::<Result<Vec<_>, ParseError3>>()?,
-        ))
+                .collect(),
+        )
+        .with_gap_count(self.gap_count)
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct LineCellWithGapStep3 {
-    step: LineStepExpr3,
+    step: LineOffsetTemplate3,
+    require_null: bool,
     require: Vec<ObjectSelector3>,
     forbid: Vec<ObjectSelector3>,
+    require_cell_mark: Vec<SelectorMark3>,
+    forbid_cell_mark: Vec<SelectorMark3>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct LineStepExpr3 {
-    base: i16,
-    gap_terms: Vec<u16>,
-}
-
-impl LineStepExpr3 {
-    fn materialize(&self, gaps: &[u16]) -> Result<i16, ParseError3> {
-        let mut step = i32::from(self.base);
-        for gap_index in &self.gap_terms {
-            let gap = gaps
-                .get(usize::from(*gap_index))
-                .ok_or_else(|| message("internal 3D gap index out of bounds"))?;
-            step += i32::from(*gap);
-        }
-        i16::try_from(step).map_err(|_| message("3D line gap offset is too large"))
-    }
-}
-
-fn parse_line_pattern_with_gaps(
-    inner: &str,
-    catalog: &SelectorCatalog3,
+fn materialize_line_pattern_with_gaps3(
+    pattern: &puzzle_authoring::UnresolvedPatternSyntax,
+    catalog: &crate::Catalog,
 ) -> Result<LinePatternWithGaps3, ParseError3> {
+    let [component] = pattern.components.as_slice() else {
+        return Err(message(
+            "3D line patterns require exactly one pattern block",
+        ));
+    };
+    let [puzzle_authoring::UnresolvedPatternLineSyntax::Cells(parts)] = component.lines.as_slice()
+    else {
+        return Err(message(
+            "line patterns must contain exactly one non-blank line",
+        ));
+    };
     let mut cells = Vec::new();
     let mut visible_step = 0_i16;
     let mut gap_count = 0_u16;
-    for cell in split_line_cells(inner) {
-        if cell == "..." {
+    for part in parts {
+        if matches!(
+            part,
+            puzzle_authoring::UnresolvedPatternPartSyntax::Ellipsis
+        ) {
             gap_count = gap_count
                 .checked_add(1)
                 .ok_or_else(|| message("too many 3D line gaps"))?;
             continue;
         }
-        let parsed = parse_cell(cell, catalog)?;
+        let puzzle_authoring::UnresolvedPatternPartSyntax::Cell(cell) = part else {
+            unreachable!()
+        };
+        let parsed = materialize_cell3(cell, catalog)?;
         cells.push(LineCellWithGapStep3 {
-            step: LineStepExpr3 {
+            step: LineOffsetTemplate3 {
                 base: visible_step,
                 gap_terms: (0..gap_count).collect(),
             },
+            require_null: parsed.require_null,
             require: parsed.require,
             forbid: parsed.forbid,
+            require_cell_mark: parsed.require_cell_mark,
+            forbid_cell_mark: parsed.forbid_cell_mark,
         });
         visible_step = visible_step
             .checked_add(1)
@@ -3202,20 +3202,25 @@ fn parse_line_pattern_with_gaps(
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum LineWriteWithGapStep3 {
     Add {
-        to: LineStepExpr3,
+        to: LineOffsetTemplate3,
         object: ObjectSelector3,
     },
     Remove {
-        from: LineStepExpr3,
+        from: LineOffsetTemplate3,
         object: ObjectSelector3,
     },
     Move {
-        from: LineStepExpr3,
-        to: LineStepExpr3,
+        from: LineOffsetTemplate3,
+        to: LineOffsetTemplate3,
         object: ObjectSelector3,
     },
     SetMark {
-        at: LineStepExpr3,
+        at: LineOffsetTemplate3,
+        object: ObjectSelector3,
+        mark: SelectorMark3,
+    },
+    RemoveMark {
+        at: LineOffsetTemplate3,
         object: ObjectSelector3,
         mark: SelectorMark3,
     },
@@ -3225,330 +3230,376 @@ fn infer_line_writes_from_patterns(
     before: &LinePatternWithGaps3,
     after: &LinePatternWithGaps3,
 ) -> Vec<LineWriteWithGapStep3> {
-    let before = positive_line_cells_from_pattern(before);
-    let after = positive_line_cells_from_pattern(after);
-    let after_for_mark = after.clone();
-    let mut writes = Vec::new();
-    let mut used_after = vec![false; after.len()];
-    for (from, object) in &before {
-        let token = object.token();
-        let Some(index) = after
+    let before = puzzle_authoring::selector_rewrite_occurrences(
+        before
+            .cells
             .iter()
-            .enumerate()
-            .find_map(|(index, (_, after_object))| {
-                (!used_after[index] && after_object.token() == token).then_some(index)
-            })
-        else {
-            writes.push(LineWriteWithGapStep3::Remove {
-                from: from.clone(),
-                object: object.clone(),
-            });
-            continue;
-        };
-        used_after[index] = true;
-        let to = after[index].0.clone();
-        if *from != to {
-            writes.push(LineWriteWithGapStep3::Move {
-                from: from.clone(),
-                to,
-                object: object.clone(),
-            });
-        }
-    }
-    for (index, (to, object)) in after.into_iter().enumerate() {
-        if !used_after[index] {
-            writes.push(LineWriteWithGapStep3::Add { to, object });
-        }
-    }
-    for (at, object) in after_for_mark {
-        for mark in object.mark() {
-            writes.push(LineWriteWithGapStep3::SetMark {
-                at: at.clone(),
-                object: object.clone(),
-                mark: mark.clone(),
-            });
-        }
-    }
-    writes
-}
-
-fn positive_line_cells_from_pattern(
-    pattern: &LinePatternWithGaps3,
-) -> Vec<(LineStepExpr3, ObjectSelector3)> {
-    let mut out = Vec::new();
-    for cell in &pattern.cells {
-        for selector in &cell.require {
-            out.push((cell.step.clone(), selector.clone()));
-        }
-    }
-    out
-}
-
-fn materialize_line_writes(
-    writes: &[LineWriteWithGapStep3],
-    gaps: &[u16],
-) -> Result<Vec<LineWriteOpTemplate3>, ParseError3> {
-    writes
-        .iter()
-        .map(|write| match write {
-            LineWriteWithGapStep3::Add { to, object } => Ok(LineWriteOpTemplate3::Add {
-                step: to.materialize(gaps)?,
-                object: object.clone(),
-            }),
-            LineWriteWithGapStep3::Remove { from, object } => Ok(LineWriteOpTemplate3::Remove {
-                step: from.materialize(gaps)?,
-                object: object.clone(),
-            }),
-            LineWriteWithGapStep3::Move { from, to, object } => Ok(LineWriteOpTemplate3::Move {
-                from_step: from.materialize(gaps)?,
-                to_step: to.materialize(gaps)?,
-                object: object.clone(),
-            }),
-            LineWriteWithGapStep3::SetMark { at, object, mark } => {
-                Ok(LineWriteOpTemplate3::SetMark {
-                    step: at.materialize(gaps)?,
-                    object: object.clone(),
-                    mark: mark.clone(),
-                })
+            .map(|cell| (cell.step.clone(), cell.require.as_slice())),
+    );
+    let after = puzzle_authoring::selector_rewrite_occurrences(
+        after
+            .cells
+            .iter()
+            .map(|cell| (cell.step.clone(), cell.require.as_slice())),
+    );
+    puzzle_authoring::diff_rewrite_occurrences(&before, &after, |left, right| left == right)
+        .into_iter()
+        .map(|delta| match delta {
+            puzzle_authoring::RewriteOccurrenceDelta::Add { at, subject } => {
+                LineWriteWithGapStep3::Add {
+                    to: at,
+                    object: subject,
+                }
+            }
+            puzzle_authoring::RewriteOccurrenceDelta::Remove { at, subject } => {
+                LineWriteWithGapStep3::Remove {
+                    from: at,
+                    object: subject,
+                }
+            }
+            puzzle_authoring::RewriteOccurrenceDelta::Move { from, to, subject } => {
+                LineWriteWithGapStep3::Move {
+                    from,
+                    to,
+                    object: subject,
+                }
+            }
+            puzzle_authoring::RewriteOccurrenceDelta::SetMark { at, subject, mark } => {
+                LineWriteWithGapStep3::SetMark {
+                    at,
+                    object: subject,
+                    mark,
+                }
+            }
+            puzzle_authoring::RewriteOccurrenceDelta::RemoveMark { at, subject, mark } => {
+                LineWriteWithGapStep3::RemoveMark {
+                    at,
+                    object: subject,
+                    mark,
+                }
             }
         })
         .collect()
 }
 
-fn line_gap_assignments(gap_count: u16, line_gap_limit: u16) -> Vec<Vec<u16>> {
-    if gap_count == 0 {
-        return vec![Vec::new()];
+fn validate_line_null_rewrite(
+    before: &LinePatternWithGaps3,
+    after: &LinePatternWithGaps3,
+) -> Result<(), String> {
+    validate_line_null_pattern(before)?;
+    for after_cell in &after.cells {
+        let before_null = before
+            .cells
+            .iter()
+            .any(|before_cell| before_cell.step == after_cell.step && before_cell.require_null);
+        puzzle_authoring::validate_null_rewrite_cell(
+            before_null,
+            after_cell.require_null,
+            after_cell.require.is_empty() && after_cell.forbid.is_empty(),
+        )
+        .map_err(|error| error.message().to_string())?;
     }
-    let mut out = Vec::new();
-    let mut current = Vec::with_capacity(usize::from(gap_count));
-    collect_line_gap_assignments(gap_count, line_gap_limit, &mut current, &mut out);
-    out
+    for before_cell in &before.cells {
+        if !before_cell.require_null {
+            continue;
+        }
+        let after_cell = after
+            .cells
+            .iter()
+            .find(|after_cell| after_cell.step == before_cell.step);
+        puzzle_authoring::validate_null_rewrite_cell(
+            true,
+            after_cell.is_some_and(|cell| cell.require_null),
+            after_cell.is_none_or(|cell| cell.require.is_empty() && cell.forbid.is_empty()),
+        )
+        .map_err(|error| error.message().to_string())?;
+    }
+    Ok(())
 }
 
-fn collect_line_gap_assignments(
-    gap_count: u16,
-    remaining: u16,
-    current: &mut Vec<u16>,
-    out: &mut Vec<Vec<u16>>,
-) {
-    if current.len() == usize::from(gap_count) {
-        out.push(current.clone());
-        return;
-    }
-    for gap in 0..=remaining {
-        current.push(gap);
-        collect_line_gap_assignments(gap_count, remaining - gap, current, out);
-        current.pop();
-    }
+fn validate_line_null_pattern(pattern: &LinePatternWithGaps3) -> Result<(), String> {
+    puzzle_authoring::validate_null_pattern_cells(
+        pattern.cells.iter().map(|cell| cell.require_null),
+    )
+    .map_err(|error| error.message().to_string())
 }
 
-fn parse_dense_pattern(
-    inner: &str,
-    catalog: &SelectorCatalog3,
+fn lower_line_writes(writes: &[LineWriteWithGapStep3]) -> Vec<LineWriteOpTemplate3> {
+    writes
+        .iter()
+        .map(|write| match write {
+            LineWriteWithGapStep3::Add { to, object } => LineWriteOpTemplate3::Add {
+                step: to.clone(),
+                object: object.clone(),
+            },
+            LineWriteWithGapStep3::Remove { from, object } => LineWriteOpTemplate3::Remove {
+                step: from.clone(),
+                object: object.clone(),
+            },
+            LineWriteWithGapStep3::Move { from, to, object } => LineWriteOpTemplate3::Move {
+                from_step: from.clone(),
+                to_step: to.clone(),
+                object: object.clone(),
+            },
+            LineWriteWithGapStep3::SetMark { at, object, mark } => LineWriteOpTemplate3::SetMark {
+                step: at.clone(),
+                object: object.clone(),
+                mark: mark.clone(),
+            },
+            LineWriteWithGapStep3::RemoveMark { at, object, mark } => {
+                LineWriteOpTemplate3::RemoveMark {
+                    step: at.clone(),
+                    object: object.clone(),
+                    mark: mark.clone(),
+                }
+            }
+        })
+        .collect()
+}
+
+fn materialize_dense_pattern3(
+    syntax: &puzzle_authoring::UnresolvedPatternSyntax,
+    catalog: &crate::Catalog,
 ) -> Result<DensePattern3, ParseError3> {
-    Ok(DensePattern3::new(
-        inner
-            .split(";;")
-            .map(str::trim)
-            .filter(|slice| !slice.is_empty())
-            .map(|slice| {
-                Ok(DenseSlice3::new(
-                    slice
-                        .split(';')
-                        .map(str::trim)
-                        .map(|row| {
-                            Ok(DenseRow3::new(
-                                split_line_cells(row)
-                                    .into_iter()
-                                    .map(|cell| {
-                                        let parsed = parse_cell(cell, catalog)?;
-                                        Ok(DenseCell3 {
-                                            require: parsed.require,
-                                            forbid: parsed.forbid,
-                                        })
-                                    })
-                                    .collect::<Result<Vec<_>, ParseError3>>()?,
-                            ))
+    let [component] = syntax.components.as_slice() else {
+        return Err(message(
+            "3D dense patterns require exactly one pattern block",
+        ));
+    };
+    let mut slices = Vec::new();
+    let mut rows = Vec::new();
+    for line in &component.lines {
+        match line {
+            puzzle_authoring::UnresolvedPatternLineSyntax::Blank => {
+                if rows.is_empty() {
+                    return Err(message("3D dense pattern contains an empty depth slice"));
+                }
+                slices.push(DenseSlice3::new(std::mem::take(&mut rows)));
+            }
+            puzzle_authoring::UnresolvedPatternLineSyntax::Cells(parts) => {
+                let cells = parts
+                    .iter()
+                    .map(|part| {
+                        let puzzle_authoring::UnresolvedPatternPartSyntax::Cell(cell) = part else {
+                            return Err(message("ellipsis is only valid in line patterns"));
+                        };
+                        let parsed = materialize_cell3(cell, catalog)?;
+                        Ok(DenseCell3 {
+                            require_null: parsed.require_null,
+                            require: parsed.require,
+                            forbid: parsed.forbid,
+                            require_cell_mark: parsed.require_cell_mark,
+                            forbid_cell_mark: parsed.forbid_cell_mark,
                         })
-                        .collect::<Result<Vec<_>, ParseError3>>()?,
-                ))
-            })
-            .collect::<Result<Vec<_>, ParseError3>>()?,
-    ))
+                    })
+                    .collect::<Result<Vec<_>, ParseError3>>()?;
+                rows.push(DenseRow3::new(cells));
+            }
+        }
+    }
+    if rows.is_empty() {
+        return Err(message("3D dense pattern contains an empty depth slice"));
+    }
+    slices.push(DenseSlice3::new(rows));
+    let pattern = DensePattern3::new(slices);
+    validate_dense_null_pattern(&pattern).map_err(message)?;
+    Ok(pattern)
 }
 
-fn split_line_cells(inner: &str) -> Vec<&str> {
-    inner.split('|').map(str::trim).collect()
+fn validate_dense_null_pattern(pattern: &DensePattern3) -> Result<(), String> {
+    let cells = pattern
+        .slices
+        .iter()
+        .flat_map(|slice| &slice.rows)
+        .flat_map(|row| &row.cells)
+        .collect::<Vec<_>>();
+    puzzle_authoring::validate_null_pattern_cells(cells.into_iter().map(|cell| cell.require_null))
+        .map_err(|error| error.message().to_string())
+}
+
+fn validate_dense_null_rewrite(
+    before: &DensePattern3,
+    after: &DensePattern3,
+) -> Result<(), String> {
+    for (depth, slice) in after.slices.iter().enumerate() {
+        for (row_index, row) in slice.rows.iter().enumerate() {
+            for (column, after_cell) in row.cells.iter().enumerate() {
+                let before_cell = before
+                    .slices
+                    .get(depth)
+                    .and_then(|slice| slice.rows.get(row_index))
+                    .and_then(|row| row.cells.get(column));
+                puzzle_authoring::validate_null_rewrite_cell(
+                    before_cell.is_some_and(|cell| cell.require_null),
+                    after_cell.require_null,
+                    after_cell.require.is_empty() && after_cell.forbid.is_empty(),
+                )
+                .map_err(|error| error.message().to_string())?;
+            }
+        }
+    }
+    for (depth, slice) in before.slices.iter().enumerate() {
+        for (row_index, row) in slice.rows.iter().enumerate() {
+            for (column, before_cell) in row.cells.iter().enumerate() {
+                if !before_cell.require_null {
+                    continue;
+                }
+                let after_cell = after
+                    .slices
+                    .get(depth)
+                    .and_then(|slice| slice.rows.get(row_index))
+                    .and_then(|row| row.cells.get(column));
+                puzzle_authoring::validate_null_rewrite_cell(
+                    true,
+                    after_cell.is_some_and(|cell| cell.require_null),
+                    after_cell.is_none_or(|cell| cell.require.is_empty() && cell.forbid.is_empty()),
+                )
+                .map_err(|error| error.message().to_string())?;
+            }
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ParsedCell3 {
+    require_null: bool,
     require: Vec<ObjectSelector3>,
     forbid: Vec<ObjectSelector3>,
+    require_cell_mark: Vec<SelectorMark3>,
+    forbid_cell_mark: Vec<SelectorMark3>,
 }
 
-fn parse_cell(cell: &str, catalog: &SelectorCatalog3) -> Result<ParsedCell3, ParseError3> {
+fn materialize_cell3(
+    cell: &puzzle_authoring::UnresolvedCellSyntax,
+    catalog: &crate::Catalog,
+) -> Result<ParsedCell3, ParseError3> {
+    if cell.keep {
+        return Err(message(
+            "3D pattern materialization received an unresolved `=` cell",
+        ));
+    }
+    let require_null = cell.require_null;
     let mut require = Vec::new();
     let mut forbid = Vec::new();
-    let tokens = puzzle_authoring::split_cell_tokens(cell).map_err(|error| match error {
-        puzzle_authoring::CellTokenError::UnmatchedCloseBrace => {
-            message("mark block has unmatched }")
-        }
-        puzzle_authoring::CellTokenError::MissingCloseBrace => message("mark block missing }"),
-        puzzle_authoring::CellTokenError::UnmatchedCloseParen => {
-            message("cell selector has unmatched )")
-        }
-        puzzle_authoring::CellTokenError::MissingCloseParen => message("cell selector missing )"),
-    })?;
-    let mut index = 0;
-    while index < tokens.len() {
-        if tokens[index] == "no" {
-            let selector = tokens
-                .get(index + 1)
-                .ok_or_else(|| message("no must be followed by a selector"))?;
-            forbid.push(parse_selector(
-                selector,
-                &catalog.families,
-                &catalog.groups,
-            )?);
-            index += 2;
-        } else if puzzle_authoring::mark_sugar_kind(&tokens[index]).is_some() {
-            let selector = tokens
-                .get(index + 1)
-                .ok_or_else(|| message("mark sugar must be followed by a selector"))?;
-            if selector == "no" || puzzle_authoring::mark_sugar_kind(selector).is_some() {
-                return Err(message("mark sugar must be followed by a selector"));
+    let mut require_cell_mark = Vec::new();
+    let mut forbid_cell_mark = Vec::new();
+    for subject in &cell.require {
+        match subject {
+            puzzle_authoring::UnresolvedCellSubjectSyntax::Selector(selector) => {
+                require.push(resolve_selector_syntax3(selector, catalog)?);
             }
-            let selector = parse_selector(selector, &catalog.families, &catalog.groups)?;
-            require.push(ObjectSelector3::with_mark(
-                selector,
-                vec![anonymous_selector_mark(&tokens[index], false)],
-            ));
-            index += 2;
-        } else {
-            require.push(parse_selector(
-                &tokens[index],
-                &catalog.families,
-                &catalog.groups,
-            )?);
-            index += 1;
+            puzzle_authoring::UnresolvedCellSubjectSyntax::CellMarks(marks) => {
+                require_cell_mark.extend(marks.clone());
+            }
         }
     }
-    Ok(ParsedCell3 { require, forbid })
+    for subject in &cell.forbid {
+        match subject {
+            puzzle_authoring::UnresolvedCellSubjectSyntax::Selector(selector) => {
+                forbid.push(resolve_selector_syntax3(selector, catalog)?);
+            }
+            puzzle_authoring::UnresolvedCellSubjectSyntax::CellMarks(marks) => {
+                forbid_cell_mark.extend(marks.clone());
+            }
+        }
+    }
+    Ok(ParsedCell3 {
+        require_null,
+        require,
+        forbid,
+        require_cell_mark,
+        forbid_cell_mark,
+    })
 }
 
 fn infer_dense_writes(
-    lhs: &str,
-    rhs: &str,
-    catalog: &SelectorCatalog3,
+    lhs: &puzzle_authoring::UnresolvedPatternSyntax,
+    rhs: &puzzle_authoring::UnresolvedPatternSyntax,
+    catalog: &crate::Catalog,
 ) -> Result<Vec<LocalWriteOpTemplate3>, ParseError3> {
-    let before = parse_positive_dense_cells(lhs, catalog)?;
-    let after = parse_positive_dense_cells(rhs, catalog)?;
-    Ok(infer_moves(before, after)
-        .into_iter()
-        .map(|write| match write {
-            InferredWrite3::Add { to, object } => LocalWriteOpTemplate3::Add {
-                offset: to.1,
-                object,
-            },
-            InferredWrite3::Remove { from, object } => LocalWriteOpTemplate3::Remove {
-                offset: from.1,
-                object,
-            },
-            InferredWrite3::Move { from, to, object } => LocalWriteOpTemplate3::Move {
-                from_offset: from.1,
-                to_offset: to.1,
-                object,
-            },
-        })
-        .collect())
-}
-
-type LinePos3 = (i16, Offset3);
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum InferredWrite3 {
-    Add {
-        to: LinePos3,
-        object: ObjectSelector3,
-    },
-    Remove {
-        from: LinePos3,
-        object: ObjectSelector3,
-    },
-    Move {
-        from: LinePos3,
-        to: LinePos3,
-        object: ObjectSelector3,
-    },
-}
-
-fn infer_moves(
-    before: Vec<(LinePos3, ObjectSelector3)>,
-    after: Vec<(LinePos3, ObjectSelector3)>,
-) -> Vec<InferredWrite3> {
-    let mut writes = Vec::new();
-    let mut used_after = vec![false; after.len()];
-    for (from, object) in &before {
-        let token = object.token();
-        let Some(index) = after
-            .iter()
-            .enumerate()
-            .find_map(|(index, (_, after_object))| {
-                (!used_after[index] && after_object.token() == token).then_some(index)
-            })
-        else {
-            writes.push(InferredWrite3::Remove {
-                from: *from,
-                object: object.clone(),
-            });
-            continue;
-        };
-        used_after[index] = true;
-        let to = after[index].0;
-        if *from != to {
-            writes.push(InferredWrite3::Move {
-                from: *from,
-                to,
-                object: object.clone(),
-            });
-        }
-    }
-    for (index, (to, object)) in after.into_iter().enumerate() {
-        if !used_after[index] {
-            writes.push(InferredWrite3::Add { to, object });
-        }
-    }
-    writes
-}
-
-fn parse_positive_dense_cells(
-    inner: &str,
-    catalog: &SelectorCatalog3,
-) -> Result<Vec<(LinePos3, ObjectSelector3)>, ParseError3> {
-    let mut parsed = Vec::new();
-    for (depth, slice) in inner.split(";;").map(str::trim).enumerate() {
-        for (row, row_text) in slice.split(';').map(str::trim).enumerate() {
-            for (column, cell) in split_line_cells(row_text).into_iter().enumerate() {
-                for selector in parse_cell(cell, catalog)?.require {
-                    let local = Offset3::new(column as i16, row as i16, depth as i16);
-                    parsed.push(((column as i16, local), selector));
+    let before_pattern = materialize_dense_pattern3(lhs, catalog)?;
+    let after_pattern = materialize_dense_pattern3(rhs, catalog)?;
+    validate_dense_null_rewrite(&before_pattern, &after_pattern).map_err(message)?;
+    let before = dense_rewrite_occurrences3(&before_pattern);
+    let after = dense_rewrite_occurrences3(&after_pattern);
+    Ok(
+        puzzle_authoring::diff_rewrite_occurrences(&before, &after, |left, right| left == right)
+            .into_iter()
+            .map(|delta| match delta {
+                puzzle_authoring::RewriteOccurrenceDelta::Add { at, subject } => {
+                    LocalWriteOpTemplate3::Add {
+                        offset: at,
+                        object: subject,
+                    }
                 }
-            }
-        }
-    }
-    Ok(parsed)
+                puzzle_authoring::RewriteOccurrenceDelta::Remove { at, subject } => {
+                    LocalWriteOpTemplate3::Remove {
+                        offset: at,
+                        object: subject,
+                    }
+                }
+                puzzle_authoring::RewriteOccurrenceDelta::Move { from, to, subject } => {
+                    LocalWriteOpTemplate3::Move {
+                        from_offset: from,
+                        to_offset: to,
+                        object: subject,
+                    }
+                }
+                puzzle_authoring::RewriteOccurrenceDelta::SetMark { at, subject, mark } => {
+                    LocalWriteOpTemplate3::SetMark {
+                        offset: at,
+                        object: subject,
+                        mark,
+                    }
+                }
+                puzzle_authoring::RewriteOccurrenceDelta::RemoveMark { at, subject, mark } => {
+                    LocalWriteOpTemplate3::RemoveMark {
+                        offset: at,
+                        object: subject,
+                        mark,
+                    }
+                }
+            })
+            .collect(),
+    )
 }
 
-fn parse_selector(
-    token: &str,
-    families: &[ObjectFamily3],
-    groups: &[SelectorGroup3],
+fn dense_rewrite_occurrences3(
+    pattern: &DensePattern3,
+) -> Vec<puzzle_authoring::RewriteOccurrence<(String, usize), Delta3, ObjectSelector3, SelectorMark3>>
+{
+    puzzle_authoring::selector_rewrite_occurrences(pattern.slices.iter().enumerate().flat_map(
+        |(depth, slice)| {
+            slice
+                .rows
+                .iter()
+                .enumerate()
+                .flat_map(move |(row, dense_row)| {
+                    dense_row
+                        .cells
+                        .iter()
+                        .enumerate()
+                        .map(move |(column, cell)| {
+                            (
+                                Delta3::new(column as i16, row as i16, depth as i16),
+                                cell.require.as_slice(),
+                            )
+                        })
+                })
+        },
+    ))
+}
+
+fn resolve_selector_syntax3(
+    syntax: &puzzle_authoring::SelectorSyntax,
+    catalog: &crate::Catalog,
 ) -> Result<ObjectSelector3, ParseError3> {
-    let (selector, mark) = split_selector_mark3(token)?;
-    let (selector, occurrence_label) = split_selector_occurrence_label3(selector)?;
-    let mut parts = selector.split(':').map(str::to_string).collect::<Vec<_>>();
-    for part in parts.iter_mut().skip(1) {
+    let selector = syntax.selector.as_str();
+    let mark = syntax.marks.clone();
+    let occurrence_label = syntax.occurrence_label.clone();
+    let mut tags = syntax.tags.clone();
+    for part in &mut tags {
         if part.contains(',') && !(part.starts_with('(') && part.ends_with(')')) {
             return Err(message(
                 "frame3 object slot must be parenthesized: Object:(primary, secondary)",
@@ -3562,13 +3613,12 @@ fn parse_selector(
             }
         }
     }
-    let parsed = if selector == "*" {
+    let parsed = if syntax.base == "*" && tags.is_empty() {
         ObjectSelector3::any()
-    } else if parts.len() > 1 {
+    } else if !tags.is_empty() {
         ObjectSelector3::variant(
-            &parts[0],
-            parts[1..]
-                .iter()
+            &syntax.base,
+            tags.iter()
                 .map(|part| {
                     if part == "*" {
                         SelectorTag3::any()
@@ -3579,15 +3629,15 @@ fn parse_selector(
                 .collect(),
         )
     } else {
-        if families.iter().any(|family| family.name == selector) {
+        if catalog.object_schemas.contains_key(&syntax.base) {
             return Err(message(format!(
                 "variant selector must use explicit tags: {selector}"
             )));
         }
-        if groups.iter().any(|group| group.name == selector) {
-            ObjectSelector3::group(selector)
+        if catalog.object_groups.contains_key(&syntax.base) {
+            ObjectSelector3::group(&syntax.base)
         } else {
-            ObjectSelector3::object(selector)
+            ObjectSelector3::object(&syntax.base)
         }
     };
     let parsed = match occurrence_label {
@@ -3595,104 +3645,6 @@ fn parse_selector(
         None => parsed,
     };
     Ok(ObjectSelector3::with_mark(parsed, mark))
-}
-
-fn split_selector_mark3(selector: &str) -> Result<(&str, Vec<SelectorMark3>), ParseError3> {
-    let Some(open_index) = selector.find('{') else {
-        return Ok((selector, Vec::new()));
-    };
-    let base = &selector[..open_index];
-    let attrs = selector[open_index + 1..]
-        .strip_suffix('}')
-        .ok_or_else(|| message("mark selector must end with }"))?;
-    if base.is_empty() {
-        return Err(message("mark selector must attach to an object"));
-    }
-    Ok((base, parse_selector_mark3(attrs)?))
-}
-
-fn parse_selector_mark3(attrs: &str) -> Result<Vec<SelectorMark3>, ParseError3> {
-    let mut parsed = Vec::new();
-    let tokens = attrs.split_whitespace().collect::<Vec<_>>();
-    let mut index = 0;
-    while index < tokens.len() {
-        let (negated, spec) = if tokens[index] == "no" {
-            let spec = tokens
-                .get(index + 1)
-                .ok_or_else(|| message("no must be followed by a mark"))?;
-            index += 2;
-            (true, *spec)
-        } else {
-            let spec = tokens[index];
-            index += 1;
-            (false, spec)
-        };
-        if puzzle_authoring::mark_sugar_kind(spec).is_some() {
-            parsed.push(anonymous_selector_mark(spec, negated));
-            continue;
-        }
-        let (name, value) = spec
-            .split_once('=')
-            .map_or((spec, None), |(name, value)| (name, Some(value)));
-        if !puzzle_authoring::is_identifier(name) {
-            return Err(message("mark name must start with an identifier"));
-        }
-        parsed.push(SelectorMark3 {
-            name: name.to_string(),
-            value: value.map(str::to_string),
-            negated,
-        });
-    }
-    Ok(parsed)
-}
-
-fn anonymous_selector_mark(value: &str, negated: bool) -> SelectorMark3 {
-    SelectorMark3 {
-        name: String::new(),
-        value: Some(value.to_string()),
-        negated,
-    }
-}
-
-fn split_selector_occurrence_label3(selector: &str) -> Result<(&str, Option<String>), ParseError3> {
-    let Some((base, label)) = selector.split_once('#') else {
-        return Ok((selector, None));
-    };
-    if base.is_empty() || label.is_empty() || label.contains('#') {
-        return Err(message("selector occurrence label must be: selector#label"));
-    }
-    if !label
-        .chars()
-        .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
-    {
-        return Err(message(
-            "selector occurrence label may only contain letters, numbers, and _",
-        ));
-    }
-    Ok((base, Some(label.to_string())))
-}
-
-fn cartesian_values(axes: &[Vec<String>]) -> Vec<Vec<String>> {
-    let mut values = vec![Vec::new()];
-    for axis in axes {
-        let mut next = Vec::new();
-        for prefix in &values {
-            for value in axis {
-                let mut row = prefix.clone();
-                row.push(value.clone());
-                next.push(row);
-            }
-        }
-        values = next;
-    }
-    values
-}
-
-fn direction_names(set: DirectionSet3) -> Vec<String> {
-    set.directions()
-        .into_iter()
-        .map(|direction| direction.name.to_string())
-        .collect()
 }
 
 fn default_inputs() -> Vec<InputDef3> {
@@ -3770,6 +3722,72 @@ fn message_at_source_line(message: impl Into<String>, source_line: &str) -> Pars
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn puzzle3_lowers_shared_nested_rule_syntax() {
+        let parsed = parse_puzzle3d(
+            r#"
+puzzle board {
+dimension = 3
+slots {
+actor = TEN:horizontal
+}
+rules {
+input [ TEN:horizontal ] -> [ > TEN:horizontal ]
+for h in horizontal {
+if input == h {
+[ TEN:horizontal ] -> [ TEN:h ]
+}
+}
+}
+}
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(parsed.game.program().len(), 5);
+    }
+
+    #[test]
+    fn puzzle3_line_patterns_consume_shared_null_cell_syntax() {
+        let catalog = crate::Catalog::for_dimension(crate::ModelDimension::Three);
+        let pattern = |inner: &str| {
+            puzzle_authoring::parse_unresolved_pattern_syntax(&format!("[{inner}]"))
+                .expect("shared pattern syntax parses")
+        };
+
+        lower_line_rewrite(
+            &catalog,
+            LineOrientation3::Direction(Direction3::DOWN),
+            &pattern("| null"),
+            &pattern("|"),
+            0,
+        )
+        .expect("null boundary detection lowers in 3D");
+
+        let error = lower_line_rewrite(
+            &catalog,
+            LineOrientation3::Direction(Direction3::DOWN),
+            &pattern("|"),
+            &pattern("| null"),
+            0,
+        )
+        .expect_err("RHS cannot introduce null");
+        assert!(
+            error.contains("`null` can only be matched on the before side"),
+            "{error}"
+        );
+
+        let dense_error = infer_dense_writes(&pattern("|"), &pattern("| null"), &catalog)
+            .expect_err("dense RHS cannot introduce null")
+            .to_string();
+        assert!(
+            dense_error.contains("`null` can only be matched on the before side"),
+            "{dense_error}"
+        );
+    }
+
     #[test]
     fn puzzle3_level_dash_separates_height_slices() {
         let rows = ["AB", "CD", "-", "EF", "GH"].map(str::to_string);
@@ -3823,7 +3841,8 @@ shape = {
 }
 
 puzzle board {
-layers {
+dimension = 3
+slots {
 objects = Pulse
 }
 rules {
@@ -3882,7 +3901,8 @@ shape = {
 }
 
 puzzle board {
-layers {
+dimension = 3
+slots {
 objects = Pulse
 }
 rules {
@@ -3915,7 +3935,8 @@ Floor2 {
 }
 
 puzzle board {
-layers {
+dimension = 3
+slots {
 floor = Floor Floor2
 }
 rules {
@@ -3929,5 +3950,85 @@ rules {
         assert_eq!(sprites.sprites.len(), 2);
         assert_eq!(sprites.sprites[0].name, "Floor");
         assert_eq!(sprites.sprites[1].name, "Floor2");
+    }
+
+    #[test]
+    fn puzzle3_axisless_sprite_rotation_defaults_to_z_axis() {
+        let syntax = crate::sprite_authoring::parse_sprite_node(
+            Some("Arrow {"),
+            &["rotate 90deg"].map(str::to_string),
+        );
+
+        let ops = super::parse_sprite_spatial_ops3(&syntax).unwrap();
+
+        assert_eq!(
+            ops,
+            vec![crate::SpriteSpatialOp3::Rotate {
+                space: crate::SpriteSpace3::World,
+                axis: [0.0, 0.0, 1.0],
+                degrees: 90.0,
+            }]
+        );
+    }
+
+    #[test]
+    fn puzzle3_sprite_rotation_combines_from_with_an_explicit_axis() {
+        let syntax = crate::sprite_authoring::parse_sprite_node(
+            Some("Arrow {"),
+            &["rotate local 90deg from 30deg around right"].map(str::to_string),
+        );
+
+        let ops = super::parse_sprite_spatial_ops3(&syntax).unwrap();
+
+        assert_eq!(
+            ops,
+            vec![crate::SpriteSpatialOp3::Rotate {
+                space: crate::SpriteSpace3::Local,
+                axis: [1.0, 0.0, 0.0],
+                degrees: 60.0,
+            }]
+        );
+    }
+
+    #[test]
+    fn puzzle3_axisless_rotation_resolves_horizontal_sprite_bindings_from_front() {
+        let parsed = super::parse_puzzle3d(
+            r#"
+sprites {
+Arrow:horizontal {
+colors = #ffffff
+rotate horizontal from front
+0
+}
+}
+
+puzzle board {
+dimension = 3
+slots {
+actor = Arrow:horizontal
+}
+rules {
+}
+}
+"#,
+        )
+        .unwrap();
+        let sprites = parsed.sprite_set.unwrap();
+
+        for (name, degrees) in [
+            ("Arrow:right", -90.0),
+            ("Arrow:front", 0.0),
+            ("Arrow:left", 90.0),
+            ("Arrow:back", -180.0),
+        ] {
+            assert_eq!(
+                sprites.sprite(name).unwrap().spatial_ops,
+                vec![crate::SpriteSpatialOp3::Rotate {
+                    space: crate::SpriteSpace3::World,
+                    axis: [0.0, 0.0, 1.0],
+                    degrees,
+                }]
+            );
+        }
     }
 }

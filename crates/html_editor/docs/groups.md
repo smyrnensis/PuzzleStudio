@@ -4,7 +4,6 @@ Use `groups` to create selector aliases in one block.
 ```puzzle
 groups {
 pushable = Box Crate
-@hints = @Cursor @Hint
 }
 ```
 

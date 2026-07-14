@@ -2,8 +2,8 @@ use crate::session_history::SessionHistory;
 #[cfg(test)]
 use puzzle_grid3d::Rule3;
 use puzzle_grid3d::{
-    Direction3, InputId, LevelBundle3, LevelBundleError3, LocalFrame, ObjectId, RuleStep3, State3,
-    TransitionError3, WinCondition3, transition_program_with_local_frame,
+    Direction3, InputDef3, InputId, LevelBundle3, LevelBundleError3, LocalFrame, ObjectId,
+    RuleStep3, State3, TransitionError3, WinCondition3, transition_program_with_local_frame,
     transition_program_without_input_with_local_frame,
 };
 use puzzle_runtime_contract::{LifecycleCommand, RuntimeLifecycle};
@@ -233,12 +233,11 @@ impl GameSession3 {
     pub fn move_direction(
         &mut self,
         bundle: &LevelBundle3,
+        inputs: &[InputDef3],
         rules: &[RuleStep3],
         direction: Direction3,
     ) -> Result<bool, GameSessionError3> {
-        let input = bundle
-            .game
-            .inputs
+        let input = inputs
             .iter()
             .find(|input| input.direction == Some(direction))
             .map(|input| input.id)
@@ -251,13 +250,12 @@ impl GameSession3 {
     pub fn move_direction_with_win_condition(
         &mut self,
         bundle: &LevelBundle3,
+        inputs: &[InputDef3],
         rules: &[RuleStep3],
         direction: Direction3,
         win_condition: &WinCondition3,
     ) -> Result<bool, GameSessionError3> {
-        let input = bundle
-            .game
-            .inputs
+        let input = inputs
             .iter()
             .find(|input| input.direction == Some(direction))
             .map(|input| input.id)
@@ -442,8 +440,8 @@ impl From<TransitionError3> for GameSessionError3 {
 mod tests {
     use super::*;
     use puzzle_grid3d::{
-        Coord3, Direction3, Game3, InputDef3, LayerId, Level3, LevelCell3, LevelEntry3, MatchCell3,
-        ObjectDef3, ObjectId, Offset3, Pattern3, Size3, WriteOp3,
+        CompiledGame3, Coord3, Delta3, Direction3, InputDef3, LayerId, Level3, LevelCell3,
+        LevelEntry3, MatchCell3, ObjectDef3, ObjectId, Pattern3, Size3, WriteOp3,
     };
 
     const PLAYER: ObjectId = ObjectId(1);
@@ -455,8 +453,8 @@ mod tests {
     const INPUT_LEFT: InputId = InputId(0);
     const INPUT_RIGHT: InputId = InputId(1);
 
-    fn session_game() -> Game3 {
-        Game3::new_with_inputs(
+    fn session_game() -> CompiledGame3 {
+        CompiledGame3::new(
             1,
             vec![
                 ObjectDef3 {
@@ -472,11 +470,15 @@ mod tests {
                     layer_id: ACTOR,
                 },
             ],
-            vec![
-                InputDef3::directional(INPUT_LEFT, "left", Direction3::LEFT),
-                InputDef3::directional(INPUT_RIGHT, "right", Direction3::RIGHT),
-            ],
+            Vec::new(),
         )
+    }
+
+    fn session_inputs() -> Vec<InputDef3> {
+        vec![
+            InputDef3::directional(INPUT_LEFT, "left", Direction3::LEFT),
+            InputDef3::directional(INPUT_RIGHT, "right", Direction3::RIGHT),
+        ]
     }
 
     fn session_bundle() -> LevelBundle3 {
@@ -505,7 +507,7 @@ mod tests {
     fn move_right_rule() -> Rule3 {
         Rule3::once(
             Pattern3::new(vec![
-                MatchCell3::new(Offset3::ZERO).require(PLAYER),
+                MatchCell3::new(Delta3::ZERO).require(PLAYER),
                 MatchCell3::new(Direction3::RIGHT.offset)
                     .forbid(PLAYER)
                     .forbid(BOX)
@@ -513,8 +515,8 @@ mod tests {
             ]),
             vec![WriteOp3::Move {
                 component: 0,
-                from_offset: Offset3::ZERO,
-                to_offset: Direction3::RIGHT.offset,
+                from_offset: Delta3::ZERO.into(),
+                to_offset: Direction3::RIGHT.offset.into(),
                 object: PLAYER,
             }],
         )
@@ -524,7 +526,7 @@ mod tests {
     fn push_right_rule() -> Rule3 {
         Rule3::once(
             Pattern3::new(vec![
-                MatchCell3::new(Offset3::ZERO).require(PLAYER),
+                MatchCell3::new(Delta3::ZERO).require(PLAYER),
                 MatchCell3::new(Direction3::RIGHT.offset).require(BOX),
                 MatchCell3::new(Direction3::RIGHT.offset.scale(2))
                     .forbid(PLAYER)
@@ -534,14 +536,14 @@ mod tests {
             vec![
                 WriteOp3::Move {
                     component: 0,
-                    from_offset: Direction3::RIGHT.offset,
+                    from_offset: Direction3::RIGHT.offset.into(),
                     to_offset: Direction3::RIGHT.offset.scale(2),
                     object: BOX,
                 },
                 WriteOp3::Move {
                     component: 0,
-                    from_offset: Offset3::ZERO,
-                    to_offset: Direction3::RIGHT.offset,
+                    from_offset: Delta3::ZERO.into(),
+                    to_offset: Direction3::RIGHT.offset.into(),
                     object: PLAYER,
                 },
             ],
@@ -559,7 +561,7 @@ mod tests {
             WinCondition3::AllObjectsCoveredByPattern {
                 object: GOAL,
                 cover_pattern: Pattern3::new(vec![
-                    MatchCell3::new(Offset3::ZERO).require(BOX),
+                    MatchCell3::new(Delta3::ZERO).require(BOX),
                     MatchCell3::new(Direction3::DOWN.offset).require(GOAL),
                 ]),
             },
@@ -568,7 +570,7 @@ mod tests {
 
     fn support_bundle() -> LevelBundle3 {
         LevelBundle3::checked_new(
-            Game3::new_with_inputs(
+            CompiledGame3::new(
                 2,
                 vec![
                     ObjectDef3 {
@@ -588,11 +590,7 @@ mod tests {
                         layer_id: FLOOR,
                     },
                 ],
-                vec![InputDef3::directional(
-                    INPUT_RIGHT,
-                    "right",
-                    Direction3::RIGHT,
-                )],
+                Vec::new(),
             ),
             vec![LevelEntry3::new(
                 "support",
@@ -707,7 +705,7 @@ mod tests {
 
         assert!(
             session
-                .move_direction(&bundle, &rules, Direction3::RIGHT)
+                .move_direction(&bundle, &session_inputs(), &rules, Direction3::RIGHT)
                 .unwrap()
         );
 
@@ -729,7 +727,13 @@ mod tests {
 
         assert!(
             session
-                .move_direction_with_win_condition(&bundle, &rules, Direction3::RIGHT, &win)
+                .move_direction_with_win_condition(
+                    &bundle,
+                    &session_inputs(),
+                    &rules,
+                    Direction3::RIGHT,
+                    &win,
+                )
                 .unwrap()
         );
 

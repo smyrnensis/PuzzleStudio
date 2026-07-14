@@ -1,18 +1,21 @@
-use puzzle_grid3d::{Game3, LevelBundle3, ObjectId, RuleStep3, WinCondition3};
-use puzzle_grid3d_authoring::SelectorCatalog3;
+use std::collections::HashMap;
+
+use puzzle_grid3d::{
+    CompiledGame3, InputDef3, InputId, LevelBundle3, ObjectId, RuleStep3, WinCondition3,
+};
 use puzzle_kernel::LocalFrame;
 use puzzle_runtime_contract::{Puzzle3CameraEffect, RuntimeLifecycle};
 
-use crate::{SolverStrategy3, SpriteSet3};
+use crate::{SolverStrategy3, SpriteSet3, VisualOrderDef};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ParsedPuzzle3 {
-    pub game: Game3,
-    pub catalog: SelectorCatalog3,
+    pub game: CompiledGame3,
+    pub inputs: Vec<InputDef3>,
+    pub object_labels: HashMap<ObjectId, String>,
+    pub viewport_focus_objects: Vec<ObjectId>,
     pub settings: ModelSettings3,
     pub local_frame: Option<LocalFrame<ObjectId>>,
-    pub rules: Vec<RuleStep3>,
-    pub display_objects: Vec<ObjectId>,
     pub rule_camera_effects: Vec<Vec<Puzzle3CameraEffect>>,
     pub level_bundle: Option<LevelBundle3>,
     pub level_packs: Vec<Option<String>>,
@@ -21,6 +24,17 @@ pub struct ParsedPuzzle3 {
     pub lifecycle: RuntimeLifecycle<RuleStep3, LocalFrame<ObjectId>>,
     pub on_level_start_camera_effects: Vec<Vec<Puzzle3CameraEffect>>,
     pub sprite_set: Option<SpriteSet3>,
+    pub visual_order: VisualOrderDef,
+}
+
+impl ParsedPuzzle3 {
+    pub fn input(&self, input: InputId) -> Option<&InputDef3> {
+        self.inputs.iter().find(|def| def.id == input)
+    }
+
+    pub fn input_by_name(&self, name: &str) -> Option<&InputDef3> {
+        self.inputs.iter().find(|def| def.name == name)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -50,6 +64,7 @@ impl Default for ModelSettings3 {
 pub struct CameraSettings3 {
     pub yaw_degrees: i16,
     pub pitch_degrees: i16,
+    pub roll_degrees: i16,
     pub zoom_milli: u16,
     pub interactive_look: bool,
     pub interactive_zoom: bool,
@@ -58,9 +73,10 @@ pub struct CameraSettings3 {
 impl Default for CameraSettings3 {
     fn default() -> Self {
         Self {
-            yaw_degrees: 34,
-            pitch_degrees: 38,
-            zoom_milli: 1100,
+            yaw_degrees: 0,
+            pitch_degrees: 90,
+            roll_degrees: 0,
+            zoom_milli: 1000,
             interactive_look: false,
             interactive_zoom: false,
         }

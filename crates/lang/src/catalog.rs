@@ -6,6 +6,8 @@ use puzzle_core::{
 
 #[derive(Clone, Debug)]
 pub(crate) struct Catalog {
+    pub(crate) layer_count: Option<u16>,
+    pub(crate) named_layers: HashMap<String, u16>,
     pub(crate) value_sets: HashMap<String, Vec<String>>,
     pub(crate) object_axes: HashMap<String, Vec<String>>,
     pub(crate) axis_types: HashMap<String, ValueType>,
@@ -16,7 +18,6 @@ pub(crate) struct Catalog {
     pub(crate) object_labels: HashMap<ObjectId, String>,
     pub(crate) object_layers: HashMap<ObjectId, LayerId>,
     pub(crate) object_defs: Vec<ObjectDef>,
-    pub(crate) visual_objects: Vec<ObjectId>,
     pub(crate) mark_defs: Vec<MarkDef>,
     pub(crate) mark_names: HashMap<String, MarkDef>,
     pub(crate) render_chars: HashMap<ObjectId, char>,
@@ -33,15 +34,22 @@ pub(crate) struct Catalog {
     pub(crate) condition_labels: HashMap<ConditionId, String>,
 }
 
-impl Default for Catalog {
-    fn default() -> Self {
+impl Catalog {
+    pub(crate) fn for_dimension(dimension: crate::ModelDimension) -> Self {
+        let directions = match dimension {
+            crate::ModelDimension::Two => vec!["up", "down", "left", "right"],
+            crate::ModelDimension::Three => {
+                vec!["up", "down", "left", "right", "front", "back"]
+            }
+        };
+        let horizontal = match dimension {
+            crate::ModelDimension::Two => vec!["left", "right"],
+            crate::ModelDimension::Three => vec!["left", "right", "front", "back"],
+        };
         let mut value_sets = HashMap::new();
         value_sets.insert(
             "directions".to_string(),
-            ["up", "down", "left", "right"]
-                .into_iter()
-                .map(str::to_string)
-                .collect(),
+            directions.iter().copied().map(str::to_string).collect(),
         );
         let axis_types = HashMap::from([
             ("directions".to_string(), ValueType::Direction),
@@ -50,7 +58,7 @@ impl Default for Catalog {
         ]);
         value_sets.insert(
             "horizontal".to_string(),
-            ["left", "right"].into_iter().map(str::to_string).collect(),
+            horizontal.into_iter().map(str::to_string).collect(),
         );
         value_sets.insert(
             "vertical".to_string(),
@@ -60,10 +68,7 @@ impl Default for Catalog {
         let anonymous_movement = MarkDef {
             id: MarkId(0),
             kind: MarkKind::Enum,
-            values: ["up", "down", "left", "right"]
-                .into_iter()
-                .map(str::to_string)
-                .collect(),
+            values: directions.into_iter().map(str::to_string).collect(),
         };
         let anonymous_bool = MarkDef {
             id: MarkId(1),
@@ -92,6 +97,8 @@ impl Default for Catalog {
         mark_names.insert("__move_collision".to_string(), move_collision.clone());
 
         Self {
+            layer_count: None,
+            named_layers: HashMap::new(),
             value_sets,
             object_axes: HashMap::new(),
             axis_types,
@@ -102,7 +109,6 @@ impl Default for Catalog {
             object_labels: HashMap::new(),
             object_layers: HashMap::new(),
             object_defs: Vec::new(),
-            visual_objects: Vec::new(),
             mark_defs: vec![
                 anonymous_movement,
                 anonymous_bool,
@@ -124,6 +130,12 @@ impl Default for Catalog {
             condition_names: HashMap::new(),
             condition_labels: HashMap::new(),
         }
+    }
+}
+
+impl Default for Catalog {
+    fn default() -> Self {
+        Self::for_dimension(crate::ModelDimension::Two)
     }
 }
 

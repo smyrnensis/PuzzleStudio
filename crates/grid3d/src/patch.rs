@@ -1,4 +1,4 @@
-use crate::{Coord3, Game3, LayerId, MarkId3, ObjectId, State3, StateError3, VariableId};
+use crate::{CompiledGame3, Coord3, LayerId, MarkId3, ObjectId, State3, StateError3, VariableId};
 use puzzle_kernel::{GridPatchOp, MarkValueMatch, VariableUpdateOp};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -19,13 +19,13 @@ impl Patch3 {
         self.ops.is_empty()
     }
 
-    pub fn apply(&self, game: &Game3, state: &mut State3) -> Result<(), PatchError3> {
+    pub fn apply(&self, game: &CompiledGame3, state: &mut State3) -> Result<(), PatchError3> {
         self.apply_in_place(game, state).map(|_| ())
     }
 
     pub(crate) fn apply_in_place(
         &self,
-        game: &Game3,
+        game: &CompiledGame3,
         state: &mut State3,
     ) -> Result<bool, PatchError3> {
         let changed = self.validate(game, state)?;
@@ -40,7 +40,11 @@ impl Patch3 {
         Ok(changed)
     }
 
-    pub(crate) fn validate(&self, game: &Game3, state: &State3) -> Result<bool, PatchError3> {
+    pub(crate) fn validate(
+        &self,
+        game: &CompiledGame3,
+        state: &State3,
+    ) -> Result<bool, PatchError3> {
         let mut slots = SlotOverlay3::new();
         validate_moves(game, state, &self.ops, &mut slots)?;
         let mut changed = slots.changed(state)?;
@@ -243,7 +247,11 @@ impl From<StateError3> for PatchError3 {
     }
 }
 
-fn apply_remove_phase(game: &Game3, state: &mut State3, op: &PatchOp3) -> Result<(), PatchError3> {
+fn apply_remove_phase(
+    game: &CompiledGame3,
+    state: &mut State3,
+    op: &PatchOp3,
+) -> Result<(), PatchError3> {
     match *op {
         PatchOp3::Add { .. }
         | PatchOp3::Move { .. }
@@ -262,7 +270,11 @@ fn apply_remove_phase(game: &Game3, state: &mut State3, op: &PatchOp3) -> Result
     Ok(())
 }
 
-fn apply_add_phase(game: &Game3, state: &mut State3, op: &PatchOp3) -> Result<(), PatchError3> {
+fn apply_add_phase(
+    game: &CompiledGame3,
+    state: &mut State3,
+    op: &PatchOp3,
+) -> Result<(), PatchError3> {
     match *op {
         PatchOp3::Add { position, object } => {
             state.place_object(game, position, object)?;
@@ -304,7 +316,11 @@ fn apply_add_phase(game: &Game3, state: &mut State3, op: &PatchOp3) -> Result<()
     Ok(())
 }
 
-fn apply_moves(game: &Game3, state: &mut State3, ops: &[PatchOp3]) -> Result<(), PatchError3> {
+fn apply_moves(
+    game: &CompiledGame3,
+    state: &mut State3,
+    ops: &[PatchOp3],
+) -> Result<(), PatchError3> {
     let mut moves = Vec::new();
     let mut sources = Vec::new();
     let mut destinations = Vec::new();
@@ -361,7 +377,7 @@ fn apply_moves(game: &Game3, state: &mut State3, ops: &[PatchOp3]) -> Result<(),
 }
 
 fn validate_moves(
-    game: &Game3,
+    game: &CompiledGame3,
     state: &State3,
     ops: &[PatchOp3],
     slots: &mut SlotOverlay3,
@@ -421,7 +437,7 @@ fn validate_moves(
 }
 
 fn apply_set_mark(
-    game: &Game3,
+    game: &CompiledGame3,
     state: &mut State3,
     position: Coord3,
     object: ObjectId,
@@ -442,7 +458,7 @@ fn apply_set_mark(
 }
 
 fn apply_remove_mark(
-    game: &Game3,
+    game: &CompiledGame3,
     state: &mut State3,
     position: Coord3,
     object: ObjectId,
@@ -462,13 +478,13 @@ fn apply_remove_mark(
     Ok(())
 }
 
-fn checked_object_layer(game: &Game3, object: ObjectId) -> Result<LayerId, StateError3> {
+fn checked_object_layer(game: &CompiledGame3, object: ObjectId) -> Result<LayerId, StateError3> {
     game.object_layer(object)
         .ok_or(StateError3::UnknownObject { object })
 }
 
 fn expect_object_in_overlay(
-    game: &Game3,
+    game: &CompiledGame3,
     state: &State3,
     slots: &SlotOverlay3,
     position: Coord3,

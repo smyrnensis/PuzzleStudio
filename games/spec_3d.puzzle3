@@ -4,16 +4,17 @@ author = "Levels by David Skinner"
 theme = "puzzlescript"
 
 puzzle sokoban {
+dimension = 3
 render {
 camera {
 	yaw = 0
-	pitch = 90
-		zoom = 1
+	pitch = 70
+	zoom = 1
 }
 	shadow = true
 }
 
-layers {
+slots {
 floor = Floor
 target = Goal
 Player Box Wall

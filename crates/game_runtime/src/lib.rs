@@ -1,13 +1,11 @@
 use puzzle_core::{
     CompiledGame, InputId, MarkId, MarkValueMatch as CoreMarkValueMatch, ObjectId, Patch, PatchOp,
-    RuleId, State as PuzzleState, TransitionCommand, TransitionError, VariableId, VariableUpdateOp,
-    transition_program,
+    RuleId, State as PuzzleState, TransitionCommand, VariableId, VariableUpdateOp,
 };
 use puzzle_grid3d::{
-    Coord3, Game3, LevelBundle3, MarkValueMatch, ObjectId as ObjectId3, Patch3, PatchOp3, RuleId3,
-    Size3, State3, TransitionCommand3, TransitionOutcome3,
+    CompiledGame3, Coord3, LevelBundle3, MarkValueMatch, ObjectId as ObjectId3, Patch3, PatchOp3,
+    RuleId3, Size3, State3, TransitionCommand3, TransitionOutcome3,
 };
-use puzzle_grid3d_authoring::SelectorCatalog3;
 use puzzle_lang::{
     ArrowKey, KeyTrigger, Level, LoadedDocumentModel, LoadedGame, ModelSettings3, ParsedPuzzle3,
     ResourceSelection, SceneAlignDef, SceneBinaryOp, SceneComponent, SceneDef,
@@ -93,7 +91,7 @@ impl StandaloneSessionBridge {
             .get("version")
             .and_then(Value::as_u64)
             .ok_or_else(|| "runtimeLoadedGame is missing version".to_string())?;
-        if version != 1 {
+        if version != 2 {
             return Err(format!("unsupported runtimeLoadedGame version: {version}"));
         }
         let loaded_value = runtime_bundle
@@ -558,7 +556,7 @@ fn transition_selected_program3(
         "main" => puzzle_grid3d::transition_program_outcome_with_local_frame(
             &parsed.game,
             state,
-            &parsed.rules,
+            parsed.game.program(),
             input,
             parsed.local_frame.as_ref(),
         ),
@@ -577,19 +575,13 @@ fn parsed_puzzle3_from_fixture(value: &Value) -> Result<ParsedPuzzle3, String> {
     let model = puzzle_runtime_contract::puzzle3_runtime_model_from_fixture_value(value)
         .map_err(|error| error.to_string())?;
     let game = model.game;
-    let object_layers = game
-        .objects
-        .iter()
-        .map(|object| (object.id, object.layer_id))
-        .collect::<Vec<_>>();
     Ok(ParsedPuzzle3 {
         game,
-        catalog: SelectorCatalog3::checked_new(Vec::new(), Vec::new(), Vec::new(), object_layers)
-            .map_err(|error| format!("{error:?}"))?,
+        inputs: Vec::new(),
+        object_labels: std::collections::HashMap::new(),
+        viewport_focus_objects: Vec::new(),
         settings: ModelSettings3::default(),
         local_frame: model.local_frame,
-        rules: model.rules,
-        display_objects: model.display_objects,
         rule_camera_effects: model.rule_camera_effects,
         level_bundle: Some(model.level_bundle),
         level_packs: Vec::new(),
@@ -598,6 +590,7 @@ fn parsed_puzzle3_from_fixture(value: &Value) -> Result<ParsedPuzzle3, String> {
         lifecycle: model.lifecycle,
         on_level_start_camera_effects: model.on_level_start_camera_effects,
         sprite_set: None,
+        visual_order: puzzle_lang::VisualOrderDef::default(),
     })
 }
 
@@ -675,19 +668,6 @@ fn scene_value_for_state(
     level: Option<&Level>,
     resources: Option<&puzzle_lang::SceneResources>,
 ) -> Value {
-    let display_state = match materialize_display_state(loaded, state) {
-        Ok(display_state) => display_state,
-        Err(error) => {
-            return scene_value_for_materialized_state(
-                loaded,
-                state,
-                level,
-                resources,
-                Some(format!("Display program failed: {error:?}")),
-            );
-        }
-    };
-    let state = display_state.as_ref().unwrap_or(state);
     scene_value_for_materialized_state(loaded, state, level, resources, None)
 }
 
@@ -752,16 +732,6 @@ fn scene_value_for_materialized_state(
         "cells": cells,
         "displayError": display_error,
     })
-}
-
-fn materialize_display_state(
-    loaded: &LoadedGame,
-    state: &PuzzleState,
-) -> Result<Option<PuzzleState>, TransitionError> {
-    let Some(program) = loaded.display_program.as_deref() else {
-        return Ok(None);
-    };
-    transition_program(&loaded.game, program, state, InputId(0)).map(Some)
 }
 
 fn scene_layers_value(loaded: &LoadedGame, session: &GameSession) -> Vec<Value> {
@@ -1915,7 +1885,7 @@ fn percent_decode(value: &str) -> String {
     out
 }
 
-fn state3_from_json(game: &Game3, state_json: &str) -> Result<State3, String> {
+fn state3_from_json(game: &CompiledGame3, state_json: &str) -> Result<State3, String> {
     let value: Value = serde_json::from_str(state_json).map_err(|error| error.to_string())?;
     let width = json_u16(&value, "width")?;
     let depth = json_u16(&value, "depth")?;
@@ -2036,7 +2006,17 @@ fn state3_value(state: &State3) -> Value {
 }
 
 fn commands3_contract(commands: &[TransitionCommand3]) -> Vec<RuntimeTransitionCommand> {
-    commands.iter().map(|command| match *command {}).collect()
+    commands
+        .iter()
+        .map(|command| match command {
+            TransitionCommand3::Win => RuntimeTransitionCommand::Win,
+            TransitionCommand3::Restart => RuntimeTransitionCommand::Restart,
+            TransitionCommand3::NextLevel => RuntimeTransitionCommand::NextLevel,
+            TransitionCommand3::Again => RuntimeTransitionCommand::Again,
+            TransitionCommand3::Checkpoint => RuntimeTransitionCommand::Checkpoint,
+            TransitionCommand3::ClearCheckpoint => RuntimeTransitionCommand::ClearCheckpoint,
+        })
+        .collect()
 }
 
 fn state3_contract(state: &State3) -> RuntimeStateSnapshot {
@@ -2313,42 +2293,12 @@ mod tests {
             .is_some_and(|layers| layers.iter().any(|layer| layer["object"] == object))
     }
 
-    fn display_overflow_program() -> Vec<RuleStep> {
-        vec![RuleStep::Rule(Rule {
-            id: RuleId(9000),
-            guards: Vec::<Guard>::new(),
-            application: RuleApplication::Once,
-            pattern: Pattern {
-                components: vec![PatternComponent {
-                    cells: vec![MatchCell {
-                        offset: Offset::Fixed { dx: 0, dy: 0 },
-                        require_null: false,
-                        require_objects: vec![ObjectId(1)],
-                        require_object_sets: Vec::new(),
-                        forbid_objects: Vec::new(),
-                        require_mark: Vec::new(),
-                        require_object_set_mark: Vec::new(),
-                        forbid_mark: Vec::new(),
-                        forbid_object_set_mark: Vec::new(),
-                    }],
-                    gap_count: 0,
-                }],
-            },
-            writes: vec![WriteOp::Add {
-                component: 0,
-                offset: Offset::Fixed { dx: 1, dy: 0 },
-                object: ObjectId(1),
-            }],
-            effects: Vec::new(),
-        })]
-    }
-
     fn standalone_export(source: &str) -> Value {
         let document = puzzle_lang::parse_game_for_path(source, "export_test.puzzle").unwrap();
         let loaded = loaded_document_scene_host_loaded_game(&document).unwrap();
         json!({
             "runtimeLoadedGame": {
-                "version": 1,
+                "version": 2,
                 "loaded": serde_json::to_value(&loaded).unwrap(),
             },
         })
@@ -2359,7 +2309,7 @@ mod tests {
 title = "Runtime Scene Fixture"
 
 puzzle board {
-layers {
+slots {
 @Floor
 solid = Player Box Wall
 }
@@ -2419,55 +2369,11 @@ step board
     }
 
     #[test]
-    fn scene_value_reports_display_program_errors_without_raw_cells() {
-        let mut loaded = puzzle_lang::parse_game2d(
-            r#"
-title = display_error
-
-puzzle default {
-layers {
-actor = Player
-}
-empty .
-rules {
-}
-levels {
-legend {
-P = Player
-}
-level "start" {
-P
-}
-}
-}
-"#,
-        )
-        .unwrap();
-        loaded.display_program = Some(display_overflow_program());
-        let level = loaded.levels.first().unwrap();
-
-        let scene = scene_value_for_state(&loaded, &level.initial_state, Some(level), None);
-
-        assert!(
-            level
-                .initial_state
-                .has_object(&loaded.game, 0, 0, ObjectId(1))
-        );
-        assert_eq!(scene["cells"], json!([]));
-        let display_error = scene["displayError"].as_str().unwrap_or_default();
-        assert!(
-            display_error.contains("Display program failed")
-                && display_error.contains("PositionOutOfBounds"),
-            "unexpected scene JSON: {scene}"
-        );
-    }
-
-    #[test]
     fn standalone_session_from_export_requires_runtime_loaded_game() {
         let export = json!({
             "source": "title invalid\nlevels {\nlegend {\nP = Player\n}\nP\n}\n",
             "puzzlePath": "compiled_export.puzzle",
-            "compiledPlay": {"version": 1, "model": "grid2", "transition": [1, [[1, 0]], [], [], [[], [], [], [], [], []], [[[], []]]]},
+            "compiledPlay": {"version": 2, "model": "grid2", "transition": [1, [[1, 0]], [], [[], [], []], [[[], [], []]]]},
         });
 
         let error = match StandaloneSessionBridge::from_export_json(&export.to_string()) {
@@ -2482,7 +2388,7 @@ P
         let source = r#"
 title = export_runtime_bundle
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = Player
 }
 empty .
@@ -2513,7 +2419,7 @@ P
         let source = r#"
 title = export_wait_segments
 puzzle default {
-layers {
+slots {
 __legacy_layer_0 = A B C
 }
 empty .
@@ -2581,7 +2487,7 @@ A
 title = "Debug Trace"
 
 puzzle main {
-  layers {
+  slots {
     actor = Player
   }
 
@@ -2655,7 +2561,7 @@ sounds {
 sfx step seed=step type=jump
 }
 puzzle default {
-layers {
+slots {
 actor = Player
 }
 empty .
@@ -2715,7 +2621,7 @@ level_menu
 title = editor_state_start
 
 puzzle board {
-layers {
+slots {
 actor = Player
 }
 empty .
@@ -2905,7 +2811,7 @@ puzzle mover {
       duration = 300ms
     }
   }
-  layers {
+  slots {
     actor = Player
   }
   rules {
@@ -2975,7 +2881,7 @@ render {
 }
 
 puzzle sokoban {
-layers {
+slots {
   solid = Player
 }
 
@@ -3044,7 +2950,7 @@ render {
 }
 
 puzzle sokoban {
-layers {
+slots {
   solid = Player
 }
 
@@ -3124,7 +3030,7 @@ P.
 title = "Inline 3D"
 
 puzzle sokoban {
-layers {
+slots {
   solid = Player
 }
 rules {

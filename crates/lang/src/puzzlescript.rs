@@ -1479,7 +1479,7 @@ fn ps_move_layer_names(layers: &[PsLayerDef]) -> Vec<String> {
 }
 
 fn push_layers(out: &mut Vec<String>, layers: &[PsLayerDef]) {
-    out.push("layers {".to_string());
+    out.push("slots {".to_string());
     for layer in layers {
         match layer {
             PsLayerDef::Named { name, selectors } => {

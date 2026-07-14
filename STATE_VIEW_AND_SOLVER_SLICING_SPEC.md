@@ -1,21 +1,19 @@
 # State View And Solver Slicing Spec
 
-This document defines the target contract for internalizing display behavior and
-making solver state reduction an explicit analysis. It is a design target, not a
-description of the current implementation.
+This document defines the target contract for making solver state reduction an
+explicit analysis. It is a design target, not a description of the current
+implementation.
 
 ## Goal
 
-Display classification should not be an author-declared object kind. The system
-should instead expose different state views for different consumers:
+The system exposes different state views for different consumers:
 
 - play and editor can work with all authored objects.
 - renderer consumes a render view produced by the runtime contract.
 - solver consumes a solver key derived by relevance analysis.
 
-The key distinction is not "visual object" versus "game object". The distinction
-is whether an object can affect future gameplay observations that a given
-consumer is responsible for preserving.
+The key distinction is whether an object can affect future gameplay observations
+that a given consumer is responsible for preserving.
 
 ## State Views
 
@@ -31,7 +29,7 @@ consumer is responsible for preserving.
 
 - The state or scene view used for drawing.
 - It is produced by Rust/runtime-owned APIs.
-- Browser/editor JavaScript must not reconstruct display semantics from source
+- Browser/editor JavaScript must not reconstruct solver semantics from source
   syntax, naming conventions, or renderer internals.
 
 `solver_key_state`
@@ -47,18 +45,12 @@ separate.
 
 ## Authoring Contract
 
-`@Name` must not be the semantic source of solver/display behavior in the target
-model. It may remain a legal object name while migration is in progress, but a
-leading `@` alone must not make an object solver-pruned, render-only, collision
-free, or editor-restricted.
+Object spelling must not be the semantic source of solver relevance. A naming
+convention alone must not make an object solver-pruned, collision free, or
+editor-restricted.
 
-`on_display` is a removal target. It should not be replaced by a silent fallback
-that runs an older display path. Existing files using `on_display` need either a
-diagnostic or an explicit migration command.
-
-Display-like behavior should be expressible as ordinary deterministic rules when
-it is part of authored state evolution. Solver pruning decides whether the
-result matters for solving.
+Authored state evolution uses ordinary deterministic rules. Solver pruning
+decides whether the result matters for solving.
 
 ## Solver Relevance
 
@@ -123,7 +115,7 @@ Cosmetic or render random must use a separate deterministic domain. It should be
 derived from stable inputs such as state identity, object identity, position,
 turn/frame, and a named render salt. It must not advance gameplay RNG state.
 
-A rule or effect that mixes prunable display-like writes with gameplay RNG
+A rule or effect that mixes prunable writes with gameplay RNG
 consumption is not silently pruned. It is either kept relevant or rejected with a
 specific diagnostic.
 
@@ -143,8 +135,7 @@ state view classification remains Rust-owned compiled analysis.
 
 1. Introduce solver relevance reports without changing editor editing behavior.
 2. Use `solver_key_state` for solver cache/frontier keys.
-3. Treat leading `@` as naming syntax only after tests prove relevance reports
-   cover the existing display-object cases.
-4. Reject or explicitly migrate `on_display`; do not reinterpret it silently.
-5. Update user-facing docs only after implementation behavior matches the new
+3. Remove naming-based classification only after tests prove relevance reports
+   cover the existing cases.
+4. Update user-facing docs only after implementation behavior matches the new
    contract.

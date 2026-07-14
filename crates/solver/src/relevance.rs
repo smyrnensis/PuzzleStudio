@@ -475,7 +475,7 @@ mod tests {
 title = relevance_backprop
 
 puzzle default {
-layers {
+slots {
 actor = Switch Door
 }
 
@@ -512,7 +512,7 @@ S
 title = relevance_projection
 
 puzzle default {
-layers {
+slots {
 floor = Floor
 actor = Player
 }

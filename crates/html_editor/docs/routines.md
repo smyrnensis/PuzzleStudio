@@ -29,6 +29,3 @@ once [ Fire | Grass ] -> [ Fire | Fire ]
 
 Use `routine name random` to choose one currently applicable statement with a
 deterministic choice. It does not introduce hidden randomness.
-
-Use `routine @name` for display-only work. Display routines may read main board
-objects but may write only display objects.

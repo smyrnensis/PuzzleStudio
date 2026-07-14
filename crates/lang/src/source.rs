@@ -1,5 +1,20 @@
 use crate::DiagnosticReport;
+use crate::surface::SurfaceOptionBlock;
 use crate::syntax::puzzle_lifecycle_event;
+
+#[cfg(test)]
+thread_local! {
+    static CANONICAL_SCAN_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[path = "source_lexical_product.rs"]
+pub(crate) mod lexical_product;
+
+#[path = "source_lexer.rs"]
+pub(crate) mod lexer;
+
+#[path = "source_outline_product.rs"]
+pub(crate) mod outline_product;
 
 #[cfg(test)]
 pub(crate) fn logical_lines(source: &str) -> Result<Vec<String>, DiagnosticReport> {
@@ -11,6 +26,7 @@ pub(crate) fn logical_lines(source: &str) -> Result<Vec<String>, DiagnosticRepor
 pub(crate) struct LogicalLine {
     pub(crate) text: String,
     pub(crate) line: usize,
+    pub(crate) tokens: Vec<SourceToken>,
 }
 
 impl LogicalLine {
@@ -18,13 +34,20 @@ impl LogicalLine {
         Self {
             text: text.into(),
             line,
+            tokens: Vec::new(),
         }
+    }
+
+    fn with_tokens(mut self, tokens: Vec<SourceToken>) -> Self {
+        self.tokens = tokens;
+        self
     }
 
     fn with_text(&self, text: impl Into<String>) -> Self {
         Self {
             text: text.into(),
             line: self.line,
+            tokens: self.tokens.clone(),
         }
     }
 }
@@ -32,79 +55,7 @@ impl LogicalLine {
 pub(crate) fn logical_lines_with_locations(
     source: &str,
 ) -> Result<Vec<LogicalLine>, DiagnosticReport> {
-    let mut lines = Vec::new();
-    let mut preserve_level_blanks = false;
-    let mut preserve_sprite_blanks = false;
-    let mut level_brace_depth = 0i32;
-    let mut sprite_brace_depth = 0i32;
-    let mut level_end_depth = None::<usize>;
-    let raw_lines = source
-        .lines()
-        .enumerate()
-        .map(|(index, raw_line)| {
-            LogicalLine::new(strip_line_comment(raw_line).trim().to_string(), index + 1)
-        })
-        .collect::<Vec<_>>();
-    let raw_lines = expand_structural_sugar(&raw_lines)?;
-
-    for index in 0..raw_lines.len() {
-        let logical_line = &raw_lines[index];
-        let line = logical_line.text.as_str();
-        if line.is_empty() {
-            if preserve_level_blanks || preserve_sprite_blanks {
-                lines.push(logical_line.clone());
-            }
-            continue;
-        }
-
-        let tokens = split_header_tokens(line);
-        if matches!(tokens.as_slice(), ["sprites"] | ["sprites", ..])
-            && line.ends_with('{')
-            && !preserve_level_blanks
-        {
-            preserve_sprite_blanks = true;
-            sprite_brace_depth = 0;
-        }
-        if is_levels_header(&tokens) {
-            preserve_level_blanks = true;
-            level_end_depth = Some(1);
-        } else if (is_levels_header(&tokens) || matches!(tokens.as_slice(), ["level", ..]))
-            && line.ends_with('{')
-        {
-            preserve_level_blanks = true;
-            level_brace_depth = 0;
-        }
-        if let Some(depth) = &mut level_end_depth {
-            if !is_levels_header(&tokens) {
-                if line.ends_with('{') {
-                    *depth += 1;
-                }
-                if line == "}" {
-                    *depth = depth.saturating_sub(1);
-                }
-            }
-        }
-        if preserve_level_blanks {
-            level_brace_depth += line.chars().filter(|ch| *ch == '{').count() as i32;
-            level_brace_depth -= line.chars().filter(|ch| *ch == '}').count() as i32;
-        }
-        if preserve_sprite_blanks {
-            sprite_brace_depth += line.chars().filter(|ch| *ch == '{').count() as i32;
-            sprite_brace_depth -= line.chars().filter(|ch| *ch == '}').count() as i32;
-        }
-        lines.push(logical_line.clone());
-        if preserve_level_blanks && level_brace_depth <= 0 && level_end_depth.is_none() {
-            preserve_level_blanks = false;
-        }
-        if level_end_depth == Some(0) {
-            preserve_level_blanks = false;
-            level_end_depth = None;
-        }
-        if preserve_sprite_blanks && sprite_brace_depth <= 0 {
-            preserve_sprite_blanks = false;
-        }
-    }
-    normalize_brace_blocks(&lines)
+    scan_surface_source(source).strict_logical_lines()
 }
 
 pub(crate) fn strip_line_comment(line: &str) -> &str {
@@ -128,26 +79,6 @@ pub(crate) fn strip_line_comment(line: &str) -> &str {
         previous = Some(ch);
     }
     line
-}
-
-fn expand_structural_sugar(lines: &[LogicalLine]) -> Result<Vec<LogicalLine>, DiagnosticReport> {
-    let mut expanded = Vec::new();
-    let mut block_stack = Vec::<String>::new();
-
-    for logical_line in lines {
-        if logical_line.text.is_empty() {
-            expanded.push(logical_line.clone());
-            continue;
-        }
-
-        expanded.extend(
-            expand_structural_source_line(&logical_line.text, &mut block_stack)?
-                .into_iter()
-                .map(|text| logical_line.with_text(text)),
-        );
-    }
-
-    Ok(expanded)
 }
 
 fn expand_structural_source_line(
@@ -334,17 +265,6 @@ fn matching_inline_brace(line: &str, open: usize) -> Option<usize> {
     None
 }
 
-fn normalize_brace_blocks(lines: &[LogicalLine]) -> Result<Vec<LogicalLine>, DiagnosticReport> {
-    let mut normalized = Vec::new();
-    let mut levels_brace_depth = 0i32;
-
-    for logical_line in lines {
-        normalize_brace_block_line(logical_line, &mut levels_brace_depth, &mut normalized)?;
-    }
-
-    Ok(normalized)
-}
-
 fn normalize_brace_block_line(
     logical_line: &LogicalLine,
     levels_brace_depth: &mut i32,
@@ -455,7 +375,7 @@ fn starts_inline_block(tokens: &[&str], line: &str) -> bool {
         ["map", ..]
             | ["marks"]
             | ["groups"]
-            | ["layers"]
+            | ["slots"]
             | ["collision_layers"]
             | ["legend"]
             | ["win_conditions", ..]
@@ -463,7 +383,6 @@ fn starts_inline_block(tokens: &[&str], line: &str) -> bool {
             | ["palette"]
             | ["shapes"]
             | ["objects"]
-            | ["display_objects"]
             | ["render", ..]
             | ["sfx", ..]
             | ["music", ..]
@@ -493,6 +412,7 @@ fn starts_inline_block(tokens: &[&str], line: &str) -> bool {
             | ["once"]
             | ["once_all"]
             | ["once_per_level"]
+            | ["puzzle", ..]
     ) || matches!(tokens, ["button", ..] if line.trim_end().ends_with(" with") || line.contains("->"))
 }
 
@@ -565,7 +485,7 @@ pub(crate) enum SourceScope {
     LevelMenu,
     Tags,
     Group,
-    Layers,
+    Slots,
     Mark,
     Map,
     Keys,
@@ -598,16 +518,27 @@ pub(crate) struct SourceToken {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SourceStructuralPiece {
+    pub(crate) authoring_parent: Option<crate::authoring_grammar::AuthoringKind>,
+    pub(crate) product: crate::surface::ParseProduct<Vec<SourceToken>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SurfaceSourceLine {
     pub(crate) tokens: Vec<String>,
     pub(crate) token_spans: Vec<SourceToken>,
     pub(crate) structural_token_spans: Vec<SourceToken>,
     pub(crate) structural_lines: Vec<String>,
+    pub(crate) structural_pieces: Vec<SourceStructuralPiece>,
     pub(crate) structural_events: Vec<SourceStructureEvent>,
     pub(crate) scope: Option<SourceScope>,
     pub(crate) start: usize,
     pub(crate) line: usize,
     pub(crate) content: String,
+    pub(crate) lexical_facts: Vec<lexer::SourceLexicalFact>,
+    pub(crate) option_block: Option<SurfaceOptionBlock>,
+    preserve_logical_blank: bool,
+    structural_diagnostic: Option<DiagnosticReport>,
     scanner_state_after: SurfaceSourceScannerState,
 }
 
@@ -618,6 +549,7 @@ pub(crate) enum SourceStructureEvent {
         scope: SourceScope,
         role: SourceBlockRole,
         virtual_braces: bool,
+        option_block: SurfaceOptionBlock,
     },
     Close,
 }
@@ -632,6 +564,19 @@ pub(crate) enum SourceBlockRole {
 struct SourceBlockStackEntry {
     scope: SourceScope,
     virtual_braces: bool,
+    option_block: SurfaceOptionBlock,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SourceBraceDisposition {
+    pub(crate) depth: usize,
+    pub(crate) matched_close: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SourceBraceStackEntry {
+    pub(crate) start: usize,
+    depth: usize,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -647,6 +592,43 @@ struct SurfaceSourceScannerState {
     structural_block_stack: Vec<String>,
     normalize_levels_brace_depth: i32,
     unbraced_visual_shape_body: bool,
+    structural_brace_stack: Vec<SourceBraceStackEntry>,
+}
+
+fn active_source_option_block(stack: &[SourceBlockStackEntry]) -> Option<SurfaceOptionBlock> {
+    stack
+        .iter()
+        .rev()
+        .map(|entry| entry.option_block)
+        .find(|block| {
+            matches!(
+                block,
+                SurfaceOptionBlock::Authoring(_) | SurfaceOptionBlock::LevelMenu
+            )
+        })
+}
+
+fn source_option_block_for_opening(
+    tokens: &[&str],
+    stack: &[SourceBlockStackEntry],
+) -> SurfaceOptionBlock {
+    let Some(first) = tokens.first().copied() else {
+        return SurfaceOptionBlock::Other;
+    };
+    match first {
+        "puzzle" => SurfaceOptionBlock::Puzzle2,
+        "level_menu" => SurfaceOptionBlock::LevelMenu,
+        surface => {
+            let parent = stack
+                .iter()
+                .rev()
+                .find_map(|entry| entry.option_block.authoring_parent_kind())
+                .unwrap_or(crate::authoring_grammar::AuthoringKind::Root);
+            crate::authoring_grammar::placed_authoring_kind(parent, surface)
+                .map(SurfaceOptionBlock::Authoring)
+                .unwrap_or(SurfaceOptionBlock::Other)
+        }
+    }
 }
 
 impl SurfaceSourceScan {
@@ -660,6 +642,67 @@ impl SurfaceSourceScan {
 
     pub(crate) fn line_count(&self) -> usize {
         self.lines.len()
+    }
+
+    /// Fingerprints exactly the non-trivia token stream consumed by parser
+    /// products. Absolute offsets and comments are excluded, so presentation-only
+    /// edits may reuse semantic products without source-text heuristics.
+    pub(crate) fn grammar_fingerprint(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for line in &self.lines {
+            for fact in &line.lexical_facts {
+                if matches!(fact.kind, lexer::SourceLexicalKind::Comment) {
+                    continue;
+                }
+                let start = fact.start - line.start;
+                let end = fact.end - line.start;
+                fact.kind.hash(&mut hasher);
+                line.content[start..end].hash(&mut hasher);
+            }
+        }
+        hasher.finish()
+    }
+
+    pub(crate) fn unmatched_open_braces(&self) -> &[SourceBraceStackEntry] {
+        self.lines
+            .last()
+            .map(|line| line.scanner_state_after.structural_brace_stack.as_slice())
+            .unwrap_or_default()
+    }
+
+    /// Returns the strict compiler's logical lines from this exact canonical scan.
+    ///
+    /// The incremental scanner remains total for editor use: malformed structural
+    /// sugar is stored as a recovery diagnostic on the physical line. Strict
+    /// compilation rejects that same fact here instead of rescanning the source
+    /// through a second structural grammar.
+    pub(crate) fn strict_logical_lines(&self) -> Result<Vec<LogicalLine>, DiagnosticReport> {
+        let mut logical_lines = Vec::new();
+        for line in &self.lines {
+            if let Some(diagnostic) = &line.structural_diagnostic {
+                return Err(diagnostic.clone());
+            }
+            if line.structural_lines.is_empty() {
+                if line.preserve_logical_blank {
+                    logical_lines.push(LogicalLine::new(String::new(), line.line));
+                }
+                continue;
+            }
+            logical_lines.extend(
+                line.structural_lines
+                    .iter()
+                    .cloned()
+                    .zip(
+                        line.structural_pieces
+                            .iter()
+                            .map(|piece| piece.product.value.clone()),
+                    )
+                    .map(|(text, tokens)| LogicalLine::new(text, line.line).with_tokens(tokens)),
+            );
+        }
+        Ok(logical_lines)
     }
 
     pub(crate) fn apply_edit(
@@ -707,9 +750,15 @@ impl SurfaceSourceScan {
                 .then(|| shift_offset(scanned.line.start, -delta))
                 .and_then(|old_start| {
                     old_suffix_lines.iter().position(|old| {
+                        let mut shifted_state = old.scanner_state_after.clone();
+                        shift_structural_brace_stack(
+                            &mut shifted_state.structural_brace_stack,
+                            edit_end,
+                            delta,
+                        );
                         old.start == old_start
                             && old.content == scanned.line.content
-                            && old.scanner_state_after == scanned.line.scanner_state_after
+                            && shifted_state == scanned.line.scanner_state_after
                             && old_line_has_newline(old_source, old) == line.ends_with('\n')
                     })
                 });
@@ -725,7 +774,7 @@ impl SurfaceSourceScan {
                     old_suffix_lines[old_index + 1..]
                         .iter()
                         .cloned()
-                        .map(|line| shift_surface_source_line(line, delta, line_delta)),
+                        .map(|line| shift_surface_source_line(line, edit_end, delta, line_delta)),
                 );
                 self.raw.extend(
                     old_raw
@@ -752,6 +801,49 @@ fn shift_offset(value: usize, delta: i64) -> usize {
     usize::try_from(value as i64 + delta).expect("incremental source offset underflow")
 }
 
+fn shift_structural_brace_stack(stack: &mut [SourceBraceStackEntry], threshold: usize, delta: i64) {
+    for entry in stack {
+        if entry.start >= threshold {
+            entry.start = shift_offset(entry.start, delta);
+        }
+    }
+}
+
+fn assign_structural_brace_dispositions(
+    facts: &mut [lexer::SourceLexicalFact],
+    stack: &mut Vec<SourceBraceStackEntry>,
+) {
+    for fact in facts {
+        let lexer::SourceLexicalKind::Brace(kind) = &fact.kind else {
+            continue;
+        };
+        let disposition = match *kind {
+            lexer::SourceBraceKind::Open => {
+                let depth = stack.len();
+                stack.push(SourceBraceStackEntry {
+                    start: fact.start,
+                    depth,
+                });
+                SourceBraceDisposition {
+                    depth,
+                    matched_close: true,
+                }
+            }
+            lexer::SourceBraceKind::Close => stack.pop().map_or(
+                SourceBraceDisposition {
+                    depth: 0,
+                    matched_close: false,
+                },
+                |open| SourceBraceDisposition {
+                    depth: open.depth,
+                    matched_close: true,
+                },
+            ),
+        };
+        fact.brace_disposition = Some(disposition);
+    }
+}
+
 fn old_line_has_newline(source: &str, line: &SurfaceSourceLine) -> bool {
     source
         .as_bytes()
@@ -761,6 +853,7 @@ fn old_line_has_newline(source: &str, line: &SurfaceSourceLine) -> bool {
 
 fn shift_surface_source_line(
     mut line: SurfaceSourceLine,
+    edit_end: usize,
     offset_delta: i64,
     line_delta: i64,
 ) -> SurfaceSourceLine {
@@ -775,10 +868,28 @@ fn shift_surface_source_line(
         token.start = shift_offset(token.start, offset_delta);
         token.end = shift_offset(token.end, offset_delta);
     }
+    for piece in &mut line.structural_pieces {
+        for token in &mut piece.product.value {
+            token.start = shift_offset(token.start, offset_delta);
+            token.end = shift_offset(token.end, offset_delta);
+        }
+        piece
+            .product
+            .recognition
+            .shift_offsets(edit_end, offset_delta);
+    }
+    lexer::shift_lexical_facts(&mut line.lexical_facts, edit_end, offset_delta);
+    shift_structural_brace_stack(
+        &mut line.scanner_state_after.structural_brace_stack,
+        edit_end,
+        offset_delta,
+    );
     line
 }
 
 pub(crate) fn scan_surface_source(source: &str) -> SurfaceSourceScan {
+    #[cfg(test)]
+    CANONICAL_SCAN_CALLS.with(|calls| calls.set(calls.get() + 1));
     let mut context = SurfaceSourceScan::default();
     let mut state = SurfaceSourceScannerState::default();
     let mut offset = 0usize;
@@ -792,6 +903,14 @@ pub(crate) fn scan_surface_source(source: &str) -> SurfaceSourceScan {
     }
 
     context
+}
+
+#[cfg(test)]
+pub(crate) fn count_canonical_scans<T>(action: impl FnOnce() -> T) -> (T, usize) {
+    CANONICAL_SCAN_CALLS.with(|calls| calls.set(0));
+    let result = action();
+    let canonical = CANONICAL_SCAN_CALLS.with(std::cell::Cell::get);
+    (result, canonical)
 }
 
 struct ScannedSurfaceSourceLine {
@@ -809,9 +928,27 @@ fn scan_surface_source_line(
     let line_end = offset + line.len();
     let content_end = line_end - usize::from(line.ends_with('\n'));
     let content = &line[..line.len() - usize::from(line.ends_with('\n'))];
-    let raw = strip_line_comment(content);
+    let mut lexical_facts = lexer::scan_source_line_lexical_facts(content, offset);
+    assign_structural_brace_dispositions(&mut lexical_facts, &mut state.structural_brace_stack);
+    let code_end = lexical_facts
+        .iter()
+        .find_map(|fact| {
+            matches!(fact.kind, lexer::SourceLexicalKind::Comment).then_some(fact.start - offset)
+        })
+        .unwrap_or(content.len());
+    let raw = &content[..code_end];
     let trimmed = raw.trim();
     let tokens = surface_source_tokens(trimmed);
+    let preserve_logical_blank = trimmed.is_empty()
+        && state.block_stack.iter().any(|entry| {
+            matches!(
+                entry.scope,
+                SourceScope::Levels
+                    | SourceScope::Level
+                    | SourceScope::UnbracedLevel
+                    | SourceScope::Visuals
+            )
+        });
     let mut structural_events = Vec::<SourceStructureEvent>::new();
     let mut raw_ranges = Vec::new();
     let mut plain_ranges = Vec::new();
@@ -829,6 +966,7 @@ fn scan_surface_source_line(
     }
 
     let current = state.block_stack.last().map(|entry| entry.scope);
+    let option_block = active_source_option_block(&state.block_stack);
     let in_unbraced_visual_shape_body = state.unbraced_visual_shape_body
         && current == Some(SourceScope::VisualShapeTable)
         && !trimmed.is_empty()
@@ -861,33 +999,116 @@ fn scan_surface_source_line(
     state.unbraced_visual_shape_body =
         next_unbraced_visual_shape_body(current, trimmed, &tokens, in_unbraced_visual_shape_body);
 
-    let structural_lines = surface_source_stack_lines(
+    let (structural_lines, structural_diagnostic) = match surface_source_stack_lines(
         trimmed,
         &mut state.structural_block_stack,
         &mut state.normalize_levels_brace_depth,
-    );
+    ) {
+        Ok(lines) => (lines, None),
+        Err(diagnostic) => (Vec::new(), Some(diagnostic)),
+    };
+    let mut structural_pieces = Vec::with_capacity(structural_lines.len());
+    let mut structural_piece_cursor = 0usize;
     for stack_line in &structural_lines {
         let tokens = surface_source_tokens(stack_line);
         let current = state.block_stack.last().map(|entry| entry.scope);
+        let mut authoring_parent = state
+            .block_stack
+            .iter()
+            .rev()
+            .find_map(|entry| entry.option_block.authoring_parent_kind());
+        let piece_tokens = source_tokens_for_structural_piece(
+            raw,
+            offset,
+            stack_line,
+            &mut structural_piece_cursor,
+        )
+        .unwrap_or_default();
+        let mut recognition = crate::surface::ParserRecognition::default();
+        let mut schema_recognized = false;
+        if authoring_parent.is_none() {
+            let root_facts = crate::authoring_grammar::recognize_authoring_line(
+                crate::authoring_grammar::AuthoringKind::Root,
+                &piece_tokens,
+            );
+            if !root_facts.is_empty() {
+                authoring_parent = Some(crate::authoring_grammar::AuthoringKind::Root);
+                schema_recognized = true;
+                for fact in root_facts {
+                    recognition.mark(
+                        fact.span,
+                        crate::authoring_grammar::authoring_surface_role_semantic_kind(fact.role),
+                    );
+                }
+            }
+        }
+        if let Some(parent) = authoring_parent {
+            if !schema_recognized {
+                for fact in
+                    crate::authoring_grammar::recognize_authoring_line(parent, &piece_tokens)
+                {
+                    recognition.mark(
+                        fact.span,
+                        crate::authoring_grammar::authoring_surface_role_semantic_kind(fact.role),
+                    );
+                }
+            }
+            if let Some(child) = piece_tokens.first().and_then(|token| {
+                crate::authoring_grammar::placed_authoring_kind(parent, &token.text)
+            }) {
+                for export in crate::authoring_grammar::authoring_symbol_exports(child) {
+                    let crate::authoring_grammar::AuthoringSymbolExportSource::HeaderArg(index) =
+                        export.source;
+                    let Some(value) = piece_tokens.get(index + 1) else {
+                        continue;
+                    };
+                    match export.target {
+                        crate::authoring_grammar::AuthoringSymbolExportTarget::Sfx => {
+                            recognition
+                                .completion_symbols
+                                .sfx
+                                .insert(value.text.clone());
+                        }
+                        crate::authoring_grammar::AuthoringSymbolExportTarget::Music => {
+                            recognition
+                                .completion_symbols
+                                .music
+                                .insert(value.text.clone());
+                        }
+                    }
+                }
+            }
+        }
+        let opened = (stack_line != "}" && source_opens_block(stack_line, &tokens, current))
+            .then(|| opening_scope(stack_line, &tokens, current))
+            .flatten();
+        if let Some(opened) = opened {
+            recognize_structural_header(stack_line, &piece_tokens, opened, &mut recognition);
+        }
+        structural_pieces.push(SourceStructuralPiece {
+            authoring_parent,
+            product: crate::surface::ParseProduct::new(piece_tokens, recognition),
+        });
         if stack_line == "}" {
             push_close_events(
                 close_block_line(&mut state.block_stack),
                 &mut structural_events,
             );
-        } else if source_opens_block(stack_line, &tokens, current)
-            && let Some(opened) = opening_scope(stack_line, &tokens, current)
-        {
+        } else if let Some(opened) = opened {
             let role = source_block_role(stack_line, &tokens, current, opened);
             let virtual_braces = source_block_uses_virtual_braces(stack_line, current, opened);
+            let opened_option_block = source_option_block_for_opening(&tokens, &state.block_stack);
             structural_events.push(SourceStructureEvent::Open {
                 header: structural_header(stack_line),
                 scope: opened,
                 role,
                 virtual_braces,
+                option_block: opened_option_block,
             });
             state.block_stack.push(SourceBlockStackEntry {
                 scope: opened,
                 virtual_braces,
+                option_block: opened_option_block,
             });
         }
     }
@@ -898,11 +1119,16 @@ fn scan_surface_source_line(
             token_spans: source_line_tokens(raw, offset),
             structural_token_spans: surface_source_token_spans(raw, offset),
             structural_lines,
+            structural_pieces,
             structural_events,
             scope: current,
             start: offset,
             line: line_index + 1,
             content: content.to_string(),
+            lexical_facts,
+            option_block,
+            preserve_logical_blank,
+            structural_diagnostic,
             scanner_state_after: state.clone(),
         },
         raw_ranges,
@@ -910,32 +1136,133 @@ fn scan_surface_source_line(
     }
 }
 
+fn recognize_structural_header(
+    line: &str,
+    tokens: &[SourceToken],
+    opened: SourceScope,
+    recognition: &mut crate::surface::ParserRecognition,
+) {
+    if !recognition.semantic_tokens.is_empty() || tokens.is_empty() {
+        return;
+    }
+    if opened == SourceScope::UnbracedLevel && tokens[0].text != "level" {
+        for token in tokens {
+            recognize_token(
+                recognition,
+                token,
+                crate::surface::SurfaceSemanticKind::Literal,
+            );
+        }
+        return;
+    }
+    if matches!(
+        tokens[0].text.as_str(),
+        "win_conditions" | "lose_conditions"
+    ) {
+        recognize_token(
+            recognition,
+            &tokens[0],
+            crate::surface::SurfaceSemanticKind::Condition,
+        );
+        for token in &tokens[1..] {
+            recognize_token(
+                recognition,
+                token,
+                crate::surface::SurfaceSemanticKind::Keyword,
+            );
+        }
+        return;
+    }
+    if let Some(spans) = puzzle_authoring::rule_routine_block_header_surface_spans(line) {
+        recognize_relative_span(
+            recognition,
+            tokens[0].start,
+            spans.keyword,
+            crate::surface::SurfaceSemanticKind::Keyword,
+        );
+        if let Some(name) = spans.name {
+            recognize_relative_span(
+                recognition,
+                tokens[0].start,
+                name,
+                crate::surface::SurfaceSemanticKind::Effect,
+            );
+        }
+        for modifier in spans.modifiers {
+            recognize_relative_span(
+                recognition,
+                tokens[0].start,
+                modifier,
+                crate::surface::SurfaceSemanticKind::Keyword,
+            );
+        }
+        return;
+    }
+    for (index, token) in tokens.iter().enumerate() {
+        recognize_token(
+            recognition,
+            token,
+            if index == 0 {
+                crate::surface::SurfaceSemanticKind::Keyword
+            } else {
+                crate::surface::SurfaceSemanticKind::Binding
+            },
+        );
+    }
+}
+
+fn recognize_token(
+    recognition: &mut crate::surface::ParserRecognition,
+    token: &SourceToken,
+    kind: crate::surface::SurfaceSemanticKind,
+) {
+    recognition.mark(
+        crate::surface::SourceSpan {
+            start: token.start,
+            end: token.end,
+        },
+        kind,
+    );
+}
+
+fn recognize_relative_span(
+    recognition: &mut crate::surface::ParserRecognition,
+    line_start: usize,
+    span: std::ops::Range<usize>,
+    kind: crate::surface::SurfaceSemanticKind,
+) {
+    recognition.mark(
+        crate::surface::SourceSpan {
+            start: line_start + span.start,
+            end: line_start + span.end,
+        },
+        kind,
+    );
+}
+
 fn surface_source_stack_lines(
     trimmed: &str,
     structural_block_stack: &mut Vec<String>,
     normalize_levels_brace_depth: &mut i32,
-) -> Vec<String> {
+) -> Result<Vec<String>, DiagnosticReport> {
     if trimmed.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
+    let mut next_block_stack = structural_block_stack.clone();
+    let mut next_levels_brace_depth = *normalize_levels_brace_depth;
     let mut normalized = Vec::new();
-    let expanded = match expand_structural_source_line(trimmed, structural_block_stack) {
-        Ok(expanded) => expanded,
-        Err(_) => return Vec::new(),
-    };
+    let expanded = expand_structural_source_line(trimmed, &mut next_block_stack)?;
     for line in expanded {
         let logical_line = LogicalLine::new(line, 0);
-        if normalize_brace_block_line(&logical_line, normalize_levels_brace_depth, &mut normalized)
-            .is_err()
-        {
-            return Vec::new();
-        }
+        normalize_brace_block_line(&logical_line, &mut next_levels_brace_depth, &mut normalized)?;
     }
-    normalized
+    *structural_block_stack = next_block_stack;
+    *normalize_levels_brace_depth = next_levels_brace_depth;
+    Ok(normalized
         .into_iter()
         .map(|logical_line| logical_line.text)
-        .collect()
+        .collect())
 }
 
 fn source_line_role(
@@ -1076,6 +1403,28 @@ fn surface_source_tokens(line: &str) -> Vec<&str> {
     line.split(|ch: char| ch.is_whitespace() || matches!(ch, '{' | '}' | ',' | ';'))
         .filter(|token| !token.is_empty())
         .collect()
+}
+
+fn source_tokens_for_structural_piece(
+    source_line: &str,
+    line_start: usize,
+    piece: &str,
+    cursor: &mut usize,
+) -> Option<Vec<SourceToken>> {
+    let mut tokens = Vec::new();
+    for text in surface_source_tokens(piece) {
+        let search = source_line.get(*cursor..)?;
+        let relative = search.find(text)?;
+        let start = *cursor + relative;
+        let end = start + text.len();
+        tokens.push(SourceToken {
+            text: text.to_string(),
+            start: line_start + start,
+            end: line_start + end,
+        });
+        *cursor = end;
+    }
+    Some(tokens)
 }
 
 fn surface_source_token_spans(line: &str, line_offset: usize) -> Vec<SourceToken> {
@@ -1250,8 +1599,7 @@ fn opening_scope(line: &str, tokens: &[&str], current: Option<SourceScope>) -> O
             | ["column", ..]
             | ["box", ..]
             | ["for", ..]
-            | ["puzzle", ..]
-            => {
+            | ["puzzle", ..] => {
                 return Some(SourceScope::SceneLayout);
             }
             ["state"] => return Some(SourceScope::SceneState),
@@ -1339,7 +1687,7 @@ fn source_scope_for_name(name: &str) -> Option<SourceScope> {
     match name {
         "puzzle" => Some(SourceScope::Puzzle),
         "tags" => Some(SourceScope::Tags),
-        "layers" | "collision_layers" => Some(SourceScope::Layers),
+        "slots" => Some(SourceScope::Slots),
         "groups" => Some(SourceScope::Group),
         "marks" => Some(SourceScope::Mark),
         "map" => Some(SourceScope::Map),
@@ -1408,7 +1756,102 @@ fn parse_error(line: &str, message: &str) -> DiagnosticReport {
 
 #[cfg(test)]
 mod tests {
-    use super::{logical_lines, scan_surface_source, split_header_tokens, split_tokens};
+    use super::{
+        SourceBraceDisposition, SourceStructureEvent, lexer, logical_lines, scan_surface_source,
+        split_header_tokens, split_tokens,
+    };
+    use crate::surface::SurfaceOptionBlock;
+
+    #[test]
+    fn canonical_scan_is_the_strict_logical_line_owner() {
+        let source = r#"
+title = "Demo"
+puzzle board {
+slots { objects = Box }
+sprites {
+Box {
+#fff #000
+01
+
+10
+}
+}
+rules { if exists(Box) { [ Box ] -> [ Box ]; } }
+levels {
+legend {
+B = Box
+}
+level "one" {
+B
+
+B
+}
+}
+}
+"#;
+        let actual = scan_surface_source(source).strict_logical_lines().unwrap();
+        let texts = actual
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            texts,
+            vec![
+                "title = \"Demo\"",
+                "puzzle board {",
+                "slots {",
+                "objects = Box",
+                "}",
+                "sprites {",
+                "Box {",
+                "#fff #000",
+                "01",
+                "",
+                "10",
+                "}",
+                "}",
+                "rules {",
+                "if exists(Box) {",
+                "[ Box ] -> [ Box ]",
+                "}",
+                "}",
+                "levels {",
+                "legend {",
+                "B = Box",
+                "}",
+                "level \"one\" {",
+                "B",
+                "",
+                "B",
+                "}",
+                "}",
+                "}",
+            ]
+        );
+        assert_eq!(
+            actual
+                .iter()
+                .filter(|line| line.text.is_empty())
+                .map(|line| line.line)
+                .collect::<Vec<_>>(),
+            vec![9, 20]
+        );
+    }
+
+    #[test]
+    fn canonical_scan_preserves_structural_recovery_for_strict_rejection() {
+        let source = "title = \"unfinished\npuzzle board {\n}\n";
+        let actual = scan_surface_source(source)
+            .strict_logical_lines()
+            .unwrap_err();
+
+        assert!(
+            actual
+                .to_string()
+                .contains("string literal is missing closing quote")
+        );
+    }
 
     #[test]
     fn split_tokens_preserves_block_openers() {
@@ -1422,6 +1865,116 @@ mod tests {
         assert_eq!(split_header_tokens("level first {"), vec!["level", "first"]);
         assert_eq!(split_header_tokens("levels {"), vec!["levels"]);
         assert_eq!(split_header_tokens("{"), vec!["{"]);
+    }
+
+    #[test]
+    fn lexer_emits_context_free_braces_and_structural_parser_assigns_dispositions() {
+        let lexical = lexer::scan_source_line_lexical_facts("outer { inner } }", 0);
+        let lexical_braces = lexical
+            .iter()
+            .filter(|fact| matches!(fact.kind, lexer::SourceLexicalKind::Brace(_)))
+            .collect::<Vec<_>>();
+        assert_eq!(lexical_braces.len(), 3);
+        assert!(
+            lexical_braces
+                .iter()
+                .all(|fact| fact.brace_disposition.is_none())
+        );
+
+        let scan = scan_surface_source("outer { inner } }\n");
+        let dispositions = scan.lines[0]
+            .lexical_facts
+            .iter()
+            .filter_map(|fact| fact.brace_disposition)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            dispositions,
+            vec![
+                SourceBraceDisposition {
+                    depth: 0,
+                    matched_close: true,
+                },
+                SourceBraceDisposition {
+                    depth: 0,
+                    matched_close: true,
+                },
+                SourceBraceDisposition {
+                    depth: 0,
+                    matched_close: false,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn structural_parser_assigns_authoring_owner_once_for_all_products() {
+        let scan = scan_surface_source(
+            "puzzle board {\nrender {\ngrid {\ntype = occupied_cells\n}\n}\n}\n",
+        );
+        let type_line = scan
+            .lines
+            .iter()
+            .find(|line| line.content.starts_with("type"))
+            .expect("grid definition line");
+        assert_eq!(
+            type_line.option_block,
+            Some(SurfaceOptionBlock::Authoring(
+                crate::authoring_grammar::AuthoringKind::PuzzleRenderGridConfig,
+            ))
+        );
+        let grid_open = scan
+            .lines
+            .iter()
+            .find(|line| line.content.starts_with("grid"))
+            .expect("grid header");
+        assert!(grid_open.structural_events.iter().any(|event| {
+            matches!(
+                event,
+                SourceStructureEvent::Open {
+                    option_block: SurfaceOptionBlock::Authoring(
+                        crate::authoring_grammar::AuthoringKind::PuzzleRenderGridConfig
+                    ),
+                    ..
+                }
+            )
+        }));
+    }
+
+    #[test]
+    fn semicolon_sugar_feeds_each_piece_to_the_normal_authoring_owner() {
+        use crate::authoring_grammar::AuthoringKind;
+
+        let scan =
+            scan_surface_source("puzzle board { render { grid { type = occupied_cells; } } }\n");
+        let pieces = &scan.lines[0].structural_pieces;
+        let recognized = pieces
+            .iter()
+            .filter(|piece| !piece.product.value.is_empty())
+            .map(|piece| {
+                (
+                    piece.authoring_parent,
+                    piece
+                        .product
+                        .value
+                        .iter()
+                        .map(|token| token.text.as_str())
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            recognized,
+            vec![
+                (None, vec!["puzzle", "board"]),
+                (Some(AuthoringKind::Root), vec!["render"]),
+                (Some(AuthoringKind::PuzzleRenderConfig), vec!["grid"],),
+                (
+                    Some(AuthoringKind::PuzzleRenderGridConfig),
+                    vec!["type", "=", "occupied_cells"],
+                ),
+            ]
+        );
     }
 
     #[test]
@@ -1460,6 +2013,19 @@ mod tests {
         let rescanned = incremental.apply_edit(old, new, edit_start, edit_start + 3, 11);
 
         assert_eq!(rescanned, 2);
+        assert_eq!(incremental, scan_surface_source(new));
+    }
+
+    #[test]
+    fn incremental_surface_scan_shifts_reused_lexical_facts() {
+        let old = "title = x\npuzzle board {\n  rules {\n  }\n}\n";
+        let new = "title = longer\npuzzle board {\n  rules {\n  }\n}\n";
+        let edit_start = old.find('x').expect("edit start");
+        let mut incremental = scan_surface_source(old);
+
+        let rescanned = incremental.apply_edit(old, new, edit_start, edit_start + 1, 6);
+
+        assert!(rescanned < incremental.line_count());
         assert_eq!(incremental, scan_surface_source(new));
     }
 

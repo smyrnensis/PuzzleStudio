@@ -21,6 +21,10 @@ fn diagnostic_contains(report: &DiagnosticReport, needle: &str) -> bool {
         .any(|diagnostic| diagnostic.message.contains(needle))
 }
 
+fn parse_puzzle_body3(body: &str) -> Result<ParsedPuzzle3, DiagnosticReport> {
+    parse_puzzle3d(&format!("puzzle test {{\ndimension = 3\n{body}\n}}"))
+}
+
 fn spec_3d_model_source() -> String {
     let source = include_str!("fixtures/spec_3d_full.puzzle3");
     [
@@ -68,10 +72,9 @@ fn source_block(source: &str, marker: &str) -> String {
 
 fn object_id(parsed: &ParsedPuzzle3, name: &str) -> ObjectId {
     parsed
-        .catalog
-        .objects
+        .object_labels
         .iter()
-        .find_map(|object| (object.name == name).then_some(object.id))
+        .find_map(|(object, label)| (label == name).then_some(*object))
         .unwrap_or_else(|| panic!("missing object {name}"))
 }
 
@@ -95,11 +98,12 @@ fn occupied_cells(state: &State3) -> Vec<(Coord3, Vec<ObjectId>)> {
 }
 
 #[test]
-fn at_prefixed_layer_objects_are_not_display_objects() {
+fn at_prefixed_layer_objects_are_normal_objects() {
     let parsed = parse_puzzle3d(
         r#"
 puzzle display3 {
-layers {
+dimension = 3
+slots {
 actor = Player
 fx = @Dust
 }
@@ -113,7 +117,6 @@ input right [ Player | no Player ] -> [ | Player ]
     .unwrap();
 
     object_id(&parsed, "@Dust");
-    assert!(parsed.display_objects.is_empty());
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -186,9 +189,9 @@ fn microban_basic_sprites() -> Vec<TestVoxelSprite3> {
 }
 
 fn microban_basic_model() -> ParsedPuzzle3 {
-    parse_puzzle3d(
+    parse_puzzle_body3(
         r#"
-layers {
+slots {
 @Floor
 Goal
 Player Box Wall
@@ -212,20 +215,20 @@ fn microban_basic_rules_with_input_guards(rules: &[Rule3]) -> Vec<Rule3> {
         .iter()
         .cloned()
         .map(|rule| {
-            let direction = rule.pattern.cells[1].offset;
+            let direction = rule.pattern.cells()[1].offset.clone();
             rule.when_input(input_for_microban_offset(direction))
         })
         .collect()
 }
 
 fn input_for_microban_offset(offset: Offset3) -> InputId {
-    if offset == Direction3::LEFT.offset {
+    if offset == Direction3::LEFT.offset.into() {
         INPUT_LEFT
-    } else if offset == Direction3::RIGHT.offset {
+    } else if offset == Direction3::RIGHT.offset.into() {
         INPUT_RIGHT
-    } else if offset == Direction3::FORWARD.offset {
+    } else if offset == Direction3::FORWARD.offset.into() {
         INPUT_FORWARD
-    } else if offset == Direction3::BACKWARD.offset {
+    } else if offset == Direction3::BACKWARD.offset.into() {
         INPUT_BACKWARD
     } else {
         panic!("Microban Basic only uses horizontal movement, got {offset:?}");
@@ -270,9 +273,9 @@ fn microban_basic_level_from_rows(rows: &[&str]) -> Level3 {
 
 #[test]
 fn parser_lowers_minimal_line_rule_with_direction_set_sugar() {
-    let parsed = parse_puzzle3d(
+    let parsed = parse_puzzle_body3(
         r#"
-layers {
+slots {
 Player Box Wall
 }
 
@@ -288,18 +291,18 @@ horizontal [ Player | no solid ] -> [ | Player ]
     .unwrap();
 
     assert_eq!(parsed.game.layer_count, 1);
-    assert_eq!(parsed.game.objects.len(), 3);
-    assert_eq!(flattened_rules(&parsed.rules).len(), 4);
+    assert_eq!(parsed.game.objects().len(), 3);
+    assert_eq!(flattened_rules(parsed.game.program()).len(), 4);
     assert_eq!(
-        flattened_rules(&parsed.rules)[1].pattern.cells[1].offset,
-        Direction3::RIGHT.offset
+        flattened_rules(parsed.game.program())[1].pattern.cells()[1].offset,
+        Direction3::RIGHT.offset.into()
     );
     assert_eq!(
-        flattened_rules(&parsed.rules)[1].writes,
+        flattened_rules(parsed.game.program())[1].writes,
         vec![WriteOp3::Move {
             component: 0,
-            from_offset: Offset3::ZERO,
-            to_offset: Direction3::RIGHT.offset,
+            from_offset: Delta3::ZERO.into(),
+            to_offset: Direction3::RIGHT.offset.into(),
             object: ObjectId(1),
         }]
     );
@@ -307,9 +310,9 @@ horizontal [ Player | no solid ] -> [ | Player ]
 
 #[test]
 fn parser_collects_on_level_start_rules_through_shared_block_body() {
-    let parsed = parse_puzzle3d(
+    let parsed = parse_puzzle_body3(
         r#"
-layers {
+slots {
 Player Wall
 }
 
@@ -331,9 +334,9 @@ right [ Player
     assert_eq!(
         flattened_rules(&parsed.lifecycle.on_level_start)[0]
             .pattern
-            .cells[1]
+            .cells()[1]
             .offset,
-        Direction3::RIGHT.offset
+        Direction3::RIGHT.offset.into()
     );
 }
 
@@ -342,7 +345,8 @@ fn plain_3d_lifecycle_rewrite_uses_shared_repeat_statement_boundary() {
     let parsed = parse_puzzle3d(
         r#"
 puzzle fill_floor {
-layers {
+dimension = 3
+slots {
 floor = Floor
 }
 on_level_start {
@@ -393,7 +397,8 @@ fn once_3d_neutral_rewrite_fires_once_across_direction_alternatives() {
     let parsed = parse_puzzle3d(
         r#"
 puzzle fill_one {
-layers {
+dimension = 3
+slots {
 floor = Floor
 }
 on_level_start {
@@ -434,7 +439,8 @@ fn once_3d_input_statement_selects_the_matching_guarded_direction() {
     let parsed = parse_puzzle3d(
         r#"
 puzzle move_once {
-layers {
+dimension = 3
+slots {
 actor = Player
 }
 rules {
@@ -463,7 +469,7 @@ level "start" {
         .build_level_state(0)
         .unwrap();
     let next =
-        transition_program(&parsed.game, &initial, &parsed.rules, INPUT_RIGHT).unwrap();
+        transition_program(&parsed.game, &initial, parsed.game.program(), INPUT_RIGHT).unwrap();
     let player = object_id(&parsed, "Player");
 
     assert!(!next.has_object(&parsed.game, Coord3::new(1, 1, 0), player));
@@ -475,7 +481,8 @@ fn parser_lowers_3d_line_gap_rules_against_level_extent() {
     let parsed = parse_puzzle3d(
         r#"
 puzzle gap3 {
-layers {
+dimension = 3
+slots {
 floor = Goal
 actor = Player
 }
@@ -500,13 +507,52 @@ P..G
     )
     .unwrap();
     let game = &parsed.game;
+    let rules = flattened_rules(game.program());
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0].pattern.components[0].gap_count, 1);
+    assert!(matches!(
+        rules[0].pattern.components[0].cells[1].offset,
+        puzzle_grid3d::Offset3::Variable { .. }
+    ));
     let bundle = parsed.level_bundle.as_ref().unwrap();
     let state = bundle.build_level_state(0).unwrap();
 
-    let next = transition_program(game, &state, &parsed.rules, InputId(0)).unwrap();
+    let next = transition_program(game, &state, parsed.game.program(), InputId(0)).unwrap();
 
     assert!(!next.has_object(game, Coord3::new(0, 0, 0), ObjectId(2)));
     assert!(next.has_object(game, Coord3::new(3, 0, 0), ObjectId(2)));
+}
+
+#[test]
+fn parser_materializes_named_occurrence_cell_marks_and_core_effects() {
+    let parsed = parse_puzzle_body3(
+        r#"
+slots {
+actor = Player
+}
+
+marks {
+checked
+cellflag
+}
+
+rules {
+once [ Player{checked} {cellflag} ] -> [ Player{checked} {cellflag} ] win
+}
+"#,
+    )
+    .unwrap();
+    let rules = flattened_rules(parsed.game.program());
+    assert!(!rules.is_empty());
+    assert_eq!(parsed.game.mark().len(), 7);
+    let cell = &rules[0].pattern.components[0].cells[0];
+    assert!(cell.require_mark.iter().any(|mark| !mark.object.is_empty()));
+    assert!(cell.require_mark.iter().any(|mark| mark.object.is_empty()));
+    assert!(
+        rules
+            .iter()
+            .all(|rule| matches!(rule.effects.as_slice(), [RuleEffect3::Win]))
+    );
 }
 
 #[test]
@@ -514,10 +560,12 @@ fn parser_keeps_render_settings_as_model_owned_display_state() {
     let parsed = parse_puzzle3d(
         r#"
 puzzle camera_test {
+dimension = 3
 render {
       camera {
 yaw = 90
 pitch = 42
+roll = 15
 zoom = 1.25
 interactive_look = true
 interactive_zoom = true
@@ -534,7 +582,7 @@ smoothing = true
       shadow = true
     }
 
-layers {
+slots {
 Player
 }
 }
@@ -544,6 +592,7 @@ Player
 
     assert_eq!(parsed.settings.camera.yaw_degrees, 90);
     assert_eq!(parsed.settings.camera.pitch_degrees, 42);
+    assert_eq!(parsed.settings.camera.roll_degrees, 15);
     assert_eq!(parsed.settings.camera.zoom_milli, 1250);
     assert!(parsed.settings.camera.interactive_look);
     assert!(parsed.settings.camera.interactive_zoom);
@@ -560,6 +609,7 @@ fn parser_accepts_boolean_render_setting_assignments() {
     let parsed = parse_puzzle3d(
         r#"
 puzzle camera_test {
+dimension = 3
 render {
   camera {
 interactive_look = true
@@ -572,7 +622,7 @@ smoothing = false
   shadow = false
 }
 
-layers {
+slots {
 Player
 }
 }
@@ -592,11 +642,12 @@ fn parser_rejects_old_inline_camera_render_settings() {
     let parsed = parse_puzzle3d(
         r#"
 puzzle camera_test {
+dimension = 3
 render {
   camera yaw=90
 }
 
-layers {
+slots {
 Player
 }
 }
@@ -611,13 +662,14 @@ fn parser_rejects_old_bare_grid_render_settings() {
     let parsed = parse_puzzle3d(
         r#"
 puzzle camera_test {
+dimension = 3
 render {
   grid {
 occupied_cells
   }
 }
 
-layers {
+slots {
 Player
 }
 }
@@ -632,11 +684,12 @@ fn parser_rejects_old_inline_grid_render_settings() {
     let parsed = parse_puzzle3d(
         r#"
 puzzle camera_test {
+dimension = 3
 render {
   grid occupied_cells
 }
 
-layers {
+slots {
 Player
 }
 }
@@ -651,11 +704,12 @@ fn parser_rejects_old_inline_pixelate_render_settings() {
     let parsed = parse_puzzle3d(
         r#"
 puzzle camera_test {
+dimension = 3
 render {
   pixelate scale=4
 }
 
-layers {
+slots {
 Player
 }
 }
@@ -670,11 +724,12 @@ fn parser_rejects_old_bare_render_settings() {
     let parsed = parse_puzzle3d(
         r#"
 puzzle camera_test {
+dimension = 3
 render {
   shade
 }
 
-layers {
+slots {
 Player
 }
 }
@@ -689,13 +744,14 @@ fn parser_rejects_old_camera_setting_value_syntax() {
     let parsed = parse_puzzle3d(
         r#"
 puzzle camera_test {
+dimension = 3
 render {
   camera {
 yaw 90
   }
 }
 
-layers {
+slots {
 Player
 }
 }
@@ -707,9 +763,9 @@ Player
 
 #[test]
 fn parser_defaults_render_settings() {
-    let parsed = parse_puzzle3d(
+    let parsed = parse_puzzle_body3(
         r#"
-layers {
+slots {
 Player
 }
 "#,
@@ -718,9 +774,10 @@ Player
 
     assert!(!parsed.settings.camera.interactive_look);
     assert!(!parsed.settings.camera.interactive_zoom);
-    assert_eq!(parsed.settings.camera.yaw_degrees, 34);
-    assert_eq!(parsed.settings.camera.pitch_degrees, 38);
-    assert_eq!(parsed.settings.camera.zoom_milli, 1100);
+    assert_eq!(parsed.settings.camera.yaw_degrees, 0);
+    assert_eq!(parsed.settings.camera.pitch_degrees, 90);
+    assert_eq!(parsed.settings.camera.roll_degrees, 0);
+    assert_eq!(parsed.settings.camera.zoom_milli, 1000);
     assert!(!parsed.settings.grid.occupied_cells);
     assert!(parsed.settings.sprite.shade);
     assert!(!parsed.settings.shadow);
@@ -734,6 +791,7 @@ fn parser_defaults_3d_zoomscreen_height_to_full() {
     let parsed = parse_puzzle3d(
         r#"
 puzzle viewport_test {
+dimension = 3
 render {
   viewport {
 zoomscreen 7 5
@@ -741,7 +799,7 @@ focus Player
   }
 }
 
-layers {
+slots {
 Player
 }
 }
@@ -767,7 +825,8 @@ fn parser_lowers_3d_local_radius_to_cubic_local_frame() {
     let parsed = parse_puzzle3d(
         r#"
 puzzle local_radius_test {
-layers {
+dimension = 3
+slots {
 Player Box
 }
 
@@ -791,6 +850,7 @@ fn parser_keeps_smoothscreen_as_smooth_centered_viewport() {
     let parsed = parse_puzzle3d(
         r#"
 puzzle viewport_test {
+dimension = 3
 render {
   viewport {
 smoothscreen 9 7 3
@@ -798,7 +858,7 @@ focus actor
   }
 }
 
-layers {
+slots {
 Player Box
 }
 
@@ -828,6 +888,7 @@ fn parser_keeps_flickscreen_as_paged_viewport() {
     let parsed = parse_puzzle3d(
         r#"
 puzzle viewport_test {
+dimension = 3
 render {
   viewport {
 flickscreen 9 7 2
@@ -835,7 +896,7 @@ focus Player
   }
 }
 
-layers {
+slots {
 Player
 }
 }
@@ -861,6 +922,7 @@ fn visual_fixture_exports_3d_viewport_contract() {
     let parsed = parse_puzzle3d(
         r#"
 puzzle viewport_test {
+dimension = 3
 render {
   viewport {
 smoothscreen 7 7
@@ -868,7 +930,7 @@ focus actor
   }
 }
 
-layers {
+slots {
 Player Box
 Floor
 }
@@ -903,7 +965,8 @@ fn visual_fixture_does_not_assign_implicit_sprites() {
     let parsed = parse_puzzle3d(
         r#"
 puzzle no_sprites {
-layers {
+dimension = 3
+slots {
 Player
 }
 }
@@ -931,12 +994,13 @@ fn parser_rejects_legacy_top_level_camera_settings() {
     let parsed = parse_puzzle3d(
         r#"
 puzzle camera_test {
+dimension = 3
 debug_camera = true
 camera_yaw = 90
 camera_pitch = 42
 camera_zoom = 1.25
 
-layers {
+slots {
 Player
 }
 }
@@ -948,9 +1012,9 @@ Player
 
 #[test]
 fn parser_lowers_input_guarded_direction_set_rule() {
-    let parsed = parse_puzzle3d(
+    let parsed = parse_puzzle_body3(
         r#"
-layers {
+slots {
 actor = Player Box Wall
 }
 
@@ -965,21 +1029,30 @@ input horizontal [ Player | no solid ] -> [ | Player ]
     )
     .unwrap();
 
-    assert_eq!(flattened_rules(&parsed.rules).len(), 4);
-    assert_eq!(flattened_rules(&parsed.rules)[0].guards, vec![Guard3::InputIs(INPUT_LEFT)]);
-    assert_eq!(flattened_rules(&parsed.rules)[1].guards, vec![Guard3::InputIs(INPUT_RIGHT)]);
-    assert_eq!(flattened_rules(&parsed.rules)[2].guards, vec![Guard3::InputIs(INPUT_FORWARD)]);
+    assert_eq!(flattened_rules(parsed.game.program()).len(), 4);
     assert_eq!(
-        flattened_rules(&parsed.rules)[3].guards,
+        flattened_rules(parsed.game.program())[0].guards,
+        vec![Guard3::InputIs(INPUT_LEFT)]
+    );
+    assert_eq!(
+        flattened_rules(parsed.game.program())[1].guards,
+        vec![Guard3::InputIs(INPUT_RIGHT)]
+    );
+    assert_eq!(
+        flattened_rules(parsed.game.program())[2].guards,
+        vec![Guard3::InputIs(INPUT_FORWARD)]
+    );
+    assert_eq!(
+        flattened_rules(parsed.game.program())[3].guards,
         vec![Guard3::InputIs(INPUT_BACKWARD)]
     );
 }
 
 #[test]
 fn parser_lowers_input_rule_without_set_as_directions_sugar() {
-    let parsed = parse_puzzle3d(
+    let parsed = parse_puzzle_body3(
         r#"
-layers {
+slots {
 actor = Player Wall
 }
 
@@ -994,8 +1067,8 @@ input [ Player | no solid ] -> [ | Player ]
     )
     .unwrap();
 
-    assert_eq!(flattened_rules(&parsed.rules).len(), 6);
-    let rules = flattened_rules(&parsed.rules);
+    assert_eq!(flattened_rules(parsed.game.program()).len(), 6);
+    let rules = flattened_rules(parsed.game.program());
     let guards = rules
         .iter()
         .map(|rule| rule.guards.as_slice())
@@ -1014,9 +1087,9 @@ input [ Player | no solid ] -> [ | Player ]
 
 #[test]
 fn parser_expands_3d_horizontal_and_vertical_movement_mark_sets() {
-    let parsed = parse_puzzle3d(
+    let parsed = parse_puzzle_body3(
         r#"
-layers {
+slots {
 actor = Box
 }
 
@@ -1027,14 +1100,14 @@ right [ Box{horizontal} ] -> [ Box{vertical} ]
     )
     .unwrap();
 
-    assert_eq!(flattened_rules(&parsed.rules).len(), 8);
+    assert_eq!(flattened_rules(parsed.game.program()).len(), 8);
 }
 
 #[test]
 fn parser_lowers_input_rule_with_forward_marker_rhs_sugar_as_movement_mark() {
-    let parsed = parse_puzzle3d(
+    let parsed = parse_puzzle_body3(
         r#"
-layers {
+slots {
 actor = Player
 }
 
@@ -1045,14 +1118,14 @@ input [ Player ] -> [ > Player ]
     )
     .unwrap();
 
-    assert_eq!(flattened_rules(&parsed.rules).len(), 6);
-    assert!(flattened_rules(&parsed.rules).iter().any(|rule| {
+    assert_eq!(flattened_rules(parsed.game.program()).len(), 6);
+    assert!(flattened_rules(parsed.game.program()).iter().any(|rule| {
         rule.guards == vec![Guard3::InputIs(INPUT_RIGHT)]
             && rule.writes
                 == vec![WriteOp3::SetMark {
                     component: 0,
                     object: PLAYER,
-                    offset: Offset3::ZERO,
+                    offset: Delta3::ZERO.into(),
                     mark: MarkId3(0),
                     value: Some(3),
                 }]
@@ -1060,47 +1133,74 @@ input [ Player ] -> [ > Player ]
 }
 
 #[test]
-fn parser_lowers_standard_move_step_for_3d_movement_mark() {
+fn default_repeat_rewrite_stops_after_rhs_removes_movement_mark_in_3d() {
     let parsed = parse_puzzle3d(
         r#"
-puzzle push3 {
-layers {
+puzzle move_once3 {
+dimension = 3
+slots {
 actor = Player
 }
 
 rules {
 input [ Player ] -> [ > Player ]
-move
+[ > Player | ] -> [ | Player ]
 }
 }
 
-levels demo of push3 {
+levels demo of move_once3 {
 legend {
 . = empty
 P = Player
 }
 
 level "start" {
-P.
+P....
 }
 }
 "#,
     )
     .unwrap();
-    let level_bundle = parsed.level_bundle.as_ref().unwrap();
-    let initial = level_bundle
+    let initial = parsed
+        .level_bundle
+        .as_ref()
+        .unwrap()
         .level(0)
         .unwrap()
         .level
         .build_state(&parsed.game)
         .unwrap();
 
-    let moved = transition_program(&parsed.game, &initial, &parsed.rules, INPUT_RIGHT).unwrap();
+    let moved =
+        transition_program(&parsed.game, &initial, parsed.game.program(), INPUT_RIGHT).unwrap();
     let player = object_id(&parsed, "Player");
 
-    assert!(!moved.has_object(&parsed.game, Coord3::new(0, 0, 0), player));
     assert!(moved.has_object(&parsed.game, Coord3::new(1, 0, 0), player));
-    assert!(!moved.has_mark(&parsed.game, Coord3::new(1, 0, 0), player, MarkId3(0), None));
+    assert!(!moved.has_object(&parsed.game, Coord3::new(4, 0, 0), player));
+    assert!(!moved.has_mark(&parsed.game, Coord3::new(1, 0, 0), player, MarkId3(0), None,));
+}
+
+#[test]
+fn bare_move_is_not_a_3d_builtin_step() {
+    let error = parse_puzzle3d(
+        r#"
+puzzle push3 {
+dimension = 3
+slots {
+actor = Player
+}
+
+rules {
+move
+}
+}
+"#,
+    )
+    .unwrap_err();
+    assert!(diagnostic_contains(
+        &error,
+        "3D rule blocks do not support routine calls"
+    ));
 }
 
 #[test]
@@ -1108,14 +1208,15 @@ fn neutral_3d_rewrite_expands_relative_movement_mark_by_direction() {
     let parsed = parse_puzzle3d(
         r#"
 puzzle push3 {
-layers {
+dimension = 3
+slots {
 actor = Player Box
 }
 
 rules {
 input [ Player ] -> [ > Player ]
 [ > Player | Box ] -> [ > Player | > Box ]
-move
+right [ > Player | > Box | no Player no Box ] -> [ | Player | Box ]
 }
 }
 
@@ -1143,7 +1244,8 @@ PB.
         .build_state(&parsed.game)
         .unwrap();
 
-    let moved = transition_program(&parsed.game, &initial, &parsed.rules, INPUT_RIGHT).unwrap();
+    let moved =
+        transition_program(&parsed.game, &initial, parsed.game.program(), INPUT_RIGHT).unwrap();
     let player = object_id(&parsed, "Player");
     let box_object = object_id(&parsed, "Box");
 
@@ -1157,7 +1259,8 @@ fn parser_accepts_shared_application_prefixed_3d_rule_surface() {
     let parsed = parse_puzzle3d(
         r#"
 puzzle surface3 {
-layers {
+dimension = 3
+slots {
 actor = Player Box
 }
 
@@ -1173,22 +1276,26 @@ repeat right [ Box | ] -> [ | Box ]
     )
     .unwrap();
 
-    let rules = flattened_rules(&parsed.rules);
-    assert!(rules
-        .iter()
-        .any(|rule| rule.application == RuleApplication3::Once));
-    assert!(parsed.rules.iter().any(|step| matches!(
+    let rules = flattened_rules(parsed.game.program());
+    assert!(
+        rules
+            .iter()
+            .any(|rule| rule.application == RuleApplication3::Once)
+    );
+    assert!(parsed.game.program().iter().any(|step| matches!(
         step,
         RuleStep3::Block {
             application: RuleApplication3::OnceAll,
             ..
         }
     )));
-    assert!(rules
-        .iter()
-        .any(|rule| rule.application == RuleApplication3::OncePerLevel));
+    assert!(
+        rules
+            .iter()
+            .any(|rule| rule.application == RuleApplication3::OncePerLevel)
+    );
     for application in [RuleApplication3::Random, RuleApplication3::UntilStable] {
-        assert!(parsed.rules.iter().any(|step| matches!(
+        assert!(parsed.game.program().iter().any(|step| matches!(
             step,
             RuleStep3::Block {
                 application: actual,
@@ -1203,7 +1310,8 @@ fn parser_rejects_shared_statement_surfaces_without_3d_lowering() {
     let routine_call = parse_puzzle3d(
         r#"
 puzzle no_routine_calls3 {
-layers {
+dimension = 3
+slots {
 actor = Player
 }
 
@@ -1222,7 +1330,8 @@ push_boxes
     let application_block = parse_puzzle3d(
         r#"
 puzzle no_application_blocks3 {
-layers {
+dimension = 3
+slots {
 actor = Player
 }
 
@@ -1243,109 +1352,16 @@ once
 }
 
 #[test]
-fn standard_move_step_blocks_same_layer_destination_in_3d() {
-    let parsed = parse_puzzle3d(
-        r#"
-puzzle push3 {
-layers {
-actor = Player Wall
-}
-
-rules {
-input [ Player ] -> [ > Player ]
-move
-}
-}
-
-levels demo of push3 {
-legend {
-. = empty
-P = Player
-W = Wall
-}
-
-level "start" {
-PW
-}
-}
-"#,
-    )
-    .unwrap();
-    let initial = parsed
-        .level_bundle
-        .as_ref()
-        .unwrap()
-        .level(0)
-        .unwrap()
-        .level
-        .build_state(&parsed.game)
-        .unwrap();
-
-    let blocked = transition_program(&parsed.game, &initial, &parsed.rules, INPUT_RIGHT).unwrap();
-    let player = object_id(&parsed, "Player");
-    let wall = object_id(&parsed, "Wall");
-
-    assert!(blocked.has_object(&parsed.game, Coord3::new(0, 0, 0), player));
-    assert!(blocked.has_object(&parsed.game, Coord3::new(1, 0, 0), wall));
-}
-
-#[test]
-fn standard_move_step_moves_same_direction_3d_chains_one_cell() {
-    let parsed = parse_puzzle3d(
-        r#"
-puzzle push3 {
-layers {
-actor = Box
-}
-
-rules {
-right [ Box | Box ] -> [ > Box | > Box ]
-move
-}
-}
-
-levels demo of push3 {
-legend {
-. = empty
-B = Box
-}
-
-level "start" {
-BB..
-}
-}
-"#,
-    )
-    .unwrap();
-    let initial = parsed
-        .level_bundle
-        .as_ref()
-        .unwrap()
-        .level(0)
-        .unwrap()
-        .level
-        .build_state(&parsed.game)
-        .unwrap();
-
-    let moved = transition_program(&parsed.game, &initial, &parsed.rules, INPUT_RIGHT).unwrap();
-    let box_object = object_id(&parsed, "Box");
-
-    assert!(!moved.has_object(&parsed.game, Coord3::new(0, 0, 0), box_object));
-    assert!(moved.has_object(&parsed.game, Coord3::new(1, 0, 0), box_object));
-    assert!(moved.has_object(&parsed.game, Coord3::new(2, 0, 0), box_object));
-    assert!(!moved.has_object(&parsed.game, Coord3::new(3, 0, 0), box_object));
-}
-
-#[test]
 fn parser_lowers_camera_variable_effects_from_rules() {
-    let parsed = parse_puzzle3d(
+    let parsed = parse_puzzle_body3(
         r#"
-layers {
+slots {
 actor = Player Wall
 }
 
 rules {
 right [ Player | no Wall ] -> [ | Player ] set yaw = 100
+set roll = 25
 set zoom = 1.5
 reset_camera
 }
@@ -1363,35 +1379,52 @@ P
     )
     .unwrap();
 
-    assert_eq!(flattened_rules(&parsed.rules).len(), 3);
-    assert!(flattened_rules(&parsed.rules).iter().all(|rule| rule.effects.is_empty()));
+    assert_eq!(flattened_rules(parsed.game.program()).len(), 4);
+    assert!(
+        flattened_rules(parsed.game.program())
+            .iter()
+            .all(|rule| rule.effects.is_empty())
+    );
     assert_eq!(
         parsed.rule_camera_effects[0],
         vec![Puzzle3CameraEffect::SetYaw(100)]
     );
     assert_eq!(
         parsed.rule_camera_effects[1],
-        vec![Puzzle3CameraEffect::SetZoom(1500)]
+        vec![Puzzle3CameraEffect::SetRoll(25)]
     );
-    assert!(flattened_rules(&parsed.rules)[1].pattern.cells.is_empty());
-    assert!(flattened_rules(&parsed.rules)[1].writes.is_empty());
     assert_eq!(
         parsed.rule_camera_effects[2],
+        vec![Puzzle3CameraEffect::SetZoom(1500)]
+    );
+    assert!(
+        flattened_rules(parsed.game.program())[2]
+            .pattern
+            .cells()
+            .is_empty()
+    );
+    assert!(flattened_rules(parsed.game.program())[2].writes.is_empty());
+    assert_eq!(
+        parsed.rule_camera_effects[3],
         vec![Puzzle3CameraEffect::Reset]
     );
 
     let fixture = export_visual_fixture_json(&parsed).unwrap();
     let contract =
         puzzle3_runtime_model_from_fixture_json(&fixture).expect("runtime contract decodes");
-    assert!(flattened_rules(&contract.rules).iter().all(|rule| rule.effects.is_empty()));
+    assert!(
+        flattened_rules(contract.game.program())
+            .iter()
+            .all(|rule| rule.effects.is_empty())
+    );
     assert_eq!(contract.rule_camera_effects, parsed.rule_camera_effects);
 }
 
 #[test]
 fn parser_lowers_variant_selector_assignment() {
-    let parsed = parse_puzzle3d(
+    let parsed = parse_puzzle_body3(
         r#"
-layers {
+slots {
 Marker:directions
 }
 
@@ -1402,10 +1435,10 @@ directions [ Marker:* | ] -> [ | Marker:* ]
     )
     .unwrap();
 
-    assert_eq!(parsed.game.objects.len(), 6);
-    assert_eq!(flattened_rules(&parsed.rules).len(), 36);
-    assert!(flattened_rules(&parsed.rules).iter().all(|rule| {
-        rule.pattern.cells[0].require_objects[0]
+    assert_eq!(parsed.game.objects().len(), 6);
+    assert_eq!(flattened_rules(parsed.game.program()).len(), 36);
+    assert!(flattened_rules(parsed.game.program()).iter().all(|rule| {
+        rule.pattern.cells()[0].require_objects[0]
             == match rule.writes[0] {
                 WriteOp3::Move { object, .. } => object,
                 _ => ObjectId::EMPTY,
@@ -1418,7 +1451,8 @@ fn parser_lowers_bare_star_selector_assignment() {
     let parsed = parse_puzzle3d(
         r#"
 puzzle bare_star {
-layers {
+dimension = 3
+slots {
 Player Box
 }
 
@@ -1442,14 +1476,15 @@ PB.
     )
     .unwrap();
 
-    assert_eq!(flattened_rules(&parsed.rules).len(), 2);
+    assert_eq!(flattened_rules(parsed.game.program()).len(), 2);
     let state = parsed
         .level_bundle
         .as_ref()
         .unwrap()
         .build_level_state(0)
         .unwrap();
-    let next = transition_program_without_input(&parsed.game, &state, &parsed.rules).unwrap();
+    let next =
+        transition_program_without_input(&parsed.game, &state, parsed.game.program()).unwrap();
 
     assert!(next.has_object(&parsed.game, Coord3::new(0, 0, 0), ObjectId(1)));
     assert!(!next.has_object(&parsed.game, Coord3::new(1, 0, 0), ObjectId(2)));
@@ -1461,7 +1496,8 @@ fn parser_lowers_group_selector_to_runtime_object_set_matcher() {
     let parsed = parse_puzzle3d(
         r#"
 puzzle group_move {
-layers {
+dimension = 3
+slots {
 Box Crate
 }
 
@@ -1489,12 +1525,12 @@ B.C
     )
     .unwrap();
 
-    assert_eq!(flattened_rules(&parsed.rules).len(), 1);
-    let rule = &flattened_rules(&parsed.rules)[0];
-    assert!(rule.pattern.cells[0].require_objects.is_empty());
-    assert_eq!(rule.pattern.cells[0].require_object_sets.len(), 1);
+    assert_eq!(flattened_rules(parsed.game.program()).len(), 1);
+    let rule = &flattened_rules(parsed.game.program())[0];
+    assert!(rule.pattern.cells()[0].require_objects.is_empty());
+    assert_eq!(rule.pattern.cells()[0].require_object_sets.len(), 1);
     assert_eq!(
-        rule.pattern.cells[0].require_object_sets[0].objects,
+        rule.pattern.cells()[0].require_object_sets[0].objects,
         vec![ObjectId(1), ObjectId(2)]
     );
     assert!(matches!(
@@ -1508,16 +1544,17 @@ B.C
         .unwrap()
         .build_level_state(0)
         .unwrap();
-    let next = transition_program_without_input(&parsed.game, &state, &parsed.rules).unwrap();
+    let next =
+        transition_program_without_input(&parsed.game, &state, parsed.game.program()).unwrap();
     assert!(!next.has_object(&parsed.game, Coord3::new(0, 0, 0), ObjectId(1)));
     assert!(next.has_object(&parsed.game, Coord3::new(1, 0, 0), ObjectId(1)));
 }
 
 #[test]
 fn parser_lowers_selector_occurrence_labels_for_group_swap() {
-    let parsed = parse_puzzle3d(
+    let parsed = parse_puzzle_body3(
         r#"
-layers {
+slots {
 actor = Box Crate
 }
 
@@ -1532,19 +1569,19 @@ right [ solid#1 | solid#2 ] -> [ solid#2 | solid#1 ]
     )
     .unwrap();
 
-    assert!(flattened_rules(&parsed.rules).iter().any(|rule| {
-        rule.pattern.cells[0].require_objects == vec![ObjectId(1)]
-            && rule.pattern.cells[1].require_objects == vec![ObjectId(2)]
+    assert!(flattened_rules(parsed.game.program()).iter().any(|rule| {
+        rule.pattern.cells()[0].require_objects == vec![ObjectId(1)]
+            && rule.pattern.cells()[1].require_objects == vec![ObjectId(2)]
             && rule.writes.contains(&WriteOp3::Move {
                 component: 0,
-                from_offset: Offset3::ZERO,
-                to_offset: Direction3::RIGHT.offset,
+                from_offset: Delta3::ZERO.into(),
+                to_offset: Direction3::RIGHT.offset.into(),
                 object: ObjectId(1),
             })
             && rule.writes.contains(&WriteOp3::Move {
                 component: 0,
-                from_offset: Direction3::RIGHT.offset,
-                to_offset: Offset3::ZERO,
+                from_offset: Direction3::RIGHT.offset.into(),
+                to_offset: Delta3::ZERO.into(),
                 object: ObjectId(2),
             })
     }));
@@ -1552,9 +1589,9 @@ right [ solid#1 | solid#2 ] -> [ solid#2 | solid#1 ]
 
 #[test]
 fn parser_rejects_duplicate_selector_occurrence_labels() {
-    let err = parse_puzzle3d(
+    let err = parse_puzzle_body3(
         r#"
-layers {
+slots {
 actor = Box Crate
 }
 
@@ -1577,9 +1614,9 @@ right [ solid#1 | solid#1 ] -> [ solid#1 | solid#1 ]
 
 #[test]
 fn parser_lowers_dense_frame_rule() {
-    let parsed = parse_puzzle3d(
+    let parsed = parse_puzzle_body3(
         r#"
-layers {
+slots {
 Player Box
 }
 
@@ -1590,17 +1627,17 @@ rules {
     )
     .unwrap();
 
-    assert_eq!(flattened_rules(&parsed.rules).len(), 1);
+    assert_eq!(flattened_rules(parsed.game.program()).len(), 1);
     assert_eq!(
-        flattened_rules(&parsed.rules)[0].pattern.cells[1].offset,
-        Direction3::RIGHT.offset
+        flattened_rules(parsed.game.program())[0].pattern.cells()[1].offset,
+        Direction3::RIGHT.offset.into()
     );
     assert_eq!(
-        flattened_rules(&parsed.rules)[0].writes[0],
+        flattened_rules(parsed.game.program())[0].writes[0],
         WriteOp3::Move {
             component: 0,
-            from_offset: Offset3::ZERO,
-            to_offset: Direction3::RIGHT.offset,
+            from_offset: Delta3::ZERO.into(),
+            to_offset: Direction3::RIGHT.offset.into(),
             object: ObjectId(1),
         }
     );
@@ -1608,9 +1645,9 @@ rules {
 
 #[test]
 fn parser_lowers_dense_frame_rule_with_pattern_line_breaks() {
-    let parsed = parse_puzzle3d(
+    let parsed = parse_puzzle_body3(
         r#"
-layers {
+slots {
 Player Box
 }
 
@@ -1623,22 +1660,22 @@ Box ]
     )
     .unwrap();
 
-    assert_eq!(flattened_rules(&parsed.rules).len(), 1);
+    assert_eq!(flattened_rules(parsed.game.program()).len(), 1);
     assert_eq!(
-        flattened_rules(&parsed.rules)[0].pattern.cells[1].offset,
-        Direction3::UP.offset
+        flattened_rules(parsed.game.program())[0].pattern.cells()[1].offset,
+        Direction3::UP.offset.into()
     );
 }
 
 #[test]
 fn parser_binds_frame3_domain_values_to_parenthesized_object_slots() {
-    let parsed = parse_puzzle3d(
+    let parsed = parse_puzzle_body3(
         r#"
 tags {
 pose = right, front front, left
 }
 
-layers {
+slots {
 Die:pose
 }
 
@@ -1659,15 +1696,15 @@ d
     )
     .unwrap();
 
-    assert_eq!(parsed.game.objects.len(), 2);
-    assert_eq!(flattened_rules(&parsed.rules).len(), 1);
+    assert_eq!(parsed.game.objects().len(), 2);
+    assert_eq!(flattened_rules(parsed.game.program()).len(), 1);
 }
 
 #[test]
 fn parser_rejects_colon_frame_orientation_syntax() {
-    let error = parse_puzzle3d(
+    let error = parse_puzzle_body3(
         r#"
-layers {
+slots {
 Player
 }
 
@@ -1683,13 +1720,13 @@ right:up [ Player ] -> [ Player ]
 
 #[test]
 fn parser_rejects_unparenthesized_frame3_object_slots() {
-    let error = parse_puzzle3d(
+    let error = parse_puzzle_body3(
         r#"
 tags {
 pose = right, front
 }
 
-layers {
+slots {
 Die:pose
 }
 
@@ -1708,24 +1745,24 @@ right [ Die:right,front ] -> [ Die:right,front ]
 
 #[test]
 fn parser_accepts_inline_braced_blocks_with_semicolon_rows() {
-    let parsed = parse_puzzle3d(
+    let parsed = parse_puzzle_body3(
         r#"
-layers { Player Box }
+slots { Player Box }
 groups { solid = Box }
 rules { right [ Player | no solid ] -> [ | Player ] }
 "#,
     )
     .unwrap();
 
-    assert_eq!(parsed.game.objects.len(), 2);
-    assert_eq!(flattened_rules(&parsed.rules).len(), 1);
+    assert_eq!(parsed.game.objects().len(), 2);
+    assert_eq!(flattened_rules(parsed.game.program()).len(), 1);
 }
 
 #[test]
 fn parser_lowers_layers_legend_and_levels_to_level_bundle() {
-    let parsed = parse_puzzle3d(
+    let parsed = parse_puzzle_body3(
         r#"
-layers {
+slots {
 floor = Goal
 actor = Player Box Wall
 }
@@ -1762,7 +1799,7 @@ level "stacked" {
     .unwrap();
 
     assert_eq!(parsed.game.layer_count, 2);
-    assert_eq!(parsed.game.objects.len(), 4);
+    assert_eq!(parsed.game.objects().len(), 4);
 
     let bundle = parsed.level_bundle.as_ref().expect("level bundle exists");
     assert_eq!(bundle.level_count(), 1);
@@ -1782,7 +1819,8 @@ fn parser_uses_shared_anonymous_named_and_each_layer_rows() {
     let parsed = parse_puzzle3d(
         r#"
 puzzle shared_layers {
-layers {
+dimension = 3
+slots {
 Floor
 solid = Player Box
 each Marker Goal
@@ -1800,11 +1838,7 @@ rules {
     assert_eq!(parsed.game.layer_count, 6);
     for name in ["Floor", "Player", "Box", "Marker", "Goal", "Crate", "Wall"] {
         assert!(
-            parsed
-                .catalog
-                .objects
-                .iter()
-                .any(|object| object.name == name),
+            parsed.object_labels.iter().any(|(_, label)| label == name),
             "missing shared layer-row object {name}"
         );
     }
@@ -1815,10 +1849,11 @@ fn parser_uses_shared_tags_block_and_resolves_groups_without_source_order() {
     let parsed = parse_puzzle3d(
         r#"
 puzzle shared_catalog {
+dimension = 3
 tags {
 state = open closed
 }
-layers {
+slots {
 Door:state Key
 }
 groups {
@@ -1833,8 +1868,7 @@ right [ interactive ] -> [ interactive ]
     )
     .unwrap();
 
-    assert_eq!(parsed.catalog.groups.len(), 2);
-    assert_eq!(flattened_rules(&parsed.rules).len(), 1);
+    assert_eq!(flattened_rules(parsed.game.program()).len(), 1);
 }
 
 #[test]
@@ -1842,7 +1876,8 @@ fn parser_expands_forward_groups_before_declaring_layer_objects() {
     let parsed = parse_puzzle3d(
         r#"
 puzzle forward_layer_groups {
-layers {
+dimension = 3
+slots {
 solid
 }
 groups {
@@ -1858,14 +1893,9 @@ right [ solid ] -> [ solid ]
     .unwrap();
 
     for name in ["Box", "Crate", "Wall"] {
-        assert!(parsed
-            .catalog
-            .objects
-            .iter()
-            .any(|object| object.name == name));
+        assert!(parsed.object_labels.iter().any(|(_, label)| label == name));
     }
-    assert_eq!(parsed.catalog.groups.len(), 2);
-    assert_eq!(flattened_rules(&parsed.rules).len(), 1);
+    assert_eq!(flattened_rules(parsed.game.program()).len(), 1);
 }
 
 #[test]
@@ -1873,12 +1903,13 @@ fn parser_uses_shared_tag_domain_normalization() {
     let parsed = parse_puzzle3d(
         r#"
 puzzle shared_tag_domains {
+dimension = 3
 tags {
 angle = 0deg 90deg
 count = 1...3
 pose = right, front front, left
 }
-layers {
+slots {
 Rotor:angle
 Counter:count
 Die:pose
@@ -1890,15 +1921,16 @@ rules {
     )
     .unwrap();
 
-    assert_eq!(parsed.game.objects.len(), 7);
+    assert_eq!(parsed.game.objects().len(), 7);
 
     let duplicate = parse_puzzle3d(
         r#"
 puzzle duplicate_tag_values {
+dimension = 3
 tags {
 state = open open
 }
-layers {
+slots {
 Door:state
 }
 rules {
@@ -1915,8 +1947,9 @@ fn parser_rejects_bare_tag_sets_and_cyclic_groups() {
     let bare = parse_puzzle3d(
         r#"
 puzzle bare_tags {
+dimension = 3
 state = open closed
-layers {
+slots {
 Door:state
 }
 rules {
@@ -1925,12 +1958,16 @@ rules {
 "#,
     )
     .unwrap_err();
-    assert!(bare.to_string().contains("use `tags"));
+    assert!(
+        bare.to_string()
+            .contains("object schema tag slot must name a tag set")
+    );
 
     let cycle = parse_puzzle3d(
         r#"
 puzzle cyclic_groups {
-layers {
+dimension = 3
+slots {
 Player
 }
 groups {
@@ -1950,10 +1987,11 @@ rules {
 fn catalog_validation_reports_tag_errors_before_selector_namespace_conflicts_in_2d_and_3d() {
     let source2d = r#"
 puzzle board {
+dimension = 3
 tags {
 bad-name = open closed
 }
-layers {
+slots {
 solid = Player
 }
 groups {
@@ -1996,7 +2034,8 @@ fn parser_rejects_removed_levels3_header() {
     let error = parse_puzzle3d(
         r#"
 puzzle board {
-layers {
+dimension = 3
+slots {
 Player
 }
 rules {
@@ -2019,9 +2058,9 @@ P
 
 #[test]
 fn parser_rejects_unquoted_3d_level_header_names() {
-    let err = parse_puzzle3d(
+    let err = parse_puzzle_body3(
         r#"
-layers {
+slots {
 actor = Player
 }
 
@@ -2046,9 +2085,9 @@ P
 
 #[test]
 fn parser_uses_dot_as_default_empty_char_for_3d_levels() {
-    let parsed = parse_puzzle3d(
+    let parsed = parse_puzzle_body3(
         r#"
-layers {
+slots {
 actor = Player
 }
 
@@ -2077,9 +2116,9 @@ P.
 
 #[test]
 fn parser_rejects_non_dot_empty_char_for_levels() {
-    let err = parse_puzzle3d(
+    let err = parse_puzzle_body3(
         r#"
-layers {
+slots {
 actor = Player
 }
 
@@ -2102,9 +2141,9 @@ P.
 
 #[test]
 fn parser_lowers_canonical_3d_sprite_entries() {
-    let parsed = parse_puzzle3d(
+    let parsed = parse_puzzle_body3(
         r##"
-layers {
+slots {
 floor = Floor
 }
 
@@ -2144,9 +2183,9 @@ shape = {
 
 #[test]
 fn parser_lowers_canonical_3d_sprite_shape_refs() {
-    let parsed = parse_puzzle3d(
+    let parsed = parse_puzzle_body3(
         r##"
-layers {
+slots {
 floor = Floor
 }
 
@@ -2188,9 +2227,9 @@ shape = flat
 
 #[test]
 fn parser_lowers_color_only_3d_sprite_entry_to_filled_cube() {
-    let parsed = parse_puzzle3d(
+    let parsed = parse_puzzle_body3(
         r##"
-layers {
+slots {
 floor = Floor
 target = Goal
 }
@@ -2222,9 +2261,9 @@ colors = #00008b
 
 #[test]
 fn parser_rejects_blank_lines_in_sprite_shape() {
-    let err = parse_puzzle3d(
+    let err = parse_puzzle_body3(
         r##"
-layers {
+slots {
 floor = Floor
 }
 
@@ -2247,9 +2286,9 @@ shape = {
 
 #[test]
 fn parser_rejects_legacy_sprites3_blocks() {
-    let err = parse_puzzle3d(
+    let err = parse_puzzle_body3(
         r##"
-layers {
+slots {
 floor = Floor
 }
 
@@ -2270,7 +2309,7 @@ voxels {
 
     assert!(diagnostic_contains(
         &err,
-        "unknown 3D puzzle directive: sprites3"
+        "unknown model directive: sprites3"
     ));
 }
 
@@ -2324,9 +2363,9 @@ fn parser_rejects_removed_shape_rotation_derivation() {
 
 #[test]
 fn parser_rejects_unknown_level_legend_char() {
-    let err = parse_puzzle3d(
+    let err = parse_puzzle_body3(
         r#"
-layers {
+slots {
 actor = Player
 }
 
@@ -2352,7 +2391,8 @@ fn parser_lowers_model_wrapped_win_conditions_and_named_level_pack() {
     let parsed = parse_puzzle3d(
         r#"
 puzzle push3d {
-layers {
+dimension = 3
+slots {
 floor = Goal
 actor = Player Box
 }
@@ -2416,7 +2456,8 @@ fn parser_rejects_all_on_oriented_win_pattern() {
     let err = parse_puzzle3d(
         r#"
 puzzle push3d {
-layers {
+dimension = 3
+slots {
 floor = Goal
 actor = Box
 }
@@ -2438,7 +2479,8 @@ fn parser_preserves_all_on_as_covered_object_condition() {
     let parsed = parse_puzzle3d(
         r#"
 puzzle push3d {
-layers {
+dimension = 3
+slots {
 floor = Goal
 actor = Box
 }
@@ -2463,9 +2505,11 @@ all Goal on Box
     assert_eq!(*object, goal);
     assert_eq!(cover_pattern.cells().len(), 1);
     assert!(cover_pattern.cells()[0].require_objects.contains(&goal));
-    assert!(cover_pattern.cells()[0]
-        .require_objects
-        .contains(&box_object));
+    assert!(
+        cover_pattern.cells()[0]
+            .require_objects
+            .contains(&box_object)
+    );
 }
 
 #[test]
@@ -2473,7 +2517,8 @@ fn parser_accepts_function_style_3d_win_conditions() {
     let parsed = parse_puzzle3d(
         r#"
 puzzle push3d {
-layers {
+dimension = 3
+slots {
 floor = Goal
 actor = Box
 }
@@ -2513,27 +2558,12 @@ level "solved" {
 }
 
 #[test]
-fn parser_rejects_removed_puzzle3_keyword() {
-    let err = parse_puzzle3d(
-        r#"
-puzzle3 push3d {
-layers {
-actor = Player
-}
-}
-"#,
-    )
-    .unwrap_err();
-
-    assert!(diagnostic_contains(&err, "`puzzle3` was removed"));
-}
-
-#[test]
 fn parser_accepts_last_level_clear_lifecycle() {
     let parsed = parse_puzzle3d(
         r#"
 puzzle lifecycle {
-layers {
+dimension = 3
+slots {
 actor = Player
 }
 
@@ -2557,7 +2587,8 @@ fn parser_uses_shared_scene_effect_for_last_level_message() {
     let parsed = parse_puzzle3d(
         r#"
 puzzle lifecycle {
-layers {
+dimension = 3
+slots {
 actor = Player
 }
 
@@ -2620,7 +2651,7 @@ fn spec_3d_recreates_microban_level_1() {
     assert!(fixture_json.contains("\"shadow\": false"));
     let contract =
         puzzle3_runtime_model_from_fixture_json(&fixture_json).expect("runtime contract decodes");
-    assert!(!flattened_rules(&contract.rules).is_empty());
+    assert!(!flattened_rules(contract.game.program()).is_empty());
     assert_eq!(
         contract.lifecycle.on_level_clear,
         vec![conditional_win_next_level_effect3()]
@@ -2655,7 +2686,7 @@ fn spec_3d_recreates_microban_level_1() {
     assert!(second_initial.has_object(&bundle.game, Coord3::new(2, 2, 0), ObjectId(2)));
     assert!(second_initial.has_object(&bundle.game, Coord3::new(3, 2, 0), ObjectId(2)));
 
-    assert!(!flattened_rules(&parsed.rules).is_empty());
+    assert!(!flattened_rules(parsed.game.program()).is_empty());
 }
 
 #[test]
@@ -2692,7 +2723,7 @@ fn spec_3d_sokoban_can_be_authored_from_puzzle_file() {
 #[test]
 fn microban_basic_01_is_a_single_layer_3d_level() {
     let parsed = microban_basic_model();
-    let rules = microban_basic_rules_with_input_guards(&flattened_rules(&parsed.rules));
+    let rules = microban_basic_rules_with_input_guards(&flattened_rules(parsed.game.program()));
     let program = rules.into_iter().map(RuleStep3::Rule).collect::<Vec<_>>();
     let level = microban_basic_01_level();
 
@@ -2729,14 +2760,18 @@ fn microban_basic_sprites_are_flat_bottom_5x5x1_voxel_slices() {
         assert_eq!(sprite.size, Size3::new(5, 5, 5));
         assert_eq!(sprite.layers.len(), 5);
         assert!(sprite.layers.iter().all(|layer| layer.len() == 5));
-        assert!(sprite
-            .layers
-            .iter()
-            .all(|layer| layer.iter().all(|row| row.chars().count() == 5)));
-        assert!(sprite.layers[1..]
-            .iter()
-            .flatten()
-            .all(|row| *row == "....."));
+        assert!(
+            sprite
+                .layers
+                .iter()
+                .all(|layer| layer.iter().all(|row| row.chars().count() == 5))
+        );
+        assert!(
+            sprite.layers[1..]
+                .iter()
+                .flatten()
+                .all(|row| *row == ".....")
+        );
     }
 
     let player = sprites
@@ -2764,7 +2799,8 @@ fn parser_accepts_owner_scoped_keys_for_3d_models() {
     let parsed = parse_puzzle3d(
         r#"
 puzzle scoped_inputs {
-layers {
+dimension = 3
+slots {
 solid = Player
 }
 
@@ -2781,12 +2817,12 @@ input right [ Player | ] -> [ | Player ]
     )
     .unwrap();
 
-    assert_eq!(parsed.game.inputs.len(), 2);
-    let right = parsed.game.input_by_name("right").unwrap();
+    assert_eq!(parsed.inputs.len(), 2);
+    let right = parsed.input_by_name("right").unwrap();
     assert_eq!(right.id, INPUT_RIGHT);
     assert_eq!(right.direction, Some(Direction3::RIGHT));
     assert_eq!(right.keys, vec!["d", "ArrowRight"]);
-    let restart = parsed.game.input_by_name("restart").unwrap();
+    let restart = parsed.input_by_name("restart").unwrap();
     assert_eq!(restart.direction, None);
     assert_eq!(restart.keys, vec!["r"]);
 }
@@ -2796,7 +2832,8 @@ fn parser_rejects_non_arrow_3d_key_rows_through_shared_surface() {
     let err = parse_puzzle3d(
         r#"
 puzzle scoped_inputs {
-layers {
+dimension = 3
+slots {
 solid = Player
 }
 
@@ -2826,7 +2863,8 @@ fn parser_accepts_front_back_as_canonical_3d_directions() {
     let parsed = parse_puzzle3d(
         r#"
 puzzle front_back {
-layers {
+dimension = 3
+slots {
 solid = Player
 }
 
@@ -2847,26 +2885,32 @@ input back [ Player | ] -> [ | Player ]
     .unwrap();
 
     assert_eq!(
-        parsed.game.input_by_name("front").map(|input| input.id),
+        parsed.input_by_name("front").map(|input| input.id),
         Some(INPUT_FORWARD)
     );
     assert_eq!(
-        parsed.game.input_by_name("back").map(|input| input.id),
+        parsed.input_by_name("back").map(|input| input.id),
         Some(INPUT_BACKWARD)
     );
-    assert_eq!(flattened_rules(&parsed.rules).len(), 4);
-    assert_eq!(flattened_rules(&parsed.rules)[0].pattern.cells[0].offset, Offset3::ZERO);
+    assert_eq!(flattened_rules(parsed.game.program()).len(), 4);
     assert_eq!(
-        flattened_rules(&parsed.rules)[0].pattern.cells[1].offset,
-        Direction3::FORWARD.offset
+        flattened_rules(parsed.game.program())[0].pattern.cells()[0].offset,
+        Delta3::ZERO.into()
     );
     assert_eq!(
-        flattened_rules(&parsed.rules)[1].pattern.cells[1].offset,
-        Direction3::BACKWARD.offset
+        flattened_rules(parsed.game.program())[0].pattern.cells()[1].offset,
+        Direction3::FORWARD.offset.into()
     );
-    assert_eq!(flattened_rules(&parsed.rules)[2].guards, vec![Guard3::InputIs(INPUT_FORWARD)]);
     assert_eq!(
-        flattened_rules(&parsed.rules)[3].guards,
+        flattened_rules(parsed.game.program())[1].pattern.cells()[1].offset,
+        Direction3::BACKWARD.offset.into()
+    );
+    assert_eq!(
+        flattened_rules(parsed.game.program())[2].guards,
+        vec![Guard3::InputIs(INPUT_FORWARD)]
+    );
+    assert_eq!(
+        flattened_rules(parsed.game.program())[3].guards,
         vec![Guard3::InputIs(INPUT_BACKWARD)]
     );
 }
@@ -2876,7 +2920,8 @@ fn parser_keeps_forward_backward_as_3d_direction_aliases() {
     let parsed = parse_puzzle3d(
         r#"
 puzzle legacy_forward_backward {
-layers {
+dimension = 3
+slots {
 solid = Player
 }
 
@@ -2896,34 +2941,73 @@ input backward [ Player | ] -> [ | Player ]
     )
     .unwrap();
 
-    assert!(parsed.game.input_by_name("forward").is_none());
-    assert!(parsed.game.input_by_name("backward").is_none());
+    assert!(parsed.input_by_name("forward").is_none());
+    assert!(parsed.input_by_name("backward").is_none());
     assert_eq!(
         parsed
-            .game
             .input_by_name("front")
             .map(|input| input.keys.clone()),
         Some(vec!["w".to_string(), "ArrowUp".to_string()])
     );
     assert_eq!(
-        parsed
-            .game
-            .input_by_name("back")
-            .map(|input| input.keys.clone()),
+        parsed.input_by_name("back").map(|input| input.keys.clone()),
         Some(vec!["s".to_string(), "ArrowDown".to_string()])
     );
-    assert_eq!(flattened_rules(&parsed.rules).len(), 4);
+    assert_eq!(flattened_rules(parsed.game.program()).len(), 4);
     assert_eq!(
-        flattened_rules(&parsed.rules)[0].pattern.cells[1].offset,
-        Direction3::FORWARD.offset
+        flattened_rules(parsed.game.program())[0].pattern.cells()[1].offset,
+        Direction3::FORWARD.offset.into()
     );
     assert_eq!(
-        flattened_rules(&parsed.rules)[1].pattern.cells[1].offset,
-        Direction3::BACKWARD.offset
+        flattened_rules(parsed.game.program())[1].pattern.cells()[1].offset,
+        Direction3::BACKWARD.offset.into()
     );
-    assert_eq!(flattened_rules(&parsed.rules)[2].guards, vec![Guard3::InputIs(INPUT_FORWARD)]);
     assert_eq!(
-        flattened_rules(&parsed.rules)[3].guards,
+        flattened_rules(parsed.game.program())[2].guards,
+        vec![Guard3::InputIs(INPUT_FORWARD)]
+    );
+    assert_eq!(
+        flattened_rules(parsed.game.program())[3].guards,
         vec![Guard3::InputIs(INPUT_BACKWARD)]
     );
+}
+
+#[test]
+fn teneten3d_direction_input_changes_the_level_state() {
+    let source = include_str!("fixtures/ten_horizontal_3d.puzzle3");
+    let document = parse_game_for_path(source, "ten_horizontal_3d.puzzle3").unwrap();
+    let Some(LoadedDocumentModel::Puzzle3d { puzzle, .. }) = document.single_model() else {
+        panic!("TENETEN3D must compile as a 3D puzzle");
+    };
+    let bundle = puzzle.level_bundle.as_ref().unwrap();
+    let initial = bundle.build_level_state(0).unwrap();
+    let ten_objects = puzzle
+        .object_labels
+        .iter()
+        .filter_map(|(object, label)| label.starts_with("TEN:").then_some(*object))
+        .collect::<Vec<_>>();
+    let ten_positions = |state: &State3| {
+        occupied_cells(state)
+            .into_iter()
+            .filter_map(|(position, objects)| {
+                objects
+                    .iter()
+                    .any(|object| ten_objects.contains(object))
+                    .then_some(position)
+            })
+            .collect::<Vec<_>>()
+    };
+
+    // The 3D host maps screen ArrowUp/ArrowDown to front/back. The up/down
+    // input names are the physical Z axis, not screen-relative controls.
+    for input_name in ["left", "right", "front", "back"] {
+        let input = puzzle.input_by_name(input_name).unwrap().id;
+        let next =
+            transition_program(&puzzle.game, &initial, puzzle.game.program(), input).unwrap();
+        assert_ne!(
+            ten_positions(&next),
+            ten_positions(&initial),
+            "{input_name} input must change TEN's position"
+        );
+    }
 }

@@ -72,15 +72,8 @@ pub struct LoadedGame {
     #[serde(default)]
     pub rule_debug_info: HashMap<RuleId, RuleDebugInfo>,
     pub level_start_program: Option<Vec<RuleStep>>,
-    pub display_level_start_program: Option<Vec<RuleStep>>,
     pub level_clear_program: Option<Vec<RuleStep>>,
     pub last_level_clear_program: Option<Vec<RuleStep>>,
-    pub display_level_clear_program: Option<Vec<RuleStep>>,
-    pub display_program: Option<Vec<RuleStep>>,
-    #[serde(default)]
-    pub display_objects: Vec<ObjectId>,
-    #[serde(default)]
-    pub display_rules: Vec<RuleId>,
     pub levels: Vec<Level>,
     pub run_rules_on_level_start: bool,
     pub legend: AsciiLegend,
@@ -136,13 +129,8 @@ impl LoadedGame {
             rule_effects: HashMap::new(),
             rule_debug_info: HashMap::new(),
             level_start_program: None,
-            display_level_start_program: None,
             level_clear_program: None,
             last_level_clear_program: None,
-            display_level_clear_program: None,
-            display_program: None,
-            display_objects: Vec::new(),
-            display_rules: Vec::new(),
             levels: vec![Level {
                 name: level_name.into(),
                 pack: None,
@@ -178,10 +166,6 @@ impl LoadedGame {
             render: PuzzleRenderDef::default(),
             screen: PuzzleScreenDef::default(),
         }
-    }
-
-    pub fn is_display_object(&self, object: ObjectId) -> bool {
-        self.display_objects.contains(&object)
     }
 
     pub fn program_for_level(&self, level_index: usize) -> Option<&[RuleStep]> {
@@ -407,6 +391,26 @@ pub struct ThemeVariableDef {
 pub struct VisualsDef {
     pub aliases: Vec<VisualAliasDef>,
     pub sprites: Vec<VisualSpriteDef>,
+    /// Presentation ordering is compiled independently from state slots.
+    #[serde(default)]
+    pub order: VisualOrderDef,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VisualOrderDef {
+    /// Cell-coordinate comparison directions, most significant first. The
+    /// cell on the named direction side is rendered in front.
+    pub direction_priority: Vec<String>,
+    /// Back-to-front priorities for objects occupying the same cell.
+    pub priorities: Vec<VisualOrderPriorityDef>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VisualOrderPriorityDef {
+    /// Canonically sorted for merge nodes; authored order for non-merge nodes.
+    pub objects: Vec<String>,
+    /// Merge is unordered same-priority composition, never ordered alpha-over.
+    pub merge: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -982,7 +986,6 @@ fn compare_i64(left: i64, op: ComparisonOp, right: i64) -> bool {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AsciiLegend {
     chars: Vec<char>,
-    ignored: Vec<ObjectId>,
     empty: char,
     unknown: char,
 }
@@ -991,7 +994,6 @@ impl AsciiLegend {
     pub(crate) fn new(object_count: usize, empty: Option<char>) -> Self {
         Self {
             chars: vec!['?'; object_count + 1],
-            ignored: Vec::new(),
             empty: empty.unwrap_or('?'),
             unknown: '?',
         }
@@ -1010,19 +1012,8 @@ impl AsciiLegend {
         // runtime ASCII display uses the top layer object's own legend char.
     }
 
-    pub(crate) fn ignore(&mut self, object: ObjectId) {
-        if !self.ignored.contains(&object) {
-            self.ignored.push(object);
-        }
-    }
-
     pub fn char_for_cell(&self, objects: &[ObjectId]) -> char {
-        let visible_objects = objects
-            .iter()
-            .copied()
-            .filter(|object| !self.ignored.contains(object))
-            .collect::<Vec<_>>();
-        self.char_for_cell_with_visible_objects(&visible_objects)
+        self.char_for_cell_with_visible_objects(objects)
     }
 
     pub fn legended_objects_for_cell(&self, objects: &[ObjectId]) -> Vec<ObjectId> {
@@ -1030,7 +1021,6 @@ impl AsciiLegend {
             .iter()
             .copied()
             .filter(|object| !object.is_empty())
-            .filter(|object| !self.ignored.contains(object))
             .filter(|object| self.char_for_object(*object) != self.unknown)
             .collect()
     }

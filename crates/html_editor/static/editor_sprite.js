@@ -43,16 +43,57 @@ function clampSpriteSize(value) {
   return Math.max(1, Math.min(SPRITE_EDITOR_MAX_SIZE, size));
 }
 
+function spritePaneScrollElement(builder) {
+  return builder?.querySelector(":scope > .tool-pane-scroll") || null;
+}
+
+function captureSpritePaneScroll(builder) {
+  if (!builder || builder.hidden) {
+    return null;
+  }
+  const scroll = spritePaneScrollElement(builder);
+  return scroll ? { top: scroll.scrollTop, left: scroll.scrollLeft } : null;
+}
+
+function restoreSpritePaneScroll(builder, state) {
+  if (!state) {
+    return;
+  }
+  const apply = () => {
+    const scroll = spritePaneScrollElement(builder);
+    if (!scroll) {
+      return;
+    }
+    scroll.scrollTop = Math.max(0, Math.min(state.top, scroll.scrollHeight - scroll.clientHeight));
+    scroll.scrollLeft = Math.max(0, Math.min(state.left, scroll.scrollWidth - scroll.clientWidth));
+  };
+  apply();
+  window.requestAnimationFrame?.(apply);
+}
+
+function withSpritePaneScrollPreserved(builder, render) {
+  const scroll = captureSpritePaneScroll(builder);
+  const result = render();
+  restoreSpritePaneScroll(builder, scroll);
+  return result;
+}
+
+function withSprite2dPaneScrollPreserved(render) {
+  return withSpritePaneScrollPreserved(spriteBuilder, render);
+}
+
 function renderSpriteBuilder() {
   if (!spriteBoard || !spritePalette) {
     return;
   }
-  ensureSpriteAnimationFrames();
-  renderSpriteControls();
-  renderSpritePalette();
-  renderSpriteBoard();
-  renderSpriteAnimationControls();
-  syncSpriteSourceActionButtons();
+  withSprite2dPaneScrollPreserved(() => {
+    ensureSpriteAnimationFrames();
+    renderSpriteControls();
+    renderSpritePalette();
+    renderSpriteBoard();
+    renderSpriteAnimationControls();
+    syncSpriteSourceActionButtons();
+  });
 }
 
 function setSpriteAnimationMode(enabled, options = {}) {
@@ -158,6 +199,10 @@ function renderSpriteAnimationControls() {
   if (!spriteBuilder) {
     return;
   }
+  withSprite2dPaneScrollPreserved(() => renderSpriteAnimationControlsContent());
+}
+
+function renderSpriteAnimationControlsContent() {
   mountSharedSpriteAnimationUi("2d");
   ensureSpriteAnimationFrames();
   spriteBuilder.classList.toggle("is-animation-mode", sprite.animationMode);
@@ -689,6 +734,10 @@ function spriteEditorUpperControls3d() {
 }
 
 function renderSpriteControls() {
+  withSprite2dPaneScrollPreserved(() => renderSpriteControlsContent());
+}
+
+function renderSpriteControlsContent() {
   renderSpriteEditorUpperControls(
     spriteBuilder.querySelector(".sprite-controls"),
     spriteEditorUpperControls2d(),
@@ -734,7 +783,7 @@ function syncSpriteBucketButton() {
   spriteFillButton.setAttribute("aria-label", "Fill");
   spriteFillButton.title = "Fill";
   spriteFillButton.dataset.tooltip = "Fill";
-  spriteFillButton.dataset.shortcut = "F";
+  setEditorShortcutHint(spriteFillButton, { key: "f" });
 }
 
 function toggleSpriteBucketMode() {
@@ -856,7 +905,7 @@ function renderSpritePaletteGrid({
   paletteGrid.className = "sprite-palette-grid";
   if (leadingControl) {
     leadingControl.dataset.tooltip = "Brush";
-    leadingControl.dataset.shortcut = "B";
+    setEditorShortcutHint(leadingControl, { key: "b" });
     paletteGrid.append(leadingControl);
   }
   const eraseButton = document.createElement("button");
@@ -894,7 +943,7 @@ function renderSpritePaletteGrid({
     const displayName = bind.linked && bind.name ? bind.name : "";
     button.title = displayName ? `Paint ${displayName} (${entry.color})` : `Paint ${entry.color}`;
     if (index < 9) {
-      button.dataset.shortcut = String(index + 1);
+      setEditorShortcutHint(button, { key: String(index + 1) });
     }
     button.setAttribute("aria-label", colorAriaLabel(index, displayName));
     button.addEventListener("click", () => onSelect(index));
@@ -940,6 +989,10 @@ function renderSpritePaletteGrid({
 }
 
 function renderSpritePalette() {
+  withSprite2dPaneScrollPreserved(() => renderSpritePaletteContent());
+}
+
+function renderSpritePaletteContent() {
   spritePalette.replaceChildren();
   const selectedIsTransparent = sprite.selectedColorIndex === null;
   if (selectedIsTransparent || validSpriteColorIndex(sprite.selectedColorIndex)) {
@@ -1171,6 +1224,53 @@ function renderSpritePalette() {
   renderSpriteEditorToolbar({ dimension: "2d", target: spriteToolbarHost });
 }
 
+const SPRITE_EDIT_COMMANDS = Object.freeze([
+  Object.freeze({
+    id: "copy",
+    group: "clipboard",
+    icon: "copy",
+    label: "Copy",
+    shortcut: Object.freeze({ key: "c", modifiers: Object.freeze(["primary"]) }),
+    execute2d: () => copySpriteEditRegion(),
+  }),
+  Object.freeze({
+    id: "cut",
+    group: "clipboard",
+    icon: "scissors",
+    label: "Cut",
+    shortcut: Object.freeze({ key: "x", modifiers: Object.freeze(["primary"]) }),
+    execute2d: () => cutSpriteEditRegion(),
+  }),
+  Object.freeze({
+    id: "paste",
+    group: "clipboard",
+    icon: "clipboard-paste",
+    label: "Paste into",
+    shortcut: Object.freeze({ key: "v", modifiers: Object.freeze(["primary"]) }),
+    execute2d: () => pasteSpriteEditRegion(),
+  }),
+  Object.freeze({
+    id: "delete",
+    group: "clipboard",
+    icon: "trash-2",
+    label: "Delete",
+    shortcut: Object.freeze({ keys: Object.freeze(["Delete", "Backspace"]) }),
+    execute2d: () => deleteSpriteEditRegion(),
+  }),
+]);
+
+function spriteEditCommandDefinition(command) {
+  const definition = SPRITE_EDIT_COMMANDS.find((candidate) => candidate.id === command);
+  if (!definition) {
+    throw new Error(`Unknown sprite edit command ${command}`);
+  }
+  return definition;
+}
+
+function spriteEditCommandForShortcut(event) {
+  return SPRITE_EDIT_COMMANDS.find((command) => editorShortcutMatches(event, command.shortcut)) || null;
+}
+
 const SPRITE_EDITOR_TOOL_SCHEMA = Object.freeze([
   { key: "scope", group: "context" },
   { key: "grid", group: "context" },
@@ -1181,10 +1281,7 @@ const SPRITE_EDITOR_TOOL_SCHEMA = Object.freeze([
   { key: "rotate-right", group: "transform" },
   { key: "flip-horizontal", group: "transform" },
   { key: "flip-vertical", group: "transform" },
-  { key: "copy", group: "clipboard" },
-  { key: "cut", group: "clipboard" },
-  { key: "paste", group: "clipboard" },
-  { key: "delete", group: "clipboard" },
+  ...SPRITE_EDIT_COMMANDS.map(({ id, group }) => Object.freeze({ key: id, group })),
 ]);
 
 function spriteEditorToolbarParts(dimension) {
@@ -1208,28 +1305,18 @@ function spriteEditorToolbarParts(dimension) {
 }
 
 function renderSpriteEditCommandButton(dimension, command) {
-  const icons = {
-    copy: "copy",
-    cut: "scissors",
-    paste: "clipboard-paste",
-    delete: "trash-2",
-  };
+  const definition = spriteEditCommandDefinition(command);
   const label = spriteEditCommandLabel(dimension, command);
   const button = renderSpriteClipButton({
     title: label,
     ariaLabel: label,
     danger: command === "delete",
     onClick: () => runSpriteEditCommand(dimension, command),
-    icon: spriteLucideIconSvg(icons[command]),
+    icon: spriteLucideIconSvg(definition.icon),
   });
   button.classList.add("sprite-edit-command-button", `is-${command}`);
   button.dataset.spriteEditCommand = command;
-  button.dataset.shortcut = {
-    copy: "⌘/Ctrl C",
-    cut: "⌘/Ctrl X",
-    paste: "⌘/Ctrl V",
-    delete: "Delete",
-  }[command];
+  setEditorShortcutHint(button, definition.shortcut);
   return button;
 }
 
@@ -1243,8 +1330,7 @@ function spriteEditTargetLabel(dimension) {
 
 function spriteEditCommandLabel(dimension, command) {
   const target = spriteEditTargetLabel(dimension);
-  const verb = command === "paste" ? "Paste into" : `${command[0].toUpperCase()}${command.slice(1)}`;
-  return `${verb} ${target}`;
+  return `${spriteEditCommandDefinition(command).label} ${target}`;
 }
 
 function syncSpriteEditCommandLabels(dimension) {
@@ -1257,18 +1343,15 @@ function syncSpriteEditCommandLabels(dimension) {
 }
 
 function runSpriteEditCommand(dimension, command) {
+  const definition = spriteEditCommandDefinition(command);
   if (dimension === "3d") {
-    return runSprite3dEditCommand(command);
+    return runSprite3dEditCommand(definition.id);
   }
   if (spriteClipActive && !normalizeSpriteClipRect(spriteClipSelection)) {
     setSpriteActionStatus("Select a clip region first", "is-error");
     return false;
   }
-  if (command === "copy") return copySpriteEditRegion();
-  if (command === "cut") return cutSpriteEditRegion();
-  if (command === "paste") return pasteSpriteEditRegion();
-  if (command === "delete") return deleteSpriteEditRegion();
-  throw new Error(`Unknown sprite edit command ${command}`);
+  return definition.execute2d();
 }
 
 function renderSpriteEditorToolbar({ dimension, target }) {
@@ -1316,7 +1399,7 @@ function renderSpriteTranslateButton() {
   });
   button.classList.add("sprite-translate-button");
   button.dataset.tooltip = "Move";
-  button.dataset.shortcut = "M";
+  setEditorShortcutHint(button, { key: "m" });
   return button;
 }
 
@@ -1331,7 +1414,7 @@ function renderSpriteClipActions() {
     icon: spriteLucideIconSvg("mouse-pointer-2"),
   });
   button.dataset.tooltip = "Clip";
-  button.dataset.shortcut = "C";
+  setEditorShortcutHint(button, { key: "c" });
   clipActions.append(button);
   return clipActions;
 }
@@ -2578,6 +2661,10 @@ function spriteClipFloatingCellsForSelection(rect) {
 }
 
 function renderSpriteBoard() {
+  withSprite2dPaneScrollPreserved(() => renderSpriteBoardContent());
+}
+
+function renderSpriteBoardContent() {
   spriteBoard.style.setProperty("--sprite-size", sprite.size);
   spriteBoard.classList.toggle("is-translate-active", spriteTranslateActive);
   syncSpriteGridVisibility();

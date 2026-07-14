@@ -618,15 +618,15 @@ fn parse_condition_pattern_surface_arg(
     };
     Ok(ConditionPatternAst {
         orientation,
-        pattern: parse_pattern_side(
+        pattern: lower_pattern_source(
             &pattern_source,
+            &pattern.source,
             object_names,
             object_schemas,
             value_sets,
             maps,
             object_groups,
             &HashMap::new(),
-            false,
         )?,
     })
 }
@@ -730,15 +730,15 @@ fn parse_condition_pattern_arg(
     };
     Ok(Some(ConditionPatternAst {
         orientation,
-        pattern: parse_pattern_side(
+        pattern: lower_pattern_source(
             &pattern,
+            line,
             object_names,
             object_schemas,
             value_sets,
             maps,
             object_groups,
             &HashMap::new(),
-            false,
         )?,
     }))
 }
@@ -856,7 +856,6 @@ fn parse_rule_definition(
 ) -> Result<(RuleDefinitionAst, usize), DiagnosticReport> {
     let header = split_header_tokens(&lines[start]);
     let declaration = header.first().copied().unwrap_or("routine");
-    let role = RuleRole::Main;
     let name_index = 1;
     let name_spec = expect(
         header.get(name_index),
@@ -864,7 +863,7 @@ fn parse_rule_definition(
         "missing routine name",
     )?;
     let (name, params) = parse_rule_name_and_params(name_spec, &lines[start])?;
-    let application = parse_rule_application(&header, declaration, role, &lines[start])?;
+    let application = parse_rule_application(&header, declaration, &lines[start])?;
 
     let (statements, next_i) = parse_statement_block(
         lines,
@@ -887,7 +886,6 @@ fn parse_rule_definition(
     Ok((
         RuleDefinitionAst {
             name,
-            role,
             application,
             statements,
         },

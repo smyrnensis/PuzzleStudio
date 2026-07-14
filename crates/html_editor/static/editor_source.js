@@ -1416,6 +1416,7 @@ async function refreshSourceHighlight() {
     const text = await window.PuzzleStudioHost.highlight(
       {
         source,
+        sourceProfile: puzzleSourceProfile(document),
         rangeStart: range.from,
         rangeEnd: range.to,
         includeOutline,
@@ -1494,7 +1495,10 @@ async function refreshSourceOutline() {
     return;
   }
   try {
-    const text = await window.PuzzleStudioHost.sourceOutline({ source });
+    const text = await window.PuzzleStudioHost.sourceOutline({
+      source,
+      sourceProfile: puzzleSourceProfile(document),
+    });
     if (requestId !== sourceOutlineRequestId || source !== sourceEditorDocumentValue()) {
       return;
     }
@@ -1718,6 +1722,10 @@ const SOURCE_OUTLINE_KIND_ICON_NAMES = Object.freeze({
   "marks": "bookmark",
   "render": "scan-eye",
   "camera": "camera",
+  "grid": "grid-2x2",
+  "viewport": "view",
+  "state": "database",
+  "pixelate": "file-code-2",
   "animation": "circle-play",
   "tween": "chart-spline",
   "row": "rows-3",
@@ -1940,6 +1948,22 @@ function sourceOutlineKindIconSvg(kind) {
     "arrow-right": `
       <path d="M5 12h14"></path>
       <path d="m12 5 7 7-7 7"></path>
+    `,
+    "grid-2x2": `
+      <path d="M12 3v18"></path>
+      <path d="M3 12h18"></path>
+      <rect x="3" y="3" width="18" height="18" rx="2"></rect>
+    `,
+    view: `
+      <path d="M21 17v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-2"></path>
+      <path d="M21 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v2"></path>
+      <circle cx="12" cy="12" r="1"></circle>
+      <path d="M18.944 12.33a1 1 0 0 0 0-.66 7.5 7.5 0 0 0-13.888 0 1 1 0 0 0 0 .66 7.5 7.5 0 0 0 13.888 0"></path>
+    `,
+    database: `
+      <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
+      <path d="M3 5V19A9 3 0 0 0 21 19V5"></path>
+      <path d="M3 12A9 3 0 0 0 21 12"></path>
     `,
     "volume-2": `
       <path d="M11 4.702a1 1 0 0 0-1.664-.747L5.23 7.5H3a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h2.23l4.106 3.545A1 1 0 0 0 11 19.298z"></path>
@@ -2579,7 +2603,7 @@ function syncSourceFindPanelLayout() {
   }
   sourceEditorWrap.style.setProperty(
     "--source-find-panel-space",
-    `${Math.ceil(sourceFindPanel.getBoundingClientRect().height) + 16}px`,
+    `${Math.ceil(sourceFindPanel.getBoundingClientRect().height)}px`,
   );
 }
 
@@ -3422,7 +3446,10 @@ function bindSourceEditorEvents() {
 sourceEditor.addEventListener("beforeinput", handleSourceBeforeInputTextInsert);
 sourceEditor.addEventListener("sourceanalysisreset", () => {
   const source = sourceEditorDocumentValue();
-  window.PuzzleStudioRuntime.resetSourceAnalysis(source).catch((error) => {
+  window.PuzzleStudioRuntime.resetSourceAnalysis(
+    source,
+    puzzleSourceProfile(activeDocument()),
+  ).catch((error) => {
     console.error("Source analysis reset failed", error);
   });
 });

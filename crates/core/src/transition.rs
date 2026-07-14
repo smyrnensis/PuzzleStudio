@@ -2743,15 +2743,14 @@ fn match_cell(
     let Some((dx, dy)) = resolve_offset(&cell.offset, gaps) else {
         return false;
     };
-    let Some((x, y)) = offset_pos(origin_x, origin_y, dx, dy) else {
-        return cell.require_null;
-    };
-    if x >= state.width || y >= state.height {
-        return cell.require_null;
+    let position = offset_pos(origin_x, origin_y, dx, dy)
+        .filter(|(x, y)| *x < state.width && *y < state.height);
+    match puzzle_kernel::match_cell_bounds(cell.require_null, position.is_some()) {
+        puzzle_kernel::CellBoundsMatch::MatchedNull => return true,
+        puzzle_kernel::CellBoundsMatch::Rejected => return false,
+        puzzle_kernel::CellBoundsMatch::Continue => {}
     }
-    if cell.require_null {
-        return false;
-    }
+    let (x, y) = position.expect("in-bounds cell decision preserves its position");
     if !scope.contains_cell(x, y) {
         return false;
     }

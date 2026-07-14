@@ -15,6 +15,8 @@ export class WasmCompiledCoreRuntime {
 
 export function activate_source_analysis(source: string): number;
 
+export function activate_source_analysis_with_profile(source: string, source_profile: string): number;
+
 export function active_source_analysis_entries_json(revision: number): string;
 
 export function active_source_analysis_highlight_range_json(revision: number, range_start_utf16: number, range_end_utf16: number, include_outline: boolean): string;
@@ -85,6 +87,7 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly activate_source_analysis: (a: number, b: number) => number;
+    readonly activate_source_analysis_with_profile: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly active_source_analysis_entries_json: (a: number) => [number, number, number, number];
     readonly active_source_analysis_highlight_range_json: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly active_source_analysis_import_at_json: (a: number, b: number, c: number, d: number) => [number, number, number, number];

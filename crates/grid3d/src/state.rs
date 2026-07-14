@@ -1,4 +1,4 @@
-use crate::{Coord3, Game3, LayerId, MarkId3, ObjectId, RuleId3, Size3, VariableId};
+use crate::{CompiledGame3, Coord3, LayerId, MarkId3, ObjectId, RuleId3, Size3, VariableId};
 use puzzle_kernel::{
     FnvBuilder, GridShape, MarkSpace, MarkValue, ObjectCellMask, VariableUpdateOp,
     VariableValueError, VisibleVariables, fnv_mix,
@@ -188,7 +188,7 @@ impl State3 {
         Ok(self.slots[index])
     }
 
-    pub fn has_object(&self, game: &Game3, position: Coord3, object: ObjectId) -> bool {
+    pub fn has_object(&self, game: &CompiledGame3, position: Coord3, object: ObjectId) -> bool {
         let Some(layer) = game.object_layer(object) else {
             return false;
         };
@@ -221,7 +221,7 @@ impl State3 {
 
     pub fn has_mark(
         &self,
-        game: &Game3,
+        game: &CompiledGame3,
         position: Coord3,
         object: ObjectId,
         mark: MarkId3,
@@ -241,7 +241,7 @@ impl State3 {
 
     pub fn has_mark_key(
         &self,
-        game: &Game3,
+        game: &CompiledGame3,
         position: Coord3,
         object: ObjectId,
         mark: MarkId3,
@@ -276,7 +276,7 @@ impl State3 {
 
     pub fn place_object(
         &mut self,
-        game: &Game3,
+        game: &CompiledGame3,
         position: Coord3,
         object: ObjectId,
     ) -> Result<(), StateError3> {
@@ -299,7 +299,7 @@ impl State3 {
 
     pub fn remove_object(
         &mut self,
-        game: &Game3,
+        game: &CompiledGame3,
         position: Coord3,
         object: ObjectId,
     ) -> Result<(), StateError3> {
@@ -470,7 +470,7 @@ fn grid_shape(size: Size3, layer_count: u16) -> Option<GridShape<3>> {
     GridShape::new([size.width, size.depth, size.height], layer_count)
 }
 
-fn checked_object_layer(game: &Game3, object: ObjectId) -> Result<LayerId, StateError3> {
+fn checked_object_layer(game: &CompiledGame3, object: ObjectId) -> Result<LayerId, StateError3> {
     game.object_layer(object)
         .ok_or(StateError3::UnknownObject { object })
 }

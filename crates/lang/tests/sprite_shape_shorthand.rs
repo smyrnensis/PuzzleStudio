@@ -20,7 +20,7 @@ fn source_with_sprite_body(sprite_body: &str, shapes: &str) -> String {
 title = sprite shape resolution
 
 puzzle default {{
-layers {{
+slots {{
 actors = You
 }}
 sprites {{

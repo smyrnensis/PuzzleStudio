@@ -7,12 +7,15 @@ mod frame3_literal;
 mod highlight;
 mod level;
 mod level_editor_source;
+mod lib_authoring_parse_order;
 mod loaded;
+mod model_syntax;
 mod puzzle3_model;
 mod puzzle3_parse;
 mod puzzle3_sprite;
 mod puzzle3_visual_fixture;
 mod puzzlescript;
+mod rule_syntax;
 mod semantic;
 mod solver_surface;
 mod source;
@@ -28,10 +31,7 @@ mod surface;
 mod surface_completion;
 mod syntax;
 
-use solver_surface::{
-    OrientedPatternArgOrientationSurface, SolverSurfacePatternArg, SolverSurfaceQueryArg,
-    oriented_pattern_arg_surface,
-};
+use solver_surface::{SolverSurfacePatternArg, SolverSurfaceQueryArg};
 use std::collections::{BTreeSet, HashMap, HashSet};
 #[cfg(not(target_arch = "wasm32"))]
 use std::fs;
@@ -40,7 +40,7 @@ use std::path::{Component, Path, PathBuf};
 use ast::{
     ConditionAst, ConditionDefinitionAst, ConditionPatternAst, ConditionValueAst, Direction,
     DirectionName, EffectAst, FixDefaults, OrientationExpr, OrientedRewriteAst,
-    PatternConditionAst, PatternPredicateAst, QueryDefinitionAst, RuleDefinitionAst, RuleRole,
+    PatternConditionAst, PatternPredicateAst, QueryDefinitionAst, RuleDefinitionAst,
     SolverStrategyAst, StatementAst, VariableValueAst,
 };
 use catalog::{Catalog, ObjectSchema, ObjectVariant, Rational, ValueMap, ValueType};
@@ -71,10 +71,11 @@ pub use loaded::{
     SolverStrategyDirection, SolverStrategyOf, SolverStrategyTerm, SolverStrategyTerm3,
     SolverStrategyTermOf, SoundsDef, ThemeDef, ThemeVariableDef, TriggerAnimationDef,
     TriggerAnimationKind, TweenAnimationDef, ViewportModeDef, ViewportSizeDef, VisualAliasDef,
-    VisualColorDef, VisualSpriteDef, VisualSpriteFit, VisualSpriteFitMode, VisualSpriteKind,
-    VisualSpriteLoopDef, VisualSpritePixelsPerCell, VisualSpriteSampling, VisualSpriteSpace,
-    VisualSpriteTransform, VisualsDef,
+    VisualColorDef, VisualOrderDef, VisualOrderPriorityDef, VisualSpriteDef, VisualSpriteFit,
+    VisualSpriteFitMode, VisualSpriteKind, VisualSpriteLoopDef, VisualSpritePixelsPerCell,
+    VisualSpriteSampling, VisualSpriteSpace, VisualSpriteTransform, VisualsDef,
 };
+pub use model_syntax::ModelDimension;
 
 const BLOCK_CLOSE: &str = "}";
 
@@ -133,7 +134,7 @@ pub fn parse_level_ascii_state(
 }
 pub use source_analysis::{
     SourceAnalysis, SourceAnalysisEdit, SourceAnalysisEditResult, analyze_source,
-    analyze_source_json,
+    analyze_source_for_profile, analyze_source_json,
 };
 pub use source_import::{SourceImportRange, SourceImportReference};
 pub use source_outline::{SourceOutlineItem, source_outline, source_outline_json};
@@ -145,10 +146,10 @@ pub use source_target::{
     resolve_source_target_for_profile, source_entries_json, source_target_json,
 };
 use surface::{
-    SourceSpan, SurfaceAsciiRange, SurfaceDocument, SurfaceHighlightRanges, SurfaceNodeKind,
-    SurfaceOptionBlock, SurfaceRewriteEffect, SurfaceSceneEffect, SurfaceSemanticKind,
-    SurfaceSemanticToken, SurfaceSink, SurfaceStructuralBlock, SurfaceStructuralBlockRole,
-    SurfaceVisualAsciiColorRange, SurfaceVisualNamedColorRange, SurfaceVisualSpriteRefs,
+    SourceSpan, SurfaceDisplayFact, SurfaceDocument, SurfaceHighlightRanges, SurfaceNodeKind,
+    SurfaceOptionBlock, SurfaceOutlineBlock, SurfaceRewriteEffect, SurfaceSceneEffect,
+    SurfaceSemanticKind, SurfaceSemanticToken, SurfaceSink, SurfaceStructuralBlock,
+    SurfaceStructuralBlockRole, SurfaceVisualSpriteRefs,
 };
 use syntax::puzzle_lifecycle_event;
 

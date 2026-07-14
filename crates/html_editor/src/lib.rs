@@ -26,7 +26,7 @@ const EDITOR_DOCS_METADATA_MARKDOWN: &str = include_str!("../docs/metadata.md");
 #[cfg(feature = "editor-docs")]
 const EDITOR_DOCS_PUZZLE_BLOCK_MARKDOWN: &str = include_str!("../docs/puzzle-block.md");
 #[cfg(feature = "editor-docs")]
-const EDITOR_DOCS_LAYERS_MARKDOWN: &str = include_str!("../docs/layers.md");
+const EDITOR_DOCS_SLOTS_MARKDOWN: &str = include_str!("../docs/slots.md");
 #[cfg(feature = "editor-docs")]
 const EDITOR_DOCS_GROUPS_MARKDOWN: &str = include_str!("../docs/groups.md");
 #[cfg(feature = "editor-docs")]
@@ -138,6 +138,8 @@ const EDITOR_STATIC_PUZZLE3_VISUAL_CORE_JS: &str = include_str!("../static/puzzl
 const EDITOR_SPRITE3D_JS: &str = include_str!("../static/editor_sprite3d.js");
 #[cfg(feature = "embedded-assets")]
 const EDITOR_SOUNDS_JS: &str = include_str!("../static/editor_sounds.js");
+#[cfg(feature = "embedded-assets")]
+const EDITOR_COMMANDS_JS: &str = include_str!("../static/editor_commands.js");
 #[cfg(feature = "embedded-assets")]
 const FAVICON_SVG: &str = include_str!("../static/favicon.svg");
 #[cfg(feature = "embedded-assets")]
@@ -521,12 +523,22 @@ impl EditorService {
         .map_err(AppError::Diagnostics)
     }
 
-    pub fn highlight_json(&self, source: &str) -> String {
-        Self::highlight_source_json(source)
+    pub fn highlight_json(&self, source: &str) -> Result<String, AppError> {
+        let profile = puzzle_lang::puzzle_source_profile_for_path(&self.state.puzzle_path)
+            .ok_or_else(|| {
+                AppError::Config(
+                    "source highlighting requires an active .puzzle or .puzzle3 document profile"
+                        .to_string(),
+                )
+            })?;
+        Ok(Self::highlight_source_json(source, profile))
     }
 
-    pub fn highlight_source_json(source: &str) -> String {
-        puzzle_lang::analyze_source(source).highlight_json(false)
+    pub fn highlight_source_json(
+        source: &str,
+        profile: puzzle_lang::PuzzleSourceProfile,
+    ) -> String {
+        puzzle_lang::analyze_source_for_profile(source, profile).highlight_json(false)
     }
 
     pub fn save_source_file(&self, request: &SaveRequest) -> Result<(), AppError> {
@@ -1451,6 +1463,9 @@ fn route(request: &HttpRequest, service: &EditorService) -> Vec<u8> {
             http_ok("text/javascript; charset=utf-8", EDITOR_SPRITE3D_JS)
         }
         ("GET", "/editor_sounds.js") => http_ok("text/javascript; charset=utf-8", EDITOR_SOUNDS_JS),
+        ("GET", "/editor_commands.js") => {
+            http_ok("text/javascript; charset=utf-8", EDITOR_COMMANDS_JS)
+        }
         ("GET", "/wasm/puzzle_wasm.js") => {
             http_ok("text/javascript; charset=utf-8", PUZZLE_WASM_JS)
         }
@@ -1497,10 +1512,10 @@ fn route(request: &HttpRequest, service: &EditorService) -> Vec<u8> {
             } else {
                 request.body.clone()
             };
-            http_ok(
-                "application/json; charset=utf-8",
-                &service.highlight_json(&source),
-            )
+            match service.highlight_json(&source) {
+                Ok(body) => http_ok("application/json; charset=utf-8", &body),
+                Err(error) => http_error(400, &error.to_string()),
+            }
         }
         ("POST", "/api/save") => {
             let save = SaveRequest::from_body(&request.body, service.state());
@@ -2142,6 +2157,7 @@ fn write_pages_editor_site(output_path: &Path, html: String) -> Result<(), AppEr
     write_text_asset(output_dir, "editor_sprite.js", EDITOR_SPRITE_JS)?;
     write_text_asset(output_dir, "editor_sprite3d.js", EDITOR_SPRITE3D_JS)?;
     write_text_asset(output_dir, "editor_sounds.js", EDITOR_SOUNDS_JS)?;
+    write_text_asset(output_dir, "editor_commands.js", EDITOR_COMMANDS_JS)?;
     write_text_asset(output_dir, "renderer.css", RENDERER_CSS)?;
     write_text_asset(output_dir, "renderer.js", RENDERER_JS)?;
     write_text_asset(output_dir, "puzzle3_visual_core.js", PUZZLE3_VISUAL_CORE_JS)?;
@@ -2223,9 +2239,9 @@ const EDITOR_DOCS_PAGES: &[EditorDocsPage] = &[
         markdown: EDITOR_DOCS_PUZZLE_BLOCK_MARKDOWN,
     },
     EditorDocsPage {
-        id: "layers",
-        title: "Layers",
-        markdown: EDITOR_DOCS_LAYERS_MARKDOWN,
+        id: "slots",
+        title: "Slots",
+        markdown: EDITOR_DOCS_SLOTS_MARKDOWN,
     },
     EditorDocsPage {
         id: "legend",
@@ -2408,8 +2424,8 @@ const EDITOR_DOCS_PAGES: &[EditorDocsPage] = &[
 #[cfg(feature = "editor-docs")]
 fn editor_docs_level(page: &EditorDocsPage) -> &'static str {
     match page.id {
-        "start" | "metadata" | "puzzle-block" | "layers" | "legend" | "levels"
-        | "rewrite-rules" | "input-rules" | "movement" | "win-conditions" | "sprites" => "Basic",
+        "start" | "metadata" | "puzzle-block" | "slots" | "legend" | "levels" | "rewrite-rules"
+        | "input-rules" | "movement" | "win-conditions" | "sprites" => "Basic",
         _ => "Advanced",
     }
 }
@@ -2420,9 +2436,7 @@ fn editor_docs_advanced_chapter(page: &EditorDocsPage) -> Option<&'static str> {
         "guards" | "fix" | "routines" | "rule-application" | "patterns" | "rule-effects" => {
             Some("Rules & Patterns")
         }
-        "messages" | "variables" | "mark" | "conditions" | "lifecycle" => {
-            Some("State & Lifecycle")
-        }
+        "messages" | "variables" | "mark" | "conditions" | "lifecycle" => Some("State & Lifecycle"),
         "groups" | "tags" | "maps-expansion" => Some("Objects & Selectors"),
         "level-local-legend" => Some("Levels"),
         "imports" => Some("Project Structure"),
@@ -2581,7 +2595,7 @@ fn render_docs_code_block(out: &mut String, language: &str, source: &str) {
         out.push('>');
         out.push_str(&render_source_highlight_html(
             source,
-            &puzzle_lang::highlight_source(source),
+            &puzzle_lang::highlight_source(source, puzzle_lang::PuzzleSourceProfile::Puzzle2d),
         ));
     } else {
         out.push('>');
@@ -3319,20 +3333,28 @@ mod tests {
         }
     }
 
-    fn collect_outline_kinds_from_source(source: &str, kinds: &mut BTreeSet<String>) {
-        for item in puzzle_lang::source_outline(source) {
+    fn collect_outline_kinds_from_source(
+        source: &str,
+        profile: puzzle_lang::PuzzleSourceProfile,
+        kinds: &mut BTreeSet<String>,
+    ) {
+        for item in puzzle_lang::source_outline(source, profile) {
             kinds.insert(item.kind);
         }
     }
 
-    fn collect_puzzle_fence_outline_kinds(markdown: &str, kinds: &mut BTreeSet<String>) {
+    fn collect_puzzle_fence_outline_kinds(
+        markdown: &str,
+        profile: puzzle_lang::PuzzleSourceProfile,
+        kinds: &mut BTreeSet<String>,
+    ) {
         let mut in_puzzle_fence = false;
         let mut block = String::new();
         for line in markdown.lines() {
             let trimmed = line.trim_start();
             if in_puzzle_fence {
                 if trimmed.starts_with("```") {
-                    collect_outline_kinds_from_source(&block, kinds);
+                    collect_outline_kinds_from_source(&block, profile, kinds);
                     block.clear();
                     in_puzzle_fence = false;
                 } else {
@@ -3363,7 +3385,7 @@ mod tests {
             r#"title = "{title}"
 
 puzzle default {{
-layers {{
+slots {{
 actor = Player
 }}
 
@@ -4025,7 +4047,7 @@ step board
 title = display_object_single_color_preview
 
 puzzle default {
-layers {
+slots {
 @display_floor = @Floor
 }
 sprites {
@@ -4069,7 +4091,7 @@ puzzle default {
 tags {
 state = base movable
 }
-layers {
+slots {
 actor = Box:state
 }
 sprites {
@@ -4115,7 +4137,7 @@ B
 title = "Multi Error Probe"
 
 puzzle main {
-layers {
+slots {
 base = Floor
 }
 
@@ -4182,10 +4204,10 @@ level "first"
 title = "Multi Lifecycle Error Probe"
 
 puzzle main {
-layers {
+slots {
 actor = Player
 }
-layers {
+slots {
 base = Player actor
 }
 
@@ -4269,7 +4291,7 @@ P.
 title = "Multi Statement Parse Error Probe"
 
 puzzle main {
-layers {
+slots {
 base = Player
 }
 
@@ -4330,7 +4352,7 @@ P
 title = "Sibling Statement Block Error Probe"
 
 puzzle main {
-layers {
+slots {
 base = Player
 }
 
@@ -4420,7 +4442,7 @@ P
 title = "Bare 3D Input"
 
 puzzle push3 {
-  layers {
+  slots {
     actor = Player
   }
 
@@ -5440,6 +5462,12 @@ levels demo of push3 {
         assert!(!EDITOR_RUNTIME_JS.contains("free_source_analysis_handle"));
         assert!(!EDITOR_RUNTIME_JS.contains("analysis.handle"));
         assert!(EDITOR_RUNTIME_JS.contains("return querySynchronizedAnalysisWorker(\"outline\""));
+        assert!(EDITOR_RUNTIME_JS.contains(
+            "return querySynchronizedAnalysisWorker(\"outline\", source, {\n        sourceProfile: asString(payload.sourceProfile),"
+        ));
+        assert!(
+            EDITOR_SOURCE_JS.contains("sourceProfile: puzzleSourceProfile(document),\n    });")
+        );
         assert!(
             EDITOR_RUNTIME_JS.contains("new Worker(wasmModuleUrl(\"./editor_analysis_worker.js\")")
         );
@@ -5611,7 +5639,10 @@ levels demo of push3 {
 
     #[test]
     fn codemirror_highlight_consumes_typed_rust_spans_as_decorations() {
-        let payload = EditorService::highlight_source_json("title = \"Demo\"\n");
+        let payload = EditorService::highlight_source_json(
+            "title = \"Demo\"\n",
+            puzzle_lang::PuzzleSourceProfile::Puzzle2d,
+        );
         assert!(payload.contains("\"version\":3"));
         assert!(payload.contains("\"offsetEncoding\":\"utf8\""));
         assert!(payload.contains("\"range\":{\"start\":0,"));
@@ -6030,6 +6061,17 @@ levels demo of push3 {
             Some("swatch-book")
         );
         assert_eq!(kind_icons.get("shapes").map(String::as_str), Some("shapes"));
+        assert!(!kind_icons.contains_key("arrow"));
+        assert_eq!(kind_icons.get("grid").map(String::as_str), Some("grid-2x2"));
+        assert_eq!(kind_icons.get("viewport").map(String::as_str), Some("view"));
+        assert_eq!(
+            kind_icons.get("state").map(String::as_str),
+            Some("database")
+        );
+        assert_eq!(
+            kind_icons.get("pixelate").map(String::as_str),
+            Some("file-code-2")
+        );
         assert_eq!(
             kind_icons.get("animation").map(String::as_str),
             Some("circle-play")
@@ -6061,7 +6103,7 @@ levels demo of push3 {
             EDITOR_DOCS_MARKDOWN,
             EDITOR_DOCS_METADATA_MARKDOWN,
             EDITOR_DOCS_PUZZLE_BLOCK_MARKDOWN,
-            EDITOR_DOCS_LAYERS_MARKDOWN,
+            EDITOR_DOCS_SLOTS_MARKDOWN,
             EDITOR_DOCS_GROUPS_MARKDOWN,
             EDITOR_DOCS_TAGS_MARKDOWN,
             EDITOR_DOCS_LEGEND_MARKDOWN,
@@ -6091,22 +6133,31 @@ levels demo of push3 {
             EDITOR_DOCS_PATTERNS_MARKDOWN,
             EDITOR_DOCS_IMPORTS_MARKDOWN,
             EDITOR_DOCS_RENDERING_MARKDOWN,
-            EDITOR_DOCS_3D_MARKDOWN,
             EDITOR_DOCS_ASSETS_MARKDOWN,
             EDITOR_DOCS_RULE_EFFECTS_MARKDOWN,
             EDITOR_DOCS_SPRITE_SHAPES_MARKDOWN,
             EDITOR_DOCS_SCENE_STATE_EFFECTS_MARKDOWN,
             EDITOR_DOCS_MAPS_EXPANSION_MARKDOWN,
         ] {
-            collect_puzzle_fence_outline_kinds(markdown, &mut kinds);
+            collect_puzzle_fence_outline_kinds(
+                markdown,
+                puzzle_lang::PuzzleSourceProfile::Puzzle2d,
+                &mut kinds,
+            );
         }
+        collect_puzzle_fence_outline_kinds(
+            EDITOR_DOCS_3D_MARKDOWN,
+            puzzle_lang::PuzzleSourceProfile::Puzzle3d,
+            &mut kinds,
+        );
 
-        for source in [
-            r#"
+        for (source, profile) in [
+            (
+                r#"
 title = "Outline 2D"
 
 puzzle outline {
-layers {
+slots {
 actor = Player
 }
 
@@ -6116,11 +6167,22 @@ move
 }
 }
 "#,
-            include_str!("../../lang/tests/fixtures/spec_3d_full.puzzle3"),
-            include_str!("../../lang/tests/fixtures/spec_3d_preview_contract.puzzle3"),
-            include_str!("../../lang/tests/fixtures/puzzlescript/basic_sokoban.puzzle"),
+                puzzle_lang::PuzzleSourceProfile::Puzzle2d,
+            ),
+            (
+                include_str!("../../lang/tests/fixtures/spec_3d_full.puzzle3"),
+                puzzle_lang::PuzzleSourceProfile::Puzzle3d,
+            ),
+            (
+                include_str!("../../lang/tests/fixtures/spec_3d_preview_contract.puzzle3"),
+                puzzle_lang::PuzzleSourceProfile::Puzzle3d,
+            ),
+            (
+                include_str!("../../lang/tests/fixtures/puzzlescript/basic_sokoban.puzzle"),
+                puzzle_lang::PuzzleSourceProfile::Puzzle2d,
+            ),
         ] {
-            collect_outline_kinds_from_source(source, &mut kinds);
+            collect_outline_kinds_from_source(source, profile, &mut kinds);
         }
 
         let missing_kinds = kinds
@@ -6481,7 +6543,7 @@ move
         assert!(fixture_json.contains("\"sprites\": {"));
         assert!(
             fixture_json.contains(
-                "\"camera\": { \"yawDegrees\": 10, \"pitchDegrees\": 55, \"zoom\": 1.1 }"
+                "\"camera\": { \"yawDegrees\": 10, \"pitchDegrees\": 55, \"rollDegrees\": 20, \"zoom\": 1.1 }"
             )
         );
         assert!(fixture_json.contains("\"settings\": {"));
@@ -6861,6 +6923,36 @@ move
         assert!(EDITOR_SPRITE_JS.contains("renderSpriteClipSelectionFrame(nextBoard);"));
         assert!(EDITOR_SPRITE_JS.contains("spriteBoard.replaceChildren(nextBoard);"));
         assert!(!EDITOR_SPRITE_JS.contains("spriteBoard.replaceChildren();"));
+    }
+
+    #[test]
+    fn sprite_pane_rerenders_share_scroll_preservation() {
+        assert!(EDITOR_SPRITE_JS.contains("function withSpritePaneScrollPreserved("));
+        assert!(EDITOR_SPRITE_JS.contains(
+            "function renderSpriteControls() {\n  withSprite2dPaneScrollPreserved(() => renderSpriteControlsContent());"
+        ));
+        assert!(EDITOR_SPRITE_JS.contains(
+            "function renderSpritePalette() {\n  withSprite2dPaneScrollPreserved(() => renderSpritePaletteContent());"
+        ));
+        assert!(EDITOR_SPRITE_JS.contains(
+            "function renderSpriteBoard() {\n  withSprite2dPaneScrollPreserved(() => renderSpriteBoardContent());"
+        ));
+        assert!(
+            EDITOR_SPRITE_JS
+                .contains("function renderSpriteAnimationControls() {\n  if (!spriteBuilder) {")
+        );
+        assert!(
+            EDITOR_SPRITE3D_JS
+                .contains("return withSpritePaneScrollPreserved(sprite3dBuilder, render);")
+        );
+        let capture_scroll = EDITOR_SPRITE_JS
+            .split_once("function captureSpritePaneScroll(builder) {")
+            .expect("shared sprite scroll capture exists")
+            .1
+            .split_once("function restoreSpritePaneScroll")
+            .expect("shared sprite scroll capture closes")
+            .0;
+        assert!(!capture_scroll.contains("document.activeElement"));
     }
 
     #[test]
@@ -9087,6 +9179,11 @@ move
         assert!(EDITOR_SPRITE3D_JS.contains("SPRITE3D_CAMERA_MAX_PITCH_DEGREES"));
         assert!(!EDITOR_LEVEL3D_JS.contains("level3dClampNumber(value, -80, 80)"));
         assert!(!EDITOR_SPRITE3D_JS.contains("sprite3dClampNumber(value, -80, 80)"));
+        assert!(EDITOR_HTML.contains("id=\"level3dCameraRollScrub\""));
+        assert!(EDITOR_DOM_JS.contains(
+            "const level3dCameraRollScrub = document.querySelector(\"#level3dCameraRollScrub\");"
+        ));
+        assert!(EDITOR_LEVEL3D_JS.contains("rollDegrees: Number(camera.rollDegrees ?? 0)"));
     }
 
     #[test]
@@ -9122,7 +9219,7 @@ move
         assert!(EDITOR_LEVEL3D_JS.contains("function level3dTopDownSpriteProjection("));
         assert!(EDITOR_LEVEL3D_JS.contains("function level3dLayerCamera()"));
         assert!(EDITOR_LEVEL3D_JS.contains(
-            "return { yawDegrees: 0, pitchDegrees: 90, zoom: 1, projection: \"orthographic\" };"
+            "return { yawDegrees: 0, pitchDegrees: 90, rollDegrees: 0, zoom: 1, projection: \"orthographic\" };"
         ));
         assert!(
             EDITOR_LEVEL3D_JS

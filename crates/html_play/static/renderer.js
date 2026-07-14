@@ -149,6 +149,9 @@ class PuzzleRenderer {
     cell.setAttribute("aria-label", this.cellLabel(cellData));
 
     const layers = this.sortedLayers(cellData.layers);
+    if (this.options.renderMode === "dom" && this.layersUseMerge(layers)) {
+      throw new Error("sprite merge requires the canvas renderer");
+    }
     cell.classList.toggle("has-objects", layers.length > 0);
     for (const layer of layers) {
       if (this.resolveVisualSprite(layer)) {
@@ -159,6 +162,9 @@ class PuzzleRenderer {
     for (const layer of layers) {
       const sprite = this.renderSprite(layer);
       if (sprite) {
+        const cellOrder = this.cellRenderIndex(cellData, scene);
+        const priority = this.spriteRenderPriority(layer);
+        sprite.style.zIndex = String((cellOrder * this.spritePriorityCount()) + priority + 1);
         cell.append(sprite);
       }
     }
@@ -183,7 +189,6 @@ class PuzzleRenderer {
     sprite.className = `sprite visual-sprite visual-fit-${fit.mode} visual-sampling-${sampling} ${definition.className || ""} ${layer.sprite} visual-${this.classNameFor(visualKey)}`;
     sprite.dataset.object = layer.object;
     sprite.dataset.layer = layer.layer;
-    sprite.style.zIndex = String(definition.zIndex ?? layer.layer + 1);
     const { cols: spriteCols, rows: spriteRows } = this.spritePatternSize(baseFrame);
     const { cols: boxCols, rows: boxRows } = this.spriteDrawBox(baseFrame);
     sprite.style.setProperty("--sprite-cols", String(spriteCols));
@@ -373,12 +378,35 @@ class PuzzleRenderer {
     for (const cell of this.frameCells(scene, frame)) {
       const x = (cell.x - frame.x) * unit;
       const y = (cell.y - frame.y) * unit;
-      for (const layer of this.sortedLayers(cell.layers)) {
-        const animation = this.animationForLayer(animations, cell, layer);
+      const layers = this.sortedLayers(cell.layers);
+      for (let index = 0; index < layers.length;) {
+        const priority = this.spriteRenderPriority(layers[index]);
+        const priorityDef = this.spriteOrder().priorities[priority];
+        const priorityLayers = [];
+        while (index < layers.length && this.spriteRenderPriority(layers[index]) === priority) {
+          priorityLayers.push(layers[index]);
+          index += 1;
+        }
+        if (priorityDef.merge) {
+          staticItems.push({
+            kind: "merge",
+            layers: priorityLayers,
+            cellOrder: this.cellRenderIndex(cell, scene),
+            layerOrder: priority,
+            order: order++,
+            x,
+            y,
+            animations: priorityLayers.map((layer) => this.animationForLayer(animations, cell, layer)),
+          });
+          continue;
+        }
+        for (const layer of priorityLayers) {
+          const animation = this.animationForLayer(animations, cell, layer);
         const item = {
           kind: "layer",
           layer,
-          layerOrder: Number(layer.layer) || 0,
+          cellOrder: this.cellRenderIndex(cell, scene),
+          layerOrder: this.spriteRenderPriority(layer),
           order: order++,
           x,
           y,
@@ -389,9 +417,10 @@ class PuzzleRenderer {
         } else {
           staticItems.push(item);
         }
+        }
       }
     }
-    const compare = (a, b) => a.layerOrder - b.layerOrder || a.order - b.order;
+    const compare = (a, b) => a.cellOrder - b.cellOrder || a.layerOrder - b.layerOrder || a.order - b.order;
     return [...staticItems.sort(compare), ...animatedItems.sort(compare)];
   }
 
@@ -464,7 +493,56 @@ class PuzzleRenderer {
   }
 
   paintCanvasItem(context, item, unit, progress = 1, now = performance.now()) {
+    if (item.kind === "merge") {
+      this.paintCanvasMergedLayers(context, item, unit, progress, now);
+      return;
+    }
     this.paintCanvasLayer(context, item.layer, item.x, item.y, unit, item.animation, progress, now);
+  }
+
+  paintCanvasMergedLayers(context, item, unit, progress, now) {
+    const samples = item.layers.map((layer, index) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = context.canvas.width;
+      canvas.height = context.canvas.height;
+      const sample = canvas.getContext("2d");
+      sample.setTransform(context.getTransform());
+      sample.imageSmoothingEnabled = context.imageSmoothingEnabled;
+      this.paintCanvasLayer(sample, layer, item.x, item.y, unit, item.animations[index], progress, now);
+      return sample.getImageData(0, 0, canvas.width, canvas.height);
+    });
+    const merged = context.createImageData(context.canvas.width, context.canvas.height);
+    for (let offset = 0; offset < merged.data.length; offset += 4) {
+      let count = 0;
+      let red = 0;
+      let green = 0;
+      let blue = 0;
+      let alpha = 0;
+      for (const sample of samples) {
+        if (sample.data[offset + 3] === 0) {
+          continue;
+        }
+        count += 1;
+        red += sample.data[offset];
+        green += sample.data[offset + 1];
+        blue += sample.data[offset + 2];
+        alpha += sample.data[offset + 3];
+      }
+      if (count > 0) {
+        merged.data[offset] = Math.round(red / count);
+        merged.data[offset + 1] = Math.round(green / count);
+        merged.data[offset + 2] = Math.round(blue / count);
+        merged.data[offset + 3] = Math.round(alpha / count);
+      }
+    }
+    const output = document.createElement("canvas");
+    output.width = context.canvas.width;
+    output.height = context.canvas.height;
+    output.getContext("2d").putImageData(merged, 0, 0);
+    context.save();
+    context.setTransform(1, 0, 0, 1, 0, 0);
+    context.drawImage(output, 0, 0);
+    context.restore();
   }
 
   paintCanvasLayer(context, layer, x, y, unit, animation = null, progress = 1, now = performance.now()) {
@@ -1127,7 +1205,56 @@ class PuzzleRenderer {
   }
 
   sortedLayers(layers) {
-    return [...layers].sort((a, b) => a.layer - b.layer);
+    return [...layers].sort((a, b) =>
+      this.spriteRenderPriority(a) - this.spriteRenderPriority(b)
+      || Number(a.objectId) - Number(b.objectId)
+    );
+  }
+
+  spriteOrder() {
+    const order = this.visuals().order;
+    if (!order || !Array.isArray(order.direction_priority) || !Array.isArray(order.priorities)) {
+      throw new Error("compiled sprite order contract is missing");
+    }
+    return order;
+  }
+
+  spritePriorityCount() {
+    return Math.max(1, this.spriteOrder().priorities.length);
+  }
+
+  layersUseMerge(layers) {
+    return layers.some((layer) => this.spriteOrder().priorities[this.spriteRenderPriority(layer)]?.merge);
+  }
+
+  spriteRenderPriority(layer) {
+    const name = String(layer.object || "");
+    const priority = this.spriteOrder().priorities.findIndex((entry) =>
+      Array.isArray(entry.objects) && entry.objects.includes(name)
+    );
+    if (priority < 0) {
+      throw new Error(`compiled sprite order does not cover object: ${name}`);
+    }
+    return priority;
+  }
+
+  cellRenderIndex(cell, scene) {
+    const width = Math.max(1, Number(scene?.width) || 1);
+    const height = Math.max(1, Number(scene?.height) || 1);
+    let index = 0;
+    for (const direction of this.spriteOrder().direction_priority) {
+      let value;
+      let span;
+      switch (direction) {
+        case "right": value = Number(cell.x); span = width; break;
+        case "left": value = width - 1 - Number(cell.x); span = width; break;
+        case "down": value = Number(cell.y); span = height; break;
+        case "up": value = height - 1 - Number(cell.y); span = height; break;
+        default: throw new Error(`invalid 2D sprite order direction: ${direction}`);
+      }
+      index = (index * span) + value;
+    }
+    return index;
   }
 
   usesVisualSprites(scene, visuals) {

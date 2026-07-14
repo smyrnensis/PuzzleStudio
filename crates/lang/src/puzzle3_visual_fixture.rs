@@ -5,7 +5,6 @@ use crate::{
     ParsedPuzzle3, SpriteColor3, SpriteSet3, ViewportFollow3, ViewportHeight3, ViewportMode3,
 };
 use puzzle_grid3d::{Direction3, LevelBundle3, LevelCell3, ObjectId, Size3};
-use puzzle_grid3d_authoring::{ObjectSelector3, SelectorCatalog3, SelectorTag3};
 use puzzle_runtime_contract::{
     Puzzle3RuntimeModel, RUNTIME_CONTRACT_VERSION, RuntimeContract, RuntimeModelContract,
     runtime_contract_json,
@@ -72,7 +71,11 @@ pub fn export_visual_fixture_json_with_title_scenes_and_animation(
         .level_bundle
         .as_ref()
         .ok_or(VisualFixtureExportError3::MissingLevelBundle)?;
-    let object_names = object_names(&parsed.catalog);
+    let object_names = parsed
+        .object_labels
+        .iter()
+        .map(|(object, label)| (*object, label.clone()))
+        .collect::<BTreeMap<_, _>>();
     let title = title
         .map(str::to_string)
         .unwrap_or_else(|| fixture_title(parsed));
@@ -96,12 +99,22 @@ pub fn export_visual_fixture_json_with_title_scenes_and_animation(
     write_controls(&mut out, parsed);
     write_inputs(&mut out, parsed);
     write_objects(&mut out, parsed, &object_names)?;
+    write_visual_order(&mut out, parsed);
     write_scenes(&mut out, scene_fields_json);
     write_levels(&mut out, parsed, &object_names)?;
     write_level_bundles(&mut out, parsed, level_bundle_names);
     write_sprites(&mut out, parsed.sprite_set.as_ref());
     out.push_str("}\n");
     Ok(out)
+}
+
+fn write_visual_order(out: &mut String, parsed: &ParsedPuzzle3) {
+    out.push_str("  \"order\": ");
+    out.push_str(
+        &serde_json::to_string(&parsed.visual_order)
+            .expect("compiled 3D sprite order serialization must succeed"),
+    );
+    out.push_str(",\n");
 }
 
 fn write_runtime_contract(
@@ -112,8 +125,6 @@ fn write_runtime_contract(
     let model = Puzzle3RuntimeModel::checked_new(
         parsed.game.clone(),
         parsed.local_frame.clone(),
-        parsed.rules.clone(),
-        parsed.display_objects.clone(),
         parsed.rule_camera_effects.clone(),
         bundle.clone(),
         parsed.win_condition.clone(),
@@ -135,9 +146,10 @@ fn write_camera(out: &mut String, parsed: &ParsedPuzzle3) {
     let camera = &parsed.settings.camera;
     let _ = writeln!(
         out,
-        "  \"camera\": {{ \"yawDegrees\": {}, \"pitchDegrees\": {}, \"zoom\": {} }},",
+        "  \"camera\": {{ \"yawDegrees\": {}, \"pitchDegrees\": {}, \"rollDegrees\": {}, \"zoom\": {} }},",
         camera.yaw_degrees,
         camera.pitch_degrees,
+        camera.roll_degrees,
         format_zoom(camera.zoom_milli),
     );
 }
@@ -210,41 +222,7 @@ fn write_viewport(out: &mut String, parsed: &ParsedPuzzle3) {
 }
 
 fn viewport_focus_objects(parsed: &ParsedPuzzle3) -> Vec<ObjectId> {
-    let focus = &parsed.settings.viewport.focus;
-    let selector = viewport_focus_selector(focus, &parsed.catalog);
-    let mut objects = selector
-        .and_then(|selector| parsed.catalog.resolve(&selector).ok())
-        .map(|resolved| resolved.alternatives)
-        .unwrap_or_default();
-    objects.sort_by_key(|object| object.0);
-    objects.dedup();
-    objects
-}
-
-fn viewport_focus_selector(focus: &str, catalog: &SelectorCatalog3) -> Option<ObjectSelector3> {
-    let parts = focus.split(':').collect::<Vec<_>>();
-    if parts.len() > 1 {
-        return Some(ObjectSelector3::variant(
-            parts[0],
-            parts[1..]
-                .iter()
-                .map(|part| {
-                    if *part == "*" {
-                        SelectorTag3::any()
-                    } else {
-                        SelectorTag3::value(*part)
-                    }
-                })
-                .collect(),
-        ));
-    }
-    if catalog.groups.iter().any(|group| group.name == focus) {
-        return Some(ObjectSelector3::group(focus));
-    }
-    if catalog.objects.iter().any(|object| object.name == focus) {
-        return Some(ObjectSelector3::object(focus));
-    }
-    None
+    parsed.viewport_focus_objects.clone()
 }
 
 fn format_zoom(zoom_milli: u16) -> String {
@@ -295,25 +273,6 @@ fn title_from_identifier(identifier: &str) -> String {
         .join(" ")
 }
 
-fn object_names(catalog: &SelectorCatalog3) -> BTreeMap<ObjectId, String> {
-    let mut names = BTreeMap::new();
-    for object in &catalog.objects {
-        names.insert(object.id, object.name.clone());
-    }
-    for family in &catalog.families {
-        for variant in &family.variants {
-            let suffix = variant.values.join(":");
-            let name = if suffix.is_empty() {
-                family.name.clone()
-            } else {
-                format!("{}:{suffix}", family.name)
-            };
-            names.insert(variant.id, name);
-        }
-    }
-    names
-}
-
 fn write_directions(out: &mut String) {
     out.push_str("  \"directions\": {\n");
     for (index, direction) in Direction3::directions().into_iter().enumerate() {
@@ -361,13 +320,8 @@ fn write_controls(out: &mut String, parsed: &ParsedPuzzle3) {
         ("Down", "back"),
     ];
     let mut keys = Vec::<(&str, &str)>::new();
-    if parsed
-        .game
-        .inputs
-        .iter()
-        .any(|input| !input.keys.is_empty())
-    {
-        for input in &parsed.game.inputs {
+    if parsed.inputs.iter().any(|input| !input.keys.is_empty()) {
+        for input in &parsed.inputs {
             for key in &input.keys {
                 keys.push((key.as_str(), input.name.as_str()));
             }
@@ -392,7 +346,7 @@ fn write_controls(out: &mut String, parsed: &ParsedPuzzle3) {
 
 fn write_inputs(out: &mut String, parsed: &ParsedPuzzle3) {
     out.push_str("  \"inputs\": [");
-    for (index, input) in parsed.game.inputs.iter().enumerate() {
+    for (index, input) in parsed.inputs.iter().enumerate() {
         if index > 0 {
             out.push_str(", ");
         }

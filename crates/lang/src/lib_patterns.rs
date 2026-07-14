@@ -53,78 +53,6 @@ fn rewrite_step_with_application(step: RuleStep, application: RuleApplication) -
     }
 }
 
-fn validate_visual_effects(
-    effects: &LoweredEffects,
-    source_line: &str,
-) -> Result<(), DiagnosticReport> {
-    if !lowered_effects_change_gameplay(effects) {
-        return Ok(());
-    }
-    Err(DiagnosticReport::error_at_line(
-        "display block rewrites cannot use gameplay effects",
-        source_line,
-    ))
-}
-
-fn lowered_effects_change_gameplay(effects: &LoweredEffects) -> bool {
-    !effects.core.is_empty() || effects.ordered.iter().any(rule_effect_changes_gameplay)
-}
-
-fn rule_effect_changes_gameplay(effect: &RuleEffect) -> bool {
-    matches!(
-        effect,
-        RuleEffect::Win
-            | RuleEffect::Restart
-            | RuleEffect::NextLevel
-            | RuleEffect::Again
-            | RuleEffect::Checkpoint
-            | RuleEffect::ClearCheckpoint
-            | RuleEffect::Scene(_)
-    )
-}
-
-fn validate_visual_writes(
-    writes: &[WriteOp],
-    visual_objects: &[ObjectId],
-) -> Result<(), DiagnosticReport> {
-    for write in writes {
-        match write {
-            WriteOp::Add { object, .. }
-            | WriteOp::Remove { object, .. }
-            | WriteOp::Move { object, .. } => {
-                ensure_visual_write_object(*object, visual_objects)?;
-            }
-            WriteOp::AddObjectSet { .. }
-            | WriteOp::RemoveObjectSet { .. }
-            | WriteOp::MoveObjectSet { .. }
-            | WriteOp::SetObjectSetMark { .. }
-            | WriteOp::RemoveObjectSetMark { .. } => {}
-            WriteOp::Replace { remove, add, .. } => {
-                ensure_visual_write_object(*remove, visual_objects)?;
-                ensure_visual_write_object(*add, visual_objects)?;
-            }
-            WriteOp::SetMark { object, .. } | WriteOp::RemoveMark { object, .. } => {
-                if !object.is_empty() {
-                    ensure_visual_write_object(*object, visual_objects)?;
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-fn ensure_visual_write_object(
-    object: ObjectId,
-    visual_objects: &[ObjectId],
-) -> Result<(), DiagnosticReport> {
-    if visual_objects.contains(&object) {
-        return Ok(());
-    }
-    Err(DiagnosticReport::error(
-        "display block can read main objects but can only write display objects".to_string(),
-    ))
-}
-
 #[derive(Clone, Debug, Default)]
 struct RuleBodyAlternative {
     guards: Vec<Guard>,
@@ -235,96 +163,57 @@ fn parse_inline_rewrite(
     ),
     DiagnosticReport,
 > {
-    let (before, after) = line
-        .split_once("->")
-        .ok_or_else(|| parse_error(line, "inline rewrite must contain ->"))?;
-    let before = parse_pattern_side(
-        before.trim(),
+    let syntax = puzzle_authoring::parse_unresolved_rewrite_syntax(line)
+        .map_err(|error| parse_error(line, error.message()))?;
+    let before = lower_unresolved_pattern(
+        syntax.before,
+        line,
         object_names,
         object_schemas,
         value_sets,
         maps,
         object_groups,
         variable_names,
-        false,
     )?;
-    let (after, effects, after_effects, after_call) = split_rewrite_suffix(after.trim(), line)?;
-    let after = if after.is_empty() {
-        before.clone()
-    } else {
-        let after = parse_pattern_side(
+    let (after, effects, after_effects, after_call) = if let Some(after) = syntax.after {
+        let after = lower_unresolved_pattern(
             after,
+            line,
             object_names,
             object_schemas,
             value_sets,
             maps,
             object_groups,
             variable_names,
-            true,
         )?;
-        normalize_rhs_keep_cells(&before, after, line)?
+        let (after_effects, after_call) = parse_after_pattern_suffix(&syntax.suffix, line)?;
+        (after, Vec::new(), after_effects, after_call)
+    } else {
+        (
+            before.clone(),
+            parse_rewrite_effect(&syntax.suffix, line)?,
+            Vec::new(),
+            None,
+        )
     };
 
     Ok((before, after, effects, after_effects, after_call))
 }
 
-fn split_rewrite_suffix<'a>(
-    after: &'a str,
+fn parse_after_pattern_suffix(
+    suffix: &str,
     line: &str,
-) -> Result<(&'a str, Vec<EffectAst>, Vec<EffectAst>, Option<String>), DiagnosticReport> {
-    let Some(last_block_end) = after.rfind(']') else {
-        return parse_rewrite_effect(after, line).map(|effects| ("", effects, Vec::new(), None));
-    };
-    let pattern = after[..=last_block_end].trim();
-    let suffix = after[last_block_end + 1..].trim();
+) -> Result<(Vec<EffectAst>, Option<String>), DiagnosticReport> {
     if suffix.is_empty() {
-        return Ok((pattern, Vec::new(), Vec::new(), None));
+        return Ok((Vec::new(), None));
     }
-
     let tokens = split_header_tokens(suffix);
     if matches!(tokens.as_slice(), [name] if is_qualified_identifier(name))
         && !is_builtin_rewrite_effect_text(suffix)
     {
-        return Ok((pattern, Vec::new(), Vec::new(), Some(suffix.to_string())));
+        return Ok((Vec::new(), Some(suffix.to_string())));
     }
-
-    parse_rewrite_effect(suffix, line).map(|effects| (pattern, Vec::new(), effects, None))
-}
-
-fn normalize_rhs_keep_cells(
-    before: &PatternBlock,
-    mut after: PatternBlock,
-    line: &str,
-) -> Result<PatternBlock, DiagnosticReport> {
-    if before.components.len() != after.components.len() {
-        return Err(parse_error(
-            line,
-            "before and after sides must have the same number of blocks",
-        ));
-    }
-
-    for (before_component, after_component) in before.components.iter().zip(&mut after.components) {
-        if !block_shapes_match(before_component, after_component) {
-            return Err(parse_error(
-                line,
-                "before and after blocks must have matching cell and ellipsis layout",
-            ));
-        }
-        for (before_row, after_row) in before_component.rows.iter().zip(&mut after_component.rows) {
-            for (before_part, after_part) in before_row.iter().zip(after_row) {
-                let (BlockPart::Cell(before_cell), BlockPart::Cell(after_cell)) =
-                    (before_part, after_part)
-                else {
-                    continue;
-                };
-                if after_cell.keep {
-                    *after_cell = before_cell.clone();
-                }
-            }
-        }
-    }
-
-    Ok(after)
+    parse_rewrite_effect(suffix, line).map(|effects| (effects, None))
 }
 
 #[derive(Clone, Debug)]
@@ -333,7 +222,10 @@ pub(crate) struct ParsedRewriteEffect {
     pub(crate) semantic_tokens: Vec<semantic::SemanticToken>,
 }
 
-fn parse_rewrite_effect(suffix: &str, line: &str) -> Result<Vec<EffectAst>, DiagnosticReport> {
+pub(crate) fn parse_rewrite_effect(
+    suffix: &str,
+    line: &str,
+) -> Result<Vec<EffectAst>, DiagnosticReport> {
     let parsed = parse_rewrite_effect_with_semantic_tokens(suffix, line)?;
     debug_assert!(
         parsed
@@ -878,13 +770,7 @@ enum MarkValueTemplate {
     Relative(RelativeDirection),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RelativeDirection {
-    Forward,
-    Backward,
-    Left,
-    Right,
-}
+type RelativeDirection = puzzle_authoring::RelativeDirection;
 
 #[derive(Clone, Debug)]
 enum WriteOpTemplate {
@@ -897,7 +783,6 @@ enum WriteOpTemplate {
         component: u16,
         offset: OffsetTemplate,
         binding: u16,
-        objects: Vec<ObjectId>,
     },
     Remove {
         component: u16,
@@ -908,7 +793,6 @@ enum WriteOpTemplate {
         component: u16,
         offset: OffsetTemplate,
         binding: u16,
-        objects: Vec<ObjectId>,
     },
     Replace {
         component: u16,
@@ -1146,6 +1030,18 @@ struct OccurrencePlacement {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+struct RewritePosition2 {
+    component: u16,
+    offset: OffsetTemplate,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum RewriteMark2 {
+    Object(MarkPatternTemplate),
+    ObjectSet(ObjectSetMarkPatternTemplate),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct ParsedMark {
     name: String,
     value: Option<String>,
@@ -1192,7 +1088,8 @@ struct FamilyWildcardSelector {
     mapped_objects: HashMap<ObjectId, ObjectId>,
 }
 
-fn parse_pattern_side(
+fn lower_unresolved_pattern(
+    syntax: puzzle_authoring::UnresolvedPatternSyntax,
     line: &str,
     object_names: &HashMap<String, ObjectId>,
     object_schemas: &HashMap<String, ObjectSchema>,
@@ -1200,50 +1097,51 @@ fn parse_pattern_side(
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
     variable_names: &HashMap<String, VariableId>,
-    allow_keep_marker: bool,
 ) -> Result<PatternBlock, DiagnosticReport> {
-    let mut components = Vec::new();
-    let mut rest = line.trim();
-
-    while !rest.is_empty() {
-        let Some(inner_start) = rest.strip_prefix('[') else {
-            return Err(parse_error(
-                line,
-                "pattern side must contain bracketed blocks",
-            ));
-        };
-        let Some(close_index) = inner_start.find(']') else {
-            return Err(parse_error(line, "pattern block missing ]"));
-        };
-        let inner = &inner_start[..close_index];
-        components.push(BlockComponent {
-            rows: parse_block_rows(
-                inner,
-                line,
-                object_names,
-                object_schemas,
-                value_sets,
-                maps,
-                object_groups,
-                variable_names,
-                allow_keep_marker,
-            )?,
-        });
-        rest = inner_start[close_index + 1..].trim_start();
-    }
-
-    if components.is_empty() {
-        return Err(parse_error(
-            line,
-            "pattern side must contain at least one block",
-        ));
-    }
-
+    let components = syntax
+        .components
+        .into_iter()
+        .map(|component| {
+            let rows = component
+                .lines
+                .into_iter()
+                .map(|pattern_line| match pattern_line {
+                    puzzle_authoring::UnresolvedPatternLineSyntax::Blank => Err(parse_error(
+                        line,
+                        "blank lines inside patterns require a spatial dimension that defines them",
+                    )),
+                    puzzle_authoring::UnresolvedPatternLineSyntax::Cells(parts) => parts
+                        .into_iter()
+                        .map(|part| match part {
+                            puzzle_authoring::UnresolvedPatternPartSyntax::Ellipsis => {
+                                Ok(BlockPart::Ellipsis)
+                            }
+                            puzzle_authoring::UnresolvedPatternPartSyntax::Cell(cell) => {
+                                lower_unresolved_cell(
+                                    cell,
+                                    line,
+                                    object_names,
+                                    object_schemas,
+                                    value_sets,
+                                    maps,
+                                    object_groups,
+                                    variable_names,
+                                )
+                                .map(BlockPart::Cell)
+                            }
+                        })
+                        .collect(),
+                })
+                .collect::<Result<Vec<Vec<BlockPart>>, DiagnosticReport>>()?;
+            validate_rectangular_ellipsis_layout(&rows, line)?;
+            Ok(BlockComponent { rows })
+        })
+        .collect::<Result<Vec<_>, DiagnosticReport>>()?;
     Ok(PatternBlock { components })
 }
 
-fn parse_block_rows(
-    inner: &str,
+fn lower_pattern_source(
+    source: &str,
     line: &str,
     object_names: &HashMap<String, ObjectId>,
     object_schemas: &HashMap<String, ObjectSchema>,
@@ -1251,35 +1149,79 @@ fn parse_block_rows(
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
     variable_names: &HashMap<String, VariableId>,
-    allow_keep_marker: bool,
-) -> Result<Vec<Vec<BlockPart>>, DiagnosticReport> {
-    let rows = inner
-        .split(';')
-        .map(str::trim)
-        .map(|row| {
-            parse_block_parts(
-                row,
-                line,
-                object_names,
-                object_schemas,
-                value_sets,
-                maps,
-                object_groups,
-                variable_names,
-                allow_keep_marker,
-            )
-        })
-        .collect::<Result<Vec<_>, DiagnosticReport>>()?;
+) -> Result<PatternBlock, DiagnosticReport> {
+    let syntax = puzzle_authoring::parse_unresolved_pattern_syntax(source)
+        .map_err(|error| parse_error(line, error.message()))?;
+    lower_unresolved_pattern(
+        syntax,
+        line,
+        object_names,
+        object_schemas,
+        value_sets,
+        maps,
+        object_groups,
+        variable_names,
+    )
+}
 
-    if rows.is_empty() {
-        return Err(parse_error(
-            line,
-            "pattern block must contain at least one row",
-        ));
+fn lower_unresolved_cell(
+    cell: puzzle_authoring::UnresolvedCellSyntax,
+    line: &str,
+    object_names: &HashMap<String, ObjectId>,
+    object_schemas: &HashMap<String, ObjectSchema>,
+    value_sets: &HashMap<String, Vec<String>>,
+    maps: &HashMap<String, ValueMap>,
+    object_groups: &HashMap<String, Vec<ObjectId>>,
+    variable_names: &HashMap<String, VariableId>,
+) -> Result<BlockCell, DiagnosticReport> {
+    let mut parsed = BlockCell {
+        keep: cell.keep,
+        require_null: cell.require_null,
+        ..BlockCell::default()
+    };
+    for subject in cell.require {
+        match subject {
+            puzzle_authoring::UnresolvedCellSubjectSyntax::CellMarks(marks) => {
+                parsed
+                    .require_cell_mark
+                    .extend(lower_selector_syntax_marks(marks));
+            }
+            puzzle_authoring::UnresolvedCellSubjectSyntax::Selector(selector) => {
+                parsed.require.push(resolve_object_selector_syntax(
+                    selector,
+                    line,
+                    object_names,
+                    object_schemas,
+                    value_sets,
+                    maps,
+                    object_groups,
+                    variable_names,
+                )?);
+            }
+        }
     }
-    validate_rectangular_ellipsis_layout(&rows, line)?;
-
-    Ok(rows)
+    for subject in cell.forbid {
+        match subject {
+            puzzle_authoring::UnresolvedCellSubjectSyntax::CellMarks(marks) => {
+                parsed
+                    .forbid_cell_mark
+                    .extend(lower_selector_syntax_marks(marks));
+            }
+            puzzle_authoring::UnresolvedCellSubjectSyntax::Selector(selector) => {
+                parsed.forbid.push(resolve_object_selector_syntax(
+                    selector,
+                    line,
+                    object_names,
+                    object_schemas,
+                    value_sets,
+                    maps,
+                    object_groups,
+                    variable_names,
+                )?);
+            }
+        }
+    }
+    Ok(parsed)
 }
 
 fn validate_rectangular_ellipsis_layout(
@@ -1297,7 +1239,7 @@ fn validate_rectangular_ellipsis_layout(
 
     let first = rows
         .first()
-        .expect("parse_block_rows already rejected empty blocks");
+        .expect("canonical pattern syntax rejected empty blocks");
     for row in rows.iter().skip(1) {
         let same_ellipsis_columns = row.len() == first.len()
             && row.iter().zip(first).all(|(left, right)| {
@@ -1318,200 +1260,6 @@ fn validate_rectangular_ellipsis_layout(
     Ok(())
 }
 
-fn parse_block_parts(
-    inner: &str,
-    line: &str,
-    object_names: &HashMap<String, ObjectId>,
-    object_schemas: &HashMap<String, ObjectSchema>,
-    value_sets: &HashMap<String, Vec<String>>,
-    maps: &HashMap<String, ValueMap>,
-    object_groups: &HashMap<String, Vec<ObjectId>>,
-    variable_names: &HashMap<String, VariableId>,
-    allow_keep_marker: bool,
-) -> Result<Vec<BlockPart>, DiagnosticReport> {
-    let parts = inner
-        .split('|')
-        .map(str::trim)
-        .map(|cell| {
-            if cell == "..." {
-                Ok(BlockPart::Ellipsis)
-            } else {
-                Ok(BlockPart::Cell(parse_block_cell(
-                    cell,
-                    line,
-                    object_names,
-                    object_schemas,
-                    value_sets,
-                    maps,
-                    object_groups,
-                    variable_names,
-                    allow_keep_marker,
-                )?))
-            }
-        })
-        .collect::<Result<Vec<_>, DiagnosticReport>>()?;
-
-    if parts.is_empty() {
-        return Err(parse_error(
-            line,
-            "pattern block must contain at least one cell",
-        ));
-    }
-
-    Ok(parts)
-}
-
-fn parse_block_cell(
-    cell: &str,
-    line: &str,
-    object_names: &HashMap<String, ObjectId>,
-    object_schemas: &HashMap<String, ObjectSchema>,
-    value_sets: &HashMap<String, Vec<String>>,
-    maps: &HashMap<String, ValueMap>,
-    object_groups: &HashMap<String, Vec<ObjectId>>,
-    variable_names: &HashMap<String, VariableId>,
-    allow_keep_marker: bool,
-) -> Result<BlockCell, DiagnosticReport> {
-    let mut parsed = BlockCell::default();
-    let cell_tokens = split_cell_tokens(cell, line)?;
-    if cell_tokens.iter().any(|token| token == "=") {
-        if !allow_keep_marker {
-            return Err(parse_error(line, "`=` is only valid as a RHS cell"));
-        }
-        if cell_tokens.len() != 1 {
-            return Err(parse_error(
-                line,
-                "`=` RHS cell cannot contain other tokens",
-            ));
-        }
-        parsed.keep = true;
-        return Ok(parsed);
-    }
-    let mut tokens = cell_tokens.iter().map(String::as_str).peekable();
-    while let Some(token) = tokens.next() {
-        if let Some(mark) = parse_cell_mark_token(token, line)? {
-            if parsed.require_null {
-                return Err(parse_error(
-                    line,
-                    "`null` cell pattern cannot contain other tokens",
-                ));
-            }
-            parsed.require_cell_mark.extend(mark);
-            continue;
-        }
-        if let Some(anonymous) = anonymous_mark_for_token(token) {
-            if parsed.require_null {
-                return Err(parse_error(
-                    line,
-                    "`null` cell pattern cannot contain other tokens",
-                ));
-            }
-            let selector = tokens
-                .next()
-                .ok_or_else(|| parse_error(line, "mark sugar must be followed by a selector"))?;
-            if selector == "no" || anonymous_mark_for_token(selector).is_some() {
-                return Err(parse_error(
-                    line,
-                    "mark sugar must be followed by a selector",
-                ));
-            }
-            let mut selector = resolve_object_selector(
-                selector,
-                line,
-                object_names,
-                object_schemas,
-                value_sets,
-                maps,
-                object_groups,
-                variable_names,
-            )?;
-            selector
-                .mark
-                .push(ParsedMark::anonymous(anonymous, token, false));
-            parsed.require.push(selector);
-            continue;
-        }
-        if token == "no" {
-            if parsed.require_null {
-                return Err(parse_error(
-                    line,
-                    "`null` cell pattern cannot contain other tokens",
-                ));
-            }
-            let selector = tokens
-                .next()
-                .ok_or_else(|| parse_error(line, "`no` must be followed by a selector"))?;
-            if selector == "no" {
-                return Err(parse_error(line, "`no no` is not a valid cell pattern"));
-            }
-            if selector == "null" {
-                return Err(parse_error(line, "`no null` is not a valid cell pattern"));
-            }
-            if let Some(mark) = parse_cell_mark_token(selector, line)? {
-                parsed.forbid_cell_mark.extend(mark);
-                continue;
-            }
-            parsed.forbid.push(resolve_object_selector(
-                selector,
-                line,
-                object_names,
-                object_schemas,
-                value_sets,
-                maps,
-                object_groups,
-                variable_names,
-            )?);
-        } else {
-            if token == "null" {
-                if parsed.require_null
-                    || !parsed.require.is_empty()
-                    || !parsed.forbid.is_empty()
-                    || !parsed.require_cell_mark.is_empty()
-                    || !parsed.forbid_cell_mark.is_empty()
-                {
-                    return Err(parse_error(
-                        line,
-                        "`null` cell pattern cannot contain other tokens",
-                    ));
-                }
-                parsed.require_null = true;
-                continue;
-            }
-            if parsed.require_null {
-                return Err(parse_error(
-                    line,
-                    "`null` cell pattern cannot contain other tokens",
-                ));
-            }
-            parsed.require.push(resolve_object_selector(
-                token,
-                line,
-                object_names,
-                object_schemas,
-                value_sets,
-                maps,
-                object_groups,
-                variable_names,
-            )?);
-        }
-    }
-
-    Ok(parsed)
-}
-
-fn parse_cell_mark_token(
-    token: &str,
-    line: &str,
-) -> Result<Option<Vec<ParsedMark>>, DiagnosticReport> {
-    let Some(inner) = token
-        .strip_prefix('{')
-        .and_then(|rest| rest.strip_suffix('}'))
-    else {
-        return Ok(None);
-    };
-    Ok(Some(parse_selector_mark(inner, line)?))
-}
-
 fn anonymous_mark_for_token(token: &str) -> Option<AnonymousMark> {
     let base = token.split_once('#').map_or(token, |(base, _)| base);
     match puzzle_authoring::mark_sugar_kind(base)? {
@@ -1519,23 +1267,6 @@ fn anonymous_mark_for_token(token: &str) -> Option<AnonymousMark> {
         puzzle_authoring::MarkSugarKind::Bool => Some(AnonymousMark::Bool),
         puzzle_authoring::MarkSugarKind::Int => Some(AnonymousMark::Int),
     }
-}
-
-fn split_cell_tokens(cell: &str, line: &str) -> Result<Vec<String>, DiagnosticReport> {
-    puzzle_authoring::split_cell_tokens(cell).map_err(|error| match error {
-        puzzle_authoring::CellTokenError::UnmatchedCloseBrace => {
-            parse_error(line, "mark block has unmatched }")
-        }
-        puzzle_authoring::CellTokenError::MissingCloseBrace => {
-            parse_error(line, "mark block missing }")
-        }
-        puzzle_authoring::CellTokenError::UnmatchedCloseParen => {
-            parse_error(line, "computed selector has unmatched )")
-        }
-        puzzle_authoring::CellTokenError::MissingCloseParen => {
-            parse_error(line, "computed selector missing )")
-        }
-    })
 }
 
 fn resolve_object_selector(
@@ -1548,9 +1279,36 @@ fn resolve_object_selector(
     object_groups: &HashMap<String, Vec<ObjectId>>,
     variable_names: &HashMap<String, VariableId>,
 ) -> Result<ObjectSelector, DiagnosticReport> {
-    let (selector, mark) = split_selector_mark(selector, line)?;
-    let (selector_text, occurrence_label) = split_selector_occurrence_label(selector, line)?;
-    let selector = selector_text.as_ref();
+    let syntax = puzzle_authoring::parse_selector_syntax(selector)
+        .map_err(|error| parse_error(line, error.message()))?;
+    resolve_object_selector_syntax(
+        syntax,
+        line,
+        object_names,
+        object_schemas,
+        value_sets,
+        maps,
+        object_groups,
+        variable_names,
+    )
+}
+
+fn resolve_object_selector_syntax(
+    syntax: puzzle_authoring::SelectorSyntax,
+    line: &str,
+    object_names: &HashMap<String, ObjectId>,
+    object_schemas: &HashMap<String, ObjectSchema>,
+    value_sets: &HashMap<String, Vec<String>>,
+    maps: &HashMap<String, ValueMap>,
+    object_groups: &HashMap<String, Vec<ObjectId>>,
+    variable_names: &HashMap<String, VariableId>,
+) -> Result<ObjectSelector, DiagnosticReport> {
+    let selector_parts = std::iter::once(syntax.base.as_str())
+        .chain(syntax.tags.iter().map(String::as_str))
+        .collect::<Vec<_>>();
+    let mark = lower_selector_syntax_marks(syntax.marks.clone());
+    let occurrence_label = syntax.occurrence_label.clone();
+    let selector = syntax.selector.as_str();
     let token = labeled_selector_token(selector, occurrence_label.as_deref());
     if !selector.contains(':')
         && let Some(object) = object_names.get(selector).copied()
@@ -1586,7 +1344,7 @@ fn resolve_object_selector(
         });
     }
 
-    let parts = selector.split(':').collect::<Vec<_>>();
+    let parts = selector_parts;
     if parts.as_slice() == ["*"] {
         return resolve_any_object_selector(
             token,
@@ -1898,265 +1656,6 @@ fn resolve_object_selector(
         mark,
         occurrence_label,
     })
-}
-
-fn record_resolved_object_selector_surface_token(
-    token: &SourceToken,
-    line: &str,
-    catalog: &Catalog,
-    sink: &mut SurfaceSink,
-) {
-    if matches!(
-        token.text.as_str(),
-        "no" | "all" | "any" | "empty" | "..." | "and" | "or" | "="
-    ) {
-        return;
-    }
-    if resolve_object_selector(
-        &token.text,
-        line,
-        &catalog.object_names,
-        &catalog.object_schemas,
-        &catalog_value_sets(catalog),
-        &catalog.maps,
-        &catalog.object_groups,
-        &catalog.variable_names,
-    )
-    .is_err()
-    {
-        return;
-    }
-    record_resolved_selector_surface_parts(token, line, catalog, sink);
-}
-
-fn record_resolved_selector_surface_parts(
-    token: &SourceToken,
-    line: &str,
-    catalog: &Catalog,
-    sink: &mut SurfaceSink,
-) {
-    let Ok((selector, marks)) = split_selector_mark(&token.text, line) else {
-        return;
-    };
-    let Ok((selector, _occurrence_label)) = split_selector_occurrence_label(selector, line) else {
-        return;
-    };
-    let selector = selector.as_ref();
-    let selector_offset = token.text.find(selector).unwrap_or(0);
-    if !selector.contains(':') {
-        if catalog.object_names.contains_key(selector)
-            || catalog.object_schemas.contains_key(selector)
-        {
-            mark_surface_token_part(
-                token,
-                selector_offset,
-                selector,
-                selector,
-                SurfaceSemanticKind::Object,
-                sink,
-            );
-        } else if catalog.object_groups.contains_key(selector) {
-            mark_surface_token_part(
-                token,
-                selector_offset,
-                selector,
-                selector,
-                SurfaceSemanticKind::Group,
-                sink,
-            );
-        }
-        record_selector_mark_surface_parts(token, &marks, catalog, sink);
-        return;
-    }
-
-    let parts = selector.split(':').collect::<Vec<_>>();
-    let Some(base) = parts.first().copied() else {
-        return;
-    };
-    if catalog.object_schemas.contains_key(base) || catalog.object_names.contains_key(base) {
-        mark_surface_token_part(
-            token,
-            selector_offset,
-            selector,
-            base,
-            SurfaceSemanticKind::Object,
-            sink,
-        );
-        record_schema_selector_suffix_surface_parts(
-            token,
-            selector_offset,
-            selector,
-            &parts,
-            catalog,
-            sink,
-        );
-    } else if catalog.value_sets.contains_key(base) || catalog.object_axes.contains_key(base) {
-        mark_surface_token_part(
-            token,
-            selector_offset,
-            selector,
-            base,
-            SurfaceSemanticKind::Group,
-            sink,
-        );
-        for suffix in parts.iter().skip(1) {
-            mark_surface_token_part(
-                token,
-                selector_offset,
-                selector,
-                suffix,
-                SurfaceSemanticKind::Object,
-                sink,
-            );
-        }
-    }
-    record_selector_mark_surface_parts(token, &marks, catalog, sink);
-}
-
-fn record_schema_selector_suffix_surface_parts(
-    token: &SourceToken,
-    selector_offset: usize,
-    selector: &str,
-    parts: &[&str],
-    catalog: &Catalog,
-    sink: &mut SurfaceSink,
-) {
-    let Some(schema) = catalog.object_schemas.get(parts[0]) else {
-        return;
-    };
-    for (axis_index, axis) in schema.axes.iter().enumerate() {
-        let Some(raw_value) = schema_selector_part(parts, schema, axis_index) else {
-            continue;
-        };
-        record_schema_selector_value_surface_parts(
-            token,
-            selector_offset,
-            selector,
-            raw_value,
-            axis,
-            catalog,
-            sink,
-        );
-    }
-}
-
-fn record_schema_selector_value_surface_parts(
-    token: &SourceToken,
-    selector_offset: usize,
-    selector: &str,
-    raw_value: &str,
-    axis: &str,
-    catalog: &Catalog,
-    sink: &mut SurfaceSink,
-) {
-    if let Some((map_name, raw_arg)) = parse_map_call(raw_value) {
-        if catalog.maps.contains_key(map_name) {
-            mark_surface_token_part(
-                token,
-                selector_offset,
-                selector,
-                map_name,
-                SurfaceSemanticKind::Group,
-                sink,
-            );
-        }
-        record_schema_selector_value_atom_surface_part(
-            token,
-            selector_offset,
-            selector,
-            raw_arg,
-            axis,
-            catalog,
-            sink,
-        );
-        return;
-    }
-    record_schema_selector_value_atom_surface_part(
-        token,
-        selector_offset,
-        selector,
-        raw_value,
-        axis,
-        catalog,
-        sink,
-    );
-}
-
-fn record_schema_selector_value_atom_surface_part(
-    token: &SourceToken,
-    selector_offset: usize,
-    selector: &str,
-    raw_value: &str,
-    axis: &str,
-    catalog: &Catalog,
-    sink: &mut SurfaceSink,
-) {
-    let value = raw_value
-        .split_once('#')
-        .map_or(raw_value, |(base, _)| base);
-    if value == "*" {
-        return;
-    }
-    let kind = if value == axis
-        || catalog.value_sets.contains_key(value)
-        || catalog.object_axes.contains_key(value)
-    {
-        SurfaceSemanticKind::Group
-    } else if catalog.variable_names.contains_key(value) {
-        SurfaceSemanticKind::State
-    } else {
-        SurfaceSemanticKind::Variant
-    };
-    mark_surface_token_part(token, selector_offset, selector, value, kind, sink);
-}
-
-fn record_selector_mark_surface_parts(
-    token: &SourceToken,
-    marks: &[ParsedMark],
-    catalog: &Catalog,
-    sink: &mut SurfaceSink,
-) {
-    for mark in marks {
-        if catalog.mark_names.contains_key(&mark.name) {
-            mark_surface_token_part(
-                token,
-                0,
-                &token.text,
-                &mark.name,
-                SurfaceSemanticKind::Mark,
-                sink,
-            );
-        }
-        if let Some(value) = &mark.value {
-            mark_surface_token_part(
-                token,
-                0,
-                &token.text,
-                value,
-                SurfaceSemanticKind::Variant,
-                sink,
-            );
-        }
-    }
-}
-
-fn mark_surface_token_part(
-    token: &SourceToken,
-    haystack_offset: usize,
-    haystack: &str,
-    needle: &str,
-    kind: SurfaceSemanticKind,
-    sink: &mut SurfaceSink,
-) {
-    if needle.is_empty() {
-        return;
-    }
-    let Some(relative) = haystack.find(needle) else {
-        return;
-    };
-    let start = token.start + haystack_offset + relative;
-    let end = start + needle.len();
-    sink.mark(SourceSpan { start, end }, kind);
 }
 
 fn resolve_any_object_selector(
@@ -2511,52 +2010,6 @@ fn schema_wildcard_target_set_map(
     Ok(mapped)
 }
 
-fn split_selector_occurrence_label<'a>(
-    selector: &'a str,
-    line: &str,
-) -> Result<(std::borrow::Cow<'a, str>, Option<String>), DiagnosticReport> {
-    if let Some(colon) = selector.find(':') {
-        let head = &selector[..colon];
-        let suffix = &selector[colon..];
-        let Some((base, label)) = head.split_once('#') else {
-            return Ok((std::borrow::Cow::Borrowed(selector), None));
-        };
-        validate_selector_occurrence_label_parts(base, label, line)?;
-        return Ok((
-            std::borrow::Cow::Owned(format!("{base}{suffix}")),
-            Some(label.to_string()),
-        ));
-    }
-    let Some((base, label)) = selector.split_once('#') else {
-        return Ok((std::borrow::Cow::Borrowed(selector), None));
-    };
-    validate_selector_occurrence_label_parts(base, label, line)?;
-    Ok((std::borrow::Cow::Borrowed(base), Some(label.to_string())))
-}
-
-fn validate_selector_occurrence_label_parts(
-    base: &str,
-    label: &str,
-    line: &str,
-) -> Result<(), DiagnosticReport> {
-    if base.is_empty() || label.is_empty() || label.contains('#') {
-        return Err(parse_error(
-            line,
-            "selector occurrence label must be: selector#label",
-        ));
-    }
-    if !label
-        .chars()
-        .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
-    {
-        return Err(parse_error(
-            line,
-            "selector occurrence label may only contain letters, numbers, and _",
-        ));
-    }
-    Ok(())
-}
-
 fn selector_tag_capture_key<'a>(
     value: &'a str,
     axis: &str,
@@ -2643,50 +2096,19 @@ fn labeled_selector_token(selector: &str, occurrence_label: Option<&str>) -> Str
     }
 }
 
-fn split_selector_mark<'a>(
-    selector: &'a str,
-    line: &str,
-) -> Result<(&'a str, Vec<ParsedMark>), DiagnosticReport> {
-    let Some(open_index) = selector.find('{') else {
-        return Ok((selector, Vec::new()));
-    };
-    let base = &selector[..open_index];
-    let attrs = selector[open_index + 1..]
-        .strip_suffix('}')
-        .ok_or_else(|| parse_error(line, "mark selector must end with }"))?;
-    if base.is_empty() {
-        return Err(parse_error(line, "mark selector must attach to an object"));
-    }
-    let attrs = parse_selector_mark(attrs, line)?;
-    Ok((base, attrs))
-}
-
-fn parse_selector_mark(attrs: &str, line: &str) -> Result<Vec<ParsedMark>, DiagnosticReport> {
-    let mut parsed = Vec::new();
-    let mut tokens = attrs.split_whitespace().peekable();
-    while let Some(token) = tokens.next() {
-        let (negated, spec) = if token == "no" {
-            let spec = tokens
-                .next()
-                .ok_or_else(|| parse_error(line, "`no` must be followed by an mark"))?;
-            (true, spec)
-        } else {
-            (false, token)
-        };
-        if let Some(anonymous) = anonymous_mark_for_token(spec) {
-            parsed.push(ParsedMark::anonymous(anonymous, spec, negated));
-            continue;
-        }
-        let (name, value) = spec
-            .split_once('=')
-            .map_or((spec, None), |(name, value)| (name, Some(value)));
-        validate_mark_name(name, line)?;
-        if value.is_some_and(str::is_empty) {
-            return Err(parse_error(line, "mark value must not be empty"));
-        }
-        parsed.push(ParsedMark::named(name, value, negated));
-    }
-    Ok(parsed)
+fn lower_selector_syntax_marks(marks: Vec<puzzle_authoring::SelectorMark>) -> Vec<ParsedMark> {
+    marks
+        .into_iter()
+        .map(|mark| {
+            if mark.name.is_empty()
+                && let Some(value) = mark.value.as_deref()
+                && let Some(anonymous) = anonymous_mark_for_token(value)
+            {
+                return ParsedMark::anonymous(anonymous, value, mark.negated);
+            }
+            ParsedMark::named(&mark.name, mark.value.as_deref(), mark.negated)
+        })
+        .collect()
 }
 
 fn validate_mark_name(value: &str, line: &str) -> Result<(), DiagnosticReport> {
@@ -4453,14 +3875,68 @@ fn normalize_occurrence_writes(
     after_placements: &HashMap<OccurrenceKey, OccurrencePlacement>,
     _line: &str,
 ) -> Result<Vec<WriteOpTemplate>, DiagnosticReport> {
-    let moves = before_placements
+    let before_occurrences = before_placements
         .iter()
-        .filter_map(|(key, before)| {
-            let after = after_placements.get(key)?;
-            (before.matched == after.matched
-                && before.component == after.component
-                && before.offset != after.offset)
-                .then_some((before, after))
+        .map(|(key, placement)| puzzle_authoring::RewriteOccurrence {
+            key: key.clone(),
+            position: RewritePosition2 {
+                component: placement.component,
+                offset: placement.offset.clone(),
+            },
+            subject: placement.matched.clone(),
+            require_marks: placement
+                .require_mark
+                .iter()
+                .cloned()
+                .map(RewriteMark2::Object)
+                .chain(
+                    placement
+                        .require_object_set_mark
+                        .iter()
+                        .cloned()
+                        .map(RewriteMark2::ObjectSet),
+                )
+                .collect(),
+            forbid_marks: Vec::new(),
+        })
+        .collect::<Vec<_>>();
+    let after_occurrences = after_placements
+        .iter()
+        .map(|(key, placement)| puzzle_authoring::RewriteOccurrence {
+            key: key.clone(),
+            position: RewritePosition2 {
+                component: placement.component,
+                offset: placement.offset.clone(),
+            },
+            subject: placement.matched.clone(),
+            require_marks: placement
+                .require_mark
+                .iter()
+                .cloned()
+                .map(RewriteMark2::Object)
+                .chain(
+                    placement
+                        .require_object_set_mark
+                        .iter()
+                        .cloned()
+                        .map(RewriteMark2::ObjectSet),
+                )
+                .collect(),
+            forbid_marks: Vec::new(),
+        })
+        .collect::<Vec<_>>();
+    let deltas = puzzle_authoring::diff_rewrite_occurrences(
+        &before_occurrences,
+        &after_occurrences,
+        |left, right| left == right,
+    );
+    let moves = deltas
+        .iter()
+        .filter_map(|delta| match delta {
+            puzzle_authoring::RewriteOccurrenceDelta::Move { from, to, subject } => {
+                Some((from.clone(), to.clone(), subject.clone()))
+            }
+            _ => None,
         })
         .collect::<Vec<_>>();
     if moves.is_empty() {
@@ -4468,8 +3944,8 @@ fn normalize_occurrence_writes(
     }
 
     let mut out = Vec::new();
-    for (before, after) in &moves {
-        match &before.matched {
+    for (before, after, subject) in &moves {
+        match subject {
             ResolvedObjectMatch::Object(object) => {
                 out.push(WriteOpTemplate::Move {
                     component: before.component,
@@ -4484,38 +3960,60 @@ fn normalize_occurrence_writes(
                     from_offset: before.offset.clone(),
                     to_offset: after.offset.clone(),
                     binding: *binding,
-                    objects: before.matched.possible_objects(),
+                    objects: subject.possible_objects(),
                 });
             }
         }
-
-        for attr in mark_to_remove(&before.require_mark, &after.require_mark) {
-            out.push(WriteOpTemplate::RemoveMark {
-                component: after.component,
-                offset: after.offset.clone(),
+    }
+    for delta in deltas {
+        let puzzle_authoring::RewriteOccurrenceDelta::RemoveMark { at, subject, mark } = delta
+        else {
+            continue;
+        };
+        if !moves
+            .iter()
+            .any(|(_, destination, moved)| *destination == at && *moved == subject)
+        {
+            continue;
+        }
+        match mark {
+            RewriteMark2::Object(attr) => out.push(WriteOpTemplate::RemoveMark {
+                component: at.component,
+                offset: at.offset,
                 object: attr.object,
                 mark: attr.mark,
                 value: attr.value,
                 match_value: attr.match_value,
-            });
-        }
-        for attr in mark_to_remove_object_set(
-            &before.require_object_set_mark,
-            &after.require_object_set_mark,
-        ) {
-            out.push(WriteOpTemplate::RemoveObjectSetMark {
-                component: after.component,
-                offset: after.offset.clone(),
+            }),
+            RewriteMark2::ObjectSet(attr) => out.push(WriteOpTemplate::RemoveObjectSetMark {
+                component: at.component,
+                offset: at.offset,
                 binding: attr.binding,
                 mark: attr.mark,
                 value: attr.value,
                 match_value: attr.match_value,
-            });
+            }),
         }
     }
 
+    let moved_placements = moves
+        .iter()
+        .filter_map(|(before, after, subject)| {
+            let before = before_placements.values().find(|placement| {
+                placement.component == before.component
+                    && placement.offset == before.offset
+                    && placement.matched == *subject
+            })?;
+            let after = after_placements.values().find(|placement| {
+                placement.component == after.component
+                    && placement.offset == after.offset
+                    && placement.matched == *subject
+            })?;
+            Some((before, after))
+        })
+        .collect::<Vec<_>>();
     out.extend(writes.into_iter().filter(|write| {
-        !moves.iter().any(|(before, after)| {
+        !moved_placements.iter().any(|(before, after)| {
             write_removes_match_at(write, before)
                 || write_adds_match_at(write, after)
                 || write_removes_moved_mark_at_before(write, before)
@@ -4652,18 +4150,12 @@ fn validate_null_cell_rewrite(
         else {
             continue;
         };
-        if after_cell.require_null && !before_cell.require_null {
-            return Err(parse_error(
-                line,
-                "`null` can only be matched on the before side of a rewrite",
-            ));
-        }
-        if before_cell.require_null && !block_cell_is_empty_or_null(after_cell) {
-            return Err(parse_error(
-                line,
-                "`null` matched cells cannot be written to",
-            ));
-        }
+        puzzle_authoring::validate_null_rewrite_cell(
+            before_cell.require_null,
+            after_cell.require_null,
+            block_cell_is_empty_or_null(after_cell),
+        )
+        .map_err(|error| parse_error(line, error.message()))?;
     }
     Ok(())
 }
@@ -4672,25 +4164,13 @@ fn validate_null_component_has_anchor_cell(
     component: &BlockComponent,
     line: &str,
 ) -> Result<(), DiagnosticReport> {
-    let mut has_null = false;
-    let mut has_non_null_cell = false;
-    for part in component.rows.iter().flatten() {
-        let BlockPart::Cell(cell) = part else {
-            continue;
-        };
-        if cell.require_null {
-            has_null = true;
-        } else {
-            has_non_null_cell = true;
-        }
-    }
-    if has_null && !has_non_null_cell {
-        return Err(parse_error(
-            line,
-            "`null` patterns must include at least one non-null cell",
-        ));
-    }
-    Ok(())
+    puzzle_authoring::validate_null_pattern_cells(component.rows.iter().flatten().filter_map(
+        |part| match part {
+            BlockPart::Cell(cell) => Some(cell.require_null),
+            BlockPart::Ellipsis => None,
+        },
+    ))
+    .map_err(|error| parse_error(line, error.message()))
 }
 
 fn block_cell_is_empty_or_null(cell: &BlockCell) -> bool {
@@ -4957,13 +4437,7 @@ fn parse_enum_mark_value(
 }
 
 fn parse_relative_direction_value(value: &str) -> Option<RelativeDirection> {
-    match value {
-        ">" => Some(RelativeDirection::Forward),
-        "<" => Some(RelativeDirection::Backward),
-        "^" => Some(RelativeDirection::Left),
-        "v" => Some(RelativeDirection::Right),
-        _ => None,
-    }
+    puzzle_authoring::relative_direction(value)
 }
 
 fn reject_duplicate_mark_patterns(
@@ -5871,7 +5345,6 @@ fn append_object_set_presence_writes(
             component,
             offset: offset.clone(),
             binding: *binding,
-            objects: before.matched.possible_objects(),
         });
     }
     for after in after_occurrences {
@@ -5889,7 +5362,6 @@ fn append_object_set_presence_writes(
             component,
             offset: offset.clone(),
             binding: *binding,
-            objects: after.matched.possible_objects(),
         });
     }
 }
