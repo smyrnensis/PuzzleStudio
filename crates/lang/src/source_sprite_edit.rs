@@ -1,7 +1,7 @@
 use serde::Deserialize;
 
-use crate::source_target::{resolve_source_entries_from_document, sprite_blocks};
-use crate::{SourceTargetKind, parse_surface_source_target_document};
+use crate::source_target::resolve_source_entries_from_document;
+use crate::{SourceTargetKind, parse_surface_source_target_document_for_profile};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpriteEditMutationResult {
@@ -64,18 +64,21 @@ pub fn mutate_sprite_source(
 ) -> Result<SpriteEditMutationResult, String> {
     let request: SpriteEditRequest = serde_json::from_str(request_json)
         .map_err(|error| format!("invalid sprite edit request: {error}"))?;
-    let kind = match request.dimension.as_str() {
-        "2d" => SourceTargetKind::Sprite,
-        "3d" => SourceTargetKind::Sprite3d,
+    let dimension = match request.dimension.as_str() {
+        "2d" => crate::ModelDimension::Two,
+        "3d" => crate::ModelDimension::Three,
         other => return Err(format!("unknown sprite edit dimension `{other}`")),
     };
-    let document = parse_surface_source_target_document(source);
-    let entries = resolve_source_entries_from_document(source, &document);
+    let document = parse_surface_source_target_document_for_profile(
+        source,
+        source_profile_for_dimension(dimension),
+    );
+    let entries = resolve_source_entries_from_document(&document);
     match request.operation.as_str() {
-        "insert" => insert_sprite(source, &document, &entries, kind, &request, false),
-        "insertEmpty" => insert_sprite(source, &document, &entries, kind, &request, true),
-        "update" => replace_sprite(source, &entries, kind, &request, false),
-        "duplicate" => replace_sprite(source, &entries, kind, &request, true),
+        "insert" => insert_sprite(source, &document, &entries, dimension, &request, false),
+        "insertEmpty" => insert_sprite(source, &document, &entries, dimension, &request, true),
+        "update" => replace_sprite(source, &entries, dimension, &request, false),
+        "duplicate" => replace_sprite(source, &entries, dimension, &request, true),
         other => Err(format!("unknown sprite edit operation `{other}`")),
     }
 }
@@ -83,7 +86,7 @@ pub fn mutate_sprite_source(
 fn replace_sprite(
     source: &str,
     entries: &[crate::SourceTarget],
-    kind: SourceTargetKind,
+    dimension: crate::ModelDimension,
     request: &SpriteEditRequest,
     duplicate: bool,
 ) -> Result<SpriteEditMutationResult, String> {
@@ -101,14 +104,21 @@ fn replace_sprite(
     };
     let source = owned_source.as_deref().unwrap_or(source);
     let entries = if owned_source.is_some() {
-        let document = parse_surface_source_target_document(source);
-        resolve_source_entries_from_document(source, &document)
+        let document = parse_surface_source_target_document_for_profile(
+            source,
+            source_profile_for_dimension(dimension),
+        );
+        resolve_source_entries_from_document(&document)
     } else {
         entries.to_vec()
     };
     let matching = entries
         .iter()
-        .filter(|entry| entry.kind == kind && entry.name == original)
+        .filter(|entry| {
+            entry.kind == SourceTargetKind::Sprite
+                && entry.dimension == Some(dimension)
+                && entry.name == original
+        })
         .collect::<Vec<_>>();
     let [target] = matching.as_slice() else {
         return Err(format!(
@@ -116,7 +126,7 @@ fn replace_sprite(
         ));
     };
     let name = if duplicate {
-        unique_name(&entries, kind, original)
+        unique_name(&entries, dimension, original)
     } else {
         request.name.clone().unwrap_or_else(|| original.to_string())
     };
@@ -135,6 +145,13 @@ fn replace_sprite(
         end: target.start + text.len(),
         name,
     })
+}
+
+fn source_profile_for_dimension(dimension: crate::ModelDimension) -> crate::PuzzleSourceProfile {
+    match dimension {
+        crate::ModelDimension::Two => crate::PuzzleSourceProfile::Puzzle2d,
+        crate::ModelDimension::Three => crate::PuzzleSourceProfile::Puzzle3d,
+    }
 }
 
 fn mutate_linked_definitions(source: &str, request: &SpriteEditRequest) -> Result<String, String> {
@@ -166,7 +183,10 @@ fn replace_named_color_definition(
     source: &str,
     binding: &SpriteEditColorBinding,
 ) -> Result<String, String> {
-    let document = parse_surface_source_target_document(source);
+    let document = parse_surface_source_target_document_for_profile(
+        source,
+        crate::PuzzleSourceProfile::Puzzle2d,
+    );
     let matches = document
         .lines
         .iter()
@@ -207,7 +227,10 @@ fn replace_named_shape_definition(
     frames: &[Vec<Vec<Vec<Option<usize>>>>],
     palette_len: usize,
 ) -> Result<String, String> {
-    let document = parse_surface_source_target_document(source);
+    let document = parse_surface_source_target_document_for_profile(
+        source,
+        crate::PuzzleSourceProfile::Puzzle2d,
+    );
     let matches = document
         .lines
         .iter()
@@ -274,19 +297,25 @@ fn insert_sprite(
     source: &str,
     document: &crate::surface::SurfaceDocument,
     entries: &[crate::SourceTarget],
-    kind: SourceTargetKind,
+    dimension: crate::ModelDimension,
     request: &SpriteEditRequest,
     empty: bool,
 ) -> Result<SpriteEditMutationResult, String> {
     let cursor = request.cursor.unwrap_or(source.len()).min(source.len());
-    let blocks = sprite_blocks(source, document);
-    let block = blocks
+    let block = document
+        .sprite_resources
         .iter()
-        .find(|block| block.kind == kind && cursor > block.open_index && cursor < block.close_index)
-        .or_else(|| blocks.iter().find(|block| block.kind == kind));
+        .filter(|block| block.dimension == dimension)
+        .find(|block| cursor > block.open_brace && cursor < block.close_brace)
+        .or_else(|| {
+            document
+                .sprite_resources
+                .iter()
+                .find(|block| block.dimension == dimension)
+        });
     if empty {
         if let Some(block) = block {
-            return insert_text(source, block.close_index, "", String::new());
+            return insert_text(source, block.close_brace, "", String::new());
         }
         let text = "sprites {\n\n}\n";
         return insert_text(source, line_end_after(source, cursor), text, String::new());
@@ -296,15 +325,16 @@ fn insert_sprite(
         .clone()
         .filter(|name| !name.trim().is_empty())
         .ok_or_else(|| "sprite insert requires a name".to_string())?;
-    if entries
-        .iter()
-        .any(|entry| entry.kind == kind && entry.name == name)
-    {
+    if entries.iter().any(|entry| {
+        entry.kind == SourceTargetKind::Sprite
+            && entry.dimension == Some(dimension)
+            && entry.name == name
+    }) {
         return Err(format!("sprite `{name}` already exists"));
     }
     let text = serialize_sprite(request, &name)?;
     if let Some(block) = block {
-        return insert_text(source, block.close_index, &text, name);
+        return insert_text(source, block.close_brace, &text, name);
     }
     let header = format!("sprites {{\n{text}\n}}\n");
     insert_text(source, source.len(), &header, name).map(|mut result| {
@@ -449,7 +479,11 @@ fn palette_char(cell: Option<usize>, palette_len: usize) -> Result<char, String>
     }
 }
 
-fn unique_name(entries: &[crate::SourceTarget], kind: SourceTargetKind, original: &str) -> String {
+fn unique_name(
+    entries: &[crate::SourceTarget],
+    dimension: crate::ModelDimension,
+    original: &str,
+) -> String {
     let base = original.strip_suffix("_copy").unwrap_or(original);
     for index in 1..=10_000 {
         let name = if index == 1 {
@@ -457,10 +491,11 @@ fn unique_name(entries: &[crate::SourceTarget], kind: SourceTargetKind, original
         } else {
             format!("{base}_copy_{index}")
         };
-        if !entries
-            .iter()
-            .any(|entry| entry.kind == kind && entry.name == name)
-        {
+        if !entries.iter().any(|entry| {
+            entry.kind == SourceTargetKind::Sprite
+                && entry.dimension == Some(dimension)
+                && entry.name == name
+        }) {
             return name;
         }
     }
@@ -513,7 +548,7 @@ mod tests {
 
     #[test]
     fn mutation_serializes_common_3d_layers_in_rust() {
-        let source = "puzzle3 world {\n  slots { solid = Box }\n}\n\nsprites art of world {\nBox {\ncolors = red\nshape = {\n0\n}\n}\n}\n";
+        let source = "puzzle world {\n  dimension = 3\n  slots { solid = Box }\n}\n\nsprites art of world {\nBox {\ncolors = red\nshape = {\n0\n}\n}\n}\n";
         let request = serde_json::json!({
             "operation": "update",
             "dimension": "3d",
@@ -547,7 +582,7 @@ mod tests {
 
     #[test]
     fn update_mutates_linked_definitions_and_preserves_bindings() {
-        let source = "puzzle3 world {\n}\n\nsprites art of world {\npalette {\naccent = red\n}\nshapes {\nbox_shape {\n0\n}\n}\nBox {\ncolors = accent\nshape = box_shape\n}\nOther {\ncolors = accent\nshape = box_shape\n}\n}\n";
+        let source = "puzzle world {\ndimension = 3\n}\n\nsprites art of world {\npalette {\naccent = red\n}\nshapes {\nbox_shape {\n0\n}\n}\nBox {\ncolors = accent\nshape = box_shape\n}\nOther {\ncolors = accent\nshape = box_shape\n}\n}\n";
         let request = serde_json::json!({
             "operation": "update",
             "dimension": "3d",

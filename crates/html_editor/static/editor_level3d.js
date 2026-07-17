@@ -1573,22 +1573,24 @@ function drawLevel3dPalettePreview(canvas, entry, exportData = previewExport) {
     .filter(Boolean);
   const snapshot = {
     size: { width: 1, depth: 1, height: 1 },
-    camera: level3dPalettePreviewCamera(exportData),
     sprites,
-    settings: exportData?.settings || {},
+    render: {
+      ...(exportData?.render || {}),
+      camera: level3dPalettePreviewCamera(exportData),
+    },
   };
   if (!objects.length) {
     if ((entry.objects || []).length) {
       drawLevel3dUnavailableTilePreview(ctx, width, height, entry.char);
     } else {
-      drawLevel3dEmptyTilePreview(ctx, width, height, snapshot, level3dPalettePreviewOptions(snapshot.camera));
+      drawLevel3dEmptyTilePreview(ctx, width, height, snapshot, level3dPalettePreviewOptions(snapshot.render.camera));
     }
     return;
   }
   drawLevel3dCellsPreview(ctx, width, height, snapshot, [{
     position: { x: 0, y: 0, z: 0 },
     objects,
-  }], level3dPalettePreviewOptions(snapshot.camera));
+  }], level3dPalettePreviewOptions(snapshot.render.camera));
 }
 
 function level3dPalettePreviewCamera(source) {
@@ -3130,17 +3132,11 @@ function sendLevel3dPlaytestKey(event) {
     setLevel3dActionStatus("3D play runtime is not ready", "is-error");
     return false;
   }
-  if (event.code === "KeyZ") {
-    target.postMessage({ type: "PuzzleStudioCommand", command: "undo" }, "*");
-  } else if (event.code === "KeyR") {
-    target.postMessage({ type: "PuzzleStudioCommand", command: "restart" }, "*");
-  } else {
-    target.postMessage({
-      type: "PuzzleStudioKey",
-      key: event.key,
-      code: event.code,
-    }, "*");
-  }
+  target.postMessage({
+    type: "PuzzleStudioKey",
+    key: event.key,
+    code: event.code,
+  }, "*");
   event.preventDefault();
   event.stopPropagation();
   return true;
@@ -3258,7 +3254,7 @@ function level3dRuntimePreviewUpdate() {
     resources: level3dRuntimePreviewResources(snapshot),
     camera: level3dRuntimePreviewCamera(snapshot),
     view: level3dRuntimePreviewView(snapshot),
-    settings: level3dPreviewSettings(snapshot.settings || {}),
+    settings: level3dPreviewSettings(snapshot.render || {}),
     component: level3dModelPreviewComponent(),
     componentEmbed: true,
   };
@@ -3301,8 +3297,8 @@ function level3dLayerRuntimePreviewUpdate() {
       cells: JSON.parse(JSON.stringify(snapshot.cells || [])),
     },
     resources: level3dRuntimePreviewResources(snapshot),
-    camera: snapshot.camera,
-    settings: snapshot.settings || {},
+    camera: snapshot.render?.camera,
+    settings: snapshot.render || {},
     component: level3dModelPreviewComponent(),
     componentEmbed: true,
   };
@@ -3505,8 +3501,8 @@ function level3dLayerRuntimeSnapshot() {
       objects: (cell.objects || []).filter((object) => level3dObjectIsVisible(object, snapshot)),
     }));
   const next = JSON.parse(JSON.stringify(snapshot));
-  next.camera = level3dLayerCamera();
-  next.settings = level3dLayerSettings(snapshot.settings || {});
+  next.render = level3dLayerSettings(snapshot.render || {});
+  next.render.camera = level3dLayerCamera();
   next.size = size;
   next.cells = cells;
   const levelIndex = Math.max(0, Math.min((next.levels || []).length - 1, Math.trunc(Number(next.levelIndex) || 0)));
@@ -4212,10 +4208,6 @@ function level3dRuntimePreviewDocument(update) {
     next.levelIndex = levelIndex;
     next.size = { ...size };
     next.cells = JSON.parse(JSON.stringify(cells));
-    const camera = payload.camera || incoming.camera;
-    if (camera) {
-      next.camera = JSON.parse(JSON.stringify(camera));
-    }
     const view = payload.view || incoming.view || {};
     if (payload.view || incoming.view) {
       next.view = JSON.parse(JSON.stringify({
@@ -4225,7 +4217,14 @@ function level3dRuntimePreviewDocument(update) {
     }
     const settings = payload.settings || incoming.settings;
     if (settings) {
-      next.settings = { ...(next.settings || {}), ...JSON.parse(JSON.stringify(settings)) };
+      next.render = { ...(next.render || {}), ...JSON.parse(JSON.stringify(settings)) };
+    }
+    const camera = payload.camera || incoming.camera;
+    if (camera) {
+      next.render = {
+        ...(next.render || {}),
+        camera: JSON.parse(JSON.stringify(camera)),
+      };
     }
     const sceneName = incoming.scene || "__editor_model_preview__";
     next.scenes = [{
@@ -4496,7 +4495,7 @@ function level3dPreviewUpdateFromSnapshot(snapshot) {
     resources,
     camera: level3dRuntimePreviewCamera(snapshot),
     view: level3dRuntimePreviewView(snapshot),
-    settings: level3dPreviewSettings(snapshot.settings || {}),
+    settings: level3dPreviewSettings(snapshot.render || {}),
     component: level3dModelPreviewComponent(),
     componentEmbed: true,
   };
@@ -4552,8 +4551,6 @@ function puzzle3dSolutionStepSnapshot(step) {
   snapshot.size = { ...(scene.size || snapshot.size || {}) };
   snapshot.cells = JSON.parse(JSON.stringify(scene.cells || []));
   snapshot.layerCount = scene.layerCount || snapshot.layerCount;
-  snapshot.completed = Boolean(step.completed);
-  snapshot.clearCommands = Array.isArray(step.clearCommands) ? [...step.clearCommands] : [];
   if (Array.isArray(snapshot.levels) && Number.isInteger(snapshot.levelIndex) && snapshot.levels[snapshot.levelIndex]) {
     snapshot.levels[snapshot.levelIndex].size = { ...snapshot.size };
     snapshot.levels[snapshot.levelIndex].cells = JSON.parse(JSON.stringify(snapshot.cells));
@@ -4566,7 +4563,7 @@ function level3dSnapshotWithPreviewGrid(snapshot) {
     return snapshot;
   }
   const next = JSON.parse(JSON.stringify(snapshot));
-  next.settings = level3dPreviewSettings(next.settings || {});
+  next.render = level3dPreviewSettings(next.render || {});
   return next;
 }
 
@@ -4596,7 +4593,7 @@ function level3dPreviewSettings(settings = {}) {
 }
 
 function level3dPreviewGridSettings(snapshot) {
-  const raw = snapshot?.settings?.grid;
+  const raw = snapshot?.render?.grid;
   if (!raw || raw === false || raw === true) {
     return { visibility: 0 };
   }
@@ -4733,7 +4730,7 @@ function level3dPlacementFaces(snapshot, view) {
       continue;
     }
     for (const face of directions) {
-      if (level3dDirectionDepth(face.normal, snapshot.camera) <= 0) {
+      if (level3dDirectionDepth(face.normal, snapshot.render?.camera) <= 0) {
         continue;
       }
       const place = {
@@ -5503,7 +5500,7 @@ function level3dPreviewCamera(source) {
 }
 
 function level3dBasePreviewCamera(source) {
-  const camera = source?.camera || previewExport?.camera || {};
+  const camera = source?.render?.camera || previewExport?.render?.camera || {};
   return {
     yawDegrees: Number(camera.yawDegrees ?? 15),
     pitchDegrees: Number(camera.pitchDegrees ?? 55),

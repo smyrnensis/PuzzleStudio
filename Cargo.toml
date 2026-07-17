@@ -3,7 +3,6 @@ members = [
     "crates/kernel",
     "crates/authoring",
     "crates/core",
-    "crates/grid3d",
     "crates/runtime_contract",
     "crates/scene",
     "crates/lang",

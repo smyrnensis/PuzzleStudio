@@ -11,8 +11,8 @@ choice = first second
 }
 
 slots {
-Portal:choice
-Selector Wall
+portal = Portal:choice
+actor = Selector Wall
 }
 
 win_conditions {
@@ -50,8 +50,11 @@ level "choose"
 
 puzzle main {
 slots {
-Goal
-Player Box Wall
+goal = Goal
+actor = Player Box Wall
+}
+
+rules {
 }
 
 levels {

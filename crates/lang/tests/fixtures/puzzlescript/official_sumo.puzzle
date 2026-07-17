@@ -77,18 +77,18 @@ next_level
 
 levels {
 legend {
-. = Background
+A = Background
 # = Wall Background
 P = Player Background
 S = Sumo Background
 }
 
 ########
-#......#
-#......#
-#.P..S.#
-#......#
-#......#
+#AAAAAA#
+#AAAAAA#
+#APAASA#
+#AAAAAA#
+#AAAAAA#
 ########
 }
 }

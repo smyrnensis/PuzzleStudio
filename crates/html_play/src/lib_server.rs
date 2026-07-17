@@ -349,7 +349,7 @@ fn is_solver_control_input(name: &str) -> bool {
 }
 
 #[cfg(feature = "solver")]
-fn solver_inputs3(inputs: &[puzzle_grid3d::InputDef3]) -> Vec<InputId> {
+fn solver_inputs3(inputs: &[puzzle_core::GridInput<3>]) -> Vec<InputId> {
     let mut inputs = inputs
         .iter()
         .filter(|input| !is_solver_control_input(&input.name))
@@ -395,19 +395,27 @@ fn push_solution_steps(out: &mut String, loaded: &LoadedGame, steps: &[PuzzleSol
 }
 
 #[cfg(feature = "solver")]
-fn push_solution_moves3(out: &mut String, parsed: &ParsedPuzzle3, inputs: &[InputId]) {
+fn push_solution_moves3(
+    out: &mut String,
+    model: &LoadedGridGame<3, Size3>,
+    inputs: &[InputId],
+) {
     out.push_str("\"moves\":[");
     for (index, input) in inputs.iter().enumerate() {
         if index > 0 {
             out.push(',');
         }
-        push_input_move3(out, parsed, *input);
+        push_input_move3(out, model, *input);
     }
     out.push(']');
 }
 
 #[cfg(feature = "solver")]
-fn push_solution_steps3(out: &mut String, parsed: &ParsedPuzzle3, steps: &[Puzzle3SolutionStep]) {
+fn push_spatial_solution_steps(
+    out: &mut String,
+    model: &LoadedGridGame<3, Size3>,
+    steps: &[GridSolutionStep<3, Size3>],
+) {
     out.push_str("\"steps\":[");
     for (index, step) in steps.iter().enumerate() {
         if index > 0 {
@@ -418,21 +426,12 @@ fn push_solution_steps3(out: &mut String, parsed: &ParsedPuzzle3, steps: &[Puzzl
         out.push(',');
         if let Some(input) = step.input {
             out.push_str("\"move\":");
-            push_input_move3(out, parsed, input);
+            push_input_move3(out, model, input);
         } else {
             out.push_str("\"move\":null");
         }
         out.push(',');
-        push_json_bool(out, "completed", step.completed);
-        out.push(',');
-        out.push_str("\"clearCommands\":");
-        if step.completed {
-            push_lifecycle_commands3(out, &parsed.lifecycle.on_level_clear);
-        } else {
-            out.push_str("[]");
-        }
-        out.push(',');
-        push_state3_scene(out, parsed, &step.state);
+        push_state3_scene(out, model, &step.state);
         out.push('}');
     }
     out.push(']');
@@ -461,9 +460,9 @@ fn push_input_move(out: &mut String, loaded: &LoadedGame, input: InputId) {
     out.push('}');
 }
 
-fn push_input_move3(out: &mut String, parsed: &ParsedPuzzle3, input: InputId) {
+fn push_input_move3(out: &mut String, model: &LoadedGridGame<3, Size3>, input: InputId) {
     out.push('{');
-    let input_def = parsed.input(input);
+    let input_def = model.inputs.iter().find(|candidate| candidate.id == input);
     let name = input_def
         .map(|input| input.name.as_str())
         .unwrap_or_else(|| panic!("compiled 3D input {} is missing its definition", input.0));
@@ -474,27 +473,30 @@ fn push_input_move3(out: &mut String, parsed: &ParsedPuzzle3, input: InputId) {
     out.push_str("\"arrow\":null");
     out.push(',');
     if let Some(direction) = input_def.and_then(|input| input.direction) {
-        push_json_pair(out, "direction", direction.name);
+        push_json_pair(out, "direction", spatial_input_direction_name(direction.axes()));
     } else {
         out.push_str("\"direction\":null");
     }
     out.push('}');
 }
 
-fn push_lifecycle_commands3(out: &mut String, commands: &[LifecycleCommand]) {
-    out.push('[');
-    for (index, command) in commands.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        out.push('{');
-        push_json_effect_fields(out, command);
-        out.push('}');
+fn spatial_input_direction_name(axes: [i16; 3]) -> &'static str {
+    match axes {
+        [0, 0, 1] => "up",
+        [0, 0, -1] => "down",
+        [-1, 0, 0] => "left",
+        [1, 0, 0] => "right",
+        [0, 1, 0] => "front",
+        [0, -1, 0] => "back",
+        _ => panic!("compiled spatial input has a non-cardinal direction: {axes:?}"),
     }
-    out.push(']');
 }
 
-fn push_state3_scene(out: &mut String, parsed: &ParsedPuzzle3, state: &State3) {
+fn push_state3_scene(
+    out: &mut String,
+    model: &LoadedGridGame<3, Size3>,
+    state: &GridState<3, Size3>,
+) {
     out.push_str("\"scene\":{");
     push_json_pair(out, "kind", "puzzle3d");
     out.push(',');
@@ -526,7 +528,7 @@ fn push_state3_scene(out: &mut String, parsed: &ParsedPuzzle3, state: &State3) {
                     if object_index > 0 {
                         out.push(',');
                     }
-                    push_object3(out, parsed, *object);
+                    push_object3(out, model, *object);
                 }
                 out.push_str("]}");
             }
@@ -555,11 +557,11 @@ fn push_coord3(out: &mut String, position: Coord3) {
     out.push('}');
 }
 
-fn push_object3(out: &mut String, parsed: &ParsedPuzzle3, object: ObjectId3) {
+fn push_object3(out: &mut String, model: &LoadedGridGame<3, Size3>, object: ObjectId) {
     out.push('{');
     push_json_number(out, "id", object.0 as u64);
     out.push(',');
-    let name = parsed
+    let name = model
         .object_labels
         .get(&object)
         .map(String::as_str)
@@ -571,7 +573,7 @@ fn push_object3(out: &mut String, parsed: &ParsedPuzzle3, object: ObjectId3) {
         });
     push_json_pair(out, "name", name);
     out.push(',');
-    if let Some(layer) = parsed.game.object_layer(object) {
+    if let Some(layer) = model.game.object_layer(object) {
         push_json_number(out, "layer", layer.0 as u64);
     } else {
         out.push_str("\"layer\":null");
@@ -681,7 +683,7 @@ fn push_scene_puzzle_state(out: &mut String, loaded: &LoadedGame, session: &Game
         if let Some(level_index) = state
             .puzzles
             .get(name)
-            .and_then(|puzzle| puzzle.level_index)
+            .and_then(|puzzle| puzzle.active_level_index)
         {
             out.push_str("\"level\":");
             push_level_ref(
@@ -697,7 +699,7 @@ fn push_scene_puzzle_state(out: &mut String, loaded: &LoadedGame, session: &Game
         if let Some(puzzle) = state.puzzles.get(name) {
             out.push(',');
             let level = puzzle
-                .level_index
+                .active_level_index
                 .and_then(|index| loaded.levels.get(index));
             push_scene_object_body(
                 out,
@@ -902,7 +904,7 @@ fn scene_puzzle_state<'a>(
             .and_then(|puzzle_name| state.puzzles.get(puzzle_name))
     }?;
     let level = puzzle
-        .level_index
+        .active_level_index
         .and_then(|index| loaded.levels.get(index));
     Some((&puzzle.state, level))
 }
@@ -910,8 +912,8 @@ fn scene_puzzle_state<'a>(
 fn first_puzzle_component(components: &[SceneComponent]) -> Option<&str> {
     for component in components {
         match component {
-            SceneComponent::Frame(frame) if frame.kind == "puzzle" || frame.kind == "frame" => {
-                return Some(frame.source.as_str());
+            SceneComponent::Viewport(viewport) => {
+                return Some(viewport.source.as_str());
             }
             SceneComponent::Row(container)
             | SceneComponent::Column(container)
@@ -1496,8 +1498,6 @@ fn push_scene_state_def(out: &mut String, scene: &puzzle_lang::SceneDef) {
         }
         out.push('{');
         push_json_pair(out, "name", &puzzle.name);
-        out.push(',');
-        push_json_pair(out, "kind", &puzzle.kind);
         out.push(',');
         push_json_pair(out, "model", &puzzle.model);
         out.push(',');

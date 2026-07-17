@@ -45,19 +45,20 @@ const source = `
 title = "Editor Preview Contract"
 
 puzzle board {
-  layers {
-    tiles = Player
+  slots {
+    Player
   }
-  empty .
   rules {
     [ Player ] -> [ Player ]
   }
-}
 
-levels default of board {
-  legend P = Player
-  level "one" {
+  levels {
+    legend {
+      P = Player
+    }
+    level "one" {
     P
+    }
   }
 }
 `;
@@ -77,10 +78,31 @@ for (const token of required) {
   }
 }
 
-const puzzle3Source = await readFile(
-  "crates/lang/tests/fixtures/spec_3d_preview_contract.puzzle3",
-  "utf8",
-);
+const puzzle3Source = `
+title = "3D Editor Preview Contract"
+
+puzzle preview {
+  dimension = 3
+  slots {
+    Player
+  }
+  rules {
+  }
+  layout {
+    puzzle
+  }
+}
+
+levels default of preview {
+  legend {
+    P = Player
+  }
+  level "one" {
+    P
+  }
+}
+
+`;
 const puzzle3Html = compile_preview(
   puzzle3Source,
   "spec_3d_preview_contract.puzzle3",
@@ -88,17 +110,22 @@ const puzzle3Html = compile_preview(
   "",
 );
 for (const token of [
-  "function schedulePuzzle3ControllerConnectedResize(entry)",
-  "entry.root?.isConnected",
+  "window.Puzzle3DFrameFixture = JSON.parse(",
+  "window.Puzzle3ControllerAutoBoot = false",
+  "WasmStandaloneSession",
+  "sessionManaged: Boolean(standaloneRuntime && !puzzle3PreviewSurface)",
+  "window.PuzzleRuntimeWasmLoader",
 ]) {
   if (!puzzle3Html.includes(token)) {
-    throw new Error(`generated 3D editor preview is missing required connected-render contract: ${token}`);
+    throw new Error(
+      `generated spatial editor preview is missing required runtime contract: ${token}\n${puzzle3Html.slice(0, 800)}`,
+    );
   }
 }
 
 const editorSource = `
 puzzle default {
-layers {
+slots {
 Player Box Wall
 }
 rules {

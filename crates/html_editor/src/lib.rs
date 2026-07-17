@@ -183,7 +183,7 @@ const RENDERER_JS: &str = include_str!("../../html_play/static/renderer.js");
 const EDITOR_STATIC_RENDERER_JS: &str = include_str!("../static/renderer.js");
 #[cfg(feature = "embedded-assets")]
 const PAGES_EXAMPLE_PUZZLE_PATH: &str = "starter/01-basic.puzzle";
-#[cfg(feature = "embedded-assets")]
+#[cfg(all(test, feature = "embedded-assets"))]
 const PAGES_EXAMPLE_PUZZLE_SOURCE: &str = include_str!("../starter/01-basic.puzzle");
 #[cfg(feature = "embedded-assets")]
 const PAGES_STARTER_DOCUMENTS: &[(&str, &str, bool)] = &[
@@ -4431,8 +4431,12 @@ P
             ))
             .expect("compile puzzle3 preview");
 
-        assert!(html.contains("window.Puzzle3DFixture"));
-        assert!(html.contains("WasmPuzzle3Runtime"));
+        assert!(html.contains("window.Puzzle3DFrameFixture"));
+        assert!(html.contains("WasmStandaloneSession"));
+        assert!(html.contains("window.Puzzle3ControllerAutoBoot = false"));
+        assert!(
+            html.contains("sessionManaged: Boolean(standaloneRuntime && !puzzle3PreviewSurface)")
+        );
         assert!(html.contains("window.Puzzle3ThreeModuleSource = "));
         assert!(html.contains("window.Puzzle3ThreeRenderer"));
         assert!(html.contains("return text === \"canvas\" ? \"canvas\" : \"three\";"));
@@ -4446,6 +4450,8 @@ P
 title = "Bare 3D Input"
 
 puzzle push3 {
+  dimension = 3
+
   slots {
     actor = Player
   }
@@ -4477,7 +4483,8 @@ levels demo of push3 {
             ))
             .expect("compile puzzle3 input preview");
 
-        assert!(html.contains("window.Puzzle3DFixture"));
+        assert!(html.contains("window.Puzzle3DFrameFixture"));
+        assert!(html.contains("WasmStandaloneSession"));
         assert!(html.contains("Bare 3D Input"));
     }
 
@@ -4942,7 +4949,7 @@ levels demo of push3 {
             .find("saveDocumentStore(false);")
             .expect("file import persists the imported workspace");
         let status_imported = EDITOR_IMPORT_EXPORT_JS[load_imported..]
-            .find("setEditorStatus(`Imported to ${folderName}`, \"is-ok\");")
+            .find("setEditorStatus(`Opened in ${folderName}`, \"is-ok\");")
             .expect("file import reports import success");
 
         assert!(save_imported < status_imported);
@@ -5125,8 +5132,10 @@ levels demo of push3 {
         assert!(EDITOR_JS.contains("const inputs = latestPreviewState?.inputs?.length"));
         assert!(EDITOR_JS.contains(": exportData?.inputs || [];"));
         assert!(EDITOR_JS.contains(
-            "const command = levelPlaytestCommandForKey(event) || levelPlaytestInputForKey(event);"
+            "const command = levelPlaytestInputForKey(event) || levelPlaytestCommandForKey(event);"
         ));
+        assert!(!EDITOR_JS.contains("code === \"KeyZ\""));
+        assert!(!EDITOR_JS.contains("code.startsWith(\"Key\")"));
         assert!(EDITOR_JS.contains(r#"postMessage({ type: "PuzzleStudioCommand", command }"#));
         assert!(EDITOR_JS.contains(r#"type: "PuzzleStudioKey","#));
         assert!(EDITOR_JS.contains("code: event.code"));
@@ -5160,11 +5169,16 @@ levels demo of push3 {
         assert!(EDITOR_LEVEL3D_JS.contains("function stopLevel3dPlaytest(options = {})"));
         assert!(!EDITOR_LEVEL3D_JS.contains("PuzzleStudioStopPreviewSession"));
         assert!(EDITOR_LEVEL3D_JS.contains("function sendLevel3dPlaytestKey(event)"));
-        assert!(
-            EDITOR_LEVEL3D_JS.contains(
-                "target.postMessage({ type: \"PuzzleStudioCommand\", command: \"undo\" }"
-            )
-        );
+        let send_key_start = EDITOR_LEVEL3D_JS
+            .find("function sendLevel3dPlaytestKey(event) {")
+            .unwrap();
+        let send_key_end = EDITOR_LEVEL3D_JS[send_key_start..]
+            .find("function handleLevel3dPlaytestStateMessage(event) {")
+            .map(|offset| send_key_start + offset)
+            .unwrap();
+        let send_key_body = &EDITOR_LEVEL3D_JS[send_key_start..send_key_end];
+        assert!(send_key_body.contains("type: \"PuzzleStudioKey\""));
+        assert!(!send_key_body.contains("PuzzleStudioCommand"));
         assert!(EDITOR_LEVEL3D_JS.contains("type: \"PuzzleStudioRequestPuzzle3State\""));
         assert!(EDITOR_LEVEL3D_JS.contains("function handleLevel3dPlaytestStateMessage(event)"));
         assert!(EDITOR_LEVEL3D_JS.contains("event.data?.type !== \"PuzzleStudioPuzzle3State\""));
@@ -5303,7 +5317,7 @@ levels demo of push3 {
         assert!(EDITOR_RUNTIME_JS.contains("active_source_analysis_level_editor_level_slots"));
         assert!(EDITOR_RUNTIME_JS.contains("active_source_analysis_level_editor_sprite_json"));
         assert!(!EDITOR_JS.contains("loadLevelSourceEntryAfterPreviewCompile"));
-        assert!(EDITOR_JS.contains("applyLevelEditorContractVisuals(session, objects)"));
+        assert!(!EDITOR_JS.contains("applyLevelEditorContractVisuals"));
         assert!(EDITOR_JS.contains("session.levelSlots(levelIndex, authoredLayer)"));
         assert!(!EDITOR_JS.contains("function levelEditorRuntimeSprite("));
         assert!(EDITOR_JS.contains("if (exportData.editorSourceContract) {"));
@@ -5412,7 +5426,7 @@ levels demo of push3 {
     fn level_name_picker_uses_parsed_level_definitions_only() {
         assert!(EDITOR_JS.contains("function findLevelSourceEntries(source, document)"));
         assert!(EDITOR_JS.contains(
-            "for (const entry of surfaceEntriesForSource(source).filter((candidate) => candidate.kind === \"level\"))"
+            "for (const entry of surfaceEntriesForSource(source).filter((candidate) => sourceTargetMatches(candidate, \"level\", \"2d\")))"
         ));
         assert!(EDITOR_JS.contains(
             "sourceName: Object.prototype.hasOwnProperty.call(entry, \"sourceName\") ? entry.sourceName : entry.name || \"\","
@@ -5513,18 +5527,26 @@ levels demo of push3 {
         assert!(EDITOR_WORKSPACE_JS.contains("await loadWasmCompiler();"));
         assert!(EDITOR_JS.contains("throw new Error(message);"));
         assert!(EDITOR_JS.contains("console.warn(\"Focused source entries unavailable\", error);"));
-        assert!(
-            EDITOR_JS.contains("return [];\n  }\n}\n\nfunction focusedPuzzleSurfaceEntriesByKind")
-        );
+        assert!(EDITOR_JS.contains(
+            "return uniqueFocusedPuzzleEntries(focusedPuzzleSurfaceEntriesByKind(kind, context))"
+        ));
         assert!(
             !EDITOR_JS
                 .contains("return [];\n  }\n  const raw = compiler.source_entries_json(text);")
         );
         assert!(!EDITOR_JS.contains("compiler.source_entries_json(text)"));
-        assert!(EDITOR_JS.contains("focusedPuzzleSurfaceEntriesByKind(\"level\""));
-        assert!(EDITOR_JS.contains("focusedPuzzleSurfaceEntriesByKind(\"level3d\""));
-        assert!(EDITOR_JS.contains("focusedPuzzleSurfaceEntriesByKind(\"sprite\""));
-        assert!(EDITOR_JS.contains("focusedPuzzleSurfaceEntriesByKind(\"sprite3d\""));
+        assert!(EDITOR_JS.contains(
+            "focusedPuzzleSurfaceEntriesByKind(\"level\", { document, source }, \"2d\")"
+        ));
+        assert!(EDITOR_JS.contains(
+            "focusedPuzzleSurfaceEntriesByKind(\"level\", { document: activeDocument(), source }, \"3d\")"
+        ));
+        assert!(EDITOR_JS.contains(
+            "focusedPuzzleSurfaceEntriesByKind(\"sprite\", { document: activeDocument(), source }, \"2d\")"
+        ));
+        assert!(EDITOR_JS.contains(
+            "focusedPuzzleSurfaceEntriesByKind(\"sprite\", { document: activeDocument(), source }, \"3d\")"
+        ));
         assert!(!EDITOR_JS.contains("sourceSprite3dTargetAtPosition("));
         assert!(!EDITOR_JS.contains("const sprite3dTarget = sourceSprite3dTargetAtPosition"));
         assert!(!EDITOR_JS.contains("for (const range of findLevelsRanges(source) || []) {\n      if (sourcePositionInsideRanges(range.start, level3dRanges))"));
@@ -5535,25 +5557,17 @@ levels demo of push3 {
     }
 
     #[test]
-    fn editor_dimension_follows_active_source_profile() {
+    fn editor_dimension_follows_canonical_source_products() {
         assert!(EDITOR_WORKSPACE_JS.contains("function puzzleSourceProfile(document)"));
-        assert!(
-            EDITOR_JS.contains("function editorDimensionForDocument(document = activeDocument())")
-        );
-        assert!(
-            EDITOR_JS.contains(
-                "const documentDimension = editorDimensionForDocument(context.document);"
-            )
-        );
+        assert!(!EDITOR_JS.contains("function editorDimensionForDocument("));
+        assert!(!EDITOR_JS.contains("editorDimensionForPuzzleSourceProfile("));
+        assert!(EDITOR_JS.contains("dimension: entry.dimension,"));
         assert!(EDITOR_JS.contains(
-            "if (documentDimension && normalized !== documentDimension) {\n    return [];\n  }"
+            "throw new Error(`Source ${kind} entry is missing its canonical dimension.`);"
         ));
-        assert!(
-            EDITOR_JS
-                .contains("const sourceDimension = editorDimensionForDocument(context?.document);")
-        );
+        assert!(EDITOR_JS.contains(".filter((item) => item.dimension === normalized);"));
         assert!(EDITOR_WORKSPACE_JS.contains(
-            "syncPaneModesFromFocusedPuzzleSource({ switchOpenPane: true, loadFirst: false });"
+            "void syncPaneModesFromFocusedPuzzleSource({ switchOpenPane: true, loadFirst: false })"
         ));
     }
 
@@ -5678,14 +5692,14 @@ levels demo of push3 {
         assert!(payload.contains("\"folds\":[{"));
         assert!(payload.contains("\"version\":1"));
         assert!(payload.contains("\"offsetEncoding\":\"utf8\""));
-        assert!(EDITOR_CODEMIRROR_JS.contains("foldService.of(sourceFoldRangeForLine)"));
-        assert!(EDITOR_CODEMIRROR_JS.contains("foldGutter({"));
-        assert!(EDITOR_CODEMIRROR_JS.contains("...foldKeymap"));
+        assert!(EDITOR_CODEMIRROR_SOURCE_JS.contains("foldService.of(sourceFoldRangeForLine)"));
+        assert!(EDITOR_CODEMIRROR_SOURCE_JS.contains("foldGutter({"));
+        assert!(EDITOR_CODEMIRROR_SOURCE_JS.contains("...foldKeymap"));
         assert!(
             EDITOR_SOURCE_JS
                 .contains("sourceEditor.sourceEditorPort.applyFoldRanges(source, payload);")
         );
-        assert!(!EDITOR_CODEMIRROR_JS.contains("sourceFoldableBlocks"));
+        assert!(!EDITOR_CODEMIRROR_SOURCE_JS.contains("sourceFoldableBlocks"));
     }
 
     #[test]
@@ -5885,7 +5899,8 @@ levels demo of push3 {
         assert!(EDITOR_JS.contains("setActiveLevelIndex(levelIndex, exportData);"));
         assert!(EDITOR_JS.contains("currentLevel3dSourceLocationForIndex(levelIndex, exportData)"));
         assert!(EDITOR_JS.contains("currentLevelSourceLocation();"));
-        assert!(EDITOR_JS.contains("kind: targetMode === \"level3d\" ? \"level3d\" : \"level\","));
+        assert!(EDITOR_JS.contains("kind: \"level\","));
+        assert!(EDITOR_JS.contains("dimension: targetMode === \"level3d\" ? \"3d\" : \"2d\","));
         assert!(EDITOR_JS.contains("previewEditButton?.addEventListener(\"click\""));
         assert!(EDITOR_JS.contains("openLevelPaneForCurrentPreviewLevel();"));
         assert!(EDITOR_JS.contains("requestFocusedPreviewState();"));
@@ -6509,7 +6524,7 @@ move
         assert!(EDITOR_LEVEL3D_JS.contains("zoom: camera.zoom,"));
         assert!(EDITOR_LEVEL3D_JS.contains("view: level3dRuntimePreviewView(snapshot)"));
         assert!(
-            EDITOR_LEVEL3D_JS.contains("settings: level3dPreviewSettings(snapshot.settings || {})")
+            EDITOR_LEVEL3D_JS.contains("settings: level3dPreviewSettings(snapshot.render || {})")
         );
         assert!(!EDITOR_LEVEL3D_JS.contains("previewFrameHasEditorLevelState = true;"));
         assert!(EDITOR_LEVEL3D_JS.contains("function renderPuzzle3dSolverPreview()"));
@@ -6570,10 +6585,10 @@ move
         assert!(fixture_json.contains("\"sprites\": {"));
         assert!(
             fixture_json.contains(
-                "\"camera\": { \"yawDegrees\": 10, \"pitchDegrees\": 55, \"rollDegrees\": 20, \"zoom\": 1.1 }"
+                "\"camera\": { \"yawDegrees\": 10, \"pitchDegrees\": 55, \"rollDegrees\": 20, \"zoom\": 1.1, \"interactiveLook\": false, \"interactiveZoom\": false }"
             )
         );
-        assert!(fixture_json.contains("\"settings\": {"));
+        assert!(fixture_json.contains("\"render\": {"));
         assert!(fixture_json.contains("\"interactiveLook\": false"));
         assert!(fixture_json.contains("\"interactiveZoom\": false"));
         assert!(fixture_json.contains("\"shade\": true"));
@@ -6583,7 +6598,7 @@ move
         assert!(EDITOR_LEVEL3D_JS.contains("camera: level3dRuntimePreviewCamera(snapshot)"));
         assert!(EDITOR_LEVEL3D_JS.contains("view: level3dRuntimePreviewView(snapshot)"));
         assert!(
-            EDITOR_LEVEL3D_JS.contains("settings: level3dPreviewSettings(snapshot.settings || {})")
+            EDITOR_LEVEL3D_JS.contains("settings: level3dPreviewSettings(snapshot.render || {})")
         );
     }
 
@@ -6668,8 +6683,10 @@ move
                 .contains("sourceEditor.addEventListener(\"click\", loadSpriteFromSourceClick);")
         );
         assert!(EDITOR_JS.contains("function loadResolvedSourceTarget(target, options = {})"));
-        assert!(EDITOR_JS.contains("function previewModeForSourceTargetKind(kind)"));
-        assert!(EDITOR_JS.contains("kind: target.kind, start: target.start, end: target.end"));
+        assert!(EDITOR_JS.contains("function previewModeForSourceTarget(target)"));
+        assert!(EDITOR_JS.contains(
+            "kind: target.kind, dimension: target.dimension, start: target.start, end: target.end"
+        ));
         assert!(EDITOR_JS.contains("currentPreviewMode === resolvedMode"));
         assert!(EDITOR_SPRITE_JS.contains("function loadSpriteSourceTarget(target, options = {})"));
     }
@@ -6715,7 +6732,9 @@ move
         assert!(!EDITOR_SPRITE3D_JS.contains("function findSprite3dDefinitionByName"));
         assert!(!EDITOR_SPRITE3D_JS.contains("function findSprite3dDefinitionAtPosition"));
         assert!(!EDITOR_SPRITE3D_JS.contains("function findSprite3dDefinitions"));
-        assert!(EDITOR_JS.contains("focusedPuzzleSurfaceEntriesByKind(\"sprite3d\""));
+        assert!(EDITOR_JS.contains(
+            "focusedPuzzleSurfaceEntriesByKind(\"sprite\", { document: activeDocument(), source }, \"3d\")"
+        ));
         assert!(EDITOR_JS.contains("window.PuzzleStudioRuntime.sourceEntries(text)"));
         assert!(!EDITOR_JS.contains("findSprite3dDefinitionByName(source, name)"));
         assert!(EDITOR_SPRITE3D_JS.contains("function sprite3dTargetPayload(target)"));
@@ -7039,9 +7058,12 @@ move
         for command in ["copy", "cut", "paste", "delete"] {
             assert!(
                 EDITOR_SPRITE_JS
-                    .contains(&format!("{{ key: \"{command}\", group: \"clipboard\" }}"))
+                    .contains(&format!("id: \"{command}\",\n    group: \"clipboard\","))
             );
         }
+        assert!(EDITOR_SPRITE_JS.contains(
+            "...SPRITE_EDIT_COMMANDS.map(({ id, group }) => Object.freeze({ key: id, group }))"
+        ));
         assert!(EDITOR_SPRITE_JS.contains("function runSpriteEditCommand(dimension, command)"));
         assert!(EDITOR_SPRITE3D_JS.contains("function runSprite3dEditCommand(command)"));
         assert!(!EDITOR_HTML.contains(r#"id="sprite3dCopySliceButton""#));
@@ -7149,19 +7171,20 @@ move
         assert!(
             EDITOR_WORKBENCH_JS.contains("document.querySelector(\"#spritePaneHeaderActions\")")
         );
-        assert!(
-            EDITOR_SPRITE_JS
-                .contains("root.append(nameRow, geometry, animation);")
-        );
+        assert!(EDITOR_SPRITE_JS.contains("root.append(nameRow, geometry, animation);"));
         assert!(EDITOR_SPRITE_JS.contains("currentWrap.append(spriteShapeField);"));
         assert!(EDITOR_SPRITE3D_JS.contains("currentWrap.append(sprite3dShapeField);"));
-        assert_eq!(EDITOR_SPRITE_JS.matches("input.placeholder = \"shape\";").count(), 2);
+        assert_eq!(
+            EDITOR_SPRITE_JS
+                .matches("input.placeholder = \"shape\";")
+                .count(),
+            2
+        );
         assert!(!EDITOR_SPRITE_JS.contains("sprite-shape-bind-label"));
         assert!(EDITOR_CSS.contains(".sprite-editor-name-row {\n  flex: 0 1 470px;"));
         assert!(
-            EDITOR_CSS.contains(
-                ".sprite-current-color-wrap > .sprite-shape-field {\n  flex: 0 0 auto;"
-            )
+            EDITOR_CSS
+                .contains(".sprite-current-color-wrap > .sprite-shape-field {\n  flex: 0 0 auto;")
         );
         assert!(EDITOR_SPRITE3D_JS.contains("function newSprite3dDraft()"));
         assert!(EDITOR_SPRITE3D_JS.contains("function addSprite3dToSource()"));
@@ -7184,13 +7207,18 @@ move
         assert!(EDITOR_SPRITE3D_JS.contains(
             "bindSprite3dDimensionInput(sprite3dWidthInput, \"width\");\nbindSprite3dDimensionInput(sprite3dHeightInput, \"height\");\nbindSprite3dDimensionInput(sprite3dDepthInput, \"depth\");"
         ));
-        assert!(EDITOR_SPRITE_JS.contains("sizeBindButton.innerHTML = spriteLucideIconSvg(\"link-2\");"));
+        assert!(
+            EDITOR_SPRITE_JS
+                .contains("sizeBindButton.innerHTML = spriteLucideIconSvg(\"link-2\");")
+        );
         assert!(EDITOR_SPRITE_JS.contains("sprite.sizeBound = !sprite.sizeBound;"));
         assert!(EDITOR_SPRITE_JS.contains("sprite3d.sizeBound = !sprite3d.sizeBound;"));
         assert!(EDITOR_CSS.contains(
             ".sprite-editor-name-row .sprite-size-control .sprite-extent-inputs input,\n.sprite-editor-name-row .sprite-size-control .sprite3d-extent-inputs input {\n  width: 24px;"
         ));
-        assert!(EDITOR_CSS.contains("  border: 0;\n  border-radius: 0;\n  background: transparent;"));
+        assert!(
+            EDITOR_CSS.contains("  border: 0;\n  border-radius: 0;\n  background: transparent;")
+        );
     }
 
     #[test]
@@ -7210,15 +7238,17 @@ move
         ));
         assert!(EDITOR_SPRITE_JS.contains("let spriteBrushSizePx = 1;"));
         assert!(EDITOR_HTML.contains(r#"id="spriteBrushSizeInput" class="sprite-brush-size-input" type="number" min="1" max="64" step="1""#));
-        assert!(EDITOR_HTML.contains(
-            r#"data-editor-icon="highlighter" class="sprite-marker-icon""#
-        ));
+        assert!(
+            EDITOR_HTML.contains(r#"data-editor-icon="highlighter" class="sprite-marker-icon""#)
+        );
         assert!(EDITOR_ICONS_JS.contains(r#""highlighter": `"#));
         assert!(!EDITOR_HTML.contains("data-sprite-brush-preset"));
         assert!(EDITOR_SPRITE_JS.contains(
             "if (spriteBrushSizePx === 1) {\n    const index = spriteCellIndexFromPoint(point);\n    return index >= 0 ? [index] : [];\n  }"
         ));
-        assert!(EDITOR_SPRITE_JS.contains("return Math.min(Math.max(sprite.width, sprite.height), spriteBrushSizePx);"));
+        assert!(EDITOR_SPRITE_JS.contains(
+            "return Math.min(Math.max(sprite.width, sprite.height), spriteBrushSizePx);"
+        ));
         assert!(EDITOR_SPRITE_JS.contains("return Math.min(size, spriteBrushSizePx);"));
         assert!(EDITOR_SPRITE_JS.contains("function renderSpriteCellsAtIndices(indices)"));
         assert!(EDITOR_SPRITE_JS.contains("finishSpritePaintMutation(changedIndices);"));
@@ -7310,8 +7340,9 @@ move
         assert!(EDITOR_SPRITE_JS.contains(
             "{ key: \"fill\", group: \"paint\" },\n  { key: \"translate\", group: \"paint\" },"
         ));
-        assert!(EDITOR_SPRITE_JS.contains("{ key: \"flip-vertical\", group: \"transform\" },\n  { key: \"copy\", group: \"clipboard\" },"));
-        assert!(EDITOR_SPRITE_JS.contains("{ key: \"paste\", group: \"clipboard\" },\n  { key: \"delete\", group: \"clipboard\" },"));
+        assert!(EDITOR_SPRITE_JS.contains(
+            "{ key: \"flip-vertical\", group: \"transform\" },\n  ...SPRITE_EDIT_COMMANDS.map(({ id, group }) => Object.freeze({ key: id, group })),"
+        ));
         assert!(EDITOR_SPRITE_JS.contains(
             "\"flip-vertical\": is3d ? sprite3dFlipPlaneVerticalButton : spriteFlipVerticalButton,"
         ));
@@ -7472,7 +7503,8 @@ move
         assert!(EDITOR_HTML.contains(r#"id="sprite3dHeightInput" type="number""#));
         assert!(EDITOR_HTML.contains(r#"id="sprite3dDepthInput" type="number""#));
         assert!(
-            EDITOR_SPRITE3D_JS.contains("return sprite3d.width * sprite3d.height * sprite3d.depth;")
+            EDITOR_SPRITE3D_JS
+                .contains("return sprite3d.width * sprite3d.height * sprite3d.depth;")
         );
         assert!(EDITOR_SPRITE3D_JS.contains("if (width < 1 || height < 1 || depth < 1"));
         assert!(!EDITOR_SPRITE3D_JS.contains("width !== height"));
@@ -7485,27 +7517,22 @@ move
 
     #[test]
     fn sprite3d_size_and_scale_remap_all_frames_with_explicit_dimensions() {
-        assert!(EDITOR_SPRITE3D_JS.contains(
-            "function remapSprite3dFrames(nextExtent, sourceCoordinates)"
-        ));
-        assert!(EDITOR_SPRITE3D_JS.contains(
-            "sprite3d.frames = frames.map(remap);"
-        ));
-        assert!(EDITOR_SPRITE3D_JS.contains(
-            "height: axis === \"height\" ? nextValue : sprite3d.height,"
-        ));
-        assert!(EDITOR_SPRITE3D_JS.contains(
-            "height: sprite3d.height * factor,"
-        ));
-        assert!(EDITOR_SPRITE3D_JS.contains(
-            "height: sprite3d.height / factor,"
-        ));
-        assert!(EDITOR_SPRITE3D_JS.contains(
-            "size: Math.max(sprite3d.width, sprite3d.height, sprite3d.depth),"
-        ));
-        assert!(EDITOR_JS.contains(
-            "sprite3d.slice = Math.max(0, Math.min(sprite3dAxisSize() - 1"
-        ));
+        assert!(
+            EDITOR_SPRITE3D_JS
+                .contains("function remapSprite3dFrames(nextExtent, sourceCoordinates)")
+        );
+        assert!(EDITOR_SPRITE3D_JS.contains("sprite3d.frames = frames.map(remap);"));
+        assert!(
+            EDITOR_SPRITE3D_JS
+                .contains("height: axis === \"height\" ? nextValue : sprite3d.height,")
+        );
+        assert!(EDITOR_SPRITE3D_JS.contains("height: sprite3d.height * factor,"));
+        assert!(EDITOR_SPRITE3D_JS.contains("height: sprite3d.height / factor,"));
+        assert!(
+            EDITOR_SPRITE3D_JS
+                .contains("size: Math.max(sprite3d.width, sprite3d.height, sprite3d.depth),")
+        );
+        assert!(EDITOR_JS.contains("sprite3d.slice = Math.max(0, Math.min(sprite3dAxisSize() - 1"));
         assert!(!EDITOR_SPRITE3D_JS.contains("sprite3d.size ="));
         assert!(!EDITOR_SPRITE3D_JS.contains("sprite3d.size *"));
     }
@@ -7619,7 +7646,7 @@ move
             "{ key: \"Enter\", run: (view) => dispatchSourceCompletionCommand(view, \"commit\") }"
         ));
         assert!(EDITOR_CODEMIRROR_SOURCE_JS.contains(
-            "keymap.of([...sourceCompletionKeymap, indentWithTab, ...defaultKeymap, ...historyKeymap])"
+            "keymap.of([\n        ...sourceCompletionKeymap,\n        ...sourceEditingKeymap,\n        ...foldKeymap,\n        indentWithTab,"
         ));
         assert!(EDITOR_CODEMIRROR_JS.contains("sourcecompletioncommand"));
     }
@@ -7640,7 +7667,7 @@ move
                 .contains("dispatchSourceEditingCommand(view, \"shift-tab\")")
         );
         assert!(EDITOR_CODEMIRROR_SOURCE_JS.contains(
-            "...sourceCompletionKeymap,\n        ...sourceEditingKeymap,\n        indentWithTab,"
+            "...sourceCompletionKeymap,\n        ...sourceEditingKeymap,\n        ...foldKeymap,\n        indentWithTab,"
         ));
         assert!(!EDITOR_CODEMIRROR_SOURCE_JS.contains("handleSourceRuleBracketCell"));
         assert!(
@@ -9512,7 +9539,10 @@ move
         assert!(
             EDITOR_LEVEL3D_JS.contains("drawLevel3dCellsPreview(ctx, width, height, snapshot, [{")
         );
-        assert!(EDITOR_LEVEL3D_JS.contains("}], level3dPalettePreviewOptions(snapshot.camera));"));
+        assert!(
+            EDITOR_LEVEL3D_JS
+                .contains("}], level3dPalettePreviewOptions(snapshot.render.camera));")
+        );
         assert!(
             EDITOR_LEVEL3D_JS
                 .contains("const camera = options.camera || level3dPreviewCamera(snapshot);")

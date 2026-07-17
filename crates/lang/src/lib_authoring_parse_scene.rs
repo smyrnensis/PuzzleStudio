@@ -1,10 +1,16 @@
-fn named_direction_vector(value: &str, line: &str) -> Result<(i16, i16), DiagnosticReport> {
-    match value {
-        "right" => Ok((1, 0)),
-        "left" => Ok((-1, 0)),
-        "up" => Ok((0, -1)),
-        "down" => Ok((0, 1)),
-        _ => Err(parse_error(line, "unknown direction name")),
+fn validate_direction_name(
+    value: &str,
+    catalog: &Catalog,
+    line: &str,
+) -> Result<(), DiagnosticReport> {
+    if catalog
+        .value_sets
+        .get("directions")
+        .is_some_and(|directions| directions.iter().any(|direction| direction == value))
+    {
+        Ok(())
+    } else {
+        Err(parse_error(line, "unknown direction name"))
     }
 }
 
@@ -110,7 +116,7 @@ fn collect_scene_resources(
             i = parse_scene_resources_block(lines, i, &mut resources)?;
             continue;
         }
-        depth += raw_brace_delta(strip_line_comment(line));
+        depth += line.structural_brace_delta();
         i += 1;
     }
     Err(parse_error(&lines[start], "scene missing closing brace"))
@@ -138,6 +144,10 @@ fn parse_scene_definition(
         })?
         .name;
     let (name, _params) = parse_scene_name_and_params(name, &lines[start])?;
+    recognition
+        .completion_symbols
+        .scenes
+        .insert(name.clone());
 
     let resources = collect_scene_resources(lines, start)?;
     let expansion_catalog = SceneExpansionCatalog::from_scene_resources(level_entries, &resources);
@@ -287,7 +297,7 @@ fn scene_component_uses_signal_name(component: &SceneComponent, name: &str) -> b
                     .iter()
                     .any(|button| scene_effect_uses_signal_name(&button.effect, name))
         }
-        SceneComponent::Frame(_) | SceneComponent::Text(_) => false,
+        SceneComponent::Viewport(_) | SceneComponent::Frame(_) | SceneComponent::Text(_) => false,
     }
 }
 
@@ -528,7 +538,7 @@ fn resolve_scene_component_actions(
             }
             Ok(())
         }
-        SceneComponent::Frame(_) | SceneComponent::Text(_) => Ok(()),
+        SceneComponent::Viewport(_) | SceneComponent::Frame(_) | SceneComponent::Text(_) => Ok(()),
     }
 }
 
@@ -719,7 +729,7 @@ fn validate_scene_component_routine_calls(
             }
             Ok(())
         }
-        SceneComponent::Frame(_) | SceneComponent::Text(_) => Ok(()),
+        SceneComponent::Viewport(_) | SceneComponent::Frame(_) | SceneComponent::Text(_) => Ok(()),
     }
 }
 
@@ -857,12 +867,8 @@ impl puzzle_scene::SceneBlockHandler<source::LogicalLine> for Scene2dBlockHandle
         lines: &[source::LogicalLine],
         start: usize,
     ) -> Result<usize, DiagnosticReport> {
-        let (layout_block, next_i) = parse_scene_layout_block(
-            lines,
-            start,
-            self.for_expansion_sets,
-            self.recognition,
-        )?;
+        let (layout_block, next_i) =
+            parse_scene_layout_block(lines, start, self.for_expansion_sets, self.recognition)?;
         self.scene.layout = layout_block.layout;
         self.scene
             .state
@@ -889,7 +895,7 @@ impl puzzle_scene::SceneBlockHandler<source::LogicalLine> for Scene2dBlockHandle
         lines: &[source::LogicalLine],
         start: usize,
     ) -> Result<usize, DiagnosticReport> {
-        let (bindings, next_i) = parse_scene_keys_block(lines, start)?;
+        let (bindings, next_i) = parse_scene_keys_block(lines, start, self.recognition)?;
         self.scene.key_bindings.extend(bindings);
         Ok(next_i)
     }
@@ -931,6 +937,10 @@ impl puzzle_scene::SceneBlockHandler<source::LogicalLine> for Scene2dBlockHandle
             | ["persistent", "const", ..] => {
                 match parse_scene_state_entry(&lines[start], SceneStateLifetime::Instance)? {
                     ParsedSceneStateEntry::Variable(variable) => {
+                        self.recognition
+                            .completion_symbols
+                            .states
+                            .insert(variable.name.clone());
                         self.scene.state.variables.push(variable);
                     }
                     ParsedSceneStateEntry::Puzzle(_) => {
@@ -965,6 +975,11 @@ impl puzzle_scene::SceneBlockHandler<source::LogicalLine> for Scene2dBlockHandle
                     return Err(parse_error(&lines[start], "duplicate scene routine"));
                 }
                 mark_scene_routine_header(self.recognition, &lines[start]);
+                self.recognition
+                    .completion_symbols
+                    .routines
+                    .insert(routine.name.clone());
+                recognize_scene_effect_body(lines, start + 1, next_i, self.recognition);
                 self.scene.routines.push(routine);
                 Ok(next_i)
             }
@@ -1148,6 +1163,11 @@ fn parse_scene_view_like_block(
                     recognition,
                 )?;
             components.extend(parsed_components);
+            recognition.completion_symbols.states.extend(
+                nested_puzzles
+                    .iter()
+                    .map(|puzzle| puzzle.name.clone()),
+            );
             puzzles.extend(nested_puzzles);
             i = next_i;
             continue;
@@ -1157,6 +1177,10 @@ fn parse_scene_view_like_block(
             if let Some(declaration) =
                 parse_scene_puzzle_layout_declaration(&lines[i], SceneStateLifetime::Instance)?
             {
+                recognition
+                    .completion_symbols
+                    .states
+                    .insert(declaration.puzzle.name.clone());
                 if !hidden.iter().any(|name| name == &declaration.puzzle.name) {
                     components.push(scene_puzzle_slot_component_with_layout(
                         &declaration.puzzle,
@@ -1167,12 +1191,22 @@ fn parse_scene_view_like_block(
             } else {
                 match parse_scene_state_entry(&lines[i], SceneStateLifetime::Instance)? {
                     ParsedSceneStateEntry::Puzzle(puzzle) => {
+                        recognition
+                            .completion_symbols
+                            .states
+                            .insert(puzzle.name.clone());
                         if !hidden.iter().any(|name| name == &puzzle.name) {
                             components.push(scene_puzzle_slot_component(&puzzle));
                         }
                         puzzles.push(puzzle);
                     }
-                    ParsedSceneStateEntry::Variable(variable) => variables.push(variable),
+                    ParsedSceneStateEntry::Variable(variable) => {
+                        recognition
+                            .completion_symbols
+                            .states
+                            .insert(variable.name.clone());
+                        variables.push(variable);
+                    }
                 }
             }
             i += 1;
@@ -1183,6 +1217,10 @@ fn parse_scene_view_like_block(
             && is_identifier(slot)
         {
             let puzzle = inferred_scene_puzzle_slot(slot, SceneStateLifetime::Instance);
+            recognition
+                .completion_symbols
+                .states
+                .insert(puzzle.name.clone());
             if !hidden.iter().any(|name| name == &puzzle.name) {
                 components.push(scene_puzzle_slot_component(&puzzle));
             }
@@ -1199,6 +1237,11 @@ fn parse_scene_view_like_block(
             recognition,
         )?;
         components.extend(parsed_components);
+        recognition.completion_symbols.states.extend(
+            nested_puzzles
+                .iter()
+                .map(|puzzle| puzzle.name.clone()),
+        );
         puzzles.extend(nested_puzzles);
         i = next_i;
     }
@@ -1242,12 +1285,6 @@ fn parse_layer_visibility(line: &str) -> Result<Option<(String, bool)>, Diagnost
     }
 }
 
-fn scene_frame_component(kind: impl Into<String>, source: impl Into<String>) -> SceneComponent {
-    let mut layout = SceneLayoutDef::default();
-    layout.space = SceneSpaceDef::Fill { weight: 1 };
-    scene_frame_component_with_layout(kind, source, layout)
-}
-
 fn scene_frame_component_with_layout(
     kind: impl Into<String>,
     source: impl Into<String>,
@@ -1261,6 +1298,28 @@ fn scene_frame_component_with_layout(
     })
 }
 
+fn scene_viewport_component(
+    source: impl Into<String>,
+    projection: puzzle_scene::ViewportProjection,
+) -> SceneComponent {
+    let mut layout = SceneLayoutDef::default();
+    layout.space = SceneSpaceDef::Fill { weight: 1 };
+    scene_viewport_component_with_layout(source, projection, layout)
+}
+
+fn scene_viewport_component_with_layout(
+    source: impl Into<String>,
+    projection: puzzle_scene::ViewportProjection,
+    layout: SceneLayoutDef,
+) -> SceneComponent {
+    SceneComponent::Viewport(puzzle_scene::ViewportComponent {
+        source: source.into(),
+        projection,
+        inputs: Vec::new(),
+        layout,
+    })
+}
+
 fn scene_puzzle_slot_component(puzzle: &ScenePuzzleDef) -> SceneComponent {
     scene_puzzle_slot_component_with_layout(puzzle, SceneLayoutDef::default())
 }
@@ -1269,12 +1328,16 @@ fn scene_puzzle_slot_component_with_layout(
     puzzle: &ScenePuzzleDef,
     layout: SceneLayoutDef,
 ) -> SceneComponent {
-    scene_frame_component_with_layout(puzzle.kind.clone(), puzzle.name.clone(), layout)
+    scene_viewport_component_with_layout(
+        puzzle.name.clone(),
+        puzzle_scene::ViewportProjection::TwoD,
+        layout,
+    )
 }
 
 fn scene_puzzle_component_source(component: &SceneComponent) -> Option<&str> {
     match component {
-        SceneComponent::Frame(frame) => Some(frame.source.as_str()),
+        SceneComponent::Viewport(viewport) => Some(viewport.source.as_str()),
         _ => None,
     }
 }
@@ -1290,14 +1353,13 @@ fn parse_scene_component_units_with_puzzles(
     let mut parse_leaf = |lines: &[source::LogicalLine],
                           index: usize|
      -> Result<(usize, Vec<SceneComponent>), DiagnosticReport> {
-        let (components, next, puzzle) =
-            parse_scene_leaf_component_units(
-                lines,
-                index,
-                lifetime,
-                for_expansion_sets,
-                recognition,
-            )?;
+        let (components, next, puzzle) = parse_scene_leaf_component_units(
+            lines,
+            index,
+            lifetime,
+            for_expansion_sets,
+            recognition,
+        )?;
         if let Some(puzzle) = puzzle {
             nested_puzzles.borrow_mut().push(puzzle);
         }
@@ -1342,6 +1404,7 @@ fn parse_scene_leaf_component_units(
     recognition: &mut crate::surface::ParserRecognition,
 ) -> Result<(Vec<SceneComponent>, usize, Option<ScenePuzzleDef>), DiagnosticReport> {
     if let Some(declaration) = parse_scene_puzzle_layout_declaration(&lines[start], lifetime)? {
+        recognize_scene_component_line(&lines[start], recognition);
         return Ok((
             vec![scene_puzzle_slot_component_with_layout(
                 &declaration.puzzle,
@@ -1352,7 +1415,7 @@ fn parse_scene_leaf_component_units(
         ));
     }
     let tokens = split_header_tokens(&lines[start]);
-    match tokens.as_slice() {
+    let result = match tokens.as_slice() {
         ["puzzle", "current_level"] => Err(parse_error(
             &lines[start],
             "current_level is not scene syntax; declare a puzzle slot with `puzzle board = <model>`",
@@ -1372,9 +1435,9 @@ fn parse_scene_leaf_component_units(
             }
             let layout = parse_scene_layout_attrs_for_line(attrs, &lines[start])?;
             Ok((
-                vec![scene_frame_component_with_layout(
-                    "puzzle",
+                vec![scene_viewport_component_with_layout(
                     (*state_name).to_string(),
+                    puzzle_scene::ViewportProjection::TwoD,
                     layout,
                 )],
                 start + 1,
@@ -1462,7 +1525,10 @@ fn parse_scene_leaf_component_units(
             "level_menu takes no inline source or effect; use scene resources to choose levels",
         )),
         [state_name] if is_identifier(state_name) => Ok((
-            vec![scene_frame_component("puzzle", (*state_name).to_string())],
+            vec![scene_viewport_component(
+                (*state_name).to_string(),
+                puzzle_scene::ViewportProjection::TwoD,
+            )],
             start + 1,
             None,
         )),
@@ -1471,6 +1537,85 @@ fn parse_scene_leaf_component_units(
             &format!("unknown layout directive {other}"),
         )),
         [] => Err(parse_error(&lines[start], "empty layout directive")),
+    };
+    if let Ok((_, next, _)) = &result {
+        recognize_scene_component_line(&lines[start], recognition);
+        if matches!(tokens.first().copied(), Some("button" | "choice")) {
+            recognize_scene_effect_body(lines, start + 1, *next, recognition);
+        }
+    }
+    result
+}
+
+fn recognize_scene_effect_body(
+    lines: &[source::LogicalLine],
+    start: usize,
+    end: usize,
+    recognition: &mut crate::surface::ParserRecognition,
+) {
+    for line in lines.iter().take(end).skip(start) {
+        let document = scene_effect_surface_document(&line.tokens);
+        recognition.merge_surface_document(document);
+    }
+}
+
+fn recognize_scene_component_line(
+    line: &source::LogicalLine,
+    recognition: &mut crate::surface::ParserRecognition,
+) {
+    let Some(first) = line.tokens.first() else {
+        return;
+    };
+    recognition.mark(
+        crate::surface::SourceSpan {
+            start: first.start,
+            end: first.end,
+        },
+        if line.tokens.len() == 1 {
+            crate::surface::SurfaceSemanticKind::State
+        } else {
+            crate::surface::SurfaceSemanticKind::Keyword
+        },
+    );
+    let arrow = line.tokens.iter().position(|token| token.text == "->");
+    let argument_end = arrow.unwrap_or(line.tokens.len());
+    for (index, token) in line.tokens[1..argument_end].iter().enumerate() {
+        if token.text == "=" || token.text.starts_with('"') {
+            continue;
+        }
+        let kind = match first.text.as_str() {
+            "heading" | "subheading" | "text" | "caption" => {
+                crate::surface::SurfaceSemanticKind::Literal
+            }
+            "puzzle" if index == 0 => crate::surface::SurfaceSemanticKind::Binding,
+            "puzzle" | "frame" => crate::surface::SurfaceSemanticKind::State,
+            _ => crate::surface::SurfaceSemanticKind::Setting,
+        };
+        recognition.mark(
+            crate::surface::SourceSpan {
+                start: token.start,
+                end: token.end,
+            },
+            kind,
+        );
+    }
+    if let Some(arrow) = arrow {
+        let document = scene_effect_surface_document(&line.tokens[arrow + 1..]);
+        if document.semantic_tokens.is_empty() {
+            for token in &line.tokens[arrow + 1..] {
+                if token.text != "{" && token.text != "}" {
+                    recognition.mark(
+                        crate::surface::SourceSpan {
+                            start: token.start,
+                            end: token.end,
+                        },
+                        crate::surface::SurfaceSemanticKind::Effect,
+                    );
+                }
+            }
+        } else {
+            recognition.merge_surface_document(document);
+        }
     }
 }
 

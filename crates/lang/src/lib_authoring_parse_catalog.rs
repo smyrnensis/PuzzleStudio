@@ -104,16 +104,28 @@ fn project_builtin_completion_symbols(sink: &mut SurfaceSink) {
     );
 }
 
-fn record_parser_catalog_completion_symbols(catalog: &Catalog, sink: &mut SurfaceSink) {
-    let symbols = sink.completion_symbols_mut();
+fn parser_catalog_completion_symbols(catalog: &Catalog) -> crate::surface::SurfaceCompletionSymbols {
+    let mut symbols = crate::surface::SurfaceCompletionSymbols::default();
     symbols.objects.extend(
         catalog
             .object_schemas
             .keys()
-            .filter(|name| !catalog.object_groups.contains_key(*name))
             .cloned(),
     );
-    symbols.groups.extend(catalog.object_groups.keys().cloned());
+    symbols.objects.extend(
+        catalog
+            .object_names
+            .keys()
+            .filter(|name| !name.contains(':') && !catalog.object_groups.contains_key(*name))
+            .cloned(),
+    );
+    symbols.groups.extend(
+        catalog
+            .object_groups
+            .keys()
+            .filter(|name| !catalog.named_layers.contains_key(*name))
+            .cloned(),
+    );
     symbols
         .inputs
         .extend(catalog.input_labels.values().cloned());
@@ -137,18 +149,29 @@ fn record_parser_catalog_completion_symbols(catalog: &Catalog, sink: &mut Surfac
             symbols.direction_sets.insert(name.clone());
         }
     }
-    for (object, axes) in &catalog.object_axes {
+    for (name, values) in &catalog.object_axes {
+        symbols.value_set_names.insert(name.clone());
+        symbols
+            .value_sets
+            .entry(name.clone())
+            .or_insert(values.clone());
+        symbols.object_name_atoms.extend(values.iter().cloned());
+    }
+    for (object, schema) in &catalog.object_schemas {
         symbols
             .object_axes
             .entry(object.clone())
-            .or_insert(axes.clone());
-        symbols.object_name_atoms.extend(axes.iter().cloned());
+            .or_insert(schema.axes.clone());
+        symbols
+            .object_name_atoms
+            .extend(schema.axes.iter().cloned());
     }
     for name in catalog.mark_names.keys() {
         if !name.starts_with("__") {
             symbols.markes.insert(name.clone());
         }
     }
+    symbols
 }
 
 fn surface_completion_direction_value(value: &str) -> bool {
@@ -308,107 +331,214 @@ fn surface_scene_effect_commands_for_catalog() -> Vec<(&'static str, SemanticKin
 
 fn build_puzzle_catalog(
     model: &model_syntax::PuzzleModelSyntax,
-) -> Result<Catalog, DiagnosticReport> {
-    let mut catalog = Catalog::for_dimension(model.dimension);
-    let mut named_layers = HashMap::<String, u16>::new();
-    let mut layer_count = None::<u16>;
-
+) -> crate::surface::ParseProduct<Result<Catalog, DiagnosticReport>> {
+    let mut recognition = crate::surface::ParserRecognition::default();
     for entry in &model.catalog_entries {
-        let tokens = split_header_tokens(&entry.header.text);
-        if tokens.as_slice() != ["tags"] {
-            continue;
-        }
-        for line in &entry.body {
-            if line.text.trim().is_empty() {
+        recognition.merge(entry.semantics.fixed.clone());
+    }
+    let value = (|| {
+        let mut catalog = Catalog::for_dimension(model.dimension);
+        let mut named_layers = HashMap::<String, u16>::new();
+        let mut layer_count = None::<u16>;
+
+        for entry in &model.catalog_entries {
+            let tokens = split_header_tokens(&entry.header.text);
+            if tokens.as_slice() != ["tags"] {
                 continue;
             }
-            let assignment = puzzle_authoring::selector_assignment_surface(&line.text)
-                .ok_or_else(|| parse_error(&line.text, "tag row must be: <name> = <value...>"))?;
-            parse_tag_set_directive(
-                assignment.name,
-                &assignment.selectors,
-                &line.text,
-                &mut catalog,
-            )?;
-        }
-    }
-
-    for entry in &model.catalog_entries {
-        let tokens = split_header_tokens(&entry.header.text);
-        if tokens.first().copied() != Some("map") {
-            continue;
-        }
-        let lines = catalog_entry_lines(entry);
-        let value_sets = catalog_value_sets(&catalog);
-        let (map, next) = parse_map_definition(&lines, 0, &value_sets)?;
-        if next != lines.len() {
-            return Err(parse_error(
-                &entry.header.text,
-                "map block was not fully consumed",
-            ));
-        }
-        if catalog.maps.insert(map.name.clone(), map).is_some() {
-            return Err(parse_error(&entry.header.text, "duplicate map"));
-        }
-    }
-
-    let pending_groups = collect_puzzle_group_declarations_from_entries(&model.catalog_entries)?;
-    let mut resolved_groups = HashSet::<String>::new();
-    for entry in &model.catalog_entries {
-        let tokens = split_header_tokens(&entry.header.text);
-        match tokens.as_slice() {
-            ["slots"] => {
-                let mut lines = entry.body.clone();
-                lines.push(source::LogicalLine::new(BLOCK_CLOSE, entry.header.line));
-                let next = parse_layers_block(
-                    &lines,
-                    0,
-                    &mut named_layers,
-                    &mut layer_count,
-                    &mut catalog,
-                    &pending_groups,
-                    &mut resolved_groups,
-                )?;
-                if next != lines.len() {
-                    return Err(parse_error(
-                        &entry.header.text,
-                        "slots block was not fully consumed",
-                    ));
+            for line in &entry.body {
+                if line.text.trim().is_empty() {
+                    continue;
                 }
-                refresh_layer_tags_and_value_sets(&named_layers, &mut catalog);
+                let assignment = puzzle_authoring::selector_assignment_surface(&line.text)
+                    .ok_or_else(|| {
+                        parse_error(&line.text, "tag row must be: <name> = <value...>")
+                    })?;
+                parse_tag_set_directive(
+                    assignment.name,
+                    &assignment.selectors,
+                    &line.text,
+                    &mut catalog,
+                )?;
             }
-            ["slots", count] => {
-                layer_count = Some(parse_u16(
-                    Some(count),
+        }
+
+        for entry in &model.catalog_entries {
+            let tokens = split_header_tokens(&entry.header.text);
+            if tokens.first().copied() != Some("map") {
+                continue;
+            }
+            let lines = catalog_entry_lines(entry);
+            let value_sets = catalog_value_sets(&catalog);
+            let (map, next) = parse_map_definition(&lines, 0, &value_sets)?;
+            if next != lines.len() {
+                return Err(parse_error(
                     &entry.header.text,
-                    "missing layer count",
-                )?);
+                    "map block was not fully consumed",
+                ));
             }
-            ["slots", ..] => {
-                return Err(parse_error(&entry.header.text, "slots header is malformed"));
+            if catalog.maps.insert(map.name.clone(), map).is_some() {
+                return Err(parse_error(&entry.header.text, "duplicate map"));
             }
-            _ => {}
+        }
+
+        let pending_groups =
+            collect_puzzle_group_declarations_from_entries(&model.catalog_entries)?;
+        let mut resolved_groups = HashSet::<String>::new();
+        for entry in &model.catalog_entries {
+            let tokens = split_header_tokens(&entry.header.text);
+            match tokens.as_slice() {
+                ["slots"] => {
+                    let mut lines = entry.body.clone();
+                    lines.push(source::LogicalLine::new(BLOCK_CLOSE, entry.header.line));
+                    let next = parse_layers_block(
+                        &lines,
+                        0,
+                        &mut named_layers,
+                        &mut layer_count,
+                        &mut catalog,
+                        &pending_groups,
+                        &mut resolved_groups,
+                    )?;
+                    if next != lines.len() {
+                        return Err(parse_error(
+                            &entry.header.text,
+                            "slots block was not fully consumed",
+                        ));
+                    }
+                    refresh_layer_tags_and_value_sets(&named_layers, &mut catalog);
+                }
+                ["slots", count] => {
+                    layer_count = Some(parse_u16(
+                        Some(count),
+                        &entry.header.text,
+                        "missing layer count",
+                    )?);
+                }
+                ["slots", ..] => {
+                    return Err(parse_error(&entry.header.text, "slots header is malformed"));
+                }
+                _ => {}
+            }
+        }
+        resolve_pending_group_definitions(
+            &pending_groups,
+            None,
+            &mut resolved_groups,
+            &mut catalog,
+        )?;
+
+        for entry in &model.catalog_entries {
+            if split_header_tokens(&entry.header.text).as_slice() != ["marks"] {
+                continue;
+            }
+            let lines = catalog_entry_lines(entry);
+            let next = parse_mark_block(&lines, 0, &mut catalog)?;
+            if next != lines.len() {
+                return Err(parse_error(
+                    &entry.header.text,
+                    "marks block was not fully consumed",
+                ));
+            }
+        }
+
+        catalog.layer_count = layer_count;
+        catalog.named_layers = named_layers;
+        for entry in &model.catalog_entries {
+            for selector in &entry.semantics.selectors {
+                project_selector_occurrence(selector, &catalog, &mut recognition);
+            }
+        }
+        Ok(catalog)
+    })();
+    crate::surface::ParseProduct::new(value, recognition)
+}
+
+fn project_selector_occurrence(
+    selector: &model_syntax::SelectorOccurrenceSyntax,
+    catalog: &Catalog,
+    recognition: &mut crate::surface::ParserRecognition,
+) {
+    let mut offset = 0;
+    for (index, part) in selector.text.split(':').enumerate() {
+        let prefix_len = usize::from(part.starts_with('@'));
+        let semantic = &part[prefix_len..];
+        if !semantic.is_empty() {
+            mark_selector_component(
+                recognition,
+                selector.span.start + offset + prefix_len,
+                semantic,
+                index == 0,
+                catalog,
+            );
+        }
+        offset += part.len() + 1;
+    }
+}
+
+fn mark_line_token(
+    recognition: &mut crate::surface::ParserRecognition,
+    line: &source::LogicalLine,
+    text: Option<&str>,
+    kind: crate::surface::SurfaceSemanticKind,
+) {
+    let Some(text) = text else {
+        return;
+    };
+    for token in &line.tokens {
+        if token.text == text {
+            recognition.mark(
+                crate::surface::SourceSpan {
+                    start: token.start,
+                    end: token.end,
+                },
+                kind,
+            );
         }
     }
-    resolve_pending_group_definitions(&pending_groups, None, &mut resolved_groups, &mut catalog)?;
+}
 
-    for entry in &model.catalog_entries {
-        if split_header_tokens(&entry.header.text).as_slice() != ["marks"] {
+fn mark_selector_token(
+    recognition: &mut crate::surface::ParserRecognition,
+    line: &source::LogicalLine,
+    selector: &str,
+    catalog: &Catalog,
+) {
+    for token in &line.tokens {
+        if token.text != selector {
             continue;
         }
-        let lines = catalog_entry_lines(entry);
-        let next = parse_mark_block(&lines, 0, &mut catalog)?;
-        if next != lines.len() {
-            return Err(parse_error(
-                &entry.header.text,
-                "marks block was not fully consumed",
-            ));
+        let mut offset = 0usize;
+        for (index, part) in selector.split(':').enumerate() {
+            if part.is_empty() {
+                offset += 1;
+                continue;
+            }
+            let prefix_len = usize::from(part.starts_with('@'));
+            let semantic = &part[prefix_len..];
+            let kind = if index == 0 {
+                if catalog.object_groups.contains_key(semantic) {
+                    crate::surface::SurfaceSemanticKind::Group
+                } else {
+                    crate::surface::SurfaceSemanticKind::Object
+                }
+            } else if catalog.value_sets.contains_key(semantic)
+                || catalog.object_axes.contains_key(semantic)
+            {
+                crate::surface::SurfaceSemanticKind::Group
+            } else {
+                crate::surface::SurfaceSemanticKind::Variant
+            };
+            recognition.mark(
+                crate::surface::SourceSpan {
+                    start: token.start + offset + prefix_len,
+                    end: token.start + offset + part.len(),
+                },
+                kind,
+            );
+            offset += part.len() + 1;
         }
     }
-
-    catalog.layer_count = layer_count;
-    catalog.named_layers = named_layers;
-    Ok(catalog)
 }
 
 fn catalog_entry_lines(entry: &model_syntax::PuzzleEntrySyntax) -> Vec<source::LogicalLine> {
@@ -440,25 +570,7 @@ fn collect_puzzle_group_declarations_from_entries(
             if line.text.trim().is_empty() {
                 continue;
             }
-            let Some(assignment) = puzzle_authoring::selector_assignment_surface(&line.text) else {
-                return Err(parse_error(
-                    &line.text,
-                    "group row must be: <name> = <selector...>",
-                ));
-            };
-            validate_selector_alias_name(assignment.name, &line.text, "group name")?;
-            if !names.insert(assignment.name.to_string()) {
-                return Err(parse_error(&line.text, "duplicate group"));
-            }
-            groups.push(PendingGroupDefinition {
-                name: assignment.name.to_string(),
-                selectors: assignment
-                    .selectors
-                    .iter()
-                    .map(|selector| (*selector).to_string())
-                    .collect(),
-                source_line: line.text.clone(),
-            });
+            push_pending_group_declaration(line, &mut groups, &mut names)?;
         }
     }
     Ok(groups)
@@ -466,10 +578,175 @@ fn collect_puzzle_group_declarations_from_entries(
 
 fn parser_surface_catalog_from_source_scan(
     source_scan: &source::SurfaceSourceScan,
-) -> Result<crate::surface::ParseProduct<LevelEditorIntegration>, DiagnosticReport> {
-    let logical_lines = source_scan.strict_logical_lines()?;
-    let parts = parse_document_source_parts_from_logical_lines(logical_lines)?;
-    integrate_level_editor_document_parts(parts)
+    source_profile: Option<PuzzleSourceProfile>,
+) -> crate::surface::ParseProduct<Result<LevelEditorIntegration, DiagnosticReport>> {
+    let mut recognition = crate::surface::ParserRecognition::default();
+    let logical_lines = source_scan.editor_logical_lines();
+    project_surface_sound_products(&logical_lines, &mut recognition);
+    let (model_lines, scenes) =
+        match split_document_scene_logical_lines(logical_lines, &mut recognition) {
+            Ok(parts) => parts,
+            Err(report) => return crate::surface::ParseProduct::new(Err(report), recognition),
+        };
+    let document_entries = match model_syntax::parse_document_entries(&model_lines) {
+        Ok(entries) => entries,
+        Err(report) => return crate::surface::ParseProduct::new(Err(report), recognition),
+    };
+    let shell = match parse_document_shell_entries(&document_entries) {
+        Ok(shell) => shell,
+        Err(report) => return crate::surface::ParseProduct::new(Err(report), recognition),
+    };
+    let (models, mut diagnostics) =
+        match model_syntax::parse_puzzle_models_from_document_entries(&document_entries) {
+            Ok(models) => {
+                let diagnostics = models
+                    .iter()
+                    .flat_map(|model| model.diagnostics.iter().map(ToString::to_string))
+                    .collect();
+                (models, diagnostics)
+            }
+            Err(report) => (Vec::new(), vec![report.to_string()]),
+        };
+    let mut model_catalogs = Vec::with_capacity(models.len());
+    for model in &models {
+        let parsed_catalog = build_puzzle_catalog(model);
+        recognition.merge(parsed_catalog.recognition);
+        match parsed_catalog.value {
+            Ok(catalog) => model_catalogs.push(catalog),
+            Err(report) => diagnostics.push(report.to_string()),
+        }
+    }
+    let loose_entries = models.is_empty().then(|| document_entries.clone());
+    let parts = DocumentSourceParts {
+        shell,
+        models,
+        model_catalogs,
+        scenes,
+        recognition,
+    };
+    let mut integrated = integrate_level_editor_document_parts(parts);
+    if let (Some(entries), Some(source_profile)) = (loose_entries, source_profile) {
+        let dimension = match source_profile {
+            PuzzleSourceProfile::Puzzle2d => crate::ModelDimension::Two,
+            PuzzleSourceProfile::Puzzle3d => crate::ModelDimension::Three,
+        };
+        let catalog = Catalog::for_dimension(dimension);
+        let mut level_count = 0;
+        for entry in &entries {
+            match entry.directive {
+                puzzle_authoring::PuzzleDirectiveSurface::Sprites => {
+                    let parsed =
+                        parse_visuals_entry(entry, &catalog, &mut integrated.value.visuals);
+                    integrated.recognition.merge(parsed.recognition);
+                    if let Err(report) = parsed.value {
+                        integrated.value.diagnostics.push(report.to_string());
+                    }
+                }
+                puzzle_authoring::PuzzleDirectiveSurface::Level
+                | puzzle_authoring::PuzzleDirectiveSurface::Levels => {
+                    match parse_level_resource_entry(entry, level_count, None) {
+                        Ok(resource) => {
+                            project_level_products(
+                                &resource.levels,
+                                dimension,
+                                &mut integrated.recognition,
+                            );
+                            level_count += resource.levels.len();
+                        }
+                        Err(report) => integrated.value.diagnostics.push(report.to_string()),
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    integrated.value.diagnostics.append(&mut diagnostics);
+    crate::surface::ParseProduct::new(Ok(integrated.value), integrated.recognition)
+}
+
+fn project_surface_sound_products(
+    lines: &[source::LogicalLine],
+    recognition: &mut crate::surface::ParserRecognition,
+) {
+    let mut index = 0;
+    while index < lines.len() {
+        if split_header_tokens(&lines[index]).as_slice() != ["sounds"]
+            || !is_block_header_line(&lines[index])
+        {
+            index += 1;
+            continue;
+        }
+        let Ok((node, next)) = authoring_grammar::parse_authoring_node_with_kind(
+            lines,
+            index,
+            authoring_grammar::AuthoringKind::SoundsConfig,
+            "sounds missing closing brace",
+        ) else {
+            index += 1;
+            continue;
+        };
+        recognition.sound_products.extend(
+            node.children
+                .iter()
+                .filter_map(|child| surface_sound_product(lines, child)),
+        );
+        index = next;
+    }
+}
+
+fn surface_sound_product(
+    lines: &[source::LogicalLine],
+    node: &authoring_grammar::AuthoringNode,
+) -> Option<crate::surface::SurfaceSoundProduct> {
+    let (kind, name) = authoring_grammar::authoring_symbol_exports(node.kind)
+        .iter()
+        .find_map(|export| {
+            let index = match export.source {
+                authoring_grammar::AuthoringSymbolExportSource::HeaderArg(index) => index,
+            };
+            let kind = match export.target {
+                authoring_grammar::AuthoringSymbolExportTarget::Sfx => {
+                    crate::surface::SurfaceSoundKind::Sfx
+                }
+                authoring_grammar::AuthoringSymbolExportTarget::Music => {
+                    crate::surface::SurfaceSoundKind::Music
+                }
+            };
+            Some((kind, node.header_args.get(index)?))
+        })?;
+    let start = lines
+        .get(node.source_index)?
+        .tokens
+        .first()
+        .map(|token| token.start)?;
+    let end = lines
+        .get(node.source_index..=node.closing_index)?
+        .iter()
+        .rev()
+        .find_map(|line| line.tokens.last().map(|token| token.end))?;
+    Some(crate::surface::SurfaceSoundProduct {
+        span: crate::surface::SourceSpan { start, end },
+        kind,
+        name: name.clone(),
+        params: node
+            .definition_rows
+            .iter()
+            .filter_map(|row| row.single_value().map(|value| (row.key.clone(), value)))
+            .map(|(key, value)| (key, trim_authoring_quotes(value).to_string()))
+            .collect(),
+    })
+}
+
+fn trim_authoring_quotes(value: &str) -> &str {
+    value
+        .strip_prefix('"')
+        .and_then(|stripped| stripped.strip_suffix('"'))
+        .or_else(|| {
+            value
+                .strip_prefix('\'')
+                .and_then(|stripped| stripped.strip_suffix('\''))
+        })
+        .unwrap_or(value)
 }
 
 /// Editor-specific integration of parser-owned authoring facts. Unlike full
@@ -491,24 +768,75 @@ pub(crate) struct LevelEditorIntegratedLevel {
     pub(crate) char_objects: HashMap<char, Vec<ObjectId>>,
 }
 
+fn parser_document_completion_symbols(
+    parts: &DocumentSourceParts,
+) -> crate::surface::SurfaceCompletionSymbols {
+    let mut symbols = crate::surface::SurfaceCompletionSymbols::default();
+    symbols
+        .assets
+        .extend(parts.shell.assets.entries.iter().map(|asset| asset.path.clone()));
+    symbols
+        .sfx
+        .extend(parts.shell.sounds.sfx.iter().map(|sound| sound.name.clone()));
+    symbols.music.extend(
+        parts
+            .shell
+            .sounds
+            .music
+            .iter()
+            .map(|sound| sound.name.clone()),
+    );
+    for model in &parts.models {
+        symbols.levels.extend(
+            model
+                .body
+                .levels
+                .levels
+                .iter()
+                .map(|level| level.name.clone()),
+        );
+        symbols.routines.extend(model.body.routines.iter().filter_map(|routine| {
+            routine.statement.tokens().get(1).cloned()
+        }));
+    }
+    for scene in &parts.scenes {
+        symbols
+            .states
+            .extend(scene.state.variables.iter().map(|variable| variable.name.clone()));
+        symbols
+            .states
+            .extend(scene.state.puzzles.iter().map(|puzzle| puzzle.name.clone()));
+        symbols
+            .routines
+            .extend(scene.routines.iter().map(|routine| routine.name.clone()));
+    }
+    symbols
+}
+
 fn integrate_level_editor_document_parts(
     parts: DocumentSourceParts,
-) -> Result<crate::surface::ParseProduct<LevelEditorIntegration>, DiagnosticReport> {
+) -> crate::surface::ParseProduct<LevelEditorIntegration> {
+    let document_completion_symbols = parser_document_completion_symbols(&parts);
     let mut recognition = parts.recognition;
+    recognition
+        .completion_symbols
+        .merge(document_completion_symbols);
     let dimension = parts
         .models
         .first()
         .map(|model| model.dimension)
         .unwrap_or_default();
-    let lines = parts.model_lines;
-    let mut catalog = Catalog::for_dimension(dimension);
+    let mut catalog = parts
+        .model_catalogs
+        .first()
+        .cloned()
+        .unwrap_or_else(|| Catalog::for_dimension(dimension));
     let level_blocks = parts
         .models
         .iter()
         .filter(|model| model.dimension == crate::ModelDimension::Two)
         .flat_map(|model| model.body.levels.levels.iter().cloned())
         .collect::<Vec<_>>();
-    let mut pending_visual_blocks = Vec::<usize>::new();
     let mut render_overlays = Vec::<(Vec<ObjectId>, char)>::new();
     let mut empty_char = Some('.');
     let mut diagnostics = Vec::<String>::new();
@@ -523,50 +851,10 @@ fn integrate_level_editor_document_parts(
             diagnostics.push(report.to_string());
         }
     }
-    let mut i = 0usize;
-    while i < lines.len() {
-        let tokens = split_header_tokens(&lines[i]);
-        match tokens.as_slice() {
-            ["puzzle", _] => match parse_editor_puzzle_catalog(&lines, i, &mut catalog, false) {
-                Ok((next_i, mut visuals, _)) => {
-                    pending_visual_blocks.append(&mut visuals);
-                    i = next_i;
-                }
-                Err(report) => {
-                    diagnostics.push(report.to_string());
-                    i = recover_after_directive_error(&lines, i);
-                }
-            },
-            ["levels", ..] => {
-                match collect_levels_authoring_entry(&lines, i) {
-                    Ok((_, next_i)) => i = next_i,
-                    Err(report) => {
-                        diagnostics.push(report.to_string());
-                        i = recover_after_directive_error(&lines, i);
-                    }
-                }
-            }
-            ["level", ..] => {
-                match parse_level_block(&lines, i, 0) {
-                    Ok((_, next_i)) => i = next_i,
-                    Err(report) => {
-                        diagnostics.push(report.to_string());
-                        i = recover_after_directive_error(&lines, i);
-                    }
-                }
-            }
-            ["sprites", ..] => {
-                pending_visual_blocks.push(i);
-                match collect_authoring_entry(&lines, i, AuthoringEntryOwner::DocumentVisuals) {
-                    Ok((_, next_i)) => i = next_i,
-                    Err(report) => {
-                        diagnostics.push(report.to_string());
-                        pending_visual_blocks.pop();
-                        i = recover_after_directive_error(&lines, i);
-                    }
-                }
-            }
-            _ => i += 1,
+    for (index, model) in parts.models.iter().enumerate() {
+        let model_catalog = parts.model_catalogs.get(index).unwrap_or(&catalog);
+        for legend in &model.body.levels.legends {
+            recognize_level_resource_legend(legend, model_catalog, &mut recognition);
         }
     }
     if dimension == crate::ModelDimension::Two {
@@ -584,14 +872,42 @@ fn integrate_level_editor_document_parts(
             }
         }
     }
+    for (index, model) in parts.models.iter().enumerate() {
+        let model_catalog = parts.model_catalogs.get(index).unwrap_or(&catalog);
+        project_model_semantics(model, model_catalog, &mut recognition);
+    }
     let mut visuals = VisualsDef::default();
-    for visual_start in pending_visual_blocks {
-        let parsed = parse_visuals_block(&lines, visual_start, &catalog, &mut visuals);
-        recognition.merge(parsed.recognition);
-        if let Err(report) = parsed.value {
-            diagnostics.push(report.to_string());
+    for (index, model) in parts.models.iter().enumerate() {
+        let model_catalog = parts.model_catalogs.get(index).unwrap_or(&catalog);
+        for entry in &model.body.sprite_resources {
+            let parsed = parse_visuals_entry(entry, model_catalog, &mut visuals);
+            recognition.merge(parsed.recognition);
+            if let Err(report) = parsed.value {
+                diagnostics.push(report.to_string());
+            }
         }
     }
+    let mut completion_symbols = parser_catalog_completion_symbols(&catalog);
+    completion_symbols
+        .sprites
+        .extend(visuals.sprites.iter().map(|sprite| sprite.name.clone()));
+    completion_symbols.shapes.extend(
+        recognition
+            .visual_sprite_refs
+            .shape_names
+            .iter()
+            .cloned(),
+    );
+    completion_symbols.colors.extend(
+        recognition
+            .visual_sprite_refs
+            .color_names
+            .iter()
+            .cloned(),
+    );
+    recognition
+        .completion_symbols
+        .merge(completion_symbols);
     let layer_count = catalog
         .object_defs
         .iter()
@@ -604,16 +920,11 @@ fn integrate_level_editor_document_parts(
     for (source_level_index, level) in level_blocks.into_iter().enumerate() {
         let level_name = level.name.clone();
         let parsed = (|| {
-            let body = parse_level_body_for_editor(&level, &catalog, empty_char)?;
+            let body = parse_level_body_for_editor(&level, &catalog)?;
             let mut char_objects = catalog.char_objects.clone();
             char_objects.extend(body.local_char_objects);
-            let parsed = crate::level::parse_level(
-                &game,
-                &body.lines,
-                Some(empty_char),
-                &char_objects,
-                &[],
-            );
+            let parsed =
+                crate::level::parse_level(&game, &body.lines, Some(empty_char), &char_objects, &[]);
             recognition.merge(parsed.recognition);
             let parsed = parsed.value?;
             Ok::<_, DiagnosticReport>(LevelEditorIntegratedLevel {
@@ -630,202 +941,162 @@ fn integrate_level_editor_document_parts(
             Err(report) => diagnostics.push(format!("level `{level_name}`: {report}")),
         }
     }
-    Ok(crate::surface::ParseProduct::new(LevelEditorIntegration {
-        catalog,
-        empty_char: Some(empty_char),
-        visuals,
-        levels,
-        diagnostics,
-    }, recognition))
+    crate::surface::ParseProduct::new(
+        LevelEditorIntegration {
+            catalog,
+            empty_char: Some(empty_char),
+            visuals,
+            levels,
+            diagnostics,
+        },
+        recognition,
+    )
 }
 
-fn parse_editor_puzzle_catalog(
-    lines: &[source::LogicalLine],
-    start: usize,
-    catalog: &mut Catalog,
-    strict: bool,
-) -> Result<(usize, Vec<usize>, u16), DiagnosticReport> {
-    if let Err(error) = collect_puzzle_tag_declarations(lines, start + 1, catalog)
-        && strict
+fn project_model_semantics(
+    model: &model_syntax::PuzzleModelSyntax,
+    catalog: &Catalog,
+    recognition: &mut crate::surface::ParserRecognition,
+) {
+    project_level_products(
+        &model.body.levels.levels,
+        model.dimension,
+        recognition,
+    );
+    project_syntax_semantics(&model.body.semantics, catalog, recognition);
+    for program in [
+        model.body.rules.as_ref(),
+        model.body.on_level_start.as_ref(),
+        model.body.on_level_clear.as_ref(),
+        model.body.on_last_level_clear.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
     {
-        return Err(error);
+        project_syntax_semantics(&program.semantics, catalog, recognition);
     }
-    let pending_groups = match collect_puzzle_group_declarations(lines, start + 1) {
-        Ok(groups) => groups,
-        Err(error) if strict => return Err(error),
-        Err(_) => Vec::new(),
+    for routine in &model.body.routines {
+        project_syntax_semantics(&routine.semantics, catalog, recognition);
+    }
+    for level in &model.body.levels.levels {
+        for program in level
+            .on_level_start
+            .iter()
+            .chain(&level.on_level_clear)
+            .chain(level.rules_before.iter())
+            .chain(level.rules_after.iter())
+        {
+            project_syntax_semantics(&program.semantics, catalog, recognition);
+        }
+    }
+    if let Some(win_conditions) = &model.body.win_conditions {
+        project_syntax_semantics(&win_conditions.semantics, catalog, recognition);
+    }
+}
+
+fn project_level_products(
+    levels: &[crate::level::LevelBlock],
+    dimension: crate::ModelDimension,
+    recognition: &mut crate::surface::ParserRecognition,
+) {
+    recognition.level_products.extend(levels.iter().enumerate().map(
+        |(level_index, level)| crate::surface::SurfaceLevelProduct {
+            span: level.source_span,
+            body_span: level.body_span,
+            name: level.source_name.clone(),
+            dimension,
+            pack: level.pack.clone(),
+            puzzle: level.puzzle.clone(),
+            level_index,
+        },
+    ));
+}
+
+fn project_syntax_semantics(
+    semantics: &model_syntax::SyntaxSemantics,
+    catalog: &Catalog,
+    recognition: &mut crate::surface::ParserRecognition,
+) {
+    recognition.merge(semantics.fixed.clone());
+    for selector in &semantics.selectors {
+        project_selector_occurrence(selector, catalog, recognition);
+    }
+}
+
+fn mark_selector_component(
+    recognition: &mut crate::surface::ParserRecognition,
+    start: usize,
+    component: &str,
+    selector_head: bool,
+    catalog: &Catalog,
+) {
+    if let Some(open) = component.find('(')
+        && component.ends_with(')')
+    {
+        let map = &component[..open];
+        recognition.mark(
+            crate::surface::SourceSpan {
+                start,
+                end: start + map.len(),
+            },
+            crate::surface::SurfaceSemanticKind::Group,
+        );
+        let argument = &component[open + 1..component.len() - 1];
+        let argument = argument.split('#').next().unwrap_or(argument);
+        recognition.mark(
+            crate::surface::SourceSpan {
+                start: start + open + 1,
+                end: start + open + 1 + argument.len(),
+            },
+            if catalog.value_sets.contains_key(argument)
+                || catalog.object_axes.contains_key(argument)
+            {
+                crate::surface::SurfaceSemanticKind::Group
+            } else {
+                crate::surface::SurfaceSemanticKind::Variant
+            },
+        );
+        if let Some(hash) = component.find('#') {
+            recognition.mark(
+                crate::surface::SourceSpan {
+                    start: start + hash + 1,
+                    end: start + component.len() - 1,
+                },
+                crate::surface::SurfaceSemanticKind::Binding,
+            );
+        }
+        return;
+    }
+    let semantic = component.split('#').next().unwrap_or(component);
+    let kind = if selector_head {
+        if catalog.object_groups.contains_key(semantic) {
+            crate::surface::SurfaceSemanticKind::Group
+        } else {
+            crate::surface::SurfaceSemanticKind::Object
+        }
+    } else if catalog.value_sets.contains_key(semantic)
+        || catalog.object_axes.contains_key(semantic)
+    {
+        crate::surface::SurfaceSemanticKind::Group
+    } else {
+        crate::surface::SurfaceSemanticKind::Variant
     };
-    let mut resolved_groups = HashSet::<String>::new();
-    let mut named_layers = HashMap::<String, u16>::new();
-    let mut layer_count = None::<u16>;
-    let mut pending_visual_blocks = Vec::<usize>::new();
-    let mut i = start + 1;
-    while i < lines.len() && !is_block_close_line(&lines[i]) {
-        let tokens = split_header_tokens(&lines[i]);
-        let directive = puzzle_authoring::puzzle_directive_surface(&lines[i]);
-        match directive {
-            puzzle_authoring::PuzzleDirectiveSurface::Empty => i += 1,
-            puzzle_authoring::PuzzleDirectiveSurface::Tags => {
-                if tokens.as_slice() != ["tags"] {
-                    if strict {
-                        return Err(parse_error(&lines[i], "tags header must be: tags"));
-                    }
-                    i = recover_after_directive_error(lines, i);
-                } else {
-                    i = skip_tags_block(lines, i).unwrap_or(i + 1);
-                }
-            }
-            puzzle_authoring::PuzzleDirectiveSurface::Slots => match tokens.as_slice() {
-                ["slots"] => {
-                    let parsed = parse_layers_block(
-                        lines,
-                        i + 1,
-                        &mut named_layers,
-                        &mut layer_count,
-                        catalog,
-                        &pending_groups,
-                        &mut resolved_groups,
-                    );
-                    i = match parsed {
-                        Ok(next_i) => next_i,
-                        Err(error) if strict => return Err(error),
-                        Err(_) => recover_after_directive_error(lines, i),
-                    };
-                    refresh_layer_tags_and_value_sets(&named_layers, catalog);
-                }
-                ["slots", count] => {
-                    match parse_u16(Some(count), &lines[i], "missing layer count") {
-                        Ok(count) => layer_count = Some(count),
-                        Err(error) if strict => return Err(error),
-                        Err(_) => {}
-                    }
-                    i += 1;
-                }
-                _ if strict => {
-                    return Err(parse_error(&lines[i], "slots header is malformed"));
-                }
-                _ => i = recover_after_directive_error(lines, i),
+    recognition.mark(
+        crate::surface::SourceSpan {
+            start,
+            end: start + semantic.len(),
+        },
+        kind,
+    );
+    if let Some(hash) = component.find('#') {
+        recognition.mark(
+            crate::surface::SourceSpan {
+                start: start + hash + 1,
+                end: start + component.len(),
             },
-            puzzle_authoring::PuzzleDirectiveSurface::Groups => {
-                i = match collect_authoring_entry(lines, i, AuthoringEntryOwner::PuzzleGroups) {
-                    Ok((_, next_i)) => next_i,
-                    Err(error) if strict => return Err(error),
-                    Err(_) => recover_after_directive_error(lines, i),
-                };
-                let resolved = resolve_pending_group_definitions(
-                    &pending_groups,
-                    None,
-                    &mut resolved_groups,
-                    catalog,
-                );
-                if let Err(error) = resolved
-                    && strict
-                {
-                    return Err(error);
-                }
-            }
-            puzzle_authoring::PuzzleDirectiveSurface::Levels => {
-                i = collect_levels_authoring_entry(lines, i)?.1;
-            }
-            puzzle_authoring::PuzzleDirectiveSurface::Level => {
-                i = parse_level_block(lines, i, 0)?.1;
-            }
-            puzzle_authoring::PuzzleDirectiveSurface::Sprites => {
-                pending_visual_blocks.push(i);
-                i = collect_authoring_entry(lines, i, AuthoringEntryOwner::DocumentVisuals)?.1;
-            }
-            _ => match tokens.as_slice() {
-                ["map", ..] => {
-                    let value_sets = catalog_value_sets(catalog);
-                    match parse_map_definition(lines, i, &value_sets) {
-                        Ok((map, next_i)) => {
-                            catalog.maps.insert(map.name.clone(), map);
-                            i = next_i;
-                        }
-                        Err(error) if strict => return Err(error),
-                        Err(_) => i = recover_after_directive_error(lines, i),
-                    }
-                }
-                ["marks"] => {
-                    i = match parse_mark_block(lines, i, catalog) {
-                        Ok(next_i) => next_i,
-                        Err(error) if strict => return Err(error),
-                        Err(_) => recover_after_directive_error(lines, i),
-                    };
-                }
-                _ => i = recover_after_directive_error(lines, i),
-            },
-        }
+            crate::surface::SurfaceSemanticKind::Binding,
+        );
     }
-    if let Err(error) =
-        resolve_pending_group_definitions(&pending_groups, None, &mut resolved_groups, catalog)
-        && strict
-    {
-        return Err(error);
-    }
-    Ok((
-        i.saturating_add(1),
-        pending_visual_blocks,
-        layer_count.unwrap_or(0),
-    ))
-}
-
-fn parse_tags_block(
-    lines: &[source::LogicalLine],
-    start: usize,
-    catalog: &mut Catalog,
-) -> Result<usize, DiagnosticReport> {
-    let mut i = start + 1;
-    while i < lines.len() && !is_block_close_line(&lines[i]) {
-        let line = &lines[i];
-        if line.trim().is_empty() {
-            i += 1;
-            continue;
-        }
-        let assignment = puzzle_authoring::selector_assignment_surface(line)
-            .ok_or_else(|| parse_error(line, "tag row must be: <name> = <value...>"))?;
-        parse_tag_set_directive(assignment.name, &assignment.selectors, line, catalog)?;
-        i += 1;
-    }
-    if i >= lines.len() {
-        return Err(parse_error(&lines[start], "tags missing closing brace"));
-    }
-    Ok(i + 1)
-}
-
-fn collect_puzzle_tag_declarations(
-    lines: &[source::LogicalLine],
-    start: usize,
-    catalog: &mut Catalog,
-) -> Result<(), DiagnosticReport> {
-    let mut i = start;
-    while i < lines.len() && !is_block_close_line(&lines[i]) {
-        let tokens = split_header_tokens(&lines[i]);
-        match tokens.as_slice() {
-            [] => i += 1,
-            ["tags"] => {
-                i = parse_tags_block(lines, i, catalog)?;
-            }
-            ["tags", ..] => {
-                return Err(parse_error(&lines[i], "tags header must be: tags"));
-            }
-            _ => {
-                i = recover_after_directive_error(lines, i);
-            }
-        }
-    }
-    Ok(())
-}
-
-fn skip_tags_block(lines: &[source::LogicalLine], start: usize) -> Result<usize, DiagnosticReport> {
-    let mut i = start + 1;
-    while i < lines.len() && !is_block_close_line(&lines[i]) {
-        i += 1;
-    }
-    if i >= lines.len() {
-        return Err(parse_error(&lines[start], "tags missing closing brace"));
-    }
-    Ok(i + 1)
 }
 
 fn parse_tag_set_directive(
@@ -1243,48 +1514,6 @@ fn parse_decimal_integer(value: &str, line: &str) -> Result<i64, DiagnosticRepor
         .map_err(|_| parse_error(line, "integer value is malformed"))
 }
 
-fn parse_assignment_directive(
-    name: &str,
-    line: &str,
-    catalog: &mut Catalog,
-    named_conditions: &mut HashMap<String, (String, ConditionAst)>,
-) -> Result<(), DiagnosticReport> {
-    if !is_identifier(name) {
-        return Err(parse_error(line, "assignment name must be an identifier"));
-    }
-    let (parsed_name, expr) = require_assignment_row(line, "assignment must be: <name> = <value>")?;
-    if parsed_name != name {
-        return Err(parse_error(
-            line,
-            "assignment name does not match directive",
-        ));
-    }
-    if looks_like_condition_expr(expr) {
-        if named_conditions.contains_key(name) {
-            return Err(parse_error(line, "duplicate condition"));
-        }
-        let condition = parse_condition_expr(
-            expr,
-            line,
-            &catalog.input_names,
-            &catalog.variable_names,
-            &catalog.condition_names,
-            &catalog.object_names,
-            &catalog.object_schemas,
-            &catalog_value_sets(catalog),
-            &catalog.maps,
-            &catalog.object_groups,
-        )?;
-        named_conditions.insert(name.to_string(), (expr.to_string(), condition));
-        return Ok(());
-    }
-
-    Err(parse_error(
-        line,
-        "tag sets must be declared inside `tags { ... }`",
-    ))
-}
-
 fn catalog_value_sets(catalog: &Catalog) -> HashMap<String, Vec<String>> {
     let mut values = catalog.value_sets.clone();
     for (name, value_set_values) in &catalog.object_axes {
@@ -1600,15 +1829,16 @@ fn predeclare_layer_block_objects(
 ) -> Result<Vec<String>, DiagnosticReport> {
     let mut terms = Vec::<String>::new();
     let mut used_groups = Vec::<String>::new();
-    collect_layer_block_terms(
+    let collected = collect_layer_block_terms(
         lines,
         start,
         pending_groups,
         catalog,
         &mut terms,
         &mut used_groups,
-    )?;
+    );
     predeclare_layer_terms(&terms, catalog)?;
+    collected?;
     Ok(used_groups)
 }
 
@@ -2272,25 +2502,28 @@ fn add_default_restart_handler(main_statements: Option<&mut Vec<StatementAst>>) 
     });
 }
 
-fn add_cardinal_directions(
+fn add_spatial_directions(
     line: &str,
     catalog: &mut Catalog,
-    directions: &mut Vec<Direction>,
+    directions: &mut Vec<DirectionalInput>,
 ) -> Result<(), DiagnosticReport> {
-    for (name, dx, dy) in [
-        ("up", 0, -1),
-        ("down", 0, 1),
-        ("left", -1, 0),
-        ("right", 1, 0),
-    ] {
+    let names = catalog
+        .value_sets
+        .get("directions")
+        .cloned()
+        .ok_or_else(|| DiagnosticReport::error("missing canonical directions domain"))?;
+    for name in names {
         let input = catalog
             .input_names
-            .get(name)
+            .get(&name)
             .copied()
             .map(Ok)
-            .unwrap_or_else(|| add_input_name(name, line, catalog))?;
+            .unwrap_or_else(|| add_input_name(&name, line, catalog))?;
         if !directions.iter().any(|direction| direction.input == input) {
-            directions.push(Direction { input, dx, dy });
+            directions.push(DirectionalInput {
+                input,
+                direction: name,
+            });
         }
     }
     Ok(())
@@ -2308,83 +2541,14 @@ fn add_default_non_direction_inputs(
     Ok(())
 }
 
-fn has_cardinal_input_names(input_names: &HashMap<String, InputId>) -> bool {
-    ["up", "down", "left", "right"]
-        .iter()
-        .any(|name| input_names.contains_key(*name))
-}
-
-fn directions_include_all_cardinals(
-    directions: &[Direction],
+fn directions_include_all_spatial(
+    directions: &[DirectionalInput],
+    direction_names: &[String],
     input_names: &HashMap<String, InputId>,
 ) -> bool {
-    ["up", "down", "left", "right"].iter().all(|name| {
+    direction_names.iter().all(|name| {
         input_names
-            .get(*name)
+            .get(name)
             .is_some_and(|input| directions.iter().any(|direction| direction.input == *input))
     })
-}
-
-fn parse_command_definition(
-    lines: &[source::LogicalLine],
-    start: usize,
-    catalog: &mut Catalog,
-) -> Result<(Option<Direction>, usize), DiagnosticReport> {
-    let header = split_header_tokens(&lines[start]);
-    let keyword = header.first().copied().unwrap_or("input");
-    let name = expect(header.get(1), &lines[start], "missing input name")?;
-    let input = if let Some(input) = catalog.input_names.get(name).copied() {
-        input
-    } else {
-        add_input_name(name, &lines[start], catalog)?
-    };
-
-    match header.as_slice() {
-        ["input", _] => {
-            let next = start + 1;
-            if next >= lines.len() || is_block_close_line(&lines[next]) {
-                return Ok((None, next));
-            }
-            if !is_input_option(&split_header_tokens(&lines[next])) {
-                return Ok((None, next));
-            }
-
-            let mut direction = None;
-            let mut i = next;
-            while i < lines.len() && !is_block_close_line(&lines[i]) {
-                direction = Some(parse_input_option(&lines[i], input)?);
-                i += 1;
-            }
-            if i >= lines.len() {
-                return Err(parse_error(&lines[start], "input missing closing brace"));
-            }
-            Ok((direction, i + 1))
-        }
-        ["input", _, "direction", value] => {
-            let (dx, dy) = named_direction_vector(value, &lines[start])?;
-            Ok((Some(Direction { input, dx, dy }), start + 1))
-        }
-        _ => Err(parse_error(
-            &lines[start],
-            &format!("{keyword} must be: input <name> [direction <up|down|left|right>]"),
-        )),
-    }
-}
-
-fn is_input_option(tokens: &[&str]) -> bool {
-    matches!(tokens, ["direction", ..])
-}
-
-fn parse_input_option(line: &str, input: InputId) -> Result<Direction, DiagnosticReport> {
-    let tokens = split_header_tokens(line);
-    match tokens.as_slice() {
-        ["direction", value] => {
-            let (dx, dy) = named_direction_vector(value, line)?;
-            Ok(Direction { input, dx, dy })
-        }
-        _ => Err(parse_error(
-            line,
-            "input option must be: direction <up|down|left|right>",
-        )),
-    }
 }

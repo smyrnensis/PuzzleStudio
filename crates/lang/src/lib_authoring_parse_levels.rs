@@ -1,11 +1,3 @@
-fn parse_level_block(
-    lines: &[source::LogicalLine],
-    start: usize,
-    existing_count: usize,
-) -> Result<(LevelBlock, usize), DiagnosticReport> {
-    parse_level_block_with_default_puzzle(lines, start, existing_count, None)
-}
-
 fn parse_level_block_with_default_puzzle(
     lines: &[source::LogicalLine],
     start: usize,
@@ -37,13 +29,12 @@ pub(crate) fn parse_level_resource_entry(
             let mut resource = crate::level::LevelResourceSyntax::default();
             for line in &entry.body {
                 if line.text.ends_with('{') {
-                    return Err(parse_error(
-                        line,
-                        "legend accepts rows, not nested blocks",
-                    ));
+                    return Err(parse_error(line, "legend accepts rows, not nested blocks"));
                 }
                 if !line.text.is_empty() {
-                    resource.legends.push(parse_level_legend_syntax(line, false)?);
+                    resource
+                        .legends
+                        .push(parse_level_legend_syntax(line, false)?);
                 }
             }
             Ok(resource)
@@ -52,13 +43,14 @@ pub(crate) fn parse_level_resource_entry(
             let mut lines = Vec::with_capacity(entry.body.len() + 2);
             lines.push(entry.header.clone());
             lines.extend(entry.body.iter().cloned());
-            lines.push(source::LogicalLine::new(BLOCK_CLOSE, entry.header.line));
-            let (level, next) = parse_level_block_with_default_puzzle(
-                &lines,
-                0,
-                existing_count,
-                default_puzzle,
-            )?;
+            lines.push(
+                entry
+                    .closing
+                    .clone()
+                    .unwrap_or_else(|| source::LogicalLine::new(BLOCK_CLOSE, entry.header.line)),
+            );
+            let (level, next) =
+                parse_level_block_with_default_puzzle(&lines, 0, existing_count, default_puzzle)?;
             if next != lines.len() {
                 return Err(parse_error(
                     &entry.header,
@@ -88,7 +80,12 @@ fn parse_levels_resource_entry(
     let mut lines = Vec::with_capacity(entry.body.len() + 2);
     lines.push(entry.header.clone());
     lines.extend(entry.body.iter().cloned());
-    lines.push(source::LogicalLine::new(BLOCK_CLOSE, entry.header.line));
+    lines.push(
+        entry
+            .closing
+            .clone()
+            .unwrap_or_else(|| source::LogicalLine::new(BLOCK_CLOSE, entry.header.line)),
+    );
     let header = parse_levels_header(&lines[0], default_puzzle)?;
     let mut resource = crate::level::LevelResourceSyntax::default();
     let mut namespace_count = 0usize;
@@ -97,15 +94,14 @@ fn parse_levels_resource_entry(
         let tokens = split_header_tokens(&lines[index]);
         match tokens.as_slice() {
             ["legend"] => {
-                let block = puzzle_authoring::collect_row_block_surface(
-                    &lines,
-                    index + 1,
-                    "legend",
-                )
-                .map_err(|error| parse_error(&lines[index], error.message()))?;
+                let block =
+                    puzzle_authoring::collect_row_block_surface(&lines, index + 1, "legend")
+                        .map_err(|error| parse_error(&lines[index], error.message()))?;
                 for line in &lines[block.body_start..block.body_end] {
                     if !line.text.is_empty() {
-                        resource.legends.push(parse_level_legend_syntax(line, false)?);
+                        resource
+                            .legends
+                            .push(parse_level_legend_syntax(line, false)?);
                     }
                 }
                 index = block.next_index;
@@ -127,7 +123,13 @@ fn parse_levels_resource_entry(
                 let (level, next) = if puzzle_authoring::is_braced_level_header(&lines[index]) {
                     parse_named_level_body(&lines, index, name, &header)?
                 } else {
-                    parse_unbraced_level_body(&lines, index + 1, name, &header)?
+                    parse_unbraced_level_body(
+                        &lines,
+                        index + 1,
+                        name,
+                        &header,
+                        Some(&lines[index]),
+                    )?
                 };
                 resource.levels.push(level);
                 index = next;
@@ -157,7 +159,8 @@ fn parse_levels_resource_entry(
                     existing_count + resource.levels.len(),
                     namespace_count,
                 );
-                let (level, next) = parse_unbraced_level_body(&lines, index, name, &header)?;
+                let (level, next) =
+                    parse_unbraced_level_body(&lines, index, name, &header, None)?;
                 resource.levels.push(level);
                 index = next;
             }
@@ -173,32 +176,16 @@ fn apply_level_resource_legend(
     empty_char: &mut Option<char>,
     recognition: &mut crate::surface::ParserRecognition,
 ) -> Result<(), DiagnosticReport> {
+    recognize_level_resource_legend(syntax, catalog, recognition);
     if syntax.selectors == ["empty"] {
-        if syntax.ch != '.' {
+        if syntax.ch != crate::syntax::DEFAULT_LEVEL_EMPTY_CHAR {
             return Err(parse_error(
                 &syntax.source,
                 "levels use `.` for empty; remove the non-dot empty legend row",
             ));
         }
-        *empty_char = Some('.');
-        for token in &syntax.source.tokens {
-            if token.text == "empty" {
-                recognition.mark(
-                    crate::surface::SourceSpan {
-                        start: token.start,
-                        end: token.end,
-                    },
-                    crate::surface::SurfaceSemanticKind::Literal,
-                );
-            }
-        }
+        *empty_char = Some(crate::syntax::DEFAULT_LEVEL_EMPTY_CHAR);
         return Ok(());
-    }
-    if syntax.ch == '.' {
-        return Err(parse_error(
-            &syntax.source,
-            "levels reserve `.` for empty; use another legend char for objects",
-        ));
     }
     if syntax.selectors.iter().any(|selector| selector == "empty") {
         return Err(parse_error(
@@ -220,7 +207,34 @@ fn apply_level_resource_legend(
         &mut catalog.render_chars,
         &mut catalog.char_objects,
         render_overlays,
-    )
+    )?;
+    Ok(())
+}
+
+fn recognize_level_resource_legend(
+    syntax: &crate::level::LevelLegendSyntax,
+    catalog: &Catalog,
+    recognition: &mut crate::surface::ParserRecognition,
+) {
+    let legend = syntax.ch.to_string();
+    mark_line_token(
+        recognition,
+        &syntax.source,
+        Some(&legend),
+        crate::surface::SurfaceSemanticKind::Literal,
+    );
+    for selector in &syntax.selectors {
+        if selector == "empty" {
+            mark_line_token(
+                recognition,
+                &syntax.source,
+                Some(selector),
+                crate::surface::SurfaceSemanticKind::Literal,
+            );
+        } else {
+            mark_selector_token(recognition, &syntax.source, selector, catalog);
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -280,36 +294,6 @@ fn parse_level_header_name_or_auto(
 ) -> Result<String, DiagnosticReport> {
     puzzle_authoring::parse_level_header_name_or_auto(line, auto_name)
         .map_err(|error| parse_error(line, error.message()))
-}
-
-fn parse_conditions_block(
-    lines: &[source::LogicalLine],
-    start: usize,
-    catalog: &Catalog,
-    named_conditions: &mut HashMap<String, (String, ConditionAst)>,
-) -> Result<usize, DiagnosticReport> {
-    let mut end = start + 1;
-    let mut depth = 1i32;
-    while end < lines.len() {
-        depth += authoring_line_brace_delta(&lines[end]);
-        if depth == 0 {
-            break;
-        }
-        end += 1;
-    }
-    if end >= lines.len() {
-        return Err(parse_error(
-            &lines[start],
-            "condition block missing closing brace",
-        ));
-    }
-    lower_condition_block_syntax_rows(
-        &lines[start],
-        &lines[start + 1..end],
-        catalog,
-        named_conditions,
-    )?;
-    Ok(end + 1)
 }
 
 fn lower_condition_block_syntax_rows(
@@ -456,35 +440,6 @@ impl ConditionBlockCombinator {
             Self::Any => ConditionAst::Any(conditions),
         }
     }
-}
-
-fn parse_puzzle_screen_block(
-    lines: &[source::LogicalLine],
-    start: usize,
-    puzzle_screen: &mut PuzzleScreenDef,
-) -> Result<usize, DiagnosticReport> {
-    let mut parsed = puzzle_screen.clone();
-    let mut i = start + 1;
-    while i < lines.len() && !is_block_close_line(&lines[i]) {
-        let line = &lines[i];
-        let tokens = split_header_tokens(line);
-        match tokens.as_slice() {
-            [] => i += 1,
-            _ => {
-                parse_puzzle_screen_directive(line, &mut parsed)?;
-                i += 1;
-            }
-        }
-    }
-    if i >= lines.len() {
-        return Err(parse_error(
-            &lines[start],
-            "puzzle screen missing closing brace",
-        ));
-    }
-    validate_puzzle_screen(&parsed, &lines[start])?;
-    *puzzle_screen = parsed;
-    Ok(i + 1)
 }
 
 pub(crate) fn lower_puzzle_render_node(
@@ -705,10 +660,9 @@ fn apply_puzzle_render_viewport_node(
             depth: render_positive_u16(depth, &format!("{directive} depth"))?,
             height: match height {
                 Some("full") | None => ViewportHeight3::Full,
-                Some(value) => ViewportHeight3::Size(render_positive_u16(
-                    value,
-                    "viewport height",
-                )?),
+                Some(value) => {
+                    ViewportHeight3::Size(render_positive_u16(value, "viewport height")?)
+                }
             },
         });
     }
@@ -889,8 +843,8 @@ fn parse_animation_duration_ms(value: &str, line: &str) -> Result<u64, Diagnosti
     Ok(milliseconds)
 }
 
-fn parse_puzzle_screen_directive(
-    line: &str,
+pub(crate) fn parse_puzzle_screen_directive(
+    line: &source::LogicalLine,
     puzzle_screen: &mut PuzzleScreenDef,
 ) -> Result<(), DiagnosticReport> {
     let tokens = split_header_tokens(line);
@@ -930,9 +884,9 @@ fn parse_puzzle_screen_directive(
     Ok(())
 }
 
-fn validate_puzzle_screen(
+pub(crate) fn validate_puzzle_screen(
     puzzle_screen: &PuzzleScreenDef,
-    line: &str,
+    line: &source::LogicalLine,
 ) -> Result<(), DiagnosticReport> {
     if !matches!(puzzle_screen.viewport_size, ViewportSizeDef::Size { .. })
         && puzzle_screen.viewport_mode == ViewportModeDef::Centered
@@ -946,10 +900,11 @@ fn validate_puzzle_screen(
 }
 
 fn parse_screen_size_directive(
-    line: &str,
+    line: &source::LogicalLine,
     directive: &str,
 ) -> Result<(u16, u16), DiagnosticReport> {
     let value = line
+        .text
         .strip_prefix(directive)
         .map(str::trim)
         .unwrap_or_default();
@@ -1159,9 +1114,17 @@ fn parse_named_level_body(
         return Err(parse_error(&lines[start], "level missing closing brace"));
     }
 
+    let name = name_override.unwrap_or(name);
+    let source_name = (!matches!(split_header_tokens(&lines[start]).as_slice(), ["{"]))
+        .then(|| name.clone())
+        .unwrap_or_default();
+    let (source_span, body_span) = braced_level_source_spans(lines, start, i);
     Ok((
         canonicalize_level_block(LevelBlock {
-            name: name_override.unwrap_or(name),
+            name,
+            source_name,
+            source_span,
+            body_span,
             pack: header.pack.clone(),
             puzzle: header.puzzle.clone(),
             lines: level_lines,
@@ -1196,46 +1159,12 @@ fn canonical_level_name_override(line: &str) -> Result<Option<String>, Diagnosti
     Ok(Some(parsed))
 }
 
-fn braced_level_name_override_or(
-    lines: &[source::LogicalLine],
-    start: usize,
-    fallback: String,
-) -> Result<String, DiagnosticReport> {
-    let mut name = None::<String>;
-    let mut nested_blocks = 0usize;
-    let mut i = start + 1;
-    while i < lines.len() {
-        if is_block_close_line(&lines[i]) {
-            if nested_blocks == 0 {
-                return Ok(name.unwrap_or(fallback));
-            }
-            nested_blocks -= 1;
-            i += 1;
-            continue;
-        }
-        if nested_blocks == 0
-            && let Some(parsed) = canonical_level_name_override(&lines[i])?
-        {
-            if name.is_some() {
-                return Err(parse_error(&lines[i], "duplicate level name"));
-            }
-            name = Some(parsed);
-            i += 1;
-            continue;
-        }
-        if is_level_body_block(&split_header_tokens(&lines[i])) {
-            nested_blocks += 1;
-        }
-        i += 1;
-    }
-    Err(parse_error(&lines[start], "level missing closing brace"))
-}
-
 fn parse_unbraced_level_body(
     lines: &[source::LogicalLine],
     start: usize,
     name: String,
     header: &LevelsHeader,
+    source_header: Option<&source::LogicalLine>,
 ) -> Result<(LevelBlock, usize), DiagnosticReport> {
     let mut level_lines = Vec::new();
     let mut i = start;
@@ -1274,9 +1203,14 @@ fn parse_unbraced_level_body(
         ));
     }
 
+    let (source_span, body_span) = unbraced_level_source_spans(source_header, &level_lines);
+    let source_name = source_header.map_or_else(String::new, |_| name.clone());
     Ok((
         canonicalize_level_block(LevelBlock {
             name,
+            source_name,
+            source_span,
+            body_span,
             pack: header.pack.clone(),
             puzzle: header.puzzle.clone(),
             lines: level_lines,
@@ -1290,6 +1224,71 @@ fn parse_unbraced_level_body(
         })?,
         i,
     ))
+}
+
+fn braced_level_source_spans(
+    lines: &[source::LogicalLine],
+    header_index: usize,
+    closing_index: usize,
+) -> (crate::surface::SourceSpan, crate::surface::SourceSpan) {
+    let header = &lines[header_index];
+    let closing = &lines[closing_index];
+    let start = header.tokens.first().map_or(0, |token| token.start);
+    let header_end = header.tokens.last().map_or(start, |token| token.end);
+    let body_start = header
+        .tokens
+        .iter()
+        .find(|token| token.text == "{")
+        .map_or(header_end, |token| token.end);
+    let body_end = closing.tokens.first().map_or_else(
+        || {
+            lines[header_index + 1..closing_index]
+                .iter()
+                .rev()
+                .find_map(|line| line.tokens.last().map(|token| token.end))
+                .unwrap_or(body_start)
+        },
+        |token| token.start,
+    );
+    let end = closing
+        .tokens
+        .last()
+        .map_or(body_end, |token| token.end);
+    (
+        crate::surface::SourceSpan { start, end },
+        crate::surface::SourceSpan {
+            start: body_start,
+            end: body_end,
+        },
+    )
+}
+
+fn unbraced_level_source_spans(
+    header: Option<&source::LogicalLine>,
+    body: &[source::LogicalLine],
+) -> (crate::surface::SourceSpan, crate::surface::SourceSpan) {
+    let body_start = body
+        .first()
+        .and_then(|line| line.tokens.first())
+        .map_or(0, |token| token.start);
+    let body_end = body
+        .iter()
+        .rev()
+        .find_map(|line| line.tokens.last().map(|token| token.end))
+        .unwrap_or(body_start);
+    let start = header
+        .and_then(|line| line.tokens.first())
+        .map_or(body_start, |token| token.start);
+    (
+        crate::surface::SourceSpan {
+            start,
+            end: body_end,
+        },
+        crate::surface::SourceSpan {
+            start: body_start,
+            end: body_end,
+        },
+    )
 }
 
 fn is_level_body_block(tokens: &[&str]) -> bool {
@@ -1339,20 +1338,23 @@ fn canonicalize_level_block(mut level: LevelBlock) -> Result<LevelBlock, Diagnos
                     },
                 ));
             }
-            let (statements, next) =
-                puzzle_authoring::collect_rule_statement_block(&source_lines, index + 1, "level rules")
-                    .map_err(|error| {
-                        let source = error
-                            .line_index()
-                            .and_then(|line_index| source_lines.get(line_index))
-                            .unwrap_or(line);
-                        parse_error(source, &error.message())
-                    })?;
-            *target = Some(crate::model_syntax::RuleStatementsSyntax {
-                header: line.clone(),
-                modifier: before.then(|| "before".to_string()),
+            let (statements, next) = puzzle_authoring::collect_rule_statement_block(
+                &source_lines,
+                index + 1,
+                "level rules",
+            )
+            .map_err(|error| {
+                let source = error
+                    .line_index()
+                    .and_then(|line_index| source_lines.get(line_index))
+                    .unwrap_or(line);
+                parse_error(source, &error.message())
+            })?;
+            *target = Some(crate::model_syntax::RuleStatementsSyntax::new(
+                line.clone(),
+                before.then(|| "before".to_string()),
                 statements,
-            });
+            ));
             index = next;
             continue;
         }
@@ -1376,11 +1378,8 @@ fn canonicalize_level_block(mut level: LevelBlock) -> Result<LevelBlock, Diagnos
                     .unwrap_or(line);
                 parse_error(source, &error.message())
             })?;
-            let syntax = crate::model_syntax::RuleStatementsSyntax {
-                header: line.clone(),
-                modifier: None,
-                statements,
-            };
+            let syntax =
+                crate::model_syntax::RuleStatementsSyntax::new(line.clone(), None, statements);
             if tokens[0] == "on_level_start" {
                 level.on_level_start.push(syntax);
             } else {
@@ -1462,7 +1461,11 @@ fn parse_level_legend_syntax(
     Ok(crate::level::LevelLegendSyntax {
         source: line.clone(),
         ch,
-        selectors: assignment.1.iter().map(|selector| (*selector).to_string()).collect(),
+        selectors: assignment
+            .1
+            .iter()
+            .map(|selector| (*selector).to_string())
+            .collect(),
     })
 }
 
@@ -1493,24 +1496,21 @@ struct ParsedLevelBody {
 fn parse_level_body(
     level: &LevelBlock,
     catalog: &Catalog,
-    empty_char: Option<char>,
     named_conditions: &HashMap<String, (String, ConditionAst)>,
 ) -> Result<ParsedLevelBody, DiagnosticReport> {
-    parse_level_body_with_rules(level, catalog, empty_char, named_conditions, true)
+    parse_level_body_with_rules(level, catalog, named_conditions, true)
 }
 
 fn parse_level_body_for_editor(
     level: &LevelBlock,
     catalog: &Catalog,
-    empty_char: char,
 ) -> Result<ParsedLevelBody, DiagnosticReport> {
-    parse_level_body_with_rules(level, catalog, Some(empty_char), &HashMap::new(), false)
+    parse_level_body_with_rules(level, catalog, &HashMap::new(), false)
 }
 
 fn parse_level_body_with_rules(
     level: &LevelBlock,
     catalog: &Catalog,
-    empty_char: Option<char>,
     named_conditions: &HashMap<String, (String, ConditionAst)>,
     include_rules: bool,
 ) -> Result<ParsedLevelBody, DiagnosticReport> {
@@ -1522,8 +1522,7 @@ fn parse_level_body_with_rules(
         let mut tokens = vec!["legend".to_string(), legend.ch.to_string(), "=".to_string()];
         tokens.extend(legend.selectors.iter().cloned());
         let tokens = tokens.iter().map(String::as_str).collect::<Vec<_>>();
-        let (ch, objects) =
-            parse_level_legend_directive(&tokens, &legend.source, catalog, empty_char)?;
+        let (ch, objects) = parse_level_legend_directive(&tokens, &legend.source, catalog)?;
         body.local_char_objects.insert(ch, objects);
     }
     if !include_rules {
@@ -1605,7 +1604,6 @@ fn parse_level_legend_directive(
     tokens: &[&str],
     line: &str,
     catalog: &Catalog,
-    empty_char: Option<char>,
 ) -> Result<(char, Vec<ObjectId>), DiagnosticReport> {
     let Some(syntax) = crate::syntax::level_legend_directive_syntax(tokens, true) else {
         return Err(parse_error(
@@ -1615,7 +1613,7 @@ fn parse_level_legend_directive(
     };
 
     let ch = parse_char(tokens.get(1), line, "missing legend char")?;
-    if ch == '.' || Some(ch) == empty_char || tokens[syntax.rhs_start..] == ["empty"] {
+    if tokens[syntax.rhs_start..] == ["empty"] {
         return Err(parse_error(line, "level-local legend cannot define empty"));
     }
     let selector_sets = selector_sets(

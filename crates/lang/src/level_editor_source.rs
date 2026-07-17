@@ -18,7 +18,10 @@ pub(crate) fn level_editor_manifest_json(
 ) -> Result<String, String> {
     let level_targets = entries
         .iter()
-        .filter(|entry| entry.kind == SourceTargetKind::Level)
+        .filter(|entry| {
+            entry.kind == SourceTargetKind::Level
+                && entry.dimension == Some(crate::ModelDimension::Two)
+        })
         .collect::<Vec<_>>();
     let objects = parsed
         .catalog
@@ -135,6 +138,9 @@ fn legend_value(
     parsed: &LevelEditorIntegration,
     entries: &std::collections::HashMap<char, Vec<puzzle_core::ObjectId>>,
 ) -> Value {
+    let empty_has_objects = parsed
+        .empty_char
+        .is_some_and(|empty_char| entries.contains_key(&empty_char));
     let mut entries = entries
         .iter()
         .map(|(symbol, objects)| {
@@ -144,7 +150,7 @@ fn legend_value(
             })
         })
         .collect::<Vec<_>>();
-    if let Some(empty_char) = parsed.empty_char {
+    if let Some(empty_char) = parsed.empty_char.filter(|_| !empty_has_objects) {
         entries.push(json!({ "symbol": empty_char.to_string(), "objectIds": [] }));
     }
     entries.sort_by(|left, right| left["symbol"].as_str().cmp(&right["symbol"].as_str()));
@@ -156,9 +162,9 @@ fn renderer_sprite_value(sprite: &VisualSpriteDef) -> Value {
     let mut value = match &sprite.kind {
         VisualSpriteKind::Solid(color) => json!({ "colors": { "0": color }, "pattern": ["0"] }),
         VisualSpriteKind::Image { source } => json!({ "source": source }),
-        VisualSpriteKind::Ascii { pattern, colors } => json!({
+        VisualSpriteKind::Ascii { colors } => json!({
             "colors": colors.iter().map(|color| (color.token.to_string(), Value::String(color.color.clone()))).collect::<serde_json::Map<_, _>>(),
-            "pattern": pattern,
+            "pattern": sprite.frames.first().and_then(|frame| frame.planes.first()).cloned().unwrap_or_default(),
         }),
     };
     let object = value
@@ -173,9 +179,18 @@ fn renderer_sprite_value(sprite: &VisualSpriteDef) -> Value {
     if let Some(sampling) = sprite.sampling {
         object.insert("sampling".to_string(), json!(sampling));
     }
-    if let Some(loop_animation) = &sprite.loop_animation {
-        object.insert("durationMs".to_string(), json!(loop_animation.duration_ms));
-        object.insert("frames".to_string(), json!(loop_animation.frames));
+    if let Some(duration_ms) = sprite.animation_duration_ms {
+        object.insert("durationMs".to_string(), json!(duration_ms));
+        object.insert(
+            "frames".to_string(),
+            json!(
+                sprite
+                    .frames
+                    .iter()
+                    .filter_map(|frame| frame.planes.first())
+                    .collect::<Vec<_>>()
+            ),
+        );
     }
     if let Some(pixels_per_cell) = sprite.pixels_per_cell {
         object.insert(

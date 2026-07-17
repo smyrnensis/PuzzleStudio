@@ -375,7 +375,7 @@ direction north up
 direction south down
 ```
 
-物理キーは owner-scoped な `keys` block で semantic input 名または scene routine に対応させる。puzzle 内の `keys` は puzzle rules へ渡す input、scene 内の `keys` は scene-wide shortcut や title/menu confirm などを処理する routine/effect を定義する。
+キーボード入力は owner-scoped な `keys` block で semantic input 名または scene routine に対応させる。puzzle 内の `keys` は puzzle rules へ渡す input、scene 内の `keys` は scene-wide shortcut や title/menu confirm などを処理する routine/effect を定義する。
 
 ```txt
 puzzle sokoban {
@@ -404,7 +404,7 @@ goto playing
 }
 ```
 
-`keys { <key...> -> <semantic-input-or-routine-or-effect> }` は、複数の physical key を同じ owner-scoped target に lower する。通常文字に加えて `ArrowUp` / `ArrowDown` / `ArrowLeft` / `ArrowRight` / `Enter` / `Space` / `Escape` / `Tab` / `Backspace` を named key token として書ける。`keys { q Escape -> level_select }` は複数 key から scene-local `routine level_select` を呼ぶ shortcut、`keys { Escape -> goto title }` は key から直接 scene effect へ送る shortcut。`keys` では `=` を使わない。`r -> my_restart` のように model input で書くと、既定の `r -> restart` は shadow される。`button "Play" -> input confirm` は button click を semantic input 経路へ送る。model `rules` の `<input> -> <effect>` は input guard の sugar。scene key dispatch は `keys` と `routine` で書く。scene / presentation / lifecycle effect は `effect` wrapper を付けずに直接書く。scene が level lifecycle に介入する場合は `playing.restart` や `board.restart` のように target を明示する。
+`keys { <key...> -> <semantic-input-or-routine-or-effect> }` は、複数の logical key を同じ owner-scoped target に lower する。1文字の token は現在のキーボード配列が生成する論理文字を小文字化した値であり、物理位置を表さない。通常文字に加えて `ArrowUp` / `ArrowDown` / `ArrowLeft` / `ArrowRight` / `Enter` / `Space` / `Escape` / `Tab` / `Backspace` を named key token として書ける。browser adapter は `KeyboardEvent.code` から文字 token を合成しない。`keys { q Escape -> level_select }` は複数 key から scene-local `routine level_select` を呼ぶ shortcut、`keys { Escape -> goto title }` は key から直接 scene effect へ送る shortcut。`keys` では `=` を使わない。`r -> my_restart` のように model input で書くと、既定の `r -> restart` は shadow される。`button "Play" -> input confirm` は button click を semantic input 経路へ送る。model `rules` の `<input> -> <effect>` は input guard の sugar。scene key dispatch は `keys` と `routine` で書く。scene / presentation / lifecycle effect は `effect` wrapper を付けずに直接書く。scene が level lifecycle に介入する場合は `playing.restart` や `board.restart` のように target を明示する。
 
 入力適用後の turn completion では、runtime が post-rules / pre-navigation の snapshot に対して `win_conditions` を評価する。`win_conditions` が true なら model lifecycle として `on_level_clear` を level navigation より前に実行する。通常の clear / advance / restart は model window component と puzzle lifecycle が所有し、scene condition transitions は overlay、menu、hub、特殊分岐などの例外的な flow 介入だけを担う。これは puzzle-core の rewrite ではなく、`GameSession` / standalone HTML runtime が扱う flow である。
 

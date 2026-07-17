@@ -16,22 +16,6 @@ pub fn parse_game_for_path(
     parse_game_document_with_profile(source, profile)
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct DocumentRuntimeSources {
-    pub model_2d: String,
-    pub model_3d: String,
-}
-
-pub fn split_document_runtime_sources(
-    source: &str,
-) -> Result<DocumentRuntimeSources, DiagnosticReport> {
-    let mixed_sources = split_mixed_game_document_source(source)?;
-    Ok(DocumentRuntimeSources {
-        model_2d: strip_document_shell_source(&mixed_sources.puzzle2d)?,
-        model_3d: strip_document_shell_source(&mixed_sources.puzzle3d)?,
-    })
-}
-
 pub fn parse_game2d(source: &str) -> Result<LoadedGame, DiagnosticReport> {
     parse_game2d_document(source)
 }
@@ -41,7 +25,7 @@ struct SurfaceDocumentProducts {
     semantic_tokens: bool,
     completion_symbols: bool,
     highlight_ranges: bool,
-    visual_sprite_refs: bool,
+    source_targets: bool,
 }
 
 impl SurfaceDocumentProducts {
@@ -49,32 +33,32 @@ impl SurfaceDocumentProducts {
         semantic_tokens: true,
         completion_symbols: true,
         highlight_ranges: true,
-        visual_sprite_refs: true,
+        source_targets: true,
     };
 
     const STRUCTURE_ONLY: Self = Self {
         semantic_tokens: false,
         completion_symbols: false,
         highlight_ranges: false,
-        visual_sprite_refs: false,
+        source_targets: false,
     };
 
     const SOURCE_TARGET: Self = Self {
         semantic_tokens: false,
         completion_symbols: false,
         highlight_ranges: false,
-        visual_sprite_refs: true,
+        source_targets: true,
     };
 
     const COMPLETION_SYMBOLS: Self = Self {
         semantic_tokens: false,
         completion_symbols: true,
         highlight_ranges: false,
-        visual_sprite_refs: false,
+        source_targets: false,
     };
 
     fn needs_parser_catalog(self) -> bool {
-        self.semantic_tokens || self.completion_symbols || self.visual_sprite_refs
+        self.semantic_tokens || self.completion_symbols || self.source_targets
     }
 }
 
@@ -84,7 +68,7 @@ impl SurfaceDocumentProducts {
 pub(crate) struct ParseSnapshot {
     source_scan: source::SurfaceSourceScan,
     parser_catalog:
-        Option<Result<crate::surface::ParseProduct<LevelEditorIntegration>, DiagnosticReport>>,
+        Option<crate::surface::ParseProduct<Result<LevelEditorIntegration, DiagnosticReport>>>,
     document: SurfaceDocument,
     strict_diagnostic: Option<DiagnosticReport>,
 }
@@ -92,7 +76,10 @@ pub(crate) struct ParseSnapshot {
 impl ParseSnapshot {
     pub(crate) fn parse(source: &str, source_profile: Option<PuzzleSourceProfile>) -> Self {
         let source_scan = source::scan_surface_source(source);
-        let parser_catalog = Some(parser_surface_catalog_from_source_scan(&source_scan));
+        let parser_catalog = Some(parser_surface_catalog_from_source_scan(
+            &source_scan,
+            source_profile,
+        ));
         Self::from_scan(source_profile, source_scan, parser_catalog)
     }
 
@@ -104,25 +91,28 @@ impl ParseSnapshot {
     fn from_scan(
         source_profile: Option<PuzzleSourceProfile>,
         source_scan: source::SurfaceSourceScan,
-        parser_catalog:
-            Option<Result<crate::surface::ParseProduct<LevelEditorIntegration>, DiagnosticReport>>,
+        parser_catalog: Option<
+            crate::surface::ParseProduct<Result<LevelEditorIntegration, DiagnosticReport>>,
+        >,
     ) -> Self {
-        let parser_product = parser_catalog
-            .as_ref()
-            .and_then(|product| product.as_ref().ok());
-        let mut document = build_surface_document_from_source_scan(
-            &source_scan,
-            parser_product,
-            source_profile,
-        );
+        let parser_product = parser_catalog.as_ref();
+        let mut document =
+            build_surface_document_from_source_scan(&source_scan, parser_product, source_profile);
         let strict_diagnostic = match source_scan.strict_logical_lines() {
             Ok(logical_lines) => {
                 document.logical_lines = logical_lines;
                 None
             }
-            Err(report) => Some(report),
+            Err(report) => {
+                document
+                    .diagnostics
+                    .extend(report.diagnostics().iter().cloned());
+                Some(report)
+            }
         };
-        if let Some(Err(report)) = &parser_catalog {
+        if let Some(parser_product) = &parser_catalog
+            && let Err(report) = &parser_product.value
+        {
             document
                 .diagnostics
                 .extend(report.diagnostics().iter().cloned());
@@ -143,8 +133,8 @@ impl ParseSnapshot {
         self.parser_catalog
             .as_ref()
             .expect("source analysis snapshot requires parser product")
+            .value
             .as_ref()
-            .map(|product| &product.value)
             .map_err(ToString::to_string)
     }
 
@@ -172,7 +162,10 @@ impl ParseSnapshot {
         let parser_catalog = if parser_catalog_reused {
             self.parser_catalog.take()
         } else {
-            Some(parser_surface_catalog_from_source_scan(&source_scan))
+            Some(parser_surface_catalog_from_source_scan(
+                &source_scan,
+                source_profile,
+            ))
         };
         *self = Self::from_scan(source_profile, source_scan, parser_catalog);
         (rescanned_lines, parser_catalog_reused)
@@ -199,37 +192,12 @@ pub fn validate_surface_document_projection(source: &str) -> Result<(), Diagnost
 fn validate_parser_recognition_completeness(
     document: &SurfaceDocument,
 ) -> Result<(), DiagnosticReport> {
-    let missing = document
-        .lines
-        .iter()
-        .flat_map(|line| &line.lexical_facts)
-        .find(|fact| {
-            matches!(fact.kind, source::lexer::SourceLexicalKind::Word)
-                && !document
-                    .semantic_tokens
-                    .iter()
-                    .any(|token| token.span.start <= fact.start && token.span.end >= fact.end)
-                && !document
-                    .highlight_ranges
-                    .raw_ranges
-                    .iter()
-                    .chain(&document.highlight_ranges.plain_ranges)
-                    .any(|span| span.start <= fact.start && span.end >= fact.end)
-                && !document
-                    .highlight_ranges
-                    .display_facts
-                    .iter()
-                    .any(|display| {
-                        let span = display.span();
-                        span.start <= fact.start && span.end >= fact.end
-                    })
-        });
-    let Some(fact) = missing else {
+    let Some(span) = document.syntax_error_spans.first() else {
         return Ok(());
     };
     Err(DiagnosticReport::error(format!(
         "canonical parser product contains token at {}..{} without a syntax disposition",
-        fact.start, fact.end
+        span.start, span.end
     )))
 }
 
@@ -249,6 +217,18 @@ fn parse_surface_source_target_document(source: &str) -> SurfaceDocument {
     build_surface_document(source, SurfaceDocumentProducts::SOURCE_TARGET)
 }
 
+fn parse_surface_source_target_document_for_profile(
+    source: &str,
+    source_profile: PuzzleSourceProfile,
+) -> SurfaceDocument {
+    try_build_surface_document_with_profile(
+        source,
+        SurfaceDocumentProducts::SOURCE_TARGET,
+        Some(source_profile),
+    )
+    .expect("surface document scan failed")
+}
+
 fn build_surface_document(source: &str, products: SurfaceDocumentProducts) -> SurfaceDocument {
     try_build_surface_document(source, products).expect("surface document scan failed")
 }
@@ -257,19 +237,27 @@ fn try_build_surface_document(
     source: &str,
     products: SurfaceDocumentProducts,
 ) -> Result<SurfaceDocument, DiagnosticReport> {
+    try_build_surface_document_with_profile(source, products, None)
+}
+
+fn try_build_surface_document_with_profile(
+    source: &str,
+    products: SurfaceDocumentProducts,
+    source_profile: Option<PuzzleSourceProfile>,
+) -> Result<SurfaceDocument, DiagnosticReport> {
     let source_scan = source::scan_surface_source(source);
     let parser_catalog = products
         .needs_parser_catalog()
-        .then(|| parser_surface_catalog_from_source_scan(&source_scan));
+        .then(|| parser_surface_catalog_from_source_scan(&source_scan, source_profile));
     let mut document = try_build_surface_document_from_scan(
         &source_scan,
         products,
-        parser_catalog
-            .as_ref()
-            .and_then(|product| product.as_ref().ok()),
-        None,
+        parser_catalog.as_ref(),
+        source_profile,
     )?;
-    if let Some(Err(report)) = parser_catalog {
+    if let Some(parser_product) = parser_catalog
+        && let Err(report) = parser_product.value
+    {
         document.diagnostics.extend(report.into_diagnostics());
     }
     Ok(document)
@@ -278,7 +266,9 @@ fn try_build_surface_document(
 fn try_build_surface_document_from_scan(
     scan: &source::SurfaceSourceScan,
     products: SurfaceDocumentProducts,
-    parser_catalog: Option<&crate::surface::ParseProduct<LevelEditorIntegration>>,
+    parser_catalog: Option<
+        &crate::surface::ParseProduct<Result<LevelEditorIntegration, DiagnosticReport>>,
+    >,
     source_profile: Option<PuzzleSourceProfile>,
 ) -> Result<SurfaceDocument, DiagnosticReport> {
     let mut sink = SurfaceSink::default();
@@ -319,12 +309,11 @@ fn try_build_surface_document_from_scan(
         if products.semantic_tokens {
             sink.project_parser_recognition(&parser_product.recognition);
         }
-        if products.visual_sprite_refs {
-            sink.project_parser_visual_refs(&parser_product.recognition);
+        if products.source_targets {
+            sink.project_parser_source_targets(&parser_product.recognition);
         }
-        let catalog = &parser_product.value.catalog;
         if products.completion_symbols {
-            record_parser_catalog_completion_symbols(catalog, &mut sink);
+            sink.project_parser_completion(&parser_product.recognition);
         }
     }
     if products.highlight_ranges {
@@ -335,12 +324,49 @@ fn try_build_surface_document_from_scan(
     }
     let mut document = sink.into_document();
     document.source_profile = source_profile;
+    if products.semantic_tokens {
+        document.syntax_error_spans = syntax_error_spans(&document);
+    }
     Ok(document)
+}
+
+fn syntax_error_spans(document: &SurfaceDocument) -> Vec<SourceSpan> {
+    document
+        .lines
+        .iter()
+        .flat_map(|line| &line.lexical_facts)
+        .filter(|fact| matches!(fact.kind, source::lexer::SourceLexicalKind::Word))
+        .filter(|fact| {
+            !document
+                .semantic_tokens
+                .iter()
+                .any(|token| token.span.start <= fact.start && token.span.end >= fact.end)
+                && !document
+                    .highlight_ranges
+                    .raw_ranges
+                    .iter()
+                    .any(|span| span.start <= fact.start && span.end >= fact.end)
+                && !document
+                    .highlight_ranges
+                    .display_facts
+                    .iter()
+                    .any(|display| {
+                        let span = display.span();
+                        span.start <= fact.start && span.end >= fact.end
+                    })
+        })
+        .map(|fact| SourceSpan {
+            start: fact.start,
+            end: fact.end,
+        })
+        .collect()
 }
 
 pub(crate) fn build_surface_document_from_source_scan(
     source_scan: &source::SurfaceSourceScan,
-    parser_catalog: Option<&crate::surface::ParseProduct<LevelEditorIntegration>>,
+    parser_catalog: Option<
+        &crate::surface::ParseProduct<Result<LevelEditorIntegration, DiagnosticReport>>,
+    >,
     source_profile: Option<PuzzleSourceProfile>,
 ) -> SurfaceDocument {
     try_build_surface_document_from_scan(
@@ -641,15 +667,21 @@ Box
         let color_start = source.find("#111").unwrap();
         let row_start = source.find("01.").unwrap();
 
-        assert!(document.highlight_ranges.display_facts.contains(
-            &crate::SurfaceDisplayFact::Color {
-                span: crate::surface::SourceSpan {
-                    start: color_start,
-                    end: color_start + 4,
-                },
-                color: "#111".to_string(),
-            }
-        ), "facts={:?} diagnostics={:?}", document.highlight_ranges.display_facts, document.diagnostics);
+        assert!(
+            document
+                .highlight_ranges
+                .display_facts
+                .contains(&crate::SurfaceDisplayFact::Color {
+                    span: crate::surface::SourceSpan {
+                        start: color_start,
+                        end: color_start + 4,
+                    },
+                    color: "#111".to_string(),
+                }),
+            "facts={:?} diagnostics={:?}",
+            document.highlight_ranges.display_facts,
+            document.diagnostics
+        );
         assert!(document.highlight_ranges.display_facts.contains(
             &crate::SurfaceDisplayFact::SpritePixel {
                 span: crate::surface::SourceSpan {
@@ -678,15 +710,20 @@ Box
         let document = parse_surface_document(source);
         let row_start = source.find("B?\n").unwrap();
 
-        assert!(document.highlight_ranges.display_facts.contains(
-            &crate::SurfaceDisplayFact::LevelCell {
-                span: crate::surface::SourceSpan {
-                    start: row_start,
-                    end: row_start + 1,
-                },
-                known: true,
-            }
-        ), "facts={:?} diagnostics={:?}", document.highlight_ranges.display_facts, document.diagnostics);
+        assert!(
+            document.highlight_ranges.display_facts.contains(
+                &crate::SurfaceDisplayFact::LevelCell {
+                    span: crate::surface::SourceSpan {
+                        start: row_start,
+                        end: row_start + 1,
+                    },
+                    known: true,
+                }
+            ),
+            "facts={:?} diagnostics={:?}",
+            document.highlight_ranges.display_facts,
+            document.diagnostics
+        );
         assert!(document.highlight_ranges.display_facts.contains(
             &crate::SurfaceDisplayFact::LevelCell {
                 span: crate::surface::SourceSpan {
@@ -1083,9 +1120,7 @@ __invalid_unowned_surface_node__ {
             validate_surface_document_projection(source).expect_err("unowned header should fail");
 
         assert!(
-            error
-                .to_string()
-                .contains("without a syntax disposition"),
+            error.to_string().contains("without a syntax disposition"),
             "{error}"
         );
     }

@@ -239,8 +239,8 @@ Validation:
 
 ### Package E: Migrate 3D Scenes To Shared Shape
 
-Owner: `puzzle-lang` for parsing/lowering, with deterministic 3D state owned by
-`puzzle-grid3d` and runtime/export behavior owned by adapters.
+Owner: `puzzle-lang` for parsing/lowering, with deterministic grid state owned by
+`puzzle-core` and runtime/export behavior owned by adapters.
 
 Goal: stop representing 3D scenes as a separate scene/component hierarchy.
 
@@ -257,7 +257,7 @@ Tasks:
 Validation:
 
 - `cargo test -p puzzle-lang --test puzzle3_parse`
-- `cargo test -p puzzle-grid3d`
+- `cargo test -p puzzle-core`
 - Fixture export should still include the same scene JSON shape.
 
 ### Package F: Shared Scene JSON
@@ -284,7 +284,7 @@ Validation:
 
 - `cargo check -p html-play`
 - `cargo test -p puzzle-lang --test puzzle3_parse`
-- `cargo test -p puzzle-grid3d`
+- `cargo test -p puzzle-core`
 - Diff generated fixture JSON intentionally if field names change.
 
 ### Package G: Runtime Rendering Boundary

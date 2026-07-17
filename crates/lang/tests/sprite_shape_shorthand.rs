@@ -9,7 +9,7 @@ fn sprite_pattern(source: &str) -> Vec<String> {
         .find(|sprite| sprite.name == "You")
         .expect("sprite should be present");
     match &sprite.kind {
-        VisualSpriteKind::Ascii { pattern, .. } => pattern.clone(),
+        VisualSpriteKind::Ascii { .. } => sprite.frames[0].planes[0].clone(),
         _ => panic!("You should have an ASCII sprite"),
     }
 }

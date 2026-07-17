@@ -180,7 +180,9 @@ fn default_puzzle3_screenshot_scene(document: &puzzle_lang::LoadedDocument) -> O
 
 fn component_contains_puzzle3_frame(component: &SceneComponent) -> bool {
     match component {
-        SceneComponent::Frame(frame) => frame.kind == "puzzle3",
+        SceneComponent::Viewport(viewport) => {
+            viewport.projection == puzzle_lang::ViewportProjectionDef::ThreeD
+        }
         SceneComponent::Row(container)
         | SceneComponent::Column(container)
         | SceneComponent::Box(container) => container

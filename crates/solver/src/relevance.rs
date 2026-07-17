@@ -1,6 +1,7 @@
 use crate::object_refs::{self, SolverPatternObjectRefs};
-use puzzle_core::{CompiledGame, ObjectId as ObjectId2};
-use puzzle_grid3d::{CompiledGame3, GridPattern, GridRuleStep, Offset3};
+#[cfg(test)]
+use puzzle_core::CompiledGame;
+use puzzle_core::{GridCompiledGame, GridOffset, GridPattern, GridRuleStep};
 use puzzle_kernel::{
     CompiledGameModel, ConditionId, ConditionValueKind, InputId, LocalFrame, MarkId, ObjectId,
     ProgramCondition, ProgramStep, RuleConditionDef, RuleEffect, RuleGuard, RuleId, RuleModel,
@@ -29,7 +30,7 @@ type RelevanceGame<Pattern, Offset> = CompiledGameModel<
 >;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SolverRelevance<ObjectId = ObjectId2> {
+pub struct SolverRelevance<ObjectId = puzzle_kernel::ObjectId> {
     relevant_objects: BTreeSet<ObjectId>,
     relevant_rules: BTreeSet<u16>,
 }
@@ -95,41 +96,31 @@ impl<ObjectId: Copy + Ord> SolverRelevance<ObjectId> {
     }
 }
 
-impl SolverRelevance<ObjectId2> {
-    pub fn from_root_objects(
-        game: &CompiledGame,
-        roots: impl IntoIterator<Item = ObjectId2>,
+impl SolverRelevance<ObjectId> {
+    pub fn from_root_objects<const D: usize>(
+        game: &GridCompiledGame<D>,
+        roots: impl IntoIterator<Item = ObjectId>,
     ) -> Self {
         Self::from_game_program(game, game.program(), roots)
     }
 
-    pub fn ignored_objects_for_game(&self, game: &CompiledGame) -> Vec<ObjectId2> {
-        game.objects()
-            .iter()
-            .filter_map(|object| {
-                (!object.id.is_empty() && !self.contains_object(object.id)).then_some(object.id)
-            })
-            .collect()
+    pub fn ignored_objects_for_game<const D: usize>(
+        &self,
+        game: &GridCompiledGame<D>,
+    ) -> Vec<ObjectId> {
+        self.ignored_objects(game)
     }
 
     pub fn relevant_rules(&self) -> Vec<RuleId> {
         self.relevant_rule_ids().into_iter().map(RuleId).collect()
     }
 
-    pub fn from_game3_root_objects(
-        game: &CompiledGame3,
-        program: &[GridRuleStep<3>],
+    pub fn from_program_roots<const D: usize>(
+        game: &GridCompiledGame<D>,
+        program: &[GridRuleStep<D>],
         roots: impl IntoIterator<Item = ObjectId>,
     ) -> Self {
-        Self::from_game_program::<GridPattern<3>, Offset3>(game, program, roots)
-    }
-
-    pub fn ignored_objects_for_game3(&self, game: &CompiledGame3) -> Vec<ObjectId> {
-        self.ignored_objects(game)
-    }
-
-    pub fn relevant_rules3(&self) -> Vec<RuleId> {
-        self.relevant_rules()
+        Self::from_game_program::<GridPattern<D>, GridOffset<D>>(game, program, roots)
     }
 
     fn from_game_program<Pattern, Offset>(

@@ -27,12 +27,15 @@ pub(crate) struct LogicalLine {
     pub(crate) text: String,
     pub(crate) line: usize,
     pub(crate) tokens: Vec<SourceToken>,
+    structural_brace_delta: i8,
 }
 
 impl LogicalLine {
     pub(crate) fn new(text: impl Into<String>, line: usize) -> Self {
+        let text = text.into();
         Self {
-            text: text.into(),
+            structural_brace_delta: canonical_structural_brace_delta(&text),
+            text,
             line,
             tokens: Vec::new(),
         }
@@ -48,7 +51,26 @@ impl LogicalLine {
             text: text.into(),
             line: self.line,
             tokens: self.tokens.clone(),
+            structural_brace_delta: self.structural_brace_delta,
         }
+    }
+
+    fn with_normalized_text(&self, text: impl Into<String>) -> Self {
+        Self::new(text, self.line).with_tokens(self.tokens.clone())
+    }
+
+    pub(crate) fn structural_brace_delta(&self) -> i32 {
+        i32::from(self.structural_brace_delta)
+    }
+}
+
+fn canonical_structural_brace_delta(text: &str) -> i8 {
+    if text == "}" {
+        -1
+    } else if text == "{" || text.trim_end().ends_with('{') {
+        1
+    } else {
+        0
     }
 }
 
@@ -301,7 +323,7 @@ fn normalize_brace_block_line(
 ) -> Result<(), DiagnosticReport> {
     let line = logical_line.text.as_str();
     if line == "}" {
-        normalized.push(logical_line.with_text("}"));
+        normalized.push(logical_line.with_normalized_text("}"));
         if *levels_brace_depth > 0 {
             *levels_brace_depth -= 1;
         }
@@ -312,16 +334,16 @@ fn normalize_brace_block_line(
         let rest = rest.trim_start();
         match rest {
             "else" => {
-                normalized.push(logical_line.with_text("}"));
-                normalized.push(logical_line.with_text("else"));
+                normalized.push(logical_line.with_normalized_text("}"));
+                normalized.push(logical_line.with_normalized_text("else"));
             }
             "else {" | "else{" => {
-                normalized.push(logical_line.with_text("}"));
-                normalized.push(logical_line.with_text("else {"));
+                normalized.push(logical_line.with_normalized_text("}"));
+                normalized.push(logical_line.with_normalized_text("else {"));
             }
             rest if rest.starts_with("->") => {
-                normalized.push(logical_line.with_text("}"));
-                normalized.push(logical_line.with_text(rest));
+                normalized.push(logical_line.with_normalized_text("}"));
+                normalized.push(logical_line.with_normalized_text(rest));
             }
             _ => {
                 return Err(parse_error(
@@ -334,12 +356,12 @@ fn normalize_brace_block_line(
     }
 
     if line == "else {" {
-        normalized.push(logical_line.with_text("else {"));
+        normalized.push(logical_line.with_normalized_text("else {"));
         return Ok(());
     }
 
     if line == "{" {
-        normalized.push(logical_line.with_text("{"));
+        normalized.push(logical_line.with_normalized_text("{"));
         return Ok(());
     }
 
@@ -356,17 +378,17 @@ fn normalize_brace_block_line(
         let preserve_level_header =
             *levels_brace_depth > 0 || matches!(header_tokens.as_slice(), ["level", ..]);
         if header.ends_with("->") {
-            normalized.push(logical_line.with_text(format!("{header} {{")));
+            normalized.push(logical_line.with_normalized_text(format!("{header} {{")));
             return Ok(());
         }
         if preserve_level_header {
-            normalized.push(logical_line.with_text(format!("{header} {{")));
+            normalized.push(logical_line.with_normalized_text(format!("{header} {{")));
             if *levels_brace_depth > 0 || is_levels_header {
                 *levels_brace_depth += 1;
             }
             return Ok(());
         }
-        normalized.push(logical_line.with_text(format!("{header} {{")));
+        normalized.push(logical_line.with_normalized_text(format!("{header} {{")));
         if *levels_brace_depth > 0 || is_levels_header {
             *levels_brace_depth += 1;
         }
@@ -708,10 +730,34 @@ impl SurfaceSourceScan {
     /// compilation rejects that same fact here instead of rescanning the source
     /// through a second structural grammar.
     pub(crate) fn strict_logical_lines(&self) -> Result<Vec<LogicalLine>, DiagnosticReport> {
-        let mut logical_lines = Vec::new();
         for line in &self.lines {
             if let Some(diagnostic) = &line.structural_diagnostic {
                 return Err(diagnostic.clone());
+            }
+        }
+        Ok(self.editor_logical_lines())
+    }
+
+    /// Total logical product for editor projections. Invalid physical lines
+    /// retain their scanner diagnostic and contribute no invented syntax, while
+    /// successfully parsed sibling lines keep their canonical tokens.
+    pub(crate) fn editor_logical_lines(&self) -> Vec<LogicalLine> {
+        let mut logical_lines = Vec::new();
+        for line in &self.lines {
+            if line.structural_diagnostic.is_some() {
+                continue;
+            }
+            if line.content.trim() == "}"
+                && line.lexical_facts.iter().any(|fact| {
+                    matches!(
+                        fact.kind,
+                        lexer::SourceLexicalKind::Brace(lexer::SourceBraceKind::Close)
+                    ) && fact
+                        .brace_disposition
+                        .is_some_and(|disposition| !disposition.matched_close)
+                })
+            {
+                continue;
             }
             if line.structural_lines.is_empty() {
                 if line.preserve_logical_blank {
@@ -731,7 +777,7 @@ impl SurfaceSourceScan {
                     .map(|(text, tokens)| LogicalLine::new(text, line.line).with_tokens(tokens)),
             );
         }
-        Ok(logical_lines)
+        logical_lines
     }
 
     pub(crate) fn apply_edit(
@@ -1114,6 +1160,7 @@ fn scan_surface_source_line(
         if let Some(opened) = opened {
             recognize_structural_header(stack_line, &piece_tokens, opened, &mut recognition);
         }
+        recognize_owner_line(current, &piece_tokens, &mut recognition);
         structural_pieces.push(SourceStructuralPiece {
             authoring_parent,
             product: crate::surface::ParseProduct::new(piece_tokens, recognition),
@@ -1184,6 +1231,21 @@ fn recognize_structural_header(
         }
         return;
     }
+    if opened == SourceScope::Scene && tokens[0].text == "scene" {
+        recognize_token(
+            recognition,
+            &tokens[0],
+            crate::surface::SurfaceSemanticKind::Keyword,
+        );
+        if let Some(name) = tokens.get(1) {
+            recognize_token(
+                recognition,
+                name,
+                crate::surface::SurfaceSemanticKind::Scene,
+            );
+        }
+        return;
+    }
     if matches!(
         tokens[0].text.as_str(),
         "win_conditions" | "lose_conditions"
@@ -1243,6 +1305,83 @@ fn recognize_structural_header(
                 },
             );
         }
+    }
+}
+
+fn recognize_owner_line(
+    owner: Option<SourceScope>,
+    tokens: &[SourceToken],
+    recognition: &mut crate::surface::ParserRecognition,
+) {
+    match owner {
+        Some(SourceScope::SceneLayout) => {
+            if let Some(first) = tokens.first()
+                && puzzle_scene::SceneComponentKind::from_keyword(&first.text).is_some()
+            {
+                recognize_token(
+                    recognition,
+                    first,
+                    crate::surface::SurfaceSemanticKind::Keyword,
+                );
+            }
+        }
+        Some(SourceScope::Scene | SourceScope::SceneTransitions) => {
+            if let [step, target] = tokens
+                && step.text == "step"
+            {
+                recognize_token(
+                    recognition,
+                    step,
+                    crate::surface::SurfaceSemanticKind::Keyword,
+                );
+                recognize_token(
+                    recognition,
+                    target,
+                    crate::surface::SurfaceSemanticKind::State,
+                );
+                return;
+            }
+            let Some(arrow) = tokens.iter().position(|token| token.text == "->") else {
+                return;
+            };
+            for (index, token) in tokens[..arrow].iter().enumerate() {
+                if index == 0 && token.text == "if" {
+                    recognize_token(
+                        recognition,
+                        token,
+                        crate::surface::SurfaceSemanticKind::Keyword,
+                    );
+                } else {
+                    let condition = token
+                        .text
+                        .rsplit_once('.')
+                        .map_or((0, token.text.as_str()), |(prefix, condition)| {
+                            (prefix.len() + 1, condition)
+                        });
+                    recognition.mark(
+                        crate::surface::SourceSpan {
+                            start: token.start + condition.0,
+                            end: token.start + condition.0 + condition.1.len(),
+                        },
+                        crate::surface::SurfaceSemanticKind::Condition,
+                    );
+                }
+            }
+            let document = crate::scene_effect_surface_document(&tokens[arrow + 1..]);
+            recognition.merge_surface_document(document);
+        }
+        Some(SourceScope::Levels | SourceScope::UnbracedLevel) => {
+            if let Some(command) = tokens.first()
+                && command.text == "message"
+            {
+                recognize_token(
+                    recognition,
+                    command,
+                    crate::surface::SurfaceSemanticKind::Emission,
+                );
+            }
+        }
+        _ => {}
     }
 }
 

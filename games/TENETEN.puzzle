@@ -163,7 +163,7 @@ shape_Ball {
 ....222222....
 ....222222....
 }
-shape_Boundary:directions rotate from up {
+shape_Boundary {
 01110011101101
 00101001000100
 ..............
@@ -179,7 +179,7 @@ shape_Boundary:directions rotate from up {
 ..............
 ..............
 }
-shape_Corner:directions rotate from up {
+shape_Corner {
 ............00
 ............00
 ..............
@@ -565,11 +565,13 @@ Wall
 
 Boundary:directions
 #447755 #477a58
-shape_Boundary:directions
+rotate directions from up
+shape_Boundary
 
 Corner:directions
 #475
-shape_Corner:directions
+rotate directions from up
+shape_Corner
 
 WallShadow
 #00000015

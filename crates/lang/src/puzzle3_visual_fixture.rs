@@ -2,52 +2,53 @@ use std::collections::BTreeMap;
 use std::fmt::Write;
 
 use crate::{
-    ParsedPuzzle3, SpriteColor3, SpriteSet3, ViewportFollow3, ViewportHeight3, ViewportMode3,
+    LoadedGridGame, SpatialPresentation, ViewportFollow3, ViewportHeight3, ViewportMode3,
+    VoxelColor, VoxelSpriteSet,
 };
-use puzzle_grid3d::{Direction3, LevelBundle3, LevelCell3, ObjectId, Size3};
+use puzzle_core::{GridLevel, GridLevelBundle, GridState, ObjectId, Size3};
 use puzzle_runtime_contract::{
-    Puzzle3RuntimeModel, RUNTIME_CONTRACT_VERSION, RuntimeContract, RuntimeModelContract,
-    runtime_contract_json,
+    GridPresentation, GridRuntimeModel, RUNTIME_CONTRACT_VERSION, RuntimeContract,
+    RuntimeLifecycle, RuntimeRuleEffects, runtime_contract_json,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum VisualFixtureExportError3 {
-    MissingLevelBundle,
+pub enum VisualFixtureExportError {
+    MissingLevels,
     MissingObjectName { object: ObjectId },
     RuntimeContract(String),
 }
 
 pub fn export_visual_fixture_json(
-    parsed: &ParsedPuzzle3,
-) -> Result<String, VisualFixtureExportError3> {
-    export_visual_fixture_json_with_title(parsed, None)
+    game: &LoadedGridGame<3, Size3>,
+    presentation: &SpatialPresentation,
+) -> Result<String, VisualFixtureExportError> {
+    export_visual_fixture_json_with_title(game, presentation, None)
 }
 
 pub fn export_visual_fixture_json_with_title(
-    parsed: &ParsedPuzzle3,
+    game: &LoadedGridGame<3, Size3>,
+    presentation: &SpatialPresentation,
     title: Option<&str>,
-) -> Result<String, VisualFixtureExportError3> {
-    export_visual_fixture_json_with_title_and_scenes(parsed, title, None, &[])
+) -> Result<String, VisualFixtureExportError> {
+    export_visual_fixture_json_with_title_and_scenes(game, presentation, title, None, &[])
 }
 
 pub fn export_visual_fixture_json_with_title_and_scenes(
-    parsed: &ParsedPuzzle3,
+    game: &LoadedGridGame<3, Size3>,
+    presentation: &SpatialPresentation,
     title: Option<&str>,
     scene_fields_json: Option<&str>,
     level_bundle_names: &[String],
-) -> Result<String, VisualFixtureExportError3> {
-    let bundle = parsed
-        .level_bundle
-        .as_ref()
-        .ok_or(VisualFixtureExportError3::MissingLevelBundle)?;
-    let object_names = parsed
+) -> Result<String, VisualFixtureExportError> {
+    let bundle = runtime_level_bundle(game)?;
+    let object_names = game
         .object_labels
         .iter()
         .map(|(object, label)| (*object, label.clone()))
         .collect::<BTreeMap<_, _>>();
     let title = title
         .map(str::to_string)
-        .unwrap_or_else(|| fixture_title(parsed));
+        .unwrap_or_else(|| fixture_title(presentation));
 
     let mut out = String::new();
     out.push_str("{\n");
@@ -57,28 +58,92 @@ pub fn export_visual_fixture_json_with_title_and_scenes(
         "  \"runtimeContractVersion\": {},",
         RUNTIME_CONTRACT_VERSION
     );
-    write_runtime_contract(&mut out, parsed, bundle)?;
-    let _ = writeln!(out, "  \"layerCount\": {},", parsed.game.layer_count);
-    write_size_field(&mut out, 1, "size", bundle.levels[0].level.size, true);
-    write_render(&mut out, parsed);
+    write_runtime_contract(&mut out, game, presentation)?;
+    let _ = writeln!(out, "  \"layerCount\": {},", game.game.layer_count);
+    let size = bundle
+        .levels
+        .first()
+        .ok_or(VisualFixtureExportError::MissingLevels)?
+        .initial_state
+        .size;
+    write_size_field(&mut out, 1, "size", size, true);
+    write_render(&mut out, game, presentation);
     write_directions(&mut out);
     write_direction_sets(&mut out);
-    write_controls(&mut out, parsed);
-    write_inputs(&mut out, parsed);
-    write_objects(&mut out, parsed, &object_names)?;
-    write_visual_order(&mut out, parsed);
+    write_inputs(&mut out, game);
+    write_objects(&mut out, game, presentation, &object_names)?;
+    write_visual_order(&mut out, presentation);
     write_scenes(&mut out, scene_fields_json);
-    write_levels(&mut out, parsed, &object_names)?;
-    write_level_bundles(&mut out, parsed, level_bundle_names);
-    write_sprites(&mut out, parsed.sprite_set.as_ref());
+    write_levels(&mut out, game, presentation, &object_names)?;
+    write_level_bundles(&mut out, game, level_bundle_names);
+    write_sprites(&mut out, presentation.sprite_set.as_ref());
     out.push_str("}\n");
     Ok(out)
 }
 
-fn write_visual_order(out: &mut String, parsed: &ParsedPuzzle3) {
+fn runtime_level_bundle(
+    game: &LoadedGridGame<3, Size3>,
+) -> Result<GridLevelBundle<3, Size3>, VisualFixtureExportError> {
+    GridLevelBundle::checked_new(
+        game.game.clone(),
+        game.levels
+            .iter()
+            .map(|level| {
+                GridLevel::new(
+                    level.name.clone(),
+                    level.initial_state.clone(),
+                    level.program.clone(),
+                    level.level_start_program.clone(),
+                    level.level_clear_program.clone(),
+                )
+            })
+            .collect(),
+    )
+    .map_err(|error| VisualFixtureExportError::RuntimeContract(format!("{error:?}")))
+}
+
+pub fn spatial_runtime_model(
+    game: &LoadedGridGame<3, Size3>,
+    presentation: &SpatialPresentation,
+) -> Result<
+    GridRuntimeModel<3, Size3, puzzle_runtime_contract::CameraEffect>,
+    VisualFixtureExportError,
+> {
+    GridRuntimeModel::checked_new(
+        game.game.clone(),
+        game.inputs.clone(),
+        runtime_level_bundle(game)?,
+        game.goal.clone(),
+        {
+            let mut entries = game
+                .rule_effects
+                .iter()
+                .map(|(rule, effects)| RuntimeRuleEffects {
+                    rule: rule.0,
+                    effects: effects.clone(),
+                })
+                .collect::<Vec<_>>();
+            entries.sort_by_key(|entry| entry.rule);
+            entries
+        },
+        RuntimeLifecycle {
+            on_level_start: game.level_start_program.clone(),
+            on_level_clear: game.level_clear_program.clone(),
+            on_last_level_clear: game.last_level_clear_program.clone(),
+        },
+        GridPresentation {
+            local_frame: presentation.local_frame.clone(),
+            rule_camera_effects: presentation.rule_camera_effects.clone(),
+            on_level_start_camera_effects: presentation.on_level_start_camera_effects.clone(),
+        },
+    )
+    .map_err(|error| VisualFixtureExportError::RuntimeContract(error.to_string()))
+}
+
+fn write_visual_order(out: &mut String, presentation: &SpatialPresentation) {
     out.push_str("  \"order\": ");
     out.push_str(
-        &serde_json::to_string(&parsed.visual_order)
+        &serde_json::to_string(&presentation.visual_order)
             .expect("compiled 3D sprite order serialization must succeed"),
     );
     out.push_str(",\n");
@@ -86,32 +151,27 @@ fn write_visual_order(out: &mut String, parsed: &ParsedPuzzle3) {
 
 fn write_runtime_contract(
     out: &mut String,
-    parsed: &ParsedPuzzle3,
-    bundle: &LevelBundle3,
-) -> Result<(), VisualFixtureExportError3> {
-    let model = Puzzle3RuntimeModel::checked_new(
-        parsed.game.clone(),
-        parsed.local_frame.clone(),
-        parsed.rule_camera_effects.clone(),
-        bundle.clone(),
-        parsed.win_condition.clone(),
-        parsed.lifecycle.clone(),
-        parsed.on_level_start_camera_effects.clone(),
-    )
-    .map_err(|error| VisualFixtureExportError3::RuntimeContract(error.to_string()))?;
-    let contract = RuntimeContract::checked_new(RuntimeModelContract::Puzzle3(model))
-        .map_err(|error| VisualFixtureExportError3::RuntimeContract(error.to_string()))?;
+    game: &LoadedGridGame<3, Size3>,
+    presentation: &SpatialPresentation,
+) -> Result<(), VisualFixtureExportError> {
+    let model = spatial_runtime_model(game, presentation)?;
+    let contract = RuntimeContract::checked_new(model)
+        .map_err(|error| VisualFixtureExportError::RuntimeContract(error.to_string()))?;
     let contract_json = runtime_contract_json(&contract)
-        .map_err(|error| VisualFixtureExportError3::RuntimeContract(error.to_string()))?;
+        .map_err(|error| VisualFixtureExportError::RuntimeContract(error.to_string()))?;
     out.push_str("  \"runtimeContract\": ");
     out.push_str(&contract_json);
     out.push_str(",\n");
     Ok(())
 }
 
-fn write_render(out: &mut String, parsed: &ParsedPuzzle3) {
-    let camera = &parsed.render.camera;
-    let pixelate = &parsed.render.pixelate;
+fn write_render(
+    out: &mut String,
+    game: &LoadedGridGame<3, Size3>,
+    presentation: &SpatialPresentation,
+) {
+    let camera = &game.render.camera;
+    let pixelate = &game.render.pixelate;
     let _ = write!(
         out,
         "  \"render\": {{ \"camera\": {{ \"yawDegrees\": {}, \"pitchDegrees\": {}, \"rollDegrees\": {}, \"zoom\": {}, \"interactiveLook\": {}, \"interactiveZoom\": {} }}, ",
@@ -125,21 +185,21 @@ fn write_render(out: &mut String, parsed: &ParsedPuzzle3) {
     let _ = write!(
         out,
         "\"grid\": {{ \"visibility\": {}, \"occupiedCells\": {} }}, \"sprite\": {{ \"shade\": {} }}, \"shadow\": {}, \"pixelate\": {{ \"enabled\": {}, \"scale\": {}, \"smoothing\": {} }}, \"animation\": {{ \"tween\": {{ \"enabled\": {}, \"intervalMs\": {} }} }}, \"viewport\": ",
-        if parsed.render.grid.occupied_cells {
+        if game.render.grid.occupied_cells {
             1
         } else {
             0
         },
-        parsed.render.grid.occupied_cells,
-        parsed.render.sprite.shade,
-        parsed.render.shadow,
+        game.render.grid.occupied_cells,
+        game.render.sprite.shade,
+        game.render.shadow,
         pixelate.enabled,
         pixelate.scale,
         pixelate.smoothing,
-        parsed.animation.tween.enabled,
-        parsed.animation.tween.interval_ms,
+        game.animation.tween.enabled,
+        game.animation.tween.interval_ms,
     );
-    let viewport = &parsed.render.viewport;
+    let viewport = &game.render.viewport;
     let Some(framing) = viewport.framing else {
         out.push_str("null },\n");
         return;
@@ -161,7 +221,7 @@ fn write_render(out: &mut String, parsed: &ParsedPuzzle3) {
         json_string(follow),
         json_string(&viewport.focus),
     );
-    for (index, object) in viewport_focus_objects(parsed).iter().enumerate() {
+    for (index, object) in presentation.viewport_focus_objects.iter().enumerate() {
         if index > 0 {
             out.push_str(", ");
         }
@@ -182,10 +242,6 @@ fn write_render(out: &mut String, parsed: &ParsedPuzzle3) {
     out.push_str(" } } },\n");
 }
 
-fn viewport_focus_objects(parsed: &ParsedPuzzle3) -> Vec<ObjectId> {
-    parsed.viewport_focus_objects.clone()
-}
-
 fn format_zoom(zoom_milli: u16) -> String {
     let whole = zoom_milli / 1000;
     let fraction = zoom_milli % 1000;
@@ -199,8 +255,8 @@ fn format_zoom(zoom_milli: u16) -> String {
     format!("{whole}.{fraction}")
 }
 
-fn fixture_title(parsed: &ParsedPuzzle3) -> String {
-    parsed
+fn fixture_title(presentation: &SpatialPresentation) -> String {
+    presentation
         .sprite_set
         .as_ref()
         .and_then(|sprites| sprites.model.as_deref())
@@ -235,9 +291,15 @@ fn title_from_identifier(identifier: &str) -> String {
 }
 
 fn write_directions(out: &mut String) {
+    let domain = crate::spatial_orientation::SpatialDomain::new(crate::ModelDimension::Three);
+    let directions = domain.direction_names();
     out.push_str("  \"directions\": {\n");
-    for (index, direction) in Direction3::directions().into_iter().enumerate() {
-        let comma = if index + 1 == Direction3::directions().len() {
+    for (index, name) in directions.iter().enumerate() {
+        let offset = domain
+            .direction_vector(name)
+            .expect("canonical direction has an offset")
+            .axes();
+        let comma = if index + 1 == directions.len() {
             ""
         } else {
             ","
@@ -245,7 +307,7 @@ fn write_directions(out: &mut String) {
         writeln!(
             out,
             "    \"{}\": {{ \"dx\": {}, \"dy\": {}, \"dz\": {} }}{}",
-            direction.name, direction.offset.dx, direction.offset.dy, direction.offset.dz, comma
+            name, offset[0], offset[1], offset[2], comma
         )
         .unwrap();
     }
@@ -259,55 +321,9 @@ fn write_direction_sets(out: &mut String) {
     out.push_str("  },\n");
 }
 
-fn write_controls(out: &mut String, parsed: &ParsedPuzzle3) {
-    out.push_str("  \"controls\": {\n");
-    out.push_str("    \"keys\": {\n");
-    let default_keys = [
-        ("ArrowLeft", "left"),
-        ("ArrowRight", "right"),
-        ("ArrowUp", "front"),
-        ("ArrowDown", "back"),
-        ("KeyA", "left"),
-        ("KeyD", "right"),
-        ("KeyW", "front"),
-        ("KeyS", "back"),
-        ("a", "left"),
-        ("d", "right"),
-        ("w", "front"),
-        ("s", "back"),
-        ("Left", "left"),
-        ("Right", "right"),
-        ("Up", "front"),
-        ("Down", "back"),
-    ];
-    let mut keys = Vec::<(&str, &str)>::new();
-    if parsed.inputs.iter().any(|input| !input.keys.is_empty()) {
-        for input in &parsed.inputs {
-            for key in &input.keys {
-                keys.push((key.as_str(), input.name.as_str()));
-            }
-        }
-    } else {
-        keys.extend(default_keys);
-    }
-    for (index, (key, input)) in keys.iter().enumerate() {
-        let comma = if index + 1 == keys.len() { "" } else { "," };
-        writeln!(
-            out,
-            "      {}: {}{}",
-            json_string(key),
-            json_string(input),
-            comma
-        )
-        .unwrap();
-    }
-    out.push_str("    }\n");
-    out.push_str("  },\n");
-}
-
-fn write_inputs(out: &mut String, parsed: &ParsedPuzzle3) {
+fn write_inputs(out: &mut String, game: &LoadedGridGame<3, Size3>) {
     out.push_str("  \"inputs\": [");
-    for (index, input) in parsed.inputs.iter().enumerate() {
+    for (index, input) in game.inputs.iter().enumerate() {
         if index > 0 {
             out.push_str(", ");
         }
@@ -319,7 +335,9 @@ fn write_inputs(out: &mut String, parsed: &ParsedPuzzle3) {
         )
         .unwrap();
         if let Some(direction) = input.direction {
-            write!(out, ", \"direction\": {}", json_string(direction.name)).unwrap();
+            if let Some(name) = input_direction_name(direction.axes()) {
+                write!(out, ", \"direction\": {}", json_string(name)).unwrap();
+            }
         }
         if !input.keys.is_empty() {
             out.push_str(", \"keys\": [");
@@ -336,15 +354,28 @@ fn write_inputs(out: &mut String, parsed: &ParsedPuzzle3) {
     out.push_str("],\n");
 }
 
+fn input_direction_name(axes: [i16; 3]) -> Option<&'static str> {
+    match axes {
+        [0, 0, 1] => Some("up"),
+        [0, 0, -1] => Some("down"),
+        [-1, 0, 0] => Some("left"),
+        [1, 0, 0] => Some("right"),
+        [0, 1, 0] => Some("front"),
+        [0, -1, 0] => Some("back"),
+        _ => None,
+    }
+}
+
 fn write_objects(
     out: &mut String,
-    parsed: &ParsedPuzzle3,
+    game: &LoadedGridGame<3, Size3>,
+    presentation: &SpatialPresentation,
     names: &BTreeMap<ObjectId, String>,
-) -> Result<(), VisualFixtureExportError3> {
+) -> Result<(), VisualFixtureExportError> {
     out.push_str("  \"objects\": {\n");
     for (index, (object, name)) in names.iter().enumerate() {
         let comma = if index + 1 == names.len() { "" } else { "," };
-        let layer = parsed
+        let layer = game
             .game
             .object_layer(*object)
             .map(|layer| layer.0)
@@ -355,7 +386,7 @@ fn write_objects(
             json_string(name),
             object.0,
             json_string(name),
-            fixture_sprite_value(parsed, name),
+            fixture_sprite_value(presentation, name),
             layer,
             comma
         )
@@ -385,53 +416,54 @@ fn write_scenes(out: &mut String, scene_fields_json: Option<&str>) {
 
 fn write_levels(
     out: &mut String,
-    parsed: &ParsedPuzzle3,
+    game: &LoadedGridGame<3, Size3>,
+    presentation: &SpatialPresentation,
     names: &BTreeMap<ObjectId, String>,
-) -> Result<(), VisualFixtureExportError3> {
-    let bundle = parsed
-        .level_bundle
-        .as_ref()
-        .ok_or(VisualFixtureExportError3::MissingLevelBundle)?;
+) -> Result<(), VisualFixtureExportError> {
+    let first = game
+        .levels
+        .first()
+        .ok_or(VisualFixtureExportError::MissingLevels)?;
     out.push_str("  \"levelIndex\": 0,\n");
     out.push_str("  \"levels\": [\n");
-    for (index, entry) in bundle.levels.iter().enumerate() {
-        let comma = if index + 1 == bundle.levels.len() {
+    for (index, level) in game.levels.iter().enumerate() {
+        let comma = if index + 1 == game.levels.len() {
             ""
         } else {
             ","
         };
         out.push_str("    {\n");
-        write_json_string_field(out, 3, "name", &entry.name, true);
-        write_json_string_field(out, 3, "label", &level_label(&entry.name), true);
-        write_size_field(out, 3, "size", entry.level.size, true);
-        write_cells_field(
+        write_json_string_field(out, 3, "name", &level.name, true);
+        write_json_string_field(out, 3, "label", &level_label(&level.name), true);
+        write_size_field(out, 3, "size", level.initial_state.size, true);
+        write_state_cells_field(
             out,
             3,
             "cells",
-            &entry.level.cells,
+            &level.initial_state,
             names,
-            parsed.sprite_set.as_ref(),
+            presentation.sprite_set.as_ref(),
         )?;
         out.push('\n');
         writeln!(out, "    }}{}", comma).unwrap();
     }
     out.push_str("  ],\n");
-    write_cells_field(
+    write_state_cells_field(
         out,
         1,
         "cells",
-        &bundle.levels[0].level.cells,
+        &first.initial_state,
         names,
-        parsed.sprite_set.as_ref(),
+        presentation.sprite_set.as_ref(),
     )?;
     out.push_str(",\n");
     Ok(())
 }
 
-fn write_level_bundles(out: &mut String, parsed: &ParsedPuzzle3, extra_names: &[String]) {
-    let Some(bundle) = parsed.level_bundle.as_ref() else {
+fn write_level_bundles(out: &mut String, game: &LoadedGridGame<3, Size3>, extra_names: &[String]) {
+    if game.levels.is_empty() {
         return;
-    };
+    }
     let mut names = vec!["default".to_string(), "levels".to_string()];
     for name in extra_names {
         push_unique_string(&mut names, name);
@@ -446,7 +478,7 @@ fn write_level_bundles(out: &mut String, parsed: &ParsedPuzzle3, extra_names: &[
         };
         write_indent(out, 2);
         write!(out, "{}: [", json_string(name)).unwrap();
-        for index in 0..bundle.levels.len() {
+        for index in 0..game.levels.len() {
             if index > 0 {
                 out.push_str(", ");
             }
@@ -470,34 +502,49 @@ fn level_label(name: &str) -> String {
         .unwrap_or_else(|| title_from_identifier(name))
 }
 
-fn write_cells_field(
+fn write_state_cells_field(
     out: &mut String,
     indent: usize,
     name: &str,
-    cells: &[LevelCell3],
+    state: &GridState<3, Size3>,
     names: &BTreeMap<ObjectId, String>,
-    sprite_set: Option<&SpriteSet3>,
-) -> Result<(), VisualFixtureExportError3> {
+    sprite_set: Option<&VoxelSpriteSet>,
+) -> Result<(), VisualFixtureExportError> {
+    let cells = state
+        .slots()
+        .chunks(usize::from(state.layer_count))
+        .enumerate()
+        .filter_map(|(index, slots)| {
+            let objects = slots
+                .iter()
+                .copied()
+                .filter(|object| !object.is_empty())
+                .collect::<Vec<_>>();
+            (!objects.is_empty()).then(|| (state.cell_coord(index), objects))
+        })
+        .filter_map(|(position, objects)| position.map(|position| (position, objects)))
+        .collect::<Vec<_>>();
     write_indent(out, indent);
     writeln!(out, "{}: [", json_string(name)).unwrap();
-    for (index, cell) in cells.iter().enumerate() {
+    for (index, (position, objects)) in cells.iter().enumerate() {
         let comma = if index + 1 == cells.len() { "" } else { "," };
         write_indent(out, indent + 1);
         out.push_str("{ ");
+        let [x, y, z] = position.axes();
         write!(
             out,
             "\"position\": {{ \"x\": {}, \"y\": {}, \"z\": {} }}, ",
-            cell.position.x, cell.position.y, cell.position.z
+            x, y, z
         )
         .unwrap();
         out.push_str("\"objects\": [");
-        for (object_index, object) in cell.objects.iter().enumerate() {
+        for (object_index, object) in objects.iter().enumerate() {
             if object_index > 0 {
                 out.push_str(", ");
             }
             let object_name = names
                 .get(object)
-                .ok_or(VisualFixtureExportError3::MissingObjectName { object: *object })?;
+                .ok_or(VisualFixtureExportError::MissingObjectName { object: *object })?;
             write!(
                 out,
                 "{{ \"id\": {}, \"name\": {}, \"sprite\": {} }}",
@@ -514,18 +561,18 @@ fn write_cells_field(
     Ok(())
 }
 
-fn fixture_sprite_value(parsed: &ParsedPuzzle3, object_name: &str) -> String {
-    fixture_sprite_value_from_set(parsed.sprite_set.as_ref(), object_name)
+fn fixture_sprite_value(presentation: &SpatialPresentation, object_name: &str) -> String {
+    fixture_sprite_value_from_set(presentation.sprite_set.as_ref(), object_name)
 }
 
-fn fixture_sprite_value_from_set(sprite_set: Option<&SpriteSet3>, object_name: &str) -> String {
+fn fixture_sprite_value_from_set(sprite_set: Option<&VoxelSpriteSet>, object_name: &str) -> String {
     sprite_set
         .and_then(|sprites| sprites.sprite(object_name))
         .map(|sprite| json_string(&sprite.name))
         .unwrap_or_else(|| "null".to_string())
 }
 
-fn write_sprites(out: &mut String, sprite_set: Option<&SpriteSet3>) {
+fn write_sprites(out: &mut String, sprite_set: Option<&VoxelSpriteSet>) {
     out.push_str("  \"sprites\": {\n");
     let Some(sprite_set) = sprite_set else {
         out.push_str("  }\n");
@@ -543,8 +590,8 @@ fn write_sprites(out: &mut String, sprite_set: Option<&SpriteSet3>) {
             .palette
             .iter()
             .map(|(key, color)| match color {
-                SpriteColor3::Transparent => (*key, "transparent"),
-                SpriteColor3::Hex(value) => (*key, value.as_str()),
+                VoxelColor::Transparent => (*key, "transparent"),
+                VoxelColor::Hex(value) => (*key, value.as_str()),
             })
             .collect::<Vec<_>>();
         for (color_index, (key, value)) in visible_colors.iter().enumerate() {
@@ -595,9 +642,10 @@ fn write_sprites(out: &mut String, sprite_set: Option<&SpriteSet3>) {
             None => out.push_str("      \"frameDurationMs\": null,\n"),
         }
         out.push_str("      \"spatialOps\": ");
-        out.push_str(&serde_json::to_string(&sprite.spatial_ops.iter().map(|op| match op {
-            crate::SpriteSpatialOp3::Translate { space, value } => serde_json::json!({"kind":"translate3","space":match space { crate::SpriteSpace3::World => "world", crate::SpriteSpace3::Local => "local" },"value":value}),
-            crate::SpriteSpatialOp3::Rotate { space, axis, degrees } => serde_json::json!({"kind":"rotate3","space":match space { crate::SpriteSpace3::World => "world", crate::SpriteSpace3::Local => "local" },"axis":axis,"degrees":degrees}),
+        out.push_str(&serde_json::to_string(&sprite.transforms.iter().map(|op| match op {
+            crate::VisualSpriteTransform::Translate { space, value } => serde_json::json!({"kind":"translate3","space":match space { crate::VisualSpriteSpace::World => "world", crate::VisualSpriteSpace::Local => "local" },"value":value}),
+            crate::VisualSpriteTransform::Rotate { space, axis, degrees } => serde_json::json!({"kind":"rotate3","space":match space { crate::VisualSpriteSpace::World => "world", crate::VisualSpriteSpace::Local => "local" },"axis":axis,"degrees":degrees}),
+            crate::VisualSpriteTransform::Flip { enabled } => serde_json::json!({"kind":"flip3","enabled":enabled}),
         }).collect::<Vec<_>>()).expect("sprite spatial ops serialize"));
         out.push('\n');
         writeln!(out, "    }}{}", comma).unwrap();

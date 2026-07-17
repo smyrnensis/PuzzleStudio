@@ -167,10 +167,59 @@ workspace_sources=(
   Cargo.lock
 )
 
-authoring_sources=(crates/authoring/Cargo.toml crates/authoring/src)
-core_sources=(crates/core/Cargo.toml crates/core/src)
-grid3d_sources=(crates/grid3d/Cargo.toml crates/grid3d/src)
-grid3d_authoring_sources=(crates/grid3d_authoring/Cargo.toml crates/grid3d_authoring/src)
+if ! command -v jq >/dev/null 2>&1; then
+  echo "wasm freshness requires jq to read the Cargo workspace dependency graph" >&2
+  exit 1
+fi
+
+workspace_metadata="$(cargo metadata --format-version 1 --no-deps)"
+
+workspace_dependency_sources() {
+  local package_name="$1"
+  local manifests
+  manifests="$(
+    jq -r --arg name "$package_name" '
+      . as $workspace
+      | ($workspace.packages[] | select(.name == $name) | .manifest_path) as $root
+      | def dependencies($manifest):
+          $manifest,
+          ($workspace.packages[]
+            | select(.manifest_path == $manifest)
+            | .dependencies[]
+            | select(.path != null)
+            | (.path + "/Cargo.toml")
+            | dependencies(.));
+      [dependencies($root)] | unique[]
+    ' <<<"$workspace_metadata"
+  )"
+  if [[ -z "$manifests" ]]; then
+    echo "wasm freshness Cargo package is missing: $package_name" >&2
+    return 1
+  fi
+
+  local manifest crate_root
+  while IFS= read -r manifest; do
+    printf '%s\n' "$manifest"
+    crate_root="${manifest%/Cargo.toml}"
+    if [[ -d "$crate_root/src" ]]; then
+      printf '%s\n' "$crate_root/src"
+    fi
+    if [[ -f "$crate_root/build.rs" ]]; then
+      printf '%s\n' "$crate_root/build.rs"
+    fi
+  done <<<"$manifests"
+}
+
+wasm_editor_rust_sources=()
+while IFS= read -r source; do
+  wasm_editor_rust_sources+=("$source")
+done < <(workspace_dependency_sources puzzle-wasm)
+
+wasm_game_rust_sources=()
+while IFS= read -r source; do
+  wasm_game_rust_sources+=("$source")
+done < <(workspace_dependency_sources puzzle-wasm-game)
+
 html_play_preview_sources=(
   crates/html_play/static/index.html
   crates/html_play/static/app.css
@@ -190,13 +239,6 @@ html_play_preview_sources=(
   tools/music_generator/seeded_music_player.mjs
   tools/music_generator/seeded_timbre_fields.mjs
 )
-kernel_sources=(crates/kernel/Cargo.toml crates/kernel/src)
-lang_sources=(crates/lang/Cargo.toml crates/lang/src)
-play_sources=(crates/play/Cargo.toml crates/play/src)
-runtime_contract_sources=(crates/runtime_contract/Cargo.toml crates/runtime_contract/src)
-puzzle3_sources=("${grid3d_sources[@]}" "${grid3d_authoring_sources[@]}" "${lang_sources[@]}" "${runtime_contract_sources[@]}")
-scene_sources=(crates/scene/Cargo.toml crates/scene/src)
-solver_sources=(crates/solver/Cargo.toml crates/solver/src)
 
 ensure_target_current \
   puzzle_wasm \
@@ -206,22 +248,8 @@ ensure_target_current \
   -- \
   "${workspace_sources[@]}" \
   tools/build_wasm_editor.sh \
-  crates/wasm/Cargo.toml \
-  crates/wasm/src \
-  crates/html_play/Cargo.toml \
-  crates/html_play/src \
   "${html_play_preview_sources[@]}" \
-  crates/wasm_core/Cargo.toml \
-  crates/wasm_core/src \
-  "${authoring_sources[@]}" \
-  "${core_sources[@]}" \
-  "${grid3d_sources[@]}" \
-  "${kernel_sources[@]}" \
-  "${lang_sources[@]}" \
-  "${play_sources[@]}" \
-  "${puzzle3_sources[@]}" \
-  "${scene_sources[@]}" \
-  "${solver_sources[@]}"
+  "${wasm_editor_rust_sources[@]}"
 
 ensure_target_current \
   puzzle_wasm_game \
@@ -233,18 +261,7 @@ ensure_target_current \
   -- \
   "${workspace_sources[@]}" \
   tools/build_wasm_game.sh \
-  crates/wasm_game/Cargo.toml \
-  crates/wasm_game/src \
-  crates/game_runtime/Cargo.toml \
-  crates/game_runtime/src \
-  "${authoring_sources[@]}" \
-  "${core_sources[@]}" \
-  "${grid3d_sources[@]}" \
-  "${kernel_sources[@]}" \
-  "${lang_sources[@]}" \
-  "${play_sources[@]}" \
-  "${puzzle3_sources[@]}" \
-  "${scene_sources[@]}"
+  "${wasm_game_rust_sources[@]}"
 
 ensure_game_wasm_copies_match
 ensure_static_asset_copies_match

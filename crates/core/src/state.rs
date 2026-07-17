@@ -180,15 +180,18 @@ struct MarkPositionKey {
     value: Option<i64>,
 }
 
-impl<'de> Deserialize<'de> for State {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+impl<'de, const D: usize, Size> Deserialize<'de> for GridState<D, Size>
+where
+    Size: GridSize<D> + Deserialize<'de>,
+{
+    fn deserialize<De>(deserializer: De) -> Result<Self, De::Error>
     where
-        D: Deserializer<'de>,
+        De: Deserializer<'de>,
     {
         #[derive(Deserialize)]
-        struct StateData {
-            width: u16,
-            height: u16,
+        struct StateData<Size> {
+            #[serde(flatten)]
+            size: Size,
             layer_count: u16,
             slots: Vec<ObjectId>,
             mark: MarkSpace<MarkId>,
@@ -196,9 +199,9 @@ impl<'de> Deserialize<'de> for State {
             level_fired_rules: Vec<RuleId>,
         }
 
-        let data = StateData::deserialize(deserializer)?;
-        let mut state = State {
-            size: Size2::new(data.width, data.height),
+        let data = StateData::<Size>::deserialize(deserializer)?;
+        let mut state = GridState {
+            size: data.size,
             layer_count: data.layer_count,
             slots: data.slots,
             mark: data.mark,

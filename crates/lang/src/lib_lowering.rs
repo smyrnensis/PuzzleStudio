@@ -10,7 +10,7 @@ struct ProgramLowerer<'a> {
     animation: &'a AnimationDef,
     value_sets: &'a HashMap<String, Vec<String>>,
     maps: &'a HashMap<String, ValueMap>,
-    directions: &'a [Direction],
+    directions: &'a [OrientationEnvironment],
     next_rule_id: u16,
     rule_animations: HashMap<RuleId, Vec<RuleAnimation>>,
     rule_effects: HashMap<RuleId, Vec<RuleEffect>>,
@@ -19,7 +19,7 @@ struct ProgramLowerer<'a> {
 
 #[derive(Clone, Debug, Default)]
 struct StatementLoweringContext {
-    guards: Vec<Guard>,
+    guards: Vec<CanonicalGuard>,
     call_stack: Vec<String>,
     application: RuleApplication,
     application_fixed: bool,
@@ -36,13 +36,13 @@ struct ResolvedRoutineDefinition {
 }
 
 struct LoweredPrograms {
-    main: Vec<RuleStep>,
-    level_start: Option<Vec<RuleStep>>,
-    level_clear: Option<Vec<RuleStep>>,
-    last_level_clear: Option<Vec<RuleStep>>,
-    level_starts: Vec<Option<Vec<RuleStep>>>,
-    level_clears: Vec<Option<Vec<RuleStep>>>,
-    level_programs: Vec<Vec<RuleStep>>,
+    main: Vec<CanonicalRuleStep>,
+    level_start: Option<Vec<CanonicalRuleStep>>,
+    level_clear: Option<Vec<CanonicalRuleStep>>,
+    last_level_clear: Option<Vec<CanonicalRuleStep>>,
+    level_starts: Vec<Option<Vec<CanonicalRuleStep>>>,
+    level_clears: Vec<Option<Vec<CanonicalRuleStep>>>,
+    level_programs: Vec<Vec<CanonicalRuleStep>>,
     rule_animations: HashMap<RuleId, Vec<RuleAnimation>>,
     rule_effects: HashMap<RuleId, Vec<RuleEffect>>,
     rule_debug_info: HashMap<RuleId, RuleDebugInfo>,
@@ -75,7 +75,7 @@ fn lower_programs(
     animation: &AnimationDef,
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
-    directions: &[Direction],
+    directions: &[OrientationEnvironment],
 ) -> Result<LoweredPrograms, DiagnosticReport> {
     let mut definitions_by_name = HashMap::new();
     for definition in definitions {
@@ -473,11 +473,11 @@ fn routine_definition_exists(
 }
 
 fn wrap_program_local_frame(
-    steps: Vec<RuleStep>,
+    steps: Vec<CanonicalRuleStep>,
     local_frame: Option<LocalFrame<ObjectId>>,
-) -> Vec<RuleStep> {
+) -> Vec<CanonicalRuleStep> {
     match local_frame {
-        Some(frame) => vec![RuleStep::LocalFrame { frame, steps }],
+        Some(frame) => vec![CanonicalRuleStep::LocalFrame { frame, steps }],
         None => steps,
     }
 }
@@ -529,8 +529,8 @@ fn lower_condition_defs(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     input_names: &HashMap<String, InputId>,
-    directions: &[Direction],
-) -> Result<Vec<ConditionDef>, DiagnosticReport> {
+    directions: &[OrientationEnvironment],
+) -> Result<Vec<CanonicalConditionDef>, DiagnosticReport> {
     definitions
         .into_iter()
         .map(|definition| {
@@ -543,7 +543,7 @@ fn lower_condition_defs(
                 maps,
                 directions,
             )?;
-            Ok(ConditionDef {
+            Ok(CanonicalConditionDef {
                 id: definition.id,
                 kind,
             })
@@ -558,17 +558,17 @@ fn lower_condition_value_kind(
     mark_names: &HashMap<String, MarkDef>,
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
-    directions: &[Direction],
-) -> Result<ConditionValueKind, DiagnosticReport> {
+    directions: &[OrientationEnvironment],
+) -> Result<CanonicalConditionValueKind, DiagnosticReport> {
     match kind {
         ConditionValueAst::CountObjects(objects) => {
-            Ok(ConditionValueKind::CountObjects(objects.clone()))
+            Ok(CanonicalConditionValueKind::CountObjects(objects.clone()))
         }
         ConditionValueAst::ExistsObjects(objects) => {
-            Ok(ConditionValueKind::ExistsObjects(objects.clone()))
+            Ok(CanonicalConditionValueKind::ExistsObjects(objects.clone()))
         }
         ConditionValueAst::NoneObjects(objects) => {
-            Ok(ConditionValueKind::NoneObjects(objects.clone()))
+            Ok(CanonicalConditionValueKind::NoneObjects(objects.clone()))
         }
         ConditionValueAst::CountMatches(pattern) => lower_condition_match_kind(
             pattern,
@@ -618,8 +618,8 @@ fn lower_condition_match_kind(
     mark_names: &HashMap<String, MarkDef>,
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
-    directions: &[Direction],
-) -> Result<ConditionValueKind, DiagnosticReport> {
+    directions: &[OrientationEnvironment],
+) -> Result<CanonicalConditionValueKind, DiagnosticReport> {
     if matches!(
         condition_pattern.orientation,
         OrientationExpr::Input | OrientationExpr::InputSet(_)
@@ -634,9 +634,9 @@ fn lower_condition_match_kind(
             directions,
         )?;
         return Ok(match kind {
-            ConditionMatchKind::Count => ConditionValueKind::CountInputMatches(patterns),
-            ConditionMatchKind::Exists => ConditionValueKind::ExistsInputMatches(patterns),
-            ConditionMatchKind::None => ConditionValueKind::NoneInputMatches(patterns),
+            ConditionMatchKind::Count => CanonicalConditionValueKind::CountInputMatches(patterns),
+            ConditionMatchKind::Exists => CanonicalConditionValueKind::ExistsInputMatches(patterns),
+            ConditionMatchKind::None => CanonicalConditionValueKind::NoneInputMatches(patterns),
         });
     }
     let patterns = lower_condition_patterns(
@@ -649,9 +649,9 @@ fn lower_condition_match_kind(
         directions,
     )?;
     Ok(match kind {
-        ConditionMatchKind::Count => ConditionValueKind::CountMatches(patterns),
-        ConditionMatchKind::Exists => ConditionValueKind::ExistsMatches(patterns),
-        ConditionMatchKind::None => ConditionValueKind::NoneMatches(patterns),
+        ConditionMatchKind::Count => CanonicalConditionValueKind::CountMatches(patterns),
+        ConditionMatchKind::Exists => CanonicalConditionValueKind::ExistsMatches(patterns),
+        ConditionMatchKind::None => CanonicalConditionValueKind::NoneMatches(patterns),
     })
 }
 
@@ -662,8 +662,8 @@ fn lower_condition_patterns(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     input_names: &HashMap<String, InputId>,
-    directions: &[Direction],
-) -> Result<Vec<Pattern>, DiagnosticReport> {
+    directions: &[OrientationEnvironment],
+) -> Result<Vec<CanonicalPattern>, DiagnosticReport> {
     let block = &condition_pattern.pattern;
     match &condition_pattern.orientation {
         OrientationExpr::Neutral => {
@@ -684,7 +684,7 @@ fn lower_condition_patterns(
                 mark_names,
                 value_sets,
                 maps,
-                &[neutral_direction()],
+                &[neutral_direction(directions)],
                 false,
             )
         }
@@ -745,9 +745,9 @@ fn lower_condition_patterns_for_directions(
     mark_names: &HashMap<String, MarkDef>,
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
-    directions: &[Direction],
+    directions: &[OrientationEnvironment],
     direction_expanded: bool,
-) -> Result<Vec<Pattern>, DiagnosticReport> {
+) -> Result<Vec<CanonicalPattern>, DiagnosticReport> {
     let mut patterns = Vec::new();
     for direction in directions {
         let (_, alternatives) = compile_before_after_blocks_for_direction(
@@ -779,8 +779,8 @@ fn lower_condition_input_patterns(
     mark_names: &HashMap<String, MarkDef>,
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
-    directions: &[Direction],
-) -> Result<Vec<(InputId, Pattern)>, DiagnosticReport> {
+    directions: &[OrientationEnvironment],
+) -> Result<Vec<(InputId, CanonicalPattern)>, DiagnosticReport> {
     let block = &condition_pattern.pattern;
     let mut patterns = Vec::new();
     let input_directions = match &condition_pattern.orientation {
@@ -818,10 +818,19 @@ fn directions_for_orientation_name(
     name: &str,
     input_names: &HashMap<String, InputId>,
     value_sets: &HashMap<String, Vec<String>>,
-    directions: &[Direction],
-) -> Result<Option<Vec<Direction>>, DiagnosticReport> {
-    if let Some(direction) = direction_by_name(name, input_names, directions) {
-        return Ok(Some(vec![direction]));
+    directions: &[OrientationEnvironment],
+) -> Result<Option<Vec<OrientationEnvironment>>, DiagnosticReport> {
+    let direct = direction_by_name(name, input_names, directions);
+    if !direct.is_empty() {
+        return Ok(Some(direct));
+    }
+    if name.contains(',') {
+        let Some(domain) = directions.first().copied() else {
+            return Err(DiagnosticReport::error(
+                "frame orientation requires a spatial domain".to_string(),
+            ));
+        };
+        return domain.expand_selector(name, InputId(0)).map(Some);
     }
     let Some(values) = value_sets.get(name) else {
         return Ok(None);
@@ -831,25 +840,25 @@ fn directions_for_orientation_name(
             "empty orientation set: {name}"
         )));
     }
-    values
-        .iter()
-        .map(|value| {
-            direction_by_name(value, input_names, directions).ok_or_else(|| {
-                DiagnosticReport::error(format!(
-                    "orientation set {name} contains non-direction value: {value}"
-                ))
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()
-        .map(Some)
+    let mut expanded = Vec::new();
+    for value in values {
+        let variants = direction_by_name(value, input_names, directions);
+        if variants.is_empty() {
+            return Err(DiagnosticReport::error(format!(
+                "orientation set {name} contains non-direction value: {value}"
+            )));
+        }
+        expanded.extend(variants);
+    }
+    Ok(Some(expanded))
 }
 
 fn patterns_from_alternatives(
     alternatives: &[RuleBodyAlternative],
-    directions: &[Direction],
+    directions: &[OrientationEnvironment],
     direction_expanded: bool,
     line: &str,
-) -> Result<Vec<Pattern>, DiagnosticReport> {
+) -> Result<Vec<CanonicalPattern>, DiagnosticReport> {
     let mut patterns = Vec::new();
     for direction in directions {
         for alternative in alternatives {
@@ -872,10 +881,10 @@ fn patterns_from_alternatives(
 
 fn pattern_from_alternative(
     alternative: &RuleBodyAlternative,
-    direction: Direction,
+    direction: OrientationEnvironment,
     direction_expanded: bool,
     line: &str,
-) -> Result<Pattern, DiagnosticReport> {
+) -> Result<CanonicalPattern, DiagnosticReport> {
     let components = alternative
         .components
         .iter()
@@ -884,7 +893,7 @@ fn pattern_from_alternative(
                 .cells
                 .iter()
                 .map(|cell| {
-                    Ok(MatchCell {
+                    Ok(CanonicalMatchCell {
                         offset: resolve_offset(
                             cell.offset.clone(),
                             direction,
@@ -922,13 +931,13 @@ fn pattern_from_alternative(
                     })
                 })
                 .collect::<Result<Vec<_>, DiagnosticReport>>()?;
-            Ok(PatternComponent {
+            Ok(CanonicalPatternComponent {
                 cells,
                 gap_count: component.gap_count,
             })
         })
         .collect::<Result<Vec<_>, DiagnosticReport>>()?;
-    Ok(Pattern { components })
+    Ok(CanonicalPattern { components })
 }
 
 fn lower_goal_condition(
@@ -941,9 +950,9 @@ fn lower_goal_condition(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     input_names: &HashMap<String, InputId>,
-    directions: &[Direction],
-) -> Result<GoalCondition, DiagnosticReport> {
-    Ok(GoalCondition {
+    directions: &[OrientationEnvironment],
+) -> Result<CanonicalGoalCondition, DiagnosticReport> {
+    Ok(CanonicalGoalCondition {
         description,
         expr: lower_goal_expr(
             condition,
@@ -970,8 +979,8 @@ fn lower_query_definitions(
     mark_names: &HashMap<String, MarkDef>,
     value_sets: &HashMap<String, Vec<String>>,
     input_names: &HashMap<String, InputId>,
-    directions: &[Direction],
-) -> Result<HashMap<String, QueryExpr>, DiagnosticReport> {
+    directions: &[OrientationEnvironment],
+) -> Result<HashMap<String, CanonicalQueryExpr>, DiagnosticReport> {
     let context = QueryLoweringContext {
         object_names,
         object_schemas,
@@ -1000,7 +1009,7 @@ struct QueryLoweringContext<'a> {
     mark_names: &'a HashMap<String, MarkDef>,
     value_sets: &'a HashMap<String, Vec<String>>,
     input_names: &'a HashMap<String, InputId>,
-    directions: &'a [Direction],
+    directions: &'a [OrientationEnvironment],
 }
 
 struct QueryLoweringAdapter2d;
@@ -1009,7 +1018,7 @@ impl<'a> crate::solver_surface::SolverQueryLoweringAdapter<QueryLoweringContext<
     for QueryLoweringAdapter2d
 {
     type Object = ObjectId;
-    type Value = ConditionValueKind;
+    type Value = CanonicalConditionValueKind;
     type Variable = VariableId;
     type Error = DiagnosticReport;
 
@@ -1044,13 +1053,13 @@ impl<'a> crate::solver_surface::SolverQueryLoweringAdapter<QueryLoweringContext<
         let objects = lower_query_selector2d(selector, source_line, context)?;
         Ok(match kind {
             crate::solver_surface::SolverQueryCallKind::Count => {
-                ConditionValueKind::CountObjects(objects)
+                CanonicalConditionValueKind::CountObjects(objects)
             }
             crate::solver_surface::SolverQueryCallKind::Exists => {
-                ConditionValueKind::ExistsObjects(objects)
+                CanonicalConditionValueKind::ExistsObjects(objects)
             }
             crate::solver_surface::SolverQueryCallKind::None => {
-                ConditionValueKind::NoneObjects(objects)
+                CanonicalConditionValueKind::NoneObjects(objects)
             }
         })
     }
@@ -1147,8 +1156,8 @@ fn lower_solver_strategy(
     mark_names: &HashMap<String, MarkDef>,
     value_sets: &HashMap<String, Vec<String>>,
     input_names: &HashMap<String, InputId>,
-    directions: &[Direction],
-) -> Result<SolverStrategy, DiagnosticReport> {
+    directions: &[OrientationEnvironment],
+) -> Result<CanonicalSolverStrategy, DiagnosticReport> {
     let context = QueryLoweringContext {
         object_names,
         object_schemas,
@@ -1177,10 +1186,10 @@ fn lower_goal_expr(
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     input_names: &HashMap<String, InputId>,
-    directions: &[Direction],
-) -> Result<GoalExpr, DiagnosticReport> {
+    directions: &[OrientationEnvironment],
+) -> Result<CanonicalGoalExpr, DiagnosticReport> {
     match condition {
-        ConditionAst::All(conditions) => Ok(GoalExpr::All(
+        ConditionAst::All(conditions) => Ok(CanonicalGoalExpr::All(
             conditions
                 .iter()
                 .map(|condition| {
@@ -1198,7 +1207,7 @@ fn lower_goal_expr(
                 })
                 .collect::<Result<Vec<_>, DiagnosticReport>>()?,
         )),
-        ConditionAst::Any(conditions) => Ok(GoalExpr::Any(
+        ConditionAst::Any(conditions) => Ok(CanonicalGoalExpr::Any(
             conditions
                 .iter()
                 .map(|condition| {
@@ -1217,52 +1226,36 @@ fn lower_goal_expr(
                 .collect::<Result<Vec<_>, DiagnosticReport>>()?,
         )),
         ConditionAst::AllObjectsOn { subjects, covers } => {
-            let patterns = subjects
-                .iter()
-                .map(|subject| Pattern {
-                    components: vec![PatternComponent::new(vec![MatchCell {
-                        offset: Offset::Fixed {
-                            delta: [0, 0].into(),
-                        },
-                        require_null: false,
-                        require_objects: vec![*subject],
-                        require_object_sets: Vec::new(),
-                        forbid_objects: covers.clone(),
-                        require_mark: Vec::new(),
-                        require_object_set_mark: Vec::new(),
-                        forbid_mark: Vec::new(),
-                        forbid_object_set_mark: Vec::new(),
-                    }])],
-                })
-                .collect();
-            Ok(GoalExpr::Clause(GoalClause {
-                value: GoalValue::InlineConditionValue(ConditionValueKind::NoneMatches(patterns)),
+            Ok(CanonicalGoalExpr::Clause(CanonicalGoalClause {
+                value: CanonicalGoalValue::InlineConditionValue(all_objects_on_condition_kind(
+                    subjects, covers,
+                )),
                 op: ComparisonOp::NotEq,
                 expected: 0,
             }))
         }
-        ConditionAst::VariableEquals { name, value } => Ok(GoalExpr::Clause(GoalClause {
-            value: GoalValue::Variable(resolve_variable_for_goal(name, variable_names)?),
+        ConditionAst::VariableEquals { name, value } => Ok(CanonicalGoalExpr::Clause(CanonicalGoalClause {
+            value: CanonicalGoalValue::Variable(resolve_variable_for_goal(name, variable_names)?),
             op: ComparisonOp::Eq,
             expected: *value,
         })),
-        ConditionAst::VariableCompare { name, op, value } => Ok(GoalExpr::Clause(GoalClause {
-            value: GoalValue::Variable(resolve_variable_for_goal(name, variable_names)?),
+        ConditionAst::VariableCompare { name, op, value } => Ok(CanonicalGoalExpr::Clause(CanonicalGoalClause {
+            value: CanonicalGoalValue::Variable(resolve_variable_for_goal(name, variable_names)?),
             op: *op,
             expected: *value,
         })),
-        ConditionAst::ConditionEquals { name, value } => Ok(GoalExpr::Clause(GoalClause {
-            value: GoalValue::Condition(resolve_condition_for_goal(name, condition_names)?),
+        ConditionAst::ConditionEquals { name, value } => Ok(CanonicalGoalExpr::Clause(CanonicalGoalClause {
+            value: CanonicalGoalValue::Condition(resolve_condition_for_goal(name, condition_names)?),
             op: ComparisonOp::Eq,
             expected: *value,
         })),
-        ConditionAst::ConditionNonZero(name) => Ok(GoalExpr::Clause(GoalClause {
-            value: GoalValue::Condition(resolve_condition_for_goal(name, condition_names)?),
+        ConditionAst::ConditionNonZero(name) => Ok(CanonicalGoalExpr::Clause(CanonicalGoalClause {
+            value: CanonicalGoalValue::Condition(resolve_condition_for_goal(name, condition_names)?),
             op: ComparisonOp::NotEq,
             expected: 0,
         })),
-        ConditionAst::ConditionCompare { name, op, value } => Ok(GoalExpr::Clause(GoalClause {
-            value: GoalValue::Condition(resolve_condition_for_goal(name, condition_names)?),
+        ConditionAst::ConditionCompare { name, op, value } => Ok(CanonicalGoalExpr::Clause(CanonicalGoalClause {
+            value: CanonicalGoalValue::Condition(resolve_condition_for_goal(name, condition_names)?),
             op: *op,
             expected: *value,
         })),
@@ -1276,8 +1269,8 @@ fn lower_goal_expr(
                 maps,
                 directions,
             )?;
-            Ok(GoalExpr::Clause(GoalClause {
-                value: GoalValue::InlineConditionValue(kind),
+            Ok(CanonicalGoalExpr::Clause(CanonicalGoalClause {
+                value: CanonicalGoalValue::InlineConditionValue(kind),
                 op: ComparisonOp::Eq,
                 expected: *value,
             }))
@@ -1292,8 +1285,8 @@ fn lower_goal_expr(
                 maps,
                 directions,
             )?;
-            Ok(GoalExpr::Clause(GoalClause {
-                value: GoalValue::InlineConditionValue(kind),
+            Ok(CanonicalGoalExpr::Clause(CanonicalGoalClause {
+                value: CanonicalGoalValue::InlineConditionValue(kind),
                 op: ComparisonOp::NotEq,
                 expected: 0,
             }))
@@ -1308,8 +1301,8 @@ fn lower_goal_expr(
                 maps,
                 directions,
             )?;
-            Ok(GoalExpr::Clause(GoalClause {
-                value: GoalValue::InlineConditionValue(kind),
+            Ok(CanonicalGoalExpr::Clause(CanonicalGoalClause {
+                value: CanonicalGoalValue::InlineConditionValue(kind),
                 op: *op,
                 expected: *value,
             }))
@@ -1340,12 +1333,38 @@ fn resolve_condition_for_goal(
         .ok_or_else(|| DiagnosticReport::error(format!("unknown condition in goal: {name}")))
 }
 
+fn all_objects_on_condition_kind(
+    subjects: &[ObjectId],
+    covers: &[ObjectId],
+) -> CanonicalConditionValueKind {
+    CanonicalConditionValueKind::NoneMatches(
+        subjects
+            .iter()
+            .map(|subject| CanonicalPattern {
+                components: vec![CanonicalPatternComponent::new(vec![CanonicalMatchCell {
+                    offset: CanonicalOffset::Fixed {
+                        delta: [0, 0, 0].into(),
+                    },
+                    require_null: false,
+                    require_objects: vec![*subject],
+                    require_object_sets: Vec::new(),
+                    forbid_objects: covers.to_vec(),
+                    require_mark: Vec::new(),
+                    require_object_set_mark: Vec::new(),
+                    forbid_mark: Vec::new(),
+                    forbid_object_set_mark: Vec::new(),
+                }])],
+            })
+            .collect(),
+    )
+}
+
 impl<'a> ProgramLowerer<'a> {
     fn lower_statements(
         &mut self,
         statements: &[StatementAst],
         context: &StatementLoweringContext,
-    ) -> Result<Vec<RuleStep>, DiagnosticReport> {
+    ) -> Result<Vec<CanonicalRuleStep>, DiagnosticReport> {
         let mut scoped_context = context.clone();
         let local_definitions = local_routine_definitions(statements);
         if !local_definitions.is_empty() {
@@ -1363,7 +1382,7 @@ impl<'a> ProgramLowerer<'a> {
         &mut self,
         statement: &StatementAst,
         context: &StatementLoweringContext,
-    ) -> Result<Vec<RuleStep>, DiagnosticReport> {
+    ) -> Result<Vec<CanonicalRuleStep>, DiagnosticReport> {
         match statement {
             StatementAst::LocalRoutine { .. } => Ok(Vec::new()),
             StatementAst::Call {
@@ -1434,7 +1453,7 @@ impl<'a> ProgramLowerer<'a> {
         source_line_number: Option<usize>,
         effects: &[EffectAst],
         context: &StatementLoweringContext,
-    ) -> Result<Vec<RuleStep>, DiagnosticReport> {
+    ) -> Result<Vec<CanonicalRuleStep>, DiagnosticReport> {
         let effects = self.lower_effects(effects)?;
         let id = RuleId(self.next_rule_id);
         self.next_rule_id += 1;
@@ -1442,11 +1461,11 @@ impl<'a> ProgramLowerer<'a> {
             self.rule_effects.insert(id, effects.ordered.clone());
         }
         self.record_rule_debug_info(id, source_line, source_line_number, context);
-        Ok(vec![RuleStep::Rule(Rule {
+        Ok(vec![CanonicalRuleStep::Rule(CanonicalRule {
             id,
             guards: context.guards.clone(),
             application: RuleApplication::Once,
-            pattern: Pattern {
+            pattern: CanonicalPattern {
                 components: Vec::new(),
             },
             writes: Vec::new(),
@@ -1462,9 +1481,9 @@ impl<'a> ProgramLowerer<'a> {
         then_statements: &[StatementAst],
         else_statements: &[StatementAst],
         context: &StatementLoweringContext,
-    ) -> Result<Vec<RuleStep>, DiagnosticReport> {
+    ) -> Result<Vec<CanonicalRuleStep>, DiagnosticReport> {
         if else_statements.is_empty() {
-            return Ok(vec![RuleStep::ConditionalBlock {
+            return Ok(vec![CanonicalRuleStep::ConditionalBlock {
                 condition: self.lower_pattern_condition(
                     condition,
                     context,
@@ -1474,7 +1493,7 @@ impl<'a> ProgramLowerer<'a> {
                 steps: self.lower_statements(then_statements, context)?,
             }]);
         }
-        Ok(vec![RuleStep::ConditionalBranch {
+        Ok(vec![CanonicalRuleStep::ConditionalBranch {
             condition: self.lower_pattern_condition(
                 condition,
                 context,
@@ -1491,7 +1510,7 @@ impl<'a> ProgramLowerer<'a> {
         application: RuleApplication,
         statements: &[StatementAst],
         context: &StatementLoweringContext,
-    ) -> Result<Vec<RuleStep>, DiagnosticReport> {
+    ) -> Result<Vec<CanonicalRuleStep>, DiagnosticReport> {
         let mut nested_context = context.clone();
         if !nested_context.application_fixed {
             nested_context.application = if application == RuleApplication::Random {
@@ -1501,7 +1520,7 @@ impl<'a> ProgramLowerer<'a> {
             };
         }
         let steps = self.lower_statements(statements, &nested_context)?;
-        Ok(vec![RuleStep::Block {
+        Ok(vec![CanonicalRuleStep::Block {
             application,
             stop_condition: None,
             steps,
@@ -1515,7 +1534,7 @@ impl<'a> ProgramLowerer<'a> {
         condition: &ConditionAst,
         statements: &[StatementAst],
         context: &StatementLoweringContext,
-    ) -> Result<Vec<RuleStep>, DiagnosticReport> {
+    ) -> Result<Vec<CanonicalRuleStep>, DiagnosticReport> {
         let mut nested_context = context.clone();
         if !nested_context.application_fixed {
             nested_context.application = RuleApplication::UntilStable;
@@ -1523,7 +1542,7 @@ impl<'a> ProgramLowerer<'a> {
         let stop_condition =
             self.lower_guard_condition(condition, context, source_line, source_line_number)?;
         let steps = self.lower_statements(statements, &nested_context)?;
-        Ok(vec![RuleStep::Block {
+        Ok(vec![CanonicalRuleStep::Block {
             application: RuleApplication::UntilStable,
             stop_condition: Some(stop_condition),
             steps,
@@ -1535,7 +1554,7 @@ impl<'a> ProgramLowerer<'a> {
         defaults: &FixDefaults,
         statements: &[StatementAst],
         context: &StatementLoweringContext,
-    ) -> Result<Vec<RuleStep>, DiagnosticReport> {
+    ) -> Result<Vec<CanonicalRuleStep>, DiagnosticReport> {
         let mut nested_context = context.clone();
         if let Some(application) = defaults.application {
             nested_context.application = application;
@@ -1553,7 +1572,7 @@ impl<'a> ProgramLowerer<'a> {
         source_line: &str,
         source_line_number: Option<usize>,
         context: &StatementLoweringContext,
-    ) -> Result<Vec<RuleStep>, DiagnosticReport> {
+    ) -> Result<Vec<CanonicalRuleStep>, DiagnosticReport> {
         if context.call_stack.iter().any(|active| active == name) {
             return Err(report_at_source_line_number(
                 format!("recursive routine call: {name}"),
@@ -1577,7 +1596,7 @@ impl<'a> ProgramLowerer<'a> {
         nested_context.application_fixed = false;
         nested_context.orientation = None;
         let steps = self.lower_statements(&definition.statements, &nested_context)?;
-        Ok(vec![RuleStep::Block {
+        Ok(vec![CanonicalRuleStep::Block {
             application: definition.application,
             stop_condition: None,
             steps,
@@ -1621,7 +1640,7 @@ impl<'a> ProgramLowerer<'a> {
         context: &StatementLoweringContext,
         source_line: &str,
         source_line_number: Option<usize>,
-    ) -> Result<RuleCondition, DiagnosticReport> {
+    ) -> Result<CanonicalRuleCondition, DiagnosticReport> {
         let orientation = if matches!(condition.orientation, OrientationExpr::Neutral) {
             context
                 .orientation
@@ -1642,7 +1661,7 @@ impl<'a> ProgramLowerer<'a> {
                 } else {
                     self.condition_patterns(
                         &condition.pattern,
-                        neutral_direction(),
+                        neutral_direction(self.directions),
                         false,
                         "neutral pattern condition",
                     )?
@@ -1668,8 +1687,8 @@ impl<'a> ProgramLowerer<'a> {
                     }
                 }
                 return Ok(match condition.predicate {
-                    PatternPredicateAst::Some => RuleCondition::AnyInputMatches(patterns),
-                    PatternPredicateAst::None => RuleCondition::NoInputMatches(patterns),
+                    PatternPredicateAst::Some => CanonicalRuleCondition::AnyInputMatches(patterns),
+                    PatternPredicateAst::None => CanonicalRuleCondition::NoInputMatches(patterns),
                 });
             }
             OrientationExpr::InputSet(axis) => {
@@ -1699,8 +1718,8 @@ impl<'a> ProgramLowerer<'a> {
                     }
                 }
                 return Ok(match condition.predicate {
-                    PatternPredicateAst::Some => RuleCondition::AnyInputMatches(patterns),
-                    PatternPredicateAst::None => RuleCondition::NoInputMatches(patterns),
+                    PatternPredicateAst::Some => CanonicalRuleCondition::AnyInputMatches(patterns),
+                    PatternPredicateAst::None => CanonicalRuleCondition::NoInputMatches(patterns),
                 });
             }
             OrientationExpr::Fixed(direction_name) => {
@@ -1726,8 +1745,8 @@ impl<'a> ProgramLowerer<'a> {
         };
 
         let condition = match condition.predicate {
-            PatternPredicateAst::Some => RuleCondition::AnyMatches(patterns),
-            PatternPredicateAst::None => RuleCondition::NoMatches(patterns),
+            PatternPredicateAst::Some => CanonicalRuleCondition::AnyMatches(patterns),
+            PatternPredicateAst::None => CanonicalRuleCondition::NoMatches(patterns),
         };
         Ok(condition)
     }
@@ -1738,8 +1757,8 @@ impl<'a> ProgramLowerer<'a> {
         context: &StatementLoweringContext,
         source_line: &str,
         source_line_number: Option<usize>,
-    ) -> Result<RuleCondition, DiagnosticReport> {
-        Ok(RuleCondition::GuardBranches(
+    ) -> Result<CanonicalRuleCondition, DiagnosticReport> {
+        Ok(CanonicalRuleCondition::GuardBranches(
             self.lower_condition_branches(condition, context, source_line, source_line_number)?,
         ))
     }
@@ -1747,10 +1766,10 @@ impl<'a> ProgramLowerer<'a> {
     fn condition_patterns(
         &self,
         pattern: &PatternBlock,
-        direction: Direction,
+        direction: OrientationEnvironment,
         direction_expanded: bool,
         line: &str,
-    ) -> Result<Vec<Pattern>, DiagnosticReport> {
+    ) -> Result<Vec<CanonicalPattern>, DiagnosticReport> {
         let alternatives = compile_before_after_blocks(
             pattern,
             pattern,
@@ -1767,10 +1786,10 @@ impl<'a> ProgramLowerer<'a> {
     fn condition_patterns_for_directions(
         &self,
         pattern: &PatternBlock,
-        directions: &[Direction],
+        directions: &[OrientationEnvironment],
         direction_expanded: bool,
         line: &str,
-    ) -> Result<Vec<Pattern>, DiagnosticReport> {
+    ) -> Result<Vec<CanonicalPattern>, DiagnosticReport> {
         let mut patterns = Vec::new();
         for direction in directions {
             let (_, alternatives) = compile_before_after_blocks_for_direction(
@@ -1803,9 +1822,9 @@ impl<'a> ProgramLowerer<'a> {
         then_statements: &[StatementAst],
         else_statements: &[StatementAst],
         context: &StatementLoweringContext,
-    ) -> Result<Vec<RuleStep>, DiagnosticReport> {
+    ) -> Result<Vec<CanonicalRuleStep>, DiagnosticReport> {
         if !else_statements.is_empty() {
-            return Ok(vec![RuleStep::ConditionalBranch {
+            return Ok(vec![CanonicalRuleStep::ConditionalBranch {
                 condition: self.lower_guard_condition(
                     condition,
                     context,
@@ -1816,7 +1835,7 @@ impl<'a> ProgramLowerer<'a> {
                 else_steps: self.lower_statements(else_statements, context)?,
             }]);
         }
-        Ok(vec![RuleStep::ConditionalBlock {
+        Ok(vec![CanonicalRuleStep::ConditionalBlock {
             condition: self.lower_guard_condition(
                 condition,
                 context,
@@ -1864,7 +1883,7 @@ impl<'a> ProgramLowerer<'a> {
     fn directions_for_orientation_name(
         &self,
         name: &str,
-    ) -> Result<Option<Vec<Direction>>, DiagnosticReport> {
+    ) -> Result<Option<Vec<OrientationEnvironment>>, DiagnosticReport> {
         directions_for_orientation_name(name, self.input_names, self.value_sets, self.directions)
     }
 
@@ -1874,10 +1893,10 @@ impl<'a> ProgramLowerer<'a> {
         context: &StatementLoweringContext,
         source_line: &str,
         source_line_number: Option<usize>,
-    ) -> Result<Vec<Vec<Guard>>, DiagnosticReport> {
+    ) -> Result<Vec<Vec<CanonicalGuard>>, DiagnosticReport> {
         match condition {
             ConditionAst::All(conditions) => {
-                let mut branches = vec![Vec::<Guard>::new()];
+                let mut branches = vec![Vec::<CanonicalGuard>::new()];
                 for condition in conditions {
                     let next_branches = self.lower_condition_branches(
                         condition,
@@ -1920,7 +1939,7 @@ impl<'a> ProgramLowerer<'a> {
                 Ok(self
                     .input_ids_for_value_set(axis, source_line, source_line_number)?
                     .into_iter()
-                    .map(|input| vec![Guard::InputIs(input)])
+                    .map(|input| vec![CanonicalGuard::InputIs(input)])
                     .collect())
             }
             _ => Ok(vec![vec![self.lower_condition_clause(
@@ -1938,7 +1957,7 @@ impl<'a> ProgramLowerer<'a> {
         context: &StatementLoweringContext,
         source_line: &str,
         source_line_number: Option<usize>,
-    ) -> Result<Guard, DiagnosticReport> {
+    ) -> Result<CanonicalGuard, DiagnosticReport> {
         match condition {
             ConditionAst::InputIs(input_name) => {
                 if !context.input_allowed {
@@ -1955,7 +1974,7 @@ impl<'a> ProgramLowerer<'a> {
                         source_line_number,
                     )
                 })?;
-                Ok(Guard::InputIs(input))
+                Ok(CanonicalGuard::InputIs(input))
             }
             ConditionAst::InputIn(_) => Err(report_at_source_line_number(
                 "input tag-set condition was not expanded",
@@ -1970,7 +1989,7 @@ impl<'a> ProgramLowerer<'a> {
                         source_line_number,
                     )
                 })?;
-                Ok(Guard::VariableEquals {
+                Ok(CanonicalGuard::VariableEquals {
                     variable,
                     value: *value,
                 })
@@ -1983,7 +2002,7 @@ impl<'a> ProgramLowerer<'a> {
                         source_line_number,
                     )
                 })?;
-                Ok(Guard::VariableCompare {
+                Ok(CanonicalGuard::VariableCompare {
                     variable,
                     op: *op,
                     value: *value,
@@ -1997,7 +2016,7 @@ impl<'a> ProgramLowerer<'a> {
                         source_line_number,
                     )
                 })?;
-                Ok(Guard::ConditionEquals {
+                Ok(CanonicalGuard::ConditionEquals {
                     condition,
                     value: *value,
                 })
@@ -2010,7 +2029,7 @@ impl<'a> ProgramLowerer<'a> {
                         source_line_number,
                     )
                 })?;
-                Ok(Guard::ConditionNonZero(condition))
+                Ok(CanonicalGuard::ConditionNonZero(condition))
             }
             ConditionAst::ConditionCompare { name, op, value } => {
                 let condition = *self.condition_names.get(name).ok_or_else(|| {
@@ -2020,7 +2039,7 @@ impl<'a> ProgramLowerer<'a> {
                         source_line_number,
                     )
                 })?;
-                Ok(Guard::ConditionCompare {
+                Ok(CanonicalGuard::ConditionCompare {
                     condition,
                     op: *op,
                     value: *value,
@@ -2036,7 +2055,7 @@ impl<'a> ProgramLowerer<'a> {
                     self.maps,
                     self.directions,
                 )?;
-                Ok(Guard::InlineConditionValue {
+                Ok(CanonicalGuard::InlineConditionValue {
                     kind,
                     value: *value,
                 })
@@ -2051,7 +2070,7 @@ impl<'a> ProgramLowerer<'a> {
                     self.maps,
                     self.directions,
                 )?;
-                Ok(Guard::InlineConditionNonZero(kind))
+                Ok(CanonicalGuard::InlineConditionNonZero(kind))
             }
             ConditionAst::InlineConditionCompare { kind, op, value } => {
                 let kind = lower_condition_value_kind(
@@ -2063,7 +2082,7 @@ impl<'a> ProgramLowerer<'a> {
                     self.maps,
                     self.directions,
                 )?;
-                Ok(Guard::InlineConditionCompare {
+                Ok(CanonicalGuard::InlineConditionCompare {
                     kind,
                     op: *op,
                     value: *value,
@@ -2074,11 +2093,11 @@ impl<'a> ProgramLowerer<'a> {
                 source_line,
                 source_line_number,
             )),
-            ConditionAst::AllObjectsOn { .. } => Err(report_at_source_line_number(
-                "all <object> on <object> is only valid in win_conditions or lose_conditions",
-                source_line,
-                source_line_number,
-            )),
+            ConditionAst::AllObjectsOn { subjects, covers } => {
+                Ok(CanonicalGuard::InlineConditionNonZero(
+                    all_objects_on_condition_kind(subjects, covers),
+                ))
+            }
         }
     }
 
@@ -2086,7 +2105,7 @@ impl<'a> ProgramLowerer<'a> {
         &mut self,
         rewrite: &OrientedRewriteAst,
         context: &StatementLoweringContext,
-    ) -> Result<Vec<RuleStep>, DiagnosticReport> {
+    ) -> Result<Vec<CanonicalRuleStep>, DiagnosticReport> {
         let steps = self.lower_rewrite_core(rewrite, context)?;
         if rewrite.after_effects.is_empty() && rewrite.after_call.is_none() {
             return Ok(steps);
@@ -2109,14 +2128,14 @@ impl<'a> ProgramLowerer<'a> {
                 context,
             )?);
         }
-        Ok(vec![RuleStep::AfterTriggered { steps, then_steps }])
+        Ok(vec![CanonicalRuleStep::AfterTriggered { steps, then_steps }])
     }
 
     fn lower_rewrite_core(
         &mut self,
         rewrite: &OrientedRewriteAst,
         context: &StatementLoweringContext,
-    ) -> Result<Vec<RuleStep>, DiagnosticReport> {
+    ) -> Result<Vec<CanonicalRuleStep>, DiagnosticReport> {
         let application = if rewrite
             .effects
             .iter()
@@ -2146,6 +2165,7 @@ impl<'a> ProgramLowerer<'a> {
                             context.guards.clone(),
                         )?);
                     }
+                    self.dedup_orientation_rules(&mut rules);
                     return Ok(wrap_rewrite_steps(application, rules));
                 }
                 self.lower_rewrite_rules_for_direction(
@@ -2153,7 +2173,7 @@ impl<'a> ProgramLowerer<'a> {
                     context,
                     &rewrite.effects,
                     application,
-                    neutral_direction(),
+                    neutral_direction(self.directions),
                     false,
                     context.guards.clone(),
                 )
@@ -2170,7 +2190,7 @@ impl<'a> ProgramLowerer<'a> {
                 let mut rules = Vec::new();
                 for direction in self.directions {
                     let mut guards = context.guards.clone();
-                    guards.push(Guard::InputIs(direction.input));
+                    guards.push(CanonicalGuard::InputIs(direction.input));
                     rules.extend(self.lower_rewrite_rules_for_direction(
                         rewrite,
                         context,
@@ -2181,6 +2201,7 @@ impl<'a> ProgramLowerer<'a> {
                         guards,
                     )?);
                 }
+                self.dedup_orientation_rules(&mut rules);
                 Ok(wrap_rewrite_steps(application, rules))
             }
             OrientationExpr::InputSet(axis) => {
@@ -2201,7 +2222,7 @@ impl<'a> ProgramLowerer<'a> {
                 let mut rules = Vec::new();
                 for direction in directions {
                     let mut guards = context.guards.clone();
-                    guards.push(Guard::InputIs(direction.input));
+                    guards.push(CanonicalGuard::InputIs(direction.input));
                     rules.extend(self.lower_rewrite_rules_for_direction(
                         rewrite,
                         context,
@@ -2212,6 +2233,7 @@ impl<'a> ProgramLowerer<'a> {
                         guards,
                     )?);
                 }
+                self.dedup_orientation_rules(&mut rules);
                 Ok(wrap_rewrite_steps(application, rules))
             }
             OrientationExpr::Fixed(direction_name) => {
@@ -2236,9 +2258,43 @@ impl<'a> ProgramLowerer<'a> {
                         context.guards.clone(),
                     )?);
                 }
+                self.dedup_orientation_rules(&mut rules);
                 Ok(wrap_rewrite_steps(application, rules))
             }
         }
+    }
+
+    fn dedup_orientation_rules(&mut self, rules: &mut Vec<CanonicalRuleStep>) {
+        fn same_writes(left: &[CanonicalWriteOp], right: &[CanonicalWriteOp]) -> bool {
+            let mut left = left.to_vec();
+            let mut right = right.to_vec();
+            left.sort_unstable();
+            right.sort_unstable();
+            left == right
+        }
+
+        let mut unique = Vec::<CanonicalRule>::new();
+        rules.retain(|step| {
+            let CanonicalRuleStep::Rule(rule) = step else {
+                return true;
+            };
+            let duplicate = unique.iter().any(|existing| {
+                existing.guards == rule.guards
+                    && existing.application == rule.application
+                    && existing.pattern == rule.pattern
+                    && same_writes(&existing.writes, &rule.writes)
+                    && existing.effects == rule.effects
+            });
+            if duplicate {
+                self.rule_animations.remove(&rule.id);
+                self.rule_effects.remove(&rule.id);
+                self.rule_debug_info.remove(&rule.id);
+                false
+            } else {
+                unique.push(rule.clone());
+                true
+            }
+        });
     }
 
     fn lower_rewrite_rules_for_direction(
@@ -2247,10 +2303,10 @@ impl<'a> ProgramLowerer<'a> {
         context: &StatementLoweringContext,
         effects: &[EffectAst],
         application: RuleApplication,
-        direction: Direction,
+        direction: OrientationEnvironment,
         direction_expanded: bool,
-        guards: Vec<Guard>,
-    ) -> Result<Vec<RuleStep>, DiagnosticReport> {
+        guards: Vec<CanonicalGuard>,
+    ) -> Result<Vec<CanonicalRuleStep>, DiagnosticReport> {
         let (_before, alternatives) = compile_before_after_blocks_for_direction(
             &rewrite.before,
             &rewrite.after,
@@ -2382,7 +2438,9 @@ impl<'a> ProgramLowerer<'a> {
                     });
                 }
                 EffectAst::Scene(effect) => {
-                    lowered.ordered.push(RuleEffect::Scene(effect.clone()));
+                    lowered.ordered.push(RuleEffect::Scene {
+                        effect: effect.clone(),
+                    });
                 }
                 EffectAst::UpdateVariable { name, op, value } => {
                     let variable = *self.variable_names.get(name).ok_or_else(|| {
@@ -2418,15 +2476,15 @@ impl<'a> ProgramLowerer<'a> {
     fn rules_from_alternatives(
         &mut self,
         alternatives: Vec<RuleBodyAlternative>,
-        direction: Direction,
+        direction: OrientationEnvironment,
         direction_expanded: bool,
-        guards: Vec<Guard>,
+        guards: Vec<CanonicalGuard>,
         effects: &[EffectAst],
         application: RuleApplication,
         source_line: &str,
         source_line_number: Option<usize>,
         context: &StatementLoweringContext,
-    ) -> Result<Vec<RuleStep>, DiagnosticReport> {
+    ) -> Result<Vec<CanonicalRuleStep>, DiagnosticReport> {
         let preserve_once_group = application == RuleApplication::Once
             && alternatives.len() > 1
             && guards.is_empty()
@@ -2479,7 +2537,7 @@ impl<'a> ProgramLowerer<'a> {
                         .cells
                         .iter()
                         .map(|cell| {
-                            Ok(MatchCell {
+                            Ok(CanonicalMatchCell {
                                 offset: resolve_offset(
                                     cell.offset.clone(),
                                     direction,
@@ -2517,7 +2575,7 @@ impl<'a> ProgramLowerer<'a> {
                             })
                         })
                         .collect::<Result<Vec<_>, DiagnosticReport>>()?;
-                    Ok(PatternComponent {
+                    Ok(CanonicalPatternComponent {
                         cells,
                         gap_count: component.gap_count,
                     })
@@ -2537,11 +2595,11 @@ impl<'a> ProgramLowerer<'a> {
                 self.rule_effects.insert(id, rule_effects);
             }
             self.record_rule_debug_info(id, source_line, source_line_number, context);
-            rules.push(RuleStep::Rule(Rule {
+            rules.push(CanonicalRuleStep::Rule(CanonicalRule {
                 id,
                 guards,
                 application,
-                pattern: Pattern {
+                pattern: CanonicalPattern {
                     components: compiled_components,
                 },
                 writes: compiled_writes,
@@ -2555,15 +2613,15 @@ impl<'a> ProgramLowerer<'a> {
     }
 }
 
-fn once_alternative_chain(patterns: Vec<Pattern>, rules: Vec<RuleStep>) -> RuleStep {
+fn once_alternative_chain(patterns: Vec<CanonicalPattern>, rules: Vec<CanonicalRuleStep>) -> CanonicalRuleStep {
     let alternatives = patterns
         .into_iter()
         .zip(rules)
         .map(|(pattern, step)| {
-            let RuleStep::Rule(rule) = step else {
+            let CanonicalRuleStep::Rule(rule) = step else {
                 unreachable!("lowered rewrite alternatives must be rule steps");
             };
-            (RuleCondition::AnyMatches(vec![pattern]), rule)
+            (CanonicalRuleCondition::AnyMatches(vec![pattern]), rule)
         })
         .collect();
     puzzle_kernel::first_matching_program_alternative(alternatives)

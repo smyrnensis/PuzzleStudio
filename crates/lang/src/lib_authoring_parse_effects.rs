@@ -59,6 +59,9 @@ fn project_surface_semantic_kind(kind: SurfaceSemanticKind) -> semantic::Semanti
         SurfaceSemanticKind::Object => semantic::SemanticKind::Object,
         SurfaceSemanticKind::Input => semantic::SemanticKind::Input,
         SurfaceSemanticKind::State => semantic::SemanticKind::State,
+        SurfaceSemanticKind::Group => semantic::SemanticKind::Group,
+        SurfaceSemanticKind::Mark => semantic::SemanticKind::Mark,
+        SurfaceSemanticKind::Variant => semantic::SemanticKind::Variant,
         SurfaceSemanticKind::Condition => semantic::SemanticKind::Condition,
         SurfaceSemanticKind::Scene => semantic::SemanticKind::Scene,
         SurfaceSemanticKind::Theme => semantic::SemanticKind::Theme,
@@ -796,7 +799,7 @@ fn resolve_default_wait_in_component(component: &mut SceneComponent, default_wai
                 resolve_default_wait_in_effect(&mut button.effect, default_wait_ms);
             }
         }
-        SceneComponent::Frame(_) | SceneComponent::Text(_) => {}
+        SceneComponent::Viewport(_) | SceneComponent::Frame(_) | SceneComponent::Text(_) => {}
     }
 }
 

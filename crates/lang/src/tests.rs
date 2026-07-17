@@ -1,5 +1,13 @@
 use super::*;
 
+fn planar_sprite_pattern(sprite: &VisualSpriteDef) -> &Vec<String> {
+    sprite
+        .frames
+        .first()
+        .and_then(|frame| frame.planes.first())
+        .expect("ascii sprite has a first frame and plane")
+}
+
 #[test]
 fn virtual_workspace_imports_are_resolved_by_the_language_layer() {
     let documents = vec![
@@ -89,15 +97,15 @@ levels default of board {
     let loaded = super::parse_game2d(source).unwrap();
     let first = transition_program(
         &loaded.game,
-        &loaded.levels[0].program,
         &loaded.levels[0].initial_state,
+        &loaded.levels[0].program,
         InputId(0),
     )
     .unwrap();
     let second = transition_program(
         &loaded.game,
-        &loaded.levels[1].program,
         &loaded.levels[1].initial_state,
+        &loaded.levels[1].program,
         InputId(0),
     )
     .unwrap();
@@ -592,7 +600,10 @@ level "start" {
 
     let error = parse_game(source).unwrap_err().to_string();
 
-    assert!(error.contains("`no null` is not a valid cell pattern"));
+    assert!(
+        error.contains("`no null` is not a valid cell pattern"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -1179,33 +1190,6 @@ audio {
         error.contains("unknown top-level directive `audio`"),
         "{error}"
     );
-    assert!(error.contains("content ("), "{error}");
-    assert!(error.contains("`sounds`"), "{error}");
-}
-
-#[test]
-fn model_top_level_expected_message_uses_parser_alternatives() {
-    let message = model_top_level_expected_directives_message();
-
-    for alternative in MODEL_TOP_LEVEL_ALTERNATIVES {
-        let label = format!("`{}`", alternative.label);
-        if alternative.expected_group.is_some() {
-            assert!(
-                message.contains(&label),
-                "expected parser alternative {label} to appear in: {message}"
-            );
-            assert_ne!(
-                classify_model_top_level_directive(&[alternative.trigger]),
-                ModelTopLevelDirective::Unknown,
-                "expected parser alternative {label} to classify as known"
-            );
-        } else {
-            assert!(
-                !message.contains(&label),
-                "non-expected parser alternative {label} leaked into: {message}"
-            );
-        }
-    }
 }
 
 #[test]
@@ -1978,7 +1962,9 @@ text "Menu"
         .collect::<Vec<_>>();
     assert!(effects.iter().any(|effect| matches!(
         effect,
-        RuleEffect::Scene(SceneEffect::Goto { scene, params }) if scene == "menu" && params.is_empty()
+        RuleEffect::Scene {
+            effect: SceneEffect::Goto { scene, params },
+        } if scene == "menu" && params.is_empty()
     )));
 }
 
@@ -2971,7 +2957,9 @@ step sokoban
     assert_eq!(scene.state.puzzles[0].name, "sokoban");
     assert!(matches!(
         &scene.components[0],
-        SceneComponent::Frame(frame) if frame.kind == "puzzle" && frame.source == "sokoban"
+        SceneComponent::Viewport(viewport)
+            if viewport.projection == ViewportProjectionDef::TwoD
+                && viewport.source == "sokoban"
     ));
     assert!(matches!(
         &scene.puzzle_rule,
@@ -4753,8 +4741,9 @@ move
 }
 
 levels {
-level "start"
+level "start" {
 B
+}
 }
 }
 "#;
@@ -5255,8 +5244,8 @@ S
 
     let started = transition_program(
         &loaded.game,
-        loaded.level_start_program.as_deref().unwrap(),
         initial,
+        loaded.level_start_program.as_ref().unwrap(),
         InputId(0),
     )
     .unwrap();
@@ -5983,14 +5972,14 @@ rules {
 
 }
 
-level "start"
+level "start" {
 B
 }
 }
 "#;
 
     let error = parse_game(source).unwrap_err().to_string();
-    assert!(error.contains("unknown puzzle directive domain"));
+    assert!(error.contains("unknown puzzle directive domain"), "{error}");
 }
 
 #[test]
@@ -6273,7 +6262,7 @@ P
     let error = parse_game(source).unwrap_err().to_string();
 
     assert!(
-        error.contains("unknown object selector: [ Missing ]"),
+        error.contains("unknown object selector: no [ Missing ]"),
         "{error}"
     );
     assert!(
@@ -6350,7 +6339,7 @@ shape = {
     let error = super::parse_game_file(&game_path).unwrap_err().to_string();
 
     assert!(
-        error.contains("unknown object selector: [ Missing ]"),
+        error.contains("unknown object selector: no [ Missing ]"),
         "{error}"
     );
     assert!(
@@ -7025,8 +7014,9 @@ A.
         .iter()
         .find(|sprite| sprite.name == "Box-B")
         .unwrap();
+    let pattern = planar_sprite_pattern(box_b);
     match &box_b.kind {
-        VisualSpriteKind::Ascii { pattern, colors } => {
+        VisualSpriteKind::Ascii { colors } => {
             assert_eq!(
                 pattern.as_slice(),
                 ["11".to_string(), "00".to_string()].as_slice()
@@ -7080,8 +7070,9 @@ P
         .iter()
         .find(|sprite| sprite.name == "Player")
         .unwrap();
+    let pattern = planar_sprite_pattern(sprite);
     match &sprite.kind {
-        VisualSpriteKind::Ascii { pattern, colors } => {
+        VisualSpriteKind::Ascii { colors } => {
             assert_eq!(
                 pattern.as_slice(),
                 ["0.".to_string(), ".1".to_string()].as_slice()
@@ -7571,8 +7562,9 @@ B
         .iter()
         .find(|sprite| sprite.name == "Box")
         .unwrap();
+    let pattern = planar_sprite_pattern(box_sprite);
     match &box_sprite.kind {
-        VisualSpriteKind::Ascii { pattern, colors } => {
+        VisualSpriteKind::Ascii { colors } => {
             assert_eq!(
                 pattern.as_slice(),
                 [
@@ -7674,8 +7666,9 @@ HB
         .iter()
         .find(|sprite| sprite.name == "Box-open")
         .unwrap();
+    let pattern = planar_sprite_pattern(box_sprite);
     match &box_sprite.kind {
-        VisualSpriteKind::Ascii { pattern, colors } => {
+        VisualSpriteKind::Ascii { colors } => {
             assert_eq!(pattern.as_slice(), ["01".to_string(), "10".to_string()]);
             assert!(
                 colors
@@ -7905,8 +7898,9 @@ B
         .iter()
         .find(|sprite| sprite.name == "Box-movable")
         .unwrap();
+    let pattern = planar_sprite_pattern(box_movable);
     match &box_movable.kind {
-        VisualSpriteKind::Ascii { pattern, colors } => {
+        VisualSpriteKind::Ascii { colors } => {
             assert_eq!(pattern.as_slice(), ["0".to_string()].as_slice());
             assert!(
                 colors
@@ -7965,8 +7959,9 @@ level "start"
         .find(|sprite| sprite.name == "Gate-1")
         .unwrap();
 
+    let pattern = planar_sprite_pattern(sprite);
     match &sprite.kind {
-        VisualSpriteKind::Ascii { pattern, colors } => {
+        VisualSpriteKind::Ascii { colors } => {
             assert_eq!(pattern.as_slice(), ["01".to_string(), "10".to_string()]);
             assert!(
                 colors
@@ -8183,8 +8178,9 @@ B
         .iter()
         .find(|sprite| sprite.name == "Box")
         .unwrap();
+    let pattern = planar_sprite_pattern(box_sprite);
     match &box_sprite.kind {
-        VisualSpriteKind::Ascii { pattern, colors } => {
+        VisualSpriteKind::Ascii { colors } => {
             assert_eq!(
                 pattern.as_slice(),
                 ["010".to_string(), "111".to_string(), "010".to_string()].as_slice()
@@ -8238,8 +8234,9 @@ B
         .iter()
         .find(|sprite| sprite.name == "Box")
         .unwrap();
+    let pattern = planar_sprite_pattern(box_sprite);
     match &box_sprite.kind {
-        VisualSpriteKind::Ascii { pattern, .. } => {
+        VisualSpriteKind::Ascii { .. } => {
             assert_eq!(
                 pattern.as_slice(),
                 ["01".to_string(), "10".to_string()].as_slice()
@@ -8289,8 +8286,9 @@ P
         .iter()
         .find(|sprite| sprite.name == "Player")
         .unwrap();
+    let pattern = planar_sprite_pattern(sprite);
     match &sprite.kind {
-        VisualSpriteKind::Ascii { pattern, colors } => {
+        VisualSpriteKind::Ascii { colors } => {
             assert_eq!(pattern.as_slice(), ["00".to_string(), "11".to_string()]);
             assert_eq!(colors[0].color, "#fff");
             assert_eq!(colors[1].color, "#000");
@@ -8351,22 +8349,11 @@ B
         .iter()
         .find(|sprite| sprite.name == "Background")
         .unwrap();
-    assert_eq!(
-        sprite
-            .loop_animation
-            .as_ref()
-            .map(|animation| animation.duration_ms),
-        Some(500)
-    );
-    assert_eq!(
-        sprite
-            .loop_animation
-            .as_ref()
-            .map(|animation| animation.frames.len()),
-        Some(3)
-    );
+    assert_eq!(sprite.animation_duration_ms, Some(500));
+    assert_eq!(sprite.frames.len(), 3);
+    let pattern = planar_sprite_pattern(sprite);
     match &sprite.kind {
-        VisualSpriteKind::Ascii { pattern, colors } => {
+        VisualSpriteKind::Ascii { colors } => {
             assert_eq!(pattern[0], "11111");
             assert_eq!(colors[0].color, "#90ee90");
             assert_eq!(colors[1].color, "#008000");
@@ -8414,8 +8401,9 @@ P
         .iter()
         .find(|sprite| sprite.name == "Player")
         .unwrap();
+    let pattern = planar_sprite_pattern(sprite);
     match &sprite.kind {
-        VisualSpriteKind::Ascii { pattern, .. } => {
+        VisualSpriteKind::Ascii { .. } => {
             assert_eq!(pattern, &["000", "010", "000"]);
         }
         _ => panic!("Player should be an ascii sprite"),
@@ -8510,13 +8498,7 @@ B
         .iter()
         .find(|sprite| sprite.name == "Background")
         .unwrap();
-    assert_eq!(
-        sprite
-            .loop_animation
-            .as_ref()
-            .map(|animation| animation.duration_ms),
-        Some(300)
-    );
+    assert_eq!(sprite.animation_duration_ms, Some(300));
 }
 
 #[test]
@@ -8631,8 +8613,9 @@ B
         .iter()
         .find(|sprite| sprite.name == "Box-B")
         .unwrap();
+    let pattern = planar_sprite_pattern(box_sprite);
     match &box_sprite.kind {
-        VisualSpriteKind::Ascii { pattern, colors } => {
+        VisualSpriteKind::Ascii { colors } => {
             assert_eq!(
                 pattern.as_slice(),
                 ["11".to_string(), "00".to_string()].as_slice()
@@ -8649,8 +8632,9 @@ B
         .iter()
         .find(|sprite| sprite.name == "Floor")
         .unwrap();
+    let pattern = planar_sprite_pattern(floor_sprite);
     match &floor_sprite.kind {
-        VisualSpriteKind::Ascii { pattern, .. } => {
+        VisualSpriteKind::Ascii { .. } => {
             assert_eq!(pattern.as_slice(), ["0".to_string()].as_slice());
         }
         _ => panic!("@Floor should be an ascii sprite"),
@@ -8705,8 +8689,9 @@ B
         .iter()
         .find(|sprite| sprite.name == "Box-B")
         .unwrap();
+    let pattern = planar_sprite_pattern(box_sprite);
     match &box_sprite.kind {
-        VisualSpriteKind::Ascii { pattern, .. } => {
+        VisualSpriteKind::Ascii { .. } => {
             assert_eq!(
                 pattern.as_slice(),
                 ["11".to_string(), "00".to_string()].as_slice()
@@ -8763,8 +8748,9 @@ B
         .iter()
         .find(|sprite| sprite.name == "Box")
         .unwrap();
+    let pattern = planar_sprite_pattern(box_sprite);
     match &box_sprite.kind {
-        VisualSpriteKind::Ascii { pattern, colors } => {
+        VisualSpriteKind::Ascii { colors } => {
             assert_eq!(
                 pattern.as_slice(),
                 ["010".to_string(), "111".to_string(), "010".to_string()].as_slice()
@@ -8839,8 +8825,9 @@ BP
         .iter()
         .find(|sprite| sprite.name == "Box")
         .unwrap();
+    let pattern = planar_sprite_pattern(box_sprite);
     match &box_sprite.kind {
-        VisualSpriteKind::Ascii { pattern, .. } => {
+        VisualSpriteKind::Ascii { .. } => {
             assert_eq!(
                 pattern.as_slice(),
                 ["010".to_string(), "111".to_string(), "010".to_string()].as_slice()
@@ -8855,8 +8842,9 @@ BP
         .iter()
         .find(|sprite| sprite.name == "Pull")
         .unwrap();
+    let pattern = planar_sprite_pattern(pull_sprite);
     match &pull_sprite.kind {
-        VisualSpriteKind::Ascii { pattern, .. } => {
+        VisualSpriteKind::Ascii { .. } => {
             assert_eq!(
                 pattern.as_slice(),
                 ["000".to_string(), "010".to_string(), "000".to_string()].as_slice()
@@ -8919,8 +8907,9 @@ BP
         .iter()
         .find(|sprite| sprite.name == "Box")
         .unwrap();
+    let pattern = planar_sprite_pattern(box_sprite);
     match &box_sprite.kind {
-        VisualSpriteKind::Ascii { pattern, .. } => {
+        VisualSpriteKind::Ascii { .. } => {
             assert_eq!(
                 pattern.as_slice(),
                 ["010".to_string(), "111".to_string(), "010".to_string()].as_slice()
@@ -8935,8 +8924,9 @@ BP
         .iter()
         .find(|sprite| sprite.name == "Pad")
         .unwrap();
+    let pattern = planar_sprite_pattern(pad_sprite);
     match &pad_sprite.kind {
-        VisualSpriteKind::Ascii { pattern, .. } => {
+        VisualSpriteKind::Ascii { .. } => {
             assert_eq!(pattern.as_slice(), ["0".to_string()].as_slice());
         }
         _ => panic!("Pad should be an ascii sprite"),
@@ -8994,8 +8984,9 @@ B
         .iter()
         .find(|sprite| sprite.name == "Box")
         .unwrap();
+    let pattern = planar_sprite_pattern(box_sprite);
     match &box_sprite.kind {
-        VisualSpriteKind::Ascii { pattern, colors } => {
+        VisualSpriteKind::Ascii { colors } => {
             assert_eq!(pattern.as_slice(), ["0123".to_string()].as_slice());
             assert_eq!(colors.len(), 4);
             assert_eq!(colors[0].token, '0');
@@ -9124,8 +9115,7 @@ B
     assert_eq!(
         sprite.transforms,
         [VisualSpriteTransform::Translate {
-            x: 0.0,
-            y: -0.25,
+            value: [0.0, -0.25, 0.0],
             space: VisualSpriteSpace::World
         }]
     );
@@ -9179,8 +9169,7 @@ B
     assert_eq!(
         sprite.transforms,
         [VisualSpriteTransform::Translate {
-            x: 0.0,
-            y: -0.25,
+            value: [0.0, -0.25, 0.0],
             space: VisualSpriteSpace::World
         }]
     );
@@ -9284,8 +9273,9 @@ P
         .iter()
         .find(|sprite| sprite.name == "Player")
         .unwrap();
+    let pattern = planar_sprite_pattern(sprite);
     match &sprite.kind {
-        VisualSpriteKind::Ascii { pattern, colors } => {
+        VisualSpriteKind::Ascii { colors } => {
             assert_eq!(pattern.as_slice(), ["a".to_string()].as_slice());
             assert!(
                 colors
@@ -9335,8 +9325,9 @@ P
         .iter()
         .find(|sprite| sprite.name == "Player")
         .unwrap();
+    let pattern = planar_sprite_pattern(sprite);
     match &sprite.kind {
-        VisualSpriteKind::Ascii { pattern, colors } => {
+        VisualSpriteKind::Ascii { colors } => {
             assert_eq!(pattern.as_slice(), ["01".to_string()].as_slice());
             assert!(
                 colors
@@ -9391,8 +9382,9 @@ P
         .iter()
         .find(|sprite| sprite.name == "Player")
         .unwrap();
+    let pattern = planar_sprite_pattern(sprite);
     match &sprite.kind {
-        VisualSpriteKind::Ascii { pattern, colors } => {
+        VisualSpriteKind::Ascii { colors } => {
             assert_eq!(pattern.as_slice(), ["01.".to_string()].as_slice());
             assert_eq!(colors.len(), 2);
             assert!(
@@ -9448,8 +9440,9 @@ P
         .iter()
         .find(|sprite| sprite.name == "Player")
         .unwrap();
+    let pattern = planar_sprite_pattern(sprite);
     match &sprite.kind {
-        VisualSpriteKind::Ascii { pattern, colors } => {
+        VisualSpriteKind::Ascii { colors } => {
             assert_eq!(pattern.as_slice(), ["01".to_string()].as_slice());
             assert_eq!(colors.len(), 2);
             assert!(
@@ -9545,8 +9538,9 @@ P
         .iter()
         .find(|sprite| sprite.name == "Player")
         .unwrap();
+    let pattern = planar_sprite_pattern(sprite);
     match &sprite.kind {
-        VisualSpriteKind::Ascii { pattern, .. } => {
+        VisualSpriteKind::Ascii { .. } => {
             assert_eq!(
                 pattern.as_slice(),
                 ["0.".to_string(), ".1".to_string()].as_slice()
@@ -9745,8 +9739,9 @@ level "start"
         .iter()
         .find(|sprite| sprite.name == "Boundary-right")
         .unwrap();
+    let pattern = planar_sprite_pattern(boundary_right);
     match &boundary_right.kind {
-        VisualSpriteKind::Ascii { pattern, .. } => {
+        VisualSpriteKind::Ascii { .. } => {
             assert_eq!(
                 pattern.as_slice(),
                 ["01".to_string(), "01".to_string()].as_slice()
@@ -9871,10 +9866,9 @@ level "start"
             .iter()
             .find(|sprite| sprite.name == name)
             .unwrap();
+        let actual = planar_sprite_pattern(sprite);
         match &sprite.kind {
-            VisualSpriteKind::Ascii {
-                pattern: actual, ..
-            } => {
+            VisualSpriteKind::Ascii { .. } => {
                 let expected = pattern.into_iter().map(str::to_string).collect::<Vec<_>>();
                 assert_eq!(actual.as_slice(), expected.as_slice());
             }
@@ -9956,10 +9950,9 @@ level "start"
             .iter()
             .find(|sprite| sprite.name == name)
             .unwrap();
+        let actual = planar_sprite_pattern(sprite);
         match &sprite.kind {
-            VisualSpriteKind::Ascii {
-                pattern: actual, ..
-            } => {
+            VisualSpriteKind::Ascii { .. } => {
                 let expected = pattern.into_iter().map(str::to_string).collect::<Vec<_>>();
                 assert_eq!(actual.as_slice(), expected.as_slice());
             }
@@ -10071,10 +10064,9 @@ level "start"
             .iter()
             .find(|sprite| sprite.name == name)
             .unwrap();
+        let actual = planar_sprite_pattern(sprite);
         match &sprite.kind {
-            VisualSpriteKind::Ascii {
-                pattern: actual, ..
-            } => {
+            VisualSpriteKind::Ascii { .. } => {
                 let expected = pattern.into_iter().map(str::to_string).collect::<Vec<_>>();
                 assert_eq!(actual.as_slice(), expected.as_slice());
             }
@@ -10358,8 +10350,9 @@ level "start"
         .find(|sprite| sprite.name == "Boundary-right")
         .unwrap();
 
+    let pattern = planar_sprite_pattern(boundary_right);
     match &boundary_right.kind {
-        VisualSpriteKind::Ascii { pattern, .. } => {
+        VisualSpriteKind::Ascii { .. } => {
             assert_eq!(
                 pattern.as_slice(),
                 ["000".to_string(), "000".to_string(), "111".to_string()].as_slice()
@@ -10415,16 +10408,16 @@ P
     assert_eq!(
         sprite.transforms,
         [VisualSpriteTransform::Translate {
-            x: 0.5,
-            y: -0.25,
+            value: [0.5, -0.25, 0.0],
             space: VisualSpriteSpace::World
         }]
     );
     assert_eq!(sprite.fit, VisualSpriteFit::default());
     assert_eq!(sprite.sampling, Some(VisualSpriteSampling::Smooth));
     assert!(sprite.pixels_per_cell.is_none());
+    let pattern = planar_sprite_pattern(sprite);
     match &sprite.kind {
-        VisualSpriteKind::Ascii { pattern, colors } => {
+        VisualSpriteKind::Ascii { colors } => {
             assert_eq!(
                 pattern.as_slice(),
                 [
@@ -10483,8 +10476,9 @@ P
         .iter()
         .find(|sprite| sprite.name == "Player")
         .unwrap();
+    let pattern = planar_sprite_pattern(sprite);
     match &sprite.kind {
-        VisualSpriteKind::Ascii { pattern, colors } => {
+        VisualSpriteKind::Ascii { colors } => {
             assert_eq!(
                 pattern.as_slice(),
                 [
@@ -10543,8 +10537,9 @@ P
         .iter()
         .find(|sprite| sprite.name == "Player")
         .unwrap();
+    let pattern = planar_sprite_pattern(sprite);
     match &sprite.kind {
-        VisualSpriteKind::Ascii { pattern, colors } => {
+        VisualSpriteKind::Ascii { colors } => {
             assert_eq!(
                 pattern.as_slice(),
                 [
@@ -10604,8 +10599,9 @@ P
         .iter()
         .find(|sprite| sprite.name == "Player")
         .unwrap();
+    let pattern = planar_sprite_pattern(sprite);
     match &sprite.kind {
-        VisualSpriteKind::Ascii { pattern, colors } => {
+        VisualSpriteKind::Ascii { colors } => {
             assert_eq!(
                 pattern.as_slice(),
                 ["00".to_string(), "01".to_string()].as_slice()
@@ -10663,10 +10659,9 @@ level "start"
             .iter()
             .find(|sprite| sprite.name == name)
             .unwrap();
+        let actual = planar_sprite_pattern(sprite);
         match &sprite.kind {
-            VisualSpriteKind::Ascii {
-                pattern: actual, ..
-            } => {
+            VisualSpriteKind::Ascii { .. } => {
                 assert_eq!(actual, &["111", "000", "000"]);
             }
             _ => panic!("{name} should be an ascii sprite"),
@@ -10675,6 +10670,7 @@ level "start"
             sprite.transforms,
             [VisualSpriteTransform::Rotate {
                 degrees,
+                axis: [0.0, 0.0, 1.0],
                 space: VisualSpriteSpace::World,
             }]
         );
@@ -10731,6 +10727,7 @@ level "start"
         boundary_right.transforms,
         [VisualSpriteTransform::Rotate {
             degrees: -90.0,
+            axis: [0.0, 0.0, 1.0],
             space: VisualSpriteSpace::World,
         }]
     );
@@ -10785,6 +10782,7 @@ level "start"
         boundary_right.transforms,
         [VisualSpriteTransform::Rotate {
             degrees: -90.0,
+            axis: [0.0, 0.0, 1.0],
             space: VisualSpriteSpace::World,
         }]
     );
@@ -10863,10 +10861,9 @@ level "start"
             .iter()
             .find(|sprite| sprite.name == name)
             .unwrap();
+        let actual = planar_sprite_pattern(sprite);
         match &sprite.kind {
-            VisualSpriteKind::Ascii {
-                pattern: actual, ..
-            } => {
+            VisualSpriteKind::Ascii { .. } => {
                 let expected = pattern.into_iter().map(str::to_string).collect::<Vec<_>>();
                 assert_eq!(actual.as_slice(), expected.as_slice());
             }
@@ -10948,10 +10945,9 @@ level "start"
             .iter()
             .find(|sprite| sprite.name == name)
             .unwrap();
+        let actual = planar_sprite_pattern(sprite);
         match &sprite.kind {
-            VisualSpriteKind::Ascii {
-                pattern: actual, ..
-            } => {
+            VisualSpriteKind::Ascii { .. } => {
                 let expected = pattern.into_iter().map(str::to_string).collect::<Vec<_>>();
                 assert_eq!(actual.as_slice(), expected.as_slice());
             }
@@ -12298,7 +12294,7 @@ AB
 }
 "#;
     let error = parse_game(lhs_source).unwrap_err().to_string();
-    assert!(error.contains("`=` is only valid as a RHS cell"));
+    assert!(error.contains("`=` is only valid as a RHS cell"), "{error}");
 
     let mixed_rhs_source = r#"
 title = rhs_keep_marker_mixed_reject
@@ -12319,7 +12315,10 @@ A
 }
 "#;
     let error = parse_game(mixed_rhs_source).unwrap_err().to_string();
-    assert!(error.contains("`=` RHS cell cannot contain other tokens"));
+    assert!(
+        error.contains("`=` RHS cell cannot contain other tokens"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -13233,7 +13232,7 @@ d ArrowRight -> input right
 }
 
 #[test]
-fn levels_reject_object_and_non_dot_empty_redefinitions_of_reserved_dot() {
+fn explicit_dot_legend_overrides_implicit_empty() {
     let source = |legend_row: &str| {
         format!(
             r#"puzzle default {{
@@ -13256,8 +13255,13 @@ P.
         )
     };
 
-    let dot_object = parse_game(&source(". = Player")).unwrap_err().to_string();
-    assert!(dot_object.contains("levels reserve `.` for empty"));
+    let loaded = parse_game(&source(". = Player")).unwrap();
+    let player = object_named(&loaded, "Player");
+    assert!(
+        loaded.levels[0]
+            .initial_state
+            .has_object(&loaded.game, 1, 0, player)
+    );
 
     let non_dot_empty = parse_game(&source("_ = empty")).unwrap_err().to_string();
     assert!(non_dot_empty.contains("levels use `.` for empty"));
@@ -15781,12 +15785,12 @@ p
         sprite.transforms,
         [
             VisualSpriteTransform::Translate {
-                x: 0.5,
-                y: 0.0,
+                value: [0.5, 0.0, 0.0],
                 space: VisualSpriteSpace::World
             },
             VisualSpriteTransform::Rotate {
                 degrees: -90.0,
+                axis: [0.0, 0.0, 1.0],
                 space: VisualSpriteSpace::World
             },
         ]
@@ -15801,12 +15805,12 @@ p
         up.transforms,
         [
             VisualSpriteTransform::Translate {
-                x: 0.5,
-                y: 0.0,
+                value: [0.5, 0.0, 0.0],
                 space: VisualSpriteSpace::World
             },
             VisualSpriteTransform::Rotate {
                 degrees: 0.0,
+                axis: [0.0, 0.0, 1.0],
                 space: VisualSpriteSpace::World
             },
         ]
@@ -15821,12 +15825,12 @@ p
         down.transforms,
         [
             VisualSpriteTransform::Translate {
-                x: 0.5,
-                y: 0.0,
+                value: [0.5, 0.0, 0.0],
                 space: VisualSpriteSpace::World
             },
             VisualSpriteTransform::Rotate {
                 degrees: -180.0,
+                axis: [0.0, 0.0, 1.0],
                 space: VisualSpriteSpace::World
             },
         ]
@@ -16168,7 +16172,7 @@ rules {
 once [ player:_ ] -> [ player:_ ]
 }
 
-level "start"
+level "start" {
 l
 }
 }
@@ -16176,8 +16180,8 @@ l
 "#;
     let error = parse_game(source).unwrap_err().to_string();
 
-    assert!(error.contains("wildcard must use *"));
-    assert!(error.contains("_ is reserved for completion"));
+    assert!(error.contains("wildcard must use *"), "{error}");
+    assert!(error.contains("_ is reserved for completion"), "{error}");
 }
 
 #[test]
@@ -16203,7 +16207,7 @@ rules {
 once [ player ] -> [ player ]
 }
 
-level "start"
+level "start" {
 l
 }
 }
@@ -16211,7 +16215,10 @@ l
 "#;
     let error = parse_game(source).unwrap_err().to_string();
 
-    assert!(error.contains("object selector for variants must use :*"));
+    assert!(
+        error.contains("object selector for variants must use :*"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -17380,7 +17387,7 @@ rules {
 once [ cargo | cargo | ] -> [ | cargo | cargo ]
 }
 
-level "start"
+level "start" {
 BC.
 }
 }
@@ -17630,7 +17637,7 @@ rules {
 once [ box:color | box:color | ] -> [ | box:color | box:color ]
 }
 
-level "start"
+level "start" {
 rb.
 }
 }
@@ -17779,14 +17786,14 @@ rules {
 
 }
 
-level "start"
+level "start" {
 X
 }
 }
 "#;
     let error = parse_game(source).unwrap_err().to_string();
 
-    assert!(error.contains("unknown query function"));
+    assert!(error.contains("unknown query function"), "{error}");
 }
 
 #[test]
@@ -18676,7 +18683,7 @@ level "start"
 
 #[test]
 fn puzzle3_parser_is_available_through_lang_crate() {
-    let parsed = crate::parse_puzzle3d(
+    let document = crate::parse_game_for_path(
         r#"
 puzzle push3 {
   dimension = 3
@@ -18712,22 +18719,35 @@ levels demo of push3 {
   }
 }
 "#,
+        "test.puzzle",
     )
     .unwrap();
+    let Some(LoadedDocumentModel::Puzzle3d {
+        game, presentation, ..
+    }) = document.single_model()
+    else {
+        panic!("expected one 3D puzzle model");
+    };
 
-    assert_eq!(parsed.game.program().len(), 2);
+    assert_eq!(game.game.program().len(), 3);
+    assert_eq!(puzzle_core::flattened_rules(game.game.program()).len(), 9);
+    assert_eq!(game.levels.len(), 1);
+    let fixture_json = crate::export_visual_fixture_json(game, presentation).unwrap();
+    let contract = puzzle_runtime_contract::runtime_contract_from_fixture_json::<
+        puzzle_runtime_contract::GridRuntimeModel<
+            3,
+            puzzle_core::Size3,
+            puzzle_runtime_contract::CameraEffect,
+        >,
+    >(&fixture_json)
+    .unwrap();
     assert_eq!(
-        puzzle_grid3d::flattened_rules(parsed.game.program()).len(),
-        8
+        contract.model.game.program().len(),
+        game.game.program().len()
     );
-    assert_eq!(parsed.level_bundle.as_ref().unwrap().level_count(), 1);
-    let fixture_json = crate::export_visual_fixture_json(&parsed).unwrap();
-    let contract =
-        puzzle_runtime_contract::puzzle3_runtime_model_from_fixture_json(&fixture_json).unwrap();
-    assert_eq!(contract.game.program().len(), parsed.game.program().len());
     assert_eq!(
-        puzzle_grid3d::flattened_rules(contract.game.program()).len(),
-        8
+        puzzle_core::flattened_rules(contract.model.game.program()).len(),
+        9
     );
     assert!(!fixture_json.contains("pushableObjectIds"));
     assert!(!fixture_json.contains("blocksMovement"));
@@ -18778,7 +18798,9 @@ P
             )
             && matches!(
                 document.scenes[0].components.as_slice(),
-                [SceneComponent::Frame(frame)] if frame.kind == "puzzle" && frame.source == "default"
+                [SceneComponent::Viewport(viewport)]
+                    if viewport.projection == ViewportProjectionDef::TwoD
+                        && viewport.source == "default"
             )
             && matches!(
                 &document.scenes[0].puzzle_rule,
@@ -18836,16 +18858,10 @@ scene title {
     assert!(
         matches!(parts.scenes.as_slice(), [default, title] if default.name == "default" && title.name == "title")
     );
-    assert!(!parts.model_source.contains("scene title"));
-    assert!(!parts.model_source.contains("title \"Two Dee\""));
-    assert!(!parts.model_source.contains("sfx push"));
-    let model_game = super::parse_game2d_expanded_lines_with_shell(
-        parts.model_lines,
-        &parts.models,
-        &parts.model_catalogs,
-        &parts.shell,
-    )
-    .unwrap();
+    let model_game = super::parse_model_from_document_parts(parts).unwrap();
+    let super::LoweredModel::Puzzle2d(model_game) = model_game else {
+        panic!("2D source lowered to a 3D model");
+    };
     assert!(model_game.scenes.is_empty());
 }
 
@@ -18984,14 +19000,14 @@ P
             if scene.name == "sokoban"
                 && matches!(
                     scene.state.puzzles.as_slice(),
-                    [puzzle] if puzzle.name == "sokoban" && puzzle.kind == "puzzle" && puzzle.model == "sokoban"
+                    [puzzle] if puzzle.name == "sokoban" && puzzle.model == "sokoban"
                 )
                 && matches!(
                     scene.components.as_slice(),
-                    [SceneComponent::Text(text), SceneComponent::Frame(frame)]
+                    [SceneComponent::Text(text), SceneComponent::Viewport(viewport)]
                         if matches!(&text.content, SceneTextContent::Literal(value) if value == "Ready")
-                            && frame.kind == "puzzle"
-                            && frame.source == "sokoban"
+                            && viewport.projection == ViewportProjectionDef::TwoD
+                            && viewport.source == "sokoban"
                 )
                 && matches!(
                     &scene.puzzle_rule,
@@ -19078,7 +19094,7 @@ scene level_select {
     )
     .unwrap();
 
-    let Some(LoadedDocumentModel::Puzzle3d { name, puzzle }) = document.single_model() else {
+    let Some(LoadedDocumentModel::Puzzle3d { name, game, .. }) = document.single_model() else {
         panic!("expected one 3D puzzle model");
     };
     assert_eq!(document.title, "Three Dee");
@@ -19098,14 +19114,14 @@ scene level_select {
                 && title.layout.aspect_ratio == Some(SceneAspectRatioDef::new(4, 3))
                 && level_select.name == "level_select"
                 && push3.name == "push3"
-                && matches!(push3.state.puzzles.as_slice(), [puzzle] if puzzle.name == "push3" && puzzle.kind == "puzzle3" && puzzle.model == "push3")
-                && matches!(push3.components.as_slice(), [SceneComponent::Frame(frame)] if frame.kind == "puzzle3" && frame.source == "push3")
+                && matches!(push3.state.puzzles.as_slice(), [puzzle] if puzzle.name == "push3" && puzzle.model == "push3")
+                && matches!(push3.components.as_slice(), [SceneComponent::Viewport(viewport)] if viewport.projection == ViewportProjectionDef::ThreeD && viewport.source == "push3")
                 && matches!(&push3.puzzle_rule, Some(ScenePuzzleRule { target, rule }) if target == "push3" && rule == "rules")
     ));
     assert_eq!(name, "push3");
-    assert_eq!(puzzle.game.program().len(), 2);
-    assert_eq!(puzzle.game.rules().len(), 8);
-    assert_eq!(puzzle.level_bundle.as_ref().unwrap().level_count(), 1);
+    assert_eq!(game.game.program().len(), 3);
+    assert_eq!(game.game.rules().len(), 9);
+    assert_eq!(game.levels.len(), 1);
     let fixture_json = crate::export_loaded_document_visual_fixture_json(&document).unwrap();
     assert!(fixture_json.contains("\"title\": \"Three Dee\""));
     assert!(fixture_json.contains("\"theme\": {\"name\":\"clean\""));
@@ -19151,11 +19167,11 @@ levels demo of push3 {
     )
     .unwrap();
 
-    let Some(LoadedDocumentModel::Puzzle3d { puzzle, .. }) = document.single_model() else {
+    let Some(LoadedDocumentModel::Puzzle3d { game, .. }) = document.single_model() else {
         panic!("expected one 3D puzzle model");
     };
-    assert_eq!(puzzle.game.program().len(), 1);
-    assert_eq!(puzzle.game.rules().len(), 6);
+    assert_eq!(game.game.program().len(), 2);
+    assert_eq!(game.game.rules().len(), 7);
 }
 
 #[test]
@@ -19190,13 +19206,13 @@ levels demo of push3 {
     assert_eq!(document.theme.name.as_deref(), Some("puzzlescript"));
     assert!(matches!(
         document.models.as_slice(),
-        [LoadedDocumentModel::Puzzle3d { name, puzzle }]
-            if name == "push3" && puzzle.level_bundle.as_ref().unwrap().level_count() == 1
+        [LoadedDocumentModel::Puzzle3d { name, game, .. }]
+            if name == "push3" && game.levels.len() == 1
     ));
 }
 
 #[test]
-fn document_runtime_sources_route_puzzles_by_owner_dimension() {
+fn canonical_document_associates_resources_by_puzzle_owner() {
     let source = r#"
 title = "Mixed Runtime"
 theme = "puzzlescript"
@@ -19245,15 +19261,15 @@ puzzle cube_board = cube
 }
 "#;
 
-    let sources = super::split_document_runtime_sources(source).unwrap();
-
-    assert!(sources.model_2d.contains("puzzle flat"));
-    assert!(sources.model_2d.contains("levels flat_levels"));
-    assert!(!sources.model_2d.contains("scene mixed_play"));
-    assert!(!sources.model_2d.contains("puzzle cube {"));
-    assert!(sources.model_2d.contains("levels cube_levels"));
-    assert!(sources.model_3d.contains("puzzle cube {"));
-    assert!(!sources.model_3d.contains("puzzle flat {"));
+    let parts = super::parse_document_source_parts(source).unwrap();
+    let [flat, cube] = parts.models.as_slice() else {
+        panic!("expected two canonical puzzle models")
+    };
+    assert_eq!(flat.dimension, ModelDimension::Two);
+    assert_eq!(cube.dimension, ModelDimension::Three);
+    assert_eq!(flat.body.levels.levels[0].puzzle.as_deref(), Some("flat"));
+    assert_eq!(cube.body.levels.levels[0].puzzle.as_deref(), Some("cube"));
+    assert!(parts.scenes.iter().any(|scene| scene.name == "mixed_play"));
 }
 
 #[test]
@@ -19294,14 +19310,14 @@ P
             if scene.name == "push3"
                 && matches!(
                     scene.state.puzzles.as_slice(),
-                    [puzzle] if puzzle.name == "push3" && puzzle.kind == "puzzle3" && puzzle.model == "push3"
+                    [puzzle] if puzzle.name == "push3" && puzzle.model == "push3"
                 )
                 && matches!(
                     scene.components.as_slice(),
-                    [SceneComponent::Text(text), SceneComponent::Frame(frame)]
+                    [SceneComponent::Text(text), SceneComponent::Viewport(viewport)]
                         if matches!(&text.content, SceneTextContent::Literal(value) if value == "Ready")
-                            && frame.kind == "puzzle3"
-                            && frame.source == "push3"
+                            && viewport.projection == ViewportProjectionDef::ThreeD
+                            && viewport.source == "push3"
                 )
                 && matches!(
                     &scene.puzzle_rule,
@@ -19310,8 +19326,8 @@ P
     ));
     assert!(matches!(
         &document.models[0],
-        LoadedDocumentModel::Puzzle3d { name, puzzle }
-            if name == "push3" && puzzle.level_bundle.as_ref().unwrap().level_count() == 1
+        LoadedDocumentModel::Puzzle3d { name, game, .. }
+            if name == "push3" && game.levels.len() == 1
     ));
 }
 
@@ -19356,8 +19372,12 @@ messag "END"
     let diagnostic = report
         .diagnostics()
         .iter()
-        .find(|diagnostic| diagnostic.message.contains("effect must be"))
-        .expect("shared scene effect diagnostic");
+        .find(|diagnostic| {
+            diagnostic
+                .message
+                .contains("unknown statement directive messag")
+        })
+        .expect("shared puzzle statement diagnostic");
     let expected_line = source
         .lines()
         .position(|line| line.trim() == r#"messag "END""#)
@@ -19377,7 +19397,7 @@ messag "END"
 }
 
 #[test]
-fn scene_state_implicit_puzzle_slots_resolve_against_model_kind() {
+fn scene_viewports_resolve_projection_from_their_world_dimension() {
     let flat_document = super::parse_game(
         r#"
 title = Implicit Flat Slot
@@ -19416,7 +19436,6 @@ flat
         flat_play.state.puzzles.as_slice(),
         [flat]
             if flat.name == "flat"
-                && flat.kind == "puzzle"
                 && flat.model == "flat"
     ));
 
@@ -19461,18 +19480,17 @@ cube
         cube_play.state.puzzles.as_slice(),
         [cube]
             if cube.name == "cube"
-                && cube.kind == "puzzle3"
                 && cube.model == "cube"
     ));
     assert!(cube_document.scenes.iter().any(|scene| {
         scene.name == "cube"
             && matches!(
                 scene.state.puzzles.as_slice(),
-                [puzzle] if puzzle.name == "cube" && puzzle.kind == "puzzle3" && puzzle.model == "cube"
+                [puzzle] if puzzle.name == "cube" && puzzle.model == "cube"
             )
             && matches!(
                 scene.components.as_slice(),
-                [SceneComponent::Frame(frame)] if frame.kind == "puzzle3" && frame.source == "cube"
+                [SceneComponent::Viewport(viewport)] if viewport.projection == ViewportProjectionDef::ThreeD && viewport.source == "cube"
             )
     }));
 }
@@ -19616,7 +19634,7 @@ rules {
 
 #[test]
 fn puzzle3_parser_rejects_old_model_prefix() {
-    let error = crate::parse_puzzle3d(
+    let error = crate::parse_game_for_path(
         r#"
 model puzzle3 push3 {
   slots {
@@ -19627,13 +19645,14 @@ model puzzle3 push3 {
   }
 }
 "#,
+        "test.puzzle",
     )
     .unwrap_err();
 
+    let error = error.to_string();
     assert!(
-        error
-            .to_string()
-            .contains("3D lowering requires exactly one `puzzle <name> { ... }` declaration")
+        error.contains("top-level puzzle definition must be: puzzle <name>"),
+        "{error}"
     );
 }
 

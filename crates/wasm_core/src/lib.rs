@@ -77,8 +77,8 @@ impl WasmCompiledCoreRuntime {
         let before = state.clone();
         let outcome = puzzle_core::transition_program_outcome(
             &self.engine.game,
-            program,
             state,
+            program,
             InputId(input),
         )
         .map_err(|error| JsValue::from_str(&format!("{error:?}")))?;
@@ -102,11 +102,11 @@ impl WasmCompiledCoreRuntime {
 
 pub struct CompiledEngine {
     game: CompiledGame,
-    level_start_program: Vec<RuleStep>,
-    level_clear_program: Vec<RuleStep>,
-    level_start_programs: Vec<Vec<RuleStep>>,
-    level_clear_programs: Vec<Vec<RuleStep>>,
-    level_main_programs: Vec<Vec<RuleStep>>,
+    level_start_program: puzzle_core::ExecutableProgram,
+    level_clear_program: puzzle_core::ExecutableProgram,
+    level_start_programs: Vec<puzzle_core::ExecutableProgram>,
+    level_clear_programs: Vec<puzzle_core::ExecutableProgram>,
+    level_main_programs: Vec<puzzle_core::ExecutableProgram>,
 }
 
 impl CompiledEngine {
@@ -117,15 +117,16 @@ impl CompiledEngine {
     pub fn game_for_level(&self, level_index: usize) -> Option<CompiledGame> {
         self.level_main_programs
             .get(level_index)
-            .map(|program| self.game.clone_with_program(program.clone()))
+            .cloned()
+            .map(|program| self.game.clone_with_executable_program(program))
     }
 
-    pub fn program(&self, key: &str, level_index: i32) -> Option<&[RuleStep]> {
+    pub fn program(&self, key: &str, level_index: i32) -> Option<&puzzle_core::ExecutableProgram> {
         match key {
             "main" | "run_rules_on_level_start" if level_index >= 0 => {
                 level_program(&self.level_main_programs, level_index)
             }
-            "main" | "run_rules_on_level_start" => Some(self.game.program()),
+            "main" | "run_rules_on_level_start" => Some(self.game.executable_program()),
             "level_start" => Some(&self.level_start_program),
             "level_clear" => Some(&self.level_clear_program),
             "level_start_local" => level_program(&self.level_start_programs, level_index),
@@ -135,9 +136,12 @@ impl CompiledEngine {
     }
 }
 
-fn level_program(programs: &[Vec<RuleStep>], level_index: i32) -> Option<&[RuleStep]> {
+fn level_program(
+    programs: &[puzzle_core::ExecutableProgram],
+    level_index: i32,
+) -> Option<&puzzle_core::ExecutableProgram> {
     let index = usize::try_from(level_index).ok()?;
-    programs.get(index).map(Vec::as_slice)
+    programs.get(index)
 }
 
 fn save_state(states: &mut Vec<Option<State>>, state: State) -> u32 {
@@ -203,26 +207,24 @@ pub fn decode_compiled_play(value: &Value) -> Result<CompiledEngine, String> {
     let mut level_main_programs = Vec::with_capacity(level_programs.len());
     for (index, entry) in level_programs.iter().enumerate() {
         let entry = value_array(entry, &format!("level program {index}"))?;
-        level_start_programs.push(decode_compact_program(value_at(
-            entry,
-            0,
-            "level start local program",
-        )?)?);
-        level_clear_programs.push(decode_compact_program(value_at(
-            entry,
-            1,
-            "level clear local program",
-        )?)?);
-        level_main_programs.push(decode_compact_program(value_at(
-            entry,
-            2,
-            "level main program",
-        )?)?);
+        level_start_programs.push(puzzle_core::ExecutableProgram::new(decode_compact_program(
+            value_at(entry, 0, "level start local program")?,
+        )?));
+        level_clear_programs.push(puzzle_core::ExecutableProgram::new(decode_compact_program(
+            value_at(entry, 1, "level clear local program")?,
+        )?));
+        level_main_programs.push(puzzle_core::ExecutableProgram::new(decode_compact_program(
+            value_at(entry, 2, "level main program")?,
+        )?));
     }
     Ok(CompiledEngine {
         game,
-        level_start_program: decode_compact_program(value_at(programs, 1, "level start program")?)?,
-        level_clear_program: decode_compact_program(value_at(programs, 2, "level clear program")?)?,
+        level_start_program: puzzle_core::ExecutableProgram::new(decode_compact_program(
+            value_at(programs, 1, "level start program")?,
+        )?),
+        level_clear_program: puzzle_core::ExecutableProgram::new(decode_compact_program(
+            value_at(programs, 2, "level clear program")?,
+        )?),
         level_start_programs,
         level_clear_programs,
         level_main_programs,
@@ -496,19 +498,14 @@ fn decode_compact_offset(value: &Value) -> Result<Offset, String> {
             delta: [i16_at(items, 1, "dx")?, i16_at(items, 2, "dy")?].into(),
         }),
         1 => Ok(Offset::Variable {
-            base: [
-                i16_at(items, 1, "base dx")?,
-                i16_at(items, 2, "base dy")?,
-            ]
-            .into(),
+            base: [i16_at(items, 1, "base dx")?, i16_at(items, 2, "base dy")?].into(),
             gap_terms: value_array(value_at(items, 3, "gap terms")?, "gap terms")?
                 .iter()
                 .map(|term| {
                     let term = value_array(term, "gap term")?;
                     Ok(GapTerm {
                         gap_index: u16_at(term, 0, "gap index")?,
-                        delta: [i16_at(term, 1, "dx")?, i16_at(term, 2, "dy")?]
-                            .into(),
+                        delta: [i16_at(term, 1, "dx")?, i16_at(term, 2, "dy")?].into(),
                     })
                 })
                 .collect::<Result<Vec<_>, String>>()?,

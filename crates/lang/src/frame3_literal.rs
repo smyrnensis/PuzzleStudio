@@ -1,8 +1,11 @@
 use std::collections::HashSet;
 
-use puzzle_grid3d::{Direction3, Frame3};
+use crate::{
+    ModelDimension,
+    spatial_orientation::{SpatialDomain, SpatialFrame},
+};
 
-pub(crate) fn parse_frame3_literal(value: &str) -> Result<Frame3, String> {
+pub(crate) fn parse_frame3_literal(value: &str) -> Result<SpatialFrame, String> {
     let value = value.trim();
     let inner = value
         .strip_prefix('(')
@@ -13,7 +16,7 @@ pub(crate) fn parse_frame3_literal(value: &str) -> Result<Frame3, String> {
     parse_frame3_components(inner)
 }
 
-pub(crate) fn parse_frame3_orientation_sugar(value: &str) -> Result<Frame3, String> {
+pub(crate) fn parse_frame3_orientation_sugar(value: &str) -> Result<SpatialFrame, String> {
     parse_frame3_components(value.trim())
 }
 
@@ -46,14 +49,21 @@ pub(crate) fn parse_frame3_domain(body: &str) -> Result<Option<Vec<String>>, Str
     Ok(recognized.then_some(values))
 }
 
-pub(crate) fn format_frame3(frame: Frame3) -> String {
+pub(crate) fn format_frame3(frame: SpatialFrame) -> String {
+    let domain = SpatialDomain::new(ModelDimension::Three);
+    let primary = domain
+        .direction_name(frame.axis(0))
+        .expect("spatial frame primary axis is canonical");
+    let secondary = domain
+        .direction_name(frame.axis(1))
+        .expect("spatial frame secondary axis is canonical");
     if frame.is_canonical_chiral() {
-        format!("({},{})", frame.primary.name, frame.secondary.name)
+        format!("({primary},{secondary})")
     } else {
-        format!(
-            "({},{},{})",
-            frame.primary.name, frame.secondary.name, frame.depth.name
-        )
+        let depth = domain
+            .direction_name(frame.axis(2))
+            .expect("spatial frame depth axis is canonical");
+        format!("({},{},{})", primary, secondary, depth)
     }
 }
 
@@ -65,23 +75,20 @@ pub(crate) fn split_frame3_components(value: &str) -> Result<Vec<&str>, String> 
     Ok(parts)
 }
 
-fn parse_frame3_components(value: &str) -> Result<Frame3, String> {
+fn parse_frame3_components(value: &str) -> Result<SpatialFrame, String> {
     let parts = split_frame3_components(value)?;
-    let directions = parts
-        .iter()
-        .map(|part| {
-            Direction3::by_name(part).ok_or_else(|| format!("unknown frame3 direction: {part}"))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    if directions.len() == 2 {
-        Frame3::canonical(directions[0], directions[1])
-    } else {
-        Frame3::explicit(directions[0], directions[1], directions[2])
+    let domain = SpatialDomain::new(ModelDimension::Three);
+    for part in &parts {
+        if domain.direction_vector(part).is_none() {
+            return Err(format!("unknown frame3 direction: {part}"));
+        }
     }
-    .map_err(|error| format!("invalid frame3 orientation: {error:?}"))
+    domain
+        .frame_from_names(parts[0], parts[1], parts.get(2).copied())
+        .map_err(|error| format!("invalid frame3 orientation: {error}"))
 }
 
-fn parse_domain_item(body: &str, start: usize) -> Result<Option<(Frame3, usize)>, String> {
+fn parse_domain_item(body: &str, start: usize) -> Result<Option<(SpatialFrame, usize)>, String> {
     if body[start..].starts_with('(') {
         let Some(relative_end) = body[start + 1..].find(')') else {
             return Err("frame3 value is missing closing )".to_string());
@@ -97,7 +104,10 @@ fn parse_domain_item(body: &str, start: usize) -> Result<Option<(Frame3, usize)>
     let Some((first, mut cursor)) = parse_identifier(body, start) else {
         return Ok(None);
     };
-    if Direction3::by_name(first).is_none() {
+    if SpatialDomain::new(ModelDimension::Three)
+        .direction_vector(first)
+        .is_none()
+    {
         return Ok(None);
     }
     cursor = skip_whitespace(body, cursor);
@@ -131,7 +141,9 @@ fn parenthesized_item_starts_with_direction(value: &str) -> bool {
         .unwrap_or(value);
     inner
         .split_once(',')
-        .and_then(|(first, _)| Direction3::by_name(first.trim()))
+        .and_then(|(first, _)| {
+            SpatialDomain::new(ModelDimension::Three).direction_vector(first.trim())
+        })
         .is_some()
 }
 

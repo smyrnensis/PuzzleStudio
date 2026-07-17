@@ -175,7 +175,7 @@ fn translates_basic_vanilla_puzzlescript_to_canonical_fixture() {
 }
 
 #[test]
-fn puzzlescript_import_adds_background_to_every_level_legend_entry_without_empty() {
+fn puzzlescript_import_remaps_reserved_dot_background_in_legend_and_levels() {
     let source = r#"
 title Background Legend
 
@@ -200,17 +200,70 @@ Player
 LEVELS
 
 .P
+
+message between levels
+
+P.
 "#;
 
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
 
+    let background_char = translated
+        .lines()
+        .find_map(|line| {
+            let (left, right) = line.trim().split_once('=')?;
+            let mut chars = left.trim().chars();
+            let ch = chars.next()?;
+            (chars.next().is_none() && right.trim() == "Background").then_some(ch)
+        })
+        .expect("imported background legend char");
+    assert_ne!(background_char, '.');
     assert!(
-        translated.contains("levels {\nlegend {\n. = Background\nP = Player Background\n}"),
+        translated.contains(&format!("{background_char}P")),
         "{translated}"
     );
+    assert!(
+        translated.contains(&format!("P{background_char}")),
+        "{translated}"
+    );
+    assert!(!translated.contains(". = Background"), "{translated}");
     assert!(!translated.contains("= empty"));
     assert!(!translated.contains("once_all [ no Background ] -> [ Background ]"));
     parse_game(&translated).expect("background-legended imported game should parse");
+}
+
+#[test]
+fn puzzlescript_import_remaps_reserved_dot_object_shorthand() {
+    let source = r#"
+title Dot Object Shorthand
+
+OBJECTS
+
+Background .
+black
+
+Player P
+blue
+
+LEGEND
+
+P = Background and Player
+
+COLLISIONLAYERS
+
+Background
+Player
+
+LEVELS
+
+.P
+"#;
+
+    let translated = translate_puzzlescript_to_canonical(source).unwrap();
+
+    assert!(!translated.contains(". = Background"), "{translated}");
+    assert!(!translated.contains("\n.P\n"), "{translated}");
+    parse_game(&translated).expect("dot object shorthand should be remapped before compile");
 }
 
 #[test]
@@ -332,7 +385,9 @@ fn translated_basic_vanilla_puzzlescript_parses_as_loaded_game() {
     ));
     assert!(playing_scene.components.iter().any(|component| matches!(
         component,
-        SceneComponent::Frame(frame) if frame.kind == "puzzle" && frame.source == "board"
+        SceneComponent::Viewport(viewport)
+            if viewport.projection == puzzle_lang::ViewportProjectionDef::TwoD
+                && viewport.source == "board"
     )));
     assert!(
         playing_scene
@@ -521,8 +576,16 @@ rules {
         .collect::<Vec<_>>();
 
     assert_eq!(requirements.len(), 2);
-    assert!(requirements.iter().any(|objects| objects == &[c, a]));
-    assert!(requirements.iter().any(|objects| objects == &[c, b]));
+    assert!(
+        requirements
+            .iter()
+            .any(|objects| { objects.len() == 2 && objects.contains(&c) && objects.contains(&a) })
+    );
+    assert!(
+        requirements
+            .iter()
+            .any(|objects| { objects.len() == 2 && objects.contains(&c) && objects.contains(&b) })
+    );
     assert!(!requirements.iter().any(|objects| objects == &[a]));
     assert!(!requirements.iter().any(|objects| objects == &[a, b]));
 }
@@ -832,41 +895,56 @@ P..
 }
 
 #[test]
-fn routine_once_does_not_force_inner_rewrites_to_once() {
+fn puzzlescript_subroutine_uses_canonical_routine_default() {
     let source = r#"
-title = routine_once_repeat_fixture
+title PuzzleScript Subroutine Default
 
-puzzle main {
-slots {
-  layer_1 = A
-}
+OBJECTS
 
-routine spread once {
-  [ A | ] -> [ A | A ]
-}
+Background
+black
 
-rules {
-  spread
-}
+Player
+blue
 
-levels {
-  legend {
-    A = A
-    . = empty
-  }
+A
+red
 
-  A...
-}
-}
+LEGEND
+
+. = Background
+P = Player
+A = A
+
+COLLISIONLAYERS
+
+Background
+Player
+A
+
+RULES
+
+[ A ] -> gosub spread
+
+subroutine spread
+[ A | no A ] -> [ A | A ]
+
+LEVELS
+
+A...
 "#;
 
-    let loaded = parse_game(source).unwrap();
+    let translated = translate_puzzlescript_to_canonical(source).unwrap();
+    assert!(translated.contains("routine spread {"));
+    assert!(!translated.contains("routine spread once {"));
+
+    let loaded = parse_game(&translated).unwrap();
     let object = object_named(&loaded, "A");
 
     let moved = transition_program(
         &loaded.game,
-        loaded.game.program(),
         &loaded.levels[0].initial_state,
+        loaded.game.executable_program(),
         InputId(0),
     )
     .unwrap();
@@ -1460,8 +1538,8 @@ LEVELS
     let wall = object_named(&loaded, "Wall");
     let started = transition_program(
         &loaded.game,
-        loaded.level_start_program.as_deref().unwrap(),
         &loaded.levels[0].initial_state,
+        loaded.level_start_program.as_ref().unwrap(),
         InputId(0),
     )
     .unwrap();
@@ -1574,8 +1652,8 @@ E..
     let beam = object_named(&loaded, "Beam");
     let started = transition_program(
         &loaded.game,
-        loaded.level_start_program.as_deref().unwrap(),
         &loaded.levels[0].initial_state,
+        loaded.level_start_program.as_ref().unwrap(),
         InputId(0),
     )
     .unwrap();

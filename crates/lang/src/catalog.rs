@@ -6,6 +6,7 @@ use puzzle_core::{
 
 #[derive(Clone, Debug)]
 pub(crate) struct Catalog {
+    pub(crate) dimension: crate::ModelDimension,
     pub(crate) layer_count: Option<u16>,
     pub(crate) named_layers: HashMap<String, u16>,
     pub(crate) value_sets: HashMap<String, Vec<String>>,
@@ -64,6 +65,16 @@ impl Catalog {
             "vertical".to_string(),
             ["up", "down"].into_iter().map(str::to_string).collect(),
         );
+        if dimension == crate::ModelDimension::Two {
+            value_sets.insert(
+                "parallel".to_string(),
+                ["<", ">"].into_iter().map(str::to_string).collect(),
+            );
+            value_sets.insert(
+                "perpendicular".to_string(),
+                ["^", "v"].into_iter().map(str::to_string).collect(),
+            );
+        }
 
         let anonymous_movement = MarkDef {
             id: MarkId(0),
@@ -97,6 +108,7 @@ impl Catalog {
         mark_names.insert("__move_collision".to_string(), move_collision.clone());
 
         Self {
+            dimension,
             layer_count: None,
             named_layers: HashMap::new(),
             value_sets,

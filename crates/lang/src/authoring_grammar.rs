@@ -36,6 +36,7 @@ pub(crate) enum AuthoringRowKind {
     ViewportZoomscreen,
     ViewportSmoothscreen,
     ViewportFocus,
+    SoundTrigger,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -424,6 +425,7 @@ pub(crate) struct AuthoringNode {
     pub(crate) content_rows: Vec<AuthoringContentRow>,
     pub(crate) source_line: String,
     pub(crate) source_index: usize,
+    pub(crate) closing_index: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -553,6 +555,31 @@ const PUZZLE_RENDER_VIEWPORT_ROWS: &[RowSpec] = &[
         kind: AuthoringRowKind::ViewportFocus,
         parts: VIEWPORT_FOCUS_ROW_PARTS,
         usage: "focus <selector>",
+    },
+];
+const SOUND_TRIGGER_ROW_PARTS: &[RowPartSpec] = &[
+    row_slot("input", AuthoringSurfaceRole::Keyword),
+    row_keyword("->"),
+    row_keyword("sfx"),
+    row_slot("asset", AuthoringSurfaceRole::Asset),
+];
+const SOUND_TRIGGER_SELECTOR_ROW_PARTS: &[RowPartSpec] = &[
+    row_slot("input", AuthoringSurfaceRole::Keyword),
+    row_slot("selector", AuthoringSurfaceRole::Object),
+    row_keyword("->"),
+    row_keyword("sfx"),
+    row_slot("asset", AuthoringSurfaceRole::Asset),
+];
+const SOUND_TRIGGER_ROWS: &[RowSpec] = &[
+    RowSpec {
+        kind: AuthoringRowKind::SoundTrigger,
+        parts: SOUND_TRIGGER_ROW_PARTS,
+        usage: "<input> -> sfx <asset>",
+    },
+    RowSpec {
+        kind: AuthoringRowKind::SoundTrigger,
+        parts: SOUND_TRIGGER_SELECTOR_ROW_PARTS,
+        usage: "<input> <selector> -> sfx <asset>",
     },
 ];
 const ASSETS_PATH_ROW_PARTS: &[RowPartSpec] = &[RowPartSpec::Slot {
@@ -1151,7 +1178,7 @@ pub(crate) const KIND_SPECS: &[KindSpec] = &[
         kind: AuthoringKind::SoundsConfig,
         header: SOUNDS_HEADER,
         definitions: NO_DEFINITIONS,
-        rows: NO_ROWS,
+        rows: SOUND_TRIGGER_ROWS,
         body: AuthoringBody::None,
         symbol_exports: NO_SYMBOL_EXPORTS,
         block_role: None,
@@ -2030,6 +2057,7 @@ pub(crate) fn parse_authoring_node_with_kind(
         content_rows: Vec::new(),
         source_line: line.text.clone(),
         source_index: start,
+        closing_index: start,
     };
 
     if !is_block_header_line(line) {
@@ -2049,6 +2077,7 @@ pub(crate) fn parse_authoring_node_with_kind(
     while i < lines.len() {
         let line = &lines[i];
         if is_block_close_line(line) {
+            node.closing_index = i;
             return Ok((node, i + 1));
         }
         let tokens = split_authoring_tokens(line);
@@ -2111,29 +2140,6 @@ pub(crate) fn parse_authoring_node_with_kind(
         missing_close_message,
         lines[start].as_ref(),
     ))
-}
-
-pub(crate) fn parse_authoring_node_source(
-    source: &str,
-    kind: AuthoringKind,
-) -> Result<AuthoringNode, DiagnosticReport> {
-    let lines = crate::source::logical_lines_with_locations(source)?;
-    if lines.is_empty() {
-        return Err(DiagnosticReport::error_at_line(
-            "authoring node source is empty",
-            source,
-        ));
-    }
-    let (node, next_i) =
-        parse_authoring_node_with_kind(&lines, 0, kind, missing_close_message_for_kind(kind))?;
-    if next_i == lines.len() {
-        Ok(node)
-    } else {
-        Err(DiagnosticReport::error_at_line(
-            "authoring node source must contain one node",
-            lines[next_i].as_ref(),
-        ))
-    }
 }
 
 pub(crate) fn parse_authoring_row(

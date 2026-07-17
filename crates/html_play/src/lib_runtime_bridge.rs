@@ -108,7 +108,7 @@ impl CoreRuntimeBridge {
             .ok_or_else(|| "2D runtime current state has not been initialized".to_string())?;
         let program = selected_rule_program(&self.loaded, program_key, level_index)
             .map_err(|error| error.to_string())?;
-        let outcome = transition_program_trace(&self.loaded.game, program, state, InputId(input))
+        let outcome = transition_program_outcome(&self.loaded.game, state, program, InputId(input))
             .map_err(|error| format!("{error:?}"))?;
         let before = state.clone();
         let previous_state_handle = if program_key == "main" && before != outcome.next_state {
@@ -132,64 +132,7 @@ impl CoreRuntimeBridge {
     }
 }
 
-pub struct Puzzle3RuntimeBridge {
-    inner: puzzle_game_runtime::Puzzle3RuntimeBridge,
-}
-
-impl Puzzle3RuntimeBridge {
-    pub fn from_source(source: &str) -> Result<Self, String> {
-        Ok(Self {
-            inner: puzzle_game_runtime::Puzzle3RuntimeBridge::from_source(source)?,
-        })
-    }
-
-    pub fn transition_program_outcome_json(
-        &self,
-        program_key: &str,
-        state_json: &str,
-        input: u16,
-    ) -> Result<String, String> {
-        self.inner
-            .transition_program_outcome_json(program_key, state_json, input)
-    }
-
-    pub fn is_complete_json(&self, state_json: &str) -> Result<bool, String> {
-        self.inner.is_complete_json(state_json)
-    }
-
-    pub fn set_state_json(&mut self, state_json: &str) -> Result<(), String> {
-        self.inner.set_state_json(state_json)
-    }
-
-    pub fn current_state_json(&self) -> Result<String, String> {
-        self.inner.current_state_json()
-    }
-
-    pub fn current_cells_json(&self) -> Result<String, String> {
-        self.inner.current_cells_json()
-    }
-
-    pub fn save_current_state(&mut self) -> Result<u32, String> {
-        self.inner.save_current_state()
-    }
-
-    pub fn restore_saved_state(&mut self, handle: u32) -> Result<(), String> {
-        self.inner.restore_saved_state(handle)
-    }
-
-    pub fn transition_current_outcome_json(
-        &mut self,
-        program_key: &str,
-        input: u16,
-    ) -> Result<String, String> {
-        self.inner
-            .transition_current_outcome_json(program_key, input)
-    }
-
-    pub fn is_current_complete(&self) -> Result<bool, String> {
-        self.inner.is_current_complete()
-    }
-}
+pub use puzzle_game_runtime::GridRuntimeBridge;
 
 struct SavedStateStore<T> {
     states: Vec<Option<T>>,
@@ -244,7 +187,7 @@ fn transition_program_outcome_json_inner(
 ) -> Result<String, AppError> {
     let state = state_from_json(loaded, state_json)?;
     let program = selected_rule_program(loaded, program_key, level_index)?;
-    let outcome = transition_program_trace(&loaded.game, program, &state, input)?;
+    let outcome = transition_program_outcome(&loaded.game, &state, program, input)?;
     runtime_transition_program_outcome_json(
         loaded,
         &outcome.next_state,
@@ -259,39 +202,53 @@ fn selected_rule_program<'a>(
     loaded: &'a LoadedGame,
     program_key: &str,
     level_index: i32,
-) -> Result<&'a [RuleStep], AppError> {
+) -> Result<&'a puzzle_core::ExecutableProgram, AppError> {
     match program_key {
         "main" | "run_rules_on_level_start" => {
             if level_index < 0 {
-                return Ok(loaded.game.program());
+                return Ok(loaded.game.executable_program());
             }
             let index = usize::try_from(level_index)
                 .map_err(|_| AppError::Config("main program requires a level index".to_string()))?;
-            loaded.program_for_level(index).ok_or_else(|| {
+            loaded.executable_program_for_level(index).ok_or_else(|| {
                 AppError::Config(format!("main program level index out of range: {index}"))
             })
         }
-        "level_start" => Ok(loaded.level_start_program.as_deref().unwrap_or(&[])),
-        "level_clear" => Ok(loaded.level_clear_program.as_deref().unwrap_or(&[])),
+        "level_start" => loaded
+            .level_start_program
+            .as_ref()
+            .ok_or_else(|| AppError::Config("level_start program is not declared".to_string())),
+        "level_clear" => loaded
+            .level_clear_program
+            .as_ref()
+            .ok_or_else(|| AppError::Config("level_clear program is not declared".to_string())),
         "level_start_local" => {
             let index = usize::try_from(level_index).map_err(|_| {
                 AppError::Config("level_start_local requires a level index".to_string())
             })?;
-            Ok(loaded
+            loaded
                 .levels
                 .get(index)
-                .and_then(|level| level.level_start_program.as_deref())
-                .unwrap_or(&[]))
+                .and_then(|level| level.level_start_program.as_ref())
+                .ok_or_else(|| {
+                    AppError::Config(format!(
+                        "level_start_local program is not declared for level {index}"
+                    ))
+                })
         }
         "level_clear_local" => {
             let index = usize::try_from(level_index).map_err(|_| {
                 AppError::Config("level_clear_local requires a level index".to_string())
             })?;
-            Ok(loaded
+            loaded
                 .levels
                 .get(index)
-                .and_then(|level| level.level_clear_program.as_deref())
-                .unwrap_or(&[]))
+                .and_then(|level| level.level_clear_program.as_ref())
+                .ok_or_else(|| {
+                    AppError::Config(format!(
+                        "level_clear_local program is not declared for level {index}"
+                    ))
+                })
         }
         other => Err(AppError::Config(format!(
             "unknown transition program selector: {other}"
@@ -313,6 +270,11 @@ fn runtime_transition_program_outcome_json(
         cancelled,
         completed: loaded.is_goal_complete(state),
         commands: transition_commands_contract(commands),
+        effects: puzzle_play::runtime_effects_for_outcome(
+            &loaded.rule_effects,
+            commands,
+            fired_rules,
+        ),
         fired_rules: fired_rules.iter().map(|rule| rule.0).collect(),
         patches: patches_contract_2d(patches),
         animation_events: animation_events_contract_2d(loaded, &animation_events),
@@ -343,6 +305,11 @@ fn runtime_transition_current_outcome_json(
             None
         },
         commands: transition_commands_contract(commands),
+        effects: puzzle_play::runtime_effects_for_outcome(
+            &loaded.rule_effects,
+            commands,
+            fired_rules,
+        ),
         fired_rules: fired_rules.iter().map(|rule| rule.0).collect(),
         patches: patches_contract_2d(patches),
         animation_events: animation_events_contract_2d(loaded, &animation_events),
@@ -829,16 +796,16 @@ fn solve_request3_json_from_source_inner(
                 .to_string(),
         ));
     }
-    let parsed = parse_puzzle3d_for_solver(source)?;
-    validate_solver_request_level3d(&parsed, target)?;
-    let mut state = state3_from_json(&parsed.game, state_json)?;
+    let model = parse_spatial_model_for_solver(source)?;
+    validate_solver_request_level3d(&model, target)?;
+    let mut state = state3_from_json(&model.game, state_json)?;
     if solver_request_materializes_level_start(target_state)? {
-        state = materialize_level_start_state3(&parsed, state)?;
+        state = materialize_level_start_state3(&model, state)?;
     }
     let budget = solver_request_budget(max_depth, max_nodes, max_ms)?;
-    let response = solve_current_state3_with_budget(&parsed, state, budget)?;
+    let response = solve_current_state3_with_budget(&model, state, budget)?;
     let mut out = String::new();
-    push_solution_response3(&mut out, &parsed, &response);
+    push_spatial_solution_response(&mut out, &model, &response);
     Ok(out)
 }
 
@@ -916,7 +883,7 @@ fn materialize_compiled_level_start_state(
         AppError::Config("compiled solver task missing level_start program".to_string())
     })?;
     if !level_start.is_empty() {
-        let outcome = transition_program_outcome(engine.game(), level_start, &state, InputId(0))?;
+        let outcome = transition_program_outcome(engine.game(), &state, level_start, InputId(0))?;
         state = outcome.next_state;
         cancelled |= outcome.cancelled;
     } else if run_rules_on_level_start {
@@ -929,7 +896,7 @@ fn materialize_compiled_level_start_state(
                     "compiled solver task missing main program for level {level_index}"
                 ))
             })?;
-        let outcome = transition_program_outcome(engine.game(), program, &state, InputId(0))?;
+        let outcome = transition_program_outcome(engine.game(), &state, program, InputId(0))?;
         state = outcome.next_state;
         cancelled |= outcome.cancelled;
     }
@@ -944,7 +911,7 @@ fn materialize_compiled_level_start_state(
                 ))
             })?;
         if !local.is_empty() {
-            let outcome = transition_program_outcome(engine.game(), local, &state, InputId(0))?;
+            let outcome = transition_program_outcome(engine.game(), &state, local, InputId(0))?;
             state = outcome.next_state;
         }
     }
@@ -1331,17 +1298,13 @@ fn validate_solver_request_level2d(
 
 #[cfg(feature = "solver")]
 fn validate_solver_request_level3d(
-    parsed: &ParsedPuzzle3,
+    model: &LoadedGridGame<3, Size3>,
     target: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<usize, AppError> {
     validate_solver_target_origin(target)?;
     let level = required_json_object(target, "level")?;
     let index = json_usize_value(level.get("index"), "level.index")?;
-    let bundle = parsed
-        .level_bundle
-        .as_ref()
-        .ok_or_else(|| AppError::Config("3D solver target requires levels".to_string()))?;
-    let expected = bundle.levels.get(index).ok_or_else(|| {
+    let expected = model.levels.get(index).ok_or_else(|| {
         AppError::Config(format!(
             "3D solver target level index out of range: {index}"
         ))
@@ -1713,10 +1676,10 @@ fn solve_state3_json_from_source_inner(
     max_nodes: usize,
     max_ms: u64,
 ) -> Result<String, AppError> {
-    let parsed = parse_puzzle3d_for_solver(source)?;
-    let state = state3_from_json(&parsed.game, state_json)?;
-    let state = if level_index_from_state3_json(&parsed, state_json).is_some() {
-        materialize_level_start_state3(&parsed, state)?
+    let model = parse_spatial_model_for_solver(source)?;
+    let state = state3_from_json(&model.game, state_json)?;
+    let state = if level_index_from_state3_json(&model, state_json).is_some() {
+        materialize_level_start_state3(&model, state)?
     } else {
         state
     };
@@ -1730,20 +1693,22 @@ fn solve_state3_json_from_source_inner(
             max_duration: None,
         }
     };
-    let response = solve_current_state3_with_budget(&parsed, state, budget)?;
+    let response = solve_current_state3_with_budget(&model, state, budget)?;
     let mut out = String::new();
-    push_solution_response3(&mut out, &parsed, &response);
+    push_spatial_solution_response(&mut out, &model, &response);
     Ok(out)
 }
 
 #[cfg(feature = "solver")]
-fn parse_puzzle3d_for_solver(source: &str) -> Result<ParsedPuzzle3, AppError> {
-    let document = puzzle_lang::parse_game_for_path(source, "solver.puzzle3")?;
+fn parse_spatial_model_for_solver(
+    source: &str,
+) -> Result<LoadedGridGame<3, Size3>, AppError> {
+    let document = puzzle_lang::parse_game_for_path(source, "solver.puzzle")?;
     document
         .models
         .into_iter()
         .find_map(|model| match model {
-            LoadedDocumentModel::Puzzle3d { puzzle, .. } => Some(puzzle),
+            LoadedDocumentModel::Puzzle3d { game, .. } => Some(game),
             LoadedDocumentModel::Puzzle2d { .. } => None,
         })
         .ok_or_else(|| AppError::Config("3D solver source does not contain a puzzle3 model".into()))
@@ -1828,15 +1793,17 @@ fn materialize_level_start_state(
 ) -> Result<State, AppError> {
     let mut state = state;
     let mut cancelled = false;
-    if let Some(program) = loaded.level_start_program.as_deref() {
-        let outcome = transition_program_outcome(&loaded.game, program, &state, InputId(0))?;
+    if let Some(program) = loaded.level_start_program.as_ref() {
+        let outcome = transition_program_outcome(&loaded.game, &state, program, InputId(0))?;
         state = outcome.next_state;
         cancelled |= outcome.cancelled;
     } else if loaded.run_rules_on_level_start {
-        let program = loaded.program_for_level(level_index).ok_or_else(|| {
-            AppError::Config(format!("level start index out of range: {level_index}"))
-        })?;
-        let outcome = transition_program_outcome(&loaded.game, program, &state, InputId(0))?;
+        let program = loaded
+            .executable_program_for_level(level_index)
+            .ok_or_else(|| {
+                AppError::Config(format!("level start index out of range: {level_index}"))
+            })?;
+        let outcome = transition_program_outcome(&loaded.game, &state, program, InputId(0))?;
         state = outcome.next_state;
         cancelled |= outcome.cancelled;
     }
@@ -1844,16 +1811,16 @@ fn materialize_level_start_state(
         if let Some(program) = loaded
             .levels
             .get(level_index)
-            .and_then(|level| level.level_start_program.as_deref())
+            .and_then(|level| level.level_start_program.as_ref())
         {
-            let outcome = transition_program_outcome(&loaded.game, program, &state, InputId(0))?;
+            let outcome = transition_program_outcome(&loaded.game, &state, program, InputId(0))?;
             state = outcome.next_state;
         }
     }
     Ok(state)
 }
 
-fn state3_from_json(game: &CompiledGame3, state_json: &str) -> Result<State3, AppError> {
+fn state3_from_json(game: &GridCompiledGame<3>, state_json: &str) -> Result<GridState<3, Size3>, AppError> {
     let width = json_u64_field(state_json, "width")
         .ok_or_else(|| AppError::Config("3D solver state missing width".to_string()))?
         .try_into()
@@ -1892,7 +1859,7 @@ fn state3_from_json(game: &CompiledGame3, state_json: &str) -> Result<State3, Ap
         )));
     }
 
-    let mut state = State3::empty(Size3::new(width, depth, height), layer_count)
+    let mut state = GridState::<3, Size3>::empty(Size3::new(width, depth, height), layer_count)
         .map_err(|error| AppError::Config(format!("{error:?}")))?;
     for (index, object) in slots.into_iter().enumerate() {
         if object == 0 {
@@ -1907,7 +1874,7 @@ fn state3_from_json(game: &CompiledGame3, state_json: &str) -> Result<State3, Ap
         let yz = cell / usize::from(width);
         let y = (yz % usize::from(depth)) as u16;
         let z = (yz / usize::from(depth)) as u16;
-        let object = ObjectId3(object);
+        let object = ObjectId(object);
         let expected_layer = game.object_layer(object).ok_or_else(|| {
             AppError::Config(format!("3D solver state unknown object id {}", object.0))
         })?;
@@ -1925,26 +1892,27 @@ fn state3_from_json(game: &CompiledGame3, state_json: &str) -> Result<State3, Ap
         let rule: u16 = rule
             .try_into()
             .map_err(|_| AppError::Config("3D solver state rule id out of range".to_string()))?;
-        state.mark_level_rule_fired(RuleId3(rule));
+        state.mark_level_rule_fired(RuleId(rule));
     }
     Ok(state)
 }
 
-fn level_index_from_state3_json(parsed: &ParsedPuzzle3, state_json: &str) -> Option<usize> {
+fn level_index_from_state3_json(
+    model: &LoadedGridGame<3, Size3>,
+    state_json: &str,
+) -> Option<usize> {
     let index = usize::try_from(json_u64_field(state_json, "levelIndex")?).ok()?;
-    let level_count = parsed.level_bundle.as_ref()?.levels.len();
+    let level_count = model.levels.len();
     (index < level_count).then_some(index)
 }
 
 fn materialize_level_start_state3(
-    parsed: &ParsedPuzzle3,
-    state: State3,
-) -> Result<State3, AppError> {
-    transition_program_without_input_with_local_frame(
-        &parsed.game,
-        &state,
-        &parsed.lifecycle.on_level_start,
-        parsed.lifecycle.on_level_start_local_frame.as_ref(),
-    )
-    .map_err(|error| AppError::Config(format!("{error:?}")))
+    model: &LoadedGridGame<3, Size3>,
+    state: GridState<3, Size3>,
+) -> Result<GridState<3, Size3>, AppError> {
+    let Some(program) = model.level_start_program.as_ref() else {
+        return Ok(state);
+    };
+    puzzle_core::grid_transition::transition_program_without_input(&model.game, &state, program)
+        .map_err(|error| AppError::Config(format!("{error:?}")))
 }

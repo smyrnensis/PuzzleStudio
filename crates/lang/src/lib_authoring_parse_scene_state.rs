@@ -20,7 +20,6 @@ struct ParsedScenePuzzleLayoutDeclaration {
 fn inferred_scene_puzzle_slot(name: &str, lifetime: SceneStateLifetime) -> ScenePuzzleDef {
     ScenePuzzleDef {
         name: name.to_string(),
-        kind: INFERRED_SCENE_PUZZLE_KIND.to_string(),
         model: name.to_string(),
         initializer: ScenePuzzleInitializer::CurrentLevel,
         lifetime,
@@ -57,8 +56,8 @@ fn parse_typed_scene_puzzle_declaration<'a>(
     };
     let lhs_tokens = split_header_tokens(lhs);
     let rhs_tokens = split_header_tokens(rhs);
-    let (kind, name) = match lhs_tokens.as_slice() {
-        ["puzzle", name] => ("puzzle", *name),
+    let name = match lhs_tokens.as_slice() {
+        ["puzzle", name] => *name,
         ["puzzle", ..] => {
             return Err(parse_error(
                 line,
@@ -75,11 +74,10 @@ fn parse_typed_scene_puzzle_declaration<'a>(
     };
     validate_identifier(name, line, "puzzle slot name")?;
     let (model, initializer, attrs) =
-        parse_scene_puzzle_initializer_rhs(rhs_tokens.as_slice(), line, kind)?;
+        parse_scene_puzzle_initializer_rhs(rhs_tokens.as_slice(), line)?;
     Ok(Some((
         ScenePuzzleDef {
             name: name.to_string(),
-            kind: kind.to_string(),
             model,
             initializer,
             lifetime,
@@ -91,7 +89,6 @@ fn parse_typed_scene_puzzle_declaration<'a>(
 fn parse_scene_puzzle_initializer_rhs<'a>(
     tokens: &[&'a str],
     line: &str,
-    kind: &str,
 ) -> Result<(String, ScenePuzzleInitializer, Vec<&'a str>), DiagnosticReport> {
     match tokens {
         ["puzzle", ..] => Err(parse_error(
@@ -123,10 +120,7 @@ fn parse_scene_puzzle_initializer_rhs<'a>(
                 attrs.to_vec(),
             ))
         }
-        [] => Err(parse_error(
-            line,
-            &format!("scene {kind} declaration must name a model"),
-        )),
+        [] => Err(parse_error(line, "scene puzzle declaration must name a model")),
     }
 }
 
@@ -689,6 +683,8 @@ fn parse_level_menu_component(
         let tokens = split_header_tokens(&lines[i]);
         if matches!(tokens.as_slice(), ["button", ..]) {
             let (button, next_i) = parse_button_def(lines, i)?;
+            recognize_scene_component_line(&lines[i], recognition);
+            recognize_scene_effect_body(lines, i + 1, next_i, recognition);
             menu.buttons.push(button);
             i = next_i;
             continue;
@@ -811,11 +807,13 @@ fn lower_model_key_bindings(
 fn parse_scene_keys_block(
     lines: &[source::LogicalLine],
     start: usize,
+    recognition: &mut crate::surface::ParserRecognition,
 ) -> Result<(Vec<KeyBinding>, usize), DiagnosticReport> {
     let mut bindings = Vec::<KeyBinding>::new();
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
         let (binding, next_i) = parse_scene_key_binding_at(lines, i)?;
+        recognize_scene_key_binding_line(&lines[i], recognition);
         bindings.push(binding);
         i = next_i;
     }
@@ -823,6 +821,40 @@ fn parse_scene_keys_block(
         return Err(parse_error(&lines[start], "keys missing closing brace"));
     }
     Ok((bindings, i + 1))
+}
+
+fn recognize_scene_key_binding_line(
+    line: &source::LogicalLine,
+    recognition: &mut crate::surface::ParserRecognition,
+) {
+    let Some(arrow) = line.tokens.iter().position(|token| token.text == "->") else {
+        return;
+    };
+    for token in &line.tokens[..arrow] {
+        recognition.mark(
+            crate::surface::SourceSpan {
+                start: token.start,
+                end: token.end,
+            },
+            crate::surface::SurfaceSemanticKind::Input,
+        );
+    }
+    let document = scene_effect_surface_document(&line.tokens[arrow + 1..]);
+    if document.semantic_tokens.is_empty() {
+        for token in &line.tokens[arrow + 1..] {
+            if token.text != "{" && token.text != "}" {
+                recognition.mark(
+                    crate::surface::SourceSpan {
+                        start: token.start,
+                        end: token.end,
+                    },
+                    crate::surface::SurfaceSemanticKind::Effect,
+                );
+            }
+        }
+    } else {
+        recognition.merge_surface_document(document);
+    }
 }
 
 fn parse_scene_key_binding_at(

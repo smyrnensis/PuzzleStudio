@@ -184,102 +184,12 @@ struct ModelSoundTrigger {
     sfx_name: String,
 }
 
-#[derive(Clone, Debug)]
-struct ModelSoundTriggerSpec {
-    kind: ModelSoundTriggerKind,
-    selector: String,
-    sfx_name: String,
-    line: String,
-}
-
-#[derive(Clone, Debug)]
-struct ModelOperationSoundSpec {
-    operation: ModelOperationSound,
-    sfx_name: String,
-}
+type ModelSoundTriggerSpec = model_syntax::ModelSoundTriggerSyntax;
+type ModelOperationSoundSpec = model_syntax::ModelOperationSoundSyntax;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ModelSoundTriggerKind {
     Move,
-}
-
-fn model_sounds_block_starts(lines: &[source::LogicalLine], start: usize) -> bool {
-    lines.get(start + 1).is_some_and(|first| {
-        matches!(
-            split_header_tokens(first).as_slice(),
-            ["move" | "undo" | "restart", ..]
-        )
-    })
-}
-
-fn parse_model_sounds_block(
-    lines: &[source::LogicalLine],
-    start: usize,
-    triggers: &mut Vec<ModelSoundTriggerSpec>,
-    operation_sounds: &mut Vec<ModelOperationSoundSpec>,
-    allow_operation_sounds: bool,
-) -> Result<usize, DiagnosticReport> {
-    let header = split_header_tokens(&lines[start]);
-    if !matches!(header.as_slice(), ["sounds"]) {
-        return Err(parse_error(
-            &lines[start],
-            "model sounds header must be: sounds",
-        ));
-    }
-
-    let mut i = start + 1;
-    while i < lines.len() {
-        let line = &lines[i];
-        if is_block_close_line(line) {
-            return Ok(i + 1);
-        }
-        let tokens = split_header_tokens(line);
-        let trigger_kind = match tokens.as_slice() {
-            ["move", ..] => Some(ModelSoundTriggerKind::Move),
-            _ => None,
-        };
-        let operation = match tokens.as_slice() {
-            ["undo", ..] => Some(ModelOperationSound::Undo),
-            ["restart", ..] => Some(ModelOperationSound::Restart),
-            _ => None,
-        };
-        match (trigger_kind, operation, tokens.as_slice()) {
-            (Some(kind), _, [_, selector, "->", "sfx", name]) => {
-                validate_qualified_identifier(name, line, "sfx name")?;
-                triggers.push(ModelSoundTriggerSpec {
-                    kind,
-                    selector: (*selector).to_string(),
-                    sfx_name: (*name).to_string(),
-                    line: line.to_string(),
-                });
-            }
-            (_, Some(operation), [_, "->", "sfx", name]) if allow_operation_sounds => {
-                validate_qualified_identifier(name, line, "sfx name")?;
-                operation_sounds.push(ModelOperationSoundSpec {
-                    operation,
-                    sfx_name: (*name).to_string(),
-                });
-            }
-            (_, Some(_), [_, "->", "sfx", _]) => {
-                return Err(parse_error(
-                    line,
-                    "undo/restart sounds must be inside a puzzle sounds block",
-                ));
-            }
-            _ => {
-                return Err(parse_error(
-                    line,
-                    "model sounds entry must be: move <object-selector> -> sfx <name> | undo -> sfx <name> | restart -> sfx <name>",
-                ));
-            }
-        }
-        i += 1;
-    }
-
-    Err(parse_error(
-        &lines[start],
-        "model sounds missing closing brace",
-    ))
 }
 
 fn resolve_model_operation_sounds(
@@ -304,7 +214,7 @@ fn resolve_model_sound_triggers(
         .map(|spec| {
             let selector = resolve_object_selector(
                 &spec.selector,
-                &spec.line,
+                &spec.source,
                 &catalog.object_names,
                 &catalog.object_schemas,
                 &value_sets,
@@ -314,7 +224,7 @@ fn resolve_model_sound_triggers(
             )
             .map_err(|error| model_sound_selector_error(error, spec))?;
             Ok(ModelSoundTrigger {
-                kind: spec.kind,
+                kind: ModelSoundTriggerKind::Move,
                 objects: selector.alternatives,
                 sfx_name: spec.sfx_name.clone(),
             })
@@ -332,7 +242,7 @@ fn model_sound_selector_error(
         .any(|diagnostic| diagnostic.message.starts_with("unknown object selector"))
     {
         parse_error(
-            &spec.line,
+            &spec.source,
             &format!(
                 "unknown model sound trigger object selector `{}`",
                 spec.selector

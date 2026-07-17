@@ -1,0 +1,153 @@
+use std::collections::HashMap;
+
+use puzzle_core::{
+    CompiledGame, ConditionValueKind, ExecutableProgram, GridCompiledGame, GridConditionValueKind,
+    GridRuleStep, try_project_grid_compiled_game, try_project_grid_condition_value,
+    try_project_grid_program,
+};
+use puzzle_kernel::SpatialVector;
+
+use crate::{
+    CanonicalGoalCondition, CanonicalQueryExpr, CanonicalSolverStrategy, DiagnosticReport,
+    GoalCondition, QueryExpr, SolverStrategy,
+};
+
+pub(crate) fn validate_visuals(visuals: &crate::VisualsDef) -> Result<(), DiagnosticReport> {
+    const EPSILON: f64 = 1e-9;
+    for sprite in &visuals.sprites {
+        if sprite.frames.iter().any(|frame| frame.planes.len() > 1) {
+            return Err(DiagnosticReport::error(format!(
+                "2D renderer cannot materialize multi-plane sprite `{}`",
+                sprite.name
+            )));
+        }
+        for transform in &sprite.transforms {
+            match transform {
+                crate::VisualSpriteTransform::Translate { value, .. }
+                    if value[2].abs() > EPSILON =>
+                {
+                    return Err(DiagnosticReport::error(format!(
+                        "2D renderer cannot materialize out-of-plane translation on sprite `{}`",
+                        sprite.name
+                    )));
+                }
+                crate::VisualSpriteTransform::Rotate { axis, .. }
+                    if axis[0].abs() > EPSILON
+                        || axis[1].abs() > EPSILON
+                        || (axis[2].abs() - 1.0).abs() > EPSILON =>
+                {
+                    return Err(DiagnosticReport::error(format!(
+                        "2D renderer cannot materialize rotation outside the sprite plane on `{}`",
+                        sprite.name
+                    )));
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn game(source: &GridCompiledGame<3>) -> Result<CompiledGame, DiagnosticReport> {
+    try_project_grid_compiled_game(source, project_vector)
+}
+
+pub(crate) fn executable(
+    source: &[GridRuleStep<3>],
+) -> Result<ExecutableProgram, DiagnosticReport> {
+    Ok(ExecutableProgram::new(try_project_grid_program(
+        source,
+        project_vector,
+    )?))
+}
+
+pub(crate) fn query(value: &CanonicalQueryExpr) -> Result<QueryExpr, DiagnosticReport> {
+    value.try_map_value(&mut condition_value)
+}
+
+pub(crate) fn queries(
+    values: HashMap<String, CanonicalQueryExpr>,
+) -> Result<HashMap<String, QueryExpr>, DiagnosticReport> {
+    values
+        .into_iter()
+        .map(|(name, value)| query(&value).map(|value| (name, value)))
+        .collect()
+}
+
+pub(crate) fn goal(value: &CanonicalGoalCondition) -> Result<GoalCondition, DiagnosticReport> {
+    value.try_map_value(&mut condition_value)
+}
+
+pub(crate) fn goals(
+    values: HashMap<String, CanonicalGoalCondition>,
+) -> Result<HashMap<String, GoalCondition>, DiagnosticReport> {
+    values
+        .into_iter()
+        .map(|(name, value)| goal(&value).map(|value| (name, value)))
+        .collect()
+}
+
+pub(crate) fn solver(value: &CanonicalSolverStrategy) -> Result<SolverStrategy, DiagnosticReport> {
+    value.try_map_query(&mut query)
+}
+
+fn condition_value(
+    value: &GridConditionValueKind<3>,
+) -> Result<ConditionValueKind, DiagnosticReport> {
+    try_project_grid_condition_value(value, project_vector)
+}
+
+fn project_vector(value: SpatialVector<3>) -> Result<SpatialVector<2>, DiagnosticReport> {
+    let [x, y, z] = value.axes();
+    if z != 0 {
+        return Err(DiagnosticReport::error(
+            "2D materialization received a non-zero canonical z offset".to_string(),
+        ));
+    }
+    Ok(SpatialVector::new([x, y]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        VisualSpriteDef, VisualSpriteFit, VisualSpriteKind, VisualSpriteSpace,
+        VisualSpriteTransform, VisualsDef,
+    };
+
+    fn visuals_with(transform: VisualSpriteTransform) -> VisualsDef {
+        VisualsDef {
+            sprites: vec![VisualSpriteDef {
+                name: "test".to_string(),
+                kind: VisualSpriteKind::Solid("#fff".to_string()),
+                frames: Vec::new(),
+                transforms: vec![transform],
+                fit: VisualSpriteFit::default(),
+                sampling: None,
+                animation_duration_ms: None,
+                pixels_per_cell: None,
+            }],
+            ..VisualsDef::default()
+        }
+    }
+
+    #[test]
+    fn planar_projection_accepts_the_2d_subspace_of_shared_sprite_transforms() {
+        validate_visuals(&visuals_with(VisualSpriteTransform::Translate {
+            value: [1.0, -0.5, 0.0],
+            space: VisualSpriteSpace::Local,
+        }))
+        .unwrap();
+    }
+
+    #[test]
+    fn planar_projection_rejects_transform_that_leaves_the_2d_subspace() {
+        let error = validate_visuals(&visuals_with(VisualSpriteTransform::Rotate {
+            degrees: 45.0,
+            axis: [1.0, 0.0, 0.0],
+            space: VisualSpriteSpace::World,
+        }))
+        .unwrap_err();
+        assert!(error.to_string().contains("outside the sprite plane"));
+    }
+}

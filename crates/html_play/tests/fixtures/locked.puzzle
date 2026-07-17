@@ -611,7 +611,7 @@ Pull:close
 shape Pull
 
 @LockedFrame:directions
-rotate from up
+rotate local directions from up
 #000000
 ....................
 .000..000..000..000.
@@ -635,7 +635,7 @@ rotate from up
 ....................
 
 @LockedCorner:directions
-rotate from up
+rotate local directions from up
 #000000
 ....................
 ..................0.
@@ -659,7 +659,7 @@ rotate from up
 ....................
 
 @WallFrame:directions
-rotate from up
+rotate local directions from up
 #585858
 00000000
 ........
@@ -672,7 +672,7 @@ rotate from up
 
 
 @WallCorner:directions
-rotate from up
+rotate local directions from up
 #585858
 .......0
 ........

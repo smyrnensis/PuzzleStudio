@@ -32,7 +32,6 @@ fn export_html_with_runtime_wasm(
     } else {
         push_export_data_with_source(&mut data, state, true);
     }
-    let data = escape_script_json(&data);
     let mut boot_data = String::new();
     push_export_boot_data(
         &mut boot_data,
@@ -40,18 +39,41 @@ fn export_html_with_runtime_wasm(
         host_mode == StandaloneHostMode::EditorPreview,
         host_mode == StandaloneHostMode::EditorPreview,
     );
-    let boot_data = escape_script_json(&boot_data);
     let body_theme_attributes = preview_body_theme_attributes(&state.loaded.theme);
+    standalone_html(
+        &boot_data,
+        &data,
+        &body_theme_attributes,
+        &state.game_css,
+        &state.game_visuals_js,
+        loaded_uses_puzzle3_frames(&state.loaded),
+        host_mode,
+        runtime_wasm,
+    )
+}
+
+fn standalone_html(
+    boot_data: &str,
+    data: &str,
+    body_theme_attributes: &str,
+    game_css: &str,
+    game_visuals_js: &str,
+    uses_puzzle3_frames: bool,
+    host_mode: StandaloneHostMode,
+    runtime_wasm: StandaloneRuntimeWasm<'_>,
+) -> String {
+    let boot_data = escape_script_json(boot_data);
+    let data = escape_script_json(data);
     let app_css = escape_style(APP_CSS);
     let theme_presets_css = escape_style(THEME_PRESETS_CSS);
     let renderer_css = escape_style(RENDERER_CSS);
-    let game_css = escape_style(&state.game_css);
-    let game_visuals_js = escape_script(&state.game_visuals_js);
+    let game_css = escape_style(game_css);
+    let game_visuals_js = escape_script(game_visuals_js);
     let renderer_js = escape_script(RENDERER_JS);
     let standalone_js = escape_script(STANDALONE_JS);
     let runtime_wasm_js = standalone_runtime_wasm_script(host_mode, runtime_wasm);
     let sound_tools_js = escape_script(&sound_tools_js());
-    let app_js_source = standalone_host_js(state, host_mode);
+    let app_js_source = standalone_host_js(uses_puzzle3_frames, host_mode);
     let app_js = escape_script(&app_js_source);
 
     let html = INDEX_HTML
@@ -113,14 +135,14 @@ fn replace_required_script_asset(html: String, asset_path: &str, replacement: &s
     output
 }
 
-fn standalone_host_js(state: &ServerState, host_mode: StandaloneHostMode) -> String {
+fn standalone_host_js(uses_puzzle3_frames: bool, host_mode: StandaloneHostMode) -> String {
     let mut script = APP_JS.to_string();
     script = strip_optional_host_blocks(&script, "solver");
     if host_mode == StandaloneHostMode::Export {
         script = strip_optional_host_blocks(&script, "studio-bridge");
         script = strip_optional_host_blocks(&script, "scene-editor");
     }
-    if !loaded_uses_puzzle3_frames(&state.loaded) {
+    if !uses_puzzle3_frames {
         script = strip_optional_host_blocks(&script, "puzzle3");
     }
     remove_optional_host_markers(&script)
@@ -389,17 +411,16 @@ fn escape_html_attr(value: &str) -> String {
 
 fn export_puzzle3_document_html(
     document: &puzzle_lang::LoadedDocument,
-    source: &str,
     puzzle_path: &str,
     game_css: &str,
     game_visuals_js: &str,
 ) -> Result<String, String> {
     export_puzzle3_document_html_with_runtime_wasm(
         document,
-        source,
         puzzle_path,
         game_css,
         game_visuals_js,
+        None,
         StandaloneHostMode::Export,
         StandaloneRuntimeWasm::HostDefault,
     )
@@ -407,40 +428,75 @@ fn export_puzzle3_document_html(
 
 fn export_puzzle3_document_html_with_runtime_wasm(
     document: &puzzle_lang::LoadedDocument,
-    source: &str,
     puzzle_path: &str,
     game_css: &str,
     game_visuals_js: &str,
+    source: Option<&str>,
     host_mode: StandaloneHostMode,
     runtime_wasm: StandaloneRuntimeWasm<'_>,
 ) -> Result<String, String> {
     let fixture_json = puzzle_lang::export_loaded_document_visual_fixture_json(document)
         .map_err(|error| error.to_string())?;
-    let runtime_sources = if host_mode == StandaloneHostMode::EditorPreview {
-        Some(puzzle_lang::split_document_runtime_sources(source).map_err(|error| error.to_string())?)
-    } else {
-        None
-    };
-    let loaded = loaded_document_scene_host_loaded_game(document)?;
-    let state_source = if host_mode == StandaloneHostMode::EditorPreview {
-        source.to_string()
-    } else {
-        String::new()
-    };
-    let state = ServerState::new(
-        loaded,
-        state_source,
-        puzzle_path.to_string(),
-        game_css.to_string(),
-        game_visuals_js.to_string(),
-        SolverConfig::default(),
+    let mut boot: serde_json::Value =
+        serde_json::from_str(&fixture_json).map_err(|error| error.to_string())?;
+    let boot_object = boot
+        .as_object_mut()
+        .ok_or_else(|| "spatial fixture root must be an object".to_string())?;
+    boot_object.insert(
+        "engineVersion".to_string(),
+        serde_json::Value::String(env!("CARGO_PKG_VERSION").to_string()),
+    );
+    boot_object.insert(
+        "puzzlePath".to_string(),
+        serde_json::Value::String(puzzle_path.to_string()),
+    );
+    boot_object.insert(
+        "saveKey".to_string(),
+        serde_json::Value::String(format!("{}:{puzzle_path}", document.title)),
+    );
+    boot_object.insert("progressSaveVersion".to_string(), serde_json::json!(1));
+    boot_object.insert(
+        "editorPreview".to_string(),
+        serde_json::Value::Bool(host_mode == StandaloneHostMode::EditorPreview),
+    );
+    boot_object.insert(
+        "theme".to_string(),
+        serde_json::json!({
+            "name": document.theme.name,
+            "variables": document
+                .theme
+                .variables
+                .iter()
+                .map(|variable| (variable.name.clone(), serde_json::Value::String(variable.value.clone())))
+                .collect::<serde_json::Map<_, _>>(),
+        }),
+    );
+    if let Some(source) = source {
+        boot_object.insert(
+            "source".to_string(),
+            serde_json::Value::String(source.to_string()),
+        );
+    }
+    let boot_data = serde_json::to_string(&boot).unwrap();
+    let document_json = runtime_loaded_document_json(document).map_err(|error| error.to_string())?;
+    let runtime_export = format!(
+        "{{\"runtimeLoadedDocument\":{{\"version\":1,\"document\":{document_json}}}}}"
+    );
+    let body_theme_attributes = preview_body_theme_attributes(&document.theme);
+    let html = standalone_html(
+        &boot_data,
+        &runtime_export,
+        &body_theme_attributes,
+        game_css,
+        game_visuals_js,
+        true,
+        host_mode,
+        runtime_wasm,
     );
     Ok(inject_puzzle3_frame_assets(
-        export_html_with_runtime_wasm(&state, host_mode, runtime_wasm),
+        html,
         &fixture_json,
-        runtime_sources
-            .as_ref()
-            .map(|sources| sources.model_3d.as_str()),
+        source,
         Some(puzzle_path),
     ))
 }
@@ -457,17 +513,14 @@ fn export_mixed_document_html(
     runtime_wasm: StandaloneRuntimeWasm<'_>,
 ) -> Result<String, String> {
     let fixture_json = mixed_document_puzzle3_fixture_json(document)?;
-    let runtime_sources = if host_mode == StandaloneHostMode::EditorPreview {
-        Some(puzzle_lang::split_document_runtime_sources(&source).map_err(|error| error.to_string())?)
-    } else {
-        None
-    };
     let puzzle3_path = puzzle_path.clone();
-    let state_source = runtime_sources
-        .as_ref()
-        .map(|sources| sources.model_2d.clone())
-        .unwrap_or_default();
+    let state_source = if host_mode == StandaloneHostMode::EditorPreview {
+        source
+    } else {
+        String::new()
+    };
     let state = ServerState::new(
+        document.clone(),
         loaded,
         state_source,
         puzzle_path,
@@ -479,9 +532,7 @@ fn export_mixed_document_html(
     Ok(inject_puzzle3_frame_assets(
         html,
         &fixture_json,
-        runtime_sources
-            .as_ref()
-            .map(|sources| sources.model_3d.as_str()),
+        None,
         Some(&puzzle3_path),
     ))
 }
@@ -489,7 +540,11 @@ fn export_mixed_document_html(
 fn mixed_document_puzzle3_fixture_json(
     document: &puzzle_lang::LoadedDocument,
 ) -> Result<String, String> {
-    let Some(LoadedDocumentModel::Puzzle3d { name, puzzle }) = document
+    let Some(LoadedDocumentModel::Puzzle3d {
+        name,
+        game,
+        presentation,
+    }) = document
         .models
         .iter()
         .find(|model| matches!(model, LoadedDocumentModel::Puzzle3d { .. }))
@@ -505,17 +560,26 @@ fn mixed_document_puzzle3_fixture_json(
         default_again_ms: document.default_again_ms,
         input_buffer: document.input_buffer.clone(),
         animation: document.animation.clone(),
+        variables: document.variables.clone(),
         sounds: document.sounds.clone(),
         theme: document.theme.clone(),
         assets: document.assets.clone(),
         scenes: document.scenes.clone(),
         models: vec![LoadedDocumentModel::Puzzle3d {
             name: name.clone(),
-            puzzle: puzzle.clone(),
+            game: game.clone(),
+            presentation: presentation.clone(),
         }],
     };
     puzzle_lang::export_loaded_document_visual_fixture_json(&puzzle3_document)
         .map_err(|error| error.to_string())
+}
+
+fn document_uses_puzzle3_renderer(document: &puzzle_lang::LoadedDocument) -> bool {
+    document
+        .models
+        .iter()
+        .any(|model| matches!(model, LoadedDocumentModel::Puzzle3d { .. }))
 }
 
 fn inject_puzzle3_frame_assets(
@@ -721,10 +785,10 @@ fn export_html_from_source_with_runtime_wasm(
     if matches!(document.single_model(), Some(LoadedDocumentModel::Puzzle3d { .. })) {
         return export_puzzle3_document_html_with_runtime_wasm(
             &document,
-            source,
             puzzle_path,
             game_css,
             game_visuals_js,
+            Some(source),
             host_mode,
             runtime_wasm,
         )
@@ -732,13 +796,13 @@ fn export_html_from_source_with_runtime_wasm(
     }
     let loaded =
         loaded_document_scene_host_loaded_game(&document).map_err(DiagnosticReport::error)?;
-    runtime_loaded_game_json(&loaded).map_err(|error| {
+    runtime_loaded_document_json(&document).map_err(|error| {
         DiagnosticReport::error(format!(
-            "runtime loaded game bundle failed to serialize: {error}"
+            "runtime loaded document bundle failed to serialize: {error}"
         ))
     })?;
     let game_visuals_js = join_visuals_js(game_visuals_js, &generated_visuals_js(&loaded));
-    if document.models.len() > 1 {
+    if document_uses_puzzle3_renderer(&document) {
         export_mixed_document_html(
             &document,
             loaded,
@@ -753,6 +817,7 @@ fn export_html_from_source_with_runtime_wasm(
         .map_err(DiagnosticReport::error)
     } else {
         let state = ServerState::new(
+            document.clone(),
             loaded,
             source.to_string(),
             puzzle_path.to_string(),
@@ -783,7 +848,6 @@ pub fn export_html_file(path: impl AsRef<Path>) -> Result<String, String> {
     if matches!(document.single_model(), Some(LoadedDocumentModel::Puzzle3d { .. })) {
         return export_puzzle3_document_html(
             &document,
-            &source,
             &puzzle_path.display().to_string(),
             &game_css,
             VISUALS_JS,
@@ -793,7 +857,7 @@ pub fn export_html_file(path: impl AsRef<Path>) -> Result<String, String> {
     let loaded = loaded_document_scene_host_loaded_game(&document)?;
     let game_visuals_js =
         load_game_visuals_js(&puzzle_path, &loaded).map_err(|error| error.to_string())?;
-    if document.models.len() > 1 {
+    if document_uses_puzzle3_renderer(&document) {
         export_mixed_document_html(
             &document,
             loaded,
@@ -807,6 +871,7 @@ pub fn export_html_file(path: impl AsRef<Path>) -> Result<String, String> {
         )
     } else {
         let state = ServerState::new(
+            document.clone(),
             loaded,
             source,
             puzzle_path.display().to_string(),

@@ -1,4 +1,6 @@
-use puzzle_lang::{SolverDeadendOf, SolverStrategyOf, parse_game2d, parse_puzzle3d};
+use puzzle_lang::{
+    LoadedDocumentModel, SolverDeadendOf, SolverStrategyOf, parse_game_for_path, parse_game2d,
+};
 
 #[test]
 fn deadend_queries_lower_from_the_solver_block() {
@@ -84,10 +86,14 @@ level "start" {
 }
 "#;
 
-    let parsed = parse_puzzle3d(source).expect("3D deadend query should lower");
+    let document =
+        parse_game_for_path(source, "test.puzzle").expect("spatial deadend query should lower");
+    let Some(LoadedDocumentModel::Puzzle3d { game, .. }) = document.single_model() else {
+        panic!("expected one spatial model");
+    };
 
     assert!(matches!(
-        parsed.solver_strategy.deadends.as_slice(),
+        game.solver_strategy.deadends.as_slice(),
         [SolverDeadendOf::Any(values)] if values.len() == 1
     ));
 }

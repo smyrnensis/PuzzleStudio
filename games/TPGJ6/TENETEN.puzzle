@@ -43,7 +43,7 @@ F -> B
 B -> F
 }
 
-layers {
+slots {
 layer1 = Background
 layer2 = Pond Puddle Crack Hole
 layer3 = Background2
@@ -107,7 +107,7 @@ shape_Ball {
 ....222222....
 ....222222....
 }
-shape_Boundary:directions rotate from up {
+shape_Boundary {
 01110011101101
 00101001000100
 ..............
@@ -123,7 +123,7 @@ shape_Boundary:directions rotate from up {
 ..............
 ..............
 }
-shape_Corner:directions rotate from up {
+shape_Corner {
 ............00
 ............00
 ..............
@@ -220,7 +220,6 @@ shape = shape_You_F
 sprite {
 selector = Crate
 colors = #b85 #a74 #00000015
-shape =
 ..............
 ..............
 ..0000000000..
@@ -240,7 +239,6 @@ shape =
 sprite {
 selector = CrateW
 colors = #88c
-shape =
 ..............
 ..............
 ..0000000000..
@@ -260,7 +258,6 @@ shape =
 sprite {
 selector = TargetCrate
 colors = #0003
-shape =
 ..............
 ..............
 ..0000000000..
@@ -292,7 +289,6 @@ shape = shape_Ball
 sprite {
 selector = TargetBall
 colors = #0003
-shape =
 ..............
 ..............
 ....000000....
@@ -312,7 +308,6 @@ shape =
 sprite {
 selector = Fly
 colors = #fd0 #220 #6cf #00000015
-shape =
 ..............
 ..............
 ..............
@@ -332,7 +327,6 @@ shape =
 sprite {
 selector = TargetFly
 colors = #0003
-shape =
 ..............
 ..............
 ..............
@@ -352,7 +346,6 @@ shape =
 sprite {
 selector = Headlong
 colors = #f82 #201a00 #00000015
-shape =
 ..............
 ..............
 ....000000....
@@ -372,7 +365,6 @@ shape =
 sprite {
 selector = TargetHeadlong
 colors = #0003
-shape =
 ..............
 ..............
 ....000000....
@@ -392,7 +384,6 @@ shape =
 sprite {
 selector = NoGo
 colors = #b44
-shape =
 ..............
 ..............
 ..00......00..
@@ -412,7 +403,6 @@ shape =
 sprite {
 selector = Pond
 colors = #3373d3 #3575d5
-shape =
 00000000000000
 11111111111111
 00000000000000
@@ -432,7 +422,6 @@ shape =
 sprite {
 selector = Crack
 colors = #037
-shape =
 ..............
 ..............
 ..............
@@ -452,7 +441,6 @@ shape =
 sprite {
 selector = Puddle
 colors = #3373d3 #3575d5 #8fcf6f
-shape =
 22000000000022
 22111111111122
 00000000000000
@@ -477,7 +465,6 @@ colors = transparent
 sprite {
 selector = Hole
 colors = #332a11 #3a2f1a
-shape =
 00000000000000
 01111111111110
 01000000000010
@@ -497,7 +484,6 @@ shape =
 sprite {
 selector = Button
 colors = #777 #b44 #6a6a6a
-shape =
 ..............
 ..............
 ..0000000000..
@@ -517,7 +503,6 @@ shape =
 sprite {
 selector = GateC
 colors = #b44 #00000015
-shape =
 ..............
 ..............
 ......00......
@@ -537,7 +522,6 @@ shape =
 sprite {
 selector = GateO
 colors = #b443
-shape =
 ..............
 ..............
 ......00......
@@ -557,7 +541,6 @@ shape =
 sprite {
 selector = Wall
 colors = #224433 #234534
-shape =
 00000000010000
 01101000111011
 01011101111110
@@ -577,19 +560,20 @@ shape =
 sprite {
 selector = Boundary:directions
 colors = #447755 #477a58
-shape = shape_Boundary:directions
+rotate directions from up
+shape = shape_Boundary
 }
 
 sprite {
 selector = Corner:directions
 colors = #475
-shape = shape_Corner:directions
+rotate directions from up
+shape = shape_Corner
 }
 
 sprite {
 selector = WallShadow
 colors = #00000015
-shape =
 00000000000000
 00000000000000
 ..............
@@ -614,7 +598,6 @@ colors = transparent
 sprite {
 selector = Count:1
 colors = #000 #fff #888
-shape =
 ..............
 ..............
 ..............
@@ -634,7 +617,6 @@ shape =
 sprite {
 selector = Count:2
 colors = #000 #fff #888
-shape =
 ..............
 ..............
 ..............
@@ -654,7 +636,6 @@ shape =
 sprite {
 selector = Count:3
 colors = #000 #fff #888
-shape =
 ..............
 ..............
 .....0011.....
@@ -674,7 +655,6 @@ shape =
 sprite {
 selector = Count:Inf
 colors = #000 #fff
-shape =
 ..............
 ..............
 ..............
@@ -718,7 +698,6 @@ shape = shape_TimeMachine_F
 sprite {
 selector = Star
 colors = #fff3 #000
-shape =
 ..............
 ..............
 ..............
@@ -1026,7 +1005,6 @@ Q = You:B Start
 @ = Crate TargetCrate
 # = Wall
 ⋆ = Wall Star
-_ = empty
 }
 
 level "1-1"
@@ -1393,8 +1371,8 @@ level "2-5+"
 
 scene title {
 layout {
-title = "TENETEN"
-subtitle = "by smyrnensis"
+heading "TENETEN"
+subheading "by smyrnensis"
 if has_progress_save {
 choice "Continue" -> continue_game
 }
@@ -1413,7 +1391,7 @@ goto playing(0)
 scene playing {
 layout {
 row {
-title = "TENETEN"
+heading "TENETEN"
 }
 puzzle board = main
 }

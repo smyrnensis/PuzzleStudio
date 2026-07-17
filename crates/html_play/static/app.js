@@ -1309,12 +1309,13 @@ function renderPuzzle3Frame(component, scope = {}) {
     canvas.height = 640;
     canvas.setAttribute("aria-label", `${sceneTitle(sceneName)} ${source}`);
     root.append(canvas);
-    const fixture = puzzle3FrameFixture(sceneName);
+    const fixture = puzzle3FrameFixture(sceneName, source);
     const controller = window.Puzzle3Controller.attach(canvas, {
       screenView: root,
       fixture,
       scene: sceneName,
       component,
+      sessionManaged: Boolean(standaloneRuntime && !puzzle3PreviewSurface),
       onLifecycleEffects(effects) {
         sendPuzzle3LifecycleEffects(effects, {
           ...scope,
@@ -1364,7 +1365,11 @@ function sendPuzzle3LifecycleEffects(effects, scope = {}) {
     .catch((error) => showError(error));
 }
 
-function puzzle3FrameFixture(sceneName) {
+function puzzle3FrameFixture(sceneName, source = "board") {
+  const sessionSnapshot = currentState?.scenePuzzleState?.[source];
+  if (standaloneRuntime && sessionSnapshot && typeof sessionSnapshot === "object") {
+    return JSON.parse(JSON.stringify(sessionSnapshot));
+  }
   const fixture = JSON.parse(JSON.stringify(window.Puzzle3DFrameFixture || {}));
   if (puzzle3PreviewSurface) {
     return puzzle3PreviewSurfaceFixture(fixture, sceneName);
@@ -1522,6 +1527,13 @@ function syncPuzzle3ControllerLevel(entry) {
     return;
   }
   if (puzzle3PreviewSurface) {
+    return;
+  }
+  if (standaloneRuntime) {
+    const sceneName = entry.root.dataset.scene;
+    const source = entry.root.dataset.source || "board";
+    const sessionSnapshot = puzzle3FrameFixture(sceneName, source);
+    entry.controller.replaceSessionSnapshot?.(sessionSnapshot);
     return;
   }
   const level = Number.isInteger(currentState?.levelIndex)
@@ -2336,14 +2348,10 @@ function focusShell() {
 
 function isMessageDismissKey(event) {
   const rawKey = String(event.key || "");
-  const rawCode = String(event.code || "");
-  const key = normalizedKeyName(rawKey, rawCode);
+  const key = normalizedKeyName(rawKey);
   if (rawKey === "Enter"
-    || rawKey === " "
-    || rawCode === "Enter"
-    || rawCode === "Space"
-    || key === "x"
-    || rawCode === "KeyX") {
+    || key === "Space"
+    || key === "x") {
     return true;
   }
   if (event.altKey || event.ctrlKey || event.metaKey) {
@@ -2356,23 +2364,21 @@ function effectsForKey(event) {
   if (!currentState) {
     return [];
   }
-  const effects = [];
   const rawKey = String(event.key || "");
-  const rawCode = String(event.code || "");
-  const key = normalizedKeyName(rawKey, rawCode);
-  const keyTokens = rawKeyTokens(rawKey, rawCode);
+  const key = normalizedKeyName(rawKey);
+  const keyTokens = logicalKeyTokens(rawKey);
   const scene = currentSceneDef();
   const profile = sceneInteractionProfile(scene);
   const chrome = sceneChromeProfile(profile);
   const binding = scene?.keys?.find((binding) => binding.keys.some((candidate) => keyTokens.includes(candidate)));
   if (binding) {
-    effects.push(binding.effect || { kind: "command", name: binding.command });
+    return [binding.effect || { kind: "command", name: binding.command }];
   }
 
-  if (!binding && chrome === "menu" && profile.menuFocusCells.length > 0) {
-    const menuInput = menuInputForKey(key, key, rawCode);
+  if (chrome === "menu" && profile.menuFocusCells.length > 0) {
+    const menuInput = menuInputForKey(key);
     if (menuInput) {
-      effects.push({ kind: "scene_menu", input: menuInput });
+      return [{ kind: "scene_menu", input: menuInput }];
     }
   }
 
@@ -2381,95 +2387,82 @@ function effectsForKey(event) {
     || keyTokens.includes(input.arrow)
     || (input.keys || []).some((candidate) => keyTokens.includes(candidate))
   );
-  const standardInput = standardChoiceInputForKey(key, key, rawCode);
-  if (!binding && chrome !== "menu" && standardInput && profile.standardChoices.length > 0) {
-    effects.push({ kind: "standard_choice", input: standardInput });
+  const standardInput = standardChoiceInputForKey(key);
+  if (chrome !== "menu" && standardInput && profile.standardChoices.length > 0) {
+    return [{ kind: "standard_choice", input: standardInput }];
+  }
+  if (input && profile.acceptsModelInput) {
+    return [{ kind: "model_input", name: input.name }];
   }
 
   if (key === "z") {
-    effects.push({ kind: "command", name: "undo" });
+    return [{ kind: "command", name: "undo" }];
   }
   if (key === "y") {
-    effects.push({ kind: "command", name: "redo" });
+    return [{ kind: "command", name: "redo" }];
   }
-  if (input && profile.acceptsModelInput) {
-    effects.push({ kind: "model_input", name: input.name });
-  }
-  return effects;
+  return [];
 }
 
 function commandForKey(event) {
   return effectsForKey(event)[0] || null;
 }
 
-function normalizedKeyName(key, code = "") {
+function normalizedKeyName(key) {
+  if (key === " ") {
+    return "Space";
+  }
   if (key.length === 1) {
     return key.toLowerCase();
-  }
-  if (!key && code.startsWith("Key") && code.length === 4) {
-    return code.slice(3).toLowerCase();
   }
   return key;
 }
 
-function rawKeyTokens(key, code = "") {
-  const normalized = normalizedKeyName(key, code);
-  return [...new Set([normalized, key, code, codeToArrowName(code), codeToLetterName(code)].filter(Boolean))];
+function logicalKeyTokens(key) {
+  const normalized = normalizedKeyName(key);
+  return normalized ? [normalized] : [];
 }
 
-function codeToArrowName(code) {
-  return ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(code) ? code : "";
-}
-
-function codeToLetterName(code) {
-  return code.startsWith("Key") && code.length === 4 ? code.slice(3).toLowerCase() : "";
-}
-
-function standardChoiceInputForKey(key, rawKey, code = "") {
-  if (key === "w" || rawKey === "ArrowUp" || code === "ArrowUp") {
+function standardChoiceInputForKey(key) {
+  if (key === "w" || key === "ArrowUp") {
     return "up";
   }
-  if (key === "s" || rawKey === "ArrowDown" || code === "ArrowDown") {
+  if (key === "s" || key === "ArrowDown") {
     return "down";
   }
-  if (key === "a" || rawKey === "ArrowLeft" || code === "ArrowLeft") {
+  if (key === "a" || key === "ArrowLeft") {
     return "left";
   }
-  if (key === "d" || rawKey === "ArrowRight" || code === "ArrowRight") {
+  if (key === "d" || key === "ArrowRight") {
     return "right";
   }
-  if (isStandardMenuConfirmKey(key, rawKey, code)) {
+  if (isStandardMenuConfirmKey(key)) {
     return "enter";
   }
   return null;
 }
 
-function isStandardMenuConfirmKey(key, rawKey, code = "") {
-  return rawKey === "Enter"
-    || rawKey === " "
-    || code === "Enter"
-    || code === "Space"
-    || key === "x"
-    || code === "KeyX";
+function isStandardMenuConfirmKey(key) {
+  return key === "Enter" || key === "Space" || key === "x";
 }
 
-function menuInputForKey(key, rawKey, code = "") {
-  if (key === "w" || rawKey === "ArrowUp" || code === "ArrowUp") {
+function menuInputForKey(key) {
+  if (key === "w" || key === "ArrowUp") {
     return "up";
   }
-  if (key === "s" || rawKey === "ArrowDown" || code === "ArrowDown") {
+  if (key === "s" || key === "ArrowDown") {
     return "down";
   }
-  if (key === "a" || rawKey === "ArrowLeft" || code === "ArrowLeft") {
+  if (key === "a" || key === "ArrowLeft") {
     return "left";
   }
-  if (key === "d" || rawKey === "ArrowRight" || code === "ArrowRight") {
+  if (key === "d" || key === "ArrowRight") {
     return "right";
   }
-  if (isStandardMenuConfirmKey(key, rawKey, code)) {
+  if (isStandardMenuConfirmKey(key)) {
     return "enter";
   }
-  if (rawKey === "Escape" || code === "Escape" || key === "q") {
+  if (key === "Escape" || key === "q") {
     return "back";
   }
   return null;
@@ -2714,6 +2707,9 @@ async function drainQueuedModelInput() {
 function sendPuzzle3Command(command) {
   const parsed = parsePuzzle3Command(command);
   if (!parsed) {
+    return false;
+  }
+  if (standaloneRuntime && parsed.command !== "reset_camera") {
     return false;
   }
   const controller = puzzle3ControllerForTarget(parsed.target);
@@ -3361,6 +3357,9 @@ document.addEventListener("keyup", (event) => {
 });
 
 function broadcastPuzzle3Key(event, action = "down") {
+  if (standaloneRuntime && !puzzle3PreviewSurface) {
+    return false;
+  }
   if (!puzzle3PreviewSurface && !currentSceneHasPuzzle3()) {
     return false;
   }

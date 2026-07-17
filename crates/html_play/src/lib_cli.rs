@@ -27,15 +27,17 @@ fn run(args: impl IntoIterator<Item = String>) -> Result<(), AppError> {
         }
     };
 
-    if profile == puzzle_lang::PuzzleSourceProfile::Puzzle3d {
-        let document = puzzle_lang::parse_game_for_path(&source, &config.puzzle_path)
-            .map_err(AppError::Lang)?;
+    let document = puzzle_lang::parse_game_for_path(&source, &config.puzzle_path)
+        .map_err(AppError::Lang)?;
+    if matches!(
+        document.single_model(),
+        Some(LoadedDocumentModel::Puzzle3d { .. })
+    ) {
         let game_css = load_asset_css(&config.puzzle_path, &document.assets)?;
         let output_path = config.output_path();
         let puzzle_path = config.puzzle_path.display().to_string();
-        let html =
-            export_puzzle3_document_html(&document, &source, &puzzle_path, &game_css, VISUALS_JS)
-                .map_err(AppError::Config)?;
+        let html = export_puzzle3_document_html(&document, &puzzle_path, &game_css, VISUALS_JS)
+            .map_err(AppError::Config)?;
         if let Some(screenshot) = &config.screenshot {
             let scene = screenshot
                 .scene
@@ -53,13 +55,46 @@ fn run(args: impl IntoIterator<Item = String>) -> Result<(), AppError> {
         return serve_static_html(html, &config.puzzle_path, config.port);
     }
 
-    let loaded = parse_game(&source)?;
+    let loaded = loaded_document_scene_host_loaded_game(&document).map_err(AppError::Config)?;
     let game_css = load_game_css(&config.puzzle_path, &loaded)?;
     print_warnings(&loaded);
     let game_visuals_js = load_game_visuals_js(&config.puzzle_path, &loaded)?;
 
+    if document_uses_puzzle3_renderer(&document) {
+        let html = export_mixed_document_html(
+            &document,
+            loaded,
+            source,
+            config.puzzle_path.display().to_string(),
+            game_css,
+            game_visuals_js,
+            config.solver,
+            StandaloneHostMode::Export,
+            StandaloneRuntimeWasm::HostDefault,
+        )
+        .map_err(AppError::Config)?;
+        if let Some(screenshot) = &config.screenshot {
+            capture_html_screenshot(
+                &html,
+                &screenshot.output_path,
+                screenshot.scene.as_deref(),
+                screenshot,
+            )?;
+            println!("screenshot {}", screenshot.output_path.display());
+            return Ok(());
+        }
+        if !config.serve {
+            let output_path = config.output_path();
+            fs::write(&output_path, html)?;
+            println!("exported {}", output_path.display());
+            return Ok(());
+        }
+        return serve_static_html(html, &config.puzzle_path, config.port);
+    }
+
     if !config.serve {
         let state = ServerState::new(
+            document.clone(),
             loaded,
             source,
             config.puzzle_path.display().to_string(),
@@ -84,6 +119,7 @@ fn run(args: impl IntoIterator<Item = String>) -> Result<(), AppError> {
     }
 
     let state = Arc::new(Mutex::new(ServerState::new(
+        document,
         loaded,
         source,
         config.puzzle_path.display().to_string(),
@@ -129,7 +165,6 @@ fn print_wasm_freshness_status() {
             Path::new("crates/core/src"),
             Path::new("crates/lang/src"),
             Path::new("crates/play/src"),
-            Path::new("crates/grid3d/src"),
             Path::new("crates/runtime_contract/src"),
             Path::new("crates/scene/src"),
             Path::new("crates/kernel/src"),
@@ -150,7 +185,6 @@ fn print_wasm_freshness_status() {
             Path::new("crates/core/src"),
             Path::new("crates/lang/src"),
             Path::new("crates/play/src"),
-            Path::new("crates/grid3d/src"),
             Path::new("crates/runtime_contract/src"),
             Path::new("crates/scene/src"),
             Path::new("crates/kernel/src"),

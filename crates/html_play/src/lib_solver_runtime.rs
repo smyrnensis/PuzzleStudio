@@ -100,6 +100,7 @@ fn parse_solver_ms_arg(
 }
 
 struct ServerState {
+    document: puzzle_lang::LoadedDocument,
     loaded: LoadedGame,
     session: GameSession,
     source: String,
@@ -112,6 +113,7 @@ struct ServerState {
 
 impl ServerState {
     fn new(
+        document: puzzle_lang::LoadedDocument,
         loaded: LoadedGame,
         source: String,
         puzzle_path: String,
@@ -121,6 +123,7 @@ impl ServerState {
     ) -> Self {
         let session = GameSession::new(&loaded);
         Self {
+            document,
             loaded,
             session,
             source,
@@ -310,39 +313,6 @@ impl ServerState {
         Ok(())
     }
 
-    fn set_current_state_json(
-        &mut self,
-        state_json: &str,
-        level_index: usize,
-        materialize_level_start: bool,
-    ) -> Result<(), AppError> {
-        if level_index >= self.loaded.levels.len() {
-            return Err(AppError::Config(format!(
-                "level index out of range: {level_index}"
-            )));
-        }
-        let state = state_from_json(&self.loaded, state_json)?;
-        self.session
-            .start_level_from_state(&self.loaded, level_index, state, materialize_level_start)
-            .map_err(AppError::CoreTransition)
-    }
-
-    fn progress_save_json(&self) -> String {
-        let save = self.session.progress_save_data(&self.loaded);
-        let mut out = String::new();
-        push_progress_save_data(&mut out, &save);
-        out
-    }
-
-    fn restore_progress_save_json(&mut self, save_json: &str) -> Result<(), AppError> {
-        let save = progress_save_data_from_json(save_json).map_err(AppError::Config)?;
-        self.session
-            .restore_progress_save_data(&self.loaded, &save)
-            .map_err(|error| AppError::Config(format!("{error:?}")))?;
-        self.has_progress_save = true;
-        Ok(())
-    }
-
     #[cfg(feature = "solver")]
     fn solve_json(&self) -> Result<String, AppError> {
         let level_index = self
@@ -361,127 +331,12 @@ impl ServerState {
     }
 }
 
-pub struct StandaloneSessionBridge {
-    state: ServerState,
-}
-
-impl StandaloneSessionBridge {
-    pub fn from_source(source: &str, puzzle_path: &str) -> Result<Self, String> {
-        let document = puzzle_lang::parse_game_for_path(source, puzzle_path)
-            .map_err(|error| error.to_string())?;
-        let loaded = loaded_document_scene_host_loaded_game(&document)?;
-        Ok(Self {
-            state: ServerState::new(
-                loaded,
-                source.to_string(),
-                puzzle_path.to_string(),
-                String::new(),
-                String::new(),
-                SolverConfig::default(),
-            ),
-        })
-    }
-
-    pub fn snapshot_json(&mut self) -> String {
-        self.state.snapshot_json()
-    }
-
-    pub fn request_json(&mut self, method: &str, url: &str) -> Result<String, String> {
-        match puzzle_game_runtime::standalone_session_request(method, url)? {
-            puzzle_game_runtime::StandaloneSessionRequest::State => Ok(self.snapshot_json()),
-            puzzle_game_runtime::StandaloneSessionRequest::Undo => {
-                self.state.session.undo(&self.state.loaded);
-                Ok(self.snapshot_json())
-            }
-            puzzle_game_runtime::StandaloneSessionRequest::Redo => {
-                self.state.session.redo(&self.state.loaded);
-                Ok(self.snapshot_json())
-            }
-            puzzle_game_runtime::StandaloneSessionRequest::Restart => {
-                self.state
-                    .session
-                    .restart_level(&self.state.loaded)
-                    .map_err(|error| format!("{error:?}"))?;
-                Ok(self.snapshot_json())
-            }
-            puzzle_game_runtime::StandaloneSessionRequest::Next => {
-                self.state.session.advance_level(&self.state.loaded);
-                Ok(self.snapshot_json())
-            }
-            puzzle_game_runtime::StandaloneSessionRequest::Input(input_name) => {
-                self.state
-                    .apply_input_name(&input_name)
-                    .map_err(|error| error.to_string())?;
-                Ok(self.snapshot_json())
-            }
-            puzzle_game_runtime::StandaloneSessionRequest::DebugInput(input_name) => self
-                .state
-                .apply_debug_input_name_json(&input_name)
-                .map_err(|error| error.to_string()),
-            puzzle_game_runtime::StandaloneSessionRequest::Command(command_name) => {
-                self.state
-                    .apply_command_name(&command_name)
-                    .map_err(|error| error.to_string())?;
-                Ok(self.snapshot_json())
-            }
-        }
-    }
-
-    pub fn apply_input_name(&mut self, input_name: &str) -> Result<(), String> {
-        self.state
-            .apply_input_name(input_name)
-            .map_err(|error| error.to_string())
-    }
-
-    pub fn apply_debug_input_name_json(&mut self, input_name: &str) -> Result<String, String> {
-        self.state
-            .apply_debug_input_name_json(input_name)
-            .map_err(|error| error.to_string())
-    }
-
-    pub fn apply_command_name(&mut self, command_name: &str) -> Result<(), String> {
-        self.state
-            .apply_command_name(command_name)
-            .map_err(|error| error.to_string())
-    }
-
-    pub fn set_current_state_json(
-        &mut self,
-        state_json: &str,
-        level_index: usize,
-        materialize_level_start: bool,
-    ) -> Result<(), String> {
-        self.state
-            .set_current_state_json(state_json, level_index, materialize_level_start)
-            .map_err(|error| error.to_string())
-    }
-
-    pub fn progress_save_json(&self) -> String {
-        self.state.progress_save_json()
-    }
-
-    pub fn restore_progress_save_json(&mut self, save_json: &str) -> Result<(), String> {
-        self.state
-            .restore_progress_save_json(save_json)
-            .map_err(|error| error.to_string())
-    }
-
-    pub fn mark_progress_save_written(&mut self) {
-        self.state.has_progress_save = true;
-    }
-
-    pub fn clear_progress_save(&mut self) {
-        self.state.has_progress_save = false;
-    }
-}
-
 #[cfg(feature = "solver")]
 #[derive(Clone, Debug)]
 struct SolutionStep<State, Input> {
     index: usize,
     input: Option<Input>,
     state: State,
-    completed: bool,
 }
 
 #[cfg(feature = "solver")]
@@ -580,11 +435,11 @@ type PuzzleSolutionStep = SolutionStep<State, InputId>;
 #[cfg(feature = "solver")]
 type PuzzleSearchObservation = SearchObservation<State>;
 #[cfg(feature = "solver")]
-type Puzzle3SolutionResponse = SolutionResponse<State3, InputId>;
+type GridSolutionResponse<const D: usize, Size> = SolutionResponse<GridState<D, Size>, InputId>;
 #[cfg(feature = "solver")]
-type Puzzle3SolutionStep = SolutionStep<State3, InputId>;
+type GridSolutionStep<const D: usize, Size> = SolutionStep<GridState<D, Size>, InputId>;
 #[cfg(feature = "solver")]
-type Puzzle3SearchObservation = SearchObservation<State3>;
+type GridSearchObservation<const D: usize, Size> = SearchObservation<GridState<D, Size>>;
 
 #[cfg(feature = "solver")]
 fn solve_domain_with_observations<D, ObservationState, Score, IsDead, Observe, OnProgress, Steps>(
@@ -879,20 +734,20 @@ fn collect_state_objects(state: &State, roots: &mut BTreeSet<ObjectId>) {
 }
 
 #[cfg(feature = "solver")]
-fn solver_state_slicer_for_puzzle3(
-    parsed: &ParsedPuzzle3,
-) -> puzzle_solver::SolverStateSlicer<ObjectId3> {
+fn solver_state_slicer_for_spatial_model(
+    model: &LoadedGridGame<3, Size3>,
+) -> puzzle_solver::SolverStateSlicer<ObjectId> {
     let mut roots = BTreeSet::new();
-    if let Some(win_condition) = &parsed.win_condition {
-        collect_win_condition3_roots(win_condition, &mut roots);
+    if let Some(goal) = &model.goal {
+        collect_spatial_goal_expr_roots(&model.game, &goal.expr, &mut roots);
     }
-    for query in parsed
+    for query in model
         .solver_strategy
         .terms
         .iter()
         .map(|term| &term.value)
         .chain(
-            parsed
+            model
                 .solver_strategy
                 .deadends
                 .iter()
@@ -903,12 +758,12 @@ fn solver_state_slicer_for_puzzle3(
             puzzle_solver::object_refs::collect_condition_value_roots(kind, roots)
         });
     }
-    let relevance = puzzle_solver::SolverRelevance::<ObjectId3>::from_game3_root_objects(
-        &parsed.game,
-        parsed.game.program(),
+    let relevance = puzzle_solver::SolverRelevance::<ObjectId>::from_program_roots(
+        &model.game,
+        model.game.program(),
         roots,
     );
-    puzzle_solver::SolverStateSlicer::<ObjectId3>::from_relevance3(&parsed.game, &relevance)
+    puzzle_solver::SolverStateSlicer::<ObjectId>::from_relevance(&model.game, &relevance)
 }
 
 #[cfg(feature = "solver")]
@@ -966,30 +821,31 @@ fn collect_query_expr_roots<Object, Value, Variable>(
 }
 
 #[cfg(feature = "solver")]
-fn collect_win_condition3_roots(condition: &WinCondition3, roots: &mut BTreeSet<ObjectId3>) {
-    match condition {
-        WinCondition3::All(conditions) | WinCondition3::Any(conditions) => {
-            for condition in conditions {
-                collect_win_condition3_roots(condition, roots);
+fn collect_spatial_goal_expr_roots(
+    game: &GridCompiledGame<3>,
+    expr: &puzzle_core::GridGoalExpr<3>,
+    roots: &mut BTreeSet<ObjectId>,
+) {
+    match expr {
+        GoalExprOf::All(values) | GoalExprOf::Any(values) => {
+            for value in values {
+                collect_spatial_goal_expr_roots(game, value, roots);
             }
         }
-        WinCondition3::SomeObject(object) | WinCondition3::NoObject(object) => {
-            if !object.is_empty() {
-                roots.insert(*object);
+        GoalExprOf::Clause(clause) => match &clause.value {
+            GoalValueOf::Variable(_) => {}
+            GoalValueOf::Condition(condition) => {
+                if let Some(condition) = game.condition_def(*condition) {
+                    puzzle_solver::object_refs::collect_condition_value_roots(
+                        &condition.kind,
+                        roots,
+                    );
+                }
             }
-        }
-        WinCondition3::SomePattern(pattern) | WinCondition3::NoPattern(pattern) => {
-            puzzle_solver::object_refs::collect_pattern_roots(pattern, roots);
-        }
-        WinCondition3::AllObjectsCoveredByPattern {
-            object,
-            cover_pattern,
-        } => {
-            if !object.is_empty() {
-                roots.insert(*object);
+            GoalValueOf::InlineConditionValue(kind) => {
+                puzzle_solver::object_refs::collect_condition_value_roots(kind, roots);
             }
-            puzzle_solver::object_refs::collect_pattern_roots(cover_pattern, roots);
-        }
+        },
     }
 }
 
@@ -1126,8 +982,8 @@ fn materialize_compiled_display_state(
     }
     Ok(transition_program(
         engine.game(),
-        program,
         state,
+        program,
         InputId(0),
     )?)
 }
@@ -1467,7 +1323,6 @@ fn solution_steps(
         index: 0,
         input: None,
         state: state.clone(),
-        completed: false,
     });
 
     for (index, input) in inputs.iter().enumerate() {
@@ -1476,7 +1331,6 @@ fn solution_steps(
             index: index + 1,
             input: Some(*input),
             state: state.clone(),
-            completed: false,
         });
     }
 
@@ -1494,7 +1348,6 @@ fn compiled_solution_steps(
         index: 0,
         input: None,
         state: materialize_compiled_display_state(engine, &state)?,
-        completed: false,
     });
 
     for (index, input) in inputs.iter().enumerate() {
@@ -1503,7 +1356,6 @@ fn compiled_solution_steps(
             index: index + 1,
             input: Some(*input),
             state: materialize_compiled_display_state(engine, &state)?,
-            completed: false,
         });
     }
 
@@ -1512,68 +1364,63 @@ fn compiled_solution_steps(
 
 #[cfg(feature = "solver")]
 fn solve_current_state3_with_budget(
-    parsed: &ParsedPuzzle3,
-    initial: State3,
+    model: &LoadedGridGame<3, Size3>,
+    initial: GridState<3, Size3>,
     budget: SearchBudget,
-) -> Result<Puzzle3SolutionResponse, AppError> {
+) -> Result<GridSolutionResponse<3, Size3>, AppError> {
     solve_current_state3_with_budget_inner(
-        parsed,
+        model,
         initial,
         budget,
-        None::<fn(&State3, SearchProgress)>,
+        None::<fn(&GridState<3, Size3>, SearchProgress)>,
     )
 }
 
 #[cfg(feature = "solver")]
 fn solve_current_state3_with_budget_inner<O>(
-    parsed: &ParsedPuzzle3,
-    initial: State3,
+    model: &LoadedGridGame<3, Size3>,
+    initial: GridState<3, Size3>,
     budget: SearchBudget,
     on_progress: Option<O>,
-) -> Result<Puzzle3SolutionResponse, AppError>
+) -> Result<GridSolutionResponse<3, Size3>, AppError>
 where
-    O: FnMut(&State3, SearchProgress),
+    O: FnMut(&GridState<3, Size3>, SearchProgress),
 {
-    let inputs = solver_inputs3(&parsed.inputs);
+    let inputs = solver_inputs3(&model.inputs);
     if inputs.is_empty() {
         return Err(AppError::Config("no 3D model inputs available".to_string()));
     }
-    let win_condition = parsed
-        .win_condition
+    let goal = model
+        .goal
         .clone()
         .ok_or_else(|| AppError::Config("3D solver requires win_conditions".to_string()))?;
 
-    let game = Arc::new(parsed.game.clone());
+    let game = Arc::new(model.game.clone());
     let goal_game = Arc::clone(&game);
-    let score_win_condition = win_condition.clone();
-    let state_slicer = solver_state_slicer_for_puzzle3(parsed);
-    let mut domain = Puzzle3Domain::with_state_slicer(
+    let state_slicer = solver_state_slicer_for_spatial_model(model);
+    let mut domain = GridPuzzleDomain::<3, Size3>::with_state_slicer(
         Arc::clone(&game),
         inputs,
         state_slicer,
-        move |state: &State3| win_condition.is_met(&goal_game, state),
+        move |state: &GridState<3, Size3>| goal.is_met(&goal_game, state),
     );
     let solver_initial = domain.initial_state(initial);
     let replay_initial = solver_initial.clone();
     let score_game = Arc::clone(&game);
-    let score_strategy = parsed.solver_strategy.clone();
+    let score_strategy = model.solver_strategy.clone();
     let deadend_game = Arc::clone(&game);
-    let deadend_strategy = parsed.solver_strategy.clone();
+    let deadend_strategy = model.solver_strategy.clone();
     solve_domain_with_observations(
         &mut domain,
         solver_initial,
         budget,
-        move |state| {
-            win_condition3_score(&score_game, state, &score_win_condition)
-                + solver_strategy_score3(&score_game, &score_strategy, state)
-        },
+        move |state| solver_strategy_score3(&score_game, &score_strategy, state),
         move |state| solver_has_deadend3(&deadend_game, &deadend_strategy, state),
         |state| state.clone(),
         on_progress,
         move |solution_inputs| {
-            solution_steps3(
+            spatial_solution_steps(
                 &game,
-                parsed.win_condition.as_ref(),
                 replay_initial,
                 solution_inputs,
             )
@@ -1582,27 +1429,29 @@ where
 }
 
 #[cfg(feature = "solver")]
-fn solution_steps3(
-    game: &CompiledGame3,
-    win_condition: Option<&WinCondition3>,
-    mut state: State3,
+fn spatial_solution_steps(
+    game: &GridCompiledGame<3>,
+    mut state: GridState<3, Size3>,
     inputs: &[InputId],
-) -> Result<Vec<Puzzle3SolutionStep>, AppError> {
+) -> Result<Vec<GridSolutionStep<3, Size3>>, AppError> {
     let mut steps = Vec::with_capacity(inputs.len() + 1);
     steps.push(SolutionStep {
         index: 0,
         input: None,
-        completed: win_condition.is_some_and(|condition| condition.is_met(game, &state)),
         state: state.clone(),
     });
 
     for (index, input) in inputs.iter().enumerate() {
-        state = transition_program3(game, &state, game.program(), *input)
-            .map_err(|error| AppError::Config(format!("{error:?}")))?;
+        state = puzzle_core::grid_transition::transition_program(
+            game,
+            &state,
+            game.executable_program(),
+            *input,
+        )
+        .map_err(|error| AppError::Config(format!("{error:?}")))?;
         steps.push(SolutionStep {
             index: index + 1,
             input: Some(*input),
-            completed: win_condition.is_some_and(|condition| condition.is_met(game, &state)),
             state: state.clone(),
         });
     }
@@ -1700,14 +1549,26 @@ fn selector_object_positions(
 }
 
 #[cfg(feature = "solver")]
-fn solver_strategy_score3(game: &CompiledGame3, strategy: &SolverStrategy3, state: &State3) -> i64 {
+fn solver_strategy_score3(
+    game: &GridCompiledGame<3>,
+    strategy: &SolverStrategyOf<
+        QueryExprOf<ObjectId, puzzle_core::GridConditionValueKind<3>, VariableId>,
+    >,
+    state: &GridState<3, Size3>,
+) -> i64 {
     solver_strategy_score_with(strategy, |value| {
         solver_query_expr_value3(game, state, value)
     })
 }
 
 #[cfg(feature = "solver")]
-fn solver_has_deadend3(game: &CompiledGame3, strategy: &SolverStrategy3, state: &State3) -> bool {
+fn solver_has_deadend3(
+    game: &GridCompiledGame<3>,
+    strategy: &SolverStrategyOf<
+        QueryExprOf<ObjectId, puzzle_core::GridConditionValueKind<3>, VariableId>,
+    >,
+    state: &GridState<3, Size3>,
+) -> bool {
     strategy.has_deadend_with(|query| solver_query_expr_value3(game, state, query) != 0)
 }
 
@@ -1752,7 +1613,11 @@ fn solver_strategy_term_score(direction: SolverStrategyDirection, weight: i64, v
 }
 
 #[cfg(feature = "solver")]
-fn solver_query_expr_value3(game: &CompiledGame3, state: &State3, value: &QueryExpr3) -> i64 {
+fn solver_query_expr_value3(
+    game: &GridCompiledGame<3>,
+    state: &GridState<3, Size3>,
+    value: &QueryExprOf<ObjectId, puzzle_core::GridConditionValueKind<3>, VariableId>,
+) -> i64 {
     solver_query_expr_value_with(
         value,
         &mut |variable| {
@@ -1809,10 +1674,10 @@ where
 
 #[cfg(feature = "solver")]
 fn solver_strategy_distance3(
-    game: &CompiledGame3,
-    state: &State3,
-    from: &[ObjectId3],
-    to: &[ObjectId3],
+    game: &GridCompiledGame<3>,
+    state: &GridState<3, Size3>,
+    from: &[ObjectId],
+    to: &[ObjectId],
 ) -> i64 {
     let from_positions = selector_object_positions3(game, state, from);
     let to_positions = selector_object_positions3(game, state, to);
@@ -1827,9 +1692,9 @@ fn solver_strategy_distance3(
 
 #[cfg(feature = "solver")]
 fn selector_object_positions3(
-    game: &CompiledGame3,
-    state: &State3,
-    objects: &[ObjectId3],
+    game: &GridCompiledGame<3>,
+    state: &GridState<3, Size3>,
+    objects: &[ObjectId],
 ) -> Vec<Coord3> {
     let mut positions = Vec::new();
     for z in 0..state.size.height {
@@ -1852,85 +1717,6 @@ fn selector_object_positions3(
 #[cfg(feature = "solver")]
 fn manhattan3(a: Coord3, b: Coord3) -> i64 {
     i64::from(a.x.abs_diff(b.x)) + i64::from(a.y.abs_diff(b.y)) + i64::from(a.z.abs_diff(b.z))
-}
-
-#[cfg(feature = "solver")]
-fn win_condition3_score(game: &CompiledGame3, state: &State3, condition: &WinCondition3) -> i64 {
-    match condition {
-        WinCondition3::All(conditions) => conditions
-            .iter()
-            .map(|condition| win_condition3_score(game, state, condition))
-            .sum(),
-        WinCondition3::Any(conditions) => conditions
-            .iter()
-            .map(|condition| win_condition3_score(game, state, condition))
-            .min()
-            .unwrap_or(0),
-        WinCondition3::AllObjectsCoveredByPattern {
-            object,
-            cover_pattern,
-        } => same_cell_all_objects_on_score3(game, state, *object, cover_pattern).unwrap_or(0),
-        WinCondition3::SomeObject(_)
-        | WinCondition3::NoObject(_)
-        | WinCondition3::SomePattern(_)
-        | WinCondition3::NoPattern(_) => 0,
-    }
-}
-
-#[cfg(feature = "solver")]
-fn same_cell_all_objects_on_score3(
-    game: &CompiledGame3,
-    state: &State3,
-    subject: ObjectId3,
-    cover_pattern: &puzzle_grid3d::GridPattern<3>,
-) -> Option<i64> {
-    let cells = cover_pattern.cells();
-    let [cell] = cells.as_slice() else {
-        return None;
-    };
-    if !matches!(
-        &cell.offset,
-        puzzle_grid3d::Offset3::Fixed { delta } if delta.axes() == [0, 0, 0]
-    ) || !cell.require_objects.contains(&subject)
-        || !cell.require_object_sets.is_empty()
-        || !cell.forbid_objects.is_empty()
-        || !cell.require_mark.is_empty()
-        || !cell.require_object_set_mark.is_empty()
-        || !cell.forbid_mark.is_empty()
-        || !cell.forbid_object_set_mark.is_empty()
-    {
-        return None;
-    }
-    let covers = cell
-        .require_objects
-        .iter()
-        .copied()
-        .filter(|object| *object != subject)
-        .collect::<Vec<_>>();
-    if covers.is_empty() {
-        return None;
-    }
-    let cover_positions = selector_object_positions3(game, state, &covers);
-    let fallback =
-        i64::from(state.size.width) + i64::from(state.size.depth) + i64::from(state.size.height);
-    Some(
-        selector_object_positions3(game, state, &[subject])
-            .into_iter()
-            .filter(|position| {
-                !covers
-                    .iter()
-                    .any(|cover| state.has_object_at(game, *position, *cover))
-            })
-            .map(|position| {
-                cover_positions
-                    .iter()
-                    .map(|cover| manhattan3(position, *cover))
-                    .min()
-                    .unwrap_or(fallback)
-                    .max(1)
-            })
-            .sum(),
-    )
 }
 
 #[cfg(feature = "solver")]
@@ -2314,15 +2100,18 @@ G..B
 
     #[test]
     fn all_objects_on_goal_generates_the_same_subject_first_score_in_3d() {
-        let parsed = parse_puzzle3d_for_solver(
+        let model = parse_spatial_model_for_solver(
             r#"
 puzzle board {
+dimension = 3
 slots {
 floor = Goal
 actor = Box
 }
 win_conditions {
 all Goal on Box
+}
+rules {
 }
 }
 
@@ -2339,18 +2128,13 @@ G.B
 "#,
         )
         .expect("test puzzle3 should load");
-        let state = parsed
-            .level_bundle
-            .as_ref()
-            .expect("test puzzle3 should have levels")
-            .build_level_state(0)
-            .expect("test level should build");
+        let state = model.levels[0].initial_state.clone();
 
         assert_eq!(
-            win_condition3_score(
-                &parsed.game,
+            solver_strategy_score3(
+                &model.game,
+                &model.solver_strategy,
                 &state,
-                parsed.win_condition.as_ref().expect("test win condition"),
             ),
             2
         );

@@ -3809,22 +3809,6 @@ function spriteModeForEditorDimension(dimension = currentEditorDimension) {
   return normalizeEditorDimension(dimension) === "3d" ? "sprite3d" : "sprite";
 }
 
-function editorDimensionForPuzzleSourceProfile(profile) {
-  if (profile === "puzzle3d") {
-    return "3d";
-  }
-  if (profile === "puzzle2d") {
-    return "2d";
-  }
-  return "";
-}
-
-function editorDimensionForDocument(document = activeDocument()) {
-  return editorDimensionForPuzzleSourceProfile(
-    typeof puzzleSourceProfile === "function" ? puzzleSourceProfile(document) : "",
-  );
-}
-
 function focusedPuzzleSourceContext(document = activeDocument()) {
   if (!isPuzzleDocument(document) || !isTextDocument(document)) {
     return null;
@@ -3841,12 +3825,16 @@ function focusedPuzzleEntries(kind, context = focusedPuzzleSourceContext()) {
   if (!context?.document) {
     return [];
   }
-  const documentDimension = editorDimensionForDocument(context.document);
-  if (!documentDimension) {
-    return [];
-  }
-  return focusedPuzzleEntriesForDimension(kind, documentDimension, context)
-    .filter((item) => Number.isFinite(item?.target?.start))
+  return uniqueFocusedPuzzleEntries(focusedPuzzleSurfaceEntriesByKind(kind, context))
+    .map((entry) => {
+      if (entry.dimension !== "2d" && entry.dimension !== "3d") {
+        throw new Error(`Source ${kind} entry is missing its canonical dimension.`);
+      }
+      return {
+        dimension: entry.dimension,
+        target: { ...entry, document: context.document },
+      };
+    })
     .sort((left, right) => left.target.start - right.target.start);
 }
 
@@ -3855,19 +3843,9 @@ function firstFocusedPuzzleEntryForDimension(kind, dimension, context = focusedP
 }
 
 function focusedPuzzleEntriesForDimension(kind, dimension, context = focusedPuzzleSourceContext()) {
-  if (!context?.document) {
-    return [];
-  }
   const normalized = normalizeEditorDimension(dimension);
-  const documentDimension = editorDimensionForDocument(context.document);
-  if (documentDimension && normalized !== documentDimension) {
-    return [];
-  }
-  const entries = normalized === "3d"
-    ? (kind === "sprite" ? focusedPuzzleSprite3dEntries(context.source) : focusedPuzzleLevel3dEntries(context.source))
-    : (kind === "sprite" ? focusedPuzzleSprite2dEntries(context.source) : focusedPuzzleLevel2dEntries(context.source, context.document));
-  return uniqueFocusedPuzzleEntries(entries)
-    .map((entry) => ({ dimension: normalized, target: { ...entry, document: context.document } }));
+  return focusedPuzzleEntries(kind, context)
+    .filter((item) => item.dimension === normalized);
 }
 
 function uniqueFocusedPuzzleEntries(entries) {
@@ -3912,18 +3890,10 @@ async function syncPaneModesFromFocusedPuzzleSource(options = {}) {
   if (currentContext?.document?.id !== documentId || currentContext.source !== context.source) {
     return null;
   }
-  const sourceDimension = editorDimensionForDocument(context?.document);
   const firstLevel = firstFocusedPuzzleEntry("level", context);
   const firstSprite = firstFocusedPuzzleEntry("sprite", context);
-  const levelMode = sourceDimension
-    ? levelModeForEditorDimension(sourceDimension)
-    : modeForFocusedPuzzleEntry("level", context);
-  const spriteMode = sourceDimension
-    ? spriteModeForEditorDimension(sourceDimension)
-    : modeForFocusedPuzzleEntry("sprite", context);
-  if (sourceDimension) {
-    currentEditorDimension = sourceDimension;
-  }
+  const levelMode = modeForFocusedPuzzleEntry("level", context);
+  const spriteMode = modeForFocusedPuzzleEntry("sprite", context);
   if (levelMode) {
     currentLevelPaneMode = levelMode;
   } else if (currentPreviewMode === "edit" || currentPreviewMode === "level3d") {
@@ -4062,9 +4032,14 @@ function focusedPuzzleSurfaceEntries(context = focusedPuzzleSourceContext()) {
   }
 }
 
-function focusedPuzzleSurfaceEntriesByKind(kind, context = focusedPuzzleSourceContext()) {
+function sourceTargetMatches(target, kind, dimension = "") {
+  return target?.kind === kind
+    && (!dimension || target.dimension === normalizeEditorDimension(dimension));
+}
+
+function focusedPuzzleSurfaceEntriesByKind(kind, context = focusedPuzzleSourceContext(), dimension = "") {
   return focusedPuzzleSurfaceEntries(context)
-    .filter((entry) => entry?.kind === kind);
+    .filter((entry) => sourceTargetMatches(entry, kind, dimension));
 }
 
 function firstFocusedPuzzleLevel2dEntry(source, document) {
@@ -4073,7 +4048,7 @@ function firstFocusedPuzzleLevel2dEntry(source, document) {
 
 function focusedPuzzleLevel2dEntries(source, document) {
   return uniqueFocusedPuzzleEntries(
-    focusedPuzzleSurfaceEntriesByKind("level", { document, source })
+    focusedPuzzleSurfaceEntriesByKind("level", { document, source }, "2d")
   );
 }
 
@@ -4087,7 +4062,7 @@ function firstFocusedPuzzleLevel3dEntry(source) {
 
 function focusedPuzzleLevel3dEntries(source) {
   return uniqueFocusedPuzzleEntries(
-    focusedPuzzleSurfaceEntriesByKind("level3d", { document: activeDocument(), source })
+    focusedPuzzleSurfaceEntriesByKind("level", { document: activeDocument(), source }, "3d")
   );
 }
 
@@ -4101,7 +4076,7 @@ function firstFocusedPuzzleSprite2dEntry(source) {
 
 function focusedPuzzleSprite2dEntries(source) {
   return uniqueFocusedPuzzleEntries(
-    focusedPuzzleSurfaceEntriesByKind("sprite", { document: activeDocument(), source })
+    focusedPuzzleSurfaceEntriesByKind("sprite", { document: activeDocument(), source }, "2d")
   );
 }
 
@@ -4115,7 +4090,7 @@ function firstFocusedPuzzleSprite3dEntry(source) {
 
 function focusedPuzzleSprite3dEntries(source) {
   return uniqueFocusedPuzzleEntries(
-    focusedPuzzleSurfaceEntriesByKind("sprite3d", { document: activeDocument(), source })
+    focusedPuzzleSurfaceEntriesByKind("sprite", { document: activeDocument(), source }, "3d")
   );
 }
 
@@ -4395,7 +4370,8 @@ function openLevelPaneForCurrentPreviewLevel() {
   }
   const loaded = loadResolvedSourceTarget({
     ...target,
-    kind: targetMode === "level3d" ? "level3d" : "level",
+    kind: "level",
+    dimension: targetMode === "level3d" ? "3d" : "2d",
   }, {
     silent: true,
     recordHistory: false,
@@ -5241,7 +5217,7 @@ async function loadLevelFromSourcePosition(position, options = {}) {
     return null;
   }
   const target = await resolveSourceTargetFromWasm(source, position);
-  if (target?.kind !== "level") {
+  if (!sourceTargetMatches(target, "level", "2d")) {
     return null;
   }
   return loadLevelSourceTarget(target, options);
@@ -5752,16 +5728,16 @@ function loadResolvedSourceTarget(target, options = {}) {
   if (!target?.kind) {
     return null;
   }
-  if (target.kind === "level3d" && typeof loadLevel3dSourceTarget === "function") {
+  if (sourceTargetMatches(target, "level", "3d") && typeof loadLevel3dSourceTarget === "function") {
     return loadLevel3dSourceTarget(target, options);
   }
-  if (target.kind === "level") {
+  if (sourceTargetMatches(target, "level", "2d")) {
     return loadLevelSourceTarget(target, options);
   }
-  if (target.kind === "sprite" && typeof loadSpriteSourceTarget === "function") {
+  if (sourceTargetMatches(target, "sprite", "2d") && typeof loadSpriteSourceTarget === "function") {
     return loadSpriteSourceTarget(target, options);
   }
-  if (target.kind === "sprite3d" && typeof loadSprite3dSourceTarget === "function") {
+  if (sourceTargetMatches(target, "sprite", "3d") && typeof loadSprite3dSourceTarget === "function") {
     return loadSprite3dSourceTarget(target, options);
   }
   if (target.kind === "sounds" && typeof loadSoundSourceTarget === "function") {
@@ -5770,13 +5746,10 @@ function loadResolvedSourceTarget(target, options = {}) {
   return null;
 }
 
-function previewModeForSourceTargetKind(kind) {
-  if (kind === "level") {
-    return "edit";
-  }
-  if (["level3d", "sprite", "sprite3d", "sounds"].includes(kind)) {
-    return kind;
-  }
+function previewModeForSourceTarget(target) {
+  if (target?.kind === "sounds") return "sounds";
+  if (target?.kind === "level") return levelModeForEditorDimension(target.dimension);
+  if (target?.kind === "sprite") return spriteModeForEditorDimension(target.dimension);
   return null;
 }
 
@@ -5828,7 +5801,7 @@ function syncPreviewModeFromSourceCursor(options = {}) {
       ),
     ) || 0)),
   );
-  const resolvedMode = previewModeForSourceTargetKind(sourceCursorResolveRegion?.kind);
+  const resolvedMode = previewModeForSourceTarget(sourceCursorResolveRegion);
   // The source structure (which block the caret sits in) only changes when the
   // text changes. While the text is unchanged and the caret is still inside the
   // last resolved target's range, the target is identical and the preview is
@@ -5870,7 +5843,7 @@ function syncPreviewModeFromSourceCursor(options = {}) {
         return false;
       }
       sourceCursorResolveRegion = target && Number.isInteger(target.start) && Number.isInteger(target.end)
-        ? { source, kind: target.kind, start: target.start, end: target.end }
+        ? { source, kind: target.kind, dimension: target.dimension, start: target.start, end: target.end }
         : null;
       const key = target ? loadResolvedSourceTarget(target, loadOptions) || "" : "";
       return finishSourceTargetSync(key, options);
@@ -6003,7 +5976,7 @@ function currentLevel3dSourceLocationForIndex(levelIndex, exportData = currentPr
   const allEntries = [];
   for (const document of puzzleTextDocuments()) {
     const source = sourceForDocument(document);
-    for (const entry of surfaceEntriesForSource(source).filter((candidate) => candidate.kind === "level3d")) {
+    for (const entry of surfaceEntriesForSource(source).filter((candidate) => sourceTargetMatches(candidate, "level", "3d"))) {
       const entryIndex = allEntries.length;
       const target = {
         document,
@@ -6032,7 +6005,7 @@ function currentLevel3dSourceLocationForIndex(levelIndex, exportData = currentPr
 function findLevelSourceEntries(source, document) {
   const entries = [];
   const seen = new Set();
-  for (const entry of surfaceEntriesForSource(source).filter((candidate) => candidate.kind === "level")) {
+  for (const entry of surfaceEntriesForSource(source).filter((candidate) => sourceTargetMatches(candidate, "level", "2d"))) {
     const key = `${entry.start}:${entry.end}`;
     if (seen.has(key)) {
       continue;
@@ -8993,14 +8966,13 @@ function formatSeconds(milliseconds) {
 
 function levelPlaytestCommandForKey(event) {
   const key = String(event.key || "").toLowerCase();
-  const code = String(event.code || "");
-  if (key === "z" || code === "KeyZ") {
+  if (key === "z") {
     return "undo";
   }
-  if (key === "y" || code === "KeyY") {
+  if (key === "y") {
     return "redo";
   }
-  if (key === "r" || code === "KeyR") {
+  if (key === "r") {
     return "restart";
   }
   return "";
@@ -9008,19 +8980,8 @@ function levelPlaytestCommandForKey(event) {
 
 function levelPlaytestKeyTokens(event) {
   const key = String(event.key || "");
-  const code = String(event.code || "");
-  const tokens = new Set();
-  if (key) {
-    tokens.add(key);
-    tokens.add(key.toLowerCase());
-  }
-  if (code) {
-    tokens.add(code);
-  }
-  if (code.startsWith("Key") && code.length === 4) {
-    tokens.add(code.slice(3).toLowerCase());
-  }
-  return tokens;
+  const normalized = key === " " ? "Space" : (key.length === 1 ? key.toLowerCase() : key);
+  return new Set(normalized ? [normalized] : []);
 }
 
 function levelPlaytestInputForKey(event, exportData = currentLevelExportData()) {
@@ -9041,7 +9002,7 @@ function levelPlaytestInputForKey(event, exportData = currentLevelExportData()) 
 
 function sendPreviewKey(event) {
   if (!levelBuilder.hidden && levelPlaytestActive) {
-    const command = levelPlaytestCommandForKey(event) || levelPlaytestInputForKey(event);
+    const command = levelPlaytestInputForKey(event) || levelPlaytestCommandForKey(event);
     if (command) {
       pendingPreviewKeyStateSync += 1;
       previewFrame.contentWindow?.postMessage({ type: "PuzzleStudioCommand", command }, "*");
@@ -11203,7 +11164,6 @@ solverModeButton.addEventListener("click", () => {
 for (const button of editorDimensionButtons) {
   button.addEventListener("click", () => {
     const context = focusedPuzzleSourceContext();
-    const sourceDimension = editorDimensionForDocument(context?.document);
     const previousMode = currentPreviewMode;
     const activeKind = previousMode === "sprite" || previousMode === "sprite3d" ? "sprite" : "level";
     const first = ["edit", "level3d", "sprite", "sprite3d"].includes(previousMode)
@@ -11217,7 +11177,7 @@ for (const button of editorDimensionButtons) {
       loadFocusedPuzzleEntry(activeKind, first, { silent: true, recordHistory: false });
       return;
     }
-    setEditorDimensionMode(sourceDimension || button.dataset.editorDimension);
+    setEditorDimensionMode(button.dataset.editorDimension);
   });
 }
 for (const button of levelPaneModeButtons) {

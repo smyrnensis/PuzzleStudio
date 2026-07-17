@@ -23,8 +23,7 @@ They do not reinterpret source syntax or deterministic model internals.
 - Rust package boundaries and the current crate map: `crates/AGENTS.md`
 - `.puzzle` syntax, validation, source analysis, and lowering:
   `crates/lang/AGENTS.md`
-- Deterministic 2D state and transitions: `crates/core/AGENTS.md`
-- Deterministic spatial/3D mechanics: `crates/grid3d/AGENTS.md`
+- Deterministic dimension-generic state and transitions: `crates/core/AGENTS.md`
 - Session lifecycle, undo, restart, and level flow: `crates/play/AGENTS.md`
 - Shared scene and component contracts: `crates/scene/AGENTS.md`
 - Source-free adapter/runtime schemas: `crates/runtime_contract/AGENTS.md`

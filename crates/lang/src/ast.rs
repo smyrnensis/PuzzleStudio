@@ -213,9 +213,8 @@ pub(crate) struct OrientedRewriteAst {
     pub(crate) after_call: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct Direction {
+#[derive(Clone, Debug)]
+pub(crate) struct DirectionalInput {
     pub(crate) input: puzzle_core::InputId,
-    pub(crate) dx: i16,
-    pub(crate) dy: i16,
+    pub(crate) direction: String,
 }

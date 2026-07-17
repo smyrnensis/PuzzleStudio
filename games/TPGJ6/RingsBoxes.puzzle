@@ -1567,7 +1567,7 @@ I = Ice Water
 @ = PurpleRing OrangeBox
 * = OrangeRing PurpleBox
 ` = OrangeRing BlackBox Start
-. = OrangeRing GreenBox
+· = OrangeRing GreenBox
 ~ = PurpleRing GreenBox
 : = GreenRing OrangeBox
 9 = GreenRing PurpleBox
@@ -1687,7 +1687,7 @@ wwwwwwwww
 w2wwwwwww
 w____wwww
 w_ww_wz3w
-w_*.!___w
+w_*·!___w
 wwwwaww_w
 wwwwa___w
 wwwwwwwww
@@ -1745,7 +1745,7 @@ level "Simultaneous-1"
 message "Simultaneous"
 wwwwwwwww
 wwwwwwwww
-wb__.__zw
+wb__·__zw
 www_w_www
 www_@_www
 www_#_www
@@ -1766,7 +1766,7 @@ wwwwwwwww
 wwwwwwzww
 w___b@#3w
 w__www_ww
-ww__:._ww
+ww__:·_ww
 ww____www
 wwwwwwwww
 
@@ -1814,7 +1814,7 @@ wwwwwwwwww
 w2wwwwwwww
 w____awwww
 w_wwwaww3w
-w____!*._w
+w____!*·_w
 wwwww_ww_w
 wwwwz____w
 wwwwwwwwww

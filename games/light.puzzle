@@ -18,6 +18,7 @@ groups {
 obstacle = Wall Crate Box
 push = Crate Lump
 multpush = Box Player
+object = solid
 }
 
 routine light_effect {
@@ -29,6 +30,18 @@ routine light_effect {
 
 on_level_start {
 light_effect
+}
+
+routine move {
+repeat {
+for d in directions {
+d [ d object | no object no {__move_collision} ] -> [ | object{no directions} ]
+}
+for d in directions {
+once_all d [ d object ] -> [ object ]
+}
+once_all [ {__move_collision} ] -> [ ]
+}
 }
 
 rules {
@@ -94,9 +107,6 @@ P = Player
 #########
 }
 
-keys {
-Escape q -> goto title
-}
 }
 
 scene title {
@@ -109,6 +119,18 @@ choice "Levels" -> goto level_select
 keys {
 Enter Space -> goto playing
 l -> goto level_select
+}
+}
+
+scene playing {
+layout {
+puzzle board = main
+}
+keys {
+Escape q -> goto title
+}
+rules {
+step board
 }
 }
 

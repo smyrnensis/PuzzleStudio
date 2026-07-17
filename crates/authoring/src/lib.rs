@@ -1147,8 +1147,11 @@ pub enum PuzzleDirectiveSurface {
     Close,
     Model,
     RemovedModelPrefix,
+    RemovedNameMetadata,
     Metadata,
     DocumentShell,
+    InputBuffer,
+    RemovedAnimation,
     Slots,
     Marks,
     Tags,
@@ -1164,6 +1167,24 @@ pub enum PuzzleDirectiveSurface {
     RemovedLevels3,
     Sprites,
     Scene,
+    Dimension,
+    Variable,
+    RunRulesOnLevelStart,
+    CollisionLayers,
+    EmptyCell,
+    Input,
+    RemovedVariable,
+    RemovedCondition,
+    RemovedEffect,
+    Direction,
+    RenderOverlay,
+    LoseConditions,
+    PuzzleScreen,
+    PuzzleScreenDirective,
+    RemovedFrameScreen,
+    RemovedRule,
+    RemovedMain,
+    Routine,
     RuleProgram,
     WinConditions,
     Query,
@@ -1200,11 +1221,14 @@ pub fn puzzle_directive_surface(line: &str) -> PuzzleDirectiveSurface {
     match first {
         "puzzle" => PuzzleDirectiveSurface::Model,
         "model" => PuzzleDirectiveSurface::RemovedModelPrefix,
+        "name" => PuzzleDirectiveSurface::RemovedNameMetadata,
         "title" | "subtitle" | "author" | "homepage" | "default_wait_time" | "again_interval" => {
             PuzzleDirectiveSurface::Metadata
         }
         "theme" if parse_assignment_row(line).is_some() => PuzzleDirectiveSurface::Metadata,
         "sounds" | "theme" | "assets" => PuzzleDirectiveSurface::DocumentShell,
+        "input_buffer" => PuzzleDirectiveSurface::InputBuffer,
+        "animation" => PuzzleDirectiveSurface::RemovedAnimation,
         "slots" => PuzzleDirectiveSurface::Slots,
         "marks" => PuzzleDirectiveSurface::Marks,
         "tags" => PuzzleDirectiveSurface::Tags,
@@ -1220,6 +1244,28 @@ pub fn puzzle_directive_surface(line: &str) -> PuzzleDirectiveSurface {
         "levels3" => PuzzleDirectiveSurface::RemovedLevels3,
         "sprites" => PuzzleDirectiveSurface::Sprites,
         "scene" => PuzzleDirectiveSurface::Scene,
+        "dimension" => PuzzleDirectiveSurface::Dimension,
+        "var" | "const" | "persistent" => PuzzleDirectiveSurface::Variable,
+        "run_rules_on_level_start" => PuzzleDirectiveSurface::RunRulesOnLevelStart,
+        "collision_layers" => PuzzleDirectiveSurface::CollisionLayers,
+        "empty" => PuzzleDirectiveSurface::EmptyCell,
+        "input" => PuzzleDirectiveSurface::Input,
+        "variable" => PuzzleDirectiveSurface::RemovedVariable,
+        "condition" => PuzzleDirectiveSurface::RemovedCondition,
+        "effect" => PuzzleDirectiveSurface::RemovedEffect,
+        "direction" => PuzzleDirectiveSurface::Direction,
+        "render_overlay" => PuzzleDirectiveSurface::RenderOverlay,
+        "lose_conditions" => PuzzleDirectiveSurface::LoseConditions,
+        "screen" | "layout" => PuzzleDirectiveSurface::PuzzleScreen,
+        "flickscreen" | "zoomscreen" | "screen_focus" => {
+            PuzzleDirectiveSurface::PuzzleScreenDirective
+        }
+        "frame_focus" | "frame_size" | "switch_frame" | "follow_frame" => {
+            PuzzleDirectiveSurface::RemovedFrameScreen
+        }
+        "rule" => PuzzleDirectiveSurface::RemovedRule,
+        "main" => PuzzleDirectiveSurface::RemovedMain,
+        "routine" => PuzzleDirectiveSurface::Routine,
         "win_conditions" => PuzzleDirectiveSurface::WinConditions,
         "query" => PuzzleDirectiveSurface::Query,
         "solver" => PuzzleDirectiveSurface::Solver,
@@ -1831,21 +1877,382 @@ pub enum RuleProgramBlockBody<Line> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RuleStatementLine<Line> {
-    pub source: Line,
-    pub text: String,
+pub struct RuleStatementSyntax<Line> {
+    sources: Vec<RuleStatementSource<Line>>,
+    text: String,
+    tokens: Vec<String>,
+    node: RuleStatementNode,
+    statements: Option<Vec<RuleStatementSyntax<Line>>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum RuleStatementSyntax<Line> {
-    Line(RuleStatementLine<Line>),
-    Block {
-        header: RuleStatementLine<Line>,
-        statements: Vec<RuleStatementSyntax<Line>>,
+pub enum RuleStatementNode {
+    Routine,
+    For(RuleForSurface),
+    Fix,
+    If(RuleIfSurface),
+    Else,
+    When,
+    Action,
+    Emit,
+    Do,
+    InputEffect(InputEffectSurfaceSpans),
+    Effect,
+    Rewrite(RuleRewriteSurface),
+    InvalidRewrite {
+        line: RuleLineSurfaceSpans,
+        error: UnresolvedPatternSyntaxError,
     },
+    Once,
+    OnceAll,
+    OncePerLevel,
+    Random,
+    Repeat,
+    Display,
+    Call {
+        name: String,
+    },
+    Arrow(RuleStatementTargetSurface),
+    ConditionRow,
+    Other(Option<String>),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RuleIfSurface {
+    Inline {
+        condition: Range<usize>,
+        target: RuleStatementTargetSurface,
+    },
+    Other,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RuleStatementTargetSurface {
+    Empty,
+    Call { name: String, span: Range<usize> },
+    Effect { span: Range<usize> },
+    Invalid { span: Range<usize> },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RuleRewriteSurface {
+    pub line: RuleLineSurfaceSpans,
+    pub syntax: UnresolvedRewriteSyntax,
+    pub target: RuleStatementTargetSurface,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RuleForSurface {
+    pub binding: String,
+    pub sources: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RuleStatementSource<Line> {
+    line: Line,
+    facts: RuleStatementFacts,
+}
+
+#[derive(Clone, Debug)]
+struct RuleStatementSourceMap {
+    source_start: usize,
+    joined: Range<usize>,
+}
+
+impl<Line: AsRef<str>> RuleStatementSyntax<Line> {
+    pub fn new(source: Line, text: String) -> Self {
+        let tokens = rule_statement_tokens(&text);
+        let node = rule_statement_node(&text, &tokens);
+        let facts = rule_statement_facts(source.as_ref().trim(), &node);
+        Self {
+            sources: vec![RuleStatementSource {
+                line: source,
+                facts,
+            }],
+            text,
+            tokens,
+            node,
+            statements: None,
+        }
+    }
+
+    pub fn new_block(
+        source: Line,
+        text: String,
+        statements: Vec<RuleStatementSyntax<Line>>,
+    ) -> Self {
+        let facts = rule_statement_block_facts(source.as_ref().trim());
+        let tokens = rule_statement_tokens(&text);
+        let node = rule_statement_node(&text, &tokens);
+        Self {
+            sources: vec![RuleStatementSource {
+                line: source,
+                facts,
+            }],
+            text,
+            tokens,
+            node,
+            statements: Some(statements),
+        }
+    }
+
+    fn new_composed(
+        sources: Vec<Line>,
+        text: String,
+        source_maps: Vec<RuleStatementSourceMap>,
+    ) -> Self {
+        let tokens = rule_statement_tokens(&text);
+        let node = rule_statement_node(&text, &tokens);
+        let mut source_facts = vec![RuleStatementFacts::default(); sources.len()];
+        for semantic in rule_statement_facts(&text, &node).spans {
+            let Some((source_index, source_map)) =
+                source_maps.iter().enumerate().find(|(_, source_map)| {
+                    source_map.joined.start <= semantic.span.start
+                        && semantic.span.end <= source_map.joined.end
+                })
+            else {
+                continue;
+            };
+            source_facts[source_index].spans.push(RuleSyntaxFact {
+                kind: semantic.kind,
+                span: source_map.source_start + semantic.span.start - source_map.joined.start
+                    ..source_map.source_start + semantic.span.end - source_map.joined.start,
+            });
+        }
+        let sources = sources
+            .into_iter()
+            .zip(source_facts)
+            .map(|(line, facts)| RuleStatementSource { line, facts })
+            .collect::<Vec<_>>();
+        assert!(!sources.is_empty(), "rule statement requires source");
+        Self {
+            sources,
+            text,
+            tokens,
+            node,
+            statements: None,
+        }
+    }
+
+    pub fn source(&self) -> &Line {
+        &self.sources[0].line
+    }
+
+    pub fn sources(&self) -> &[RuleStatementSource<Line>] {
+        &self.sources
+    }
+
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    pub fn tokens(&self) -> &[String] {
+        &self.tokens
+    }
+
+    pub fn node(&self) -> &RuleStatementNode {
+        &self.node
+    }
+
+    pub fn statements(&self) -> Option<&[RuleStatementSyntax<Line>]> {
+        self.statements.as_deref()
+    }
+
+    pub fn instantiate(
+        &self,
+        text: String,
+        statements: Option<Vec<RuleStatementSyntax<Line>>>,
+    ) -> Self
+    where
+        Line: Clone,
+    {
+        let tokens = rule_statement_tokens(&text);
+        let node = rule_statement_node(&text, &tokens);
+        Self {
+            sources: self.sources.clone(),
+            tokens,
+            node,
+            text,
+            statements,
+        }
+    }
+}
+
+impl<Line> RuleStatementSource<Line> {
+    pub fn line(&self) -> &Line {
+        &self.line
+    }
+
+    pub fn facts(&self) -> &RuleStatementFacts {
+        &self.facts
+    }
+}
+
+fn rule_statement_tokens(line: &str) -> Vec<String> {
+    split_header_tokens(line)
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+}
+
+fn rule_statement_node(line: &str, tokens: &[String]) -> RuleStatementNode {
+    let rewrite = rule_rewrite_surface(line);
+    match tokens.first().map(String::as_str) {
+        Some("routine") => RuleStatementNode::Routine,
+        Some("for") => rule_for_surface(&tokens)
+            .map(RuleStatementNode::For)
+            .unwrap_or_else(|| RuleStatementNode::Other(Some("for".to_string()))),
+        Some("fix") => RuleStatementNode::Fix,
+        Some("if") => RuleStatementNode::If(rule_if_surface(line)),
+        Some("else") => RuleStatementNode::Else,
+        Some("when") => RuleStatementNode::When,
+        Some("action") => RuleStatementNode::Action,
+        Some("emit") => RuleStatementNode::Emit,
+        Some("do") => RuleStatementNode::Do,
+        _ if input_effect_surface_spans(line).is_some() => RuleStatementNode::InputEffect(
+            input_effect_surface_spans(line).expect("checked input effect syntax"),
+        ),
+        _ if is_builtin_rewrite_effect_text(line) => RuleStatementNode::Effect,
+        _ if matches!(&rewrite, Ok(Some(_))) => RuleStatementNode::Rewrite(
+            rewrite
+                .expect("checked rewrite syntax")
+                .expect("checked rewrite product"),
+        ),
+        _ if rewrite.is_err() => {
+            let Err((line, error)) = rewrite else {
+                unreachable!("checked invalid rewrite")
+            };
+            RuleStatementNode::InvalidRewrite { line, error }
+        }
+        Some("once") => RuleStatementNode::Once,
+        Some("once_all") => RuleStatementNode::OnceAll,
+        Some("once_per_level") => RuleStatementNode::OncePerLevel,
+        Some("random") => RuleStatementNode::Random,
+        Some("repeat") => RuleStatementNode::Repeat,
+        Some("display") => RuleStatementNode::Display,
+        Some("->") => RuleStatementNode::Arrow(rule_arrow_surface(line)),
+        Some(name)
+            if tokens.len() == 1
+                && (is_at_identifier_token(name) || is_qualified_identifier(name)) =>
+        {
+            RuleStatementNode::Call {
+                name: name.to_string(),
+            }
+        }
+        Some(_) => RuleStatementNode::Other(tokens.first().cloned()),
+        None => RuleStatementNode::Other(None),
+    }
+}
+
+fn rule_rewrite_surface(
+    line: &str,
+) -> Result<Option<RuleRewriteSurface>, (RuleLineSurfaceSpans, UnresolvedPatternSyntaxError)> {
+    let surface = match rule_line_surface_spans(line) {
+        Ok(surface) => surface,
+        Err(_) => return Ok(None),
+    };
+    let rewrite = match &surface {
+        RuleLineSurfaceSpans::InputRewrite { surface, .. } => surface.rewrite.clone(),
+        RuleLineSurfaceSpans::NeutralRewrite { rewrite, .. }
+        | RuleLineSurfaceSpans::OrientedRewrite { rewrite, .. } => rewrite.clone(),
+    };
+    let syntax = parse_unresolved_rewrite_syntax(&line[rewrite.clone()])
+        .map_err(|error| (surface.clone(), error))?;
+    let suffix = rewrite.start + syntax.suffix_span.start..rewrite.start + syntax.suffix_span.end;
+    let target = rule_statement_target_surface(line, suffix);
+    Ok(Some(RuleRewriteSurface {
+        line: surface,
+        syntax,
+        target,
+    }))
+}
+
+fn rule_if_surface(line: &str) -> RuleIfSurface {
+    let condition_start = line.find("if").unwrap_or(0) + "if".len();
+    let Some(arrow) = top_level_arrow_index(line, condition_start) else {
+        return RuleIfSurface::Other;
+    };
+    let condition = trim_end_range(line, trim_start_range(line, condition_start..arrow));
+    RuleIfSurface::Inline {
+        condition,
+        target: rule_statement_target_surface(line, arrow + "->".len()..line.len()),
+    }
+}
+
+fn rule_arrow_surface(line: &str) -> RuleStatementTargetSurface {
+    let trimmed = trimmed_range(line);
+    rule_statement_target_surface(line, trimmed.start + "->".len()..trimmed.end)
+}
+
+fn rule_statement_target_surface(line: &str, range: Range<usize>) -> RuleStatementTargetSurface {
+    let span = trim_end_range(line, trim_start_range(line, range));
+    if span.is_empty() {
+        return RuleStatementTargetSurface::Empty;
+    }
+    let target = &line[span.clone()];
+    if is_builtin_rewrite_effect_text(target) {
+        RuleStatementTargetSurface::Effect { span }
+    } else if is_qualified_identifier(target) || is_at_identifier_token(target) {
+        RuleStatementTargetSurface::Call {
+            name: target.to_string(),
+            span,
+        }
+    } else {
+        RuleStatementTargetSurface::Invalid { span }
+    }
+}
+
+fn top_level_arrow_index(line: &str, start: usize) -> Option<usize> {
+    let mut square_depth = 0_u16;
+    let mut paren_depth = 0_u16;
+    let mut brace_depth = 0_u16;
+    let mut quoted = false;
+    let mut escaped = false;
+    let mut chars = line[start..].char_indices().peekable();
+    while let Some((relative, ch)) = chars.next() {
+        if quoted {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                quoted = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => quoted = true,
+            '[' => square_depth += 1,
+            ']' => square_depth = square_depth.saturating_sub(1),
+            '(' => paren_depth += 1,
+            ')' => paren_depth = paren_depth.saturating_sub(1),
+            '{' => brace_depth += 1,
+            '}' => brace_depth = brace_depth.saturating_sub(1),
+            '-' if square_depth == 0 && paren_depth == 0 && brace_depth == 0 => {
+                if chars.peek().is_some_and(|(_, next)| *next == '>') {
+                    return Some(start + relative);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn rule_for_surface(tokens: &[String]) -> Option<RuleForSurface> {
+    let [for_keyword, binding, in_keyword, sources @ ..] = tokens else {
+        return None;
+    };
+    if for_keyword != "for" || in_keyword != "in" || sources.is_empty() || !is_identifier(binding) {
+        return None;
+    }
+    Some(RuleForSurface {
+        binding: binding.clone(),
+        sources: sources.to_vec(),
+    })
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RuleProgramBlockBodyError {
     MissingClosingBrace { block_name: &'static str },
     RewriteContinuationMustStartWithPattern { line_index: usize },
@@ -1853,7 +2260,7 @@ pub enum RuleProgramBlockBodyError {
 }
 
 impl RuleProgramBlockBodyError {
-    pub fn message(self) -> String {
+    pub fn message(&self) -> String {
         match self {
             Self::MissingClosingBrace { block_name } => {
                 format!("{block_name} block missing }}")
@@ -1867,11 +2274,11 @@ impl RuleProgramBlockBodyError {
         }
     }
 
-    pub fn line_index(self) -> Option<usize> {
+    pub fn line_index(&self) -> Option<usize> {
         match self {
             Self::MissingClosingBrace { .. } => None,
             Self::RewriteContinuationMustStartWithPattern { line_index }
-            | Self::RewriteContinuationNestedArrow { line_index } => Some(line_index),
+            | Self::RewriteContinuationNestedArrow { line_index } => Some(*line_index),
         }
     }
 }
@@ -2017,46 +2424,6 @@ pub fn rule_application_surface(token: &str) -> Option<RuleApplicationSurface> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RuleStatementSurface<'a> {
-    ApplicationBlock { application: RuleApplicationSurface },
-    RuleLine(RuleLineSurface<'a>),
-    Call { name: &'a str },
-}
-
-pub fn rule_statement_surface(
-    line: &str,
-) -> Result<RuleStatementSurface<'_>, RuleLineSurfaceError> {
-    let line = line.trim();
-    let tokens = split_header_tokens(line);
-    if let [application] = tokens.as_slice()
-        && let Some(application) = rule_application_surface(application)
-    {
-        return Ok(RuleStatementSurface::ApplicationBlock { application });
-    }
-    if tokens.len() == 1 && is_qualified_identifier(tokens[0]) {
-        return Ok(RuleStatementSurface::Call { name: tokens[0] });
-    }
-    rule_line_surface(line).map(RuleStatementSurface::RuleLine)
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RuleLineSurface<'a> {
-    InputRewrite {
-        application: Option<RuleApplicationSurface>,
-        surface: InputRewriteSurface<'a>,
-    },
-    NeutralRewrite {
-        application: Option<RuleApplicationSurface>,
-        rewrite: &'a str,
-    },
-    OrientedRewrite {
-        application: Option<RuleApplicationSurface>,
-        orientation: &'a str,
-        rewrite: &'a str,
-    },
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RuleApplicationSurfaceSpan {
     pub application: RuleApplicationSurface,
@@ -2088,17 +2455,27 @@ pub enum RuleLineSurfaceSpans {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RuleSemanticSurfaceKind {
-    Direction,
+pub enum RuleSyntaxFactKind {
     Keyword,
-    Object,
+    Selector,
     Mark,
+    Variant,
+    Binding,
+    Call,
+    Effect,
+    State,
+    Input,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RuleSemanticSurfaceSpan {
-    pub kind: RuleSemanticSurfaceKind,
+pub struct RuleSyntaxFact {
+    pub kind: RuleSyntaxFactKind,
     pub span: Range<usize>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RuleStatementFacts {
+    pub spans: Vec<RuleSyntaxFact>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2117,37 +2494,6 @@ impl RuleLineSurfaceError {
             }
         }
     }
-}
-
-pub fn rule_line_surface(line: &str) -> Result<RuleLineSurface<'_>, RuleLineSurfaceError> {
-    Ok(match rule_line_surface_spans(line)? {
-        RuleLineSurfaceSpans::InputRewrite {
-            application,
-            surface,
-        } => RuleLineSurface::InputRewrite {
-            application: application.map(|application| application.application),
-            surface: InputRewriteSurface {
-                orientation: surface.orientation.map(|range| &line[range]),
-                rewrite: &line[surface.rewrite],
-            },
-        },
-        RuleLineSurfaceSpans::NeutralRewrite {
-            application,
-            rewrite,
-        } => RuleLineSurface::NeutralRewrite {
-            application: application.map(|application| application.application),
-            rewrite: &line[rewrite],
-        },
-        RuleLineSurfaceSpans::OrientedRewrite {
-            application,
-            orientation,
-            rewrite,
-        } => RuleLineSurface::OrientedRewrite {
-            application: application.map(|application| application.application),
-            orientation: &line[orientation],
-            rewrite: &line[rewrite],
-        },
-    })
 }
 
 pub fn rule_line_surface_spans(line: &str) -> Result<RuleLineSurfaceSpans, RuleLineSurfaceError> {
@@ -2186,26 +2532,280 @@ pub fn rule_line_surface_spans(line: &str) -> Result<RuleLineSurfaceSpans, RuleL
     })
 }
 
-pub fn rule_line_semantic_surface_spans(
-    line: &str,
-) -> Result<Vec<RuleSemanticSurfaceSpan>, RuleLineSurfaceError> {
+/// Semantic spans for a standalone pattern expression, shared by rules,
+/// win/lose conditions, and queries.
+pub fn pattern_semantic_surface_spans(line: &str) -> Vec<RuleSyntaxFact> {
     let mut spans = Vec::new();
-    match rule_line_surface_spans(line)? {
-        RuleLineSurfaceSpans::InputRewrite { surface, .. } => {
-            add_rule_rewrite_semantic_surface_spans(line, surface.rewrite, &mut spans);
+    add_rule_rewrite_semantic_surface_spans(line, 0..line.len(), &mut spans);
+    spans
+}
+
+fn rule_statement_facts(line: &str, node: &RuleStatementNode) -> RuleStatementFacts {
+    let mut semantics = RuleStatementFacts::default();
+    let spans = &mut semantics.spans;
+    match node {
+        RuleStatementNode::Rewrite(surface) => {
+            add_rule_statement_rewrite_facts(line, surface, spans);
+            return semantics;
         }
-        RuleLineSurfaceSpans::NeutralRewrite { rewrite, .. }
-        | RuleLineSurfaceSpans::OrientedRewrite { rewrite, .. } => {
-            add_rule_rewrite_semantic_surface_spans(line, rewrite, &mut spans);
+        RuleStatementNode::InvalidRewrite { line: surface, .. } => {
+            add_rule_line_surface_facts(line, surface, spans);
+            return semantics;
+        }
+        RuleStatementNode::If(RuleIfSurface::Inline { target, .. }) => {
+            collect_non_rule_statement_semantic_surface_spans(line, spans);
+            add_rule_statement_target_fact(target, spans);
+            return semantics;
+        }
+        RuleStatementNode::Arrow(target) => {
+            if let Some(arrow) = line.find("->") {
+                push_rule_semantic(
+                    spans,
+                    RuleSyntaxFactKind::Keyword,
+                    arrow..arrow + "->".len(),
+                );
+            }
+            add_rule_statement_target_fact(target, spans);
+            return semantics;
+        }
+        RuleStatementNode::Once
+        | RuleStatementNode::OnceAll
+        | RuleStatementNode::OncePerLevel
+        | RuleStatementNode::Random
+        | RuleStatementNode::Repeat => {
+            if let Some(token) = header_token_spans(line, trimmed_range(line)).first() {
+                push_rule_semantic(spans, RuleSyntaxFactKind::Keyword, token.range.clone());
+            }
+        }
+        RuleStatementNode::Call { name } => {
+            if let Some(start) = line.find(name) {
+                push_rule_semantic(spans, RuleSyntaxFactKind::Call, start..start + name.len());
+            }
+        }
+        RuleStatementNode::Effect => {
+            push_rule_semantic(spans, RuleSyntaxFactKind::Effect, trimmed_range(line));
+        }
+        RuleStatementNode::InputEffect(surface) => {
+            push_rule_semantic(spans, RuleSyntaxFactKind::Input, surface.input.clone());
+            push_rule_semantic(spans, RuleSyntaxFactKind::Effect, surface.effect.clone());
+        }
+        _ => {
+            collect_non_rule_statement_semantic_surface_spans(line, spans);
         }
     }
-    Ok(spans)
+    semantics
+}
+
+fn add_rule_statement_rewrite_facts(
+    line: &str,
+    surface: &RuleRewriteSurface,
+    spans: &mut Vec<RuleSyntaxFact>,
+) {
+    add_rule_line_surface_facts(line, &surface.line, spans);
+    add_rule_statement_target_fact(&surface.target, spans);
+}
+
+fn add_rule_line_surface_facts(
+    line: &str,
+    surface: &RuleLineSurfaceSpans,
+    spans: &mut Vec<RuleSyntaxFact>,
+) {
+    let rewrite = match surface {
+        RuleLineSurfaceSpans::InputRewrite {
+            application,
+            surface,
+        } => {
+            if let Some(application) = application {
+                push_rule_semantic(spans, RuleSyntaxFactKind::Keyword, application.span.clone());
+            }
+            push_rule_semantic(spans, RuleSyntaxFactKind::Keyword, surface.input.clone());
+            if let Some(orientation) = &surface.orientation {
+                push_rule_semantic(spans, RuleSyntaxFactKind::Keyword, orientation.clone());
+            }
+            surface.rewrite.clone()
+        }
+        RuleLineSurfaceSpans::NeutralRewrite {
+            application,
+            rewrite,
+        } => {
+            if let Some(application) = application {
+                push_rule_semantic(spans, RuleSyntaxFactKind::Keyword, application.span.clone());
+            }
+            rewrite.clone()
+        }
+        RuleLineSurfaceSpans::OrientedRewrite {
+            application,
+            orientation,
+            rewrite,
+        } => {
+            if let Some(application) = application {
+                push_rule_semantic(spans, RuleSyntaxFactKind::Keyword, application.span.clone());
+            }
+            push_rule_semantic(spans, RuleSyntaxFactKind::Keyword, orientation.clone());
+            rewrite.clone()
+        }
+    };
+    add_rule_rewrite_semantic_surface_spans(line, rewrite, spans);
+}
+
+fn add_rule_statement_target_fact(
+    target: &RuleStatementTargetSurface,
+    spans: &mut Vec<RuleSyntaxFact>,
+) {
+    match target {
+        RuleStatementTargetSurface::Call { span, .. } => {
+            push_rule_semantic(spans, RuleSyntaxFactKind::Call, span.clone())
+        }
+        RuleStatementTargetSurface::Effect { span } => {
+            push_rule_semantic(spans, RuleSyntaxFactKind::Effect, span.clone())
+        }
+        RuleStatementTargetSurface::Empty | RuleStatementTargetSurface::Invalid { .. } => {}
+    }
+}
+
+fn rule_statement_block_facts(line: &str) -> RuleStatementFacts {
+    let mut semantics = RuleStatementFacts::default();
+    if rule_program_block_surface(line).is_some() {
+        for token in header_token_spans(line, trimmed_range(line))
+            .into_iter()
+            .filter(|token| token.text != "{" && token.text != "}")
+        {
+            push_rule_semantic(
+                &mut semantics.spans,
+                RuleSyntaxFactKind::Keyword,
+                token.range,
+            );
+        }
+        return semantics;
+    }
+    if let Some(header) = rule_routine_block_header_surface_spans(line) {
+        push_rule_semantic(
+            &mut semantics.spans,
+            RuleSyntaxFactKind::Keyword,
+            header.keyword,
+        );
+        if let Some(name) = header.name {
+            push_rule_semantic(&mut semantics.spans, RuleSyntaxFactKind::Call, name);
+        }
+        semantics
+            .spans
+            .extend(header.modifiers.into_iter().map(|span| RuleSyntaxFact {
+                kind: RuleSyntaxFactKind::Keyword,
+                span,
+            }));
+        return semantics;
+    }
+    let head = line
+        .trim_end()
+        .strip_suffix('{')
+        .map(str::trim_end)
+        .unwrap_or(line);
+    collect_non_rule_statement_semantic_surface_spans(head, &mut semantics.spans);
+    semantics
+}
+
+fn collect_non_rule_statement_semantic_surface_spans(line: &str, spans: &mut Vec<RuleSyntaxFact>) {
+    let tokens = header_token_spans(line, trimmed_range(line));
+    match tokens.as_slice() {
+        [first, binding, infix, selectors @ ..] if first.text == "for" && infix.text == "in" => {
+            for token in [first, infix] {
+                push_rule_semantic(spans, RuleSyntaxFactKind::Keyword, token.range.clone());
+            }
+            push_rule_semantic(spans, RuleSyntaxFactKind::Binding, binding.range.clone());
+            spans.extend(selectors.iter().map(|selector| RuleSyntaxFact {
+                kind: RuleSyntaxFactKind::Selector,
+                span: selector.range.clone(),
+            }));
+        }
+        [first, ..]
+            if RULE_STATEMENT_HEAD_KEYWORDS.contains(&first.text) || first.text == "else" =>
+        {
+            push_rule_semantic(spans, RuleSyntaxFactKind::Keyword, first.range.clone());
+        }
+        [first, ..] if parse_assignment_row(line).is_some() => {
+            push_rule_semantic(spans, RuleSyntaxFactKind::State, first.range.clone());
+        }
+        _ => {}
+    }
+    for surface in input_oriented_pattern_surfaces(line) {
+        push_rule_semantic(spans, RuleSyntaxFactKind::Keyword, surface.input);
+        if let Some(orientation) = surface.orientation {
+            push_rule_semantic(spans, RuleSyntaxFactKind::Keyword, orientation);
+        }
+    }
+}
+
+fn push_rule_semantic(
+    spans: &mut Vec<RuleSyntaxFact>,
+    kind: RuleSyntaxFactKind,
+    span: Range<usize>,
+) {
+    spans.push(RuleSyntaxFact { kind, span });
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InputEffectSurfaceSpans {
+    pub input: Range<usize>,
+    pub effect: Range<usize>,
+}
+
+pub fn input_effect_surface_spans(line: &str) -> Option<InputEffectSurfaceSpans> {
+    let (left, right) = line.split_once("->")?;
+    let input = trimmed_range(left);
+    let effect_start = left.len() + "->".len();
+    let effect_relative = trimmed_range(right);
+    if !is_identifier(&left[input.clone()]) || effect_relative.is_empty() {
+        return None;
+    }
+    Some(InputEffectSurfaceSpans {
+        input,
+        effect: effect_start + effect_relative.start..effect_start + effect_relative.end,
+    })
+}
+
+pub fn is_builtin_rewrite_effect_text(text: &str) -> bool {
+    if text.strip_prefix("message ").is_some() || text.strip_prefix("emit ").is_some() {
+        return true;
+    }
+    let tokens = split_header_tokens(text);
+    matches!(tokens.as_slice(), ["goto", ..] | ["start", ..])
+        || tokens
+            .first()
+            .is_some_and(|token| is_builtin_rewrite_effect_command_token(token))
+        || matches!(
+            tokens.as_slice(),
+            [name, operator, ..]
+                if is_identifier(name) && is_variable_update_operator(operator)
+        )
+}
+
+fn is_builtin_rewrite_effect_command_token(token: &str) -> bool {
+    matches!(
+        token.to_ascii_lowercase().as_str(),
+        "cancel"
+            | "win"
+            | "restart"
+            | "next_level"
+            | "again"
+            | "checkpoint"
+            | "clear_checkpoint"
+            | "wait"
+            | "sfx"
+            | "play_music"
+            | "pause_music"
+            | "resume_music"
+            | "stop_music"
+    )
+}
+
+pub fn is_variable_update_operator(op: &str) -> bool {
+    matches!(op, "=" | "+=" | "-=" | "*=" | "/=" | "%=")
 }
 
 fn add_rule_rewrite_semantic_surface_spans(
     line: &str,
     rewrite: Range<usize>,
-    spans: &mut Vec<RuleSemanticSurfaceSpan>,
+    spans: &mut Vec<RuleSyntaxFact>,
 ) {
     for cell in bracket_content_spans(line, rewrite) {
         let Ok(tokens) = cell_token_spans(line, cell) else {
@@ -2290,22 +2890,22 @@ fn cell_token_spans(line: &str, range: Range<usize>) -> Result<Vec<Range<usize>>
 fn add_rule_cell_token_semantic_surface_spans(
     line: &str,
     token: Range<usize>,
-    spans: &mut Vec<RuleSemanticSurfaceSpan>,
+    spans: &mut Vec<RuleSyntaxFact>,
 ) {
     let text = &line[token.clone()];
     if text == "|" {
         return;
     }
     if text == "no" {
-        spans.push(RuleSemanticSurfaceSpan {
-            kind: RuleSemanticSurfaceKind::Keyword,
+        spans.push(RuleSyntaxFact {
+            kind: RuleSyntaxFactKind::Keyword,
             span: token,
         });
         return;
     }
     if mark_sugar_kind(text) == Some(MarkSugarKind::Movement) {
-        spans.push(RuleSemanticSurfaceSpan {
-            kind: RuleSemanticSurfaceKind::Direction,
+        spans.push(RuleSyntaxFact {
+            kind: RuleSyntaxFactKind::Keyword,
             span: token,
         });
         return;
@@ -2313,21 +2913,21 @@ fn add_rule_cell_token_semantic_surface_spans(
     let mark_start = text.find('{').map(|offset| token.start + offset);
     let selector_end = mark_start.unwrap_or(token.end);
     if selector_end > token.start {
-        spans.push(RuleSemanticSurfaceSpan {
-            kind: RuleSemanticSurfaceKind::Object,
+        spans.push(RuleSyntaxFact {
+            kind: RuleSyntaxFactKind::Selector,
             span: token.start..selector_end,
         });
     }
     if let Some(open) = mark_start
         && line[token.clone()].ends_with('}')
     {
-        spans.push(RuleSemanticSurfaceSpan {
-            kind: RuleSemanticSurfaceKind::Mark,
+        spans.push(RuleSyntaxFact {
+            kind: RuleSyntaxFactKind::Mark,
             span: open..open + 1,
         });
         add_rule_mark_block_semantic_surface_spans(line, open + 1..token.end - 1, spans);
-        spans.push(RuleSemanticSurfaceSpan {
-            kind: RuleSemanticSurfaceKind::Mark,
+        spans.push(RuleSyntaxFact {
+            kind: RuleSyntaxFactKind::Mark,
             span: token.end - 1..token.end,
         });
     }
@@ -2336,7 +2936,7 @@ fn add_rule_cell_token_semantic_surface_spans(
 fn add_rule_mark_block_semantic_surface_spans(
     line: &str,
     range: Range<usize>,
-    spans: &mut Vec<RuleSemanticSurfaceSpan>,
+    spans: &mut Vec<RuleSyntaxFact>,
 ) {
     let Ok(tokens) = cell_token_spans(line, range) else {
         return;
@@ -2344,8 +2944,8 @@ fn add_rule_mark_block_semantic_surface_spans(
     for token in tokens {
         let text = &line[token.clone()];
         if text == "no" {
-            spans.push(RuleSemanticSurfaceSpan {
-                kind: RuleSemanticSurfaceKind::Keyword,
+            spans.push(RuleSyntaxFact {
+                kind: RuleSyntaxFactKind::Keyword,
                 span: token,
             });
             continue;
@@ -2353,10 +2953,16 @@ fn add_rule_mark_block_semantic_surface_spans(
         let end = text
             .find('=')
             .map_or(token.end, |offset| token.start + offset);
-        spans.push(RuleSemanticSurfaceSpan {
-            kind: RuleSemanticSurfaceKind::Mark,
+        spans.push(RuleSyntaxFact {
+            kind: RuleSyntaxFactKind::Mark,
             span: token.start..end,
         });
+        if end < token.end {
+            spans.push(RuleSyntaxFact {
+                kind: RuleSyntaxFactKind::Variant,
+                span: end + 1..token.end,
+            });
+        }
     }
 }
 
@@ -2492,20 +3098,14 @@ pub fn input_oriented_pattern_surfaces(line: &str) -> Vec<InputOrientedPatternSu
 pub fn collect_rule_statement_line<Line>(
     lines: &[Line],
     start: usize,
-) -> Result<(RuleStatementLine<Line>, usize), RuleProgramBlockBodyError>
+) -> Result<(RuleStatementSyntax<Line>, usize), RuleProgramBlockBodyError>
 where
     Line: AsRef<str> + Clone,
 {
     let source = lines[start].clone();
     let first = source.as_ref().trim().to_string();
     if !looks_like_multiline_rule_line_start(&first) {
-        return Ok((
-            RuleStatementLine {
-                source,
-                text: first,
-            },
-            start + 1,
-        ));
+        return Ok((RuleStatementSyntax::new(source, first), start + 1));
     }
 
     if let Some(trailing) = rewrite_lhs_trailing(&first) {
@@ -2514,10 +3114,7 @@ where
                 if let Some(rhs) = next_line.strip_prefix("->").map(str::trim_start) {
                     validate_rewrite_rhs_continuation(rhs, start + 1)?;
                     return Ok((
-                        RuleStatementLine {
-                            source,
-                            text: format!("{first} -> {rhs}"),
-                        },
+                        compose_rule_statement_line(&lines[start..start + 2], " "),
                         start + 2,
                     ));
                 }
@@ -2526,10 +3123,7 @@ where
             if let Some(rhs) = lines.get(start + 1).map(AsRef::as_ref).map(str::trim) {
                 validate_rewrite_rhs_continuation(rhs, start + 1)?;
                 return Ok((
-                    RuleStatementLine {
-                        source,
-                        text: format!("{first} {rhs}"),
-                    },
+                    compose_rule_statement_line(&lines[start..start + 2], " "),
                     start + 2,
                 ));
             }
@@ -2539,6 +3133,8 @@ where
     let mut joined = String::new();
     let mut bracket_depth = 0usize;
     let mut saw_arrow = false;
+    let mut sources = Vec::new();
+    let mut source_maps = Vec::new();
     let mut index = start;
     while index < lines.len() {
         let line = lines[index].as_ref().trim();
@@ -2546,13 +3142,7 @@ where
             break;
         }
         if index > start && bracket_depth == 0 && !saw_arrow && !line.starts_with("->") {
-            return Ok((
-                RuleStatementLine {
-                    source,
-                    text: first,
-                },
-                start + 1,
-            ));
+            return Ok((RuleStatementSyntax::new(source, first), start + 1));
         }
         if !joined.is_empty() {
             if bracket_depth > 0 {
@@ -2565,18 +3155,18 @@ where
                 joined.push(' ');
             }
         }
+        let joined_start = joined.len();
         joined.push_str(line);
+        sources.push(lines[index].clone());
+        source_maps.push(RuleStatementSourceMap {
+            source_start: lines[index].as_ref().find(line).unwrap_or(0),
+            joined: joined_start..joined.len(),
+        });
         bracket_depth = update_square_bracket_depth(bracket_depth, line);
         saw_arrow |= line.contains("->");
 
         if index == start && bracket_depth == 0 {
-            return Ok((
-                RuleStatementLine {
-                    source,
-                    text: first,
-                },
-                start + 1,
-            ));
+            return Ok((RuleStatementSyntax::new(source, first), start + 1));
         }
         if index > start && bracket_depth == 0 && saw_arrow {
             let rhs = joined.split_once("->").map(|(_, rhs)| rhs.trim_start());
@@ -2584,23 +3174,38 @@ where
                 validate_rewrite_rhs_continuation(rhs, index)?;
             }
             return Ok((
-                RuleStatementLine {
-                    source,
-                    text: joined,
-                },
+                RuleStatementSyntax::new_composed(sources, joined, source_maps),
                 index + 1,
             ));
         }
         index += 1;
     }
 
-    Ok((
-        RuleStatementLine {
-            source,
-            text: first,
-        },
-        start + 1,
-    ))
+    Ok((RuleStatementSyntax::new(source, first), start + 1))
+}
+
+fn compose_rule_statement_line<Line>(lines: &[Line], separator: &str) -> RuleStatementSyntax<Line>
+where
+    Line: AsRef<str> + Clone,
+{
+    let mut text = String::new();
+    let mut sources = Vec::with_capacity(lines.len());
+    let mut source_maps = Vec::with_capacity(lines.len());
+    for line in lines {
+        let source_text = line.as_ref();
+        let fragment = source_text.trim();
+        if !text.is_empty() {
+            text.push_str(separator);
+        }
+        let joined_start = text.len();
+        text.push_str(fragment);
+        sources.push(line.clone());
+        source_maps.push(RuleStatementSourceMap {
+            source_start: source_text.find(fragment).unwrap_or(0),
+            joined: joined_start..text.len(),
+        });
+    }
+    RuleStatementSyntax::new_composed(sources, text, source_maps)
 }
 
 fn collect_rule_statement_entry_body<Line>(
@@ -2610,7 +3215,7 @@ fn collect_rule_statement_entry_body<Line>(
 where
     Line: AsRef<str> + Clone,
 {
-    collect_rule_statement_body(lines, 0, block_name, false).map(|(body, _)| body)
+    collect_rule_statement_body(lines, 0, block_name, false, false).map(|(body, _)| body)
 }
 
 pub fn collect_rule_statement_block<Line>(
@@ -2621,7 +3226,7 @@ pub fn collect_rule_statement_block<Line>(
 where
     Line: AsRef<str> + Clone,
 {
-    collect_rule_statement_body(lines, body_start, block_name, true)
+    collect_rule_statement_body(lines, body_start, block_name, true, false)
 }
 
 fn collect_rule_statement_body<Line>(
@@ -2629,6 +3234,7 @@ fn collect_rule_statement_body<Line>(
     mut index: usize,
     block_name: &'static str,
     closing_brace_required: bool,
+    condition_rows: bool,
 ) -> Result<(Vec<RuleStatementSyntax<Line>>, usize), RuleProgramBlockBodyError>
 where
     Line: AsRef<str> + Clone,
@@ -2649,18 +3255,27 @@ where
                 .expect("rule statement block surface requires an opening brace")
                 .trim_end()
                 .to_string();
-            let header = RuleStatementLine {
-                source: lines[index].clone(),
+            let child_condition_rows = is_condition_row_block_header(line);
+            let (statements, next_index) = collect_rule_statement_body(
+                lines,
+                index + 1,
+                block_name,
+                true,
+                child_condition_rows,
+            )?;
+            body.push(RuleStatementSyntax::new_block(
+                lines[index].clone(),
                 text,
-            };
-            let (statements, next_index) =
-                collect_rule_statement_body(lines, index + 1, block_name, true)?;
-            body.push(RuleStatementSyntax::Block { header, statements });
+                statements,
+            ));
             index = next_index;
             continue;
         }
-        let (rule_line, next_index) = collect_rule_statement_line(lines, index)?;
-        body.push(RuleStatementSyntax::Line(rule_line));
+        let (mut rule_line, next_index) = collect_rule_statement_line(lines, index)?;
+        if condition_rows {
+            rule_line.node = RuleStatementNode::ConditionRow;
+        }
+        body.push(rule_line);
         index = next_index;
     }
     if closing_brace_required {
@@ -2668,6 +3283,18 @@ where
     } else {
         Ok((body, index))
     }
+}
+
+fn is_condition_row_block_header(line: &str) -> bool {
+    let head = line
+        .trim_end()
+        .strip_suffix('{')
+        .map(str::trim_end)
+        .unwrap_or(line);
+    matches!(
+        split_header_tokens(head).as_slice(),
+        ["if"] | ["if", "all"] | ["if", "any"]
+    )
 }
 
 fn looks_like_multiline_rule_line_start(line: &str) -> bool {
@@ -2989,6 +3616,7 @@ pub struct UnresolvedRewriteSyntax {
     pub before: UnresolvedPatternSyntax,
     pub after: Option<UnresolvedPatternSyntax>,
     pub suffix: String,
+    pub suffix_span: Range<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3042,12 +3670,14 @@ pub fn parse_unresolved_rewrite_syntax(
             before,
             after: Some(after),
             suffix: suffix.to_string(),
+            suffix_span: source.len() - suffix.len()..source.len(),
         })
     } else {
         Ok(UnresolvedRewriteSyntax {
             before,
             after: None,
             suffix: after.to_string(),
+            suffix_span: source.len() - after.len()..source.len(),
         })
     }
 }
@@ -3130,11 +3760,19 @@ fn parse_unresolved_pattern_component(
             ])],
         });
     }
+    let source_lines = source.split([';', '\n']).collect::<Vec<_>>();
+    let last_line_index = source_lines.len().saturating_sub(1);
     let mut lines = Vec::new();
-    for line in source.split([';', '\n']) {
+    for (line_index, line) in source_lines.into_iter().enumerate() {
         let line = line.trim().trim_end_matches('\r').trim();
         if line.is_empty() {
-            lines.push(UnresolvedPatternLineSyntax::Blank);
+            if line_index == 0 || line_index == last_line_index {
+                lines.push(UnresolvedPatternLineSyntax::Cells(vec![
+                    UnresolvedPatternPartSyntax::Cell(UnresolvedCellSyntax::default()),
+                ]));
+            } else {
+                lines.push(UnresolvedPatternLineSyntax::Blank);
+            }
             continue;
         }
         let parts = line
@@ -3389,11 +4027,16 @@ pub fn split_cell_tokens(cell: &str) -> Result<Vec<String>, CellTokenError> {
 mod tests {
     use super::*;
 
-    fn statement_line(source: &str, text: &str) -> RuleStatementLine<String> {
-        RuleStatementLine {
-            source: source.to_string(),
-            text: text.to_string(),
-        }
+    fn statement_line(source: &str, text: &str) -> RuleStatementSyntax<String> {
+        RuleStatementSyntax::new(source.to_string(), text.to_string())
+    }
+
+    fn statement_block(
+        source: &str,
+        text: &str,
+        statements: Vec<RuleStatementSyntax<String>>,
+    ) -> RuleStatementSyntax<String> {
+        RuleStatementSyntax::new_block(source.to_string(), text.to_string(), statements)
     }
 
     #[test]
@@ -3430,6 +4073,18 @@ mod tests {
             semicolons.components[0].lines[2],
             UnresolvedPatternLineSyntax::Blank
         ));
+    }
+
+    #[test]
+    fn leading_and_trailing_semicolon_rows_are_empty_cells_not_blank_slices() {
+        let leading = parse_unresolved_pattern_syntax("[;Player]").unwrap();
+        let trailing = parse_unresolved_pattern_syntax("[Player;]").unwrap();
+
+        for syntax in [leading, trailing] {
+            assert!(syntax.components[0].lines.iter().all(|line| {
+                matches!(line, UnresolvedPatternLineSyntax::Cells(parts) if parts.len() == 1)
+            }));
+        }
     }
 
     #[test]
@@ -3573,45 +4228,11 @@ mod tests {
         );
         assert_eq!(rule_statement_block_surface("render {", true), None);
         assert_eq!(
-            rule_statement_surface("move").unwrap(),
-            RuleStatementSurface::Call { name: "move" }
-        );
-        assert_eq!(
-            rule_statement_surface("once {").unwrap(),
-            RuleStatementSurface::ApplicationBlock {
-                application: RuleApplicationSurface::Once
-            }
-        );
-        assert_eq!(
-            rule_statement_surface("push_boxes").unwrap(),
-            RuleStatementSurface::Call { name: "push_boxes" }
-        );
-        assert_eq!(
             input_rewrite_surface("input [ Player ] -> [ > Player ]").unwrap(),
             Some(InputRewriteSurface {
                 orientation: None,
                 rewrite: "[ Player ] -> [ > Player ]",
             })
-        );
-        assert_eq!(
-            rule_line_surface("input [ Player ] -> [ > Player ]").unwrap(),
-            RuleLineSurface::InputRewrite {
-                application: None,
-                surface: InputRewriteSurface {
-                    orientation: None,
-                    rewrite: "[ Player ] -> [ > Player ]",
-                },
-            }
-        );
-        assert_eq!(
-            rule_line_surface("once input [ Player ] -> [ > Player ]").unwrap(),
-            RuleLineSurface::InputRewrite {
-                application: Some(RuleApplicationSurface::Once),
-                surface: InputRewriteSurface {
-                    orientation: None,
-                    rewrite: "[ Player ] -> [ > Player ]",
-                },
-            }
         );
         assert_eq!(
             rule_line_surface_spans("once input directions [ Player ] -> [ > Player ]").unwrap(),
@@ -3689,15 +4310,29 @@ mod tests {
             "| Player ]".to_string(),
             "move".to_string(),
         ];
+        let (multiline_statement, next) = collect_rule_statement_line(&multiline, 0).unwrap();
+        assert_eq!(next, 4);
+        assert_eq!(multiline_statement.source(), "input directions [ Player");
         assert_eq!(
-            collect_rule_statement_line(&multiline, 0).unwrap(),
-            (
-                statement_line(
-                    "input directions [ Player",
-                    "input directions [ Player | no Wall ] -> [ | Player ]",
-                ),
-                4,
-            )
+            multiline_statement.text,
+            "input directions [ Player | no Wall ] -> [ | Player ]"
+        );
+        assert_eq!(multiline_statement.sources.len(), 4);
+        assert!(
+            multiline_statement.sources[1]
+                .facts
+                .spans
+                .iter()
+                .any(|span| span.kind == RuleSyntaxFactKind::Selector
+                    && &multiline_statement.sources[1].line[span.span.clone()] == "Wall")
+        );
+        assert!(
+            multiline_statement.sources[3]
+                .facts
+                .spans
+                .iter()
+                .any(|span| span.kind == RuleSyntaxFactKind::Selector
+                    && &multiline_statement.sources[3].line[span.span.clone()] == "Player")
         );
         assert_eq!(
             collect_rule_statement_line(&multiline, 4).unwrap(),
@@ -3710,20 +4345,14 @@ mod tests {
             "| Player ]".to_string(),
             "move".to_string(),
         ];
-        assert_eq!(
-            collect_rule_program_entry_body(
-                &rule_program_lines,
-                RuleProgramBlockSurface::Rules { modifier: "" },
-            )
-            .unwrap(),
-            RuleProgramBlockBody::RuleStatements(vec![
-                RuleStatementSyntax::Line(statement_line(
-                    "input directions [ Player",
-                    "input directions [ Player | no Wall ] -> [ | Player ]",
-                )),
-                RuleStatementSyntax::Line(statement_line("move", "move")),
-            ])
-        );
+        let RuleProgramBlockBody::RuleStatements(program) = collect_rule_program_entry_body(
+            &rule_program_lines,
+            RuleProgramBlockSurface::Rules { modifier: "" },
+        )
+        .unwrap();
+        assert_eq!(program.len(), 2);
+        assert_eq!(program[0].sources.len(), 4);
+        assert_eq!(program[1].text, "move");
         let nested_rule_program_lines = vec![
             "for h in horizontal {".to_string(),
             "if input == h {".to_string(),
@@ -3737,32 +4366,38 @@ mod tests {
                 RuleProgramBlockSurface::Rules { modifier: "" },
             )
             .unwrap(),
-            RuleProgramBlockBody::RuleStatements(vec![RuleStatementSyntax::Block {
-                header: statement_line("for h in horizontal {", "for h in horizontal"),
-                statements: vec![RuleStatementSyntax::Block {
-                    header: statement_line("if input == h {", "if input == h"),
-                    statements: vec![RuleStatementSyntax::Line(statement_line(
+            RuleProgramBlockBody::RuleStatements(vec![statement_block(
+                "for h in horizontal {",
+                "for h in horizontal",
+                vec![statement_block(
+                    "if input == h {",
+                    "if input == h",
+                    vec![statement_line(
                         "[ TEN:horizontal ] -> [ TEN:h ]",
                         "[ TEN:horizontal ] -> [ TEN:h ]",
-                    ))],
-                }],
-            }])
+                    )],
+                )],
+            )])
         );
         let dense_multiline = vec![
             "(right, up) [ Player".to_string(),
             "Box ] -> [ Player".to_string(),
             "Box ]".to_string(),
         ];
+        let (dense_statement, next) = collect_rule_statement_line(&dense_multiline, 0).unwrap();
+        assert_eq!(next, 3);
         assert_eq!(
-            collect_rule_statement_line(&dense_multiline, 0).unwrap(),
-            (
-                statement_line(
-                    "(right, up) [ Player",
-                    "(right, up) [ Player ; Box ] -> [ Player ; Box ]",
-                ),
-                3,
-            )
+            dense_statement.text,
+            "(right, up) [ Player ; Box ] -> [ Player ; Box ]"
         );
+        assert_eq!(dense_statement.sources.len(), 3);
+        assert!(dense_statement.sources.iter().skip(1).all(|source| {
+            source
+                .facts
+                .spans
+                .iter()
+                .any(|span| span.kind == RuleSyntaxFactKind::Selector)
+        }));
         let lifecycle_lines = vec![
             "".to_string(),
             "if win_conditions -> next_level".to_string(),
@@ -3773,56 +4408,10 @@ mod tests {
                 RuleProgramBlockSurface::OnLevelClear,
             )
             .unwrap(),
-            RuleProgramBlockBody::RuleStatements(vec![RuleStatementSyntax::Line(statement_line(
+            RuleProgramBlockBody::RuleStatements(vec![statement_line(
                 "if win_conditions -> next_level",
                 "if win_conditions -> next_level",
-            ),)])
-        );
-        assert_eq!(
-            rule_line_surface("right [ Player ] -> [ > Player ]").unwrap(),
-            RuleLineSurface::OrientedRewrite {
-                application: None,
-                orientation: "right",
-                rewrite: "[ Player ] -> [ > Player ]",
-            }
-        );
-        assert_eq!(
-            rule_line_surface("repeat right [ Player ] -> [ > Player ]").unwrap(),
-            RuleLineSurface::OrientedRewrite {
-                application: Some(RuleApplicationSurface::Repeat),
-                orientation: "right",
-                rewrite: "[ Player ] -> [ > Player ]",
-            }
-        );
-        assert_eq!(
-            rule_line_surface("right, front [ Player ] -> [ Player ]").unwrap(),
-            RuleLineSurface::OrientedRewrite {
-                application: None,
-                orientation: "right, front",
-                rewrite: "[ Player ] -> [ Player ]",
-            }
-        );
-        assert_eq!(
-            rule_line_surface("(right, front) [ Player ] -> [ Player ]").unwrap(),
-            RuleLineSurface::OrientedRewrite {
-                application: None,
-                orientation: "(right, front)",
-                rewrite: "[ Player ] -> [ Player ]",
-            }
-        );
-        assert_eq!(
-            rule_line_surface("[ > Player | Box ] -> [ > Player | > Box ]").unwrap(),
-            RuleLineSurface::NeutralRewrite {
-                application: None,
-                rewrite: "[ > Player | Box ] -> [ > Player | > Box ]",
-            }
-        );
-        assert_eq!(
-            rule_line_surface("once_all [ > Player | Box ] -> [ > Player | > Box ]").unwrap(),
-            RuleLineSurface::NeutralRewrite {
-                application: Some(RuleApplicationSurface::OnceAll),
-                rewrite: "[ > Player | Box ] -> [ > Player | > Box ]",
-            }
+            )])
         );
     }
 
@@ -3860,17 +4449,113 @@ mod tests {
     #[test]
     fn rule_semantic_surface_splits_compact_selector_marks() {
         let line = "[ > Player{mark} ] -> [ Player ]";
-        let spans = rule_line_semantic_surface_spans(line).unwrap();
-        let projected = spans
+        let syntax = RuleStatementSyntax::new(line.to_string(), line.to_string());
+        let projected = syntax.sources[0]
+            .facts
+            .spans
             .iter()
             .map(|span| (span.kind, &line[span.span.clone()]))
             .collect::<Vec<_>>();
 
-        assert!(projected.contains(&(RuleSemanticSurfaceKind::Direction, ">")));
-        assert!(projected.contains(&(RuleSemanticSurfaceKind::Object, "Player")));
-        assert!(projected.contains(&(RuleSemanticSurfaceKind::Mark, "{")));
-        assert!(projected.contains(&(RuleSemanticSurfaceKind::Mark, "mark")));
-        assert!(projected.contains(&(RuleSemanticSurfaceKind::Mark, "}")));
+        assert!(projected.contains(&(RuleSyntaxFactKind::Keyword, ">")));
+        assert!(projected.contains(&(RuleSyntaxFactKind::Selector, "Player")));
+        assert!(projected.contains(&(RuleSyntaxFactKind::Mark, "{")));
+        assert!(projected.contains(&(RuleSyntaxFactKind::Mark, "mark")));
+        assert!(projected.contains(&(RuleSyntaxFactKind::Mark, "}")));
+    }
+
+    #[test]
+    fn accepted_statement_nodes_own_their_semantic_facts() {
+        let unknown = RuleStatementSyntax::new(
+            "mystery argument".to_string(),
+            "mystery argument".to_string(),
+        );
+        assert_eq!(
+            unknown.node,
+            RuleStatementNode::Other(Some("mystery".to_string()))
+        );
+        assert!(unknown.sources[0].facts.spans.is_empty());
+
+        let effect = RuleStatementSyntax::new("wait 120ms".to_string(), "wait 120ms".to_string());
+        assert_eq!(effect.node, RuleStatementNode::Effect);
+        assert!(
+            effect.sources[0]
+                .facts
+                .spans
+                .iter()
+                .any(|fact| fact.kind == RuleSyntaxFactKind::Effect)
+        );
+
+        let input_effect =
+            RuleStatementSyntax::new("move -> restart".to_string(), "move -> restart".to_string());
+        assert!(matches!(
+            input_effect.node,
+            RuleStatementNode::InputEffect(InputEffectSurfaceSpans { input, effect })
+                if &input_effect.text[input.clone()] == "move"
+                    && &input_effect.text[effect.clone()] == "restart"
+        ));
+
+        let for_statement = RuleStatementSyntax::new(
+            "for h in horizontal".to_string(),
+            "for h in horizontal".to_string(),
+        );
+        assert_eq!(
+            for_statement.node,
+            RuleStatementNode::For(RuleForSurface {
+                binding: "h".to_string(),
+                sources: vec!["horizontal".to_string()],
+            })
+        );
+
+        let rewrite_text = "right [ Player ] -> [ Player ] restart";
+        let rewrite = RuleStatementSyntax::new(rewrite_text.to_string(), rewrite_text.to_string());
+        assert!(matches!(
+            rewrite.node,
+            RuleStatementNode::Rewrite(RuleRewriteSurface {
+                syntax: UnresolvedRewriteSyntax { after: Some(_), .. },
+                target: RuleStatementTargetSurface::Effect { ref span },
+                ..
+            }) if &rewrite_text[span.clone()] == "restart"
+        ));
+
+        let multi_effect_text = "[ Player ] -> [ Player ] sfx step again";
+        let multi_effect =
+            RuleStatementSyntax::new(multi_effect_text.to_string(), multi_effect_text.to_string());
+        assert!(matches!(
+            multi_effect.node,
+            RuleStatementNode::Rewrite(RuleRewriteSurface {
+                target: RuleStatementTargetSurface::Effect { ref span },
+                ..
+            }) if &multi_effect_text[span.clone()] == "sfx step again"
+        ));
+
+        let inline_text = "if ready -> restart";
+        let inline = RuleStatementSyntax::new(inline_text.to_string(), inline_text.to_string());
+        assert!(matches!(
+            inline.node,
+            RuleStatementNode::If(RuleIfSurface::Inline {
+                ref condition,
+                target: RuleStatementTargetSurface::Effect { ref span },
+            }) if &inline_text[condition.clone()] == "ready"
+                && &inline_text[span.clone()] == "restart"
+        ));
+
+        let keep_text = "[ = | B ] -> [ A | B ]";
+        let keep = RuleStatementSyntax::new(keep_text.to_string(), keep_text.to_string());
+        assert!(matches!(
+            keep.node,
+            RuleStatementNode::InvalidRewrite { .. }
+        ));
+
+        let arrow_text = "-> move";
+        let arrow = RuleStatementSyntax::new(arrow_text.to_string(), arrow_text.to_string());
+        assert!(matches!(
+            arrow.node,
+            RuleStatementNode::Arrow(RuleStatementTargetSurface::Call {
+                ref name,
+                ref span,
+            }) if name == "move" && &arrow_text[span.clone()] == "move"
+        ));
     }
 
     #[test]

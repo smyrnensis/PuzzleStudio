@@ -2,7 +2,7 @@ use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 pub struct WasmPuzzle3Runtime {
-    inner: puzzle_game_runtime::Puzzle3RuntimeBridge,
+    inner: puzzle_game_runtime::GridRuntimeBridge<3, puzzle_core::Size3>,
 }
 
 #[wasm_bindgen]
@@ -16,7 +16,7 @@ impl WasmPuzzle3Runtime {
     pub fn new(source: &str, puzzle_path: &str) -> Result<WasmPuzzle3Runtime, JsValue> {
         let _ = puzzle_path;
         Ok(Self {
-            inner: puzzle_game_runtime::Puzzle3RuntimeBridge::from_source(source)
+            inner: puzzle_game_runtime::GridRuntimeBridge::from_source(source)
                 .map_err(|error| JsValue::from_str(&error))?,
         })
     }
@@ -24,20 +24,19 @@ impl WasmPuzzle3Runtime {
     #[wasm_bindgen(js_name = fromFixture)]
     pub fn from_fixture(fixture_json: &str) -> Result<WasmPuzzle3Runtime, JsValue> {
         Ok(Self {
-            inner: puzzle_game_runtime::Puzzle3RuntimeBridge::from_visual_fixture_json(
-                fixture_json,
-            )
-            .map_err(|error| JsValue::from_str(&error))?,
+            inner: puzzle_game_runtime::GridRuntimeBridge::from_visual_fixture_json(fixture_json)
+                .map_err(|error| JsValue::from_str(&error))?,
         })
     }
 
     pub fn transition_current_outcome(
         &mut self,
         program_key: &str,
+        level_index: i32,
         input: u16,
     ) -> Result<String, JsValue> {
         self.inner
-            .transition_current_outcome_json(program_key, input)
+            .transition_current_outcome_json(program_key, level_index, input)
             .map_err(|error| JsValue::from_str(&error))
     }
 

@@ -1,8 +1,7 @@
 use crate::{
-    ConditionId, GridCompiledGame, GridConditionValueKind, GridGuard, GridPatch, GridPatchError,
-    GridPattern, GridPatternComponent, GridRule, GridRuleCondition, GridRuleStep, GridSize,
-    GridState, GridTransitionError, GridWriteOp, InputId, MarkId, ObjectId, PatchOp, RuleId,
-    TransitionCommand,
+    ConditionId, GridCompiledGame, GridConditionValueKind, GridExecutableProgram, GridGuard,
+    GridPatch, GridPatchError, GridPattern, GridPatternComponent, GridRule, GridRuleCondition,
+    GridSize, GridState, GridWriteOp, InputId, MarkId, ObjectId, PatchOp, RuleId,
 };
 use puzzle_kernel::{
     ComparisonOp, ComponentPlacement, FnvBuilder, GridCoord, GridOffset as CoordOffset, LocalFrame,
@@ -19,6 +18,34 @@ type ObjectSetMarkPattern = puzzle_kernel::ObjectSetMarkPattern<MarkId>;
 use puzzle_kernel::{RuleApplication, RuleEffect};
 
 pub(crate) const UNTIL_STABLE_REPEAT_LIMIT: usize = 200;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GridTransitionError<const D: usize> {
+    Patch(GridPatchError<D>),
+    OffsetOutOfBounds,
+    RepeatUntilNoProgress,
+    InvalidProgramContinuation,
+    InvalidCommand(String),
+    UnboundObjectSet { binding: u16 },
+}
+
+impl<const D: usize> From<GridPatchError<D>> for GridTransitionError<D> {
+    fn from(value: GridPatchError<D>) -> Self {
+        Self::Patch(value)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TransitionCommand {
+    Win,
+    Restart,
+    NextLevel,
+    Again,
+    Checkpoint,
+    ClearCheckpoint,
+}
+
+pub type ProgramContinuation = puzzle_kernel::ProgramContinuation;
 
 pub use puzzle_kernel::flattened_program_rules as flattened_rules;
 
@@ -67,6 +94,46 @@ pub type GridTransitionOutcome<const D: usize, Size> = KernelTransitionOutcome<
     GridPatch<D>,
 >;
 
+pub fn transition_state<const D: usize, Size: GridSize<D>>(
+    game: &GridCompiledGame<D>,
+    state: &GridState<D, Size>,
+    input: InputId,
+) -> Result<GridState<D, Size>, GridTransitionError<D>> {
+    transition_program(game, state, game.executable_program(), input)
+}
+
+pub fn transition_outcome<const D: usize, Size: GridSize<D>>(
+    game: &GridCompiledGame<D>,
+    state: &GridState<D, Size>,
+    input: InputId,
+) -> Result<GridTransitionOutcome<D, Size>, GridTransitionError<D>> {
+    transition_program_outcome(game, state, game.executable_program(), input)
+}
+
+pub fn transition_solver_state<const D: usize, Size: GridSize<D>>(
+    game: &GridCompiledGame<D>,
+    state: &GridState<D, Size>,
+    input: InputId,
+) -> Result<GridState<D, Size>, GridTransitionError<D>> {
+    transition_state(game, state, input)
+}
+
+pub fn transition_solver_outcome<const D: usize, Size: GridSize<D>>(
+    game: &GridCompiledGame<D>,
+    state: &GridState<D, Size>,
+    input: InputId,
+) -> Result<GridTransitionOutcome<D, Size>, GridTransitionError<D>> {
+    transition_outcome(game, state, input)
+}
+
+pub fn transition_trace<const D: usize, Size: GridSize<D>>(
+    game: &GridCompiledGame<D>,
+    state: &GridState<D, Size>,
+    input: InputId,
+) -> Result<GridTransitionOutcome<D, Size>, GridTransitionError<D>> {
+    transition_outcome(game, state, input)
+}
+
 pub struct GridProgramBoundarySnapshot<'a, const D: usize, Size: GridSize<D>> {
     pub input: Option<InputId>,
     pub next_state: &'a GridState<D, Size>,
@@ -87,7 +154,7 @@ pub fn transition_program_segment_trace<
     Stop: FnMut(GridProgramBoundarySnapshot<'_, D, Size>) -> bool,
 >(
     game: &GridCompiledGame<D>,
-    program: &[GridRuleStep<D>],
+    program: &GridExecutableProgram<D>,
     state: &GridState<D, Size>,
     input: Option<InputId>,
     local_frame: Option<&LocalFrame<ObjectId>>,
@@ -130,7 +197,7 @@ pub fn transition_program_continuation_segment_trace<
     Stop: FnMut(GridProgramBoundarySnapshot<'_, D, Size>) -> bool,
 >(
     game: &GridCompiledGame<D>,
-    program: &[GridRuleStep<D>],
+    program: &GridExecutableProgram<D>,
     continuation: &puzzle_kernel::ProgramContinuation,
     state: &GridState<D, Size>,
     input: Option<InputId>,
@@ -226,7 +293,7 @@ pub fn transition_once_with_input<const D: usize, Size: GridSize<D>>(
 pub fn transition_program<const D: usize, Size: GridSize<D>>(
     game: &GridCompiledGame<D>,
     state: &GridState<D, Size>,
-    program: &[GridRuleStep<D>],
+    program: &GridExecutableProgram<D>,
     input: InputId,
 ) -> Result<GridState<D, Size>, GridTransitionError<D>> {
     transition_program_outcome_with_local_frame(game, state, program, input, None)
@@ -236,7 +303,7 @@ pub fn transition_program<const D: usize, Size: GridSize<D>>(
 pub fn transition_program_with_local_frame<const D: usize, Size: GridSize<D>>(
     game: &GridCompiledGame<D>,
     state: &GridState<D, Size>,
-    program: &[GridRuleStep<D>],
+    program: &GridExecutableProgram<D>,
     input: InputId,
     local_frame: Option<&LocalFrame<ObjectId>>,
 ) -> Result<GridState<D, Size>, GridTransitionError<D>> {
@@ -247,7 +314,7 @@ pub fn transition_program_with_local_frame<const D: usize, Size: GridSize<D>>(
 pub fn transition_program_outcome<const D: usize, Size: GridSize<D>>(
     game: &GridCompiledGame<D>,
     state: &GridState<D, Size>,
-    program: &[GridRuleStep<D>],
+    program: &GridExecutableProgram<D>,
     input: InputId,
 ) -> Result<GridTransitionOutcome<D, Size>, GridTransitionError<D>> {
     transition_program_outcome_with_local_frame(game, state, program, input, None)
@@ -256,7 +323,7 @@ pub fn transition_program_outcome<const D: usize, Size: GridSize<D>>(
 pub fn transition_program_outcome_with_local_frame<const D: usize, Size: GridSize<D>>(
     game: &GridCompiledGame<D>,
     state: &GridState<D, Size>,
-    program: &[GridRuleStep<D>],
+    program: &GridExecutableProgram<D>,
     input: InputId,
     local_frame: Option<&LocalFrame<ObjectId>>,
 ) -> Result<GridTransitionOutcome<D, Size>, GridTransitionError<D>> {
@@ -266,13 +333,34 @@ pub fn transition_program_outcome_with_local_frame<const D: usize, Size: GridSiz
 fn transition_program_outcome_inner<const D: usize, Size: GridSize<D>>(
     game: &GridCompiledGame<D>,
     state: &GridState<D, Size>,
-    program: &[GridRuleStep<D>],
+    program: &GridExecutableProgram<D>,
     input: Option<InputId>,
     local_frame: Option<&LocalFrame<ObjectId>>,
 ) -> Result<GridTransitionOutcome<D, Size>, GridTransitionError<D>> {
     let mut original = state.clone();
     original.clear_mark();
-    let mut outcome = apply_grid_program(game, &original, program, input, local_frame)?;
+    let mut trace = GridTransitionTrace::<D>::default();
+    let mut next_state = original.clone();
+    let mut backend = GridProgramBackend {
+        game,
+        input,
+        trace: &mut trace,
+    };
+    puzzle_kernel::execute_program(
+        &mut backend,
+        &mut next_state,
+        program,
+        local_frame,
+        UNTIL_STABLE_REPEAT_LIMIT,
+    )?;
+    let mut outcome = KernelTransitionOutcome {
+        input,
+        next_state,
+        cancelled: trace.cancelled,
+        commands: trace.commands,
+        fired_rules: trace.fired_rules,
+        patches: trace.patches,
+    };
     if outcome.cancelled {
         outcome.next_state = original;
         outcome.commands.clear();
@@ -282,30 +370,10 @@ fn transition_program_outcome_inner<const D: usize, Size: GridSize<D>>(
     Ok(outcome)
 }
 
-pub(crate) fn apply_grid_program<const D: usize, Size: GridSize<D>>(
-    game: &GridCompiledGame<D>,
-    state: &GridState<D, Size>,
-    program: &[GridRuleStep<D>],
-    input: Option<InputId>,
-    local_frame: Option<&LocalFrame<ObjectId>>,
-) -> Result<GridTransitionOutcome<D, Size>, GridTransitionError<D>> {
-    let mut trace = GridTransitionTrace::<D>::default();
-    let next_state =
-        transition_program_steps(game, state, program, input, local_frame, &mut trace)?;
-    Ok(KernelTransitionOutcome {
-        input,
-        next_state,
-        cancelled: trace.cancelled,
-        commands: trace.commands,
-        fired_rules: trace.fired_rules,
-        patches: trace.patches,
-    })
-}
-
 pub fn transition_program_without_input<const D: usize, Size: GridSize<D>>(
     game: &GridCompiledGame<D>,
     state: &GridState<D, Size>,
-    program: &[GridRuleStep<D>],
+    program: &GridExecutableProgram<D>,
 ) -> Result<GridState<D, Size>, GridTransitionError<D>> {
     transition_program_without_input_outcome_with_local_frame(game, state, program, None)
         .map(|outcome| outcome.next_state)
@@ -314,7 +382,7 @@ pub fn transition_program_without_input<const D: usize, Size: GridSize<D>>(
 pub fn transition_program_without_input_with_local_frame<const D: usize, Size: GridSize<D>>(
     game: &GridCompiledGame<D>,
     state: &GridState<D, Size>,
-    program: &[GridRuleStep<D>],
+    program: &GridExecutableProgram<D>,
     local_frame: Option<&LocalFrame<ObjectId>>,
 ) -> Result<GridState<D, Size>, GridTransitionError<D>> {
     transition_program_without_input_outcome_with_local_frame(game, state, program, local_frame)
@@ -324,9 +392,36 @@ pub fn transition_program_without_input_with_local_frame<const D: usize, Size: G
 pub fn transition_program_without_input_outcome<const D: usize, Size: GridSize<D>>(
     game: &GridCompiledGame<D>,
     state: &GridState<D, Size>,
-    program: &[GridRuleStep<D>],
+    program: &GridExecutableProgram<D>,
 ) -> Result<GridTransitionOutcome<D, Size>, GridTransitionError<D>> {
     transition_program_without_input_outcome_with_local_frame(game, state, program, None)
+}
+
+pub fn transition_program_sequence_without_input_outcome<const D: usize, Size: GridSize<D>>(
+    game: &GridCompiledGame<D>,
+    state: &GridState<D, Size>,
+    programs: &[&GridExecutableProgram<D>],
+) -> Result<GridTransitionOutcome<D, Size>, GridTransitionError<D>> {
+    let mut outcome = KernelTransitionOutcome {
+        input: None,
+        next_state: state.clone(),
+        cancelled: false,
+        commands: Vec::new(),
+        fired_rules: Vec::new(),
+        patches: Vec::new(),
+    };
+    for program in programs {
+        let next = transition_program_without_input_outcome(game, &outcome.next_state, program)?;
+        outcome.next_state = next.next_state;
+        outcome.commands.extend(next.commands);
+        outcome.fired_rules.extend(next.fired_rules);
+        outcome.patches.extend(next.patches);
+        if next.cancelled {
+            outcome.cancelled = true;
+            break;
+        }
+    }
+    Ok(outcome)
 }
 
 pub fn transition_program_without_input_outcome_with_local_frame<
@@ -335,30 +430,10 @@ pub fn transition_program_without_input_outcome_with_local_frame<
 >(
     game: &GridCompiledGame<D>,
     state: &GridState<D, Size>,
-    program: &[GridRuleStep<D>],
+    program: &GridExecutableProgram<D>,
     local_frame: Option<&LocalFrame<ObjectId>>,
 ) -> Result<GridTransitionOutcome<D, Size>, GridTransitionError<D>> {
     transition_program_outcome_inner(game, state, program, None, local_frame)
-}
-
-fn transition_program_steps<const D: usize, Size: GridSize<D>>(
-    game: &GridCompiledGame<D>,
-    state: &GridState<D, Size>,
-    steps: &[GridRuleStep<D>],
-    input: Option<InputId>,
-    local_frame: Option<&LocalFrame<ObjectId>>,
-    trace: &mut GridTransitionTrace<D>,
-) -> Result<GridState<D, Size>, GridTransitionError<D>> {
-    let mut current = state.clone();
-    let mut backend = GridProgramBackend { game, input, trace };
-    puzzle_kernel::execute_program(
-        &mut backend,
-        &mut current,
-        steps,
-        local_frame,
-        UNTIL_STABLE_REPEAT_LIMIT,
-    )?;
-    Ok(current)
 }
 
 struct GridProgramBackend<'a, const D: usize> {

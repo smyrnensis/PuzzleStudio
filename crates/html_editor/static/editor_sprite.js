@@ -2523,11 +2523,9 @@ function spriteClipboardTextForRect(rect) {
     rows.push(cells.slice(y * rect.width, (y + 1) * rect.width).map(spriteExportCharForColorIndex).join(""));
   }
   return [
-    "SpriteClip {",
     `colors = ${spritePaletteSourceTokens().join(" ")}`,
     "shape = {",
     ...rows,
-    "}",
     "}",
   ].join("\n");
 }
@@ -4818,7 +4816,7 @@ async function spriteSourceTargetAtCursor(source, cursor) {
   return resolveSourceTargetFromWasm(source, cursor);
 }
 
-async function spriteSourceTargetByName(source, name, targetKind = "sprite") {
+async function spriteSourceTargetByName(source, name) {
   const targetName = String(name || "").trim();
   if (!targetName) {
     return null;
@@ -4833,7 +4831,7 @@ async function spriteSourceTargetByName(source, name, targetKind = "sprite") {
   const unique = new Map();
   for (const candidate of candidates) {
     const target = await spriteSourceTargetAtCursor(text, candidate);
-    if (target?.kind !== targetKind || target.name !== targetName) {
+    if (!sourceTargetMatches(target, "sprite", "2d") || target.name !== targetName) {
       continue;
     }
     const key = `${target.start}:${target.end}`;
@@ -4942,7 +4940,7 @@ function uniqueSpriteDuplicateName(source, originalName) {
 
 function spriteSourceDefinitionNames(source) {
   const names = new Set();
-  for (const entry of surfaceEntriesForSource(source).filter((entry) => entry.kind === "sprite")) {
+  for (const entry of surfaceEntriesForSource(source).filter((entry) => sourceTargetMatches(entry, "sprite", "2d"))) {
     names.add(entry.name);
   }
   return names;

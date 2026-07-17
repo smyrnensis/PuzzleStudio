@@ -26,6 +26,9 @@ dependencies = [
 [[package]]
 name = "puzzle-authoring"
 version = "0.1.0"
+dependencies = [
+ "puzzle-kernel",
+]
 
 [[package]]
 name = "puzzle-core"
@@ -45,23 +48,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "puzzle-grid3d"
-version = "0.1.0"
-dependencies = [
- "puzzle-kernel",
- "serde",
-]
-
-[[package]]
-name = "puzzle-grid3d-authoring"
-version = "0.1.0"
-dependencies = [
- "puzzle-authoring",
- "puzzle-grid3d",
- "puzzle-kernel",
-]
-
-[[package]]
 name = "puzzle-kernel"
 version = "0.1.0"
 dependencies = [
@@ -74,8 +60,6 @@ version = "0.1.0"
 dependencies = [
  "puzzle-authoring",
  "puzzle-core",
- "puzzle-grid3d",
- "puzzle-grid3d-authoring",
  "puzzle-kernel",
  "puzzle-runtime-contract",
  "puzzle-scene",
@@ -88,7 +72,6 @@ name = "puzzle-play"
 version = "0.1.0"
 dependencies = [
  "puzzle-core",
- "puzzle-grid3d",
  "puzzle-lang",
  "puzzle-runtime-contract",
  "serde",
@@ -98,7 +81,7 @@ dependencies = [
 name = "puzzle-runtime-contract"
 version = "0.1.0"
 dependencies = [
- "puzzle-grid3d",
+ "puzzle-core",
  "puzzle-scene",
  "serde",
  "serde_json",

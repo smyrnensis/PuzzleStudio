@@ -82,6 +82,7 @@ const sourceHighlightClasses = Object.freeze({
   "brace-depth-3": "syntax-brace-depth-3",
   "brace-depth-4": "syntax-brace-depth-4",
   "brace-depth-5": "syntax-brace-depth-5",
+  "syntax-invalid": "syntax-invalid",
   "brace-invalid": "syntax-brace-invalid",
   "level-cell": "syntax-level-cell",
   "level-cell-invalid": "syntax-level-cell-invalid",

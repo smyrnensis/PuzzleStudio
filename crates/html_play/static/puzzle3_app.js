@@ -1,6 +1,7 @@
 (() => {
 function createPuzzle3Controller(options = {}) {
 const controllerOptions = options && typeof options === "object" ? options : {};
+const sessionManaged = controllerOptions.sessionManaged === true;
 const inlineComponentMount = Boolean(controllerOptions.canvas) || controllerOptions.mountMode === "inline";
 const screenView = controllerOptions.screenView || controllerOptions.container || document.querySelector("#screenView") || document.body;
 const componentEmbedMode = Boolean(controllerOptions.componentEmbedMode)
@@ -30,7 +31,7 @@ const puzzle3RendererMode = resolvePuzzle3RendererMode(
     || new URLSearchParams(window.location.search).get("renderer"),
 );
 const ctx = puzzle3RendererMode === "three" ? null : canvas.getContext("2d", { alpha: true });
-const PUZZLE3_RUNTIME_CONTRACT_VERSION = 4;
+const PUZZLE3_RUNTIME_CONTRACT_VERSION = 6;
 const PUZZLE3_RENDERER_CONTRACT_VERSION = 1;
 const PUZZLE3_APP_CAMERA_MIN_PITCH_DEGREES = -90;
 const PUZZLE3_APP_CAMERA_MAX_PITCH_DEGREES = 90;
@@ -191,10 +192,20 @@ function requireLoadedPuzzle3Snapshot(label = "Puzzle3 snapshot") {
 }
 
 async function loadSnapshotData(source, options = {}) {
+  const previousCamera = snapshotLoaded ? cloneCamera(snapshot.render.camera) : null;
   snapshotLoaded = false;
   snapshot = normalizeSnapshot(requirePuzzle3Snapshot(source));
-  runtime = await createPuzzle3Runtime(snapshot);
-  snapshot = runtime.snapshot();
+  let startupEffects = [];
+  if (sessionManaged) {
+    runtime = null;
+    if (previousCamera && options.preserveCamera !== false) {
+      snapshot.render.camera = previousCamera;
+    }
+  } else {
+    runtime = await createPuzzle3Runtime(snapshot);
+    snapshot = runtime.snapshot();
+    startupEffects = runtime.takeLevelLoadEffects();
+  }
   snapshotLoaded = true;
   editorModelComponentPreview = options.modelComponentPreview || null;
   document.title = snapshot.title || "Puzzle3";
@@ -213,6 +224,7 @@ async function loadSnapshotData(source, options = {}) {
   renderScene();
   applyStartupPuzzle3UrlCommands();
   notifyPuzzle3StateChange();
+  emitPuzzle3LifecycleEffects(startupEffects);
 }
 
 function showPuzzle3LoadError(error) {
@@ -381,7 +393,7 @@ class Puzzle3SessionRuntime {
     this.animationEvents = [];
     this.initialStateHandle = null;
     this.completed = false;
-    this.loadLevel(this.levelIndex);
+    this.levelLoadEffects = this.loadLevel(this.levelIndex);
   }
 
   snapshot() {
@@ -413,10 +425,17 @@ class Puzzle3SessionRuntime {
     const inputId = this.inputIdForName(inputName);
     const before = this.historyEntry();
     const outcome = this.transitionCurrent("main", inputId);
-    if (outcome.changed !== true) {
+    const effects = cloneRequiredJsonArray(outcome.effects, "runtime current outcome.effects");
+    const handled = outcome.changed === true
+      || effects.length > 0
+      || cloneRequiredJsonArray(outcome.commands, "runtime current outcome.commands").length > 0
+      || cloneRequiredJsonArray(outcome.firedRules, "runtime current outcome.firedRules").length > 0;
+    if (!handled) {
       return false;
     }
-    this.undoStack.push(before);
+    if (outcome.changed === true) {
+      this.undoStack.push(before);
+    }
     this.animationEvents = cloneRequiredJsonArray(
       outcome.animationEvents,
       "runtime current outcome.animationEvents",
@@ -428,11 +447,10 @@ class Puzzle3SessionRuntime {
     this.moveCount += 1;
     const wasCompleted = this.completed;
     this.completed = outcome.completed === true;
-    let lifecycleEffects = [];
     if (!wasCompleted && this.completed) {
-      lifecycleEffects = this.levelClearLifecycleEffects();
+      effects.push(...this.runLevelClearLifecycle());
     }
-    return { changed: true, lifecycleEffects };
+    return { handled: true, effects };
   }
 
   setCamera(camera) {
@@ -480,16 +498,14 @@ class Puzzle3SessionRuntime {
     if (!this.hasNextLevel()) {
       return false;
     }
-    this.loadLevel(this.levelIndex + 1);
-    return true;
+    return this.loadLevel(this.levelIndex + 1);
   }
 
   previousLevel() {
     if (!this.hasPreviousLevel()) {
       return false;
     }
-    this.loadLevel(this.levelIndex - 1);
-    return true;
+    return this.loadLevel(this.levelIndex - 1);
   }
 
   hasNextLevel() {
@@ -502,17 +518,18 @@ class Puzzle3SessionRuntime {
 
   loadLevel(levelIndex) {
     this.levelIndex = clampIndex(levelIndex, this.levels.length);
-    this.loadInitialStateForCurrentLevel();
+    const effects = this.loadInitialStateForCurrentLevel();
     this.undoStack = [];
     this.moveCount = 0;
     this.animationEvents = [];
     this.completed = this.coreRuntime.is_current_complete() === true;
     this.initialStateHandle = this.coreRuntime.save_current_state();
+    return effects;
   }
 
   loadInitialStateForCurrentLevel() {
     const level = this.currentLevel();
-    const raw = stateFromRuntimeCells(this, level.cells, level.size);
+    const raw = stateFromRuntimeCells(this, level.cells, level.size, level.variables);
     this.coreRuntime.set_state(JSON.stringify(raw));
     this.cellsByKey.clear();
     this.cells = [];
@@ -524,22 +541,39 @@ class Puzzle3SessionRuntime {
       "runtime level_start outcome.changedCells",
     ));
     this.completed = outcome.completed === true;
+    return cloneRequiredJsonArray(outcome.effects, "runtime level_start outcome.effects");
+  }
+
+  takeLevelLoadEffects() {
+    const effects = this.levelLoadEffects;
+    this.levelLoadEffects = [];
+    return effects;
   }
 
   currentLevel() {
     return this.levels[this.levelIndex];
   }
 
-  levelClearLifecycleEffects() {
-    const commands = this.levelIndex + 1 >= this.levels.length
-      ? (this.base.lifecycle?.onLastLevelClear || this.base.lifecycle?.onLevelClear || [])
-      : (this.base.lifecycle?.onLevelClear || []);
-    return JSON.parse(JSON.stringify(commands));
+  runLevelClearLifecycle() {
+    const programKey = this.levelIndex + 1 >= this.levels.length
+      ? "last_level_clear"
+      : "level_clear";
+    const outcome = this.transitionCurrent(programKey, 0);
+    this.animationEvents.push(...cloneRequiredJsonArray(
+      outcome.animationEvents,
+      `runtime ${programKey} outcome.animationEvents`,
+    ));
+    this.applyRuntimeCells(cloneRequiredJsonArray(
+      outcome.changedCells,
+      `runtime ${programKey} outcome.changedCells`,
+    ));
+    return cloneRequiredJsonArray(outcome.effects, `runtime ${programKey} outcome.effects`);
   }
 
   transitionCurrent(programKey, inputId) {
     const raw = this.coreRuntime.transition_current_outcome(
       programKey,
+      this.levelIndex,
       Number(inputId || 0),
     );
     return JSON.parse(raw);
@@ -578,12 +612,12 @@ class Puzzle3SessionRuntime {
 
   inputIdForName(inputName) {
     const canonicalName = canonicalPuzzle3InputName(inputName);
-    const input = (this.runtimeGame.inputs || [])
+    const input = this.base.inputs
       .find((candidate) => canonicalPuzzle3InputName(candidate.name) === canonicalName);
     if (!input) {
       throw new Error(`Unknown Puzzle3 runtime input: ${inputName}`);
     }
-    return runtimeInputId(input, `runtimeContract.model.game.inputs.${input.name || canonicalName}`);
+    return runtimeInputId(input, `runtimeContract.model.inputs.${input.name || canonicalName}`);
   }
 
   objectForId(objectId) {
@@ -879,9 +913,12 @@ function createPuzzle3Component() {
       draw();
     },
     applyInput(input) {
+      if (sessionManaged) {
+        return false;
+      }
       runtime.setCamera(snapshot.render.camera);
       const beforeLevelIndex = snapshot.levelIndex || 0;
-      let lifecycleEffects = [];
+      let effects = [];
       if (input === "undo") {
         if (!runtime.undo()) {
           return false;
@@ -893,10 +930,10 @@ function createPuzzle3Component() {
         resetViewportMotion();
       } else {
         const result = runtime.applyInput(input);
-        if (!result.changed) {
+        if (!result.handled) {
           return false;
         }
-        lifecycleEffects = result.lifecycleEffects || [];
+        effects = result.effects || [];
       }
       snapshot = runtime.snapshot();
       if ((snapshot.levelIndex || 0) !== beforeLevelIndex) {
@@ -904,39 +941,53 @@ function createPuzzle3Component() {
       }
       requestSceneViewportDraw();
       notifyPuzzle3StateChange();
-      emitPuzzle3LifecycleEffects(lifecycleEffects);
+      emitPuzzle3LifecycleEffects(effects);
       return true;
     },
     nextLevel() {
-      if (!runtime.nextLevel()) {
+      if (sessionManaged) {
+        return false;
+      }
+      const effects = runtime.nextLevel();
+      if (effects === false) {
         return false;
       }
       snapshot = runtime.snapshot();
       resetViewportMotion();
       draw();
       notifyPuzzle3StateChange();
+      emitPuzzle3LifecycleEffects(effects);
       return true;
     },
     previousLevel() {
-      if (!runtime.previousLevel()) {
+      if (sessionManaged) {
+        return false;
+      }
+      const effects = runtime.previousLevel();
+      if (effects === false) {
         return false;
       }
       snapshot = runtime.snapshot();
       resetViewportMotion();
       draw();
       notifyPuzzle3StateChange();
+      emitPuzzle3LifecycleEffects(effects);
       return true;
     },
     gotoLevel(level) {
+      if (sessionManaged) {
+        return false;
+      }
       const index = puzzle3LevelIndex(level);
       if (index === null) {
         return false;
       }
-      runtime.loadLevel(index);
+      const effects = runtime.loadLevel(index);
       snapshot = runtime.snapshot();
       resetViewportMotion();
       draw();
       notifyPuzzle3StateChange();
+      emitPuzzle3LifecycleEffects(effects);
       return true;
     },
     resetCamera() {
@@ -3479,27 +3530,23 @@ function handleStandaloneKeydown(event) {
     return;
   }
 
-  if (applyPuzzle3CommandKey(event)) {
+  if (puzzle3ComponentFor(currentScene()) && puzzle3Component.handleKey(event)) {
     return;
   }
-  if (puzzle3ComponentFor(currentScene())) {
-    puzzle3Component.handleKey(event);
-  }
+  applyPuzzle3CommandKey(event);
 }
 
 function handleComponentEmbedKeydown(event) {
   if (!puzzle3ComponentFor(currentScene())) {
     return;
   }
-  if (applyPuzzle3CommandKey(event)) {
+  const input = inputForRawInput({ key: event.key, code: event.code });
+  if (input) {
+    event.preventDefault();
+    startHeldSceneInput(rawInputHoldId({ key: event.key, code: event.code }), input);
     return;
   }
-  const input = inputForRawInput({ key: event.key, code: event.code }, puzzle3ComponentFor(currentScene()));
-  if (!input) {
-    return;
-  }
-  event.preventDefault();
-  startHeldSceneInput(rawInputHoldId({ key: event.key, code: event.code }), input);
+  applyPuzzle3CommandKey(event);
 }
 
 function handleStandaloneKeyup(event) {
@@ -3594,8 +3641,8 @@ window.addEventListener("message", (event) => {
     };
     if (event.data.action === "up") {
       stopSceneRawInput(raw);
-    } else {
-      enqueueSceneRawInput(raw);
+    } else if (!enqueueSceneRawInput(raw)) {
+      applyPuzzle3CommandKey(raw);
     }
     return;
   }
@@ -3610,7 +3657,7 @@ window.addEventListener("message", (event) => {
 });
 
 function inputForEvent(event) {
-  return inputForRawInput({ key: event.key, code: event.code }, mountedPuzzle3Component);
+  return inputForRawInput({ key: event.key, code: event.code });
 }
 
 function applyPuzzle3CommandKey(event) {
@@ -3623,55 +3670,42 @@ function applyPuzzle3CommandKey(event) {
 }
 
 function puzzle3CommandInputForEvent(event) {
-  if (event.code === "KeyZ") {
+  const key = String(event.key || "").toLowerCase();
+  if (key === "z") {
     return "undo";
   }
-  if (event.code === "KeyR") {
+  if (key === "r") {
     return "restart";
   }
   return null;
 }
 
-function inputForRawInput(raw, component = mountedPuzzle3Component) {
+function inputForRawInput(raw) {
   const keys = rawKeyCandidates(raw);
-  const componentInputs = component?.inputs || {};
-  for (const [input, bindings] of Object.entries(componentInputs)) {
-    if ((bindings || []).some((binding) => keys.includes(normalizeRawKeyToken(binding)))) {
-      return input;
+  for (const input of snapshot.inputs) {
+    if ((input.keys || []).some((binding) => keys.includes(normalizeRawKeyToken(binding)))) {
+      return input.name;
     }
   }
-  const defaultInputs = defaultPuzzle3Inputs();
-  for (const [input, bindings] of Object.entries(defaultInputs)) {
-    if (bindings.some((binding) => keys.includes(binding))) {
-      return input;
-    }
-  }
-  return snapshot.controls?.keys?.[raw.key]
-    || snapshot.controls?.keys?.[raw.code]
-    || snapshot.controls?.keys?.[String(raw.key || "").toLowerCase()]
-    || null;
+  return null;
 }
 
 function rawKeyCandidates(raw) {
-  return [...new Set([
-    normalizeRawKeyToken(raw?.code),
-    normalizeRawKeyToken(raw?.key),
-  ].filter(Boolean))];
+  const key = normalizeRawKeyToken(raw?.key);
+  return key ? [key] : [];
 }
 
 function normalizeRawKeyToken(value) {
-  const token = String(value || "").trim();
+  const raw = String(value || "");
+  if (raw === " ") {
+    return "Space";
+  }
+  const token = raw.trim();
   if (!token) {
     return "";
   }
   if (token.length === 1) {
-    const ch = token[0];
-    if (/[a-z]/i.test(ch)) {
-      return `Key${ch.toUpperCase()}`;
-    }
-    if (/[0-9]/.test(ch)) {
-      return `Digit${ch}`;
-    }
+    return token.toLowerCase();
   }
   const lower = token.toLowerCase();
   const aliases = {
@@ -3698,15 +3732,6 @@ function normalizeRawKeyToken(value) {
   return aliases[lower] || token;
 }
 
-function defaultPuzzle3Inputs() {
-  return {
-    left: ["KeyA", "ArrowLeft"],
-    right: ["KeyD", "ArrowRight"],
-    front: ["KeyW", "ArrowUp"],
-    back: ["KeyS", "ArrowDown"],
-  };
-}
-
 function canonicalPuzzle3InputName(inputName) {
   if (inputName === "forward") {
     return "front";
@@ -3720,16 +3745,13 @@ function canonicalPuzzle3InputName(inputName) {
 function sceneControlForEvent(event) {
   const scene = currentScene();
   const controls = scene?.controls || {};
-  const explicit = controls[event.key]
-    || controls[event.code]
-    || controls[String(event.key).toLowerCase()];
+  const key = normalizeRawKeyToken(event.key);
+  const explicit = controls[key];
   if (explicit) {
     return explicit;
   }
   const keys = scene?.keys || {};
-  const action = keys[event.key]
-    || keys[event.code]
-    || keys[String(event.key).toLowerCase()];
+  const action = keys[key];
   return action || null;
 }
 
@@ -3795,7 +3817,7 @@ function stopAllHeldSceneInputs() {
 }
 
 function enqueueSceneRawInput(raw) {
-  const input = inputForRawInput(raw, puzzle3ComponentFor(currentScene()));
+  const input = inputForRawInput(raw);
   if (!input) {
     return false;
   }
@@ -3829,7 +3851,7 @@ function scheduleQueuedSceneInput() {
 }
 
 function applySceneRawInput(raw) {
-  const input = inputForRawInput(raw, puzzle3ComponentFor(currentScene()));
+  const input = inputForRawInput(raw);
   if (!input) {
     return false;
   }
@@ -3848,8 +3870,18 @@ const controllerApi = {
     });
     return this.ready;
   },
+  replaceSessionSnapshot(nextSnapshot) {
+    if (!sessionManaged) {
+      throw new Error("Session snapshots require a session-managed Puzzle3 controller.");
+    }
+    this.ready = Promise.resolve(this.ready).then(() => loadSnapshotData(nextSnapshot, {
+      scene: nextSnapshot?.currentScene,
+      preserveCamera: true,
+    }));
+    return this.ready;
+  },
   applyKey(event) {
-    return applyPuzzle3CommandKey(event || {}) || puzzle3Component.handleKey(event || {});
+    return puzzle3Component.handleKey(event || {}) || applyPuzzle3CommandKey(event || {});
   },
   releaseKey(event) {
     stopSceneRawInput({
@@ -3915,30 +3947,19 @@ function cloneRuntimeSnapshot(source) {
   const runtimeModel = requireRuntimeContractPuzzle3Model(runtimeContract);
   const runtimeGame = requireRuntimeContractGame(runtimeContract);
   const runtimeLevelBundle = requireRuntimeContractLevelBundle(runtimeContract);
-  const lifecycle = requireRuntimeContractLifecycle(runtimeContract);
   return {
     ...source,
     size: { ...source.size },
     render: JSON.parse(JSON.stringify(source.render)),
     directions: cloneRuntimeRecord(source.directions || {}),
     directionSets: cloneRuntimeRecord(source.directionSets || {}),
-    controls: {
-      keys: { ...(source.controls?.keys || {}) },
-    },
     layerCount: runtimeLayerCount(runtimeGame),
-    inputs: cloneRuntimeInputs(runtimeGame.inputs),
+    inputs: cloneRuntimeInputs(runtimeModel.inputs),
     rules: cloneRequiredJsonArray(runtimeModel.rules, "runtimeContract.model.rules"),
     winCondition: runtimeModel.winCondition
       ? JSON.parse(JSON.stringify(runtimeModel.winCondition))
       : null,
     runtimeContract: JSON.parse(JSON.stringify(runtimeContract)),
-    lifecycle: {
-      onLevelStart: JSON.parse(JSON.stringify(lifecycle.onLevelStart)),
-      onLevelClear: [...lifecycle.onLevelClear],
-      onLastLevelClear: lifecycle.onLastLevelClear
-        ? [...lifecycle.onLastLevelClear]
-        : null,
-    },
     objects: cloneRuntimeObjects(source.objects || {}),
     sprites: cloneRuntimeSprites(source.sprites || {}),
     cells: cloneRuntimeCells(source.cells || []),
@@ -4004,17 +4025,10 @@ function requireRuntimeContractLifecycle(contract) {
   if (!lifecycle || typeof lifecycle !== "object" || Array.isArray(lifecycle)) {
     throw new Error("Puzzle3 runtimeContract.model.lifecycle is missing or invalid.");
   }
-  if (!Array.isArray(lifecycle.onLevelStart)) {
-    throw new Error("Puzzle3 runtimeContract.model.lifecycle.onLevelStart is missing or invalid.");
-  }
-  if (!Array.isArray(lifecycle.onLevelClear)) {
-    throw new Error("Puzzle3 runtimeContract.model.lifecycle.onLevelClear is missing or invalid.");
-  }
-  if (lifecycle.onLastLevelClear !== null
-    && lifecycle.onLastLevelClear !== undefined
-    && !Array.isArray(lifecycle.onLastLevelClear)
-  ) {
-    throw new Error("Puzzle3 runtimeContract.model.lifecycle.onLastLevelClear is invalid.");
+  for (const key of ["onLevelStart", "onLevelClear", "onLastLevelClear"]) {
+    if (lifecycle[key] !== null && lifecycle[key] !== undefined && !Array.isArray(lifecycle[key])) {
+      throw new Error(`Puzzle3 runtimeContract.model.lifecycle.${key} is invalid.`);
+    }
   }
   return lifecycle;
 }
@@ -4062,8 +4076,8 @@ function cloneRuntimeCells(cells) {
 function cloneRuntimeInputs(inputs) {
   return inputs.map((input, index) => ({
     ...input,
-    id: runtimeInputId(input, `runtimeContract.model.game.inputs[${index}]`),
-    name: runtimeInputName(input, `runtimeContract.model.game.inputs[${index}]`),
+    id: runtimeInputId(input, `runtimeContract.model.inputs[${index}]`),
+    name: runtimeInputName(input, `runtimeContract.model.inputs[${index}]`),
     keys: Array.isArray(input.keys) ? [...input.keys] : [],
   }));
 }
@@ -4087,6 +4101,11 @@ function cloneRuntimeContractLevels(levelBundle, presentationLevels = []) {
       throw new Error(`Puzzle3 ${label}.level is missing or invalid.`);
     }
     const size = runtimeSize(level.size, `${label}.level.size`);
+    const variables = cloneRequiredJsonArray(level.variables, `${label}.level.variables`)
+      .map((value, variableIndex) => runtimeInteger(
+        value,
+        `${label}.level.variables[${variableIndex}]`,
+      ));
     if (!Array.isArray(level.cells)) {
       throw new Error(`Puzzle3 ${label}.level.cells must be an array.`);
     }
@@ -4110,6 +4129,7 @@ function cloneRuntimeContractLevels(levelBundle, presentationLevels = []) {
       label: presentation.label || name,
       size,
       cells,
+      variables,
     };
   });
   if (levels.length === 0) {
@@ -4245,14 +4265,22 @@ function runtimePositiveInteger(value, label) {
 }
 
 function runtimeUnsignedInteger(value, label) {
-  const number = Number(value);
+    const number = Number(value);
   if (!Number.isInteger(number) || number < 0) {
     throw new Error(`Puzzle3 ${label} must be an unsigned integer.`);
   }
   return number;
 }
 
-function stateFromRuntimeCells(runtime, cells, size) {
+function runtimeInteger(value, label) {
+  const number = Number(value);
+  if (!Number.isSafeInteger(number)) {
+    throw new Error(`Puzzle3 ${label} must be an integer.`);
+  }
+  return number;
+}
+
+function stateFromRuntimeCells(runtime, cells, size, variables) {
   const layerCount = runtime.runtimeLayerCount();
   const width = runtimePositiveInteger(size.width, "runtime level size.width");
   const depth = runtimePositiveInteger(size.depth, "runtime level size.depth");
@@ -4278,6 +4306,7 @@ function stateFromRuntimeCells(runtime, cells, size) {
     height,
     layerCount,
     slots,
+    variables: [...variables],
     levelFiredRules: [],
   };
 }
@@ -4359,10 +4388,10 @@ function normalizeSnapshot(source) {
     ...source,
     levelIndex,
     levels,
-    size: currentLevel.size,
-    cells: currentLevel.cells,
-    levelName: currentLevel.name,
-    levelLabel: currentLevel.label,
+    size: source.size || currentLevel.size,
+    cells: Array.isArray(source.cells) ? source.cells : currentLevel.cells,
+    levelName: source.levelName || currentLevel.name,
+    levelLabel: source.levelLabel || currentLevel.label,
   };
 }
 

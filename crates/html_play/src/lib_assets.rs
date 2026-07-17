@@ -313,7 +313,12 @@ fn push_visual_sprite(out: &mut String, sprite: &VisualSpriteDef) {
             push_json_string(out, source);
             out.push('}');
         }
-        VisualSpriteKind::Ascii { pattern, colors } => {
+        VisualSpriteKind::Ascii { colors } => {
+            let pattern = sprite
+                .frames
+                .first()
+                .and_then(|frame| frame.planes.first())
+                .expect("validated planar sprite has a first frame and plane");
             out.push_str("{\"colors\":{");
             for (index, color) in colors.iter().enumerate() {
                 if index > 0 {
@@ -336,7 +341,7 @@ fn push_visual_sprite(out: &mut String, sprite: &VisualSpriteDef) {
     if !sprite.transforms.is_empty()
         || sprite.fit != Default::default()
         || sprite.sampling.is_some()
-        || sprite.loop_animation.is_some()
+        || sprite.animation_duration_ms.is_some()
         || sprite.pixels_per_cell.is_some()
     {
         out.pop();
@@ -347,9 +352,13 @@ fn push_visual_sprite(out: &mut String, sprite: &VisualSpriteDef) {
                     out.push(',');
                 }
                 match transform {
-                    VisualSpriteTransform::Rotate { degrees, space } => {
+                    VisualSpriteTransform::Rotate {
+                        degrees,
+                        axis,
+                        space,
+                    } => {
                         out.push_str("{\"kind\":\"rotate\",\"degrees\":");
-                        out.push_str(&degrees.to_string());
+                        out.push_str(&(degrees * axis[2]).to_string());
                         out.push_str(",\"space\":\"");
                         out.push_str(match space {
                             puzzle_lang::VisualSpriteSpace::World => "world",
@@ -358,11 +367,11 @@ fn push_visual_sprite(out: &mut String, sprite: &VisualSpriteDef) {
                         out.push('"');
                         out.push('}');
                     }
-                    VisualSpriteTransform::Translate { x, y, space } => {
+                    VisualSpriteTransform::Translate { value, space } => {
                         out.push_str("{\"kind\":\"translate\",\"x\":");
-                        out.push_str(&x.to_string());
+                        out.push_str(&value[0].to_string());
                         out.push_str(",\"y\":");
-                        out.push_str(&y.to_string());
+                        out.push_str(&value[1].to_string());
                         out.push_str(",\"space\":\"");
                         out.push_str(match space {
                             puzzle_lang::VisualSpriteSpace::World => "world",
@@ -393,8 +402,8 @@ fn push_visual_sprite(out: &mut String, sprite: &VisualSpriteDef) {
             out.push_str(",\"sampling\":");
             push_json_string(out, visual_sprite_sampling_name(sampling));
         }
-        if let Some(loop_animation) = &sprite.loop_animation {
-            push_visual_sprite_loop(out, loop_animation);
+        if let Some(duration_ms) = sprite.animation_duration_ms {
+            push_visual_sprite_loop(out, duration_ms, &sprite.frames);
         }
         if let Some(pixels_per_cell) = sprite.pixels_per_cell {
             out.push_str(",\"pixelsPerCell\":{\"width\":");
@@ -407,16 +416,24 @@ fn push_visual_sprite(out: &mut String, sprite: &VisualSpriteDef) {
     }
 }
 
-fn push_visual_sprite_loop(out: &mut String, loop_animation: &puzzle_lang::VisualSpriteLoopDef) {
+fn push_visual_sprite_loop(
+    out: &mut String,
+    duration_ms: u64,
+    frames: &[puzzle_lang::VisualSpriteFrameDef],
+) {
     out.push_str(",\"durationMs\":");
-    out.push_str(&loop_animation.duration_ms.to_string());
+    out.push_str(&duration_ms.to_string());
     out.push_str(",\"frames\":[");
-    for (frame_index, frame) in loop_animation.frames.iter().enumerate() {
+    for (frame_index, frame) in frames.iter().enumerate() {
         if frame_index > 0 {
             out.push(',');
         }
         out.push('[');
-        for (row_index, row) in frame.iter().enumerate() {
+        let plane = frame
+            .planes
+            .first()
+            .expect("validated planar sprite frame has one plane");
+        for (row_index, row) in plane.iter().enumerate() {
             if row_index > 0 {
                 out.push(',');
             }
