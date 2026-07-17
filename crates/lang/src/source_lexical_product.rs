@@ -25,6 +25,8 @@ pub(crate) fn build_surface_highlight_spans_in_range(
     let mut spans = Vec::<SourceHighlightSpan>::new();
     let display_facts = display_facts_in_range(document, range_start, range_end);
     let semantic_tokens = semantic_tokens_in_range(document, range_start, range_end);
+    let syntax_error_spans =
+        source_spans_in_range(&document.syntax_error_spans, range_start, range_end);
     let raw_ranges = source_spans_in_range(
         &document.highlight_ranges.raw_ranges,
         range_start,
@@ -55,13 +57,21 @@ pub(crate) fn build_surface_highlight_spans_in_range(
         }) {
             continue;
         }
-        if is_contained_by(fact.start, fact.end, plain_ranges) {
+        if is_contained_by(fact.start, fact.end, plain_ranges)
+            && !matches!(fact.kind, SourceLexicalKind::Word)
+        {
             continue;
         }
         if is_suppressed_raw_fact(semantic_tokens, raw_ranges, fact) {
             continue;
         }
-        map_lexical_fact(document, semantic_tokens, fact, &mut spans);
+        map_lexical_fact(
+            document,
+            semantic_tokens,
+            syntax_error_spans,
+            fact,
+            &mut spans,
+        );
     }
 
     append_owner_display_facts(display_facts, &mut spans);
@@ -72,6 +82,7 @@ pub(crate) fn build_surface_highlight_spans_in_range(
 fn map_lexical_fact(
     document: &SurfaceDocument,
     semantic_tokens: &[crate::surface::SurfaceSemanticToken],
+    syntax_error_spans: &[SourceSpan],
     fact: &SourceLexicalFact,
     spans: &mut Vec<SourceHighlightSpan>,
 ) {
@@ -79,6 +90,13 @@ fn map_lexical_fact(
         SourceLexicalKind::Word => {
             if let Some(kind) = semantic_kind_at(semantic_tokens, fact.start, fact.end) {
                 push_span(spans, fact.start, fact.end, highlight_kind(kind));
+            } else if is_contained_by(fact.start, fact.end, syntax_error_spans) {
+                push_span(
+                    spans,
+                    fact.start,
+                    fact.end,
+                    SourceHighlightKind::InvalidSyntax,
+                );
             }
         }
         SourceLexicalKind::Number => {
@@ -306,6 +324,9 @@ fn highlight_kind(kind: SurfaceSemanticKind) -> SourceHighlightKind {
         SurfaceSemanticKind::Object => SourceHighlightKind::Object,
         SurfaceSemanticKind::Input => SourceHighlightKind::Input,
         SurfaceSemanticKind::State => SourceHighlightKind::State,
+        SurfaceSemanticKind::Group => SourceHighlightKind::Group,
+        SurfaceSemanticKind::Mark => SourceHighlightKind::Mark,
+        SurfaceSemanticKind::Variant => SourceHighlightKind::Variant,
         SurfaceSemanticKind::Condition => SourceHighlightKind::Condition,
         SurfaceSemanticKind::Scene => SourceHighlightKind::Scene,
         SurfaceSemanticKind::Theme => SourceHighlightKind::Theme,
@@ -360,7 +381,9 @@ fn normalize_highlight_spans(spans: Vec<SourceHighlightSpan>) -> Vec<SourceHighl
             normalized
                 .last()
                 .is_none_or(|previous| previous.end <= span.start),
-            "parser-owned highlight facts must not overlap"
+            "parser-owned highlight facts must not overlap: previous={:?}, next={:?}",
+            normalized.last(),
+            span,
         );
         normalized.push(span);
     }
@@ -441,7 +464,7 @@ mod tests {
 
     #[test]
     fn parser_fact_boundaries_preserve_prefixes_selectors_and_invalid_braces() {
-        let source = "puzzle board {\nslots { objects = @Box }\nrules {\n[ Box:1{checked} ] -> [ @Box ]\n}\n}\n}\n";
+        let source = "puzzle board {\nslots {\nobjects = @Box\n}\nrules {\n[ Box:1{checked} ] -> [ @Box ]\n}\n}\n}\n";
         let highlighted = highlight_source(source);
         assert!(has_span(
             source,
@@ -468,6 +491,64 @@ mod tests {
             SourceHighlightKind::InvalidBrace,
             "}"
         ));
+    }
+
+    #[test]
+    fn missing_parser_disposition_is_explicit_invalid_syntax() {
+        let source = "__unowned_syntax__\n";
+        let highlighted = highlight_source(source);
+        assert!(has_span(
+            source,
+            &highlighted,
+            SourceHighlightKind::InvalidSyntax,
+            "__unowned_syntax__"
+        ));
+    }
+
+    #[test]
+    fn accepted_authoring_rows_have_terminal_semantic_dispositions() {
+        let source = r#"puzzle board {
+slots {
+actor = Player
+}
+sounds {
+move Player -> sfx step
+}
+win_conditions {
+all Player on Player
+no [ Player no Player ]
+}
+on_level_clear {
+wait 25ms
+}
+levels {
+legend {
+P = Player
+}
+level "one"
+P
+}
+}
+scene title {
+layout {
+choice "Play" -> goto playing
+}
+keys {
+Enter -> goto playing
+}
+}
+"#;
+        let highlighted = highlight_source(source);
+        let invalid = highlighted
+            .spans
+            .iter()
+            .filter(|span| span.kind == SourceHighlightKind::InvalidSyntax)
+            .map(|span| &source[span.start..span.end])
+            .collect::<Vec<_>>();
+        assert!(
+            invalid.is_empty(),
+            "invalid parser dispositions: {invalid:?}"
+        );
     }
 
     #[test]

@@ -114,7 +114,7 @@ fn push_export_data_with_source(out: &mut String, state: &ServerState, include_s
     out.push(',');
     push_compiled_play_bundle(out, &state.loaded);
     out.push(',');
-    push_runtime_loaded_game_bundle(out, &state.loaded);
+    push_runtime_loaded_document_bundle(out, &state.document);
     out.push(',');
     push_puzzle_screen(out, &state.loaded);
     out.push(',');
@@ -152,7 +152,7 @@ fn push_export_data_with_source(out: &mut String, state: &ServerState, include_s
 
 fn push_runtime_export_data(out: &mut String, state: &ServerState) {
     out.push('{');
-    push_runtime_loaded_game_bundle(out, &state.loaded);
+    push_runtime_loaded_document_bundle(out, &state.document);
     out.push('}');
 }
 
@@ -251,93 +251,6 @@ fn push_export_boot_data(
     out.push(',');
     push_export_animation(out, &state.loaded);
     out.push('}');
-}
-
-fn push_progress_save_data(out: &mut String, save: &ProgressSaveData) {
-    out.push('{');
-    push_json_number(out, "version", u64::from(save.version));
-    out.push_str(",\"levels\":[");
-    for (index, level) in save.levels.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        out.push('{');
-        push_json_pair(out, "name", &level.name);
-        out.push(',');
-        push_json_bool(out, "cleared", level.cleared);
-        out.push('}');
-    }
-    out.push_str("],\"currentLevel\":");
-    if let Some(current_level) = &save.current_level {
-        push_json_string(out, current_level);
-    } else {
-        out.push_str("null");
-    }
-    out.push_str(",\"persistentVars\":[");
-    for (index, var) in save.persistent_vars.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        out.push('{');
-        push_json_pair(out, "name", &var.name);
-        out.push(',');
-        push_json_i64(out, "value", var.value);
-        out.push('}');
-    }
-    out.push_str("]}");
-}
-
-fn progress_save_data_from_json(raw: &str) -> Result<ProgressSaveData, String> {
-    let value: serde_json::Value = serde_json::from_str(raw).map_err(|error| error.to_string())?;
-    let version = value
-        .get("version")
-        .and_then(serde_json::Value::as_u64)
-        .ok_or_else(|| "progress save is missing version".to_string())?;
-    let levels = value
-        .get("levels")
-        .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| "progress save is missing levels".to_string())?
-        .iter()
-        .filter_map(|entry| {
-            Some(LevelProgressSaveData {
-                name: entry.get("name")?.as_str()?.to_string(),
-                cleared: entry
-                    .get("cleared")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(false),
-            })
-        })
-        .collect();
-    let current_level = value
-        .get("currentLevel")
-        .or_else(|| value.get("current_level"))
-        .and_then(serde_json::Value::as_str)
-        .map(ToString::to_string);
-    let persistent_vars = value
-        .get("persistentVars")
-        .or_else(|| value.get("persistent_vars"))
-        .and_then(serde_json::Value::as_array)
-        .map(|entries| {
-            entries
-                .iter()
-                .filter_map(|entry| {
-                    Some(PersistentVarSaveData {
-                        name: entry.get("name")?.as_str()?.to_string(),
-                        value: entry
-                            .get("value")
-                            .and_then(serde_json::Value::as_i64)
-                            .unwrap_or(0),
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    Ok(ProgressSaveData {
-        version: u32::try_from(version).map_err(|_| "progress save version is too large")?,
-        levels,
-        current_level,
-        persistent_vars,
-    })
 }
 
 fn progress_save_key(loaded: &LoadedGame, puzzle_path: &str) -> String {
@@ -729,7 +642,7 @@ fn push_ordered_rule_effect(out: &mut String, effect: &RuleEffect) {
             out.push(',');
             push_json_bool(out, "literal", *literal);
         }
-        RuleEffect::Scene(effect) => {
+        RuleEffect::Scene { effect } => {
             push_json_effect_fields(out, effect);
         }
     }
@@ -784,23 +697,39 @@ fn push_rule_animation(out: &mut String, animation: &RuleAnimation) {
     out.push('}');
 }
 
-fn push_runtime_loaded_game_bundle(out: &mut String, loaded: &LoadedGame) {
-    out.push_str("\"runtimeLoadedGame\":{");
-    push_json_number(out, "version", 2);
-    out.push_str(",\"loaded\":");
-    let loaded_json =
-        runtime_loaded_game_json(loaded).expect("runtime loaded game bundle should serialize");
-    out.push_str(&loaded_json);
+fn push_runtime_loaded_document_bundle(out: &mut String, document: &puzzle_lang::LoadedDocument) {
+    out.push_str("\"runtimeLoadedDocument\":{");
+    push_json_number(out, "version", 1);
+    out.push_str(",\"document\":");
+    let document_json = runtime_loaded_document_json(document)
+        .expect("runtime loaded document bundle should serialize");
+    out.push_str(&document_json);
     out.push('}');
 }
 
-fn runtime_loaded_game_json(loaded: &LoadedGame) -> Result<String, serde_json::Error> {
-    let mut value = serde_json::to_value(loaded)?;
-    value
-        .as_object_mut()
-        .expect("LoadedGame must serialize as an object")
-        .remove("solver_strategy");
+fn runtime_loaded_document_json(
+    document: &puzzle_lang::LoadedDocument,
+) -> Result<String, serde_json::Error> {
+    let mut value = serde_json::to_value(document)?;
+    remove_runtime_only_key(&mut value, "solver_strategy");
     serde_json::to_string(&value)
+}
+
+fn remove_runtime_only_key(value: &mut serde_json::Value, key: &str) {
+    match value {
+        serde_json::Value::Object(object) => {
+            object.remove(key);
+            for value in object.values_mut() {
+                remove_runtime_only_key(value, key);
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                remove_runtime_only_key(value, key);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn push_compact_objects(out: &mut String, loaded: &LoadedGame) {
@@ -1071,7 +1000,7 @@ fn state2_cell_slots_equal(before: &State, after: &State, cell: usize) -> bool {
     before.slots()[start..start + layer_count] == after.slots()[start..start + layer_count]
 }
 
-fn push_state3_data(out: &mut String, state: &State3) {
+fn push_state3_data(out: &mut String, state: &GridState<3, Size3>) {
     out.push('{');
     push_json_pair(out, "kind", "puzzle3d");
     out.push(',');
@@ -2588,10 +2517,10 @@ fn push_compiled_input_move(
 }
 
 #[cfg(feature = "solver")]
-fn push_solution_response3(
+fn push_spatial_solution_response(
     out: &mut String,
-    parsed: &ParsedPuzzle3,
-    response: &Puzzle3SolutionResponse,
+    model: &LoadedGridGame<3, Size3>,
+    response: &GridSolutionResponse<3, Size3>,
 ) {
     out.push('{');
     push_json_pair(out, "model", "puzzle3d");
@@ -2607,11 +2536,11 @@ fn push_solution_response3(
             out.push(',');
             push_json_number(out, "depth", *depth as u64);
             out.push(',');
-            push_solution_moves3(out, parsed, moves);
+            push_solution_moves3(out, model, moves);
             out.push(',');
-            push_solution_steps3(out, parsed, steps);
+            push_spatial_solution_steps(out, model, steps);
             out.push(',');
-            push_search_observations3(out, observations);
+            push_spatial_search_observations(out, observations);
         }
         SolutionResponse::Exhausted {
             stats,
@@ -2621,7 +2550,7 @@ fn push_solution_response3(
             out.push(',');
             push_search_stats(out, stats);
             out.push(',');
-            push_search_observations3(out, observations);
+            push_spatial_search_observations(out, observations);
         }
         SolutionResponse::BudgetExceeded {
             stats,
@@ -2631,7 +2560,7 @@ fn push_solution_response3(
             out.push(',');
             push_search_stats(out, stats);
             out.push(',');
-            push_search_observations3(out, observations);
+            push_spatial_search_observations(out, observations);
         }
         SolutionResponse::Failed {
             depth,
@@ -2644,26 +2573,33 @@ fn push_solution_response3(
             out.push(',');
             push_json_pair(out, "error", error);
             out.push(',');
-            push_search_observations3(out, observations);
+            push_spatial_search_observations(out, observations);
         }
     }
     out.push('}');
 }
 
 #[cfg(feature = "solver")]
-fn push_search_observations3(out: &mut String, observations: &[Puzzle3SearchObservation]) {
+fn push_spatial_search_observations(
+    out: &mut String,
+    observations: &[GridSearchObservation<3, Size3>],
+) {
     out.push_str("\"observations\":[");
     for (index, observation) in observations.iter().enumerate() {
         if index > 0 {
             out.push(',');
         }
-        push_search_observation3(out, &observation.state, &observation.progress);
+        push_spatial_search_observation(out, &observation.state, &observation.progress);
     }
     out.push(']');
 }
 
 #[cfg(feature = "solver")]
-fn push_search_observation3(out: &mut String, state: &State3, progress: &SearchProgress) {
+fn push_spatial_search_observation(
+    out: &mut String,
+    state: &GridState<3, Size3>,
+    progress: &SearchProgress,
+) {
     out.push('{');
     push_search_progress(out, progress);
     out.push_str(",\"state\":");

@@ -834,7 +834,7 @@ function sprite3dClipboardSourceText(clipboard) {
         .map((value) => validSprite3dColorIndex(value) ? SPRITE_COLOR_TOKENS[value] : ".").join(""));
     }
   }
-  return ["Sprite3dClip {", `colors = ${sprite3dPaletteSourceTokens().join(" ")}`, "shape = {", ...rows, "}", "}"].join("\n");
+  return [`colors = ${sprite3dPaletteSourceTokens().join(" ")}`, "shape = {", ...rows, "}"].join("\n");
 }
 
 async function copySprite3dEditRegion() {
@@ -3724,7 +3724,7 @@ async function loadSprite3dFromSourcePosition(position, options = {}) {
     return null;
   }
   const target = await resolveSourceTargetFromWasm(source, position);
-  if (target?.kind !== "sprite3d") {
+  if (!sourceTargetMatches(target, "sprite", "3d")) {
     return null;
   }
   return loadSprite3dSourceTarget(target, options);

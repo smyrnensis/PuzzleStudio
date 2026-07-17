@@ -10,7 +10,7 @@ export const wasmpuzzle3runtime_new: (a: number, b: number, c: number, d: number
 export const wasmpuzzle3runtime_restore_saved_state: (a: number, b: number) => [number, number];
 export const wasmpuzzle3runtime_save_current_state: (a: number) => [number, number, number];
 export const wasmpuzzle3runtime_set_state: (a: number, b: number, c: number) => [number, number];
-export const wasmpuzzle3runtime_transition_current_outcome: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+export const wasmpuzzle3runtime_transition_current_outcome: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
 export const wasmstandalonesession_apply_command_name: (a: number, b: number, c: number) => [number, number];
 export const wasmstandalonesession_apply_input_name: (a: number, b: number, c: number) => [number, number];
 export const wasmstandalonesession_clear_progress_save: (a: number) => void;

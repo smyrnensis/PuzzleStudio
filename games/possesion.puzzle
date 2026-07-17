@@ -19,6 +19,7 @@ Stop
 groups {
 playable = Alien *:poss
 solid = Crab:*
+object = playable solid Wall Stop
 }
 
 routine @initial_displays {
@@ -33,6 +34,18 @@ repeat {
 
 on_level_start {
 @initial_displays
+}
+
+routine move {
+repeat {
+for d in directions {
+d [ d object | no object no {__move_collision} ] -> [ | object{no directions} ]
+}
+for d in directions {
+once_all d [ d object ] -> [ object ]
+}
+once_all [ {__move_collision} ] -> [ ]
+}
 }
 
 rules {
@@ -100,7 +113,7 @@ Crab:poss
 #808080
 
 @WallFrame:directions
-rotate from up
+rotate directions from up
 #585858
 0000000
 .......
@@ -112,7 +125,7 @@ rotate from up
 
 
 @WallCorner:directions
-rotate from up
+rotate directions from up
 #585858
 ......0
 .......

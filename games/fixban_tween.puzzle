@@ -158,7 +158,7 @@ P {
 }
 }
 
-edge:directions rotate from up {
+edge {
 11111
 00000
 00000
@@ -166,7 +166,7 @@ edge:directions rotate from up {
 00000
 }
 
-corner:directions rotate from up {
+corner {
 00001
 00000
 00000
@@ -225,12 +225,14 @@ piece_color:kind
 
 @Boundary:directions {
 #00000000 #555
-edge:directions
+rotate directions from up
+edge
 }
 
 @Corner:directions {
 #00000000 #555
-corner:directions
+rotate directions from up
+corner
 }
 
 Wall {

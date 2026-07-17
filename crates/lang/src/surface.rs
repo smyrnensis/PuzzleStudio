@@ -15,10 +15,58 @@ pub(crate) struct SourceSpan {
 /// them and never recognize source text independently.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ParserRecognition {
+    pub(crate) nodes: Vec<SurfaceNode>,
     pub(crate) semantic_tokens: Vec<SurfaceSemanticToken>,
     pub(crate) display_facts: Vec<SurfaceDisplayFact>,
     pub(crate) completion_symbols: SurfaceCompletionSymbols,
     pub(crate) visual_sprite_refs: SurfaceVisualSpriteRefs,
+    pub(crate) sound_products: Vec<SurfaceSoundProduct>,
+    pub(crate) level_products: Vec<SurfaceLevelProduct>,
+    pub(crate) sprite_resources: Vec<SurfaceSpriteResourceProduct>,
+    pub(crate) sprite_products: Vec<SurfaceSpriteProduct>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SurfaceSoundKind {
+    Sfx,
+    Music,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SurfaceSoundProduct {
+    pub(crate) span: SourceSpan,
+    pub(crate) kind: SurfaceSoundKind,
+    pub(crate) name: String,
+    pub(crate) params: Vec<(String, String)>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SurfaceLevelProduct {
+    pub(crate) span: SourceSpan,
+    pub(crate) body_span: SourceSpan,
+    pub(crate) name: String,
+    pub(crate) dimension: crate::ModelDimension,
+    pub(crate) pack: Option<String>,
+    pub(crate) puzzle: Option<String>,
+    pub(crate) level_index: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SurfaceSpriteResourceProduct {
+    pub(crate) span: SourceSpan,
+    pub(crate) open_brace: usize,
+    pub(crate) close_brace: usize,
+    pub(crate) dimension: crate::ModelDimension,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SurfaceSpriteProduct {
+    pub(crate) span: SourceSpan,
+    pub(crate) body_span: SourceSpan,
+    pub(crate) name: String,
+    pub(crate) dimension: crate::ModelDimension,
+    pub(crate) body: crate::sprite_authoring::SpriteBodyProduct,
+    pub(crate) shape_asset_name: Option<String>,
 }
 
 impl ParserRecognition {
@@ -80,6 +128,9 @@ impl ParserRecognition {
     }
 
     pub(crate) fn finish(mut self) -> Self {
+        self.nodes
+            .sort_by_key(|node| (node.span.start, node.span.end));
+        self.nodes.dedup();
         self.semantic_tokens
             .sort_by_key(|token| (token.span.start, token.span.end));
         self.semantic_tokens.dedup();
@@ -91,13 +142,34 @@ impl ParserRecognition {
     }
 
     pub(crate) fn merge(&mut self, other: ParserRecognition) {
+        self.nodes.extend(other.nodes);
         self.semantic_tokens.extend(other.semantic_tokens);
         self.display_facts.extend(other.display_facts);
         self.completion_symbols.merge(other.completion_symbols);
         self.visual_sprite_refs.merge(other.visual_sprite_refs);
+        self.sound_products.extend(other.sound_products);
+        self.level_products.extend(other.level_products);
+        self.sprite_resources.extend(other.sprite_resources);
+        self.sprite_products.extend(other.sprite_products);
+    }
+
+    pub(crate) fn merge_surface_document(&mut self, document: SurfaceDocument) {
+        self.nodes.extend(document.nodes);
+        self.semantic_tokens.extend(document.semantic_tokens);
+        self.display_facts
+            .extend(document.highlight_ranges.display_facts);
+        self.completion_symbols.merge(document.completion_symbols);
+        self.visual_sprite_refs.merge(document.visual_sprite_refs);
+        self.sound_products.extend(document.sound_products);
+        self.level_products.extend(document.level_products);
+        self.sprite_resources.extend(document.sprite_resources);
+        self.sprite_products.extend(document.sprite_products);
     }
 
     pub(crate) fn shift_offsets(&mut self, threshold: usize, delta: i64) {
+        for node in &mut self.nodes {
+            shift_span(&mut node.span, threshold, delta);
+        }
         for token in &mut self.semantic_tokens {
             shift_span(&mut token.span, threshold, delta);
         }
@@ -112,6 +184,29 @@ impl ParserRecognition {
                 }
             }
         }
+        for product in &mut self.sprite_products {
+            shift_span(&mut product.span, threshold, delta);
+            shift_span(&mut product.body_span, threshold, delta);
+        }
+        for product in &mut self.level_products {
+            shift_span(&mut product.span, threshold, delta);
+            shift_span(&mut product.body_span, threshold, delta);
+        }
+        for product in &mut self.sound_products {
+            shift_span(&mut product.span, threshold, delta);
+        }
+        for resource in &mut self.sprite_resources {
+            shift_span(&mut resource.span, threshold, delta);
+            shift_offset(&mut resource.open_brace, threshold, delta);
+            shift_offset(&mut resource.close_brace, threshold, delta);
+        }
+    }
+}
+
+fn shift_offset(offset: &mut usize, threshold: usize, delta: i64) {
+    if *offset >= threshold {
+        *offset =
+            usize::try_from(*offset as i64 + delta).expect("incremental parser offset underflow");
     }
 }
 
@@ -149,6 +244,9 @@ pub(crate) enum SurfaceSemanticKind {
     Object,
     Input,
     State,
+    Group,
+    Mark,
+    Variant,
     Condition,
     Scene,
     Theme,
@@ -185,10 +283,15 @@ pub(crate) struct SurfaceDocument {
     pub(crate) structural_blocks: Vec<SurfaceStructuralBlock>,
     pub(crate) nodes: Vec<SurfaceNode>,
     pub(crate) semantic_tokens: Vec<SurfaceSemanticToken>,
+    pub(crate) syntax_error_spans: Vec<SourceSpan>,
     pub(crate) unmatched_open_braces: BTreeSet<usize>,
     pub(crate) completion_symbols: SurfaceCompletionSymbols,
     pub(crate) highlight_ranges: SurfaceHighlightRanges,
     pub(crate) visual_sprite_refs: SurfaceVisualSpriteRefs,
+    pub(crate) sound_products: Vec<SurfaceSoundProduct>,
+    pub(crate) level_products: Vec<SurfaceLevelProduct>,
+    pub(crate) sprite_resources: Vec<SurfaceSpriteResourceProduct>,
+    pub(crate) sprite_products: Vec<SurfaceSpriteProduct>,
     pub(crate) diagnostics: Vec<crate::Diagnostic>,
 }
 
@@ -281,14 +384,21 @@ pub(crate) struct SurfaceVisualSpriteRefs {
     pub(crate) color_names: BTreeSet<String>,
     pub(crate) shape_names: BTreeSet<String>,
     pub(crate) color_assets: BTreeMap<String, String>,
-    pub(crate) shape_assets: BTreeMap<String, Vec<String>>,
+    pub(crate) shape_assets: BTreeMap<String, SurfaceSpriteShapeAsset>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum SurfaceSpriteShapeAsset {
+    Plain {
+        frames: Vec<crate::sprite_authoring::SpriteFrameSyntax>,
+    },
+    Table {
+        axis: String,
+        variants: BTreeMap<String, crate::sprite_authoring::SpriteFrameSyntax>,
+    },
 }
 
 impl SurfaceVisualSpriteRefs {
-    pub(crate) fn contains_color(&self, value: &str) -> bool {
-        self.color_names.contains(value)
-    }
-
     pub(crate) fn merge(&mut self, other: SurfaceVisualSpriteRefs) {
         self.color_names.extend(other.color_names);
         self.shape_names.extend(other.shape_names);
@@ -354,6 +464,9 @@ pub(crate) struct SurfaceSink {
 impl SurfaceSink {
     pub(crate) fn project_parser_recognition(&mut self, recognition: &ParserRecognition) {
         self.document
+            .nodes
+            .extend(recognition.nodes.iter().copied());
+        self.document
             .semantic_tokens
             .extend(recognition.semantic_tokens.iter().cloned());
         self.document
@@ -368,10 +481,22 @@ impl SurfaceSink {
             .merge(recognition.completion_symbols.clone());
     }
 
-    pub(crate) fn project_parser_visual_refs(&mut self, recognition: &ParserRecognition) {
+    pub(crate) fn project_parser_source_targets(&mut self, recognition: &ParserRecognition) {
         self.document
             .visual_sprite_refs
             .merge(recognition.visual_sprite_refs.clone());
+        self.document
+            .sound_products
+            .extend(recognition.sound_products.iter().cloned());
+        self.document
+            .level_products
+            .extend(recognition.level_products.iter().cloned());
+        self.document
+            .sprite_products
+            .extend(recognition.sprite_products.iter().cloned());
+        self.document
+            .sprite_resources
+            .extend(recognition.sprite_resources.iter().cloned());
     }
 
     pub(crate) fn line(
@@ -429,6 +554,9 @@ impl SurfaceSink {
         self.document
             .semantic_tokens
             .sort_by_key(|token| (token.span.start, token.span.end));
+        self.document
+            .syntax_error_spans
+            .sort_by_key(|span| (span.start, span.end));
         self.document.highlight_ranges.sort_by_source();
         self.document
     }
@@ -447,6 +575,9 @@ impl SurfaceSink {
             .semantic_tokens
             .extend(document.semantic_tokens);
         self.document
+            .syntax_error_spans
+            .extend(document.syntax_error_spans);
+        self.document
             .unmatched_open_braces
             .extend(document.unmatched_open_braces);
         self.document
@@ -458,6 +589,14 @@ impl SurfaceSink {
         self.document
             .visual_sprite_refs
             .merge(document.visual_sprite_refs);
+        self.document.sound_products.extend(document.sound_products);
+        self.document.level_products.extend(document.level_products);
+        self.document
+            .sprite_resources
+            .extend(document.sprite_resources);
+        self.document
+            .sprite_products
+            .extend(document.sprite_products);
     }
 }
 

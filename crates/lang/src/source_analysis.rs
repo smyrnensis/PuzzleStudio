@@ -114,7 +114,7 @@ impl SourceAnalysis {
 
     fn entries(&self) -> &[SourceTarget] {
         self.entries
-            .get_or_init(|| resolve_source_entries_from_document(&self.source, self.document()))
+            .get_or_init(|| resolve_source_entries_from_document(self.document()))
             .as_slice()
     }
 
@@ -169,7 +169,6 @@ impl SourceAnalysis {
     /// Resolves the source target at `cursor_offset` from this analysis document.
     pub fn resolve_target(&self, cursor_offset: usize) -> Option<SourceTarget> {
         resolve_source_target_from_entries(
-            &self.source,
             self.document(),
             self.entries(),
             cursor_offset.min(self.source.len()),
@@ -621,7 +620,7 @@ ___
 
     #[test]
     fn source_analysis_resolves_targets_and_entries_from_analysis_document() {
-        let source = "puzzle Demo {\n  level Start {\n    .\n  }\n}\n";
+        let source = "puzzle Demo {\n  level \"Start\" {\n    .\n  }\n}\n";
         let cursor = source.find("Start").expect("level name cursor");
         let analysis = analyze_source(source);
 

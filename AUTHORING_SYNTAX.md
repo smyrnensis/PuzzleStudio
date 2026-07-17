@@ -283,7 +283,7 @@ rule pattern の movement mark として使う場合も上の共通 binding 規�
 
 `up` / `down` / `left` / `right` は標準の意味入力でもあり、direction mapping も既定で用意される。
 
-これらは physical key ではなく、key を読み替えた semantic input である。キーやタッチなどの物理入力との対応は puzzle の `keys` table で定義し、puzzle rule からは `transition(state, input)` の transition context として参照する。
+これらは keyboard key ではなく、key を読み替えた semantic input である。キーボードやタッチなどの入力との対応は puzzle の `keys` table で定義し、puzzle rule からは `transition(state, input)` の transition context として参照する。
 
 別名を使いたい場合だけ、`direction` で標準方向への alias を定義する。
 
@@ -324,7 +324,7 @@ button "Restart" -> playing.restart
 button "Restart Board" -> board.restart
 ```
 
-物理入力の対応は puzzle の `keys` block に書く。
+キーボード入力の対応は puzzle の `keys` block に書く。
 
 ```txt
 keys {
@@ -336,7 +336,7 @@ r -> restart
 }
 ```
 
-`keys` は `<key...> -> <input>` の形で、raw key を puzzle semantic input に割り当てる。`r -> my_restart` のように書くと、既定の `r -> restart` は shadow され、`r` は `my_restart` として解釈される。
+`keys` は `<key...> -> <input>` の形で、raw key を puzzle semantic input に割り当てる。1文字の token は現在のキーボード配列で入力された文字を小文字化して照合する。`ArrowUp` や `Escape` などは名前付きキーとして扱う。`r -> my_restart` のように書くと、既定の `r -> restart` は shadow され、`r` は `my_restart` として解釈される。
 
 `rules` 内では `<input> -> <effect>` を input guard の sugar として書ける。
 
@@ -2015,7 +2015,7 @@ r -> restart
 }
 ```
 
-`keys` は owner-scoped な raw key から semantic input、scene routine、または scene effect への対応表。puzzle 内では puzzle rules が読む semantic input に変換し、scene 内では scene-local routine や明示 effect を呼ぶ。
+`keys` は owner-scoped な raw key から semantic input、scene routine、または scene effect への対応表。1文字の token は現在の配列で入力された文字、`ArrowUp` / `Escape` などは名前付きキーを表す。puzzle 内では puzzle rules が読む semantic input に変換し、scene 内では scene-local routine や明示 effect を呼ぶ。
 
 ```txt
 <key> [<key> ...] -> <input-or-routine-or-effect>

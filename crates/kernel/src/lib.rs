@@ -7,11 +7,11 @@ use serde::{Deserialize, Serialize};
 
 mod program;
 pub use program::{
-    ProgramContinuation, ProgramSegment, ProgramStateKey, execute_program_segment,
-    resume_program_segment,
+    ExecutableProgram, ProgramContinuation, ProgramNodeId, ProgramSegment, ProgramStateKey,
+    execute_program_segment, resume_program_segment,
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SpatialVector<const D: usize>([i16; D]);
 
 impl<const D: usize> SpatialVector<D> {
@@ -156,7 +156,7 @@ pub enum ProgramCondition<Pattern, Guard> {
     GuardBranches(Vec<Vec<Guard>>),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum SpatialOffset<const D: usize> {
     Fixed {
         delta: SpatialVector<D>,
@@ -167,7 +167,7 @@ pub enum SpatialOffset<const D: usize> {
     },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct SpatialGapTerm<const D: usize> {
     pub gap_index: u16,
     pub delta: SpatialVector<D>,
@@ -176,6 +176,29 @@ pub struct SpatialGapTerm<const D: usize> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct GridCoord<const D: usize> {
     axes: [u16; D],
+}
+
+impl<const D: usize> Serialize for GridCoord<D> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.axes.as_slice().serialize(serializer)
+    }
+}
+
+impl<'de, const D: usize> Deserialize<'de> for GridCoord<D> {
+    fn deserialize<De>(deserializer: De) -> Result<Self, De::Error>
+    where
+        De: serde::Deserializer<'de>,
+    {
+        let values = Vec::<u16>::deserialize(deserializer)?;
+        let found = values.len();
+        let axes = values
+            .try_into()
+            .map_err(|_| De::Error::custom(format!("expected {D} grid axes, found {found}")))?;
+        Ok(Self { axes })
+    }
 }
 
 impl<const D: usize> GridCoord<D> {
@@ -713,28 +736,33 @@ pub enum ProgramStep<Rule, Condition, Frame> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(bound(
+    deserialize = "ConditionDef: Deserialize<'de>, Rule: Clone + Deserialize<'de>, Condition: Clone + Deserialize<'de>, Frame: Clone + Deserialize<'de>"
+))]
 pub struct CompiledGameModel<ConditionDef, Rule, Condition, Frame> {
     pub layer_count: u16,
     objects: Vec<ObjectDef>,
     mark: Vec<MarkDef>,
     condition_defs: Vec<ConditionDef>,
     rules: Vec<Rule>,
-    program: Vec<ProgramStep<Rule, Condition, Frame>>,
+    program: ExecutableProgram<Rule, Condition, Frame>,
 }
 
 impl<ConditionDef, Rule, Condition, Frame> CompiledGameModel<ConditionDef, Rule, Condition, Frame> {
     pub fn new(layer_count: u16, objects: Vec<ObjectDef>, rules: Vec<Rule>) -> Self
     where
         Rule: Clone,
+        Condition: Clone,
+        Frame: Clone,
     {
-        let program = rules.iter().cloned().map(ProgramStep::Rule).collect();
+        let source = rules.iter().cloned().map(ProgramStep::Rule).collect();
         Self {
             layer_count,
             objects,
             mark: Vec::new(),
             condition_defs: Vec::new(),
             rules,
-            program,
+            program: ExecutableProgram::new(source),
         }
     }
 
@@ -745,6 +773,8 @@ impl<ConditionDef, Rule, Condition, Frame> CompiledGameModel<ConditionDef, Rule,
     ) -> Self
     where
         Rule: Clone,
+        Condition: Clone,
+        Frame: Clone,
     {
         Self::new_with_condition_defs_and_program(layer_count, objects, Vec::new(), program)
     }
@@ -756,6 +786,8 @@ impl<ConditionDef, Rule, Condition, Frame> CompiledGameModel<ConditionDef, Rule,
     ) -> Self
     where
         Rule: Clone,
+        Condition: Clone,
+        Frame: Clone,
     {
         Self::new_with_condition_defs_and_program(layer_count, objects, condition_defs, Vec::new())
     }
@@ -768,6 +800,8 @@ impl<ConditionDef, Rule, Condition, Frame> CompiledGameModel<ConditionDef, Rule,
     ) -> Self
     where
         Rule: Clone,
+        Condition: Clone,
+        Frame: Clone,
     {
         Self::new_with_mark_condition_defs_and_program(
             layer_count,
@@ -787,6 +821,8 @@ impl<ConditionDef, Rule, Condition, Frame> CompiledGameModel<ConditionDef, Rule,
     ) -> Self
     where
         Rule: Clone,
+        Condition: Clone,
+        Frame: Clone,
     {
         let mut rules = Vec::new();
         collect_program_rules(&program, &mut rules);
@@ -796,22 +832,28 @@ impl<ConditionDef, Rule, Condition, Frame> CompiledGameModel<ConditionDef, Rule,
             mark,
             condition_defs,
             rules,
-            program,
+            program: ExecutableProgram::new(program),
         }
     }
 
-    pub fn clone_with_program(&self, program: Vec<ProgramStep<Rule, Condition, Frame>>) -> Self
+    pub fn clone_with_executable_program(
+        &self,
+        program: ExecutableProgram<Rule, Condition, Frame>,
+    ) -> Self
     where
         ConditionDef: Clone,
         Rule: Clone,
     {
-        Self::new_with_mark_condition_defs_and_program(
-            self.layer_count,
-            self.objects.clone(),
-            self.mark.clone(),
-            self.condition_defs.clone(),
+        let mut rules = Vec::new();
+        collect_program_rules(program.as_steps(), &mut rules);
+        Self {
+            layer_count: self.layer_count,
+            objects: self.objects.clone(),
+            mark: self.mark.clone(),
+            condition_defs: self.condition_defs.clone(),
+            rules,
             program,
-        )
+        }
     }
 
     pub fn object_count(&self) -> usize {
@@ -835,6 +877,10 @@ impl<ConditionDef, Rule, Condition, Frame> CompiledGameModel<ConditionDef, Rule,
     }
 
     pub fn program(&self) -> &[ProgramStep<Rule, Condition, Frame>] {
+        self.program.as_steps()
+    }
+
+    pub fn executable_program(&self) -> &ExecutableProgram<Rule, Condition, Frame> {
         &self.program
     }
 
@@ -873,6 +919,8 @@ impl<ConditionKind, Rule, Condition, Frame>
     pub fn checked_new(layer_count: u16, objects: Vec<ObjectDef>) -> Result<Self, CompiledGameError>
     where
         Rule: Clone,
+        Condition: Clone,
+        Frame: Clone,
     {
         let game = Self::new(layer_count, objects, Vec::new());
         game.validate()?;
@@ -1022,7 +1070,7 @@ pub trait ProgramBackend<Rule, Condition, Frame, State> {
 pub fn execute_program<Rule, Condition, Frame, State, Backend>(
     backend: &mut Backend,
     state: &mut State,
-    steps: &[ProgramStep<Rule, Condition, Frame>],
+    program: &ExecutableProgram<Rule, Condition, Frame>,
     frame: Option<&Frame>,
     repeat_limit: usize,
 ) -> Result<ProgramApplyOutcome, Backend::Error>
@@ -1031,8 +1079,15 @@ where
     Backend: ProgramBackend<Rule, Condition, Frame, State>,
 {
     let mut never_stop = |_: &State, _: &Backend| false;
-    execute_program_segment(backend, state, steps, frame, repeat_limit, &mut never_stop)
-        .map(|segment| segment.outcome)
+    execute_program_segment(
+        backend,
+        state,
+        program,
+        frame,
+        repeat_limit,
+        &mut never_stop,
+    )
+    .map(|segment| segment.outcome)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1266,7 +1321,7 @@ pub enum MarkKind {
     Enum,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum MarkValueMatch {
     Any,
     Exact,
@@ -1417,7 +1472,7 @@ impl<MatchCell> RulePatternComponent<MatchCell> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum RuleWriteOp<Offset, ObjectId, MarkId> {
     Add {
         component: u16,
@@ -2279,14 +2334,15 @@ mod tests {
 
     #[test]
     fn random_program_restores_state_and_trace_when_a_candidate_errors() {
-        let program = vec![ProgramStep::Block {
-            application: RuleApplication::Random,
-            stop_condition: None,
-            steps: vec![
-                ProgramStep::Rule(TestProgramRule::Add),
-                ProgramStep::Rule(TestProgramRule::Fail),
-            ],
-        }];
+        let program =
+            ExecutableProgram::<TestProgramRule, bool, ()>::new(vec![ProgramStep::Block {
+                application: RuleApplication::Random,
+                stop_condition: None,
+                steps: vec![
+                    ProgramStep::Rule(TestProgramRule::Add),
+                    ProgramStep::Rule(TestProgramRule::Fail),
+                ],
+            }]);
         let mut backend = TestProgramBackend::default();
         let mut state = 0;
 

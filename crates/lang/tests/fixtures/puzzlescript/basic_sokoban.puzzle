@@ -80,7 +80,7 @@ next_level
 
 levels {
 legend {
-. = Background
+A = Background
 # = Wall Background
 P = Player Background
 B = Crate Background
@@ -89,8 +89,8 @@ T = Target Background
 }
 
 #######
-#P.BT.#
-#..*..#
+#PABTA#
+#AA*AA#
 #######
 }
 }

@@ -1627,16 +1627,17 @@ fn push_legend(
     out.push("legend {".to_string());
     let mut defined_chars = BTreeSet::<char>::new();
     let used_chars = level_chars(level_lines);
-    let char_map = ps_level_char_map(lines, &used_chars);
+    let char_map = ps_level_char_map(lines, objects, &used_chars);
 
     for object in objects {
         let Some(ch) = object.shorthand else {
             continue;
         };
+        let output_ch = char_map.get(&ch).copied().unwrap_or(ch);
         let mut terms = vec![object.name.clone()];
         append_ps_background(&mut terms, background_object);
-        out.push(format!("  {ch} = {}", terms.join(" ")));
-        defined_chars.insert(ch);
+        out.push(format!("  {output_ch} = {}", terms.join(" ")));
+        defined_chars.insert(output_ch);
     }
 
     for line in lines.iter().filter(|line| !line.trim().is_empty()) {
@@ -1707,8 +1708,15 @@ fn ps_player_selector(
         .unwrap_or_else(|| "Player".to_string())
 }
 
-fn ps_level_char_map(lines: &[String], used_chars: &BTreeSet<char>) -> BTreeMap<char, char> {
-    let mut defined_chars = BTreeSet::<char>::new();
+fn ps_level_char_map(
+    lines: &[String],
+    objects: &[PsObjectDef],
+    used_chars: &BTreeSet<char>,
+) -> BTreeMap<char, char> {
+    let mut defined_chars = objects
+        .iter()
+        .filter_map(|object| object.shorthand)
+        .collect::<BTreeSet<_>>();
     for line in lines.iter().filter(|line| !line.trim().is_empty()) {
         let Some((ch, _)) = parse_legend_row(line) else {
             continue;
@@ -1726,7 +1734,7 @@ fn ps_level_char_map(lines: &[String], used_chars: &BTreeSet<char>) -> BTreeMap<
     for ch in defined_chars
         .iter()
         .copied()
-        .filter(|ch| is_canonical_legend_syntax_char(*ch))
+        .filter(|ch| crate::syntax::level_legend_char_requires_import_remap(*ch))
     {
         let replacement = choose_ps_level_char_replacement(&reserved);
         remapped.insert(ch, replacement);
@@ -1735,14 +1743,12 @@ fn ps_level_char_map(lines: &[String], used_chars: &BTreeSet<char>) -> BTreeMap<
     remapped
 }
 
-fn is_canonical_legend_syntax_char(ch: char) -> bool {
-    matches!(ch, '{' | '}' | '"' | ';')
-}
-
 fn choose_ps_level_char_replacement(reserved: &BTreeSet<char>) -> char {
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789;,:!?'`~@^&=<>"
         .chars()
-        .find(|ch| !reserved.contains(ch) && !is_canonical_legend_syntax_char(*ch))
+        .find(|ch| {
+            !reserved.contains(ch) && !crate::syntax::level_legend_char_requires_import_remap(*ch)
+        })
         .unwrap_or('§')
 }
 
@@ -2144,7 +2150,7 @@ fn push_ps_subroutines(
     case_sensitive: bool,
 ) {
     for routine in routines {
-        out.push(format!("routine {} once {{", routine.name));
+        out.push(format!("routine {} {{", routine.name));
         push_canonical_rule_rows(
             out,
             routine

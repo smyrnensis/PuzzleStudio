@@ -1,6 +1,5 @@
 use crate::relevance::SolverRelevance;
-use puzzle_core::{GridSize, GridState, ObjectId as ObjectId2};
-use puzzle_grid3d::{CompiledGame3, ObjectId as ObjectId3};
+use puzzle_core::{GridSize, GridState, ObjectId};
 use puzzle_kernel::CompiledGameModel;
 use std::collections::BTreeSet;
 
@@ -11,7 +10,7 @@ pub trait SolverStateProjection: Sized {
 }
 
 impl<const D: usize, Size: GridSize<D>> SolverStateProjection for GridState<D, Size> {
-    type ObjectId = ObjectId2;
+    type ObjectId = ObjectId;
 
     fn without_solver_objects(&self, ignored_objects: &[Self::ObjectId]) -> Self {
         self.without_objects(ignored_objects)
@@ -19,7 +18,7 @@ impl<const D: usize, Size: GridSize<D>> SolverStateProjection for GridState<D, S
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct SolverStateSlicer<ObjectId = ObjectId2> {
+pub struct SolverStateSlicer<ObjectId = puzzle_core::ObjectId> {
     ignored_objects: Vec<ObjectId>,
 }
 
@@ -44,10 +43,10 @@ impl<ObjectId: Copy> SolverStateSlicer<ObjectId> {
     }
 }
 
-impl SolverStateSlicer<ObjectId2> {
+impl SolverStateSlicer<ObjectId> {
     pub fn from_kept_objects<ConditionDef, Rule, Condition, Frame>(
         game: &CompiledGameModel<ConditionDef, Rule, Condition, Frame>,
-        kept_objects: &BTreeSet<ObjectId2>,
+        kept_objects: &BTreeSet<ObjectId>,
     ) -> Self {
         Self::from_ignored_objects(
             game.objects()
@@ -64,16 +63,6 @@ impl SolverStateSlicer<ObjectId2> {
         game: &CompiledGameModel<ConditionDef, Rule, Condition, Frame>,
         relevance: &SolverRelevance,
     ) -> Self {
-        Self::from_kept_objects(game, &relevance.relevant_objects().into_iter().collect())
-    }
-}
-
-impl SolverStateSlicer<ObjectId3> {
-    pub fn from_kept_objects3(game: &CompiledGame3, kept_objects: &BTreeSet<ObjectId3>) -> Self {
-        Self::from_kept_objects(game, kept_objects)
-    }
-
-    pub fn from_relevance3(game: &CompiledGame3, relevance: &SolverRelevance<ObjectId3>) -> Self {
         Self::from_kept_objects(game, &relevance.relevant_objects().into_iter().collect())
     }
 }

@@ -1,29 +1,3 @@
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct RuleForSyntax {
-    pub(crate) binding: String,
-    pub(crate) sources: Vec<String>,
-}
-
-pub(crate) fn parse_rule_for_syntax(line: &str) -> Result<Option<RuleForSyntax>, &'static str> {
-    let tokens = crate::split_header_tokens(line);
-    if tokens.first().copied() != Some("for") {
-        return Ok(None);
-    }
-    let ["for", binding, "in", sources @ ..] = tokens.as_slice() else {
-        return Err("for directive must be: for <binding> in <source...>");
-    };
-    if sources.is_empty() {
-        return Err("for directive must be: for <binding> in <source...>");
-    }
-    if !puzzle_authoring::is_identifier(binding) {
-        return Err("for expansion binding must be an identifier");
-    }
-    Ok(Some(RuleForSyntax {
-        binding: (*binding).to_string(),
-        sources: sources.iter().map(|source| (*source).to_string()).collect(),
-    }))
-}
-
 /// Canonical rule-binding substitution, promoted from the original 2D parser.
 ///
 /// It owns lexical behavior (identifiers, quoted text, comments, projections,
@@ -126,17 +100,6 @@ fn is_identifier_continue(ch: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn canonical_for_syntax_is_dimension_independent() {
-        assert_eq!(
-            parse_rule_for_syntax("for h in horizontal {").unwrap(),
-            Some(RuleForSyntax {
-                binding: "h".to_string(),
-                sources: vec!["horizontal".to_string()],
-            })
-        );
-    }
 
     #[test]
     fn canonical_binding_substitution_preserves_strings_and_comments() {

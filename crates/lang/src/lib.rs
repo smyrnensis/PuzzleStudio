@@ -11,7 +11,6 @@ mod lib_authoring_parse_order;
 mod loaded;
 mod model_syntax;
 mod puzzle3_model;
-mod spatial_materialize3;
 mod puzzle3_sprite;
 mod puzzle3_visual_fixture;
 mod puzzlescript;
@@ -25,6 +24,9 @@ mod source_import;
 mod source_outline;
 mod source_sprite_edit;
 mod source_target;
+mod spatial_materialize2;
+mod spatial_materialize3;
+mod spatial_orientation;
 mod sprite_authoring;
 mod sprite_spatial;
 mod surface;
@@ -37,9 +39,11 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
+use puzzle_authoring::is_variable_update_operator;
+
 use ast::{
-    ConditionAst, ConditionDefinitionAst, ConditionPatternAst, ConditionValueAst, Direction,
-    DirectionName, EffectAst, FixDefaults, OrientationExpr, OrientedRewriteAst,
+    ConditionAst, ConditionDefinitionAst, ConditionPatternAst, ConditionValueAst, DirectionName,
+    DirectionalInput, EffectAst, FixDefaults, OrientationExpr, OrientedRewriteAst,
     PatternConditionAst, PatternPredicateAst, QueryDefinitionAst, RuleDefinitionAst,
     SolverStrategyAst, StatementAst, VariableValueAst,
 };
@@ -56,10 +60,11 @@ pub use highlight::{
 use level::{LevelBlock, parse_level};
 pub use loaded::{
     AnimationDef, ArrowKey, AsciiLegend, AssetDef, AssetKind, AssetsDef, Controls, ForSource,
-    GoalClause, GoalCondition, GoalExpr, GoalValue, InputBufferDef, KeyBinding, KeyTrigger, Level,
+    GoalClause, GoalClauseOf, GoalCondition, GoalConditionOf, GoalExpr, GoalExprOf, GoalValue,
+    GoalValueOf, GridQueryExpr, GridSolverStrategy, InputBufferDef, KeyBinding, KeyTrigger, Level,
     LevelMenuDef, LevelMenuLocked, LevelRegionDef, LoadedDocument, LoadedDocumentModel, LoadedGame,
-    ModelOperationSound, ModelOperationSoundDef, MusicSoundDef, PuzzleGridRenderDef,
-    PuzzleRenderDef, PuzzleScreenDef, PuzzleViewDef, QueryExpr, QueryExpr3, QueryExprOf,
+    LoadedGridGame, LoadedGridLevel, ModelOperationSound, ModelOperationSoundDef, MusicSoundDef,
+    PuzzleGridRenderDef, PuzzleRenderDef, PuzzleScreenDef, PuzzleViewDef, QueryExpr, QueryExprOf,
     ResourceSelection, RuleAnimation, RuleAnimationTrigger, RuleDebugInfo, RuleEffect,
     SceneAlignDef, SceneAspectRatioDef, SceneBinaryOp, SceneButtonDef, SceneComponent,
     SceneConditionalDef, SceneContainerDef, SceneDef, SceneDistributionDef, SceneEffect,
@@ -67,14 +72,13 @@ pub use loaded::{
     ScenePuzzleInitializer, ScenePuzzleRule, SceneResources, SceneRoutineDef, SceneSpaceDef,
     SceneStateDef, SceneStateLifetime, SceneTextAlignDef, SceneTextContent, SceneTextDef,
     SceneTextRoleDef, SceneTransition, SceneTransitionTrigger, SceneValue, SceneVarDef,
-    SceneVarKind, SfxSoundDef, SolverDeadendOf, SolverStrategy, SolverStrategy3,
-    SolverStrategyDirection, SolverStrategyOf, SolverStrategyTerm, SolverStrategyTerm3,
-    SolverStrategyTermOf, SoundsDef, ThemeDef, ThemeVariableDef, TriggerAnimationDef,
-    TriggerAnimationKind, TweenAnimationDef, ViewportModeDef, ViewportSizeDef, VisualAliasDef,
-    VisualColorDef, VisualOrderDef, VisualOrderPriorityDef, VisualSpriteDef, VisualSpriteFit,
-    VisualSpriteFitMode, VisualSpriteKind, VisualSpriteLoopDef, VisualSpritePixelsPerCell,
-    VisualSpriteSampling, VisualSpriteSpace, VisualSpriteSpatialDef, VisualSpriteTransform,
-    VisualsDef,
+    SceneVarKind, SfxSoundDef, SolverDeadendOf, SolverStrategy, SolverStrategyDirection,
+    SolverStrategyOf, SolverStrategyTerm, SolverStrategyTermOf, SoundsDef, ThemeDef,
+    ThemeVariableDef, TriggerAnimationDef, TriggerAnimationKind, TweenAnimationDef,
+    ViewportModeDef, ViewportProjectionDef, ViewportSizeDef, VisualAliasDef, VisualColorDef,
+    VisualOrderDef, VisualOrderPriorityDef, VisualSpriteDef, VisualSpriteFit, VisualSpriteFitMode,
+    VisualSpriteFrameDef, VisualSpriteKind, VisualSpritePixelsPerCell, VisualSpriteSampling,
+    VisualSpriteSpace, VisualSpriteTransform, VisualsDef,
 };
 pub use model_syntax::ModelDimension;
 
@@ -95,23 +99,44 @@ fn is_block_header_line(line: &str) -> bool {
     line.trim_end().ends_with('{')
 }
 use puzzle_core::{
-    ComparisonOp, CompiledGame, ConditionDef, ConditionId, ConditionValueKind, Effect, GapTerm,
-    Guard, InputId, LayerId, LocalFrame, LocalFrameExtent, MarkDef, MarkId, MarkKind, MarkPattern,
-    MarkValueMatch, MatchCell, ObjectDef, ObjectId, ObjectSetMarkPattern, ObjectSetMatcher, Offset,
-    Pattern, PatternComponent, Rule, RuleApplication, RuleCondition, RuleId, RuleStep, State,
-    VariableId, VariableUpdateOp, WriteOp,
+    ComparisonOp, CompiledGame, ConditionId, Effect, GridConditionDef, GridConditionValueKind,
+    GridGapTerm, GridGuard, GridMatchCell, GridOffset, GridPattern, GridPatternComponent, GridRule,
+    GridRuleCondition, GridRuleStep, GridWriteOp, InputId, LayerId, LocalFrame, LocalFrameExtent,
+    MarkDef, MarkId, MarkKind, MarkPattern, MarkValueMatch, ObjectDef, ObjectId,
+    ObjectSetMarkPattern, ObjectSetMatcher, RuleApplication, RuleId, State, VariableId,
+    VariableUpdateOp, WriteOp,
 };
+#[cfg(test)]
+use puzzle_core::{ConditionValueKind, Guard, Offset};
+use spatial_orientation::{OrientationEnvironment, SpatialDomain};
+
+type CanonicalConditionDef = GridConditionDef<3>;
+type CanonicalConditionValueKind = GridConditionValueKind<3>;
+type CanonicalGoalCondition = GoalConditionOf<CanonicalConditionValueKind>;
+type CanonicalGoalExpr = GoalExprOf<CanonicalConditionValueKind>;
+type CanonicalGoalClause = GoalClauseOf<CanonicalConditionValueKind>;
+type CanonicalGoalValue = GoalValueOf<CanonicalConditionValueKind>;
+type CanonicalQueryExpr = QueryExprOf<ObjectId, CanonicalConditionValueKind, VariableId>;
+type CanonicalSolverStrategy = SolverStrategyOf<CanonicalQueryExpr>;
+type CanonicalSolverStrategyTerm = SolverStrategyTermOf<CanonicalQueryExpr>;
+type CanonicalGapTerm = GridGapTerm<3>;
+type CanonicalGuard = GridGuard<3>;
+type CanonicalMatchCell = GridMatchCell<3>;
+type CanonicalOffset = GridOffset<3>;
+type CanonicalPattern = GridPattern<3>;
+type CanonicalPatternComponent = GridPatternComponent<3>;
+type CanonicalRule = GridRule<3>;
+type CanonicalRuleCondition = GridRuleCondition<3>;
+type CanonicalRuleStep = GridRuleStep<3>;
+type CanonicalWriteOp = GridWriteOp<3>;
 pub use puzzle3_model::{
-    CameraSettings3, ParsedPuzzle3, PixelateRenderSettings3, SpriteRenderSettings3,
+    CameraSettings3, PixelateRenderSettings3, SpatialPresentation, SpriteRenderSettings3,
     ViewportFollow3, ViewportFraming3, ViewportHeight3, ViewportMode3, ViewportSettings3,
 };
-pub type ParseError3 = DiagnosticReport;
-pub use puzzle3_sprite::{
-    Sprite3, SpriteColor3, SpriteSet3, SpriteSpace3, SpriteSpatialOp3, SpriteVoxels3,
-};
+pub use puzzle3_sprite::{VoxelColor, VoxelFrame, VoxelSprite, VoxelSpriteSet};
 pub use puzzle3_visual_fixture::{
-    VisualFixtureExportError3, export_visual_fixture_json, export_visual_fixture_json_with_title,
-    export_visual_fixture_json_with_title_and_scenes,
+    VisualFixtureExportError, export_visual_fixture_json, export_visual_fixture_json_with_title,
+    export_visual_fixture_json_with_title_and_scenes, spatial_runtime_model,
 };
 pub use puzzlescript::translate_puzzlescript_to_canonical;
 pub use semantic::{SemanticKind, SemanticToken, semantic_tokens};
@@ -119,7 +144,7 @@ use source::{
     SourceScope, SourceToken, logical_lines_with_locations, source_line_tokens,
     split_header_tokens, strip_line_comment,
 };
-pub use sprite_spatial::{SpriteAffine3, evaluate_sprite_spatial_ops3};
+pub use sprite_spatial::{SpatialSpriteAffine, evaluate_spatial_sprite_transforms};
 
 pub fn parse_level_ascii_state(
     game: &CompiledGame,
@@ -144,10 +169,10 @@ pub use source_import::{SourceImportRange, SourceImportReference};
 pub use source_outline::{SourceOutlineItem, source_outline, source_outline_json};
 pub use source_sprite_edit::{SpriteEditMutationResult, mutate_sprite_source};
 pub use source_target::{
-    SoundSourceTargetKind, SourceSprite3dStatus, SourceSpriteColorAsset, SourceSpriteDimension,
-    SourceSpriteDocument, SourceSpritePaletteEntry, SourceSpriteShapeAsset, SourceSpriteStatus,
-    SourceSpriteTarget, SourceTarget, SourceTargetKind, resolve_source_target,
-    resolve_source_target_for_profile, source_entries_json, source_target_json,
+    SoundSourceTargetKind, SourceSpriteColorAsset, SourceSpriteDocument, SourceSpritePaletteEntry,
+    SourceSpriteShapeAsset, SourceSpriteStatus, SourceSpriteTarget, SourceTarget, SourceTargetKind,
+    resolve_source_target, resolve_source_target_for_profile, source_entries_json,
+    source_target_json,
 };
 use surface::{
     SourceSpan, SurfaceDisplayFact, SurfaceDocument, SurfaceHighlightRanges, SurfaceNodeKind,
@@ -155,8 +180,6 @@ use surface::{
     SurfaceSemanticKind, SurfaceSemanticToken, SurfaceSink, SurfaceStructuralBlock,
     SurfaceStructuralBlockRole,
 };
-use syntax::puzzle_lifecycle_event;
-
 const ANONYMOUS_MOVEMENT_MARK: MarkId = MarkId(puzzle_authoring::ANONYMOUS_MOVEMENT_MARK_INDEX);
 const ANONYMOUS_BOOL_MARK: MarkId = MarkId(1);
 const ANONYMOUS_INT_MARK: MarkId = MarkId(2);

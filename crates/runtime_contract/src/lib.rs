@@ -1,9 +1,12 @@
-use puzzle_grid3d::{CompiledGame3, LevelBundle3, LocalFrame, ObjectId, WinCondition3};
+use puzzle_core::{
+    GridCompiledGame, GridExecutableProgram, GridGoalCondition, GridInput, GridLevelBundle,
+    GridSize, LocalFrame, ObjectId,
+};
 pub use puzzle_scene::SceneEffect as LifecycleCommand;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub const RUNTIME_CONTRACT_VERSION: u16 = 4;
+pub const RUNTIME_CONTRACT_VERSION: u16 = 6;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RuntimeModelKind {
@@ -152,6 +155,65 @@ pub enum RuntimeTransitionCommand {
     ClearCheckpoint,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeAnimationOffset {
+    pub x: u16,
+    pub y: u16,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RuntimeEffect {
+    Win,
+    Restart,
+    NextLevel,
+    Again,
+    Checkpoint,
+    ClearCheckpoint,
+    PlaySfx {
+        name: String,
+    },
+    PlayMusic {
+        name: String,
+    },
+    PauseMusic {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
+    ResumeMusic {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
+    StopMusic {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
+    Wait {
+        milliseconds: u64,
+    },
+    WaitAnimation,
+    EmitAnimation {
+        name: String,
+        component: u16,
+        offset: RuntimeAnimationOffset,
+    },
+    Message {
+        text: String,
+        literal: bool,
+    },
+    Scene {
+        effect: LifecycleCommand,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeRuleEffects {
+    pub rule: u16,
+    pub effects: Vec<RuntimeEffect>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeTransitionProgramOutcome {
@@ -159,6 +221,7 @@ pub struct RuntimeTransitionProgramOutcome {
     pub cancelled: bool,
     pub completed: bool,
     pub commands: Vec<RuntimeTransitionCommand>,
+    pub effects: Vec<RuntimeEffect>,
     pub fired_rules: Vec<u16>,
     pub patches: Vec<Vec<RuntimePatchOp>>,
     pub animation_events: Vec<RuntimeAnimationEvent>,
@@ -180,6 +243,7 @@ pub struct RuntimeTransitionCurrentOutcome {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub state: Option<RuntimeStateSnapshot>,
     pub commands: Vec<RuntimeTransitionCommand>,
+    pub effects: Vec<RuntimeEffect>,
     pub fired_rules: Vec<u16>,
     pub patches: Vec<Vec<RuntimePatchOp>>,
     pub animation_events: Vec<RuntimeAnimationEvent>,
@@ -201,30 +265,17 @@ impl RuntimeTransitionCurrentOutcome {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RuntimeLifecycle<Rule, Frame> {
-    pub on_level_start: Vec<Rule>,
-    pub on_level_start_local_frame: Option<Frame>,
-    pub on_level_clear: Vec<LifecycleCommand>,
-    pub on_last_level_clear: Option<Vec<LifecycleCommand>>,
+pub struct RuntimeLifecycle<Program> {
+    pub on_level_start: Option<Program>,
+    pub on_level_clear: Option<Program>,
+    pub on_last_level_clear: Option<Program>,
 }
 
-impl<Rule, Frame> Default for RuntimeLifecycle<Rule, Frame> {
+impl<Program> Default for RuntimeLifecycle<Program> {
     fn default() -> Self {
         Self {
-            on_level_start: Vec::new(),
-            on_level_start_local_frame: None,
-            on_level_clear: Vec::new(),
-            on_last_level_clear: None,
-        }
-    }
-}
-
-impl<Rule, Frame> RuntimeLifecycle<Rule, Frame> {
-    pub fn new(on_level_start: Vec<Rule>, on_level_clear: Vec<LifecycleCommand>) -> Self {
-        Self {
-            on_level_start,
-            on_level_start_local_frame: None,
-            on_level_clear,
+            on_level_start: None,
+            on_level_clear: None,
             on_last_level_clear: None,
         }
     }
@@ -232,13 +283,13 @@ impl<Rule, Frame> RuntimeLifecycle<Rule, Frame> {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RuntimeContract {
+pub struct RuntimeContract<Model> {
     pub version: u16,
-    pub model: RuntimeModelContract,
+    pub model: Model,
 }
 
-impl RuntimeContract {
-    pub fn checked_new(model: RuntimeModelContract) -> Result<Self, RuntimeContractError> {
+impl<Model: RuntimeModel> RuntimeContract<Model> {
+    pub fn checked_new(model: Model) -> Result<Self, RuntimeContractError> {
         let contract = Self {
             version: RUNTIME_CONTRACT_VERSION,
             model,
@@ -255,44 +306,35 @@ impl RuntimeContract {
         }
         self.model.validate()
     }
-
-    pub fn into_puzzle3_model(self) -> Result<Puzzle3RuntimeModel, RuntimeContractError> {
-        match self.model {
-            RuntimeModelContract::Puzzle3(model) => Ok(model),
-        }
-    }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
-pub enum RuntimeModelContract {
-    #[serde(rename = "puzzle3")]
-    Puzzle3(Puzzle3RuntimeModel),
-}
-
-impl RuntimeModelContract {
-    fn validate(&self) -> Result<(), RuntimeContractError> {
-        match self {
-            Self::Puzzle3(model) => model.validate(),
-        }
-    }
+pub trait RuntimeModel {
+    fn validate(&self) -> Result<(), RuntimeContractError>;
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Puzzle3RuntimeModel {
-    pub game: CompiledGame3,
+pub struct GridPresentation<CameraEffect> {
     pub local_frame: Option<LocalFrame<ObjectId>>,
-    pub rule_camera_effects: Vec<Vec<Puzzle3CameraEffect>>,
-    pub level_bundle: LevelBundle3,
-    pub win_condition: Option<WinCondition3>,
-    pub lifecycle: RuntimeLifecycle<puzzle_grid3d::GridRuleStep<3>, LocalFrame<ObjectId>>,
-    pub on_level_start_camera_effects: Vec<Vec<Puzzle3CameraEffect>>,
+    pub rule_camera_effects: Vec<Vec<CameraEffect>>,
+    pub on_level_start_camera_effects: Vec<Vec<CameraEffect>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum Puzzle3CameraEffect {
+pub struct GridRuntimeModel<const D: usize, Size: GridSize<D>, CameraEffect> {
+    pub game: GridCompiledGame<D>,
+    pub inputs: Vec<GridInput<D>>,
+    pub level_bundle: GridLevelBundle<D, Size>,
+    pub goal: Option<GridGoalCondition<D>>,
+    pub rule_effects: Vec<RuntimeRuleEffects>,
+    pub lifecycle: RuntimeLifecycle<GridExecutableProgram<D>>,
+    pub presentation: GridPresentation<CameraEffect>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CameraEffect {
     SetYaw(i16),
     SetPitch(i16),
     SetRoll(i16),
@@ -300,55 +342,77 @@ pub enum Puzzle3CameraEffect {
     Reset,
 }
 
-impl Puzzle3RuntimeModel {
+impl<const D: usize, Size: GridSize<D>, PresentationEffect>
+    GridRuntimeModel<D, Size, PresentationEffect>
+{
     pub fn checked_new(
-        game: CompiledGame3,
-        local_frame: Option<LocalFrame<ObjectId>>,
-        rule_camera_effects: Vec<Vec<Puzzle3CameraEffect>>,
-        level_bundle: LevelBundle3,
-        win_condition: Option<WinCondition3>,
-        lifecycle: RuntimeLifecycle<puzzle_grid3d::GridRuleStep<3>, LocalFrame<ObjectId>>,
-        on_level_start_camera_effects: Vec<Vec<Puzzle3CameraEffect>>,
+        game: GridCompiledGame<D>,
+        inputs: Vec<GridInput<D>>,
+        level_bundle: GridLevelBundle<D, Size>,
+        goal: Option<GridGoalCondition<D>>,
+        rule_effects: Vec<RuntimeRuleEffects>,
+        lifecycle: RuntimeLifecycle<GridExecutableProgram<D>>,
+        presentation: GridPresentation<PresentationEffect>,
     ) -> Result<Self, RuntimeContractError> {
         let model = Self {
             game,
-            local_frame,
-            rule_camera_effects,
+            inputs,
             level_bundle,
-            win_condition,
+            goal,
+            rule_effects,
             lifecycle,
-            on_level_start_camera_effects,
+            presentation,
         };
         model.validate()?;
         Ok(model)
     }
 
     pub fn validate(&self) -> Result<(), RuntimeContractError> {
-        self.game
-            .validate()
-            .map_err(|error| RuntimeContractError::InvalidGame(format!("{error:?}")))?;
-        if self.level_bundle.game != self.game {
-            return Err(RuntimeContractError::InvalidLevelBundle(
-                "level bundle game does not match runtime contract game".to_string(),
-            ));
-        }
-        self.level_bundle
-            .validate()
-            .map_err(|error| RuntimeContractError::InvalidLevelBundle(format!("{error:?}")))?;
-        let rule_count = count_program_rules(self.game.program());
-        let level_start_rule_count = count_program_rules(&self.lifecycle.on_level_start);
-        if self.rule_camera_effects.len() != rule_count {
-            return Err(RuntimeContractError::InvalidPresentationEffects {
-                owner: "ruleCameraEffects".to_string(),
-            });
-        }
-        if self.on_level_start_camera_effects.len() != level_start_rule_count {
-            return Err(RuntimeContractError::InvalidPresentationEffects {
-                owner: "onLevelStartCameraEffects".to_string(),
-            });
-        }
-        Ok(())
+        validate_grid_runtime_model(self)
     }
+}
+
+impl<const D: usize, Size: GridSize<D>, PresentationEffect> RuntimeModel
+    for GridRuntimeModel<D, Size, PresentationEffect>
+{
+    fn validate(&self) -> Result<(), RuntimeContractError> {
+        validate_grid_runtime_model(self)
+    }
+}
+
+fn validate_grid_runtime_model<const D: usize, Size: GridSize<D>, PresentationEffect>(
+    model: &GridRuntimeModel<D, Size, PresentationEffect>,
+) -> Result<(), RuntimeContractError> {
+    model
+        .game
+        .validate()
+        .map_err(|error| RuntimeContractError::InvalidGame(format!("{error:?}")))?;
+    if model.level_bundle.game != model.game {
+        return Err(RuntimeContractError::InvalidLevelBundle(
+            "level bundle game does not match runtime contract game".to_string(),
+        ));
+    }
+    model
+        .level_bundle
+        .validate()
+        .map_err(|error| RuntimeContractError::InvalidLevelBundle(format!("{error:?}")))?;
+    let rule_count = model.game.executable_program().rule_count();
+    let level_start_rule_count = model
+        .lifecycle
+        .on_level_start
+        .as_ref()
+        .map_or(0, |program| program.rule_count());
+    if model.presentation.rule_camera_effects.len() != rule_count {
+        return Err(RuntimeContractError::InvalidPresentationEffects {
+            owner: "ruleCameraEffects".to_string(),
+        });
+    }
+    if model.presentation.on_level_start_camera_effects.len() != level_start_rule_count {
+        return Err(RuntimeContractError::InvalidPresentationEffects {
+            owner: "onLevelStartCameraEffects".to_string(),
+        });
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -392,92 +456,50 @@ impl std::fmt::Display for RuntimeContractError {
 
 impl std::error::Error for RuntimeContractError {}
 
-pub fn runtime_contract_json(contract: &RuntimeContract) -> Result<String, RuntimeContractError> {
+pub fn runtime_contract_json<Model>(
+    contract: &RuntimeContract<Model>,
+) -> Result<String, RuntimeContractError>
+where
+    Model: RuntimeModel + Serialize,
+{
     contract.validate()?;
     serde_json::to_string(contract)
         .map_err(|error| RuntimeContractError::InvalidJson(error.to_string()))
 }
 
-pub fn runtime_contract_from_fixture_value(
+pub fn runtime_contract_from_fixture_value<Model>(
     value: &Value,
-) -> Result<RuntimeContract, RuntimeContractError> {
+) -> Result<RuntimeContract<Model>, RuntimeContractError>
+where
+    Model: RuntimeModel + serde::de::DeserializeOwned,
+{
     let contract_value = value
         .get("runtimeContract")
         .ok_or(RuntimeContractError::MissingRuntimeContract)?;
-    let contract: RuntimeContract = serde_json::from_value(contract_value.clone())
+    let contract: RuntimeContract<Model> = serde_json::from_value(contract_value.clone())
         .map_err(|error| RuntimeContractError::InvalidJson(error.to_string()))?;
     contract.validate()?;
     Ok(contract)
 }
 
-pub fn runtime_contract_from_fixture_json(
+pub fn runtime_contract_from_fixture_json<Model>(
     fixture_json: &str,
-) -> Result<RuntimeContract, RuntimeContractError> {
+) -> Result<RuntimeContract<Model>, RuntimeContractError>
+where
+    Model: RuntimeModel + serde::de::DeserializeOwned,
+{
     let value: Value = serde_json::from_str(fixture_json)
         .map_err(|error| RuntimeContractError::InvalidJson(error.to_string()))?;
     runtime_contract_from_fixture_value(&value)
 }
 
-pub fn puzzle3_runtime_model_from_fixture_value(
-    value: &Value,
-) -> Result<Puzzle3RuntimeModel, RuntimeContractError> {
-    runtime_contract_from_fixture_value(value)?.into_puzzle3_model()
-}
-
-pub fn puzzle3_runtime_model_from_fixture_json(
-    fixture_json: &str,
-) -> Result<Puzzle3RuntimeModel, RuntimeContractError> {
-    runtime_contract_from_fixture_json(fixture_json)?.into_puzzle3_model()
-}
-
-fn count_program_rules(steps: &[puzzle_grid3d::GridRuleStep<3>]) -> usize {
-    let mut rule_count = 0;
-    for step in steps {
-        match step {
-            puzzle_grid3d::GridRuleStep::<3>::Rule(rule) => {
-                let _ = rule;
-                rule_count += 1;
-            }
-            puzzle_grid3d::GridRuleStep::<3>::ConditionalBlock { condition, steps } => {
-                let _ = condition;
-                rule_count += count_program_rules(steps);
-            }
-            puzzle_grid3d::GridRuleStep::<3>::ConditionalBranch {
-                condition,
-                then_steps,
-                else_steps,
-            } => {
-                let _ = condition;
-                rule_count += count_program_rules(then_steps);
-                rule_count += count_program_rules(else_steps);
-            }
-            puzzle_grid3d::GridRuleStep::<3>::Block {
-                stop_condition,
-                steps,
-                ..
-            } => {
-                let _ = stop_condition;
-                rule_count += count_program_rules(steps);
-            }
-            puzzle_grid3d::GridRuleStep::<3>::AfterTriggered { steps, then_steps } => {
-                rule_count += count_program_rules(steps);
-                rule_count += count_program_rules(then_steps);
-            }
-            puzzle_grid3d::GridRuleStep::<3>::LocalFrame { steps, .. } => {
-                rule_count += count_program_rules(steps);
-            }
-        }
-    }
-    rule_count
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use puzzle_grid3d::{
-        ConditionDef3, ConditionId3, ConditionValueKind3, Coord3, Delta3, GridMatchCell,
-        GridPattern, GridRule, Guard3, LayerId, Level3, LevelCell3, LevelEntry3, ObjectDef3,
-        RuleApplication3, RuleId3, Size3,
+    use puzzle_core::{
+        ConditionId, Delta3, GridConditionDef, GridConditionValueKind, GridExecutableProgram,
+        GridGuard, GridLevel, GridLevelBundle, GridMatchCell, GridPattern, GridRule, GridRuleStep,
+        GridState, LayerId, ObjectDef, RuleApplication, RuleId, Size3,
     };
     use serde_json::json;
 
@@ -485,30 +507,34 @@ mod tests {
 
     const PLAYER: ObjectId = ObjectId(1);
 
-    fn support_game() -> CompiledGame3 {
-        CompiledGame3::new_with_condition_defs(
+    fn support_game() -> GridCompiledGame<3> {
+        GridCompiledGame::<3>::new_with_condition_defs(
             1,
-            vec![ObjectDef3 {
+            vec![ObjectDef {
                 id: PLAYER,
                 layer_id: LayerId(0),
             }],
-            vec![ConditionDef3 {
-                id: ConditionId3(0),
-                kind: ConditionValueKind3::ExistsObjects(vec![PLAYER]),
+            vec![GridConditionDef::<3> {
+                id: ConditionId(0),
+                kind: GridConditionValueKind::<3>::ExistsObjects(vec![PLAYER]),
             }],
         )
     }
 
-    fn support_level_bundle(game: &CompiledGame3) -> LevelBundle3 {
-        LevelBundle3::checked_new(
+    fn support_level_bundle(game: &GridCompiledGame<3>) -> GridLevelBundle<3, Size3> {
+        let mut state = GridState::empty_sized(Size3::new(1, 1, 1), 1, game.object_count())
+            .expect("support state dimensions are valid");
+        state
+            .place_object_at(game, puzzle_core::GridCoord::new([0, 0, 0]), PLAYER)
+            .expect("support object placement is valid");
+        GridLevelBundle::checked_new(
             game.clone(),
-            vec![LevelEntry3::new(
+            vec![GridLevel::new(
                 "one",
-                Level3::new(
-                    Size3::new(1, 1, 1),
-                    vec![LevelCell3::new(Coord3::new(0, 0, 0), vec![PLAYER])],
-                ),
-                Vec::new(),
+                state,
+                puzzle_core::GridExecutableProgram::new(Vec::new()),
+                None,
+                None,
             )],
         )
         .expect("support level bundle is valid")
@@ -516,7 +542,11 @@ mod tests {
 
     #[test]
     fn fixture_requires_runtime_contract_field() {
-        let error = runtime_contract_from_fixture_value(&json!({})).unwrap_err();
+        let error =
+            runtime_contract_from_fixture_value::<GridRuntimeModel<3, Size3, CameraEffect>>(
+                &json!({}),
+            )
+            .unwrap_err();
 
         assert_eq!(error, RuntimeContractError::MissingRuntimeContract);
     }
@@ -524,37 +554,41 @@ mod tests {
     #[test]
     fn runtime_contract_round_trips_shared_guard_variants() {
         let rule = Rule {
-            id: RuleId3(7),
-            guards: vec![Guard3::ConditionNonZero(ConditionId3(0))],
-            application: RuleApplication3::Once,
+            id: RuleId(7),
+            guards: vec![GridGuard::<3>::ConditionNonZero(ConditionId(0))],
+            application: RuleApplication::Once,
             pattern: GridPattern::<3>::new(vec![
                 GridMatchCell::<3>::new(Delta3::ZERO).require(PLAYER),
             ]),
             writes: Vec::new(),
             effects: Vec::new(),
         };
-        let game = support_game()
-            .clone_with_program(vec![puzzle_grid3d::GridRuleStep::<3>::Rule(rule.clone())]);
-        let model = Puzzle3RuntimeModel::checked_new(
+        let game = support_game().clone_with_executable_program(GridExecutableProgram::new(vec![
+            GridRuleStep::<3>::Rule(rule.clone()),
+        ]));
+        let model = GridRuntimeModel::checked_new(
             game.clone(),
-            None,
-            vec![Vec::new()],
+            Vec::new(),
             support_level_bundle(&game),
             None,
-            RuntimeLifecycle::default(),
             Vec::new(),
+            RuntimeLifecycle::default(),
+            GridPresentation::<CameraEffect> {
+                local_frame: None,
+                rule_camera_effects: vec![Vec::new()],
+                on_level_start_camera_effects: Vec::new(),
+            },
         )
         .expect("runtime model is valid");
-        let contract = RuntimeContract::checked_new(RuntimeModelContract::Puzzle3(model))
-            .expect("runtime contract is valid");
+        let contract = RuntimeContract::checked_new(model).expect("runtime contract is valid");
         let fixture = json!({
             "runtimeContract": serde_json::to_value(&contract).expect("contract serializes"),
         });
 
-        let decoded =
-            puzzle3_runtime_model_from_fixture_value(&fixture).expect("runtime contract decodes");
+        let decoded: RuntimeContract<GridRuntimeModel<3, Size3, CameraEffect>> =
+            runtime_contract_from_fixture_value(&fixture).expect("runtime contract decodes");
 
-        assert_eq!(decoded.game.rules()[0].guards, rule.guards);
+        assert_eq!(decoded.model.game.rules()[0].guards, rule.guards);
     }
 
     #[test]
@@ -573,6 +607,7 @@ mod tests {
             cancelled: false,
             completed: true,
             commands: vec![RuntimeTransitionCommand::Win],
+            effects: vec![RuntimeEffect::Win],
             fired_rules: vec![3],
             patches: vec![vec![RuntimePatchOp::Remove {
                 position: RuntimeCoord {
@@ -617,6 +652,7 @@ mod tests {
                 "cancelled",
                 "commands",
                 "completed",
+                "effects",
                 "firedRules",
                 "patches",
                 "state"
@@ -632,6 +668,7 @@ mod tests {
             completed: false,
             state: None,
             commands: Vec::new(),
+            effects: Vec::new(),
             fired_rules: Vec::new(),
             patches: Vec::new(),
             animation_events: Vec::new(),
@@ -670,6 +707,7 @@ mod tests {
                 "changedCells",
                 "commands",
                 "completed",
+                "effects",
                 "firedRules",
                 "levelFiredRules",
                 "patches",

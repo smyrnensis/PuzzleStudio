@@ -2,6 +2,7 @@ use puzzle_lang::{PuzzleSourceProfile, SourceTargetKind, analyze_source_for_prof
 
 const PROFILE_SENSITIVE_SOURCE: &str = r#"
 puzzle sokoban {
+dimension = 3
 }
 
 levels microban of sokoban {
@@ -28,7 +29,7 @@ shape = {
 "#;
 
 #[test]
-fn source_analysis_profile_controls_bare_puzzle_level_and_sprite_targets() {
+fn source_analysis_profile_does_not_override_model_dimension() {
     let level_cursor = PROFILE_SENSITIVE_SOURCE
         .find(".\n-\n.")
         .expect("stacked level body");
@@ -42,13 +43,13 @@ fn source_analysis_profile_controls_bare_puzzle_level_and_sprite_targets() {
         puzzle3
             .resolve_target(level_cursor)
             .map(|target| target.kind),
-        Some(SourceTargetKind::Level3d),
+        Some(SourceTargetKind::Level),
     );
     assert_eq!(
         puzzle3
             .resolve_target(sprite_cursor)
             .map(|target| target.kind),
-        Some(SourceTargetKind::Sprite3d),
+        Some(SourceTargetKind::Sprite),
     );
 
     let puzzle2 =
@@ -64,5 +65,17 @@ fn source_analysis_profile_controls_bare_puzzle_level_and_sprite_targets() {
             .resolve_target(sprite_cursor)
             .map(|target| target.kind),
         Some(SourceTargetKind::Sprite),
+    );
+    assert_eq!(
+        puzzle2
+            .resolve_target(level_cursor)
+            .and_then(|target| target.dimension),
+        Some(puzzle_lang::ModelDimension::Three),
+    );
+    assert_eq!(
+        puzzle2
+            .resolve_target(sprite_cursor)
+            .and_then(|target| target.dimension),
+        Some(puzzle_lang::ModelDimension::Three),
     );
 }

@@ -302,8 +302,12 @@ mod tests {
     #[test]
     fn only_the_incremental_source_scanner_may_create_lexical_facts() {
         let source_scanner = include_str!("source.rs");
+        let production_source = source_scanner
+            .split("\nmod tests {")
+            .next()
+            .expect("source module has production content");
         assert_eq!(
-            source_scanner
+            production_source
                 .matches("scan_source_line_lexical_facts")
                 .count(),
             1

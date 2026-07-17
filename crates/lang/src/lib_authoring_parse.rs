@@ -15,35 +15,29 @@ fn scene_entry_is_component(tokens: &[&str]) -> bool {
         | puzzle_scene::SceneComponentKind::Conditional
         | puzzle_scene::SceneComponentKind::For => true,
         puzzle_scene::SceneComponentKind::LevelMenu => true,
-        puzzle_scene::SceneComponentKind::Frame => tokens.len() >= 2,
+        puzzle_scene::SceneComponentKind::Viewport | puzzle_scene::SceneComponentKind::Frame => {
+            tokens.len() >= 2
+        }
     }
 }
 
 #[derive(Clone, Copy)]
 enum AuthoringEntryOwner {
-    GenericBlock,
-    PuzzleGroups,
-    PuzzleVisuals,
     SceneLayoutCondition,
     SceneCondition,
     SceneLifecycle,
     SceneRoutine,
-    DocumentVisuals,
 }
 
 impl AuthoringEntryOwner {
     fn missing_close_message(self) -> &'static str {
         match self {
-            AuthoringEntryOwner::GenericBlock => "block missing closing brace",
-            AuthoringEntryOwner::PuzzleGroups => "groups block missing closing brace",
-            AuthoringEntryOwner::PuzzleVisuals => "sprites block missing closing brace",
             AuthoringEntryOwner::SceneLayoutCondition => {
                 "layout condition block missing closing brace"
             }
             AuthoringEntryOwner::SceneCondition => "condition block missing closing brace",
             AuthoringEntryOwner::SceneLifecycle => "scene lifecycle block missing closing brace",
             AuthoringEntryOwner::SceneRoutine => "scene routine block missing closing brace",
-            AuthoringEntryOwner::DocumentVisuals => "document sprites block missing closing brace",
         }
     }
 }
@@ -54,7 +48,7 @@ fn collect_authoring_entry(
     owner: AuthoringEntryOwner,
 ) -> Result<(Vec<source::LogicalLine>, usize), DiagnosticReport> {
     let first = &lines[start];
-    let mut depth = authoring_line_brace_delta(first);
+    let mut depth = first.structural_brace_delta();
     if depth <= 0 {
         return Ok((vec![first.clone()], start + 1));
     }
@@ -63,7 +57,7 @@ fn collect_authoring_entry(
     let mut i = start + 1;
     while i < lines.len() {
         let line = &lines[i];
-        let next_depth = depth + authoring_line_brace_delta(line);
+        let next_depth = depth + line.structural_brace_delta();
         if next_depth < 0 {
             return Err(parse_error(line, "closing brace without block"));
         }
@@ -75,10 +69,6 @@ fn collect_authoring_entry(
         depth = next_depth;
     }
     Err(parse_error(first, owner.missing_close_message()))
-}
-
-fn authoring_line_brace_delta(line: &str) -> i32 {
-    raw_brace_delta(strip_line_comment(line))
 }
 
 fn next_line_is_else(lines: &[source::LogicalLine], index: usize) -> bool {
@@ -98,7 +88,7 @@ fn collect_braced_body_until_close(
     let mut i = start;
     while i < lines.len() {
         let line = &lines[i];
-        let next_depth = depth + authoring_line_brace_delta(line);
+        let next_depth = depth + line.structural_brace_delta();
         if next_depth < 0 {
             return Err(parse_error(line, "closing brace without block"));
         }
@@ -110,34 +100,6 @@ fn collect_braced_body_until_close(
         i += 1;
     }
     Err(parse_error(header_line, missing_close_message))
-}
-
-fn collect_levels_authoring_entry(
-    lines: &[source::LogicalLine],
-    start: usize,
-) -> Result<(Vec<source::LogicalLine>, usize), DiagnosticReport> {
-    let first = &lines[start];
-    let mut entry = vec![first.clone()];
-    let mut depth = authoring_line_brace_delta(first);
-    if depth <= 0 {
-        depth = 1;
-    }
-
-    let mut i = start + 1;
-    while i < lines.len() {
-        let line = &lines[i];
-        let next_depth = depth + authoring_line_brace_delta(line);
-        if next_depth < 0 {
-            return Err(parse_error(line, "closing brace without block"));
-        }
-        entry.push(line.clone());
-        i += 1;
-        if next_depth == 0 {
-            return Ok((entry, i));
-        }
-        depth = next_depth;
-    }
-    Err(parse_error(first, "levels block missing closing brace"))
 }
 
 fn lower_model_statement_block(
@@ -167,9 +129,7 @@ fn lower_model_statement_block(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn parse_puzzle_definition(
-    lines: &[source::LogicalLine],
-    start: usize,
+fn lower_puzzle_model(
     model: &model_syntax::PuzzleModelSyntax,
     catalog_product: &Catalog,
     layer_count: &mut Option<u16>,
@@ -180,7 +140,7 @@ fn parse_puzzle_definition(
     query_names: &mut HashSet<String>,
     condition_definitions: &mut Vec<ConditionDefinitionAst>,
     controls: &mut Controls,
-    directions: &mut Vec<Direction>,
+    directions: &mut Vec<DirectionalInput>,
     rule_definitions: &mut Vec<RuleDefinitionAst>,
     main_statements: &mut Option<Vec<StatementAst>>,
     main_local_frame: &mut Option<LocalFrame<ObjectId>>,
@@ -202,53 +162,91 @@ fn parse_puzzle_definition(
     puzzle_screen: &mut PuzzleScreenDef,
     level_blocks: &mut Vec<LevelBlock>,
     recognition: &mut crate::surface::ParserRecognition,
-) -> Result<(usize, String), DiagnosticReport> {
-    let header = split_header_tokens(&lines[start]);
-    let name = crate::syntax::named_block_declaration_syntax(&header, "puzzle")
-        .ok_or_else(|| parse_error(&lines[start], "puzzle header must be: puzzle <name>"))?
-        .name;
-    validate_qualified_identifier(name, &lines[start], "puzzle name")?;
-    if model.name != name {
-        return Err(parse_error(
-            &lines[start],
-            "canonical puzzle model does not match the lowering entry",
-        ));
-    }
+) -> Result<String, DiagnosticReport> {
+    let model_source = source::LogicalLine::new(&model.source_line, model.source_line_number);
+    validate_qualified_identifier(&model.name, &model_source, "puzzle name")?;
     *catalog = catalog_product.clone();
     *layer_count = catalog.layer_count;
     *named_layers = catalog.named_layers.clone();
     for legend in &model.body.levels.legends {
-        apply_level_resource_legend(
-            legend,
-            catalog,
-            render_overlays,
-            empty_char,
-            recognition,
-        )?;
+        apply_level_resource_legend(legend, catalog, render_overlays, empty_char, recognition)?;
     }
     level_blocks.extend(model.body.levels.levels.iter().cloned());
     lower_model_key_bindings(&model.body.keys, catalog, controls)?;
 
-    let mut diagnostics = Vec::new();
-    for entry in &model.entries {
-        let tokens = split_header_tokens(&entry.header.text);
-        match tokens.as_slice() {
-            ["var" | "const" | "persistent", ..] => parse_variable_directive(
-                &tokens,
-                &entry.header,
-                &mut catalog.variable_names,
-                &mut catalog.variable_labels,
-                &mut catalog.variable_defaults,
-                &mut catalog.numeric_variable_defaults,
-                &mut catalog.persistent_vars,
-                &mut catalog.constant_variables,
-            )?,
-            [name, "=", ..] if *name != "dimension" => {
-                parse_assignment_directive(name, &entry.header, catalog, named_conditions)?;
-            }
-            _ => {}
+    for declaration in &model.body.variables {
+        if catalog.variable_names.contains_key(&declaration.name) {
+            return Err(parse_error(&declaration.source, "duplicate var or const"));
+        }
+        let id = VariableId(catalog.variable_defaults.len() as u16);
+        catalog.variable_names.insert(declaration.name.clone(), id);
+        catalog.variable_labels.insert(id, declaration.name.clone());
+        catalog.variable_defaults.push(declaration.default);
+        if declaration.numeric {
+            catalog
+                .numeric_variable_defaults
+                .insert(declaration.name.clone(), declaration.default);
+        }
+        if declaration.persistent {
+            catalog.persistent_vars.push(id);
+        }
+        if declaration.constant {
+            catalog.constant_variables.push(id);
         }
     }
+    for syntax in &model.body.named_conditions {
+        if named_conditions.contains_key(&syntax.name) {
+            return Err(parse_error(&syntax.source, "duplicate condition"));
+        }
+        let condition = parse_condition_expr(
+            &syntax.expression,
+            &syntax.source,
+            &catalog.input_names,
+            &catalog.variable_names,
+            &catalog.condition_names,
+            &catalog.object_names,
+            &catalog.object_schemas,
+            &catalog_value_sets(catalog),
+            &catalog.maps,
+            &catalog.object_groups,
+        )?;
+        named_conditions.insert(
+            syntax.name.clone(),
+            (syntax.expression.clone(), condition),
+        );
+    }
+    for syntax in &model.body.inputs {
+        let input = catalog
+            .input_names
+            .get(&syntax.name)
+            .copied()
+            .map(Ok)
+            .unwrap_or_else(|| add_input_name(&syntax.name, &syntax.source, catalog))?;
+        if let Some(direction) = &syntax.direction {
+            validate_direction_name(direction, catalog, &syntax.source)?;
+            directions.push(DirectionalInput {
+                input,
+                direction: direction.clone(),
+            });
+        }
+    }
+    for syntax in &model.body.direction_aliases {
+        add_direction_alias(
+            &syntax.alias,
+            &syntax.canonical,
+            &syntax.source,
+            catalog,
+        )?;
+    }
+    if let Some(character) = model.body.empty_char {
+        *empty_char = Some(character);
+    }
+    *run_rules_on_level_start |= model.body.run_rules_on_level_start;
+    *puzzle_screen = model.body.screen.clone();
+    model_sound_triggers.extend(model.body.sounds.triggers.iter().cloned());
+    model_operation_sounds.extend(model.body.sounds.operations.iter().cloned());
+
+    let mut diagnostics = Vec::new();
     for query in &model.body.queries {
         let (query, core_definition) = lower_query_definition_syntax(
             &query.definition,
@@ -276,24 +274,35 @@ fn parse_puzzle_definition(
             named_conditions,
         )?;
     }
+    if let Some(lose_conditions) = &model.body.lose_conditions {
+        lower_condition_block_syntax_rows(
+            &lose_conditions.header,
+            &lose_conditions.rows,
+            catalog,
+            named_conditions,
+        )?;
+    }
+    for syntax in &model.body.render_overlays {
+        let (overlays, level_objects) = lower_render_overlay_syntax(
+            syntax,
+            &catalog.object_names,
+            &catalog.object_schemas,
+            &catalog_value_sets(catalog),
+            &catalog.maps,
+            &catalog.object_groups,
+        )?;
+        render_overlays.extend(overlays);
+        if let Some(objects) = level_objects {
+            catalog.char_objects.insert(syntax.character, objects);
+        }
+    }
     if let Some(product) = &model.body.render {
         *render = product.render.clone();
         *animation = product.animation.clone();
     }
     for syntax in &model.body.routines {
-        let header = puzzle_authoring::RuleStatementLine {
-            source: syntax.header.clone(),
-            text: syntax
-                .header
-                .text
-                .strip_suffix('{')
-                .unwrap_or(&syntax.header.text)
-                .trim_end()
-                .to_string(),
-        };
         match lower_rule_definition_syntax(
-            &header,
-            &syntax.statements,
+            &syntax.statement,
             &catalog.object_names,
             &catalog.object_schemas,
             &catalog_value_sets(catalog),
@@ -334,260 +343,18 @@ fn parse_puzzle_definition(
         *last_level_clear_local_frame = local_frame;
     }
 
-    let mut i = start + 1;
-    let mut pending_visual_blocks = Vec::<usize>::new();
-    while i < lines.len() && !is_block_close_line(&lines[i]) {
-        let line = &lines[i];
-        let tokens = split_header_tokens(line);
-        if tokens.is_empty() {
-            i += 1;
-            continue;
-        }
-
-        match tokens[0] {
-            "dimension"
-                if tokens.as_slice()
-                    == ["dimension", "=", model.dimension.number().to_string().as_str()] =>
-            {
-                i += 1;
-            }
-            "dimension" => {
-                return Err(parse_error(
-                    line,
-                    "puzzle dimension does not match the canonical model",
-                ));
-            }
-            _assignment_name if tokens.get(1).copied() == Some("=") => {
-                i += 1;
-            }
-            "tags" => {
-                if tokens.len() != 1 {
-                    return Err(parse_error(line, "tags header must be: tags"));
-                }
-                i = skip_tags_block(lines, i)?;
-            }
-            "map" => {
-                i = skip_logical_block(lines, i);
-            }
-            "run_rules_on_level_start" => {
-                if tokens.len() != 1 {
-                    return Err(parse_error(
-                        line,
-                        "run_rules_on_level_start takes no values",
-                    ));
-                }
-                *run_rules_on_level_start = true;
-                i += 1;
-            }
-            lifecycle_block if puzzle_lifecycle_event(lifecycle_block).is_some() => {
-                i = skip_logical_block(lines, i);
-            }
-            "slots" if tokens.len() == 1 => {
-                i = skip_logical_block(lines, i);
-            }
-            "slots" => {
-                i += 1;
-            }
-            "collision_layers" => {
-                diagnostics.extend(
-                    parse_error(line, "`collision_layers` was removed; use `slots { ... }`")
-                        .into_diagnostics(),
-                );
-                i = recover_after_directive_error(lines, i);
-            }
-            "empty" => {
-                let ch = parse_char(tokens.get(1), line, "missing empty char")?;
-                if ch != '.' {
-                    return Err(parse_error(line, "levels use `.` for empty"));
-                }
-                *empty_char = Some('.');
-                i += 1;
-            }
-            "marks" => {
-                i = skip_logical_block(lines, i);
-            }
-            "input" => {
-                let (direction, next_i) = parse_command_definition(lines, i, catalog)?;
-                if let Some(direction) = direction {
-                    directions.push(direction);
-                }
-                i = next_i;
-            }
-            "inputs" => {
-                diagnostics.extend(
-                    parse_error(
-                        line,
-                        "`inputs { ... }` was removed; use `keys { <key...> -> <input> }`",
-                    )
-                    .into_diagnostics(),
-                );
-                i = recover_after_directive_error(lines, i);
-            }
-            "keys" => {
-                i = skip_logical_block(lines, i);
-            }
-            "var" | "const" | "persistent" => {
-                i += 1;
-            }
-            "variable" => {
-                diagnostics.extend(
-                    parse_error(line, "`variable` was removed; use `var`").into_diagnostics(),
-                );
-                i += 1;
-            }
-            "condition" => {
-                diagnostics.extend(
-                    parse_error(line, "`condition` declarations were removed; use `query`")
-                        .into_diagnostics(),
-                );
-                i += 1;
-            }
-            "query" => {
-                i += 1;
-            }
-            "solver" => {
-                *solver_strategy = model.body.solver.clone();
-                i = skip_logical_block(lines, i);
-            }
-            "effect" => {
-                diagnostics.extend(
-                    parse_error(line, "effect definitions are obsolete; use routine")
-                        .into_diagnostics(),
-                );
-                i = recover_after_directive_error(lines, i);
-            }
-            "groups" => {
-                if tokens.len() == 1 {
-                    i = skip_logical_block(lines, i);
-                } else {
-                    return Err(parse_error(line, "groups block must be: groups { ... }"));
-                }
-            }
-            "group" => {
-                let message = if tokens.len() == 1 {
-                    "`group { ... }` was removed; use `groups { ... }`"
-                } else {
-                    "`group <name> = ...` was removed; use `groups { <name> = ... }`"
-                };
-                diagnostics.extend(parse_error(line, message).into_diagnostics());
-                i = recover_after_directive_error(lines, i);
-            }
-            "direction" => {
-                if let Some(direction) = parse_direction_directive(&tokens, line, catalog)? {
-                    directions.push(direction);
-                }
-                i += 1;
-            }
-            "legend" => {
-                diagnostics.extend(
-                    parse_error(line, "`legend` must be inside `levels { ... }`")
-                        .into_diagnostics(),
-                );
-                i = recover_after_directive_error(lines, i);
-            }
-            "render_overlay" => {
-                let (overlays, level_objects, ch) = parse_render_overlay(
-                    &tokens,
-                    line,
-                    &catalog.object_names,
-                    &catalog.object_schemas,
-                    &catalog_value_sets(&catalog),
-                    &catalog.maps,
-                    &catalog.object_groups,
-                )?;
-                render_overlays.extend(overlays);
-                if let Some(objects) = level_objects {
-                    catalog.char_objects.insert(ch, objects);
-                }
-                i += 1;
-            }
-            "win_conditions" => {
-                i = skip_logical_block(lines, i);
-            }
-            "lose_conditions" => {
-                i = parse_conditions_block(lines, i, catalog, named_conditions)?;
-            }
-            "sprites" => {
-                pending_visual_blocks.push(i);
-                let (_, next_i) =
-                    collect_authoring_entry(lines, i, AuthoringEntryOwner::PuzzleVisuals)?;
-                i = next_i;
-            }
-            "render" => {
-                i = skip_logical_block(lines, i);
-            }
-            "sounds" => {
-                i = parse_model_sounds_block(
-                    lines,
-                    i,
-                    model_sound_triggers,
-                    model_operation_sounds,
-                    true,
-                )?;
-            }
-            "screen" | "layout" => {
-                i = parse_puzzle_screen_block(lines, i, puzzle_screen)?;
-            }
-            "flickscreen" | "zoomscreen" | "screen_focus" => {
-                parse_puzzle_screen_directive(line, puzzle_screen)?;
-                i += 1;
-            }
-            "frame_focus" | "frame_size" | "switch_frame" | "follow_frame" => {
-                diagnostics.extend(parse_error(
-                    line,
-                    "`frame_*` screen directives were removed; use `flickscreen`, `zoomscreen`, or `screen_focus`",
-                ).into_diagnostics());
-                i += 1;
-            }
-            "routine" => {
-                i = skip_logical_block(lines, i);
-            }
-            "rule" => {
-                diagnostics.extend(
-                    parse_error(line, "`rule` was removed; use `routine`").into_diagnostics(),
-                );
-                i = recover_after_directive_error(lines, i);
-            }
-            "rules" => {
-                i = skip_logical_block(lines, i);
-            }
-            "main" => {
-                diagnostics.extend(
-                    parse_error(line, "`main` was removed; use `rules`").into_diagnostics(),
-                );
-                i = recover_after_directive_error(lines, i);
-            }
-            "levels" => {
-                let (_, next_i) = collect_levels_authoring_entry(lines, i)?;
-                i = next_i;
-            }
-            "level" => {
-                let (_, next_i) = parse_level_block(lines, i, 0)?;
-                i = next_i;
-            }
-            other => {
-                diagnostics.extend(
-                    parse_error(line, &format!("unknown puzzle directive {other}"))
-                        .into_diagnostics(),
-                );
-                i = recover_after_directive_error(lines, i);
-            }
-        }
-    }
-    if i >= lines.len() {
-        return Err(parse_error(&lines[start], "puzzle missing closing brace"));
-    }
-    for visual_start in pending_visual_blocks {
-        if let Err(report) = parse_visuals_block(lines, visual_start, catalog, visuals).value {
+    *solver_strategy = model.body.solver.clone();
+    for entry in &model.body.sprite_resources {
+        let parsed = parse_visuals_entry(entry, catalog, visuals);
+        recognition.merge(parsed.recognition);
+        if let Err(report) = parsed.value {
             diagnostics.extend(report.into_diagnostics());
         }
     }
     if !diagnostics.is_empty() {
         return Err(DiagnosticReport::from_diagnostics(diagnostics));
     }
-    validate_puzzle_screen(puzzle_screen, &lines[start])?;
-
-    Ok((i + 1, name.to_string()))
+    Ok(model.name.clone())
 }
 
 fn parse_program_local_frame_modifier(

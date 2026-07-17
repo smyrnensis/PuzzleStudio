@@ -1,4 +1,7 @@
-fn wrap_rewrite_steps(application: RuleApplication, steps: Vec<RuleStep>) -> Vec<RuleStep> {
+fn wrap_rewrite_steps(
+    application: RuleApplication,
+    steps: Vec<CanonicalRuleStep>,
+) -> Vec<CanonicalRuleStep> {
     if matches!(
         application,
         RuleApplication::Random | RuleApplication::UntilStable
@@ -11,7 +14,7 @@ fn wrap_rewrite_steps(application: RuleApplication, steps: Vec<RuleStep>) -> Vec
         } else {
             steps
         };
-        vec![RuleStep::Block {
+        vec![CanonicalRuleStep::Block {
             application,
             stop_condition: None,
             steps,
@@ -21,24 +24,29 @@ fn wrap_rewrite_steps(application: RuleApplication, steps: Vec<RuleStep>) -> Vec
     }
 }
 
-fn rewrite_step_with_application(step: RuleStep, application: RuleApplication) -> RuleStep {
+fn rewrite_step_with_application(
+    step: CanonicalRuleStep,
+    application: RuleApplication,
+) -> CanonicalRuleStep {
     match step {
-        RuleStep::Rule(mut rule) => {
+        CanonicalRuleStep::Rule(mut rule) => {
             rule.application = application;
-            RuleStep::Rule(rule)
+            CanonicalRuleStep::Rule(rule)
         }
-        RuleStep::ConditionalBlock { condition, steps } => RuleStep::ConditionalBlock {
-            condition,
-            steps: steps
-                .into_iter()
-                .map(|step| rewrite_step_with_application(step, application))
-                .collect(),
-        },
-        RuleStep::ConditionalBranch {
+        CanonicalRuleStep::ConditionalBlock { condition, steps } => {
+            CanonicalRuleStep::ConditionalBlock {
+                condition,
+                steps: steps
+                    .into_iter()
+                    .map(|step| rewrite_step_with_application(step, application))
+                    .collect(),
+            }
+        }
+        CanonicalRuleStep::ConditionalBranch {
             condition,
             then_steps,
             else_steps,
-        } => RuleStep::ConditionalBranch {
+        } => CanonicalRuleStep::ConditionalBranch {
             condition,
             then_steps: then_steps
                 .into_iter()
@@ -55,7 +63,7 @@ fn rewrite_step_with_application(step: RuleStep, application: RuleApplication) -
 
 #[derive(Clone, Debug, Default)]
 struct RuleBodyAlternative {
-    guards: Vec<Guard>,
+    guards: Vec<CanonicalGuard>,
     components: Vec<PatternComponentTemplate>,
     writes: Vec<WriteOpTemplate>,
     tag_captures: TagCaptureValues,
@@ -145,8 +153,11 @@ fn append_tween_rule_animations(
     });
 }
 
-fn parse_inline_rewrite(
-    line: &str,
+fn lower_inline_rewrite_syntax(
+    syntax: &puzzle_authoring::UnresolvedRewriteSyntax,
+    target: &puzzle_authoring::RuleStatementTargetSurface,
+    rewrite_source: &str,
+    source_line: &str,
     object_names: &HashMap<String, ObjectId>,
     object_schemas: &HashMap<String, ObjectSchema>,
     value_sets: &HashMap<String, Vec<String>>,
@@ -163,11 +174,9 @@ fn parse_inline_rewrite(
     ),
     DiagnosticReport,
 > {
-    let syntax = puzzle_authoring::parse_unresolved_rewrite_syntax(line)
-        .map_err(|error| parse_error(line, error.message()))?;
     let before = lower_unresolved_pattern(
-        syntax.before,
-        line,
+        syntax.before.clone(),
+        rewrite_source,
         object_names,
         object_schemas,
         value_sets,
@@ -175,10 +184,10 @@ fn parse_inline_rewrite(
         object_groups,
         variable_names,
     )?;
-    let (after, effects, after_effects, after_call) = if let Some(after) = syntax.after {
+    let (after, effects, after_effects, after_call) = if let Some(after) = &syntax.after {
         let after = lower_unresolved_pattern(
-            after,
-            line,
+            after.clone(),
+            rewrite_source,
             object_names,
             object_schemas,
             value_sets,
@@ -186,34 +195,48 @@ fn parse_inline_rewrite(
             object_groups,
             variable_names,
         )?;
-        let (after_effects, after_call) = parse_after_pattern_suffix(&syntax.suffix, line)?;
+        let (after_effects, after_call) = match target {
+            puzzle_authoring::RuleStatementTargetSurface::Empty => (Vec::new(), None),
+            puzzle_authoring::RuleStatementTargetSurface::Call { name, .. } => {
+                (Vec::new(), Some(name.clone()))
+            }
+            puzzle_authoring::RuleStatementTargetSurface::Effect { span } => (
+                parse_rewrite_effect(&source_line[span.clone()], source_line)?,
+                None,
+            ),
+            puzzle_authoring::RuleStatementTargetSurface::Invalid { span } => {
+                return Err(parse_error(
+                    source_line,
+                    &format!("invalid rewrite suffix: {}", &source_line[span.clone()]),
+                ));
+            }
+        };
         (after, Vec::new(), after_effects, after_call)
     } else {
-        (
-            before.clone(),
-            parse_rewrite_effect(&syntax.suffix, line)?,
-            Vec::new(),
-            None,
-        )
+        let effects = match target {
+            puzzle_authoring::RuleStatementTargetSurface::Effect { span } => {
+                parse_rewrite_effect(&source_line[span.clone()], source_line)?
+            }
+            puzzle_authoring::RuleStatementTargetSurface::Empty => {
+                return Err(parse_error(source_line, "rewrite target cannot be empty"));
+            }
+            puzzle_authoring::RuleStatementTargetSurface::Call { name, .. } => {
+                return Err(parse_error(
+                    source_line,
+                    &format!("routine call target `{name}` must lower as a conditional call"),
+                ));
+            }
+            puzzle_authoring::RuleStatementTargetSurface::Invalid { span } => {
+                return Err(parse_error(
+                    source_line,
+                    &format!("invalid rewrite target: {}", &source_line[span.clone()]),
+                ));
+            }
+        };
+        (before.clone(), effects, Vec::new(), None)
     };
 
     Ok((before, after, effects, after_effects, after_call))
-}
-
-fn parse_after_pattern_suffix(
-    suffix: &str,
-    line: &str,
-) -> Result<(Vec<EffectAst>, Option<String>), DiagnosticReport> {
-    if suffix.is_empty() {
-        return Ok((Vec::new(), None));
-    }
-    let tokens = split_header_tokens(suffix);
-    if matches!(tokens.as_slice(), [name] if is_qualified_identifier(name))
-        && !is_builtin_rewrite_effect_text(suffix)
-    {
-        return Ok((Vec::new(), Some(suffix.to_string())));
-    }
-    parse_rewrite_effect(suffix, line).map(|effects| (effects, None))
 }
 
 #[derive(Clone, Debug)]
@@ -536,35 +559,6 @@ fn is_rewrite_effect_command_token(token: &str) -> bool {
     )
 }
 
-fn is_builtin_rewrite_effect_text(suffix: &str) -> bool {
-    if suffix.strip_prefix("message ").is_some() || suffix.strip_prefix("emit ").is_some() {
-        return true;
-    }
-    let tokens = split_header_tokens(suffix);
-    matches!(
-        tokens.as_slice(),
-        [command] if command.eq_ignore_ascii_case("cancel") || command.eq_ignore_ascii_case("win") || command.eq_ignore_ascii_case("restart") || command.eq_ignore_ascii_case("next_level") || command.eq_ignore_ascii_case("again") || command.eq_ignore_ascii_case("checkpoint") || command.eq_ignore_ascii_case("clear_checkpoint")
-    ) || matches!(tokens.as_slice(), ["goto", ..] | ["start", ..])
-        || matches!(
-            tokens.as_slice(),
-            ["sfx", _]
-                | ["play_music", _]
-                | ["pause_music"]
-                | ["pause_music", _]
-                | ["resume_music"]
-                | ["resume_music", _]
-                | ["stop_music"]
-                | ["stop_music", _]
-                | ["wait"]
-                | ["wait", _]
-        )
-        || matches!(tokens.as_slice(), [_, op, _] if is_variable_update_operator(op))
-}
-
-fn is_variable_update_operator(op: &str) -> bool {
-    matches!(op, "=" | "+=" | "-=" | "*=" | "/=" | "%=")
-}
-
 fn parse_variable_update_op(op: &str, line: &str) -> Result<VariableUpdateOp, DiagnosticReport> {
     match op {
         "=" => Ok(VariableUpdateOp::Set),
@@ -613,12 +607,12 @@ fn validate_tag_capture_reference(token: &str, line: &str) -> Result<(), Diagnos
     ))
 }
 
-fn neutral_direction() -> Direction {
-    Direction {
-        input: InputId(0),
-        dx: 1,
-        dy: 0,
-    }
+fn neutral_direction(directions: &[OrientationEnvironment]) -> OrientationEnvironment {
+    directions
+        .iter()
+        .copied()
+        .find(|environment| environment.primary_name == "right")
+        .unwrap_or_else(|| SpatialDomain::new(ModelDimension::Two).neutral())
 }
 
 fn rewrite_requires_implicit_cardinal_expansion(rewrite: &OrientedRewriteAst) -> bool {
@@ -652,15 +646,21 @@ fn selector_has_relative_direction(selector: &ObjectSelector) -> bool {
     }
     selector.mark.iter().any(|mark| {
         mark.value.as_deref().is_some_and(|value| {
-            parse_relative_direction_value(value).is_some()
-                || movement_mark_set_values(value).is_some()
+            parse_relative_direction_value(value).is_some() || is_movement_mark_set(value)
         })
     })
 }
 
+fn is_movement_mark_set(value: &str) -> bool {
+    matches!(
+        value.split_once('#').map_or(value, |(base, _)| base),
+        "directions" | "horizontal" | "vertical" | "parallel" | "perpendicular"
+    )
+}
+
 fn resolve_relative_selectors_in_block(
     block: &PatternBlock,
-    direction: Direction,
+    direction: OrientationEnvironment,
     direction_expanded: bool,
     line: &str,
 ) -> Result<PatternBlock, DiagnosticReport> {
@@ -685,7 +685,7 @@ fn resolve_relative_selectors_in_block(
 
 fn resolve_relative_selector(
     selector: &mut ObjectSelector,
-    direction: Direction,
+    direction: OrientationEnvironment,
     direction_expanded: bool,
     line: &str,
 ) -> Result<(), DiagnosticReport> {
@@ -701,7 +701,7 @@ fn resolve_relative_selector(
     for constraint in &selector.relative_constraints {
         let absolute =
             resolve_relative_direction(constraint.relative, direction, direction_expanded, line)?;
-        let value = direction_tag_name(absolute, line)?;
+        let value = direction_tag_name(direction, absolute, line)?;
         let allowed = constraint
             .alternatives_by_direction
             .get(value)
@@ -2875,7 +2875,7 @@ fn compile_before_after_blocks_for_direction(
     mark_names: &HashMap<String, MarkDef>,
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
-    direction: Direction,
+    direction: OrientationEnvironment,
     direction_expanded: bool,
     line: &str,
     source_line_number: Option<usize>,
@@ -2921,7 +2921,7 @@ fn compile_before_after_blocks(
         validate_null_component_has_anchor_cell(before_component, line)?;
         validate_null_cell_rewrite(before_component, after_component, line)?;
     }
-    let expanded_blocks = expand_movement_mark_sets(before, after, line)?;
+    let expanded_blocks = expand_movement_mark_sets(before, after, _value_sets, line)?;
     let mut alternatives = Vec::new();
 
     for (before, after) in expanded_blocks {
@@ -3346,7 +3346,7 @@ fn pattern_block_preserves_once_group(block: &PatternBlock) -> bool {
 fn expand_dynamic_selector_blocks(
     before: &PatternBlock,
     after: &PatternBlock,
-) -> Vec<(Vec<Guard>, PatternBlock, PatternBlock)> {
+) -> Vec<(Vec<CanonicalGuard>, PatternBlock, PatternBlock)> {
     let mut branches = vec![(Vec::new(), before.clone(), after.clone())];
     loop {
         let mut expanded = Vec::new();
@@ -3434,21 +3434,25 @@ fn first_dynamic_selector_location(block: &PatternBlock) -> Option<SelectorLocat
 }
 
 fn expand_dynamic_selector_branch(
-    guards: Vec<Guard>,
+    guards: Vec<CanonicalGuard>,
     before: PatternBlock,
     after: PatternBlock,
     in_before: bool,
     location: SelectorLocation,
-    out: &mut Vec<(Vec<Guard>, PatternBlock, PatternBlock)>,
+    out: &mut Vec<(Vec<CanonicalGuard>, PatternBlock, PatternBlock)>,
 ) {
     let selector = selector_at_location(if in_before { &before } else { &after }, location);
     for object in &selector.alternatives {
         let mut guards = guards.clone();
         if let Some(dynamic_guards) = selector.dynamic_guards.get(object) {
-            guards.extend(dynamic_guards.iter().map(|guard| Guard::VariableEquals {
-                variable: guard.variable,
-                value: guard.value,
-            }));
+            guards.extend(
+                dynamic_guards
+                    .iter()
+                    .map(|guard| CanonicalGuard::VariableEquals {
+                        variable: guard.variable,
+                        value: guard.value,
+                    }),
+            );
         }
         let mut before = before.clone();
         let mut after = after.clone();
@@ -3492,7 +3496,7 @@ fn selector_at_location_mut(
 #[derive(Clone, Debug)]
 struct MarkSetBinding {
     key: String,
-    values: &'static [&'static str],
+    values: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -3501,18 +3505,21 @@ struct MarkSetOccurrence {
     anchor: String,
     set: String,
     label: Option<String>,
-    values: &'static [&'static str],
+    values: Vec<String>,
 }
 
 fn expand_movement_mark_sets(
     before: &PatternBlock,
     after: &PatternBlock,
+    value_sets: &HashMap<String, Vec<String>>,
     line: &str,
 ) -> Result<Vec<(PatternBlock, PatternBlock)>, DiagnosticReport> {
-    let before = expand_negated_movement_mark_sets(before);
-    let after = expand_negated_movement_mark_sets(after);
-    let before_occurrences = collect_movement_mark_set_occurrences(&before, "before", line)?;
-    let after_occurrences = collect_movement_mark_set_occurrences(&after, "after", line)?;
+    let before = expand_negated_movement_mark_sets(before, value_sets);
+    let after = expand_negated_movement_mark_sets(after, value_sets);
+    let before_occurrences =
+        collect_movement_mark_set_occurrences(&before, "before", value_sets, line)?;
+    let after_occurrences =
+        collect_movement_mark_set_occurrences(&after, "after", value_sets, line)?;
     let (mut bindings, occurrence_bindings) =
         resolve_mark_set_bindings(&before_occurrences, &after_occurrences, line)?;
     dedup_mark_set_bindings(&mut bindings);
@@ -3544,7 +3551,10 @@ fn expand_movement_mark_sets(
         .collect())
 }
 
-fn expand_negated_movement_mark_sets(block: &PatternBlock) -> PatternBlock {
+fn expand_negated_movement_mark_sets(
+    block: &PatternBlock,
+    value_sets: &HashMap<String, Vec<String>>,
+) -> PatternBlock {
     let mut block = block.clone();
     for component in &mut block.components {
         for row in &mut component.rows {
@@ -3552,13 +3562,13 @@ fn expand_negated_movement_mark_sets(block: &PatternBlock) -> PatternBlock {
                 let BlockPart::Cell(cell) = part else {
                     continue;
                 };
-                expand_negated_movement_mark_set_list(&mut cell.require_cell_mark);
-                expand_negated_movement_mark_set_list(&mut cell.forbid_cell_mark);
+                expand_negated_movement_mark_set_list(&mut cell.require_cell_mark, value_sets);
+                expand_negated_movement_mark_set_list(&mut cell.forbid_cell_mark, value_sets);
                 for selector in &mut cell.require {
-                    expand_negated_movement_mark_set_list(&mut selector.mark);
+                    expand_negated_movement_mark_set_list(&mut selector.mark, value_sets);
                 }
                 for selector in &mut cell.forbid {
-                    expand_negated_movement_mark_set_list(&mut selector.mark);
+                    expand_negated_movement_mark_set_list(&mut selector.mark, value_sets);
                 }
             }
         }
@@ -3566,16 +3576,19 @@ fn expand_negated_movement_mark_sets(block: &PatternBlock) -> PatternBlock {
     block
 }
 
-fn expand_negated_movement_mark_set_list(mark: &mut Vec<ParsedMark>) {
+fn expand_negated_movement_mark_set_list(
+    mark: &mut Vec<ParsedMark>,
+    value_sets: &HashMap<String, Vec<String>>,
+) {
     let mut expanded = Vec::with_capacity(mark.len());
     for mark in mark.drain(..) {
         if mark.negated
             && let Some(value) = mark.value.as_deref()
-            && let Some(values) = movement_mark_set_values(value)
+            && let Some(values) = movement_mark_set_values(value, value_sets)
         {
-            expanded.extend(values.iter().map(|value| {
+            expanded.extend(values.into_iter().map(|value| {
                 let mut mark = mark.clone();
-                mark.value = Some((*value).to_string());
+                mark.value = Some(value);
                 mark
             }));
         } else {
@@ -3588,6 +3601,7 @@ fn expand_negated_movement_mark_set_list(mark: &mut Vec<ParsedMark>) {
 fn collect_movement_mark_set_occurrences(
     block: &PatternBlock,
     side: &str,
+    value_sets: &HashMap<String, Vec<String>>,
     line: &str,
 ) -> Result<Vec<MarkSetOccurrence>, DiagnosticReport> {
     let mut occurrences = Vec::new();
@@ -3602,6 +3616,7 @@ fn collect_movement_mark_set_occurrences(
                     &cell.require_cell_mark,
                     format!("cell:{component_index}:{row_index}:{part_index}:require"),
                     side,
+                    value_sets,
                     line,
                     &mut occurrences,
                 )?;
@@ -3609,6 +3624,7 @@ fn collect_movement_mark_set_occurrences(
                     &cell.forbid_cell_mark,
                     format!("cell:{component_index}:{row_index}:{part_index}:forbid"),
                     side,
+                    value_sets,
                     line,
                     &mut occurrences,
                 )?;
@@ -3619,6 +3635,7 @@ fn collect_movement_mark_set_occurrences(
                         &selector.mark,
                         format!("object:{}:{ordinal}", selector.token),
                         side,
+                        value_sets,
                         line,
                         &mut occurrences,
                     )?;
@@ -3633,6 +3650,7 @@ fn collect_cell_mark_set_occurrences(
     mark: &[ParsedMark],
     anchor: String,
     side: &str,
+    value_sets: &HashMap<String, Vec<String>>,
     line: &str,
     occurrences: &mut Vec<MarkSetOccurrence>,
 ) -> Result<(), DiagnosticReport> {
@@ -3640,7 +3658,8 @@ fn collect_cell_mark_set_occurrences(
         let Some(value) = mark.value.as_deref() else {
             continue;
         };
-        let Some((set, label, values)) = movement_mark_set_reference(value, line)? else {
+        let Some((set, label, values)) = movement_mark_set_reference(value, value_sets, line)?
+        else {
             continue;
         };
         occurrences.push(MarkSetOccurrence {
@@ -3670,7 +3689,7 @@ fn resolve_mark_set_bindings(
         occurrence_bindings.insert(occurrence.location.clone(), key.clone());
         bindings.push(MarkSetBinding {
             key,
-            values: occurrence.values,
+            values: occurrence.values.clone(),
         });
     }
 
@@ -3737,7 +3756,7 @@ fn expand_mark_set_assignments(
         return;
     }
     let binding = &bindings[index];
-    for value in binding.values {
+    for value in &binding.values {
         current.insert(binding.key.clone(), (*value).to_string());
         expand_mark_set_assignments(bindings, index + 1, current, out);
     }
@@ -3800,7 +3819,7 @@ fn apply_cell_mark_set_assignment(
         let Some(value) = mark.value.as_deref() else {
             continue;
         };
-        if movement_mark_set_values(value).is_none() {
+        if !is_movement_mark_set(value) {
             continue;
         }
         let location = format!("{side}:{anchor}:{mark_index}");
@@ -4291,7 +4310,7 @@ fn parsed_mark_pattern(
     line: &str,
 ) -> Result<MarkPatternTemplate, DiagnosticReport> {
     if let Some(anonymous) = &mark.anonymous {
-        return parsed_anonymous_mark_pattern(object, anonymous, mark, line);
+        return parsed_anonymous_mark_pattern(object, anonymous, mark, mark_names, line);
     }
     let def = mark_names
         .get(&mark.name)
@@ -4346,6 +4365,7 @@ fn parsed_anonymous_mark_pattern(
     object: ObjectId,
     anonymous: &AnonymousMark,
     mark: &ParsedMark,
+    mark_names: &HashMap<String, MarkDef>,
     line: &str,
 ) -> Result<MarkPatternTemplate, DiagnosticReport> {
     let value = mark
@@ -4358,7 +4378,7 @@ fn parsed_anonymous_mark_pattern(
         }
         AnonymousMark::Movement => (
             ANONYMOUS_MOVEMENT_MARK,
-            Some(parse_anonymous_movement_value(value, line)?),
+            Some(parse_anonymous_movement_value(value, mark_names, line)?),
             MarkValueMatch::Exact,
         ),
         AnonymousMark::Bool => (
@@ -4389,30 +4409,44 @@ fn parsed_anonymous_mark_pattern(
 
 fn parse_anonymous_movement_value(
     value: &str,
+    mark_names: &HashMap<String, MarkDef>,
     line: &str,
 ) -> Result<MarkValueTemplate, DiagnosticReport> {
     let value = value.split_once('#').map_or(value, |(base, _)| base);
     if let Some(relative) = parse_relative_direction_value(value) {
         return Ok(MarkValueTemplate::Relative(relative));
     }
-    puzzle_authoring::movement_mark_index(value, puzzle_authoring::MOVEMENT_DIRECTIONS_2D)
-        .map(|index| MarkValueTemplate::Literal(i64::from(index)))
+    let value = puzzle_authoring::canonical_3d_movement_direction_name(value);
+    mark_names
+        .get("__move")
+        .and_then(|definition| {
+            definition
+                .values
+                .iter()
+                .position(|candidate| candidate == value)
+        })
+        .and_then(|index| i64::try_from(index).ok())
+        .map(MarkValueTemplate::Literal)
         .ok_or_else(|| parse_error(line, "unknown movement mark value"))
 }
 
-fn movement_mark_set_values(value: &str) -> Option<&'static [&'static str]> {
+fn movement_mark_set_values(
+    value: &str,
+    value_sets: &HashMap<String, Vec<String>>,
+) -> Option<Vec<String>> {
     let value = value.split_once('#').map_or(value, |(base, _)| base);
-    puzzle_authoring::movement_mark_set_values(value, 2)
+    value_sets.get(value).cloned()
 }
 
 fn movement_mark_set_reference<'a>(
     value: &'a str,
+    value_sets: &HashMap<String, Vec<String>>,
     line: &str,
-) -> Result<Option<(&'a str, Option<String>, &'static [&'static str])>, DiagnosticReport> {
+) -> Result<Option<(&'a str, Option<String>, Vec<String>)>, DiagnosticReport> {
     let (set, label) = value
         .split_once('#')
         .map_or((value, None), |(set, label)| (set, Some(label)));
-    let Some(values) = puzzle_authoring::movement_mark_set_values(set, 2) else {
+    let Some(values) = value_sets.get(set).cloned() else {
         return Ok(None);
     };
     if let Some(label) = label {
@@ -4533,13 +4567,8 @@ fn mark_to_remove_object_set(
 }
 
 fn dedup_objects(objects: &mut Vec<ObjectId>) {
-    let mut deduped = Vec::with_capacity(objects.len());
-    for object in objects.drain(..) {
-        if !deduped.contains(&object) {
-            deduped.push(object);
-        }
-    }
-    *objects = deduped;
+    objects.sort_unstable();
+    objects.dedup();
 }
 
 #[derive(Clone, Debug)]
@@ -5402,21 +5431,24 @@ fn same_cell_occurrence_replacements(
 fn direction_by_name(
     name: &str,
     input_names: &HashMap<String, InputId>,
-    directions: &[Direction],
-) -> Option<Direction> {
-    let input = input_names.get(name)?;
+    directions: &[OrientationEnvironment],
+) -> Vec<OrientationEnvironment> {
+    let Some(input) = input_names.get(name) else {
+        return Vec::new();
+    };
     directions
         .iter()
         .copied()
-        .find(|direction| direction.input == *input)
+        .filter(|direction| direction.input == *input)
+        .collect()
 }
 
 fn resolve_write(
     write: &WriteOpTemplate,
-    direction: Direction,
+    direction: OrientationEnvironment,
     dir_any: bool,
     line: &str,
-) -> Result<WriteOp, DiagnosticReport> {
+) -> Result<CanonicalWriteOp, DiagnosticReport> {
     match write {
         WriteOpTemplate::Add {
             component,
@@ -5424,7 +5456,7 @@ fn resolve_write(
             object,
         } => {
             let offset = resolve_offset(offset.clone(), direction, dir_any, line)?;
-            Ok(WriteOp::Add {
+            Ok(CanonicalWriteOp::Add {
                 component: *component,
                 offset,
                 object: *object,
@@ -5437,7 +5469,7 @@ fn resolve_write(
             ..
         } => {
             let offset = resolve_offset(offset.clone(), direction, dir_any, line)?;
-            Ok(WriteOp::AddObjectSet {
+            Ok(CanonicalWriteOp::AddObjectSet {
                 component: *component,
                 offset,
                 binding: *binding,
@@ -5449,7 +5481,7 @@ fn resolve_write(
             object,
         } => {
             let offset = resolve_offset(offset.clone(), direction, dir_any, line)?;
-            Ok(WriteOp::Remove {
+            Ok(CanonicalWriteOp::Remove {
                 component: *component,
                 offset,
                 object: *object,
@@ -5462,7 +5494,7 @@ fn resolve_write(
             ..
         } => {
             let offset = resolve_offset(offset.clone(), direction, dir_any, line)?;
-            Ok(WriteOp::RemoveObjectSet {
+            Ok(CanonicalWriteOp::RemoveObjectSet {
                 component: *component,
                 offset,
                 binding: *binding,
@@ -5475,7 +5507,7 @@ fn resolve_write(
             add,
         } => {
             let offset = resolve_offset(offset.clone(), direction, dir_any, line)?;
-            Ok(WriteOp::Replace {
+            Ok(CanonicalWriteOp::Replace {
                 component: *component,
                 offset,
                 remove: *remove,
@@ -5490,7 +5522,7 @@ fn resolve_write(
         } => {
             let from_offset = resolve_offset(from_offset.clone(), direction, dir_any, line)?;
             let to_offset = resolve_offset(to_offset.clone(), direction, dir_any, line)?;
-            Ok(WriteOp::Move {
+            Ok(CanonicalWriteOp::Move {
                 component: *component,
                 from_offset,
                 to_offset,
@@ -5506,7 +5538,7 @@ fn resolve_write(
         } => {
             let from_offset = resolve_offset(from_offset.clone(), direction, dir_any, line)?;
             let to_offset = resolve_offset(to_offset.clone(), direction, dir_any, line)?;
-            Ok(WriteOp::MoveObjectSet {
+            Ok(CanonicalWriteOp::MoveObjectSet {
                 component: *component,
                 from_offset,
                 to_offset,
@@ -5521,7 +5553,7 @@ fn resolve_write(
             value,
         } => {
             let offset = resolve_offset(offset.clone(), direction, dir_any, line)?;
-            Ok(WriteOp::SetMark {
+            Ok(CanonicalWriteOp::SetMark {
                 component: *component,
                 offset,
                 object: *object,
@@ -5537,7 +5569,7 @@ fn resolve_write(
             value,
         } => {
             let offset = resolve_offset(offset.clone(), direction, dir_any, line)?;
-            Ok(WriteOp::SetObjectSetMark {
+            Ok(CanonicalWriteOp::SetObjectSetMark {
                 component: *component,
                 offset,
                 binding: *binding,
@@ -5554,7 +5586,7 @@ fn resolve_write(
             match_value,
         } => {
             let offset = resolve_offset(offset.clone(), direction, dir_any, line)?;
-            Ok(WriteOp::RemoveMark {
+            Ok(CanonicalWriteOp::RemoveMark {
                 component: *component,
                 offset,
                 object: *object,
@@ -5572,7 +5604,7 @@ fn resolve_write(
             match_value,
         } => {
             let offset = resolve_offset(offset.clone(), direction, dir_any, line)?;
-            Ok(WriteOp::RemoveObjectSetMark {
+            Ok(CanonicalWriteOp::RemoveObjectSetMark {
                 component: *component,
                 offset,
                 binding: *binding,
@@ -5586,7 +5618,7 @@ fn resolve_write(
 
 fn resolve_mark_patterns(
     patterns: Vec<MarkPatternTemplate>,
-    direction: Direction,
+    direction: OrientationEnvironment,
     direction_expanded: bool,
     line: &str,
 ) -> Result<Vec<MarkPattern>, DiagnosticReport> {
@@ -5610,7 +5642,7 @@ fn resolve_mark_patterns(
 
 fn resolve_object_set_mark_patterns(
     patterns: Vec<ObjectSetMarkPatternTemplate>,
-    direction: Direction,
+    direction: OrientationEnvironment,
     direction_expanded: bool,
     line: &str,
 ) -> Result<Vec<ObjectSetMarkPattern>, DiagnosticReport> {
@@ -5634,16 +5666,16 @@ fn resolve_object_set_mark_patterns(
 
 fn resolve_mark_value(
     value: Option<&MarkValueTemplate>,
-    direction: Direction,
+    direction: OrientationEnvironment,
     direction_expanded: bool,
     line: &str,
 ) -> Result<Option<i64>, DiagnosticReport> {
     match value {
         Some(MarkValueTemplate::Literal(value)) => Ok(Some(*value)),
         Some(MarkValueTemplate::Relative(relative)) => {
-            let direction =
+            let absolute =
                 resolve_relative_direction(*relative, direction, direction_expanded, line)?;
-            Ok(Some(direction_value(direction)?))
+            Ok(Some(direction_value(direction, absolute)?))
         }
         None => Ok(None),
     }
@@ -5651,61 +5683,48 @@ fn resolve_mark_value(
 
 fn resolve_relative_direction(
     relative: RelativeDirection,
-    direction: Direction,
+    direction: OrientationEnvironment,
     direction_expanded: bool,
     line: &str,
-) -> Result<Direction, DiagnosticReport> {
+) -> Result<puzzle_kernel::SpatialVector<3>, DiagnosticReport> {
     if !direction_expanded {
         return Err(parse_error(
             line,
             "relative direction mark value requires an oriented rule",
         ));
     }
-    let (dx, dy) = match relative {
-        RelativeDirection::Forward => (direction.dx, direction.dy),
-        RelativeDirection::Backward => (-direction.dx, -direction.dy),
-        RelativeDirection::Left => (direction.dy, -direction.dx),
-        RelativeDirection::Right => (-direction.dy, direction.dx),
-    };
-    Ok(Direction {
-        input: InputId(0),
-        dx,
-        dy,
+    Ok(direction.relative_vector(relative))
+}
+
+fn direction_value(
+    environment: OrientationEnvironment,
+    direction: puzzle_kernel::SpatialVector<3>,
+) -> Result<i64, DiagnosticReport> {
+    environment.direction_value(direction).ok_or_else(|| {
+        DiagnosticReport::error("relative mark resolved outside the direction domain".to_string())
     })
 }
 
-fn direction_value(direction: Direction) -> Result<i64, DiagnosticReport> {
-    match (direction.dx, direction.dy) {
-        (0, -1) => Ok(0),
-        (0, 1) => Ok(1),
-        (-1, 0) => Ok(2),
-        (1, 0) => Ok(3),
-        _ => Err(DiagnosticReport::error(
-            "unsupported direction mark".to_string(),
-        )),
-    }
-}
-
-fn direction_tag_name(direction: Direction, line: &str) -> Result<&'static str, DiagnosticReport> {
-    match (direction.dx, direction.dy) {
-        (0, -1) => Ok("up"),
-        (0, 1) => Ok("down"),
-        (-1, 0) => Ok("left"),
-        (1, 0) => Ok("right"),
-        _ => Err(parse_error(
+fn direction_tag_name(
+    environment: OrientationEnvironment,
+    direction: puzzle_kernel::SpatialVector<3>,
+    line: &str,
+) -> Result<&'static str, DiagnosticReport> {
+    environment.direction_name(direction).ok_or_else(|| {
+        parse_error(
             line,
-            "relative direction selector only supports cardinal directions",
-        )),
-    }
+            "relative selector resolved outside the direction domain",
+        )
+    })
 }
 
 fn resolve_offset(
     offset: OffsetTemplate,
-    direction: Direction,
+    direction: OrientationEnvironment,
     direction_expanded: bool,
     line: &str,
-) -> Result<Offset, DiagnosticReport> {
-    let (base_dx, base_dy) = resolve_oriented_xy(
+) -> Result<CanonicalOffset, DiagnosticReport> {
+    let base = resolve_oriented_xy(
         offset.oriented_x,
         offset.oriented_y,
         direction,
@@ -5713,21 +5732,19 @@ fn resolve_offset(
         line,
     )?;
     if offset.gap_terms.is_empty() {
-        return Ok(Offset::Fixed {
-            delta: [base_dx, base_dy].into(),
-        });
+        return Ok(CanonicalOffset::Fixed { delta: base });
     }
 
-    let (step_dx, step_dy) = resolve_oriented_xy(1, 0, direction, direction_expanded, line)?;
-    Ok(Offset::Variable {
-        base: [base_dx, base_dy].into(),
+    let step = resolve_oriented_xy(1, 0, direction, direction_expanded, line)?;
+    Ok(CanonicalOffset::Variable {
+        base,
         gap_terms: offset
             .gap_terms
             .iter()
             .copied()
-            .map(|gap_index| GapTerm {
+            .map(|gap_index| CanonicalGapTerm {
                 gap_index,
-                delta: [step_dx, step_dy].into(),
+                delta: step,
             })
             .collect(),
     })
@@ -5736,21 +5753,15 @@ fn resolve_offset(
 fn resolve_oriented_xy(
     x: i16,
     y: i16,
-    direction: Direction,
+    direction: OrientationEnvironment,
     direction_expanded: bool,
     line: &str,
-) -> Result<(i16, i16), DiagnosticReport> {
+) -> Result<puzzle_kernel::SpatialVector<3>, DiagnosticReport> {
     if !direction_expanded {
-        return Ok((x, y));
+        return Ok(puzzle_kernel::SpatialVector::new([x, y, 0]));
     }
-
-    Ok(match (direction.dx, direction.dy) {
-        (1, 0) => (x, y),
-        (-1, 0) => (-x, -y),
-        (0, -1) => (y, -x),
-        (0, 1) => (-y, x),
-        _ => return Err(parse_error(line, "unsupported direction")),
-    })
+    let _ = line;
+    Ok(direction.frame.project_xy(x, y))
 }
 
 fn is_identifier(value: &str) -> bool {
@@ -5811,8 +5822,53 @@ fn expect<'a>(
     token.copied().ok_or_else(|| parse_error(line, message))
 }
 
-fn parse_error(line: &str, message: &str) -> DiagnosticReport {
-    DiagnosticReport::error_at_line(message, line)
+trait DiagnosticSourceLine {
+    fn diagnostic_text(&self) -> &str;
+
+    fn diagnostic_line_number(&self) -> Option<usize> {
+        None
+    }
+}
+
+impl DiagnosticSourceLine for str {
+    fn diagnostic_text(&self) -> &str {
+        self
+    }
+}
+
+impl DiagnosticSourceLine for String {
+    fn diagnostic_text(&self) -> &str {
+        self
+    }
+}
+
+impl<T: DiagnosticSourceLine + ?Sized> DiagnosticSourceLine for &T {
+    fn diagnostic_text(&self) -> &str {
+        (*self).diagnostic_text()
+    }
+
+    fn diagnostic_line_number(&self) -> Option<usize> {
+        (*self).diagnostic_line_number()
+    }
+}
+
+impl DiagnosticSourceLine for source::LogicalLine {
+    fn diagnostic_text(&self) -> &str {
+        &self.text
+    }
+
+    fn diagnostic_line_number(&self) -> Option<usize> {
+        Some(self.line)
+    }
+}
+
+fn parse_error(line: &(impl DiagnosticSourceLine + ?Sized), message: &str) -> DiagnosticReport {
+    match line.diagnostic_line_number() {
+        Some(number) => {
+            DiagnosticReport::error_at_source_line_number(message, line.diagnostic_text(), number)
+        }
+        None => DiagnosticReport::error_at_line(message, line.diagnostic_text()),
+    }
 }
 
 fn parse_error_at_source_line_number(

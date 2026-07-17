@@ -1,15 +1,21 @@
 use crate::{block_header_text, is_block_header_line, source::split_header_tokens};
+use std::collections::HashSet;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct SpriteNodeSyntax {
     pub(crate) selector: Option<String>,
+    pub(crate) selector_body_line: Option<usize>,
     pub(crate) colors: Option<Vec<String>>,
     pub(crate) colors_body_line: Option<usize>,
     pub(crate) duration: Option<String>,
+    pub(crate) duration_body_line: Option<usize>,
     pub(crate) frame_duration: Option<String>,
+    pub(crate) frame_duration_body_line: Option<usize>,
     pub(crate) prelude_rows: Vec<String>,
     pub(crate) properties: Vec<(SpritePropertySyntax, String)>,
+    pub(crate) property_body_lines: Vec<usize>,
     pub(crate) shape: Option<SpriteShapeSyntax>,
+    pub(crate) shape_body_line: Option<usize>,
     pub(crate) separator_body_lines: Vec<usize>,
     pub(crate) issues: Vec<SpriteSyntaxIssue>,
 }
@@ -75,10 +81,18 @@ pub(crate) struct SpriteBodyError {
     pub(crate) message: String,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AnalyzedSpriteBody {
     pub(crate) syntax: SpriteNodeSyntax,
     pub(crate) shape: ResolvedSpriteShape,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SpriteBodyProduct {
+    pub(crate) syntax: SpriteNodeSyntax,
+    pub(crate) shape: ResolvedSpriteShape,
+    pub(crate) error: Option<SpriteBodyError>,
 }
 
 #[cfg(test)]
@@ -91,6 +105,7 @@ pub(crate) fn analyze_sprite_body(
     analyze_sprite_syntax(syntax, is_known_shape)
 }
 
+#[cfg(test)]
 fn analyze_sprite_syntax(
     syntax: SpriteNodeSyntax,
     is_known_shape: impl FnMut(&str) -> bool,
@@ -109,15 +124,34 @@ pub(crate) fn analyze_sprite_body_product(
     header: Option<&str>,
     lines: &[crate::source::LogicalLine],
     is_known_shape: impl FnMut(&str) -> bool,
-) -> crate::surface::ParseProduct<Result<AnalyzedSpriteBody, SpriteBodyError>> {
+) -> crate::surface::ParseProduct<SpriteBodyProduct> {
     let syntax = parse_sprite_node(header, lines);
-    let value = analyze_sprite_syntax(syntax.clone(), is_known_shape);
-    let recognition = recognize_sprite_display(
-        &syntax,
-        value.as_ref().ok().map(|analyzed| &analyzed.shape),
-        lines,
-    );
-    crate::surface::ParseProduct::new(value, recognition)
+    let shape = resolve_sprite_shape(&syntax, is_known_shape);
+    let mut error = syntax.issues.first().map(|issue| SpriteBodyError {
+        line: issue.line.clone(),
+        message: issue.message.to_string(),
+    });
+    if error.is_none()
+        && let ResolvedSpriteShape::Inline(frames) = &shape
+        && let Err(message) = validate_sprite_frame_geometry(frames)
+    {
+        error = Some(SpriteBodyError {
+            line: lines
+                .first()
+                .map(|line| line.as_ref().to_string())
+                .unwrap_or_default(),
+            message: message.to_string(),
+        });
+    }
+    let recognition = recognize_sprite_display(&syntax, Some(&shape), lines);
+    crate::surface::ParseProduct::new(
+        SpriteBodyProduct {
+            syntax,
+            shape,
+            error,
+        },
+        recognition,
+    )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -163,6 +197,34 @@ pub(crate) fn validate_sprite_frame_geometry(
         }
     }
     Ok(geometry)
+}
+
+pub(crate) fn parse_sprite_shape_rows(
+    lines: &[impl AsRef<str>],
+) -> Result<Vec<SpriteFrameSyntax>, SpriteBodyError> {
+    let mut frames = vec![empty_sprite_frame()];
+    let mut issues = Vec::new();
+    for (body_line, line) in lines.iter().enumerate() {
+        let line = line.as_ref().trim();
+        if line.is_empty() {
+            continue;
+        }
+        append_shape_item(line, body_line, &mut frames, &mut issues);
+    }
+    if let Some(issue) = issues.into_iter().next() {
+        return Err(SpriteBodyError {
+            line: issue.line,
+            message: issue.message.to_string(),
+        });
+    }
+    validate_sprite_frame_geometry(&frames).map_err(|message| SpriteBodyError {
+        line: lines
+            .first()
+            .map(|line| line.as_ref().to_string())
+            .unwrap_or_default(),
+        message: message.to_string(),
+    })?;
+    Ok(frames)
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -225,18 +287,22 @@ pub(crate) fn resolve_sprite_timing(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SpriteAttachmentSyntax<Line> {
     pub(crate) header: String,
+    pub(crate) header_line: Line,
     pub(crate) body_lines: Vec<Line>,
+    pub(crate) closing_line: Option<Line>,
     pub(crate) next_index: usize,
 }
 
 pub(crate) fn collect_sprite_attachment<Line>(
     lines: &[Line],
     start: usize,
+    known_colors: &HashSet<String>,
 ) -> Result<SpriteAttachmentSyntax<Line>, &'static str>
 where
     Line: AsRef<str> + Clone,
 {
     let header = lines[start].as_ref().to_string();
+    let header_line = lines[start].clone();
     if is_block_header_line(&header) {
         let mut body_lines = Vec::new();
         let mut depth = 0usize;
@@ -246,7 +312,9 @@ where
                 if depth == 0 {
                     return Ok(SpriteAttachmentSyntax {
                         header,
+                        header_line,
                         body_lines,
+                        closing_line: Some(lines[index].clone()),
                         next_index: index + 1,
                     });
                 }
@@ -267,13 +335,13 @@ where
     let mut body_lines = Vec::new();
     let mut index = start + 1;
     let mut nested_depth = 0i32;
+    let mut saw_color_row = sprite_header_has_inline_body(&header, known_colors);
     while index < lines.len() {
         if lines[index].as_ref().trim() == "}" && nested_depth == 0 {
             break;
         }
         if nested_depth == 0
-            && body_lines.len() >= 2
-            && is_tagged_sprite_attachment_header(lines[index].as_ref())
+            && starts_next_unbraced_sprite(lines, index, saw_color_row, known_colors)
         {
             break;
         }
@@ -292,20 +360,177 @@ where
         if is_block_header_line(lines[index].as_ref()) {
             nested_depth += 1;
         }
+        if nested_depth == 0 && is_sprite_entry_start_color_row(lines[index].as_ref(), known_colors)
+        {
+            saw_color_row = true;
+        }
         index += 1;
     }
     Ok(SpriteAttachmentSyntax {
         header,
+        header_line,
         body_lines,
+        closing_line: None,
         next_index: index,
     })
 }
 
-fn is_tagged_sprite_attachment_header(line: &str) -> bool {
+fn starts_next_unbraced_sprite<Line>(
+    lines: &[Line],
+    index: usize,
+    saw_color_row: bool,
+    known_colors: &HashSet<String>,
+) -> bool
+where
+    Line: AsRef<str>,
+{
+    let line = lines[index].as_ref();
+    let tokens = split_header_tokens(block_header_text(line));
+    if matches!(tokens.first(), Some(&("palette" | "shapes"))) && is_block_header_line(line) {
+        return true;
+    }
+    match tokens.as_slice() {
+        [selector, source]
+            if saw_color_row
+                && is_sprite_definition_name_token(selector)
+                && (is_visual_image_source(source)
+                    || is_sprite_entry_start_color_token(source, known_colors)) =>
+        {
+            return true;
+        }
+        [selector] if saw_color_row && is_sprite_definition_name_token(selector) => {
+            if lines
+                .iter()
+                .skip(index + 1)
+                .map(|line| line.as_ref().trim())
+                .find(|line| !line.is_empty())
+                .is_some_and(|next| {
+                    next != "}"
+                        && (is_visual_image_source(next)
+                            || is_sprite_entry_start_color_row(next, known_colors))
+                })
+            {
+                return true;
+            }
+        }
+        _ => {}
+    }
+    if is_sprite_entry_start_color_row(line, known_colors) {
+        return false;
+    }
+    !saw_color_row && matches!(tokens.as_slice(), [name] if is_sprite_definition_name_token(name))
+}
+
+fn sprite_header_has_inline_body(header: &str, known_colors: &HashSet<String>) -> bool {
     matches!(
-        split_header_tokens(block_header_text(line)).as_slice(),
-        [selector] if selector.contains(':') || selector.contains('@')
+        split_header_tokens(block_header_text(header)).as_slice(),
+        [selector, source]
+            if is_sprite_definition_name_token(selector)
+                && (is_visual_image_source(source)
+                    || is_sprite_entry_start_color_token(source, known_colors))
     )
+}
+
+fn is_sprite_entry_start_color_row(line: &str, known_colors: &HashSet<String>) -> bool {
+    let colors = sprite_color_row_tokens(line);
+    if colors.is_empty() || !colors.iter().all(|color| is_sprite_color_expr(color)) {
+        return false;
+    }
+    colors.len() > 1
+        || colors.first().is_some_and(|color| {
+            is_sprite_color(color)
+                || is_declared_color_ref(color, known_colors)
+                || known_colors.contains(*color)
+        })
+}
+
+fn sprite_color_row_tokens(line: &str) -> Vec<&str> {
+    let mut tokens = split_header_tokens(line);
+    if tokens.first() == Some(&"colors") {
+        tokens.remove(0);
+    }
+    if tokens.first() == Some(&"=") {
+        tokens.remove(0);
+    }
+    tokens
+}
+
+fn is_sprite_entry_start_color_token(token: &str, known_colors: &HashSet<String>) -> bool {
+    is_sprite_color(token)
+        || is_declared_color_ref(token, known_colors)
+        || known_colors.contains(token)
+}
+
+fn is_declared_color_ref(token: &str, known_colors: &HashSet<String>) -> bool {
+    token
+        .split_once(':')
+        .is_some_and(|(name, value)| !value.is_empty() && known_colors.contains(name))
+}
+
+fn is_sprite_color_expr(value: &str) -> bool {
+    is_sprite_color(value) || is_sprite_color_ref(value)
+}
+
+fn is_sprite_color(value: &str) -> bool {
+    crate::syntax::is_visual_named_color(value) || is_hex_color(value)
+}
+
+fn is_sprite_color_ref(value: &str) -> bool {
+    let mut parts = value.split(':');
+    let Some(first) = parts.next() else {
+        return false;
+    };
+    is_identifier_token(first)
+        && parts.all(|part| {
+            !part.is_empty()
+                && part.chars().all(|ch| {
+                    ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '+' | '*' | '(' | ')')
+                })
+        })
+}
+
+fn is_identifier_token(value: &str) -> bool {
+    let Some(first) = value.chars().next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == '_')
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+}
+
+fn is_sprite_definition_name_token(value: &str) -> bool {
+    if matches!(
+        value,
+        "shape" | "shapes" | "palette" | "colors" | "ascii" | "sprites"
+    ) {
+        return false;
+    }
+    let cleaned = value.trim_start_matches('@');
+    let Some(first) = cleaned.chars().next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == '_')
+        && cleaned
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | ':'))
+}
+
+fn is_hex_color(value: &str) -> bool {
+    let Some(hex) = value.strip_prefix('#') else {
+        return false;
+    };
+    matches!(hex.len(), 3 | 4 | 6 | 8) && hex.chars().all(|ch| ch.is_ascii_hexdigit())
+}
+
+fn is_visual_image_source(value: &str) -> bool {
+    let lower = value
+        .trim_matches(|ch| matches!(ch, '"' | '\''))
+        .to_ascii_lowercase();
+    lower.ends_with(".png")
+        || lower.ends_with(".jpg")
+        || lower.ends_with(".jpeg")
+        || lower.ends_with(".svg")
 }
 
 pub(crate) fn parse_sprite_node(
@@ -355,6 +580,7 @@ pub(crate) fn parse_sprite_node(
                 Ok(property) => {
                     syntax.prelude_rows.push(line.to_string());
                     syntax.properties.push((property, line.to_string()));
+                    syntax.property_body_lines.push(line_index);
                 }
                 Err(message) => issue(&mut syntax, line, message),
             }
@@ -423,6 +649,9 @@ pub(crate) fn parse_sprite_node(
         match tokens.as_slice() {
             ["selector", "=", value] | ["selector", value] => {
                 syntax.prelude_rows.push(line.to_string());
+                if syntax.selector.is_none() {
+                    syntax.selector_body_line = Some(line_index);
+                }
                 set_string_once(
                     &mut syntax.selector,
                     value,
@@ -441,6 +670,9 @@ pub(crate) fn parse_sprite_node(
             }
             ["duration", "=", value] | ["duration", value] => {
                 syntax.prelude_rows.push(line.to_string());
+                if syntax.duration.is_none() {
+                    syntax.duration_body_line = Some(line_index);
+                }
                 set_string_once(
                     &mut syntax.duration,
                     value,
@@ -451,6 +683,9 @@ pub(crate) fn parse_sprite_node(
             }
             ["frame_duration", "=", value] | ["frame_duration", value] => {
                 syntax.prelude_rows.push(line.to_string());
+                if syntax.frame_duration.is_none() {
+                    syntax.frame_duration_body_line = Some(line_index);
+                }
                 set_string_once(
                     &mut syntax.frame_duration,
                     value,
@@ -465,6 +700,9 @@ pub(crate) fn parse_sprite_node(
                 "inline sprite shape must be `shape = { ... }` or bare ASCII rows",
             ),
             ["shape", "=", value] | ["shape", value] => {
+                if syntax.shape.is_none() {
+                    syntax.shape_body_line = Some(line_index);
+                }
                 set_shape_reference(&mut syntax, value, line)
             }
             [value] if syntax.colors.is_some() && !saw_shape && is_sprite_duration_token(value) => {
@@ -483,6 +721,7 @@ pub(crate) fn parse_sprite_node(
                     property_syntax(&tokens).expect("checked property"),
                     line.to_string(),
                 ));
+                syntax.property_body_lines.push(line_index);
             }
             _ if syntax.colors.is_none() && !saw_shape => {
                 syntax.colors = Some(tokens.iter().map(|value| (*value).to_string()).collect());
@@ -522,12 +761,21 @@ fn recognize_sprite_display(
     use crate::surface::{ParserRecognition, SourceSpan, SurfaceDisplayFact};
 
     let mut recognition = ParserRecognition::default();
+    recognize_sprite_semantics(syntax, lines, &mut recognition);
     let colors = syntax.colors.as_deref().unwrap_or_default();
     if let Some(line_index) = syntax.colors_body_line
         && let Some(line) = lines.get(line_index)
     {
+        let mut token_index = 0;
         for color in colors {
-            if let Some(token) = line.tokens.iter().find(|token| token.text == *color) {
+            if let Some((index, token)) = line
+                .tokens
+                .iter()
+                .enumerate()
+                .skip(token_index)
+                .find(|(_, token)| token.text == *color)
+            {
+                token_index = index + 1;
                 recognition.display_facts.push(SurfaceDisplayFact::Color {
                     span: SourceSpan {
                         start: token.start,
@@ -583,6 +831,164 @@ fn recognize_sprite_display(
         }
     }
     recognition
+}
+
+fn recognize_sprite_semantics(
+    syntax: &SpriteNodeSyntax,
+    lines: &[crate::source::LogicalLine],
+    recognition: &mut crate::surface::ParserRecognition,
+) {
+    use crate::surface::{SourceSpan, SurfaceSemanticKind};
+
+    let mark = |recognition: &mut crate::surface::ParserRecognition,
+                line: &crate::source::LogicalLine,
+                text: &str,
+                kind: SurfaceSemanticKind| {
+        for token in &line.tokens {
+            if token.text == text {
+                recognition.mark(
+                    SourceSpan {
+                        start: token.start,
+                        end: token.end,
+                    },
+                    kind,
+                );
+            }
+        }
+    };
+    if let (Some(line_index), Some(selector)) = (syntax.selector_body_line, &syntax.selector)
+        && let Some(line) = lines.get(line_index)
+    {
+        mark(recognition, line, "selector", SurfaceSemanticKind::Setting);
+        mark_sprite_compound(recognition, line, selector, SurfaceSemanticKind::Object);
+    }
+    if let Some(line_index) = syntax.colors_body_line
+        && let Some(line) = lines.get(line_index)
+    {
+        mark(recognition, line, "colors", SurfaceSemanticKind::Setting);
+        for color in syntax.colors.as_deref().unwrap_or_default() {
+            mark(recognition, line, color, SurfaceSemanticKind::Color);
+        }
+    }
+    for (line_index, (property, _)) in syntax
+        .property_body_lines
+        .iter()
+        .copied()
+        .zip(&syntax.properties)
+    {
+        let Some(line) = lines.get(line_index) else {
+            continue;
+        };
+        let Some(keyword) = line.tokens.first().map(|token| token.text.as_str()) else {
+            continue;
+        };
+        mark(recognition, line, keyword, SurfaceSemanticKind::Setting);
+        match property {
+            SpritePropertySyntax::Sampling(value) => {
+                mark(recognition, line, value, SurfaceSemanticKind::Literal)
+            }
+            SpritePropertySyntax::Translate { space, value } => {
+                mark(
+                    recognition,
+                    line,
+                    match space {
+                        SpriteSpaceSyntax::World => "world",
+                        SpriteSpaceSyntax::Local => "local",
+                    },
+                    SurfaceSemanticKind::Keyword,
+                );
+                mark(recognition, line, value, SurfaceSemanticKind::Binding);
+            }
+            SpritePropertySyntax::Rotate {
+                space,
+                angle,
+                from,
+                axis,
+            } => {
+                mark(
+                    recognition,
+                    line,
+                    match space {
+                        SpriteSpaceSyntax::World => "world",
+                        SpriteSpaceSyntax::Local => "local",
+                    },
+                    SurfaceSemanticKind::Keyword,
+                );
+                mark(recognition, line, angle, SurfaceSemanticKind::Binding);
+                if let Some(from) = from {
+                    mark(recognition, line, "from", SurfaceSemanticKind::Keyword);
+                    mark(recognition, line, from, SurfaceSemanticKind::Variant);
+                }
+                if let Some(axis) = axis {
+                    mark(recognition, line, "around", SurfaceSemanticKind::Keyword);
+                    mark(recognition, line, axis, SurfaceSemanticKind::Variant);
+                }
+            }
+            SpritePropertySyntax::Flip(value) => {
+                mark(recognition, line, value, SurfaceSemanticKind::Binding)
+            }
+            SpritePropertySyntax::Image(value) => {
+                mark(recognition, line, value, SurfaceSemanticKind::Asset)
+            }
+            SpritePropertySyntax::RemovedOffset | SpritePropertySyntax::Unknown(_) => {}
+        }
+    }
+    for (line_index, value) in [
+        (syntax.duration_body_line, syntax.duration.as_deref()),
+        (
+            syntax.frame_duration_body_line,
+            syntax.frame_duration.as_deref(),
+        ),
+    ] {
+        if let (Some(line_index), Some(value)) = (line_index, value)
+            && let Some(line) = lines.get(line_index)
+        {
+            if let Some(keyword) = line.tokens.first() {
+                mark(
+                    recognition,
+                    line,
+                    &keyword.text,
+                    SurfaceSemanticKind::Setting,
+                );
+            }
+            mark(recognition, line, value, SurfaceSemanticKind::Number);
+        }
+    }
+    if let (Some(line_index), Some(SpriteShapeSyntax::Reference(shape))) =
+        (syntax.shape_body_line, &syntax.shape)
+        && let Some(line) = lines.get(line_index)
+    {
+        mark(recognition, line, "shape", SurfaceSemanticKind::Setting);
+        mark_sprite_compound(recognition, line, shape, SurfaceSemanticKind::Asset);
+    }
+}
+
+fn mark_sprite_compound(
+    recognition: &mut crate::surface::ParserRecognition,
+    line: &crate::source::LogicalLine,
+    value: &str,
+    head_kind: crate::surface::SurfaceSemanticKind,
+) {
+    for token in &line.tokens {
+        if token.text != value {
+            continue;
+        }
+        let mut offset = 0usize;
+        for (index, part) in value.split(':').enumerate() {
+            recognition.mark(
+                crate::surface::SourceSpan {
+                    start: token.start + offset,
+                    end: token.start + offset + part.len(),
+                },
+                if index == 0 {
+                    head_kind
+                } else {
+                    crate::surface::SurfaceSemanticKind::Variant
+                },
+            );
+            offset += part.len() + 1;
+        }
+    }
 }
 
 fn resolved_sprite_frames(resolved: Option<&ResolvedSpriteShape>) -> &[SpriteFrameSyntax] {
@@ -935,15 +1341,36 @@ mod tests {
     fn attachment_collection_preserves_braced_and_unbraced_surface_forms() {
         let unbraced =
             ["Floor", "#8fcf6f", "0", "", "Wall {", "#333", "0", "}"].map(str::to_string);
-        let first = collect_sprite_attachment(&unbraced, 0).unwrap();
+        let known_colors = std::collections::HashSet::new();
+        let first = collect_sprite_attachment(&unbraced, 0, &known_colors).unwrap();
         assert_eq!(first.header, "Floor");
         assert_eq!(first.body_lines, ["#8fcf6f", "0"]);
         assert_eq!(first.next_index, 3);
 
-        let braced = collect_sprite_attachment(&unbraced, 4).unwrap();
+        let braced = collect_sprite_attachment(&unbraced, 4, &known_colors).unwrap();
         assert_eq!(braced.header, "Wall {");
         assert_eq!(braced.body_lines, ["#333", "0"]);
         assert_eq!(braced.next_index, 8);
+    }
+
+    #[test]
+    fn tagged_object_selector_after_shape_reference_is_not_a_color_row() {
+        let lines = [
+            "You:F",
+            "#fff #000",
+            "shape_You_F",
+            "",
+            "You:B",
+            "#000 #fff",
+            "shape_You_F",
+            "",
+        ]
+        .map(str::to_string);
+        let first =
+            collect_sprite_attachment(&lines, 0, &std::collections::HashSet::new()).unwrap();
+
+        assert_eq!(first.body_lines, ["#fff #000", "shape_You_F"]);
+        assert_eq!(first.next_index, 3);
     }
 
     #[test]

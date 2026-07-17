@@ -1,5 +1,4 @@
-use puzzle_core::Offset;
-use puzzle_grid3d::Offset3;
+use puzzle_core::{GridOffset, Offset};
 use serde_json::json;
 
 #[test]
@@ -7,7 +6,7 @@ fn serialized_offset_stores_only_the_axes_of_its_dimension() {
     let offset_2d = Offset::Fixed {
         delta: [4, -2].into(),
     };
-    let offset_3d = Offset3::Fixed {
+    let offset_3d = GridOffset::<3>::Fixed {
         delta: [4, -2, 7].into(),
     };
 
@@ -28,5 +27,9 @@ fn deserialization_rejects_an_axis_count_from_another_dimension() {
     }))
     .unwrap_err();
 
-    assert!(error.to_string().contains("expected 2 spatial axes, found 3"));
+    assert!(
+        error
+            .to_string()
+            .contains("expected 2 spatial axes, found 3")
+    );
 }

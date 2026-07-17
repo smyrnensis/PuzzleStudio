@@ -36,6 +36,7 @@
   --syntax-brace-depth-3: #4ec9b0;
   --syntax-brace-depth-4: #ff9da4;
   --syntax-brace-depth-5: #b5cea8;
+  --syntax-invalid: #ff4d5d;
   --syntax-brace-invalid: #ff4d5d;
   --syntax-group: #f2c15d;
   --syntax-input: #9cdcfe;
@@ -114,6 +115,7 @@ html[data-theme="light"] {
   --syntax-brace-depth-3: #0b7f68;
   --syntax-brace-depth-4: #a8324a;
   --syntax-brace-depth-5: #5f6f1f;
+  --syntax-invalid: #c71f32;
   --syntax-brace-invalid: #c71f32;
   --syntax-group: #8a5a00;
   --syntax-input: #0f6f95;
@@ -2255,6 +2257,10 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
 .syntax-brace-depth-3 { color: var(--syntax-brace-depth-3); }
 .syntax-brace-depth-4 { color: var(--syntax-brace-depth-4); }
 .syntax-brace-depth-5 { color: var(--syntax-brace-depth-5); }
+.syntax-invalid {
+  color: var(--syntax-invalid);
+  text-decoration: underline wavy currentColor;
+}
 .syntax-brace-invalid {
   color: var(--syntax-brace-invalid);
   font-weight: 800;

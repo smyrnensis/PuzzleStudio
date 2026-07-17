@@ -49,71 +49,32 @@ fn parse_group_definition(
 
 type PendingGroupDefinition = puzzle_authoring::SelectorGroupDeclaration;
 
-fn collect_puzzle_group_declarations(
-    lines: &[source::LogicalLine],
-    start: usize,
-) -> Result<Vec<PendingGroupDefinition>, DiagnosticReport> {
-    let mut groups = Vec::new();
-    let mut names = HashSet::<String>::new();
-    let mut i = start;
-    let mut depth = 1i32;
-    while i < lines.len() && depth > 0 {
-        let tokens = split_header_tokens(&lines[i]);
-        if depth == 1 {
-            match tokens.as_slice() {
-                ["groups"] => {
-                    i = collect_pending_group_block(lines, i, &mut groups, &mut names)?;
-                    continue;
-                }
-                ["groups", ..] => {
-                    return Err(parse_error(
-                        &lines[i],
-                        "groups block must be: groups { ... }",
-                    ));
-                }
-                _ => {}
-            }
-        }
-        depth += raw_brace_delta(&lines[i]);
-        i += 1;
-    }
-    Ok(groups)
-}
-
-fn collect_pending_group_block(
-    lines: &[source::LogicalLine],
-    start: usize,
+fn push_pending_group_declaration(
+    line: &source::LogicalLine,
     groups: &mut Vec<PendingGroupDefinition>,
     names: &mut HashSet<String>,
-) -> Result<usize, DiagnosticReport> {
-    let block = puzzle_authoring::collect_row_block_surface(lines, start + 1, "groups")
-        .map_err(|error| parse_error(&lines[start], error.message()))?;
-    for line in &lines[block.body_start..block.body_end] {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let Some(assignment) = puzzle_authoring::selector_assignment_surface(line) else {
-            return Err(parse_error(
-                line,
-                "group row must be: <name> = <selector...>",
-            ));
-        };
-        let name = assignment.name;
-        validate_selector_alias_name(name, line, "group name")?;
-        if !names.insert(name.to_string()) {
-            return Err(parse_error(line, "duplicate group"));
-        }
-        groups.push(PendingGroupDefinition {
-            name: name.to_string(),
-            selectors: assignment
-                .selectors
-                .iter()
-                .map(|selector| (*selector).to_string())
-                .collect(),
-            source_line: line.to_string(),
-        });
+) -> Result<(), DiagnosticReport> {
+    let Some(assignment) = puzzle_authoring::selector_assignment_surface(line) else {
+        return Err(parse_error(
+            line,
+            "group row must be: <name> = <selector...>",
+        ));
+    };
+    let name = assignment.name;
+    validate_selector_alias_name(name, line, "group name")?;
+    if !names.insert(name.to_string()) {
+        return Err(parse_error(line, "duplicate group"));
     }
-    Ok(block.next_index)
+    groups.push(PendingGroupDefinition {
+        name: name.to_string(),
+        selectors: assignment
+            .selectors
+            .iter()
+            .map(|selector| (*selector).to_string())
+            .collect(),
+        source_line: line.to_string(),
+    });
+    Ok(())
 }
 fn resolve_pending_group_definitions(
     pending_groups: &[PendingGroupDefinition],
@@ -218,12 +179,6 @@ fn parse_legend_directive(
     };
 
     let ch = parse_char(tokens.get(1), line, "missing legend char")?;
-    if ch == '.' {
-        return Err(parse_error(
-            line,
-            "levels reserve `.` for empty; use another legend char for objects",
-        ));
-    }
     let selector_sets = selector_sets(
         &tokens[syntax.rhs_start..],
         line,
@@ -255,26 +210,22 @@ fn parse_legend_directive(
     Ok(())
 }
 
-fn parse_render_overlay(
-    tokens: &[&str],
-    line: &str,
+fn lower_render_overlay_syntax(
+    syntax: &model_syntax::RenderOverlaySyntax,
     object_names: &HashMap<String, ObjectId>,
     object_schemas: &HashMap<String, ObjectSchema>,
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
-) -> Result<(OverlayDefs, Option<Vec<ObjectId>>, char), DiagnosticReport> {
-    if tokens.len() < 4 {
-        return Err(parse_error(
-            line,
-            "render_overlay must be: render_overlay <object> <object> [object...] <char>",
-        ));
-    }
-
-    let ch = parse_char(tokens.last(), line, "missing overlay char")?;
+) -> Result<(OverlayDefs, Option<Vec<ObjectId>>), DiagnosticReport> {
+    let selectors = syntax
+        .selectors
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
     let selector_sets = selector_sets(
-        &tokens[1..tokens.len() - 1],
-        line,
+        &selectors,
+        &syntax.source,
         object_names,
         object_schemas,
         value_sets,
@@ -284,11 +235,11 @@ fn parse_render_overlay(
     let combinations = cartesian_object_product(&selector_sets);
     let overlays = combinations
         .iter()
-        .map(|objects| (objects.clone(), ch))
+        .map(|objects| (objects.clone(), syntax.character))
         .collect::<Vec<_>>();
     let level_objects = (combinations.len() == 1).then(|| combinations[0].clone());
 
-    Ok((overlays, level_objects, ch))
+    Ok((overlays, level_objects))
 }
 
 fn selector_sets(
@@ -334,23 +285,6 @@ fn cartesian_object_product(sets: &[Vec<ObjectId>]) -> Vec<Vec<ObjectId>> {
     combinations
 }
 
-fn parse_direction_directive(
-    tokens: &[&str],
-    line: &str,
-    catalog: &mut Catalog,
-) -> Result<Option<Direction>, DiagnosticReport> {
-    match tokens {
-        ["direction", alias, canonical] => {
-            add_direction_alias(alias, canonical, line, catalog)?;
-            Ok(None)
-        }
-        _ => Err(parse_error(
-            line,
-            "direction must be: direction <alias> <up|down|left|right>",
-        )),
-    }
-}
-
 fn add_direction_alias(
     alias: &str,
     canonical: &str,
@@ -358,7 +292,7 @@ fn add_direction_alias(
     catalog: &mut Catalog,
 ) -> Result<(), DiagnosticReport> {
     validate_identifier(alias, line, "direction alias")?;
-    named_direction_vector(canonical, line)?;
+    validate_direction_name(canonical, catalog, line)?;
     let canonical_input = catalog
         .input_names
         .get(canonical)
@@ -378,54 +312,6 @@ fn add_direction_alias(
         .input_names
         .insert(alias.to_string(), canonical_input);
     Ok(())
-}
-
-fn parse_variable_directive(
-    tokens: &[&str],
-    line: &str,
-    variable_names: &mut HashMap<String, VariableId>,
-    variable_labels: &mut HashMap<VariableId, String>,
-    variable_defaults: &mut Vec<i64>,
-    numeric_variable_defaults: &mut HashMap<String, i64>,
-    persistent_vars: &mut Vec<VariableId>,
-    constant_variables: &mut Vec<VariableId>,
-) -> Result<(), DiagnosticReport> {
-    let parsed = match tokens {
-        ["var", name, "=", value] => Some((*name, *value, false, false)),
-        ["const", name, "=", value] => Some((*name, *value, false, true)),
-        ["persistent", "var", name, "=", value] => Some((*name, *value, true, false)),
-        ["persistent", "const", name, "=", value] => Some((*name, *value, true, true)),
-        _ => None,
-    };
-    match parsed {
-        Some((name, value, persistent, constant)) => {
-            if !is_identifier(name) {
-                return Err(parse_error(line, "var or const name must be an identifier"));
-            }
-            if variable_names.contains_key(name) {
-                return Err(parse_error(line, "duplicate var or const"));
-            }
-            let id = VariableId(variable_defaults.len() as u16);
-            let default = parse_variable_value(value, line)?;
-            variable_names.insert(name.to_string(), id);
-            variable_labels.insert(id, name.to_string());
-            variable_defaults.push(default);
-            if value.parse::<i64>().is_ok() {
-                numeric_variable_defaults.insert(name.to_string(), default);
-            }
-            if persistent {
-                persistent_vars.push(id);
-            }
-            if constant {
-                constant_variables.push(id);
-            }
-            Ok(())
-        }
-        _ => Err(parse_error(
-            line,
-            "var or const must be: var <name> = <true | false | number> or const <name> = <true | false | number>",
-        )),
-    }
 }
 
 fn lower_query_definition_syntax(
@@ -796,48 +682,9 @@ fn parse_call_expr<'a>(expr: &'a str, line: &str) -> Result<(&'a str, &'a str), 
     Ok((call.name, arg))
 }
 
-fn default_cardinal_directions(input_names: &HashMap<String, InputId>) -> Vec<Direction> {
-    let Some(up) = input_names.get("up").copied() else {
-        return Vec::new();
-    };
-    let Some(down) = input_names.get("down").copied() else {
-        return Vec::new();
-    };
-    let Some(left) = input_names.get("left").copied() else {
-        return Vec::new();
-    };
-    let Some(right) = input_names.get("right").copied() else {
-        return Vec::new();
-    };
-
-    vec![
-        Direction {
-            input: up,
-            dx: 0,
-            dy: -1,
-        },
-        Direction {
-            input: down,
-            dx: 0,
-            dy: 1,
-        },
-        Direction {
-            input: left,
-            dx: -1,
-            dy: 0,
-        },
-        Direction {
-            input: right,
-            dx: 1,
-            dy: 0,
-        },
-    ]
-}
-
 #[allow(clippy::too_many_arguments)]
 fn lower_rule_definition_syntax(
-    header: &puzzle_authoring::RuleStatementLine<source::LogicalLine>,
-    statements: &[puzzle_authoring::RuleStatementSyntax<source::LogicalLine>],
+    syntax: &puzzle_authoring::RuleStatementSyntax<source::LogicalLine>,
     object_names: &HashMap<String, ObjectId>,
     object_schemas: &HashMap<String, ObjectSchema>,
     value_sets: &HashMap<String, Vec<String>>,
@@ -849,11 +696,20 @@ fn lower_rule_definition_syntax(
     condition_names: &HashMap<String, ConditionId>,
     named_conditions: &HashMap<String, (String, ConditionAst)>,
 ) -> Result<RuleDefinitionAst, DiagnosticReport> {
-    let tokens = split_header_tokens(&header.text);
-    let declaration = tokens.first().copied().unwrap_or("routine");
-    let name_spec = expect(tokens.get(1), &header.source, "missing routine name")?;
-    let (name, params) = parse_rule_name_and_params(name_spec, &header.source)?;
-    let application = parse_rule_application(&tokens, declaration, &header.source)?;
+    let statements = syntax.statements().ok_or_else(|| {
+        parse_error(
+            syntax.source(),
+            "routine definition must use a statement block",
+        )
+    })?;
+    let tokens = syntax.tokens();
+    let declaration = tokens.first().map(String::as_str).unwrap_or("routine");
+    let name_spec = tokens
+        .get(1)
+        .map(String::as_str)
+        .ok_or_else(|| parse_error(syntax.source(), "missing routine name"))?;
+    let (name, params) = parse_rule_name_and_params(name_spec, syntax.source())?;
+    let application = parse_rule_application(tokens, declaration, syntax.source())?;
     let statements = lower_statement_syntax(
         statements,
         object_names,

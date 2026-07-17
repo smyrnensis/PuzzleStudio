@@ -60,7 +60,7 @@
       if (!this.data || typeof this.data !== "object") {
         return;
       }
-      delete this.data.runtimeLoadedGame;
+      delete this.data.runtimeLoadedDocument;
       delete this.data.compiledPlay;
       delete this.data.engine;
     }

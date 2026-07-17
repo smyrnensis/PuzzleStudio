@@ -110,16 +110,17 @@ export class WasmPuzzle3Runtime {
     }
     /**
      * @param {string} program_key
+     * @param {number} level_index
      * @param {number} input
      * @returns {string}
      */
-    transition_current_outcome(program_key, input) {
+    transition_current_outcome(program_key, level_index, input) {
         let deferred3_0;
         let deferred3_1;
         try {
             const ptr0 = passStringToWasm0(program_key, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
-            const ret = wasm.wasmpuzzle3runtime_transition_current_outcome(this.__wbg_ptr, ptr0, len0, input);
+            const ret = wasm.wasmpuzzle3runtime_transition_current_outcome(this.__wbg_ptr, ptr0, len0, level_index, input);
             var ptr2 = ret[0];
             var len2 = ret[1];
             if (ret[3]) {

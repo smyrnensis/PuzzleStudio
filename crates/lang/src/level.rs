@@ -12,6 +12,9 @@ use crate::{
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LevelBlock {
     pub(crate) name: String,
+    pub(crate) source_name: String,
+    pub(crate) source_span: SourceSpan,
+    pub(crate) body_span: SourceSpan,
     pub(crate) pack: Option<String>,
     pub(crate) puzzle: Option<String>,
     pub(crate) lines: Vec<LogicalLine>,
@@ -69,13 +72,15 @@ pub(crate) fn recognize_spatial_levels(
                 }
                 for token in &row.tokens {
                     for (offset, ch) in token.text.char_indices() {
-                        recognition.display_facts.push(SurfaceDisplayFact::LevelCell {
-                            span: SourceSpan {
-                                start: token.start + offset,
-                                end: token.start + offset + ch.len_utf8(),
-                            },
-                            known: known.contains(&ch),
-                        });
+                        recognition
+                            .display_facts
+                            .push(SurfaceDisplayFact::LevelCell {
+                                span: SourceSpan {
+                                    start: token.start + offset,
+                                    end: token.start + offset + ch.len_utf8(),
+                                },
+                                known: known.contains(&ch),
+                            });
                     }
                 }
             }
@@ -173,12 +178,9 @@ pub(crate) fn parse_level(
             for (authored_layer, layer) in placed_region.region.layers.iter().enumerate() {
                 for (y, row) in layer.iter().enumerate() {
                     for (x, ch) in row.chars().enumerate() {
-                        if ch == '.' || Some(ch) == empty {
+                        let Some(objects) = level_cell_objects(ch, empty, char_objects)? else {
                             continue;
-                        }
-                        let objects = char_objects.get(&ch).ok_or_else(|| {
-                            DiagnosticReport::error(format!("unknown level char '{ch}'"))
-                        })?;
+                        };
                         let mut char_layers = HashMap::<LayerId, ObjectId>::new();
                         for object in objects {
                             let object_layer = game
@@ -260,11 +262,27 @@ fn recognize_level_display(
                         start: token.start + byte_offset,
                         end: token.start + byte_offset + ch.len_utf8(),
                     },
-                    known: ch == '.' || Some(ch) == empty || char_objects.contains_key(&ch),
+                    known: char_objects.contains_key(&ch) || Some(ch) == empty,
                 });
         }
     }
     recognition
+}
+
+pub(crate) fn level_cell_objects<'a>(
+    ch: char,
+    empty: Option<char>,
+    char_objects: &'a HashMap<char, Vec<ObjectId>>,
+) -> Result<Option<&'a [ObjectId]>, DiagnosticReport> {
+    if let Some(objects) = char_objects.get(&ch) {
+        return Ok(Some(objects));
+    }
+    if Some(ch) == empty {
+        return Ok(None);
+    }
+    Err(DiagnosticReport::error(format!(
+        "unknown level char '{ch}'"
+    )))
 }
 
 #[derive(Clone, Debug)]

@@ -28,7 +28,6 @@ num = 0...5
 }
 
 render {
-cell_size = 40
 tween = true
 tween_duration = 50ms
 }

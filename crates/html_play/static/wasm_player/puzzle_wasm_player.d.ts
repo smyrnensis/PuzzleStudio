@@ -11,7 +11,7 @@ export class WasmPuzzle3Runtime {
     restore_saved_state(handle: number): void;
     save_current_state(): number;
     set_state(state_json: string): void;
-    transition_current_outcome(program_key: string, input: number): string;
+    transition_current_outcome(program_key: string, level_index: number, input: number): string;
 }
 
 export class WasmStandaloneSession {
@@ -42,7 +42,7 @@ export interface InitOutput {
     readonly wasmpuzzle3runtime_restore_saved_state: (a: number, b: number) => [number, number];
     readonly wasmpuzzle3runtime_save_current_state: (a: number) => [number, number, number];
     readonly wasmpuzzle3runtime_set_state: (a: number, b: number, c: number) => [number, number];
-    readonly wasmpuzzle3runtime_transition_current_outcome: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+    readonly wasmpuzzle3runtime_transition_current_outcome: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
     readonly wasmstandalonesession_apply_command_name: (a: number, b: number, c: number) => [number, number];
     readonly wasmstandalonesession_apply_input_name: (a: number, b: number, c: number) => [number, number];
     readonly wasmstandalonesession_clear_progress_save: (a: number) => void;

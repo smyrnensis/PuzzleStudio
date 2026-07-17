@@ -206,6 +206,7 @@ fn parse_render_chars(render: &str, line: &str) -> Result<Vec<char>, DiagnosticR
 }
 
 type OverlayDefs = Vec<(Vec<ObjectId>, char)>;
+type VisualShapeFrames = Vec<crate::sprite_authoring::SpriteFrameSyntax>;
 
 #[derive(Clone, Debug)]
 struct VisualShapeTable {
@@ -240,15 +241,14 @@ struct SpriteEntrySpec {
     source_line: String,
     selector: Option<String>,
     color_exprs: Option<Vec<(char, String)>>,
-    transforms: Vec<SpriteTransformExpr>,
+    transforms: Vec<(crate::sprite_authoring::SpritePropertySyntax, String)>,
     sampling: Option<VisualSpriteSampling>,
     loop_duration_ms: Option<u64>,
     loop_frame_duration_ms: Option<u64>,
     image_source: Option<String>,
     shape_ref: Option<(String, ValueExpr)>,
-    inline_pattern: Option<Vec<String>>,
-    loop_animation: Option<VisualSpriteLoopDef>,
-    spatial: Option<VisualSpriteSpatialDef>,
+    frames: Option<Vec<VisualSpriteFrameDef>>,
+    animation_duration_ms: Option<u64>,
     rotation: Option<VisualShapeRotation>,
 }
 
@@ -264,9 +264,8 @@ impl SpriteEntrySpec {
             loop_frame_duration_ms: None,
             image_source: None,
             shape_ref: None,
-            inline_pattern: None,
-            loop_animation: None,
-            spatial: None,
+            frames: None,
+            animation_duration_ms: None,
             rotation,
         }
     }
@@ -292,25 +291,6 @@ impl SpriteEntrySpec {
         self.sampling = Some(parse_sprite_sampling(value, line)?);
         Ok(())
     }
-
-    fn set_shape_ref(&mut self, value: &str, line: &str) -> Result<(), DiagnosticReport> {
-        self.shape_ref = Some(parse_sprite_shape_ref(value, line)?);
-        Ok(())
-    }
-}
-
-#[derive(Clone, Debug)]
-enum SpriteTransformExpr {
-    Rotate {
-        angle: String,
-        from: Option<String>,
-        space: crate::sprite_authoring::SpriteSpaceSyntax,
-    },
-    Translate {
-        value: String,
-        space: crate::sprite_authoring::SpriteSpaceSyntax,
-    },
-    Flip(String),
 }
 
 #[derive(Clone, Debug)]
@@ -326,14 +306,22 @@ fn parse_visuals_block(
     visuals: &mut VisualsDef,
 ) -> crate::surface::ParseProduct<Result<usize, DiagnosticReport>> {
     let mut recognition = crate::surface::ParserRecognition::default();
-    let value = parse_visuals_block_inner(
-        lines,
-        start,
-        catalog,
-        visuals,
-        &mut recognition,
-    );
+    let value = parse_visuals_block_inner(lines, start, catalog, visuals, &mut recognition);
     crate::surface::ParseProduct::new(value, recognition)
+}
+
+fn parse_visuals_entry(
+    entry: &crate::model_syntax::PuzzleEntrySyntax,
+    catalog: &Catalog,
+    visuals: &mut VisualsDef,
+) -> crate::surface::ParseProduct<Result<usize, DiagnosticReport>> {
+    let mut lines = Vec::with_capacity(entry.body.len() + 2);
+    lines.push(entry.header.clone());
+    lines.extend(entry.body.iter().cloned());
+    if let Some(closing) = &entry.closing {
+        lines.push(closing.clone());
+    }
+    parse_visuals_block(&lines, 0, catalog, visuals)
 }
 
 fn parse_visuals_block_inner(
@@ -345,10 +333,19 @@ fn parse_visuals_block_inner(
 ) -> Result<usize, DiagnosticReport> {
     let resource = puzzle_authoring::collect_resource_block_surface(lines, start, "sprites")
         .map_err(|error| parse_error(&lines[start], error.message()))?;
+    if let Some(product) = sprite_resource_product(lines, start, resource.next_index, catalog.dimension)
+    {
+        recognition.sprite_resources.push(product);
+    }
     let mut shapes = HashMap::<String, VisualShapeTable>::new();
-    let mut plain_shapes = HashMap::<String, Vec<String>>::new();
+    let mut plain_shapes = HashMap::<String, VisualShapeFrames>::new();
     let mut color_aliases = HashMap::<String, String>::new();
     let mut colors = HashMap::<String, VisualColorTable>::new();
+    let declared_color_names = predeclare_visual_color_names(
+        lines,
+        resource.body_start,
+        resource.body_end,
+    );
     let mut sprite_entries =
         Vec::<crate::sprite_authoring::SpriteAttachmentSyntax<source::LogicalLine>>::new();
     let mut order = None;
@@ -366,7 +363,14 @@ fn parse_visuals_block_inner(
         match tokens.as_slice() {
             [] => i += 1,
             ["palette"] => {
-                i = parse_visual_palette_block(lines, i, catalog, &mut color_aliases, &mut colors)?;
+                i = parse_visual_palette_block(
+                    lines,
+                    i,
+                    catalog,
+                    &mut color_aliases,
+                    &mut colors,
+                    recognition,
+                )?;
             }
             ["colors"] => {
                 return Err(parse_error(
@@ -378,7 +382,14 @@ fn parse_visuals_block_inner(
                 return Err(parse_error(line, "palettes block was renamed to palette"));
             }
             ["shapes"] => {
-                i = parse_visual_shapes_block(lines, i, catalog, &mut plain_shapes, &mut shapes)?;
+                i = parse_visual_shapes_block(
+                    lines,
+                    i,
+                    catalog,
+                    &mut plain_shapes,
+                    &mut shapes,
+                    recognition,
+                )?;
             }
             ["shape", table_ref] => {
                 if !table_ref.contains(':') {
@@ -460,7 +471,7 @@ fn parse_visuals_block_inner(
                 i = next;
             }
             ["sprite"] if is_block_header_line(line) => {
-                let entry = collect_sprite_attachment_entry(lines, i)?;
+                let entry = collect_sprite_attachment_entry(lines, i, &declared_color_names)?;
                 i = entry.next_index;
                 sprite_entries.push(entry);
             }
@@ -469,7 +480,7 @@ fn parse_visuals_block_inner(
                     crate::authoring_grammar::AuthoringKind::SpritesConfig,
                 ) == Some(crate::authoring_grammar::ContentAttachment::SpriteEntries)
                 {
-                    let entry = collect_sprite_attachment_entry(lines, i)?;
+                    let entry = collect_sprite_attachment_entry(lines, i, &declared_color_names)?;
                     i = entry.next_index;
                     sprite_entries.push(entry);
                     continue;
@@ -489,10 +500,11 @@ fn parse_visuals_block_inner(
         .visual_sprite_refs
         .color_names
         .extend(colors.keys().cloned());
-    recognition
-        .visual_sprite_refs
-        .color_assets
-        .extend(color_aliases.iter().map(|(name, color)| (name.clone(), color.clone())));
+    recognition.visual_sprite_refs.color_assets.extend(
+        color_aliases
+            .iter()
+            .map(|(name, color)| (name.clone(), color.clone())),
+    );
     recognition
         .visual_sprite_refs
         .shape_names
@@ -504,17 +516,53 @@ fn parse_visuals_block_inner(
     recognition
         .visual_sprite_refs
         .shape_assets
-        .extend(plain_shapes.iter().map(|(name, rows)| (name.clone(), rows.clone())));
-    for attachment in sprite_entries {
+        .extend(plain_shapes.iter().map(|(name, frames)| {
+            (
+                name.clone(),
+                crate::surface::SurfaceSpriteShapeAsset::Plain {
+                    frames: frames.clone(),
+                },
+            )
+        }));
+    recognition
+        .visual_sprite_refs
+        .shape_assets
+        .extend(shapes.iter().map(|(name, table)| {
+            (
+                name.clone(),
+                crate::surface::SurfaceSpriteShapeAsset::Table {
+                    axis: table.axis.clone(),
+                    variants: table
+                        .entries
+                        .iter()
+                        .map(|(value, rows)| (value.clone(), sprite_frame_from_rows(rows)))
+                        .collect(),
+                },
+            )
+        }));
+    let sprite_entries = sprite_entries
+        .into_iter()
+        .map(|attachment| {
+            let analyzed = analyze_sprite_attachment_entry(
+                &attachment,
+                &plain_shapes,
+                &shapes,
+                catalog.dimension,
+                recognition,
+            );
+            (attachment, analyzed)
+        })
+        .collect::<Vec<_>>();
+    for (attachment, analyzed) in sprite_entries {
         lower_sprite_attachment_entry(
             attachment,
+            analyzed,
             &plain_shapes,
             &shapes,
             &color_aliases,
             &colors,
             catalog,
             visuals,
-            recognition,
         )?;
     }
     visuals.order = crate::lib_authoring_parse_order::lower_sprite_order(
@@ -531,6 +579,7 @@ fn parse_visual_palette_block(
     catalog: &Catalog,
     color_aliases: &mut HashMap<String, String>,
     colors: &mut HashMap<String, VisualColorTable>,
+    recognition: &mut crate::surface::ParserRecognition,
 ) -> Result<usize, DiagnosticReport> {
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
@@ -539,6 +588,18 @@ fn parse_visual_palette_block(
         match tokens.as_slice() {
             [] => i += 1,
             [name, "=", color] => {
+                mark_line_token(
+                    recognition,
+                    line,
+                    Some(name),
+                    crate::surface::SurfaceSemanticKind::Color,
+                );
+                mark_line_token(
+                    recognition,
+                    line,
+                    Some(color),
+                    crate::surface::SurfaceSemanticKind::Color,
+                );
                 color_aliases.insert((*name).to_string(), (*color).to_string());
                 i += 1;
             }
@@ -569,8 +630,9 @@ fn parse_visual_shapes_block(
     lines: &[source::LogicalLine],
     start: usize,
     catalog: &Catalog,
-    plain_shapes: &mut HashMap<String, Vec<String>>,
+    plain_shapes: &mut HashMap<String, VisualShapeFrames>,
     shapes: &mut HashMap<String, VisualShapeTable>,
+    recognition: &mut crate::surface::ParserRecognition,
 ) -> Result<usize, DiagnosticReport> {
     let mut i = start + 1;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
@@ -587,6 +649,7 @@ fn parse_visual_shapes_block(
             [name] if !name.contains(':') => {
                 let (pattern, next_i) = parse_visual_plain_shape(lines, i)?;
                 plain_shapes.insert((*name).to_string(), pattern);
+                mark_visual_shape_ref(recognition, line, name, false);
                 i = next_i;
             }
             [table_ref] => {
@@ -595,11 +658,13 @@ fn parse_visual_shapes_block(
                 {
                     let (pattern, next_i) = parse_visual_shape_value_pattern(lines, i, &[], false)?;
                     insert_visual_shape_value(shapes, name, axis, value, pattern, line)?;
+                    mark_visual_shape_ref(recognition, line, table_ref, true);
                     i = next_i;
                 } else {
                     let (name, axis) = parse_visual_table_ref(table_ref, line)?;
                     let (table, next_i) = parse_visual_shape_table(lines, i, &axis, None, catalog)?;
                     shapes.insert(name, table);
+                    mark_visual_shape_ref(recognition, line, table_ref, false);
                     i = next_i;
                 }
             }
@@ -641,27 +706,51 @@ fn parse_visual_shapes_block(
     Ok(i + 1)
 }
 
-#[allow(clippy::too_many_arguments)]
+fn mark_visual_shape_ref(
+    recognition: &mut crate::surface::ParserRecognition,
+    line: &source::LogicalLine,
+    value: &str,
+    concrete_value: bool,
+) {
+    for token in &line.tokens {
+        if token.text != value {
+            continue;
+        }
+        let parts = value.split(':').collect::<Vec<_>>();
+        let mut offset = 0usize;
+        for (index, part) in parts.iter().enumerate() {
+            let kind = if index == 0 {
+                crate::surface::SurfaceSemanticKind::Asset
+            } else if concrete_value && index + 1 == parts.len() {
+                crate::surface::SurfaceSemanticKind::Variant
+            } else {
+                crate::surface::SurfaceSemanticKind::Group
+            };
+            recognition.mark(
+                crate::surface::SourceSpan {
+                    start: token.start + offset,
+                    end: token.start + offset + part.len(),
+                },
+                kind,
+            );
+            offset += part.len() + 1;
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn lower_sprite_attachment_entry(
     attachment: crate::sprite_authoring::SpriteAttachmentSyntax<source::LogicalLine>,
-    plain_shapes: &HashMap<String, Vec<String>>,
+    analyzed: AnalyzedSpriteAttachment,
+    plain_shapes: &HashMap<String, VisualShapeFrames>,
     shapes: &HashMap<String, VisualShapeTable>,
     color_aliases: &HashMap<String, String>,
     color_tables: &HashMap<String, VisualColorTable>,
     catalog: &Catalog,
     visuals: &mut VisualsDef,
-    recognition: &mut crate::surface::ParserRecognition,
 ) -> Result<(), DiagnosticReport> {
     let mut entry = SpriteEntrySpec::new(&attachment.header, None);
-    apply_sprite_attachment_body(
-        &mut entry,
-        &attachment.header,
-        &attachment.body_lines,
-        plain_shapes,
-        shapes,
-        recognition,
-    )?;
+    apply_sprite_attachment_body(&mut entry, analyzed, plain_shapes)?;
     lower_sprite_entry(
         entry,
         plain_shapes,
@@ -674,38 +763,138 @@ fn lower_sprite_attachment_entry(
     Ok(())
 }
 
+struct AnalyzedSpriteAttachment {
+    body: crate::sprite_authoring::SpriteBodyProduct,
+    shape_ref: Result<Option<(String, ValueExpr)>, DiagnosticReport>,
+}
+
+fn analyze_sprite_attachment_entry(
+    attachment: &crate::sprite_authoring::SpriteAttachmentSyntax<source::LogicalLine>,
+    plain_shapes: &HashMap<String, VisualShapeFrames>,
+    shapes: &HashMap<String, VisualShapeTable>,
+    dimension: crate::ModelDimension,
+    recognition: &mut crate::surface::ParserRecognition,
+) -> AnalyzedSpriteAttachment {
+    let analyzed = crate::sprite_authoring::analyze_sprite_body_product(
+        Some(&attachment.header),
+        &attachment.body_lines,
+        |name| plain_shapes.contains_key(name) || shapes.contains_key(name),
+    );
+    recognition.merge(analyzed.recognition);
+    let shape_ref = match &analyzed.value.shape {
+        crate::sprite_authoring::ResolvedSpriteShape::Reference(reference) => {
+            parse_sprite_shape_ref(reference, &attachment.header).map(Some)
+        }
+        _ => Ok(None),
+    };
+    let shape_asset_name = shape_ref
+        .as_ref()
+        .ok()
+        .and_then(|shape_ref| shape_ref.as_ref().map(|(name, _)| name.clone()));
+    recognition
+        .sprite_products
+        .push(crate::surface::SurfaceSpriteProduct {
+            span: sprite_attachment_span(attachment),
+            body_span: sprite_attachment_body_span(attachment),
+            name: analyzed
+                .value
+                .syntax
+                .selector
+                .clone()
+                .or_else(|| {
+                    crate::split_header_tokens(&attachment.header)
+                        .into_iter()
+                        .find(|token| *token != "sprite")
+                        .map(str::to_string)
+                })
+                .unwrap_or_default(),
+            dimension,
+            body: analyzed.value.clone(),
+            shape_asset_name,
+        });
+    AnalyzedSpriteAttachment {
+        body: analyzed.value,
+        shape_ref,
+    }
+}
+
 fn collect_sprite_attachment_entry(
     lines: &[source::LogicalLine],
     start: usize,
-) -> Result<
-    crate::sprite_authoring::SpriteAttachmentSyntax<source::LogicalLine>,
-    DiagnosticReport,
-> {
-    crate::sprite_authoring::collect_sprite_attachment(lines, start)
+    known_colors: &HashSet<String>,
+) -> Result<crate::sprite_authoring::SpriteAttachmentSyntax<source::LogicalLine>, DiagnosticReport>
+{
+    crate::sprite_authoring::collect_sprite_attachment(lines, start, known_colors)
         .map_err(|message| parse_error(&lines[start], message))
+}
+
+fn predeclare_visual_color_names(
+    lines: &[source::LogicalLine],
+    start: usize,
+    end: usize,
+) -> HashSet<String> {
+    let mut names = HashSet::new();
+    let mut index = start;
+    while index < end {
+        let tokens = split_header_tokens(&lines[index]);
+        match tokens.as_slice() {
+            ["palette"] if is_block_header_line(&lines[index]) => {
+                let Ok(block) = puzzle_authoring::collect_container_block_surface(
+                    lines,
+                    index + 1,
+                    "palette",
+                ) else {
+                    break;
+                };
+                let mut row = block.body_start;
+                while row < block.body_end {
+                    let row_tokens = split_header_tokens(&lines[row]);
+                    match row_tokens.as_slice() {
+                        [name, "=", _] => {
+                            names.insert((*name).to_string());
+                            row += 1;
+                        }
+                        [table] if is_block_header_line(&lines[row]) => {
+                            names.insert(table.split(':').next().unwrap_or(table).to_string());
+                            row = puzzle_authoring::collect_container_block_surface(
+                                lines,
+                                row + 1,
+                                "palette table",
+                            )
+                            .map_or(row + 1, |block| block.next_index);
+                        }
+                        _ => row += 1,
+                    }
+                }
+                index = block.next_index;
+            }
+            ["palette", table] => {
+                names.insert(table.split(':').next().unwrap_or(table).to_string());
+                index += 1;
+            }
+            _ => index += 1,
+        }
+    }
+    names
 }
 
 fn apply_sprite_attachment_body(
     entry: &mut SpriteEntrySpec,
-    header: &str,
-    body_lines: &[source::LogicalLine],
-    plain_shapes: &HashMap<String, Vec<String>>,
-    shapes: &HashMap<String, VisualShapeTable>,
-    recognition: &mut crate::surface::ParserRecognition,
+    analyzed: AnalyzedSpriteAttachment,
+    plain_shapes: &HashMap<String, VisualShapeFrames>,
 ) -> Result<(), DiagnosticReport> {
     entry.selector = None;
-    let analyzed = crate::sprite_authoring::analyze_sprite_body_product(
-        Some(header),
-        body_lines,
-        |name| plain_shapes.contains_key(name) || shapes.contains_key(name),
-    );
-    recognition.merge(analyzed.recognition);
-    let analyzed = analyzed
-        .value
-        .map_err(|error| parse_error(&error.line, &error.message))?;
-    let syntax = analyzed.syntax;
-    let inline_frame_count = match &analyzed.shape {
+    if let Some(error) = &analyzed.body.error {
+        return Err(parse_error(&error.line, &error.message));
+    }
+    let shape_ref = analyzed.shape_ref?;
+    let syntax = analyzed.body.syntax;
+    let inline_frame_count = match &analyzed.body.shape {
         crate::sprite_authoring::ResolvedSpriteShape::Inline(frames) => frames.len(),
+        crate::sprite_authoring::ResolvedSpriteShape::Reference(_) => shape_ref
+            .as_ref()
+            .and_then(|(name, _)| plain_shapes.get(name))
+            .map_or(1, Vec::len),
         _ => 1,
     };
     let timing = crate::sprite_authoring::resolve_sprite_timing(
@@ -734,9 +923,10 @@ fn apply_sprite_attachment_body(
                 entry.set_sampling(&value, &property_line)?;
             }
             crate::sprite_authoring::SpritePropertySyntax::Translate { value, space } => {
-                entry
-                    .transforms
-                    .push(SpriteTransformExpr::Translate { value, space });
+                entry.transforms.push((
+                    crate::sprite_authoring::SpritePropertySyntax::Translate { value, space },
+                    property_line,
+                ));
             }
             crate::sprite_authoring::SpritePropertySyntax::Rotate {
                 angle,
@@ -744,18 +934,21 @@ fn apply_sprite_attachment_body(
                 axis,
                 space,
             } => {
-                if axis.is_some() {
-                    return Err(parse_error(
-                        &property_line,
-                        "2D sprite rotate does not accept an axis",
-                    ));
-                }
-                entry
-                    .transforms
-                    .push(SpriteTransformExpr::Rotate { angle, from, space });
+                entry.transforms.push((
+                    crate::sprite_authoring::SpritePropertySyntax::Rotate {
+                        angle,
+                        from,
+                        axis,
+                        space,
+                    },
+                    property_line,
+                ));
             }
             crate::sprite_authoring::SpritePropertySyntax::Flip(value) => {
-                entry.transforms.push(SpriteTransformExpr::Flip(value));
+                entry.transforms.push((
+                    crate::sprite_authoring::SpritePropertySyntax::Flip(value),
+                    property_line,
+                ));
             }
             crate::sprite_authoring::SpritePropertySyntax::RemovedOffset => {
                 return Err(parse_error(
@@ -777,17 +970,17 @@ fn apply_sprite_attachment_body(
             }
         }
     }
-    match analyzed.shape {
-        crate::sprite_authoring::ResolvedSpriteShape::Reference(reference) => {
-            entry.set_shape_ref(&reference, &entry.source_line.clone())?;
+    match analyzed.body.shape {
+        crate::sprite_authoring::ResolvedSpriteShape::Reference(_) => {
+            entry.shape_ref = shape_ref;
         }
         crate::sprite_authoring::ResolvedSpriteShape::Inline(frames) => {
             crate::sprite_authoring::validate_sprite_frame_geometry(&frames)
                 .map_err(|message| parse_error(&entry.source_line, message))?;
-            let spatial_frames = frames
+            let frames = frames
                 .iter()
-                .map(|frame| {
-                    frame
+                .map(|frame| VisualSpriteFrameDef {
+                    planes: frame
                         .layers
                         .iter()
                         .map(|layer| {
@@ -797,42 +990,13 @@ fn apply_sprite_attachment_body(
                                 .map(|row| row.text.clone())
                                 .collect::<Vec<_>>()
                         })
-                        .collect::<Vec<_>>()
+                        .collect::<Vec<_>>(),
                 })
                 .collect::<Vec<_>>();
-            let frames = spatial_frames
-                .iter()
-                .map(|frame| frame.first().cloned().unwrap_or_default())
-                .collect::<Vec<_>>();
-            if spatial_frames.iter().any(|frame| frame.len() > 1) {
-                entry.spatial = Some(VisualSpriteSpatialDef {
-                    frames: spatial_frames,
-                });
-            }
-            if frames.iter().all(Vec::is_empty) {
-                return Err(parse_error(
-                    &entry.source_line,
-                    "sprite shape block requires at least one row",
-                ));
-            }
-            if frames.iter().any(Vec::is_empty) {
-                return Err(parse_error(
-                    &entry.source_line,
-                    "sprite animation frame requires at least one row",
-                ));
-            }
-            for frame in &frames {
-                validate_visual_pattern(frame, &entry.source_line)?;
-            }
-            entry.inline_pattern = frames.first().cloned();
             if frames.len() > 1 {
-                entry.loop_animation = Some(VisualSpriteLoopDef {
-                    duration_ms: timing
-                        .total_duration_ms
-                        .expect("shared timing resolves animated sprite duration"),
-                    frames,
-                });
+                entry.animation_duration_ms = timing.total_duration_ms;
             }
+            entry.frames = Some(frames);
         }
         crate::sprite_authoring::ResolvedSpriteShape::UnknownBareReference(reference) => {
             return Err(parse_error(
@@ -851,10 +1015,96 @@ fn apply_sprite_attachment_body(
     Ok(())
 }
 
+fn sprite_attachment_span(
+    attachment: &crate::sprite_authoring::SpriteAttachmentSyntax<source::LogicalLine>,
+) -> crate::surface::SourceSpan {
+    let start = attachment
+        .header_line
+        .tokens
+        .first()
+        .map_or(0, |token| token.start);
+    let end = attachment
+        .closing_line
+        .as_ref()
+        .and_then(|line| line.tokens.last().map(|token| token.end))
+        .or_else(|| {
+            attachment
+                .body_lines
+                .iter()
+                .rev()
+                .find_map(|line| line.tokens.last().map(|token| token.end))
+        })
+        .or_else(|| attachment.header_line.tokens.last().map(|token| token.end))
+        .unwrap_or(start);
+    crate::surface::SourceSpan { start, end }
+}
+
+fn sprite_attachment_body_span(
+    attachment: &crate::sprite_authoring::SpriteAttachmentSyntax<source::LogicalLine>,
+) -> crate::surface::SourceSpan {
+    let header_end = attachment
+        .header_line
+        .tokens
+        .last()
+        .map_or(0, |token| token.end);
+    let start = if attachment.closing_line.is_some() {
+        header_end
+    } else if attachment.body_lines.is_empty() {
+        attachment
+            .header_line
+            .tokens
+            .get(1)
+            .map_or(header_end, |token| token.start)
+    } else {
+        header_end
+    };
+    let end = attachment
+        .closing_line
+        .as_ref()
+        .and_then(|line| line.tokens.first().map(|token| token.start))
+        .or_else(|| {
+            attachment
+                .body_lines
+                .iter()
+                .rev()
+                .find_map(|line| line.tokens.last().map(|token| token.end))
+        })
+        .unwrap_or_else(|| {
+            attachment
+                .header_line
+                .tokens
+                .last()
+                .map_or(start, |token| token.end)
+        });
+    crate::surface::SourceSpan { start, end }
+}
+
+fn sprite_resource_product(
+    lines: &[source::LogicalLine],
+    start: usize,
+    next: usize,
+    dimension: crate::ModelDimension,
+) -> Option<crate::surface::SurfaceSpriteResourceProduct> {
+    let header = lines.get(start)?;
+    let closing = lines.get(next.checked_sub(1)?)?;
+    let first = header.tokens.first()?;
+    let open = header.tokens.iter().find(|token| token.text == "{")?;
+    let close = closing.tokens.iter().find(|token| token.text == "}")?;
+    Some(crate::surface::SurfaceSpriteResourceProduct {
+        span: crate::surface::SourceSpan {
+            start: first.start,
+            end: close.end,
+        },
+        open_brace: open.start,
+        close_brace: close.start,
+        dimension,
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn lower_sprite_entry(
     entry: SpriteEntrySpec,
-    plain_shapes: &HashMap<String, Vec<String>>,
+    plain_shapes: &HashMap<String, VisualShapeFrames>,
     shapes: &HashMap<String, VisualShapeTable>,
     color_aliases: &HashMap<String, String>,
     color_tables: &HashMap<String, VisualColorTable>,
@@ -865,9 +1115,9 @@ fn lower_sprite_entry(
     let line = entry.source_line.as_str();
     if let Some(source) = entry.image_source {
         if entry.color_exprs.is_some()
-            || entry.inline_pattern.is_some()
+            || entry.frames.is_some()
             || entry.shape_ref.is_some()
-            || entry.loop_animation.is_some()
+            || entry.animation_duration_ms.is_some()
             || entry.rotation.is_some()
         {
             return Err(parse_error(
@@ -888,18 +1138,29 @@ fn lower_sprite_entry(
         let color_exprs = entry
             .color_exprs
             .ok_or_else(|| parse_error(line, "sprite entry missing colors"))?;
-        validate_loop_animation_palette(entry.loop_animation.as_ref(), &color_exprs, line)?;
-        let Some(pattern) = entry.inline_pattern else {
+        let Some(frames) = entry.frames else {
             return Err(parse_error(
                 line,
                 "sprite rotation requires inline ASCII rows",
+            ));
+        };
+        let [frame] = frames.as_slice() else {
+            return Err(parse_error(
+                line,
+                "sprite rotation derivation requires one frame",
+            ));
+        };
+        let [pattern] = frame.planes.as_slice() else {
+            return Err(parse_error(
+                line,
+                "sprite rotation derivation requires one plane",
             ));
         };
         validate_visual_pattern_palette(&pattern, &color_exprs, line)?;
         let targets = expand_visual_selector(&selector, line, catalog)?;
         let axis = visual_rotation_axis_for_targets(&targets, catalog, &rotation, line)?;
         let mut entries = HashMap::new();
-        entries.insert(rotation.from.clone(), pattern);
+        entries.insert(rotation.from.clone(), pattern.clone());
         let values = catalog_value_set(catalog, &axis)
             .ok_or_else(|| parse_error(line, "visual rotation tag set must exist"))?;
         expand_visual_shape_rotations(&mut entries, values, catalog, &axis, &rotation, line)?;
@@ -912,7 +1173,6 @@ fn lower_sprite_entry(
             &color_exprs,
             &entry.transforms,
             entry.sampling,
-            entry.loop_animation,
             color_aliases,
             color_tables,
             catalog,
@@ -922,7 +1182,6 @@ fn lower_sprite_entry(
         let color_exprs = entry
             .color_exprs
             .ok_or_else(|| parse_error(line, "sprite entry missing colors"))?;
-        validate_loop_animation_palette(entry.loop_animation.as_ref(), &color_exprs, line)?;
         if let Some(shape) = shapes.get(&shape_name) {
             add_ascii_visuals(
                 &selector,
@@ -932,52 +1191,56 @@ fn lower_sprite_entry(
                 &color_exprs,
                 &entry.transforms,
                 entry.sampling,
-                entry.loop_animation,
                 color_aliases,
                 color_tables,
                 catalog,
                 visuals,
             )?;
         } else {
-            let pattern = plain_shapes
+            let shape_frames = plain_shapes
                 .get(&shape_name)
                 .ok_or_else(|| parse_error(line, "unknown sprite shape"))?;
+            let frames = shape_frames
+                .iter()
+                .map(|frame| VisualSpriteFrameDef {
+                    planes: frame
+                        .layers
+                        .iter()
+                        .map(|layer| layer.rows.iter().map(|row| row.text.clone()).collect())
+                        .collect(),
+                })
+                .collect::<Vec<_>>();
             add_inline_ascii_visuals(
                 &selector,
                 line,
-                pattern,
+                &frames,
                 &color_exprs,
                 &entry.transforms,
                 entry.sampling,
-                entry.loop_animation,
+                entry.animation_duration_ms,
                 color_aliases,
                 color_tables,
                 catalog,
                 visuals,
             )?;
         }
-    } else if let Some(pattern) = entry.inline_pattern {
+    } else if let Some(frames) = entry.frames {
         let color_exprs = entry
             .color_exprs
             .ok_or_else(|| parse_error(line, "sprite entry missing colors"))?;
-        validate_loop_animation_palette(entry.loop_animation.as_ref(), &color_exprs, line)?;
-        let first_sprite = visuals.sprites.len();
         add_inline_ascii_visuals(
             &selector,
             line,
-            &pattern,
+            &frames,
             &color_exprs,
             &entry.transforms,
             entry.sampling,
-            entry.loop_animation,
+            entry.animation_duration_ms,
             color_aliases,
             color_tables,
             catalog,
             visuals,
         )?;
-        for sprite in &mut visuals.sprites[first_sprite..] {
-            sprite.spatial = entry.spatial.clone();
-        }
     } else {
         let color_exprs = entry
             .color_exprs
@@ -985,14 +1248,12 @@ fn lower_sprite_entry(
         let [(_, color)] = color_exprs.as_slice() else {
             return Err(parse_error(line, "solid sprite requires exactly one color"));
         };
-        validate_loop_animation_palette(entry.loop_animation.as_ref(), &color_exprs, line)?;
         add_solid_visuals(
             &selector,
             line,
             color,
             &entry.transforms,
             entry.sampling,
-            entry.loop_animation,
             color_aliases,
             color_tables,
             catalog,
@@ -1121,11 +1382,9 @@ fn visual_table_key<T>(
 fn parse_visual_plain_shape(
     lines: &[source::LogicalLine],
     start: usize,
-) -> Result<(Vec<String>, usize), DiagnosticReport> {
+) -> Result<(VisualShapeFrames, usize), DiagnosticReport> {
     let is_braced = is_block_header_line(&lines[start]);
-    let mut pattern = Vec::new();
     let mut i = start + 1;
-    let mut width = None::<usize>;
     while i < lines.len() && !is_block_close_line(&lines[i]) {
         if lines[i].is_empty() {
             if is_braced {
@@ -1134,36 +1393,45 @@ fn parse_visual_plain_shape(
             }
             break;
         }
-        let row_tokens = split_header_tokens(&lines[i]);
-        let [row] = row_tokens.as_slice() else {
-            return Err(parse_error(
-                &lines[i],
-                "visual shape row must be a single token row",
-            ));
-        };
-        let row_width = row.chars().count();
-        if !is_braced
-            && let Some(expected_width) = width
-            && row_width != expected_width
-        {
-            return Err(parse_error(
-                &lines[i],
-                "visual shape rows must be equal-width ascii",
-            ));
-        }
-        width = Some(row_width);
-        pattern.push((*row).to_string());
         i += 1;
     }
-    if i >= lines.len() {
+    if is_braced && (i >= lines.len() || !is_block_close_line(&lines[i])) {
         return Err(parse_error(
             &lines[start],
             "visual shape missing closing brace",
         ));
     }
-    validate_visual_pattern(&pattern, &lines[start])?;
+    let frames = crate::sprite_authoring::parse_sprite_shape_rows(&lines[start + 1..i])
+        .map_err(|error| parse_error(&error.line, &error.message))?;
+    for frame in &frames {
+        for layer in &frame.layers {
+            let rows = layer
+                .rows
+                .iter()
+                .map(|row| row.text.clone())
+                .collect::<Vec<_>>();
+            validate_visual_pattern(&rows, &lines[start])?;
+        }
+    }
     let next_i = if is_braced { i + 1 } else { i };
-    Ok((pattern, next_i))
+    Ok((frames, next_i))
+}
+
+fn sprite_frame_from_rows(rows: &[String]) -> crate::sprite_authoring::SpriteFrameSyntax {
+    crate::sprite_authoring::SpriteFrameSyntax {
+        layers: vec![crate::sprite_authoring::SpriteLayerSyntax {
+            rows: rows
+                .iter()
+                .enumerate()
+                .map(
+                    |(body_line, text)| crate::sprite_authoring::SpriteShapeRow {
+                        text: text.clone(),
+                        body_line,
+                    },
+                )
+                .collect(),
+        }],
+    }
 }
 
 fn parse_sprite_shape_ref(
@@ -1199,24 +1467,6 @@ fn validate_visual_pattern_palette(
         }
     }
     Ok(())
-}
-
-fn validate_loop_animation_palette(
-    loop_animation: Option<&VisualSpriteLoopDef>,
-    color_exprs: &[(char, String)],
-    line: &str,
-) -> Result<(), DiagnosticReport> {
-    let Some(loop_animation) = loop_animation else {
-        return Ok(());
-    };
-    for frame in &loop_animation.frames {
-        validate_visual_pattern_palette(frame, color_exprs, line)?;
-    }
-    Ok(())
-}
-
-pub(crate) fn is_visual_color_token(value: &str) -> bool {
-    value.starts_with('#') || crate::syntax::is_visual_named_color(value)
 }
 
 fn is_visual_image_source(value: &str) -> bool {
@@ -1779,35 +2029,50 @@ fn parse_visual_color_table(
     ))
 }
 
-fn eval_sprite_transforms(
-    expressions: &[SpriteTransformExpr],
+pub(crate) fn eval_sprite_transforms(
+    expressions: &[(crate::sprite_authoring::SpritePropertySyntax, String)],
     bindings: &HashMap<String, String>,
     line: &str,
 ) -> Result<Vec<VisualSpriteTransform>, DiagnosticReport> {
     expressions
         .iter()
-        .map(|expression| match expression {
-            SpriteTransformExpr::Rotate { angle, from, space } => {
-                let mut degrees = eval_sprite_angle_expr(angle, bindings, line)?;
+        .map(|(expression, expression_line)| match expression {
+            crate::sprite_authoring::SpritePropertySyntax::Rotate {
+                angle,
+                from,
+                axis,
+                space,
+            } => {
+                let mut degrees = eval_sprite_angle_expr(angle, bindings, expression_line)?;
                 if let Some(from) = from {
-                    degrees = degrees.sub(eval_sprite_angle_expr(from, bindings, line)?);
+                    degrees = degrees.sub(eval_sprite_angle_expr(from, bindings, expression_line)?);
                 }
                 Ok(VisualSpriteTransform::Rotate {
                     degrees: degrees.as_f64(),
+                    axis: eval_sprite_axis_expr(
+                        axis.as_deref().unwrap_or("up"),
+                        bindings,
+                        expression_line,
+                    )?,
                     space: visual_sprite_space(*space),
                 })
             }
-            SpriteTransformExpr::Translate { value, space } => {
-                let (x, y) = eval_sprite_vec2_expr(value, bindings, line)?;
+            crate::sprite_authoring::SpritePropertySyntax::Translate { value, space } => {
+                let value = eval_sprite_vector_expr(value, bindings, expression_line)?;
                 Ok(VisualSpriteTransform::Translate {
-                    x: x.as_f64(),
-                    y: y.as_f64(),
+                    value: value.map(Rational::as_f64),
                     space: visual_sprite_space(*space),
                 })
             }
-            SpriteTransformExpr::Flip(value) => Ok(VisualSpriteTransform::Flip {
-                enabled: eval_sprite_bool_expr(value, bindings, line)?,
-            }),
+            crate::sprite_authoring::SpritePropertySyntax::Flip(value) => {
+                Ok(VisualSpriteTransform::Flip {
+                    enabled: eval_sprite_bool_expr(value, bindings, expression_line)?,
+                })
+            }
+            _ => Err(parse_error(
+                line,
+                "non-transform sprite property reached transform lowering",
+            )),
         })
         .collect()
 }
@@ -1881,26 +2146,38 @@ fn sprite_direction_degrees(value: &str) -> Option<Rational> {
     })
 }
 
-fn eval_sprite_vec2_expr(
+fn eval_sprite_vector_expr(
     expression: &str,
     bindings: &HashMap<String, String>,
     line: &str,
-) -> Result<(Rational, Rational), DiagnosticReport> {
+) -> Result<[Rational; 3], DiagnosticReport> {
     let expression = strip_expression_parentheses(expression.trim());
     if let Some((left, operator, right)) = split_top_level_arithmetic(expression) {
-        let (left_x, left_y) = eval_sprite_vec2_expr(left, bindings, line)?;
-        let (right_x, right_y) = eval_sprite_vec2_expr(right, bindings, line)?;
+        let left = eval_sprite_vector_expr(left, bindings, line)?;
+        let right = eval_sprite_vector_expr(right, bindings, line)?;
         return Ok(if operator == '+' {
-            (left_x.add(right_x), left_y.add(right_y))
+            std::array::from_fn(|axis| left[axis].add(right[axis]))
         } else {
-            (left_x.sub(right_x), left_y.sub(right_y))
+            std::array::from_fn(|axis| left[axis].sub(right[axis]))
         });
     }
-    if let Ok((x, y)) = split_vec2_components(expression, line) {
-        return Ok((
-            eval_sprite_number_expr(x, bindings, line)?,
-            eval_sprite_number_expr(y, bindings, line)?,
-        ));
+    if let Some(components) = split_sprite_vector_components(expression) {
+        return match components.as_slice() {
+            [x, y] => Ok([
+                eval_sprite_number_expr(x, bindings, line)?,
+                eval_sprite_number_expr(y, bindings, line)?,
+                Rational::ZERO,
+            ]),
+            [x, y, z] => Ok([
+                eval_sprite_number_expr(x, bindings, line)?,
+                eval_sprite_number_expr(y, bindings, line)?,
+                eval_sprite_number_expr(z, bindings, line)?,
+            ]),
+            _ => Err(parse_error(
+                line,
+                "sprite translate expression must resolve to a vec2 or vec3",
+            )),
+        };
     }
     let value = bindings
         .get(expression)
@@ -1909,8 +2186,51 @@ fn eval_sprite_vec2_expr(
     if let Some(direction) = sprite_direction_vector(value) {
         return Ok(direction);
     }
-    parse_vec2_value(value, line)
-        .map_err(|_| parse_error(line, "sprite translate expression must resolve to a vec2"))
+    Err(parse_error(
+        line,
+        "sprite translate expression must resolve to a vec2 or vec3",
+    ))
+}
+
+fn split_sprite_vector_components(expression: &str) -> Option<Vec<&str>> {
+    let inner = expression.trim();
+    if !inner.contains(',') {
+        return None;
+    }
+    let components = inner.split(',').map(str::trim).collect::<Vec<_>>();
+    components
+        .iter()
+        .all(|value| !value.is_empty())
+        .then_some(components)
+}
+
+fn eval_sprite_axis_expr(
+    expression: &str,
+    bindings: &HashMap<String, String>,
+    line: &str,
+) -> Result<[f64; 3], DiagnosticReport> {
+    let expression = bindings
+        .get(expression.trim())
+        .map(String::as_str)
+        .unwrap_or(expression.trim());
+    let value = match expression {
+        "right" => [1.0, 0.0, 0.0],
+        "left" => [-1.0, 0.0, 0.0],
+        "front" => [0.0, 1.0, 0.0],
+        "back" => [0.0, -1.0, 0.0],
+        "up" => [0.0, 0.0, 1.0],
+        "down" => [0.0, 0.0, -1.0],
+        _ => eval_sprite_vector_expr(expression, bindings, line)?.map(Rational::as_f64),
+    };
+    let length = value
+        .iter()
+        .map(|component| component * component)
+        .sum::<f64>()
+        .sqrt();
+    if length == 0.0 {
+        return Err(parse_error(line, "sprite rotate axis cannot be zero"));
+    }
+    Ok(value.map(|component| component / length))
 }
 
 fn eval_sprite_number_expr(
@@ -1936,12 +2256,12 @@ fn eval_sprite_number_expr(
         .map_err(|_| parse_error(line, "sprite vec2 component must resolve to a number"))
 }
 
-fn sprite_direction_vector(value: &str) -> Option<(Rational, Rational)> {
+fn sprite_direction_vector(value: &str) -> Option<[Rational; 3]> {
     Some(match value {
-        "right" => (Rational::integer(1), Rational::ZERO),
-        "up" => (Rational::ZERO, Rational::integer(-1)),
-        "left" => (Rational::integer(-1), Rational::ZERO),
-        "down" => (Rational::ZERO, Rational::integer(1)),
+        "right" => [Rational::integer(1), Rational::ZERO, Rational::ZERO],
+        "up" => [Rational::ZERO, Rational::integer(-1), Rational::ZERO],
+        "left" => [Rational::integer(-1), Rational::ZERO, Rational::ZERO],
+        "down" => [Rational::ZERO, Rational::integer(1), Rational::ZERO],
         _ => return None,
     })
 }
@@ -2010,9 +2330,8 @@ fn add_ascii_visuals(
     shape: &VisualShapeTable,
     shape_value_expr: &ValueExpr,
     color_exprs: &[(char, String)],
-    transform_exprs: &[SpriteTransformExpr],
+    transform_exprs: &[(crate::sprite_authoring::SpritePropertySyntax, String)],
     sampling: Option<VisualSpriteSampling>,
-    loop_animation: Option<VisualSpriteLoopDef>,
     color_aliases: &HashMap<String, String>,
     color_tables: &HashMap<String, VisualColorTable>,
     catalog: &Catalog,
@@ -2059,13 +2378,15 @@ fn add_ascii_visuals(
         });
         visuals.sprites.push(VisualSpriteDef {
             name: sprite,
+            frames: vec![VisualSpriteFrameDef {
+                planes: vec![pattern],
+            }],
             transforms,
             fit: VisualSpriteFit::default(),
             sampling,
-            loop_animation: loop_animation.clone(),
+            animation_duration_ms: None,
             pixels_per_cell: None,
-            spatial: None,
-            kind: VisualSpriteKind::Ascii { pattern, colors },
+            kind: VisualSpriteKind::Ascii { colors },
         });
     }
     Ok(())
@@ -2074,17 +2395,21 @@ fn add_ascii_visuals(
 fn add_inline_ascii_visuals(
     selector: &str,
     line: &str,
-    pattern: &[String],
+    frames: &[VisualSpriteFrameDef],
     color_exprs: &[(char, String)],
-    transform_exprs: &[SpriteTransformExpr],
+    transform_exprs: &[(crate::sprite_authoring::SpritePropertySyntax, String)],
     sampling: Option<VisualSpriteSampling>,
-    loop_animation: Option<VisualSpriteLoopDef>,
+    animation_duration_ms: Option<u64>,
     color_aliases: &HashMap<String, String>,
     color_tables: &HashMap<String, VisualColorTable>,
     catalog: &Catalog,
     visuals: &mut VisualsDef,
 ) -> Result<(), DiagnosticReport> {
-    validate_visual_pattern_palette(pattern, color_exprs, line)?;
+    for frame in frames {
+        for plane in &frame.planes {
+            validate_visual_pattern_palette(plane, color_exprs, line)?;
+        }
+    }
     for target in expand_visual_selector(selector, line, catalog)? {
         let transforms = eval_sprite_transforms(transform_exprs, &target.bindings, line)?;
         let colors = color_exprs
@@ -2110,16 +2435,13 @@ fn add_inline_ascii_visuals(
         });
         visuals.sprites.push(VisualSpriteDef {
             name: sprite,
+            frames: frames.to_vec(),
             transforms,
             fit: VisualSpriteFit::default(),
             sampling,
-            loop_animation: loop_animation.clone(),
+            animation_duration_ms,
             pixels_per_cell: None,
-            spatial: None,
-            kind: VisualSpriteKind::Ascii {
-                pattern: pattern.to_vec(),
-                colors,
-            },
+            kind: VisualSpriteKind::Ascii { colors },
         });
     }
     Ok(())
@@ -2129,9 +2451,8 @@ fn add_solid_visuals(
     selector: &str,
     line: &str,
     color_expr: &str,
-    transform_exprs: &[SpriteTransformExpr],
+    transform_exprs: &[(crate::sprite_authoring::SpritePropertySyntax, String)],
     sampling: Option<VisualSpriteSampling>,
-    loop_animation: Option<VisualSpriteLoopDef>,
     color_aliases: &HashMap<String, String>,
     color_tables: &HashMap<String, VisualColorTable>,
     catalog: &Catalog,
@@ -2154,12 +2475,12 @@ fn add_solid_visuals(
         });
         visuals.sprites.push(VisualSpriteDef {
             name: sprite,
+            frames: Vec::new(),
             transforms,
             fit: VisualSpriteFit::default(),
             sampling,
-            loop_animation: loop_animation.clone(),
+            animation_duration_ms: None,
             pixels_per_cell: None,
-            spatial: None,
             kind: VisualSpriteKind::Solid(color),
         });
     }
@@ -2170,7 +2491,7 @@ fn add_image_visuals(
     selector: &str,
     line: &str,
     source: &str,
-    transform_exprs: &[SpriteTransformExpr],
+    transform_exprs: &[(crate::sprite_authoring::SpritePropertySyntax, String)],
     sampling: Option<VisualSpriteSampling>,
     catalog: &Catalog,
     visuals: &mut VisualsDef,
@@ -2184,12 +2505,12 @@ fn add_image_visuals(
         });
         visuals.sprites.push(VisualSpriteDef {
             name: sprite,
+            frames: Vec::new(),
             transforms,
             fit: VisualSpriteFit::default(),
             sampling,
-            loop_animation: None,
+            animation_duration_ms: None,
             pixels_per_cell: None,
-            spatial: None,
             kind: VisualSpriteKind::Image {
                 source: source.to_string(),
             },

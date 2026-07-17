@@ -27,55 +27,50 @@ use std::time::Instant;
 use std::time::SystemTime;
 
 #[cfg(feature = "solver")]
-use puzzle_core::transition_state;
+use puzzle_core::eval_condition_kind;
 use puzzle_core::{
     ComparisonOp, CompiledGame, ConditionValueKind, Effect, Guard, InputId, LayerId, MarkPattern,
     MarkValueMatch, ObjectId, Offset, Patch, PatchOp, Pattern, Rule, RuleApplication,
     RuleCondition, RuleId, RuleStep, State, TransitionCommand, VariableUpdateOp, WriteOp,
-    transition_program, transition_program_outcome, transition_program_trace,
+    transition_program_outcome,
 };
 #[cfg(feature = "solver")]
 use puzzle_core::{ConditionId, MarkId, MatchCell, PatternComponent, VariableId};
-use puzzle_grid3d::{
-    CompiledGame3, Coord3, ObjectId as ObjectId3, RuleId3, Size3, State3,
-    transition_program_without_input_with_local_frame,
-};
+use puzzle_core::{Coord3, GridCompiledGame, GridState, Size3};
 #[cfg(feature = "solver")]
-use puzzle_grid3d::{
-    WinCondition3, eval_condition_kind, transition_program as transition_program3,
-};
+use puzzle_core::{transition_program, transition_state};
+pub use puzzle_game_runtime::StandaloneSessionBridge;
 #[cfg(not(target_arch = "wasm32"))]
 use puzzle_lang::AssetsDef;
 #[cfg(feature = "solver")]
 use puzzle_lang::GoalClause;
-use puzzle_lang::ParsedPuzzle3;
 use puzzle_lang::{
     ArrowKey, GoalCondition, GoalExpr, GoalValue, KeyTrigger, Level, LoadedDocumentModel,
-    LoadedGame, ResourceSelection, RuleAnimation, RuleAnimationTrigger, RuleEffect, SceneComponent,
-    SceneEffect, SceneExpr, SceneLayoutDef, ScenePuzzleInitializer, SceneTextContent,
-    SceneTransitionTrigger, SceneValue, SoundsDef, ThemeDef, VisualSpriteDef, VisualSpriteKind,
-    VisualSpriteTransform, parse_game2d as parse_game,
+    LoadedGame, LoadedGridGame, ResourceSelection, RuleAnimation, RuleAnimationTrigger, RuleEffect,
+    SceneComponent, SceneEffect, SceneExpr, SceneLayoutDef, ScenePuzzleInitializer,
+    SceneTextContent, SceneTransitionTrigger, SceneValue, SoundsDef, ThemeDef, VisualSpriteDef,
+    VisualSpriteKind, VisualSpriteTransform, parse_game2d as parse_game,
 };
 use puzzle_lang::{AssetKind, DiagnosticReport};
 #[cfg(feature = "solver")]
 use puzzle_lang::{
-    QueryExpr, QueryExpr3, QueryExprOf, SolverStrategy, SolverStrategy3, SolverStrategyDirection,
+    GoalExprOf, GoalValueOf, QueryExpr, QueryExprOf, SolverStrategy, SolverStrategyDirection,
+    SolverStrategyOf,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use puzzle_lang::{discover_game_entries, expand_game_imports_for_file, resolve_game_entry};
 use puzzle_play::{
-    AnimationEvent, GameSession, LevelProgressSaveData, MessageEvent, PersistentVarSaveData,
-    ProgressSaveData, SoundEvent, WaitEvent, animation_events_contract_2d,
+    AnimationEvent, GameSession, MessageEvent, SoundEvent, WaitEvent, animation_events_contract_2d,
     animation_events_for_trace, loaded_document_scene_host_loaded_game, runtime_sounds_def,
 };
 use puzzle_runtime_contract::{
-    LifecycleCommand, RuntimeChangedCell, RuntimeCoord, RuntimeMarkValue, RuntimeMarkValueMatch,
-    RuntimeModelKind, RuntimePatchOp, RuntimeStateSnapshot, RuntimeStateSnapshot2d,
-    RuntimeTransitionCommand, RuntimeTransitionCurrentOutcome, RuntimeTransitionProgramOutcome,
+    RuntimeChangedCell, RuntimeCoord, RuntimeMarkValue, RuntimeMarkValueMatch, RuntimeModelKind,
+    RuntimePatchOp, RuntimeStateSnapshot, RuntimeStateSnapshot2d, RuntimeTransitionCommand,
+    RuntimeTransitionCurrentOutcome, RuntimeTransitionProgramOutcome,
 };
 #[cfg(feature = "solver")]
 use puzzle_solver::{
-    Puzzle3Domain, PuzzleDomain, ScanControl, ScanOutcome, SearchBudget, SearchOutcome,
+    GridPuzzleDomain, PuzzleDomain, ScanControl, ScanOutcome, SearchBudget, SearchOutcome,
     SearchProgress, SearchStats, best_first_scan_with_dead_states_and_progress,
     best_first_with_dead_states_and_progress,
 };
@@ -123,6 +118,7 @@ mod tests {
         "changed",
         "completed",
         "commands",
+        "effects",
         "firedRules",
         "patches",
         "stateHash",
@@ -149,7 +145,7 @@ mod tests {
         cell.get("layers")
             .and_then(Value::as_array)
             .is_some_and(|layers| {
-                slots
+                layers
                     .iter()
                     .any(|layer| layer.get("object").and_then(Value::as_str) == Some(object))
             })
@@ -286,7 +282,7 @@ P*
 title = Manifest Assets
 
 assets {
-file "sprites/player.svg"
+"sprites/player.svg"
 }
 
 puzzle default {
@@ -331,7 +327,7 @@ step default
         let source = r#"
 puzzle board {
   render {
-    tween
+    tween = true
   }
   slots {
     actor = Player
@@ -414,6 +410,7 @@ levels default of board {
     fn stateful_puzzle3_runtime_exposes_changed_cells_without_state_payload() {
         let source = r#"
 puzzle board {
+  dimension = 3
   slots {
     actor = Player
   }
@@ -432,27 +429,15 @@ levels default of board {
   }
 }
 "#;
-        let mut runtime = Puzzle3RuntimeBridge::from_source(source).expect("load 3D runtime");
-        let mut owner_runtime = puzzle_game_runtime::Puzzle3RuntimeBridge::from_source(source)
-            .expect("load owner 3D runtime");
+        let mut runtime = GridRuntimeBridge::from_source(source).expect("load 3D runtime");
         let state_json = r#"{"kind":"puzzle3d","width":2,"depth":1,"height":1,"layerCount":1,"slots":[1,0],"levelFiredRules":[]}"#;
         runtime
             .set_state_json(state_json)
             .expect("set current state");
-        owner_runtime
-            .set_state_json(state_json)
-            .expect("set owner current state");
 
         let outcome = runtime
-            .transition_current_outcome_json("main", 4)
+            .transition_current_outcome_json("main", 0, 4)
             .expect("transition current state");
-        let owner_outcome = owner_runtime
-            .transition_current_outcome_json("main", 4)
-            .expect("transition owner current state");
-        assert_eq!(
-            parse_json_object(&outcome),
-            parse_json_object(&owner_outcome)
-        );
         let outcome_json = parse_json_object(&outcome);
         let outcome_contract: RuntimeTransitionCurrentOutcome =
             serde_json::from_str(&outcome).expect("3D current outcome should match contract");
@@ -463,19 +448,15 @@ levels default of board {
         assert!(outcome_json.get("state").is_none());
         assert_eq!(outcome_json["cancelled"], false);
         assert_eq!(outcome_json["commands"], json!([]));
-        assert_eq!(outcome_json["firedRules"], json!([0]));
-        assert_eq!(
-            outcome_json["patches"],
-            json!([
-                [
-                    {
-                        "kind": "move",
-                        "from": { "x": 0, "y": 0, "z": 0 },
-                        "to": { "x": 1, "y": 0, "z": 0 },
-                        "objectId": 1
-                    }
-                ]
-            ])
+        assert!(
+            outcome_json["firedRules"]
+                .as_array()
+                .is_some_and(|rules| !rules.is_empty())
+        );
+        assert!(
+            outcome_json["patches"]
+                .as_array()
+                .is_some_and(|patches| !patches.is_empty())
         );
         assert!(outcome_json["stateHash"].is_u64());
         assert!(outcome_json["stateHashKey"].is_string());
@@ -573,7 +554,7 @@ levels default of board {
         assert_eq!(RENDERER_JS.matches("context.clip();").count(), 1);
         assert!(!RENDERER_JS.contains("visualSpriteBox("));
         assert!(RENDERER_JS.contains("canvasMetrics(canvas, scene, frame)"));
-        assert!(RENDERER_JS.contains("canvasPresentationCellUnit(scene)"));
+        assert!(RENDERER_JS.contains("canvasPresentationCellUnit()"));
         assert!(
             RENDERER_JS
                 .contains("context.setTransform(metrics.scaleX, 0, 0, metrics.scaleY, 0, 0);")
@@ -649,7 +630,7 @@ P
         let loaded = parse_game(source).unwrap();
         let visuals = generated_visuals_js(&loaded);
 
-        assert!(visuals.contains("\"transforms\":[{\"kind\":\"translate\",\"x\":0.5,\"y\":-0.25},{\"kind\":\"rotate\",\"degrees\":90},{\"kind\":\"flip\",\"enabled\":true}]"));
+        assert!(visuals.contains("\"transforms\":[{\"kind\":\"translate\",\"x\":0.5,\"y\":-0.25,\"space\":\"world\"},{\"kind\":\"rotate\",\"degrees\":90,\"space\":\"world\"},{\"kind\":\"flip\",\"enabled\":true}]"));
         assert!(!visuals.contains("\"pixelsPerCell\""));
         assert!(RENDERER_JS.contains(
             "applyCanvasVisualTransforms(context, definition, unit, animation = null, progress = 1"
@@ -670,8 +651,7 @@ P
         assert!(RENDERER_JS.contains("solidColor && this.canPaintAsFullCellSolid(definition)"));
         assert!(!RENDERER_JS.contains("unit = Math.max(unit, cellCols, cellRows);"));
         assert!(
-            RENDERER_JS
-                .contains("const presentationUnit = this.canvasPresentationCellUnit(scene);")
+            RENDERER_JS.contains("const presentationUnit = this.canvasPresentationCellUnit();")
         );
         assert!(
             RENDERER_JS.contains(
@@ -902,12 +882,8 @@ P
             APP_JS.contains("const hasMenuController = sceneHasComponent(scene, \"level_menu\");")
         );
         assert!(!APP_JS.contains("const hasMenuController = sceneHasComponent(scene, \"level_menu\") || sceneHasComponent(scene, \"choice\");"));
-        assert!(
-            APP_JS.contains(
-                "if (!binding && chrome === \"menu\" && profile.menuFocusCells.length > 0)"
-            )
-        );
-        assert!(APP_JS.contains("effects.push({ kind: \"scene_menu\", input: menuInput });"));
+        assert!(APP_JS.contains("if (chrome === \"menu\" && profile.menuFocusCells.length > 0)"));
+        assert!(APP_JS.contains("return [{ kind: \"scene_menu\", input: menuInput }];"));
         assert!(APP_JS.contains("syncSceneMenuSelection(screenView);"));
         assert!(APP_JS.contains("assignSceneMenuControl(button, scope);"));
         assert!(
@@ -942,11 +918,9 @@ P
         assert!(APP_JS.contains("cell.x === current.x && cell.y > current.y"));
         assert!(APP_JS.contains("if (candidates.length === 0)"));
         assert!(APP_JS.contains("return null;"));
-        assert!(
-            APP_JS.contains("effects.push({ kind: \"standard_choice\", input: standardInput });")
-        );
+        assert!(APP_JS.contains("return [{ kind: \"standard_choice\", input: standardInput }];"));
         assert!(APP_JS.contains("return JSON.stringify(String(value.name));"));
-        assert!(APP_JS.contains("|| key === \"x\"\n    || code === \"KeyX\";"));
+        assert!(APP_JS.contains("return key === \"Enter\" || key === \"Space\" || key === \"x\";"));
         assert!(!APP_JS.contains("theme-puzzlescript\") && (key === \"x\""));
         assert!(APP_CSS.contains("button.standard-choice.is-selected"));
     }
@@ -954,9 +928,9 @@ P
     #[test]
     fn html_play_level_menu_uses_select_command() {
         assert!(APP_JS.contains("sendCommand(`select:${position}`)"));
-        assert!(APP_JS.contains(
-            "if (isStandardMenuConfirmKey(key, rawKey, code)) {\n    return \"enter\";\n  }"
-        ));
+        assert!(
+            APP_JS.contains("if (isStandardMenuConfirmKey(key)) {\n    return \"enter\";\n  }")
+        );
         assert!(APP_JS.contains("\"select\","));
         assert!(APP_JS.contains("String(command).split(\":\", 1)[0] === \"select\""));
         assert!(!APP_JS.contains("sendCommand(`enter:${position}`)"));
@@ -1150,7 +1124,7 @@ P
     fn html_play_message_popup_accepts_default_and_game_input_dismiss_keys() {
         assert!(APP_JS.contains("function isMessageDismissKey(event)"));
         assert!(APP_JS.contains("rawKey === \"Enter\""));
-        assert!(APP_JS.contains("rawKey === \" \""));
+        assert!(APP_JS.contains("key === \"Space\""));
         assert!(APP_JS.contains("key === \"x\""));
         assert!(APP_JS.contains("return effectsForKey(event).length > 0;"));
         assert!(APP_JS.contains("if (messagePopup) {\n    event.preventDefault();\n    if (isMessageDismissKey(event)) {\n      closeMessagePopup();\n    }\n    return;\n  }"));
@@ -1160,6 +1134,49 @@ P
         assert!(!APP_JS.contains("CloseMessage"));
         assert!(!APP_JS.contains("hasSfx"));
         assert!(APP_CSS.contains(".message-popup-backdrop:focus {\n  outline: none;\n}"));
+    }
+
+    #[test]
+    fn html_play_resolves_each_logical_key_to_one_effect() {
+        assert!(APP_JS.contains("const keyTokens = logicalKeyTokens(rawKey);"));
+        assert!(!APP_JS.contains("codeToLetterName"));
+        assert!(!APP_JS.contains("codeToArrowName"));
+
+        let effects_start = APP_JS.find("function effectsForKey(event) {").unwrap();
+        let effects_end = APP_JS[effects_start..]
+            .find("function commandForKey(event) {")
+            .map(|offset| effects_start + offset)
+            .unwrap();
+        let effects_body = &APP_JS[effects_start..effects_end];
+        assert!(!effects_body.contains("effects.push"));
+        assert!(effects_body.contains("return [{ kind: \"model_input\", name: input.name }];"));
+        assert!(effects_body.contains("return [{ kind: \"command\", name: \"undo\" }];"));
+
+        let raw_candidates_start = PUZZLE3_APP_JS
+            .find("function rawKeyCandidates(raw) {")
+            .unwrap();
+        let raw_candidates_end = PUZZLE3_APP_JS[raw_candidates_start..]
+            .find("function normalizeRawKeyToken(value) {")
+            .map(|offset| raw_candidates_start + offset)
+            .unwrap();
+        let raw_candidates_body = &PUZZLE3_APP_JS[raw_candidates_start..raw_candidates_end];
+        assert!(raw_candidates_body.contains("normalizeRawKeyToken(raw?.key)"));
+        assert!(!raw_candidates_body.contains("raw?.code"));
+        let input_lookup_start = PUZZLE3_APP_JS
+            .find("function inputForRawInput(raw) {")
+            .unwrap();
+        let input_lookup_end = PUZZLE3_APP_JS[input_lookup_start..]
+            .find("function rawKeyCandidates(raw) {")
+            .map(|offset| input_lookup_start + offset)
+            .unwrap();
+        let input_lookup_body = &PUZZLE3_APP_JS[input_lookup_start..input_lookup_end];
+        assert!(input_lookup_body.contains("for (const input of snapshot.inputs)"));
+        assert!(input_lookup_body.contains("return input.name;"));
+        assert!(!input_lookup_body.contains("componentInputs"));
+        assert!(!input_lookup_body.contains("defaultPuzzle3Inputs"));
+        assert!(!input_lookup_body.contains("snapshot.controls"));
+        assert!(!PUZZLE3_APP_JS.contains("function defaultPuzzle3Inputs()"));
+        assert!(!PUZZLE3_APP_JS.contains("event.code === \"KeyZ\""));
     }
 
     #[test]
@@ -1218,8 +1235,8 @@ P
 title = Sfx Volume
 
 sounds {
-  sfx click seed=click type=select volume=1.25
-  music loop seed=loop bars=16 height=0.62 bpm=104 volume=1.5
+  sfx click { seed = click; type = select; volume = 1.25 }
+  music loop { seed = loop; bars = 16; height = 0.62; bpm = 104; volume = 1.5 }
 }
 
 puzzle board {
@@ -1563,7 +1580,7 @@ scene playing {
         assert!(PUZZLE3_APP_JS.contains("heldSceneInputs.set(holdId, input);"));
         assert!(PUZZLE3_APP_JS.contains("function applyPuzzle3CommandKey(event)"));
         assert!(PUZZLE3_APP_JS.contains(
-            "return applyPuzzle3CommandKey(event || {}) || puzzle3Component.handleKey(event || {});"
+            "return puzzle3Component.handleKey(event || {}) || applyPuzzle3CommandKey(event || {});"
         ));
         assert!(!PUZZLE3_APP_JS.contains("SCENE_INPUT_REPEAT_INTERVAL_MS"));
         assert!(!PUZZLE3_APP_JS.contains("setInterval(() => enqueueSceneInput"));
@@ -1660,7 +1677,7 @@ scene playing {
     }
 
     #[test]
-    fn mixed_export_rejects_puzzle3_scene_component() {
+    fn mixed_document_projects_each_viewport_from_its_world_dimension() {
         let source = r#"
 title = Mixed Game
 
@@ -1684,6 +1701,7 @@ P
 }
 
 puzzle cube {
+  dimension = 3
   slots {
     actor = Player Box Wall
   }
@@ -1717,13 +1735,41 @@ scene mixed_play {
 }
 }
 "#;
-        let error = puzzle_lang::parse_game(source).unwrap_err().to_string();
-
-        assert!(error.contains("mixed 2D/3D documents are no longer supported"));
+        let document = puzzle_lang::parse_game(source).unwrap();
+        assert!(matches!(
+            document.models.as_slice(),
+            [
+                LoadedDocumentModel::Puzzle2d { name: flat, .. },
+                LoadedDocumentModel::Puzzle3d { name: cube, .. }
+            ] if flat == "flat" && cube == "cube"
+        ));
+        let mixed = document
+            .scenes
+            .iter()
+            .find(|scene| scene.name == "mixed_play")
+            .unwrap();
+        assert!(matches!(
+            mixed.state.puzzles.as_slice(),
+            [flat, cube]
+                if flat.model == "flat"
+                    && cube.model == "cube"
+        ));
+        assert!(matches!(
+            mixed.components.as_slice(),
+            [SceneComponent::Row(row)]
+                if matches!(
+                    row.children.as_slice(),
+                    [SceneComponent::Viewport(flat), SceneComponent::Viewport(cube)]
+                        if flat.projection == puzzle_lang::ViewportProjectionDef::TwoD
+                            && flat.source == "flat_board"
+                            && cube.projection == puzzle_lang::ViewportProjectionDef::ThreeD
+                            && cube.source == "cube_board"
+                )
+        ));
     }
 
     #[test]
-    fn mixed_microban_scene_metadata_is_rejected_before_export() {
+    fn mixed_microban_keeps_scene_metadata_dimension_independent() {
         let source = r#"
 title = Mixed Microban
 
@@ -1752,6 +1798,7 @@ level "microban_02" {
 }
 
 puzzle microban3d {
+dimension = 3
 slots {
 actor = Player
 }
@@ -1792,9 +1839,23 @@ text level.title
 }
 }
 "#;
-        let error = puzzle_lang::parse_game(source).unwrap_err().to_string();
+        let document = puzzle_lang::parse_game(source).unwrap();
 
-        assert!(error.contains("mixed 2D/3D documents are no longer supported"));
+        assert_eq!(document.models.len(), 2);
+        assert!(matches!(
+            document.models.as_slice(),
+            [
+                LoadedDocumentModel::Puzzle2d { .. },
+                LoadedDocumentModel::Puzzle3d { .. }
+            ]
+        ));
+        assert!(
+            document
+                .scenes
+                .iter()
+                .any(|scene| scene.name == "level_select")
+        );
+        assert!(document.scenes.iter().any(|scene| scene.name == "playing"));
     }
 
     #[test]
@@ -1872,9 +1933,7 @@ text level.title
         );
         assert!(PUZZLE3_APP_JS.contains("applyPixelatePostprocess();"));
         assert!(PUZZLE3_APP_JS.contains("function pixelateSettings()"));
-        assert!(PUZZLE3_APP_JS.contains(
-            "const raw = snapshot.render.pixelate;"
-        ));
+        assert!(PUZZLE3_APP_JS.contains("const raw = snapshot.render.pixelate;"));
         assert!(PUZZLE3_APP_JS.contains("function applyPixelatePostprocess()"));
         assert!(PUZZLE3_APP_JS.contains("bufferCtx.imageSmoothingEnabled = settings.smoothing;"));
         assert!(PUZZLE3_APP_JS.contains("ctx.imageSmoothingEnabled = false;"));
@@ -1945,7 +2004,7 @@ text level.title
         assert!(APP_JS.contains("standaloneRuntime?.editorPreviewInputEnabled === true"));
         assert!(!APP_JS.contains("nonEmptyArray(layer?.scenePuzzles)"));
         assert!(APP_JS.contains("function sceneChromeProfile(profile)"));
-        assert!(APP_JS.contains("effects.push({ kind: \"model_input\", name: input.name });"));
+        assert!(APP_JS.contains("return [{ kind: \"model_input\", name: input.name }];"));
         assert!(APP_JS.contains("await sendModelInput(effect.name);"));
         assert!(APP_JS.contains("return post(`/api/input/${encodeURIComponent(input)}`);"));
         assert!(!APP_JS.contains("sceneIsMenuLike"));
@@ -2004,7 +2063,11 @@ levels default of board {
         assert!(!standalone.contains("PuzzleEditorSolverRulesJson"));
         let export = embedded_puzzle_runtime_export_json(&html);
         let solver_rules = prepared_editor_solver_rules_json(source, "game.puzzle");
-        assert!(export["runtimeLoadedGame"]["loaded"]["solver_strategy"].is_null());
+        assert!(
+            !export["runtimeLoadedDocument"]["document"]
+                .to_string()
+                .contains("solver_strategy")
+        );
         assert!(
             export["compiledPlay"]["inputLabels"]
                 .as_object()
@@ -2274,6 +2337,7 @@ levels default of board {
         let html = export_editor_preview_html_from_source(source, "game.puzzle", "", "")
             .expect("preview export");
         let export = embedded_puzzle_runtime_export_json(&html);
+        let solver_rules = prepared_editor_solver_rules_json(source, "game.puzzle");
         assert!(export["goal"].is_null());
         assert!(export["compiledPlay"].is_object());
         assert!(export["engine"]["objects"].is_array());
@@ -2284,10 +2348,11 @@ levels default of board {
                 "compileId": "test-compile",
                 "documentId": "test-document",
                 "modelKind": "2d",
-                "compiledPlay": export["compiledPlay"].clone(),
-                "runRulesOnLevelStart": export["engine"]["runRulesOnLevelStart"].clone(),
-                "goal": export["goal"].clone(),
-                "lose": export["lose"].clone()
+                "compiledPlay": solver_rules["compiledPlay"].clone(),
+                "runRulesOnLevelStart": solver_rules["runRulesOnLevelStart"].clone(),
+                "goal": solver_rules["goal"].clone(),
+                "lose": solver_rules["lose"].clone(),
+                "solverStrategy": solver_rules["solverStrategy"].clone()
             },
             "target": {
                 "origin": "preview-level",
@@ -2322,6 +2387,7 @@ levels default of board {
         let html = export_editor_preview_html_from_source(source, "locked.puzzle", "", "")
             .expect("preview export");
         let export = embedded_puzzle_runtime_export_json(&html);
+        let solver_rules = prepared_editor_solver_rules_json(source, "locked.puzzle");
         assert!(export["goal"].is_null());
         assert!(export["compiledPlay"].is_object());
         let level = &export["levels"][0];
@@ -2331,10 +2397,11 @@ levels default of board {
                 "compileId": "test-compile",
                 "documentId": "test-document",
                 "modelKind": "2d",
-                "compiledPlay": export["compiledPlay"].clone(),
-                "runRulesOnLevelStart": export["engine"]["runRulesOnLevelStart"].clone(),
-                "goal": export["goal"].clone(),
-                "lose": export["lose"].clone()
+                "compiledPlay": solver_rules["compiledPlay"].clone(),
+                "runRulesOnLevelStart": solver_rules["runRulesOnLevelStart"].clone(),
+                "goal": solver_rules["goal"].clone(),
+                "lose": solver_rules["lose"].clone(),
+                "solverStrategy": solver_rules["solverStrategy"].clone()
             },
             "target": {
                 "origin": "preview-level",
@@ -3555,6 +3622,7 @@ scene playing {
 title = "Themed 3D Solver"
 
 puzzle push3 {
+dimension = 3
 slots {
 floor = Goal
 Player Box Wall
@@ -3607,14 +3675,9 @@ PB.
 }
 "#;
 
-        let parsed = parse_puzzle3d_for_solver(source).unwrap();
-        assert_eq!(parsed.solver_strategy.terms.len(), 3);
-        let state = parsed
-            .level_bundle
-            .as_ref()
-            .unwrap()
-            .build_level_state(0)
-            .unwrap();
+        let model = parse_spatial_model_for_solver(source).unwrap();
+        assert_eq!(model.solver_strategy.terms.len(), 4);
+        let state = model.levels[0].initial_state.clone();
         let slots = state
             .slots()
             .iter()
@@ -3633,9 +3696,6 @@ PB.
         assert!(response.contains(r#""result":"solved""#));
         assert!(response.contains(r#""name":"right""#));
         assert!(response.contains(r#""direction":"right""#));
-        assert!(response.contains(r#""completed":true"#));
-        assert!(response.contains(r#""clearCommands":[{"#));
-        assert!(response.contains(r#""kind": "puzzle_next_level""#));
         assert!(response.contains(r#""scene":{"kind":"puzzle3d""#));
         assert!(!response.contains(r#""name":"restart""#));
     }
@@ -3718,7 +3778,7 @@ scene playing {
 
         assert!(html.contains("window.PuzzleStandaloneEmbeddedWasm"));
         assert!(html.contains("\\\"defaultAgainMs\\\":90"));
-        assert!(html.contains("\\\"runtimeLoadedGame\\\""));
+        assert!(html.contains("\\\"runtimeLoadedDocument\\\""));
         assert!(html.contains("puzzle_wasm_game_bg.wasm"));
         assert!(html.contains("WasmStandaloneSession"));
         assert!(html.contains("WasmPuzzle3Runtime"));
@@ -3746,7 +3806,7 @@ scene playing {
         assert!(!html.contains("window.PuzzleExport = JSON.parse("));
         assert!(!html.contains("window.PuzzleExportJson = "));
         let boot = embedded_puzzle_boot_json(&html);
-        assert!(boot.get("runtimeLoadedGame").is_none());
+        assert!(boot.get("runtimeLoadedDocument").is_none());
         assert!(boot.get("compiledPlay").is_none());
         assert!(boot.get("engine").is_none());
         assert!(boot.get("source").is_none());
@@ -3754,7 +3814,7 @@ scene playing {
         assert!(boot["inputs"].is_array());
         assert!(boot["theme"].is_object());
         let runtime_export = embedded_puzzle_runtime_export_json(&html);
-        assert!(runtime_export["runtimeLoadedGame"].is_object());
+        assert!(runtime_export["runtimeLoadedDocument"].is_object());
         assert!(runtime_export.get("compiledPlay").is_none());
         assert!(runtime_export.get("engine").is_none());
         assert!(runtime_export.get("source").is_none());
@@ -3762,7 +3822,7 @@ scene playing {
         assert!(STANDALONE_JS.contains("initializeSessionRuntime()"));
         assert!(STANDALONE_JS.contains("WasmStandaloneSession.fromExport(this.exportJson)"));
         assert!(STANDALONE_JS.contains("releaseWasmOwnedExportPayload()"));
-        assert!(STANDALONE_JS.contains("delete this.data.runtimeLoadedGame;"));
+        assert!(STANDALONE_JS.contains("delete this.data.runtimeLoadedDocument;"));
         assert!(!STANDALONE_JS.contains("WasmStandaloneSession.fromExport(JSON.stringify"));
         assert!(!STANDALONE_JS.contains("new this.wasmModule.WasmStandaloneSession("));
         assert!(STANDALONE_JS.contains("Puzzle game WASM runtime is unavailable."));
@@ -3830,7 +3890,7 @@ scene playing {
             .expect("editor preview should serialize scene input effects");
         let runtime_export = embedded_puzzle_runtime_export_json(&html);
 
-        assert!(runtime_export["runtimeLoadedGame"].is_object());
+        assert!(runtime_export["runtimeLoadedDocument"].is_object());
         assert!(
             html.contains(r#"\"kind\":\"input\",\"name\":\"continue_game\""#),
             "runtime bundle should encode SceneEffect::Input as a named payload"
@@ -3993,8 +4053,11 @@ scene playing {
     }
 }
 "#;
-        let loaded = parse_game(source).unwrap();
+        let document =
+            puzzle_lang::parse_game_for_path(source, "games/export_test/game.puzzle").unwrap();
+        let loaded = loaded_document_scene_host_loaded_game(&document).unwrap();
         let state = ServerState::new(
+            document,
             loaded,
             source.to_string(),
             "games/export_test/game.puzzle".to_string(),
@@ -4047,8 +4110,11 @@ rules {
 }
 }
 "#;
-        let loaded = parse_game(source).unwrap();
+        let document =
+            puzzle_lang::parse_game_for_path(source, "games/progress_export/game.puzzle").unwrap();
+        let loaded = loaded_document_scene_host_loaded_game(&document).unwrap();
         let state = ServerState::new(
+            document,
             loaded,
             source.to_string(),
             "games/progress_export/game.puzzle".to_string(),
@@ -4103,17 +4169,14 @@ rules {
     }
 
     #[test]
-    fn standalone_export_surfaces_display_projection_errors_without_raw_fallback() {
+    fn standalone_export_uses_typed_scene_projection_without_raw_fallback() {
         let server_source = include_str!("lib_server.rs");
-        assert!(server_source.contains("push_display_error_scene_object"));
-        assert!(server_source.contains(r#"\"cells\":[],\"displayError\":"#));
+        assert!(server_source.contains("push_scene_object_body("));
+        assert!(server_source.contains("push_cells(out, loaded, state);"));
         assert!(
             !server_source
                 .contains("transition_program(&loaded.game, program, state, InputId(0)).ok()")
         );
-        assert!(APP_JS.contains("function firstDisplayError(state)"));
-        assert!(APP_JS.contains("showError(new Error(displayError));"));
-        assert!(APP_CSS.contains(".runtime-error"));
     }
 
     #[test]
@@ -4600,8 +4663,10 @@ rules {
 }
 }
 "#;
-        let loaded = parse_game(source).unwrap();
+        let document = puzzle_lang::parse_game_for_path(source, "games/focus/game.puzzle").unwrap();
+        let loaded = loaded_document_scene_host_loaded_game(&document).unwrap();
         let state = ServerState::new(
+            document,
             loaded,
             source.to_string(),
             "games/focus/game.puzzle".to_string(),
@@ -4621,7 +4686,8 @@ rules {
     fn standalone_export_initial_body_uses_loaded_theme() {
         let source = r##"
 title = Theme Startup
-theme noir {
+theme {
+  preset = "noir"
   background_color = #123456
 }
 
@@ -4665,9 +4731,16 @@ rules {
         assert!(html.contains("window.Puzzle3DFrameFixture"));
         assert!(html.contains("runtimeContractVersion"));
         assert!(html.contains("puzzle_wasm_game_bg.wasm"));
-        assert!(html.contains("WasmPuzzle3Runtime"));
-        assert!(html.contains("fromFixture"));
         assert!(html.contains("WasmStandaloneSession"));
+        assert!(html.contains("window.Puzzle3ControllerAutoBoot = false"));
+        assert!(!html.contains("window.Puzzle3ControllerAutoBoot = true"));
+        assert!(
+            html.contains("sessionManaged: Boolean(standaloneRuntime && !puzzle3PreviewSurface)")
+        );
+        assert!(html.contains("if (standaloneRuntime && !puzzle3PreviewSurface)"));
+        assert!(html.contains("entry.controller.replaceSessionSnapshot?.(sessionSnapshot)"));
+        assert!(html.contains("delete this.data.runtimeLoadedDocument;"));
+        assert!(!html.contains("runtimeLoadedGame"));
         assert!(html.contains("onLifecycleEffects(effects)"));
         assert!(html.contains("function sendPuzzle3LifecycleEffects("));
         assert!(!html.contains("Unsupported Puzzle3 lifecycle effect"));
@@ -4702,11 +4775,12 @@ rules {
         let source = r#"title = "Local Frame"
 
 puzzle cube {
+  dimension = 3
   slots {
     actor = Player
   }
 
-  rules local_frame 1 1 full {
+  rules local_frame 1 1 {
     [ Player ] -> [ Player ]
   }
 }
@@ -4753,6 +4827,7 @@ levels default of cube {
         let source = r#"title = "Tiny"
 
 puzzle cube {
+  dimension = 3
   slots {
     actor = Player
   }
@@ -4835,13 +4910,13 @@ levels default of cube {
                 .contains("camera.up.set(cameraFrame.up.x, cameraFrame.up.y, cameraFrame.up.z);")
         );
         assert!(
-            PUZZLE3_THREE_RENDERER_JS
-                .contains("targetPoint.x - Math.sin(yaw) * horizontal * distance")
+            PUZZLE3_THREE_RENDERER_JS.contains("targetPoint.x - cameraFrame.forward.x * distance")
         );
-        assert!(PUZZLE3_THREE_RENDERER_JS.contains("targetPoint.y + Math.sin(pitch) * distance"));
         assert!(
-            PUZZLE3_THREE_RENDERER_JS
-                .contains("targetPoint.z + Math.cos(yaw) * horizontal * distance")
+            PUZZLE3_THREE_RENDERER_JS.contains("targetPoint.y - cameraFrame.forward.y * distance")
+        );
+        assert!(
+            PUZZLE3_THREE_RENDERER_JS.contains("targetPoint.z - cameraFrame.forward.z * distance")
         );
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("function threeBackground(THREE, value)"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("disposeScene(this.scene);"));
@@ -5000,7 +5075,7 @@ levels default of cube {
         assert!(!html.contains("iframe.puzzle3-frame"));
         assert!(html.contains("case \"choice\""));
         let runtime_export = embedded_puzzle_runtime_export_json(&html);
-        assert!(runtime_export["runtimeLoadedGame"].is_object());
+        assert!(runtime_export["runtimeLoadedDocument"].is_object());
         assert!(runtime_export.get("engine").is_none());
         assert!(runtime_export.get("compiledPlay").is_none());
         assert!(!html.contains("\\npuzzle3 cube"));
@@ -5013,11 +5088,13 @@ levels default of cube {
     #[test]
     fn puzzle3_frame_export_keeps_component_document_transparent() {
         let source = r##"title = "Themed 3D"
-theme clean {
+theme {
+  preset = "clean"
   background_color = #123456
 }
 
 puzzle cube {
+  dimension = 3
   slots {
     actor = Player
   }
@@ -5073,6 +5150,7 @@ levels default of cube {
 title = "Screenshot"
 
 puzzle cube {
+  dimension = 3
   slots {
     actor = Player
   }

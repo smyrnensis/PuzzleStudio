@@ -310,6 +310,7 @@ pub enum SceneComponent<
     TextExpr = SceneTextExpr,
     ConditionExpr = String,
 > {
+    Viewport(ViewportComponent),
     Frame(FrameComponent),
     Text(SceneTextComponent<TextExpr>),
     Button(SceneButton<Effect, LabelExpr>),
@@ -327,6 +328,7 @@ impl<Effect, LabelExpr, TextExpr, ConditionExpr>
 {
     pub fn kind(&self) -> SceneComponentKind {
         match self {
+            Self::Viewport(_) => SceneComponentKind::Viewport,
             Self::Frame(_) => SceneComponentKind::Frame,
             Self::Text(_) => SceneComponentKind::Text,
             Self::Button(_) => SceneComponentKind::Button,
@@ -366,6 +368,7 @@ impl<Effect, LabelExpr, TextExpr, ConditionExpr>
 
     pub fn layout(&self) -> Option<&SceneLayout> {
         match self {
+            Self::Viewport(component) => Some(&component.layout),
             Self::Frame(component) => Some(&component.layout),
             Self::Button(button) | Self::Choice(button) => Some(&button.layout),
             Self::Row(container) | Self::Column(container) | Self::Box(container) => {
@@ -379,6 +382,7 @@ impl<Effect, LabelExpr, TextExpr, ConditionExpr>
 
     pub fn layout_mut(&mut self) -> Option<&mut SceneLayout> {
         match self {
+            Self::Viewport(component) => Some(&mut component.layout),
             Self::Frame(component) => Some(&mut component.layout),
             Self::Button(button) | Self::Choice(button) => Some(&mut button.layout),
             Self::Row(container) | Self::Column(container) | Self::Box(container) => {
@@ -393,6 +397,7 @@ impl<Effect, LabelExpr, TextExpr, ConditionExpr>
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SceneComponentKind {
+    Viewport,
     Frame,
     Text,
     Button,
@@ -408,6 +413,7 @@ pub enum SceneComponentKind {
 impl SceneComponentKind {
     pub fn keyword(self) -> &'static str {
         match self {
+            Self::Viewport => "puzzle",
             Self::Frame => "frame",
             Self::Text => "text",
             Self::Button => "button",
@@ -423,7 +429,8 @@ impl SceneComponentKind {
 
     pub fn from_keyword(value: &str) -> Option<Self> {
         Some(match value {
-            "frame" | "puzzle" | "puzzle3" => Self::Frame,
+            "puzzle" | "puzzle3" => Self::Viewport,
+            "frame" => Self::Frame,
             "heading" | "subheading" | "text" | "caption" => Self::Text,
             "button" => Self::Button,
             "choice" => Self::Choice,
@@ -457,6 +464,21 @@ pub const GENERIC_SCENE_COMPONENT_KINDS: &[SceneComponentKind] = &[
 pub struct FrameComponent {
     pub kind: String,
     pub source: String,
+    pub inputs: Vec<SceneInputBinding>,
+    pub layout: SceneLayout,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ViewportProjection {
+    #[default]
+    TwoD,
+    ThreeD,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ViewportComponent {
+    pub source: String,
+    pub projection: ViewportProjection,
     pub inputs: Vec<SceneInputBinding>,
     pub layout: SceneLayout,
 }
@@ -1106,7 +1128,7 @@ pub enum SceneBinaryOp {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SceneFixtureJsonOptions<'a> {
-    pub frame_kind: Option<&'a str>,
+    pub viewport_projection: Option<ViewportProjection>,
     pub default_level_menu_action: Option<&'a SceneEffect>,
 }
 
@@ -1122,13 +1144,27 @@ where
     LevelSource: FnMut(&str),
 {
     match component {
-        SceneComponent::Frame(frame) => {
+        SceneComponent::Viewport(viewport) => {
             if options
-                .frame_kind
-                .is_some_and(|frame_kind| frame.kind != frame_kind)
+                .viewport_projection
+                .is_some_and(|projection| viewport.projection != projection)
             {
                 return false;
             }
+            out.push_str("{ \"kind\": ");
+            write_json_string(
+                out,
+                match viewport.projection {
+                    ViewportProjection::TwoD => "puzzle",
+                    ViewportProjection::ThreeD => "puzzle3",
+                },
+            );
+            out.push_str(", \"source\": ");
+            write_json_string(out, &viewport.source);
+            push_inline_layout_json(out, &viewport.layout);
+            out.push_str(" }");
+        }
+        SceneComponent::Frame(frame) => {
             out.push_str("{ \"kind\": ");
             write_json_string(out, &frame.kind);
             out.push_str(", \"source\": ");
@@ -2120,11 +2156,11 @@ mod tests {
         }
         assert_eq!(
             SceneComponentKind::from_keyword("puzzle"),
-            Some(SceneComponentKind::Frame)
+            Some(SceneComponentKind::Viewport)
         );
         assert_eq!(
             SceneComponentKind::from_keyword("puzzle3"),
-            Some(SceneComponentKind::Frame)
+            Some(SceneComponentKind::Viewport)
         );
         assert_eq!(SceneComponentKind::from_keyword("panel"), None);
     }

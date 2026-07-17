@@ -7,7 +7,6 @@ license.workspace = true
 [dependencies]
 puzzle-authoring = { path = "../authoring" }
 puzzle-core = { path = "../core" }
-puzzle-grid3d = { path = "../grid3d" }
 puzzle-kernel = { path = "../kernel" }
 puzzle-runtime-contract = { path = "../runtime_contract" }
 puzzle-scene = { path = "../scene" }

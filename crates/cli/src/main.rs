@@ -289,18 +289,18 @@ fn inspect_document_text(document: &LoadedDocument) -> String {
                     }
                 }
             }
-            LoadedDocumentModel::Puzzle3d { name, puzzle } => {
+            LoadedDocumentModel::Puzzle3d { name, game, .. } => {
                 if multi_model {
                     out.push_str(&format!("  {name}:\n"));
                 }
-                let Some(bundle) = puzzle.level_bundle.as_ref() else {
+                if game.levels.is_empty() {
                     if multi_model {
                         out.push_str("    (none)\n");
                     }
                     continue;
-                };
+                }
                 any_levels = true;
-                for (index, level) in bundle.levels.iter().enumerate() {
+                for (index, level) in game.levels.iter().enumerate() {
                     if multi_model {
                         out.push_str(&format!("    {index}: {}\n", level.name));
                     } else {
@@ -343,11 +343,11 @@ fn inspect_document_text(document: &LoadedDocument) -> String {
                     }
                 }
             }
-            LoadedDocumentModel::Puzzle3d { name, puzzle } => {
+            LoadedDocumentModel::Puzzle3d { name, game, .. } => {
                 if multi_model {
                     out.push_str(&format!("  {name}:\n"));
                 }
-                let mut inputs = puzzle
+                let mut inputs = game
                     .inputs
                     .iter()
                     .map(|input| (input.id.0, input.name.as_str()))

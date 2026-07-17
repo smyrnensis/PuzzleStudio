@@ -1,41 +1,17 @@
-use std::collections::HashMap;
-
-use puzzle_grid3d::{
-    CompiledGame3, GridRuleStep, InputDef3, InputId, LevelBundle3, ObjectId, WinCondition3,
-};
+use puzzle_core::ObjectId;
 use puzzle_kernel::LocalFrame;
-use puzzle_runtime_contract::{Puzzle3CameraEffect, RuntimeLifecycle};
+use puzzle_runtime_contract::CameraEffect;
 
-use crate::{AnimationDef, PuzzleRenderDef, SolverStrategy3, SpriteSet3, VisualOrderDef};
+use crate::{VisualOrderDef, VoxelSpriteSet};
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct ParsedPuzzle3 {
-    pub game: CompiledGame3,
-    pub inputs: Vec<InputDef3>,
-    pub object_labels: HashMap<ObjectId, String>,
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SpatialPresentation {
     pub viewport_focus_objects: Vec<ObjectId>,
-    pub animation: AnimationDef,
-    pub render: PuzzleRenderDef,
     pub local_frame: Option<LocalFrame<ObjectId>>,
-    pub rule_camera_effects: Vec<Vec<Puzzle3CameraEffect>>,
-    pub level_bundle: Option<LevelBundle3>,
-    pub level_packs: Vec<Option<String>>,
-    pub win_condition: Option<WinCondition3>,
-    pub solver_strategy: SolverStrategy3,
-    pub lifecycle: RuntimeLifecycle<GridRuleStep<3>, LocalFrame<ObjectId>>,
-    pub on_level_start_camera_effects: Vec<Vec<Puzzle3CameraEffect>>,
-    pub sprite_set: Option<SpriteSet3>,
+    pub rule_camera_effects: Vec<Vec<CameraEffect>>,
+    pub on_level_start_camera_effects: Vec<Vec<CameraEffect>>,
+    pub sprite_set: Option<VoxelSpriteSet>,
     pub visual_order: VisualOrderDef,
-}
-
-impl ParsedPuzzle3 {
-    pub fn input(&self, input: InputId) -> Option<&InputDef3> {
-        self.inputs.iter().find(|def| def.id == input)
-    }
-
-    pub fn input_by_name(&self, name: &str) -> Option<&InputDef3> {
-        self.inputs.iter().find(|def| def.name == name)
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

@@ -1,11 +1,11 @@
-use crate::{SpriteSpace3, SpriteSpatialOp3};
+use crate::{VisualSpriteSpace, VisualSpriteTransform};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct SpriteAffine3 {
+pub struct SpatialSpriteAffine {
     pub matrix: [[f64; 4]; 4],
 }
 
-impl Default for SpriteAffine3 {
+impl Default for SpatialSpriteAffine {
     fn default() -> Self {
         Self {
             matrix: [
@@ -18,7 +18,7 @@ impl Default for SpriteAffine3 {
     }
 }
 
-impl SpriteAffine3 {
+impl SpatialSpriteAffine {
     pub fn transform_point(self, p: [f64; 3]) -> [f64; 3] {
         let m = self.matrix;
         [
@@ -29,27 +29,40 @@ impl SpriteAffine3 {
     }
 }
 
-pub fn evaluate_sprite_spatial_ops3(ops: &[SpriteSpatialOp3]) -> SpriteAffine3 {
-    let mut result = SpriteAffine3::default().matrix;
-    for op in ops {
-        let (space, op_matrix) = match *op {
-            SpriteSpatialOp3::Translate { space, value } => (space, translation(value)),
-            SpriteSpatialOp3::Rotate {
+pub fn evaluate_spatial_sprite_transforms(
+    transforms: &[VisualSpriteTransform],
+) -> SpatialSpriteAffine {
+    let mut result = SpatialSpriteAffine::default().matrix;
+    for transform in transforms {
+        let (space, op_matrix) = match *transform {
+            VisualSpriteTransform::Translate { space, value } => (space, translation(value)),
+            VisualSpriteTransform::Rotate {
                 space,
                 axis,
                 degrees,
             } => (space, rotation(axis, degrees)),
+            VisualSpriteTransform::Flip { enabled } => {
+                if !enabled {
+                    continue;
+                }
+                (VisualSpriteSpace::Local, reflection_x())
+            }
         };
         result = match space {
-            SpriteSpace3::World => multiply(op_matrix, result),
-            SpriteSpace3::Local => multiply(result, op_matrix),
+            VisualSpriteSpace::World => multiply(op_matrix, result),
+            VisualSpriteSpace::Local => multiply(result, op_matrix),
         };
     }
-    SpriteAffine3 { matrix: result }
+    SpatialSpriteAffine { matrix: result }
+}
+fn reflection_x() -> [[f64; 4]; 4] {
+    let mut m = SpatialSpriteAffine::default().matrix;
+    m[0][0] = -1.0;
+    m
 }
 
 fn translation([x, y, z]: [f64; 3]) -> [[f64; 4]; 4] {
-    let mut m = SpriteAffine3::default().matrix;
+    let mut m = SpatialSpriteAffine::default().matrix;
     m[0][3] = x;
     m[1][3] = y;
     m[2][3] = z;
@@ -87,13 +100,13 @@ mod tests {
     }
     #[test]
     fn world_rotation_rotates_earlier_translation() {
-        let p = evaluate_sprite_spatial_ops3(&[
-            SpriteSpatialOp3::Translate {
-                space: SpriteSpace3::World,
+        let p = evaluate_spatial_sprite_transforms(&[
+            VisualSpriteTransform::Translate {
+                space: VisualSpriteSpace::World,
                 value: [1.0, 0.0, 0.0],
             },
-            SpriteSpatialOp3::Rotate {
-                space: SpriteSpace3::World,
+            VisualSpriteTransform::Rotate {
+                space: VisualSpriteSpace::World,
                 axis: [0.0, 0.0, 1.0],
                 degrees: 90.0,
             },
@@ -102,13 +115,13 @@ mod tests {
     }
     #[test]
     fn local_rotation_uses_translated_local_origin() {
-        let p = evaluate_sprite_spatial_ops3(&[
-            SpriteSpatialOp3::Translate {
-                space: SpriteSpace3::World,
+        let p = evaluate_spatial_sprite_transforms(&[
+            VisualSpriteTransform::Translate {
+                space: VisualSpriteSpace::World,
                 value: [1.0, 0.0, 0.0],
             },
-            SpriteSpatialOp3::Rotate {
-                space: SpriteSpace3::Local,
+            VisualSpriteTransform::Rotate {
+                space: VisualSpriteSpace::Local,
                 axis: [0.0, 0.0, 1.0],
                 degrees: 90.0,
             },

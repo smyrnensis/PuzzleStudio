@@ -120,6 +120,12 @@ const VISUAL_LINE_HEAD_EXPECTED: &[ExpectedCompletionValue] = &[
     ExpectedCompletionValue::SpriteSelector,
 ];
 
+pub(crate) const DEFAULT_LEVEL_EMPTY_CHAR: char = '.';
+
+pub(crate) fn level_legend_char_requires_import_remap(ch: char) -> bool {
+    ch == DEFAULT_LEVEL_EMPTY_CHAR || matches!(ch, '{' | '}' | '"' | ';')
+}
+
 pub(crate) fn visual_line_head_expected_completion_values() -> &'static [ExpectedCompletionValue] {
     VISUAL_LINE_HEAD_EXPECTED
 }

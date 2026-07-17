@@ -14,6 +14,7 @@ actor = Chain Left Right UpMover Wall
 
 groups {
 movers = Chain Left Right UpMover
+object = movers Wall
 }
 
 sprites {
@@ -60,6 +61,18 @@ Wall
 
 sounds {
 move movers -> sfx move
+}
+
+routine move {
+repeat {
+for d in directions {
+d [ d object | no object no {__move_collision} ] -> [ | object{no directions} ]
+}
+for d in directions {
+once_all d [ d object ] -> [ object ]
+}
+once_all [ {__move_collision} ] -> [ ]
+}
 }
 
 rules {

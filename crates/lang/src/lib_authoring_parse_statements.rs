@@ -26,13 +26,13 @@ fn parse_rule_name_and_params(
 }
 
 fn parse_rule_application(
-    tokens: &[&str],
+    tokens: &[String],
     declaration: &str,
     line: &str,
 ) -> Result<RuleApplication, DiagnosticReport> {
     match tokens {
-        [kind, _] if *kind == declaration => Ok(RuleApplication::Once),
-        [kind, _, application] if *kind == declaration => {
+        [kind, _] if kind == declaration => Ok(RuleApplication::Once),
+        [kind, _, application] if kind == declaration => {
             parse_application_keyword(application, line)
         }
         _ => Err(parse_error(
@@ -57,7 +57,7 @@ fn parse_application_keyword(token: &str, line: &str) -> Result<RuleApplication,
 }
 
 fn parse_fix_defaults(
-    tokens: &[&str],
+    tokens: &[String],
     line: &str,
     rule_params: &[String],
 ) -> Result<FixDefaults, DiagnosticReport> {
@@ -70,7 +70,7 @@ fn parse_fix_defaults(
 
     let mut defaults = FixDefaults::default();
     for token in &tokens[1..] {
-        match *token {
+        match token.as_str() {
             "once" | "once_all" | "once_per_level" | "random" | "repeat" => {
                 let application = parse_application_keyword(token, line)?;
                 if defaults.application.replace(application).is_some() {
@@ -102,7 +102,7 @@ fn collect_statement_block_lines(
     let mut i = start;
     while i < lines.len() {
         let nested_line = &lines[i];
-        let next_depth = depth + raw_brace_delta(strip_line_comment(nested_line));
+        let next_depth = depth + nested_line.structural_brace_delta();
         if next_depth == 0 {
             return Ok((body, i + 1));
         }
@@ -151,15 +151,15 @@ fn lower_statement_condition_syntax(
 ) -> Result<ConditionAst, DiagnosticReport> {
     let mut conditions = Vec::new();
     for statement in syntax {
-        let puzzle_authoring::RuleStatementSyntax::Line(line) = statement else {
+        if statement.statements().is_some() {
             return Err(parse_error(
-                rule_statement_source(statement),
+                statement.source(),
                 "if condition block accepts condition rows, not nested blocks",
             ));
-        };
+        }
         conditions.push(parse_statement_condition(
-            &line.text,
-            &line.source,
+            statement.text(),
+            statement.source(),
             input_names,
             variable_names,
             condition_names,
@@ -200,59 +200,93 @@ fn lower_statement_arrow_syntax(
     named_conditions: &HashMap<String, (String, ConditionAst)>,
     rule_params: &[String],
 ) -> Result<Vec<StatementAst>, DiagnosticReport> {
-    let (line, nested) = match statement {
-        puzzle_authoring::RuleStatementSyntax::Line(line) => (line, None),
-        puzzle_authoring::RuleStatementSyntax::Block { header, statements } => {
-            (header, Some(statements.as_slice()))
-        }
-    };
-    let Some((_, effect_text)) = line.text.split_once("->") else {
+    let puzzle_authoring::RuleStatementNode::Arrow(target) = statement.node() else {
         return Err(parse_error(
-            &line.source,
+            statement.source(),
             "if condition block must be followed by ->",
         ));
     };
-    let effect_text = effect_text.trim();
-    if let Some(nested) = nested {
-        if !effect_text.is_empty() {
-            return Err(parse_error(
-                &line.source,
-                "if -> block header must be: -> {",
-            ));
+    lower_statement_target_syntax(
+        statement,
+        target,
+        statement.statements(),
+        header_line,
+        object_names,
+        object_schemas,
+        value_sets,
+        maps,
+        object_groups,
+        input_names,
+        variable_names,
+        numeric_variables,
+        condition_names,
+        named_conditions,
+        rule_params,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_statement_target_syntax(
+    line: &puzzle_authoring::RuleStatementSyntax<source::LogicalLine>,
+    target: &puzzle_authoring::RuleStatementTargetSurface,
+    nested: Option<&[puzzle_authoring::RuleStatementSyntax<source::LogicalLine>]>,
+    header_line: &str,
+    object_names: &HashMap<String, ObjectId>,
+    object_schemas: &HashMap<String, ObjectSchema>,
+    value_sets: &HashMap<String, Vec<String>>,
+    maps: &HashMap<String, ValueMap>,
+    object_groups: &HashMap<String, Vec<ObjectId>>,
+    input_names: &HashMap<String, InputId>,
+    variable_names: &HashMap<String, VariableId>,
+    numeric_variables: &HashMap<String, i64>,
+    condition_names: &HashMap<String, ConditionId>,
+    named_conditions: &HashMap<String, (String, ConditionAst)>,
+    rule_params: &[String],
+) -> Result<Vec<StatementAst>, DiagnosticReport> {
+    match (target, nested) {
+        (puzzle_authoring::RuleStatementTargetSurface::Empty, Some(nested)) => {
+            lower_statement_syntax(
+                nested,
+                object_names,
+                object_schemas,
+                value_sets,
+                maps,
+                object_groups,
+                input_names,
+                variable_names,
+                numeric_variables,
+                condition_names,
+                named_conditions,
+                rule_params,
+            )
         }
-        return lower_statement_syntax(
-            nested,
-            object_names,
-            object_schemas,
-            value_sets,
-            maps,
-            object_groups,
-            input_names,
-            variable_names,
-            numeric_variables,
-            condition_names,
-            named_conditions,
-            rule_params,
-        );
-    }
-    if effect_text.is_empty() {
-        return Err(parse_error(
-            &line.source,
+        (puzzle_authoring::RuleStatementTargetSurface::Empty, None) => Err(parse_error(
+            line.source(),
             "if -> must be followed by an effect or block",
-        ));
+        )),
+        (_, Some(_)) => Err(parse_error(
+            line.source(),
+            "if -> block header must be: -> {",
+        )),
+        (puzzle_authoring::RuleStatementTargetSurface::Call { name, .. }, None) => {
+            Ok(vec![StatementAst::Call {
+                name: name.clone(),
+                source_line: line.text().to_string(),
+                source_line_number: Some(line.source().line),
+            }])
+        }
+        (puzzle_authoring::RuleStatementTargetSurface::Effect { span }, None) => {
+            Ok(vec![StatementAst::Effect {
+                source_line: line.text().to_string(),
+                source_line_number: Some(line.source().line),
+                effects: parse_rewrite_effect(&line.text()[span.clone()], header_line)?,
+            }])
+        }
+        (puzzle_authoring::RuleStatementTargetSurface::Invalid { span }, None) => Err(parse_error(
+            line.source(),
+            &format!("invalid statement target: {}", &line.text()[span.clone()]),
+        )),
     }
-    if is_qualified_identifier(effect_text) && !is_builtin_rewrite_effect_text(effect_text) {
-        return Ok(vec![StatementAst::Call {
-            name: effect_text.to_string(),
-            source_line: line.text.clone(),
-            source_line_number: Some(line.source.line),
-        }]);
-    }
-    Ok(vec![StatementAst::Effect {
-        source_line: line.text.clone(),
-        source_line_number: Some(line.source.line),
-        effects: parse_rewrite_effect(effect_text, header_line)?,
-    }])
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -401,22 +435,15 @@ fn expand_for_binding_syntax(
 ) -> Result<Vec<puzzle_authoring::RuleStatementSyntax<source::LogicalLine>>, DiagnosticReport> {
     syntax
         .iter()
-        .map(|statement| match statement {
-            puzzle_authoring::RuleStatementSyntax::Line(line) => Ok(
-                puzzle_authoring::RuleStatementSyntax::Line(puzzle_authoring::RuleStatementLine {
-                    source: line.source.clone(),
-                    text: expand_for_binding_line(&line.text, binding, value, maps)?,
-                }),
-            ),
-            puzzle_authoring::RuleStatementSyntax::Block { header, statements } => {
-                Ok(puzzle_authoring::RuleStatementSyntax::Block {
-                    header: puzzle_authoring::RuleStatementLine {
-                        source: header.source.clone(),
-                        text: expand_for_binding_line(&header.text, binding, value, maps)?,
-                    },
-                    statements: expand_for_binding_syntax(statements, binding, value, maps)?,
-                })
-            }
+        .map(|statement| {
+            let statements = statement
+                .statements()
+                .map(|statements| expand_for_binding_syntax(statements, binding, value, maps))
+                .transpose()?;
+            Ok(statement.instantiate(
+                expand_for_binding_line(statement.text(), binding, value, maps)?,
+                statements,
+            ))
         })
         .collect()
 }
@@ -731,13 +758,18 @@ fn lower_statement_syntax(
     macro_rules! lower_optional_else {
         ($next:expr) => {{
             match syntax.get($next) {
-                Some(puzzle_authoring::RuleStatementSyntax::Block { header, statements })
-                    if header.text == "else" =>
+                Some(statement)
+                    if matches!(statement.node(), puzzle_authoring::RuleStatementNode::Else) =>
                 {
-                    lower_statements!(statements).map(|lowered| (lowered, $next + 1))
-                }
-                Some(puzzle_authoring::RuleStatementSyntax::Line(line)) if line.text == "else" => {
-                    Err(parse_error(&line.source, "else block must use `{ ... }`"))
+                    match statement.statements() {
+                        Some(statements) => {
+                            lower_statements!(statements).map(|lowered| (lowered, $next + 1))
+                        }
+                        None => Err(parse_error(
+                            statement.source(),
+                            "else block must use `{ ... }`",
+                        )),
+                    }
                 }
                 _ => Ok((Vec::new(), $next)),
             }
@@ -745,20 +777,16 @@ fn lower_statement_syntax(
     }
 
     while i < syntax.len() {
-        let (statement_line, nested_syntax) = match &syntax[i] {
-            puzzle_authoring::RuleStatementSyntax::Line(line) => (line, None),
-            puzzle_authoring::RuleStatementSyntax::Block { header, statements } => {
-                (header, Some(statements.as_slice()))
-            }
-        };
-        let source_line = &statement_line.source;
+        let statement_line = &syntax[i];
+        let nested_syntax = statement_line.statements();
+        let source_line = statement_line.source();
         let source_line_number = Some(source_line.line);
         let next_statement_i = i + 1;
-        let line = statement_line.text.as_str();
+        let line = statement_line.text();
         let opens_block = nested_syntax.is_some();
-        let tokens = split_header_tokens(line);
-        match tokens.first().copied() {
-            Some("routine") => {
+        let tokens = statement_line.tokens();
+        match statement_line.node() {
+            puzzle_authoring::RuleStatementNode::Routine => {
                 if !opens_block {
                     extend_report_with_source_line_number(
                         &mut diagnostics,
@@ -771,7 +799,6 @@ fn lower_statement_syntax(
                 }
                 let definition = recover_current_statement!(lower_rule_definition_syntax(
                     statement_line,
-                    nested_syntax.expect("checked block syntax"),
                     object_names,
                     object_schemas,
                     value_sets,
@@ -800,7 +827,7 @@ fn lower_statement_syntax(
                 });
                 i += 1;
             }
-            Some("for") => {
+            puzzle_authoring::RuleStatementNode::For(for_syntax) => {
                 if !opens_block {
                     extend_report_with_source_line_number(
                         &mut diagnostics,
@@ -811,11 +838,6 @@ fn lower_statement_syntax(
                     i += 1;
                     continue;
                 }
-                let for_syntax = recover_current_statement!(
-                    crate::rule_syntax::parse_rule_for_syntax(line)
-                        .map_err(|error| parse_error(line, error))?
-                        .ok_or_else(|| parse_error(line, "expected for rule syntax"))
-                );
                 let source_refs = for_syntax
                     .sources
                     .iter()
@@ -871,9 +893,9 @@ fn lower_statement_syntax(
                 i += 1;
                 continue;
             }
-            Some("fix") => {
+            puzzle_authoring::RuleStatementNode::Fix => {
                 let defaults =
-                    recover_current_statement!(parse_fix_defaults(&tokens, line, rule_params));
+                    recover_current_statement!(parse_fix_defaults(tokens, line, rule_params));
                 let (nested, next_i) =
                     recover_current_statement!(lower_nested_statement!(nested_syntax, line, i));
                 statements.push(StatementAst::Fix {
@@ -882,7 +904,7 @@ fn lower_statement_syntax(
                 });
                 i = next_i;
             }
-            Some("if") => {
+            puzzle_authoring::RuleStatementNode::If(if_surface) => {
                 if let Some(combinator) =
                     recover_current_statement!(parse_if_condition_block_header(line))
                 {
@@ -981,14 +1003,9 @@ fn lower_statement_syntax(
                     }
                     continue;
                 }
-                if let Some((condition_text, _)) = line
-                    .strip_prefix("if")
-                    .unwrap_or("")
-                    .trim_start()
-                    .split_once("->")
-                {
+                if let puzzle_authoring::RuleIfSurface::Inline { condition, target } = if_surface {
                     let condition = recover_current_statement!(parse_statement_condition(
-                        condition_text.trim(),
+                        &line[condition.clone()],
                         line,
                         input_names,
                         variable_names,
@@ -1000,21 +1017,24 @@ fn lower_statement_syntax(
                         maps,
                         object_groups,
                     ));
-                    let then_statements = recover_current_statement!(lower_statement_arrow_syntax(
-                        &syntax[i],
-                        line,
-                        object_names,
-                        object_schemas,
-                        value_sets,
-                        maps,
-                        object_groups,
-                        input_names,
-                        variable_names,
-                        numeric_variables,
-                        condition_names,
-                        named_conditions,
-                        rule_params,
-                    ));
+                    let then_statements =
+                        recover_current_statement!(lower_statement_target_syntax(
+                            statement_line,
+                            target,
+                            nested_syntax,
+                            line,
+                            object_names,
+                            object_schemas,
+                            value_sets,
+                            maps,
+                            object_groups,
+                            input_names,
+                            variable_names,
+                            numeric_variables,
+                            condition_names,
+                            named_conditions,
+                            rule_params,
+                        ));
                     let (else_statements, next_i) =
                         recover_current_statement!(lower_optional_else!(i + 1));
                     statements.push(StatementAst::If {
@@ -1053,7 +1073,7 @@ fn lower_statement_syntax(
                 });
                 i = next_i;
             }
-            Some("else") => {
+            puzzle_authoring::RuleStatementNode::Else => {
                 extend_report_with_source_line_number(
                     &mut diagnostics,
                     parse_error(line, "else without if"),
@@ -1062,7 +1082,7 @@ fn lower_statement_syntax(
                 );
                 i += 1;
             }
-            Some("when") => {
+            puzzle_authoring::RuleStatementNode::When => {
                 extend_report_with_source_line_number(
                     &mut diagnostics,
                     parse_error(line, "use `if` for conditions"),
@@ -1071,7 +1091,7 @@ fn lower_statement_syntax(
                 );
                 i += 1;
             }
-            Some("action") if tokens.len() > 1 => {
+            puzzle_authoring::RuleStatementNode::Action => {
                 extend_report_with_source_line_number(
                     &mut diagnostics,
                     parse_error(
@@ -1083,7 +1103,7 @@ fn lower_statement_syntax(
                 );
                 i += 1;
             }
-            Some("emit") => {
+            puzzle_authoring::RuleStatementNode::Emit => {
                 match parse_rewrite_effect(line, line) {
                     Ok(effects) => statements.push(StatementAst::Effect {
                         source_line: line.to_string(),
@@ -1099,7 +1119,7 @@ fn lower_statement_syntax(
                 }
                 i += 1;
             }
-            Some("do") => {
+            puzzle_authoring::RuleStatementNode::Do => {
                 extend_report_with_source_line_number(
                     &mut diagnostics,
                     parse_error(
@@ -1111,14 +1131,11 @@ fn lower_statement_syntax(
                 );
                 i += 1;
             }
-            _ if is_input_effect_statement(line) => {
-                let (input_name, effect_text) = line
-                    .split_once("->")
-                    .expect("input effect statement contains arrow");
-                let input_name = input_name.trim();
+            puzzle_authoring::RuleStatementNode::InputEffect(surface) => {
+                let input_name = &line[surface.input.clone()];
                 recover_current_statement!(validate_identifier(input_name, line, "input name"));
                 let condition = ConditionAst::InputIs(input_name.to_string());
-                let effect_text = effect_text.trim();
+                let effect_text = &line[surface.effect.clone()];
                 if effect_text.is_empty() || effect_text == "{" {
                     let (then_statements, next_i) =
                         recover_current_statement!(lower_nested_statement!(nested_syntax, line, i));
@@ -1153,7 +1170,7 @@ fn lower_statement_syntax(
                     i += 1;
                 }
             }
-            _ if is_builtin_rewrite_effect_text(line) => {
+            puzzle_authoring::RuleStatementNode::Effect => {
                 match parse_rewrite_effect(line, line) {
                     Ok(effects) => statements.push(StatementAst::Effect {
                         source_line: line.to_string(),
@@ -1169,197 +1186,98 @@ fn lower_statement_syntax(
                 }
                 i += 1;
             }
-            Some("[") => {
-                if let Some(statement) = match parse_conditional_call_statement(
-                    line,
-                    source_line_number,
-                    None,
-                    rule_params,
-                    object_names,
-                    object_schemas,
-                    value_sets,
-                    maps,
-                    object_groups,
-                    variable_names,
-                ) {
-                    Ok(statement) => statement,
-                    Err(report) => {
-                        extend_report_with_source_line_number(
-                            &mut diagnostics,
-                            report,
+            puzzle_authoring::RuleStatementNode::Rewrite(surface) => {
+                let lowered = match (&surface.syntax.after, &surface.target) {
+                    (None, puzzle_authoring::RuleStatementTargetSurface::Call { name, .. }) => {
+                        lower_conditional_call_statement(
                             line,
                             source_line_number,
-                        );
-                        i = next_statement_i;
-                        continue;
+                            surface,
+                            name,
+                            rule_params,
+                            object_names,
+                            object_schemas,
+                            value_sets,
+                            maps,
+                            object_groups,
+                            variable_names,
+                        )
                     }
-                } {
-                    statements.push(statement);
-                } else {
-                    match parse_neutral_rewrite_statement(
+                    _ => lower_rule_line_rewrite_statement(
                         line,
-                        None,
+                        surface,
+                        rule_params,
                         object_names,
                         object_schemas,
                         value_sets,
                         maps,
                         object_groups,
                         variable_names,
-                    ) {
-                        Ok(rewrite) => statements.push(StatementAst::Rewrite(
-                            rewrite_with_source_line_number(rewrite, source_line_number),
-                        )),
-                        Err(report) => extend_report_with_source_line_number(
-                            &mut diagnostics,
-                            report,
-                            line,
+                    )
+                    .map(|rewrite| {
+                        StatementAst::Rewrite(rewrite_with_source_line_number(
+                            rewrite,
                             source_line_number,
-                        ),
-                    }
+                        ))
+                    }),
+                };
+                match lowered {
+                    Ok(statement) => statements.push(statement),
+                    Err(report) => extend_report_with_source_line_number(
+                        &mut diagnostics,
+                        report,
+                        line,
+                        source_line_number,
+                    ),
                 }
                 i = next_statement_i;
             }
-            Some("once") => {
-                if tokens.len() == 1 {
-                    let (nested, next_i) =
-                        recover_current_statement!(lower_nested_statement!(nested_syntax, line, i));
-                    statements.push(StatementAst::Block {
-                        application: RuleApplication::Once,
-                        statements: nested,
-                    });
-                    i = next_i;
-                } else {
-                    match parse_application_prefixed_rewrite_statement(
-                        line,
-                        "once",
-                        RuleApplication::Once,
-                        rule_params,
-                        object_names,
-                        object_schemas,
-                        value_sets,
-                        maps,
-                        object_groups,
-                        variable_names,
-                    ) {
-                        Ok(rewrite) => statements.push(StatementAst::Rewrite(
-                            rewrite_with_source_line_number(rewrite, source_line_number),
-                        )),
-                        Err(report) => extend_report_with_source_line_number(
-                            &mut diagnostics,
-                            report,
-                            line,
-                            source_line_number,
-                        ),
-                    }
-                    i = next_statement_i;
-                }
+            puzzle_authoring::RuleStatementNode::InvalidRewrite { error, .. } => {
+                extend_report_with_source_line_number(
+                    &mut diagnostics,
+                    parse_error(line, error.message()),
+                    line,
+                    source_line_number,
+                );
+                i = next_statement_i;
             }
-            Some("once_all") => {
-                if tokens.len() == 1 {
-                    let (nested, next_i) =
-                        recover_current_statement!(lower_nested_statement!(nested_syntax, line, i));
-                    statements.push(StatementAst::Block {
-                        application: RuleApplication::OnceAll,
-                        statements: nested,
-                    });
-                    i = next_i;
-                } else {
-                    match parse_application_prefixed_rewrite_statement(
-                        line,
-                        "once_all",
-                        RuleApplication::OnceAll,
-                        rule_params,
-                        object_names,
-                        object_schemas,
-                        value_sets,
-                        maps,
-                        object_groups,
-                        variable_names,
-                    ) {
-                        Ok(rewrite) => statements.push(StatementAst::Rewrite(
-                            rewrite_with_source_line_number(rewrite, source_line_number),
-                        )),
-                        Err(report) => extend_report_with_source_line_number(
-                            &mut diagnostics,
-                            report,
-                            line,
-                            source_line_number,
-                        ),
-                    }
-                    i = next_statement_i;
-                }
+            puzzle_authoring::RuleStatementNode::Once => {
+                let (nested, next_i) =
+                    recover_current_statement!(lower_nested_statement!(nested_syntax, line, i));
+                statements.push(StatementAst::Block {
+                    application: RuleApplication::Once,
+                    statements: nested,
+                });
+                i = next_i;
             }
-            Some("once_per_level") => {
-                if tokens.len() == 1 {
-                    let (nested, next_i) =
-                        recover_current_statement!(lower_nested_statement!(nested_syntax, line, i));
-                    statements.push(StatementAst::Block {
-                        application: RuleApplication::OncePerLevel,
-                        statements: nested,
-                    });
-                    i = next_i;
-                } else {
-                    match parse_application_prefixed_rewrite_statement(
-                        line,
-                        "once_per_level",
-                        RuleApplication::OncePerLevel,
-                        rule_params,
-                        object_names,
-                        object_schemas,
-                        value_sets,
-                        maps,
-                        object_groups,
-                        variable_names,
-                    ) {
-                        Ok(rewrite) => statements.push(StatementAst::Rewrite(
-                            rewrite_with_source_line_number(rewrite, source_line_number),
-                        )),
-                        Err(report) => extend_report_with_source_line_number(
-                            &mut diagnostics,
-                            report,
-                            line,
-                            source_line_number,
-                        ),
-                    }
-                    i = next_statement_i;
-                }
+            puzzle_authoring::RuleStatementNode::OnceAll => {
+                let (nested, next_i) =
+                    recover_current_statement!(lower_nested_statement!(nested_syntax, line, i));
+                statements.push(StatementAst::Block {
+                    application: RuleApplication::OnceAll,
+                    statements: nested,
+                });
+                i = next_i;
             }
-            Some("random") => {
-                if tokens.len() == 1 {
-                    let (nested, next_i) =
-                        recover_current_statement!(lower_nested_statement!(nested_syntax, line, i));
-                    statements.push(StatementAst::Block {
-                        application: RuleApplication::Random,
-                        statements: nested,
-                    });
-                    i = next_i;
-                } else {
-                    match parse_application_prefixed_rewrite_statement(
-                        line,
-                        "random",
-                        RuleApplication::Random,
-                        rule_params,
-                        object_names,
-                        object_schemas,
-                        value_sets,
-                        maps,
-                        object_groups,
-                        variable_names,
-                    ) {
-                        Ok(rewrite) => statements.push(StatementAst::Rewrite(
-                            rewrite_with_source_line_number(rewrite, source_line_number),
-                        )),
-                        Err(report) => extend_report_with_source_line_number(
-                            &mut diagnostics,
-                            report,
-                            line,
-                            source_line_number,
-                        ),
-                    }
-                    i = next_statement_i;
-                }
+            puzzle_authoring::RuleStatementNode::OncePerLevel => {
+                let (nested, next_i) =
+                    recover_current_statement!(lower_nested_statement!(nested_syntax, line, i));
+                statements.push(StatementAst::Block {
+                    application: RuleApplication::OncePerLevel,
+                    statements: nested,
+                });
+                i = next_i;
             }
-            Some("repeat") => {
+            puzzle_authoring::RuleStatementNode::Random => {
+                let (nested, next_i) =
+                    recover_current_statement!(lower_nested_statement!(nested_syntax, line, i));
+                statements.push(StatementAst::Block {
+                    application: RuleApplication::Random,
+                    statements: nested,
+                });
+                i = next_i;
+            }
+            puzzle_authoring::RuleStatementNode::Repeat => {
                 if tokens.len() == 1 {
                     let (nested, next_i) =
                         recover_current_statement!(lower_nested_statement!(nested_syntax, line, i));
@@ -1368,7 +1286,7 @@ fn lower_statement_syntax(
                         statements: nested,
                     });
                     i = next_i;
-                } else if tokens.get(1).copied() == Some("until") {
+                } else if tokens.get(1).map(String::as_str) == Some("until") {
                     let condition_text = line
                         .strip_prefix("repeat")
                         .and_then(|rest| rest.trim_start().strip_prefix("until"))
@@ -1410,82 +1328,19 @@ fn lower_statement_syntax(
                     });
                     i = next_i;
                 } else {
-                    match parse_application_prefixed_rewrite_statement(
-                        line,
-                        "repeat",
-                        RuleApplication::UntilStable,
-                        rule_params,
-                        object_names,
-                        object_schemas,
-                        value_sets,
-                        maps,
-                        object_groups,
-                        variable_names,
-                    ) {
-                        Ok(rewrite) => statements.push(StatementAst::Rewrite(
-                            rewrite_with_source_line_number(rewrite, source_line_number),
-                        )),
-                        Err(report) => extend_report_with_source_line_number(
-                            &mut diagnostics,
-                            report,
+                    extend_report_with_source_line_number(
+                        &mut diagnostics,
+                        parse_error(
                             line,
-                            source_line_number,
+                            "repeat statement must be a block, `repeat until` block, or rewrite",
                         ),
-                    }
-                    i = next_statement_i;
+                        line,
+                        source_line_number,
+                    );
+                    i += 1;
                 }
             }
-            Some(_) if line.starts_with('[') => {
-                if let Some(statement) = match parse_conditional_call_statement(
-                    line,
-                    source_line_number,
-                    None,
-                    rule_params,
-                    object_names,
-                    object_schemas,
-                    value_sets,
-                    maps,
-                    object_groups,
-                    variable_names,
-                ) {
-                    Ok(statement) => statement,
-                    Err(report) => {
-                        extend_report_with_source_line_number(
-                            &mut diagnostics,
-                            report,
-                            line,
-                            source_line_number,
-                        );
-                        i = next_statement_i;
-                        continue;
-                    }
-                } {
-                    statements.push(statement);
-                } else {
-                    match parse_neutral_rewrite_statement(
-                        line,
-                        None,
-                        object_names,
-                        object_schemas,
-                        value_sets,
-                        maps,
-                        object_groups,
-                        variable_names,
-                    ) {
-                        Ok(rewrite) => statements.push(StatementAst::Rewrite(
-                            rewrite_with_source_line_number(rewrite, source_line_number),
-                        )),
-                        Err(report) => extend_report_with_source_line_number(
-                            &mut diagnostics,
-                            report,
-                            line,
-                            source_line_number,
-                        ),
-                    }
-                }
-                i = next_statement_i;
-            }
-            Some("display") => {
+            puzzle_authoring::RuleStatementNode::Display => {
                 if tokens.len() == 1 {
                     let (_, next_i) =
                         recover_current_statement!(lower_nested_statement!(nested_syntax, line, i));
@@ -1512,75 +1367,17 @@ fn lower_statement_syntax(
                     i += 1;
                 }
             }
-            Some(first) if is_oriented_rewrite_line(line, first) => {
-                if let Some(statement) = match parse_conditional_call_statement(
-                    line,
-                    source_line_number,
-                    Some(first),
-                    rule_params,
-                    object_names,
-                    object_schemas,
-                    value_sets,
-                    maps,
-                    object_groups,
-                    variable_names,
-                ) {
-                    Ok(statement) => statement,
-                    Err(report) => {
-                        extend_report_with_source_line_number(
-                            &mut diagnostics,
-                            report,
-                            line,
-                            source_line_number,
-                        );
-                        i = next_statement_i;
-                        continue;
-                    }
-                } {
-                    statements.push(statement);
-                } else {
-                    match parse_oriented_rewrite_statement(
-                        line,
-                        first,
-                        None,
-                        rule_params,
-                        object_names,
-                        object_schemas,
-                        value_sets,
-                        maps,
-                        object_groups,
-                        variable_names,
-                    ) {
-                        Ok(rewrite) => statements.push(StatementAst::Rewrite(
-                            rewrite_with_source_line_number(rewrite, source_line_number),
-                        )),
-                        Err(report) => extend_report_with_source_line_number(
-                            &mut diagnostics,
-                            report,
-                            line,
-                            source_line_number,
-                        ),
-                    }
-                }
-                i = next_statement_i;
-            }
-            Some(call) if tokens.len() == 1 && is_shared_rule_call_statement(line, call) => {
+            puzzle_authoring::RuleStatementNode::Call { name } => {
                 statements.push(StatementAst::Call {
-                    name: call.to_string(),
+                    name: name.clone(),
                     source_line: line.to_string(),
                     source_line_number,
                 });
                 i += 1;
             }
-            Some(call) if tokens.len() == 1 && is_at_identifier_token(call) => {
-                statements.push(StatementAst::Call {
-                    name: call.to_string(),
-                    source_line: line.to_string(),
-                    source_line_number,
-                });
-                i += 1;
-            }
-            Some(other) if scene_effect_command_syntax(other).is_some() => {
+            puzzle_authoring::RuleStatementNode::Other(Some(other))
+                if scene_effect_command_syntax(other).is_some() =>
+            {
                 extend_report_with_source_line_number(
                     &mut diagnostics,
                     parse_error(
@@ -1596,7 +1393,7 @@ fn lower_statement_syntax(
                 );
                 i += 1;
             }
-            Some(other) => {
+            puzzle_authoring::RuleStatementNode::Other(Some(other)) => {
                 extend_report_with_source_line_number(
                     &mut diagnostics,
                     parse_error(line, &format!("unknown statement directive {other}")),
@@ -1605,7 +1402,25 @@ fn lower_statement_syntax(
                 );
                 i += 1;
             }
-            None => i += 1,
+            puzzle_authoring::RuleStatementNode::Arrow(_) => {
+                extend_report_with_source_line_number(
+                    &mut diagnostics,
+                    parse_error(line, "statement arrow must follow an if condition block"),
+                    line,
+                    source_line_number,
+                );
+                i += 1;
+            }
+            puzzle_authoring::RuleStatementNode::ConditionRow => {
+                extend_report_with_source_line_number(
+                    &mut diagnostics,
+                    parse_error(line, "condition row is only valid inside `if [all | any]`"),
+                    line,
+                    source_line_number,
+                );
+                i += 1;
+            }
+            puzzle_authoring::RuleStatementNode::Other(None) => i += 1,
         }
     }
 
@@ -1619,17 +1434,7 @@ fn lower_statement_syntax(
 fn rule_statement_source(
     statement: &puzzle_authoring::RuleStatementSyntax<source::LogicalLine>,
 ) -> &source::LogicalLine {
-    match statement {
-        puzzle_authoring::RuleStatementSyntax::Line(line) => &line.source,
-        puzzle_authoring::RuleStatementSyntax::Block { header, .. } => &header.source,
-    }
-}
-
-fn is_shared_rule_call_statement(line: &str, expected_name: &str) -> bool {
-    matches!(
-        puzzle_authoring::rule_statement_surface(line),
-        Ok(puzzle_authoring::RuleStatementSurface::Call { name }) if name == expected_name
-    )
+    statement.source()
 }
 
 fn rewrite_with_source_line_number(
@@ -1641,10 +1446,11 @@ fn rewrite_with_source_line_number(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn parse_conditional_call_statement(
+fn lower_conditional_call_statement(
     line: &str,
     source_line_number: Option<usize>,
-    orientation_token: Option<&str>,
+    surface: &puzzle_authoring::RuleRewriteSurface,
+    rule_name: &str,
     rule_params: &[String],
     object_names: &HashMap<String, ObjectId>,
     object_schemas: &HashMap<String, ObjectSchema>,
@@ -1652,39 +1458,32 @@ fn parse_conditional_call_statement(
     maps: &HashMap<String, ValueMap>,
     object_groups: &HashMap<String, Vec<ObjectId>>,
     variable_names: &HashMap<String, VariableId>,
-) -> Result<Option<StatementAst>, DiagnosticReport> {
-    let Some((left, right)) = line.split_once("->") else {
-        return Ok(None);
-    };
-    let rule_name = right.trim();
-    if !is_qualified_identifier(rule_name) {
-        return Ok(None);
+) -> Result<StatementAst, DiagnosticReport> {
+    let (orientation, application, rewrite) =
+        rewrite_orientation_and_application(line, &surface.line, rule_params)?;
+    if application.is_some() {
+        return Err(parse_error(
+            line,
+            "application-prefixed rewrite cannot target a routine call",
+        ));
     }
-    if is_builtin_rewrite_effect_text(rule_name) {
-        return Ok(None);
-    }
-
-    let (pattern, orientation) = if let Some(orientation_token) = orientation_token {
-        let (orientation, pattern) =
-            parse_oriented_rewrite_prefix(left, orientation_token, rule_params)?;
-        (pattern, Some(orientation))
-    } else {
-        (left.trim(), None)
-    };
-    let condition = parse_pattern_condition(
-        PatternPredicateAst::Some,
-        pattern,
-        line,
+    let rewrite_source = &line[rewrite];
+    let condition = PatternConditionAst {
+        predicate: PatternPredicateAst::Some,
         orientation,
-        object_names,
-        object_schemas,
-        value_sets,
-        maps,
-        object_groups,
-        variable_names,
-    )?;
+        pattern: lower_unresolved_pattern(
+            surface.syntax.before.clone(),
+            rewrite_source,
+            object_names,
+            object_schemas,
+            value_sets,
+            maps,
+            object_groups,
+            variable_names,
+        )?,
+    };
 
-    Ok(Some(StatementAst::Conditional {
+    Ok(StatementAst::Conditional {
         source_line: line.to_string(),
         source_line_number,
         condition,
@@ -1694,7 +1493,7 @@ fn parse_conditional_call_statement(
             source_line_number,
         }],
         else_statements: Vec::new(),
-    }))
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1810,126 +1609,10 @@ fn parse_pattern_condition(
     })
 }
 
-fn is_oriented_rewrite_line(line: &str, orientation_token: &str) -> bool {
-    if !line.trim_start().starts_with(orientation_token) {
-        return false;
-    }
-    matches!(
-        puzzle_authoring::rule_line_surface(line),
-        Ok(puzzle_authoring::RuleLineSurface::InputRewrite { .. })
-            | Ok(puzzle_authoring::RuleLineSurface::OrientedRewrite { .. })
-    )
-}
-
-fn parse_oriented_rewrite_statement(
-    line: &str,
-    orientation_token: &str,
-    application: Option<RuleApplication>,
-    rule_params: &[String],
-    object_names: &HashMap<String, ObjectId>,
-    object_schemas: &HashMap<String, ObjectSchema>,
-    value_sets: &HashMap<String, Vec<String>>,
-    maps: &HashMap<String, ValueMap>,
-    object_groups: &HashMap<String, Vec<ObjectId>>,
-    variable_names: &HashMap<String, VariableId>,
-) -> Result<OrientedRewriteAst, DiagnosticReport> {
-    if !line.trim_start().starts_with(orientation_token) {
-        return Err(parse_error(line, "missing oriented rewrite"));
-    }
-    let surface = puzzle_authoring::rule_line_surface(line)
-        .map_err(|error| parse_error(line, error.message()))?;
-    let parsed = parse_rule_line_rewrite_statement(
-        line,
-        surface,
-        rule_params,
-        object_names,
-        object_schemas,
-        value_sets,
-        maps,
-        object_groups,
-        variable_names,
-    )?;
-    if parsed.application.is_some() {
-        return Err(parse_error(line, "unexpected application-prefixed rewrite"));
-    }
-    Ok(OrientedRewriteAst {
-        application,
-        ..parsed
-    })
-}
-
-fn parse_neutral_rewrite_statement(
-    line: &str,
-    application: Option<RuleApplication>,
-    object_names: &HashMap<String, ObjectId>,
-    object_schemas: &HashMap<String, ObjectSchema>,
-    value_sets: &HashMap<String, Vec<String>>,
-    maps: &HashMap<String, ValueMap>,
-    object_groups: &HashMap<String, Vec<ObjectId>>,
-    variable_names: &HashMap<String, VariableId>,
-) -> Result<OrientedRewriteAst, DiagnosticReport> {
-    let surface = puzzle_authoring::rule_line_surface(line)
-        .map_err(|error| parse_error(line, error.message()))?;
-    let parsed = parse_rule_line_rewrite_statement(
-        line,
-        surface,
-        &[],
-        object_names,
-        object_schemas,
-        value_sets,
-        maps,
-        object_groups,
-        variable_names,
-    )?;
-    if !matches!(parsed.orientation, OrientationExpr::Neutral) || parsed.application.is_some() {
-        return Err(parse_error(line, "expected a neutral rewrite"));
-    }
-    Ok(OrientedRewriteAst {
-        application,
-        ..parsed
-    })
-}
-
-fn parse_application_prefixed_rewrite_statement(
-    line: &str,
-    prefix: &str,
-    application: RuleApplication,
-    rule_params: &[String],
-    object_names: &HashMap<String, ObjectId>,
-    object_schemas: &HashMap<String, ObjectSchema>,
-    value_sets: &HashMap<String, Vec<String>>,
-    maps: &HashMap<String, ValueMap>,
-    object_groups: &HashMap<String, Vec<ObjectId>>,
-    variable_names: &HashMap<String, VariableId>,
-) -> Result<OrientedRewriteAst, DiagnosticReport> {
-    line.strip_prefix(prefix)
-        .ok_or_else(|| parse_error(line, "missing application-prefixed rewrite"))?;
-    let surface = puzzle_authoring::rule_line_surface(line)
-        .map_err(|error| parse_error(line, error.message()))?;
-    let parsed = parse_rule_line_rewrite_statement(
-        line,
-        surface,
-        rule_params,
-        object_names,
-        object_schemas,
-        value_sets,
-        maps,
-        object_groups,
-        variable_names,
-    )?;
-    if parsed.application != Some(application) {
-        return Err(parse_error(
-            line,
-            "application prefix must be followed by a rewrite",
-        ));
-    }
-    Ok(parsed)
-}
-
 #[allow(clippy::too_many_arguments)]
-fn parse_rule_line_rewrite_statement(
+fn lower_rule_line_rewrite_statement(
     line: &str,
-    surface: puzzle_authoring::RuleLineSurface<'_>,
+    surface: &puzzle_authoring::RuleRewriteSurface,
     rule_params: &[String],
     object_names: &HashMap<String, ObjectId>,
     object_schemas: &HashMap<String, ObjectSchema>,
@@ -1938,40 +1621,14 @@ fn parse_rule_line_rewrite_statement(
     object_groups: &HashMap<String, Vec<ObjectId>>,
     variable_names: &HashMap<String, VariableId>,
 ) -> Result<OrientedRewriteAst, DiagnosticReport> {
-    let (orientation, application, rewrite) = match surface {
-        puzzle_authoring::RuleLineSurface::InputRewrite {
-            application,
-            surface,
-        } => {
-            if let Some(axis) = surface.orientation {
-                validate_identifier(axis, line, "input orientation")?;
-            }
-            (
-                OrientationExpr::InputSet(surface.orientation.unwrap_or("directions").to_string()),
-                application.map(rule_application_from_surface),
-                surface.rewrite,
-            )
-        }
-        puzzle_authoring::RuleLineSurface::NeutralRewrite {
-            application,
-            rewrite,
-        } => (
-            OrientationExpr::Neutral,
-            application.map(rule_application_from_surface),
-            rewrite,
-        ),
-        puzzle_authoring::RuleLineSurface::OrientedRewrite {
-            application,
-            orientation,
-            rewrite,
-        } => (
-            parse_statement_orientation_expr(orientation, rule_params),
-            application.map(rule_application_from_surface),
-            rewrite,
-        ),
-    };
-    let (before, after, effects, after_effects, after_call) = parse_inline_rewrite(
-        rewrite,
+    let (orientation, application, rewrite) =
+        rewrite_orientation_and_application(line, &surface.line, rule_params)?;
+    let rewrite_source = &line[rewrite];
+    let (before, after, effects, after_effects, after_call) = lower_inline_rewrite_syntax(
+        &surface.syntax,
+        &surface.target,
+        rewrite_source,
+        line,
         object_names,
         object_schemas,
         value_sets,
@@ -1993,6 +1650,65 @@ fn parse_rule_line_rewrite_statement(
     })
 }
 
+fn rewrite_orientation_and_application(
+    line: &str,
+    surface: &puzzle_authoring::RuleLineSurfaceSpans,
+    rule_params: &[String],
+) -> Result<
+    (
+        OrientationExpr,
+        Option<RuleApplication>,
+        std::ops::Range<usize>,
+    ),
+    DiagnosticReport,
+> {
+    Ok(match surface {
+        puzzle_authoring::RuleLineSurfaceSpans::InputRewrite {
+            application,
+            surface,
+        } => {
+            if let Some(axis) = &surface.orientation {
+                let axis = &line[axis.clone()];
+                validate_identifier(axis, line, "input orientation")?;
+            }
+            (
+                OrientationExpr::InputSet(
+                    surface
+                        .orientation
+                        .as_ref()
+                        .map(|axis| line[axis.clone()].to_string())
+                        .unwrap_or_else(|| "directions".to_string()),
+                ),
+                application
+                    .as_ref()
+                    .map(|application| rule_application_from_surface(application.application)),
+                surface.rewrite.clone(),
+            )
+        }
+        puzzle_authoring::RuleLineSurfaceSpans::NeutralRewrite {
+            application,
+            rewrite,
+        } => (
+            OrientationExpr::Neutral,
+            application
+                .as_ref()
+                .map(|application| rule_application_from_surface(application.application)),
+            rewrite.clone(),
+        ),
+        puzzle_authoring::RuleLineSurfaceSpans::OrientedRewrite {
+            application,
+            orientation,
+            rewrite,
+        } => (
+            parse_statement_orientation_expr(&line[orientation.clone()], rule_params),
+            application
+                .as_ref()
+                .map(|application| rule_application_from_surface(application.application)),
+            rewrite.clone(),
+        ),
+    })
+}
+
 fn rule_application_from_surface(
     application: puzzle_authoring::RuleApplicationSurface,
 ) -> RuleApplication {
@@ -2003,36 +1719,6 @@ fn rule_application_from_surface(
         puzzle_authoring::RuleApplicationSurface::Random => RuleApplication::Random,
         puzzle_authoring::RuleApplicationSurface::Repeat => RuleApplication::UntilStable,
     }
-}
-
-fn parse_oriented_rewrite_prefix<'a>(
-    line: &'a str,
-    orientation_token: &str,
-    rule_params: &[String],
-) -> Result<(OrientationExpr, &'a str), DiagnosticReport> {
-    let rest = line
-        .strip_prefix(orientation_token)
-        .map(str::trim_start)
-        .ok_or_else(|| parse_error(line, "missing oriented rewrite"))?;
-    if orientation_token == "input" {
-        let surface = puzzle_authoring::input_rewrite_surface(line)
-            .map_err(|error| parse_error(line, error.message()))?
-            .ok_or_else(|| parse_error(line, "missing input-oriented rewrite"))?;
-        if let Some(axis) = surface.orientation {
-            validate_identifier(axis, line, "input orientation")?;
-        }
-        return Ok((
-            OrientationExpr::InputSet(surface.orientation.unwrap_or("directions").to_string()),
-            surface.rewrite,
-        ));
-    }
-    if !rest.starts_with('[') {
-        return Err(parse_error(line, "missing oriented rewrite"));
-    }
-    Ok((
-        parse_statement_orientation_expr(orientation_token, rule_params),
-        rest,
-    ))
 }
 
 fn parse_statement_orientation_expr(token: &str, rule_params: &[String]) -> OrientationExpr {
@@ -2302,13 +1988,6 @@ fn parse_condition_atom(
     }
 
     Err(parse_error(line, "unsupported condition"))
-}
-
-fn is_input_effect_statement(line: &str) -> bool {
-    let Some((left, _)) = line.split_once("->") else {
-        return false;
-    };
-    is_identifier(left.trim())
 }
 
 fn report_with_source_line_number(

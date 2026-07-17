@@ -1232,7 +1232,6 @@ version = "0.1.0"
 dependencies = [
  "puzzle-core",
  "puzzle-game-runtime",
- "puzzle-grid3d",
  "puzzle-lang",
  "puzzle-play",
  "puzzle-runtime-contract",
@@ -2356,20 +2355,10 @@ name = "puzzle-game-runtime"
 version = "0.1.0"
 dependencies = [
  "puzzle-core",
- "puzzle-grid3d",
  "puzzle-lang",
  "puzzle-play",
  "puzzle-runtime-contract",
  "serde_json",
-]
-
-[[package]]
-name = "puzzle-grid3d"
-version = "0.1.0"
-dependencies = [
- "puzzle-core",
- "puzzle-kernel",
- "serde",
 ]
 
 [[package]]
@@ -2385,7 +2374,6 @@ version = "0.1.0"
 dependencies = [
  "puzzle-authoring",
  "puzzle-core",
- "puzzle-grid3d",
  "puzzle-kernel",
  "puzzle-runtime-contract",
  "puzzle-scene",
@@ -2398,7 +2386,6 @@ name = "puzzle-play"
 version = "0.1.0"
 dependencies = [
  "puzzle-core",
- "puzzle-grid3d",
  "puzzle-lang",
  "puzzle-runtime-contract",
  "serde",
@@ -2409,7 +2396,7 @@ dependencies = [
 name = "puzzle-runtime-contract"
 version = "0.1.0"
 dependencies = [
- "puzzle-grid3d",
+ "puzzle-core",
  "puzzle-scene",
  "serde",
  "serde_json",
@@ -2429,7 +2416,6 @@ name = "puzzle-solver"
 version = "0.1.0"
 dependencies = [
  "puzzle-core",
- "puzzle-grid3d",
  "puzzle-kernel",
  "puzzle-lang",
 ]
@@ -2459,6 +2445,7 @@ dependencies = [
 name = "puzzle-wasm-game"
 version = "0.1.0"
 dependencies = [
+ "puzzle-core",
  "puzzle-game-runtime",
  "wasm-bindgen",
 ]
@@ -2467,6 +2454,7 @@ dependencies = [
 name = "puzzle-wasm-player"
 version = "0.1.0"
 dependencies = [
+ "puzzle-core",
  "puzzle-game-runtime",
  "wasm-bindgen",
 ]

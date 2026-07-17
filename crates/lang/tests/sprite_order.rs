@@ -1,4 +1,4 @@
-use puzzle_lang::{VisualOrderPriorityDef, parse_game2d, parse_puzzle3d};
+use puzzle_lang::{LoadedDocumentModel, VisualOrderPriorityDef, parse_game_for_path, parse_game2d};
 
 fn game_with_slots(sprites_body: &str) -> String {
     format!(
@@ -166,13 +166,19 @@ P
 }
 "#;
 
-    let parsed = parse_puzzle3d(source).expect("3D sprite order");
+    let document = parse_game_for_path(source, "test.puzzle").expect("3D sprite order");
+    let Some(LoadedDocumentModel::Puzzle3d {
+        game, presentation, ..
+    }) = document.single_model()
+    else {
+        panic!("expected one spatial model");
+    };
 
     assert_eq!(
-        parsed.visual_order.direction_priority,
+        presentation.visual_order.direction_priority,
         ["down", "right", "front"]
     );
-    let fixture = puzzle_lang::export_visual_fixture_json(&parsed).expect("3D fixture");
+    let fixture = puzzle_lang::export_visual_fixture_json(game, presentation).expect("3D fixture");
     let fixture: serde_json::Value = serde_json::from_str(&fixture).expect("fixture JSON");
     assert_eq!(
         fixture["order"]["direction_priority"],

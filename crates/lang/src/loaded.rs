@@ -1,10 +1,13 @@
 use std::collections::HashMap;
 
-use crate::ParsedPuzzle3;
+use crate::SpatialPresentation;
 use puzzle_core::{
-    ComparisonOp, CompiledGame, ConditionId, ConditionValueKind, InputId, MarkId, ObjectId, RuleId,
-    RuleStep, State, VariableId,
+    ComparisonOp, ConditionId, ConditionValueKind, GridCompiledGame, GridConditionValueKind,
+    GridExecutableProgram, GridGoalCondition, GridInput, GridRuleStep, GridSize, GridState,
+    InputId, MarkId, ObjectId, RuleId, Size2, Size3, VariableId,
 };
+pub use puzzle_core::{GoalClauseOf, GoalConditionOf, GoalExprOf, GoalValueOf};
+pub use puzzle_runtime_contract::RuntimeEffect as RuleEffect;
 pub use puzzle_scene::{
     LevelMenuLocked, SceneAlign as SceneAlignDef, SceneAspectRatio as SceneAspectRatioDef,
     SceneBinaryOp, SceneButton as SharedSceneButton, SceneComponent as SharedSceneComponent,
@@ -13,10 +16,11 @@ pub use puzzle_scene::{
     SceneFor as SharedSceneFor, SceneForSource as ForSource, SceneLayout as SceneLayoutDef,
     SceneLevelKey, SceneSpace as SceneSpaceDef, SceneTextAlign as SceneTextAlignDef,
     SceneTextComponent as SharedSceneTextComponent, SceneTextRole as SceneTextRoleDef,
+    ViewportProjection as ViewportProjectionDef,
 };
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LoadedDocument {
     pub title: String,
     pub subtitle: Option<String>,
@@ -26,6 +30,7 @@ pub struct LoadedDocument {
     pub default_again_ms: u64,
     pub input_buffer: InputBufferDef,
     pub animation: AnimationDef,
+    pub variables: Vec<SceneVarDef>,
     pub sounds: SoundsDef,
     pub theme: ThemeDef,
     pub assets: AssetsDef,
@@ -42,10 +47,17 @@ impl LoadedDocument {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum LoadedDocumentModel {
-    Puzzle2d { name: String, game: LoadedGame },
-    Puzzle3d { name: String, puzzle: ParsedPuzzle3 },
+    Puzzle2d {
+        name: String,
+        game: LoadedGame,
+    },
+    Puzzle3d {
+        name: String,
+        game: LoadedGridGame<3, Size3>,
+        presentation: SpatialPresentation,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -56,12 +68,14 @@ pub struct RuleDebugInfo {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct LoadedGame {
+pub struct LoadedGridGame<const D: usize, Size: GridSize<D>> {
     pub title: String,
     pub subtitle: Option<String>,
     pub author: Option<String>,
     pub homepage: Option<String>,
-    pub game: CompiledGame,
+    pub game: GridCompiledGame<D>,
+    #[serde(default)]
+    pub inputs: Vec<GridInput<D>>,
     pub warnings: Vec<String>,
     pub default_wait_ms: u64,
     pub default_again_ms: u64,
@@ -71,10 +85,10 @@ pub struct LoadedGame {
     pub rule_effects: HashMap<RuleId, Vec<RuleEffect>>,
     #[serde(default)]
     pub rule_debug_info: HashMap<RuleId, RuleDebugInfo>,
-    pub level_start_program: Option<Vec<RuleStep>>,
-    pub level_clear_program: Option<Vec<RuleStep>>,
-    pub last_level_clear_program: Option<Vec<RuleStep>>,
-    pub levels: Vec<Level>,
+    pub level_start_program: Option<GridExecutableProgram<D>>,
+    pub level_clear_program: Option<GridExecutableProgram<D>>,
+    pub last_level_clear_program: Option<GridExecutableProgram<D>>,
+    pub levels: Vec<LoadedGridLevel<D, Size>>,
     pub run_rules_on_level_start: bool,
     pub legend: AsciiLegend,
     pub controls: Controls,
@@ -89,12 +103,12 @@ pub struct LoadedGame {
     pub persistent_vars: Vec<VariableId>,
     pub condition_labels: HashMap<ConditionId, String>,
     #[serde(default)]
-    pub queries: HashMap<String, QueryExpr>,
-    pub conditions: HashMap<String, GoalCondition>,
-    pub goal: Option<GoalCondition>,
-    pub lose: Option<GoalCondition>,
+    pub queries: HashMap<String, GridQueryExpr<D>>,
+    pub conditions: HashMap<String, GridGoalCondition<D>>,
+    pub goal: Option<GridGoalCondition<D>>,
+    pub lose: Option<GridGoalCondition<D>>,
     #[serde(default)]
-    pub solver_strategy: SolverStrategy,
+    pub solver_strategy: GridSolverStrategy<D>,
     pub sounds: SoundsDef,
     #[serde(default)]
     pub model_operation_sounds: Vec<ModelOperationSoundDef>,
@@ -105,81 +119,29 @@ pub struct LoadedGame {
     pub screen: PuzzleScreenDef,
 }
 
-impl LoadedGame {
-    pub fn empty_scene_host(
-        title: impl Into<String>,
-        puzzle_name: impl Into<String>,
-        level_name: impl Into<String>,
-    ) -> Self {
-        let puzzle_name = puzzle_name.into();
-        let initial_state = State::empty(1, 1, 1, 0)
-            .expect("empty scene host state uses valid non-zero dimensions");
-        Self {
-            title: title.into(),
-            subtitle: None,
-            author: None,
-            homepage: None,
-            game: CompiledGame::new(1, Vec::new(), Vec::new()),
-            warnings: Vec::new(),
-            default_wait_ms: 250,
-            default_again_ms: 150,
-            input_buffer: InputBufferDef::default(),
-            animation: AnimationDef::default(),
-            rule_animations: HashMap::new(),
-            rule_effects: HashMap::new(),
-            rule_debug_info: HashMap::new(),
-            level_start_program: None,
-            level_clear_program: None,
-            last_level_clear_program: None,
-            levels: vec![Level {
-                name: level_name.into(),
-                pack: None,
-                puzzle: puzzle_name,
-                initial_state,
-                regions: Vec::new(),
-                program: Vec::new(),
-                level_start_program: None,
-                level_clear_program: None,
-            }],
-            run_rules_on_level_start: false,
-            legend: AsciiLegend::new(0, Some('.')),
-            controls: Controls::default(),
-            variables: Vec::new(),
-            scenes: Vec::new(),
-            object_labels: HashMap::new(),
-            object_groups: HashMap::new(),
-            input_labels: HashMap::new(),
-            variable_labels: HashMap::new(),
-            mark_labels: HashMap::new(),
-            persistent_vars: Vec::new(),
-            condition_labels: HashMap::new(),
-            queries: HashMap::new(),
-            conditions: HashMap::new(),
-            goal: None,
-            lose: None,
-            solver_strategy: SolverStrategy::default(),
-            sounds: SoundsDef::default(),
-            model_operation_sounds: Vec::new(),
-            theme: ThemeDef::default(),
-            assets: AssetsDef::default(),
-            visuals: VisualsDef::default(),
-            render: PuzzleRenderDef::default(),
-            screen: PuzzleScreenDef::default(),
-        }
-    }
+pub type LoadedGame = LoadedGridGame<2, Size2>;
 
-    pub fn program_for_level(&self, level_index: usize) -> Option<&[RuleStep]> {
+impl<const D: usize, Size: GridSize<D>> LoadedGridGame<D, Size> {
+    pub fn program_for_level(&self, level_index: usize) -> Option<&[GridRuleStep<D>]> {
         self.levels
             .get(level_index)
-            .map(|level| level.program.as_slice())
+            .map(|level| level.program.as_steps())
     }
 
-    pub fn compiled_game_for_level(&self, level_index: usize) -> Option<CompiledGame> {
-        self.program_for_level(level_index)
-            .map(|program| self.game.clone_with_program(program.to_vec()))
+    pub fn executable_program_for_level(
+        &self,
+        level_index: usize,
+    ) -> Option<&GridExecutableProgram<D>> {
+        self.levels.get(level_index).map(|level| &level.program)
     }
 
-    pub fn solver_state(&self, state: &State) -> State {
+    pub fn compiled_game_for_level(&self, level_index: usize) -> Option<GridCompiledGame<D>> {
+        self.executable_program_for_level(level_index)
+            .cloned()
+            .map(|program| self.game.clone_with_executable_program(program))
+    }
+
+    pub fn solver_state(&self, state: &GridState<D, Size>) -> GridState<D, Size> {
         state.clone()
     }
 }
@@ -264,51 +226,6 @@ pub enum TriggerAnimationKind {
         frames: Vec<Vec<String>>,
         colors: Vec<VisualColorDef>,
     },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum RuleEffect {
-    Win,
-    Restart,
-    NextLevel,
-    Again,
-    Checkpoint,
-    ClearCheckpoint,
-    PlaySfx {
-        name: String,
-    },
-    PlayMusic {
-        name: String,
-    },
-    PauseMusic {
-        name: Option<String>,
-    },
-    ResumeMusic {
-        name: Option<String>,
-    },
-    StopMusic {
-        name: Option<String>,
-    },
-    Wait {
-        milliseconds: u64,
-    },
-    WaitAnimation,
-    EmitAnimation {
-        name: String,
-        component: u16,
-        offset: AnimationOffset,
-    },
-    Message {
-        text: String,
-        literal: bool,
-    },
-    Scene(SceneEffect),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AnimationOffset {
-    pub x: u16,
-    pub y: u16,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -423,27 +340,22 @@ pub struct VisualAliasDef {
 pub struct VisualSpriteDef {
     pub name: String,
     pub kind: VisualSpriteKind,
+    /// Canonical cell-art frames. Each frame contains one or more parallel planes.
+    #[serde(default)]
+    pub frames: Vec<VisualSpriteFrameDef>,
     #[serde(default)]
     pub transforms: Vec<VisualSpriteTransform>,
     pub fit: VisualSpriteFit,
     pub sampling: Option<VisualSpriteSampling>,
     #[serde(default)]
-    pub loop_animation: Option<VisualSpriteLoopDef>,
+    pub animation_duration_ms: Option<u64>,
     #[serde(default)]
     pub pixels_per_cell: Option<VisualSpritePixelsPerCell>,
-    #[serde(default)]
-    pub spatial: Option<VisualSpriteSpatialDef>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct VisualSpriteSpatialDef {
-    pub frames: Vec<Vec<Vec<String>>>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct VisualSpriteLoopDef {
-    pub duration_ms: u64,
-    pub frames: Vec<Vec<String>>,
+pub struct VisualSpriteFrameDef {
+    pub planes: Vec<Vec<String>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -451,11 +363,13 @@ pub struct VisualSpriteLoopDef {
 pub enum VisualSpriteTransform {
     Rotate {
         degrees: f64,
+        /// Unit axis in canonical sprite space. Planar rotation uses +Z.
+        axis: [f64; 3],
         space: VisualSpriteSpace,
     },
     Translate {
-        x: f64,
-        y: f64,
+        /// Canonical sprite-space displacement. Planar translation has z = 0.
+        value: [f64; 3],
         space: VisualSpriteSpace,
     },
     Flip {
@@ -512,13 +426,8 @@ pub struct VisualSpritePixelsPerCell {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum VisualSpriteKind {
     Solid(String),
-    Image {
-        source: String,
-    },
-    Ascii {
-        pattern: Vec<String>,
-        colors: Vec<VisualColorDef>,
-    },
+    Image { source: String },
+    Ascii { colors: Vec<VisualColorDef> },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -544,16 +453,18 @@ pub struct PuzzleGridRenderDef {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Level {
+pub struct LoadedGridLevel<const D: usize, Size: GridSize<D>> {
     pub name: String,
     pub pack: Option<String>,
     pub puzzle: String,
-    pub initial_state: State,
+    pub initial_state: GridState<D, Size>,
     pub regions: Vec<LevelRegionDef>,
-    pub program: Vec<RuleStep>,
-    pub level_start_program: Option<Vec<RuleStep>>,
-    pub level_clear_program: Option<Vec<RuleStep>>,
+    pub program: GridExecutableProgram<D>,
+    pub level_start_program: Option<GridExecutableProgram<D>>,
+    pub level_clear_program: Option<GridExecutableProgram<D>>,
 }
+
+pub type Level = LoadedGridLevel<2, Size2>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LevelRegionDef {
@@ -595,43 +506,17 @@ pub enum ViewportModeDef {
     Centered,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct GoalCondition {
-    pub description: String,
-    pub expr: GoalExpr,
-}
+pub type GoalCondition = GoalConditionOf<ConditionValueKind>;
+pub type GoalExpr = GoalExprOf<ConditionValueKind>;
+pub type GoalClause = GoalClauseOf<ConditionValueKind>;
+pub type GoalValue = GoalValueOf<ConditionValueKind>;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum GoalExpr {
-    All(Vec<GoalExpr>),
-    Any(Vec<GoalExpr>),
-    Clause(GoalClause),
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct GoalClause {
-    pub value: GoalValue,
-    pub op: ComparisonOp,
-    pub expected: i64,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum GoalValue {
-    Variable(VariableId),
-    Condition(ConditionId),
-    InlineConditionValue(ConditionValueKind),
-}
-
-pub type SolverStrategy = SolverStrategyOf<QueryExpr>;
+pub type GridQueryExpr<const D: usize> =
+    QueryExprOf<ObjectId, GridConditionValueKind<D>, VariableId>;
+pub type GridSolverStrategy<const D: usize> = SolverStrategyOf<GridQueryExpr<D>>;
+pub type SolverStrategy = GridSolverStrategy<2>;
 pub type SolverStrategyTerm = SolverStrategyTermOf<QueryExpr>;
 pub type QueryExpr = QueryExprOf<ObjectId, ConditionValueKind, VariableId>;
-pub type SolverStrategy3 = SolverStrategyOf<QueryExpr3>;
-pub type SolverStrategyTerm3 = SolverStrategyTermOf<QueryExpr3>;
-pub type QueryExpr3 = QueryExprOf<
-    puzzle_grid3d::ObjectId,
-    puzzle_grid3d::ConditionValueKind3,
-    puzzle_grid3d::VariableId,
->;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SolverStrategyOf<Query> {
@@ -658,6 +543,41 @@ impl<Query> SolverStrategyOf<Query> {
         self.deadends
             .iter()
             .any(|deadend| deadend.is_met_with(&mut evaluate))
+    }
+
+    pub(crate) fn try_map_query<Mapped, Error>(
+        &self,
+        map: &mut impl FnMut(&Query) -> Result<Mapped, Error>,
+    ) -> Result<SolverStrategyOf<Mapped>, Error> {
+        Ok(SolverStrategyOf {
+            terms: self
+                .terms
+                .iter()
+                .map(|term| {
+                    Ok(SolverStrategyTermOf {
+                        direction: term.direction,
+                        value: map(&term.value)?,
+                        weight: term.weight,
+                    })
+                })
+                .collect::<Result<_, Error>>()?,
+            deadends: self
+                .deadends
+                .iter()
+                .map(|deadend| match deadend {
+                    SolverDeadendOf::All(values) => values
+                        .iter()
+                        .map(&mut *map)
+                        .collect::<Result<Vec<_>, _>>()
+                        .map(SolverDeadendOf::All),
+                    SolverDeadendOf::Any(values) => values
+                        .iter()
+                        .map(&mut *map)
+                        .collect::<Result<Vec<_>, _>>()
+                        .map(SolverDeadendOf::Any),
+                })
+                .collect::<Result<_, _>>()?,
+        })
     }
 }
 
@@ -714,6 +634,31 @@ pub enum QueryExprOf<Object, Value, Variable> {
         op: ComparisonOp,
         right: i64,
     },
+}
+
+impl<Object: Clone, Value, Variable: Clone> QueryExprOf<Object, Value, Variable> {
+    pub(crate) fn try_map_value<Mapped, Error>(
+        &self,
+        map: &mut impl FnMut(&Value) -> Result<Mapped, Error>,
+    ) -> Result<QueryExprOf<Object, Mapped, Variable>, Error> {
+        Ok(match self {
+            Self::Variable(variable) => QueryExprOf::Variable(variable.clone()),
+            Self::Value(value) => QueryExprOf::Value(map(value)?),
+            Self::Distance { from, to } => QueryExprOf::Distance {
+                from: from.clone(),
+                to: to.clone(),
+            },
+            Self::AllOnDistance { subjects, covers } => QueryExprOf::AllOnDistance {
+                subjects: subjects.clone(),
+                covers: covers.clone(),
+            },
+            Self::Compare { left, op, right } => QueryExprOf::Compare {
+                left: Box::new(left.try_map_value(map)?),
+                op: *op,
+                right: *right,
+            },
+        })
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -780,7 +725,6 @@ pub enum SceneVarKind {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ScenePuzzleDef {
     pub name: String,
-    pub kind: String,
     pub model: String,
     pub initializer: ScenePuzzleInitializer,
     pub lifetime: SceneStateLifetime,
@@ -858,7 +802,7 @@ pub enum KeyTrigger {
     Named(String),
 }
 
-impl LoadedGame {
+impl<const D: usize, Size: GridSize<D>> LoadedGridGame<D, Size> {
     pub fn object_name(&self, object: ObjectId) -> &str {
         self.object_labels
             .get(&object)
@@ -871,27 +815,27 @@ impl LoadedGame {
             })
     }
 
-    pub fn is_goal_complete(&self, state: &State) -> bool {
+    pub fn is_goal_complete(&self, state: &GridState<D, Size>) -> bool {
         self.goal
             .as_ref()
-            .is_some_and(|goal| eval_goal_expr(&self.game, state, &goal.expr))
+            .is_some_and(|goal| goal.is_met(&self.game, state))
     }
 
-    pub fn is_lose_complete(&self, state: &State) -> bool {
+    pub fn is_lose_complete(&self, state: &GridState<D, Size>) -> bool {
         self.lose
             .as_ref()
-            .is_some_and(|lose| eval_goal_expr(&self.game, state, &lose.expr))
+            .is_some_and(|lose| lose.is_met(&self.game, state))
     }
 
-    pub fn is_condition_true(&self, name: &str, state: &State) -> bool {
+    pub fn is_condition_true(&self, name: &str, state: &GridState<D, Size>) -> bool {
         let Some(condition) = self.conditions.get(name) else {
             return false;
         };
 
-        eval_goal_expr(&self.game, state, &condition.expr)
+        condition.is_met(&self.game, state)
     }
 
-    pub fn is_variable_truthy(&self, name: &str, state: &State) -> bool {
+    pub fn is_variable_truthy(&self, name: &str, state: &GridState<D, Size>) -> bool {
         let Some(variable) = self.variable_id(name) else {
             return false;
         };
@@ -903,94 +847,6 @@ impl LoadedGame {
         self.variable_labels
             .iter()
             .find_map(|(variable, label)| (label == name).then_some(*variable))
-    }
-}
-
-fn eval_goal_expr(game: &CompiledGame, state: &State, expr: &GoalExpr) -> bool {
-    match expr {
-        GoalExpr::All(exprs) => exprs.iter().all(|expr| eval_goal_expr(game, state, expr)),
-        GoalExpr::Any(exprs) => exprs.iter().any(|expr| eval_goal_expr(game, state, expr)),
-        GoalExpr::Clause(clause) => compare_i64(
-            eval_goal_value(game, state, &clause.value),
-            clause.op,
-            clause.expected,
-        ),
-    }
-}
-
-fn eval_goal_value(game: &CompiledGame, state: &State, value: &GoalValue) -> i64 {
-    match value {
-        GoalValue::Variable(variable) => state.variable_value(*variable).unwrap_or(0),
-        GoalValue::Condition(condition) => game
-            .condition_def(*condition)
-            .map(|condition| eval_goal_condition_value_kind(game, state, &condition.kind))
-            .unwrap_or(0),
-        GoalValue::InlineConditionValue(kind) => eval_goal_condition_value_kind(game, state, kind),
-    }
-}
-
-fn eval_goal_condition_value_kind(
-    game: &CompiledGame,
-    state: &State,
-    kind: &ConditionValueKind,
-) -> i64 {
-    match kind {
-        ConditionValueKind::CountObjects(objects) => objects
-            .iter()
-            .map(|object| i64::from(state.object_count(*object)))
-            .sum(),
-        ConditionValueKind::ExistsObjects(objects) => {
-            if objects.iter().any(|object| state.object_count(*object) > 0) {
-                1
-            } else {
-                0
-            }
-        }
-        ConditionValueKind::NoneObjects(objects) => {
-            if objects.iter().any(|object| state.object_count(*object) > 0) {
-                0
-            } else {
-                1
-            }
-        }
-        ConditionValueKind::CountMatches(patterns) => patterns
-            .iter()
-            .map(|pattern| i64::from(puzzle_core::count_pattern_matches(game, state, pattern)))
-            .sum(),
-        ConditionValueKind::ExistsMatches(patterns) => {
-            if patterns
-                .iter()
-                .any(|pattern| puzzle_core::has_pattern_match(game, state, pattern))
-            {
-                1
-            } else {
-                0
-            }
-        }
-        ConditionValueKind::NoneMatches(patterns) => {
-            if patterns
-                .iter()
-                .any(|pattern| puzzle_core::has_pattern_match(game, state, pattern))
-            {
-                0
-            } else {
-                1
-            }
-        }
-        ConditionValueKind::CountInputMatches(_)
-        | ConditionValueKind::ExistsInputMatches(_)
-        | ConditionValueKind::NoneInputMatches(_) => 0,
-    }
-}
-
-fn compare_i64(left: i64, op: ComparisonOp, right: i64) -> bool {
-    match op {
-        ComparisonOp::Eq => left == right,
-        ComparisonOp::NotEq => left != right,
-        ComparisonOp::Greater => left > right,
-        ComparisonOp::GreaterEq => left >= right,
-        ComparisonOp::Less => left < right,
-        ComparisonOp::LessEq => left <= right,
     }
 }
 

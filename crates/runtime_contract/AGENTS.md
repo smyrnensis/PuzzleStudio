@@ -13,8 +13,8 @@ This crate owns typed runtime/export contracts.
 - Reject missing or unsupported contract fields visibly. Do not read visual
   fixture fields as a fallback for runtime semantics.
 
-Contract structures may reference deterministic model types from `grid3d` and
-shared kernel types. Adapters and temporary facades may produce or consume these
+Contract structures may reference deterministic dimension-generic model types
+from `core` and shared kernel types. Adapters may produce or consume these
 contracts, but they must not define an alternate semantic schema.
 
 Scene presentation transport must preserve the shared text role and layout
