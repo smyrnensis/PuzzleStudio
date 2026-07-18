@@ -66,7 +66,8 @@
     }
 
     sessionRequestJson(method, url) {
-      const raw = this.sessionRuntime.request_json(method, url);
+      const action = this.sessionAction(method, url);
+      const raw = this.sessionRuntime.dispatch(JSON.stringify(action));
       const next = JSON.parse(raw);
       if (method === "POST" && this.writeSessionProgressSave()) {
         if (next && typeof next.snapshot === "object") {
@@ -76,6 +77,37 @@
         }
       }
       return next;
+    }
+
+    sessionAction(method, url) {
+      if (method === "GET" && url === "/api/state") {
+        return { kind: "snapshot" };
+      }
+      if (method !== "POST") {
+        throw new Error(`Unsupported standalone session request: ${method} ${url}`);
+      }
+      const debugInputPrefix = "/api/debug/input/";
+      if (url.startsWith(debugInputPrefix)) {
+        return { kind: "debug_input", name: decodeURIComponent(url.slice(debugInputPrefix.length)) };
+      }
+      const inputPrefix = "/api/input/";
+      if (url.startsWith(inputPrefix)) {
+        return { kind: "input", name: decodeURIComponent(url.slice(inputPrefix.length)) };
+      }
+      const commandPrefix = "/api/command/";
+      if (!url.startsWith(commandPrefix)) {
+        throw new Error(`Unsupported standalone session request: ${method} ${url}`);
+      }
+      const name = decodeURIComponent(url.slice(commandPrefix.length));
+      const directActions = {
+        undo: "undo",
+        redo: "redo",
+        restart: "restart",
+        next: "next_level",
+        next_level: "next_level",
+        previous_level: "previous_level",
+      };
+      return directActions[name] ? { kind: directActions[name] } : { kind: "command", name };
     }
 
     snapshot() {

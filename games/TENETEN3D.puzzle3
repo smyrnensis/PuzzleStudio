@@ -84,7 +84,7 @@ dimension = 3
 render {
 camera {
 yaw = 0
-pitch = 90
+pitch = 10
 zoom = 1
 }
 shadow = true
@@ -95,6 +95,9 @@ floor = Floor Floor2
 solid = TEN:horizontal
 }
 
+on_level_start {
+  down [ no Floor | null ] -> [ Floor | null ]
+}
 
 rules {
 input [ TEN:horizontal ] -> [ > TEN:horizontal ]

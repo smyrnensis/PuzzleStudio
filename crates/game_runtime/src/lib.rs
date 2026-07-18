@@ -1,9 +1,10 @@
 use puzzle_core::{
-    CompiledGame, Coord3, GridCompiledGame, GridCoord, GridLevel, GridPatch, GridSize, GridState,
-    GridTransitionOutcome, InputId, MarkId, MarkValueMatch as CoreMarkValueMatch, ObjectId,
-    PatchOp, RuleId, Size2, Size3, State as PuzzleState, TransitionCommand, VariableId,
-    VariableUpdateOp,
+    CompiledGame, Coord3, GridCompiledGame, GridLevel, GridRuleFiring, GridSize, GridState,
+    GridTransitionOutcome, InputId, MarkValueMatch as CoreMarkValueMatch, ObjectId, PatchOp,
+    RuleId, Size2, Size3, State as PuzzleState, TransitionCommand,
 };
+#[cfg(feature = "editor-debug")]
+use puzzle_core::{GridCoord, GridPatch, MarkId, VariableId, VariableUpdateOp};
 use puzzle_lang::{
     ArrowKey, KeyTrigger, Level, LoadedDocument, LoadedDocumentModel, LoadedGame, LoadedGridGame,
     ResourceSelection, SceneAlignDef, SceneBinaryOp, SceneComponent, SceneDef,
@@ -12,15 +13,17 @@ use puzzle_lang::{
     SceneTransitionTrigger, SceneValue, ThemeDef, ViewportModeDef, ViewportProjectionDef,
     ViewportSizeDef,
 };
+#[cfg(feature = "editor-debug")]
+use puzzle_play::GridTransitionTrace;
 use puzzle_play::{
-    DebugTransition, GameSession, GridDebugTransition, GridGameSession, LevelProgressSaveData,
-    MessageEvent, PersistentVarSaveData, ProgressSaveData, SoundEvent, WaitEvent,
-    animation_events_contract, runtime_effects_for_outcome, runtime_sounds_def,
+    GameSession, GridGameSession, LevelProgressSaveData, PersistentVarSaveData,
+    PresentationEventKind, ProgressSaveData, presentation_events_contract,
+    runtime_effects_for_outcome, runtime_sounds_def,
 };
 use puzzle_runtime_contract::{
     CameraEffect, GridRuntimeModel, RuntimeAnimationEvent, RuntimeChangedCell, RuntimeContract,
-    RuntimeCoord, RuntimeMarkValue, RuntimeMarkValueMatch, RuntimeModelKind, RuntimePatchOp,
-    RuntimeStateSnapshot, RuntimeStateSnapshot3d, RuntimeTransitionCommand,
+    RuntimeCoord, RuntimeGridSize, RuntimeMarkValueMatch, RuntimePatchOp, RuntimeRuleFiring,
+    RuntimeStateSnapshot, RuntimeStateSnapshot3d, RuntimeTransitionCommand, SessionAction,
     RuntimeTransitionCurrentOutcome, RuntimeTransitionProgramOutcome,
 };
 use serde_json::{Value, json};
@@ -33,12 +36,15 @@ pub struct StandaloneSessionBridge {
 trait StandaloneSessionModel {
     fn snapshot_value(&mut self, has_progress_save: bool) -> Value;
     fn apply_input_name(&mut self, input_name: &str) -> Result<(), String>;
+    #[cfg(feature = "editor-debug")]
     fn apply_debug_input_name_json(&mut self, input_name: &str) -> Result<String, String>;
     fn apply_command_name(&mut self, command_name: &str) -> Result<(), String>;
     fn undo(&mut self);
     fn redo(&mut self);
     fn restart(&mut self) -> Result<(), String>;
     fn next_level(&mut self);
+    fn previous_level(&mut self);
+    fn goto_level(&mut self, level: usize) -> Result<(), String>;
     fn set_current_state_json(
         &mut self,
         state_json: &str,
@@ -82,43 +88,6 @@ struct SpatialProjection {
     fixture: Value,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum StandaloneSessionRequest {
-    State,
-    Undo,
-    Redo,
-    Restart,
-    Next,
-    Input(String),
-    DebugInput(String),
-    Command(String),
-}
-
-pub fn standalone_session_request(
-    method: &str,
-    url: &str,
-) -> Result<StandaloneSessionRequest, String> {
-    match (method, url) {
-        ("GET", "/api/state") => Ok(StandaloneSessionRequest::State),
-        ("POST", "/api/command/undo") => Ok(StandaloneSessionRequest::Undo),
-        ("POST", "/api/command/redo") => Ok(StandaloneSessionRequest::Redo),
-        ("POST", "/api/command/restart") => Ok(StandaloneSessionRequest::Restart),
-        ("POST", "/api/command/next") => Ok(StandaloneSessionRequest::Next),
-        ("POST", path) if path.starts_with("/api/debug/input/") => {
-            Ok(StandaloneSessionRequest::DebugInput(percent_decode(
-                &path["/api/debug/input/".len()..],
-            )))
-        }
-        ("POST", path) if path.starts_with("/api/input/") => Ok(StandaloneSessionRequest::Input(
-            percent_decode(&path["/api/input/".len()..]),
-        )),
-        ("POST", path) if path.starts_with("/api/command/") => Ok(
-            StandaloneSessionRequest::Command(percent_decode(&path["/api/command/".len()..])),
-        ),
-        _ => Err(format!("Unsupported exported HTML request: {method} {url}")),
-    }
-}
-
 impl StandaloneSessionBridge {
     pub fn from_source(source: &str, puzzle_path: &str) -> Result<Self, String> {
         let document = puzzle_lang::parse_game_for_path(source, puzzle_path)
@@ -159,43 +128,63 @@ impl StandaloneSessionBridge {
             .expect("snapshot JSON should serialize")
     }
 
-    pub fn request_json(&mut self, method: &str, url: &str) -> Result<String, String> {
-        match standalone_session_request(method, url)? {
-            StandaloneSessionRequest::State => Ok(self.snapshot_json()),
-            StandaloneSessionRequest::Undo => {
+    pub fn dispatch(&mut self, action: SessionAction) -> Result<String, String> {
+        match action {
+            SessionAction::Snapshot => Ok(self.snapshot_json()),
+            SessionAction::Undo => {
                 self.model.undo();
                 Ok(self.snapshot_json())
             }
-            StandaloneSessionRequest::Redo => {
+            SessionAction::Redo => {
                 self.model.redo();
                 Ok(self.snapshot_json())
             }
-            StandaloneSessionRequest::Restart => {
+            SessionAction::Restart => {
                 self.model.restart()?;
                 Ok(self.snapshot_json())
             }
-            StandaloneSessionRequest::Next => {
+            SessionAction::NextLevel => {
                 self.model.next_level();
                 Ok(self.snapshot_json())
             }
-            StandaloneSessionRequest::Input(input_name) => {
-                self.apply_input_name(&input_name)?;
+            SessionAction::PreviousLevel => {
+                self.model.previous_level();
                 Ok(self.snapshot_json())
             }
-            StandaloneSessionRequest::DebugInput(input_name) => {
-                self.apply_debug_input_name_json(&input_name)
+            SessionAction::GotoLevel { level } => {
+                self.model.goto_level(level)?;
+                Ok(self.snapshot_json())
             }
-            StandaloneSessionRequest::Command(command_name) => {
-                self.apply_command_name(&command_name)?;
+            SessionAction::Input { name } => {
+                self.apply_input_name(&name)?;
+                Ok(self.snapshot_json())
+            }
+            #[cfg(feature = "editor-debug")]
+            SessionAction::DebugInput { name } => {
+                self.apply_debug_input_name_json(&name)
+            }
+            #[cfg(not(feature = "editor-debug"))]
+            SessionAction::DebugInput { .. } => {
+                Err("debug input is unavailable in the player runtime".to_string())
+            }
+            SessionAction::Command { name } => {
+                self.apply_command_name(&name)?;
                 Ok(self.snapshot_json())
             }
         }
+    }
+
+    pub fn dispatch_json(&mut self, action_json: &str) -> Result<String, String> {
+        let action: SessionAction = serde_json::from_str(action_json)
+            .map_err(|error| format!("invalid session action: {error}"))?;
+        self.dispatch(action)
     }
 
     pub fn apply_input_name(&mut self, input_name: &str) -> Result<(), String> {
         self.model.apply_input_name(input_name)
     }
 
+    #[cfg(feature = "editor-debug")]
     pub fn apply_debug_input_name_json(&mut self, input_name: &str) -> Result<String, String> {
         self.model.apply_debug_input_name_json(input_name)
     }
@@ -274,10 +263,10 @@ where
     Projection: GridSessionProjection<D, Size> + 'static,
 {
     fn snapshot_value(&mut self, has_progress_save: bool) -> Value {
-        let sound_events = self.session.take_sound_events();
-        let message_events = self.session.take_message_events();
-        let wait_events = self.session.take_wait_events();
-        let animation_events = self.session.take_animation_events();
+        let presentation_events = self.session.take_presentation_events();
+        let busy = presentation_events
+            .iter()
+            .any(|event| matches!(event.kind, PresentationEventKind::Wait(_)));
         let current_scene = self.session.focused_scene();
         let projected = self.projection.snapshot_grid(&self.loaded, &self.session);
         let scene_state = scene_state_value(self.session.scene_state());
@@ -291,17 +280,13 @@ where
             "sounds": sounds_value(&self.loaded),
             "theme": theme_value(&self.loaded.theme),
             "defaultWaitMs": self.loaded.default_wait_ms,
-            "defaultAgainMs": self.loaded.default_again_ms,
             "inputBuffer": {
                 "queueDuringWait": self.loaded.input_buffer.queue_during_wait,
                 "fastForwardWait": self.loaded.input_buffer.fast_forward_wait,
                 "minWaitMs": self.loaded.input_buffer.min_wait_ms,
             },
             "animation": animation_value(&self.loaded),
-            "soundEvents": sound_events_value(&sound_events),
-            "messageEvents": message_events_value(&message_events),
-            "waitEvents": wait_events_value(&wait_events),
-            "animationEvents": animation_events_contract(&self.loaded, &animation_events),
+            "presentationEvents": presentation_events_contract(&self.loaded, &presentation_events),
             "level": level_context_value(&self.loaded, &self.session),
             "levelIndex": self.session.active_level_index(),
             "levelCount": self.loaded.levels.len(),
@@ -317,7 +302,7 @@ where
             "scenePuzzleState": projected.scene_puzzle_state,
             "sceneLayers": projected.scene_layers,
             "selectedLevelIndex": self.session.selected_level_index(),
-            "busy": !wait_events.is_empty(),
+            "busy": busy,
             "canUndo": self.session.can_undo(),
             "canRedo": self.session.can_redo(),
             "inputs": inputs_value(&self.loaded),
@@ -335,9 +320,14 @@ where
             .map_err(|error| format!("{error:?}"))
     }
 
+    #[cfg(feature = "editor-debug")]
     fn apply_debug_input_name_json(&mut self, input_name: &str) -> Result<String, String> {
-        self.apply_input_name(input_name)?;
-        let debug = self.session.last_debug_transition().cloned();
+        let input = input_id_by_name(&self.loaded, input_name)
+            .ok_or_else(|| format!("unknown input: {input_name}"))?;
+        self.session
+            .apply_traced_input(&self.loaded, input)
+            .map_err(|error| format!("{error:?}"))?;
+        let debug = self.session.last_transition_trace().cloned();
         Ok(json!({
             "snapshot": self.snapshot_value(false),
             "debug": debug_transition_value_grid(&self.loaded, debug.as_ref()),
@@ -367,6 +357,18 @@ where
 
     fn next_level(&mut self) {
         self.session.advance_level(&self.loaded);
+    }
+
+    fn previous_level(&mut self) {
+        self.session.previous_level(&self.loaded);
+    }
+
+    fn goto_level(&mut self, level: usize) -> Result<(), String> {
+        if level >= self.loaded.levels.len() {
+            return Err(format!("level index out of range: {level}"));
+        }
+        self.session.start_level(&self.loaded, level);
+        Ok(())
     }
 
     fn set_current_state_json(
@@ -653,314 +655,7 @@ fn u16_value(value: &Value, name: &str) -> Result<u16, String> {
     u16::try_from(raw).map_err(|_| format!("{name} out of range"))
 }
 
-pub struct GridRuntimeBridge<const D: usize, Size: GridSize<D>> {
-    model: GridRuntimeModel<D, Size, CameraEffect>,
-    animation: puzzle_lang::AnimationDef,
-    rule_effects: std::collections::HashMap<RuleId, Vec<puzzle_lang::RuleEffect>>,
-    current_state: Option<GridState<D, Size>>,
-    saved_states: SavedStateStore<GridState<D, Size>>,
-}
-
-impl GridRuntimeBridge<3, Size3> {
-    pub fn from_source(source: &str) -> Result<Self, String> {
-        let document = puzzle_lang::parse_game_for_path(source, "runtime.puzzle")
-            .map_err(|error| error.to_string())?;
-        let result = document.models.iter().find_map(|model| match model {
-            LoadedDocumentModel::Puzzle3d {
-                game, presentation, ..
-            } => Some(
-                puzzle_lang::spatial_runtime_model(game, presentation)
-                    .map(|model| (model, game.animation.clone())),
-            ),
-            LoadedDocumentModel::Puzzle2d { .. } => None,
-        });
-        let (model, animation) = result
-            .ok_or_else(|| "runtime source does not contain a three-axis grid model".to_string())?
-            .map_err(|error| format!("{error:?}"))?;
-        let rule_effects = runtime_rule_effects(&model);
-        Ok(Self {
-            model,
-            animation,
-            rule_effects,
-            current_state: None,
-            saved_states: SavedStateStore::new(),
-        })
-    }
-
-    pub fn from_visual_fixture_json(fixture_json: &str) -> Result<Self, String> {
-        let value: Value = serde_json::from_str(fixture_json).map_err(|error| error.to_string())?;
-        let contract: RuntimeContract<GridRuntimeModel<3, Size3, CameraEffect>> =
-            puzzle_runtime_contract::runtime_contract_from_fixture_value(&value)
-                .map_err(|error| error.to_string())?;
-        let model = contract.model;
-        let animation = animation_def_from_fixture(&value)?;
-        let rule_effects = runtime_rule_effects(&model);
-        Ok(Self {
-            model,
-            animation,
-            rule_effects,
-            current_state: None,
-            saved_states: SavedStateStore::new(),
-        })
-    }
-
-    pub fn set_state_json(&mut self, state_json: &str) -> Result<(), String> {
-        self.current_state = Some(state3_from_json(&self.model.game, state_json)?);
-        Ok(())
-    }
-
-    pub fn transition_program_outcome_json(
-        &self,
-        program_key: &str,
-        level_index: i32,
-        state_json: &str,
-        input: u16,
-    ) -> Result<String, String> {
-        let state = state3_from_json(&self.model.game, state_json)?;
-        let level = self.level(level_index)?;
-        let outcome =
-            transition_selected_program(&self.model, level, program_key, &state, InputId(input))?;
-        let next_state = &outcome.next_state;
-        let completed = self
-            .model
-            .goal
-            .as_ref()
-            .is_some_and(|goal| goal.is_met(&self.model.game, next_state));
-        RuntimeTransitionProgramOutcome {
-            state: state3_contract(next_state),
-            cancelled: false,
-            completed,
-            commands: commands3_contract(&outcome.commands),
-            effects: runtime_effects_for_outcome(
-                &self.rule_effects,
-                &outcome.commands,
-                &outcome.fired_rules,
-            ),
-            fired_rules: outcome.fired_rules.iter().map(|rule| rule.0).collect(),
-            patches: patches3_contract(&outcome.patches),
-            animation_events: animation_events3_contract(&self.animation, &state, next_state),
-        }
-        .to_json_string()
-        .map_err(|error| error.to_string())
-    }
-
-    pub fn is_complete_json(&self, state_json: &str) -> Result<bool, String> {
-        let state = state3_from_json(&self.model.game, state_json)?;
-        Ok(self
-            .model
-            .goal
-            .as_ref()
-            .is_some_and(|goal| goal.is_met(&self.model.game, &state)))
-    }
-
-    pub fn current_state_json(&self) -> Result<String, String> {
-        Ok(state3_value(self.current_state()?).to_string())
-    }
-
-    pub fn current_cells_json(&self) -> Result<String, String> {
-        Ok(state3_cells_value(self.current_state()?, None).to_string())
-    }
-
-    pub fn is_current_complete(&self) -> Result<bool, String> {
-        let state = self.current_state()?;
-        Ok(self
-            .model
-            .goal
-            .as_ref()
-            .is_some_and(|goal| goal.is_met(&self.model.game, state)))
-    }
-
-    pub fn save_current_state(&mut self) -> Result<u32, String> {
-        let state = self.current_state()?.clone();
-        Ok(self.saved_states.save(state))
-    }
-
-    pub fn restore_saved_state(&mut self, handle: u32) -> Result<(), String> {
-        self.current_state = Some(self.saved_states.restore(handle)?.clone());
-        Ok(())
-    }
-
-    pub fn transition_current_outcome_json(
-        &mut self,
-        program_key: &str,
-        level_index: i32,
-        input: u16,
-    ) -> Result<String, String> {
-        let before = self.current_state()?.clone();
-        let level = self.level(level_index)?;
-        let outcome =
-            transition_selected_program(&self.model, level, program_key, &before, InputId(input))?;
-        let next_state = outcome.next_state.clone();
-        self.current_state = Some(next_state.clone());
-        let previous_state_handle = if program_key == "main" && before != next_state {
-            Some(self.saved_states.save(before.clone()))
-        } else {
-            None
-        };
-        let completed = self
-            .model
-            .goal
-            .as_ref()
-            .is_some_and(|goal| goal.is_met(&self.model.game, &next_state));
-        RuntimeTransitionCurrentOutcome {
-            cancelled: false,
-            changed: before != next_state,
-            completed,
-            state: None,
-            commands: commands3_contract(&outcome.commands),
-            effects: runtime_effects_for_outcome(
-                &self.rule_effects,
-                &outcome.commands,
-                &outcome.fired_rules,
-            ),
-            fired_rules: outcome.fired_rules.iter().map(|rule| rule.0).collect(),
-            patches: patches3_contract(&outcome.patches),
-            animation_events: animation_events3_contract(&self.animation, &before, &next_state),
-            state_hash: next_state.hash(),
-            state_hash_key: next_state.hash().to_string(),
-            previous_state_handle,
-            changed_cells: changed_cells3_contract(&next_state, Some(&before)),
-            variables: next_state.visible_variables().to_vec(),
-            level_fired_rules: next_state
-                .level_fired_rules()
-                .iter()
-                .map(|rule| rule.0)
-                .collect(),
-        }
-        .to_json_string()
-        .map_err(|error| error.to_string())
-    }
-
-    fn level(&self, level_index: i32) -> Result<&GridLevel<3, Size3>, String> {
-        let index = usize::try_from(level_index)
-            .map_err(|_| format!("runtime level index out of bounds: {level_index}"))?;
-        self.model
-            .level_bundle
-            .level(index)
-            .ok_or_else(|| format!("runtime level index out of bounds: {level_index}"))
-    }
-
-    fn current_state(&self) -> Result<&GridState<3, Size3>, String> {
-        self.current_state
-            .as_ref()
-            .ok_or_else(|| "runtime current state has not been initialized".to_string())
-    }
-}
-
-fn runtime_rule_effects(
-    model: &GridRuntimeModel<3, Size3, CameraEffect>,
-) -> std::collections::HashMap<RuleId, Vec<puzzle_lang::RuleEffect>> {
-    model
-        .rule_effects
-        .iter()
-        .map(|entry| (RuleId(entry.rule), entry.effects.clone()))
-        .collect()
-}
-
-fn transition_selected_program(
-    model: &GridRuntimeModel<3, Size3, CameraEffect>,
-    level: &GridLevel<3, Size3>,
-    program_key: &str,
-    state: &GridState<3, Size3>,
-    input: InputId,
-) -> Result<GridTransitionOutcome<3, Size3>, String> {
-    match program_key {
-        "main" => puzzle_core::grid_transition::transition_program_outcome_with_local_frame(
-            &model.game,
-            state,
-            &level.program,
-            input,
-            model.presentation.local_frame.as_ref(),
-        ),
-        "level_start" => transition_lifecycle_program(
-            model,
-            state,
-            model.lifecycle.on_level_start.as_ref(),
-            level.level_start_program.as_ref(),
-        ),
-        "level_clear" => transition_lifecycle_program(
-            model,
-            state,
-            model.lifecycle.on_level_clear.as_ref(),
-            level.level_clear_program.as_ref(),
-        ),
-        "last_level_clear" => transition_lifecycle_program(
-            model,
-            state,
-            model
-                .lifecycle
-                .on_last_level_clear
-                .as_ref()
-                .or(model.lifecycle.on_level_clear.as_ref()),
-            level.level_clear_program.as_ref(),
-        ),
-        other => return Err(format!("unknown transition program selector: {other}")),
-    }
-    .map_err(|error| format!("{error:?}"))
-}
-
-fn transition_lifecycle_program(
-    model: &GridRuntimeModel<3, Size3, CameraEffect>,
-    state: &GridState<3, Size3>,
-    model_program: Option<&puzzle_core::GridExecutableProgram<3>>,
-    level_program: Option<&puzzle_core::GridExecutableProgram<3>>,
-) -> Result<GridTransitionOutcome<3, Size3>, puzzle_core::GridTransitionError<3>> {
-    let programs = model_program
-        .into_iter()
-        .chain(level_program)
-        .collect::<Vec<_>>();
-    puzzle_core::transition_program_sequence_without_input_outcome(&model.game, state, &programs)
-}
-
-fn animation_def_from_fixture(value: &Value) -> Result<puzzle_lang::AnimationDef, String> {
-    let mut animation = puzzle_lang::AnimationDef::default();
-    let Some(tween) = value
-        .get("render")
-        .and_then(|render| render.get("animation"))
-        .and_then(|animation| animation.get("tween"))
-    else {
-        return Ok(animation);
-    };
-    if let Some(enabled) = tween.get("enabled") {
-        animation.tween.enabled = enabled.as_bool().ok_or_else(|| {
-            "Puzzle3 fixture animation tween enabled must be a boolean".to_string()
-        })?;
-    }
-    if let Some(interval) = tween.get("intervalMs") {
-        animation.tween.interval_ms = interval.as_u64().ok_or_else(|| {
-            "Puzzle3 fixture animation tween intervalMs must be an unsigned integer".to_string()
-        })?;
-    }
-    Ok(animation)
-}
-
-struct SavedStateStore<T> {
-    states: Vec<Option<T>>,
-}
-
-impl<T> SavedStateStore<T> {
-    fn new() -> Self {
-        Self { states: Vec::new() }
-    }
-
-    fn save(&mut self, state: T) -> u32 {
-        if let Some(index) = self.states.iter().position(Option::is_none) {
-            self.states[index] = Some(state);
-            return index as u32;
-        }
-        self.states.push(Some(state));
-        (self.states.len() - 1) as u32
-    }
-
-    fn restore(&self, handle: u32) -> Result<&T, String> {
-        self.states
-            .get(handle as usize)
-            .and_then(Option::as_ref)
-            .ok_or_else(|| format!("saved state handle {handle} does not exist"))
-    }
-}
-
-fn focused_scene_value(loaded: &LoadedGame, session: &GameSession) -> Value {
+function focused_scene_value(loaded: &LoadedGame, session: &GameSession) -> Value {
     if let Some((state, level)) = scene_puzzle_state(loaded, session, session.focused_scene()) {
         return scene_value_for_state(
             loaded,
@@ -1631,13 +1326,18 @@ fn input_id_by_name<const D: usize, Size: GridSize<D>>(
         .find_map(|(id, label)| (label == input_name).then_some(*id))
 }
 
-pub fn debug_transition_value(loaded: &LoadedGame, debug: Option<&DebugTransition>) -> Value {
+#[cfg(feature = "editor-debug")]
+pub fn debug_transition_value(
+    loaded: &LoadedGame,
+    debug: Option<&puzzle_play::TransitionTrace>,
+) -> Value {
     debug_transition_value_grid(loaded, debug)
 }
 
+#[cfg(feature = "editor-debug")]
 pub fn debug_transition_value_grid<const D: usize, Size: GridSize<D>>(
     loaded: &LoadedGridGame<D, Size>,
-    debug: Option<&GridDebugTransition<D>>,
+    debug: Option<&GridTransitionTrace<D>>,
 ) -> Value {
     let Some(debug) = debug else {
         return Value::Null;
@@ -1646,24 +1346,25 @@ pub fn debug_transition_value_grid<const D: usize, Size: GridSize<D>>(
         "kind": "model_input",
         "inputId": debug.input.0,
         "input": loaded.input_labels.get(&debug.input).map(String::as_str).unwrap_or(""),
+        "progressed": debug.progressed,
+        "observable": debug.observable,
         "cancelled": debug.cancelled,
         "target": debug.target,
         "commands": debug.commands.iter().map(debug_command_value).collect::<Vec<_>>(),
-        "executions": debug.fired_rules.iter().enumerate().map(|(index, rule)| {
+        "executions": debug.firings.iter().enumerate().map(|(index, firing)| {
             json!({
                 "index": index,
-                "ruleId": rule.0,
-                "rule": debug_rule_value(loaded, *rule),
-                "patch": debug
-                    .patches
-                    .get(index)
-                    .map(|patch| debug_patch_value(loaded, patch))
-                    .unwrap_or_else(Vec::new),
+                "ruleId": firing.rule.0,
+                "rule": debug_rule_value(loaded, firing.rule),
+                "progressed": firing.progressed,
+                "observable": firing.observable,
+                "patch": debug_patch_value(loaded, &firing.patch),
             })
         }).collect::<Vec<_>>(),
     })
 }
 
+#[cfg(feature = "editor-debug")]
 fn debug_rule_value<const D: usize, Size: GridSize<D>>(
     loaded: &LoadedGridGame<D, Size>,
     rule: RuleId,
@@ -1679,6 +1380,7 @@ fn debug_rule_value<const D: usize, Size: GridSize<D>>(
     })
 }
 
+#[cfg(feature = "editor-debug")]
 fn debug_command_value(command: &TransitionCommand) -> Value {
     json!({
         "kind": match command {
@@ -1692,6 +1394,7 @@ fn debug_command_value(command: &TransitionCommand) -> Value {
     })
 }
 
+#[cfg(feature = "editor-debug")]
 fn debug_patch_value<const D: usize, Size: GridSize<D>>(
     loaded: &LoadedGridGame<D, Size>,
     patch: &GridPatch<D>,
@@ -1703,6 +1406,7 @@ fn debug_patch_value<const D: usize, Size: GridSize<D>>(
         .collect()
 }
 
+#[cfg(feature = "editor-debug")]
 fn debug_patch_op_value<const D: usize, Size: GridSize<D>>(
     loaded: &LoadedGridGame<D, Size>,
     op: &PatchOp<D>,
@@ -1793,6 +1497,7 @@ fn debug_patch_op_value<const D: usize, Size: GridSize<D>>(
     }
 }
 
+#[cfg(feature = "editor-debug")]
 fn position_value_from_grid<const D: usize>(position: GridCoord<D>) -> Value {
     let axes = position.axes();
     let mut value = serde_json::Map::new();
@@ -1811,6 +1516,7 @@ fn object_name<const D: usize, Size: GridSize<D>>(
     loaded.object_name(object).to_string()
 }
 
+#[cfg(feature = "editor-debug")]
 fn mark_name<const D: usize, Size: GridSize<D>>(
     loaded: &LoadedGridGame<D, Size>,
     mark: MarkId,
@@ -1822,6 +1528,7 @@ fn mark_name<const D: usize, Size: GridSize<D>>(
         .unwrap_or_else(|| format!("mark#{}", mark.0))
 }
 
+#[cfg(feature = "editor-debug")]
 fn variable_name<const D: usize, Size: GridSize<D>>(
     loaded: &LoadedGridGame<D, Size>,
     variable: VariableId,
@@ -1909,42 +1616,6 @@ fn screen_value(loaded: &LoadedGame) -> Value {
         "viewportFocusObjects": viewport_focus_objects,
         "viewportMode": viewport_mode,
     })
-}
-
-fn sound_events_value(events: &[SoundEvent]) -> Vec<Value> {
-    events
-        .iter()
-        .map(|event| match event {
-            SoundEvent::PlaySfx { name } => json!({"kind": "play_sfx", "name": name}),
-            SoundEvent::PlayMusic { name } => json!({"kind": "play_music", "name": name}),
-            SoundEvent::PauseMusic { name } => json!({"kind": "pause_music", "name": name}),
-            SoundEvent::ResumeMusic { name } => json!({"kind": "resume_music", "name": name}),
-            SoundEvent::StopMusic { name } => json!({"kind": "stop_music", "name": name}),
-        })
-        .collect()
-}
-
-fn message_events_value(events: &[MessageEvent]) -> Vec<Value> {
-    events
-        .iter()
-        .map(|event| match event {
-            MessageEvent::Message { text } => json!({"kind": "message", "text": text}),
-        })
-        .collect()
-}
-
-fn wait_events_value(events: &[WaitEvent]) -> Vec<Value> {
-    events
-        .iter()
-        .map(|event| match event {
-            WaitEvent::Wait { milliseconds } => {
-                json!({"kind": "wait", "milliseconds": milliseconds})
-            }
-            WaitEvent::ContinueEffects { milliseconds } => {
-                json!({"kind": "continue_effects", "milliseconds": milliseconds})
-            }
-        })
-        .collect()
 }
 
 fn level_context_value<const D: usize, Size: GridSize<D>>(
@@ -2236,150 +1907,18 @@ fn progress_save_data_from_json(raw: &str) -> Result<ProgressSaveData, String> {
     })
 }
 
-fn percent_decode(value: &str) -> String {
-    let mut out = String::new();
-    let bytes = value.as_bytes();
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%' && index + 2 < bytes.len() {
-            if let Ok(hex) = std::str::from_utf8(&bytes[index + 1..index + 3]) {
-                if let Ok(byte) = u8::from_str_radix(hex, 16) {
-                    out.push(byte as char);
-                    index += 3;
-                    continue;
-                }
-            }
-        }
-        out.push(bytes[index] as char);
-        index += 1;
-    }
-    out
-}
-
 fn state3_from_json(
     game: &GridCompiledGame<3>,
     state_json: &str,
 ) -> Result<GridState<3, Size3>, String> {
-    let value: Value = serde_json::from_str(state_json).map_err(|error| error.to_string())?;
-    let width = json_u16(&value, "width")?;
-    let depth = json_u16(&value, "depth")?;
-    let height = json_u16(&value, "height")?;
-    let layer_count = value
-        .get("layerCount")
-        .and_then(Value::as_u64)
-        .map(u16::try_from)
-        .transpose()
-        .map_err(|_| "3D state layerCount out of range".to_string())?
-        .unwrap_or(game.layer_count);
-    if layer_count != game.layer_count {
-        return Err(format!(
-            "3D state layerCount mismatch: expected {}, got {layer_count}",
-            game.layer_count
-        ));
-    }
-    let slots = value
-        .get("slots")
-        .and_then(Value::as_array)
-        .ok_or_else(|| "3D state missing slots".to_string())?;
-    let expected_slots = usize::from(width)
-        .checked_mul(usize::from(depth))
-        .and_then(|count| count.checked_mul(usize::from(height)))
-        .and_then(|count| count.checked_mul(usize::from(layer_count)))
-        .ok_or_else(|| "3D state dimensions are too large".to_string())?;
-    if slots.len() != expected_slots {
-        return Err(format!(
-            "3D state slots length mismatch: expected {expected_slots}, got {}",
-            slots.len()
-        ));
-    }
-    let variables = value
-        .get("variables")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .map(|item| {
-                    item.as_i64()
-                        .ok_or_else(|| "3D state variable is not an integer".to_string())
-                })
-                .collect::<Result<Vec<_>, _>>()
-        })
-        .transpose()?
-        .unwrap_or_default();
-    let mut state = GridState::<3, Size3>::empty_with_variables(
-        Size3::new(width, depth, height),
-        layer_count,
-        variables,
-    )
-    .map_err(|error| format!("{error:?}"))?;
-    for (index, object) in slots.iter().enumerate() {
-        let object = object
-            .as_u64()
-            .ok_or_else(|| "3D state slot is not a number".to_string())?;
-        if object == 0 {
-            continue;
-        }
-        let object: u16 = object
-            .try_into()
-            .map_err(|_| "3D state object id out of range".to_string())?;
-        let layer = index % usize::from(layer_count);
-        let cell = index / usize::from(layer_count);
-        let x = (cell % usize::from(width)) as u16;
-        let yz = cell / usize::from(width);
-        let y = (yz % usize::from(depth)) as u16;
-        let z = (yz / usize::from(depth)) as u16;
-        let object = ObjectId(object);
-        let expected_layer = game
-            .object_layer(object)
-            .ok_or_else(|| format!("3D state unknown object id {}", object.0))?;
-        if usize::from(expected_layer.0) != layer {
-            return Err(format!(
-                "3D state object {} is in layer {layer}, expected {}",
-                object.0, expected_layer.0
-            ));
-        }
-        state
-            .place_object_at(game, Coord3 { x, y, z }, object)
-            .map_err(|error| format!("{error:?}"))?;
-    }
-    if let Some(fired_rules) = value.get("levelFiredRules").and_then(Value::as_array) {
-        for rule in fired_rules {
-            let rule = rule
-                .as_u64()
-                .ok_or_else(|| "3D state fired rule is not a number".to_string())?;
-            let rule: u16 = rule
-                .try_into()
-                .map_err(|_| "3D state rule id out of range".to_string())?;
-            state.mark_level_rule_fired(RuleId(rule));
-        }
-    }
-    Ok(state)
-}
-
-fn json_u16(value: &Value, key: &str) -> Result<u16, String> {
-    value
-        .get(key)
-        .and_then(Value::as_u64)
-        .ok_or_else(|| format!("3D state missing {key}"))?
-        .try_into()
-        .map_err(|_| format!("3D state {key} out of range"))
+    serde_json::from_str::<RuntimeStateSnapshot3d>(state_json)
+        .map_err(|error| error.to_string())?
+        .into_state(game)
 }
 
 fn state3_value(state: &GridState<3, Size3>) -> Value {
-    json!({
-        "kind": "puzzle3d",
-        "width": state.size.width,
-        "depth": state.size.depth,
-        "height": state.size.height,
-        "layerCount": state.layer_count,
-        "slots": state.slots().iter().map(|object| object.0).collect::<Vec<_>>(),
-        "variables": state.visible_variables(),
-        "levelFiredRules": state
-            .level_fired_rules()
-            .iter()
-            .map(|rule| rule.0)
-            .collect::<Vec<_>>(),
-    })
+    serde_json::to_value(RuntimeStateSnapshot3d::from_state(state))
+        .expect("runtime state snapshot serializes")
 }
 
 fn commands3_contract(commands: &[TransitionCommand]) -> Vec<RuntimeTransitionCommand> {
@@ -2397,33 +1936,7 @@ fn commands3_contract(commands: &[TransitionCommand]) -> Vec<RuntimeTransitionCo
 }
 
 fn state3_contract(state: &GridState<3, Size3>) -> RuntimeStateSnapshot {
-    RuntimeStateSnapshot::ThreeD(RuntimeStateSnapshot3d {
-        kind: RuntimeModelKind::ThreeD,
-        width: state.size.width,
-        depth: state.size.depth,
-        height: state.size.height,
-        layer_count: state.layer_count,
-        slots: state.slots().iter().map(|object| object.0).collect(),
-        slot_marks: state
-            .slot_mark()
-            .into_iter()
-            .map(|marks| {
-                marks
-                    .into_iter()
-                    .map(|mark| RuntimeMarkValue {
-                        mark: mark.mark.0,
-                        value: mark.value,
-                    })
-                    .collect()
-            })
-            .collect(),
-        variables: state.visible_variables().to_vec(),
-        level_fired_rules: state
-            .level_fired_rules()
-            .iter()
-            .map(|rule| rule.0)
-            .collect(),
-    })
+    RuntimeStateSnapshot::ThreeD(RuntimeStateSnapshot3d::from_state(state))
 }
 
 fn state3_cells_value(state: &GridState<3, Size3>, before: Option<&GridState<3, Size3>>) -> Value {
@@ -2493,10 +2006,15 @@ fn changed_cells3_contract(
     cells
 }
 
-fn patches3_contract(patches: &[GridPatch<3>]) -> Vec<Vec<RuntimePatchOp>> {
-    patches
+fn firings3_contract(firings: &[GridRuleFiring<3>]) -> Vec<RuntimeRuleFiring> {
+    firings
         .iter()
-        .map(|patch| patch.ops().iter().map(patch_op3_contract).collect())
+        .map(|firing| RuntimeRuleFiring {
+            rule_id: firing.rule.0,
+            patch: firing.patch.ops().iter().map(patch_op3_contract).collect(),
+            progressed: firing.progressed,
+            observable: firing.observable,
+        })
         .collect()
 }
 
@@ -2673,6 +2191,10 @@ mod tests {
             .is_some_and(|layers| layers.iter().any(|layer| layer["object"] == object))
     }
 
+    fn runtime_state_json(state: &GridState<3, Size3>) -> String {
+        serde_json::to_string(&RuntimeStateSnapshot3d::from_state(state)).unwrap()
+    }
+
     fn standalone_export(source: &str) -> Value {
         let document = puzzle_lang::parse_game_for_path(source, "export_test.puzzle").unwrap();
         json!({
@@ -2794,7 +2316,7 @@ P
     }
 
     #[test]
-    fn standalone_session_from_export_uses_game_session_wait_continuation() {
+    fn standalone_session_from_export_reports_atomic_state_with_presentation_wait() {
         let source = r#"
 title = export_wait_segments
 puzzle default {
@@ -2828,26 +2350,14 @@ A
         let waiting: Value = serde_json::from_str(
             &bridge
                 .request_json("POST", "/api/input/right")
-                .expect("input should start wait continuation"),
+                .expect("input should complete with a presentation wait"),
         )
         .unwrap();
         assert!(!cell_has_object(&waiting["scene"]["cells"][0], "A"));
-        assert!(cell_has_object(&waiting["scene"]["cells"][0], "C"));
-        assert!(!cell_has_object(&waiting["scene"]["cells"][0], "B"));
-        assert_eq!(
-            waiting["waitEvents"],
-            json!([{ "kind": "continue_effects", "milliseconds": 100 }])
-        );
-
-        let continued: Value = serde_json::from_str(
-            &bridge
-                .request_json("POST", "/api/command/__continue_effects")
-                .expect("continuation should finish wait segment"),
-        )
-        .unwrap();
-        assert!(!cell_has_object(&continued["scene"]["cells"][0], "A"));
-        assert!(!cell_has_object(&continued["scene"]["cells"][0], "C"));
-        assert!(cell_has_object(&continued["scene"]["cells"][0], "B"));
+        assert!(!cell_has_object(&waiting["scene"]["cells"][0], "C"));
+        assert!(cell_has_object(&waiting["scene"]["cells"][0], "B"));
+        assert_eq!(waiting["presentationEvents"][0]["kind"], json!("wait"));
+        assert_eq!(waiting["presentationEvents"][0]["milliseconds"], 100);
 
         let undone: Value = serde_json::from_str(
             &bridge
@@ -2860,6 +2370,75 @@ A
         assert!(!cell_has_object(&undone["scene"]["cells"][0], "C"));
     }
 
+    #[test]
+    fn standalone_snapshot_serializes_mixed_presentation_events_in_authored_order() {
+        let source = r#"
+title = runtime_mixed_presentation
+default_wait_time = 40ms
+sounds {
+sfx tick {
+seed = tick01
+type = hit
+}
+}
+puzzle default {
+render {
+tween = true
+tween_duration = 80ms
+}
+slots {
+actor = Player
+marker = Done
+}
+empty .
+rules {
+wait 10ms
+message "ready"
+input right [ Player | no Player ] -> [ | Player ] sfx tick
+wait animation
+[ Player no Done ] -> [ Player Done ]
+}
+levels {
+legend {
+. = empty
+P = Player
+}
+level "first" {
+P.
+}
+}
+}
+"#;
+        let mut bridge =
+            StandaloneSessionBridge::from_source(source, "runtime_mixed_presentation.puzzle")
+                .unwrap();
+
+        let moved: Value =
+            serde_json::from_str(&bridge.request_json("POST", "/api/input/right").unwrap())
+                .unwrap();
+        let events = moved["presentationEvents"].as_array().unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event["kind"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["wait", "message", "wait", "animation", "play_sfx", "wait"]
+        );
+        assert!(events.iter().all(|event| event["levelIndex"] == 0));
+        assert!(cell_has_object(&moved["scene"]["cells"][1], "Done"));
+    }
+
+    #[cfg(not(feature = "editor-debug"))]
+    #[test]
+    fn player_request_surface_rejects_editor_debug_input() {
+        let error = standalone_session_request("POST", "/api/debug/input/right").unwrap_err();
+        assert_eq!(
+            error,
+            "Unsupported exported HTML request: POST /api/debug/input/right"
+        );
+    }
+
+    #[cfg(feature = "editor-debug")]
     #[test]
     fn standalone_session_debug_input_reports_rule_trace() {
         let source = r#"
@@ -2989,7 +2568,7 @@ level_menu
             serde_json::from_str(&bridge.request_json("POST", "/api/input/down").unwrap()).unwrap();
         assert_eq!(after_input["currentScene"], json!("level_select"));
         assert!(after_input["scene"].is_null());
-        assert_eq!(after_input["soundEvents"], json!([]));
+        assert_eq!(after_input["presentationEvents"], json!([]));
     }
 
     #[test]
@@ -3230,328 +2809,21 @@ scene playing {
             serde_json::from_str(&bridge.request_json("POST", "/api/input/right").unwrap())
                 .unwrap();
         assert_eq!(
-            moved["animationEvents"],
-            json!([
-                {
-                    "kind": "move",
-                    "name": "tween",
-                    "objectId": 1,
-                    "from": { "x": 0, "y": 0 },
-                    "to": { "x": 1, "y": 0 }
-                }
-            ]),
+            moved["presentationEvents"][0]["animation"],
+            json!({
+                "kind": "move",
+                "name": "tween",
+                "objectId": 1,
+                "from": { "x": 0, "y": 0 },
+                "to": { "x": 1, "y": 0 }
+            }),
             "unexpected moved snapshot: {moved}"
         );
     }
 
-    #[test]
-    fn puzzle3_runtime_bridge_emits_tween_move_events() {
-        let source = r#"
-title = "3D Tween"
 
-puzzle sokoban {
-dimension = 3
 
-render {
-  tween = true
-  tween_duration = 300ms
-}
 
-slots {
-  solid = Player
-}
-
-rules {
-  input horizontal [ Player | no Player ] -> [ | Player ]
-}
-}
-
-levels default of sokoban {
-legend {
-P = Player
-. = empty
-}
-level "one" {
-P.
-}
-}
-"#;
-        let mut bridge = GridRuntimeBridge::<3, Size3>::from_source(source).unwrap();
-        let right_input = bridge
-            .model
-            .inputs
-            .iter()
-            .find(|input| input.name == "right")
-            .expect("right input")
-            .id
-            .0;
-        bridge
-            .set_state_json(
-                r#"{"kind":"puzzle3d","width":2,"depth":1,"height":1,"layerCount":1,"slots":[1,0],"levelFiredRules":[]}"#,
-            )
-            .unwrap();
-
-        let moved: Value = serde_json::from_str(
-            &bridge
-                .transition_current_outcome_json("main", 0, right_input)
-                .unwrap(),
-        )
-        .unwrap();
-
-        assert_eq!(
-            moved["animationEvents"],
-            json!([
-                {
-                    "kind": "move",
-                    "name": "tween",
-                    "objectId": 1,
-                    "from": { "x": 0, "y": 0, "z": 0 },
-                    "to": { "x": 1, "y": 0, "z": 0 }
-                }
-            ])
-        );
-
-        let program_outcome = bridge
-            .transition_program_outcome_json(
-                "main",
-                0,
-                r#"{"kind":"puzzle3d","width":2,"depth":1,"height":1,"layerCount":1,"slots":[1,0],"levelFiredRules":[]}"#,
-                right_input,
-            )
-            .unwrap();
-        let program_outcome: RuntimeTransitionProgramOutcome =
-            serde_json::from_str(&program_outcome).unwrap();
-        assert!(!program_outcome.completed);
-        assert!(!program_outcome.fired_rules.is_empty());
-        assert_eq!(program_outcome.patches.len(), 1);
-    }
-
-    #[test]
-    fn puzzle3_runtime_bridge_runs_from_visual_fixture_json() {
-        let source = r#"
-title = "3D Fixture Runtime"
-
-puzzle sokoban {
-dimension = 3
-
-render {
-  tween = true
-  tween_duration = 300ms
-}
-
-slots {
-  solid = Player
-}
-
-rules {
-  input horizontal [ Player | no Player ] -> [ | Player ]
-}
-}
-
-levels default of sokoban {
-legend {
-P = Player
-. = empty
-}
-level "one" {
-P.
-}
-}
-"#;
-        let document = puzzle_lang::parse_game(source).unwrap();
-        let fixture_json = puzzle_lang::export_loaded_document_visual_fixture_json(&document)
-            .expect("visual fixture should export");
-        let mut bridge = GridRuntimeBridge::<3, Size3>::from_visual_fixture_json(&fixture_json)
-            .expect("fixture runtime bridge should decode");
-        let right_input = bridge
-            .model
-            .inputs
-            .iter()
-            .find(|input| input.name == "right")
-            .expect("right input")
-            .id
-            .0;
-        bridge
-            .set_state_json(
-                r#"{"kind":"puzzle3d","width":2,"depth":1,"height":1,"layerCount":1,"slots":[1,0],"levelFiredRules":[]}"#,
-            )
-            .unwrap();
-
-        let moved: Value = serde_json::from_str(
-            &bridge
-                .transition_current_outcome_json("main", 0, right_input)
-                .unwrap(),
-        )
-        .unwrap();
-
-        assert_eq!(moved["changed"], json!(true));
-        assert_eq!(
-            moved["changedCells"],
-            json!([
-                {"position":{"x":0,"y":0,"z":0},"objects":[]},
-                {"position":{"x":1,"y":0,"z":0},"objects":[1]}
-            ])
-        );
-        assert_eq!(
-            moved["animationEvents"],
-            json!([
-                {
-                    "kind": "move",
-                    "name": "tween",
-                    "objectId": 1,
-                    "from": { "x": 0, "y": 0, "z": 0 },
-                    "to": { "x": 1, "y": 0, "z": 0 }
-                }
-            ])
-        );
-    }
-
-    #[test]
-    fn puzzle3_runtime_bridge_executes_shared_lifecycle_program_effects() {
-        let source = r#"
-puzzle board {
-dimension = 3
-slots {
-actor = Player
-}
-rules {
-}
-on_level_clear {
-message "END"
-goto title
-}
-levels {
-legend {
-P = Player
-}
-level "one" {
-P
-}
-}
-}
-
-scene title {
-layout {
-text "Done"
-}
-}
-"#;
-        let document = puzzle_lang::parse_game(source).unwrap();
-        let fixture_json = puzzle_lang::export_loaded_document_visual_fixture_json(&document)
-            .expect("visual fixture should export");
-        let mut bridge = GridRuntimeBridge::<3, Size3>::from_visual_fixture_json(&fixture_json)
-            .expect("fixture runtime bridge should decode");
-        bridge
-            .set_state_json(
-                r#"{"kind":"puzzle3d","width":1,"depth":1,"height":1,"layerCount":1,"slots":[1],"levelFiredRules":[]}"#,
-            )
-            .unwrap();
-
-        let outcome: Value = serde_json::from_str(
-            &bridge
-                .transition_current_outcome_json("level_clear", 0, 0)
-                .unwrap(),
-        )
-        .unwrap();
-
-        assert_eq!(
-            outcome["effects"],
-            json!([
-                {"kind":"message","text":"END","literal":true},
-                {"kind":"scene","effect":{"kind":"goto","scene":"title","params":[]}}
-            ])
-        );
-    }
-
-    #[test]
-    fn puzzle3_runtime_selects_canonical_level_programs_and_initial_variables() {
-        let source = r#"
-puzzle board {
-dimension = 3
-var counter = 7
-slots {
-actor = Player
-}
-rules {
-}
-}
-
-levels default of board {
-legend {
-P = Player
-. = empty
-}
-level "one" {
-P.
-rules {
-input right [ Player | no Player ] -> [ | Player ]
-}
-on_level_start {
-message "ONE"
-}
-}
-level "two" {
-P.
-on_level_start {
-message "TWO"
-}
-}
-}
-"#;
-        let document = puzzle_lang::parse_game(source).expect("shared source should compile");
-        let puzzle = document
-            .models
-            .iter()
-            .find_map(|model| match model {
-                LoadedDocumentModel::Puzzle3d { game, .. } => Some(game),
-                LoadedDocumentModel::Puzzle2d { .. } => None,
-            })
-            .expect("3D model");
-        assert_eq!(puzzle.levels[1].initial_state.visible_variables(), &[7]);
-        let right_input = puzzle
-            .inputs
-            .iter()
-            .find(|input| input.name == "right")
-            .expect("right input")
-            .id
-            .0;
-
-        let fixture_json = puzzle_lang::export_loaded_document_visual_fixture_json(&document)
-            .expect("visual fixture should export");
-        let mut bridge = GridRuntimeBridge::<3, Size3>::from_visual_fixture_json(&fixture_json)
-            .expect("fixture runtime bridge should decode");
-        let initial = r#"{"kind":"puzzle3d","width":2,"depth":1,"height":1,"layerCount":1,"slots":[1,0],"variables":[7],"levelFiredRules":[]}"#;
-
-        bridge.set_state_json(initial).unwrap();
-        let start: Value = serde_json::from_str(
-            &bridge
-                .transition_current_outcome_json("level_start", 1, 0)
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(
-            start["effects"],
-            json!([{"kind":"message","text":"TWO","literal":true}])
-        );
-
-        bridge.set_state_json(initial).unwrap();
-        let second: Value = serde_json::from_str(
-            &bridge
-                .transition_current_outcome_json("main", 1, right_input)
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(second["changed"], false);
-
-        bridge.set_state_json(initial).unwrap();
-        let first: Value = serde_json::from_str(
-            &bridge
-                .transition_current_outcome_json("main", 0, right_input)
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(first["changed"], true);
-    }
 
     #[test]
     fn standalone_session_bridge_restores_progress_save() {

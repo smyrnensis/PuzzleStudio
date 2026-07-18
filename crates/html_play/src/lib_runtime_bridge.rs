@@ -124,15 +124,13 @@ impl CoreRuntimeBridge {
             previous_state_handle,
             outcome.cancelled,
             &outcome.commands,
-            &outcome.fired_rules,
-            &outcome.patches,
+            &outcome.firings,
             include_state,
         )
         .map_err(|error| error.to_string())
     }
 }
 
-pub use puzzle_game_runtime::GridRuntimeBridge;
 
 struct SavedStateStore<T> {
     states: Vec<Option<T>>,
@@ -193,8 +191,7 @@ fn transition_program_outcome_json_inner(
         &outcome.next_state,
         outcome.cancelled,
         &outcome.commands,
-        &outcome.fired_rules,
-        &outcome.patches,
+        &outcome.firings,
     )
 }
 
@@ -261,22 +258,16 @@ fn runtime_transition_program_outcome_json(
     state: &State,
     cancelled: bool,
     commands: &[TransitionCommand],
-    fired_rules: &[RuleId],
-    patches: &[Patch],
+    firings: &[RuleFiring],
 ) -> Result<String, AppError> {
-    let animation_events = animation_events_for_trace(loaded, fired_rules, patches, state);
+    let animation_events = animation_events_for_trace(loaded, firings, state);
     RuntimeTransitionProgramOutcome {
         state: state_contract_2d(state),
         cancelled,
         completed: loaded.is_goal_complete(state),
         commands: transition_commands_contract(commands),
-        effects: puzzle_play::runtime_effects_for_outcome(
-            &loaded.rule_effects,
-            commands,
-            fired_rules,
-        ),
-        fired_rules: fired_rules.iter().map(|rule| rule.0).collect(),
-        patches: patches_contract_2d(patches),
+        effects: puzzle_play::runtime_effects_for_outcome(&loaded.rule_effects, commands, firings),
+        firings: firings_contract_2d(firings),
         animation_events: animation_events_contract_2d(loaded, &animation_events),
     }
     .to_json_string()
@@ -290,11 +281,10 @@ fn runtime_transition_current_outcome_json(
     previous_state_handle: Option<u32>,
     cancelled: bool,
     commands: &[TransitionCommand],
-    fired_rules: &[RuleId],
-    patches: &[Patch],
+    firings: &[RuleFiring],
     include_state: bool,
 ) -> Result<String, AppError> {
-    let animation_events = animation_events_for_trace(loaded, fired_rules, patches, state);
+    let animation_events = animation_events_for_trace(loaded, firings, state);
     RuntimeTransitionCurrentOutcome {
         cancelled,
         changed: before.is_some_and(|before| before != state),
@@ -305,13 +295,8 @@ fn runtime_transition_current_outcome_json(
             None
         },
         commands: transition_commands_contract(commands),
-        effects: puzzle_play::runtime_effects_for_outcome(
-            &loaded.rule_effects,
-            commands,
-            fired_rules,
-        ),
-        fired_rules: fired_rules.iter().map(|rule| rule.0).collect(),
-        patches: patches_contract_2d(patches),
+        effects: puzzle_play::runtime_effects_for_outcome(&loaded.rule_effects, commands, firings),
+        firings: firings_contract_2d(firings),
         animation_events: animation_events_contract_2d(loaded, &animation_events),
         state_hash: state.hash(),
         state_hash_key: state.hash().to_string(),
@@ -343,30 +328,7 @@ fn transition_commands_contract(commands: &[TransitionCommand]) -> Vec<RuntimeTr
 }
 
 fn state_contract_2d(state: &State) -> RuntimeStateSnapshot {
-    RuntimeStateSnapshot::TwoD(RuntimeStateSnapshot2d {
-        kind: RuntimeModelKind::TwoD,
-        width: state.width,
-        height: state.height,
-        layer_count: state.layer_count,
-        slots: state.slots().iter().map(|object| object.0).collect(),
-        slot_marks: (0..state.slots().len())
-            .map(|index| {
-                state
-                    .slot_mark_at(index)
-                    .map(|mark| RuntimeMarkValue {
-                        mark: mark.mark.0,
-                        value: mark.value,
-                    })
-                    .collect()
-            })
-            .collect(),
-        variables: state.visible_variables().to_vec(),
-        level_fired_rules: state
-            .level_fired_rules()
-            .iter()
-            .map(|rule| rule.0)
-            .collect(),
-    })
+    RuntimeStateSnapshot::TwoD(RuntimeStateSnapshot2d::from_state(state))
 }
 
 fn changed_cells_contract_2d(state: &State, before: Option<&State>) -> Vec<RuntimeChangedCell> {
@@ -397,10 +359,22 @@ fn changed_cells_contract_2d(state: &State, before: Option<&State>) -> Vec<Runti
     cells
 }
 
-fn patches_contract_2d(patches: &[Patch]) -> Vec<Vec<RuntimePatchOp>> {
-    patches
+fn firings_contract_2d(firings: &[RuleFiring]) -> Vec<RuntimeRuleFiring> {
+    firings
         .iter()
-        .map(|patch| patch.ops().iter().map(patch_op_contract_2d).collect())
+        .map(|firing| {
+            RuntimeRuleFiring {
+                rule_id: firing.rule.0,
+                patch: firing
+                    .patch
+                    .ops()
+                    .iter()
+                    .map(patch_op_contract_2d)
+                    .collect(),
+                progressed: firing.progressed,
+                observable: firing.observable,
+            }
+        })
         .collect()
 }
 
@@ -468,14 +442,6 @@ fn runtime_mark_value_match(match_value: MarkValueMatch) -> RuntimeMarkValueMatc
     }
 }
 
-fn source_looks_puzzle3d(source: &str) -> bool {
-    source.lines().any(|line| {
-        let trimmed = line.split("//").next().unwrap_or("").trim();
-        let tokens = trimmed.split_whitespace().collect::<Vec<_>>();
-        matches!(tokens.as_slice(), ["puzzle3", ..] | ["sprites3", ..])
-    })
-}
-
 #[cfg(feature = "solver")]
 pub fn solve_request_json(request_json: &str) -> Result<String, String> {
     solve_request_json_inner(request_json).map_err(|error| error.to_string())
@@ -513,6 +479,7 @@ fn solver_task_initial_display_state_json_inner(request_json: &str) -> Result<St
     let request: serde_json::Value = serde_json::from_str(request_json)
         .map_err(|error| AppError::Config(format!("solver task JSON is invalid: {error}")))?;
     let request = json_object(&request, "solver task")?;
+    reject_removed_solver_request_fields(request)?;
     let rules = required_json_object(request, "rules")?;
     let model_kind = required_json_string(rules, "modelKind")?;
     let target = required_json_object(request, "target")?;
@@ -526,34 +493,52 @@ fn solver_task_initial_display_state_json_inner(request_json: &str) -> Result<St
             let compiled_play = required_json_value(rules, "compiledPlay")?;
             let engine =
                 puzzle_core_wasm::decode_compiled_play(compiled_play).map_err(AppError::Config)?;
+            let loaded: LoadedGame = serde_json::from_value(
+                required_json_value(rules, "loadedGame")?.clone(),
+            )
+            .map_err(|error| {
+                AppError::Config(format!("solver task loaded game is invalid: {error}"))
+            })?;
             if required_json_string(target_state, "kind")? == "level-ascii" {
                 return Err(AppError::Config(
                     "compiled solver task display materialization does not support level-ascii target states"
                         .to_string(),
                 ));
             }
-            let mut state = puzzle_core_wasm::decode_state(engine.game(), &state_data)
+            let state = puzzle_core_wasm::decode_state(engine.game(), &state_data)
                 .map_err(AppError::Config)?;
-            if solver_request_materializes_level_start(target_state)? {
-                let level_index = solver_task_level_index(target)?;
-                state = materialize_compiled_level_start_state(
-                    &engine,
-                    state,
-                    level_index,
-                    rules
-                        .get("runRulesOnLevelStart")
-                        .and_then(serde_json::Value::as_bool)
-                        .unwrap_or(false),
-                )?;
-            }
+            let level_index = validate_solver_request_level2d(&loaded, target)?;
+            let session = grid_play_session_from_state(
+                &loaded,
+                level_index,
+                state,
+                solver_request_materializes_level_start(target_state)?,
+            )?;
+            let mut state = session.state().clone();
             state = materialize_compiled_display_state(&engine, &state)?;
             let mut out = String::new();
             push_state_data(&mut out, &state);
             Ok(out)
         }
-        "3d" => Err(AppError::Config(
-            "compiled 3D solver task display materialization is not implemented".to_string(),
-        )),
+        "3d" => {
+            let model: LoadedGridGame<3, Size3> = serde_json::from_value(
+                required_json_value(rules, "loadedGame")?.clone(),
+            )
+            .map_err(|error| {
+                AppError::Config(format!("solver task loaded 3d game is invalid: {error}"))
+            })?;
+            let level_index = validate_grid_solver_request_level(&model, target)?;
+            let state = state3_from_json(&model.game, &state_data)?;
+            let session = grid_play_session_from_state(
+                &model,
+                level_index,
+                state,
+                solver_request_materializes_level_start(target_state)?,
+            )?;
+            let mut out = String::new();
+            push_state3_data(&mut out, session.state());
+            Ok(out)
+        }
         other => Err(AppError::Config(format!(
             "unsupported solver task modelKind {other:?}"
         ))),
@@ -589,25 +574,32 @@ where
             let engine =
                 puzzle_core_wasm::decode_compiled_play(compiled_play).map_err(AppError::Config)?;
             validate_compiled_solver_input_labels(engine.game(), &input_labels)?;
+            let mut loaded: LoadedGame = serde_json::from_value(
+                required_json_value(rules, "loadedGame")?.clone(),
+            )
+            .map_err(|error| {
+                AppError::Config(format!("solver task loaded game is invalid: {error}"))
+            })?;
+            loaded.solver_strategy =
+                serde_json::from_value(required_json_value(rules, "solverStrategy")?.clone())
+                    .map_err(|error| {
+                        AppError::Config(format!("solver task strategy is invalid: {error}"))
+                    })?;
             if required_json_string(target_state, "kind")? == "level-ascii" {
                 return Err(AppError::Config(
                     "compiled solver task does not support level-ascii target states".to_string(),
                 ));
             }
-            let mut state = puzzle_core_wasm::decode_state(engine.game(), &state_data)
+            let state = puzzle_core_wasm::decode_state(engine.game(), &state_data)
                 .map_err(AppError::Config)?;
-            if solver_request_materializes_level_start(target_state)? {
-                let level_index = solver_task_level_index(target)?;
-                state = materialize_compiled_level_start_state(
-                    &engine,
-                    state,
-                    level_index,
-                    rules
-                        .get("runRulesOnLevelStart")
-                        .and_then(serde_json::Value::as_bool)
-                        .unwrap_or(false),
-                )?;
-            }
+            let level_index = solver_task_level_index(target)?;
+            let session = grid_play_session_from_state(
+                &loaded,
+                level_index,
+                state,
+                solver_request_materializes_level_start(target_state)?,
+            )?;
+            let state = session.state().clone();
             let mut progress_json = |state: &State, progress: SearchProgress| {
                 if let Some(on_observation) = on_observation.as_mut() {
                     let mut out = String::new();
@@ -615,17 +607,15 @@ where
                     on_observation(&out);
                 }
             };
-            let response = solve_compiled_state_with_budget_and_progress(
-                &engine,
-                solver_task_level_index(target)?,
-                serde_json::from_value(required_json_value(rules, "solverStrategy")?.clone())
-                    .map_err(|error| {
-                        AppError::Config(format!("solver task strategy is invalid: {error}"))
-                    })?,
-                decode_optional_goal_expr(rules.get("goal"))?,
+            let goal = decode_optional_goal_expr(rules.get("goal"))?
+                .map_or(SolverGoal2::BuiltIn, SolverGoal2::Expr);
+            let response = solve_current_state_with_goal_with_budget_inner(
+                &loaded,
+                level_index,
+                goal,
                 decode_optional_goal_expr(rules.get("lose"))?,
-                optional_json_bool(request.get("acceptWinCommand"), true)?,
                 state,
+                Some(session),
                 solver_request_budget(max_depth, max_nodes, max_ms)?,
                 Some(&mut progress_json),
             )?;
@@ -633,9 +623,41 @@ where
             push_compiled_solution_response(&mut out, &response, &input_labels)?;
             Ok(out)
         }
-        "3d" => Err(AppError::Config(
-            "compiled 3D solver task decoding is not implemented".to_string(),
-        )),
+        "3d" => {
+            let model: LoadedGridGame<3, Size3> = serde_json::from_value(
+                required_json_value(rules, "loadedGame")?.clone(),
+            )
+            .map_err(|error| {
+                AppError::Config(format!("solver task loaded 3d game is invalid: {error}"))
+            })?;
+            let level_index = validate_grid_solver_request_level(&model, target)?;
+            let state = state3_from_json(&model.game, &state_data)?;
+            let session = grid_play_session_from_state(
+                &model,
+                level_index,
+                state,
+                solver_request_materializes_level_start(target_state)?,
+            )?;
+            let initial = session.state().clone();
+            let mut progress_json = |state: &GridState<3, Size3>, progress: SearchProgress| {
+                if let Some(on_observation) = on_observation.as_mut() {
+                    let mut out = String::new();
+                    push_spatial_search_observation(&mut out, state, &progress);
+                    on_observation(&out);
+                }
+            };
+            let response = solve_current_grid_state_with_budget_inner(
+                &model,
+                level_index,
+                initial,
+                Some(session),
+                solver_request_budget(max_depth, max_nodes, max_ms)?,
+                Some(&mut progress_json),
+            )?;
+            let mut out = String::new();
+            push_spatial_solution_response(&mut out, &model, &response);
+            Ok(out)
+        }
         other => Err(AppError::Config(format!(
             "unsupported solver task modelKind {other:?}"
         ))),
@@ -647,6 +669,7 @@ fn solve_request_json_inner(request_json: &str) -> Result<String, AppError> {
     let request: serde_json::Value = serde_json::from_str(request_json)
         .map_err(|error| AppError::Config(format!("solver request JSON is invalid: {error}")))?;
     let request = json_object(&request, "solver request")?;
+    reject_removed_solver_request_fields(request)?;
     let task = decode_solver_request_task(request.get("task"))?;
     let source = required_json_string(request, "source")?;
     let puzzle_path = required_json_string(request, "puzzlePath")?;
@@ -660,7 +683,6 @@ fn solve_request_json_inner(request_json: &str) -> Result<String, AppError> {
     let goal = request.get("goal");
     let collect = request.get("collect");
     let lose = decode_optional_goal_expr(request.get("lose"))?;
-    let accept_win_command = optional_json_bool(request.get("acceptWinCommand"), true)?;
 
     puzzle_lang::validate_source_profile_for_path(source, puzzle_path)?;
     match model_kind {
@@ -677,9 +699,8 @@ fn solve_request_json_inner(request_json: &str) -> Result<String, AppError> {
             goal,
             collect,
             lose,
-            accept_win_command,
         ),
-        "3d" => solve_request3_json_from_source_inner(
+        "3d" => solve_grid_request_json_from_source_inner(
             source,
             target,
             target_state,
@@ -711,7 +732,6 @@ fn solve_request2_json_from_source_inner(
     goal: Option<&serde_json::Value>,
     collect: Option<&serde_json::Value>,
     lose: Option<GoalExpr>,
-    accept_win_command: bool,
 ) -> Result<String, AppError> {
     if matches!(task, SolverRequestTask::Reachability) && goal.is_none() {
         return Err(AppError::Config(
@@ -725,10 +745,14 @@ fn solve_request2_json_from_source_inner(
     }
     let loaded = parse_game(source)?;
     let level_index = validate_solver_request_level2d(&loaded, target)?;
-    let mut state = state2_from_solver_target(&loaded, target_state, level_index, state_json)?;
-    if solver_request_materializes_level_start(target_state)? {
-        state = materialize_level_start_state(&loaded, state, level_index)?;
-    }
+    let state = state2_from_solver_target(&loaded, target_state, level_index, state_json)?;
+    let session = grid_play_session_from_state(
+        &loaded,
+        level_index,
+        state,
+        solver_request_materializes_level_start(target_state)?,
+    )?;
+    let state = session.state().clone();
     let budget = solver_request_budget(max_depth, max_nodes, max_ms)?;
     if matches!(task, SolverRequestTask::Collect) {
         let (selector, max_results) = decode_solver_collect2(collect)?;
@@ -737,8 +761,8 @@ fn solve_request2_json_from_source_inner(
             level_index,
             selector,
             lose,
-            accept_win_command,
             state,
+            Some(session),
             budget,
             max_results,
             None::<fn(&State, SearchProgress)>,
@@ -753,8 +777,8 @@ fn solve_request2_json_from_source_inner(
         level_index,
         solver_goal,
         lose,
-        accept_win_command,
         state,
+        Some(session),
         budget,
         None::<fn(&State, SearchProgress)>,
     )?;
@@ -768,7 +792,7 @@ fn solve_request2_json_from_source_inner(
 }
 
 #[cfg(feature = "solver")]
-fn solve_request3_json_from_source_inner(
+fn solve_grid_request_json_from_source_inner(
     source: &str,
     target: &serde_json::Map<String, serde_json::Value>,
     target_state: &serde_json::Map<String, serde_json::Value>,
@@ -782,28 +806,31 @@ fn solve_request3_json_from_source_inner(
 ) -> Result<String, AppError> {
     if matches!(task, SolverRequestTask::Reachability) {
         return Err(AppError::Config(
-            "3D source solver request does not support reachability tasks yet".to_string(),
+            "solver requests for modelKind 3d do not support reachability tasks yet".to_string(),
         ));
     }
     if matches!(task, SolverRequestTask::Collect) {
         return Err(AppError::Config(
-            "3D source solver request does not support collect tasks yet".to_string(),
+            "solver requests for modelKind 3d do not support collect tasks yet".to_string(),
         ));
     }
     if goal.is_some() || lose.is_some() {
         return Err(AppError::Config(
-            "3D source solver request does not support explicit goal or lose conditions yet"
+            "solver requests for modelKind 3d do not support explicit goal or lose conditions yet"
                 .to_string(),
         ));
     }
-    let model = parse_spatial_model_for_solver(source)?;
-    validate_solver_request_level3d(&model, target)?;
-    let mut state = state3_from_json(&model.game, state_json)?;
-    if solver_request_materializes_level_start(target_state)? {
-        state = materialize_level_start_state3(&model, state)?;
-    }
+    let model = parse_grid_model_for_solver(source)?;
+    let level_index = validate_grid_solver_request_level(&model, target)?;
+    let state = state3_from_json(&model.game, state_json)?;
+    let session = grid_play_session_from_state(
+        &model,
+        level_index,
+        state,
+        solver_request_materializes_level_start(target_state)?,
+    )?;
     let budget = solver_request_budget(max_depth, max_nodes, max_ms)?;
-    let response = solve_current_state3_with_budget(&model, state, budget)?;
+    let response = solve_current_grid_session_with_budget(&model, level_index, session, budget)?;
     let mut out = String::new();
     push_spatial_solution_response(&mut out, &model, &response);
     Ok(out)
@@ -863,59 +890,24 @@ fn solver_request_budget(
 }
 
 #[cfg(feature = "solver")]
+fn reject_removed_solver_request_fields(
+    request: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), AppError> {
+    if request.contains_key("acceptWinCommand") {
+        return Err(AppError::Config(
+            "solver request acceptWinCommand is unsupported; level completion is always observed"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "solver")]
 fn solver_task_level_index(
     target: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<usize, AppError> {
     let level = required_json_object(target, "level")?;
     json_usize_value(level.get("index"), "level.index")
-}
-
-#[cfg(feature = "solver")]
-fn materialize_compiled_level_start_state(
-    engine: &puzzle_core_wasm::CompiledEngine,
-    state: State,
-    level_index: usize,
-    run_rules_on_level_start: bool,
-) -> Result<State, AppError> {
-    let mut state = state;
-    let mut cancelled = false;
-    let level_start = engine.program("level_start", -1).ok_or_else(|| {
-        AppError::Config("compiled solver task missing level_start program".to_string())
-    })?;
-    if !level_start.is_empty() {
-        let outcome = transition_program_outcome(engine.game(), &state, level_start, InputId(0))?;
-        state = outcome.next_state;
-        cancelled |= outcome.cancelled;
-    } else if run_rules_on_level_start {
-        let level_index = i32::try_from(level_index)
-            .map_err(|_| AppError::Config("solver task level index out of range".to_string()))?;
-        let program = engine
-            .program("run_rules_on_level_start", level_index)
-            .ok_or_else(|| {
-                AppError::Config(format!(
-                    "compiled solver task missing main program for level {level_index}"
-                ))
-            })?;
-        let outcome = transition_program_outcome(engine.game(), &state, program, InputId(0))?;
-        state = outcome.next_state;
-        cancelled |= outcome.cancelled;
-    }
-    if !cancelled {
-        let level_index = i32::try_from(level_index)
-            .map_err(|_| AppError::Config("solver task level index out of range".to_string()))?;
-        let local = engine
-            .program("level_start_local", level_index)
-            .ok_or_else(|| {
-                AppError::Config(format!(
-                    "compiled solver task missing local level_start program for level {level_index}"
-                ))
-            })?;
-        if !local.is_empty() {
-            let outcome = transition_program_outcome(engine.game(), &state, local, InputId(0))?;
-            state = outcome.next_state;
-        }
-    }
-    Ok(state)
 }
 
 #[cfg(feature = "solver")]
@@ -1297,7 +1289,7 @@ fn validate_solver_request_level2d(
 }
 
 #[cfg(feature = "solver")]
-fn validate_solver_request_level3d(
+fn validate_grid_solver_request_level(
     model: &LoadedGridGame<3, Size3>,
     target: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<usize, AppError> {
@@ -1306,13 +1298,13 @@ fn validate_solver_request_level3d(
     let index = json_usize_value(level.get("index"), "level.index")?;
     let expected = model.levels.get(index).ok_or_else(|| {
         AppError::Config(format!(
-            "3D solver target level index out of range: {index}"
+            "solver target level index out of range for modelKind 3d: {index}"
         ))
     })?;
     let name = required_json_string(level, "levelName")?;
     if name != expected.name {
         return Err(AppError::Config(format!(
-            "3D solver target levelName mismatch: expected {:?}, got {:?}",
+            "solver target levelName mismatch for modelKind 3d: expected {:?}, got {:?}",
             expected.name, name
         )));
     }
@@ -1574,16 +1566,6 @@ fn json_u64_value(value: Option<&serde_json::Value>, key: &str) -> Result<u64, A
 }
 
 #[cfg(feature = "solver")]
-fn optional_json_bool(value: Option<&serde_json::Value>, default: bool) -> Result<bool, AppError> {
-    let Some(value) = value else {
-        return Ok(default);
-    };
-    value
-        .as_bool()
-        .ok_or_else(|| AppError::Config("solver request acceptWinCommand must be a boolean".into()))
-}
-
-#[cfg(feature = "solver")]
 fn json_u16_value(value: &serde_json::Value, key: &str) -> Result<u16, AppError> {
     let raw = value
         .as_u64()
@@ -1629,80 +1611,49 @@ fn solve_state_json_from_source_inner(
     max_ms: u64,
 ) -> Result<String, AppError> {
     puzzle_lang::validate_source_profile_for_path(source, puzzle_path)?;
-    if source_looks_puzzle3d(source) || state_json.contains("\"kind\":\"puzzle3d\"") {
-        return solve_state3_json_from_source_inner(
+    let document = puzzle_lang::parse_game_for_path(source, puzzle_path)?;
+    if matches!(
+        document.single_model(),
+        Some(LoadedDocumentModel::Puzzle3d { .. })
+    ) {
+        return solve_grid_state_json_from_source_inner(
             source, state_json, max_depth, max_nodes, max_ms,
         );
     }
 
     let loaded = parse_game(source)?;
     let state = state_from_json(&loaded, state_json)?;
-    let state = match level_index_from_state_json(&loaded, state_json) {
-        Some(level_index) => materialize_level_start_state(&loaded, state, level_index)?,
-        None => state,
-    };
-    let solver = SolverConfig {
-        max_depth,
-        max_nodes,
-        max_duration: if max_ms > 0 {
-            Duration::from_millis(max_ms)
-        } else {
-            Duration::from_secs(24 * 60 * 60)
-        },
-    };
-    let budget = if max_ms > 0 {
-        solver.budget()
-    } else {
-        SearchBudget {
-            max_depth: Some(max_depth),
-            max_nodes: Some(max_nodes),
-            max_frontier: None,
-            max_duration: None,
-        }
-    };
     let level_index = level_index_from_state_json(&loaded, state_json)
         .ok_or_else(|| AppError::Config("solver state requires a valid levelIndex".to_string()))?;
-    let response = solve_current_state_with_budget(&loaded, level_index, state, budget)?;
+    let session = grid_play_session_from_state(&loaded, level_index, state, true)?;
+    let budget = solver_request_budget(max_depth, max_nodes, max_ms)?;
+    let response = solve_current_session_with_budget(&loaded, level_index, session, budget)?;
     let mut out = String::new();
     push_solution_response(&mut out, &loaded, &response);
     Ok(out)
 }
 
 #[cfg(feature = "solver")]
-fn solve_state3_json_from_source_inner(
+fn solve_grid_state_json_from_source_inner(
     source: &str,
     state_json: &str,
     max_depth: u32,
     max_nodes: usize,
     max_ms: u64,
 ) -> Result<String, AppError> {
-    let model = parse_spatial_model_for_solver(source)?;
+    let model = parse_grid_model_for_solver(source)?;
     let state = state3_from_json(&model.game, state_json)?;
-    let state = if level_index_from_state3_json(&model, state_json).is_some() {
-        materialize_level_start_state3(&model, state)?
-    } else {
-        state
-    };
-    let budget = if max_ms > 0 {
-        SearchBudget::bounded(max_depth, max_nodes, Duration::from_millis(max_ms))
-    } else {
-        SearchBudget {
-            max_depth: Some(max_depth),
-            max_nodes: Some(max_nodes),
-            max_frontier: None,
-            max_duration: None,
-        }
-    };
-    let response = solve_current_state3_with_budget(&model, state, budget)?;
+    let level_index = grid_level_index_for_complete_state(&model, state_json)?;
+    let session = grid_play_session_from_state(&model, level_index, state, true)?;
+    let budget = solver_request_budget(max_depth, max_nodes, max_ms)?;
+    let response = solve_current_grid_session_with_budget(&model, level_index, session, budget)?;
     let mut out = String::new();
     push_spatial_solution_response(&mut out, &model, &response);
     Ok(out)
 }
 
 #[cfg(feature = "solver")]
-fn parse_spatial_model_for_solver(
-    source: &str,
-) -> Result<LoadedGridGame<3, Size3>, AppError> {
+fn parse_grid_model_for_solver(source: &str) -> Result<LoadedGridGame<3, Size3>, AppError> {
     let document = puzzle_lang::parse_game_for_path(source, "solver.puzzle")?;
     document
         .models
@@ -1711,7 +1662,7 @@ fn parse_spatial_model_for_solver(
             LoadedDocumentModel::Puzzle3d { game, .. } => Some(game),
             LoadedDocumentModel::Puzzle2d { .. } => None,
         })
-        .ok_or_else(|| AppError::Config("3D solver source does not contain a puzzle3 model".into()))
+        .ok_or_else(|| AppError::Config("solver source does not contain a 3d model".into()))
 }
 
 fn state_from_json(loaded: &LoadedGame, state_json: &str) -> Result<State, AppError> {
@@ -1786,75 +1737,61 @@ fn level_index_from_state_json(loaded: &LoadedGame, state_json: &str) -> Option<
     (index < loaded.levels.len()).then_some(index)
 }
 
-fn materialize_level_start_state(
-    loaded: &LoadedGame,
-    state: State,
-    level_index: usize,
-) -> Result<State, AppError> {
-    let mut state = state;
-    let mut cancelled = false;
-    if let Some(program) = loaded.level_start_program.as_ref() {
-        let outcome = transition_program_outcome(&loaded.game, &state, program, InputId(0))?;
-        state = outcome.next_state;
-        cancelled |= outcome.cancelled;
-    } else if loaded.run_rules_on_level_start {
-        let program = loaded
-            .executable_program_for_level(level_index)
-            .ok_or_else(|| {
-                AppError::Config(format!("level start index out of range: {level_index}"))
-            })?;
-        let outcome = transition_program_outcome(&loaded.game, &state, program, InputId(0))?;
-        state = outcome.next_state;
-        cancelled |= outcome.cancelled;
-    }
-    if !cancelled {
-        if let Some(program) = loaded
-            .levels
-            .get(level_index)
-            .and_then(|level| level.level_start_program.as_ref())
-        {
-            let outcome = transition_program_outcome(&loaded.game, &state, program, InputId(0))?;
-            state = outcome.next_state;
-        }
-    }
-    Ok(state)
-}
-
-fn state3_from_json(game: &GridCompiledGame<3>, state_json: &str) -> Result<GridState<3, Size3>, AppError> {
+fn state3_from_json(
+    game: &GridCompiledGame<3>,
+    state_json: &str,
+) -> Result<GridState<3, Size3>, AppError> {
     let width = json_u64_field(state_json, "width")
-        .ok_or_else(|| AppError::Config("3D solver state missing width".to_string()))?
+        .ok_or_else(|| {
+            AppError::Config("solver state for modelKind 3d is missing width".to_string())
+        })?
         .try_into()
-        .map_err(|_| AppError::Config("3D solver state width out of range".to_string()))?;
+        .map_err(|_| {
+            AppError::Config("solver state width for modelKind 3d is out of range".to_string())
+        })?;
     let depth = json_u64_field(state_json, "depth")
-        .ok_or_else(|| AppError::Config("3D solver state missing depth".to_string()))?
+        .ok_or_else(|| {
+            AppError::Config("solver state for modelKind 3d is missing depth".to_string())
+        })?
         .try_into()
-        .map_err(|_| AppError::Config("3D solver state depth out of range".to_string()))?;
+        .map_err(|_| {
+            AppError::Config("solver state depth for modelKind 3d is out of range".to_string())
+        })?;
     let height = json_u64_field(state_json, "height")
-        .ok_or_else(|| AppError::Config("3D solver state missing height".to_string()))?
+        .ok_or_else(|| {
+            AppError::Config("solver state for modelKind 3d is missing height".to_string())
+        })?
         .try_into()
-        .map_err(|_| AppError::Config("3D solver state height out of range".to_string()))?;
+        .map_err(|_| {
+            AppError::Config("solver state height for modelKind 3d is out of range".to_string())
+        })?;
     let layer_count = json_u64_field(state_json, "layerCount")
         .map(u16::try_from)
         .transpose()
-        .map_err(|_| AppError::Config("3D solver state layerCount out of range".to_string()))?
+        .map_err(|_| {
+            AppError::Config("solver state layerCount for modelKind 3d is out of range".to_string())
+        })?
         .unwrap_or(game.layer_count);
     if layer_count != game.layer_count {
         return Err(AppError::Config(format!(
-            "3D solver state layerCount mismatch: expected {}, got {layer_count}",
+            "solver state layerCount mismatch for modelKind 3d: expected {}, got {layer_count}",
             game.layer_count
         )));
     }
-    let slots = json_u64_array_field(state_json, "slots")
-        .ok_or_else(|| AppError::Config("3D solver state missing slots".to_string()))?;
+    let slots = json_u64_array_field(state_json, "slots").ok_or_else(|| {
+        AppError::Config("solver state for modelKind 3d is missing slots".to_string())
+    })?;
     let fired_rules = json_u64_array_field(state_json, "levelFiredRules").unwrap_or_default();
     let expected_slots = usize::from(width)
         .checked_mul(usize::from(depth))
         .and_then(|count| count.checked_mul(usize::from(height)))
         .and_then(|count| count.checked_mul(usize::from(layer_count)))
-        .ok_or_else(|| AppError::Config("3D solver state dimensions are too large".to_string()))?;
+        .ok_or_else(|| {
+            AppError::Config("solver state dimensions for modelKind 3d are too large".to_string())
+        })?;
     if slots.len() != expected_slots {
         return Err(AppError::Config(format!(
-            "3D solver state slots length mismatch: expected {expected_slots}, got {}",
+            "solver state slots length mismatch for modelKind 3d: expected {expected_slots}, got {}",
             slots.len()
         )));
     }
@@ -1865,9 +1802,9 @@ fn state3_from_json(game: &GridCompiledGame<3>, state_json: &str) -> Result<Grid
         if object == 0 {
             continue;
         }
-        let object: u16 = object
-            .try_into()
-            .map_err(|_| AppError::Config("3D solver state object id out of range".to_string()))?;
+        let object: u16 = object.try_into().map_err(|_| {
+            AppError::Config("solver state object id for modelKind 3d is out of range".to_string())
+        })?;
         let layer = index % usize::from(layer_count);
         let cell = index / usize::from(layer_count);
         let x = (cell % usize::from(width)) as u16;
@@ -1876,11 +1813,14 @@ fn state3_from_json(game: &GridCompiledGame<3>, state_json: &str) -> Result<Grid
         let z = (yz / usize::from(depth)) as u16;
         let object = ObjectId(object);
         let expected_layer = game.object_layer(object).ok_or_else(|| {
-            AppError::Config(format!("3D solver state unknown object id {}", object.0))
+            AppError::Config(format!(
+                "solver state for modelKind 3d has unknown object id {}",
+                object.0
+            ))
         })?;
         if usize::from(expected_layer.0) != layer {
             return Err(AppError::Config(format!(
-                "3D solver state object {} is in layer {layer}, expected {}",
+                "solver state object {} for modelKind 3d is in layer {layer}, expected {}",
                 object.0, expected_layer.0
             )));
         }
@@ -1889,30 +1829,36 @@ fn state3_from_json(game: &GridCompiledGame<3>, state_json: &str) -> Result<Grid
             .map_err(|error| AppError::Config(format!("{error:?}")))?;
     }
     for rule in fired_rules {
-        let rule: u16 = rule
-            .try_into()
-            .map_err(|_| AppError::Config("3D solver state rule id out of range".to_string()))?;
+        let rule: u16 = rule.try_into().map_err(|_| {
+            AppError::Config("solver state rule id for modelKind 3d is out of range".to_string())
+        })?;
         state.mark_level_rule_fired(RuleId(rule));
     }
     Ok(state)
 }
 
-fn level_index_from_state3_json(
+#[cfg(feature = "solver")]
+fn grid_level_index_for_complete_state(
     model: &LoadedGridGame<3, Size3>,
     state_json: &str,
-) -> Option<usize> {
-    let index = usize::try_from(json_u64_field(state_json, "levelIndex")?).ok()?;
-    let level_count = model.levels.len();
-    (index < level_count).then_some(index)
-}
-
-fn materialize_level_start_state3(
-    model: &LoadedGridGame<3, Size3>,
-    state: GridState<3, Size3>,
-) -> Result<GridState<3, Size3>, AppError> {
-    let Some(program) = model.level_start_program.as_ref() else {
-        return Ok(state);
-    };
-    puzzle_core::grid_transition::transition_program_without_input(&model.game, &state, program)
-        .map_err(|error| AppError::Config(format!("{error:?}")))
+) -> Result<usize, AppError> {
+    let state: serde_json::Value = serde_json::from_str(state_json)
+        .map_err(|error| AppError::Config(format!("solver state JSON is invalid: {error}")))?;
+    let state = json_object(&state, "solver state")?;
+    if let Some(value) = state.get("levelIndex") {
+        let index = json_usize_value(Some(value), "state.levelIndex")?;
+        if index >= model.levels.len() {
+            return Err(AppError::Config(format!(
+                "solver state levelIndex out of range for modelKind 3d: {index}"
+            )));
+        }
+        return Ok(index);
+    }
+    if model.levels.len() == 1 {
+        return Ok(0);
+    }
+    Err(AppError::Config(format!(
+        "solver state requires levelIndex because the 3d model has {} levels",
+        model.levels.len()
+    )))
 }

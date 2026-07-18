@@ -17,8 +17,42 @@ pub struct SourceHighlightSpan {
     pub start: usize,
     pub end: usize,
     pub kind: SourceHighlightKind,
-    pub color: Option<String>,
-    pub transparent: bool,
+    pub(crate) color: Option<SourceHighlightColor>,
+    pub(crate) transparent: bool,
+}
+
+impl SourceHighlightSpan {
+    pub fn color(&self) -> Option<&SourceHighlightColor> {
+        self.color.as_ref()
+    }
+
+    pub fn is_transparent(&self) -> bool {
+        self.transparent
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SourceHighlightColor(String);
+
+impl SourceHighlightColor {
+    pub fn parse(value: impl Into<String>) -> Option<Self> {
+        let value = value.into();
+        crate::syntax::canonical_visual_color_literal(&value).map(Self)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn is_transparent(&self) -> bool {
+        self.0.eq_ignore_ascii_case("transparent")
+    }
+}
+
+impl AsRef<str> for SourceHighlightColor {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -139,7 +173,7 @@ pub(crate) fn highlight_source_range_with_document(
 
 #[cfg(test)]
 mod tests {
-    use crate::SurfaceDocument;
+    use crate::{SourceHighlightColor, SurfaceDocument};
 
     use super::highlight_source_range_with_document;
 
@@ -152,6 +186,23 @@ mod tests {
                 .spans
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn every_named_highlight_color_resolves_to_a_browser_color() {
+        for (name, _) in crate::syntax::VISUAL_NAMED_COLORS {
+            let color = SourceHighlightColor::parse(*name).expect("registered color must resolve");
+            let value = color.as_str();
+            assert!(
+                value == "transparent"
+                    || value == "currentcolor"
+                    || value.strip_prefix('#').is_some_and(|hex| {
+                        matches!(hex.len(), 3 | 4 | 6 | 8)
+                            && hex.chars().all(|ch| ch.is_ascii_hexdigit())
+                    }),
+                "registered highlight color {name:?} resolved to invalid CSS color {value:?}"
+            );
+        }
     }
 
     #[test]

@@ -14,6 +14,10 @@ mod tests {
     const MARK: MarkId = MarkId(1);
     const RIGHT: InputId = InputId(1);
 
+    fn fired_rules(trace: &crate::TransitionOutcome) -> Vec<RuleId> {
+        trace.firings.iter().map(|firing| firing.rule).collect()
+    }
+
     fn fixed(dx: i16, dy: i16) -> Offset {
         Offset::Fixed {
             delta: [dx, dy].into(),
@@ -180,6 +184,33 @@ mod tests {
         assert_eq!(first, repeated);
         assert_eq!(first.object_count(BOX), 1);
         assert_eq!(first.object_count(PLAYER), 1);
+    }
+
+    #[test]
+    fn random_rule_treats_idempotent_lhs_match_as_a_firing_candidate() {
+        let objects = vec![ObjectDef {
+            id: PLAYER,
+            layer_id: LayerId(1),
+        }];
+        let identity = Rule {
+            id: RuleId(29),
+            guards: Vec::new(),
+            application: RuleApplication::Random,
+            pattern: pattern(vec![cell(0, 0, vec![PLAYER], vec![])]),
+            writes: vec![add(0, 0, PLAYER)],
+            effects: Vec::new(),
+        };
+        let game = CompiledGame::new(2, objects, vec![identity]);
+        let mut state = State::empty(2, 1, game.layer_count, game.object_count()).unwrap();
+        state.place_object(&game, 0, 0, PLAYER).unwrap();
+        state.place_object(&game, 1, 0, PLAYER).unwrap();
+
+        let trace = transition_trace(&game, &state, RIGHT).unwrap();
+
+        assert_eq!(trace.next_state, state);
+        assert_eq!(fired_rules(&trace), vec![RuleId(29)]);
+        assert!(!trace.progressed);
+        assert!(!trace.observable);
     }
 
     #[test]
@@ -362,9 +393,9 @@ mod tests {
 
         let trace = transition_trace(&game, &state, RIGHT).unwrap();
 
-        assert_eq!(trace.fired_rules, vec![RuleId(1)]);
-        assert_eq!(trace.patches.len(), 1);
-        assert_eq!(trace.patches[0].ops().len(), 4);
+        assert_eq!(fired_rules(&trace), vec![RuleId(1)]);
+        assert_eq!(trace.firings.len(), 1);
+        assert_eq!(trace.firings[0].patch.ops().len(), 4);
     }
 
     #[test]
@@ -397,8 +428,8 @@ mod tests {
         let trace = transition_trace(&game, &state, RIGHT).unwrap();
 
         assert_eq!(trace.next_state, state);
-        assert_eq!(trace.fired_rules, vec![RuleId(3)]);
-        assert_eq!(trace.patches.len(), 1);
+        assert_eq!(fired_rules(&trace), vec![RuleId(3)]);
+        assert_eq!(trace.firings.len(), 1);
     }
 
     #[test]
@@ -425,8 +456,8 @@ mod tests {
         let trace = transition_trace(&game, &state, RIGHT).unwrap();
 
         assert!(trace.next_state.has_object(&game, 3, 0, PLAYER));
-        assert_eq!(trace.fired_rules, vec![RuleId(1), RuleId(1), RuleId(1)]);
-        assert_eq!(trace.patches.len(), 3);
+        assert_eq!(fired_rules(&trace), vec![RuleId(1), RuleId(1), RuleId(1)]);
+        assert_eq!(trace.firings.len(), 3);
     }
 
     #[test]
@@ -456,7 +487,7 @@ mod tests {
         assert!(trace.next_state.has_object(&game, 1, 0, PLAYER));
         assert!(trace.next_state.has_object(&game, 4, 0, PLAYER));
         assert!(!trace.next_state.has_object(&game, 2, 0, PLAYER));
-        assert_eq!(trace.fired_rules, vec![RuleId(1), RuleId(1)]);
+        assert_eq!(fired_rules(&trace), vec![RuleId(1), RuleId(1)]);
     }
 
     #[test]
@@ -496,8 +527,8 @@ mod tests {
             ObjectId::EMPTY
         );
         assert!(trace.next_state.has_object(&game, 2, 0, PLAYER));
-        assert_eq!(trace.fired_rules, vec![RuleId(8)]);
-        assert_eq!(trace.patches.len(), 1);
+        assert_eq!(fired_rules(&trace), vec![RuleId(8)]);
+        assert_eq!(trace.firings.len(), 1);
     }
 
     #[test]
@@ -526,7 +557,7 @@ mod tests {
         assert!(!trace.next_state.has_object(&game, 0, 0, PLAYER));
         assert!(trace.next_state.has_object(&game, 1, 0, PLAYER));
         assert!(!trace.next_state.has_object(&game, 2, 0, PLAYER));
-        assert_eq!(trace.fired_rules, vec![RuleId(10)]);
+        assert_eq!(fired_rules(&trace), vec![RuleId(10)]);
     }
 
     #[test]
@@ -560,6 +591,40 @@ mod tests {
         assert!(first.has_object(&game, 0, 0, BOX));
         assert!(first.level_rule_has_fired(RuleId(9)));
         assert_eq!(second, first);
+    }
+
+    #[test]
+    fn once_per_level_keeps_first_match_semantics_for_idempotent_patch() {
+        const DECORATION: ObjectId = ObjectId(4);
+        let objects = vec![
+            ObjectDef {
+                id: PLAYER,
+                layer_id: LayerId(1),
+            },
+            ObjectDef {
+                id: DECORATION,
+                layer_id: LayerId(2),
+            },
+        ];
+        let decorate_once = Rule {
+            id: RuleId(28),
+            guards: Vec::new(),
+            application: RuleApplication::OncePerLevel,
+            pattern: pattern(vec![cell(0, 0, vec![PLAYER], vec![])]),
+            writes: vec![add(0, 0, DECORATION)],
+            effects: Vec::new(),
+        };
+        let game = CompiledGame::new(3, objects, vec![decorate_once]);
+        let mut state = State::empty(3, 1, game.layer_count, game.object_count()).unwrap();
+        for x in 0..3 {
+            state.place_object(&game, x, 0, PLAYER).unwrap();
+        }
+        state.place_object(&game, 0, 0, DECORATION).unwrap();
+
+        let next = transition_state(&game, &state, RIGHT).unwrap();
+
+        assert!(next.level_rule_has_fired(RuleId(28)));
+        assert!(!next.has_object(&game, 1, 0, DECORATION));
     }
 
     #[test]
@@ -744,6 +809,172 @@ mod tests {
             next.variable_value(counter),
             Some(crate::grid_transition::UNTIL_STABLE_REPEAT_LIMIT as i64)
         );
+    }
+
+    #[test]
+    fn until_stable_block_skips_idempotent_first_match_and_reaches_later_matches() {
+        const DECORATION: ObjectId = ObjectId(4);
+        let objects = vec![
+            ObjectDef {
+                id: PLAYER,
+                layer_id: LayerId(1),
+            },
+            ObjectDef {
+                id: DECORATION,
+                layer_id: LayerId(2),
+            },
+        ];
+        let decorate_one = Rule {
+            id: RuleId(25),
+            guards: Vec::new(),
+            application: RuleApplication::RepeatStep,
+            pattern: pattern(vec![cell(0, 0, vec![PLAYER], vec![])]),
+            writes: vec![add(0, 0, DECORATION)],
+            effects: Vec::new(),
+        };
+        let game = CompiledGame::new_with_program(
+            3,
+            objects,
+            vec![RuleStep::Block {
+                application: RuleApplication::UntilStable,
+                stop_condition: None,
+                steps: vec![RuleStep::Rule(decorate_one)],
+            }],
+        );
+        let mut state = State::empty(3, 1, game.layer_count, game.object_count()).unwrap();
+        for x in 0..3 {
+            state.place_object(&game, x, 0, PLAYER).unwrap();
+        }
+
+        let state_only = transition_state(&game, &state, RIGHT).unwrap();
+        let trace = transition_trace(&game, &state, RIGHT).unwrap();
+
+        assert_eq!(state_only, trace.next_state);
+        for x in 0..3 {
+            assert!(trace.next_state.has_object(&game, x, 0, DECORATION));
+        }
+        assert_eq!(fired_rules(&trace), vec![RuleId(25); 4]);
+        assert!(trace.progressed);
+        assert!(!trace.observable);
+        assert_eq!(
+            trace
+                .firings
+                .iter()
+                .map(|firing| firing.progressed)
+                .collect::<Vec<_>>(),
+            vec![true, true, true, false]
+        );
+        assert!(trace.firings.iter().all(|firing| !firing.observable));
+    }
+
+    #[test]
+    fn once_keeps_first_match_semantics_when_first_patch_is_idempotent() {
+        const DECORATION: ObjectId = ObjectId(4);
+        let objects = vec![
+            ObjectDef {
+                id: PLAYER,
+                layer_id: LayerId(1),
+            },
+            ObjectDef {
+                id: DECORATION,
+                layer_id: LayerId(2),
+            },
+        ];
+        let decorate_once = Rule {
+            id: RuleId(27),
+            guards: Vec::new(),
+            application: RuleApplication::Once,
+            pattern: pattern(vec![cell(0, 0, vec![PLAYER], vec![])]),
+            writes: vec![add(0, 0, DECORATION)],
+            effects: Vec::new(),
+        };
+        let game = CompiledGame::new(3, objects, vec![decorate_once]);
+        let mut state = State::empty(3, 1, game.layer_count, game.object_count()).unwrap();
+        for x in 0..3 {
+            state.place_object(&game, x, 0, PLAYER).unwrap();
+        }
+        state.place_object(&game, 0, 0, DECORATION).unwrap();
+
+        let trace = transition_trace(&game, &state, RIGHT).unwrap();
+
+        assert_eq!(trace.next_state, state);
+        assert_eq!(fired_rules(&trace), vec![RuleId(27)]);
+        assert!(!trace.progressed);
+        assert!(!trace.observable);
+        assert!(!trace.firings[0].progressed);
+        assert!(!trace.firings[0].observable);
+        assert!(!trace.next_state.has_object(&game, 1, 0, DECORATION));
+    }
+
+    #[test]
+    fn observable_effect_only_match_fires_without_state_progress() {
+        let objects = vec![ObjectDef {
+            id: PLAYER,
+            layer_id: LayerId(1),
+        }];
+        let effect_only = Rule {
+            id: RuleId(26),
+            guards: Vec::new(),
+            application: RuleApplication::Once,
+            pattern: pattern(vec![cell(0, 0, vec![PLAYER], vec![])]),
+            writes: Vec::new(),
+            effects: vec![Effect::ObserveMatch],
+        };
+        let game = CompiledGame::new(2, objects, vec![effect_only]);
+        let mut state = State::empty(1, 1, game.layer_count, game.object_count()).unwrap();
+        state.place_object(&game, 0, 0, PLAYER).unwrap();
+
+        let trace = transition_trace(&game, &state, RIGHT).unwrap();
+
+        assert_eq!(trace.next_state, state);
+        assert_eq!(fired_rules(&trace), vec![RuleId(26)]);
+        assert!(!trace.progressed);
+        assert!(trace.observable);
+        assert!(!trace.firings[0].progressed);
+        assert!(trace.firings[0].observable);
+    }
+
+    #[test]
+    fn observable_repeat_step_preserves_first_match_priority() {
+        const DECORATION: ObjectId = ObjectId(4);
+        let objects = vec![
+            ObjectDef {
+                id: PLAYER,
+                layer_id: LayerId(1),
+            },
+            ObjectDef {
+                id: DECORATION,
+                layer_id: LayerId(2),
+            },
+        ];
+        let observable_decorate = Rule {
+            id: RuleId(30),
+            guards: Vec::new(),
+            application: RuleApplication::RepeatStep,
+            pattern: pattern(vec![cell(0, 0, vec![PLAYER], vec![])]),
+            writes: vec![add(0, 0, DECORATION)],
+            effects: vec![Effect::ObserveMatch],
+        };
+        let game = CompiledGame::new_with_program(
+            3,
+            objects,
+            vec![RuleStep::Block {
+                application: RuleApplication::UntilStable,
+                stop_condition: None,
+                steps: vec![RuleStep::Rule(observable_decorate)],
+            }],
+        );
+        let mut state = State::empty(3, 1, game.layer_count, game.object_count()).unwrap();
+        for x in 0..3 {
+            state.place_object(&game, x, 0, PLAYER).unwrap();
+        }
+        state.place_object(&game, 0, 0, DECORATION).unwrap();
+
+        let trace = transition_trace(&game, &state, RIGHT).unwrap();
+
+        assert_eq!(trace.next_state, state);
+        assert_eq!(fired_rules(&trace), vec![RuleId(30)]);
+        assert!(!trace.next_state.has_object(&game, 1, 0, DECORATION));
     }
 
     #[test]

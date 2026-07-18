@@ -104,14 +104,13 @@ fn project_builtin_completion_symbols(sink: &mut SurfaceSink) {
     );
 }
 
-fn parser_catalog_completion_symbols(catalog: &Catalog) -> crate::surface::SurfaceCompletionSymbols {
+fn parser_catalog_completion_symbols(
+    catalog: &Catalog,
+) -> crate::surface::SurfaceCompletionSymbols {
     let mut symbols = crate::surface::SurfaceCompletionSymbols::default();
-    symbols.objects.extend(
-        catalog
-            .object_schemas
-            .keys()
-            .cloned(),
-    );
+    symbols
+        .objects
+        .extend(catalog.object_schemas.keys().cloned());
     symbols.objects.extend(
         catalog
             .object_names
@@ -579,7 +578,7 @@ fn collect_puzzle_group_declarations_from_entries(
 fn parser_surface_catalog_from_source_scan(
     source_scan: &source::SurfaceSourceScan,
     source_profile: Option<PuzzleSourceProfile>,
-) -> crate::surface::ParseProduct<Result<LevelEditorIntegration, DiagnosticReport>> {
+) -> crate::surface::ParseProduct<Result<ParserSurfaceSnapshot, DiagnosticReport>> {
     let mut recognition = crate::surface::ParserRecognition::default();
     let logical_lines = source_scan.editor_logical_lines();
     project_surface_sound_products(&logical_lines, &mut recognition);
@@ -596,16 +595,27 @@ fn parser_surface_catalog_from_source_scan(
         Ok(shell) => shell,
         Err(report) => return crate::surface::ParseProduct::new(Err(report), recognition),
     };
+    let mut compile_diagnostics = Vec::new();
+    if let Err(report) = model_syntax::validate_closed_entries(&document_entries, "document") {
+        compile_diagnostics.extend(report.into_diagnostics());
+    }
     let (models, mut diagnostics) =
         match model_syntax::parse_puzzle_models_from_document_entries(&document_entries) {
             Ok(models) => {
+                if let Err(report) = model_syntax::validate_puzzle_model_diagnostics(&models) {
+                    compile_diagnostics.extend(report.into_diagnostics());
+                }
                 let diagnostics = models
                     .iter()
                     .flat_map(|model| model.diagnostics.iter().map(ToString::to_string))
                     .collect();
                 (models, diagnostics)
             }
-            Err(report) => (Vec::new(), vec![report.to_string()]),
+            Err(report) => {
+                let diagnostics = vec![report.to_string()];
+                compile_diagnostics.extend(report.into_diagnostics());
+                (Vec::new(), diagnostics)
+            }
         };
     let mut model_catalogs = Vec::with_capacity(models.len());
     for model in &models {
@@ -613,7 +623,10 @@ fn parser_surface_catalog_from_source_scan(
         recognition.merge(parsed_catalog.recognition);
         match parsed_catalog.value {
             Ok(catalog) => model_catalogs.push(catalog),
-            Err(report) => diagnostics.push(report.to_string()),
+            Err(report) => {
+                diagnostics.push(report.to_string());
+                compile_diagnostics.extend(report.into_diagnostics());
+            }
         }
     }
     let loose_entries = models.is_empty().then(|| document_entries.clone());
@@ -623,6 +636,12 @@ fn parser_surface_catalog_from_source_scan(
         model_catalogs,
         scenes,
         recognition,
+        disposition_diagnostic: None,
+    };
+    let compile_parts = if compile_diagnostics.is_empty() {
+        Ok(parts.clone())
+    } else {
+        Err(DiagnosticReport::from_diagnostics(compile_diagnostics))
     };
     let mut integrated = integrate_level_editor_document_parts(parts);
     if let (Some(entries), Some(source_profile)) = (loose_entries, source_profile) {
@@ -661,7 +680,17 @@ fn parser_surface_catalog_from_source_scan(
         }
     }
     integrated.value.diagnostics.append(&mut diagnostics);
-    crate::surface::ParseProduct::new(Ok(integrated.value), integrated.recognition)
+    let mut compile_parts = compile_parts;
+    if let Ok(parts) = &mut compile_parts {
+        parts.recognition = integrated.recognition.clone();
+    }
+    crate::surface::ParseProduct::new(
+        Ok(ParserSurfaceSnapshot {
+            level_editor: integrated.value,
+            compile_parts,
+        }),
+        integrated.recognition,
+    )
 }
 
 fn project_surface_sound_products(
@@ -759,6 +788,11 @@ pub(crate) struct LevelEditorIntegration {
     pub(crate) diagnostics: Vec<String>,
 }
 
+struct ParserSurfaceSnapshot {
+    level_editor: LevelEditorIntegration,
+    compile_parts: Result<DocumentSourceParts, DiagnosticReport>,
+}
+
 pub(crate) struct LevelEditorIntegratedLevel {
     pub(crate) source_level_index: usize,
     pub(crate) name: String,
@@ -772,12 +806,22 @@ fn parser_document_completion_symbols(
     parts: &DocumentSourceParts,
 ) -> crate::surface::SurfaceCompletionSymbols {
     let mut symbols = crate::surface::SurfaceCompletionSymbols::default();
-    symbols
-        .assets
-        .extend(parts.shell.assets.entries.iter().map(|asset| asset.path.clone()));
-    symbols
-        .sfx
-        .extend(parts.shell.sounds.sfx.iter().map(|sound| sound.name.clone()));
+    symbols.assets.extend(
+        parts
+            .shell
+            .assets
+            .entries
+            .iter()
+            .map(|asset| asset.path.clone()),
+    );
+    symbols.sfx.extend(
+        parts
+            .shell
+            .sounds
+            .sfx
+            .iter()
+            .map(|sound| sound.name.clone()),
+    );
     symbols.music.extend(
         parts
             .shell
@@ -795,14 +839,22 @@ fn parser_document_completion_symbols(
                 .iter()
                 .map(|level| level.name.clone()),
         );
-        symbols.routines.extend(model.body.routines.iter().filter_map(|routine| {
-            routine.statement.tokens().get(1).cloned()
-        }));
+        symbols.routines.extend(
+            model
+                .body
+                .routines
+                .iter()
+                .filter_map(|routine| routine.statement.tokens().get(1).cloned()),
+        );
     }
     for scene in &parts.scenes {
-        symbols
-            .states
-            .extend(scene.state.variables.iter().map(|variable| variable.name.clone()));
+        symbols.states.extend(
+            scene
+                .state
+                .variables
+                .iter()
+                .map(|variable| variable.name.clone()),
+        );
         symbols
             .states
             .extend(scene.state.puzzles.iter().map(|puzzle| puzzle.name.clone()));
@@ -856,6 +908,15 @@ fn integrate_level_editor_document_parts(
         for legend in &model.body.levels.legends {
             recognize_level_resource_legend(legend, model_catalog, &mut recognition);
         }
+        for legend in model
+            .body
+            .levels
+            .levels
+            .iter()
+            .flat_map(|level| &level.legends)
+        {
+            recognize_level_resource_legend(legend, model_catalog, &mut recognition);
+        }
     }
     if dimension == crate::ModelDimension::Two {
         for model in &parts.models {
@@ -891,23 +952,13 @@ fn integrate_level_editor_document_parts(
     completion_symbols
         .sprites
         .extend(visuals.sprites.iter().map(|sprite| sprite.name.clone()));
-    completion_symbols.shapes.extend(
-        recognition
-            .visual_sprite_refs
-            .shape_names
-            .iter()
-            .cloned(),
-    );
-    completion_symbols.colors.extend(
-        recognition
-            .visual_sprite_refs
-            .color_names
-            .iter()
-            .cloned(),
-    );
-    recognition
-        .completion_symbols
-        .merge(completion_symbols);
+    completion_symbols
+        .shapes
+        .extend(recognition.visual_sprite_refs.shape_names.iter().cloned());
+    completion_symbols
+        .colors
+        .extend(recognition.visual_sprite_refs.color_names.iter().cloned());
+    recognition.completion_symbols.merge(completion_symbols);
     let layer_count = catalog
         .object_defs
         .iter()
@@ -958,11 +1009,7 @@ fn project_model_semantics(
     catalog: &Catalog,
     recognition: &mut crate::surface::ParserRecognition,
 ) {
-    project_level_products(
-        &model.body.levels.levels,
-        model.dimension,
-        recognition,
-    );
+    project_level_products(&model.body.levels.levels, model.dimension, recognition);
     project_syntax_semantics(&model.body.semantics, catalog, recognition);
     for program in [
         model.body.rules.as_ref(),
@@ -992,6 +1039,9 @@ fn project_model_semantics(
     if let Some(win_conditions) = &model.body.win_conditions {
         project_syntax_semantics(&win_conditions.semantics, catalog, recognition);
     }
+    if let Some(lose_conditions) = &model.body.lose_conditions {
+        project_syntax_semantics(&lose_conditions.semantics, catalog, recognition);
+    }
 }
 
 fn project_level_products(
@@ -999,17 +1049,19 @@ fn project_level_products(
     dimension: crate::ModelDimension,
     recognition: &mut crate::surface::ParserRecognition,
 ) {
-    recognition.level_products.extend(levels.iter().enumerate().map(
-        |(level_index, level)| crate::surface::SurfaceLevelProduct {
-            span: level.source_span,
-            body_span: level.body_span,
-            name: level.source_name.clone(),
-            dimension,
-            pack: level.pack.clone(),
-            puzzle: level.puzzle.clone(),
-            level_index,
-        },
-    ));
+    recognition
+        .level_products
+        .extend(levels.iter().enumerate().map(|(level_index, level)| {
+            crate::surface::SurfaceLevelProduct {
+                span: level.source_span,
+                body_span: level.body_span,
+                name: level.source_name.clone(),
+                dimension,
+                pack: level.pack.clone(),
+                puzzle: level.puzzle.clone(),
+                level_index,
+            }
+        }));
 }
 
 fn project_syntax_semantics(
@@ -1020,6 +1072,18 @@ fn project_syntax_semantics(
     recognition.merge(semantics.fixed.clone());
     for selector in &semantics.selectors {
         project_selector_occurrence(selector, catalog, recognition);
+    }
+    for identifier in &semantics.identifiers {
+        let kind = if catalog.condition_names.contains_key(&identifier.text) {
+            crate::surface::SurfaceSemanticKind::Condition
+        } else if catalog.variable_names.contains_key(&identifier.text) {
+            crate::surface::SurfaceSemanticKind::State
+        } else if catalog.input_names.contains_key(&identifier.text) {
+            crate::surface::SurfaceSemanticKind::Input
+        } else {
+            crate::surface::SurfaceSemanticKind::Binding
+        };
+        recognition.mark(identifier.span, kind);
     }
 }
 
@@ -1128,6 +1192,16 @@ pub(crate) fn parse_tag_domain_values(
 ) -> Result<(Vec<String>, ValueType), DiagnosticReport> {
     if values.is_empty() {
         return Err(parse_error(line, "tag set must have at least one value"));
+    }
+    if let Some(value) = values
+        .iter()
+        .copied()
+        .find(|value| puzzle_authoring::is_selector_tag_syntax_literal(value))
+    {
+        return Err(parse_error(
+            line,
+            &format!("tag value {value} is reserved by selector syntax"),
+        ));
     }
     if matches!(
         values.first().copied(),
@@ -2064,10 +2138,13 @@ fn layer_selector_variant_values(
         let Some(value) = schema_selector_part(parts, schema, axis_index) else {
             return Err(parse_error(
                 line,
-                "object selector must name every variant slot; use * for unconstrained slots",
+                &format!(
+                    "object selector must name every variant slot; use {} for unconstrained slots",
+                    puzzle_authoring::SELECTOR_WILDCARD
+                ),
             ));
         };
-        let values = if value == "*" {
+        let values = if puzzle_authoring::is_selector_wildcard(value) {
             schema_axis_values(schema, axis_index)?
         } else if let Some(values) = value_sets.get(value) {
             values
@@ -2136,7 +2213,9 @@ fn is_known_object_selector(
         || object_groups.contains_key(selector)
         || (selector.contains(':') && object_schemas.contains_key(base))
         || (selector.contains(':') && value_sets.contains_key(base))
-        || (base == "*" && selector.contains(':') && !object_schemas.is_empty())
+        || (puzzle_authoring::is_selector_wildcard(base)
+            && selector.contains(':')
+            && !object_schemas.is_empty())
 }
 
 fn assign_selectors_to_separate_layers(

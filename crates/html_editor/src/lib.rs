@@ -155,6 +155,12 @@ const PUZZLE_GAME_WASM_JS: &str =
 const PUZZLE_GAME_WASM_BG: &[u8] =
     include_bytes!("../../html_play/static/wasm_game/puzzle_wasm_game_bg.wasm");
 #[cfg(feature = "embedded-assets")]
+const PUZZLE_PLAYER_WASM_JS: &str =
+    include_str!("../../html_play/static/wasm_player/puzzle_wasm_player.js");
+#[cfg(feature = "embedded-assets")]
+const PUZZLE_PLAYER_WASM_BG: &[u8] =
+    include_bytes!("../../html_play/static/wasm_player/puzzle_wasm_player_bg.wasm");
+#[cfg(feature = "embedded-assets")]
 const PUZZLE_CORE_WASM_JS: &str = include_str!("../../wasm_core/static/puzzle_core_wasm.js");
 #[cfg(feature = "embedded-assets")]
 const PUZZLE_CORE_WASM_BG: &[u8] =
@@ -1479,6 +1485,12 @@ fn route(request: &HttpRequest, service: &EditorService) -> Vec<u8> {
         ("GET", "/wasm_game/puzzle_wasm_game_bg.wasm") => {
             http_bytes("application/wasm", PUZZLE_GAME_WASM_BG)
         }
+        ("GET", "/wasm_player/puzzle_wasm_player.js") => {
+            http_ok("text/javascript; charset=utf-8", PUZZLE_PLAYER_WASM_JS)
+        }
+        ("GET", "/wasm_player/puzzle_wasm_player_bg.wasm") => {
+            http_bytes("application/wasm", PUZZLE_PLAYER_WASM_BG)
+        }
         ("GET", "/wasm_core/puzzle_core_wasm.js") => {
             http_ok("text/javascript; charset=utf-8", PUZZLE_CORE_WASM_JS)
         }
@@ -1864,11 +1876,6 @@ fn create_source_file(
     let workspace_root = workspace_root_path.canonicalize()?;
     let requested_path =
         resolve_workspace_request_path(&request.puzzle_path, &workspace_root_path)?;
-    if !puzzle_lang::is_puzzle_source_path(&requested_path) {
-        return Err(AppError::Config(
-            "can only create .puzzle or .puzzle3 source files".to_string(),
-        ));
-    }
     if requested_path.exists() {
         return Err(AppError::Config(format!(
             "file already exists: {}",
@@ -2180,6 +2187,17 @@ fn write_pages_editor_site(output_path: &Path, html: String) -> Result<(), AppEr
     fs::write(
         game_wasm_dir.join("puzzle_wasm_game_bg.wasm"),
         PUZZLE_GAME_WASM_BG,
+    )?;
+
+    let player_wasm_dir = output_dir.join("wasm_player");
+    fs::create_dir_all(&player_wasm_dir)?;
+    fs::write(
+        player_wasm_dir.join("puzzle_wasm_player.js"),
+        PUZZLE_PLAYER_WASM_JS,
+    )?;
+    fs::write(
+        player_wasm_dir.join("puzzle_wasm_player_bg.wasm"),
+        PUZZLE_PLAYER_WASM_BG,
     )?;
 
     let core_wasm_dir = output_dir.join("wasm_core");
@@ -2632,11 +2650,11 @@ fn render_source_highlight_html(
         out.push_str(&escape_html(&source[cursor..span.start]));
         out.push_str("<span class=\"syntax-");
         out.push_str(span.kind.as_str());
-        if span.transparent {
+        if span.is_transparent() {
             out.push_str(" is-transparent");
         }
         out.push('"');
-        if let Some(color) = &span.color {
+        if let Some(color) = span.color() {
             let property = if span.kind == puzzle_lang::SourceHighlightKind::SpritePixel {
                 "--syntax-sprite-pixel-color"
             } else {
@@ -2645,7 +2663,7 @@ fn render_source_highlight_html(
             out.push_str(" style=\"");
             out.push_str(property);
             out.push_str(": ");
-            out.push_str(&escape_html(color));
+            out.push_str(&escape_html(color.as_str()));
             out.push('"');
         }
         out.push('>');
@@ -4433,7 +4451,7 @@ P
 
         assert!(html.contains("window.Puzzle3DFrameFixture"));
         assert!(html.contains("WasmStandaloneSession"));
-        assert!(html.contains("window.Puzzle3ControllerAutoBoot = false"));
+        assert!(html.contains("window.Puzzle3ComponentAutoBoot = false"));
         assert!(
             html.contains("sessionManaged: Boolean(standaloneRuntime && !puzzle3PreviewSurface)")
         );
@@ -4441,6 +4459,23 @@ P
         assert!(html.contains("window.Puzzle3ThreeRenderer"));
         assert!(html.contains("return text === \"canvas\" ? \"canvas\" : \"three\";"));
         assert!(html.contains("Microban 3D"));
+    }
+
+    #[test]
+    fn preview_status_and_errors_follow_runtime_completion() {
+        assert!(EDITOR_JS.contains(
+            "appendPreviewLog(\"system\", \"Preview compiled\", { source: \"compiler\" });"
+        ));
+        assert!(EDITOR_JS.contains("setStatus(\"Starting preview\", \"\");"));
+        assert!(EDITOR_JS.contains("event.data?.type === \"PuzzleStudioPreviewRuntimeReady\""));
+        assert!(EDITOR_JS.contains("event.data?.type === \"PuzzleStudioPreviewRuntimeError\""));
+        assert!(EDITOR_JS.contains("[headline, stack].filter(Boolean).join(\"\\\\n\")"));
+        assert!(EDITOR_JS.contains(
+            "window.PuzzleStudioPreviewRuntimeFailure && event.message === \"Script error.\""
+        ));
+        assert!(!EDITOR_JS.contains(
+            "appendPreviewLog(\"system\", \"Preview ready\", { source: \"compiler\" });"
+        ));
     }
 
     #[test]
@@ -5052,6 +5087,16 @@ levels demo of push3 {
         assert!(!EDITOR_JS.contains("function levelEditorSourceExportData(source, entry)"));
         assert!(!EDITOR_JS.contains("function sourceGameVisualsJs(source)"));
         assert!(EDITOR_JS.contains("applyGameVisuals(compiledPreviewGameVisualsJs(html));"));
+        assert!(EDITOR_JS.contains(
+            "order: {\n            direction_priority: [...(config.order?.direction_priority || [])],\n            priorities: [...(config.order?.priorities || [])],\n          },"
+        ));
+        assert!(EDITOR_JS.contains("animations: { ...(config.animations || {}) },"));
+        assert!(EDITOR_JS.contains("triggers: { ...(config.triggers || {}) },"));
+        assert!(EDITOR_JS.contains("animationDefaults: { ...(config.animationDefaults || {}) },"));
+        assert!(EDITOR_JS.contains("  Function(script)();\n}"));
+        assert!(!EDITOR_JS.contains(
+            "window.PuzzleStudio.disposeAssetScripts();\n    window.GameVisuals = window.PuzzleSpriteRegistry.create();\n    console.error(error);"
+        ));
         assert!(EDITOR_JS.contains("label.textContent = `Layer ${index + 1}`;"));
         assert!(EDITOR_JS.contains("levelLayerPreviewStrip.replaceChildren(fragment);"));
         assert!(EDITOR_CSS.contains(".level-board.board.has-all-cell-grid .cell::after"));
@@ -5796,6 +5841,14 @@ levels demo of push3 {
         assert!(open_solver_source.contains("await ensurePreviewSolverExportData();"));
         assert!(EDITOR_JS.contains("async function ensurePreviewSolverExportData()"));
         assert!(EDITOR_JS.contains("await prepareEditorSolverArtifact({"));
+        assert!(!EDITOR_JS.contains("if (isPuzzle3dExport(exportData)) return exportData;"));
+        assert!(EDITOR_JS.contains("const solverRules = exportData?.__solverRules;"));
+        assert!(EDITOR_JS.contains(
+            "!solverRules?.loadedGame || (modelKind === \"2d\" && !solverRules?.compiledPlay)"
+        ));
+        assert!(EDITOR_JS.contains(
+            "!task.rules.loadedGame || (task.rules.modelKind === \"2d\" && !task.rules.compiledPlay)"
+        ));
         assert!(EDITOR_JS.contains("setLevelSolveStatus(\"Preparing solver\", \"\");"));
         assert!(EDITOR_JS.contains("exportData.__solverArtifactId = prepared.artifactId;"));
         assert!(!EDITOR_JS.contains("Preview failed: ${userFacingRuntimeError(error)}"));
@@ -5815,13 +5868,15 @@ levels demo of push3 {
         assert!(!EDITOR_JS.contains("compilingMessage: \"Compiling preview for solve\""));
         assert!(EDITOR_JS.contains("async function solveEditedLevelFromEditor()"));
         assert!(EDITOR_JS.contains("function compiledLevelStateData("));
-        assert!(EDITOR_JS.contains("function solverPuzzle3dPreviewSnapshot("));
+        assert!(EDITOR_JS.contains("function puzzle3dSnapshotForActiveSolverTask("));
         assert!(EDITOR_JS.contains("const solve = module.solve_solver_task_json_with_progress;"));
         assert!(EDITOR_JS.contains("const solutionJson = solve(JSON.stringify(request),"));
         assert!(
             EDITOR_JS.contains("const entry = artifacts.get(String(data.artifactId || \"\"));")
         );
         assert!(EDITOR_JS.contains("function solverRequestForTask(task)"));
+        assert!(EDITOR_JS.contains("maxNodes: 1000,"));
+        assert!(!EDITOR_JS.contains("maxNodes: 5_000_000,"));
         assert!(EDITOR_JS.contains("if (isSolverTaskComplete(task))"));
         assert!(EDITOR_JS.contains(
             "setLevelSolveStatus(\"This level has already been solved\", \"is-error\");"
@@ -5847,8 +5902,7 @@ levels demo of push3 {
         assert!(EDITOR_LEVEL3D_JS.contains("function level3dEditedSnapshotAppliesToLevel("));
         assert!(EDITOR_LEVEL3D_JS.contains("function level3dCellsWithObjectDescriptors("));
         assert!(
-            EDITOR_JS
-                .contains("isPuzzle3dExport(exportData) && typeof renderPuzzle3dSolverPreview")
+            EDITOR_JS.contains("isPuzzle3dExport(exportData) && typeof renderSolverRuntimePreview")
         );
     }
 
@@ -6527,16 +6581,16 @@ move
             EDITOR_LEVEL3D_JS.contains("settings: level3dPreviewSettings(snapshot.render || {})")
         );
         assert!(!EDITOR_LEVEL3D_JS.contains("previewFrameHasEditorLevelState = true;"));
-        assert!(EDITOR_LEVEL3D_JS.contains("function renderPuzzle3dSolverPreview()"));
-        assert!(EDITOR_LEVEL3D_JS.contains("function sendPuzzle3dSolutionToSolverRuntime()"));
-        assert!(EDITOR_LEVEL3D_JS.contains("level3dSolverFrame.contentWindow.postMessage(level3dPreviewSurfaceMessage(update), \"*\");"));
+        assert!(EDITOR_LEVEL3D_JS.contains("function renderSolverRuntimePreview()"));
+        assert!(EDITOR_LEVEL3D_JS.contains("function sendSolverPreviewToRuntime()"));
+        assert!(EDITOR_LEVEL3D_JS.contains("solverPreviewFrame.contentWindow.postMessage(level3dPreviewSurfaceMessage(update), \"*\");"));
         assert!(EDITOR_LEVEL3D_JS.contains("function level3dPreviewUpdateFromSnapshot(snapshot)"));
         assert!(EDITOR_JS.contains(
-            "isPuzzle3dExport(exportData) && typeof renderPuzzle3dSolverPreview === \"function\""
+            "isPuzzle3dExport(exportData) && typeof renderSolverRuntimePreview === \"function\""
         ));
-        assert!(EDITOR_JS.contains("typeof clearPuzzle3dSolverPreview === \"function\""));
+        assert!(EDITOR_JS.contains("typeof clearSolverRuntimePreview === \"function\""));
         assert!(EDITOR_CSS.contains(".solver-board-viewport.is-puzzle3d"));
-        assert!(EDITOR_CSS.contains(".solver3d-frame"));
+        assert!(EDITOR_CSS.contains(".solver-preview-frame"));
         assert!(
             EDITOR_LEVEL3D_JS.contains("function level3dLayerUsesRuntimeScreenFootprints(view)")
         );
@@ -8700,7 +8754,7 @@ move
     }
 
     #[test]
-    fn create_source_file_only_adds_new_puzzle_files_inside_workspace() {
+    fn create_source_file_adds_new_files_inside_workspace() {
         let workspace = TestWorkspace::new();
         let game_path = workspace.write(
             "games/editor_fixture/game.puzzle",
@@ -8741,11 +8795,14 @@ move
             .to_string();
         assert!(outside_error.contains("can only create files under"));
 
-        let text_error = service
+        let created_text = service
             .create_source_file(&CreateSourceFileRequest::new("notes\n", "notes.md"))
-            .expect_err("import creates puzzle files only")
-            .to_string();
-        assert!(text_error.contains("can only create .puzzle"));
+            .expect("create new text file");
+        assert!(created_text.ends_with("notes.md"));
+        assert_eq!(
+            fs::read_to_string(&created_text).expect("read created text file"),
+            "notes\n"
+        );
     }
 
     #[test]
@@ -9040,6 +9097,13 @@ move
         assert!(EDITOR_RUNTIME_JS.contains("./wasm_game/puzzle_wasm_game.js"));
         assert!(EDITOR_RUNTIME_JS.contains("./wasm_game/puzzle_wasm_game_bg.wasm"));
         assert!(EDITOR_RUNTIME_JS.contains("gameRuntimeAssetsPromise"));
+        assert!(EDITOR_RUNTIME_JS.contains("playerRuntimeAssets()"));
+        assert!(EDITOR_RUNTIME_JS.contains("./wasm_player/puzzle_wasm_player.js"));
+        assert!(EDITOR_RUNTIME_JS.contains("./wasm_player/puzzle_wasm_player_bg.wasm"));
+        assert!(EDITOR_RUNTIME_JS.contains("playerRuntimeAssetsPromise"));
+        assert!(EDITOR_RUNTIME_JS.contains(
+            "const runtimeAssets = await window.PuzzleStudioRuntime.playerRuntimeAssets();"
+        ));
         assert!(EDITOR_IMPORT_EXPORT_JS.contains("exportStandaloneHtml({"));
         assert!(!EDITOR_IMPORT_EXPORT_JS.contains("html: latestHtml"));
         assert!(EDITOR_JS.contains("PuzzleStudioRuntimeAssetRequest"));

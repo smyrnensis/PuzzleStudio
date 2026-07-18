@@ -176,30 +176,80 @@ fn route(request: &HttpRequest, state: Arc<Mutex<ServerState>>) -> String {
                 Err(error) => http_error(400, &error.to_string()),
             }
         }
-        (method, path) => match puzzle_game_runtime::standalone_session_request(method, path) {
-            Ok(request) => handle_standalone_session_request(state, request),
+        (method, path) => match session_action_from_http(method, path) {
+            Ok(action) => handle_session_action(state, action),
             Err(_) => http_error(404, "not found"),
         },
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn handle_standalone_session_request(
+fn session_action_from_http(
+    method: &str,
+    path: &str,
+) -> Result<puzzle_runtime_contract::SessionAction, String> {
+    use puzzle_runtime_contract::SessionAction;
+    match (method, path) {
+        ("GET", "/api/state") => Ok(SessionAction::Snapshot),
+        ("POST", "/api/command/undo") => Ok(SessionAction::Undo),
+        ("POST", "/api/command/redo") => Ok(SessionAction::Redo),
+        ("POST", "/api/command/restart") => Ok(SessionAction::Restart),
+        ("POST", "/api/command/next") | ("POST", "/api/command/next_level") => {
+            Ok(SessionAction::NextLevel)
+        }
+        ("POST", "/api/command/previous_level") => Ok(SessionAction::PreviousLevel),
+        ("POST", path) if path.starts_with("/api/debug/input/") => Ok(SessionAction::DebugInput {
+            name: percent_decode(&path["/api/debug/input/".len()..]),
+        }),
+        ("POST", path) if path.starts_with("/api/input/") => Ok(SessionAction::Input {
+            name: percent_decode(&path["/api/input/".len()..]),
+        }),
+        ("POST", path) if path.starts_with("/api/command/") => Ok(SessionAction::Command {
+            name: percent_decode(&path["/api/command/".len()..]),
+        }),
+        _ => Err(format!("unsupported session request: {method} {path}")),
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn percent_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            if let Ok(hex) = std::str::from_utf8(&bytes[index + 1..index + 3]) {
+                if let Ok(byte) = u8::from_str_radix(hex, 16) {
+                    decoded.push(byte);
+                    index += 3;
+                    continue;
+                }
+            }
+        }
+        decoded.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&decoded).into_owned()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn handle_session_action(
     state: Arc<Mutex<ServerState>>,
-    request: puzzle_game_runtime::StandaloneSessionRequest,
+    action: puzzle_runtime_contract::SessionAction,
 ) -> String {
-    match request {
-        puzzle_game_runtime::StandaloneSessionRequest::State => {
+    use puzzle_runtime_contract::SessionAction;
+    match action {
+        SessionAction::Snapshot => {
             let mut state = state.lock().expect("server state poisoned");
             http_ok("application/json; charset=utf-8", &state.snapshot_json())
         }
-        puzzle_game_runtime::StandaloneSessionRequest::Undo => {
+        SessionAction::Undo => {
             mutate(state, |state| state.session.undo(&state.loaded))
         }
-        puzzle_game_runtime::StandaloneSessionRequest::Redo => {
+        SessionAction::Redo => {
             mutate(state, |state| state.session.redo(&state.loaded))
         }
-        puzzle_game_runtime::StandaloneSessionRequest::Restart => {
+        SessionAction::Restart => {
             let mut state = state.lock().expect("server state poisoned");
             let result = {
                 let ServerState {
@@ -212,24 +262,38 @@ fn handle_standalone_session_request(
                 Err(error) => http_error(400, &format!("{error:?}")),
             }
         }
-        puzzle_game_runtime::StandaloneSessionRequest::Next => {
+        SessionAction::NextLevel => {
             mutate(state, |state| state.session.advance_level(&state.loaded))
         }
-        puzzle_game_runtime::StandaloneSessionRequest::Input(input_name) => {
+        SessionAction::PreviousLevel => {
+            mutate(state, |state| state.session.previous_level(&state.loaded))
+        }
+        SessionAction::GotoLevel { level } => {
+            let mut state = state.lock().expect("server state poisoned");
+            if level >= state.loaded.levels.len() {
+                return http_error(400, &format!("level index out of range: {level}"));
+            }
+            let ServerState {
+                session, loaded, ..
+            } = &mut *state;
+            session.start_level(loaded, level);
+            http_ok("application/json; charset=utf-8", &state.snapshot_json())
+        }
+        SessionAction::Input { name: input_name } => {
             let mut state = state.lock().expect("server state poisoned");
             match state.apply_input_name(&input_name) {
                 Ok(()) => http_ok("application/json; charset=utf-8", &state.snapshot_json()),
                 Err(error) => http_error(400, &error.to_string()),
             }
         }
-        puzzle_game_runtime::StandaloneSessionRequest::DebugInput(input_name) => {
+        SessionAction::DebugInput { name: input_name } => {
             let mut state = state.lock().expect("server state poisoned");
             match state.apply_debug_input_name_json(&input_name) {
                 Ok(body) => http_ok("application/json; charset=utf-8", &body),
                 Err(error) => http_error(400, &error.to_string()),
             }
         }
-        puzzle_game_runtime::StandaloneSessionRequest::Command(command_name) => {
+        SessionAction::Command { name: command_name } => {
             let mut state = state.lock().expect("server state poisoned");
             match state.apply_command_name(&command_name) {
                 Ok(()) => http_ok("application/json; charset=utf-8", &state.snapshot_json()),
@@ -349,7 +413,9 @@ fn is_solver_control_input(name: &str) -> bool {
 }
 
 #[cfg(feature = "solver")]
-fn solver_inputs3(inputs: &[puzzle_core::GridInput<3>]) -> Vec<InputId> {
+fn solver_inputs_for_grid_model<const D: usize>(
+    inputs: &[puzzle_core::GridInput<D>],
+) -> Vec<InputId> {
     let mut inputs = inputs
         .iter()
         .filter(|input| !is_solver_control_input(&input.name))
@@ -395,11 +461,7 @@ fn push_solution_steps(out: &mut String, loaded: &LoadedGame, steps: &[PuzzleSol
 }
 
 #[cfg(feature = "solver")]
-fn push_solution_moves3(
-    out: &mut String,
-    model: &LoadedGridGame<3, Size3>,
-    inputs: &[InputId],
-) {
+fn push_solution_moves3(out: &mut String, model: &LoadedGridGame<3, Size3>, inputs: &[InputId]) {
     out.push_str("\"moves\":[");
     for (index, input) in inputs.iter().enumerate() {
         if index > 0 {
@@ -473,7 +535,11 @@ fn push_input_move3(out: &mut String, model: &LoadedGridGame<3, Size3>, input: I
     out.push_str("\"arrow\":null");
     out.push(',');
     if let Some(direction) = input_def.and_then(|input| input.direction) {
-        push_json_pair(out, "direction", spatial_input_direction_name(direction.axes()));
+        push_json_pair(
+            out,
+            "direction",
+            spatial_input_direction_name(direction.axes()),
+        );
     } else {
         out.push_str("\"direction\":null");
     }

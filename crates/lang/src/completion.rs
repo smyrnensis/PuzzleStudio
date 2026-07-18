@@ -4,7 +4,7 @@ use crate::THEME_PRESET_NAMES;
 use crate::semantic::{SemanticCompletionSlot, SettingCompletionSet};
 use crate::surface::SurfaceCompletionSymbols;
 use crate::surface_completion::surface_completion_context_for_document;
-use crate::syntax::VISUAL_COLOR_NAMES;
+use crate::syntax::VISUAL_NAMED_COLORS;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompletionList {
@@ -252,15 +252,25 @@ fn selector_axis_items(
     let current_tag = partial.rsplit(':').next().unwrap_or_default();
     let mut items = Vec::new();
 
-    if current_tag != "_" && !axis_values.iter().any(|value| value == "_") {
+    for literal in puzzle_authoring::SELECTOR_TAG_SYNTAX_LITERALS {
+        let token = literal.token();
+        if current_tag == token {
+            continue;
+        }
         items.push(CompletionItem {
-            label: "_".to_string(),
+            label: token.to_string(),
             kind: CompletionKind::Literal,
-            insert_text: "_".to_string(),
-            detail: "wildcard".to_string(),
+            insert_text: token.to_string(),
+            detail: match literal {
+                puzzle_authoring::SelectorTagSyntaxLiteral::Wildcard => "wildcard",
+            }
+            .to_string(),
         });
     }
-    for value in axis_values {
+    for value in axis_values
+        .iter()
+        .filter(|value| !puzzle_authoring::is_selector_tag_syntax_literal(value))
+    {
         items.push(CompletionItem {
             label: value.clone(),
             kind: CompletionKind::Object,
@@ -465,7 +475,7 @@ fn add_slot_items(
             }
         }
         SemanticCompletionSlot::Colors => {
-            for color in VISUAL_COLOR_NAMES {
+            for (color, _) in VISUAL_NAMED_COLORS {
                 items.push(CompletionItem {
                     label: (*color).to_string(),
                     kind: CompletionKind::Color,
@@ -854,7 +864,7 @@ Pl
     }
 
     #[test]
-    fn suggests_selector_axis_values_after_colon() {
+    fn selector_tag_completion_uses_parser_owned_literals() {
         let source = r#"
 title = complete_variants
 puzzle board {
@@ -862,19 +872,35 @@ tags {
 kind = A B
 }
 slots {
-__legacy_layer_0 = Box:kind
+actor = Box:kind
+}
+legend {
+. = empty
+X = Box:A
 }
 rules {
-[ Box:
+once [ Box: ] -> [ Box:A ]
+}
+level "start" {
+X
 }
 }
 "#;
-        let cursor = source.rfind("Box:").unwrap() + "Box:".len();
+        let cursor = source.find("[ Box: ]").unwrap() + "[ Box:".len();
         let list = suggest_source_completions(source, cursor);
+        let wildcard = puzzle_authoring::SELECTOR_WILDCARD;
 
-        assert!(list.items.iter().any(|item| item.label == "_"));
+        assert!(list.items.iter().any(|item| {
+            item.label == wildcard
+                && item.insert_text == wildcard
+                && item.kind == CompletionKind::Literal
+        }));
         assert!(list.items.iter().any(|item| item.label == "A"));
         assert!(list.items.iter().any(|item| item.label == "B"));
+
+        let mut completed = source.to_string();
+        completed.insert_str(cursor, wildcard);
+        crate::parse_game(&completed).expect("parser-owned selector literal must compile");
     }
 
     #[test]

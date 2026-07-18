@@ -14,5 +14,6 @@ tween_duration = 160ms
 ```
 
 `grid occupied_cells` outlines cells containing objects. `grid all_cells`
-includes empty cells. `wait animation` in `rules` pauses the remaining part of
-the same turn until visual animation from the preceding segment finishes.
+includes empty cells. `wait animation` adds presentation pacing based on the
+turn's visual animation duration. The logical turn always reaches its stable
+state before the adapter schedules that wait.

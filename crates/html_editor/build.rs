@@ -75,6 +75,8 @@ fn main() {
     println!("cargo:rerun-if-changed=static/wasm/puzzle_wasm_bg.wasm");
     println!("cargo:rerun-if-changed=../html_play/static/wasm_game/puzzle_wasm_game.js");
     println!("cargo:rerun-if-changed=../html_play/static/wasm_game/puzzle_wasm_game_bg.wasm");
+    println!("cargo:rerun-if-changed=../html_play/static/wasm_player/puzzle_wasm_player.js");
+    println!("cargo:rerun-if-changed=../html_play/static/wasm_player/puzzle_wasm_player_bg.wasm");
     println!("cargo:rerun-if-changed=../wasm_core/static/puzzle_core_wasm.js");
     println!("cargo:rerun-if-changed=../wasm_core/static/puzzle_core_wasm_bg.wasm");
 

@@ -53,14 +53,23 @@ impl<'de, const D: usize> Deserialize<'de> for SpatialVector<D> {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RuleFiring<RuleId, Patch> {
+    pub rule: RuleId,
+    pub patch: Patch,
+    pub progressed: bool,
+    pub observable: bool,
+}
+
 #[derive(Clone, Debug)]
 pub struct TransitionOutcome<Input, State, Command, RuleId, Patch> {
     pub input: Input,
     pub next_state: State,
+    pub progressed: bool,
+    pub observable: bool,
     pub cancelled: bool,
     pub commands: Vec<Command>,
-    pub fired_rules: Vec<RuleId>,
-    pub patches: Vec<Patch>,
+    pub firings: Vec<RuleFiring<RuleId, Patch>>,
 }
 
 pub trait KernelId: Copy {
@@ -133,6 +142,9 @@ pub struct MarkDef {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RuleEffect {
+    /// A successful match is observable outside deterministic state even when
+    /// its patch is idempotent (for example, a presentation or scene effect).
+    ObserveMatch,
     Cancel,
     Win,
     Restart,
@@ -697,6 +709,10 @@ pub enum VariableEffect<VariableId> {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RuleApplication {
     Once,
+    /// Internal application used by rewrite-level `repeat`: select the first
+    /// match that progresses deterministic state, without changing public
+    /// `once` first-match semantics.
+    RepeatStep,
     OnceAll,
     OncePerLevel,
     Random,
@@ -1031,13 +1047,20 @@ pub fn first_matching_program_alternative<Rule, Condition, Frame>(
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ProgramApplyOutcome {
+    /// The rule's LHS matched and the rule fired.
     pub fired: bool,
+    /// Solver-visible deterministic state changed.
+    pub progressed: bool,
+    /// An effect outside deterministic state was emitted.
+    pub observable: bool,
     pub cancelled: bool,
 }
 
 impl ProgramApplyOutcome {
     pub fn merge(&mut self, other: Self) {
         self.fired |= other.fired;
+        self.progressed |= other.progressed;
+        self.observable |= other.observable;
         self.cancelled |= other.cancelled;
     }
 }
@@ -1814,6 +1837,20 @@ impl<MarkId: Copy> MarkSpace<MarkId> {
         hash
     }
 
+    pub fn append_key_words<F>(&self, words: &mut Vec<u64>, mut mark_raw: F)
+    where
+        F: FnMut(MarkId) -> u64,
+    {
+        words.push(self.cell_heads.len() as u64);
+        for index in 0..self.cell_heads.len() {
+            append_mark_words(words, self.cell_at(index), &mut mark_raw);
+        }
+        words.push(self.slot_heads.len() as u64);
+        for index in 0..self.slot_heads.len() {
+            append_mark_words(words, self.slot_at(index), &mut mark_raw);
+        }
+    }
+
     fn push_cell(&mut self, index: usize, mark: MarkValue<MarkId>) {
         push_mark(
             &mut self.cell_heads,
@@ -1833,6 +1870,27 @@ impl<MarkId: Copy> MarkSpace<MarkId> {
             mark,
         );
     }
+}
+
+fn append_mark_words<MarkId: Copy, F>(
+    words: &mut Vec<u64>,
+    marks: MarkIter<'_, MarkId>,
+    mark_raw: &mut F,
+) where
+    F: FnMut(MarkId) -> u64,
+{
+    let count_index = words.len();
+    words.push(0);
+    let mut count = 0_u64;
+    for mark in marks {
+        words.push(mark_raw(mark.mark));
+        words.push(u64::from(mark.value.is_some()));
+        if let Some(value) = mark.value {
+            words.push(value as u64);
+        }
+        count += 1;
+    }
+    words[count_index] = count;
 }
 
 impl<MarkId: Copy + PartialEq> PartialEq for MarkSpace<MarkId> {
@@ -2055,6 +2113,7 @@ mod tests {
     #[derive(Clone, Copy)]
     enum TestProgramRule {
         Add,
+        Observe,
         Fail,
     }
 
@@ -2082,14 +2141,31 @@ mod tests {
             rule: &TestProgramRule,
             _frame: Option<&()>,
         ) -> Result<ProgramApplyOutcome, Self::Error> {
-            *state += 1;
-            self.trace += 1;
             match rule {
-                TestProgramRule::Add => Ok(ProgramApplyOutcome {
-                    fired: true,
-                    cancelled: false,
-                }),
-                TestProgramRule::Fail => Err("candidate failed"),
+                TestProgramRule::Add => {
+                    *state += 1;
+                    self.trace += 1;
+                    Ok(ProgramApplyOutcome {
+                        fired: true,
+                        progressed: true,
+                        observable: false,
+                        cancelled: false,
+                    })
+                }
+                TestProgramRule::Observe => {
+                    self.trace += 1;
+                    Ok(ProgramApplyOutcome {
+                        fired: true,
+                        progressed: false,
+                        observable: true,
+                        cancelled: false,
+                    })
+                }
+                TestProgramRule::Fail => {
+                    *state += 1;
+                    self.trace += 1;
+                    Err("candidate failed")
+                }
             }
         }
 
@@ -2351,6 +2427,26 @@ mod tests {
         assert_eq!(result, Err("candidate failed"));
         assert_eq!(state, 0);
         assert_eq!(backend.trace, 0);
+    }
+
+    #[test]
+    fn repeat_stops_on_fired_observable_rule_without_progress() {
+        let program =
+            ExecutableProgram::<TestProgramRule, bool, ()>::new(vec![ProgramStep::Block {
+                application: RuleApplication::UntilStable,
+                stop_condition: None,
+                steps: vec![ProgramStep::Rule(TestProgramRule::Observe)],
+            }]);
+        let mut backend = TestProgramBackend::default();
+        let mut state = 0;
+
+        let outcome = execute_program(&mut backend, &mut state, &program, None, 10).unwrap();
+
+        assert!(outcome.fired);
+        assert!(!outcome.progressed);
+        assert!(outcome.observable);
+        assert_eq!(state, 0);
+        assert_eq!(backend.trace, 1);
     }
 
     #[test]

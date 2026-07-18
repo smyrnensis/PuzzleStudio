@@ -9,7 +9,7 @@ fn wrap_rewrite_steps(
         let steps = if application == RuleApplication::UntilStable {
             steps
                 .into_iter()
-                .map(|step| rewrite_step_with_application(step, RuleApplication::Once))
+                .map(|step| rewrite_step_with_application(step, RuleApplication::RepeatStep))
                 .collect()
         } else {
             steps
@@ -583,17 +583,23 @@ fn parse_variable_update_value(
 }
 
 fn validate_tag_capture_reference(token: &str, line: &str) -> Result<(), DiagnosticReport> {
-    if token == "*" {
+    if puzzle_authoring::is_selector_wildcard(token) {
         return Ok(());
     }
-    if let Some(label) = token.strip_prefix("*#") {
+    if let Some(label) = token
+        .strip_prefix(puzzle_authoring::SELECTOR_WILDCARD)
+        .and_then(|suffix| suffix.strip_prefix('#'))
+    {
         return validate_tag_capture_label(label, line);
     }
     if let Some((name, label)) = token.split_once('#') {
         if !is_identifier(name) {
             return Err(parse_error(
                 line,
-                "tag capture reference must be *, *#label, name, or name#label",
+                &format!(
+                    "tag capture reference must be {0}, {0}#label, name, or name#label",
+                    puzzle_authoring::SELECTOR_WILDCARD
+                ),
             ));
         }
         return validate_tag_capture_label(label, line);
@@ -615,47 +621,62 @@ fn neutral_direction(directions: &[OrientationEnvironment]) -> OrientationEnviro
         .unwrap_or_else(|| SpatialDomain::new(ModelDimension::Two).neutral())
 }
 
-fn rewrite_requires_implicit_cardinal_expansion(rewrite: &OrientedRewriteAst) -> bool {
-    pattern_block_requires_implicit_cardinal_expansion(&rewrite.before)
-        || pattern_block_requires_implicit_cardinal_expansion(&rewrite.after)
+fn rewrite_requires_implicit_cardinal_expansion(
+    rewrite: &OrientedRewriteAst,
+    value_sets: &HashMap<String, Vec<String>>,
+) -> bool {
+    pattern_block_requires_implicit_cardinal_expansion(&rewrite.before, value_sets)
+        || pattern_block_requires_implicit_cardinal_expansion(&rewrite.after, value_sets)
 }
 
-fn pattern_block_requires_implicit_cardinal_expansion(block: &PatternBlock) -> bool {
+fn pattern_block_requires_implicit_cardinal_expansion(
+    block: &PatternBlock,
+    value_sets: &HashMap<String, Vec<String>>,
+) -> bool {
     block.components.iter().any(|component| {
         component.rows.len() > 1
             || component.rows.iter().any(|row| {
                 row.len() > 1
                     || row.iter().any(|part| match part {
-                        BlockPart::Cell(cell) => block_cell_has_relative_direction(cell),
+                        BlockPart::Cell(cell) => {
+                            block_cell_has_relative_direction(cell, value_sets)
+                        }
                         BlockPart::Ellipsis => true,
                     })
             })
     })
 }
 
-fn block_cell_has_relative_direction(cell: &BlockCell) -> bool {
+fn block_cell_has_relative_direction(
+    cell: &BlockCell,
+    value_sets: &HashMap<String, Vec<String>>,
+) -> bool {
     cell.require
         .iter()
         .chain(&cell.forbid)
-        .any(selector_has_relative_direction)
+        .any(|selector| selector_has_relative_direction(selector, value_sets))
 }
 
-fn selector_has_relative_direction(selector: &ObjectSelector) -> bool {
+fn selector_has_relative_direction(
+    selector: &ObjectSelector,
+    value_sets: &HashMap<String, Vec<String>>,
+) -> bool {
     if !selector.relative_constraints.is_empty() {
         return true;
     }
     selector.mark.iter().any(|mark| {
-        mark.value.as_deref().is_some_and(|value| {
-            parse_relative_direction_value(value).is_some() || is_movement_mark_set(value)
-        })
+        mark.name.is_empty()
+            && mark.value.as_deref().is_some_and(|value| {
+                puzzle_authoring::mark_sugar_kind(value)
+                    == Some(puzzle_authoring::MarkSugarKind::Movement)
+                    && (parse_relative_direction_value(value).is_some()
+                        || value_sets.get(value).is_some_and(|values| {
+                            values
+                                .iter()
+                                .any(|value| parse_relative_direction_value(value).is_some())
+                        }))
+            })
     })
-}
-
-fn is_movement_mark_set(value: &str) -> bool {
-    matches!(
-        value.split_once('#').map_or(value, |(base, _)| base),
-        "directions" | "horizontal" | "vertical" | "parallel" | "perpendicular"
-    )
 }
 
 fn resolve_relative_selectors_in_block(
@@ -867,8 +888,8 @@ struct BlockCell {
     require_null: bool,
     require: Vec<ObjectSelector>,
     forbid: Vec<ObjectSelector>,
-    require_cell_mark: Vec<ParsedMark>,
-    forbid_cell_mark: Vec<ParsedMark>,
+    require_cell_mark: Vec<SelectorMark>,
+    forbid_cell_mark: Vec<SelectorMark>,
 }
 
 #[derive(Clone, Debug)]
@@ -882,7 +903,7 @@ struct ObjectSelector {
     capture_requirements: HashMap<ObjectId, Vec<CaptureSelectorRequirement>>,
     dynamic_guards: HashMap<ObjectId, Vec<DynamicSelectorGuard>>,
     tag_captures: HashMap<ObjectId, Vec<TagCapture>>,
-    mark: Vec<ParsedMark>,
+    mark: Vec<SelectorMark>,
     occurrence_label: Option<String>,
 }
 
@@ -1041,41 +1062,6 @@ enum RewriteMark2 {
     ObjectSet(ObjectSetMarkPatternTemplate),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct ParsedMark {
-    name: String,
-    value: Option<String>,
-    negated: bool,
-    anonymous: Option<AnonymousMark>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum AnonymousMark {
-    Movement,
-    Bool,
-    Int,
-}
-
-impl ParsedMark {
-    fn named(name: &str, value: Option<&str>, negated: bool) -> Self {
-        Self {
-            name: name.to_string(),
-            value: value.map(str::to_string),
-            negated,
-            anonymous: None,
-        }
-    }
-
-    fn anonymous(kind: AnonymousMark, value: &str, negated: bool) -> Self {
-        Self {
-            name: String::new(),
-            value: Some(value.to_string()),
-            negated,
-            anonymous: Some(kind),
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 struct SelectorTransform {
     source_token: String,
@@ -1182,9 +1168,7 @@ fn lower_unresolved_cell(
     for subject in cell.require {
         match subject {
             puzzle_authoring::UnresolvedCellSubjectSyntax::CellMarks(marks) => {
-                parsed
-                    .require_cell_mark
-                    .extend(lower_selector_syntax_marks(marks));
+                parsed.require_cell_mark.extend(marks);
             }
             puzzle_authoring::UnresolvedCellSubjectSyntax::Selector(selector) => {
                 parsed.require.push(resolve_object_selector_syntax(
@@ -1203,9 +1187,7 @@ fn lower_unresolved_cell(
     for subject in cell.forbid {
         match subject {
             puzzle_authoring::UnresolvedCellSubjectSyntax::CellMarks(marks) => {
-                parsed
-                    .forbid_cell_mark
-                    .extend(lower_selector_syntax_marks(marks));
+                parsed.forbid_cell_mark.extend(marks);
             }
             puzzle_authoring::UnresolvedCellSubjectSyntax::Selector(selector) => {
                 parsed.forbid.push(resolve_object_selector_syntax(
@@ -1260,15 +1242,6 @@ fn validate_rectangular_ellipsis_layout(
     Ok(())
 }
 
-fn anonymous_mark_for_token(token: &str) -> Option<AnonymousMark> {
-    let base = token.split_once('#').map_or(token, |(base, _)| base);
-    match puzzle_authoring::mark_sugar_kind(base)? {
-        puzzle_authoring::MarkSugarKind::Movement => Some(AnonymousMark::Movement),
-        puzzle_authoring::MarkSugarKind::Bool => Some(AnonymousMark::Bool),
-        puzzle_authoring::MarkSugarKind::Int => Some(AnonymousMark::Int),
-    }
-}
-
 fn resolve_object_selector(
     selector: &str,
     line: &str,
@@ -1306,7 +1279,7 @@ fn resolve_object_selector_syntax(
     let selector_parts = std::iter::once(syntax.base.as_str())
         .chain(syntax.tags.iter().map(String::as_str))
         .collect::<Vec<_>>();
-    let mark = lower_selector_syntax_marks(syntax.marks.clone());
+    let mark = syntax.marks.clone();
     let occurrence_label = syntax.occurrence_label.clone();
     let selector = syntax.selector.as_str();
     let token = labeled_selector_token(selector, occurrence_label.as_deref());
@@ -1345,7 +1318,7 @@ fn resolve_object_selector_syntax(
     }
 
     let parts = selector_parts;
-    if parts.as_slice() == ["*"] {
+    if parts.len() == 1 && puzzle_authoring::is_selector_wildcard(parts[0]) {
         return resolve_any_object_selector(
             token,
             mark,
@@ -1355,7 +1328,11 @@ fn resolve_object_selector_syntax(
             object_schemas,
         );
     }
-    if parts.first().copied() == Some("*") {
+    if parts
+        .first()
+        .copied()
+        .is_some_and(puzzle_authoring::is_selector_wildcard)
+    {
         return resolve_schema_family_wildcard_selector(
             &parts,
             token,
@@ -1390,7 +1367,10 @@ fn resolve_object_selector_syntax(
     if parts.len() == 1 {
         return Err(parse_error(
             line,
-            "object selector for variants must use :* or explicit variant tags",
+            &format!(
+                "object selector for variants must use :{} or explicit variant tags",
+                puzzle_authoring::SELECTOR_WILDCARD
+            ),
         ));
     }
 
@@ -1406,8 +1386,8 @@ fn resolve_object_selector_syntax(
             };
             let (value, tag_capture_key) =
                 selector_tag_capture_key(value, axis, schema.axes.len(), line)?;
-            if value == "*" {
-                source_token_parts.push("*".to_string());
+            if puzzle_authoring::is_selector_wildcard(value) {
+                source_token_parts.push(puzzle_authoring::SELECTOR_WILDCARD.to_string());
                 return Ok(tag_capture_key.map(|key| SelectorConstraint::Capture {
                     axis_index: index,
                     key,
@@ -1567,7 +1547,7 @@ fn resolve_object_selector_syntax(
                 .zip(&source_token_parts)
                 .map(|(constraint, value)| {
                     if matches!(constraint, Some(SelectorConstraint::Relative { .. })) {
-                        "*".to_string()
+                        puzzle_authoring::SELECTOR_WILDCARD.to_string()
                     } else {
                         value.clone()
                     }
@@ -1660,7 +1640,7 @@ fn resolve_object_selector_syntax(
 
 fn resolve_any_object_selector(
     token: String,
-    mark: Vec<ParsedMark>,
+    mark: Vec<SelectorMark>,
     occurrence_label: Option<String>,
     line: &str,
     object_names: &HashMap<String, ObjectId>,
@@ -1691,7 +1671,7 @@ fn resolve_any_object_selector(
 fn resolve_qualified_value_set_selector(
     selector: &str,
     token: String,
-    mark: Vec<ParsedMark>,
+    mark: Vec<SelectorMark>,
     occurrence_label: Option<String>,
     line: &str,
     object_names: &HashMap<String, ObjectId>,
@@ -1823,7 +1803,7 @@ fn qualify_object_name_atom(
 fn resolve_schema_family_wildcard_selector(
     parts: &[&str],
     token: String,
-    mark: Vec<ParsedMark>,
+    mark: Vec<SelectorMark>,
     occurrence_label: Option<String>,
     line: &str,
     object_schemas: &HashMap<String, ObjectSchema>,
@@ -1833,18 +1813,14 @@ fn resolve_schema_family_wildcard_selector(
     if parts.len() != 2 {
         return Err(parse_error(
             line,
-            "family wildcard object selector must be *:<tag>",
+            &format!(
+                "family wildcard object selector must be {}:<tag>",
+                puzzle_authoring::SELECTOR_WILDCARD
+            ),
         ));
     }
     let tag = parts[1];
-    if tag == "_" {
-        return Err(parse_error(
-            line,
-            "object selector wildcard must use *; _ is reserved for completion",
-        ));
-    }
-
-    let (mut alternatives, family_wildcard) = if tag == "*" {
+    let (mut alternatives, family_wildcard) = if puzzle_authoring::is_selector_wildcard(tag) {
         (
             schema_wildcard_alternatives(object_schemas, |_, _| true),
             None,
@@ -2023,21 +1999,27 @@ fn selector_tag_capture_key<'a>(
         if value == axis {
             return Ok((value, Some(axis.to_string())));
         }
-        if value == "*" && axis_count == 1 {
-            return Ok((value, Some("*".to_string())));
+        if puzzle_authoring::is_selector_wildcard(value) && axis_count == 1 {
+            return Ok((value, Some(puzzle_authoring::SELECTOR_WILDCARD.to_string())));
         }
         return Ok((value, None));
     };
     validate_tag_capture_label(label, line)?;
-    if base == "*" {
-        return Ok((base, Some(format!("*#{label}"))));
+    if puzzle_authoring::is_selector_wildcard(base) {
+        return Ok((
+            base,
+            Some(format!("{}#{label}", puzzle_authoring::SELECTOR_WILDCARD)),
+        ));
     }
     if base == axis {
         return Ok((base, Some(format!("{axis}#{label}"))));
     }
     Err(parse_error(
         line,
-        "tag capture labels must attach to * or the schema tag slot name",
+        &format!(
+            "tag capture labels must attach to {} or the schema tag slot name",
+            puzzle_authoring::SELECTOR_WILDCARD
+        ),
     ))
 }
 
@@ -2094,21 +2076,6 @@ fn labeled_selector_token(selector: &str, occurrence_label: Option<&str>) -> Str
         Some(label) => format!("{selector}#{label}"),
         None => selector.to_string(),
     }
-}
-
-fn lower_selector_syntax_marks(marks: Vec<puzzle_authoring::SelectorMark>) -> Vec<ParsedMark> {
-    marks
-        .into_iter()
-        .map(|mark| {
-            if mark.name.is_empty()
-                && let Some(value) = mark.value.as_deref()
-                && let Some(anonymous) = anonymous_mark_for_token(value)
-            {
-                return ParsedMark::anonymous(anonymous, value, mark.negated);
-            }
-            ParsedMark::named(&mark.name, mark.value.as_deref(), mark.negated)
-        })
-        .collect()
 }
 
 fn validate_mark_name(value: &str, line: &str) -> Result<(), DiagnosticReport> {
@@ -2306,25 +2273,22 @@ fn validate_schema_selector_arity(
     label: &str,
 ) -> Result<(), DiagnosticReport> {
     let slot_count = parts.len().saturating_sub(1);
-    if parts.iter().skip(1).any(|part| *part == "_") {
-        return Err(parse_error(
-            line,
-            &format!("{label} wildcard must use *; _ is reserved for completion"),
-        ));
-    }
     if slot_count > schema.axes.len() {
         return Err(parse_error(line, &format!("{label} has too many tags")));
     }
     if slot_count == 0 {
         return Ok(());
     }
-    if slot_count == 1 && parts[1] == "*" {
+    if slot_count == 1 && puzzle_authoring::is_selector_wildcard(parts[1]) {
         return Ok(());
     }
     if slot_count < schema.axes.len() {
         return Err(parse_error(
             line,
-            &format!("{label} must name every variant slot; use * for unconstrained slots"),
+            &format!(
+                "{label} must name every variant slot; use {} for unconstrained slots",
+                puzzle_authoring::SELECTOR_WILDCARD
+            ),
         ));
     }
     Ok(())
@@ -2335,8 +2299,9 @@ fn schema_selector_part<'a>(
     schema: &ObjectSchema,
     axis_index: usize,
 ) -> Option<&'a str> {
-    if parts.len() == 2 && parts[1] == "*" && schema.axes.len() > 1 {
-        return Some("*");
+    if parts.len() == 2 && puzzle_authoring::is_selector_wildcard(parts[1]) && schema.axes.len() > 1
+    {
+        return Some(puzzle_authoring::SELECTOR_WILDCARD);
     }
     parts.get(axis_index + 1).copied()
 }
@@ -3516,10 +3481,8 @@ fn expand_movement_mark_sets(
 ) -> Result<Vec<(PatternBlock, PatternBlock)>, DiagnosticReport> {
     let before = expand_negated_movement_mark_sets(before, value_sets);
     let after = expand_negated_movement_mark_sets(after, value_sets);
-    let before_occurrences =
-        collect_movement_mark_set_occurrences(&before, "before", value_sets, line)?;
-    let after_occurrences =
-        collect_movement_mark_set_occurrences(&after, "after", value_sets, line)?;
+    let before_occurrences = collect_movement_mark_set_occurrences(&before, "before", value_sets);
+    let after_occurrences = collect_movement_mark_set_occurrences(&after, "after", value_sets);
     let (mut bindings, occurrence_bindings) =
         resolve_mark_set_bindings(&before_occurrences, &after_occurrences, line)?;
     dedup_mark_set_bindings(&mut bindings);
@@ -3577,7 +3540,7 @@ fn expand_negated_movement_mark_sets(
 }
 
 fn expand_negated_movement_mark_set_list(
-    mark: &mut Vec<ParsedMark>,
+    mark: &mut Vec<SelectorMark>,
     value_sets: &HashMap<String, Vec<String>>,
 ) {
     let mut expanded = Vec::with_capacity(mark.len());
@@ -3589,6 +3552,7 @@ fn expand_negated_movement_mark_set_list(
             expanded.extend(values.into_iter().map(|value| {
                 let mut mark = mark.clone();
                 mark.value = Some(value);
+                mark.binding_label = None;
                 mark
             }));
         } else {
@@ -3602,8 +3566,7 @@ fn collect_movement_mark_set_occurrences(
     block: &PatternBlock,
     side: &str,
     value_sets: &HashMap<String, Vec<String>>,
-    line: &str,
-) -> Result<Vec<MarkSetOccurrence>, DiagnosticReport> {
+) -> Vec<MarkSetOccurrence> {
     let mut occurrences = Vec::new();
     let mut selector_counts = HashMap::<String, usize>::new();
     for (component_index, component) in block.components.iter().enumerate() {
@@ -3617,17 +3580,15 @@ fn collect_movement_mark_set_occurrences(
                     format!("cell:{component_index}:{row_index}:{part_index}:require"),
                     side,
                     value_sets,
-                    line,
                     &mut occurrences,
-                )?;
+                );
                 collect_cell_mark_set_occurrences(
                     &cell.forbid_cell_mark,
                     format!("cell:{component_index}:{row_index}:{part_index}:forbid"),
                     side,
                     value_sets,
-                    line,
                     &mut occurrences,
-                )?;
+                );
                 for selector in &cell.require {
                     let ordinal = *selector_counts.get(&selector.token).unwrap_or(&0);
                     selector_counts.insert(selector.token.clone(), ordinal + 1);
@@ -3636,30 +3597,24 @@ fn collect_movement_mark_set_occurrences(
                         format!("object:{}:{ordinal}", selector.token),
                         side,
                         value_sets,
-                        line,
                         &mut occurrences,
-                    )?;
+                    );
                 }
             }
         }
     }
-    Ok(occurrences)
+    occurrences
 }
 
 fn collect_cell_mark_set_occurrences(
-    mark: &[ParsedMark],
+    mark: &[SelectorMark],
     anchor: String,
     side: &str,
     value_sets: &HashMap<String, Vec<String>>,
-    line: &str,
     occurrences: &mut Vec<MarkSetOccurrence>,
-) -> Result<(), DiagnosticReport> {
+) {
     for (mark_index, mark) in mark.iter().enumerate() {
-        let Some(value) = mark.value.as_deref() else {
-            continue;
-        };
-        let Some((set, label, values)) = movement_mark_set_reference(value, value_sets, line)?
-        else {
+        let Some((set, label, values)) = movement_mark_set_reference(mark, value_sets) else {
             continue;
         };
         occurrences.push(MarkSetOccurrence {
@@ -3670,7 +3625,6 @@ fn collect_cell_mark_set_occurrences(
             values,
         });
     }
-    Ok(())
 }
 
 fn resolve_mark_set_bindings(
@@ -3809,7 +3763,7 @@ fn apply_movement_mark_set_assignment(
 }
 
 fn apply_cell_mark_set_assignment(
-    mark: &mut [ParsedMark],
+    mark: &mut [SelectorMark],
     anchor: &str,
     side: &str,
     occurrence_bindings: &HashMap<String, String>,
@@ -3819,7 +3773,7 @@ fn apply_cell_mark_set_assignment(
         let Some(value) = mark.value.as_deref() else {
             continue;
         };
-        if !is_movement_mark_set(value) {
+        if !puzzle_authoring::is_movement_mark_set(value) {
             continue;
         }
         let location = format!("{side}:{anchor}:{mark_index}");
@@ -3827,6 +3781,7 @@ fn apply_cell_mark_set_assignment(
             && let Some(concrete) = assignment.get(key)
         {
             mark.value = Some(concrete.clone());
+            mark.binding_label = None;
         }
     }
 }
@@ -4289,7 +4244,7 @@ fn dedup_object_set_mark_patterns(patterns: &mut Vec<ObjectSetMarkPatternTemplat
 
 fn parsed_object_set_mark_pattern(
     binding: u16,
-    mark: &ParsedMark,
+    mark: &SelectorMark,
     mark_names: &HashMap<String, MarkDef>,
     line: &str,
 ) -> Result<ObjectSetMarkPatternTemplate, DiagnosticReport> {
@@ -4305,12 +4260,12 @@ fn parsed_object_set_mark_pattern(
 
 fn parsed_mark_pattern(
     object: ObjectId,
-    mark: &ParsedMark,
+    mark: &SelectorMark,
     mark_names: &HashMap<String, MarkDef>,
     line: &str,
 ) -> Result<MarkPatternTemplate, DiagnosticReport> {
-    if let Some(anonymous) = &mark.anonymous {
-        return parsed_anonymous_mark_pattern(object, anonymous, mark, mark_names, line);
+    if mark.name.is_empty() {
+        return parsed_anonymous_mark_pattern(object, mark, mark_names, line);
     }
     let def = mark_names
         .get(&mark.name)
@@ -4363,8 +4318,7 @@ fn parsed_mark_pattern(
 
 fn parsed_anonymous_mark_pattern(
     object: ObjectId,
-    anonymous: &AnonymousMark,
-    mark: &ParsedMark,
+    mark: &SelectorMark,
     mark_names: &HashMap<String, MarkDef>,
     line: &str,
 ) -> Result<MarkPatternTemplate, DiagnosticReport> {
@@ -4372,16 +4326,18 @@ fn parsed_anonymous_mark_pattern(
         .value
         .as_deref()
         .ok_or_else(|| parse_error(line, "anonymous mark must specify a value"))?;
-    let (mark_id, value, match_value) = match anonymous {
-        AnonymousMark::Movement if value == "directions" => {
+    let kind = puzzle_authoring::mark_sugar_kind(value)
+        .ok_or_else(|| parse_error(line, "unknown anonymous mark"))?;
+    let (mark_id, value, match_value) = match kind {
+        puzzle_authoring::MarkSugarKind::Movement if value == "directions" => {
             (ANONYMOUS_MOVEMENT_MARK, None, MarkValueMatch::Any)
         }
-        AnonymousMark::Movement => (
+        puzzle_authoring::MarkSugarKind::Movement => (
             ANONYMOUS_MOVEMENT_MARK,
             Some(parse_anonymous_movement_value(value, mark_names, line)?),
             MarkValueMatch::Exact,
         ),
-        AnonymousMark::Bool => (
+        puzzle_authoring::MarkSugarKind::Bool => (
             ANONYMOUS_BOOL_MARK,
             Some(MarkValueTemplate::Literal(match value {
                 "false" => 0,
@@ -4390,7 +4346,7 @@ fn parsed_anonymous_mark_pattern(
             })),
             MarkValueMatch::Exact,
         ),
-        AnonymousMark::Int => (
+        puzzle_authoring::MarkSugarKind::Int => (
             ANONYMOUS_INT_MARK,
             Some(MarkValueTemplate::Literal(value.parse::<i64>().map_err(
                 |_| parse_error(line, "expected integer mark value"),
@@ -4412,7 +4368,6 @@ fn parse_anonymous_movement_value(
     mark_names: &HashMap<String, MarkDef>,
     line: &str,
 ) -> Result<MarkValueTemplate, DiagnosticReport> {
-    let value = value.split_once('#').map_or(value, |(base, _)| base);
     if let Some(relative) = parse_relative_direction_value(value) {
         return Ok(MarkValueTemplate::Relative(relative));
     }
@@ -4434,25 +4389,25 @@ fn movement_mark_set_values(
     value: &str,
     value_sets: &HashMap<String, Vec<String>>,
 ) -> Option<Vec<String>> {
-    let value = value.split_once('#').map_or(value, |(base, _)| base);
     value_sets.get(value).cloned()
 }
 
 fn movement_mark_set_reference<'a>(
-    value: &'a str,
+    mark: &'a SelectorMark,
     value_sets: &HashMap<String, Vec<String>>,
-    line: &str,
-) -> Result<Option<(&'a str, Option<String>, Vec<String>)>, DiagnosticReport> {
-    let (set, label) = value
-        .split_once('#')
-        .map_or((value, None), |(set, label)| (set, Some(label)));
-    let Some(values) = value_sets.get(set).cloned() else {
-        return Ok(None);
-    };
-    if let Some(label) = label {
-        validate_tag_capture_label(label, line)?;
+) -> Option<(&'a str, Option<String>, Vec<String>)> {
+    if !mark.name.is_empty() {
+        return None;
     }
-    Ok(Some((set, label.map(str::to_string), values)))
+    let set = mark.value.as_deref()?;
+    if puzzle_authoring::mark_sugar_kind(set) != Some(puzzle_authoring::MarkSugarKind::Movement) {
+        return None;
+    }
+    let values = value_sets.get(set).cloned()?;
+    if !puzzle_authoring::is_movement_mark_set(set) {
+        return None;
+    }
+    Some((set, mark.binding_label.clone(), values))
 }
 
 fn parse_enum_mark_value(

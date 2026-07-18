@@ -1,7 +1,6 @@
 title = "TENETEN"
 author = "smyrnensis"
 homepage = "smyrnensis.itch.io"
-again_interval = 0.10s
 
 theme {
 preset = "puzzlescript"

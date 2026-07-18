@@ -81,7 +81,11 @@ pub fn parse_document_assets(source: &str) -> Result<AssetsDef, DiagnosticReport
 
 fn parse_game2d_document(source: &str) -> Result<LoadedGame, DiagnosticReport> {
     let parts = parse_document_source_parts_from_surface_source(source)?;
-    parse_game2d_from_document_parts(parts)
+    let disposition_diagnostic = parts.disposition_diagnostic.clone();
+    finish_compile_with_parser_dispositions(
+        parse_game2d_from_document_parts(parts),
+        disposition_diagnostic,
+    )
 }
 
 fn parse_game2d_from_document_parts(
@@ -137,7 +141,22 @@ fn parse_game_document_with_profile(
 ) -> Result<LoadedDocument, DiagnosticReport> {
     let parts = parse_document_source_parts_from_surface_source(source)?;
     validate_document_source_profile(&parts, profile)?;
-    parse_loaded_document_parts(parts)
+    let disposition_diagnostic = parts.disposition_diagnostic.clone();
+    finish_compile_with_parser_dispositions(
+        parse_loaded_document_parts(parts),
+        disposition_diagnostic,
+    )
+}
+
+fn finish_compile_with_parser_dispositions<T>(
+    compiled: Result<T, DiagnosticReport>,
+    disposition_diagnostic: Option<DiagnosticReport>,
+) -> Result<T, DiagnosticReport> {
+    let compiled = compiled?;
+    if let Some(report) = disposition_diagnostic {
+        return Err(report);
+    }
+    Ok(compiled)
 }
 
 fn validate_document_source_profile(
@@ -267,7 +286,6 @@ fn loaded_document_from_shell(
         author: shell.author,
         homepage: shell.homepage,
         default_wait_ms: shell.default_wait_ms,
-        default_again_ms: shell.default_again_ms,
         input_buffer: shell.input_buffer,
         animation: shell.animation,
         variables: shell.variables,
@@ -571,7 +589,6 @@ struct DocumentShell {
     author: Option<String>,
     homepage: Option<String>,
     default_wait_ms: u64,
-    default_again_ms: u64,
     input_buffer: InputBufferDef,
     animation: AnimationDef,
     variables: Vec<SceneVarDef>,
@@ -587,17 +604,17 @@ struct DocumentSourceParts {
     model_catalogs: Vec<Catalog>,
     scenes: Vec<SceneDef>,
     recognition: crate::surface::ParserRecognition,
+    disposition_diagnostic: Option<DiagnosticReport>,
 }
 
 impl Default for DocumentShell {
     fn default() -> Self {
         Self {
-            title: "ASCII play".to_string(),
+            title: "Untitled puzzle".to_string(),
             subtitle: None,
             author: None,
             homepage: None,
             default_wait_ms: DEFAULT_WAIT_MS,
-            default_again_ms: DEFAULT_AGAIN_MS,
             input_buffer: InputBufferDef::default(),
             animation: AnimationDef::default(),
             variables: Vec::new(),
@@ -633,21 +650,10 @@ fn parse_document_source_parts(source: &str) -> Result<DocumentSourceParts, Diag
 fn parse_document_source_parts_from_surface_source(
     source: &str,
 ) -> Result<DocumentSourceParts, DiagnosticReport> {
-    let surface = parse_surface_compile_document(source)?;
-    parse_document_source_parts_from_surface_document(&surface)
+    ParseSnapshot::parse(source, None).into_strict_document_parts()
 }
 
-fn parse_document_source_parts_from_surface_document(
-    document: &SurfaceDocument,
-) -> Result<DocumentSourceParts, DiagnosticReport> {
-    if document.logical_lines.is_empty() {
-        return Err(DiagnosticReport::error(
-            "surface document missing compile logical lines".to_string(),
-        ));
-    }
-    parse_document_source_parts_from_logical_lines(document.logical_lines.clone())
-}
-
+#[cfg(test)]
 fn parse_document_source_parts_from_logical_lines(
     logical_lines: Vec<source::LogicalLine>,
 ) -> Result<DocumentSourceParts, DiagnosticReport> {
@@ -671,6 +677,7 @@ fn parse_document_source_parts_from_logical_lines(
         model_catalogs,
         scenes,
         recognition,
+        disposition_diagnostic: None,
     })
 }
 
@@ -696,9 +703,6 @@ fn parse_document_shell_entries(
             }
             ["default_wait_time", ..] => {
                 shell.default_wait_ms = parse_default_wait_time_directive(&entry.header)?;
-            }
-            ["again_interval", ..] => {
-                shell.default_again_ms = parse_again_interval_directive(&entry.header)?;
             }
             ["theme", ..] => {
                 let lines = document_entry_lines(entry);
@@ -1069,8 +1073,8 @@ mod document_surface_flow_tests {
             "document compile must share one surface-source to document-parts entrypoint"
         );
         assert!(
-            source.contains("let surface = parse_surface_compile_document(source)?;"),
-            "document parts construction must build the checked surface product before model-specific parsing"
+            source.contains("ParseSnapshot::parse(source, None).into_strict_document_parts()"),
+            "document parts construction must consume the checked parser snapshot directly"
         );
         assert!(
             source.contains("parse_document_source_parts_from_surface_source(source)?"),
@@ -1579,7 +1583,6 @@ fn lower_model_with_shell_inner(
     let assets = shell.assets.clone();
     let mut puzzle_screen = PuzzleScreenDef::default();
     let default_wait_ms = shell.default_wait_ms;
-    let default_again_ms = shell.default_again_ms;
     let input_buffer = shell.input_buffer.clone();
 
     let mut parser_recognition = crate::surface::ParserRecognition::default();
@@ -1837,7 +1840,6 @@ fn lower_model_with_shell_inner(
             inputs: materialized.inputs,
             warnings,
             default_wait_ms,
-            default_again_ms,
             input_buffer,
             animation,
             rule_animations: programs.rule_animations,
@@ -1955,7 +1957,6 @@ fn lower_model_with_shell_inner(
         )?,
         warnings,
         default_wait_ms,
-        default_again_ms,
         input_buffer,
         animation: animation.clone(),
         rule_animations: programs.rule_animations,

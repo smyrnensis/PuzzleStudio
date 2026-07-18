@@ -136,8 +136,6 @@ fn push_export_data_with_source(out: &mut String, state: &ServerState, include_s
     out.push(',');
     push_json_number(out, "defaultWaitMs", state.loaded.default_wait_ms);
     out.push(',');
-    push_json_number(out, "defaultAgainMs", state.loaded.default_again_ms);
-    out.push(',');
     push_export_input_buffer(out, &state.loaded);
     out.push(',');
     push_export_animation(out, &state.loaded);
@@ -163,12 +161,12 @@ fn push_editor_solver_rules(out: &mut String, loaded: &LoadedGame) {
     push_json_pair(out, "modelKind", "2d");
     out.push(',');
     push_compiled_play_bundle(out, loaded);
-    out.push(',');
-    push_json_bool(
-        out,
-        "runRulesOnLevelStart",
-        loaded.run_rules_on_level_start,
+    out.push_str(",\"loadedGame\":");
+    out.push_str(
+        &serde_json::to_string(loaded).expect("loaded solver game serialization must succeed"),
     );
+    out.push(',');
+    push_json_bool(out, "runRulesOnLevelStart", loaded.run_rules_on_level_start);
     out.push(',');
     push_export_goal(out, "goal", loaded.goal.as_ref());
     out.push(',');
@@ -177,6 +175,27 @@ fn push_editor_solver_rules(out: &mut String, loaded: &LoadedGame) {
     out.push_str(
         &serde_json::to_string(&loaded.solver_strategy)
             .expect("solver strategy serialization must succeed"),
+    );
+    out.push('}');
+}
+
+fn push_editor_grid_solver_rules(
+    out: &mut String,
+    model_kind: &str,
+    loaded: &LoadedGridGame<3, Size3>,
+) {
+    out.push('{');
+    push_json_number(out, "version", 1);
+    out.push(',');
+    push_json_pair(out, "modelKind", model_kind);
+    out.push_str(",\"loadedGame\":");
+    out.push_str(
+        &serde_json::to_string(loaded).expect("loaded grid solver game serialization must succeed"),
+    );
+    out.push_str(",\"solverStrategy\":");
+    out.push_str(
+        &serde_json::to_string(&loaded.solver_strategy)
+            .expect("grid solver strategy serialization must succeed"),
     );
     out.push('}');
 }
@@ -244,8 +263,6 @@ fn push_export_boot_data(
     push_export_theme(out, &state.loaded.theme);
     out.push(',');
     push_json_number(out, "defaultWaitMs", state.loaded.default_wait_ms);
-    out.push(',');
-    push_json_number(out, "defaultAgainMs", state.loaded.default_again_ms);
     out.push(',');
     push_export_input_buffer(out, &state.loaded);
     out.push(',');
@@ -356,107 +373,10 @@ fn push_export_input_buffer(out: &mut String, loaded: &LoadedGame) {
     out.push('}');
 }
 
-fn push_sound_events(out: &mut String, events: &[SoundEvent]) {
-    out.push_str("\"soundEvents\":[");
-    for (index, event) in events.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        out.push('{');
-        match event {
-            SoundEvent::PlaySfx { name } => {
-                push_json_pair(out, "kind", "play_sfx");
-                out.push(',');
-                push_json_pair(out, "name", name);
-            }
-            SoundEvent::PlayMusic { name } => {
-                push_json_pair(out, "kind", "play_music");
-                out.push(',');
-                push_json_pair(out, "name", name);
-            }
-            SoundEvent::PauseMusic { name } => {
-                push_json_pair(out, "kind", "pause_music");
-                out.push(',');
-                out.push_str("\"name\":");
-                if let Some(name) = name {
-                    push_json_string(out, name);
-                } else {
-                    out.push_str("null");
-                }
-            }
-            SoundEvent::ResumeMusic { name } => {
-                push_json_pair(out, "kind", "resume_music");
-                out.push(',');
-                out.push_str("\"name\":");
-                if let Some(name) = name {
-                    push_json_string(out, name);
-                } else {
-                    out.push_str("null");
-                }
-            }
-            SoundEvent::StopMusic { name } => {
-                push_json_pair(out, "kind", "stop_music");
-                out.push(',');
-                out.push_str("\"name\":");
-                if let Some(name) = name {
-                    push_json_string(out, name);
-                } else {
-                    out.push_str("null");
-                }
-            }
-        }
-        out.push('}');
-    }
-    out.push(']');
-}
-
-fn push_message_events(out: &mut String, events: &[MessageEvent]) {
-    out.push_str("\"messageEvents\":[");
-    for (index, event) in events.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        out.push('{');
-        match event {
-            MessageEvent::Message { text } => {
-                push_json_pair(out, "kind", "message");
-                out.push(',');
-                push_json_pair(out, "text", text);
-            }
-        }
-        out.push('}');
-    }
-    out.push(']');
-}
-
-fn push_wait_events(out: &mut String, events: &[WaitEvent]) {
-    out.push_str("\"waitEvents\":[");
-    for (index, event) in events.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        out.push('{');
-        match event {
-            WaitEvent::Wait { milliseconds } => {
-                push_json_pair(out, "kind", "wait");
-                out.push(',');
-                push_json_number(out, "milliseconds", *milliseconds);
-            }
-            WaitEvent::ContinueEffects { milliseconds } => {
-                push_json_pair(out, "kind", "continue_effects");
-                out.push(',');
-                push_json_number(out, "milliseconds", *milliseconds);
-            }
-        }
-        out.push('}');
-    }
-    out.push(']');
-}
-
-fn push_animation_events(out: &mut String, loaded: &LoadedGame, events: &[AnimationEvent]) {
-    out.push_str("\"animationEvents\":");
-    let events_json = serde_json::to_string(&animation_events_contract_2d(loaded, events))
-        .expect("runtime animation event contract should serialize");
+fn push_presentation_events(out: &mut String, loaded: &LoadedGame, events: &[PresentationEvent]) {
+    out.push_str("\"presentationEvents\":");
+    let events_json = serde_json::to_string(&presentation_events_contract(loaded, events))
+        .expect("runtime presentation event contract should serialize");
     out.push_str(&events_json);
 }
 
@@ -1155,6 +1075,7 @@ fn push_compact_rule_application(out: &mut String, application: RuleApplication)
         RuleApplication::OncePerLevel => "2",
         RuleApplication::UntilStable => "3",
         RuleApplication::Random => "4",
+        RuleApplication::RepeatStep => "5",
     });
 }
 
@@ -1221,7 +1142,11 @@ fn push_compact_guard(out: &mut String, guard: &Guard) {
             out.push(',');
             out.push_str(&value.to_string());
         }
-        Guard::VariableCompare { variable, op, value } => {
+        Guard::VariableCompare {
+            variable,
+            op,
+            value,
+        } => {
             out.push('1');
             out.push(',');
             out.push_str(&variable.0.to_string());
@@ -1694,6 +1619,7 @@ fn push_compact_write(out: &mut String, write: &WriteOp) {
 fn push_compact_effect(out: &mut String, effect: &Effect) {
     out.push('[');
     match effect {
+        Effect::ObserveMatch => out.push('8'),
         Effect::Cancel => out.push('0'),
         Effect::Win => out.push('1'),
         Effect::Restart => out.push('2'),
@@ -1701,7 +1627,11 @@ fn push_compact_effect(out: &mut String, effect: &Effect) {
         Effect::Again => out.push('4'),
         Effect::Checkpoint => out.push('5'),
         Effect::ClearCheckpoint => out.push('6'),
-        Effect::UpdateVariable { variable, op, value } => {
+        Effect::UpdateVariable {
+            variable,
+            op,
+            value,
+        } => {
             out.push('7');
             out.push(',');
             out.push_str(&variable.0.to_string());

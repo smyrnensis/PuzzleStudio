@@ -1,0 +1,4 @@
+interface:
+  display_name: "Solve Puzzles"
+  short_description: "Solve difficult PuzzleStudio levels through experiments"
+  default_prompt: "Use $solve-puzzles to solve this PuzzleStudio level."

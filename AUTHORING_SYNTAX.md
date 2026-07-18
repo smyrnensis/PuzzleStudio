@@ -915,7 +915,9 @@ once input [ Fire | Grass ] -> [ Fire | Fire ]
 
 この例は「各行は1回適用、block 全体は変化しなくなるまで反復」。`repeat` を書かない routine では、block 全体は1回だけ実行される。一方で plain rewrite にすると、その rewrite 行自体は変化しなくなるまで適用される。
 
-rewrite-level `repeat` は、同じ concrete rewrite rule の match origin がなくなるまで繰り返す。実行順は row-major order。実装は単純な単一 component / fixed offset rule では dirty-origin delta を使い、それ以外の矩形 pattern、可変 gap、離散 pattern では全 origin を再検査する。
+rewrite-level `once` は row-major order の最初の LHS match に1回適用する。その patch が solver-visible state を変えなくても後続 match へ移らず、match した rule は発火として扱う。
+
+rewrite-level `repeat` は、solver-visible state を変える最初の match を row-major order で選びながら固定点まで繰り返す。progress 可能な match がなくなった pass では最初の match が発火しても反復を終了する。実装は単純な単一 component / fixed offset rule では dirty-origin delta を使い、それ以外の矩形 pattern、可変 gap、離散 pattern では全 origin を再検査する。
 
 rewrite-level `once_all` は、適用開始時点の全マッチを row-major order で集め、それぞれを最大1回ずつ適用する。各マッチは開始 state に対する write proposal を出し、同じ slot に複数 proposal が来た場合は row-major 後続マッチの proposal が勝つ。途中で作られた新しいマッチは同じ `once_all` では拾わない。
 
@@ -1246,7 +1248,7 @@ if win_conditions -> next_level
 
 `again` が「again」するのは物理 key や直前の semantic input ではない。直前に押された `left` / `x` / `Enter` を再送しない。`again` は、同じ puzzle target の通常 rule entrypoint、たとえば scene の `rules { step sokoban }` で指定された `sokoban` を、input なしで 1 turn だけもう一度実行する。したがって `if input == left` のような input guard は `again` turn では false になり、input に依存しない rule や、前 turn が盤面に残した object / mark ではない状態だけが進む。
 
-1つの follow-up turn がまた `again` を出すと、さらに次の no-input follow-up turn が予約される。自動 turn は最大 256 回で止まり、`cancel` が出た場合はその自動 turn だけを取り消して停止する。standalone HTML export では follow-up turn は既定で 120ms ごとに 1 turn ずつ実行され、top-level の `again_interval = 100ms` / `again_interval = 0.1s` で変更できる。PuzzleScript import 互換として `again_interval 0.1` も秒指定として読める。各 follow-up turn は別 snapshot として公開されるため、その turn で発火した `sfx` / `message` も turn ごとに処理される。
+1つの follow-up turn がまた `again` を出すと、さらに次の no-input follow-up turn を実行する。自動 turn は最大 256 回で止まり、`cancel` が出た場合はその自動 turn だけを取り消して停止する。1 回の入力から派生した follow-up turn は、win 判定と lifecycle を含む安定状態まで同じ論理入力の中で完了する。各 turn が出した animation、`sfx`、`message`、wait は発生順を保った 1 本の presentation timeline として adapter へ渡され、表示時間は論理状態の進行に影響しない。
 
 ```txt
 [ Dog | Baby ] -> [ | dog_angry ] again
@@ -1263,7 +1265,7 @@ tween_duration = 160ms
 }
 ```
 
-`wait animation` は rules 内の明示的な animation boundary。そこまでの segment で発生した tween などの visual animation が終わってから、同じ turn の残りの rules を continuation として実行する。animation が発生していなければ no-op。`wait tween` は互換 alias だが、canonical には `wait animation` を使う。
+`wait animation` は rules が出した visual animation に対する presentation pacing marker。その入力の rules、win 判定、lifecycle は安定状態まで原子的に完了し、adapter が同じ turn の animation duration だけ次の表示入力を待つ。logical state や後続 rule の実行は表示時間に依存せず、animation が発生していなければ no-op。`wait tween` は互換 alias だが、canonical には `wait animation` を使う。
 
 ```txt
 rules {
@@ -1690,7 +1692,7 @@ goto secret_clear
 
 authoring で推奨する level 指定は `level.name`。`level.label` は表示名として読めるが、現時点では `level.name` と同じ値を返す。`level.last` / `level.has_next` は真偽 condition として使える。
 
-puzzle rule の rewrite effect としても `message "text"` / `message <path>` / `sfx <name>` を書ける。`message` は popup を出し、既定で `default_wait_time` だけ後続 effect / 後続 rule segment を待たせる。この effect は board state ではなく presentation command なので、`puzzle-core` の状態には残らない。
+puzzle rule の rewrite effect としても `message "text"` / `message <path>` / `sfx <name>` を書ける。`message` は popup と既定の `default_wait_time` を presentation event として adapter へ渡す。表示待ちは後続 effect、後続 rule、win 判定、lifecycle を止めず、board state にも残らない。
 
 ```txt
 [ Player Goal ] -> message "You found the goal"

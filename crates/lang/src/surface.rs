@@ -352,12 +352,12 @@ pub(crate) enum SurfaceDisplayFact {
     },
     SpritePixel {
         span: SourceSpan,
-        color: String,
+        color: Option<crate::highlight::SourceHighlightColor>,
         transparent: bool,
     },
     Color {
         span: SourceSpan,
-        color: String,
+        color: crate::highlight::SourceHighlightColor,
     },
     LevelSeparator {
         span: SourceSpan,

@@ -111,9 +111,9 @@ const puzzle3Html = compile_preview(
 );
 for (const token of [
   "window.Puzzle3DFrameFixture = JSON.parse(",
-  "window.Puzzle3ControllerAutoBoot = false",
+  "window.Puzzle3ComponentAutoBoot = false",
   "WasmStandaloneSession",
-  "sessionManaged: Boolean(standaloneRuntime && !puzzle3PreviewSurface)",
+  "window.Puzzle3Component",
   "window.PuzzleRuntimeWasmLoader",
 ]) {
   if (!puzzle3Html.includes(token)) {

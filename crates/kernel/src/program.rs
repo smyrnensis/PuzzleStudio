@@ -1,17 +1,46 @@
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::Deref;
+use std::sync::Arc;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::{ProgramApplyOutcome, ProgramBackend, ProgramStep, RuleApplication};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ProgramStateKey(Vec<u64>);
+#[derive(Clone, Debug)]
+pub struct ProgramStateKey {
+    hash: u64,
+    words: Arc<[u64]>,
+}
 
 impl ProgramStateKey {
     pub fn from_words(words: Vec<u64>) -> Self {
-        Self(words)
+        let mut hasher = DefaultHasher::new();
+        words.hash(&mut hasher);
+        Self::from_words_and_hash(words, hasher.finish())
+    }
+
+    pub fn from_words_and_hash(words: Vec<u64>, hash: u64) -> Self {
+        Self {
+            hash,
+            words: words.into(),
+        }
     }
 }
+
+impl Default for ProgramStateKey {
+    fn default() -> Self {
+        Self::from_words(Vec::new())
+    }
+}
+
+impl PartialEq for ProgramStateKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.hash == other.hash
+            && (Arc::ptr_eq(&self.words, &other.words) || self.words == other.words)
+    }
+}
+
+impl Eq for ProgramStateKey {}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ProgramNodeId(u32);
@@ -225,7 +254,11 @@ enum ContinuationStep {
         before: ProgramStateKey,
         seen: Vec<ProgramStateKey>,
         fired_any: bool,
+        progressed_any: bool,
+        observable_any: bool,
         pass_fired: bool,
+        pass_progressed: bool,
+        pass_observable: bool,
         repeat_count: usize,
         remaining_pass: ProgramContinuation,
     },
@@ -436,17 +469,18 @@ where
             stop_condition,
             steps,
         } => match application {
-            RuleApplication::Once | RuleApplication::OnceAll | RuleApplication::OncePerLevel => {
-                execute_block_once(
-                    backend,
-                    state,
-                    program,
-                    steps,
-                    frame,
-                    repeat_limit,
-                    should_stop,
-                )
-            }
+            RuleApplication::Once
+            | RuleApplication::RepeatStep
+            | RuleApplication::OnceAll
+            | RuleApplication::OncePerLevel => execute_block_once(
+                backend,
+                state,
+                program,
+                steps,
+                frame,
+                repeat_limit,
+                should_stop,
+            ),
             RuleApplication::Random => execute_random(
                 backend,
                 state,
@@ -622,6 +656,8 @@ where
 {
     let mut seen = vec![backend.state_key(state)];
     let mut fired_any = false;
+    let mut progressed_any = false;
+    let mut observable_any = false;
     let mut repeat_count = 0;
     loop {
         if stop_condition
@@ -648,7 +684,11 @@ where
                         before,
                         seen,
                         fired_any,
+                        progressed_any,
+                        observable_any,
                         pass_fired: pass.outcome.fired,
+                        pass_progressed: pass.outcome.progressed,
+                        pass_observable: pass.outcome.observable,
                         repeat_count,
                         remaining_pass,
                     },
@@ -662,8 +702,10 @@ where
             break;
         }
         fired_any = true;
+        progressed_any |= pass.outcome.progressed;
+        observable_any |= pass.outcome.observable;
         let current = backend.state_key(state);
-        if current == before || seen.contains(&current) {
+        if !pass.outcome.progressed || current == before || seen.contains(&current) {
             break;
         }
         seen.push(current);
@@ -674,6 +716,8 @@ where
     }
     Ok(ProgramSegment::from_outcome(ProgramApplyOutcome {
         fired: fired_any,
+        progressed: progressed_any,
+        observable: observable_any,
         cancelled: false,
     }))
 }
@@ -819,7 +863,11 @@ where
             before,
             seen,
             fired_any,
+            progressed_any,
+            observable_any,
             pass_fired,
+            pass_progressed,
+            pass_observable,
             repeat_count,
             remaining_pass,
         } => resume_until_stable(
@@ -830,7 +878,11 @@ where
             before,
             seen.clone(),
             *fired_any,
+            *progressed_any,
+            *observable_any,
             *pass_fired,
+            *pass_progressed,
+            *pass_observable,
             *repeat_count,
             remaining_pass,
             frame,
@@ -849,7 +901,11 @@ fn resume_until_stable<Rule, Condition, Frame, State, Backend, Stop>(
     before: &ProgramStateKey,
     mut seen: Vec<ProgramStateKey>,
     mut fired_any: bool,
+    mut progressed_any: bool,
+    mut observable_any: bool,
     pass_fired_before_pause: bool,
+    pass_progressed_before_pause: bool,
+    pass_observable_before_pause: bool,
     mut repeat_count: usize,
     remaining_pass: &ProgramContinuation,
     frame: Option<&Frame>,
@@ -880,9 +936,13 @@ where
     )?;
     if let Some(next_remaining) = remaining.continuation.take() {
         let pass_fired = pass_fired_before_pause || remaining.outcome.fired;
+        let pass_progressed = pass_progressed_before_pause || remaining.outcome.progressed;
+        let pass_observable = pass_observable_before_pause || remaining.outcome.observable;
         return Ok(ProgramSegment {
             outcome: ProgramApplyOutcome {
                 fired: pass_fired,
+                progressed: pass_progressed,
+                observable: pass_observable,
                 cancelled: false,
             },
             continuation: Some(ProgramContinuation::from_step(
@@ -891,7 +951,11 @@ where
                     before: before.clone(),
                     seen,
                     fired_any,
+                    progressed_any,
+                    observable_any,
                     pass_fired,
+                    pass_progressed,
+                    pass_observable,
                     repeat_count,
                     remaining_pass: next_remaining,
                 },
@@ -903,17 +967,25 @@ where
     }
 
     let pass_fired = pass_fired_before_pause || remaining.outcome.fired;
+    let pass_progressed = pass_progressed_before_pause || remaining.outcome.progressed;
+    let pass_observable = pass_observable_before_pause || remaining.outcome.observable;
     if !pass_fired {
         return Ok(ProgramSegment::from_outcome(ProgramApplyOutcome {
             fired: fired_any,
+            progressed: progressed_any,
+            observable: observable_any,
             cancelled: false,
         }));
     }
     fired_any = true;
+    progressed_any |= pass_progressed;
+    observable_any |= pass_observable;
     let current = backend.state_key(state);
-    if &current == before || seen.contains(&current) {
+    if !pass_progressed || &current == before || seen.contains(&current) {
         return Ok(ProgramSegment::from_outcome(ProgramApplyOutcome {
             fired: true,
+            progressed: progressed_any,
+            observable: observable_any,
             cancelled: false,
         }));
     }
@@ -922,6 +994,8 @@ where
     if repeat_count >= repeat_limit {
         return Ok(ProgramSegment::from_outcome(ProgramApplyOutcome {
             fired: true,
+            progressed: progressed_any,
+            observable: observable_any,
             cancelled: false,
         }));
     }
@@ -952,7 +1026,11 @@ where
                         before,
                         seen,
                         fired_any,
+                        progressed_any,
+                        observable_any,
                         pass_fired: pass.outcome.fired,
+                        pass_progressed: pass.outcome.progressed,
+                        pass_observable: pass.outcome.observable,
                         repeat_count,
                         remaining_pass,
                     },
@@ -966,8 +1044,10 @@ where
             break;
         }
         fired_any = true;
+        progressed_any |= pass.outcome.progressed;
+        observable_any |= pass.outcome.observable;
         let current = backend.state_key(state);
-        if current == before || seen.contains(&current) {
+        if !pass.outcome.progressed || current == before || seen.contains(&current) {
             break;
         }
         seen.push(current);
@@ -978,6 +1058,8 @@ where
     }
     Ok(ProgramSegment::from_outcome(ProgramApplyOutcome {
         fired: fired_any,
+        progressed: progressed_any,
+        observable: observable_any,
         cancelled: false,
     }))
 }

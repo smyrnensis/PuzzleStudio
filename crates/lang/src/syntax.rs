@@ -14,43 +14,64 @@ pub(crate) fn puzzle_lifecycle_event(block: &str) -> Option<&'static str> {
 
 pub(crate) fn is_visual_named_color(token: &str) -> bool {
     let lower = token.to_ascii_lowercase();
-    VISUAL_COLOR_NAMES.contains(&lower.as_str())
+    VISUAL_NAMED_COLORS.iter().any(|(name, _)| *name == lower)
 }
 
-pub(crate) const VISUAL_COLOR_NAMES: &[&str] = &[
-    "transparent",
-    "currentcolor",
-    "black",
-    "silver",
-    "gray",
-    "grey",
-    "darkgray",
-    "darkgrey",
-    "lightgray",
-    "lightgrey",
-    "white",
-    "maroon",
-    "red",
-    "darkred",
-    "lightred",
-    "purple",
-    "fuchsia",
-    "green",
-    "darkgreen",
-    "lightgreen",
-    "lime",
-    "olive",
-    "yellow",
-    "navy",
-    "blue",
-    "darkblue",
-    "lightblue",
-    "teal",
-    "aqua",
-    "orange",
-    "brown",
-    "darkbrown",
-    "pink",
+pub(crate) fn is_visual_color_literal(token: &str) -> bool {
+    is_visual_named_color(token) || is_visual_hex_color(token)
+}
+
+pub(crate) fn canonical_visual_color_literal(token: &str) -> Option<String> {
+    if is_visual_hex_color(token) {
+        return Some(token.to_string());
+    }
+    let lower = token.to_ascii_lowercase();
+    VISUAL_NAMED_COLORS
+        .iter()
+        .find_map(|(name, color)| (*name == lower).then(|| (*color).to_string()))
+}
+
+fn is_visual_hex_color(token: &str) -> bool {
+    let Some(hex) = token.strip_prefix('#') else {
+        return false;
+    };
+    matches!(hex.len(), 3 | 4 | 6 | 8) && hex.chars().all(|ch| ch.is_ascii_hexdigit())
+}
+
+pub(crate) const VISUAL_NAMED_COLORS: &[(&str, &str)] = &[
+    ("transparent", "transparent"),
+    ("currentcolor", "currentcolor"),
+    ("black", "#000000"),
+    ("silver", "#c0c0c0"),
+    ("gray", "#808080"),
+    ("grey", "#808080"),
+    ("darkgray", "#404040"),
+    ("darkgrey", "#404040"),
+    ("lightgray", "#c0c0c0"),
+    ("lightgrey", "#c0c0c0"),
+    ("white", "#ffffff"),
+    ("maroon", "#800000"),
+    ("red", "#ff0000"),
+    ("darkred", "#800000"),
+    ("lightred", "#ff8080"),
+    ("purple", "#800080"),
+    ("fuchsia", "#ff00ff"),
+    ("green", "#008000"),
+    ("darkgreen", "#006400"),
+    ("lightgreen", "#90ee90"),
+    ("lime", "#00ff00"),
+    ("olive", "#808000"),
+    ("yellow", "#ffff00"),
+    ("navy", "#000080"),
+    ("blue", "#0000ff"),
+    ("darkblue", "#00008b"),
+    ("lightblue", "#add8e6"),
+    ("teal", "#008080"),
+    ("aqua", "#00ffff"),
+    ("orange", "#ffa500"),
+    ("brown", "#a46322"),
+    ("darkbrown", "#493c2b"),
+    ("pink", "#ffc0cb"),
 ];
 
 pub(crate) const PUZZLE_COMPLETION_KEYWORDS: &[&str] = &[

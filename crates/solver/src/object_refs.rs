@@ -1,4 +1,5 @@
 use crate::relevance::SolverRelevance;
+use puzzle_core::{GridCompiledGame, GridGoalExpr, GridGoalValue, GridSize, GridState};
 use puzzle_kernel::{
     ConditionValueKind, LayerId, MarkId, ObjectId, RuleMatchCell, RulePattern,
     RulePatternComponent, RuleWriteOp,
@@ -128,6 +129,52 @@ pub fn collect_condition_value_roots<ObjectId, Pattern, InputId>(
             collect_patterns_roots(patterns.iter().map(|(_, pattern)| pattern), roots)
         }
     }
+}
+
+pub fn collect_goal_expr_roots<const D: usize>(
+    game: &GridCompiledGame<D>,
+    expr: &GridGoalExpr<D>,
+    roots: &mut std::collections::BTreeSet<ObjectId>,
+) {
+    match expr {
+        GridGoalExpr::All(exprs) | GridGoalExpr::Any(exprs) => {
+            for expr in exprs {
+                collect_goal_expr_roots(game, expr, roots);
+            }
+        }
+        GridGoalExpr::Clause(clause) => collect_goal_value_roots(game, &clause.value, roots),
+    }
+}
+
+pub fn collect_goal_value_roots<const D: usize>(
+    game: &GridCompiledGame<D>,
+    value: &GridGoalValue<D>,
+    roots: &mut std::collections::BTreeSet<ObjectId>,
+) {
+    match value {
+        GridGoalValue::Variable(_) => {}
+        GridGoalValue::Condition(condition) => {
+            if let Some(condition) = game.condition_def(*condition) {
+                collect_condition_value_roots(&condition.kind, roots);
+            }
+        }
+        GridGoalValue::InlineConditionValue(kind) => {
+            collect_condition_value_roots(kind, roots);
+        }
+    }
+}
+
+pub fn collect_state_roots<const D: usize, Size: GridSize<D>>(
+    state: &GridState<D, Size>,
+    roots: &mut std::collections::BTreeSet<ObjectId>,
+) {
+    roots.extend(
+        state
+            .slots()
+            .iter()
+            .copied()
+            .filter(|object| !object.is_empty()),
+    );
 }
 
 pub fn collect_pattern_roots<Pattern>(

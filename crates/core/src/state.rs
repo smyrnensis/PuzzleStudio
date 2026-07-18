@@ -171,11 +171,19 @@ struct DerivedCache {
     object_positions: Vec<Vec<usize>>,
     cell_object_masks: Vec<ObjectCellMask>,
     mark_positions: BTreeMap<MarkPositionKey, Vec<usize>>,
+    slot_mark_positions: BTreeMap<MarkKey, Vec<usize>>,
+    program_state_key: puzzle_kernel::ProgramStateKey,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct MarkPositionKey {
     object: ObjectId,
+    mark: MarkId,
+    value: Option<i64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct MarkKey {
     mark: MarkId,
     value: Option<i64>,
 }
@@ -292,6 +300,8 @@ impl<const D: usize, Size: GridSize<D>> GridState<D, Size> {
                 object_positions: vec![Vec::new(); object_count + 1],
                 cell_object_masks: vec![ObjectCellMask::default(); cell_count],
                 mark_positions: BTreeMap::new(),
+                slot_mark_positions: BTreeMap::new(),
+                program_state_key: puzzle_kernel::ProgramStateKey::default(),
             },
             hash: 0,
         };
@@ -305,25 +315,18 @@ impl<const D: usize, Size: GridSize<D>> GridState<D, Size> {
     }
 
     pub(crate) fn program_state_key(&self) -> puzzle_kernel::ProgramStateKey {
+        self.derived_cache.program_state_key.clone()
+    }
+
+    fn build_program_state_key_words(&self) -> Vec<u64> {
         let mut words =
             Vec::with_capacity(self.slots.len() + self.visible_variables.as_slice().len() + 16);
         words.extend(self.size.axes().into_iter().map(u64::from));
         words.push(u64::from(self.layer_count));
         words.push(self.slots.len() as u64);
         words.extend(self.slots.iter().map(|object| u64::from(object.0)));
-        for values in [self.mark.cell_values(), self.mark.slot_values()] {
-            words.push(values.len() as u64);
-            for marks in values {
-                words.push(marks.len() as u64);
-                for mark in marks {
-                    words.push(u64::from(mark.mark.0));
-                    words.push(u64::from(mark.value.is_some()));
-                    if let Some(value) = mark.value {
-                        words.push(value as u64);
-                    }
-                }
-            }
-        }
+        self.mark
+            .append_key_words(&mut words, |mark| u64::from(mark.0));
         words.push(self.visible_variables.as_slice().len() as u64);
         words.extend(
             self.visible_variables
@@ -333,7 +336,7 @@ impl<const D: usize, Size: GridSize<D>> GridState<D, Size> {
         );
         words.push(self.level_fired_rules.len() as u64);
         words.extend(self.level_fired_rules.iter().map(|rule| u64::from(rule.0)));
-        puzzle_kernel::ProgramStateKey::from_words(words)
+        words
     }
 
     #[inline]
@@ -380,6 +383,33 @@ impl<const D: usize, Size: GridSize<D>> GridState<D, Size> {
             Err(index) => self.level_fired_rules.insert(index, rule),
         }
         self.recompute_hash();
+    }
+
+    pub fn set_slot_mark_at(
+        &mut self,
+        position: impl Into<GridCoord<D>>,
+        layer: LayerId,
+        mark: MarkId,
+        value: Option<i64>,
+    ) -> Result<(), GridStateError<D>> {
+        let position = position.into();
+        self.slot_index(position, layer)?;
+        self.set_mark_unchecked(position, layer, mark, value);
+        self.recompute_hash();
+        Ok(())
+    }
+
+    pub fn set_cell_mark_at(
+        &mut self,
+        position: impl Into<GridCoord<D>>,
+        mark: MarkId,
+        value: Option<i64>,
+    ) -> Result<(), GridStateError<D>> {
+        let position = position.into();
+        self.cell_index(position)?;
+        self.set_cell_mark_unchecked(position, mark, value);
+        self.recompute_hash();
+        Ok(())
     }
 
     pub fn without_objects(&self, objects: &[ObjectId]) -> Self {
@@ -483,6 +513,15 @@ impl<const D: usize, Size: GridSize<D>> GridState<D, Size> {
         self.derived_cache
             .mark_positions
             .get(&key)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    #[inline]
+    pub fn slot_mark_positions(&self, mark: MarkId, value: Option<i64>) -> &[usize] {
+        self.derived_cache
+            .slot_mark_positions
+            .get(&MarkKey { mark, value })
             .map(Vec::as_slice)
             .unwrap_or(&[])
     }
@@ -751,6 +790,7 @@ impl<const D: usize, Size: GridSize<D>> GridState<D, Size> {
         }
         self.mark.clear_all();
         self.derived_cache.mark_positions.clear();
+        self.derived_cache.slot_mark_positions.clear();
         self.recompute_hash();
     }
 
@@ -778,7 +818,11 @@ impl<const D: usize, Size: GridSize<D>> GridState<D, Size> {
                 .resize(index + 1, Vec::new());
         }
         self.derived_cache.object_counts[index] += 1;
-        self.derived_cache.object_positions[index].push(slot_index);
+        let positions = &mut self.derived_cache.object_positions[index];
+        match positions.binary_search(&slot_index) {
+            Ok(_) => {}
+            Err(insert_at) => positions.insert(insert_at, slot_index),
+        }
     }
 
     fn rebuild_derived_cache(&mut self) {
@@ -797,6 +841,8 @@ impl<const D: usize, Size: GridSize<D>> GridState<D, Size> {
             object_positions: vec![Vec::new(); object_count + 1],
             cell_object_masks: vec![ObjectCellMask::default(); cell_count],
             mark_positions: BTreeMap::new(),
+            slot_mark_positions: BTreeMap::new(),
+            program_state_key: puzzle_kernel::ProgramStateKey::default(),
         };
         let mut index = 0;
         while index < self.slots.len() {
@@ -825,11 +871,9 @@ impl<const D: usize, Size: GridSize<D>> GridState<D, Size> {
             *count = count.saturating_sub(1);
         }
         if let Some(positions) = self.derived_cache.object_positions.get_mut(index)
-            && let Some(position_index) = positions
-                .iter()
-                .position(|position| *position == slot_index)
+            && let Ok(position_index) = positions.binary_search(&slot_index)
         {
-            positions.swap_remove(position_index);
+            positions.remove(position_index);
         }
     }
 
@@ -929,8 +973,18 @@ impl<const D: usize, Size: GridSize<D>> GridState<D, Size> {
             value,
         };
         let positions = self.derived_cache.mark_positions.entry(key).or_default();
-        if !positions.contains(&index) {
-            positions.push(index);
+        if let Err(insert_at) = positions.binary_search(&index) {
+            positions.insert(insert_at, index);
+        }
+        if !object.is_empty() {
+            let positions = self
+                .derived_cache
+                .slot_mark_positions
+                .entry(MarkKey { mark, value })
+                .or_default();
+            if let Err(insert_at) = positions.binary_search(&index) {
+                positions.insert(insert_at, index);
+            }
         }
     }
 
@@ -947,11 +1001,22 @@ impl<const D: usize, Size: GridSize<D>> GridState<D, Size> {
             value,
         };
         if let Some(positions) = self.derived_cache.mark_positions.get_mut(&key) {
-            if let Some(position_index) = positions.iter().position(|position| *position == index) {
-                positions.swap_remove(position_index);
+            if let Ok(position_index) = positions.binary_search(&index) {
+                positions.remove(position_index);
             }
             if positions.is_empty() {
                 self.derived_cache.mark_positions.remove(&key);
+            }
+        }
+        if !object.is_empty() {
+            let key = MarkKey { mark, value };
+            if let Some(positions) = self.derived_cache.slot_mark_positions.get_mut(&key) {
+                if let Ok(position_index) = positions.binary_search(&index) {
+                    positions.remove(position_index);
+                }
+                if positions.is_empty() {
+                    self.derived_cache.slot_mark_positions.remove(&key);
+                }
             }
         }
     }
@@ -974,6 +1039,10 @@ impl<const D: usize, Size: GridSize<D>> GridState<D, Size> {
             hash = fnv_mix(hash, u64::from(rule.0));
         }
         self.hash = hash;
+        self.derived_cache.program_state_key = puzzle_kernel::ProgramStateKey::from_words_and_hash(
+            self.build_program_state_key_words(),
+            hash,
+        );
     }
 
     pub(crate) fn check_pos(&self, position: GridCoord<D>) -> Result<(), GridStateError<D>> {

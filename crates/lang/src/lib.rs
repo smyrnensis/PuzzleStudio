@@ -39,7 +39,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-use puzzle_authoring::is_variable_update_operator;
+use puzzle_authoring::{SelectorMark, is_variable_update_operator};
 
 use ast::{
     ConditionAst, ConditionDefinitionAst, ConditionPatternAst, ConditionValueAst, DirectionName,
@@ -54,8 +54,8 @@ pub use completion::{
 };
 pub use error::{Diagnostic, DiagnosticReport, DiagnosticSeverity, DiagnosticSpan};
 pub use highlight::{
-    HighlightedSource, HighlightedSourceWithOutline, SourceHighlightKind, SourceHighlightSpan,
-    highlight_source, highlight_source_with_outline,
+    HighlightedSource, HighlightedSourceWithOutline, SourceHighlightColor, SourceHighlightKind,
+    SourceHighlightSpan, highlight_source, highlight_source_with_outline,
 };
 use level::{LevelBlock, parse_level};
 pub use loaded::{

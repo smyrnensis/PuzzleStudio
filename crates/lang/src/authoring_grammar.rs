@@ -695,13 +695,6 @@ const ROOT_DEFINITIONS: &[DefinitionSpec] = &[
         AuthoringSurfaceRole::Keyword,
         AuthoringSurfaceRole::Number,
     ),
-    DefinitionSpec::keyed_value_role(
-        "again_interval",
-        DefinitionValueSpec::One,
-        DefinitionValueSyntax::Duration,
-        AuthoringSurfaceRole::Keyword,
-        AuthoringSurfaceRole::Number,
-    ),
     DefinitionSpec::mirror(
         "theme",
         AuthoringSurfaceRole::Keyword,

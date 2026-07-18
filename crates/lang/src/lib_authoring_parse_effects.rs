@@ -31,6 +31,9 @@ pub(crate) fn scene_effect_command_syntax(token: &str) -> Option<SceneEffectComm
         | "copy"
         | "load"
         | "message"
+        | "next_level"
+        | "previous_level"
+        | "restart"
         | "wait" => Some(SceneEffectCommandSyntax::Plain),
         _ => None,
     }
@@ -101,6 +104,9 @@ fn scene_effect_surface_document(tokens: &[SourceToken]) -> SurfaceDocument {
         if let Some(effect) = parts.next() {
             add_scene_effect_token_part(&mut sink, first, effect, SurfaceSemanticKind::Effect);
         }
+        for argument in tokens.iter().skip(1) {
+            add_scene_effect_token_range(&mut sink, argument, SurfaceSemanticKind::State);
+        }
         return surface_document_with_node(sink, SurfaceNodeKind::SceneEffect, effect_span);
     }
 
@@ -108,10 +114,15 @@ fn scene_effect_surface_document(tokens: &[SourceToken]) -> SurfaceDocument {
         return surface_document_with_node(sink, SurfaceNodeKind::SceneEffect, effect_span);
     }
 
-    match scene_effect_command_syntax(&first.text) {
+    let command_syntax = scene_effect_command_syntax(&first.text);
+    match command_syntax {
         Some(SceneEffectCommandSyntax::InputTarget) => {
             add_scene_effect_token_range(&mut sink, first, SurfaceSemanticKind::Effect);
-            if let Some(input) = tokens.get(1) {
+            for input in tokens
+                .iter()
+                .skip(1)
+                .filter(|token| !matches!(token.text.as_str(), "=" | ":"))
+            {
                 add_scene_command_token(&mut sink, input);
             }
         }
@@ -145,6 +156,28 @@ fn scene_effect_surface_document(tokens: &[SourceToken]) -> SurfaceDocument {
             add_scene_effect_token_range(&mut sink, first, kind);
         }
         None => {}
+    }
+
+    if command_syntax.is_some() {
+        for token in tokens.iter().skip(1).filter(|token| {
+            matches!(command_syntax, Some(SceneEffectCommandSyntax::Plain))
+                || token
+                    .text
+                    .chars()
+                    .any(|ch| matches!(ch, '(' | ')' | '.' | '[' | ']'))
+        }) {
+            sink.mark(
+                SourceSpan {
+                    start: token.start,
+                    end: token.end,
+                },
+                if token.text.starts_with('"') || token.text.starts_with('\'') {
+                    SurfaceSemanticKind::String
+                } else {
+                    SurfaceSemanticKind::State
+                },
+            );
+        }
     }
 
     surface_document_with_node(sink, SurfaceNodeKind::SceneEffect, effect_span)
@@ -443,6 +476,14 @@ pub(crate) fn is_level_event_sugar(trimmed: &str, tokens: &[&str]) -> bool {
 }
 
 fn rewrite_effect_surface_document(tokens: &[SourceToken]) -> SurfaceDocument {
+    if tokens.first().is_some_and(|token| {
+        matches!(
+            token.text.as_str(),
+            "goto" | "start" | "play_music" | "pause_music" | "resume_music" | "stop_music"
+        )
+    }) {
+        return scene_effect_surface_document(tokens);
+    }
     let mut sink = SurfaceSink::default();
     let effect_span = source_tokens_span(tokens);
     add_rewrite_effect_surface_tokens(tokens, &mut sink);
@@ -753,7 +794,6 @@ fn is_scene_effect_command_start(token: &str) -> bool {
 }
 
 const DEFAULT_WAIT_MS: u64 = 200;
-const DEFAULT_AGAIN_MS: u64 = 120;
 
 fn resolve_default_wait_in_scenes(scenes: &mut [SceneDef], default_wait_ms: u64) {
     for scene in scenes {

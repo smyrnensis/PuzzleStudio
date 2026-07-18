@@ -123,6 +123,23 @@ impl SolverRelevance<ObjectId> {
         Self::from_game_program::<GridPattern<D>, GridOffset<D>>(game, program, roots)
     }
 
+    pub fn from_programs_roots<'a, const D: usize>(
+        game: &GridCompiledGame<D>,
+        programs: impl IntoIterator<Item = &'a [GridRuleStep<D>]>,
+        roots: impl IntoIterator<Item = ObjectId>,
+    ) -> Self {
+        let programs = programs.into_iter().collect::<Vec<_>>();
+        let mut analysis = Self::from_roots(roots, ObjectId::is_empty);
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for step in programs.iter().flat_map(|program| program.iter()) {
+                changed |= analysis.propagate_step(game, step);
+            }
+        }
+        analysis
+    }
+
     fn from_game_program<Pattern, Offset>(
         game: &RelevanceGame<Pattern, Offset>,
         program: &[RelevanceStep<Pattern, Offset>],

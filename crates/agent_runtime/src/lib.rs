@@ -1,8 +1,8 @@
-use puzzle_core::{InputId, ObjectId, State, TransitionCommand};
+use puzzle_core::{InputId, ObjectId, Size2, State, TransitionCommand};
 use puzzle_lang::{LoadedDocumentModel, LoadedGame};
-use puzzle_play::{DebugTransition, GameSession, cell_objects};
+use puzzle_play::{GameSession, TransitionTrace, cell_objects};
 use puzzle_solver::{
-    PuzzleDomain, PuzzleSearchState, PuzzleStateKey, ResumableAdvanceOutcome, ResumableBestFirst,
+    GridPuzzleDomain, GridSearchState, GridStateKey, ResumableAdvanceOutcome, ResumableBestFirst,
     ResumablePauseReason, ResumableSearchAllowance, ResumableSearchCandidate,
     ResumableSearchLimits, ResumableSearchStatus, SearchBudget, SearchDomain, SearchOutcome,
     SearchStats, best_first, exact_bfs,
@@ -15,6 +15,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 pub const AGENT_PROTOCOL_VERSION: u32 = 1;
+
+type AgentSearchDomain = GridPuzzleDomain<2, Size2>;
+type AgentSearchState = GridSearchState<2, Size2>;
+type AgentStateKey = GridStateKey<2>;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -558,10 +562,12 @@ struct StateRecord {
 #[derive(Clone)]
 enum StateReplay {
     Reachable {
+        start_level_index: usize,
         inputs: Vec<InputId>,
     },
     Hypothetical {
         base_state_id: String,
+        root_level_index: usize,
         root_state: State,
         inputs: Vec<InputId>,
     },
@@ -597,7 +603,7 @@ struct SearchSession {
     goal: SemanticGoal,
     algorithm: SemanticGoalSearchAlgorithm,
     limits: SearchSessionLimits,
-    machine: ResumableBestFirst<PuzzleSearchState, InputId, PuzzleStateKey>,
+    machine: ResumableBestFirst<AgentSearchState, InputId, AgentStateKey>,
     advanced: bool,
     pause_reason: Option<&'static str>,
     failure: Option<Value>,
@@ -607,7 +613,7 @@ struct SearchSession {
 struct RunPoint {
     index: usize,
     state: State,
-    trace: Option<DebugTransition>,
+    trace: Option<TransitionTrace>,
     goal: bool,
     lose: bool,
 }
@@ -649,7 +655,10 @@ impl CompiledSession {
             let state_id = session.store_state(StateRecord {
                 level_index,
                 state: play.state().clone(),
-                replay: StateReplay::Reachable { inputs: Vec::new() },
+                replay: StateReplay::Reachable {
+                    start_level_index: level_index,
+                    inputs: Vec::new(),
+                },
             });
             session.initial_state_ids.push(state_id);
         }
@@ -670,11 +679,13 @@ impl CompiledSession {
 
     fn replay_state(&self, record: &StateRecord) -> Result<GameSession, AgentError> {
         let (mut play, inputs) = match &record.replay {
-            StateReplay::Reachable { inputs } => {
-                (self.play_session_for_level(record.level_index)?, inputs)
-            }
+            StateReplay::Reachable {
+                start_level_index,
+                inputs,
+            } => (self.play_session_for_level(*start_level_index)?, inputs),
             StateReplay::Hypothetical {
                 base_state_id,
+                root_level_index,
                 root_state,
                 inputs,
             } => {
@@ -687,7 +698,7 @@ impl CompiledSession {
                 let mut play = self.replay_state(base)?;
                 play.start_level_from_state(
                     &self.game,
-                    record.level_index,
+                    *root_level_index,
                     root_state.clone(),
                     false,
                 )
@@ -707,9 +718,10 @@ impl CompiledSession {
             }
         };
         for input in inputs {
-            play.apply_input(&self.game, *input).map_err(|error| {
-                AgentError::new("transition_failed", format!("replay failed: {error:?}"))
-            })?;
+            play.apply_traced_input(&self.game, *input)
+                .map_err(|error| {
+                    AgentError::new("transition_failed", format!("replay failed: {error:?}"))
+                })?;
         }
         if play.state() != &record.state {
             return Err(AgentError::new(
@@ -903,11 +915,17 @@ impl CompiledSession {
                 .with_details(json!({ "inputIndex": offset, "input": input_names[offset] }))
             })?;
             executed.push(*input);
-            let state = play.state().clone();
-            let trace = play.last_debug_transition().cloned();
+            let terminal_state = play.state().clone();
+            let completion = play.last_level_completion().cloned();
+            let state = completion.as_ref().map_or_else(
+                || terminal_state.clone(),
+                |completion| completion.state().clone(),
+            );
+            let trace = play.last_transition_trace().cloned();
             let goal = self.game.is_goal_complete(&state);
             let lose = self.game.is_lose_complete(&state);
-            won = goal
+            won = completion.is_some()
+                || goal
                 || trace.as_ref().is_some_and(|debug| {
                     debug
                         .commands
@@ -944,11 +962,7 @@ impl CompiledSession {
             })));
         }
 
-        let terminal = points
-            .last()
-            .expect("run always has initial point")
-            .state
-            .clone();
+        let terminal = play.state().clone();
         if expected_terminal.is_some_and(|expected| expected != &terminal) {
             return Err(AgentError::new(
                 "search_candidate_replay_mismatch",
@@ -962,25 +976,33 @@ impl CompiledSession {
             })));
         }
         let replay = match source.replay {
-            StateReplay::Reachable { mut inputs } => {
+            StateReplay::Reachable {
+                start_level_index,
+                mut inputs,
+            } => {
                 inputs.extend(executed.iter().copied());
-                StateReplay::Reachable { inputs }
+                StateReplay::Reachable {
+                    start_level_index,
+                    inputs,
+                }
             }
             StateReplay::Hypothetical {
                 base_state_id,
+                root_level_index,
                 root_state,
                 mut inputs,
             } => {
                 inputs.extend(executed.iter().copied());
                 StateReplay::Hypothetical {
                     base_state_id,
+                    root_level_index,
                     root_state,
                     inputs,
                 }
             }
         };
         let terminal_state_id = self.store_state(StateRecord {
-            level_index: source.level_index,
+            level_index: play.active_level_index().unwrap_or(source.level_index),
             state: terminal.clone(),
             replay,
         });
@@ -1165,6 +1187,7 @@ impl CompiledSession {
             state: state.clone(),
             replay: StateReplay::Hypothetical {
                 base_state_id: artifact.base_state_id.clone(),
+                root_level_index: base.level_index,
                 root_state: state,
                 inputs: Vec::new(),
             },
@@ -1353,8 +1376,15 @@ impl CompiledSession {
                 "semantic goal and search source must have the same level and dimensions",
             ));
         }
-        let mut domain = self.semantic_search_domain(&goal)?;
-        let initial = domain.initial_state(source.state);
+        let mut domain = self.semantic_search_domain(&goal, &source.state)?;
+        let initial = domain
+            .initial_session(self.replay_state(&source)?)
+            .map_err(|error| {
+                AgentError::new(
+                    "semantic_search_session_failed",
+                    format!("failed to initialize authoritative search session: {error:?}"),
+                )
+            })?;
         let search_budget = SearchBudget::bounded(
             budget.max_depth,
             budget.max_nodes,
@@ -1365,7 +1395,7 @@ impl CompiledSession {
             SemanticGoalSearchAlgorithm::BestFirst => {
                 let score_goal = goal.clone();
                 best_first(&mut domain, initial, search_budget, move |state| {
-                    semantic_goal_mismatch_count(&score_goal, state.state()) as i64
+                    semantic_goal_mismatch_count(&score_goal, state.observation_state()) as i64
                 })
             }
         };
@@ -1427,7 +1457,11 @@ impl CompiledSession {
         }
     }
 
-    fn semantic_search_domain(&self, goal: &SemanticGoal) -> Result<PuzzleDomain, AgentError> {
+    fn semantic_search_domain(
+        &self,
+        goal: &SemanticGoal,
+        source_state: &State,
+    ) -> Result<AgentSearchDomain, AgentError> {
         let inputs = self.game.input_labels.keys().copied().collect::<Vec<_>>();
         if inputs.is_empty() {
             return Err(AgentError::new(
@@ -1435,26 +1469,49 @@ impl CompiledSession {
                 "compiled model has no inputs available for semantic goal search",
             ));
         }
-        // Semantic goals describe the complete symbolic state, including objects
-        // that the presentation-aware solver projection may omit. Search the
-        // authoritative compiled game so the stopping predicate and replay see
-        // the same state contract.
-        let solver_game = Arc::new(
-            self.game
-                .compiled_game_for_level(goal.level_index)
-                .ok_or_else(|| {
-                    AgentError::new(
-                        "search_level_out_of_range",
-                        format!("semantic goal level {} is out of range", goal.level_index),
-                    )
-                })?,
+        if goal.level_index >= self.game.levels.len() {
+            return Err(AgentError::new(
+                "search_level_out_of_range",
+                format!("semantic goal level {} is out of range", goal.level_index),
+            ));
+        }
+        let mut roots = semantic_goal_root_objects(&self.game, goal);
+        for condition in self
+            .game
+            .conditions
+            .values()
+            .chain(self.game.goal.iter())
+            .chain(self.game.lose.iter())
+        {
+            puzzle_solver::object_refs::collect_goal_expr_roots(
+                &self.game.game,
+                &condition.expr,
+                &mut roots,
+            );
+        }
+        let slice = puzzle_solver::SolverSlice::from_loaded_level_roots(
+            &self.game,
+            goal.level_index,
+            [source_state],
+            roots,
+        )
+        .ok_or_else(|| {
+            AgentError::new(
+                "search_level_out_of_range",
+                format!("semantic goal level {} is out of range", goal.level_index),
+            )
+        })?;
+        let state_slicer = puzzle_solver::SolverStateSlicer::from_kept_objects(
+            &self.game.game,
+            slice.kept_objects(),
         );
+        let solver_game = Arc::new(slice.project_loaded_game(&self.game, &state_slicer));
         let goal_for_domain = goal.clone();
-        Ok(PuzzleDomain::with_state_slicer_and_win_command_goal(
+        Ok(AgentSearchDomain::with_state_slicer(
             solver_game,
+            goal.level_index,
             inputs,
-            puzzle_solver::SolverStateSlicer::new(),
-            false,
+            state_slicer,
             move |state| semantic_goal_matches(&goal_for_domain, state),
         )
         .without_input_history())
@@ -1487,8 +1544,15 @@ impl CompiledSession {
             )
         })?;
         validate_goal_source(&goal, &source, "search source")?;
-        let domain = self.semantic_search_domain(&goal)?;
-        let initial = domain.initial_state(source.state);
+        let domain = self.semantic_search_domain(&goal, &source.state)?;
+        let initial = domain
+            .initial_session(self.replay_state(&source)?)
+            .map_err(|error| {
+                AgentError::new(
+                    "semantic_search_session_failed",
+                    format!("failed to initialize authoritative search session: {error:?}"),
+                )
+            })?;
         let initial_key = domain.key(&initial);
         let initial_score = search_session_score(algorithm, &goal, &initial);
         let machine = ResumableBestFirst::new(
@@ -1542,7 +1606,7 @@ impl CompiledSession {
                 "maxExpandedNodes and maxMillis must both be greater than zero",
             ));
         }
-        let (goal, algorithm, status) = {
+        let (goal, algorithm, status, from_state_id) = {
             let search = self.searches.get(search_id).ok_or_else(|| {
                 AgentError::new(
                     "unknown_search",
@@ -1553,6 +1617,7 @@ impl CompiledSession {
                 search.goal.clone(),
                 search.algorithm,
                 search.machine.status(),
+                search.from_state_id.clone(),
             )
         };
         if !matches!(status, ResumableSearchStatus::Active) {
@@ -1564,7 +1629,17 @@ impl CompiledSession {
                 ),
             ));
         }
-        let mut domain = self.semantic_search_domain(&goal)?;
+        let source_state = &self
+            .states
+            .get(&from_state_id)
+            .ok_or_else(|| {
+                AgentError::new(
+                    "unknown_state",
+                    format!("agent state {from_state_id:?} does not exist"),
+                )
+            })?
+            .state;
+        let mut domain = self.semantic_search_domain(&goal, source_state)?;
         let search = self
             .searches
             .get_mut(search_id)
@@ -1802,7 +1877,7 @@ impl CompiledSession {
 
 fn state_provenance(replay: &StateReplay) -> Value {
     match replay {
-        StateReplay::Reachable { inputs } => json!({
+        StateReplay::Reachable { inputs, .. } => json!({
             "kind": "reachable",
             "inputCount": inputs.len(),
         }),
@@ -2119,6 +2194,32 @@ fn semantic_goal_matches(goal: &SemanticGoal, state: &State) -> bool {
     semantic_goal_mismatch_count(goal, state) == 0
 }
 
+fn semantic_goal_root_objects(game: &LoadedGame, goal: &SemanticGoal) -> BTreeSet<ObjectId> {
+    if goal
+        .cells
+        .iter()
+        .any(|cell| matches!(cell, SemanticGoalCell::Exact(_)))
+    {
+        return game
+            .game
+            .objects()
+            .iter()
+            .filter_map(|object| (!object.id.is_empty()).then_some(object.id))
+            .collect();
+    }
+    goal.cells
+        .iter()
+        .flat_map(|cell| match cell {
+            SemanticGoalCell::Contains(objects) | SemanticGoalCell::Excludes(objects) => {
+                objects.as_slice()
+            }
+            SemanticGoalCell::Exact(_) | SemanticGoalCell::Unknown => &[],
+        })
+        .copied()
+        .filter(|object| !object.is_empty())
+        .collect()
+}
+
 fn validate_goal_source(
     goal: &SemanticGoal,
     source: &StateRecord,
@@ -2198,12 +2299,12 @@ fn search_algorithm_name(algorithm: SemanticGoalSearchAlgorithm) -> &'static str
 fn search_session_score(
     algorithm: SemanticGoalSearchAlgorithm,
     goal: &SemanticGoal,
-    state: &PuzzleSearchState,
+    state: &AgentSearchState,
 ) -> i64 {
     match algorithm {
         SemanticGoalSearchAlgorithm::Bfs => 0,
         SemanticGoalSearchAlgorithm::BestFirst => {
-            semantic_goal_mismatch_count(goal, state.state()) as i64
+            semantic_goal_mismatch_count(goal, state.observation_state()) as i64
         }
     }
 }
@@ -2255,7 +2356,7 @@ fn search_stats_json(stats: &SearchStats) -> Value {
 fn search_candidate_json(
     game: &LoadedGame,
     goal: &SemanticGoal,
-    candidate: ResumableSearchCandidate<PuzzleSearchState, InputId>,
+    candidate: ResumableSearchCandidate<AgentSearchState, InputId>,
 ) -> Result<Value, AgentError> {
     let inputs = candidate
         .actions
@@ -2269,14 +2370,15 @@ fn search_candidate_json(
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let (_, _, goal_diff) = semantic_goal_mismatches(game, goal, candidate.state.state());
+    let (_, _, goal_diff) =
+        semantic_goal_mismatches(game, goal, candidate.state.observation_state());
     Ok(json!({
         "candidateId": candidate_id(candidate.index),
         "score": candidate.score,
         "depth": candidate.depth,
         "discoveryIndex": candidate.discovery_index,
         "inputs": inputs,
-        "stateHash": state_hash(candidate.state.state()),
+        "stateHash": state_hash(candidate.state.observation_state()),
         "goalDiff": goal_diff,
     }))
 }
@@ -2481,14 +2583,14 @@ fn describe_run_point(game: &LoadedGame, point: &RunPoint, include_trace: bool) 
     })
 }
 
-fn describe_trace(trace: &DebugTransition) -> Value {
+fn describe_trace(trace: &TransitionTrace) -> Value {
     json!({
         "inputId": trace.input.0,
         "target": trace.target,
         "cancelled": trace.cancelled,
         "commands": trace.commands.iter().map(command_name).collect::<Vec<_>>(),
-        "firedRules": trace.fired_rules.iter().map(|rule| rule.0).collect::<Vec<_>>(),
-        "patchCount": trace.patches.len(),
+        "firedRules": trace.firings.iter().map(|firing| firing.rule.0).collect::<Vec<_>>(),
+        "patchCount": trace.firings.len(),
     })
 }
 
@@ -2556,9 +2658,9 @@ fn run_events(game: &LoadedGame, points: &[RunPoint]) -> Vec<Value> {
         }
         if let Some(trace) = &after.trace {
             let rules = trace
-                .fired_rules
+                .firings
                 .iter()
-                .map(|rule| rule.0)
+                .map(|firing| firing.rule.0)
                 .collect::<Vec<_>>();
             if rules != previous_rules {
                 events.push(json!({
@@ -2566,7 +2668,7 @@ fn run_events(game: &LoadedGame, points: &[RunPoint]) -> Vec<Value> {
                     "inputIndex": after.index,
                     "firedRules": rules,
                 }));
-                previous_rules = trace.fired_rules.iter().map(|rule| rule.0).collect();
+                previous_rules = trace.firings.iter().map(|firing| firing.rule.0).collect();
             }
             if !trace.commands.is_empty() || trace.cancelled {
                 events.push(json!({
@@ -2724,12 +2826,16 @@ P.G
 "#;
 
     fn write_source() -> std::path::PathBuf {
+        write_source_text(SOURCE)
+    }
+
+    fn write_source_text(source: &str) -> std::path::PathBuf {
         let path = std::env::temp_dir().join(format!(
             "puzzle-agent-runtime-{}-{}.puzzle",
             std::process::id(),
             NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed)
         ));
-        fs::write(&path, SOURCE).unwrap();
+        fs::write(&path, source).unwrap();
         path
     }
 
@@ -2809,6 +2915,227 @@ P.G
         );
         assert_eq!(inspected["ok"], true, "{inspected}");
         assert_eq!(inspected["data"]["points"].as_array().unwrap().len(), 2);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn locked_stuck_room_sequence_reaches_win_in_five_inputs() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../games/TPGJ6/locked.puzzle");
+        let mut server = AgentServer::new();
+        let compiled = request(
+            &mut server,
+            json!({
+                "version": 1,
+                "op": "compile",
+                "path": path,
+                "model": "main"
+            }),
+        );
+        assert_eq!(compiled["ok"], true, "{compiled}");
+        let session = compiled["data"]["sessionId"].as_str().unwrap();
+        let initial = compiled["data"]["initialStates"][0]["stateId"]
+            .as_str()
+            .unwrap();
+
+        let run = request(
+            &mut server,
+            json!({
+                "version": 1,
+                "op": "run",
+                "sessionId": session,
+                "fromStateId": initial,
+                "inputs": ["right", "right", "left", "left", "left"]
+            }),
+        );
+
+        assert_eq!(run["ok"], true, "{run}");
+        assert_eq!(run["data"]["result"], "solved", "{run}");
+        assert_eq!(run["data"]["executedInputs"], 5);
+    }
+
+    #[test]
+    fn semantic_search_replays_one_again_input_through_play() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../play/tests/fixtures/again_atomic.puzzle");
+        let mut server = AgentServer::new();
+        let compiled = request(
+            &mut server,
+            json!({
+                "version": 1,
+                "op": "compile",
+                "path": path,
+                "model": "board"
+            }),
+        );
+        assert_eq!(compiled["ok"], true, "{compiled}");
+        let session = compiled["data"]["sessionId"].as_str().unwrap();
+        let initial = compiled["data"]["initialStates"][0]["stateId"]
+            .as_str()
+            .unwrap();
+        let exported = request(
+            &mut server,
+            json!({
+                "version": 1,
+                "op": "export_semantic_state",
+                "sessionId": session,
+                "stateId": initial
+            }),
+        );
+        let mut goal = exported["data"].clone();
+        goal["kind"] = json!("puzzle2d-semantic-goal");
+        goal.as_object_mut().unwrap().remove("variables");
+        goal["legend"]["D"] = json!({ "kind": "exact", "objects": ["Done"] });
+        goal["lines"] = json!(["D"]);
+        let imported = request(
+            &mut server,
+            json!({
+                "version": 1,
+                "op": "import_semantic_goal",
+                "sessionId": session,
+                "artifact": goal
+            }),
+        );
+        assert_eq!(imported["ok"], true, "{imported}");
+        let goal_id = imported["data"]["goalId"].as_str().unwrap();
+
+        let solved = request(
+            &mut server,
+            json!({
+                "version": 1,
+                "op": "solve_semantic_goal",
+                "sessionId": session,
+                "goalId": goal_id,
+                "fromStateId": initial,
+                "algorithm": "bfs",
+                "budget": { "maxDepth": 1, "maxNodes": 10, "maxMillis": 1000 }
+            }),
+        );
+        assert_eq!(solved["ok"], true, "{solved}");
+        assert_eq!(solved["data"]["searchOutcome"], "solved", "{solved}");
+        assert_eq!(solved["data"]["solutionDepth"], 1);
+        assert_eq!(solved["data"]["inputs"], json!(["right"]));
+        assert_eq!(solved["data"]["result"], "semantic_goal_reached");
+    }
+
+    #[test]
+    fn semantic_search_matches_completion_observation_before_next_level() {
+        let path = write_source_text(
+            r#"
+title = semantic_completion_observation
+puzzle board {
+slots {
+floor = Goal
+actor = Player Box Wall
+}
+groups { solid = Player Box Wall }
+keys { d ArrowRight -> right }
+win_conditions {
+some Goal
+all Goal on Box
+}
+on_level_clear { next_level }
+rules {
+once input directions [ Player | Box | no solid ] -> [ | Player | Box ]
+once input directions [ Player | no solid ] -> [ | Player ]
+}
+levels {
+legend {
+. = empty
+G = Goal
+P = Player
+B = Box
+# = Wall
+}
+level "first" {
+#####
+#PBG#
+#####
+}
+level "second" {
+#####
+#P.G#
+#####
+}
+}
+}
+"#,
+        );
+        let mut server = AgentServer::new();
+        let compiled = request(
+            &mut server,
+            json!({ "version": 1, "op": "compile", "path": path, "model": "board" }),
+        );
+        assert_eq!(compiled["ok"], true, "{compiled}");
+        let session = compiled["data"]["sessionId"].as_str().unwrap();
+        let initial = compiled["data"]["initialStates"][0]["stateId"]
+            .as_str()
+            .unwrap();
+        let exported = request(
+            &mut server,
+            json!({
+                "version": 1,
+                "op": "export_semantic_state",
+                "sessionId": session,
+                "stateId": initial
+            }),
+        );
+        let mut goal = exported["data"].clone();
+        goal["kind"] = json!("puzzle2d-semantic-goal");
+        goal.as_object_mut().unwrap().remove("variables");
+        goal["legend"] = json!({
+            "?": { "kind": "unknown" },
+            "X": { "kind": "contains", "objects": ["Goal", "Box"] }
+        });
+        goal["lines"] = json!(["?????", "???X?", "?????"]);
+        let imported = request(
+            &mut server,
+            json!({
+                "version": 1,
+                "op": "import_semantic_goal",
+                "sessionId": session,
+                "artifact": goal
+            }),
+        );
+        assert_eq!(imported["ok"], true, "{imported}");
+
+        let solved = request(
+            &mut server,
+            json!({
+                "version": 1,
+                "op": "solve_semantic_goal",
+                "sessionId": session,
+                "goalId": imported["data"]["goalId"],
+                "fromStateId": initial,
+                "algorithm": "bfs",
+                "budget": { "maxDepth": 1, "maxNodes": 10, "maxMillis": 1000 }
+            }),
+        );
+        assert_eq!(solved["ok"], true, "{solved}");
+        assert_eq!(solved["data"]["searchOutcome"], "solved", "{solved}");
+        assert_eq!(solved["data"]["result"], "semantic_goal_reached");
+        assert_eq!(solved["data"]["inputs"], json!(["right"]));
+        let terminal = request(
+            &mut server,
+            json!({
+                "version": 1,
+                "op": "inspect_state",
+                "sessionId": session,
+                "stateId": solved["data"]["terminalStateId"]
+            }),
+        );
+        assert_eq!(terminal["data"]["levelIndex"], 1, "{terminal}");
+        let continued = request(
+            &mut server,
+            json!({
+                "version": 1,
+                "op": "run",
+                "sessionId": session,
+                "fromStateId": solved["data"]["terminalStateId"],
+                "inputs": ["right"]
+            }),
+        );
+        assert_eq!(continued["ok"], true, "{continued}");
         let _ = fs::remove_file(path);
     }
 

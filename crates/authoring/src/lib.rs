@@ -297,10 +297,49 @@ pub struct ResolvedSelector<ObjectId, Mark> {
     pub mark: Vec<Mark>,
 }
 
+/// Canonical spelling shared by selector parsing, serialization, and completion.
+pub const SELECTOR_WILDCARD: &str = "*";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SelectorTagSyntaxLiteral {
+    Wildcard,
+}
+
+impl SelectorTagSyntaxLiteral {
+    pub const fn token(self) -> &'static str {
+        match self {
+            Self::Wildcard => SELECTOR_WILDCARD,
+        }
+    }
+}
+
+/// Parser-owned selector tag literals that editor projections may offer.
+pub const SELECTOR_TAG_SYNTAX_LITERALS: &[SelectorTagSyntaxLiteral] =
+    &[SelectorTagSyntaxLiteral::Wildcard];
+
+pub fn selector_tag_syntax_literal(token: &str) -> Option<SelectorTagSyntaxLiteral> {
+    SELECTOR_TAG_SYNTAX_LITERALS
+        .iter()
+        .copied()
+        .find(|literal| literal.token() == token)
+}
+
+pub fn is_selector_wildcard(token: &str) -> bool {
+    match selector_tag_syntax_literal(token) {
+        Some(SelectorTagSyntaxLiteral::Wildcard) => true,
+        None => false,
+    }
+}
+
+pub fn is_selector_tag_syntax_literal(token: &str) -> bool {
+    selector_tag_syntax_literal(token).is_some()
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SelectorMark {
     pub name: String,
     pub value: Option<String>,
+    pub binding_label: Option<String>,
     pub negated: bool,
 }
 
@@ -326,6 +365,8 @@ pub enum SelectorSyntaxError {
     InvalidMarkName,
     EmptyMarkValue,
     InvalidOccurrenceLabel,
+    InvalidMarkBindingLabel,
+    MarkBindingLabelRequiresSet,
 }
 
 impl SelectorSyntaxError {
@@ -340,6 +381,12 @@ impl SelectorSyntaxError {
             Self::EmptyMarkValue => "mark value must not be empty",
             Self::InvalidOccurrenceLabel => {
                 "selector occurrence label must be: selector#label using only letters, numbers, and _"
+            }
+            Self::InvalidMarkBindingLabel => {
+                "movement set binding label must use only letters, numbers, and _"
+            }
+            Self::MarkBindingLabelRequiresSet => {
+                "mark binding labels may only attach to a movement set"
             }
         }
     }
@@ -385,10 +432,11 @@ fn parse_selector_marks_syntax(
         } else {
             (false, token)
         };
-        if mark_sugar_kind(spec).is_some() {
+        if let Some(sugar) = parse_mark_sugar_syntax(spec)? {
             marks.push(SelectorMark {
                 name: String::new(),
-                value: Some(spec.to_string()),
+                value: Some(sugar.value.to_string()),
+                binding_label: sugar.binding_label.map(str::to_string),
                 negated,
             });
             continue;
@@ -414,6 +462,7 @@ fn parse_selector_marks_syntax(
         marks.push(SelectorMark {
             name: name.to_string(),
             value: value.map(str::to_string),
+            binding_label: None,
             negated,
         });
     }
@@ -429,13 +478,7 @@ fn parse_selector_occurrence_label_syntax(
     let Some((base, label)) = head.split_once('#') else {
         return Ok((selector.to_string(), None));
     };
-    if base.is_empty()
-        || label.is_empty()
-        || label.contains('#')
-        || !label
-            .chars()
-            .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
-    {
+    if base.is_empty() || !is_binding_label(label) {
         return Err(SelectorSyntaxError::InvalidOccurrenceLabel);
     }
     Ok((format!("{base}{suffix}"), Some(label.to_string())))
@@ -622,6 +665,7 @@ pub fn selector_rewrite_occurrences<'a, Position: Clone>(
                     .map(|mark| SelectorMark {
                         name: mark.name.clone(),
                         value: mark.value.clone(),
+                        binding_label: mark.binding_label.clone(),
                         negated: false,
                     })
                     .collect(),
@@ -766,7 +810,7 @@ impl<Mark> ObjectSelector<Mark> {
 
     pub fn token(&self) -> String {
         match self {
-            Self::Any => "*".to_string(),
+            Self::Any => SELECTOR_WILDCARD.to_string(),
             Self::Object(name) | Self::Group(name) => name.clone(),
             Self::Labeled { token, .. } => token.clone(),
             Self::WithMark { selector, .. } => selector.token(),
@@ -816,7 +860,7 @@ impl SelectorTag {
     pub fn token(&self) -> String {
         match self {
             Self::Value(value) => value.clone(),
-            Self::Any => "*".to_string(),
+            Self::Any => SELECTOR_WILDCARD.to_string(),
         }
     }
 }
@@ -1222,7 +1266,7 @@ pub fn puzzle_directive_surface(line: &str) -> PuzzleDirectiveSurface {
         "puzzle" => PuzzleDirectiveSurface::Model,
         "model" => PuzzleDirectiveSurface::RemovedModelPrefix,
         "name" => PuzzleDirectiveSurface::RemovedNameMetadata,
-        "title" | "subtitle" | "author" | "homepage" | "default_wait_time" | "again_interval" => {
+        "title" | "subtitle" | "author" | "homepage" | "default_wait_time" => {
             PuzzleDirectiveSurface::Metadata
         }
         "theme" if parse_assignment_row(line).is_some() => PuzzleDirectiveSurface::Metadata,
@@ -2403,6 +2447,7 @@ pub enum RuleApplicationSurface {
 
 pub const RULE_STATEMENT_HEAD_KEYWORDS: &[&str] = &[
     "display",
+    "fix",
     "for",
     "if",
     "input",
@@ -2457,6 +2502,7 @@ pub enum RuleLineSurfaceSpans {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RuleSyntaxFactKind {
     Keyword,
+    Literal,
     Selector,
     Mark,
     Variant,
@@ -2465,6 +2511,7 @@ pub enum RuleSyntaxFactKind {
     Effect,
     State,
     Input,
+    Identifier,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2540,6 +2587,91 @@ pub fn pattern_semantic_surface_spans(line: &str) -> Vec<RuleSyntaxFact> {
     spans
 }
 
+/// Semantic facts for a condition expression already accepted by its owner
+/// parser. Pattern cells retain their selector/mark facts; identifiers outside
+/// patterns remain unresolved until the language catalog assigns their role.
+pub fn condition_semantic_surface_spans(condition: &str) -> Vec<RuleSyntaxFact> {
+    let mut spans = Vec::new();
+    add_condition_semantic_surface_spans(condition, 0..condition.len(), &mut spans);
+    spans
+}
+
+fn add_condition_semantic_surface_spans(
+    line: &str,
+    range: Range<usize>,
+    spans: &mut Vec<RuleSyntaxFact>,
+) {
+    add_rule_rewrite_semantic_surface_spans(line, range.clone(), spans);
+    let orientation = line[range.clone()].find('[').and_then(|open| {
+        header_token_spans(line, range.start..range.start + open)
+            .last()
+            .map(|token| token.range.clone())
+    });
+    let mut bracket_depth = 0_u16;
+    let mut quoted = None::<char>;
+    let mut identifier_start = None::<usize>;
+    let finish_identifier = |end: usize,
+                             identifier_start: &mut Option<usize>,
+                             spans: &mut Vec<RuleSyntaxFact>| {
+        let Some(start) = identifier_start.take() else {
+            return;
+        };
+        let text = &line[start..end];
+        let kind = if matches!(text, "true" | "false") {
+            RuleSyntaxFactKind::Literal
+        } else if orientation.as_ref() == Some(&(start..end))
+            || matches!(
+                text,
+                "all" | "and" | "any" | "exists" | "input" | "no" | "none" | "not" | "or" | "some"
+            )
+        {
+            RuleSyntaxFactKind::Keyword
+        } else {
+            RuleSyntaxFactKind::Identifier
+        };
+        push_rule_semantic(spans, kind, start..end);
+    };
+
+    for (offset, ch) in line[range.clone()].char_indices() {
+        let index = range.start + offset;
+        if let Some(quote) = quoted {
+            if ch == quote {
+                quoted = None;
+            }
+            continue;
+        }
+        if matches!(ch, '"' | '\'') {
+            finish_identifier(index, &mut identifier_start, spans);
+            quoted = Some(ch);
+            continue;
+        }
+        match ch {
+            '[' => {
+                finish_identifier(index, &mut identifier_start, spans);
+                bracket_depth += 1;
+            }
+            ']' => {
+                finish_identifier(index, &mut identifier_start, spans);
+                bracket_depth = bracket_depth.saturating_sub(1);
+            }
+            _ if bracket_depth > 0 => {}
+            '*' => {
+                finish_identifier(index, &mut identifier_start, spans);
+                push_rule_semantic(
+                    spans,
+                    RuleSyntaxFactKind::Variant,
+                    index..index + ch.len_utf8(),
+                );
+            }
+            _ if identifier_start.is_some()
+                && (ch == '_' || ch == '.' || ch.is_ascii_alphanumeric()) => {}
+            _ if ch == '_' || ch.is_ascii_alphabetic() => identifier_start = Some(index),
+            _ => finish_identifier(index, &mut identifier_start, spans),
+        }
+    }
+    finish_identifier(range.end, &mut identifier_start, spans);
+}
+
 fn rule_statement_facts(line: &str, node: &RuleStatementNode) -> RuleStatementFacts {
     let mut semantics = RuleStatementFacts::default();
     let spans = &mut semantics.spans;
@@ -2552,8 +2684,9 @@ fn rule_statement_facts(line: &str, node: &RuleStatementNode) -> RuleStatementFa
             add_rule_line_surface_facts(line, surface, spans);
             return semantics;
         }
-        RuleStatementNode::If(RuleIfSurface::Inline { target, .. }) => {
+        RuleStatementNode::If(RuleIfSurface::Inline { condition, target }) => {
             collect_non_rule_statement_semantic_surface_spans(line, spans);
+            add_condition_semantic_surface_spans(line, condition.clone(), spans);
             add_rule_statement_target_fact(target, spans);
             return semantics;
         }
@@ -2588,6 +2721,9 @@ fn rule_statement_facts(line: &str, node: &RuleStatementNode) -> RuleStatementFa
         RuleStatementNode::InputEffect(surface) => {
             push_rule_semantic(spans, RuleSyntaxFactKind::Input, surface.input.clone());
             push_rule_semantic(spans, RuleSyntaxFactKind::Effect, surface.effect.clone());
+        }
+        RuleStatementNode::ConditionRow => {
+            add_condition_semantic_surface_spans(line, trimmed_range(line), spans);
         }
         _ => {
             collect_non_rule_statement_semantic_surface_spans(line, spans);
@@ -2721,6 +2857,21 @@ fn collect_non_rule_statement_semantic_surface_spans(line: &str, spans: &mut Vec
             if RULE_STATEMENT_HEAD_KEYWORDS.contains(&first.text) || first.text == "else" =>
         {
             push_rule_semantic(spans, RuleSyntaxFactKind::Keyword, first.range.clone());
+            if first.text == "if" {
+                let condition = trim_end_range(
+                    line,
+                    trim_start_range(line, first.range.end..trimmed_range(line).end),
+                );
+                add_condition_semantic_surface_spans(line, condition, spans);
+            } else if first.text == "fix" {
+                for modifier in tokens.iter().skip(1) {
+                    push_rule_semantic(spans, RuleSyntaxFactKind::Keyword, modifier.range.clone());
+                }
+            } else if first.text == "repeat"
+                && let Some(until) = tokens.get(1).filter(|token| token.text == "until")
+            {
+                push_rule_semantic(spans, RuleSyntaxFactKind::Keyword, until.range.clone());
+            }
         }
         [first, ..] if parse_assignment_row(line).is_some() => {
             push_rule_semantic(spans, RuleSyntaxFactKind::State, first.range.clone());
@@ -2903,11 +3054,19 @@ fn add_rule_cell_token_semantic_surface_spans(
         });
         return;
     }
-    if mark_sugar_kind(text) == Some(MarkSugarKind::Movement) {
+    if let Some(sugar) = parse_mark_sugar_syntax(text).ok().flatten()
+        && sugar.kind == MarkSugarKind::Movement
+    {
         spans.push(RuleSyntaxFact {
             kind: RuleSyntaxFactKind::Keyword,
-            span: token,
+            span: token.start..token.start + sugar.value.len(),
         });
+        if let Some(binding_label) = sugar.binding_label {
+            spans.push(RuleSyntaxFact {
+                kind: RuleSyntaxFactKind::Binding,
+                span: token.end - binding_label.len()..token.end,
+            });
+        }
         return;
     }
     let mark_start = text.find('{').map(|offset| token.start + offset);
@@ -3274,6 +3433,12 @@ where
         let (mut rule_line, next_index) = collect_rule_statement_line(lines, index)?;
         if condition_rows {
             rule_line.node = RuleStatementNode::ConditionRow;
+            for source in &mut rule_line.sources {
+                source.facts = rule_statement_facts(
+                    source.line.as_ref().trim(),
+                    &RuleStatementNode::ConditionRow,
+                );
+            }
         }
         body.push(rule_line);
         index = next_index;
@@ -3492,6 +3657,13 @@ pub enum MarkSugarKind {
     Int,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MarkSugarSyntax<'a> {
+    pub kind: MarkSugarKind,
+    pub value: &'a str,
+    pub binding_label: Option<&'a str>,
+}
+
 pub const ANONYMOUS_MOVEMENT_MARK_INDEX: u16 = 0;
 pub const MOVEMENT_DIRECTIONS_2D: &[&str] = &["up", "down", "left", "right"];
 pub const MOVEMENT_DIRECTIONS_3D: &[&str] = &["up", "down", "left", "right", "front", "back"];
@@ -3524,6 +3696,45 @@ pub fn mark_sugar_kind(token: &str) -> Option<MarkSugarKind> {
     } else {
         None
     }
+}
+
+pub fn parse_mark_sugar_syntax(
+    token: &str,
+) -> Result<Option<MarkSugarSyntax<'_>>, SelectorSyntaxError> {
+    let (value, binding_label) = token
+        .split_once('#')
+        .map_or((token, None), |(value, label)| (value, Some(label)));
+    let Some(kind) = mark_sugar_kind(value) else {
+        return Ok(None);
+    };
+    if let Some(label) = binding_label {
+        if !is_binding_label(label) {
+            return Err(SelectorSyntaxError::InvalidMarkBindingLabel);
+        }
+        if kind != MarkSugarKind::Movement || !is_movement_mark_set(value) {
+            return Err(SelectorSyntaxError::MarkBindingLabelRequiresSet);
+        }
+    }
+    Ok(Some(MarkSugarSyntax {
+        kind,
+        value,
+        binding_label,
+    }))
+}
+
+pub fn is_movement_mark_set(value: &str) -> bool {
+    matches!(
+        value,
+        "directions" | "horizontal" | "vertical" | "parallel" | "perpendicular"
+    )
+}
+
+fn is_binding_label(label: &str) -> bool {
+    !label.is_empty()
+        && !label.contains('#')
+        && label
+            .chars()
+            .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
 }
 
 pub fn canonical_3d_movement_direction_name(value: &str) -> &str {
@@ -3841,12 +4052,18 @@ fn parse_unresolved_cell_syntax(
             index += 2;
             continue;
         }
-        if mark_sugar_kind(token).is_some() {
+        if let Some(sugar) =
+            parse_mark_sugar_syntax(token).map_err(UnresolvedPatternSyntaxError::Selector)?
+        {
             let subject = tokens
                 .get(index + 1)
                 .ok_or(CellPatternError::MissingMarkSugarSelector)
                 .map_err(UnresolvedPatternSyntaxError::CellPattern)?;
-            if subject == "no" || mark_sugar_kind(subject).is_some() {
+            if subject == "no"
+                || parse_mark_sugar_syntax(subject)
+                    .map_err(UnresolvedPatternSyntaxError::Selector)?
+                    .is_some()
+            {
                 return Err(UnresolvedPatternSyntaxError::CellPattern(
                     CellPatternError::InvalidMarkSugarSelector,
                 ));
@@ -3860,7 +4077,8 @@ fn parse_unresolved_cell_syntax(
                 parse_selector_syntax(subject).map_err(UnresolvedPatternSyntaxError::Selector)?;
             selector.marks.push(SelectorMark {
                 name: String::new(),
-                value: Some(token.clone()),
+                value: Some(sugar.value.to_string()),
+                binding_label: sugar.binding_label.map(str::to_string),
                 negated: false,
             });
             cell.require
@@ -4052,11 +4270,13 @@ mod tests {
                     SelectorMark {
                         name: String::new(),
                         value: Some("right".to_string()),
+                        binding_label: None,
                         negated: false,
                     },
                     SelectorMark {
                         name: "active".to_string(),
                         value: None,
+                        binding_label: None,
                         negated: true,
                     },
                 ],
@@ -4154,6 +4374,14 @@ mod tests {
         assert_eq!(mark_sugar_kind("true"), Some(MarkSugarKind::Bool));
         assert_eq!(mark_sugar_kind("7"), Some(MarkSugarKind::Int));
         assert_eq!(mark_sugar_kind("Player"), None);
+        assert_eq!(
+            parse_mark_sugar_syntax("directions#moving").unwrap(),
+            Some(MarkSugarSyntax {
+                kind: MarkSugarKind::Movement,
+                value: "directions",
+                binding_label: Some("moving"),
+            })
+        );
     }
 
     #[test]
@@ -4462,6 +4690,47 @@ mod tests {
         assert!(projected.contains(&(RuleSyntaxFactKind::Mark, "{")));
         assert!(projected.contains(&(RuleSyntaxFactKind::Mark, "mark")));
         assert!(projected.contains(&(RuleSyntaxFactKind::Mark, "}")));
+    }
+
+    #[test]
+    fn accepted_conditions_and_mark_bindings_own_semantic_facts() {
+        let condition = "if some([ Gate:n{checked} ]) -> next_level";
+        let syntax = RuleStatementSyntax::new(condition.to_string(), condition.to_string());
+        let projected = syntax.sources[0]
+            .facts
+            .spans
+            .iter()
+            .map(|fact| (fact.kind, &condition[fact.span.clone()]))
+            .collect::<Vec<_>>();
+        assert!(projected.contains(&(RuleSyntaxFactKind::Keyword, "some")));
+        assert!(projected.contains(&(RuleSyntaxFactKind::Selector, "Gate:n")));
+        assert!(projected.contains(&(RuleSyntaxFactKind::Mark, "checked")));
+
+        let comparison = "if locked_room_count == n {";
+        let syntax = RuleStatementSyntax::new_block(
+            comparison.to_string(),
+            comparison.to_string(),
+            Vec::new(),
+        );
+        let projected = syntax.sources[0]
+            .facts
+            .spans
+            .iter()
+            .map(|fact| (fact.kind, &comparison[fact.span.clone()]))
+            .collect::<Vec<_>>();
+        assert!(projected.contains(&(RuleSyntaxFactKind::Identifier, "locked_room_count")));
+        assert!(projected.contains(&(RuleSyntaxFactKind::Identifier, "n")));
+
+        let movement = "[ directions#moving Player ] -> [ Player ]";
+        let syntax = RuleStatementSyntax::new(movement.to_string(), movement.to_string());
+        let projected = syntax.sources[0]
+            .facts
+            .spans
+            .iter()
+            .map(|fact| (fact.kind, &movement[fact.span.clone()]))
+            .collect::<Vec<_>>();
+        assert!(projected.contains(&(RuleSyntaxFactKind::Keyword, "directions")));
+        assert!(projected.contains(&(RuleSyntaxFactKind::Binding, "moving")));
     }
 
     #[test]

@@ -1,5 +1,9 @@
-use crate::{SolverRelevance, SolverStageAvailability};
-use puzzle_core::{CompiledGame, ObjectId, Rule, RuleId, RuleStep};
+use crate::{SolverRelevance, SolverStageAvailability, SolverStateSlicer};
+use puzzle_core::{
+    GridCompiledGame, GridExecutableProgram, GridRule, GridRuleStep, GridSize, GridState,
+    GridWriteOp, ObjectId, RuleId,
+};
+use puzzle_lang::LoadedGridGame;
 use std::collections::BTreeSet;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -9,6 +13,106 @@ pub struct SolverSlice {
 }
 
 impl SolverSlice {
+    pub fn from_loaded_level_roots<'a, const D: usize, Size: GridSize<D> + 'a>(
+        loaded: &'a LoadedGridGame<D, Size>,
+        level_index: usize,
+        states: impl IntoIterator<Item = &'a GridState<D, Size>>,
+        roots: impl IntoIterator<Item = ObjectId>,
+    ) -> Option<Self> {
+        let level = loaded.levels.get(level_index)?;
+        let mut programs = vec![level.program.as_steps()];
+        programs.extend(
+            loaded
+                .level_start_program
+                .iter()
+                .map(|program| program.as_steps()),
+        );
+        programs.extend(
+            loaded
+                .level_clear_program
+                .iter()
+                .map(|program| program.as_steps()),
+        );
+        programs.extend(
+            loaded
+                .last_level_clear_program
+                .iter()
+                .map(|program| program.as_steps()),
+        );
+        programs.extend(
+            level
+                .level_start_program
+                .iter()
+                .map(|program| program.as_steps()),
+        );
+        programs.extend(
+            level
+                .level_clear_program
+                .iter()
+                .map(|program| program.as_steps()),
+        );
+        let relevance =
+            SolverRelevance::from_programs_roots(&loaded.game, programs.iter().copied(), roots);
+        let availability = SolverStageAvailability::from_states_and_programs(
+            states.into_iter().chain([&level.initial_state]),
+            programs.iter().copied(),
+        );
+        Some(Self::from_relevance_and_availability(
+            &relevance,
+            &availability,
+        ))
+    }
+
+    pub fn from_loaded_game_roots<'a, const D: usize, Size: GridSize<D> + 'a>(
+        loaded: &'a LoadedGridGame<D, Size>,
+        states: impl IntoIterator<Item = &'a GridState<D, Size>>,
+        roots: impl IntoIterator<Item = ObjectId>,
+    ) -> Self {
+        let mut programs = vec![loaded.game.program()];
+        programs.extend(loaded.levels.iter().map(|level| level.program.as_steps()));
+        programs.extend(
+            loaded
+                .level_start_program
+                .iter()
+                .map(|program| program.as_steps()),
+        );
+        programs.extend(
+            loaded
+                .level_clear_program
+                .iter()
+                .map(|program| program.as_steps()),
+        );
+        programs.extend(
+            loaded
+                .last_level_clear_program
+                .iter()
+                .map(|program| program.as_steps()),
+        );
+        for level in &loaded.levels {
+            programs.extend(
+                level
+                    .level_start_program
+                    .iter()
+                    .map(|program| program.as_steps()),
+            );
+            programs.extend(
+                level
+                    .level_clear_program
+                    .iter()
+                    .map(|program| program.as_steps()),
+            );
+        }
+        let relevance =
+            SolverRelevance::from_programs_roots(&loaded.game, programs.iter().copied(), roots);
+        let availability = SolverStageAvailability::from_states_and_programs(
+            states
+                .into_iter()
+                .chain(loaded.levels.iter().map(|level| &level.initial_state)),
+            programs.iter().copied(),
+        );
+        Self::from_relevance_and_availability(&relevance, &availability)
+    }
+
     pub fn from_relevance_and_availability(
         relevance: &SolverRelevance,
         availability: &SolverStageAvailability,
@@ -45,9 +149,9 @@ impl SolverSlice {
         &self.kept_rules
     }
 
-    pub fn project_game(&self, game: &CompiledGame) -> CompiledGame {
+    pub fn project_game<const D: usize>(&self, game: &GridCompiledGame<D>) -> GridCompiledGame<D> {
         assert_unique_rule_ids(game.rules());
-        CompiledGame::new_with_mark_condition_defs_and_program(
+        GridCompiledGame::new_with_mark_condition_defs_and_program(
             game.layer_count,
             game.objects().to_vec(),
             game.mark().to_vec(),
@@ -56,27 +160,68 @@ impl SolverSlice {
         )
     }
 
-    fn filter_program(&self, program: &[RuleStep]) -> Vec<RuleStep> {
+    pub fn project_program<const D: usize>(
+        &self,
+        program: &GridExecutableProgram<D>,
+    ) -> GridExecutableProgram<D> {
+        GridExecutableProgram::new(self.filter_program(program.as_steps()))
+    }
+
+    pub fn project_loaded_game<const D: usize, Size: GridSize<D>>(
+        &self,
+        loaded: &LoadedGridGame<D, Size>,
+        state_slicer: &SolverStateSlicer<ObjectId>,
+    ) -> LoadedGridGame<D, Size> {
+        let mut projected = loaded.clone();
+        projected.game = self.project_game(&loaded.game);
+        projected.level_start_program = loaded
+            .level_start_program
+            .as_ref()
+            .map(|program| self.project_program(program));
+        projected.level_clear_program = loaded
+            .level_clear_program
+            .as_ref()
+            .map(|program| self.project_program(program));
+        projected.last_level_clear_program = loaded
+            .last_level_clear_program
+            .as_ref()
+            .map(|program| self.project_program(program));
+        for (projected_level, source_level) in projected.levels.iter_mut().zip(&loaded.levels) {
+            projected_level.initial_state = state_slicer.project_state(&source_level.initial_state);
+            projected_level.program = self.project_program(&source_level.program);
+            projected_level.level_start_program = source_level
+                .level_start_program
+                .as_ref()
+                .map(|program| self.project_program(program));
+            projected_level.level_clear_program = source_level
+                .level_clear_program
+                .as_ref()
+                .map(|program| self.project_program(program));
+        }
+        projected
+    }
+
+    fn filter_program<const D: usize>(&self, program: &[GridRuleStep<D>]) -> Vec<GridRuleStep<D>> {
         program
             .iter()
             .filter_map(|step| self.filter_step(step))
             .collect()
     }
 
-    fn filter_step(&self, step: &RuleStep) -> Option<RuleStep> {
+    fn filter_step<const D: usize>(&self, step: &GridRuleStep<D>) -> Option<GridRuleStep<D>> {
         match step {
-            RuleStep::Rule(rule) => self
+            GridRuleStep::Rule(rule) => self
                 .kept_rules
                 .contains(&rule.id)
-                .then(|| RuleStep::Rule(rule.clone())),
-            RuleStep::ConditionalBlock { condition, steps } => {
+                .then(|| GridRuleStep::Rule(self.project_rule(rule))),
+            GridRuleStep::ConditionalBlock { condition, steps } => {
                 let steps = self.filter_program(steps);
-                (!steps.is_empty()).then(|| RuleStep::ConditionalBlock {
+                (!steps.is_empty()).then(|| GridRuleStep::ConditionalBlock {
                     condition: condition.clone(),
                     steps,
                 })
             }
-            RuleStep::ConditionalBranch {
+            GridRuleStep::ConditionalBranch {
                 condition,
                 then_steps,
                 else_steps,
@@ -84,32 +229,32 @@ impl SolverSlice {
                 let then_steps = self.filter_program(then_steps);
                 let else_steps = self.filter_program(else_steps);
                 (!then_steps.is_empty() || !else_steps.is_empty()).then(|| {
-                    RuleStep::ConditionalBranch {
+                    GridRuleStep::ConditionalBranch {
                         condition: condition.clone(),
                         then_steps,
                         else_steps,
                     }
                 })
             }
-            RuleStep::Block {
+            GridRuleStep::Block {
                 application,
                 stop_condition,
                 steps,
             } => {
                 let steps = self.filter_program(steps);
-                (!steps.is_empty()).then(|| RuleStep::Block {
+                (!steps.is_empty()).then(|| GridRuleStep::Block {
                     application: *application,
                     stop_condition: stop_condition.clone(),
                     steps,
                 })
             }
-            RuleStep::AfterTriggered { steps, then_steps } => {
+            GridRuleStep::AfterTriggered { steps, then_steps } => {
                 let filtered_steps = self.filter_program(steps);
                 let filtered_then_steps = self.filter_program(then_steps);
                 if !filtered_then_steps.is_empty() {
                     // The complete trigger program determines whether the relevant
                     // continuation runs; pruning it would change that predicate.
-                    Some(RuleStep::AfterTriggered {
+                    Some(GridRuleStep::AfterTriggered {
                         steps: steps.clone(),
                         then_steps: filtered_then_steps,
                     })
@@ -117,7 +262,7 @@ impl SolverSlice {
                     // The trigger itself can contain relevant writes even when its
                     // continuation is irrelevant. Keep the wrapper so application
                     // and fired-state semantics remain unchanged.
-                    Some(RuleStep::AfterTriggered {
+                    Some(GridRuleStep::AfterTriggered {
                         steps: filtered_steps,
                         then_steps: Vec::new(),
                     })
@@ -125,18 +270,83 @@ impl SolverSlice {
                     None
                 }
             }
-            RuleStep::LocalFrame { frame, steps } => {
+            GridRuleStep::LocalFrame { frame, steps } => {
                 let steps = self.filter_program(steps);
-                (!steps.is_empty()).then(|| RuleStep::LocalFrame {
+                (!steps.is_empty()).then(|| GridRuleStep::LocalFrame {
                     frame: frame.clone(),
                     steps,
                 })
             }
         }
     }
+
+    fn project_rule<const D: usize>(&self, rule: &GridRule<D>) -> GridRule<D> {
+        let mut projected = rule.clone();
+        for component in &mut projected.pattern.components {
+            for cell in &mut component.cells {
+                for object_set in &mut cell.require_object_sets {
+                    object_set
+                        .objects
+                        .retain(|object| self.kept_objects.contains(object));
+                }
+                cell.forbid_objects
+                    .retain(|object| self.kept_objects.contains(object));
+                cell.forbid_mark
+                    .retain(|mark| self.kept_objects.contains(&mark.object));
+            }
+        }
+        projected.writes = rule
+            .writes
+            .iter()
+            .filter_map(|write| self.project_write(write))
+            .collect();
+        projected
+    }
+
+    fn project_write<const D: usize>(&self, write: &GridWriteOp<D>) -> Option<GridWriteOp<D>> {
+        match write.clone() {
+            GridWriteOp::Add { object, .. }
+            | GridWriteOp::Remove { object, .. }
+            | GridWriteOp::Move { object, .. }
+            | GridWriteOp::SetMark { object, .. }
+            | GridWriteOp::RemoveMark { object, .. }
+                if !self.kept_objects.contains(&object) =>
+            {
+                None
+            }
+            GridWriteOp::Replace {
+                component,
+                offset,
+                remove,
+                add,
+            } => match (
+                self.kept_objects.contains(&remove),
+                self.kept_objects.contains(&add),
+            ) {
+                (true, true) => Some(GridWriteOp::Replace {
+                    component,
+                    offset,
+                    remove,
+                    add,
+                }),
+                (true, false) => Some(GridWriteOp::Remove {
+                    component,
+                    offset,
+                    object: remove,
+                }),
+                (false, true) => Some(GridWriteOp::Add {
+                    component,
+                    offset,
+                    object: add,
+                }),
+                (false, false) => None,
+            },
+            projected => Some(projected),
+        }
+    }
 }
 
-fn assert_unique_rule_ids(rules: &[Rule]) {
+fn assert_unique_rule_ids<const D: usize>(rules: &[GridRule<D>]) {
     let mut seen = BTreeSet::new();
     for rule in rules {
         assert!(
@@ -152,9 +362,10 @@ mod tests {
     use super::*;
     use crate::{SolverRelevance, SolverStageAvailability};
     use puzzle_core::{
-        CompiledGame, Effect, InputId, LayerId, MatchCell, ObjectDef, Offset, Pattern,
-        PatternComponent, Rule, RuleApplication, RuleId, RuleStep, State, WriteOp,
-        transition_state,
+        CompiledGame, Effect, GridCompiledGame, GridCoord, GridMatchCell, GridOffset, GridPattern,
+        GridPatternComponent, GridRule, GridRuleStep, GridState, GridWriteOp, InputId, LayerId,
+        MatchCell, ObjectDef, Offset, Pattern, PatternComponent, Rule, RuleApplication, RuleId,
+        RuleStep, Size3, State, WriteOp, transition_state,
     };
 
     const PLAYER: ObjectId = ObjectId(1);
@@ -226,6 +437,42 @@ mod tests {
         }
     }
 
+    fn fixed3(dx: i16, dy: i16, dz: i16) -> GridOffset<3> {
+        GridOffset::Fixed {
+            delta: [dx, dy, dz].into(),
+        }
+    }
+
+    fn rule3(id: u16, read: ObjectId, write: ObjectId) -> GridRule<3> {
+        GridRule {
+            id: RuleId(id),
+            guards: Vec::new(),
+            application: RuleApplication::Once,
+            pattern: GridPattern {
+                components: vec![GridPatternComponent {
+                    cells: vec![GridMatchCell {
+                        offset: fixed3(0, 0, 0),
+                        require_null: false,
+                        require_objects: vec![read],
+                        require_object_sets: Vec::new(),
+                        forbid_objects: Vec::new(),
+                        require_mark: Vec::new(),
+                        require_object_set_mark: Vec::new(),
+                        forbid_mark: Vec::new(),
+                        forbid_object_set_mark: Vec::new(),
+                    }],
+                    gap_count: 0,
+                }],
+            },
+            writes: vec![GridWriteOp::Add {
+                component: 0,
+                offset: fixed3(0, 0, 0),
+                object: write,
+            }],
+            effects: Vec::new(),
+        }
+    }
+
     #[test]
     fn solver_slice_intersects_relevance_with_stage_availability() {
         let game = CompiledGame::new_with_program(
@@ -283,6 +530,40 @@ mod tests {
         assert_eq!(projected.rules().len(), 1);
         assert_eq!(projected.rules()[0].id, RuleId(1));
         assert_eq!(projected.program().len(), 1);
+    }
+
+    #[test]
+    fn solver_slice_projects_3d_game_with_the_shared_analysis() {
+        let game = GridCompiledGame::<3>::new_with_program(
+            2,
+            vec![
+                object(1, LayerId(0)),
+                object(2, LayerId(1)),
+                object(3, LayerId(1)),
+                object(4, LayerId(1)),
+            ],
+            vec![
+                GridRuleStep::Rule(rule3(1, SWITCH, DOOR)),
+                GridRuleStep::Rule(rule3(2, BATTERY, DOOR)),
+            ],
+        );
+        let mut initial = GridState::<3, Size3>::empty_sized(Size3::new(2, 1, 1), 2, 4).unwrap();
+        initial
+            .place_object_at(&game, GridCoord::new([0, 0, 0]), PLAYER)
+            .unwrap();
+        initial
+            .place_object_at(&game, GridCoord::new([1, 0, 0]), SWITCH)
+            .unwrap();
+        let relevance = SolverRelevance::from_root_objects(&game, [DOOR]);
+        let availability = SolverStageAvailability::from_initial_state(&game, &initial);
+        let slice = SolverSlice::from_relevance_and_availability(&relevance, &availability);
+
+        let projected = slice.project_game(&game);
+
+        assert_eq!(projected.rules().len(), 1);
+        assert_eq!(projected.rules()[0].id, RuleId(1));
+        assert!(slice.kept_objects().contains(&SWITCH));
+        assert!(!slice.kept_objects().contains(&BATTERY));
     }
 
     #[test]

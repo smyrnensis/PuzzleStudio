@@ -477,8 +477,8 @@ pub fn export_html(
     puzzle_path: &str,
     game_css: &str,
     game_visuals_js: &str,
-    game_runtime_module_js: &str,
-    game_runtime_wasm_base64: &str,
+    player_runtime_module_js: &str,
+    player_runtime_wasm_base64: &str,
 ) -> Result<String, JsValue> {
     let path = if puzzle_path.trim().is_empty() {
         "game.puzzle"
@@ -490,8 +490,8 @@ pub fn export_html(
         path,
         game_css,
         game_visuals_js,
-        game_runtime_module_js,
-        game_runtime_wasm_base64,
+        player_runtime_module_js,
+        player_runtime_wasm_base64,
     )
     .map_err(|error| diagnostic_report_js_value(&error))
 }
@@ -502,8 +502,8 @@ pub fn export_workspace_html(
     documents_json: &str,
     game_css: &str,
     game_visuals_js: &str,
-    game_runtime_module_js: &str,
-    game_runtime_wasm_base64: &str,
+    player_runtime_module_js: &str,
+    player_runtime_wasm_base64: &str,
 ) -> Result<String, JsValue> {
     let source = expand_workspace_entry(entry_path, documents_json)?;
     html_play::export_html_from_source_with_embedded_wasm(
@@ -511,8 +511,8 @@ pub fn export_workspace_html(
         entry_path,
         game_css,
         game_visuals_js,
-        game_runtime_module_js,
-        game_runtime_wasm_base64,
+        player_runtime_module_js,
+        player_runtime_wasm_base64,
     )
     .map_err(|error| diagnostic_report_js_value(&error))
 }

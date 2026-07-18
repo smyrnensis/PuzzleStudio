@@ -12,10 +12,14 @@ solver = ["dep:puzzle-solver"]
 name = "html-play"
 path = "src/main.rs"
 
+[[bench]]
+name = "microban"
+harness = false
+
 [dependencies]
 puzzle-core = { path = "../core" }
 puzzle-core-wasm = { package = "puzzle-wasm-core", path = "../wasm_core" }
-puzzle-game-runtime = { path = "../game_runtime" }
+puzzle-game-runtime = { path = "../game_runtime", default-features = false, features = ["editor-debug"] }
 puzzle-lang = { path = "../lang" }
 puzzle-runtime-contract = { path = "../runtime_contract" }
 puzzle-scene = { path = "../scene" }

@@ -1582,6 +1582,13 @@ function ensureGameVisualsRuntime() {
         return {
           aliases: { ...(config.aliases || {}) },
           sprites: { ...(config.sprites || {}) },
+          order: {
+            direction_priority: [...(config.order?.direction_priority || [])],
+            priorities: [...(config.order?.priorities || [])],
+          },
+          animations: { ...(config.animations || {}) },
+          triggers: { ...(config.triggers || {}) },
+          animationDefaults: { ...(config.animationDefaults || {}) },
           boardClass: config.boardClass || "",
           themeClass: config.themeClass || "",
           editorPuzzle: { ...(config.editorPuzzle || {}) },
@@ -1674,13 +1681,7 @@ function applyGameVisuals(script) {
   if (!script) {
     return;
   }
-  try {
-    Function(script)();
-  } catch (error) {
-    window.PuzzleStudio.disposeAssetScripts();
-    window.GameVisuals = window.PuzzleSpriteRegistry.create();
-    console.error(error);
-  }
+  Function(script)();
 }
 
 function compiledPreviewGameVisualsJs(html) {
@@ -1889,8 +1890,8 @@ function applyCompiledPreviewHtml(html, document, source) {
   }
   scheduleLocalSave();
   downloadButton.disabled = false;
-  appendPreviewLog("system", "Preview ready", { source: "compiler" });
-  setStatus("Preview ready", "is-ok");
+  appendPreviewLog("system", "Preview compiled", { source: "compiler" });
+  setStatus("Starting preview", "");
 }
 
 function invalidateCompiledPreview(document = activePreviewDocument()) {
@@ -3456,7 +3457,16 @@ window.PuzzleStudioEditorPreviewProgressSaves = ${progressSaveData};
       return value;
     }
     if (value instanceof Error) {
-      return value.stack || value.message || String(value);
+      const headline = [value.name || "Error", value.message || ""]
+        .filter(Boolean)
+        .join(": ");
+      const stack = String(value.stack || "");
+      if (!stack) {
+        return headline || String(value);
+      }
+      return value.message && stack.includes(value.message)
+        ? stack
+        : [headline, stack].filter(Boolean).join("\\n");
     }
     if (value === undefined) {
       return "undefined";
@@ -3516,6 +3526,9 @@ window.PuzzleStudioEditorPreviewProgressSaves = ${progressSaveData};
     };
   }
   window.addEventListener("error", (event) => {
+    if (window.PuzzleStudioPreviewRuntimeFailure && event.message === "Script error.") {
+      return;
+    }
     try {
       window.parent.postMessage({
         type: "PuzzleStudioPreviewLog",
@@ -3529,6 +3542,11 @@ window.PuzzleStudioEditorPreviewProgressSaves = ${progressSaveData};
     }
   });
   window.addEventListener("unhandledrejection", (event) => {
+    const failure = window.PuzzleStudioPreviewRuntimeFailure;
+    const reasonMessage = String(event.reason?.message || event.reason || "");
+    if (failure?.message && failure.message === reasonMessage) {
+      return;
+    }
     try {
       window.parent.postMessage({
         type: "PuzzleStudioPreviewLog",
@@ -5025,8 +5043,8 @@ function createSolverTask({ producer, exportData, levelIndex, stateKind, lifecyc
   const targetIndex = normalizedLevelIndex(levelIndex, exportData);
   const levelInfo = solverLevelDescriptor(exportData, targetIndex);
   const modelKind = isPuzzle3dExport(exportData) ? "3d" : "2d";
-  const solverRules = modelKind === "2d" ? exportData?.__solverRules : null;
-  if (!levelInfo || !stateData || (modelKind === "2d" && !solverRules?.compiledPlay)) {
+  const solverRules = exportData?.__solverRules;
+  if (!levelInfo || !stateData || !solverRules?.loadedGame || (modelKind === "2d" && !solverRules?.compiledPlay)) {
     return null;
   }
   const document = activePreviewDocument();
@@ -5037,6 +5055,7 @@ function createSolverTask({ producer, exportData, levelIndex, stateKind, lifecyc
       documentId: document?.id || "",
       modelKind,
       compiledPlay: cloneJson(solverRules?.compiledPlay || null),
+      loadedGame: cloneJson(solverRules?.loadedGame || null),
       runRulesOnLevelStart: solverRules?.runRulesOnLevelStart === true,
       goal: cloneJson(solverRules?.goal || null),
       lose: cloneJson(solverRules?.lose || null),
@@ -5145,7 +5164,6 @@ async function ensurePreviewSolverExportData() {
   });
   if (!exportData) return null;
   const document = activePreviewDocument();
-  if (isPuzzle3dExport(exportData)) return exportData;
   setLevelSolveStatus("Preparing solver", "");
   try {
     await ensurePreviewDocumentsLoaded(document);
@@ -7043,12 +7061,12 @@ function renderSolverBoard() {
     return;
   }
   const exportData = previewExport || extractPreviewExport(latestHtml);
-  if (isPuzzle3dExport(exportData) && typeof renderPuzzle3dSolverPreview === "function") {
-    renderPuzzle3dSolverPreview();
+  if (isPuzzle3dExport(exportData) && typeof renderSolverRuntimePreview === "function") {
+    renderSolverRuntimePreview();
     return;
   }
-  if (typeof clearPuzzle3dSolverPreview === "function") {
-    clearPuzzle3dSolverPreview();
+  if (typeof clearSolverRuntimePreview === "function") {
+    clearSolverRuntimePreview();
   }
   const scene = displayedSolverScene(exportData);
   if (!scene) {
@@ -8251,8 +8269,8 @@ function solverRequestForTask(task) {
   if (!task?.rules?.modelKind || !task?.state?.data || !task?.level) {
     throw new Error("Solver task is incomplete.");
   }
-  if (task.rules.modelKind === "2d" && !task.rules.compiledPlay) {
-    throw new Error("Solver task is missing compiled rule data.");
+  if (!task.rules.loadedGame || (task.rules.modelKind === "2d" && !task.rules.compiledPlay)) {
+    throw new Error("Solver task is missing the play-owned rule data.");
   }
   return {
     version: 1,
@@ -8265,7 +8283,7 @@ function solverRequestForTask(task) {
       state: task.state,
     },
     maxDepth: 512,
-    maxNodes: 5_000_000,
+    maxNodes: 1000,
     maxMs: 0,
   };
 }
@@ -8277,12 +8295,10 @@ async function solveEditedLevelFromEditor() {
     setLevelSolveStatus("No rule model for edited level", "is-error");
     return;
   }
-  if (!isPuzzle3dExport(exportData)) {
-    const preparedExport = await ensurePreviewSolverExportData();
-    if (!preparedExport) return;
-    exportData.__solverRules = preparedExport.__solverRules;
-    exportData.__solverArtifactId = preparedExport.__solverArtifactId;
-  }
+  const preparedExport = await ensurePreviewSolverExportData();
+  if (!preparedExport) return;
+  exportData.__solverRules = preparedExport.__solverRules;
+  exportData.__solverArtifactId = preparedExport.__solverArtifactId;
   const levelIndex = currentEditableLevelIndex(exportData);
   if (isPuzzle3dExport(exportData)) {
     const snapshot = typeof level3dRuntimeSnapshot === "function" ? level3dRuntimeSnapshot() : null;
@@ -8778,8 +8794,8 @@ function clearSolutionPreview(options = {}) {
   if (currentPreviewMode === "level3d" && typeof renderLevel3dBuilder === "function") {
     renderLevel3dBuilder();
   }
-  if (typeof clearPuzzle3dSolverPreview === "function") {
-    clearPuzzle3dSolverPreview();
+  if (typeof clearSolverRuntimePreview === "function") {
+    clearSolverRuntimePreview();
   }
 }
 
@@ -9319,7 +9335,7 @@ function compiledLevelStateData(exportData, levelIndex) {
   };
 }
 
-function solverPuzzle3dPreviewSnapshot() {
+function puzzle3dSnapshotForActiveSolverTask() {
   return activeSolverTask?.puzzle3dSnapshot
     ? cloneJson(activeSolverTask.puzzle3dSnapshot)
     : null;
@@ -11015,6 +11031,29 @@ window.addEventListener("message", (event) => {
       title: event.data.title || "",
       href: event.data.href || "",
     };
+    if (isPuzzle3dExport(previewExport)) {
+      setStatus("Starting 3D runtime", "");
+    } else {
+      appendPreviewLog("system", "Preview ready", { source: "runtime" });
+      setStatus("Preview ready", "is-ok");
+    }
+    return;
+  }
+  if (event.data?.type === "PuzzleStudioPreviewRuntimeReady") {
+    if (event.source && previewFrame?.contentWindow && event.source !== previewFrame.contentWindow) {
+      return;
+    }
+    appendPreviewLog("system", "Preview ready", { source: "runtime" });
+    setStatus("Preview ready", "is-ok");
+    return;
+  }
+  if (event.data?.type === "PuzzleStudioPreviewRuntimeError") {
+    if (event.source && previewFrame?.contentWindow && event.source !== previewFrame.contentWindow) {
+      return;
+    }
+    const label = String(event.data.label || "runtime failed");
+    const message = String(event.data.message || "unknown error");
+    setStatus(`Preview ${label}: ${message}`, "is-error");
     return;
   }
   if (event.data?.type === "PuzzleStudioPreviewState") {

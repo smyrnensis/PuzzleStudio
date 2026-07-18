@@ -19,6 +19,11 @@ or environment variable only when auto-discovery is not enough.
 Browser adapters play presentation commands such as messages, waits, sounds, and
 music. Core remains sound-playback-free, timer-free, and message-state-free.
 
+Standalone exports embed the `puzzle-wasm-player` artifact. Editor previews use
+`puzzle-wasm-game`, whose runtime dependency enables the editor debug surface.
+Do not substitute the editor artifact into exports or add editor request routes
+to the player artifact.
+
 Themes lower to HTML/CSS presentation only; they are not core state.
 
 When behavior is duplicated between Rust/session runtime and standalone

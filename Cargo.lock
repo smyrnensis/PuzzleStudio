@@ -2418,6 +2418,7 @@ dependencies = [
  "puzzle-core",
  "puzzle-kernel",
  "puzzle-lang",
+ "puzzle-play",
 ]
 
 [[package]]

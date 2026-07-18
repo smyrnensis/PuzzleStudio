@@ -11,8 +11,8 @@ solver の目的は、面白い挙動を見つけるために人間が手でプ�
 
 抽象的には、パズルは状態遷移グラフとして理解できる。
 
-- node はゲーム状態
-- edge は入力による状態遷移
+- node は、盤面だけでなく checkpoint、scene/session 値、level lifecycle を含む安定した論理 game session
+- edge は、1つの意味入力から派生する `again`、win/lose 判定、lifecycle、navigation を安定状態まで完了する原子的な論理 turn
 - start と goal は関心のある状態領域
 - 面白さは、プレイヤーが非自明な状態間のつながりを発見するところに生まれる
 
@@ -126,11 +126,16 @@ exact または sampling search が成功する一方で known-motif search が�
 
 solver は、変化するルールセットに対して動かなければならない。
 
-そのため、ゲーム固有の探索ロジックを手で書く方針は危険である。solver は rule engine を真実の源泉として扱い、コンパイル済みの transition function に依存するべきである。
+そのため、ゲーム固有の探索ロジックを手で書く方針は危険である。solver はコンパイル済み rule と play/session lifecycle を真実の源泉として扱い、play が所有する headless session transition に依存するべきである。core の盤面 transition だけを solver の公開 edge にすると、checkpoint 後の restart、scene state、level advance、`again` など、同じ盤面から将来を変える文脈を失う。
 
 ```txt
-compiled rules + state + input -> next state + trace
+compiled game + logical session + input
+  -> next stable logical session
 ```
+
+headless solver transition は presentation timeline や debug trace を生成しない。必要な証拠は、候補の入力列を authoritative player session で replay して観測する。wait や animation の再生時間は logical edge を分割せず、探索を進める入力にもならない。
+
+1 input が level completion と navigation を同時に起こす場合、headless transition は post-rules / pre-clear の completion observation と、post-lifecycle の continuation session を区別して保持する。built-in completion、semantic goal、exact state、collect は同じ observation にそれぞれの matcher を適用し、探索可能性と replay provenance は continuation session から導く。completion 自体を consumer 側のフラグで抑制してはならない。
 
 高速性を保つため、rule system は探索前に正規化された中間表現へ compile する。
 
@@ -153,8 +158,9 @@ solver は、反復的な authoring loop に最適化する。
 重要な技術:
 
 - canonical state encoding
+- board、checkpoint、scene/session 値、level lifecycle を含む canonical session key
 - 高速な state hashing
-- `state + input` に対する transition cache
+- `canonical session key + input` に対する transition cache
 - 繰り返し遷移に対する trace cache
 - 可能であれば incremental / Zobrist-style hash update
 - 早期の duplicate detection
@@ -164,6 +170,8 @@ solver は、反復的な authoring loop に最適化する。
 - 可能な範囲での parallel exploration
 
 想定 workload は、巨大な1ステージを完璧に解くことではない。ルール編集、ステージ variation、生成された test arena に対して、小中規模の probe を大量に走らせることである。
+
+対話的な既定探索の状態上限は最大 1000 とする。これは解けなさの証明に使う境界ではなく、AI や作者が仮説、途中状態、heuristic を更新するための probe 単位である。wall-clock budget は各実行入口の運用契約として定め、状態上限の意味とは分ける。より大きな探索は個別の実験で明示する。
 
 ## Solver State Slicing
 
@@ -301,8 +309,8 @@ solver は observation を出す。何を重視するかは人間が決める。
 
 段階的に作る。
 
-1. rule を deterministic transition function に compile する。
-2. canonical state hashing と transition cache を実装する。
+1. rule を deterministic transition function に compile し、play-owned headless session から同じ lifecycle を実行する。
+2. future behavior を変える session context を含む canonical key と transition cache を実装する。
 3. 小さな level 用の exact BFS を作る。
 4. replay と rule firing trace output を追加する。
 5. level perturbation generation と比較を追加する。

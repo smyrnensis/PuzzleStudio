@@ -37,7 +37,10 @@ coordinates; the protocol does not return raster images.
 
 `run` validates the complete input list before execution, replays the source
 state through the authoritative play lifecycle, and creates a new terminal
-state without mutating the source state. Observation modes are:
+state without mutating the source state. When an input completes a level,
+semantic goal matching and the corresponding run point use the committed
+post-rules/pre-clear completion observation; `terminalStateId` still identifies
+the post-lifecycle continuation state. Observation modes are:
 
 - `summary`: terminal summary only (default);
 - `events`: summary plus deterministic transition events when explicitly requested;
@@ -125,7 +128,7 @@ Use an imported semantic goal as the search stopping condition from any
 compatible state handle:
 
 ```json
-{"version":1,"op":"solve_semantic_goal","sessionId":"session-1","goalId":"goal-1","fromStateId":"state-1","algorithm":"best_first","budget":{"maxDepth":80,"maxNodes":1000000,"maxMillis":5000}}
+{"version":1,"op":"solve_semantic_goal","sessionId":"session-1","goalId":"goal-1","fromStateId":"state-1","algorithm":"best_first","budget":{"maxDepth":80,"maxNodes":1000,"maxMillis":5000}}
 ```
 
 `algorithm` is explicitly `bfs` or `best_first`, and every budget field is
@@ -136,8 +139,10 @@ unknown cells contribute neither a mismatch nor a binding.
 
 A solved search replays the witness through the authoritative play lifecycle
 and returns normal immutable `runId` and `terminalStateId` handles together with
-`searchOutcome: "solved"`. Exhausted and budget-limited searches return search
-statistics without manufacturing a terminal state.
+`searchOutcome: "solved"`. The search and replay both test a level-completing
+input against its completion observation, even when `on_level_clear` navigates
+to another level atomically. Exhausted and budget-limited searches return
+search statistics without manufacturing a terminal state.
 
 ## Keep A Search Session Alive
 
@@ -145,7 +150,7 @@ A resumable search owns its actual frontier, visited keys, node graph, and
 parent actions. Creating it performs validation but no search work:
 
 ```json
-{"version":1,"op":"create_search","sessionId":"session-1","fromStateId":"state-1","goalId":"goal-1","algorithm":"best_first","limits":{"maxDepth":200,"maxStoredNodes":5000000}}
+{"version":1,"op":"create_search","sessionId":"session-1","fromStateId":"state-1","goalId":"goal-1","algorithm":"best_first","limits":{"maxDepth":200,"maxStoredNodes":1000}}
 ```
 
 The start state, goal snapshot, algorithm, input set, heuristic, maximum depth,
@@ -153,7 +158,7 @@ and stored-node limit are immutable for the search lifetime. Advance it by an
 additional allowance; an allowance is not a cumulative budget:
 
 ```json
-{"version":1,"op":"advance_search","sessionId":"session-1","searchId":"search-1","allowance":{"maxExpandedNodes":100000,"maxMillis":2000}}
+{"version":1,"op":"advance_search","sessionId":"session-1","searchId":"search-1","allowance":{"maxExpandedNodes":1000,"maxMillis":2000}}
 ```
 
 Node or duration allowance exhaustion produces `paused` and preserves the same
