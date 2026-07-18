@@ -124,6 +124,7 @@ pub(crate) fn analyze_sprite_body_product(
     header: Option<&str>,
     lines: &[crate::source::LogicalLine],
     is_known_shape: impl FnMut(&str) -> bool,
+    resolve_display_color: impl FnMut(&str) -> Option<crate::SourceHighlightColor>,
 ) -> crate::surface::ParseProduct<SpriteBodyProduct> {
     let syntax = parse_sprite_node(header, lines);
     let shape = resolve_sprite_shape(&syntax, is_known_shape);
@@ -143,7 +144,7 @@ pub(crate) fn analyze_sprite_body_product(
             message: message.to_string(),
         });
     }
-    let recognition = recognize_sprite_display(&syntax, Some(&shape), lines);
+    let recognition = recognize_sprite_display(&syntax, Some(&shape), lines, resolve_display_color);
     crate::surface::ParseProduct::new(
         SpriteBodyProduct {
             syntax,
@@ -472,7 +473,7 @@ fn is_sprite_color_expr(value: &str) -> bool {
 }
 
 fn is_sprite_color(value: &str) -> bool {
-    crate::syntax::is_visual_named_color(value) || is_hex_color(value)
+    crate::syntax::is_visual_color_literal(value)
 }
 
 fn is_sprite_color_ref(value: &str) -> bool {
@@ -514,13 +515,6 @@ fn is_sprite_definition_name_token(value: &str) -> bool {
         && cleaned
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | ':'))
-}
-
-fn is_hex_color(value: &str) -> bool {
-    let Some(hex) = value.strip_prefix('#') else {
-        return false;
-    };
-    matches!(hex.len(), 3 | 4 | 6 | 8) && hex.chars().all(|ch| ch.is_ascii_hexdigit())
 }
 
 fn is_visual_image_source(value: &str) -> bool {
@@ -707,6 +701,9 @@ pub(crate) fn parse_sprite_node(
             }
             [value] if syntax.colors.is_some() && !saw_shape && is_sprite_duration_token(value) => {
                 syntax.prelude_rows.push(line.to_string());
+                if syntax.duration.is_none() {
+                    syntax.duration_body_line = Some(line_index);
+                }
                 set_string_once(
                     &mut syntax.duration,
                     value,
@@ -757,6 +754,7 @@ fn recognize_sprite_display(
     syntax: &SpriteNodeSyntax,
     resolved: Option<&ResolvedSpriteShape>,
     lines: &[crate::source::LogicalLine],
+    mut resolve_display_color: impl FnMut(&str) -> Option<crate::SourceHighlightColor>,
 ) -> crate::surface::ParserRecognition {
     use crate::surface::{ParserRecognition, SourceSpan, SurfaceDisplayFact};
 
@@ -776,13 +774,15 @@ fn recognize_sprite_display(
                 .find(|(_, token)| token.text == *color)
             {
                 token_index = index + 1;
-                recognition.display_facts.push(SurfaceDisplayFact::Color {
-                    span: SourceSpan {
-                        start: token.start,
-                        end: token.end,
-                    },
-                    color: color.clone(),
-                });
+                if let Some(color) = resolve_display_color(color) {
+                    recognition.display_facts.push(SurfaceDisplayFact::Color {
+                        span: SourceSpan {
+                            start: token.start,
+                            end: token.end,
+                        },
+                        color,
+                    });
+                }
             }
         }
     }
@@ -797,13 +797,16 @@ fn recognize_sprite_display(
                 };
                 for (byte_offset, pixel) in row.text.char_indices() {
                     let color = if pixel == '.' {
-                        "transparent".to_string()
+                        crate::SourceHighlightColor::parse("transparent")
                     } else {
                         visual_color_index(pixel)
                             .and_then(|index| colors.get(index))
-                            .cloned()
-                            .unwrap_or_else(|| "transparent".to_string())
+                            .and_then(|color| resolve_display_color(color))
                     };
+                    let transparent = pixel == '.'
+                        || color
+                            .as_ref()
+                            .is_some_and(crate::SourceHighlightColor::is_transparent);
                     recognition
                         .display_facts
                         .push(SurfaceDisplayFact::SpritePixel {
@@ -811,7 +814,7 @@ fn recognize_sprite_display(
                                 start: token.start + byte_offset,
                                 end: token.start + byte_offset + pixel.len_utf8(),
                             },
-                            transparent: pixel == '.' || color == "transparent",
+                            transparent,
                             color,
                         });
                 }
@@ -897,7 +900,7 @@ fn recognize_sprite_semantics(
                     },
                     SurfaceSemanticKind::Keyword,
                 );
-                mark(recognition, line, value, SurfaceSemanticKind::Binding);
+                mark_sprite_fragment_tokens(recognition, line, value, SurfaceSemanticKind::Binding);
             }
             SpritePropertySyntax::Rotate {
                 space,
@@ -914,7 +917,7 @@ fn recognize_sprite_semantics(
                     },
                     SurfaceSemanticKind::Keyword,
                 );
-                mark(recognition, line, angle, SurfaceSemanticKind::Binding);
+                mark_sprite_fragment_tokens(recognition, line, angle, SurfaceSemanticKind::Binding);
                 if let Some(from) = from {
                     mark(recognition, line, "from", SurfaceSemanticKind::Keyword);
                     mark(recognition, line, from, SurfaceSemanticKind::Variant);
@@ -925,7 +928,7 @@ fn recognize_sprite_semantics(
                 }
             }
             SpritePropertySyntax::Flip(value) => {
-                mark(recognition, line, value, SurfaceSemanticKind::Binding)
+                mark_sprite_fragment_tokens(recognition, line, value, SurfaceSemanticKind::Binding)
             }
             SpritePropertySyntax::Image(value) => {
                 mark(recognition, line, value, SurfaceSemanticKind::Asset)
@@ -951,7 +954,17 @@ fn recognize_sprite_semantics(
                     SurfaceSemanticKind::Setting,
                 );
             }
-            mark(recognition, line, value, SurfaceSemanticKind::Number);
+            if let (Some(first), Some(last)) = (line.tokens.first(), line.tokens.last()) {
+                recognition.mark(
+                    SourceSpan {
+                        start: first.start,
+                        end: last.end,
+                    },
+                    SurfaceSemanticKind::Number,
+                );
+            } else {
+                mark(recognition, line, value, SurfaceSemanticKind::Number);
+            }
         }
     }
     if let (Some(line_index), Some(SpriteShapeSyntax::Reference(shape))) =
@@ -960,6 +973,25 @@ fn recognize_sprite_semantics(
     {
         mark(recognition, line, "shape", SurfaceSemanticKind::Setting);
         mark_sprite_compound(recognition, line, shape, SurfaceSemanticKind::Asset);
+    }
+}
+
+fn mark_sprite_fragment_tokens(
+    recognition: &mut crate::surface::ParserRecognition,
+    line: &crate::source::LogicalLine,
+    fragment: &str,
+    kind: crate::surface::SurfaceSemanticKind,
+) {
+    for token in &line.tokens {
+        if fragment.contains(&token.text) {
+            recognition.mark(
+                crate::surface::SourceSpan {
+                    start: token.start,
+                    end: token.end,
+                },
+                kind,
+            );
+        }
     }
 }
 

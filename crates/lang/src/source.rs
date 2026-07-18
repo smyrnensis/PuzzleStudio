@@ -695,10 +695,10 @@ impl SurfaceSourceScan {
         self.lines.len()
     }
 
-    /// Fingerprints exactly the non-trivia token stream consumed by parser
-    /// products. Absolute offsets and comments are excluded, so presentation-only
-    /// edits may reuse semantic products without source-text heuristics.
-    pub(crate) fn grammar_fingerprint(&self) -> u64 {
+    /// Fingerprints the non-trivia token spellings and absolute spans consumed
+    /// by parser products. Comments are excluded, but any edit that moves a
+    /// parser token invalidates position-bearing semantic products.
+    pub(crate) fn parser_product_fingerprint(&self) -> u64 {
         use std::hash::{Hash, Hasher};
 
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -710,6 +710,8 @@ impl SurfaceSourceScan {
                 let start = fact.start - line.start;
                 let end = fact.end - line.start;
                 fact.kind.hash(&mut hasher);
+                fact.start.hash(&mut hasher);
+                fact.end.hash(&mut hasher);
                 line.content[start..end].hash(&mut hasher);
             }
         }

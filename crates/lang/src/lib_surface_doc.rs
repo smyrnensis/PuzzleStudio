@@ -68,7 +68,7 @@ impl SurfaceDocumentProducts {
 pub(crate) struct ParseSnapshot {
     source_scan: source::SurfaceSourceScan,
     parser_catalog:
-        Option<crate::surface::ParseProduct<Result<LevelEditorIntegration, DiagnosticReport>>>,
+        Option<crate::surface::ParseProduct<Result<ParserSurfaceSnapshot, DiagnosticReport>>>,
     document: SurfaceDocument,
     strict_diagnostic: Option<DiagnosticReport>,
 }
@@ -83,16 +83,11 @@ impl ParseSnapshot {
         Self::from_scan(source_profile, source_scan, parser_catalog)
     }
 
-    fn parse_for_compile(source: &str) -> Self {
-        let source_scan = source::scan_surface_source(source);
-        Self::from_scan(None, source_scan, None)
-    }
-
     fn from_scan(
         source_profile: Option<PuzzleSourceProfile>,
         source_scan: source::SurfaceSourceScan,
         parser_catalog: Option<
-            crate::surface::ParseProduct<Result<LevelEditorIntegration, DiagnosticReport>>,
+            crate::surface::ParseProduct<Result<ParserSurfaceSnapshot, DiagnosticReport>>,
         >,
     ) -> Self {
         let parser_product = parser_catalog.as_ref();
@@ -135,14 +130,44 @@ impl ParseSnapshot {
             .expect("source analysis snapshot requires parser product")
             .value
             .as_ref()
+            .map(|snapshot| &snapshot.level_editor)
             .map_err(ToString::to_string)
     }
 
+    #[cfg(test)]
     fn into_strict_document(self) -> Result<SurfaceDocument, DiagnosticReport> {
-        if let Some(report) = self.strict_diagnostic {
-            return Err(report);
-        }
+        self.validate_strict_parser_product()?;
+        validate_parser_recognition_completeness(&self.document)?;
         Ok(self.document)
+    }
+
+    fn into_strict_document_parts(self) -> Result<DocumentSourceParts, DiagnosticReport> {
+        self.validate_strict_parser_product()?;
+        let disposition_diagnostic = validate_parser_recognition_completeness(&self.document).err();
+        let mut parts = self
+            .parser_catalog
+            .expect("strict parser snapshot requires parser product")
+            .value?
+            .compile_parts?;
+        parts.disposition_diagnostic = disposition_diagnostic;
+        Ok(parts)
+    }
+
+    fn validate_strict_parser_product(&self) -> Result<(), DiagnosticReport> {
+        if let Some(report) = &self.strict_diagnostic {
+            return Err(report.clone());
+        }
+        let parser_snapshot = self
+            .parser_catalog
+            .as_ref()
+            .expect("strict parser snapshot requires parser product")
+            .value
+            .as_ref()
+            .map_err(Clone::clone)?;
+        if let Err(report) = &parser_snapshot.compile_parts {
+            return Err(report.clone());
+        }
+        Ok(())
     }
 
     pub(crate) fn apply_edit(
@@ -154,11 +179,12 @@ impl ParseSnapshot {
         edit_end: usize,
         insert_len: usize,
     ) -> (usize, bool) {
-        let old_grammar_fingerprint = self.source_scan.grammar_fingerprint();
+        let old_parser_product_fingerprint = self.source_scan.parser_product_fingerprint();
         let mut source_scan = std::mem::take(&mut self.source_scan);
         let rescanned_lines =
             source_scan.apply_edit(old_source, new_source, edit_start, edit_end, insert_len);
-        let parser_catalog_reused = old_grammar_fingerprint == source_scan.grammar_fingerprint();
+        let parser_catalog_reused =
+            old_parser_product_fingerprint == source_scan.parser_product_fingerprint();
         let parser_catalog = if parser_catalog_reused {
             self.parser_catalog.take()
         } else {
@@ -180,8 +206,9 @@ pub(crate) fn parse_surface_document(source: &str) -> SurfaceDocument {
     build_surface_document(source, SurfaceDocumentProducts::FULL)
 }
 
+#[cfg(test)]
 fn parse_surface_compile_document(source: &str) -> Result<SurfaceDocument, DiagnosticReport> {
-    ParseSnapshot::parse_for_compile(source).into_strict_document()
+    ParseSnapshot::parse(source, None).into_strict_document()
 }
 
 pub fn validate_surface_document_projection(source: &str) -> Result<(), DiagnosticReport> {
@@ -195,9 +222,19 @@ fn validate_parser_recognition_completeness(
     let Some(span) = document.syntax_error_spans.first() else {
         return Ok(());
     };
+    let location = document.lines.iter().find_map(|line| {
+        (line.start <= span.start && span.end <= line.start + line.content.len()).then(|| {
+            let relative_start = span.start - line.start;
+            let relative_end = span.end - line.start;
+            (line.line, &line.content[relative_start..relative_end])
+        })
+    });
+    let detail = location.map_or_else(
+        || format!("token at {}..{}", span.start, span.end),
+        |(line, token)| format!("token `{token}` on line {line}"),
+    );
     Err(DiagnosticReport::error(format!(
-        "canonical parser product contains token at {}..{} without a syntax disposition",
-        span.start, span.end
+        "canonical parser product contains {detail} without a syntax disposition"
     )))
 }
 
@@ -267,7 +304,7 @@ fn try_build_surface_document_from_scan(
     scan: &source::SurfaceSourceScan,
     products: SurfaceDocumentProducts,
     parser_catalog: Option<
-        &crate::surface::ParseProduct<Result<LevelEditorIntegration, DiagnosticReport>>,
+        &crate::surface::ParseProduct<Result<ParserSurfaceSnapshot, DiagnosticReport>>,
     >,
     source_profile: Option<PuzzleSourceProfile>,
 ) -> Result<SurfaceDocument, DiagnosticReport> {
@@ -331,29 +368,40 @@ fn try_build_surface_document_from_scan(
 }
 
 fn syntax_error_spans(document: &SurfaceDocument) -> Vec<SourceSpan> {
+    let mut disposition_spans = document
+        .semantic_tokens
+        .iter()
+        .map(|token| token.span)
+        .chain(document.highlight_ranges.raw_ranges.iter().copied())
+        .chain(
+            document
+                .highlight_ranges
+                .display_facts
+                .iter()
+                .map(|display| display.span()),
+        )
+        .collect::<Vec<_>>();
+    disposition_spans.sort_by_key(|span| (span.start, span.end));
+    let mut merged_dispositions = Vec::<SourceSpan>::with_capacity(disposition_spans.len());
+    for span in disposition_spans {
+        if let Some(previous) = merged_dispositions.last_mut()
+            && span.start <= previous.end
+        {
+            previous.end = previous.end.max(span.end);
+        } else {
+            merged_dispositions.push(span);
+        }
+    }
+
     document
         .lines
         .iter()
         .flat_map(|line| &line.lexical_facts)
         .filter(|fact| matches!(fact.kind, source::lexer::SourceLexicalKind::Word))
         .filter(|fact| {
-            !document
-                .semantic_tokens
+            !merged_dispositions
                 .iter()
-                .any(|token| token.span.start <= fact.start && token.span.end >= fact.end)
-                && !document
-                    .highlight_ranges
-                    .raw_ranges
-                    .iter()
-                    .any(|span| span.start <= fact.start && span.end >= fact.end)
-                && !document
-                    .highlight_ranges
-                    .display_facts
-                    .iter()
-                    .any(|display| {
-                        let span = display.span();
-                        span.start <= fact.start && span.end >= fact.end
-                    })
+                .any(|span| span.start <= fact.start && span.end >= fact.end)
         })
         .map(|fact| SourceSpan {
             start: fact.start,
@@ -365,7 +413,7 @@ fn syntax_error_spans(document: &SurfaceDocument) -> Vec<SourceSpan> {
 pub(crate) fn build_surface_document_from_source_scan(
     source_scan: &source::SurfaceSourceScan,
     parser_catalog: Option<
-        &crate::surface::ParseProduct<Result<LevelEditorIntegration, DiagnosticReport>>,
+        &crate::surface::ParseProduct<Result<ParserSurfaceSnapshot, DiagnosticReport>>,
     >,
     source_profile: Option<PuzzleSourceProfile>,
 ) -> SurfaceDocument {
@@ -676,7 +724,7 @@ Box
                         start: color_start,
                         end: color_start + 4,
                     },
-                    color: "#111".to_string(),
+                    color: crate::SourceHighlightColor::parse("#111").unwrap(),
                 }),
             "facts={:?} diagnostics={:?}",
             document.highlight_ranges.display_facts,
@@ -688,7 +736,7 @@ Box
                     start: row_start + 1,
                     end: row_start + 2,
                 },
-                color: "#eee".to_string(),
+                color: Some(crate::SourceHighlightColor::parse("#eee").unwrap()),
                 transparent: false,
             }
         ));
@@ -698,10 +746,112 @@ Box
                     start: row_start + 2,
                     end: row_start + 3,
                 },
-                color: "transparent".to_string(),
+                color: Some(crate::SourceHighlightColor::parse("transparent").unwrap()),
                 transparent: true,
             }
         ));
+    }
+
+    #[test]
+    fn sprite_palette_alias_display_facts_use_the_resolved_color_literal() {
+        let source = r##"
+puzzle board {
+slots {
+actors = GoalCount
+}
+sprites {
+palette {
+GoalCount = #acacac
+}
+GoalCount
+GoalCount
+0
+}
+}
+"##;
+        let document = parse_surface_document(source);
+        let color_start = source.rfind("GoalCount\n0").unwrap();
+        let pixel_start = source.rfind("\n0\n").unwrap() + 1;
+        let resolved = crate::SourceHighlightColor::parse("#acacac").unwrap();
+
+        assert!(document.highlight_ranges.display_facts.contains(
+            &crate::SurfaceDisplayFact::Color {
+                span: crate::surface::SourceSpan {
+                    start: color_start,
+                    end: color_start + "GoalCount".len(),
+                },
+                color: resolved.clone(),
+            }
+        ));
+        assert!(document.highlight_ranges.display_facts.contains(
+            &crate::SurfaceDisplayFact::SpritePixel {
+                span: crate::surface::SourceSpan {
+                    start: pixel_start,
+                    end: pixel_start + 1,
+                },
+                color: Some(resolved),
+                transparent: false,
+            }
+        ));
+        assert!(crate::SourceHighlightColor::parse("GoalCount").is_none());
+        assert_eq!(
+            crate::SourceHighlightColor::parse("lightred")
+                .unwrap()
+                .as_str(),
+            "#ff8080"
+        );
+        assert_eq!(
+            crate::SourceHighlightColor::parse("darkbrown")
+                .unwrap()
+                .as_str(),
+            "#493c2b"
+        );
+    }
+
+    #[test]
+    fn variant_dependent_sprite_colors_have_no_false_display_color() {
+        let source = r##"
+puzzle board {
+tags {
+kind = A B
+}
+slots {
+actors = Box:kind
+}
+sprites {
+palette {
+piece_color:kind {
+A = #4a4
+B = #a4a
+}
+}
+sprite {
+selector = Box:kind
+colors = piece_color:kind
+shape = {
+0
+}
+}
+}
+}
+"##;
+        let document = parse_surface_document(source);
+        let pixel_start = source.rfind("\n0\n").unwrap() + 1;
+
+        assert!(document.highlight_ranges.display_facts.contains(
+            &crate::SurfaceDisplayFact::SpritePixel {
+                span: crate::surface::SourceSpan {
+                    start: pixel_start,
+                    end: pixel_start + 1,
+                },
+                color: None,
+                transparent: false,
+            }
+        ));
+        assert!(!document.highlight_ranges.display_facts.iter().any(|fact| {
+            matches!(fact, crate::SurfaceDisplayFact::Color { span, .. }
+                if &source[span.start..span.end] == "piece_color:kind")
+        }));
     }
 
     #[test]
@@ -1123,5 +1273,24 @@ __invalid_unowned_surface_node__ {
             error.to_string().contains("without a syntax disposition"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn canonical_game_surfaces_have_complete_parser_dispositions() {
+        for (name, source) in [
+            ("spec_3d", include_str!("../../../games/spec_3d.puzzle3")),
+            (
+                "microban",
+                include_str!("../../../games/microban/game.puzzle"),
+            ),
+            ("locked", include_str!("../../../games/TPGJ6/locked.puzzle")),
+            (
+                "fixban_tween",
+                include_str!("../../../games/fixban_tween.puzzle"),
+            ),
+        ] {
+            validate_surface_document_projection(source)
+                .unwrap_or_else(|error| panic!("{name} has an unowned parser token: {error}"));
+        }
     }
 }

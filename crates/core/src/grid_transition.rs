@@ -5,7 +5,7 @@ use crate::{
 };
 use puzzle_kernel::{
     ComparisonOp, ComponentPlacement, FnvBuilder, GridCoord, GridOffset as CoordOffset, LocalFrame,
-    MarkValueMatch, MatchPlacement, ObjectBinding, ProgramApplyOutcome, ProgramBackend,
+    MarkValueMatch, MatchPlacement, ObjectBinding, ProgramApplyOutcome, ProgramBackend, RuleFiring,
     TransitionOutcome as KernelTransitionOutcome, bind_object,
     bound_object as bound_object_in_bindings,
     collect_component_placements as collect_component_placements_shared,
@@ -49,28 +49,24 @@ pub type ProgramContinuation = puzzle_kernel::ProgramContinuation;
 
 pub use puzzle_kernel::flattened_program_rules as flattened_rules;
 
+pub type GridRuleFiring<const D: usize> = RuleFiring<RuleId, GridPatch<D>>;
+pub type GridRuleFiringSummary = RuleFiring<RuleId, ()>;
+
 #[derive(Clone, Default)]
-struct GridTransitionTrace<const D: usize> {
-    fired_rules: Vec<RuleId>,
-    patches: Vec<GridPatch<D>>,
+struct GridExecutionEffects {
     commands: Vec<TransitionCommand>,
     cancelled: bool,
 }
 
-impl<const D: usize> GridTransitionTrace<D> {
-    fn record(&mut self, rule: &GridRule<D>, patch: GridPatch<D>) {
-        self.fired_rules.push(rule.id);
-        self.patches.push(patch);
-        if rule
-            .effects
-            .iter()
-            .any(|effect| matches!(effect, RuleEffect::Cancel))
-        {
+impl GridExecutionEffects {
+    fn apply<const D: usize>(&mut self, rule: &GridRule<D>) {
+        if rule_cancels(rule) {
             self.cancelled = true;
             return;
         }
         for effect in &rule.effects {
             match effect {
+                RuleEffect::ObserveMatch => {}
                 RuleEffect::Cancel => unreachable!("cancel handled before command emission"),
                 RuleEffect::Win => self.commands.push(TransitionCommand::Win),
                 RuleEffect::Restart => self.commands.push(TransitionCommand::Restart),
@@ -86,6 +82,126 @@ impl<const D: usize> GridTransitionTrace<D> {
     }
 }
 
+#[derive(Clone)]
+enum GridFiringCollector<const D: usize> {
+    Discard,
+    Summary(Vec<GridRuleFiringSummary>),
+    Detailed(Vec<GridRuleFiring<D>>),
+}
+
+impl<const D: usize> Default for GridFiringCollector<D> {
+    fn default() -> Self {
+        Self::Detailed(Vec::new())
+    }
+}
+
+impl<const D: usize> GridFiringCollector<D> {
+    fn summary() -> Self {
+        Self::Summary(Vec::new())
+    }
+
+    fn record(&mut self, rule: RuleId, patch: GridPatch<D>, progressed: bool, observable: bool) {
+        match self {
+            Self::Discard => {}
+            Self::Summary(firings) => firings.push(GridRuleFiringSummary {
+                rule,
+                patch: (),
+                progressed,
+                observable,
+            }),
+            Self::Detailed(firings) => firings.push(GridRuleFiring::<D> {
+                rule,
+                patch,
+                progressed,
+                observable,
+            }),
+        }
+    }
+
+    fn detailed(&self) -> Option<&[GridRuleFiring<D>]> {
+        match self {
+            Self::Detailed(firings) => Some(firings),
+            Self::Discard | Self::Summary(_) => None,
+        }
+    }
+
+    fn into_detailed(self) -> Vec<GridRuleFiring<D>> {
+        match self {
+            Self::Detailed(firings) => firings,
+            Self::Discard | Self::Summary(_) => {
+                unreachable!("detailed firing collection was not requested")
+            }
+        }
+    }
+
+    fn into_summary(self) -> Vec<GridRuleFiringSummary> {
+        match self {
+            Self::Summary(firings) => firings,
+            Self::Discard | Self::Detailed(_) => {
+                unreachable!("summary firing collection was not requested")
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum FiringCollection {
+    Discard,
+    Summary,
+    Detailed,
+}
+
+#[derive(Clone, Default)]
+struct GridProgramContext<const D: usize> {
+    effects: GridExecutionEffects,
+    firings: GridFiringCollector<D>,
+}
+
+impl<const D: usize> GridProgramContext<D> {
+    fn collecting(collection: FiringCollection) -> Self {
+        Self {
+            effects: GridExecutionEffects::default(),
+            firings: match collection {
+                FiringCollection::Discard => GridFiringCollector::Discard,
+                FiringCollection::Summary => GridFiringCollector::summary(),
+                FiringCollection::Detailed => GridFiringCollector::default(),
+            },
+        }
+    }
+
+    fn commit(
+        &mut self,
+        rule: &GridRule<D>,
+        patch: GridPatch<D>,
+        progressed: bool,
+    ) -> ProgramApplyOutcome {
+        let outcome = ProgramApplyOutcome {
+            fired: true,
+            progressed,
+            observable: rule_has_observable_effect(rule),
+            cancelled: rule_cancels(rule),
+        };
+        self.effects.apply(rule);
+        self.firings
+            .record(rule.id, patch, outcome.progressed, outcome.observable);
+        outcome
+    }
+}
+
+struct GridRuleTransition<State> {
+    next_state: Option<State>,
+    outcome: ProgramApplyOutcome,
+}
+
+impl<State> GridRuleTransition<State> {
+    fn idle() -> Self {
+        Self {
+            next_state: None,
+            outcome: ProgramApplyOutcome::default(),
+        }
+    }
+}
+
 pub type GridTransitionOutcome<const D: usize, Size> = KernelTransitionOutcome<
     Option<InputId>,
     GridState<D, Size>,
@@ -93,6 +209,18 @@ pub type GridTransitionOutcome<const D: usize, Size> = KernelTransitionOutcome<
     RuleId,
     GridPatch<D>,
 >;
+pub type GridTransitionSummaryOutcome<const D: usize, Size> =
+    KernelTransitionOutcome<Option<InputId>, GridState<D, Size>, TransitionCommand, RuleId, ()>;
+
+struct GridInternalTransitionOutcome<const D: usize, Size: GridSize<D>> {
+    input: Option<InputId>,
+    next_state: GridState<D, Size>,
+    progressed: bool,
+    observable: bool,
+    cancelled: bool,
+    commands: Vec<TransitionCommand>,
+    firings: GridFiringCollector<D>,
+}
 
 pub fn transition_state<const D: usize, Size: GridSize<D>>(
     game: &GridCompiledGame<D>,
@@ -139,8 +267,7 @@ pub struct GridProgramBoundarySnapshot<'a, const D: usize, Size: GridSize<D>> {
     pub next_state: &'a GridState<D, Size>,
     pub cancelled: bool,
     pub commands: &'a [TransitionCommand],
-    pub fired_rules: &'a [RuleId],
-    pub patches: &'a [GridPatch<D>],
+    pub firings: &'a [GridRuleFiring<D>],
 }
 
 pub struct GridProgramSegmentTrace<const D: usize, Size: GridSize<D>> {
@@ -163,12 +290,12 @@ pub fn transition_program_segment_trace<
     let mut original = state.clone();
     original.clear_mark();
     let mut current = original.clone();
-    let mut trace = GridTransitionTrace::<D>::default();
+    let mut context = GridProgramContext::<D>::default();
     let segment = {
         let mut backend = GridProgramBackend {
             game,
             input,
-            trace: &mut trace,
+            context: &mut context,
         };
         puzzle_kernel::execute_program_segment(
             &mut backend,
@@ -180,15 +307,18 @@ pub fn transition_program_segment_trace<
                 should_stop(GridProgramBoundarySnapshot {
                     input,
                     next_state: state,
-                    cancelled: backend.trace.cancelled,
-                    commands: &backend.trace.commands,
-                    fired_rules: &backend.trace.fired_rules,
-                    patches: &backend.trace.patches,
+                    cancelled: backend.context.effects.cancelled,
+                    commands: &backend.context.effects.commands,
+                    firings: backend
+                        .context
+                        .firings
+                        .detailed()
+                        .expect("program segment trace always collects firings"),
                 })
             },
         )?
     };
-    finish_program_segment(input, original, current, trace, segment)
+    finish_program_segment(input, original, current, context, segment)
 }
 
 pub fn transition_program_continuation_segment_trace<
@@ -207,12 +337,12 @@ pub fn transition_program_continuation_segment_trace<
     let mut original = state.clone();
     original.clear_mark();
     let mut current = original.clone();
-    let mut trace = GridTransitionTrace::<D>::default();
+    let mut context = GridProgramContext::<D>::default();
     let segment = {
         let mut backend = GridProgramBackend {
             game,
             input,
-            trace: &mut trace,
+            context: &mut context,
         };
         puzzle_kernel::resume_program_segment(
             &mut backend,
@@ -225,22 +355,25 @@ pub fn transition_program_continuation_segment_trace<
                 should_stop(GridProgramBoundarySnapshot {
                     input,
                     next_state: state,
-                    cancelled: backend.trace.cancelled,
-                    commands: &backend.trace.commands,
-                    fired_rules: &backend.trace.fired_rules,
-                    patches: &backend.trace.patches,
+                    cancelled: backend.context.effects.cancelled,
+                    commands: &backend.context.effects.commands,
+                    firings: backend
+                        .context
+                        .firings
+                        .detailed()
+                        .expect("program segment trace always collects firings"),
                 })
             },
         )?
     };
-    finish_program_segment(input, original, current, trace, segment)
+    finish_program_segment(input, original, current, context, segment)
 }
 
 fn finish_program_segment<const D: usize, Size: GridSize<D>>(
     input: Option<InputId>,
     original: GridState<D, Size>,
     mut current: GridState<D, Size>,
-    trace: GridTransitionTrace<D>,
+    context: GridProgramContext<D>,
     segment: puzzle_kernel::ProgramSegment,
 ) -> Result<GridProgramSegmentTrace<D, Size>, GridTransitionError<D>> {
     let cancelled = segment.outcome.cancelled;
@@ -248,16 +381,17 @@ fn finish_program_segment<const D: usize, Size: GridSize<D>>(
         (original, Vec::new())
     } else {
         current.clear_mark();
-        (current, trace.commands)
+        (current, context.effects.commands)
     };
     Ok(GridProgramSegmentTrace {
         trace: KernelTransitionOutcome {
             input,
             next_state,
+            progressed: !cancelled && segment.outcome.progressed,
+            observable: segment.outcome.observable,
             cancelled,
             commands,
-            fired_rules: trace.fired_rules,
-            patches: trace.patches,
+            firings: context.firings.into_detailed(),
         },
         remaining_program: segment.continuation,
     })
@@ -270,8 +404,10 @@ pub fn transition_once<const D: usize, Size: GridSize<D>>(
 ) -> Result<GridState<D, Size>, GridTransitionError<D>> {
     let mut scoped = state.clone();
     scoped.clear_mark();
-    let mut trace = GridTransitionTrace::<D>::default();
-    let mut next = transition_rule_once(game, &scoped, rule, None, None, &mut trace)?;
+    let mut context = GridProgramContext::<D>::collecting(FiringCollection::Discard);
+    let mut next = transition_rule_once(game, &scoped, rule, None, None, &mut context)?
+        .next_state
+        .unwrap_or(scoped);
     next.clear_mark();
     Ok(next)
 }
@@ -284,8 +420,10 @@ pub fn transition_once_with_input<const D: usize, Size: GridSize<D>>(
 ) -> Result<GridState<D, Size>, GridTransitionError<D>> {
     let mut scoped = state.clone();
     scoped.clear_mark();
-    let mut trace = GridTransitionTrace::<D>::default();
-    let mut next = transition_rule_once(game, &scoped, rule, Some(input), None, &mut trace)?;
+    let mut context = GridProgramContext::<D>::collecting(FiringCollection::Discard);
+    let mut next = transition_rule_once(game, &scoped, rule, Some(input), None, &mut context)?
+        .next_state
+        .unwrap_or(scoped);
     next.clear_mark();
     Ok(next)
 }
@@ -296,8 +434,15 @@ pub fn transition_program<const D: usize, Size: GridSize<D>>(
     program: &GridExecutableProgram<D>,
     input: InputId,
 ) -> Result<GridState<D, Size>, GridTransitionError<D>> {
-    transition_program_outcome_with_local_frame(game, state, program, input, None)
-        .map(|outcome| outcome.next_state)
+    transition_program_inner(
+        game,
+        state,
+        program,
+        Some(input),
+        None,
+        FiringCollection::Discard,
+    )
+    .map(|outcome| outcome.next_state)
 }
 
 pub fn transition_program_with_local_frame<const D: usize, Size: GridSize<D>>(
@@ -307,8 +452,15 @@ pub fn transition_program_with_local_frame<const D: usize, Size: GridSize<D>>(
     input: InputId,
     local_frame: Option<&LocalFrame<ObjectId>>,
 ) -> Result<GridState<D, Size>, GridTransitionError<D>> {
-    transition_program_outcome_with_local_frame(game, state, program, input, local_frame)
-        .map(|outcome| outcome.next_state)
+    transition_program_inner(
+        game,
+        state,
+        program,
+        Some(input),
+        local_frame,
+        FiringCollection::Discard,
+    )
+    .map(|outcome| outcome.next_state)
 }
 
 pub fn transition_program_outcome<const D: usize, Size: GridSize<D>>(
@@ -327,39 +479,66 @@ pub fn transition_program_outcome_with_local_frame<const D: usize, Size: GridSiz
     input: InputId,
     local_frame: Option<&LocalFrame<ObjectId>>,
 ) -> Result<GridTransitionOutcome<D, Size>, GridTransitionError<D>> {
-    transition_program_outcome_inner(game, state, program, Some(input), local_frame)
+    transition_program_inner(
+        game,
+        state,
+        program,
+        Some(input),
+        local_frame,
+        FiringCollection::Detailed,
+    )
+    .map(detailed_outcome)
 }
 
-fn transition_program_outcome_inner<const D: usize, Size: GridSize<D>>(
+pub fn transition_program_summary_outcome<const D: usize, Size: GridSize<D>>(
+    game: &GridCompiledGame<D>,
+    state: &GridState<D, Size>,
+    program: &GridExecutableProgram<D>,
+    input: InputId,
+) -> Result<GridTransitionSummaryOutcome<D, Size>, GridTransitionError<D>> {
+    transition_program_inner(
+        game,
+        state,
+        program,
+        Some(input),
+        None,
+        FiringCollection::Summary,
+    )
+    .map(summary_outcome)
+}
+
+fn transition_program_inner<const D: usize, Size: GridSize<D>>(
     game: &GridCompiledGame<D>,
     state: &GridState<D, Size>,
     program: &GridExecutableProgram<D>,
     input: Option<InputId>,
     local_frame: Option<&LocalFrame<ObjectId>>,
-) -> Result<GridTransitionOutcome<D, Size>, GridTransitionError<D>> {
+    firing_collection: FiringCollection,
+) -> Result<GridInternalTransitionOutcome<D, Size>, GridTransitionError<D>> {
     let mut original = state.clone();
     original.clear_mark();
-    let mut trace = GridTransitionTrace::<D>::default();
+    let mut context = GridProgramContext::<D>::collecting(firing_collection);
     let mut next_state = original.clone();
     let mut backend = GridProgramBackend {
         game,
         input,
-        trace: &mut trace,
+        context: &mut context,
     };
-    puzzle_kernel::execute_program(
+    let program_outcome = puzzle_kernel::execute_program(
         &mut backend,
         &mut next_state,
         program,
         local_frame,
         UNTIL_STABLE_REPEAT_LIMIT,
     )?;
-    let mut outcome = KernelTransitionOutcome {
+    let mut outcome = GridInternalTransitionOutcome {
         input,
         next_state,
-        cancelled: trace.cancelled,
-        commands: trace.commands,
-        fired_rules: trace.fired_rules,
-        patches: trace.patches,
+        progressed: !context.effects.cancelled && program_outcome.progressed,
+        observable: program_outcome.observable,
+        cancelled: context.effects.cancelled,
+        commands: context.effects.commands,
+        firings: context.firings,
     };
     if outcome.cancelled {
         outcome.next_state = original;
@@ -370,12 +549,40 @@ fn transition_program_outcome_inner<const D: usize, Size: GridSize<D>>(
     Ok(outcome)
 }
 
+fn detailed_outcome<const D: usize, Size: GridSize<D>>(
+    outcome: GridInternalTransitionOutcome<D, Size>,
+) -> GridTransitionOutcome<D, Size> {
+    KernelTransitionOutcome {
+        input: outcome.input,
+        next_state: outcome.next_state,
+        progressed: outcome.progressed,
+        observable: outcome.observable,
+        cancelled: outcome.cancelled,
+        commands: outcome.commands,
+        firings: outcome.firings.into_detailed(),
+    }
+}
+
+fn summary_outcome<const D: usize, Size: GridSize<D>>(
+    outcome: GridInternalTransitionOutcome<D, Size>,
+) -> GridTransitionSummaryOutcome<D, Size> {
+    KernelTransitionOutcome {
+        input: outcome.input,
+        next_state: outcome.next_state,
+        progressed: outcome.progressed,
+        observable: outcome.observable,
+        cancelled: outcome.cancelled,
+        commands: outcome.commands,
+        firings: outcome.firings.into_summary(),
+    }
+}
+
 pub fn transition_program_without_input<const D: usize, Size: GridSize<D>>(
     game: &GridCompiledGame<D>,
     state: &GridState<D, Size>,
     program: &GridExecutableProgram<D>,
 ) -> Result<GridState<D, Size>, GridTransitionError<D>> {
-    transition_program_without_input_outcome_with_local_frame(game, state, program, None)
+    transition_program_inner(game, state, program, None, None, FiringCollection::Discard)
         .map(|outcome| outcome.next_state)
 }
 
@@ -385,8 +592,15 @@ pub fn transition_program_without_input_with_local_frame<const D: usize, Size: G
     program: &GridExecutableProgram<D>,
     local_frame: Option<&LocalFrame<ObjectId>>,
 ) -> Result<GridState<D, Size>, GridTransitionError<D>> {
-    transition_program_without_input_outcome_with_local_frame(game, state, program, local_frame)
-        .map(|outcome| outcome.next_state)
+    transition_program_inner(
+        game,
+        state,
+        program,
+        None,
+        local_frame,
+        FiringCollection::Discard,
+    )
+    .map(|outcome| outcome.next_state)
 }
 
 pub fn transition_program_without_input_outcome<const D: usize, Size: GridSize<D>>(
@@ -405,23 +619,67 @@ pub fn transition_program_sequence_without_input_outcome<const D: usize, Size: G
     let mut outcome = KernelTransitionOutcome {
         input: None,
         next_state: state.clone(),
+        progressed: false,
+        observable: false,
         cancelled: false,
         commands: Vec::new(),
-        fired_rules: Vec::new(),
-        patches: Vec::new(),
+        firings: Vec::new(),
     };
     for program in programs {
         let next = transition_program_without_input_outcome(game, &outcome.next_state, program)?;
         outcome.next_state = next.next_state;
+        outcome.progressed |= next.progressed;
+        outcome.observable |= next.observable;
         outcome.commands.extend(next.commands);
-        outcome.fired_rules.extend(next.fired_rules);
-        outcome.patches.extend(next.patches);
+        outcome.firings.extend(next.firings);
         if next.cancelled {
             outcome.cancelled = true;
             break;
         }
     }
     Ok(outcome)
+}
+
+pub fn transition_program_sequence_without_input_summary_outcome<
+    const D: usize,
+    Size: GridSize<D>,
+>(
+    game: &GridCompiledGame<D>,
+    state: &GridState<D, Size>,
+    programs: &[&GridExecutableProgram<D>],
+) -> Result<GridTransitionSummaryOutcome<D, Size>, GridTransitionError<D>> {
+    let mut outcome = KernelTransitionOutcome {
+        input: None,
+        next_state: state.clone(),
+        progressed: false,
+        observable: false,
+        cancelled: false,
+        commands: Vec::new(),
+        firings: Vec::new(),
+    };
+    for program in programs {
+        let next =
+            transition_program_without_input_summary_outcome(game, &outcome.next_state, program)?;
+        outcome.next_state = next.next_state;
+        outcome.progressed |= next.progressed;
+        outcome.observable |= next.observable;
+        outcome.commands.extend(next.commands);
+        outcome.firings.extend(next.firings);
+        if next.cancelled {
+            outcome.cancelled = true;
+            break;
+        }
+    }
+    Ok(outcome)
+}
+
+pub fn transition_program_without_input_summary_outcome<const D: usize, Size: GridSize<D>>(
+    game: &GridCompiledGame<D>,
+    state: &GridState<D, Size>,
+    program: &GridExecutableProgram<D>,
+) -> Result<GridTransitionSummaryOutcome<D, Size>, GridTransitionError<D>> {
+    transition_program_inner(game, state, program, None, None, FiringCollection::Summary)
+        .map(summary_outcome)
 }
 
 pub fn transition_program_without_input_outcome_with_local_frame<
@@ -433,13 +691,21 @@ pub fn transition_program_without_input_outcome_with_local_frame<
     program: &GridExecutableProgram<D>,
     local_frame: Option<&LocalFrame<ObjectId>>,
 ) -> Result<GridTransitionOutcome<D, Size>, GridTransitionError<D>> {
-    transition_program_outcome_inner(game, state, program, None, local_frame)
+    transition_program_inner(
+        game,
+        state,
+        program,
+        None,
+        local_frame,
+        FiringCollection::Detailed,
+    )
+    .map(detailed_outcome)
 }
 
 struct GridProgramBackend<'a, const D: usize> {
     game: &'a GridCompiledGame<D>,
     input: Option<InputId>,
-    trace: &'a mut GridTransitionTrace<D>,
+    context: &'a mut GridProgramContext<D>,
 }
 
 impl<const D: usize, Size: GridSize<D>>
@@ -447,7 +713,7 @@ impl<const D: usize, Size: GridSize<D>>
     for GridProgramBackend<'_, D>
 {
     type Error = GridTransitionError<D>;
-    type Snapshot = GridTransitionTrace<D>;
+    type Snapshot = GridProgramContext<D>;
 
     fn condition_accepts(
         &mut self,
@@ -464,22 +730,43 @@ impl<const D: usize, Size: GridSize<D>>
         rule: &GridRule<D>,
         frame: Option<&LocalFrame<ObjectId>>,
     ) -> Result<ProgramApplyOutcome, Self::Error> {
-        let fired_before = self.trace.fired_rules.len();
-        let cancelled_before = self.trace.cancelled;
-        *state =
-            transition_rule_by_application(self.game, state, rule, self.input, frame, self.trace)?;
-        Ok(ProgramApplyOutcome {
-            fired: self.trace.fired_rules.len() > fired_before,
-            cancelled: !cancelled_before && self.trace.cancelled,
-        })
+        let outcome = if matches!(
+            rule.application,
+            RuleApplication::Once | RuleApplication::RepeatStep
+        ) {
+            transition_rule_once_in_place(self.game, state, rule, self.input, frame, self.context)?
+        } else if rule.application == RuleApplication::OnceAll {
+            transition_rule_once_all_in_place(
+                self.game,
+                state,
+                rule,
+                self.input,
+                frame,
+                self.context,
+            )?
+        } else {
+            let transition = transition_rule_by_application(
+                self.game,
+                state,
+                rule,
+                self.input,
+                frame,
+                self.context,
+            )?;
+            if let Some(next_state) = transition.next_state {
+                *state = next_state;
+            }
+            transition.outcome
+        };
+        Ok(outcome)
     }
 
     fn checkpoint(&self) -> Self::Snapshot {
-        self.trace.clone()
+        self.context.clone()
     }
 
     fn restore(&mut self, snapshot: &Self::Snapshot) {
-        *self.trace = snapshot.clone();
+        *self.context = snapshot.clone();
     }
 
     fn choose_random(&self, state: &GridState<D, Size>, candidate_count: usize) -> usize {
@@ -501,24 +788,26 @@ fn transition_rule_by_application<const D: usize, Size: GridSize<D>>(
     rule: &GridRule<D>,
     input: Option<InputId>,
     local_frame: Option<&LocalFrame<ObjectId>>,
-    trace: &mut GridTransitionTrace<D>,
-) -> Result<GridState<D, Size>, GridTransitionError<D>> {
-    if !guards_accept(rule, game, state, input, local_frame) {
-        return Ok(state.clone());
-    }
+    context: &mut GridProgramContext<D>,
+) -> Result<GridRuleTransition<GridState<D, Size>>, GridTransitionError<D>> {
     match rule.application {
-        RuleApplication::Once => transition_rule_once(game, state, rule, input, local_frame, trace),
+        RuleApplication::Once => {
+            transition_rule_once(game, state, rule, input, local_frame, context)
+        }
+        RuleApplication::RepeatStep => {
+            transition_rule_once(game, state, rule, input, local_frame, context)
+        }
         RuleApplication::OnceAll => {
-            transition_rule_once_all(game, state, rule, input, local_frame, trace)
+            transition_rule_once_all(game, state, rule, input, local_frame, context)
         }
         RuleApplication::OncePerLevel => {
-            transition_rule_once_per_level(game, state, rule, input, local_frame, trace)
+            transition_rule_once_per_level(game, state, rule, input, local_frame, context)
         }
         RuleApplication::UntilStable => {
-            transition_rule_repeated(game, state, rule, input, local_frame, trace)
+            transition_rule_repeated(game, state, rule, input, local_frame, context)
         }
         RuleApplication::Random => {
-            transition_rule_random(game, state, rule, input, local_frame, trace)
+            transition_rule_random(game, state, rule, input, local_frame, context)
         }
     }
 }
@@ -560,24 +849,72 @@ fn transition_rule_once<const D: usize, Size: GridSize<D>>(
     rule: &GridRule<D>,
     input: Option<InputId>,
     local_frame: Option<&LocalFrame<ObjectId>>,
-    trace: &mut GridTransitionTrace<D>,
-) -> Result<GridState<D, Size>, GridTransitionError<D>> {
-    let mut next = state.clone();
-    if !guards_accept(rule, game, state, input, local_frame) {
-        return Ok(next);
+    context: &mut GridProgramContext<D>,
+) -> Result<GridRuleTransition<GridState<D, Size>>, GridTransitionError<D>> {
+    if rule_required_anchor_is_absent(state, rule)
+        || !guards_accept(rule, game, state, input, local_frame)
+    {
+        return Ok(GridRuleTransition::idle());
     }
     let scope = LocalFrameScope::new(state, local_frame);
-    let Some(placement) = first_writable_match(game, state, rule, &scope)? else {
-        return Ok(next);
+    let placement =
+        if rule.application == RuleApplication::RepeatStep && !rule_has_observable_effect(rule) {
+            first_progressing_match(game, state, rule, &scope)?
+        } else {
+            first_writable_match(game, state, rule, &scope)?
+        };
+    let Some(placement) = placement else {
+        return Ok(GridRuleTransition::idle());
     };
     let patch = build_patch(rule, &placement)?;
     if rule_cancels(rule) {
-        patch.validate(game, &next)?;
-    } else {
-        patch.apply_in_place(game, &mut next)?;
+        patch.validate(game, state)?;
+        let outcome = context.commit(rule, patch, false);
+        return Ok(GridRuleTransition {
+            next_state: None,
+            outcome,
+        });
     }
-    trace.record(rule, patch);
-    Ok(next)
+    let mut next = state.clone();
+    let progressed = patch.apply_in_place(game, &mut next)?;
+    let outcome = context.commit(rule, patch, progressed);
+    Ok(GridRuleTransition {
+        next_state: Some(next),
+        outcome,
+    })
+}
+
+fn transition_rule_once_in_place<const D: usize, Size: GridSize<D>>(
+    game: &GridCompiledGame<D>,
+    state: &mut GridState<D, Size>,
+    rule: &GridRule<D>,
+    input: Option<InputId>,
+    local_frame: Option<&LocalFrame<ObjectId>>,
+    context: &mut GridProgramContext<D>,
+) -> Result<ProgramApplyOutcome, GridTransitionError<D>> {
+    if rule_required_anchor_is_absent(state, rule)
+        || !guards_accept(rule, game, state, input, local_frame)
+    {
+        return Ok(ProgramApplyOutcome::default());
+    }
+    let scope = LocalFrameScope::new(state, local_frame);
+    let placement =
+        if rule.application == RuleApplication::RepeatStep && !rule_has_observable_effect(rule) {
+            first_progressing_match(game, state, rule, &scope)?
+        } else {
+            first_writable_match(game, state, rule, &scope)?
+        };
+    let Some(placement) = placement else {
+        return Ok(ProgramApplyOutcome::default());
+    };
+    let patch = build_patch(rule, &placement)?;
+    let progressed = if rule_cancels(rule) {
+        patch.validate(game, state)?;
+        false
+    } else {
+        patch.apply_in_place(game, state)?
+    };
+    Ok(context.commit(rule, patch, progressed))
 }
 
 fn transition_rule_random<const D: usize, Size: GridSize<D>>(
@@ -586,27 +923,36 @@ fn transition_rule_random<const D: usize, Size: GridSize<D>>(
     rule: &GridRule<D>,
     input: Option<InputId>,
     local_frame: Option<&LocalFrame<ObjectId>>,
-    trace: &mut GridTransitionTrace<D>,
-) -> Result<GridState<D, Size>, GridTransitionError<D>> {
-    let mut next = state.clone();
-    if !guards_accept(rule, game, state, input, local_frame) {
-        return Ok(next);
+    context: &mut GridProgramContext<D>,
+) -> Result<GridRuleTransition<GridState<D, Size>>, GridTransitionError<D>> {
+    if rule_required_anchor_is_absent(state, rule)
+        || !guards_accept(rule, game, state, input, local_frame)
+    {
+        return Ok(GridRuleTransition::idle());
     }
     let scope = LocalFrameScope::new(state, local_frame);
     let placements = writable_matches(game, state, rule, &scope)?;
     if placements.is_empty() {
-        return Ok(next);
+        return Ok(GridRuleTransition::idle());
     }
     let index = grid_random_choice_index(game, state, input, rule.id, placements.len());
     let placement = &placements[index];
     let patch = build_patch(rule, placement)?;
     if rule_cancels(rule) {
-        patch.validate(game, &next)?;
-    } else {
-        patch.apply_in_place(game, &mut next)?;
+        patch.validate(game, state)?;
+        let outcome = context.commit(rule, patch, false);
+        return Ok(GridRuleTransition {
+            next_state: None,
+            outcome,
+        });
     }
-    trace.record(rule, patch);
-    Ok(next)
+    let mut next = state.clone();
+    let progressed = patch.apply_in_place(game, &mut next)?;
+    let outcome = context.commit(rule, patch, progressed);
+    Ok(GridRuleTransition {
+        next_state: Some(next),
+        outcome,
+    })
 }
 
 pub fn transition_once_all<const D: usize, Size: GridSize<D>>(
@@ -616,8 +962,10 @@ pub fn transition_once_all<const D: usize, Size: GridSize<D>>(
 ) -> Result<GridState<D, Size>, GridTransitionError<D>> {
     let mut scoped = state.clone();
     scoped.clear_mark();
-    let mut trace = GridTransitionTrace::<D>::default();
-    let mut next = transition_rule_once_all(game, &scoped, rule, None, None, &mut trace)?;
+    let mut context = GridProgramContext::<D>::default();
+    let mut next = transition_rule_once_all(game, &scoped, rule, None, None, &mut context)?
+        .next_state
+        .unwrap_or(scoped);
     next.clear_mark();
     Ok(next)
 }
@@ -629,8 +977,10 @@ pub fn transition_once_per_level<const D: usize, Size: GridSize<D>>(
 ) -> Result<GridState<D, Size>, GridTransitionError<D>> {
     let mut scoped = state.clone();
     scoped.clear_mark();
-    let mut trace = GridTransitionTrace::<D>::default();
-    let mut next = transition_rule_once_per_level(game, &scoped, rule, None, None, &mut trace)?;
+    let mut context = GridProgramContext::<D>::default();
+    let mut next = transition_rule_once_per_level(game, &scoped, rule, None, None, &mut context)?
+        .next_state
+        .unwrap_or(scoped);
     next.clear_mark();
     Ok(next)
 }
@@ -641,20 +991,23 @@ fn transition_rule_once_all<const D: usize, Size: GridSize<D>>(
     rule: &GridRule<D>,
     input: Option<InputId>,
     local_frame: Option<&LocalFrame<ObjectId>>,
-    trace: &mut GridTransitionTrace<D>,
-) -> Result<GridState<D, Size>, GridTransitionError<D>> {
-    if !guards_accept(rule, game, state, input, local_frame) {
-        return Ok(state.clone());
+    context: &mut GridProgramContext<D>,
+) -> Result<GridRuleTransition<GridState<D, Size>>, GridTransitionError<D>> {
+    if rule_required_anchor_is_absent(state, rule)
+        || !guards_accept(rule, game, state, input, local_frame)
+    {
+        return Ok(GridRuleTransition::idle());
     }
 
     let scope = LocalFrameScope::new(state, local_frame);
     let placements = all_matches(game, state, &rule.pattern, &scope);
     if placements.is_empty() {
-        return Ok(state.clone());
+        return Ok(GridRuleTransition::idle());
     }
 
     let mut current = state.clone();
     let mut current_scope = LocalFrameScope::new(&current, local_frame);
+    let mut outcome = ProgramApplyOutcome::default();
     for placement in placements {
         if !placement_still_valid(game, &current, &rule.pattern, &placement, &current_scope) {
             continue;
@@ -666,19 +1019,65 @@ fn transition_rule_once_all<const D: usize, Size: GridSize<D>>(
         let patch = build_patch(rule, &placement)?;
         if rule_cancels(rule) {
             patch.validate(game, &current)?;
-            trace.record(rule, patch);
-            return Ok(state.clone());
+            outcome.merge(context.commit(rule, patch, false));
+            return Ok(GridRuleTransition {
+                next_state: None,
+                outcome,
+            });
         }
         match patch.apply_in_place(game, &mut current) {
-            Ok(_) => {
-                trace.record(rule, patch);
-                current_scope = LocalFrameScope::new(&current, local_frame);
+            Ok(changed) => {
+                outcome.merge(context.commit(rule, patch, changed));
+                if changed {
+                    current_scope = LocalFrameScope::new(&current, local_frame);
+                }
             }
             Err(error) if once_all_patch_became_stale(&error) => {}
             Err(error) => return Err(error.into()),
         }
     }
-    Ok(current)
+    Ok(GridRuleTransition {
+        next_state: outcome.fired.then_some(current),
+        outcome,
+    })
+}
+
+fn transition_rule_once_all_in_place<const D: usize, Size: GridSize<D>>(
+    game: &GridCompiledGame<D>,
+    state: &mut GridState<D, Size>,
+    rule: &GridRule<D>,
+    input: Option<InputId>,
+    local_frame: Option<&LocalFrame<ObjectId>>,
+    context: &mut GridProgramContext<D>,
+) -> Result<ProgramApplyOutcome, GridTransitionError<D>> {
+    if rule_required_anchor_is_absent(state, rule)
+        || !guards_accept(rule, game, state, input, local_frame)
+    {
+        return Ok(ProgramApplyOutcome::default());
+    }
+    let scope = LocalFrameScope::new(state, local_frame);
+    let placements = all_matches(game, state, &rule.pattern, &scope);
+    let mut current_scope = scope;
+    let mut outcome = ProgramApplyOutcome::default();
+    for placement in placements {
+        if !placement_still_valid(game, state, &rule.pattern, &placement, &current_scope)
+            || !writes_within_local_frame(&placement, &rule.writes, &current_scope)?
+        {
+            continue;
+        }
+        let patch = build_patch(rule, &placement)?;
+        if rule_cancels(rule) {
+            patch.validate(game, state)?;
+            outcome.merge(context.commit(rule, patch, false));
+            return Ok(outcome);
+        }
+        let changed = patch.apply_in_place(game, state)?;
+        outcome.merge(context.commit(rule, patch, changed));
+        if changed {
+            current_scope = LocalFrameScope::new(state, local_frame);
+        }
+    }
+    Ok(outcome)
 }
 
 fn transition_rule_once_per_level<const D: usize, Size: GridSize<D>>(
@@ -687,27 +1086,35 @@ fn transition_rule_once_per_level<const D: usize, Size: GridSize<D>>(
     rule: &GridRule<D>,
     input: Option<InputId>,
     local_frame: Option<&LocalFrame<ObjectId>>,
-    trace: &mut GridTransitionTrace<D>,
-) -> Result<GridState<D, Size>, GridTransitionError<D>> {
-    let mut next = state.clone();
-    if next.level_rule_has_fired(rule.id) || !guards_accept(rule, game, state, input, local_frame) {
-        return Ok(next);
+    context: &mut GridProgramContext<D>,
+) -> Result<GridRuleTransition<GridState<D, Size>>, GridTransitionError<D>> {
+    if state.level_rule_has_fired(rule.id)
+        || rule_required_anchor_is_absent(state, rule)
+        || !guards_accept(rule, game, state, input, local_frame)
+    {
+        return Ok(GridRuleTransition::idle());
     }
     let scope = LocalFrameScope::new(state, local_frame);
     let Some(placement) = first_writable_match(game, state, rule, &scope)? else {
-        return Ok(next);
+        return Ok(GridRuleTransition::idle());
     };
     let patch = build_patch(rule, &placement)?;
     if rule_cancels(rule) {
-        patch.validate(game, &next)?;
-    } else {
-        patch.apply_in_place(game, &mut next)?;
+        patch.validate(game, state)?;
+        let outcome = context.commit(rule, patch, false);
+        return Ok(GridRuleTransition {
+            next_state: None,
+            outcome,
+        });
     }
-    trace.record(rule, patch);
-    if !rule_cancels(rule) {
-        next.mark_level_rule_fired(rule.id);
-    }
-    Ok(next)
+    let mut next = state.clone();
+    patch.apply_in_place(game, &mut next)?;
+    next.mark_level_rule_fired(rule.id);
+    let outcome = context.commit(rule, patch, true);
+    Ok(GridRuleTransition {
+        next_state: Some(next),
+        outcome,
+    })
 }
 
 pub fn transition_repeated<const D: usize, Size: GridSize<D>>(
@@ -717,8 +1124,10 @@ pub fn transition_repeated<const D: usize, Size: GridSize<D>>(
 ) -> Result<GridState<D, Size>, GridTransitionError<D>> {
     let mut scoped = state.clone();
     scoped.clear_mark();
-    let mut trace = GridTransitionTrace::<D>::default();
-    let mut next = transition_rule_repeated(game, &scoped, rule, None, None, &mut trace)?;
+    let mut context = GridProgramContext::<D>::default();
+    let mut next = transition_rule_repeated(game, &scoped, rule, None, None, &mut context)?
+        .next_state
+        .unwrap_or(scoped);
     next.clear_mark();
     Ok(next)
 }
@@ -809,24 +1218,42 @@ fn transition_rule_repeated<const D: usize, Size: GridSize<D>>(
     rule: &GridRule<D>,
     input: Option<InputId>,
     local_frame: Option<&LocalFrame<ObjectId>>,
-    trace: &mut GridTransitionTrace<D>,
-) -> Result<GridState<D, Size>, GridTransitionError<D>> {
+    context: &mut GridProgramContext<D>,
+) -> Result<GridRuleTransition<GridState<D, Size>>, GridTransitionError<D>> {
     let mut current = state.clone();
     let mut seen = vec![current.clone()];
     let mut repeat_count = 0;
+    let mut outcome = ProgramApplyOutcome::default();
     loop {
-        let next = transition_rule_once_all(game, &current, rule, input, local_frame, trace)?;
-        if next == current {
-            return Ok(current);
+        let step = transition_rule_once_all(game, &current, rule, input, local_frame, context)?;
+        let step_outcome = step.outcome;
+        outcome.merge(step_outcome);
+        let Some(next) = step.next_state else {
+            return Ok(GridRuleTransition {
+                next_state: outcome.progressed.then_some(current),
+                outcome,
+            });
+        };
+        if !step_outcome.progressed || next == current {
+            return Ok(GridRuleTransition {
+                next_state: outcome.progressed.then_some(current),
+                outcome,
+            });
         }
         if seen.iter().any(|seen_state| *seen_state == next) {
-            return Ok(next);
+            return Ok(GridRuleTransition {
+                next_state: Some(next),
+                outcome,
+            });
         }
         seen.push(next.clone());
         current = next;
         repeat_count += 1;
         if repeat_count >= UNTIL_STABLE_REPEAT_LIMIT {
-            return Ok(current);
+            return Ok(GridRuleTransition {
+                next_state: Some(current),
+                outcome,
+            });
         }
     }
 }
@@ -1143,6 +1570,28 @@ fn first_writable_match<const D: usize, Size: GridSize<D>>(
     Ok(None)
 }
 
+fn first_progressing_match<const D: usize, Size: GridSize<D>>(
+    game: &GridCompiledGame<D>,
+    state: &GridState<D, Size>,
+    rule: &GridRule<D>,
+    scope: &LocalFrameScope<'_, D>,
+) -> Result<Option<GridMatchPlacement<D>>, GridTransitionError<D>> {
+    let mut first_match = None;
+    for placement in all_matches(game, state, &rule.pattern, scope) {
+        if !writes_within_local_frame(&placement, &rule.writes, scope)? {
+            continue;
+        }
+        if first_match.is_none() {
+            first_match = Some(placement.clone());
+        }
+        let patch = build_patch(rule, &placement)?;
+        if patch.validate(game, state)? {
+            return Ok(Some(placement));
+        }
+    }
+    Ok(first_match)
+}
+
 fn writable_matches<const D: usize, Size: GridSize<D>>(
     game: &GridCompiledGame<D>,
     state: &GridState<D, Size>,
@@ -1151,15 +1600,29 @@ fn writable_matches<const D: usize, Size: GridSize<D>>(
 ) -> Result<Vec<GridMatchPlacement<D>>, GridTransitionError<D>> {
     let mut placements = Vec::new();
     for placement in all_matches(game, state, &rule.pattern, scope) {
-        if writes_within_local_frame(&placement, &rule.writes, scope)? {
-            placements.push(placement);
+        if !writes_within_local_frame(&placement, &rule.writes, scope)? {
+            continue;
         }
+        placements.push(placement);
     }
     Ok(placements)
 }
 
 type GridMatchPlacement<const D: usize> = MatchPlacement<D, ObjectId>;
 type GridComponentPlacement<const D: usize> = ComponentPlacement<D, ObjectId>;
+
+#[derive(Clone, Copy)]
+enum ComponentAnchor<'a, const D: usize> {
+    Object(&'a crate::GridOffset<D>, ObjectId),
+    ObjectSet(&'a crate::GridOffset<D>, &'a [ObjectId]),
+    Mark(&'a crate::GridOffset<D>, ObjectId, MarkId, Option<i64>),
+    ObjectSetMark(
+        &'a crate::GridOffset<D>,
+        &'a [ObjectId],
+        MarkId,
+        Option<i64>,
+    ),
+}
 
 fn first_match<const D: usize, Size: GridSize<D>>(
     game: &GridCompiledGame<D>,
@@ -1170,14 +1633,89 @@ fn first_match<const D: usize, Size: GridSize<D>>(
     if pattern.components.is_empty() {
         return Some(GridMatchPlacement::<D>::empty());
     }
-    if let Some(candidates) = scope.origin_candidates(state) {
-        return candidates.into_iter().find_map(|origin| {
-            pattern_placement_from_first_origin(game, state, pattern, origin, scope)
-        });
+    if let Some(placement) = first_anchored_match(game, state, pattern, scope) {
+        return placement;
     }
-    all_coords(state)
+    component_origin_candidates(state, &pattern.components[0], scope)
         .into_iter()
         .find_map(|origin| pattern_placement_from_first_origin(game, state, pattern, origin, scope))
+}
+
+fn first_anchored_match<const D: usize, Size: GridSize<D>>(
+    game: &GridCompiledGame<D>,
+    state: &GridState<D, Size>,
+    pattern: &GridPattern<D>,
+    scope: &LocalFrameScope<'_, D>,
+) -> Option<Option<GridMatchPlacement<D>>> {
+    let anchor = component_anchor(&pattern.components[0])?;
+    let inverse = inverse_resolved_offset(match &anchor {
+        ComponentAnchor::Object(offset, _)
+        | ComponentAnchor::ObjectSet(offset, _)
+        | ComponentAnchor::Mark(offset, ..)
+        | ComponentAnchor::ObjectSetMark(offset, ..) => offset,
+    })?;
+    match anchor {
+        ComponentAnchor::Object(_, object) | ComponentAnchor::Mark(_, object, ..) => {
+            let positions = match anchor {
+                ComponentAnchor::Object(..) => state.object_positions(object),
+                ComponentAnchor::Mark(_, _, mark, value) => {
+                    state.mark_positions(object, mark, value)
+                }
+                _ => unreachable!(),
+            };
+            for index in positions {
+                let Some(position) = cached_position_coord(state, object, *index) else {
+                    continue;
+                };
+                let Some(origin) = position.checked_offset(inverse) else {
+                    continue;
+                };
+                if !scope.contains_coord(origin) {
+                    continue;
+                }
+                if let Some(placement) =
+                    pattern_placement_from_first_origin(game, state, pattern, origin, scope)
+                {
+                    return Some(Some(placement));
+                }
+            }
+        }
+        ComponentAnchor::ObjectSetMark(_, objects, mark, value) => {
+            for slot in state.slot_mark_positions(mark, value) {
+                if !state
+                    .slots()
+                    .get(*slot)
+                    .is_some_and(|object| objects.contains(object))
+                {
+                    continue;
+                }
+                let Some(position) = state.slot_coord(*slot) else {
+                    continue;
+                };
+                let Some(origin) = position.checked_offset(inverse) else {
+                    continue;
+                };
+                if !scope.contains_coord(origin) {
+                    continue;
+                }
+                if let Some(placement) =
+                    pattern_placement_from_first_origin(game, state, pattern, origin, scope)
+                {
+                    return Some(Some(placement));
+                }
+            }
+        }
+        ComponentAnchor::ObjectSet(_, _) => {
+            for origin in anchored_component_origins(state, &pattern.components[0], scope)? {
+                if let Some(placement) =
+                    pattern_placement_from_first_origin(game, state, pattern, origin, scope)
+                {
+                    return Some(Some(placement));
+                }
+            }
+        }
+    }
+    Some(None)
 }
 
 fn all_matches<const D: usize, Size: GridSize<D>>(
@@ -1189,20 +1727,13 @@ fn all_matches<const D: usize, Size: GridSize<D>>(
     if pattern.components.is_empty() {
         return vec![GridMatchPlacement::<D>::empty()];
     }
-    let mut placements = Vec::new();
-    if let Some(candidates) = scope.origin_candidates(state) {
-        placements.extend(candidates.into_iter().flat_map(|origin| {
-            component_placement_at(game, state, &pattern.components[0], origin, scope)
-                .into_iter()
-                .flat_map(|first| {
-                    let mut components = vec![first];
-                    collect_component_placements(game, state, pattern, 1, &mut components, scope)
-                })
-                .collect::<Vec<_>>()
-        }));
-        return placements;
+    if component_anchor(&pattern.components[0])
+        .is_some_and(|anchor| !component_anchor_has_candidates(state, anchor))
+    {
+        return Vec::new();
     }
-    for origin in all_coords(state) {
+    let mut placements = Vec::new();
+    for origin in component_origin_candidates(state, &pattern.components[0], scope) {
         if let Some(first) =
             component_placement_at(game, state, &pattern.components[0], origin, scope)
         {
@@ -1242,7 +1773,7 @@ fn complete_component_placements<const D: usize, Size: GridSize<D>>(
     scope: &LocalFrameScope<'_, D>,
 ) -> bool {
     let mut candidate_origins =
-        |_component: &GridPatternComponent<D>| component_origin_candidates(state, scope);
+        |component: &GridPatternComponent<D>| component_origin_candidates(state, component, scope);
     let mut place_at = |component: &GridPatternComponent<D>, origin| {
         component_placement_at(game, state, component, origin, scope)
     };
@@ -1265,7 +1796,7 @@ fn collect_component_placements<const D: usize, Size: GridSize<D>>(
 ) -> Vec<GridMatchPlacement<D>> {
     let mut matches = Vec::new();
     let mut candidate_origins =
-        |_component: &GridPatternComponent<D>| component_origin_candidates(state, scope);
+        |component: &GridPatternComponent<D>| component_origin_candidates(state, component, scope);
     let mut place_at = |component: &GridPatternComponent<D>, origin| {
         component_placement_at(game, state, component, origin, scope)
     };
@@ -1287,12 +1818,206 @@ fn collect_component_placements<const D: usize, Size: GridSize<D>>(
 
 fn component_origin_candidates<const D: usize, Size: GridSize<D>>(
     state: &GridState<D, Size>,
+    component: &GridPatternComponent<D>,
     scope: &LocalFrameScope<'_, D>,
 ) -> Vec<GridCoord<D>> {
+    if let Some(candidates) = anchored_component_origins(state, component, scope) {
+        return candidates;
+    }
     if let Some(candidates) = scope.origin_candidates(state) {
         return candidates;
     }
     all_coords(state)
+}
+
+fn anchored_component_origins<const D: usize, Size: GridSize<D>>(
+    state: &GridState<D, Size>,
+    component: &GridPatternComponent<D>,
+    scope: &LocalFrameScope<'_, D>,
+) -> Option<Vec<GridCoord<D>>> {
+    let anchor = component_anchor(component)?;
+    let (offset, objects, mark, all_slot_marks, merge_required): (
+        &crate::GridOffset<D>,
+        &[ObjectId],
+        Option<(MarkId, Option<i64>)>,
+        bool,
+        bool,
+    ) = match &anchor {
+        ComponentAnchor::Object(offset, object) => {
+            (offset, std::slice::from_ref(object), None, false, false)
+        }
+        ComponentAnchor::ObjectSet(offset, objects) => (offset, objects, None, false, true),
+        ComponentAnchor::Mark(offset, object, mark, value) => (
+            offset,
+            std::slice::from_ref(object),
+            Some((*mark, *value)),
+            false,
+            false,
+        ),
+        ComponentAnchor::ObjectSetMark(offset, objects, mark, value) => {
+            (offset, objects, Some((*mark, *value)), true, false)
+        }
+    };
+    let inverse = inverse_resolved_offset(offset)?;
+    let mut candidates = Vec::new();
+    if all_slot_marks {
+        let (mark, value) = mark.expect("object-set mark anchor carries a mark");
+        for slot in state.slot_mark_positions(mark, value) {
+            if !state
+                .slots()
+                .get(*slot)
+                .is_some_and(|object| objects.contains(object))
+            {
+                continue;
+            }
+            let Some(position) = state.slot_coord(*slot) else {
+                continue;
+            };
+            let Some(origin) = position.checked_offset(inverse) else {
+                continue;
+            };
+            if scope.contains_coord(origin) {
+                candidates.push(origin);
+            }
+        }
+        return Some(candidates);
+    }
+    for object in objects {
+        let positions = mark.map_or_else(
+            || state.object_positions(*object),
+            |(mark, value)| state.mark_positions(*object, mark, value),
+        );
+        for index in positions {
+            let Some(position) = cached_position_coord(state, *object, *index) else {
+                continue;
+            };
+            let Some(origin) = position.checked_offset(inverse) else {
+                continue;
+            };
+            if scope.contains_coord(origin) {
+                candidates.push(origin);
+            }
+        }
+    }
+    if merge_required {
+        candidates.sort_unstable_by_key(|coord| state.shape().cell_index_unchecked(*coord));
+        candidates.dedup();
+    }
+    Some(candidates)
+}
+
+fn component_anchor<const D: usize>(
+    component: &GridPatternComponent<D>,
+) -> Option<ComponentAnchor<'_, D>> {
+    for cell in &component.cells {
+        if resolve_offset(&cell.offset, &[]).is_none() {
+            continue;
+        }
+        if let Some(mark) = cell
+            .require_mark
+            .iter()
+            .find(|mark| mark.match_value == MarkValueMatch::Exact)
+        {
+            return Some(ComponentAnchor::Mark(
+                &cell.offset,
+                mark.object,
+                mark.mark,
+                mark.value,
+            ));
+        }
+        for mark in cell
+            .require_object_set_mark
+            .iter()
+            .filter(|mark| mark.match_value == MarkValueMatch::Exact)
+        {
+            if let Some(objects) = component
+                .cells
+                .iter()
+                .flat_map(|cell| &cell.require_object_sets)
+                .find(|matcher| matcher.binding == mark.binding)
+                .map(|matcher| matcher.objects.as_slice())
+            {
+                return Some(ComponentAnchor::ObjectSetMark(
+                    &cell.offset,
+                    objects,
+                    mark.mark,
+                    mark.value,
+                ));
+            }
+        }
+    }
+    for cell in &component.cells {
+        if resolve_offset(&cell.offset, &[]).is_none() {
+            continue;
+        }
+        if let Some(object) = cell.require_objects.first() {
+            return Some(ComponentAnchor::Object(&cell.offset, *object));
+        }
+        if let Some(object_set) = cell.require_object_sets.first() {
+            return Some(ComponentAnchor::ObjectSet(
+                &cell.offset,
+                &object_set.objects,
+            ));
+        }
+    }
+    None
+}
+
+fn component_anchor_has_candidates<const D: usize, Size: GridSize<D>>(
+    state: &GridState<D, Size>,
+    anchor: ComponentAnchor<'_, D>,
+) -> bool {
+    match anchor {
+        ComponentAnchor::Object(_, object) => !state.object_positions(object).is_empty(),
+        ComponentAnchor::ObjectSet(_, objects) => objects
+            .iter()
+            .any(|object| !state.object_positions(*object).is_empty()),
+        ComponentAnchor::Mark(_, object, mark, value) => {
+            !state.mark_positions(object, mark, value).is_empty()
+        }
+        ComponentAnchor::ObjectSetMark(_, objects, mark, value) => {
+            state.slot_mark_positions(mark, value).iter().any(|slot| {
+                state
+                    .slots()
+                    .get(*slot)
+                    .is_some_and(|object| objects.contains(object))
+            })
+        }
+    }
+}
+
+fn rule_required_anchor_is_absent<const D: usize, Size: GridSize<D>>(
+    state: &GridState<D, Size>,
+    rule: &GridRule<D>,
+) -> bool {
+    let Some(component) = rule.pattern.components.first() else {
+        return false;
+    };
+    component_anchor(component)
+        .is_some_and(|anchor| !component_anchor_has_candidates(state, anchor))
+}
+
+fn cached_position_coord<const D: usize, Size: GridSize<D>>(
+    state: &GridState<D, Size>,
+    object: ObjectId,
+    index: usize,
+) -> Option<GridCoord<D>> {
+    if object.is_empty() {
+        state.cell_coord(index)
+    } else {
+        state.slot_coord(index)
+    }
+}
+
+fn inverse_resolved_offset<const D: usize>(
+    offset: &crate::GridOffset<D>,
+) -> Option<CoordOffset<D>> {
+    let resolved = resolve_offset(offset, &[])?;
+    let mut inverse = [0_i16; D];
+    for (target, delta) in inverse.iter_mut().zip(resolved.deltas()) {
+        *target = delta.checked_neg()?;
+    }
+    Some(CoordOffset::new(inverse))
 }
 
 fn component_placement_at<const D: usize, Size: GridSize<D>>(
@@ -1694,6 +2419,7 @@ fn build_patch<const D: usize>(
     }
     for effect in &rule.effects {
         match effect {
+            RuleEffect::ObserveMatch => {}
             RuleEffect::UpdateVariable {
                 variable,
                 op,
@@ -1721,6 +2447,12 @@ fn rule_cancels<const D: usize>(rule: &GridRule<D>) -> bool {
     rule.effects
         .iter()
         .any(|effect| matches!(effect, RuleEffect::Cancel))
+}
+
+fn rule_has_observable_effect<const D: usize>(rule: &GridRule<D>) -> bool {
+    rule.effects
+        .iter()
+        .any(|effect| !matches!(effect, RuleEffect::UpdateVariable { .. }))
 }
 
 fn write_position<const D: usize>(

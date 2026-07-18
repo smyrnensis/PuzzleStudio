@@ -333,7 +333,8 @@ fn parse_visuals_block_inner(
 ) -> Result<usize, DiagnosticReport> {
     let resource = puzzle_authoring::collect_resource_block_surface(lines, start, "sprites")
         .map_err(|error| parse_error(&lines[start], error.message()))?;
-    if let Some(product) = sprite_resource_product(lines, start, resource.next_index, catalog.dimension)
+    if let Some(product) =
+        sprite_resource_product(lines, start, resource.next_index, catalog.dimension)
     {
         recognition.sprite_resources.push(product);
     }
@@ -341,11 +342,8 @@ fn parse_visuals_block_inner(
     let mut plain_shapes = HashMap::<String, VisualShapeFrames>::new();
     let mut color_aliases = HashMap::<String, String>::new();
     let mut colors = HashMap::<String, VisualColorTable>::new();
-    let declared_color_names = predeclare_visual_color_names(
-        lines,
-        resource.body_start,
-        resource.body_end,
-    );
+    let declared_color_names =
+        predeclare_visual_color_names(lines, resource.body_start, resource.body_end);
     let mut sprite_entries =
         Vec::<crate::sprite_authoring::SpriteAttachmentSyntax<source::LogicalLine>>::new();
     let mut order = None;
@@ -447,7 +445,9 @@ fn parse_visuals_block_inner(
                 if colors.contains_key(&name) {
                     return Err(parse_error(line, "duplicate visual colors"));
                 }
-                let (table, next_i) = parse_visual_color_table(lines, i, &axis, catalog)?;
+                mark_visual_color_table_ref(recognition, line, table_ref);
+                let (table, next_i) =
+                    parse_visual_color_table(lines, i, &axis, catalog, recognition)?;
                 colors.insert(name, table);
                 i = next_i;
             }
@@ -547,7 +547,9 @@ fn parse_visuals_block_inner(
                 &attachment,
                 &plain_shapes,
                 &shapes,
-                catalog.dimension,
+                &color_aliases,
+                &colors,
+                catalog,
                 recognition,
             );
             (attachment, analyzed)
@@ -588,6 +590,10 @@ fn parse_visual_palette_block(
         match tokens.as_slice() {
             [] => i += 1,
             [name, "=", color] => {
+                let color_token = *color;
+                let color = crate::syntax::canonical_visual_color_literal(color_token).ok_or_else(
+                    || parse_error(line, "palette color must be a named color or hex color"),
+                )?;
                 mark_line_token(
                     recognition,
                     line,
@@ -597,10 +603,10 @@ fn parse_visual_palette_block(
                 mark_line_token(
                     recognition,
                     line,
-                    Some(color),
+                    Some(color_token),
                     crate::surface::SurfaceSemanticKind::Color,
                 );
-                color_aliases.insert((*name).to_string(), (*color).to_string());
+                color_aliases.insert((*name).to_string(), color);
                 i += 1;
             }
             [table_ref] => {
@@ -608,7 +614,9 @@ fn parse_visual_palette_block(
                 if colors.contains_key(&name) {
                     return Err(parse_error(line, "duplicate visual colors"));
                 }
-                let (table, next_i) = parse_visual_color_table(lines, i, &axis, catalog)?;
+                mark_visual_color_table_ref(recognition, line, table_ref);
+                let (table, next_i) =
+                    parse_visual_color_table(lines, i, &axis, catalog, recognition)?;
                 colors.insert(name, table);
                 i = next_i;
             }
@@ -738,6 +746,33 @@ fn mark_visual_shape_ref(
     }
 }
 
+fn mark_visual_color_table_ref(
+    recognition: &mut crate::surface::ParserRecognition,
+    line: &source::LogicalLine,
+    value: &str,
+) {
+    for token in &line.tokens {
+        if token.text != value {
+            continue;
+        }
+        let mut offset = 0usize;
+        for (index, part) in value.split(':').enumerate() {
+            recognition.mark(
+                crate::surface::SourceSpan {
+                    start: token.start + offset,
+                    end: token.start + offset + part.len(),
+                },
+                if index == 0 {
+                    crate::surface::SurfaceSemanticKind::Color
+                } else {
+                    crate::surface::SurfaceSemanticKind::Group
+                },
+            );
+            offset += part.len() + 1;
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn lower_sprite_attachment_entry(
     attachment: crate::sprite_authoring::SpriteAttachmentSyntax<source::LogicalLine>,
@@ -772,13 +807,28 @@ fn analyze_sprite_attachment_entry(
     attachment: &crate::sprite_authoring::SpriteAttachmentSyntax<source::LogicalLine>,
     plain_shapes: &HashMap<String, VisualShapeFrames>,
     shapes: &HashMap<String, VisualShapeTable>,
-    dimension: crate::ModelDimension,
+    color_aliases: &HashMap<String, String>,
+    color_tables: &HashMap<String, VisualColorTable>,
+    catalog: &Catalog,
     recognition: &mut crate::surface::ParserRecognition,
 ) -> AnalyzedSpriteAttachment {
+    let empty_bindings = HashMap::new();
     let analyzed = crate::sprite_authoring::analyze_sprite_body_product(
         Some(&attachment.header),
         &attachment.body_lines,
         |name| plain_shapes.contains_key(name) || shapes.contains_key(name),
+        |expr| {
+            resolve_visual_color_expr(
+                expr,
+                &empty_bindings,
+                color_aliases,
+                color_tables,
+                &catalog.maps,
+                &attachment.header,
+            )
+            .ok()
+            .and_then(crate::SourceHighlightColor::parse)
+        },
     );
     recognition.merge(analyzed.recognition);
     let shape_ref = match &analyzed.value.shape {
@@ -808,7 +858,7 @@ fn analyze_sprite_attachment_entry(
                         .map(str::to_string)
                 })
                 .unwrap_or_default(),
-            dimension,
+            dimension: catalog.dimension,
             body: analyzed.value.clone(),
             shape_asset_name,
         });
@@ -839,11 +889,9 @@ fn predeclare_visual_color_names(
         let tokens = split_header_tokens(&lines[index]);
         match tokens.as_slice() {
             ["palette"] if is_block_header_line(&lines[index]) => {
-                let Ok(block) = puzzle_authoring::collect_container_block_surface(
-                    lines,
-                    index + 1,
-                    "palette",
-                ) else {
+                let Ok(block) =
+                    puzzle_authoring::collect_container_block_surface(lines, index + 1, "palette")
+                else {
                     break;
                 };
                 let mut row = block.body_start;
@@ -1983,6 +2031,7 @@ fn parse_visual_color_table(
     start: usize,
     axis: &str,
     catalog: &Catalog,
+    recognition: &mut crate::surface::ParserRecognition,
 ) -> Result<(VisualColorTable, usize), DiagnosticReport> {
     let values = catalog_value_set(catalog, axis).ok_or_else(|| {
         parse_error(
@@ -2006,10 +2055,25 @@ fn parse_visual_color_table(
                 "visual color value is not in tag set",
             ));
         }
-        if entries
-            .insert((*value).to_string(), (*color).to_string())
-            .is_some()
-        {
+        mark_line_token(
+            recognition,
+            &lines[i],
+            Some(value),
+            crate::surface::SurfaceSemanticKind::Variant,
+        );
+        mark_line_token(
+            recognition,
+            &lines[i],
+            Some(color),
+            crate::surface::SurfaceSemanticKind::Color,
+        );
+        let color = crate::syntax::canonical_visual_color_literal(color).ok_or_else(|| {
+            parse_error(
+                &lines[i],
+                "visual color table value must be a named color or hex color",
+            )
+        })?;
+        if entries.insert((*value).to_string(), color).is_some() {
             return Err(parse_error(&lines[i], "duplicate visual color value"));
         }
         i += 1;
@@ -2559,7 +2623,12 @@ fn resolve_visual_color_expr_with_aliases(
             .cloned()
             .ok_or_else(|| parse_error(line, "visual color value missing"));
     }
-    Ok(expr.to_string())
+    crate::syntax::canonical_visual_color_literal(expr).ok_or_else(|| {
+        parse_error(
+            line,
+            "visual color must resolve to a named color or hex color",
+        )
+    })
 }
 
 #[derive(Clone, Debug)]

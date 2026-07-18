@@ -10,16 +10,28 @@ The system exposes different state views for different consumers:
 
 - play and editor can work with all authored objects.
 - renderer consumes a render view produced by the runtime contract.
-- solver consumes a solver key derived by relevance analysis.
+- solver consumes a solver key derived from the complete logical session by
+  relevance analysis.
 
 The key distinction is whether an object can affect future gameplay observations
 that a given consumer is responsible for preserving.
 
 ## State Views
 
+`logic_session`
+
+- The authoritative stable state between semantic inputs.
+- It owns the active model state together with checkpoints, scene and session
+  values, routed worlds, selected and cleared levels, persistent variables,
+  lifecycle progress, and other context that can change a future input result.
+- A solver edge starts and ends at this boundary. Automatic `again` turns,
+  win/lose checks, and lifecycle or navigation effects complete inside the
+  edge. Presentation timing never advances it.
+
 `logic_state`
 
-- The ordinary runtime state after applying authored rules.
+- The model-local board state inside `logic_session` after applying authored
+  rules.
 - It may contain objects that are useful only for drawing, inspection, or editor
   workflows.
 - It is the editable state surface for the editor unless a narrower editing mode
@@ -36,7 +48,9 @@ that a given consumer is responsible for preserving.
 
 - The canonical state used for solver duplicate detection, transition cache
   keys, and search frontier membership.
-- It is derived from `logic_state` by solver relevance analysis.
+- It is derived from `logic_session` by solver relevance analysis. Equal board
+  slots are not sufficient when checkpoint, scene/session, level, persistent,
+  routing, or lifecycle context can change future behavior.
 - It may omit objects whose presence cannot affect future solver-visible
   gameplay results.
 
@@ -60,6 +74,9 @@ becomes relevant only when that read can affect a relevant output.
 Roots include:
 
 - win and lose conditions, and `solver { deadend <query> }` predicates;
+- checkpoint and restart anchors, active/selected/cleared level state,
+  lifecycle and navigation state, persistent variables, routed worlds, and
+  scene/session values that can affect a later input;
 - query values used by gameplay conditions, goals, or solver-visible reports;
 - input availability and input-dependent transition differences;
 - movement, collision, and layer occupancy that can change relevant objects;
@@ -134,7 +151,8 @@ state view classification remains Rust-owned compiled analysis.
 ## Migration Shape
 
 1. Introduce solver relevance reports without changing editor editing behavior.
-2. Use `solver_key_state` for solver cache/frontier keys.
+2. Use the complete logical session as the conservative solver cache/frontier
+   key, then apply only proven relevance reductions.
 3. Remove naming-based classification only after tests prove relevance reports
    cover the existing cases.
 4. Update user-facing docs only after implementation behavior matches the new

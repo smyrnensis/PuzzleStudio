@@ -1,11 +1,11 @@
-// 3D level editor source roundtrip and runtime bridge. Rendering stays in puzzle3_app.js.
+// 3D level editor source roundtrip and runtime bridge. Rendering stays in puzzle3_component.js.
 let level3dRuntimeFrameKey = "";
 let level3dRuntimeFrameLoaded = false;
 let level3dLayerFrameKey = "";
 let level3dLayerFrameLoaded = false;
-let level3dSolverFrame = null;
-let level3dSolverFrameKey = "";
-let level3dSolverFrameLoaded = false;
+let solverPreviewFrame = null;
+let solverPreviewFrameKey = "";
+let solverPreviewFrameLoaded = false;
 let level3dLayerHover = null;
 let level3dLayerRendererView = null;
 let level3dStageOverlay = null;
@@ -4378,7 +4378,7 @@ function showPuzzle3dSolutionPreview(solution) {
     snapshot,
   };
   updateSolutionControls();
-  renderPuzzle3dSolverPreview();
+  renderSolverRuntimePreview();
   setLevelSolveStatus(solution.depth ? `Solved in ${solution.depth} moves` : "Already solved", "is-ok");
 }
 
@@ -4390,73 +4390,73 @@ function setPuzzle3dSolutionStep(index) {
   levelSolutionPreview.index = nextIndex;
   levelSolutionPreview.snapshot = puzzle3dSolutionStepSnapshot(levelSolutionPreview.steps[nextIndex]);
   updateSolutionControls();
-  renderPuzzle3dSolverPreview();
+  renderSolverRuntimePreview();
 }
 
-function renderPuzzle3dSolverPreview() {
+function renderSolverRuntimePreview() {
   if (!solverBoardViewport || !latestHtml) {
-    clearPuzzle3dSolverPreview();
+    clearSolverRuntimePreview();
     return false;
   }
-  const snapshot = puzzle3dSolverPreviewSnapshot();
+  const snapshot = puzzle3dSnapshotForSolverPreview();
   const update = level3dPreviewUpdateFromSnapshot(snapshot);
   if (!update) {
-    clearPuzzle3dSolverPreview();
+    clearSolverRuntimePreview();
     return false;
   }
-  if (!level3dSolverFrame) {
-    level3dSolverFrame = document.createElement("iframe");
-    level3dSolverFrame.className = "solver3d-frame";
-    level3dSolverFrame.title = "3D solution preview";
-    level3dSolverFrame.sandbox = "allow-scripts";
-    level3dSolverFrame.scrolling = "no";
-    solverBoardViewport.append(level3dSolverFrame);
+  if (!solverPreviewFrame) {
+    solverPreviewFrame = document.createElement("iframe");
+    solverPreviewFrame.className = "solver-preview-frame";
+    solverPreviewFrame.title = "3D solution preview";
+    solverPreviewFrame.sandbox = "allow-scripts";
+    solverPreviewFrame.scrolling = "no";
+    solverBoardViewport.append(solverPreviewFrame);
   }
   solverBoardViewport.classList.add("is-puzzle3d");
   if (solverBoard) {
     solverBoard.hidden = true;
   }
-  const key = `${activePreviewDocument()?.id || ""}:${latestHtml.length}:solver3d`;
-  if (level3dSolverFrameKey !== key) {
-    level3dSolverFrameLoaded = false;
-    level3dSolverFrameKey = key;
-    level3dSolverFrame.addEventListener("load", () => {
-      level3dSolverFrameLoaded = true;
-      sendPuzzle3dSolutionToSolverRuntime();
+  const key = `${activePreviewDocument()?.id || ""}:${latestHtml.length}:solver-preview`;
+  if (solverPreviewFrameKey !== key) {
+    solverPreviewFrameLoaded = false;
+    solverPreviewFrameKey = key;
+    solverPreviewFrame.addEventListener("load", () => {
+      solverPreviewFrameLoaded = true;
+      sendSolverPreviewToRuntime();
     }, { once: true });
-    level3dSolverFrame.srcdoc = level3dRuntimePreviewDocument(update);
+    solverPreviewFrame.srcdoc = level3dRuntimePreviewDocument(update);
     return true;
   }
-  sendPuzzle3dSolutionToSolverRuntime();
+  sendSolverPreviewToRuntime();
   return true;
 }
 
-function clearPuzzle3dSolverPreview() {
-  if (level3dSolverFrame) {
-    level3dSolverFrame.remove();
+function clearSolverRuntimePreview() {
+  if (solverPreviewFrame) {
+    solverPreviewFrame.remove();
   }
-  level3dSolverFrame = null;
-  level3dSolverFrameKey = "";
-  level3dSolverFrameLoaded = false;
+  solverPreviewFrame = null;
+  solverPreviewFrameKey = "";
+  solverPreviewFrameLoaded = false;
   solverBoardViewport?.classList.remove("is-puzzle3d");
   if (solverBoard) {
     solverBoard.hidden = false;
   }
 }
 
-function sendPuzzle3dSolutionToSolverRuntime() {
-  if (!level3dSolverFrameLoaded || !level3dSolverFrame?.contentWindow) {
+function sendSolverPreviewToRuntime() {
+  if (!solverPreviewFrameLoaded || !solverPreviewFrame?.contentWindow) {
     return;
   }
-  const snapshot = puzzle3dSolverPreviewSnapshot();
+  const snapshot = puzzle3dSnapshotForSolverPreview();
   const update = level3dPreviewUpdateFromSnapshot(snapshot);
   if (!update) {
     return;
   }
-  level3dSolverFrame.contentWindow.postMessage(level3dPreviewSurfaceMessage(update), "*");
+  solverPreviewFrame.contentWindow.postMessage(level3dPreviewSurfaceMessage(update), "*");
 }
 
-function puzzle3dSolverPreviewSnapshot() {
+function puzzle3dSnapshotForSolverPreview() {
   if (levelSolutionPreview?.kind === "puzzle3d") {
     return levelSolutionPreview.snapshot
       || puzzle3dSolutionStepSnapshot(levelSolutionPreview.steps?.[levelSolutionPreview.index || 0]);
@@ -4464,8 +4464,8 @@ function puzzle3dSolverPreviewSnapshot() {
   if (solverObservationPreview?.kind === "puzzle3d") {
     return solverObservationPreview.snapshot || null;
   }
-  if (typeof solverPuzzle3dPreviewSnapshot === "function") {
-    return solverPuzzle3dPreviewSnapshot();
+  if (typeof puzzle3dSnapshotForActiveSolverTask === "function") {
+    return puzzle3dSnapshotForActiveSolverTask();
   }
   return level3dRuntimeSnapshot();
 }

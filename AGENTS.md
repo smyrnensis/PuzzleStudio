@@ -73,10 +73,10 @@ default behavior, or compatibility path.
 
 If an existing fallback path is encountered during any work, report it
 explicitly. When it is in the area being changed, treat it as technical debt to
-remove or report rather than a pattern to extend. Compatibility paths are
-allowed only when the user explicitly requests a temporary migration bridge and
-the code names the migration boundary, the failure mode it preserves, and the
-condition for deleting it.
+remove rather than a pattern to extend. Migration support is valid only when
+coexistence or conversion is itself part of the final supported product
+contract. A request to preserve the current implementation temporarily does not
+justify a compatibility path.
 
 Fallback pressure is a signal to stop and identify the missing required path,
 not a reason to make the system keep running by another route. Before coding
@@ -85,6 +85,36 @@ adapter capability, name which required contract is absent or broken. If that
 contract cannot be repaired in scope, report the blocker instead of adding a
 graceful degradation, guessed default, legacy route, or silent compatibility
 branch.
+
+## Implement The Final Structure
+
+Technical debt is not an implementation strategy. A locally cheaper detour
+usually defers the same design decision until more callers, states, and data
+depend on the wrong boundary, multiplying the eventual repair cost. Optimize
+for the final ownership model and dependency structure, not for the smallest
+immediate diff or preservation of the current shape.
+
+Before implementing, identify the owner, contract, data flow, and lifecycle that
+the completed system requires, then change those owners directly. Do not add a
+temporary wrapper, parallel path, duplicated contract, transitional adapter,
+old/new branch, or cleanup TODO whose only purpose is to avoid making the
+structural change now. Existing behavior and compatibility have authority only
+when they are explicit requirements of the final product, not merely because
+they already exist or make the current patch easier.
+
+Incremental work is acceptable only when every landed increment belongs to the
+final structure and needs no later removal, bypass, or ownership transfer. When
+the final structure cannot be completed within scope, expose the missing
+prerequisite and stop at that boundary instead of landing a detour. If the area
+being changed already contains a structural workaround, remove it as part of
+the change; do not build the new behavior on top of it or report the task as
+complete while required cleanup remains.
+
+Report every existing structural debt encountered during the work, whether or
+not it can be removed within the current scope. The report must identify its
+location, the detour or misplaced responsibility, the final owner or contract
+it should use, and any prerequisite that prevents removal. Discovery creates a
+reporting obligation; do not silently leave a known workaround undocumented.
 
 ## Context Budget And Repository Shape
 
@@ -141,10 +171,12 @@ lines or behavior contract you intend to change, and reconstruct your smallest
 patch against the latest content while preserving all unrelated work.
 
 Do not revert, overwrite, normalize, or otherwise repair concurrent changes merely
-to restore the state you first inspected. Do not alter another session's work to
-make a test pass, reduce the diff, satisfy formatting, or recover an expected
-generated output. Run verification against the combined current state and report
-failures that belong to concurrent work without trying to absorb or conceal them.
+to restore the state you first inspected. Do not alter authored inputs or generator
+implementation owned by another session to make a test pass, reduce the diff,
+satisfy formatting, or force a particular generated result. Run verification
+against the combined current authored state, and regenerate derived outputs from
+that state when required. Report failures that belong to concurrent work without
+trying to absorb or conceal them.
 Ask the user only when the concurrent change overlaps the same lines or semantic
 contract, makes ownership impossible to determine, or prevents a safe minimal
 patch. Treat repeated patch context mismatches, content that reverts between
@@ -155,7 +187,9 @@ Do not edit an `AM`, staged, or otherwise externally owned file unless the user
 explicitly assigns that file to the current session or you can identify the
 existing changes as your own. If shared-worktree editing is unavoidable, use the
 hash-and-overlap check above as the minimum safety gate; separate worktrees remain
-the preferred structure.
+the preferred structure. Apply this ownership check to authored inputs, not to a
+known generated artifact as though it were an independently edited source file.
+Generated outputs follow the regeneration rules below.
 
 ## Diagnose Briefly, Then Act
 
@@ -302,10 +336,18 @@ convenience. When adding or changing syntax, preserve these surface principles:
 ## Generated Artifacts
 
 Generated artifacts must not be edited directly. Patch the source owner and
-regenerate through the normal command only when regeneration is explicitly
-intended. Before regenerating a tracked generated artifact, check whether the
-output path is dirty and avoid overwriting unrelated user work without clear
-intent.
+regenerate through the normal command whenever the source change or requested
+verification requires the generated result to be current. A dirty generated
+output is derivation state, not evidence of an independent manual edit: assume
+known generated artifacts are changed through their generator, and do not stop
+or ask for permission solely because an output path is dirty.
+
+Before regenerating, identify the source owner, generator, and expected output
+set. Apply dirty-file and concurrent-ownership checks to the authored inputs,
+then run the generator against the combined current source state. Inspect the
+resulting diff and stop only when the command would modify authored files,
+consume an unresolved source conflict, or write outside its declared generated
+output set.
 
 Generated-artifact details, including which paths are generated and which source
 folders own them, belong in the nearest folder-specific `AGENTS.md`.

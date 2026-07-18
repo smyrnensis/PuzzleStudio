@@ -1,5 +1,6 @@
 use puzzle_core::{
-    CompiledGame, MatchCell, ObjectId, Pattern, Rule, RuleId, RuleStep, State, WriteOp,
+    GridCompiledGame, GridMatchCell, GridPattern, GridRule, GridRuleStep, GridSize, GridState,
+    GridWriteOp, ObjectId, RuleId,
 };
 use std::collections::BTreeSet;
 
@@ -10,18 +11,39 @@ pub struct SolverStageAvailability {
 }
 
 impl SolverStageAvailability {
-    pub fn from_initial_state(game: &CompiledGame, initial: &State) -> Self {
+    pub fn from_initial_state<const D: usize, Size: GridSize<D>>(
+        game: &GridCompiledGame<D>,
+        initial: &GridState<D, Size>,
+    ) -> Self {
+        Self::from_states_and_programs([initial], [game.program()])
+    }
+
+    pub fn from_states_and_programs<'a, const D: usize, Size: GridSize<D> + 'a>(
+        states: impl IntoIterator<Item = &'a GridState<D, Size>>,
+        programs: impl IntoIterator<Item = &'a [GridRuleStep<D>]>,
+    ) -> Self {
         let mut available_objects = BTreeSet::new();
-        for object in initial.slots() {
-            if !object.is_empty() {
-                available_objects.insert(*object);
+        for state in states {
+            for object in state.slots() {
+                if !object.is_empty() {
+                    available_objects.insert(*object);
+                }
             }
         }
         let mut availability = Self {
             available_objects,
             available_rules: BTreeSet::new(),
         };
-        availability.propagate_program(game.program());
+        let programs = programs.into_iter().collect::<Vec<_>>();
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for program in &programs {
+                for step in *program {
+                    changed |= availability.propagate_step(step);
+                }
+            }
+        }
         availability
     }
 
@@ -41,29 +63,19 @@ impl SolverStageAvailability {
         self.available_rules.iter().copied().collect()
     }
 
-    fn propagate_program(&mut self, program: &[RuleStep]) {
-        let mut changed = true;
-        while changed {
-            changed = false;
-            for step in program {
-                changed |= self.propagate_step(step);
-            }
-        }
-    }
-
-    fn propagate_step(&mut self, step: &RuleStep) -> bool {
+    fn propagate_step<const D: usize>(&mut self, step: &GridRuleStep<D>) -> bool {
         match step {
-            RuleStep::Rule(rule) => self.propagate_rule(rule),
-            RuleStep::ConditionalBlock { steps, .. }
-            | RuleStep::Block { steps, .. }
-            | RuleStep::LocalFrame { steps, .. } => {
+            GridRuleStep::Rule(rule) => self.propagate_rule(rule),
+            GridRuleStep::ConditionalBlock { steps, .. }
+            | GridRuleStep::Block { steps, .. }
+            | GridRuleStep::LocalFrame { steps, .. } => {
                 let mut changed = false;
                 for step in steps {
                     changed |= self.propagate_step(step);
                 }
                 changed
             }
-            RuleStep::ConditionalBranch {
+            GridRuleStep::ConditionalBranch {
                 then_steps,
                 else_steps,
                 ..
@@ -74,7 +86,7 @@ impl SolverStageAvailability {
                 }
                 changed
             }
-            RuleStep::AfterTriggered { steps, then_steps } => {
+            GridRuleStep::AfterTriggered { steps, then_steps } => {
                 let mut changed = false;
                 for step in steps.iter().chain(then_steps) {
                     changed |= self.propagate_step(step);
@@ -84,7 +96,7 @@ impl SolverStageAvailability {
         }
     }
 
-    fn propagate_rule(&mut self, rule: &Rule) -> bool {
+    fn propagate_rule<const D: usize>(&mut self, rule: &GridRule<D>) -> bool {
         if !self.pattern_may_match(&rule.pattern) {
             return false;
         }
@@ -96,7 +108,7 @@ impl SolverStageAvailability {
         changed
     }
 
-    fn pattern_may_match(&self, pattern: &Pattern) -> bool {
+    fn pattern_may_match<const D: usize>(&self, pattern: &GridPattern<D>) -> bool {
         pattern
             .components
             .iter()
@@ -104,7 +116,7 @@ impl SolverStageAvailability {
             .all(|cell| self.cell_may_match(cell))
     }
 
-    fn cell_may_match(&self, cell: &MatchCell) -> bool {
+    fn cell_may_match<const D: usize>(&self, cell: &GridMatchCell<D>) -> bool {
         cell.require_objects
             .iter()
             .all(|object| self.contains_object(*object))
@@ -120,26 +132,30 @@ impl SolverStageAvailability {
                 .all(|mark| self.contains_object(mark.object))
     }
 
-    fn insert_write_outputs(&mut self, write: &WriteOp, pattern: &Pattern) -> bool {
+    fn insert_write_outputs<const D: usize>(
+        &mut self,
+        write: &GridWriteOp<D>,
+        pattern: &GridPattern<D>,
+    ) -> bool {
         match write {
-            WriteOp::Add { object, .. } | WriteOp::Replace { add: object, .. } => {
+            GridWriteOp::Add { object, .. } | GridWriteOp::Replace { add: object, .. } => {
                 self.insert_available_object(*object)
             }
-            WriteOp::AddObjectSet { binding, .. } => {
+            GridWriteOp::AddObjectSet { binding, .. } => {
                 let mut changed = false;
                 for object in object_set_binding_objects(pattern, *binding) {
                     changed |= self.insert_available_object(object);
                 }
                 changed
             }
-            WriteOp::Remove { .. }
-            | WriteOp::RemoveObjectSet { .. }
-            | WriteOp::Move { .. }
-            | WriteOp::MoveObjectSet { .. }
-            | WriteOp::SetMark { .. }
-            | WriteOp::SetObjectSetMark { .. }
-            | WriteOp::RemoveMark { .. }
-            | WriteOp::RemoveObjectSetMark { .. } => false,
+            GridWriteOp::Remove { .. }
+            | GridWriteOp::RemoveObjectSet { .. }
+            | GridWriteOp::Move { .. }
+            | GridWriteOp::MoveObjectSet { .. }
+            | GridWriteOp::SetMark { .. }
+            | GridWriteOp::SetObjectSetMark { .. }
+            | GridWriteOp::RemoveMark { .. }
+            | GridWriteOp::RemoveObjectSetMark { .. } => false,
         }
     }
 
@@ -148,7 +164,10 @@ impl SolverStageAvailability {
     }
 }
 
-fn object_set_binding_objects(pattern: &Pattern, binding: u16) -> Vec<ObjectId> {
+fn object_set_binding_objects<const D: usize>(
+    pattern: &GridPattern<D>,
+    binding: u16,
+) -> Vec<ObjectId> {
     let mut objects = Vec::new();
     for cell in pattern
         .components
@@ -173,7 +192,8 @@ fn object_set_binding_objects(pattern: &Pattern, binding: u16) -> Vec<ObjectId> 
 mod tests {
     use super::*;
     use puzzle_core::{
-        LayerId, ObjectDef, ObjectSetMatcher, Offset, PatternComponent, RuleApplication, WriteOp,
+        CompiledGame, LayerId, MatchCell, ObjectDef, ObjectSetMatcher, Offset, Pattern,
+        PatternComponent, Rule, RuleApplication, RuleStep, State, WriteOp,
     };
 
     const PLAYER: ObjectId = ObjectId(1);

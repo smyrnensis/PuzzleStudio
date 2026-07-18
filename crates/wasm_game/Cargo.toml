@@ -11,5 +11,5 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 puzzle-core = { path = "../core" }
-puzzle-game-runtime = { path = "../game_runtime" }
+puzzle-game-runtime = { path = "../game_runtime", default-features = false, features = ["editor-debug"] }
 wasm-bindgen = "0.2"

@@ -1346,8 +1346,8 @@ message hint
 }
 
 #[test]
-fn again_interval_parses_to_default_again_milliseconds() {
-    let loaded = parse_game(
+fn again_interval_is_not_canonical_syntax() {
+    let err = parse_game(
         r#"
 title = again_interval_fixture
 again_interval = 75ms
@@ -1370,40 +1370,10 @@ P
 }
 "#,
     )
-    .unwrap();
-
-    assert_eq!(loaded.default_again_ms, 75);
-}
-
-#[test]
-fn puzzlescript_style_again_interval_is_not_canonical_syntax() {
-    let err = parse_game(
-        r#"
-title = again_interval_seconds_fixture
-again_interval 0.1
-
-puzzle main {
-slots {
-actor = Player
-}
-rules {
-
-}
-levels {
-legend {
-. = empty
-P = Player
-}
-level "first"
-P
-}
-}
-"#,
-    )
     .unwrap_err()
     .to_string();
 
-    assert!(err.contains("again_interval must be: again_interval = <duration>"));
+    assert!(err.contains("again_interval"));
 }
 
 #[test]
@@ -11678,7 +11648,7 @@ A..
             application: RuleApplication::UntilStable,
             steps,
             ..
-        }) if matches!(steps.as_slice(), [RuleStep::Rule(rule)] if rule.application == RuleApplication::Once)
+        }) if matches!(steps.as_slice(), [RuleStep::Rule(rule)] if rule.application == RuleApplication::RepeatStep)
     ));
 }
 
@@ -11714,6 +11684,47 @@ AAA
     assert!(moved.has_object(&loaded.game, 1, 0, object_b));
     assert!(moved.has_object(&loaded.game, 2, 0, object_b));
     assert_eq!(loaded.game.rules()[0].application, RuleApplication::OnceAll);
+}
+
+#[test]
+fn repeat_rewrite_progresses_past_idempotent_earlier_matches() {
+    let source = r#"
+title = repeat_progressing_match
+
+puzzle default {
+slots {
+base = A
+decoration = D
+}
+empty .
+
+legend A = A
+
+rules {
+[ A ] -> [ A D ]
+}
+
+level "start" {
+AAA
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let moved =
+        transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+    let decoration = object_named(&loaded, "D");
+
+    for x in 0..3 {
+        assert!(moved.has_object(&loaded.game, x, 0, decoration));
+    }
+    assert!(matches!(
+        loaded.game.program().first(),
+        Some(RuleStep::Block {
+            application: RuleApplication::UntilStable,
+            steps,
+            ..
+        }) if matches!(steps.as_slice(), [RuleStep::Rule(rule)] if rule.application == RuleApplication::RepeatStep)
+    ));
 }
 
 #[test]
@@ -16150,7 +16161,7 @@ b
 }
 
 #[test]
-fn underscore_selector_wildcard_is_rejected() {
+fn underscore_selector_is_a_literal_tag_value() {
     let source = r#"
 title = underscore_selector
 
@@ -16158,30 +16169,60 @@ puzzle default {
 empty .
 
 tags {
-facing = left right
+facing = _ left
 }
 
 slots {
-__legacy_layer_1 = player:facing
+actor = player:facing
 }
 
-legend l = player:left
+legend u = player:_
 
 rules {
 
-once [ player:_ ] -> [ player:_ ]
+once [ player:_ ] -> [ player:left ]
 }
 
 level "start" {
-l
+u
 }
 }
 
 "#;
+    let loaded = parse_game(source).unwrap();
+    let next = transition_state(&loaded.game, &loaded.levels[0].initial_state, InputId(0)).unwrap();
+    let player_left = object_named(&loaded, "player:left");
+
+    assert!(next.has_object(&loaded.game, 0, 0, player_left));
+}
+
+#[test]
+fn selector_syntax_literals_cannot_be_declared_as_tag_values() {
+    let source = r#"
+title = selector_literal_tag_value
+
+puzzle default {
+tags {
+facing = * left
+}
+slots {
+actor = player:facing
+}
+empty .
+rules {
+
+}
+level "start" {
+.
+}
+}
+"#;
     let error = parse_game(source).unwrap_err().to_string();
 
-    assert!(error.contains("wildcard must use *"), "{error}");
-    assert!(error.contains("_ is reserved for completion"), "{error}");
+    assert!(
+        error.contains("tag value * is reserved by selector syntax"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -18754,6 +18795,11 @@ levels demo of push3 {
 }
 
 #[test]
+fn document_without_title_uses_neutral_default() {
+    assert_eq!(super::DocumentShell::default().title, "Untitled puzzle");
+}
+
+#[test]
 fn parse_game_returns_document_for_2d_model() {
     let document = super::parse_game(
         r#"
@@ -19025,7 +19071,6 @@ subtitle = "Cubic puzzle"
 author = Tester
 homepage = "https://example.com/3d"
 default_wait_time = 100ms
-again_interval = 80ms
 sounds {
   sfx push { seed = push01; type = jump }
 }
@@ -19102,7 +19147,6 @@ scene level_select {
     assert_eq!(document.author.as_deref(), Some("Tester"));
     assert_eq!(document.homepage.as_deref(), Some("https://example.com/3d"));
     assert_eq!(document.default_wait_ms, 100);
-    assert_eq!(document.default_again_ms, 80);
     assert_eq!(document.sounds.sfx[0].name, "push");
     assert_eq!(document.theme.name.as_deref(), Some("clean"));
     assert_eq!(document.assets.entries[0].path, "game.css");

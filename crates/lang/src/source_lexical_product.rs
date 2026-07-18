@@ -127,7 +127,10 @@ fn map_lexical_fact(
                 start: fact.start,
                 end: fact.end,
                 kind: SourceHighlightKind::Color,
-                color: Some(color.clone()),
+                color: Some(
+                    crate::SourceHighlightColor::parse(color.clone())
+                        .expect("lexer color facts must contain a visual color literal"),
+                ),
                 transparent: false,
             });
         }
@@ -203,7 +206,7 @@ fn append_owner_display_facts(
                 start: span.start,
                 end: span.end,
                 kind: SourceHighlightKind::SpritePixel,
-                color: Some(color.clone()),
+                color: color.clone(),
                 transparent: *transparent,
             }),
             crate::SurfaceDisplayFact::Color { span, color } => spans.push(SourceHighlightSpan {
@@ -580,12 +583,12 @@ Enter -> goto playing
         assert!(
             pixels
                 .iter()
-                .any(|span| span.color.as_deref() == Some("#fff"))
+                .any(|span| span.color.as_ref().map(|color| color.as_str()) == Some("#fff"))
         );
         assert!(
             pixels
                 .iter()
-                .any(|span| span.color.as_deref() == Some("#000"))
+                .any(|span| span.color.as_ref().map(|color| color.as_str()) == Some("#000"))
         );
     }
 }

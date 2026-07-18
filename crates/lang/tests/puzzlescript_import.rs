@@ -496,7 +496,7 @@ G
 }
 
 #[test]
-fn puzzlescript_again_interval_lowers_to_canonical_default_again_ms() {
+fn puzzlescript_again_interval_is_not_emitted_as_canonical_syntax() {
     let source = r#"
 Again Interval
 again_interval 0.1
@@ -521,10 +521,8 @@ P
 "#;
 
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
-    assert!(translated.contains("again_interval = 0.1s"));
-
-    let loaded = parse_game(&translated).unwrap();
-    assert_eq!(loaded.default_again_ms, 100);
+    assert!(!translated.contains("again_interval"));
+    parse_game(&translated).unwrap();
 }
 
 #[test]

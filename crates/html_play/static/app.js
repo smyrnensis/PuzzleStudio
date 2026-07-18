@@ -270,6 +270,8 @@ let screenScaleSyncFrame = 0;
 let screenScaleSyncPasses = 0;
 let pendingModelInput = null;
 const activeWaitTimers = new Set();
+const pendingPresentationEvents = [];
+let dispatchingPresentationEvents = false;
 let drainingQueuedModelInput = false;
 let sceneEditorPreview = null;
 
@@ -327,7 +329,7 @@ async function solveStandaloneCurrentState(options = {}) {
     puzzleBoot.puzzlePath || "game.puzzle",
     JSON.stringify(standaloneRuntime.state),
     Number(options.maxDepth ?? 512),
-    Number(options.maxNodes ?? 5_000_000),
+    Number(options.maxNodes ?? 1000),
     Number(options.maxMs ?? 0),
   ));
 }
@@ -351,37 +353,22 @@ function render(state) {
   window.__PuzzleCurrentState = state;
   applyTheme(state?.theme || puzzleBoot.theme || null);
   soundRuntime.configure(state?.sounds || puzzleBoot.sounds || { sfx: [], music: [] });
-  soundRuntime.applyEvents(state?.soundEvents || []);
   const displayError = firstDisplayError(state);
   if (displayError) {
     showError(new Error(displayError));
     notifyPreviewState(state);
     return;
   }
-  if (state) {
-    state.soundEvents = [];
-  }
-  const waitEvents = state?.waitEvents || [];
+  const presentationEvents = state?.presentationEvents || [];
   if (state) {
     state.busy = state.busy === true || clientPendingWaits > 0;
-    state.waitEvents = [];
-    const animationEvents = Array.isArray(state.animationEvents) ? state.animationEvents : [];
-    if (state.scene && Array.isArray(animationEvents)) {
-      state.scene.animationEvents = animationEvents;
-    }
-    if (Array.isArray(state.sceneLayers) && Array.isArray(animationEvents)) {
-      const focusedLayer = state.sceneLayers.find((layer) => layer?.focused === true) || state.sceneLayers[0];
-      if (focusedLayer?.scene) {
-        focusedLayer.scene.animationEvents = animationEvents;
-      }
-    }
+    state.presentationEvents = [];
   }
   renderSceneStack(state);
   scheduleSelectedLevelMenuScroll();
   scheduleScreenScaleSync(3);
   notifyPreviewState(state);
-  applyMessageEvents(state?.messageEvents || []);
-  applyWaitEvents(waitEvents);
+  applyPresentationEvents(presentationEvents);
 }
 
 function firstDisplayError(state) {
@@ -1288,7 +1275,7 @@ function renderPuzzle(component, scope = {}) {
 
 /* puzzle-host:optional:puzzle3:start */
 function renderPuzzle3Frame(component, scope = {}) {
-  if (!window.Puzzle3DFrameFixture || !window.Puzzle3DFrameAssets || !window.Puzzle3Controller) {
+  if (!window.Puzzle3DFrameFixture || !window.Puzzle3DFrameAssets || !window.Puzzle3Component) {
     const empty = document.createElement("div");
     empty.hidden = true;
     return empty;
@@ -1310,23 +1297,23 @@ function renderPuzzle3Frame(component, scope = {}) {
     canvas.setAttribute("aria-label", `${sceneTitle(sceneName)} ${source}`);
     root.append(canvas);
     const fixture = puzzle3FrameFixture(sceneName, source);
-    const controller = window.Puzzle3Controller.attach(canvas, {
+    const controller = window.Puzzle3Component.attach(canvas, {
       screenView: root,
       fixture,
       scene: sceneName,
       component,
-      sessionManaged: Boolean(standaloneRuntime && !puzzle3PreviewSurface),
-      onLifecycleEffects(effects) {
-        sendPuzzle3LifecycleEffects(effects, {
-          ...scope,
-          __sceneDef: scope.__sceneDef || currentSceneDef(),
-          __puzzle3Source: source,
-          __effectTargetScene: sceneName,
-        });
+      onInput(input) {
+        return sendModelInput(input);
+      },
+      onCommand(action) {
+        if (action.kind === "goto_level" || action.kind === "goto") {
+          return sendCommand(`${source}.goto ${String(action.level ?? "")}`.trim());
+        }
+        return sendCommand(String(action.kind || ""));
       },
     });
     entry = { root, canvas, controller, levelIndex: null };
-    if (shouldPostPuzzle3ControllerMessages()) {
+    if (shouldPostPuzzle3ComponentMessages()) {
       controller.onView?.((view) => {
         window.parent?.postMessage({
           type: "PuzzleStudioPuzzle3View",
@@ -1346,28 +1333,14 @@ function renderPuzzle3Frame(component, scope = {}) {
     }
     puzzle3Controllers.set(key, entry);
   }
-  syncPuzzle3ControllerLevel(entry);
-  schedulePuzzle3ControllerConnectedResize(entry);
+  syncPuzzle3ComponentLevel(entry);
+  schedulePuzzle3ComponentConnectedResize(entry);
   return entry.root;
-}
-
-function sendPuzzle3LifecycleEffects(effects, scope = {}) {
-  const list = Array.isArray(effects) ? effects : [];
-  if (list.length === 0) {
-    return;
-  }
-  Promise.resolve()
-    .then(async () => {
-      for (const effect of list) {
-        await sendEffect(effect?.effect || effect, scope);
-      }
-    })
-    .catch((error) => showError(error));
 }
 
 function puzzle3FrameFixture(sceneName, source = "board") {
   const sessionSnapshot = currentState?.scenePuzzleState?.[source];
-  if (standaloneRuntime && sessionSnapshot && typeof sessionSnapshot === "object") {
+  if (sessionSnapshot && typeof sessionSnapshot === "object") {
     return JSON.parse(JSON.stringify(sessionSnapshot));
   }
   const fixture = JSON.parse(JSON.stringify(window.Puzzle3DFrameFixture || {}));
@@ -1463,7 +1436,7 @@ function effectiveComponentEmbedMode() {
   return componentEmbedMode || Boolean(puzzle3PreviewSurface);
 }
 
-function shouldPostPuzzle3ControllerMessages() {
+function shouldPostPuzzle3ComponentMessages() {
   return Boolean((componentEmbedMode || puzzle3PreviewSurface) && window.parent && window.parent !== window);
 }
 
@@ -1521,7 +1494,7 @@ function puzzle3PreviewSurfaceFixture(source, sceneName) {
   return next;
 }
 
-function syncPuzzle3ControllerLevel(entry) {
+function syncPuzzle3ComponentLevel(entry) {
   const controller = entry?.controller;
   if (!controller) {
     return;
@@ -1533,21 +1506,18 @@ function syncPuzzle3ControllerLevel(entry) {
     const sceneName = entry.root.dataset.scene;
     const source = entry.root.dataset.source || "board";
     const sessionSnapshot = puzzle3FrameFixture(sceneName, source);
-    entry.controller.replaceSessionSnapshot?.(sessionSnapshot);
+    entry.controller.replaceSnapshot(sessionSnapshot);
     return;
   }
-  const level = Number.isInteger(currentState?.levelIndex)
-    ? currentState.levelIndex
-    : Number.isInteger(currentState?.selectedLevelIndex)
-      ? currentState.selectedLevelIndex
-      : null;
-  if (level !== null && entry.levelIndex !== level) {
-    entry.levelIndex = level;
-    controller.ready?.then(() => controller.command("goto_level", { level }));
+  const sceneName = entry.root.dataset.scene;
+  const source = entry.root.dataset.source || "board";
+  const sessionSnapshot = currentState?.scenePuzzleState?.[source];
+  if (sessionSnapshot && typeof sessionSnapshot === "object") {
+    entry.controller.replaceSnapshot(sessionSnapshot);
   }
 }
 
-function schedulePuzzle3ControllerConnectedResize(entry) {
+function schedulePuzzle3ComponentConnectedResize(entry) {
   if (!entry?.controller || entry.connectedResizePending) {
     return;
   }
@@ -2552,54 +2522,113 @@ function waitForEffect(effect) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-function applyWaitEvents(events) {
+function applyPresentationEvents(events) {
   for (const event of events || []) {
-    if (event.kind !== "wait" && event.kind !== "continue_effects") {
-      continue;
+    if (event.kind === "wait") {
+      clientPendingWaits += 1;
     }
-    clientPendingWaits += 1;
-    if (currentState) {
-      currentState.busy = true;
-    }
-    const waitTimer = {
-      event,
-      startedAt: 0,
-      timeoutId: 0,
-      done: false,
-      fastForwardRequested: false,
-      config: inputBufferConfig(),
-    };
-    waitTimer.complete = () => {
-      if (waitTimer.done) {
-        return;
-      }
-      waitTimer.done = true;
-      activeWaitTimers.delete(waitTimer);
-      clientPendingWaits = Math.max(0, clientPendingWaits - 1);
-      if (currentState) {
-        currentState.busy = clientPendingWaits > 0;
-      }
-      if (event.kind === "continue_effects") {
-        sendCommandNow("__continue_effects").then(drainQueuedModelInput);
-      } else {
-        drainQueuedModelInput();
-      }
-    };
-    activeWaitTimers.add(waitTimer);
-    window.setTimeout(() => {
-      if (waitTimer.done) {
-        return;
-      }
-      waitTimer.startedAt = performance.now();
-      waitTimer.timeoutId = setTimeout(
-        waitTimer.complete,
-        Math.max(0, Number(event.milliseconds || event.ms || 0)),
-      );
-      if (waitTimer.fastForwardRequested) {
-        fastForwardWaitTimer(waitTimer);
-      }
-    }, 0);
+    pendingPresentationEvents.push(event);
   }
+  if (currentState) {
+    currentState.busy = clientPendingWaits > 0;
+  }
+  dispatchNextPresentationEvent();
+}
+
+function dispatchNextPresentationEvent() {
+  if (dispatchingPresentationEvents || activeWaitTimers.size > 0) {
+    return;
+  }
+  dispatchingPresentationEvents = true;
+  while (pendingPresentationEvents.length > 0) {
+    const event = pendingPresentationEvents.shift();
+    if (event.kind === "wait") {
+      dispatchingPresentationEvents = false;
+      startPresentationWait(event);
+      return;
+    }
+    if (event.kind === "message") {
+      applyMessageEvents([event]);
+    } else if (event.kind === "animation") {
+      const animations = [event.animation];
+      while (pendingPresentationEvents[0]?.kind === "animation"
+        && samePresentationContext(event, pendingPresentationEvents[0])) {
+        animations.push(pendingPresentationEvents.shift().animation);
+      }
+      applyPresentationAnimations(event, animations);
+    } else {
+      soundRuntime.applyEvents([event]);
+    }
+  }
+  dispatchingPresentationEvents = false;
+  drainQueuedModelInput();
+}
+
+function samePresentationContext(left, right) {
+  return left.scene === right.scene
+    && left.puzzle === right.puzzle
+    && left.levelIndex === right.levelIndex;
+}
+
+function applyPresentationAnimations(event, animations) {
+  const currentPuzzles = currentState?.scenePuzzles || [];
+  if (!currentState
+    || currentState.currentScene !== event.scene
+    || currentState.levelIndex !== event.levelIndex
+    || !currentPuzzles.includes(event.puzzle)) {
+    return;
+  }
+  if (currentState.scene) {
+    currentState.scene.animationEvents = animations;
+  }
+  const layer = (currentState.sceneLayers || []).find((candidate) =>
+    (candidate?.name === event.scene || candidate?.scene?.name === event.scene)
+      && (candidate?.scenePuzzles || []).includes(event.puzzle)
+  );
+  if (layer?.scene) {
+    layer.scene.animationEvents = animations;
+  }
+  renderSceneStack(currentState);
+}
+
+function startPresentationWait(event) {
+  const config = inputBufferConfig();
+  const waitTimer = {
+    event,
+    startedAt: 0,
+    timeoutId: 0,
+    done: false,
+    fastForwardRequested: Boolean(
+      pendingModelInput && config.queueDuringWait && config.fastForwardWait
+    ),
+    config,
+  };
+  waitTimer.complete = () => {
+    if (waitTimer.done) {
+      return;
+    }
+    waitTimer.done = true;
+    activeWaitTimers.delete(waitTimer);
+    clientPendingWaits = Math.max(0, clientPendingWaits - 1);
+    if (currentState) {
+      currentState.busy = clientPendingWaits > 0;
+    }
+    dispatchNextPresentationEvent();
+  };
+  activeWaitTimers.add(waitTimer);
+  window.setTimeout(() => {
+    if (waitTimer.done) {
+      return;
+    }
+    waitTimer.startedAt = performance.now();
+    waitTimer.timeoutId = setTimeout(
+      waitTimer.complete,
+      Math.max(0, Number(event.milliseconds || event.ms || 0)),
+    );
+    if (waitTimer.fastForwardRequested) {
+      fastForwardWaitTimer(waitTimer);
+    }
+  }, 0);
 }
 
 function inputBufferConfig() {
@@ -2709,7 +2738,7 @@ function sendPuzzle3Command(command) {
   if (!parsed) {
     return false;
   }
-  if (standaloneRuntime && parsed.command !== "reset_camera") {
+  if (parsed.command !== "reset_camera") {
     return false;
   }
   const controller = puzzle3ControllerForTarget(parsed.target);
@@ -2745,7 +2774,7 @@ function puzzle3ControllerForTarget(target) {
 /* puzzle-host:optional:scene-editor:start */
 function isStandaloneEditorSessionCommand(command) {
   const name = String(command || "").split(":", 1)[0];
-  return name === "undo" || name === "redo" || name === "restart" || name === "__continue_effects";
+  return name === "undo" || name === "redo" || name === "restart";
 }
 
 function applyStandaloneEditorInput(command) {

@@ -11,6 +11,5 @@ path = "src/lib.rs"
 [dependencies]
 puzzle-core = { path = "../core" }
 puzzle-kernel = { path = "../kernel" }
-
-[dev-dependencies]
 puzzle-lang = { path = "../lang" }
+puzzle-play = { path = "../play" }

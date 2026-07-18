@@ -3,6 +3,7 @@
   let wasmCompiler = null;
   let wasmCompilerPromise = null;
   let gameRuntimeAssetsPromise = null;
+  let playerRuntimeAssetsPromise = null;
   let activeSourceAnalysis = null;
   let analysisWorker = null;
   let analysisWorkerFailure = null;
@@ -261,7 +262,7 @@
 
     async exportHtml(payload = {}) {
       const exportHtml = await requireWasmFunction("export_workspace_html");
-      const runtimeAssets = await window.PuzzleStudioRuntime.gameRuntimeAssets();
+      const runtimeAssets = await window.PuzzleStudioRuntime.playerRuntimeAssets();
       return exportHtml(
         asString(payload.puzzlePath) || "game.puzzle",
         JSON.stringify(payload.workspaceDocuments || []),
@@ -449,6 +450,24 @@
           });
       }
       return gameRuntimeAssetsPromise;
+    },
+
+    async playerRuntimeAssets() {
+      if (!playerRuntimeAssetsPromise) {
+        playerRuntimeAssetsPromise = Promise.all([
+          fetchRequiredText(wasmModuleUrl("./wasm_player/puzzle_wasm_player.js"), "Puzzle player runtime module"),
+          fetchRequiredBytes(wasmModuleUrl("./wasm_player/puzzle_wasm_player_bg.wasm"), "Puzzle player runtime WASM"),
+        ])
+          .then(([moduleSource, wasmBytes]) => ({
+            moduleSource,
+            wasmBase64: bytesToBase64(wasmBytes),
+          }))
+          .catch((error) => {
+            playerRuntimeAssetsPromise = null;
+            throw error;
+          });
+      }
+      return playerRuntimeAssetsPromise;
     },
 
     loadWasmCompiler,

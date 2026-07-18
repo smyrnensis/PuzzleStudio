@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "engine": {
+    "name": "PuzzleScriptNext",
+    "build": "1819, 2-mar-2026",
+    "url": "https://www.puzzlescriptnext.polyomino.com/editor.html",
+    "capturedAt": "2026-07-17",
+    "captureMethod": "Official editor SOLVE console output"
+  },
+  "cases": [
+    {
+      "id": "microban_01",
+      "levelIndex": 0,
+      "result": "solved",
+      "solutionMoves": 33,
+      "exploredPositions": 400
+    }
+  ]
+}

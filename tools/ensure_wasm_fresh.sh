@@ -124,26 +124,31 @@ ensure_target_current() {
   echo "wasm: $name current"
 }
 
-ensure_game_wasm_copies_match() {
-  local build_cmd="tools/build_wasm_game.sh"
+ensure_wasm_copies_match() {
+  local name="$1"
+  local build_cmd="$2"
+  local source_js="$3"
+  local target_js="$4"
+  local source_wasm="$5"
+  local target_wasm="$6"
   if cmp -s \
-    crates/html_play/static/wasm_game/puzzle_wasm_game.js \
-    crates/html_editor/static/wasm_game/puzzle_wasm_game.js \
+    "$source_js" \
+    "$target_js" \
     && cmp -s \
-      crates/html_play/static/wasm_game/puzzle_wasm_game_bg.wasm \
-      crates/html_editor/static/wasm_game/puzzle_wasm_game_bg.wasm; then
+      "$source_wasm" \
+      "$target_wasm"; then
     return
   fi
 
-  echo "wasm: puzzle_wasm_game editor copy differs; running $build_cmd" >&2
+  echo "wasm: $name editor copy differs; running $build_cmd" >&2
   "$build_cmd"
   if ! cmp -s \
-    crates/html_play/static/wasm_game/puzzle_wasm_game.js \
-    crates/html_editor/static/wasm_game/puzzle_wasm_game.js \
+    "$source_js" \
+    "$target_js" \
     || ! cmp -s \
-      crates/html_play/static/wasm_game/puzzle_wasm_game_bg.wasm \
-      crates/html_editor/static/wasm_game/puzzle_wasm_game_bg.wasm; then
-    echo "wasm: puzzle_wasm_game editor copy still differs after $build_cmd" >&2
+      "$source_wasm" \
+      "$target_wasm"; then
+    echo "wasm: $name editor copy still differs after $build_cmd" >&2
     exit 1
   fi
 }
@@ -220,6 +225,11 @@ while IFS= read -r source; do
   wasm_game_rust_sources+=("$source")
 done < <(workspace_dependency_sources puzzle-wasm-game)
 
+wasm_player_rust_sources=()
+while IFS= read -r source; do
+  wasm_player_rust_sources+=("$source")
+done < <(workspace_dependency_sources puzzle-wasm-player)
+
 html_play_preview_sources=(
   crates/html_play/static/index.html
   crates/html_play/static/app.css
@@ -232,7 +242,7 @@ html_play_preview_sources=(
   crates/html_play/static/puzzle3.css
   crates/html_play/static/puzzle3_visual_core.js
   crates/html_play/static/puzzle3_three_renderer.js
-  crates/html_play/static/puzzle3_app.js
+  crates/html_play/static/puzzle3_component.js
   crates/html_play/static/vendor/three/three.module.min.js
   tools/music_generator/seeded_sfx.mjs
   tools/music_generator/seeded_music.mjs
@@ -252,6 +262,18 @@ ensure_target_current \
   "${wasm_editor_rust_sources[@]}"
 
 ensure_target_current \
+  puzzle_wasm_player \
+  tools/build_wasm_player.sh \
+  crates/html_play/static/wasm_player/puzzle_wasm_player.js \
+  crates/html_play/static/wasm_player/puzzle_wasm_player_bg.wasm \
+  crates/html_editor/static/wasm_player/puzzle_wasm_player.js \
+  crates/html_editor/static/wasm_player/puzzle_wasm_player_bg.wasm \
+  -- \
+  "${workspace_sources[@]}" \
+  tools/build_wasm_player.sh \
+  "${wasm_player_rust_sources[@]}"
+
+ensure_target_current \
   puzzle_wasm_game \
   tools/build_wasm_game.sh \
   crates/html_play/static/wasm_game/puzzle_wasm_game.js \
@@ -263,5 +285,18 @@ ensure_target_current \
   tools/build_wasm_game.sh \
   "${wasm_game_rust_sources[@]}"
 
-ensure_game_wasm_copies_match
+ensure_wasm_copies_match \
+  puzzle_wasm_player \
+  tools/build_wasm_player.sh \
+  crates/html_play/static/wasm_player/puzzle_wasm_player.js \
+  crates/html_editor/static/wasm_player/puzzle_wasm_player.js \
+  crates/html_play/static/wasm_player/puzzle_wasm_player_bg.wasm \
+  crates/html_editor/static/wasm_player/puzzle_wasm_player_bg.wasm
+ensure_wasm_copies_match \
+  puzzle_wasm_game \
+  tools/build_wasm_game.sh \
+  crates/html_play/static/wasm_game/puzzle_wasm_game.js \
+  crates/html_editor/static/wasm_game/puzzle_wasm_game.js \
+  crates/html_play/static/wasm_game/puzzle_wasm_game_bg.wasm \
+  crates/html_editor/static/wasm_game/puzzle_wasm_game_bg.wasm
 ensure_static_asset_copies_match

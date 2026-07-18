@@ -198,10 +198,25 @@ pub(crate) struct PuzzleEntrySyntax {
 pub(crate) struct SyntaxSemantics {
     pub(crate) fixed: ParserRecognition,
     pub(crate) selectors: Vec<SelectorOccurrenceSyntax>,
+    pub(crate) identifiers: Vec<IdentifierOccurrenceSyntax>,
+}
+
+impl SyntaxSemantics {
+    fn merge(&mut self, other: Self) {
+        self.fixed.merge(other.fixed);
+        self.selectors.extend(other.selectors);
+        self.identifiers.extend(other.identifiers);
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SelectorOccurrenceSyntax {
+    pub(crate) span: SourceSpan,
+    pub(crate) text: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct IdentifierOccurrenceSyntax {
     pub(crate) span: SourceSpan,
     pub(crate) text: String,
 }
@@ -271,13 +286,13 @@ pub(crate) fn parse_puzzle_models_from_document_entries(
             if let Err(report) = validate_closed_entries(&all_entries, "puzzle") {
                 model_diagnostics.push(report);
             }
-            let fallback_entries = all_entries.clone();
+            let diagnostic_recovery_entries = all_entries.clone();
             let (catalog_entries, body, dimension) =
                 match parse_model_body_syntax(all_entries, declaration.name) {
                     Ok(product) => product,
                     Err(report) => {
                         model_diagnostics.push(report);
-                        let catalog_entries = fallback_entries
+                        let catalog_entries = diagnostic_recovery_entries
                             .into_iter()
                             .filter(|entry| entry.directive.is_catalog_owned())
                             .collect();
@@ -400,6 +415,7 @@ fn parse_model_body_syntax(
             catalog_entries.push(entry);
             continue;
         }
+        body.semantics.merge(entry.semantics.clone());
         match entry.directive {
             puzzle_authoring::PuzzleDirectiveSurface::Dimension => {
                 if dimension.is_some() {
@@ -1130,6 +1146,12 @@ fn project_rule_facts(
                 span.span.clone(),
                 SurfaceSemanticKind::Keyword,
             ),
+            puzzle_authoring::RuleSyntaxFactKind::Literal => mark_relative(
+                &mut semantics.fixed,
+                source,
+                span.span.clone(),
+                SurfaceSemanticKind::Literal,
+            ),
             puzzle_authoring::RuleSyntaxFactKind::Mark => mark_relative(
                 &mut semantics.fixed,
                 source,
@@ -1172,6 +1194,9 @@ fn project_rule_facts(
             puzzle_authoring::RuleSyntaxFactKind::Effect => {
                 let text = &source.text[span.span.clone()];
                 collect_effect_semantics(source, text, span.span.start, semantics);
+            }
+            puzzle_authoring::RuleSyntaxFactKind::Identifier => {
+                push_relative_identifier(semantics, source, span.span.clone())
             }
         }
     }
@@ -1217,8 +1242,19 @@ fn win_condition_semantics(header: &LogicalLine, rows: &[LogicalLine]) -> Syntax
                     &puzzle_authoring::pattern_semantic_surface_spans(&line.text),
                     &mut semantics,
                 );
+                if argument.contains('[') {
+                    project_rule_facts(
+                        line,
+                        &puzzle_authoring::condition_semantic_surface_spans(&line.text),
+                        &mut semantics,
+                    );
+                }
             }
-            puzzle_authoring::WinConditionRowSurface::Expression(_) => {}
+            puzzle_authoring::WinConditionRowSurface::Expression(_) => project_rule_facts(
+                line,
+                &puzzle_authoring::condition_semantic_surface_spans(&line.text),
+                &mut semantics,
+            ),
         }
     }
     semantics
@@ -1265,6 +1301,23 @@ fn push_relative_selector(
         return;
     };
     semantics.selectors.push(SelectorOccurrenceSyntax {
+        span: SourceSpan {
+            start: base + span.start,
+            end: base + span.end,
+        },
+        text: line.text[span].to_string(),
+    });
+}
+
+fn push_relative_identifier(
+    semantics: &mut SyntaxSemantics,
+    line: &LogicalLine,
+    span: std::ops::Range<usize>,
+) {
+    let Some(base) = logical_line_source_base(line) else {
+        return;
+    };
+    semantics.identifiers.push(IdentifierOccurrenceSyntax {
         span: SourceSpan {
             start: base + span.start,
             end: base + span.end,
@@ -1354,6 +1407,10 @@ fn associate_model_resources(
                 ));
             }
         };
+        models[model_index]
+            .body
+            .semantics
+            .merge(entry.semantics.clone());
         match entry.directive {
             puzzle_authoring::PuzzleDirectiveSurface::Legend
             | puzzle_authoring::PuzzleDirectiveSurface::Level
@@ -1363,11 +1420,6 @@ fn associate_model_resources(
                     models[model_index].body.levels.levels.len(),
                     Some(&models[model_index].name),
                 )?;
-                models[model_index]
-                    .body
-                    .semantics
-                    .fixed
-                    .merge(level_resource_header_semantics(&entry.header));
                 models[model_index]
                     .body
                     .levels
@@ -1489,6 +1541,22 @@ fn entry_semantic_syntax(
         SurfaceSemanticKind::Keyword,
     );
     match directive {
+        puzzle_authoring::PuzzleDirectiveSurface::Legend
+        | puzzle_authoring::PuzzleDirectiveSurface::Level
+        | puzzle_authoring::PuzzleDirectiveSurface::Levels => {
+            mark_resource_header_semantics(
+                &mut semantics.fixed,
+                header,
+                SurfaceSemanticKind::State,
+            );
+        }
+        puzzle_authoring::PuzzleDirectiveSurface::Sprites => {
+            mark_resource_header_semantics(
+                &mut semantics.fixed,
+                header,
+                SurfaceSemanticKind::Asset,
+            );
+        }
         puzzle_authoring::PuzzleDirectiveSurface::Tags => {
             for line in body {
                 let Some(assignment) = puzzle_authoring::selector_assignment_surface(&line.text)
@@ -1521,6 +1589,15 @@ fn entry_semantic_syntax(
                         value,
                         SurfaceSemanticKind::Variant,
                     );
+                }
+                for token in line.tokens.iter().skip(1) {
+                    if !matches!(token.text.as_str(), "=" | "{" | "}") {
+                        mark_token(
+                            &mut semantics.fixed,
+                            Some(token),
+                            SurfaceSemanticKind::Variant,
+                        );
+                    }
                 }
             }
         }
@@ -1590,6 +1667,18 @@ fn entry_semantic_syntax(
                     line.tokens.first(),
                     SurfaceSemanticKind::Mark,
                 );
+                if let [_, "=", value] = crate::split_header_tokens(&line.text).as_slice() {
+                    mark_text(
+                        &mut semantics.fixed,
+                        line,
+                        value,
+                        if matches!(*value, "bool" | "int") {
+                            SurfaceSemanticKind::Keyword
+                        } else {
+                            SurfaceSemanticKind::Group
+                        },
+                    );
+                }
             }
         }
         puzzle_authoring::PuzzleDirectiveSurface::Map => {
@@ -1617,9 +1706,148 @@ fn entry_semantic_syntax(
                 }
             }
         }
+        puzzle_authoring::PuzzleDirectiveSurface::Input => {
+            for (index, token) in header
+                .tokens
+                .iter()
+                .filter(|token| token.text != "{" && token.text != "}")
+                .enumerate()
+            {
+                let kind = match (index, token.text.as_str()) {
+                    (0, _) | (_, "direction") => SurfaceSemanticKind::Keyword,
+                    (1, _) => SurfaceSemanticKind::Input,
+                    _ => SurfaceSemanticKind::Keyword,
+                };
+                mark_token(&mut semantics.fixed, Some(token), kind);
+            }
+        }
+        puzzle_authoring::PuzzleDirectiveSurface::Direction => {
+            for (index, token) in header.tokens.iter().enumerate() {
+                mark_token(
+                    &mut semantics.fixed,
+                    Some(token),
+                    if index == 1 {
+                        SurfaceSemanticKind::Input
+                    } else {
+                        SurfaceSemanticKind::Keyword
+                    },
+                );
+            }
+        }
+        puzzle_authoring::PuzzleDirectiveSurface::Keys => {
+            for line in body {
+                let arrow = line.tokens.iter().position(|token| token.text == "->");
+                for (index, token) in line.tokens.iter().enumerate() {
+                    if token.text == "->" || token.text == "{" || token.text == "}" {
+                        continue;
+                    }
+                    mark_token(
+                        &mut semantics.fixed,
+                        Some(token),
+                        if arrow.is_none_or(|arrow| index < arrow) {
+                            SurfaceSemanticKind::Input
+                        } else {
+                            SurfaceSemanticKind::Effect
+                        },
+                    );
+                }
+            }
+        }
+        puzzle_authoring::PuzzleDirectiveSurface::Query => {
+            if let Some(name) = header.tokens.get(1) {
+                mark_token(
+                    &mut semantics.fixed,
+                    Some(name),
+                    SurfaceSemanticKind::Condition,
+                );
+            }
+            project_rule_facts(
+                header,
+                &puzzle_authoring::condition_semantic_surface_spans(&header.text),
+                &mut semantics,
+            );
+        }
+        puzzle_authoring::PuzzleDirectiveSurface::Assignment => {
+            mark_token(
+                &mut semantics.fixed,
+                header.tokens.first(),
+                SurfaceSemanticKind::Condition,
+            );
+            project_rule_facts(
+                header,
+                &puzzle_authoring::condition_semantic_surface_spans(&header.text),
+                &mut semantics,
+            );
+        }
+        puzzle_authoring::PuzzleDirectiveSurface::WinConditions if body.is_empty() => {
+            mark_token(
+                &mut semantics.fixed,
+                header.tokens.first(),
+                SurfaceSemanticKind::Condition,
+            );
+            project_rule_facts(
+                header,
+                &puzzle_authoring::condition_semantic_surface_spans(&header.text),
+                &mut semantics,
+            );
+        }
+        puzzle_authoring::PuzzleDirectiveSurface::Solver
+        | puzzle_authoring::PuzzleDirectiveSurface::PuzzleScreen
+        | puzzle_authoring::PuzzleDirectiveSurface::PuzzleScreenDirective => {
+            for (index, token) in header
+                .tokens
+                .iter()
+                .filter(|token| !matches!(token.text.as_str(), "{" | "}" | "="))
+                .enumerate()
+            {
+                mark_token(
+                    &mut semantics.fixed,
+                    Some(token),
+                    if index == 0 {
+                        SurfaceSemanticKind::Keyword
+                    } else {
+                        SurfaceSemanticKind::Setting
+                    },
+                );
+            }
+            for line in body {
+                for token in &line.tokens {
+                    if !matches!(token.text.as_str(), "{" | "}" | "=") {
+                        mark_token(
+                            &mut semantics.fixed,
+                            Some(token),
+                            SurfaceSemanticKind::Setting,
+                        );
+                    }
+                }
+            }
+        }
         _ => {}
     }
     semantics
+}
+
+fn mark_resource_header_semantics(
+    recognition: &mut ParserRecognition,
+    header: &LogicalLine,
+    resource_name_kind: SurfaceSemanticKind,
+) {
+    let tokens = header
+        .tokens
+        .iter()
+        .filter(|token| token.text != "{" && token.text != "}")
+        .collect::<Vec<_>>();
+    let owner_index = tokens.iter().position(|token| token.text == "of");
+    for (index, token) in tokens.into_iter().enumerate() {
+        let kind = if index == 0 || token.text == "of" {
+            SurfaceSemanticKind::Keyword
+        } else if owner_index.is_some_and(|owner| index > owner) {
+            SurfaceSemanticKind::State
+        } else {
+            resource_name_kind
+        };
+        mark_token(recognition, Some(token), kind);
+    }
 }
 
 fn register_slot_completion_selector(recognition: &mut ParserRecognition, selector: &str) {

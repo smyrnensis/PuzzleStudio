@@ -16,18 +16,23 @@ if ! grep -q "export class WasmStandaloneSession" crates/html_play/static/wasm_g
   exit 1
 fi
 
-if ! grep -q "export class WasmPuzzle3Runtime" crates/html_play/static/wasm_game/puzzle_wasm_game.js; then
-  echo "generated game WASM bindings are missing WasmPuzzle3Runtime" >&2
+if ! grep -q "dispatch(action_json)" crates/html_play/static/wasm_game/puzzle_wasm_game.js; then
+  echo "generated game WASM bindings are missing typed session dispatch" >&2
   exit 1
 fi
 
-if grep -Eq "solve_state|suggest_source_completions|highlight_source_html|compile_preview|PuzzleStudioSolve|WasmCoreRuntime|WasmCompiledCoreRuntime" crates/html_play/static/wasm_game/puzzle_wasm_game.js; then
+if grep -Eq "WasmPuzzle3Runtime|fromFixture|solve_state|suggest_source_completions|highlight_source_html|compile_preview|PuzzleStudioSolve|WasmCoreRuntime|WasmCompiledCoreRuntime" crates/html_play/static/wasm_game/puzzle_wasm_game.js; then
   echo "generated game WASM bindings include editor or solver exports" >&2
   exit 1
 fi
 
 if grep -aEq "solve_state|puzzle_solver|PuzzleDomain|SearchBudget|suggest_source_completions|highlight_source_html|compile_preview|PuzzleStudioSolve|WasmCoreRuntime|WasmCompiledCoreRuntime" crates/html_play/static/wasm_game/puzzle_wasm_game_bg.wasm; then
   echo "generated game WASM binary includes editor, solver, or core-runtime symbols" >&2
+  exit 1
+fi
+
+if ! grep -aFq "debug_transition_value" crates/html_play/static/wasm_game/puzzle_wasm_game_bg.wasm; then
+  echo "generated editor game WASM binary is missing the editor debug endpoint" >&2
   exit 1
 fi
 

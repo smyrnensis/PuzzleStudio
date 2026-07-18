@@ -4039,7 +4039,7 @@ html[data-theme="light"] .theme-toggle .theme-toggle-moon {
   background: var(--preview-game-bg, var(--sprite3d-preview-bg));
 }
 
-.solver3d-frame {
+.solver-preview-frame {
   position: absolute;
   inset: 0;
   width: 100%;

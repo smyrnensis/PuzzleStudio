@@ -326,15 +326,6 @@ fn parse_input_buffer_block(
     Ok(next_i)
 }
 
-fn parse_again_interval_directive(line: &str) -> Result<u64, DiagnosticReport> {
-    let duration = parse_root_scalar_definition_value(
-        line,
-        "again_interval",
-        "again_interval must be: again_interval = <duration>",
-    )?;
-    parse_wait_duration_ms(&duration, line)
-}
-
 fn parse_scene_value(value: &str, line: &str) -> Result<SceneValue, DiagnosticReport> {
     if value == "true" {
         return Ok(SceneValue::Bool(true));
@@ -814,6 +805,7 @@ fn parse_scene_keys_block(
     while i < lines.len() && !is_block_close_line(&lines[i]) {
         let (binding, next_i) = parse_scene_key_binding_at(lines, i)?;
         recognize_scene_key_binding_line(&lines[i], recognition);
+        recognize_scene_effect_body(lines, i + 1, next_i, recognition);
         bindings.push(binding);
         i = next_i;
     }

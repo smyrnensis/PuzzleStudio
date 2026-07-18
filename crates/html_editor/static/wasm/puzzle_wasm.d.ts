@@ -64,9 +64,9 @@ export function editor_solver_cache_policy_json(): string;
 
 export function expand_workspace_entry_source(entry_path: string, documents_json: string): string;
 
-export function export_html(source: string, puzzle_path: string, game_css: string, game_visuals_js: string, game_runtime_module_js: string, game_runtime_wasm_base64: string): string;
+export function export_html(source: string, puzzle_path: string, game_css: string, game_visuals_js: string, player_runtime_module_js: string, player_runtime_wasm_base64: string): string;
 
-export function export_workspace_html(entry_path: string, documents_json: string, game_css: string, game_visuals_js: string, game_runtime_module_js: string, game_runtime_wasm_base64: string): string;
+export function export_workspace_html(entry_path: string, documents_json: string, game_css: string, game_visuals_js: string, player_runtime_module_js: string, player_runtime_wasm_base64: string): string;
 
 export function generate_visuals_js(source: string, base_visuals_js: string): string;
 

@@ -4,7 +4,8 @@ pub mod budget;
 pub mod domain;
 pub mod grid_domain;
 pub mod object_refs;
-pub mod puzzle_domain;
+#[cfg(test)]
+mod puzzle_domain;
 pub mod relevance;
 pub mod report;
 pub mod slice;
@@ -21,8 +22,7 @@ pub use best_first::{
 pub use bfs::exact_bfs;
 pub use budget::SearchBudget;
 pub use domain::SearchDomain;
-pub use grid_domain::{GridPuzzleDomain, GridStateKey};
-pub use puzzle_domain::{PuzzleDomain, PuzzleSearchState, PuzzleStateKey};
+pub use grid_domain::{GridPuzzleDomain, GridSearchGoal, GridSearchState, GridStateKey};
 pub use relevance::SolverRelevance;
 pub use report::{SearchFailure, SearchOutcome, SearchProgress, SearchStats, Witness};
 pub use slice::SolverSlice;

@@ -236,3 +236,29 @@ level "start" { P }
     assert_eq!(contract.model.game, game.game);
     assert_eq!(contract.model.level_bundle.level_count(), 1);
 }
+
+#[test]
+fn inline_spatial_rows_can_span_multiple_cells_and_levels() {
+    let (game, _) = parse_spatial(
+        r#"
+puzzle board {
+dimension = 3
+slots { Player Goal }
+rules {
+}
+}
+levels demo of board {
+legend {
+P = Player
+G = Goal
+}
+level "one" { PG }
+level "two" { PG }
+}
+"#,
+    );
+
+    assert_eq!(game.levels.len(), 2);
+    assert_eq!(game.levels[0].initial_state.size, Size3::new(2, 1, 1));
+    assert_eq!(game.levels[1].initial_state.size, Size3::new(2, 1, 1));
+}

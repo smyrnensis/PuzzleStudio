@@ -181,7 +181,6 @@ pub fn translate_puzzlescript_to_canonical(source: &str) -> Result<String, Diagn
     let run_rules_on_level_start = parse_run_rules_on_level_start(&sections.prelude);
     let level_select = parse_level_select(&sections.prelude);
     let case_sensitive = parse_case_sensitive(&sections.prelude);
-    let again_interval = parse_again_interval(&sections.prelude);
     let theme_colors = parse_theme_colors(&sections.prelude);
     let viewport_size = parse_viewport_size(&sections.prelude);
     let sounds = parse_sound_defs(&sections.sounds);
@@ -210,9 +209,6 @@ pub fn translate_puzzlescript_to_canonical(source: &str) -> Result<String, Diagn
     }
     if let Some(homepage) = &homepage {
         out.push(format!("homepage = {}", canonical_metadata_text(homepage)));
-    }
-    if let Some(seconds) = &again_interval {
-        out.push(format!("again_interval = {seconds}s"));
     }
     push_imported_comments(&mut out, &sections.comments);
     out.push(String::new());
@@ -581,18 +577,6 @@ fn parse_case_sensitive(prelude: &[String]) -> bool {
     prelude
         .iter()
         .any(|line| line.trim().eq_ignore_ascii_case("case_sensitive"))
-}
-
-fn parse_again_interval(prelude: &[String]) -> Option<String> {
-    prelude.iter().find_map(|line| {
-        let tokens = line.split_whitespace().collect::<Vec<_>>();
-        let [command, seconds] = tokens.as_slice() else {
-            return None;
-        };
-        command
-            .eq_ignore_ascii_case("again_interval")
-            .then(|| (*seconds).to_string())
-    })
 }
 
 fn parse_theme_colors(prelude: &[String]) -> Vec<(String, String)> {
@@ -1239,34 +1223,7 @@ fn parse_ps_color_row(line: &str) -> Option<Vec<String>> {
 }
 
 fn ps_color_to_canonical(color: &str) -> Option<String> {
-    if color.starts_with('#') {
-        return Some(color.to_string());
-    }
-    let mapped = match color.to_ascii_lowercase().as_str() {
-        "transparent" => "transparent",
-        "black" => "#000000",
-        "white" => "#ffffff",
-        "gray" | "grey" => "#808080",
-        "darkgray" | "darkgrey" => "#404040",
-        "lightgray" | "lightgrey" => "#c0c0c0",
-        "red" => "#ff0000",
-        "darkred" => "#800000",
-        "lightred" => "#ff8080",
-        "brown" => "#a46322",
-        "darkbrown" => "#493c2b",
-        "orange" => "#ffa500",
-        "yellow" => "#ffff00",
-        "green" => "#008000",
-        "darkgreen" => "#006400",
-        "lightgreen" => "#90ee90",
-        "blue" => "#0000ff",
-        "darkblue" => "#00008b",
-        "lightblue" => "#add8e6",
-        "purple" => "#800080",
-        "pink" => "#ffc0cb",
-        _ => return None,
-    };
-    Some(mapped.to_string())
+    crate::syntax::canonical_visual_color_literal(color)
 }
 
 fn is_sprite_row(line: &str) -> bool {

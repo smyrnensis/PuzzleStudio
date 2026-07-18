@@ -144,10 +144,7 @@ fn parse_scene_definition(
         })?
         .name;
     let (name, _params) = parse_scene_name_and_params(name, &lines[start])?;
-    recognition
-        .completion_symbols
-        .scenes
-        .insert(name.clone());
+    recognition.completion_symbols.scenes.insert(name.clone());
 
     let resources = collect_scene_resources(lines, start)?;
     let expansion_catalog = SceneExpansionCatalog::from_scene_resources(level_entries, &resources);
@@ -919,6 +916,7 @@ impl puzzle_scene::SceneBlockHandler<source::LogicalLine> for Scene2dBlockHandle
         start: usize,
     ) -> Result<usize, DiagnosticReport> {
         let (transition, next_i) = parse_scene_lifecycle_block(lines, start)?;
+        recognize_scene_effect_body(lines, start + 1, next_i, self.recognition);
         self.scene.transitions.push(transition);
         Ok(next_i)
     }
@@ -930,7 +928,11 @@ impl puzzle_scene::SceneBlockHandler<source::LogicalLine> for Scene2dBlockHandle
     ) -> Result<usize, DiagnosticReport> {
         let tokens = split_header_tokens(&lines[start]);
         match tokens.as_slice() {
-            ["resources"] => parse_scene_resources_block(lines, start, &mut self.scene.resources),
+            ["resources"] => {
+                let next = parse_scene_resources_block(lines, start, &mut self.scene.resources)?;
+                recognize_scene_resource_body(lines, start + 1, next, self.recognition);
+                Ok(next)
+            }
             ["var", ..]
             | ["const", ..]
             | ["persistent", "var", ..]
@@ -950,6 +952,7 @@ impl puzzle_scene::SceneBlockHandler<source::LogicalLine> for Scene2dBlockHandle
                         ));
                     }
                 }
+                recognize_scene_state_line(&lines[start], self.recognition);
                 Ok(start + 1)
             }
             ["on_level_start" | "on_level_clear" | "on_last_level_clear"] => Err(parse_error(
@@ -985,11 +988,15 @@ impl puzzle_scene::SceneBlockHandler<source::LogicalLine> for Scene2dBlockHandle
             }
             ["on", ..] => {
                 let (transition, next_i) = parse_scene_on_block(lines, start)?;
+                recognize_scene_condition_line(&lines[start], self.recognition);
+                recognize_scene_effect_body(lines, start + 1, next_i, self.recognition);
                 self.scene.transitions.push(transition);
                 Ok(next_i)
             }
             ["if", ..] => {
                 let (transition, next_i) = parse_scene_condition_block(lines, start)?;
+                recognize_scene_condition_line(&lines[start], self.recognition);
+                recognize_scene_effect_body(lines, start + 1, next_i, self.recognition);
                 self.scene.transitions.push(transition);
                 Ok(next_i)
             }
@@ -1002,6 +1009,80 @@ impl puzzle_scene::SceneBlockHandler<source::LogicalLine> for Scene2dBlockHandle
                 &lines[start],
                 &format!("unknown scene directive {other}"),
             )),
+        }
+    }
+}
+
+fn recognize_scene_state_line(
+    line: &source::LogicalLine,
+    recognition: &mut crate::surface::ParserRecognition,
+) {
+    for (index, token) in line
+        .tokens
+        .iter()
+        .filter(|token| !matches!(token.text.as_str(), "{" | "}" | "="))
+        .enumerate()
+    {
+        recognition.mark(
+            crate::surface::SourceSpan {
+                start: token.start,
+                end: token.end,
+            },
+            if index == 0 {
+                crate::surface::SurfaceSemanticKind::Keyword
+            } else {
+                crate::surface::SurfaceSemanticKind::State
+            },
+        );
+    }
+}
+
+fn recognize_scene_condition_line(
+    line: &source::LogicalLine,
+    recognition: &mut crate::surface::ParserRecognition,
+) {
+    for (index, token) in line
+        .tokens
+        .iter()
+        .filter(|token| !matches!(token.text.as_str(), "{" | "}" | "="))
+        .enumerate()
+    {
+        recognition.mark(
+            crate::surface::SourceSpan {
+                start: token.start,
+                end: token.end,
+            },
+            if index == 0 {
+                crate::surface::SurfaceSemanticKind::Keyword
+            } else {
+                crate::surface::SurfaceSemanticKind::State
+            },
+        );
+    }
+}
+
+fn recognize_scene_resource_body(
+    lines: &[source::LogicalLine],
+    start: usize,
+    end: usize,
+    recognition: &mut crate::surface::ParserRecognition,
+) {
+    for line in lines.iter().take(end.saturating_sub(1)).skip(start) {
+        for (index, token) in line.tokens.iter().enumerate() {
+            if matches!(token.text.as_str(), "{" | "}") {
+                continue;
+            }
+            recognition.mark(
+                crate::surface::SourceSpan {
+                    start: token.start,
+                    end: token.end,
+                },
+                if index == 0 {
+                    crate::surface::SurfaceSemanticKind::Keyword
+                } else {
+                    crate::surface::SurfaceSemanticKind::State
+                },
+            );
         }
     }
 }
@@ -1163,11 +1244,10 @@ fn parse_scene_view_like_block(
                     recognition,
                 )?;
             components.extend(parsed_components);
-            recognition.completion_symbols.states.extend(
-                nested_puzzles
-                    .iter()
-                    .map(|puzzle| puzzle.name.clone()),
-            );
+            recognition
+                .completion_symbols
+                .states
+                .extend(nested_puzzles.iter().map(|puzzle| puzzle.name.clone()));
             puzzles.extend(nested_puzzles);
             i = next_i;
             continue;
@@ -1209,6 +1289,7 @@ fn parse_scene_view_like_block(
                     }
                 }
             }
+            recognize_scene_state_line(&lines[i], recognition);
             i += 1;
             continue;
         }
@@ -1216,6 +1297,7 @@ fn parse_scene_view_like_block(
         if let [slot] = tokens.as_slice()
             && is_identifier(slot)
         {
+            recognize_scene_component_line(&lines[i], recognition);
             let puzzle = inferred_scene_puzzle_slot(slot, SceneStateLifetime::Instance);
             recognition
                 .completion_symbols
@@ -1237,11 +1319,10 @@ fn parse_scene_view_like_block(
             recognition,
         )?;
         components.extend(parsed_components);
-        recognition.completion_symbols.states.extend(
-            nested_puzzles
-                .iter()
-                .map(|puzzle| puzzle.name.clone()),
-        );
+        recognition
+            .completion_symbols
+            .states
+            .extend(nested_puzzles.iter().map(|puzzle| puzzle.name.clone()));
         puzzles.extend(nested_puzzles);
         i = next_i;
     }

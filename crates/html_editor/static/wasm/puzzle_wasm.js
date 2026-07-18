@@ -619,11 +619,11 @@ export function expand_workspace_entry_source(entry_path, documents_json) {
  * @param {string} puzzle_path
  * @param {string} game_css
  * @param {string} game_visuals_js
- * @param {string} game_runtime_module_js
- * @param {string} game_runtime_wasm_base64
+ * @param {string} player_runtime_module_js
+ * @param {string} player_runtime_wasm_base64
  * @returns {string}
  */
-export function export_html(source, puzzle_path, game_css, game_visuals_js, game_runtime_module_js, game_runtime_wasm_base64) {
+export function export_html(source, puzzle_path, game_css, game_visuals_js, player_runtime_module_js, player_runtime_wasm_base64) {
     let deferred8_0;
     let deferred8_1;
     try {
@@ -635,9 +635,9 @@ export function export_html(source, puzzle_path, game_css, game_visuals_js, game
         const len2 = WASM_VECTOR_LEN;
         const ptr3 = passStringToWasm0(game_visuals_js, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len3 = WASM_VECTOR_LEN;
-        const ptr4 = passStringToWasm0(game_runtime_module_js, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const ptr4 = passStringToWasm0(player_runtime_module_js, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len4 = WASM_VECTOR_LEN;
-        const ptr5 = passStringToWasm0(game_runtime_wasm_base64, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const ptr5 = passStringToWasm0(player_runtime_wasm_base64, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len5 = WASM_VECTOR_LEN;
         const ret = wasm.export_html(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5);
         var ptr7 = ret[0];
@@ -659,11 +659,11 @@ export function export_html(source, puzzle_path, game_css, game_visuals_js, game
  * @param {string} documents_json
  * @param {string} game_css
  * @param {string} game_visuals_js
- * @param {string} game_runtime_module_js
- * @param {string} game_runtime_wasm_base64
+ * @param {string} player_runtime_module_js
+ * @param {string} player_runtime_wasm_base64
  * @returns {string}
  */
-export function export_workspace_html(entry_path, documents_json, game_css, game_visuals_js, game_runtime_module_js, game_runtime_wasm_base64) {
+export function export_workspace_html(entry_path, documents_json, game_css, game_visuals_js, player_runtime_module_js, player_runtime_wasm_base64) {
     let deferred8_0;
     let deferred8_1;
     try {
@@ -675,9 +675,9 @@ export function export_workspace_html(entry_path, documents_json, game_css, game
         const len2 = WASM_VECTOR_LEN;
         const ptr3 = passStringToWasm0(game_visuals_js, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len3 = WASM_VECTOR_LEN;
-        const ptr4 = passStringToWasm0(game_runtime_module_js, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const ptr4 = passStringToWasm0(player_runtime_module_js, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len4 = WASM_VECTOR_LEN;
-        const ptr5 = passStringToWasm0(game_runtime_wasm_base64, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const ptr5 = passStringToWasm0(player_runtime_wasm_base64, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len5 = WASM_VECTOR_LEN;
         const ret = wasm.export_workspace_html(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5);
         var ptr7 = ret[0];

@@ -451,7 +451,7 @@ fn push_highlight_spans_json<'a>(
         push_json_string(out, "kind", span.kind.as_str());
         out.push_str(",\"color\":");
         match &span.color {
-            Some(color) => push_json_string_value(out, color),
+            Some(color) => push_json_string_value(out, color.as_str()),
             None => out.push_str("null"),
         }
         out.push(',');
@@ -849,6 +849,27 @@ B
             analysis.highlight_json(true),
             analyze_source(&expected).highlight_json(true)
         );
+    }
+
+    #[test]
+    fn source_analysis_trivia_edit_keeps_parser_spans_on_the_current_revision() {
+        let source =
+            "puzzle board {\n  input right\n  slots { actors = Player }\n  rules {\n  }\n}\n";
+        let mut analysis = analyze_source(source);
+        let _ = analysis.highlight_json(true);
+
+        let result = analysis
+            .apply_edit(SourceAnalysisEdit { start: 0, end: 0 }, " ")
+            .expect("incremental trivia edit");
+
+        let expected = format!(" {source}");
+        assert_eq!(analysis.source(), expected);
+        assert_eq!(
+            analysis.highlight_json(true),
+            analyze_source(&expected).highlight_json(true),
+            "incremental parser spans must describe the same revision as a fresh parser product"
+        );
+        assert!(!result.parser_catalog_reused);
     }
 
     #[test]

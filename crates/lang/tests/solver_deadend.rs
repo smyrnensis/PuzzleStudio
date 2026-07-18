@@ -56,6 +56,8 @@ level "start" {
 fn deadend_queries_lower_for_puzzle3d() {
     let source = r#"
 puzzle default {
+dimension = 3
+
 slots {
 floor = Goal
 actor = Box
@@ -71,6 +73,9 @@ solver {
 deadend any {
 blocked
 }
+}
+
+rules {
 }
 }
 

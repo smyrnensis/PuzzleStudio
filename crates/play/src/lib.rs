@@ -4,11 +4,11 @@ use std::{
 };
 
 use puzzle_core::{
-    GridExecutableProgram, GridPatch, GridProgramSegmentTrace, GridSize, GridState,
-    GridTransitionError, InputId, LayerId, ObjectId, PatchOp, ProgramContinuation, RuleId, Size2,
-    State as PuzzleState, TransitionCommand, transition_program_continuation_segment_trace,
-    transition_program_outcome, transition_program_segment_trace,
+    GridExecutableProgram, GridRuleFiring, GridRuleFiringSummary, GridSize, GridState,
+    GridTransitionError, InputId, LayerId, ObjectId, PatchOp, RuleId, Size2, State as PuzzleState,
+    TransitionCommand, transition_program_outcome,
     transition_program_sequence_without_input_outcome,
+    transition_program_sequence_without_input_summary_outcome, transition_program_summary_outcome,
 };
 use puzzle_lang::{
     AsciiLegend, LevelMenuDef, LoadedDocument, LoadedDocumentModel, LoadedGame, LoadedGridGame,
@@ -17,7 +17,9 @@ use puzzle_lang::{
     SceneLevelKey, ScenePuzzleInitializer, SceneTransitionTrigger, SceneValue, SceneVarKind,
     parse_scene_effect_params, parse_scene_expression,
 };
-use puzzle_runtime_contract::{RuntimeAnimationEvent, RuntimeCoord};
+use puzzle_runtime_contract::{
+    RuntimeAnimationEvent, RuntimeCoord, RuntimePresentationEvent, RuntimePresentationEventKind,
+};
 
 mod runtime_sounds;
 mod session_history;
@@ -60,7 +62,6 @@ pub enum MessageEvent {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WaitEvent {
     Wait { milliseconds: u64 },
-    ContinueEffects { milliseconds: u64 },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -83,6 +84,27 @@ pub enum AnimationEvent {
         y: u16,
         z: u16,
     },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PresentationEventKind {
+    Sound(SoundEvent),
+    Message(MessageEvent),
+    Wait(WaitEvent),
+    Animation(AnimationEvent),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PresentationEvent {
+    pub context: PresentationContext,
+    pub kind: PresentationEventKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PresentationContext {
+    pub scene: String,
+    pub puzzle: String,
+    pub level_index: Option<usize>,
 }
 
 pub fn animation_events_contract<const D: usize, Size: GridSize<D>>(
@@ -137,6 +159,59 @@ pub fn animation_events_contract<const D: usize, Size: GridSize<D>>(
         .collect()
 }
 
+pub fn presentation_events_contract<const D: usize, Size: GridSize<D>>(
+    loaded: &LoadedGridGame<D, Size>,
+    events: &[PresentationEvent],
+) -> Vec<RuntimePresentationEvent> {
+    events
+        .iter()
+        .map(|event| {
+            let event_kind = match &event.kind {
+                PresentationEventKind::Sound(SoundEvent::PlaySfx { name }) => {
+                    RuntimePresentationEventKind::PlaySfx { name: name.clone() }
+                }
+                PresentationEventKind::Sound(SoundEvent::PlayMusic { name }) => {
+                    RuntimePresentationEventKind::PlayMusic { name: name.clone() }
+                }
+                PresentationEventKind::Sound(SoundEvent::PauseMusic { name }) => {
+                    RuntimePresentationEventKind::PauseMusic { name: name.clone() }
+                }
+                PresentationEventKind::Sound(SoundEvent::ResumeMusic { name }) => {
+                    RuntimePresentationEventKind::ResumeMusic { name: name.clone() }
+                }
+                PresentationEventKind::Sound(SoundEvent::StopMusic { name }) => {
+                    RuntimePresentationEventKind::StopMusic { name: name.clone() }
+                }
+                PresentationEventKind::Message(MessageEvent::Message { text }) => {
+                    RuntimePresentationEventKind::Message { text: text.clone() }
+                }
+                PresentationEventKind::Wait(WaitEvent::Wait { milliseconds }) => {
+                    RuntimePresentationEventKind::Wait {
+                        milliseconds: *milliseconds,
+                    }
+                }
+                PresentationEventKind::Animation(animation) => {
+                    RuntimePresentationEventKind::Animation {
+                        animation: animation_events_contract(
+                            loaded,
+                            std::slice::from_ref(animation),
+                        )
+                        .into_iter()
+                        .next()
+                        .expect("one animation event must serialize as one runtime event"),
+                    }
+                }
+            };
+            RuntimePresentationEvent {
+                scene: event.context.scene.clone(),
+                puzzle: event.context.puzzle.clone(),
+                level_index: event.context.level_index,
+                event: event_kind,
+            }
+        })
+        .collect()
+}
+
 pub fn animation_events_contract_2d(
     loaded: &LoadedGame,
     events: &[AnimationEvent],
@@ -180,10 +255,7 @@ pub struct GridWorldInstanceState<const D: usize, Size: GridSize<D>> {
     selected_level_index: usize,
     level_initial_state_override: Option<GridLevelInitialStateOverride<D, Size>>,
     persistent_vars: Vec<i64>,
-    pending_effect_continuation: Option<PendingEffectContinuation>,
-    pending_program_continuation: Option<PendingProgramContinuation>,
-    pending_program_undo_anchor: Option<GridState<D, Size>>,
-    last_debug_transition: Option<GridDebugTransition<D>>,
+    last_transition_trace: Option<GridTransitionTrace<D>>,
 }
 
 pub type WorldInstanceState = GridWorldInstanceState<2, Size2>;
@@ -206,22 +278,22 @@ struct GridModelInputResult<const D: usize> {
     world: Option<WorldInstanceId>,
     undo_base_len: usize,
     cancelled: bool,
-    effects: Vec<QueuedRuleEffect>,
-    checkpoint: Option<PendingProgramContinuation>,
-    debug_transition: Option<GridDebugTransition<D>>,
+    items: Vec<QueuedTurnItem>,
+    transition_trace: Option<GridTransitionTrace<D>>,
 }
 
 #[derive(Clone, Debug)]
-pub struct GridDebugTransition<const D: usize> {
+pub struct GridTransitionTrace<const D: usize> {
     pub input: InputId,
     pub target: Option<String>,
+    pub progressed: bool,
+    pub observable: bool,
     pub cancelled: bool,
     pub commands: Vec<TransitionCommand>,
-    pub fired_rules: Vec<RuleId>,
-    pub patches: Vec<GridPatch<D>>,
+    pub firings: Vec<GridRuleFiring<D>>,
 }
 
-pub type DebugTransition = GridDebugTransition<2>;
+pub type TransitionTrace = GridTransitionTrace<2>;
 
 #[derive(Clone, Debug)]
 struct QueuedTransitionCommand {
@@ -236,46 +308,37 @@ struct QueuedRuleEffect {
 }
 
 #[derive(Clone, Debug)]
-struct PendingEffectContinuation {
-    effects: Vec<QueuedRuleEffect>,
-    condition_effect: Option<SceneEffect>,
-    undo_base_len: usize,
+enum QueuedTurnItem {
+    Effect(QueuedRuleEffect),
+    Animation(AnimationEvent),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InputExecutionMode {
+    Player,
+    PlayerTrace,
+    Headless,
+}
+
+impl InputExecutionMode {
+    fn materializes_presentation(self) -> bool {
+        matches!(self, Self::Player | Self::PlayerTrace)
+    }
+
+    fn collects_trace(self) -> bool {
+        matches!(self, Self::PlayerTrace)
+    }
 }
 
 #[derive(Clone, Debug)]
-struct PendingProgramContinuation {
-    target: Option<String>,
-    input: InputId,
-    program_level_index: usize,
-    wait_ms: u64,
-    remaining_program: ProgramContinuation,
-    effects_after_wait: Vec<QueuedRuleEffect>,
-    mode: PendingProgramMode,
-    undo_base_len: usize,
-}
-
-#[derive(Clone, Debug)]
-enum PendingProgramMode {
-    TurnCompletion,
-}
-
-#[derive(Clone, Debug)]
-struct GridProgramSegmentOutcome<const D: usize, Size: GridSize<D>> {
+struct GridProgramOutcome<const D: usize, Size: GridSize<D>> {
     next_state: GridState<D, Size>,
+    progressed: bool,
+    observable: bool,
     cancelled: bool,
     commands: Vec<TransitionCommand>,
-    fired_rules: Vec<RuleId>,
-    patches: Vec<GridPatch<D>>,
-    effects: Vec<QueuedRuleEffect>,
-    animations: Vec<AnimationEvent>,
-    checkpoint: Option<EffectCheckpoint>,
-}
-
-#[derive(Clone, Debug)]
-struct EffectCheckpoint {
-    milliseconds: u64,
-    effects_after_wait: Vec<QueuedRuleEffect>,
-    remaining_program: ProgramContinuation,
+    firings: GridCapturedFirings<D>,
+    items: Vec<QueuedTurnItem>,
 }
 
 #[derive(Clone, Debug)]
@@ -283,7 +346,39 @@ struct GridLifecycleOutcome<const D: usize, Size: GridSize<D>> {
     next_state: GridState<D, Size>,
     cancelled: bool,
     commands: Vec<TransitionCommand>,
-    fired_rules: Vec<puzzle_core::RuleId>,
+    firings: GridCapturedFirings<D>,
+}
+
+#[derive(Clone, Debug)]
+enum GridCapturedFirings<const D: usize> {
+    Summary(Vec<GridRuleFiringSummary>),
+    Detailed(Vec<GridRuleFiring<D>>),
+}
+
+impl<const D: usize> GridCapturedFirings<D> {
+    fn is_empty(&self) -> bool {
+        match self {
+            Self::Summary(firings) => firings.is_empty(),
+            Self::Detailed(firings) => firings.is_empty(),
+        }
+    }
+
+    fn into_detailed(self) -> Vec<GridRuleFiring<D>> {
+        match self {
+            Self::Detailed(firings) => firings,
+            Self::Summary(_) => {
+                unreachable!("detailed firings were required for the traced input mode")
+            }
+        }
+    }
+
+    fn extend(&mut self, next: Self) {
+        match (self, next) {
+            (Self::Summary(current), Self::Summary(next)) => current.extend(next),
+            (Self::Detailed(current), Self::Detailed(next)) => current.extend(next),
+            _ => unreachable!("lifecycle firing capture mode changed during one transition"),
+        }
+    }
 }
 
 pub const PROGRESS_SAVE_VERSION: u32 = 1;
@@ -322,17 +417,149 @@ pub struct GridGameSession<const D: usize, Size: GridSize<D>> {
     scene_states: HashMap<String, GridSceneRuntimeState<D, Size>>,
     routed_world: WorldInstanceId,
     execution_world: Option<WorldInstanceId>,
-    continuation_worlds: Vec<WorldInstanceId>,
     session_values: HashMap<String, SceneValue>,
     current_input: Option<String>,
     current_turn_sfx: Option<HashSet<String>>,
-    sound_events: Vec<SoundEvent>,
-    message_events: Vec<MessageEvent>,
-    wait_events: Vec<WaitEvent>,
-    animation_events: Vec<AnimationEvent>,
+    presentation_events: Vec<PresentationEvent>,
+    input_execution_mode: InputExecutionMode,
+    last_level_completion: Option<GridLevelCompletion<D, Size>>,
 }
 
 pub type GameSession = GridGameSession<2, Size2>;
+
+/// The committed level state that satisfied turn completion before any
+/// `on_level_clear` effects or navigation changed the active session state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GridLevelCompletion<const D: usize, Size: GridSize<D>> {
+    level_index: usize,
+    state: GridState<D, Size>,
+}
+
+pub type LevelCompletion = GridLevelCompletion<2, Size2>;
+
+impl<const D: usize, Size: GridSize<D>> GridLevelCompletion<D, Size> {
+    pub fn level_index(&self) -> usize {
+        self.level_index
+    }
+
+    pub fn state(&self) -> &GridState<D, Size> {
+        &self.state
+    }
+}
+
+/// A headless play session whose one public operation is one complete semantic
+/// model input. It intentionally owns no clock or presentation scheduling:
+/// `GridGameSession::apply_input` finishes `again` turns and lifecycle work
+/// synchronously before returning.
+#[derive(Clone, Debug)]
+pub struct GridHeadlessSession<const D: usize, Size: GridSize<D>> {
+    session: GridGameSession<D, Size>,
+    tracked_level_index: usize,
+    completion: Option<GridLevelCompletion<D, Size>>,
+}
+
+pub type HeadlessSession = GridHeadlessSession<2, Size2>;
+
+impl<const D: usize, Size: GridSize<D>> GridHeadlessSession<D, Size> {
+    pub fn from_level_state(
+        game: &LoadedGridGame<D, Size>,
+        level_index: usize,
+        state: GridState<D, Size>,
+    ) -> Result<Self, GridTransitionError<D>> {
+        let mut session = GridGameSession::new(game);
+        session.start_level_from_state(game, level_index, state.clone(), false)?;
+        if session.active_level_index() != Some(level_index) || session.state() != &state {
+            return Err(GridTransitionError::<D>::InvalidCommand(
+                "headless level state was changed before its first semantic input".to_string(),
+            ));
+        }
+        session.clear_headless_transients();
+        Ok(Self {
+            session,
+            tracked_level_index: level_index,
+            completion: None,
+        })
+    }
+
+    pub fn from_game_session(
+        session: GridGameSession<D, Size>,
+        tracked_level_index: usize,
+    ) -> Result<Self, GridTransitionError<D>> {
+        Self::from_game_session_with_state_projection(
+            session,
+            tracked_level_index,
+            GridState::clone,
+        )
+    }
+
+    pub fn from_game_session_with_state_projection(
+        mut session: GridGameSession<D, Size>,
+        tracked_level_index: usize,
+        mut project_state: impl FnMut(&GridState<D, Size>) -> GridState<D, Size>,
+    ) -> Result<Self, GridTransitionError<D>> {
+        if tracked_level_index >= session.cleared_levels().len() {
+            return Err(GridTransitionError::<D>::InvalidCommand(format!(
+                "headless tracked level index out of range: {tracked_level_index}"
+            )));
+        }
+        session.clear_headless_transients();
+        session.project_persistent_states(&mut project_state);
+        Ok(Self {
+            session,
+            tracked_level_index,
+            completion: None,
+        })
+    }
+
+    pub fn apply_input(
+        &mut self,
+        game: &LoadedGridGame<D, Size>,
+        input: InputId,
+    ) -> Result<(), GridTransitionError<D>> {
+        self.session.apply_headless_input(game, input)?;
+        self.completion = self
+            .session
+            .last_level_completion()
+            .filter(|completion| completion.level_index() == self.tracked_level_index)
+            .cloned();
+        self.session.clear_headless_transients();
+        Ok(())
+    }
+
+    pub fn state(&self) -> &GridState<D, Size> {
+        self.session.state()
+    }
+
+    pub fn completed(&self) -> bool {
+        self.completion.is_some()
+    }
+
+    pub fn completion(&self) -> Option<&GridLevelCompletion<D, Size>> {
+        self.completion.as_ref()
+    }
+
+    pub fn observation_state(&self) -> &GridState<D, Size> {
+        self.completion
+            .as_ref()
+            .map_or_else(|| self.state(), GridLevelCompletion::state)
+    }
+
+    pub fn session(&self) -> &GridGameSession<D, Size> {
+        &self.session
+    }
+
+    pub fn into_session(self) -> GridGameSession<D, Size> {
+        self.session
+    }
+
+    /// Exact future-relevant session state used for search deduplication.
+    /// Presentation events, debug traces, and undo history are excluded because
+    /// semantic model inputs cannot observe or invoke those player controls.
+    pub fn search_key(&self) -> Vec<u8> {
+        self.session
+            .headless_search_key(self.tracked_level_index, self.completed())
+    }
+}
 
 impl<const D: usize, Size: GridSize<D>> Deref for GridGameSession<D, Size> {
     type Target = GridWorldInstanceState<D, Size>;
@@ -372,7 +599,6 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
             scene_states: HashMap::new(),
             routed_world: routed_world.clone(),
             execution_world: None,
-            continuation_worlds: Vec::new(),
             session_values: game
                 .variables
                 .iter()
@@ -380,10 +606,9 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
                 .collect(),
             current_input: None,
             current_turn_sfx: None,
-            sound_events: Vec::new(),
-            message_events: Vec::new(),
-            wait_events: Vec::new(),
-            animation_events: Vec::new(),
+            presentation_events: Vec::new(),
+            input_execution_mode: InputExecutionMode::Player,
+            last_level_completion: None,
         };
         session.create_scene(game, &routed_world.scene);
         if routed_world.scene != focused_scene {
@@ -395,6 +620,209 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         let _ = session.apply_scene_start_transition(game);
         let _ = session.apply_level_start_transition(game);
         session
+    }
+
+    fn clear_headless_transients(&mut self) {
+        self.presentation_events.clear();
+        self.last_level_completion = None;
+        for scene in self.scene_states.values_mut() {
+            for puzzle in scene.puzzles.values_mut() {
+                puzzle.history.clear();
+                puzzle.last_transition_trace = None;
+            }
+        }
+    }
+
+    fn project_persistent_states(
+        &mut self,
+        project_state: &mut impl FnMut(&GridState<D, Size>) -> GridState<D, Size>,
+    ) {
+        for scene in self.scene_states.values_mut() {
+            for puzzle in scene.puzzles.values_mut() {
+                puzzle.state = project_state(&puzzle.state);
+                puzzle.initial_state = project_state(&puzzle.initial_state);
+                puzzle.checkpoint_state = puzzle.checkpoint_state.as_ref().map(&mut *project_state);
+                if let Some(initial) = &mut puzzle.level_initial_state_override {
+                    initial.state = project_state(&initial.state);
+                }
+            }
+        }
+    }
+
+    fn headless_search_key(&self, tracked_level_index: usize, completed: bool) -> Vec<u8> {
+        fn push_u64(out: &mut Vec<u8>, value: u64) {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+
+        fn push_text(out: &mut Vec<u8>, value: &str) {
+            push_u64(out, value.len() as u64);
+            out.extend_from_slice(value.as_bytes());
+        }
+
+        fn push_value(out: &mut Vec<u8>, value: &SceneValue) {
+            match value {
+                SceneValue::Bool(value) => {
+                    out.push(0);
+                    out.push(u8::from(*value));
+                }
+                SceneValue::Int(value) => {
+                    out.push(1);
+                    push_u64(out, *value as u64);
+                }
+                SceneValue::Text(value) => {
+                    out.push(2);
+                    push_text(out, value);
+                }
+                SceneValue::Symbol(value) => {
+                    out.push(3);
+                    push_text(out, value);
+                }
+                SceneValue::LevelRef(value) => {
+                    out.push(4);
+                    push_u64(out, *value as u64);
+                }
+            }
+        }
+
+        fn push_state<const D: usize, Size: GridSize<D>>(
+            out: &mut Vec<u8>,
+            state: &GridState<D, Size>,
+        ) {
+            for axis in state.size.axes() {
+                push_u64(out, u64::from(axis));
+            }
+            push_u64(out, u64::from(state.layer_count));
+            push_u64(out, state.slots().len() as u64);
+            for object in state.slots() {
+                push_u64(out, u64::from(object.0));
+            }
+            push_state_marks(out, state);
+            push_u64(out, state.visible_variables().len() as u64);
+            for value in state.visible_variables() {
+                push_u64(out, *value as u64);
+            }
+            push_u64(out, state.level_fired_rules().len() as u64);
+            for rule in state.level_fired_rules() {
+                push_u64(out, u64::from(rule.0));
+            }
+        }
+
+        fn push_state_marks<const D: usize, Size: GridSize<D>>(
+            out: &mut Vec<u8>,
+            state: &GridState<D, Size>,
+        ) {
+            for marks in [state.cell_mark(), state.slot_mark()] {
+                push_u64(out, marks.len() as u64);
+                for cell in marks {
+                    push_u64(out, cell.len() as u64);
+                    for mark in cell {
+                        push_u64(out, u64::from(mark.mark.0));
+                        out.push(u8::from(mark.value.is_some()));
+                        if let Some(value) = mark.value {
+                            push_u64(out, value as u64);
+                        }
+                    }
+                }
+            }
+        }
+
+        fn push_optional_state<const D: usize, Size: GridSize<D>>(
+            out: &mut Vec<u8>,
+            state: Option<&GridState<D, Size>>,
+        ) {
+            out.push(u8::from(state.is_some()));
+            if let Some(state) = state {
+                push_state(out, state);
+            }
+        }
+
+        let mut out = Vec::new();
+        let current_world = self.current_world_id();
+        push_u64(&mut out, tracked_level_index as u64);
+        out.push(u8::from(completed));
+        push_text(&mut out, &self.focused_scene);
+        push_u64(&mut out, self.visible_scenes.len() as u64);
+        for scene in &self.visible_scenes {
+            push_text(&mut out, scene);
+        }
+        push_u64(&mut out, self.focus_history.len() as u64);
+        for scene in &self.focus_history {
+            push_text(&mut out, scene);
+        }
+        let mut scene_names = self.scene_states.keys().cloned().collect::<Vec<_>>();
+        scene_names.sort();
+        push_u64(&mut out, scene_names.len() as u64);
+        for scene_name in scene_names {
+            push_text(&mut out, &scene_name);
+            let scene = &self.scene_states[&scene_name];
+            let mut values = scene.values.iter().collect::<Vec<_>>();
+            values.sort_by_key(|(name, _)| *name);
+            push_u64(&mut out, values.len() as u64);
+            for (name, value) in values {
+                push_text(&mut out, name);
+                push_value(&mut out, value);
+            }
+            let mut puzzle_names = scene.puzzles.keys().cloned().collect::<Vec<_>>();
+            puzzle_names.sort();
+            push_u64(&mut out, puzzle_names.len() as u64);
+            for puzzle_name in puzzle_names {
+                push_text(&mut out, &puzzle_name);
+                let puzzle = &scene.puzzles[&puzzle_name];
+                push_text(&mut out, &puzzle.model);
+                if current_world.scene == scene_name && current_world.puzzle == puzzle_name {
+                    // The solver key already owns this state's dimensions,
+                    // slots, variables, and fired rules. Marks are the only
+                    // remaining core state not represented there.
+                    push_state_marks(&mut out, &puzzle.state);
+                } else {
+                    push_state(&mut out, &puzzle.state);
+                }
+                push_state(&mut out, &puzzle.initial_state);
+                push_optional_state(&mut out, puzzle.checkpoint_state.as_ref());
+                push_u64(
+                    &mut out,
+                    puzzle
+                        .active_level_index
+                        .map_or(u64::MAX, |index| index as u64),
+                );
+                out.push(u8::from(puzzle.level_started));
+                push_u64(&mut out, puzzle.cleared_levels.len() as u64);
+                for cleared in &puzzle.cleared_levels {
+                    out.push(u8::from(*cleared));
+                }
+                push_u64(&mut out, puzzle.selected_level_index as u64);
+                push_optional_state(
+                    &mut out,
+                    puzzle
+                        .level_initial_state_override
+                        .as_ref()
+                        .map(|initial| &initial.state),
+                );
+                push_u64(&mut out, puzzle.persistent_vars.len() as u64);
+                for value in &puzzle.persistent_vars {
+                    push_u64(&mut out, *value as u64);
+                }
+            }
+        }
+        push_text(&mut out, &self.routed_world.scene);
+        push_text(&mut out, &self.routed_world.puzzle);
+        out.push(u8::from(self.execution_world.is_some()));
+        if let Some(world) = &self.execution_world {
+            push_text(&mut out, &world.scene);
+            push_text(&mut out, &world.puzzle);
+        }
+        let mut session_values = self.session_values.iter().collect::<Vec<_>>();
+        session_values.sort_by_key(|(name, _)| *name);
+        push_u64(&mut out, session_values.len() as u64);
+        for (name, value) in session_values {
+            push_text(&mut out, name);
+            push_value(&mut out, value);
+        }
+        out.push(u8::from(self.current_input.is_some()));
+        if let Some(input) = &self.current_input {
+            push_text(&mut out, input);
+        }
+        out
     }
 
     pub fn screen(&self) -> &str {
@@ -580,20 +1008,23 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         })
     }
 
-    pub fn take_sound_events(&mut self) -> Vec<SoundEvent> {
-        std::mem::take(&mut self.sound_events)
+    pub fn take_presentation_events(&mut self) -> Vec<PresentationEvent> {
+        std::mem::take(&mut self.presentation_events)
     }
 
-    pub fn take_message_events(&mut self) -> Vec<MessageEvent> {
-        std::mem::take(&mut self.message_events)
-    }
-
-    pub fn take_wait_events(&mut self) -> Vec<WaitEvent> {
-        std::mem::take(&mut self.wait_events)
-    }
-
-    pub fn take_animation_events(&mut self) -> Vec<AnimationEvent> {
-        std::mem::take(&mut self.animation_events)
+    fn push_presentation_event(&mut self, kind: PresentationEventKind) {
+        if !self.input_execution_mode.materializes_presentation() {
+            return;
+        }
+        let world = self.current_world_id().clone();
+        self.presentation_events.push(PresentationEvent {
+            context: PresentationContext {
+                scene: world.scene,
+                puzzle: world.puzzle,
+                level_index: self.active_level_index,
+            },
+            kind,
+        });
     }
 
     fn mark_current_level_cleared(&mut self) {
@@ -714,7 +1145,55 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         game: &LoadedGridGame<D, Size>,
         input: InputId,
     ) -> Result<(), GridTransitionError<D>> {
-        self.last_debug_transition = None;
+        self.last_level_completion = None;
+        self.apply_input_with_mode(game, input, InputExecutionMode::Player)
+    }
+
+    pub fn apply_traced_input(
+        &mut self,
+        game: &LoadedGridGame<D, Size>,
+        input: InputId,
+    ) -> Result<(), GridTransitionError<D>> {
+        self.last_level_completion = None;
+        self.apply_input_with_mode(game, input, InputExecutionMode::PlayerTrace)
+    }
+
+    pub fn last_level_completion(&self) -> Option<&GridLevelCompletion<D, Size>> {
+        self.last_level_completion.as_ref()
+    }
+
+    /// Applies one complete semantic model input without materializing any
+    /// presentation timeline or debug trace. Turn completion, `again`, scene
+    /// effects, and lifecycle handling remain owned by the same player path.
+    pub fn apply_headless_input(
+        &mut self,
+        game: &LoadedGridGame<D, Size>,
+        input: InputId,
+    ) -> Result<(), GridTransitionError<D>> {
+        self.last_level_completion = None;
+        self.apply_input_with_mode(game, input, InputExecutionMode::Headless)?;
+        Ok(())
+    }
+
+    fn apply_input_with_mode(
+        &mut self,
+        game: &LoadedGridGame<D, Size>,
+        input: InputId,
+        mode: InputExecutionMode,
+    ) -> Result<(), GridTransitionError<D>> {
+        let previous_mode = self.input_execution_mode;
+        self.input_execution_mode = mode;
+        let result = self.apply_input_in_current_mode(game, input);
+        self.input_execution_mode = previous_mode;
+        result
+    }
+
+    fn apply_input_in_current_mode(
+        &mut self,
+        game: &LoadedGridGame<D, Size>,
+        input: InputId,
+    ) -> Result<(), GridTransitionError<D>> {
+        self.last_transition_trace = None;
         let previous_input = self.current_input.clone();
         self.current_input = game.input_labels.get(&input).cloned();
         let undo_base_len = self.history.undo_len();
@@ -737,22 +1216,15 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
             .world
             .clone()
             .unwrap_or_else(|| self.current_world_id().clone());
-        let debug_transition = result.debug_transition.clone();
-        self.with_execution_world(world.clone(), |session| {
-            session.last_debug_transition = debug_transition;
-        });
+        if self.input_execution_mode.collects_trace() {
+            let transition_trace = result.transition_trace.clone();
+            self.with_execution_world(world.clone(), |session| {
+                session.last_transition_trace = transition_trace;
+            });
+        }
         if !result.cancelled {
             let condition_result = self.with_execution_world(world, |session| {
-                if let Some(checkpoint) = result.checkpoint {
-                    session.queue_program_continuation(checkpoint);
-                    return session.resolve_turn_effects(
-                        game,
-                        result.effects,
-                        None,
-                        result.undo_base_len,
-                    );
-                }
-                session.apply_turn_completion(game, result.effects, result.undo_base_len)
+                session.apply_turn_completion(game, result.items, result.undo_base_len)
             });
             self.current_input = previous_input;
             self.end_turn_sfx_dedup(owns_turn_sfx);
@@ -764,8 +1236,8 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         Ok(())
     }
 
-    pub fn last_debug_transition(&self) -> Option<&GridDebugTransition<D>> {
-        self.last_debug_transition.as_ref()
+    pub fn last_transition_trace(&self) -> Option<&GridTransitionTrace<D>> {
+        self.last_transition_trace.as_ref()
     }
 
     fn apply_model_input(
@@ -824,7 +1296,6 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         if self.active_level_index.is_none() {
             return Ok(GridModelInputResult::<D>::default());
         }
-        let undo_anchor = self.state.clone();
         let mut state = self.state.clone();
         self.apply_persistent_vars(game, &mut state);
         let level_index = self
@@ -837,71 +1308,89 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
                     "active level index out of range: {level_index}"
                 ))
             })?;
-        let outcome = transition_program_segment_outcome(game, program, &state, input, target)?;
+        let outcome = transition_program_outcome_with_effects(
+            game,
+            program,
+            &state,
+            input,
+            target,
+            self.input_execution_mode,
+        )?;
         let cancelled = outcome.cancelled;
-        let state_changed = self.replace_state_if_changed(game, outcome.next_state);
-        self.animation_events.extend(outcome.animations.clone());
-        self.pending_program_undo_anchor =
-            (outcome.checkpoint.is_some() && !state_changed).then_some(undo_anchor);
-        let checkpoint = outcome
-            .checkpoint
-            .map(|checkpoint| PendingProgramContinuation {
-                target: target.map(str::to_string),
+        self.replace_state_if_changed(game, outcome.next_state);
+        let transition_trace = if self.input_execution_mode.collects_trace() {
+            Some(GridTransitionTrace::<D> {
                 input,
-                program_level_index: level_index,
-                wait_ms: checkpoint.milliseconds,
-                remaining_program: checkpoint.remaining_program,
-                effects_after_wait: checkpoint.effects_after_wait,
-                mode: PendingProgramMode::TurnCompletion,
-                undo_base_len,
-            });
+                target: target.map(str::to_string),
+                progressed: outcome.progressed,
+                observable: outcome.observable,
+                cancelled,
+                commands: outcome.commands,
+                firings: outcome.firings.into_detailed(),
+            })
+        } else {
+            None
+        };
         Ok(GridModelInputResult::<D> {
             world: Some(self.current_world_id().clone()),
             undo_base_len,
             cancelled,
-            effects: outcome.effects,
-            checkpoint,
-            debug_transition: Some(GridDebugTransition::<D> {
-                input,
-                target: target.map(str::to_string),
-                cancelled,
-                commands: outcome.commands,
-                fired_rules: outcome.fired_rules,
-                patches: outcome.patches,
-            }),
+            items: outcome.items,
+            transition_trace,
         })
     }
 
     fn apply_turn_completion(
         &mut self,
         game: &LoadedGridGame<D, Size>,
-        effects: Vec<QueuedRuleEffect>,
+        items: Vec<QueuedTurnItem>,
         undo_base_len: usize,
     ) -> Result<(), GridTransitionError<D>> {
-        let win_targets = effects
+        let win_targets = items
             .iter()
-            .filter(|effect| matches!(effect.effect, RuleEffect::Win))
-            .map(|effect| effect.target.clone())
+            .filter_map(|item| match item {
+                QueuedTurnItem::Effect(effect) if matches!(effect.effect, RuleEffect::Win) => {
+                    Some(effect.target.clone())
+                }
+                _ => None,
+            })
             .collect::<Vec<_>>();
         let force_clear = !win_targets.is_empty() && self.can_force_clear_state(game, &self.state);
         let forced_win_targets: &[Option<String>] = if force_clear { &win_targets } else { &[] };
         let condition_effect = self.condition_transition_effect(game, forced_win_targets);
-        let mut effects = effects;
-        effects.extend(self.apply_model_level_clear(game, force_clear)?);
-        self.resolve_turn_effects(game, effects, condition_effect, undo_base_len)
+        if (force_clear || self.can_clear_state(game, &self.state))
+            && self.last_level_completion.is_none()
+            && let Some(level_index) = self.active_level_index
+        {
+            self.last_level_completion = Some(GridLevelCompletion {
+                level_index,
+                state: self.state.clone(),
+            });
+        }
+        let mut items = items;
+        items.extend(self.apply_model_level_clear(game, force_clear)?);
+        self.resolve_turn_effects(game, items, condition_effect, undo_base_len)
     }
 
     fn resolve_turn_effects(
         &mut self,
         game: &LoadedGridGame<D, Size>,
-        mut effects: Vec<QueuedRuleEffect>,
+        items: Vec<QueuedTurnItem>,
         condition_effect: Option<SceneEffect>,
         undo_base_len: usize,
     ) -> Result<(), GridTransitionError<D>> {
         let mut commands = Vec::new();
         let mut index = 0;
-        while index < effects.len() {
-            let effect = effects[index].clone();
+        while index < items.len() {
+            let item = items[index].clone();
+            let QueuedTurnItem::Effect(effect) = item else {
+                let QueuedTurnItem::Animation(animation) = item else {
+                    unreachable!()
+                };
+                self.push_presentation_event(PresentationEventKind::Animation(animation));
+                index += 1;
+                continue;
+            };
             match effect.effect {
                 RuleEffect::Win => {
                     commands.push(QueuedTransitionCommand {
@@ -935,61 +1424,46 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
                 }
                 RuleEffect::PlaySfx { name } => {
                     if self.should_emit_turn_sfx(&name) {
-                        self.sound_events.push(SoundEvent::PlaySfx { name });
+                        self.push_presentation_event(PresentationEventKind::Sound(
+                            SoundEvent::PlaySfx { name },
+                        ));
                     }
                 }
                 RuleEffect::PlayMusic { name } => {
-                    self.sound_events.push(SoundEvent::PlayMusic { name });
+                    self.push_presentation_event(PresentationEventKind::Sound(
+                        SoundEvent::PlayMusic { name },
+                    ));
                 }
                 RuleEffect::PauseMusic { name } => {
-                    self.sound_events.push(SoundEvent::PauseMusic { name });
+                    self.push_presentation_event(PresentationEventKind::Sound(
+                        SoundEvent::PauseMusic { name },
+                    ));
                 }
                 RuleEffect::ResumeMusic { name } => {
-                    self.sound_events.push(SoundEvent::ResumeMusic { name });
+                    self.push_presentation_event(PresentationEventKind::Sound(
+                        SoundEvent::ResumeMusic { name },
+                    ));
                 }
                 RuleEffect::StopMusic { name } => {
-                    self.sound_events.push(SoundEvent::StopMusic { name });
+                    self.push_presentation_event(PresentationEventKind::Sound(
+                        SoundEvent::StopMusic { name },
+                    ));
                 }
                 RuleEffect::Wait { milliseconds } => {
-                    let remaining = effects.split_off(index + 1);
-                    if !remaining.is_empty() || condition_effect.is_some() {
-                        self.pending_effect_continuation = Some(PendingEffectContinuation {
-                            effects: remaining,
-                            condition_effect,
-                            undo_base_len,
-                        });
-                        self.schedule_current_continuation();
-                        self.wait_events
-                            .push(WaitEvent::ContinueEffects { milliseconds });
-                    } else {
-                        self.wait_events.push(WaitEvent::Wait { milliseconds });
-                    }
-                    return self.resolve_turn_commands(game, commands, None, undo_base_len);
+                    self.push_presentation_event(PresentationEventKind::Wait(WaitEvent::Wait {
+                        milliseconds,
+                    }));
                 }
                 RuleEffect::WaitAnimation => {}
                 RuleEffect::EmitAnimation { .. } => {}
                 RuleEffect::Message { text, literal } => {
                     let text = self.resolve_message_text(&text, literal);
-                    self.message_events.push(MessageEvent::Message { text });
-                    if self.pending_program_continuation.is_none() {
-                        let remaining = effects.split_off(index + 1);
-                        if !remaining.is_empty() || condition_effect.is_some() {
-                            self.pending_effect_continuation = Some(PendingEffectContinuation {
-                                effects: remaining,
-                                condition_effect,
-                                undo_base_len,
-                            });
-                            self.schedule_current_continuation();
-                            self.wait_events.push(WaitEvent::ContinueEffects {
-                                milliseconds: game.default_wait_ms,
-                            });
-                        } else {
-                            self.wait_events.push(WaitEvent::Wait {
-                                milliseconds: game.default_wait_ms,
-                            });
-                        }
-                        return self.resolve_turn_commands(game, commands, None, undo_base_len);
-                    }
+                    self.push_presentation_event(PresentationEventKind::Message(
+                        MessageEvent::Message { text },
+                    ));
+                    self.push_presentation_event(PresentationEventKind::Wait(WaitEvent::Wait {
+                        milliseconds: game.default_wait_ms,
+                    }));
                 }
                 RuleEffect::Scene { effect } => {
                     self.apply_screen_effect(game, &effect, &HashMap::new())?;
@@ -998,127 +1472,6 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
             index += 1;
         }
         self.resolve_turn_commands(game, commands, condition_effect, undo_base_len)
-    }
-
-    fn resume_effect_continuation(
-        &mut self,
-        game: &LoadedGridGame<D, Size>,
-    ) -> Result<(), GridTransitionError<D>> {
-        let world = if self.continuation_worlds.is_empty() {
-            self.current_world_id().clone()
-        } else {
-            self.continuation_worlds.remove(0)
-        };
-        self.with_execution_world(world, |session| {
-            session.resume_current_world_continuation(game)
-        })
-    }
-
-    fn resume_current_world_continuation(
-        &mut self,
-        game: &LoadedGridGame<D, Size>,
-    ) -> Result<(), GridTransitionError<D>> {
-        if let Some(continuation) = self.pending_program_continuation.take() {
-            return self.resume_program_continuation(game, continuation);
-        }
-        let Some(continuation) = self.pending_effect_continuation.take() else {
-            return Ok(());
-        };
-        self.resolve_turn_effects(
-            game,
-            continuation.effects,
-            continuation.condition_effect,
-            continuation.undo_base_len,
-        )
-    }
-
-    fn queue_program_continuation(&mut self, continuation: PendingProgramContinuation) {
-        self.wait_events.push(WaitEvent::ContinueEffects {
-            milliseconds: continuation.wait_ms,
-        });
-        self.pending_program_continuation = Some(continuation);
-        self.schedule_current_continuation();
-    }
-
-    fn schedule_current_continuation(&mut self) {
-        let world = self.current_world_id().clone();
-        if !self
-            .continuation_worlds
-            .iter()
-            .any(|scheduled| scheduled == &world)
-        {
-            self.continuation_worlds.push(world);
-        }
-    }
-
-    fn resume_program_continuation(
-        &mut self,
-        game: &LoadedGridGame<D, Size>,
-        continuation: PendingProgramContinuation,
-    ) -> Result<(), GridTransitionError<D>> {
-        let target_name = continuation.target.clone();
-        let target = target_name.as_deref();
-        let input = continuation.input;
-        let mode = continuation.mode;
-        let undo_base_len = continuation.undo_base_len;
-        let mut undo_anchor = self.pending_program_undo_anchor.take();
-        let mut state = self.state.clone();
-        self.apply_persistent_vars(game, &mut state);
-        let program = game
-            .executable_program_for_level(continuation.program_level_index)
-            .ok_or_else(|| {
-                GridTransitionError::<D>::InvalidCommand(format!(
-                    "continuation level index out of range: {}",
-                    continuation.program_level_index
-                ))
-            })?;
-        let outcome = transition_continuation_segment_outcome(
-            game,
-            program,
-            &continuation.remaining_program,
-            &state,
-            input,
-            target,
-        )?;
-        let state_changed = match undo_anchor.clone() {
-            Some(anchor) => {
-                self.replace_state_if_changed_from_anchor(game, outcome.next_state, anchor)
-            }
-            None => self.replace_state_if_changed_without_undo(game, outcome.next_state),
-        };
-        if state_changed {
-            undo_anchor = None;
-        }
-
-        let mut effects = continuation.effects_after_wait;
-        effects.extend(outcome.effects);
-        if let Some(checkpoint) = outcome.checkpoint {
-            self.pending_program_undo_anchor = undo_anchor;
-            self.pending_program_continuation = Some(PendingProgramContinuation {
-                target: target_name,
-                input,
-                program_level_index: continuation.program_level_index,
-                wait_ms: checkpoint.milliseconds,
-                remaining_program: checkpoint.remaining_program,
-                effects_after_wait: checkpoint.effects_after_wait,
-                mode,
-                undo_base_len,
-            });
-            self.schedule_current_continuation();
-            self.wait_events.push(WaitEvent::ContinueEffects {
-                milliseconds: checkpoint.milliseconds,
-            });
-            return self.resolve_turn_effects(game, effects, None, undo_base_len);
-        }
-
-        match mode {
-            PendingProgramMode::TurnCompletion if effects.is_empty() && game.goal.is_none() => {
-                Ok(())
-            }
-            PendingProgramMode::TurnCompletion => {
-                self.apply_turn_completion(game, effects, undo_base_len)
-            }
-        }
     }
 
     fn resolve_turn_commands(
@@ -1147,7 +1500,10 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
             }
         }
         if pending_restart {
+            let preceding_presentation = std::mem::take(&mut self.presentation_events);
             self.restart_level(game)?;
+            self.presentation_events
+                .splice(0..0, preceding_presentation);
             return Ok(());
         }
         if let Some(effect) = condition_effect {
@@ -1195,15 +1551,15 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
                 return Ok(());
             }
             let has_again = result
-                .effects
+                .items
                 .iter()
-                .any(|effect| matches!(effect.effect, RuleEffect::Again));
-            let effects: Vec<_> = result
-                .effects
+                .any(|item| matches!(item, QueuedTurnItem::Effect(effect) if matches!(effect.effect, RuleEffect::Again)));
+            let items: Vec<_> = result
+                .items
                 .into_iter()
-                .filter(|effect| !matches!(effect.effect, RuleEffect::Again))
+                .filter(|item| !matches!(item, QueuedTurnItem::Effect(effect) if matches!(effect.effect, RuleEffect::Again)))
                 .collect();
-            let completion = self.apply_turn_completion(game, effects, undo_base_len);
+            let completion = self.apply_turn_completion(game, items, undo_base_len);
             self.compress_undo_stack_to_turn_boundary(undo_base_len);
             self.end_separate_turn_sfx_dedup(previous_turn_sfx);
             completion?;
@@ -1263,8 +1619,9 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
             }
             let name = &sound.sfx_name;
             if self.should_emit_turn_sfx(name) {
-                self.sound_events
-                    .push(SoundEvent::PlaySfx { name: name.clone() });
+                self.push_presentation_event(PresentationEventKind::Sound(SoundEvent::PlaySfx {
+                    name: name.clone(),
+                }));
             }
         }
     }
@@ -1275,9 +1632,6 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         command: &str,
     ) -> Result<(), GridTransitionError<D>> {
         match command {
-            "__continue_effects" => {
-                return self.resume_effect_continuation(game);
-            }
             "undo" => {
                 self.undo(game);
                 return Ok(());
@@ -1364,7 +1718,7 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         };
 
         if self.current_scene_accepts_model_input(game) {
-            self.apply_input(game, input_id)?;
+            self.apply_input_in_current_mode(game, input_id)?;
         } else {
             let previous_input = self.current_input.clone();
             self.current_input = Some(input.to_string());
@@ -1427,7 +1781,7 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         &mut self,
         game: &LoadedGridGame<D, Size>,
         force_clear: bool,
-    ) -> Result<Vec<QueuedRuleEffect>, GridTransitionError<D>> {
+    ) -> Result<Vec<QueuedTurnItem>, GridTransitionError<D>> {
         if self.active_level_index.is_none() {
             return Ok(Vec::new());
         }
@@ -1449,9 +1803,7 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         let mut state = self.state.clone();
         self.apply_persistent_vars(game, &mut state);
         let outcome = self.model_level_start_outcome(game, &state, level_index)?;
-        if outcome.fired_rules.is_empty()
-            && outcome.commands.is_empty()
-            && outcome.next_state == state
+        if outcome.firings.is_empty() && outcome.commands.is_empty() && outcome.next_state == state
         {
             self.state = state;
             self.apply_persistent_vars_to_current_world(game);
@@ -1463,10 +1815,16 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         self.state = next_state;
         self.apply_persistent_vars_to_current_world(game);
         if emit_events && !outcome.cancelled {
-            let effects =
-                queued_effects_for_outcome(game, None, &outcome.commands, &outcome.fired_rules);
+            let items = queued_turn_items_for_outcome(
+                game,
+                None,
+                &outcome.commands,
+                &outcome.firings,
+                &outcome.next_state,
+                self.input_execution_mode,
+            );
             let undo_base_len = self.history.undo_len();
-            self.resolve_turn_effects(game, effects, None, undo_base_len)?;
+            self.resolve_turn_effects(game, items, None, undo_base_len)?;
         }
         Ok(())
     }
@@ -1521,18 +1879,11 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
             return self.lifecycle_programs_outcome(game, state, &programs);
         }
         if game.run_rules_on_level_start {
-            let next = transition_program_outcome(
-                &game.game,
+            let mut outcome = self.lifecycle_input_program_outcome(
+                game,
                 state,
                 &game.levels[level_index].program,
-                InputId(0),
             )?;
-            let mut outcome = GridLifecycleOutcome::<D, Size> {
-                next_state: next.next_state,
-                cancelled: next.cancelled,
-                commands: next.commands,
-                fired_rules: next.fired_rules,
-            };
             if !outcome.cancelled
                 && let Some(program) = local_program
             {
@@ -1549,14 +1900,54 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         state: &GridState<D, Size>,
         programs: &[&GridExecutableProgram<D>],
     ) -> Result<GridLifecycleOutcome<D, Size>, GridTransitionError<D>> {
+        if self.requires_detailed_firings(game) {
+            let outcome =
+                transition_program_sequence_without_input_outcome(&game.game, state, programs)?;
+            return Ok(GridLifecycleOutcome::<D, Size> {
+                next_state: outcome.next_state,
+                cancelled: outcome.cancelled,
+                commands: outcome.commands,
+                firings: GridCapturedFirings::Detailed(outcome.firings),
+            });
+        }
         let outcome =
-            transition_program_sequence_without_input_outcome(&game.game, state, programs)?;
+            transition_program_sequence_without_input_summary_outcome(&game.game, state, programs)?;
         Ok(GridLifecycleOutcome::<D, Size> {
             next_state: outcome.next_state,
             cancelled: outcome.cancelled,
             commands: outcome.commands,
-            fired_rules: outcome.fired_rules,
+            firings: GridCapturedFirings::Summary(outcome.firings),
         })
+    }
+
+    fn lifecycle_input_program_outcome(
+        &self,
+        game: &LoadedGridGame<D, Size>,
+        state: &GridState<D, Size>,
+        program: &GridExecutableProgram<D>,
+    ) -> Result<GridLifecycleOutcome<D, Size>, GridTransitionError<D>> {
+        if self.requires_detailed_firings(game) {
+            let outcome = transition_program_outcome(&game.game, state, program, InputId(0))?;
+            return Ok(GridLifecycleOutcome::<D, Size> {
+                next_state: outcome.next_state,
+                cancelled: outcome.cancelled,
+                commands: outcome.commands,
+                firings: GridCapturedFirings::Detailed(outcome.firings),
+            });
+        }
+        let outcome = transition_program_summary_outcome(&game.game, state, program, InputId(0))?;
+        Ok(GridLifecycleOutcome::<D, Size> {
+            next_state: outcome.next_state,
+            cancelled: outcome.cancelled,
+            commands: outcome.commands,
+            firings: GridCapturedFirings::Summary(outcome.firings),
+        })
+    }
+
+    fn requires_detailed_firings(&self, game: &LoadedGridGame<D, Size>) -> bool {
+        self.input_execution_mode.collects_trace()
+            || (self.input_execution_mode.materializes_presentation()
+                && !game.rule_animations.is_empty())
     }
 
     fn extend_lifecycle_outcome(
@@ -1565,12 +1956,11 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         program: &GridExecutableProgram<D>,
         outcome: &mut GridLifecycleOutcome<D, Size>,
     ) -> Result<(), GridTransitionError<D>> {
-        let next =
-            transition_program_outcome(&game.game, &outcome.next_state, program, InputId(0))?;
+        let next = self.lifecycle_input_program_outcome(game, &outcome.next_state, program)?;
         outcome.next_state = next.next_state;
         outcome.cancelled |= next.cancelled;
         outcome.commands.extend(next.commands);
-        outcome.fired_rules.extend(next.fired_rules);
+        outcome.firings.extend(next.firings);
         Ok(())
     }
 
@@ -1616,14 +2006,14 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         &mut self,
         game: &LoadedGridGame<D, Size>,
         force_clear: bool,
-    ) -> Result<Vec<QueuedRuleEffect>, GridTransitionError<D>> {
+    ) -> Result<Vec<QueuedTurnItem>, GridTransitionError<D>> {
         if !force_clear && !game.is_goal_complete(&self.state) {
             return Ok(Vec::new());
         }
         if game.is_lose_complete(&self.state) {
             return Ok(Vec::new());
         }
-        let mut effects = Vec::new();
+        let mut items = Vec::new();
         let model_clear_program = if self
             .active_level_index
             .is_some_and(|index| index + 1 >= game.levels.len())
@@ -1642,21 +2032,22 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         if !programs.is_empty() {
             let mut state = self.state.clone();
             self.apply_persistent_vars(game, &mut state);
-            let outcome =
-                transition_program_sequence_without_input_outcome(&game.game, &state, &programs)?;
+            let outcome = self.lifecycle_programs_outcome(game, &state, &programs)?;
             self.state = outcome.next_state;
             self.capture_persistent_vars(game, &self.state.clone());
             if !outcome.cancelled {
-                effects.extend(queued_effects_for_outcome(
+                items.extend(queued_turn_items_for_outcome(
                     game,
                     None,
                     &outcome.commands,
-                    &outcome.fired_rules,
+                    &outcome.firings,
+                    &self.state,
+                    self.input_execution_mode,
                 ));
             }
         }
         self.apply_persistent_vars_to_current_world(game);
-        Ok(effects)
+        Ok(items)
     }
 
     fn is_screen_condition_true(
@@ -1943,14 +2334,21 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
             }
             SceneEffect::Message { text } => {
                 if let Some(text) = self.eval_effect_string(game, text, bindings) {
-                    self.message_events.push(MessageEvent::Message { text });
-                    self.wait_events.push(WaitEvent::Wait {
+                    self.push_presentation_event(PresentationEventKind::Message(
+                        MessageEvent::Message { text },
+                    ));
+                    self.push_presentation_event(PresentationEventKind::Wait(WaitEvent::Wait {
                         milliseconds: game.default_wait_ms,
-                    });
+                    }));
                 }
                 Ok(())
             }
-            SceneEffect::Wait { .. } => Ok(()),
+            SceneEffect::Wait { milliseconds } => {
+                self.push_presentation_event(PresentationEventKind::Wait(WaitEvent::Wait {
+                    milliseconds: milliseconds.unwrap_or(game.default_wait_ms),
+                }));
+                Ok(())
+            }
             SceneEffect::Conditional { condition, effect } => {
                 if self.is_screen_condition_true(game, condition) {
                     self.apply_screen_effect(game, effect, bindings)?;
@@ -1959,29 +2357,34 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
             }
             SceneEffect::PlaySfx { name } => {
                 if self.should_emit_turn_sfx(name) {
-                    self.sound_events
-                        .push(SoundEvent::PlaySfx { name: name.clone() });
+                    self.push_presentation_event(PresentationEventKind::Sound(
+                        SoundEvent::PlaySfx { name: name.clone() },
+                    ));
                 }
                 Ok(())
             }
             SceneEffect::PlayMusic { name } => {
-                self.sound_events
-                    .push(SoundEvent::PlayMusic { name: name.clone() });
+                self.push_presentation_event(PresentationEventKind::Sound(SoundEvent::PlayMusic {
+                    name: name.clone(),
+                }));
                 Ok(())
             }
             SceneEffect::PauseMusic { name } => {
-                self.sound_events
-                    .push(SoundEvent::PauseMusic { name: name.clone() });
+                self.push_presentation_event(PresentationEventKind::Sound(
+                    SoundEvent::PauseMusic { name: name.clone() },
+                ));
                 Ok(())
             }
             SceneEffect::ResumeMusic { name } => {
-                self.sound_events
-                    .push(SoundEvent::ResumeMusic { name: name.clone() });
+                self.push_presentation_event(PresentationEventKind::Sound(
+                    SoundEvent::ResumeMusic { name: name.clone() },
+                ));
                 Ok(())
             }
             SceneEffect::StopMusic { name } => {
-                self.sound_events
-                    .push(SoundEvent::StopMusic { name: name.clone() });
+                self.push_presentation_event(PresentationEventKind::Sound(SoundEvent::StopMusic {
+                    name: name.clone(),
+                }));
                 Ok(())
             }
             SceneEffect::Goto { scene, params } => {
@@ -2059,7 +2462,7 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
                     if let Some(target) = target {
                         self.apply_model_input_to_target(game, target, input)?;
                     } else {
-                        self.apply_input(game, input)?;
+                        self.apply_input_in_current_mode(game, input)?;
                     }
                 }
                 Ok(())
@@ -2207,14 +2610,7 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
 
     fn begin_new_level_attempt(&mut self) {
         self.history.clear();
-        self.pending_effect_continuation = None;
-        self.pending_program_continuation = None;
-        self.pending_program_undo_anchor = None;
-        let world = self.current_world_id().clone();
-        self.continuation_worlds
-            .retain(|scheduled| scheduled != &world);
-        self.wait_events.clear();
-        self.animation_events.clear();
+        self.presentation_events.clear();
     }
 
     pub fn advance_level(&mut self, game: &LoadedGridGame<D, Size>) {
@@ -2224,6 +2620,15 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
             initial_level_scene_name(game).to_string()
         };
         self.advance_level_in_scene(game, &scene);
+    }
+
+    pub fn previous_level(&mut self, game: &LoadedGridGame<D, Size>) {
+        let scene = if scene_is_level_scene(game, &self.focused_scene) {
+            self.focused_scene.clone()
+        } else {
+            initial_level_scene_name(game).to_string()
+        };
+        self.previous_level_in_scene(game, &scene);
     }
 
     fn advance_level_from_target(&mut self, game: &LoadedGridGame<D, Size>, target: &str) {
@@ -2408,17 +2813,11 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         game: &LoadedGridGame<D, Size>,
         next: GridState<D, Size>,
     ) -> bool {
-        let undo_state = self.state.clone();
-        self.replace_state_if_changed_with_undo(game, next, Some(undo_state))
-    }
-
-    fn replace_state_if_changed_from_anchor(
-        &mut self,
-        game: &LoadedGridGame<D, Size>,
-        next: GridState<D, Size>,
-        undo_anchor: GridState<D, Size>,
-    ) -> bool {
-        self.replace_state_if_changed_with_undo(game, next, Some(undo_anchor))
+        let undo_state = self
+            .input_execution_mode
+            .materializes_presentation()
+            .then(|| self.state.clone());
+        self.replace_state_if_changed_with_undo(game, next, undo_state)
     }
 
     fn replace_state_if_changed_without_undo(
@@ -2955,10 +3354,7 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
                         selected_level_index: active_level_index.unwrap_or(0),
                         level_initial_state_override: None,
                         persistent_vars,
-                        pending_effect_continuation: None,
-                        pending_program_continuation: None,
-                        pending_program_undo_anchor: None,
-                        last_debug_transition: None,
+                        last_transition_trace: None,
                     },
                 )
             })
@@ -3861,14 +4257,47 @@ fn parse_puzzle_runtime_command(command_text: &str) -> Option<SceneEffect> {
     }
 }
 
-pub fn runtime_effects_for_outcome(
+pub fn runtime_effects_for_outcome<const D: usize>(
     rule_effects: &HashMap<RuleId, Vec<RuleEffect>>,
     commands: &[TransitionCommand],
-    fired_rules: &[RuleId],
+    firings: &[GridRuleFiring<D>],
 ) -> Vec<RuleEffect> {
-    let effects = fired_rules
+    runtime_effects_for_firings(rule_effects, commands, firings)
+}
+
+trait GridFiringView<const D: usize> {
+    fn rule(&self) -> RuleId;
+    fn detailed(&self) -> Option<&GridRuleFiring<D>>;
+}
+
+impl<const D: usize> GridFiringView<D> for GridRuleFiring<D> {
+    fn rule(&self) -> RuleId {
+        self.rule
+    }
+
+    fn detailed(&self) -> Option<&GridRuleFiring<D>> {
+        Some(self)
+    }
+}
+
+impl<const D: usize> GridFiringView<D> for GridRuleFiringSummary {
+    fn rule(&self) -> RuleId {
+        self.rule
+    }
+
+    fn detailed(&self) -> Option<&GridRuleFiring<D>> {
+        None
+    }
+}
+
+fn runtime_effects_for_firings<const D: usize, Firing: GridFiringView<D>>(
+    rule_effects: &HashMap<RuleId, Vec<RuleEffect>>,
+    commands: &[TransitionCommand],
+    firings: &[Firing],
+) -> Vec<RuleEffect> {
+    let effects = firings
         .iter()
-        .filter_map(|rule| rule_effects.get(rule))
+        .filter_map(|firing| rule_effects.get(&firing.rule()))
         .flatten()
         .cloned()
         .collect::<Vec<_>>();
@@ -3888,13 +4317,13 @@ pub fn runtime_effects_for_outcome(
         .collect()
 }
 
-fn queued_effects_for_outcome<const D: usize, Size: GridSize<D>>(
+fn queued_effects_for_outcome<const D: usize, Size: GridSize<D>, Firing: GridFiringView<D>>(
     game: &LoadedGridGame<D, Size>,
     target: Option<&str>,
     commands: &[TransitionCommand],
-    fired_rules: &[RuleId],
+    firings: &[Firing],
 ) -> Vec<QueuedRuleEffect> {
-    runtime_effects_for_outcome(&game.rule_effects, commands, fired_rules)
+    runtime_effects_for_firings(&game.rule_effects, commands, firings)
         .into_iter()
         .map(|effect| QueuedRuleEffect {
             target: target.map(str::to_string),
@@ -3903,135 +4332,190 @@ fn queued_effects_for_outcome<const D: usize, Size: GridSize<D>>(
         .collect()
 }
 
-fn transition_program_segment_outcome<const D: usize, Size: GridSize<D>>(
+fn rule_effect_is_presentation_only(effect: &RuleEffect) -> bool {
+    matches!(
+        effect,
+        RuleEffect::PlaySfx { .. }
+            | RuleEffect::PlayMusic { .. }
+            | RuleEffect::PauseMusic { .. }
+            | RuleEffect::ResumeMusic { .. }
+            | RuleEffect::StopMusic { .. }
+            | RuleEffect::Wait { .. }
+            | RuleEffect::WaitAnimation
+            | RuleEffect::EmitAnimation { .. }
+            | RuleEffect::Message { .. }
+    )
+}
+
+fn queued_turn_items_for_outcome<const D: usize, Size: GridSize<D>>(
+    game: &LoadedGridGame<D, Size>,
+    target: Option<&str>,
+    commands: &[TransitionCommand],
+    firings: &GridCapturedFirings<D>,
+    next_state: &GridState<D, Size>,
+    mode: InputExecutionMode,
+) -> Vec<QueuedTurnItem> {
+    match firings {
+        GridCapturedFirings::Summary(firings) => {
+            queued_turn_items_for_firings(game, target, commands, firings, next_state, mode)
+        }
+        GridCapturedFirings::Detailed(firings) => {
+            queued_turn_items_for_firings(game, target, commands, firings, next_state, mode)
+        }
+    }
+}
+
+fn queued_turn_items_for_firings<const D: usize, Size: GridSize<D>, Firing: GridFiringView<D>>(
+    game: &LoadedGridGame<D, Size>,
+    target: Option<&str>,
+    commands: &[TransitionCommand],
+    firings: &[Firing],
+    next_state: &GridState<D, Size>,
+    mode: InputExecutionMode,
+) -> Vec<QueuedTurnItem> {
+    if !mode.materializes_presentation() {
+        let mut items = Vec::new();
+        let mut has_rule_effects = false;
+        for firing in firings {
+            let Some(effects) = game.rule_effects.get(&firing.rule()) else {
+                continue;
+            };
+            has_rule_effects |= !effects.is_empty();
+            items.extend(
+                effects
+                    .iter()
+                    .filter(|effect| !rule_effect_is_presentation_only(effect))
+                    .cloned()
+                    .map(|effect| {
+                        QueuedTurnItem::Effect(QueuedRuleEffect {
+                            target: target.map(str::to_string),
+                            effect,
+                        })
+                    }),
+            );
+        }
+        if !has_rule_effects {
+            items.extend(
+                queued_effects_for_outcome(game, target, commands, firings)
+                    .into_iter()
+                    .map(QueuedTurnItem::Effect),
+            );
+        }
+        return items;
+    }
+
+    let mut items = Vec::new();
+    let mut animation_window = Vec::new();
+    let mut has_rule_effects = false;
+    for firing in firings {
+        let animations = if game.rule_animations.contains_key(&firing.rule()) {
+            let firing = firing
+                .detailed()
+                .expect("animated rule firing must retain its patch");
+            animation_events_for_trace(game, std::slice::from_ref(firing), next_state)
+        } else {
+            Vec::new()
+        };
+        animation_window.extend(animations.iter().cloned());
+        items.extend(animations.into_iter().map(QueuedTurnItem::Animation));
+        let Some(effects) = game.rule_effects.get(&firing.rule()) else {
+            continue;
+        };
+        has_rule_effects |= !effects.is_empty();
+        for effect in effects {
+            let effect = if matches!(effect, RuleEffect::WaitAnimation) {
+                let Some(milliseconds) = animation_wait_milliseconds(game, &animation_window)
+                else {
+                    continue;
+                };
+                animation_window.clear();
+                RuleEffect::Wait { milliseconds }
+            } else {
+                effect.clone()
+            };
+            items.push(QueuedTurnItem::Effect(QueuedRuleEffect {
+                target: target.map(str::to_string),
+                effect,
+            }));
+        }
+    }
+    if !has_rule_effects {
+        items.extend(
+            queued_effects_for_outcome(game, target, commands, firings)
+                .into_iter()
+                .map(QueuedTurnItem::Effect),
+        );
+    }
+    items
+}
+
+fn transition_program_outcome_with_effects<const D: usize, Size: GridSize<D>>(
     game: &LoadedGridGame<D, Size>,
     program: &GridExecutableProgram<D>,
     state: &GridState<D, Size>,
     input: InputId,
     target: Option<&str>,
-) -> Result<GridProgramSegmentOutcome<D, Size>, GridTransitionError<D>> {
+    mode: InputExecutionMode,
+) -> Result<GridProgramOutcome<D, Size>, GridTransitionError<D>> {
+    let detailed_firings = mode.collects_trace()
+        || (mode.materializes_presentation() && !game.rule_animations.is_empty());
     if program.is_empty() {
-        return Ok(GridProgramSegmentOutcome::<D, Size> {
+        return Ok(GridProgramOutcome::<D, Size> {
             next_state: state.clone(),
+            progressed: false,
+            observable: false,
             cancelled: false,
             commands: Vec::new(),
-            fired_rules: Vec::new(),
-            patches: Vec::new(),
-            effects: Vec::new(),
-            animations: Vec::new(),
-            checkpoint: None,
+            firings: if detailed_firings {
+                GridCapturedFirings::Detailed(Vec::new())
+            } else {
+                GridCapturedFirings::Summary(Vec::new())
+            },
+            items: Vec::new(),
         });
     }
 
-    let segment = transition_program_segment_trace(
-        &game.game,
-        program,
-        state,
-        Some(input),
-        None,
-        |snapshot| {
-            let effects =
-                queued_effects_for_outcome(game, target, snapshot.commands, snapshot.fired_rules);
-            let animations = animation_events_for_trace(
-                game,
-                snapshot.fired_rules,
-                snapshot.patches,
-                snapshot.next_state,
-            );
-            split_effects_at_program_boundary(game, effects, &animations).is_some()
-        },
-    )?;
-    program_segment_outcome_from_trace(game, target, segment)
-}
-
-fn transition_continuation_segment_outcome<const D: usize, Size: GridSize<D>>(
-    game: &LoadedGridGame<D, Size>,
-    program: &GridExecutableProgram<D>,
-    continuation: &ProgramContinuation,
-    state: &GridState<D, Size>,
-    input: InputId,
-    target: Option<&str>,
-) -> Result<GridProgramSegmentOutcome<D, Size>, GridTransitionError<D>> {
-    let segment = transition_program_continuation_segment_trace(
-        &game.game,
-        program,
-        continuation,
-        state,
-        Some(input),
-        None,
-        |snapshot| {
-            let effects =
-                queued_effects_for_outcome(game, target, snapshot.commands, snapshot.fired_rules);
-            let animations = animation_events_for_trace(
-                game,
-                snapshot.fired_rules,
-                snapshot.patches,
-                snapshot.next_state,
-            );
-            split_effects_at_program_boundary(game, effects, &animations).is_some()
-        },
-    )?;
-    program_segment_outcome_from_trace(game, target, segment)
-}
-
-fn program_segment_outcome_from_trace<const D: usize, Size: GridSize<D>>(
-    game: &LoadedGridGame<D, Size>,
-    target: Option<&str>,
-    segment: GridProgramSegmentTrace<D, Size>,
-) -> Result<GridProgramSegmentOutcome<D, Size>, GridTransitionError<D>> {
-    let outcome = segment.trace;
-    let effects = queued_effects_for_outcome(game, target, &outcome.commands, &outcome.fired_rules);
-    let animations = animation_events_for_trace(
-        game,
-        &outcome.fired_rules,
-        &outcome.patches,
-        &outcome.next_state,
-    );
-    if let Some((before_wait, milliseconds, after_wait)) =
-        split_effects_at_program_boundary(game, effects.clone(), &animations)
-    {
-        let Some(remaining_program) = segment.remaining_program else {
-            return Err(GridTransitionError::<D>::InvalidCommand(
-                "program boundary did not produce a continuation".to_string(),
-            ));
-        };
-        return Ok(GridProgramSegmentOutcome::<D, Size> {
-            next_state: outcome.next_state,
-            cancelled: outcome.cancelled,
-            commands: outcome.commands,
-            fired_rules: outcome.fired_rules,
-            patches: outcome.patches,
-            effects: before_wait,
-            animations,
-            checkpoint: Some(EffectCheckpoint {
-                milliseconds,
-                effects_after_wait: after_wait,
-                remaining_program,
-            }),
-        });
-    }
-
-    Ok(GridProgramSegmentOutcome::<D, Size> {
-        effects,
-        animations,
-        next_state: outcome.next_state,
-        cancelled: outcome.cancelled,
-        commands: outcome.commands,
-        fired_rules: outcome.fired_rules,
-        patches: outcome.patches,
-        checkpoint: None,
+    let (next_state, progressed, observable, cancelled, commands, firings) = if detailed_firings {
+        let outcome = transition_program_outcome(&game.game, state, program, input)?;
+        (
+            outcome.next_state,
+            outcome.progressed,
+            outcome.observable,
+            outcome.cancelled,
+            outcome.commands,
+            GridCapturedFirings::Detailed(outcome.firings),
+        )
+    } else {
+        let outcome = transition_program_summary_outcome(&game.game, state, program, input)?;
+        (
+            outcome.next_state,
+            outcome.progressed,
+            outcome.observable,
+            outcome.cancelled,
+            outcome.commands,
+            GridCapturedFirings::Summary(outcome.firings),
+        )
+    };
+    let items = queued_turn_items_for_outcome(game, target, &commands, &firings, &next_state, mode);
+    Ok(GridProgramOutcome::<D, Size> {
+        next_state,
+        progressed,
+        observable,
+        cancelled,
+        commands,
+        firings,
+        items,
     })
 }
 
 pub fn animation_events_for_trace<const D: usize, Size: GridSize<D>>(
     game: &LoadedGridGame<D, Size>,
-    fired_rules: &[puzzle_core::RuleId],
-    patches: &[GridPatch<D>],
+    firings: &[GridRuleFiring<D>],
     next_state: &GridState<D, Size>,
 ) -> Vec<AnimationEvent> {
     let mut events = Vec::new();
-    for (rule, patch) in fired_rules.iter().zip(patches.iter()) {
-        let Some(animations) = game.rule_animations.get(rule) else {
+    for firing in firings {
+        let Some(animations) = game.rule_animations.get(&firing.rule) else {
             continue;
         };
         for RuleAnimation {
@@ -4042,7 +4526,7 @@ pub fn animation_events_for_trace<const D: usize, Size: GridSize<D>>(
         {
             match trigger {
                 RuleAnimationTrigger::Move => {
-                    for op in patch.ops() {
+                    for op in firing.patch.ops() {
                         let PatchOp::Move { from, to, object } = op else {
                             continue;
                         };
@@ -4067,7 +4551,7 @@ pub fn animation_events_for_trace<const D: usize, Size: GridSize<D>>(
                             );
                         }
                     }
-                    for op in patch.ops() {
+                    for op in firing.patch.ops() {
                         let PatchOp::Replace {
                             position,
                             remove,
@@ -4097,7 +4581,7 @@ pub fn animation_events_for_trace<const D: usize, Size: GridSize<D>>(
                     }
                 }
                 RuleAnimationTrigger::CantMove => {
-                    for op in patch.ops() {
+                    for op in firing.patch.ops() {
                         let PatchOp::RemoveMark {
                             position,
                             object,
@@ -4207,40 +4691,6 @@ fn push_unique_animation(events: &mut Vec<AnimationEvent>, event: AnimationEvent
     if !events.contains(&event) {
         events.push(event);
     }
-}
-
-fn split_effects_at_program_boundary<const D: usize, Size: GridSize<D>>(
-    game: &LoadedGridGame<D, Size>,
-    effects: Vec<QueuedRuleEffect>,
-    animations: &[AnimationEvent],
-) -> Option<(Vec<QueuedRuleEffect>, u64, Vec<QueuedRuleEffect>)> {
-    let mut boundary = None;
-    for (index, effect) in effects.iter().enumerate() {
-        match effect.effect {
-            RuleEffect::Wait { milliseconds } => {
-                boundary = Some((index, index + 1, milliseconds));
-                break;
-            }
-            RuleEffect::WaitAnimation => {
-                if let Some(milliseconds) = animation_wait_milliseconds(game, animations) {
-                    boundary = Some((index, index + 1, milliseconds));
-                    break;
-                }
-            }
-            RuleEffect::Message { .. } => {
-                boundary = Some((index + 1, index + 1, game.default_wait_ms));
-                break;
-            }
-            _ => {}
-        }
-    }
-    if let Some((before_end, after_start, milliseconds)) = boundary {
-        let before = effects[..before_end].to_vec();
-        let after = effects[after_start..].to_vec();
-        return Some((before, milliseconds, after));
-    }
-
-    None
 }
 
 fn animation_wait_milliseconds<const D: usize, Size: GridSize<D>>(
@@ -4653,6 +5103,46 @@ mod tests {
     use puzzle_core::transition_outcome;
     use puzzle_lang::parse_game2d as parse_game;
 
+    fn sound_events(events: &[PresentationEvent]) -> Vec<SoundEvent> {
+        events
+            .iter()
+            .filter_map(|event| match &event.kind {
+                PresentationEventKind::Sound(event) => Some(event.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn message_events(events: &[PresentationEvent]) -> Vec<MessageEvent> {
+        events
+            .iter()
+            .filter_map(|event| match &event.kind {
+                PresentationEventKind::Message(event) => Some(event.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn wait_events(events: &[PresentationEvent]) -> Vec<WaitEvent> {
+        events
+            .iter()
+            .filter_map(|event| match &event.kind {
+                PresentationEventKind::Wait(event) => Some(event.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn animation_events(events: &[PresentationEvent]) -> Vec<AnimationEvent> {
+        events
+            .iter()
+            .filter_map(|event| match &event.kind {
+                PresentationEventKind::Animation(event) => Some(event.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
     fn object_named(loaded: &LoadedGame, name: &str) -> ObjectId {
         loaded
             .object_labels
@@ -5043,13 +5533,22 @@ P.
         .unwrap();
         let player = object_named(&loaded, "Player");
         let mut session = GameSession::new(&loaded);
+        let right = input_named(&loaded, "right");
+        let outcome = transition_program_outcome_with_effects(
+            &loaded,
+            loaded.executable_program_for_level(0).unwrap(),
+            session.state(),
+            right,
+            None,
+            InputExecutionMode::Player,
+        )
+        .unwrap();
+        assert!(matches!(outcome.firings, GridCapturedFirings::Detailed(_)));
 
-        session
-            .apply_input(&loaded, input_named(&loaded, "right"))
-            .unwrap();
+        session.apply_input(&loaded, right).unwrap();
 
         assert_eq!(
-            session.take_animation_events(),
+            animation_events(&session.take_presentation_events()),
             vec![AnimationEvent::Move {
                 name: "tween".to_string(),
                 object: player,
@@ -5103,15 +5602,15 @@ P
         let to = object_named(&loaded, "Player:right");
         let mut session = GameSession::new(&loaded);
         session
-            .apply_input(&loaded, input_named(&loaded, "right"))
+            .apply_traced_input(&loaded, input_named(&loaded, "right"))
             .unwrap();
 
         let patch_ops = session
-            .last_debug_transition()
+            .last_transition_trace()
             .unwrap()
-            .patches
+            .firings
             .iter()
-            .flat_map(|patch| patch.ops())
+            .flat_map(|firing| firing.patch.ops())
             .collect::<Vec<_>>();
         assert!(patch_ops.iter().any(|op| {
             matches!(
@@ -5129,7 +5628,7 @@ P
         }));
 
         assert_eq!(
-            session.take_animation_events(),
+            animation_events(&session.take_presentation_events()),
             vec![AnimationEvent::Move {
                 name: "tween".to_string(),
                 object: to,
@@ -5190,7 +5689,7 @@ A
             .apply_input(&loaded, input_named(&loaded, "right"))
             .unwrap();
 
-        assert!(session.take_animation_events().is_empty());
+        assert!(animation_events(&session.take_presentation_events()).is_empty());
     }
 
     #[test]
@@ -6022,12 +6521,12 @@ stop_music music_name
         )
         .unwrap();
         let mut session = GameSession::new(&loaded);
-        assert!(session.take_sound_events().is_empty());
+        assert!(sound_events(&session.take_presentation_events()).is_empty());
 
         session.apply_command(&loaded, "goto menu").unwrap();
 
         assert_eq!(
-            session.take_sound_events(),
+            sound_events(&session.take_presentation_events()),
             vec![SoundEvent::StopMusic {
                 name: Some("music_name".to_string())
             }]
@@ -6069,7 +6568,7 @@ P.
         session.apply_input(&loaded, right).unwrap();
 
         assert_eq!(
-            session.take_sound_events(),
+            sound_events(&session.take_presentation_events()),
             vec![SoundEvent::PlaySfx {
                 name: "push".to_string()
             }]
@@ -6112,14 +6611,14 @@ P.
         .unwrap();
         let right = input_named(&loaded, "right");
         let mut session = GameSession::new(&loaded);
-        assert!(session.take_sound_events().is_empty());
+        assert!(sound_events(&session.take_presentation_events()).is_empty());
 
         session.apply_input(&loaded, right).unwrap();
-        assert!(session.take_sound_events().is_empty());
+        assert!(sound_events(&session.take_presentation_events()).is_empty());
 
         session.undo(&loaded);
         assert_eq!(
-            session.take_sound_events(),
+            sound_events(&session.take_presentation_events()),
             vec![SoundEvent::PlaySfx {
                 name: "undo_tick".to_string()
             }]
@@ -6127,7 +6626,7 @@ P.
 
         session.restart_level(&loaded).unwrap();
         assert_eq!(
-            session.take_sound_events(),
+            sound_events(&session.take_presentation_events()),
             vec![SoundEvent::PlaySfx {
                 name: "restart_tick".to_string()
             }]
@@ -6189,7 +6688,7 @@ step board
         session.apply_command(&loaded, "goto playing").unwrap();
 
         assert_eq!(
-            session.take_sound_events(),
+            sound_events(&session.take_presentation_events()),
             vec![
                 SoundEvent::PlaySfx {
                     name: "locked".to_string()
@@ -6206,7 +6705,7 @@ step board
         assert!(!session.can_undo());
         assert!(!session.can_redo());
         assert_eq!(
-            session.take_sound_events(),
+            sound_events(&session.take_presentation_events()),
             vec![
                 SoundEvent::PlaySfx {
                     name: "restart_tick".to_string()
@@ -6220,10 +6719,10 @@ step board
         session
             .start_level_from_state(&loaded, 0, loaded.levels[0].initial_state.clone(), false)
             .unwrap();
-        assert!(session.take_sound_events().is_empty());
+        assert!(sound_events(&session.take_presentation_events()).is_empty());
         session.restart_level(&loaded).unwrap();
         assert_eq!(
-            session.take_sound_events(),
+            sound_events(&session.take_presentation_events()),
             vec![
                 SoundEvent::PlaySfx {
                     name: "restart_tick".to_string()
@@ -6237,12 +6736,12 @@ step board
         session
             .apply_input(&loaded, input_named(&loaded, "save"))
             .unwrap();
-        assert!(session.take_sound_events().is_empty());
+        assert!(sound_events(&session.take_presentation_events()).is_empty());
         session
             .apply_input(&loaded, input_named(&loaded, "restart"))
             .unwrap();
         assert_eq!(
-            session.take_sound_events(),
+            sound_events(&session.take_presentation_events()),
             vec![
                 SoundEvent::PlaySfx {
                     name: "restart_tick".to_string()
@@ -6255,7 +6754,7 @@ step board
 
         session.apply_command(&loaded, "board.restart").unwrap();
         assert_eq!(
-            session.take_sound_events(),
+            sound_events(&session.take_presentation_events()),
             vec![SoundEvent::PlaySfx {
                 name: "restart_tick".to_string()
             }]
@@ -6264,17 +6763,22 @@ step board
         session
             .apply_input(&loaded, input_named(&loaded, "delay"))
             .unwrap();
-        assert!(
-            session.pending_effect_continuation.is_some()
-                || session.pending_program_continuation.is_some()
-        );
-        assert!(!session.take_wait_events().is_empty());
-        session.restart_level(&loaded).unwrap();
-        assert!(session.pending_effect_continuation.is_none());
-        assert!(session.pending_program_continuation.is_none());
-        assert!(session.take_wait_events().is_empty());
+        let presentation_events = session.take_presentation_events();
         assert_eq!(
-            session.take_sound_events(),
+            wait_events(&presentation_events),
+            vec![WaitEvent::Wait { milliseconds: 1000 }]
+        );
+        assert_eq!(
+            sound_events(&presentation_events),
+            vec![SoundEvent::PlaySfx {
+                name: "locked".to_string()
+            }]
+        );
+        session.restart_level(&loaded).unwrap();
+        let presentation_events = session.take_presentation_events();
+        assert!(wait_events(&presentation_events).is_empty());
+        assert_eq!(
+            sound_events(&presentation_events),
             vec![
                 SoundEvent::PlaySfx {
                     name: "restart_tick".to_string()
@@ -6321,7 +6825,7 @@ P.
         session.apply_input(&loaded, right).unwrap();
 
         assert_eq!(
-            session.take_sound_events(),
+            sound_events(&session.take_presentation_events()),
             vec![SoundEvent::StopMusic {
                 name: Some("locked_room".to_string())
             }]
@@ -6366,7 +6870,7 @@ PB.
         session.apply_input(&loaded, right).unwrap();
 
         assert_eq!(
-            session.take_sound_events(),
+            sound_events(&session.take_presentation_events()),
             vec![SoundEvent::PlaySfx {
                 name: "push".to_string()
             }]
@@ -6445,7 +6949,7 @@ B.B.
         session.apply_input(&loaded, right).unwrap();
 
         assert_eq!(
-            session.take_sound_events(),
+            sound_events(&session.take_presentation_events()),
             vec![SoundEvent::PlaySfx {
                 name: "push".to_string()
             }]
@@ -6489,7 +6993,7 @@ B..
         session.apply_input(&loaded, right).unwrap();
 
         assert_eq!(
-            session.take_sound_events(),
+            sound_events(&session.take_presentation_events()),
             vec![
                 SoundEvent::PlaySfx {
                     name: "push".to_string()
@@ -6536,7 +7040,7 @@ P
         session.apply_input(&loaded, right).unwrap();
 
         assert_eq!(
-            session.take_sound_events(),
+            sound_events(&session.take_presentation_events()),
             vec![SoundEvent::PlaySfx {
                 name: "tick".to_string()
             }]
@@ -6577,18 +7081,144 @@ P
         session.apply_input(&loaded, right).unwrap();
 
         assert_eq!(
-            session.take_wait_events(),
-            vec![WaitEvent::ContinueEffects { milliseconds: 25 }]
+            wait_events(&session.take_presentation_events()),
+            vec![WaitEvent::Wait { milliseconds: 25 }]
         );
-
-        session
-            .apply_command(&loaded, "__continue_effects")
-            .unwrap();
-        assert!(session.take_wait_events().is_empty());
     }
 
     #[test]
-    fn wait_animation_pauses_until_segment_animation_completes() {
+    fn wait_duration_changes_presentation_event_but_not_logical_result() {
+        let source = |duration: &str| {
+            format!(
+                r#"
+title = wait_duration_invariance
+puzzle default {{
+slots {{
+__legacy_layer_0 = A B C
+}}
+empty .
+rules {{
+[ A ] -> [ B ]
+wait {duration}
+[ B ] -> [ C ]
+}}
+levels {{
+legend {{
+A = A
+}}
+level "start" {{
+A
+}}
+}}
+}}
+"#
+            )
+        };
+        let fast = parse_game(&source("1ms")).unwrap();
+        let slow = parse_game(&source("10s")).unwrap();
+        let mut fast_session = GameSession::new(&fast);
+        let mut slow_session = GameSession::new(&slow);
+
+        fast_session.apply_input(&fast, InputId(0)).unwrap();
+        slow_session.apply_input(&slow, InputId(0)).unwrap();
+
+        assert_eq!(fast_session.state(), slow_session.state());
+        assert_eq!(
+            wait_events(&fast_session.take_presentation_events()),
+            vec![WaitEvent::Wait { milliseconds: 1 }]
+        );
+        assert_eq!(
+            wait_events(&slow_session.take_presentation_events()),
+            vec![WaitEvent::Wait {
+                milliseconds: 10_000
+            }]
+        );
+    }
+
+    #[test]
+    fn mixed_presentation_events_keep_authored_order_and_origin_context() {
+        let loaded = parse_game(
+            r#"
+title = mixed_presentation_timeline
+default_wait_time = 40ms
+sounds {
+sfx tick { seed = tick01; type = hit }
+}
+puzzle default {
+render {
+tween = true
+tween_duration = 80ms
+}
+slots {
+actor = Player
+marker = Done
+}
+empty .
+rules {
+wait 10ms
+message "ready"
+input right [ Player | no Player ] -> [ | Player ] sfx tick
+wait animation
+[ Player no Done ] -> [ Player Done ]
+}
+levels {
+legend {
+. = empty
+P = Player
+}
+level "first" {
+P.
+}
+level "second" {
+P.
+}
+}
+}
+"#,
+        )
+        .unwrap();
+        let mut session = GameSession::new(&loaded);
+        let done = object_named(&loaded, "Done");
+
+        session
+            .apply_input(&loaded, input_named(&loaded, "right"))
+            .unwrap();
+
+        assert!(session.state().has_object(&loaded.game, 1, 0, done));
+        let events = session.take_presentation_events();
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| match &event.kind {
+                    PresentationEventKind::Wait(WaitEvent::Wait { milliseconds }) => {
+                        format!("wait:{milliseconds}")
+                    }
+                    PresentationEventKind::Message(_) => "message".to_string(),
+                    PresentationEventKind::Animation(_) => "animation".to_string(),
+                    PresentationEventKind::Sound(SoundEvent::PlaySfx { .. }) => {
+                        "sfx".to_string()
+                    }
+                    PresentationEventKind::Sound(_) => "music".to_string(),
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                "wait:10",
+                "message",
+                "wait:40",
+                "animation",
+                "sfx",
+                "wait:80"
+            ]
+        );
+        assert!(
+            events
+                .iter()
+                .all(|event| event.context.level_index == Some(0))
+        );
+    }
+
+    #[test]
+    fn wait_animation_records_move_duration_and_completes_following_rule() {
         let loaded = parse_game(
             r#"
 title = wait_animation_fixture
@@ -6627,12 +7257,13 @@ P.
             .apply_input(&loaded, input_named(&loaded, "right"))
             .unwrap();
 
+        let presentation_events = session.take_presentation_events();
         assert_eq!(
-            session.take_wait_events(),
-            vec![WaitEvent::ContinueEffects { milliseconds: 80 }]
+            wait_events(&presentation_events),
+            vec![WaitEvent::Wait { milliseconds: 80 }]
         );
         assert_eq!(
-            session.take_animation_events(),
+            animation_events(&presentation_events),
             vec![AnimationEvent::Move {
                 name: "tween".to_string(),
                 object: player,
@@ -6645,18 +7276,11 @@ P.
                 to_z: 0,
             }]
         );
-        assert!(!session.state().has_object(&loaded.game, 1, 0, marker));
-
-        session
-            .apply_command(&loaded, "__continue_effects")
-            .unwrap();
-
         assert!(session.state().has_object(&loaded.game, 1, 0, marker));
-        assert!(session.take_wait_events().is_empty());
     }
 
     #[test]
-    fn wait_animation_pauses_following_routine_until_animation_completes() {
+    fn wait_animation_records_duration_and_completes_following_routine() {
         let loaded = parse_game(
             r#"
 title = tween_routine_boundary
@@ -6699,13 +7323,14 @@ P.
             .unwrap();
 
         assert!(session.state().has_object(&loaded.game, 1, 0, player));
-        assert!(!session.state().has_object(&loaded.game, 1, 0, marker));
+        assert!(session.state().has_object(&loaded.game, 1, 0, marker));
+        let presentation_events = session.take_presentation_events();
         assert_eq!(
-            session.take_wait_events(),
-            vec![WaitEvent::ContinueEffects { milliseconds: 80 }]
+            wait_events(&presentation_events),
+            vec![WaitEvent::Wait { milliseconds: 80 }]
         );
         assert_eq!(
-            session.take_animation_events(),
+            animation_events(&presentation_events),
             vec![AnimationEvent::Move {
                 name: "tween".to_string(),
                 object: player,
@@ -6718,12 +7343,6 @@ P.
                 to_z: 0,
             }]
         );
-
-        session
-            .apply_command(&loaded, "__continue_effects")
-            .unwrap();
-
-        assert!(session.state().has_object(&loaded.game, 1, 0, marker));
     }
 
     #[test]
@@ -6770,9 +7389,10 @@ P.
 
         assert!(session.state().has_object(&loaded.game, 1, 0, player));
         assert!(session.state().has_object(&loaded.game, 1, 0, marker));
-        assert!(session.take_wait_events().is_empty());
+        let presentation_events = session.take_presentation_events();
+        assert!(wait_events(&presentation_events).is_empty());
         assert_eq!(
-            session.take_animation_events(),
+            animation_events(&presentation_events),
             vec![AnimationEvent::Move {
                 name: "tween".to_string(),
                 object: player,
@@ -6788,7 +7408,7 @@ P.
     }
 
     #[test]
-    fn wait_animation_pauses_after_chain_rewrite() {
+    fn wait_animation_records_chain_duration_and_completes_following_routine() {
         let loaded = parse_game(
             r#"
 title = standard_move_tween_chain_boundary
@@ -6835,12 +7455,13 @@ PB.
         assert!(!session.state().has_object(&loaded.game, 0, 0, player));
         assert!(session.state().has_object(&loaded.game, 1, 0, player));
         assert!(session.state().has_object(&loaded.game, 2, 0, box_object));
-        assert!(!session.state().has_object(&loaded.game, 1, 0, marker));
+        assert!(session.state().has_object(&loaded.game, 1, 0, marker));
+        let presentation_events = session.take_presentation_events();
         assert_eq!(
-            session.take_wait_events(),
-            vec![WaitEvent::ContinueEffects { milliseconds: 80 }]
+            wait_events(&presentation_events),
+            vec![WaitEvent::Wait { milliseconds: 80 }]
         );
-        let mut animation_events = session.take_animation_events();
+        let mut animation_events = animation_events(&presentation_events);
         animation_events.sort_by_key(|event| match event {
             AnimationEvent::Move { object, .. } | AnimationEvent::CantMove { object, .. } => {
                 object.0
@@ -6873,17 +7494,10 @@ PB.
                 },
             ]
         );
-
-        session
-            .apply_command(&loaded, "__continue_effects")
-            .unwrap();
-
-        assert!(session.state().has_object(&loaded.game, 1, 0, marker));
-        assert!(session.take_wait_events().is_empty());
     }
 
     #[test]
-    fn wait_animation_pauses_before_following_direct_rewrite() {
+    fn wait_animation_records_chain_duration_and_completes_following_rule() {
         let loaded = parse_game(
             r#"
 title = standard_move_tween_direct_rule_boundary
@@ -6926,17 +7540,11 @@ PB.
 
         assert!(session.state().has_object(&loaded.game, 1, 0, player));
         assert!(session.state().has_object(&loaded.game, 2, 0, box_object));
-        assert!(!session.state().has_object(&loaded.game, 1, 0, marker));
-        assert_eq!(
-            session.take_wait_events(),
-            vec![WaitEvent::ContinueEffects { milliseconds: 80 }]
-        );
-
-        session
-            .apply_command(&loaded, "__continue_effects")
-            .unwrap();
-
         assert!(session.state().has_object(&loaded.game, 1, 0, marker));
+        assert_eq!(
+            wait_events(&session.take_presentation_events()),
+            vec![WaitEvent::Wait { milliseconds: 80 }]
+        );
     }
 
     #[test]
@@ -6976,19 +7584,11 @@ AA
             .unwrap();
 
         assert_eq!(
-            session.take_wait_events(),
-            vec![WaitEvent::ContinueEffects { milliseconds: 25 }]
+            wait_events(&session.take_presentation_events()),
+            vec![WaitEvent::Wait { milliseconds: 25 }]
         );
         assert!(session.state().has_object(&loaded.game, 0, 0, b));
         assert!(session.state().has_object(&loaded.game, 1, 0, b));
-        assert!(!session.state().has_object(&loaded.game, 0, 0, marker));
-        assert!(!session.state().has_object(&loaded.game, 1, 0, marker));
-
-        session
-            .apply_command(&loaded, "__continue_effects")
-            .unwrap();
-
-        assert!(session.take_wait_events().is_empty());
         assert!(session.state().has_object(&loaded.game, 0, 0, marker));
         assert!(session.state().has_object(&loaded.game, 1, 0, marker));
     }
@@ -7027,7 +7627,7 @@ P
             .apply_input(&loaded, input_named(&loaded, "right"))
             .unwrap();
 
-        assert!(session.take_wait_events().is_empty());
+        assert!(wait_events(&session.take_presentation_events()).is_empty());
         assert!(session.state().has_object(&loaded.game, 0, 0, marker));
     }
 
@@ -7070,14 +7670,15 @@ message hint
         let mut session = GameSession::new(&loaded);
         session.apply_command(&loaded, "goto playing").unwrap();
 
+        let presentation_events = session.take_presentation_events();
         assert_eq!(
-            session.take_message_events(),
+            message_events(&presentation_events),
             vec![MessageEvent::Message {
                 text: "Push the box".to_string()
             }]
         );
         assert_eq!(
-            session.take_wait_events(),
+            wait_events(&presentation_events),
             vec![WaitEvent::Wait { milliseconds: 350 }]
         );
     }
@@ -7124,10 +7725,10 @@ message hint
         let mut session = GameSession::new(&loaded);
         session.apply_command(&loaded, "goto playing").unwrap();
 
-        assert!(session.take_message_events().is_empty());
+        assert!(message_events(&session.take_presentation_events()).is_empty());
 
         session.start_level(&loaded, 1);
-        assert!(session.take_message_events().is_empty());
+        assert!(message_events(&session.take_presentation_events()).is_empty());
     }
 
     #[test]
@@ -7163,25 +7764,26 @@ level "start" {
         )
         .unwrap();
         let mut session = GameSession::new(&loaded);
-        session.take_message_events();
+        message_events(&session.take_presentation_events());
 
         let right = input_id_by_label(&loaded, "right").unwrap();
         session.apply_input(&loaded, right).unwrap();
 
+        let presentation_events = session.take_presentation_events();
         assert_eq!(
-            session.take_message_events(),
+            message_events(&presentation_events),
             vec![MessageEvent::Message {
                 text: "Found".to_string()
             }]
         );
         assert_eq!(
-            session.take_wait_events(),
-            vec![WaitEvent::ContinueEffects { milliseconds: 400 }]
+            wait_events(&presentation_events),
+            vec![WaitEvent::Wait { milliseconds: 400 }]
         );
     }
 
     #[test]
-    fn message_effect_waits_before_following_rule_segment() {
+    fn message_effect_records_wait_and_completes_following_rule() {
         let loaded = parse_game(
             r#"
 title = message_rule_segment_wait
@@ -7215,28 +7817,23 @@ A
 
         session.apply_input(&loaded, InputId(0)).unwrap();
 
-        assert!(session.state().has_object(&loaded.game, 0, 0, b));
-        assert!(!session.state().has_object(&loaded.game, 0, 0, c));
+        assert!(!session.state().has_object(&loaded.game, 0, 0, b));
+        assert!(session.state().has_object(&loaded.game, 0, 0, c));
+        let presentation_events = session.take_presentation_events();
         assert_eq!(
-            session.take_message_events(),
+            message_events(&presentation_events),
             vec![MessageEvent::Message {
                 text: "changed".to_string()
             }]
         );
         assert_eq!(
-            session.take_wait_events(),
-            vec![WaitEvent::ContinueEffects { milliseconds: 450 }]
+            wait_events(&presentation_events),
+            vec![WaitEvent::Wait { milliseconds: 450 }]
         );
-
-        session
-            .apply_command(&loaded, "__continue_effects")
-            .unwrap();
-
-        assert!(session.state().has_object(&loaded.game, 0, 0, c));
     }
 
     #[test]
-    fn routine_wait_splits_before_following_inner_rule_and_undo_is_one_turn() {
+    fn routine_wait_records_delay_and_completes_one_undoable_turn() {
         let loaded = parse_game(
             r#"
 title = routine_wait_segments
@@ -7278,21 +7875,15 @@ A
         session.apply_input(&loaded, InputId(0)).unwrap();
 
         assert!(!session.state().has_object(&loaded.game, 0, 0, a));
-        assert!(!session.state().has_object(&loaded.game, 0, 0, b));
-        assert!(session.state().has_object(&loaded.game, 0, 0, c));
-        assert_eq!(
-            session.take_wait_events(),
-            vec![WaitEvent::ContinueEffects { milliseconds: 100 }]
-        );
-
-        session
-            .apply_command(&loaded, "__continue_effects")
-            .unwrap();
-
-        assert!(!session.state().has_object(&loaded.game, 0, 0, c));
         assert!(session.state().has_object(&loaded.game, 0, 0, b));
+        assert!(!session.state().has_object(&loaded.game, 0, 0, c));
+        let presentation_events = session.take_presentation_events();
         assert_eq!(
-            session.take_sound_events(),
+            wait_events(&presentation_events),
+            vec![WaitEvent::Wait { milliseconds: 100 }]
+        );
+        assert_eq!(
+            sound_events(&presentation_events),
             vec![SoundEvent::PlaySfx {
                 name: "fall".to_string()
             }]
@@ -7338,21 +7929,13 @@ A
 
         session.apply_input(&loaded, InputId(0)).unwrap();
 
-        assert!(session.state().has_object(&loaded.game, 0, 0, a));
-        assert!(!session.state().has_object(&loaded.game, 0, 0, b));
-        assert!(!session.can_undo());
-        assert_eq!(
-            session.take_wait_events(),
-            vec![WaitEvent::ContinueEffects { milliseconds: 100 }]
-        );
-
-        session
-            .apply_command(&loaded, "__continue_effects")
-            .unwrap();
-
         assert!(!session.state().has_object(&loaded.game, 0, 0, a));
         assert!(session.state().has_object(&loaded.game, 0, 0, b));
         assert!(session.can_undo());
+        assert_eq!(
+            wait_events(&session.take_presentation_events()),
+            vec![WaitEvent::Wait { milliseconds: 100 }]
+        );
 
         session.undo(&loaded);
 
@@ -8001,10 +8584,10 @@ puzzle board
     }
 
     #[test]
-    fn targeted_model_input_continuation_resumes_its_owning_world_instance() {
+    fn targeted_model_input_wait_completes_in_the_owning_world() {
         let loaded = parse_game(
             r#"
-title = targeted_continuation_target_error
+title = targeted_wait_atomicity
 
 default_wait_time = 100ms
 
@@ -8047,19 +8630,10 @@ step board
             .apply_input(&loaded, input_named(&loaded, "right"))
             .unwrap();
         assert_eq!(
-            session.take_wait_events(),
-            vec![WaitEvent::ContinueEffects { milliseconds: 100 }]
+            wait_events(&session.take_presentation_events()),
+            vec![WaitEvent::Wait { milliseconds: 100 }]
         );
-        session
-            .pending_program_continuation
-            .as_mut()
-            .unwrap()
-            .target = Some("missing.board".to_string());
         let initial = session.state().clone();
-
-        session
-            .apply_command(&loaded, "__continue_effects")
-            .unwrap();
         assert_eq!(session.state(), &initial);
     }
 
@@ -8508,7 +9082,7 @@ level_menu
         assert_eq!(session.screen(), "level_select");
         assert_eq!(session.state(), &initial);
         assert!(!session.can_undo());
-        assert!(session.take_sound_events().is_empty());
+        assert!(sound_events(&session.take_presentation_events()).is_empty());
     }
 
     #[test]
@@ -8941,13 +9515,26 @@ text "done"
 
         session.apply_input(&loaded, right).unwrap();
 
+        let completion = session
+            .last_level_completion()
+            .expect("clear must retain the state that satisfied completion");
+        assert!(
+            !completion
+                .state()
+                .has_object(&loaded.game, 3, 1, clear_mark)
+        );
+        assert!(
+            !completion
+                .state()
+                .has_object(&loaded.game, 3, 1, clear_visual)
+        );
         assert_eq!(session.screen(), "level_select");
         assert!(session.state().has_object(&loaded.game, 3, 1, clear_mark));
         assert!(session.state().has_object(&loaded.game, 3, 1, clear_visual));
     }
 
     #[test]
-    fn wait_before_next_level_exposes_cleared_snapshot_until_continuation() {
+    fn wait_before_next_level_records_delay_and_advances_atomically() {
         let loaded = parse_game(
             r#"
 title = wait_clear_snapshot
@@ -9008,23 +9595,87 @@ step board
 
         session.apply_input(&loaded, right).unwrap();
 
-        assert_eq!(session.level_index(), 0);
-        assert!(loaded.is_condition_true("win_conditions", session.state()));
+        let completion = session
+            .last_level_completion()
+            .expect("winning input must retain its pre-navigation observation");
+        assert_eq!(completion.level_index(), 0);
+        assert!(loaded.is_goal_complete(completion.state()));
+        assert_eq!(session.level_index(), 1);
+        assert_eq!(session.state(), &loaded.levels[1].initial_state);
+        let events = session.take_presentation_events();
+        assert_eq!(events.len(), 1);
         assert_eq!(
-            session.take_wait_events(),
-            vec![WaitEvent::ContinueEffects { milliseconds: 1000 }]
+            events[0].kind,
+            PresentationEventKind::Wait(WaitEvent::Wait { milliseconds: 1000 })
         );
+        assert_eq!(events[0].context.level_index, Some(0));
+    }
+
+    #[test]
+    fn lifecycle_animation_wait_keeps_old_level_context_before_atomic_navigation() {
+        let loaded = parse_game(
+            r#"
+title = lifecycle_animation_timeline
+puzzle default {
+render {
+tween = true
+tween_duration = 80ms
+}
+slots {
+actor = Player
+}
+empty .
+rules {
+input right [ Player ] -> [ Player ] win
+}
+on_level_clear {
+[ Player | no Player ] -> [ | Player ]
+wait animation
+next_level
+}
+levels {
+legend {
+. = empty
+P = Player
+}
+level "first" {
+P.
+}
+level "second" {
+P.
+}
+}
+}
+"#,
+        )
+        .unwrap();
+        let mut session = GameSession::new(&loaded);
 
         session
-            .apply_command(&loaded, "__continue_effects")
+            .apply_input(&loaded, input_named(&loaded, "right"))
             .unwrap();
 
         assert_eq!(session.level_index(), 1);
         assert_eq!(session.state(), &loaded.levels[1].initial_state);
+        let events = session.take_presentation_events();
+        assert!(events.len() >= 2);
+        assert!(events[..events.len() - 1].iter().all(|event| matches!(
+            event.kind,
+            PresentationEventKind::Animation(AnimationEvent::Move { .. })
+        )));
+        assert_eq!(
+            events.last().unwrap().kind,
+            PresentationEventKind::Wait(WaitEvent::Wait { milliseconds: 80 })
+        );
+        assert!(
+            events
+                .iter()
+                .all(|event| event.context.level_index == Some(0))
+        );
     }
 
     #[test]
-    fn wait_statement_splits_rules_into_observable_segments() {
+    fn wait_statement_records_presentation_delay_without_splitting_rules() {
         let loaded = parse_game(
             r#"
 title = wait_statement_segments
@@ -9058,18 +9709,12 @@ A
 
         session.apply_input(&loaded, InputId(0)).unwrap();
 
-        assert!(session.state().has_object(&loaded.game, 0, 0, b));
-        assert!(!session.state().has_object(&loaded.game, 0, 0, c));
-        assert_eq!(
-            session.take_wait_events(),
-            vec![WaitEvent::ContinueEffects { milliseconds: 1000 }]
-        );
-
-        session
-            .apply_command(&loaded, "__continue_effects")
-            .unwrap();
-
+        assert!(!session.state().has_object(&loaded.game, 0, 0, b));
         assert!(session.state().has_object(&loaded.game, 0, 0, c));
+        assert_eq!(
+            wait_events(&session.take_presentation_events()),
+            vec![WaitEvent::Wait { milliseconds: 1000 }]
+        );
     }
 
     #[test]
@@ -10209,7 +10854,7 @@ step board
 
         assert!(session.state().has_object(&loaded.game, 0, 0, started));
         assert_eq!(
-            session.take_message_events(),
+            message_events(&session.take_presentation_events()),
             vec![MessageEvent::Message {
                 text: "started".to_string()
             }]
@@ -10268,7 +10913,7 @@ step board
 
         let mut session = GameSession::new(&loaded);
         assert_eq!(
-            session.take_message_events(),
+            message_events(&session.take_presentation_events()),
             vec![MessageEvent::Message {
                 text: "enter one".to_string()
             }]
@@ -10278,7 +10923,7 @@ step board
         session.apply_input(&loaded, tick).unwrap();
 
         assert_eq!(
-            session.take_message_events(),
+            message_events(&session.take_presentation_events()),
             vec![MessageEvent::Message {
                 text: "clear one".to_string()
             }]
@@ -10336,13 +10981,13 @@ step board
         let mut session = GameSession::new(&loaded);
         assert_eq!(session.scene(), "title");
         assert!(session.scene_state().unwrap().puzzles.is_empty());
-        assert!(session.take_message_events().is_empty());
+        assert!(message_events(&session.take_presentation_events()).is_empty());
 
         session.apply_command(&loaded, "goto playing").unwrap();
         assert_eq!(session.scene(), "playing");
         assert_eq!(session.active_level_index(), Some(0));
         assert_eq!(
-            session.take_message_events(),
+            message_events(&session.take_presentation_events()),
             vec![MessageEvent::Message {
                 text: "enter one".to_string()
             }]
@@ -10417,11 +11062,165 @@ if board.win_conditions -> message "clear"
         assert_eq!(session.level_index(), 1);
         assert!(session.cleared_levels()[0]);
         assert_eq!(
-            session.take_message_events(),
+            message_events(&session.take_presentation_events()),
             vec![MessageEvent::Message {
                 text: "clear".to_string()
             }]
         );
         assert_eq!(session.state().visible_variables(), &[1]);
+    }
+
+    #[test]
+    fn headless_semantic_input_matches_player_again_completion() {
+        let loaded = parse_game(include_str!("../tests/fixtures/again_atomic.puzzle")).unwrap();
+        let right = input_named(&loaded, "right");
+        let mut player = GameSession::new(&loaded);
+        player.start_level(&loaded, 0);
+        let initial = player.state().clone();
+
+        player.apply_input(&loaded, right).unwrap();
+
+        let mut headless = HeadlessSession::from_level_state(&loaded, 0, initial).unwrap();
+        headless.apply_input(&loaded, right).unwrap();
+        assert_eq!(headless.state(), player.state());
+        assert!(headless.completed());
+        assert!(loaded.is_goal_complete(headless.state()));
+    }
+
+    #[test]
+    fn input_modes_materialize_only_the_requested_outputs() {
+        let loaded = parse_game(
+            r#"
+title = headless_presentation_fixture
+sounds {
+sfx move { seed = move01; type = jump }
+}
+puzzle default {
+slots {
+actor = Player
+}
+rules {
+input right [ Player | no Player ] -> [ | Player ] sfx move
+}
+levels {
+legend {
+. = empty
+P = Player
+}
+level "start" {
+P.
+}
+}
+}
+"#,
+        )
+        .unwrap();
+        let right = input_named(&loaded, "right");
+        let mut player = GameSession::new(&loaded);
+        let initial = player.state().clone();
+        let program = loaded.executable_program_for_level(0).unwrap();
+
+        let player_outcome = transition_program_outcome_with_effects(
+            &loaded,
+            program,
+            &initial,
+            right,
+            None,
+            InputExecutionMode::Player,
+        )
+        .unwrap();
+        assert!(matches!(
+            player_outcome.firings,
+            GridCapturedFirings::Summary(_)
+        ));
+        let traced_outcome = transition_program_outcome_with_effects(
+            &loaded,
+            program,
+            &initial,
+            right,
+            None,
+            InputExecutionMode::PlayerTrace,
+        )
+        .unwrap();
+        assert!(matches!(
+            traced_outcome.firings,
+            GridCapturedFirings::Detailed(_)
+        ));
+        let headless_outcome = transition_program_outcome_with_effects(
+            &loaded,
+            program,
+            &initial,
+            right,
+            None,
+            InputExecutionMode::Headless,
+        )
+        .unwrap();
+        assert!(matches!(
+            headless_outcome.firings,
+            GridCapturedFirings::Summary(_)
+        ));
+
+        player.apply_input(&loaded, right).unwrap();
+        assert!(!player.take_presentation_events().is_empty());
+        assert!(player.last_transition_trace().is_none());
+
+        let mut traced = GameSession::new(&loaded);
+        traced.apply_traced_input(&loaded, right).unwrap();
+        assert!(!traced.take_presentation_events().is_empty());
+        assert!(traced.last_transition_trace().is_some());
+
+        let mut headless = HeadlessSession::from_level_state(&loaded, 0, initial).unwrap();
+        headless.apply_input(&loaded, right).unwrap();
+        assert_eq!(headless.state(), player.state());
+        let mut session = headless.into_session();
+        assert!(session.take_presentation_events().is_empty());
+        assert!(session.last_transition_trace().is_none());
+    }
+
+    #[test]
+    fn headless_search_key_distinguishes_checkpoint_and_scene_context() {
+        let loaded = parse_game(
+            r#"
+title = headless_context_key
+puzzle default {
+slots { Player }
+input save
+rules {
+if input == save { checkpoint }
+}
+levels {
+legend { P = Player }
+level "start" { P }
+}
+}
+scene playing {
+layout { puzzle board = default }
+}
+scene menu {
+layout { text "Menu" }
+}
+"#,
+        )
+        .unwrap();
+        let base = GameSession::new(&loaded);
+        let base_key = HeadlessSession::from_game_session(base.clone(), 0)
+            .unwrap()
+            .search_key();
+
+        let mut checkpoint = base.clone();
+        checkpoint
+            .apply_input(&loaded, input_named(&loaded, "save"))
+            .unwrap();
+        let checkpoint_key = HeadlessSession::from_game_session(checkpoint, 0)
+            .unwrap()
+            .search_key();
+        assert_ne!(checkpoint_key, base_key);
+
+        let mut scene = base;
+        scene.apply_command(&loaded, "goto menu").unwrap();
+        let scene_key = HeadlessSession::from_game_session(scene, 0)
+            .unwrap()
+            .search_key();
+        assert_ne!(scene_key, base_key);
     }
 }

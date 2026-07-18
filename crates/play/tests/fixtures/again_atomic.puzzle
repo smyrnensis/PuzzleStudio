@@ -1,0 +1,30 @@
+title = again_atomic
+
+puzzle board {
+slots {
+actor = Player Ready Done
+}
+
+keys {
+d ArrowRight -> right
+}
+
+rules {
+[ Ready ] -> [ Done ]
+input right [ Player ] -> [ Ready ] again
+}
+
+win_conditions {
+count(Done) == 1
+}
+}
+
+levels main of board {
+legend {
+P = Player
+}
+
+level "again" {
+P
+}
+}

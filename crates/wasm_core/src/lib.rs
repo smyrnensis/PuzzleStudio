@@ -1,11 +1,14 @@
 use puzzle_core::{
     ComparisonOp, CompiledGame, ConditionDef, ConditionId, ConditionValueKind, Effect, GapTerm,
     Guard, InputId, LayerId, LocalFrame, LocalFrameExtent, MarkId, MarkPattern, MarkValueMatch,
-    MatchCell, ObjectDef, ObjectId, ObjectSetMarkPattern, ObjectSetMatcher, Offset, Pattern,
-    PatternComponent, Rule, RuleApplication, RuleCondition, RuleId, RuleStep, State,
-    TransitionCommand, VariableId, VariableUpdateOp, WriteOp,
+    MatchCell, ObjectDef, ObjectId, ObjectSetMarkPattern, ObjectSetMatcher, Offset, PatchOp,
+    Pattern, PatternComponent, Rule, RuleApplication, RuleCondition, RuleFiring, RuleId, RuleStep,
+    State, TransitionCommand, VariableId, VariableUpdateOp, WriteOp,
 };
-use puzzle_runtime_contract::{RuntimeChangedCell, RuntimeCoord, RuntimeTransitionCommand};
+use puzzle_runtime_contract::{
+    RuntimeChangedCell, RuntimeCoord, RuntimeMarkValueMatch, RuntimePatchOp, RuntimeRuleFiring,
+    RuntimeTransitionCommand,
+};
 use serde_json::Value;
 use wasm_bindgen::prelude::*;
 
@@ -94,7 +97,7 @@ impl WasmCompiledCoreRuntime {
             previous_state_handle,
             outcome.cancelled,
             &outcome.commands,
-            &outcome.fired_rules,
+            &outcome.firings,
         )
         .map_err(|error| JsValue::from_str(&error))
     }
@@ -317,6 +320,7 @@ fn decode_compact_application(value: u16) -> Result<RuleApplication, String> {
         2 => Ok(RuleApplication::OncePerLevel),
         3 => Ok(RuleApplication::UntilStable),
         4 => Ok(RuleApplication::Random),
+        5 => Ok(RuleApplication::RepeatStep),
         other => Err(format!("unknown compact rule application: {other}")),
     }
 }
@@ -604,6 +608,7 @@ fn decode_compact_effect(value: &Value) -> Result<Effect, String> {
             op: decode_compact_variable_update(u16_at(items, 2, "variable update")?)?,
             value: i64_at(items, 3, "value")?,
         }),
+        8 => Ok(Effect::ObserveMatch),
         tag => Err(format!("unknown compact effect tag: {tag}")),
     }
 }
@@ -791,7 +796,7 @@ fn encode_outcome(
     previous_state_handle: Option<u32>,
     cancelled: bool,
     commands: &[TransitionCommand],
-    fired_rules: &[RuleId],
+    firings: &[RuleFiring],
 ) -> Result<String, String> {
     let mut out = String::new();
     out.push('{');
@@ -828,14 +833,12 @@ fn encode_outcome(
         }
         out.push_str(&rule.0.to_string());
     }
-    out.push_str("],\"firedRules\":[");
-    for (index, rule) in fired_rules.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        out.push_str(&rule.0.to_string());
-    }
-    out.push_str("],\"commands\":");
+    out.push_str("],\"firings\":");
+    out.push_str(
+        &serde_json::to_string(&runtime_firings_contract(firings))
+            .map_err(|error| format!("failed to encode firings: {error}"))?,
+    );
+    out.push_str(",\"commands\":");
     out.push_str(
         &serde_json::to_string(&transition_commands_contract(commands))
             .map_err(|error| format!("failed to encode commands: {error}"))?,
@@ -847,6 +850,78 @@ fn encode_outcome(
     }
     out.push('}');
     Ok(out)
+}
+
+fn runtime_firings_contract(firings: &[RuleFiring]) -> Vec<RuntimeRuleFiring> {
+    firings
+        .iter()
+        .map(|firing| RuntimeRuleFiring {
+            rule_id: firing.rule.0,
+            patch: firing.patch.ops().iter().map(runtime_patch_op).collect(),
+            progressed: firing.progressed,
+            observable: firing.observable,
+        })
+        .collect()
+}
+
+fn runtime_patch_op(op: &PatchOp) -> RuntimePatchOp {
+    match *op {
+        PatchOp::Add { position, object } => RuntimePatchOp::Add {
+            position: runtime_coord(position),
+            object_id: object.0,
+        },
+        PatchOp::Remove { position, object } => RuntimePatchOp::Remove {
+            position: runtime_coord(position),
+            object_id: object.0,
+        },
+        PatchOp::Move { from, to, object } => RuntimePatchOp::Move {
+            from: runtime_coord(from),
+            to: runtime_coord(to),
+            object_id: object.0,
+        },
+        PatchOp::Replace {
+            position,
+            remove,
+            add,
+        } => RuntimePatchOp::Replace {
+            position: runtime_coord(position),
+            remove: remove.0,
+            add: add.0,
+        },
+        PatchOp::UpdateVariable { variable, .. } => RuntimePatchOp::UpdateVariable {
+            variable: variable.0,
+        },
+        PatchOp::SetMark {
+            position,
+            object,
+            mark,
+            ..
+        } => RuntimePatchOp::SetMark {
+            position: runtime_coord(position),
+            object_id: object.0,
+            mark: mark.0,
+        },
+        PatchOp::RemoveMark {
+            position,
+            object,
+            mark,
+            match_value,
+            ..
+        } => RuntimePatchOp::RemoveMark {
+            position: runtime_coord(position),
+            object_id: object.0,
+            mark: mark.0,
+            match_value: match match_value {
+                MarkValueMatch::Any => RuntimeMarkValueMatch::Any,
+                MarkValueMatch::Exact => RuntimeMarkValueMatch::Exact,
+            },
+        },
+    }
+}
+
+fn runtime_coord(position: puzzle_core::GridCoord<2>) -> RuntimeCoord {
+    let [x, y] = position.axes();
+    RuntimeCoord { x, y, z: None }
 }
 
 fn changed_cells_contract_2d(state: &State, before: Option<&State>) -> Vec<RuntimeChangedCell> {

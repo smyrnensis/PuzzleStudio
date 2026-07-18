@@ -1,0 +1,44 @@
+title = solver_checkpoint_restart
+
+puzzle default {
+slots {
+actor = Player
+floor = Goal
+}
+
+input save
+input bad
+input reset
+input finish
+
+rules {
+if input == save {
+once_per_level [ Player | no Player ] -> [ | Player ]
+checkpoint
+}
+if input == bad {
+once left [ Player | no Player ] -> [ | Player ]
+}
+if input == reset {
+restart
+}
+if input == finish {
+once right [ Player | Goal no Player ] -> [ | Goal Player ]
+}
+}
+
+win_conditions {
+all Goal on Player
+}
+
+levels {
+legend {
+. = empty
+P = Player
+G = Goal
+}
+level "start" {
+P.G
+}
+}
+}

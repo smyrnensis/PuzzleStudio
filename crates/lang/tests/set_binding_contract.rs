@@ -38,7 +38,7 @@ fn one_unlabeled_movement_capture_is_shared_by_all_rhs_references() {
     let count =
         lowered_rule_count("once [ directions A B ] -> [ directions A directions B directions C ]");
 
-    assert_eq!(count, 16);
+    assert_eq!(count, 4);
 }
 
 #[test]
@@ -47,7 +47,7 @@ fn labeled_movement_captures_remain_independent() {
         "once [ directions#1 A directions#2 B ] -> [ directions#2 A directions#1 B C ]",
     );
 
-    assert_eq!(count, 64);
+    assert_eq!(count, 16);
 }
 
 #[test]

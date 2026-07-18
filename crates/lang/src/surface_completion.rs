@@ -842,7 +842,6 @@ const VISUAL_COMPLETION_KEYWORDS: &[&str] = &[
 const COMPLETION_LITERALS: &[&str] = &["false", "true"];
 
 const COMPLETION_KEYWORDS: &[&str] = &[
-    "again_interval",
     "assets",
     "author",
     "sounds",
@@ -925,7 +924,9 @@ fn split_completion_line_tokens(line: &str) -> Vec<&str> {
 mod tests {
     use crate::authoring_grammar::AuthoringKind;
 
-    use super::{SemanticCompletionSlot, surface_completion_context_for_document};
+    use super::{
+        COMPLETION_KEYWORDS, SemanticCompletionSlot, surface_completion_context_for_document,
+    };
 
     #[test]
     fn completion_context_uses_source_scope_for_same_word() {
@@ -990,6 +991,11 @@ assets {
         assert!(!context.slots.iter().any(|slot| {
             matches!(slot, SemanticCompletionSlot::Keywords(keywords) if keywords.contains(&"css"))
         }));
+    }
+
+    #[test]
+    fn root_completion_does_not_offer_again_timing() {
+        assert!(!COMPLETION_KEYWORDS.contains(&"again_interval"));
     }
 
     #[test]

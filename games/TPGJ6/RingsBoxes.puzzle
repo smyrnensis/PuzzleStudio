@@ -19,6 +19,23 @@ sfx undo { seed = 46965907; type = puzzlescript }
 sfx endlevel { seed = 98393900; type = puzzlescript }
 }
 
+scene title {
+layout {
+heading "Rings and Boxes"
+subheading "by smyrnensis"
+if has_progress_save {
+choice "Continue" -> {
+goto playing
+}
+}
+choice "New Game" -> {
+clear_game_progress
+start playing
+}
+choice "Level Select" -> goto level_select
+}
+}
+
 puzzle main {
 slots {
 layer1 = BlackFloor OrangeFloor PurpleFloor GreenFloor BrownFloor WhiteFloor
@@ -1325,7 +1342,7 @@ once_all [ {__move_collision} ] -> [ ]
 }
 }
 
-routine main once {
+routine main {
 up [ Start ] [ Ice | ] -> [ Start ] [ Ice | IceAboveEdge ]
 up [ Start ] [ OrangeBlock | ] -> [ Start ] [ OrangeBlock | OrangeAboveEdge ]
 up [ Start ] [ BlackBlock | ] -> [ Start ] [ BlackBlock | BlackAboveEdge ]
@@ -2565,23 +2582,6 @@ wwwwwwww
 message "THE END"
 message "Thanks to competor and Karoo for helpful feedbacks.\\n\\n And thank you so much for playing through to the very end!"
 message "Rings and Boxes \\n\\n by smyrnensis"
-}
-}
-
-scene title {
-layout {
-heading "Rings and Boxes"
-subheading "by smyrnensis"
-if has_progress_save {
-choice "Continue" -> {
-goto playing
-}
-}
-choice "New Game" -> {
-clear_game_progress
-start playing
-}
-choice "Level Select" -> goto level_select
 }
 }
 

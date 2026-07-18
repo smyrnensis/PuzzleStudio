@@ -27,8 +27,8 @@ fn run(args: impl IntoIterator<Item = String>) -> Result<(), AppError> {
         }
     };
 
-    let document = puzzle_lang::parse_game_for_path(&source, &config.puzzle_path)
-        .map_err(AppError::Lang)?;
+    let document =
+        puzzle_lang::parse_game_for_path(&source, &config.puzzle_path).map_err(AppError::Lang)?;
     if matches!(
         document.single_model(),
         Some(LoadedDocumentModel::Puzzle3d { .. })
@@ -387,7 +387,7 @@ impl Config {
                 }
                 "--help" | "-h" => {
                     return Err(AppError::Config(
-                        "usage: html-play [path/to/game-folder-or-game.puzzle-or-game.puzzle3] [-o game.html] [--serve] [--port 7878] [--screenshot out.png] [--scene name] [--width 1280] [--height 720] [--browser path] [--solver-depth 128] [--solver-nodes 1000000] [--solver-ms 5000]".to_string(),
+                        "usage: html-play [path/to/game-folder-or-game.puzzle-or-game.puzzle3] [-o game.html] [--serve] [--port 7878] [--screenshot out.png] [--scene name] [--width 1280] [--height 720] [--browser path] [--solver-depth 128] [--solver-nodes 1000] [--solver-ms N]".to_string(),
                     ));
                 }
                 value => puzzle_path = Some(PathBuf::from(value)),

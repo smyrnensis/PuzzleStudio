@@ -23,12 +23,15 @@ pub use goal::{
     GridGoalExpr, GridGoalValue,
 };
 pub use grid_transition::{
-    GridProgramBoundarySnapshot, GridProgramSegmentTrace, GridTransitionError,
-    GridTransitionOutcome, ProgramContinuation, TransitionCommand, count_pattern_matches,
-    eval_condition_kind, flattened_rules, has_pattern_match, transition_outcome,
-    transition_program, transition_program_continuation_segment_trace, transition_program_outcome,
+    GridProgramBoundarySnapshot, GridProgramSegmentTrace, GridRuleFiring, GridRuleFiringSummary,
+    GridTransitionError, GridTransitionOutcome, GridTransitionSummaryOutcome, ProgramContinuation,
+    TransitionCommand, count_pattern_matches, eval_condition_kind, flattened_rules,
+    has_pattern_match, transition_outcome, transition_program,
+    transition_program_continuation_segment_trace, transition_program_outcome,
     transition_program_segment_trace, transition_program_sequence_without_input_outcome,
-    transition_solver_outcome, transition_solver_state, transition_state, transition_trace,
+    transition_program_sequence_without_input_summary_outcome, transition_program_summary_outcome,
+    transition_program_without_input_summary_outcome, transition_solver_outcome,
+    transition_solver_state, transition_state, transition_trace,
 };
 pub use ids::{ConditionId, InputId, LayerId, MarkId, ObjectId, RuleId, VariableId};
 pub use model::{GridInput, GridLevel, GridLevelBundle, GridLevelBundleError};
@@ -42,5 +45,6 @@ pub type TransitionError = GridTransitionError<2>;
 pub type TransitionResult<T = State> = Result<T, TransitionError>;
 pub type TransitionOutcome = GridTransitionOutcome<2, Size2>;
 pub type StepTrace = TransitionOutcome;
+pub type RuleFiring = GridRuleFiring<2>;
 pub type ProgramBoundarySnapshot<'a> = GridProgramBoundarySnapshot<'a, 2, Size2>;
 pub type ProgramSegmentTrace = GridProgramSegmentTrace<2, Size2>;

@@ -54,6 +54,19 @@ struct LoweredEffects {
     ordered: Vec<RuleEffect>,
 }
 
+impl LoweredEffects {
+    fn mark_external_observation(&mut self) {
+        if !self.ordered.is_empty()
+            && !self
+                .core
+                .iter()
+                .any(|effect| matches!(effect, Effect::ObserveMatch))
+        {
+            self.core.push(Effect::ObserveMatch);
+        }
+    }
+}
+
 fn lower_programs(
     definitions: Vec<RuleDefinitionAst>,
     main_statements: Option<Vec<StatementAst>>,
@@ -667,7 +680,7 @@ fn lower_condition_patterns(
     let block = &condition_pattern.pattern;
     match &condition_pattern.orientation {
         OrientationExpr::Neutral => {
-            if pattern_block_requires_implicit_cardinal_expansion(block) {
+            if pattern_block_requires_implicit_cardinal_expansion(block, value_sets) {
                 return lower_condition_patterns_for_directions(
                     block,
                     object_layers,
@@ -1234,31 +1247,56 @@ fn lower_goal_expr(
                 expected: 0,
             }))
         }
-        ConditionAst::VariableEquals { name, value } => Ok(CanonicalGoalExpr::Clause(CanonicalGoalClause {
-            value: CanonicalGoalValue::Variable(resolve_variable_for_goal(name, variable_names)?),
-            op: ComparisonOp::Eq,
-            expected: *value,
-        })),
-        ConditionAst::VariableCompare { name, op, value } => Ok(CanonicalGoalExpr::Clause(CanonicalGoalClause {
-            value: CanonicalGoalValue::Variable(resolve_variable_for_goal(name, variable_names)?),
-            op: *op,
-            expected: *value,
-        })),
-        ConditionAst::ConditionEquals { name, value } => Ok(CanonicalGoalExpr::Clause(CanonicalGoalClause {
-            value: CanonicalGoalValue::Condition(resolve_condition_for_goal(name, condition_names)?),
-            op: ComparisonOp::Eq,
-            expected: *value,
-        })),
-        ConditionAst::ConditionNonZero(name) => Ok(CanonicalGoalExpr::Clause(CanonicalGoalClause {
-            value: CanonicalGoalValue::Condition(resolve_condition_for_goal(name, condition_names)?),
-            op: ComparisonOp::NotEq,
-            expected: 0,
-        })),
-        ConditionAst::ConditionCompare { name, op, value } => Ok(CanonicalGoalExpr::Clause(CanonicalGoalClause {
-            value: CanonicalGoalValue::Condition(resolve_condition_for_goal(name, condition_names)?),
-            op: *op,
-            expected: *value,
-        })),
+        ConditionAst::VariableEquals { name, value } => {
+            Ok(CanonicalGoalExpr::Clause(CanonicalGoalClause {
+                value: CanonicalGoalValue::Variable(resolve_variable_for_goal(
+                    name,
+                    variable_names,
+                )?),
+                op: ComparisonOp::Eq,
+                expected: *value,
+            }))
+        }
+        ConditionAst::VariableCompare { name, op, value } => {
+            Ok(CanonicalGoalExpr::Clause(CanonicalGoalClause {
+                value: CanonicalGoalValue::Variable(resolve_variable_for_goal(
+                    name,
+                    variable_names,
+                )?),
+                op: *op,
+                expected: *value,
+            }))
+        }
+        ConditionAst::ConditionEquals { name, value } => {
+            Ok(CanonicalGoalExpr::Clause(CanonicalGoalClause {
+                value: CanonicalGoalValue::Condition(resolve_condition_for_goal(
+                    name,
+                    condition_names,
+                )?),
+                op: ComparisonOp::Eq,
+                expected: *value,
+            }))
+        }
+        ConditionAst::ConditionNonZero(name) => {
+            Ok(CanonicalGoalExpr::Clause(CanonicalGoalClause {
+                value: CanonicalGoalValue::Condition(resolve_condition_for_goal(
+                    name,
+                    condition_names,
+                )?),
+                op: ComparisonOp::NotEq,
+                expected: 0,
+            }))
+        }
+        ConditionAst::ConditionCompare { name, op, value } => {
+            Ok(CanonicalGoalExpr::Clause(CanonicalGoalClause {
+                value: CanonicalGoalValue::Condition(resolve_condition_for_goal(
+                    name,
+                    condition_names,
+                )?),
+                op: *op,
+                expected: *value,
+            }))
+        }
         ConditionAst::InlineConditionValueEquals { kind, value } => {
             let kind = lower_condition_value_kind(
                 kind,
@@ -1651,7 +1689,10 @@ impl<'a> ProgramLowerer<'a> {
         };
         let patterns = match orientation {
             OrientationExpr::Neutral => {
-                if pattern_block_requires_implicit_cardinal_expansion(&condition.pattern) {
+                if pattern_block_requires_implicit_cardinal_expansion(
+                    &condition.pattern,
+                    self.value_sets,
+                ) {
                     self.condition_patterns_for_directions(
                         &condition.pattern,
                         self.directions,
@@ -2128,7 +2169,10 @@ impl<'a> ProgramLowerer<'a> {
                 context,
             )?);
         }
-        Ok(vec![CanonicalRuleStep::AfterTriggered { steps, then_steps }])
+        Ok(vec![CanonicalRuleStep::AfterTriggered {
+            steps,
+            then_steps,
+        }])
     }
 
     fn lower_rewrite_core(
@@ -2152,7 +2196,7 @@ impl<'a> ProgramLowerer<'a> {
         };
         match orientation {
             OrientationExpr::Neutral => {
-                if rewrite_requires_implicit_cardinal_expansion(rewrite) {
+                if rewrite_requires_implicit_cardinal_expansion(rewrite, self.value_sets) {
                     let mut rules = Vec::new();
                     for direction in self.directions {
                         rules.extend(self.lower_rewrite_rules_for_direction(
@@ -2352,6 +2396,7 @@ impl<'a> ProgramLowerer<'a> {
     fn lower_effects(&self, effects: &[EffectAst]) -> Result<LoweredEffects, DiagnosticReport> {
         let mut lowered = LoweredEffects::default();
         self.lower_effects_into(effects, None, &mut lowered)?;
+        lowered.mark_external_observation();
         Ok(lowered)
     }
 
@@ -2362,6 +2407,7 @@ impl<'a> ProgramLowerer<'a> {
     ) -> Result<LoweredEffects, DiagnosticReport> {
         let mut lowered = LoweredEffects::default();
         self.lower_effects_into(effects, Some(tag_captures), &mut lowered)?;
+        lowered.mark_external_observation();
         Ok(lowered)
     }
 
@@ -2524,11 +2570,7 @@ impl<'a> ProgramLowerer<'a> {
                 &mut rule_effects,
             );
             let mut rule_animations = Vec::new();
-            append_tween_rule_animations(
-                &alternative.writes,
-                self.animation,
-                &mut rule_animations,
-            );
+            append_tween_rule_animations(&alternative.writes, self.animation, &mut rule_animations);
             let compiled_components = alternative
                 .components
                 .iter()
@@ -2613,7 +2655,10 @@ impl<'a> ProgramLowerer<'a> {
     }
 }
 
-fn once_alternative_chain(patterns: Vec<CanonicalPattern>, rules: Vec<CanonicalRuleStep>) -> CanonicalRuleStep {
+fn once_alternative_chain(
+    patterns: Vec<CanonicalPattern>,
+    rules: Vec<CanonicalRuleStep>,
+) -> CanonicalRuleStep {
     let alternatives = patterns
         .into_iter()
         .zip(rules)
