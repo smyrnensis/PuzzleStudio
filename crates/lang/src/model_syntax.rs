@@ -1270,8 +1270,9 @@ fn collect_effect_semantics(
         return;
     };
     let tokens = crate::source_line_tokens(text, base + relative_start);
-    let document = crate::rewrite_effect_surface_document(&tokens);
-    semantics.fixed.merge_surface_document(document);
+    semantics
+        .fixed
+        .merge(crate::rewrite_effect_parser_recognition(&tokens));
 }
 
 fn mark_relative(

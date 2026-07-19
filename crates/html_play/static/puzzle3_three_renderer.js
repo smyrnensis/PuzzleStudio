@@ -298,6 +298,7 @@ function spriteVisual(sprite) {
   if (!sprite) {
     return null;
   }
+  const spatialAffine = Puzzle3VisualCore.evaluateSpatialSpriteAffine(sprite.spatialOps);
   const palette = sprite.palette || {};
   const blocks = currentSpriteLayers(sprite);
   const height = Math.max(1, blocks.length);
@@ -329,7 +330,7 @@ function spriteVisual(sprite) {
   if (!voxels.length) {
     return null;
   }
-  return { kind: "voxels", size: { width, depth, height }, voxels };
+  return { kind: "voxels", size: { width, depth, height }, spatialAffine, voxels };
 }
 
 function currentSpriteLayers(sprite, now = performance.now()) {
@@ -776,7 +777,11 @@ function voxelInstances(frame, position, object, sourceKey, objectOrder = 0) {
   base.y += offset.y;
   base.z += offset.z;
   return visual.voxels.map((voxel) => {
-    const local = spriteVoxelLocalPosition(voxel, size, step);
+    const local = Puzzle3VisualCore.transformSpatialPoint(
+      spriteVoxelLocalPosition(voxel, size, step),
+      visual.spatialAffine,
+    );
+    const localGrid = Puzzle3VisualCore.spatialGridPoint(local, step);
     const renderPosition = {
       x: base.x + local.x,
       y: base.y + local.z,
@@ -792,7 +797,7 @@ function voxelInstances(frame, position, object, sourceKey, objectOrder = 0) {
       color: voxel.color,
       opaque: voxel.opaque,
       scale: step,
-      grid: { x: voxel.x, y: voxel.z, z: -voxel.y },
+      grid: { x: localGrid.x, y: localGrid.z, z: -localGrid.y },
       position: renderPosition,
       stackPosition,
       bounds: voxelBounds(renderPosition, step),

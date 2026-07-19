@@ -1,19 +1,6 @@
 /* tslint:disable */
 /* eslint-disable */
 
-export class WasmPuzzle3Runtime {
-    private constructor();
-    free(): void;
-    [Symbol.dispose](): void;
-    current_cells(): string;
-    static fromFixture(fixture_json: string): WasmPuzzle3Runtime;
-    is_current_complete(): boolean;
-    restore_saved_state(handle: number): void;
-    save_current_state(): number;
-    set_state(state_json: string): void;
-    transition_current_outcome(program_key: string, level_index: number, input: number): string;
-}
-
 export class WasmStandaloneSession {
     private constructor();
     free(): void;
@@ -21,10 +8,10 @@ export class WasmStandaloneSession {
     apply_command_name(command_name: string): void;
     apply_input_name(input_name: string): void;
     clear_progress_save(): void;
+    dispatch(action_json: string): string;
     static fromExport(export_json: string): WasmStandaloneSession;
     mark_progress_save_written(): void;
     progress_save(): string;
-    request_json(method: string, url: string): string;
     restore_progress_save(save_json: string): void;
     set_current_state(state_json: string, level_index: number, materialize_level_start: boolean): void;
     snapshot(): string;
@@ -34,30 +21,22 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
-    readonly __wbg_wasmpuzzle3runtime_free: (a: number, b: number) => void;
     readonly __wbg_wasmstandalonesession_free: (a: number, b: number) => void;
-    readonly wasmpuzzle3runtime_current_cells: (a: number) => [number, number, number, number];
-    readonly wasmpuzzle3runtime_fromFixture: (a: number, b: number) => [number, number, number];
-    readonly wasmpuzzle3runtime_is_current_complete: (a: number) => [number, number, number];
-    readonly wasmpuzzle3runtime_restore_saved_state: (a: number, b: number) => [number, number];
-    readonly wasmpuzzle3runtime_save_current_state: (a: number) => [number, number, number];
-    readonly wasmpuzzle3runtime_set_state: (a: number, b: number, c: number) => [number, number];
-    readonly wasmpuzzle3runtime_transition_current_outcome: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
     readonly wasmstandalonesession_apply_command_name: (a: number, b: number, c: number) => [number, number];
     readonly wasmstandalonesession_apply_input_name: (a: number, b: number, c: number) => [number, number];
     readonly wasmstandalonesession_clear_progress_save: (a: number) => void;
+    readonly wasmstandalonesession_dispatch: (a: number, b: number, c: number) => [number, number, number, number];
     readonly wasmstandalonesession_fromExport: (a: number, b: number) => [number, number, number];
     readonly wasmstandalonesession_mark_progress_save_written: (a: number) => void;
     readonly wasmstandalonesession_progress_save: (a: number) => [number, number];
-    readonly wasmstandalonesession_request_json: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
     readonly wasmstandalonesession_restore_progress_save: (a: number, b: number, c: number) => [number, number];
     readonly wasmstandalonesession_set_current_state: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly wasmstandalonesession_snapshot: (a: number) => [number, number];
     readonly __wbindgen_externrefs: WebAssembly.Table;
-    readonly __externref_table_dealloc: (a: number) => void;
-    readonly __wbindgen_free: (a: number, b: number, c: number) => void;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
+    readonly __externref_table_dealloc: (a: number) => void;
+    readonly __wbindgen_free: (a: number, b: number, c: number) => void;
     readonly __wbindgen_start: () => void;
 }
 

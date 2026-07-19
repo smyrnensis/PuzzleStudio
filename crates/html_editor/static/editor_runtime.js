@@ -253,10 +253,18 @@
     async compilePreview(payload = {}) {
       const compile = await requireWasmFunction("compile_workspace_preview");
       return compile(
-        asString(payload.puzzlePath) || "game.puzzle",
-        JSON.stringify(payload.workspaceDocuments || []),
+        asString(payload.puzzlePath),
+        payload.workspaceDocuments,
         asString(payload.gameCss),
         asString(payload.gameVisualsJs),
+      );
+    },
+
+    async workspacePresentationManifest(payload = {}) {
+      const manifest = await requireWasmFunction("workspace_presentation_manifest");
+      return manifest(
+        asString(payload.puzzlePath),
+        payload.workspaceDocuments,
       );
     },
 
@@ -264,8 +272,8 @@
       const exportHtml = await requireWasmFunction("export_workspace_html");
       const runtimeAssets = await window.PuzzleStudioRuntime.playerRuntimeAssets();
       return exportHtml(
-        asString(payload.puzzlePath) || "game.puzzle",
-        JSON.stringify(payload.workspaceDocuments || []),
+        asString(payload.puzzlePath),
+        payload.workspaceDocuments,
         asString(payload.gameCss),
         asString(payload.gameVisualsJs),
         asString(runtimeAssets.moduleSource),
@@ -336,9 +344,17 @@
     },
 
     async sourceEntries(source) {
+      const payload = await window.PuzzleStudioRuntime.sourceEntryInfo(source);
+      return payload.entries;
+    },
+
+    async sourceEntryInfo(source) {
       const raw = await querySynchronizedAnalysisWorker("entries", asString(source));
       const payload = parseSourceAnalysisJson(raw);
-      return Array.isArray(payload.entries) ? payload.entries : [];
+      return {
+        declaresGameEntry: payload.declaresGameEntry === true,
+        entries: Array.isArray(payload.entries) ? payload.entries : [],
+      };
     },
 
     workspaceSourceEntries(source) {
@@ -404,23 +420,6 @@
       } catch (error) {
         return Promise.reject(error);
       }
-    },
-
-    async solveState(source, puzzlePath, stateJson, maxDepth, maxNodes, maxMs) {
-      const solve = await requireWasmFunction("solve_state");
-      return solve(
-        asString(source),
-        asString(puzzlePath) || "game.puzzle",
-        asString(stateJson),
-        Number(maxDepth) || 0,
-        Number(maxNodes) || 0,
-        Number(maxMs) || 0,
-      );
-    },
-
-    async solverTaskInitialDisplayState(requestJson) {
-      const materialize = await requireWasmFunction("solver_task_initial_display_state_json");
-      return materialize(asString(requestJson));
     },
 
     wasmCompilerConfig() {

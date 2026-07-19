@@ -5,17 +5,12 @@ use crate::{
     LoadedGridGame, SpatialPresentation, ViewportFollow3, ViewportHeight3, ViewportMode3,
     VoxelColor, VoxelSpriteSet,
 };
-use puzzle_core::{GridLevel, GridLevelBundle, GridState, ObjectId, Size3};
-use puzzle_runtime_contract::{
-    GridPresentation, GridRuntimeModel, RUNTIME_CONTRACT_VERSION, RuntimeContract,
-    RuntimeLifecycle, RuntimeRuleEffects, runtime_contract_json,
-};
+use puzzle_core::{GridState, ObjectId, Size3};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum VisualFixtureExportError {
     MissingLevels,
     MissingObjectName { object: ObjectId },
-    RuntimeContract(String),
 }
 
 pub fn export_visual_fixture_json(
@@ -40,7 +35,6 @@ pub fn export_visual_fixture_json_with_title_and_scenes(
     scene_fields_json: Option<&str>,
     level_bundle_names: &[String],
 ) -> Result<String, VisualFixtureExportError> {
-    let bundle = runtime_level_bundle(game)?;
     let object_names = game
         .object_labels
         .iter()
@@ -53,14 +47,8 @@ pub fn export_visual_fixture_json_with_title_and_scenes(
     let mut out = String::new();
     out.push_str("{\n");
     write_json_string_field(&mut out, 1, "title", &title, true);
-    let _ = writeln!(
-        out,
-        "  \"runtimeContractVersion\": {},",
-        RUNTIME_CONTRACT_VERSION
-    );
-    write_runtime_contract(&mut out, game, presentation)?;
     let _ = writeln!(out, "  \"layerCount\": {},", game.game.layer_count);
-    let size = bundle
+    let size = game
         .levels
         .first()
         .ok_or(VisualFixtureExportError::MissingLevels)?
@@ -81,65 +69,6 @@ pub fn export_visual_fixture_json_with_title_and_scenes(
     Ok(out)
 }
 
-fn runtime_level_bundle(
-    game: &LoadedGridGame<3, Size3>,
-) -> Result<GridLevelBundle<3, Size3>, VisualFixtureExportError> {
-    GridLevelBundle::checked_new(
-        game.game.clone(),
-        game.levels
-            .iter()
-            .map(|level| {
-                GridLevel::new(
-                    level.name.clone(),
-                    level.initial_state.clone(),
-                    level.program.clone(),
-                    level.level_start_program.clone(),
-                    level.level_clear_program.clone(),
-                )
-            })
-            .collect(),
-    )
-    .map_err(|error| VisualFixtureExportError::RuntimeContract(format!("{error:?}")))
-}
-
-pub fn spatial_runtime_model(
-    game: &LoadedGridGame<3, Size3>,
-    presentation: &SpatialPresentation,
-) -> Result<
-    GridRuntimeModel<3, Size3, puzzle_runtime_contract::CameraEffect>,
-    VisualFixtureExportError,
-> {
-    GridRuntimeModel::checked_new(
-        game.game.clone(),
-        game.inputs.clone(),
-        runtime_level_bundle(game)?,
-        game.goal.clone(),
-        {
-            let mut entries = game
-                .rule_effects
-                .iter()
-                .map(|(rule, effects)| RuntimeRuleEffects {
-                    rule: rule.0,
-                    effects: effects.clone(),
-                })
-                .collect::<Vec<_>>();
-            entries.sort_by_key(|entry| entry.rule);
-            entries
-        },
-        RuntimeLifecycle {
-            on_level_start: game.level_start_program.clone(),
-            on_level_clear: game.level_clear_program.clone(),
-            on_last_level_clear: game.last_level_clear_program.clone(),
-        },
-        GridPresentation {
-            local_frame: presentation.local_frame.clone(),
-            rule_camera_effects: presentation.rule_camera_effects.clone(),
-            on_level_start_camera_effects: presentation.on_level_start_camera_effects.clone(),
-        },
-    )
-    .map_err(|error| VisualFixtureExportError::RuntimeContract(error.to_string()))
-}
-
 fn write_visual_order(out: &mut String, presentation: &SpatialPresentation) {
     out.push_str("  \"order\": ");
     out.push_str(
@@ -147,22 +76,6 @@ fn write_visual_order(out: &mut String, presentation: &SpatialPresentation) {
             .expect("compiled 3D sprite order serialization must succeed"),
     );
     out.push_str(",\n");
-}
-
-fn write_runtime_contract(
-    out: &mut String,
-    game: &LoadedGridGame<3, Size3>,
-    presentation: &SpatialPresentation,
-) -> Result<(), VisualFixtureExportError> {
-    let model = spatial_runtime_model(game, presentation)?;
-    let contract = RuntimeContract::checked_new(model)
-        .map_err(|error| VisualFixtureExportError::RuntimeContract(error.to_string()))?;
-    let contract_json = runtime_contract_json(&contract)
-        .map_err(|error| VisualFixtureExportError::RuntimeContract(error.to_string()))?;
-    out.push_str("  \"runtimeContract\": ");
-    out.push_str(&contract_json);
-    out.push_str(",\n");
-    Ok(())
 }
 
 fn write_render(

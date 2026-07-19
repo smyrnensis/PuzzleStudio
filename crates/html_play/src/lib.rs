@@ -1,7 +1,5 @@
 #![cfg_attr(any(target_arch = "wasm32", not(feature = "solver")), allow(dead_code))]
 
-#[cfg(feature = "solver")]
-use std::collections::{BTreeSet, HashMap};
 #[cfg(not(target_arch = "wasm32"))]
 use std::env;
 use std::fmt::Write as FmtWrite;
@@ -26,56 +24,34 @@ use std::time::Instant;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::SystemTime;
 
-#[cfg(feature = "solver")]
-use puzzle_core::eval_condition_kind;
-#[cfg(feature = "solver")]
-use puzzle_core::transition_program;
 use puzzle_core::{
-    ComparisonOp, CompiledGame, ConditionValueKind, Effect, Guard, InputId, LayerId, MarkPattern,
-    MarkValueMatch, ObjectId, Offset, PatchOp, Pattern, Rule, RuleApplication, RuleCondition,
-    RuleFiring, RuleId, RuleStep, State, TransitionCommand, VariableUpdateOp, WriteOp,
-    transition_program_outcome,
+    ComparisonOp, CompiledGame, ConditionValueKind, InputId, LayerId, MarkPattern, MarkValueMatch,
+    ObjectId, Offset, PatchOp, Pattern, RuleFiring, State, TransitionCommand,
 };
-#[cfg(feature = "solver")]
-use puzzle_core::{ConditionId, MarkId, MatchCell, PatternComponent, VariableId};
-use puzzle_core::{Coord3, GridCompiledGame, GridState, Size3};
-#[cfg(feature = "solver")]
-use puzzle_core::{GridCoord, GridGoalExpr, GridSize, Size2};
 pub use puzzle_game_runtime::StandaloneSessionBridge;
 #[cfg(not(target_arch = "wasm32"))]
 use puzzle_lang::AssetsDef;
-#[cfg(feature = "solver")]
-use puzzle_lang::GoalClause;
 use puzzle_lang::{
     ArrowKey, GoalCondition, GoalExpr, GoalValue, KeyTrigger, Level, LoadedDocumentModel,
-    LoadedGame, LoadedGridGame, ResourceSelection, RuleAnimation, RuleAnimationTrigger, RuleEffect,
-    SceneComponent, SceneEffect, SceneExpr, SceneLayoutDef, ScenePuzzleInitializer,
-    SceneTextContent, SceneTransitionTrigger, SceneValue, SoundsDef, ThemeDef, VisualSpriteDef,
-    VisualSpriteKind, VisualSpriteTransform, parse_game2d as parse_game,
+    LoadedGame, ResourceSelection, RuleAnimation, RuleAnimationTrigger, RuleEffect, SceneComponent,
+    SceneEffect, SceneExpr, SceneLayoutDef, ScenePuzzleInitializer, SceneTextContent,
+    SceneTransitionTrigger, SceneValue, SoundsDef, ThemeDef, VisualSpriteDef, VisualSpriteKind,
+    VisualSpriteTransform, parse_game2d as parse_game,
 };
 use puzzle_lang::{AssetKind, DiagnosticReport};
-#[cfg(feature = "solver")]
-use puzzle_lang::{GridSolverStrategy, QueryExprOf, SolverStrategyDirection};
 #[cfg(not(target_arch = "wasm32"))]
 use puzzle_lang::{discover_game_entries, expand_game_imports_for_file, resolve_game_entry};
 use puzzle_play::{
     GameSession, PresentationEvent, animation_events_contract_2d, animation_events_for_trace,
     loaded_document_scene_host_loaded_game, presentation_events_contract, runtime_sounds_def,
 };
+#[cfg(all(test, not(target_arch = "wasm32")))]
+use puzzle_runtime_contract::SessionAction;
 use puzzle_runtime_contract::{
     RuntimeChangedCell, RuntimeCoord, RuntimeMarkValueMatch, RuntimePatchOp, RuntimeRuleFiring,
     RuntimeStateSnapshot, RuntimeStateSnapshot2d, RuntimeTransitionCommand,
     RuntimeTransitionCurrentOutcome, RuntimeTransitionProgramOutcome,
 };
-#[cfg(all(test, not(target_arch = "wasm32")))]
-use puzzle_runtime_contract::{RuntimeModelKind, RuntimeStateSnapshot3d};
-#[cfg(feature = "solver")]
-use puzzle_solver::{
-    GridPuzzleDomain, GridSearchGoal, ScanControl, ScanOutcome, SearchBudget, SearchOutcome,
-    SearchProgress, SearchStats, best_first_scan_with_dead_states_and_progress,
-    best_first_with_dead_states_and_progress,
-};
-
 const INDEX_HTML: &str = include_str!("../static/index.html");
 const APP_CSS: &str = include_str!("../static/app.css");
 const THEME_PRESETS_CSS: &str = include_str!("../static/theme_presets.css");
@@ -156,54 +132,6 @@ mod tests {
             })
     }
 
-    #[cfg(feature = "solver")]
-    #[test]
-    fn solver_strategy_score_reads_queries_variables_and_distance() {
-        let source = r#"
-title = solver_strategy_score
-
-puzzle default {
-slots {
-floor = Goal
-actor = Player Box
-}
-
-var pressure = 2
-query boxes_on_goal = count([ Box Goal ])
-query player_to_goal = distance(Player, Goal)
-query near = distance(Player, Goal) <= 3
-
-solver {
-strategy {
-maximize boxes_on_goal weight 50
-minimize pressure weight 2
-prefer near weight 10
-minimize player_to_goal weight 3
-}
-}
-
-rules {
-}
-
-levels tiny of default {
-legend {
-. = empty
-P = Player
-* = Box Goal
-}
-
-level "start" {
-P*
-}
-}
-}
-"#;
-        let loaded = parse_game(source).unwrap();
-        let state = &loaded.levels[0].initial_state;
-
-        assert_eq!(solver_strategy_score(&loaded, state), -43);
-    }
-
     fn embedded_puzzle_runtime_export_json(html: &str) -> Value {
         embedded_puzzle_json_assignment(
             html,
@@ -213,11 +141,13 @@ P*
         )
     }
 
-    fn prepared_editor_solver_rules_json(source: &str, path: &str) -> Value {
-        serde_json::from_str(
-            &export_solver_rules_json_from_source(source, path).expect("prepared solver rules"),
+    fn embedded_editor_preview_export_json(html: &str) -> Value {
+        embedded_puzzle_json_assignment(
+            html,
+            "window.PuzzleEditorPreviewExportJson = \"",
+            "\";",
+            "PuzzleEditorPreviewExportJson",
         )
-        .expect("prepared solver rules json")
     }
 
     fn embedded_puzzle_boot_json(html: &str) -> Value {
@@ -242,41 +172,26 @@ P*
         let script = format!(
             r#"
 globalThis.window = globalThis;
-window.Puzzle3ComponentAutoBoot = false;
 {}
 const fs = require("fs");
 const fixture = JSON.parse(fs.readFileSync(0, "utf8"));
-const moduleSource = fs.readFileSync(process.argv[1], "utf8");
-const wasmBytes = fs.readFileSync(process.argv[2]);
-(async () => {{
-  const moduleUrl = `data:text/javascript;base64,${{Buffer.from(moduleSource).toString("base64")}}`;
-  const runtimeModule = await import(moduleUrl);
-  runtimeModule.initSync({{ module: wasmBytes }});
-  const validated = window.Puzzle3Component.validateRuntimeContract(fixture);
-  const coreRuntime = runtimeModule.WasmPuzzle3Runtime.fromFixture(JSON.stringify(fixture));
-  const initialState = validated.levelBundle.levels[0].initialState;
-  coreRuntime.set_state(JSON.stringify(initialState));
-  const currentCells = JSON.parse(coreRuntime.current_cells());
-  coreRuntime.free();
+try {{
+  const validated = window.Puzzle3Component.validateSnapshot(fixture);
   process.stdout.write(JSON.stringify({{
-    version: validated.contract.version,
-    modelKeys: Object.keys(validated.model).sort(),
-    levelCount: validated.levelBundle.levels.length,
-    runtimeCellCount: currentCells.length,
+    size: validated.size,
+    cellCount: validated.cells.length,
+    inputCount: validated.inputs.length,
   }}));
-}})().catch((error) => {{
+}} catch (error) {{
   console.error(error?.stack || error?.message || String(error));
   process.exitCode = 1;
-}});
+}}
 "#,
             PUZZLE3_COMPONENT_JS
         );
-        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let mut child = Command::new("node")
             .arg("-e")
             .arg(script)
-            .arg(manifest_dir.join("static/wasm_game/puzzle_wasm_game.js"))
-            .arg(manifest_dir.join("static/wasm_game/puzzle_wasm_game_bg.wasm"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -471,7 +386,6 @@ levels default of board {
             outcome_json["animationEvents"]
         );
     }
-
 
     #[test]
     fn renderer_board_floor_is_transparent_by_default() {
@@ -865,7 +779,7 @@ P
     }
 
     #[test]
-    fn presentation_wait_timer_is_serial_and_never_advances_runtime_state() {
+    fn presentation_wait_timer_serially_resumes_the_waiting_session() {
         assert!(APP_JS.contains("function applyPresentationEvents(events)"));
         assert!(APP_JS.contains("function dispatchNextPresentationEvent()"));
         assert!(APP_JS.contains("const event = pendingPresentationEvents.shift();"));
@@ -880,6 +794,18 @@ P
         assert!(APP_JS.contains("soundRuntime.applyEvents([event]);"));
         assert!(APP_JS.contains("currentState.levelIndex !== event.levelIndex"));
         assert!(APP_JS.contains("!currentPuzzles.includes(event.puzzle)"));
+        assert_eq!(
+            session_action_from_http("POST", "/api/resume").unwrap(),
+            SessionAction::Resume
+        );
+        assert!(STANDALONE_JS.contains("return { kind: \"resume\" };"));
+        assert!(APP_JS.contains("requestJson(\"/api/resume\", { method: \"POST\" })"));
+        assert!(APP_JS.contains("resumesSession: sessionWaiting"));
+        assert!(
+            APP_JS.contains(
+                "pendingSessionResume = pendingSessionResume || waitTimer.resumesSession;"
+            )
+        );
         assert!(
             APP_JS
                 .contains("pendingModelInput && config.queueDuringWait && config.fastForwardWait")
@@ -1338,12 +1264,16 @@ scene playing {
     fn puzzle3_component_does_not_fallback_to_empty_snapshot_when_fixture_load_fails() {
         assert!(PUZZLE3_COMPONENT_JS.contains("async function loadInitialPuzzle3Snapshot()"));
         assert!(PUZZLE3_COMPONENT_JS.contains(
-            "throw new Error(`Could not load Puzzle3 fixture ./fixture.json (${status})`);"
+            "throw new Error(\"Puzzle3 component requires an explicit view snapshot.\");"
         ));
-        assert!(PUZZLE3_COMPONENT_JS.contains("function requirePuzzle3Snapshot("));
+        assert!(!PUZZLE3_COMPONENT_JS.contains("fetch(\"./fixture.json\""));
+        assert!(!PUZZLE3_COMPONENT_JS.contains("window.Puzzle3DFixture"));
+        assert!(PUZZLE3_COMPONENT_JS.contains("function validatePuzzle3ViewSnapshot("));
         assert!(PUZZLE3_COMPONENT_JS.contains("function requireLoadedPuzzle3Snapshot("));
         assert!(PUZZLE3_COMPONENT_JS.contains("function showPuzzle3LoadError(error)"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("controllerApi.ready = loadPuzzle3ComponentSnapshot();"));
+        assert!(
+            PUZZLE3_COMPONENT_JS.contains("controllerApi.ready = loadPuzzle3ComponentSnapshot();")
+        );
         assert!(!PUZZLE3_COMPONENT_JS.contains("catch {\n    nextSnapshot = fallbackSnapshot;"));
         assert!(!PUZZLE3_COMPONENT_JS.contains("normalizeSnapshot(source || fallbackSnapshot)"));
         assert!(!PUZZLE3_COMPONENT_JS.contains("snapshot || fallbackSnapshot"));
@@ -1351,21 +1281,21 @@ scene playing {
     }
 
     #[test]
-    fn puzzle3_component_requires_current_runtime_contract_version() {
-        let expected = format!(
-            "const PUZZLE3_RUNTIME_CONTRACT_VERSION = {};",
-            puzzle_runtime_contract::RUNTIME_CONTRACT_VERSION
-        );
-        assert!(PUZZLE3_COMPONENT_JS.contains(&expected));
-        assert!(
-            PUZZLE3_COMPONENT_JS
-                .contains("Number(contract.version) !== PUZZLE3_RUNTIME_CONTRACT_VERSION")
-        );
-        assert!(!PUZZLE3_COMPONENT_JS.contains("Number(contract.version) !== 2"));
+    fn puzzle3_component_consumes_only_a_completed_view_snapshot() {
+        assert!(PUZZLE3_COMPONENT_JS.contains("window.Puzzle3Component"));
+        assert!(PUZZLE3_COMPONENT_JS.contains("validateSnapshot(source)"));
+        assert!(PUZZLE3_COMPONENT_JS.contains("controllerOptions.onError?.("));
+        assert!(!PUZZLE3_COMPONENT_JS.contains("runtimeContract"));
+        assert!(!PUZZLE3_COMPONENT_JS.contains("WasmPuzzle3Runtime"));
+        assert!(!PUZZLE3_COMPONENT_JS.contains("document.querySelector"));
+        assert!(!PUZZLE3_COMPONENT_JS.contains("URLSearchParams"));
+        assert!(!PUZZLE3_COMPONENT_JS.contains("postMessage"));
+        assert!(!PUZZLE3_COMPONENT_JS.contains("document.title"));
+        assert!(APP_JS.contains("function reportPuzzle3ComponentError(failure = {})"));
     }
 
     #[test]
-    fn generated_puzzle3_fixture_passes_the_browser_runtime_contract() {
+    fn puzzle3_session_projection_keeps_render_fixture_host_owned() {
         let source = r#"
 title = "Runtime boundary"
 
@@ -1393,29 +1323,29 @@ scene playing {
   }
 }
 "#;
-        let html = export_html_from_source(source, "runtime_boundary.puzzle3", "", "")
-            .expect("compile Puzzle3 boundary fixture");
-        let fixture = embedded_puzzle3_frame_fixture_json(&html);
+        let document = puzzle_lang::parse_game_for_path(source, "runtime_boundary.puzzle3")
+            .expect("compile Puzzle3 document");
+        let fixture_json = puzzle_lang::export_loaded_document_visual_fixture_json(&document)
+            .expect("export Puzzle3 render fixture");
+        let fixture: Value = serde_json::from_str(&fixture_json).unwrap();
         let result = validate_puzzle3_fixture_with_browser_contract(&fixture);
+        let mut bridge = StandaloneSessionBridge::from_source(source, "runtime_boundary.puzzle3")
+            .expect("compile Puzzle3 session projection");
+        let session: Value = serde_json::from_str(&bridge.snapshot_json()).unwrap();
+        let view = session["scene"].clone();
 
-        assert_eq!(
-            result["version"],
-            puzzle_runtime_contract::RUNTIME_CONTRACT_VERSION
+        assert_eq!(result["size"], json!({"width": 1, "depth": 1, "height": 1}));
+        assert_eq!(result["cellCount"], 1);
+        assert!(result["inputCount"].as_u64().is_some_and(|count| count > 0));
+        assert!(view.get("render").is_none());
+        assert!(view.get("objects").is_none());
+        assert!(view.get("sprites").is_none());
+        assert!(
+            view["cells"][0]["objects"][0].get("id").is_some(),
+            "projected Puzzle3 session view: {view}"
         );
-        assert_eq!(result["levelCount"], 1);
-        assert_eq!(result["runtimeCellCount"], 1);
-        assert_eq!(
-            result["modelKeys"],
-            json!([
-                "game",
-                "goal",
-                "inputs",
-                "levelBundle",
-                "lifecycle",
-                "presentation",
-                "ruleEffects"
-            ])
-        );
+        assert!(APP_JS.contains("function mergePuzzle3SessionSnapshot(fixture, sessionSnapshot)"));
+        assert!(APP_JS.contains("Puzzle3 session references unknown object id"));
         assert!(!PUZZLE3_COMPONENT_JS.contains("model.kind"));
         assert!(!PUZZLE3_COMPONENT_JS.contains("runtimeModel.rules"));
         assert!(!PUZZLE3_COMPONENT_JS.contains("runtimeModel.winCondition"));
@@ -1431,7 +1361,7 @@ scene playing {
     }
 
     #[test]
-    fn puzzle3_component_exposes_editor_preview_update_contract() {
+    fn puzzle3_preview_updates_are_owned_by_the_browser_host() {
         assert!(APP_JS.contains(
             "const PREVIEW_SURFACE_UPDATE_MESSAGE = \"PuzzleStudioPreviewSurfaceUpdate\";"
         ));
@@ -1443,23 +1373,6 @@ scene playing {
         assert!(APP_JS.contains("let puzzle3PreviewSurface = initialPuzzle3PreviewSurface;"));
         assert!(APP_JS.contains("function normalizePuzzle3PreviewSurface(update = null)"));
         assert!(APP_JS.contains("function puzzle3PreviewSurfaceFixture(source, sceneName)"));
-        assert!(APP_JS.contains(
-            "function puzzle3PreviewSurfaceControllerUpdate(surface = puzzle3PreviewSurface)"
-        ));
-        assert!(APP_JS.contains("camera: payload.camera"));
-        assert!(APP_JS.contains("view: payload.view"));
-        assert!(APP_JS.contains("settings: payload.settings || {}"));
-        assert!(PUZZLE3_COMPONENT_JS.contains(
-            "const PREVIEW_SURFACE_UPDATE_MESSAGE = \"PuzzleStudioPreviewSurfaceUpdate\";"
-        ));
-        assert!(PUZZLE3_COMPONENT_JS.contains("function puzzle3PreviewUpdateFromSurface(update = {})"));
-        assert!(
-            PUZZLE3_COMPONENT_JS.contains("if (event.data?.type === PREVIEW_SURFACE_UPDATE_MESSAGE)")
-        );
-        assert!(PUZZLE3_COMPONENT_JS.contains("levelIndex: payload.levelIndex"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("camera: payload.camera"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("view: payload.view"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("settings: payload.settings || {}"));
         assert!(APP_JS.contains("if (puzzle3PreviewSurface) {\n    return puzzle3PreviewSurfaceFixture(fixture, sceneName);\n  }"));
         assert!(
             APP_JS.contains("if (componentEmbedMode && renderEmbeddedPuzzleComponent(layers))")
@@ -1474,50 +1387,18 @@ scene playing {
         assert!(APP_JS.contains(
             "window.applyPuzzleStudioPreviewSurfaceUpdate = applyPuzzleStudioPreviewSurfaceUpdate;"
         ));
+        assert!(APP_JS.contains("entry.controller?.replaceSnapshot(snapshot);"));
         let stripped = strip_optional_host_blocks(APP_JS, "puzzle3");
         assert!(!stripped.contains("normalizePuzzle3PreviewSurface("));
         assert!(!stripped.contains("PuzzleStudioInitialPreviewSurfaceConsumed"));
         assert!(!stripped.contains("effectiveComponentEmbedMode"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("function applyPuzzle3PreviewUpdate(update = {})"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("PuzzleStudioUpdatePuzzle3Preview"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("PuzzleStudioRenderPuzzle3ModelComponent"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("PuzzleStudioInitialModelComponentPreview"));
-        assert!(
-            PUZZLE3_COMPONENT_JS
-                .contains("function applyPuzzle3ModelComponentPreviewUpdate(update = {})")
-        );
-        assert!(PUZZLE3_COMPONENT_JS.contains(
-            "const initialModelPreview = window.PuzzleStudioInitialModelComponentPreview;"
-        ));
-        assert!(PUZZLE3_COMPONENT_JS.contains(
-            "await loadSnapshotData(next, puzzle3ModelComponentPreviewLoadOptions(initialModelPreview));"
-        ));
-        assert!(
-            PUZZLE3_COMPONENT_JS
-                .contains("window.PuzzleStudioInitialModelComponentPreviewConsumed = true;")
-        );
-        assert!(PUZZLE3_COMPONENT_JS.contains(
-            "function puzzle3PreviewSnapshot(update = {}, source = requireLoadedPuzzle3Snapshot(\"Puzzle3 preview source snapshot\"))"
-        ));
-        assert!(!PUZZLE3_COMPONENT_JS.contains(
-            "await loadSnapshotData(nextSnapshot);\n  if (window.PuzzleStudioInitialModelComponentPreview"
-        ));
-        assert!(PUZZLE3_COMPONENT_JS.contains("modelComponentPreview: {"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("if (editorModelComponentPreview)"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("mergePuzzle3PreviewRender"));
-        assert!(
-            PUZZLE3_COMPONENT_JS
-                .contains("applyPuzzle3PreviewResources(next, update.resources || update)")
-        );
-        assert!(PUZZLE3_COMPONENT_JS.contains("function applyPuzzle3PreviewResources"));
-        assert!(
-            PUZZLE3_COMPONENT_JS
-                .contains("target.sprites = JSON.parse(JSON.stringify(resources.sprites));")
-        );
-        assert!(PUZZLE3_COMPONENT_JS.contains("next.levels[levelIndex]"));
-        assert!(APP_JS.contains("zoom: view.zoom,"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("zoom: update.camera.zoom ?? update.view?.zoom,"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("next.render = mergePuzzle3PreviewRender"));
+        assert!(!PUZZLE3_COMPONENT_JS.contains("PuzzleStudioPreviewSurfaceUpdate"));
+        assert!(!PUZZLE3_COMPONENT_JS.contains("PuzzleStudioRenderPuzzle3ModelComponent"));
+        assert!(!PUZZLE3_COMPONENT_JS.contains("puzzle3PreviewSnapshot"));
+        assert!(!PUZZLE3_COMPONENT_JS.contains("applyPuzzle3PreviewResources"));
+        assert!(!PUZZLE3_COMPONENT_JS.contains("mergePuzzle3PreviewRender"));
+        assert!(!PUZZLE3_COMPONENT_JS.contains("update(update = {})"));
+        assert!(PUZZLE3_COMPONENT_JS.contains("replaceSnapshot(nextSnapshot)"));
         assert!(PUZZLE3_COMPONENT_JS.contains(r#"coordinateSpace: "canvas-css-px""#));
         assert!(PUZZLE3_COMPONENT_JS.contains(
             "const target = source?.target || source?.origin || modelCenterForSize(size);"
@@ -1558,19 +1439,24 @@ scene playing {
         ));
         assert!(PUZZLE3_COMPONENT_JS.contains("viewport.framingBox.height === \"full\""));
         assert!(PUZZLE3_COMPONENT_JS.contains("function scheduleViewportAnimation()"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("target.follow !== \"smooth\" || view.viewportSnapNext"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("function smoothViewportOrigin(nextX, nextY, target)"));
+        assert!(
+            PUZZLE3_COMPONENT_JS.contains("target.follow !== \"smooth\" || view.viewportSnapNext")
+        );
+        assert!(
+            PUZZLE3_COMPONENT_JS.contains("function smoothViewportOrigin(nextX, nextY, target)")
+        );
         assert!(PUZZLE3_COMPONENT_JS.contains("function smoothViewportMaxLag(target)"));
         assert!(PUZZLE3_COMPONENT_JS.contains("const amount = 0.12;"));
         assert!(PUZZLE3_COMPONENT_JS.contains("function requestSceneViewportDraw()"));
         assert!(PUZZLE3_COMPONENT_JS.contains("if (smoothViewportActive())"));
         assert!(PUZZLE3_COMPONENT_JS.contains("function smoothViewportActive()"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("requestSceneViewportDraw();"));
         assert!(
-            PUZZLE3_COMPONENT_JS.contains("const advanceViewport = options.advanceViewport !== false;")
+            PUZZLE3_COMPONENT_JS
+                .contains("const advanceViewport = options.advanceViewport !== false;")
         );
         assert!(
-            PUZZLE3_COMPONENT_JS.contains("fitProjectionToViewport(renderContext, { advanceViewport })")
+            PUZZLE3_COMPONENT_JS
+                .contains("fitProjectionToViewport(renderContext, { advanceViewport })")
         );
         assert!(PUZZLE3_COMPONENT_JS.contains("if (options.advanceViewport === false)"));
         assert!(PUZZLE3_COMPONENT_JS.contains("target.cellScale * projectionZoom(camera) * 3.5"));
@@ -1594,7 +1480,8 @@ scene playing {
             "for (const voxel of objectVoxels(focusCell.position || {}, object, sourceKey))"
         ));
         assert!(
-            PUZZLE3_COMPONENT_JS.contains("function viewportFramingRanges(size, viewport, focusCell)")
+            PUZZLE3_COMPONENT_JS
+                .contains("function viewportFramingRanges(size, viewport, focusCell)")
         );
         assert!(PUZZLE3_COMPONENT_JS.contains("function virtualCenteredCellRange(center, span)"));
         assert!(PUZZLE3_COMPONENT_JS.contains(
@@ -1620,11 +1507,15 @@ scene playing {
                 "const anchorX = Number.isFinite(centerX) ? centerX : (minX + maxX) / 2;"
             )
         );
-        assert!(PUZZLE3_COMPONENT_JS.contains("originY: frameHeight / 2 - anchorY * effectiveScale"));
+        assert!(
+            PUZZLE3_COMPONENT_JS.contains("originY: frameHeight / 2 - anchorY * effectiveScale")
+        );
         assert!(PUZZLE3_COMPONENT_JS.contains("viewportFitForFrame("));
         assert!(PUZZLE3_COMPONENT_JS.contains("function puzzle3RenderContext(width = canvas.clientWidth, height = canvas.clientHeight)"));
         assert!(PUZZLE3_COMPONENT_JS.contains("function canvasLayoutFrame()"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("Number(canvas.clientWidth) || Number(rect.width) || 1"));
+        assert!(
+            PUZZLE3_COMPONENT_JS.contains("Number(canvas.clientWidth) || Number(rect.width) || 1")
+        );
         assert!(PUZZLE3_COMPONENT_JS.contains("const frame = canvasLayoutFrame();"));
         assert!(PUZZLE3_COMPONENT_JS.contains("function normalizeFrame(frame)"));
         assert!(PUZZLE3_COMPONENT_JS.contains("function normalizeModelSize(size)"));
@@ -1632,12 +1523,17 @@ scene playing {
             PUZZLE3_COMPONENT_JS
                 .contains("function fitScaleForProjectedBounds(frame, bounds, margin = 0)")
         );
-        assert!(PUZZLE3_COMPONENT_JS.contains("const candidates = renderCellCandidates(renderContext);"));
+        assert!(
+            PUZZLE3_COMPONENT_JS
+                .contains("const candidates = renderCellCandidates(renderContext);")
+        );
         assert!(
             PUZZLE3_COMPONENT_JS
                 .contains("function renderCellCandidates(renderContext = puzzle3RenderContext())")
         );
-        assert!(PUZZLE3_COMPONENT_JS.contains("function viewportRenderCullingEnabled(renderContext)"));
+        assert!(
+            PUZZLE3_COMPONENT_JS.contains("function viewportRenderCullingEnabled(renderContext)")
+        );
         assert!(!PUZZLE3_COMPONENT_JS.contains("function viewportRenderPixelMargin"));
         assert!(!PUZZLE3_COMPONENT_JS.contains("function projectedCellPixelMargin"));
         assert!(PUZZLE3_COMPONENT_JS.contains("function cellProjectsIntoFrame(position, frame)"));
@@ -1670,19 +1566,10 @@ scene playing {
         );
         assert!(APP_JS.contains("document.addEventListener(\"keyup\", (event) => {"));
         assert!(APP_JS.contains("broadcastPuzzle3Key(event, \"up\");"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("function handleComponentEmbedKeydown(event)"));
-        assert!(PUZZLE3_COMPONENT_JS.contains(
-            "if (inlineComponentMount) {\n  // Inline controllers receive input through the host controller contract.\n} else if (!effectiveComponentEmbedMode()) {"
-        ));
-        assert!(
-            PUZZLE3_COMPONENT_JS
-                .contains("window.addEventListener(\"keydown\", handleComponentEmbedKeydown);")
-        );
-        assert!(PUZZLE3_COMPONENT_JS.contains("function handleComponentEmbedKeyup(event)"));
-        assert!(
-            PUZZLE3_COMPONENT_JS
-                .contains("window.addEventListener(\"keyup\", handleComponentEmbedKeyup);")
-        );
+        assert!(!PUZZLE3_COMPONENT_JS.contains("window.addEventListener(\"keydown\""));
+        assert!(!PUZZLE3_COMPONENT_JS.contains("window.addEventListener(\"keyup\""));
+        assert!(PUZZLE3_COMPONENT_JS.contains("applyKey(event)"));
+        assert!(PUZZLE3_COMPONENT_JS.contains("releaseKey(event)"));
         assert!(PUZZLE3_COMPONENT_JS.contains("function startHeldSceneInput(holdId, input)"));
         assert!(PUZZLE3_COMPONENT_JS.contains("heldSceneInputs.set(holdId, input);"));
         assert!(PUZZLE3_COMPONENT_JS.contains("function applyPuzzle3CommandKey(event)"));
@@ -1714,12 +1601,16 @@ scene playing {
                 .contains("function cellVisibleVoxelsForRender(cell, renderContext = null)")
         );
         assert!(PUZZLE3_COMPONENT_JS.contains("renderContext.visibleVoxelCells = new Map();"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("function isVoxelFaceOccluded(voxel, offset, occupied)"));
+        assert!(
+            PUZZLE3_COMPONENT_JS.contains("function isVoxelFaceOccluded(voxel, offset, occupied)")
+        );
         assert!(
             PUZZLE3_COMPONENT_JS
                 .contains("if (voxel.opaque !== false && occupied.opaque.has(adjacentKey))")
         );
-        assert!(PUZZLE3_COMPONENT_JS.contains("occupied.bySource.has(`${sourceKey}|${adjacentKey}`)"));
+        assert!(
+            PUZZLE3_COMPONENT_JS.contains("occupied.bySource.has(`${sourceKey}|${adjacentKey}`)")
+        );
     }
 
     #[test]
@@ -1727,7 +1618,9 @@ scene playing {
         assert!(PUZZLE3_COMPONENT_JS.contains("function visibleVoxelStack(stack)"));
         assert!(PUZZLE3_COMPONENT_JS.contains("const visible = [];"));
         assert!(PUZZLE3_COMPONENT_JS.contains("opaque: source.a >= 0.999"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("if (renderVoxel.opaque) {\n      visible.length = 0;"));
+        assert!(
+            PUZZLE3_COMPONENT_JS.contains("if (renderVoxel.opaque) {\n      visible.length = 0;")
+        );
         assert!(PUZZLE3_COMPONENT_JS.contains("visible.push(renderVoxel);"));
         assert!(PUZZLE3_COMPONENT_JS.contains("voxels.push(...visibleStack);"));
         assert!(!PUZZLE3_COMPONENT_JS.contains("function compositeVoxelStack(stack)"));
@@ -1746,20 +1639,26 @@ scene playing {
         assert!(PUZZLE3_COMPONENT_JS.contains("x: (grid.x + 0.5 - width / 2) * scale"));
         assert!(PUZZLE3_COMPONENT_JS.contains("y: (grid.y + 0.5 - depth / 2) * scale"));
         assert!(PUZZLE3_COMPONENT_JS.contains("z: (grid.z + 0.5 - height / 2) * scale"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("const source = voxel.color || parseColor(voxel.fill);"));
+        assert!(
+            PUZZLE3_COMPONENT_JS.contains("const source = voxel.color || parseColor(voxel.fill);")
+        );
     }
 
     #[test]
     fn puzzle3_component_caches_render_geometry_by_dirty_cells() {
         assert!(
-            PUZZLE3_COMPONENT_JS.contains("const renderGeometryCache = createRenderGeometryCache();")
+            PUZZLE3_COMPONENT_JS
+                .contains("const renderGeometryCache = createRenderGeometryCache();")
         );
-        assert!(PUZZLE3_COMPONENT_JS.contains("function syncRenderGeometryCache(renderContext = null)"));
+        assert!(
+            PUZZLE3_COMPONENT_JS.contains("function syncRenderGeometryCache(renderContext = null)")
+        );
         assert!(PUZZLE3_COMPONENT_JS.contains("function renderCellSignature(cell)"));
         assert!(PUZZLE3_COMPONENT_JS.contains("function expandDirtyCellKeys(keys)"));
         assert!(PUZZLE3_COMPONENT_JS.contains("for (const offset of faceNeighborOffsets())"));
         assert!(
-            PUZZLE3_COMPONENT_JS.contains("function rebuildVisibleCellGeometry(key, cell, signature)")
+            PUZZLE3_COMPONENT_JS
+                .contains("function rebuildVisibleCellGeometry(key, cell, signature)")
         );
         assert!(PUZZLE3_COMPONENT_JS.contains("function rebuildCachedCellFaces(key, cell)"));
         assert!(
@@ -1978,10 +1877,9 @@ text level.title
 
     #[test]
     fn puzzle3_lifecycle_effect_semantics_are_host_owned() {
-        assert!(PUZZLE3_COMPONENT_JS.contains("function emitPuzzle3LifecycleEffects("));
-        assert!(PUZZLE3_COMPONENT_JS.contains("controllerOptions.onLifecycleEffects"));
-        assert!(APP_JS.contains("function sendPuzzle3LifecycleEffects("));
-        assert!(APP_JS.contains("await sendEffect(effect?.effect || effect, scope);"));
+        assert!(!PUZZLE3_COMPONENT_JS.contains("LifecycleEffects"));
+        assert!(!PUZZLE3_COMPONENT_JS.contains("onLifecycleEffects"));
+        assert!(APP_JS.contains("applyPresentationEvents(presentationEvents);"));
         assert!(APP_JS.contains("function puzzleEffectCommand("));
         assert!(!PUZZLE3_COMPONENT_JS.contains("function applyRuntimeLifecycleEffect("));
         assert!(!PUZZLE3_COMPONENT_JS.contains("Unsupported Puzzle3 lifecycle effect"));
@@ -1991,8 +1889,13 @@ text level.title
 
     #[test]
     fn puzzle3_component_camera_pitch_allows_vertical_view() {
-        assert!(PUZZLE3_COMPONENT_JS.contains("const PUZZLE3_COMPONENT_CAMERA_MIN_PITCH_DEGREES = -90;"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("const PUZZLE3_COMPONENT_CAMERA_MAX_PITCH_DEGREES = 90;"));
+        assert!(
+            PUZZLE3_COMPONENT_JS
+                .contains("const PUZZLE3_COMPONENT_CAMERA_MIN_PITCH_DEGREES = -90;")
+        );
+        assert!(
+            PUZZLE3_COMPONENT_JS.contains("const PUZZLE3_COMPONENT_CAMERA_MAX_PITCH_DEGREES = 90;")
+        );
         assert!(PUZZLE3_COMPONENT_JS.contains("PUZZLE3_COMPONENT_CAMERA_MAX_PITCH_DEGREES"));
         assert!(!PUZZLE3_COMPONENT_JS.contains("camera.pitchDegrees - deltaY * 0.25, -80, 80"));
     }
@@ -2013,7 +1916,9 @@ text level.title
         assert!(!PUZZLE3_VISUAL_CORE_JS.contains("adapter.compoundFace"));
         assert!(!PUZZLE3_VISUAL_CORE_JS.contains("const depthDiff ="));
         assert!(PUZZLE3_COMPONENT_JS.contains("primitives = orderScenePrimitives(primitives);"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("return Puzzle3VisualCore.comparePrimitiveOrder(a, b);"));
+        assert!(
+            PUZZLE3_COMPONENT_JS.contains("return Puzzle3VisualCore.comparePrimitiveOrder(a, b);")
+        );
         assert!(PUZZLE3_COMPONENT_JS.contains("function orderScenePrimitives(primitives)"));
         assert!(PUZZLE3_COMPONENT_JS.contains(
             "view.primitiveSortCacheOrder.map((stableKey) => byStableKey.get(stableKey))"
@@ -2031,25 +1936,40 @@ text level.title
             PUZZLE3_COMPONENT_JS
                 .contains("return Puzzle3VisualCore.faceGridOrder(corners, puzzle3VisualView());")
         );
+        assert!(
+            PUZZLE3_VISUAL_CORE_JS.contains("function evaluateSpatialSpriteAffine(operations)")
+        );
+        assert!(PUZZLE3_VISUAL_CORE_JS.contains("function transformSpatialPoint(point, affine)"));
+        assert!(
+            PUZZLE3_COMPONENT_JS
+                .contains("Puzzle3VisualCore.evaluateSpatialSpriteAffine(sprite.spatialOps)")
+        );
+        assert!(
+            PUZZLE3_THREE_RENDERER_JS
+                .contains("Puzzle3VisualCore.evaluateSpatialSpriteAffine(sprite.spatialOps)")
+        );
     }
 
     #[test]
     fn puzzle3_component_applies_pixelate_as_canvas_postprocess() {
         assert!(
-            PUZZLE3_COMPONENT_JS.contains("const pixelateBuffer = document.createElement(\"canvas\");")
+            PUZZLE3_COMPONENT_JS
+                .contains("const pixelateBuffer = document.createElement(\"canvas\");")
         );
         assert!(PUZZLE3_COMPONENT_JS.contains("applyPixelatePostprocess();"));
         assert!(PUZZLE3_COMPONENT_JS.contains("function pixelateSettings()"));
         assert!(PUZZLE3_COMPONENT_JS.contains("const raw = snapshot.render.pixelate;"));
         assert!(PUZZLE3_COMPONENT_JS.contains("function applyPixelatePostprocess()"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("bufferCtx.imageSmoothingEnabled = settings.smoothing;"));
+        assert!(
+            PUZZLE3_COMPONENT_JS.contains("bufferCtx.imageSmoothingEnabled = settings.smoothing;")
+        );
         assert!(PUZZLE3_COMPONENT_JS.contains("ctx.imageSmoothingEnabled = false;"));
         assert!(PUZZLE3_COMPONENT_JS.contains("ctx.setTransform(1, 0, 0, 1, 0, 0);"));
     }
 
     #[test]
-    fn standalone_again_turns_are_scheduled_between_snapshots() {
-        assert!(STANDALONE_JS.contains("this.sessionRuntime.request_json(method, url)"));
+    fn standalone_again_turns_are_owned_by_the_session_runtime() {
+        assert!(STANDALONE_JS.contains("this.sessionRuntime.dispatch(JSON.stringify(action))"));
         assert!(!STANDALONE_JS.contains("scheduleAgainTurn"));
         assert!(!STANDALONE_JS.contains("runAgainTurn"));
         assert!(!STANDALONE_JS.contains("pendingAgainTurns"));
@@ -2126,1876 +2046,6 @@ text level.title
         assert!(APP_JS.contains("standaloneRuntime?.inputIdsByName?.has(command)"));
         assert!(APP_JS.contains("standaloneRuntime.applyInputName(command);"));
         assert!(STANDALONE_JS.contains("this.editorPreviewInputEnabled = false;"));
-    }
-
-    #[cfg(feature = "solver")]
-    #[test]
-    fn solver_task_request_solves_compiled_2d_without_source_fallback() {
-        let source = r#"
-title = solver_task_compiled
-
-puzzle board {
-  slots {
-    floor = Goal
-    actor = Player Box Wall
-  }
-  keys {
-    d ArrowRight -> right
-  }
-  rules {
-    input right [ Player | Box | Goal no actor ] -> [ | Player | Goal Box ]
-  }
-  win_conditions {
-    all Goal on Box
-  }
-}
-
-levels default of board {
-  legend {
-    . = empty
-    P = Player
-    B = Box
-    G = Goal
-  }
-  level "start" {
-    PBG
-  }
-}
-"#;
-        let html = export_editor_preview_html_from_source(source, "game.puzzle", "", "")
-            .expect("preview export");
-        let standalone =
-            export_html_from_source(source, "game.puzzle", "", "").expect("standalone export");
-        assert!(!html.contains("PuzzleEditorSolverRulesJson"));
-        assert!(!standalone.contains("PuzzleEditorSolverRulesJson"));
-        let export = embedded_puzzle_runtime_export_json(&html);
-        let solver_rules = prepared_editor_solver_rules_json(source, "game.puzzle");
-        assert!(
-            !export["runtimeLoadedDocument"]["document"]
-                .to_string()
-                .contains("solver_strategy")
-        );
-        assert!(
-            export["compiledPlay"]["inputLabels"]
-                .as_object()
-                .expect("compiled input labels")
-                .values()
-                .any(|label| label == "right")
-        );
-        let level = &export["levels"][0];
-        let request = json!({
-            "version": 1,
-            "rules": {
-                "compileId": "test-compile",
-                "documentId": "test-document",
-                "modelKind": solver_rules["modelKind"].clone(),
-                "compiledPlay": solver_rules["compiledPlay"].clone(),
-                "loadedGame": solver_rules["loadedGame"].clone(),
-                "runRulesOnLevelStart": solver_rules["runRulesOnLevelStart"].clone(),
-                "goal": solver_rules["goal"].clone(),
-                "lose": solver_rules["lose"].clone(),
-                "solverStrategy": solver_rules["solverStrategy"].clone()
-            },
-            "target": {
-                "origin": "preview-level",
-                "compileId": "test-compile",
-                "documentId": "test-document",
-                "level": {
-                    "index": 0,
-                    "levelName": level["name"].clone()
-                },
-                "state": {
-                    "kind": "compiled-start",
-                    "lifecycle": "playable-start",
-                    "data": level["initialState"].clone()
-                }
-            },
-            "maxDepth": 4,
-            "maxNodes": 1000,
-            "maxMs": 0
-        });
-
-        let response = solve_solver_task_json(&request.to_string()).unwrap();
-
-        assert!(response.contains(r#""result":"solved""#), "{response}");
-        assert!(response.contains(r#""depth":1"#));
-        assert!(response.contains(r#""name":"right""#));
-        assert!(!response.contains("input_"));
-        assert!(request["rules"].get("source").is_none());
-        assert!(request["target"].get("source").is_none());
-    }
-
-    #[cfg(all(feature = "solver", not(target_arch = "wasm32")))]
-    #[test]
-    fn editor_solver_task_solves_microban_5_with_generated_strategy() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../games/microban/game.puzzle");
-        let source = std::fs::read_to_string(&path).expect("microban source");
-        let html =
-            export_editor_preview_html_from_source(&source, &path.display().to_string(), "", "")
-                .expect("microban editor preview");
-        let export = embedded_puzzle_runtime_export_json(&html);
-        let solver_rules = prepared_editor_solver_rules_json(&source, &path.display().to_string());
-        let level = &export["levels"][4];
-        assert_eq!(level["name"], "microban_05");
-        assert_eq!(
-            solver_rules["solverStrategy"]["terms"][0]["value"],
-            json!({"AllOnDistance":{"subjects":[2],"covers":[4]}})
-        );
-        let request = json!({
-            "version": 1,
-            "rules": {
-                "compileId": "microban-5",
-                "documentId": "microban",
-                "modelKind": solver_rules["modelKind"].clone(),
-                "compiledPlay": solver_rules["compiledPlay"].clone(),
-                "loadedGame": solver_rules["loadedGame"].clone(),
-                "runRulesOnLevelStart": solver_rules["runRulesOnLevelStart"].clone(),
-                "goal": solver_rules["goal"].clone(),
-                "lose": solver_rules["lose"].clone(),
-                "solverStrategy": solver_rules["solverStrategy"].clone()
-            },
-            "target": {
-                "origin": "preview-level",
-                "compileId": "microban-5",
-                "documentId": "microban",
-                "level": {"index": 4, "levelName": "microban_05"},
-                "state": {
-                    "kind": "compiled-start",
-                    "lifecycle": "playable-start",
-                    "data": level["initialState"].clone()
-                }
-            },
-            "maxDepth": 512,
-            "maxNodes": 100_000,
-            "maxMs": 0
-        });
-
-        let response = solve_solver_task_json(&request.to_string()).expect("editor solver task");
-        assert!(response.contains(r#""result":"solved""#), "{response}");
-        let response_json: Value = serde_json::from_str(&response).expect("solver response JSON");
-        let expanded = response_json["observations"]
-            .as_array()
-            .and_then(|observations| observations.last())
-            .and_then(|observation| observation["progress"]["expanded"].as_u64())
-            .expect("solved response should retain final search progress");
-        let visited = response_json["observations"]
-            .as_array()
-            .and_then(|observations| observations.last())
-            .and_then(|observation| observation["progress"]["visited"].as_u64())
-            .expect("solved response should retain visited search progress");
-        eprintln!("microban_05 editor solver visited={visited} expanded={expanded}");
-        assert!(visited < 35_000, "visited {visited} positions");
-        assert!(expanded < 100_000, "expanded {expanded} positions");
-    }
-
-    #[cfg(all(feature = "solver", not(target_arch = "wasm32")))]
-    #[test]
-    fn editor_solver_task_preserves_teneten_routine_control_flow() {
-        let path =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../games/TENETEN.puzzle");
-        let source = std::fs::read_to_string(&path).expect("TENETEN source");
-        let html =
-            export_editor_preview_html_from_source(&source, &path.display().to_string(), "", "")
-                .expect("TENETEN editor preview");
-        let export = embedded_puzzle_runtime_export_json(&html);
-        let solver_rules = prepared_editor_solver_rules_json(&source, &path.display().to_string());
-        let level = &export["levels"][1];
-        assert_eq!(level["name"], "1-2");
-        let request = json!({
-            "version": 1,
-            "rules": {
-                "compileId": "teneten-1-2",
-                "documentId": "teneten",
-                "modelKind": solver_rules["modelKind"].clone(),
-                "compiledPlay": solver_rules["compiledPlay"].clone(),
-                "loadedGame": solver_rules["loadedGame"].clone(),
-                "runRulesOnLevelStart": solver_rules["runRulesOnLevelStart"].clone(),
-                "goal": solver_rules["goal"].clone(),
-                "lose": solver_rules["lose"].clone(),
-                "solverStrategy": solver_rules["solverStrategy"].clone()
-            },
-            "target": {
-                "origin": "preview-level",
-                "compileId": "teneten-1-2",
-                "documentId": "teneten",
-                "level": {"index": 1, "levelName": "1-2"},
-                "state": {
-                    "kind": "compiled-start",
-                    "lifecycle": "playable-start",
-                    "data": level["initialState"].clone()
-                }
-            },
-            "maxDepth": 128,
-            "maxNodes": 1000,
-            "maxMs": 0
-        });
-
-        let response = solve_solver_task_json(&request.to_string()).expect("TENETEN solver task");
-        let response: Value = serde_json::from_str(&response).expect("solver response JSON");
-        assert_eq!(response["result"], "solved", "{response}");
-        assert_eq!(response["depth"], 14);
-    }
-
-    #[cfg(feature = "solver")]
-    #[test]
-    fn solver_model_slicer_uses_stage_availability() {
-        let source = r#"
-title = solver_compiled_stage_availability
-
-puzzle board {
-  slots {
-    floor = Goal
-    actor = Player Box
-    item = Battery Door
-  }
-  keys {
-    d ArrowRight -> right
-  }
-  rules {
-    input right [ Player | Box | Goal no actor ] -> [ | Player | Goal Box ]
-    [ Battery ] -> [ Door ]
-  }
-  win_conditions {
-    all Goal on Box
-  }
-}
-
-levels default of board {
-  legend {
-    . = empty
-    P = Player
-    B = Box
-    G = Goal
-    X = Battery
-  }
-  level "start" {
-    PBG.
-  }
-}
-"#;
-
-        let loaded = parse_game(source).unwrap();
-        let object_named = |name: &str| {
-            loaded
-                .object_labels
-                .iter()
-                .find_map(|(id, label)| (label == name).then_some(*id))
-                .unwrap_or_else(|| panic!("missing object {name}"))
-        };
-        let battery = object_named("Battery");
-        let initial = &loaded.levels[0].initial_state;
-        let goal = loaded.goal.as_ref().map(|goal| &goal.expr);
-        let lose = loaded.lose.as_ref().map(|lose| &lose.expr);
-        let (solver_model, slicer) =
-            solver_model_and_state_slicer(&loaded, initial, None, goal, lose);
-        let solver_game = solver_model.compiled_game_for_level(0).unwrap();
-        let mut probe = initial.clone();
-        probe.place_object(&solver_game, 3, 0, battery).unwrap();
-
-        let projected = slicer.project_state(&probe);
-
-        assert!(!projected.has_object(&solver_game, 3, 0, battery));
-        let rule_ids = solver_game
-            .rules()
-            .iter()
-            .map(|rule| rule.id)
-            .collect::<Vec<_>>();
-        let battery_rule = loaded
-            .rule_debug_info
-            .iter()
-            .find_map(|(rule, info)| {
-                (info.source_line == "[ Battery ] -> [ Door ]").then_some(*rule)
-            })
-            .expect("battery rule debug info");
-        assert!(!rule_ids.contains(&battery_rule));
-    }
-
-    #[cfg(feature = "solver")]
-    #[test]
-    fn solver_task_request_treats_win_command_as_goal_without_win_conditions() {
-        let source = r#"
-title = solver_task_win_command
-
-puzzle board {
-  slots {
-    actor = Player Exit
-  }
-  keys {
-    d ArrowRight -> right
-  }
-  rules {
-    input right [ Player | Exit ] -> win
-    input right [ Player | no actor ] -> [ | Player ]
-  }
-}
-
-levels default of board {
-  legend {
-    . = empty
-    P = Player
-    E = Exit
-  }
-  level "start" {
-    PE
-  }
-}
-"#;
-        let html = export_editor_preview_html_from_source(source, "game.puzzle", "", "")
-            .expect("preview export");
-        let export = embedded_puzzle_runtime_export_json(&html);
-        let solver_rules = prepared_editor_solver_rules_json(source, "game.puzzle");
-        assert!(export["goal"].is_null());
-        assert!(export["compiledPlay"].is_object());
-        assert!(export["engine"]["objects"].is_array());
-        let level = &export["levels"][0];
-        let request = json!({
-            "version": 1,
-            "rules": {
-                "compileId": "test-compile",
-                "documentId": "test-document",
-                "modelKind": "2d",
-                "compiledPlay": solver_rules["compiledPlay"].clone(),
-                "loadedGame": solver_rules["loadedGame"].clone(),
-                "runRulesOnLevelStart": solver_rules["runRulesOnLevelStart"].clone(),
-                "goal": solver_rules["goal"].clone(),
-                "lose": solver_rules["lose"].clone(),
-                "solverStrategy": solver_rules["solverStrategy"].clone()
-            },
-            "target": {
-                "origin": "preview-level",
-                "compileId": "test-compile",
-                "documentId": "test-document",
-                "level": {
-                    "index": 0,
-                    "levelName": level["name"].clone()
-                },
-                "state": {
-                    "kind": "compiled-start",
-                    "lifecycle": "playable-start",
-                    "data": level["initialState"].clone()
-                }
-            },
-            "maxDepth": 2,
-            "maxNodes": 100,
-            "maxMs": 0
-        });
-
-        let response = solve_solver_task_json(&request.to_string()).unwrap();
-
-        assert!(response.contains(r#""result":"solved""#), "{response}");
-        assert!(response.contains(r#""depth":1"#));
-        assert!(request["rules"].get("source").is_none());
-        assert!(request["target"].get("source").is_none());
-    }
-
-    #[cfg(feature = "solver")]
-    #[test]
-    fn solver_task_accepts_locked_win_command_sample() {
-        let source = include_str!("../tests/fixtures/locked.puzzle");
-        let html = export_editor_preview_html_from_source(source, "locked.puzzle", "", "")
-            .expect("preview export");
-        let export = embedded_puzzle_runtime_export_json(&html);
-        let solver_rules = prepared_editor_solver_rules_json(source, "locked.puzzle");
-        assert!(export["goal"].is_null());
-        assert!(export["compiledPlay"].is_object());
-        let level = &export["levels"][0];
-        let request = json!({
-            "version": 1,
-            "rules": {
-                "compileId": "test-compile",
-                "documentId": "test-document",
-                "modelKind": "2d",
-                "compiledPlay": solver_rules["compiledPlay"].clone(),
-                "loadedGame": solver_rules["loadedGame"].clone(),
-                "runRulesOnLevelStart": solver_rules["runRulesOnLevelStart"].clone(),
-                "goal": solver_rules["goal"].clone(),
-                "lose": solver_rules["lose"].clone(),
-                "solverStrategy": solver_rules["solverStrategy"].clone()
-            },
-            "target": {
-                "origin": "preview-level",
-                "compileId": "test-compile",
-                "documentId": "test-document",
-                "level": {
-                    "index": 0,
-                    "levelName": level["name"].clone()
-                },
-                "state": {
-                    "kind": "compiled-start",
-                    "lifecycle": "playable-start",
-                    "data": level["initialState"].clone()
-                }
-            },
-            "maxDepth": 50,
-            "maxNodes": 50,
-            "maxMs": 0
-        });
-
-        let response = solve_solver_task_json(&request.to_string()).unwrap();
-
-        assert!(response.contains(r#""result":"solved""#));
-        assert!(response.contains(r#""observations":["#));
-        assert!(response.contains(r#""progress":{"#));
-    }
-
-    #[cfg(feature = "solver")]
-    #[test]
-    fn solver_materializes_level_start_for_editor_state_with_level_index() {
-        let source = r#"
-title = solver_level_start
-
-puzzle board {
-  slots {
-    floor = Goal
-    actor = Player
-  }
-  keys {
-    Space -> noop
-  }
-  rules {
-    if input == noop {
-      [ Player ] -> [ Player ]
-    }
-  }
-  on_level_start {
-    [ Goal no Player ] -> [ Goal Player ]
-  }
-  win_conditions {
-    all Goal on Player
-  }
-}
-
-levels default of board {
-  legend {
-    . = empty
-    P = Player
-    G = Goal
-  }
-  level "start" {
-    PG
-  }
-}
-
-scene playing {
-  layout {
-    puzzle board
-  }
-}
-"#;
-
-        let loaded = parse_game(source).unwrap();
-        let mut state_json = String::new();
-        push_state_data(&mut state_json, &loaded.levels[0].initial_state);
-        state_json.pop();
-        write!(&mut state_json, r#","levelIndex":0}}"#).unwrap();
-
-        let response =
-            solve_state_json_from_source(source, "game.puzzle", &state_json, 0, 1000, 0).unwrap();
-
-        assert!(response.contains(r#""result":"solved""#));
-        assert!(response.contains(r#""depth":0"#));
-    }
-
-    #[cfg(feature = "solver")]
-    #[test]
-    fn html_solver_treats_again_completion_as_one_semantic_input() {
-        let source = include_str!("../../play/tests/fixtures/again_atomic.puzzle");
-        let loaded = parse_game(source).unwrap();
-        let mut state_json = String::new();
-        push_state_data(&mut state_json, &loaded.levels[0].initial_state);
-        state_json.pop();
-        write!(&mut state_json, r#","levelIndex":0}}"#).unwrap();
-
-        let response =
-            solve_state_json_from_source(source, "game.puzzle", &state_json, 1, 10, 0).unwrap();
-
-        assert!(response.contains(r#""result":"solved""#), "{response}");
-        assert!(response.contains(r#""depth":1"#), "{response}");
-    }
-
-    #[cfg(feature = "solver")]
-    #[test]
-    fn live_server_solver_preserves_checkpoint_restart_context() {
-        let source = include_str!("../tests/fixtures/solver_checkpoint_restart.puzzle");
-        let document =
-            puzzle_lang::parse_game_for_path(source, "solver_checkpoint_restart.puzzle").unwrap();
-        let loaded = loaded_document_scene_host_loaded_game(&document).unwrap();
-        let mut server = ServerState::new(
-            document,
-            loaded,
-            source.to_string(),
-            "solver_checkpoint_restart.puzzle".to_string(),
-            String::new(),
-            String::new(),
-            SolverConfig::default(),
-        );
-        server.apply_input_name("save").unwrap();
-        server.apply_input_name("bad").unwrap();
-
-        let mut player = server.session.clone();
-        player
-            .apply_input(
-                &server.loaded,
-                input_id_by_name(&server.loaded, "reset").unwrap(),
-            )
-            .unwrap();
-        player
-            .apply_input(
-                &server.loaded,
-                input_id_by_name(&server.loaded, "finish").unwrap(),
-            )
-            .unwrap();
-        assert!(server.loaded.is_goal_complete(player.state()));
-
-        let raw = solve_current_state(
-            &server.loaded,
-            0,
-            server.session.state().clone(),
-            SolverConfig::default(),
-        )
-        .unwrap();
-        assert!(!matches!(raw, SolutionResponse::Solved { .. }), "{raw:?}");
-
-        let live = server.solve_json().unwrap();
-        assert!(live.contains(r#""result":"solved""#), "{live}");
-        assert!(live.contains(r#""name":"reset""#), "{live}");
-        assert!(live.contains(r#""name":"finish""#), "{live}");
-    }
-
-    #[cfg(feature = "solver")]
-    #[test]
-    fn solver_request_materializes_level_start_from_explicit_target() {
-        let source = r#"
-title = solver_request_level_start
-
-puzzle board {
-  slots {
-    floor = Goal
-    actor = Player
-  }
-  keys {
-    Space -> noop
-  }
-  rules {
-    if input == noop {
-      [ Player ] -> [ Player ]
-    }
-  }
-  on_level_start {
-    [ Goal no Player ] -> [ Goal Player ]
-  }
-  win_conditions {
-    all Goal on Player
-  }
-}
-
-levels default of board {
-  legend {
-    . = empty
-    P = Player
-    G = Goal
-  }
-  level "start" {
-    PG
-  }
-}
-"#;
-
-        let loaded = parse_game(source).unwrap();
-        let mut state_json = String::new();
-        push_state_data(&mut state_json, &loaded.levels[0].initial_state);
-        let state: Value = serde_json::from_str(&state_json).unwrap();
-        let request = json!({
-            "source": source,
-            "puzzlePath": "game.puzzle",
-            "modelKind": "2d",
-            "target": {
-                "origin": "level-editor",
-                "compileId": "test-compile",
-                "documentId": "test-document",
-                "level": {
-                    "index": 0,
-                    "levelName": loaded.levels[0].name,
-                    "levelPuzzle": loaded.levels[0].puzzle,
-                    "levelPack": loaded.levels[0].pack,
-                },
-                "state": {
-                    "kind": "editor-staged",
-                    "lifecycle": "playable-start",
-                    "data": state,
-                },
-            },
-            "maxDepth": 0,
-            "maxNodes": 1000,
-            "maxMs": 0,
-        });
-
-        let response = solve_request_json(&request.to_string()).unwrap();
-
-        assert!(response.contains(r#""result":"solved""#));
-        assert!(response.contains(r#""depth":0"#));
-    }
-
-    #[cfg(feature = "solver")]
-    #[test]
-    fn solver_request_accepts_level_ascii_state() {
-        let source = r#"
-title = solver_request_level_ascii
-
-puzzle board {
-  slots {
-    floor = Goal
-    actor = Player Box Wall
-  }
-  keys {
-    d ArrowRight -> right
-  }
-  rules {
-    input right [ Player | Box | Goal no actor ] -> [ | Player | Goal Box ]
-  }
-  win_conditions {
-    all Goal on Box
-  }
-}
-
-levels default of board {
-  legend {
-    . = empty
-    P = Player
-    B = Box
-    G = Goal
-  }
-  level "start" {
-    PBG
-  }
-}
-"#;
-
-        let loaded = parse_game(source).unwrap();
-        let object_id = |name: &str| {
-            loaded
-                .object_labels
-                .iter()
-                .find_map(|(id, label)| (label == name).then_some(id.0))
-                .unwrap_or_else(|| panic!("missing object {name}"))
-        };
-        let request = json!({
-            "source": source,
-            "puzzlePath": "game.puzzle",
-            "modelKind": "2d",
-            "target": {
-                "origin": "preview-level",
-                "compileId": "test-compile",
-                "documentId": "test-document",
-                "level": {
-                    "index": 0,
-                    "levelName": loaded.levels[0].name,
-                    "levelPuzzle": loaded.levels[0].puzzle,
-                    "levelPack": loaded.levels[0].pack,
-                },
-                "state": {
-                    "kind": "level-ascii",
-                    "lifecycle": "already-materialized",
-                    "data": {
-                        "empty": ".",
-                        "legend": {
-                            ".": [],
-                            "P": [object_id("Player")],
-                            "B": [object_id("Box")],
-                            "G": [object_id("Goal")]
-                        },
-                        "lines": ["PBG"]
-                    },
-                },
-            },
-            "maxDepth": 4,
-            "maxNodes": 1000,
-            "maxMs": 0,
-        });
-
-        let response = solve_request_json(&request.to_string()).unwrap();
-
-        assert!(response.contains(r#""result":"solved""#), "{response}");
-        assert!(response.contains(r#""depth":1"#), "{response}");
-    }
-
-    #[cfg(feature = "solver")]
-    #[test]
-    fn solver_request_accepts_exact_state_goal() {
-        let source = r#"
-title = solver_request_exact_state_goal
-
-puzzle board {
-  slots {
-    actor = Player
-  }
-  keys {
-    d ArrowRight -> right
-  }
-  rules {
-    input right [ Player | no actor ] -> [ | Player ]
-  }
-}
-
-levels default of board {
-  legend {
-    . = empty
-    P = Player
-  }
-  level "start" {
-    P.
-  }
-}
-"#;
-
-        let loaded = parse_game(source).unwrap();
-        let object_id = |name: &str| {
-            loaded
-                .object_labels
-                .iter()
-                .find_map(|(id, label)| (label == name).then_some(id.0))
-                .unwrap_or_else(|| panic!("missing object {name}"))
-        };
-        let player = object_id("Player");
-        let state_spec = |lines: Vec<&str>| {
-            json!({
-                "kind": "level-ascii",
-                "data": {
-                    "empty": ".",
-                    "legend": {
-                        ".": [],
-                        "P": [player]
-                    },
-                    "lines": lines
-                }
-            })
-        };
-        let request = json!({
-            "source": source,
-            "puzzlePath": "game.puzzle",
-            "modelKind": "2d",
-            "target": {
-                "origin": "preview-level",
-                "compileId": "test-compile",
-                "documentId": "test-document",
-                "level": {
-                    "index": 0,
-                    "levelName": loaded.levels[0].name,
-                    "levelPuzzle": loaded.levels[0].puzzle,
-                    "levelPack": loaded.levels[0].pack,
-                },
-                "state": {
-                    "kind": "level-ascii",
-                    "lifecycle": "already-materialized",
-                    "data": {
-                        "empty": ".",
-                        "legend": {
-                            ".": [],
-                            "P": [player]
-                        },
-                        "lines": ["P."]
-                    },
-                },
-            },
-            "goal": {
-                "kind": "exact-state",
-                "state": state_spec(vec![".P"])
-            },
-            "maxDepth": 4,
-            "maxNodes": 1000,
-            "maxMs": 0,
-        });
-
-        let response = solve_request_json(&request.to_string()).unwrap();
-
-        assert!(response.contains(r#""result":"solved""#), "{response}");
-        assert!(response.contains(r#""depth":1"#), "{response}");
-    }
-
-    #[cfg(feature = "solver")]
-    #[test]
-    fn exact_state_heuristic_uses_start_goal_object_distance() {
-        let source = r#"
-title = solver_exact_state_heuristic
-
-puzzle board {
-  slots {
-    actor = Player
-  }
-  keys {
-    d ArrowRight -> right
-  }
-  rules {
-    input right [ Player | no actor ] -> [ | Player ]
-  }
-}
-
-levels default of board {
-  legend {
-    . = empty
-    P = Player
-  }
-  level "start" {
-    P..
-  }
-}
-"#;
-
-        let loaded = parse_game(source).unwrap();
-        let player = loaded
-            .object_labels
-            .iter()
-            .find_map(|(id, label)| (label == "Player").then_some(*id))
-            .unwrap_or_else(|| panic!("missing object Player"));
-        let mut legend = HashMap::new();
-        legend.insert('.', Vec::new());
-        legend.insert('P', vec![player]);
-        let parse_state = |line: &str| {
-            puzzle_lang::parse_level_ascii_state(
-                &loaded.game,
-                &[line.to_string()],
-                '.',
-                &legend,
-                loaded.levels[0].initial_state.visible_variables(),
-            )
-            .map(|(state, _)| state)
-            .unwrap()
-        };
-        let initial = parse_state("P..");
-        let middle = parse_state(".P.");
-        let goal = parse_state("..P");
-        let heuristic = ExactStateHeuristic::new(&loaded.game, &initial, &goal);
-
-        assert!(heuristic.score(&middle) < heuristic.score(&initial));
-        assert_eq!(heuristic.score(&goal), 0);
-    }
-
-    #[cfg(feature = "solver")]
-    #[test]
-    fn solver_loaded_slicer_uses_stage_availability() {
-        let source = r#"
-title = solver_stage_availability
-
-puzzle board {
-  slots {
-    actor = Player
-    item = Switch Battery Door
-  }
-  rules {
-    [ Switch ] -> [ Door ]
-    [ Battery ] -> [ Door ]
-  }
-  win_conditions {
-    some Door
-  }
-}
-
-levels default of board {
-  legend {
-    . = empty
-    P = Player
-    S = Switch
-    B = Battery
-  }
-  level "start" {
-    PS.
-  }
-}
-"#;
-
-        let loaded = parse_game(source).unwrap();
-        let object_named = |name: &str| {
-            loaded
-                .object_labels
-                .iter()
-                .find_map(|(id, label)| (label == name).then_some(*id))
-                .unwrap_or_else(|| panic!("missing object {name}"))
-        };
-        let switch = object_named("Switch");
-        let battery = object_named("Battery");
-        let initial = &loaded.levels[0].initial_state;
-        let (solver_model, slicer) =
-            solver_model_and_state_slicer(&loaded, initial, None, None, None);
-        let solver_game = solver_model.compiled_game_for_level(0).unwrap();
-        let mut probe = initial.clone();
-        probe.place_object(&solver_game, 2, 0, battery).unwrap();
-
-        let projected = slicer.project_state(&probe);
-
-        assert!(projected.has_object(&solver_game, 1, 0, switch));
-        assert!(!projected.has_object(&solver_game, 2, 0, battery));
-        let rule_ids = solver_game
-            .rules()
-            .iter()
-            .map(|rule| rule.id)
-            .collect::<Vec<_>>();
-        assert_eq!(rule_ids.len(), 2);
-        assert!(rule_ids.contains(&RuleId(1)));
-        assert!(rule_ids.contains(&RuleId(3)));
-        assert!(!rule_ids.contains(&RuleId(2)));
-    }
-
-    #[cfg(feature = "solver")]
-    #[test]
-    fn solver_collect_slicer_uses_stage_availability() {
-        let source = r#"
-title = solver_collect_stage_availability
-
-puzzle board {
-  slots {
-    actor = Player
-    item = Switch Battery Door
-  }
-  rules {
-    [ Switch ] -> [ Door ]
-    [ Battery ] -> [ Door ]
-  }
-}
-
-levels default of board {
-  legend {
-    . = empty
-    P = Player
-    S = Switch
-    B = Battery
-  }
-  level "start" {
-    PS.
-  }
-}
-"#;
-
-        let loaded = parse_game(source).unwrap();
-        let object_named = |name: &str| {
-            loaded
-                .object_labels
-                .iter()
-                .find_map(|(id, label)| (label == name).then_some(*id))
-                .unwrap_or_else(|| panic!("missing object {name}"))
-        };
-        let switch = object_named("Switch");
-        let battery = object_named("Battery");
-        let door = object_named("Door");
-        let selector = SolverCollectSelector2::Maximize(GoalValue::InlineConditionValue(
-            ConditionValueKind::CountObjects(vec![door]),
-        ));
-        let initial = &loaded.levels[0].initial_state;
-        let (solver_model, slicer) =
-            solver_game_and_state_slicer_for_collect(&loaded, initial, &selector, None);
-        let solver_game = solver_model.compiled_game_for_level(0).unwrap();
-        let mut probe = initial.clone();
-        probe.place_object(&solver_game, 2, 0, battery).unwrap();
-
-        let projected = slicer.project_state(&probe);
-
-        assert!(projected.has_object(&solver_game, 1, 0, switch));
-        assert!(!projected.has_object(&solver_game, 2, 0, battery));
-        let rule_ids = solver_game
-            .rules()
-            .iter()
-            .map(|rule| rule.id)
-            .collect::<Vec<_>>();
-        assert_eq!(rule_ids.len(), 2);
-        assert!(rule_ids.contains(&RuleId(1)));
-        assert!(rule_ids.contains(&RuleId(3)));
-        assert!(!rule_ids.contains(&RuleId(2)));
-    }
-
-    #[cfg(feature = "solver")]
-    #[test]
-    fn solver_exact_state_slicer_uses_stage_availability() {
-        let source = r#"
-title = solver_exact_stage_availability
-
-puzzle board {
-  slots {
-    actor = Player
-    item = Battery Door
-  }
-  keys {
-    d ArrowRight -> right
-  }
-  rules {
-    input right [ Player | no actor ] -> [ | Player ]
-    [ Battery ] -> [ Door ]
-  }
-}
-
-levels default of board {
-  legend {
-    . = empty
-    P = Player
-    B = Battery
-  }
-  level "start" {
-    P..
-  }
-}
-"#;
-
-        let loaded = parse_game(source).unwrap();
-        let object_named = |name: &str| {
-            loaded
-                .object_labels
-                .iter()
-                .find_map(|(id, label)| (label == name).then_some(*id))
-                .unwrap_or_else(|| panic!("missing object {name}"))
-        };
-        let player = object_named("Player");
-        let battery = object_named("Battery");
-        let mut legend = HashMap::new();
-        legend.insert('.', Vec::new());
-        legend.insert('P', vec![player]);
-        let (goal, _) = puzzle_lang::parse_level_ascii_state(
-            &loaded.game,
-            &[".P.".to_string()],
-            '.',
-            &legend,
-            loaded.levels[0].initial_state.visible_variables(),
-        )
-        .unwrap();
-        let initial = &loaded.levels[0].initial_state;
-        let (solver_model, slicer) =
-            solver_model_and_state_slicer(&loaded, initial, Some(&goal), None, None);
-        let solver_game = solver_model.compiled_game_for_level(0).unwrap();
-        let mut probe = initial.clone();
-        probe.place_object(&solver_game, 2, 0, battery).unwrap();
-
-        let projected = slicer.project_state(&probe);
-
-        assert!(projected.has_object(&solver_game, 0, 0, player));
-        assert!(!projected.has_object(&solver_game, 2, 0, battery));
-        let rule_ids = solver_game
-            .rules()
-            .iter()
-            .map(|rule| rule.id)
-            .collect::<Vec<_>>();
-        assert!(rule_ids.contains(&RuleId(1)));
-        assert!(rule_ids.contains(&RuleId(3)));
-        assert!(!rule_ids.contains(&RuleId(2)));
-    }
-
-    #[cfg(feature = "solver")]
-    #[test]
-    fn solver_request_supports_reachability_task() {
-        let source = r#"
-title = solver_request_reachability
-
-puzzle board {
-  slots {
-    actor = Player
-  }
-  keys {
-    d ArrowRight -> right
-  }
-  rules {
-    input right [ Player | no actor ] -> [ | Player ]
-  }
-}
-
-levels default of board {
-  legend {
-    . = empty
-    P = Player
-  }
-  level "start" {
-    P.
-  }
-}
-"#;
-
-        let loaded = parse_game(source).unwrap();
-        let player = loaded
-            .object_labels
-            .iter()
-            .find_map(|(id, label)| (label == "Player").then_some(id.0))
-            .unwrap_or_else(|| panic!("missing object Player"));
-        let state_spec = |lines: Vec<&str>| {
-            json!({
-                "kind": "level-ascii",
-                "data": {
-                    "empty": ".",
-                    "legend": {
-                        ".": [],
-                        "P": [player]
-                    },
-                    "lines": lines
-                }
-            })
-        };
-        let request = json!({
-            "task": "reachability",
-            "source": source,
-            "puzzlePath": "game.puzzle",
-            "modelKind": "2d",
-            "target": {
-                "origin": "preview-level",
-                "compileId": "test-compile",
-                "documentId": "test-document",
-                "level": {
-                    "index": 0,
-                    "levelName": loaded.levels[0].name,
-                    "levelPuzzle": loaded.levels[0].puzzle,
-                    "levelPack": loaded.levels[0].pack,
-                },
-                "state": {
-                    "kind": "level-ascii",
-                    "lifecycle": "already-materialized",
-                    "data": {
-                        "empty": ".",
-                        "legend": {
-                            ".": [],
-                            "P": [player]
-                        },
-                        "lines": ["P."]
-                    },
-                },
-            },
-            "goal": {
-                "kind": "exact-state",
-                "state": state_spec(vec![".P"])
-            },
-            "maxDepth": 4,
-            "maxNodes": 1000,
-            "maxMs": 0,
-        });
-
-        let response = solve_request_json(&request.to_string()).unwrap();
-
-        assert!(response.contains(r#""task":"reachability""#), "{response}");
-        assert!(response.contains(r#""result":"reachable""#), "{response}");
-        assert!(response.contains(r#""reachable":true"#), "{response}");
-        assert!(response.contains(r#""cost":{"steps":1}"#), "{response}");
-        assert!(response.contains(r#""path":["#), "{response}");
-    }
-
-    #[cfg(feature = "solver")]
-    #[test]
-    fn solver_request_reachability_requires_explicit_goal() {
-        let source = r#"
-title = solver_request_reachability_requires_goal
-
-puzzle board {
-  slots {
-    actor = Player
-  }
-  keys {
-    d ArrowRight -> right
-  }
-  rules {
-    input right [ Player | no actor ] -> [ | Player ]
-  }
-}
-
-levels default of board {
-  legend {
-    . = empty
-    P = Player
-  }
-  level "start" {
-    P.
-  }
-}
-"#;
-
-        let loaded = parse_game(source).unwrap();
-        let player = loaded
-            .object_labels
-            .iter()
-            .find_map(|(id, label)| (label == "Player").then_some(id.0))
-            .unwrap_or_else(|| panic!("missing object Player"));
-        let request = json!({
-            "task": "reachability",
-            "source": source,
-            "puzzlePath": "game.puzzle",
-            "modelKind": "2d",
-            "target": {
-                "origin": "preview-level",
-                "compileId": "test-compile",
-                "documentId": "test-document",
-                "level": {
-                    "index": 0,
-                    "levelName": loaded.levels[0].name,
-                    "levelPuzzle": loaded.levels[0].puzzle,
-                    "levelPack": loaded.levels[0].pack,
-                },
-                "state": {
-                    "kind": "level-ascii",
-                    "lifecycle": "already-materialized",
-                    "data": {
-                        "empty": ".",
-                        "legend": {
-                            ".": [],
-                            "P": [player]
-                        },
-                        "lines": ["P."]
-                    },
-                },
-            },
-            "maxDepth": 4,
-            "maxNodes": 1000,
-            "maxMs": 0,
-        });
-
-        let error = solve_request_json(&request.to_string()).unwrap_err();
-
-        assert!(error.contains("reachability requests require an explicit goal"));
-    }
-
-    #[cfg(feature = "solver")]
-    #[test]
-    fn solver_request_collects_predicate_matches() {
-        let source = r#"
-title = solver_request_collect_predicate
-
-puzzle board {
-  slots {
-    floor = Trail
-    actor = Player
-  }
-  keys {
-    d ArrowRight -> right
-  }
-  rules {
-    input right [ Player | no actor ] -> [ Trail | Player ]
-  }
-}
-
-levels default of board {
-  legend {
-    . = empty
-    P = Player
-  }
-  level "start" {
-    P...
-  }
-}
-"#;
-
-        let loaded = parse_game(source).unwrap();
-        let object_id = |name: &str| {
-            loaded
-                .object_labels
-                .iter()
-                .find_map(|(id, label)| (label == name).then_some(id.0))
-                .unwrap_or_else(|| panic!("missing object {name}"))
-        };
-        let player = object_id("Player");
-        let trail = object_id("Trail");
-        let count_trails = json!({
-            "kind": "condition_value",
-            "conditionValueKind": {
-                "kind": "count_objects",
-                "objects": [trail]
-            }
-        });
-        let request = json!({
-            "task": "collect",
-            "source": source,
-            "puzzlePath": "game.puzzle",
-            "modelKind": "2d",
-            "target": {
-                "origin": "preview-level",
-                "compileId": "test-compile",
-                "documentId": "test-document",
-                "level": {
-                    "index": 0,
-                    "levelName": loaded.levels[0].name,
-                    "levelPuzzle": loaded.levels[0].puzzle,
-                    "levelPack": loaded.levels[0].pack,
-                },
-                "state": {
-                    "kind": "level-ascii",
-                    "lifecycle": "already-materialized",
-                    "data": {
-                        "empty": ".",
-                        "legend": {
-                            ".": [],
-                            "P": [player]
-                        },
-                        "lines": ["P..."]
-                    },
-                },
-            },
-            "collect": {
-                "kind": "predicate",
-                "maxResults": 1,
-                "predicate": {
-                    "expr": {
-                        "kind": "clause",
-                        "value": count_trails,
-                        "op": "greater_eq",
-                        "expected": 1
-                    }
-                }
-            },
-            "maxDepth": 4,
-            "maxNodes": 1000,
-            "maxMs": 0,
-        });
-
-        let response = solve_request_json(&request.to_string()).unwrap();
-
-        assert!(response.contains(r#""task":"collect""#), "{response}");
-        assert!(
-            response.contains(r#""result":"limit_reached""#),
-            "{response}"
-        );
-        assert!(response.contains(r#""count":1"#), "{response}");
-        assert!(response.contains(r#""matches":["#), "{response}");
-        assert!(response.contains(r#""score":null"#), "{response}");
-    }
-
-    #[cfg(feature = "solver")]
-    #[test]
-    fn solver_request_collects_maximized_objective_matches() {
-        let source = r#"
-title = solver_request_collect_maximize
-
-puzzle board {
-  slots {
-    floor = Trail
-    actor = Player
-  }
-  keys {
-    d ArrowRight -> right
-  }
-  rules {
-    input right [ Player | no actor ] -> [ Trail | Player ]
-  }
-}
-
-levels default of board {
-  legend {
-    . = empty
-    P = Player
-  }
-  level "start" {
-    P...
-  }
-}
-"#;
-
-        let loaded = parse_game(source).unwrap();
-        let object_id = |name: &str| {
-            loaded
-                .object_labels
-                .iter()
-                .find_map(|(id, label)| (label == name).then_some(id.0))
-                .unwrap_or_else(|| panic!("missing object {name}"))
-        };
-        let player = object_id("Player");
-        let trail = object_id("Trail");
-        let count_trails = json!({
-            "kind": "condition_value",
-            "conditionValueKind": {
-                "kind": "count_objects",
-                "objects": [trail]
-            }
-        });
-        let request = json!({
-            "task": "collect",
-            "source": source,
-            "puzzlePath": "game.puzzle",
-            "modelKind": "2d",
-            "target": {
-                "origin": "preview-level",
-                "compileId": "test-compile",
-                "documentId": "test-document",
-                "level": {
-                    "index": 0,
-                    "levelName": loaded.levels[0].name,
-                    "levelPuzzle": loaded.levels[0].puzzle,
-                    "levelPack": loaded.levels[0].pack,
-                },
-                "state": {
-                    "kind": "level-ascii",
-                    "lifecycle": "already-materialized",
-                    "data": {
-                        "empty": ".",
-                        "legend": {
-                            ".": [],
-                            "P": [player]
-                        },
-                        "lines": ["P..."]
-                    },
-                },
-            },
-            "collect": {
-                "kind": "maximize",
-                "maxResults": 1,
-                "objective": {
-                    "value": count_trails
-                }
-            },
-            "maxDepth": 3,
-            "maxNodes": 1000,
-            "maxMs": 0,
-        });
-
-        let response = solve_request_json(&request.to_string()).unwrap();
-
-        assert!(response.contains(r#""task":"collect""#), "{response}");
-        assert!(response.contains(r#""count":1"#), "{response}");
-        assert!(response.contains(r#""score":3"#), "{response}");
-    }
-
-    #[cfg(feature = "solver")]
-    #[test]
-    fn solver_treats_win_command_as_goal() {
-        let source = r#"
-title = solver_win_command
-
-puzzle board {
-  slots {
-    actor = Player Exit
-  }
-  keys {
-    d ArrowRight -> right
-  }
-  rules {
-    input right [ Player | Exit ] -> win
-    input right [ Player | no actor ] -> [ | Player ]
-  }
-}
-
-levels default of board {
-  legend {
-    . = empty
-    P = Player
-    E = Exit
-  }
-  level "start" {
-    PE
-  }
-}
-"#;
-
-        let loaded = parse_game(source).unwrap();
-        let mut state_json = String::new();
-        push_state_data(&mut state_json, &loaded.levels[0].initial_state);
-        state_json.pop();
-        write!(&mut state_json, r#","levelIndex":0}}"#).unwrap();
-
-        let response =
-            solve_state_json_from_source(source, "game.puzzle", &state_json, 2, 100, 0).unwrap();
-
-        assert!(response.contains(r#""result":"solved""#));
-        assert!(response.contains(r#""depth":1"#));
-    }
-
-    #[cfg(feature = "solver")]
-    #[test]
-    fn solver_explicit_goal_does_not_substitute_level_completion() {
-        let source = r#"
-title = solver_explicit_goal_without_win
-
-puzzle board {
-  slots {
-    floor = Flag
-    actor = Player Exit
-  }
-  keys {
-    d ArrowRight -> right
-  }
-  rules {
-    input right [ Player | Exit ] -> win
-    input right [ Player | no actor ] -> [ | Player ]
-  }
-  win_conditions {
-    all Flag on Player
-  }
-}
-
-levels default of board {
-  legend {
-    . = empty
-    P = Player
-    E = Exit
-    F = Flag
-  }
-  level "start" {
-    PEF
-  }
-}
-"#;
-
-        let loaded = parse_game(source).unwrap();
-        let html = export_editor_preview_html_from_source(source, "game.puzzle", "", "")
-            .expect("preview export");
-        let export = embedded_puzzle_runtime_export_json(&html);
-        let mut state_json = String::new();
-        push_state_data(&mut state_json, &loaded.levels[0].initial_state);
-        let state: Value = serde_json::from_str(&state_json).unwrap();
-        let mut request = json!({
-            "source": source,
-            "puzzlePath": "game.puzzle",
-            "modelKind": "2d",
-            "target": {
-                "origin": "preview-level",
-                "compileId": "test-compile",
-                "documentId": "test-document",
-                "level": {
-                    "index": 0,
-                    "levelName": loaded.levels[0].name,
-                    "levelPuzzle": loaded.levels[0].puzzle,
-                    "levelPack": loaded.levels[0].pack,
-                },
-                "state": {
-                    "kind": "compiled-start",
-                    "lifecycle": "already-materialized",
-                    "data": state,
-                },
-            },
-            "goal": export["goal"].clone(),
-            "maxDepth": 2,
-            "maxNodes": 100,
-            "maxMs": 0,
-        });
-
-        let response = solve_request_json(&request.to_string()).unwrap();
-
-        assert!(response.contains(r#""result":"exhausted""#), "{response}");
-
-        request["acceptWinCommand"] = json!(false);
-        let error = solve_request_json(&request.to_string()).unwrap_err();
-        assert!(error.contains("acceptWinCommand is unsupported"), "{error}");
-    }
-
-    #[cfg(feature = "solver")]
-    #[test]
-    fn solver_request_rejects_mismatched_level_identity() {
-        let source =
-            include_str!("../../../crates/lang/tests/fixtures/spec_2d_microban_basic.puzzle");
-        let loaded = parse_game(source).unwrap();
-        let mut state_json = String::new();
-        push_state_data(&mut state_json, &loaded.levels[0].initial_state);
-        let state: Value = serde_json::from_str(&state_json).unwrap();
-        let request = json!({
-            "source": source,
-            "puzzlePath": "game.puzzle",
-            "modelKind": "2d",
-            "target": {
-                "origin": "preview-level",
-                "compileId": "test-compile",
-                "documentId": "test-document",
-                "level": {
-                    "index": 0,
-                    "levelName": "not_the_compiled_level",
-                    "levelPuzzle": loaded.levels[0].puzzle,
-                    "levelPack": loaded.levels[0].pack,
-                },
-                "state": {
-                    "kind": "compiled-start",
-                    "lifecycle": "playable-start",
-                    "data": state,
-                },
-            },
-            "maxDepth": 8,
-            "maxNodes": 1000,
-            "maxMs": 0,
-        });
-
-        let error = solve_request_json(&request.to_string()).unwrap_err();
-
-        assert!(error.contains("solver target levelName mismatch"));
-    }
-
-    #[cfg(feature = "solver")]
-    #[test]
-    fn solver_inputs_use_model_inputs_not_scene_or_control_inputs() {
-        let source = r#"
-title = solver_input_scope
-
-puzzle board {
-  slots {
-    floor = Goal
-    actor = Player Box Wall
-  }
-  keys {
-    w ArrowUp -> up
-    s ArrowDown -> down
-    a ArrowLeft -> left
-    d ArrowRight -> right
-    r -> restart
-  }
-  rules {
-    input directions [ Player | Box | no actor ] -> [ | Player | Box ]
-    input directions [ Player | no actor ] -> [ | Player ]
-  }
-  win_conditions {
-    all Goal on Box
-  }
-}
-
-levels default of board {
-  legend {
-    . = empty
-    P = Player
-    B = Box
-    G = Goal
-  }
-  level "one" {
-    PBG
-  }
-}
-
-scene title {
-  layout {
-    choice "New Game" -> input new_game
-  }
-  keys {
-    n -> new_game
-  }
-  routine new_game {
-    goto playing
-  }
-}
-
-scene playing {
-  keys {
-    Escape -> back
-  }
-  routine back {
-    goto title
-  }
-  layout {
-    puzzle board = board
-  }
-}
-"#;
-
-        let loaded = parse_game(source).unwrap();
-        let labels = solver_inputs_for_program(&loaded, loaded.game.program())
-            .into_iter()
-            .map(|input| loaded.input_labels.get(&input).unwrap().as_str())
-            .collect::<Vec<_>>();
-
-        assert_eq!(labels, vec!["up", "down", "left", "right"]);
-    }
-
-    #[cfg(feature = "solver")]
-    #[test]
-    fn solver_accepts_puzzle3d_state_and_returns_replay_steps() {
-        let source = r#"
-title = "Themed 3D Puzzle"
-
-puzzle push3 {
-dimension = 3
-slots {
-floor = Goal
-Player Box Wall
-item = Battery Door
-}
-
-groups {
-solid = Player Box Wall
-}
-
-rules {
-input right [ Player | Box | no solid ] -> [ | Player | Box ]
-input right [ Player | no solid ] -> [ | Player ]
-[ Battery ] -> [ Door ]
-}
-
-on_level_clear {
-if win_conditions -> next_level
-}
-
-win_conditions {
-some Goal
-no down [ no Box | Goal ]
-}
-
-query box_to_goal = distance(Box, Goal)
-query has_box = exists(Box)
-query box_goal_lines = count([ Box Goal ])
-
-solver {
-strategy {
-maximize box_goal_lines weight 2
-minimize box_to_goal weight 3
-prefer has_box
-}
-}
-}
-
-levels tiny of push3 {
-legend {
-. = empty
-P = Player
-B = Box
-G = Goal
-}
-
-level "one" {
-PB.
-
-..G
-}
-}
-"#;
-
-        let model = parse_grid_model_for_solver(source).unwrap();
-        assert_eq!(model.solver_strategy.terms.len(), 4);
-        let state = model.levels[0].initial_state.clone();
-        let battery = model
-            .object_labels
-            .iter()
-            .find_map(|(id, label)| (label == "Battery").then_some(*id))
-            .expect("Battery object");
-        let (solver_model, slicer) =
-            solver_model_and_state_slicer(&model, &state, None, None, None);
-        let solver_game = solver_model.compiled_game_for_level(0).unwrap();
-        let mut probe = state.clone();
-        probe
-            .place_object_at(&solver_game, GridCoord::new([2, 0, 0]), battery)
-            .unwrap();
-        assert!(!slicer.project_state(&probe).slots().contains(&battery));
-        assert!(solver_game.rules().iter().all(|rule| {
-            model
-                .rule_debug_info
-                .get(&rule.id)
-                .is_none_or(|info| info.source_line != "[ Battery ] -> [ Door ]")
-        }));
-        let slots = state
-            .slots()
-            .iter()
-            .map(|object| object.0.to_string())
-            .collect::<Vec<_>>()
-            .join(",");
-        let state_json = format!(
-            r#"{{"kind":"puzzle3d","width":{},"depth":{},"height":{},"layerCount":{},"slots":[{}]}}"#,
-            state.size.width, state.size.depth, state.size.height, state.layer_count, slots
-        );
-
-        let response =
-            solve_state_json_from_source(source, "game.puzzle", &state_json, 4, 1000, 0).unwrap();
-
-        assert!(response.contains(r#""model":"puzzle3d""#));
-        assert!(response.contains(r#""result":"solved""#));
-        assert!(response.contains(r#""name":"right""#));
-        assert!(response.contains(r#""direction":"right""#));
-        assert!(response.contains(r#""scene":{"kind":"puzzle3d""#));
-        assert!(!response.contains(r#""name":"restart""#));
-    }
-
-    #[cfg(feature = "solver")]
-    #[test]
-    fn editor_solver_task_uses_typed_loaded_game_for_puzzle3d() {
-        let source = r#"
-title = editor_solver_3d
-puzzle push3 {
-dimension = 3
-slots {
-floor = Goal
-Player Box
-}
-groups {
-solid = Player Box
-}
-rules {
-input right [ Player | Box | no solid ] -> [ | Player | Box ]
-input right [ Player | no solid ] -> [ | Player ]
-}
-win_conditions {
-some Goal
-no down [ no Box | Goal ]
-}
-}
-levels tiny of push3 {
-legend {
-. = empty
-P = Player
-B = Box
-G = Goal
-}
-level "one" {
-PB.
-
-..G
-}
-}
-"#;
-        let model = parse_grid_model_for_solver(source).unwrap();
-        let rules = prepared_editor_solver_rules_json(source, "editor_solver_3d.puzzle");
-        assert_eq!(rules["modelKind"], "3d");
-        assert!(rules["loadedGame"].is_object());
-        assert!(rules.get("compiledPlay").is_none());
-        let state = &model.levels[0].initial_state;
-        let mut state_json = String::new();
-        push_state3_data(&mut state_json, state);
-        let state: Value = serde_json::from_str(&state_json).unwrap();
-        let request = json!({
-            "version": 1,
-            "rules": {
-                "compileId": "editor-solver-3d",
-                "documentId": "editor-solver-3d",
-                "modelKind": rules["modelKind"].clone(),
-                "loadedGame": rules["loadedGame"].clone(),
-                "solverStrategy": rules["solverStrategy"].clone()
-            },
-            "target": {
-                "origin": "preview-level",
-                "compileId": "editor-solver-3d",
-                "documentId": "editor-solver-3d",
-                "level": {"index": 0, "levelName": "one"},
-                "state": {
-                    "kind": "compiled-start",
-                    "lifecycle": "playable-start",
-                    "data": state
-                }
-            },
-            "maxDepth": 4,
-            "maxNodes": 1000,
-            "maxMs": 0
-        });
-
-        let response = solve_solver_task_json(&request.to_string()).unwrap();
-        assert!(response.contains(r#""model":"puzzle3d""#), "{response}");
-        assert!(response.contains(r#""result":"solved""#), "{response}");
-        assert!(response.contains(r#""name":"right""#), "{response}");
-    }
-
-    #[cfg(feature = "solver")]
-    #[test]
-    fn puzzle3d_complete_state_requires_level_context_when_ambiguous() {
-        let source = r#"
-title = ambiguous_3d_levels
-puzzle space {
-dimension = 3
-slots { Player Goal }
-rules { input right [ Player | no Player ] -> [ | Player ] }
-win_conditions { all Goal on Player }
-}
-levels tiny of space {
-legend {
-. = empty
-P = Player
-G = Goal
-}
-level "one" { PG }
-level "two" { PG }
-}
-"#;
-        let model = parse_grid_model_for_solver(source).unwrap();
-        let mut state_json = String::new();
-        push_state3_data(&mut state_json, &model.levels[0].initial_state);
-
-        let error = solve_state_json_from_source(
-            source,
-            "ambiguous_3d_levels.puzzle",
-            &state_json,
-            4,
-            1000,
-            0,
-        )
-        .unwrap_err();
-        assert!(
-            error.contains("requires levelIndex because the 3d model has 2 levels"),
-            "{error}"
-        );
     }
 
     #[test]
@@ -4079,7 +2129,7 @@ scene playing {
         assert!(html.contains("puzzle_wasm_player_bg.wasm"));
         assert!(!html.contains("puzzle_wasm_game_bg.wasm"));
         assert!(html.contains("WasmStandaloneSession"));
-        assert!(html.contains("WasmPuzzle3Runtime"));
+        assert!(!html.contains("WasmPuzzle3Runtime"));
         assert!(!html.contains("WasmCoreRuntime"));
         assert!(!html.contains("compile_preview"));
         assert!(!html.contains("highlight_source_html"));
@@ -4112,7 +2162,21 @@ scene playing {
         assert!(boot["inputs"].is_array());
         assert!(boot["theme"].is_object());
         let runtime_export = embedded_puzzle_runtime_export_json(&html);
+        let _: puzzle_runtime_contract::StandaloneRuntimeExport<puzzle_lang::LoadedDocument> =
+            serde_json::from_value(runtime_export.clone())
+                .expect("HTML runtime export must satisfy the standalone runtime schema");
         assert!(runtime_export["runtimeLoadedDocument"].is_object());
+        assert_eq!(
+            runtime_export["runtimeLoadedDocument"]["version"],
+            json!(puzzle_runtime_contract::STANDALONE_RUNTIME_EXPORT_VERSION)
+        );
+        let runtime_game =
+            &runtime_export["runtimeLoadedDocument"]["document"]["models"][0]["Puzzle2d"]["game"];
+        assert_eq!(runtime_game["levels"][0]["program"], json!(["Main"]));
+        assert_eq!(runtime_game["program_catalog"]["programs"], json!([]));
+        assert!(runtime_game.get("warnings").is_none());
+        assert!(runtime_game.get("rule_debug_info").is_none());
+        assert!(runtime_game.get("solver_strategy").is_none());
         assert!(runtime_export.get("compiledPlay").is_none());
         assert!(runtime_export.get("engine").is_none());
         assert!(runtime_export.get("source").is_none());
@@ -4120,7 +2184,8 @@ scene playing {
         assert!(STANDALONE_JS.contains("initializeSessionRuntime()"));
         assert!(STANDALONE_JS.contains("WasmStandaloneSession.fromExport(this.exportJson)"));
         assert!(STANDALONE_JS.contains("releaseWasmOwnedExportPayload()"));
-        assert!(STANDALONE_JS.contains("delete this.data.runtimeLoadedDocument;"));
+        assert!(!STANDALONE_JS.contains("delete this.data.runtimeLoadedDocument;"));
+        assert!(!STANDALONE_JS.contains("delete this.data.engine;"));
         assert!(!STANDALONE_JS.contains("WasmStandaloneSession.fromExport(JSON.stringify"));
         assert!(!STANDALONE_JS.contains("new this.wasmModule.WasmStandaloneSession("));
         assert!(STANDALONE_JS.contains("Puzzle game WASM runtime is unavailable."));
@@ -4132,8 +2197,9 @@ scene playing {
         assert!(!STANDALONE_JS.contains("WasmCoreRuntime"));
         assert!(!STANDALONE_JS.contains("WasmCompiledCoreRuntime"));
         assert!(PUZZLE_PLAYER_WASM_JS.contains("WasmStandaloneSession"));
-        assert!(PUZZLE_PLAYER_WASM_JS.contains("WasmPuzzle3Runtime"));
-        assert!(PUZZLE_PLAYER_WASM_JS.contains("fromFixture"));
+        assert!(PUZZLE_PLAYER_WASM_JS.contains("dispatch(action_json)"));
+        assert!(!PUZZLE_PLAYER_WASM_JS.contains("WasmPuzzle3Runtime"));
+        assert!(!PUZZLE_PLAYER_WASM_JS.contains("fromFixture"));
         assert!(!PUZZLE_PLAYER_WASM_JS.contains("compile_preview"));
         assert!(!PUZZLE_PLAYER_WASM_JS.contains("solve_state"));
         assert!(!PUZZLE_PLAYER_WASM_JS.contains("solver"));
@@ -4144,6 +2210,57 @@ scene playing {
         assert!(!bytes_contain(PUZZLE_PLAYER_WASM_BG, b"puzzle_solver"));
         assert!(!bytes_contain(PUZZLE_PLAYER_WASM_BG, b"SearchBudget"));
         assert!(!bytes_contain(PUZZLE_PLAYER_WASM_BG, b"best_first"));
+    }
+
+    #[test]
+    fn runtime_export_size_does_not_multiply_common_program_by_level_count() {
+        let rules = (0..256)
+            .map(|_| "[ A ] -> [ A ]")
+            .collect::<Vec<_>>()
+            .join("\n");
+        let levels = (0..64)
+            .map(|index| format!("level \"level-{index}\" {{\nA\n}}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let source = format!(
+            r#"
+title = Shared Program Size Gate
+puzzle board {{
+  slots {{ item = A }}
+  rules {{
+{rules}
+  }}
+}}
+levels default of board {{
+  legend A = A
+{levels}
+}}
+"#
+        );
+        let document = puzzle_lang::parse_game_for_path(&source, "size_gate.puzzle").unwrap();
+        let export = runtime_export_json(&document).unwrap();
+        let value: Value = serde_json::from_str(&export).unwrap();
+        let game = &value["runtimeLoadedDocument"]["document"]["models"][0]["Puzzle2d"]["game"];
+
+        assert_eq!(game["levels"].as_array().unwrap().len(), 64);
+        assert!(
+            game["levels"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|level| level["program"] == json!(["Main"]))
+        );
+        assert!(
+            game["program_catalog"]["programs"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            export.len() < 2_000_000,
+            "runtime export was {} bytes",
+            export.len()
+        );
     }
 
     #[test]
@@ -4288,7 +2405,8 @@ scene playing {
         assert!(html.contains("PuzzleStudioPreviewState"));
         assert!(html.contains("PuzzleStudioSetPreviewDebugMode"));
         assert!(html.contains("PuzzleStudioPreviewDebugTrace"));
-        assert!(html.contains("/api/debug/input/"));
+        assert!(html.contains("standaloneRuntime.applyDebugInputName(input)"));
+        assert!(html.contains("kind: \"debug_input\""));
         assert!(html.contains("PuzzleRuntimeWasmLoader"));
         assert!(html.contains("set_current_state("));
         assert!(APP_JS.contains("await standaloneRuntime.setCurrentState(event.data.state, {"));
@@ -4307,6 +2425,26 @@ scene playing {
             boot["puzzlePath"],
             json!("games/editor_preview/game.puzzle")
         );
+        let runtime_export = embedded_puzzle_runtime_export_json(&html);
+        let _: puzzle_runtime_contract::StandaloneRuntimeExport<puzzle_lang::LoadedDocument> =
+            serde_json::from_value(runtime_export.clone())
+                .expect("editor preview runtime export must satisfy the standalone runtime schema");
+        assert!(runtime_export["runtimeLoadedDocument"].is_object());
+        assert!(runtime_export.get("title").is_none());
+        assert!(runtime_export.get("engine").is_none());
+        assert!(runtime_export.get("source").is_none());
+        let editor_preview_export = embedded_editor_preview_export_json(&html);
+        assert_eq!(
+            editor_preview_export["title"],
+            json!("Editor Preview Export")
+        );
+        assert!(editor_preview_export["engine"].is_object());
+        assert!(
+            editor_preview_export["source"]
+                .as_str()
+                .is_some_and(|value| value.contains("Editor Preview Export"))
+        );
+        assert!(editor_preview_export.get("runtimeLoadedDocument").is_none());
     }
 
     #[test]
@@ -4366,7 +2504,7 @@ scene playing {
             SolverConfig::default(),
         );
         let mut data = String::new();
-        push_export_data(&mut data, &state);
+        push_editor_preview_data(&mut data, &state);
 
         let export: serde_json::Value =
             serde_json::from_str(&data).expect("export data should be JSON");
@@ -4423,14 +2561,14 @@ rules {
             SolverConfig::default(),
         );
         let mut data = String::new();
-        push_export_data(&mut data, &state);
+        push_editor_preview_data(&mut data, &state);
 
         assert!(data.contains(r#""saveKey":"Progress Export:"#));
         assert!(data.contains(r#""progressSaveVersion":1"#));
         assert!(data.contains(r#""variables":[{"id":0,"name":"bonus"}]"#));
         assert!(data.contains(r#""persistentVars":[0]"#));
         assert!(STANDALONE_JS.contains("WasmStandaloneSession"));
-        assert!(STANDALONE_JS.contains("this.sessionRuntime.request_json(method, url)"));
+        assert!(STANDALONE_JS.contains("this.sessionRuntime.dispatch(JSON.stringify(action))"));
         assert!(STANDALONE_JS.contains("snapshot()"));
         assert!(STANDALONE_JS.contains("restoreSessionProgressSave()"));
         assert!(STANDALONE_JS.contains("writeSessionProgressSave()"));
@@ -4489,7 +2627,7 @@ rules {
         )
         .unwrap();
 
-        let initial = bridge.request_json("GET", "/api/state").unwrap();
+        let initial = bridge.dispatch(SessionAction::Snapshot).unwrap();
         let initial: serde_json::Value = serde_json::from_str(&initial).unwrap();
         assert_eq!(initial["currentScene"], "sokoban");
         assert_eq!(initial["title"], "Microban");
@@ -4502,7 +2640,9 @@ rules {
         assert!(!initial.contains_key("screenPuzzles"));
 
         let playing = bridge
-            .request_json("POST", "/api/command/goto%20playing")
+            .dispatch(SessionAction::Command {
+                name: "goto playing".to_string(),
+            })
             .unwrap();
         let playing: serde_json::Value = serde_json::from_str(&playing).unwrap();
         assert_eq!(playing["currentScene"], "playing");
@@ -4541,7 +2681,9 @@ levels main of main {
             StandaloneSessionBridge::from_source(source, "debug_trace.puzzle").unwrap();
 
         let body = bridge
-            .request_json("POST", "/api/debug/input/right")
+            .dispatch(SessionAction::DebugInput {
+                name: "right".to_string(),
+            })
             .unwrap();
         let body: serde_json::Value = serde_json::from_str(&body).unwrap();
 
@@ -4566,7 +2708,9 @@ levels main of main {
             StandaloneSessionBridge::from_source(source, "games/TPGJ6/locked.puzzle").unwrap();
 
         let playing = bridge
-            .request_json("POST", "/api/command/goto%20playing")
+            .dispatch(SessionAction::Command {
+                name: "goto playing".to_string(),
+            })
             .unwrap();
         let playing: serde_json::Value = serde_json::from_str(&playing).unwrap();
 
@@ -4601,16 +2745,35 @@ levels main of main {
         bridge
             .set_current_state_json(&state_json, level_index, true)
             .unwrap();
-        bridge.apply_input_name("left").unwrap();
-        let after_first: serde_json::Value = serde_json::from_str(&bridge.snapshot_json()).unwrap();
+        let mut after_first: serde_json::Value = serde_json::from_str(
+            &bridge
+                .dispatch(SessionAction::Input {
+                    name: "left".to_string(),
+                })
+                .unwrap(),
+        )
+        .unwrap();
+        while after_first["busy"] == true {
+            after_first =
+                serde_json::from_str(&bridge.dispatch(SessionAction::Resume).unwrap()).unwrap();
+        }
         assert!(cell_has_object(
             &after_first["scene"]["cells"][69],
             "Player"
         ));
 
-        bridge.apply_input_name("left").unwrap();
-
-        let snapshot: serde_json::Value = serde_json::from_str(&bridge.snapshot_json()).unwrap();
+        let mut snapshot: serde_json::Value = serde_json::from_str(
+            &bridge
+                .dispatch(SessionAction::Input {
+                    name: "left".to_string(),
+                })
+                .unwrap(),
+        )
+        .unwrap();
+        while snapshot["busy"] == true {
+            snapshot =
+                serde_json::from_str(&bridge.dispatch(SessionAction::Resume).unwrap()).unwrap();
+        }
         assert_eq!(snapshot["levelIndex"], level_index);
         assert_eq!(snapshot["currentScene"], "playing");
         assert!(cell_has_object(&snapshot["scene"]["cells"][68], "Player"));
@@ -4664,15 +2827,23 @@ level_menu
 
         let select: Value = serde_json::from_str(
             &bridge
-                .request_json("POST", "/api/command/goto%20level_select")
+                .dispatch(SessionAction::Command {
+                    name: "goto level_select".to_string(),
+                })
                 .unwrap(),
         )
         .unwrap();
         assert_eq!(select["currentScene"], json!("level_select"));
         assert_eq!(select["acceptsModelInput"], json!(false));
 
-        let after_input: Value =
-            serde_json::from_str(&bridge.request_json("POST", "/api/input/down").unwrap()).unwrap();
+        let after_input: Value = serde_json::from_str(
+            &bridge
+                .dispatch(SessionAction::Input {
+                    name: "down".to_string(),
+                })
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(after_input["currentScene"], json!("level_select"));
         assert_eq!(after_input["acceptsModelInput"], json!(false));
         assert_eq!(after_input["canUndo"], json!(false));
@@ -4725,21 +2896,30 @@ level_menu
 
         let playing: Value = serde_json::from_str(
             &bridge
-                .request_json("POST", "/api/command/goto%20playing(second)")
+                .dispatch(SessionAction::Command {
+                    name: "goto playing(second)".to_string(),
+                })
                 .unwrap(),
         )
         .unwrap();
         assert_eq!(playing["currentScene"], json!("playing"));
         assert_eq!(playing["levelIndex"], json!(1));
 
-        let moved: Value =
-            serde_json::from_str(&bridge.request_json("POST", "/api/input/right").unwrap())
-                .unwrap();
+        let moved: Value = serde_json::from_str(
+            &bridge
+                .dispatch(SessionAction::Input {
+                    name: "right".to_string(),
+                })
+                .unwrap(),
+        )
+        .unwrap();
         assert!(cell_has_object(&moved["scene"]["cells"][1], "Player"));
 
         let select: Value = serde_json::from_str(
             &bridge
-                .request_json("POST", "/api/command/goto%20level_select")
+                .dispatch(SessionAction::Command {
+                    name: "goto level_select".to_string(),
+                })
                 .unwrap(),
         )
         .unwrap();
@@ -4747,7 +2927,9 @@ level_menu
 
         let restarted: Value = serde_json::from_str(
             &bridge
-                .request_json("POST", "/api/command/select:1")
+                .dispatch(SessionAction::Command {
+                    name: "select:1".to_string(),
+                })
                 .unwrap(),
         )
         .unwrap();
@@ -4800,13 +2982,19 @@ scene playing {
                 .unwrap();
 
         let playing = bridge
-            .request_json("POST", "/api/command/goto%20playing(%22first%22)")
+            .dispatch(SessionAction::Command {
+                name: "goto playing(\"first\")".to_string(),
+            })
             .unwrap();
         let playing: serde_json::Value = serde_json::from_str(&playing).unwrap();
         assert_eq!(playing["currentScene"], "playing");
         assert_eq!(playing["levelIndex"], 0);
 
-        let moved = bridge.request_json("POST", "/api/input/right").unwrap();
+        let moved = bridge
+            .dispatch(SessionAction::Input {
+                name: "right".to_string(),
+            })
+            .unwrap();
         let moved: serde_json::Value = serde_json::from_str(&moved).unwrap();
         assert_eq!(
             moved["presentationEvents"][0]["animation"],
@@ -4873,10 +3061,16 @@ scene playing {
                 .unwrap();
 
         bridge
-            .request_json("POST", "/api/command/goto%20playing(%22first%22)")
+            .dispatch(SessionAction::Command {
+                name: "goto playing(\"first\")".to_string(),
+            })
             .unwrap();
 
-        let moved = bridge.request_json("POST", "/api/input/right").unwrap();
+        let moved = bridge
+            .dispatch(SessionAction::Input {
+                name: "right".to_string(),
+            })
+            .unwrap();
         let moved: serde_json::Value = serde_json::from_str(&moved).unwrap();
         assert_eq!(
             moved["inputBuffer"],
@@ -4887,7 +3081,8 @@ scene playing {
             })
         );
         assert!(cell_has_object(&moved["scene"]["cells"][1], "Player"));
-        assert!(cell_has_object(&moved["scene"]["cells"][1], "Done"));
+        assert!(!cell_has_object(&moved["scene"]["cells"][1], "Done"));
+        assert_eq!(moved["busy"], true);
         assert_eq!(
             moved["presentationEvents"]
                 .as_array()
@@ -4896,6 +3091,14 @@ scene playing {
                 .unwrap()["kind"],
             json!("wait")
         );
+        let resumed: serde_json::Value = serde_json::from_str(
+            &bridge
+                .dispatch(SessionAction::Resume)
+                .expect("the wait boundary should resume the same input turn"),
+        )
+        .unwrap();
+        assert!(cell_has_object(&resumed["scene"]["cells"][1], "Done"));
+        assert_eq!(resumed["busy"], false);
     }
 
     #[test]
@@ -4913,7 +3116,7 @@ scene playing {
             )
             .unwrap();
 
-        let snapshot = bridge.request_json("GET", "/api/state").unwrap();
+        let snapshot = bridge.dispatch(SessionAction::Snapshot).unwrap();
         let snapshot: serde_json::Value = serde_json::from_str(&snapshot).unwrap();
         assert_eq!(snapshot["selectedLevelIndex"], 0);
         assert_eq!(snapshot["has_progress_save"], true);
@@ -4962,7 +3165,7 @@ rules {
             SolverConfig::default(),
         );
         let mut data = String::new();
-        push_export_data(&mut data, &state);
+        push_editor_preview_data(&mut data, &state);
 
         assert!(data.contains(r#""viewportFocus":"player""#));
         assert!(data.contains(r#""viewportFocusObjects":[2,3]"#));
@@ -5016,20 +3219,16 @@ rules {
         .expect("release export should use source-free 3D runtime");
 
         assert!(html.contains("window.Puzzle3DFrameFixture"));
-        assert!(html.contains("runtimeContractVersion"));
+        assert!(!html.contains("runtimeContractVersion"));
+        assert!(!html.contains("runtimeContract"));
         assert!(html.contains("puzzle_wasm_player_bg.wasm"));
         assert!(html.contains("WasmStandaloneSession"));
-        assert!(html.contains("window.Puzzle3ComponentAutoBoot = false"));
-        assert!(!html.contains("window.Puzzle3ComponentAutoBoot = true"));
-        assert!(
-            html.contains("sessionManaged: Boolean(standaloneRuntime && !puzzle3PreviewSurface)")
-        );
-        assert!(html.contains("if (standaloneRuntime && !puzzle3PreviewSurface)"));
-        assert!(html.contains("entry.controller.replaceSessionSnapshot?.(sessionSnapshot)"));
-        assert!(html.contains("delete this.data.runtimeLoadedDocument;"));
+        assert!(html.contains("window.Puzzle3Component.attach(canvas"));
+        assert!(html.contains("entry.controller.replaceSnapshot(snapshot)"));
+        assert!(!html.contains("delete this.data.runtimeLoadedDocument;"));
         assert!(!html.contains("runtimeLoadedGame"));
-        assert!(html.contains("onLifecycleEffects(effects)"));
-        assert!(html.contains("function sendPuzzle3LifecycleEffects("));
+        assert!(!html.contains("onLifecycleEffects(effects)"));
+        assert!(!html.contains("function sendPuzzle3LifecycleEffects("));
         assert!(!html.contains("Unsupported Puzzle3 lifecycle effect"));
         assert!(!html.contains("puzzle_wasm_game_bg.wasm"));
         assert!(!html.contains("\\npuzzle3 microban3d"));
@@ -5042,11 +3241,13 @@ rules {
         )
         .expect("editor preview should embed preview runtime assets");
 
-        assert!(preview_html.contains("window.Puzzle3DFixture"));
-        assert!(preview_html.contains("WasmPuzzle3Runtime"));
+        assert!(preview_html.contains("window.Puzzle3DFrameFixture"));
+        assert!(!preview_html.contains("window.Puzzle3DFixture"));
+        assert!(!preview_html.contains("WasmPuzzle3Runtime"));
         assert!(preview_html.contains("WasmStandaloneSession"));
-        assert!(preview_html.contains("onLifecycleEffects(effects)"));
-        assert!(preview_html.contains("function sendPuzzle3LifecycleEffects("));
+        assert!(preview_html.contains("window.Puzzle3Component"));
+        assert!(!preview_html.contains("onLifecycleEffects(effects)"));
+        assert!(!preview_html.contains("function sendPuzzle3LifecycleEffects("));
         assert!(!preview_html.contains("Unsupported Puzzle3 lifecycle effect"));
         assert!(!preview_html.contains("Puzzle3DTestRuntime"));
         assert!(html.contains("Microban 3D"));
@@ -5058,7 +3259,7 @@ rules {
     }
 
     #[test]
-    fn puzzle3_source_free_export_embeds_local_frame_runtime_contract() {
+    fn puzzle3_source_free_export_keeps_runtime_semantics_out_of_the_visual_fixture() {
         let source = r#"title = "Local Frame"
 
 puzzle cube {
@@ -5088,10 +3289,9 @@ levels default of cube {
 }
 "#;
         let html = export_html_from_source(source, "games/local_frame.puzzle3", "", "")
-            .expect("local_frame should be part of the source-free runtime contract");
+            .expect("local_frame should compile into the standalone session model");
 
-        assert!(html.contains("runtimeContract"));
-        assert!(html.contains("localFrame"));
+        assert!(!html.contains("runtimeContract"));
         assert!(!html.contains("\\npuzzle3 cube"));
     }
 
@@ -5148,7 +3348,7 @@ levels default of cube {
 
         assert!(html.contains("window.Puzzle3DFrameFixture = JSON.parse"));
         assert!(html.contains("window.Puzzle3DFrameAssets = {"));
-        assert!(html.contains("window.Puzzle3ComponentAutoBoot = false"));
+        assert!(!html.contains("Puzzle3ComponentAutoBoot"));
         assert!(html.contains("window.Puzzle3ThreeModuleSource = "));
         assert!(html.contains("window.Puzzle3ThreeRenderer"));
         assert!(html.contains("window.Puzzle3Component"));
@@ -5169,12 +3369,16 @@ levels default of cube {
         );
         assert!(PUZZLE3_COMPONENT_JS.contains("function drawWithThree()"));
         assert!(PUZZLE3_COMPONENT_JS.contains("function resolvePuzzle3RendererMode(value)"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("return text === \"canvas\" ? \"canvas\" : \"three\";"));
+        assert!(
+            PUZZLE3_COMPONENT_JS.contains("return text === \"canvas\" ? \"canvas\" : \"three\";")
+        );
         assert!(!PUZZLE3_COMPONENT_JS.contains("function puzzle3ThreeRendererAvailable()"));
         assert!(PUZZLE3_COMPONENT_JS.contains("const PUZZLE3_RENDERER_CONTRACT_VERSION = 1;"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("function puzzle3RendererContractInput(width, height)"));
+        assert!(
+            PUZZLE3_COMPONENT_JS.contains("function puzzle3RendererContractInput(width, height)")
+        );
         assert!(PUZZLE3_COMPONENT_JS.contains(
-            "snapshot: cloneRuntimeSnapshot(requireLoadedPuzzle3Snapshot(\"Puzzle3 renderer snapshot\"))"
+            "snapshot: clonePuzzle3ViewSnapshot(requireLoadedPuzzle3Snapshot(\"Puzzle3 renderer snapshot\"))"
         ));
         assert!(PUZZLE3_COMPONENT_JS.contains("renderer.render(input.snapshot, input.view)"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("const PUZZLE3_THREE_RENDERER_CONTRACT = "));
@@ -5339,7 +3543,9 @@ levels default of cube {
                 .contains("id: Number.isFinite(Number(merged.id)) ? Number(merged.id) : name")
         );
         assert!(PUZZLE3_COMPONENT_JS.contains("viewportSnapNext: view.viewportSnapNext"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("pixelateBuffer.getContext(\"2d\", { alpha: true })"));
+        assert!(
+            PUZZLE3_COMPONENT_JS.contains("pixelateBuffer.getContext(\"2d\", { alpha: true })")
+        );
         assert!(APP_JS.contains("window.Puzzle3Component.attach(canvas"));
         assert!(APP_CSS.contains(
             ".scene-ratio-slot > [data-frame-component=\"true\"] {\n  width: 100%;\n  height: 100%;"
@@ -5419,7 +3625,7 @@ levels default of cube {
         );
         assert_eq!(fixture["theme"]["variables"][0]["value"], json!("#123456"));
         assert!(html.contains("window.Puzzle3DFrameAssets = {"));
-        assert!(html.contains("window.Puzzle3ComponentAutoBoot = false"));
+        assert!(!html.contains("Puzzle3ComponentAutoBoot"));
         assert!(html.contains("window.Puzzle3Component"));
         assert!(!html.contains("\"themeCss\""));
         assert!(!html.contains("theme-clean is-component-embed"));
@@ -5477,109 +3683,79 @@ levels basic of cube {
 
     #[cfg(feature = "solver")]
     #[test]
-    fn solver_request_uses_target_levels_effective_rules() {
+    fn native_solver_route_uses_the_shared_typed_solver_result() {
         let source = r#"
-title = solver_level_rules
-puzzle board {
-  slots {
-    floor = Goal
-    actor = Player
-  }
-  keys {
-    a ArrowLeft -> left
-    d ArrowRight -> right
-  }
-  rules {
-    input left [ Player ] -> [ Player ]
-  }
-  win_conditions {
-    all Goal on Player
-  }
+title = shared_native_solver
+
+puzzle default {
+slots {
+floor = Goal
+actor = Player Box
 }
-levels default of board {
-  legend {
-    . = empty
-    P = Player
-    G = Goal
-    X = Goal Player
-  }
-  level "local" {
-    rules {
-      input right [ Player | Goal no actor ] -> [ | Goal Player ]
-    }
-    PG
-  }
+keys {
+d ArrowRight -> right
+}
+rules {
+input right [ Player | Box | no actor ] -> [ | Player | Box ]
+}
+win_conditions {
+all Goal on Box
+}
+}
+
+levels tiny of default {
+legend {
+P = Player
+B = Box
+G = Goal
+}
+level "start" {
+PBG
+}
 }
 "#;
-        let loaded = parse_game(source).unwrap();
-        let player = loaded
-            .object_labels
-            .iter()
-            .find_map(|(id, label)| (label == "Player").then_some(*id))
-            .unwrap();
-        let goal = loaded
-            .object_labels
-            .iter()
-            .find_map(|(id, label)| (label == "Goal").then_some(*id))
-            .unwrap();
-        let state_spec = |lines: Vec<&str>| {
-            json!({
-                "kind": "level-ascii",
-                "lifecycle": "already-materialized",
-                "data": {
-                    "empty": ".",
-                    "legend": {
-                        ".": [],
-                        "P": [player],
-                        "G": [goal],
-                        "X": [player, goal]
-                    },
-                    "lines": lines,
-                }
-            })
-        };
-        let request = json!({
-            "source": source,
-            "puzzlePath": "game.puzzle",
-            "modelKind": "2d",
-            "target": {
-                "origin": "preview-level",
-                "level": {
-                    "index": 0,
-                    "levelName": "local",
-                    "levelPuzzle": "board",
-                    "levelPack": "default"
-                },
-                "state": state_spec(vec!["PG"]),
-            },
-            "goal": {"kind": "exact-state", "state": state_spec(vec![".X"])},
-            "maxDepth": 2,
-            "maxNodes": 100,
-            "maxMs": 0,
-        });
-
-        let response = solve_request_json(&request.to_string()).unwrap();
-        assert!(response.contains(r#""result":"solved""#), "{response}");
-        assert!(response.contains(r#""depth":1"#), "{response}");
-
-        let mut state_json = String::new();
-        push_state_data(&mut state_json, &loaded.levels[0].initial_state);
-        state_json.pop();
-        write!(&mut state_json, r#","levelIndex":0}}"#).unwrap();
-        let response =
-            solve_state_json_from_source(source, "game.puzzle", &state_json, 2, 100, 0).unwrap();
-        assert!(response.contains(r#""result":"solved""#), "{response}");
-        assert!(response.contains(r#""depth":1"#), "{response}");
-
-        let mut state_without_level = String::new();
-        push_state_data(&mut state_without_level, &loaded.levels[0].initial_state);
-        let error =
-            solve_state_json_from_source(source, "game.puzzle", &state_without_level, 2, 100, 0)
-                .unwrap_err();
-        assert!(
-            error.contains("solver state requires a valid levelIndex"),
-            "{error}"
+        let document = puzzle_lang::parse_game_for_path(source, "shared_native_solver.puzzle")
+            .expect("compile native solver fixture");
+        let loaded =
+            loaded_document_scene_host_loaded_game(&document).expect("select native solver model");
+        let mut state = ServerState::new(
+            document,
+            loaded,
+            source.to_string(),
+            "shared_native_solver.puzzle".to_string(),
+            String::new(),
+            String::new(),
+            SolverConfig::default(),
         );
+
+        let result: Value =
+            serde_json::from_str(&state.solve_json().expect("solve native session"))
+                .expect("native solver response is typed JSON");
+        assert_eq!(result["model"], "2d");
+        assert_eq!(result["result"], "solved");
+        assert_eq!(result["depth"], 1);
+        assert_eq!(result["steps"][0]["state"]["kind"], "2d");
+        assert!(result["steps"][0].get("scene").is_none());
+
+        state.solver.max_duration = Duration::ZERO;
+        let limited: Value =
+            serde_json::from_str(&state.solve_json().expect("bound native solver session"))
+                .expect("bounded native solver response is typed JSON");
+        assert_eq!(limited["result"], "budget_exceeded");
+        assert!(limited["observations"].is_array());
+    }
+
+    #[cfg(feature = "solver")]
+    #[test]
+    fn html_play_contains_no_search_orchestration_owner() {
+        let runtime = include_str!("lib_solver_runtime.rs");
+        let bridge = include_str!("lib_runtime_bridge.rs");
+        let manifest = include_str!("../Cargo.toml");
+        assert!(!runtime.contains("best_first"));
+        assert!(!runtime.contains("SearchBudget"));
+        assert!(!bridge.contains("solve_request_json"));
+        assert!(manifest.contains("puzzle-solver-runtime"));
+        assert!(!manifest.contains("puzzle-solver ="));
     }
 
     #[test]
@@ -5604,20 +3780,35 @@ impl std::fmt::Display for AppError {
         }
     }
 }
+#[cfg(feature = "solver")]
 #[test]
-fn solver_defaults_keep_interactive_search_bounded() {
+fn solver_defaults_match_product_entry_points() {
     let defaults = SolverConfig::default();
-    assert_eq!(defaults.max_nodes, 1000);
+    assert_eq!(defaults.max_nodes, 1_000_000);
     assert_eq!(defaults.max_duration, Duration::from_secs(5));
-    assert!(APP_JS.contains("options.maxNodes ?? 1000"));
-    assert!(!APP_JS.contains("options.maxNodes ?? 5_000_000"));
+    let solve_start = APP_JS
+        .find("async function solveStandaloneCurrentState(")
+        .expect("standalone solve entry point");
+    let solve_end = APP_JS[solve_start..]
+        .find("\n}\n/* puzzle-host:optional:solver:end */")
+        .map(|index| solve_start + index)
+        .expect("standalone solve entry point end");
+    let solve_source = &APP_JS[solve_start..solve_end];
+    assert!(solve_source.contains("options.maxNodes ?? 5_000_000"));
+    assert!(!solve_source.contains("options.maxNodes ?? 1000"));
 }
 
+#[cfg(feature = "solver")]
 #[test]
 fn solver_cli_can_override_the_wall_clock_limit() {
     let puzzle_path = format!("{}/../../games/spec_3d.puzzle3", env!("CARGO_MANIFEST_DIR"));
     let defaults = Config::from_args([puzzle_path.clone()]).unwrap();
     assert_eq!(defaults.solver.max_duration, Duration::from_secs(5));
+
+    let help = Config::from_args(["--help".to_string()])
+        .expect_err("help exits through the config diagnostic")
+        .to_string();
+    assert!(help.contains("[--solver-nodes 1000000]"));
 
     let bounded =
         Config::from_args([puzzle_path, "--solver-ms".to_string(), "250".to_string()]).unwrap();

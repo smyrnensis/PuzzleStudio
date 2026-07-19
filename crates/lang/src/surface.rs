@@ -16,7 +16,7 @@ pub(crate) struct SourceSpan {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ParserRecognition {
     pub(crate) nodes: Vec<SurfaceNode>,
-    pub(crate) semantic_tokens: Vec<SurfaceSemanticToken>,
+    pub(crate) token_dispositions: Vec<ParserTokenDisposition>,
     pub(crate) display_facts: Vec<SurfaceDisplayFact>,
     pub(crate) completion_symbols: SurfaceCompletionSymbols,
     pub(crate) visual_sprite_refs: SurfaceVisualSpriteRefs,
@@ -72,9 +72,31 @@ pub(crate) struct SurfaceSpriteProduct {
 impl ParserRecognition {
     pub(crate) fn mark(&mut self, span: SourceSpan, kind: SurfaceSemanticKind) {
         if span.start < span.end {
-            self.semantic_tokens
-                .push(SurfaceSemanticToken { span, kind });
+            self.token_dispositions.push(ParserTokenDisposition {
+                span,
+                kind,
+                resolution: None,
+            });
         }
+    }
+
+    pub(crate) fn mark_resolved(
+        &mut self,
+        span: SourceSpan,
+        kind: SurfaceSemanticKind,
+        resolution: ParserTokenResolution,
+    ) {
+        if span.start < span.end {
+            self.token_dispositions.push(ParserTokenDisposition {
+                span,
+                kind,
+                resolution: Some(resolution),
+            });
+        }
+    }
+
+    pub(crate) fn node(&mut self, kind: SurfaceNodeKind, span: SourceSpan) {
+        self.nodes.push(SurfaceNode { kind, span });
     }
 
     pub(crate) fn mark_assignment(
@@ -131,9 +153,9 @@ impl ParserRecognition {
         self.nodes
             .sort_by_key(|node| (node.span.start, node.span.end));
         self.nodes.dedup();
-        self.semantic_tokens
+        self.token_dispositions
             .sort_by_key(|token| (token.span.start, token.span.end));
-        self.semantic_tokens.dedup();
+        self.token_dispositions.dedup();
         self.display_facts.sort_by_key(|fact| {
             let span = fact.span();
             (span.start, span.end)
@@ -143,7 +165,7 @@ impl ParserRecognition {
 
     pub(crate) fn merge(&mut self, other: ParserRecognition) {
         self.nodes.extend(other.nodes);
-        self.semantic_tokens.extend(other.semantic_tokens);
+        self.token_dispositions.extend(other.token_dispositions);
         self.display_facts.extend(other.display_facts);
         self.completion_symbols.merge(other.completion_symbols);
         self.visual_sprite_refs.merge(other.visual_sprite_refs);
@@ -153,24 +175,11 @@ impl ParserRecognition {
         self.sprite_products.extend(other.sprite_products);
     }
 
-    pub(crate) fn merge_surface_document(&mut self, document: SurfaceDocument) {
-        self.nodes.extend(document.nodes);
-        self.semantic_tokens.extend(document.semantic_tokens);
-        self.display_facts
-            .extend(document.highlight_ranges.display_facts);
-        self.completion_symbols.merge(document.completion_symbols);
-        self.visual_sprite_refs.merge(document.visual_sprite_refs);
-        self.sound_products.extend(document.sound_products);
-        self.level_products.extend(document.level_products);
-        self.sprite_resources.extend(document.sprite_resources);
-        self.sprite_products.extend(document.sprite_products);
-    }
-
     pub(crate) fn shift_offsets(&mut self, threshold: usize, delta: i64) {
         for node in &mut self.nodes {
             shift_span(&mut node.span, threshold, delta);
         }
-        for token in &mut self.semantic_tokens {
+        for token in &mut self.token_dispositions {
             shift_span(&mut token.span, threshold, delta);
         }
         for fact in &mut self.display_facts {
@@ -257,6 +266,30 @@ pub(crate) enum SurfaceSemanticKind {
     String,
 }
 
+/// Symbol target selected by canonical parser resolution.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ParserTokenResolution {
+    Object(String),
+    ObjectGroup(String),
+    ValueSet(String),
+    ObjectAxis(String),
+    Variant(String),
+    ValueMap(String),
+    Binding(String),
+}
+
+/// Canonical parser-owned disposition for an accepted source token or token
+/// component. Highlighting may project this fact, but does not own its span,
+/// semantic role, or resolved symbol target.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ParserTokenDisposition {
+    pub(crate) span: SourceSpan,
+    pub(crate) kind: SurfaceSemanticKind,
+    pub(crate) resolution: Option<ParserTokenResolution>,
+}
+
+/// Editor-facing semantic projection. This type never feeds parser acceptance
+/// or lowering decisions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct SurfaceSemanticToken {
     pub(crate) span: SourceSpan,
@@ -283,7 +316,7 @@ pub(crate) struct SurfaceDocument {
     pub(crate) structural_blocks: Vec<SurfaceStructuralBlock>,
     pub(crate) nodes: Vec<SurfaceNode>,
     pub(crate) semantic_tokens: Vec<SurfaceSemanticToken>,
-    pub(crate) syntax_error_spans: Vec<SourceSpan>,
+    pub(crate) unclassified_highlight_spans: Vec<SourceSpan>,
     pub(crate) unmatched_open_braces: BTreeSet<usize>,
     pub(crate) completion_symbols: SurfaceCompletionSymbols,
     pub(crate) highlight_ranges: SurfaceHighlightRanges,
@@ -468,7 +501,12 @@ impl SurfaceSink {
             .extend(recognition.nodes.iter().copied());
         self.document
             .semantic_tokens
-            .extend(recognition.semantic_tokens.iter().cloned());
+            .extend(recognition.token_dispositions.iter().map(|disposition| {
+                SurfaceSemanticToken {
+                    span: disposition.span,
+                    kind: disposition.kind,
+                }
+            }));
         self.document
             .highlight_ranges
             .display_facts
@@ -522,24 +560,12 @@ impl SurfaceSink {
         });
     }
 
-    pub(crate) fn node(&mut self, kind: SurfaceNodeKind, span: SourceSpan) {
-        self.document.nodes.push(SurfaceNode { kind, span });
-    }
-
     pub(crate) fn set_structural_blocks(&mut self, blocks: Vec<SurfaceStructuralBlock>) {
         self.document.structural_blocks = blocks;
     }
 
     pub(crate) fn set_unmatched_open_braces(&mut self, braces: BTreeSet<usize>) {
         self.document.unmatched_open_braces = braces;
-    }
-
-    pub(crate) fn mark(&mut self, span: SourceSpan, kind: SurfaceSemanticKind) {
-        if span.start < span.end {
-            self.document
-                .semantic_tokens
-                .push(SurfaceSemanticToken { span, kind });
-        }
     }
 
     pub(crate) fn completion_symbols_mut(&mut self) -> &mut SurfaceCompletionSymbols {
@@ -555,48 +581,10 @@ impl SurfaceSink {
             .semantic_tokens
             .sort_by_key(|token| (token.span.start, token.span.end));
         self.document
-            .syntax_error_spans
+            .unclassified_highlight_spans
             .sort_by_key(|span| (span.start, span.end));
         self.document.highlight_ranges.sort_by_source();
         self.document
-    }
-
-    pub(crate) fn has_semantic_tokens(&self) -> bool {
-        !self.document.semantic_tokens.is_empty()
-    }
-
-    pub(crate) fn extend(&mut self, document: SurfaceDocument) {
-        self.document.lines.extend(document.lines);
-        self.document
-            .structural_blocks
-            .extend(document.structural_blocks);
-        self.document.nodes.extend(document.nodes);
-        self.document
-            .semantic_tokens
-            .extend(document.semantic_tokens);
-        self.document
-            .syntax_error_spans
-            .extend(document.syntax_error_spans);
-        self.document
-            .unmatched_open_braces
-            .extend(document.unmatched_open_braces);
-        self.document
-            .completion_symbols
-            .merge(document.completion_symbols);
-        self.document
-            .highlight_ranges
-            .merge(document.highlight_ranges);
-        self.document
-            .visual_sprite_refs
-            .merge(document.visual_sprite_refs);
-        self.document.sound_products.extend(document.sound_products);
-        self.document.level_products.extend(document.level_products);
-        self.document
-            .sprite_resources
-            .extend(document.sprite_resources);
-        self.document
-            .sprite_products
-            .extend(document.sprite_products);
     }
 }
 

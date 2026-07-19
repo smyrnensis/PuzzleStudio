@@ -1033,17 +1033,6 @@ pub fn new_puzzle_source(_title: &str) -> String {
     String::new()
 }
 
-pub fn is_at_identifier_token(token: &str) -> bool {
-    let Some(rest) = token.strip_prefix('@') else {
-        return false;
-    };
-    let without_mark = rest.split_once('{').map_or(rest, |(base, _)| base);
-    let base = without_mark
-        .split_once(':')
-        .map_or(without_mark, |(base, _)| base);
-    is_identifier(base)
-}
-
 pub fn is_identifier(value: &str) -> bool {
     let mut chars = value.chars();
     let Some(first) = chars.next() else {
@@ -1061,6 +1050,15 @@ pub fn is_qualified_identifier(value: &str) -> bool {
         return false;
     };
     is_identifier(first) && parts.all(is_identifier)
+}
+
+pub fn is_symbol_name(value: &str) -> bool {
+    let mut parts = value.split(':');
+    let Some(head) = parts.next() else {
+        return false;
+    };
+    let head = head.strip_prefix('@').unwrap_or(head);
+    is_identifier(head) && parts.all(is_identifier)
 }
 
 pub fn split_object_spec(token: &str) -> Option<(&str, impl Iterator<Item = &str> + '_)> {
@@ -2175,14 +2173,9 @@ fn rule_statement_node(line: &str, tokens: &[String]) -> RuleStatementNode {
         Some("repeat") => RuleStatementNode::Repeat,
         Some("display") => RuleStatementNode::Display,
         Some("->") => RuleStatementNode::Arrow(rule_arrow_surface(line)),
-        Some(name)
-            if tokens.len() == 1
-                && (is_at_identifier_token(name) || is_qualified_identifier(name)) =>
-        {
-            RuleStatementNode::Call {
-                name: name.to_string(),
-            }
-        }
+        Some(name) if tokens.len() == 1 && is_symbol_name(name) => RuleStatementNode::Call {
+            name: name.to_string(),
+        },
         Some(_) => RuleStatementNode::Other(tokens.first().cloned()),
         None => RuleStatementNode::Other(None),
     }
@@ -2236,7 +2229,7 @@ fn rule_statement_target_surface(line: &str, range: Range<usize>) -> RuleStateme
     let target = &line[span.clone()];
     if is_builtin_rewrite_effect_text(target) {
         RuleStatementTargetSurface::Effect { span }
-    } else if is_qualified_identifier(target) || is_at_identifier_token(target) {
+    } else if is_symbol_name(target) {
         RuleStatementTargetSurface::Call {
             name: target.to_string(),
             span,
@@ -3667,6 +3660,17 @@ pub struct MarkSugarSyntax<'a> {
 pub const ANONYMOUS_MOVEMENT_MARK_INDEX: u16 = 0;
 pub const MOVEMENT_DIRECTIONS_2D: &[&str] = &["up", "down", "left", "right"];
 pub const MOVEMENT_DIRECTIONS_3D: &[&str] = &["up", "down", "left", "right", "front", "back"];
+pub const ABSOLUTE_DIRECTION_SET_NAMES: &[&str] = &[
+    "directions",
+    "horizontal",
+    "vertical",
+    "x_axis",
+    "y_axis",
+    "z_axis",
+    "xy_plane",
+    "yz_plane",
+    "xz_plane",
+];
 
 pub fn mark_sugar_kind(token: &str) -> Option<MarkSugarKind> {
     if matches!(
@@ -3682,12 +3686,8 @@ pub fn mark_sugar_kind(token: &str) -> Option<MarkSugarKind> {
             | "back"
             | "forward"
             | "backward"
-            | "directions"
-            | "horizontal"
-            | "vertical"
-            | "parallel"
-            | "perpendicular"
-    ) {
+    ) || is_movement_mark_set(token)
+    {
         Some(MarkSugarKind::Movement)
     } else if matches!(token, "true" | "false") {
         Some(MarkSugarKind::Bool)
@@ -3723,10 +3723,11 @@ pub fn parse_mark_sugar_syntax(
 }
 
 pub fn is_movement_mark_set(value: &str) -> bool {
-    matches!(
-        value,
-        "directions" | "horizontal" | "vertical" | "parallel" | "perpendicular"
-    )
+    is_absolute_direction_set(value) || matches!(value, "parallel" | "perpendicular")
+}
+
+pub fn is_absolute_direction_set(value: &str) -> bool {
+    ABSOLUTE_DIRECTION_SET_NAMES.contains(&value)
 }
 
 fn is_binding_label(label: &str) -> bool {
@@ -3763,10 +3764,14 @@ pub fn movement_mark_set_values(value: &str, dimensions: u8) -> Option<&'static 
     match (value, dimensions) {
         ("directions", 2) => Some(MOVEMENT_DIRECTIONS_2D),
         ("directions", 3) => Some(MOVEMENT_DIRECTIONS_3D),
-        ("horizontal", 2) => Some(&["left", "right"]),
-        ("horizontal", 3) => Some(&["left", "right", "front", "back"]),
-        ("vertical", 2) => Some(&["up", "down"]),
-        ("vertical", 3) => Some(&["up", "down"]),
+        ("horizontal" | "x_axis", 2) | ("x_axis", 3) => Some(&["left", "right"]),
+        ("vertical" | "y_axis", 2) => Some(&["up", "down"]),
+        ("vertical" | "z_axis", 3) => Some(&["up", "down"]),
+        ("y_axis", 3) => Some(&["front", "back"]),
+        ("horizontal" | "xy_plane", 3) => Some(&["left", "right", "front", "back"]),
+        ("xy_plane", 2) => Some(MOVEMENT_DIRECTIONS_2D),
+        ("yz_plane", 3) => Some(&["up", "down", "front", "back"]),
+        ("xz_plane", 3) => Some(&["up", "down", "left", "right"]),
         ("parallel", 2) => Some(&["<", ">"]),
         ("perpendicular", 2) => Some(&["^", "v"]),
         _ => None,
@@ -4358,13 +4363,14 @@ mod tests {
     }
 
     #[test]
-    fn recognizes_at_prefixed_identifiers_without_assigning_a_role() {
-        assert!(is_at_identifier_token("@Trail"));
-        assert!(is_at_identifier_token("@Trail:kind"));
-        assert!(is_at_identifier_token("@Trail{right}"));
-        assert!(!is_at_identifier_token("Trail"));
-        assert!(!is_at_identifier_token("@"));
-        assert!(!is_at_identifier_token("@:kind"));
+    fn symbol_names_apply_one_grammar_to_all_name_spellings() {
+        assert!(is_symbol_name("Trail"));
+        assert!(is_symbol_name("@Trail"));
+        assert!(is_symbol_name("Trail:kind"));
+        assert!(is_symbol_name("@Trail:kind"));
+        assert!(!is_symbol_name("@"));
+        assert!(!is_symbol_name("@:kind"));
+        assert!(!is_symbol_name("@Trail{right}"));
     }
 
     #[test]
@@ -4659,6 +4665,31 @@ mod tests {
             movement_mark_set_values("horizontal", 3),
             Some(["left", "right", "front", "back"].as_slice())
         );
+        assert_eq!(
+            movement_mark_set_values("x_axis", 3),
+            Some(["left", "right"].as_slice())
+        );
+        assert_eq!(
+            movement_mark_set_values("y_axis", 3),
+            Some(["front", "back"].as_slice())
+        );
+        assert_eq!(
+            movement_mark_set_values("z_axis", 3),
+            Some(["up", "down"].as_slice())
+        );
+        assert_eq!(
+            movement_mark_set_values("xy_plane", 3),
+            movement_mark_set_values("horizontal", 3)
+        );
+        assert_eq!(
+            movement_mark_set_values("yz_plane", 3),
+            Some(["up", "down", "front", "back"].as_slice())
+        );
+        assert_eq!(
+            movement_mark_set_values("xz_plane", 3),
+            Some(["up", "down", "left", "right"].as_slice())
+        );
+        assert_eq!(movement_mark_set_values("z_axis", 2), None);
         assert_eq!(
             movement_mark_set_values("perpendicular", 3),
             None,

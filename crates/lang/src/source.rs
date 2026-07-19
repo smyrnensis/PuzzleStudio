@@ -1103,6 +1103,7 @@ fn scan_surface_source_line(
         .unwrap_or_default();
         let mut recognition = crate::surface::ParserRecognition::default();
         let mut schema_recognized = false;
+        let mut header_owned_by_authoring = false;
         if authoring_parent.is_none() {
             let root_facts = crate::authoring_grammar::recognize_authoring_line(
                 crate::authoring_grammar::AuthoringKind::Root,
@@ -1111,6 +1112,7 @@ fn scan_surface_source_line(
             if !root_facts.is_empty() {
                 authoring_parent = Some(crate::authoring_grammar::AuthoringKind::Root);
                 schema_recognized = true;
+                header_owned_by_authoring = true;
                 for fact in root_facts {
                     recognition.mark(
                         fact.span,
@@ -1121,9 +1123,10 @@ fn scan_surface_source_line(
         }
         if let Some(parent) = authoring_parent {
             if !schema_recognized {
-                for fact in
-                    crate::authoring_grammar::recognize_authoring_line(parent, &piece_tokens)
-                {
+                let facts =
+                    crate::authoring_grammar::recognize_authoring_line(parent, &piece_tokens);
+                header_owned_by_authoring = !facts.is_empty();
+                for fact in facts {
                     recognition.mark(
                         fact.span,
                         crate::authoring_grammar::authoring_surface_role_semantic_kind(fact.role),
@@ -1159,7 +1162,9 @@ fn scan_surface_source_line(
         let opened = (stack_line != "}" && source_opens_block(stack_line, &tokens, current))
             .then(|| opening_scope(stack_line, &tokens, current))
             .flatten();
-        if let Some(opened) = opened {
+        if let Some(opened) = opened
+            && !header_owned_by_authoring
+        {
             recognize_structural_header(stack_line, &piece_tokens, opened, &mut recognition);
         }
         recognize_owner_line(current, &piece_tokens, &mut recognition);
@@ -1220,7 +1225,7 @@ fn recognize_structural_header(
     opened: SourceScope,
     recognition: &mut crate::surface::ParserRecognition,
 ) {
-    if !recognition.semantic_tokens.is_empty() || tokens.is_empty() {
+    if tokens.is_empty() {
         return;
     }
     if opened == SourceScope::UnbracedLevel && tokens[0].text != "level" {
@@ -1369,8 +1374,7 @@ fn recognize_owner_line(
                     );
                 }
             }
-            let document = crate::scene_effect_surface_document(&tokens[arrow + 1..]);
-            recognition.merge_surface_document(document);
+            recognition.merge(crate::scene_effect_parser_recognition(&tokens[arrow + 1..]));
         }
         Some(SourceScope::Levels | SourceScope::UnbracedLevel) => {
             if let Some(command) = tokens.first()
@@ -1534,12 +1538,11 @@ fn is_visual_sprite_selector_header_token(value: &str) -> bool {
     ) {
         return false;
     }
-    let cleaned = value.trim_start_matches('@');
-    let mut parts = cleaned.split(':');
+    let mut parts = value.split(':');
     let Some(first) = parts.next() else {
         return false;
     };
-    is_surface_source_identifier(first) && parts.all(is_visual_sprite_selector_part_token)
+    puzzle_authoring::is_symbol_name(first) && parts.all(is_visual_sprite_selector_part_token)
 }
 
 fn is_visual_sprite_selector_part_token(value: &str) -> bool {

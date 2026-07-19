@@ -1,19 +1,52 @@
 (function attachPuzzle3VisualCore(root) {
+  function cameraModelFrame(camera = {}) {
+    const yaw = degreesToRadians(camera.yawDegrees ?? 0);
+    const pitch = degreesToRadians(camera.pitchDegrees ?? 35);
+    const roll = degreesToRadians(camera.rollDegrees ?? 0);
+    const baseRight = {
+      x: Math.cos(yaw),
+      y: -Math.sin(yaw),
+      z: 0,
+    };
+    const baseUp = {
+      x: -Math.sin(yaw) * Math.sin(pitch),
+      y: -Math.cos(yaw) * Math.sin(pitch),
+      z: -Math.cos(pitch),
+    };
+    const depth = {
+      x: -Math.sin(yaw) * Math.cos(pitch),
+      y: -Math.cos(yaw) * Math.cos(pitch),
+      z: Math.sin(pitch),
+    };
+    const cosRoll = Math.cos(roll);
+    const sinRoll = Math.sin(roll);
+    return {
+      right: {
+        x: baseRight.x * cosRoll - baseUp.x * sinRoll,
+        y: baseRight.y * cosRoll - baseUp.y * sinRoll,
+        z: baseRight.z * cosRoll - baseUp.z * sinRoll,
+      },
+      up: {
+        x: baseRight.x * sinRoll + baseUp.x * cosRoll,
+        y: baseRight.y * sinRoll + baseUp.y * cosRoll,
+        z: baseRight.z * sinRoll + baseUp.z * cosRoll,
+      },
+      depth,
+    };
+  }
+
   function projectOrthographic(position, view) {
-    const yaw = degreesToRadians(view.camera?.yawDegrees ?? 0);
-    const pitch = degreesToRadians(view.camera?.pitchDegrees ?? 35);
+    const frame = cameraModelFrame(view.camera);
     const zoom = view.camera?.zoom ?? 1;
     const center = view.center || { x: 0, y: 0, z: 0 };
     const x = position.x - center.x;
     const y = position.y - center.y;
     const z = position.z - center.z;
-    const yawX = x * Math.cos(yaw) - y * Math.sin(yaw);
-    const yawY = x * Math.sin(yaw) + y * Math.cos(yaw);
     const scale = view.scale * zoom;
     return {
-      x: view.origin.x + yawX * scale,
-      y: view.origin.y + (-yawY * Math.sin(pitch) - z * Math.cos(pitch)) * scale,
-      depth: -yawY * Math.cos(pitch) + z * Math.sin(pitch),
+      x: view.origin.x + (x * frame.right.x + y * frame.right.y + z * frame.right.z) * scale,
+      y: view.origin.y + (x * frame.up.x + y * frame.up.y + z * frame.up.z) * scale,
+      depth: x * frame.depth.x + y * frame.depth.y + z * frame.depth.z,
     };
   }
 
@@ -22,10 +55,8 @@
   }
 
   function directionDepth(vector, view) {
-    const yaw = degreesToRadians(view.camera?.yawDegrees ?? 0);
-    const pitch = degreesToRadians(view.camera?.pitchDegrees ?? 35);
-    const yawY = vector.x * Math.sin(yaw) + vector.y * Math.cos(yaw);
-    return -yawY * Math.cos(pitch) + vector.z * Math.sin(pitch);
+    const { depth } = cameraModelFrame(view.camera);
+    return vector.x * depth.x + vector.y * depth.y + vector.z * depth.z;
   }
 
   function faceGridOrder(corners, view) {
@@ -69,13 +100,7 @@
   }
 
   function cameraOrderBasis(view) {
-    const yaw = degreesToRadians(view.camera?.yawDegrees ?? 0);
-    const pitch = degreesToRadians(view.camera?.pitchDegrees ?? 35);
-    const coefficients = {
-      x: -Math.sin(yaw) * Math.cos(pitch),
-      y: -Math.cos(yaw) * Math.cos(pitch),
-      z: Math.sin(pitch),
-    };
+    const coefficients = cameraModelFrame(view.camera).depth;
     const axes = ["x", "y", "z"].sort((left, right) => {
       const magnitudeComparison = Math.abs(coefficients[right]) - Math.abs(coefficients[left]);
       if (Math.abs(magnitudeComparison) > 0.000001) {
@@ -128,6 +153,13 @@
     if (!a.ownerCell || !b.ownerCell || a.ownerCell.key === b.ownerCell.key) {
       return 0;
     }
+    const directionComparison = compareNumberArrays(
+      a.ownerCell.directionPriority,
+      b.ownerCell.directionPriority,
+    );
+    if (directionComparison !== 0) {
+      return directionComparison;
+    }
     const gridDominanceComparison = compareGridDominance(a.ownerCell.order, b.ownerCell.order);
     if (gridDominanceComparison !== 0) {
       return gridDominanceComparison;
@@ -141,6 +173,19 @@
       return priorityComparison;
     }
     return compareStableKey(a.ownerCell.key, b.ownerCell.key);
+  }
+
+  function compareNumberArrays(a, b) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) {
+      return 0;
+    }
+    for (let index = 0; index < a.length; index += 1) {
+      const comparison = compareNumber(a[index], b[index]);
+      if (comparison !== 0) {
+        return comparison;
+      }
+    }
+    return 0;
   }
 
   function compareGridOrder(a, b) {
@@ -268,6 +313,53 @@
     return faces;
   }
 
+  function averageMergedVoxels(voxels, parseColor, formatColor) {
+    const colors = voxels
+      .map((voxel) => voxel.color || parseColor(voxel.fill))
+      .filter((color) => color && color.a > 0);
+    if (!colors.length) {
+      return voxels[0];
+    }
+    const divisor = colors.length;
+    const color = colors.reduce((sum, candidate) => ({
+      r: sum.r + candidate.r,
+      g: sum.g + candidate.g,
+      b: sum.b + candidate.b,
+      a: sum.a + candidate.a,
+    }), { r: 0, g: 0, b: 0, a: 0 });
+    color.r /= divisor;
+    color.g /= divisor;
+    color.b /= divisor;
+    color.a /= divisor;
+    return {
+      ...voxels[0],
+      color,
+      fill: formatColor(color),
+      sourceKeys: voxels.flatMap((voxel) =>
+        voxel.sourceKey ? [voxel.sourceKey] : (voxel.sourceKeys || [])
+      ),
+    };
+  }
+
+  function objectPriority(order, object, fallbackIndex = 0) {
+    const name = String(object?.name || "");
+    const priority = order?.priorities?.findIndex((entry) =>
+      Array.isArray(entry.objects) && entry.objects.includes(name)
+    );
+    if (priority >= 0) {
+      return priority;
+    }
+    throw new Error(`compiled sprite order does not cover object: ${name || fallbackIndex}`);
+  }
+
+  function priorityDefinition(order, encodedPriority) {
+    const priorities = order?.priorities;
+    if (!Array.isArray(priorities) || priorities.length === 0) {
+      throw new Error("compiled sprite order contract is missing");
+    }
+    return priorities[encodedPriority % priorities.length];
+  }
+
   function rectsFromCells(cells) {
     const remaining = new Set(cells);
     const rects = [];
@@ -304,6 +396,8 @@
   }
 
   root.Puzzle3VisualCore = {
+    averageMergedVoxels,
+    cameraModelFrame,
     cameraOrderKey,
     compareGridOrder,
     comparePrimitiveOrder,
@@ -311,6 +405,8 @@
     faceGridOrder,
     gridOrder,
     mergeVoxelFaces,
+    objectPriority,
+    priorityDefinition,
     projectOrthographic,
     rectsFromCells,
     stageFrameEdges,

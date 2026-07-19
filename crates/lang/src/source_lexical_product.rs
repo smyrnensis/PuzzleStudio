@@ -25,8 +25,11 @@ pub(crate) fn build_surface_highlight_spans_in_range(
     let mut spans = Vec::<SourceHighlightSpan>::new();
     let display_facts = display_facts_in_range(document, range_start, range_end);
     let semantic_tokens = semantic_tokens_in_range(document, range_start, range_end);
-    let syntax_error_spans =
-        source_spans_in_range(&document.syntax_error_spans, range_start, range_end);
+    let unclassified_highlight_spans = source_spans_in_range(
+        &document.unclassified_highlight_spans,
+        range_start,
+        range_end,
+    );
     let raw_ranges = source_spans_in_range(
         &document.highlight_ranges.raw_ranges,
         range_start,
@@ -68,7 +71,7 @@ pub(crate) fn build_surface_highlight_spans_in_range(
         map_lexical_fact(
             document,
             semantic_tokens,
-            syntax_error_spans,
+            unclassified_highlight_spans,
             fact,
             &mut spans,
         );
@@ -82,7 +85,7 @@ pub(crate) fn build_surface_highlight_spans_in_range(
 fn map_lexical_fact(
     document: &SurfaceDocument,
     semantic_tokens: &[crate::surface::SurfaceSemanticToken],
-    syntax_error_spans: &[SourceSpan],
+    unclassified_highlight_spans: &[SourceSpan],
     fact: &SourceLexicalFact,
     spans: &mut Vec<SourceHighlightSpan>,
 ) {
@@ -90,7 +93,7 @@ fn map_lexical_fact(
         SourceLexicalKind::Word => {
             if let Some(kind) = semantic_kind_at(semantic_tokens, fact.start, fact.end) {
                 push_span(spans, fact.start, fact.end, highlight_kind(kind));
-            } else if is_contained_by(fact.start, fact.end, syntax_error_spans) {
+            } else if is_contained_by(fact.start, fact.end, unclassified_highlight_spans) {
                 push_span(
                     spans,
                     fact.start,
@@ -466,22 +469,16 @@ mod tests {
     }
 
     #[test]
-    fn parser_fact_boundaries_preserve_prefixes_selectors_and_invalid_braces() {
+    fn parser_fact_boundaries_preserve_names_selectors_and_invalid_braces() {
         let source = "puzzle board {\nslots {\nobjects = @Box\n}\nrules {\n[ Box:1{checked} ] -> [ @Box ]\n}\n}\n}\n";
         let highlighted = highlight_source(source);
-        assert!(has_span(
-            source,
-            &highlighted,
-            SourceHighlightKind::Object,
-            "Box"
-        ));
-        let prefix = source.find("@Box").expect("object prefix");
-        assert!(
-            highlighted
-                .spans
-                .iter()
-                .all(|span| !(span.start <= prefix && prefix < span.end))
-        );
+        for (start, _) in source.match_indices("@Box") {
+            assert!(highlighted.spans.iter().any(|span| {
+                span.kind == SourceHighlightKind::Object
+                    && span.start == start
+                    && &source[span.start..span.end] == "@Box"
+            }));
+        }
         assert!(has_span(
             source,
             &highlighted,

@@ -51,10 +51,10 @@
       <div id="levelPaneModeSwitch" class="level-pane-mode-switch pane-bind-label" aria-label="Bound level editor dimension" hidden>Level: none</div>
 
       <section class="workbench" aria-label="Puzzle editor">
-        <button class="pane-restore-button pane-restore-explorer" type="button" data-pane-toggle="explorer" aria-label="Show explorer pane" title="Show explorer pane (Command+B)">
+        <button class="icon-button pane-restore-button pane-restore-explorer" type="button" data-pane-toggle="explorer" aria-label="Show explorer pane" title="Show explorer pane (Command+B)">
           <svg data-editor-icon="panel-left" aria-hidden="true"></svg>
         </button>
-        <button class="pane-restore-button pane-restore-preview" type="button" data-pane-toggle="preview" aria-label="Show game pane" title="Show game pane">
+        <button class="icon-button pane-restore-button pane-restore-preview" type="button" data-pane-toggle="preview" aria-label="Show game pane" title="Show game pane">
           <svg data-editor-icon="panel-right" aria-hidden="true"></svg>
         </button>
         <aside class="explorer-pane" aria-label="Explorer">
@@ -102,7 +102,7 @@
           </div>
         </aside>
 
-        <div id="explorerSplitter" class="explorer-splitter" role="separator" aria-label="Resize explorer pane" aria-orientation="vertical"></div>
+        <div id="explorerSplitter" class="accent-splitter explorer-splitter" role="separator" aria-label="Resize explorer pane" aria-orientation="vertical"></div>
 
         <section class="code-pane" aria-label="Puzzle source" data-work-pane="source">
           <div class="document-tabbar" data-pane-drag-handle="source" draggable="true" title="Drag header to move source pane">
@@ -115,10 +115,10 @@
               <button id="saveButton" class="icon-button document-save-button" type="button" aria-label="Save" title="Save (Command+S)">
                 <svg data-editor-icon="save" aria-hidden="true"></svg>
               </button>
-              <button class="pane-maximize-button" type="button" data-pane-maximize="source" aria-label="Maximize Source pane" aria-pressed="false" title="Maximize Source pane">
+              <button class="icon-button pane-maximize-button" type="button" data-pane-maximize="source" aria-label="Maximize Source pane" aria-pressed="false" title="Maximize Source pane">
                 <svg data-editor-icon="maximize" aria-hidden="true"></svg>
               </button>
-              <button class="pane-close-button" type="button" data-pane-close="source" aria-label="Hide source pane" title="Hide source pane">
+              <button class="icon-button pane-close-button" type="button" data-pane-close="source" aria-label="Hide source pane" title="Hide source pane">
                 <svg data-editor-icon="x" aria-hidden="true"></svg>
               </button>
             </div>
@@ -132,7 +132,7 @@
           </div>
         </section>
 
-        <div id="paneSplitter" class="pane-splitter" role="separator" aria-label="Resize panes" aria-orientation="vertical"></div>
+        <div id="paneSplitter" class="accent-splitter pane-splitter" role="separator" aria-label="Resize panes" aria-orientation="vertical"></div>
 
         <section class="preview-pane" aria-label="Game tools" data-work-pane="preview">
           <div class="pane-header" data-pane-drag-handle="preview" draggable="true" title="Drag header to move Preview pane">
@@ -141,20 +141,20 @@
               <div id="soundsHeaderTools" class="sounds-header-tools" hidden></div>
             </div>
             <div class="pane-actions">
-              <button id="previewEditButton" class="pane-header-icon-button preview-edit-button" type="button" aria-label="Edit level" title="Edit level">
+              <button id="previewEditButton" class="icon-button pane-header-icon-button preview-edit-button" type="button" aria-label="Edit level" title="Edit level" disabled>
                 <svg data-editor-icon="pencil" aria-hidden="true"></svg>
               </button>
-              <button id="previewDebugToggleButton" class="pane-header-icon-button preview-debug-toggle-button" type="button" aria-label="Debug" title="Debug" aria-pressed="false">
+              <button id="previewDebugToggleButton" class="icon-button pane-header-icon-button preview-debug-toggle-button" type="button" aria-label="Debug" title="Debug" aria-pressed="false">
                 <svg data-editor-icon="bug" aria-hidden="true"></svg>
               </button>
-              <button id="previewSolveButton" class="pane-header-icon-button preview-solve-button" type="button" aria-label="Solve" title="Solve">
+              <button id="previewSolveButton" class="icon-button pane-header-icon-button preview-solve-button" type="button" aria-label="Solve" title="Solve" disabled>
                 <svg data-editor-icon="route" class="solve-level-icon" aria-hidden="true"></svg>
                 <svg data-editor-icon="x" class="cancel-solve-icon" aria-hidden="true"></svg>
               </button>
-              <button class="pane-maximize-button" type="button" data-pane-maximize="preview" aria-label="Maximize Preview pane" aria-pressed="false" title="Maximize Preview pane">
+              <button class="icon-button pane-maximize-button" type="button" data-pane-maximize="preview" aria-label="Maximize Preview pane" aria-pressed="false" title="Maximize Preview pane">
                 <svg data-editor-icon="maximize" aria-hidden="true"></svg>
               </button>
-              <button class="pane-close-button" type="button" data-pane-close="preview" aria-label="Hide Preview pane" title="Hide Preview pane">
+              <button class="icon-button pane-close-button" type="button" data-pane-close="preview" aria-label="Hide Preview pane" title="Hide Preview pane">
                 <svg data-editor-icon="x" aria-hidden="true"></svg>
               </button>
             </div>
@@ -177,13 +177,13 @@
                 <span id="previewLogTitle">Log</span>
                 <div class="preview-log-header-actions">
                   <div id="previewDebugControls" class="preview-debug-controls" hidden>
-                    <button id="previewDebugPrevButton" class="preview-debug-control-button" type="button" aria-label="Previous rule execution" title="Previous rule execution" disabled>
+                    <button id="previewDebugPrevButton" class="icon-button preview-debug-control-button" type="button" aria-label="Previous rule execution" title="Previous rule execution" disabled>
                       <svg data-editor-icon="step-back" aria-hidden="true"></svg>
                     </button>
-                    <button id="previewDebugNextButton" class="preview-debug-control-button" type="button" aria-label="Next rule execution" title="Next rule execution" disabled>
+                    <button id="previewDebugNextButton" class="icon-button preview-debug-control-button" type="button" aria-label="Next rule execution" title="Next rule execution" disabled>
                       <svg data-editor-icon="step-forward" aria-hidden="true"></svg>
                     </button>
-                    <button id="previewDebugLatestButton" class="preview-debug-control-button" type="button" aria-label="Latest rule execution" title="Latest rule execution" disabled>
+                    <button id="previewDebugLatestButton" class="icon-button preview-debug-control-button" type="button" aria-label="Latest rule execution" title="Latest rule execution" disabled>
                       <svg data-editor-icon="chevrons-right" aria-hidden="true"></svg>
                     </button>
                     <span id="previewDebugStatus" class="preview-debug-status">No rule execution yet</span>
@@ -217,10 +217,10 @@
                     </div>
                     <textarea id="psImportOutput" spellcheck="false" autocomplete="off" autocapitalize="off" readonly></textarea>
                     <div class="source-action-group ps-import-actions ps-import-output-actions" role="group" aria-label="Converted .puzzle actions">
-                      <button id="psImportCopyButton" class="source-action-button source-copy-button" type="button" aria-label="Copy converted .puzzle" title="Copy converted .puzzle" disabled>
+                      <button id="psImportCopyButton" class="icon-button source-action-button source-copy-button" type="button" aria-label="Copy converted .puzzle" title="Copy converted .puzzle" disabled>
                         <svg data-editor-icon="copy" aria-hidden="true"></svg>
                       </button>
-                      <button id="psImportAddFileButton" class="source-action-button" type="button" aria-label="Add converted .puzzle file" title="Add converted .puzzle file" disabled>
+                      <button id="psImportAddFileButton" class="icon-button source-action-button" type="button" aria-label="Add converted .puzzle file" title="Add converted .puzzle file" disabled>
                         <svg data-editor-icon="file-plus" aria-hidden="true"></svg>
                       </button>
                     </div>
@@ -243,53 +243,53 @@
                   <datalist id="levelNameOptions"></datalist>
                 </label>
                 <div class="source-action-group source-preview-actions level-header-actions" role="group" aria-label="Level source actions">
-                <button id="levelPlaytestButton" class="source-action-button level-playtest-button" type="button" aria-label="Play level" title="Play" data-tooltip="Play">
+                <button id="levelPlaytestButton" class="icon-button source-action-button level-playtest-button" type="button" aria-label="Play level" title="Play" data-tooltip="Play">
                   <svg data-editor-icon="play" class="level-play-icon" aria-hidden="true"></svg>
                   <svg data-editor-icon="square" class="level-stop-icon" aria-hidden="true"></svg>
                 </button>
-                <button id="levelSolveShortcutButton" class="source-action-button level-solve-shortcut-button" type="button" aria-label="Solve" title="Solve" data-tooltip="Solve">
+                <button id="levelSolveShortcutButton" class="icon-button source-action-button level-solve-shortcut-button" type="button" aria-label="Solve" title="Solve" data-tooltip="Solve">
                   <svg data-editor-icon="route" class="solve-level-icon" aria-hidden="true"></svg>
                   <svg data-editor-icon="x" class="cancel-solve-icon" aria-hidden="true"></svg>
                 </button>
-                <button id="copyLevelButton" class="source-action-button source-copy-button" type="button" aria-label="Copy" title="Copy" data-tooltip="Copy">
+                <button id="copyLevelButton" class="icon-button source-action-button source-copy-button" type="button" aria-label="Copy" title="Copy" data-tooltip="Copy">
                   <svg data-editor-icon="copy" aria-hidden="true"></svg>
                 </button>
-                <button id="addLevelButton" class="source-action-button" type="button" aria-label="Add source" title="Add source" data-tooltip="Add source">
+                <button id="addLevelButton" class="icon-button source-action-button" type="button" aria-label="Add source" title="Add source" data-tooltip="Add source">
                   <svg data-editor-icon="file-plus-corner" aria-hidden="true"></svg>
                 </button>
-                <button id="updateLevelButton" class="source-action-button is-primary" type="button" aria-label="Edit source" title="Edit source" data-tooltip="Edit source">
+                <button id="updateLevelButton" class="icon-button source-action-button is-primary" type="button" aria-label="Edit source" title="Edit source" data-tooltip="Edit source">
                   <svg data-editor-icon="file-pen-line" aria-hidden="true"></svg>
                 </button>
                 </div>
               </div>
             </div>
             <div class="level-toolbar sprite-toolbar" role="toolbar" aria-label="Level edit actions">
-              <button id="levelGridButton" class="sprite-icon-button level-grid-button" type="button" aria-label="Toggle level grid" aria-pressed="false" title="Toggle grid" data-tooltip="Toggle grid">
+              <button id="levelGridButton" class="icon-button sprite-icon-button level-grid-button" type="button" aria-label="Toggle level grid" aria-pressed="false" title="Toggle grid" data-tooltip="Toggle grid">
                 <svg data-editor-icon="grid-2x2" class="level-grid-token-icon" aria-hidden="true"></svg>
               </button>
-              <button id="levelExpandButton" class="sprite-icon-button level-expand-button" type="button" aria-label="Toggle level expansion" aria-pressed="false" title="Expand" data-tooltip="Expand">
+              <button id="levelExpandButton" class="icon-button sprite-icon-button level-expand-button" type="button" aria-label="Toggle level expansion" aria-pressed="false" title="Expand" data-tooltip="Expand">
                 <svg data-editor-icon="expand" aria-hidden="true"></svg>
               </button>
-              <button id="levelShrinkButton" class="sprite-icon-button level-shrink-button" type="button" aria-label="Toggle level shrinking" aria-pressed="false" title="Shrink" data-tooltip="Shrink">
+              <button id="levelShrinkButton" class="icon-button sprite-icon-button level-shrink-button" type="button" aria-label="Toggle level shrinking" aria-pressed="false" title="Shrink" data-tooltip="Shrink">
                 <svg data-editor-icon="shrink" aria-hidden="true"></svg>
               </button>
-              <button id="levelRotateLeftButton" class="sprite-icon-button" type="button" aria-label="Rotate level left" title="Rotate left" data-tooltip="Rotate left">
+              <button id="levelRotateLeftButton" class="icon-button sprite-icon-button" type="button" aria-label="Rotate level left" title="Rotate left" data-tooltip="Rotate left">
                 <svg data-editor-icon="rotate-ccw" aria-hidden="true"></svg>
               </button>
-              <button id="levelRotateRightButton" class="sprite-icon-button" type="button" aria-label="Rotate level right" title="Rotate right" data-tooltip="Rotate right">
+              <button id="levelRotateRightButton" class="icon-button sprite-icon-button" type="button" aria-label="Rotate level right" title="Rotate right" data-tooltip="Rotate right">
                 <svg data-editor-icon="rotate-cw" aria-hidden="true"></svg>
               </button>
-              <button id="levelFlipHorizontalButton" class="sprite-icon-button" type="button" aria-label="Flip level horizontal" title="Flip horizontal" data-tooltip="Flip horizontal">
+              <button id="levelFlipHorizontalButton" class="icon-button sprite-icon-button" type="button" aria-label="Flip level horizontal" title="Flip horizontal" data-tooltip="Flip horizontal">
                 <svg data-editor-icon="flip-horizontal" aria-hidden="true"></svg>
               </button>
-              <button id="levelFlipVerticalButton" class="sprite-icon-button" type="button" aria-label="Flip level vertical" title="Flip vertical" data-tooltip="Flip vertical">
+              <button id="levelFlipVerticalButton" class="icon-button sprite-icon-button" type="button" aria-label="Flip level vertical" title="Flip vertical" data-tooltip="Flip vertical">
                 <svg data-editor-icon="flip-vertical" aria-hidden="true"></svg>
               </button>
               <div id="levelLayerControls" class="level-layer-controls" aria-label="Level layer controls"></div>
             </div>
             <div class="level-palette-toolbar" aria-label="Palette display controls" hidden></div>
             <div id="levelPalette" class="level-palette" aria-label="Level tile palette">
-              <button id="levelFillButton" class="level-palette-tool-button sprite-fill-button sprite-icon-button" type="button" aria-label="Fill" aria-pressed="false" title="Fill" data-tooltip="Fill">
+              <button id="levelFillButton" class="icon-button level-palette-tool-button sprite-fill-button sprite-icon-button" type="button" aria-label="Fill" aria-pressed="false" title="Fill" data-tooltip="Fill">
                 <svg data-editor-icon="paint-bucket" aria-hidden="true"></svg>
               </button>
             </div>
@@ -332,16 +332,16 @@
                   <span class="solve-button-label">Solve</span>
                 </button>
                 <span class="solution-step-controls" aria-label="Solution playback controls">
-                  <button id="solutionPrevButton" class="solution-step-button solution-step-prev" type="button" aria-label="Previous step" title="Previous step" disabled></button>
-                  <button id="solutionPlayButton" class="solution-step-button solution-play-button" type="button" aria-label="Play solution" title="Play solution" disabled></button>
-                  <button id="solutionNextButton" class="solution-step-button solution-step-next" type="button" aria-label="Next step" title="Next step" disabled></button>
+                  <button id="solutionPrevButton" class="icon-button solution-step-button solution-step-prev" type="button" aria-label="Previous step" title="Previous step" disabled></button>
+                  <button id="solutionPlayButton" class="icon-button solution-step-button solution-play-button" type="button" aria-label="Play solution" title="Play solution" disabled></button>
+                  <button id="solutionNextButton" class="icon-button solution-step-button solution-step-next" type="button" aria-label="Next step" title="Next step" disabled></button>
                   <select id="solutionSpeedSelect" class="solution-speed-select" aria-label="Playback speed" title="Playback speed" disabled>
                     <option value="0.5">0.5x</option>
                     <option value="1" selected>1x</option>
                     <option value="2">2x</option>
                     <option value="4">4x</option>
                   </select>
-                  <button id="solutionResetButton" class="solution-step-button solution-step-reset" type="button" aria-label="Reset solution preview" title="Reset solution preview" disabled>
+                  <button id="solutionResetButton" class="icon-button solution-step-button solution-step-reset" type="button" aria-label="Reset solution preview" title="Reset solution preview" disabled>
                     <svg data-editor-icon="refresh-ccw" aria-hidden="true"></svg>
                   </button>
                 </span>
@@ -354,7 +354,7 @@
                 <span class="solution-copy-group">
                   <span class="solution-format-label">Solution:</span>
                   <output id="solutionText" class="solution-text" aria-live="polite">No solution yet</output>
-                  <button id="solutionExportButton" class="solution-copy-button" type="button" aria-label="Copy solution" title="Copy solution" disabled>
+                  <button id="solutionExportButton" class="icon-button solution-copy-button" type="button" aria-label="Copy solution" title="Copy solution" disabled>
                     <svg data-editor-icon="copy" aria-hidden="true"></svg>
                   </button>
                 </span>
@@ -371,10 +371,10 @@
           <div id="spriteBuilder" class="sprite-builder" hidden>
             <div id="spritePaneHeaderActions" class="source-action-group source-preview-actions sprite-pane-header-actions" role="group" aria-label="Sprite pane actions">
               <span class="sprite-dimension-toggle" role="group" aria-label="Sprite dimension">
-                <button id="spriteDimension2dButton" class="source-action-button is-active" type="button" data-sprite-dimension="2d" aria-label="Edit as 2D sprite" aria-pressed="true" title="2D sprite">2D</button>
-                <button id="spriteDimension3dButton" class="source-action-button" type="button" data-sprite-dimension="3d" aria-label="Edit as 3D sprite" aria-pressed="false" title="3D sprite">3D</button>
+                <button id="spriteDimension2dButton" class="icon-button source-action-button is-active" type="button" data-sprite-dimension="2d" aria-label="Edit as 2D sprite" aria-pressed="true" title="2D sprite">2D</button>
+                <button id="spriteDimension3dButton" class="icon-button source-action-button" type="button" data-sprite-dimension="3d" aria-label="Edit as 3D sprite" aria-pressed="false" title="3D sprite">3D</button>
               </span>
-              <button id="spriteAnimateModeButton" class="source-action-button" type="button" aria-label="Animate sprite" aria-pressed="false" title="Animate sprite">
+              <button id="spriteAnimateModeButton" class="icon-button source-action-button" type="button" aria-label="Animate sprite" aria-pressed="false" title="Animate sprite">
                 <svg data-editor-icon="film" aria-hidden="true"></svg>
               </button>
             </div>
@@ -398,10 +398,10 @@
                   <div class="sprite-scale-group">
                     <span class="sprite-scale-prefix" aria-hidden="true">×</span>
                     <input id="spriteScaleInput" type="number" min="2" max="64" value="2" inputmode="numeric" aria-label="Scale multiplier">
-                    <button id="spriteScaleDownButton" class="sprite-scale-step-button" type="button" aria-label="Scale down" title="Scale down">
+                    <button id="spriteScaleDownButton" class="icon-button sprite-scale-step-button" type="button" aria-label="Scale down" title="Scale down">
                       <svg data-editor-icon="minimize-2" aria-hidden="true"></svg>
                     </button>
-                    <button id="spriteScaleUpButton" class="sprite-scale-step-button" type="button" aria-label="Scale up" title="Scale up">
+                    <button id="spriteScaleUpButton" class="icon-button sprite-scale-step-button" type="button" aria-label="Scale up" title="Scale up">
                       <svg data-editor-icon="maximize-2" aria-hidden="true"></svg>
                     </button>
                   </div>
@@ -422,16 +422,16 @@
               </div>
               </div>
               <span id="spriteTransformActionBank" hidden>
-              <button id="spriteRotateLeftButton" class="sprite-icon-button" type="button" aria-label="Rotate left" title="Rotate left">
+              <button id="spriteRotateLeftButton" class="icon-button sprite-icon-button" type="button" aria-label="Rotate left" title="Rotate left">
                 <svg data-editor-icon="rotate-ccw" aria-hidden="true"></svg>
               </button>
-              <button id="spriteRotateRightButton" class="sprite-icon-button" type="button" aria-label="Rotate right" title="Rotate right">
+              <button id="spriteRotateRightButton" class="icon-button sprite-icon-button" type="button" aria-label="Rotate right" title="Rotate right">
                 <svg data-editor-icon="rotate-cw" aria-hidden="true"></svg>
               </button>
-              <button id="spriteFlipHorizontalButton" class="sprite-icon-button" type="button" aria-label="Flip horizontal" title="Flip horizontal">
+              <button id="spriteFlipHorizontalButton" class="icon-button sprite-icon-button" type="button" aria-label="Flip horizontal" title="Flip horizontal">
                 <svg data-editor-icon="flip-horizontal" aria-hidden="true"></svg>
               </button>
-              <button id="spriteFlipVerticalButton" class="sprite-icon-button" type="button" aria-label="Flip vertical" title="Flip vertical">
+              <button id="spriteFlipVerticalButton" class="icon-button sprite-icon-button" type="button" aria-label="Flip vertical" title="Flip vertical">
                 <svg data-editor-icon="flip-vertical" aria-hidden="true"></svg>
               </button>
               </span>
@@ -440,23 +440,23 @@
                   <svg data-editor-icon="highlighter" class="sprite-marker-icon" aria-hidden="true"></svg>
                   <input id="spriteBrushSizeInput" class="sprite-brush-size-input" type="number" min="1" max="64" step="1" inputmode="numeric" value="1" aria-label="Brush size in pixels">
                 </span>
-                <button id="spriteFillButton" class="sprite-token sprite-palette-fill-button sprite-fill-button sprite-icon-button sprite-paint-tool-button" type="button" aria-label="Bucket fill" aria-pressed="false" title="Bucket fill">
+                <button id="spriteFillButton" class="icon-button sprite-token sprite-palette-fill-button sprite-fill-button sprite-icon-button sprite-paint-tool-button" type="button" aria-label="Bucket fill" aria-pressed="false" title="Bucket fill">
                   <svg data-editor-icon="paint-bucket" aria-hidden="true"></svg>
                 </button>
-                <button id="spriteGridButton" class="sprite-grid-button sprite-icon-button sprite-paint-tool-button is-active" type="button" aria-label="Toggle sprite grid" aria-pressed="true" title="Toggle grid">
+                <button id="spriteGridButton" class="icon-button sprite-grid-button sprite-icon-button sprite-paint-tool-button is-active" type="button" aria-label="Toggle sprite grid" aria-pressed="true" title="Toggle grid">
                   <svg data-editor-icon="grid-2x2" aria-hidden="true"></svg>
                 </button>
               </div>
               <div id="spriteToolbarHost" class="sprite-toolbar-host"></div>
               <span id="spriteSourceActionBank" hidden>
-                <button id="newSpriteButton" class="source-action-button" type="button" aria-label="New sprite" title="New sprite"><svg data-editor-icon="image-plus" aria-hidden="true"></svg></button>
-                <button id="spriteInsertButton" class="source-action-button" type="button" aria-label="Add sprite" title="Add sprite"><svg data-editor-icon="file-plus-corner" aria-hidden="true"></svg></button>
-                <button id="spriteUpdateButton" class="source-action-button sprite-update-source-button" type="button" aria-label="Save sprite" title="Save"><svg data-editor-icon="save" aria-hidden="true"></svg></button>
+                <button id="newSpriteButton" class="icon-button source-action-button" type="button" aria-label="New sprite" title="New sprite"><svg data-editor-icon="image-plus" aria-hidden="true"></svg></button>
+                <button id="spriteInsertButton" class="icon-button source-action-button" type="button" aria-label="Add sprite" title="Add sprite"><svg data-editor-icon="file-plus-corner" aria-hidden="true"></svg></button>
+                <button id="spriteUpdateButton" class="icon-button source-action-button sprite-update-source-button" type="button" aria-label="Save sprite" title="Save"><svg data-editor-icon="save" aria-hidden="true"></svg></button>
               </span>
               <div class="sprite-board-wrap">
                 <div class="sprite-animation-toolbar sprite3d-slice-axis-control" role="group" aria-label="Sprite animation frame controls">
                   <span class="sprite3d-layer-axis-label">Frame</span>
-                  <button id="spriteAnimationPreviousFrameButton" class="sprite-icon-button" type="button" aria-label="Move to previous sprite frame" title="Previous frame">
+                  <button id="spriteAnimationPreviousFrameButton" class="icon-button sprite-icon-button" type="button" aria-label="Move to previous sprite frame" title="Previous frame">
                     <svg data-editor-icon="chevron-left" aria-hidden="true"></svg>
                   </button>
                   <span class="sprite3d-slice-value-wrap" title="Adjust frame">
@@ -464,13 +464,13 @@
                     <span class="sprite3d-slice-total-separator" aria-hidden="true">/</span>
                     <span id="spriteAnimationFrameTotal" class="sprite3d-slice-total">1</span>
                   </span>
-                  <button id="spriteAnimationNextFrameButton" class="sprite-icon-button" type="button" aria-label="Move to next sprite frame" title="Next frame">
+                  <button id="spriteAnimationNextFrameButton" class="icon-button sprite-icon-button" type="button" aria-label="Move to next sprite frame" title="Next frame">
                     <svg data-editor-icon="chevron-right" aria-hidden="true"></svg>
                   </button>
-                  <button id="spriteAnimationInsertFrameButton" class="sprite-animation-insert-frame-button sprite-icon-button" type="button" aria-label="Add animation frame" aria-pressed="false" title="Add frame" data-tooltip="Add frame">
+                  <button id="spriteAnimationInsertFrameButton" class="icon-button sprite-animation-insert-frame-button sprite-icon-button" type="button" aria-label="Add animation frame" aria-pressed="false" title="Add frame" data-tooltip="Add frame">
                     <svg data-editor-icon="square-plus" aria-hidden="true"></svg>
                   </button>
-                  <button id="spriteAnimationRemoveFrameButton" class="sprite-animation-remove-frame-button sprite-icon-button" type="button" aria-label="Remove animation frame" aria-pressed="false" title="Remove frame" data-tooltip="Remove frame">
+                  <button id="spriteAnimationRemoveFrameButton" class="icon-button sprite-animation-remove-frame-button sprite-icon-button" type="button" aria-label="Remove animation frame" aria-pressed="false" title="Remove frame" data-tooltip="Remove frame">
                     <svg data-editor-icon="square-minus" aria-hidden="true"></svg>
                   </button>
                 </div>
@@ -513,10 +513,10 @@
                   <div class="sprite-scale-group">
                     <span class="sprite-scale-prefix" aria-hidden="true">×</span>
                     <input id="sprite3dScaleInput" type="number" min="2" max="64" value="2" inputmode="numeric" aria-label="3D sprite scale multiplier">
-                    <button id="sprite3dScaleDownButton" class="sprite-scale-step-button" type="button" aria-label="Scale down" title="Scale down">
+                    <button id="sprite3dScaleDownButton" class="icon-button sprite-scale-step-button" type="button" aria-label="Scale down" title="Scale down">
                       <svg data-editor-icon="minimize-2" aria-hidden="true"></svg>
                     </button>
-                    <button id="sprite3dScaleUpButton" class="sprite-scale-step-button" type="button" aria-label="Scale up" title="Scale up">
+                    <button id="sprite3dScaleUpButton" class="icon-button sprite-scale-step-button" type="button" aria-label="Scale up" title="Scale up">
                       <svg data-editor-icon="maximize-2" aria-hidden="true"></svg>
                     </button>
                   </div>
@@ -539,39 +539,39 @@
               <div id="sprite3dPalette" class="sprite-palette sprite3d-palette" aria-label="3D sprite palette"></div>
               <div id="sprite3dToolbarHost" class="sprite-toolbar-host"></div>
               <span id="sprite3dSourceActionBank" hidden>
-                <button id="newSprite3dButton" class="source-action-button" type="button" aria-label="New 3D sprite" title="New sprite"><svg data-editor-icon="image-plus" aria-hidden="true"></svg></button>
-                <button id="sprite3dInsertButton" class="source-action-button" type="button" aria-label="Add 3D sprite" title="Add sprite"><svg data-editor-icon="file-plus-corner" aria-hidden="true"></svg></button>
-                <button id="sprite3dUpdateButton" class="source-action-button sprite-update-source-button" type="button" aria-label="Save 3D sprite" title="Save"><svg data-editor-icon="save" aria-hidden="true"></svg></button>
+                <button id="newSprite3dButton" class="icon-button source-action-button" type="button" aria-label="New 3D sprite" title="New sprite"><svg data-editor-icon="image-plus" aria-hidden="true"></svg></button>
+                <button id="sprite3dInsertButton" class="icon-button source-action-button" type="button" aria-label="Add 3D sprite" title="Add sprite"><svg data-editor-icon="file-plus-corner" aria-hidden="true"></svg></button>
+                <button id="sprite3dUpdateButton" class="icon-button source-action-button sprite-update-source-button" type="button" aria-label="Save 3D sprite" title="Save"><svg data-editor-icon="save" aria-hidden="true"></svg></button>
               </span>
               <div class="sprite3d-workspace">
                 <div class="sprite-board-wrap sprite3d-slice-wrap">
                   <div id="sprite3dSliceBoard" class="sprite-board sprite3d-slice-board" aria-label="Editable 3D sprite slice"></div>
                   <div class="sprite-toolbar sprite3d-edit-actions" role="toolbar" aria-label="3D sprite edit actions">
                     <div class="sprite3d-scope-toggle" role="group" aria-label="3D sprite edit scope">
-                      <button id="sprite3dScopeSliceButton" class="sprite3d-scope-button sprite-icon-button is-active" type="button" data-sprite3d-scope-option="slice" aria-label="Scope 2D" aria-pressed="true" title="Scope 2D slice">
+                      <button id="sprite3dScopeSliceButton" class="icon-button sprite3d-scope-button sprite-icon-button is-active" type="button" data-sprite3d-scope-option="slice" aria-label="Scope 2D" aria-pressed="true" title="Scope 2D slice">
                         <svg data-editor-icon="square" aria-hidden="true"></svg>
                       </button>
-                      <button id="sprite3dScopeAllButton" class="sprite3d-scope-button sprite-icon-button" type="button" data-sprite3d-scope-option="all" aria-label="Scope 3D" aria-pressed="false" title="Scope 3D volume">
+                      <button id="sprite3dScopeAllButton" class="icon-button sprite3d-scope-button sprite-icon-button" type="button" data-sprite3d-scope-option="all" aria-label="Scope 3D" aria-pressed="false" title="Scope 3D volume">
                         <svg data-editor-icon="box" aria-hidden="true"></svg>
                       </button>
                     </div>
                     <div class="sprite3d-action-row" role="group" aria-label="3D sprite edit commands">
-                    <button id="sprite3dTranslateButton" class="sprite-translate-button sprite-icon-button" type="button" aria-label="Translate current slice" aria-pressed="false" title="Translate current slice">
+                    <button id="sprite3dTranslateButton" class="icon-button sprite-translate-button sprite-icon-button" type="button" aria-label="Translate current slice" aria-pressed="false" title="Translate current slice">
                       <svg data-editor-icon="move" aria-hidden="true"></svg>
                     </button>
-                    <button id="sprite3dRotatePlaneLeftButton" class="sprite-icon-button" type="button" aria-label="Rotate CCW" title="Rotate CCW">
+                    <button id="sprite3dRotatePlaneLeftButton" class="icon-button sprite-icon-button" type="button" aria-label="Rotate CCW" title="Rotate CCW">
                       <svg data-editor-icon="rotate-ccw" aria-hidden="true"></svg>
                     </button>
-                    <button id="sprite3dRotatePlaneRightButton" class="sprite-icon-button" type="button" aria-label="Rotate CW" title="Rotate CW">
+                    <button id="sprite3dRotatePlaneRightButton" class="icon-button sprite-icon-button" type="button" aria-label="Rotate CW" title="Rotate CW">
                       <svg data-editor-icon="rotate-cw" aria-hidden="true"></svg>
                     </button>
-                    <button id="sprite3dFlipPlaneHorizontalButton" class="sprite-icon-button" type="button" aria-label="Flip horizontal" title="Flip horizontal">
+                    <button id="sprite3dFlipPlaneHorizontalButton" class="icon-button sprite-icon-button" type="button" aria-label="Flip horizontal" title="Flip horizontal">
                       <svg data-editor-icon="flip-horizontal" aria-hidden="true"></svg>
                     </button>
-                    <button id="sprite3dFlipPlaneVerticalButton" class="sprite-icon-button" type="button" aria-label="Flip vertical" title="Flip vertical">
+                    <button id="sprite3dFlipPlaneVerticalButton" class="icon-button sprite-icon-button" type="button" aria-label="Flip vertical" title="Flip vertical">
                       <svg data-editor-icon="flip-vertical" aria-hidden="true"></svg>
                     </button>
-                    <button id="sprite3dFillButton" class="sprite-fill-button sprite3d-fill-button sprite-icon-button" type="button" aria-label="Bucket fill" aria-pressed="false" title="Bucket fill">
+                    <button id="sprite3dFillButton" class="icon-button sprite-fill-button sprite3d-fill-button sprite-icon-button" type="button" aria-label="Bucket fill" aria-pressed="false" title="Bucket fill">
                       <svg data-editor-icon="paint-bucket" aria-hidden="true"></svg>
                     </button>
                     <span id="sprite3dClipActions"></span>
@@ -583,9 +583,9 @@
                     <div class="sprite3d-preview-wrap">
                     <div class="sprite3d-slice-axis-control" role="group" aria-label="3D sprite slice and axis">
                       <span class="sprite3d-layer-axis-label">Slices</span>
-                      <button id="sprite3dPreviousSliceButton" class="sprite-icon-button" type="button" aria-label="Move to lower slice" title="Lower slice"><svg data-editor-icon="chevron-left" aria-hidden="true"></svg></button>
+                      <button id="sprite3dPreviousSliceButton" class="icon-button sprite-icon-button" type="button" aria-label="Move to lower slice" title="Lower slice"><svg data-editor-icon="chevron-left" aria-hidden="true"></svg></button>
                       <span class="sprite3d-slice-value-wrap" data-sprite3d-slice-scrub title="Adjust slice"><input id="sprite3dSliceValue" class="sprite3d-layer-axis-value" type="number" min="1" max="5" value="1" inputmode="numeric" aria-label="Current 3D sprite slice"><span class="sprite3d-slice-total-separator" aria-hidden="true">/</span><span id="sprite3dSliceTotal" class="sprite3d-slice-total">5</span></span>
-                      <button id="sprite3dNextSliceButton" class="sprite-icon-button" type="button" aria-label="Move to higher slice" title="Higher slice"><svg data-editor-icon="chevron-right" aria-hidden="true"></svg></button>
+                      <button id="sprite3dNextSliceButton" class="icon-button sprite-icon-button" type="button" aria-label="Move to higher slice" title="Higher slice"><svg data-editor-icon="chevron-right" aria-hidden="true"></svg></button>
                       <span class="sprite3d-layer-axis-label">Axis</span>
                       <div class="sprite3d-axis-control sprite3d-toolbar-axis" role="group" aria-label="3D sprite slice axis"><div class="sprite3d-axis-buttons"><button class="sprite3d-axis-button" type="button" data-sprite3d-axis="x" aria-pressed="false" title="Edit YZ slices">X</button><button class="sprite3d-axis-button" type="button" data-sprite3d-axis="y" aria-pressed="false" title="Edit XZ slices">Y</button><button class="sprite3d-axis-button is-active" type="button" data-sprite3d-axis="z" aria-pressed="true" title="Edit XY slices">Z</button></div></div>
                     </div>
@@ -603,7 +603,7 @@
                         <span title="zoom">Z</span>
                         <button id="sprite3dCameraZoomScrub" class="sprite3d-camera-scrub" type="button" data-sprite3d-camera="zoom" aria-label="Adjust zoom" title="Zoom">1</button>
                       </label>
-                      <button id="sprite3dResetCameraButton" class="sprite3d-preview-reset-button sprite-icon-button" type="button" aria-label="Reset 3D preview camera" title="Reset camera">
+                      <button id="sprite3dResetCameraButton" class="icon-button sprite3d-preview-reset-button sprite-icon-button" type="button" aria-label="Reset 3D preview camera" title="Reset camera">
                         <svg data-editor-icon="refresh-ccw" aria-hidden="true"></svg>
                       </button>
                     </div>
@@ -626,21 +626,21 @@
                 </label>
               </div>
               <div class="source-action-group source-preview-actions level-header-actions level3d-source-actions" role="group" aria-label="3D level source actions">
-                <button id="level3dPlaytestButton" class="source-action-button level-playtest-button" type="button" aria-label="Play" title="Play">
+                <button id="level3dPlaytestButton" class="icon-button source-action-button level-playtest-button" type="button" aria-label="Play" title="Play">
                   <svg data-editor-icon="play" class="level-play-icon" aria-hidden="true"></svg>
                   <svg data-editor-icon="square" class="level-stop-icon" aria-hidden="true"></svg>
                 </button>
-                <button id="level3dSolveShortcutButton" class="source-action-button level-solve-shortcut-button" type="button" aria-label="Solve" title="Solve">
+                <button id="level3dSolveShortcutButton" class="icon-button source-action-button level-solve-shortcut-button" type="button" aria-label="Solve" title="Solve">
                   <svg data-editor-icon="route" class="solve-level-icon" aria-hidden="true"></svg>
                   <svg data-editor-icon="x" class="cancel-solve-icon" aria-hidden="true"></svg>
                 </button>
-                <button id="copyLevel3dButton" class="source-action-button source-copy-button" type="button" aria-label="Copy" title="Copy">
+                <button id="copyLevel3dButton" class="icon-button source-action-button source-copy-button" type="button" aria-label="Copy" title="Copy">
                   <svg data-editor-icon="copy" aria-hidden="true"></svg>
                 </button>
-                <button id="addLevel3dButton" class="source-action-button" type="button" aria-label="Add source" title="Add source">
+                <button id="addLevel3dButton" class="icon-button source-action-button" type="button" aria-label="Add source" title="Add source">
                   <svg data-editor-icon="file-plus-corner" aria-hidden="true"></svg>
                 </button>
-                <button id="updateLevel3dButton" class="source-action-button is-primary" type="button" aria-label="Update source" title="Update source">
+                <button id="updateLevel3dButton" class="icon-button source-action-button is-primary" type="button" aria-label="Update source" title="Update source">
                   <svg data-editor-icon="file-pen-line" aria-hidden="true"></svg>
                 </button>
               </div>
@@ -699,7 +699,7 @@
                           <span title="origin z">Z</span>
                           <button id="level3dOriginZScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="originZ" aria-label="Adjust origin z" title="Origin Z">0</button>
                         </label>
-                        <button id="level3dResetPreviewButton" class="sprite3d-preview-reset-button sprite-icon-button" type="button" aria-label="Reset view" title="Reset view">
+                        <button id="level3dResetPreviewButton" class="icon-button sprite3d-preview-reset-button sprite-icon-button" type="button" aria-label="Reset view" title="Reset view">
                           <svg data-editor-icon="refresh-ccw" aria-hidden="true"></svg>
                         </button>
                       </div>
@@ -712,10 +712,10 @@
                 <div class="level3d-layer-frame-viewport level-board-wrap game-preview-scope">
                   <div class="level3d-layer-toolbar sprite3d-slice-axis-control" role="group" aria-label="3D level slice controls">
                     <span class="sprite3d-layer-axis-label">Slice</span>
-                    <button id="level3dAddSliceAboveButton" class="sprite-icon-button level3d-slice-add-button" type="button" aria-label="Add slice above current 3D level slice" title="Add slice above">
+                    <button id="level3dAddSliceAboveButton" class="icon-button sprite-icon-button level3d-slice-add-button" type="button" aria-label="Add slice above current 3D level slice" title="Add slice above">
                       <span aria-hidden="true">+</span>
                     </button>
-                    <button id="level3dPreviousLayerButton" class="sprite-icon-button" type="button" aria-label="Move to lower 3D level slice" title="Lower slice">
+                    <button id="level3dPreviousLayerButton" class="icon-button sprite-icon-button" type="button" aria-label="Move to lower 3D level slice" title="Lower slice">
                       <svg data-editor-icon="chevron-left" aria-hidden="true"></svg>
                     </button>
                     <span class="sprite3d-slice-value-wrap" data-level3d-slice-scrub title="Adjust slice">
@@ -723,10 +723,10 @@
                       <span class="sprite3d-slice-total-separator" aria-hidden="true">/</span>
                       <span id="level3dLayerTotal" class="sprite3d-slice-total">1</span>
                     </span>
-                    <button id="level3dNextLayerButton" class="sprite-icon-button" type="button" aria-label="Move to higher 3D level slice" title="Higher slice">
+                    <button id="level3dNextLayerButton" class="icon-button sprite-icon-button" type="button" aria-label="Move to higher 3D level slice" title="Higher slice">
                       <svg data-editor-icon="chevron-right" aria-hidden="true"></svg>
                     </button>
-                    <button id="level3dAddSliceBelowButton" class="sprite-icon-button level3d-slice-add-button" type="button" aria-label="Add slice below current 3D level slice" title="Add slice below">
+                    <button id="level3dAddSliceBelowButton" class="icon-button sprite-icon-button level3d-slice-add-button" type="button" aria-label="Add slice below current 3D level slice" title="Add slice below">
                       <span aria-hidden="true">+</span>
                     </button>
                   </div>
@@ -769,21 +769,21 @@
               </div>
               <div class="sounds-section-actions">
                 <div id="soundsSfxTransport" class="sounds-transport" role="group" aria-label="SFX transport">
-                  <button id="soundsSfxPlayButton" class="sounds-icon-button" type="button" aria-label="Play SFX" title="Play SFX">
+                  <button id="soundsSfxPlayButton" class="icon-button sounds-icon-button" type="button" aria-label="Play SFX" title="Play SFX">
                     <svg data-editor-icon="play" aria-hidden="true"></svg>
                   </button>
-                  <button id="soundsSfxRandomButton" class="sounds-icon-button" type="button" aria-label="Randomize SFX" title="Randomize SFX">
+                  <button id="soundsSfxRandomButton" class="icon-button sounds-icon-button" type="button" aria-label="Randomize SFX" title="Randomize SFX">
                     <svg data-editor-icon="shuffle" aria-hidden="true"></svg>
                   </button>
                 </div>
                 <div id="soundsSfxSourceActions" class="source-action-group source-preview-actions sounds-source-actions" role="group" aria-label="SFX source actions">
-                  <button id="soundsSfxCopyButton" class="source-action-button source-copy-button" type="button" aria-label="Copy SFX sound line" title="Copy SFX sound line">
+                  <button id="soundsSfxCopyButton" class="icon-button source-action-button source-copy-button" type="button" aria-label="Copy SFX sound line" title="Copy SFX sound line">
                     <svg data-editor-icon="copy" aria-hidden="true"></svg>
                   </button>
-                  <button id="soundsSfxInsertButton" class="source-action-button" type="button" aria-label="Add SFX to source" title="Add SFX to source">
+                  <button id="soundsSfxInsertButton" class="icon-button source-action-button" type="button" aria-label="Add SFX to source" title="Add SFX to source">
                     <svg data-editor-icon="file-plus-corner" aria-hidden="true"></svg>
                   </button>
-                  <button id="soundsSfxUpdateButton" class="source-action-button is-primary" type="button" aria-label="Update matching SFX in source" title="Update matching SFX in source">
+                  <button id="soundsSfxUpdateButton" class="icon-button source-action-button is-primary" type="button" aria-label="Update matching SFX in source" title="Update matching SFX in source">
                     <svg data-editor-icon="file-pen-line" aria-hidden="true"></svg>
                   </button>
                 </div>
@@ -819,21 +819,21 @@
               </div>
               <div class="sounds-section-actions">
                 <div id="soundsMusicTransport" class="sounds-transport" role="group" aria-label="Music transport">
-                  <button id="soundsMusicPlayButton" class="sounds-icon-button" type="button" aria-label="Play music" title="Play music">
+                  <button id="soundsMusicPlayButton" class="icon-button sounds-icon-button" type="button" aria-label="Play music" title="Play music">
                     <svg data-editor-icon="play" aria-hidden="true"></svg>
                   </button>
-                  <button id="soundsMusicRandomButton" class="sounds-icon-button" type="button" aria-label="Randomize music" title="Randomize music">
+                  <button id="soundsMusicRandomButton" class="icon-button sounds-icon-button" type="button" aria-label="Randomize music" title="Randomize music">
                     <svg data-editor-icon="shuffle" aria-hidden="true"></svg>
                   </button>
                 </div>
                 <div id="soundsMusicSourceActions" class="source-action-group source-preview-actions sounds-source-actions" role="group" aria-label="Music source actions">
-                  <button id="soundsMusicCopyButton" class="source-action-button source-copy-button" type="button" aria-label="Copy music sound line" title="Copy music sound line">
+                  <button id="soundsMusicCopyButton" class="icon-button source-action-button source-copy-button" type="button" aria-label="Copy music sound line" title="Copy music sound line">
                     <svg data-editor-icon="copy" aria-hidden="true"></svg>
                   </button>
-                  <button id="soundsMusicInsertButton" class="source-action-button" type="button" aria-label="Add music to source" title="Add music to source">
+                  <button id="soundsMusicInsertButton" class="icon-button source-action-button" type="button" aria-label="Add music to source" title="Add music to source">
                     <svg data-editor-icon="file-plus-corner" aria-hidden="true"></svg>
                   </button>
-                  <button id="soundsMusicUpdateButton" class="source-action-button is-primary" type="button" aria-label="Update matching music in source" title="Update matching music in source">
+                  <button id="soundsMusicUpdateButton" class="icon-button source-action-button is-primary" type="button" aria-label="Update matching music in source" title="Update matching music in source">
                     <svg data-editor-icon="file-pen-line" aria-hidden="true"></svg>
                   </button>
                 </div>

@@ -3,11 +3,14 @@ use crate::stable_hash::{fnv_mix, fnv_seed};
 use crate::state_slicer::SolverStateSlicer;
 use puzzle_core::{
     GridCompiledGame, GridRuleStep, GridSize, GridState, GridTransitionError, InputId, ObjectId,
+    TransitionCommand, transition_program_sequence_summary_outcome,
 };
 use puzzle_lang::LoadedGridGame;
-use puzzle_play::{GridGameSession, GridHeadlessSession};
+use puzzle_play::GridGameSession;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+
+const MAX_LOGICAL_AGAIN_STEPS: usize = 256;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GridStateKey<const D: usize> {
@@ -18,7 +21,6 @@ pub struct GridStateKey<const D: usize> {
     slots: Vec<u16>,
     visible_variables: Vec<i64>,
     level_fired_rules: Vec<u16>,
-    session: Vec<u8>,
 }
 
 impl<const D: usize> GridStateKey<D> {
@@ -27,12 +29,7 @@ impl<const D: usize> GridStateKey<D> {
     }
 
     fn from_search_state<Size: GridSize<D>>(state: &GridSearchState<D, Size>) -> Self {
-        let mut key = Self::from_parts(state.observation_state(), state.completed());
-        key.session = state.headless.search_key();
-        for byte in &key.session {
-            key.hash = fnv_mix(key.hash, u64::from(*byte));
-        }
-        key
+        Self::from_parts(state.observation_state(), state.completed())
     }
 
     fn from_parts<Size: GridSize<D>>(state: &GridState<D, Size>, completed: bool) -> Self {
@@ -69,45 +66,38 @@ impl<const D: usize> GridStateKey<D> {
                 .iter()
                 .map(|rule| rule.0)
                 .collect(),
-            session: Vec::new(),
         }
     }
 }
 
 #[derive(Clone, Debug)]
 pub struct GridSearchState<const D: usize, Size: GridSize<D>> {
-    headless: GridHeadlessSession<D, Size>,
-    input_history: Vec<InputId>,
+    state: GridState<D, Size>,
+    completed: bool,
 }
 
 impl<const D: usize, Size: GridSize<D>> GridSearchState<D, Size> {
-    fn new(headless: GridHeadlessSession<D, Size>) -> Self {
+    fn new(state: GridState<D, Size>) -> Self {
         Self {
-            headless,
-            input_history: Vec::new(),
+            state,
+            completed: false,
         }
     }
 
     pub fn state(&self) -> &GridState<D, Size> {
-        self.headless.state()
+        &self.state
     }
 
-    /// The state committed by the input before level-clear lifecycle and
-    /// navigation. For a non-completing input this is the continuation state.
     pub fn observation_state(&self) -> &GridState<D, Size> {
-        self.headless.observation_state()
-    }
-
-    pub fn input_history(&self) -> &[InputId] {
-        &self.input_history
+        &self.state
     }
 
     pub fn into_state(self) -> GridState<D, Size> {
-        self.headless.state().clone()
+        self.state
     }
 
     pub fn completed(&self) -> bool {
-        self.headless.completed()
+        self.completed
     }
 }
 
@@ -123,7 +113,6 @@ pub struct GridPuzzleDomain<const D: usize, Size: GridSize<D>> {
     inputs: Vec<InputId>,
     state_slicer: SolverStateSlicer<ObjectId>,
     goal: GridSearchGoal<D, Size>,
-    track_input_history: bool,
 }
 
 pub enum GridSearchGoal<const D: usize, Size: GridSize<D>> {
@@ -198,22 +187,16 @@ impl<const D: usize, Size: GridSize<D>> GridPuzzleDomain<D, Size> {
             inputs,
             state_slicer,
             goal,
-            track_input_history: true,
         }
-    }
-
-    pub fn without_input_history(mut self) -> Self {
-        self.track_input_history = false;
-        self
     }
 
     pub fn game(&self) -> &GridCompiledGame<D> {
         &self.game.game
     }
 
-    pub fn rules(&self) -> &[GridRuleStep<D>] {
+    pub fn rules(&self) -> Vec<&GridRuleStep<D>> {
         self.game
-            .program_for_level(self.level_index)
+            .program_steps_for_level(self.level_index)
             .unwrap_or_default()
     }
 
@@ -221,21 +204,73 @@ impl<const D: usize, Size: GridSize<D>> GridPuzzleDomain<D, Size> {
         &self,
         state: GridState<D, Size>,
     ) -> Result<GridSearchState<D, Size>, GridTransitionError<D>> {
+        self.programs()?;
         let state = self.state_slicer.project_state(&state);
-        GridHeadlessSession::from_level_state(&self.game, self.level_index, state)
-            .map(GridSearchState::new)
+        Ok(GridSearchState::new(state))
     }
 
     pub fn initial_session(
         &self,
         session: GridGameSession<D, Size>,
     ) -> Result<GridSearchState<D, Size>, GridTransitionError<D>> {
-        GridHeadlessSession::from_game_session_with_state_projection(
-            session,
-            self.level_index,
-            |state| self.state_slicer.project_state(state),
-        )
-        .map(GridSearchState::new)
+        self.initial_state(session.state().clone())
+    }
+
+    fn programs(
+        &self,
+    ) -> Result<Vec<&puzzle_core::GridExecutableProgram<D>>, GridTransitionError<D>> {
+        self.game
+            .programs_for_level(self.level_index)
+            .ok_or_else(|| {
+                GridTransitionError::InvalidCommand(format!(
+                    "solver level index out of range: {}",
+                    self.level_index
+                ))
+            })
+    }
+
+    fn apply_logical_input(
+        &self,
+        source: &GridSearchState<D, Size>,
+        input: InputId,
+    ) -> Result<GridSearchState<D, Size>, GridTransitionError<D>> {
+        let programs = self.programs()?;
+        let mut state = source.state.clone();
+        let mut next_input = input;
+        for again_index in 0..=MAX_LOGICAL_AGAIN_STEPS {
+            let outcome = transition_program_sequence_summary_outcome(
+                &self.game.game,
+                &state,
+                &programs,
+                next_input,
+            )?;
+            state = outcome.next_state;
+            let mut again = false;
+            let mut completed = source.completed;
+            for command in outcome.commands {
+                match command {
+                    TransitionCommand::Win | TransitionCommand::NextLevel => completed = true,
+                    TransitionCommand::Again => again = true,
+                    TransitionCommand::Checkpoint | TransitionCommand::ClearCheckpoint => {}
+                    TransitionCommand::Restart => {
+                        return Err(GridTransitionError::InvalidCommand(
+                            "logical solver transition cannot execute restart".to_string(),
+                        ));
+                    }
+                }
+            }
+            completed |= self.game.is_goal_complete(&state);
+            if completed || !again {
+                return Ok(GridSearchState { state, completed });
+            }
+            if again_index == MAX_LOGICAL_AGAIN_STEPS {
+                return Err(GridTransitionError::InvalidCommand(format!(
+                    "logical solver input exceeded {MAX_LOGICAL_AGAIN_STEPS} again steps"
+                )));
+            }
+            next_input = InputId(0);
+        }
+        unreachable!("logical again loop returns at its explicit bound")
     }
 }
 
@@ -258,19 +293,7 @@ impl<const D: usize, Size: GridSize<D>> SearchDomain for GridPuzzleDomain<D, Siz
         state: &Self::State,
         action: &Self::Action,
     ) -> Result<Self::State, Self::Error> {
-        let mut headless = state.headless.clone();
-        headless.apply_input(&self.game, *action)?;
-        let input_history = if self.track_input_history {
-            let mut input_history = state.input_history.clone();
-            input_history.push(*action);
-            input_history
-        } else {
-            Vec::new()
-        };
-        Ok(GridSearchState {
-            headless,
-            input_history,
-        })
+        self.apply_logical_input(state, *action)
     }
 
     fn is_goal(&self, state: &Self::State) -> bool {

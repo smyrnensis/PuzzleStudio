@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, HashMap};
 
 use puzzle_core::Coord3;
-use puzzle_core::{GridCompiledGame, GridExecutableProgram, GridInput, GridState, Size3};
+use puzzle_core::{
+    GridCompiledGame, GridExecutableProgram, GridInput, GridProgramCatalog, GridState, Size3,
+};
 
 use crate::{
     Catalog, Controls, DiagnosticReport, LoadedGridLevel, PuzzleRenderDef, SpatialPresentation,
@@ -11,6 +13,7 @@ use crate::{
 
 pub(crate) struct SpatialMaterialization {
     pub(crate) inputs: Vec<GridInput<3>>,
+    pub(crate) program_catalog: GridProgramCatalog<3>,
     pub(crate) levels: Vec<LoadedGridLevel<3, Size3>>,
     pub(crate) presentation: SpatialPresentation,
 }
@@ -19,14 +22,14 @@ pub(crate) fn materialize_spatial_model(
     model: &PuzzleModelSyntax,
     catalog: &Catalog,
     game: &GridCompiledGame<3>,
-    programs: &crate::LoweredPrograms,
+    programs: &mut crate::LoweredPrograms,
     controls: &Controls,
     input_labels: &HashMap<puzzle_core::InputId, String>,
     render: &PuzzleRenderDef,
     visuals: &VisualsDef,
 ) -> Result<SpatialMaterialization, DiagnosticReport> {
     let sprite_set = materialize_sprite_set(visuals)?;
-    let levels = materialize_levels(model, catalog, programs, game)?;
+    let (program_catalog, levels) = materialize_levels(model, catalog, programs, game)?;
     let viewport_focus_objects = materialize_viewport_focus(render, catalog);
     let rule_camera_effects = vec![Vec::new(); game.executable_program().rule_count()];
     Ok(SpatialMaterialization {
@@ -35,6 +38,7 @@ pub(crate) fn materialize_spatial_model(
             controls,
             input_labels,
         )?,
+        program_catalog,
         levels,
         presentation: SpatialPresentation {
             viewport_focus_objects,
@@ -184,9 +188,9 @@ fn materialize_voxels(
 fn materialize_levels(
     model: &PuzzleModelSyntax,
     catalog: &Catalog,
-    programs: &crate::LoweredPrograms,
+    programs: &mut crate::LoweredPrograms,
     game: &GridCompiledGame<3>,
-) -> Result<Vec<LoadedGridLevel<3, Size3>>, DiagnosticReport> {
+) -> Result<(GridProgramCatalog<3>, Vec<LoadedGridLevel<3, Size3>>), DiagnosticReport> {
     let mut legends = HashMap::<char, Vec<_>>::new();
     for legend in &model.body.levels.legends {
         let mut objects = Vec::new();
@@ -205,7 +209,8 @@ fn materialize_levels(
         }
         legends.insert(legend.ch, objects);
     }
-    model
+    let mut program_catalog = GridProgramCatalog::default();
+    let levels = model
         .body
         .levels
         .levels
@@ -291,7 +296,7 @@ fn materialize_levels(
                     }
                 }
             }
-            let program = programs.level_programs.get(index).cloned().ok_or_else(|| {
+            let program = programs.level_programs.get_mut(index).ok_or_else(|| {
                 DiagnosticReport::error(format!(
                     "canonical 3D level `{}` has no matching lowered program",
                     level.name
@@ -321,36 +326,51 @@ fn materialize_levels(
                         })?;
                 }
             }
+            let program = match std::mem::replace(program, crate::LoweredLevelProgram::Main) {
+                crate::LoweredLevelProgram::Main => puzzle_core::GridProgramSequence::main(),
+                crate::LoweredLevelProgram::WithSurrounding { before, after } => {
+                    let before = (!before.is_empty())
+                        .then(|| program_catalog.intern(GridExecutableProgram::new(before)));
+                    let after = (!after.is_empty())
+                        .then(|| program_catalog.intern(GridExecutableProgram::new(after)));
+                    puzzle_core::GridProgramSequence::with_surrounding(before, after)
+                }
+            };
+            let level_start_program = programs
+                .level_starts
+                .get_mut(index)
+                .ok_or_else(|| {
+                    DiagnosticReport::error(format!(
+                        "canonical 3D level `{}` has no matching level-start program slot",
+                        level.name
+                    ))
+                })?
+                .take()
+                .map(GridExecutableProgram::new)
+                .map(|program| program_catalog.intern(program));
+            let level_clear_program = programs
+                .level_clears
+                .get_mut(index)
+                .ok_or_else(|| {
+                    DiagnosticReport::error(format!(
+                        "canonical 3D level `{}` has no matching level-clear program slot",
+                        level.name
+                    ))
+                })?
+                .take()
+                .map(GridExecutableProgram::new)
+                .map(|program| program_catalog.intern(program));
             Ok(LoadedGridLevel {
                 name: level.name.clone(),
                 pack: level.pack.clone(),
                 puzzle: model.name.clone(),
                 initial_state,
                 regions: Vec::new(),
-                program: GridExecutableProgram::new(program),
-                level_start_program: programs
-                    .level_starts
-                    .get(index)
-                    .cloned()
-                    .ok_or_else(|| {
-                        DiagnosticReport::error(format!(
-                            "canonical 3D level `{}` has no matching level-start program slot",
-                            level.name
-                        ))
-                    })?
-                    .map(GridExecutableProgram::new),
-                level_clear_program: programs
-                    .level_clears
-                    .get(index)
-                    .cloned()
-                    .ok_or_else(|| {
-                        DiagnosticReport::error(format!(
-                            "canonical 3D level `{}` has no matching level-clear program slot",
-                            level.name
-                        ))
-                    })?
-                    .map(GridExecutableProgram::new),
+                program,
+                level_start_program,
+                level_clear_program,
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>, DiagnosticReport>>()?;
+    Ok((program_catalog, levels))
 }

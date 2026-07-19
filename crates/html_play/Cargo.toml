@@ -6,23 +6,18 @@ license.workspace = true
 
 [features]
 default = ["solver"]
-solver = ["dep:puzzle-solver"]
+solver = ["dep:puzzle-solver-runtime"]
 
 [[bin]]
 name = "html-play"
 path = "src/main.rs"
 
-[[bench]]
-name = "microban"
-harness = false
-
 [dependencies]
 puzzle-core = { path = "../core" }
-puzzle-core-wasm = { package = "puzzle-wasm-core", path = "../wasm_core" }
 puzzle-game-runtime = { path = "../game_runtime", default-features = false, features = ["editor-debug"] }
 puzzle-lang = { path = "../lang" }
 puzzle-runtime-contract = { path = "../runtime_contract" }
 puzzle-scene = { path = "../scene" }
 puzzle-play = { path = "../play" }
-puzzle-solver = { path = "../solver", optional = true }
+puzzle-solver-runtime = { path = "../solver_runtime", optional = true }
 serde_json = "1"

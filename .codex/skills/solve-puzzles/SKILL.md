@@ -7,6 +7,18 @@ description: Solve difficult PuzzleStudio levels by combining causal reasoning, 
 
 Read [references/solver-cli.md](references/solver-cli.md) completely before operating the solver. Calibrate against the live CLI contract described there instead of relying on remembered commands, JSON fields, PuzzleStudio source syntax, or old examples.
 
+Treat JSONL as the external agent-process protocol only. A successful `compile`
+creates a Rust-owned session whose compiled model, prepared rules, states,
+frontiers, and candidates remain behind handles. Never reconstruct or transport
+those owned artifacts through JavaScript or by copying fields from manifests.
+
+Treat the Rust solver runtime services as the owner of solver execution in every
+host. Built-in solving uses `SolverService`; agent semantic investigation uses
+the runtime's investigation service. Native HTTP, browser WASM, and the agent
+process may expose different transport and scheduling adapters, but they must
+not implement their own search setup, frontier lifecycle, replay, observation
+sampling, or terminal-result mapping.
+
 ## Objective
 
 Produce an input sequence that wins from the authoritative initial state. Treat the solver as an experimental instrument inside a model-based investigation of the puzzle. Use search to test and execute an explanation of the puzzle, not to replace one.
@@ -65,7 +77,7 @@ Use the heuristic surfaces actually exposed by the live CLI. When the current CL
 
 ## Allocate Search Deliberately
 
-Begin experiments with a modest state budget, commonly around 1000 states. Choose each budget from the hypothesis, expected solution depth, branching factor, and predicted observation. This is a calibration default, not a hard limit.
+Use 1000 states as the default budget for the first experimental search. Choose later budgets from the hypothesis, expected solution depth, branching factor, and predicted observation. This is a calibration default, not a hard limit.
 
 Increase a budget when observations support the current model, the frontier progresses in the predicted direction, and additional search has a specific evidential or solution value. Redirect the investigation when expansion stops distinguishing hypotheses, discovering structure, improving relevant features, or approaching a predicted condition.
 

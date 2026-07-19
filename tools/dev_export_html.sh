@@ -8,5 +8,4 @@ cd "$repo_root"
 # Rebuilding is usually a cheap no-op when Cargo's cache is already fresh.
 tools/build_wasm_player.sh
 tools/build_wasm_game.sh
-tools/build_wasm_core.sh
 exec cargo run -p html-play -- "$@"

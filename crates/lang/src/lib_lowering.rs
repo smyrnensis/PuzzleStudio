@@ -42,10 +42,18 @@ struct LoweredPrograms {
     last_level_clear: Option<Vec<CanonicalRuleStep>>,
     level_starts: Vec<Option<Vec<CanonicalRuleStep>>>,
     level_clears: Vec<Option<Vec<CanonicalRuleStep>>>,
-    level_programs: Vec<Vec<CanonicalRuleStep>>,
+    level_programs: Vec<LoweredLevelProgram>,
     rule_animations: HashMap<RuleId, Vec<RuleAnimation>>,
     rule_effects: HashMap<RuleId, Vec<RuleEffect>>,
     rule_debug_info: HashMap<RuleId, RuleDebugInfo>,
+}
+
+enum LoweredLevelProgram {
+    Main,
+    WithSurrounding {
+        before: Vec<CanonicalRuleStep>,
+        after: Vec<CanonicalRuleStep>,
+    },
 }
 
 #[derive(Clone, Debug, Default)]
@@ -210,10 +218,11 @@ fn lower_programs(
                 Vec::new()
             }
         };
-        let mut effective = before;
-        effective.extend(program.as_deref().unwrap_or_default().iter().cloned());
-        effective.extend(after);
-        level_programs.push(effective);
+        if before.is_empty() && after.is_empty() {
+            level_programs.push(LoweredLevelProgram::Main);
+        } else {
+            level_programs.push(LoweredLevelProgram::WithSurrounding { before, after });
+        }
 
         let mut context = StatementLoweringContext::default();
         context.input_allowed = false;

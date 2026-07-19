@@ -192,21 +192,6 @@ fn print_wasm_freshness_status() {
         ],
         "tools/build_wasm_game.sh",
     );
-    print_wasm_artifact_status(
-        "puzzle_core_wasm",
-        &[
-            Path::new("crates/wasm_core/static/puzzle_core_wasm.js"),
-            Path::new("crates/wasm_core/static/puzzle_core_wasm_bg.wasm"),
-        ],
-        &[
-            Path::new("crates/wasm_core/src"),
-            Path::new("crates/wasm_core/Cargo.toml"),
-            Path::new("crates/core/src"),
-            Path::new("crates/kernel/src"),
-            Path::new("Cargo.lock"),
-        ],
-        "tools/build_wasm_core.sh",
-    );
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -387,7 +372,7 @@ impl Config {
                 }
                 "--help" | "-h" => {
                     return Err(AppError::Config(
-                        "usage: html-play [path/to/game-folder-or-game.puzzle-or-game.puzzle3] [-o game.html] [--serve] [--port 7878] [--screenshot out.png] [--scene name] [--width 1280] [--height 720] [--browser path] [--solver-depth 128] [--solver-nodes 1000] [--solver-ms N]".to_string(),
+                        "usage: html-play [path/to/game-folder-or-game.puzzle-or-game.puzzle3] [-o game.html] [--serve] [--port 7878] [--screenshot out.png] [--scene name] [--width 1280] [--height 720] [--browser path] [--solver-depth 128] [--solver-nodes 1000000] [--solver-ms N]".to_string(),
                     ));
                 }
                 value => puzzle_path = Some(PathBuf::from(value)),

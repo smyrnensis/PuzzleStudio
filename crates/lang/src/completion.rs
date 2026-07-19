@@ -1169,6 +1169,22 @@ once hori [
                 item.label == "horizontal" && item.kind == CompletionKind::Direction
             })
         );
+
+        let cartesian_source = source.replace("hori", "x_a");
+        let rewrite_cursor = cartesian_source.find("once x_a").unwrap() + "once x_a".len();
+        let rewrite_list = suggest_source_completions(&cartesian_source, rewrite_cursor);
+        assert!(
+            rewrite_list
+                .items
+                .iter()
+                .any(|item| { item.label == "x_axis" && item.kind == CompletionKind::Direction })
+        );
+
+        let selector_cursor = cartesian_source.find("Box:x_a").unwrap() + "Box:x_a".len();
+        let selector_list = suggest_source_completions(&cartesian_source, selector_cursor);
+        assert!(selector_list.items.iter().any(|item| {
+            item.label == "x_axis" && item.kind == CompletionKind::ValueSet && item.detail == "tags"
+        }));
     }
 
     #[test]

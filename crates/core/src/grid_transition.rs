@@ -472,6 +472,23 @@ pub fn transition_program_outcome<const D: usize, Size: GridSize<D>>(
     transition_program_outcome_with_local_frame(game, state, program, input, None)
 }
 
+pub fn transition_program_sequence_outcome<const D: usize, Size: GridSize<D>>(
+    game: &GridCompiledGame<D>,
+    state: &GridState<D, Size>,
+    programs: &[&GridExecutableProgram<D>],
+    input: InputId,
+) -> Result<GridTransitionOutcome<D, Size>, GridTransitionError<D>> {
+    transition_program_sequence_inner(
+        game,
+        state,
+        programs,
+        Some(input),
+        None,
+        FiringCollection::Detailed,
+    )
+    .map(detailed_outcome)
+}
+
 pub fn transition_program_outcome_with_local_frame<const D: usize, Size: GridSize<D>>(
     game: &GridCompiledGame<D>,
     state: &GridState<D, Size>,
@@ -507,6 +524,23 @@ pub fn transition_program_summary_outcome<const D: usize, Size: GridSize<D>>(
     .map(summary_outcome)
 }
 
+pub fn transition_program_sequence_summary_outcome<const D: usize, Size: GridSize<D>>(
+    game: &GridCompiledGame<D>,
+    state: &GridState<D, Size>,
+    programs: &[&GridExecutableProgram<D>],
+    input: InputId,
+) -> Result<GridTransitionSummaryOutcome<D, Size>, GridTransitionError<D>> {
+    transition_program_sequence_inner(
+        game,
+        state,
+        programs,
+        Some(input),
+        None,
+        FiringCollection::Summary,
+    )
+    .map(summary_outcome)
+}
+
 fn transition_program_inner<const D: usize, Size: GridSize<D>>(
     game: &GridCompiledGame<D>,
     state: &GridState<D, Size>,
@@ -515,27 +549,54 @@ fn transition_program_inner<const D: usize, Size: GridSize<D>>(
     local_frame: Option<&LocalFrame<ObjectId>>,
     firing_collection: FiringCollection,
 ) -> Result<GridInternalTransitionOutcome<D, Size>, GridTransitionError<D>> {
+    transition_program_sequence_inner(
+        game,
+        state,
+        &[program],
+        input,
+        local_frame,
+        firing_collection,
+    )
+}
+
+fn transition_program_sequence_inner<const D: usize, Size: GridSize<D>>(
+    game: &GridCompiledGame<D>,
+    state: &GridState<D, Size>,
+    programs: &[&GridExecutableProgram<D>],
+    input: Option<InputId>,
+    local_frame: Option<&LocalFrame<ObjectId>>,
+    firing_collection: FiringCollection,
+) -> Result<GridInternalTransitionOutcome<D, Size>, GridTransitionError<D>> {
     let mut original = state.clone();
     original.clear_mark();
     let mut context = GridProgramContext::<D>::collecting(firing_collection);
     let mut next_state = original.clone();
-    let mut backend = GridProgramBackend {
-        game,
-        input,
-        context: &mut context,
-    };
-    let program_outcome = puzzle_kernel::execute_program(
-        &mut backend,
-        &mut next_state,
-        program,
-        local_frame,
-        UNTIL_STABLE_REPEAT_LIMIT,
-    )?;
+    let mut progressed = false;
+    let mut observable = false;
+    for program in programs {
+        let mut backend = GridProgramBackend {
+            game,
+            input,
+            context: &mut context,
+        };
+        let program_outcome = puzzle_kernel::execute_program(
+            &mut backend,
+            &mut next_state,
+            program,
+            local_frame,
+            UNTIL_STABLE_REPEAT_LIMIT,
+        )?;
+        progressed |= program_outcome.progressed;
+        observable |= program_outcome.observable;
+        if context.effects.cancelled {
+            break;
+        }
+    }
     let mut outcome = GridInternalTransitionOutcome {
         input,
         next_state,
-        progressed: !context.effects.cancelled && program_outcome.progressed,
-        observable: program_outcome.observable,
+        progressed: !context.effects.cancelled && progressed,
+        observable,
         cancelled: context.effects.cancelled,
         commands: context.effects.commands,
         firings: context.firings,

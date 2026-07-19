@@ -1,159 +1,144 @@
 # State View And Solver Slicing Spec
 
-This document defines the target contract for making solver state reduction an
-explicit analysis. It is a design target, not a description of the current
-implementation.
-
-## Goal
-
-The system exposes different state views for different consumers:
-
-- play and editor can work with all authored objects.
-- renderer consumes a render view produced by the runtime contract.
-- solver consumes a solver key derived from the complete logical session by
-  relevance analysis.
-
-The key distinction is whether an object can affect future gameplay observations
-that a given consumer is responsible for preserving.
+This document defines the state boundary shared by play, editor, and solver.
 
 ## State Views
 
-`logic_session`
+`real_state`
 
-- The authoritative stable state between semantic inputs.
-- It owns the active model state together with checkpoints, scene and session
-  values, routed worlds, selected and cleared levels, persistent variables,
-  lifecycle progress, and other context that can change a future input result.
-- A solver edge starts and ends at this boundary. Automatic `again` turns,
-  win/lose checks, and lifecycle or navigation effects complete inside the
-  edge. Presentation timing never advances it.
+- The complete model state observed and edited by play/editor.
+- It may contain authored objects that have no effect on the selected solver
+  goal or on any transition that can affect that goal.
+- Runtime state handles and authoritative replays use this view.
 
-`logic_state`
+`solver_logical_state`
 
-- The model-local board state inside `logic_session` after applying authored
-  rules.
-- It may contain objects that are useful only for drawing, inspection, or editor
-  workflows.
-- It is the editable state surface for the editor unless a narrower editing mode
-  explicitly says otherwise.
+- The relevance-projected model state stored in solver nodes.
+- It is the only state admitted to the frontier, visited table, duplicate key,
+  heuristic, dead-end predicate, and candidate record.
+- It contains no checkpoint, navigation wait, editor presentation state,
+  lifecycle bookkeeping, provenance, witness history, or other state outside
+  the compiled logical transition needed by the search.
+
+`materialized_observation`
+
+- A `real_state` reconstructed for an explicitly selected logical candidate.
+- Reconstruction starts from the candidate search's authoritative real root and
+  replays its witness inputs through `puzzle-play`.
+- The runtime projects the reconstructed result and verifies equality with the
+  candidate's `solver_logical_state` before exposing a reusable state handle.
+- It is never attached to every search node or used as a solver key.
 
 `render_state`
 
-- The state or scene view used for drawing.
-- It is produced by Rust/runtime-owned APIs.
-- Browser/editor JavaScript must not reconstruct solver semantics from source
-  syntax, naming conventions, or renderer internals.
+- A runtime-owned view of a real or materialized state for drawing.
+- Browser/editor JavaScript consumes this view and does not infer solver or
+  language semantics from source text, names, or sprites.
 
-`solver_key_state`
+## Search-State Contract
 
-- The canonical state used for solver duplicate detection, transition cache
-  keys, and search frontier membership.
-- It is derived from `logic_session` by solver relevance analysis. Equal board
-  slots are not sufficient when checkpoint, scene/session, level, persistent,
-  routing, or lifecycle context can change future behavior.
-- It may omit objects whose presence cannot affect future solver-visible
-  gameplay results.
+A stored search node consists of:
 
-These views may share storage internally, but their public contracts must stay
-separate.
+- one `solver_logical_state`;
+- goal-completion metadata required by the search algorithm;
+- parent/action linkage owned by the search machine.
 
-## Authoring Contract
+The witness input sequence is reconstructed from parent/action linkage. Run
+provenance, editor history, a real board snapshot, and replay/session state are
+owned outside the node.
 
-Object spelling must not be the semantic source of solver relevance. A naming
-convention alone must not make an object solver-pruned, collision free, or
-editor-restricted.
-
-Authored state evolution uses ordinary deterministic rules. Solver pruning
-decides whether the result matters for solving.
+Solver inputs are compiled logical inputs. Session operations such as undo,
+restart, level selection, and navigation are not search actions. A compiled
+effect that requires unsupported session semantics fails at the solver
+transition boundary; it does not switch the search to a full session state.
 
 ## Solver Relevance
 
-Solver relevance is backward liveness over compiled rule behavior. A rule read
-becomes relevant only when that read can affect a relevant output.
+Relevance is backward liveness over compiled rules. A read becomes relevant
+only when it can affect a relevant output.
 
 Roots include:
 
-- win and lose conditions, and `solver { deadend <query> }` predicates;
-- checkpoint and restart anchors, active/selected/cleared level state,
-  lifecycle and navigation state, persistent variables, routed worlds, and
-  scene/session values that can affect a later input;
-- query values used by gameplay conditions, goals, or solver-visible reports;
-- input availability and input-dependent transition differences;
-- movement, collision, and layer occupancy that can change relevant objects;
-- writes to already relevant objects;
-- deterministic gameplay RNG state and counters.
+- the active goal and lose conditions;
+- `solver { deadend <query> }` and solver strategy predicates;
+- query values used by the selected goal or heuristic;
+- movement, collision, layers, and writes that can change a rooted object;
+- deterministic gameplay random state when its consumption can change a
+  relevant transition.
 
 Propagation rules:
 
-- If a rule can write a relevant object or relevant mark, the rule's LHS,
-  conditions, selector bindings, and required input dependencies become
-  relevant.
-- If a rule writes only irrelevant objects, its LHS and conditions do not become
-  relevant merely because the rule exists.
-- Self-maintaining projection rules such as `[ no Floor ] -> [ Floor ]` do not
-  keep `Floor` relevant unless another relevant root reads `Floor` or a rule
-  uses it to affect a relevant result.
-- Relevance is computed to a fixed point over compiled rules and compiled
-  selectors, not over authoring syntax.
+- If a rule can write a relevant object or mark, its LHS, conditions, selector
+  bindings, and input dependencies become relevant.
+- A rule that writes only irrelevant objects does not keep its reads relevant
+  merely because it exists.
+- Relevance reaches a fixed point over compiled rules and selectors, not source
+  spelling.
+- Object names and rendering roles never determine relevance.
 
-Ambiguity must be visible. If the analysis cannot prove that pruning preserves
-solver-visible behavior, the object or dependency remains relevant or the
-compiler/solver reports a specific unsupported case.
+The projection must be closed under the logical transition used by the solver.
+If analysis cannot establish that closure, compilation or search reports the
+unsupported dependency. It must not retain the complete real state as a silent
+fallback.
+
+## Materialization Contract
+
+Logical-to-real reconstruction is an explicit runtime operation:
+
+```txt
+authoritative real root + witness inputs
+  -> puzzle-play replay
+  -> reconstructed real state
+  -> solver projection
+  -> equality check against logical candidate
+```
+
+`puzzle-solver-runtime` owns this orchestration. `puzzle-play` owns game
+initialization and replay semantics. The editor decides which candidate to
+observe, but does not implement reconstruction in JavaScript.
+
+Materialization cost is proportional to the selected witness. Search expansion
+does not pay that cost and does not retain the result. A UI that wants previews
+requests them for selected candidates or progress checkpoints, not for every
+frontier node.
 
 ## Editor Contract
 
-The editor should not restrict editing to solver-relevant objects. It may place,
-remove, inspect, and save any authored object in `logic_state`.
+The editor can place, remove, inspect, and save every authored object in
+`real_state`, including solver-pruned objects. It may display runtime-provided
+labels such as solver-relevant, solver-pruned, random-dependent, or unsupported.
 
-The editor may surface analysis results such as:
-
-- solver-relevant;
-- solver-pruned;
-- random-dependent;
-- ambiguous or unsupported for solver pruning.
-
-Those labels are explanatory, not object ownership declarations. They must come
-from Rust/runtime analysis data, not from editor-side source scanning.
-
-Preview and solver panes may render different views, but the difference must be
-named in the API response. A solver preview can display `solver_key_state` or a
-solver observation view; an editing preview should display the runtime/render
-view.
+A solver preview must identify whether it displays a logical projection or a
+materialized real observation. An editing preview displays the real/render
+view. Both views come from typed Rust-owned contracts.
 
 ## Random
 
-Random behavior in this project must remain deterministic.
+Gameplay random remains deterministic and solver-visible whenever its
+consumption can affect a relevant future transition. Cosmetic random uses a
+separate deterministic render domain and never advances gameplay random state.
 
-Gameplay random belongs to the solver-visible deterministic state model. If a
-rule consumes gameplay random, that consumption is relevant unless the compiler
-can prove that removing the rule cannot change any later gameplay random value.
-
-Cosmetic or render random must use a separate deterministic domain. It should be
-derived from stable inputs such as state identity, object identity, position,
-turn/frame, and a named render salt. It must not advance gameplay RNG state.
-
-A rule or effect that mixes prunable writes with gameplay RNG
-consumption is not silently pruned. It is either kept relevant or rejected with a
-specific diagnostic.
+A transition that mixes prunable writes with relevant gameplay RNG consumption
+is retained or rejected with a specific diagnostic.
 
 ## Non-Goals
 
-This contract does not require full automatic semantic inference from visuals,
-sprite names, object adjacency, or current sample usage.
+- Solver slicing does not restrict what the editor can author.
+- Visual appearance, sprite names, and object adjacency are not semantic
+  relevance declarations.
+- Materialization is not a second search representation.
+- Provenance categories such as reachable and counterfactual do not alter the
+  contents of an internal solver node.
 
-It does not promise that every object irrelevant to a particular goal can be
-removed from play/editor state. Solver slicing is a solver key optimization and
-analysis contract first.
+## Verification
 
-It does not make editor JavaScript a second compiler. The source of truth for
-state view classification remains Rust-owned compiled analysis.
+Tests must establish that:
 
-## Migration Shape
-
-1. Introduce solver relevance reports without changing editor editing behavior.
-2. Use the complete logical session as the conservative solver cache/frontier
-   key, then apply only proven relevance reductions.
-3. Remove naming-based classification only after tests prove relevance reports
-   cover the existing cases.
-4. Update user-facing docs only after implementation behavior matches the new
-   contract.
+1. irrelevant authored objects are absent from every inspected search
+   candidate state;
+2. duplicate keys are computed from the projected logical state;
+3. a selected witness reconstructs a real state containing preserved
+   solver-irrelevant objects;
+4. projecting that real state exactly reproduces the logical candidate;
+5. agent and editor adapters use the same runtime search and materialization
+   implementation.

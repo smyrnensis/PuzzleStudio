@@ -1,21 +1,116 @@
 use puzzle_core::{
-    GridCompiledGame, GridCoord, GridExecutableProgram, GridGoalCondition, GridInput, GridLevel,
-    GridLevelBundle, GridSize, GridState, LayerId, LocalFrame, MarkId, ObjectId, RuleId, Size2,
+    GridCompiledGame, GridCoord, GridSize, GridState, LayerId, MarkId, ObjectId, RuleId, Size2,
     Size3,
 };
 pub use puzzle_scene::SceneEffect as LifecycleCommand;
 use serde::{
-    Deserialize, Deserializer, Serialize, Serializer, de::DeserializeOwned, ser::SerializeStruct,
+    Deserialize, Deserializer, Serialize,
+    de::{self, MapAccess, Visitor},
 };
-use serde_json::Value;
+use std::fmt;
 
-pub const RUNTIME_CONTRACT_VERSION: u16 = 7;
+pub const STANDALONE_RUNTIME_EXPORT_VERSION: u16 = 2;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeLoadedDocumentBundle<Document> {
+    pub version: u16,
+    pub document: Document,
+}
+
+impl<'de, Document> Deserialize<'de> for RuntimeLoadedDocumentBundle<Document>
+where
+    Document: Deserialize<'de>,
+{
+    fn deserialize<DeserializerType>(
+        deserializer: DeserializerType,
+    ) -> Result<Self, DeserializerType::Error>
+    where
+        DeserializerType: Deserializer<'de>,
+    {
+        struct BundleVisitor<Document>(std::marker::PhantomData<Document>);
+
+        impl<'de, Document> Visitor<'de> for BundleVisitor<Document>
+        where
+            Document: Deserialize<'de>,
+        {
+            type Value = RuntimeLoadedDocumentBundle<Document>;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a versioned runtime loaded document bundle")
+            }
+
+            fn visit_map<Access>(self, mut map: Access) -> Result<Self::Value, Access::Error>
+            where
+                Access: MapAccess<'de>,
+            {
+                let mut version = None;
+                let mut document = None;
+                while let Some(field) = map.next_key::<String>()? {
+                    match field.as_str() {
+                        "version" => {
+                            if version.is_some() {
+                                return Err(de::Error::duplicate_field("version"));
+                            }
+                            let value = map.next_value::<u16>()?;
+                            if value != STANDALONE_RUNTIME_EXPORT_VERSION {
+                                return Err(de::Error::custom(format!(
+                                    "unsupported runtimeLoadedDocument version: {value}"
+                                )));
+                            }
+                            version = Some(value);
+                        }
+                        "document" => {
+                            if document.is_some() {
+                                return Err(de::Error::duplicate_field("document"));
+                            }
+                            document = Some(map.next_value()?);
+                        }
+                        _ => {
+                            return Err(de::Error::unknown_field(&field, &["version", "document"]));
+                        }
+                    }
+                }
+                Ok(RuntimeLoadedDocumentBundle {
+                    version: version.ok_or_else(|| de::Error::missing_field("version"))?,
+                    document: document.ok_or_else(|| de::Error::missing_field("document"))?,
+                })
+            }
+        }
+
+        deserializer.deserialize_map(BundleVisitor(std::marker::PhantomData))
+    }
+}
+
+impl<Document> RuntimeLoadedDocumentBundle<Document> {
+    pub fn new(document: Document) -> Self {
+        Self {
+            version: STANDALONE_RUNTIME_EXPORT_VERSION,
+            document,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StandaloneRuntimeExport<Document> {
+    pub runtime_loaded_document: RuntimeLoadedDocumentBundle<Document>,
+}
+
+impl<Document> StandaloneRuntimeExport<Document> {
+    pub fn new(document: Document) -> Self {
+        Self {
+            runtime_loaded_document: RuntimeLoadedDocumentBundle::new(document),
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SessionAction {
     Snapshot,
     Input { name: String },
+    Resume,
     DebugInput { name: String },
     Undo,
     Redo,
@@ -87,15 +182,126 @@ pub struct RuntimeStateSnapshot3d {
     pub level_fired_rules: Vec<u16>,
 }
 
-pub trait RuntimeGridSize<const D: usize>: GridSize<D> + Serialize + DeserializeOwned {
-    type Snapshot: Clone + Serialize + DeserializeOwned;
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", deny_unknown_fields)]
+pub enum SolverStateSnapshot {
+    #[serde(rename = "2d", rename_all = "camelCase")]
+    TwoD {
+        width: u16,
+        height: u16,
+        layer_count: u16,
+        slots: Vec<u16>,
+        slot_marks: Vec<Vec<RuntimeMarkValue>>,
+        cell_marks: Vec<Vec<RuntimeMarkValue>>,
+        variables: Vec<i64>,
+        level_fired_rules: Vec<u16>,
+    },
+    #[serde(rename = "puzzle3d", rename_all = "camelCase")]
+    ThreeD {
+        width: u16,
+        depth: u16,
+        height: u16,
+        layer_count: u16,
+        slots: Vec<u16>,
+        slot_marks: Vec<Vec<RuntimeMarkValue>>,
+        cell_marks: Vec<Vec<RuntimeMarkValue>>,
+        variables: Vec<i64>,
+        level_fired_rules: Vec<u16>,
+    },
+}
 
-    fn snapshot(state: &GridState<D, Self>) -> Self::Snapshot;
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SolverPreparedArtifact {
+    pub artifact_id: String,
+    pub model_kind: RuntimeModelKind,
+    pub level_count: usize,
+}
 
-    fn state(
-        game: &GridCompiledGame<D>,
-        snapshot: Self::Snapshot,
-    ) -> Result<GridState<D, Self>, String>;
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SolverSearchRequest {
+    pub level_index: usize,
+    pub state: SolverStateSnapshot,
+    pub materialize_level_start: bool,
+    pub max_depth: u32,
+    pub max_nodes: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SolverSearchStatus {
+    Paused,
+    Solved,
+    Exhausted,
+    BudgetExceeded,
+    ResourceLimit,
+    Failed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SolverSearchStats {
+    pub visited: usize,
+    pub expanded: usize,
+    pub frontier: usize,
+    pub max_depth_reached: u32,
+    pub elapsed_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SolverSearchProgress {
+    pub visited: usize,
+    pub expanded: usize,
+    pub frontier: usize,
+    pub max_depth_reached: u32,
+    pub depth: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SolverObservation {
+    pub progress: SolverSearchProgress,
+    pub state: SolverStateSnapshot,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SolverMove {
+    pub id: u16,
+    pub name: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SolverStep {
+    pub index: usize,
+    #[serde(rename = "move")]
+    pub input: Option<SolverMove>,
+    pub state: SolverStateSnapshot,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SolverResult {
+    pub model: RuntimeModelKind,
+    pub result: SolverSearchStatus,
+    pub depth: Option<u32>,
+    pub moves: Vec<SolverMove>,
+    pub steps: Vec<SolverStep>,
+    pub observations: Vec<SolverObservation>,
+    pub stats: SolverSearchStats,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SolverAdvanceResponse {
+    pub status: SolverSearchStatus,
+    pub stats: SolverSearchStats,
+    pub observation: Option<SolverObservation>,
+    pub result: Option<SolverResult>,
 }
 
 impl RuntimeStateSnapshot2d {
@@ -134,6 +340,96 @@ impl RuntimeStateSnapshot2d {
     }
 }
 
+impl SolverStateSnapshot {
+    pub fn from_state2(state: &GridState<2, Size2>) -> Self {
+        Self::TwoD {
+            width: state.size.width,
+            height: state.size.height,
+            layer_count: state.layer_count,
+            slots: state.slots().iter().map(|object| object.0).collect(),
+            slot_marks: runtime_marks(state.slot_mark()),
+            cell_marks: runtime_marks(state.cell_mark()),
+            variables: state.visible_variables().to_vec(),
+            level_fired_rules: state
+                .level_fired_rules()
+                .iter()
+                .map(|rule| rule.0)
+                .collect(),
+        }
+    }
+
+    pub fn from_state3(state: &GridState<3, Size3>) -> Self {
+        Self::ThreeD {
+            width: state.size.width,
+            depth: state.size.depth,
+            height: state.size.height,
+            layer_count: state.layer_count,
+            slots: state.slots().iter().map(|object| object.0).collect(),
+            slot_marks: runtime_marks(state.slot_mark()),
+            cell_marks: runtime_marks(state.cell_mark()),
+            variables: state.visible_variables().to_vec(),
+            level_fired_rules: state
+                .level_fired_rules()
+                .iter()
+                .map(|rule| rule.0)
+                .collect(),
+        }
+    }
+
+    pub fn into_state2(self, game: &GridCompiledGame<2>) -> Result<GridState<2, Size2>, String> {
+        let Self::TwoD {
+            width,
+            height,
+            layer_count,
+            slots,
+            slot_marks,
+            cell_marks,
+            variables,
+            level_fired_rules,
+        } = self
+        else {
+            return Err("solver state kind must be 2d".to_string());
+        };
+        decode_runtime_state(
+            game,
+            Size2::new(width, height),
+            layer_count,
+            slots,
+            slot_marks,
+            cell_marks,
+            variables,
+            level_fired_rules,
+        )
+    }
+
+    pub fn into_state3(self, game: &GridCompiledGame<3>) -> Result<GridState<3, Size3>, String> {
+        let Self::ThreeD {
+            width,
+            depth,
+            height,
+            layer_count,
+            slots,
+            slot_marks,
+            cell_marks,
+            variables,
+            level_fired_rules,
+        } = self
+        else {
+            return Err("solver state kind must be puzzle3d".to_string());
+        };
+        decode_runtime_state(
+            game,
+            Size3::new(width, depth, height),
+            layer_count,
+            slots,
+            slot_marks,
+            cell_marks,
+            variables,
+            level_fired_rules,
+        )
+    }
+}
+
 impl RuntimeStateSnapshot3d {
     pub fn from_state(state: &GridState<3, Size3>) -> Self {
         Self {
@@ -168,36 +464,6 @@ impl RuntimeStateSnapshot3d {
             self.variables,
             self.level_fired_rules,
         )
-    }
-}
-
-impl RuntimeGridSize<2> for Size2 {
-    type Snapshot = RuntimeStateSnapshot2d;
-
-    fn snapshot(state: &GridState<2, Self>) -> Self::Snapshot {
-        RuntimeStateSnapshot2d::from_state(state)
-    }
-
-    fn state(
-        game: &GridCompiledGame<2>,
-        snapshot: Self::Snapshot,
-    ) -> Result<GridState<2, Self>, String> {
-        snapshot.into_state(game)
-    }
-}
-
-impl RuntimeGridSize<3> for Size3 {
-    type Snapshot = RuntimeStateSnapshot3d;
-
-    fn snapshot(state: &GridState<3, Self>) -> Self::Snapshot {
-        RuntimeStateSnapshot3d::from_state(state)
-    }
-
-    fn state(
-        game: &GridCompiledGame<3>,
-        snapshot: Self::Snapshot,
-    ) -> Result<GridState<3, Self>, String> {
-        snapshot.into_state(game)
     }
 }
 
@@ -490,13 +756,6 @@ pub enum RuntimeEffect {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RuntimeRuleEffects {
-    pub rule: u16,
-    pub effects: Vec<RuntimeEffect>,
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeRuleFiring {
@@ -519,9 +778,9 @@ pub struct RuntimeTransitionProgramOutcome {
 }
 
 impl RuntimeTransitionProgramOutcome {
-    pub fn to_json_string(&self) -> Result<String, RuntimeContractError> {
+    pub fn to_json_string(&self) -> Result<String, RuntimeJsonError> {
         serde_json::to_string(self)
-            .map_err(|error| RuntimeContractError::InvalidJson(error.to_string()))
+            .map_err(|error| RuntimeJsonError::InvalidJson(error.to_string()))
     }
 }
 
@@ -547,78 +806,10 @@ pub struct RuntimeTransitionCurrentOutcome {
 }
 
 impl RuntimeTransitionCurrentOutcome {
-    pub fn to_json_string(&self) -> Result<String, RuntimeContractError> {
+    pub fn to_json_string(&self) -> Result<String, RuntimeJsonError> {
         serde_json::to_string(self)
-            .map_err(|error| RuntimeContractError::InvalidJson(error.to_string()))
+            .map_err(|error| RuntimeJsonError::InvalidJson(error.to_string()))
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RuntimeLifecycle<Program> {
-    pub on_level_start: Option<Program>,
-    pub on_level_clear: Option<Program>,
-    pub on_last_level_clear: Option<Program>,
-}
-
-impl<Program> Default for RuntimeLifecycle<Program> {
-    fn default() -> Self {
-        Self {
-            on_level_start: None,
-            on_level_clear: None,
-            on_last_level_clear: None,
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RuntimeContract<Model> {
-    pub version: u16,
-    pub model: Model,
-}
-
-impl<Model: RuntimeModel> RuntimeContract<Model> {
-    pub fn checked_new(model: Model) -> Result<Self, RuntimeContractError> {
-        let contract = Self {
-            version: RUNTIME_CONTRACT_VERSION,
-            model,
-        };
-        contract.validate()?;
-        Ok(contract)
-    }
-
-    pub fn validate(&self) -> Result<(), RuntimeContractError> {
-        if self.version != RUNTIME_CONTRACT_VERSION {
-            return Err(RuntimeContractError::UnsupportedVersion {
-                version: self.version,
-            });
-        }
-        self.model.validate()
-    }
-}
-
-pub trait RuntimeModel {
-    fn validate(&self) -> Result<(), RuntimeContractError>;
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GridPresentation<CameraEffect> {
-    pub local_frame: Option<LocalFrame<ObjectId>>,
-    pub rule_camera_effects: Vec<Vec<CameraEffect>>,
-    pub on_level_start_camera_effects: Vec<Vec<CameraEffect>>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct GridRuntimeModel<const D: usize, Size: RuntimeGridSize<D>, CameraEffect> {
-    pub game: GridCompiledGame<D>,
-    pub inputs: Vec<GridInput<D>>,
-    pub level_bundle: GridLevelBundle<D, Size>,
-    pub goal: Option<GridGoalCondition<D>>,
-    pub rule_effects: Vec<RuntimeRuleEffects>,
-    pub lifecycle: RuntimeLifecycle<GridExecutableProgram<D>>,
-    pub presentation: GridPresentation<CameraEffect>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -631,416 +822,81 @@ pub enum CameraEffect {
     Reset,
 }
 
-impl<const D: usize, Size: RuntimeGridSize<D>, PresentationEffect>
-    GridRuntimeModel<D, Size, PresentationEffect>
-{
-    pub fn checked_new(
-        game: GridCompiledGame<D>,
-        inputs: Vec<GridInput<D>>,
-        level_bundle: GridLevelBundle<D, Size>,
-        goal: Option<GridGoalCondition<D>>,
-        rule_effects: Vec<RuntimeRuleEffects>,
-        lifecycle: RuntimeLifecycle<GridExecutableProgram<D>>,
-        presentation: GridPresentation<PresentationEffect>,
-    ) -> Result<Self, RuntimeContractError> {
-        let model = Self {
-            game,
-            inputs,
-            level_bundle,
-            goal,
-            rule_effects,
-            lifecycle,
-            presentation,
-        };
-        model.validate()?;
-        Ok(model)
-    }
-
-    pub fn validate(&self) -> Result<(), RuntimeContractError> {
-        validate_grid_runtime_model(self)
-    }
-}
-
-impl<const D: usize, Size: RuntimeGridSize<D>, PresentationEffect> RuntimeModel
-    for GridRuntimeModel<D, Size, PresentationEffect>
-{
-    fn validate(&self) -> Result<(), RuntimeContractError> {
-        validate_grid_runtime_model(self)
-    }
-}
-
-fn validate_grid_runtime_model<const D: usize, Size: RuntimeGridSize<D>, PresentationEffect>(
-    model: &GridRuntimeModel<D, Size, PresentationEffect>,
-) -> Result<(), RuntimeContractError> {
-    model
-        .game
-        .validate()
-        .map_err(|error| RuntimeContractError::InvalidGame(format!("{error:?}")))?;
-    if model.level_bundle.game != model.game {
-        return Err(RuntimeContractError::InvalidLevelBundle(
-            "level bundle game does not match runtime contract game".to_string(),
-        ));
-    }
-    model
-        .level_bundle
-        .validate()
-        .map_err(|error| RuntimeContractError::InvalidLevelBundle(format!("{error:?}")))?;
-    let rule_count = model.game.executable_program().rule_count();
-    let level_start_rule_count = model
-        .lifecycle
-        .on_level_start
-        .as_ref()
-        .map_or(0, |program| program.rule_count());
-    if model.presentation.rule_camera_effects.len() != rule_count {
-        return Err(RuntimeContractError::InvalidPresentationEffects {
-            owner: "ruleCameraEffects".to_string(),
-        });
-    }
-    if model.presentation.on_level_start_camera_effects.len() != level_start_rule_count {
-        return Err(RuntimeContractError::InvalidPresentationEffects {
-            owner: "onLevelStartCameraEffects".to_string(),
-        });
-    }
-    Ok(())
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[serde(bound(
-    serialize = "Snapshot: Serialize",
-    deserialize = "Snapshot: DeserializeOwned"
-))]
-struct RuntimeGridLevelBundleWire<const D: usize, Snapshot> {
-    levels: Vec<RuntimeGridLevelWire<D, Snapshot>>,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[serde(bound(
-    serialize = "Snapshot: Serialize",
-    deserialize = "Snapshot: DeserializeOwned"
-))]
-struct RuntimeGridLevelWire<const D: usize, Snapshot> {
-    name: String,
-    initial_state: Snapshot,
-    program: GridExecutableProgram<D>,
-    level_start_program: Option<GridExecutableProgram<D>>,
-    level_clear_program: Option<GridExecutableProgram<D>>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[serde(bound(deserialize = "Snapshot: DeserializeOwned, CameraEffect: DeserializeOwned"))]
-struct RuntimeGridModelWire<const D: usize, Snapshot, CameraEffect> {
-    game: GridCompiledGame<D>,
-    inputs: Vec<GridInput<D>>,
-    level_bundle: RuntimeGridLevelBundleWire<D, Snapshot>,
-    goal: Option<GridGoalCondition<D>>,
-    rule_effects: Vec<RuntimeRuleEffects>,
-    lifecycle: RuntimeLifecycle<GridExecutableProgram<D>>,
-    presentation: GridPresentation<CameraEffect>,
-}
-
-fn runtime_level_bundle_wire<const D: usize, Size>(
-    bundle: &GridLevelBundle<D, Size>,
-) -> RuntimeGridLevelBundleWire<D, Size::Snapshot>
-where
-    Size: RuntimeGridSize<D>,
-{
-    RuntimeGridLevelBundleWire::<D, Size::Snapshot> {
-        levels: bundle
-            .levels
-            .iter()
-            .map(|level| RuntimeGridLevelWire {
-                name: level.name.clone(),
-                initial_state: Size::snapshot(&level.initial_state),
-                program: level.program.clone(),
-                level_start_program: level.level_start_program.clone(),
-                level_clear_program: level.level_clear_program.clone(),
-            })
-            .collect(),
-    }
-}
-
-fn runtime_level_bundle_from_wire<const D: usize, Size>(
-    game: &GridCompiledGame<D>,
-    wire: RuntimeGridLevelBundleWire<D, Size::Snapshot>,
-) -> Result<GridLevelBundle<D, Size>, String>
-where
-    Size: RuntimeGridSize<D>,
-{
-    let levels = wire
-        .levels
-        .into_iter()
-        .map(|level| {
-            let initial_state = Size::state(game, level.initial_state)?;
-            Ok(GridLevel::new(
-                level.name,
-                initial_state,
-                level.program,
-                level.level_start_program,
-                level.level_clear_program,
-            ))
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    GridLevelBundle::checked_new(game.clone(), levels).map_err(|error| format!("{error:?}"))
-}
-
-impl<const D: usize, Size, CameraEffect> Serialize for GridRuntimeModel<D, Size, CameraEffect>
-where
-    Size: RuntimeGridSize<D>,
-    CameraEffect: Serialize,
-{
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let level_bundle = runtime_level_bundle_wire(&self.level_bundle);
-        let mut wire = serializer.serialize_struct("GridRuntimeModel", 7)?;
-        wire.serialize_field("game", &self.game)?;
-        wire.serialize_field("inputs", &self.inputs)?;
-        wire.serialize_field("levelBundle", &level_bundle)?;
-        wire.serialize_field("goal", &self.goal)?;
-        wire.serialize_field("ruleEffects", &self.rule_effects)?;
-        wire.serialize_field("lifecycle", &self.lifecycle)?;
-        wire.serialize_field("presentation", &self.presentation)?;
-        wire.end()
-    }
-}
-
-impl<'de, const D: usize, Size, CameraEffect> Deserialize<'de>
-    for GridRuntimeModel<D, Size, CameraEffect>
-where
-    Size: RuntimeGridSize<D>,
-    CameraEffect: DeserializeOwned,
-{
-    fn deserialize<De>(deserializer: De) -> Result<Self, De::Error>
-    where
-        De: Deserializer<'de>,
-    {
-        let wire =
-            RuntimeGridModelWire::<D, Size::Snapshot, CameraEffect>::deserialize(deserializer)?;
-        let level_bundle = runtime_level_bundle_from_wire(&wire.game, wire.level_bundle)
-            .map_err(serde::de::Error::custom)?;
-        Ok(Self {
-            game: wire.game,
-            inputs: wire.inputs,
-            level_bundle,
-            goal: wire.goal,
-            rule_effects: wire.rule_effects,
-            lifecycle: wire.lifecycle,
-            presentation: wire.presentation,
-        })
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum RuntimeContractError {
-    MissingRuntimeContract,
+pub enum RuntimeJsonError {
     InvalidJson(String),
-    UnsupportedVersion { version: u16 },
-    UnsupportedModelKind(String),
-    InvalidGame(String),
-    InvalidLevelBundle(String),
-    InvalidPresentationEffects { owner: String },
 }
 
-impl std::fmt::Display for RuntimeContractError {
+impl std::fmt::Display for RuntimeJsonError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::MissingRuntimeContract => {
-                write!(f, "runtime fixture is missing runtimeContract")
-            }
             Self::InvalidJson(error) => {
-                write!(f, "invalid runtimeContract: {error}")
-            }
-            Self::UnsupportedVersion { version } => {
-                write!(f, "unsupported runtimeContract version: {version}")
-            }
-            Self::UnsupportedModelKind(kind) => {
-                write!(f, "unsupported runtimeContract model kind: {kind}")
-            }
-            Self::InvalidGame(error) => {
-                write!(f, "invalid runtimeContract model game: {error}")
-            }
-            Self::InvalidLevelBundle(error) => {
-                write!(f, "invalid runtimeContract model level bundle: {error}")
-            }
-            Self::InvalidPresentationEffects { owner } => {
-                write!(f, "invalid runtimeContract presentation effects at {owner}")
+                write!(f, "invalid runtime JSON: {error}")
             }
         }
     }
 }
 
-impl std::error::Error for RuntimeContractError {}
-
-pub fn runtime_contract_json<Model>(
-    contract: &RuntimeContract<Model>,
-) -> Result<String, RuntimeContractError>
-where
-    Model: RuntimeModel + Serialize,
-{
-    contract.validate()?;
-    serde_json::to_string(contract)
-        .map_err(|error| RuntimeContractError::InvalidJson(error.to_string()))
-}
-
-pub fn runtime_contract_from_fixture_value<Model>(
-    value: &Value,
-) -> Result<RuntimeContract<Model>, RuntimeContractError>
-where
-    Model: RuntimeModel + serde::de::DeserializeOwned,
-{
-    let contract_value = value
-        .get("runtimeContract")
-        .ok_or(RuntimeContractError::MissingRuntimeContract)?;
-    let contract: RuntimeContract<Model> = serde_json::from_value(contract_value.clone())
-        .map_err(|error| RuntimeContractError::InvalidJson(error.to_string()))?;
-    contract.validate()?;
-    Ok(contract)
-}
-
-pub fn runtime_contract_from_fixture_json<Model>(
-    fixture_json: &str,
-) -> Result<RuntimeContract<Model>, RuntimeContractError>
-where
-    Model: RuntimeModel + serde::de::DeserializeOwned,
-{
-    let value: Value = serde_json::from_str(fixture_json)
-        .map_err(|error| RuntimeContractError::InvalidJson(error.to_string()))?;
-    runtime_contract_from_fixture_value(&value)
-}
+impl std::error::Error for RuntimeJsonError {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use puzzle_core::{
-        ConditionId, Delta3, GridConditionDef, GridConditionValueKind, GridExecutableProgram,
-        GridGuard, GridLevel, GridLevelBundle, GridMatchCell, GridPattern, GridRule, GridRuleStep,
-        GridState, LayerId, ObjectDef, RuleApplication, RuleId, Size3,
-    };
     use serde_json::json;
 
-    type Rule = GridRule<3>;
-
-    const PLAYER: ObjectId = ObjectId(1);
-
-    fn support_game() -> GridCompiledGame<3> {
-        GridCompiledGame::<3>::new_with_condition_defs(
-            1,
-            vec![ObjectDef {
-                id: PLAYER,
-                layer_id: LayerId(0),
-            }],
-            vec![GridConditionDef::<3> {
-                id: ConditionId(0),
-                kind: GridConditionValueKind::<3>::ExistsObjects(vec![PLAYER]),
-            }],
-        )
-    }
-
-    fn support_level_bundle(game: &GridCompiledGame<3>) -> GridLevelBundle<3, Size3> {
-        let mut state = GridState::empty_sized(Size3::new(1, 1, 1), 1, game.object_count())
-            .expect("support state dimensions are valid");
-        state
-            .place_object_at(game, puzzle_core::GridCoord::new([0, 0, 0]), PLAYER)
-            .expect("support object placement is valid");
-        state
-            .set_slot_mark_at(
-                puzzle_core::GridCoord::new([0, 0, 0]),
-                LayerId(0),
-                MarkId(2),
-                Some(7),
-            )
-            .expect("support slot mark is valid");
-        state
-            .set_cell_mark_at(puzzle_core::GridCoord::new([0, 0, 0]), MarkId(3), None)
-            .expect("support cell mark is valid");
-        state.mark_level_rule_fired(RuleId(9));
-        GridLevelBundle::checked_new(
-            game.clone(),
-            vec![GridLevel::new(
-                "one",
-                state,
-                puzzle_core::GridExecutableProgram::new(Vec::new()),
-                None,
-                None,
-            )],
-        )
-        .expect("support level bundle is valid")
-    }
-
     #[test]
-    fn fixture_requires_runtime_contract_field() {
-        let error =
-            runtime_contract_from_fixture_value::<GridRuntimeModel<3, Size3, CameraEffect>>(
-                &json!({}),
-            )
-            .unwrap_err();
-
-        assert_eq!(error, RuntimeContractError::MissingRuntimeContract);
-    }
-
-    #[test]
-    fn runtime_contract_round_trips_shared_guard_variants() {
-        let rule = Rule {
-            id: RuleId(7),
-            guards: vec![GridGuard::<3>::ConditionNonZero(ConditionId(0))],
-            application: RuleApplication::Once,
-            pattern: GridPattern::<3>::new(vec![
-                GridMatchCell::<3>::new(Delta3::ZERO).require(PLAYER),
-            ]),
-            writes: Vec::new(),
-            effects: Vec::new(),
+    fn session_action_uses_a_tagged_source_free_wire_contract() {
+        let action = SessionAction::Input {
+            name: "front".to_string(),
         };
-        let game = support_game().clone_with_executable_program(GridExecutableProgram::new(vec![
-            GridRuleStep::<3>::Rule(rule.clone()),
-        ]));
-        let model = GridRuntimeModel::checked_new(
-            game.clone(),
-            Vec::new(),
-            support_level_bundle(&game),
-            None,
-            Vec::new(),
-            RuntimeLifecycle::default(),
-            GridPresentation::<CameraEffect> {
-                local_frame: None,
-                rule_camera_effects: vec![Vec::new()],
-                on_level_start_camera_effects: Vec::new(),
-            },
-        )
-        .expect("runtime model is valid");
-        let contract = RuntimeContract::checked_new(model).expect("runtime contract is valid");
-        let fixture = json!({
-            "runtimeContract": serde_json::to_value(&contract).expect("contract serializes"),
-        });
-        assert!(fixture["runtimeContract"]["model"]["game"].is_object());
+        let value = serde_json::to_value(&action).unwrap();
+        assert_eq!(value, json!({"kind": "input", "name": "front"}));
+        assert_eq!(
+            serde_json::from_value::<SessionAction>(value).unwrap(),
+            action
+        );
+        let resume = serde_json::to_value(SessionAction::Resume).unwrap();
+        assert_eq!(resume, json!({"kind": "resume"}));
+        assert_eq!(
+            serde_json::from_value::<SessionAction>(resume).unwrap(),
+            SessionAction::Resume
+        );
         assert!(
-            fixture["runtimeContract"]["model"]["levelBundle"]
-                .get("game")
-                .is_none()
+            serde_json::from_value::<SessionAction>(json!({
+                "kind": "input",
+                "name": "front",
+                "url": "/api/input/front"
+            }))
+            .is_err()
         );
-        let initial_state =
-            &fixture["runtimeContract"]["model"]["levelBundle"]["levels"][0]["initialState"];
-        assert_eq!(initial_state["kind"], "3d");
-        assert_eq!(initial_state["layerCount"], 1);
-        assert_eq!(initial_state["slots"], json!([1]));
-        assert_eq!(
-            initial_state["slotMarks"],
-            json!([[{"mark": 2, "value": 7}]])
-        );
-        assert_eq!(initial_state["cellMarks"], json!([[{"mark": 3}]]));
-        assert!(initial_state.get("layer_count").is_none());
-        assert!(initial_state.get("visible_variables").is_none());
+    }
 
-        let decoded: RuntimeContract<GridRuntimeModel<3, Size3, CameraEffect>> =
-            runtime_contract_from_fixture_value(&fixture).expect("runtime contract decodes");
-
-        assert_eq!(decoded.model.game.rules()[0].guards, rule.guards);
+    #[test]
+    fn solver_state_snapshot_preserves_slot_and_cell_marks() {
+        let snapshot = SolverStateSnapshot::TwoD {
+            width: 1,
+            height: 1,
+            layer_count: 1,
+            slots: vec![7],
+            slot_marks: vec![vec![RuntimeMarkValue {
+                mark: 2,
+                value: Some(11),
+            }]],
+            cell_marks: vec![vec![RuntimeMarkValue {
+                mark: 3,
+                value: None,
+            }]],
+            variables: vec![5],
+            level_fired_rules: vec![13],
+        };
+        let value = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(value["kind"], "2d");
+        assert_eq!(value["slotMarks"][0][0], json!({"mark": 2, "value": 11}));
+        assert_eq!(value["cellMarks"][0][0], json!({"mark": 3}));
+        assert!(value.get("mark").is_none());
         assert_eq!(
-            decoded.model.level_bundle.levels[0].initial_state,
-            contract.model.level_bundle.levels[0].initial_state
+            serde_json::from_value::<SolverStateSnapshot>(value).unwrap(),
+            snapshot
         );
     }
 

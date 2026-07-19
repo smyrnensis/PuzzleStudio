@@ -61,15 +61,35 @@ judgment.
 
 ## No Fallback Paths
 
-This is a context-critical rule for every task in this repository, not an
-optional style preference.
+This is a context-critical rule for engineering decisions in every task in this
+repository, not an optional style preference. Its purpose is to keep broken
+technical contracts diagnosable. It does not make every internal failure a
+valid reason to fail a user operation.
 
 Do not add fallback behavior. Fallbacks make bugs harder to see by silently
 turning an invalid, stale, unsupported, or miswired path into a different
 execution path. When a required capability, generated artifact, command, host
-API, feature, version, or backend is unavailable, fail visibly with a specific
-error instead of trying an older API, alternate backend, generated artifact,
-default behavior, or compatibility path.
+API, feature, version, or backend is unavailable, fail visibly at the boundary
+that owns that requirement, with a specific diagnostic for the developer or
+operator who can repair it, instead of trying an older API, alternate backend,
+generated artifact, default behavior, or compatibility path.
+
+Contain the failure to the operations whose own contracts require the missing
+capability. Before making an error block compilation, preview, export, saving,
+gameplay, or another user outcome, identify the declared dependency that makes
+the failed contract necessary for that outcome. Presentation, editing
+assistance, observability, and diagnostic consumers must not become acceptance
+gates for otherwise valid language or runtime operations. If an auxiliary
+consumer fails while the requested operation's contracts still hold, report
+that consumer's failure through its own channel and run the requested operation
+through its normal owner path. Continuing an independently valid operation is
+failure containment, not a fallback.
+
+User-facing recovery is part of the product contract when the owning feature
+defines it: preserving work, explaining the failed operation, and offering
+retry, correction, or cancellation are not technical fallback paths. Such
+behavior must not suppress the underlying diagnostic or substitute a different
+implementation for the failed operation.
 
 If an existing fallback path is encountered during any work, report it
 explicitly. When it is in the area being changed, treat it as technical debt to
@@ -81,10 +101,11 @@ justify a compatibility path.
 Fallback pressure is a signal to stop and identify the missing required path,
 not a reason to make the system keep running by another route. Before coding
 around a missing parser case, runtime API, generated artifact, host command, or
-adapter capability, name which required contract is absent or broken. If that
-contract cannot be repaired in scope, report the blocker instead of adding a
-graceful degradation, guessed default, legacy route, or silent compatibility
-branch.
+adapter capability, name which required contract is absent or broken, which
+owner must repair it, and which dependent operations it actually invalidates.
+If that contract cannot be repaired in scope, report the blocker for those
+operations instead of adding a graceful degradation, guessed default, legacy
+route, or silent compatibility branch.
 
 ## Implement The Final Structure
 

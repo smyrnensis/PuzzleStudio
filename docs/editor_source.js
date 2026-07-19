@@ -76,12 +76,8 @@ let sourceCompositionRange = null;
 let sourceLevelBuilderResetFrame = 0;
 let sourceLevelBuilderResetCells = false;
 let sourceLevelBuilderResetSignature = null;
-let sourceLineNumberSource = null;
-let sourceLineNumberColumns = 0;
-let sourceLineNumberLineHeight = 0;
 let sourceHighlightClientWidth = 0;
 let sourceHighlightScrollHeight = 0;
-let sourceLineNumberScrollHeight = 0;
 let sourceFoldedBlockKeys = new Set();
 let sourceFoldBaseSource = null;
 let sourceFoldViewMap = [];
@@ -162,118 +158,11 @@ function resetSourceFoldingState() {
   sourceFoldBlockCache = [];
 }
 
-function sourceFoldLinesWithOffsets(source) {
-  const lines = [];
-  let start = 0;
-  const text = String(source || "");
-  for (const raw of text.split("\n")) {
-    const end = start + raw.length;
-    const hasNewline = end < text.length;
-    lines.push({
-      raw,
-      start,
-      end,
-      absoluteEnd: end + (hasNewline ? 1 : 0),
-      hasNewline,
-    });
-    start = end + 1;
-  }
-  return lines;
-}
-
-function sourceLineIndexForFoldOffset(lines, offset) {
-  const position = Math.max(0, offset || 0);
-  for (let index = 0; index < lines.length; index += 1) {
-    if (position <= lines[index].end || index === lines.length - 1) {
-      return index;
-    }
-  }
-  return Math.max(0, lines.length - 1);
-}
-
 function sourceFoldableBlocks(source) {
-  const text = String(source || "");
-  if (sourceFoldBlockCacheSource === text) {
-    return sourceFoldBlockCache;
-  }
-  const lines = sourceFoldLinesWithOffsets(text);
-  const stack = [];
-  const blocks = [];
-  let lineIndex = 0;
-  let quote = "";
-  let escaped = false;
-  let lineComment = false;
-
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index];
-    const next = text[index + 1] || "";
-    if (char === "\n") {
-      lineIndex += 1;
-      lineComment = false;
-      escaped = false;
-      continue;
-    }
-    if (lineComment) {
-      continue;
-    }
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (quote) {
-      if (char === "\\") {
-        escaped = true;
-      } else if (char === quote) {
-        quote = "";
-      }
-      continue;
-    }
-    if (char === "/" && next === "/") {
-      lineComment = true;
-      index += 1;
-      continue;
-    }
-    if (char === "\"") {
-      quote = char;
-      continue;
-    }
-    if (char === "{") {
-      stack.push({ offset: index, lineIndex });
-      continue;
-    }
-    if (char !== "}") {
-      continue;
-    }
-    const open = stack.pop();
-    if (!open || lineIndex <= open.lineIndex) {
-      continue;
-    }
-    const openLine = lines[open.lineIndex];
-    const closeLine = lines[lineIndex];
-    if (!openLine || !closeLine) {
-      continue;
-    }
-    blocks.push({
-      key: `${open.offset}:${index}`,
-      openOffset: open.offset,
-      closeOffset: index,
-      openLine: open.lineIndex,
-      closeLine: lineIndex,
-      sourceStart: openLine.end,
-      sourceEnd: closeLine.absoluteEnd,
-      hiddenLineCount: Math.max(1, lineIndex - open.lineIndex),
-      hasTrailingNewline: closeLine.hasNewline,
-    });
-  }
-
-  blocks.sort((left, right) => (
-    left.openLine - right.openLine
-    || left.openOffset - right.openOffset
-    || right.closeOffset - left.closeOffset
-  ));
-  sourceFoldBlockCacheSource = text;
-  sourceFoldBlockCache = blocks;
-  return blocks;
+  // CodeMirror owns generic folding. Puzzle syntax recognition must stay in
+  // Rust, so the removed textarea folding path cannot infer brace blocks here.
+  void source;
+  return [];
 }
 
 function sourceFoldRangesForSource(source) {
@@ -299,12 +188,19 @@ function sourceFoldRangesForSource(source) {
 }
 
 function sourceFoldStateForSource(source = sourceEditorDocumentValue()) {
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
+    return [];
+  }
   return sourceFoldableBlocks(source)
     .filter((block) => sourceFoldedBlockKeys.has(block.key))
     .map((block) => block.key);
 }
 
 function restoreSourceFoldState(keys = []) {
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
+    resetSourceFoldingState();
+    return false;
+  }
   const validKeys = new Set(sourceFoldableBlocks(sourceEditorDocumentValue()).map((block) => block.key));
   sourceFoldedBlockKeys = new Set(
     (Array.isArray(keys) ? keys : []).filter((key) => typeof key === "string" && validKeys.has(key)),
@@ -671,11 +567,19 @@ function sourceSnapshotWithChangedRangeSelection(snapshot, nextValue) {
 }
 
 function resetSourceUndoHistory() {
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
+    sourceUndoStack = [];
+    sourceRedoStack = [];
+    return;
+  }
   sourceUndoStack = [sourceEditorSnapshot()];
   sourceRedoStack = [];
 }
 
 function ensureSourceUndoHistory() {
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
+    return;
+  }
   if (!sourceUndoStack.length || sourceUndoStack.at(-1)?.value !== sourceEditorDocumentValue()) {
     resetSourceUndoHistory();
     return;
@@ -687,7 +591,7 @@ function ensureSourceUndoHistory() {
 }
 
 function recordSourceUndoSnapshot() {
-  if (sourceUndoApplying) {
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror" || sourceUndoApplying) {
     return;
   }
   const snapshot = sourceEditorSnapshot();
@@ -786,7 +690,13 @@ function setSourceEditorValue(value, options = {}) {
     return;
   }
   resetSourceFoldingState();
-  sourceEditor.value = nextValue;
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
+    sourceEditor.sourceEditorPort.replaceDocument(nextValue, {
+      preserveHistory: preservesUndo,
+    });
+  } else {
+    sourceEditor.value = nextValue;
+  }
   updateSourceMeta();
   if (sourceDocumentSupportsEditableTargets()) {
     scheduleSourceHighlight(true, { preserveCurrent: preserveCurrentHighlight });
@@ -809,6 +719,17 @@ function scheduleSourceHighlight(immediate = false, options = {}) {
     return;
   }
   setSourcePlainTextMode(false);
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
+    window.cancelAnimationFrame(sourceOptimisticHighlightFrame);
+    sourceOptimisticHighlightFrame = 0;
+    sourceOptimisticHighlightSource = null;
+    window.clearTimeout(sourceHighlightTimer);
+    sourceHighlightTimer = window.setTimeout(() => {
+      sourceHighlightTimer = 0;
+      refreshSourceHighlight();
+    }, immediate ? 0 : 140);
+    return;
+  }
   const preserveCurrent = options.preserveCurrent !== false;
   if (immediate) {
     window.cancelAnimationFrame(sourceOptimisticHighlightFrame);
@@ -888,6 +809,13 @@ function resetSourcePuzzleAnalysisState() {
   sourceCursorResolveSignature = null;
   sourceCursorResolveRegion = null;
   hideSourceCompletions();
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
+    sourceEditor.sourceEditorPort.clearHighlights();
+    sourceHighlightSource = "";
+    sourceHighlightHtml = "";
+    sourceHighlightRuns = [];
+    sourceHighlightMode = "plain-text";
+  }
   if (plainModeChanged && sourceHighlight) {
     sourceHighlight.innerHTML = "";
     sourceHighlightSource = "";
@@ -966,12 +894,6 @@ function sourceHighlightRunsFromDom() {
     return runs;
   }
   return sourceHighlightRunsFromRoot(sourceHighlight);
-}
-
-function sourceHighlightRunsFromHtml(html) {
-  const root = document.createElement("div");
-  root.innerHTML = html || "";
-  return sourceHighlightRunsFromRoot(root);
 }
 
 function sourceHighlightRunsFromRoot(root) {
@@ -1200,6 +1122,22 @@ function scheduleLevelBuilderResetFromSource(resetCells = false) {
 }
 
 function renderPlainSourceHighlight(source = sourceEditor.value, reason = null) {
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
+    sourceEditor.sourceEditorPort.clearHighlights();
+    sourceHighlightSource = String(source || "");
+    sourceHighlightHtml = "";
+    sourceHighlightRuns = [];
+    sourceHighlightMode = "plain-text";
+    if (reason) {
+      const message = `Source highlighting unavailable: ${userFacingRuntimeError(reason)}`;
+      if (!sourceHighlightUnavailableStatusShown && typeof setEditorStatus === "function") {
+        sourceHighlightUnavailableStatusShown = true;
+        setEditorStatus(message, "is-error");
+      }
+      console.warn(message);
+    }
+    return;
+  }
   if (!sourceHighlight) {
     return;
   }
@@ -1291,30 +1229,49 @@ function syncSourceHighlightTransform() {
   if (sourceFindMatchLayer) {
     sourceFindMatchLayer.style.transform = "";
   }
-  syncSourceLineNumberScroll();
 }
 
 function sourceScrollTop() {
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
+    return sourceEditor.sourceEditorPort.scrollTop();
+  }
   return sourceEditorWrap.scrollTop || 0;
 }
 
 function sourceScrollLeft() {
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
+    return sourceEditor.sourceEditorPort.scrollLeft();
+  }
   return sourceEditorWrap.scrollLeft || 0;
 }
 
 function setSourceScrollTop(value) {
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
+    sourceEditor.sourceEditorPort.scrollTop(value);
+    return;
+  }
   sourceEditorWrap.scrollTop = Math.max(0, value || 0);
 }
 
 function setSourceScrollLeft(value) {
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
+    sourceEditor.sourceEditorPort.scrollLeft(value);
+    return;
+  }
   sourceEditorWrap.scrollLeft = Math.max(0, value || 0);
 }
 
 function sourceViewportHeight() {
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
+    return sourceEditor.sourceEditorPort.viewportSize().height;
+  }
   return sourceEditorWrap.clientHeight;
 }
 
 function sourceViewportWidth() {
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
+    return sourceEditor.sourceEditorPort.viewportSize().width;
+  }
   return sourceEditorWrap.clientWidth;
 }
 
@@ -1326,7 +1283,6 @@ function scheduleSourceEditorLayoutSync(frameCount = 1) {
   const sync = () => {
     sourceLayoutSyncFrame = 0;
     syncSourceHighlightScroll();
-    renderSourceLineNumbers();
     if (remainingFrames > 1) {
       remainingFrames -= 1;
       sourceLayoutSyncFrame = window.requestAnimationFrame(sync);
@@ -1434,8 +1390,12 @@ function sourceOutlineShouldRefreshForSource(source, options = {}) {
 
 async function refreshSourceHighlight() {
   const document = activeDocument();
-  if (!sourceHighlight || !isPuzzleDocument(document) || !isTextDocument(document)) {
+  const codeMirror = sourceEditor.sourceEditorPort?.kind === "codemirror";
+  if (!isPuzzleDocument(document) || !isTextDocument(document)) {
     return;
+  }
+  if (!codeMirror) {
+    throw new Error("Source highlighting requires the CodeMirror source editor port.");
   }
   if (sourceCompositionPreviewSource) {
     return;
@@ -1446,6 +1406,7 @@ async function refreshSourceHighlight() {
   }
   const source = sourceEditorDocumentValue();
   const displaySource = sourceEditor.value || "";
+  const range = sourceEditor.sourceEditorPort.highlightViewportRange();
   const includeOutline = sourceOutlineShouldRefreshForSource(source);
   const requestId = ++sourceHighlightRequestId;
   const controller = new AbortController();
@@ -1453,7 +1414,13 @@ async function refreshSourceHighlight() {
 
   try {
     const text = await window.PuzzleStudioHost.highlight(
-      { source, includeOutline },
+      {
+        source,
+        sourceProfile: puzzleSourceProfile(document),
+        rangeStart: range.from,
+        rangeEnd: range.to,
+        includeOutline,
+      },
       { signal: controller.signal },
     );
     if (
@@ -1463,17 +1430,17 @@ async function refreshSourceHighlight() {
     ) {
       return;
     }
-    syncSourceHighlightMetrics();
     const payload = JSON.parse(text);
     if (payload.outline) {
       applySourceOutlinePayload(payload.outline, source);
     }
-    if (sourceFoldsActive()) {
-      const foldedRuns = sourceFoldHighlightRuns(sourceHighlightRunsFromHtml(payload.html || escapeHtml(source || " ")), source);
-      setSourceHighlightHtml(displaySource, sourceHighlightRunsToHtml(foldedRuns), "server", foldedRuns);
-    } else {
-      setSourceHighlightHtml(source, payload.html || escapeHtml(source || " "), "server");
-    }
+    sourceEditor.sourceEditorPort.applyHighlightRange(source, range, payload);
+    sourceHighlightSource = source;
+    sourceHighlightHtml = "";
+    sourceHighlightRuns = [];
+    sourceHighlightMode = "server";
+    sourceHighlightUnavailableStatusShown = false;
+    renderSourceBlockSelection();
   } catch (error) {
     if (error.name === "AbortError") {
       return;
@@ -1528,7 +1495,10 @@ async function refreshSourceOutline() {
     return;
   }
   try {
-    const text = await window.PuzzleStudioHost.sourceOutline({ source });
+    const text = await window.PuzzleStudioHost.sourceOutline({
+      source,
+      sourceProfile: puzzleSourceProfile(document),
+    });
     if (requestId !== sourceOutlineRequestId || source !== sourceEditorDocumentValue()) {
       return;
     }
@@ -1547,28 +1517,100 @@ async function refreshSourceOutline() {
 }
 
 function applySourceOutlinePayload(payload, source) {
-  sourceOutlineItems = normalizeSourceOutlineItems(payload?.items, source);
+  try {
+    sourceEditor.sourceEditorPort.applyFoldRanges(source, payload);
+  } catch (error) {
+    const message = `Source folding unavailable: ${userFacingRuntimeError(error)}`;
+    if (typeof setEditorStatus === "function") {
+      setEditorStatus(message, "is-error");
+    }
+    console.warn(message);
+  }
+  const nextItems = normalizeSourceOutlineItems(payload?.items, source);
+  const structureChanged = sourceOutlineStructureSignature(sourceOutlineItems)
+    !== sourceOutlineStructureSignature(nextItems);
+  sourceOutlineItems = nextItems;
   pruneSourceOutlineExpandedItems();
   sourceOutlineDirty = false;
   sourceOutlineSignature = sourceOutlineStructuralSignature(source);
-  renderSourceOutline();
+  if (structureChanged) {
+    renderSourceOutline();
+  } else {
+    syncSourceOutlineRowOffsets();
+  }
   syncSourceOutlineActiveItem();
 }
 
+function sourceOutlineStructureSignature(items) {
+  return items.map((item) => [
+    item.id,
+    item.kind,
+    item.label,
+    item.depth,
+    item.parent,
+  ].join("\u0000")).join("\u0001");
+}
+
+function syncSourceOutlineRowOffsets() {
+  if (!sourceOutlineList) {
+    return;
+  }
+  const itemsById = sourceOutlineItemById();
+  for (const row of sourceOutlineList.querySelectorAll("[data-source-outline-id]")) {
+    const item = itemsById.get(row.dataset.sourceOutlineId || "");
+    if (item && row.dataset.sourceOutlineStart !== String(item.start)) {
+      row.dataset.sourceOutlineStart = String(item.start);
+    }
+  }
+}
+
 function normalizeSourceOutlineItems(items, source) {
+  const utf16ByUtf8 = sourceUtf16OffsetsByUtf8Byte(source);
   return (Array.isArray(items) ? items : []).map((item) => {
-    const start = sourceUtf16OffsetFromByteOffset(source, Number(item?.start) || 0);
-    const end = sourceUtf16OffsetFromByteOffset(source, Number(item?.end) || Number(item?.start) || 0);
+    const byteStart = Number(item?.start);
+    const byteEnd = Number(item?.end);
+    const start = utf16ByUtf8.get(byteStart);
+    const end = utf16ByUtf8.get(byteEnd);
+    if (
+      !Number.isInteger(byteStart)
+      || !Number.isInteger(byteEnd)
+      || byteStart < 0
+      || byteStart > byteEnd
+      || start === undefined
+      || end === undefined
+    ) {
+      throw new Error("Rust source outline contains an invalid UTF-8 source range.");
+    }
     return {
       id: String(item?.id || ""),
       kind: String(item?.kind || "item"),
       label: String(item?.label || item?.kind || "item"),
       start,
-      end: Math.max(start, end),
+      end,
       depth: Math.max(0, Math.min(8, Number(item?.depth) || 0)),
       parent: item?.parent == null ? "" : String(item.parent),
     };
   }).filter((item) => item.id && Number.isFinite(item.start));
+}
+
+function sourceUtf16OffsetsByUtf8Byte(source) {
+  const offsets = new Map([[0, 0]]);
+  let byteOffset = 0;
+  for (let utf16Offset = 0; utf16Offset < source.length;) {
+    const codePoint = source.codePointAt(utf16Offset);
+    const utf16Length = codePoint > 0xffff ? 2 : 1;
+    const utf8Length = codePoint <= 0x7f
+      ? 1
+      : codePoint <= 0x7ff
+        ? 2
+        : codePoint <= 0xffff
+          ? 3
+          : 4;
+    byteOffset += utf8Length;
+    utf16Offset += utf16Length;
+    offsets.set(byteOffset, utf16Offset);
+  }
+  return offsets;
 }
 
 function sourceOutlineItemById() {
@@ -1622,7 +1664,7 @@ function renderSourceOutline() {
     const expanded = sourceOutlineExpandedItemIds.has(item.id);
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "source-outline-row";
+    button.className = "navigation-row source-outline-row";
     button.dataset.sourceOutlineId = item.id;
     button.dataset.sourceOutlineStart = String(item.start);
     button.style.setProperty("--depth", String(item.depth));
@@ -1662,18 +1704,17 @@ function renderSourceOutlineEmpty(message) {
 }
 
 function sourceOutlineChevronSvg(expanded) {
-  const path = expanded ? "M4 6l4 4 4-4" : "M6 4l4 4-4 4";
-  return `<svg class="source-outline-chevron-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="${path}"></path></svg>`;
+  return editorIconSvg(expanded ? "chevron-down" : "chevron-right", {
+    className: "source-outline-chevron-icon",
+  });
 }
 
 const SOURCE_OUTLINE_KIND_ICON_NAMES = Object.freeze({
   "puzzle": "puzzle",
   "puzzle3": "puzzle",
   "levels": "map",
-  "levels3": "map",
   "level": "map",
   "sprites": "image",
-  "sprites3": "image",
   "sprite": "image",
   "objects": "boxes",
   "object": "box",
@@ -1682,6 +1723,10 @@ const SOURCE_OUTLINE_KIND_ICON_NAMES = Object.freeze({
   "marks": "bookmark",
   "render": "scan-eye",
   "camera": "camera",
+  "grid": "grid-2x2",
+  "viewport": "view",
+  "state": "database",
+  "pixelate": "file-code-2",
   "animation": "circle-play",
   "tween": "chart-spline",
   "row": "rows-3",
@@ -1711,11 +1756,13 @@ const SOURCE_OUTLINE_KIND_ICON_NAMES = Object.freeze({
   "theme": "swatch-book",
   "colors": "palette",
   "shapes": "shapes",
+  "shape": "shapes",
   "sounds": "volume-2",
   "keys": "keyboard",
   "layers": "layers",
   "collision_layers": "layers",
   "metadata": "info",
+  "slots": "square-dashed",
   "fix": "wrench",
 });
 
@@ -1734,224 +1781,9 @@ function sourceOutlineKindIconName(kind) {
 }
 
 function sourceOutlineKindIconSvg(kind) {
-  const name = sourceOutlineKindIconName(kind);
-  const icons = {
-    puzzle: `
-      <path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"></path>
-    `,
-    map: `
-      <path d="M14.106 5.553a2 2 0 0 0 1.788 0l3.659-1.83A1 1 0 0 1 21 4.619v12.764a1 1 0 0 1-.553.894l-4.553 2.277a2 2 0 0 1-1.788 0l-4.212-2.106a2 2 0 0 0-1.788 0l-3.659 1.83A1 1 0 0 1 3 19.381V6.618a1 1 0 0 1 .553-.894l4.553-2.277a2 2 0 0 1 1.788 0z"></path>
-      <path d="M15 5.764v15"></path>
-      <path d="M9 3.236v15"></path>
-    `,
-    box: `
-      <path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"></path>
-      <path d="m3.3 7 8.7 5 8.7-5"></path>
-      <path d="M12 22V12"></path>
-    `,
-    boxes: `
-      <path d="M2.97 12.92A2 2 0 0 0 2 14.63v3.24a2 2 0 0 0 .97 1.71l3 1.8a2 2 0 0 0 2.06 0L12 19v-5.5l-5-3-4.03 2.42Z"></path>
-      <path d="m7 16.5-4.74-2.85"></path>
-      <path d="m7 16.5 5-3"></path>
-      <path d="M7 16.5v5.17"></path>
-      <path d="M12 13.5V19l3.97 2.38a2 2 0 0 0 2.06 0l3-1.8a2 2 0 0 0 .97-1.71v-3.24a2 2 0 0 0-.97-1.71L17 10.5l-5 3Z"></path>
-      <path d="m17 16.5-5-3"></path>
-      <path d="m17 16.5 4.74-2.85"></path>
-      <path d="M17 16.5v5.17"></path>
-      <path d="M7.97 4.42A2 2 0 0 0 7 6.13v4.37l5 3 5-3V6.13a2 2 0 0 0-.97-1.71l-3-1.8a2 2 0 0 0-2.06 0l-3 1.8Z"></path>
-      <path d="M12 8 7.26 5.15"></path>
-      <path d="m12 8 4.74-2.85"></path>
-      <path d="M12 13.5V8"></path>
-    `,
-    image: `
-      <rect width="18" height="18" x="3" y="3" rx="2" ry="2"></rect>
-      <circle cx="9" cy="9" r="2"></circle>
-      <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"></path>
-    `,
-    group: `
-      <path d="M3 7V5c0-1.1.9-2 2-2h2"></path>
-      <path d="M17 3h2c1.1 0 2 .9 2 2v2"></path>
-      <path d="M21 17v2c0 1.1-.9 2-2 2h-2"></path>
-      <path d="M7 21H5c-1.1 0-2-.9-2-2v-2"></path>
-      <rect width="7" height="5" x="7" y="7" rx="1"></rect>
-      <rect width="7" height="5" x="10" y="12" rx="1"></rect>
-    `,
-    tag: `
-      <path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z"></path>
-      <circle cx="7.5" cy="7.5" r=".5" fill="currentColor"></circle>
-    `,
-    bookmark: `
-      <path d="M17 3a2 2 0 0 1 2 2v15a1 1 0 0 1-1.496.868l-4.512-2.578a2 2 0 0 0-1.984 0l-4.512 2.578A1 1 0 0 1 5 20V5a2 2 0 0 1 2-2z"></path>
-    `,
-    "scan-eye": `
-      <path d="M3 7V5a2 2 0 0 1 2-2h2"></path>
-      <path d="M17 3h2a2 2 0 0 1 2 2v2"></path>
-      <path d="M21 17v2a2 2 0 0 1-2 2h-2"></path>
-      <path d="M7 21H5a2 2 0 0 1-2-2v-2"></path>
-      <circle cx="12" cy="12" r="1"></circle>
-      <path d="M18.944 12.33a1 1 0 0 0 0-.66 7.5 7.5 0 0 0-13.888 0 1 1 0 0 0 0 .66 7.5 7.5 0 0 0 13.888 0"></path>
-    `,
-    camera: `
-      <path d="M13.997 4a2 2 0 0 1 1.76 1.05l.486.9A2 2 0 0 0 18.003 7H20a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h1.997a2 2 0 0 0 1.759-1.048l.489-.904A2 2 0 0 1 10.004 4z"></path>
-      <circle cx="12" cy="13" r="3"></circle>
-    `,
-    "chart-spline": `
-      <path d="M3 3v16a2 2 0 0 0 2 2h16"></path>
-      <path d="M7 16c.5-2 1.5-7 4-7 2 0 2 3 4 3 2.5 0 4.5-5 5-7"></path>
-    `,
-    "circle-play": `
-      <path d="M9 9.003a1 1 0 0 1 1.517-.859l4.997 2.997a1 1 0 0 1 0 1.718l-4.997 2.997A1 1 0 0 1 9 14.996z"></path>
-      <circle cx="12" cy="12" r="10"></circle>
-    `,
-    "rows-3": `
-      <rect width="18" height="18" x="3" y="3" rx="2"></rect>
-      <path d="M21 9H3"></path>
-      <path d="M21 15H3"></path>
-    `,
-    "columns-3": `
-      <rect width="18" height="18" x="3" y="3" rx="2"></rect>
-      <path d="M9 3v18"></path>
-      <path d="M15 3v18"></path>
-    `,
-    "mouse-pointer-click": `
-      <path d="M14 4.1 12 6"></path>
-      <path d="m5.1 8-2.9-.8"></path>
-      <path d="m6 12-1.9 2"></path>
-      <path d="M7.2 2.2 8 5.1"></path>
-      <path d="M9.037 9.69a.498.498 0 0 1 .653-.653l11 4.5a.5.5 0 0 1-.074.949l-4.349 1.041a1 1 0 0 0-.74.739l-1.04 4.35a.5.5 0 0 1-.95.074z"></path>
-    `,
-    "square-mouse-pointer": `
-      <path d="M12.034 12.681a.498.498 0 0 1 .647-.647l9 3.5a.5.5 0 0 1-.033.943l-3.444 1.068a1 1 0 0 0-.66.66l-1.067 3.443a.5.5 0 0 1-.943.033z"></path>
-      <path d="M21 11V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h6"></path>
-    `,
-    "message-square": `
-      <path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"></path>
-    `,
-    "file-text": `
-      <path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"></path>
-      <path d="M14 2v5a1 1 0 0 0 1 1h5"></path>
-      <path d="M10 9H8"></path>
-      <path d="M16 13H8"></path>
-      <path d="M16 17H8"></path>
-    `,
-    "import": `
-      <path d="M12 3v12"></path>
-      <path d="m8 11 4 4 4-4"></path>
-      <path d="M8 5H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-4"></path>
-    `,
-    "list-checks": `
-      <path d="M13 5h8"></path>
-      <path d="M13 12h8"></path>
-      <path d="M13 19h8"></path>
-      <path d="m3 17 2 2 4-4"></path>
-      <path d="m3 7 2 2 4-4"></path>
-    `,
-    workflow: `
-      <rect width="8" height="8" x="3" y="3" rx="2"></rect>
-      <path d="M7 11v4a2 2 0 0 0 2 2h4"></path>
-      <rect width="8" height="8" x="13" y="13" rx="2"></rect>
-    `,
-    flag: `
-      <path d="M4 22V4a1 1 0 0 1 .4-.8A6 6 0 0 1 8 2c3 0 5 2 7.333 2q2 0 3.067-.8A1 1 0 0 1 20 4v10a1 1 0 0 1-.4.8A6 6 0 0 1 16 16c-3 0-5-2-8-2a6 6 0 0 0-4 1.528"></path>
-    `,
-    "flag-off": `
-      <path d="M16 16c-3 0-5-2-8-2a6 6 0 0 0-4 1.528"></path>
-      <path d="m2 2 20 20"></path>
-      <path d="M4 22V4"></path>
-      <path d="M7.656 2H8c3 0 5 2 7.333 2q2 0 3.067-.8A1 1 0 0 1 20 4v10.347"></path>
-    `,
-    "panels-top-left": `
-      <rect width="18" height="18" x="3" y="3" rx="2"></rect>
-      <path d="M3 9h18"></path>
-      <path d="M9 21V9"></path>
-    `,
-    clapperboard: `
-      <path d="m12.296 3.464 3.02 3.956"></path>
-      <path d="M20.2 6 3 11l-.9-2.4c-.3-1.1.3-2.2 1.3-2.5l13.5-4c1.1-.3 2.2.3 2.5 1.3z"></path>
-      <path d="M3 11h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
-      <path d="m6.18 5.276 3.1 3.899"></path>
-    `,
-    package: `
-      <path d="m7.5 4.27 9 5.15"></path>
-      <path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"></path>
-      <path d="m3.3 7 8.7 5 8.7-5"></path>
-      <path d="M12 22V12"></path>
-    `,
-    palette: `
-      <circle cx="13.5" cy="6.5" r=".5" fill="currentColor"></circle>
-      <circle cx="17.5" cy="10.5" r=".5" fill="currentColor"></circle>
-      <circle cx="8.5" cy="7.5" r=".5" fill="currentColor"></circle>
-      <circle cx="6.5" cy="12.5" r=".5" fill="currentColor"></circle>
-      <path d="M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10c0 1.657-1.343 3-3 3h-1.5a2.5 2.5 0 0 0 0 5H19a3 3 0 0 1-3 3z"></path>
-    `,
-    "swatch-book": `
-      <path d="M11 17a4 4 0 0 1-8 0V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2Z"></path>
-      <path d="M16.7 13H19a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H7"></path>
-      <path d="M 7 17h.01"></path>
-      <path d="m11 8 2.3-2.3a2.4 2.4 0 0 1 3.404.004L18.6 7.6a2.4 2.4 0 0 1 .026 3.434L9.9 19.8"></path>
-    `,
-    shapes: `
-      <path d="M8.3 10a.7.7 0 0 1-.626-1.079L11.4 3a.7.7 0 0 1 1.198-.043L16.3 8.9a.7.7 0 0 1-.572 1.1Z"></path>
-      <rect x="3" y="14" width="7" height="7" rx="1"></rect>
-      <circle cx="17.5" cy="17.5" r="3.5"></circle>
-    `,
-    "move-horizontal": `
-      <path d="m18 8 4 4-4 4"></path>
-      <path d="M2 12h20"></path>
-      <path d="m6 8-4 4 4 4"></path>
-    `,
-    "arrow-right": `
-      <path d="M5 12h14"></path>
-      <path d="m12 5 7 7-7 7"></path>
-    `,
-    "volume-2": `
-      <path d="M11 4.702a1 1 0 0 0-1.664-.747L5.23 7.5H3a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h2.23l4.106 3.545A1 1 0 0 0 11 19.298z"></path>
-      <path d="M16 9a5 5 0 0 1 0 6"></path>
-      <path d="M19.364 18.364a9 9 0 0 0 0-12.728"></path>
-    `,
-    keyboard: `
-      <path d="M10 8h.01"></path>
-      <path d="M12 12h.01"></path>
-      <path d="M14 8h.01"></path>
-      <path d="M16 12h.01"></path>
-      <path d="M18 8h.01"></path>
-      <path d="M6 8h.01"></path>
-      <path d="M7 16h10"></path>
-      <path d="M8 12h.01"></path>
-      <rect width="20" height="16" x="2" y="4" rx="2"></rect>
-    `,
-    layers: `
-      <path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z"></path>
-      <path d="m22 12.5-9.17 4.18a2 2 0 0 1-1.66 0L2 12.5"></path>
-      <path d="m22 17.5-9.17 4.18a2 2 0 0 1-1.66 0L2 17.5"></path>
-    `,
-    info: `
-      <circle cx="12" cy="12" r="10"></circle>
-      <path d="M12 16v-4"></path>
-      <path d="M12 8h.01"></path>
-    `,
-    wrench: `
-      <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94z"></path>
-    `,
-    zap: `
-      <path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"></path>
-    `,
-    "file-code-2": `
-      <path d="M4 22h14a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v4"></path>
-      <path d="M14 2v4a2 2 0 0 0 2 2h4"></path>
-      <path d="m5 12-3 3 3 3"></path>
-      <path d="m9 18 3-3-3-3"></path>
-    `,
-  };
-  const paths = icons[name];
-  if (!paths) {
-    throw new Error(`Unknown source outline lucide icon ${name}`);
-  }
-  return `
-    <svg xmlns="http://www.w3.org/2000/svg" class="source-outline-icon lucide lucide-${name}-icon lucide-${name}" viewBox="0 0 24 24" aria-hidden="true">
-      ${paths}
-    </svg>
-  `;
+  return editorIconSvg(sourceOutlineKindIconName(kind), {
+    className: "source-outline-icon",
+  });
 }
 
 function toggleSourceOutlineItem(itemId, expanded = null) {
@@ -2091,24 +1923,24 @@ function createSourceFindPanel() {
   panel.innerHTML = `
     <div class="source-find-row">
       <input class="source-find-input" data-source-find-input type="search" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Find" aria-label="Find in source">
-      <button class="source-find-icon-button" data-source-find-case type="button" aria-label="Match case" title="Match case" aria-pressed="false">Aa</button>
-      <button class="source-find-icon-button" data-source-find-previous type="button" aria-label="Previous match" title="Previous match">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m18 15-6-6-6 6"></path></svg>
+      <button class="icon-button source-find-icon-button" data-source-find-case type="button" aria-label="Match case" title="Match case" aria-pressed="false">Aa</button>
+      <button class="icon-button source-find-icon-button" data-source-find-previous type="button" aria-label="Previous match" title="Previous match">
+        ${editorIconSvg("chevron-up")}
       </button>
-      <button class="source-find-icon-button" data-source-find-next type="button" aria-label="Next match" title="Next match">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+      <button class="icon-button source-find-icon-button" data-source-find-next type="button" aria-label="Next match" title="Next match">
+        ${editorIconSvg("chevron-down")}
       </button>
-      <button class="source-find-icon-button" data-source-find-close type="button" aria-label="Close find" title="Close">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>
+      <button class="icon-button source-find-icon-button" data-source-find-close type="button" aria-label="Close find" title="Close">
+        ${editorIconSvg("x")}
       </button>
     </div>
     <div class="source-find-row source-replace-row">
       <input class="source-find-input" data-source-replace-input type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Replace" aria-label="Replace with">
-      <button class="source-find-icon-button" data-source-replace-current type="button" aria-label="Replace" title="Replace">
-        <svg class="lucide lucide-replace" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4a1 1 0 0 1 1-1"></path><path d="M15 10a1 1 0 0 1-1-1"></path><path d="M21 4a1 1 0 0 0-1-1"></path><path d="M21 9a1 1 0 0 1-1 1"></path><path d="m3 7 3 3 3-3"></path><path d="M6 10V5a2 2 0 0 1 2-2h2"></path><rect x="3" y="14" width="7" height="7" rx="1"></rect></svg>
+      <button class="icon-button source-find-icon-button" data-source-replace-current type="button" aria-label="Replace" title="Replace">
+        ${editorIconSvg("replace")}
       </button>
-      <button class="source-find-icon-button" data-source-replace-all type="button" aria-label="Replace all" title="Replace all">
-        <svg class="lucide lucide-replace-all" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 14a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1"></path><path d="M14 4a1 1 0 0 1 1-1"></path><path d="M15 10a1 1 0 0 1-1-1"></path><path d="M19 14a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1"></path><path d="M21 4a1 1 0 0 0-1-1"></path><path d="M21 9a1 1 0 0 1-1 1"></path><path d="m3 7 3 3 3-3"></path><path d="M6 10V5a2 2 0 0 1 2-2h2"></path><rect x="3" y="14" width="7" height="7" rx="1"></rect></svg>
+      <button class="icon-button source-find-icon-button" data-source-replace-all type="button" aria-label="Replace all" title="Replace all">
+        ${editorIconSvg("replace-all")}
       </button>
     </div>
     <div class="source-find-status" data-source-find-status aria-live="polite">No query</div>
@@ -2174,12 +2006,6 @@ async function showSourceCompletions(options = {}) {
       replaceEnd: list.replaceEnd,
       items,
       selectedIndex,
-      keyboardCommit: Boolean(options.manual || sourceCompletionSessionMatches(previousState, {
-        source,
-        cursor,
-        replaceStart: list.replaceStart,
-        replaceEnd: list.replaceEnd,
-      }) && previousState?.keyboardCommit),
     };
     renderSourceCompletionItems();
     positionSourceCompletionPopover();
@@ -2194,9 +2020,9 @@ async function showSourceCompletions(options = {}) {
 function filterSourceCompletionsForDocument(items, document) {
   const profile = typeof puzzleSourceProfile === "function" ? puzzleSourceProfile(document) : "";
   const hidden = profile === "puzzle3d"
-    ? new Set(["puzzle", "levels", "sprites"])
+    ? new Set(["puzzle", "sprites"])
     : profile === "puzzle2d"
-      ? new Set(["puzzle3", "levels3", "sprites3"])
+      ? new Set(["puzzle3", "sprites"])
       : null;
   if (!hidden) {
     return items;
@@ -2248,7 +2074,7 @@ function sourceCursorBeforeSyntaxBoundaryWithoutPrefix(source, cursor) {
   }
   const lineEnd = source.indexOf("\n", cursor);
   const safeLineEnd = lineEnd < 0 ? source.length : lineEnd;
-  const after = stripSourceImportLineComment(source.slice(cursor, safeLineEnd));
+  const after = stripSourceStructureLineComment(source.slice(cursor, safeLineEnd));
   return /^[\t ]*[\]{}]/.test(after);
 }
 
@@ -2341,17 +2167,12 @@ function moveSourceCompletionSelection(delta) {
     return;
   }
   sourceCompletionState.mode = "completion";
-  sourceCompletionState.keyboardCommit = true;
   if (!Number.isInteger(sourceCompletionState.selectedIndex)) {
     sourceCompletionState.selectedIndex = 0;
   }
   const count = sourceCompletionState.items.length;
   sourceCompletionState.selectedIndex = (sourceCompletionState.selectedIndex + delta + count) % count;
   renderSourceCompletionItems();
-}
-
-function sourceCompletionCanKeyboardCommit() {
-  return Boolean(sourceCompletionState?.keyboardCommit && sourceCompletionState?.mode === "completion");
 }
 
 function sourceCompletionMatchesCurrentCursor() {
@@ -2413,13 +2234,28 @@ function positionSourceCompletionPopover() {
   if (!anchorRect || !cursorRect) {
     return;
   }
-  const maxLeft = Math.max(8, window.innerWidth - 284);
+  const margin = 8;
+  const gap = 6;
+  const popoverWidth = Math.min(276, Math.max(0, wrapRect.width - margin * 2));
+  const maxLeft = Math.max(wrapRect.left + margin, wrapRect.right - popoverWidth - margin);
   const left = wrapRect.left + anchorRect.left;
-  const top = wrapRect.top + cursorRect.top + cursorRect.height + 6;
-  const availableBelow = Math.max(56, window.innerHeight - top - 8);
-  sourceCompletionPopover.style.left = `${Math.max(8, Math.min(maxLeft, left))}px`;
-  sourceCompletionPopover.style.top = `${top}px`;
-  sourceCompletionPopover.style.maxHeight = `${Math.min(216, availableBelow)}px`;
+  const caretTop = wrapRect.top + cursorRect.top;
+  const caretBottom = caretTop + cursorRect.height;
+  const viewportTop = Math.max(margin, wrapRect.top + margin);
+  const viewportBottom = Math.min(window.innerHeight - margin, wrapRect.bottom - margin);
+  const availableBelow = Math.max(0, viewportBottom - caretBottom - gap);
+  const availableAbove = Math.max(0, caretTop - viewportTop - gap);
+  const desiredHeight = Math.min(216, Math.max(38, (sourceCompletionState?.items?.length || 1) * 28 + 10));
+  const placeBelow = availableBelow >= desiredHeight || availableBelow >= availableAbove;
+  const available = placeBelow ? availableBelow : availableAbove;
+  const height = Math.max(0, Math.min(desiredHeight, available));
+  const top = placeBelow
+    ? caretBottom + gap
+    : caretTop - gap - height;
+  sourceCompletionPopover.dataset.placement = placeBelow ? "below" : "above";
+  sourceCompletionPopover.style.left = `${Math.max(wrapRect.left + margin, Math.min(maxLeft, left))}px`;
+  sourceCompletionPopover.style.top = `${Math.max(viewportTop, top)}px`;
+  sourceCompletionPopover.style.maxHeight = `${height}px`;
 }
 
 function sourceFindShortcutRequested(event) {
@@ -2480,6 +2316,7 @@ function openSourceFindPanel(options = {}) {
     sourceFindInput.value = selected;
   }
   sourceFindPanel.hidden = false;
+  syncSourceFindPanelLayout();
   syncSourceFindMatches({ select: Boolean(sourceFindInput.value), anchor: sourceEditor.selectionStart });
   window.setTimeout(() => {
     sourceFindInput.focus();
@@ -2493,6 +2330,7 @@ function closeSourceFindPanel(options = {}) {
     return;
   }
   sourceFindPanel.hidden = true;
+  syncSourceFindPanelLayout();
   sourceFindState.matches = [];
   sourceFindState.selectedIndex = -1;
   renderSourceFindMatches();
@@ -2519,6 +2357,25 @@ function setSourceFindReplaceVisible(visible) {
   } else {
     sourceReplaceInput?.setAttribute("tabindex", "-1");
   }
+  if (isSourceFindPanelOpen()) {
+    syncSourceFindPanelLayout();
+  }
+}
+
+function syncSourceFindPanelLayout() {
+  const open = isSourceFindPanelOpen();
+  sourceEditorWrap?.classList.toggle("has-source-find-panel", open);
+  if (!sourceEditorWrap) {
+    return;
+  }
+  if (!open) {
+    sourceEditorWrap.style.removeProperty("--source-find-panel-space");
+    return;
+  }
+  sourceEditorWrap.style.setProperty(
+    "--source-find-panel-space",
+    `${Math.ceil(sourceFindPanel.getBoundingClientRect().height)}px`,
+  );
 }
 
 function syncSourceFindMatches(options = {}) {
@@ -2584,7 +2441,7 @@ function selectSourceFindMatch(index, options = {}) {
   }
   sourceFindState.selectedIndex = index;
   sourceEditor.setSelectionRange(match.start, match.end);
-  scrollSourceOffsetIntoView(match.start);
+  scrollSourceOffsetIntoView(match.start, "start");
   if (options.focusEditor) {
     sourceEditor.focus({ preventScroll: true });
   }
@@ -2696,6 +2553,18 @@ function renderSourceFindMatches() {
     return;
   }
   sourceFindMatchLayer.replaceChildren();
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
+    const matches = isSourceFindPanelOpen() && isTextDocument(activeDocument())
+      ? sourceFindState.matches
+      : [];
+    sourceEditor.sourceEditorPort.applyFindMatches(
+      sourceEditor.value,
+      matches,
+      sourceFindState.selectedIndex,
+    );
+    sourceFindMatchLayer.hidden = true;
+    return;
+  }
   if (!isSourceFindPanelOpen() || !sourceFindState.matches.length || !isTextDocument(activeDocument())) {
     sourceFindMatchLayer.hidden = true;
     return;
@@ -2714,7 +2583,11 @@ function renderSourceFindMatches() {
   sourceFindMatchLayer.hidden = sourceFindMatchLayer.childElementCount === 0;
 }
 
-function scrollSourceOffsetIntoView(offset) {
+function scrollSourceOffsetIntoView(offset, alignment = "nearest") {
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
+    sourceEditor.sourceEditorPort.scrollIntoView(offset, alignment);
+    return;
+  }
   const rect = sourceCaretRectForOffset(offset);
   if (!rect) {
     return;
@@ -2774,6 +2647,18 @@ function sourceEditorCaretPoint(offset) {
 function sourceCaretRectForOffset(offset) {
   const source = sourceEditor.value || "";
   const safeOffset = Math.max(0, Math.min(source.length, offset || 0));
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
+    const rect = sourceEditor.sourceEditorPort.coordsAtOffset(safeOffset);
+    if (!rect) {
+      return null;
+    }
+    const wrapRect = sourceEditorWrap.getBoundingClientRect();
+    return {
+      left: rect.left - wrapRect.left,
+      top: rect.top - wrapRect.top,
+      height: rect.height,
+    };
+  }
   const domPosition = sourceHighlightDomPositionForOffset(safeOffset);
   if (!domPosition) {
     const fallback = sourceEditorCaretPoint(safeOffset);
@@ -2878,6 +2763,10 @@ function sourceHighlightDomPositionForOffset(offset) {
 }
 
 function sourceVisualOffsetFromPoint(clientX, clientY) {
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
+    const offset = sourceEditor.sourceEditorPort.offsetAtCoords(clientX, clientY);
+    return Number.isInteger(offset) ? offset : null;
+  }
   if (!sourceHighlight || !sourceEditor) {
     return null;
   }
@@ -3287,6 +3176,9 @@ function handleSourceBeforeInputTextInsert(event) {
   if (!isTextDocument(documents[currentDocumentIndex])) {
     return;
   }
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
+    return;
+  }
   if (sourceFoldsActive() && event.inputType !== "historyUndo" && event.inputType !== "historyRedo") {
     captureSourceFoldEditSnapshot();
   }
@@ -3312,8 +3204,29 @@ function handleSourceBeforeInputTextInsert(event) {
   }
 }
 
+function applySourceAnalysisEditorChanges(changes, source) {
+  if (!Array.isArray(changes)) {
+    throw new Error("CodeMirror edit must provide source analysis changes.");
+  }
+  window.PuzzleStudioRuntime
+    .applySourceAnalysisEdits(changes, source)
+    .catch((error) => console.error("Source analysis edit failed", error));
+}
+
 function bindSourceEditorEvents() {
 sourceEditor.addEventListener("beforeinput", handleSourceBeforeInputTextInsert);
+sourceEditor.addEventListener("sourceanalysisreset", () => {
+  const source = sourceEditorDocumentValue();
+  window.PuzzleStudioRuntime.resetSourceAnalysis(
+    source,
+    puzzleSourceProfile(activeDocument()),
+  ).catch((error) => {
+    console.error("Source analysis reset failed", error);
+  });
+});
+sourceEditor.addEventListener("sourceanalysisedit", (event) => {
+  applySourceAnalysisEditorChanges(event.detail?.changes, event.detail?.source);
+});
 sourceEditor.addEventListener("compositionstart", () => {
   sourceCompositionRange = {
     start: sourceEditor.selectionStart || 0,
@@ -3329,9 +3242,17 @@ sourceEditor.addEventListener("compositionupdate", (event) => {
   }
   beginSourceCompositionPreview(sourceCompositionPreviewValue(event.data));
 });
-sourceEditor.addEventListener("input", () => {
+sourceEditor.addEventListener("input", (event) => {
   if (!isTextDocument(documents[currentDocumentIndex])) {
     return;
+  }
+  const sourceChanges = event.detail?.changes;
+  const editedSource = sourceEditorDocumentValue();
+  applySourceAnalysisEditorChanges(sourceChanges, editedSource);
+  if (typeof refreshSurfaceEntriesForActiveSource === "function") {
+    void refreshSurfaceEntriesForActiveSource(editedSource).catch((error) => {
+      console.error("Source entries refresh failed", error);
+    });
   }
   if (sourceFoldsActive()) {
     const changed = commitSourceFoldedDisplayEdit();
@@ -3372,6 +3293,11 @@ sourceEditor.addEventListener("input", () => {
     scheduleLevelBuilderResetFromSource(false);
     scheduleSourceCursorPreviewSync();
     schedulePreview();
+  }
+});
+sourceEditor.addEventListener("sourceviewportchange", () => {
+  if (sourceDocumentSupportsEditableTargets()) {
+    scheduleSourceHighlight(true);
   }
 });
 sourceEditor.addEventListener("compositionend", () => {
@@ -3785,136 +3711,6 @@ function sourceEditorLineHeight() {
   return Number.isFinite(lineHeight) && lineHeight > 0 ? lineHeight : 18;
 }
 
-function renderSourceLineNumbers() {
-  if (!sourceLineNumbers || !sourceEditor || !sourceEditorWrap) {
-    return;
-  }
-  const visibleSource = sourceEditor.value || "";
-  const documentSource = sourceEditorDocumentValue();
-  const visibleLines = visibleSource.length ? visibleSource.split("\n") : [""];
-  const documentLines = sourceFoldLinesWithOffsets(documentSource);
-  const digits = Math.max(2, String(Math.max(1, documentLines.length)).length);
-  const numberWidth = Math.max(44, Math.min(88, 24 + (digits * sourceEditorCharWidth())));
-  sourceEditorWrap.style.setProperty("--source-line-number-width", `${Math.ceil(numberWidth)}px`);
-
-  const lineHeight = sourceEditorLineHeight();
-  const columns = sourceEditorTextColumnCapacity();
-  if (
-    sourceLineNumberSource === `${visibleSource}\u0000${documentSource}\u0000${Array.from(sourceFoldedBlockKeys).join("|")}`
-    && sourceLineNumberColumns === columns
-    && sourceLineNumberLineHeight === lineHeight
-  ) {
-    syncSourceLineNumberScroll();
-    return;
-  }
-
-  sourceLineNumberSource = `${visibleSource}\u0000${documentSource}\u0000${Array.from(sourceFoldedBlockKeys).join("|")}`;
-  sourceLineNumberColumns = columns;
-  sourceLineNumberLineHeight = lineHeight;
-  const foldBlocksByLine = sourceFoldBlocksByOpenLine(documentSource);
-  // Without active folds, view lines map 1:1 to document lines, so the line
-  // index is just the loop counter. Resolving it via sourceLineIndexForFoldOffset
-  // is an O(lines) scan per line -> O(lines^2) per keystroke; only pay that when
-  // folds actually remap the view.
-  const foldsRemapLines = sourceFoldsActive();
-  let viewLineStart = 0;
-  sourceLineNumbers.innerHTML = visibleLines.map((line, viewLineIndex) => {
-    const sourceLineIndex = foldsRemapLines
-      ? sourceLineIndexForFoldOffset(documentLines, sourceViewOffsetToDocumentOffset(viewLineStart, "start"))
-      : viewLineIndex;
-    const foldBlock = foldBlocksByLine.get(sourceLineIndex) || null;
-    const folded = foldBlock ? sourceFoldedBlockKeys.has(foldBlock.key) : false;
-    const visualRows = sourceVisualRowCount(line, columns);
-    const height = Math.max(lineHeight, visualRows * lineHeight);
-    const lineNumber = Number.isInteger(sourceLineIndex) ? sourceLineIndex + 1 : "";
-    const foldIcon = folded
-      ? `<svg class="source-fold-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg>`
-      : `<svg class="source-fold-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>`;
-    const button = foldBlock
-      ? `<button class="source-fold-button${folded ? " is-folded" : ""}" type="button" data-source-fold-key="${escapeHtml(foldBlock.key)}" data-source-fold-line="${sourceLineIndex}" aria-label="${folded ? "Expand" : "Fold"} block at line ${lineNumber}" title="${folded ? "Expand" : "Fold"} block">${foldIcon}</button>`
-      : `<span class="source-fold-spacer" aria-hidden="true"></span>`;
-    viewLineStart += line.length + 1;
-    return `<span class="source-line-number-row" style="height:${height}px"><span class="source-line-number-label">${lineNumber}</span>${button}</span>`;
-  }).join("");
-  syncSourceLineNumberScroll();
-}
-
-function sourceFoldBlocksByOpenLine(source) {
-  const byLine = new Map();
-  for (const block of sourceFoldableBlocks(source)) {
-    const existing = byLine.get(block.openLine);
-    if (!existing || block.closeLine > existing.closeLine) {
-      byLine.set(block.openLine, block);
-    }
-  }
-  return byLine;
-}
-
-function toggleSourceFoldByKey(key) {
-  const source = sourceEditorDocumentValue();
-  const block = sourceFoldableBlocks(source).find((item) => item.key === key);
-  if (!block) {
-    return false;
-  }
-  if (sourceFoldedBlockKeys.has(block.key)) {
-    sourceFoldedBlockKeys.delete(block.key);
-  } else {
-    sourceFoldedBlockKeys.add(block.key);
-  }
-  applySourceFoldingView();
-  scheduleLocalSave();
-  return true;
-}
-
-function handleSourceFoldGutterClick(event) {
-  const button = event.target?.closest?.("[data-source-fold-key]");
-  if (!button || !sourceLineNumbers?.contains(button)) {
-    return;
-  }
-  event.preventDefault();
-  event.stopPropagation();
-  toggleSourceFoldByKey(button.dataset.sourceFoldKey || "");
-  sourceEditor.focus({ preventScroll: true });
-}
-
-function syncSourceLineNumberScroll() {
-  if (!sourceLineNumbers || !sourceEditor) {
-    return;
-  }
-  const scrollHeight = Math.max(sourceEditor.scrollHeight, sourceEditorWrap?.clientHeight || 0);
-  if (sourceLineNumberScrollHeight !== scrollHeight) {
-    sourceLineNumberScrollHeight = scrollHeight;
-    sourceLineNumbers.style.height = `${scrollHeight}px`;
-  }
-  sourceLineNumbers.style.transform = "";
-}
-
-function sourceEditorTextColumnCapacity() {
-  const style = window.getComputedStyle(sourceEditor);
-  const paddingLeft = Number.parseFloat(style.paddingLeft) || 0;
-  const paddingRight = Number.parseFloat(style.paddingRight) || 0;
-  const contentWidth = Math.max(1, sourceViewportWidth() - paddingLeft - paddingRight);
-  return Math.max(1, Math.floor(contentWidth / sourceEditorCharWidth()));
-}
-
-function sourceVisualRowCount(line, columns) {
-  return Math.max(1, Math.ceil(sourceVisualColumnCount(line) / Math.max(1, columns)));
-}
-
-function sourceVisualColumnCount(line) {
-  const tabSize = 2;
-  let columns = 0;
-  for (const char of line || "") {
-    if (char === "\t") {
-      const remainder = columns % tabSize;
-      columns += remainder === 0 ? tabSize : tabSize - remainder;
-    } else {
-      columns += 1;
-    }
-  }
-  return columns;
-}
-
 function sourceWordPosition(delta) {
   const source = sourceEditor.value;
   let position = sourceSelectionFocus();
@@ -4067,8 +3863,8 @@ function handleSourceRewriteLhsBracketAssist(event) {
   const safeLineEnd = lineEnd < 0 ? source.length : lineEnd;
   const lineBeforeSelection = source.slice(lineStart, start);
   const lineAfterSelection = source.slice(end, safeLineEnd);
-  const codeBeforeSelection = stripSourceImportLineComment(lineBeforeSelection);
-  const codeAfterSelection = stripSourceImportLineComment(lineAfterSelection);
+  const codeBeforeSelection = stripSourceStructureLineComment(lineBeforeSelection);
+  const codeAfterSelection = stripSourceStructureLineComment(lineAfterSelection);
   if (codeBeforeSelection.length !== lineBeforeSelection.length) {
     return false;
   }
@@ -4172,7 +3968,7 @@ function handleSourceRewriteRhsPatternAssist(event) {
   const safeLineEnd = lineEnd < 0 ? source.length : lineEnd;
   const line = source.slice(lineStart, safeLineEnd);
   const cursorColumn = cursor - lineStart;
-  const code = stripSourceImportLineComment(line);
+  const code = stripSourceStructureLineComment(line);
   if (cursorColumn > code.length) {
     return false;
   }
@@ -4310,7 +4106,7 @@ function sourceRuleBracketCellSlots(source, cursor) {
   const lineEnd = source.indexOf("\n", cursor);
   const safeLineEnd = lineEnd < 0 ? source.length : lineEnd;
   const lineBeforeCursor = source.slice(lineStart, cursor);
-  if (stripSourceImportLineComment(lineBeforeCursor).length !== lineBeforeCursor.length) {
+  if (stripSourceStructureLineComment(lineBeforeCursor).length !== lineBeforeCursor.length) {
     return null;
   }
   const open = source.lastIndexOf("[", cursor - 1);
@@ -4397,7 +4193,7 @@ function handleSourceRuleBracketCellTabExit(event) {
   const lineEnd = source.indexOf("\n", cursor);
   const safeLineEnd = lineEnd < 0 ? source.length : lineEnd;
   const lineBeforeCursor = source.slice(lineStart, cursor);
-  if (stripSourceImportLineComment(lineBeforeCursor).length !== lineBeforeCursor.length) {
+  if (stripSourceStructureLineComment(lineBeforeCursor).length !== lineBeforeCursor.length) {
     return false;
   }
   const open = source.lastIndexOf("[", cursor - 1);
@@ -4455,7 +4251,7 @@ function handleSourceRewritePatternTab(event) {
   const lineEnd = source.indexOf("\n", cursor);
   const safeLineEnd = lineEnd < 0 ? source.length : lineEnd;
   const line = source.slice(lineStart, safeLineEnd);
-  const code = stripSourceImportLineComment(line);
+  const code = stripSourceStructureLineComment(line);
   const cursorColumn = cursor - lineStart;
   if (cursorColumn > code.length) {
     return false;
@@ -5076,104 +4872,24 @@ function sourceImportLinesWithOffsets(source) {
 }
 
 function sourceImportLinkAtOffset(source, offset, lines = sourceImportLinesWithOffsets(source)) {
-  const lineIndex = sourceLineIndexAtOffset(lines, offset);
-  const line = lines[lineIndex];
-  if (!line) {
+  const reference = window.PuzzleStudioRuntime?.sourceImportReference?.(
+    source,
+    activeDocument()?.puzzlePath || "game.puzzle",
+    offset,
+  );
+  if (!reference?.range || !reference?.pathRange || !reference.resolvedPath) {
     return null;
   }
-  const code = stripSourceImportLineComment(line.raw);
-  const importMatch = code.match(/^(\s*import\s*)"((?:\\.|[^"\\])*)"/);
-  if (importMatch) {
-    return sourceQuotedPathLinkForMatch(importMatch, line, lineIndex, offset, "import");
-  }
-  if (!sourceLineIsInAssetsBlock(lines, lineIndex)) {
-    return null;
-  }
-  const assetMatch = code.match(/^(\s*(?:css|script|file)\s*)"((?:\\.|[^"\\])*)"/);
-  if (assetMatch) {
-    return sourceQuotedPathLinkForMatch(assetMatch, line, lineIndex, offset, "asset");
-  }
-  return null;
-}
-
-function sourceQuotedPathLinkForMatch(match, line, lineIndex, offset, kind) {
-  if (!match) {
-    return null;
-  }
-  const quoteStart = line.start + match[1].length;
-  const frameStart = quoteStart;
-  const frameEnd = quoteStart + match[0].length - match[1].length;
-  const pathStart = quoteStart + 1;
-  const pathEnd = pathStart + match[2].length;
-  if (offset < frameStart || offset > frameEnd) {
-    return null;
-  }
-  const baseDir = directoryName(activeDocument()?.puzzlePath || "");
-  const resolvedPath = resolveWasmImportPath(baseDir, match[2]);
   return {
-    kind,
-    rawPath: match[2],
-    resolvedPath,
-    lineIndex,
-    start: frameStart,
-    end: frameEnd,
-    rect: sourceFrameRectForOffsets(frameStart, frameEnd),
-    pathStart,
-    pathEnd,
+    rawPath: reference.rawPath,
+    resolvedPath: reference.resolvedPath,
+    lineIndex: sourceLineIndexAtOffset(lines, reference.range.start),
+    start: reference.range.start,
+    end: reference.range.end,
+    rect: sourceFrameRectForOffsets(reference.range.start, reference.range.end),
+    pathStart: reference.pathRange.start,
+    pathEnd: reference.pathRange.end,
   };
-}
-
-function sourceLineIsInAssetsBlock(lines, lineIndex) {
-  const stack = [];
-  for (let index = 0; index < lineIndex; index += 1) {
-    const code = stripSourceImportLineComment(lines[index]?.raw || "").trim();
-    if (!code) {
-      continue;
-    }
-    if (code === "}" || code === "end") {
-      stack.pop();
-      continue;
-    }
-    if (/^assets(?:\s*\{)?$/.test(code)) {
-      stack.push("assets");
-      continue;
-    }
-    if (code.endsWith("{")) {
-      stack.push("other");
-    }
-  }
-  return stack.at(-1) === "assets";
-}
-
-function stripSourceImportLineComment(line) {
-  let quote = "";
-  let escaped = false;
-  for (let index = 0; index < line.length; index += 1) {
-    const char = line[index];
-    const next = line[index + 1] || "";
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (char === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (quote) {
-      if (char === quote) {
-        quote = "";
-      }
-      continue;
-    }
-    if (char === "\"") {
-      quote = char;
-      continue;
-    }
-    if (char === "/" && next === "/") {
-      return line.slice(0, index);
-    }
-  }
-  return line;
 }
 
 function renderSourceImportLinkFrame() {
@@ -5223,7 +4939,7 @@ function openSourceImportLink() {
   }
   const target = documentByPath(link.resolvedPath);
   if (!target || !isTextDocument(target)) {
-    setEditorStatus(`${link.kind === "asset" ? "Asset" : "Import"} not found`, "is-error");
+    setEditorStatus("Import not found", "is-error");
     hideSourceImportLinkFrame();
     return false;
   }
@@ -5761,6 +5477,108 @@ function applySourceBlockSelectionReplacement(replacer, options = {}) {
   renderSourceBlockSelection();
 }
 
+sourceEditor.addEventListener("sourcecompletioncommand", (event) => {
+  if (!isTextDocument(documents[currentDocumentIndex])) {
+    return;
+  }
+  const command = event.detail?.command;
+  if (command === "show") {
+    event.preventDefault();
+    showSourceCompletions({ manual: true });
+    return;
+  }
+  if (
+    !sourceCompletionState
+    || sourceCompletionPopover?.hidden
+    || !sourceCompletionMatchesCurrentCursor()
+  ) {
+    return;
+  }
+  if (command === "close") {
+    event.preventDefault();
+    hideSourceCompletions();
+    return;
+  }
+  if (command === "next" || command === "previous") {
+    event.preventDefault();
+    moveSourceCompletionSelection(command === "next" ? 1 : -1);
+    return;
+  }
+  if (command === "commit" && sourceCompletionState.mode === "completion") {
+    if (acceptSourceCompletion()) {
+      event.preventDefault();
+    }
+  }
+});
+
+function sourceEditingCommandKeyEvent(event) {
+  const command = event.detail?.command || "";
+  const key = command === "open-brace"
+    ? "{"
+    : command === "close-brace"
+      ? "}"
+      : command === "open-bracket"
+        ? "["
+        : command === "backspace"
+          ? "Backspace"
+          : command === "enter"
+            ? "Enter"
+            : "Tab";
+  return {
+    key,
+    shiftKey: command === "shift-tab",
+    altKey: false,
+    ctrlKey: false,
+    metaKey: false,
+    isComposing: false,
+    preventDefault() {
+      event.preventDefault();
+    },
+    stopPropagation() {},
+  };
+}
+
+sourceEditor.addEventListener("sourceeditingcommand", (event) => {
+  if (!isTextDocument(documents[currentDocumentIndex])) {
+    return;
+  }
+  const command = event.detail?.command || "";
+  const keyEvent = sourceEditingCommandKeyEvent(event);
+  if (command === "open-brace" || command === "close-brace" || command === "backspace") {
+    if (handleSourceBraceAssist(keyEvent)) {
+      return;
+    }
+    if (command === "backspace") {
+      handleSourceIndentBackspace(keyEvent);
+    }
+    return;
+  }
+  if (command === "open-bracket") {
+    if (handleSourceRewriteLhsBracketAssist(keyEvent)) {
+      return;
+    }
+    handleSourceRewriteRhsPatternAssist(keyEvent);
+    return;
+  }
+  if (command === "tab" || command === "shift-tab") {
+    if (handleSourceRuleBracketCellSlotTab(keyEvent)) {
+      return;
+    }
+    if (handleSourceRuleBracketCellTabExit(keyEvent)) {
+      return;
+    }
+    handleSourceRewritePatternTab(keyEvent);
+    return;
+  }
+  if (command === "enter") {
+    const insert = nextLineIndent();
+    if (sourceNewlineCursorOffset(insert) !== null) {
+      event.preventDefault();
+      insertSourceNewlineAtSelection();
+    }
+  }
+});
+
 sourceEditor.addEventListener("keydown", (event) => {
   if (!isTextDocument(documents[currentDocumentIndex])) {
     return;
@@ -5775,6 +5593,9 @@ sourceEditor.addEventListener("keydown", (event) => {
     event.preventDefault();
     event.stopPropagation();
     closeSourceFindPanel();
+    return;
+  }
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
     return;
   }
   if (sourceFoldsActive() && sourceKeydownWillEdit(event)) {
@@ -5818,7 +5639,7 @@ sourceEditor.addEventListener("keydown", (event) => {
           acceptSourceCompletion();
           return;
         }
-        if (event.key === "Enter" && sourceCompletionCanKeyboardCommit()) {
+        if (event.key === "Enter") {
           event.preventDefault();
           acceptSourceCompletion();
           return;
@@ -5968,7 +5789,6 @@ sourceEditorWrap?.addEventListener("scroll", hideSourceCompletions);
 sourceEditorWrap?.addEventListener("scroll", hideSourceImportLinkFrame);
 sourceEditor.addEventListener("click", syncSourceOutlineActiveItem);
 sourceEditor.addEventListener("keyup", syncSourceOutlineActiveItem);
-sourceLineNumbers?.addEventListener("click", handleSourceFoldGutterClick);
 sourceOutlineList?.addEventListener("click", (event) => {
   const row = event.target.closest("[data-source-outline-id]");
   if (!row || !sourceOutlineList.contains(row)) {
@@ -5998,7 +5818,6 @@ sourceOutlineList?.addEventListener("keydown", (event) => {
 });
 document.addEventListener("pointerdown", hideSourceColorEditorForOutsidePointer);
 window.addEventListener("resize", syncSourceHighlightScroll);
-window.addEventListener("resize", renderSourceLineNumbers);
 window.addEventListener("resize", hideSourceColorEditor);
 window.addEventListener("resize", () => {
   if (sourceEditorBlockSelection?.ranges?.length) {
@@ -6133,7 +5952,7 @@ function showSourceLevelNameMenu(config = {}) {
   menu.replaceChildren(...entries.map((entry) => {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "source-level-name-option";
+    button.className = "option-button source-level-name-option";
     button.classList.toggle("is-current", entry.value === current || entry.name === current);
     button.textContent = entry.label || entry.value;
     button.title = entry.name === entry.value ? entry.value : entry.name;

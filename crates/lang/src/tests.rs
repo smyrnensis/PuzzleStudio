@@ -11,14 +11,14 @@ fn planar_sprite_pattern(sprite: &VisualSpriteDef) -> &Vec<String> {
 #[test]
 fn virtual_workspace_imports_are_resolved_by_the_language_layer() {
     let documents = vec![
-        (
-            "games/demo/game.puzzle".to_string(),
-            "import \"parts/model.puzzle\"\n".to_string(),
-        ),
-        (
-            "games/demo/parts/model.puzzle".to_string(),
-            "title = imported\npuzzle default { objects {} collision_layers {} rules {} levels default of default {} }\n".to_string(),
-        ),
+        WorkspaceSourceDocument {
+            path: "games/demo/game.puzzle".to_string(),
+            source: "import \"parts/model.puzzle\"\n".to_string(),
+        },
+        WorkspaceSourceDocument {
+            path: "games/demo/parts/model.puzzle".to_string(),
+            source: "title = imported\npuzzle default { objects {} collision_layers {} rules {} levels default of default {} }\n".to_string(),
+        },
     ];
     let expanded = expand_game_imports_from_documents("games/demo/game.puzzle", &documents)
         .expect("virtual import expansion");
@@ -29,18 +29,87 @@ fn virtual_workspace_imports_are_resolved_by_the_language_layer() {
 #[test]
 fn virtual_workspace_import_cycles_fail_visibly() {
     let documents = vec![
-        (
-            "game.puzzle".to_string(),
-            "import \"part.puzzle\"\n".to_string(),
-        ),
-        (
-            "part.puzzle".to_string(),
-            "import \"game.puzzle\"\n".to_string(),
-        ),
+        WorkspaceSourceDocument {
+            path: "game.puzzle".to_string(),
+            source: "import \"part.puzzle\"\n".to_string(),
+        },
+        WorkspaceSourceDocument {
+            path: "part.puzzle".to_string(),
+            source: "import \"game.puzzle\"\n".to_string(),
+        },
     ];
     let error =
         expand_game_imports_from_documents("game.puzzle", &documents).expect_err("cycle must fail");
     assert!(error.to_string().contains("cyclic import"));
+}
+
+#[test]
+fn virtual_workspace_rejects_duplicate_normalized_paths() {
+    let documents = vec![
+        WorkspaceSourceDocument {
+            path: "parts/../game.puzzle".to_string(),
+            source: "title = first\n".to_string(),
+        },
+        WorkspaceSourceDocument {
+            path: "game.puzzle".to_string(),
+            source: "title = second\n".to_string(),
+        },
+    ];
+
+    let error = expand_game_imports_from_documents("game.puzzle", &documents)
+        .expect_err("normalized duplicate paths must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("duplicate workspace document path")
+    );
+}
+
+#[test]
+fn workspace_presentation_manifest_uses_compiled_language_facts() {
+    let source = r##"
+title = workspace_manifest
+theme = "pixel"
+
+assets {
+"game.css"
+"visuals.js"
+"audio/click.wav"
+}
+
+puzzle default {
+slots {
+Box
+}
+sprites {
+Box {
+image = "sprites/box.png"
+}
+}
+rules {
+}
+levels {
+legend {
+B = Box
+}
+level "start" {
+B
+}
+}
+}
+"##;
+    let documents = vec![WorkspaceSourceDocument {
+        path: "game.puzzle".to_string(),
+        source: source.to_string(),
+    }];
+
+    let manifest = workspace_presentation_manifest("game.puzzle", &documents)
+        .expect("workspace presentation manifest");
+    assert_eq!(manifest.theme_name.as_deref(), Some("pixel"));
+    assert_eq!(manifest.css_paths, ["game.css"]);
+    assert_eq!(manifest.script_paths, ["visuals.js"]);
+    assert_eq!(manifest.file_paths, ["audio/click.wav"]);
+    assert_eq!(manifest.sprite_image_paths, ["sprites/box.png"]);
 }
 
 #[test]
@@ -60,10 +129,12 @@ fn source_analysis_returns_typed_import_reference_at_the_path_only() {
             .is_none()
     );
 }
-use puzzle_core::{LocalFrameExtent, RuleStep, State, transition_program, transition_state};
+use puzzle_core::{
+    GridProgramRef, LocalFrameExtent, RuleStep, State, transition_program, transition_state,
+};
 
 #[test]
-fn level_rules_compose_before_global_and_after_in_one_program() {
+fn level_rules_compose_before_global_and_after_by_reference() {
     let source = r#"
 title = level_rules_order
 
@@ -95,20 +166,38 @@ levels default of board {
 }
 "#;
     let loaded = super::parse_game2d(source).unwrap();
-    let first = transition_program(
+    assert_eq!(
+        loaded.levels[0].program.references(),
+        &[
+            GridProgramRef::Catalog(0),
+            GridProgramRef::Main,
+            GridProgramRef::Catalog(1)
+        ]
+    );
+    assert_eq!(
+        loaded.levels[1].program.references(),
+        &[GridProgramRef::Main]
+    );
+    assert_eq!(loaded.program_catalog.programs().len(), 2);
+    loaded.validate_program_references().unwrap();
+    let first_programs = loaded.programs_for_level(0).unwrap();
+    let first = puzzle_core::transition_program_sequence_outcome(
         &loaded.game,
         &loaded.levels[0].initial_state,
-        &loaded.levels[0].program,
+        &first_programs,
         InputId(0),
     )
-    .unwrap();
-    let second = transition_program(
+    .unwrap()
+    .next_state;
+    let second_programs = loaded.programs_for_level(1).unwrap();
+    let second = puzzle_core::transition_program_sequence_outcome(
         &loaded.game,
         &loaded.levels[1].initial_state,
-        &loaded.levels[1].program,
+        &second_programs,
         InputId(0),
     )
-    .unwrap();
+    .unwrap()
+    .next_state;
     let object = |name: &str| {
         loaded
             .object_labels
@@ -7106,13 +7195,13 @@ B
 }
 
 #[test]
-fn puzzle_sprites_accept_display_object_single_color_solid_sprite() {
+fn puzzle_sprites_accept_at_prefixed_object_single_color_solid_sprite() {
     let source = r##"
-title = display_object_single_color_solid_sprite
+title = at_prefixed_object_single_color_solid_sprite
 
 puzzle default {
 slots {
-@display_floor = @Floor
+@floor_slot = @Floor
 }
 legend {
 . = empty
@@ -7137,13 +7226,59 @@ level "start"
         .visuals
         .sprites
         .iter()
-        .find(|sprite| sprite.name == "Floor")
+        .find(|sprite| sprite.name == "@Floor")
         .unwrap();
     match &sprite.kind {
         VisualSpriteKind::Solid(color) => {
             assert_eq!(color, "#eeeeee");
         }
         _ => panic!("@Floor should be a solid sprite"),
+    }
+}
+
+#[test]
+fn prefixed_and_unprefixed_objects_keep_distinct_sprite_keys() {
+    let source = r##"
+title = distinct_symbol_sprite_keys
+
+puzzle default {
+slots {
+floor = Floor @Floor
+}
+legend {
+. = empty
+}
+sprites {
+sprite {
+selector = Floor
+colors = #111111
+}
+sprite {
+selector = @Floor
+colors = #eeeeee
+}
+}
+rules {
+
+}
+levels {
+level "start"
+.
+}
+}
+"##;
+    let loaded = parse_game(source).unwrap();
+    for (name, expected_color) in [("Floor", "#111111"), ("@Floor", "#eeeeee")] {
+        let sprite = loaded
+            .visuals
+            .sprites
+            .iter()
+            .find(|sprite| sprite.name == name)
+            .unwrap();
+        assert!(matches!(
+            &sprite.kind,
+            VisualSpriteKind::Solid(color) if color == expected_color
+        ));
     }
 }
 
@@ -7160,7 +7295,7 @@ colors = #eeeeee
 }
 }
 slots {
-@display_floor = @Floor
+@floor_slot = @Floor
 }
 legend {
 . = empty
@@ -7179,7 +7314,7 @@ level "start"
         .visuals
         .sprites
         .iter()
-        .find(|sprite| sprite.name == "Floor")
+        .find(|sprite| sprite.name == "@Floor")
         .unwrap();
     match &sprite.kind {
         VisualSpriteKind::Solid(color) => assert_eq!(color, "#eeeeee"),
@@ -7279,14 +7414,14 @@ rules {
 }
 
 #[test]
-fn puzzle_sprites_accept_display_object_after_another_line_style_sprite() {
+fn puzzle_sprites_accept_at_prefixed_object_after_another_sprite() {
     let source = r##"
-title = display_object_after_sprite
+title = at_prefixed_object_after_sprite
 
 puzzle default {
 slots {
 solid = Player
-@display_floor = @Floor
+@floor_slot = @Floor
 }
 legend P = Player
 legend {
@@ -7322,7 +7457,7 @@ P
         .visuals
         .sprites
         .iter()
-        .find(|sprite| sprite.name == "Floor")
+        .find(|sprite| sprite.name == "@Floor")
         .unwrap();
 
     match &player.kind {
@@ -7336,9 +7471,9 @@ P
 }
 
 #[test]
-fn puzzle_sprites_report_unknown_display_selector_instead_of_shape_error() {
+fn puzzle_sprites_report_unknown_at_prefixed_selector_instead_of_shape_error() {
     let source = r##"
-title = unknown_display_sprite_selector
+title = unknown_at_prefixed_sprite_selector
 
 puzzle default {
 slots {
@@ -8600,7 +8735,7 @@ B
         .visuals
         .sprites
         .iter()
-        .find(|sprite| sprite.name == "Floor")
+        .find(|sprite| sprite.name == "@Floor")
         .unwrap();
     let pattern = planar_sprite_pattern(floor_sprite);
     match &floor_sprite.kind {
@@ -9932,9 +10067,9 @@ level "start"
 }
 
 #[test]
-fn unbraced_display_sprite_entry_can_use_direction_shape_table() {
+fn unbraced_at_prefixed_sprite_entry_can_use_direction_shape_table() {
     let source = r#"
-title = unbraced_display_rotated_sprite_header
+title = unbraced_at_prefixed_rotated_sprite_header
 
 puzzle default {
 slots {
@@ -10002,25 +10137,25 @@ level "start"
     let loaded = parse_game(source).unwrap();
     let expected = [
         (
-            "WallFrame-up",
+            "@WallFrame-up",
             vec![
                 "0000000", ".......", ".......", ".......", ".......", ".......", ".......",
             ],
         ),
         (
-            "WallFrame-right",
+            "@WallFrame-right",
             vec![
                 "......0", "......0", "......0", "......0", "......0", "......0", "......0",
             ],
         ),
         (
-            "WallFrame-down",
+            "@WallFrame-down",
             vec![
                 ".......", ".......", ".......", ".......", ".......", ".......", "0000000",
             ],
         ),
         (
-            "WallFrame-left",
+            "@WallFrame-left",
             vec![
                 "0......", "0......", "0......", "0......", "0......", "0......", "0......",
             ],
@@ -10046,9 +10181,9 @@ level "start"
 }
 
 #[test]
-fn consecutive_unbraced_display_sprite_entries_can_use_rotation_and_shape_metadata() {
+fn consecutive_unbraced_at_prefixed_sprite_entries_can_use_rotation_and_shape_metadata() {
     let source = r#"
-title = unbraced_display_rotated_sprites
+title = unbraced_at_prefixed_rotated_sprites
 
 puzzle default {
 map rotate directions {
@@ -10153,10 +10288,10 @@ level "start"
         .collect::<Vec<_>>();
 
     for expected in [
-        "Boundary-up",
-        "Boundary-right",
-        "Corner-up",
-        "Corner-right",
+        "@Boundary-up",
+        "@Boundary-right",
+        "@Corner-up",
+        "@Corner-right",
         "Goal-open",
         "Goal-close",
     ] {
@@ -10168,9 +10303,9 @@ level "start"
 }
 
 #[test]
-fn unbraced_shape_sprite_entry_can_be_followed_by_braced_rotated_display_sprite() {
+fn unbraced_shape_sprite_entry_can_be_followed_by_braced_rotated_at_prefixed_sprite() {
     let source = r#"
-title = shape_before_braced_rotated_display_sprite
+title = shape_before_braced_rotated_at_prefixed_sprite
 
 puzzle default {
 map rotate directions {
@@ -10246,7 +10381,7 @@ level "start"
         .map(|sprite| sprite.name.as_str())
         .collect::<Vec<_>>();
 
-    for expected in ["Goal-open", "LockedFrame-up", "LockedFrame-right"] {
+    for expected in ["Goal-open", "@LockedFrame-up", "@LockedFrame-right"] {
         assert!(
             sprite_names.contains(&expected),
             "missing sprite {expected}; got {sprite_names:?}"
@@ -12828,6 +12963,25 @@ fn scene_effect_parser_retains_semantic_tokens() {
     assert!(parsed.surface.document.semantic_tokens.iter().any(|token| {
         &line[token.span.start..token.span.end] == "goto"
             && token.kind == SurfaceSemanticKind::Effect
+    }));
+    assert!(parsed.surface.document.nodes.iter().any(|node| {
+        node.kind == SurfaceNodeKind::SceneEffect && &line[node.span.start..node.span.end] == line
+    }));
+}
+
+#[test]
+fn scene_routine_call_parser_retains_semantic_token() {
+    let line = "level_select";
+    let parsed = parse_scene_effect_with_semantic_tokens(line, line).unwrap();
+    assert!(matches!(
+        parsed.surface.effect,
+        SceneEffect::RoutineCall(ref name) if name == line
+    ));
+    assert!(parsed.semantic_tokens.iter().any(|token| {
+        &line[token.start..token.end] == line && token.kind == SemanticKind::Effect
+    }));
+    assert!(parsed.surface.document.semantic_tokens.iter().any(|token| {
+        &line[token.span.start..token.span.end] == line && token.kind == SurfaceSemanticKind::Effect
     }));
     assert!(parsed.surface.document.nodes.iter().any(|node| {
         node.kind == SurfaceNodeKind::SceneEffect && &line[node.span.start..node.span.end] == line
@@ -18423,14 +18577,14 @@ level "start"
 }
 
 #[test]
-fn main_and_display_object_layers_keep_separate_storage_slots() {
+fn separate_slot_rows_keep_at_prefixed_objects_in_their_declared_slot() {
     let source = r#"
 title = mixed_layers
 
 puzzle default {
 slots {
 floor = Floor
-@floor_visual = @Shadow @Glow
+@effects = @Shadow @Glow
 actor = Player
 }
 
@@ -18511,9 +18665,9 @@ P
 }
 
 #[test]
-fn display_groups_can_use_at_names() {
+fn groups_can_use_at_prefixed_names() {
     let source = r#"
-title = display_group
+title = at_prefixed_group
 
 puzzle default {
 slots {
@@ -18548,7 +18702,7 @@ P
 #[test]
 fn at_prefixed_layer_name_can_contain_any_objects() {
     let source = r#"
-title = display_layer_rejected
+title = at_prefixed_slot
 
 puzzle default {
 slots {
@@ -18773,25 +18927,66 @@ levels demo of push3 {
     assert_eq!(game.game.program().len(), 3);
     assert_eq!(puzzle_core::flattened_rules(game.game.program()).len(), 9);
     assert_eq!(game.levels.len(), 1);
+    assert_eq!(game.levels[0].program.references(), &[GridProgramRef::Main]);
+    game.validate_program_references().unwrap();
     let fixture_json = crate::export_visual_fixture_json(game, presentation).unwrap();
-    let contract = puzzle_runtime_contract::runtime_contract_from_fixture_json::<
-        puzzle_runtime_contract::GridRuntimeModel<
-            3,
-            puzzle_core::Size3,
-            puzzle_runtime_contract::CameraEffect,
-        >,
-    >(&fixture_json)
-    .unwrap();
-    assert_eq!(
-        contract.model.game.program().len(),
-        game.game.program().len()
-    );
-    assert_eq!(
-        puzzle_core::flattened_rules(contract.model.game.program()).len(),
-        9
-    );
+    assert!(!fixture_json.contains("runtimeContract"));
+    assert!(!fixture_json.contains("\"levelBundle\":"));
+    assert!(!fixture_json.contains("onLevelClear"));
     assert!(!fixture_json.contains("pushableObjectIds"));
     assert!(!fixture_json.contains("blocksMovement"));
+}
+
+#[test]
+fn puzzle3_default_forward_keys_target_the_horizontal_plane() {
+    let document = crate::parse_game_for_path(
+        r#"
+puzzle board {
+  dimension = 3
+  slots {
+    actor = Player
+  }
+  rules {
+  }
+}
+
+levels default of board {
+  legend {
+    P = Player
+  }
+  level "one" {
+    P
+  }
+}
+"#,
+        "default_3d_keys.puzzle3",
+    )
+    .unwrap();
+    let Some(LoadedDocumentModel::Puzzle3d { game, .. }) = document.single_model() else {
+        panic!("expected one 3D puzzle model");
+    };
+    let input = |name: &str| {
+        game.input_labels
+            .iter()
+            .find_map(|(id, label)| (label == name).then_some(*id))
+            .unwrap()
+    };
+
+    assert_eq!(game.controls.keys.get(&b'w'), Some(&input("front")));
+    assert_eq!(game.controls.keys.get(&b's'), Some(&input("back")));
+    assert_eq!(
+        game.controls.arrows.get(&ArrowKey::Up),
+        Some(&input("front"))
+    );
+    assert_eq!(
+        game.controls.arrows.get(&ArrowKey::Down),
+        Some(&input("back"))
+    );
+    assert_ne!(game.controls.arrows.get(&ArrowKey::Up), Some(&input("up")));
+    assert_ne!(
+        game.controls.arrows.get(&ArrowKey::Down),
+        Some(&input("down"))
+    );
 }
 
 #[test]

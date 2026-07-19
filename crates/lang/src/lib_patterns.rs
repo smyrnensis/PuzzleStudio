@@ -276,8 +276,9 @@ fn parse_surface_rewrite_effect(
     line: &str,
 ) -> Result<SurfaceRewriteEffect, DiagnosticReport> {
     let tokens = source_line_tokens(strip_line_comment(suffix), 0);
-    let document = rewrite_effect_surface_document(&tokens);
     let effects = parse_rewrite_effect_value(suffix, line)?;
+    let recognition = rewrite_effect_parser_recognition(&tokens);
+    let document = parser_recognition_surface_document(&recognition);
     Ok(SurfaceRewriteEffect { effects, document })
 }
 
@@ -698,10 +699,25 @@ fn resolve_relative_selectors_in_block(
                 for selector in &mut cell.forbid {
                     resolve_relative_selector(selector, direction, direction_expanded, line)?;
                 }
+                cell.forbid
+                    .retain(|selector| !selector.alternatives.is_empty());
             }
         }
     }
     Ok(block)
+}
+
+fn block_has_unavailable_required_selector(block: &PatternBlock) -> bool {
+    block.components.iter().any(|component| {
+        component.rows.iter().flatten().any(|part| {
+            let BlockPart::Cell(cell) = part else {
+                return false;
+            };
+            cell.require
+                .iter()
+                .any(|selector| selector.alternatives.is_empty())
+        })
+    })
 }
 
 fn resolve_relative_selector(
@@ -723,19 +739,13 @@ fn resolve_relative_selector(
         let absolute =
             resolve_relative_direction(constraint.relative, direction, direction_expanded, line)?;
         let value = direction_tag_name(direction, absolute, line)?;
-        let allowed = constraint
-            .alternatives_by_direction
-            .get(value)
-            .ok_or_else(|| parse_error(line, "relative direction selector target is unknown"))?;
+        let Some(allowed) = constraint.alternatives_by_direction.get(value) else {
+            selector.alternatives.clear();
+            break;
+        };
         selector
             .alternatives
             .retain(|object| allowed.contains(object));
-    }
-    if selector.alternatives.is_empty() {
-        return Err(parse_error(
-            line,
-            "relative direction selector matched no objects",
-        ));
     }
     selector.relative_constraints.clear();
     Ok(())
@@ -1405,10 +1415,10 @@ fn resolve_object_selector_syntax(
                 }));
             }
             if let Some(relative) = parse_relative_direction_value(value) {
-                if axis != "directions" {
+                if schema.axis_types.get(index).copied().flatten() != Some(ValueType::Direction) {
                     return Err(parse_error(
                         line,
-                        "relative direction selector tag requires a directions tag slot",
+                        "relative direction selector tag requires a direction-typed tag slot",
                     ));
                 }
                 source_token_parts.push((*value).to_string());
@@ -2847,6 +2857,11 @@ fn compile_before_after_blocks_for_direction(
 ) -> Result<(PatternBlock, Vec<RuleBodyAlternative>), DiagnosticReport> {
     let before = resolve_relative_selectors_in_block(before, direction, direction_expanded, line)?;
     let after = resolve_relative_selectors_in_block(after, direction, direction_expanded, line)?;
+    if block_has_unavailable_required_selector(&before)
+        || block_has_unavailable_required_selector(&after)
+    {
+        return Ok((before, Vec::new()));
+    }
     let alternatives = compile_before_after_blocks(
         &before,
         &after,

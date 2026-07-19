@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use crate::SpatialPresentation;
 use puzzle_core::{
     ComparisonOp, ConditionId, ConditionValueKind, GridCompiledGame, GridConditionValueKind,
-    GridExecutableProgram, GridGoalCondition, GridInput, GridRuleStep, GridSize, GridState,
-    InputId, MarkId, ObjectId, RuleId, Size2, Size3, VariableId,
+    GridExecutableProgram, GridGoalCondition, GridInput, GridProgramCatalog, GridProgramRef,
+    GridRuleStep, GridSize, GridState, InputId, MarkId, ObjectId, RuleId, Size2, Size3, VariableId,
 };
 pub use puzzle_core::{GoalClauseOf, GoalConditionOf, GoalExprOf, GoalValueOf};
 pub use puzzle_runtime_contract::RuntimeEffect as RuleEffect;
@@ -75,17 +75,19 @@ pub struct LoadedGridGame<const D: usize, Size: GridSize<D>> {
     pub game: GridCompiledGame<D>,
     #[serde(default)]
     pub inputs: Vec<GridInput<D>>,
+    #[serde(default, skip_serializing)]
     pub warnings: Vec<String>,
     pub default_wait_ms: u64,
     pub input_buffer: InputBufferDef,
     pub animation: AnimationDef,
     pub rule_animations: HashMap<RuleId, Vec<RuleAnimation>>,
     pub rule_effects: HashMap<RuleId, Vec<RuleEffect>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub rule_debug_info: HashMap<RuleId, RuleDebugInfo>,
     pub level_start_program: Option<GridExecutableProgram<D>>,
     pub level_clear_program: Option<GridExecutableProgram<D>>,
     pub last_level_clear_program: Option<GridExecutableProgram<D>>,
+    pub program_catalog: GridProgramCatalog<D>,
     pub levels: Vec<LoadedGridLevel<D, Size>>,
     pub run_rules_on_level_start: bool,
     pub legend: AsciiLegend,
@@ -105,7 +107,7 @@ pub struct LoadedGridGame<const D: usize, Size: GridSize<D>> {
     pub conditions: HashMap<String, GridGoalCondition<D>>,
     pub goal: Option<GridGoalCondition<D>>,
     pub lose: Option<GridGoalCondition<D>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub solver_strategy: GridSolverStrategy<D>,
     pub sounds: SoundsDef,
     #[serde(default)]
@@ -120,23 +122,94 @@ pub struct LoadedGridGame<const D: usize, Size: GridSize<D>> {
 pub type LoadedGame = LoadedGridGame<2, Size2>;
 
 impl<const D: usize, Size: GridSize<D>> LoadedGridGame<D, Size> {
-    pub fn program_for_level(&self, level_index: usize) -> Option<&[GridRuleStep<D>]> {
-        self.levels
-            .get(level_index)
-            .map(|level| level.program.as_steps())
+    pub fn programs_for_level(&self, level_index: usize) -> Option<Vec<&GridExecutableProgram<D>>> {
+        let level = self.levels.get(level_index)?;
+        level
+            .program
+            .references()
+            .iter()
+            .map(|reference| self.resolve_program(*reference))
+            .collect()
     }
 
-    pub fn executable_program_for_level(
+    pub fn program_steps_for_level(&self, level_index: usize) -> Option<Vec<&GridRuleStep<D>>> {
+        Some(
+            self.programs_for_level(level_index)?
+                .into_iter()
+                .flat_map(|program| program.as_steps())
+                .collect(),
+        )
+    }
+
+    pub fn level_start_program_for_level(
         &self,
         level_index: usize,
     ) -> Option<&GridExecutableProgram<D>> {
-        self.levels.get(level_index).map(|level| &level.program)
+        self.levels
+            .get(level_index)
+            .and_then(|level| level.level_start_program)
+            .and_then(|reference| self.resolve_program(reference))
+    }
+
+    pub fn level_clear_program_for_level(
+        &self,
+        level_index: usize,
+    ) -> Option<&GridExecutableProgram<D>> {
+        self.levels
+            .get(level_index)
+            .and_then(|level| level.level_clear_program)
+            .and_then(|reference| self.resolve_program(reference))
+    }
+
+    pub fn resolve_program(&self, reference: GridProgramRef) -> Option<&GridExecutableProgram<D>> {
+        match reference {
+            GridProgramRef::Main => Some(self.game.executable_program()),
+            GridProgramRef::Catalog(_) => self.program_catalog.get(reference),
+        }
+    }
+
+    pub fn validate_program_references(&self) -> Result<(), String> {
+        for (level_index, level) in self.levels.iter().enumerate() {
+            if !level.program.is_valid_level_sequence() {
+                return Err(format!(
+                    "level {level_index} has an invalid program sequence: {:?}",
+                    level.program.references()
+                ));
+            }
+            for (role, reference) in level
+                .program
+                .references()
+                .iter()
+                .copied()
+                .map(|reference| ("program", Some(reference)))
+                .chain([
+                    ("level_start_program", level.level_start_program),
+                    ("level_clear_program", level.level_clear_program),
+                ])
+            {
+                let Some(reference) = reference else {
+                    continue;
+                };
+                if self.resolve_program(reference).is_none() {
+                    return Err(format!(
+                        "level {level_index} has an invalid {role} reference: {reference:?}"
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn compiled_game_for_level(&self, level_index: usize) -> Option<GridCompiledGame<D>> {
-        self.executable_program_for_level(level_index)
-            .cloned()
-            .map(|program| self.game.clone_with_executable_program(program))
+        let steps = self
+            .programs_for_level(level_index)?
+            .into_iter()
+            .flat_map(|program| program.as_steps().iter().cloned())
+            .collect();
+        Some(
+            self.game
+                .clone_with_executable_program(GridExecutableProgram::new(steps)),
+        )
     }
 
     pub fn solver_state(&self, state: &GridState<D, Size>) -> GridState<D, Size> {
@@ -457,9 +530,9 @@ pub struct LoadedGridLevel<const D: usize, Size: GridSize<D>> {
     pub puzzle: String,
     pub initial_state: GridState<D, Size>,
     pub regions: Vec<LevelRegionDef>,
-    pub program: GridExecutableProgram<D>,
-    pub level_start_program: Option<GridExecutableProgram<D>>,
-    pub level_clear_program: Option<GridExecutableProgram<D>>,
+    pub program: puzzle_core::GridProgramSequence,
+    pub level_start_program: Option<GridProgramRef>,
+    pub level_clear_program: Option<GridProgramRef>,
 }
 
 pub type Level = LoadedGridLevel<2, Size2>;

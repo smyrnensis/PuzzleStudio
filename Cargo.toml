@@ -7,6 +7,7 @@ members = [
     "crates/scene",
     "crates/lang",
     "crates/solver",
+    "crates/solver_runtime",
     "crates/play",
     "crates/game_runtime",
     "crates/html_play",
@@ -15,7 +16,6 @@ members = [
     "crates/wasm",
     "crates/wasm_game",
     "crates/wasm_player",
-    "crates/wasm_core",
     "crates/agent_runtime",
     "src-tauri",
 ]

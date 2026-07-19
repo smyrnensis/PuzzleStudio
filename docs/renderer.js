@@ -149,6 +149,9 @@ class PuzzleRenderer {
     cell.setAttribute("aria-label", this.cellLabel(cellData));
 
     const layers = this.sortedLayers(cellData.layers);
+    if (this.options.renderMode === "dom" && this.layersUseMerge(layers)) {
+      throw new Error("sprite merge requires the canvas renderer");
+    }
     cell.classList.toggle("has-objects", layers.length > 0);
     for (const layer of layers) {
       if (this.resolveVisualSprite(layer)) {
@@ -159,6 +162,9 @@ class PuzzleRenderer {
     for (const layer of layers) {
       const sprite = this.renderSprite(layer);
       if (sprite) {
+        const cellOrder = this.cellRenderIndex(cellData, scene);
+        const priority = this.spriteRenderPriority(layer);
+        sprite.style.zIndex = String((cellOrder * this.spritePriorityCount()) + priority + 1);
         cell.append(sprite);
       }
     }
@@ -183,7 +189,6 @@ class PuzzleRenderer {
     sprite.className = `sprite visual-sprite visual-fit-${fit.mode} visual-sampling-${sampling} ${definition.className || ""} ${layer.sprite} visual-${this.classNameFor(visualKey)}`;
     sprite.dataset.object = layer.object;
     sprite.dataset.layer = layer.layer;
-    sprite.style.zIndex = String(definition.zIndex ?? layer.layer + 1);
     const { cols: spriteCols, rows: spriteRows } = this.spritePatternSize(baseFrame);
     const { cols: boxCols, rows: boxRows } = this.spriteDrawBox(baseFrame);
     sprite.style.setProperty("--sprite-cols", String(spriteCols));
@@ -211,7 +216,7 @@ class PuzzleRenderer {
     }
 
     sprite.classList.add("visual-pattern");
-    sprite.style.backgroundImage = `url("${this.patternDataUrl(baseFrame)}")`;
+    sprite.style.backgroundImage = `url("${this.domPatternDataUrl(baseFrame)}")`;
 
     return sprite;
   }
@@ -275,13 +280,13 @@ class PuzzleRenderer {
     }
 
     sprite.classList.add("visual-pattern");
-    sprite.style.backgroundImage = `url("${this.patternDataUrl(frame)}")`;
+    sprite.style.backgroundImage = `url("${this.domPatternDataUrl(frame)}")`;
   }
 
   renderCanvas(scene, frame) {
     const canvas = document.createElement("canvas");
     canvas.className = "board-canvas";
-    const presentationUnit = this.canvasPresentationCellUnit(scene);
+    const presentationUnit = this.canvasPresentationCellUnit();
     canvas.width = Math.max(1, Math.ceil(frame.width * presentationUnit));
     canvas.height = Math.max(1, Math.ceil(frame.height * presentationUnit));
     canvas.setAttribute("aria-label", this.boardLabel(scene, frame));
@@ -373,12 +378,35 @@ class PuzzleRenderer {
     for (const cell of this.frameCells(scene, frame)) {
       const x = (cell.x - frame.x) * unit;
       const y = (cell.y - frame.y) * unit;
-      for (const layer of this.sortedLayers(cell.layers)) {
-        const animation = this.animationForLayer(animations, cell, layer);
+      const layers = this.sortedLayers(cell.layers);
+      for (let index = 0; index < layers.length;) {
+        const priority = this.spriteRenderPriority(layers[index]);
+        const priorityDef = this.spriteOrder().priorities[priority];
+        const priorityLayers = [];
+        while (index < layers.length && this.spriteRenderPriority(layers[index]) === priority) {
+          priorityLayers.push(layers[index]);
+          index += 1;
+        }
+        if (priorityDef.merge) {
+          staticItems.push({
+            kind: "merge",
+            layers: priorityLayers,
+            cellOrder: this.cellRenderIndex(cell, scene),
+            layerOrder: priority,
+            order: order++,
+            x,
+            y,
+            animations: priorityLayers.map((layer) => this.animationForLayer(animations, cell, layer)),
+          });
+          continue;
+        }
+        for (const layer of priorityLayers) {
+          const animation = this.animationForLayer(animations, cell, layer);
         const item = {
           kind: "layer",
           layer,
-          layerOrder: Number(layer.layer) || 0,
+          cellOrder: this.cellRenderIndex(cell, scene),
+          layerOrder: this.spriteRenderPriority(layer),
           order: order++,
           x,
           y,
@@ -389,9 +417,10 @@ class PuzzleRenderer {
         } else {
           staticItems.push(item);
         }
+        }
       }
     }
-    const compare = (a, b) => a.layerOrder - b.layerOrder || a.order - b.order;
+    const compare = (a, b) => a.cellOrder - b.cellOrder || a.layerOrder - b.layerOrder || a.order - b.order;
     return [...staticItems.sort(compare), ...animatedItems.sort(compare)];
   }
 
@@ -464,7 +493,56 @@ class PuzzleRenderer {
   }
 
   paintCanvasItem(context, item, unit, progress = 1, now = performance.now()) {
+    if (item.kind === "merge") {
+      this.paintCanvasMergedLayers(context, item, unit, progress, now);
+      return;
+    }
     this.paintCanvasLayer(context, item.layer, item.x, item.y, unit, item.animation, progress, now);
+  }
+
+  paintCanvasMergedLayers(context, item, unit, progress, now) {
+    const samples = item.layers.map((layer, index) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = context.canvas.width;
+      canvas.height = context.canvas.height;
+      const sample = canvas.getContext("2d");
+      sample.setTransform(context.getTransform());
+      sample.imageSmoothingEnabled = context.imageSmoothingEnabled;
+      this.paintCanvasLayer(sample, layer, item.x, item.y, unit, item.animations[index], progress, now);
+      return sample.getImageData(0, 0, canvas.width, canvas.height);
+    });
+    const merged = context.createImageData(context.canvas.width, context.canvas.height);
+    for (let offset = 0; offset < merged.data.length; offset += 4) {
+      let count = 0;
+      let red = 0;
+      let green = 0;
+      let blue = 0;
+      let alpha = 0;
+      for (const sample of samples) {
+        if (sample.data[offset + 3] === 0) {
+          continue;
+        }
+        count += 1;
+        red += sample.data[offset];
+        green += sample.data[offset + 1];
+        blue += sample.data[offset + 2];
+        alpha += sample.data[offset + 3];
+      }
+      if (count > 0) {
+        merged.data[offset] = Math.round(red / count);
+        merged.data[offset + 1] = Math.round(green / count);
+        merged.data[offset + 2] = Math.round(blue / count);
+        merged.data[offset + 3] = Math.round(alpha / count);
+      }
+    }
+    const output = document.createElement("canvas");
+    output.width = context.canvas.width;
+    output.height = context.canvas.height;
+    output.getContext("2d").putImageData(merged, 0, 0);
+    context.save();
+    context.setTransform(1, 0, 0, 1, 0, 0);
+    context.drawImage(output, 0, 0);
+    context.restore();
   }
 
   paintCanvasLayer(context, layer, x, y, unit, animation = null, progress = 1, now = performance.now()) {
@@ -488,7 +566,7 @@ class PuzzleRenderer {
       context.translate(x + unit / 2 + (transform?.x || 0), y + unit / 2 + (transform?.y || 0));
       context.rotate(transform?.angle || 0);
       context.scale(transform?.scale ?? 1, transform?.scale ?? 1);
-      this.applyCanvasVisualTransforms(context, frame, unit);
+      this.applyCanvasVisualTransforms(context, frame, unit, animation, progress, now);
       x = -unit / 2;
       y = -unit / 2;
     }
@@ -530,7 +608,7 @@ class PuzzleRenderer {
     const fit = this.visualSpriteFit(frame, unit);
     context.save();
     context.imageSmoothingEnabled = this.spriteSampling(frame) === "smooth";
-    this.paintPattern(context, frame, x + fit.x, y + fit.y, fit.pixelWidth, fit.pixelHeight);
+    this.paintLogicalPatternToCanvas(context, frame, x + fit.x, y + fit.y, fit.pixelWidth, fit.pixelHeight);
     context.restore();
     if (usesTransformStack) {
       context.restore();
@@ -568,9 +646,6 @@ class PuzzleRenderer {
       transform.alpha = animation.kind === "move"
         ? 0.35 + 0.65 * eased
         : 1 - Math.sin(eased * Math.PI) * 0.45;
-    }
-    if (names.has("turn")) {
-      transform.angle = (animation.kind === "move" ? 1 - eased : Math.sin(eased * Math.PI)) * Math.PI * 0.5;
     }
     return transform;
   }
@@ -697,7 +772,7 @@ class PuzzleRenderer {
     const fit = this.visualSpriteFit(definition, unit);
     context.save();
     context.imageSmoothingEnabled = this.spriteSampling(definition) === "smooth";
-    this.paintPattern(context, definition, x + fit.x, y + fit.y, fit.pixelWidth, fit.pixelHeight);
+    this.paintLogicalPatternToCanvas(context, definition, x + fit.x, y + fit.y, fit.pixelWidth, fit.pixelHeight);
     context.restore();
     if (usesTransformStack) {
       context.restore();
@@ -789,23 +864,67 @@ class PuzzleRenderer {
         const y = (Number(transform.y) || 0) * 100 / Math.max(1, Number(boxRows) || 1);
         return `translate(${x}%, ${y}%)`;
       }
+      if (transform?.kind === "flip") {
+        return transform.enabled ? "scale(-1, -1)" : "";
+      }
       throw new Error(`Unknown sprite transform kind: ${String(transform?.kind)}`);
     });
     sprite.style.transformOrigin = "50% 50%";
     sprite.style.transform = css.join(" ");
   }
 
-  applyCanvasVisualTransforms(context, definition, unit) {
-    const transforms = Array.isArray(definition?.transforms) ? definition.transforms : [];
+  applyCanvasVisualTransforms(context, definition, unit, animation = null, progress = 1, now = performance.now()) {
+    const transforms = this.tweenedVisualTransforms(definition, animation, progress, now);
     for (const transform of [...transforms].reverse()) {
       if (transform?.kind === "rotate") {
         context.rotate(-Number(transform.degrees || 0) * Math.PI / 180);
       } else if (transform?.kind === "translate") {
         context.translate((Number(transform.x) || 0) * unit, (Number(transform.y) || 0) * unit);
+      } else if (transform?.kind === "flip") {
+        if (transform.enabled) {
+          context.scale(-1, -1);
+        }
       } else {
         throw new Error(`Unknown sprite transform kind: ${String(transform?.kind)}`);
       }
     }
+  }
+
+  tweenedVisualTransforms(definition, animation, progress, now) {
+    const target = Array.isArray(definition?.transforms) ? definition.transforms : [];
+    if (!animation?.fromObject || progress >= 1) {
+      return target;
+    }
+    const sourceSprite = this.resolveVisualSprite({ object: animation.fromObject });
+    if (!sourceSprite?.definition) {
+      throw new Error(`Tween source sprite is missing: ${animation.fromObject}`);
+    }
+    const sourceFrame = this.resolveVisualFrame(
+      sourceSprite.definition,
+      this.loopAnimationTimeMs(now, sourceSprite.definition),
+    );
+    const source = Array.isArray(sourceFrame.transforms) ? sourceFrame.transforms : [];
+    return target.map((transform, index) => {
+      if (transform?.kind !== "rotate") {
+        return transform;
+      }
+      const from = source[index];
+      if (from?.kind !== "rotate") {
+        throw new Error(`Tween rotate transform mismatch at index ${index}`);
+      }
+      const fromDegrees = Number(from.degrees || 0);
+      const toDegrees = Number(transform.degrees || 0);
+      const delta = this.rotationTweenDeltaDegrees(fromDegrees, toDegrees);
+      return { ...transform, degrees: fromDegrees + delta * progress };
+    });
+  }
+
+  rotationTweenDeltaDegrees(fromDegrees, toDegrees) {
+    let delta = ((toDegrees - fromDegrees + 180) % 360 + 360) % 360 - 180;
+    if (delta === -180) {
+      delta = 180;
+    }
+    return delta;
   }
 
   visualFrameCount(definition) {
@@ -850,7 +969,7 @@ class PuzzleRenderer {
     return ((value % size) + size) % size;
   }
 
-  paintPattern(context, definition, x, y, pixelWidth, pixelHeight = pixelWidth) {
+  paintLogicalPatternToCanvas(context, definition, x, y, pixelWidth, pixelHeight = pixelWidth) {
     const pattern = definition.pattern || [];
     pattern.forEach((row, rowIndex) => {
       [...row].forEach((token, colIndex) => {
@@ -935,7 +1054,7 @@ class PuzzleRenderer {
 
   canvasMetrics(canvas, scene, frame) {
     const rect = canvas.getBoundingClientRect();
-    const presentationUnit = this.canvasPresentationCellUnit(scene);
+    const presentationUnit = this.canvasPresentationCellUnit();
     const cssWidth = rect.width > 0 ? rect.width : frame.width * presentationUnit;
     const cssHeight = rect.height > 0 ? rect.height : frame.height * presentationUnit;
     if (cssWidth <= 0 || cssHeight <= 0) {
@@ -959,11 +1078,7 @@ class PuzzleRenderer {
     };
   }
 
-  canvasPresentationCellUnit(scene) {
-    const configured = Number(scene?.settings?.render?.cellSize);
-    if (Number.isFinite(configured) && configured > 0) {
-      return configured;
-    }
+  canvasPresentationCellUnit() {
     const cssValue = getComputedStyle(this.root).getPropertyValue("--cell-size").trim();
     const parsed = Number.parseFloat(cssValue);
     if (Number.isFinite(parsed) && parsed > 0) {
@@ -984,29 +1099,34 @@ class PuzzleRenderer {
     return `Board ${frame.width} by ${frame.height}`;
   }
 
-  patternDataUrl(definition) {
-    const pattern = definition.pattern || [];
+  domPatternDataUrl(definition) {
+    const key = JSON.stringify([definition.pattern || [], definition.colors || {}]);
+    const cache = this.constructor.domPatternDataUrlCache
+      || (this.constructor.domPatternDataUrlCache = new Map());
+    const existing = cache.get(key);
+    if (existing) {
+      return existing;
+    }
     const { cols: width, rows: height } = this.spritePatternSize(definition);
-    const rects = [];
-    pattern.forEach((row, y) => {
-      [...row].forEach((token, x) => {
+    const bitmap = document.createElement("canvas");
+    bitmap.width = width;
+    bitmap.height = height;
+    const bitmapContext = bitmap.getContext("2d");
+    bitmapContext.imageSmoothingEnabled = false;
+    const pattern = definition.pattern || [];
+    pattern.forEach((row, rowIndex) => {
+      [...row].forEach((token, colIndex) => {
         const color = definition.colors?.[token] || "transparent";
         if (!color || color === "transparent") {
           return;
         }
-        rects.push(`<rect x="${x}" y="${y}" width="1" height="1" fill="${this.svgAttribute(color)}"/>`);
+        bitmapContext.fillStyle = color;
+        bitmapContext.fillRect(colIndex, rowIndex, 1, 1);
       });
     });
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" shape-rendering="crispEdges">${rects.join("")}</svg>`;
-    return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
-  }
-
-  svgAttribute(value) {
-    return String(value)
-      .replace(/&/g, "&amp;")
-      .replace(/"/g, "&quot;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;");
+    const url = bitmap.toDataURL("image/png");
+    cache.set(key, url);
+    return url;
   }
 
   solidPatternColor(definition) {
@@ -1081,7 +1201,57 @@ class PuzzleRenderer {
   }
 
   sortedLayers(layers) {
-    return [...layers].sort((a, b) => a.layer - b.layer);
+    return [...layers].sort((a, b) =>
+      this.spriteRenderPriority(a) - this.spriteRenderPriority(b)
+      || Number(a.objectId) - Number(b.objectId)
+    );
+  }
+
+  spriteOrder() {
+    const order = this.visuals().order;
+    if (!order || !Array.isArray(order.direction_priority) || !Array.isArray(order.priorities)) {
+      throw new Error("compiled sprite order contract is missing");
+    }
+    return order;
+  }
+
+  spritePriorityCount() {
+    return Math.max(1, this.spriteOrder().priorities.length);
+  }
+
+  layersUseMerge(layers) {
+    return layers.some((layer) => this.spriteOrder().priorities[this.spriteRenderPriority(layer)]?.merge);
+  }
+
+  spriteRenderPriority(layer) {
+    const name = String(layer.object || "");
+    const priority = this.spriteOrder().priorities.findIndex((entry) =>
+      Array.isArray(entry.objects) && entry.objects.includes(name)
+    );
+    if (priority < 0) {
+      throw new Error(`compiled sprite order does not cover object: ${name}`);
+    }
+    return priority;
+  }
+
+  cellRenderIndex(cell, scene) {
+    const width = Math.max(1, Number(scene?.width) || 1);
+    const height = Math.max(1, Number(scene?.height) || 1);
+    const coordinates = {
+      right: [Number(cell.x), width],
+      left: [width - 1 - Number(cell.x), width],
+      down: [Number(cell.y), height],
+      up: [height - 1 - Number(cell.y), height],
+    };
+    let index = 0;
+    for (const direction of this.spriteOrder().direction_priority) {
+      const coordinate = coordinates[direction];
+      if (!coordinate) {
+        throw new Error(`invalid 2D sprite order direction: ${direction}`);
+      }
+      index = (index * coordinate[1]) + coordinate[0];
+    }
+    return index;
   }
 
   usesVisualSprites(scene, visuals) {

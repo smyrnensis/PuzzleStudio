@@ -171,7 +171,7 @@ function toolPanePanelForPaneId(paneId) {
 
 function createPaneCloseButton(paneId) {
   const button = document.createElement("button");
-  button.className = "pane-close-button";
+  button.className = "icon-button pane-close-button";
   button.type = "button";
   button.dataset.paneClose = paneId;
   button.setAttribute("aria-label", `Hide ${toolPaneTitle(paneId)} pane`);
@@ -195,7 +195,7 @@ function setPaneMaximizeButtonIcon(button, isRestore) {
 
 function createPaneMaximizeButton(paneId) {
   const button = document.createElement("button");
-  button.className = "pane-maximize-button";
+  button.className = "icon-button pane-maximize-button";
   button.type = "button";
   button.dataset.paneMaximize = paneId;
   button.setAttribute("aria-label", `Maximize ${toolPaneTitle(paneId)} pane`);
@@ -310,7 +310,7 @@ function initializePhysicalWorkPanes() {
   }
   const previewClose = previewPane.querySelector("[data-pane-close]");
   if (previewClose) {
-    previewClose.className = "pane-close-button";
+    previewClose.className = "icon-button pane-close-button";
     previewClose.dataset.paneClose = PREVIEW_WORK_PANE_ID;
     previewClose.setAttribute("aria-label", "Hide Preview pane");
     previewClose.title = "Hide Preview pane";
@@ -424,7 +424,7 @@ function ensurePaneSplitterCount(count) {
   const splitters = Array.from(workbench.querySelectorAll(".pane-splitter"));
   while (splitters.length < count) {
     const splitter = document.createElement("div");
-    splitter.className = "pane-splitter";
+    splitter.className = "accent-splitter pane-splitter";
     splitter.setAttribute("role", "separator");
     splitter.setAttribute("aria-label", "Resize panes");
     splitter.setAttribute("aria-orientation", "vertical");

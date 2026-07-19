@@ -57,12 +57,6 @@
         window.PuzzleRuntimeExportJson = "";
       }
       this.exportJson = "";
-      if (!this.data || typeof this.data !== "object") {
-        return;
-      }
-      delete this.data.runtimeLoadedDocument;
-      delete this.data.compiledPlay;
-      delete this.data.engine;
     }
 
     sessionRequestJson(method, url) {
@@ -86,9 +80,8 @@
       if (method !== "POST") {
         throw new Error(`Unsupported standalone session request: ${method} ${url}`);
       }
-      const debugInputPrefix = "/api/debug/input/";
-      if (url.startsWith(debugInputPrefix)) {
-        return { kind: "debug_input", name: decodeURIComponent(url.slice(debugInputPrefix.length)) };
+      if (url === "/api/resume") {
+        return { kind: "resume" };
       }
       const inputPrefix = "/api/input/";
       if (url.startsWith(inputPrefix)) {
@@ -124,6 +117,16 @@
       this.sessionRuntime.apply_input_name(inputName);
       this.writeSessionProgressSave();
       window.dispatchEvent(new CustomEvent("PuzzleStandaloneStateChanged"));
+    }
+
+    applyDebugInputName(inputName) {
+      if (!this.sessionRuntime || !this.editorPreviewInputEnabled) {
+        throw new Error("Debug input is unavailable in this standalone runtime.");
+      }
+      return JSON.parse(this.sessionRuntime.dispatch(JSON.stringify({
+        kind: "debug_input",
+        name: String(inputName || ""),
+      })));
     }
 
     applyCommandName(commandName) {

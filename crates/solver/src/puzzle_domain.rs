@@ -393,7 +393,7 @@ level "second" {
 
         assert!(completed.completed());
         assert!(loaded.is_goal_complete(completed.observation_state()));
-        assert!(!loaded.is_goal_complete(completed.state()));
+        assert_eq!(completed.observation_state(), completed.state());
         assert!(domain.is_goal(&completed));
 
         let outcome = exact_bfs(
@@ -467,7 +467,7 @@ AAA
     }
 
     #[test]
-    fn solver_edge_is_one_play_owned_again_input() {
+    fn solver_edge_completes_again_within_one_logical_input() {
         let loaded = parse_game(include_str!(
             "../../play/tests/fixtures/again_atomic.puzzle"
         ))

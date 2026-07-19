@@ -18,13 +18,14 @@ async function downloadHtml() {
   setEditorStatus(`Exporting ${filename}`, "");
   let html = "";
   try {
+    const presentationManifest = await ensurePreviewDocumentsLoaded(document);
     html = await window.PuzzleStudioHost.exportStandaloneHtml({
       source,
       workspaceDocuments: workspaceCompilerDocuments(document),
       puzzlePath: document.puzzlePath,
       workspaceRoot: document.workspaceRoot || "",
-      gameCss: effectiveGameCss(document),
-      gameVisualsJs: effectiveGameVisualsJs(document),
+      gameCss: effectiveGameCss(document, presentationManifest),
+      gameVisualsJs: effectiveGameVisualsJs(document, presentationManifest),
     });
   } catch (error) {
     appendCompileDiagnostics(error, { source: "compiler", document, sourceText: source });

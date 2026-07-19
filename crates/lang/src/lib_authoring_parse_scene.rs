@@ -1635,8 +1635,7 @@ fn recognize_scene_effect_body(
     recognition: &mut crate::surface::ParserRecognition,
 ) {
     for line in lines.iter().take(end).skip(start) {
-        let document = scene_effect_surface_document(&line.tokens);
-        recognition.merge_surface_document(document);
+        recognition.merge(scene_effect_parser_recognition(&line.tokens));
     }
 }
 
@@ -1681,22 +1680,7 @@ fn recognize_scene_component_line(
         );
     }
     if let Some(arrow) = arrow {
-        let document = scene_effect_surface_document(&line.tokens[arrow + 1..]);
-        if document.semantic_tokens.is_empty() {
-            for token in &line.tokens[arrow + 1..] {
-                if token.text != "{" && token.text != "}" {
-                    recognition.mark(
-                        crate::surface::SourceSpan {
-                            start: token.start,
-                            end: token.end,
-                        },
-                        crate::surface::SurfaceSemanticKind::Effect,
-                    );
-                }
-            }
-        } else {
-            recognition.merge_surface_document(document);
-        }
+        recognition.merge(scene_effect_parser_recognition(&line.tokens[arrow + 1..]));
     }
 }
 
