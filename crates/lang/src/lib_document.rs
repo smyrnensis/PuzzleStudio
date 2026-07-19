@@ -81,11 +81,7 @@ pub fn parse_document_assets(source: &str) -> Result<AssetsDef, DiagnosticReport
 
 fn parse_game2d_document(source: &str) -> Result<LoadedGame, DiagnosticReport> {
     let parts = parse_document_source_parts_from_surface_source(source)?;
-    let disposition_diagnostic = parts.disposition_diagnostic.clone();
-    finish_compile_with_parser_dispositions(
-        parse_game2d_from_document_parts(parts),
-        disposition_diagnostic,
-    )
+    parse_game2d_from_document_parts(parts)
 }
 
 fn parse_game2d_from_document_parts(
@@ -141,22 +137,7 @@ fn parse_game_document_with_profile(
 ) -> Result<LoadedDocument, DiagnosticReport> {
     let parts = parse_document_source_parts_from_surface_source(source)?;
     validate_document_source_profile(&parts, profile)?;
-    let disposition_diagnostic = parts.disposition_diagnostic.clone();
-    finish_compile_with_parser_dispositions(
-        parse_loaded_document_parts(parts),
-        disposition_diagnostic,
-    )
-}
-
-fn finish_compile_with_parser_dispositions<T>(
-    compiled: Result<T, DiagnosticReport>,
-    disposition_diagnostic: Option<DiagnosticReport>,
-) -> Result<T, DiagnosticReport> {
-    let compiled = compiled?;
-    if let Some(report) = disposition_diagnostic {
-        return Err(report);
-    }
-    Ok(compiled)
+    parse_loaded_document_parts(parts)
 }
 
 fn validate_document_source_profile(
@@ -604,7 +585,6 @@ struct DocumentSourceParts {
     model_catalogs: Vec<Catalog>,
     scenes: Vec<SceneDef>,
     recognition: crate::surface::ParserRecognition,
-    disposition_diagnostic: Option<DiagnosticReport>,
 }
 
 impl Default for DocumentShell {
@@ -677,7 +657,6 @@ fn parse_document_source_parts_from_logical_lines(
         model_catalogs,
         scenes,
         recognition,
-        disposition_diagnostic: None,
     })
 }
 
@@ -1360,18 +1339,24 @@ pub fn expand_game_imports_for_file_under_root(
 /// Hosts provide files; the language layer alone interprets import syntax.
 pub fn expand_game_imports_from_documents(
     entry_path: &str,
-    documents: &[(String, String)],
+    documents: &[WorkspaceSourceDocument],
 ) -> Result<String, DiagnosticReport> {
     let entry = normalize_virtual_import_path(Path::new(entry_path));
-    let sources = documents
-        .iter()
-        .map(|(path, source)| {
-            (
-                normalize_virtual_import_path(Path::new(path)),
-                source.as_str(),
-            )
-        })
-        .collect::<HashMap<_, _>>();
+    let mut sources = HashMap::new();
+    for document in documents {
+        let path = normalize_virtual_import_path(Path::new(&document.path));
+        if path.as_os_str().is_empty() {
+            return Err(DiagnosticReport::error(
+                "workspace document path must not be empty".to_string(),
+            ));
+        }
+        if sources.insert(path.clone(), document.source.as_str()).is_some() {
+            return Err(DiagnosticReport::error(format!(
+                "duplicate workspace document path: {}",
+                path.display()
+            )));
+        }
+    }
     let source = sources.get(&entry).copied().ok_or_else(|| {
         DiagnosticReport::error(format!(
             "workspace puzzle entry not found: {}",
@@ -1668,7 +1653,7 @@ fn lower_model_with_shell_inner(
         add_spatial_directions("default inputs", &mut catalog, &mut directions)?;
     }
     add_default_non_direction_inputs("default inputs", &mut catalog)?;
-    add_default_key_controls(&catalog.input_names, &mut controls);
+    add_default_key_controls(model.dimension, &catalog.input_names, &mut controls);
     let effective_directional_inputs = directions.clone();
     let dimension = model.dimension;
     let spatial_domain = SpatialDomain::new(dimension);
@@ -1777,7 +1762,7 @@ fn lower_model_with_shell_inner(
     );
     warnings.extend(collect_visual_overwrite_warnings(&visuals));
     warnings.extend(collect_visual_sprite_grid_warnings(&visuals));
-    let programs = lower_programs(
+    let mut programs = lower_programs(
         rule_definitions,
         main_statements,
         main_local_frame,
@@ -1813,7 +1798,7 @@ fn lower_model_with_shell_inner(
             model,
             &catalog,
             &canonical_game,
-            &programs,
+            &mut programs,
             &controls,
             &catalog.input_labels,
             &render,
@@ -1854,6 +1839,7 @@ fn lower_model_with_shell_inner(
             last_level_clear_program: programs
                 .last_level_clear
                 .map(puzzle_core::GridExecutableProgram::new),
+            program_catalog: materialized.program_catalog,
             levels: materialized.levels,
             run_rules_on_level_start,
             legend,
@@ -1894,6 +1880,7 @@ fn lower_model_with_shell_inner(
     for (objects, ch) in render_overlays {
         legend.add_overlay(objects, ch);
     }
+    let mut program_catalog = puzzle_core::GridProgramCatalog::default();
     let levels = prepared_level_bodies
         .into_iter()
         .enumerate()
@@ -1906,21 +1893,39 @@ fn lower_model_with_shell_inner(
                 &catalog.variable_defaults,
             )
             .value?;
+            let program = match &programs.level_programs[index] {
+                LoweredLevelProgram::Main => puzzle_core::GridProgramSequence::main(),
+                LoweredLevelProgram::WithSurrounding { before, after } => {
+                    let before = (!before.is_empty())
+                        .then(|| crate::spatial_materialize2::executable(before))
+                        .transpose()?
+                        .map(|program| program_catalog.intern(program));
+                    let after = (!after.is_empty())
+                        .then(|| crate::spatial_materialize2::executable(after))
+                        .transpose()?
+                        .map(|program| program_catalog.intern(program));
+                    puzzle_core::GridProgramSequence::with_surrounding(before, after)
+                }
+            };
+            let level_start_program = programs.level_starts[index]
+                .as_deref()
+                .map(crate::spatial_materialize2::executable)
+                .transpose()?
+                .map(|program| program_catalog.intern(program));
+            let level_clear_program = programs.level_clears[index]
+                .as_deref()
+                .map(crate::spatial_materialize2::executable)
+                .transpose()?
+                .map(|program| program_catalog.intern(program));
             Ok(Level {
                 name: prepared.name,
                 pack: prepared.pack,
                 puzzle: prepared.puzzle,
                 initial_state: parsed_level.state,
                 regions: parsed_level.regions,
-                program: crate::spatial_materialize2::executable(&programs.level_programs[index])?,
-                level_start_program: programs.level_starts[index]
-                    .as_deref()
-                    .map(crate::spatial_materialize2::executable)
-                    .transpose()?,
-                level_clear_program: programs.level_clears[index]
-                    .as_deref()
-                    .map(crate::spatial_materialize2::executable)
-                    .transpose()?,
+                program,
+                level_start_program,
+                level_clear_program,
             })
         })
         .collect::<Result<Vec<_>, DiagnosticReport>>()?;
@@ -1977,6 +1982,7 @@ fn lower_model_with_shell_inner(
             .as_deref()
             .map(crate::spatial_materialize2::executable)
             .transpose()?,
+        program_catalog,
         levels,
         run_rules_on_level_start,
         legend,

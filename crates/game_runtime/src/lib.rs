@@ -1,10 +1,11 @@
 use puzzle_core::{
-    CompiledGame, Coord3, GridCompiledGame, GridLevel, GridRuleFiring, GridSize, GridState,
-    GridTransitionOutcome, InputId, MarkValueMatch as CoreMarkValueMatch, ObjectId, PatchOp,
-    RuleId, Size2, Size3, State as PuzzleState, TransitionCommand,
+    GridCompiledGame, GridSize, GridState, InputId, ObjectId, Size2, Size3, State as PuzzleState,
 };
 #[cfg(feature = "editor-debug")]
-use puzzle_core::{GridCoord, GridPatch, MarkId, VariableId, VariableUpdateOp};
+use puzzle_core::{
+    GridCoord, GridPatch, MarkId, MarkValueMatch as CoreMarkValueMatch, PatchOp, RuleId,
+    TransitionCommand, VariableId, VariableUpdateOp,
+};
 use puzzle_lang::{
     ArrowKey, KeyTrigger, Level, LoadedDocument, LoadedDocumentModel, LoadedGame, LoadedGridGame,
     ResourceSelection, SceneAlignDef, SceneBinaryOp, SceneComponent, SceneDef,
@@ -16,15 +17,12 @@ use puzzle_lang::{
 #[cfg(feature = "editor-debug")]
 use puzzle_play::GridTransitionTrace;
 use puzzle_play::{
-    GameSession, GridGameSession, LevelProgressSaveData, PersistentVarSaveData,
-    PresentationEventKind, ProgressSaveData, presentation_events_contract,
-    runtime_effects_for_outcome, runtime_sounds_def,
+    GameSession, GridGameSession, LevelProgressSaveData, PersistentVarSaveData, ProgressSaveData,
+    presentation_events_contract, runtime_sounds_def,
 };
 use puzzle_runtime_contract::{
-    CameraEffect, GridRuntimeModel, RuntimeAnimationEvent, RuntimeChangedCell, RuntimeContract,
-    RuntimeCoord, RuntimeGridSize, RuntimeMarkValueMatch, RuntimePatchOp, RuntimeRuleFiring,
-    RuntimeStateSnapshot, RuntimeStateSnapshot3d, RuntimeTransitionCommand, SessionAction,
-    RuntimeTransitionCurrentOutcome, RuntimeTransitionProgramOutcome,
+    RuntimeStateSnapshot2d, RuntimeStateSnapshot3d, STANDALONE_RUNTIME_EXPORT_VERSION,
+    SessionAction, SolverStateSnapshot, StandaloneRuntimeExport,
 };
 use serde_json::{Value, json};
 
@@ -35,6 +33,8 @@ pub struct StandaloneSessionBridge {
 
 trait StandaloneSessionModel {
     fn snapshot_value(&mut self, has_progress_save: bool) -> Value;
+    fn is_waiting(&self) -> bool;
+    fn resume_wait(&mut self) -> Result<(), String>;
     fn apply_input_name(&mut self, input_name: &str) -> Result<(), String>;
     #[cfg(feature = "editor-debug")]
     fn apply_debug_input_name_json(&mut self, input_name: &str) -> Result<String, String>;
@@ -62,10 +62,10 @@ struct GridSessionRuntime<const D: usize, Size: GridSize<D>, Projection> {
 }
 
 trait GridSessionProjection<const D: usize, Size: GridSize<D>> {
-    fn decode_state(
+    fn decode_state_json(
         &self,
         game: &GridCompiledGame<D>,
-        value: &Value,
+        state_json: &str,
     ) -> Result<GridState<D, Size>, String>;
 
     fn snapshot_grid(
@@ -73,6 +73,8 @@ trait GridSessionProjection<const D: usize, Size: GridSize<D>> {
         loaded: &LoadedGridGame<D, Size>,
         session: &GridGameSession<D, Size>,
     ) -> ProjectedGridSnapshot;
+
+    fn solver_state(&self, state: &GridState<D, Size>) -> SolverStateSnapshot;
 }
 
 struct ProjectedGridSnapshot {
@@ -84,9 +86,8 @@ struct ProjectedGridSnapshot {
 #[derive(Default)]
 struct CanvasProjection;
 
-struct SpatialProjection {
-    fixture: Value,
-}
+#[derive(Default)]
+struct SpatialProjection;
 
 impl StandaloneSessionBridge {
     pub fn from_source(source: &str, puzzle_path: &str) -> Result<Self, String> {
@@ -99,26 +100,17 @@ impl StandaloneSessionBridge {
     }
 
     pub fn from_export_json(export_json: &str) -> Result<Self, String> {
-        let export: Value = serde_json::from_str(export_json).map_err(|error| error.to_string())?;
-        let runtime_bundle = export
-            .get("runtimeLoadedDocument")
-            .ok_or_else(|| "standalone export is missing runtimeLoadedDocument".to_string())?;
-        let version = runtime_bundle
-            .get("version")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| "runtimeLoadedDocument is missing version".to_string())?;
-        if version != 1 {
+        let export: StandaloneRuntimeExport<LoadedDocument> = serde_json::from_str(export_json)
+            .map_err(|error| format!("invalid standalone runtime export: {error}"))?;
+        let runtime_bundle = export.runtime_loaded_document;
+        if runtime_bundle.version != STANDALONE_RUNTIME_EXPORT_VERSION {
             return Err(format!(
-                "unsupported runtimeLoadedDocument version: {version}"
+                "unsupported runtimeLoadedDocument version: {}",
+                runtime_bundle.version
             ));
         }
-        let document_value = runtime_bundle
-            .get("document")
-            .ok_or_else(|| "runtimeLoadedDocument is missing document".to_string())?;
-        let document: LoadedDocument = serde_json::from_value(document_value.clone())
-            .map_err(|error| format!("invalid runtimeLoadedDocument document: {error}"))?;
         Ok(Self {
-            model: standalone_session_model(document)?,
+            model: standalone_session_model(runtime_bundle.document)?,
             has_progress_save: false,
         })
     }
@@ -129,8 +121,17 @@ impl StandaloneSessionBridge {
     }
 
     pub fn dispatch(&mut self, action: SessionAction) -> Result<String, String> {
+        if self.model.is_waiting()
+            && !matches!(&action, SessionAction::Snapshot | SessionAction::Resume)
+        {
+            return Err("session action is unavailable while a turn is waiting".to_string());
+        }
         match action {
             SessionAction::Snapshot => Ok(self.snapshot_json()),
+            SessionAction::Resume => {
+                self.model.resume_wait()?;
+                Ok(self.snapshot_json())
+            }
             SessionAction::Undo => {
                 self.model.undo();
                 Ok(self.snapshot_json())
@@ -160,9 +161,7 @@ impl StandaloneSessionBridge {
                 Ok(self.snapshot_json())
             }
             #[cfg(feature = "editor-debug")]
-            SessionAction::DebugInput { name } => {
-                self.apply_debug_input_name_json(&name)
-            }
+            SessionAction::DebugInput { name } => self.apply_debug_input_name_json(&name),
             #[cfg(not(feature = "editor-debug"))]
             SessionAction::DebugInput { .. } => {
                 Err("debug input is unavailable in the player runtime".to_string())
@@ -223,36 +222,29 @@ impl StandaloneSessionBridge {
 }
 
 fn standalone_session_model(
-    document: LoadedDocument,
+    mut document: LoadedDocument,
 ) -> Result<Box<dyn StandaloneSessionModel>, String> {
-    match document.single_model() {
-        Some(LoadedDocumentModel::Puzzle2d { game, .. }) => {
-            let loaded = game.clone();
-            Ok(Box::new(GridSessionRuntime {
-                session: GridGameSession::new(&loaded),
-                loaded,
-                projection: CanvasProjection,
-            }))
-        }
-        Some(LoadedDocumentModel::Puzzle3d {
-            game, presentation, ..
-        }) => {
-            let fixture = puzzle_lang::export_loaded_document_visual_fixture_json(&document)
-                .map_err(|error| format!("spatial runtime fixture failed: {error:?}"))?;
-            let fixture = serde_json::from_str(&fixture)
-                .map_err(|error| format!("spatial runtime fixture is invalid JSON: {error}"))?;
-            let loaded = game.clone();
-            let _ = presentation;
-            Ok(Box::new(GridSessionRuntime {
-                session: GridGameSession::new(&loaded),
-                loaded,
-                projection: SpatialProjection { fixture },
-            }))
-        }
-        None => Err(
+    if document.models.len() != 1 {
+        return Err(
             "a document with multiple puzzle worlds requires model-addressed session routing"
                 .to_string(),
-        ),
+        );
+    }
+    match document.models.first().expect("single model was checked") {
+        LoadedDocumentModel::Puzzle2d { game, .. } => game.validate_program_references()?,
+        LoadedDocumentModel::Puzzle3d { game, .. } => game.validate_program_references()?,
+    }
+    match document.models.pop().expect("single model was checked") {
+        LoadedDocumentModel::Puzzle2d { game: loaded, .. } => Ok(Box::new(GridSessionRuntime {
+            session: GridGameSession::new(&loaded),
+            loaded,
+            projection: CanvasProjection,
+        })),
+        LoadedDocumentModel::Puzzle3d { game: loaded, .. } => Ok(Box::new(GridSessionRuntime {
+            session: GridGameSession::new(&loaded),
+            loaded,
+            projection: SpatialProjection,
+        })),
     }
 }
 
@@ -264,11 +256,10 @@ where
 {
     fn snapshot_value(&mut self, has_progress_save: bool) -> Value {
         let presentation_events = self.session.take_presentation_events();
-        let busy = presentation_events
-            .iter()
-            .any(|event| matches!(event.kind, PresentationEventKind::Wait(_)));
+        let busy = self.session.is_waiting();
         let current_scene = self.session.focused_scene();
         let projected = self.projection.snapshot_grid(&self.loaded, &self.session);
+        let solver_state = self.projection.solver_state(self.session.state());
         let scene_state = scene_state_value(self.session.scene_state());
         let scene_puzzles = scene_puzzles_value(self.session.scene_state());
         json!({
@@ -301,6 +292,7 @@ where
             "scenePuzzles": scene_puzzles,
             "scenePuzzleState": projected.scene_puzzle_state,
             "sceneLayers": projected.scene_layers,
+            "solverState": solver_state,
             "selectedLevelIndex": self.session.selected_level_index(),
             "busy": busy,
             "canUndo": self.session.can_undo(),
@@ -310,6 +302,16 @@ where
             "scenes": scenes_value(&self.loaded),
             "screens": scenes_value(&self.loaded),
         })
+    }
+
+    fn is_waiting(&self) -> bool {
+        self.session.is_waiting()
+    }
+
+    fn resume_wait(&mut self) -> Result<(), String> {
+        self.session
+            .resume_wait(&self.loaded)
+            .map_err(|error| format!("{error:?}"))
     }
 
     fn apply_input_name(&mut self, input_name: &str) -> Result<(), String> {
@@ -380,8 +382,9 @@ where
         if level_index >= self.loaded.levels.len() {
             return Err(format!("level index out of range: {level_index}"));
         }
-        let value: Value = serde_json::from_str(state_json).map_err(|error| error.to_string())?;
-        let state = self.projection.decode_state(&self.loaded.game, &value)?;
+        let state = self
+            .projection
+            .decode_state_json(&self.loaded.game, state_json)?;
         self.session
             .start_level_from_state(&self.loaded, level_index, state, materialize_level_start)
             .map_err(|error| format!("{error:?}"))
@@ -399,59 +402,15 @@ where
     }
 }
 
-fn decode_state_value(game: &CompiledGame, value: &Value) -> Result<PuzzleState, String> {
-    let width = u16_field(value, "width")?;
-    let height = u16_field(value, "height")?;
-    let layer_count = u16_field(value, "layerCount")?;
-    let variables = value
-        .get("variables")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .map(|item| {
-                    item.as_i64()
-                        .ok_or_else(|| "variable must be an integer".to_string())
-                })
-                .collect::<Result<Vec<_>, _>>()
-        })
-        .transpose()?
-        .unwrap_or_default();
-    let mut state = PuzzleState::empty_with_variables(
-        width,
-        height,
-        layer_count,
-        game.object_count(),
-        variables,
-    )
-    .map_err(|error| format!("{error:?}"))?;
-    for (index, item) in array_field(value, "slots")?.iter().enumerate() {
-        let object = ObjectId(u16_value(item, "slot")?);
-        if object.is_empty() {
-            continue;
-        }
-        let cell = index / usize::from(layer_count);
-        let x = u16::try_from(cell % usize::from(width)).map_err(|_| "x out of range")?;
-        let y = u16::try_from(cell / usize::from(width)).map_err(|_| "y out of range")?;
-        state
-            .place_object(game, x, y, object)
-            .map_err(|error| format!("{error:?}"))?;
-    }
-    if let Some(rules) = value.get("levelFiredRules").and_then(Value::as_array) {
-        for rule in rules {
-            state.mark_level_rule_fired(RuleId(u16_value(rule, "levelFiredRules")?));
-        }
-    }
-    Ok(state)
-}
-
 impl GridSessionProjection<2, Size2> for CanvasProjection {
-    fn decode_state(
+    fn decode_state_json(
         &self,
         game: &GridCompiledGame<2>,
-        value: &Value,
+        state_json: &str,
     ) -> Result<GridState<2, Size2>, String> {
-        decode_state_value(game, value)
+        serde_json::from_str::<RuntimeStateSnapshot2d>(state_json)
+            .map_err(|error| error.to_string())?
+            .into_state(game)
     }
 
     fn snapshot_grid(
@@ -465,15 +424,21 @@ impl GridSessionProjection<2, Size2> for CanvasProjection {
             scene_layers: scene_layers_value(loaded, session),
         }
     }
+
+    fn solver_state(&self, state: &GridState<2, Size2>) -> SolverStateSnapshot {
+        SolverStateSnapshot::from_state2(state)
+    }
 }
 
 impl GridSessionProjection<3, Size3> for SpatialProjection {
-    fn decode_state(
+    fn decode_state_json(
         &self,
         game: &GridCompiledGame<3>,
-        value: &Value,
+        state_json: &str,
     ) -> Result<GridState<3, Size3>, String> {
-        state3_from_json(game, &value.to_string())
+        serde_json::from_str::<RuntimeStateSnapshot3d>(state_json)
+            .map_err(|error| error.to_string())?
+            .into_state(game)
     }
 
     fn snapshot_grid(
@@ -481,12 +446,12 @@ impl GridSessionProjection<3, Size3> for SpatialProjection {
         loaded: &LoadedGridGame<3, Size3>,
         session: &GridGameSession<3, Size3>,
     ) -> ProjectedGridSnapshot {
-        let scene_puzzle_state = spatial_scene_puzzle_state_value(&self.fixture, loaded, session);
+        let scene_puzzle_state = spatial_scene_puzzle_state_value(loaded, session);
         let focused_scene = session.focused_scene();
         let scene = session
             .scene_state()
             .and_then(|state| state.puzzles.values().next())
-            .map(|world| spatial_world_value(&self.fixture, loaded, focused_scene, world))
+            .map(|world| spatial_world_value(loaded, focused_scene, world))
             .unwrap_or(Value::Null);
         let scene_layers = session
             .visible_scenes()
@@ -495,7 +460,7 @@ impl GridSessionProjection<3, Size3> for SpatialProjection {
                 let state = session.scene_state_for(name);
                 let projected = state
                     .and_then(|state| state.puzzles.values().next())
-                    .map(|world| spatial_world_value(&self.fixture, loaded, name, world));
+                    .map(|world| spatial_world_value(loaded, name, world));
                 json!({
                     "name": name,
                     "focused": name == focused_scene,
@@ -511,10 +476,13 @@ impl GridSessionProjection<3, Size3> for SpatialProjection {
             scene_layers,
         }
     }
+
+    fn solver_state(&self, state: &GridState<3, Size3>) -> SolverStateSnapshot {
+        SolverStateSnapshot::from_state3(state)
+    }
 }
 
 fn spatial_scene_puzzle_state_value(
-    fixture: &Value,
     loaded: &LoadedGridGame<3, Size3>,
     session: &GridGameSession<3, Size3>,
 ) -> Value {
@@ -527,7 +495,7 @@ fn spatial_scene_puzzle_state_value(
         .map(|(name, world)| {
             (
                 name.clone(),
-                spatial_world_value(fixture, loaded, session.focused_scene(), world),
+                spatial_world_value(loaded, session.focused_scene(), world),
             )
         })
         .collect();
@@ -535,58 +503,31 @@ fn spatial_scene_puzzle_state_value(
 }
 
 fn spatial_world_value(
-    fixture: &Value,
     loaded: &LoadedGridGame<3, Size3>,
     scene_name: &str,
     world: &puzzle_play::GridWorldInstanceState<3, Size3>,
 ) -> Value {
-    let mut value = fixture.clone();
     let level_index = world.active_level_index.unwrap_or(0);
     let level = loaded.levels.get(level_index);
     let size = world.state.size;
-    let cells = spatial_state_cells_value(fixture, &world.state);
-    let Some(object) = value.as_object_mut() else {
-        return Value::Null;
-    };
-    object.insert(
-        "currentScene".to_string(),
-        Value::String(scene_name.to_string()),
-    );
-    object.insert("levelIndex".to_string(), json!(level_index));
-    object.insert("levelCount".to_string(), json!(loaded.levels.len()));
-    object.insert(
-        "levelName".to_string(),
-        json!(level.map(|level| &level.name)),
-    );
-    object.insert(
-        "size".to_string(),
-        json!({
+    json!({
+        "currentScene": scene_name,
+        "levelIndex": level_index,
+        "levelCount": loaded.levels.len(),
+        "levelName": level.map(|level| &level.name),
+        "size": {
             "width": size.width,
             "depth": size.depth,
             "height": size.height,
-        }),
-    );
-    object.insert("cells".to_string(), cells);
-    object.insert(
-        "completed".to_string(),
-        json!(loaded.is_goal_complete(&world.state)),
-    );
-    object.insert(
-        "hasNextLevel".to_string(),
-        json!(level_index + 1 < loaded.levels.len()),
-    );
-    object.insert("hasPreviousLevel".to_string(), json!(level_index > 0));
-    value
+        },
+        "cells": spatial_state_cells_value(&world.state),
+        "completed": loaded.is_goal_complete(&world.state),
+        "hasNextLevel": level_index + 1 < loaded.levels.len(),
+        "hasPreviousLevel": level_index > 0,
+    })
 }
 
-fn spatial_state_cells_value(fixture: &Value, state: &GridState<3, Size3>) -> Value {
-    let objects = fixture.get("objects").and_then(Value::as_object);
-    let mut by_id = std::collections::HashMap::new();
-    for object in objects.into_iter().flat_map(|objects| objects.values()) {
-        if let Some(id) = object.get("id").and_then(Value::as_u64) {
-            by_id.insert(id as u16, object.clone());
-        }
-    }
+fn spatial_state_cells_value(state: &GridState<3, Size3>) -> Value {
     let mut cells = Vec::new();
     for z in 0..state.size.height {
         for y in 0..state.size.depth {
@@ -598,12 +539,7 @@ fn spatial_state_cells_value(fixture: &Value, state: &GridState<3, Size3>) -> Va
                     .filter_map(|layer| {
                         let slot = cell * usize::from(state.layer_count) + usize::from(layer);
                         let object = state.slots()[slot];
-                        (!object.is_empty()).then(|| {
-                            by_id
-                                .get(&object.0)
-                                .cloned()
-                                .unwrap_or_else(|| json!({"id": object.0, "layer": layer}))
-                        })
+                        (!object.is_empty()).then(|| json!({"id": object.0, "layer": layer}))
                     })
                     .collect::<Vec<_>>();
                 if !cell_objects.is_empty() {
@@ -620,42 +556,11 @@ fn spatial_state_cells_value(fixture: &Value, state: &GridState<3, Size3>) -> Va
 
 #[cfg(test)]
 fn compiled_state_value(state: &PuzzleState) -> Value {
-    json!({
-        "width": state.width,
-        "height": state.height,
-        "layerCount": state.layer_count,
-        "slots": state.slots().iter().map(|object| object.0).collect::<Vec<_>>(),
-        "mark": [],
-        "variables": state.visible_variables(),
-        "levelFiredRules": state.level_fired_rules().iter().map(|rule| rule.0).collect::<Vec<_>>(),
-    })
+    serde_json::to_value(RuntimeStateSnapshot2d::from_state(state))
+        .expect("runtime state snapshot serializes")
 }
 
-fn array_field<'a>(value: &'a Value, key: &str) -> Result<&'a [Value], String> {
-    value
-        .get(key)
-        .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .ok_or_else(|| format!("{key} must be an array"))
-}
-
-fn u16_field(value: &Value, key: &str) -> Result<u16, String> {
-    u16_value(
-        value
-            .get(key)
-            .ok_or_else(|| format!("missing field: {key}"))?,
-        key,
-    )
-}
-
-fn u16_value(value: &Value, name: &str) -> Result<u16, String> {
-    let raw = value
-        .as_u64()
-        .ok_or_else(|| format!("{name} must be an unsigned integer"))?;
-    u16::try_from(raw).map_err(|_| format!("{name} out of range"))
-}
-
-function focused_scene_value(loaded: &LoadedGame, session: &GameSession) -> Value {
+fn focused_scene_value(loaded: &LoadedGame, session: &GameSession) -> Value {
     if let Some((state, level)) = scene_puzzle_state(loaded, session, session.focused_scene()) {
         return scene_value_for_state(
             loaded,
@@ -1907,279 +1812,6 @@ fn progress_save_data_from_json(raw: &str) -> Result<ProgressSaveData, String> {
     })
 }
 
-fn state3_from_json(
-    game: &GridCompiledGame<3>,
-    state_json: &str,
-) -> Result<GridState<3, Size3>, String> {
-    serde_json::from_str::<RuntimeStateSnapshot3d>(state_json)
-        .map_err(|error| error.to_string())?
-        .into_state(game)
-}
-
-fn state3_value(state: &GridState<3, Size3>) -> Value {
-    serde_json::to_value(RuntimeStateSnapshot3d::from_state(state))
-        .expect("runtime state snapshot serializes")
-}
-
-fn commands3_contract(commands: &[TransitionCommand]) -> Vec<RuntimeTransitionCommand> {
-    commands
-        .iter()
-        .map(|command| match command {
-            TransitionCommand::Win => RuntimeTransitionCommand::Win,
-            TransitionCommand::Restart => RuntimeTransitionCommand::Restart,
-            TransitionCommand::NextLevel => RuntimeTransitionCommand::NextLevel,
-            TransitionCommand::Again => RuntimeTransitionCommand::Again,
-            TransitionCommand::Checkpoint => RuntimeTransitionCommand::Checkpoint,
-            TransitionCommand::ClearCheckpoint => RuntimeTransitionCommand::ClearCheckpoint,
-        })
-        .collect()
-}
-
-fn state3_contract(state: &GridState<3, Size3>) -> RuntimeStateSnapshot {
-    RuntimeStateSnapshot::ThreeD(RuntimeStateSnapshot3d::from_state(state))
-}
-
-fn state3_cells_value(state: &GridState<3, Size3>, before: Option<&GridState<3, Size3>>) -> Value {
-    let mut cells = Vec::new();
-    for z in 0..state.size.height {
-        for y in 0..state.size.depth {
-            for x in 0..state.size.width {
-                let cell = ((usize::from(z) * usize::from(state.size.depth)) + usize::from(y))
-                    * usize::from(state.size.width)
-                    + usize::from(x);
-                if before.is_some_and(|before| state3_cell_slots_equal(before, state, cell)) {
-                    continue;
-                }
-                let mut objects = Vec::new();
-                for layer in 0..state.layer_count {
-                    let slot = (cell * usize::from(state.layer_count)) + usize::from(layer);
-                    let object = state.slots()[slot];
-                    if !object.is_empty() {
-                        objects.push(object.0);
-                    }
-                }
-                if before.is_none() && objects.is_empty() {
-                    continue;
-                }
-                cells.push(json!({
-                    "position": {"x": x, "y": y, "z": z},
-                    "objects": objects,
-                }));
-            }
-        }
-    }
-    Value::Array(cells)
-}
-
-fn changed_cells3_contract(
-    state: &GridState<3, Size3>,
-    before: Option<&GridState<3, Size3>>,
-) -> Vec<RuntimeChangedCell> {
-    let mut cells = Vec::new();
-    for z in 0..state.size.height {
-        for y in 0..state.size.depth {
-            for x in 0..state.size.width {
-                let cell = ((usize::from(z) * usize::from(state.size.depth)) + usize::from(y))
-                    * usize::from(state.size.width)
-                    + usize::from(x);
-                if before.is_some_and(|before| state3_cell_slots_equal(before, state, cell)) {
-                    continue;
-                }
-                let mut objects = Vec::new();
-                for layer in 0..state.layer_count {
-                    let slot = (cell * usize::from(state.layer_count)) + usize::from(layer);
-                    let object = state.slots()[slot];
-                    if !object.is_empty() {
-                        objects.push(object.0);
-                    }
-                }
-                if before.is_none() && objects.is_empty() {
-                    continue;
-                }
-                cells.push(RuntimeChangedCell {
-                    position: RuntimeCoord { x, y, z: Some(z) },
-                    objects,
-                });
-            }
-        }
-    }
-    cells
-}
-
-fn firings3_contract(firings: &[GridRuleFiring<3>]) -> Vec<RuntimeRuleFiring> {
-    firings
-        .iter()
-        .map(|firing| RuntimeRuleFiring {
-            rule_id: firing.rule.0,
-            patch: firing.patch.ops().iter().map(patch_op3_contract).collect(),
-            progressed: firing.progressed,
-            observable: firing.observable,
-        })
-        .collect()
-}
-
-fn patch_op3_contract(op: &PatchOp<3>) -> RuntimePatchOp {
-    match *op {
-        PatchOp::<3>::Add { position, object } => RuntimePatchOp::Add {
-            position: runtime_coord3(position.into()),
-            object_id: object.0,
-        },
-        PatchOp::<3>::Remove { position, object } => RuntimePatchOp::Remove {
-            position: runtime_coord3(position.into()),
-            object_id: object.0,
-        },
-        PatchOp::<3>::Move { from, to, object } => RuntimePatchOp::Move {
-            from: runtime_coord3(from.into()),
-            to: runtime_coord3(to.into()),
-            object_id: object.0,
-        },
-        PatchOp::<3>::Replace {
-            position,
-            remove,
-            add,
-        } => RuntimePatchOp::Replace {
-            position: runtime_coord3(position.into()),
-            remove: remove.0,
-            add: add.0,
-        },
-        PatchOp::<3>::UpdateVariable { variable, .. } => RuntimePatchOp::UpdateVariable {
-            variable: variable.0,
-        },
-        PatchOp::<3>::SetMark {
-            position,
-            object,
-            mark,
-            ..
-        } => RuntimePatchOp::SetMark {
-            position: runtime_coord3(position.into()),
-            object_id: object.0,
-            mark: mark.0,
-        },
-        PatchOp::<3>::RemoveMark {
-            position,
-            object,
-            mark,
-            match_value,
-            ..
-        } => RuntimePatchOp::RemoveMark {
-            position: runtime_coord3(position.into()),
-            object_id: object.0,
-            mark: mark.0,
-            match_value: runtime_mark_value_match3(match_value),
-        },
-    }
-}
-
-fn runtime_coord3(position: Coord3) -> RuntimeCoord {
-    RuntimeCoord {
-        x: position.x,
-        y: position.y,
-        z: Some(position.z),
-    }
-}
-
-fn runtime_mark_value_match3(match_value: CoreMarkValueMatch) -> RuntimeMarkValueMatch {
-    match match_value {
-        CoreMarkValueMatch::Any => RuntimeMarkValueMatch::Any,
-        CoreMarkValueMatch::Exact => RuntimeMarkValueMatch::Exact,
-    }
-}
-
-fn state3_cell_slots_equal(
-    before: &GridState<3, Size3>,
-    after: &GridState<3, Size3>,
-    cell: usize,
-) -> bool {
-    if before.size != after.size || before.layer_count != after.layer_count {
-        return false;
-    }
-    let layer_count = usize::from(after.layer_count);
-    let start = cell * layer_count;
-    before.slots()[start..start + layer_count] == after.slots()[start..start + layer_count]
-}
-
-fn animation_events3_contract(
-    animation: &puzzle_lang::AnimationDef,
-    before: &GridState<3, Size3>,
-    after: &GridState<3, Size3>,
-) -> Vec<RuntimeAnimationEvent> {
-    if !animation.tween.enabled
-        || before.size != after.size
-        || before.layer_count != after.layer_count
-    {
-        return Vec::new();
-    }
-    let mut events = Vec::new();
-    for object in changed_object_ids3(before, after) {
-        let mut sources = changed_positions_for_object3(before, after, object, false);
-        let targets = changed_positions_for_object3(before, after, object, true);
-        for target in targets {
-            if let Some(source_index) = sources
-                .iter()
-                .position(|source| adjacent_coord3(*source, target))
-            {
-                let source = sources.remove(source_index);
-                events.push(RuntimeAnimationEvent::Move {
-                    name: "tween".to_string(),
-                    object_id: object.0,
-                    from_object: None,
-                    from: runtime_coord3(source),
-                    to: runtime_coord3(target),
-                });
-            }
-        }
-    }
-    events
-}
-
-fn changed_object_ids3(before: &GridState<3, Size3>, after: &GridState<3, Size3>) -> Vec<ObjectId> {
-    let mut objects = Vec::new();
-    for (before, after) in before.slots().iter().zip(after.slots().iter()) {
-        for object in [*before, *after] {
-            if !object.is_empty() && !objects.contains(&object) {
-                objects.push(object);
-            }
-        }
-    }
-    objects.sort_by_key(|object| object.0);
-    objects
-}
-
-fn changed_positions_for_object3(
-    before: &GridState<3, Size3>,
-    after: &GridState<3, Size3>,
-    object: ObjectId,
-    present_after: bool,
-) -> Vec<Coord3> {
-    let mut positions = Vec::new();
-    for z in 0..after.size.height {
-        for y in 0..after.size.depth {
-            for x in 0..after.size.width {
-                let coord = Coord3 { x, y, z };
-                let had = state3_has_object(before, coord, object);
-                let has = state3_has_object(after, coord, object);
-                if had != has && has == present_after {
-                    positions.push(coord);
-                }
-            }
-        }
-    }
-    positions
-}
-
-fn state3_has_object(state: &GridState<3, Size3>, coord: Coord3, object: ObjectId) -> bool {
-    let cell = ((usize::from(coord.z) * usize::from(state.size.depth)) + usize::from(coord.y))
-        * usize::from(state.size.width)
-        + usize::from(coord.x);
-    let start = cell * usize::from(state.layer_count);
-    state.slots()[start..start + usize::from(state.layer_count)].contains(&object)
-}
-
-fn adjacent_coord3(left: Coord3, right: Coord3) -> bool {
-    let distance = left.x.abs_diff(right.x) + left.y.abs_diff(right.y) + left.z.abs_diff(right.z);
-    distance == 1
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2191,18 +1823,9 @@ mod tests {
             .is_some_and(|layers| layers.iter().any(|layer| layer["object"] == object))
     }
 
-    fn runtime_state_json(state: &GridState<3, Size3>) -> String {
-        serde_json::to_string(&RuntimeStateSnapshot3d::from_state(state)).unwrap()
-    }
-
     fn standalone_export(source: &str) -> Value {
         let document = puzzle_lang::parse_game_for_path(source, "export_test.puzzle").unwrap();
-        json!({
-            "runtimeLoadedDocument": {
-                "version": 1,
-                "document": serde_json::to_value(&document).unwrap(),
-            },
-        })
+        serde_json::to_value(StandaloneRuntimeExport::new(document)).unwrap()
     }
 
     fn runtime_scene_fixture_source() -> &'static str {
@@ -2274,7 +1897,6 @@ step board
         let export = json!({
             "source": "title invalid\nlevels {\nlegend {\nP = Player\n}\nP\n}\n",
             "puzzlePath": "compiled_export.puzzle",
-            "compiledPlay": {"version": 2, "model": "grid2", "transition": [1, [[1, 0]], [], [[], [], []], [[[], [], []]]]},
         });
 
         let error = match StandaloneSessionBridge::from_export_json(&export.to_string()) {
@@ -2285,7 +1907,7 @@ step board
     }
 
     #[test]
-    fn standalone_session_from_export_does_not_parse_embedded_source() {
+    fn standalone_session_from_export_rejects_compiler_fields() {
         let source = r#"
 title = export_runtime_bundle
 puzzle default {
@@ -2309,14 +1931,44 @@ P
         export["source"] = json!("this is not puzzle syntax");
         export["puzzlePath"] = json!("bad_source_path.puzzle");
 
-        let mut bridge = StandaloneSessionBridge::from_export_json(&export.to_string()).unwrap();
-        let snapshot: Value = serde_json::from_str(&bridge.snapshot_json()).unwrap();
-
-        assert_eq!(snapshot["title"], "export_runtime_bundle");
+        let error = match StandaloneSessionBridge::from_export_json(&export.to_string()) {
+            Ok(_) => panic!("compiler fields must be rejected"),
+            Err(error) => error,
+        };
+        assert!(error.contains("unknown field"), "{error}");
     }
 
     #[test]
-    fn standalone_session_from_export_reports_atomic_state_with_presentation_wait() {
+    fn standalone_session_from_export_rejects_unsupported_runtime_version() {
+        let mut export = standalone_export(runtime_scene_fixture_source());
+        export["runtimeLoadedDocument"]["version"] = json!(
+            STANDALONE_RUNTIME_EXPORT_VERSION
+                .checked_add(1)
+                .expect("test version remains in range")
+        );
+
+        let error = match StandaloneSessionBridge::from_export_json(&export.to_string()) {
+            Ok(_) => panic!("unsupported runtime version must be rejected"),
+            Err(error) => error,
+        };
+        assert!(error.contains("unsupported runtimeLoadedDocument version"));
+    }
+
+    #[test]
+    fn standalone_session_from_export_rejects_dangling_program_reference() {
+        let mut export = standalone_export(runtime_scene_fixture_source());
+        export["runtimeLoadedDocument"]["document"]["models"][0]["Puzzle2d"]["game"]["levels"][0]
+            ["program"] = json!([{"Catalog": 999}, "Main"]);
+
+        let error = match StandaloneSessionBridge::from_export_json(&export.to_string()) {
+            Ok(_) => panic!("dangling program reference must be rejected"),
+            Err(error) => error,
+        };
+        assert!(error.contains("invalid program reference"), "{error}");
+    }
+
+    #[test]
+    fn standalone_session_resumes_rules_after_presentation_wait() {
         let source = r#"
 title = export_wait_segments
 puzzle default {
@@ -2349,19 +2001,42 @@ A
 
         let waiting: Value = serde_json::from_str(
             &bridge
-                .request_json("POST", "/api/input/right")
+                .dispatch(SessionAction::Input {
+                    name: "right".to_string(),
+                })
                 .expect("input should complete with a presentation wait"),
         )
         .unwrap();
         assert!(!cell_has_object(&waiting["scene"]["cells"][0], "A"));
-        assert!(!cell_has_object(&waiting["scene"]["cells"][0], "C"));
-        assert!(cell_has_object(&waiting["scene"]["cells"][0], "B"));
+        assert!(cell_has_object(&waiting["scene"]["cells"][0], "C"));
+        assert!(!cell_has_object(&waiting["scene"]["cells"][0], "B"));
+        assert_eq!(waiting["busy"], true);
         assert_eq!(waiting["presentationEvents"][0]["kind"], json!("wait"));
         assert_eq!(waiting["presentationEvents"][0]["milliseconds"], 100);
+        assert_eq!(
+            bridge.dispatch(SessionAction::Undo).unwrap_err(),
+            "session action is unavailable while a turn is waiting"
+        );
+
+        let resumed: Value = serde_json::from_str(
+            &bridge
+                .dispatch(SessionAction::Resume)
+                .expect("wait completion should resume the same turn"),
+        )
+        .unwrap();
+        assert!(!cell_has_object(&resumed["scene"]["cells"][0], "C"));
+        assert!(cell_has_object(&resumed["scene"]["cells"][0], "B"));
+        assert_eq!(resumed["busy"], false);
+        assert!(
+            bridge
+                .dispatch(SessionAction::Resume)
+                .unwrap_err()
+                .contains("no turn is waiting")
+        );
 
         let undone: Value = serde_json::from_str(
             &bridge
-                .request_json("POST", "/api/command/undo")
+                .dispatch(SessionAction::Undo)
                 .expect("undo should return to pre-input state"),
         )
         .unwrap();
@@ -2413,29 +2088,50 @@ P.
             StandaloneSessionBridge::from_source(source, "runtime_mixed_presentation.puzzle")
                 .unwrap();
 
-        let moved: Value =
-            serde_json::from_str(&bridge.request_json("POST", "/api/input/right").unwrap())
-                .unwrap();
-        let events = moved["presentationEvents"].as_array().unwrap();
+        let mut snapshot: Value = serde_json::from_str(
+            &bridge
+                .dispatch(SessionAction::Input {
+                    name: "right".to_string(),
+                })
+                .unwrap(),
+        )
+        .unwrap();
+        let mut event_kinds = Vec::new();
+        loop {
+            let events = snapshot["presentationEvents"].as_array().unwrap();
+            assert!(events.iter().all(|event| event["levelIndex"] == 0));
+            event_kinds.extend(
+                events
+                    .iter()
+                    .map(|event| event["kind"].as_str().unwrap().to_string()),
+            );
+            if snapshot["busy"] != true {
+                break;
+            }
+            snapshot =
+                serde_json::from_str(&bridge.dispatch(SessionAction::Resume).unwrap()).unwrap();
+        }
         assert_eq!(
-            events
-                .iter()
-                .map(|event| event["kind"].as_str().unwrap())
-                .collect::<Vec<_>>(),
+            event_kinds,
             vec!["wait", "message", "wait", "animation", "play_sfx", "wait"]
         );
-        assert!(events.iter().all(|event| event["levelIndex"] == 0));
-        assert!(cell_has_object(&moved["scene"]["cells"][1], "Done"));
+        assert!(cell_has_object(&snapshot["scene"]["cells"][1], "Done"));
     }
 
     #[cfg(not(feature = "editor-debug"))]
     #[test]
-    fn player_request_surface_rejects_editor_debug_input() {
-        let error = standalone_session_request("POST", "/api/debug/input/right").unwrap_err();
-        assert_eq!(
-            error,
-            "Unsupported exported HTML request: POST /api/debug/input/right"
-        );
+    fn player_session_contract_rejects_editor_debug_input() {
+        let mut bridge = StandaloneSessionBridge::from_source(
+            runtime_scene_fixture_source(),
+            "runtime_scene_fixture.puzzle",
+        )
+        .unwrap();
+        let error = bridge
+            .dispatch(SessionAction::DebugInput {
+                name: "right".to_string(),
+            })
+            .unwrap_err();
+        assert_eq!(error, "debug input is unavailable in the player runtime");
     }
 
     #[cfg(feature = "editor-debug")]
@@ -2469,7 +2165,9 @@ levels main of main {
 
         let body: Value = serde_json::from_str(
             &bridge
-                .request_json("POST", "/api/debug/input/right")
+                .dispatch(SessionAction::DebugInput {
+                    name: "right".to_string(),
+                })
                 .unwrap(),
         )
         .unwrap();
@@ -2487,9 +2185,13 @@ levels main of main {
             StandaloneSessionBridge::from_source(source, "runtime_scene_fixture.puzzle").unwrap();
 
         let initial: Value =
-            serde_json::from_str(&bridge.request_json("GET", "/api/state").unwrap()).unwrap();
+            serde_json::from_str(&bridge.dispatch(SessionAction::Snapshot).unwrap()).unwrap();
         assert_eq!(initial["currentScene"], "board");
         assert_eq!(initial["title"], "Runtime Scene Fixture");
+        assert_eq!(initial["solverState"]["kind"], "2d");
+        assert!(initial["solverState"]["slots"].is_array());
+        assert!(initial["solverState"]["slotMarks"].is_array());
+        assert!(initial["solverState"]["cellMarks"].is_array());
         let title = initial["scenes"]
             .as_array()
             .unwrap()
@@ -2501,7 +2203,9 @@ levels main of main {
 
         let playing: Value = serde_json::from_str(
             &bridge
-                .request_json("POST", "/api/command/goto%20playing")
+                .dispatch(SessionAction::Command {
+                    name: "goto playing".to_string(),
+                })
                 .unwrap(),
         )
         .unwrap();
@@ -2556,7 +2260,9 @@ level_menu
 
         let select: Value = serde_json::from_str(
             &bridge
-                .request_json("POST", "/api/command/goto%20level_select")
+                .dispatch(SessionAction::Command {
+                    name: "goto level_select".to_string(),
+                })
                 .unwrap(),
         )
         .unwrap();
@@ -2564,8 +2270,14 @@ level_menu
         assert!(select["scene"].is_null());
         assert!(select["sceneLayers"][0]["scene"].is_null());
 
-        let after_input: Value =
-            serde_json::from_str(&bridge.request_json("POST", "/api/input/down").unwrap()).unwrap();
+        let after_input: Value = serde_json::from_str(
+            &bridge
+                .dispatch(SessionAction::Input {
+                    name: "down".to_string(),
+                })
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(after_input["currentScene"], json!("level_select"));
         assert!(after_input["scene"].is_null());
         assert_eq!(after_input["presentationEvents"], json!([]));
@@ -2647,7 +2359,7 @@ step board
             StandaloneSessionBridge::from_source(source, "runtime_scene_fixture.puzzle").unwrap();
 
         let title: Value =
-            serde_json::from_str(&bridge.request_json("GET", "/api/state").unwrap()).unwrap();
+            serde_json::from_str(&bridge.dispatch(SessionAction::Snapshot).unwrap()).unwrap();
         assert!(
             title["inputs"]
                 .as_array()
@@ -2692,7 +2404,9 @@ step board
 
         let playing: Value = serde_json::from_str(
             &bridge
-                .request_json("POST", "/api/command/goto%20playing(0)")
+                .dispatch(SessionAction::Command {
+                    name: "goto playing(0)".to_string(),
+                })
                 .unwrap(),
         )
         .unwrap();
@@ -2730,7 +2444,9 @@ step board
             let before = start_spec_2d_new_game(&mut bridge);
             let after: Value = serde_json::from_str(
                 &bridge
-                    .request_json("POST", &format!("/api/input/{input}"))
+                    .dispatch(SessionAction::Input {
+                        name: input.to_string(),
+                    })
                     .unwrap(),
             )
             .unwrap();
@@ -2746,11 +2462,15 @@ step board
 
     fn start_spec_2d_new_game(bridge: &mut StandaloneSessionBridge) -> Value {
         bridge
-            .request_json("POST", "/api/command/clear_game_progress")
+            .dispatch(SessionAction::Command {
+                name: "clear_game_progress".to_string(),
+            })
             .unwrap();
         serde_json::from_str(
             &bridge
-                .request_json("POST", "/api/command/goto%20playing(%22microban.1%22)")
+                .dispatch(SessionAction::Command {
+                    name: "goto playing(\"microban.1\")".to_string(),
+                })
                 .unwrap(),
         )
         .unwrap()
@@ -2798,16 +2518,23 @@ scene playing {
 
         let playing: Value = serde_json::from_str(
             &bridge
-                .request_json("POST", "/api/command/goto%20playing")
+                .dispatch(SessionAction::Command {
+                    name: "goto playing".to_string(),
+                })
                 .unwrap(),
         )
         .unwrap();
         assert_eq!(playing["currentScene"], "playing");
         assert_eq!(playing["levelIndex"], 0);
 
-        let moved: Value =
-            serde_json::from_str(&bridge.request_json("POST", "/api/input/right").unwrap())
-                .unwrap();
+        let moved: Value = serde_json::from_str(
+            &bridge
+                .dispatch(SessionAction::Input {
+                    name: "right".to_string(),
+                })
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(
             moved["presentationEvents"][0]["animation"],
             json!({
@@ -2821,10 +2548,6 @@ scene playing {
         );
     }
 
-
-
-
-
     #[test]
     fn standalone_session_bridge_restores_progress_save() {
         let source = runtime_scene_fixture_source();
@@ -2837,7 +2560,7 @@ scene playing {
             .unwrap();
 
         let snapshot: Value =
-            serde_json::from_str(&bridge.request_json("GET", "/api/state").unwrap()).unwrap();
+            serde_json::from_str(&bridge.dispatch(SessionAction::Snapshot).unwrap()).unwrap();
         assert_eq!(snapshot["selectedLevelIndex"], 1);
         assert_eq!(snapshot["has_progress_save"], true);
         assert_eq!(snapshot["levels"][1]["cleared"], true);
@@ -2851,9 +2574,136 @@ scene playing {
 
         let snapshot: Value = serde_json::from_str(&bridge.snapshot_json()).unwrap();
         assert_eq!(snapshot["currentScene"], "sokoban");
+        assert_eq!(snapshot["solverState"]["kind"], "puzzle3d");
+        assert!(snapshot["solverState"]["slotMarks"].is_array());
+        assert!(snapshot["solverState"]["cellMarks"].is_array());
         assert!(snapshot["scenePuzzleState"]["sokoban"]["cells"].is_array());
+        assert!(
+            snapshot["scenePuzzleState"]["sokoban"]
+                .get("render")
+                .is_none()
+        );
+        assert!(
+            snapshot["scenePuzzleState"]["sokoban"]
+                .get("sprites")
+                .is_none()
+        );
+        let second: Value = serde_json::from_str(
+            &bridge
+                .dispatch(SessionAction::GotoLevel { level: 1 })
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(second["levelIndex"], 1);
+        let first: Value =
+            serde_json::from_str(&bridge.dispatch(SessionAction::PreviousLevel).unwrap()).unwrap();
+        assert_eq!(first["levelIndex"], 0);
         bridge
-            .request_json("POST", "/api/input/right")
+            .dispatch(SessionAction::Input {
+                name: "right".to_string(),
+            })
             .expect("spatial model input should route through the shared session");
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct DimensionIndependentSessionTrace {
+        slots: Vec<u16>,
+        can_undo: bool,
+        can_redo: bool,
+        active_level_index: Option<usize>,
+    }
+
+    fn session_trace<const D: usize, Size: GridSize<D>>(
+        loaded: &LoadedGridGame<D, Size>,
+    ) -> Vec<DimensionIndependentSessionTrace> {
+        fn capture<const D: usize, Size: GridSize<D>>(
+            session: &GridGameSession<D, Size>,
+        ) -> DimensionIndependentSessionTrace {
+            DimensionIndependentSessionTrace {
+                slots: session
+                    .state()
+                    .slots()
+                    .iter()
+                    .map(|object| object.0)
+                    .collect(),
+                can_undo: session.can_undo(),
+                can_redo: session.can_redo(),
+                active_level_index: session.active_level_index(),
+            }
+        }
+
+        let mut session = GridGameSession::new(loaded);
+        let mut trace = vec![capture(&session)];
+        session.apply_input(loaded, InputId(0)).unwrap();
+        trace.push(capture(&session));
+        session.undo(loaded);
+        trace.push(capture(&session));
+        session.redo(loaded);
+        trace.push(capture(&session));
+        session.restart_level(loaded).unwrap();
+        trace.push(capture(&session));
+        trace
+    }
+
+    #[test]
+    fn shared_session_actions_have_dimension_independent_semantics() {
+        let model = |dimension: &str, path: &str| {
+            puzzle_lang::parse_game_for_path(
+                &format!(
+                    r#"
+title = Session parity
+puzzle board {{
+  {dimension}
+  slots {{ actor = A B C D E }}
+  rules {{ [ C ] -> [ D ] }}
+}}
+levels default of board {{
+  legend {{ A = A }}
+  level "one" {{
+    on_level_start {{ [ A ] -> [ B ] }}
+    rules before {{ [ B ] -> [ C ] }}
+    A
+    rules {{ [ D ] -> [ E ] }}
+  }}
+}}
+"#
+                ),
+                path,
+            )
+            .unwrap()
+        };
+        let flat = model("", "session_parity.puzzle");
+        let spatial = model("dimension = 3", "session_parity.puzzle3");
+        let Some(LoadedDocumentModel::Puzzle2d { game: flat, .. }) = flat.single_model() else {
+            panic!("expected 2D model");
+        };
+        let Some(LoadedDocumentModel::Puzzle3d { game: spatial, .. }) = spatial.single_model()
+        else {
+            panic!("expected 3D model");
+        };
+
+        assert_eq!(flat.levels[0].program.references().len(), 3);
+        assert!(matches!(
+            flat.levels[0].program.references(),
+            [
+                puzzle_core::GridProgramRef::Catalog(_),
+                puzzle_core::GridProgramRef::Main,
+                puzzle_core::GridProgramRef::Catalog(_)
+            ]
+        ));
+        assert_eq!(flat.levels[0].program, spatial.levels[0].program);
+        assert_eq!(
+            flat.levels[0].level_start_program,
+            spatial.levels[0].level_start_program
+        );
+        assert_eq!(
+            flat.levels[0].level_clear_program,
+            spatial.levels[0].level_clear_program
+        );
+        assert_eq!(
+            flat.program_catalog.programs().len(),
+            spatial.program_catalog.programs().len()
+        );
+        assert_eq!(session_trace(flat), session_trace(spatial));
     }
 }

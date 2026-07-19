@@ -283,7 +283,23 @@ impl SourceAnalysis {
 
     /// Emits source entries JSON from the entries captured by this analysis.
     pub fn entries_json(&self) -> String {
-        source_entries_json_from_entries(self.entries())
+        let mut out = String::from("{\"version\":1,\"declaresGameEntry\":");
+        out.push_str(if self.declares_game_entry() {
+            "true"
+        } else {
+            "false"
+        });
+        out.push_str(",\"entries\":");
+        push_entries_json_value(&mut out, self.entries());
+        out.push('}');
+        out
+    }
+
+    /// Reports whether this revision contains a parser-owned top-level puzzle model.
+    pub fn declares_game_entry(&self) -> bool {
+        self.document().structural_blocks.iter().any(|block| {
+            block.parent.is_none() && block.scope == crate::source::SourceScope::Puzzle
+        })
     }
 
     /// Emits level-editor metadata without transferring per-cell state or every sprite.
@@ -651,6 +667,15 @@ ___
         assert!(json.contains("\"outline\":{\"items\":["));
         assert!(json.contains("\"entries\":["));
         assert!(json.contains("\"kind\":\"level\""));
+    }
+
+    #[test]
+    fn source_entries_json_reports_parser_owned_game_entry_metadata() {
+        let game = analyze_source("puzzle Demo {}\n").entries_json();
+        assert!(game.contains("\"declaresGameEntry\":true"));
+
+        let fragment = analyze_source("levels Demo {\n}\n").entries_json();
+        assert!(fragment.contains("\"declaresGameEntry\":false"));
     }
 
     #[test]

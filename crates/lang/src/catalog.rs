@@ -37,34 +37,26 @@ pub(crate) struct Catalog {
 
 impl Catalog {
     pub(crate) fn for_dimension(dimension: crate::ModelDimension) -> Self {
-        let directions = match dimension {
-            crate::ModelDimension::Two => vec!["up", "down", "left", "right"],
-            crate::ModelDimension::Three => {
-                vec!["up", "down", "left", "right", "front", "back"]
-            }
-        };
-        let horizontal = match dimension {
-            crate::ModelDimension::Two => vec!["left", "right"],
-            crate::ModelDimension::Three => vec!["left", "right", "front", "back"],
+        let dimensions = match dimension {
+            crate::ModelDimension::Two => 2,
+            crate::ModelDimension::Three => 3,
         };
         let mut value_sets = HashMap::new();
-        value_sets.insert(
-            "directions".to_string(),
-            directions.iter().copied().map(str::to_string).collect(),
-        );
-        let axis_types = HashMap::from([
-            ("directions".to_string(), ValueType::Direction),
-            ("horizontal".to_string(), ValueType::Direction),
-            ("vertical".to_string(), ValueType::Direction),
-        ]);
-        value_sets.insert(
-            "horizontal".to_string(),
-            horizontal.into_iter().map(str::to_string).collect(),
-        );
-        value_sets.insert(
-            "vertical".to_string(),
-            ["up", "down"].into_iter().map(str::to_string).collect(),
-        );
+        let mut axis_types = HashMap::new();
+        for name in puzzle_authoring::ABSOLUTE_DIRECTION_SET_NAMES {
+            let Some(values) = puzzle_authoring::movement_mark_set_values(name, dimensions) else {
+                continue;
+            };
+            value_sets.insert(
+                (*name).to_string(),
+                values.iter().copied().map(str::to_string).collect(),
+            );
+            axis_types.insert((*name).to_string(), ValueType::Direction);
+        }
+        let directions = value_sets
+            .get("directions")
+            .cloned()
+            .expect("every model dimension defines directions");
         if dimension == crate::ModelDimension::Two {
             value_sets.insert(
                 "parallel".to_string(),
@@ -79,7 +71,7 @@ impl Catalog {
         let anonymous_movement = MarkDef {
             id: MarkId(0),
             kind: MarkKind::Enum,
-            values: directions.into_iter().map(str::to_string).collect(),
+            values: directions,
         };
         let anonymous_bool = MarkDef {
             id: MarkId(1),
@@ -275,4 +267,47 @@ fn gcd(mut a: u64, mut b: u64) -> u64 {
         b = r;
     }
     a.max(1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Catalog, ValueType};
+
+    #[test]
+    fn cartesian_direction_sets_follow_the_model_dimension() {
+        let two = Catalog::for_dimension(crate::ModelDimension::Two);
+        assert_eq!(two.value_sets["x_axis"], ["left", "right"]);
+        assert_eq!(two.value_sets["y_axis"], ["up", "down"]);
+        assert_eq!(two.value_sets["xy_plane"], ["up", "down", "left", "right"]);
+        assert_eq!(two.value_sets["horizontal"], two.value_sets["x_axis"]);
+        assert_eq!(two.value_sets["vertical"], two.value_sets["y_axis"]);
+        assert_eq!(two.value_sets["directions"], two.value_sets["xy_plane"]);
+        for unavailable in ["z_axis", "yz_plane", "xz_plane"] {
+            assert!(!two.value_sets.contains_key(unavailable));
+        }
+
+        let three = Catalog::for_dimension(crate::ModelDimension::Three);
+        assert_eq!(three.value_sets["x_axis"], ["left", "right"]);
+        assert_eq!(three.value_sets["y_axis"], ["front", "back"]);
+        assert_eq!(three.value_sets["z_axis"], ["up", "down"]);
+        assert_eq!(
+            three.value_sets["xy_plane"],
+            ["left", "right", "front", "back"]
+        );
+        assert_eq!(
+            three.value_sets["yz_plane"],
+            ["up", "down", "front", "back"]
+        );
+        assert_eq!(
+            three.value_sets["xz_plane"],
+            ["up", "down", "left", "right"]
+        );
+        assert_eq!(three.value_sets["horizontal"], three.value_sets["xy_plane"]);
+        assert_eq!(three.value_sets["vertical"], three.value_sets["z_axis"]);
+        for name in puzzle_authoring::ABSOLUTE_DIRECTION_SET_NAMES {
+            if three.value_sets.contains_key(*name) {
+                assert_eq!(three.axis_types[*name], ValueType::Direction);
+            }
+        }
+    }
 }

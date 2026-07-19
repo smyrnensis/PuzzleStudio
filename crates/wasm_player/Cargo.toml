@@ -9,6 +9,10 @@ name = "puzzle_wasm_player"
 path = "src/lib.rs"
 crate-type = ["cdylib", "rlib"]
 
+[features]
+default = []
+source-runtime = ["puzzle-game-runtime/editor-debug"]
+
 [dependencies]
 puzzle-core = { path = "../core" }
 puzzle-game-runtime = { path = "../game_runtime", default-features = false }

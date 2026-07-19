@@ -77,9 +77,6 @@ fn main() {
     println!("cargo:rerun-if-changed=../html_play/static/wasm_game/puzzle_wasm_game_bg.wasm");
     println!("cargo:rerun-if-changed=../html_play/static/wasm_player/puzzle_wasm_player.js");
     println!("cargo:rerun-if-changed=../html_play/static/wasm_player/puzzle_wasm_player_bg.wasm");
-    println!("cargo:rerun-if-changed=../wasm_core/static/puzzle_core_wasm.js");
-    println!("cargo:rerun-if-changed=../wasm_core/static/puzzle_core_wasm_bg.wasm");
-
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let editor_js =
         fs::read_to_string(manifest_dir.join("static/editor.js")).expect("read static/editor.js");

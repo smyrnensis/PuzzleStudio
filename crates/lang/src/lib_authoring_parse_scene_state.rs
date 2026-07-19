@@ -831,22 +831,7 @@ fn recognize_scene_key_binding_line(
             crate::surface::SurfaceSemanticKind::Input,
         );
     }
-    let document = scene_effect_surface_document(&line.tokens[arrow + 1..]);
-    if document.semantic_tokens.is_empty() {
-        for token in &line.tokens[arrow + 1..] {
-            if token.text != "{" && token.text != "}" {
-                recognition.mark(
-                    crate::surface::SourceSpan {
-                        start: token.start,
-                        end: token.end,
-                    },
-                    crate::surface::SurfaceSemanticKind::Effect,
-                );
-            }
-        }
-    } else {
-        recognition.merge_surface_document(document);
-    }
+    recognition.merge(scene_effect_parser_recognition(&line.tokens[arrow + 1..]));
 }
 
 fn parse_scene_key_binding_at(
@@ -907,10 +892,18 @@ fn add_key_trigger_to_controls(
     Ok(())
 }
 
-fn add_default_key_controls(input_names: &HashMap<String, InputId>, controls: &mut Controls) {
+fn add_default_key_controls(
+    dimension: ModelDimension,
+    input_names: &HashMap<String, InputId>,
+    controls: &mut Controls,
+) {
+    let (forward, backward) = match dimension {
+        ModelDimension::Two => ("up", "down"),
+        ModelDimension::Three => ("front", "back"),
+    };
     for (name, key, arrow) in [
-        ("up", b'w', Some(ArrowKey::Up)),
-        ("down", b's', Some(ArrowKey::Down)),
+        (forward, b'w', Some(ArrowKey::Up)),
+        (backward, b's', Some(ArrowKey::Down)),
         ("left", b'a', Some(ArrowKey::Left)),
         ("right", b'd', Some(ArrowKey::Right)),
         ("restart", b'r', None),

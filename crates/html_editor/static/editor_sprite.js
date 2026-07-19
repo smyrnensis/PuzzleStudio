@@ -671,7 +671,7 @@ function renderSpriteEditorUpperControls(target, controls) {
   sizeEditor.className = "sprite-size-editor";
   const sizeBindButton = document.createElement("button");
   sizeBindButton.type = "button";
-  sizeBindButton.className = "sprite-size-bind-button sprite-icon-button";
+  sizeBindButton.className = "icon-button sprite-size-bind-button sprite-icon-button";
   sizeBindButton.classList.toggle("is-active", controls.sizeBound);
   sizeBindButton.setAttribute("aria-label", controls.sizeBound ? "Unbind size axes" : "Bind size axes");
   sizeBindButton.setAttribute("aria-pressed", String(controls.sizeBound));
@@ -952,7 +952,7 @@ function renderSpritePaletteGrid({
   }
   const eraseButton = document.createElement("button");
   eraseButton.type = "button";
-  eraseButton.className = "sprite-token sprite-token-erase sprite-icon-button";
+  eraseButton.className = "icon-button sprite-token sprite-token-erase sprite-icon-button";
   eraseButton.classList.toggle("is-selected", selectedIndex === null && !bucketActive);
   eraseButton.dataset.colorIndex = "erase";
   eraseButton.style.setProperty("--sprite-swatch-color", "#00000000");
@@ -1456,7 +1456,7 @@ function renderSpriteCurrentColorTagButton({ state, entry, onToggle }) {
   const bind = spritePaletteEntryBindInfo(entry);
   const button = document.createElement("button");
   button.type = "button";
-  button.className = "sprite-current-tag-button sprite-icon-button";
+  button.className = "icon-button sprite-current-tag-button sprite-icon-button";
   button.classList.toggle("is-active", bind.linked);
   button.title = bind.name ? `Color tag: ${bind.name}` : "Tag selected color";
   button.setAttribute("aria-label", button.title);
@@ -1475,7 +1475,7 @@ function renderSpriteCurrentColorTagButton({ state, entry, onToggle }) {
 function renderSpriteCurrentColorUnlinkButton(index, bind) {
   const button = document.createElement("button");
   button.type = "button";
-  button.className = "sprite-current-tag-unlink-button sprite-icon-button";
+  button.className = "icon-button is-danger sprite-current-tag-unlink-button sprite-icon-button";
   button.title = bind?.name ? `Unlink color tag ${bind.name}` : "Unlink color tag";
   button.setAttribute("aria-label", button.title);
   button.innerHTML = spriteUnlinkIconSvg();
@@ -1699,7 +1699,7 @@ function renderSpriteBindToggle(entry, index, options = {}) {
   }
   const button = document.createElement("button");
   button.type = "button";
-  button.className = ["sprite-bind-toggle", options.className || ""].filter(Boolean).join(" ");
+  button.className = ["icon-button", "sprite-bind-toggle", options.className || ""].filter(Boolean).join(" ");
   button.classList.toggle("is-linked", bind.linked);
   button.classList.toggle("is-unlinked", !bind.linked);
   button.dataset.colorIndex = String(index);
@@ -1731,7 +1731,7 @@ function renderSpriteAssetBindToggle({ bind, className, label, linkedTitle, unli
   const info = spriteAssetBindInfo(bind, label);
   const button = document.createElement("button");
   button.type = "button";
-  button.className = ["sprite-bind-toggle", "sprite-asset-bind-toggle", className || ""].filter(Boolean).join(" ");
+  button.className = ["icon-button", "sprite-bind-toggle", "sprite-asset-bind-toggle", className || ""].filter(Boolean).join(" ");
   button.classList.toggle("is-linked", info.linked);
   button.classList.toggle("is-unlinked", !info.linked);
   button.title = info.linked ? `${linkedTitle}: ${info.name}` : unlinkedTitle;
@@ -2127,7 +2127,7 @@ function renderSpriteColorMenu({
     actionRow.classList.add("is-floating");
     const discardButton = document.createElement("button");
     discardButton.type = "button";
-    discardButton.className = "sprite-color-action-button sprite-color-trash-button";
+    discardButton.className = "icon-button is-danger sprite-color-action-button sprite-color-trash-button";
     discardButton.title = "Discard new color";
     discardButton.setAttribute("aria-label", "Discard new color");
     discardButton.innerHTML = spriteTrashIconSvg();
@@ -2250,7 +2250,7 @@ function stopSpriteTranslate(event) {
 function renderSpriteClipButton({ title, ariaLabel, icon, active = false, disabled = false, danger = false, onClick }) {
   const button = document.createElement("button");
   button.type = "button";
-  button.className = "sprite-icon-button sprite-clip-button";
+  button.className = "icon-button sprite-icon-button sprite-clip-button";
   button.classList.toggle("is-active", active);
   button.classList.toggle("is-danger", danger);
   button.disabled = Boolean(disabled);
@@ -3962,7 +3962,7 @@ function renderSpriteShapeBindRow(target) {
   input.setAttribute("aria-label", "Shape name");
   const tagButton = document.createElement("button");
   tagButton.type = "button";
-  tagButton.className = "sprite-shape-tag-button sprite-icon-button";
+  tagButton.className = "icon-button sprite-shape-tag-button sprite-icon-button";
   tagButton.classList.toggle("is-active", info.linked);
   tagButton.innerHTML = spriteTagIconSvg();
   tagButton.setAttribute("aria-pressed", String(info.linked));
@@ -4053,7 +4053,7 @@ function renderSpriteShapeBindControl(target, options) {
   input.setAttribute("aria-label", "Shape name");
   const tagButton = document.createElement("button");
   tagButton.type = "button";
-  tagButton.className = "sprite-shape-tag-button sprite-icon-button";
+  tagButton.className = "icon-button sprite-shape-tag-button sprite-icon-button";
   tagButton.classList.toggle("is-active", info.linked);
   tagButton.innerHTML = spriteTagIconSvg();
   tagButton.setAttribute("aria-pressed", String(info.linked));
@@ -4086,7 +4086,7 @@ function renderSpriteShapeBindControl(target, options) {
   if (info.linked && info.name) {
     const unlink = document.createElement("button");
     unlink.type = "button";
-    unlink.className = "sprite-shape-tag-unlink-button sprite-icon-button";
+    unlink.className = "icon-button is-danger sprite-shape-tag-unlink-button sprite-icon-button";
     unlink.title = `Unlink shape tag ${info.name}`;
     unlink.setAttribute("aria-label", unlink.title);
     unlink.innerHTML = spriteUnlinkIconSvg();
@@ -4124,7 +4124,7 @@ function renderSpriteShapeBindControl(target, options) {
 function renderSpriteShapeUnlinkButton(info) {
   const button = document.createElement("button");
   button.type = "button";
-  button.className = "sprite-shape-tag-unlink-button sprite-icon-button";
+  button.className = "icon-button is-danger sprite-shape-tag-unlink-button sprite-icon-button";
   button.title = info?.name ? `Unlink shape tag ${info.name}` : "Unlink shape tag";
   button.setAttribute("aria-label", button.title);
   button.innerHTML = spriteUnlinkIconSvg();

@@ -11,8 +11,8 @@ solver の目的は、面白い挙動を見つけるために人間が手でプ�
 
 抽象的には、パズルは状態遷移グラフとして理解できる。
 
-- node は、盤面だけでなく checkpoint、scene/session 値、level lifecycle を含む安定した論理 game session
-- edge は、1つの意味入力から派生する `again`、win/lose 判定、lifecycle、navigation を安定状態まで完了する原子的な論理 turn
+- node は、goal と compiled transition に関係する object だけを持つ projected logical state
+- edge は、1つの compiled logical input と、その rule evaluation 内で生じる `again` を完了する論理 transition
 - start と goal は関心のある状態領域
 - 面白さは、プレイヤーが非自明な状態間のつながりを発見するところに生まれる
 
@@ -126,16 +126,16 @@ exact または sampling search が成功する一方で known-motif search が�
 
 solver は、変化するルールセットに対して動かなければならない。
 
-そのため、ゲーム固有の探索ロジックを手で書く方針は危険である。solver はコンパイル済み rule と play/session lifecycle を真実の源泉として扱い、play が所有する headless session transition に依存するべきである。core の盤面 transition だけを solver の公開 edge にすると、checkpoint 後の restart、scene state、level advance、`again` など、同じ盤面から将来を変える文脈を失う。
+そのため、ゲーム固有の探索ロジックを手で書く方針は危険である。solver はコンパイル済み rule を真実の源泉とし、relevance analysis で閉じた projected model 上の logical transition を使う。restart、undo、level navigation などの session operation は探索 input に含めない。探索 transition が session semantics を要求する effect に遭遇した場合は、その境界で unsupported として失敗させる。
 
 ```txt
-compiled game + logical session + input
-  -> next stable logical session
+projected compiled game + projected logical state + input
+  -> next projected logical state
 ```
 
-headless solver transition は presentation timeline や debug trace を生成しない。必要な証拠は、候補の入力列を authoritative player session で replay して観測する。wait や animation の再生時間は logical edge を分割せず、探索を進める入力にもならない。
+solver transition は presentation timeline、debug trace、checkpoint、navigation wait、editor history を生成・保持しない。必要な証拠と real state は、選択された候補の入力列を authoritative player session で replay して観測する。wait や animation の再生時間は探索を進める入力にならない。
 
-1 input が level completion と navigation を同時に起こす場合、headless transition は post-rules / pre-clear の completion observation と、post-lifecycle の continuation session を区別して保持する。built-in completion、semantic goal、exact state、collect は同じ observation にそれぞれの matcher を適用し、探索可能性と replay provenance は continuation session から導く。completion 自体を consumer 側のフラグで抑制してはならない。
+level completion は logical candidate の terminal metadata として扱う。navigation 後の session state は探索ノードに格納しない。候補を採用または表示するときは、同じ root と witness を `puzzle-play` で replay し、completion observation を含む real state を取得する。
 
 高速性を保つため、rule system は探索前に正規化された中間表現へ compile する。
 
@@ -158,9 +158,9 @@ solver は、反復的な authoring loop に最適化する。
 重要な技術:
 
 - canonical state encoding
-- board、checkpoint、scene/session 値、level lifecycle を含む canonical session key
+- relevance-projected logical state の canonical key
 - 高速な state hashing
-- `canonical session key + input` に対する transition cache
+- `projected logical key + input` に対する transition cache
 - 繰り返し遷移に対する trace cache
 - 可能であれば incremental / Zobrist-style hash update
 - 早期の duplicate detection
@@ -170,8 +170,6 @@ solver は、反復的な authoring loop に最適化する。
 - 可能な範囲での parallel exploration
 
 想定 workload は、巨大な1ステージを完璧に解くことではない。ルール編集、ステージ variation、生成された test arena に対して、小中規模の probe を大量に走らせることである。
-
-対話的な既定探索の状態上限は最大 1000 とする。これは解けなさの証明に使う境界ではなく、AI や作者が仮説、途中状態、heuristic を更新するための probe 単位である。wall-clock budget は各実行入口の運用契約として定め、状態上限の意味とは分ける。より大きな探索は個別の実験で明示する。
 
 ## Solver State Slicing
 
@@ -280,6 +278,330 @@ solver は、人間と AI の両方が検査できる artifact を出すべき�
 
 これらの output は、design note、regression test、AI との会話から参照できる程度に安定しているべきである。
 
+## Manual Solver Workbench
+
+### 定義と成功条件
+
+manual solver は、探索を人間の手作業に戻す機能ではない。人間または AI が、現在地、
+目標、次の入力、探索へ渡す仕事量、観察・採用する候補を明示的に選ぶ investigation
+session である。logical search と real-state replay は同じ runtime が別の operation として所有する。
+
+```txt
+operator chooses question or action
+  -> engine executes or searches
+  -> engine returns state, provenance, diff, trace, candidates
+  -> operator chooses the next question or action
+```
+
+人間と AI は表示方法や入力装置を共有する必要はない。共有すべきものは、同じ状態、
+同じ command、同じ goal、同じ search frontier、同じ結果の意味である。Human UI と
+agent JSONL が別々の solver implementation を持ち、たまたま似た答えを返す構成は
+「共通」ではない。
+
+manual solver が満たす成功条件は次のとおり。
+
+- 人間は盤面を見ながら semantic input を1手ずつ実行し、履歴上の任意の状態から分岐できる。
+- AI は同じ操作を opaque handle と typed response で実行できる。
+- 人間と AI は同じ typed goal を評価し、同じ search を bounded allowance 単位で進められる。
+- search candidate は projected logical state と witness だけを持ち、authoritative replay と projection equality check に成功したときだけ real state として観察・再利用できる。
+- state、run、goal、search、candidate の由来が失われず、reachable、counterfactual、search-local を混同しない。
+- source snapshot が変わった場合、古い session を新しい compile のものとして継続しない。
+- UI は source text、object ID、raw slot、win 判定、lifecycle を再解釈しない。
+
+### Runtime boundary
+
+`puzzle-solver-runtime` は state、run、goal、search、candidate、provenance の owner である。
+`puzzle-agent-runtime` は versioned JSONL envelope、request correlation、error serialization
+だけを所有し、domain operation を実装しない。
+
+editor worker、browser player、WASM binding に残る orchestration は、この runtime contract を
+呼ぶ adapter へ縮小する。特に editor は候補を選択するが、logical-to-real reconstruction や
+goal matching を JavaScript で実装しない。
+
+adapter に同じ domain operation が見つかった場合は runtime contract へ移し、adapter 側の
+実装を削除する。旧実装へ委譲する compatibility path は持たない。
+
+### 共通 domain model
+
+#### Prepared artifact
+
+prepared artifact は、1つの完全な source snapshot から compile された model を表す。
+`artifact_id` は entry path、全 document 内容、選択 model、compiler contract version から
+作る。level list、semantic input list、object/variable catalog、goal capability、model kind を
+manifest として公開する。
+
+artifact は source を再 parse する consumer のための JSON blob ではない。compiled model は
+Rust/WASM service 内に留まり、consumer は opaque `artifact_id` だけを持つ。
+
+#### Investigation session
+
+investigation session は prepared artifact と選択 level に属し、次を所有する。
+
+- immutable state node
+- input sequence を実行した run edge
+- goal
+- resumable search と search-local candidate
+- state、run、candidate に付けた label と note
+- source fingerprint と contract version
+
+session の各 handle は session-local で、別 artifact や別 process に持ち込めない。session を
+close すると未保存の search frontier を含む全 handle を解放する。
+
+#### Runtime state と search node
+
+runtime state handle は editor が観察・再利用する real state を持てる。search node はこれと
+異なり、relevance-projected logical state、goal completion metadata、parent/action linkage だけを
+持つ。real state、run provenance、input history、checkpoint、navigation、UI state は frontier と
+visited key に入れない。
+
+provenance は少なくとも次を区別する。
+
+- `authored`: compiled level start から materialize した状態
+- `reachable`: authored または reachable state から semantic input を replay して得た状態
+- `counterfactual`: base state から明示的な semantic edit で作った仮説状態
+- `materialized_candidate`: search candidate を同じ root から replay して一致を検証した状態
+
+`materialized_candidate` は search root の real state から witness を replay して作る。replay
+結果を search と同じ slicer で projection し、logical candidate と一致した場合だけ handle を
+作る。counterfactual root からの candidate を materialize しても provenance は reachable へ
+変わらない。
+
+#### Run edge と履歴
+
+run edge は `from_state_id`、semantic input sequence、各 input 後の real observation、terminal
+state、trace、result を持つ。これは search edge ではなく、`puzzle-play` が authoritative に
+実行する materialized run である。
+
+UI の Undo / Redo は state graph 上の cursor navigation である。ゲーム自身の undo command を
+実行することではない。古い node から新しい input を実行すると branch が増え、既存 branch は
+消えない。
+
+#### Goal
+
+共通 goal contract は少なくとも次を持つ。
+
+- `level_completion`: game が定義した completion observation
+- `semantic`: cell、object、variable に対する typed predicate
+- `exact_state`: 指定 state node の logical observation と一致
+
+2D semantic goal は `exact`、`contains`、`excludes`、`unknown` を canonical predicate とする。
+ASCII は AI 向け codec、grid painter は人間向け editor であり、どちらも language-owned な
+同じ semantic goal model へ lower する。JavaScript が legend や object name を解決しては
+ならない。
+
+3D の semantic goal editor は、同じ typed spatial predicate contract が定義されるまで
+unsupported として明示的に失敗させる。level completion search や manual input まで無効に
+する理由にはしない。
+
+#### Search
+
+search は root state、goal snapshot、algorithm、input set、heuristic、最大 depth、最大 stored
+node を作成時に固定する。これらを変える場合は新しい search を作る。
+
+`advance_search` は、既存 frontier に追加する `max_expanded_nodes` と `max_millis` を受け取る。
+allowance 終了時は `paused` になり frontier を保持する。UI は hidden loop で無期限に再開せず、
+operator が指定した allowance または明示的な run-until 条件だけを実行する。
+
+candidate は search-local で、次を返す。
+
+- stable candidate ID within the search
+- score、depth、discovery order
+- witness input sequence
+- state hash
+- goal diff
+- root との差分要約
+
+candidate の logical preview は read-only である。real preview または再利用可能な state が
+必要な場合、`materialize_candidate` が witness を authoritative session で replay し、その
+projection が candidate の logical state と一致することを確認してから state/run handle を作る。
+
+### 共通 command surface
+
+`puzzle-solver-runtime` は Rust の typed command と typed result を所有する。WASM method と
+agent JSONL operation はその adapter であり、内部 model ではない。
+
+| 操作 | 入力 | 主な結果 |
+|---|---|---|
+| `prepare` | workspace snapshot、entry、model selector | artifact handle、manifest |
+| `create_session` | artifact、level | session、authored state |
+| `inspect_state` | state handle、observation profile | symbolic state、summary、provenance |
+| `apply_inputs` | from state、semantic input sequence、trace profile | run、points、terminal state、result |
+| `compare_states` | two state handles | object/variable/session diff |
+| `derive_counterfactual` | base state、typed semantic edit | counterfactual state、validated diff |
+| `define_goal` | base state、typed goal spec | goal handle、normalized goal |
+| `evaluate_goal` | goal、state | match、mismatch list |
+| `create_search` | root、goal、algorithm、limits | search handle、`ready` status |
+| `advance_search` | search、allowance | status、stats、best candidates |
+| `inspect_search` | search、candidate limit | immutable search snapshot |
+| `materialize_candidate` | search、candidate | replay-verified run/state |
+| `close_search` | search | released search resources |
+| `close_session` | session | released child resources |
+
+`apply_inputs` は単手と複数手を同じ operation として扱う。人間の1手入力を特権的な別 contract
+にしない。逆に、solve convenience operation は `create_search`、`advance_search`、
+`materialize_candidate` の合成として adapter が勝手に再実装してはならない。必要なら runtime
+が named orchestration として所有する。
+
+### Ownership と data flow
+
+```txt
+Human Solver UI                      Agent / automation
+  -> WASM adapter                       -> JSONL adapter
+           \                           /
+            puzzle-solver-runtime
+              - handles and provenance
+              - immutable run graph
+              - goals and searches
+                |        |        |
+          puzzle-lang puzzle-play puzzle-solver
+          compile/codec  replay     search machine
+```
+
+ownership は次のように分ける。
+
+- `puzzle-lang`: workspace compile、semantic state/goal model と ASCII codec
+- `puzzle-play`: real state の authoritative initialization、run、replay、completion observation
+- `puzzle-solver`: logical transition、state slicing、search algorithm、frontier、candidate ordering、projected state key
+- `puzzle-solver-runtime`: artifact/session/handle、provenance、run graph、goal/search orchestration、candidate materialization
+- `puzzle-runtime-contract`: source-free な adapter transport type
+- `puzzle-agent-runtime`: JSONL versioning、request correlation、error serialization
+- `puzzle-wasm`: browser worker から呼ぶ thin WASM binding
+- `html_editor`: DOM、keyboard、layout、render request、human-readable status
+
+editor と agent adapter は source syntax、goal matching、state hash、candidate promotion、completion
+判定を実装しない。
+
+### Human UI
+
+solver は独立した「答え再生パネル」ではなく、状態グラフを操作する workbench とする。
+wide layout の基準形は次のとおり。
+
+```txt
++ Solver: Level 4 / artifact 8f2a / current: reachable ----------------------+
+| History / branches |                Board                 | Goal / Search  |
+| Start              |                                      | Level complete |
+|  R D                |     current logical observation      | [Evaluate]     |
+|  + candidate-7     |                                      |                |
+|  + manual branch   |  Inputs: [Up] [Down] [Left] [Right]  | Search paused  |
+|                    |          [Action] [Restart]           | 820 visited    |
+|                    |                                      | [Advance 100]  |
+|                    |                                      | Candidates     |
+|                    |                                      | #7 score 2     |
++--------------------+--------------------------------------+----------------+
+| Diff / trace / notes                                                     |
++----------------------------------------------------------------------------+
+```
+
+#### Context bar
+
+常に level、artifact fingerprint の短縮表示、current state provenance、source freshness を表示する。
+source が変わったら `stale` を表示し、古い session は読み取り可能なまま凍結する。新 compile で
+自動継続したり、同名 level へ暗黙に rebase しない。
+
+#### Board と input
+
+board は current state、selected history node、candidate preview のいずれを表示しているかを
+明示する。candidate preview は border と label でも区別し、色だけに依存しない。
+
+input control は compiled manifest の semantic input を列挙する。方向キーや game-specific key は
+adapter が物理 key を semantic input ID へ変換するだけで、UI が名前から方向を推測しない。
+複数手を入力欄へ queue して `Run` する操作も、単手 button も `apply_inputs` を使う。
+
+#### History / branches
+
+history は state node と run edge の tree として表示する。各 edge には入力列、result、state
+provenance を表示し、node を選ぶと board、diff、trace が同時に切り替わる。
+
+- Back / Forward: cursor navigation
+- Branch: 選択 node を current root にする
+- Pin: review 対象として保持する
+- Compare: 2つの pin を比較する
+- Label / Note: `interesting`、`deadend` などの判断を記録する
+
+Restart は authored state へ cursor を戻す操作と、game の restart lifecycle を実行する操作を
+別の名前で提示する。意味を混ぜない。
+
+#### Goal editor
+
+既定 goal は level completion である。Semantic goal mode では、base state から goal layer を
+作り、cell ごとに `exact`、`contains`、`excludes`、`unknown` を選ぶ。object picker は manifest
+由来で、保存時に Rust 側が collision layer、dimension、object identity を検証する。
+
+goal card は checked cell 数、unknown cell 数、current state との差分を常時表示する。goal を
+変更して既存 search を再利用せず、新 search 作成を要求する。
+
+#### Search inspector
+
+search inspector は次を同時に見せる。
+
+- root state と goal
+- algorithm と immutable limits
+- status: `ready` / `paused` / `solved` / `exhausted` / `resource_limit` / `failed`
+- visited、expanded、frontier、max depth、elapsed
+- allowance control: expanded nodes と wall time
+- ranked candidate list
+
+`Advance` は指定 allowance だけ進める。`Run until solved` を置く場合も、明示した total limit と
+Pause を持ち、内部では同じ advance を使う。`paused` と `resource_limit` を「解なし」と表示しない。
+
+candidate を選ぶと board と goal diff を preview する。`Materialize as branch` で replay verification
+を通過した場合だけ history に追加する。solution candidate も同じ経路を通し、特別な未検証の
+solution object を作らない。
+
+#### Inspector
+
+選択 state について、前 state との差分、発火 rule、variable/session change、completion
+observation を tabs で表示する。人間向け文言は symbolic contract から生成し、raw slot 配列を
+primary UI にしない。board を読めない利用者向けに、座標と object 名の textual diff を提供する。
+
+#### Responsive behavior
+
+狭い preview pane では board を先頭に置き、History、Goal/Search、Inspector を tabs または
+drawer にする。情報を削除した簡易 solver へ切り替えず、同じ state selection と command を
+異なる layout で表示する。
+
+### Human / AI handoff
+
+live handle や frontier は process-local なので、そのまま clipboard や file へ保存しない。
+handoff 用には replayable な `SolverNotebook` artifact を別途定義する。
+
+保存対象:
+
+- contract version と exact source fingerprint
+- model / level identity
+- root provenance
+- semantic goal spec
+- pinned state への authoritative input sequence、または base 付き counterfactual spec
+- materialize 済み candidate の witness
+- labels、notes、比較対象
+- search configuration、final status、stats
+
+保存しない対象:
+
+- compiled model blob
+- raw object IDs だけの board snapshot
+- search frontier、visited table、process-local handle
+- renderer state
+
+Notebook を開くときは exact source fingerprint を検証し、authoritative replay で state を再構築する。
+一致しなければ drift を報告して停止する。類似する level や古い source へ自動変換しない。
+
+### Contract acceptance
+
+最低限、次を cross-adapter test と UI test で保証する。
+
+1. 同じ artifact、level、from state、input sequence は、Human UI 経由と agent 経由で同じ result、
+   logical state hash、trace summary を返す。
+2. 同じ typed goal は同じ match と mismatch を返す。
+3. node-count allowance が同じ search は同じ stats と candidate order を返す。
+4. candidate materialization は replay state が一致しない限り handle を作らない。
+5. UI history navigation は game input や lifecycle を実行しない。
+6. source fingerprint change は active session を stale にし、新 artifact として継続しない。
+7. unsupported な 3D semantic goal は明示 error になり、3D manual input と level-completion search は
+   それ自体の contract が成立する限り動く。
+8. JavaScript が `.puzzle` source、legend、object ID、win condition を解釈しないことを source-contract
+   test で守る。
+
 ## Authoring Flow との関係
 
 制作フローは、solver が全知であることに依存してはいけない。
@@ -305,19 +627,19 @@ rule system
 
 solver は observation を出す。何を重視するかは人間が決める。
 
-## 初期実装方針
+## 実装順序
 
-段階的に作る。
+各段階は最終 ownership に直接移し、旧 owner の同じ実装を同じ変更で削除する。一時的な
+新旧 solver route は作らない。
 
-1. rule を deterministic transition function に compile し、play-owned headless session から同じ lifecycle を実行する。
-2. future behavior を変える session context を含む canonical key と transition cache を実装する。
-3. 小さな level 用の exact BFS を作る。
-4. replay と rule firing trace output を追加する。
-5. level perturbation generation と比較を追加する。
-6. 単純な naive player model を追加する。
-7. 大きめの実験用に sampling search を追加する。
-8. macro link candidate extraction を追加する。
-9. human-labeled example の corpus ができてから motif matching を追加する。
+1. editor の manual input を共通 `apply_inputs` / inspect contract へ接続し、WASM を adapter のみにする。
+2. semantic state/goal model と ASCII codec を `puzzle-lang` の owned contract にし、agent artifact と 2D Goal UI を
+   同じ normalized spec へ lower する。
+3. `html_play` と editor worker に残る search orchestration を共通 runtime operation に置き換える。
+4. editor の現在の one-button solve/replay panel を、board、history、goal、search、inspector を持つ Solver Workbench に置き換える。
+5. cross-adapter conformance test を追加し、node allowance、logical state hash、goal diff、candidate order、materialized replay result を比較する。
+6. replayable `SolverNotebook` を追加して human / AI handoff を可能にする。
+7. その後に perturbation、naive model、sampling、macro link、human label corpus、motif matching を追加する。
 
 最初の有用な solver は、賢い必要はない。速く、再現可能で、証拠を明確に見せられる必要がある。
 
@@ -331,5 +653,10 @@ solver は observation を出す。何を重視するかは人間が決める。
 - solver が見つけた経路を自動的に良いパズルとみなす
 - 非自明さの完全自動判定を要求する
 - perfect solver ができるまで有用な tooling を遅らせる
+- Human UI と agent protocol に別々の state、goal、search implementation を持たせる
+- real state を search frontier や duplicate key に格納する
+- materialized real state の projection を logical candidate と照合しない
+- search を hidden loop で自動再開し、operator が探索量を決められなくする
+- candidate preview を replay verification なしで reachable state に昇格する
 
 solver は、パズル設計を理論的に解決するものではなく、発見のための実用的な観測器であり続けるべきである。

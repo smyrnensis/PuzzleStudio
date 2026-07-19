@@ -159,7 +159,23 @@ count = 1...10
 
 tag value list の中の `<start>...<end>` は inclusive numeric range として展開される。`count = 1...10` は `count = 1 2 3 4 5 6 7 8 9 10` と同じ tag set を作る。
 
-`directions` は組み込み tag set で、常に `up down left right` を表す。`horizontal` は `left right`、`vertical` は `up down` を表す。これらは object schema、`map`、visual `shape` / `palette`、`for` の展開元で同じように使える。再定義はできない。
+`*` は selector wildcard の予約 token なので tag value には使えない。`_` を含む identifier atom は通常の tag value として扱う。
+
+絶対方向の組み込み tag set は座標軸と座標平面で構成する。
+
+| set | 2D | 3D |
+| --- | --- | --- |
+| `x_axis` | `left right` | `left right` |
+| `y_axis` | `up down` | `front back` |
+| `z_axis` | 使用不可 | `up down` |
+| `xy_plane` | `up down left right` | `left right front back` |
+| `yz_plane` | 使用不可 | `up down front back` |
+| `xz_plane` | 使用不可 | `up down left right` |
+| `directions` | `xy_plane` | 全6方向 |
+
+`horizontal` は2Dでは `x_axis`、3Dでは `xy_plane`、`vertical` は2Dでは `y_axis`、3Dでは `z_axis` と同じ集合を表す正式alias。これらの組み込み名は再定義できず、2Dで `z_axis` / `yz_plane` / `xz_plane` を使用すると errorになる。object schema、`map`、visual `shape` / `palette`、`for`、orientation set prefixは同じ集合契約を使う。
+
+`up down left right front back` の部分集合だけからなる author-defined tag set も、名前に依存せず方向型として扱う。方向型の schema tag slot では、oriented rule の相対 selector tag `>` / `<` / `^` / `v` を使える。相対方向がその tag set の domain 外になる orientation は rule alternative を生成しない。
 
 `slots` は object 定義から作られる組み込み tag set。名前付き layer はその名前、匿名 layer は内部名で展開される。各 layer 名は同じ layer に属する object group としても登録される。
 
@@ -269,7 +285,7 @@ lexical expansion である。
 
 ### `directions` / `direction`
 
-`directions` は標準の `up` / `down` / `left` / `right` を表す組み込み tag set。
+`directions` はmodel次元の全絶対方向を表す組み込み tag set。2Dでは `up` / `down` / `left` / `right`、3Dではさらに `front` / `back` を含む。
 
 rule pattern の movement mark として使う場合も上の共通 binding 規約に従う。
 
@@ -1082,7 +1098,7 @@ once [ Door ] -> [ ClosedDoor ]
 
 入力方向に合わせて object を動かす基本形は、まず movement mark を付け、最後に標準搭載の `move` routine を呼ぶ。
 
-`input` は key から読み替えられた semantic input の名前。bare `input [ ... ]` は、現在の input が標準4方向のいずれかなら、その方向を rewrite orientation として使う。`input <direction-set> [ ... ]` は対象となる方向集合を指定し、`horizontal` / `vertical` / `directions` を使える。`> Player` は「その rewrite orientation へ移動したい」という builtin movement mark。実際に隣の cell へ移す処理と collision は標準 `move` routine が担当する。通常の移動例では、直接 `[ | Player ]` へ書き換えたり、`for d in directions { if input == d { ... } }` へ展開して書かない。
+`input` は key から読み替えられた semantic input の名前。bare `input [ ... ]` は、現在の input がmodelの絶対方向なら、その方向を rewrite orientation として使う。`input <direction-set> [ ... ]` は対象となる組み込みまたはauthor-defined方向集合を指定する。`> Player` は「その rewrite orientation へ移動したい」という builtin movement mark。実際に隣の cell へ移す処理と collision は標準 `move` routine が担当する。通常の移動例では、直接 `[ | Player ]` へ書き換えたり、`for d in directions { if input == d { ... } }` へ展開して書かない。
 
 ```txt
 rules {
@@ -1094,7 +1110,7 @@ move
 
 これは概念的には、入力された方向だけに対応する movement intent を Player に付け、前方の Box にも同じ intent を伝播し、最後に `move` で可能な object だけを動かす。
 
-`directions` は常に `up/down/left/right` の4方向 tag set。`input` は canonical state ではなく、`transition(state, input)` の transition context である。
+`directions` の値はmodel次元に従う。`input` は canonical state ではなく、`transition(state, input)` の transition context である。
 
 入力とは独立に、方向 set へ同じ rewrite を展開する場合は次の形を使える。
 
@@ -1103,14 +1119,15 @@ rules {
 directions [ Fire | Wood ] -> [ Fire | Fire ]
 horizontal [ Player | ] -> [ | Player ]
 input horizontal [ Cursor | ] -> [ | Cursor ]
+input yz_plane [ Cursor | ] -> [ | Cursor ]
 }
 ```
 
-`directions [ ... ]` は `up` / `down` / `left` / `right`、`horizontal [ ... ]` は `left` / `right`、`vertical [ ... ]` は `up` / `down` に展開される。これは input guard を付けない。
+`<direction-set> [ ... ]` は集合内の各絶対方向へ展開され、input guardを付けない。たとえば3Dの `yz_plane [ ... ]` は `up` / `down` / `front` / `back` へ展開される。
 
 `input horizontal [ ... ]` は input guard 付きの短縮形。現在の input が `left` または `right` のときだけ、その方向の rewrite として評価する。横移動だけを受け付けたい場合も、通常は intent を付けて `move` を呼ぶ。
 
-同じ形で `input directions [ ... ]` と `input vertical [ ... ]` も使える。input 名が指定した set の member だったときに、その member を orientation として使う。
+同じ形で任意の方向型setを使える。input 名が指定した set の member だったときに、その member を orientation として使う。
 
 名前だけを見たい場合は `restart -> restart` のような input sugar を使える。これは orientation を要求しないので、非方向 input でも意味を持つ。
 
@@ -1118,7 +1135,7 @@ input horizontal [ Cursor | ] -> [ | Cursor ]
 
 ### Direction Expansion Trigger
 
-`for <binding> in <source...>` は、有限で順序を持つ source の各 item へ statement list を展開する。source には `directions` / `horizontal` / `vertical` / `slots`、author-defined tag set、numeric range、または inline value list を使える。
+`for <binding> in <source...>` は、有限で順序を持つ source の各 item へ statement list を展開する。source には組み込み方向set、`slots`、author-defined tag set、numeric range、または inline value list を使える。
 
 よく使う軸:
 
@@ -1126,6 +1143,8 @@ input horizontal [ Cursor | ] -> [ | Cursor ]
 for d in directions
 for h in horizontal
 for v in vertical
+for z in z_axis
+for p in yz_plane
 for s in slots
 for i in 1...3
 for i in 1...L
@@ -1134,7 +1153,7 @@ for tag in tag_1 tag_2 tag_3 tag_4
 for x in a b 1...3 z
 ```
 
-`directions` / `horizontal` / `vertical` はそれ自体を offset の単位としては使わない。展開後の `up` / `right` などが orientation prefix や movement mark として解釈される。
+方向set名はそれ自体を offset の単位としては使わない。展開後の `up` / `right` などが orientation prefix や movement mark として解釈される。
 
 `<start>...<end>` は inclusive numeric range。`1...3` は `1` / `2` / `3` へ展開される。endpoint は整数 literal または同じ puzzle 内で整数 literal に初期化された `var` / `const` を使える。これは authoring-time expansion なので、turn 中に var を更新しても展開数は変わらない。同じ range token は `tags` の value list でも使える。
 
@@ -1248,7 +1267,7 @@ if win_conditions -> next_level
 
 `again` が「again」するのは物理 key や直前の semantic input ではない。直前に押された `left` / `x` / `Enter` を再送しない。`again` は、同じ puzzle target の通常 rule entrypoint、たとえば scene の `rules { step sokoban }` で指定された `sokoban` を、input なしで 1 turn だけもう一度実行する。したがって `if input == left` のような input guard は `again` turn では false になり、input に依存しない rule や、前 turn が盤面に残した object / mark ではない状態だけが進む。
 
-1つの follow-up turn がまた `again` を出すと、さらに次の no-input follow-up turn を実行する。自動 turn は最大 256 回で止まり、`cancel` が出た場合はその自動 turn だけを取り消して停止する。1 回の入力から派生した follow-up turn は、win 判定と lifecycle を含む安定状態まで同じ論理入力の中で完了する。各 turn が出した animation、`sfx`、`message`、wait は発生順を保った 1 本の presentation timeline として adapter へ渡され、表示時間は論理状態の進行に影響しない。
+1つの follow-up turn がまた `again` を出すと、さらに次の no-input follow-up turn を実行する。自動 turn は最大 256 回で止まり、`cancel` が出た場合はその自動 turn だけを取り消して停止する。follow-up turn も通常の turn と同じ wait continuation を持つ。wait までの rule segment が commit され、表示待ちの完了後に同じ follow-up turn の残りが再開する。
 
 ```txt
 [ Dog | Baby ] -> [ | dog_angry ] again
@@ -1265,7 +1284,9 @@ tween_duration = 160ms
 }
 ```
 
-`wait animation` は rules が出した visual animation に対する presentation pacing marker。その入力の rules、win 判定、lifecycle は安定状態まで原子的に完了し、adapter が同じ turn の animation duration だけ次の表示入力を待つ。logical state や後続 rule の実行は表示時間に依存せず、animation が発生していなければ no-op。`wait tween` は互換 alias だが、canonical には `wait animation` を使う。
+Puzzle rule の `wait animation` は、現在の rule segment を commit して turn を pause する。adapter はその segment が出した animation の最大 duration を待ち、完了時に同じ turn の残りの rules、win 判定、lifecycle を再開する。pause 中は別 input、undo、restart を受け付けない。animation が発生していなければ pause は作られず、そのまま後続 rule に進む。`wait tween` は互換 alias だが、canonical には `wait animation` を使う。
+
+時間を直接指定する `wait 300ms` / `wait 1s` も同じ rule segment の pause で、resume 条件だけが指定時間になる。resume 前に commit 済みの盤面は表示され、後続 rule の盤面変化はまだ発生しない。turn が複数 segment に分かれても undo は入力開始前まで戻る 1 回分のままになる。
 
 ```txt
 rules {
@@ -1692,7 +1713,7 @@ goto secret_clear
 
 authoring で推奨する level 指定は `level.name`。`level.label` は表示名として読めるが、現時点では `level.name` と同じ値を返す。`level.last` / `level.has_next` は真偽 condition として使える。
 
-puzzle rule の rewrite effect としても `message "text"` / `message <path>` / `sfx <name>` を書ける。`message` は popup と既定の `default_wait_time` を presentation event として adapter へ渡す。表示待ちは後続 effect、後続 rule、win 判定、lifecycle を止めず、board state にも残らない。
+puzzle rule の rewrite effect としても `message "text"` / `message <path>` / `sfx <name>` を書ける。`message` は popup と既定の `default_wait_time` の wait を presentation event として adapter へ渡す。popup の待機中は同じ turn の後続 rule、win 判定、lifecycleを pause し、完了後に保存された continuation から再開する。wait 自体は board state には残らない。
 
 ```txt
 [ Player Goal ] -> message "You found the goal"

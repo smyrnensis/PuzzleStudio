@@ -1236,8 +1236,7 @@ dependencies = [
  "puzzle-play",
  "puzzle-runtime-contract",
  "puzzle-scene",
- "puzzle-solver",
- "puzzle-wasm-core",
+ "puzzle-solver-runtime",
  "serde_json",
 ]
 
@@ -2327,10 +2326,7 @@ dependencies = [
 name = "puzzle-agent-runtime"
 version = "0.1.0"
 dependencies = [
- "puzzle-core",
- "puzzle-lang",
- "puzzle-play",
- "puzzle-solver",
+ "puzzle-solver-runtime",
  "serde",
  "serde_json",
 ]
@@ -2422,22 +2418,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "puzzle-solver-runtime"
+version = "0.1.0"
+dependencies = [
+ "puzzle-core",
+ "puzzle-lang",
+ "puzzle-play",
+ "puzzle-runtime-contract",
+ "puzzle-solver",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "puzzle-wasm"
 version = "0.1.0"
 dependencies = [
  "html-play",
  "js-sys",
  "puzzle-lang",
- "serde_json",
- "wasm-bindgen",
-]
-
-[[package]]
-name = "puzzle-wasm-core"
-version = "0.1.0"
-dependencies = [
- "puzzle-core",
  "puzzle-runtime-contract",
+ "puzzle-solver-runtime",
+ "serde",
+ "serde-wasm-bindgen",
  "serde_json",
  "wasm-bindgen",
 ]
@@ -2446,9 +2449,7 @@ dependencies = [
 name = "puzzle-wasm-game"
 version = "0.1.0"
 dependencies = [
- "puzzle-core",
- "puzzle-game-runtime",
- "wasm-bindgen",
+ "puzzle-wasm-player",
 ]
 
 [[package]]
@@ -2781,6 +2782,17 @@ dependencies = [
  "serde",
  "serde_core",
  "typeid",
+]
+
+[[package]]
+name = "serde-wasm-bindgen"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8302e169f0eddcc139c70f139d19d6467353af16f9fce27e8c30158036a1e16b"
+dependencies = [
+ "js-sys",
+ "serde",
+ "wasm-bindgen",
 ]
 
 [[package]]

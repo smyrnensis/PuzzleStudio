@@ -1,129 +1,5 @@
 (() => {
-function createPuzzle3ComponentController(options = {}) {
-const controllerOptions = options && typeof options === "object" ? options : {};
-const inlineComponentMount = Boolean(controllerOptions.canvas) || controllerOptions.mountMode === "inline";
-const screenView = controllerOptions.screenView || controllerOptions.container || document.querySelector("#screenView") || document.body;
-const componentEmbedMode = Boolean(controllerOptions.componentEmbedMode)
-  || (!inlineComponentMount && (
-    new URLSearchParams(window.location.search).get("component") === "1"
-    || window.Puzzle3DComponentEmbed === true
-  ));
-const PREVIEW_SURFACE_UPDATE_MESSAGE = "PuzzleStudioPreviewSurfaceUpdate";
-const PUZZLE3_LEVEL_PREVIEW_KIND = "puzzle3-level";
-const ISOLATED_PREVIEW_MODE = "isolated";
-let editorComponentEmbedMode = false;
-if (!inlineComponentMount) {
-  document.documentElement.classList.toggle("is-component-embed", componentEmbedMode);
-}
-let activeThemeClass = "";
-const activeThemeVariables = new Set();
-if (!inlineComponentMount) {
-  applyTheme({ name: "clean" });
-  document.body.classList.toggle("is-component-embed", componentEmbedMode);
-}
-const puzzle3Frame = ensurePuzzle3ComponentFrame();
-const canvas = puzzle3Frame.querySelector("#view");
-const puzzle3RendererMode = resolvePuzzle3RendererMode(
-  controllerOptions.renderer
-    || controllerOptions.rendererMode
-    || new URLSearchParams(window.location.search).get("puzzle3Renderer")
-    || new URLSearchParams(window.location.search).get("renderer"),
-);
-const ctx = puzzle3RendererMode === "three" ? null : canvas.getContext("2d", { alpha: true });
-const PUZZLE3_RENDERER_CONTRACT_VERSION = 1;
-const PUZZLE3_COMPONENT_CAMERA_MIN_PITCH_DEGREES = -90;
-const PUZZLE3_COMPONENT_CAMERA_MAX_PITCH_DEGREES = 90;
-
-function ensurePuzzle3ComponentFrame() {
-  let existing = controllerOptions.canvas || document.querySelector("#view");
-  let frame = existing?.closest(".puzzle3-component")
-    || (inlineComponentMount ? existing?.parentElement : null)
-    || document.createElement("div");
-  frame.className = "puzzle3-component";
-  if (!existing) {
-    existing = document.createElement("canvas");
-    existing.id = "view";
-    existing.width = 960;
-    existing.height = 640;
-    existing.setAttribute("aria-label", "Puzzle3 component");
-  } else if (!existing.id) {
-    existing.id = "view";
-  }
-  if (existing.parentElement !== frame) {
-    frame.append(existing);
-  }
-  return frame;
-}
-
-const view = {
-  cellScale: 78,
-  originX: 0,
-  originY: 0,
-  dragging: false,
-  pointerId: null,
-  lastPointerX: 0,
-  lastPointerY: 0,
-  shadowsEnabled: false,
-  projectionFitKey: "",
-  projectionWidth: 0,
-  projectionHeight: 0,
-  viewportSnapNext: true,
-  viewportAnimationFrame: 0,
-  primitiveSortCacheKey: "",
-  primitiveSortCacheOrder: [],
-};
-let snapshot = null;
-let snapshotLoaded = false;
-let initialCamera = null;
-let currentSceneName = "";
-let editorModelComponentPreview = null;
-let sceneEditorPreview = null;
-let queuedSceneInputs = [];
-let queuedSceneInputFrame = 0;
-const heldSceneInputs = new Map();
-const SCENE_DEFAULT_WIDTH = 16;
-const SCENE_DEFAULT_HEIGHT = 12;
-const spriteVoxelTemplateCache = new WeakMap();
-const renderGeometryCache = createRenderGeometryCache();
-const pixelateBuffer = document.createElement("canvas");
-let mountedPuzzle3Component = null;
-let pendingResizeFrame = 0;
-let pendingSceneLayoutRender = false;
-let startupUrlCommandsApplied = false;
-let puzzle3ThreeRenderer = null;
-let puzzle3ThreeViewPayload = null;
-const viewListeners = new Set();
-const stateListeners = new Set();
-const puzzle3Component = createPuzzle3Component();
-
-async function loadSnapshot() {
-  const nextSnapshot = await loadInitialPuzzle3Snapshot();
-  const initialModelPreview = window.PuzzleStudioInitialModelComponentPreview;
-  if (initialModelPreview?.type === "PuzzleStudioRenderPuzzle3ModelComponent") {
-    window.PuzzleStudioInitialModelComponentPreviewConsumed = true;
-    const next = puzzle3PreviewSnapshot(initialModelPreview, nextSnapshot);
-    await loadSnapshotData(next, puzzle3ModelComponentPreviewLoadOptions(initialModelPreview));
-    return;
-  }
-  await loadSnapshotData(nextSnapshot);
-}
-
-async function loadInitialPuzzle3Snapshot() {
-  if (controllerOptions.fixture) {
-    return controllerOptions.fixture;
-  }
-  if (window.Puzzle3DFixture) {
-    return window.Puzzle3DFixture;
-  }
-  const response = await fetch("./fixture.json", { cache: "no-store" });
-  if (!response.ok) {
-    const status = `${response.status} ${response.statusText || ""}`.trim();
-    throw new Error(`Could not load Puzzle3 fixture ./fixture.json (${status})`);
-  }
-  return response.json();
-}
-
-function requirePuzzle3Snapshot(source, label = "Puzzle3 snapshot") {
+function validatePuzzle3ViewSnapshot(source, label = "Puzzle3 snapshot") {
   if (!source || typeof source !== "object" || Array.isArray(source)) {
     throw new Error(`${label} is missing or invalid.`);
   }
@@ -157,37 +33,115 @@ function requirePuzzle3Snapshot(source, label = "Puzzle3 snapshot") {
   return source;
 }
 
+function createPuzzle3ComponentController(options = {}) {
+const controllerOptions = options && typeof options === "object" ? options : {};
+const canvas = controllerOptions.canvas;
+if (!(canvas instanceof HTMLCanvasElement)) {
+  throw new Error("Puzzle3 component requires an explicit canvas element.");
+}
+const screenView = controllerOptions.screenView || controllerOptions.container || canvas.parentElement;
+if (!(screenView instanceof HTMLElement)) {
+  throw new Error("Puzzle3 component requires an explicit container element.");
+}
+const componentEmbedMode = Boolean(controllerOptions.componentEmbedMode);
+const puzzle3Frame = ensurePuzzle3ComponentFrame();
+const puzzle3RendererMode = resolvePuzzle3RendererMode(
+  controllerOptions.renderer
+    || controllerOptions.rendererMode,
+);
+const ctx = puzzle3RendererMode === "three" ? null : canvas.getContext("2d", { alpha: true });
+const PUZZLE3_RENDERER_CONTRACT_VERSION = 1;
+const PUZZLE3_COMPONENT_CAMERA_MIN_PITCH_DEGREES = -90;
+const PUZZLE3_COMPONENT_CAMERA_MAX_PITCH_DEGREES = 90;
+
+function ensurePuzzle3ComponentFrame() {
+  const existing = canvas;
+  const frame = existing.closest(".puzzle3-component")
+    || existing.parentElement
+    || document.createElement("div");
+  frame.className = "puzzle3-component";
+  if (!existing.id) {
+    existing.id = "view";
+  }
+  if (existing.parentElement !== frame) {
+    frame.append(existing);
+  }
+  return frame;
+}
+
+const view = {
+  cellScale: 78,
+  originX: 0,
+  originY: 0,
+  dragging: false,
+  pointerId: null,
+  lastPointerX: 0,
+  lastPointerY: 0,
+  shadowsEnabled: false,
+  projectionFitKey: "",
+  projectionWidth: 0,
+  projectionHeight: 0,
+  viewportSnapNext: true,
+  viewportAnimationFrame: 0,
+  primitiveSortCacheKey: "",
+  primitiveSortCacheOrder: [],
+};
+let snapshot = null;
+let snapshotLoaded = false;
+let initialCamera = null;
+let currentSceneName = "";
+let queuedSceneInputs = [];
+let queuedSceneInputFrame = 0;
+const heldSceneInputs = new Map();
+const SCENE_DEFAULT_WIDTH = 16;
+const SCENE_DEFAULT_HEIGHT = 12;
+const spriteVoxelTemplateCache = new WeakMap();
+const renderGeometryCache = createRenderGeometryCache();
+const pixelateBuffer = document.createElement("canvas");
+let mountedPuzzle3Component = null;
+let pendingResizeFrame = 0;
+let pendingSceneLayoutRender = false;
+let puzzle3ThreeRenderer = null;
+let puzzle3ThreeViewPayload = null;
+const viewListeners = new Set();
+const stateListeners = new Set();
+const puzzle3Component = createPuzzle3Component();
+
+async function loadSnapshot() {
+  const nextSnapshot = await loadInitialPuzzle3Snapshot();
+  await loadSnapshotData(nextSnapshot);
+}
+
+async function loadInitialPuzzle3Snapshot() {
+  if (!controllerOptions.snapshot) {
+    throw new Error("Puzzle3 component requires an explicit view snapshot.");
+  }
+  return controllerOptions.snapshot;
+}
+
 function requireLoadedPuzzle3Snapshot(label = "Puzzle3 snapshot") {
   if (!snapshotLoaded) {
     throw new Error(`${label} is not loaded.`);
   }
-  return requirePuzzle3Snapshot(snapshot, label);
+  return validatePuzzle3ViewSnapshot(snapshot, label);
 }
 
 async function loadSnapshotData(source, options = {}) {
   const previousCamera = snapshotLoaded ? cloneCamera(snapshot.render.camera) : null;
   snapshotLoaded = false;
-  snapshot = normalizeSnapshot(requirePuzzle3Snapshot(source));
+  snapshot = normalizeSnapshot(validatePuzzle3ViewSnapshot(source));
   if (previousCamera && options.preserveCamera !== false) {
     snapshot.render.camera = previousCamera;
   }
   snapshotLoaded = true;
-  editorModelComponentPreview = options.modelComponentPreview || null;
-  document.title = snapshot.title || "Puzzle3";
-  currentSceneName = editorModelComponentPreview?.sceneName
-    || options.scene
+  currentSceneName = options.scene
     || controllerOptions.scene
-    || (options.preferPuzzleScene ? puzzleSceneName(snapshot) : "")
     || initialSceneName(snapshot);
-  if (!inlineComponentMount) {
-    applyTheme(snapshot.theme || { name: "clean" });
-  }
   initialCamera = cloneCamera(snapshot.render.camera);
   view.projectionFitKey = "";
   resetRenderGeometryCache();
   resetViewportMotion();
   renderScene();
-  applyStartupPuzzle3UrlCommands();
   notifyPuzzle3StateChange();
 }
 
@@ -201,23 +155,8 @@ function showPuzzle3RenderError(error) {
 
 function showPuzzle3FatalError(label, error) {
   const message = String(error?.message || error || "unknown error");
-  const previousFailure = window.PuzzleStudioPreviewRuntimeFailure;
-  const alreadyReported = previousFailure?.label === label && previousFailure?.message === message;
-  window.PuzzleStudioPreviewRuntimeFailure = { label, message };
-  if (!alreadyReported) {
-    try {
-      window.parent?.postMessage({
-        type: "PuzzleStudioPreviewRuntimeError",
-        label,
-        name: String(error?.name || "Error"),
-        message,
-        stack: String(error?.stack || ""),
-      }, "*");
-    } catch (_error) {
-      // Runtime error reporting must not replace the original failure.
-    }
-    console.error(error);
-  }
+  controllerOptions.onError?.({ label, error, message });
+  console.error(error);
   const errorView = document.createElement("div");
   errorView.className = "puzzle3-load-error";
   errorView.setAttribute("role", "alert");
@@ -243,103 +182,10 @@ function showPuzzle3FatalError(label, error) {
 
 function loadPuzzle3ComponentSnapshot() {
   return loadSnapshot()
-    .then(() => {
-      window.PuzzleStudioPreviewRuntimeFailure = null;
-      try {
-        window.parent?.postMessage({ type: "PuzzleStudioPreviewRuntimeReady" }, "*");
-      } catch (_error) {
-        // Runtime readiness reporting must not affect the controller.
-      }
-    })
     .catch((error) => {
       showPuzzle3LoadError(error);
       throw error;
     });
-}
-
-function applyTheme(theme) {
-  if (activeThemeClass) {
-    document.body.classList.remove(activeThemeClass);
-  }
-  for (const variable of activeThemeVariables) {
-    document.documentElement.style.removeProperty(variable);
-  }
-  activeThemeVariables.clear();
-  const name = normalizeScenePreviewTheme(theme)?.name || "clean";
-  activeThemeClass = `theme-${name}`;
-  document.body.classList.add(activeThemeClass);
-  const variables = theme && typeof theme === "object" ? theme.variables : null;
-  if (variables && typeof variables === "object") {
-    for (const [key, value] of Object.entries(variables)) {
-      const variable = normalizeThemeVariableKey(key);
-      if (!variable) {
-        continue;
-      }
-      document.documentElement.style.setProperty(variable, String(value));
-      activeThemeVariables.add(variable);
-    }
-  }
-}
-
-function normalizeThemeVariableKey(name) {
-  const normalized = String(name || "")
-    .replace(/^--/, "")
-    .replace(/_/g, "-")
-    .toLowerCase();
-  if (normalized === "bg") {
-    return "--background";
-  }
-  if (normalized === "ink") {
-    return "--text";
-  }
-  return /^(background|text|accent)$/.test(normalized) ? `--${normalized}` : "";
-}
-
-function normalizeScenePreviewTheme(theme) {
-  if (!theme) {
-    return null;
-  }
-  if (typeof theme === "string") {
-    const name = normalizeThemeName(theme);
-    return name ? { name } : null;
-  }
-  if (typeof theme !== "object") {
-    return null;
-  }
-  const name = normalizeThemeName(theme.name || theme.id || "clean");
-  if (!name) {
-    return null;
-  }
-  return {
-    name,
-    variables: normalizeThemeVariables(theme.variables),
-  };
-}
-
-function normalizeThemeVariables(variables) {
-  if (Array.isArray(variables)) {
-    return Object.fromEntries(variables.map((variable, index) => {
-      if (!variable || typeof variable !== "object" || Array.isArray(variable)) {
-        throw new Error(`Puzzle3 theme.variables[${index}] is invalid.`);
-      }
-      if (typeof variable.name !== "string" || variable.name.length === 0) {
-        throw new Error(`Puzzle3 theme.variables[${index}].name must be a non-empty string.`);
-      }
-      if (typeof variable.value !== "string") {
-        throw new Error(`Puzzle3 theme.variables[${index}].value must be a string.`);
-      }
-      return [variable.name, variable.value];
-    }));
-  }
-  return variables && typeof variables === "object" ? variables : {};
-}
-
-function normalizeThemeName(name) {
-  return String(name || "")
-    .trim()
-    .replace(/^theme-/, "")
-    .replace(/[^a-zA-Z0-9_-]/g, "")
-    || "clean";
 }
 
 function resolvePuzzle3RendererMode(value) {
@@ -351,135 +197,6 @@ function normalizePuzzle3RendererMode(value) {
   return text === "canvas" ? "canvas" : "three";
 }
 
-function applyPuzzle3PreviewUpdate(update = {}) {
-  const next = puzzle3PreviewSnapshot(update);
-  void loadSnapshotData(next, {
-    scene: update.scene,
-    preferPuzzleScene: update.preferPuzzleScene !== false,
-  });
-}
-
-function applyPuzzle3ModelComponentPreviewUpdate(update = {}) {
-  const next = puzzle3PreviewSnapshot(update);
-  void loadSnapshotData(next, puzzle3ModelComponentPreviewLoadOptions(update));
-}
-
-function puzzle3PreviewUpdateFromSurface(update = {}) {
-  if (
-    update.kind
-    && (update.kind !== PUZZLE3_LEVEL_PREVIEW_KIND || update.mode !== ISOLATED_PREVIEW_MODE)
-  ) {
-    return null;
-  }
-  const payload = update.payload || {};
-  return {
-    levelIndex: payload.levelIndex,
-    level: payload.level,
-    resources: payload.resources,
-    camera: payload.camera,
-    view: payload.view,
-    settings: payload.settings || {},
-    scene: update.scene,
-    component: update.component,
-    componentEmbed: update.componentEmbed === true,
-  };
-}
-
-function puzzle3ModelComponentPreviewLoadOptions(update = {}) {
-  return {
-    modelComponentPreview: {
-      sceneName: update.scene || "__editor_model_preview__",
-      component: puzzle3ModelPreviewComponent(update),
-    },
-  };
-}
-
-function puzzle3PreviewSnapshot(update = {}, source = requireLoadedPuzzle3Snapshot("Puzzle3 preview source snapshot")) {
-  const next = JSON.parse(JSON.stringify(requirePuzzle3Snapshot(source, "Puzzle3 preview source snapshot")));
-  applyPuzzle3PreviewResources(next, update.resources || update);
-  const rawLevelIndex = update.levelIndex ?? next.levelIndex ?? 0;
-  const levelCount = Array.isArray(next.levels) && next.levels.length ? next.levels.length : 1;
-  const levelIndex = clampIndex(rawLevelIndex, levelCount);
-  next.levelIndex = levelIndex;
-
-  const level = update.level || {};
-  const size = level.size || update.size;
-  const cells = Array.isArray(level.cells)
-    ? level.cells
-    : Array.isArray(update.cells)
-      ? update.cells
-      : null;
-  if (!Array.isArray(next.levels) || !next.levels.length) {
-    next.levels = [{
-      name: level.name || next.levelName || "level_1",
-      label: level.label || level.name || next.levelLabel || "Level 1",
-      size: size || next.size,
-      cells: cells || next.cells || [],
-    }];
-    next.levelIndex = 0;
-  } else if (size || cells) {
-    const target = next.levels[levelIndex] || {};
-    next.levels[levelIndex] = {
-      ...target,
-      name: level.name || target.name,
-      label: level.label || target.label || level.name || target.name,
-      size: size ? { ...size } : target.size,
-      cells: cells ? JSON.parse(JSON.stringify(cells)) : target.cells,
-    };
-  }
-  if (size) {
-    next.size = { ...size };
-  }
-  if (cells) {
-    next.cells = JSON.parse(JSON.stringify(cells));
-  }
-  if (update.camera) {
-    next.render.camera = cloneCamera({
-      ...update.camera,
-      zoom: update.camera.zoom ?? update.view?.zoom,
-    });
-  }
-  if (update.view) {
-    next.view = clonePuzzle3PreviewView(update.view, next.size);
-  }
-  if (update.settings) {
-    next.render = mergePuzzle3PreviewRender(next.render, update.settings);
-  }
-  return next;
-}
-
-function puzzle3ModelPreviewComponent(update = {}) {
-  const component = update.component || update.modelComponent || {};
-  return {
-    kind: "puzzle3",
-    source: component.source || update.source || "__editor_model_preview__",
-    layout: component.layout || update.layout || {},
-  };
-}
-
-function applyPuzzle3PreviewResources(target, resources = {}) {
-  if (Number.isFinite(Number(resources.layerCount))) {
-    target.layerCount = Math.max(1, Math.trunc(Number(resources.layerCount)));
-  }
-  if (resources.objects && typeof resources.objects === "object") {
-    target.objects = JSON.parse(JSON.stringify(resources.objects));
-  }
-  if (resources.sprites && typeof resources.sprites === "object") {
-    target.sprites = JSON.parse(JSON.stringify(resources.sprites));
-  }
-}
-
-function mergePuzzle3PreviewRender(base, patch) {
-  const next = { ...base, ...patch };
-  if (base.grid || patch.grid) {
-    next.grid = {
-      ...(typeof base.grid === "object" && base.grid ? base.grid : {}),
-      ...(typeof patch.grid === "object" && patch.grid ? patch.grid : {}),
-    };
-  }
-  return next;
-}
-
 function applySceneComponentMetadata(component, sceneName) {
   mountedPuzzle3Component = component || null;
   canvas.dataset.component = component?.kind || "puzzle3";
@@ -488,67 +205,13 @@ function applySceneComponentMetadata(component, sceneName) {
   canvas.setAttribute("aria-label", `${snapshot.title || "Puzzle3"} ${canvas.dataset.source}`);
 }
 
-function currentScene() {
-  return snapshot.scenes?.find((scene) => scene.name === currentSceneName)
-    || snapshot.scenes?.[0]
-    || null;
-}
-
-function sceneByName(sceneName) {
-  return snapshot.scenes?.find((scene) => scene.name === sceneName) || null;
-}
-
-function puzzle3ComponentFor(scene) {
-  return findSceneComponent(scene?.components || [], (component) => component.kind === "puzzle3");
-}
-
-function renderSceneEditorPreview(config = {}) {
-  const sceneName = String(config.scene?.name || config.sceneName || currentSceneName || initialSceneName(snapshot) || "").trim();
-  sceneEditorPreview = {
-    requestId: String(config.requestId || ""),
-    sceneName,
-    theme: normalizeScenePreviewTheme(config.theme) || normalizeScenePreviewTheme(snapshot.theme) || { name: "clean" },
-  };
-  applyTheme(sceneEditorPreview.theme);
-  currentSceneName = sceneName;
-  renderScene();
-  notifySceneEditorPreview(sceneEditorPreview.requestId);
-}
-
-function notifySceneEditorPreview(requestId = sceneEditorPreview?.requestId || "") {
-  if (window.parent === window || !sceneEditorPreview) {
-    return;
-  }
-  const sceneName = sceneEditorPreview.sceneName || currentSceneName || "";
-  const scene = sceneByName(sceneName);
-  window.parent.postMessage({
-    type: "PuzzleStudioScenePreview",
-    requestId,
-    scene: sceneName,
-    theme: sceneEditorPreview.theme || normalizeScenePreviewTheme(snapshot.theme) || { name: "clean" },
-    layout: scene?.layout || null,
-    logicalSize: null,
-    components: [],
-    error: scene ? null : `Unknown scene: ${sceneName}`,
-  }, "*");
-}
-
 function renderScene() {
-  let sceneName = currentSceneName || initialSceneName(snapshot) || "default";
-  let component = null;
-  if (editorModelComponentPreview) {
-    sceneName = editorModelComponentPreview.sceneName || "__editor_model_preview__";
-    component = editorModelComponentPreview.component || puzzle3ModelPreviewComponent();
-  } else {
-    const scene = currentScene();
-    sceneName = scene?.name || currentSceneName || "default";
-    component = puzzle3ComponentFor(scene) || puzzle3ModelPreviewComponent();
+  const sceneName = currentSceneName || initialSceneName(snapshot) || "default";
+  const component = controllerOptions.component;
+  if (!component || typeof component !== "object" || component.kind !== "puzzle3") {
+    throw new Error("Puzzle3 component metadata is missing or invalid.");
   }
-  if (inlineComponentMount) {
-    screenView.dataset.scene = sceneName;
-  } else {
-    screenView.className = `scene ${sceneName}`;
-  }
+  screenView.dataset.scene = sceneName;
   puzzle3Component.mount(component, sceneName);
 }
 
@@ -557,21 +220,6 @@ function puzzle3SceneDisplaySize() {
     width: SCENE_DEFAULT_WIDTH,
     height: SCENE_DEFAULT_HEIGHT,
   };
-}
-
-function findSceneComponent(components, predicate) {
-  for (const component of components || []) {
-    if (predicate(component)) {
-      return component;
-    }
-    if (component.children) {
-      const found = findSceneComponent(component.children, predicate);
-      if (found) {
-        return found;
-      }
-    }
-  }
-  return null;
 }
 
 function createPuzzle3Component() {
@@ -588,23 +236,13 @@ function createPuzzle3Component() {
       canvas.style.inset = embed ? "0" : "";
       canvas.style.width = embed ? "100%" : "";
       canvas.style.height = embed ? "100%" : "";
-      if (!inlineComponentMount) {
-        screenView.replaceChildren(puzzle3Frame);
-      } else if (!puzzle3Frame.contains(canvas)) {
+      if (!puzzle3Frame.contains(canvas)) {
         puzzle3Frame.append(canvas);
       }
       applySceneComponentMetadata(component, sceneName);
       updateCameraInteractionState();
       resizeCanvas();
       draw();
-    },
-    currentLevelIndex(levelsName) {
-      return relativeLevelIndexForBundle(levelsName, snapshot.levelIndex || 0);
-    },
-    levelEntries(levelsName) {
-      return levelIndexesForBundle(levelsName)
-        .map((index) => snapshot.levels?.[index])
-        .filter(Boolean);
     },
     handleResize() {
       resizeCanvas();
@@ -673,74 +311,9 @@ function resetProjection(rect = canvasLayoutFrame()) {
 }
 
 function initialSceneName(source) {
-  return new URLSearchParams(window.location.search).get("scene")
-    || source.currentScene
+  return source.currentScene
     || source.scenes?.[0]?.name
-    || puzzleSceneName(source)
     || "default";
-}
-
-function puzzleSceneName(source = snapshot) {
-  return source.scenes?.find((scene) => puzzle3ComponentFor(scene))?.name || null;
-}
-
-function levelIndexesForBundle(levelsName) {
-  const levels = snapshot.levels || [];
-  const bundle = snapshot.levelBundles?.[levelsName]
-    || snapshot.levelBundles?.default
-    || snapshot.levelBundles?.levels;
-  if (Array.isArray(bundle)) {
-    return bundle
-      .map((index) => Number(index))
-      .filter((index) => Number.isInteger(index) && index >= 0 && index < levels.length);
-  }
-  return levels.map((_, index) => index);
-}
-
-function absoluteLevelIndexForBundle(levelsName, relativeIndex) {
-  const indexes = levelIndexesForBundle(levelsName);
-  return indexes[clamp(relativeIndex || 0, 0, Math.max(0, indexes.length - 1))] ?? 0;
-}
-
-function puzzle3LevelIndex(level) {
-  if (level === undefined || level === null || level === "") {
-    return null;
-  }
-  const levels = snapshot.levels || [];
-  const numeric = Number(level);
-  if (Number.isInteger(numeric) && numeric >= 0 && numeric < levels.length) {
-    return numeric;
-  }
-  const text = String(level);
-  const index = levels.findIndex((candidate) => candidate?.name === text || candidate?.label === text);
-  return index >= 0 ? index : null;
-}
-
-function applyStartupPuzzle3UrlCommands() {
-  if (startupUrlCommandsApplied) {
-    return;
-  }
-  startupUrlCommandsApplied = true;
-  const params = new URLSearchParams(window.location.search);
-  const level = params.get("level") || "";
-  if (level) {
-    puzzle3Component.gotoLevel(level);
-  }
-  const inputs = [
-    ...params.getAll("input"),
-    ...params
-      .getAll("inputs")
-      .flatMap((value) => String(value || "").split(",").map((input) => input.trim())),
-  ].filter(Boolean);
-  for (const input of inputs) {
-    puzzle3Component.applyInput(input);
-  }
-}
-
-function relativeLevelIndexForBundle(levelsName, absoluteIndex) {
-  const indexes = levelIndexesForBundle(levelsName);
-  const relative = indexes.indexOf(absoluteIndex);
-  return relative >= 0 ? relative : 0;
 }
 
 function resizeCanvas() {
@@ -774,7 +347,7 @@ function schedulePuzzle3Resize(renderLayout = false) {
     const shouldRenderLayout = pendingSceneLayoutRender;
     pendingResizeFrame = 0;
     pendingSceneLayoutRender = false;
-    if (shouldRenderLayout || !puzzle3ComponentFor(currentScene())) {
+    if (shouldRenderLayout) {
       renderScene();
     } else {
       puzzle3Component.handleResize();
@@ -971,14 +544,7 @@ function cameraZoomEnabled() {
 }
 
 function effectiveComponentEmbedMode() {
-  return componentEmbedMode || editorComponentEmbedMode;
-}
-
-function setEditorComponentEmbedMode(enabled) {
-  editorComponentEmbedMode = Boolean(enabled);
-  const active = effectiveComponentEmbedMode();
-  document.documentElement.classList.toggle("is-component-embed", active);
-  document.body.classList.toggle("is-component-embed", active);
+  return componentEmbedMode;
 }
 
 function updateCameraInteractionState() {
@@ -1622,15 +1188,6 @@ function notifyPuzzle3View(width, height) {
   for (const listener of viewListeners) {
     listener(viewPayload);
   }
-  if (!effectiveComponentEmbedMode() || !window.parent || window.parent === window) {
-    return;
-  }
-  window.parent.postMessage({
-    type: "PuzzleStudioPuzzle3View",
-    source: canvas.dataset.source || "",
-    scene: canvas.dataset.scene || "",
-    view: viewPayload,
-  }, "*");
 }
 
 function puzzle3ViewPayload(width, height) {
@@ -2470,6 +2027,7 @@ function buildSpriteVoxelTemplate(sprite) {
   const depth = Math.max(1, ...blocks.map((rows) => rows.length));
   const width = Math.max(1, ...blocks.flatMap((rows) => rows.map((row) => row.length)));
   const scale = 1 / Math.max(width, depth, height);
+  const spatialAffine = Puzzle3VisualCore.evaluateSpatialSpriteAffine(sprite.spatialOps);
   const voxels = [];
   const palette = sprite.palette || {};
 
@@ -2483,12 +2041,13 @@ function buildSpriteVoxelTemplate(sprite) {
         if (!fill || color?.a <= 0) {
           continue;
         }
-        const grid = standardSpriteGridPosition({ width, depth, height }, col, row, z);
-        const localPosition = {
-          x: (grid.x + 0.5 - width / 2) * scale,
-          y: (grid.y + 0.5 - depth / 2) * scale,
-          z: (grid.z + 0.5 - height / 2) * scale,
-        };
+        const sourceGrid = standardSpriteGridPosition({ width, depth, height }, col, row, z);
+        const localPosition = Puzzle3VisualCore.transformSpatialPoint({
+          x: (sourceGrid.x + 0.5 - width / 2) * scale,
+          y: (sourceGrid.y + 0.5 - depth / 2) * scale,
+          z: (sourceGrid.z + 0.5 - height / 2) * scale,
+        }, spatialAffine);
+        const grid = Puzzle3VisualCore.spatialGridPoint(localPosition, scale);
         voxels.push({
           fill,
           color,
@@ -2531,49 +2090,6 @@ function instantiateSpriteVoxelTemplate(position, template, sourceKey = null, ob
     sourceKey,
     objectOrder,
   }));
-}
-
-function spriteVoxels(position, blocks, palette, sourceKey = null, objectOrder = 0) {
-  const height = Math.max(1, blocks.length);
-  const depth = Math.max(1, ...blocks.map((rows) => rows.length));
-  const width = Math.max(1, ...blocks.flatMap((rows) => rows.map((row) => row.length)));
-  const scale = 1 / Math.max(width, depth, height);
-  const voxels = [];
-  const occupied = new Set();
-
-  for (let z = 0; z < blocks.length; z += 1) {
-    const rows = blocks[z];
-    for (let row = 0; row < rows.length; row += 1) {
-      for (let col = 0; col < rows[row].length; col += 1) {
-        const key = rows[row][col];
-        const fill = palette[key];
-        const color = parseColor(fill);
-        if (!fill || color?.a <= 0) {
-          continue;
-        }
-        const grid = standardSpriteGridPosition({ width, depth, height }, col, row, z);
-        occupied.add(voxelKey(grid.x, grid.y, grid.z));
-        const voxelPosition = {
-          x: position.x + (grid.x + 0.5 - width / 2) * scale,
-          y: position.y + (grid.y + 0.5 - depth / 2) * scale,
-          z: position.z + (grid.z + 0.5 - height / 2) * scale,
-        };
-        voxels.push({
-          fill,
-          color,
-          opaque: !color || color.a >= 0.999,
-          scale,
-          grid,
-          position: voxelPosition,
-          bounds: voxelBounds(voxelPosition, scale),
-          sourceKey,
-          objectOrder,
-        });
-      }
-    }
-  }
-
-  return { voxels, occupied };
 }
 
 function mergedVoxelFaces(voxels, occupied, ownerCell) {
@@ -3170,133 +2686,7 @@ if (window.ResizeObserver) {
   resizeObserver.observe(canvas);
 }
 
-function handleStandaloneKeydown(event) {
-  const control = sceneControlForEvent(event);
-  if (control) {
-    event.preventDefault();
-    applySceneControl(control);
-    return;
-  }
-
-  if (puzzle3ComponentFor(currentScene()) && puzzle3Component.handleKey(event)) {
-    return;
-  }
-  applyPuzzle3CommandKey(event);
-}
-
-function handleComponentEmbedKeydown(event) {
-  if (!puzzle3ComponentFor(currentScene())) {
-    return;
-  }
-  const input = inputForRawInput({ key: event.key, code: event.code });
-  if (input) {
-    event.preventDefault();
-    startHeldSceneInput(rawInputHoldId({ key: event.key, code: event.code }), input);
-    return;
-  }
-  applyPuzzle3CommandKey(event);
-}
-
-function handleStandaloneKeyup(event) {
-  stopSceneRawInput({ key: event.key, code: event.code });
-}
-
-function handleComponentEmbedKeyup(event) {
-  stopSceneRawInput({ key: event.key, code: event.code });
-}
-
-if (inlineComponentMount) {
-  // Inline controllers receive input through the host controller contract.
-} else if (!effectiveComponentEmbedMode()) {
-  window.addEventListener("keydown", handleStandaloneKeydown);
-  window.addEventListener("keyup", handleStandaloneKeyup);
-} else {
-  window.addEventListener("keydown", handleComponentEmbedKeydown);
-  window.addEventListener("keyup", handleComponentEmbedKeyup);
-}
-
 window.addEventListener("blur", stopAllHeldSceneInputs);
-
-window.addEventListener("message", (event) => {
-  if (event.data?.type === "PuzzleStudioSetScenePreview") {
-    renderSceneEditorPreview(event.data || {});
-    return;
-  }
-
-  if (event.data?.type === "PuzzleStudioRequestScenePreview") {
-    notifySceneEditorPreview(String(event.data.requestId || ""));
-    return;
-  }
-
-  if (event.data?.type === "PuzzleStudioUpdatePuzzle3Preview") {
-    setEditorComponentEmbedMode(event.data.componentEmbed === true);
-    applyPuzzle3PreviewUpdate(event.data);
-    return;
-  }
-
-  if (event.data?.type === PREVIEW_SURFACE_UPDATE_MESSAGE) {
-    const update = puzzle3PreviewUpdateFromSurface(event.data);
-    if (update) {
-      setEditorComponentEmbedMode(event.data.componentEmbed === true);
-      applyPuzzle3ModelComponentPreviewUpdate(update);
-    }
-    return;
-  }
-
-  if (event.data?.type === "PuzzleStudioRenderPuzzle3ModelComponent") {
-    setEditorComponentEmbedMode(event.data.componentEmbed !== false);
-    applyPuzzle3ModelComponentPreviewUpdate(event.data);
-    return;
-  }
-
-  if (event.data?.type === "PuzzleStudioSetPuzzle3Snapshot") {
-    setEditorComponentEmbedMode(event.data.componentEmbed === true);
-    void loadSnapshotData(event.data.snapshot, {
-      scene: event.data.scene,
-      preferPuzzleScene: Boolean(event.data.preferPuzzleScene),
-    });
-    return;
-  }
-
-  if (event.data?.type === "PuzzleStudioResize") {
-    schedulePuzzle3Resize();
-    return;
-  }
-
-  if (event.data?.type === "PuzzleStudioCommand") {
-    const command = String(event.data.command || "");
-    if (command === "reset_camera") {
-      puzzle3Component.resetCamera();
-    } else if (command) {
-      emitPuzzle3CommandIntent(command, { level: event.data.level });
-    }
-    return;
-  }
-
-  if (event.data?.type === "PuzzleStudioKey") {
-    if (!puzzle3ComponentFor(currentScene())) {
-      return;
-    }
-    const raw = {
-      key: String(event.data.key || ""),
-      code: String(event.data.code || ""),
-    };
-    if (event.data.action === "up") {
-      stopSceneRawInput(raw);
-    } else if (!enqueueSceneRawInput(raw)) {
-      applyPuzzle3CommandKey(raw);
-    }
-    return;
-  }
-
-  if (event.data?.type === "PuzzleStudioInput") {
-    const input = String(event.data.input || "");
-    if (!input || !puzzle3ComponentFor(currentScene())) {
-      return;
-    }
-    applySceneInput(input);
-  }
-});
 
 function inputForEvent(event) {
   return inputForRawInput({ key: event.key, code: event.code });
@@ -3374,54 +2764,8 @@ function normalizeRawKeyToken(value) {
   return aliases[lower] || token;
 }
 
-function canonicalPuzzle3InputName(inputName) {
-  if (inputName === "forward") {
-    return "front";
-  }
-  if (inputName === "backward") {
-    return "back";
-  }
-  return inputName;
-}
-
-function sceneControlForEvent(event) {
-  const scene = currentScene();
-  const controls = scene?.controls || {};
-  const key = normalizeRawKeyToken(event.key);
-  const explicit = controls[key];
-  if (explicit) {
-    return explicit;
-  }
-  const keys = scene?.keys || {};
-  const action = keys[key];
-  return action || null;
-}
-
-function applySceneControl(control) {
-  if (control.kind === "input") {
-    applySceneInput(control.input);
-  }
-}
-
 function applySceneInput(input) {
-  const scene = currentScene();
-  const rules = scene?.rules || [];
-  const component = puzzle3ComponentFor(scene);
-  if (!component) {
-    return false;
-  }
-  if (rules.length === 0) {
-    return puzzle3Component.applyInput(input);
-  }
-  let changed = false;
-  for (const rule of rules) {
-    if (rule.kind !== "component_rules" || rule.target !== component.source) {
-      continue;
-    }
-    const componentInput = rule.inputMap?.[input] || input;
-    changed = puzzle3Component.applyInput(componentInput) || changed;
-  }
-  return changed;
+  return puzzle3Component.applyInput(input);
 }
 
 function enqueueSceneInput(input) {
@@ -3504,14 +2848,6 @@ const controllerApi = {
   element: puzzle3Frame,
   canvas,
   ready: null,
-  update(update = {}) {
-    const next = puzzle3PreviewSnapshot(update || {});
-    this.ready = loadSnapshotData(next, {
-      scene: update.scene,
-      preferPuzzleScene: update.preferPuzzleScene !== false,
-    });
-    return this.ready;
-  },
   replaceSnapshot(nextSnapshot) {
     this.ready = Promise.resolve(this.ready).then(() => loadSnapshotData(nextSnapshot, {
       scene: nextSnapshot?.currentScene,
@@ -3569,7 +2905,7 @@ const controllerApi = {
 controllerApi.ready = loadPuzzle3ComponentSnapshot();
 
 function clonePuzzle3ViewSnapshot(source) {
-  return JSON.parse(JSON.stringify(requirePuzzle3Snapshot(source)));
+  return JSON.parse(JSON.stringify(validatePuzzle3ViewSnapshot(source)));
 }
 
 function normalizeSnapshot(source) {
@@ -3584,25 +2920,15 @@ function standardSpriteGridPosition(size, column, row, slice) {
   };
 }
 
-function clampIndex(index, length) {
-  return Math.max(0, Math.min(Math.max(0, length - 1), index));
-}
 return controllerApi;
 }
 
 window.Puzzle3Component = {
   validateSnapshot(source) {
-    return requirePuzzle3Snapshot(source);
+    return validatePuzzle3ViewSnapshot(source);
   },
   attach(canvas, options = {}) {
-    return createPuzzle3ComponentController({ ...options, canvas, mountMode: "inline" });
-  },
-  boot(options = {}) {
-    return createPuzzle3ComponentController(options);
+    return createPuzzle3ComponentController({ ...options, canvas });
   },
 };
-
-if (window.Puzzle3ComponentAutoBoot !== false) {
-  window.Puzzle3ComponentInstance = window.Puzzle3Component.boot();
-}
 })();

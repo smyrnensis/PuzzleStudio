@@ -1664,7 +1664,7 @@ function renderSourceOutline() {
     const expanded = sourceOutlineExpandedItemIds.has(item.id);
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "source-outline-row";
+    button.className = "navigation-row source-outline-row";
     button.dataset.sourceOutlineId = item.id;
     button.dataset.sourceOutlineStart = String(item.start);
     button.style.setProperty("--depth", String(item.depth));
@@ -1923,23 +1923,23 @@ function createSourceFindPanel() {
   panel.innerHTML = `
     <div class="source-find-row">
       <input class="source-find-input" data-source-find-input type="search" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Find" aria-label="Find in source">
-      <button class="source-find-icon-button" data-source-find-case type="button" aria-label="Match case" title="Match case" aria-pressed="false">Aa</button>
-      <button class="source-find-icon-button" data-source-find-previous type="button" aria-label="Previous match" title="Previous match">
+      <button class="icon-button source-find-icon-button" data-source-find-case type="button" aria-label="Match case" title="Match case" aria-pressed="false">Aa</button>
+      <button class="icon-button source-find-icon-button" data-source-find-previous type="button" aria-label="Previous match" title="Previous match">
         ${editorIconSvg("chevron-up")}
       </button>
-      <button class="source-find-icon-button" data-source-find-next type="button" aria-label="Next match" title="Next match">
+      <button class="icon-button source-find-icon-button" data-source-find-next type="button" aria-label="Next match" title="Next match">
         ${editorIconSvg("chevron-down")}
       </button>
-      <button class="source-find-icon-button" data-source-find-close type="button" aria-label="Close find" title="Close">
+      <button class="icon-button source-find-icon-button" data-source-find-close type="button" aria-label="Close find" title="Close">
         ${editorIconSvg("x")}
       </button>
     </div>
     <div class="source-find-row source-replace-row">
       <input class="source-find-input" data-source-replace-input type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Replace" aria-label="Replace with">
-      <button class="source-find-icon-button" data-source-replace-current type="button" aria-label="Replace" title="Replace">
+      <button class="icon-button source-find-icon-button" data-source-replace-current type="button" aria-label="Replace" title="Replace">
         ${editorIconSvg("replace")}
       </button>
-      <button class="source-find-icon-button" data-source-replace-all type="button" aria-label="Replace all" title="Replace all">
+      <button class="icon-button source-find-icon-button" data-source-replace-all type="button" aria-label="Replace all" title="Replace all">
         ${editorIconSvg("replace-all")}
       </button>
     </div>
@@ -5952,7 +5952,7 @@ function showSourceLevelNameMenu(config = {}) {
   menu.replaceChildren(...entries.map((entry) => {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "source-level-name-option";
+    button.className = "option-button source-level-name-option";
     button.classList.toggle("is-current", entry.value === current || entry.name === current);
     button.textContent = entry.label || entry.value;
     button.title = entry.name === entry.value ? entry.value : entry.name;

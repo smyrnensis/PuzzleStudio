@@ -171,39 +171,17 @@ function toolPanePanelForPaneId(paneId) {
 
 function createPaneCloseButton(paneId) {
   const button = document.createElement("button");
-  button.className = "pane-close-button";
+  button.className = "icon-button pane-close-button";
   button.type = "button";
   button.dataset.paneClose = paneId;
   button.setAttribute("aria-label", `Hide ${toolPaneTitle(paneId)} pane`);
   button.title = `Hide ${toolPaneTitle(paneId)} pane`;
-  button.innerHTML = `
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M18 6 6 18"></path>
-      <path d="m6 6 12 12"></path>
-    </svg>
-  `;
+  button.innerHTML = editorIconSvg("x");
   return button;
 }
 
 function paneMaximizeIconSvg(isRestore) {
-  if (isRestore) {
-    return `
-      <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-minimize-icon lucide-minimize">
-        <path d="M8 3v3a2 2 0 0 1-2 2H3"></path>
-        <path d="M21 8h-3a2 2 0 0 1-2-2V3"></path>
-        <path d="M3 16h3a2 2 0 0 1 2 2v3"></path>
-        <path d="M16 21v-3a2 2 0 0 1 2-2h3"></path>
-      </svg>
-    `;
-  }
-  return `
-    <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-maximize-icon lucide-maximize">
-      <path d="M8 3H5a2 2 0 0 0-2 2v3"></path>
-      <path d="M21 8V5a2 2 0 0 0-2-2h-3"></path>
-      <path d="M3 16v3a2 2 0 0 0 2 2h3"></path>
-      <path d="M16 21h3a2 2 0 0 0 2-2v-3"></path>
-    </svg>
-  `;
+  return editorIconSvg(isRestore ? "minimize" : "maximize");
 }
 
 function setPaneMaximizeButtonIcon(button, isRestore) {
@@ -217,7 +195,7 @@ function setPaneMaximizeButtonIcon(button, isRestore) {
 
 function createPaneMaximizeButton(paneId) {
   const button = document.createElement("button");
-  button.className = "pane-maximize-button";
+  button.className = "icon-button pane-maximize-button";
   button.type = "button";
   button.dataset.paneMaximize = paneId;
   button.setAttribute("aria-label", `Maximize ${toolPaneTitle(paneId)} pane`);
@@ -265,8 +243,7 @@ function syncToolPaneHeaderActionGroups() {
     group.hidden = !isPaneVisible("level") || (is3d ? currentLevelPaneMode !== "level3d" : currentLevelPaneMode !== "edit");
   }
   for (const group of toolPaneHeaderActionGroups("sprite")) {
-    const is3d = Boolean(group.querySelector("#sprite3dExportButton"));
-    group.hidden = !isPaneVisible("sprite") || (is3d ? currentSpritePaneMode !== "sprite3d" : currentSpritePaneMode !== "sprite");
+    group.hidden = !isPaneVisible("sprite");
   }
 }
 
@@ -291,9 +268,6 @@ function createToolPane(paneId, panel) {
   title.append(label);
   if (paneId === "level" && levelPaneModeSwitch) {
     title.append(levelPaneModeSwitch);
-  }
-  if (paneId === "sprite" && spritePaneModeSwitch) {
-    title.append(spritePaneModeSwitch);
   }
   if (paneId === "sounds" && soundsHeaderTools) {
     title.append(soundsHeaderTools);
@@ -336,16 +310,11 @@ function initializePhysicalWorkPanes() {
   }
   const previewClose = previewPane.querySelector("[data-pane-close]");
   if (previewClose) {
-    previewClose.className = "pane-close-button";
+    previewClose.className = "icon-button pane-close-button";
     previewClose.dataset.paneClose = PREVIEW_WORK_PANE_ID;
     previewClose.setAttribute("aria-label", "Hide Preview pane");
     previewClose.title = "Hide Preview pane";
-    previewClose.innerHTML = `
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M18 6 6 18"></path>
-        <path d="m6 6 12 12"></path>
-      </svg>
-    `;
+    previewClose.innerHTML = editorIconSvg("x");
   }
   if (gamePaneTitle) {
     gamePaneTitle.textContent = toolPaneTitle(PREVIEW_WORK_PANE_ID);
@@ -358,9 +327,6 @@ function initializePhysicalWorkPanes() {
   }
   if (levelPaneModeSwitch) {
     levelPaneModeSwitch.hidden = true;
-  }
-  if (spritePaneModeSwitch) {
-    spritePaneModeSwitch.hidden = true;
   }
 
   for (const paneId of PREVIEW_HOST_WORK_PANE_IDS) {
@@ -458,7 +424,7 @@ function ensurePaneSplitterCount(count) {
   const splitters = Array.from(workbench.querySelectorAll(".pane-splitter"));
   while (splitters.length < count) {
     const splitter = document.createElement("div");
-    splitter.className = "pane-splitter";
+    splitter.className = "accent-splitter pane-splitter";
     splitter.setAttribute("role", "separator");
     splitter.setAttribute("aria-label", "Resize panes");
     splitter.setAttribute("aria-orientation", "vertical");
@@ -568,7 +534,7 @@ function activePreviewWorkPaneId() {
 }
 
 function normalizePaneDragId(paneId) {
-  return paneId === "active-preview" ? activePreviewWorkPaneId() : normalizePaneId(paneId);
+  return normalizePaneId(paneId);
 }
 
 function workPaneElementForDragEvent(event) {
@@ -710,10 +676,13 @@ function selectFallbackPreviewPane(closedPaneId) {
 }
 
 function closeWorkPane(paneId) {
-  const normalized = paneId === "active-preview" ? activePreviewWorkPaneId() : normalizePaneId(paneId);
+  const normalized = normalizePaneId(paneId);
   const next = visibleWorkPanes.filter((candidate) => candidate !== normalized);
   if (!isWorkPaneId(normalized) || !visibleWorkPanes.includes(normalized) || !layoutPaneIdsFor(next, currentPreviewMode, { allowEmpty: true }).length) {
     return false;
+  }
+  if (normalized === PREVIEW_WORK_PANE_ID) {
+    stopPreviewRuntime();
   }
   visibleWorkPanes = next;
   if (maximizedWorkPaneId === normalized) {
@@ -873,9 +842,6 @@ function applyPaneVisibility() {
   if (levelPaneModeSwitch) {
     levelPaneModeSwitch.hidden = !isPaneVisible("level");
   }
-  if (spritePaneModeSwitch) {
-    spritePaneModeSwitch.hidden = !isPaneVisible("sprite");
-  }
   if (typeof syncPaneBindLabels === "function") {
     syncPaneBindLabels();
   }
@@ -890,18 +856,14 @@ function applyPaneVisibility() {
     button.setAttribute("aria-pressed", active ? "true" : "false");
   });
   document.querySelectorAll("[data-pane-close]").forEach((button) => {
-    const paneId = button.dataset.paneClose === "active-preview"
-      ? activePreviewWorkPaneId()
-      : normalizePaneId(button.dataset.paneClose);
+    const paneId = normalizePaneId(button.dataset.paneClose);
     const next = visibleWorkPanes.filter((candidate) => candidate !== paneId);
     const disabled = !isWorkPaneId(paneId) || !isPaneVisible(paneId) || !layoutPaneIdsFor(next, currentPreviewMode, { allowEmpty: true }).length;
     button.disabled = disabled;
     button.setAttribute("aria-disabled", String(disabled));
   });
   document.querySelectorAll("[data-pane-maximize]").forEach((button) => {
-    const paneId = button.dataset.paneMaximize === "active-preview"
-      ? activePreviewWorkPaneId()
-      : normalizePaneId(button.dataset.paneMaximize);
+    const paneId = normalizePaneId(button.dataset.paneMaximize);
     const active = Boolean(maximizedWorkPaneId) && maximizedWorkPaneId === paneId;
     const title = active ? `Restore ${toolPaneTitle(paneId)} pane` : `Maximize ${toolPaneTitle(paneId)} pane`;
     button.classList.toggle("is-active", active);
@@ -917,7 +879,7 @@ function applyPaneVisibility() {
 }
 
 function toggleWorkPaneMaximized(paneId) {
-  const normalized = paneId === "active-preview" ? activePreviewWorkPaneId() : normalizePaneId(paneId);
+  const normalized = normalizePaneId(paneId);
   if (!isWorkPaneId(normalized) || !isPaneVisible(normalized)) {
     return false;
   }

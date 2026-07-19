@@ -7,6 +7,15 @@ pub struct WasmStandaloneSession {
 
 #[wasm_bindgen]
 impl WasmStandaloneSession {
+    #[cfg(feature = "source-runtime")]
+    #[wasm_bindgen(constructor)]
+    pub fn new(source: &str, puzzle_path: &str) -> Result<WasmStandaloneSession, JsValue> {
+        Ok(Self {
+            inner: puzzle_game_runtime::StandaloneSessionBridge::from_source(source, puzzle_path)
+                .map_err(|error| JsValue::from_str(&error))?,
+        })
+    }
+
     #[wasm_bindgen(js_name = fromExport)]
     pub fn from_export(export_json: &str) -> Result<WasmStandaloneSession, JsValue> {
         Ok(Self {

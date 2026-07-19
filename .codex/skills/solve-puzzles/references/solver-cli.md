@@ -21,6 +21,18 @@ Run from the PuzzleBuilder workspace root.
 
    Send exactly one JSON request per line and parse exactly one JSON response per line. Keep this process alive: sessions, states, goals, runs, and searches are in-memory handles owned by that process. A new process cannot use handles returned by an earlier process.
 
+   JSONL is the host/process boundary, not the solver's internal data model.
+   The compiled game, prepared rule programs, play session, search frontier,
+   visited set, and candidate states stay Rust-owned. Requests carry handles and
+   typed observations; they do not round-trip compiled artifacts through JSON or
+   JavaScript. Browser `WasmSolverService` handles belong to their Web Worker and
+   are not interchangeable with agent protocol handles.
+
+   Built-in solving in browser WASM and the native play server is also owned by
+   the shared Rust solver runtime. The native server registers its already-loaded
+   game and serializes only the final typed result at the HTTP response boundary;
+   it does not reparse source or run a host-specific search implementation.
+
 3. Send `compile` as the protocol handshake. Confirm top-level `version` and `ok`, then confirm `data.modelKind`, `data.sessionId`, and `data.initialStates` before constructing later requests. Treat `contract_version_mismatch`, unknown operations, missing required fields, or changed response shapes as contract drift.
 
 4. When the checked-in reference and live behavior disagree, inspect the current contract rather than guessing. Locate it by symbol so file moves do not matter:

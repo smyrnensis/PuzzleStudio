@@ -1,14 +1,189 @@
 use std::cell::RefCell;
 
+use serde::{Serialize, de::DeserializeOwned};
 use wasm_bindgen::prelude::*;
 
-mod editor_solver_cache;
-
 type SourceAnalysisRevision = u32;
+
+#[wasm_bindgen(typescript_custom_section)]
+const WORKSPACE_SOURCE_TYPES: &str = r#"
+export interface WorkspaceSourceDocument {
+    readonly path: string;
+    readonly source: string;
+}
+
+export interface WorkspacePresentationManifest {
+    readonly themeName: string | null;
+    readonly cssPaths: string[];
+    readonly scriptPaths: string[];
+    readonly filePaths: string[];
+    readonly spriteImagePaths: string[];
+}
+"#;
+
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(typescript_type = "ReadonlyArray<WorkspaceSourceDocument>")]
+    pub type WorkspaceSourceDocuments;
+
+    #[wasm_bindgen(typescript_type = "WorkspacePresentationManifest")]
+    pub type WorkspacePresentationManifestJs;
+}
 
 thread_local! {
     static SOURCE_ANALYSES: RefCell<SourceAnalysisStore> =
         RefCell::new(SourceAnalysisStore::default());
+}
+
+#[wasm_bindgen]
+pub struct WasmSolverService {
+    inner: puzzle_solver_runtime::SolverService,
+}
+
+#[wasm_bindgen]
+impl WasmSolverService {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self {
+            inner: puzzle_solver_runtime::SolverService::new(),
+        }
+    }
+
+    pub fn prepare_workspace(
+        &mut self,
+        entry_path: &str,
+        documents: WorkspaceSourceDocuments,
+        now_ms: f64,
+    ) -> Result<JsValue, JsValue> {
+        let documents = decode_js_value::<Vec<puzzle_lang::WorkspaceSourceDocument>>(
+            documents.into(),
+            "solver workspace documents",
+        )?;
+        let prepared = self
+            .inner
+            .prepare_workspace(entry_path, documents, solver_now_ms(now_ms)?)
+            .map_err(|error| JsValue::from_str(&error))?;
+        encode_js_value(&prepared, "prepared solver artifact")
+    }
+
+    pub fn prepare_source(
+        &mut self,
+        source: &str,
+        puzzle_path: &str,
+        now_ms: f64,
+    ) -> Result<JsValue, JsValue> {
+        if puzzle_path.trim().is_empty() {
+            return Err(JsValue::from_str(
+                "solver source preparation requires an explicit puzzle path",
+            ));
+        }
+        let prepared = self
+            .inner
+            .prepare_workspace(
+                puzzle_path,
+                vec![puzzle_lang::WorkspaceSourceDocument {
+                    path: puzzle_path.to_string(),
+                    source: source.to_string(),
+                }],
+                solver_now_ms(now_ms)?,
+            )
+            .map_err(|error| JsValue::from_str(&error))?;
+        encode_js_value(&prepared, "prepared solver artifact")
+    }
+
+    pub fn pin_artifact(
+        &mut self,
+        artifact_id: Option<String>,
+        now_ms: f64,
+    ) -> Result<(), JsValue> {
+        self.inner
+            .pin_artifact(artifact_id.as_deref(), solver_now_ms(now_ms)?)
+            .map_err(|error| JsValue::from_str(&error))
+    }
+
+    pub fn start(
+        &mut self,
+        artifact_id: &str,
+        request: JsValue,
+        now_ms: f64,
+    ) -> Result<u32, JsValue> {
+        let request = decode_js_value::<puzzle_runtime_contract::SolverSearchRequest>(
+            request,
+            "solver search request",
+        )?;
+        self.inner
+            .start(artifact_id, request, solver_now_ms(now_ms)?)
+            .map_err(|error| JsValue::from_str(&error))
+    }
+
+    pub fn advance(
+        &mut self,
+        search_id: u32,
+        max_expanded_nodes: u32,
+        now_ms: f64,
+    ) -> Result<JsValue, JsValue> {
+        let response = self
+            .inner
+            .advance_nodes(
+                search_id,
+                max_expanded_nodes as usize,
+                solver_now_ms(now_ms)?,
+            )
+            .map_err(|error| JsValue::from_str(&error))?;
+        encode_js_value(&response, "solver advance response")
+    }
+
+    pub fn cancel(&mut self, search_id: u32, now_ms: f64) -> Result<(), JsValue> {
+        self.inner
+            .cancel(search_id, solver_now_ms(now_ms)?)
+            .map_err(|error| JsValue::from_str(&error))
+    }
+
+    pub fn materialize_state(
+        &mut self,
+        artifact_id: &str,
+        level_index: usize,
+        state: JsValue,
+        materialize_level_start: bool,
+        now_ms: f64,
+    ) -> Result<JsValue, JsValue> {
+        let state =
+            decode_js_value::<puzzle_runtime_contract::SolverStateSnapshot>(state, "solver state")?;
+        let state = self
+            .inner
+            .materialize_state(
+                artifact_id,
+                level_index,
+                state,
+                materialize_level_start,
+                solver_now_ms(now_ms)?,
+            )
+            .map_err(|error| JsValue::from_str(&error))?;
+        encode_js_value(&state, "materialized solver state")
+    }
+}
+
+impl Default for WasmSolverService {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn solver_now_ms(value: f64) -> Result<u64, JsValue> {
+    if !value.is_finite() || value < 0.0 || value > u64::MAX as f64 {
+        return Err(JsValue::from_str("solver timestamp is invalid"));
+    }
+    Ok(value as u64)
+}
+
+fn decode_js_value<T: DeserializeOwned>(value: JsValue, label: &str) -> Result<T, JsValue> {
+    serde_wasm_bindgen::from_value(value)
+        .map_err(|error| JsValue::from_str(&format!("{label} is invalid: {error}")))
+}
+
+fn encode_js_value<T: Serialize>(value: &T, label: &str) -> Result<JsValue, JsValue> {
+    serde_wasm_bindgen::to_value(value)
+        .map_err(|error| JsValue::from_str(&format!("{label} could not be encoded: {error}")))
 }
 
 #[derive(Default)]
@@ -392,50 +567,41 @@ pub fn compile_preview(
         .map_err(|error| diagnostic_report_js_value(&error))
 }
 
-fn expand_workspace_entry(entry_path: &str, documents_json: &str) -> Result<String, JsValue> {
-    let value: serde_json::Value = serde_json::from_str(documents_json).map_err(|error| {
-        JsValue::from_str(&format!("workspace documents JSON is invalid: {error}"))
-    })?;
-    let documents = value
-        .as_array()
-        .ok_or_else(|| JsValue::from_str("workspace documents must be an array"))?
-        .iter()
-        .map(|document| {
-            let object = document
-                .as_object()
-                .ok_or_else(|| "workspace document must be an object".to_string())?;
-            let path = object
-                .get("path")
-                .and_then(serde_json::Value::as_str)
-                .ok_or_else(|| "workspace document path is missing".to_string())?;
-            let source = object
-                .get("source")
-                .and_then(serde_json::Value::as_str)
-                .ok_or_else(|| format!("workspace document source is missing for {path}"))?;
-            Ok((path.to_string(), source.to_string()))
-        })
-        .collect::<Result<Vec<_>, String>>()
-        .map_err(|error| JsValue::from_str(&error))?;
+fn expand_workspace_entry(
+    entry_path: &str,
+    documents: WorkspaceSourceDocuments,
+) -> Result<String, JsValue> {
+    let documents = decode_js_value::<Vec<puzzle_lang::WorkspaceSourceDocument>>(
+        documents.into(),
+        "workspace source documents",
+    )?;
     puzzle_lang::expand_game_imports_from_documents(entry_path, &documents)
         .map_err(|error| diagnostic_report_js_value(&error))
 }
 
 #[wasm_bindgen]
-pub fn expand_workspace_entry_source(
+pub fn workspace_presentation_manifest(
     entry_path: &str,
-    documents_json: &str,
-) -> Result<String, JsValue> {
-    expand_workspace_entry(entry_path, documents_json)
+    documents: WorkspaceSourceDocuments,
+) -> Result<WorkspacePresentationManifestJs, JsValue> {
+    let documents = decode_js_value::<Vec<puzzle_lang::WorkspaceSourceDocument>>(
+        documents.into(),
+        "workspace source documents",
+    )?;
+    let manifest = puzzle_lang::workspace_presentation_manifest(entry_path, &documents)
+        .map_err(|error| diagnostic_report_js_value(&error))?;
+    encode_js_value(&manifest, "workspace presentation manifest")
+        .map(WorkspacePresentationManifestJs::from)
 }
 
 #[wasm_bindgen]
 pub fn compile_workspace_preview(
     entry_path: &str,
-    documents_json: &str,
+    documents: WorkspaceSourceDocuments,
     game_css: &str,
     game_visuals_js: &str,
 ) -> Result<String, JsValue> {
-    let source = expand_workspace_entry(entry_path, documents_json)?;
+    let source = expand_workspace_entry(entry_path, documents)?;
     html_play::export_editor_preview_html_from_source(
         &source,
         entry_path,
@@ -443,32 +609,6 @@ pub fn compile_workspace_preview(
         game_visuals_js,
     )
     .map_err(|error| diagnostic_report_js_value(&error))
-}
-
-#[wasm_bindgen]
-pub fn compile_solver_rules_json(source: &str, puzzle_path: &str) -> Result<String, JsValue> {
-    let path = if puzzle_path.trim().is_empty() {
-        "game.puzzle"
-    } else {
-        puzzle_path
-    };
-    html_play::export_solver_rules_json_from_source(source, path)
-        .map_err(|error| diagnostic_report_js_value(&error))
-}
-
-#[wasm_bindgen]
-pub fn compile_workspace_solver_rules_json(
-    entry_path: &str,
-    documents_json: &str,
-) -> Result<String, JsValue> {
-    let source = expand_workspace_entry(entry_path, documents_json)?;
-    html_play::export_solver_rules_json_from_source(&source, entry_path)
-        .map_err(|error| diagnostic_report_js_value(&error))
-}
-
-#[wasm_bindgen]
-pub fn editor_solver_cache_policy_json() -> String {
-    editor_solver_cache::default_policy_json()
 }
 
 #[wasm_bindgen]
@@ -499,13 +639,13 @@ pub fn export_html(
 #[wasm_bindgen]
 pub fn export_workspace_html(
     entry_path: &str,
-    documents_json: &str,
+    documents: WorkspaceSourceDocuments,
     game_css: &str,
     game_visuals_js: &str,
     player_runtime_module_js: &str,
     player_runtime_wasm_base64: &str,
 ) -> Result<String, JsValue> {
-    let source = expand_workspace_entry(entry_path, documents_json)?;
+    let source = expand_workspace_entry(entry_path, documents)?;
     html_play::export_html_from_source_with_embedded_wasm(
         &source,
         entry_path,
@@ -527,53 +667,6 @@ pub fn generate_visuals_js(source: &str, base_visuals_js: &str) -> Result<String
 pub fn translate_puzzlescript(source: &str) -> Result<String, JsValue> {
     puzzle_lang::translate_puzzlescript_to_canonical(source)
         .map_err(|error| JsValue::from_str(&error.to_string()))
-}
-
-#[wasm_bindgen]
-pub fn solve_state(
-    source: &str,
-    puzzle_path: &str,
-    state_json: &str,
-    max_depth: u32,
-    max_nodes: u32,
-    max_ms: u32,
-) -> Result<String, JsValue> {
-    html_play::solve_state_json_from_source(
-        source,
-        puzzle_path,
-        state_json,
-        max_depth,
-        max_nodes as usize,
-        u64::from(max_ms),
-    )
-    .map_err(|error| JsValue::from_str(&error))
-}
-
-#[wasm_bindgen]
-pub fn solve_request_json(request_json: &str) -> Result<String, JsValue> {
-    html_play::solve_request_json(request_json).map_err(|error| JsValue::from_str(&error))
-}
-
-#[wasm_bindgen]
-pub fn solve_solver_task_json(request_json: &str) -> Result<String, JsValue> {
-    html_play::solve_solver_task_json(request_json).map_err(|error| JsValue::from_str(&error))
-}
-
-#[wasm_bindgen]
-pub fn solver_task_initial_display_state_json(request_json: &str) -> Result<String, JsValue> {
-    html_play::solver_task_initial_display_state_json(request_json)
-        .map_err(|error| JsValue::from_str(&error))
-}
-
-#[wasm_bindgen]
-pub fn solve_solver_task_json_with_progress(
-    request_json: &str,
-    on_observation: &js_sys::Function,
-) -> Result<String, JsValue> {
-    html_play::solve_solver_task_json_with_progress(request_json, |observation_json| {
-        let _ = on_observation.call1(&JsValue::NULL, &JsValue::from_str(observation_json));
-    })
-    .map_err(|error| JsValue::from_str(&error))
 }
 
 fn diagnostic_report_js_value(report: &puzzle_lang::DiagnosticReport) -> JsValue {
@@ -729,13 +822,13 @@ mod tests {
     };
 
     #[test]
-    fn compile_preview_accepts_display_object_single_color_sprite() {
+    fn compile_preview_accepts_at_prefixed_object_single_color_sprite() {
         let source = r##"
-title display_object_single_color_preview
+title at_prefixed_object_single_color_preview
 
 puzzle default {
 slots {
-@display_floor = @Floor
+@floor_slot = @Floor
 }
 sprites {
 @Floor

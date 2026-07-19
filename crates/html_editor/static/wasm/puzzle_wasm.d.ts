@@ -1,16 +1,32 @@
 /* tslint:disable */
 /* eslint-disable */
 
-export class WasmCompiledCoreRuntime {
+export interface WorkspaceSourceDocument {
+    readonly path: string;
+    readonly source: string;
+}
+
+export interface WorkspacePresentationManifest {
+    readonly themeName: string | null;
+    readonly cssPaths: string[];
+    readonly scriptPaths: string[];
+    readonly filePaths: string[];
+    readonly spriteImagePaths: string[];
+}
+
+
+
+export class WasmSolverService {
     free(): void;
     [Symbol.dispose](): void;
-    current_state(): string;
-    current_state_hash(): string;
-    constructor(engine_json: string);
-    restore_saved_state(handle: number): void;
-    save_current_state(): number;
-    set_state(state_json: string): void;
-    transition_current_outcome(program_key: string, level_index: number, input: number): string;
+    advance(search_id: number, max_expanded_nodes: number, now_ms: number): any;
+    cancel(search_id: number, now_ms: number): void;
+    materialize_state(artifact_id: string, level_index: number, state: any, materialize_level_start: boolean, now_ms: number): any;
+    constructor();
+    pin_artifact(artifact_id: string | null | undefined, now_ms: number): void;
+    prepare_source(source: string, puzzle_path: string, now_ms: number): any;
+    prepare_workspace(entry_path: string, documents: ReadonlyArray<WorkspaceSourceDocument>, now_ms: number): any;
+    start(artifact_id: string, request: any, now_ms: number): number;
 }
 
 export function activate_source_analysis(source: string): number;
@@ -54,38 +70,23 @@ export function apply_source_analysis_edit(revision: number, start_utf16: number
 
 export function compile_preview(source: string, puzzle_path: string, game_css: string, game_visuals_js: string): string;
 
-export function compile_solver_rules_json(source: string, puzzle_path: string): string;
-
-export function compile_workspace_preview(entry_path: string, documents_json: string, game_css: string, game_visuals_js: string): string;
-
-export function compile_workspace_solver_rules_json(entry_path: string, documents_json: string): string;
-
-export function editor_solver_cache_policy_json(): string;
-
-export function expand_workspace_entry_source(entry_path: string, documents_json: string): string;
+export function compile_workspace_preview(entry_path: string, documents: ReadonlyArray<WorkspaceSourceDocument>, game_css: string, game_visuals_js: string): string;
 
 export function export_html(source: string, puzzle_path: string, game_css: string, game_visuals_js: string, player_runtime_module_js: string, player_runtime_wasm_base64: string): string;
 
-export function export_workspace_html(entry_path: string, documents_json: string, game_css: string, game_visuals_js: string, player_runtime_module_js: string, player_runtime_wasm_base64: string): string;
+export function export_workspace_html(entry_path: string, documents: ReadonlyArray<WorkspaceSourceDocument>, game_css: string, game_visuals_js: string, player_runtime_module_js: string, player_runtime_wasm_base64: string): string;
 
 export function generate_visuals_js(source: string, base_visuals_js: string): string;
 
-export function solve_request_json(request_json: string): string;
-
-export function solve_solver_task_json(request_json: string): string;
-
-export function solve_solver_task_json_with_progress(request_json: string, on_observation: Function): string;
-
-export function solve_state(source: string, puzzle_path: string, state_json: string, max_depth: number, max_nodes: number, max_ms: number): string;
-
-export function solver_task_initial_display_state_json(request_json: string): string;
-
 export function translate_puzzlescript(source: string): string;
+
+export function workspace_presentation_manifest(entry_path: string, documents: ReadonlyArray<WorkspaceSourceDocument>): WorkspacePresentationManifest;
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
+    readonly __wbg_wasmsolverservice_free: (a: number, b: number) => void;
     readonly activate_source_analysis: (a: number, b: number) => number;
     readonly activate_source_analysis_with_profile: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly active_source_analysis_entries_json: (a: number) => [number, number, number, number];
@@ -101,33 +102,25 @@ export interface InitOutput {
     readonly active_source_analysis_suggest_source_completions: (a: number, b: number) => [number, number, number, number];
     readonly apply_source_analysis_edit: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
     readonly compile_preview: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
-    readonly compile_solver_rules_json: (a: number, b: number, c: number, d: number) => [number, number, number, number];
-    readonly compile_workspace_preview: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
-    readonly compile_workspace_solver_rules_json: (a: number, b: number, c: number, d: number) => [number, number, number, number];
-    readonly editor_solver_cache_policy_json: () => [number, number];
-    readonly expand_workspace_entry_source: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+    readonly compile_workspace_preview: (a: number, b: number, c: any, d: number, e: number, f: number, g: number) => [number, number, number, number];
     readonly export_html: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number, number];
-    readonly export_workspace_html: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number, number];
+    readonly export_workspace_html: (a: number, b: number, c: any, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => [number, number, number, number];
     readonly generate_visuals_js: (a: number, b: number, c: number, d: number) => [number, number, number, number];
-    readonly solve_request_json: (a: number, b: number) => [number, number, number, number];
-    readonly solve_solver_task_json: (a: number, b: number) => [number, number, number, number];
-    readonly solve_solver_task_json_with_progress: (a: number, b: number, c: any) => [number, number, number, number];
-    readonly solve_state: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number, number, number];
-    readonly solver_task_initial_display_state_json: (a: number, b: number) => [number, number, number, number];
     readonly translate_puzzlescript: (a: number, b: number) => [number, number, number, number];
-    readonly __wbg_wasmcompiledcoreruntime_free: (a: number, b: number) => void;
-    readonly wasmcompiledcoreruntime_current_state: (a: number) => [number, number, number, number];
-    readonly wasmcompiledcoreruntime_current_state_hash: (a: number) => [number, number, number, number];
-    readonly wasmcompiledcoreruntime_new: (a: number, b: number) => [number, number, number];
-    readonly wasmcompiledcoreruntime_restore_saved_state: (a: number, b: number) => [number, number];
-    readonly wasmcompiledcoreruntime_save_current_state: (a: number) => [number, number, number];
-    readonly wasmcompiledcoreruntime_set_state: (a: number, b: number, c: number) => [number, number];
-    readonly wasmcompiledcoreruntime_transition_current_outcome: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+    readonly wasmsolverservice_advance: (a: number, b: number, c: number, d: number) => [number, number, number];
+    readonly wasmsolverservice_cancel: (a: number, b: number, c: number) => [number, number];
+    readonly wasmsolverservice_materialize_state: (a: number, b: number, c: number, d: number, e: any, f: number, g: number) => [number, number, number];
+    readonly wasmsolverservice_new: () => number;
+    readonly wasmsolverservice_pin_artifact: (a: number, b: number, c: number, d: number) => [number, number];
+    readonly wasmsolverservice_prepare_source: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
+    readonly wasmsolverservice_prepare_workspace: (a: number, b: number, c: number, d: any, e: number) => [number, number, number];
+    readonly wasmsolverservice_start: (a: number, b: number, c: number, d: any, e: number) => [number, number, number];
+    readonly workspace_presentation_manifest: (a: number, b: number, c: any) => [number, number, number];
+    readonly __wbindgen_malloc: (a: number, b: number) => number;
+    readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_exn_store: (a: number) => void;
     readonly __externref_table_alloc: () => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;
-    readonly __wbindgen_malloc: (a: number, b: number) => number;
-    readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __externref_table_dealloc: (a: number) => void;
     readonly __wbindgen_free: (a: number, b: number, c: number) => void;
     readonly __wbindgen_start: () => void;

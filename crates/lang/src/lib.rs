@@ -32,6 +32,7 @@ mod sprite_spatial;
 mod surface;
 mod surface_completion;
 mod syntax;
+mod workspace;
 
 use solver_surface::{SolverSurfacePatternArg, SolverSurfaceQueryArg};
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -136,7 +137,7 @@ pub use puzzle3_model::{
 pub use puzzle3_sprite::{VoxelColor, VoxelFrame, VoxelSprite, VoxelSpriteSet};
 pub use puzzle3_visual_fixture::{
     VisualFixtureExportError, export_visual_fixture_json, export_visual_fixture_json_with_title,
-    export_visual_fixture_json_with_title_and_scenes, spatial_runtime_model,
+    export_visual_fixture_json_with_title_and_scenes,
 };
 pub use puzzlescript::translate_puzzlescript_to_canonical;
 pub use semantic::{SemanticKind, SemanticToken, semantic_tokens};
@@ -145,6 +146,9 @@ use source::{
     split_header_tokens, strip_line_comment,
 };
 pub use sprite_spatial::{SpatialSpriteAffine, evaluate_spatial_sprite_transforms};
+pub use workspace::{
+    WorkspacePresentationManifest, WorkspaceSourceDocument, workspace_presentation_manifest,
+};
 
 pub fn parse_level_ascii_state(
     game: &CompiledGame,

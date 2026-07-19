@@ -67,15 +67,15 @@ fn parse_map_definition(
 
 fn project_builtin_completion_symbols(sink: &mut SurfaceSink) {
     let symbols = sink.completion_symbols_mut();
-    for (name, values) in [
-        ("directions", vec!["up", "down", "left", "right"]),
-        ("horizontal", vec!["left", "right"]),
-        ("vertical", vec!["up", "down"]),
-    ] {
+    for name in puzzle_authoring::ABSOLUTE_DIRECTION_SET_NAMES {
+        let Some(values) = puzzle_authoring::movement_mark_set_values(name, 2) else {
+            continue;
+        };
         symbols.value_set_names.insert(name.to_string());
         symbols.direction_sets.insert(name.to_string());
         let values = values
-            .into_iter()
+            .iter()
+            .copied()
             .map(str::to_string)
             .collect::<Vec<String>>();
         symbols.object_name_atoms.extend(values.iter().cloned());
@@ -174,7 +174,7 @@ fn parser_catalog_completion_symbols(
 }
 
 fn surface_completion_direction_value(value: &str) -> bool {
-    matches!(value, "up" | "down" | "left" | "right")
+    puzzle_authoring::MOVEMENT_DIRECTIONS_3D.contains(&value)
 }
 
 fn normalize_surface_completion_symbols(sink: &mut SurfaceSink) {
@@ -460,13 +460,11 @@ fn project_selector_occurrence(
 ) {
     let mut offset = 0;
     for (index, part) in selector.text.split(':').enumerate() {
-        let prefix_len = usize::from(part.starts_with('@'));
-        let semantic = &part[prefix_len..];
-        if !semantic.is_empty() {
+        if !part.is_empty() {
             mark_selector_component(
                 recognition,
-                selector.span.start + offset + prefix_len,
-                semantic,
+                selector.span.start + offset,
+                part,
                 index == 0,
                 catalog,
             );
@@ -513,28 +511,7 @@ fn mark_selector_token(
                 offset += 1;
                 continue;
             }
-            let prefix_len = usize::from(part.starts_with('@'));
-            let semantic = &part[prefix_len..];
-            let kind = if index == 0 {
-                if catalog.object_groups.contains_key(semantic) {
-                    crate::surface::SurfaceSemanticKind::Group
-                } else {
-                    crate::surface::SurfaceSemanticKind::Object
-                }
-            } else if catalog.value_sets.contains_key(semantic)
-                || catalog.object_axes.contains_key(semantic)
-            {
-                crate::surface::SurfaceSemanticKind::Group
-            } else {
-                crate::surface::SurfaceSemanticKind::Variant
-            };
-            recognition.mark(
-                crate::surface::SourceSpan {
-                    start: token.start + offset + prefix_len,
-                    end: token.start + offset + part.len(),
-                },
-                kind,
-            );
+            mark_selector_component(recognition, token.start + offset, part, index == 0, catalog);
             offset += part.len() + 1;
         }
     }
@@ -636,7 +613,6 @@ fn parser_surface_catalog_from_source_scan(
         model_catalogs,
         scenes,
         recognition,
-        disposition_diagnostic: None,
     };
     let compile_parts = if compile_diagnostics.is_empty() {
         Ok(parts.clone())
@@ -1098,67 +1074,99 @@ fn mark_selector_component(
         && component.ends_with(')')
     {
         let map = &component[..open];
-        recognition.mark(
+        recognition.mark_resolved(
             crate::surface::SourceSpan {
                 start,
                 end: start + map.len(),
             },
             crate::surface::SurfaceSemanticKind::Group,
+            crate::surface::ParserTokenResolution::ValueMap(map.to_string()),
         );
         let argument = &component[open + 1..component.len() - 1];
         let argument = argument.split('#').next().unwrap_or(argument);
-        recognition.mark(
+        let (argument_kind, argument_resolution) = if catalog.value_sets.contains_key(argument) {
+            (
+                crate::surface::SurfaceSemanticKind::Group,
+                crate::surface::ParserTokenResolution::ValueSet(argument.to_string()),
+            )
+        } else if catalog.object_axes.contains_key(argument) {
+            (
+                crate::surface::SurfaceSemanticKind::Group,
+                crate::surface::ParserTokenResolution::ObjectAxis(argument.to_string()),
+            )
+        } else {
+            (
+                crate::surface::SurfaceSemanticKind::Variant,
+                crate::surface::ParserTokenResolution::Variant(argument.to_string()),
+            )
+        };
+        recognition.mark_resolved(
             crate::surface::SourceSpan {
                 start: start + open + 1,
                 end: start + open + 1 + argument.len(),
             },
-            if catalog.value_sets.contains_key(argument)
-                || catalog.object_axes.contains_key(argument)
-            {
-                crate::surface::SurfaceSemanticKind::Group
-            } else {
-                crate::surface::SurfaceSemanticKind::Variant
-            },
+            argument_kind,
+            argument_resolution,
         );
         if let Some(hash) = component.find('#') {
-            recognition.mark(
+            let binding = &component[hash + 1..component.len() - 1];
+            recognition.mark_resolved(
                 crate::surface::SourceSpan {
                     start: start + hash + 1,
                     end: start + component.len() - 1,
                 },
                 crate::surface::SurfaceSemanticKind::Binding,
+                crate::surface::ParserTokenResolution::Binding(binding.to_string()),
             );
         }
         return;
     }
     let semantic = component.split('#').next().unwrap_or(component);
-    let kind = if selector_head {
+    let (kind, resolution) = if selector_head {
         if catalog.object_groups.contains_key(semantic) {
-            crate::surface::SurfaceSemanticKind::Group
+            (
+                crate::surface::SurfaceSemanticKind::Group,
+                crate::surface::ParserTokenResolution::ObjectGroup(semantic.to_string()),
+            )
         } else {
-            crate::surface::SurfaceSemanticKind::Object
+            (
+                crate::surface::SurfaceSemanticKind::Object,
+                crate::surface::ParserTokenResolution::Object(semantic.to_string()),
+            )
         }
-    } else if catalog.value_sets.contains_key(semantic)
-        || catalog.object_axes.contains_key(semantic)
-    {
-        crate::surface::SurfaceSemanticKind::Group
+    } else if catalog.value_sets.contains_key(semantic) {
+        (
+            crate::surface::SurfaceSemanticKind::Group,
+            crate::surface::ParserTokenResolution::ValueSet(semantic.to_string()),
+        )
+    } else if catalog.object_axes.contains_key(semantic) {
+        (
+            crate::surface::SurfaceSemanticKind::Group,
+            crate::surface::ParserTokenResolution::ObjectAxis(semantic.to_string()),
+        )
     } else {
-        crate::surface::SurfaceSemanticKind::Variant
+        (
+            crate::surface::SurfaceSemanticKind::Variant,
+            crate::surface::ParserTokenResolution::Variant(semantic.to_string()),
+        )
     };
-    recognition.mark(
+    recognition.mark_resolved(
         crate::surface::SourceSpan {
             start,
             end: start + semantic.len(),
         },
         kind,
+        resolution,
     );
     if let Some(hash) = component.find('#') {
-        recognition.mark(
+        let binding = &component[hash + 1..];
+        recognition.mark_resolved(
             crate::surface::SourceSpan {
                 start: start + hash + 1,
                 end: start + component.len(),
             },
             crate::surface::SurfaceSemanticKind::Binding,
+            crate::surface::ParserTokenResolution::Binding(binding.to_string()),
         );
     }
 }
@@ -1290,7 +1298,7 @@ fn normalize_tag_values(
 fn infer_tag_value_type(values: &[String], line: &str) -> Result<ValueType, DiagnosticReport> {
     if values
         .iter()
-        .all(|value| matches!(value.as_str(), "up" | "down" | "left" | "right"))
+        .all(|value| puzzle_authoring::MOVEMENT_DIRECTIONS_3D.contains(&value.as_str()))
     {
         return Ok(ValueType::Direction);
     }
@@ -1604,7 +1612,7 @@ fn catalog_value_set<'a>(catalog: &'a Catalog, name: &str) -> Option<&'a Vec<Str
 }
 
 fn is_builtin_value_set(name: &str) -> bool {
-    matches!(name, "directions" | "horizontal" | "vertical" | "slots")
+    puzzle_authoring::is_absolute_direction_set(name) || name == "slots"
 }
 
 fn looks_like_condition_expr(expr: &str) -> bool {
@@ -1620,33 +1628,23 @@ fn looks_like_condition_expr(expr: &str) -> bool {
             .any(|token| matches!(token, "and" | "or"))
 }
 
-fn is_at_identifier_token(token: &str) -> bool {
-    puzzle_authoring::is_at_identifier_token(token)
-}
-
 fn validate_selector_alias_name(
     value: &str,
     line: &str,
     label: &str,
 ) -> Result<(), DiagnosticReport> {
-    if is_at_identifier_token(value) || is_qualified_identifier(value) {
+    if puzzle_authoring::is_symbol_name(value) {
         Ok(())
     } else {
-        Err(parse_error(
-            line,
-            &format!("{label} must be a qualified identifier or @name"),
-        ))
+        Err(parse_error(line, &format!("{label} must be a symbol name")))
     }
 }
 
 fn validate_rule_name(value: &str, line: &str) -> Result<(), DiagnosticReport> {
-    if is_at_identifier_token(value) || is_qualified_identifier(value) {
+    if puzzle_authoring::is_symbol_name(value) {
         Ok(())
     } else {
-        Err(parse_error(
-            line,
-            "routine name must be a qualified identifier or @name",
-        ))
+        Err(parse_error(line, "routine name must be a symbol name"))
     }
 }
 

@@ -1,7 +1,7 @@
 use crate::{SolverRelevance, SolverStageAvailability, SolverStateSlicer};
 use puzzle_core::{
-    GridCompiledGame, GridExecutableProgram, GridRule, GridRuleStep, GridSize, GridState,
-    GridWriteOp, ObjectId, RuleId,
+    GridCompiledGame, GridExecutableProgram, GridProgramCatalog, GridProgramRef, GridRule,
+    GridRuleStep, GridSize, GridState, GridWriteOp, ObjectId, RuleId,
 };
 use puzzle_lang::LoadedGridGame;
 use std::collections::BTreeSet;
@@ -20,7 +20,11 @@ impl SolverSlice {
         roots: impl IntoIterator<Item = ObjectId>,
     ) -> Option<Self> {
         let level = loaded.levels.get(level_index)?;
-        let mut programs = vec![level.program.as_steps()];
+        let mut programs = loaded
+            .programs_for_level(level_index)?
+            .into_iter()
+            .map(GridExecutableProgram::as_steps)
+            .collect::<Vec<_>>();
         programs.extend(
             loaded
                 .level_start_program
@@ -40,16 +44,14 @@ impl SolverSlice {
                 .map(|program| program.as_steps()),
         );
         programs.extend(
-            level
-                .level_start_program
-                .iter()
-                .map(|program| program.as_steps()),
+            loaded
+                .level_start_program_for_level(level_index)
+                .map(GridExecutableProgram::as_steps),
         );
         programs.extend(
-            level
-                .level_clear_program
-                .iter()
-                .map(|program| program.as_steps()),
+            loaded
+                .level_clear_program_for_level(level_index)
+                .map(GridExecutableProgram::as_steps),
         );
         let relevance =
             SolverRelevance::from_programs_roots(&loaded.game, programs.iter().copied(), roots);
@@ -69,7 +71,13 @@ impl SolverSlice {
         roots: impl IntoIterator<Item = ObjectId>,
     ) -> Self {
         let mut programs = vec![loaded.game.program()];
-        programs.extend(loaded.levels.iter().map(|level| level.program.as_steps()));
+        programs.extend(
+            loaded
+                .program_catalog
+                .programs()
+                .iter()
+                .map(GridExecutableProgram::as_steps),
+        );
         programs.extend(
             loaded
                 .level_start_program
@@ -88,20 +96,6 @@ impl SolverSlice {
                 .iter()
                 .map(|program| program.as_steps()),
         );
-        for level in &loaded.levels {
-            programs.extend(
-                level
-                    .level_start_program
-                    .iter()
-                    .map(|program| program.as_steps()),
-            );
-            programs.extend(
-                level
-                    .level_clear_program
-                    .iter()
-                    .map(|program| program.as_steps()),
-            );
-        }
         let relevance =
             SolverRelevance::from_programs_roots(&loaded.game, programs.iter().copied(), roots);
         let availability = SolverStageAvailability::from_states_and_programs(
@@ -186,19 +180,48 @@ impl SolverSlice {
             .last_level_clear_program
             .as_ref()
             .map(|program| self.project_program(program));
+        projected.program_catalog = GridProgramCatalog::default();
         for (projected_level, source_level) in projected.levels.iter_mut().zip(&loaded.levels) {
             projected_level.initial_state = state_slicer.project_state(&source_level.initial_state);
-            projected_level.program = self.project_program(&source_level.program);
-            projected_level.level_start_program = source_level
-                .level_start_program
-                .as_ref()
-                .map(|program| self.project_program(program));
-            projected_level.level_clear_program = source_level
-                .level_clear_program
-                .as_ref()
-                .map(|program| self.project_program(program));
+            projected_level.program = source_level.program.map_references(|reference| {
+                self.project_program_reference(loaded, reference, &mut projected.program_catalog)
+            });
+            projected_level.level_start_program =
+                source_level.level_start_program.map(|reference| {
+                    self.project_program_reference(
+                        loaded,
+                        reference,
+                        &mut projected.program_catalog,
+                    )
+                });
+            projected_level.level_clear_program =
+                source_level.level_clear_program.map(|reference| {
+                    self.project_program_reference(
+                        loaded,
+                        reference,
+                        &mut projected.program_catalog,
+                    )
+                });
         }
         projected
+    }
+
+    fn project_program_reference<const D: usize, Size: GridSize<D>>(
+        &self,
+        loaded: &LoadedGridGame<D, Size>,
+        reference: GridProgramRef,
+        catalog: &mut GridProgramCatalog<D>,
+    ) -> GridProgramRef {
+        match reference {
+            GridProgramRef::Main => GridProgramRef::Main,
+            GridProgramRef::Catalog(_) => catalog.intern(
+                self.project_program(
+                    loaded
+                        .resolve_program(reference)
+                        .expect("loaded program reference is valid"),
+                ),
+            ),
+        }
     }
 
     fn filter_program<const D: usize>(&self, program: &[GridRuleStep<D>]) -> Vec<GridRuleStep<D>> {

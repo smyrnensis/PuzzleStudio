@@ -18,7 +18,7 @@ Floor2 {
 
 TEN:horizontal {
 colors = #ffffff #282828
-rotate horizontal from front
+rotate horizontal from back
 .......
 .......
 .......
@@ -84,11 +84,13 @@ dimension = 3
 render {
 camera {
 yaw = 0
-pitch = 10
+pitch = 30
 zoom = 1
 }
+tween = true
 shadow = true
 }
+
 
 slots {
 floor = Floor Floor2
@@ -96,11 +98,11 @@ solid = TEN:horizontal
 }
 
 on_level_start {
-  down [ no Floor | null ] -> [ Floor | null ]
+down [ no Floor | null ] -> [ Floor | null ]
 }
 
 rules {
-input [ TEN:horizontal ] -> [ > TEN:horizontal ]
+input [ TEN:* ] -> [ > TEN:* ]
 for h in horizontal {
 if input == h {
 [ > TEN:horizontal ] -> [ > TEN:h ]
@@ -120,6 +122,13 @@ F = Floor
 level "first" {
 .....
 ...T.
+.....
+.....
+.....
+.....
+-
+.....
+.....
 .....
 .....
 .....

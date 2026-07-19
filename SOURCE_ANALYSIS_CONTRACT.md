@@ -297,11 +297,22 @@ dependencies are unchanged; otherwise they are invalidated explicitly.
 Highlighting may display recovered or incomplete tokens. It must not claim that
 their enclosing construct is valid merely because it can assign a color.
 
+Highlight projection completeness is an editor-assistance contract, not a
+language-acceptance contract. Missing semantic color or display classification
+must be reported by the highlight product and must not reject compilation,
+preview, or export when parser diagnostics and lowering otherwise permit those
+operations. Strict compilation may reject a missing canonical token disposition
+only when that disposition is owned by the parse snapshot itself; it must not
+infer the failure from highlight spans, colors, or display-range coverage.
+
 The Rust highlight module is a projection consumer. It must not scan source
 characters or own token, comment, quote, brace, selector, or owner-leaf
 recognition. The parser frontend stores lossless token dispositions, semantic
 facts, and owner-produced display facts on the snapshot. The typed highlight
-product may only map those facts. Its API must not accept source text.
+product may only map those facts. In Rust, parser recognition owns
+`ParserTokenDisposition`; `SurfaceSemanticToken` is a separate editor-facing
+projection and must never be merged back into parser recognition. The
+highlight API must not accept source text.
 
 Range highlighting must locate intersecting lines, facts, semantic tokens, and
 owner ranges through source-sorted indexes and map only that window. It must not

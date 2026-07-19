@@ -2824,7 +2824,7 @@ enum VisualSelectorConstraint {
 fn sprite_name_for_object(object_name: &str) -> String {
     let mut sprite = String::new();
     for ch in object_name.chars() {
-        if ch.is_ascii_alphanumeric() {
+        if ch == '@' || ch.is_ascii_alphanumeric() {
             sprite.push(ch);
         } else if !sprite.ends_with('-') {
             sprite.push('-');

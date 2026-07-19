@@ -137,20 +137,15 @@ impl ParseSnapshot {
     #[cfg(test)]
     fn into_strict_document(self) -> Result<SurfaceDocument, DiagnosticReport> {
         self.validate_strict_parser_product()?;
-        validate_parser_recognition_completeness(&self.document)?;
         Ok(self.document)
     }
 
     fn into_strict_document_parts(self) -> Result<DocumentSourceParts, DiagnosticReport> {
         self.validate_strict_parser_product()?;
-        let disposition_diagnostic = validate_parser_recognition_completeness(&self.document).err();
-        let mut parts = self
-            .parser_catalog
+        self.parser_catalog
             .expect("strict parser snapshot requires parser product")
             .value?
-            .compile_parts?;
-        parts.disposition_diagnostic = disposition_diagnostic;
-        Ok(parts)
+            .compile_parts
     }
 
     fn validate_strict_parser_product(&self) -> Result<(), DiagnosticReport> {
@@ -211,15 +206,15 @@ fn parse_surface_compile_document(source: &str) -> Result<SurfaceDocument, Diagn
     ParseSnapshot::parse(source, None).into_strict_document()
 }
 
-pub fn validate_surface_document_projection(source: &str) -> Result<(), DiagnosticReport> {
+pub fn validate_source_highlight_projection(source: &str) -> Result<(), DiagnosticReport> {
     let document = try_build_surface_document(source, SurfaceDocumentProducts::FULL)?;
-    validate_parser_recognition_completeness(&document)
+    validate_highlight_projection_completeness(&document)
 }
 
-fn validate_parser_recognition_completeness(
+fn validate_highlight_projection_completeness(
     document: &SurfaceDocument,
 ) -> Result<(), DiagnosticReport> {
-    let Some(span) = document.syntax_error_spans.first() else {
+    let Some(span) = document.unclassified_highlight_spans.first() else {
         return Ok(());
     };
     let location = document.lines.iter().find_map(|line| {
@@ -234,7 +229,7 @@ fn validate_parser_recognition_completeness(
         |(line, token)| format!("token `{token}` on line {line}"),
     );
     Err(DiagnosticReport::error(format!(
-        "canonical parser product contains {detail} without a syntax disposition"
+        "source highlight projection has {detail} without a parser-owned display classification"
     )))
 }
 
@@ -362,12 +357,12 @@ fn try_build_surface_document_from_scan(
     let mut document = sink.into_document();
     document.source_profile = source_profile;
     if products.semantic_tokens {
-        document.syntax_error_spans = syntax_error_spans(&document);
+        document.unclassified_highlight_spans = unclassified_highlight_spans(&document);
     }
     Ok(document)
 }
 
-fn syntax_error_spans(document: &SurfaceDocument) -> Vec<SourceSpan> {
+fn unclassified_highlight_spans(document: &SurfaceDocument) -> Vec<SourceSpan> {
     let mut disposition_spans = document
         .semantic_tokens
         .iter()
@@ -642,7 +637,7 @@ mod surface_document_flow_tests {
     use super::{
         parse_surface_completion_context_document, parse_surface_completion_symbols_document,
         parse_surface_document, parse_surface_structure_document, source_line_tokens,
-        validate_surface_document_projection,
+        validate_source_highlight_projection,
     };
     use crate::surface::SurfaceSemanticKind;
 
@@ -1000,6 +995,24 @@ puzzle board {
     }
 
     #[test]
+    fn parser_token_dispositions_project_one_way_into_highlight_tokens() {
+        let mut recognition = crate::surface::ParserRecognition::default();
+        recognition.mark(
+            crate::surface::SourceSpan { start: 0, end: 4 },
+            crate::surface::SurfaceSemanticKind::Object,
+        );
+
+        let mut sink = crate::surface::SurfaceSink::default();
+        sink.project_parser_recognition(&recognition);
+        let mut document = sink.into_document();
+
+        assert_eq!(recognition.token_dispositions.len(), 1);
+        assert_eq!(document.semantic_tokens.len(), 1);
+        document.semantic_tokens.clear();
+        assert_eq!(recognition.token_dispositions.len(), 1);
+    }
+
+    #[test]
     fn every_structural_header_token_receives_a_surface_token() {
         let source = r#"
 puzzle board {
@@ -1259,24 +1272,26 @@ text "Ready"
     }
 
     #[test]
-    fn unowned_source_tree_header_reports_surface_projection_error() {
+    fn unowned_source_tree_header_reports_highlight_projection_error() {
         let source = r#"
 puzzle board {
 __invalid_unowned_surface_node__ {
 }
 }
 "#;
-        let error =
-            validate_surface_document_projection(source).expect_err("unowned header should fail");
+        let error = validate_source_highlight_projection(source)
+            .expect_err("unowned header should fail highlight validation");
 
         assert!(
-            error.to_string().contains("without a syntax disposition"),
+            error
+                .to_string()
+                .contains("without a parser-owned display classification"),
             "{error}"
         );
     }
 
     #[test]
-    fn canonical_game_surfaces_have_complete_parser_dispositions() {
+    fn canonical_game_surfaces_have_complete_highlight_projections() {
         for (name, source) in [
             ("spec_3d", include_str!("../../../games/spec_3d.puzzle3")),
             (
@@ -1289,8 +1304,46 @@ __invalid_unowned_surface_node__ {
                 include_str!("../../../games/fixban_tween.puzzle"),
             ),
         ] {
-            validate_surface_document_projection(source)
-                .unwrap_or_else(|error| panic!("{name} has an unowned parser token: {error}"));
+            validate_source_highlight_projection(source).unwrap_or_else(|error| {
+                panic!("{name} has an unclassified highlight token: {error}")
+            });
+        }
+    }
+
+    #[test]
+    fn strict_parser_result_does_not_depend_on_highlight_projection_completeness() {
+        let source = "puzzle board {\nslots {\nactor = Player\n}\nrules {\n}\n}\n";
+        let mut snapshot = super::ParseSnapshot::parse(source, None);
+        snapshot.document.semantic_tokens.clear();
+        snapshot.document.unclassified_highlight_spans =
+            super::unclassified_highlight_spans(&snapshot.document);
+
+        assert!(super::validate_highlight_projection_completeness(&snapshot.document).is_err());
+        assert!(snapshot.into_strict_document_parts().is_ok());
+    }
+
+    #[test]
+    fn canonical_parser_product_owns_prefixed_selector_boundary_and_role() {
+        let source =
+            "puzzle board {\nslots {\nobjects = @Box\n}\nrules {\n[ @Box ] -> [ @Box ]\n}\n}\n";
+        let snapshot = super::ParseSnapshot::parse(source, None);
+        let recognition = &snapshot
+            .parser_catalog
+            .as_ref()
+            .expect("parser catalog")
+            .recognition;
+
+        for (start, _) in source.match_indices("@Box") {
+            assert!(recognition.token_dispositions.iter().any(|disposition| {
+                disposition.kind == crate::surface::SurfaceSemanticKind::Object
+                    && disposition.span.start == start
+                    && &source[disposition.span.start..disposition.span.end] == "@Box"
+                    && matches!(
+                        &disposition.resolution,
+                        Some(crate::surface::ParserTokenResolution::Object(name))
+                            if name == "@Box"
+                    )
+            }));
         }
     }
 }

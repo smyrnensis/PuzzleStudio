@@ -76,84 +76,109 @@ fn project_surface_semantic_kind(kind: SurfaceSemanticKind) -> semantic::Semanti
     }
 }
 
-fn scene_effect_surface_document(tokens: &[SourceToken]) -> SurfaceDocument {
+fn scene_effect_parser_recognition(tokens: &[SourceToken]) -> crate::surface::ParserRecognition {
     if let Some(parts) = split_scene_effect_token_sequence(tokens) {
-        let mut sink = SurfaceSink::default();
+        let mut recognition = crate::surface::ParserRecognition::default();
         for part in parts {
-            sink.extend(scene_effect_surface_document(part));
+            recognition.merge(scene_effect_parser_recognition(part));
         }
-        return sink.into_document();
+        return recognition.finish();
     }
 
-    let mut sink = SurfaceSink::default();
+    let mut recognition = crate::surface::ParserRecognition::default();
     let Some(first) = tokens.first() else {
-        return sink.into_document();
+        return recognition;
     };
     let effect_span = source_tokens_span(tokens);
 
     if first.text.starts_with("cursor.") {
-        add_cursor_scene_effect_token(&mut sink, first);
-        return surface_document_with_node(sink, SurfaceNodeKind::SceneEffect, effect_span);
+        add_cursor_scene_effect_token(&mut recognition, first);
+        return parser_recognition_with_node(
+            recognition,
+            SurfaceNodeKind::SceneEffect,
+            effect_span,
+        );
     }
 
     if first.text.contains('.') {
         let mut parts = first.text.split('.');
         if let Some(target) = parts.next() {
-            add_scene_effect_token_part(&mut sink, first, target, SurfaceSemanticKind::Scene);
+            add_scene_effect_token_part(
+                &mut recognition,
+                first,
+                target,
+                SurfaceSemanticKind::Scene,
+            );
         }
         if let Some(effect) = parts.next() {
-            add_scene_effect_token_part(&mut sink, first, effect, SurfaceSemanticKind::Effect);
+            add_scene_effect_token_part(
+                &mut recognition,
+                first,
+                effect,
+                SurfaceSemanticKind::Effect,
+            );
         }
         for argument in tokens.iter().skip(1) {
-            add_scene_effect_token_range(&mut sink, argument, SurfaceSemanticKind::State);
+            add_scene_effect_token_range(&mut recognition, argument, SurfaceSemanticKind::State);
         }
-        return surface_document_with_node(sink, SurfaceNodeKind::SceneEffect, effect_span);
+        return parser_recognition_with_node(
+            recognition,
+            SurfaceNodeKind::SceneEffect,
+            effect_span,
+        );
     }
 
-    if first.text == "start" && add_level_flow_scene_effect_tokens(tokens, &mut sink) {
-        return surface_document_with_node(sink, SurfaceNodeKind::SceneEffect, effect_span);
+    if first.text == "start" && add_level_flow_scene_effect_tokens(tokens, &mut recognition) {
+        return parser_recognition_with_node(
+            recognition,
+            SurfaceNodeKind::SceneEffect,
+            effect_span,
+        );
     }
 
     let command_syntax = scene_effect_command_syntax(&first.text);
     match command_syntax {
         Some(SceneEffectCommandSyntax::InputTarget) => {
-            add_scene_effect_token_range(&mut sink, first, SurfaceSemanticKind::Effect);
+            add_scene_effect_token_range(&mut recognition, first, SurfaceSemanticKind::Effect);
             for input in tokens
                 .iter()
                 .skip(1)
                 .filter(|token| !matches!(token.text.as_str(), "=" | ":"))
             {
-                add_scene_command_token(&mut sink, input);
+                add_scene_command_token(&mut recognition, input);
             }
         }
         Some(SceneEffectCommandSyntax::ComponentEffectTarget) => {
-            add_scene_effect_token_range(&mut sink, first, SurfaceSemanticKind::Effect);
+            add_scene_effect_token_range(&mut recognition, first, SurfaceSemanticKind::Effect);
             if let Some(effect) = tokens.get(1) {
-                add_scene_command_token(&mut sink, effect);
+                add_scene_command_token(&mut recognition, effect);
             }
         }
         Some(SceneEffectCommandSyntax::SceneTarget) => {
-            add_scene_effect_token_range(&mut sink, first, SurfaceSemanticKind::Effect);
+            add_scene_effect_token_range(&mut recognition, first, SurfaceSemanticKind::Effect);
             if let Some(scene) = tokens.get(1) {
-                add_scene_effect_token_range(&mut sink, scene, SurfaceSemanticKind::Scene);
+                add_scene_effect_token_range(&mut recognition, scene, SurfaceSemanticKind::Scene);
             }
         }
         Some(SceneEffectCommandSyntax::AssetTarget) => {
             let kind = scene_effect_command_kind(&first.text);
-            add_scene_effect_token_range(&mut sink, first, kind);
+            add_scene_effect_token_range(&mut recognition, first, kind);
             if let Some(asset) = tokens.get(1) {
-                add_scene_effect_token_range(&mut sink, asset, SurfaceSemanticKind::Asset);
+                add_scene_effect_token_range(&mut recognition, asset, SurfaceSemanticKind::Asset);
             }
         }
         Some(SceneEffectCommandSyntax::OptionalAssetTarget) => {
-            add_scene_effect_token_range(&mut sink, first, SurfaceSemanticKind::Effect);
+            add_scene_effect_token_range(&mut recognition, first, SurfaceSemanticKind::Effect);
             if let Some(asset) = tokens.get(1) {
-                add_scene_effect_token_range(&mut sink, asset, SurfaceSemanticKind::Asset);
+                add_scene_effect_token_range(&mut recognition, asset, SurfaceSemanticKind::Asset);
             }
         }
         Some(SceneEffectCommandSyntax::Plain) => {
             let kind = scene_effect_command_kind(&first.text);
-            add_scene_effect_token_range(&mut sink, first, kind);
+            add_scene_effect_token_range(&mut recognition, first, kind);
+        }
+        None if tokens.len() == 1 && puzzle_authoring::is_identifier(&first.text) => {
+            add_scene_effect_token_range(&mut recognition, first, SurfaceSemanticKind::Effect);
         }
         None => {}
     }
@@ -166,7 +191,7 @@ fn scene_effect_surface_document(tokens: &[SourceToken]) -> SurfaceDocument {
                     .chars()
                     .any(|ch| matches!(ch, '(' | ')' | '.' | '[' | ']'))
         }) {
-            sink.mark(
+            recognition.mark(
                 SourceSpan {
                     start: token.start,
                     end: token.end,
@@ -180,7 +205,7 @@ fn scene_effect_surface_document(tokens: &[SourceToken]) -> SurfaceDocument {
         }
     }
 
-    surface_document_with_node(sink, SurfaceNodeKind::SceneEffect, effect_span)
+    parser_recognition_with_node(recognition, SurfaceNodeKind::SceneEffect, effect_span)
 }
 
 fn source_tokens_span(tokens: &[SourceToken]) -> Option<SourceSpan> {
@@ -189,17 +214,35 @@ fn source_tokens_span(tokens: &[SourceToken]) -> Option<SourceSpan> {
     (start < end).then_some(SourceSpan { start, end })
 }
 
-fn surface_document_with_node(
-    mut sink: SurfaceSink,
+fn parser_recognition_with_node(
+    mut recognition: crate::surface::ParserRecognition,
     kind: SurfaceNodeKind,
     span: Option<SourceSpan>,
-) -> SurfaceDocument {
-    if sink.has_semantic_tokens()
+) -> crate::surface::ParserRecognition {
+    if !recognition.token_dispositions.is_empty()
         && let Some(span) = span
     {
-        sink.node(kind, span);
+        recognition.node(kind, span);
     }
+    recognition.finish()
+}
+
+fn parser_recognition_surface_document(
+    recognition: &crate::surface::ParserRecognition,
+) -> SurfaceDocument {
+    let mut sink = SurfaceSink::default();
+    sink.project_parser_recognition(recognition);
     sink.into_document()
+}
+
+trait SemanticDispositionSink {
+    fn mark(&mut self, span: SourceSpan, kind: SurfaceSemanticKind);
+}
+
+impl SemanticDispositionSink for crate::surface::ParserRecognition {
+    fn mark(&mut self, span: SourceSpan, kind: SurfaceSemanticKind) {
+        crate::surface::ParserRecognition::mark(self, span, kind);
+    }
 }
 
 fn scene_effect_command_kind(token: &str) -> SurfaceSemanticKind {
@@ -219,7 +262,10 @@ fn scene_effect_command_kind(token: &str) -> SurfaceSemanticKind {
     }
 }
 
-fn add_level_flow_scene_effect_tokens(tokens: &[SourceToken], sink: &mut SurfaceSink) -> bool {
+fn add_level_flow_scene_effect_tokens(
+    tokens: &[SourceToken],
+    sink: &mut impl SemanticDispositionSink,
+) -> bool {
     match tokens {
         [command, levels, in_keyword, scene]
             if levels.text == "levels" && in_keyword.text == "in" =>
@@ -244,7 +290,7 @@ fn add_level_flow_scene_effect_tokens(tokens: &[SourceToken], sink: &mut Surface
     }
 }
 
-fn add_scene_command_token(sink: &mut SurfaceSink, token: &SourceToken) {
+fn add_scene_command_token(sink: &mut impl SemanticDispositionSink, token: &SourceToken) {
     if let Some(cursor_offset) = token.text.find("cursor.") {
         add_scene_effect_token_subrange(
             sink,
@@ -310,7 +356,7 @@ fn add_scene_command_token(sink: &mut SurfaceSink, token: &SourceToken) {
     }
 }
 
-fn add_cursor_scene_effect_token(sink: &mut SurfaceSink, token: &SourceToken) {
+fn add_cursor_scene_effect_token(sink: &mut impl SemanticDispositionSink, token: &SourceToken) {
     add_scene_effect_token_part(sink, token, "cursor", SurfaceSemanticKind::State);
     if let Some((_, tail)) = token.text.split_once('.') {
         let kind = if matches!(tail, "prev" | "next") {
@@ -323,7 +369,7 @@ fn add_cursor_scene_effect_token(sink: &mut SurfaceSink, token: &SourceToken) {
 }
 
 fn add_scene_effect_token_range(
-    sink: &mut SurfaceSink,
+    sink: &mut impl SemanticDispositionSink,
     token: &SourceToken,
     kind: SurfaceSemanticKind,
 ) {
@@ -334,7 +380,7 @@ fn add_scene_effect_token_range(
 }
 
 fn add_scene_effect_token_part(
-    sink: &mut SurfaceSink,
+    sink: &mut impl SemanticDispositionSink,
     token: &SourceToken,
     part: &str,
     kind: SurfaceSemanticKind,
@@ -354,7 +400,7 @@ fn add_scene_effect_token_part(
 }
 
 fn add_scene_effect_token_subrange(
-    sink: &mut SurfaceSink,
+    sink: &mut impl SemanticDispositionSink,
     token: &SourceToken,
     relative_start: usize,
     relative_end: usize,
@@ -475,22 +521,25 @@ pub(crate) fn is_level_event_sugar(trimmed: &str, tokens: &[&str]) -> bool {
     }
 }
 
-fn rewrite_effect_surface_document(tokens: &[SourceToken]) -> SurfaceDocument {
+fn rewrite_effect_parser_recognition(tokens: &[SourceToken]) -> crate::surface::ParserRecognition {
     if tokens.first().is_some_and(|token| {
         matches!(
             token.text.as_str(),
             "goto" | "start" | "play_music" | "pause_music" | "resume_music" | "stop_music"
         )
     }) {
-        return scene_effect_surface_document(tokens);
+        return scene_effect_parser_recognition(tokens);
     }
-    let mut sink = SurfaceSink::default();
+    let mut recognition = crate::surface::ParserRecognition::default();
     let effect_span = source_tokens_span(tokens);
-    add_rewrite_effect_surface_tokens(tokens, &mut sink);
-    surface_document_with_node(sink, SurfaceNodeKind::RewriteEffect, effect_span)
+    add_rewrite_effect_surface_tokens(tokens, &mut recognition);
+    parser_recognition_with_node(recognition, SurfaceNodeKind::RewriteEffect, effect_span)
 }
 
-fn add_rewrite_effect_surface_tokens(tokens: &[SourceToken], sink: &mut SurfaceSink) -> bool {
+fn add_rewrite_effect_surface_tokens(
+    tokens: &[SourceToken],
+    sink: &mut impl SemanticDispositionSink,
+) -> bool {
     let Some(first) = tokens.first() else {
         return false;
     };
@@ -565,7 +614,7 @@ fn add_rewrite_effect_surface_tokens(tokens: &[SourceToken], sink: &mut SurfaceS
 
 fn add_simple_rewrite_effect_surface_tokens(
     tokens: &[SourceToken],
-    sink: &mut SurfaceSink,
+    sink: &mut impl SemanticDispositionSink,
 ) -> bool {
     let mut index = 0usize;
     let mut parsed_any = false;
@@ -710,8 +759,9 @@ fn parse_surface_scene_effect(
     line: &str,
 ) -> Result<SurfaceSceneEffect, DiagnosticReport> {
     let tokens = source_line_tokens(strip_line_comment(value), 0);
-    let document = scene_effect_surface_document(&tokens);
     let effect = parse_scene_effect_value(value, line)?;
+    let recognition = scene_effect_parser_recognition(&tokens);
+    let document = parser_recognition_surface_document(&recognition);
     Ok(SurfaceSceneEffect { effect, document })
 }
 

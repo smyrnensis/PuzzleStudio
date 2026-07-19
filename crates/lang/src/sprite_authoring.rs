@@ -507,14 +507,17 @@ fn is_sprite_definition_name_token(value: &str) -> bool {
     ) {
         return false;
     }
-    let cleaned = value.trim_start_matches('@');
-    let Some(first) = cleaned.chars().next() else {
+    let mut parts = value.split(':');
+    let Some(head) = parts.next() else {
         return false;
     };
-    (first.is_ascii_alphabetic() || first == '_')
-        && cleaned
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | ':'))
+    puzzle_authoring::is_symbol_name(head)
+        && parts.all(|part| {
+            !part.is_empty()
+                && part
+                    .chars()
+                    .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+        })
 }
 
 fn is_visual_image_source(value: &str) -> bool {
@@ -1365,8 +1368,8 @@ fn issue(syntax: &mut SpriteNodeSyntax, line: &str, message: &'static str) {
 mod tests {
     use super::{
         ResolvedSpriteShape, SpritePropertySyntax, SpriteShapeSyntax, SpriteSpaceSyntax,
-        analyze_sprite_body, collect_sprite_attachment, parse_sprite_node, resolve_sprite_timing,
-        validate_sprite_frame_geometry,
+        analyze_sprite_body, collect_sprite_attachment, is_sprite_definition_name_token,
+        parse_sprite_node, resolve_sprite_timing, validate_sprite_frame_geometry,
     };
 
     #[test]
@@ -1383,6 +1386,14 @@ mod tests {
         assert_eq!(braced.header, "Wall {");
         assert_eq!(braced.body_lines, ["#333", "0"]);
         assert_eq!(braced.next_index, 8);
+    }
+
+    #[test]
+    fn sprite_definition_names_share_the_symbol_name_grammar() {
+        for name in ["Floor", "@Floor", "Floor:directions", "@Floor:directions"] {
+            assert!(is_sprite_definition_name_token(name), "{name}");
+        }
+        assert!(!is_sprite_definition_name_token("@@Floor"));
     }
 
     #[test]

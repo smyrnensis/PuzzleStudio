@@ -4,7 +4,6 @@ use puzzle_lang::{
     LoadedDocumentModel, LoadedGridGame, SpatialPresentation, VoxelColor,
     export_visual_fixture_json, parse_game_for_path,
 };
-use puzzle_runtime_contract::{CameraEffect, GridRuntimeModel, runtime_contract_from_fixture_json};
 
 fn parse_spatial(source: &str) -> (LoadedGridGame<3, Size3>, SpatialPresentation) {
     let document = parse_game_for_path(source, "test.puzzle").expect("canonical document parses");
@@ -98,6 +97,190 @@ input [ Player | no solid ] -> [ | Player ]
                 .any(|rule| { rule.guards == vec![GridGuard::<3>::InputIs(input.id)] })
         );
     }
+}
+
+#[test]
+fn relative_selector_accepts_author_defined_direction_typed_tag_set() {
+    let (game, _) = parse_spatial_body(
+        r#"
+tags {
+heading = left right front back
+}
+
+slots {
+actor = TEN:heading
+}
+
+rules {
+input [ TEN:heading ] -> [ > TEN:> ]
+}
+"#,
+    );
+
+    let rules = flattened_rules(game.game.program())
+        .into_iter()
+        .filter(|rule| !rule.guards.is_empty())
+        .collect::<Vec<_>>();
+    assert_eq!(rules.len(), 16);
+    for name in ["left", "right", "front", "back"] {
+        let input = game
+            .inputs
+            .iter()
+            .find(|input| input.name == name)
+            .unwrap_or_else(|| panic!("missing input {name}"));
+        assert!(
+            rules
+                .iter()
+                .any(|rule| rule.guards == vec![GridGuard::<3>::InputIs(input.id)]),
+            "missing relative selector rule for {name}"
+        );
+    }
+    for name in ["up", "down"] {
+        let input = game
+            .inputs
+            .iter()
+            .find(|input| input.name == name)
+            .unwrap_or_else(|| panic!("missing input {name}"));
+        assert!(
+            rules
+                .iter()
+                .all(|rule| rule.guards != vec![GridGuard::<3>::InputIs(input.id)]),
+            "relative selector must not lower outside its tag domain: {name}"
+        );
+    }
+}
+
+#[test]
+fn relative_selector_accepts_cartesian_axis_set() {
+    let (game, _) = parse_spatial_body(
+        r#"
+slots {
+actor = TEN:x_axis
+}
+
+rules {
+input [ TEN:x_axis ] -> [ > TEN:> ]
+}
+"#,
+    );
+
+    let guarded_rules = flattened_rules(game.game.program())
+        .into_iter()
+        .filter(|rule| !rule.guards.is_empty())
+        .count();
+    assert_eq!(guarded_rules, 4);
+}
+
+#[test]
+fn cartesian_plane_set_is_shared_by_schema_and_orientation_lowering() {
+    let (game, _) = parse_spatial_body(
+        r#"
+slots {
+actor = Player
+marker = Marker:yz_plane
+}
+
+rules {
+input yz_plane [ Player ] -> [ > Player ]
+}
+"#,
+    );
+
+    for name in ["up", "down", "front", "back"] {
+        assert!(
+            game.object_labels
+                .values()
+                .any(|label| label == &format!("Marker:{name}")),
+            "missing schema variant Marker:{name}"
+        );
+        let input = game
+            .inputs
+            .iter()
+            .find(|input| input.name == name)
+            .unwrap_or_else(|| panic!("missing input {name}"));
+        assert!(
+            flattened_rules(game.game.program())
+                .into_iter()
+                .any(|rule| rule.guards == vec![GridGuard::<3>::InputIs(input.id)])
+        );
+    }
+}
+
+#[test]
+fn unavailable_cartesian_direction_sets_fail_in_two_dimensions() {
+    let error = parse_game_for_path(
+        r#"
+puzzle test {
+dimension = 2
+slots {
+actor = Player
+}
+rules {
+z_axis [ Player ] -> [ Player ]
+}
+}
+"#,
+        "test.puzzle",
+    )
+    .expect_err("z_axis is not available in two dimensions")
+    .to_string();
+
+    assert!(error.contains("unknown orientation: z_axis"), "{error}");
+}
+
+#[test]
+fn cartesian_direction_set_names_cannot_be_redefined() {
+    let error = parse_game_for_path(
+        r#"
+puzzle test {
+dimension = 2
+tags {
+z_axis = left right
+}
+slots {
+actor = Player
+}
+rules {
+}
+}
+"#,
+        "test.puzzle",
+    )
+    .expect_err("cartesian direction set names are built in")
+    .to_string();
+
+    assert!(
+        error.contains("built-in tag set cannot be redefined"),
+        "{error}"
+    );
+}
+
+#[test]
+fn relative_selector_rejects_nominal_tag_set() {
+    let error = parse_game_for_path(
+        r#"
+puzzle test {
+dimension = 3
+tags {
+mood = calm alert
+}
+slots {
+actor = Token:mood
+}
+rules {
+right [ Token:> ] -> [ Token:> ]
+}
+}
+"#,
+        "test.puzzle3",
+    )
+    .expect_err("relative selectors require a direction-typed tag set")
+    .to_string();
+
+    assert!(
+        error.contains("relative direction selector tag requires a direction-typed tag slot"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -212,7 +395,7 @@ shape = {
 }
 
 #[test]
-fn visual_fixture_round_trips_the_shared_runtime_model() {
+fn visual_fixture_contains_no_session_runtime_model() {
     let (game, presentation) = parse_spatial(
         r#"
 puzzle board {
@@ -229,12 +412,15 @@ level "start" { P }
     );
 
     let fixture = export_visual_fixture_json(&game, &presentation).expect("fixture exports");
-    let contract =
-        runtime_contract_from_fixture_json::<GridRuntimeModel<3, Size3, CameraEffect>>(&fixture)
-            .expect("shared runtime contract decodes");
+    let fixture: serde_json::Value = serde_json::from_str(&fixture).expect("fixture decodes");
 
-    assert_eq!(contract.model.game, game.game);
-    assert_eq!(contract.model.level_bundle.level_count(), 1);
+    assert_eq!(
+        fixture["size"],
+        serde_json::json!({"width": 1, "depth": 1, "height": 1})
+    );
+    assert!(fixture["cells"].is_array());
+    assert!(fixture.get("runtimeContract").is_none());
+    assert!(fixture.get("runtimeContractVersion").is_none());
 }
 
 #[test]

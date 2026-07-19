@@ -262,7 +262,7 @@ let puzzle3PreviewSurface = initialPuzzle3PreviewSurface;
 /* puzzle-host:optional:puzzle3:end */
 /* puzzle-host:optional:solver:start */
 const activeSolveRequests = new Map();
-let wasmSolverPromise = null;
+let wasmSolverServicePromise = null;
 /* puzzle-host:optional:solver:end */
 const standardChoiceCursors = new Map();
 const sceneMenuCursors = new Map();
@@ -272,6 +272,9 @@ let pendingModelInput = null;
 const activeWaitTimers = new Set();
 const pendingPresentationEvents = [];
 let dispatchingPresentationEvents = false;
+let pendingSessionResume = false;
+let resumingSession = false;
+let sessionWaiting = false;
 let drainingQueuedModelInput = false;
 let sceneEditorPreview = null;
 
@@ -296,24 +299,35 @@ async function requestJson(url, options = {}) {
 
 /* puzzle-host:optional:solver:start */
 async function loadWasmSolver() {
-  if (!wasmSolverPromise) {
-    wasmSolverPromise = import("./wasm/puzzle_wasm.js")
+  if (!wasmSolverServicePromise) {
+    wasmSolverServicePromise = import("./wasm/puzzle_wasm.js")
       .then(async (module) => {
         await module.default({ module_or_path: "./wasm/puzzle_wasm_bg.wasm" });
-        if (typeof module.solve_state !== "function") {
-          throw new Error("Solver is not available");
+        if (typeof module.WasmSolverService !== "function") {
+          throw new Error("Solver service is not available");
         }
-        return module;
+        const service = new module.WasmSolverService();
+        const puzzlePath = String(puzzleBoot.puzzlePath || "").trim();
+        if (!puzzlePath) {
+          throw new Error("Standalone solver requires an explicit puzzle path");
+        }
+        const prepared = service.prepare_source(
+          puzzleBoot.source,
+          puzzlePath,
+          Date.now(),
+        );
+        service.pin_artifact(prepared.artifactId, Date.now());
+        return { service, prepared };
       })
       .catch((error) => {
-        wasmSolverPromise = null;
+        wasmSolverServicePromise = null;
         throw error;
       });
   }
-  return wasmSolverPromise;
+  return wasmSolverServicePromise;
 }
 
-async function solveStandaloneCurrentState(options = {}) {
+async function solveStandaloneCurrentState(options = {}, control = null) {
   if (!standaloneRuntime) {
     if (puzzleBoot.editorPreview === true) {
       throw new Error("Editor preview requires its WASM session runtime; /api requests are unavailable in the preview iframe.");
@@ -323,15 +337,33 @@ async function solveStandaloneCurrentState(options = {}) {
   if (!puzzleBoot.source) {
     throw new Error("standalone solve requires PuzzleBoot.source");
   }
-  const solver = await loadWasmSolver();
-  return JSON.parse(solver.solve_state(
-    puzzleBoot.source,
-    puzzleBoot.puzzlePath || "game.puzzle",
-    JSON.stringify(standaloneRuntime.state),
-    Number(options.maxDepth ?? 512),
-    Number(options.maxNodes ?? 1000),
-    Number(options.maxMs ?? 0),
-  ));
+  const { service, prepared } = await loadWasmSolver();
+  const state = currentState;
+  if (!state?.solverState) {
+    throw new Error("Standalone session snapshot is missing solverState");
+  }
+  const searchId = service.start(prepared.artifactId, {
+    levelIndex: Number(options.levelIndex ?? state.levelIndex),
+    state: state.solverState,
+    materializeLevelStart: options.materializeLevelStart !== false,
+    maxDepth: Number(options.maxDepth ?? 512),
+    maxNodes: Number(options.maxNodes ?? 5_000_000),
+  }, Date.now());
+  if (control) {
+    control.searchId = searchId;
+    control.service = service;
+  }
+  for (;;) {
+    if (control?.cancelled) {
+      service.cancel(searchId, Date.now());
+      return { result: "cancelled" };
+    }
+    const response = service.advance(searchId, 64, Date.now());
+    if (response.status !== "paused") {
+      return response.result;
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+  }
 }
 /* puzzle-host:optional:solver:end */
 
@@ -350,6 +382,7 @@ async function post(url) {
 
 function render(state) {
   currentState = state;
+  sessionWaiting = state?.busy === true;
   window.__PuzzleCurrentState = state;
   applyTheme(state?.theme || puzzleBoot.theme || null);
   soundRuntime.configure(state?.sounds || puzzleBoot.sounds || { sfx: [], music: [] });
@@ -1276,9 +1309,7 @@ function renderPuzzle(component, scope = {}) {
 /* puzzle-host:optional:puzzle3:start */
 function renderPuzzle3Frame(component, scope = {}) {
   if (!window.Puzzle3DFrameFixture || !window.Puzzle3DFrameAssets || !window.Puzzle3Component) {
-    const empty = document.createElement("div");
-    empty.hidden = true;
-    return empty;
+    throw new Error("Puzzle3 component assets are unavailable.");
   }
   const sceneName = scope.__sceneDef?.name || scope.__sceneLayer?.name || currentState?.currentScene || currentState?.screen || "playing";
   const source = component.source || "board";
@@ -1299,13 +1330,22 @@ function renderPuzzle3Frame(component, scope = {}) {
     const fixture = puzzle3FrameFixture(sceneName, source);
     const controller = window.Puzzle3Component.attach(canvas, {
       screenView: root,
-      fixture,
+      snapshot: fixture,
       scene: sceneName,
       component,
+      onError(failure) {
+        reportPuzzle3ComponentError(failure);
+      },
       onInput(input) {
+        if (puzzle3PreviewSurface && !standaloneRuntime?.editorPreviewInputEnabled) {
+          throw new Error("Visual-only Puzzle3 preview does not accept session input.");
+        }
         return sendModelInput(input);
       },
       onCommand(action) {
+        if (puzzle3PreviewSurface && !standaloneRuntime?.editorPreviewInputEnabled) {
+          throw new Error("Visual-only Puzzle3 preview does not accept session commands.");
+        }
         if (action.kind === "goto_level" || action.kind === "goto") {
           return sendCommand(`${source}.goto ${String(action.level ?? "")}`.trim());
         }
@@ -1313,6 +1353,12 @@ function renderPuzzle3Frame(component, scope = {}) {
       },
     });
     entry = { root, canvas, controller, levelIndex: null };
+    Promise.resolve(controller.ready).then(() => {
+      window.PuzzleStudioPreviewRuntimeFailure = null;
+      if (shouldPostPuzzle3ComponentMessages()) {
+        window.parent.postMessage({ type: "PuzzleStudioPreviewRuntimeReady" }, "*");
+      }
+    }).catch(() => {});
     if (shouldPostPuzzle3ComponentMessages()) {
       controller.onView?.((view) => {
         window.parent?.postMessage({
@@ -1338,22 +1384,60 @@ function renderPuzzle3Frame(component, scope = {}) {
   return entry.root;
 }
 
+function reportPuzzle3ComponentError(failure = {}) {
+  const error = failure.error;
+  const detail = {
+    label: String(failure.label || "render failed"),
+    name: String(error?.name || "Error"),
+    message: String(failure.message || error?.message || error || "unknown error"),
+    stack: String(error?.stack || ""),
+  };
+  window.PuzzleStudioPreviewRuntimeFailure = detail;
+  if (shouldPostPuzzle3ComponentMessages()) {
+    window.parent.postMessage({
+      type: "PuzzleStudioPreviewRuntimeError",
+      ...detail,
+    }, "*");
+  }
+}
+
 function puzzle3FrameFixture(sceneName, source = "board") {
   const sessionSnapshot = currentState?.scenePuzzleState?.[source];
   if (sessionSnapshot && typeof sessionSnapshot === "object") {
-    return JSON.parse(JSON.stringify(sessionSnapshot));
+    return mergePuzzle3SessionSnapshot(window.Puzzle3DFrameFixture, sessionSnapshot);
   }
-  const fixture = JSON.parse(JSON.stringify(window.Puzzle3DFrameFixture || {}));
+  const fixture = JSON.parse(JSON.stringify(window.Puzzle3DFrameFixture));
   if (puzzle3PreviewSurface) {
     return puzzle3PreviewSurfaceFixture(fixture, sceneName);
   }
-  fixture.currentScene = sceneName || fixture.currentScene || fixture.scenes?.[0]?.name || "playing";
-  if (Number.isInteger(currentState?.levelIndex)) {
-    fixture.levelIndex = currentState.levelIndex;
-  } else if (Number.isInteger(currentState?.selectedLevelIndex)) {
-    fixture.levelIndex = currentState.selectedLevelIndex;
+  throw new Error(`Puzzle3 session snapshot is missing for component source: ${source}`);
+}
+
+function mergePuzzle3SessionSnapshot(fixture, sessionSnapshot) {
+  if (!fixture || typeof fixture !== "object") {
+    throw new Error("Puzzle3 frame fixture is unavailable.");
   }
-  return fixture;
+  const objectById = new Map(
+    Object.values(fixture.objects || {}).map((object) => [Number(object.id), object]),
+  );
+  const cells = (sessionSnapshot.cells || []).map((cell) => ({
+    ...cell,
+    objects: (cell.objects || []).map((reference) => {
+      const object = objectById.get(Number(reference.id));
+      if (!object) {
+        throw new Error(`Puzzle3 session references unknown object id: ${reference.id}`);
+      }
+      return {
+        ...object,
+        layer: Number.isInteger(Number(reference.layer)) ? Number(reference.layer) : object.layer,
+      };
+    }),
+  }));
+  return {
+    ...fixture,
+    ...sessionSnapshot,
+    cells,
+  };
 }
 
 function normalizePuzzle3PreviewSurface(update = null) {
@@ -1390,23 +1474,6 @@ function legacyPuzzle3LevelPreviewPayload(update = {}) {
   };
 }
 
-function puzzle3PreviewSurfaceControllerUpdate(surface = puzzle3PreviewSurface) {
-  if (!surface) {
-    return {};
-  }
-  const payload = surface.payload || {};
-  return {
-    levelIndex: payload.levelIndex,
-    level: payload.level,
-    resources: payload.resources,
-    camera: payload.camera,
-    view: payload.view,
-    settings: payload.settings || {},
-    component: surface.component,
-    componentEmbed: true,
-  };
-}
-
 function setPuzzle3PreviewSurface(update = null) {
   puzzle3PreviewSurface = normalizePuzzle3PreviewSurface(update);
   const embed = effectiveComponentEmbedMode();
@@ -1423,9 +1490,12 @@ function applyPuzzleStudioPreviewSurfaceUpdate(update = null) {
     return false;
   }
   setPuzzle3PreviewSurface(update);
-  const controllerUpdate = puzzle3PreviewSurfaceControllerUpdate(surface);
+  const snapshot = puzzle3PreviewSurfaceFixture(
+    JSON.parse(JSON.stringify(window.Puzzle3DFrameFixture)),
+    surface.sceneName,
+  );
   for (const entry of puzzle3Controllers.values()) {
-    entry.controller?.update?.(controllerUpdate);
+    entry.controller?.replaceSnapshot(snapshot);
   }
   return true;
 }
@@ -1443,7 +1513,10 @@ function shouldPostPuzzle3ComponentMessages() {
 function puzzle3PreviewSurfaceFixture(source, sceneName) {
   const surface = puzzle3PreviewSurface || {};
   const payload = surface.payload || {};
-  const next = JSON.parse(JSON.stringify(source || {}));
+  if (!source || typeof source !== "object" || Array.isArray(source)) {
+    throw new Error("Puzzle3 visual preview requires a view template.");
+  }
+  const next = JSON.parse(JSON.stringify(source));
   const resources = payload.resources || {};
   if (resources.layerCount != null) {
     next.layerCount = Math.max(1, Math.trunc(Number(resources.layerCount) || 1));
@@ -1455,8 +1528,18 @@ function puzzle3PreviewSurfaceFixture(source, sceneName) {
     next.sprites = JSON.parse(JSON.stringify(resources.sprites));
   }
   const level = payload.level || {};
-  const size = level.size || payload.size || next.size || {};
-  const cells = Array.isArray(level.cells) ? level.cells : Array.isArray(payload.cells) ? payload.cells : next.cells || [];
+  const size = level.size || payload.size;
+  if (!size || typeof size !== "object" || Array.isArray(size)) {
+    throw new Error("Puzzle3 visual preview update is missing level size.");
+  }
+  const cells = Array.isArray(level.cells)
+    ? level.cells
+    : Array.isArray(payload.cells)
+      ? payload.cells
+      : null;
+  if (!cells) {
+    throw new Error("Puzzle3 visual preview update is missing level cells.");
+  }
   const rawLevelIndex = payload.levelIndex ?? next.levelIndex ?? 0;
   const levels = Array.isArray(next.levels) && next.levels.length ? next.levels : [{}];
   const levelIndex = Math.max(0, Math.min(levels.length - 1, Math.trunc(Number(rawLevelIndex) || 0)));
@@ -1473,7 +1556,10 @@ function puzzle3PreviewSurfaceFixture(source, sceneName) {
   next.size = { ...size };
   next.cells = JSON.parse(JSON.stringify(cells));
   if (payload.camera) {
-    next.camera = JSON.parse(JSON.stringify(payload.camera));
+    next.render.camera = JSON.parse(JSON.stringify({
+      ...payload.camera,
+      zoom: payload.camera.zoom ?? payload.view?.zoom,
+    }));
   }
   if (payload.view) {
     const view = payload.view || {};
@@ -1483,7 +1569,14 @@ function puzzle3PreviewSurfaceFixture(source, sceneName) {
     }));
   }
   if (payload.settings) {
-    next.settings = { ...(next.settings || {}), ...JSON.parse(JSON.stringify(payload.settings)) };
+    const settings = JSON.parse(JSON.stringify(payload.settings));
+    next.render = { ...next.render, ...settings };
+    if (next.render.grid || settings.grid) {
+      next.render.grid = {
+        ...(typeof next.render.grid === "object" && next.render.grid ? next.render.grid : {}),
+        ...(typeof settings.grid === "object" && settings.grid ? settings.grid : {}),
+      };
+    }
   }
   const previewSceneName = sceneName || surface.sceneName || "__editor_model_preview__";
   next.scenes = [{
@@ -1502,19 +1595,10 @@ function syncPuzzle3ComponentLevel(entry) {
   if (puzzle3PreviewSurface) {
     return;
   }
-  if (standaloneRuntime) {
-    const sceneName = entry.root.dataset.scene;
-    const source = entry.root.dataset.source || "board";
-    const sessionSnapshot = puzzle3FrameFixture(sceneName, source);
-    entry.controller.replaceSnapshot(sessionSnapshot);
-    return;
-  }
   const sceneName = entry.root.dataset.scene;
   const source = entry.root.dataset.source || "board";
-  const sessionSnapshot = currentState?.scenePuzzleState?.[source];
-  if (sessionSnapshot && typeof sessionSnapshot === "object") {
-    entry.controller.replaceSnapshot(sessionSnapshot);
-  }
+  const snapshot = puzzle3FrameFixture(sceneName, source);
+  entry.controller.replaceSnapshot(snapshot);
 }
 
 function schedulePuzzle3ComponentConnectedResize(entry) {
@@ -2561,7 +2645,33 @@ function dispatchNextPresentationEvent() {
     }
   }
   dispatchingPresentationEvents = false;
+  if (pendingSessionResume) {
+    resumePendingSessionTurn();
+    return;
+  }
   drainQueuedModelInput();
+}
+
+async function resumePendingSessionTurn() {
+  if (resumingSession) {
+    return;
+  }
+  pendingSessionResume = false;
+  resumingSession = true;
+  if (currentState) {
+    currentState.busy = true;
+  }
+  try {
+    render(await requestJson("/api/resume", { method: "POST" }));
+  } catch (error) {
+    if (currentState) {
+      currentState.busy = false;
+    }
+    showError(error);
+  } finally {
+    resumingSession = false;
+    drainQueuedModelInput();
+  }
 }
 
 function samePresentationContext(left, right) {
@@ -2598,6 +2708,7 @@ function startPresentationWait(event) {
     startedAt: 0,
     timeoutId: 0,
     done: false,
+    resumesSession: sessionWaiting,
     fastForwardRequested: Boolean(
       pendingModelInput && config.queueDuringWait && config.fastForwardWait
     ),
@@ -2610,8 +2721,9 @@ function startPresentationWait(event) {
     waitTimer.done = true;
     activeWaitTimers.delete(waitTimer);
     clientPendingWaits = Math.max(0, clientPendingWaits - 1);
+    pendingSessionResume = pendingSessionResume || waitTimer.resumesSession;
     if (currentState) {
-      currentState.busy = clientPendingWaits > 0;
+      currentState.busy = clientPendingWaits > 0 || pendingSessionResume;
     }
     dispatchNextPresentationEvent();
   };
@@ -3433,7 +3545,7 @@ async function postStudioPreviewDebugInput(input) {
     if (!standaloneRuntime) {
       throw new Error("Debug input requires the embedded WASM game runtime.");
     }
-    const response = await requestJson(`/api/debug/input/${encodeURIComponent(input)}`, { method: "POST" });
+    const response = standaloneRuntime.applyDebugInputName(input);
     const snapshot = response?.snapshot;
     if (!snapshot) {
       throw new Error("Debug input response did not include a snapshot.");
@@ -3539,7 +3651,7 @@ window.addEventListener("message", async (event) => {
           render(snapshot);
         }
       }
-      const solution = await solveStandaloneCurrentState(event.data.options || {});
+      const solution = await solveStandaloneCurrentState(event.data.options || {}, solveRequest);
       window.parent.postMessage({
         type: "PuzzleStudioSolveResult",
         requestId,

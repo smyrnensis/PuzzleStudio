@@ -170,7 +170,7 @@ fn route(request: &HttpRequest, state: Arc<Mutex<ServerState>>) -> String {
         }
         #[cfg(feature = "solver")]
         ("POST", "/api/solve") => {
-            let state = state.lock().expect("server state poisoned");
+            let mut state = state.lock().expect("server state poisoned");
             match state.solve_json() {
                 Ok(body) => http_ok("application/json; charset=utf-8", &body),
                 Err(error) => http_error(400, &error.to_string()),
@@ -191,6 +191,7 @@ fn session_action_from_http(
     use puzzle_runtime_contract::SessionAction;
     match (method, path) {
         ("GET", "/api/state") => Ok(SessionAction::Snapshot),
+        ("POST", "/api/resume") => Ok(SessionAction::Resume),
         ("POST", "/api/command/undo") => Ok(SessionAction::Undo),
         ("POST", "/api/command/redo") => Ok(SessionAction::Redo),
         ("POST", "/api/command/restart") => Ok(SessionAction::Restart),
@@ -199,37 +200,41 @@ fn session_action_from_http(
         }
         ("POST", "/api/command/previous_level") => Ok(SessionAction::PreviousLevel),
         ("POST", path) if path.starts_with("/api/debug/input/") => Ok(SessionAction::DebugInput {
-            name: percent_decode(&path["/api/debug/input/".len()..]),
+            name: percent_decode(&path["/api/debug/input/".len()..])?,
         }),
         ("POST", path) if path.starts_with("/api/input/") => Ok(SessionAction::Input {
-            name: percent_decode(&path["/api/input/".len()..]),
+            name: percent_decode(&path["/api/input/".len()..])?,
         }),
         ("POST", path) if path.starts_with("/api/command/") => Ok(SessionAction::Command {
-            name: percent_decode(&path["/api/command/".len()..]),
+            name: percent_decode(&path["/api/command/".len()..])?,
         }),
         _ => Err(format!("unsupported session request: {method} {path}")),
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn percent_decode(value: &str) -> String {
+fn percent_decode(value: &str) -> Result<String, String> {
     let bytes = value.as_bytes();
     let mut decoded = Vec::with_capacity(bytes.len());
     let mut index = 0;
     while index < bytes.len() {
-        if bytes[index] == b'%' && index + 2 < bytes.len() {
-            if let Ok(hex) = std::str::from_utf8(&bytes[index + 1..index + 3]) {
-                if let Ok(byte) = u8::from_str_radix(hex, 16) {
-                    decoded.push(byte);
-                    index += 3;
-                    continue;
-                }
-            }
+        if bytes[index] == b'%' {
+            let hex = bytes
+                .get(index + 1..index + 3)
+                .ok_or_else(|| format!("invalid percent encoding in session path: {value}"))?;
+            let hex = std::str::from_utf8(hex)
+                .map_err(|_| format!("invalid percent encoding in session path: {value}"))?;
+            let byte = u8::from_str_radix(hex, 16)
+                .map_err(|_| format!("invalid percent encoding in session path: {value}"))?;
+            decoded.push(byte);
+            index += 3;
+            continue;
         }
         decoded.push(bytes[index]);
         index += 1;
     }
-    String::from_utf8_lossy(&decoded).into_owned()
+    String::from_utf8(decoded)
+        .map_err(|_| format!("session path is not valid UTF-8 after percent decoding: {value}"))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -238,10 +243,32 @@ fn handle_session_action(
     action: puzzle_runtime_contract::SessionAction,
 ) -> String {
     use puzzle_runtime_contract::SessionAction;
+    if !matches!(&action, SessionAction::Snapshot | SessionAction::Resume)
+        && state
+            .lock()
+            .expect("server state poisoned")
+            .session
+            .is_waiting()
+    {
+        return http_error(409, "session action is unavailable while a turn is waiting");
+    }
     match action {
         SessionAction::Snapshot => {
             let mut state = state.lock().expect("server state poisoned");
             http_ok("application/json; charset=utf-8", &state.snapshot_json())
+        }
+        SessionAction::Resume => {
+            let mut state = state.lock().expect("server state poisoned");
+            let result = {
+                let ServerState {
+                    session, loaded, ..
+                } = &mut *state;
+                session.resume_wait(loaded)
+            };
+            match result {
+                Ok(()) => http_ok("application/json; charset=utf-8", &state.snapshot_json()),
+                Err(error) => http_error(409, &format!("{error:?}")),
+            }
         }
         SessionAction::Undo => {
             mutate(state, |state| state.session.undo(&state.loaded))
@@ -320,349 +347,6 @@ fn input_id_by_name(loaded: &LoadedGame, input_name: &str) -> Option<InputId> {
         .find_map(|(id, label)| (label == input_name).then_some(*id))
 }
 
-#[cfg(feature = "solver")]
-fn solver_inputs_for_program(loaded: &LoadedGame, program: &[RuleStep]) -> Vec<InputId> {
-    let mut inputs = BTreeSet::new();
-    collect_solver_inputs(program, &mut inputs);
-
-    let mut inputs = if inputs.is_empty() {
-        loaded.input_labels.keys().copied().collect::<Vec<_>>()
-    } else {
-        inputs.into_iter().collect()
-    };
-    inputs.retain(|input| {
-        loaded
-            .input_labels
-            .get(input)
-            .is_none_or(|name| !is_solver_control_input(name))
-    });
-    inputs.sort();
-    inputs
-}
-
-#[cfg(feature = "solver")]
-fn collect_solver_inputs(program: &[RuleStep], inputs: &mut BTreeSet<InputId>) {
-    for step in program {
-        match step {
-            RuleStep::Rule(rule) => {
-                for guard in &rule.guards {
-                    collect_solver_inputs_from_guard(guard, inputs);
-                }
-            }
-            RuleStep::ConditionalBlock { condition, steps } => {
-                collect_solver_inputs_from_condition(condition, inputs);
-                collect_solver_inputs(steps, inputs);
-            }
-            RuleStep::ConditionalBranch {
-                condition,
-                then_steps,
-                else_steps,
-            } => {
-                collect_solver_inputs_from_condition(condition, inputs);
-                collect_solver_inputs(then_steps, inputs);
-                collect_solver_inputs(else_steps, inputs);
-            }
-            RuleStep::Block {
-                stop_condition,
-                steps,
-                ..
-            } => {
-                if let Some(condition) = stop_condition {
-                    collect_solver_inputs_from_condition(condition, inputs);
-                }
-                collect_solver_inputs(steps, inputs);
-            }
-            RuleStep::LocalFrame { steps, .. } => collect_solver_inputs(steps, inputs),
-            RuleStep::AfterTriggered { steps, then_steps } => {
-                collect_solver_inputs(steps, inputs);
-                collect_solver_inputs(then_steps, inputs);
-            }
-        }
-    }
-}
-
-#[cfg(feature = "solver")]
-fn collect_solver_inputs_from_condition(condition: &RuleCondition, inputs: &mut BTreeSet<InputId>) {
-    match condition {
-        RuleCondition::AnyInputMatches(matches) | RuleCondition::NoInputMatches(matches) => {
-            for (input, _) in matches {
-                inputs.insert(*input);
-            }
-        }
-        RuleCondition::GuardBranches(branches) => {
-            for branch in branches {
-                for guard in branch {
-                    collect_solver_inputs_from_guard(guard, inputs);
-                }
-            }
-        }
-        RuleCondition::AnyMatches(_) | RuleCondition::NoMatches(_) => {}
-    }
-}
-
-#[cfg(feature = "solver")]
-fn collect_solver_inputs_from_guard(guard: &Guard, inputs: &mut BTreeSet<InputId>) {
-    if let Guard::InputIs(input) = guard {
-        inputs.insert(*input);
-    }
-}
-
-#[cfg(feature = "solver")]
-fn is_solver_control_input(name: &str) -> bool {
-    matches!(name, "undo" | "restart" | "next_level" | "previous_level")
-}
-
-#[cfg(feature = "solver")]
-fn solver_inputs_for_grid_model<const D: usize>(
-    inputs: &[puzzle_core::GridInput<D>],
-) -> Vec<InputId> {
-    let mut inputs = inputs
-        .iter()
-        .filter(|input| !is_solver_control_input(&input.name))
-        .map(|input| input.id)
-        .collect::<Vec<_>>();
-    inputs.sort();
-    inputs
-}
-
-#[cfg(feature = "solver")]
-fn push_solution_moves(out: &mut String, loaded: &LoadedGame, inputs: &[InputId]) {
-    out.push_str("\"moves\":[");
-    for (index, input) in inputs.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        push_input_move(out, loaded, *input);
-    }
-    out.push(']');
-}
-
-#[cfg(feature = "solver")]
-fn push_solution_steps(out: &mut String, loaded: &LoadedGame, steps: &[PuzzleSolutionStep]) {
-    out.push_str("\"steps\":[");
-    for (index, step) in steps.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        out.push('{');
-        push_json_number(out, "index", step.index as u64);
-        out.push(',');
-        if let Some(input) = step.input {
-            out.push_str("\"move\":");
-            push_input_move(out, loaded, input);
-        } else {
-            out.push_str("\"move\":null");
-        }
-        out.push(',');
-        push_scene(out, loaded, &step.state, None, None);
-        out.push('}');
-    }
-    out.push(']');
-}
-
-#[cfg(feature = "solver")]
-fn push_solution_moves3(out: &mut String, model: &LoadedGridGame<3, Size3>, inputs: &[InputId]) {
-    out.push_str("\"moves\":[");
-    for (index, input) in inputs.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        push_input_move3(out, model, *input);
-    }
-    out.push(']');
-}
-
-#[cfg(feature = "solver")]
-fn push_spatial_solution_steps(
-    out: &mut String,
-    model: &LoadedGridGame<3, Size3>,
-    steps: &[GridSolutionStep<3, Size3>],
-) {
-    out.push_str("\"steps\":[");
-    for (index, step) in steps.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        out.push('{');
-        push_json_number(out, "index", step.index as u64);
-        out.push(',');
-        if let Some(input) = step.input {
-            out.push_str("\"move\":");
-            push_input_move3(out, model, input);
-        } else {
-            out.push_str("\"move\":null");
-        }
-        out.push(',');
-        push_state3_scene(out, model, &step.state);
-        out.push('}');
-    }
-    out.push(']');
-}
-
-fn push_input_move(out: &mut String, loaded: &LoadedGame, input: InputId) {
-    out.push('{');
-    let name = loaded
-        .input_labels
-        .get(&input)
-        .map(String::as_str)
-        .unwrap_or_else(|| panic!("compiled input {} is missing its required label", input.0));
-    push_json_pair(out, "name", name);
-    out.push(',');
-    if let Some(key) = key_for_input(loaded, input) {
-        push_json_pair(out, "key", &key);
-    } else {
-        out.push_str("\"key\":null");
-    }
-    out.push(',');
-    if let Some(arrow) = arrow_for_input(loaded, input) {
-        push_json_pair(out, "arrow", &arrow);
-    } else {
-        out.push_str("\"arrow\":null");
-    }
-    out.push('}');
-}
-
-fn push_input_move3(out: &mut String, model: &LoadedGridGame<3, Size3>, input: InputId) {
-    out.push('{');
-    let input_def = model.inputs.iter().find(|candidate| candidate.id == input);
-    let name = input_def
-        .map(|input| input.name.as_str())
-        .unwrap_or_else(|| panic!("compiled 3D input {} is missing its definition", input.0));
-    push_json_pair(out, "name", name);
-    out.push(',');
-    out.push_str("\"key\":null");
-    out.push(',');
-    out.push_str("\"arrow\":null");
-    out.push(',');
-    if let Some(direction) = input_def.and_then(|input| input.direction) {
-        push_json_pair(
-            out,
-            "direction",
-            spatial_input_direction_name(direction.axes()),
-        );
-    } else {
-        out.push_str("\"direction\":null");
-    }
-    out.push('}');
-}
-
-fn spatial_input_direction_name(axes: [i16; 3]) -> &'static str {
-    match axes {
-        [0, 0, 1] => "up",
-        [0, 0, -1] => "down",
-        [-1, 0, 0] => "left",
-        [1, 0, 0] => "right",
-        [0, 1, 0] => "front",
-        [0, -1, 0] => "back",
-        _ => panic!("compiled spatial input has a non-cardinal direction: {axes:?}"),
-    }
-}
-
-fn push_state3_scene(
-    out: &mut String,
-    model: &LoadedGridGame<3, Size3>,
-    state: &GridState<3, Size3>,
-) {
-    out.push_str("\"scene\":{");
-    push_json_pair(out, "kind", "puzzle3d");
-    out.push(',');
-    push_size3(out, state.size);
-    out.push(',');
-    push_json_number(out, "layerCount", state.layer_count as u64);
-    out.push(',');
-    out.push_str("\"cells\":[");
-    let mut first = true;
-    for z in 0..state.size.height {
-        for y in 0..state.size.depth {
-            for x in 0..state.size.width {
-                let position = Coord3 { x, y, z };
-                let Ok(view) = state.cell_view_at(position) else {
-                    continue;
-                };
-                if view.objects.is_empty() {
-                    continue;
-                }
-                if !first {
-                    out.push(',');
-                }
-                first = false;
-                out.push('{');
-                push_coord3(out, position);
-                out.push(',');
-                out.push_str("\"objects\":[");
-                for (object_index, object) in view.objects.iter().enumerate() {
-                    if object_index > 0 {
-                        out.push(',');
-                    }
-                    push_object3(out, model, *object);
-                }
-                out.push_str("]}");
-            }
-        }
-    }
-    out.push_str("]}");
-}
-
-fn push_size3(out: &mut String, size: Size3) {
-    out.push_str("\"size\":{");
-    push_json_number(out, "width", size.width as u64);
-    out.push(',');
-    push_json_number(out, "depth", size.depth as u64);
-    out.push(',');
-    push_json_number(out, "height", size.height as u64);
-    out.push('}');
-}
-
-fn push_coord3(out: &mut String, position: Coord3) {
-    out.push_str("\"position\":{");
-    push_json_number(out, "x", position.x as u64);
-    out.push(',');
-    push_json_number(out, "y", position.y as u64);
-    out.push(',');
-    push_json_number(out, "z", position.z as u64);
-    out.push('}');
-}
-
-fn push_object3(out: &mut String, model: &LoadedGridGame<3, Size3>, object: ObjectId) {
-    out.push('{');
-    push_json_number(out, "id", object.0 as u64);
-    out.push(',');
-    let name = model
-        .object_labels
-        .get(&object)
-        .map(String::as_str)
-        .unwrap_or_else(|| {
-            panic!(
-                "compiled 3D object {} is missing its required label",
-                object.0
-            )
-        });
-    push_json_pair(out, "name", name);
-    out.push(',');
-    if let Some(layer) = model.game.object_layer(object) {
-        push_json_number(out, "layer", layer.0 as u64);
-    } else {
-        out.push_str("\"layer\":null");
-    }
-    out.push(',');
-    push_json_pair(out, "sprite", name);
-    out.push('}');
-}
-
-#[cfg(feature = "solver")]
-fn push_search_stats(out: &mut String, stats: &puzzle_solver::SearchStats) {
-    out.push_str("\"stats\":{");
-    push_json_number(out, "visited", stats.visited as u64);
-    out.push(',');
-    push_json_number(out, "expanded", stats.expanded as u64);
-    out.push(',');
-    push_json_number(out, "frontier", stats.frontier as u64);
-    out.push(',');
-    push_json_number(out, "maxDepthReached", stats.max_depth_reached as u64);
-    out.push(',');
-    push_json_number(out, "elapsedMs", stats.elapsed.as_millis() as u64);
-    out.push('}');
-}
 
 fn push_session_state(out: &mut String, loaded: &LoadedGame, session: &GameSession) {
     out.push_str("\"gameState\":{");

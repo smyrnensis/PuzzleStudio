@@ -28,13 +28,17 @@ pub use grid_transition::{
     TransitionCommand, count_pattern_matches, eval_condition_kind, flattened_rules,
     has_pattern_match, transition_outcome, transition_program,
     transition_program_continuation_segment_trace, transition_program_outcome,
-    transition_program_segment_trace, transition_program_sequence_without_input_outcome,
+    transition_program_segment_trace, transition_program_sequence_outcome,
+    transition_program_sequence_summary_outcome, transition_program_sequence_without_input_outcome,
     transition_program_sequence_without_input_summary_outcome, transition_program_summary_outcome,
     transition_program_without_input_summary_outcome, transition_solver_outcome,
     transition_solver_state, transition_state, transition_trace,
 };
 pub use ids::{ConditionId, InputId, LayerId, MarkId, ObjectId, RuleId, VariableId};
-pub use model::{GridInput, GridLevel, GridLevelBundle, GridLevelBundleError};
+pub use model::{
+    GridInput, GridLevel, GridLevelBundle, GridLevelBundleError, GridProgramCatalog,
+    GridProgramRef, GridProgramSequence,
+};
 pub use patch::{GridPatch, GridPatchError, Patch, PatchError, PatchOp};
 pub use puzzle_kernel::GridCoord;
 pub use state::{

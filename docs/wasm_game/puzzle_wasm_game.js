@@ -1,141 +1,5 @@
 /* @ts-self-types="./puzzle_wasm_game.d.ts" */
 
-export class WasmPuzzle3Runtime {
-    static __wrap(ptr) {
-        const obj = Object.create(WasmPuzzle3Runtime.prototype);
-        obj.__wbg_ptr = ptr;
-        WasmPuzzle3RuntimeFinalization.register(obj, obj.__wbg_ptr, obj);
-        return obj;
-    }
-    __destroy_into_raw() {
-        const ptr = this.__wbg_ptr;
-        this.__wbg_ptr = 0;
-        WasmPuzzle3RuntimeFinalization.unregister(this);
-        return ptr;
-    }
-    free() {
-        const ptr = this.__destroy_into_raw();
-        wasm.__wbg_wasmpuzzle3runtime_free(ptr, 0);
-    }
-    /**
-     * @returns {string}
-     */
-    current_cells() {
-        let deferred2_0;
-        let deferred2_1;
-        try {
-            const ret = wasm.wasmpuzzle3runtime_current_cells(this.__wbg_ptr);
-            var ptr1 = ret[0];
-            var len1 = ret[1];
-            if (ret[3]) {
-                ptr1 = 0; len1 = 0;
-                throw takeFromExternrefTable0(ret[2]);
-            }
-            deferred2_0 = ptr1;
-            deferred2_1 = len1;
-            return getStringFromWasm0(ptr1, len1);
-        } finally {
-            wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
-        }
-    }
-    /**
-     * @param {string} fixture_json
-     * @returns {WasmPuzzle3Runtime}
-     */
-    static fromFixture(fixture_json) {
-        const ptr0 = passStringToWasm0(fixture_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.wasmpuzzle3runtime_fromFixture(ptr0, len0);
-        if (ret[2]) {
-            throw takeFromExternrefTable0(ret[1]);
-        }
-        return WasmPuzzle3Runtime.__wrap(ret[0]);
-    }
-    /**
-     * @returns {boolean}
-     */
-    is_current_complete() {
-        const ret = wasm.wasmpuzzle3runtime_is_current_complete(this.__wbg_ptr);
-        if (ret[2]) {
-            throw takeFromExternrefTable0(ret[1]);
-        }
-        return ret[0] !== 0;
-    }
-    /**
-     * @param {string} source
-     * @param {string} puzzle_path
-     */
-    constructor(source, puzzle_path) {
-        const ptr0 = passStringToWasm0(source, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ptr1 = passStringToWasm0(puzzle_path, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len1 = WASM_VECTOR_LEN;
-        const ret = wasm.wasmpuzzle3runtime_new(ptr0, len0, ptr1, len1);
-        if (ret[2]) {
-            throw takeFromExternrefTable0(ret[1]);
-        }
-        this.__wbg_ptr = ret[0];
-        WasmPuzzle3RuntimeFinalization.register(this, this.__wbg_ptr, this);
-        return this;
-    }
-    /**
-     * @param {number} handle
-     */
-    restore_saved_state(handle) {
-        const ret = wasm.wasmpuzzle3runtime_restore_saved_state(this.__wbg_ptr, handle);
-        if (ret[1]) {
-            throw takeFromExternrefTable0(ret[0]);
-        }
-    }
-    /**
-     * @returns {number}
-     */
-    save_current_state() {
-        const ret = wasm.wasmpuzzle3runtime_save_current_state(this.__wbg_ptr);
-        if (ret[2]) {
-            throw takeFromExternrefTable0(ret[1]);
-        }
-        return ret[0] >>> 0;
-    }
-    /**
-     * @param {string} state_json
-     */
-    set_state(state_json) {
-        const ptr0 = passStringToWasm0(state_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.wasmpuzzle3runtime_set_state(this.__wbg_ptr, ptr0, len0);
-        if (ret[1]) {
-            throw takeFromExternrefTable0(ret[0]);
-        }
-    }
-    /**
-     * @param {string} program_key
-     * @param {number} input
-     * @returns {string}
-     */
-    transition_current_outcome(program_key, input) {
-        let deferred3_0;
-        let deferred3_1;
-        try {
-            const ptr0 = passStringToWasm0(program_key, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-            const len0 = WASM_VECTOR_LEN;
-            const ret = wasm.wasmpuzzle3runtime_transition_current_outcome(this.__wbg_ptr, ptr0, len0, input);
-            var ptr2 = ret[0];
-            var len2 = ret[1];
-            if (ret[3]) {
-                ptr2 = 0; len2 = 0;
-                throw takeFromExternrefTable0(ret[2]);
-            }
-            deferred3_0 = ptr2;
-            deferred3_1 = len2;
-            return getStringFromWasm0(ptr2, len2);
-        } finally {
-            wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
-        }
-    }
-}
-if (Symbol.dispose) WasmPuzzle3Runtime.prototype[Symbol.dispose] = WasmPuzzle3Runtime.prototype.free;
-
 export class WasmStandaloneSession {
     static __wrap(ptr) {
         const obj = Object.create(WasmStandaloneSession.prototype);
@@ -177,6 +41,30 @@ export class WasmStandaloneSession {
     }
     clear_progress_save() {
         wasm.wasmstandalonesession_clear_progress_save(this.__wbg_ptr);
+    }
+    /**
+     * @param {string} action_json
+     * @returns {string}
+     */
+    dispatch(action_json) {
+        let deferred3_0;
+        let deferred3_1;
+        try {
+            const ptr0 = passStringToWasm0(action_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ret = wasm.wasmstandalonesession_dispatch(this.__wbg_ptr, ptr0, len0);
+            var ptr2 = ret[0];
+            var len2 = ret[1];
+            if (ret[3]) {
+                ptr2 = 0; len2 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred3_0 = ptr2;
+            deferred3_1 = len2;
+            return getStringFromWasm0(ptr2, len2);
+        } finally {
+            wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+        }
     }
     /**
      * @param {string} export_json
@@ -224,33 +112,6 @@ export class WasmStandaloneSession {
             return getStringFromWasm0(ret[0], ret[1]);
         } finally {
             wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
-        }
-    }
-    /**
-     * @param {string} method
-     * @param {string} url
-     * @returns {string}
-     */
-    request_json(method, url) {
-        let deferred4_0;
-        let deferred4_1;
-        try {
-            const ptr0 = passStringToWasm0(method, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-            const len0 = WASM_VECTOR_LEN;
-            const ptr1 = passStringToWasm0(url, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-            const len1 = WASM_VECTOR_LEN;
-            const ret = wasm.wasmstandalonesession_request_json(this.__wbg_ptr, ptr0, len0, ptr1, len1);
-            var ptr3 = ret[0];
-            var len3 = ret[1];
-            if (ret[3]) {
-                ptr3 = 0; len3 = 0;
-                throw takeFromExternrefTable0(ret[2]);
-            }
-            deferred4_0 = ptr3;
-            deferred4_1 = len3;
-            return getStringFromWasm0(ptr3, len3);
-        } finally {
-            wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
         }
     }
     /**
@@ -321,9 +182,6 @@ function __wbg_get_imports() {
     };
 }
 
-const WasmPuzzle3RuntimeFinalization = (typeof FinalizationRegistry === 'undefined')
-    ? { register: () => {}, unregister: () => {} }
-    : new FinalizationRegistry(ptr => wasm.__wbg_wasmpuzzle3runtime_free(ptr, 1));
 const WasmStandaloneSessionFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_wasmstandalonesession_free(ptr, 1));

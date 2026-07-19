@@ -31,8 +31,8 @@ cargo run -p html-editor -- games/spec_2d.puzzle --serve
 ```
 
 `tools/generate_web_editor.sh <path> -o docs/index.html` writes the Pages HTML
-entry and copies the static JS, CSS, editor WASM, core runtime WASM, and game
-runtime WASM assets beside it. If Rust/WASM changes are meant to appear there,
+entry and copies the static JS, CSS, editor WASM, and game runtime WASM assets
+beside it. If Rust/WASM changes are meant to appear there,
 rebuild the generated WASM artifacts explicitly before generating the Pages site.
 Do not add a portable single-file HTML release path or a compatibility alias for
 the removed root artifact.

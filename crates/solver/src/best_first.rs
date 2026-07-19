@@ -507,7 +507,7 @@ pub struct ResumableSearchLimits {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ResumableSearchAllowance {
     pub max_expanded_nodes: usize,
-    pub max_duration: Duration,
+    pub max_duration: Option<Duration>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -663,26 +663,53 @@ where
         &mut self,
         domain: &mut D,
         allowance: ResumableSearchAllowance,
-        mut score: F,
+        score: F,
     ) -> ResumableAdvanceOutcome<Action, D::Error>
     where
         D: SearchDomain<State = State, Action = Action, Key = Key>,
         F: FnMut(&State) -> i64,
+    {
+        self.advance_with_dead_states(domain, allowance, score, |_| false)
+    }
+
+    pub fn advance_with_dead_states<D, F, IsDead>(
+        &mut self,
+        domain: &mut D,
+        allowance: ResumableSearchAllowance,
+        mut score: F,
+        mut is_dead: IsDead,
+    ) -> ResumableAdvanceOutcome<Action, D::Error>
+    where
+        D: SearchDomain<State = State, Action = Action, Key = Key>,
+        F: FnMut(&State) -> i64,
+        IsDead: FnMut(&State) -> bool,
     {
         assert!(
             matches!(self.status, ResumableSearchStatus::Active),
             "terminal resumable search must not be advanced"
         );
         assert!(allowance.max_expanded_nodes > 0);
-        assert!(!allowance.max_duration.is_zero());
+        assert!(
+            allowance
+                .max_duration
+                .is_none_or(|duration| !duration.is_zero())
+        );
 
-        let started_at = Instant::now();
+        let started_at = allowance.max_duration.map(|_| Instant::now());
         let expanded_before = self.expanded;
         if !self.initial_goal_checked {
             self.initial_goal_checked = true;
+            if is_dead(&self.nodes[0].state) {
+                self.status = ResumableSearchStatus::Exhausted;
+                self.frontier.clear();
+                self.elapsed += resumable_elapsed(started_at);
+                return ResumableAdvanceOutcome::Exhausted {
+                    stats: self.stats(),
+                };
+            }
             if domain.is_goal(&self.nodes[0].state) {
                 self.status = ResumableSearchStatus::Solved { candidate_index: 0 };
-                self.elapsed += started_at.elapsed();
+                self.elapsed += resumable_elapsed(started_at);
                 return ResumableAdvanceOutcome::Solved {
                     candidate_index: 0,
                     stats: self.stats(),
@@ -692,14 +719,17 @@ where
 
         loop {
             if self.expanded - expanded_before >= allowance.max_expanded_nodes {
-                self.elapsed += started_at.elapsed();
+                self.elapsed += resumable_elapsed(started_at);
                 return ResumableAdvanceOutcome::Paused {
                     reason: ResumablePauseReason::ExpandedNodes,
                     stats: self.stats(),
                 };
             }
-            if started_at.elapsed() >= allowance.max_duration {
-                self.elapsed += started_at.elapsed();
+            if allowance
+                .max_duration
+                .is_some_and(|duration| resumable_elapsed(started_at) >= duration)
+            {
+                self.elapsed += resumable_elapsed(started_at);
                 return ResumableAdvanceOutcome::Paused {
                     reason: ResumablePauseReason::Duration,
                     stats: self.stats(),
@@ -708,7 +738,7 @@ where
 
             let Some(entry) = self.frontier.pop() else {
                 self.status = ResumableSearchStatus::Exhausted;
-                self.elapsed += started_at.elapsed();
+                self.elapsed += resumable_elapsed(started_at);
                 return ResumableAdvanceOutcome::Exhausted {
                     stats: self.stats(),
                 };
@@ -728,7 +758,7 @@ where
                     Ok(next) => next,
                     Err(error) => {
                         self.status = ResumableSearchStatus::Failed;
-                        self.elapsed += started_at.elapsed();
+                        self.elapsed += resumable_elapsed(started_at);
                         return ResumableAdvanceOutcome::Failed {
                             failure: SearchFailure {
                                 action,
@@ -743,9 +773,12 @@ where
                 if next_key == current_key || self.visited.contains_key(&next_key) {
                     continue;
                 }
+                if is_dead(&next) {
+                    continue;
+                }
                 if self.nodes.len() >= self.limits.max_stored_nodes {
                     self.status = ResumableSearchStatus::ResourceLimit;
-                    self.elapsed += started_at.elapsed();
+                    self.elapsed += resumable_elapsed(started_at);
                     return ResumableAdvanceOutcome::ResourceLimit {
                         stats: self.stats(),
                     };
@@ -770,7 +803,7 @@ where
                     self.status = ResumableSearchStatus::Solved {
                         candidate_index: next_index,
                     };
-                    self.elapsed += started_at.elapsed();
+                    self.elapsed += resumable_elapsed(started_at);
                     return ResumableAdvanceOutcome::Solved {
                         candidate_index: next_index,
                         stats: self.stats(),
@@ -786,6 +819,12 @@ where
             }
         }
     }
+}
+
+fn resumable_elapsed(started_at: Option<Instant>) -> Duration {
+    started_at
+        .map(|instant| instant.elapsed())
+        .unwrap_or_default()
 }
 
 fn resumable_witness<State, Action: Clone>(
@@ -866,6 +905,54 @@ mod tests {
     }
 
     #[test]
+    fn resumable_search_prunes_dead_states_before_goal_acceptance() {
+        let mut domain = LineDomain { actions: [1] };
+        let mut machine = ResumableBestFirst::new(
+            0,
+            0,
+            0,
+            ResumableSearchLimits {
+                max_depth: 8,
+                max_stored_nodes: 32,
+            },
+        );
+        let outcome = machine.advance_with_dead_states(
+            &mut domain,
+            ResumableSearchAllowance {
+                max_expanded_nodes: 32,
+                max_duration: Some(Duration::from_secs(1)),
+            },
+            |_| 0,
+            |state| *state >= 3,
+        );
+        assert!(matches!(outcome, ResumableAdvanceOutcome::Exhausted { .. }));
+    }
+
+    #[test]
+    fn resumable_search_prunes_a_dead_initial_goal() {
+        let mut domain = LineDomain { actions: [1] };
+        let mut machine = ResumableBestFirst::new(
+            3,
+            3,
+            0,
+            ResumableSearchLimits {
+                max_depth: 8,
+                max_stored_nodes: 32,
+            },
+        );
+        let outcome = machine.advance_with_dead_states(
+            &mut domain,
+            ResumableSearchAllowance {
+                max_expanded_nodes: 32,
+                max_duration: Some(Duration::from_secs(1)),
+            },
+            |_| 0,
+            |state| *state >= 3,
+        );
+        assert!(matches!(outcome, ResumableAdvanceOutcome::Exhausted { .. }));
+    }
+
+    #[test]
     fn prunes_dead_states_before_accepting_goals() {
         let mut domain = LineDomain { actions: [1] };
 
@@ -927,7 +1014,7 @@ mod tests {
         );
         let allowance = ResumableSearchAllowance {
             max_expanded_nodes: 1,
-            max_duration: Duration::from_secs(1),
+            max_duration: Some(Duration::from_secs(1)),
         };
 
         let first = machine.advance(&mut domain, allowance, |state| i64::from(3 - *state));

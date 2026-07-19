@@ -264,9 +264,9 @@ OrientationExpr::Binding(...)
 OrientationExpr::Neutral
 ```
 
-`directions` / `horizontal` / `vertical` は orientation set prefix として使える。runtime で式評価するのではなく、lowering でそれぞれの方向 variants に展開する。`horizontal [ ... ]` は `left [ ... ]` と `right [ ... ]`、`directions [ ... ]` は `up` / `down` / `left` / `right` の rewrite として読む。
+組み込みまたはauthor-definedの方向型setは orientation set prefix として使える。runtime で式評価するのではなく、lowering でset内の方向variantsへ展開する。たとえば3Dの `yz_plane [ ... ]` は `up` / `down` / `front` / `back` のrewriteとして読む。
 
-bare `input [ ... ]` は標準4方向の input guard 付き orientation を表す。`input <direction-set> [ ... ]` は対象集合を指定し、`input horizontal [ ... ]` / `input vertical [ ... ]` / `input directions [ ... ]` と書ける。通常の4方向入力移動では bare `input` で builtin movement mark を付け、標準 `move` routine で実際の移動と collision を処理する。lowering 上は、現在の input が対象 set の member だったときだけ、その member の oriented rewrite を評価する。
+bare `input [ ... ]` はmodel次元の絶対方向に対する input guard 付き orientation を表す。`input <direction-set> [ ... ]` は対象集合を指定する。lowering 上は、現在の input が対象 set の member だったときだけ、その member の oriented rewrite を評価する。
 
 prefix なしの単独セル pattern は neutral として扱い、offset を方向回転しない。
 
@@ -293,7 +293,7 @@ count(directions [ Rock | ])
 ```
 
 上のような prefix なし pattern は4方向 variant を作る。
-orientation set prefix の pattern は、その set に含まれる方向 variants へ展開する。`horizontal [ ... ]` は left/right、`vertical [ ... ]` は up/down だけを見る。`input horizontal [ ... ]` は、現在の transition input が horizontal の member のときだけ、その input に対応する orientation の pattern として評価する。
+orientation set prefix の pattern は、その set に含まれる方向 variants へ展開する。`input <direction-set> [ ... ]` は、現在の transition input がsetのmemberのときだけ、そのinputに対応するorientationのpatternとして評価する。
 
 ## Value Expansion
 
@@ -336,7 +336,7 @@ a b 1...3 z
 
 inline value list は `for object in Box Wall Player` や `for tag in tag_1 tag_2 tag_3 tag_4` のように書ける。binding 名は型名ではなく lexical binding なので、object / tag / layer などの意味は展開後の body 側の構文が決める。
 
-`directions` は組み込み tag set であり、常に `up` / `down` / `left` / `right` の4値を表す。`horizontal` は `left` / `right`、`vertical` は `up` / `down`。object schema、`map`、visual table、`for` で同じ集合として使える。
+絶対方向の組み込みtag setは座標部分空間として定義する。2Dは `x_axis = left/right`、`y_axis = up/down`、`xy_plane = directions`。3Dは `x_axis = left/right`、`y_axis = front/back`、`z_axis = up/down`、`xy_plane = x_axis + y_axis`、`yz_plane = y_axis + z_axis`、`xz_plane = x_axis + z_axis`、`directions` は全6方向。`horizontal` は2Dでは `x_axis`、3Dでは `xy_plane`、`vertical` は2Dでは `y_axis`、3Dでは `z_axis` の正式alias。2Dで `z_axis` / `yz_plane` / `xz_plane` は使用できない。object schema、`map`、visual table、`for`、orientation prefixは同じset ownerを使う。canonical direction値の部分集合だけからなるauthor-defined tag setも名前に依存せず方向型となる。
 
 `slots` は layer 定義から作られる tag set。展開値は layer group 名で、名前付き layer はその名前、匿名 layer は内部名を使う。標準 `move` rule はユーザーが同名 rule を定義していない場合に用意される。概念的には次の rule と同じ。
 
@@ -412,11 +412,13 @@ goto playing
 
 入力適用後の turn completion では、runtime が post-rules / pre-navigation の snapshot に対して `win_conditions` を評価する。`win_conditions` が true なら、その snapshot を level completion observation として確定してから、model lifecycle として `on_level_clear` を level navigation より前に実行する。solver の built-in completion と state predicate はこの同じ observation を照合し、navigation 後の session state は後続 flow と replay の continuation として別に保持する。通常の clear / advance / restart は model window component と puzzle lifecycle が所有し、scene condition transitions は overlay、menu、hub、特殊分岐などの例外的な flow 介入だけを担う。これは puzzle-core の rewrite ではなく、`GameSession` / standalone HTML runtime が扱う flow である。
 
-`again` command も turn completion で解決される。`again` は入力 event の再送ではなく、同じ puzzle target の rule entrypoint を `InputId(0)` / no semantic input で再実行する follow-up turn request である。follow-up turn は現在の turn が commit され、message / sfx / wait / navigation command の収集が終わった後に実行される。follow-up turn 内で `again` が再び出ると次の no-input turn を実行する。runtime は 1 input から派生する automatic turn を最大 256 回に制限し、win 判定と lifecycle を含む安定状態まで同じ論理入力の中で完了させる。各 turn の presentation event は発生順を保った 1 本の timeline として公開し、その再生時間は authoritative state を進めない。
+`again` command も turn completion で解決される。`again` は入力 event の再送ではなく、同じ puzzle target の rule entrypoint を `InputId(0)` / no semantic input で再実行する follow-up turn request である。follow-up turn は現在の turn の rules、win 判定、lifecycle、navigation command が完了した後に実行される。現在の turn が wait で pause している間は `again` の解決にも進まない。follow-up turn 内で `again` が再び出ると次の no-input turnを実行する。runtime は 1 input から派生する automatic turn を最大 256 回に制限する。follow-up turn も通常の turn と同じ rule segment / wait / resume 契約を使う。各 segment の presentation event は commit 時に発生順で公開される。
 
 Puzzle/model 内の `render` block では `tween = true` が move write に対する tween animation を有効化する。duration は `tween_duration = 160ms` で指定する。`tween_duration` は `tween = true` と同じ render block にある場合だけ有効で、単独では error。旧 block 形の `tween { duration = ... }` は読まない。`tween = false` は明示的な無効化。
 
-`wait animation` は rules が出した visual animation に対する presentation pacing marker。runtime は入力に対応する rules、win 判定、lifecycle を安定状態まで原子的に完了し、その turn が出した animation events の最大 duration を presentation wait として adapter に渡す。logical state や後続 rule の実行は表示時間に依存せず、continuation command も使わない。animation events が空なら no-op。`sfx` / `message` / `wait 300ms` は別 presentation effect であり、`wait animation` は visual animation の duration だけを使う。`wait tween` は alias として読めるが canonical は `wait animation`。
+Puzzle rule の `wait <duration>` と `wait animation` は、現在の rule segment を commit して turn を pause する。adapter が wait を完了すると runtime は保存した continuation から同じ turn の残りを再開する。pause 中は後続 rule / routine、win 判定、`on_level_clear`、navigation、`again` に進まず、別 input、undo、restart も受け付けない。undo は resume 後も入力開始前の state まで戻る 1 turn boundary のままになる。
+
+`wait animation` の resume 条件には、その segment で発生した visual animation events の最大 duration を使う。対象 animation が空なら pause を作らず、そのまま continuation を実行する。`wait 300ms` は指定時間を使う。rule の `message` は popup と `default_wait_time` の wait を発生させ、同じ continuation 契約で後続 rules を pause する。`sfx` は pause 条件を持たない。`wait tween` は alias として読めるが canonical は `wait animation`。
 
 ## Scenes
 
@@ -625,7 +627,7 @@ button "Title" -> goto title
 
 level の開始、読み込み、restart は level scene / puzzle slot に対する effect として書ける。ただし通常の clear / advance / restart は level scene 内の model window component と puzzle lifecycle が所有する。scene からの target effect は、title/menu から入る、button で明示 restart する、hub から特定 level に飛ぶ、通常 clear とは別の例外 flow に入る、などの介入だけに使う。canonical な開始は `goto sokoban` または `goto sokoban(level_name)`。独自 scene なら `scene playing(level) { state { sokoban(level) } layout { sokoban } rules { step sokoban } }` として `goto playing(level)` で入る。旧 `start levels ... in <scene>` / `continue levels ... in <scene>` は読まない。`playing.restart` は playing scene の現在 level を初期状態に戻し、`playing.next_level` は playing scene を次 level で開始し、`playing.previous_level` は前 level で開始する。`playing.goto <level>` は指定 level で playing scene に移る。`board.restart` のように puzzle slot を target にした場合は、その puzzle state を初期状態に戻す。`board.next_level` はその puzzle を所有する level scene を進める。
 
-puzzle rule でも `win`、`restart`、`next_level`、`again`、`message`、`sfx`、`goto` / `start` を effect として出せる。`win` はその turn の `win_conditions` を true として扱う clear outcome effect で、`set win_conditions = true` の sugar に近い。model rules では `restart -> restart` が semantic input `restart` を model restart effect に接続する rule になる。model rules 内に `restart` input handler がない場合は、この default handler が暗黙に追加される。scene key dispatch は `keys { q -> level_select }` と `routine level_select { goto level_select }` で書く。scene 側で restart / level navigation に介入したい場合は、`board.restart` や `playing.next_level` のように target effect を明示する。これは通常進行の書き方ではなく、ユーザー操作や特殊 flow のための escape hatch である。`[ Goal Box ] -> next_level` と `if win_conditions -> next_level` は board transition の結果として、所有 component/runtime に level advance effect を渡す。`again` は現在の turn を commit した後、runtime に no-input follow-up turn を要求する。`again` が再実行するのは直前の key / semantic input ではなく、同じ puzzle target の rule entrypoint である。したがって follow-up turn では input guard は成立しない。自動 turn は最大 256 回で止まり、`cancel` が出た場合はその自動 turn だけを取り消して停止する。1 input から派生する follow-up turn は win 判定と lifecycle を含む安定状態まで同じ論理入力の中で完了する。各 turn の animation、`sfx`、`message`、wait は発生順を保った 1 本の presentation timeline として adapter へ渡され、表示時間は論理状態の進行に影響しない。`[ Player Goal ] -> message "Found"` と `[ Player Box ] -> message hint` は popup message と `default_wait_time` の presentation wait を adapter に渡す。message と wait は後続 effect、後続 rule、win 判定、lifecycle を止めず、論理 turn は表示時間に依存せず完了する。`[ Player | Box | ] -> [ | Player | Box ] sfx push` は rule が match したときに named SFX を再生する effect を渡す。同じ turn 内で同じ named SFX が複数回出ても再生 event は 1 回にまとめる。`again` の follow-up は別 turn なので、各 automatic turn で同じ SFX を最大 1 回ずつ出せる。model 内の `sounds { move <selector> -> sfx <name> }` は、同じ puzzle scope の最終 catalog に対して selector を解決し、lowering 後の rewrite alternative が対象 object の `Move` writeを持つときだけ、その rule に `sfx` emission を付ける。remove+add は move sound の対象外。canonical syntax は `cantmove` sound trigger を持たない。PuzzleScript importer だけが PS `cantmove` を生成 `move` routine 内の明示的な `sfx` rule として変換する。PS `endlevel` も canonical sound trigger にはせず、生成 `on_level_clear` の先頭に `sfx endlevel` として明示的に埋め込む。
+puzzle rule でも `win`、`restart`、`next_level`、`again`、`message`、`sfx`、`goto` / `start` を effect として出せる。`win` はその turn の `win_conditions` を true として扱う clear outcome effect で、`set win_conditions = true` の sugar に近い。model rules では `restart -> restart` が semantic input `restart` を model restart effect に接続する rule になる。model rules 内に `restart` input handler がない場合は、この default handler が暗黙に追加される。scene key dispatch は `keys { q -> level_select }` と `routine level_select { goto level_select }` で書く。scene 側で restart / level navigation に介入したい場合は、`board.restart` や `playing.next_level` のように target effect を明示する。これは通常進行の書き方ではなく、ユーザー操作や特殊 flow のための escape hatch である。`[ Goal Box ] -> next_level` と `if win_conditions -> next_level` は board transition の結果として、所有 component/runtime に level advance effect を渡す。`again` は現在の turn を完了した後、runtime に no-input follow-up turn を要求する。`again` が再実行するのは直前の key / semantic input ではなく、同じ puzzle target の rule entrypoint である。したがって follow-up turn では input guard は成立しない。自動 turn は最大 256 回で止まり、`cancel` が出た場合はその自動 turn だけを取り消して停止する。各 automatic turn は通常の turn と同じ wait continuation を持つ。`[ Player Goal ] -> message "Found"` と `[ Player Box ] -> message hint` は popup message と `default_wait_time` の wait を adapter に渡し、popup の待機中は同じ turn の後続 rules を pause する。`[ Player | Box | ] -> [ | Player | Box ] sfx push` は rule が match したときに named SFX を再生する effect を渡す。同じ turn 内で同じ named SFX が複数回出ても再生 event は 1 回にまとめる。`again` の follow-up は別 turn なので、各 automatic turn で同じ SFX を最大 1 回ずつ出せる。model 内の `sounds { move <selector> -> sfx <name> }` は、同じ puzzle scope の最終 catalog に対して selector を解決し、lowering 後の rewrite alternative が対象 object の `Move` writeを持つときだけ、その rule に `sfx` emission を付ける。remove+add は move sound の対象外。canonical syntax は `cantmove` sound trigger を持たない。PuzzleScript importer だけが PS `cantmove` を生成 `move` routine 内の明示的な `sfx` rule として変換する。PS `endlevel` も canonical sound trigger にはせず、生成 `on_level_clear` の先頭に `sfx endlevel` として明示的に埋め込む。
 
 level list は `level_menu` または明示的な `for level in levels` projection で表す。`for` は単なる layout projection であり、cursor 移動や confirm 動作は所有しない。
 
@@ -857,6 +859,8 @@ count = 1...10
 
 tag value list の中の `<start>...<end>` は inclusive numeric range として展開する。`count = 1...10` は `count = 1 2 3 4 5 6 7 8 9 10` と同じ tag set を作る。
 
+`*` は selector wildcard の予約 token なので tag value には使えない。`_` を含む identifier atom は通常の tag value として扱う。
+
 この名前は `for` や schema tag slot に渡せる tag set である。bare `color = red blue`、単数 `tag ...`、古い `domain <name> ...` 形は public syntax ではない。
 
 schema object は `slots` の右辺で宣言する:
@@ -915,7 +919,7 @@ capture。複数候補は ambiguous error、候補なしは unbound error。nega
 capture を作らない。`for <binding> in <set>` は rewrite capture ではなく lexical な
 列挙であり、この規約の対象外。
 
-movement set の `directions` / `horizontal` / `vertical` も出現ごとの独立 cartesian
+組み込み方向setも出現ごとの独立 cartesian
 展開にはしない。`[ directions A ] -> [ directions A directions B ]` の右辺は、左辺で
 一致した同じ concrete direction を参照する。複数の独立 capture は
 `directions#1` / `directions#2` のように label を付ける。

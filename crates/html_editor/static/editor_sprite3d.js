@@ -1251,7 +1251,7 @@ function renderSprite3dPaletteContent() {
       if (bind.linked && bind.name) {
         const unlink = document.createElement("button");
         unlink.type = "button";
-        unlink.className = "sprite-current-tag-unlink-button sprite-icon-button";
+        unlink.className = "icon-button is-danger sprite-current-tag-unlink-button sprite-icon-button";
         unlink.title = `Unlink color tag ${bind.name}`;
         unlink.setAttribute("aria-label", unlink.title);
         unlink.innerHTML = spriteUnlinkIconSvg();

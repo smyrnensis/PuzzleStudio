@@ -5,6 +5,93 @@ use serde::{Deserialize, Serialize};
 
 use crate::{GridCompiledGame, GridExecutableProgram, GridSize, GridState, InputId, LayerId};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum GridProgramRef {
+    Main,
+    Catalog(u32),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct GridProgramSequence {
+    references: Vec<GridProgramRef>,
+}
+
+impl GridProgramSequence {
+    pub fn main() -> Self {
+        Self {
+            references: vec![GridProgramRef::Main],
+        }
+    }
+
+    pub fn with_surrounding(before: Option<GridProgramRef>, after: Option<GridProgramRef>) -> Self {
+        let mut references = Vec::with_capacity(3);
+        references.extend(before);
+        references.push(GridProgramRef::Main);
+        references.extend(after);
+        Self { references }
+    }
+
+    pub fn references(&self) -> &[GridProgramRef] {
+        &self.references
+    }
+
+    pub fn is_valid_level_sequence(&self) -> bool {
+        matches!(
+            self.references.as_slice(),
+            [GridProgramRef::Main]
+                | [GridProgramRef::Catalog(_), GridProgramRef::Main]
+                | [GridProgramRef::Main, GridProgramRef::Catalog(_)]
+                | [
+                    GridProgramRef::Catalog(_),
+                    GridProgramRef::Main,
+                    GridProgramRef::Catalog(_)
+                ]
+        )
+    }
+
+    pub fn map_references(&self, mut map: impl FnMut(GridProgramRef) -> GridProgramRef) -> Self {
+        Self {
+            references: self.references.iter().copied().map(&mut map).collect(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GridProgramCatalog<const D: usize> {
+    programs: Vec<GridExecutableProgram<D>>,
+}
+
+impl<const D: usize> GridProgramCatalog<D> {
+    pub fn intern(&mut self, program: GridExecutableProgram<D>) -> GridProgramRef {
+        if let Some(index) = self.programs.iter().position(|entry| entry == &program) {
+            return GridProgramRef::Catalog(
+                index
+                    .try_into()
+                    .expect("program catalog exceeds u32 capacity"),
+            );
+        }
+        let index = self.programs.len();
+        self.programs.push(program);
+        GridProgramRef::Catalog(
+            index
+                .try_into()
+                .expect("program catalog exceeds u32 capacity"),
+        )
+    }
+
+    pub fn get(&self, reference: GridProgramRef) -> Option<&GridExecutableProgram<D>> {
+        let GridProgramRef::Catalog(index) = reference else {
+            return None;
+        };
+        self.programs.get(index as usize)
+    }
+
+    pub fn programs(&self) -> &[GridExecutableProgram<D>] {
+        &self.programs
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GridInput<const D: usize> {
     pub id: InputId,
