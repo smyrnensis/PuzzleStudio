@@ -362,6 +362,13 @@ fn normalize_rhs_keep_cells(
     }
 
     for (before_component, after_component) in before.components.iter().zip(&mut after.components) {
+        if after_component.orientation.is_some() {
+            return Err(parse_error(
+                line,
+                "rewrite result components inherit orientation from the matching side",
+            ));
+        }
+        after_component.orientation = before_component.orientation.clone();
         if !block_shapes_match(before_component, after_component) {
             return Err(parse_error(
                 line,
@@ -794,14 +801,15 @@ fn rewrite_requires_implicit_cardinal_expansion(rewrite: &OrientedRewriteAst) ->
 
 fn pattern_block_requires_implicit_cardinal_expansion(block: &PatternBlock) -> bool {
     block.components.iter().any(|component| {
-        component.rows.len() > 1
+        component.orientation.is_none()
+            && (component.rows.len() > 1
             || component.rows.iter().any(|row| {
                 row.len() > 1
                     || row.iter().any(|part| match part {
                         BlockPart::Cell(cell) => block_cell_has_relative_direction(cell),
                         BlockPart::Ellipsis => true,
                     })
-            })
+            }))
     })
 }
 
@@ -1019,6 +1027,31 @@ enum WriteOpTemplate {
     },
 }
 
+fn write_template_component(write: &WriteOpTemplate) -> u16 {
+    match write {
+        WriteOpTemplate::Add { component, .. }
+        | WriteOpTemplate::AddObjectSet { component, .. }
+        | WriteOpTemplate::Remove { component, .. }
+        | WriteOpTemplate::RemoveObjectSet { component, .. }
+        | WriteOpTemplate::Replace { component, .. }
+        | WriteOpTemplate::Move { component, .. }
+        | WriteOpTemplate::MoveObjectSet { component, .. }
+        | WriteOpTemplate::SetMark { component, .. }
+        | WriteOpTemplate::SetObjectSetMark { component, .. }
+        | WriteOpTemplate::RemoveMark { component, .. }
+        | WriteOpTemplate::RemoveObjectSetMark { component, .. } => *component,
+    }
+}
+
+fn component_input_axis(value: &str) -> Option<&str> {
+    let tokens = split_header_tokens(value);
+    match tokens.as_slice() {
+        ["input"] => Some("directions"),
+        ["input", axis] => Some(axis),
+        _ => None,
+    }
+}
+
 #[derive(Clone, Debug)]
 struct PatternBlock {
     components: Vec<BlockComponent>,
@@ -1026,6 +1059,7 @@ struct PatternBlock {
 
 #[derive(Clone, Debug)]
 struct BlockComponent {
+    orientation: Option<String>,
     rows: Vec<Vec<BlockPart>>,
 }
 
@@ -1264,17 +1298,28 @@ fn parse_pattern_side(
     let mut rest = line.trim();
 
     while !rest.is_empty() {
-        let Some(inner_start) = rest.strip_prefix('[') else {
-            return Err(parse_error(
-                line,
-                "pattern side must contain bracketed blocks",
-            ));
+        let (orientation, inner_start) = if let Some(inner_start) = rest.strip_prefix('[') {
+            (None, inner_start)
+        } else {
+            let Some(open_index) = rest.find('[') else {
+                return Err(parse_error(line, "pattern orientation must be followed by [ ... ]"));
+            };
+            let orientation = rest[..open_index].trim();
+            let tokens = split_header_tokens(orientation);
+            if !matches!(tokens.as_slice(), [_] | ["input", _]) {
+                return Err(parse_error(
+                    line,
+                    "component orientation must be: <orientation> [ ... ] or input <axis> [ ... ]",
+                ));
+            }
+            (Some(orientation.to_string()), &rest[open_index + 1..])
         };
         let Some(close_index) = inner_start.find(']') else {
             return Err(parse_error(line, "pattern block missing ]"));
         };
         let inner = &inner_start[..close_index];
         components.push(BlockComponent {
+            orientation,
             rows: parse_block_rows(
                 inner,
                 line,
@@ -3503,6 +3548,40 @@ fn relative_selector_constraints(
     Ok(out)
 }
 
+fn compile_before_after_blocks_for_directions(
+    before: &PatternBlock,
+    after: &PatternBlock,
+    object_layers: &HashMap<ObjectId, LayerId>,
+    mark_names: &HashMap<String, MarkDef>,
+    value_sets: &HashMap<String, Vec<String>>,
+    maps: &HashMap<String, ValueMap>,
+    component_directions: &[(Direction, bool)],
+    line: &str,
+    source_line_number: Option<usize>,
+) -> Result<(PatternBlock, Vec<RuleBodyAlternative>), DiagnosticReport> {
+    let before = resolve_relative_selectors_in_block_by_component(
+        before,
+        component_directions,
+        line,
+    )?;
+    let after = resolve_relative_selectors_in_block_by_component(
+        after,
+        component_directions,
+        line,
+    )?;
+    let alternatives = compile_before_after_blocks(
+        &before,
+        &after,
+        object_layers,
+        mark_names,
+        value_sets,
+        maps,
+        line,
+        source_line_number,
+    )?;
+    Ok((before, alternatives))
+}
+
 fn compile_before_after_blocks_for_direction(
     before: &PatternBlock,
     after: &PatternBlock,
@@ -3515,19 +3594,50 @@ fn compile_before_after_blocks_for_direction(
     line: &str,
     source_line_number: Option<usize>,
 ) -> Result<(PatternBlock, Vec<RuleBodyAlternative>), DiagnosticReport> {
-    let before = resolve_relative_selectors_in_block(before, direction, direction_expanded, line)?;
-    let after = resolve_relative_selectors_in_block(after, direction, direction_expanded, line)?;
-    let alternatives = compile_before_after_blocks(
-        &before,
-        &after,
+    let component_directions = vec![(direction, direction_expanded); before.components.len()];
+    compile_before_after_blocks_for_directions(
+        before,
+        after,
         object_layers,
         mark_names,
         value_sets,
         maps,
+        &component_directions,
         line,
         source_line_number,
-    )?;
-    Ok((before, alternatives))
+    )
+}
+
+fn resolve_relative_selectors_in_block_by_component(
+    block: &PatternBlock,
+    component_directions: &[(Direction, bool)],
+    line: &str,
+) -> Result<PatternBlock, DiagnosticReport> {
+    if block.components.len() != component_directions.len() {
+        return Err(parse_error(line, "pattern component orientation count mismatch"));
+    }
+    let mut block = block.clone();
+    for (component, (direction, direction_expanded)) in block
+        .components
+        .iter_mut()
+        .zip(component_directions.iter().copied())
+    {
+        let single = PatternBlock {
+            components: vec![component.clone()],
+        };
+        let resolved = resolve_relative_selectors_in_block(
+            &single,
+            direction,
+            direction_expanded,
+            line,
+        )?;
+        *component = resolved
+            .components
+            .into_iter()
+            .next()
+            .expect("single component remains present");
+    }
+    Ok(block)
 }
 
 fn compile_before_after_blocks(

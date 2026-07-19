@@ -16,6 +16,13 @@ Direction inputs `up`, `down`, `left`, and `right` are built in, with standard
 direction mappings. Optional direction aliases should map to those semantic
 directions rather than expose numeric direction syntax as public authoring.
 
+Disconnected pattern components may carry local orientation prefixes. A rule-leading
+orientation remains the shared orientation for components without a local override;
+an orientation between bracketed components applies only to the following component.
+Components remain independently placed and may overlap. Identical absolute writes are
+idempotent; a placement whose overlapping components demand different final objects in
+the same cell and collision layer is skipped atomically.
+
 `for <binding> in directions|horizontal|vertical` is value expansion, not a UI
 menu primitive. Do not make generic loops navigable or level-aware.
 

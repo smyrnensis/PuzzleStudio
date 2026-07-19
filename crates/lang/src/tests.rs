@@ -10794,6 +10794,204 @@ P#D
 }
 
 #[test]
+fn component_local_fixed_orientation_does_not_constrain_other_components_position() {
+    let source = r#"
+title = component_local_fixed_orientation
+
+puzzle default {
+layers {
+base = Start Ice
+overlay = Marker
+}
+rules {
+once [ Start ] up [ Ice | ] -> [ Start ] [ Ice | Marker ]
+}
+levels {
+legend {
+S = Start
+I = Ice
+. = empty
+}
+level "start"
+.S
+I.
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let right = *loaded.controls.keys.get(&b'd').unwrap();
+    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, right).unwrap();
+    let marker = object_named(&loaded, "Marker");
+
+    assert!(moved.has_object(&loaded.game, 0, 0, marker));
+}
+
+#[test]
+fn component_local_orientation_set_expands_only_that_component() {
+    let source = r#"
+title = component_local_orientation_set
+
+puzzle default {
+layers {
+base = Start Ice
+overlay = Marker
+}
+rules {
+once [ Start ] horizontal [ Ice | ] -> [ Start ] [ Ice | Marker ]
+}
+levels {
+legend {
+S = Start
+I = Ice
+. = empty
+}
+level "start"
+.IS
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+
+    assert_eq!(loaded.game.rules().len(), 3);
+}
+
+#[test]
+fn shared_and_component_local_orientation_sets_form_separate_axes() {
+    let source = r#"
+title = shared_and_local_orientation_sets
+
+puzzle default {
+layers {
+base = A B C D
+}
+rules {
+once horizontal [ A | B ] vertical [ C | D ] -> [ A | B ] [ C | D ]
+}
+levels {
+legend {
+A = A
+B = B
+C = C
+D = D
+. = empty
+}
+level "start"
+AB
+CD
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+
+    assert_eq!(loaded.game.rules().len(), 5);
+}
+
+#[test]
+fn component_local_input_orientation_uses_the_turn_input() {
+    let source = r#"
+title = component_local_input_orientation
+
+puzzle default {
+layers {
+base = Start Ice
+overlay = Marker
+}
+rules {
+once [ Start ] input horizontal [ Ice | ] -> [ Start ] [ Ice | Marker ]
+}
+levels {
+legend {
+S = Start
+I = Ice
+. = empty
+}
+level "start"
+.IS
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let up = *loaded.controls.keys.get(&b'w').unwrap();
+    let right = *loaded.controls.keys.get(&b'd').unwrap();
+    let marker = object_named(&loaded, "Marker");
+
+    let moved_up = transition_state(&loaded.game, &loaded.levels[0].initial_state, up).unwrap();
+    let moved_right =
+        transition_state(&loaded.game, &loaded.levels[0].initial_state, right).unwrap();
+
+    assert_eq!(moved_up.object_count(marker), 0);
+    assert!(moved_right.has_object(&loaded.game, 2, 0, marker));
+}
+
+#[test]
+fn conflicting_overlapping_component_writes_are_a_noop() {
+    let source = r#"
+title = conflicting_overlapping_component_writes
+
+puzzle default {
+layers {
+actor = A B C
+b_layer = b
+c_layer = c
+}
+rules {
+once [ A b ] [ A c ] -> [ B b ] [ C c ]
+}
+levels {
+legend {
+X = A b c
+. = empty
+}
+level "start"
+X
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let right = *loaded.controls.keys.get(&b'd').unwrap();
+
+    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, right).unwrap();
+
+    assert_eq!(moved, loaded.levels[0].initial_state);
+}
+
+#[test]
+fn condition_patterns_accept_component_local_orientations() {
+    let source = r#"
+title = condition_component_local_orientation
+
+puzzle default {
+layers {
+base = Start Ice Door OpenDoor
+}
+rules {
+if some([ Start ] up [ Ice | ]) {
+once [ Door ] -> [ OpenDoor ]
+}
+}
+levels {
+legend {
+S = Start
+I = Ice
+D = Door
+. = empty
+}
+level "start"
+.SD
+I..
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let right = *loaded.controls.keys.get(&b'd').unwrap();
+    let open_door = object_named(&loaded, "OpenDoor");
+
+    let moved = transition_state(&loaded.game, &loaded.levels[0].initial_state, right).unwrap();
+
+    assert!(moved.has_object(&loaded.game, 2, 0, open_door));
+}
+
+#[test]
 fn input_condition_pattern_without_set_is_directions_sugar() {
     let source = r#"
 title = input_condition_directions_sugar

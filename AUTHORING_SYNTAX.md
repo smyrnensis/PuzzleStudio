@@ -1036,6 +1036,18 @@ input horizontal [ Cursor | ] -> [ | Cursor ]
 
 同じ形で `input directions [ ... ]` と `input vertical [ ... ]` も使える。これは `input` が方向そのものだという意味ではなく、input 名が指定 set の member だったときに、その member を orientation として使うという意味。
 
+複数の独立 pattern component は、それぞれ直前に orientation を持てる。
+
+```txt
+[ Start ] up [ Ice | ] -> [ Start ] [ Ice | IceAboveEdge ]
+left [ A | B ] up [ Ice | ] -> [ B | A ] [ Water | ]
+horizontal [ A | B ] input vertical [ C | D ] -> [ B | A ] [ D | C ]
+```
+
+先頭の orientation は、local override のない全 component が共有する。途中の orientation は直後の `[...]` だけを上書きする。したがって `horizontal [ A | B ] [ C | D ]` は両 component が同じ left/right variant を共有し、`horizontal [ A | B ] vertical [ C | D ]` は horizontal と vertical の直積へ展開する。複数の `input` component は独立な方向を選ばず、同じ transition input に束縛される。
+
+複数 component の盤面上の位置は独立で、互いに overlap してよい。overlap cell では全 component の LHS 条件を同じ pre-state が満たす必要がある。同じ絶対 write は冪等に1回として扱う。同じ cell / collision layer に異なる最終 object を要求する placement は、部分適用や runtime errorにせず、その placement全体をskipする。
+
 名前だけを見たい場合は `restart -> restart` のような input sugar を使える。これは orientation を要求しないので、非方向 input でも意味を持つ。
 
 入力に連動しない複数方向ルールや、方向ごとに複数の文をまとめて生成したい advanced case では、明示的な `for` block を使える。

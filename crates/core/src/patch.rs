@@ -22,6 +22,9 @@ impl CorePatch {
     }
 
     pub(crate) fn push(&mut self, op: CorePatchOp) {
+        if !matches!(op, CorePatchOp::UpdateVariable { .. }) && self.ops.contains(&op) {
+            return;
+        }
         self.ops.push(op);
     }
 
@@ -901,6 +904,21 @@ mod tests {
         ]);
 
         assert_eq!(Patch::from_core(patch.to_core()).ops(), patch.ops());
+    }
+
+    #[test]
+    fn duplicate_variable_updates_are_not_deduplicated() {
+        let update = CorePatchOp::UpdateVariable {
+            variable: VariableId(0),
+            op: VariableUpdateOp::Add,
+            value: 1,
+        };
+        let mut patch = CorePatch::new();
+
+        patch.push(update.clone());
+        patch.push(update);
+
+        assert_eq!(patch.ops.len(), 2);
     }
 
     #[test]
