@@ -284,6 +284,17 @@ OrientationExpr::Neutral
 
 `input horizontal [ ... ]` / `input directions [ ... ]` は input guard 付きの orientation set。通常の入力方向移動では、この形で builtin movement mark を付け、標準 `move` routine で実際の移動と collision を処理する。これは lowering 上、現在の input が set の member だったときだけその member の oriented rewrite を評価する。
 
+orientation は独立 pattern component ごとにも指定できる。
+
+```txt
+[ Start ] up [ Ice | ] -> [ Start ] [ Ice | IceAboveEdge ]
+horizontal [ A | B ] input vertical [ C | D ] -> [ B | A ] [ D | C ]
+```
+
+rule先頭のorientationはlocal指定のないcomponentで共有され、途中のorientationは直後のcomponentだけを上書きする。共有setは同じconcrete方向値を各componentへ渡し、異なるlocal setは直積展開する。local `input`はすべて同じtransition inputを参照する。
+
+複数componentは独立配置であり、同じ盤面cellにoverlapできる。LHSは同じpre-stateに対する条件の論理積。完全に同じabsolute writeは冪等。同じcell / collision layerへ異なる最終objectを書くplacementはatomicにskipし、部分適用もtransition errorも起こさない。
+
 prefix なしの単独セル pattern は neutral として扱い、offset を方向回転しない。
 
 prefix なしの空間 pattern、つまり複数セル、複数行、ellipsis、または相対方向属性を含む pattern は、PuzzleScript 互換の cardinal direction pattern として `up` / `down` / `left` / `right` に lower する。

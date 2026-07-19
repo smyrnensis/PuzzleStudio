@@ -614,7 +614,8 @@ fn lower_condition_match_kind(
     if matches!(
         condition_pattern.orientation,
         OrientationExpr::Input | OrientationExpr::InputSet(_)
-    ) {
+    ) || pattern_block_has_input_orientation(&condition_pattern.pattern)
+    {
         let patterns = lower_condition_input_patterns(
             condition_pattern,
             input_names,
@@ -667,6 +668,8 @@ fn lower_condition_patterns(
                     maps,
                     directions,
                     true,
+                    input_names,
+                    directions,
                 );
             }
             lower_condition_patterns_for_directions(
@@ -677,6 +680,8 @@ fn lower_condition_patterns(
                 maps,
                 &[neutral_direction()],
                 false,
+                input_names,
+                directions,
             )
         }
         OrientationExpr::Input => lower_condition_patterns_for_directions(
@@ -687,9 +692,11 @@ fn lower_condition_patterns(
             maps,
             directions,
             true,
+            input_names,
+            directions,
         ),
         OrientationExpr::InputSet(axis) => {
-            let directions =
+            let resolved_directions =
                 directions_for_orientation_name(axis, input_names, value_sets, directions)?
                     .ok_or_else(|| {
                         DiagnosticReport::error(format!("unknown input orientation set: {axis}"))
@@ -700,12 +707,14 @@ fn lower_condition_patterns(
                 mark_names,
                 value_sets,
                 maps,
-                &directions,
+                &resolved_directions,
                 true,
+                input_names,
+                directions,
             )
         }
         OrientationExpr::Fixed(direction_name) => {
-            let directions = directions_for_orientation_name(
+            let resolved_directions = directions_for_orientation_name(
                 &direction_name.0,
                 input_names,
                 value_sets,
@@ -723,8 +732,10 @@ fn lower_condition_patterns(
                 mark_names,
                 value_sets,
                 maps,
-                &directions,
+                &resolved_directions,
                 true,
+                input_names,
+                directions,
             )
         }
     }
@@ -738,27 +749,39 @@ fn lower_condition_patterns_for_directions(
     maps: &HashMap<String, ValueMap>,
     directions: &[Direction],
     direction_expanded: bool,
+    input_names: &HashMap<String, InputId>,
+    all_directions: &[Direction],
 ) -> Result<Vec<Pattern>, DiagnosticReport> {
     let mut patterns = Vec::new();
     for direction in directions {
-        let (_, alternatives) = compile_before_after_blocks_for_direction(
+        for component_directions in expand_condition_component_directions(
             block,
-            block,
-            object_layers,
-            mark_names,
-            value_sets,
-            maps,
             *direction,
             direction_expanded,
-            "condition pattern",
             None,
-        )?;
-        patterns.extend(patterns_from_alternatives(
-            &alternatives,
-            &[*direction],
-            direction_expanded,
-            "condition pattern",
-        )?);
+            input_names,
+            value_sets,
+            all_directions,
+        )? {
+            let (_, alternatives) = compile_before_after_blocks_for_directions(
+                block,
+                block,
+                object_layers,
+                mark_names,
+                value_sets,
+                maps,
+                &component_directions,
+                "condition pattern",
+                None,
+            )?;
+            for alternative in &alternatives {
+                patterns.push(pattern_from_alternative_component_directions(
+                    alternative,
+                    &component_directions,
+                    "condition pattern",
+                )?);
+            }
+        }
     }
     Ok(patterns)
 }
@@ -774,35 +797,137 @@ fn lower_condition_input_patterns(
 ) -> Result<Vec<(InputId, Pattern)>, DiagnosticReport> {
     let block = &condition_pattern.pattern;
     let mut patterns = Vec::new();
-    let input_directions = match &condition_pattern.orientation {
+    let mut input_directions = match &condition_pattern.orientation {
         OrientationExpr::Input => directions.to_vec(),
         OrientationExpr::InputSet(axis) => {
             directions_for_orientation_name(axis, input_names, value_sets, directions)?.ok_or_else(
                 || DiagnosticReport::error(format!("unknown input orientation set: {axis}")),
             )?
         }
-        OrientationExpr::Neutral | OrientationExpr::Fixed(_) => Vec::new(),
+        OrientationExpr::Neutral | OrientationExpr::Fixed(_) => directions.to_vec(),
     };
+    for component in &block.components {
+        let Some(axis) = component
+            .orientation
+            .as_deref()
+            .and_then(component_input_axis)
+        else {
+            continue;
+        };
+        let allowed = directions_for_orientation_name(axis, input_names, value_sets, directions)?
+            .ok_or_else(|| DiagnosticReport::error(format!("unknown input orientation set: {axis}")))?;
+        input_directions.retain(|direction| {
+            allowed.iter().any(|candidate| candidate.input == direction.input)
+        });
+    }
     for direction in &input_directions {
-        let (_, alternatives) = compile_before_after_blocks_for_direction(
-            block,
-            block,
-            object_layers,
-            mark_names,
-            value_sets,
-            maps,
-            *direction,
-            true,
-            "condition pattern",
-            None,
-        )?;
-        for pattern in
-            patterns_from_alternatives(&alternatives, &[*direction], true, "condition pattern")?
-        {
-            patterns.push((direction.input, pattern));
+        let shared_directions = match &condition_pattern.orientation {
+            OrientationExpr::Input | OrientationExpr::InputSet(_) => vec![(*direction, true)],
+            OrientationExpr::Neutral if pattern_block_requires_implicit_cardinal_expansion(block) => {
+                directions.iter().copied().map(|direction| (direction, true)).collect()
+            }
+            OrientationExpr::Neutral => vec![(neutral_direction(), false)],
+            OrientationExpr::Fixed(name) => directions_for_orientation_name(
+                &name.0,
+                input_names,
+                value_sets,
+                directions,
+            )?
+            .ok_or_else(|| DiagnosticReport::error(format!(
+                "unknown condition pattern orientation: {}",
+                name.0
+            )))?
+            .into_iter()
+            .map(|direction| (direction, true))
+            .collect(),
+        };
+        for (shared_direction, shared_expanded) in shared_directions {
+            for component_directions in expand_condition_component_directions(
+                block,
+                shared_direction,
+                shared_expanded,
+                Some(*direction),
+                input_names,
+                value_sets,
+                directions,
+            )? {
+                let (_, alternatives) = compile_before_after_blocks_for_directions(
+                    block,
+                    block,
+                    object_layers,
+                    mark_names,
+                    value_sets,
+                    maps,
+                    &component_directions,
+                    "condition pattern",
+                    None,
+                )?;
+                for alternative in &alternatives {
+                    patterns.push((
+                        direction.input,
+                        pattern_from_alternative_component_directions(
+                            alternative,
+                            &component_directions,
+                            "condition pattern",
+                        )?,
+                    ));
+                }
+            }
         }
     }
     Ok(patterns)
+}
+
+fn pattern_block_has_input_orientation(block: &PatternBlock) -> bool {
+    block.components.iter().any(|component| {
+        component
+            .orientation
+            .as_deref()
+            .and_then(component_input_axis)
+            .is_some()
+    })
+}
+
+fn expand_condition_component_directions(
+    block: &PatternBlock,
+    shared_direction: Direction,
+    shared_expanded: bool,
+    input_direction: Option<Direction>,
+    input_names: &HashMap<String, InputId>,
+    value_sets: &HashMap<String, Vec<String>>,
+    directions: &[Direction],
+) -> Result<Vec<Vec<(Direction, bool)>>, DiagnosticReport> {
+    let mut assignments = vec![Vec::new()];
+    for component in &block.components {
+        let candidates = match component.orientation.as_deref() {
+            None => vec![(shared_direction, shared_expanded)],
+            Some(raw) if component_input_axis(raw).is_some() => {
+                let input_direction = input_direction.ok_or_else(|| {
+                    DiagnosticReport::error(
+                        "input-oriented component requires an input binding".to_string(),
+                    )
+                })?;
+                vec![(input_direction, true)]
+            }
+            Some(raw) => directions_for_orientation_name(raw, input_names, value_sets, directions)?
+                .ok_or_else(|| {
+                    DiagnosticReport::error(format!("unknown component orientation: {raw}"))
+                })?
+                .into_iter()
+                .map(|direction| (direction, true))
+                .collect(),
+        };
+        let mut next = Vec::new();
+        for assignment in assignments {
+            for candidate in &candidates {
+                let mut expanded = assignment.clone();
+                expanded.push(*candidate);
+                next.push(expanded);
+            }
+        }
+        assignments = next;
+    }
+    Ok(assignments)
 }
 
 fn directions_for_orientation_name(
@@ -871,6 +996,72 @@ fn pattern_from_alternative(
         .components
         .iter()
         .map(|component| {
+            let cells = component
+                .cells
+                .iter()
+                .map(|cell| {
+                    Ok(MatchCell {
+                        offset: resolve_offset(
+                            cell.offset.clone(),
+                            direction,
+                            direction_expanded,
+                            line,
+                        )?,
+                        require_null: cell.require_null,
+                        require_objects: cell.require_objects.clone(),
+                        require_object_sets: cell.require_object_sets.clone(),
+                        forbid_objects: cell.forbid_objects.clone(),
+                        require_mark: resolve_mark_patterns(
+                            cell.require_mark.clone(),
+                            direction,
+                            direction_expanded,
+                            line,
+                        )?,
+                        require_object_set_mark: resolve_object_set_mark_patterns(
+                            cell.require_object_set_mark.clone(),
+                            direction,
+                            direction_expanded,
+                            line,
+                        )?,
+                        forbid_mark: resolve_mark_patterns(
+                            cell.forbid_mark.clone(),
+                            direction,
+                            direction_expanded,
+                            line,
+                        )?,
+                        forbid_object_set_mark: resolve_object_set_mark_patterns(
+                            cell.forbid_object_set_mark.clone(),
+                            direction,
+                            direction_expanded,
+                            line,
+                        )?,
+                    })
+                })
+                .collect::<Result<Vec<_>, DiagnosticReport>>()?;
+            Ok(PatternComponent {
+                cells,
+                gap_count: component.gap_count,
+            })
+        })
+        .collect::<Result<Vec<_>, DiagnosticReport>>()?;
+    Ok(Pattern { components })
+}
+
+fn pattern_from_alternative_component_directions(
+    alternative: &RuleBodyAlternative,
+    component_directions: &[(Direction, bool)],
+    line: &str,
+) -> Result<Pattern, DiagnosticReport> {
+    if alternative.components.len() != component_directions.len() {
+        return Err(DiagnosticReport::error(
+            "pattern component orientation count mismatch".to_string(),
+        ));
+    }
+    let components = alternative
+        .components
+        .iter()
+        .zip(component_directions.iter().copied())
+        .map(|(component, (direction, direction_expanded))| {
             let cells = component
                 .cells
                 .iter()
@@ -2612,48 +2803,158 @@ impl<'a> ProgramLowerer<'a> {
         direction_expanded: bool,
         guards: Vec<Guard>,
     ) -> Result<Vec<RuleStep>, DiagnosticReport> {
-        let (before, alternatives) = compile_before_after_blocks_for_direction(
+        let assignments = self.component_direction_assignments(
             &rewrite.before,
-            &rewrite.after,
-            self.object_layers,
-            self.mark_names,
-            self.value_sets,
-            self.maps,
             direction,
             direction_expanded,
+            &guards,
             &rewrite.source_line,
             rewrite.source_line_number,
         )?;
-        let role_effects = match alternatives.first() {
-            Some(alternative) => {
-                self.lower_effects_for_rewrite(effects, &alternative.tag_captures)?
+        let mut rules = Vec::new();
+        for (component_directions, assignment_guards) in assignments {
+            let (before, alternatives) = compile_before_after_blocks_for_directions(
+                &rewrite.before,
+                &rewrite.after,
+                self.object_layers,
+                self.mark_names,
+                self.value_sets,
+                self.maps,
+                &component_directions,
+                &rewrite.source_line,
+                rewrite.source_line_number,
+            )?;
+            let role_effects = match alternatives.first() {
+                Some(alternative) => {
+                    self.lower_effects_for_rewrite(effects, &alternative.tag_captures)?
+                }
+                None => self.lower_effects(effects)?,
+            };
+            let role = classify_rewrite_role(
+                &before,
+                &alternatives,
+                &role_effects,
+                self.visual_objects,
+                context,
+                &rewrite.source_line,
+                rewrite.source_line_number,
+            )?;
+            if role == ClassifiedRuleRole::Visual {
+                validate_visual_effects(&role_effects, &rewrite.source_line)?;
             }
-            None => self.lower_effects(effects)?,
-        };
-        let role = classify_rewrite_role(
-            &before,
-            &alternatives,
-            &role_effects,
-            self.visual_objects,
-            context,
-            &rewrite.source_line,
-            rewrite.source_line_number,
-        )?;
-        if role == ClassifiedRuleRole::Visual {
-            validate_visual_effects(&role_effects, &rewrite.source_line)?;
+            rules.extend(self.rules_from_alternatives(
+                alternatives,
+                &component_directions,
+                assignment_guards,
+                effects,
+                application,
+                role,
+                &rewrite.source_line,
+                rewrite.source_line_number,
+                context,
+            )?);
         }
-        self.rules_from_alternatives(
-            alternatives,
-            direction,
-            direction_expanded,
-            guards,
-            effects,
-            application,
-            role,
-            &rewrite.source_line,
-            rewrite.source_line_number,
-            context,
-        )
+        Ok(rules)
+    }
+
+    fn component_direction_assignments(
+        &self,
+        block: &PatternBlock,
+        shared_direction: Direction,
+        shared_expanded: bool,
+        guards: &[Guard],
+        source_line: &str,
+        source_line_number: Option<usize>,
+    ) -> Result<Vec<(Vec<(Direction, bool)>, Vec<Guard>)>, DiagnosticReport> {
+        let existing_input = guards.iter().find_map(|guard| match guard {
+            Guard::InputIs(input) => self
+                .directions
+                .iter()
+                .copied()
+                .find(|direction| direction.input == *input),
+            _ => None,
+        });
+        let input_axes = block
+            .components
+            .iter()
+            .filter_map(|component| component.orientation.as_deref())
+            .filter_map(component_input_axis)
+            .collect::<Vec<_>>();
+        let input_directions = if input_axes.is_empty() {
+            vec![existing_input]
+        } else if let Some(existing) = existing_input {
+            vec![Some(existing)]
+        } else {
+            self.directions.iter().copied().map(Some).collect()
+        };
+
+        let mut out = Vec::new();
+        for input_direction in input_directions {
+            let Some(input_direction) = input_direction.or(existing_input).or_else(|| {
+                input_axes.is_empty().then_some(shared_direction)
+            }) else {
+                continue;
+            };
+            let mut input_allowed = true;
+            for axis in &input_axes {
+                let allowed = self
+                    .directions_for_orientation_name(axis)?
+                    .ok_or_else(|| report_at_source_line_number(
+                        format!("unknown input orientation set: {axis}"),
+                        source_line,
+                        source_line_number,
+                    ))?;
+                input_allowed &= allowed.iter().any(|candidate| candidate.input == input_direction.input);
+            }
+            if !input_allowed {
+                continue;
+            }
+
+            let mut candidates = Vec::with_capacity(block.components.len());
+            for component in &block.components {
+                let directions = match component.orientation.as_deref() {
+                    None => vec![(shared_direction, shared_expanded)],
+                    Some(raw) if component_input_axis(raw).is_some() => {
+                        vec![(input_direction, true)]
+                    }
+                    Some(raw) => self
+                        .directions_for_orientation_name(raw)?
+                        .ok_or_else(|| report_at_source_line_number(
+                            format!("unknown component orientation: {raw}"),
+                            source_line,
+                            source_line_number,
+                        ))?
+                        .into_iter()
+                        .map(|direction| (direction, true))
+                        .collect(),
+                };
+                candidates.push(directions);
+            }
+            let mut assignments = vec![Vec::new()];
+            for component_candidates in candidates {
+                let mut next = Vec::new();
+                for assignment in assignments {
+                    for candidate in &component_candidates {
+                        let mut expanded = assignment.clone();
+                        expanded.push(*candidate);
+                        next.push(expanded);
+                    }
+                }
+                assignments = next;
+            }
+            for assignment in assignments {
+                let mut assignment_guards = guards.to_vec();
+                if !input_axes.is_empty()
+                    && !assignment_guards
+                        .iter()
+                        .any(|guard| matches!(guard, Guard::InputIs(input) if *input == input_direction.input))
+                {
+                    assignment_guards.push(Guard::InputIs(input_direction.input));
+                }
+                out.push((assignment, assignment_guards));
+            }
+        }
+        Ok(out)
     }
 
     fn record_rule_debug_info(
@@ -2798,8 +3099,7 @@ impl<'a> ProgramLowerer<'a> {
     fn rules_from_alternatives(
         &mut self,
         alternatives: Vec<RuleBodyAlternative>,
-        direction: Direction,
-        direction_expanded: bool,
+        component_directions: &[(Direction, bool)],
         guards: Vec<Guard>,
         effects: &[EffectAst],
         application: RuleApplication,
@@ -2822,10 +3122,9 @@ impl<'a> ProgramLowerer<'a> {
                 alternatives
                     .iter()
                     .map(|alternative| {
-                        pattern_from_alternative(
+                        pattern_from_alternative_component_directions(
                             alternative,
-                            direction,
-                            direction_expanded,
+                            component_directions,
                             "statement",
                         )
                     })
@@ -2858,7 +3157,8 @@ impl<'a> ProgramLowerer<'a> {
             let compiled_components = alternative
                 .components
                 .iter()
-                .map(|component| {
+                .zip(component_directions.iter().copied())
+                .map(|(component, (direction, direction_expanded))| {
                     let cells = component
                         .cells
                         .iter()
@@ -2910,7 +3210,11 @@ impl<'a> ProgramLowerer<'a> {
             let compiled_writes = alternative
                 .writes
                 .iter()
-                .map(|write| resolve_write(write, direction, direction_expanded, "statement"))
+                .map(|write| {
+                    let component = usize::from(write_template_component(write));
+                    let (direction, direction_expanded) = component_directions[component];
+                    resolve_write(write, direction, direction_expanded, "statement")
+                })
                 .collect::<Result<Vec<_>, DiagnosticReport>>()?;
             if role == ClassifiedRuleRole::Visual {
                 validate_visual_writes(&compiled_writes, self.visual_objects)?;

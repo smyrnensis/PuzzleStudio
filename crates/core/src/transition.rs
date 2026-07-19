@@ -1577,20 +1577,37 @@ fn apply_rule_once(
     collect_trace: bool,
 ) -> TransitionResult<ApplyOutcome> {
     let scope = LocalFrameScope2::new(current, local_frame);
-    let Some(placement) = find_first_match(game, current, rule, &scope) else {
-        return Ok(ApplyOutcome::idle());
-    };
-
-    let patch = build_patch(rule, &placement)?;
     let cancels = rule
         .effects
         .iter()
         .any(|effect| matches!(effect, Effect::Cancel));
-    if cancels {
-        patch.validate(game, current)?;
-    } else {
-        patch.apply_in_place(game, current)?;
+    let mut selected_patch = None;
+    for placement in find_all_matches(game, current, rule, &scope) {
+        if overlapping_component_writes_conflict(game, rule, &placement)? {
+            continue;
+        }
+        let patch = build_patch(rule, &placement)?;
+        let applied = if cancels {
+            match patch.validate(game, current) {
+                Ok(_) => true,
+                Err(error) if overlapping_writes_conflict(&error) => false,
+                Err(error) => return Err(error.into()),
+            }
+        } else {
+            match patch.apply_in_place(game, current) {
+                Ok(_) => true,
+                Err(error) if overlapping_writes_conflict(&error) => false,
+                Err(error) => return Err(error.into()),
+            }
+        };
+        if applied {
+            selected_patch = Some(patch);
+            break;
+        }
     }
+    let Some(patch) = selected_patch else {
+        return Ok(ApplyOutcome::idle());
+    };
     fired_rules.push(rule.id);
     if collect_trace {
         patches.push(patch);
@@ -1620,19 +1637,28 @@ fn apply_rule_random(
 ) -> TransitionResult<ApplyOutcome> {
     let scope = LocalFrameScope2::new(current, context.local_frame);
     let placements = find_all_matches(game, current, rule, &scope);
-    if placements.is_empty() {
-        return Ok(ApplyOutcome::idle());
-    }
-    let index = random_choice_index(game, current, context.input, rule.id, placements.len());
-    let placement = &placements[index];
-    let patch = build_patch(rule, placement)?;
     let cancels = rule
         .effects
         .iter()
         .any(|effect| matches!(effect, Effect::Cancel));
-    if cancels {
-        patch.validate(game, current)?;
-    } else {
+    let mut applicable = Vec::new();
+    for placement in placements {
+        if overlapping_component_writes_conflict(game, rule, &placement)? {
+            continue;
+        }
+        let patch = build_patch(rule, &placement)?;
+        match patch.validate(game, current) {
+            Ok(_) => applicable.push((placement, patch)),
+            Err(error) if overlapping_writes_conflict(&error) => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    if applicable.is_empty() {
+        return Ok(ApplyOutcome::idle());
+    }
+    let index = random_choice_index(game, current, context.input, rule.id, applicable.len());
+    let (_, patch) = applicable.swap_remove(index);
+    if !cancels {
         patch.apply_in_place(game, current)?;
     }
     fired_rules.push(rule.id);
@@ -1674,6 +1700,9 @@ fn apply_rule_once_all(
         if !placement_matches(game, current, rule, &placement, &current_scope) {
             continue;
         }
+        if overlapping_component_writes_conflict(game, rule, &placement)? {
+            continue;
+        }
 
         let patch = build_patch(rule, &placement)?;
         let cancels = rule
@@ -1683,13 +1712,13 @@ fn apply_rule_once_all(
         let applied = if cancels {
             match patch.validate(game, current) {
                 Ok(_) => true,
-                Err(error) if once_all_patch_became_stale(&error) => false,
+                Err(error) if overlapping_writes_conflict(&error) => false,
                 Err(error) => return Err(error.into()),
             }
         } else {
             match patch.apply_in_place(game, current) {
                 Ok(_) => true,
-                Err(error) if once_all_patch_became_stale(&error) => false,
+                Err(error) if overlapping_writes_conflict(&error) => false,
                 Err(error) => return Err(error.into()),
             }
         };
@@ -1722,11 +1751,200 @@ fn apply_rule_once_all(
     })
 }
 
-fn once_all_patch_became_stale(error: &PatchError) -> bool {
+fn overlapping_writes_conflict(error: &PatchError) -> bool {
     matches!(
         error,
         PatchError::ExpectedObject { .. } | PatchError::LayerOccupied { .. }
     )
+}
+
+fn overlapping_component_writes_conflict(
+    game: &CompiledGame,
+    rule: &Rule,
+    placement: &MatchPlacement,
+) -> TransitionResult<bool> {
+    let mut intents = BTreeMap::<(u16, u16, crate::ids::LayerId), (u16, ObjectId)>::new();
+
+    for write in &rule.writes {
+        match write {
+            WriteOp::Add {
+                component,
+                offset,
+                object,
+            } => {
+                let position =
+                    write_position_for_components(&placement.components, *component, offset)
+                        .ok_or(TransitionError::OffsetOutOfBounds)?;
+                if record_component_write_intent(game, &mut intents, *component, position, *object)
+                {
+                    return Ok(true);
+                }
+            }
+            WriteOp::AddObjectSet {
+                component,
+                offset,
+                binding,
+            } => {
+                let object = placement_object_binding(placement, *binding)?;
+                let position =
+                    write_position_for_components(&placement.components, *component, offset)
+                        .ok_or(TransitionError::OffsetOutOfBounds)?;
+                if record_component_write_intent(game, &mut intents, *component, position, object) {
+                    return Ok(true);
+                }
+            }
+            WriteOp::Remove {
+                component,
+                offset,
+                object,
+            } => {
+                let position =
+                    write_position_for_components(&placement.components, *component, offset)
+                        .ok_or(TransitionError::OffsetOutOfBounds)?;
+                let layer = game
+                    .object_layer(*object)
+                    .expect("compiled write object has a layer");
+                if record_layer_write_intent(
+                    &mut intents,
+                    *component,
+                    position,
+                    layer,
+                    ObjectId::EMPTY,
+                ) {
+                    return Ok(true);
+                }
+            }
+            WriteOp::RemoveObjectSet {
+                component,
+                offset,
+                binding,
+            } => {
+                let object = placement_object_binding(placement, *binding)?;
+                let position =
+                    write_position_for_components(&placement.components, *component, offset)
+                        .ok_or(TransitionError::OffsetOutOfBounds)?;
+                let layer = game
+                    .object_layer(object)
+                    .expect("compiled write object has a layer");
+                if record_layer_write_intent(
+                    &mut intents,
+                    *component,
+                    position,
+                    layer,
+                    ObjectId::EMPTY,
+                ) {
+                    return Ok(true);
+                }
+            }
+            WriteOp::Replace {
+                component,
+                offset,
+                remove,
+                add,
+            } => {
+                let position =
+                    write_position_for_components(&placement.components, *component, offset)
+                        .ok_or(TransitionError::OffsetOutOfBounds)?;
+                let remove_layer = game
+                    .object_layer(*remove)
+                    .expect("compiled write object has a layer");
+                if record_layer_write_intent(
+                    &mut intents,
+                    *component,
+                    position,
+                    remove_layer,
+                    ObjectId::EMPTY,
+                ) {
+                    return Ok(true);
+                }
+                if record_component_write_intent(game, &mut intents, *component, position, *add) {
+                    return Ok(true);
+                }
+            }
+            WriteOp::Move {
+                component,
+                from_offset,
+                to_offset,
+                object,
+            } => {
+                let from =
+                    write_position_for_components(&placement.components, *component, from_offset)
+                        .ok_or(TransitionError::OffsetOutOfBounds)?;
+                let to =
+                    write_position_for_components(&placement.components, *component, to_offset)
+                        .ok_or(TransitionError::OffsetOutOfBounds)?;
+                let layer = game
+                    .object_layer(*object)
+                    .expect("compiled write object has a layer");
+                if record_layer_write_intent(&mut intents, *component, from, layer, ObjectId::EMPTY)
+                {
+                    return Ok(true);
+                }
+                if record_component_write_intent(game, &mut intents, *component, to, *object) {
+                    return Ok(true);
+                }
+            }
+            WriteOp::MoveObjectSet {
+                component,
+                from_offset,
+                to_offset,
+                binding,
+            } => {
+                let object = placement_object_binding(placement, *binding)?;
+                let from =
+                    write_position_for_components(&placement.components, *component, from_offset)
+                        .ok_or(TransitionError::OffsetOutOfBounds)?;
+                let to =
+                    write_position_for_components(&placement.components, *component, to_offset)
+                        .ok_or(TransitionError::OffsetOutOfBounds)?;
+                let layer = game
+                    .object_layer(object)
+                    .expect("compiled write object has a layer");
+                if record_layer_write_intent(&mut intents, *component, from, layer, ObjectId::EMPTY)
+                {
+                    return Ok(true);
+                }
+                if record_component_write_intent(game, &mut intents, *component, to, object) {
+                    return Ok(true);
+                }
+            }
+            WriteOp::SetMark { .. }
+            | WriteOp::SetObjectSetMark { .. }
+            | WriteOp::RemoveMark { .. }
+            | WriteOp::RemoveObjectSetMark { .. } => {}
+        }
+    }
+    Ok(false)
+}
+
+fn record_component_write_intent(
+    game: &CompiledGame,
+    intents: &mut BTreeMap<(u16, u16, crate::ids::LayerId), (u16, ObjectId)>,
+    component: u16,
+    position: (u16, u16),
+    object: ObjectId,
+) -> bool {
+    let Some(layer) = game.object_layer(object) else {
+        return false;
+    };
+    record_layer_write_intent(intents, component, position, layer, object)
+}
+
+fn record_layer_write_intent(
+    intents: &mut BTreeMap<(u16, u16, crate::ids::LayerId), (u16, ObjectId)>,
+    component: u16,
+    position: (u16, u16),
+    layer: crate::ids::LayerId,
+    object: ObjectId,
+) -> bool {
+    let key = (position.0, position.1, layer);
+    if let Some((existing_component, existing_object)) = intents.get(&key) {
+        if *existing_component != component && *existing_object != object {
+            return true;
+        }
+    }
+    intents.insert(key, (component, object));
+    false
 }
 
 fn apply_rule_once_per_level(
@@ -2044,31 +2262,6 @@ fn has_pattern_match_in_scope(
 type MatchPlacement = puzzle_kernel::MatchPlacement<2, ObjectId>;
 type ComponentPlacement = puzzle_kernel::ComponentPlacement<2, ObjectId>;
 type ObjectBinding = puzzle_kernel::ObjectBinding<ObjectId>;
-
-fn find_first_match(
-    game: &CompiledGame,
-    state: &State,
-    rule: &Rule,
-    scope: &LocalFrameScope2<'_>,
-) -> Option<MatchPlacement> {
-    if rule.pattern.components.is_empty() {
-        return Some(MatchPlacement::empty());
-    }
-
-    for (x, y) in component_candidate_origins(game, state, &rule.pattern.components[0], scope) {
-        if let Some(first) =
-            component_placement_at(game, state, &rule.pattern.components[0], x, y, scope)
-        {
-            let mut components = vec![first];
-            if complete_component_placements(game, state, rule, 1, &mut components, scope)
-                && placement_writes_within_local_frame(rule, &components, scope)
-            {
-                return Some(MatchPlacement::new(components));
-            }
-        }
-    }
-    None
-}
 
 fn find_all_matches(
     game: &CompiledGame,
@@ -3611,6 +3804,98 @@ mod tests {
 
         assert!(next.has_object(&game, 0, 0, PLAYER));
         assert_eq!(next.object_count(PLAYER), 1);
+    }
+
+    #[test]
+    fn overlapping_components_deduplicate_identical_removes() {
+        let objects = vec![ObjectDef {
+            id: PLAYER,
+            layer_id: LayerId(1),
+        }];
+        let component = PatternComponent {
+            cells: vec![cell(0, 0, vec![PLAYER], vec![])],
+            gap_count: 0,
+        };
+        let rule = Rule {
+            id: RuleId(1),
+            guards: vec![],
+            application: RuleApplication::Once,
+            pattern: Pattern {
+                components: vec![component.clone(), component],
+            },
+            writes: vec![
+                WriteOp::Remove {
+                    component: 0,
+                    offset: fixed(0, 0),
+                    object: PLAYER,
+                },
+                WriteOp::Remove {
+                    component: 1,
+                    offset: fixed(0, 0),
+                    object: PLAYER,
+                },
+            ],
+            effects: vec![],
+        };
+        let game = CompiledGame::new(2, objects, vec![rule]);
+        let mut state = State::empty(1, 1, game.layer_count, game.object_count()).unwrap();
+        state.place_object(&game, 0, 0, PLAYER).unwrap();
+
+        let next = transition_state(&game, &state, RIGHT).unwrap();
+
+        assert!(!next.has_object(&game, 0, 0, PLAYER));
+    }
+
+    #[test]
+    fn conflicting_overlapping_component_writes_skip_the_placement() {
+        let objects = vec![
+            ObjectDef {
+                id: PLAYER,
+                layer_id: LayerId(1),
+            },
+            ObjectDef {
+                id: BOX,
+                layer_id: LayerId(1),
+            },
+            ObjectDef {
+                id: WALL,
+                layer_id: LayerId(1),
+            },
+        ];
+        let component = PatternComponent {
+            cells: vec![cell(0, 0, vec![PLAYER], vec![])],
+            gap_count: 0,
+        };
+        let rule = Rule {
+            id: RuleId(1),
+            guards: vec![],
+            application: RuleApplication::Once,
+            pattern: Pattern {
+                components: vec![component.clone(), component],
+            },
+            writes: vec![
+                WriteOp::Replace {
+                    component: 0,
+                    offset: fixed(0, 0),
+                    remove: PLAYER,
+                    add: BOX,
+                },
+                WriteOp::Replace {
+                    component: 1,
+                    offset: fixed(0, 0),
+                    remove: PLAYER,
+                    add: WALL,
+                },
+            ],
+            effects: vec![],
+        };
+        let game = CompiledGame::new(2, objects, vec![rule]);
+        let mut state = State::empty(1, 1, game.layer_count, game.object_count()).unwrap();
+        state.place_object(&game, 0, 0, PLAYER).unwrap();
+
+        let next = transition_state(&game, &state, RIGHT).unwrap();
+
+        assert_eq!(next, state);
     }
 
     #[test]

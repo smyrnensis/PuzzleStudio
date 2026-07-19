@@ -1347,6 +1347,12 @@ fn add_rule_rewrite_semantic_surface_spans(
     rewrite: Range<usize>,
     spans: &mut Vec<RuleSemanticSurfaceSpan>,
 ) {
+    for span in component_orientation_spans(line, rewrite.clone()) {
+        spans.push(RuleSemanticSurfaceSpan {
+            kind: RuleSemanticSurfaceKind::Keyword,
+            span,
+        });
+    }
     for cell in bracket_content_spans(line, rewrite) {
         let Ok(tokens) = cell_token_spans(line, cell) else {
             continue;
@@ -1355,6 +1361,63 @@ fn add_rule_rewrite_semantic_surface_spans(
             add_rule_cell_token_semantic_surface_spans(line, token, spans);
         }
     }
+}
+
+fn component_orientation_spans(line: &str, range: Range<usize>) -> Vec<Range<usize>> {
+    let mut spans = Vec::new();
+    let mut depth = 0_u16;
+    let mut segment_start = range.start;
+    let mut saw_block = false;
+    for (offset, ch) in line[range.clone()].char_indices() {
+        let index = range.start + offset;
+        match ch {
+            '[' if depth == 0 => {
+                if saw_block {
+                    let segment = trimmed_subrange(line, segment_start..index);
+                    if !segment.is_empty() && !line[segment.clone()].contains("->") {
+                        spans.extend(word_spans(line, segment));
+                    }
+                }
+                depth = 1;
+            }
+            '[' => depth += 1,
+            ']' if depth > 0 => {
+                depth -= 1;
+                if depth == 0 {
+                    saw_block = true;
+                    segment_start = index + ch.len_utf8();
+                }
+            }
+            _ => {}
+        }
+    }
+    spans
+}
+
+fn trimmed_subrange(line: &str, range: Range<usize>) -> Range<usize> {
+    let value = &line[range.clone()];
+    let start = range.start + value.len() - value.trim_start().len();
+    let end = range.end - value.len() + value.trim_end().len();
+    start..end
+}
+
+fn word_spans(line: &str, range: Range<usize>) -> Vec<Range<usize>> {
+    let mut spans = Vec::new();
+    let mut start = None;
+    for (offset, ch) in line[range.clone()].char_indices() {
+        let index = range.start + offset;
+        if ch.is_whitespace() {
+            if let Some(start) = start.take() {
+                spans.push(start..index);
+            }
+        } else {
+            start.get_or_insert(index);
+        }
+    }
+    if let Some(start) = start {
+        spans.push(start..range.end);
+    }
+    spans
 }
 
 fn bracket_content_spans(line: &str, range: Range<usize>) -> Vec<Range<usize>> {
@@ -2378,6 +2441,19 @@ mod tests {
             None,
             "relative 2D movement sets are not defined for 3D line space"
         );
+    }
+
+    #[test]
+    fn rule_semantics_include_component_local_orientation_spans() {
+        let line = "once [ Start ] input horizontal [ Ice | ] -> [ Start ] [ Ice | ]";
+        let spans = rule_line_semantic_surface_spans(line).unwrap();
+        let projected = spans
+            .iter()
+            .map(|span| (span.kind, &line[span.span.clone()]))
+            .collect::<Vec<_>>();
+
+        assert!(projected.contains(&(RuleSemanticSurfaceKind::Keyword, "input")));
+        assert!(projected.contains(&(RuleSemanticSurfaceKind::Keyword, "horizontal")));
     }
 
     #[test]
