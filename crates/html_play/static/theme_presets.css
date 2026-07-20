@@ -35,46 +35,38 @@ body.theme-clean {
   --title-font: var(--ui-font);
 }
 
-.theme-clean .scene-layer.is-menu-scene {
-  gap: 16px;
-}
-
 .theme-clean .view-text[data-text-role="heading"] {
   font-size: 30px;
   line-height: 1.08;
 }
 
 .theme-clean .scene-layer > button,
-.theme-clean .scene-layer > .level-menu,
 .theme-clean .view-column > button,
-.theme-clean .view-column > .level-menu,
-.theme-clean .view-box > button,
-.theme-clean .view-box > .level-menu {
+.theme-clean .view-box > button {
   width: var(--clean-control-width, auto);
   max-width: 100%;
 }
 
-.theme-clean .level-menu {
+.theme-clean .view-column.is-scroll,
+.theme-clean .view-box.is-scroll {
   padding-right: 0;
   scrollbar-gutter: auto;
   scrollbar-width: none;
 }
 
-.theme-clean .level-menu::-webkit-scrollbar {
+.theme-clean .view-column.is-scroll::-webkit-scrollbar,
+.theme-clean .view-box.is-scroll::-webkit-scrollbar {
   display: none;
 }
 
-.theme-clean .is-menu-scene button {
+.theme-clean button.standard-choice {
   justify-items: center;
   text-align: center;
 }
 
-.theme-clean .is-menu-scene button .ps-control-label {
+.theme-clean button.standard-choice .ps-control-label {
   justify-self: center;
   text-align: center;
-}
-
-.theme-clean .level-menu .ps-control-label {
   white-space: nowrap;
 }
 
@@ -86,7 +78,6 @@ body.theme-terminal {
   --radius-control: 0px;
   --radius-panel: 0px;
   --menu-cursor: ">";
-  --level-clear-mark: "*";
   --ui-font: "PuzzleStudio Pixel 5x7", "Courier New", Monaco, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --title-font: var(--ui-font);
   background: var(--background);
@@ -97,8 +88,7 @@ body.theme-terminal {
   text-rendering: optimizeSpeed;
 }
 
-.theme-terminal button,
-.theme-terminal .level-menu li {
+.theme-terminal button {
   border: 0;
   background: transparent;
   color: var(--text);
@@ -108,17 +98,14 @@ body.theme-terminal {
 }
 
 .theme-terminal button:hover,
-.theme-terminal .is-menu-scene button:hover,
-.theme-terminal .level-menu li.is-selected,
-.theme-terminal .is-menu-scene button.is-selected {
+.theme-terminal button.standard-choice.is-selected {
   background: var(--text);
   color: var(--background);
   box-shadow: none;
   transform: none;
 }
 
-.theme-terminal button:active,
-.theme-terminal .is-menu-scene button:active {
+.theme-terminal button:active {
   background: transparent;
   color: var(--text);
 }
@@ -130,13 +117,8 @@ body.theme-terminal {
 }
 
 .theme-terminal .cell,
-.theme-terminal .sprite {
+.theme-terminal .visual {
   image-rendering: pixelated;
-}
-
-.theme-terminal .scene-layer.is-menu-scene {
-  gap: 8px;
-  justify-items: stretch;
 }
 
 .theme-terminal .view-text[data-text-role="heading"] {
@@ -154,13 +136,8 @@ body.theme-terminal {
   text-transform: uppercase;
 }
 
-.theme-terminal .is-menu-scene button,
-.theme-terminal .level-menu {
+.theme-terminal button.standard-choice {
   width: min(100%, 520px);
-}
-
-.theme-terminal .is-menu-scene button,
-.theme-terminal .level-menu li {
   min-height: 30px;
   padding: 5px 8px 5px 32px;
   font-size: 18px;
@@ -180,8 +157,7 @@ body.theme-paper {
     var(--background);
 }
 
-.theme-paper button,
-.theme-paper .level-menu li {
+.theme-paper button {
   border: 1px solid color-mix(in srgb, var(--accent) 24%, transparent);
   border-left: 4px solid color-mix(in srgb, var(--accent) 34%, transparent);
   background: color-mix(in srgb, var(--background) 90%, transparent);
@@ -189,22 +165,22 @@ body.theme-paper {
   color: var(--text);
 }
 
-.theme-paper .level-menu li,
-.theme-paper .is-menu-scene button {
+.theme-paper button.standard-choice {
+  width: min(100%, 460px);
+  min-height: 46px;
+  padding: 10px 16px 10px 38px;
   border-radius: 2px 7px 7px 2px;
   justify-items: start;
   text-align: left;
 }
 
-.theme-paper button:hover,
-.theme-paper .is-menu-scene button:hover {
+.theme-paper button:hover {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
   box-shadow: 0 5px 12px color-mix(in srgb, var(--text) 13%, transparent);
   transform: translateY(-1px);
 }
 
-.theme-paper .level-menu li.is-selected,
-.theme-paper .is-menu-scene button.is-selected {
+.theme-paper button.standard-choice.is-selected {
   border-left-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 12%, transparent);
   box-shadow:
@@ -215,10 +191,6 @@ body.theme-paper {
 .theme-paper .board {
   border: 1px solid color-mix(in srgb, var(--text) 16%, transparent);
   box-shadow: 0 10px 24px color-mix(in srgb, var(--text) 15%, transparent);
-}
-
-.theme-paper .scene-layer.is-menu-scene {
-  gap: 18px;
 }
 
 .theme-paper .view-text[data-text-role="heading"] {
@@ -232,17 +204,6 @@ body.theme-paper {
   text-align: center;
 }
 
-.theme-paper .is-menu-scene button,
-.theme-paper .level-menu {
-  width: min(100%, 460px);
-}
-
-.theme-paper .is-menu-scene button,
-.theme-paper .level-menu li {
-  min-height: 46px;
-  padding: 10px 16px 10px 38px;
-}
-
 body.theme-pixel {
   color-scheme: dark;
   --background: #08080c;
@@ -251,7 +212,6 @@ body.theme-pixel {
   --radius-control: 0px;
   --radius-panel: 0px;
   --menu-cursor: ">";
-  --level-clear-mark: "*";
   --ui-font: "PuzzleStudio Pixel 8x8", "Courier New", Monaco, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --title-font: var(--ui-font);
   background: var(--background);
@@ -262,8 +222,7 @@ body.theme-pixel {
   text-rendering: optimizeSpeed;
 }
 
-.theme-pixel button,
-.theme-pixel .level-menu li {
+.theme-pixel button {
   border: 4px solid var(--text);
   background: transparent;
   color: var(--text);
@@ -275,17 +234,14 @@ body.theme-pixel {
 }
 
 .theme-pixel button:hover,
-.theme-pixel .is-menu-scene button:hover,
-.theme-pixel .level-menu li.is-selected,
-.theme-pixel .is-menu-scene button.is-selected {
+.theme-pixel button.standard-choice.is-selected {
   background: var(--text);
   color: var(--background);
   box-shadow: none;
   transform: none;
 }
 
-.theme-pixel button:active,
-.theme-pixel .is-menu-scene button:active {
+.theme-pixel button:active {
   background: transparent;
   color: var(--text);
 }
@@ -297,13 +253,8 @@ body.theme-pixel {
 }
 
 .theme-pixel .cell,
-.theme-pixel .sprite {
+.theme-pixel .visual {
   image-rendering: pixelated;
-}
-
-.theme-pixel .scene-layer.is-menu-scene {
-  gap: 16px;
-  justify-items: stretch;
 }
 
 .theme-pixel .view-text[data-text-role="heading"] {
@@ -327,26 +278,16 @@ body.theme-pixel {
   text-transform: uppercase;
 }
 
-.theme-pixel .is-menu-scene button,
-.theme-pixel .level-menu {
+.theme-pixel button.standard-choice {
   width: min(100%, 608px);
-}
-
-.theme-pixel .is-menu-scene button,
-.theme-pixel .level-menu li {
   min-height: 72px;
   padding: 12px 16px 12px 64px;
   font-size: 32px;
   line-height: 1.15;
 }
 
-.theme-pixel .level-menu li::before,
-.theme-pixel .is-menu-scene button::before {
+.theme-pixel button.standard-choice::before {
   left: 16px;
-}
-
-.theme-pixel .level-clear-mark {
-  width: 24px;
 }
 
 body.theme-puzzlescript {
@@ -366,7 +307,6 @@ body.theme-puzzlescript {
   --radius-control: 0px;
   --radius-panel: 0px;
   --menu-cursor: "#";
-  --level-clear-mark: "*";
   --ui-font: "PuzzleScript Terminal", "Courier New", Monaco, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --title-font: var(--ui-font);
   background: var(--background);
@@ -390,11 +330,6 @@ body.theme-puzzlescript {
 
 .theme-puzzlescript .screen-view {
   gap: 16px;
-}
-
-.theme-puzzlescript .scene-layer.is-menu-scene {
-  gap: 16px;
-  justify-items: center;
 }
 
 .theme-puzzlescript .view-text[data-text-role="heading"],
@@ -429,11 +364,11 @@ body.theme-puzzlescript {
   text-align: center;
 }
 
-.theme-puzzlescript button,
-.theme-puzzlescript .level-menu li {
+.theme-puzzlescript button {
   position: relative;
+  width: min(100%, var(--ps-terminal-control-width));
+  max-width: min(100%, var(--ps-terminal-control-width));
   min-height: 44px;
-  max-width: 100%;
   padding: 5px 1ch;
   border: 0;
   border-radius: 0;
@@ -449,6 +384,7 @@ body.theme-puzzlescript {
   box-shadow: none;
   font-weight: 400;
   letter-spacing: 0;
+  overflow: hidden;
   text-align: center;
   text-shadow: none;
   text-transform: none;
@@ -489,61 +425,35 @@ body.theme-puzzlescript {
   content: "";
 }
 
-.theme-puzzlescript .view-list {
+.theme-puzzlescript .view-column.is-scroll,
+.theme-puzzlescript .view-box.is-scroll {
   width: min(100%, var(--ps-terminal-control-width));
-  justify-items: stretch;
+  align-items: stretch;
+  padding-right: 0;
+  scrollbar-gutter: auto;
+  scrollbar-width: none;
 }
 
-.theme-puzzlescript .view-list > li {
+.theme-puzzlescript .view-column.is-scroll > button.standard-choice,
+.theme-puzzlescript .view-box.is-scroll > button.standard-choice {
   width: 100%;
   display: grid;
   justify-items: center;
 }
 
 .theme-puzzlescript button::before,
-.theme-puzzlescript button::after,
-.theme-puzzlescript .level-menu li::before,
-.theme-puzzlescript .level-menu li::after {
+.theme-puzzlescript button::after {
   display: none;
   content: "";
 }
 
-.theme-puzzlescript .level-menu li {
-  width: 100%;
-}
-
-.theme-puzzlescript .level-clear-mark {
-  position: absolute;
-  right: 1ch;
-  width: 1ch;
-  color: var(--ok);
-  text-align: center;
-}
-
-.theme-puzzlescript button,
-.theme-puzzlescript .level-menu {
-  width: min(100%, var(--ps-terminal-control-width));
-  max-width: min(100%, var(--ps-terminal-control-width));
-}
-
-.theme-puzzlescript .level-menu {
-  padding-right: 0;
-  scrollbar-gutter: auto;
-  scrollbar-width: none;
-}
-
-.theme-puzzlescript .level-menu::-webkit-scrollbar {
+.theme-puzzlescript .view-column.is-scroll::-webkit-scrollbar,
+.theme-puzzlescript .view-box.is-scroll::-webkit-scrollbar {
   display: none;
-}
-
-.theme-puzzlescript button,
-.theme-puzzlescript .level-menu li {
-  overflow: hidden;
 }
 
 .theme-puzzlescript button:hover,
 .theme-puzzlescript button:active,
-.theme-puzzlescript .level-menu li.is-selected,
 .theme-puzzlescript button.is-selected,
 .theme-puzzlescript button.is-confirming {
   background: transparent;
@@ -552,19 +462,17 @@ body.theme-puzzlescript {
   transform: none;
 }
 
-.theme-puzzlescript button.is-selected > .ps-control-edge::before,
-.theme-puzzlescript .level-menu li.is-selected > .ps-control-edge::before {
+.theme-puzzlescript button.is-selected > .ps-control-edge::before {
   content: "#";
 }
 
-.theme-puzzlescript button.is-confirming > .ps-control-edge::before,
-.theme-puzzlescript .level-menu li.is-confirming > .ps-control-edge::before {
+.theme-puzzlescript button.is-confirming > .ps-control-edge::before {
   content: var(--ps-confirm-fill, "#");
 }
 
 .theme-puzzlescript .board,
 .theme-puzzlescript .cell,
-.theme-puzzlescript .sprite {
+.theme-puzzlescript .visual {
   border: 0;
   box-shadow: none;
   image-rendering: pixelated;
@@ -597,8 +505,7 @@ body.theme-candy {
     var(--background);
 }
 
-.theme-candy button,
-.theme-candy .level-menu li {
+.theme-candy button {
   border: 1px solid color-mix(in srgb, var(--accent) 24%, transparent);
   box-shadow: 0 5px 0 color-mix(in srgb, var(--accent) 16%, transparent);
   color: var(--text);
@@ -612,16 +519,14 @@ body.theme-candy {
   );
 }
 
-.theme-candy button:hover,
-.theme-candy .is-menu-scene button:hover {
+.theme-candy button:hover {
   box-shadow:
     0 6px 0 color-mix(in srgb, var(--accent) 18%, transparent),
     inset 0 0 0 2px color-mix(in srgb, var(--background) 26%, transparent);
   transform: translateY(-2px);
 }
 
-.theme-candy .level-menu li.is-selected,
-.theme-candy .is-menu-scene button.is-selected {
+.theme-candy button.standard-choice.is-selected {
   background: var(--accent);
   color: var(--background);
   box-shadow:
@@ -634,10 +539,6 @@ body.theme-candy {
   border-radius: 14px;
   box-shadow: 0 16px 34px color-mix(in srgb, var(--text) 16%, transparent);
   overflow: hidden;
-}
-
-.theme-candy .scene-layer.is-menu-scene {
-  gap: 22px;
 }
 
 .theme-candy .view-text[data-text-role="heading"] {
@@ -653,20 +554,14 @@ body.theme-candy {
   text-align: center;
 }
 
-.theme-candy .is-menu-scene button,
-.theme-candy .level-menu {
+.theme-candy button.standard-choice {
   width: min(100%, 390px);
-}
-
-.theme-candy .is-menu-scene button,
-.theme-candy .level-menu li {
   min-height: 60px;
   padding: 14px 20px 14px 46px;
   font-size: 17px;
 }
 
-.theme-candy .level-menu li.is-selected::before,
-.theme-candy .is-menu-scene button.is-selected::before {
+.theme-candy button.standard-choice.is-selected::before {
   width: 10px;
   height: 10px;
   display: block;
@@ -695,8 +590,7 @@ body.theme-blueprint {
   text-transform: uppercase;
 }
 
-.theme-blueprint button,
-.theme-blueprint .level-menu li {
+.theme-blueprint button {
   border: 1px solid color-mix(in srgb, var(--text) 42%, transparent);
   background: color-mix(in srgb, var(--background) 78%, transparent);
   color: var(--text);
@@ -704,9 +598,7 @@ body.theme-blueprint {
 }
 
 .theme-blueprint button:hover,
-.theme-blueprint .is-menu-scene button:hover,
-.theme-blueprint .level-menu li.is-selected,
-.theme-blueprint .is-menu-scene button.is-selected {
+.theme-blueprint button.standard-choice.is-selected {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
   box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 42%, transparent);
   transform: none;
@@ -721,11 +613,6 @@ body.theme-blueprint {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 4%, transparent);
 }
 
-.theme-blueprint .scene-layer.is-menu-scene {
-  gap: 10px;
-  justify-items: stretch;
-}
-
 .theme-blueprint .view-text[data-text-role="heading"] {
   font-size: 26px;
   line-height: 1.1;
@@ -737,13 +624,8 @@ body.theme-blueprint {
   text-align: left;
 }
 
-.theme-blueprint .is-menu-scene button,
-.theme-blueprint .level-menu {
+.theme-blueprint button.standard-choice {
   width: min(100%, 540px);
-}
-
-.theme-blueprint .is-menu-scene button,
-.theme-blueprint .level-menu li {
   min-height: 42px;
   padding: 8px 12px 8px 36px;
   font-size: 13px;
@@ -773,31 +655,18 @@ body.theme-noir {
   color: var(--accent);
 }
 
-.theme-noir button,
-.theme-noir .level-menu li {
+.theme-noir button {
   border: 1px solid color-mix(in srgb, var(--text) 24%, transparent);
   box-shadow: 0 10px 24px color-mix(in srgb, var(--background) 50%, transparent);
 }
 
-.theme-noir button:hover,
-.theme-noir .is-menu-scene button:hover {
+.theme-noir button:hover {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
-}
-
-.theme-noir .level-menu li.is-selected,
-.theme-noir .is-menu-scene button.is-selected {
-  box-shadow:
-    inset 0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent),
-    0 10px 24px color-mix(in srgb, var(--background) 50%, transparent);
 }
 
 .theme-noir .board {
   border: 1px solid color-mix(in srgb, var(--text) 24%, transparent);
   box-shadow: 0 16px 36px color-mix(in srgb, var(--background) 54%, transparent);
-}
-
-.theme-noir .scene-layer.is-menu-scene {
-  gap: 24px;
 }
 
 .theme-noir .view-text[data-text-role="heading"] {
@@ -815,33 +684,17 @@ body.theme-noir {
   text-transform: uppercase;
 }
 
-.theme-noir .is-menu-scene button {
-  width: min(100%, 340px);
-  min-height: 56px;
-  padding: 0 24px;
-  justify-items: center;
-  text-align: center;
-}
-
-.theme-noir .is-menu-scene button::before {
-  display: none;
-}
-
-.theme-noir .level-menu {
+.theme-noir button.standard-choice {
   width: min(100%, 380px);
-}
-
-.theme-noir .level-menu li {
   min-height: 48px;
   padding: 10px 18px 10px 18px;
 }
 
-.theme-noir .level-menu li::before {
+.theme-noir button.standard-choice::before {
   display: none;
 }
 
-.theme-noir .level-menu li.is-selected,
-.theme-noir .is-menu-scene button.is-selected {
+.theme-noir button.standard-choice.is-selected {
   border-color: var(--accent);
   box-shadow:
     inset 4px 0 0 var(--accent),

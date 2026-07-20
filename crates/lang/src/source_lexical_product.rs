@@ -62,6 +62,7 @@ pub(crate) fn build_surface_highlight_spans_in_range(
         }
         if is_contained_by(fact.start, fact.end, plain_ranges)
             && !matches!(fact.kind, SourceLexicalKind::Word)
+            && semantic_kind_at(semantic_tokens, fact.start, fact.end).is_none()
         {
             continue;
         }
@@ -89,6 +90,16 @@ fn map_lexical_fact(
     fact: &SourceLexicalFact,
     spans: &mut Vec<SourceHighlightSpan>,
 ) {
+    if let Some(kind) = semantic_kind_exact(semantic_tokens, fact.start, fact.end)
+        && !matches!(
+            (&fact.kind, kind),
+            (SourceLexicalKind::Color(_), SurfaceSemanticKind::Color)
+        )
+    {
+        push_span(spans, fact.start, fact.end, highlight_kind(kind));
+        return;
+    }
+
     match &fact.kind {
         SourceLexicalKind::Word => {
             if let Some(kind) = semantic_kind_at(semantic_tokens, fact.start, fact.end) {
@@ -201,14 +212,14 @@ fn append_owner_display_facts(
                     SourceHighlightKind::InvalidLevelCell
                 },
             ),
-            crate::SurfaceDisplayFact::SpritePixel {
+            crate::SurfaceDisplayFact::VisualPixel {
                 span,
                 color,
                 transparent,
             } => spans.push(SourceHighlightSpan {
                 start: span.start,
                 end: span.end,
-                kind: SourceHighlightKind::SpritePixel,
+                kind: SourceHighlightKind::VisualPixel,
                 color: color.clone(),
                 transparent: *transparent,
             }),
@@ -219,10 +230,13 @@ fn append_owner_display_facts(
                 color: Some(color.clone()),
                 transparent: false,
             }),
-            crate::SurfaceDisplayFact::LevelSeparator { span } => {
-                push_span(spans, span.start, span.end, SourceHighlightKind::LevelCell)
-            }
-            crate::SurfaceDisplayFact::SpriteSeparator { span } => {
+            crate::SurfaceDisplayFact::LevelSeparator { span } => push_span(
+                spans,
+                span.start,
+                span.end,
+                SourceHighlightKind::LevelSeparator,
+            ),
+            crate::SurfaceDisplayFact::VisualSeparator { span } => {
                 push_span(spans, span.start, span.end, SourceHighlightKind::Arrow)
             }
         }
@@ -570,12 +584,12 @@ Enter -> goto playing
 
     #[test]
     fn owner_ranges_override_lexical_facts_with_pixel_data() {
-        let source = "puzzle board {\nslots { objects = Box }\nsprites {\nBox {\n#fff #000\n01\n}\n}\nrules {\n}\n}\n";
+        let source = "puzzle board {\nslots { objects = Box }\nvisuals {\nBox {\n#fff #000\n01\n}\n}\nrules {\n}\n}\n";
         let highlighted = highlight_source(source);
         let pixels = highlighted
             .spans
             .iter()
-            .filter(|span| span.kind == SourceHighlightKind::SpritePixel)
+            .filter(|span| span.kind == SourceHighlightKind::VisualPixel)
             .collect::<Vec<_>>();
         assert!(
             pixels

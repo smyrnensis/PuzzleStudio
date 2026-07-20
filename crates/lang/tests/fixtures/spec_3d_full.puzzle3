@@ -68,9 +68,9 @@ scene level_select {
 layout {
   heading "Select Level"
   column scroll=true {
-    for level in microban {
-      choice join("microban ", level.num) -> goto sokoban(level)
-    }
+    choice "microban 1" -> goto sokoban("microban 1")
+    choice "microban 2" -> goto sokoban("microban 2")
+    choice "microban 3" -> goto sokoban("microban 3")
   }
   button "Exit" -> goto title
 }
@@ -139,7 +139,7 @@ level "microban 3" {
 }
 }
 
-sprites basic of sokoban {
+visuals basic of sokoban {
 Floor {
 colors = #90ee90 #008000
 shape = {

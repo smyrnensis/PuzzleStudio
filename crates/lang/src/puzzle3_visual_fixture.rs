@@ -3,7 +3,7 @@ use std::fmt::Write;
 
 use crate::{
     LoadedGridGame, SpatialPresentation, ViewportFollow3, ViewportHeight3, ViewportMode3,
-    VoxelColor, VoxelSpriteSet,
+    VoxelColor, VoxelVisualSet,
 };
 use puzzle_core::{GridState, ObjectId, Size3};
 
@@ -64,7 +64,7 @@ pub fn export_visual_fixture_json_with_title_and_scenes(
     write_scenes(&mut out, scene_fields_json);
     write_levels(&mut out, game, presentation, &object_names)?;
     write_level_bundles(&mut out, game, level_bundle_names);
-    write_sprites(&mut out, presentation.sprite_set.as_ref());
+    write_visuals(&mut out, presentation.visual_set.as_ref());
     out.push_str("}\n");
     Ok(out)
 }
@@ -73,7 +73,7 @@ fn write_visual_order(out: &mut String, presentation: &SpatialPresentation) {
     out.push_str("  \"order\": ");
     out.push_str(
         &serde_json::to_string(&presentation.visual_order)
-            .expect("compiled 3D sprite order serialization must succeed"),
+            .expect("compiled 3D visual order serialization must succeed"),
     );
     out.push_str(",\n");
 }
@@ -97,14 +97,14 @@ fn write_render(
     );
     let _ = write!(
         out,
-        "\"grid\": {{ \"visibility\": {}, \"occupiedCells\": {} }}, \"sprite\": {{ \"shade\": {} }}, \"shadow\": {}, \"pixelate\": {{ \"enabled\": {}, \"scale\": {}, \"smoothing\": {} }}, \"animation\": {{ \"tween\": {{ \"enabled\": {}, \"intervalMs\": {} }} }}, \"viewport\": ",
+        "\"grid\": {{ \"visibility\": {}, \"occupiedCells\": {} }}, \"visual\": {{ \"shade\": {} }}, \"shadow\": {}, \"pixelate\": {{ \"enabled\": {}, \"scale\": {}, \"smoothing\": {} }}, \"animation\": {{ \"tween\": {{ \"enabled\": {}, \"intervalMs\": {} }} }}, \"viewport\": ",
         if game.render.grid.occupied_cells {
             1
         } else {
             0
         },
         game.render.grid.occupied_cells,
-        game.render.sprite.shade,
+        game.render.visual.shade,
         game.render.shadow,
         pixelate.enabled,
         pixelate.scale,
@@ -170,9 +170,9 @@ fn format_zoom(zoom_milli: u16) -> String {
 
 fn fixture_title(presentation: &SpatialPresentation) -> String {
     presentation
-        .sprite_set
+        .visual_set
         .as_ref()
-        .and_then(|sprites| sprites.model.as_deref())
+        .and_then(|visuals| visuals.model.as_deref())
         .map(title_from_identifier)
         .unwrap_or_else(|| "Puzzle3".to_string())
 }
@@ -295,11 +295,11 @@ fn write_objects(
             .unwrap_or(0);
         writeln!(
             out,
-            "    {}: {{ \"id\": {}, \"name\": {}, \"sprite\": {}, \"layer\": {} }}{}",
+            "    {}: {{ \"id\": {}, \"name\": {}, \"visual\": {}, \"layer\": {} }}{}",
             json_string(name),
             object.0,
             json_string(name),
-            fixture_sprite_value(presentation, name),
+            fixture_visual_value(presentation, name),
             layer,
             comma
         )
@@ -355,7 +355,7 @@ fn write_levels(
             "cells",
             &level.initial_state,
             names,
-            presentation.sprite_set.as_ref(),
+            presentation.visual_set.as_ref(),
         )?;
         out.push('\n');
         writeln!(out, "    }}{}", comma).unwrap();
@@ -367,7 +367,7 @@ fn write_levels(
         "cells",
         &first.initial_state,
         names,
-        presentation.sprite_set.as_ref(),
+        presentation.visual_set.as_ref(),
     )?;
     out.push_str(",\n");
     Ok(())
@@ -421,7 +421,7 @@ fn write_state_cells_field(
     name: &str,
     state: &GridState<3, Size3>,
     names: &BTreeMap<ObjectId, String>,
-    sprite_set: Option<&VoxelSpriteSet>,
+    visual_set: Option<&VoxelVisualSet>,
 ) -> Result<(), VisualFixtureExportError> {
     let cells = state
         .slots()
@@ -460,10 +460,10 @@ fn write_state_cells_field(
                 .ok_or(VisualFixtureExportError::MissingObjectName { object: *object })?;
             write!(
                 out,
-                "{{ \"id\": {}, \"name\": {}, \"sprite\": {} }}",
+                "{{ \"id\": {}, \"name\": {}, \"visual\": {} }}",
                 object.0,
                 json_string(object_name),
-                fixture_sprite_value_from_set(sprite_set, object_name)
+                fixture_visual_value_from_set(visual_set, object_name)
             )
             .unwrap();
         }
@@ -474,32 +474,32 @@ fn write_state_cells_field(
     Ok(())
 }
 
-fn fixture_sprite_value(presentation: &SpatialPresentation, object_name: &str) -> String {
-    fixture_sprite_value_from_set(presentation.sprite_set.as_ref(), object_name)
+fn fixture_visual_value(presentation: &SpatialPresentation, object_name: &str) -> String {
+    fixture_visual_value_from_set(presentation.visual_set.as_ref(), object_name)
 }
 
-fn fixture_sprite_value_from_set(sprite_set: Option<&VoxelSpriteSet>, object_name: &str) -> String {
-    sprite_set
-        .and_then(|sprites| sprites.sprite(object_name))
-        .map(|sprite| json_string(&sprite.name))
+fn fixture_visual_value_from_set(visual_set: Option<&VoxelVisualSet>, object_name: &str) -> String {
+    visual_set
+        .and_then(|visuals| visuals.visual(object_name))
+        .map(|visual| json_string(&visual.name))
         .unwrap_or_else(|| "null".to_string())
 }
 
-fn write_sprites(out: &mut String, sprite_set: Option<&VoxelSpriteSet>) {
-    out.push_str("  \"sprites\": {\n");
-    let Some(sprite_set) = sprite_set else {
+fn write_visuals(out: &mut String, visual_set: Option<&VoxelVisualSet>) {
+    out.push_str("  \"visuals\": {\n");
+    let Some(visual_set) = visual_set else {
         out.push_str("  }\n");
         return;
     };
-    for (index, sprite) in sprite_set.sprites.iter().enumerate() {
-        let comma = if index + 1 == sprite_set.sprites.len() {
+    for (index, visual) in visual_set.visuals.iter().enumerate() {
+        let comma = if index + 1 == visual_set.visuals.len() {
             ""
         } else {
             ","
         };
-        writeln!(out, "    {}: {{", json_string(&sprite.name)).unwrap();
+        writeln!(out, "    {}: {{", json_string(&visual.name)).unwrap();
         out.push_str("      \"palette\": {");
-        let visible_colors = sprite
+        let visible_colors = visual
             .palette
             .iter()
             .map(|(key, color)| match color {
@@ -521,7 +521,7 @@ fn write_sprites(out: &mut String, sprite_set: Option<&VoxelSpriteSet>) {
         }
         out.push_str("},\n");
         out.push_str("      \"frames\": [\n");
-        for (frame_index, frame) in sprite.frames.iter().enumerate() {
+        for (frame_index, frame) in visual.frames.iter().enumerate() {
             out.push_str("        { \"layers\": [\n");
             for (layer_index, layer) in frame.slices.iter().enumerate() {
                 out.push_str("          [");
@@ -538,7 +538,7 @@ fn write_sprites(out: &mut String, sprite_set: Option<&VoxelSpriteSet>) {
                 };
                 writeln!(out, "]{layer_comma}").unwrap();
             }
-            let frame_comma = if frame_index + 1 == sprite.frames.len() {
+            let frame_comma = if frame_index + 1 == visual.frames.len() {
                 ""
             } else {
                 ","
@@ -546,20 +546,20 @@ fn write_sprites(out: &mut String, sprite_set: Option<&VoxelSpriteSet>) {
             writeln!(out, "        ] }}{frame_comma}").unwrap();
         }
         out.push_str("      ],\n");
-        match sprite.duration_ms {
+        match visual.duration_ms {
             Some(value) => writeln!(out, "      \"durationMs\": {value},").unwrap(),
             None => out.push_str("      \"durationMs\": null,\n"),
         }
-        match sprite.frame_duration_ms {
+        match visual.frame_duration_ms {
             Some(value) => writeln!(out, "      \"frameDurationMs\": {value},").unwrap(),
             None => out.push_str("      \"frameDurationMs\": null,\n"),
         }
         out.push_str("      \"spatialOps\": ");
-        out.push_str(&serde_json::to_string(&sprite.transforms.iter().map(|op| match op {
-            crate::VisualSpriteTransform::Translate { space, value } => serde_json::json!({"kind":"translate3","space":match space { crate::VisualSpriteSpace::World => "world", crate::VisualSpriteSpace::Local => "local" },"value":value}),
-            crate::VisualSpriteTransform::Rotate { space, axis, degrees } => serde_json::json!({"kind":"rotate3","space":match space { crate::VisualSpriteSpace::World => "world", crate::VisualSpriteSpace::Local => "local" },"axis":axis,"degrees":degrees}),
-            crate::VisualSpriteTransform::Flip { enabled } => serde_json::json!({"kind":"flip3","enabled":enabled}),
-        }).collect::<Vec<_>>()).expect("sprite spatial ops serialize"));
+        out.push_str(&serde_json::to_string(&visual.transforms.iter().map(|op| match op {
+            crate::VisualTransform::Translate { space, value } => serde_json::json!({"kind":"translate3","space":match space { crate::VisualSpace::World => "world", crate::VisualSpace::Local => "local" },"value":value}),
+            crate::VisualTransform::Rotate { space, axis, degrees } => serde_json::json!({"kind":"rotate3","space":match space { crate::VisualSpace::World => "world", crate::VisualSpace::Local => "local" },"axis":axis,"degrees":degrees}),
+            crate::VisualTransform::Flip { enabled } => serde_json::json!({"kind":"flip3","enabled":enabled}),
+        }).collect::<Vec<_>>()).expect("visual spatial ops serialize"));
         out.push('\n');
         writeln!(out, "    }}{}", comma).unwrap();
     }

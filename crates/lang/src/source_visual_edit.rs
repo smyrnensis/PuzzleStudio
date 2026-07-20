@@ -4,7 +4,7 @@ use crate::source_target::resolve_source_entries_from_document;
 use crate::{SourceTargetKind, parse_surface_source_target_document_for_profile};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SpriteEditMutationResult {
+pub struct VisualEditMutationResult {
     pub source: String,
     pub start: usize,
     pub end: usize,
@@ -13,7 +13,7 @@ pub struct SpriteEditMutationResult {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct SpriteEditRequest {
+struct VisualEditRequest {
     operation: String,
     dimension: String,
     name: Option<String>,
@@ -25,20 +25,20 @@ struct SpriteEditRequest {
     frame_duration_ms: Option<u64>,
     shape_ref: Option<String>,
     prelude_rows: Option<Vec<String>>,
-    spatial_ops: Option<Vec<SpriteEditSpatialOp>>,
-    color_bindings: Option<Vec<SpriteEditColorBinding>>,
+    spatial_ops: Option<Vec<VisualEditSpatialOp>>,
+    color_bindings: Option<Vec<VisualEditColorBinding>>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct SpriteEditColorBinding {
+struct VisualEditColorBinding {
     name: String,
     color: String,
 }
 
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
-enum SpriteEditSpatialOp {
+enum VisualEditSpatialOp {
     Translate2 {
         space: String,
         value: [f64; 2],
@@ -58,16 +58,16 @@ enum SpriteEditSpatialOp {
     },
 }
 
-pub fn mutate_sprite_source(
+pub fn mutate_visual_source(
     source: &str,
     request_json: &str,
-) -> Result<SpriteEditMutationResult, String> {
-    let request: SpriteEditRequest = serde_json::from_str(request_json)
-        .map_err(|error| format!("invalid sprite edit request: {error}"))?;
+) -> Result<VisualEditMutationResult, String> {
+    let request: VisualEditRequest = serde_json::from_str(request_json)
+        .map_err(|error| format!("invalid visual edit request: {error}"))?;
     let dimension = match request.dimension.as_str() {
         "2d" => crate::ModelDimension::Two,
         "3d" => crate::ModelDimension::Three,
-        other => return Err(format!("unknown sprite edit dimension `{other}`")),
+        other => return Err(format!("unknown visual edit dimension `{other}`")),
     };
     let document = parse_surface_source_target_document_for_profile(
         source,
@@ -75,27 +75,27 @@ pub fn mutate_sprite_source(
     );
     let entries = resolve_source_entries_from_document(&document);
     match request.operation.as_str() {
-        "insert" => insert_sprite(source, &document, &entries, dimension, &request, false),
-        "insertEmpty" => insert_sprite(source, &document, &entries, dimension, &request, true),
-        "update" => replace_sprite(source, &entries, dimension, &request, false),
-        "duplicate" => replace_sprite(source, &entries, dimension, &request, true),
-        other => Err(format!("unknown sprite edit operation `{other}`")),
+        "insert" => insert_visual(source, &document, &entries, dimension, &request, false),
+        "insertEmpty" => insert_visual(source, &document, &entries, dimension, &request, true),
+        "update" => replace_visual(source, &entries, dimension, &request, false),
+        "duplicate" => replace_visual(source, &entries, dimension, &request, true),
+        other => Err(format!("unknown visual edit operation `{other}`")),
     }
 }
 
-fn replace_sprite(
+fn replace_visual(
     source: &str,
     entries: &[crate::SourceTarget],
     dimension: crate::ModelDimension,
-    request: &SpriteEditRequest,
+    request: &VisualEditRequest,
     duplicate: bool,
-) -> Result<SpriteEditMutationResult, String> {
+) -> Result<VisualEditMutationResult, String> {
     let original = request
         .original_name
         .as_deref()
         .or(request.name.as_deref())
         .filter(|name| !name.trim().is_empty())
-        .ok_or_else(|| "sprite edit requires an original name".to_string())?;
+        .ok_or_else(|| "visual edit requires an original name".to_string())?;
     let owned_source = if !duplicate {
         let mutated = mutate_linked_definitions(source, request)?;
         (mutated != source).then_some(mutated)
@@ -115,14 +115,14 @@ fn replace_sprite(
     let matching = entries
         .iter()
         .filter(|entry| {
-            entry.kind == SourceTargetKind::Sprite
+            entry.kind == SourceTargetKind::Visual
                 && entry.dimension == Some(dimension)
                 && entry.name == original
         })
         .collect::<Vec<_>>();
     let [target] = matching.as_slice() else {
         return Err(format!(
-            "sprite `{original}` must resolve to exactly one source entry"
+            "visual `{original}` must resolve to exactly one source entry"
         ));
     };
     let name = if duplicate {
@@ -130,7 +130,7 @@ fn replace_sprite(
     } else {
         request.name.clone().unwrap_or_else(|| original.to_string())
     };
-    let text = serialize_sprite(request, &name)?;
+    let text = serialize_visual(request, &name)?;
     if duplicate {
         let position = line_end_after(source, target.end);
         return insert_text(source, position, &text, name);
@@ -139,7 +139,7 @@ fn replace_sprite(
     next.push_str(&source[..target.start]);
     next.push_str(&text);
     next.push_str(&source[target.end..]);
-    Ok(SpriteEditMutationResult {
+    Ok(VisualEditMutationResult {
         source: next,
         start: target.start,
         end: target.start + text.len(),
@@ -154,7 +154,7 @@ fn source_profile_for_dimension(dimension: crate::ModelDimension) -> crate::Puzz
     }
 }
 
-fn mutate_linked_definitions(source: &str, request: &SpriteEditRequest) -> Result<String, String> {
+fn mutate_linked_definitions(source: &str, request: &VisualEditRequest) -> Result<String, String> {
     let mut next = source.to_string();
     for binding in request.color_bindings.as_deref().unwrap_or_default() {
         next = replace_named_color_definition(&next, binding)?;
@@ -181,7 +181,7 @@ fn mutate_linked_definitions(source: &str, request: &SpriteEditRequest) -> Resul
 
 fn replace_named_color_definition(
     source: &str,
-    binding: &SpriteEditColorBinding,
+    binding: &VisualEditColorBinding,
 ) -> Result<String, String> {
     let document = parse_surface_source_target_document_for_profile(
         source,
@@ -293,23 +293,23 @@ fn serialize_shape_frames(
     Ok(())
 }
 
-fn insert_sprite(
+fn insert_visual(
     source: &str,
     document: &crate::surface::SurfaceDocument,
     entries: &[crate::SourceTarget],
     dimension: crate::ModelDimension,
-    request: &SpriteEditRequest,
+    request: &VisualEditRequest,
     empty: bool,
-) -> Result<SpriteEditMutationResult, String> {
+) -> Result<VisualEditMutationResult, String> {
     let cursor = request.cursor.unwrap_or(source.len()).min(source.len());
     let block = document
-        .sprite_resources
+        .visual_resources
         .iter()
         .filter(|block| block.dimension == dimension)
         .find(|block| cursor > block.open_brace && cursor < block.close_brace)
         .or_else(|| {
             document
-                .sprite_resources
+                .visual_resources
                 .iter()
                 .find(|block| block.dimension == dimension)
         });
@@ -317,40 +317,40 @@ fn insert_sprite(
         if let Some(block) = block {
             return insert_text(source, block.close_brace, "", String::new());
         }
-        let text = "sprites {\n\n}\n";
+        let text = "visuals {\n\n}\n";
         return insert_text(source, line_end_after(source, cursor), text, String::new());
     }
     let name = request
         .name
         .clone()
         .filter(|name| !name.trim().is_empty())
-        .ok_or_else(|| "sprite insert requires a name".to_string())?;
+        .ok_or_else(|| "visual insert requires a name".to_string())?;
     if entries.iter().any(|entry| {
-        entry.kind == SourceTargetKind::Sprite
+        entry.kind == SourceTargetKind::Visual
             && entry.dimension == Some(dimension)
             && entry.name == name
     }) {
-        return Err(format!("sprite `{name}` already exists"));
+        return Err(format!("visual `{name}` already exists"));
     }
-    let text = serialize_sprite(request, &name)?;
+    let text = serialize_visual(request, &name)?;
     if let Some(block) = block {
         return insert_text(source, block.close_brace, &text, name);
     }
-    let header = format!("sprites {{\n{text}\n}}\n");
+    let header = format!("visuals {{\n{text}\n}}\n");
     insert_text(source, source.len(), &header, name).map(|mut result| {
-        result.start += "sprites {\n".len();
+        result.start += "visuals {\n".len();
         result.end = result.start + text.len();
         result
     })
 }
 
-fn serialize_sprite(request: &SpriteEditRequest, name: &str) -> Result<String, String> {
+fn serialize_visual(request: &VisualEditRequest, name: &str) -> Result<String, String> {
     let palette = request
         .palette
         .as_ref()
         .filter(|palette| !palette.is_empty())
-        .ok_or_else(|| "sprite edit requires a non-empty palette".to_string())?;
-    let mut lines = vec![format!("{name} {{")];
+        .ok_or_else(|| "visual edit requires a non-empty palette".to_string())?;
+    let mut lines = vec![format!("visual {name} {{")];
     for row in request.prelude_rows.as_deref().unwrap_or_default() {
         let row = row.trim();
         if !row.is_empty()
@@ -382,14 +382,14 @@ fn serialize_sprite(request: &SpriteEditRequest, name: &str) -> Result<String, S
             .frames
             .as_ref()
             .filter(|frames| !frames.is_empty())
-            .ok_or_else(|| "sprite edit requires frames or a shape reference".to_string())?;
+            .ok_or_else(|| "visual edit requires frames or a shape reference".to_string())?;
         lines.push("shape = {".to_string());
         for (frame_index, layers) in frames.iter().enumerate() {
             if frame_index > 0 {
                 lines.push(">".to_string());
             }
             if request.dimension == "2d" && layers.len() != 1 {
-                return Err("2D sprite edit requires exactly one Z layer per frame".to_string());
+                return Err("2D visual edit requires exactly one Z layer per frame".to_string());
             }
             for (layer_index, rows) in layers.iter().enumerate() {
                 if layer_index > 0 {
@@ -412,11 +412,11 @@ fn serialize_sprite(request: &SpriteEditRequest, name: &str) -> Result<String, S
 
 fn serialize_spatial_op(
     lines: &mut Vec<String>,
-    op: &SpriteEditSpatialOp,
+    op: &VisualEditSpatialOp,
     dimension: &str,
 ) -> Result<(), String> {
     match op {
-        SpriteEditSpatialOp::Translate2 { space, value } if dimension == "2d" => {
+        VisualEditSpatialOp::Translate2 { space, value } if dimension == "2d" => {
             lines.extend([
                 "translate {".to_string(),
                 format!("space = {}", checked_space(space)?),
@@ -424,7 +424,7 @@ fn serialize_spatial_op(
                 "}".to_string(),
             ]);
         }
-        SpriteEditSpatialOp::Rotate2 { space, degrees } if dimension == "2d" => {
+        VisualEditSpatialOp::Rotate2 { space, degrees } if dimension == "2d" => {
             lines.extend([
                 "rotate {".to_string(),
                 format!("space = {}", checked_space(space)?),
@@ -432,7 +432,7 @@ fn serialize_spatial_op(
                 "}".to_string(),
             ]);
         }
-        SpriteEditSpatialOp::Translate3 { space, value } if dimension == "3d" => {
+        VisualEditSpatialOp::Translate3 { space, value } if dimension == "3d" => {
             lines.extend([
                 "translate {".to_string(),
                 format!("space = {}", checked_space(space)?),
@@ -440,13 +440,13 @@ fn serialize_spatial_op(
                 "}".to_string(),
             ]);
         }
-        SpriteEditSpatialOp::Rotate3 {
+        VisualEditSpatialOp::Rotate3 {
             space,
             axis,
             degrees,
         } if dimension == "3d" => {
             if axis.iter().all(|value| *value == 0.0) {
-                return Err("3D sprite rotate axis cannot be zero".to_string());
+                return Err("3D visual rotate axis cannot be zero".to_string());
             }
             lines.extend([
                 "rotate {".to_string(),
@@ -456,7 +456,7 @@ fn serialize_spatial_op(
                 "}".to_string(),
             ]);
         }
-        _ => return Err("sprite spatial operation does not match its dimension".to_string()),
+        _ => return Err("visual spatial operation does not match its dimension".to_string()),
     }
     Ok(())
 }
@@ -464,7 +464,7 @@ fn serialize_spatial_op(
 fn checked_space(space: &str) -> Result<&str, String> {
     match space {
         "world" | "local" => Ok(space),
-        _ => Err(format!("unknown sprite space `{space}`")),
+        _ => Err(format!("unknown visual space `{space}`")),
     }
 }
 
@@ -474,7 +474,7 @@ fn palette_char(cell: Option<usize>, palette_len: usize) -> Result<char, String>
         None => Ok('.'),
         Some(index) if index < palette_len && index < KEYS.len() => Ok(KEYS[index] as char),
         Some(index) => Err(format!(
-            "sprite cell palette index `{index}` is out of range"
+            "visual cell palette index `{index}` is out of range"
         )),
     }
 }
@@ -492,7 +492,7 @@ fn unique_name(
             format!("{base}_copy_{index}")
         };
         if !entries.iter().any(|entry| {
-            entry.kind == SourceTargetKind::Sprite
+            entry.kind == SourceTargetKind::Visual
                 && entry.dimension == Some(dimension)
                 && entry.name == name
         }) {
@@ -514,9 +514,9 @@ fn insert_text(
     position: usize,
     text: &str,
     name: String,
-) -> Result<SpriteEditMutationResult, String> {
+) -> Result<VisualEditMutationResult, String> {
     if !source.is_char_boundary(position) {
-        return Err("sprite insertion is not on a UTF-8 boundary".to_string());
+        return Err("visual insertion is not on a UTF-8 boundary".to_string());
     }
     let before = source[..position].trim_end();
     let after = source[position..].trim_start();
@@ -534,7 +534,7 @@ fn insert_text(
     } else {
         next.push('\n');
     }
-    Ok(SpriteEditMutationResult {
+    Ok(VisualEditMutationResult {
         source: next,
         start,
         end,
@@ -548,7 +548,7 @@ mod tests {
 
     #[test]
     fn mutation_serializes_common_3d_layers_in_rust() {
-        let source = "puzzle world {\n  dimension = 3\n  slots { solid = Box }\n}\n\nsprites art of world {\nBox {\ncolors = red\nshape = {\n0\n}\n}\n}\n";
+        let source = "puzzle world {\n  dimension = 3\n  slots { solid = Box }\n}\n\nvisuals art of world {\nBox {\ncolors = red\nshape = {\n0\n}\n}\n}\n";
         let request = serde_json::json!({
             "operation": "update",
             "dimension": "3d",
@@ -557,14 +557,14 @@ mod tests {
             "palette": ["red", "blue"],
             "frames": [[[[0, 1]], [[1, 0]]]]
         });
-        let result = mutate_sprite_source(source, &request.to_string()).unwrap();
+        let result = mutate_visual_source(source, &request.to_string()).unwrap();
         assert!(result.source.contains("shape = {\n01\n-\n10\n}"));
-        assert!(!result.source.contains("sprites3"));
+        assert!(!result.source.contains("visuals3"));
     }
 
     #[test]
     fn mutation_rejects_multiple_z_layers_for_2d() {
-        let source = "puzzle world {}\n\nsprites art of world {\nBox {\ncolors = red\nshape = {\n0\n}\n}\n}\n";
+        let source = "puzzle world {}\n\nvisuals art of world {\nBox {\ncolors = red\nshape = {\n0\n}\n}\n}\n";
         let request = serde_json::json!({
             "operation": "update",
             "dimension": "2d",
@@ -574,7 +574,7 @@ mod tests {
             "frames": [[[[0]], [[0]]]]
         });
         assert!(
-            mutate_sprite_source(source, &request.to_string())
+            mutate_visual_source(source, &request.to_string())
                 .unwrap_err()
                 .contains("exactly one Z layer")
         );
@@ -582,7 +582,7 @@ mod tests {
 
     #[test]
     fn update_mutates_linked_definitions_and_preserves_bindings() {
-        let source = "puzzle world {\ndimension = 3\n}\n\nsprites art of world {\npalette {\naccent = red\n}\nshapes {\nbox_shape {\n0\n}\n}\nBox {\ncolors = accent\nshape = box_shape\n}\nOther {\ncolors = accent\nshape = box_shape\n}\n}\n";
+        let source = "puzzle world {\ndimension = 3\n}\n\nvisuals art of world {\npalette {\naccent = red\n}\nshapes {\nbox_shape {\n0\n}\n}\nBox {\ncolors = accent\nshape = box_shape\n}\nOther {\ncolors = accent\nshape = box_shape\n}\n}\n";
         let request = serde_json::json!({
             "operation": "update",
             "dimension": "3d",
@@ -594,7 +594,7 @@ mod tests {
             "frames": [[[[0]], [[0]]]]
         });
 
-        let result = mutate_sprite_source(source, &request.to_string()).unwrap();
+        let result = mutate_visual_source(source, &request.to_string()).unwrap();
         assert!(result.source.contains("accent = #123456"));
         assert!(result.source.contains("box_shape {\n0\n-\n0\n}"));
         assert_eq!(result.source.matches("colors = accent").count(), 2);

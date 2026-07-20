@@ -17,7 +17,7 @@ movers = Chain Left Right UpMover
 object = movers Wall
 }
 
-sprites {
+visuals {
 Chain
 #2563eb #dbeafe
 00100

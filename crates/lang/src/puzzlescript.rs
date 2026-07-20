@@ -67,7 +67,7 @@ struct PsObjectDef {
     aliases: Vec<String>,
     shorthand: Option<char>,
     copy_of: Option<String>,
-    sprite: Option<PsSpriteDef>,
+    visual: Option<PsVisualDef>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -98,14 +98,14 @@ struct PsMapDef {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct PsSpriteDef {
+struct PsVisualDef {
     colors: Vec<String>,
     pattern: Vec<String>,
-    rotation: Option<PsSpriteRotation>,
+    rotation: Option<PsVisualRotation>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct PsSpriteRotation {
+struct PsVisualRotation {
     from: String,
     axis: String,
 }
@@ -226,7 +226,7 @@ pub fn translate_puzzlescript_to_canonical(source: &str) -> Result<String, Diagn
     push_action_input(&mut out, uses_action_input);
     push_default_inputs(&mut out, uses_action_input);
     push_groups(&mut out, &aliases);
-    push_sprites(&mut out, &object_defs);
+    push_visuals(&mut out, &object_defs);
     push_ps_model_sounds(
         &mut out,
         &sounds,
@@ -307,7 +307,13 @@ fn collect_sections(source: &str) -> PsSections {
     let mut parenthetical_comment: Option<(PsSection, usize, String)> = None;
     for (line_index, raw_line) in source.lines().enumerate() {
         let line_number = line_index + 1;
-        let (without_line_comment, line_comment) = split_ps_line_comment(raw_line);
+        let (without_line_comment, line_comment) = if current == PsSection::Prelude
+            && strip_ps_prelude_key(raw_line.trim_start(), "homepage").is_some()
+        {
+            (raw_line, None)
+        } else {
+            split_ps_line_comment(raw_line)
+        };
         if let Some(text) = line_comment.filter(|text| !text.trim().is_empty()) {
             sections.comments.push(PsComment {
                 section: current,
@@ -553,7 +559,7 @@ fn is_ps_prelude_flag_or_directive(line: &str) -> bool {
             | "text_color"
             | "again_interval"
             | "key_repeat_interval"
-            | "sprite_size"
+            | "visual_size"
             | "noaction"
             | "flickscreen"
             | "zoomscreen"
@@ -1066,18 +1072,18 @@ fn parse_object_defs(lines: &[String]) -> Vec<PsObjectDef> {
                 .iter()
                 .any(|existing: &PsObjectDef| existing.name == header.name)
         {
-            let (sprite, next_i) = parse_object_sprite(lines, i + 1);
+            let (visual, next_i) = parse_object_visual(lines, i + 1);
             objects.push(PsObjectDef {
                 name: header.name,
                 aliases: header.aliases,
                 shorthand: header.shorthand,
                 copy_of: header.copy_of,
-                sprite,
+                visual,
             });
             previous_meaningful = objects
                 .last()
-                .and_then(|object| object.sprite.as_ref())
-                .and_then(|sprite| sprite.pattern.last())
+                .and_then(|object| object.visual.as_ref())
+                .and_then(|visual| visual.pattern.last())
                 .cloned()
                 .or_else(|| Some(trimmed.to_string()));
             i = next_i;
@@ -1086,12 +1092,12 @@ fn parse_object_defs(lines: &[String]) -> Vec<PsObjectDef> {
         previous_meaningful = Some(trimmed.to_string());
         i += 1;
     }
-    resolve_copy_sprites(&mut objects);
+    resolve_copy_visuals(&mut objects);
     objects
 }
 
 fn parse_object_header(line: &str, previous: Option<&str>) -> Option<PsObjectHeader> {
-    if !previous.is_none_or(is_sprite_row) {
+    if !previous.is_none_or(is_visual_row) {
         return None;
     }
     let mut tokens = line.split_whitespace().collect::<Vec<_>>();
@@ -1134,7 +1140,7 @@ fn is_ps_object_shorthand(token: &str) -> bool {
     token.chars().count() == 1 && !token.chars().all(char::is_whitespace)
 }
 
-fn parse_object_sprite(lines: &[String], start: usize) -> (Option<PsSpriteDef>, usize) {
+fn parse_object_visual(lines: &[String], start: usize) -> (Option<PsVisualDef>, usize) {
     let mut i = start;
     while i < lines.len() && lines[i].trim().is_empty() {
         i += 1;
@@ -1146,7 +1152,7 @@ fn parse_object_sprite(lines: &[String], start: usize) -> (Option<PsSpriteDef>, 
 
     let mut pattern = Vec::new();
     while i < lines.len()
-        && is_sprite_row_for_palette(
+        && is_visual_row_for_palette(
             lines[i].trim(),
             colors.len(),
             pattern.first().map(|row: &String| row.chars().count()),
@@ -1164,7 +1170,7 @@ fn parse_object_sprite(lines: &[String], start: usize) -> (Option<PsSpriteDef>, 
     }
 
     (
-        Some(PsSpriteDef {
+        Some(PsVisualDef {
             colors,
             pattern,
             rotation,
@@ -1173,7 +1179,7 @@ fn parse_object_sprite(lines: &[String], start: usize) -> (Option<PsSpriteDef>, 
     )
 }
 
-fn parse_ps_rotation_directive(line: &str) -> Option<PsSpriteRotation> {
+fn parse_ps_rotation_directive(line: &str) -> Option<PsVisualRotation> {
     let mut parts = line.split(':');
     let command = parts.next()?;
     if !command.eq_ignore_ascii_case("rot") {
@@ -1181,13 +1187,13 @@ fn parse_ps_rotation_directive(line: &str) -> Option<PsSpriteRotation> {
     }
     let from = parts.next()?.trim();
     let axis = parts.next()?.trim();
-    (parts.next().is_none() && !from.is_empty() && !axis.is_empty()).then(|| PsSpriteRotation {
+    (parts.next().is_none() && !from.is_empty() && !axis.is_empty()).then(|| PsVisualRotation {
         from: from.to_string(),
         axis: axis.to_string(),
     })
 }
 
-fn resolve_copy_sprites(objects: &mut [PsObjectDef]) {
+fn resolve_copy_visuals(objects: &mut [PsObjectDef]) {
     for index in 0..objects.len() {
         let Some(copy_of) = objects[index].copy_of.clone() else {
             continue;
@@ -1195,20 +1201,20 @@ fn resolve_copy_sprites(objects: &mut [PsObjectDef]) {
         let Some(source) = objects
             .iter()
             .find(|object| object.name.eq_ignore_ascii_case(&copy_of))
-            .and_then(|object| object.sprite.clone())
+            .and_then(|object| object.visual.clone())
         else {
             continue;
         };
-        match &mut objects[index].sprite {
-            Some(sprite) if sprite.pattern.is_empty() => {
-                sprite.pattern = source.pattern;
-                if sprite.rotation.is_none() {
-                    sprite.rotation = source.rotation;
+        match &mut objects[index].visual {
+            Some(visual) if visual.pattern.is_empty() => {
+                visual.pattern = source.pattern;
+                if visual.rotation.is_none() {
+                    visual.rotation = source.rotation;
                 }
             }
             Some(_) => {}
             None => {
-                objects[index].sprite = Some(source);
+                objects[index].visual = Some(source);
             }
         }
     }
@@ -1226,7 +1232,7 @@ fn ps_color_to_canonical(color: &str) -> Option<String> {
     crate::syntax::canonical_visual_color_literal(color)
 }
 
-fn is_sprite_row(line: &str) -> bool {
+fn is_visual_row(line: &str) -> bool {
     !line.is_empty()
         && line
             .chars()
@@ -1234,7 +1240,7 @@ fn is_sprite_row(line: &str) -> bool {
         && line.chars().any(|ch| ch == '.' || ch.is_ascii_digit())
 }
 
-fn is_sprite_row_for_palette(line: &str, color_count: usize, width: Option<usize>) -> bool {
+fn is_visual_row_for_palette(line: &str, color_count: usize, width: Option<usize>) -> bool {
     if line.is_empty() || width.is_some_and(|width| line.chars().count() != width) {
         return false;
     }
@@ -1469,30 +1475,30 @@ fn push_default_inputs(out: &mut Vec<String>, uses_action_input: bool) {
     out.push(String::new());
 }
 
-fn push_sprites(out: &mut Vec<String>, objects: &[PsObjectDef]) {
-    let sprites = objects
+fn push_visuals(out: &mut Vec<String>, objects: &[PsObjectDef]) {
+    let visuals = objects
         .iter()
-        .filter_map(|object| object.sprite.as_ref().map(|sprite| (&object.name, sprite)))
+        .filter_map(|object| object.visual.as_ref().map(|visual| (&object.name, visual)))
         .collect::<Vec<_>>();
-    if sprites.is_empty() {
+    if visuals.is_empty() {
         return;
     }
     let shape_sources = ps_copy_shape_sources(objects);
 
-    out.push("sprites {".to_string());
+    out.push("visuals {".to_string());
     if !shape_sources.is_empty() {
         out.push("  shapes {".to_string());
         for source in &shape_sources {
-            let Some(sprite) = objects
+            let Some(visual) = objects
                 .iter()
                 .find(|object| &object.name == source)
-                .and_then(|object| object.sprite.as_ref())
+                .and_then(|object| object.visual.as_ref())
             else {
                 continue;
             };
             let shape_name = ps_copy_shape_name(source);
             out.push(format!("    {shape_name} {{"));
-            for row in &sprite.pattern {
+            for row in &visual.pattern {
                 out.push(format!("      {row}"));
             }
             out.push("    }".to_string());
@@ -1500,11 +1506,11 @@ fn push_sprites(out: &mut Vec<String>, objects: &[PsObjectDef]) {
         out.push("  }".to_string());
         out.push(String::new());
     }
-    for (name, sprite) in sprites {
+    for (name, visual) in visuals {
         let copy_shape = ps_copy_shape_for_object(name, objects, &shape_sources);
         out.push(format!("  {name}"));
-        out.push(format!("  {}", sprite.colors.join(" ")));
-        if let Some(rotation) = &sprite.rotation {
+        out.push(format!("  {}", visual.colors.join(" ")));
+        if let Some(rotation) = &visual.rotation {
             out.push(format!("  rotate ({} - {})", rotation.axis, rotation.from));
         }
         if let Some(shape) = copy_shape {
@@ -1512,8 +1518,8 @@ fn push_sprites(out: &mut Vec<String>, objects: &[PsObjectDef]) {
             out.push(String::new());
             continue;
         }
-        if !sprite.pattern.is_empty() {
-            for row in &sprite.pattern {
+        if !visual.pattern.is_empty() {
+            for row in &visual.pattern {
                 out.push(format!("  {row}"));
             }
         }
@@ -1534,7 +1540,7 @@ fn ps_copy_shape_sources(objects: &[PsObjectDef]) -> BTreeSet<String> {
         };
         if objects
             .iter()
-            .any(|source| source.name.eq_ignore_ascii_case(copy_of) && source.sprite.is_some())
+            .any(|source| source.name.eq_ignore_ascii_case(copy_of) && source.visual.is_some())
         {
             sources.insert(copy_of.clone());
         }

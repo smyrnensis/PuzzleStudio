@@ -31,9 +31,9 @@ next_level
 }
 }
 
-sprites {
+visuals {
 
-sprite {
+visual {
 selector = Background
 colors = #90ee90 #008000
 duration = 500ms
@@ -68,7 +68,7 @@ duration = 500ms
 11111
 }
 
-sprite {
+visual {
 selector = Wall
 colors = #a46322 #493c2b
 duration = 500ms

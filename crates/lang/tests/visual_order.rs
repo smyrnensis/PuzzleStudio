@@ -1,30 +1,30 @@
 use puzzle_lang::{LoadedDocumentModel, VisualOrderPriorityDef, parse_game_for_path, parse_game2d};
 
-fn game_with_slots(sprites_body: &str) -> String {
+fn game_with_slots(visuals_body: &str) -> String {
     format!(
         r#"
-title = sprite_order
+title = visual_order
 
 puzzle default {{
 slots {{
 background = Floor Goal
 actor = Player Box
 }}
-sprites {{
-{sprites_body}
-sprite {{
+visuals {{
+{visuals_body}
+visual {{
 selector = Floor
 colors = #111111
 }}
-sprite {{
+visual {{
 selector = Goal
 colors = #222222
 }}
-sprite {{
+visual {{
 selector = Player
 colors = #333333
 }}
-sprite {{
+visual {{
 selector = Box
 colors = #444444
 }}
@@ -55,7 +55,7 @@ Box
 }"#,
     );
 
-    let loaded = parse_game2d(&source).expect("explicit sprite order");
+    let loaded = parse_game2d(&source).expect("explicit visual order");
     let canonical = parse_game2d(&game_with_slots(
         r#"order {
 priority = down right
@@ -89,7 +89,7 @@ Box
 
 #[test]
 fn omitted_order_is_generated_from_slot_declaration_order() {
-    let loaded = parse_game2d(&game_with_slots("")).expect("generated sprite order");
+    let loaded = parse_game2d(&game_with_slots("")).expect("generated visual order");
 
     assert_eq!(loaded.visuals.order.direction_priority, ["down", "right"]);
     assert_eq!(
@@ -137,7 +137,7 @@ fn old_layers_spelling_is_not_a_slots_compatibility_path() {
 #[test]
 fn three_dimensional_direction_priority_requires_and_preserves_three_axes() {
     let source = r#"
-sprites {
+visuals {
 order {
 priority = down right front
 Floor
@@ -166,7 +166,7 @@ P
 }
 "#;
 
-    let document = parse_game_for_path(source, "test.puzzle").expect("3D sprite order");
+    let document = parse_game_for_path(source, "test.puzzle").expect("3D visual order");
     let Some(LoadedDocumentModel::Puzzle3d {
         game, presentation, ..
     }) = document.single_model()

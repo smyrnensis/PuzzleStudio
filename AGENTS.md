@@ -59,6 +59,74 @@ pretend there is a reproduced bug. The same honesty rule applies: separate
 observed evidence from assumptions, proposed behavior, and implementation
 judgment.
 
+## Test Quality And Maintenance
+
+Tests protect owned contracts, not lines of implementation or a coverage
+number. Before adding a test, name the behavior that can regress, the layer that
+owns it, and the observable result or diagnostic that distinguishes correct
+behavior. Put the primary test at that owner. Consumers may add projection or
+integration tests for their own contract, but must not duplicate the owner's
+semantic implementation in test helpers.
+
+Choose test scope from the change rather than defaulting to one style:
+
+- Deterministic state, lowering, and session semantics need focused owner-level
+  tests over typed inputs and outputs.
+- Parsing and validation changes need an accepted case plus the relevant
+  rejection, ambiguity, or boundary case. Assert structured diagnostics when
+  available; assert the smallest stable diagnostic fragment otherwise.
+- A bug fix needs a regression test that fails for the reproduced mechanism,
+  not merely a broad example that happened to exercise the edited file. Include
+  a sibling or boundary case when the same cause could plausibly affect it.
+- A cross-layer contract change needs an owner test and the smallest consumer
+  contract test needed to prove serialization, routing, or projection. It does
+  not require repeating all owner semantics through every adapter.
+- Visual, browser, host, or generated-export behavior needs verification at the
+  first observable surface that can expose the defect. Source-string checks may
+  enforce a narrow static boundary, such as absence of a forbidden fallback,
+  but they are not evidence that runtime interaction or appearance works.
+
+Prefer assertions on complete relevant state, typed values, ordered effects,
+traces, or explicit errors. Avoid tests that pass after merely finding a token,
+function name, JSON key, or source fragment unless the text itself is the owned
+contract. A test should fail under at least one plausible incorrect
+implementation of the behavior named by the test. Keep each test's setup small
+enough that a failure identifies one contract; split unrelated assertions.
+
+Fixtures are authored test inputs, not general sample storage. Keep them beside
+the owning tests, minimize them to the contract under test, and give them names
+that describe the behavior. Do not treat a large game, generated export, or a
+duplicate copy of a sample as canonical expected output. Pinned external-format
+fixtures are appropriate only when compatibility with that exact input is the
+contract.
+
+Tests must be deterministic and isolated. Pin random seeds, control clocks and
+budgets, use per-test temporary paths, and do not depend on execution order,
+network access, user data, or a previously generated local artifact. A test that
+requires an installed browser, host permission, or another external capability
+must fail with a specific prerequisite diagnostic and be routed by the nearest
+owner `AGENTS.md`; do not silently skip it or convert it into a weaker path.
+
+Before finalizing a change:
+
+1. Prove every new test is discovered by its intended runner. A Rust file that
+   is not a module or declared integration-test target and an unreferenced
+   fixture provide no protection.
+2. Run the narrowest owner command that exercises the changed contract, then
+   expand to dependent crates or the workspace when the contract crosses those
+   boundaries. Use the nearest owner `AGENTS.md` for environment-specific
+   commands.
+3. Report the exact commands run and distinguish passing tests from checks that
+   were not run, skipped, or blocked by prerequisites. The existence of a test
+   is not evidence that automation executes it.
+4. Inspect the changed tests for copied semantic logic, implementation-string
+   coupling, over-broad fixtures, and assertions unrelated to the test name.
+   Remove those weaknesses before treating the regression as protected.
+
+Coverage reports may locate unexamined code, but no percentage is an acceptance
+criterion by itself. Missing contract cases, rejection paths, lifecycle edges,
+and adapter boundaries take priority over increasing line coverage.
+
 ## No Fallback Paths
 
 This is a context-critical rule for engineering decisions in every task in this
@@ -390,7 +458,7 @@ JavaScript adapters and editors must not recognize or interpret PuzzleStudio
 source syntax. They may consume only explicit, typed contracts produced by the
 language-processing owner. In particular, JavaScript must not tokenize source,
 identify declarations or blocks, resolve names, combine legends, levels, or
-sprites, or infer language semantics from source text. If an editor needs
+visuals, or infer language semantics from source text. If an editor needs
 information that its current contract does not provide, extend the language
 contract and fail visibly until that contract is available; do not add a
 JavaScript parser, regex recognizer, heuristic, or fallback source path.

@@ -14,31 +14,29 @@ use crate::{
 
 pub(crate) fn validate_visuals(visuals: &crate::VisualsDef) -> Result<(), DiagnosticReport> {
     const EPSILON: f64 = 1e-9;
-    for sprite in &visuals.sprites {
-        if sprite.frames.iter().any(|frame| frame.planes.len() > 1) {
+    for visual in &visuals.entries {
+        if visual.frames.iter().any(|frame| frame.planes.len() > 1) {
             return Err(DiagnosticReport::error(format!(
-                "2D renderer cannot materialize multi-plane sprite `{}`",
-                sprite.name
+                "2D renderer cannot materialize multi-plane visual `{}`",
+                visual.name
             )));
         }
-        for transform in &sprite.transforms {
+        for transform in &visual.transforms {
             match transform {
-                crate::VisualSpriteTransform::Translate { value, .. }
-                    if value[2].abs() > EPSILON =>
-                {
+                crate::VisualTransform::Translate { value, .. } if value[2].abs() > EPSILON => {
                     return Err(DiagnosticReport::error(format!(
-                        "2D renderer cannot materialize out-of-plane translation on sprite `{}`",
-                        sprite.name
+                        "2D renderer cannot materialize out-of-plane translation on visual `{}`",
+                        visual.name
                     )));
                 }
-                crate::VisualSpriteTransform::Rotate { axis, .. }
+                crate::VisualTransform::Rotate { axis, .. }
                     if axis[0].abs() > EPSILON
                         || axis[1].abs() > EPSILON
                         || (axis[2].abs() - 1.0).abs() > EPSILON =>
                 {
                     return Err(DiagnosticReport::error(format!(
-                        "2D renderer cannot materialize rotation outside the sprite plane on `{}`",
-                        sprite.name
+                        "2D renderer cannot materialize rotation outside the visual plane on `{}`",
+                        visual.name
                     )));
                 }
                 _ => {}
@@ -110,19 +108,16 @@ fn project_vector(value: SpatialVector<3>) -> Result<SpatialVector<2>, Diagnosti
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        VisualSpriteDef, VisualSpriteFit, VisualSpriteKind, VisualSpriteSpace,
-        VisualSpriteTransform, VisualsDef,
-    };
+    use crate::{VisualDef, VisualFit, VisualKind, VisualSpace, VisualTransform, VisualsDef};
 
-    fn visuals_with(transform: VisualSpriteTransform) -> VisualsDef {
+    fn visuals_with(transform: VisualTransform) -> VisualsDef {
         VisualsDef {
-            sprites: vec![VisualSpriteDef {
+            entries: vec![VisualDef {
                 name: "test".to_string(),
-                kind: VisualSpriteKind::Solid("#fff".to_string()),
+                kind: VisualKind::Solid("#fff".to_string()),
                 frames: Vec::new(),
                 transforms: vec![transform],
-                fit: VisualSpriteFit::default(),
+                fit: VisualFit::default(),
                 sampling: None,
                 animation_duration_ms: None,
                 pixels_per_cell: None,
@@ -132,22 +127,22 @@ mod tests {
     }
 
     #[test]
-    fn planar_projection_accepts_the_2d_subspace_of_shared_sprite_transforms() {
-        validate_visuals(&visuals_with(VisualSpriteTransform::Translate {
+    fn planar_projection_accepts_the_2d_subspace_of_shared_visual_transforms() {
+        validate_visuals(&visuals_with(VisualTransform::Translate {
             value: [1.0, -0.5, 0.0],
-            space: VisualSpriteSpace::Local,
+            space: VisualSpace::Local,
         }))
         .unwrap();
     }
 
     #[test]
     fn planar_projection_rejects_transform_that_leaves_the_2d_subspace() {
-        let error = validate_visuals(&visuals_with(VisualSpriteTransform::Rotate {
+        let error = validate_visuals(&visuals_with(VisualTransform::Rotate {
             degrees: 45.0,
             axis: [1.0, 0.0, 0.0],
-            space: VisualSpriteSpace::World,
+            space: VisualSpace::World,
         }))
         .unwrap_err();
-        assert!(error.to_string().contains("outside the sprite plane"));
+        assert!(error.to_string().contains("outside the visual plane"));
     }
 }

@@ -475,6 +475,7 @@ impl EffectAst {
             | EffectAst::StopMusic { .. }
             | EffectAst::Wait { .. }
             | EffectAst::WaitAnimation
+            | EffectAst::EmitVisual { .. }
             | EffectAst::Message { .. }
             | EffectAst::Scene(_) => RewriteEffectCommandSyntax::Emission,
             EffectAst::Cancel
@@ -571,6 +572,10 @@ fn add_rewrite_effect_surface_tokens(
     }
 
     match tokens {
+        [visual] if puzzle_authoring::is_visual_emission_name(&visual.text) => {
+            add_scene_effect_token_range(sink, visual, SurfaceSemanticKind::Asset);
+            true
+        }
         [command] if command.text == "sfx" => {
             add_scene_effect_token_range(sink, command, SurfaceSemanticKind::Effect);
             true
@@ -619,6 +624,12 @@ fn add_simple_rewrite_effect_surface_tokens(
     let mut index = 0usize;
     let mut parsed_any = false;
     while index < tokens.len() {
+        if puzzle_authoring::is_visual_emission_name(&tokens[index].text) {
+            add_scene_effect_token_range(sink, &tokens[index], SurfaceSemanticKind::Asset);
+            index += 1;
+            parsed_any = true;
+            continue;
+        }
         match tokens[index].text.to_ascii_lowercase().as_str() {
             "cancel" | "win" | "restart" | "next_level" | "again" | "checkpoint"
             | "clear_checkpoint" => {
@@ -877,16 +888,6 @@ fn resolve_default_wait_in_component(component: &mut SceneComponent, default_wai
         SceneComponent::Conditional(conditional) => {
             for child in &mut conditional.children {
                 resolve_default_wait_in_component(child, default_wait_ms);
-            }
-        }
-        SceneComponent::For(for_view) => {
-            for child in &mut for_view.children {
-                resolve_default_wait_in_component(child, default_wait_ms);
-            }
-        }
-        SceneComponent::LevelMenu(menu) => {
-            for button in &mut menu.buttons {
-                resolve_default_wait_in_effect(&mut button.effect, default_wait_ms);
             }
         }
         SceneComponent::Viewport(_) | SceneComponent::Frame(_) | SceneComponent::Text(_) => {}

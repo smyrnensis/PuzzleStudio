@@ -7,6 +7,7 @@ struct ProgramLowerer<'a> {
     condition_names: &'a HashMap<String, ConditionId>,
     mark_names: &'a HashMap<String, MarkDef>,
     model_sound_triggers: &'a [ModelSoundTrigger],
+    visual_names: &'a HashSet<String>,
     animation: &'a AnimationDef,
     value_sets: &'a HashMap<String, Vec<String>>,
     maps: &'a HashMap<String, ValueMap>,
@@ -93,6 +94,7 @@ fn lower_programs(
     condition_names: &HashMap<String, ConditionId>,
     mark_names: &HashMap<String, MarkDef>,
     model_sound_triggers: &[ModelSoundTrigger],
+    visual_names: &HashSet<String>,
     animation: &AnimationDef,
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
@@ -134,6 +136,7 @@ fn lower_programs(
         condition_names,
         mark_names,
         model_sound_triggers,
+        visual_names,
         animation,
         value_sets,
         maps,
@@ -1501,6 +1504,16 @@ impl<'a> ProgramLowerer<'a> {
         effects: &[EffectAst],
         context: &StatementLoweringContext,
     ) -> Result<Vec<CanonicalRuleStep>, DiagnosticReport> {
+        if effects
+            .iter()
+            .any(|effect| matches!(effect, EffectAst::EmitVisual { .. }))
+        {
+            return Err(report_at_source_line_number(
+                "visual animation emission requires a rewrite match position",
+                source_line,
+                source_line_number,
+            ));
+        }
         let effects = self.lower_effects(effects)?;
         let id = RuleId(self.next_rule_id);
         self.next_rule_id += 1;
@@ -2156,17 +2169,27 @@ impl<'a> ProgramLowerer<'a> {
         rewrite: &OrientedRewriteAst,
         context: &StatementLoweringContext,
     ) -> Result<Vec<CanonicalRuleStep>, DiagnosticReport> {
-        let steps = self.lower_rewrite_core(rewrite, context)?;
-        if rewrite.after_effects.is_empty() && rewrite.after_call.is_none() {
+        let mut anchored_rewrite = rewrite.clone();
+        let mut followup_effects = Vec::new();
+        for effect in &rewrite.after_effects {
+            if matches!(effect, EffectAst::EmitVisual { .. }) {
+                anchored_rewrite.effects.push(effect.clone());
+            } else {
+                followup_effects.push(effect.clone());
+            }
+        }
+        anchored_rewrite.after_effects.clear();
+        let steps = self.lower_rewrite_core(&anchored_rewrite, context)?;
+        if followup_effects.is_empty() && rewrite.after_call.is_none() {
             return Ok(steps);
         }
 
         let mut then_steps = Vec::new();
-        if !rewrite.after_effects.is_empty() {
+        if !followup_effects.is_empty() {
             then_steps.extend(self.lower_effect_statement(
                 &rewrite.source_line,
                 rewrite.source_line_number,
-                &rewrite.after_effects,
+                &followup_effects,
                 context,
             )?);
         }
@@ -2485,6 +2508,18 @@ impl<'a> ProgramLowerer<'a> {
                 }
                 EffectAst::WaitAnimation => {
                     lowered.ordered.push(RuleEffect::WaitAnimation);
+                }
+                EffectAst::EmitVisual { name } => {
+                    if !self.visual_names.contains(name) {
+                        return Err(DiagnosticReport::error(format!(
+                            "unknown visual animation: !{name}"
+                        )));
+                    }
+                    lowered.ordered.push(RuleEffect::EmitAnimation {
+                        name: name.clone(),
+                        component: 0,
+                        offset: puzzle_runtime_contract::RuntimeAnimationOffset { x: 0, y: 0 },
+                    });
                 }
                 EffectAst::Message { text, literal } => {
                     lowered.ordered.push(RuleEffect::Message {

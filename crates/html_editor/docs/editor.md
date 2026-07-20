@@ -11,7 +11,7 @@ Goal
 Player Wall
 }
 
-sprites {
+visuals {
 Goal {
 #ffd166
 .....
@@ -73,7 +73,7 @@ Read the Basic pages in order when making your first game.
 Metadata and Puzzle Block define the game and its playable model. Layers,
 Legend, and Levels make a board that the editor can load. Rewrite Rules, Input
 Rules, and Movement make it respond to input. Win Conditions make a level
-finish, and Sprites make declared objects visible.
+finish, and Visuals make declared objects visible.
 
 ## Advanced Path
 Read Advanced pages when the basic game needs another capability.
@@ -93,7 +93,7 @@ Map that character in `legend`.
 
 Put it in a layer.
 
-Give the object a sprite if it should be visible. A 3D object without a sprite
+Give the object a visual if it should be visible. A 3D object without a visual
 is not given an implicit cube.
 
 Add rules only after it appears correctly.

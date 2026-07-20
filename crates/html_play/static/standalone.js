@@ -12,6 +12,7 @@
       this.initialized = false;
       this.editorPreviewSceneEnabled = false;
       this.editorPreviewInputEnabled = false;
+      this.editorPreviewDebugAvailable = bootData.editorPreview === true;
       this.inputIdsByName = new Map((bootData.inputs || []).map((input) => [input.name, input.id]));
       this.initializationPromise = this.initializeRuntime();
     }
@@ -19,7 +20,7 @@
     async requestJson(url, options = {}) {
       await this.ensureInitialized();
       const method = options.method || "GET";
-      return this.sessionRequestJson(method, url);
+      return this.sessionRequestJson(method, url, options);
     }
 
     async initializeRuntime() {
@@ -59,8 +60,8 @@
       this.exportJson = "";
     }
 
-    sessionRequestJson(method, url) {
-      const action = this.sessionAction(method, url);
+    sessionRequestJson(method, url, options = {}) {
+      const action = this.sessionAction(method, url, options);
       const raw = this.sessionRuntime.dispatch(JSON.stringify(action));
       const next = JSON.parse(raw);
       if (method === "POST" && this.writeSessionProgressSave()) {
@@ -73,7 +74,7 @@
       return next;
     }
 
-    sessionAction(method, url) {
+    sessionAction(method, url, options = {}) {
       if (method === "GET" && url === "/api/state") {
         return { kind: "snapshot" };
       }
@@ -82,6 +83,12 @@
       }
       if (url === "/api/resume") {
         return { kind: "resume" };
+      }
+      if (url === "/api/action") {
+        if (typeof options.body !== "string" || options.body.trim() === "") {
+          throw new Error("Standalone session action requires a JSON request body.");
+        }
+        return JSON.parse(options.body);
       }
       const inputPrefix = "/api/input/";
       if (url.startsWith(inputPrefix)) {
@@ -120,7 +127,7 @@
     }
 
     applyDebugInputName(inputName) {
-      if (!this.sessionRuntime || !this.editorPreviewInputEnabled) {
+      if (!this.sessionRuntime || !this.editorPreviewDebugAvailable) {
         throw new Error("Debug input is unavailable in this standalone runtime.");
       }
       return JSON.parse(this.sessionRuntime.dispatch(JSON.stringify({
@@ -160,12 +167,18 @@
     }
 
     progressSaveVersion() {
-      return Number(this.data.progressSaveVersion || 1);
+      const version = Number(this.data.progressSaveVersion);
+      if (!Number.isInteger(version) || version < 1) {
+        throw new Error("Standalone runtime requires a positive progressSaveVersion.");
+      }
+      return version;
     }
 
     progressSaveStorageKey() {
-      const key = this.data.saveKey || this.data.puzzlePath || this.data.title || "untitled";
-      return `PuzzleStudio.progress.v${this.progressSaveVersion()}:${key}`;
+      if (typeof this.data.saveKey !== "string" || this.data.saveKey.length === 0) {
+        throw new Error("Standalone runtime requires saveKey for progress persistence.");
+      }
+      return `PuzzleStudio.progress.v${this.progressSaveVersion()}:${this.data.saveKey}`;
     }
 
     editorPreviewProgressSave() {

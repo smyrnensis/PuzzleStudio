@@ -105,7 +105,7 @@ pub(crate) const PUZZLE_COMPLETION_KEYWORDS: &[&str] = &[
     "solver",
     "marks",
     "sounds",
-    "sprites",
+    "visuals",
     "state",
     "tags",
     "var",
@@ -117,7 +117,7 @@ pub(crate) enum ExpectedCompletionValue {
     Selector,
     LegendEmpty,
     VisualDirective,
-    SpriteSelector,
+    VisualSelector,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -138,7 +138,7 @@ const LEGEND_EXPECTED: &[ExpectedCompletionValue] = &[
 ];
 const VISUAL_LINE_HEAD_EXPECTED: &[ExpectedCompletionValue] = &[
     ExpectedCompletionValue::VisualDirective,
-    ExpectedCompletionValue::SpriteSelector,
+    ExpectedCompletionValue::VisualSelector,
 ];
 
 pub(crate) const DEFAULT_LEVEL_EMPTY_CHAR: char = '.';

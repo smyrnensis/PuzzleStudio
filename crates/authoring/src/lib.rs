@@ -1207,7 +1207,7 @@ pub enum PuzzleDirectiveSurface {
     Levels,
     Level,
     RemovedLevels3,
-    Sprites,
+    Visuals,
     Scene,
     Dimension,
     Variable,
@@ -1284,7 +1284,7 @@ pub fn puzzle_directive_surface(line: &str) -> PuzzleDirectiveSurface {
         "levels" => PuzzleDirectiveSurface::Levels,
         "level" => PuzzleDirectiveSurface::Level,
         "levels3" => PuzzleDirectiveSurface::RemovedLevels3,
-        "sprites" => PuzzleDirectiveSurface::Sprites,
+        "visuals" => PuzzleDirectiveSurface::Visuals,
         "scene" => PuzzleDirectiveSurface::Scene,
         "dimension" => PuzzleDirectiveSurface::Dimension,
         "var" | "const" | "persistent" => PuzzleDirectiveSurface::Variable,
@@ -1989,6 +1989,20 @@ pub struct RuleForSurface {
     pub sources: Vec<String>,
 }
 
+pub fn for_surface(line: &str) -> Option<RuleForSurface> {
+    let tokens = split_header_tokens(line);
+    let ["for", binding, "in", sources @ ..] = tokens.as_slice() else {
+        return None;
+    };
+    if sources.is_empty() || !is_identifier(binding) {
+        return None;
+    }
+    Some(RuleForSurface {
+        binding: (*binding).to_string(),
+        sources: sources.iter().map(|source| (*source).to_string()).collect(),
+    })
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RuleStatementSource<Line> {
     line: Line,
@@ -2141,7 +2155,7 @@ fn rule_statement_node(line: &str, tokens: &[String]) -> RuleStatementNode {
     let rewrite = rule_rewrite_surface(line);
     match tokens.first().map(String::as_str) {
         Some("routine") => RuleStatementNode::Routine,
-        Some("for") => rule_for_surface(&tokens)
+        Some("for") => for_surface(line)
             .map(RuleStatementNode::For)
             .unwrap_or_else(|| RuleStatementNode::Other(Some("for".to_string()))),
         Some("fix") => RuleStatementNode::Fix,
@@ -2274,19 +2288,6 @@ fn top_level_arrow_index(line: &str, start: usize) -> Option<usize> {
         }
     }
     None
-}
-
-fn rule_for_surface(tokens: &[String]) -> Option<RuleForSurface> {
-    let [for_keyword, binding, in_keyword, sources @ ..] = tokens else {
-        return None;
-    };
-    if for_keyword != "for" || in_keyword != "in" || sources.is_empty() || !is_identifier(binding) {
-        return None;
-    }
-    Some(RuleForSurface {
-        binding: binding.clone(),
-        sources: sources.to_vec(),
-    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2913,14 +2914,49 @@ pub fn is_builtin_rewrite_effect_text(text: &str) -> bool {
     }
     let tokens = split_header_tokens(text);
     matches!(tokens.as_slice(), ["goto", ..] | ["start", ..])
-        || tokens
-            .first()
-            .is_some_and(|token| is_builtin_rewrite_effect_command_token(token))
+        || tokens.first().is_some_and(|token| {
+            is_visual_emission_name(token) || is_builtin_rewrite_effect_command_token(token)
+        })
         || matches!(
             tokens.as_slice(),
             [name, operator, ..]
                 if is_identifier(name) && is_variable_update_operator(operator)
         )
+}
+
+pub fn is_visual_emission_name(value: &str) -> bool {
+    value
+        .strip_prefix('!')
+        .is_some_and(|name| is_qualified_identifier(name))
+}
+
+pub fn is_visual_definition_target(value: &str) -> bool {
+    if is_visual_emission_name(value) {
+        return true;
+    }
+    if matches!(
+        value,
+        "shape" | "shapes" | "palette" | "colors" | "ascii" | "visuals" | "visual"
+    ) {
+        return false;
+    }
+    let mut parts = value.split(':');
+    let Some(first) = parts.next() else {
+        return false;
+    };
+    is_symbol_name(first) && parts.all(is_visual_selector_part)
+}
+
+fn is_visual_selector_part(value: &str) -> bool {
+    value == "*"
+        || (!value.is_empty()
+            && value
+                .chars()
+                .all(|ch| ch == '_' || ch.is_ascii_alphanumeric()))
+        || value.split_once('(').is_some_and(|(name, rest)| {
+            rest.strip_suffix(')')
+                .is_some_and(|arg| is_identifier(name) && is_identifier(arg))
+        })
 }
 
 fn is_builtin_rewrite_effect_command_token(token: &str) -> bool {
@@ -4966,14 +5002,14 @@ mod tests {
             }
         );
         assert_eq!(
-            resource_header_surface("sprites of board {", "sprites").unwrap(),
+            resource_header_surface("visuals of board {", "visuals").unwrap(),
             ResourceHeaderSurface {
                 name: None,
                 owner: Some("board"),
             }
         );
         assert_eq!(
-            resource_header_surface("sprites demo", "sprites").unwrap(),
+            resource_header_surface("visuals demo", "visuals").unwrap(),
             ResourceHeaderSurface {
                 name: Some("demo"),
                 owner: None,
@@ -4981,11 +5017,11 @@ mod tests {
         );
         assert!(resource_header_surface("levels bad name {", "levels").is_err());
         assert!(
-            collect_resource_block_surface(&["sprites demo".to_string()], 0, "sprites").is_err()
+            collect_resource_block_surface(&["visuals demo".to_string()], 0, "visuals").is_err()
         );
 
         let lines = [
-            "sprites icons of board {",
+            "visuals icons of board {",
             "shapes {",
             "dot {",
             "0",
@@ -5000,7 +5036,7 @@ mod tests {
         ]
         .map(str::to_string);
         assert_eq!(
-            collect_resource_block_surface(&lines, 0, "sprites").unwrap(),
+            collect_resource_block_surface(&lines, 0, "visuals").unwrap(),
             ResourceBlockSurface {
                 header: ResourceHeaderSurface {
                     name: Some("icons"),

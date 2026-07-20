@@ -261,9 +261,9 @@ fn push_export_input_buffer(out: &mut String, loaded: &LoadedGame) {
     out.push('}');
 }
 
-fn push_presentation_events(out: &mut String, loaded: &LoadedGame, events: &[PresentationEvent]) {
+fn push_presentation_events(out: &mut String, events: &[PresentationEvent]) {
     out.push_str("\"presentationEvents\":");
-    let events_json = serde_json::to_string(&presentation_events_contract(loaded, events))
+    let events_json = serde_json::to_string(&presentation_events_contract::<2>(events))
         .expect("runtime presentation event contract should serialize");
     out.push_str(&events_json);
 }
@@ -342,7 +342,10 @@ fn push_rule_effects(out: &mut String, loaded: &LoadedGame) {
 }
 
 fn push_ordered_rule_effect(out: &mut String, effect: &RuleEffect) {
-    out.push('{');
+    let writes_complete_object = matches!(effect, RuleEffect::Scene { .. });
+    if !writes_complete_object {
+        out.push('{');
+    }
     match effect {
         RuleEffect::Win => push_json_pair(out, "kind", "win"),
         RuleEffect::Restart => push_json_pair(out, "kind", "restart"),
@@ -411,10 +414,12 @@ fn push_ordered_rule_effect(out: &mut String, effect: &RuleEffect) {
             push_json_bool(out, "literal", *literal);
         }
         RuleEffect::Scene { effect } => {
-            push_json_effect_fields(out, effect);
+            puzzle_scene::write_scene_effect_json(out, effect);
         }
     }
-    out.push('}');
+    if !writes_complete_object {
+        out.push('}');
+    }
 }
 
 fn push_rule_animations(out: &mut String, loaded: &LoadedGame) {
@@ -513,7 +518,7 @@ fn push_export_objects(out: &mut String, loaded: &LoadedGame) {
         out.push(',');
         push_json_pair(out, "name", name);
         out.push(',');
-        push_json_pair(out, "sprite", &sprite_name(name));
+        push_json_pair(out, "visual", &visual_name(name));
         out.push('}');
     }
     out.push(']');

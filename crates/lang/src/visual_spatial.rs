@@ -1,11 +1,11 @@
-use crate::{VisualSpriteSpace, VisualSpriteTransform};
+use crate::{VisualSpace, VisualTransform};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct SpatialSpriteAffine {
+pub struct SpatialVisualAffine {
     pub matrix: [[f64; 4]; 4],
 }
 
-impl Default for SpatialSpriteAffine {
+impl Default for SpatialVisualAffine {
     fn default() -> Self {
         Self {
             matrix: [
@@ -18,7 +18,7 @@ impl Default for SpatialSpriteAffine {
     }
 }
 
-impl SpatialSpriteAffine {
+impl SpatialVisualAffine {
     pub fn transform_point(self, p: [f64; 3]) -> [f64; 3] {
         let m = self.matrix;
         [
@@ -29,40 +29,38 @@ impl SpatialSpriteAffine {
     }
 }
 
-pub fn evaluate_spatial_sprite_transforms(
-    transforms: &[VisualSpriteTransform],
-) -> SpatialSpriteAffine {
-    let mut result = SpatialSpriteAffine::default().matrix;
+pub fn evaluate_spatial_visual_transforms(transforms: &[VisualTransform]) -> SpatialVisualAffine {
+    let mut result = SpatialVisualAffine::default().matrix;
     for transform in transforms {
         let (space, op_matrix) = match *transform {
-            VisualSpriteTransform::Translate { space, value } => (space, translation(value)),
-            VisualSpriteTransform::Rotate {
+            VisualTransform::Translate { space, value } => (space, translation(value)),
+            VisualTransform::Rotate {
                 space,
                 axis,
                 degrees,
             } => (space, rotation(axis, degrees)),
-            VisualSpriteTransform::Flip { enabled } => {
+            VisualTransform::Flip { enabled } => {
                 if !enabled {
                     continue;
                 }
-                (VisualSpriteSpace::Local, reflection_x())
+                (VisualSpace::Local, reflection_x())
             }
         };
         result = match space {
-            VisualSpriteSpace::World => multiply(op_matrix, result),
-            VisualSpriteSpace::Local => multiply(result, op_matrix),
+            VisualSpace::World => multiply(op_matrix, result),
+            VisualSpace::Local => multiply(result, op_matrix),
         };
     }
-    SpatialSpriteAffine { matrix: result }
+    SpatialVisualAffine { matrix: result }
 }
 fn reflection_x() -> [[f64; 4]; 4] {
-    let mut m = SpatialSpriteAffine::default().matrix;
+    let mut m = SpatialVisualAffine::default().matrix;
     m[0][0] = -1.0;
     m
 }
 
 fn translation([x, y, z]: [f64; 3]) -> [[f64; 4]; 4] {
-    let mut m = SpatialSpriteAffine::default().matrix;
+    let mut m = SpatialVisualAffine::default().matrix;
     m[0][3] = x;
     m[1][3] = y;
     m[2][3] = z;
@@ -100,13 +98,13 @@ mod tests {
     }
     #[test]
     fn world_rotation_rotates_earlier_translation() {
-        let p = evaluate_spatial_sprite_transforms(&[
-            VisualSpriteTransform::Translate {
-                space: VisualSpriteSpace::World,
+        let p = evaluate_spatial_visual_transforms(&[
+            VisualTransform::Translate {
+                space: VisualSpace::World,
                 value: [1.0, 0.0, 0.0],
             },
-            VisualSpriteTransform::Rotate {
-                space: VisualSpriteSpace::World,
+            VisualTransform::Rotate {
+                space: VisualSpace::World,
                 axis: [0.0, 0.0, 1.0],
                 degrees: 90.0,
             },
@@ -115,13 +113,13 @@ mod tests {
     }
     #[test]
     fn local_rotation_uses_translated_local_origin() {
-        let p = evaluate_spatial_sprite_transforms(&[
-            VisualSpriteTransform::Translate {
-                space: VisualSpriteSpace::World,
+        let p = evaluate_spatial_visual_transforms(&[
+            VisualTransform::Translate {
+                space: VisualSpace::World,
                 value: [1.0, 0.0, 0.0],
             },
-            VisualSpriteTransform::Rotate {
-                space: VisualSpriteSpace::Local,
+            VisualTransform::Rotate {
+                space: VisualSpace::Local,
                 axis: [0.0, 0.0, 1.0],
                 degrees: 90.0,
             },

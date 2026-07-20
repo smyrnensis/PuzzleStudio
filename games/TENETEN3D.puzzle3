@@ -5,7 +5,7 @@ preset =  "puzzlescript"
 background_color = #8fcf6f
 }
 
-sprites {
+visuals {
 Floor {
 #8fcf6f
 0

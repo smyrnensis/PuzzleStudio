@@ -1,11 +1,11 @@
-# Sprites
-Use `sprites` to define how objects look.
+# Visuals
+Use `visuals` to define how objects look.
 
 ```puzzle
 puzzle sokoban {
-sprites {
+visuals {
 Player {
-image "sprites/player.png"
+image "visuals/player.png"
 }
 
 Box {
@@ -20,27 +20,27 @@ Box {
 }
 ```
 
-Image sprites use a game-folder relative path. ASCII sprites use a palette row
+Image visuals use a game-folder relative path. ASCII visuals use a palette row
 followed by rows of palette indexes.
 
-Sprites are drawn into one cell by default. Use `contain`, `cover`, or
+Visuals are drawn into one cell by default. Use `contain`, `cover`, or
 `stretch` to choose the draw box and scaling:
 
 ```puzzle
-sprites {
+visuals {
 Gate {
-image "sprites/gate.svg"
+image "visuals/gate.svg"
 contain 2 2
 translate (0, -0.25)
 }
 
 Portrait {
-image "sprites/portrait.jpg"
+image "visuals/portrait.jpg"
 cover 1 1
 }
 
 Panel {
-image "sprites/panel.png"
+image "visuals/panel.png"
 stretch 2 1
 }
 }
@@ -48,22 +48,22 @@ stretch 2 1
 
 Use `slots` for collision and `legend` for level characters.
 
-Sprite spatial operations use `translate [world|local] <vector>`. A 2D sprite
+Visual spatial operations use `translate [world|local] <vector>`. A 2D visual
 uses `rotate [world|local] <angle> [from <angle>]`, for example
-`rotate directions from up`. A 3D sprite may use the same `from` and axis-less
+`rotate directions from up`. A 3D visual may use the same `from` and axis-less
 forms; an omitted axis defaults to +Z (`up`). Use `around <axis>` for another
 axis, for example `rotate local facing from 0deg around right`. The removed
 `offset`, `rotate using`, and generic `transform` forms are not accepted.
 For four-way 3D variants authored facing front, use
 `Arrow:horizontal { rotate horizontal from front }`.
 
-Both model kinds use `sprites`. In a reusable ASCII shape, `>` starts the next
-animation frame and `-` starts the next -Z layer; 2D sprites must have depth 1.
+Both model kinds use `visuals`. In a reusable ASCII shape, `>` starts the next
+animation frame and `-` starts the next -Z layer; 2D visuals must have depth 1.
 
-Drawing order belongs inside `sprites`:
+Drawing order belongs inside `visuals`:
 
 ```puzzle
-sprites {
+visuals {
 order {
 priority = down right
 Floor

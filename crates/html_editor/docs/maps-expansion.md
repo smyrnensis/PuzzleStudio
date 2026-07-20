@@ -49,3 +49,5 @@ tag set.
 
 Layout `for` follows the same projection principle, but it only creates layout
 children. It does not gain cursor movement, selection, or level-menu behavior.
+`level_menu` uses this projection during authoring, then lowers the generated
+items to ordinary `choice` components inside a `scroll=true` container.

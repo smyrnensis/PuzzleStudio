@@ -16,6 +16,7 @@ import {
   lineNumbers,
   rectangularSelection,
   scrollPastEnd,
+  WidgetType,
 } from "@codemirror/view";
 import {
   defaultKeymap,
@@ -86,12 +87,14 @@ const sourceHighlightClasses = Object.freeze({
   "brace-invalid": "syntax-brace-invalid",
   "level-cell": "syntax-level-cell",
   "level-cell-invalid": "syntax-level-cell-invalid",
-  "sprite-pixel": "syntax-sprite-pixel",
+  "level-separator": "syntax-level-separator",
+  "visual-pixel": "syntax-visual-pixel",
 });
 const replaceSourceHighlightRange = StateEffect.define();
 const clearSourceHighlightDecorations = StateEffect.define();
 const replaceSourceFindDecorations = StateEffect.define();
 const replaceSourceFoldRanges = StateEffect.define();
+const replaceSourceAddLineWidget = StateEffect.define();
 const sourceHighlightDecorations = StateField.define({
   create() {
     return Decoration.none;
@@ -149,6 +152,64 @@ const sourceFoldRanges = StateField.define({
     }
     return next;
   },
+});
+
+class SourceAddLineWidget extends WidgetType {
+  constructor(cursorOffset) {
+    super();
+    this.cursorOffset = cursorOffset;
+  }
+
+  eq(other) {
+    return other instanceof SourceAddLineWidget && other.cursorOffset === this.cursorOffset;
+  }
+
+  toDOM(view) {
+    const button = document.createElement("button");
+    button.className = "cm-source-add-marker";
+    button.type = "button";
+    button.setAttribute("aria-label", "Add setting here");
+    button.dataset.tooltip = "Add setting here";
+    button.innerHTML = editorIconSvg("plus");
+    button.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      view.contentDOM.dispatchEvent(new CustomEvent("sourcelineaddrequest", {
+        bubbles: true,
+        cancelable: true,
+        detail: { cursorOffset: this.cursorOffset },
+      }));
+    });
+    return button;
+  }
+}
+
+const sourceAddLineWidgets = StateField.define({
+  create() {
+    return Decoration.none;
+  },
+  update(widgets, transaction) {
+    let next = widgets.map(transaction.changes);
+    for (const effect of transaction.effects) {
+      if (effect.is(replaceSourceAddLineWidget)) {
+        const widget = effect.value;
+        next = widget
+          ? Decoration.set([
+            Decoration.widget({
+              widget: new SourceAddLineWidget(widget.cursorOffset),
+              side: -1,
+            }).range(widget.from),
+          ])
+          : Decoration.none;
+      }
+    }
+    return next;
+  },
+  provide: (field) => EditorView.decorations.from(field),
 });
 
 function sourceFoldRangeForLine(state, lineStart, lineEnd) {
@@ -247,8 +308,8 @@ function highlightDecorations(source, request, payload, offsets = sourceOffsetMa
     let decorationClass = className;
     const spec = {};
     if (span.transparent === true) {
-      if (span.kind !== "sprite-pixel") {
-        throw new Error("Only sprite-pixel highlights may be transparent.");
+      if (span.kind !== "visual-pixel") {
+        throw new Error("Only visual-pixel highlights may be transparent.");
       }
       decorationClass += " is-transparent";
     }
@@ -256,14 +317,14 @@ function highlightDecorations(source, request, payload, offsets = sourceOffsetMa
     if (span.color !== null && span.color !== undefined) {
       const color = String(span.color);
       if (
-        (span.kind !== "color" && span.kind !== "sprite-pixel")
+        (span.kind !== "color" && span.kind !== "visual-pixel")
         || (!validatedColors.has(color) && !CSS.supports("color", color))
       ) {
         throw new Error("Rust source highlight color is invalid.");
       }
       validatedColors.add(color);
-      const property = span.kind === "sprite-pixel"
-        ? "--syntax-sprite-pixel-color"
+      const property = span.kind === "visual-pixel"
+        ? "--syntax-visual-pixel-color"
         : "--syntax-color-token";
       spec.attributes = { style: `${property}: ${color}` };
     }
@@ -277,6 +338,7 @@ function createState(text, readOnlyCompartment, readOnly, inputListeners) {
   return EditorState.create({
     doc: String(text || ""),
     extensions: [
+      sourceAddLineWidgets,
       lineNumbers(),
       sourceFoldRanges,
       foldService.of(sourceFoldRangeForLine),
@@ -287,6 +349,7 @@ function createState(text, readOnlyCompartment, readOnly, inputListeners) {
       history(),
       sourceHighlightDecorations,
       sourceFindDecorations,
+      EditorState.languageData.of(() => [{ commentTokens: { line: "//" } }]),
       EditorState.allowMultipleSelections.of(true),
       drawSelection(),
       rectangularSelection(),
@@ -310,6 +373,11 @@ function createState(text, readOnlyCompartment, readOnly, inputListeners) {
       }),
       readOnlyCompartment.of(EditorState.readOnly.of(Boolean(readOnly))),
       EditorView.updateListener.of((update) => {
+        if (update.selectionSet) {
+          queueMicrotask(() => update.view.contentDOM.dispatchEvent(new CustomEvent("sourceselectionchange", {
+            detail: { cursorOffset: update.state.selection.main.head },
+          })));
+        }
         if (update.viewportChanged && !update.docChanged) {
           queueMicrotask(() => update.view.contentDOM.dispatchEvent(new Event("sourceviewportchange")));
         }
@@ -352,6 +420,44 @@ function createState(text, readOnlyCompartment, readOnly, inputListeners) {
           color: "var(--muted)",
         },
         ".cm-source-fold-marker svg": {
+          width: "14px",
+          height: "14px",
+          fill: "none",
+          stroke: "currentColor",
+          strokeWidth: "2",
+          strokeLinecap: "round",
+          strokeLinejoin: "round",
+        },
+        ".cm-line": {
+          position: "relative",
+        },
+        ".cm-source-add-marker": {
+          display: "inline-flex",
+          position: "absolute",
+          left: "0",
+          top: "0",
+          zIndex: "1",
+          alignItems: "center",
+          justifyContent: "center",
+          width: "20px",
+          height: "20px",
+          margin: "0",
+          padding: "0",
+          border: "0",
+          borderRadius: "4px",
+          background: "transparent",
+          color: "var(--muted)",
+          cursor: "pointer",
+        },
+        ".cm-source-add-marker:hover": {
+          background: "var(--hover-bg)",
+          color: "var(--code-ink)",
+        },
+        ".cm-source-add-marker:focus-visible": {
+          outline: "2px solid var(--accent)",
+          outlineOffset: "-2px",
+        },
+        ".cm-source-add-marker svg": {
           width: "14px",
           height: "14px",
           fill: "none",
@@ -447,6 +553,17 @@ export function createSourceEditor(parent) {
     },
     clearHighlights() {
       view.dispatch({ effects: clearSourceHighlightDecorations.of(null) });
+    },
+    setAddLineOverlay(source, cursorOffset, visible) {
+      const expected = String(source || "");
+      if (expected !== view.state.doc.toString()) {
+        throw new Error("Cannot apply a stale source add line widget to CodeMirror.");
+      }
+      const cursor = clampOffset(view, cursorOffset);
+      const widget = visible
+        ? { from: view.state.doc.lineAt(cursor).from, cursorOffset: cursor }
+        : null;
+      view.dispatch({ effects: replaceSourceAddLineWidget.of(widget) });
     },
     applyFoldRanges(source, payload) {
       const expected = String(source || "");

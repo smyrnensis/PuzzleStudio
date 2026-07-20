@@ -76,6 +76,7 @@ fn standalone_html(
     let renderer_css = escape_style(RENDERER_CSS);
     let game_css = escape_style(game_css);
     let game_visuals_js = escape_script(game_visuals_js);
+    let visual_tween_core_js = escape_script(VISUAL_TWEEN_CORE_JS);
     let renderer_js = escape_script(RENDERER_JS);
     let standalone_js = escape_script(STANDALONE_JS);
     let runtime_wasm_js = standalone_runtime_wasm_script(host_mode, runtime_wasm);
@@ -117,6 +118,11 @@ fn standalone_html(
             &format!("<script>\n{app_js}\n</script>"),
         )
         .replace("<body>", &format!("<body{body_theme_attributes}>"));
+    let html = replace_required_script_asset(
+        html,
+        "/visual_tween_core.js",
+        &format!("<script>\n{visual_tween_core_js}\n</script>"),
+    );
     replace_required_script_asset(
         html,
         "/renderer.js",
@@ -477,7 +483,10 @@ fn export_puzzle3_document_html_with_runtime_wasm(
         "saveKey".to_string(),
         serde_json::Value::String(format!("{}:{puzzle_path}", document.title)),
     );
-    boot_object.insert("progressSaveVersion".to_string(), serde_json::json!(1));
+    boot_object.insert(
+        "progressSaveVersion".to_string(),
+        serde_json::json!(puzzle_play::PROGRESS_SAVE_VERSION),
+    );
     boot_object.insert(
         "editorPreview".to_string(),
         serde_json::Value::Bool(host_mode == StandaloneHostMode::EditorPreview),

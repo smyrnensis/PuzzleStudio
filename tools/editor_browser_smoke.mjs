@@ -17,7 +17,7 @@ const importFileOnly = args.importFileOnly ? path.resolve(repoRoot, args.importF
 const chromePath = resolveChrome(args.chrome);
 const headless = !args.headed;
 const sourceInputOnly = Boolean(args.sourceInputOnly);
-const spritePaletteOnly = Boolean(args.spritePaletteOnly);
+const visualPaletteOnly = Boolean(args.visualPaletteOnly);
 const sourceEditingCommandsOnly = Boolean(args.sourceEditingCommandsOnly);
 
 const failures = [];
@@ -34,12 +34,13 @@ async function main() {
         await fileInputImportAddsExternalPuzzleDocument(page, importFileOnly);
         return;
       }
-      await spritePaletteMouseClickPreservesPaneScroll(page);
-      if (spritePaletteOnly) {
+      await visualPaletteMouseClickPreservesPaneScroll(page);
+      if (visualPaletteOnly) {
         return;
       }
       if (sourceEditingCommandsOnly) {
         await sourceCodeMirrorEditingCommandsReachWorkflow(page);
+        await sourceAddControlOverlaysEmptyLineWithoutChangingEditorWidth(page);
         await sourceCompletionPopoverStaysInsideEditor(page);
         return;
       }
@@ -51,6 +52,7 @@ async function main() {
       await sourceCompletionKeepsKeyboardSelectionAcrossRefresh(page);
       await sourceCompletionPopoverStaysInsideEditor(page);
       await sourceCodeMirrorEditingCommandsReachWorkflow(page);
+      await sourceAddControlOverlaysEmptyLineWithoutChangingEditorWidth(page);
       await sourceRewritePatternTabCopiesLhsToEmptyRhs(page);
       await fileInputImportAddsPuzzleDocument(page);
       if (sourceInputOnly) {
@@ -62,7 +64,7 @@ async function main() {
       await sourceLevelAsciiClickOpensLevelEditor(page);
     });
 
-    if (!sourceInputOnly && !sourceEditingCommandsOnly && !spritePaletteOnly && !importFileOnly) {
+    if (!sourceInputOnly && !sourceEditingCommandsOnly && !visualPaletteOnly && !importFileOnly) {
       await withEditorServer(fixture3d, async (server) => {
         await page.navigate(server.url);
         await editorLoads(page);
@@ -80,22 +82,22 @@ async function main() {
   console.log("editor browser smoke tests passed");
 }
 
-async function spritePaletteMouseClickPreservesPaneScroll(page) {
-  await clickTop(page, "#spriteModeButton");
+async function visualPaletteMouseClickPreservesPaneScroll(page) {
+  await clickTop(page, "#visualModeButton");
   await page.waitForTop(
-    `Boolean(document.querySelector("#spriteBuilder") && !document.querySelector("#spriteBuilder").hidden)`,
-    "2D sprite pane"
+    `Boolean(document.querySelector("#visualBuilder") && !document.querySelector("#visualBuilder").hidden)`,
+    "2D visual pane"
   );
   const clickPoint = await page.evaluateTop(`(() => {
-    const palette = document.querySelector("#spritePalette");
-    const button = palette?.querySelector('[data-sprite-brush-preset="thick"]');
+    const palette = document.querySelector("#visualPalette");
+    const button = palette?.querySelector('[data-visual-brush-preset="thick"]');
     const scroller = palette?.closest(".tool-pane-scroll");
     if (!palette || !button || !scroller) {
-      throw new Error("missing sprite palette scroll test target");
+      throw new Error("missing visual palette scroll test target");
     }
-    window.__spritePaletteSmokeScroller = scroller;
-    window.__spritePaletteSmokeOriginalStyle = scroller.style.cssText;
-    window.__spritePaletteSmokeClicked = false;
+    window.__visualPaletteSmokeScroller = scroller;
+    window.__visualPaletteSmokeOriginalStyle = scroller.style.cssText;
+    window.__visualPaletteSmokeClicked = false;
     scroller.style.height = "458px";
     scroller.style.maxHeight = "458px";
     scroller.style.overflow = "auto";
@@ -103,7 +105,7 @@ async function spritePaletteMouseClickPreservesPaneScroll(page) {
     scroller.scrollTop = Math.min(70, maxScroll);
     if (scroller.scrollTop <= 0) {
       throw new Error(
-        "sprite palette smoke requires overflow: " + JSON.stringify({
+        "visual palette smoke requires overflow: " + JSON.stringify({
           clientHeight: scroller.clientHeight,
           scrollHeight: scroller.scrollHeight,
         })
@@ -112,11 +114,11 @@ async function spritePaletteMouseClickPreservesPaneScroll(page) {
     const buttonRect = button.getBoundingClientRect();
     const scrollerRect = scroller.getBoundingClientRect();
     if (buttonRect.bottom <= scrollerRect.top || buttonRect.top >= scrollerRect.bottom) {
-      throw new Error("sprite palette smoke button is outside the scroller viewport");
+      throw new Error("visual palette smoke button is outside the scroller viewport");
     }
-    window.__spritePaletteSmokeBaseline = scroller.scrollTop;
+    window.__visualPaletteSmokeBaseline = scroller.scrollTop;
     button.addEventListener("click", () => {
-      window.__spritePaletteSmokeClicked = true;
+      window.__visualPaletteSmokeClicked = true;
     }, { once: true });
     return {
       x: Math.round(buttonRect.left + buttonRect.width / 2),
@@ -127,38 +129,38 @@ async function spritePaletteMouseClickPreservesPaneScroll(page) {
   try {
     await clickViewport(page, clickPoint);
     const result = await page.evaluateTop(`(() => {
-      const scroller = window.__spritePaletteSmokeScroller;
-      const button = document.querySelector('#spritePalette [data-sprite-brush-preset="thick"]');
+      const scroller = window.__visualPaletteSmokeScroller;
+      const button = document.querySelector('#visualPalette [data-visual-brush-preset="thick"]');
       return {
-        baseline: window.__spritePaletteSmokeBaseline,
+        baseline: window.__visualPaletteSmokeBaseline,
         scrollTop: scroller?.scrollTop ?? null,
-        clicked: window.__spritePaletteSmokeClicked === true,
+        clicked: window.__visualPaletteSmokeClicked === true,
         buttonFocused: document.activeElement === button,
       };
     })()`);
-    assert.equal(result.clicked, true, "sprite palette button click should still fire");
+    assert.equal(result.clicked, true, "visual palette button click should still fire");
     assert.equal(
       result.scrollTop,
       result.baseline,
-      `sprite palette mouse click changed pane scroll: ${JSON.stringify(result)}`
+      `visual palette mouse click changed pane scroll: ${JSON.stringify(result)}`
     );
-    assert.equal(result.buttonFocused, false, "sprite palette mouse click should not take focus");
+    assert.equal(result.buttonFocused, false, "visual palette mouse click should not take focus");
   } finally {
     await page.evaluateTop(`(() => {
-      const scroller = window.__spritePaletteSmokeScroller;
+      const scroller = window.__visualPaletteSmokeScroller;
       if (scroller) {
-        scroller.style.cssText = window.__spritePaletteSmokeOriginalStyle || "";
+        scroller.style.cssText = window.__visualPaletteSmokeOriginalStyle || "";
         scroller.scrollTop = 0;
       }
-      delete window.__spritePaletteSmokeScroller;
-      delete window.__spritePaletteSmokeOriginalStyle;
-      delete window.__spritePaletteSmokeBaseline;
-      delete window.__spritePaletteSmokeClicked;
+      delete window.__visualPaletteSmokeScroller;
+      delete window.__visualPaletteSmokeOriginalStyle;
+      delete window.__visualPaletteSmokeBaseline;
+      delete window.__visualPaletteSmokeClicked;
       return true;
     })()`).catch(() => {});
     await clickTop(page, "#playModeButton").catch(() => {});
   }
-  await page.assertNoErrors("sprite palette mouse focus");
+  await page.assertNoErrors("visual palette mouse focus");
 }
 
 async function editorLoads(page) {
@@ -885,6 +887,71 @@ async function sourceCodeMirrorEditingCommandsReachWorkflow(page) {
     })()`);
   }
   await page.assertNoErrors("CodeMirror source editing commands");
+}
+
+async function sourceAddControlOverlaysEmptyLineWithoutChangingEditorWidth(page) {
+  await page.evaluateTop(`(() => {
+    const editor = document.querySelector("#sourceEditor");
+    const port = editor?.sourceEditorPort;
+    if (!editor || port?.kind !== "codemirror" || typeof port.setAddLineOverlay !== "function") {
+      throw new Error("missing CodeMirror source line add control");
+    }
+    const original = editor.value || "";
+    const source = "puzzle add_overlay_smoke\\n\\nrules {\\n}\\n";
+    const cursor = source.indexOf("\\n") + 1;
+    try {
+      setSourceEditorValue(source, { resetUndo: true });
+      editor.setSelectionRange(cursor, cursor);
+      port.setAddLineOverlay(source, cursor, false);
+      const content = document.querySelector("#sourceEditorMount .cm-content");
+      const gutters = document.querySelector("#sourceEditorMount .cm-gutters");
+      if (!content || !gutters) {
+        throw new Error("missing CodeMirror layout surfaces");
+      }
+      const before = {
+        contentLeft: content.getBoundingClientRect().left,
+        contentWidth: content.getBoundingClientRect().width,
+        guttersWidth: gutters.getBoundingClientRect().width,
+      };
+      port.setAddLineOverlay(source, cursor, true);
+      const marker = document.querySelector("#sourceEditorMount .cm-source-add-marker");
+      const line = marker?.closest(".cm-line");
+      if (!marker || !line) {
+        throw new Error("source add control was not rendered on its line");
+      }
+      const after = {
+        contentLeft: content.getBoundingClientRect().left,
+        contentWidth: content.getBoundingClientRect().width,
+        guttersWidth: gutters.getBoundingClientRect().width,
+      };
+      const markerRect = marker.getBoundingClientRect();
+      const lineRect = line.getBoundingClientRect();
+      if (
+        before.contentLeft !== after.contentLeft
+        || before.contentWidth !== after.contentWidth
+        || before.guttersWidth !== after.guttersWidth
+        || document.querySelector("#sourceEditorMount .cm-source-add-gutter")
+        || getComputedStyle(marker).position !== "absolute"
+        || Math.abs(markerRect.left - lineRect.left) > 1
+      ) {
+        throw new Error("source add control changed editor layout: " + JSON.stringify({
+          before,
+          after,
+          markerLeft: markerRect.left,
+          lineLeft: lineRect.left,
+          position: getComputedStyle(marker).position,
+        }));
+      }
+    } finally {
+      port.setAddLineOverlay(source, cursor, false);
+      setSourceEditorValue(original, { resetUndo: true });
+      if (documents[currentDocumentIndex]) {
+        documents[currentDocumentIndex].source = original;
+      }
+    }
+    return true;
+  })()`);
+  await page.assertNoErrors("source add line overlay layout");
 }
 
 async function sourceCompletionPopoverStaysInsideEditor(page) {
@@ -2101,8 +2168,8 @@ function parseArgs(argv) {
       parsed.sourceEditingCommandsOnly = true;
       continue;
     }
-    if (arg === "--sprite-palette-only") {
-      parsed.spritePaletteOnly = true;
+    if (arg === "--visual-palette-only") {
+      parsed.visualPaletteOnly = true;
       continue;
     }
     if (arg === "--editor-bin") {

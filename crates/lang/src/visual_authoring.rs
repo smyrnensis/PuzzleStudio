@@ -2,7 +2,7 @@ use crate::{block_header_text, is_block_header_line, source::split_header_tokens
 use std::collections::HashSet;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct SpriteNodeSyntax {
+pub(crate) struct VisualNodeSyntax {
     pub(crate) selector: Option<String>,
     pub(crate) selector_body_line: Option<usize>,
     pub(crate) colors: Option<Vec<String>>,
@@ -12,24 +12,24 @@ pub(crate) struct SpriteNodeSyntax {
     pub(crate) frame_duration: Option<String>,
     pub(crate) frame_duration_body_line: Option<usize>,
     pub(crate) prelude_rows: Vec<String>,
-    pub(crate) properties: Vec<(SpritePropertySyntax, String)>,
+    pub(crate) properties: Vec<(VisualPropertySyntax, String)>,
     pub(crate) property_body_lines: Vec<usize>,
-    pub(crate) shape: Option<SpriteShapeSyntax>,
+    pub(crate) shape: Option<VisualShapeSyntax>,
     pub(crate) shape_body_line: Option<usize>,
     pub(crate) separator_body_lines: Vec<usize>,
-    pub(crate) issues: Vec<SpriteSyntaxIssue>,
+    pub(crate) issues: Vec<VisualSyntaxIssue>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum SpritePropertySyntax {
+pub(crate) enum VisualPropertySyntax {
     Image(String),
     Sampling(String),
     Translate {
-        space: SpriteSpaceSyntax,
+        space: VisualSpaceSyntax,
         value: String,
     },
     Rotate {
-        space: SpriteSpaceSyntax,
+        space: VisualSpaceSyntax,
         angle: String,
         from: Option<String>,
         axis: Option<String>,
@@ -40,103 +40,103 @@ pub(crate) enum SpritePropertySyntax {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum SpriteSpaceSyntax {
+pub(crate) enum VisualSpaceSyntax {
     #[default]
     World,
     Local,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum SpriteShapeSyntax {
+pub(crate) enum VisualShapeSyntax {
     Reference(String),
-    ExplicitInline(Vec<SpriteFrameSyntax>),
-    BareFrames(Vec<SpriteFrameSyntax>),
+    ExplicitInline(Vec<VisualFrameSyntax>),
+    BareFrames(Vec<VisualFrameSyntax>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct SpriteFrameSyntax {
-    pub(crate) layers: Vec<SpriteLayerSyntax>,
+pub(crate) struct VisualFrameSyntax {
+    pub(crate) layers: Vec<VisualLayerSyntax>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct SpriteLayerSyntax {
-    pub(crate) rows: Vec<SpriteShapeRow>,
+pub(crate) struct VisualLayerSyntax {
+    pub(crate) rows: Vec<VisualShapeRow>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct SpriteShapeRow {
+pub(crate) struct VisualShapeRow {
     pub(crate) text: String,
     pub(crate) body_line: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct SpriteSyntaxIssue {
+pub(crate) struct VisualSyntaxIssue {
     pub(crate) line: String,
     pub(crate) message: &'static str,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct SpriteBodyError {
+pub(crate) struct VisualBodyError {
     pub(crate) line: String,
     pub(crate) message: String,
 }
 
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct AnalyzedSpriteBody {
-    pub(crate) syntax: SpriteNodeSyntax,
-    pub(crate) shape: ResolvedSpriteShape,
+pub(crate) struct AnalyzedVisualBody {
+    pub(crate) syntax: VisualNodeSyntax,
+    pub(crate) shape: ResolvedVisualShape,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct SpriteBodyProduct {
-    pub(crate) syntax: SpriteNodeSyntax,
-    pub(crate) shape: ResolvedSpriteShape,
-    pub(crate) error: Option<SpriteBodyError>,
+pub(crate) struct VisualBodyProduct {
+    pub(crate) syntax: VisualNodeSyntax,
+    pub(crate) shape: ResolvedVisualShape,
+    pub(crate) error: Option<VisualBodyError>,
 }
 
 #[cfg(test)]
-pub(crate) fn analyze_sprite_body(
+pub(crate) fn analyze_visual_body(
     header: Option<&str>,
     lines: &[impl AsRef<str>],
     is_known_shape: impl FnMut(&str) -> bool,
-) -> Result<AnalyzedSpriteBody, SpriteBodyError> {
-    let syntax = parse_sprite_node(header, lines);
-    analyze_sprite_syntax(syntax, is_known_shape)
+) -> Result<AnalyzedVisualBody, VisualBodyError> {
+    let syntax = parse_visual_node(header, lines);
+    analyze_visual_syntax(syntax, is_known_shape)
 }
 
 #[cfg(test)]
-fn analyze_sprite_syntax(
-    syntax: SpriteNodeSyntax,
+fn analyze_visual_syntax(
+    syntax: VisualNodeSyntax,
     is_known_shape: impl FnMut(&str) -> bool,
-) -> Result<AnalyzedSpriteBody, SpriteBodyError> {
+) -> Result<AnalyzedVisualBody, VisualBodyError> {
     if let Some(issue) = syntax.issues.first() {
-        return Err(SpriteBodyError {
+        return Err(VisualBodyError {
             line: issue.line.clone(),
             message: issue.message.to_string(),
         });
     }
-    let shape = resolve_sprite_shape(&syntax, is_known_shape);
-    Ok(AnalyzedSpriteBody { syntax, shape })
+    let shape = resolve_visual_shape(&syntax, is_known_shape);
+    Ok(AnalyzedVisualBody { syntax, shape })
 }
 
-pub(crate) fn analyze_sprite_body_product(
+pub(crate) fn analyze_visual_body_product(
     header: Option<&str>,
     lines: &[crate::source::LogicalLine],
     is_known_shape: impl FnMut(&str) -> bool,
     resolve_display_color: impl FnMut(&str) -> Option<crate::SourceHighlightColor>,
-) -> crate::surface::ParseProduct<SpriteBodyProduct> {
-    let syntax = parse_sprite_node(header, lines);
-    let shape = resolve_sprite_shape(&syntax, is_known_shape);
-    let mut error = syntax.issues.first().map(|issue| SpriteBodyError {
+) -> crate::surface::ParseProduct<VisualBodyProduct> {
+    let syntax = parse_visual_node(header, lines);
+    let shape = resolve_visual_shape(&syntax, is_known_shape);
+    let mut error = syntax.issues.first().map(|issue| VisualBodyError {
         line: issue.line.clone(),
         message: issue.message.to_string(),
     });
     if error.is_none()
-        && let ResolvedSpriteShape::Inline(frames) = &shape
-        && let Err(message) = validate_sprite_frame_geometry(frames)
+        && let ResolvedVisualShape::Inline(frames) = &shape
+        && let Err(message) = validate_visual_frame_geometry(frames)
     {
-        error = Some(SpriteBodyError {
+        error = Some(VisualBodyError {
             line: lines
                 .first()
                 .map(|line| line.as_ref().to_string())
@@ -144,9 +144,9 @@ pub(crate) fn analyze_sprite_body_product(
             message: message.to_string(),
         });
     }
-    let recognition = recognize_sprite_display(&syntax, Some(&shape), lines, resolve_display_color);
+    let recognition = recognize_visual_display(&syntax, Some(&shape), lines, resolve_display_color);
     crate::surface::ParseProduct::new(
-        SpriteBodyProduct {
+        VisualBodyProduct {
             syntax,
             shape,
             error,
@@ -156,35 +156,35 @@ pub(crate) fn analyze_sprite_body_product(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct SpriteFrameGeometry {
+pub(crate) struct VisualFrameGeometry {
     pub(crate) width: usize,
     pub(crate) height: usize,
     pub(crate) layers: usize,
 }
 
-pub(crate) fn validate_sprite_frame_geometry(
-    frames: &[SpriteFrameSyntax],
-) -> Result<SpriteFrameGeometry, &'static str> {
-    let first_frame = frames.first().ok_or("sprite requires at least one frame")?;
+pub(crate) fn validate_visual_frame_geometry(
+    frames: &[VisualFrameSyntax],
+) -> Result<VisualFrameGeometry, &'static str> {
+    let first_frame = frames.first().ok_or("visual requires at least one frame")?;
     let first_layer = first_frame
         .layers
         .first()
-        .ok_or("sprite frame requires at least one layer")?;
+        .ok_or("visual frame requires at least one layer")?;
     let first_row = first_layer
         .rows
         .first()
-        .ok_or("sprite layer requires at least one row")?;
-    let geometry = SpriteFrameGeometry {
+        .ok_or("visual layer requires at least one row")?;
+    let geometry = VisualFrameGeometry {
         width: first_row.text.chars().count(),
         height: first_layer.rows.len(),
         layers: first_frame.layers.len(),
     };
     if geometry.width == 0 {
-        return Err("sprite row must not be empty");
+        return Err("visual row must not be empty");
     }
     for frame in frames {
         if frame.layers.len() != geometry.layers {
-            return Err("sprite animation frames must have the same size");
+            return Err("visual animation frames must have the same size");
         }
         for layer in &frame.layers {
             if layer.rows.len() != geometry.height
@@ -193,17 +193,17 @@ pub(crate) fn validate_sprite_frame_geometry(
                     .iter()
                     .any(|row| row.text.chars().count() != geometry.width)
             {
-                return Err("sprite animation frames must have the same size");
+                return Err("visual animation frames must have the same size");
             }
         }
     }
     Ok(geometry)
 }
 
-pub(crate) fn parse_sprite_shape_rows(
+pub(crate) fn parse_visual_shape_rows(
     lines: &[impl AsRef<str>],
-) -> Result<Vec<SpriteFrameSyntax>, SpriteBodyError> {
-    let mut frames = vec![empty_sprite_frame()];
+) -> Result<Vec<VisualFrameSyntax>, VisualBodyError> {
+    let mut frames = vec![empty_visual_frame()];
     let mut issues = Vec::new();
     for (body_line, line) in lines.iter().enumerate() {
         let line = line.as_ref().trim();
@@ -213,12 +213,12 @@ pub(crate) fn parse_sprite_shape_rows(
         append_shape_item(line, body_line, &mut frames, &mut issues);
     }
     if let Some(issue) = issues.into_iter().next() {
-        return Err(SpriteBodyError {
+        return Err(VisualBodyError {
             line: issue.line,
             message: issue.message.to_string(),
         });
     }
-    validate_sprite_frame_geometry(&frames).map_err(|message| SpriteBodyError {
+    validate_visual_frame_geometry(&frames).map_err(|message| VisualBodyError {
         line: lines
             .first()
             .map(|line| line.as_ref().to_string())
@@ -229,17 +229,17 @@ pub(crate) fn parse_sprite_shape_rows(
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct SpriteTiming {
+pub(crate) struct VisualTiming {
     pub(crate) duration_ms: Option<u64>,
     pub(crate) frame_duration_ms: Option<u64>,
     pub(crate) total_duration_ms: Option<u64>,
 }
 
-pub(crate) fn resolve_sprite_timing(
+pub(crate) fn resolve_visual_timing(
     frame_count: usize,
     duration: Option<&str>,
     frame_duration: Option<&str>,
-) -> Result<SpriteTiming, String> {
+) -> Result<VisualTiming, String> {
     let duration_ms = duration
         .map(|value| puzzle_scene::parse_wait_duration_ms_at(value, value))
         .transpose()
@@ -249,25 +249,25 @@ pub(crate) fn resolve_sprite_timing(
         .transpose()
         .map_err(|error| error.to_string())?;
     if frame_count <= 1 {
-        return Ok(SpriteTiming {
+        return Ok(VisualTiming {
             duration_ms,
             frame_duration_ms,
             total_duration_ms: duration_ms.or(frame_duration_ms),
         });
     }
     let count = u64::try_from(frame_count)
-        .map_err(|_| "sprite animation has too many frames".to_string())?;
+        .map_err(|_| "visual animation has too many frames".to_string())?;
     let total_duration_ms = match (duration_ms, frame_duration_ms) {
         (None, None) => {
-            return Err("sprite animation requires duration or frame_duration".to_string());
+            return Err("visual animation requires duration or frame_duration".to_string());
         }
         (Some(duration), Some(frame_duration)) => {
             let expected = frame_duration
                 .checked_mul(count)
-                .ok_or_else(|| "sprite frame_duration is too large".to_string())?;
+                .ok_or_else(|| "visual frame_duration is too large".to_string())?;
             if duration != expected {
                 return Err(
-                    "sprite duration must equal frame_duration multiplied by frame count"
+                    "visual duration must equal frame_duration multiplied by frame count"
                         .to_string(),
                 );
             }
@@ -276,9 +276,9 @@ pub(crate) fn resolve_sprite_timing(
         (Some(duration), None) => duration,
         (None, Some(frame_duration)) => frame_duration
             .checked_mul(count)
-            .ok_or_else(|| "sprite frame_duration is too large".to_string())?,
+            .ok_or_else(|| "visual frame_duration is too large".to_string())?,
     };
-    Ok(SpriteTiming {
+    Ok(VisualTiming {
         duration_ms,
         frame_duration_ms,
         total_duration_ms: Some(total_duration_ms),
@@ -286,7 +286,7 @@ pub(crate) fn resolve_sprite_timing(
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct SpriteAttachmentSyntax<Line> {
+pub(crate) struct VisualAttachmentSyntax<Line> {
     pub(crate) header: String,
     pub(crate) header_line: Line,
     pub(crate) body_lines: Vec<Line>,
@@ -294,11 +294,11 @@ pub(crate) struct SpriteAttachmentSyntax<Line> {
     pub(crate) next_index: usize,
 }
 
-pub(crate) fn collect_sprite_attachment<Line>(
+pub(crate) fn collect_visual_attachment<Line>(
     lines: &[Line],
     start: usize,
     known_colors: &HashSet<String>,
-) -> Result<SpriteAttachmentSyntax<Line>, &'static str>
+) -> Result<VisualAttachmentSyntax<Line>, &'static str>
 where
     Line: AsRef<str> + Clone,
 {
@@ -311,7 +311,7 @@ where
         while index < lines.len() {
             if lines[index].as_ref().trim() == "}" {
                 if depth == 0 {
-                    return Ok(SpriteAttachmentSyntax {
+                    return Ok(VisualAttachmentSyntax {
                         header,
                         header_line,
                         body_lines,
@@ -330,19 +330,19 @@ where
             }
             index += 1;
         }
-        return Err("sprite attachment missing closing brace");
+        return Err("visual attachment missing closing brace");
     }
 
     let mut body_lines = Vec::new();
     let mut index = start + 1;
     let mut nested_depth = 0i32;
-    let mut saw_color_row = sprite_header_has_inline_body(&header, known_colors);
+    let mut saw_color_row = visual_header_has_inline_body(&header, known_colors);
     while index < lines.len() {
         if lines[index].as_ref().trim() == "}" && nested_depth == 0 {
             break;
         }
         if nested_depth == 0
-            && starts_next_unbraced_sprite(lines, index, saw_color_row, known_colors)
+            && starts_next_unbraced_visual(lines, index, saw_color_row, known_colors)
         {
             break;
         }
@@ -361,13 +361,13 @@ where
         if is_block_header_line(lines[index].as_ref()) {
             nested_depth += 1;
         }
-        if nested_depth == 0 && is_sprite_entry_start_color_row(lines[index].as_ref(), known_colors)
+        if nested_depth == 0 && is_visual_entry_start_color_row(lines[index].as_ref(), known_colors)
         {
             saw_color_row = true;
         }
         index += 1;
     }
-    Ok(SpriteAttachmentSyntax {
+    Ok(VisualAttachmentSyntax {
         header,
         header_line,
         body_lines,
@@ -376,7 +376,7 @@ where
     })
 }
 
-fn starts_next_unbraced_sprite<Line>(
+fn starts_next_unbraced_visual<Line>(
     lines: &[Line],
     index: usize,
     saw_color_row: bool,
@@ -393,13 +393,13 @@ where
     match tokens.as_slice() {
         [selector, source]
             if saw_color_row
-                && is_sprite_definition_name_token(selector)
+                && is_visual_definition_name_token(selector)
                 && (is_visual_image_source(source)
-                    || is_sprite_entry_start_color_token(source, known_colors)) =>
+                    || is_visual_entry_start_color_token(source, known_colors)) =>
         {
             return true;
         }
-        [selector] if saw_color_row && is_sprite_definition_name_token(selector) => {
+        [selector] if saw_color_row && is_visual_definition_name_token(selector) => {
             if lines
                 .iter()
                 .skip(index + 1)
@@ -408,7 +408,7 @@ where
                 .is_some_and(|next| {
                     next != "}"
                         && (is_visual_image_source(next)
-                            || is_sprite_entry_start_color_row(next, known_colors))
+                            || is_visual_entry_start_color_row(next, known_colors))
                 })
             {
                 return true;
@@ -416,36 +416,36 @@ where
         }
         _ => {}
     }
-    if is_sprite_entry_start_color_row(line, known_colors) {
+    if is_visual_entry_start_color_row(line, known_colors) {
         return false;
     }
-    !saw_color_row && matches!(tokens.as_slice(), [name] if is_sprite_definition_name_token(name))
+    !saw_color_row && matches!(tokens.as_slice(), [name] if is_visual_definition_name_token(name))
 }
 
-fn sprite_header_has_inline_body(header: &str, known_colors: &HashSet<String>) -> bool {
+fn visual_header_has_inline_body(header: &str, known_colors: &HashSet<String>) -> bool {
     matches!(
         split_header_tokens(block_header_text(header)).as_slice(),
         [selector, source]
-            if is_sprite_definition_name_token(selector)
+            if is_visual_definition_name_token(selector)
                 && (is_visual_image_source(source)
-                    || is_sprite_entry_start_color_token(source, known_colors))
+                    || is_visual_entry_start_color_token(source, known_colors))
     )
 }
 
-fn is_sprite_entry_start_color_row(line: &str, known_colors: &HashSet<String>) -> bool {
-    let colors = sprite_color_row_tokens(line);
-    if colors.is_empty() || !colors.iter().all(|color| is_sprite_color_expr(color)) {
+fn is_visual_entry_start_color_row(line: &str, known_colors: &HashSet<String>) -> bool {
+    let colors = visual_color_row_tokens(line);
+    if colors.is_empty() || !colors.iter().all(|color| is_visual_color_expr(color)) {
         return false;
     }
     colors.len() > 1
         || colors.first().is_some_and(|color| {
-            is_sprite_color(color)
+            is_visual_color(color)
                 || is_declared_color_ref(color, known_colors)
                 || known_colors.contains(*color)
         })
 }
 
-fn sprite_color_row_tokens(line: &str) -> Vec<&str> {
+fn visual_color_row_tokens(line: &str) -> Vec<&str> {
     let mut tokens = split_header_tokens(line);
     if tokens.first() == Some(&"colors") {
         tokens.remove(0);
@@ -456,8 +456,8 @@ fn sprite_color_row_tokens(line: &str) -> Vec<&str> {
     tokens
 }
 
-fn is_sprite_entry_start_color_token(token: &str, known_colors: &HashSet<String>) -> bool {
-    is_sprite_color(token)
+fn is_visual_entry_start_color_token(token: &str, known_colors: &HashSet<String>) -> bool {
+    is_visual_color(token)
         || is_declared_color_ref(token, known_colors)
         || known_colors.contains(token)
 }
@@ -468,15 +468,15 @@ fn is_declared_color_ref(token: &str, known_colors: &HashSet<String>) -> bool {
         .is_some_and(|(name, value)| !value.is_empty() && known_colors.contains(name))
 }
 
-fn is_sprite_color_expr(value: &str) -> bool {
-    is_sprite_color(value) || is_sprite_color_ref(value)
+fn is_visual_color_expr(value: &str) -> bool {
+    is_visual_color(value) || is_visual_color_ref(value)
 }
 
-fn is_sprite_color(value: &str) -> bool {
+fn is_visual_color(value: &str) -> bool {
     crate::syntax::is_visual_color_literal(value)
 }
 
-fn is_sprite_color_ref(value: &str) -> bool {
+fn is_visual_color_ref(value: &str) -> bool {
     let mut parts = value.split(':');
     let Some(first) = parts.next() else {
         return false;
@@ -500,24 +500,8 @@ fn is_identifier_token(value: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 
-fn is_sprite_definition_name_token(value: &str) -> bool {
-    if matches!(
-        value,
-        "shape" | "shapes" | "palette" | "colors" | "ascii" | "sprites"
-    ) {
-        return false;
-    }
-    let mut parts = value.split(':');
-    let Some(head) = parts.next() else {
-        return false;
-    };
-    puzzle_authoring::is_symbol_name(head)
-        && parts.all(|part| {
-            !part.is_empty()
-                && part
-                    .chars()
-                    .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
-        })
+fn is_visual_definition_name_token(value: &str) -> bool {
+    puzzle_authoring::is_visual_definition_target(value)
 }
 
 fn is_visual_image_source(value: &str) -> bool {
@@ -530,15 +514,15 @@ fn is_visual_image_source(value: &str) -> bool {
         || lower.ends_with(".svg")
 }
 
-pub(crate) fn parse_sprite_node(
+pub(crate) fn parse_visual_node(
     header: Option<&str>,
     lines: &[impl AsRef<str>],
-) -> SpriteNodeSyntax {
-    let mut syntax = SpriteNodeSyntax {
+) -> VisualNodeSyntax {
+    let mut syntax = VisualNodeSyntax {
         selector: owner_selector(header),
-        ..SpriteNodeSyntax::default()
+        ..VisualNodeSyntax::default()
     };
-    let mut frames = vec![empty_sprite_frame()];
+    let mut frames = vec![empty_visual_frame()];
     let mut explicit_shape = false;
     let mut saw_shape = false;
     let mut i = 0usize;
@@ -569,7 +553,7 @@ pub(crate) fn parse_sprite_node(
                 issue(
                     &mut syntax,
                     line,
-                    "sprite spatial property block missing closing brace",
+                    "visual spatial property block missing closing brace",
                 );
                 continue;
             }
@@ -599,7 +583,7 @@ pub(crate) fn parse_sprite_node(
                     issue(
                         &mut syntax,
                         original,
-                        "sprite shape cannot contain blank lines; use `-` between Z layers or `>` between frames",
+                        "visual shape cannot contain blank lines; use `-` between Z layers or `>` between frames",
                     );
                     continue;
                 }
@@ -607,7 +591,7 @@ pub(crate) fn parse_sprite_node(
                     issue(
                         &mut syntax,
                         row,
-                        "removed sprite translate syntax; use translate (<x>, <y>)",
+                        "removed visual translate syntax; use translate (<x>, <y>)",
                     );
                     continue;
                 }
@@ -619,7 +603,7 @@ pub(crate) fn parse_sprite_node(
                 issue(
                     &mut syntax,
                     line,
-                    "sprite shape block missing closing brace",
+                    "visual shape block missing closing brace",
                 );
             }
             continue;
@@ -630,7 +614,7 @@ pub(crate) fn parse_sprite_node(
                 issue(
                     &mut syntax,
                     original,
-                    "sprite shape cannot contain blank lines; use `-` between Z layers or `>` between frames",
+                    "visual shape cannot contain blank lines; use `-` between Z layers or `>` between frames",
                 );
             }
             continue;
@@ -639,7 +623,7 @@ pub(crate) fn parse_sprite_node(
             issue(
                 &mut syntax,
                 line,
-                "removed sprite translate syntax; use translate (<x>, <y>)",
+                "removed visual translate syntax; use translate (<x>, <y>)",
             );
             continue;
         }
@@ -653,14 +637,14 @@ pub(crate) fn parse_sprite_node(
                     &mut syntax.selector,
                     value,
                     line,
-                    "duplicate sprite selector",
+                    "duplicate visual selector",
                     &mut syntax.issues,
                 );
             }
             ["colors", "=", values @ ..] | ["colors", values @ ..] if !values.is_empty() => {
                 let colors = values.iter().map(|value| (*value).to_string()).collect();
                 if syntax.colors.replace(colors).is_some() {
-                    issue(&mut syntax, line, "duplicate sprite colors");
+                    issue(&mut syntax, line, "duplicate visual colors");
                 } else {
                     syntax.colors_body_line = Some(line_index);
                 }
@@ -674,7 +658,7 @@ pub(crate) fn parse_sprite_node(
                     &mut syntax.duration,
                     value,
                     line,
-                    "duplicate sprite duration",
+                    "duplicate visual duration",
                     &mut syntax.issues,
                 );
             }
@@ -687,14 +671,14 @@ pub(crate) fn parse_sprite_node(
                     &mut syntax.frame_duration,
                     value,
                     line,
-                    "duplicate sprite frame_duration",
+                    "duplicate visual frame_duration",
                     &mut syntax.issues,
                 );
             }
             ["shape", "="] => issue(
                 &mut syntax,
                 line,
-                "inline sprite shape must be `shape = { ... }` or bare ASCII rows",
+                "inline visual shape must be `shape = { ... }` or bare ASCII rows",
             ),
             ["shape", "=", value] | ["shape", value] => {
                 if syntax.shape.is_none() {
@@ -702,7 +686,7 @@ pub(crate) fn parse_sprite_node(
                 }
                 set_shape_reference(&mut syntax, value, line)
             }
-            [value] if syntax.colors.is_some() && !saw_shape && is_sprite_duration_token(value) => {
+            [value] if syntax.colors.is_some() && !saw_shape && is_visual_duration_token(value) => {
                 syntax.prelude_rows.push(line.to_string());
                 if syntax.duration.is_none() {
                     syntax.duration_body_line = Some(line_index);
@@ -711,7 +695,7 @@ pub(crate) fn parse_sprite_node(
                     &mut syntax.duration,
                     value,
                     line,
-                    "duplicate sprite duration",
+                    "duplicate visual duration",
                     &mut syntax.issues,
                 );
             }
@@ -736,33 +720,33 @@ pub(crate) fn parse_sprite_node(
             _ => issue(
                 &mut syntax,
                 line,
-                "sprite ASCII row must be a single token row",
+                "visual ASCII row must be a single token row",
             ),
         }
     }
     if saw_shape {
         let shape = if explicit_shape {
-            SpriteShapeSyntax::ExplicitInline(frames)
+            VisualShapeSyntax::ExplicitInline(frames)
         } else {
-            SpriteShapeSyntax::BareFrames(frames)
+            VisualShapeSyntax::BareFrames(frames)
         };
         if syntax.shape.replace(shape).is_some() {
-            issue(&mut syntax, "", "duplicate sprite shape");
+            issue(&mut syntax, "", "duplicate visual shape");
         }
     }
     syntax
 }
 
-fn recognize_sprite_display(
-    syntax: &SpriteNodeSyntax,
-    resolved: Option<&ResolvedSpriteShape>,
+fn recognize_visual_display(
+    syntax: &VisualNodeSyntax,
+    resolved: Option<&ResolvedVisualShape>,
     lines: &[crate::source::LogicalLine],
     mut resolve_display_color: impl FnMut(&str) -> Option<crate::SourceHighlightColor>,
 ) -> crate::surface::ParserRecognition {
     use crate::surface::{ParserRecognition, SourceSpan, SurfaceDisplayFact};
 
     let mut recognition = ParserRecognition::default();
-    recognize_sprite_semantics(syntax, lines, &mut recognition);
+    recognize_visual_semantics(syntax, lines, &mut recognition);
     let colors = syntax.colors.as_deref().unwrap_or_default();
     if let Some(line_index) = syntax.colors_body_line
         && let Some(line) = lines.get(line_index)
@@ -789,7 +773,7 @@ fn recognize_sprite_display(
             }
         }
     }
-    for frame in resolved_sprite_frames(resolved) {
+    for frame in resolved_visual_frames(resolved) {
         for layer in &frame.layers {
             for row in &layer.rows {
                 let Some(line) = lines.get(row.body_line) else {
@@ -812,7 +796,7 @@ fn recognize_sprite_display(
                             .is_some_and(crate::SourceHighlightColor::is_transparent);
                     recognition
                         .display_facts
-                        .push(SurfaceDisplayFact::SpritePixel {
+                        .push(SurfaceDisplayFact::VisualPixel {
                             span: SourceSpan {
                                 start: token.start + byte_offset,
                                 end: token.start + byte_offset + pixel.len_utf8(),
@@ -828,7 +812,7 @@ fn recognize_sprite_display(
         if let Some(token) = lines.get(*line_index).and_then(|line| line.tokens.first()) {
             recognition
                 .display_facts
-                .push(SurfaceDisplayFact::SpriteSeparator {
+                .push(SurfaceDisplayFact::VisualSeparator {
                     span: SourceSpan {
                         start: token.start,
                         end: token.end,
@@ -839,8 +823,8 @@ fn recognize_sprite_display(
     recognition
 }
 
-fn recognize_sprite_semantics(
-    syntax: &SpriteNodeSyntax,
+fn recognize_visual_semantics(
+    syntax: &VisualNodeSyntax,
     lines: &[crate::source::LogicalLine],
     recognition: &mut crate::surface::ParserRecognition,
 ) {
@@ -866,7 +850,7 @@ fn recognize_sprite_semantics(
         && let Some(line) = lines.get(line_index)
     {
         mark(recognition, line, "selector", SurfaceSemanticKind::Setting);
-        mark_sprite_compound(recognition, line, selector, SurfaceSemanticKind::Object);
+        mark_visual_compound(recognition, line, selector, SurfaceSemanticKind::Object);
     }
     if let Some(line_index) = syntax.colors_body_line
         && let Some(line) = lines.get(line_index)
@@ -890,22 +874,22 @@ fn recognize_sprite_semantics(
         };
         mark(recognition, line, keyword, SurfaceSemanticKind::Setting);
         match property {
-            SpritePropertySyntax::Sampling(value) => {
+            VisualPropertySyntax::Sampling(value) => {
                 mark(recognition, line, value, SurfaceSemanticKind::Literal)
             }
-            SpritePropertySyntax::Translate { space, value } => {
+            VisualPropertySyntax::Translate { space, value } => {
                 mark(
                     recognition,
                     line,
                     match space {
-                        SpriteSpaceSyntax::World => "world",
-                        SpriteSpaceSyntax::Local => "local",
+                        VisualSpaceSyntax::World => "world",
+                        VisualSpaceSyntax::Local => "local",
                     },
                     SurfaceSemanticKind::Keyword,
                 );
-                mark_sprite_fragment_tokens(recognition, line, value, SurfaceSemanticKind::Binding);
+                mark_visual_fragment_tokens(recognition, line, value, SurfaceSemanticKind::Binding);
             }
-            SpritePropertySyntax::Rotate {
+            VisualPropertySyntax::Rotate {
                 space,
                 angle,
                 from,
@@ -915,12 +899,12 @@ fn recognize_sprite_semantics(
                     recognition,
                     line,
                     match space {
-                        SpriteSpaceSyntax::World => "world",
-                        SpriteSpaceSyntax::Local => "local",
+                        VisualSpaceSyntax::World => "world",
+                        VisualSpaceSyntax::Local => "local",
                     },
                     SurfaceSemanticKind::Keyword,
                 );
-                mark_sprite_fragment_tokens(recognition, line, angle, SurfaceSemanticKind::Binding);
+                mark_visual_fragment_tokens(recognition, line, angle, SurfaceSemanticKind::Binding);
                 if let Some(from) = from {
                     mark(recognition, line, "from", SurfaceSemanticKind::Keyword);
                     mark(recognition, line, from, SurfaceSemanticKind::Variant);
@@ -930,13 +914,13 @@ fn recognize_sprite_semantics(
                     mark(recognition, line, axis, SurfaceSemanticKind::Variant);
                 }
             }
-            SpritePropertySyntax::Flip(value) => {
-                mark_sprite_fragment_tokens(recognition, line, value, SurfaceSemanticKind::Binding)
+            VisualPropertySyntax::Flip(value) => {
+                mark_visual_fragment_tokens(recognition, line, value, SurfaceSemanticKind::Binding)
             }
-            SpritePropertySyntax::Image(value) => {
+            VisualPropertySyntax::Image(value) => {
                 mark(recognition, line, value, SurfaceSemanticKind::Asset)
             }
-            SpritePropertySyntax::RemovedOffset | SpritePropertySyntax::Unknown(_) => {}
+            VisualPropertySyntax::RemovedOffset | VisualPropertySyntax::Unknown(_) => {}
         }
     }
     for (line_index, value) in [
@@ -970,16 +954,16 @@ fn recognize_sprite_semantics(
             }
         }
     }
-    if let (Some(line_index), Some(SpriteShapeSyntax::Reference(shape))) =
+    if let (Some(line_index), Some(VisualShapeSyntax::Reference(shape))) =
         (syntax.shape_body_line, &syntax.shape)
         && let Some(line) = lines.get(line_index)
     {
         mark(recognition, line, "shape", SurfaceSemanticKind::Setting);
-        mark_sprite_compound(recognition, line, shape, SurfaceSemanticKind::Asset);
+        mark_visual_compound(recognition, line, shape, SurfaceSemanticKind::Asset);
     }
 }
 
-fn mark_sprite_fragment_tokens(
+fn mark_visual_fragment_tokens(
     recognition: &mut crate::surface::ParserRecognition,
     line: &crate::source::LogicalLine,
     fragment: &str,
@@ -998,7 +982,7 @@ fn mark_sprite_fragment_tokens(
     }
 }
 
-fn mark_sprite_compound(
+fn mark_visual_compound(
     recognition: &mut crate::surface::ParserRecognition,
     line: &crate::source::LogicalLine,
     value: &str,
@@ -1026,9 +1010,9 @@ fn mark_sprite_compound(
     }
 }
 
-fn resolved_sprite_frames(resolved: Option<&ResolvedSpriteShape>) -> &[SpriteFrameSyntax] {
+fn resolved_visual_frames(resolved: Option<&ResolvedVisualShape>) -> &[VisualFrameSyntax] {
     match resolved {
-        Some(ResolvedSpriteShape::Inline(frames)) => frames,
+        Some(ResolvedVisualShape::Inline(frames)) => frames,
         _ => &[],
     }
 }
@@ -1043,52 +1027,52 @@ fn is_removed_colon_translate_syntax(line: &str) -> bool {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ResolvedSpriteShape {
+pub(crate) enum ResolvedVisualShape {
     None,
     Reference(String),
-    Inline(Vec<SpriteFrameSyntax>),
+    Inline(Vec<VisualFrameSyntax>),
     UnknownBareReference(String),
     AmbiguousBareRow(String),
 }
 
 pub(crate) fn into_single_layer_frames(
-    frames: Vec<SpriteFrameSyntax>,
-) -> Result<Vec<Vec<SpriteShapeRow>>, &'static str> {
+    frames: Vec<VisualFrameSyntax>,
+) -> Result<Vec<Vec<VisualShapeRow>>, &'static str> {
     frames
         .into_iter()
         .map(|frame| {
             let [layer] = frame.layers.as_slice() else {
-                return Err("2D sprite cannot contain `-` Z-layer separators");
+                return Err("2D visual cannot contain `-` Z-layer separators");
             };
             Ok(layer.rows.clone())
         })
         .collect()
 }
 
-pub(crate) fn resolve_sprite_shape(
-    syntax: &SpriteNodeSyntax,
+pub(crate) fn resolve_visual_shape(
+    syntax: &VisualNodeSyntax,
     mut is_known_shape: impl FnMut(&str) -> bool,
-) -> ResolvedSpriteShape {
+) -> ResolvedVisualShape {
     let Some(shape) = &syntax.shape else {
-        return ResolvedSpriteShape::None;
+        return ResolvedVisualShape::None;
     };
     let frames = match shape {
-        SpriteShapeSyntax::Reference(reference) => {
-            return ResolvedSpriteShape::Reference(reference.clone());
+        VisualShapeSyntax::Reference(reference) => {
+            return ResolvedVisualShape::Reference(reference.clone());
         }
-        SpriteShapeSyntax::ExplicitInline(frames) => {
-            return ResolvedSpriteShape::Inline(frames.clone());
+        VisualShapeSyntax::ExplicitInline(frames) => {
+            return ResolvedVisualShape::Inline(frames.clone());
         }
-        SpriteShapeSyntax::BareFrames(frames) => frames,
+        VisualShapeSyntax::BareFrames(frames) => frames,
     };
     let [frame] = frames.as_slice() else {
-        return ResolvedSpriteShape::Inline(frames.clone());
+        return ResolvedVisualShape::Inline(frames.clone());
     };
     let [layer] = frame.layers.as_slice() else {
-        return ResolvedSpriteShape::Inline(frames.clone());
+        return ResolvedVisualShape::Inline(frames.clone());
     };
     let [row] = layer.rows.as_slice() else {
-        return ResolvedSpriteShape::Inline(frames.clone());
+        return ResolvedVisualShape::Inline(frames.clone());
     };
     let candidate = row.text.as_str();
     let shape_name = candidate
@@ -1103,14 +1087,14 @@ pub(crate) fn resolve_sprite_shape(
                 .any(|palette_token| token == palette_token)
     });
     match (known_shape, valid_inline_row) {
-        (true, true) => ResolvedSpriteShape::AmbiguousBareRow(candidate.to_string()),
-        (true, false) => ResolvedSpriteShape::Reference(candidate.to_string()),
-        (false, true) => ResolvedSpriteShape::Inline(frames.clone()),
-        (false, false) => ResolvedSpriteShape::UnknownBareReference(candidate.to_string()),
+        (true, true) => ResolvedVisualShape::AmbiguousBareRow(candidate.to_string()),
+        (true, false) => ResolvedVisualShape::Reference(candidate.to_string()),
+        (false, true) => ResolvedVisualShape::Inline(frames.clone()),
+        (false, false) => ResolvedVisualShape::UnknownBareReference(candidate.to_string()),
     }
 }
 
-pub(crate) fn is_sprite_property_tokens(tokens: &[&str]) -> bool {
+pub(crate) fn is_visual_property_tokens(tokens: &[&str]) -> bool {
     matches!(
         tokens.first().copied(),
         Some(
@@ -1137,60 +1121,61 @@ fn owner_selector(header: Option<&str>) -> Option<String> {
     let header = header?.trim();
     let tokens = split_header_tokens(block_header_text(header));
     match tokens.as_slice() {
-        ["sprite"] | [] => None,
+        ["visual"] | [] => None,
+        ["visual", selector] => Some((*selector).to_string()),
         [selector] => Some((*selector).to_string()),
         _ => None,
     }
 }
 
-fn property_syntax(tokens: &[&str]) -> Option<SpritePropertySyntax> {
+fn property_syntax(tokens: &[&str]) -> Option<VisualPropertySyntax> {
     Some(match tokens {
         ["image", "=", source] | ["image", source] => {
-            SpritePropertySyntax::Image((*source).to_string())
+            VisualPropertySyntax::Image((*source).to_string())
         }
         ["sampling", "=", value] | ["sampling", value] => {
-            SpritePropertySyntax::Sampling((*value).to_string())
+            VisualPropertySyntax::Sampling((*value).to_string())
         }
-        ["translate", value] => SpritePropertySyntax::Translate {
-            space: SpriteSpaceSyntax::World,
+        ["translate", value] => VisualPropertySyntax::Translate {
+            space: VisualSpaceSyntax::World,
             value: (*value).to_string(),
         },
-        ["translate", "world", value] => SpritePropertySyntax::Translate {
-            space: SpriteSpaceSyntax::World,
+        ["translate", "world", value] => VisualPropertySyntax::Translate {
+            space: VisualSpaceSyntax::World,
             value: (*value).to_string(),
         },
-        ["translate", "local", value] => SpritePropertySyntax::Translate {
-            space: SpriteSpaceSyntax::Local,
+        ["translate", "local", value] => VisualPropertySyntax::Translate {
+            space: VisualSpaceSyntax::Local,
             value: (*value).to_string(),
         },
-        ["rotate", angle] => SpritePropertySyntax::Rotate {
-            space: SpriteSpaceSyntax::World,
+        ["rotate", angle] => VisualPropertySyntax::Rotate {
+            space: VisualSpaceSyntax::World,
             angle: (*angle).to_string(),
             from: None,
             axis: None,
         },
-        ["rotate", space @ ("world" | "local"), angle] => SpritePropertySyntax::Rotate {
+        ["rotate", space @ ("world" | "local"), angle] => VisualPropertySyntax::Rotate {
             space: parse_space(space),
             angle: (*angle).to_string(),
             from: None,
             axis: None,
         },
-        ["rotate", angle, "from", from] => SpritePropertySyntax::Rotate {
-            space: SpriteSpaceSyntax::World,
+        ["rotate", angle, "from", from] => VisualPropertySyntax::Rotate {
+            space: VisualSpaceSyntax::World,
             angle: (*angle).to_string(),
             from: Some((*from).to_string()),
             axis: None,
         },
         ["rotate", space @ ("world" | "local"), angle, "from", from] => {
-            SpritePropertySyntax::Rotate {
+            VisualPropertySyntax::Rotate {
                 space: parse_space(space),
                 angle: (*angle).to_string(),
                 from: Some((*from).to_string()),
                 axis: None,
             }
         }
-        ["rotate", angle, "from", from, "around", axis] => SpritePropertySyntax::Rotate {
-            space: SpriteSpaceSyntax::World,
+        ["rotate", angle, "from", from, "around", axis] => VisualPropertySyntax::Rotate {
+            space: VisualSpaceSyntax::World,
             angle: (*angle).to_string(),
             from: Some((*from).to_string()),
             axis: Some((*axis).to_string()),
@@ -1203,48 +1188,48 @@ fn property_syntax(tokens: &[&str]) -> Option<SpritePropertySyntax> {
             from,
             "around",
             axis,
-        ] => SpritePropertySyntax::Rotate {
+        ] => VisualPropertySyntax::Rotate {
             space: parse_space(space),
             angle: (*angle).to_string(),
             from: Some((*from).to_string()),
             axis: Some((*axis).to_string()),
         },
-        ["rotate", angle, "around", axis] => SpritePropertySyntax::Rotate {
-            space: SpriteSpaceSyntax::World,
+        ["rotate", angle, "around", axis] => VisualPropertySyntax::Rotate {
+            space: VisualSpaceSyntax::World,
             angle: (*angle).to_string(),
             from: None,
             axis: Some((*axis).to_string()),
         },
         ["rotate", space @ ("world" | "local"), angle, "around", axis] => {
-            SpritePropertySyntax::Rotate {
+            VisualPropertySyntax::Rotate {
                 space: parse_space(space),
                 angle: (*angle).to_string(),
                 from: None,
                 axis: Some((*axis).to_string()),
             }
         }
-        ["flip", value] => SpritePropertySyntax::Flip((*value).to_string()),
-        ["offset", ..] => SpritePropertySyntax::RemovedOffset,
-        [property, ..] if is_sprite_property_tokens(tokens) => {
-            SpritePropertySyntax::Unknown((*property).to_string())
+        ["flip", value] => VisualPropertySyntax::Flip((*value).to_string()),
+        ["offset", ..] => VisualPropertySyntax::RemovedOffset,
+        [property, ..] if is_visual_property_tokens(tokens) => {
+            VisualPropertySyntax::Unknown((*property).to_string())
         }
         _ => return None,
     })
 }
 
-fn parse_space(value: &str) -> SpriteSpaceSyntax {
+fn parse_space(value: &str) -> VisualSpaceSyntax {
     if value == "local" {
-        SpriteSpaceSyntax::Local
+        VisualSpaceSyntax::Local
     } else {
-        SpriteSpaceSyntax::World
+        VisualSpaceSyntax::World
     }
 }
 
 fn block_spatial_property(
     name: &str,
     rows: &[String],
-) -> Result<SpritePropertySyntax, &'static str> {
-    let mut space = SpriteSpaceSyntax::World;
+) -> Result<VisualPropertySyntax, &'static str> {
+    let mut space = VisualSpaceSyntax::World;
     let mut value = None;
     let mut angle = None;
     let mut from = None;
@@ -1257,15 +1242,15 @@ fn block_spatial_property(
             ["angle", "=", raw] => angle = Some((*raw).to_string()),
             ["from", "=", raw] => from = Some((*raw).to_string()),
             ["axis", "=", raw] => axis = Some((*raw).to_string()),
-            _ => return Err("invalid sprite spatial property block"),
+            _ => return Err("invalid visual spatial property block"),
         }
     }
     match name {
-        "translate" => Ok(SpritePropertySyntax::Translate {
+        "translate" => Ok(VisualPropertySyntax::Translate {
             space,
             value: value.ok_or("translate block requires value")?,
         }),
-        "rotate" => Ok(SpritePropertySyntax::Rotate {
+        "rotate" => Ok(VisualPropertySyntax::Rotate {
             space,
             angle: angle.ok_or("rotate block requires angle")?,
             from,
@@ -1275,32 +1260,32 @@ fn block_spatial_property(
     }
 }
 
-fn set_shape_reference(syntax: &mut SpriteNodeSyntax, value: &str, line: &str) {
+fn set_shape_reference(syntax: &mut VisualNodeSyntax, value: &str, line: &str) {
     if syntax
         .shape
-        .replace(SpriteShapeSyntax::Reference(value.to_string()))
+        .replace(VisualShapeSyntax::Reference(value.to_string()))
         .is_some()
     {
-        issue(syntax, line, "duplicate sprite shape");
+        issue(syntax, line, "duplicate visual shape");
     }
 }
 
-fn empty_sprite_frame() -> SpriteFrameSyntax {
-    SpriteFrameSyntax {
-        layers: vec![SpriteLayerSyntax { rows: Vec::new() }],
+fn empty_visual_frame() -> VisualFrameSyntax {
+    VisualFrameSyntax {
+        layers: vec![VisualLayerSyntax { rows: Vec::new() }],
     }
 }
 
 fn append_shape_item(
     line: &str,
     body_line: usize,
-    frames: &mut Vec<SpriteFrameSyntax>,
-    issues: &mut Vec<SpriteSyntaxIssue>,
+    frames: &mut Vec<VisualFrameSyntax>,
+    issues: &mut Vec<VisualSyntaxIssue>,
 ) -> bool {
     match split_header_tokens(line).as_slice() {
         [] => false,
         [">"] => {
-            frames.push(empty_sprite_frame());
+            frames.push(empty_visual_frame());
             true
         }
         ["-"] => {
@@ -1308,7 +1293,7 @@ fn append_shape_item(
                 .last_mut()
                 .expect("one frame exists")
                 .layers
-                .push(SpriteLayerSyntax { rows: Vec::new() });
+                .push(VisualLayerSyntax { rows: Vec::new() });
             true
         }
         [row] => {
@@ -1319,23 +1304,23 @@ fn append_shape_item(
                 .last_mut()
                 .expect("one layer exists")
                 .rows
-                .push(SpriteShapeRow {
+                .push(VisualShapeRow {
                     text: (*row).to_string(),
                     body_line,
                 });
             false
         }
         _ => {
-            issues.push(SpriteSyntaxIssue {
+            issues.push(VisualSyntaxIssue {
                 line: line.to_string(),
-                message: "sprite ASCII row must be a single token row",
+                message: "visual ASCII row must be a single token row",
             });
             false
         }
     }
 }
 
-pub(crate) fn is_sprite_duration_token(value: &str) -> bool {
+pub(crate) fn is_visual_duration_token(value: &str) -> bool {
     value
         .strip_suffix("ms")
         .or_else(|| value.strip_suffix('s'))
@@ -1347,18 +1332,18 @@ fn set_string_once(
     value: &str,
     line: &str,
     message: &'static str,
-    issues: &mut Vec<SpriteSyntaxIssue>,
+    issues: &mut Vec<VisualSyntaxIssue>,
 ) {
     if slot.replace(value.to_string()).is_some() {
-        issues.push(SpriteSyntaxIssue {
+        issues.push(VisualSyntaxIssue {
             line: line.to_string(),
             message,
         });
     }
 }
 
-fn issue(syntax: &mut SpriteNodeSyntax, line: &str, message: &'static str) {
-    syntax.issues.push(SpriteSyntaxIssue {
+fn issue(syntax: &mut VisualNodeSyntax, line: &str, message: &'static str) {
+    syntax.issues.push(VisualSyntaxIssue {
         line: line.to_string(),
         message,
     });
@@ -1367,9 +1352,9 @@ fn issue(syntax: &mut SpriteNodeSyntax, line: &str, message: &'static str) {
 #[cfg(test)]
 mod tests {
     use super::{
-        ResolvedSpriteShape, SpritePropertySyntax, SpriteShapeSyntax, SpriteSpaceSyntax,
-        analyze_sprite_body, collect_sprite_attachment, is_sprite_definition_name_token,
-        parse_sprite_node, resolve_sprite_timing, validate_sprite_frame_geometry,
+        ResolvedVisualShape, VisualPropertySyntax, VisualShapeSyntax, VisualSpaceSyntax,
+        analyze_visual_body, collect_visual_attachment, is_visual_definition_name_token,
+        parse_visual_node, resolve_visual_timing, validate_visual_frame_geometry,
     };
 
     #[test]
@@ -1377,23 +1362,23 @@ mod tests {
         let unbraced =
             ["Floor", "#8fcf6f", "0", "", "Wall {", "#333", "0", "}"].map(str::to_string);
         let known_colors = std::collections::HashSet::new();
-        let first = collect_sprite_attachment(&unbraced, 0, &known_colors).unwrap();
+        let first = collect_visual_attachment(&unbraced, 0, &known_colors).unwrap();
         assert_eq!(first.header, "Floor");
         assert_eq!(first.body_lines, ["#8fcf6f", "0"]);
         assert_eq!(first.next_index, 3);
 
-        let braced = collect_sprite_attachment(&unbraced, 4, &known_colors).unwrap();
+        let braced = collect_visual_attachment(&unbraced, 4, &known_colors).unwrap();
         assert_eq!(braced.header, "Wall {");
         assert_eq!(braced.body_lines, ["#333", "0"]);
         assert_eq!(braced.next_index, 8);
     }
 
     #[test]
-    fn sprite_definition_names_share_the_symbol_name_grammar() {
+    fn visual_definition_names_share_the_symbol_name_grammar() {
         for name in ["Floor", "@Floor", "Floor:directions", "@Floor:directions"] {
-            assert!(is_sprite_definition_name_token(name), "{name}");
+            assert!(is_visual_definition_name_token(name), "{name}");
         }
-        assert!(!is_sprite_definition_name_token("@@Floor"));
+        assert!(!is_visual_definition_name_token("@@Floor"));
     }
 
     #[test]
@@ -1410,7 +1395,7 @@ mod tests {
         ]
         .map(str::to_string);
         let first =
-            collect_sprite_attachment(&lines, 0, &std::collections::HashSet::new()).unwrap();
+            collect_visual_attachment(&lines, 0, &std::collections::HashSet::new()).unwrap();
 
         assert_eq!(first.body_lines, ["#fff #000", "shape_You_F"]);
         assert_eq!(first.next_index, 3);
@@ -1418,8 +1403,8 @@ mod tests {
 
     #[test]
     fn explicit_and_bare_inline_rows_preserve_distinct_syntax_with_same_content() {
-        let explicit = parse_sprite_node(
-            Some("sprite {"),
+        let explicit = parse_visual_node(
+            Some("visual {"),
             &[
                 "selector = Player",
                 "colors = #fff #000",
@@ -1430,7 +1415,7 @@ mod tests {
             ]
             .map(str::to_string),
         );
-        let shorthand = parse_sprite_node(
+        let shorthand = parse_visual_node(
             Some("Player {"),
             &["#fff #000", "500ms", "010"].map(str::to_string),
         );
@@ -1440,14 +1425,14 @@ mod tests {
         assert_eq!(explicit.duration, shorthand.duration);
         assert!(matches!(
             explicit.shape.as_ref(),
-            Some(SpriteShapeSyntax::ExplicitInline(_))
+            Some(VisualShapeSyntax::ExplicitInline(_))
         ));
         assert!(matches!(
             shorthand.shape.as_ref(),
-            Some(SpriteShapeSyntax::BareFrames(_))
+            Some(VisualShapeSyntax::BareFrames(_))
         ));
-        let rows = |shape: SpriteShapeSyntax| match shape {
-            SpriteShapeSyntax::ExplicitInline(frames) | SpriteShapeSyntax::BareFrames(frames) => {
+        let rows = |shape: VisualShapeSyntax| match shape {
+            VisualShapeSyntax::ExplicitInline(frames) | VisualShapeSyntax::BareFrames(frames) => {
                 frames
                     .into_iter()
                     .flat_map(|frame| frame.layers)
@@ -1465,7 +1450,7 @@ mod tests {
 
     #[test]
     fn analyzed_body_owns_shared_shape_geometry_and_timing() {
-        let body = analyze_sprite_body(
+        let body = analyze_visual_body(
             Some("Pulse {"),
             &[
                 "colors = red transparent",
@@ -1483,15 +1468,15 @@ mod tests {
             |_| false,
         )
         .unwrap();
-        let ResolvedSpriteShape::Inline(frames) = body.shape else {
+        let ResolvedVisualShape::Inline(frames) = body.shape else {
             panic!("inline frames");
         };
-        let geometry = validate_sprite_frame_geometry(&frames).unwrap();
+        let geometry = validate_visual_frame_geometry(&frames).unwrap();
         assert_eq!(
             (geometry.width, geometry.height, geometry.layers),
             (2, 2, 1)
         );
-        let timing = resolve_sprite_timing(
+        let timing = resolve_visual_timing(
             frames.len(),
             body.syntax.duration.as_deref(),
             body.syntax.frame_duration.as_deref(),
@@ -1504,23 +1489,23 @@ mod tests {
 
     #[test]
     fn indented_explicit_shape_and_bare_reference_are_node_owned() {
-        let explicit = parse_sprite_node(
+        let explicit = parse_visual_node(
             Some("Player {"),
             &["  #fff", "  shape = {", "  0", "  }"].map(str::to_string),
         );
         assert!(explicit.issues.is_empty());
-        let reference = parse_sprite_node(
+        let reference = parse_visual_node(
             Some("Player {"),
             &["#fff", "shape player_shape"].map(str::to_string),
         );
         assert!(
-            matches!(reference.shape, Some(SpriteShapeSyntax::Reference(name)) if name == "player_shape")
+            matches!(reference.shape, Some(VisualShapeSyntax::Reference(name)) if name == "player_shape")
         );
     }
 
     #[test]
     fn human_spatial_syntax_uses_world_by_default_and_uniform_local_prefix() {
-        let syntax = parse_sprite_node(
+        let syntax = parse_visual_node(
             Some("Player {"),
             &[
                 "colors = red",
@@ -1534,16 +1519,16 @@ mod tests {
         );
         assert!(syntax.issues.is_empty(), "{:?}", syntax.issues);
         assert!(
-            matches!(&syntax.properties[0].0, SpritePropertySyntax::Translate { space: SpriteSpaceSyntax::Local, value } if value == "(1, 0, 0)")
+            matches!(&syntax.properties[0].0, VisualPropertySyntax::Translate { space: VisualSpaceSyntax::Local, value } if value == "(1, 0, 0)")
         );
         assert!(
-            matches!(&syntax.properties[1].0, SpritePropertySyntax::Rotate { space: SpriteSpaceSyntax::World, angle, from: None, axis: Some(axis) } if angle == "45deg" && axis == "(1, 1, 0)")
+            matches!(&syntax.properties[1].0, VisualPropertySyntax::Rotate { space: VisualSpaceSyntax::World, angle, from: None, axis: Some(axis) } if angle == "45deg" && axis == "(1, 1, 0)")
         );
     }
 
     #[test]
     fn rotate_from_preserves_angle_origin_and_space() {
-        let syntax = parse_sprite_node(
+        let syntax = parse_visual_node(
             Some("Player:directions {"),
             &[
                 "colors = red",
@@ -1556,13 +1541,13 @@ mod tests {
         );
         assert!(syntax.issues.is_empty(), "{:?}", syntax.issues);
         assert!(
-            matches!(&syntax.properties[0].0, SpritePropertySyntax::Rotate { space: SpriteSpaceSyntax::Local, angle, from: Some(from), axis: None } if angle == "directions" && from == "up")
+            matches!(&syntax.properties[0].0, VisualPropertySyntax::Rotate { space: VisualSpaceSyntax::Local, angle, from: Some(from), axis: None } if angle == "directions" && from == "up")
         );
     }
 
     #[test]
     fn rotate_from_can_name_an_explicit_axis() {
-        let syntax = parse_sprite_node(
+        let syntax = parse_visual_node(
             Some("Player:horizontal {"),
             &[
                 "colors = red",
@@ -1576,13 +1561,13 @@ mod tests {
 
         assert!(syntax.issues.is_empty(), "{:?}", syntax.issues);
         assert!(
-            matches!(&syntax.properties[0].0, SpritePropertySyntax::Rotate { space: SpriteSpaceSyntax::Local, angle, from: Some(from), axis: Some(axis) } if angle == "horizontal" && from == "front" && axis == "up")
+            matches!(&syntax.properties[0].0, VisualPropertySyntax::Rotate { space: VisualSpaceSyntax::Local, angle, from: Some(from), axis: Some(axis) } if angle == "horizontal" && from == "front" && axis == "up")
         );
     }
 
     #[test]
     fn script_spatial_blocks_are_explicit() {
-        let syntax = parse_sprite_node(
+        let syntax = parse_visual_node(
             Some("Player {"),
             &[
                 "colors = red",
@@ -1604,24 +1589,24 @@ mod tests {
         assert!(syntax.issues.is_empty(), "{:?}", syntax.issues);
         assert!(matches!(
             &syntax.properties[0].0,
-            SpritePropertySyntax::Translate {
-                space: SpriteSpaceSyntax::Local,
+            VisualPropertySyntax::Translate {
+                space: VisualSpaceSyntax::Local,
                 ..
             }
         ));
         assert!(
-            matches!(&syntax.properties[1].0, SpritePropertySyntax::Rotate { space: SpriteSpaceSyntax::World, axis: Some(axis), .. } if axis == "up")
+            matches!(&syntax.properties[1].0, VisualPropertySyntax::Rotate { space: VisualSpaceSyntax::World, axis: Some(axis), .. } if axis == "up")
         );
     }
 
     #[test]
     fn removed_shape_rotation_syntax_is_not_recognized_as_spatial_rotation() {
-        let syntax = parse_sprite_node(
+        let syntax = parse_visual_node(
             Some("Player {"),
             &["colors = red", "rotate from up", "shape = {", "0", "}"].map(str::to_string),
         );
         assert!(
-            matches!(&syntax.properties[0].0, SpritePropertySyntax::Unknown(name) if name == "rotate")
+            matches!(&syntax.properties[0].0, VisualPropertySyntax::Unknown(name) if name == "rotate")
         );
     }
 
@@ -1637,7 +1622,7 @@ mod tests {
                 "}",
             ],
         ] {
-            let syntax = parse_sprite_node(
+            let syntax = parse_visual_node(
                 Some("Player {"),
                 &lines.into_iter().map(str::to_string).collect::<Vec<_>>(),
             );
@@ -1645,7 +1630,7 @@ mod tests {
                 syntax
                     .issues
                     .iter()
-                    .any(|issue| { issue.message.contains("removed sprite translate syntax") })
+                    .any(|issue| { issue.message.contains("removed visual translate syntax") })
             );
         }
     }

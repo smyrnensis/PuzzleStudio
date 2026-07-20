@@ -52,7 +52,7 @@ move
 light_effect
 }
 
-sprites {
+visuals {
 @Floor
 #eeeeee
 

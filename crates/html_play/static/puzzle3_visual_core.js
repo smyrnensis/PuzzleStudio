@@ -54,14 +54,14 @@
     return (value * Math.PI) / 180;
   }
 
-  function evaluateSpatialSpriteAffine(operations) {
+  function evaluateSpatialVisualAffine(operations) {
     if (!Array.isArray(operations)) {
-      throw new Error("Puzzle3 sprite spatialOps are missing or invalid.");
+      throw new Error("Puzzle3 visual spatialOps are missing or invalid.");
     }
     let result = identityAffine3();
     for (const operation of operations) {
       if (!operation || typeof operation !== "object" || Array.isArray(operation)) {
-        throw new Error("Puzzle3 sprite spatial operation is invalid.");
+        throw new Error("Puzzle3 visual spatial operation is invalid.");
       }
       let space = operation.space;
       let matrix;
@@ -71,9 +71,11 @@
         const axis = normalizeVector3(requireFiniteVector3(operation.axis, "rotate3 axis"));
         const degrees = requireFiniteNumber(operation.degrees, "rotate3 degrees");
         matrix = rotationAffine3(axis, degrees);
+      } else if (operation.kind === "scale3") {
+        matrix = scaleAffine3(requireFiniteVector3(operation.value, "scale3 value"));
       } else if (operation.kind === "flip3") {
         if (typeof operation.enabled !== "boolean") {
-          throw new Error("Puzzle3 sprite flip3 enabled must be boolean.");
+          throw new Error("Puzzle3 visual flip3 enabled must be boolean.");
         }
         if (!operation.enabled) {
           continue;
@@ -81,10 +83,10 @@
         space = "local";
         matrix = reflectionXAffine3();
       } else {
-        throw new Error(`Unknown Puzzle3 sprite spatial operation: ${String(operation.kind)}`);
+        throw new Error(`Unknown Puzzle3 visual spatial operation: ${String(operation.kind)}`);
       }
       if (space !== "world" && space !== "local") {
-        throw new Error(`Invalid Puzzle3 sprite spatial operation space: ${String(space)}`);
+        throw new Error(`Invalid Puzzle3 visual spatial operation space: ${String(space)}`);
       }
       result = space === "world"
         ? multiplyAffine3(matrix, result)
@@ -94,9 +96,9 @@
   }
 
   function transformSpatialPoint(point, affine) {
-    const value = requireFinitePoint3(point, "sprite point");
+    const value = requireFinitePoint3(point, "visual point");
     if (!Array.isArray(affine) || affine.length !== 4 || affine.some((row) => !Array.isArray(row) || row.length !== 4)) {
-      throw new Error("Puzzle3 sprite spatial affine is invalid.");
+      throw new Error("Puzzle3 visual spatial affine is invalid.");
     }
     return {
       x: affine[0][0] * value.x + affine[0][1] * value.y + affine[0][2] * value.z + affine[0][3],
@@ -106,10 +108,10 @@
   }
 
   function spatialGridPoint(point, scale) {
-    const value = requireFinitePoint3(point, "sprite point");
+    const value = requireFinitePoint3(point, "visual point");
     const unit = requireFiniteNumber(scale, "voxel scale");
     if (unit <= 0) {
-      throw new Error("Puzzle3 sprite voxel scale must be positive.");
+      throw new Error("Puzzle3 visual voxel scale must be positive.");
     }
     return {
       x: quantizeSpatialNumber(value.x / unit),
@@ -140,6 +142,14 @@
     return matrix;
   }
 
+  function scaleAffine3([x, y, z]) {
+    const matrix = identityAffine3();
+    matrix[0][0] = x;
+    matrix[1][1] = y;
+    matrix[2][2] = z;
+    return matrix;
+  }
+
   function rotationAffine3([x, y, z], degrees) {
     const radians = degreesToRadians(degrees);
     const cosine = Math.cos(radians);
@@ -167,7 +177,7 @@
 
   function requireFiniteVector3(value, label) {
     if (!Array.isArray(value) || value.length !== 3) {
-      throw new Error(`Puzzle3 sprite ${label} must be a three-component vector.`);
+      throw new Error(`Puzzle3 visual ${label} must be a three-component vector.`);
     }
     return value.map((component) => requireFiniteNumber(component, label));
   }
@@ -185,7 +195,7 @@
 
   function requireFiniteNumber(value, label) {
     if (typeof value !== "number" || !Number.isFinite(value)) {
-      throw new Error(`Puzzle3 sprite ${label} must be finite.`);
+      throw new Error(`Puzzle3 visual ${label} must be finite.`);
     }
     return value;
   }
@@ -193,7 +203,7 @@
   function normalizeVector3(value) {
     const length = Math.hypot(...value);
     if (length === 0) {
-      throw new Error("Puzzle3 sprite rotate3 axis cannot be zero.");
+      throw new Error("Puzzle3 visual rotate3 axis cannot be zero.");
     }
     return value.map((component) => component / length);
   }
@@ -493,13 +503,13 @@
     if (priority >= 0) {
       return priority;
     }
-    throw new Error(`compiled sprite order does not cover object: ${name || fallbackIndex}`);
+    throw new Error(`compiled visual order does not cover object: ${name || fallbackIndex}`);
   }
 
   function priorityDefinition(order, encodedPriority) {
     const priorities = order?.priorities;
     if (!Array.isArray(priorities) || priorities.length === 0) {
-      throw new Error("compiled sprite order contract is missing");
+      throw new Error("compiled visual order contract is missing");
     }
     return priorities[encodedPriority % priorities.length];
   }
@@ -546,7 +556,7 @@
     compareGridOrder,
     comparePrimitiveOrder,
     directionDepth,
-    evaluateSpatialSpriteAffine,
+    evaluateSpatialVisualAffine,
     faceGridOrder,
     gridOrder,
     mergeVoxelFaces,

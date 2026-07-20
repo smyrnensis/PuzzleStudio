@@ -7,7 +7,7 @@ import init, {
   active_source_analysis_highlight_range_json,
   active_source_analysis_level_editor_level_slots,
   active_source_analysis_level_editor_manifest_json,
-  active_source_analysis_level_editor_sprite_json,
+  active_source_analysis_level_editor_visual_json,
   compile_preview,
   compile_workspace_preview,
   workspace_presentation_manifest,
@@ -108,7 +108,7 @@ if (
   || !Array.isArray(workspaceManifest.cssPaths)
   || !Array.isArray(workspaceManifest.scriptPaths)
   || !Array.isArray(workspaceManifest.filePaths)
-  || !Array.isArray(workspaceManifest.spriteImagePaths)
+  || !Array.isArray(workspaceManifest.visualImagePaths)
 ) {
   throw new Error(`typed workspace manifest is invalid: ${JSON.stringify(workspaceManifest)}`);
 }
@@ -125,6 +125,50 @@ try {
 }
 if (!invalidWorkspaceDocumentsError.includes("missing field")) {
   throw new Error(`typed workspace input accepted a missing source: ${invalidWorkspaceDocumentsError}`);
+}
+let missingImportDiagnostic = null;
+try {
+  compile_workspace_preview(
+    "game.puzzle",
+    [{ path: "game.puzzle", source: "// heading\nimport \"missing.puzzle\"\n" }],
+    "",
+    "",
+  );
+} catch (error) {
+  missingImportDiagnostic = error?.diagnostics?.[0] || null;
+}
+if (
+  missingImportDiagnostic?.file !== "game.puzzle"
+  || missingImportDiagnostic?.line !== 2
+) {
+  throw new Error(`workspace import diagnostic lost its source origin: ${JSON.stringify(missingImportDiagnostic)}`);
+}
+const importedInvalidSource = source.replace(
+  "input right [ Player | no actor ] -> [ | Player ]",
+  "unknown_imported_statement",
+);
+const importedInvalidLine = importedInvalidSource
+  .split(/\r?\n/)
+  .findIndex((line) => line === "    unknown_imported_statement") + 1;
+let importedCompileDiagnostic = null;
+try {
+  compile_workspace_preview(
+    "game.puzzle",
+    [
+      { path: "game.puzzle", source: "import \"parts/game.puzzle\"\n" },
+      { path: "parts/game.puzzle", source: importedInvalidSource },
+    ],
+    "",
+    "",
+  );
+} catch (error) {
+  importedCompileDiagnostic = error?.diagnostics?.[0] || null;
+}
+if (
+  importedCompileDiagnostic?.file !== "parts/game.puzzle"
+  || importedCompileDiagnostic?.line !== importedInvalidLine
+) {
+  throw new Error(`workspace compile diagnostic lost its imported origin: ${JSON.stringify(importedCompileDiagnostic)}`);
 }
 const solverService = new WasmSolverService();
 const preparedSolver = solverService.prepare_source(source, "game.puzzle", Date.now());
@@ -229,7 +273,7 @@ rules {
 move
 }
 }
-sprites {
+visuals {
 Player {
 #fff
 0
@@ -247,8 +291,8 @@ P
 `;
 const revision = activate_source_analysis(editorSource);
 const manifest = active_source_analysis_level_editor_manifest_json(revision);
-if (manifest.includes("slots") || manifest.includes("\"sprites\"")) {
-  throw new Error("level editor manifest must not transfer level cells or full sprite definitions");
+if (manifest.includes("slots") || manifest.includes("\"visuals\"")) {
+  throw new Error("level editor manifest must not transfer level cells or full visual definitions");
 }
 if (!manifest.includes('"id":1,"layer":0,"name":"Player"')) {
   throw new Error(`level editor manifest lost canonical object identity: ${manifest}`);
@@ -257,9 +301,9 @@ const slots = active_source_analysis_level_editor_level_slots(revision, 0, -1);
 if (!(slots instanceof Uint32Array) || slots.length !== 1 || slots[0] !== 1) {
   throw new Error(`level editor slots must be a typed canonical-ID buffer: ${slots}`);
 }
-const sprite = active_source_analysis_level_editor_sprite_json(revision, 1);
-if (!sprite.includes('"colors":{"0":"#fff"}')) {
-  throw new Error(`level editor sprite payload is not renderer-ready: ${sprite}`);
+const visual = active_source_analysis_level_editor_visual_json(revision, 1);
+if (!visual.includes('"colors":{"0":"#fff"}')) {
+  throw new Error(`level editor visual payload is not renderer-ready: ${visual}`);
 }
 let fullCompileError = null;
 try {

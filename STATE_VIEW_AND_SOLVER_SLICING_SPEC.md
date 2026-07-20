@@ -33,7 +33,7 @@ This document defines the state boundary shared by play, editor, and solver.
 
 - A runtime-owned view of a real or materialized state for drawing.
 - Browser/editor JavaScript consumes this view and does not infer solver or
-  language semantics from source text, names, or sprites.
+  language semantics from source text, names, or visuals.
 
 ## Search-State Contract
 
@@ -124,7 +124,7 @@ is retained or rejected with a specific diagnostic.
 ## Non-Goals
 
 - Solver slicing does not restrict what the editor can author.
-- Visual appearance, sprite names, and object adjacency are not semantic
+- Visual appearance, visual names, and object adjacency are not semantic
   relevance declarations.
 - Materialization is not a second search representation.
 - Provenance categories such as reachable and counterfactual do not alter the

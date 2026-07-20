@@ -59,7 +59,7 @@ input [ playable ] -> [ > playable ]
 move
 }
 
-sprites {
+visuals {
 palette {
 Alien_skin = #00949b
 }

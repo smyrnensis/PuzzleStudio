@@ -15,89 +15,89 @@ fn validate_direction_name(
 }
 
 #[derive(Clone, Debug)]
-struct LevelExpansionEntry {
+struct LevelProjectionEntry {
     name: String,
     pack: Option<String>,
+    puzzle: String,
 }
 
-#[derive(Clone, Debug, Default)]
-struct SceneExpansionCatalog {
-    collections: HashMap<String, Vec<ForExpansionValue>>,
-}
-
-impl SceneExpansionCatalog {
-    fn from_scene_resources(levels: &[LevelExpansionEntry], resources: &SceneResources) -> Self {
-        let mut catalog = Self::default();
-        catalog.add_level_collections(levels, resources);
-        catalog
-    }
-
-    fn as_for_expansion_sets(&self) -> &HashMap<String, Vec<ForExpansionValue>> {
-        &self.collections
-    }
-
-    fn add_level_collections(
-        &mut self,
-        levels: &[LevelExpansionEntry],
-        resources: &SceneResources,
-    ) {
-        let values = levels
+fn scene_iterable_catalog(
+    levels: &[LevelProjectionEntry],
+    resources: &SceneResources,
+) -> ForIterableCatalog {
+    let selected = levels
+        .iter()
+        .filter(|level| match &resources.levels {
+            ResourceSelection::All => true,
+            ResourceSelection::Named(names) => names.iter().any(|name| {
+                level.name == *name || level.pack.as_deref() == Some(name.as_str())
+            }),
+        })
+        .collect::<Vec<_>>();
+    let mut catalog = ForIterableCatalog::default();
+    catalog.insert(
+        "levels",
+        selected
             .iter()
             .enumerate()
-            .filter(|(_, level)| resource_selection_contains_level(&resources.levels, level))
-            .map(|(index, level)| level_collection_value("levels", index, level))
-            .collect::<Vec<_>>();
-        self.collections.insert("levels".to_string(), values);
+            .map(|(index, level)| level_projection_value(index, level))
+            .collect(),
+    );
 
-        let mut pack_ordinals = HashMap::<String, usize>::new();
-        for level in levels {
-            if let Some(pack) = &level.pack {
-                let ordinal = pack_ordinals.entry(pack.clone()).or_insert(0);
-                self.collections
-                    .entry(pack.clone())
-                    .or_insert_with(Vec::new)
-                    .push(level_collection_value(pack, *ordinal, level));
-                *ordinal += 1;
-            }
+    let mut by_pack = HashMap::<String, Vec<&LevelProjectionEntry>>::new();
+    for level in selected {
+        if let Some(pack) = &level.pack {
+            by_pack.entry(pack.clone()).or_default().push(level);
         }
     }
-}
-
-fn resource_selection_contains_level(
-    selection: &ResourceSelection,
-    level: &LevelExpansionEntry,
-) -> bool {
-    match selection {
-        ResourceSelection::All => true,
-        ResourceSelection::Named(names) => names
-            .iter()
-            .any(|name| level.name == *name || level.pack.as_deref() == Some(name.as_str())),
+    for (pack, levels) in by_pack {
+        catalog.insert(
+            pack,
+            levels
+                .iter()
+                .enumerate()
+                .map(|(index, level)| level_projection_value(index, level))
+                .collect(),
+        );
     }
+    catalog
 }
 
-fn level_collection_value(
-    collection: &str,
-    ordinal: usize,
-    level: &LevelExpansionEntry,
-) -> ForExpansionValue {
-    let selector = format!("{collection}[{ordinal}]");
-    let mut attrs = HashMap::new();
-    attrs.insert("index".to_string(), ordinal.to_string());
-    attrs.insert("num".to_string(), (ordinal + 1).to_string());
-    attrs.insert("number".to_string(), (ordinal + 1).to_string());
-    attrs.insert("name".to_string(), format!("{selector}.name"));
-    attrs.insert("label".to_string(), format!("{selector}.label"));
-    attrs.insert("title".to_string(), format!("{selector}.title"));
-    attrs.insert("cleared".to_string(), format!("{selector}.cleared"));
-    attrs.insert("solved".to_string(), format!("{selector}.solved"));
+fn level_projection_value(index: usize, level: &LevelProjectionEntry) -> AuthoringValue {
+    let id = LevelId::new(&level.puzzle, &level.name);
+    let record_key = id.record_key();
+    let progress_path = format!("levels.{record_key}.progress");
+    let mut progress_fields = HashMap::new();
+    progress_fields.insert(
+        "cleared".to_string(),
+        AuthoringValue::symbol(format!("{progress_path}.cleared")),
+    );
+
+    let mut fields = HashMap::new();
+    fields.insert("id".to_string(), AuthoringValue::text(record_key));
+    fields.insert(
+        "name".to_string(),
+        AuthoringValue::text(level.name.clone()),
+    );
+    fields.insert(
+        "puzzle".to_string(),
+        AuthoringValue::symbol(level.puzzle.clone()),
+    );
+    fields.insert(
+        "ordinal".to_string(),
+        AuthoringValue::integer((index + 1) as i64),
+    );
+    fields.insert(
+        "progress".to_string(),
+        AuthoringValue::record("LevelProgress", progress_fields),
+    );
     if let Some(pack) = &level.pack {
-        attrs.insert("pack".to_string(), format!(r#""{pack}""#));
+        fields.insert(
+            "pack".to_string(),
+            AuthoringValue::text(pack.clone()),
+        );
     }
-    ForExpansionValue {
-        value: selector,
-        axis: None,
-        attrs,
-    }
+    AuthoringValue::record("Level", fields)
 }
 
 fn collect_scene_resources(
@@ -125,16 +125,10 @@ fn collect_scene_resources(
 fn parse_scene_definition(
     lines: &[source::LogicalLine],
     start: usize,
-    level_entries: &[LevelExpansionEntry],
+    level_entries: &[LevelProjectionEntry],
     recognition: &mut crate::surface::ParserRecognition,
 ) -> Result<(SceneDef, usize), DiagnosticReport> {
     let header = split_header_tokens(&lines[start]);
-    if matches!(header.as_slice(), ["scene", "level_menu", ..]) {
-        return Err(parse_error(
-            &lines[start],
-            "scene level_menu template is not supported; use scene <name> with layout { level_menu { ... } }",
-        ));
-    }
     let name = crate::syntax::named_block_declaration_syntax(&header, "scene")
         .ok_or_else(|| {
             parse_error(
@@ -147,8 +141,7 @@ fn parse_scene_definition(
     recognition.completion_symbols.scenes.insert(name.clone());
 
     let resources = collect_scene_resources(lines, start)?;
-    let expansion_catalog = SceneExpansionCatalog::from_scene_resources(level_entries, &resources);
-    let for_expansion_sets = expansion_catalog.as_for_expansion_sets();
+    let iterables = scene_iterable_catalog(level_entries, &resources);
     let mut scene = SceneDef {
         name: name.clone(),
         layout: SceneLayoutDef::default(),
@@ -162,7 +155,7 @@ fn parse_scene_definition(
     };
     let mut handler = Scene2dBlockHandler {
         scene: &mut scene,
-        for_expansion_sets: &for_expansion_sets,
+        iterables: &iterables,
         recognition,
     };
     let next = puzzle_scene::parse_scene_block_with_handler(
@@ -281,19 +274,6 @@ fn scene_component_uses_signal_name(component: &SceneComponent, name: &str) -> b
                     .iter()
                     .any(|child| scene_component_uses_signal_name(child, name))
         }
-        SceneComponent::For(for_view) => for_view
-            .children
-            .iter()
-            .any(|child| scene_component_uses_signal_name(child, name)),
-        SceneComponent::LevelMenu(menu) => {
-            menu.action
-                .as_ref()
-                .is_some_and(|effect| scene_effect_uses_signal_name(effect, name))
-                || menu
-                    .buttons
-                    .iter()
-                    .any(|button| scene_effect_uses_signal_name(&button.effect, name))
-        }
         SceneComponent::Viewport(_) | SceneComponent::Frame(_) | SceneComponent::Text(_) => false,
     }
 }
@@ -364,7 +344,6 @@ fn scene_expr_uses_path_name(expr: &SceneExpr, name: &str) -> bool {
     match expr {
         SceneExpr::Path(path) => path.len() == 1 && path[0] == name,
         SceneExpr::Call { args, .. } => args.iter().any(|arg| scene_expr_uses_path_name(arg, name)),
-        SceneExpr::LevelSelector { .. } => false,
         SceneExpr::Binary { left, right, .. } => {
             scene_expr_uses_path_name(left, name) || scene_expr_uses_path_name(right, name)
         }
@@ -422,7 +401,6 @@ fn scene_expr_uses_any_path_name(expr: &SceneExpr, names: &HashSet<&str>) -> boo
         SceneExpr::Call { args, .. } => args
             .iter()
             .any(|arg| scene_expr_uses_any_path_name(arg, names)),
-        SceneExpr::LevelSelector { .. } => false,
         SceneExpr::Binary { left, right, .. } => {
             scene_expr_uses_any_path_name(left, names)
                 || scene_expr_uses_any_path_name(right, names)
@@ -517,21 +495,6 @@ fn resolve_scene_component_actions(
             }
             for child in &mut conditional.else_children {
                 resolve_scene_component_actions(child, input_names, routine_names)?;
-            }
-            Ok(())
-        }
-        SceneComponent::For(for_view) => {
-            for child in &mut for_view.children {
-                resolve_scene_component_actions(child, input_names, routine_names)?;
-            }
-            Ok(())
-        }
-        SceneComponent::LevelMenu(menu) => {
-            if let Some(effect) = &mut menu.action {
-                resolve_scene_effect_action(effect, input_names, routine_names)?;
-            }
-            for button in &mut menu.buttons {
-                resolve_scene_effect_action(&mut button.effect, input_names, routine_names)?;
             }
             Ok(())
         }
@@ -711,21 +674,6 @@ fn validate_scene_component_routine_calls(
             }
             Ok(())
         }
-        SceneComponent::For(for_view) => {
-            for child in &for_view.children {
-                validate_scene_component_routine_calls(child, routine_names)?;
-            }
-            Ok(())
-        }
-        SceneComponent::LevelMenu(menu) => {
-            if let Some(effect) = &menu.action {
-                validate_scene_effect_routine_calls(effect, routine_names)?;
-            }
-            for button in &menu.buttons {
-                validate_scene_effect_routine_calls(&button.effect, routine_names)?;
-            }
-            Ok(())
-        }
         SceneComponent::Viewport(_) | SceneComponent::Frame(_) | SceneComponent::Text(_) => Ok(()),
     }
 }
@@ -841,7 +789,7 @@ fn collect_scene_effect_routine_calls<'a>(effect: &'a SceneEffect, calls: &mut V
 
 struct Scene2dBlockHandler<'a> {
     scene: &'a mut SceneDef,
-    for_expansion_sets: &'a HashMap<String, Vec<ForExpansionValue>>,
+    iterables: &'a ForIterableCatalog,
     recognition: &'a mut crate::surface::ParserRecognition,
 }
 
@@ -864,8 +812,14 @@ impl puzzle_scene::SceneBlockHandler<source::LogicalLine> for Scene2dBlockHandle
         lines: &[source::LogicalLine],
         start: usize,
     ) -> Result<usize, DiagnosticReport> {
-        let (layout_block, next_i) =
-            parse_scene_layout_block(lines, start, self.for_expansion_sets, self.recognition)?;
+        let (layout_block, next_i) = parse_scene_layout_block(
+            lines,
+            start,
+            SceneLayoutOwner::Scene {
+                iterables: self.iterables,
+            },
+            self.recognition,
+        )?;
         self.scene.layout = layout_block.layout;
         self.scene
             .state
@@ -1123,8 +1077,8 @@ fn parse_scene_resources_block(
             ["levels", names @ ..] => {
                 resources.levels = parse_resource_selection(names, &lines[i])?;
             }
-            ["sprites", names @ ..] => {
-                resources.sprites = parse_resource_selection(names, &lines[i])?;
+            ["visuals", names @ ..] => {
+                resources.visuals = parse_resource_selection(names, &lines[i])?;
             }
             [] => {}
             [other, ..] => {
@@ -1174,20 +1128,45 @@ struct ParsedSceneLayoutBlock {
     components: Vec<SceneComponent>,
 }
 
+#[derive(Clone, Copy)]
+enum SceneLayoutOwner<'a> {
+    Scene {
+        iterables: &'a ForIterableCatalog,
+    },
+    ModelDefault {
+        puzzle_slot: &'a str,
+        iterables: &'a ForIterableCatalog,
+    },
+}
+
+impl<'a> SceneLayoutOwner<'a> {
+    fn iterables(self) -> &'a ForIterableCatalog {
+        match self {
+            Self::Scene { iterables } | Self::ModelDefault { iterables, .. } => iterables,
+        }
+    }
+}
+
 fn parse_scene_layout_block(
     lines: &[source::LogicalLine],
     start: usize,
-    for_expansion_sets: &HashMap<String, Vec<ForExpansionValue>>,
+    owner: SceneLayoutOwner<'_>,
     recognition: &mut crate::surface::ParserRecognition,
 ) -> Result<(ParsedSceneLayoutBlock, usize), DiagnosticReport> {
-    parse_scene_view_like_block(lines, start, "layout", for_expansion_sets, recognition)
+    parse_scene_view_like_block(
+        lines,
+        start,
+        "layout",
+        owner,
+        recognition,
+    )
 }
 
 fn parse_scene_view_like_block(
     lines: &[source::LogicalLine],
     start: usize,
     block_name: &str,
-    for_expansion_sets: &HashMap<String, Vec<ForExpansionValue>>,
+    owner: SceneLayoutOwner<'_>,
     recognition: &mut crate::surface::ParserRecognition,
 ) -> Result<(ParsedSceneLayoutBlock, usize), DiagnosticReport> {
     let layout = parse_scene_layout_from_header(&lines[start], block_name)?;
@@ -1221,26 +1200,32 @@ fn parse_scene_view_like_block(
             return Err(parse_error(&lines[i], "unknown layout directive panel"));
         }
         if matches!(tokens.as_slice(), ["if", ..]) {
-            let (component, next_i) =
-                parse_view_if_component(lines, i, for_expansion_sets, recognition)?;
+            let (component, next_i) = parse_view_if_component(
+                lines,
+                i,
+                owner,
+                recognition,
+            )?;
             components.push(component);
             i = next_i;
             continue;
         }
         if matches!(tokens.as_slice(), ["for", ..]) {
             let (expanded, next_i) =
-                parse_for_components(lines, i, for_expansion_sets, recognition)?;
+                parse_for_components(lines, i, owner, recognition)?;
             components.extend(expanded);
             i = next_i;
             continue;
         }
-        if scene_entry_is_component(&tokens) || matches!(tokens.as_slice(), ["puzzle", ..]) {
+        if scene_entry_is_component(&tokens)
+            || matches!(tokens.as_slice(), ["puzzle", ..] | ["level_menu"])
+        {
             let (parsed_components, next_i, nested_puzzles) =
                 parse_scene_component_units_with_puzzles(
                     lines,
                     i,
                     SceneStateLifetime::Instance,
-                    for_expansion_sets,
+                    owner,
                     recognition,
                 )?;
             components.extend(parsed_components);
@@ -1315,7 +1300,7 @@ fn parse_scene_view_like_block(
             lines,
             i,
             SceneStateLifetime::Instance,
-            for_expansion_sets,
+            owner,
             recognition,
         )?;
         components.extend(parsed_components);
@@ -1427,7 +1412,7 @@ fn parse_scene_component_units_with_puzzles(
     lines: &[source::LogicalLine],
     start: usize,
     lifetime: SceneStateLifetime,
-    for_expansion_sets: &HashMap<String, Vec<ForExpansionValue>>,
+    owner: SceneLayoutOwner<'_>,
     recognition: &mut crate::surface::ParserRecognition,
 ) -> Result<(Vec<SceneComponent>, usize, Vec<ScenePuzzleDef>), DiagnosticReport> {
     let nested_puzzles = std::cell::RefCell::new(Vec::<ScenePuzzleDef>::new());
@@ -1438,7 +1423,7 @@ fn parse_scene_component_units_with_puzzles(
             lines,
             index,
             lifetime,
-            for_expansion_sets,
+            owner,
             recognition,
         )?;
         if let Some(puzzle) = puzzle {
@@ -1481,7 +1466,7 @@ fn parse_scene_leaf_component_units(
     lines: &[source::LogicalLine],
     start: usize,
     lifetime: SceneStateLifetime,
-    for_expansion_sets: &HashMap<String, Vec<ForExpansionValue>>,
+    owner: SceneLayoutOwner<'_>,
     recognition: &mut crate::surface::ParserRecognition,
 ) -> Result<(Vec<SceneComponent>, usize, Option<ScenePuzzleDef>), DiagnosticReport> {
     if let Some(declaration) = parse_scene_puzzle_layout_declaration(&lines[start], lifetime)? {
@@ -1497,6 +1482,19 @@ fn parse_scene_leaf_component_units(
     }
     let tokens = split_header_tokens(&lines[start]);
     let result = match tokens.as_slice() {
+        ["puzzle"] if matches!(owner, SceneLayoutOwner::ModelDefault { .. }) => {
+            let SceneLayoutOwner::ModelDefault { puzzle_slot, .. } = owner else {
+                unreachable!("model-default layout owner was matched above")
+            };
+            Ok((
+                vec![scene_viewport_component(
+                    puzzle_slot.to_string(),
+                    puzzle_scene::ViewportProjection::TwoD,
+                )],
+                start + 1,
+                None,
+            ))
+        }
         ["puzzle", "current_level"] => Err(parse_error(
             &lines[start],
             "current_level is not scene syntax; declare a puzzle slot with `puzzle board = <model>`",
@@ -1588,18 +1586,23 @@ fn parse_scene_leaf_component_units(
             Ok((vec![component], next, None))
         }
         ["if", ..] => {
-            let (component, next) =
-                parse_view_if_component(lines, start, for_expansion_sets, recognition)?;
+            let (component, next) = parse_view_if_component(
+                lines,
+                start,
+                owner,
+                recognition,
+            )?;
             Ok((vec![component], next, None))
         }
         ["for", ..] => {
             let (components, next) =
-                parse_for_components(lines, start, for_expansion_sets, recognition)?;
+                parse_for_components(lines, start, owner, recognition)?;
             Ok((components, next, None))
         }
         ["level_menu"] => {
-            let (menu, next_i) = parse_level_menu_component(lines, start, recognition)?;
-            Ok((vec![SceneComponent::LevelMenu(menu)], next_i, None))
+            let (component, next) =
+                lower_level_menu_component(lines, start, owner, recognition)?;
+            Ok((vec![component], next, None))
         }
         ["level_menu", ..] => Err(parse_error(
             &lines[start],
@@ -1626,6 +1629,180 @@ fn parse_scene_leaf_component_units(
         }
     }
     result
+}
+
+#[derive(Default)]
+struct LevelMenuSugar {
+    show_index: bool,
+    show_solved: bool,
+    columns: Option<u16>,
+    buttons: Vec<SceneButtonDef>,
+}
+
+fn lower_level_menu_component(
+    lines: &[source::LogicalLine],
+    start: usize,
+    owner: SceneLayoutOwner<'_>,
+    recognition: &mut crate::surface::ParserRecognition,
+) -> Result<(SceneComponent, usize), DiagnosticReport> {
+    let (menu, next) = parse_level_menu_sugar(lines, start, recognition)?;
+    let line_number = lines[start].line;
+    let base_label = if menu.show_index {
+        r#"join(level.ordinal, ". ", level.name)"#
+    } else {
+        "level.name"
+    };
+    let label = if menu.show_solved {
+        format!(r#"if level.progress.cleared {{ join("✓ ", {base_label}) }} else {{ {base_label} }}"#)
+    } else {
+        base_label.to_string()
+    };
+    let generated = vec![
+        source::LogicalLine::new("for level in levels {", line_number),
+        source::LogicalLine::new(
+            &format!("choice {label} -> goto level.puzzle(level.name)"),
+            line_number,
+        ),
+        source::LogicalLine::new(BLOCK_CLOSE, line_number),
+    ];
+    let expansion = expand_for_block_lines(
+        &generated,
+        0,
+        owner.iterables(),
+        &HashMap::new(),
+        &HashMap::new(),
+    )?;
+    let mut children = Vec::new();
+    let mut generated_recognition = crate::surface::ParserRecognition::default();
+    for body in expansion.bodies {
+        children.extend(parse_scene_component_body(
+            &body,
+            "for",
+            owner,
+            &mut generated_recognition,
+        )?);
+    }
+    children.extend(menu.buttons.into_iter().map(SceneComponent::Choice));
+
+    if let Some(columns) = menu.columns {
+        let columns = usize::from(columns);
+        children = children
+            .chunks(columns)
+            .map(|row| {
+                SceneComponent::Row(SceneContainerDef {
+                    children: row.to_vec(),
+                    layout: SceneLayoutDef::default(),
+                })
+            })
+            .collect();
+    }
+
+    let mut layout = SceneLayoutDef::default();
+    layout.scroll = true;
+    Ok((
+        SceneComponent::Column(SceneContainerDef { children, layout }),
+        next,
+    ))
+}
+
+fn parse_level_menu_sugar(
+    lines: &[source::LogicalLine],
+    start: usize,
+    recognition: &mut crate::surface::ParserRecognition,
+) -> Result<(LevelMenuSugar, usize), DiagnosticReport> {
+    if !lines[start].trim_end().ends_with('{') {
+        return Ok((LevelMenuSugar::default(), start + 1));
+    }
+
+    let mut menu = LevelMenuSugar::default();
+    let mut i = start + 1;
+    while i < lines.len() && !is_block_close_line(&lines[i]) {
+        if matches!(split_header_tokens(&lines[i]).as_slice(), ["button", ..]) {
+            let (button, next) = parse_button_def(lines, i)?;
+            recognize_scene_component_line(&lines[i], recognition);
+            recognize_scene_effect_body(lines, i + 1, next, recognition);
+            menu.buttons.push(button);
+            i = next;
+            continue;
+        }
+        let Some((name, value)) = parse_assignment_row(&lines[i]) else {
+            return Err(parse_error(
+                &lines[i],
+                "level_menu option must be an assignment or button",
+            ));
+        };
+        match (name, value) {
+            ("show_index", value) => menu.show_index = parse_boolean_option(value, &lines[i])?,
+            ("layout", "list") => menu.columns = None,
+            ("columns", value) => menu.columns = Some(parse_positive_columns(value, &lines[i])?),
+            ("show_solved", value) => {
+                menu.show_solved = parse_boolean_option(value, &lines[i])?
+            }
+            ("wrap", "false") => {}
+            ("wrap", "true") => {
+                return Err(parse_error(
+                    &lines[i],
+                    "wrap requires a common choice-navigation policy before it can be lowered",
+                ));
+            }
+            ("locked", _) => {
+                return Err(parse_error(
+                    &lines[i],
+                    "locked requires a public level-availability record field before it can be lowered",
+                ));
+            }
+            ("show_current" | "show_current_level", _) => {
+                return Err(parse_error(
+                    &lines[i],
+                    "level_menu does not support show_current_level",
+                ));
+            }
+            _ => {
+                return Err(parse_error(
+                    &lines[i],
+                    "unknown level_menu option",
+                ));
+            }
+        }
+        let value_kind = if name == "columns" {
+            crate::surface::SurfaceSemanticKind::Number
+        } else {
+            crate::surface::SurfaceSemanticKind::Literal
+        };
+        for token in &lines[i].tokens {
+            let kind = if token.text == name {
+                Some(crate::surface::SurfaceSemanticKind::Setting)
+            } else if token.text == value {
+                Some(value_kind)
+            } else {
+                None
+            };
+            if let Some(kind) = kind {
+                recognition.mark(
+                    crate::surface::SourceSpan {
+                        start: token.start,
+                        end: token.end,
+                    },
+                    kind,
+                );
+            }
+        }
+        i += 1;
+    }
+    if i >= lines.len() {
+        return Err(parse_error(&lines[start], "level_menu missing closing brace"));
+    }
+    Ok((menu, i + 1))
+}
+
+fn parse_positive_columns(value: &str, line: &str) -> Result<u16, DiagnosticReport> {
+    let columns = value
+        .parse::<u16>()
+        .map_err(|_| parse_error(line, "columns must be a positive integer"))?;
+    if columns == 0 {
+        return Err(parse_error(line, "columns must be greater than 0"));
+    }
+    Ok(columns)
 }
 
 fn recognize_scene_effect_body(
@@ -1802,7 +1979,7 @@ fn parse_choice_component(
 fn parse_view_if_component(
     lines: &[source::LogicalLine],
     start: usize,
-    for_expansion_sets: &HashMap<String, Vec<ForExpansionValue>>,
+    owner: SceneLayoutOwner<'_>,
     recognition: &mut crate::surface::ParserRecognition,
 ) -> Result<(SceneComponent, usize), DiagnosticReport> {
     let line = &lines[start];
@@ -1821,11 +1998,12 @@ fn parse_view_if_component(
             "layout condition requires at least one component",
         ));
     }
-    let children = parse_scene_component_body(body, "if", for_expansion_sets, recognition)?;
+    let children =
+        parse_scene_component_body(body, "if", owner, recognition)?;
     let else_children = if else_body.is_empty() {
         Vec::new()
     } else {
-        parse_scene_component_body(&else_body, "else", for_expansion_sets, recognition)?
+        parse_scene_component_body(&else_body, "else", owner, recognition)?
     };
     Ok((
         SceneComponent::Conditional(SceneConditionalDef {
@@ -1857,7 +2035,7 @@ fn collect_view_else_body(
 fn parse_scene_component_body(
     body: &[source::LogicalLine],
     block_name: &str,
-    for_expansion_sets: &HashMap<String, Vec<ForExpansionValue>>,
+    owner: SceneLayoutOwner<'_>,
     recognition: &mut crate::surface::ParserRecognition,
 ) -> Result<Vec<SceneComponent>, DiagnosticReport> {
     let mut lines = body.to_vec();
@@ -1870,7 +2048,7 @@ fn parse_scene_component_body(
             lines,
             index,
             SceneStateLifetime::Instance,
-            for_expansion_sets,
+            owner,
             recognition,
         )?;
         Ok((next, components))
@@ -1890,40 +2068,24 @@ fn parse_scene_component_body(
 fn parse_for_components(
     lines: &[source::LogicalLine],
     start: usize,
-    for_expansion_sets: &HashMap<String, Vec<ForExpansionValue>>,
+    owner: SceneLayoutOwner<'_>,
     recognition: &mut crate::surface::ParserRecognition,
 ) -> Result<(Vec<SceneComponent>, usize), DiagnosticReport> {
-    let tokens = split_header_tokens(&lines[start]);
-    let ["for", binding, "in", sources @ ..] = tokens.as_slice() else {
-        return Err(parse_error(
-            &lines[start],
-            "for layout must be: for <item> in <source...>",
-        ));
-    };
-    if !is_identifier(binding) {
-        return Err(parse_error(
-            &lines[start],
-            "for binding must be an identifier",
-        ));
-    }
-    let values = for_expansion_values_with_sets(
-        sources,
+    let expansion = expand_for_block_lines(
+        lines,
+        start,
+        owner.iterables(),
         &HashMap::new(),
         &HashMap::new(),
-        for_expansion_sets,
-        &lines[start],
     )?;
-    let (body_lines, next_i) = collect_statement_block_lines(lines, start + 1, &lines[start])?;
     let mut components = Vec::new();
-    for value in &values {
-        let expanded_lines =
-            expand_for_binding_lines(&body_lines, binding, value, &HashMap::new())?;
+    for expanded_lines in expansion.bodies {
         components.extend(parse_scene_component_body(
             &expanded_lines,
             "for",
-            for_expansion_sets,
+            owner,
             recognition,
         )?);
     }
-    Ok((components, next_i))
+    Ok((components, expansion.next))
 }

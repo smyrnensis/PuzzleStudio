@@ -1,7 +1,7 @@
 title = "Ascii Click Smoke"
 
 puzzle main {
-  slots {
+  layers {
     actor = Player
   }
 

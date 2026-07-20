@@ -44,7 +44,7 @@ pub enum CompletionKind {
     Level,
     Sfx,
     Music,
-    Sprite,
+    Visual,
     Asset,
     Shape,
     Setting,
@@ -75,7 +75,7 @@ impl CompletionKind {
             CompletionKind::Level => "level",
             CompletionKind::Sfx => "sfx",
             CompletionKind::Music => "music",
-            CompletionKind::Sprite => "sprite",
+            CompletionKind::Visual => "visual",
             CompletionKind::Asset => "asset",
             CompletionKind::Shape => "shape",
             CompletionKind::Setting => "setting",
@@ -199,7 +199,7 @@ fn slot_requires_symbols(slot: &SemanticCompletionSlot) -> bool {
         | SemanticCompletionSlot::Puzzles
         | SemanticCompletionSlot::SfxAssets
         | SemanticCompletionSlot::MusicAssets
-        | SemanticCompletionSlot::Sprites
+        | SemanticCompletionSlot::Visuals
         | SemanticCompletionSlot::Assets
         | SemanticCompletionSlot::Shapes
         | SemanticCompletionSlot::Colors => true,
@@ -452,11 +452,11 @@ fn add_slot_items(
         SemanticCompletionSlot::MusicAssets => {
             add_named_items(items, symbols.music.iter(), CompletionKind::Music, "music")
         }
-        SemanticCompletionSlot::Sprites => add_named_items(
+        SemanticCompletionSlot::Visuals => add_named_items(
             items,
-            symbols.sprites.iter(),
-            CompletionKind::Sprite,
-            "sprite",
+            symbols.visuals.iter(),
+            CompletionKind::Visual,
+            "visual",
         ),
         SemanticCompletionSlot::Assets => {
             add_named_items(items, symbols.assets.iter(), CompletionKind::Asset, "asset")
@@ -501,23 +501,24 @@ fn add_slot_items(
             add_authoring_content_row_items(items, content);
         }
         SemanticCompletionSlot::Settings(settings) => {
-            let setting_names: Vec<String> = match settings {
-                SettingCompletionSet::Static(settings) => settings
-                    .iter()
-                    .map(|setting| (*setting).to_string())
-                    .collect(),
+            let setting_items: Vec<(String, String)> = match settings {
                 SettingCompletionSet::AuthoringDefinitions(kind) => {
                     crate::authoring_grammar::authoring_definition_surfaces(kind)
                         .iter()
-                        .map(|setting| (*setting).to_string())
+                        .filter_map(|setting| {
+                            crate::authoring_grammar::authoring_definition_completion_insert_text(
+                                kind, setting,
+                            )
+                            .map(|insert_text| ((*setting).to_string(), insert_text))
+                        })
                         .collect()
                 }
             };
-            for setting in setting_names {
+            for (setting, insert_text) in setting_items {
                 items.push(CompletionItem {
                     label: setting.clone(),
                     kind: CompletionKind::Setting,
-                    insert_text: setting,
+                    insert_text,
                     detail: "setting".to_string(),
                 });
             }
@@ -598,7 +599,7 @@ fn remove_current_token_symbols(symbols: &mut SurfaceCompletionSymbols, token: &
     symbols.levels.remove(name);
     symbols.sfx.remove(name);
     symbols.music.remove(name);
-    symbols.sprites.remove(name);
+    symbols.visuals.remove(name);
     symbols.assets.remove(name);
     symbols.shapes.remove(name);
     symbols.colors.remove(name);
@@ -1391,7 +1392,7 @@ rules {
     }
 
     #[test]
-    fn scene_for_source_suggestions_are_scene_owned() {
+    fn for_source_suggestions_use_the_shared_iterable_slots_in_scenes() {
         let source = r#"
 title = complete_scene_for_source
 scene menu {
@@ -1407,19 +1408,9 @@ for item in
         assert!(
             list.items
                 .iter()
-                .any(|item| item.label == "levels" && item.kind == CompletionKind::Keyword)
-        );
-        assert!(
-            list.items
-                .iter()
                 .any(|item| item.label == "items" && item.kind == CompletionKind::State)
         );
-        assert!(
-            !list
-                .items
-                .iter()
-                .any(|item| item.label == "directions" && item.kind == CompletionKind::ValueSet)
-        );
+        assert!(!list.items.iter().any(|item| item.label == "levels"));
     }
 
     #[test]
@@ -1570,7 +1561,10 @@ rules {
         let camera_cursor = source.find("ya").unwrap() + "ya".len();
         let camera_list = suggest_source_completions(source, camera_cursor);
         assert!(camera_list.items.iter().any(|item| {
-            item.label == "yaw" && item.kind == CompletionKind::Setting && item.detail == "setting"
+            item.label == "yaw"
+                && item.kind == CompletionKind::Setting
+                && item.insert_text == "yaw = "
+                && item.detail == "setting"
         }));
 
         let render_cursor = source.find("camera {").unwrap();
@@ -1598,9 +1592,7 @@ tween_dur
 }
 scene menu {
 layout {
-level_menu {
-show_
-}
+text "menu"
 }
 }
 "#;
@@ -1658,15 +1650,6 @@ tw
                 .items
                 .iter()
                 .any(|item| item.label == "tween" && item.kind == CompletionKind::Keyword)
-        );
-
-        let menu_cursor = source.find("show_").unwrap() + "show_".len();
-        let menu_list = suggest_source_completions(source, menu_cursor);
-        assert!(
-            menu_list
-                .items
-                .iter()
-                .any(|item| item.label == "show_index" && item.kind == CompletionKind::Setting)
         );
 
         let scene_cursor = source.find("scene menu").unwrap() + "scene menu".len();
@@ -1774,15 +1757,15 @@ preset = "clean"
     }
 
     #[test]
-    fn suggests_visual_color_names_in_sprite_color_rows() {
+    fn suggests_visual_color_names_in_visual_color_rows() {
         let source = r#"
-title = complete_sprite_colors
+title = complete_visual_colors
 puzzle board {
 slots {
 __legacy_layer_0 = Box
 }
 }
-sprites {
+visuals {
 Box li
 }
 "#;
@@ -1802,7 +1785,7 @@ Box li
     }
 
     #[test]
-    fn suggests_visual_shape_names_in_sprite_entries() {
+    fn suggests_visual_shape_names_in_visual_entries() {
         let source = r#"
 title = complete_visual_resource_refs
 puzzle board {
@@ -1813,7 +1796,7 @@ slots {
 __legacy_layer_0 = Box:kind
 }
 }
-sprites {
+visuals {
 shapes {
 box_shape
 00
@@ -1839,31 +1822,31 @@ shape box_
         let source = r#"
 title = complete_visual_assets
 assets {
-"sprites/box.png"
+"visuals/box.png"
 }
 puzzle board {
 slots {
 __legacy_layer_0 = Box
 }
 }
-sprites {
-Box spr
+visuals {
+Box vis
 }
 "#;
-        let cursor = source.find("Box spr").unwrap() + "Box spr".len();
+        let cursor = source.find("Box vis").unwrap() + "Box vis".len();
         let list = suggest_source_completions(source, cursor);
 
         assert!(
             list.items.iter().any(|item| {
-                item.label == "sprites/box.png" && item.kind == CompletionKind::Asset
+                item.label == "visuals/box.png" && item.kind == CompletionKind::Asset
             })
         );
     }
 
     #[test]
-    fn suggests_sprite_selector_objects_at_visual_line_head() {
+    fn suggests_visual_selector_objects_at_visual_line_head() {
         let source = r#"
-title = complete_sprite_selector_line_head
+title = complete_visual_selector_line_head
 puzzle board {
 tags {
 kind = Red Blue
@@ -1876,7 +1859,7 @@ groups {
 Actors = Player Box:kind
 }
 }
-sprites {
+visuals {
 
 }
 "#;
@@ -1921,16 +1904,16 @@ sprites {
     }
 
     #[test]
-    fn suggests_objects_after_canonical_sprite_selector_setting() {
+    fn suggests_objects_after_canonical_visual_selector_setting() {
         let source = r#"
-title = complete_canonical_sprite_selector
+title = complete_canonical_visual_selector
 puzzle board {
 slots {
 __legacy_layer_0 = Player
 }
 }
-sprites {
-sprite {
+visuals {
+visual {
 selector = Pl
 }
 }

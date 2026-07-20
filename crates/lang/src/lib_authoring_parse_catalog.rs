@@ -559,8 +559,8 @@ fn parser_surface_catalog_from_source_scan(
     let mut recognition = crate::surface::ParserRecognition::default();
     let logical_lines = source_scan.editor_logical_lines();
     project_surface_sound_products(&logical_lines, &mut recognition);
-    let (model_lines, scenes) =
-        match split_document_scene_logical_lines(logical_lines, &mut recognition) {
+    let (model_lines, pending_scenes) =
+        match split_document_scene_sources(logical_lines, &mut recognition) {
             Ok(parts) => parts,
             Err(report) => return crate::surface::ParseProduct::new(Err(report), recognition),
         };
@@ -594,6 +594,10 @@ fn parser_surface_catalog_from_source_scan(
                 (Vec::new(), diagnostics)
             }
         };
+    let scenes = match parse_pending_scene_sources(&pending_scenes, &models, &mut recognition) {
+        Ok(scenes) => scenes,
+        Err(report) => return crate::surface::ParseProduct::new(Err(report), recognition),
+    };
     let mut model_catalogs = Vec::with_capacity(models.len());
     for model in &models {
         let parsed_catalog = build_puzzle_catalog(model);
@@ -629,7 +633,7 @@ fn parser_surface_catalog_from_source_scan(
         let mut level_count = 0;
         for entry in &entries {
             match entry.directive {
-                puzzle_authoring::PuzzleDirectiveSurface::Sprites => {
+                puzzle_authoring::PuzzleDirectiveSurface::Visuals => {
                     let parsed =
                         parse_visuals_entry(entry, &catalog, &mut integrated.value.visuals);
                     integrated.recognition.merge(parsed.recognition);
@@ -916,7 +920,7 @@ fn integrate_level_editor_document_parts(
     let mut visuals = VisualsDef::default();
     for (index, model) in parts.models.iter().enumerate() {
         let model_catalog = parts.model_catalogs.get(index).unwrap_or(&catalog);
-        for entry in &model.body.sprite_resources {
+        for entry in &model.body.visual_resources {
             let parsed = parse_visuals_entry(entry, model_catalog, &mut visuals);
             recognition.merge(parsed.recognition);
             if let Err(report) = parsed.value {
@@ -926,14 +930,14 @@ fn integrate_level_editor_document_parts(
     }
     let mut completion_symbols = parser_catalog_completion_symbols(&catalog);
     completion_symbols
-        .sprites
-        .extend(visuals.sprites.iter().map(|sprite| sprite.name.clone()));
+        .visuals
+        .extend(visuals.entries.iter().map(|visual| visual.name.clone()));
     completion_symbols
         .shapes
-        .extend(recognition.visual_sprite_refs.shape_names.iter().cloned());
+        .extend(recognition.visual_refs.shape_names.iter().cloned());
     completion_symbols
         .colors
-        .extend(recognition.visual_sprite_refs.color_names.iter().cloned());
+        .extend(recognition.visual_refs.color_names.iter().cloned());
     recognition.completion_symbols.merge(completion_symbols);
     let layer_count = catalog
         .object_defs
@@ -1808,19 +1812,16 @@ fn parse_layers_block(
             continue;
         }
         match tokens.as_slice() {
-            ["for", binding, "in", sources @ ..] => {
+            ["for", ..] => {
                 let value_sets = catalog_value_sets(catalog);
-                let values = for_expansion_values(
-                    sources,
+                let expansion = expand_for_block_lines(
+                    lines,
+                    i,
                     &value_sets,
                     &catalog.numeric_variable_defaults,
-                    &lines[i],
+                    &catalog.maps,
                 )?;
-                validate_identifier(binding, &lines[i], "expansion binding")?;
-                let (body_lines, next_i) = collect_statement_block_lines(lines, i + 1, &lines[i])?;
-                for value in &values {
-                    let mut expanded_lines =
-                        expand_for_binding_lines(&body_lines, binding, value, &catalog.maps)?;
+                for mut expanded_lines in expansion.bodies {
                     expanded_lines.push(source::LogicalLine::new(BLOCK_CLOSE, lines[i].line));
                     let parsed_i = parse_layers_block(
                         &expanded_lines,
@@ -1835,14 +1836,8 @@ fn parse_layers_block(
                         return Err(parse_error(&lines[i], "for expansion failed"));
                     }
                 }
-                i = next_i;
+                i = expansion.next;
                 continue;
-            }
-            ["for", ..] => {
-                return Err(parse_error(
-                    &lines[i],
-                    "for directive must be: for <binding> in <source...>",
-                ));
             }
             _ => match puzzle_authoring::slot_row_surface(&lines[i]) {
                 Some(puzzle_authoring::SlotRowSurface::Each { selectors }) => {
@@ -1930,19 +1925,16 @@ fn collect_layer_block_terms(
             continue;
         }
         match tokens.as_slice() {
-            ["for", binding, "in", sources @ ..] => {
+            ["for", ..] => {
                 let value_sets = catalog_value_sets(catalog);
-                let values = for_expansion_values(
-                    sources,
+                let expansion = expand_for_block_lines(
+                    lines,
+                    i,
                     &value_sets,
                     &catalog.numeric_variable_defaults,
-                    &lines[i],
+                    &catalog.maps,
                 )?;
-                validate_identifier(binding, &lines[i], "expansion binding")?;
-                let (body_lines, next_i) = collect_statement_block_lines(lines, i + 1, &lines[i])?;
-                for value in &values {
-                    let mut expanded_lines =
-                        expand_for_binding_lines(&body_lines, binding, value, &catalog.maps)?;
+                for mut expanded_lines in expansion.bodies {
                     expanded_lines.push(source::LogicalLine::new(BLOCK_CLOSE, lines[i].line));
                     let parsed_i = collect_layer_block_terms(
                         &expanded_lines,
@@ -1956,14 +1948,8 @@ fn collect_layer_block_terms(
                         return Err(parse_error(&lines[i], "for expansion failed"));
                     }
                 }
-                i = next_i;
+                i = expansion.next;
                 continue;
-            }
-            ["for", ..] => {
-                return Err(parse_error(
-                    &lines[i],
-                    "for directive must be: for <binding> in <source...>",
-                ));
             }
             _ => {
                 let selectors = match puzzle_authoring::slot_row_surface(&lines[i]) {

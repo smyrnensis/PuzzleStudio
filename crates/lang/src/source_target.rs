@@ -1,12 +1,12 @@
 use crate::PuzzleSourceProfile;
-use crate::surface::{SurfaceDocument, SurfaceVisualSpriteRefs};
+use crate::surface::{SurfaceDocument, SurfaceVisualRefs};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SourceTargetKind {
     Level,
-    Sprite,
+    Visual,
     Sounds,
 }
 
@@ -14,7 +14,7 @@ impl SourceTargetKind {
     fn as_str(&self) -> &'static str {
         match self {
             Self::Level => "level",
-            Self::Sprite => "sprite",
+            Self::Visual => "visual",
             Self::Sounds => "sounds",
         }
     }
@@ -47,16 +47,16 @@ pub struct SourceTarget {
     pub level_index: Option<usize>,
     pub sound_kind: Option<SoundSourceTargetKind>,
     pub params: Vec<(String, String)>,
-    pub source_sprite: Option<SourceSpriteDocument>,
+    pub source_visual: Option<SourceVisualDocument>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct SourceSpriteDocument {
+pub struct SourceVisualDocument {
     pub dimension: crate::ModelDimension,
-    pub status: SourceSpriteStatus,
+    pub status: SourceVisualStatus,
     pub prelude_rows: Vec<String>,
     pub palette_tokens: Vec<String>,
-    pub resolved_palette: Vec<SourceSpritePaletteEntry>,
+    pub resolved_palette: Vec<SourceVisualPaletteEntry>,
     pub palette: Vec<String>,
     pub pixel_rows: Vec<String>,
     pub rows: Vec<String>,
@@ -65,46 +65,46 @@ pub struct SourceSpriteDocument {
     pub animation_frames: Vec<Vec<String>>,
     pub shape_ref: Option<String>,
     pub resolved_shape_rows: Vec<String>,
-    pub color_assets: Vec<SourceSpriteColorAsset>,
-    pub shape_assets: Vec<SourceSpriteShapeAsset>,
+    pub color_assets: Vec<SourceVisualColorAsset>,
+    pub shape_assets: Vec<SourceVisualShapeAsset>,
     pub width: Option<usize>,
     pub height: Option<usize>,
     pub depth: Option<usize>,
     pub size: Option<usize>,
     pub cells: Vec<Option<usize>>,
     pub frames: Vec<Vec<Vec<Option<usize>>>>,
-    pub transforms: Vec<crate::VisualSpriteTransform>,
+    pub transforms: Vec<crate::VisualTransform>,
 }
 
-pub type SourceSpriteTarget = SourceSpriteDocument;
+pub type SourceVisualTarget = SourceVisualDocument;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct SourceSpritePaletteEntry {
+pub struct SourceVisualPaletteEntry {
     pub source: String,
     pub color: String,
     pub linked: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct SourceSpriteColorAsset {
+pub struct SourceVisualColorAsset {
     pub name: String,
     pub color: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum SourceSpriteShapeAsset {
+pub enum SourceVisualShapeAsset {
     Plain {
         name: String,
-        frames: Vec<crate::VisualSpriteFrameDef>,
+        frames: Vec<crate::VisualFrameDef>,
     },
     Table {
         name: String,
         axis: String,
-        variants: BTreeMap<String, crate::VisualSpriteFrameDef>,
+        variants: BTreeMap<String, crate::VisualFrameDef>,
     },
 }
 
-impl SourceSpriteShapeAsset {
+impl SourceVisualShapeAsset {
     pub fn name(&self) -> &str {
         match self {
             Self::Plain { name, .. } | Self::Table { name, .. } => name,
@@ -113,14 +113,14 @@ impl SourceSpriteShapeAsset {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub enum SourceSpriteStatus {
+pub enum SourceVisualStatus {
     Complete,
     #[default]
     Incomplete,
     Invalid,
 }
 
-impl SourceSpriteStatus {
+impl SourceVisualStatus {
     fn as_str(&self) -> &'static str {
         match self {
             Self::Complete => "complete",
@@ -167,10 +167,10 @@ pub(crate) fn resolve_source_target_from_entries(
         .iter()
         .find(|entry| cursor >= entry.start && cursor <= entry.end)?
         .clone();
-    if target.kind == SourceTargetKind::Sprite {
-        target.source_sprite = match target.dimension {
-            Some(crate::ModelDimension::Three) => source_sprite3d_for_target(document, &target),
-            _ => source_sprite_for_target(document, &target),
+    if target.kind == SourceTargetKind::Visual {
+        target.source_visual = match target.dimension {
+            Some(crate::ModelDimension::Three) => source_visual3d_for_target(document, &target),
+            _ => source_visual_for_target(document, &target),
         };
     }
     Some(target)
@@ -182,7 +182,7 @@ pub(crate) fn resolve_source_entries_from_document(
     let mut entries = Vec::new();
     entries.extend(resolve_sound_entries(document));
     entries.extend(resolve_level_entries(document));
-    entries.extend(resolve_sprite_entries(document));
+    entries.extend(resolve_visual_entries(document));
     entries.sort_by_key(|entry| entry.start);
     entries
 }
@@ -258,89 +258,89 @@ fn push_target_json(out: &mut String, target: &SourceTarget) {
         }
         out.push('}');
     }
-    if let Some(sprite) = &target.source_sprite {
-        out.push_str(",\"sourceSprite\":");
-        push_source_sprite_json(out, sprite);
+    if let Some(visual) = &target.source_visual {
+        out.push_str(",\"sourceVisual\":");
+        push_source_visual_json(out, visual);
     }
     out.push('}');
 }
 
-fn push_source_sprite_json(out: &mut String, sprite: &SourceSpriteTarget) {
+fn push_source_visual_json(out: &mut String, visual: &SourceVisualTarget) {
     out.push('{');
-    push_json_string(out, "dimension", sprite.dimension.as_str());
+    push_json_string(out, "dimension", visual.dimension.as_str());
     out.push(',');
-    push_json_string(out, "status", sprite.status.as_str());
+    push_json_string(out, "status", visual.status.as_str());
     out.push(',');
-    push_json_string_array(out, "preludeRows", &sprite.prelude_rows);
+    push_json_string_array(out, "preludeRows", &visual.prelude_rows);
     out.push(',');
-    push_json_string_array(out, "paletteTokens", &sprite.palette_tokens);
+    push_json_string_array(out, "paletteTokens", &visual.palette_tokens);
     out.push_str(",\"resolvedPalette\":");
-    push_source_sprite_palette_json(out, &sprite.resolved_palette);
+    push_source_visual_palette_json(out, &visual.resolved_palette);
     out.push(',');
-    push_json_string_array(out, "pixelRows", &sprite.pixel_rows);
-    if let Some(duration_ms) = sprite.duration_ms {
+    push_json_string_array(out, "pixelRows", &visual.pixel_rows);
+    if let Some(duration_ms) = visual.duration_ms {
         out.push(',');
         push_json_number(out, "durationMs", duration_ms as usize);
     }
-    if let Some(frame_duration_ms) = sprite.frame_duration_ms {
+    if let Some(frame_duration_ms) = visual.frame_duration_ms {
         out.push(',');
         push_json_number(out, "frameDurationMs", frame_duration_ms as usize);
     }
-    if !sprite.animation_frames.is_empty() {
+    if !visual.animation_frames.is_empty() {
         out.push_str(",\"animationFrames\":");
-        push_json_string_matrix_value(out, &sprite.animation_frames);
+        push_json_string_matrix_value(out, &visual.animation_frames);
     }
     out.push_str(",\"shapeRef\":");
-    match &sprite.shape_ref {
+    match &visual.shape_ref {
         Some(shape_ref) => push_json_string_value(out, shape_ref),
         None => out.push_str("null"),
     }
     out.push_str(",\"resolvedShapeRows\":");
-    push_json_string_array_value(out, &sprite.resolved_shape_rows);
+    push_json_string_array_value(out, &visual.resolved_shape_rows);
     out.push_str(",\"colorAssets\":");
-    push_source_sprite_color_assets_json(out, &sprite.color_assets);
+    push_source_visual_color_assets_json(out, &visual.color_assets);
     out.push_str(",\"shapeAssets\":");
-    push_source_sprite_shape_assets_json(out, &sprite.shape_assets);
+    push_source_visual_shape_assets_json(out, &visual.shape_assets);
     out.push_str(",\"extent\":{");
-    push_json_number(out, "width", sprite.width.unwrap_or(0));
+    push_json_number(out, "width", visual.width.unwrap_or(0));
     out.push(',');
-    push_json_number(out, "height", sprite.height.unwrap_or(0));
+    push_json_number(out, "height", visual.height.unwrap_or(0));
     out.push(',');
-    push_json_number(out, "depth", sprite.depth.unwrap_or(1));
+    push_json_number(out, "depth", visual.depth.unwrap_or(1));
     out.push('}');
     out.push_str(",\"frames\":");
-    push_source_sprite_edit_frames_json(out, &sprite.frames);
+    push_source_visual_edit_frames_json(out, &visual.frames);
     out.push_str(",\"spatialOps\":");
-    if sprite.dimension == crate::ModelDimension::Two {
-        push_source_sprite2d_spatial_ops_json(out, &sprite.transforms);
+    if visual.dimension == crate::ModelDimension::Two {
+        push_source_visual2d_spatial_ops_json(out, &visual.transforms);
     } else {
-        push_source_sprite3d_spatial_ops_json(out, &sprite.transforms);
+        push_source_visual3d_spatial_ops_json(out, &visual.transforms);
     }
     out.push('}');
 }
 
-fn push_source_sprite2d_spatial_ops_json(out: &mut String, ops: &[crate::VisualSpriteTransform]) {
+fn push_source_visual2d_spatial_ops_json(out: &mut String, ops: &[crate::VisualTransform]) {
     out.push('[');
     for (index, op) in ops.iter().enumerate() {
         if index > 0 {
             out.push(',');
         }
         match op {
-            crate::VisualSpriteTransform::Translate { value, space } => write!(
+            crate::VisualTransform::Translate { value, space } => write!(
                 out,
                 "{{\"kind\":\"translate2\",\"space\":\"{}\",\"value\":[{},{}]}}",
-                sprite_space_name(*space),
+                visual_space_name(*space),
                 value[0],
                 value[1]
             )
             .unwrap(),
-            crate::VisualSpriteTransform::Rotate { degrees, space, .. } => write!(
+            crate::VisualTransform::Rotate { degrees, space, .. } => write!(
                 out,
                 "{{\"kind\":\"rotate2\",\"space\":\"{}\",\"degrees\":{degrees}}}",
-                sprite_space_name(*space)
+                visual_space_name(*space)
             )
             .unwrap(),
-            crate::VisualSpriteTransform::Flip { enabled } => {
+            crate::VisualTransform::Flip { enabled } => {
                 write!(out, "{{\"kind\":\"flip2\",\"enabled\":{enabled}}}").unwrap()
             }
         }
@@ -348,14 +348,14 @@ fn push_source_sprite2d_spatial_ops_json(out: &mut String, ops: &[crate::VisualS
     out.push(']');
 }
 
-fn sprite_space_name(space: crate::VisualSpriteSpace) -> &'static str {
+fn visual_space_name(space: crate::VisualSpace) -> &'static str {
     match space {
-        crate::VisualSpriteSpace::World => "world",
-        crate::VisualSpriteSpace::Local => "local",
+        crate::VisualSpace::World => "world",
+        crate::VisualSpace::Local => "local",
     }
 }
 
-fn push_source_sprite_edit_frames_json(out: &mut String, frames: &[Vec<Vec<Option<usize>>>]) {
+fn push_source_visual_edit_frames_json(out: &mut String, frames: &[Vec<Vec<Option<usize>>>]) {
     out.push('[');
     for (frame_index, layers) in frames.iter().enumerate() {
         if frame_index > 0 {
@@ -383,7 +383,7 @@ fn push_source_sprite_edit_frames_json(out: &mut String, frames: &[Vec<Vec<Optio
     out.push(']');
 }
 
-fn push_source_sprite_palette_json(out: &mut String, entries: &[SourceSpritePaletteEntry]) {
+fn push_source_visual_palette_json(out: &mut String, entries: &[SourceVisualPaletteEntry]) {
     out.push('[');
     for (index, entry) in entries.iter().enumerate() {
         if index > 0 {
@@ -400,7 +400,7 @@ fn push_source_sprite_palette_json(out: &mut String, entries: &[SourceSpritePale
     out.push(']');
 }
 
-fn push_source_sprite_color_assets_json(out: &mut String, entries: &[SourceSpriteColorAsset]) {
+fn push_source_visual_color_assets_json(out: &mut String, entries: &[SourceVisualColorAsset]) {
     out.push('[');
     for (index, entry) in entries.iter().enumerate() {
         if index > 0 {
@@ -415,23 +415,23 @@ fn push_source_sprite_color_assets_json(out: &mut String, entries: &[SourceSprit
     out.push(']');
 }
 
-fn push_source_sprite_shape_assets_json(out: &mut String, entries: &[SourceSpriteShapeAsset]) {
+fn push_source_visual_shape_assets_json(out: &mut String, entries: &[SourceVisualShapeAsset]) {
     out.push('[');
     for (index, entry) in entries.iter().enumerate() {
         if index > 0 {
             out.push(',');
         }
         match entry {
-            SourceSpriteShapeAsset::Plain { name, frames } => {
+            SourceVisualShapeAsset::Plain { name, frames } => {
                 out.push('{');
                 push_json_string(out, "kind", "plain");
                 out.push(',');
                 push_json_string(out, "name", name);
                 out.push_str(",\"frames\":");
-                push_source_sprite_shape_frames_json(out, frames);
+                push_source_visual_shape_frames_json(out, frames);
                 out.push('}');
             }
-            SourceSpriteShapeAsset::Table {
+            SourceVisualShapeAsset::Table {
                 name,
                 axis,
                 variants,
@@ -460,7 +460,7 @@ fn push_source_sprite_shape_assets_json(out: &mut String, entries: &[SourceSprit
     out.push(']');
 }
 
-fn push_source_sprite_shape_frames_json(out: &mut String, frames: &[crate::VisualSpriteFrameDef]) {
+fn push_source_visual_shape_frames_json(out: &mut String, frames: &[crate::VisualFrameDef]) {
     out.push('[');
     for (index, frame) in frames.iter().enumerate() {
         if index > 0 {
@@ -471,16 +471,16 @@ fn push_source_sprite_shape_frames_json(out: &mut String, frames: &[crate::Visua
     out.push(']');
 }
 
-fn push_source_sprite3d_spatial_ops_json(out: &mut String, ops: &[crate::VisualSpriteTransform]) {
+fn push_source_visual3d_spatial_ops_json(out: &mut String, ops: &[crate::VisualTransform]) {
     out.push('[');
     for (index, op) in ops.iter().enumerate() {
         if index > 0 {
             out.push(',');
         }
         match op {
-            crate::VisualSpriteTransform::Translate { space, value } => write!(out, "{{\"kind\":\"translate3\",\"space\":\"{}\",\"value\":[{},{},{}]}}", sprite_space_name(*space), value[0], value[1], value[2]).unwrap(),
-            crate::VisualSpriteTransform::Rotate { space, axis, degrees } => write!(out, "{{\"kind\":\"rotate3\",\"space\":\"{}\",\"axis\":[{},{},{}],\"degrees\":{degrees}}}", sprite_space_name(*space), axis[0], axis[1], axis[2]).unwrap(),
-            crate::VisualSpriteTransform::Flip { enabled } => write!(out, "{{\"kind\":\"flip3\",\"enabled\":{enabled}}}").unwrap(),
+            crate::VisualTransform::Translate { space, value } => write!(out, "{{\"kind\":\"translate3\",\"space\":\"{}\",\"value\":[{},{},{}]}}", visual_space_name(*space), value[0], value[1], value[2]).unwrap(),
+            crate::VisualTransform::Rotate { space, axis, degrees } => write!(out, "{{\"kind\":\"rotate3\",\"space\":\"{}\",\"axis\":[{},{},{}],\"degrees\":{degrees}}}", visual_space_name(*space), axis[0], axis[1], axis[2]).unwrap(),
+            crate::VisualTransform::Flip { enabled } => write!(out, "{{\"kind\":\"flip3\",\"enabled\":{enabled}}}").unwrap(),
         }
     }
     out.push(']');
@@ -504,7 +504,7 @@ fn resolve_sound_entries(context: &SurfaceDocument) -> Vec<SourceTarget> {
                 crate::surface::SurfaceSoundKind::Music => SoundSourceTargetKind::Music,
             }),
             params: sound.params.clone(),
-            source_sprite: None,
+            source_visual: None,
         })
         .collect()
 }
@@ -532,19 +532,19 @@ fn resolve_level_entries(context: &SurfaceDocument) -> Vec<SourceTarget> {
                 level_index: Some(product.level_index),
                 sound_kind: None,
                 params,
-                source_sprite: None,
+                source_visual: None,
             }
         })
         .collect()
 }
 
-fn resolve_sprite_entries(context: &SurfaceDocument) -> Vec<SourceTarget> {
+fn resolve_visual_entries(context: &SurfaceDocument) -> Vec<SourceTarget> {
     context
-        .sprite_products
+        .visual_products
         .iter()
         .filter(|product| !product.name.is_empty())
         .map(|product| SourceTarget {
-            kind: SourceTargetKind::Sprite,
+            kind: SourceTargetKind::Visual,
             dimension: Some(product.dimension),
             name: product.name.clone(),
             start: product.span.start,
@@ -554,83 +554,83 @@ fn resolve_sprite_entries(context: &SurfaceDocument) -> Vec<SourceTarget> {
             level_index: None,
             sound_kind: None,
             params: Vec::new(),
-            source_sprite: None,
+            source_visual: None,
         })
         .collect()
 }
 
-fn source_sprite_for_target(
+fn source_visual_for_target(
     document: &SurfaceDocument,
     target: &SourceTarget,
-) -> Option<SourceSpriteTarget> {
-    source_sprite_target(
-        sprite_product_for_target(document, target)?,
-        &document.visual_sprite_refs,
+) -> Option<SourceVisualTarget> {
+    source_visual_target(
+        visual_product_for_target(document, target)?,
+        &document.visual_refs,
     )
 }
 
-fn source_sprite3d_for_target(
+fn source_visual3d_for_target(
     document: &SurfaceDocument,
     target: &SourceTarget,
-) -> Option<SourceSpriteTarget> {
-    let product = sprite_product_for_target(document, target)?;
+) -> Option<SourceVisualTarget> {
+    let product = visual_product_for_target(document, target)?;
     let analyzed = &product.body;
     if analyzed.error.is_some() {
-        return Some(SourceSpriteTarget {
+        return Some(SourceVisualTarget {
             dimension: crate::ModelDimension::Three,
-            status: SourceSpriteStatus::Invalid,
-            ..SourceSpriteTarget::default()
+            status: SourceVisualStatus::Invalid,
+            ..SourceVisualTarget::default()
         });
     }
     let syntax = &analyzed.syntax;
     let Ok(transforms) =
-        crate::eval_sprite_transforms(&syntax.properties, &HashMap::new(), &target.name)
+        crate::eval_visual_transforms(&syntax.properties, &HashMap::new(), &target.name)
     else {
-        return Some(SourceSpriteTarget {
+        return Some(SourceVisualTarget {
             dimension: crate::ModelDimension::Three,
-            status: SourceSpriteStatus::Invalid,
-            ..SourceSpriteTarget::default()
+            status: SourceVisualStatus::Invalid,
+            ..SourceVisualTarget::default()
         });
     };
     let palette_tokens = syntax.colors.clone().unwrap_or_default();
     if palette_tokens.is_empty() {
-        return Some(SourceSpriteTarget {
+        return Some(SourceVisualTarget {
             dimension: crate::ModelDimension::Three,
-            status: SourceSpriteStatus::Incomplete,
-            ..SourceSpriteTarget::default()
+            status: SourceVisualStatus::Incomplete,
+            ..SourceVisualTarget::default()
         });
     }
     let resolved_palette =
-        source_sprite_palette_from_refs(&palette_tokens, &document.visual_sprite_refs.color_assets);
+        source_visual_palette_from_refs(&palette_tokens, &document.visual_refs.color_assets);
     if resolved_palette.is_empty() {
-        return Some(SourceSpriteTarget {
+        return Some(SourceVisualTarget {
             dimension: crate::ModelDimension::Three,
-            status: SourceSpriteStatus::Invalid,
+            status: SourceVisualStatus::Invalid,
             palette_tokens,
-            ..SourceSpriteTarget::default()
+            ..SourceVisualTarget::default()
         });
     }
-    if palette_tokens.len() > SOURCE_SPRITE3D_PALETTE_KEYS.len() {
-        return Some(SourceSpriteTarget {
+    if palette_tokens.len() > SOURCE_VISUAL3D_PALETTE_KEYS.len() {
+        return Some(SourceVisualTarget {
             dimension: crate::ModelDimension::Three,
-            status: SourceSpriteStatus::Invalid,
+            status: SourceVisualStatus::Invalid,
             palette_tokens,
-            ..SourceSpriteTarget::default()
+            ..SourceVisualTarget::default()
         });
     };
     let shape_ref = match &analyzed.shape {
-        crate::sprite_authoring::ResolvedSpriteShape::Reference(reference) => {
+        crate::visual_authoring::ResolvedVisualShape::Reference(reference) => {
             Some(reference.clone())
         }
         _ => None,
     };
     let frames = match &analyzed.shape {
-        crate::sprite_authoring::ResolvedSpriteShape::Reference(reference) => {
+        crate::visual_authoring::ResolvedVisualShape::Reference(reference) => {
             let asset_name = product.shape_asset_name.as_deref()?;
-            match document.visual_sprite_refs.shape_assets.get(asset_name)? {
-                crate::surface::SurfaceSpriteShapeAsset::Plain { frames } => frames.clone(),
-                crate::surface::SurfaceSpriteShapeAsset::Table { .. } => {
-                    return Some(source_sprite3d_unresolved_table_target(
+            match document.visual_refs.shape_assets.get(asset_name)? {
+                crate::surface::SurfaceVisualShapeAsset::Plain { frames } => frames.clone(),
+                crate::surface::SurfaceVisualShapeAsset::Table { .. } => {
+                    return Some(source_visual3d_unresolved_table_target(
                         document,
                         syntax,
                         palette_tokens,
@@ -641,53 +641,53 @@ fn source_sprite3d_for_target(
                 }
             }
         }
-        crate::sprite_authoring::ResolvedSpriteShape::Inline(frames) => frames.clone(),
-        crate::sprite_authoring::ResolvedSpriteShape::None => {
-            vec![crate::sprite_authoring::SpriteFrameSyntax {
-                layers: vec![crate::sprite_authoring::SpriteLayerSyntax {
-                    rows: vec![crate::sprite_authoring::SpriteShapeRow {
+        crate::visual_authoring::ResolvedVisualShape::Inline(frames) => frames.clone(),
+        crate::visual_authoring::ResolvedVisualShape::None => {
+            vec![crate::visual_authoring::VisualFrameSyntax {
+                layers: vec![crate::visual_authoring::VisualLayerSyntax {
+                    rows: vec![crate::visual_authoring::VisualShapeRow {
                         text: "0".to_string(),
                         body_line: 0,
                     }],
                 }],
             }]
         }
-        crate::sprite_authoring::ResolvedSpriteShape::UnknownBareReference(_)
-        | crate::sprite_authoring::ResolvedSpriteShape::AmbiguousBareRow(_) => {
-            return Some(SourceSpriteTarget {
+        crate::visual_authoring::ResolvedVisualShape::UnknownBareReference(_)
+        | crate::visual_authoring::ResolvedVisualShape::AmbiguousBareRow(_) => {
+            return Some(SourceVisualTarget {
                 dimension: crate::ModelDimension::Three,
-                status: SourceSpriteStatus::Invalid,
+                status: SourceVisualStatus::Invalid,
                 palette_tokens,
-                ..SourceSpriteTarget::default()
+                ..SourceVisualTarget::default()
             });
         }
     };
-    let frame_layers = sprite_frame_layers(&frames);
+    let frame_layers = visual_frame_layers(&frames);
     let Some(layers) = frame_layers.first() else {
-        return Some(SourceSpriteTarget {
+        return Some(SourceVisualTarget {
             dimension: crate::ModelDimension::Three,
-            status: SourceSpriteStatus::Invalid,
+            status: SourceVisualStatus::Invalid,
             palette_tokens,
-            ..SourceSpriteTarget::default()
+            ..SourceVisualTarget::default()
         });
     };
     let mut edit_frames = Vec::with_capacity(frame_layers.len());
     let mut common_size = None;
     for frame in &frame_layers {
-        let Some((size, cells)) = source_sprite3d_cells(frame, palette_tokens.len()) else {
-            return Some(SourceSpriteTarget {
+        let Some((size, cells)) = source_visual3d_cells(frame, palette_tokens.len()) else {
+            return Some(SourceVisualTarget {
                 dimension: crate::ModelDimension::Three,
-                status: SourceSpriteStatus::Invalid,
+                status: SourceVisualStatus::Invalid,
                 palette_tokens,
-                ..SourceSpriteTarget::default()
+                ..SourceVisualTarget::default()
             });
         };
         if common_size.is_some_and(|expected| expected != size) {
-            return Some(SourceSpriteTarget {
+            return Some(SourceVisualTarget {
                 dimension: crate::ModelDimension::Three,
-                status: SourceSpriteStatus::Invalid,
+                status: SourceVisualStatus::Invalid,
                 palette_tokens,
-                ..SourceSpriteTarget::default()
+                ..SourceVisualTarget::default()
             });
         }
         common_size = Some(size);
@@ -701,7 +701,7 @@ fn source_sprite3d_for_target(
     }
     let palette = resolved_palette
         .iter()
-        .map(|entry| sprite_editor_color(&entry.color))
+        .map(|entry| visual_editor_color(&entry.color))
         .collect::<Vec<_>>();
     let rows = layers
         .iter()
@@ -719,23 +719,23 @@ fn source_sprite3d_for_target(
         .first()
         .map(|layers| layers.iter().flatten().copied().collect())
         .unwrap_or_default();
-    Some(SourceSpriteTarget {
+    Some(SourceVisualTarget {
         dimension: crate::ModelDimension::Three,
-        status: SourceSpriteStatus::Complete,
+        status: SourceVisualStatus::Complete,
         palette_tokens,
         resolved_palette,
         palette,
         shape_ref,
         color_assets: document
-            .visual_sprite_refs
+            .visual_refs
             .color_assets
             .iter()
-            .map(|(name, color)| SourceSpriteColorAsset {
+            .map(|(name, color)| SourceVisualColorAsset {
                 name: name.clone(),
                 color: color.clone(),
             })
             .collect(),
-        shape_assets: source_sprite_shape_assets(&document.visual_sprite_refs),
+        shape_assets: source_visual_shape_assets(&document.visual_refs),
         rows,
         frames: edit_frames,
         duration_ms: syntax
@@ -752,24 +752,24 @@ fn source_sprite3d_for_target(
         height: Some(size),
         depth: Some(size),
         transforms,
-        ..SourceSpriteTarget::default()
+        ..SourceVisualTarget::default()
     })
 }
 
-fn sprite_product_for_target<'a>(
+fn visual_product_for_target<'a>(
     document: &'a SurfaceDocument,
     target: &SourceTarget,
-) -> Option<&'a crate::surface::SurfaceSpriteProduct> {
+) -> Option<&'a crate::surface::SurfaceVisualProduct> {
     document
-        .sprite_products
+        .visual_products
         .iter()
         .find(|product| product.span.start == target.start && product.span.end == target.end)
 }
 
-fn source_sprite_shape_frame(
-    frame: &crate::sprite_authoring::SpriteFrameSyntax,
-) -> crate::VisualSpriteFrameDef {
-    crate::VisualSpriteFrameDef {
+fn source_visual_shape_frame(
+    frame: &crate::visual_authoring::VisualFrameSyntax,
+) -> crate::VisualFrameDef {
+    crate::VisualFrameDef {
         planes: frame
             .layers
             .iter()
@@ -778,26 +778,24 @@ fn source_sprite_shape_frame(
     }
 }
 
-fn source_sprite_shape_assets(
-    visual_refs: &SurfaceVisualSpriteRefs,
-) -> Vec<SourceSpriteShapeAsset> {
+fn source_visual_shape_assets(visual_refs: &SurfaceVisualRefs) -> Vec<SourceVisualShapeAsset> {
     visual_refs
         .shape_assets
         .iter()
         .map(|(name, asset)| match asset {
-            crate::surface::SurfaceSpriteShapeAsset::Plain { frames } => {
-                SourceSpriteShapeAsset::Plain {
+            crate::surface::SurfaceVisualShapeAsset::Plain { frames } => {
+                SourceVisualShapeAsset::Plain {
                     name: name.clone(),
-                    frames: frames.iter().map(source_sprite_shape_frame).collect(),
+                    frames: frames.iter().map(source_visual_shape_frame).collect(),
                 }
             }
-            crate::surface::SurfaceSpriteShapeAsset::Table { axis, variants } => {
-                SourceSpriteShapeAsset::Table {
+            crate::surface::SurfaceVisualShapeAsset::Table { axis, variants } => {
+                SourceVisualShapeAsset::Table {
                     name: name.clone(),
                     axis: axis.clone(),
                     variants: variants
                         .iter()
-                        .map(|(value, frame)| (value.clone(), source_sprite_shape_frame(frame)))
+                        .map(|(value, frame)| (value.clone(), source_visual_shape_frame(frame)))
                         .collect(),
                 }
             }
@@ -805,34 +803,34 @@ fn source_sprite_shape_assets(
         .collect()
 }
 
-fn source_sprite3d_unresolved_table_target(
+fn source_visual3d_unresolved_table_target(
     document: &SurfaceDocument,
-    syntax: &crate::sprite_authoring::SpriteNodeSyntax,
+    syntax: &crate::visual_authoring::VisualNodeSyntax,
     palette_tokens: Vec<String>,
-    resolved_palette: Vec<SourceSpritePaletteEntry>,
+    resolved_palette: Vec<SourceVisualPaletteEntry>,
     shape_ref: String,
-    transforms: Vec<crate::VisualSpriteTransform>,
-) -> SourceSpriteTarget {
-    SourceSpriteTarget {
+    transforms: Vec<crate::VisualTransform>,
+) -> SourceVisualTarget {
+    SourceVisualTarget {
         dimension: crate::ModelDimension::Three,
-        status: SourceSpriteStatus::Incomplete,
+        status: SourceVisualStatus::Incomplete,
         palette: resolved_palette
             .iter()
-            .map(|entry| sprite_editor_color(&entry.color))
+            .map(|entry| visual_editor_color(&entry.color))
             .collect(),
         palette_tokens,
         resolved_palette,
         shape_ref: Some(shape_ref),
         color_assets: document
-            .visual_sprite_refs
+            .visual_refs
             .color_assets
             .iter()
-            .map(|(name, color)| SourceSpriteColorAsset {
+            .map(|(name, color)| SourceVisualColorAsset {
                 name: name.clone(),
                 color: color.clone(),
             })
             .collect(),
-        shape_assets: source_sprite_shape_assets(&document.visual_sprite_refs),
+        shape_assets: source_visual_shape_assets(&document.visual_refs),
         duration_ms: syntax
             .duration
             .as_deref()
@@ -842,12 +840,12 @@ fn source_sprite3d_unresolved_table_target(
             .as_deref()
             .and_then(|value| puzzle_scene::parse_wait_duration_ms_at(value, value).ok()),
         transforms,
-        ..SourceSpriteTarget::default()
+        ..SourceVisualTarget::default()
     }
 }
 
-fn source_sprite_plain_shape_rows(asset: &SourceSpriteShapeAsset) -> Option<Vec<String>> {
-    let SourceSpriteShapeAsset::Plain { frames, .. } = asset else {
+fn source_shape_rows(asset: &SourceVisualShapeAsset) -> Option<Vec<String>> {
+    let SourceVisualShapeAsset::Plain { frames, .. } = asset else {
         return None;
     };
     frames
@@ -856,8 +854,8 @@ fn source_sprite_plain_shape_rows(asset: &SourceSpriteShapeAsset) -> Option<Vec<
         .cloned()
 }
 
-fn sprite_frame_layers(
-    frames: &[crate::sprite_authoring::SpriteFrameSyntax],
+fn visual_frame_layers(
+    frames: &[crate::visual_authoring::VisualFrameSyntax],
 ) -> Vec<Vec<Vec<String>>> {
     frames
         .iter()
@@ -871,11 +869,11 @@ fn sprite_frame_layers(
         .collect()
 }
 
-fn source_sprite_target(
-    product: &crate::surface::SurfaceSpriteProduct,
-    visual_refs: &SurfaceVisualSpriteRefs,
-) -> Option<SourceSpriteTarget> {
-    let mut target = SourceSpriteTarget::default();
+fn source_visual_target(
+    product: &crate::surface::SurfaceVisualProduct,
+    visual_refs: &SurfaceVisualRefs,
+) -> Option<SourceVisualTarget> {
+    let mut target = SourceVisualTarget::default();
     let analyzed = &product.body;
     let product_invalid = analyzed.error.is_some();
     let syntax = &analyzed.syntax;
@@ -888,11 +886,11 @@ fn source_sprite_target(
         target.frame_duration_ms = puzzle_scene::parse_wait_duration_ms_at(&value, &value).ok();
     }
     match &analyzed.shape {
-        crate::sprite_authoring::ResolvedSpriteShape::Reference(reference) => {
+        crate::visual_authoring::ResolvedVisualShape::Reference(reference) => {
             target.shape_ref = Some(reference.clone());
         }
-        crate::sprite_authoring::ResolvedSpriteShape::Inline(frames) => {
-            let frames = crate::sprite_authoring::into_single_layer_frames(frames.clone())
+        crate::visual_authoring::ResolvedVisualShape::Inline(frames) => {
+            let frames = crate::visual_authoring::into_single_layer_frames(frames.clone())
                 .unwrap_or_default()
                 .into_iter()
                 .map(|frame| frame.into_iter().map(|row| row.text).collect::<Vec<_>>())
@@ -902,14 +900,14 @@ fn source_sprite_target(
                 target.animation_frames = frames;
             }
         }
-        crate::sprite_authoring::ResolvedSpriteShape::None
-        | crate::sprite_authoring::ResolvedSpriteShape::UnknownBareReference(_)
-        | crate::sprite_authoring::ResolvedSpriteShape::AmbiguousBareRow(_) => {}
+        crate::visual_authoring::ResolvedVisualShape::None
+        | crate::visual_authoring::ResolvedVisualShape::UnknownBareReference(_)
+        | crate::visual_authoring::ResolvedVisualShape::AmbiguousBareRow(_) => {}
     }
     target.color_assets = visual_refs
         .color_assets
         .iter()
-        .map(|(name, color)| SourceSpriteColorAsset {
+        .map(|(name, color)| SourceVisualColorAsset {
             name: name.clone(),
             color: color.clone(),
         })
@@ -917,20 +915,20 @@ fn source_sprite_target(
     target
         .color_assets
         .sort_by(|left, right| left.name.cmp(&right.name));
-    target.shape_assets = source_sprite_shape_assets(visual_refs);
+    target.shape_assets = source_visual_shape_assets(visual_refs);
     target
         .shape_assets
         .sort_by(|left, right| left.name().cmp(right.name()));
     target.resolved_palette =
-        source_sprite_palette_from_refs(&target.palette_tokens, &visual_refs.color_assets);
-    target.transforms = match crate::eval_sprite_transforms(
+        source_visual_palette_from_refs(&target.palette_tokens, &visual_refs.color_assets);
+    target.transforms = match crate::eval_visual_transforms(
         &syntax.properties,
         &HashMap::new(),
-        syntax.selector.as_deref().unwrap_or("sprite"),
+        syntax.selector.as_deref().unwrap_or("visual"),
     ) {
         Ok(transforms) => transforms,
         Err(_) => {
-            target.status = SourceSpriteStatus::Invalid;
+            target.status = SourceVisualStatus::Invalid;
             return Some(target);
         }
     };
@@ -940,22 +938,22 @@ fn source_sprite_target(
                 .shape_assets
                 .iter()
                 .find(|asset| asset.name() == shape_ref)
-                .and_then(source_sprite_plain_shape_rows)
+                .and_then(source_shape_rows)
             {
                 target.resolved_shape_rows = rows;
             }
         }
     }
-    populate_source_sprite_edit_frames(&mut target);
+    populate_source_visual_edit_frames(&mut target);
     if product_invalid {
-        target.status = SourceSpriteStatus::Invalid;
+        target.status = SourceVisualStatus::Invalid;
     }
     Some(target)
 }
 
-fn populate_source_sprite_edit_frames(target: &mut SourceSpriteTarget) {
+fn populate_source_visual_edit_frames(target: &mut SourceVisualTarget) {
     if target.resolved_palette.is_empty() {
-        target.status = SourceSpriteStatus::Incomplete;
+        target.status = SourceVisualStatus::Incomplete;
         return;
     }
     let rows_by_frame = if !target.animation_frames.is_empty() {
@@ -967,7 +965,7 @@ fn populate_source_sprite_edit_frames(target: &mut SourceSpriteTarget) {
     } else if target.resolved_palette.len() == 1 {
         vec![vec!["0".to_string()]]
     } else {
-        target.status = SourceSpriteStatus::Incomplete;
+        target.status = SourceVisualStatus::Incomplete;
         return;
     };
     let height = rows_by_frame.first().map_or(0, Vec::len);
@@ -981,10 +979,10 @@ fn populate_source_sprite_edit_frames(target: &mut SourceSpriteTarget) {
             .iter()
             .any(|rows| rows.len() != height || rows.iter().any(|row| row.chars().count() != width))
     {
-        target.status = SourceSpriteStatus::Invalid;
+        target.status = SourceVisualStatus::Invalid;
         return;
     }
-    let keys = SOURCE_SPRITE3D_PALETTE_KEYS.chars().collect::<Vec<_>>();
+    let keys = SOURCE_VISUAL3D_PALETTE_KEYS.chars().collect::<Vec<_>>();
     let mut frames = Vec::new();
     for rows in rows_by_frame {
         let mut cells = Vec::with_capacity(width * height);
@@ -995,11 +993,11 @@ fn populate_source_sprite_edit_frames(target: &mut SourceSpriteTarget) {
                     continue;
                 }
                 let Some(index) = keys.iter().position(|key| *key == ch) else {
-                    target.status = SourceSpriteStatus::Invalid;
+                    target.status = SourceVisualStatus::Invalid;
                     return;
                 };
                 if index >= target.resolved_palette.len() {
-                    target.status = SourceSpriteStatus::Invalid;
+                    target.status = SourceVisualStatus::Invalid;
                     return;
                 }
                 cells.push(Some(index));
@@ -1010,21 +1008,21 @@ fn populate_source_sprite_edit_frames(target: &mut SourceSpriteTarget) {
     target.width = Some(width);
     target.height = Some(height);
     target.frames = frames;
-    target.status = SourceSpriteStatus::Complete;
+    target.status = SourceVisualStatus::Complete;
 }
 
-fn source_sprite_palette_from_refs(
+fn source_visual_palette_from_refs(
     tokens: &[String],
     color_assets: &BTreeMap<String, String>,
-) -> Vec<SourceSpritePaletteEntry> {
+) -> Vec<SourceVisualPaletteEntry> {
     if tokens.is_empty() {
         return Vec::new();
     }
     tokens
         .iter()
         .map(|token| {
-            if is_sprite_color(token) {
-                Some(SourceSpritePaletteEntry {
+            if is_visual_color(token) {
+                Some(SourceVisualPaletteEntry {
                     source: token.clone(),
                     color: token.clone(),
                     linked: false,
@@ -1032,7 +1030,7 @@ fn source_sprite_palette_from_refs(
             } else {
                 color_assets
                     .get(token)
-                    .map(|color| SourceSpritePaletteEntry {
+                    .map(|color| SourceVisualPaletteEntry {
                         source: token.clone(),
                         color: color.clone(),
                         linked: true,
@@ -1043,7 +1041,7 @@ fn source_sprite_palette_from_refs(
         .unwrap_or_default()
 }
 
-fn sprite_editor_color(color: &str) -> String {
+fn visual_editor_color(color: &str) -> String {
     if color == "transparent" {
         "#00000000".to_string()
     } else {
@@ -1051,7 +1049,7 @@ fn sprite_editor_color(color: &str) -> String {
     }
 }
 
-fn source_sprite3d_cells(
+fn source_visual3d_cells(
     layers: &[Vec<String>],
     palette_len: usize,
 ) -> Option<(usize, Vec<Option<usize>>)> {
@@ -1068,7 +1066,7 @@ fn source_sprite3d_cells(
     }
     let size = width.max(height).max(layers.len());
     let mut cells = vec![None; size * size * size];
-    let keys = SOURCE_SPRITE3D_PALETTE_KEYS
+    let keys = SOURCE_VISUAL3D_PALETTE_KEYS
         .chars()
         .take(palette_len)
         .collect::<Vec<_>>();
@@ -1088,10 +1086,10 @@ fn source_sprite3d_cells(
     Some((size, cells))
 }
 
-const SOURCE_SPRITE3D_PALETTE_KEYS: &str =
+const SOURCE_VISUAL3D_PALETTE_KEYS: &str =
     "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
-fn is_sprite_color(value: &str) -> bool {
+fn is_visual_color(value: &str) -> bool {
     crate::syntax::is_visual_named_color(value) || is_hex_color(value)
 }
 
@@ -1211,9 +1209,9 @@ fn escape_json_string(out: &mut String, value: &str) {
 #[cfg(test)]
 mod tests {
     use super::{
-        SoundSourceTargetKind, SourceSpritePaletteEntry, SourceSpriteShapeAsset,
-        SourceSpriteStatus, SourceTargetKind, resolve_source_entries_from_document,
-        resolve_source_target, resolve_source_target_for_profile,
+        SoundSourceTargetKind, SourceTargetKind, SourceVisualPaletteEntry, SourceVisualShapeAsset,
+        SourceVisualStatus, resolve_source_entries_from_document, resolve_source_target,
+        resolve_source_target_for_profile,
     };
     use crate::PuzzleSourceProfile;
 
@@ -1221,8 +1219,8 @@ mod tests {
     fn source_target_consumes_surface_visual_refs_instead_of_collecting_assets() {
         let source = include_str!("source_target.rs");
         let forbidden_fragments = [
-            ["struct ", "VisualSpriteRefs"],
-            ["collect_visual", "_sprite_refs"],
+            ["struct ", "VisualRefs"],
+            ["collect_visual", "_visual_refs"],
             ["collect_visual", "_flat_asset_names"],
             ["collect_visual", "_shape_names"],
             ["visual_asset", "_depth_at_line"],
@@ -1265,7 +1263,7 @@ puzzle board {
 slots {
 Player
 }
-sprites {
+visuals {
 Player {
 #fff
 0
@@ -1283,7 +1281,7 @@ level "two" {
 
 puzzle board3 {
 dimension = 3
-sprites {
+visuals {
 Cube {
 colors = #fff
 shape = {
@@ -1304,7 +1302,7 @@ level "three" {
         assert!(
             entries
                 .iter()
-                .any(|entry| { entry.kind == SourceTargetKind::Sprite && entry.name == "Player" })
+                .any(|entry| { entry.kind == SourceTargetKind::Visual && entry.name == "Player" })
         );
         assert!(entries.iter().any(|entry| {
             entry.kind == SourceTargetKind::Level
@@ -1317,7 +1315,7 @@ level "three" {
                     ]
         }));
         assert!(entries.iter().any(|entry| {
-            entry.kind == SourceTargetKind::Sprite
+            entry.kind == SourceTargetKind::Visual
                 && entry.dimension == Some(crate::ModelDimension::Three)
                 && entry.name == "Cube"
         }));
@@ -1454,9 +1452,9 @@ sfx clear { seed = clear01; type = jump }
     }
 
     #[test]
-    fn resolves_sprite_entry_body() {
+    fn resolves_visual_entry_body() {
         let source = r#"
-sprites {
+visuals {
 Player {
 #000 #fff
 .0.
@@ -1467,23 +1465,23 @@ Player {
         let cursor = source.find(".0.").unwrap();
         let target = resolve_source_target(source, cursor).unwrap();
 
-        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.kind, SourceTargetKind::Visual);
         assert_eq!(target.name, "Player");
         assert!(target.body_start.unwrap() < cursor);
         assert!(target.body_end.unwrap() > cursor);
     }
 
     #[test]
-    fn resolves_unfinished_sprite_name_as_sprite_target() {
+    fn resolves_unfinished_visual_name_as_visual_target() {
         let source = r#"
-sprites {
+visuals {
 Player
 }
 "#;
         let cursor = source.find("Player").unwrap() + "Player".len();
         let target = resolve_source_target(source, cursor).unwrap();
 
-        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.kind, SourceTargetKind::Visual);
         assert_eq!(target.name, "Player");
         assert!(
             source[target.body_start.unwrap()..target.body_end.unwrap()]
@@ -1493,24 +1491,24 @@ Player
     }
 
     #[test]
-    fn resolves_unfinished_singular_sprite_name_as_sprite_target() {
+    fn resolves_unfinished_singular_visual_name_as_visual_target() {
         let source = r#"
-sprites {
+visuals {
 Player
 }
 "#;
         let cursor = source.find("Player").unwrap() + "Player".len();
         let target = resolve_source_target(source, cursor).unwrap();
 
-        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.kind, SourceTargetKind::Visual);
         assert_eq!(target.name, "Player");
         assert_eq!(target.body_start, target.body_end);
     }
 
     #[test]
-    fn resolves_unfinished_sprite_body_as_sprite_target() {
+    fn resolves_unfinished_visual_body_as_visual_target() {
         let source = r##"
-sprites {
+visuals {
 Player
 #f
 }
@@ -1518,32 +1516,32 @@ Player
         let cursor = source.find("#f").unwrap() + 1;
         let target = resolve_source_target(source, cursor).unwrap();
 
-        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.kind, SourceTargetKind::Visual);
         assert_eq!(target.name, "Player");
         let body = &source[target.body_start.unwrap()..target.body_end.unwrap()];
         assert!(body.contains("#f"));
     }
 
     #[test]
-    fn resolves_line_style_sprite_named_like_color() {
+    fn resolves_line_style_visual_named_like_color() {
         let source = r##"
-sprites {
+visuals {
 red #f00
 }
 "##;
         let cursor = source.find("#f00").unwrap();
         let target = resolve_source_target(source, cursor).unwrap();
 
-        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.kind, SourceTargetKind::Visual);
         assert_eq!(target.name, "red");
         let body = &source[target.body_start.unwrap()..target.body_end.unwrap()];
         assert_eq!(body.trim(), "#f00");
     }
 
     #[test]
-    fn resolves_split_sprite_named_like_color_after_ascii_body() {
+    fn resolves_split_visual_named_like_color_after_ascii_body() {
         let source = r##"
-sprites {
+visuals {
 Player
 #000
 0
@@ -1554,7 +1552,7 @@ red
         let cursor = source.find("#f00").unwrap();
         let target = resolve_source_target(source, cursor).unwrap();
 
-        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.kind, SourceTargetKind::Visual);
         assert_eq!(target.name, "red");
         let body = &source[target.body_start.unwrap()..target.body_end.unwrap()];
         assert!(body.contains("#f00"));
@@ -1562,9 +1560,9 @@ red
     }
 
     #[test]
-    fn color_name_row_stays_in_current_sprite_target() {
+    fn color_name_row_stays_in_current_visual_target() {
         let source = r##"
-sprites {
+visuals {
 Player
 red blue
 01
@@ -1573,7 +1571,7 @@ red blue
         let cursor = source.find("red blue").unwrap();
         let target = resolve_source_target(source, cursor).unwrap();
 
-        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.kind, SourceTargetKind::Visual);
         assert_eq!(target.name, "Player");
         let body = &source[target.body_start.unwrap()..target.body_end.unwrap()];
         assert!(body.contains("red blue"));
@@ -1581,9 +1579,9 @@ red blue
     }
 
     #[test]
-    fn animation_sprite_rows_resolve_to_sprite_target() {
+    fn animation_visual_rows_resolve_to_visual_target() {
         let source = r##"
-sprites {
+visuals {
 Player
 duration 120ms
 #000 #fff
@@ -1601,12 +1599,12 @@ duration 120ms
             let cursor = source.find(cursor_text).unwrap();
             let target = resolve_source_target(source, cursor).unwrap();
 
-            assert_eq!(target.kind, SourceTargetKind::Sprite);
+            assert_eq!(target.kind, SourceTargetKind::Visual);
             assert_eq!(target.name, "Player");
-            let sprite = target.source_sprite.unwrap();
-            assert_eq!(sprite.duration_ms, Some(120));
+            let visual = target.source_visual.unwrap();
+            assert_eq!(visual.duration_ms, Some(120));
             assert_eq!(
-                sprite.animation_frames,
+                visual.animation_frames,
                 vec![
                     vec![".0.".to_string(), "111".to_string(), ".0.".to_string()],
                     vec!["111".to_string(), ".0.".to_string(), "111".to_string()],
@@ -1616,9 +1614,9 @@ duration 120ms
     }
 
     #[test]
-    fn animation_sprite_frame_duration_resolves_to_sprite_target() {
+    fn animation_visual_frame_duration_resolves_to_visual_target() {
         let source = r##"
-sprites {
+visuals {
 Player
 frame_duration 60ms
 #000 #fff
@@ -1633,17 +1631,17 @@ frame_duration 60ms
 "##;
         let cursor = source.find("frame_duration 60ms").unwrap();
         let target = resolve_source_target(source, cursor).unwrap();
-        let sprite = target.source_sprite.unwrap();
+        let visual = target.source_visual.unwrap();
 
-        assert_eq!(sprite.frame_duration_ms, Some(60));
-        assert_eq!(sprite.prelude_rows, vec!["frame_duration 60ms".to_string()]);
+        assert_eq!(visual.frame_duration_ms, Some(60));
+        assert_eq!(visual.prelude_rows, vec!["frame_duration 60ms".to_string()]);
     }
 
     #[test]
     fn explicit_shape_block_resolves_animation_rows_without_shape_ref() {
         let source = r##"
-sprites {
-sprite {
+visuals {
+visual {
 selector = Background
 colors = #90ee90 #008000
 duration = 500ms
@@ -1665,23 +1663,23 @@ shape = {
 "##;
         let cursor = source.find("shape =").unwrap();
         let target = resolve_source_target(source, cursor).unwrap();
-        let source_sprite = target
-            .source_sprite
+        let source_visual = target
+            .source_visual
             .as_ref()
-            .expect("source sprite contract");
+            .expect("source visual contract");
 
-        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.kind, SourceTargetKind::Visual);
         assert_eq!(target.name, "Background");
-        assert_eq!(source_sprite.shape_ref, None);
+        assert_eq!(source_visual.shape_ref, None);
         assert!(
-            !source_sprite
+            !source_visual
                 .prelude_rows
                 .iter()
                 .any(|row| row.starts_with("shape"))
         );
-        assert_eq!(source_sprite.duration_ms, Some(500));
+        assert_eq!(source_visual.duration_ms, Some(500));
         assert_eq!(
-            source_sprite.animation_frames,
+            source_visual.animation_frames,
             vec![
                 vec![
                     "11111".to_string(),
@@ -1702,9 +1700,9 @@ shape = {
     }
 
     #[test]
-    fn user_named_color_row_stays_in_current_sprite_target() {
+    fn user_named_color_row_stays_in_current_visual_target() {
         let source = r##"
-sprites {
+visuals {
 palette {
 accent = #e94f64
 }
@@ -1718,7 +1716,7 @@ Box
         let cursor = source.find("accent\n0").unwrap();
         let target = resolve_source_target(source, cursor).unwrap();
 
-        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.kind, SourceTargetKind::Visual);
         assert_eq!(target.name, "Player");
         let body = &source[target.body_start.unwrap()..target.body_end.unwrap()];
         assert!(body.contains("accent"));
@@ -1727,9 +1725,9 @@ Box
     }
 
     #[test]
-    fn tagged_sprite_color_name_row_stays_in_current_sprite_target() {
+    fn tagged_visual_color_name_row_stays_in_current_visual_target() {
         let source = r##"
-sprites {
+visuals {
 palette {
 GoalCount = #acacac
 }
@@ -1742,15 +1740,15 @@ GoalCount
         let cursor = source.find("GoalCount\n....................").unwrap();
         let target = resolve_source_target(source, cursor).unwrap();
 
-        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.kind, SourceTargetKind::Visual);
         assert_eq!(target.name, "GoalCount:5");
-        let source_sprite = target
-            .source_sprite
+        let source_visual = target
+            .source_visual
             .as_ref()
-            .expect("source sprite contract");
-        assert_eq!(source_sprite.palette_tokens, vec!["GoalCount".to_string()]);
+            .expect("source visual contract");
+        assert_eq!(source_visual.palette_tokens, vec!["GoalCount".to_string()]);
         assert_eq!(
-            source_sprite.pixel_rows,
+            source_visual.pixel_rows,
             vec![
                 "....................".to_string(),
                 "..........00........".to_string()
@@ -1762,7 +1760,7 @@ GoalCount
     }
 
     #[test]
-    fn sprite_source_contract_resolves_palette_from_parser_visuals() {
+    fn visual_source_contract_resolves_palette_from_parser_visuals() {
         let source = r##"
 puzzle main {
 slots {
@@ -1782,11 +1780,11 @@ level "one"
 P
 }
 
-sprites {
+visuals {
 palette {
 accent = #e94f64
 }
-sprite {
+visual {
 selector = Player
 colors = accent
 shape = {
@@ -1797,16 +1795,16 @@ shape = {
 "##;
         let cursor = source.find("colors = accent").unwrap();
         let target = resolve_source_target(source, cursor).unwrap();
-        let source_sprite = target
-            .source_sprite
+        let source_visual = target
+            .source_visual
             .as_ref()
-            .expect("source sprite contract");
+            .expect("source visual contract");
 
         assert_eq!(target.name, "Player");
-        assert_eq!(source_sprite.palette_tokens, vec!["accent".to_string()]);
+        assert_eq!(source_visual.palette_tokens, vec!["accent".to_string()]);
         assert_eq!(
-            source_sprite.resolved_palette,
-            vec![SourceSpritePaletteEntry {
+            source_visual.resolved_palette,
+            vec![SourceVisualPaletteEntry {
                 source: "accent".to_string(),
                 color: "#e94f64".to_string(),
                 linked: true,
@@ -1815,10 +1813,10 @@ shape = {
     }
 
     #[test]
-    fn sprite_edit_contract_distinguishes_transparent_color_from_empty_cell() {
+    fn visual_edit_contract_distinguishes_transparent_color_from_empty_cell() {
         let source = r#"
 puzzle world { slots { actor = Player } }
-sprites art of world {
+visuals art of world {
 Player {
 colors = transparent red
 shape = {
@@ -1828,14 +1826,14 @@ shape = {
 }
 "#;
         let target = resolve_source_target(source, source.find("0.1").unwrap()).unwrap();
-        let sprite = target.source_sprite.unwrap();
-        assert_eq!(sprite.status, SourceSpriteStatus::Complete);
-        assert_eq!(sprite.frames, vec![vec![vec![Some(0), None, Some(1)]]]);
-        assert_eq!(sprite.resolved_palette[0].color, "transparent");
+        let visual = target.source_visual.unwrap();
+        assert_eq!(visual.status, SourceVisualStatus::Complete);
+        assert_eq!(visual.frames, vec![vec![vec![Some(0), None, Some(1)]]]);
+        assert_eq!(visual.resolved_palette[0].color, "transparent");
     }
 
     #[test]
-    fn sprite_source_contract_preserves_selector_and_duration_rows() {
+    fn visual_source_contract_preserves_selector_and_duration_rows() {
         let source = r##"
 puzzle main {
 slots {
@@ -1855,7 +1853,7 @@ level "one"
 P
 }
 
-sprites {
+visuals {
 palette {
 accent = #e94f64
 }
@@ -1869,23 +1867,23 @@ colors accent
 "##;
         let cursor = source.find("duration 120ms").unwrap();
         let target = resolve_source_target(source, cursor).unwrap();
-        let source_sprite = target
-            .source_sprite
+        let source_visual = target
+            .source_visual
             .as_ref()
-            .expect("source sprite contract");
+            .expect("source visual contract");
 
         assert_eq!(
-            source_sprite.prelude_rows,
+            source_visual.prelude_rows,
             vec![
                 "selector = Player".to_string(),
                 "duration 120ms".to_string()
             ]
         );
-        assert_eq!(source_sprite.duration_ms, Some(120));
+        assert_eq!(source_visual.duration_ms, Some(120));
     }
 
     #[test]
-    fn sprite_source_contract_exposes_animation_frames() {
+    fn visual_source_contract_exposes_animation_frames() {
         let source = r##"
 puzzle main {
 slots {
@@ -1905,7 +1903,7 @@ level "one"
 P
 }
 
-sprites {
+visuals {
 Player {
 duration 120ms
 #e94f64
@@ -1919,18 +1917,18 @@ duration 120ms
 "##;
         let cursor = source.find(">").unwrap();
         let target = resolve_source_target(source, cursor).unwrap();
-        let source_sprite = target
-            .source_sprite
+        let source_visual = target
+            .source_visual
             .as_ref()
-            .expect("source sprite contract");
+            .expect("source visual contract");
 
-        assert_eq!(source_sprite.duration_ms, Some(120));
+        assert_eq!(source_visual.duration_ms, Some(120));
         assert_eq!(
-            source_sprite.pixel_rows,
+            source_visual.pixel_rows,
             vec!["0.".to_string(), "..".to_string()]
         );
         assert_eq!(
-            source_sprite.animation_frames,
+            source_visual.animation_frames,
             vec![
                 vec!["0.".to_string(), "..".to_string()],
                 vec!["..".to_string(), ".0".to_string()],
@@ -1939,9 +1937,9 @@ duration 120ms
     }
 
     #[test]
-    fn consecutive_tagged_sprite_color_name_rows_do_not_become_sprite_headers() {
+    fn consecutive_tagged_visual_color_name_rows_do_not_become_visual_headers() {
         let source = r##"
-sprites {
+visuals {
 palette {
 GoalCount = #acacac
 }
@@ -1961,15 +1959,15 @@ GoalCount
             + "GoalCount:2\n".len();
         let target = resolve_source_target(source, cursor).unwrap();
 
-        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.kind, SourceTargetKind::Visual);
         assert_eq!(target.name, "GoalCount:2");
-        let source_sprite = target
-            .source_sprite
+        let source_visual = target
+            .source_visual
             .as_ref()
-            .expect("source sprite contract");
-        assert_eq!(source_sprite.palette_tokens, vec!["GoalCount".to_string()]);
+            .expect("source visual contract");
+        assert_eq!(source_visual.palette_tokens, vec!["GoalCount".to_string()]);
         assert_eq!(
-            source_sprite.pixel_rows,
+            source_visual.pixel_rows,
             vec![
                 "....................".to_string(),
                 "........00..00......".to_string()
@@ -1978,9 +1976,9 @@ GoalCount
     }
 
     #[test]
-    fn line_style_sprite_accepts_user_named_color() {
+    fn line_style_visual_accepts_user_named_color() {
         let source = r##"
-sprites {
+visuals {
 palette {
 accent = #e94f64
 }
@@ -1990,16 +1988,16 @@ Player accent
         let cursor = source.rfind("accent").unwrap();
         let target = resolve_source_target(source, cursor).unwrap();
 
-        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.kind, SourceTargetKind::Visual);
         assert_eq!(target.name, "Player");
         let body = &source[target.body_start.unwrap()..target.body_end.unwrap()];
         assert_eq!(body.trim(), "accent");
     }
 
     #[test]
-    fn unfinished_unbraced_sprite_stops_before_next_entry_header() {
+    fn unfinished_unbraced_visual_stops_before_next_entry_header() {
         let source = r#"
-sprites {
+visuals {
 Player
 Box
 }
@@ -2007,14 +2005,14 @@ Box
         let cursor = source.find("Box").unwrap();
         let target = resolve_source_target(source, cursor).unwrap();
 
-        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.kind, SourceTargetKind::Visual);
         assert_eq!(target.name, "Box");
     }
 
     #[test]
-    fn resolves_unbraced_at_sprite_before_next_at_sprite() {
+    fn resolves_unbraced_at_visual_before_next_at_visual() {
         let source = r##"
-sprites {
+visuals {
 @Floor
 #cfcfcf #c5c5c5
 00000
@@ -2028,7 +2026,7 @@ sprites {
         let cursor = source.find("00100").unwrap();
         let target = resolve_source_target(source, cursor).unwrap();
 
-        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.kind, SourceTargetKind::Visual);
         assert_eq!(target.name, "@Floor");
         let body = &source[target.body_start.unwrap()..target.body_end.unwrap()];
         assert!(body.contains("#cfcfcf"));
@@ -2036,30 +2034,30 @@ sprites {
     }
 
     #[test]
-    fn resolves_unbraced_sprite_before_line_style_image_sprite() {
+    fn resolves_unbraced_visual_before_line_style_image_visual() {
         let source = r##"
-sprites {
+visuals {
 Player
 #000 #fff
 .0.
 111
-Box sprites/box.png
+Box visuals/box.png
 }
 "##;
         let cursor = source.find(".0.").unwrap();
         let target = resolve_source_target(source, cursor).unwrap();
 
-        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.kind, SourceTargetKind::Visual);
         assert_eq!(target.name, "Player");
         let body = &source[target.body_start.unwrap()..target.body_end.unwrap()];
         assert!(body.contains("111"));
-        assert!(!body.contains("Box sprites/box.png"));
+        assert!(!body.contains("Box visuals/box.png"));
     }
 
     #[test]
-    fn resolves_unbraced_schema_sprite_with_color_alias_row() {
+    fn resolves_unbraced_schema_visual_with_color_alias_row() {
         let source = r##"
-sprites {
+visuals {
 Gate:num
 Gate_color_1 Gate_color_2
 .......
@@ -2074,7 +2072,7 @@ Gate_color_1 Gate_color_2
         let cursor = source.find(".00000.").unwrap();
         let target = resolve_source_target(source, cursor).unwrap();
 
-        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.kind, SourceTargetKind::Visual);
         assert_eq!(target.name, "Gate:num");
         let body = &source[target.body_start.unwrap()..target.body_end.unwrap()];
         assert!(body.contains("Gate_color_1 Gate_color_2"));
@@ -2082,9 +2080,9 @@ Gate_color_1 Gate_color_2
     }
 
     #[test]
-    fn resolves_unbraced_variant_sprite_with_color_alias_row() {
+    fn resolves_unbraced_variant_visual_with_color_alias_row() {
         let source = r##"
-sprites {
+visuals {
 Gate:1
 Gate_color_1 Gate_color_2
 .......
@@ -2099,7 +2097,7 @@ Gate_color_1 Gate_color_2
         let cursor = source.find(".00000.").unwrap();
         let target = resolve_source_target(source, cursor).unwrap();
 
-        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.kind, SourceTargetKind::Visual);
         assert_eq!(target.name, "Gate:1");
         let body = &source[target.body_start.unwrap()..target.body_end.unwrap()];
         assert!(body.contains("Gate_color_1 Gate_color_2"));
@@ -2107,9 +2105,9 @@ Gate_color_1 Gate_color_2
     }
 
     #[test]
-    fn resolves_unbraced_tagged_sprite_after_tagged_sprite() {
+    fn resolves_unbraced_tagged_visual_after_tagged_visual() {
         let source = r##"
-sprites {
+visuals {
 Box:base
 #aaa
 0
@@ -2121,7 +2119,7 @@ Box:movable
         let cursor = source.rfind("#bbb").unwrap();
         let target = resolve_source_target(source, cursor).unwrap();
 
-        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.kind, SourceTargetKind::Visual);
         assert_eq!(target.name, "Box:movable");
         let body = &source[target.body_start.unwrap()..target.body_end.unwrap()];
         assert!(body.contains("#bbb"));
@@ -2129,32 +2127,32 @@ Box:movable
     }
 
     #[test]
-    fn resolves_unbraced_sprite_before_split_line_image_sprite() {
+    fn resolves_unbraced_visual_before_split_line_image_visual() {
         let source = r##"
-sprites {
+visuals {
 Player
 #000 #fff
 .0.
 111
 Box
-sprites/box.png
+visuals/box.png
 }
 "##;
         let cursor = source.find(".0.").unwrap();
         let target = resolve_source_target(source, cursor).unwrap();
 
-        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.kind, SourceTargetKind::Visual);
         assert_eq!(target.name, "Player");
         let body = &source[target.body_start.unwrap()..target.body_end.unwrap()];
         assert!(body.contains("111"));
         assert!(!body.contains("Box"));
-        assert!(!body.contains("sprites/box.png"));
+        assert!(!body.contains("visuals/box.png"));
     }
 
     #[test]
-    fn resolves_unbraced_sprite_with_colors_keyword_palette() {
+    fn resolves_unbraced_visual_with_colors_keyword_palette() {
         let source = r##"
-sprites {
+visuals {
 Player
 colors #000 #fff
 .0.
@@ -2164,7 +2162,7 @@ colors #000 #fff
         let cursor = source.find(".0.").unwrap();
         let target = resolve_source_target(source, cursor).unwrap();
 
-        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.kind, SourceTargetKind::Visual);
         assert_eq!(target.name, "Player");
         let body = &source[target.body_start.unwrap()..target.body_end.unwrap()];
         assert!(body.contains("colors #000 #fff"));
@@ -2172,9 +2170,9 @@ colors #000 #fff
     }
 
     #[test]
-    fn shape_reference_line_resolves_enclosing_unbraced_sprite() {
+    fn shape_reference_line_resolves_enclosing_unbraced_visual() {
         let source = r##"
-sprites {
+visuals {
 shapes {
 box_shape
 010
@@ -2192,7 +2190,7 @@ Next
         let cursor = source.find("shape box_shape").unwrap();
         let target = resolve_source_target(source, cursor).unwrap();
 
-        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.kind, SourceTargetKind::Visual);
         assert_eq!(target.name, "Box");
         let body = &source[target.body_start.unwrap()..target.body_end.unwrap()];
         assert!(body.contains("shape box_shape"));
@@ -2202,7 +2200,7 @@ Next
     #[test]
     fn bare_shape_reference_uses_shared_owner_scope_resolution() {
         let source = r##"
-sprites {
+visuals {
 Box
 #111 #eee
 box_shape
@@ -2217,23 +2215,23 @@ box_shape
 "##;
         let cursor = source.find("box_shape\n\nshapes").unwrap();
         let target = resolve_source_target(source, cursor).unwrap();
-        let source_sprite = target
-            .source_sprite
+        let source_visual = target
+            .source_visual
             .as_ref()
-            .expect("source sprite contract");
+            .expect("source visual contract");
 
-        assert_eq!(source_sprite.shape_ref.as_deref(), Some("box_shape"));
-        assert!(source_sprite.pixel_rows.is_empty());
+        assert_eq!(source_visual.shape_ref.as_deref(), Some("box_shape"));
+        assert!(source_visual.pixel_rows.is_empty());
         assert_eq!(
-            source_sprite.resolved_shape_rows,
+            source_visual.resolved_shape_rows,
             vec!["010".to_string(), "111".to_string(), "010".to_string()]
         );
     }
 
     #[test]
-    fn source_sprite_contract_preserves_hyphenated_shape_refs() {
+    fn source_visual_contract_preserves_hyphenated_shape_refs() {
         let source = r##"
-sprites {
+visuals {
 shapes {
 box-shape
 010
@@ -2248,27 +2246,27 @@ shape box-shape
         let cursor = source.find("shape box-shape").unwrap();
         let target = resolve_source_target(source, cursor).unwrap();
 
-        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.kind, SourceTargetKind::Visual);
         assert_eq!(target.name, "Box");
-        let source_sprite = target
-            .source_sprite
+        let source_visual = target
+            .source_visual
             .as_ref()
-            .expect("source sprite contract");
-        assert_eq!(source_sprite.shape_ref.as_deref(), Some("box-shape"));
+            .expect("source visual contract");
+        assert_eq!(source_visual.shape_ref.as_deref(), Some("box-shape"));
         assert!(
-            source_sprite
+            source_visual
                 .shape_assets
                 .iter()
                 .any(|asset| asset.name() == "box-shape")
         );
         assert_eq!(
-            source_sprite.resolved_shape_rows,
+            source_visual.resolved_shape_rows,
             vec!["010".to_string(), "111".to_string(), "010".to_string()]
         );
     }
 
     #[test]
-    fn source_sprite_contract_preserves_tagged_shape_table_structure() {
+    fn source_visual_contract_preserves_tagged_shape_table_structure() {
         let source = r##"
 puzzle board {
 tags {
@@ -2277,7 +2275,7 @@ kind = A B
 slots {
 actor = Box:kind
 }
-sprites {
+visuals {
 shapes {
 foo:kind {
 A {
@@ -2302,19 +2300,19 @@ shape foo:kind
         let cursor = source.find("shape foo:kind").unwrap();
         let target = resolve_source_target(source, cursor).unwrap();
 
-        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.kind, SourceTargetKind::Visual);
         assert_eq!(target.name, "Box:kind");
-        let source_sprite = target
-            .source_sprite
+        let source_visual = target
+            .source_visual
             .as_ref()
-            .expect("source sprite contract");
-        assert_eq!(source_sprite.shape_ref.as_deref(), Some("foo:kind"));
-        let table = source_sprite
+            .expect("source visual contract");
+        assert_eq!(source_visual.shape_ref.as_deref(), Some("foo:kind"));
+        let table = source_visual
             .shape_assets
             .iter()
             .find(|asset| asset.name() == "foo")
             .expect("shape table asset");
-        let SourceSpriteShapeAsset::Table { axis, variants, .. } = table else {
+        let SourceVisualShapeAsset::Table { axis, variants, .. } = table else {
             panic!("tagged shape must remain a table");
         };
         assert_eq!(axis, "kind");
@@ -2322,13 +2320,13 @@ shape foo:kind
             variants.keys().map(String::as_str).collect::<Vec<_>>(),
             vec!["A", "B"]
         );
-        assert!(source_sprite.resolved_shape_rows.is_empty());
+        assert!(source_visual.resolved_shape_rows.is_empty());
     }
 
     #[test]
-    fn rotated_unbraced_sprite_prelude_stays_in_current_sprite_target() {
+    fn rotated_unbraced_visual_prelude_stays_in_current_visual_target() {
         let source = r##"
-sprites {
+visuals {
 @LockedFrame:directions
 rotate directions from up
 #000000
@@ -2339,19 +2337,19 @@ rotate directions from up
         let cursor = source.find(".000..000").unwrap();
         let target = resolve_source_target(source, cursor).unwrap();
 
-        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.kind, SourceTargetKind::Visual);
         assert_eq!(target.name, "@LockedFrame:directions");
-        let source_sprite = target
-            .source_sprite
+        let source_visual = target
+            .source_visual
             .as_ref()
-            .expect("source sprite contract");
+            .expect("source visual contract");
         assert_eq!(
-            source_sprite.prelude_rows,
+            source_visual.prelude_rows,
             vec!["rotate directions from up".to_string()]
         );
-        assert_eq!(source_sprite.palette_tokens, vec!["#000000".to_string()]);
+        assert_eq!(source_visual.palette_tokens, vec!["#000000".to_string()]);
         assert_eq!(
-            source_sprite.pixel_rows,
+            source_visual.pixel_rows,
             vec![
                 "....................".to_string(),
                 ".000..000..000..000.".to_string()
@@ -2363,9 +2361,9 @@ rotate directions from up
     }
 
     #[test]
-    fn shape_table_rows_do_not_resolve_as_sprite_targets() {
+    fn shape_table_rows_do_not_resolve_as_visual_targets() {
         let source = r##"
-sprites {
+visuals {
 shapes {
 mark:kind {
 A {
@@ -2385,9 +2383,9 @@ Box
     }
 
     #[test]
-    fn unbraced_sprite_target_end_stops_before_next_colors_keyword_sprite() {
+    fn unbraced_visual_target_end_stops_before_next_colors_keyword_visual() {
         let source = r##"
-sprites {
+visuals {
 Player
 #000 #fff
 .0.
@@ -2400,7 +2398,7 @@ colors #222
         let cursor = source.find(".0.").unwrap();
         let target = resolve_source_target(source, cursor).unwrap();
 
-        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.kind, SourceTargetKind::Visual);
         assert_eq!(target.name, "Player");
         let target_source = &source[target.start..target.end];
         assert!(target_source.contains("111"));
@@ -2409,12 +2407,12 @@ colors #222
     }
 
     #[test]
-    fn resolves_stacked_sprite_entry_as_sprite3d() {
+    fn resolves_stacked_visual_entry_as_visual3d() {
         let source = r##"
 puzzle push3d {
 dimension = 3
 }
-sprites basic of push3d {
+visuals basic of push3d {
 Floor {
 colors = #90ee90 #008000
 shape = {
@@ -2440,30 +2438,30 @@ shape = {
             resolve_source_target_for_profile(source, cursor, PuzzleSourceProfile::Puzzle3d)
                 .unwrap();
 
-        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.kind, SourceTargetKind::Visual);
         assert_eq!(target.dimension, Some(crate::ModelDimension::Three));
         assert_eq!(target.name, "Floor");
         let body = &source[target.body_start.unwrap()..target.body_end.unwrap()];
         assert!(body.contains("#90ee90"));
         assert!(body.contains("11111"));
         assert!(!body.contains("Goal"));
-        let sprite3d = target.source_sprite.as_ref().unwrap();
-        assert_eq!(sprite3d.status, SourceSpriteStatus::Complete);
-        assert_eq!(sprite3d.size, Some(5));
-        assert_eq!(sprite3d.palette, vec!["#90ee90", "#008000"]);
-        assert_eq!(sprite3d.cells.len(), 125);
-        assert_eq!(sprite3d.cells[(4 * 5 + 1) * 5 + 2], Some(0));
-        assert_eq!(sprite3d.cells[(3 * 5) * 5], Some(1));
-        assert_eq!(sprite3d.cells[(0 * 5 + 1) * 5 + 2], None);
+        let visual3d = target.source_visual.as_ref().unwrap();
+        assert_eq!(visual3d.status, SourceVisualStatus::Complete);
+        assert_eq!(visual3d.size, Some(5));
+        assert_eq!(visual3d.palette, vec!["#90ee90", "#008000"]);
+        assert_eq!(visual3d.cells.len(), 125);
+        assert_eq!(visual3d.cells[(4 * 5 + 1) * 5 + 2], Some(0));
+        assert_eq!(visual3d.cells[(3 * 5) * 5], Some(1));
+        assert_eq!(visual3d.cells[(0 * 5 + 1) * 5 + 2], None);
     }
 
     #[test]
-    fn sprite3d_contract_preserves_named_color_shape_and_all_animation_frames() {
+    fn visual3d_contract_preserves_named_color_shape_and_all_animation_frames() {
         let source = r#"
 puzzle board {
 dimension = 3
 }
-sprites art of board {
+visuals art of board {
 palette {
 accent = #123456
 }
@@ -2486,31 +2484,31 @@ shape = pulse
         let target =
             resolve_source_target_for_profile(source, cursor, PuzzleSourceProfile::Puzzle3d)
                 .unwrap();
-        let sprite = target.source_sprite.unwrap();
+        let visual = target.source_visual.unwrap();
 
-        assert_eq!(sprite.status, SourceSpriteStatus::Complete);
-        assert_eq!(sprite.shape_ref.as_deref(), Some("pulse"));
-        assert_eq!(sprite.duration_ms, Some(200));
-        assert_eq!(sprite.frame_duration_ms, Some(100));
-        assert_eq!(sprite.frames.len(), 2);
-        assert_eq!(sprite.frames[0], vec![vec![Some(0)]]);
-        assert_eq!(sprite.frames[1], vec![vec![None]]);
+        assert_eq!(visual.status, SourceVisualStatus::Complete);
+        assert_eq!(visual.shape_ref.as_deref(), Some("pulse"));
+        assert_eq!(visual.duration_ms, Some(200));
+        assert_eq!(visual.frame_duration_ms, Some(100));
+        assert_eq!(visual.frames.len(), 2);
+        assert_eq!(visual.frames[0], vec![vec![Some(0)]]);
+        assert_eq!(visual.frames[1], vec![vec![None]]);
         assert_eq!(
-            sprite.resolved_palette,
-            vec![SourceSpritePaletteEntry {
+            visual.resolved_palette,
+            vec![SourceVisualPaletteEntry {
                 source: "accent".to_string(),
                 color: "#123456".to_string(),
                 linked: true,
             }]
         );
         assert!(
-            sprite
+            visual
                 .color_assets
                 .iter()
                 .any(|asset| asset.name == "accent")
         );
         assert!(
-            sprite
+            visual
                 .shape_assets
                 .iter()
                 .any(|asset| asset.name() == "pulse")
@@ -2518,11 +2516,11 @@ shape = pulse
     }
 
     #[test]
-    fn resolves_second_stacked_sprite_entry_as_sprite3d() {
+    fn resolves_second_stacked_visual_entry_as_visual3d() {
         let source = r##"
 puzzle board {
 dimension = 3
-sprites basic {
+visuals basic {
 Floor {
 colors = #90ee90
 shape = {
@@ -2544,17 +2542,17 @@ shape = {
             resolve_source_target_for_profile(source, cursor, PuzzleSourceProfile::Puzzle3d)
                 .unwrap();
 
-        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.kind, SourceTargetKind::Visual);
         assert_eq!(target.dimension, Some(crate::ModelDimension::Three));
         assert_eq!(target.name, "Goal");
     }
 
     #[test]
-    fn resolves_unfinished_sprite3d_name_as_sprite3d_target() {
+    fn resolves_unfinished_visual3d_name_as_visual3d_target() {
         let source = r#"
 puzzle board {
 dimension = 3
-sprites basic {
+visuals basic {
 Floor {
 }
 }
@@ -2565,7 +2563,7 @@ Floor {
             resolve_source_target_for_profile(source, cursor, PuzzleSourceProfile::Puzzle3d)
                 .unwrap();
 
-        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.kind, SourceTargetKind::Visual);
         assert_eq!(target.dimension, Some(crate::ModelDimension::Three));
         assert_eq!(target.name, "Floor");
         assert!(
@@ -2574,17 +2572,17 @@ Floor {
                 .is_empty()
         );
         assert_eq!(
-            target.source_sprite.as_ref().unwrap().status,
-            SourceSpriteStatus::Incomplete
+            target.source_visual.as_ref().unwrap().status,
+            SourceVisualStatus::Incomplete
         );
     }
 
     #[test]
-    fn unfinished_sprite3d_stops_before_next_entry_header() {
+    fn unfinished_visual3d_stops_before_next_entry_header() {
         let source = r#"
 puzzle board {
 dimension = 3
-sprites basic {
+visuals basic {
 Floor {
 }
 Goal {
@@ -2597,7 +2595,7 @@ Goal {
             resolve_source_target_for_profile(source, cursor, PuzzleSourceProfile::Puzzle3d)
                 .unwrap();
 
-        assert_eq!(target.kind, SourceTargetKind::Sprite);
+        assert_eq!(target.kind, SourceTargetKind::Visual);
         assert_eq!(target.dimension, Some(crate::ModelDimension::Three));
         assert_eq!(target.name, "Goal");
     }

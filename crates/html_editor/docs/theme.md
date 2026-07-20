@@ -13,4 +13,4 @@ text_color #1d2522
 
 Themes set defaults for exported play surfaces.
 
-Use sprites for object drawings and themes for surrounding presentation.
+Use visuals for object drawings and themes for surrounding presentation.

@@ -4,7 +4,7 @@ use puzzle_core::{LayerId, ObjectId};
 
 use crate::{Catalog, DiagnosticReport, VisualOrderDef, VisualOrderPriorityDef, parse_error};
 
-pub(crate) fn lower_sprite_order(
+pub(crate) fn lower_visual_order(
     node: Option<&crate::authoring_grammar::AuthoringNode>,
     catalog: &Catalog,
     source_line: &str,
@@ -36,20 +36,20 @@ pub(crate) fn lower_sprite_order(
         if objects.is_empty() {
             return Err(parse_error(
                 source_line,
-                "sprite order priority matched no objects",
+                "visual order priority matched no objects",
             ));
         }
         if !merge && !objects_share_slot(&objects, catalog) {
             return Err(parse_error(
                 source_line,
-                "plain sprite order priority may contain only objects from one slot; use + or merge { ... } for cross-slot composition",
+                "plain visual order priority may contain only objects from one slot; use + or merge { ... } for cross-slot composition",
             ));
         }
         for object in &objects {
             if !covered.insert(*object) {
                 return Err(parse_error(
                     source_line,
-                    "sprite order object is declared in more than one priority",
+                    "visual order object is declared in more than one priority",
                 ));
             }
         }
@@ -77,7 +77,7 @@ pub(crate) fn lower_sprite_order(
         let missing = object_names(&missing, catalog, source_line)?.join(" ");
         return Err(parse_error(
             source_line,
-            &format!("explicit sprite order must cover every object; missing: {missing}"),
+            &format!("explicit visual order must cover every object; missing: {missing}"),
         ));
     }
 
@@ -101,7 +101,7 @@ fn order_tree(
         if definition.key != "priority" || definition.op != Some(AuthoringDefinitionOp::Equals) {
             return Err(parse_error(
                 &definition.source_line,
-                "sprite order property must be: priority = <direction...>",
+                "visual order property must be: priority = <direction...>",
             ));
         }
         if direction_priority
@@ -110,7 +110,7 @@ fn order_tree(
         {
             return Err(parse_error(
                 &definition.source_line,
-                "sprite order may declare priority only once",
+                "visual order may declare priority only once",
             ));
         }
     }
@@ -129,10 +129,10 @@ fn order_tree(
         })
         .collect::<Result<Vec<_>, DiagnosticReport>>()?;
     for merge in &node.children {
-        if merge.kind != AuthoringKind::SpriteMergeConfig || merge.content_rows.is_empty() {
+        if merge.kind != AuthoringKind::VisualMergeConfig || merge.content_rows.is_empty() {
             return Err(parse_error(
                 &merge.source_line,
-                "sprite merge must not be empty",
+                "visual merge must not be empty",
             ));
         }
         let selectors = merge
@@ -162,7 +162,7 @@ fn plus_operands(line: &str) -> Result<Vec<String>, DiagnosticReport> {
                 [value] => Ok((*value).to_string()),
                 _ => Err(parse_error(
                     line,
-                    "sprite merge + requires exactly one selector on each side",
+                    "visual merge + requires exactly one selector on each side",
                 )),
             }
         })
@@ -178,7 +178,7 @@ fn generated_order_from_slots(
         let layer = catalog.object_layers.get(&object.id).ok_or_else(|| {
             parse_error(
                 source_line,
-                "cannot generate sprite order for object without a slot",
+                "cannot generate visual order for object without a slot",
             )
         })?;
         slots.entry(layer.0).or_default().push(object.id);
@@ -227,7 +227,7 @@ fn validate_direction_priority(
     if directions.len() != expected {
         return Err(parse_error(
             source_line,
-            &format!("sprite order priority requires exactly {expected} directions for this model"),
+            &format!("visual order priority requires exactly {expected} directions for this model"),
         ));
     }
     let mut axes = HashSet::new();
@@ -239,14 +239,14 @@ fn validate_direction_priority(
             _ => {
                 return Err(parse_error(
                     source_line,
-                    &format!("unknown sprite order direction: {direction}"),
+                    &format!("unknown visual order direction: {direction}"),
                 ));
             }
         };
         if !axes.insert(axis) {
             return Err(parse_error(
                 source_line,
-                "sprite order priority must name each coordinate axis exactly once",
+                "visual order priority must name each coordinate axis exactly once",
             ));
         }
     }
@@ -266,7 +266,7 @@ fn resolve_order_selector(
     if match_count > 1 {
         return Err(parse_error(
             source_line,
-            &format!("ambiguous sprite order reference: {selector}"),
+            &format!("ambiguous visual order reference: {selector}"),
         ));
     }
     if let Some(layer) = slot {
@@ -287,7 +287,7 @@ fn resolve_order_selector(
     }
     Err(parse_error(
         source_line,
-        &format!("unknown sprite order slot, object, or group: {selector}"),
+        &format!("unknown visual order slot, object, or group: {selector}"),
     ))
 }
 
@@ -314,7 +314,7 @@ fn object_names(
             catalog.object_labels.get(object).cloned().ok_or_else(|| {
                 parse_error(
                     source_line,
-                    "sprite order object is missing its canonical name",
+                    "visual order object is missing its canonical name",
                 )
             })
         })

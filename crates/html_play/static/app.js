@@ -265,12 +265,12 @@ const activeSolveRequests = new Map();
 let wasmSolverServicePromise = null;
 /* puzzle-host:optional:solver:end */
 const standardChoiceCursors = new Map();
-const sceneMenuCursors = new Map();
 let screenScaleSyncFrame = 0;
 let screenScaleSyncPasses = 0;
 let pendingModelInput = null;
 const activeWaitTimers = new Set();
 const pendingPresentationEvents = [];
+let presentationAnimationBatchId = 0;
 let dispatchingPresentationEvents = false;
 let pendingSessionResume = false;
 let resumingSession = false;
@@ -371,13 +371,20 @@ async function loadState() {
   render(await requestJson("/api/state"));
 }
 
-async function post(url) {
+async function post(url, options = {}) {
   try {
-    const nextState = await requestJson(url, { method: "POST" });
+    const nextState = await requestJson(url, { ...options, method: "POST" });
     render(nextState);
   } catch (error) {
     showError(error);
   }
+}
+
+function postSessionAction(action) {
+  return post("/api/action", {
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(action),
+  });
 }
 
 function render(state) {
@@ -398,7 +405,6 @@ function render(state) {
     state.presentationEvents = [];
   }
   renderSceneStack(state);
-  scheduleSelectedLevelMenuScroll();
   scheduleScreenScaleSync(3);
   notifyPreviewState(state);
   applyPresentationEvents(presentationEvents);
@@ -717,7 +723,6 @@ function notifySceneEditorPreview(requestId = sceneEditorPreview?.requestId || "
       __sceneDef: sceneDef,
       __sceneState: sceneEditorPreview.state || currentState?.sceneState || {},
       __standardChoiceCounter: { value: 0 },
-      __sceneMenuCounter: { value: 0 },
     }),
     error: sceneDef ? null : `Unknown scene: ${sceneName}`,
   }, "*");
@@ -766,27 +771,21 @@ function renderSceneEditorLayer(sceneDef, state) {
   screenView.replaceChildren();
   const layer = state.sceneLayers[0];
   const components = sceneDef?.components || [];
-  const profile = sceneInteractionProfile(sceneDef, { layer, state });
-  const isMenuScene = sceneChromeProfile(profile) === "menu";
   const scope = {
     __sceneLayer: layer,
     __sceneDef: sceneDef,
     __sceneState: layer.sceneState || layer.state || {},
-    __sceneMenuLike: isMenuScene,
     __standardChoiceCounter: { value: 0 },
-    __sceneMenuCounter: { value: 0 },
     __componentPath: ["components"],
   };
   const layerEl = document.createElement("div");
   layerEl.className = "scene-layer is-focused";
-  layerEl.classList.toggle("is-menu-scene", isMenuScene);
   layerEl.classList.toggle("has-ratio-content", components.some((component) => componentContainsSizingKind(component, "ratio")));
   layerEl.style.zIndex = "10";
   applySceneLayout(layerEl, mergedScenePreviewLayout(sceneDef, sceneEditorPreview?.layout), { root: true });
   renderSurfaceComponents(components, layerEl, scope);
   markSingleFrameComponentLayer(layerEl);
   screenView.append(layerEl);
-  syncSceneMenuSelection(layerEl);
   syncCleanControlGroupWidths(screenView);
   fitPuzzleFrameComponents(screenView);
 }
@@ -880,11 +879,6 @@ function sceneEditorComponentMetadata(components, scope = {}) {
         ...scope,
         __componentPath: [...path, "elseChildren"],
       }));
-    } else if (component.kind === "for") {
-      result.push(...sceneEditorComponentMetadata(component.children || [], {
-        ...scope,
-        __componentPath: [...path, "children"],
-      }));
     }
   }
   return result;
@@ -925,21 +919,16 @@ function renderSceneStack(state) {
   for (const [index, layer] of layers.entries()) {
     const sceneDef = sceneDefByName(layer.name);
     const components = sceneDef?.components || [];
-    const profile = sceneInteractionProfile(sceneDef, { layer, state });
-    const isMenuScene = sceneChromeProfile(profile) === "menu";
     const scope = {
       __sceneLayer: layer,
       __sceneDef: sceneDef,
       __sceneState: layer.sceneState || layer.state || {},
-      __sceneMenuLike: isMenuScene,
       __standardChoiceCounter: { value: 0 },
-      __sceneMenuCounter: { value: 0 },
     };
 
     const layerEl = document.createElement("div");
     layerEl.className = "scene-layer";
     layerEl.classList.toggle("is-focused", layer.focused === true);
-    layerEl.classList.toggle("is-menu-scene", isMenuScene);
     layerEl.classList.toggle("has-ratio-content", components.some((component) => componentContainsSizingKind(component, "ratio")));
     layerEl.style.zIndex = String(10 + index);
     applySceneLayout(layerEl, sceneDef?.layout, { root: true });
@@ -947,9 +936,9 @@ function renderSceneStack(state) {
     markSingleFrameComponentLayer(layerEl);
     screenView.append(layerEl);
   }
-  syncSceneMenuSelection(screenView);
   syncCleanControlGroupWidths(screenView);
   fitPuzzleFrameComponents(screenView);
+  scrollSelectedChoiceIntoView(screenView);
 }
 
 function markSingleFrameComponentLayer(layerEl) {
@@ -996,7 +985,7 @@ function cleanControlGroups(root = screenView) {
 function directCleanControlChildren(group) {
   return [...group.children].filter((child) => (
     !child.hidden
-      && child.matches("button, .level-menu")
+      && child.matches("button")
       && child.getClientRects().length > 0
   ));
 }
@@ -1035,9 +1024,7 @@ function renderEmbeddedPuzzleComponent(layers) {
       __sceneLayer: { name: sceneName, focused: true },
       __sceneDef: { name: sceneName, components: [puzzle3PreviewSurface.component] },
       __sceneState: {},
-      __sceneMenuLike: false,
       __standardChoiceCounter: { value: 0 },
-      __sceneMenuCounter: { value: 0 },
     };
     screenView.classList.remove("has-scene-stack");
     screenView.append(renderPuzzle3Frame(puzzle3PreviewSurface.component, scope));
@@ -1054,9 +1041,7 @@ function renderEmbeddedPuzzleComponent(layers) {
     __sceneLayer: layer,
     __sceneDef: sceneDef,
     __sceneState: layer.sceneState || layer.state || {},
-    __sceneMenuLike: false,
     __standardChoiceCounter: { value: 0 },
-    __sceneMenuCounter: { value: 0 },
   };
   screenView.classList.remove("has-scene-stack");
   screenView.append(renderPuzzle(component, scope));
@@ -1113,9 +1098,6 @@ function componentSizingKind(component) {
     case "button":
     case "choice":
       return "flow";
-    case "level_menu":
-    case "for":
-      return "collection";
     case "box":
     case "row":
     case "column":
@@ -1187,27 +1169,14 @@ function currentSceneAcceptsModelInput() {
 }
 
 function isControlPointerTarget(target) {
-  return Boolean(target?.closest?.("button, a, input, select, textarea, [role='button'], [role='option'], .scene-menu-control"));
-}
-
-function currentSceneHasPuzzle3() {
-  return sceneHasComponent(currentSceneDef(), "puzzle3");
-}
-
-function currentSceneHasLevelMenu() {
-  return sceneInteractionProfile(currentSceneDef()).hasLevelMenuController;
+  return Boolean(target?.closest?.("button, a, input, select, textarea, [role='button'], [role='option']"));
 }
 
 function sceneInteractionProfile(scene = currentSceneDef(), options = {}) {
   const state = options.state || currentState || {};
-  const hasMenuController = sceneHasComponent(scene, "level_menu");
-  const menuFocusCells = hasMenuController ? sceneMenuFocusCells(scene) : [];
   const standardChoices = scene ? standardChoiceFocusCells(scene) : [];
   return {
     acceptsModelInput: stateAcceptsModelInput(state),
-    hasLevelMenuController: sceneHasComponent(scene, "level_menu"),
-    hasMenuController,
-    menuFocusCells,
     standardChoices,
   };
 }
@@ -1223,16 +1192,6 @@ function currentSceneLayer(state = currentState, scene = currentSceneDef()) {
 function stateAcceptsModelInput(state = currentState || puzzleBoot || {}) {
   return state?.acceptsModelInput === true
     || standaloneRuntime?.editorPreviewInputEnabled === true;
-}
-
-function sceneChromeProfile(profile) {
-  if (profile.acceptsModelInput) {
-    return "play";
-  }
-  if (profile.menuFocusCells.length > 0) {
-    return "menu";
-  }
-  return "passive";
 }
 
 function sceneTitle(name) {
@@ -1271,15 +1230,8 @@ function renderComponent(component, scope = {}) {
       return renderContainer(component, scope);
     case "conditional":
       return renderConditional(component, scope);
-    case "for":
-      return renderFor(component, scope);
-    case "level_menu":
-      return renderLevelMenu(currentState, component, scope);
-    default: {
-      const empty = document.createElement("div");
-      empty.hidden = true;
-      return empty;
-    }
+    default:
+      throw new Error(`Unsupported scene component: ${String(component.kind || "unknown")}`);
   }
 }
 
@@ -1335,21 +1287,6 @@ function renderPuzzle3Frame(component, scope = {}) {
       component,
       onError(failure) {
         reportPuzzle3ComponentError(failure);
-      },
-      onInput(input) {
-        if (puzzle3PreviewSurface && !standaloneRuntime?.editorPreviewInputEnabled) {
-          throw new Error("Visual-only Puzzle3 preview does not accept session input.");
-        }
-        return sendModelInput(input);
-      },
-      onCommand(action) {
-        if (puzzle3PreviewSurface && !standaloneRuntime?.editorPreviewInputEnabled) {
-          throw new Error("Visual-only Puzzle3 preview does not accept session commands.");
-        }
-        if (action.kind === "goto_level" || action.kind === "goto") {
-          return sendCommand(`${source}.goto ${String(action.level ?? "")}`.trim());
-        }
-        return sendCommand(String(action.kind || ""));
       },
     });
     entry = { root, canvas, controller, levelIndex: null };
@@ -1524,8 +1461,8 @@ function puzzle3PreviewSurfaceFixture(source, sceneName) {
   if (resources.objects && typeof resources.objects === "object") {
     next.objects = JSON.parse(JSON.stringify(resources.objects));
   }
-  if (resources.sprites && typeof resources.sprites === "object") {
-    next.sprites = JSON.parse(JSON.stringify(resources.sprites));
+  if (resources.visuals && typeof resources.visuals === "object") {
+    next.visuals = JSON.parse(JSON.stringify(resources.visuals));
   }
   const level = payload.level || {};
   const size = level.size || payload.size;
@@ -1641,33 +1578,6 @@ function renderText(component, scope = {}) {
   return text;
 }
 
-function assignSceneMenuControl(control, scope = {}) {
-  if (!scope.__sceneMenuLike) {
-    return;
-  }
-  const counter = scope.__sceneMenuCounter || { value: 0 };
-  scope.__sceneMenuCounter = counter;
-  control.dataset.sceneMenuIndex = String(counter.value);
-  control.classList.add("scene-menu-control");
-  counter.value += 1;
-}
-
-function selectSceneMenuControl(control, scope = {}) {
-  if (!scope.__sceneMenuLike || !control?.dataset) {
-    return;
-  }
-  const index = Number(control.dataset.sceneMenuIndex);
-  if (!Number.isInteger(index)) {
-    return;
-  }
-  const sceneName = scope.__sceneDef?.name || currentSceneDef()?.name || "";
-  if (!sceneName) {
-    return;
-  }
-  sceneMenuCursors.set(sceneName, index);
-  syncSceneMenuSelection(control.closest(".scene-layer") || screenView);
-}
-
 function renderButton(component, scope = {}) {
   const button = document.createElement("button");
   button.type = "button";
@@ -1676,28 +1586,12 @@ function renderButton(component, scope = {}) {
     resolveLabel(component.label, scope) || sceneTitle(effectLabel(component.effect)),
   );
   annotateSceneEditorComponent(button, component, scope);
-  assignSceneMenuControl(button, scope);
-  if (scope.__menuInstance && component.value) {
-    const counter = scope.__menuButtonCounter || { value: 0 };
-    const index = counter.value;
-    counter.value += 1;
-    button.classList.toggle("is-selected", index === scope.__menuCursor);
-    button.addEventListener("click", () => {
-      if (selectSceneEditorComponent(component, scope)) {
-        return;
-      }
-      selectSceneMenuControl(button, scope);
-      runActivationConfirm(button, () => sendCommand(`${scope.__menuInstance}.select:${index}`));
-    });
-  } else {
-    button.addEventListener("click", () => {
-      if (selectSceneEditorComponent(component, scope)) {
-        return;
-      }
-      selectSceneMenuControl(button, scope);
-      runEffectActivationConfirm(button, component.effect, scope);
-    });
-  }
+  button.addEventListener("click", () => {
+    if (selectSceneEditorComponent(component, scope)) {
+      return;
+    }
+    runEffectActivationConfirm(button, component.effect);
+  });
   applySizingKind(button, component);
   applySceneLayout(button, component.layout);
   return button;
@@ -1708,11 +1602,10 @@ function renderChoice(component, scope = {}) {
   choice.type = "button";
   setControlLabel(
     choice,
-    resolveLabel(component.label, scope) || sceneTitle(effectLabel(component.effect)),
+    resolveLabel(component.label, scope),
   );
   choice.classList.add("standard-choice");
   annotateSceneEditorComponent(choice, component, scope);
-  assignSceneMenuControl(choice, scope);
   const counter = scope.__standardChoiceCounter || { value: 0 };
   scope.__standardChoiceCounter = counter;
   const index = counter.value;
@@ -1723,10 +1616,9 @@ function renderChoice(component, scope = {}) {
     if (selectSceneEditorComponent(component, scope)) {
       return;
     }
-    selectSceneMenuControl(choice, scope);
     standardChoiceCursors.set(scope.__sceneDef.name, index);
     syncStandardChoiceSelection(choice, index);
-    runEffectActivationConfirm(choice, component.effect, scope);
+    runEffectActivationConfirm(choice, component.effect);
   });
   applySizingKind(choice, component);
   applySceneLayout(choice, component.layout);
@@ -1738,59 +1630,27 @@ function syncStandardChoiceSelection(choice, selectedIndex) {
   root.querySelectorAll(".standard-choice").forEach((item) => {
     item.classList.toggle("is-selected", Number(item.dataset.standardChoiceIndex) === selectedIndex);
   });
+  scrollSelectedChoiceIntoView(root);
 }
 
-function focusedSceneMenuLayer(root = screenView) {
-  if (root?.classList?.contains("scene-layer")) {
-    return root.classList.contains("is-focused") ? root : null;
-  }
-  return root?.querySelector?.(".scene-layer.is-focused") || null;
-}
-
-function sceneMenuControls(root = screenView) {
-  const layer = focusedSceneMenuLayer(root);
-  return layer ? [...layer.querySelectorAll(".scene-menu-control")] : [];
-}
-
-function sceneMenuCursor(scene = currentSceneDef(), controls = sceneMenuControls()) {
-  if (!scene || controls.length === 0) {
-    return 0;
-  }
-  const max = controls.length - 1;
-  const stored = Number(sceneMenuCursors.get(scene.name));
-  if (Number.isInteger(stored)) {
-    return Math.max(0, Math.min(max, stored));
-  }
-  const selected = controls.findIndex((control) => control.classList.contains("is-selected"));
-  return selected >= 0 ? selected : 0;
-}
-
-function syncSceneMenuSelection(root = screenView) {
-  const layer = focusedSceneMenuLayer(root);
-  if (!layer) {
+function scrollSelectedChoiceIntoView(root = screenView) {
+  const selected = root?.querySelector?.(".standard-choice.is-selected");
+  const scroll = selected?.closest?.(".is-scroll");
+  if (!selected || !scroll || !root.contains(scroll)) {
     return;
   }
-  const scene = currentSceneDef();
-  const controls = sceneMenuControls(layer);
-  const cells = sceneMenuFocusCells(scene);
-  const count = Math.min(controls.length, cells.length);
-  if (!scene || count === 0) {
-    return;
+  const viewport = scroll.getBoundingClientRect();
+  const item = selected.getBoundingClientRect();
+  if (item.top < viewport.top) {
+    scroll.scrollTop -= viewport.top - item.top;
+  } else if (item.bottom > viewport.bottom) {
+    scroll.scrollTop += item.bottom - viewport.bottom;
   }
-  const cursor = Math.max(0, Math.min(count - 1, sceneMenuCursor(scene, controls)));
-  sceneMenuCursors.set(scene.name, cursor);
-  controls.forEach((control, index) => {
-    const selected = index === cursor;
-    control.classList.toggle("is-selected", selected);
-    if (control.getAttribute("role") === "option") {
-      control.setAttribute("aria-selected", selected ? "true" : "false");
-    }
-  });
-}
-
-function selectedSceneMenuElement() {
-  return document.querySelector(".scene-layer.is-focused .scene-menu-control.is-selected")
-    || document.querySelector(".scene-menu-control.is-selected");
+  if (item.left < viewport.left) {
+    scroll.scrollLeft -= viewport.left - item.left;
+  } else if (item.right > viewport.right) {
+    scroll.scrollLeft += item.right - viewport.right;
+  }
 }
 
 function setControlLabel(control, label) {
@@ -1849,47 +1709,11 @@ function sameSceneEditorPath(left, right) {
 }
 /* puzzle-host:optional:scene-editor:end */
 
-function runEffectActivationConfirm(control, effect, scope = {}) {
+function runEffectActivationConfirm(control, effect) {
   if (!shouldDelayActivationConfirm()) {
-    return sendEffect(effect, scope);
+    return sendSceneEffect(effect);
   }
-  const { immediate, delayed } = splitActivationEffects(effect);
-  for (const child of immediate) {
-    Promise.resolve(runImmediateActivationEffect(child, scope)).catch((error) => showError(error));
-  }
-  return runActivationConfirm(control, () => delayed ? sendEffect(delayed, scope) : undefined);
-}
-
-function splitActivationEffects(effect) {
-  if (effect?.kind !== "sequence") {
-    return { immediate: [], delayed: effect };
-  }
-  const effects = effect.effects || [];
-  let delayedStart = 0;
-  while (delayedStart < effects.length && isImmediateActivationEffect(effects[delayedStart].effect || effects[delayedStart])) {
-    delayedStart += 1;
-  }
-  const immediate = effects.slice(0, delayedStart).map((child) => child.effect || child);
-  const delayedEffects = effects.slice(delayedStart);
-  if (delayedEffects.length === 0) {
-    return { immediate, delayed: null };
-  }
-  if (delayedEffects.length === 1) {
-    return { immediate, delayed: delayedEffects[0].effect || delayedEffects[0] };
-  }
-  return { immediate, delayed: { kind: "sequence", effects: delayedEffects } };
-}
-
-function isImmediateActivationEffect(effect) {
-  return effect?.kind === "play_sfx";
-}
-
-function runImmediateActivationEffect(effect, scope = {}) {
-  if (effect?.kind === "play_sfx") {
-    soundRuntime.playSfx(effect.name);
-    return undefined;
-  }
-  return sendEffect(effect, scope);
+  return runActivationConfirm(control, () => sendSceneEffect(effect));
 }
 
 function runActivationConfirm(control, run) {
@@ -1956,24 +1780,8 @@ function puzzlescriptControlCharWidth(target) {
 }
 
 function activationConfirmLabel(target) {
-  const labelNode = target.querySelector?.(".ps-control-label, span:not(.level-clear-mark)");
+  const labelNode = target.querySelector?.(".ps-control-label");
   return (labelNode?.textContent || target.textContent || "").trim();
-}
-
-function activationConfirmTargetForCommand(effect) {
-  const command = effectToCommand(effect, { __sceneDef: currentSceneDef() });
-  if (!command) {
-    return null;
-  }
-  if (currentSceneHasLevelMenu() && String(command).split(":", 1)[0] === "select") {
-    return selectedLevelMenuElement();
-  }
-  return null;
-}
-
-function selectedLevelMenuElement() {
-  return document.querySelector(".scene-layer.is-focused .level-menu li.is-selected")
-    || document.querySelector(".level-menu li.is-selected");
 }
 
 function renderContainer(component, scope = {}) {
@@ -2048,102 +1856,6 @@ function sceneTextAlignCss(value) {
   return ["start", "center", "end"].includes(value) ? value : "start";
 }
 
-function renderFor(component, scope = {}) {
-  const list = document.createElement("ul");
-  list.className = "view-list";
-  applySizingKind(list, component);
-
-  for (const item of viewItems(component, scope)) {
-    const row = document.createElement("li");
-    row.classList.toggle("is-selected", item.selected === true);
-    renderSurfaceComponents(component.children || [], row, {
-      ...scope,
-      __insideFor: true,
-      __componentPath: [...(scope.__componentPath || []), "children"],
-      [component.binding]: item,
-    });
-    if (!row.childNodes.length) {
-      row.textContent = item.label || item.name || "";
-    }
-    list.append(row);
-  }
-
-  return list;
-}
-
-function viewItems(component, scope = {}) {
-  return sceneLevelEntries(scope.__sceneDef, component.source).map(({ level, index }, position) => ({
-    kind: "level",
-    index,
-    position,
-    num: position + 1,
-    number: position + 1,
-    title: level.title || level.label || level.name || `Level ${index + 1}`,
-    name: level.name || `Level ${index + 1}`,
-    label: level.label || level.name || `Level ${index + 1}`,
-    cleared: level.cleared === true,
-    solved: level.cleared === true,
-    current: index === currentState.levelIndex,
-    selected: index === currentState.selectedLevelIndex,
-  }));
-}
-
-function sceneLevelEntries(scene = currentSceneDef(), source = "levels") {
-  const entries = (currentState?.levels || [])
-    .map((level, index) => ({ level, index }))
-    .filter(({ level }) => sceneAcceptsLevelResource(scene, level));
-  const collection = resolveLevelCollectionSource(source || "levels", entries);
-  return entries.filter(({ level }) => levelCollectionContains(collection, level));
-}
-
-function sceneAcceptsLevelResource(scene, level) {
-  const resources = scene?.resources || {};
-  const mode = resources.levelsMode || "all";
-  if (mode !== "named") {
-    return true;
-  }
-  return (resources.levels || []).some((resource) => levelMatchesResource(resource, level));
-}
-
-function resolveLevelCollectionSource(source, entries) {
-  if (source === "levels") {
-    const keys = [...new Set(entries.map(({ level }) => levelCollectionKey(level)))];
-    if (keys.length === 0) {
-      throw new Error("for source `levels` requires a level collection");
-    }
-    if (keys.length > 1) {
-      throw new Error("for source `levels` is ambiguous; use a level collection name");
-    }
-    return { kind: "collection", key: keys[0] };
-  }
-  if (entries.some(({ level }) => levelMatchesResource(source, level))) {
-    return { kind: "resource", resource: source };
-  }
-  throw new Error(`Unknown level collection: ${source}`);
-}
-
-function levelCollectionContains(collection, level) {
-  if (collection.kind === "collection") {
-    return levelCollectionKey(level) === collection.key;
-  }
-  return levelMatchesResource(collection.resource, level);
-}
-
-function levelCollectionKey(level) {
-  const pack = level?.pack || "";
-  return pack ? `pack:${pack}` : "implicit";
-}
-
-function levelMatchesResource(resource, level) {
-  const name = level?.name || "";
-  const pack = level?.pack || "";
-  return pack === resource || resourceMatches(resource, name);
-}
-
-function resourceMatches(resource, name) {
-  return name === resource || String(name || "").startsWith(`${resource}.`);
-}
-
 function findComponent(components, predicate) {
   for (const component of components || []) {
     if (predicate(component)) {
@@ -2177,16 +1889,6 @@ function resolveViewPath(path, scope = {}) {
     }
     return (scope.__sceneState || currentState?.sceneState)?.[parts[0]]
       ?? currentState?.gameState?.[parts[0]];
-  }
-  if (parts.length >= 3 && parts[1] === "level") {
-    const puzzle = currentState?.scenePuzzleState?.[parts[0]];
-    if (puzzle !== undefined) {
-      let value = puzzle;
-      for (const part of parts.slice(1)) {
-        value = value?.[part];
-      }
-      return value;
-    }
   }
   let value = Object.prototype.hasOwnProperty.call(scope, parts[0])
     ? scope[parts[0]]
@@ -2223,7 +1925,7 @@ function resolveLabel(label, scope = {}) {
     if (label.name === "join") {
       return (label.args || []).map((arg) => resolveLabel(arg, scope)).join("");
     }
-    return exprSource(label, scope);
+    return displayExprText(label, scope);
   }
   if (label.kind === "binary") {
     const value = resolveExprValue(label, scope);
@@ -2232,17 +1934,20 @@ function resolveLabel(label, scope = {}) {
   if (label.kind === "if") {
     return resolveLabel(resolveBoolExpr(label.condition, scope) ? label.then : label.else, scope);
   }
-  return "";
+  throw new Error(`Unsupported scene label expression: ${String(label.kind || "unknown")}`);
 }
 
 function resolveBoolExpr(expr, scope = {}) {
   const value = resolveExprValue(expr, scope);
-  return typeof value === "boolean" ? value : false;
+  if (typeof value !== "boolean") {
+    throw new Error(`Scene boolean expression resolved to ${value === undefined ? "undefined" : typeof value}`);
+  }
+  return value;
 }
 
 function resolveExprValue(expr, scope = {}) {
   if (!expr) {
-    return undefined;
+    throw new Error(`Unsupported scene expression call: ${String(expr.name || "unknown")}`);
   }
   if (typeof expr === "string") {
     return expr;
@@ -2278,119 +1983,7 @@ function resolveExprValue(expr, scope = {}) {
   if (expr.kind === "if") {
     return resolveExprValue(resolveBoolExpr(expr.condition, scope) ? expr.then : expr.else, scope);
   }
-  return undefined;
-}
-
-function levelMenuCursorPosition(state, levels) {
-  const selected = Number(state?.selectedLevelIndex);
-  const levelCount = Number(state?.levelCount);
-  if (!Number.isInteger(selected) || !Number.isInteger(levelCount)) {
-    throw new Error("Level menu rendering requires selectedLevelIndex and levelCount in state snapshot.");
-  }
-  const levelPosition = levels.findIndex(({ index }) => index === selected);
-  if (levelPosition >= 0) {
-    return levelPosition;
-  }
-  if (selected >= levelCount) {
-    return levels.length + selected - levelCount;
-  }
-  return 0;
-}
-
-function renderLevelMenu(state, component = {}, scope = {}) {
-  const list = document.createElement("ul");
-  list.className = "view-list level-menu";
-  list.setAttribute("role", "listbox");
-  applySizingKind(list, { kind: "level_menu" });
-  applySceneLayout(list, component.layout);
-  const columns = Number(component.columns || 0);
-  if (columns > 0) {
-    list.classList.add("is-matrix");
-    list.style.gridTemplateColumns = `repeat(${columns}, minmax(0, 1fr))`;
-  }
-  const levels = sceneLevelEntries(scope.__sceneDef, component.source || "levels");
-  const cursorPosition = levelMenuCursorPosition(state, levels);
-  for (const [position, { level, index }] of levels.entries()) {
-    const item = document.createElement("li");
-    const selected = position === cursorPosition;
-    item.setAttribute("role", "option");
-    item.dataset.levelMenuPosition = String(position);
-    assignSceneMenuControl(item, scope);
-    item.classList.toggle("is-selected", selected);
-    item.setAttribute("aria-selected", selected ? "true" : "false");
-
-    if (component.showCleared) {
-      const cleared = document.createElement("span");
-      cleared.className = "level-clear-mark";
-      cleared.classList.toggle("is-cleared", level?.cleared === true);
-      item.append(cleared);
-    }
-
-    const levelName = level?.name || `Level ${index + 1}`;
-    item.append(...controlLabelNodes(component.showIndex ? `${position + 1}. ${levelName}` : levelName));
-    item.addEventListener("click", () => {
-      selectSceneMenuControl(item, scope);
-      runActivationConfirm(item, () => sendCommand(`select:${position}`));
-    });
-
-    list.append(item);
-  }
-  for (const [commandIndex, commandButton] of (component.buttons || []).entries()) {
-    const position = levels.length + commandIndex;
-    const selected = position === cursorPosition;
-    const item = document.createElement("li");
-    item.className = "level-menu-button";
-    item.setAttribute("role", "option");
-    item.dataset.levelMenuPosition = String(position);
-    assignSceneMenuControl(item, scope);
-    item.classList.toggle("is-selected", selected);
-    item.setAttribute("aria-selected", selected ? "true" : "false");
-    if (component.showCleared) {
-      const cleared = document.createElement("span");
-      cleared.className = "level-clear-mark";
-      item.append(cleared);
-    }
-    item.append(...controlLabelNodes(resolveLabel(commandButton.label)));
-    item.addEventListener("click", () => {
-      selectSceneMenuControl(item, scope);
-      runActivationConfirm(item, () => sendCommand(`select:${position}`));
-    });
-    list.append(item);
-  }
-  return list;
-}
-
-function scheduleSelectedLevelMenuScroll() {
-  requestAnimationFrame(scrollSelectedSceneMenuItemIntoView);
-}
-
-function scrollSelectedLevelMenuItemIntoView() {
-  const item = selectedLevelMenuElement();
-  scrollLevelMenuItemIntoView(item);
-}
-
-function scrollSelectedSceneMenuItemIntoView() {
-  const item = selectedSceneMenuElement();
-  scrollLevelMenuItemIntoView(item);
-}
-
-function scrollLevelMenuItemIntoView(item) {
-  const list = item?.closest(".level-menu");
-  if (!item || !list) {
-    return;
-  }
-  const listRect = list.getBoundingClientRect();
-  const itemRect = item.getBoundingClientRect();
-  const scale = listRect.height > 0 ? list.clientHeight / listRect.height : 1;
-  const itemTop = list.scrollTop + (itemRect.top - listRect.top) * scale;
-  const itemBottom = itemTop + itemRect.height * scale;
-  const visibleTop = list.scrollTop;
-  const visibleBottom = visibleTop + list.clientHeight;
-  if (itemTop < visibleTop) {
-    list.scrollTop = itemTop;
-  } else if (itemBottom > visibleBottom) {
-    list.scrollTop = itemBottom - list.clientHeight;
-  }
+  throw new Error(`Unsupported scene expression: ${String(expr.kind || "unknown")}`);
 }
 
 function focusShell() {
@@ -2414,26 +2007,35 @@ function isMessageDismissKey(event) {
   return effectsForKey(event).length > 0;
 }
 
+function standardSessionActionForKey(key) {
+  if (key === "z") {
+    return { kind: "undo" };
+  }
+  if (key === "y") {
+    return { kind: "redo" };
+  }
+  return null;
+}
+
 function effectsForKey(event) {
   if (!currentState) {
     return [];
   }
+  if (event.altKey || event.ctrlKey || event.metaKey) {
+    return [];
+  }
   const rawKey = String(event.key || "");
   const key = normalizedKeyName(rawKey);
+  const sessionAction = standardSessionActionForKey(key);
+  if (sessionAction) {
+    return [{ kind: "session_action", action: sessionAction }];
+  }
   const keyTokens = logicalKeyTokens(rawKey);
   const scene = currentSceneDef();
   const profile = sceneInteractionProfile(scene);
-  const chrome = sceneChromeProfile(profile);
   const binding = scene?.keys?.find((binding) => binding.keys.some((candidate) => keyTokens.includes(candidate)));
   if (binding) {
-    return [binding.effect || { kind: "command", name: binding.command }];
-  }
-
-  if (chrome === "menu" && profile.menuFocusCells.length > 0) {
-    const menuInput = menuInputForKey(key);
-    if (menuInput) {
-      return [{ kind: "scene_menu", input: menuInput }];
-    }
+    return [{ kind: "scene_effect", effect: binding.effect }];
   }
 
   const input = (currentState.inputs || []).find((input) =>
@@ -2442,24 +2044,14 @@ function effectsForKey(event) {
     || (input.keys || []).some((candidate) => keyTokens.includes(candidate))
   );
   const standardInput = standardChoiceInputForKey(key);
-  if (chrome !== "menu" && standardInput && profile.standardChoices.length > 0) {
+  if (standardInput && profile.standardChoices.length > 0) {
     return [{ kind: "standard_choice", input: standardInput }];
   }
   if (input && profile.acceptsModelInput) {
     return [{ kind: "model_input", name: input.name }];
   }
 
-  if (key === "z") {
-    return [{ kind: "command", name: "undo" }];
-  }
-  if (key === "y") {
-    return [{ kind: "command", name: "redo" }];
-  }
   return [];
-}
-
-function commandForKey(event) {
-  return effectsForKey(event)[0] || null;
 }
 
 function normalizedKeyName(key) {
@@ -2490,36 +2082,14 @@ function standardChoiceInputForKey(key) {
   if (key === "d" || key === "ArrowRight") {
     return "right";
   }
-  if (isStandardMenuConfirmKey(key)) {
+  if (isStandardChoiceConfirmKey(key)) {
     return "enter";
   }
   return null;
 }
 
-function isStandardMenuConfirmKey(key) {
+function isStandardChoiceConfirmKey(key) {
   return key === "Enter" || key === "Space" || key === "x";
-}
-
-function menuInputForKey(key) {
-  if (key === "w" || key === "ArrowUp") {
-    return "up";
-  }
-  if (key === "s" || key === "ArrowDown") {
-    return "down";
-  }
-  if (key === "a" || key === "ArrowLeft") {
-    return "left";
-  }
-  if (key === "d" || key === "ArrowRight") {
-    return "right";
-  }
-  if (isStandardMenuConfirmKey(key)) {
-    return "enter";
-  }
-  if (key === "Escape" || key === "q") {
-    return "back";
-  }
-  return null;
 }
 
 function inputByName(name) {
@@ -2546,15 +2116,6 @@ function sceneDefinitionsForSource(source) {
   return nonEmptyArray(source?.scenes) || nonEmptyArray(source?.screens) || [];
 }
 
-function sceneRoutineEffect(name, scope = {}) {
-  const scene = scope.__sceneDef || currentSceneDef();
-  const routine = (scene?.routines || []).find((candidate) => candidate.name === name);
-  if (!routine) {
-    throw new Error(`Unknown scene routine: ${name}`);
-  }
-  return routine.effect || null;
-}
-
 function nonEmptyArray(value) {
   return Array.isArray(value) && value.length > 0 ? value : null;
 }
@@ -2566,44 +2127,31 @@ function isSceneConditionTrue(condition, scope = {}) {
   return resolveBoolExpr(condition, scope);
 }
 
-async function sendEffect(effect, scope = {}) {
-  if (effect?.kind === "scene_menu") {
-    await handleSceneMenuInput(effect.input);
+async function sendResolvedInput(input) {
+  if (input?.kind === "standard_choice") {
+    handleStandardChoiceInput(input.input);
     return;
   }
-  if (effect?.kind === "standard_choice") {
-    handleStandardChoiceInput(effect.input);
+  if (input?.kind === "model_input") {
+    await sendModelInput(input.name);
     return;
   }
-  if (effect?.kind === "model_input") {
-    await sendModelInput(effect.name);
+  if (input?.kind === "scene_effect") {
+    await sendSceneEffect(input.effect);
     return;
   }
-  if (effect?.kind === "wait") {
-    await waitForEffect(effect);
+  if (input?.kind === "session_action") {
+    await postSessionAction(input.action);
     return;
   }
-  if (effect?.kind === "sequence") {
-    for (const child of effect.effects || []) {
-      await sendEffect(child.effect || child, scope);
-    }
-    return;
-  }
-  if (effect?.kind === "conditional") {
-    if (isSceneConditionTrue(effect.condition, scope)) {
-      await sendEffect(effect.effect?.effect || effect.effect, scope);
-    }
-    return;
-  }
-  const command = effectToCommand(effect, scope);
-  if (command) {
-    await sendCommand(command);
-  }
+  throw new Error(`Unsupported resolved input: ${String(input?.kind || "unknown")}`);
 }
 
-function waitForEffect(effect) {
-  const milliseconds = Math.max(0, Number(effect?.milliseconds || effect?.ms || 0));
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+async function sendSceneEffect(effect) {
+  if (!effect || typeof effect !== "object" || Array.isArray(effect)) {
+    throw new Error("Scene effect must be an object.");
+  }
+  await postSessionAction({ kind: "scene_effect", effect });
 }
 
 function applyPresentationEvents(events) {
@@ -2688,8 +2236,16 @@ function applyPresentationAnimations(event, animations) {
     || !currentPuzzles.includes(event.puzzle)) {
     return;
   }
+  const puzzleSnapshot = currentState.scenePuzzleState?.[event.puzzle];
+  if (!puzzleSnapshot || typeof puzzleSnapshot !== "object" || Array.isArray(puzzleSnapshot)) {
+    throw new Error(`Animation target puzzle snapshot is missing: ${event.puzzle}`);
+  }
+  const batchId = ++presentationAnimationBatchId;
+  puzzleSnapshot.animationEvents = animations;
+  puzzleSnapshot.animationBatchId = batchId;
   if (currentState.scene) {
     currentState.scene.animationEvents = animations;
+    currentState.scene.animationBatchId = batchId;
   }
   const layer = (currentState.sceneLayers || []).find((candidate) =>
     (candidate?.name === event.scene || candidate?.scene?.name === event.scene)
@@ -2697,6 +2253,7 @@ function applyPresentationAnimations(event, animations) {
   );
   if (layer?.scene) {
     layer.scene.animationEvents = animations;
+    layer.scene.animationBatchId = batchId;
   }
   renderSceneStack(currentState);
 }
@@ -2780,13 +2337,6 @@ function fastForwardWaitTimer(waitTimer) {
   waitTimer.timeoutId = setTimeout(waitTimer.complete, remaining);
 }
 
-function sendCommand(command) {
-  if (currentState?.busy || clientPendingWaits > 0) {
-    return undefined;
-  }
-  return sendCommandNow(command);
-}
-
 function sendModelInput(input) {
   if (currentState?.busy || clientPendingWaits > 0) {
     const config = inputBufferConfig();
@@ -2810,26 +2360,6 @@ function sendModelInputNow(input) {
   return post(`/api/input/${encodeURIComponent(input)}`);
 }
 
-async function sendCommandNow(command) {
-  /* puzzle-host:optional:puzzle3:start */
-  if (sendPuzzle3Command(command)) {
-    return undefined;
-  }
-  /* puzzle-host:optional:puzzle3:end */
-  /* puzzle-host:optional:scene-editor:start */
-  if (applyStandaloneEditorInput(command)) {
-    return undefined;
-  }
-  /* puzzle-host:optional:scene-editor:end */
-  if (currentSceneHasLevelMenu() && isLevelMenuCommandName(command)) {
-    return post(`/api/command/${encodeURIComponent(command)}`);
-  }
-  if (currentState?.inputs?.some((input) => input.name === command)) {
-    return post(`/api/input/${encodeURIComponent(command)}`);
-  }
-  return post(`/api/command/${encodeURIComponent(command)}`);
-}
-
 async function drainQueuedModelInput() {
   if (drainingQueuedModelInput || clientPendingWaits > 0 || currentState?.busy || !pendingModelInput) {
     return;
@@ -2844,106 +2374,12 @@ async function drainQueuedModelInput() {
   }
 }
 
-/* puzzle-host:optional:puzzle3:start */
-function sendPuzzle3Command(command) {
-  const parsed = parsePuzzle3Command(command);
-  if (!parsed) {
-    return false;
-  }
-  if (parsed.command !== "reset_camera") {
-    return false;
-  }
-  const controller = puzzle3ControllerForTarget(parsed.target);
-  if (!controller) {
-    return false;
-  }
-  controller.command(parsed.command, { level: parsed.level });
-  return true;
-}
-
-function parsePuzzle3Command(command) {
-  const text = String(command || "").trim();
-  const match = text.match(/^([A-Za-z_][A-Za-z0-9_.]*)\.(restart|reset_camera|next_level|previous_level|goto|goto_level)(?:\s+(.+))?$/);
-  if (!match) {
-    return null;
-  }
-  const [, target, rawCommand, level] = match;
-  const commandName = rawCommand === "goto" ? "goto_level" : rawCommand;
-  return { target, command: commandName, level };
-}
-
-function puzzle3ControllerForTarget(target) {
-  const targetName = String(target || "").split(".").pop();
-  for (const entry of puzzle3Controllers.values()) {
-    if (entry.root.dataset.source === targetName || entry.root.dataset.source === target) {
-      return entry.controller;
-    }
-  }
-  return null;
-}
-/* puzzle-host:optional:puzzle3:end */
-
-/* puzzle-host:optional:scene-editor:start */
-function isStandaloneEditorSessionCommand(command) {
-  const name = String(command || "").split(":", 1)[0];
-  return name === "undo" || name === "redo" || name === "restart";
-}
-
-function applyStandaloneEditorInput(command) {
-  if (isStandaloneEditorSessionCommand(command)) {
-    return false;
-  }
-  const acceptsEditorInput = standaloneRuntime?.editorPreviewInputEnabled
-    || (standaloneRuntime?.editorPreviewSceneEnabled && currentState?.scene);
-  if (!acceptsEditorInput || !standaloneRuntime?.inputIdsByName?.has(command)) {
-    return false;
-  }
-  try {
-    standaloneRuntime.applyInputName(command);
-    render(standaloneRuntime.snapshot());
-  } catch (error) {
-    showError(error);
-  }
-  return true;
-}
-/* puzzle-host:optional:scene-editor:end */
-
-function isLevelMenuCommandName(command) {
-  const name = String(command || "").split(":", 1)[0];
-  return [
-    "up",
-    "down",
-    "left",
-    "right",
-    "select",
-    "back",
-  ].includes(name);
-}
-
-function standardChoiceComponents(scene = currentSceneDef()) {
-  return standardChoiceFocusCells(scene).map((cell) => cell.component);
-}
-
 function standardChoiceFocusCells(scene = currentSceneDef()) {
   if (!scene) {
     return [];
   }
   const footprint = componentColumnFootprint(scene.components || [], {
     focusKind: "choice",
-    scope: {
-      __sceneDef: scene,
-      __sceneState: currentState?.sceneState || {},
-    },
-  });
-  return footprint.cells.map((cell, index) => ({ ...cell, index }));
-}
-
-function sceneMenuFocusCells(scene = currentSceneDef()) {
-  if (!scene) {
-    return [];
-  }
-  const footprint = componentColumnFootprint(scene.components || [], {
-    focusKind: "menu",
     scope: {
       __sceneDef: scene,
       __sceneState: currentState?.sceneState || {},
@@ -2964,9 +2400,6 @@ function componentFootprint(component, context = {}) {
       cells: [{ x: 0, y: 0, kind: "component", component, scope: context.scope || {} }],
     };
   }
-  if (focusKind === "menu" && component.kind === "level_menu") {
-    return levelMenuFocusFootprint(component, context);
-  }
   if (["text", "frame", "puzzle", "puzzle3"].includes(component.kind)) {
     return emptyCellFootprint();
   }
@@ -2984,44 +2417,7 @@ function componentFootprint(component, context = {}) {
       context,
     );
   }
-  if (component.kind === "for") {
-    const footprints = viewItems(component, context.scope || {}).map((item) =>
-      componentColumnFootprint(component.children || [], {
-        ...context,
-        scope: {
-          ...(context.scope || {}),
-          [component.binding]: item,
-        },
-      })
-    );
-    return stackColumnFootprints(footprints);
-  }
   return emptyCellFootprint();
-}
-
-function levelMenuFocusFootprint(component, context = {}) {
-  const levels = sceneLevelEntries(context.scope?.__sceneDef, component.source || "levels");
-  const itemCount = levels.length + (component.buttons || []).length;
-  if (itemCount === 0) {
-    return emptyCellFootprint();
-  }
-  const columns = Math.max(1, Math.trunc(Number(component.columns || 1)) || 1);
-  const cells = [];
-  for (let position = 0; position < itemCount; position += 1) {
-    cells.push({
-      x: position % columns,
-      y: Math.floor(position / columns),
-      kind: "level_menu",
-      component,
-      position,
-      scope: context.scope || {},
-    });
-  }
-  return {
-    width: columns,
-    height: Math.ceil(itemCount / columns),
-    cells,
-  };
 }
 
 function stackColumnFootprints(footprints) {
@@ -3095,49 +2491,6 @@ function standardChoiceCursor(scene = currentSceneDef()) {
   return Math.max(0, Math.min(max, cursor));
 }
 
-async function handleSceneMenuInput(input) {
-  const scene = currentSceneDef();
-  const controls = sceneMenuControls();
-  const cells = sceneMenuFocusCells(scene);
-  const count = Math.min(controls.length, cells.length);
-  if (!scene || count === 0) {
-    return;
-  }
-  syncSceneMenuSelection();
-  const cursor = Math.max(0, Math.min(count - 1, sceneMenuCursor(scene, controls)));
-  if (["up", "down", "left", "right"].includes(input)) {
-    const next = sceneMenuDirectionalTarget(cells.slice(0, count), cursor, input);
-    if (next !== null) {
-      sceneMenuCursors.set(scene.name, next);
-      syncSceneMenuSelection();
-      scrollSelectedSceneMenuItemIntoView();
-    }
-    return;
-  }
-  if (input === "enter") {
-    activateSceneMenuCell(controls[cursor], cells[cursor]);
-    return;
-  }
-  if (input === "back") {
-    await sendCommand("back");
-  }
-}
-
-function activateSceneMenuCell(control, cell) {
-  if (!control || !cell) {
-    return;
-  }
-  if (cell.kind === "level_menu") {
-    runActivationConfirm(control, () => sendCommand(`select:${cell.position}`));
-    return;
-  }
-  runEffectActivationConfirm(control, cell.component?.effect || null, cell.scope || { __sceneDef: currentSceneDef() });
-}
-
-function sceneMenuDirectionalTarget(cells, cursor, direction) {
-  return standardChoiceDirectionalTarget(cells, cursor, direction);
-}
-
 function handleStandardChoiceInput(input) {
   const scene = currentSceneDef();
   const cells = standardChoiceFocusCells(scene);
@@ -3156,7 +2509,7 @@ function handleStandardChoiceInput(input) {
   if (input === "enter") {
     const selectedChoice = document.querySelector(".standard-choice.is-selected");
     const cell = cells[cursor];
-    runEffectActivationConfirm(selectedChoice, cell?.component?.effect || null, cell?.scope || { __sceneDef: scene });
+    runEffectActivationConfirm(selectedChoice, cell?.component?.effect || null);
   }
 }
 
@@ -3250,145 +2603,11 @@ function effectLabel(effect) {
   return "";
 }
 
-function effectToCommand(effect, scope = {}) {
-  if (!effect) {
-    return "";
-  }
-  if (typeof effect === "string") {
-    return effect;
-  }
-  if (effect.kind === "command" || effect.kind === "input" || effect.kind === "component_effect") {
-    return commandWithScope(effect.name, scope);
-  }
-  if (effect.kind === "routine_call") {
-    const routineEffect = sceneRoutineEffect(effect.name, scope);
-    return effectToCommand(routineEffect?.effect || routineEffect, scope);
-  }
-  if (effect.kind === "message") {
-    return `message ${exprSource(effect.text, scope)}`.trim();
-  }
-  if (effect.kind === "wait") {
-    return "";
-  }
-  if (effect.kind === "sequence") {
-    const commands = (effect.effects || [])
-      .map((child) => effectToCommand(child.effect || child, scope))
-      .filter(Boolean);
-    return commands.at(-1) || "";
-  }
-  if (effect.kind === "conditional") {
-    return isSceneConditionTrue(effect.condition, scope)
-      ? effectToCommand(effect.effect?.effect || effect.effect, scope)
-      : "";
-  }
-  if (effect.kind === "play_sfx") {
-    return `sfx ${effect.name || ""}`.trim();
-  }
-  if (effect.kind === "play_music") {
-    return `play_music ${effect.name || ""}`.trim();
-  }
-  if (effect.kind === "pause_music") {
-    return effect.name ? `pause_music ${effect.name}` : "pause_music";
-  }
-  if (effect.kind === "resume_music") {
-    return effect.name ? `resume_music ${effect.name}` : "resume_music";
-  }
-  if (effect.kind === "stop_music") {
-    return effect.name ? `stop_music ${effect.name}` : "stop_music";
-  }
-  if (["goto", "enter", "create", "reset", "delete", "show", "hide", "toggle", "focus"].includes(effect.kind)) {
-    return effectCommand(effect, scope);
-  }
-  if (effect.kind === "start_level") {
-    return `goto ${effect.scene}`;
-  }
-  if (effect.kind === "continue_level") {
-    return `goto ${effect.scene}`;
-  }
-  if (effect.kind === "puzzle_next_level") {
-    return puzzleEffectCommand(effect, "next_level", "", scope);
-  }
-  if (effect.kind === "puzzle_previous_level") {
-    return puzzleEffectCommand(effect, "previous_level", "", scope);
-  }
-  if (effect.kind === "puzzle_reset") {
-    return puzzleEffectCommand(effect, "restart", "", scope);
-  }
-  if (effect.kind === "puzzle_goto_level") {
-    return puzzleEffectCommand(effect, "goto", effectValueToCommand(effect.level, scope), scope);
-  }
-  if (effect.kind === "set_variable") {
-    return `${effect.name} = ${exprSource(effect.value, scope)}`;
-  }
-  if (effect.kind === "set_current_level") {
-    return `current_level = ${exprSource(effect.level, scope)}`;
-  }
-  if (effect.kind === "clear_current_level") {
-    return "clear current_level";
-  }
-  if (effect.kind === "set_level_cleared") {
-    const value = effect.cleared === true ? "true" : "false";
-    return effect.level
-      ? `level(${exprSource(effect.level, scope)}).cleared = ${value}`
-      : `level.cleared = ${value}`;
-  }
-  if (effect.kind === "back") {
-    return "back";
-  }
-  return "";
-}
-
 function effectCommandName(effect) {
   return effect?.scene || effect?.screen || "";
 }
 
-function puzzleEffectCommand(effect, command, payload = "", scope = {}) {
-  const explicitTarget = String(effect?.target || "").trim();
-  const target = explicitTarget
-    || String(scope.__effectTargetScene || scope.__sceneDef?.name || currentState?.currentScene || currentState?.screen || "").trim();
-  if (!target) {
-    return "";
-  }
-  const suffix = payload ? ` ${payload}` : "";
-  return `${target}.${command}${suffix}`;
-}
-
-function effectValueToCommand(value, scope = {}) {
-  if (!value) {
-    return "";
-  }
-  if (value.kind === "bool" || value.kind === "int") {
-    return String(value.value);
-  }
-  if (value.kind === "text") {
-    return value.value || "";
-  }
-  if (value.kind === "path") {
-    return commandWithScope(value.path || "", scope);
-  }
-  return "";
-}
-
-function effectCommand(effect, scope = {}) {
-  const screen = effect?.scene || effect?.screen || "";
-  if (!screen) {
-    return "";
-  }
-  if ((effect.kind === "goto" || effect.kind === "enter") && (effect.params || []).length === 1 && sceneParamIsLevel(effect.params[0])) {
-    return `${effect.kind} ${screen}(${exprSource(effect.params[0].value, scope)})`;
-  }
-  const params = (effect.params || [])
-    .filter((param) => !sceneParamIsLevel(param))
-    .map((param) => `${param.name} = ${exprSource(param.value, scope)}`);
-  const base = `${effect.kind} ${screen}`;
-  return params.length ? `${base} with ${params.join(", ")}` : base;
-}
-
-function sceneParamIsLevel(param) {
-  return param?.kind === "level";
-}
-
-function exprSource(expr, scope = {}) {
+function displayExprText(expr, scope = {}) {
   if (!expr) {
     return "";
   }
@@ -3400,38 +2619,26 @@ function exprSource(expr, scope = {}) {
   }
   if (expr.kind === "path") {
     const resolved = resolveViewPath(expr.path, scope);
-    return resolved === undefined || resolved === null ? expr.path : exprValueSource(resolved);
+    return resolved === undefined || resolved === null ? expr.path : displayExprValueText(resolved);
   }
   if (expr.kind === "call") {
-    return `${expr.name}(${(expr.args || []).map((arg) => exprSource(arg, scope)).join(", ")})`;
+    return `${expr.name}(${(expr.args || []).map((arg) => displayExprText(arg, scope)).join(", ")})`;
   }
   if (expr.kind === "binary") {
     const op = expr.op === "and" ? "and" : expr.op === "eq" ? "==" : "!=";
-    return `${exprSource(expr.left, scope)} ${op} ${exprSource(expr.right, scope)}`;
+    return `${displayExprText(expr.left, scope)} ${op} ${displayExprText(expr.right, scope)}`;
   }
   if (expr.kind === "if") {
-    return `if ${exprSource(expr.condition, scope)} { ${exprSource(expr.then, scope)} } else { ${exprSource(expr.else, scope)} }`;
+    return `if ${displayExprText(expr.condition, scope)} { ${displayExprText(expr.then, scope)} } else { ${displayExprText(expr.else, scope)} }`;
   }
   return "";
 }
 
-function exprValueSource(value) {
+function displayExprValueText(value) {
   if (typeof value === "object" && value?.kind === "level" && value.name !== undefined) {
     return JSON.stringify(String(value.name));
   }
   return commandPayload(value);
-}
-
-function commandWithScope(command, scope = {}) {
-  const [name, payload] = String(command || "").split(":", 2);
-  if (!payload) {
-    return command;
-  }
-  const scoped = resolveViewPath(payload, scope);
-  if (scoped === undefined || scoped === null) {
-    return command;
-  }
-  return `${name}:${commandPayload(scoped)}`;
 }
 
 function commandPayload(value) {
@@ -3449,72 +2656,39 @@ function commandPayload(value) {
   return String(value);
 }
 
+function dispatchKeyboardInput(event) {
+  if (messagePopup) {
+    if (isMessageDismissKey(event)) {
+      closeMessagePopup();
+    }
+    return true;
+  }
+
+  if (!currentState) {
+    return false;
+  }
+
+  const effects = effectsForKey(event);
+  if (effects.length === 0) {
+    return false;
+  }
+  const dispatchEffects = event.repeat && (currentState?.busy || clientPendingWaits > 0)
+    ? effects.filter((effect) => effect?.kind !== "model_input")
+    : effects;
+  for (const effect of dispatchEffects) {
+    sendResolvedInput(effect);
+  }
+  return true;
+}
+
 document.addEventListener("keydown", (event) => {
   if (componentEmbedMode) {
     return;
   }
-  if (messagePopup) {
+  if (dispatchKeyboardInput(event)) {
     event.preventDefault();
-    if (isMessageDismissKey(event)) {
-      closeMessagePopup();
-    }
-    return;
-  }
-
-  if (!currentState) {
-    return;
-  }
-  /* puzzle-host:optional:puzzle3:start */
-  if (broadcastPuzzle3Key(event, "down")) {
-    event.preventDefault();
-    return;
-  }
-  /* puzzle-host:optional:puzzle3:end */
-
-  const effects = effectsForKey(event);
-  if (effects.length > 0) {
-    event.preventDefault();
-    const dispatchEffects = event.repeat && (currentState?.busy || clientPendingWaits > 0)
-      ? effects.filter((effect) => effect?.kind !== "model_input")
-      : effects;
-    for (const effect of dispatchEffects) {
-      const confirmTarget = activationConfirmTargetForCommand(effect);
-      if (confirmTarget) {
-        runEffectActivationConfirm(confirmTarget, effect);
-      } else {
-        sendEffect(effect);
-      }
-    }
-    return;
   }
 });
-
-/* puzzle-host:optional:puzzle3:start */
-document.addEventListener("keyup", (event) => {
-  if (componentEmbedMode) {
-    return;
-  }
-  broadcastPuzzle3Key(event, "up");
-});
-
-function broadcastPuzzle3Key(event, action = "down") {
-  if (standaloneRuntime && !puzzle3PreviewSurface) {
-    return false;
-  }
-  if (!puzzle3PreviewSurface && !currentSceneHasPuzzle3()) {
-    return false;
-  }
-  let handled = false;
-  for (const entry of puzzle3Controllers.values()) {
-    if (action === "up") {
-      handled = entry.controller.releaseKey(event) || handled;
-    } else {
-      handled = entry.controller.applyKey(event) || handled;
-    }
-  }
-  return handled;
-}
-/* puzzle-host:optional:puzzle3:end */
 
 if (standaloneRuntime) {
   window.addEventListener("PuzzleStandaloneStateChanged", () => {
@@ -3600,13 +2774,6 @@ window.addEventListener("message", async (event) => {
   }
   /* puzzle-host:optional:puzzle3:end */
 
-  if (event.data?.type === "PuzzleStudioInput") {
-    if (standaloneRuntime && event.data.input) {
-      sendCommand(String(event.data.input));
-    }
-    return;
-  }
-
   if (event.data?.type === "PuzzleStudioSetState") {
     if (standaloneRuntime && event.data.state) {
       await standaloneRuntime.setCurrentState(event.data.state, {
@@ -3683,40 +2850,14 @@ window.addEventListener("message", async (event) => {
     const keyEvent = {
       key: String(event.data.key || ""),
       code: String(event.data.code || ""),
+      repeat: event.data.repeat === true,
+      altKey: event.data.altKey === true,
+      ctrlKey: event.data.ctrlKey === true,
+      metaKey: event.data.metaKey === true,
+      shiftKey: event.data.shiftKey === true,
     };
-    if (messagePopup) {
-      if (isMessageDismissKey(keyEvent)) {
-        closeMessagePopup();
-      }
-      return;
-    }
-    if (currentState?.busy) {
-      return;
-    }
-    /* puzzle-host:optional:puzzle3:start */
-    broadcastPuzzle3Key(keyEvent);
-    /* puzzle-host:optional:puzzle3:end */
-    for (const effect of effectsForKey(keyEvent)) {
-      sendEffect(effect);
-    }
+    dispatchKeyboardInput(keyEvent);
     return;
-  }
-
-  if (event.data?.type !== "PuzzleStudioCommand") {
-    return;
-  }
-  const command = String(event.data.command || "");
-  if (command) {
-    soundRuntime.primePlayback();
-    /* puzzle-host:optional:puzzle3:start */
-    if (puzzle3PreviewSurface) {
-      for (const entry of puzzle3Controllers.values()) {
-        entry.controller?.command?.(command, event.data || {});
-      }
-      return;
-    }
-    /* puzzle-host:optional:puzzle3:end */
-    sendCommand(command);
   }
 });
 /* puzzle-host:optional:studio-bridge:end */

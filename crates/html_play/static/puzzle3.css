@@ -181,10 +181,3 @@ canvas.has-interactive-look.is-dragging {
 .scene-button.is-selected::before {
   content: var(--menu-cursor);
 }
-
-.level-menu {
-  display: grid;
-  gap: 8px;
-  justify-items: center;
-  width: min(100%, 420px);
-}

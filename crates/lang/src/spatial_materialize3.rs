@@ -7,7 +7,7 @@ use puzzle_core::{
 
 use crate::{
     Catalog, Controls, DiagnosticReport, LoadedGridLevel, PuzzleRenderDef, SpatialPresentation,
-    VisualSpriteKind, VisualsDef, VoxelColor, VoxelFrame, VoxelSprite, VoxelSpriteSet,
+    VisualKind, VisualsDef, VoxelColor, VoxelFrame, VoxelVisual, VoxelVisualSet,
     model_syntax::PuzzleModelSyntax,
 };
 
@@ -28,7 +28,7 @@ pub(crate) fn materialize_spatial_model(
     render: &PuzzleRenderDef,
     visuals: &VisualsDef,
 ) -> Result<SpatialMaterialization, DiagnosticReport> {
-    let sprite_set = materialize_sprite_set(visuals)?;
+    let visual_set = materialize_visual_set(visuals)?;
     let (program_catalog, levels) = materialize_levels(model, catalog, programs, game)?;
     let viewport_focus_objects = materialize_viewport_focus(render, catalog);
     let rule_camera_effects = vec![Vec::new(); game.executable_program().rule_count()];
@@ -45,7 +45,7 @@ pub(crate) fn materialize_spatial_model(
             local_frame: None,
             rule_camera_effects,
             on_level_start_camera_effects: Vec::new(),
-            sprite_set,
+            visual_set,
             visual_order: visuals.order.clone(),
         },
     })
@@ -68,63 +68,63 @@ fn materialize_viewport_focus(
     Vec::new()
 }
 
-fn materialize_sprite_set(
+fn materialize_visual_set(
     visuals: &VisualsDef,
-) -> Result<Option<VoxelSpriteSet>, DiagnosticReport> {
-    if visuals.sprites.is_empty() {
+) -> Result<Option<VoxelVisualSet>, DiagnosticReport> {
+    if visuals.entries.is_empty() {
         return Ok(None);
     }
-    let mut sprites = visuals
-        .sprites
+    let mut entries = visuals
+        .entries
         .iter()
-        .map(materialize_sprite)
+        .map(materialize_visual)
         .collect::<Result<Vec<_>, _>>()?;
     for alias in &visuals.aliases {
-        if sprites.iter().any(|sprite| sprite.name == alias.object) {
+        if entries.iter().any(|visual| visual.name == alias.object) {
             continue;
         }
-        let source = sprites
+        let source = entries
             .iter()
-            .find(|sprite| sprite.name == alias.sprite)
+            .find(|visual| visual.name == alias.visual)
             .cloned()
             .ok_or_else(|| {
                 DiagnosticReport::error(format!(
-                    "visual alias `{}` references unknown sprite `{}`",
-                    alias.object, alias.sprite
+                    "visual alias `{}` references unknown visual `{}`",
+                    alias.object, alias.visual
                 ))
             })?;
-        sprites.push(VoxelSprite {
+        entries.push(VoxelVisual {
             name: alias.object.clone(),
             ..source
         });
     }
-    Ok(Some(VoxelSpriteSet::new("canonical", None, sprites)))
+    Ok(Some(VoxelVisualSet::new("canonical", None, entries)))
 }
 
-fn materialize_sprite(sprite: &crate::VisualSpriteDef) -> Result<VoxelSprite, DiagnosticReport> {
-    let (palette, fallback_rows) = match &sprite.kind {
-        VisualSpriteKind::Solid(color) => (
-            BTreeMap::from([('0', sprite_color(color))]),
+fn materialize_visual(visual: &crate::VisualDef) -> Result<VoxelVisual, DiagnosticReport> {
+    let (palette, fallback_rows) = match &visual.kind {
+        VisualKind::Solid(color) => (
+            BTreeMap::from([('0', visual_color(color))]),
             vec!["0".to_string()],
         ),
-        VisualSpriteKind::Ascii { colors } => (
+        VisualKind::Ascii { colors } => (
             colors
                 .iter()
-                .map(|color| (color.token, sprite_color(&color.color)))
+                .map(|color| (color.token, visual_color(&color.color)))
                 .collect(),
             Vec::new(),
         ),
-        VisualSpriteKind::Image { .. } => {
+        VisualKind::Image { .. } => {
             return Err(DiagnosticReport::error(format!(
-                "3D voxel renderer cannot materialize image sprite `{}`",
-                sprite.name
+                "3D voxel renderer cannot materialize image visual `{}`",
+                visual.name
             )));
         }
     };
-    let spatial_frames = if sprite.frames.is_empty() {
+    let spatial_frames = if visual.frames.is_empty() {
         vec![vec![fallback_rows]]
     } else {
-        sprite
+        visual
             .frames
             .iter()
             .map(|frame| frame.planes.clone())
@@ -132,20 +132,20 @@ fn materialize_sprite(sprite: &crate::VisualSpriteDef) -> Result<VoxelSprite, Di
     };
     let frames = spatial_frames
         .into_iter()
-        .map(|slices| materialize_voxels(&sprite.name, slices))
+        .map(|slices| materialize_voxels(&visual.name, slices))
         .collect::<Result<_, _>>()?;
-    let mut materialized = VoxelSprite::new(
-        sprite.name.clone(),
+    let mut materialized = VoxelVisual::new(
+        visual.name.clone(),
         palette,
         frames,
-        sprite.animation_duration_ms,
+        visual.animation_duration_ms,
         None,
     );
-    materialized.transforms = sprite.transforms.clone();
+    materialized.transforms = visual.transforms.clone();
     Ok(materialized)
 }
 
-fn sprite_color(color: &str) -> VoxelColor {
+fn visual_color(color: &str) -> VoxelColor {
     if color.eq_ignore_ascii_case("transparent") {
         VoxelColor::Transparent
     } else {
@@ -154,7 +154,7 @@ fn sprite_color(color: &str) -> VoxelColor {
 }
 
 fn materialize_voxels(
-    sprite_name: &str,
+    visual_name: &str,
     slices: Vec<Vec<String>>,
 ) -> Result<VoxelFrame, DiagnosticReport> {
     let height = slices.len();
@@ -171,16 +171,16 @@ fn materialize_voxels(
         })
     {
         return Err(DiagnosticReport::error(format!(
-            "sprite `{sprite_name}` must be rectangular in every spatial frame"
+            "visual `{visual_name}` must be rectangular in every spatial frame"
         )));
     }
     let size = Size3::new(
         u16::try_from(width)
-            .map_err(|_| DiagnosticReport::error("sprite width exceeds u16".to_string()))?,
+            .map_err(|_| DiagnosticReport::error("visual width exceeds u16".to_string()))?,
         u16::try_from(depth)
-            .map_err(|_| DiagnosticReport::error("sprite depth exceeds u16".to_string()))?,
+            .map_err(|_| DiagnosticReport::error("visual depth exceeds u16".to_string()))?,
         u16::try_from(height)
-            .map_err(|_| DiagnosticReport::error("sprite height exceeds u16".to_string()))?,
+            .map_err(|_| DiagnosticReport::error("visual height exceeds u16".to_string()))?,
     );
     Ok(VoxelFrame::new(size, slices))
 }

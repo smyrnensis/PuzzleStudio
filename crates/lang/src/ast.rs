@@ -156,6 +156,9 @@ pub(crate) enum EffectAst {
         milliseconds: u64,
     },
     WaitAnimation,
+    EmitVisual {
+        name: String,
+    },
     Message {
         text: String,
         literal: bool,

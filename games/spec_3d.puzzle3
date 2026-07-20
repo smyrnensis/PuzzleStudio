@@ -3,6 +3,14 @@ author = "Levels by David Skinner"
 
 theme = "puzzlescript"
 
+scene title {
+layout {
+  heading "Microban 3D"
+  choice "New Game" -> start playing
+  choice "Level Select" -> goto level_select
+}
+}
+
 puzzle sokoban {
 dimension = 3
 render {
@@ -25,8 +33,8 @@ solid = Player Box Wall
 }
 
 rules {
-input horizontal [ Player | Box | no solid ] -> [ | Player | Box ]
-input horizontal [ Player | no solid ] -> [ | Player ]
+once input horizontal [ Player | Box | no solid ] -> [ | Player | Box ]
+once input horizontal [ Player | no solid ] -> [ | Player ]
 }
 
 win_conditions {
@@ -44,13 +52,6 @@ goto title
 }
 }
 
-scene title {
-layout {
-  heading "Microban 3D"
-  choice "New Game" -> goto playing
-  choice "Level Select" -> goto level_select
-}
-}
 
 scene playing {
 keys {
@@ -70,7 +71,7 @@ layout {
   heading "Select Level"
   column scroll=true {
     for level in microban {
-      choice join("microban ", level.num) -> goto sokoban(level)
+      choice level.name -> goto level.puzzle(level.name)
     }
   }
   button "Exit" -> goto title
@@ -139,7 +140,7 @@ level "microban 3" {
 }
 }
 
-sprites basic of sokoban {
+visuals basic of sokoban {
 Floor {
 colors = #90ee90 #008000
 shape = {

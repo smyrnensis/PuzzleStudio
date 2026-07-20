@@ -434,7 +434,7 @@ level "level 12"
 // ######
 }
 
-sprites {
+visuals {
 
 shapes {
 Box

@@ -22,13 +22,13 @@ const SOURCE_EDITABLE_TARGETS = [
     openOptions: {},
   },
   {
-    kind: "sprite3d",
-    label: "3D sprite",
+    kind: "visual3d",
+    label: "3D visual",
     openOptions: { switchMode: true },
   },
   {
-    kind: "sprite",
-    label: "sprite",
+    kind: "visual",
+    label: "visual",
     openOptions: { switchMode: true },
   },
   {
@@ -42,10 +42,12 @@ let sourceHighlightTimer = 0;
 let sourceOptimisticHighlightFrame = 0;
 let sourceOptimisticHighlightSource = null;
 let sourceCompletionTimer = 0;
+let sourceLineAddTimer = 0;
 let sourceOutlineTimer = 0;
 let activeHighlightRequest = null;
 let sourceHighlightRequestId = 0;
 let sourceCompletionRequestId = 0;
+let sourceLineAddRequestId = 0;
 let sourceOutlineRequestId = 0;
 let sourceOutlineSignature = "";
 let sourceOutlineDirty = true;
@@ -802,6 +804,7 @@ function resetSourcePuzzleAnalysisState() {
   sourceHighlightRequestId += 1;
   sourceOutlineRequestId += 1;
   sourceCompletionRequestId += 1;
+  sourceLineAddRequestId += 1;
   sourceOutlineItems = [];
   sourceOutlineDirty = true;
   sourceOutlineSignature = "";
@@ -809,6 +812,7 @@ function resetSourcePuzzleAnalysisState() {
   sourceCursorResolveSignature = null;
   sourceCursorResolveRegion = null;
   hideSourceCompletions();
+  hideSourceLineAdd();
   if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
     sourceEditor.sourceEditorPort.clearHighlights();
     sourceHighlightSource = "";
@@ -1714,8 +1718,8 @@ const SOURCE_OUTLINE_KIND_ICON_NAMES = Object.freeze({
   "puzzle3": "puzzle",
   "levels": "map",
   "level": "map",
-  "sprites": "image",
-  "sprite": "image",
+  "visuals": "image",
+  "visual": "image",
   "objects": "boxes",
   "object": "box",
   "groups": "group",
@@ -1748,7 +1752,6 @@ const SOURCE_OUTLINE_KIND_ICON_NAMES = Object.freeze({
   "scene": "clapperboard",
   "screen": "panels-top-left",
   "layout": "panels-top-left",
-  "level_menu": "panels-top-left",
   "assets": "package",
   "resources": "package",
   "legend": "move-horizontal",
@@ -1960,6 +1963,90 @@ function scheduleSourceCompletion(immediate = false) {
   }, immediate ? 0 : 120);
 }
 
+function setSourceLineAddVisible(source, cursor, visible) {
+  if (sourceEditor.sourceEditorPort?.kind !== "codemirror") {
+    return;
+  }
+  sourceEditor.sourceEditorPort.setAddLineOverlay(source, cursor, visible);
+}
+
+function hideSourceLineAdd() {
+  window.clearTimeout(sourceLineAddTimer);
+  sourceLineAddTimer = 0;
+  sourceLineAddRequestId += 1;
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
+    setSourceLineAddVisible(sourceEditor.value, sourceEditor.selectionStart, false);
+  }
+}
+
+function sourceLineAddEligible(source, cursor) {
+  if (
+    sourceEditor.sourceEditorPort?.kind !== "codemirror"
+    || sourceEditor.readOnly
+    || sourceEditor.selectionStart !== sourceEditor.selectionEnd
+    || sourceEditorBlockSelection?.ranges?.length
+  ) {
+    return false;
+  }
+  const lineStart = source.lastIndexOf("\n", Math.max(0, cursor - 1)) + 1;
+  const nextLine = source.indexOf("\n", cursor);
+  const lineEnd = nextLine < 0 ? source.length : nextLine;
+  return source.slice(lineStart, lineEnd).trim() === "";
+}
+
+function sourceCompletionItemsForRequest(list, source, cursor, options = {}) {
+  const candidates = options.settingsOnly
+    ? (list?.items || []).filter((item) => item?.kind === "setting")
+    : (list?.items || []);
+  const items = filterSourceCompletionsForTypedReplacement(
+    candidates,
+    list,
+    source,
+    cursor,
+  );
+  return items;
+}
+
+function scheduleSourceLineAdd(immediate = false) {
+  window.clearTimeout(sourceLineAddTimer);
+  if (!sourceDocumentSupportsEditableTargets()) {
+    hideSourceLineAdd();
+    return;
+  }
+  sourceLineAddTimer = window.setTimeout(() => {
+    sourceLineAddTimer = 0;
+    void refreshSourceLineAdd();
+  }, immediate ? 0 : 120);
+}
+
+async function refreshSourceLineAdd() {
+  const document = activeDocument();
+  const source = sourceEditor.value;
+  const cursor = sourceEditor.selectionStart;
+  if (!isPuzzleDocument(document) || !isTextDocument(document) || !sourceLineAddEligible(source, cursor)) {
+    hideSourceLineAdd();
+    return;
+  }
+  const requestId = ++sourceLineAddRequestId;
+  try {
+    const list = await suggestSourceCompletionsWithWasm(source, cursor);
+    if (
+      requestId !== sourceLineAddRequestId
+      || source !== sourceEditor.value
+      || cursor !== sourceEditor.selectionStart
+    ) {
+      return;
+    }
+    const items = sourceCompletionItemsForRequest(list, source, cursor, {
+      settingsOnly: true,
+    });
+    setSourceLineAddVisible(source, cursor, items.length > 0);
+  } catch (error) {
+    hideSourceLineAdd();
+    console.error("Source line additions unavailable", error);
+  }
+}
+
 async function showSourceCompletions(options = {}) {
   const document = activeDocument();
   if (!sourceCompletionPopover || !isPuzzleDocument(document) || !isTextDocument(document)) {
@@ -1978,12 +2065,7 @@ async function showSourceCompletions(options = {}) {
     if (requestId !== sourceCompletionRequestId || source !== sourceEditor.value || cursor !== sourceEditor.selectionStart) {
       return false;
     }
-    const items = filterSourceCompletionsForTypedReplacement(
-      filterSourceCompletionsForDocument(list?.items || [], document),
-      list,
-      source,
-      cursor,
-    );
+    const items = sourceCompletionItemsForRequest(list, source, cursor, options);
     if (!items.length) {
       hideSourceCompletions();
       return false;
@@ -2015,19 +2097,6 @@ async function showSourceCompletions(options = {}) {
     hideSourceCompletions();
     return false;
   }
-}
-
-function filterSourceCompletionsForDocument(items, document) {
-  const profile = typeof puzzleSourceProfile === "function" ? puzzleSourceProfile(document) : "";
-  const hidden = profile === "puzzle3d"
-    ? new Set(["puzzle", "sprites"])
-    : profile === "puzzle2d"
-      ? new Set(["puzzle3", "sprites"])
-      : null;
-  if (!hidden) {
-    return items;
-  }
-  return items.filter((item) => !hidden.has(item?.label || ""));
 }
 
 function filterSourceCompletionsForTypedReplacement(items, list, source, cursor) {
@@ -3220,7 +3289,8 @@ sourceEditor.addEventListener("sourceanalysisreset", () => {
   window.PuzzleStudioRuntime.resetSourceAnalysis(
     source,
     puzzleSourceProfile(activeDocument()),
-  ).catch((error) => {
+  ).then(() => scheduleSourceLineAdd(true)).catch((error) => {
+    hideSourceLineAdd();
     console.error("Source analysis reset failed", error);
   });
 });
@@ -3290,6 +3360,7 @@ sourceEditor.addEventListener("input", (event) => {
   scheduleLocalSave();
   if (puzzleSource) {
     scheduleSourceCompletion();
+    scheduleSourceLineAdd();
     scheduleLevelBuilderResetFromSource(false);
     scheduleSourceCursorPreviewSync();
     schedulePreview();
@@ -3331,6 +3402,7 @@ sourceEditor.addEventListener("click", (event) => {
       allowInactiveMode: true,
       position: interaction.documentOffset,
     });
+    scheduleSourceLineAdd(true);
   }
 });
 sourceEditor.addEventListener("pointerdown", handleSourceBlockSelectionPointerDown);
@@ -3360,6 +3432,7 @@ sourceEditor.addEventListener("keyup", (event) => {
       showSourceColorEditor();
       showSourceCompletions({ manual: false });
       scheduleSourceCursorPreviewSync();
+      scheduleSourceLineAdd(true);
     }
   }
   renderSourceBlockSelection();
@@ -3368,12 +3441,19 @@ sourceEditor.addEventListener("focus", () => {
   renderSourceBlockSelection();
   if (sourceDocumentSupportsEditableTargets()) {
     scheduleSourceCursorPreviewSync();
+    scheduleSourceLineAdd(true);
   }
 });
 sourceEditor.addEventListener("blur", () => {
   clearSourceCompositionPreview();
   endSourceNativeSelectionDrag();
   renderSourceBlockSelection();
+  hideSourceLineAdd();
+});
+sourceEditor.addEventListener("sourceselectionchange", () => {
+  if (sourceDocumentSupportsEditableTargets()) {
+    scheduleSourceLineAdd();
+  }
 });
 document.addEventListener("selectionchange", () => {
   if (document.activeElement !== sourceEditor) {
@@ -3383,6 +3463,7 @@ document.addEventListener("selectionchange", () => {
   if (sourceDocumentSupportsEditableTargets()) {
     scheduleSourceCursorPreviewSync();
     syncSourceOutlineActiveItem();
+    scheduleSourceLineAdd();
   }
   syncSourceFindIndexFromSelection();
   renderSourceBlockSelection();
@@ -5509,6 +5590,20 @@ sourceEditor.addEventListener("sourcecompletioncommand", (event) => {
       event.preventDefault();
     }
   }
+});
+
+sourceEditor.addEventListener("sourcelineaddrequest", (event) => {
+  if (!sourceDocumentSupportsEditableTargets()) {
+    return;
+  }
+  const cursor = Math.max(0, Math.min(
+    sourceEditor.value.length,
+    Number(event.detail?.cursorOffset) || 0,
+  ));
+  event.preventDefault();
+  sourceEditor.setSelectionRange(cursor, cursor);
+  sourceEditor.focus({ preventScroll: true });
+  void showSourceCompletions({ manual: true, settingsOnly: true });
 });
 
 function sourceEditingCommandKeyEvent(event) {

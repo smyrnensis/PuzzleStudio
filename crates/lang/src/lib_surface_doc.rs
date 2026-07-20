@@ -428,9 +428,9 @@ fn surface_structural_blocks(scan: &source::SurfaceSourceScan) -> Vec<SurfaceStr
         if line.tokens.first().is_some_and(|token| token == "selector") {
             if let Some(index) = stack.iter().rev().copied().find(|index| {
                 blocks[*index].authoring_kind
-                    == Some(authoring_grammar::AuthoringKind::SpriteConfig)
+                    == Some(authoring_grammar::AuthoringKind::VisualConfig)
             }) && let Some(selector) = authoring_grammar::authoring_definition_single_value(
-                authoring_grammar::AuthoringKind::SpriteConfig,
+                authoring_grammar::AuthoringKind::VisualConfig,
                 "selector",
                 &line.content,
             )
@@ -539,15 +539,15 @@ fn surface_outline_block(
     }
     let first = tokens.first().cloned().unwrap_or_default();
     let visual_shape_entry = scope == SourceScope::VisualShapeEntry;
-    let sprite_entry = authoring_kind == Some(authoring_grammar::AuthoringKind::SpriteConfig)
+    let visual_entry = authoring_kind == Some(authoring_grammar::AuthoringKind::VisualConfig)
         || (visual_shape_entry
             && parent
                 .and_then(|index| blocks.get(index))
                 .is_some_and(|block| {
-                    block.authoring_kind == Some(authoring_grammar::AuthoringKind::SpritesConfig)
+                    block.authoring_kind == Some(authoring_grammar::AuthoringKind::VisualsConfig)
                 }));
-    let kind = if sprite_entry {
-        "sprite".to_string()
+    let kind = if visual_entry {
+        "visual".to_string()
     } else if visual_shape_entry {
         "shape".to_string()
     } else if let Some(authoring_kind) = authoring_kind {
@@ -562,7 +562,7 @@ fn surface_outline_block(
         first.clone()
     };
     let label = if visual_shape_entry
-        && authoring_kind != Some(authoring_grammar::AuthoringKind::SpriteConfig)
+        && authoring_kind != Some(authoring_grammar::AuthoringKind::VisualConfig)
     {
         first.clone()
     } else {
@@ -648,7 +648,7 @@ puzzle board {
 slots {
 actors = Box
 }
-sprites {
+visuals {
 Box
 #111 #eee
 box_shape
@@ -679,13 +679,13 @@ B
 
         assert!(
             document
-                .visual_sprite_refs
+                .visual_refs
                 .shape_names
                 .contains("box_shape")
         );
         assert!(
             document.highlight_ranges.display_facts.iter().all(|fact| {
-                !matches!(fact, crate::SurfaceDisplayFact::SpritePixel { span, .. }
+                !matches!(fact, crate::SurfaceDisplayFact::VisualPixel { span, .. }
                     if span.end > reference_start && span.start < reference_end)
             }),
             "shape references must not be projected as inline pixel rows"
@@ -693,13 +693,13 @@ B
     }
 
     #[test]
-    fn canonical_sprite_parser_projects_palette_and_pixel_facts() {
+    fn canonical_visual_parser_projects_palette_and_pixel_facts() {
         let source = r##"
 puzzle board {
 slots {
 actors = Box
 }
-sprites {
+visuals {
 Box
 #111 #eee
 01.
@@ -726,7 +726,7 @@ Box
             document.diagnostics
         );
         assert!(document.highlight_ranges.display_facts.contains(
-            &crate::SurfaceDisplayFact::SpritePixel {
+            &crate::SurfaceDisplayFact::VisualPixel {
                 span: crate::surface::SourceSpan {
                     start: row_start + 1,
                     end: row_start + 2,
@@ -736,7 +736,7 @@ Box
             }
         ));
         assert!(document.highlight_ranges.display_facts.contains(
-            &crate::SurfaceDisplayFact::SpritePixel {
+            &crate::SurfaceDisplayFact::VisualPixel {
                 span: crate::surface::SourceSpan {
                     start: row_start + 2,
                     end: row_start + 3,
@@ -748,13 +748,13 @@ Box
     }
 
     #[test]
-    fn sprite_palette_alias_display_facts_use_the_resolved_color_literal() {
+    fn visual_palette_alias_display_facts_use_the_resolved_color_literal() {
         let source = r##"
 puzzle board {
 slots {
 actors = GoalCount
 }
-sprites {
+visuals {
 palette {
 GoalCount = #acacac
 }
@@ -779,7 +779,7 @@ GoalCount
             }
         ));
         assert!(document.highlight_ranges.display_facts.contains(
-            &crate::SurfaceDisplayFact::SpritePixel {
+            &crate::SurfaceDisplayFact::VisualPixel {
                 span: crate::surface::SourceSpan {
                     start: pixel_start,
                     end: pixel_start + 1,
@@ -804,7 +804,7 @@ GoalCount
     }
 
     #[test]
-    fn variant_dependent_sprite_colors_have_no_false_display_color() {
+    fn variant_dependent_visual_colors_have_no_false_display_color() {
         let source = r##"
 puzzle board {
 tags {
@@ -813,14 +813,14 @@ kind = A B
 slots {
 actors = Box:kind
 }
-sprites {
+visuals {
 palette {
 piece_color:kind {
 A = #4a4
 B = #a4a
 }
 }
-sprite {
+visual {
 selector = Box:kind
 colors = piece_color:kind
 shape = {
@@ -834,7 +834,7 @@ shape = {
         let pixel_start = source.rfind("\n0\n").unwrap() + 1;
 
         assert!(document.highlight_ranges.display_facts.contains(
-            &crate::SurfaceDisplayFact::SpritePixel {
+            &crate::SurfaceDisplayFact::VisualPixel {
                 span: crate::surface::SourceSpan {
                     start: pixel_start,
                     end: pixel_start + 1,
@@ -924,7 +924,7 @@ puzzle board {
         assert!(context.semantic_tokens.is_empty());
         assert!(context.highlight_ranges.raw_ranges.is_empty());
         assert!(context.completion_symbols.sfx.is_empty());
-        assert!(context.visual_sprite_refs.color_names.is_empty());
+        assert!(context.visual_refs.color_names.is_empty());
     }
 
     #[test]
@@ -940,7 +940,7 @@ puzzle board {
         assert!(symbols.completion_symbols.sfx.contains("click"));
         assert!(symbols.semantic_tokens.is_empty());
         assert!(symbols.highlight_ranges.raw_ranges.is_empty());
-        assert!(symbols.visual_sprite_refs.color_names.is_empty());
+        assert!(symbols.visual_refs.color_names.is_empty());
     }
 
     #[test]
@@ -1107,7 +1107,7 @@ goto playing
     }
 
     #[test]
-    fn reserved_literals_and_scene_options_receive_surface_tokens() {
+    fn reserved_literals_receive_surface_tokens() {
         let source = r#"
 puzzle board {
 levels {
@@ -1119,36 +1119,10 @@ level "start" {
 }
 }
 }
-
-scene level_select {
-layout {
-level_menu {
-show_index = true
-show_solved=false
-columns = 3
-}
-}
-}
 "#;
         let document = parse_surface_document(source);
 
-        for (needle, text, kind) in [
-            (". = empty", "empty", SurfaceSemanticKind::Literal),
-            (
-                "show_index = true",
-                "show_index",
-                SurfaceSemanticKind::Setting,
-            ),
-            ("show_index = true", "true", SurfaceSemanticKind::Literal),
-            (
-                "show_solved=false",
-                "show_solved",
-                SurfaceSemanticKind::Setting,
-            ),
-            ("show_solved=false", "false", SurfaceSemanticKind::Literal),
-            ("columns = 3", "columns", SurfaceSemanticKind::Setting),
-            ("columns = 3", "3", SurfaceSemanticKind::Number),
-        ] {
+        for (needle, text, kind) in [(". = empty", "empty", SurfaceSemanticKind::Literal)] {
             let needle_start = source.find(needle).unwrap();
             let start = source[needle_start..].find(text).unwrap() + needle_start;
             assert!(

@@ -315,6 +315,11 @@ fn parse_rewrite_effect_value(
 
     let tokens = split_header_tokens(suffix);
     match tokens.as_slice() {
+        [visual] if puzzle_authoring::is_visual_emission_name(visual) => {
+            Ok(vec![EffectAst::EmitVisual {
+                name: visual[1..].to_string(),
+            }])
+        }
         [command] if command.eq_ignore_ascii_case("cancel") => Ok(vec![EffectAst::Cancel]),
         [command] if command.eq_ignore_ascii_case("win") => Ok(vec![EffectAst::Win]),
         [command] if command.eq_ignore_ascii_case("restart") => Ok(vec![EffectAst::Restart]),
@@ -416,6 +421,13 @@ fn parse_simple_rewrite_effects(
     let mut effects = Vec::new();
     let mut index = 0;
     while index < tokens.len() {
+        if puzzle_authoring::is_visual_emission_name(tokens[index]) {
+            effects.push(EffectAst::EmitVisual {
+                name: tokens[index][1..].to_string(),
+            });
+            index += 1;
+            continue;
+        }
         match tokens[index].to_ascii_lowercase().as_str() {
             "cancel" => {
                 effects.push(EffectAst::Cancel);
@@ -542,6 +554,9 @@ fn parse_simple_rewrite_effects(
 }
 
 fn is_rewrite_effect_command_token(token: &str) -> bool {
+    if puzzle_authoring::is_visual_emission_name(token) {
+        return true;
+    }
     matches!(
         token.to_ascii_lowercase().as_str(),
         "cancel"

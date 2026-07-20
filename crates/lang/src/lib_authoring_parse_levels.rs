@@ -366,22 +366,16 @@ fn parse_condition_block_entry(
 ) -> Result<usize, DiagnosticReport> {
     let line = &lines[start];
     let tokens = split_header_tokens(line);
-    if matches!(tokens.as_slice(), ["for", _, "in", ..]) {
-        let ["for", binding, "in", sources @ ..] = tokens.as_slice() else {
-            unreachable!("checked by matches");
-        };
+    if matches!(tokens.first(), Some(&"for")) {
         let value_sets = catalog_value_sets(catalog);
-        let values = for_expansion_values(
-            sources,
+        let expansion = expand_for_block_lines(
+            lines,
+            start,
             &value_sets,
             &catalog.numeric_variable_defaults,
-            line,
+            &catalog.maps,
         )?;
-        validate_identifier(binding, line, "expansion binding")?;
-        let (body_lines, next_i) = collect_statement_block_lines(lines, start + 1, line)?;
-        for value in values {
-            let expanded_lines =
-                expand_for_binding_lines(&body_lines, binding, &value, &catalog.maps)?;
+        for expanded_lines in expansion.bodies {
             parse_condition_rows(
                 &expanded_lines,
                 condition_name,
@@ -390,7 +384,7 @@ fn parse_condition_block_entry(
                 descriptions,
             )?;
         }
-        return Ok(next_i);
+        return Ok(expansion.next);
     }
 
     let condition = parse_condition_block_row(line, condition_name, catalog)?;
@@ -487,7 +481,7 @@ fn apply_puzzle_render_node(
                 parsed_animation.tween.enabled = parse_puzzle_render_tween_enabled(definition)?;
             }
             "shade" => {
-                parsed.sprite.shade = render_boolean_value(definition)?;
+                parsed.visual.shade = render_boolean_value(definition)?;
             }
             "shadow" => {
                 parsed.shadow = render_boolean_value(definition)?;

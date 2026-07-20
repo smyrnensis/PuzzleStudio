@@ -9,14 +9,13 @@ use puzzle_core::{
 pub use puzzle_core::{GoalClauseOf, GoalConditionOf, GoalExprOf, GoalValueOf};
 pub use puzzle_runtime_contract::RuntimeEffect as RuleEffect;
 pub use puzzle_scene::{
-    LevelMenuLocked, SceneAlign as SceneAlignDef, SceneAspectRatio as SceneAspectRatioDef,
-    SceneBinaryOp, SceneButton as SharedSceneButton, SceneComponent as SharedSceneComponent,
+    SceneAlign as SceneAlignDef, SceneAspectRatio as SceneAspectRatioDef, SceneBinaryOp,
+    SceneButton as SharedSceneButton, SceneComponent as SharedSceneComponent,
     SceneConditional as SharedSceneConditional, SceneContainer as SharedSceneContainer,
     SceneDistribution as SceneDistributionDef, SceneEffect, SceneEffectParam, SceneExpr,
-    SceneFor as SharedSceneFor, SceneForSource as ForSource, SceneLayout as SceneLayoutDef,
-    SceneLevelKey, SceneSpace as SceneSpaceDef, SceneTextAlign as SceneTextAlignDef,
-    SceneTextComponent as SharedSceneTextComponent, SceneTextRole as SceneTextRoleDef,
-    ViewportProjection as ViewportProjectionDef,
+    SceneLayout as SceneLayoutDef, SceneSpace as SceneSpaceDef,
+    SceneTextAlign as SceneTextAlignDef, SceneTextComponent as SharedSceneTextComponent,
+    SceneTextRole as SceneTextRoleDef, ViewportProjection as ViewportProjectionDef,
 };
 use serde::{Deserialize, Serialize};
 
@@ -378,7 +377,7 @@ pub struct ThemeVariableDef {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct VisualsDef {
     pub aliases: Vec<VisualAliasDef>,
-    pub sprites: Vec<VisualSpriteDef>,
+    pub entries: Vec<VisualDef>,
     /// Presentation ordering is compiled independently from state slots.
     #[serde(default)]
     pub order: VisualOrderDef,
@@ -404,44 +403,44 @@ pub struct VisualOrderPriorityDef {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct VisualAliasDef {
     pub object: String,
-    pub sprite: String,
+    pub visual: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct VisualSpriteDef {
+pub struct VisualDef {
     pub name: String,
-    pub kind: VisualSpriteKind,
+    pub kind: VisualKind,
     /// Canonical cell-art frames. Each frame contains one or more parallel planes.
     #[serde(default)]
-    pub frames: Vec<VisualSpriteFrameDef>,
+    pub frames: Vec<VisualFrameDef>,
     #[serde(default)]
-    pub transforms: Vec<VisualSpriteTransform>,
-    pub fit: VisualSpriteFit,
-    pub sampling: Option<VisualSpriteSampling>,
+    pub transforms: Vec<VisualTransform>,
+    pub fit: VisualFit,
+    pub sampling: Option<VisualSampling>,
     #[serde(default)]
     pub animation_duration_ms: Option<u64>,
     #[serde(default)]
-    pub pixels_per_cell: Option<VisualSpritePixelsPerCell>,
+    pub pixels_per_cell: Option<VisualPixelsPerCell>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct VisualSpriteFrameDef {
+pub struct VisualFrameDef {
     pub planes: Vec<Vec<String>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum VisualSpriteTransform {
+pub enum VisualTransform {
     Rotate {
         degrees: f64,
-        /// Unit axis in canonical sprite space. Planar rotation uses +Z.
+        /// Unit axis in canonical visual space. Planar rotation uses +Z.
         axis: [f64; 3],
-        space: VisualSpriteSpace,
+        space: VisualSpace,
     },
     Translate {
-        /// Canonical sprite-space displacement. Planar translation has z = 0.
+        /// Canonical visual-space displacement. Planar translation has z = 0.
         value: [f64; 3],
-        space: VisualSpriteSpace,
+        space: VisualSpace,
     },
     Flip {
         enabled: bool,
@@ -450,23 +449,23 @@ pub enum VisualSpriteTransform {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum VisualSpriteSpace {
+pub enum VisualSpace {
     #[default]
     World,
     Local,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct VisualSpriteFit {
-    pub mode: VisualSpriteFitMode,
+pub struct VisualFit {
+    pub mode: VisualFitMode,
     pub width: u32,
     pub height: u32,
 }
 
-impl Default for VisualSpriteFit {
+impl Default for VisualFit {
     fn default() -> Self {
         Self {
-            mode: VisualSpriteFitMode::Contain,
+            mode: VisualFitMode::Contain,
             width: 1,
             height: 1,
         }
@@ -475,7 +474,7 @@ impl Default for VisualSpriteFit {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum VisualSpriteFitMode {
+pub enum VisualFitMode {
     Contain,
     Cover,
     Stretch,
@@ -483,19 +482,19 @@ pub enum VisualSpriteFitMode {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum VisualSpriteSampling {
+pub enum VisualSampling {
     Pixelated,
     Smooth,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct VisualSpritePixelsPerCell {
+pub struct VisualPixelsPerCell {
     pub width: u32,
     pub height: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum VisualSpriteKind {
+pub enum VisualKind {
     Solid(String),
     Image { source: String },
     Ascii { colors: Vec<VisualColorDef> },
@@ -511,7 +510,7 @@ pub struct VisualColorDef {
 pub struct PuzzleRenderDef {
     pub grid: PuzzleGridRenderDef,
     pub camera: crate::CameraSettings3,
-    pub sprite: crate::SpriteRenderSettings3,
+    pub visual: crate::VisualRenderSettings3,
     pub shadow: bool,
     pub viewport: crate::ViewportSettings3,
     pub pixelate: crate::PixelateRenderSettings3,
@@ -533,6 +532,39 @@ pub struct LoadedGridLevel<const D: usize, Size: GridSize<D>> {
     pub program: puzzle_core::GridProgramSequence,
     pub level_start_program: Option<GridProgramRef>,
     pub level_clear_program: Option<GridProgramRef>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct LevelId {
+    pub puzzle: String,
+    pub name: String,
+}
+
+impl LevelId {
+    pub fn new(puzzle: impl Into<String>, name: impl Into<String>) -> Self {
+        Self {
+            puzzle: puzzle.into(),
+            name: name.into(),
+        }
+    }
+
+    pub fn record_key(&self) -> String {
+        scene_level_record_key(&self.puzzle, &self.name)
+    }
+}
+
+pub fn scene_level_record_key(puzzle: &str, name: &str) -> String {
+    fn append_hex(out: &mut String, value: &str) {
+        for byte in value.as_bytes() {
+            out.push_str(&format!("{byte:02x}"));
+        }
+    }
+
+    let mut key = String::from("level_");
+    append_hex(&mut key, puzzle);
+    key.push('_');
+    append_hex(&mut key, name);
+    key
 }
 
 pub type Level = LoadedGridLevel<2, Size2>;
@@ -760,7 +792,7 @@ pub struct ScenePuzzleRule {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SceneResources {
     pub levels: ResourceSelection,
-    pub sprites: ResourceSelection,
+    pub visuals: ResourceSelection,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -842,10 +874,6 @@ pub type SceneConditionalDef =
 
 pub type SceneContainerDef =
     SharedSceneContainer<SceneEffect, SceneExpr, SceneTextContent, SceneExpr>;
-
-pub type SceneForDef = SharedSceneFor<SceneEffect, SceneExpr, SceneTextContent, SceneExpr>;
-
-pub type LevelMenuDef = puzzle_scene::LevelMenuComponent<SceneEffect, SceneExpr>;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct KeyBinding {

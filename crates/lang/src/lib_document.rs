@@ -487,15 +487,8 @@ fn push_puzzle3_scene_json(
     }
     out.push_str("},\n      \"components\": [");
     let mut wrote_component = false;
-    let default_level_menu_action = SceneEffect::Goto {
-        scene: "playing".to_string(),
-        params: vec![SceneEffectParam::Level(SceneExpr::Path(vec![
-            "level".to_string(),
-        ]))],
-    };
     let options = puzzle_scene::SceneFixtureJsonOptions {
         viewport_projection: Some(puzzle_scene::ViewportProjection::ThreeD),
-        default_level_menu_action: Some(&default_level_menu_action),
     };
     for component in &scene.components {
         let mut component_json = String::new();
@@ -587,6 +580,27 @@ struct DocumentSourceParts {
     recognition: crate::surface::ParserRecognition,
 }
 
+#[derive(Clone, Debug)]
+enum PendingSceneSource {
+    Explicit {
+        name: String,
+        lines: Vec<source::LogicalLine>,
+    },
+    Model {
+        kind: String,
+        name: String,
+        layout: Option<Vec<source::LogicalLine>>,
+    },
+}
+
+impl PendingSceneSource {
+    fn name(&self) -> &str {
+        match self {
+            Self::Explicit { name, .. } | Self::Model { name, .. } => name,
+        }
+    }
+}
+
 impl Default for DocumentShell {
     fn default() -> Self {
         Self {
@@ -606,7 +620,7 @@ impl Default for DocumentShell {
 }
 
 const MODEL_TOP_LEVEL_STRUCTURAL_KEYWORDS: &[&str] =
-    &["puzzle", "scene", "sprites", "levels", "level"];
+    &["puzzle", "scene", "visuals", "levels", "level"];
 
 pub(crate) fn model_top_level_completion_keywords() -> Vec<&'static str> {
     MODEL_TOP_LEVEL_STRUCTURAL_KEYWORDS
@@ -638,13 +652,14 @@ fn parse_document_source_parts_from_logical_lines(
     logical_lines: Vec<source::LogicalLine>,
 ) -> Result<DocumentSourceParts, DiagnosticReport> {
     let mut recognition = crate::surface::ParserRecognition::default();
-    let (model_lines, scenes) =
-        split_document_scene_logical_lines(logical_lines, &mut recognition)?;
+    let (model_lines, pending_scenes) =
+        split_document_scene_sources(logical_lines, &mut recognition)?;
     let document_entries = model_syntax::parse_document_entries(&model_lines)?;
     model_syntax::validate_closed_entries(&document_entries, "document")?;
     let shell = parse_document_shell_entries(&document_entries)?;
     let models = model_syntax::parse_puzzle_models_from_document_entries(&document_entries)?;
     model_syntax::validate_puzzle_model_diagnostics(&models)?;
+    let scenes = parse_pending_scene_sources(&pending_scenes, &models, &mut recognition)?;
     let mut model_catalogs = Vec::with_capacity(models.len());
     for model in &models {
         let parsed_catalog = build_puzzle_catalog(model);
@@ -748,33 +763,51 @@ fn document_entry_lines(
     lines
 }
 
-fn split_document_scene_logical_lines(
+fn split_document_scene_sources(
     logical_lines: Vec<source::LogicalLine>,
     recognition: &mut crate::surface::ParserRecognition,
-) -> Result<(Vec<source::LogicalLine>, Vec<SceneDef>), DiagnosticReport> {
+) -> Result<(Vec<source::LogicalLine>, Vec<PendingSceneSource>), DiagnosticReport> {
     predeclare_document_owner_completion_symbols(&logical_lines, recognition);
-    let level_entries = collect_level_expansion_entries(&logical_lines)?;
     let mut model_lines = Vec::new();
-    let mut scenes = Vec::new();
+    let mut scenes = Vec::<PendingSceneSource>::new();
     let mut model_scene_indices = HashMap::<String, usize>::new();
     let mut i = 0;
     while i < logical_lines.len() {
         let tokens = split_header_tokens(&logical_lines[i]);
         if matches!(tokens.as_slice(), ["scene", ..]) {
-            let (scene, next_i) =
-                parse_scene_definition(&logical_lines, i, &level_entries, recognition)?;
-            if let Some(index) = model_scene_indices.remove(&scene.name) {
+            let declaration = crate::syntax::named_block_declaration_syntax(&tokens, "scene")
+                .ok_or_else(|| {
+                    parse_error(
+                        &logical_lines[i],
+                        "scene header must be: scene <name>[(param...)]",
+                    )
+                })?;
+            let (name, _) = parse_scene_name_and_params(declaration.name, &logical_lines[i])?;
+            let (lines, next_i) = collect_authoring_entry(
+                &logical_lines,
+                i,
+                AuthoringEntryOwner::SceneDefinition,
+            )?;
+            let scene = PendingSceneSource::Explicit {
+                name: name.clone(),
+                lines,
+            };
+            if let Some(index) = model_scene_indices.remove(scene.name()) {
                 scenes[index] = scene;
             } else {
                 scenes.push(scene);
             }
             i = next_i;
         } else if let Some((kind, name)) = model_header_name(tokens.as_slice()) {
-            let (entry, default_scene, next_i) =
-                extract_default_model_scene(&logical_lines, i, kind, name)?;
+            let (entry, layout, next_i) =
+                extract_default_model_scene_source(&logical_lines, i)?;
             model_lines.extend(entry);
-            if !scenes.iter().any(|scene| scene.name == name) {
-                let scene = default_scene.unwrap_or_else(|| implicit_model_scene(kind, name));
+            if !scenes.iter().any(|scene| scene.name() == name) {
+                let scene = PendingSceneSource::Model {
+                    kind: kind.to_string(),
+                    name: name.to_string(),
+                    layout,
+                };
                 model_scene_indices.insert(name.to_string(), scenes.len());
                 scenes.push(scene);
             }
@@ -785,6 +818,49 @@ fn split_document_scene_logical_lines(
         }
     }
     Ok((model_lines, scenes))
+}
+
+fn parse_pending_scene_sources(
+    pending: &[PendingSceneSource],
+    models: &[model_syntax::PuzzleModelSyntax],
+    recognition: &mut crate::surface::ParserRecognition,
+) -> Result<Vec<SceneDef>, DiagnosticReport> {
+    let levels = models
+        .iter()
+        .flat_map(|model| {
+            model.body.levels.levels.iter().map(|level| LevelProjectionEntry {
+                name: level.name.clone(),
+                pack: level.pack.clone(),
+                puzzle: level
+                    .puzzle
+                    .clone()
+                    .unwrap_or_else(|| model.name.clone()),
+            })
+        })
+        .collect::<Vec<_>>();
+    pending
+        .iter()
+        .map(|source| match source {
+            PendingSceneSource::Explicit { lines, .. } => {
+                let (scene, next) = parse_scene_definition(lines, 0, &levels, recognition)?;
+                debug_assert!(
+                    next == lines.len()
+                        || (next + 1 == lines.len() && is_block_close_line(&lines[next]))
+                );
+                Ok(scene)
+            }
+            PendingSceneSource::Model {
+                kind,
+                name,
+                layout: Some(lines),
+            } => parse_default_model_scene(lines, kind, name, &levels),
+            PendingSceneSource::Model {
+                kind,
+                name,
+                layout: None,
+            } => Ok(implicit_model_scene(kind, name)),
+        })
+        .collect()
 }
 
 fn predeclare_document_owner_completion_symbols(
@@ -813,61 +889,6 @@ fn predeclare_document_owner_completion_symbols(
     }
 }
 
-fn collect_level_expansion_entries(
-    lines: &[source::LogicalLine],
-) -> Result<Vec<LevelExpansionEntry>, DiagnosticReport> {
-    let document_entries = model_syntax::parse_document_entries(lines)?;
-    let mut entries = Vec::new();
-    for entry in &document_entries {
-        match entry.directive {
-            puzzle_authoring::PuzzleDirectiveSurface::Model => {
-                let tokens = split_header_tokens(&entry.header.text);
-                let puzzle = crate::syntax::named_block_declaration_syntax(&tokens, "puzzle")
-                    .map(|declaration| declaration.name);
-                let body_entries = model_syntax::parse_document_entries(&entry.body)?;
-                collect_level_expansion_from_entries(&body_entries, puzzle, &mut entries)?;
-            }
-            puzzle_authoring::PuzzleDirectiveSurface::Level
-            | puzzle_authoring::PuzzleDirectiveSurface::Levels => {
-                collect_level_expansion_from_entries(
-                    std::slice::from_ref(entry),
-                    None,
-                    &mut entries,
-                )?;
-            }
-            _ => {}
-        }
-    }
-    Ok(entries)
-}
-
-fn collect_level_expansion_from_entries(
-    source_entries: &[model_syntax::PuzzleEntrySyntax],
-    default_puzzle: Option<&str>,
-    entries: &mut Vec<LevelExpansionEntry>,
-) -> Result<(), DiagnosticReport> {
-    for entry in source_entries {
-        if !matches!(
-            entry.directive,
-            puzzle_authoring::PuzzleDirectiveSurface::Level
-                | puzzle_authoring::PuzzleDirectiveSurface::Levels
-        ) {
-            continue;
-        }
-        let resource = parse_level_resource_entry(entry, entries.len(), default_puzzle)?;
-        entries.extend(
-            resource
-                .levels
-                .into_iter()
-                .map(|level| LevelExpansionEntry {
-                    name: level.name,
-                    pack: level.pack,
-                }),
-        );
-    }
-    Ok(())
-}
-
 fn model_header_name<'a>(tokens: &'a [&'a str]) -> Option<(&'a str, &'a str)> {
     match tokens {
         ["puzzle", name, ..] => Some((tokens[0], *name)),
@@ -875,12 +896,17 @@ fn model_header_name<'a>(tokens: &'a [&'a str]) -> Option<(&'a str, &'a str)> {
     }
 }
 
-fn extract_default_model_scene(
+fn extract_default_model_scene_source(
     logical_lines: &[source::LogicalLine],
     start: usize,
-    kind: &str,
-    name: &str,
-) -> Result<(Vec<source::LogicalLine>, Option<SceneDef>, usize), DiagnosticReport> {
+) -> Result<
+    (
+        Vec<source::LogicalLine>,
+        Option<Vec<source::LogicalLine>>,
+        usize,
+    ),
+    DiagnosticReport,
+> {
     let mut entry = vec![logical_lines[start].clone()];
     let mut default_scene = None;
     let mut depth = logical_lines[start].structural_brace_delta();
@@ -908,13 +934,7 @@ fn extract_default_model_scene(
                 ));
             }
             let next_i = skip_scene_layout_block(logical_lines, i)?;
-            default_scene = Some(parse_default_model_scene(
-                logical_lines,
-                i,
-                next_i,
-                kind,
-                name,
-            )?);
+            default_scene = Some(logical_lines[i..next_i].to_vec());
             i = next_i;
             continue;
         }
@@ -950,17 +970,22 @@ fn skip_scene_layout_block(
 }
 
 fn parse_default_model_scene(
-    lines: &[source::LogicalLine],
-    start: usize,
-    end: usize,
+    layout_lines: &[source::LogicalLine],
     kind: &str,
     name: &str,
+    levels: &[LevelProjectionEntry],
 ) -> Result<SceneDef, DiagnosticReport> {
-    let mut layout_lines = lines[start..end].to_vec();
-    rewrite_default_model_layout_components(&mut layout_lines, kind, name);
     let mut recognition = crate::surface::ParserRecognition::default();
-    let (layout_block, next_i) =
-        parse_scene_layout_block(&layout_lines, 0, &HashMap::new(), &mut recognition)?;
+    let iterables = scene_iterable_catalog(levels, &SceneResources::default());
+    let (layout_block, next_i) = parse_scene_layout_block(
+        layout_lines,
+        0,
+        SceneLayoutOwner::ModelDefault {
+            puzzle_slot: name,
+            iterables: &iterables,
+        },
+        &mut recognition,
+    )?;
     debug_assert_eq!(next_i, layout_lines.len());
     let mut scene = implicit_model_scene(kind, name);
     scene.layout = layout_block.layout;
@@ -968,18 +993,6 @@ fn parse_default_model_scene(
     scene.state.puzzles.extend(layout_block.state.puzzles);
     scene.components = layout_block.components;
     Ok(scene)
-}
-
-fn rewrite_default_model_layout_components(
-    lines: &mut [source::LogicalLine],
-    kind: &str,
-    name: &str,
-) {
-    for line in lines {
-        if split_header_tokens(line).as_slice() == [kind] {
-            line.text = format!("{kind} {name}");
-        }
-    }
 }
 
 pub fn validate_source_profile_for_path(
@@ -1341,6 +1354,52 @@ pub fn expand_game_imports_from_documents(
     entry_path: &str,
     documents: &[WorkspaceSourceDocument],
 ) -> Result<String, DiagnosticReport> {
+    Ok(expand_game_imports_from_documents_with_origins(entry_path, documents)?.source)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExpandedWorkspaceSource {
+    pub source: String,
+    line_origins: Vec<WorkspaceSourceLineOrigin>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WorkspaceSourceLineOrigin {
+    path: String,
+    line: usize,
+}
+
+impl ExpandedWorkspaceSource {
+    pub fn remap_diagnostic_report(&self, report: DiagnosticReport) -> DiagnosticReport {
+        let diagnostics = report
+            .into_diagnostics()
+            .into_iter()
+            .map(|mut diagnostic| {
+                let Some(span) = diagnostic.primary_span.as_mut() else {
+                    return diagnostic;
+                };
+                let Some(line) = span.line else {
+                    return diagnostic;
+                };
+                let Some(origin) = self.line_origins.get(line.saturating_sub(1)) else {
+                    return diagnostic;
+                };
+                span.file = Some(origin.path.clone());
+                span.line = Some(origin.line);
+                diagnostic
+            })
+            .collect();
+        DiagnosticReport::from_diagnostics(diagnostics)
+    }
+}
+
+/// Expands workspace imports while retaining the original file and line for
+/// every emitted source line. Consumers that compile the expanded source must
+/// remap their diagnostics through the returned value before exposing them.
+pub fn expand_game_imports_from_documents_with_origins(
+    entry_path: &str,
+    documents: &[WorkspaceSourceDocument],
+) -> Result<ExpandedWorkspaceSource, DiagnosticReport> {
     let entry = normalize_virtual_import_path(Path::new(entry_path));
     let mut sources = HashMap::new();
     for document in documents {
@@ -1350,7 +1409,10 @@ pub fn expand_game_imports_from_documents(
                 "workspace document path must not be empty".to_string(),
             ));
         }
-        if sources.insert(path.clone(), document.source.as_str()).is_some() {
+        if sources
+            .insert(path.clone(), document.source.as_str())
+            .is_some()
+        {
             return Err(DiagnosticReport::error(format!(
                 "duplicate workspace document path: {}",
                 path.display()
@@ -1371,49 +1433,105 @@ fn expand_virtual_game_imports(
     current_path: &Path,
     sources: &HashMap<PathBuf, &str>,
     import_stack: &mut Vec<PathBuf>,
-) -> Result<String, DiagnosticReport> {
+) -> Result<ExpandedWorkspaceSource, DiagnosticReport> {
     let mut out = String::new();
-    for raw_line in source.split_inclusive('\n') {
+    let mut line_origins = Vec::new();
+    for (line_index, raw_line) in source.split_inclusive('\n').enumerate() {
+        let source_line_number = line_index + 1;
         let content = raw_line.strip_suffix('\n').unwrap_or(raw_line);
-        if let Some(requested) = import_directive_path(content)? {
+        let requested = import_directive_path(content).map_err(|report| {
+            workspace_import_diagnostic(report, current_path, source_line_number, content)
+        })?;
+        if let Some(requested) = requested {
             if requested.is_absolute() {
-                return Err(DiagnosticReport::error(
-                    "workspace imports must be relative".to_string(),
+                return Err(workspace_import_diagnostic(
+                    DiagnosticReport::error("workspace imports must be relative"),
+                    current_path,
+                    source_line_number,
+                    content,
                 ));
             }
             let base = current_path.parent().unwrap_or_else(|| Path::new(""));
             let resolved = normalize_virtual_import_path(&base.join(requested));
             if import_stack.contains(&resolved) {
-                return Err(DiagnosticReport::error(format!(
-                    "cyclic import: {}",
-                    import_stack
-                        .iter()
-                        .chain(std::iter::once(&resolved))
-                        .map(|path| path.display().to_string())
-                        .collect::<Vec<_>>()
-                        .join(" -> ")
-                )));
+                return Err(workspace_import_diagnostic(
+                    DiagnosticReport::error(format!(
+                        "cyclic import: {}",
+                        import_stack
+                            .iter()
+                            .chain(std::iter::once(&resolved))
+                            .map(|path| path.display().to_string())
+                            .collect::<Vec<_>>()
+                            .join(" -> ")
+                    )),
+                    current_path,
+                    source_line_number,
+                    content,
+                ));
             }
             let imported = sources.get(&resolved).copied().ok_or_else(|| {
-                DiagnosticReport::error(format!(
-                    "import not found: {} from {}",
-                    resolved.display(),
-                    current_path.display()
-                ))
+                workspace_import_diagnostic(
+                    DiagnosticReport::error(format!(
+                        "import not found: {} from {}",
+                        resolved.display(),
+                        current_path.display()
+                    )),
+                    current_path,
+                    source_line_number,
+                    content,
+                )
             })?;
             import_stack.push(resolved.clone());
             let expanded = expand_virtual_game_imports(imported, &resolved, sources, import_stack);
             import_stack.pop();
             let expanded = expanded?;
-            out.push_str(&expanded);
-            if !expanded.ends_with('\n') {
+            line_origins.extend(expanded.line_origins);
+            if expanded.source.is_empty() {
+                line_origins.push(WorkspaceSourceLineOrigin {
+                    path: resolved.display().to_string(),
+                    line: 1,
+                });
+            }
+            out.push_str(&expanded.source);
+            if !expanded.source.ends_with('\n') {
                 out.push('\n');
             }
         } else {
             out.push_str(raw_line);
+            line_origins.push(WorkspaceSourceLineOrigin {
+                path: current_path.display().to_string(),
+                line: source_line_number,
+            });
         }
     }
-    Ok(out)
+    Ok(ExpandedWorkspaceSource {
+        source: out,
+        line_origins,
+    })
+}
+
+fn workspace_import_diagnostic(
+    report: DiagnosticReport,
+    path: &Path,
+    line: usize,
+    source_line: &str,
+) -> DiagnosticReport {
+    let diagnostics = report
+        .into_diagnostics()
+        .into_iter()
+        .map(|mut diagnostic| {
+            let span = diagnostic
+                .primary_span
+                .get_or_insert_with(|| DiagnosticSpan::source_line(source_line));
+            span.file = Some(path.display().to_string());
+            span.line = Some(line);
+            if span.source_line.is_none() {
+                span.source_line = Some(source_line.to_string());
+            }
+            diagnostic
+        })
+        .collect();
+    DiagnosticReport::from_diagnostics(diagnostics)
 }
 
 fn normalize_virtual_import_path(path: &Path) -> PathBuf {
@@ -1761,7 +1879,12 @@ fn lower_model_with_shell_inner(
         &catalog.constant_variables,
     );
     warnings.extend(collect_visual_overwrite_warnings(&visuals));
-    warnings.extend(collect_visual_sprite_grid_warnings(&visuals));
+    warnings.extend(collect_visual_grid_warnings(&visuals));
+    let visual_names = visuals
+        .entries
+        .iter()
+        .map(|visual| visual.name.clone())
+        .collect::<HashSet<_>>();
     let mut programs = lower_programs(
         rule_definitions,
         main_statements,
@@ -1780,6 +1903,7 @@ fn lower_model_with_shell_inner(
         &catalog.condition_names,
         &catalog.mark_names,
         &model_sound_triggers,
+        &visual_names,
         &animation,
         &value_sets,
         &catalog.maps,
@@ -2267,24 +2391,24 @@ fn collect_visual_overwrite_warnings(visuals: &VisualsDef) -> Vec<String> {
     let mut warnings = Vec::new();
     collect_duplicate_output_key_warnings(
         &mut warnings,
-        visuals.sprites.iter().map(|sprite| sprite.name.as_str()),
-        "visual sprite",
-        "later definition overwrites earlier sprite in generated visuals",
+        visuals.entries.iter().map(|visual| visual.name.as_str()),
+        "visual",
+        "later definition overwrites earlier visual in generated visuals",
     );
     warnings
 }
 
 #[derive(Clone, Copy)]
-struct VisualSpriteGrid {
+struct VisualGrid {
     width: u32,
     height: u32,
 }
 
-fn collect_visual_sprite_grid_warnings(visuals: &VisualsDef) -> Vec<String> {
+fn collect_visual_grid_warnings(visuals: &VisualsDef) -> Vec<String> {
     let grids = visuals
-        .sprites
+        .entries
         .iter()
-        .filter_map(|sprite| visual_sprite_grid(sprite).map(|grid| (sprite.name.as_str(), grid)))
+        .filter_map(|visual| visual_grid(visual).map(|grid| (visual.name.as_str(), grid)))
         .collect::<Vec<_>>();
     let largest = grids
         .iter()
@@ -2303,7 +2427,7 @@ fn collect_visual_sprite_grid_warnings(visuals: &VisualsDef) -> Vec<String> {
         push_unique_warning(
             &mut warnings,
             format!(
-                "visual sprite `{name}` uses a {}x{} cell grid that does not divide the largest sprite grid {largest}; sprite grids should divide the largest grid because the renderer uses the largest sprite grid as the canvas unit",
+                "visual `{name}` uses a {}x{} cell grid that does not divide the largest visual grid {largest}; visual grids should divide the largest grid because the renderer uses the largest visual grid as the canvas unit",
                 grid.width, grid.height
             ),
         );
@@ -2311,22 +2435,22 @@ fn collect_visual_sprite_grid_warnings(visuals: &VisualsDef) -> Vec<String> {
     warnings
 }
 
-fn visual_sprite_grid(sprite: &VisualSpriteDef) -> Option<VisualSpriteGrid> {
-    if let Some(pixels) = sprite.pixels_per_cell {
-        return Some(VisualSpriteGrid {
+fn visual_grid(visual: &VisualDef) -> Option<VisualGrid> {
+    if let Some(pixels) = visual.pixels_per_cell {
+        return Some(VisualGrid {
             width: pixels.width,
             height: pixels.height,
         });
     }
-    match &sprite.kind {
-        VisualSpriteKind::Solid(_) => Some(VisualSpriteGrid {
+    match &visual.kind {
+        VisualKind::Solid(_) => Some(VisualGrid {
             width: 1,
             height: 1,
         }),
-        VisualSpriteKind::Image { .. } => None,
-        VisualSpriteKind::Ascii { .. } => {
-            let pattern = sprite.frames.first()?.planes.first()?;
-            Some(VisualSpriteGrid {
+        VisualKind::Image { .. } => None,
+        VisualKind::Ascii { .. } => {
+            let pattern = visual.frames.first()?.planes.first()?;
+            Some(VisualGrid {
                 width: pattern
                     .iter()
                     .map(|row| row.chars().count() as u32)
