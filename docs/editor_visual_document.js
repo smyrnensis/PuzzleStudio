@@ -1,4 +1,4 @@
-function spritePaletteEntryBindInfo(entry) {
+function visualPaletteEntryBindInfo(entry) {
   const bind = entry?.bind ?? entry?.bound ?? entry?.sourceRef ?? null;
   if (!bind) return { available: true, linked: false, name: "", label: "Unlinked color" };
   if (typeof bind === "string") {
@@ -12,7 +12,7 @@ function spritePaletteEntryBindInfo(entry) {
   return { available: true, linked: true, name: "", label: "Bound color" };
 }
 
-function spriteAssetBindInfo(bind, label) {
+function visualAssetBindInfo(bind, label) {
   if (!bind) return { linked: false, name: "", label: `Unlinked ${label}` };
   if (typeof bind === "string") return { linked: true, name: bind, label: `Bound to ${bind}` };
   const name = bind.name || bind.ref || bind.source || "";
@@ -20,7 +20,7 @@ function spriteAssetBindInfo(bind, label) {
   return { linked, name, label: name ? `Bound to ${name}` : `Bound ${label}` };
 }
 
-function spriteEditorOwnedDocument(state, { allowActive = false } = {}) {
+function visualEditorOwnedDocument(state, { allowActive = false } = {}) {
   const owned = state?.editDocumentId
     ? documents.find((candidate) => candidate.id === state.editDocumentId)
     : null;
@@ -30,8 +30,8 @@ function spriteEditorOwnedDocument(state, { allowActive = false } = {}) {
   return active && isTextDocument(active) && isPuzzleDocument(active) ? active : null;
 }
 
-function spriteEditorSourceSnapshot(state, options = {}) {
-  const document = spriteEditorOwnedDocument(state, options);
+function visualEditorSourceSnapshot(state, options = {}) {
+  const document = visualEditorOwnedDocument(state, options);
   if (!document) return { document: null, source: "" };
   return {
     document,
@@ -39,7 +39,7 @@ function spriteEditorSourceSnapshot(state, options = {}) {
   };
 }
 
-function setSpriteEditorSourceTarget(state, target, document = activeDocument()) {
+function setVisualEditorSourceTarget(state, target, document = activeDocument()) {
   state.editDocumentId = document && isTextDocument(document) && isPuzzleDocument(document)
     ? document.id
     : null;
@@ -48,22 +48,22 @@ function setSpriteEditorSourceTarget(state, target, document = activeDocument())
   state.editSourceBodyStart = Number.isInteger(target?.bodyStart) ? target.bodyStart : null;
   state.editSourceBodyEnd = Number.isInteger(target?.bodyEnd) ? target.bodyEnd : null;
   state.editSourceName = target?.name || "";
-  state.sourceSpriteContract = target?.sourceSprite && typeof target.sourceSprite === "object"
-    ? cloneVisualEditValue(target.sourceSprite)
+  state.sourceVisualContract = target?.sourceVisual && typeof target.sourceVisual === "object"
+    ? cloneVisualEditValue(target.sourceVisual)
     : null;
 }
 
-function clearSpriteEditorSourceTarget(state) {
-  setSpriteEditorSourceTarget(state, null, null);
+function clearVisualEditorSourceTarget(state) {
+  setVisualEditorSourceTarget(state, null, null);
 }
 
-function invalidateSpriteEditorSourceTarget(state, document = activeDocument()) {
+function invalidateVisualEditorSourceTarget(state, document = activeDocument()) {
   if (!document || !state?.editDocumentId || document.id !== state.editDocumentId) return false;
-  clearSpriteEditorSourceTarget(state);
+  clearVisualEditorSourceTarget(state);
   return true;
 }
 
-function spriteEditorSourceRange(state, source, indentForSource) {
+function visualEditorSourceRange(state, source, indentForSource) {
   const start = state?.editSourceStart;
   const end = state?.editSourceEnd;
   if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start
@@ -75,23 +75,23 @@ function spriteEditorSourceRange(state, source, indentForSource) {
   };
 }
 
-async function commitSpriteEditorMutation({ state, request, allowActiveDocument = false }) {
-  const { document, source } = spriteEditorSourceSnapshot(state, { allowActive: allowActiveDocument });
-  if (!document) throw new Error("No puzzle source document is owned by this sprite editor.");
-  const result = await mutateSpriteSourceFromRust(source, request(source, document));
+async function commitVisualEditorMutation({ state, request, allowActiveDocument = false }) {
+  const { document, source } = visualEditorSourceSnapshot(state, { allowActive: allowActiveDocument });
+  if (!document) throw new Error("No puzzle source document is owned by this visual editor.");
+  const result = await mutateVisualSourceFromRust(source, request(source, document));
   document.source = result.source;
   if (document.id === activeDocument()?.id) {
     setSourceEditorValue(result.source, { resetUndo: false });
-    revealSpriteSourceResult(document, result);
+    revealVisualSourceResult(document, result);
   }
   scheduleLocalSave();
   schedulePreview();
-  setSpriteEditorSourceTarget(state, { start: result.start, end: result.end, name: result.name }, document);
+  setVisualEditorSourceTarget(state, { start: result.start, end: result.end, name: result.name }, document);
   sourceEditor.focus({ preventScroll: true });
   return { document, result };
 }
 
-function projectSpriteDocumentContract(contract) {
+function projectVisualDocumentContract(contract) {
   if (!contract || typeof contract !== "object") return null;
   const dimension = contract.dimension === "2d" || contract.dimension === "3d"
     ? contract.dimension

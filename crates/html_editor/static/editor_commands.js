@@ -37,16 +37,16 @@ function solverCommandActive() {
   return currentPreviewMode === "solver" && solverPanel && !solverPanel.hidden && Boolean(levelSolutionPreview);
 }
 
-function spriteCommandActive() {
-  return Boolean(spritePaneShortcutDimension());
+function visualCommandActive() {
+  return Boolean(visualPaneShortcutDimension());
 }
 
-function selectSpriteCommandColor(index) {
-  const dimension = spritePaneShortcutDimension();
-  const entries = dimension === "3d" ? sprite3dPaletteEntries() : sprite.palette;
+function selectVisualCommandColor(index) {
+  const dimension = visualPaneShortcutDimension();
+  const entries = dimension === "3d" ? visual3dPaletteEntries() : visual.palette;
   if (!dimension || (index !== null && (index < 0 || index >= entries.length))) return false;
-  if (dimension === "3d") selectSprite3dColor(index);
-  else selectSpriteColor(index);
+  if (dimension === "3d") selectVisual3dColor(index);
+  else selectVisualColor(index);
   return true;
 }
 
@@ -134,9 +134,9 @@ const editorCommandDatabase = [
     group: "level3d",
     label: "Fill",
     shortcut: { key: "f" },
-    elements: editorCommandElements("#level3dLayerPalette .sprite-fill-button"),
+    elements: editorCommandElements("#level3dLayerPalette .visual-fill-button"),
     available: () => level3dCommandActive() && !level3dPlaytestActive && level3dViewMode === "layer",
-    run: () => editorCommandClick("#level3dLayerPalette .sprite-fill-button"),
+    run: () => editorCommandClick("#level3dLayerPalette .visual-fill-button"),
   },
   {
     id: "level3d.grid",
@@ -195,15 +195,15 @@ const editorCommandDatabase = [
     run: () => (setSolutionStep(levelSolutionPreview.index - 1), true),
   },
   {
-    id: "sprite.palette.eraser",
-    group: "sprite",
+    id: "visual.palette.eraser",
+    group: "visual",
     label: "Eraser",
-    shortcut: { key: spriteExportCharForColorIndex(null) },
+    shortcut: { key: visualExportCharForColorIndex(null) },
     elements: editorCommandElements(
-      "#spritePalette .sprite-token-erase, #sprite3dPalette .sprite-token-erase",
+      "#visualPalette .visual-token-erase, #visual3dPalette .visual-token-erase",
     ),
-    available: spriteCommandActive,
-    run: () => selectSpriteCommandColor(null),
+    available: visualCommandActive,
+    run: () => selectVisualCommandColor(null),
   },
   {
     id: "solver.next",
@@ -353,16 +353,16 @@ for (let index = 0; index < 9; index += 1) {
 
 for (let index = 0; index < 10; index += 1) {
   editorCommandDatabase.push({
-    id: `sprite.palette.${SPRITE_COLOR_TOKENS[index]}`,
-    group: "sprite",
-    label: `Paint color ${SPRITE_COLOR_TOKENS[index]}`,
-    shortcut: { key: SPRITE_COLOR_TOKENS[index] },
+    id: `visual.palette.${VISUAL_COLOR_TOKENS[index]}`,
+    group: "visual",
+    label: `Paint color ${VISUAL_COLOR_TOKENS[index]}`,
+    shortcut: { key: VISUAL_COLOR_TOKENS[index] },
     shortcutOnly: true,
     elements: editorCommandElements(
-      `#spritePalette .sprite-color-swatch[data-color-index="${index}"], #sprite3dPalette .sprite-color-swatch[data-color-index="${index}"]`,
+      `#visualPalette .visual-color-swatch[data-color-index="${index}"], #visual3dPalette .visual-color-swatch[data-color-index="${index}"]`,
     ),
-    available: spriteCommandActive,
-    run: () => selectSpriteCommandColor(index),
+    available: visualCommandActive,
+    run: () => selectVisualCommandColor(index),
   });
 }
 

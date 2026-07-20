@@ -120,7 +120,7 @@ The parser frontend has four recognition stages:
 4. Semantic resolution joins declarations and references without recognizing
    their spelling again.
 
-Generic document structure, authoring rows, rules, levels, sprites, scenes, and
+Generic document structure, authoring rows, rules, levels, visuals, scenes, and
 other leaf languages may have distinct owners. An owner receives lexer tokens or
 an explicitly opaque token slice from its parent. It may inspect those token
 payloads but must not scan the whole source independently.
@@ -132,7 +132,7 @@ lists, `record_*_surface` functions, `scan_*_surface_ranges` functions, and
 post-parse spelling classification are forbidden even in parser-named modules.
 
 Contextual classes such as selector marks, directions, declaration names, level
-cells, sprite pixels, and references are parser facts, not lexical guesses.
+cells, visual pixels, and references are parser facts, not lexical guesses.
 Highlighting is a total exhaustive mapping from dispositions and resolved facts
 to display kinds. A highlight-only "canonical lexer" that strict parsing does
 not consume remains a second grammar implementation.
@@ -537,7 +537,7 @@ Recommended execution order:
    surface projection recognizers.
 3. Move rule syntax, including patterns and control flow, and make 2D/3D lowering
    consume the shared typed rule product.
-4. Move levels and legends, then sprites and visuals. These owners justify opaque
+4. Move levels and legends, then visuals and visuals. These owners justify opaque
    token slices and owner-local incremental parsers because their ASCII bodies
    have different lexical meaning.
 5. Move scenes, metadata, imports, and remaining leaf owners; then delete the

@@ -29,7 +29,7 @@
             <button id="playModeButton" class="is-active" type="button">Preview</button>
             <button id="solverModeButton" type="button">Solve</button>
             <button id="editModeButton" type="button">Level</button>
-            <button id="spriteModeButton" type="button">Sprite</button>
+            <button id="visualModeButton" type="button">Visual</button>
             <button id="soundsTopbarButton" type="button">Sound</button>
             <button id="psImportTopbarButton" type="button">PS Import</button>
             <button id="docsTopbarButton" type="button">Documents</button>
@@ -244,7 +244,7 @@
 <button class="docs-nav-button" type="button" data-docs-page="input-rules" role="tab">Input Rules</button>
 <button class="docs-nav-button" type="button" data-docs-page="movement" role="tab">Movement</button>
 <button class="docs-nav-button" type="button" data-docs-page="win-conditions" role="tab">Win Conditions</button>
-<button class="docs-nav-button" type="button" data-docs-page="sprites" role="tab">Sprites</button>
+<button class="docs-nav-button" type="button" data-docs-page="visuals" role="tab">Visuals</button>
 <div class="docs-nav-level">Advanced</div>
 <div class="docs-nav-chapter">Rules &amp; Patterns</div>
 <button class="docs-nav-button" type="button" data-docs-page="guards" role="tab">Guards</button>
@@ -277,7 +277,7 @@
 <button class="docs-nav-button" type="button" data-docs-page="display" role="tab">Display</button>
 <button class="docs-nav-button" type="button" data-docs-page="theme" role="tab">Theme</button>
 <button class="docs-nav-button" type="button" data-docs-page="rendering" role="tab">Rendering</button>
-<button class="docs-nav-button" type="button" data-docs-page="sprite-shapes" role="tab">Sprite Shapes &amp; Animation</button>
+<button class="docs-nav-button" type="button" data-docs-page="visual-shapes" role="tab">Visual Shapes &amp; Animation</button>
 <div class="docs-nav-chapter">3D</div>
 <button class="docs-nav-button" type="button" data-docs-page="3d" role="tab">3D</button>
 <div class="docs-nav-chapter">Assets &amp; Sound</div>
@@ -295,44 +295,44 @@
 <h3>Smallest Shape</h3>
 <pre><code class="language-puzzle"><span class="syntax-keyword">puzzle</span> <span class="syntax-binding">my_game</span> <span class="syntax-brace-depth-0">{</span>
 <span class="syntax-keyword">slots</span> <span class="syntax-brace-depth-1">{</span>
-<span class="syntax-syntax-invalid">Goal</span>
-<span class="syntax-syntax-invalid">Player</span> <span class="syntax-syntax-invalid">Wall</span>
+<span class="syntax-object">Goal</span>
+<span class="syntax-object">Player</span> <span class="syntax-object">Wall</span>
 <span class="syntax-brace-depth-1">}</span>
 
-<span class="syntax-keyword">sprites</span> <span class="syntax-brace-depth-1">{</span>
+<span class="syntax-keyword">visuals</span> <span class="syntax-brace-depth-1">{</span>
 <span class="syntax-keyword">Goal</span> <span class="syntax-brace-depth-2">{</span>
 <span class="syntax-color" style="--syntax-color-token: #ffd166">#ffd166</span>
-.....
-.000.
-.0.0.
-.000.
-.....
+<span class="syntax-visual-pixel is-transparent" style="--syntax-visual-pixel-color: transparent">.....</span>
+<span class="syntax-visual-pixel is-transparent" style="--syntax-visual-pixel-color: transparent">.</span><span class="syntax-visual-pixel" style="--syntax-visual-pixel-color: #ffd166">000</span><span class="syntax-visual-pixel is-transparent" style="--syntax-visual-pixel-color: transparent">.</span>
+<span class="syntax-visual-pixel is-transparent" style="--syntax-visual-pixel-color: transparent">.</span><span class="syntax-visual-pixel" style="--syntax-visual-pixel-color: #ffd166">0</span><span class="syntax-visual-pixel is-transparent" style="--syntax-visual-pixel-color: transparent">.</span><span class="syntax-visual-pixel" style="--syntax-visual-pixel-color: #ffd166">0</span><span class="syntax-visual-pixel is-transparent" style="--syntax-visual-pixel-color: transparent">.</span>
+<span class="syntax-visual-pixel is-transparent" style="--syntax-visual-pixel-color: transparent">.</span><span class="syntax-visual-pixel" style="--syntax-visual-pixel-color: #ffd166">000</span><span class="syntax-visual-pixel is-transparent" style="--syntax-visual-pixel-color: transparent">.</span>
+<span class="syntax-visual-pixel is-transparent" style="--syntax-visual-pixel-color: transparent">.....</span>
 <span class="syntax-brace-depth-2">}</span>
 <span class="syntax-keyword">Player</span> <span class="syntax-brace-depth-2">{</span>
 <span class="syntax-color" style="--syntax-color-token: #2d6cdf">#2d6cdf</span>
-.000.
-.0.0.
-.000.
-..0..
-.0.0.
+<span class="syntax-visual-pixel is-transparent" style="--syntax-visual-pixel-color: transparent">.</span><span class="syntax-visual-pixel" style="--syntax-visual-pixel-color: #2d6cdf">000</span><span class="syntax-visual-pixel is-transparent" style="--syntax-visual-pixel-color: transparent">.</span>
+<span class="syntax-visual-pixel is-transparent" style="--syntax-visual-pixel-color: transparent">.</span><span class="syntax-visual-pixel" style="--syntax-visual-pixel-color: #2d6cdf">0</span><span class="syntax-visual-pixel is-transparent" style="--syntax-visual-pixel-color: transparent">.</span><span class="syntax-visual-pixel" style="--syntax-visual-pixel-color: #2d6cdf">0</span><span class="syntax-visual-pixel is-transparent" style="--syntax-visual-pixel-color: transparent">.</span>
+<span class="syntax-visual-pixel is-transparent" style="--syntax-visual-pixel-color: transparent">.</span><span class="syntax-visual-pixel" style="--syntax-visual-pixel-color: #2d6cdf">000</span><span class="syntax-visual-pixel is-transparent" style="--syntax-visual-pixel-color: transparent">.</span>
+<span class="syntax-visual-pixel is-transparent" style="--syntax-visual-pixel-color: transparent">..</span><span class="syntax-visual-pixel" style="--syntax-visual-pixel-color: #2d6cdf">0</span><span class="syntax-visual-pixel is-transparent" style="--syntax-visual-pixel-color: transparent">..</span>
+<span class="syntax-visual-pixel is-transparent" style="--syntax-visual-pixel-color: transparent">.</span><span class="syntax-visual-pixel" style="--syntax-visual-pixel-color: #2d6cdf">0</span><span class="syntax-visual-pixel is-transparent" style="--syntax-visual-pixel-color: transparent">.</span><span class="syntax-visual-pixel" style="--syntax-visual-pixel-color: #2d6cdf">0</span><span class="syntax-visual-pixel is-transparent" style="--syntax-visual-pixel-color: transparent">.</span>
 <span class="syntax-brace-depth-2">}</span>
 <span class="syntax-keyword">Wall</span> <span class="syntax-brace-depth-2">{</span>
 <span class="syntax-color" style="--syntax-color-token: #6c757d">#6c757d</span>
-00000
-00000
-00000
-00000
-00000
+<span class="syntax-visual-pixel" style="--syntax-visual-pixel-color: #6c757d">00000</span>
+<span class="syntax-visual-pixel" style="--syntax-visual-pixel-color: #6c757d">00000</span>
+<span class="syntax-visual-pixel" style="--syntax-visual-pixel-color: #6c757d">00000</span>
+<span class="syntax-visual-pixel" style="--syntax-visual-pixel-color: #6c757d">00000</span>
+<span class="syntax-visual-pixel" style="--syntax-visual-pixel-color: #6c757d">00000</span>
 <span class="syntax-brace-depth-2">}</span>
 <span class="syntax-brace-depth-1">}</span>
 
 <span class="syntax-condition">win_conditions</span> <span class="syntax-brace-depth-1">{</span>
-<span class="syntax-syntax-invalid">all</span> <span class="syntax-syntax-invalid">Goal</span> <span class="syntax-syntax-invalid">on</span> <span class="syntax-syntax-invalid">Player</span>
+<span class="syntax-keyword">all</span> <span class="syntax-object">Goal</span> <span class="syntax-keyword">on</span> <span class="syntax-object">Player</span>
 <span class="syntax-brace-depth-1">}</span>
 
 <span class="syntax-keyword">rules</span> <span class="syntax-brace-depth-1">{</span>
-<span class="syntax-syntax-invalid">input</span> <span class="syntax-operator">[</span> <span class="syntax-syntax-invalid">Player</span> <span class="syntax-operator">]</span> <span class="syntax-arrow">-&gt;</span> <span class="syntax-operator">[</span> <span class="syntax-operator">&gt;</span> <span class="syntax-syntax-invalid">Player</span> <span class="syntax-operator">]</span>
-<span class="syntax-syntax-invalid">move</span>
+<span class="syntax-keyword">input</span> <span class="syntax-operator">[</span> <span class="syntax-object">Player</span> <span class="syntax-operator">]</span> <span class="syntax-arrow">-&gt;</span> <span class="syntax-operator">[</span> <span class="syntax-keyword">&gt;</span> <span class="syntax-object">Player</span> <span class="syntax-operator">]</span>
+<span class="syntax-effect">move</span>
 <span class="syntax-brace-depth-1">}</span>
 
 <span class="syntax-keyword">levels</span> <span class="syntax-brace-depth-1">{</span>
@@ -354,7 +354,7 @@
 <section class="docs-section">
 <h3>Basic Path</h3>
 <p>Read the Basic pages in order when making your first game.</p>
-<p>Metadata and Puzzle Block define the game and its playable model. Layers, Legend, and Levels make a board that the editor can load. Rewrite Rules, Input Rules, and Movement make it respond to input. Win Conditions make a level finish, and Sprites make declared objects visible.</p>
+<p>Metadata and Puzzle Block define the game and its playable model. Layers, Legend, and Levels make a board that the editor can load. Rewrite Rules, Input Rules, and Movement make it respond to input. Win Conditions make a level finish, and Visuals make declared objects visible.</p>
 </section>
 <section class="docs-section">
 <h3>Advanced Path</h3>
@@ -367,7 +367,7 @@
 <p>Add a character to the level.</p>
 <p>Map that character in <code>legend</code>.</p>
 <p>Put it in a layer.</p>
-<p>Give the object a sprite if it should be visible. A 3D object without a sprite is not given an implicit cube.</p>
+<p>Give the object a visual if it should be visible. A 3D object without a visual is not given an implicit cube.</p>
 <p>Add rules only after it appears correctly.</p>
 </section>
 <footer class="docs-page-links" aria-label="Related documents">
@@ -397,18 +397,18 @@
 </header>
 <pre><code class="language-puzzle"><span class="syntax-keyword">puzzle</span> <span class="syntax-binding">sokoban</span> <span class="syntax-brace-depth-0">{</span>
 <span class="syntax-keyword">slots</span> <span class="syntax-brace-depth-1">{</span>
-<span class="syntax-syntax-invalid">Goal</span>
-<span class="syntax-syntax-invalid">Player</span> <span class="syntax-syntax-invalid">Box</span> <span class="syntax-syntax-invalid">Wall</span>
+<span class="syntax-object">Goal</span>
+<span class="syntax-object">Player</span> <span class="syntax-object">Box</span> <span class="syntax-object">Wall</span>
 <span class="syntax-brace-depth-1">}</span>
 
 <span class="syntax-condition">win_conditions</span> <span class="syntax-brace-depth-1">{</span>
-<span class="syntax-syntax-invalid">all</span> <span class="syntax-syntax-invalid">Goal</span> <span class="syntax-syntax-invalid">on</span> <span class="syntax-syntax-invalid">Box</span>
+<span class="syntax-keyword">all</span> <span class="syntax-object">Goal</span> <span class="syntax-keyword">on</span> <span class="syntax-object">Box</span>
 <span class="syntax-brace-depth-1">}</span>
 
 <span class="syntax-keyword">rules</span> <span class="syntax-brace-depth-1">{</span>
-<span class="syntax-syntax-invalid">input</span> <span class="syntax-operator">[</span> <span class="syntax-syntax-invalid">Player</span> <span class="syntax-operator">]</span> <span class="syntax-arrow">-&gt;</span> <span class="syntax-operator">[</span> <span class="syntax-operator">&gt;</span> <span class="syntax-syntax-invalid">Player</span> <span class="syntax-operator">]</span>
-<span class="syntax-operator">[</span> <span class="syntax-operator">&gt;</span> <span class="syntax-syntax-invalid">Player</span> <span class="syntax-operator">|</span> <span class="syntax-syntax-invalid">Box</span> <span class="syntax-operator">]</span> <span class="syntax-arrow">-&gt;</span> <span class="syntax-operator">[</span> <span class="syntax-operator">&gt;</span> <span class="syntax-syntax-invalid">Player</span> <span class="syntax-operator">|</span> <span class="syntax-operator">&gt;</span> <span class="syntax-syntax-invalid">Box</span> <span class="syntax-operator">]</span>
-<span class="syntax-syntax-invalid">move</span>
+<span class="syntax-keyword">input</span> <span class="syntax-operator">[</span> <span class="syntax-object">Player</span> <span class="syntax-operator">]</span> <span class="syntax-arrow">-&gt;</span> <span class="syntax-operator">[</span> <span class="syntax-keyword">&gt;</span> <span class="syntax-object">Player</span> <span class="syntax-operator">]</span>
+<span class="syntax-operator">[</span> <span class="syntax-keyword">&gt;</span> <span class="syntax-object">Player</span> <span class="syntax-operator">|</span> <span class="syntax-object">Box</span> <span class="syntax-operator">]</span> <span class="syntax-arrow">-&gt;</span> <span class="syntax-operator">[</span> <span class="syntax-keyword">&gt;</span> <span class="syntax-object">Player</span> <span class="syntax-operator">|</span> <span class="syntax-keyword">&gt;</span> <span class="syntax-object">Box</span> <span class="syntax-operator">]</span>
+<span class="syntax-effect">move</span>
 <span class="syntax-brace-depth-1">}</span>
 
 <span class="syntax-keyword">levels</span> <span class="syntax-brace-depth-1">{</span>
@@ -426,7 +426,7 @@
 #####
 <span class="syntax-brace-depth-1">}</span>
 <span class="syntax-brace-depth-0">}</span></code></pre>
-<p>A puzzle usually contains layers, sprites, rules, win conditions, and levels. <code>rules { ... }</code> is the required gameplay entry point; the removed <code>transitions</code>, <code>main</code>, and <code>rule</code> forms are not alternatives.</p>
+<p>A puzzle usually contains layers, visuals, rules, win conditions, and levels. <code>rules { ... }</code> is the required gameplay entry point; the removed <code>transitions</code>, <code>main</code>, and <code>rule</code> forms are not alternatives.</p>
 <p>Files can contain more than one puzzle when scenes need to switch between them. Use <code>puzzle</code> for a 3D model. Both model kinds use <code>levels { ... }</code>; <code>levels3</code> is no longer syntax.</p>
 <footer class="docs-page-links" aria-label="Related documents">
 <button class="docs-page-link docs-page-link-previous" type="button" data-docs-page="metadata"><span class="docs-page-link-label">Previous</span><span class="docs-page-link-title">Metadata</span></button>
@@ -449,7 +449,7 @@
 <pre><code class="language-puzzle"><span class="syntax-keyword">slots</span> <span class="syntax-brace-depth-0">{</span>
 <span class="syntax-syntax-invalid">solid</span> <span class="syntax-operator">=</span> <span class="syntax-syntax-invalid">Player</span> <span class="syntax-syntax-invalid">Box</span> <span class="syntax-syntax-invalid">Wall</span>
 <span class="syntax-brace-depth-0">}</span></code></pre>
-<p>Then a rule can use <code>solid</code> to mean <code>Player Box Wall</code>. Use <code>groups</code> for selector aliases that should not also define storage-slot exclusion. Sprite drawing order is defined separately by <code>sprites { order { ... } }</code>.</p>
+<p>Then a rule can use <code>solid</code> to mean <code>Player Box Wall</code>. Use <code>groups</code> for selector aliases that should not also define storage-slot exclusion. Visual drawing order is defined separately by <code>visuals { order { ... } }</code>.</p>
 <footer class="docs-page-links" aria-label="Related documents">
 <button class="docs-page-link docs-page-link-previous" type="button" data-docs-page="puzzle-block"><span class="docs-page-link-label">Previous</span><span class="docs-page-link-title">Puzzle Block</span></button>
 <button class="docs-page-link docs-page-link-next" type="button" data-docs-page="legend"><span class="docs-page-link-label">Next</span><span class="docs-page-link-title">Legend</span></button>
@@ -596,54 +596,54 @@ P.x
 </section>
 <footer class="docs-page-links" aria-label="Related documents">
 <button class="docs-page-link docs-page-link-previous" type="button" data-docs-page="movement"><span class="docs-page-link-label">Previous</span><span class="docs-page-link-title">Movement</span></button>
-<button class="docs-page-link docs-page-link-next" type="button" data-docs-page="sprites"><span class="docs-page-link-label">Next</span><span class="docs-page-link-title">Sprites</span></button>
+<button class="docs-page-link docs-page-link-next" type="button" data-docs-page="visuals"><span class="docs-page-link-label">Next</span><span class="docs-page-link-title">Visuals</span></button>
 </footer>
-</article><article class="docs-article" data-docs-article="sprites" hidden>
+</article><article class="docs-article" data-docs-article="visuals" hidden>
 <header class="docs-header">
 <p class="docs-kicker">PuzzleStudio Documents</p>
-<h2>Sprites</h2>
-<p>Use <code>sprites</code> to define how objects look.</p>
+<h2>Visuals</h2>
+<p>Use <code>visuals</code> to define how objects look.</p>
 </header>
 <pre><code class="language-puzzle"><span class="syntax-keyword">puzzle</span> <span class="syntax-binding">sokoban</span> <span class="syntax-brace-depth-0">{</span>
-<span class="syntax-keyword">sprites</span> <span class="syntax-brace-depth-1">{</span>
+<span class="syntax-keyword">visuals</span> <span class="syntax-brace-depth-1">{</span>
 <span class="syntax-keyword">Player</span> <span class="syntax-brace-depth-2">{</span>
-<span class="syntax-keyword">image</span> <span class="syntax-asset">&quot;sprites/player.png&quot;</span>
+<span class="syntax-keyword">image</span> <span class="syntax-asset">&quot;visuals/player.png&quot;</span>
 <span class="syntax-brace-depth-2">}</span>
 
 <span class="syntax-keyword">Box</span> <span class="syntax-brace-depth-2">{</span>
 <span class="syntax-color" style="--syntax-color-token: #b5651d">#b5651d</span> <span class="syntax-color" style="--syntax-color-token: #f4a261">#f4a261</span>
-<span class="syntax-sprite-pixel" style="--syntax-sprite-pixel-color: #b5651d">00000</span>
-<span class="syntax-sprite-pixel" style="--syntax-sprite-pixel-color: #b5651d">0</span><span class="syntax-sprite-pixel" style="--syntax-sprite-pixel-color: #f4a261">111</span><span class="syntax-sprite-pixel" style="--syntax-sprite-pixel-color: #b5651d">0</span>
-<span class="syntax-sprite-pixel" style="--syntax-sprite-pixel-color: #b5651d">0</span><span class="syntax-sprite-pixel" style="--syntax-sprite-pixel-color: #f4a261">111</span><span class="syntax-sprite-pixel" style="--syntax-sprite-pixel-color: #b5651d">0</span>
-<span class="syntax-sprite-pixel" style="--syntax-sprite-pixel-color: #b5651d">0</span><span class="syntax-sprite-pixel" style="--syntax-sprite-pixel-color: #f4a261">111</span><span class="syntax-sprite-pixel" style="--syntax-sprite-pixel-color: #b5651d">0</span>
-<span class="syntax-sprite-pixel" style="--syntax-sprite-pixel-color: #b5651d">00000</span>
+<span class="syntax-visual-pixel" style="--syntax-visual-pixel-color: #b5651d">00000</span>
+<span class="syntax-visual-pixel" style="--syntax-visual-pixel-color: #b5651d">0</span><span class="syntax-visual-pixel" style="--syntax-visual-pixel-color: #f4a261">111</span><span class="syntax-visual-pixel" style="--syntax-visual-pixel-color: #b5651d">0</span>
+<span class="syntax-visual-pixel" style="--syntax-visual-pixel-color: #b5651d">0</span><span class="syntax-visual-pixel" style="--syntax-visual-pixel-color: #f4a261">111</span><span class="syntax-visual-pixel" style="--syntax-visual-pixel-color: #b5651d">0</span>
+<span class="syntax-visual-pixel" style="--syntax-visual-pixel-color: #b5651d">0</span><span class="syntax-visual-pixel" style="--syntax-visual-pixel-color: #f4a261">111</span><span class="syntax-visual-pixel" style="--syntax-visual-pixel-color: #b5651d">0</span>
+<span class="syntax-visual-pixel" style="--syntax-visual-pixel-color: #b5651d">00000</span>
 <span class="syntax-brace-depth-2">}</span>
 <span class="syntax-brace-depth-1">}</span>
 <span class="syntax-brace-depth-0">}</span></code></pre>
-<p>Image sprites use a game-folder relative path. ASCII sprites use a palette row followed by rows of palette indexes.</p>
-<p>Sprites are drawn into one cell by default. Use <code>contain</code>, <code>cover</code>, or <code>stretch</code> to choose the draw box and scaling:</p>
-<pre><code class="language-puzzle"><span class="syntax-keyword">sprites</span> <span class="syntax-brace-depth-0">{</span>
+<p>Image visuals use a game-folder relative path. ASCII visuals use a palette row followed by rows of palette indexes.</p>
+<p>Visuals are drawn into one cell by default. Use <code>contain</code>, <code>cover</code>, or <code>stretch</code> to choose the draw box and scaling:</p>
+<pre><code class="language-puzzle"><span class="syntax-keyword">visuals</span> <span class="syntax-brace-depth-0">{</span>
 <span class="syntax-keyword">Gate</span> <span class="syntax-brace-depth-1">{</span>
-<span class="syntax-keyword">image</span> <span class="syntax-asset">&quot;sprites/gate.svg&quot;</span>
+<span class="syntax-keyword">image</span> <span class="syntax-asset">&quot;visuals/gate.svg&quot;</span>
 <span class="syntax-keyword">contain</span> <span class="syntax-number">2</span> <span class="syntax-number">2</span>
 <span class="syntax-keyword">translate</span> <span class="syntax-operator">(</span><span class="syntax-number">0</span><span class="syntax-operator">,</span> <span class="syntax-number">-0.25</span><span class="syntax-operator">)</span>
 <span class="syntax-brace-depth-1">}</span>
 
 <span class="syntax-keyword">Portrait</span> <span class="syntax-brace-depth-1">{</span>
-<span class="syntax-keyword">image</span> <span class="syntax-asset">&quot;sprites/portrait.jpg&quot;</span>
+<span class="syntax-keyword">image</span> <span class="syntax-asset">&quot;visuals/portrait.jpg&quot;</span>
 <span class="syntax-keyword">cover</span> <span class="syntax-number">1</span> <span class="syntax-number">1</span>
 <span class="syntax-brace-depth-1">}</span>
 
 <span class="syntax-keyword">Panel</span> <span class="syntax-brace-depth-1">{</span>
-<span class="syntax-keyword">image</span> <span class="syntax-asset">&quot;sprites/panel.png&quot;</span>
+<span class="syntax-keyword">image</span> <span class="syntax-asset">&quot;visuals/panel.png&quot;</span>
 <span class="syntax-keyword">stretch</span> <span class="syntax-number">2</span> <span class="syntax-number">1</span>
 <span class="syntax-brace-depth-1">}</span>
 <span class="syntax-brace-depth-0">}</span></code></pre>
 <p>Use <code>slots</code> for collision and <code>legend</code> for level characters.</p>
-<p>Sprite spatial operations use <code>translate [world|local] &lt;vector&gt;</code>. A 2D sprite uses <code>rotate [world|local] &lt;angle&gt; [from &lt;angle&gt;]</code>, for example <code>rotate directions from up</code>. A 3D sprite may use the same <code>from</code> and axis-less forms; an omitted axis defaults to +Z (<code>up</code>). Use <code>around &lt;axis&gt;</code> for another axis, for example <code>rotate local facing from 0deg around right</code>. The removed <code>offset</code>, <code>rotate using</code>, and generic <code>transform</code> forms are not accepted. For four-way 3D variants authored facing front, use <code>Arrow:horizontal { rotate horizontal from front }</code>.</p>
-<p>Both model kinds use <code>sprites</code>. In a reusable ASCII shape, <code>&gt;</code> starts the next animation frame and <code>-</code> starts the next -Z layer; 2D sprites must have depth 1.</p>
-<p>Drawing order belongs inside <code>sprites</code>:</p>
-<pre><code class="language-puzzle"><span class="syntax-keyword">sprites</span> <span class="syntax-brace-depth-0">{</span>
+<p>Visual spatial operations use <code>translate [world|local] &lt;vector&gt;</code>. A 2D visual uses <code>rotate [world|local] &lt;angle&gt; [from &lt;angle&gt;]</code>, for example <code>rotate directions from up</code>. A 3D visual may use the same <code>from</code> and axis-less forms; an omitted axis defaults to +Z (<code>up</code>). Use <code>around &lt;axis&gt;</code> for another axis, for example <code>rotate local facing from 0deg around right</code>. The removed <code>offset</code>, <code>rotate using</code>, and generic <code>transform</code> forms are not accepted. For four-way 3D variants authored facing front, use <code>Arrow:horizontal { rotate horizontal from front }</code>.</p>
+<p>Both model kinds use <code>visuals</code>. In a reusable ASCII shape, <code>&gt;</code> starts the next animation frame and <code>-</code> starts the next -Z layer; 2D visuals must have depth 1.</p>
+<p>Drawing order belongs inside <code>visuals</code>:</p>
+<pre><code class="language-puzzle"><span class="syntax-keyword">visuals</span> <span class="syntax-brace-depth-0">{</span>
 <span class="syntax-keyword">order</span> <span class="syntax-brace-depth-1">{</span>
 <span class="syntax-keyword">priority</span> = <span class="syntax-literal">down</span> <span class="syntax-literal">right</span>
 <span class="syntax-object">Floor</span>
@@ -670,7 +670,7 @@ P.x
 <p>The guarded block runs only when the condition is true.</p>
 <p>Named conditions can also be used inside <code>if</code>.</p>
 <footer class="docs-page-links" aria-label="Related documents">
-<button class="docs-page-link docs-page-link-previous" type="button" data-docs-page="sprites"><span class="docs-page-link-label">Previous</span><span class="docs-page-link-title">Sprites</span></button>
+<button class="docs-page-link docs-page-link-previous" type="button" data-docs-page="visuals"><span class="docs-page-link-label">Previous</span><span class="docs-page-link-title">Visuals</span></button>
 <button class="docs-page-link docs-page-link-next" type="button" data-docs-page="fix"><span class="docs-page-link-label">Next</span><span class="docs-page-link-title">Fix</span></button>
 </footer>
 </article><article class="docs-article" data-docs-article="fix" hidden>
@@ -845,12 +845,12 @@ PBG
 <section class="docs-section">
 <h3>Basic Variables</h3>
 <pre><code class="language-puzzle"><span class="syntax-keyword">var</span> <span class="syntax-state">button_is_pushed</span> <span class="syntax-operator">=</span> <span class="syntax-literal">false</span>
-<span class="syntax-keyword">var</span> <span class="syntax-state">moves</span> <span class="syntax-operator">=</span> <span class="syntax-number">0</span></code></pre>
+<span class="syntax-keyword">var</span> <span class="syntax-state">moves</span> <span class="syntax-operator">=</span> <span class="syntax-literal">0</span></code></pre>
 <p><code>var</code> creates a named value. Rules and lifecycle blocks can update it.</p>
 </section>
 <section class="docs-section">
 <h3>Constants</h3>
-<pre><code class="language-puzzle"><span class="syntax-keyword">const</span> <span class="syntax-state">target_moves</span> <span class="syntax-operator">=</span> <span class="syntax-number">12</span>
+<pre><code class="language-puzzle"><span class="syntax-keyword">const</span> <span class="syntax-state">target_moves</span> <span class="syntax-operator">=</span> <span class="syntax-literal">12</span>
 <span class="syntax-keyword">const</span> <span class="syntax-state">door_color</span> <span class="syntax-operator">=</span> <span class="syntax-literal">&quot;blue&quot;</span></code></pre>
 <p><code>const</code> creates a named value that stays the same.</p>
 </section>
@@ -1018,7 +1018,7 @@ PBG
 <span class="syntax-syntax-invalid">once</span> <span class="syntax-syntax-invalid">d</span> <span class="syntax-operator">[</span> <span class="syntax-syntax-invalid">Arrow</span><span class="syntax-operator">:</span><span class="syntax-syntax-invalid">d</span> <span class="syntax-operator">]</span> <span class="syntax-arrow">-&gt;</span> <span class="syntax-operator">[</span> <span class="syntax-syntax-invalid">Arrow</span><span class="syntax-operator">:</span><span class="syntax-syntax-invalid">opposite</span><span class="syntax-operator">(</span><span class="syntax-syntax-invalid">d</span><span class="syntax-operator">)</span> <span class="syntax-operator">]</span>
 <span class="syntax-brace-depth-0">}</span></code></pre>
 <p>Maps can also drive visual table lookup. They do not create objects, tags, or runtime variables. The map input and every output must belong to the declared tag set.</p>
-<p>Layout <code>for</code> follows the same projection principle, but it only creates layout children. It does not gain cursor movement, selection, or level-menu behavior.</p>
+<p>Layout <code>for</code> follows the same projection principle, but it only creates layout children. It does not gain cursor movement, selection, or level-menu behavior. <code>level_menu</code> uses this projection during authoring, then lowers the generated items to ordinary <code>choice</code> components inside a <code>scroll=true</code> container.</p>
 </section>
 <footer class="docs-page-links" aria-label="Related documents">
 <button class="docs-page-link docs-page-link-previous" type="button" data-docs-page="tags"><span class="docs-page-link-label">Previous</span><span class="docs-page-link-title">Tags</span></button>
@@ -1060,8 +1060,8 @@ PBG
 <span class="syntax-object">Goal</span>
 <span class="syntax-object">Player</span> <span class="syntax-object">Box</span> <span class="syntax-object">Wall</span>
 <span class="syntax-brace-depth-1">}</span>
-<span class="syntax-syntax-invalid">import</span> <span class="syntax-string">&quot;rules.puzzle&quot;</span>
-<span class="syntax-syntax-invalid">import</span> <span class="syntax-string">&quot;levels.puzzle&quot;</span>
+<span class="syntax-keyword">import</span> <span class="syntax-string">&quot;rules.puzzle&quot;</span>
+<span class="syntax-keyword">import</span> <span class="syntax-string">&quot;levels.puzzle&quot;</span>
 <span class="syntax-brace-depth-0">}</span></code></pre>
 <p>An import expands the referenced file at the location of the <code>import</code> line. A fragment therefore contains the syntax valid at that exact owner position.</p>
 <pre><code class="language-puzzle"><span class="syntax-comment">// rules.puzzle</span>
@@ -1084,7 +1084,7 @@ PBG
 </header>
 <pre><code class="language-puzzle"><span class="syntax-keyword">scene</span> <span class="syntax-scene">title</span> <span class="syntax-brace-depth-0">{</span>
 <span class="syntax-keyword">layout</span> <span class="syntax-brace-depth-1">{</span>
-<span class="syntax-state">title</span>
+<span class="syntax-keyword">title</span>
 <span class="syntax-keyword">choice</span> <span class="syntax-string">&quot;Start&quot;</span> <span class="syntax-arrow">-&gt;</span> <span class="syntax-effect">goto</span> <span class="syntax-scene">playing</span>
 <span class="syntax-brace-depth-1">}</span>
 <span class="syntax-brace-depth-0">}</span></code></pre>
@@ -1161,12 +1161,12 @@ PBG
 <span class="syntax-input">Escape</span> <span class="syntax-input">Enter</span> <span class="syntax-input">Space</span> <span class="syntax-arrow">-&gt;</span> <span class="syntax-effect">resume</span>
 <span class="syntax-brace-depth-1">}</span>
 
-<span class="syntax-keyword">routine</span> <span class="syntax-binding">resume</span> <span class="syntax-brace-depth-1">{</span>
+<span class="syntax-keyword">routine</span> <span class="syntax-effect">resume</span> <span class="syntax-brace-depth-1">{</span>
 <span class="syntax-effect">goto</span> <span class="syntax-scene">playing</span>
 <span class="syntax-brace-depth-1">}</span>
 <span class="syntax-brace-depth-0">}</span></code></pre>
 <p>Use target-qualified commands such as <code>playing.restart</code> or <code>board.restart</code> when a command should operate on a specific target.</p>
-<p>Use <code>choice</code> for items owned by the standard selection cursor and <code>button</code> for auxiliary click/tap or explicitly keyed actions. A <code>level_menu { ... }</code> component owns level-list cursor movement and selection; generic <code>for</code> and <code>column</code> blocks do not become menus.</p>
+<p>Use <code>choice</code> for items owned by the standard selection cursor and <code>button</code> for auxiliary click/tap or explicitly keyed actions. <code>level_menu { ... }</code> is authoring sugar for a <code>scroll=true</code> column containing a level projection made of ordinary choices and typed level transitions.</p>
 <footer class="docs-page-links" aria-label="Related documents">
 <button class="docs-page-link docs-page-link-previous" type="button" data-docs-page="semantic-inputs"><span class="docs-page-link-label">Previous</span><span class="docs-page-link-title">Inputs</span></button>
 <button class="docs-page-link docs-page-link-next" type="button" data-docs-page="scene-state-effects"><span class="docs-page-link-label">Next</span><span class="docs-page-link-title">Scene State &amp; Effects</span></button>
@@ -1228,7 +1228,7 @@ PBG
 <header class="docs-header">
 <p class="docs-kicker">PuzzleStudio Documents</p>
 <h2>Display</h2>
-<p>Object rendering is configured through <code>sprites</code>. State and rules use the same object names that are declared in <code>slots</code>.</p>
+<p>Object rendering is configured through <code>visuals</code>. State and rules use the same object names that are declared in <code>slots</code>.</p>
 </header>
 <footer class="docs-page-links" aria-label="Related documents">
 <button class="docs-page-link docs-page-link-previous" type="button" data-docs-page="scene-state-effects"><span class="docs-page-link-label">Previous</span><span class="docs-page-link-title">Scene State &amp; Effects</span></button>
@@ -1246,7 +1246,7 @@ PBG
 <span class="syntax-keyword">text_color</span> <span class="syntax-color" style="--syntax-color-token: #1d2522">#1d2522</span>
 <span class="syntax-brace-depth-0">}</span></code></pre>
 <p>Themes set defaults for exported play surfaces.</p>
-<p>Use sprites for object drawings and themes for surrounding presentation.</p>
+<p>Use visuals for object drawings and themes for surrounding presentation.</p>
 <footer class="docs-page-links" aria-label="Related documents">
 <button class="docs-page-link docs-page-link-previous" type="button" data-docs-page="display"><span class="docs-page-link-label">Previous</span><span class="docs-page-link-title">Display</span></button>
 <button class="docs-page-link docs-page-link-next" type="button" data-docs-page="rendering"><span class="docs-page-link-label">Next</span><span class="docs-page-link-title">Rendering</span></button>
@@ -1270,13 +1270,13 @@ PBG
 </section>
 <footer class="docs-page-links" aria-label="Related documents">
 <button class="docs-page-link docs-page-link-previous" type="button" data-docs-page="theme"><span class="docs-page-link-label">Previous</span><span class="docs-page-link-title">Theme</span></button>
-<button class="docs-page-link docs-page-link-next" type="button" data-docs-page="sprite-shapes"><span class="docs-page-link-label">Next</span><span class="docs-page-link-title">Sprite Shapes &amp; Animation</span></button>
+<button class="docs-page-link docs-page-link-next" type="button" data-docs-page="visual-shapes"><span class="docs-page-link-label">Next</span><span class="docs-page-link-title">Visual Shapes &amp; Animation</span></button>
 </footer>
-</article><article class="docs-article" data-docs-article="sprite-shapes" hidden>
+</article><article class="docs-article" data-docs-article="visual-shapes" hidden>
 <header class="docs-header">
 <p class="docs-kicker">PuzzleStudio Documents</p>
-<h2>Sprite Shapes And Animation</h2>
-<p>Use <code>shapes</code> for reusable visual patterns and <code>sprites</code> to bind those patterns, colors, images, and transforms to object selectors.</p>
+<h2>Visual Shapes And Animation</h2>
+<p>Use <code>shapes</code> for reusable visual patterns and <code>visuals</code> to bind those patterns, colors, images, and transforms to object selectors.</p>
 </header>
 <section class="docs-section">
 <h3>Reusable Shapes</h3>
@@ -1290,7 +1290,7 @@ PBG
 <span class="syntax-brace-depth-1">}</span>
 <span class="syntax-brace-depth-0">}</span>
 
-<span class="syntax-keyword">sprites</span> <span class="syntax-brace-depth-0">{</span>
+<span class="syntax-keyword">visuals</span> <span class="syntax-brace-depth-0">{</span>
 <span class="syntax-keyword">Player</span> <span class="syntax-brace-depth-1">{</span>
 <span class="syntax-color" style="--syntax-color-token: #2d6cdf">#2d6cdf</span>
 <span class="syntax-keyword">shape</span> <span class="syntax-operator">=</span> <span class="syntax-asset">arrow</span>
@@ -1301,24 +1301,24 @@ PBG
 <section class="docs-section">
 <h3>Frames And Voxel Layers</h3>
 <p>Inside a shape, a line containing only <code>&gt;</code> starts the next animation frame. In a 3D shape, a line containing only <code>-</code> starts the next -Z voxel layer of the same frame. Do not put blank lines around these separators.</p>
-<pre><code class="language-puzzle"><span class="syntax-keyword">sprites</span> <span class="syntax-brace-depth-0">{</span>
+<pre><code class="language-puzzle"><span class="syntax-keyword">visuals</span> <span class="syntax-brace-depth-0">{</span>
 <span class="syntax-keyword">Beacon</span> <span class="syntax-brace-depth-1">{</span>
 <span class="syntax-keyword">duration</span> <span class="syntax-number">400ms</span>
 <span class="syntax-color" style="--syntax-color-token: #ffd166">#ffd166</span> <span class="syntax-color" style="--syntax-color-token: #ef476f">#ef476f</span>
-<span class="syntax-sprite-pixel" style="--syntax-sprite-pixel-color: #ffd166">000</span>
-<span class="syntax-sprite-pixel" style="--syntax-sprite-pixel-color: #ffd166">0</span><span class="syntax-sprite-pixel" style="--syntax-sprite-pixel-color: #ef476f">1</span><span class="syntax-sprite-pixel" style="--syntax-sprite-pixel-color: #ffd166">0</span>
-<span class="syntax-sprite-pixel" style="--syntax-sprite-pixel-color: #ffd166">000</span>
+<span class="syntax-visual-pixel" style="--syntax-visual-pixel-color: #ffd166">000</span>
+<span class="syntax-visual-pixel" style="--syntax-visual-pixel-color: #ffd166">0</span><span class="syntax-visual-pixel" style="--syntax-visual-pixel-color: #ef476f">1</span><span class="syntax-visual-pixel" style="--syntax-visual-pixel-color: #ffd166">0</span>
+<span class="syntax-visual-pixel" style="--syntax-visual-pixel-color: #ffd166">000</span>
 <span class="syntax-arrow">&gt;</span>
-<span class="syntax-sprite-pixel" style="--syntax-sprite-pixel-color: #ef476f">111</span>
-<span class="syntax-sprite-pixel" style="--syntax-sprite-pixel-color: #ef476f">1</span><span class="syntax-sprite-pixel" style="--syntax-sprite-pixel-color: #ffd166">0</span><span class="syntax-sprite-pixel" style="--syntax-sprite-pixel-color: #ef476f">1</span>
-<span class="syntax-sprite-pixel" style="--syntax-sprite-pixel-color: #ef476f">111</span>
+<span class="syntax-visual-pixel" style="--syntax-visual-pixel-color: #ef476f">111</span>
+<span class="syntax-visual-pixel" style="--syntax-visual-pixel-color: #ef476f">1</span><span class="syntax-visual-pixel" style="--syntax-visual-pixel-color: #ffd166">0</span><span class="syntax-visual-pixel" style="--syntax-visual-pixel-color: #ef476f">1</span>
+<span class="syntax-visual-pixel" style="--syntax-visual-pixel-color: #ef476f">111</span>
 <span class="syntax-brace-depth-1">}</span>
 <span class="syntax-brace-depth-0">}</span></code></pre>
-<p>2D sprites must remain one voxel layer deep. Both 2D and 3D use the same <code>sprites</code>, palette, shape, and frame vocabulary.</p>
+<p>2D visuals must remain one voxel layer deep. Both 2D and 3D use the same <code>visuals</code>, palette, shape, and frame vocabulary.</p>
 </section>
 <section class="docs-section">
 <h3>Spatial Operations</h3>
-<pre><code class="language-puzzle"><span class="syntax-keyword">sprites</span> <span class="syntax-brace-depth-0">{</span>
+<pre><code class="language-puzzle"><span class="syntax-keyword">visuals</span> <span class="syntax-brace-depth-0">{</span>
 <span class="syntax-keyword">Arrow</span><span class="syntax-operator">:</span><span class="syntax-keyword">directions</span> <span class="syntax-brace-depth-1">{</span>
 <span class="syntax-color" style="--syntax-color-token: #ffffff">#ffffff</span>
 <span class="syntax-keyword">shape</span> <span class="syntax-operator">=</span> <span class="syntax-asset">arrow</span>
@@ -1326,7 +1326,7 @@ PBG
 <span class="syntax-keyword">translate</span> <span class="syntax-keyword">local</span> <span class="syntax-operator">(</span><span class="syntax-number">0</span><span class="syntax-operator">,</span> <span class="syntax-number">-0.25</span><span class="syntax-operator">)</span>
 <span class="syntax-brace-depth-1">}</span>
 <span class="syntax-brace-depth-0">}</span></code></pre>
-<p>Rotation is <code>rotate [world|local] &lt;angle&gt; [from &lt;angle&gt;]</code>. In 3D, the same axis-less form rotates around +Z (<code>up</code>); append <code>around &lt;axis&gt;</code> to select another axis. Operations run in source order; put a transform on the sprite reference that needs it rather than deriving rotated shapes globally. For a four-way 3D sprite authored facing front, <code>Arrow:horizontal { rotate horizontal from front }</code> expands the variants around Z with front as the zero rotation.</p>
+<p>Rotation is <code>rotate [world|local] &lt;angle&gt; [from &lt;angle&gt;]</code>. In 3D, the same axis-less form rotates around +Z (<code>up</code>); append <code>around &lt;axis&gt;</code> to select another axis. Operations run in source order; put a transform on the visual reference that needs it rather than deriving rotated shapes globally. For a four-way 3D visual authored facing front, <code>Arrow:horizontal { rotate horizontal from front }</code> expands the variants around Z with front as the zero rotation.</p>
 </section>
 <footer class="docs-page-links" aria-label="Related documents">
 <button class="docs-page-link docs-page-link-previous" type="button" data-docs-page="rendering"><span class="docs-page-link-label">Previous</span><span class="docs-page-link-title">Rendering</span></button>
@@ -1336,7 +1336,7 @@ PBG
 <header class="docs-header">
 <p class="docs-kicker">PuzzleStudio Documents</p>
 <h2>3D</h2>
-<p>Use <code>puzzle</code> for a three-dimensional grid model. It uses the same <code>slots</code>, <code>rules</code>, <code>levels</code>, and <code>sprites</code> concepts as a 2D puzzle; there is no separate <code>levels3</code> syntax.</p>
+<p>Use <code>puzzle</code> for a three-dimensional grid model. It uses the same <code>slots</code>, <code>rules</code>, <code>levels</code>, and <code>visuals</code> concepts as a 2D puzzle; there is no separate <code>levels3</code> syntax.</p>
 </header>
 <section class="docs-section">
 <h3>Level Depth</h3>
@@ -1371,15 +1371,15 @@ PBG
 <span class="syntax-brace-depth-1">}</span>
 <span class="syntax-brace-depth-0">}</span></code></pre>
 <p><code>camera</code> defines the initial view. <code>roll</code> rotates the image plane around the view direction and defaults to <code>0</code>. Pointer look and zoom are component gestures, not semantic puzzle inputs. <code>viewport</code> frames a world-space region around its focus; it does not hide objects outside that region. <code>zoomscreen</code> snaps to the target and <code>smoothscreen</code> follows it gradually.</p>
-<p><code>pixelate</code> is a canvas postprocess. <code>shade</code> controls voxel face shading, while <code>shadow</code> enables cast shadows in the Three.js renderer. Shadows are disabled by default and are not supported by the diagnostic Canvas renderer. A 3D object without a sprite is not given an implicit cube.</p>
+<p><code>pixelate</code> is a canvas postprocess. <code>shade</code> controls voxel face shading, while <code>shadow</code> enables cast shadows in the Three.js renderer. Shadows are disabled by default and are not supported by the diagnostic Canvas renderer. A 3D object without a visual is not given an implicit cube.</p>
 <p>Rules may emit <code>set yaw = &lt;angle&gt;</code>, <code>set pitch = &lt;angle&gt;</code>, <code>set roll = &lt;angle&gt;</code>, <code>set zoom = &lt;number&gt;</code>, or <code>reset_camera</code>. These are view commands rather than saved puzzle variables.</p>
 </section>
 <section class="docs-section">
-<h3>Voxel Sprites</h3>
-<p>3D sprites use <code>-</code> for the next -Z voxel layer and <code>&gt;</code> for the next animation frame. A color-only sprite is a filled 1x1x1 voxel. Use <code>shape = &lt;name&gt;</code> to reference a reusable voxel pattern from <code>shapes</code>.</p>
+<h3>Voxel Visuals</h3>
+<p>3D visuals use <code>-</code> for the next -Z voxel layer and <code>&gt;</code> for the next animation frame. A color-only visual is a filled 1x1x1 voxel. Use <code>shape = &lt;name&gt;</code> to reference a reusable voxel pattern from <code>shapes</code>.</p>
 </section>
 <footer class="docs-page-links" aria-label="Related documents">
-<button class="docs-page-link docs-page-link-previous" type="button" data-docs-page="sprite-shapes"><span class="docs-page-link-label">Previous</span><span class="docs-page-link-title">Sprite Shapes &amp; Animation</span></button>
+<button class="docs-page-link docs-page-link-previous" type="button" data-docs-page="visual-shapes"><span class="docs-page-link-label">Previous</span><span class="docs-page-link-title">Visual Shapes &amp; Animation</span></button>
 <button class="docs-page-link docs-page-link-next" type="button" data-docs-page="sounds"><span class="docs-page-link-label">Next</span><span class="docs-page-link-title">Sounds</span></button>
 </footer>
 </article><article class="docs-article" data-docs-article="sounds" hidden>
@@ -1398,8 +1398,8 @@ PBG
 
 <span class="syntax-keyword">puzzle</span> <span class="syntax-binding">sokoban</span> <span class="syntax-brace-depth-0">{</span>
 <span class="syntax-keyword">sounds</span> <span class="syntax-brace-depth-1">{</span>
-<span class="syntax-keyword">move</span> <span class="syntax-object">Player</span> <span class="syntax-arrow">-&gt;</span> <span class="syntax-keyword">sfx</span> <span class="syntax-asset">step</span>
-<span class="syntax-keyword">move</span> <span class="syntax-object">Box</span> <span class="syntax-arrow">-&gt;</span> <span class="syntax-keyword">sfx</span> <span class="syntax-asset">box_drag</span>
+<span class="syntax-keyword">move</span> <span class="syntax-object">Player</span> <span class="syntax-keyword">-&gt;</span> <span class="syntax-keyword">sfx</span> <span class="syntax-asset">step</span>
+<span class="syntax-keyword">move</span> <span class="syntax-object">Box</span> <span class="syntax-keyword">-&gt;</span> <span class="syntax-keyword">sfx</span> <span class="syntax-asset">box_drag</span>
 <span class="syntax-brace-depth-1">}</span>
 
 <span class="syntax-syntax-invalid">on_level_clear</span> <span class="syntax-brace-depth-1">{</span>
@@ -1421,13 +1421,13 @@ PBG
 <pre><code class="language-puzzle"><span class="syntax-keyword">assets</span> <span class="syntax-brace-depth-0">{</span>
 <span class="syntax-syntax-invalid">css</span> <span class="syntax-string">&quot;game.css&quot;</span>
 <span class="syntax-syntax-invalid">script</span> <span class="syntax-string">&quot;visuals.js&quot;</span>
-<span class="syntax-syntax-invalid">file</span> <span class="syntax-string">&quot;sprites/player.png&quot;</span>
+<span class="syntax-syntax-invalid">file</span> <span class="syntax-string">&quot;visuals/player.png&quot;</span>
 <span class="syntax-brace-depth-0">}</span></code></pre>
 <p>Paths are relative to the game folder. Only declared CSS and scripts are loaded, and standalone export embeds only declared files. A file merely being present in the folder does not make it a game asset.</p>
-<p>Sprite <code>image</code> paths must also belong to the game folder.</p>
-<pre><code class="language-puzzle"><span class="syntax-keyword">sprites</span> <span class="syntax-brace-depth-0">{</span>
+<p>Visual <code>image</code> paths must also belong to the game folder.</p>
+<pre><code class="language-puzzle"><span class="syntax-keyword">visuals</span> <span class="syntax-brace-depth-0">{</span>
 <span class="syntax-keyword">Player</span> <span class="syntax-brace-depth-1">{</span>
-<span class="syntax-keyword">image</span> <span class="syntax-asset">&quot;sprites/player.png&quot;</span>
+<span class="syntax-keyword">image</span> <span class="syntax-asset">&quot;visuals/player.png&quot;</span>
 <span class="syntax-brace-depth-1">}</span>
 <span class="syntax-brace-depth-0">}</span></code></pre>
 <p>Asset scripts may derive additional presentation from rendered scene snapshots. They do not own puzzle rules and must not directly mutate puzzle state, undo history, or level progression.</p>
@@ -1467,33 +1467,33 @@ PBG
                 </div>
               </div>
             </div>
-            <div class="level-toolbar sprite-toolbar" role="toolbar" aria-label="Level edit actions">
-              <button id="levelGridButton" class="icon-button sprite-icon-button level-grid-button" type="button" aria-label="Toggle level grid" aria-pressed="false" title="Toggle grid" data-tooltip="Toggle grid">
+            <div class="level-toolbar visual-toolbar" role="toolbar" aria-label="Level edit actions">
+              <button id="levelGridButton" class="icon-button visual-icon-button level-grid-button" type="button" aria-label="Toggle level grid" aria-pressed="false" title="Toggle grid" data-tooltip="Toggle grid">
                 <svg data-editor-icon="grid-2x2" class="level-grid-token-icon" aria-hidden="true"></svg>
               </button>
-              <button id="levelExpandButton" class="icon-button sprite-icon-button level-expand-button" type="button" aria-label="Toggle level expansion" aria-pressed="false" title="Expand" data-tooltip="Expand">
+              <button id="levelExpandButton" class="icon-button visual-icon-button level-expand-button" type="button" aria-label="Toggle level expansion" aria-pressed="false" title="Expand" data-tooltip="Expand">
                 <svg data-editor-icon="expand" aria-hidden="true"></svg>
               </button>
-              <button id="levelShrinkButton" class="icon-button sprite-icon-button level-shrink-button" type="button" aria-label="Toggle level shrinking" aria-pressed="false" title="Shrink" data-tooltip="Shrink">
+              <button id="levelShrinkButton" class="icon-button visual-icon-button level-shrink-button" type="button" aria-label="Toggle level shrinking" aria-pressed="false" title="Shrink" data-tooltip="Shrink">
                 <svg data-editor-icon="shrink" aria-hidden="true"></svg>
               </button>
-              <button id="levelRotateLeftButton" class="icon-button sprite-icon-button" type="button" aria-label="Rotate level left" title="Rotate left" data-tooltip="Rotate left">
+              <button id="levelRotateLeftButton" class="icon-button visual-icon-button" type="button" aria-label="Rotate level left" title="Rotate left" data-tooltip="Rotate left">
                 <svg data-editor-icon="rotate-ccw" aria-hidden="true"></svg>
               </button>
-              <button id="levelRotateRightButton" class="icon-button sprite-icon-button" type="button" aria-label="Rotate level right" title="Rotate right" data-tooltip="Rotate right">
+              <button id="levelRotateRightButton" class="icon-button visual-icon-button" type="button" aria-label="Rotate level right" title="Rotate right" data-tooltip="Rotate right">
                 <svg data-editor-icon="rotate-cw" aria-hidden="true"></svg>
               </button>
-              <button id="levelFlipHorizontalButton" class="icon-button sprite-icon-button" type="button" aria-label="Flip level horizontal" title="Flip horizontal" data-tooltip="Flip horizontal">
+              <button id="levelFlipHorizontalButton" class="icon-button visual-icon-button" type="button" aria-label="Flip level horizontal" title="Flip horizontal" data-tooltip="Flip horizontal">
                 <svg data-editor-icon="flip-horizontal" aria-hidden="true"></svg>
               </button>
-              <button id="levelFlipVerticalButton" class="icon-button sprite-icon-button" type="button" aria-label="Flip level vertical" title="Flip vertical" data-tooltip="Flip vertical">
+              <button id="levelFlipVerticalButton" class="icon-button visual-icon-button" type="button" aria-label="Flip level vertical" title="Flip vertical" data-tooltip="Flip vertical">
                 <svg data-editor-icon="flip-vertical" aria-hidden="true"></svg>
               </button>
               <div id="levelLayerControls" class="level-layer-controls" aria-label="Level layer controls"></div>
             </div>
             <div class="level-palette-toolbar" aria-label="Palette display controls" hidden></div>
             <div id="levelPalette" class="level-palette" aria-label="Level tile palette">
-              <button id="levelFillButton" class="icon-button level-palette-tool-button sprite-fill-button sprite-icon-button" type="button" aria-label="Fill" aria-pressed="false" title="Fill" data-tooltip="Fill">
+              <button id="levelFillButton" class="icon-button level-palette-tool-button visual-fill-button visual-icon-button" type="button" aria-label="Fill" aria-pressed="false" title="Fill" data-tooltip="Fill">
                 <svg data-editor-icon="paint-bucket" aria-hidden="true"></svg>
               </button>
             </div>
@@ -1572,242 +1572,242 @@ PBG
             </div>
             <span id="levelSolveStatus" class="level-solve-status tool-feedback-bar" aria-live="polite">Ready to solve</span>
           </div>
-          <div id="spriteBuilder" class="sprite-builder" hidden>
-            <div id="spritePaneHeaderActions" class="source-action-group source-preview-actions sprite-pane-header-actions" role="group" aria-label="Sprite pane actions">
-              <span class="sprite-dimension-toggle" role="group" aria-label="Sprite dimension">
-                <button id="spriteDimension2dButton" class="icon-button source-action-button is-active" type="button" data-sprite-dimension="2d" aria-label="Edit as 2D sprite" aria-pressed="true" title="2D sprite">2D</button>
-                <button id="spriteDimension3dButton" class="icon-button source-action-button" type="button" data-sprite-dimension="3d" aria-label="Edit as 3D sprite" aria-pressed="false" title="3D sprite">3D</button>
+          <div id="visualBuilder" class="visual-builder" hidden>
+            <div id="visualPaneHeaderActions" class="source-action-group source-preview-actions visual-pane-header-actions" role="group" aria-label="Visual pane actions">
+              <span class="visual-dimension-toggle" role="group" aria-label="Visual dimension">
+                <button id="visualDimension2dButton" class="icon-button source-action-button is-active" type="button" data-visual-dimension="2d" aria-label="Edit as 2D visual" aria-pressed="true" title="2D visual">2D</button>
+                <button id="visualDimension3dButton" class="icon-button source-action-button" type="button" data-visual-dimension="3d" aria-label="Edit as 3D visual" aria-pressed="false" title="3D visual">3D</button>
               </span>
-              <button id="spriteAnimateModeButton" class="icon-button source-action-button" type="button" aria-label="Animate sprite" aria-pressed="false" title="Animate sprite">
+              <button id="visualAnimateModeButton" class="icon-button source-action-button" type="button" aria-label="Animate visual" aria-pressed="false" title="Animate visual">
                 <svg data-editor-icon="film" aria-hidden="true"></svg>
               </button>
             </div>
             <div class="tool-pane-scroll">
-              <div class="sprite-controls">
-              <div class="sprite-source-fields" aria-label="Sprite ASCII source fields">
-                <label class="sprite-name-control sprite-source-field">
-                  <span>Sprite for</span>
-                  <input id="spriteNameInput" type="text" value="Sprite" spellcheck="false" autocomplete="off" autocapitalize="off">
+              <div class="visual-controls">
+              <div class="visual-source-fields" aria-label="Visual ASCII source fields">
+                <label class="visual-name-control visual-source-field">
+                  <span>Visual for</span>
+                  <input id="visualNameInput" type="text" value="Visual" spellcheck="false" autocomplete="off" autocapitalize="off">
                 </label>
-                <div class="sprite-transform-bar sprite-source-field" aria-label="Sprite transform settings">
-                <label class="sprite-size-control sprite-compact-control">
+                <div class="visual-transform-bar visual-source-field" aria-label="Visual transform settings">
+                <label class="visual-size-control visual-compact-control">
                   <span>Size</span>
-                  <span class="sprite-extent-inputs" aria-label="Sprite size">
-                    <input id="spriteWidthInput" type="number" min="1" max="64" value="5" inputmode="numeric" aria-label="Sprite width">
+                  <span class="visual-extent-inputs" aria-label="Visual size">
+                    <input id="visualWidthInput" type="number" min="1" max="64" value="5" inputmode="numeric" aria-label="Visual width">
                     <span aria-hidden="true">×</span>
-                    <input id="spriteHeightInput" type="number" min="1" max="64" value="5" inputmode="numeric" aria-label="Sprite height">
+                    <input id="visualHeightInput" type="number" min="1" max="64" value="5" inputmode="numeric" aria-label="Visual height">
                   </span>
                 </label>
-                <div class="sprite-scale-control sprite-compact-control" role="group" aria-label="Sprite scale">
-                  <div class="sprite-scale-group">
-                    <span class="sprite-scale-prefix" aria-hidden="true">×</span>
-                    <input id="spriteScaleInput" type="number" min="2" max="64" value="2" inputmode="numeric" aria-label="Scale multiplier">
-                    <button id="spriteScaleDownButton" class="icon-button sprite-scale-step-button" type="button" aria-label="Scale down" title="Scale down">
+                <div class="visual-scale-control visual-compact-control" role="group" aria-label="Visual scale">
+                  <div class="visual-scale-group">
+                    <span class="visual-scale-prefix" aria-hidden="true">×</span>
+                    <input id="visualScaleInput" type="number" min="2" max="64" value="2" inputmode="numeric" aria-label="Scale multiplier">
+                    <button id="visualScaleDownButton" class="icon-button visual-scale-step-button" type="button" aria-label="Scale down" title="Scale down">
                       <svg data-editor-icon="minimize-2" aria-hidden="true"></svg>
                     </button>
-                    <button id="spriteScaleUpButton" class="icon-button sprite-scale-step-button" type="button" aria-label="Scale up" title="Scale up">
+                    <button id="visualScaleUpButton" class="icon-button visual-scale-step-button" type="button" aria-label="Scale up" title="Scale up">
                       <svg data-editor-icon="maximize-2" aria-hidden="true"></svg>
                     </button>
                   </div>
                 </div>
-                <label class="sprite-duration-control sprite-compact-control">
+                <label class="visual-duration-control visual-compact-control">
                   <span>Duration</span>
-                  <span class="sprite-duration-input">
-                    <input id="spriteAnimationDurationInput" type="number" min="20" max="5000" step="10" value="120" inputmode="numeric" aria-label="Animation loop duration in milliseconds">
-                    <span class="sprite-duration-unit" aria-hidden="true">ms</span>
+                  <span class="visual-duration-input">
+                    <input id="visualAnimationDurationInput" type="number" min="20" max="5000" step="10" value="120" inputmode="numeric" aria-label="Animation loop duration in milliseconds">
+                    <span class="visual-duration-unit" aria-hidden="true">ms</span>
                   </span>
                 </label>
-                <label class="sprite-frame-count-control sprite-compact-control">
+                <label class="visual-frame-count-control visual-compact-control">
                   <span>Frames</span>
-                  <input id="spriteAnimationFrameCountInput" type="number" min="1" max="24" value="1" inputmode="numeric" aria-label="Animation frame count">
+                  <input id="visualAnimationFrameCountInput" type="number" min="1" max="24" value="1" inputmode="numeric" aria-label="Animation frame count">
                 </label>
                 </div>
-                <div id="spriteShapeField" class="sprite-source-field sprite-shape-field"></div>
+                <div id="visualShapeField" class="visual-source-field visual-shape-field"></div>
               </div>
               </div>
-              <span id="spriteTransformActionBank" hidden>
-              <button id="spriteRotateLeftButton" class="icon-button sprite-icon-button" type="button" aria-label="Rotate left" title="Rotate left">
+              <span id="visualTransformActionBank" hidden>
+              <button id="visualRotateLeftButton" class="icon-button visual-icon-button" type="button" aria-label="Rotate left" title="Rotate left">
                 <svg data-editor-icon="rotate-ccw" aria-hidden="true"></svg>
               </button>
-              <button id="spriteRotateRightButton" class="icon-button sprite-icon-button" type="button" aria-label="Rotate right" title="Rotate right">
+              <button id="visualRotateRightButton" class="icon-button visual-icon-button" type="button" aria-label="Rotate right" title="Rotate right">
                 <svg data-editor-icon="rotate-cw" aria-hidden="true"></svg>
               </button>
-              <button id="spriteFlipHorizontalButton" class="icon-button sprite-icon-button" type="button" aria-label="Flip horizontal" title="Flip horizontal">
+              <button id="visualFlipHorizontalButton" class="icon-button visual-icon-button" type="button" aria-label="Flip horizontal" title="Flip horizontal">
                 <svg data-editor-icon="flip-horizontal" aria-hidden="true"></svg>
               </button>
-              <button id="spriteFlipVerticalButton" class="icon-button sprite-icon-button" type="button" aria-label="Flip vertical" title="Flip vertical">
+              <button id="visualFlipVerticalButton" class="icon-button visual-icon-button" type="button" aria-label="Flip vertical" title="Flip vertical">
                 <svg data-editor-icon="flip-vertical" aria-hidden="true"></svg>
               </button>
               </span>
-              <div id="spritePalette" class="sprite-palette" aria-label="Sprite character palette">
-                <span id="spriteMarkerTool" class="sprite-marker-tool" role="group" aria-label="Brush size">
-                  <svg data-editor-icon="highlighter" class="sprite-marker-icon" aria-hidden="true"></svg>
-                  <input id="spriteBrushSizeInput" class="sprite-brush-size-input" type="number" min="1" max="64" step="1" inputmode="numeric" value="1" aria-label="Brush size in pixels">
+              <div id="visualPalette" class="visual-palette" aria-label="Visual character palette">
+                <span id="visualMarkerTool" class="visual-marker-tool" role="group" aria-label="Brush size">
+                  <svg data-editor-icon="highlighter" class="visual-marker-icon" aria-hidden="true"></svg>
+                  <input id="visualBrushSizeInput" class="visual-brush-size-input" type="number" min="1" max="64" step="1" inputmode="numeric" value="1" aria-label="Brush size in pixels">
                 </span>
-                <button id="spriteFillButton" class="icon-button sprite-token sprite-palette-fill-button sprite-fill-button sprite-icon-button sprite-paint-tool-button" type="button" aria-label="Bucket fill" aria-pressed="false" title="Bucket fill">
+                <button id="visualFillButton" class="icon-button visual-token visual-palette-fill-button visual-fill-button visual-icon-button visual-paint-tool-button" type="button" aria-label="Bucket fill" aria-pressed="false" title="Bucket fill">
                   <svg data-editor-icon="paint-bucket" aria-hidden="true"></svg>
                 </button>
-                <button id="spriteGridButton" class="icon-button sprite-grid-button sprite-icon-button sprite-paint-tool-button is-active" type="button" aria-label="Toggle sprite grid" aria-pressed="true" title="Toggle grid">
+                <button id="visualGridButton" class="icon-button visual-grid-button visual-icon-button visual-paint-tool-button is-active" type="button" aria-label="Toggle visual grid" aria-pressed="true" title="Toggle grid">
                   <svg data-editor-icon="grid-2x2" aria-hidden="true"></svg>
                 </button>
               </div>
-              <div id="spriteToolbarHost" class="sprite-toolbar-host"></div>
-              <span id="spriteSourceActionBank" hidden>
-                <button id="newSpriteButton" class="icon-button source-action-button" type="button" aria-label="New sprite" title="New sprite"><svg data-editor-icon="image-plus" aria-hidden="true"></svg></button>
-                <button id="spriteInsertButton" class="icon-button source-action-button" type="button" aria-label="Add sprite" title="Add sprite"><svg data-editor-icon="file-plus-corner" aria-hidden="true"></svg></button>
-                <button id="spriteUpdateButton" class="icon-button source-action-button sprite-update-source-button" type="button" aria-label="Save sprite" title="Save"><svg data-editor-icon="save" aria-hidden="true"></svg></button>
+              <div id="visualToolbarHost" class="visual-toolbar-host"></div>
+              <span id="visualSourceActionBank" hidden>
+                <button id="newVisualButton" class="icon-button source-action-button" type="button" aria-label="New visual" title="New visual"><svg data-editor-icon="image-plus" aria-hidden="true"></svg></button>
+                <button id="visualInsertButton" class="icon-button source-action-button" type="button" aria-label="Add visual" title="Add visual"><svg data-editor-icon="file-plus-corner" aria-hidden="true"></svg></button>
+                <button id="visualUpdateButton" class="icon-button source-action-button visual-update-source-button" type="button" aria-label="Save visual" title="Save"><svg data-editor-icon="save" aria-hidden="true"></svg></button>
               </span>
-              <div class="sprite-board-wrap">
-                <div class="sprite-animation-toolbar sprite3d-slice-axis-control" role="group" aria-label="Sprite animation frame controls">
-                  <span class="sprite3d-layer-axis-label">Frame</span>
-                  <button id="spriteAnimationPreviousFrameButton" class="icon-button sprite-icon-button" type="button" aria-label="Move to previous sprite frame" title="Previous frame">
+              <div class="visual-board-wrap">
+                <div class="visual-animation-toolbar visual3d-slice-axis-control" role="group" aria-label="Visual animation frame controls">
+                  <span class="visual3d-layer-axis-label">Frame</span>
+                  <button id="visualAnimationPreviousFrameButton" class="icon-button visual-icon-button" type="button" aria-label="Move to previous visual frame" title="Previous frame">
                     <svg data-editor-icon="chevron-left" aria-hidden="true"></svg>
                   </button>
-                  <span class="sprite3d-slice-value-wrap" title="Adjust frame">
-                    <input id="spriteAnimationFrameInput" class="sprite3d-layer-axis-value" type="number" min="1" max="1" value="1" inputmode="numeric" aria-label="Current sprite animation frame">
-                    <span class="sprite3d-slice-total-separator" aria-hidden="true">/</span>
-                    <span id="spriteAnimationFrameTotal" class="sprite3d-slice-total">1</span>
+                  <span class="visual3d-slice-value-wrap" title="Adjust frame">
+                    <input id="visualAnimationFrameInput" class="visual3d-layer-axis-value" type="number" min="1" max="1" value="1" inputmode="numeric" aria-label="Current visual animation frame">
+                    <span class="visual3d-slice-total-separator" aria-hidden="true">/</span>
+                    <span id="visualAnimationFrameTotal" class="visual3d-slice-total">1</span>
                   </span>
-                  <button id="spriteAnimationNextFrameButton" class="icon-button sprite-icon-button" type="button" aria-label="Move to next sprite frame" title="Next frame">
+                  <button id="visualAnimationNextFrameButton" class="icon-button visual-icon-button" type="button" aria-label="Move to next visual frame" title="Next frame">
                     <svg data-editor-icon="chevron-right" aria-hidden="true"></svg>
                   </button>
-                  <button id="spriteAnimationInsertFrameButton" class="icon-button sprite-animation-insert-frame-button sprite-icon-button" type="button" aria-label="Add animation frame" aria-pressed="false" title="Add frame" data-tooltip="Add frame">
+                  <button id="visualAnimationInsertFrameButton" class="icon-button visual-animation-insert-frame-button visual-icon-button" type="button" aria-label="Add animation frame" aria-pressed="false" title="Add frame" data-tooltip="Add frame">
                     <svg data-editor-icon="square-plus" aria-hidden="true"></svg>
                   </button>
-                  <button id="spriteAnimationRemoveFrameButton" class="icon-button sprite-animation-remove-frame-button sprite-icon-button" type="button" aria-label="Remove animation frame" aria-pressed="false" title="Remove frame" data-tooltip="Remove frame">
+                  <button id="visualAnimationRemoveFrameButton" class="icon-button visual-animation-remove-frame-button visual-icon-button" type="button" aria-label="Remove animation frame" aria-pressed="false" title="Remove frame" data-tooltip="Remove frame">
                     <svg data-editor-icon="square-minus" aria-hidden="true"></svg>
                   </button>
                 </div>
-                <div class="sprite-animation-workspace">
-                  <div id="spriteBoard" class="sprite-board" aria-label="Editable sprite puzzle"></div>
-                  <div class="sprite-animation-sidecar">
-                    <section class="sprite-animation-playback-panel" aria-label="Sprite animation playback preview">
-                      <span class="sprite-animation-playback-view-label">Preview</span>
-                      <div id="spriteAnimationPlaybackView" class="sprite-animation-playback-view" aria-label="Sprite animation playback preview"></div>
+                <div class="visual-animation-workspace">
+                  <div id="visualBoard" class="visual-board" aria-label="Editable visual puzzle"></div>
+                  <div class="visual-animation-sidecar">
+                    <section class="visual-animation-playback-panel" aria-label="Visual animation playback preview">
+                      <span class="visual-animation-playback-view-label">Preview</span>
+                      <div id="visualAnimationPlaybackView" class="visual-animation-playback-view" aria-label="Visual animation playback preview"></div>
                     </section>
-                    <aside id="spriteAnimationPanel" class="sprite-animation-panel" aria-label="Sprite animation frames">
-                      <div id="spriteAnimationFrameStrip" class="sprite-animation-frame-strip" aria-label="Sprite animation frames"></div>
+                    <aside id="visualAnimationPanel" class="visual-animation-panel" aria-label="Visual animation frames">
+                      <div id="visualAnimationFrameStrip" class="visual-animation-frame-strip" aria-label="Visual animation frames"></div>
                     </aside>
                   </div>
                 </div>
               </div>
             </div>
-            <span id="spriteActionStatus" class="sprite-action-status tool-feedback-bar" aria-live="polite"></span>
+            <span id="visualActionStatus" class="visual-action-status tool-feedback-bar" aria-live="polite"></span>
           </div>
-          <div id="sprite3dBuilder" class="sprite-builder sprite3d-builder" hidden>
+          <div id="visual3dBuilder" class="visual-builder visual3d-builder" hidden>
             <div class="tool-pane-scroll">
-              <div class="sprite-controls">
-              <div class="sprite-source-fields" aria-label="3D sprite source fields">
-                <label class="sprite-name-control sprite-source-field">
-                  <span>Sprite for</span>
-                  <input id="sprite3dNameInput" type="text" value="VoxelSprite" spellcheck="false" autocomplete="off" autocapitalize="off">
+              <div class="visual-controls">
+              <div class="visual-source-fields" aria-label="3D visual source fields">
+                <label class="visual-name-control visual-source-field">
+                  <span>Visual for</span>
+                  <input id="visual3dNameInput" type="text" value="VoxelVisual" spellcheck="false" autocomplete="off" autocapitalize="off">
                 </label>
-              <div class="sprite-transform-bar sprite-source-field sprite3d-transform-bar" aria-label="3D sprite transform settings">
-                <label class="sprite-size-control sprite-compact-control">
+              <div class="visual-transform-bar visual-source-field visual3d-transform-bar" aria-label="3D visual transform settings">
+                <label class="visual-size-control visual-compact-control">
                   <span>Size</span>
-                  <span class="sprite3d-extent-inputs" aria-label="3D sprite size">
-                    <input id="sprite3dWidthInput" type="number" min="1" max="64" value="5" inputmode="numeric" aria-label="3D sprite width">
+                  <span class="visual3d-extent-inputs" aria-label="3D visual size">
+                    <input id="visual3dWidthInput" type="number" min="1" max="64" value="5" inputmode="numeric" aria-label="3D visual width">
                     <span aria-hidden="true">×</span>
-                    <input id="sprite3dHeightInput" type="number" min="1" max="64" value="5" inputmode="numeric" aria-label="3D sprite height">
+                    <input id="visual3dHeightInput" type="number" min="1" max="64" value="5" inputmode="numeric" aria-label="3D visual height">
                     <span aria-hidden="true">×</span>
-                    <input id="sprite3dDepthInput" type="number" min="1" max="64" value="5" inputmode="numeric" aria-label="3D sprite depth">
+                    <input id="visual3dDepthInput" type="number" min="1" max="64" value="5" inputmode="numeric" aria-label="3D visual depth">
                   </span>
                 </label>
-                <div class="sprite-scale-control sprite3d-scale-control sprite-compact-control" role="group" aria-label="3D sprite scale">
-                  <div class="sprite-scale-group">
-                    <span class="sprite-scale-prefix" aria-hidden="true">×</span>
-                    <input id="sprite3dScaleInput" type="number" min="2" max="64" value="2" inputmode="numeric" aria-label="3D sprite scale multiplier">
-                    <button id="sprite3dScaleDownButton" class="icon-button sprite-scale-step-button" type="button" aria-label="Scale down" title="Scale down">
+                <div class="visual-scale-control visual3d-scale-control visual-compact-control" role="group" aria-label="3D visual scale">
+                  <div class="visual-scale-group">
+                    <span class="visual-scale-prefix" aria-hidden="true">×</span>
+                    <input id="visual3dScaleInput" type="number" min="2" max="64" value="2" inputmode="numeric" aria-label="3D visual scale multiplier">
+                    <button id="visual3dScaleDownButton" class="icon-button visual-scale-step-button" type="button" aria-label="Scale down" title="Scale down">
                       <svg data-editor-icon="minimize-2" aria-hidden="true"></svg>
                     </button>
-                    <button id="sprite3dScaleUpButton" class="icon-button sprite-scale-step-button" type="button" aria-label="Scale up" title="Scale up">
+                    <button id="visual3dScaleUpButton" class="icon-button visual-scale-step-button" type="button" aria-label="Scale up" title="Scale up">
                       <svg data-editor-icon="maximize-2" aria-hidden="true"></svg>
                     </button>
                   </div>
                 </div>
-                <label class="sprite-duration-control sprite-compact-control sprite3d-animation-control">
+                <label class="visual-duration-control visual-compact-control visual3d-animation-control">
                   <span>Duration</span>
-                  <span class="sprite-duration-input">
-                    <input id="sprite3dAnimationDurationInput" type="number" min="20" max="5000" step="10" value="120" inputmode="numeric" aria-label="3D sprite animation loop duration in milliseconds">
-                    <span class="sprite-duration-unit" aria-hidden="true">ms</span>
+                  <span class="visual-duration-input">
+                    <input id="visual3dAnimationDurationInput" type="number" min="20" max="5000" step="10" value="120" inputmode="numeric" aria-label="3D visual animation loop duration in milliseconds">
+                    <span class="visual-duration-unit" aria-hidden="true">ms</span>
                   </span>
                 </label>
-                <label class="sprite-frame-count-control sprite-compact-control sprite3d-animation-control">
+                <label class="visual-frame-count-control visual-compact-control visual3d-animation-control">
                   <span>Frames</span>
-                  <input id="sprite3dAnimationFrameCountInput" type="number" min="1" max="24" value="1" inputmode="numeric" aria-label="3D sprite animation frame count">
+                  <input id="visual3dAnimationFrameCountInput" type="number" min="1" max="24" value="1" inputmode="numeric" aria-label="3D visual animation frame count">
                 </label>
               </div>
-              <div id="sprite3dShapeField" class="sprite-source-field sprite-shape-field"></div>
+              <div id="visual3dShapeField" class="visual-source-field visual-shape-field"></div>
               </div>
               </div>
-              <div id="sprite3dPalette" class="sprite-palette sprite3d-palette" aria-label="3D sprite palette"></div>
-              <div id="sprite3dToolbarHost" class="sprite-toolbar-host"></div>
-              <span id="sprite3dSourceActionBank" hidden>
-                <button id="newSprite3dButton" class="icon-button source-action-button" type="button" aria-label="New 3D sprite" title="New sprite"><svg data-editor-icon="image-plus" aria-hidden="true"></svg></button>
-                <button id="sprite3dInsertButton" class="icon-button source-action-button" type="button" aria-label="Add 3D sprite" title="Add sprite"><svg data-editor-icon="file-plus-corner" aria-hidden="true"></svg></button>
-                <button id="sprite3dUpdateButton" class="icon-button source-action-button sprite-update-source-button" type="button" aria-label="Save 3D sprite" title="Save"><svg data-editor-icon="save" aria-hidden="true"></svg></button>
+              <div id="visual3dPalette" class="visual-palette visual3d-palette" aria-label="3D visual palette"></div>
+              <div id="visual3dToolbarHost" class="visual-toolbar-host"></div>
+              <span id="visual3dSourceActionBank" hidden>
+                <button id="newVisual3dButton" class="icon-button source-action-button" type="button" aria-label="New 3D visual" title="New visual"><svg data-editor-icon="image-plus" aria-hidden="true"></svg></button>
+                <button id="visual3dInsertButton" class="icon-button source-action-button" type="button" aria-label="Add 3D visual" title="Add visual"><svg data-editor-icon="file-plus-corner" aria-hidden="true"></svg></button>
+                <button id="visual3dUpdateButton" class="icon-button source-action-button visual-update-source-button" type="button" aria-label="Save 3D visual" title="Save"><svg data-editor-icon="save" aria-hidden="true"></svg></button>
               </span>
-              <div class="sprite3d-workspace">
-                <div class="sprite-board-wrap sprite3d-slice-wrap">
-                  <div id="sprite3dSliceBoard" class="sprite-board sprite3d-slice-board" aria-label="Editable 3D sprite slice"></div>
-                  <div class="sprite-toolbar sprite3d-edit-actions" role="toolbar" aria-label="3D sprite edit actions">
-                    <div class="sprite3d-scope-toggle" role="group" aria-label="3D sprite edit scope">
-                      <button id="sprite3dScopeSliceButton" class="icon-button sprite3d-scope-button sprite-icon-button is-active" type="button" data-sprite3d-scope-option="slice" aria-label="Scope 2D" aria-pressed="true" title="Scope 2D slice">
+              <div class="visual3d-workspace">
+                <div class="visual-board-wrap visual3d-slice-wrap">
+                  <div id="visual3dSliceBoard" class="visual-board visual3d-slice-board" aria-label="Editable 3D visual slice"></div>
+                  <div class="visual-toolbar visual3d-edit-actions" role="toolbar" aria-label="3D visual edit actions">
+                    <div class="visual3d-scope-toggle" role="group" aria-label="3D visual edit scope">
+                      <button id="visual3dScopeSliceButton" class="icon-button visual3d-scope-button visual-icon-button is-active" type="button" data-visual3d-scope-option="slice" aria-label="Scope 2D" aria-pressed="true" title="Scope 2D slice">
                         <svg data-editor-icon="square" aria-hidden="true"></svg>
                       </button>
-                      <button id="sprite3dScopeAllButton" class="icon-button sprite3d-scope-button sprite-icon-button" type="button" data-sprite3d-scope-option="all" aria-label="Scope 3D" aria-pressed="false" title="Scope 3D volume">
+                      <button id="visual3dScopeAllButton" class="icon-button visual3d-scope-button visual-icon-button" type="button" data-visual3d-scope-option="all" aria-label="Scope 3D" aria-pressed="false" title="Scope 3D volume">
                         <svg data-editor-icon="box" aria-hidden="true"></svg>
                       </button>
                     </div>
-                    <div class="sprite3d-action-row" role="group" aria-label="3D sprite edit commands">
-                    <button id="sprite3dTranslateButton" class="icon-button sprite-translate-button sprite-icon-button" type="button" aria-label="Translate current slice" aria-pressed="false" title="Translate current slice">
+                    <div class="visual3d-action-row" role="group" aria-label="3D visual edit commands">
+                    <button id="visual3dTranslateButton" class="icon-button visual-translate-button visual-icon-button" type="button" aria-label="Translate current slice" aria-pressed="false" title="Translate current slice">
                       <svg data-editor-icon="move" aria-hidden="true"></svg>
                     </button>
-                    <button id="sprite3dRotatePlaneLeftButton" class="icon-button sprite-icon-button" type="button" aria-label="Rotate CCW" title="Rotate CCW">
+                    <button id="visual3dRotatePlaneLeftButton" class="icon-button visual-icon-button" type="button" aria-label="Rotate CCW" title="Rotate CCW">
                       <svg data-editor-icon="rotate-ccw" aria-hidden="true"></svg>
                     </button>
-                    <button id="sprite3dRotatePlaneRightButton" class="icon-button sprite-icon-button" type="button" aria-label="Rotate CW" title="Rotate CW">
+                    <button id="visual3dRotatePlaneRightButton" class="icon-button visual-icon-button" type="button" aria-label="Rotate CW" title="Rotate CW">
                       <svg data-editor-icon="rotate-cw" aria-hidden="true"></svg>
                     </button>
-                    <button id="sprite3dFlipPlaneHorizontalButton" class="icon-button sprite-icon-button" type="button" aria-label="Flip horizontal" title="Flip horizontal">
+                    <button id="visual3dFlipPlaneHorizontalButton" class="icon-button visual-icon-button" type="button" aria-label="Flip horizontal" title="Flip horizontal">
                       <svg data-editor-icon="flip-horizontal" aria-hidden="true"></svg>
                     </button>
-                    <button id="sprite3dFlipPlaneVerticalButton" class="icon-button sprite-icon-button" type="button" aria-label="Flip vertical" title="Flip vertical">
+                    <button id="visual3dFlipPlaneVerticalButton" class="icon-button visual-icon-button" type="button" aria-label="Flip vertical" title="Flip vertical">
                       <svg data-editor-icon="flip-vertical" aria-hidden="true"></svg>
                     </button>
-                    <button id="sprite3dFillButton" class="icon-button sprite-fill-button sprite3d-fill-button sprite-icon-button" type="button" aria-label="Bucket fill" aria-pressed="false" title="Bucket fill">
+                    <button id="visual3dFillButton" class="icon-button visual-fill-button visual3d-fill-button visual-icon-button" type="button" aria-label="Bucket fill" aria-pressed="false" title="Bucket fill">
                       <svg data-editor-icon="paint-bucket" aria-hidden="true"></svg>
                     </button>
-                    <span id="sprite3dClipActions"></span>
+                    <span id="visual3dClipActions"></span>
                     </div>
                   </div>
                 </div>
-                <div class="sprite3d-preview-column">
-                  <div class="sprite3d-preview-stage">
-                    <div class="sprite3d-preview-wrap">
-                    <div class="sprite3d-slice-axis-control" role="group" aria-label="3D sprite slice and axis">
-                      <span class="sprite3d-layer-axis-label">Slices</span>
-                      <button id="sprite3dPreviousSliceButton" class="icon-button sprite-icon-button" type="button" aria-label="Move to lower slice" title="Lower slice"><svg data-editor-icon="chevron-left" aria-hidden="true"></svg></button>
-                      <span class="sprite3d-slice-value-wrap" data-sprite3d-slice-scrub title="Adjust slice"><input id="sprite3dSliceValue" class="sprite3d-layer-axis-value" type="number" min="1" max="5" value="1" inputmode="numeric" aria-label="Current 3D sprite slice"><span class="sprite3d-slice-total-separator" aria-hidden="true">/</span><span id="sprite3dSliceTotal" class="sprite3d-slice-total">5</span></span>
-                      <button id="sprite3dNextSliceButton" class="icon-button sprite-icon-button" type="button" aria-label="Move to higher slice" title="Higher slice"><svg data-editor-icon="chevron-right" aria-hidden="true"></svg></button>
-                      <span class="sprite3d-layer-axis-label">Axis</span>
-                      <div class="sprite3d-axis-control sprite3d-toolbar-axis" role="group" aria-label="3D sprite slice axis"><div class="sprite3d-axis-buttons"><button class="sprite3d-axis-button" type="button" data-sprite3d-axis="x" aria-pressed="false" title="Edit YZ slices">X</button><button class="sprite3d-axis-button" type="button" data-sprite3d-axis="y" aria-pressed="false" title="Edit XZ slices">Y</button><button class="sprite3d-axis-button is-active" type="button" data-sprite3d-axis="z" aria-pressed="true" title="Edit XY slices">Z</button></div></div>
+                <div class="visual3d-preview-column">
+                  <div class="visual3d-preview-stage">
+                    <div class="visual3d-preview-wrap">
+                    <div class="visual3d-slice-axis-control" role="group" aria-label="3D visual slice and axis">
+                      <span class="visual3d-layer-axis-label">Slices</span>
+                      <button id="visual3dPreviousSliceButton" class="icon-button visual-icon-button" type="button" aria-label="Move to lower slice" title="Lower slice"><svg data-editor-icon="chevron-left" aria-hidden="true"></svg></button>
+                      <span class="visual3d-slice-value-wrap" data-visual3d-slice-scrub title="Adjust slice"><input id="visual3dSliceValue" class="visual3d-layer-axis-value" type="number" min="1" max="5" value="1" inputmode="numeric" aria-label="Current 3D visual slice"><span class="visual3d-slice-total-separator" aria-hidden="true">/</span><span id="visual3dSliceTotal" class="visual3d-slice-total">5</span></span>
+                      <button id="visual3dNextSliceButton" class="icon-button visual-icon-button" type="button" aria-label="Move to higher slice" title="Higher slice"><svg data-editor-icon="chevron-right" aria-hidden="true"></svg></button>
+                      <span class="visual3d-layer-axis-label">Axis</span>
+                      <div class="visual3d-axis-control visual3d-toolbar-axis" role="group" aria-label="3D visual slice axis"><div class="visual3d-axis-buttons"><button class="visual3d-axis-button" type="button" data-visual3d-axis="x" aria-pressed="false" title="Edit YZ slices">X</button><button class="visual3d-axis-button" type="button" data-visual3d-axis="y" aria-pressed="false" title="Edit XZ slices">Y</button><button class="visual3d-axis-button is-active" type="button" data-visual3d-axis="z" aria-pressed="true" title="Edit XY slices">Z</button></div></div>
                     </div>
-                    <canvas id="sprite3dPreviewCanvas" class="sprite3d-preview-canvas" width="320" height="320" aria-label="3D sprite preview"></canvas>
-                    <div class="sprite3d-camera-controls" aria-label="3D preview camera controls">
+                    <canvas id="visual3dPreviewCanvas" class="visual3d-preview-canvas" width="320" height="320" aria-label="3D visual preview"></canvas>
+                    <div class="visual3d-camera-controls" aria-label="3D preview camera controls">
                       <label>
                         <span title="yaw">Y</span>
-                        <button id="sprite3dCameraYawScrub" class="sprite3d-camera-scrub" type="button" data-sprite3d-camera="yaw" aria-label="Adjust yaw" title="Yaw">340</button>
+                        <button id="visual3dCameraYawScrub" class="visual3d-camera-scrub" type="button" data-visual3d-camera="yaw" aria-label="Adjust yaw" title="Yaw">340</button>
                       </label>
                       <label>
                         <span title="pitch">P</span>
-                        <button id="sprite3dCameraPitchScrub" class="sprite3d-camera-scrub" type="button" data-sprite3d-camera="pitch" aria-label="Adjust pitch" title="Pitch">28</button>
+                        <button id="visual3dCameraPitchScrub" class="visual3d-camera-scrub" type="button" data-visual3d-camera="pitch" aria-label="Adjust pitch" title="Pitch">28</button>
                       </label>
                       <label>
                         <span title="zoom">Z</span>
-                        <button id="sprite3dCameraZoomScrub" class="sprite3d-camera-scrub" type="button" data-sprite3d-camera="zoom" aria-label="Adjust zoom" title="Zoom">1</button>
+                        <button id="visual3dCameraZoomScrub" class="visual3d-camera-scrub" type="button" data-visual3d-camera="zoom" aria-label="Adjust zoom" title="Zoom">1</button>
                       </label>
-                      <button id="sprite3dResetCameraButton" class="icon-button sprite3d-preview-reset-button sprite-icon-button" type="button" aria-label="Reset 3D preview camera" title="Reset camera">
+                      <button id="visual3dResetCameraButton" class="icon-button visual3d-preview-reset-button visual-icon-button" type="button" aria-label="Reset 3D preview camera" title="Reset camera">
                         <svg data-editor-icon="refresh-ccw" aria-hidden="true"></svg>
                       </button>
                     </div>
@@ -1816,7 +1816,7 @@ PBG
                 </div>
               </div>
             </div>
-            <span id="sprite3dActionStatus" class="sprite-action-status tool-feedback-bar" aria-live="polite"></span>
+            <span id="visual3dActionStatus" class="visual-action-status tool-feedback-bar" aria-live="polite"></span>
           </div>
           <div id="level3dBuilder" class="level-builder level3d-builder" hidden>
             <div class="tool-pane-scroll">
@@ -1873,37 +1873,37 @@ PBG
                         tabindex="0"
                         aria-label="3D level placement surface"
                       ></canvas>
-                      <div class="sprite3d-camera-controls level3d-preview-controls" aria-label="3D level preview controls">
+                      <div class="visual3d-camera-controls level3d-preview-controls" aria-label="3D level preview controls">
                         <label>
                           <span title="yaw">Y</span>
-                          <button id="level3dCameraYawScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="yaw" aria-label="Adjust yaw" title="Yaw">15</button>
+                          <button id="level3dCameraYawScrub" class="visual3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="yaw" aria-label="Adjust yaw" title="Yaw">15</button>
                         </label>
                         <label>
                           <span title="pitch">P</span>
-                          <button id="level3dCameraPitchScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="pitch" aria-label="Adjust pitch" title="Pitch">55</button>
+                          <button id="level3dCameraPitchScrub" class="visual3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="pitch" aria-label="Adjust pitch" title="Pitch">55</button>
                         </label>
                         <label>
                           <span title="roll">R</span>
-                          <button id="level3dCameraRollScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="roll" aria-label="Adjust roll" title="Roll">0</button>
+                          <button id="level3dCameraRollScrub" class="visual3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="roll" aria-label="Adjust roll" title="Roll">0</button>
                         </label>
                         <label>
                           <span title="zoom">Z</span>
-                          <button id="level3dCameraZoomScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="zoom" aria-label="Adjust zoom" title="Zoom">1</button>
+                          <button id="level3dCameraZoomScrub" class="visual3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="zoom" aria-label="Adjust zoom" title="Zoom">1</button>
                         </label>
                         <span class="level3d-preview-control-separator" aria-hidden="true"></span>
                         <label>
                           <span title="origin x">X</span>
-                          <button id="level3dOriginXScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="originX" aria-label="Adjust origin x" title="Origin X">0</button>
+                          <button id="level3dOriginXScrub" class="visual3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="originX" aria-label="Adjust origin x" title="Origin X">0</button>
                         </label>
                         <label>
                           <span title="origin y">Y</span>
-                          <button id="level3dOriginYScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="originY" aria-label="Adjust origin y" title="Origin Y">0</button>
+                          <button id="level3dOriginYScrub" class="visual3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="originY" aria-label="Adjust origin y" title="Origin Y">0</button>
                         </label>
                         <label>
                           <span title="origin z">Z</span>
-                          <button id="level3dOriginZScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="originZ" aria-label="Adjust origin z" title="Origin Z">0</button>
+                          <button id="level3dOriginZScrub" class="visual3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="originZ" aria-label="Adjust origin z" title="Origin Z">0</button>
                         </label>
-                        <button id="level3dResetPreviewButton" class="icon-button sprite3d-preview-reset-button sprite-icon-button" type="button" aria-label="Reset view" title="Reset view">
+                        <button id="level3dResetPreviewButton" class="icon-button visual3d-preview-reset-button visual-icon-button" type="button" aria-label="Reset view" title="Reset view">
                           <svg data-editor-icon="refresh-ccw" aria-hidden="true"></svg>
                         </button>
                       </div>
@@ -1914,23 +1914,23 @@ PBG
               <div class="level3d-layer-editor" aria-label="Editable 3D level layer">
                 <div id="level3dLayerPalette" class="level-palette level3d-layer-palette" aria-label="Top-down 3D level palette"></div>
                 <div class="level3d-layer-frame-viewport level-board-wrap game-preview-scope">
-                  <div class="level3d-layer-toolbar sprite3d-slice-axis-control" role="group" aria-label="3D level slice controls">
-                    <span class="sprite3d-layer-axis-label">Slice</span>
-                    <button id="level3dAddSliceAboveButton" class="icon-button sprite-icon-button level3d-slice-add-button" type="button" aria-label="Add slice above current 3D level slice" title="Add slice above">
+                  <div class="level3d-layer-toolbar visual3d-slice-axis-control" role="group" aria-label="3D level slice controls">
+                    <span class="visual3d-layer-axis-label">Slice</span>
+                    <button id="level3dAddSliceAboveButton" class="icon-button visual-icon-button level3d-slice-add-button" type="button" aria-label="Add slice above current 3D level slice" title="Add slice above">
                       <span aria-hidden="true">+</span>
                     </button>
-                    <button id="level3dPreviousLayerButton" class="icon-button sprite-icon-button" type="button" aria-label="Move to lower 3D level slice" title="Lower slice">
+                    <button id="level3dPreviousLayerButton" class="icon-button visual-icon-button" type="button" aria-label="Move to lower 3D level slice" title="Lower slice">
                       <svg data-editor-icon="chevron-left" aria-hidden="true"></svg>
                     </button>
-                    <span class="sprite3d-slice-value-wrap" data-level3d-slice-scrub title="Adjust slice">
-                      <input id="level3dLayerInput" class="sprite3d-layer-axis-value" type="number" min="1" max="1" value="1" inputmode="numeric" aria-label="Current 3D level slice">
-                      <span class="sprite3d-slice-total-separator" aria-hidden="true">/</span>
-                      <span id="level3dLayerTotal" class="sprite3d-slice-total">1</span>
+                    <span class="visual3d-slice-value-wrap" data-level3d-slice-scrub title="Adjust slice">
+                      <input id="level3dLayerInput" class="visual3d-layer-axis-value" type="number" min="1" max="1" value="1" inputmode="numeric" aria-label="Current 3D level slice">
+                      <span class="visual3d-slice-total-separator" aria-hidden="true">/</span>
+                      <span id="level3dLayerTotal" class="visual3d-slice-total">1</span>
                     </span>
-                    <button id="level3dNextLayerButton" class="icon-button sprite-icon-button" type="button" aria-label="Move to higher 3D level slice" title="Higher slice">
+                    <button id="level3dNextLayerButton" class="icon-button visual-icon-button" type="button" aria-label="Move to higher 3D level slice" title="Higher slice">
                       <svg data-editor-icon="chevron-right" aria-hidden="true"></svg>
                     </button>
-                    <button id="level3dAddSliceBelowButton" class="icon-button sprite-icon-button level3d-slice-add-button" type="button" aria-label="Add slice below current 3D level slice" title="Add slice below">
+                    <button id="level3dAddSliceBelowButton" class="icon-button visual-icon-button level3d-slice-add-button" type="button" aria-label="Add slice below current 3D level slice" title="Add slice below">
                       <span aria-hidden="true">+</span>
                     </button>
                   </div>
@@ -1960,11 +1960,11 @@ PBG
                 </div>
               </div>
               <div class="level3d-source-panel">
-                <pre id="level3dSourcePreview" class="sprite-text-preview level3d-source-preview" aria-label="3D level source preview"></pre>
+                <pre id="level3dSourcePreview" class="visual-text-preview level3d-source-preview" aria-label="3D level source preview"></pre>
               </div>
               </div>
             </div>
-            <span id="level3dActionStatus" class="sprite-action-status tool-feedback-bar" aria-live="polite"></span>
+            <span id="level3dActionStatus" class="visual-action-status tool-feedback-bar" aria-live="polite"></span>
           </div>
           <div id="soundsBuilder" class="sounds-builder" hidden>
             <section id="soundsSfxPanel" class="sounds-panel sounds-section" aria-label="SFX generator">
@@ -2091,6 +2091,7 @@ PBG
     </main>
 
     <script src="editor_icons.js"></script>
+    <script src="visual_tween_core.js"></script>
     <script src="renderer.js?v=board-canvas-visuals"></script>
     <script>
 (() => {
@@ -8046,7 +8047,7 @@ return {exportMusicLoop,exportSoundEffect};
 </script>
     <script src="editor_codemirror.js"></script>
     <script>
-window.PuzzleEditorSeed = JSON.parse("{\"puzzlePath\":\"starter/01-basic.puzzle\",\"workspaceRoot\":\"\",\"source\":\"// BASIC\\n// EXPECT: Push the box onto the goal to clear the level.\\n// TRY: Change the level, a sprite color, or the win condition.\\n\\ntitle = \\\"01 — Basic\\\"\\nsubtitle = \\\"Rules, collision, winning, sprites, and levels\\\"\\n\\npuzzle basic {\\nslots {\\nFloor\\nGoal\\nPlayer Box Wall\\n}\\n\\nsprites {\\nFloor\\n#f4f0e6\\n\\nGoal\\n#ffd166\\n.....\\n.000.\\n.0.0.\\n.000.\\n.....\\n\\nPlayer\\n#2563eb\\n.000.\\n00000\\n.000.\\n.0.0.\\n.0.0.\\n\\nBox\\n#b5651d #f4a261\\n00000\\n01110\\n01110\\n01110\\n00000\\n\\nWall\\n#334155\\n00000\\n00000\\n00000\\n00000\\n00000\\n}\\n\\nwin_conditions {\\nall Goal on Box\\n}\\n\\non_level_start {\\n[ no Floor ] -\u003e [ Floor ]\\n}\\n\\nrules {\\ninput [ Player | Box | no Wall ] -\u003e [ | Player | Box ]\\ninput [ Player | no Box no Wall ] -\u003e [ | Player ]\\n}\\n\\non_level_clear {\\nmessage \\\"Cleared!\\\"\\n}\\n\\nlevels {\\nlegend {\\n. = empty\\n# = Wall\\nP = Player\\nB = Box\\nG = Goal\\n* = Box Goal\\n}\\n\\nlevel \\\"push the box\\\"\\n#######\\n#.....#\\n#.PB.G#\\n#.....#\\n#######\\n}\\n}\\n\",\"previewHtml\":\"\",\"gameCss\":\"\",\"folders\":[\"starter\"],\"activeDocumentIndex\":0,\"documents\":[{\"puzzlePath\":\"starter/01-basic.puzzle\",\"workspaceRoot\":\"\",\"encoding\":\"text\",\"mimeType\":\"text/plain\",\"source\":\"// BASIC\\n// EXPECT: Push the box onto the goal to clear the level.\\n// TRY: Change the level, a sprite color, or the win condition.\\n\\ntitle = \\\"01 — Basic\\\"\\nsubtitle = \\\"Rules, collision, winning, sprites, and levels\\\"\\n\\npuzzle basic {\\nslots {\\nFloor\\nGoal\\nPlayer Box Wall\\n}\\n\\nsprites {\\nFloor\\n#f4f0e6\\n\\nGoal\\n#ffd166\\n.....\\n.000.\\n.0.0.\\n.000.\\n.....\\n\\nPlayer\\n#2563eb\\n.000.\\n00000\\n.000.\\n.0.0.\\n.0.0.\\n\\nBox\\n#b5651d #f4a261\\n00000\\n01110\\n01110\\n01110\\n00000\\n\\nWall\\n#334155\\n00000\\n00000\\n00000\\n00000\\n00000\\n}\\n\\nwin_conditions {\\nall Goal on Box\\n}\\n\\non_level_start {\\n[ no Floor ] -\u003e [ Floor ]\\n}\\n\\nrules {\\ninput [ Player | Box | no Wall ] -\u003e [ | Player | Box ]\\ninput [ Player | no Box no Wall ] -\u003e [ | Player ]\\n}\\n\\non_level_clear {\\nmessage \\\"Cleared!\\\"\\n}\\n\\nlevels {\\nlegend {\\n. = empty\\n# = Wall\\nP = Player\\nB = Box\\nG = Goal\\n* = Box Goal\\n}\\n\\nlevel \\\"push the box\\\"\\n#######\\n#.....#\\n#.PB.G#\\n#.....#\\n#######\\n}\\n}\\n\",\"dataUrl\":\"\",\"contentLoaded\":true,\"declaresGameEntry\":true,\"previewHtml\":\"\",\"previewError\":\"\",\"gameCss\":\"\",\"importedBy\":[],\"parentGamePath\":\"starter/01-basic.puzzle\"},{\"puzzlePath\":\"starter/README.md\",\"workspaceRoot\":\"\",\"encoding\":\"text\",\"mimeType\":\"text/plain\",\"source\":\"# PuzzleStudio executable examples\\n\\nEach puzzle file is a small, independent project about one authoring theme.\\nOpen a file, preview it, then make the change suggested by its `TRY` comment.\\n\\n1. `01-basic.puzzle` — rules, collision, winning, sprites, and levels\\n2. `02-scenes-and-theme.puzzle` — title flow, layout, and presentation colors\\n3. `03-sound.puzzle` — movement sounds, clear sounds, and scene music\\n4. `04-animation.puzzle` — sprite frames, directional sprites, and movement tween\\n5. `05-tags-marks-and-routines.puzzle` — reusable variants and staged rules\\n6. `06-3d.puzzle3` — a grid puzzle with depth and a camera\\n7. `07-meta-level.puzzle` — one puzzle used to select levels in another puzzle\\n\\nThe files do not import one another. Copy or download any one of them as a\\nstarting point for a new project.\\n\",\"dataUrl\":\"\",\"contentLoaded\":true,\"declaresGameEntry\":false,\"previewHtml\":\"\",\"previewError\":\"\",\"gameCss\":\"\",\"importedBy\":[],\"parentGamePath\":\"\"},{\"puzzlePath\":\"starter/02-scenes-and-theme.puzzle\",\"workspaceRoot\":\"\",\"encoding\":\"text\",\"mimeType\":\"text/plain\",\"source\":\"// SCENES AND THEME\\n// EXPECT: The title screen opens the game or its level list.\\n// TRY: Change accent_color or add another choice to the title scene.\\n\\ntitle = \\\"02 — Scenes and Theme\\\"\\nsubtitle = \\\"Build the screens around a puzzle\\\"\\n\\ntheme {\\npreset = \\\"clean\\\"\\naccent_color = #e85d75\\nbackground_color = #fff7ed\\ntext_color = #292524\\n}\\n\\npuzzle board {\\nslots {\\nPlayer Wall\\n}\\n\\nsprites {\\nPlayer\\n#e85d75\\n.000.\\n00000\\n.000.\\n.0.0.\\n.0.0.\\n\\nWall\\n#57534e\\n00000\\n00000\\n00000\\n00000\\n00000\\n}\\n\\nrules {\\ninput [ Player | no Wall ] -\u003e [ | Player ]\\n}\\n\\nlevels {\\nlegend {\\n. = empty\\n# = Wall\\nP = Player\\n}\\n\\nlevel \\\"small room\\\"\\n#####\\n#P..#\\n#...#\\n#####\\n}\\n}\\n\\nscene title {\\nlayout {\\nheading title\\nsubheading subtitle\\nchoice \\\"Play\\\" -\u003e goto playing\\nchoice \\\"Choose level\\\" -\u003e goto level_select\\n}\\n}\\n\\nscene playing {\\nkeys {\\nEscape -\u003e goto title\\n}\\nlayout {\\nheading \\\"Playing\\\"\\nboard\\ncaption \\\"Arrow keys move. Escape returns to the title.\\\"\\n}\\nrules {\\nstep board\\n}\\n}\\n\\nscene level_select {\\nlayout {\\nheading \\\"Choose a level\\\"\\nlevel_menu\\nbutton \\\"Back\\\" -\u003e goto title\\n}\\n}\\n\",\"dataUrl\":\"\",\"contentLoaded\":true,\"declaresGameEntry\":true,\"previewHtml\":\"\",\"previewError\":\"\",\"gameCss\":\"\",\"importedBy\":[],\"parentGamePath\":\"starter/02-scenes-and-theme.puzzle\"},{\"puzzlePath\":\"starter/03-sound.puzzle\",\"workspaceRoot\":\"\",\"encoding\":\"text\",\"mimeType\":\"text/plain\",\"source\":\"// SOUND\\n// EXPECT: Moving, clearing the level, and entering the scene sound different.\\n// TRY: Change a seed, type, volume, or music bpm.\\n\\ntitle = \\\"03 — Sound\\\"\\nsubtitle = \\\"Put sounds in the lifecycle that owns them\\\"\\n\\nsounds {\\nsfx step { seed = step; type = step; volume = 0.45 }\\nsfx clear { seed = clear; type = jump; volume = 0.8 }\\nmusic theme { seed = starter-theme; bpm = 105; volume = 0.35 }\\n}\\n\\npuzzle sound_board {\\nslots {\\nGoal\\nPlayer Wall\\n}\\n\\nsounds {\\nmove Player -\u003e sfx step\\n}\\n\\nwin_conditions {\\nall Player on Goal\\n}\\n\\nrules {\\ninput [ Player | no Wall ] -\u003e [ | Player ]\\n}\\n\\non_level_clear {\\nsfx clear\\nwait 400ms\\ngoto title\\n}\\n\\nlevels {\\nlegend {\\n. = empty\\n# = Wall\\nP = Player\\nG = Goal\\n}\\n\\nlevel \\\"listen\\\"\\n#####\\n#P.G#\\n#####\\n}\\n}\\n\\nscene title {\\non_scene_start {\\nplay_music theme\\n}\\nlayout {\\nheading title\\nchoice \\\"Play\\\" -\u003e goto sound_board\\ncaption \\\"Music belongs to the scene; movement sound belongs to the puzzle.\\\"\\n}\\n}\\n\",\"dataUrl\":\"\",\"contentLoaded\":true,\"declaresGameEntry\":true,\"previewHtml\":\"\",\"previewError\":\"\",\"gameCss\":\"\",\"importedBy\":[],\"parentGamePath\":\"starter/03-sound.puzzle\"},{\"puzzlePath\":\"starter/04-animation.puzzle\",\"workspaceRoot\":\"\",\"encoding\":\"text\",\"mimeType\":\"text/plain\",\"source\":\"// ANIMATION\\n// EXPECT: The player faces its movement direction, the goal loops, and movement tweens.\\n// TRY: Change tween_duration or frame_duration.\\n\\ntitle = \\\"04 — Animation\\\"\\nsubtitle = \\\"Animate presentation without changing turn-based rules\\\"\\n\\npuzzle animation {\\nrender {\\ntween = true\\ntween_duration = 180ms\\n}\\n\\nslots {\\nGoal\\nPlayer:directions Wall\\n}\\n\\nsprites {\\nGoal\\n#f59e0b #fde68a\\nframe_duration 180ms\\n.....\\n.000.\\n.010.\\n.000.\\n.....\\n\u003e\\n..0..\\n.010.\\n01010\\n.010.\\n..0..\\n\\nsprite {\\nselector = Player:directions\\nrotate directions from up\\ncolors #2563eb\\n.000.\\n00000\\n.000.\\n.0.0.\\n.0.0.\\n}\\n\\nWall\\n#334155\\n00000\\n00000\\n00000\\n00000\\n00000\\n}\\n\\nrules {\\ninput [ Player:* | no Wall ] -\u003e [ | Player:\u003e ]\\n}\\n\\nlevels {\\nlegend {\\n. = empty\\n# = Wall\\nP = Player:up\\nG = Goal\\n}\\n\\nlevel \\\"three kinds of animation\\\"\\n#######\\n#P...G#\\n#.....#\\n#######\\n}\\n}\\n\",\"dataUrl\":\"\",\"contentLoaded\":true,\"declaresGameEntry\":true,\"previewHtml\":\"\",\"previewError\":\"\",\"gameCss\":\"\",\"importedBy\":[],\"parentGamePath\":\"starter/04-animation.puzzle\"},{\"puzzlePath\":\"starter/05-tags-marks-and-routines.puzzle\",\"workspaceRoot\":\"\",\"encoding\":\"text\",\"mimeType\":\"text/plain\",\"source\":\"// TAGS, MARKS, AND ROUTINES\\n// EXPECT: A key opens only the door with the same color tag.\\n// TRY: Add green to the tag and level without copying the opening rules.\\n\\ntitle = \\\"05 — Tags, Marks, and Routines\\\"\\nsubtitle = \\\"Describe variants and split a transition into named stages\\\"\\n\\npuzzle keys_and_doors {\\ntags {\\ncolor = red blue\\n}\\n\\nmarks {\\nopening\\n}\\n\\nslots {\\nFloor\\nKey:color\\nPlayer Door:color Wall\\n}\\n\\nroutine find_matching_door {\\nfor c in color {\\n[ Player Key:c ] -\u003e [ Player Key:c{opening} ]\\nif some([ Key:c{opening} ]) {\\n[ Door:c ] -\u003e [ ]\\n[ Key:c{opening} ] -\u003e [ ]\\n}\\n}\\n}\\n\\nrules {\\ninput [ Player | no Wall no Door:* ] -\u003e [ | Player ]\\nfind_matching_door\\n}\\n\\nsprites {\\nFloor\\n#f8fafc\\n\\nPlayer\\n#111827\\n.000.\\n00000\\n.000.\\n.0.0.\\n.0.0.\\n\\nKey:red\\n#ef4444\\n..0..\\n0000.\\n..0..\\n..00.\\n.....\\n\\nKey:blue\\n#3b82f6\\n..0..\\n0000.\\n..0..\\n..00.\\n.....\\n\\nDoor:red\\n#ef4444\\n.000.\\n.0.0.\\n.0.0.\\n.0.0.\\n.000.\\n\\nDoor:blue\\n#3b82f6\\n.000.\\n.0.0.\\n.0.0.\\n.0.0.\\n.000.\\n\\nWall\\n#64748b\\n00000\\n00000\\n00000\\n00000\\n00000\\n}\\n\\non_level_start {\\n[ no Floor ] -\u003e [ Floor ]\\n}\\n\\nlevels {\\nlegend {\\n. = empty\\n# = Wall\\nP = Player\\nr = Key:red\\nb = Key:blue\\nR = Door:red\\nB = Door:blue\\n}\\n\\nlevel \\\"matching colors\\\"\\n#########\\n#P.r.R..#\\n#..b.B..#\\n#########\\n}\\n}\\n\",\"dataUrl\":\"\",\"contentLoaded\":true,\"declaresGameEntry\":true,\"previewHtml\":\"\",\"previewError\":\"\",\"gameCss\":\"\",\"importedBy\":[],\"parentGamePath\":\"starter/05-tags-marks-and-routines.puzzle\"},{\"puzzlePath\":\"starter/06-3d.puzzle3\",\"workspaceRoot\":\"\",\"encoding\":\"text\",\"mimeType\":\"text/plain\",\"source\":\"// 3D\\n// EXPECT: Push the box through a level that has visible depth.\\n// TRY: Change camera yaw, pitch, or add a third Z layer after another `-`.\\n\\ntitle = \\\"06 — 3D\\\"\\nsubtitle = \\\"A turn-based puzzle on a three-dimensional grid\\\"\\n\\npuzzle depth {\\ndimension = 3\\nrender {\\ncamera {\\nyaw = 35\\npitch = 55\\nzoom = 1\\n}\\nshadow = true\\n}\\n\\nslots {\\nfloor = Floor\\ntarget = Goal\\nPlayer Box Wall\\n}\\n\\ngroups {\\nsolid = Player Box Wall\\n}\\n\\nrules {\\ninput horizontal [ Player | Box | no solid ] -\u003e [ | Player | Box ]\\ninput horizontal [ Player | no solid ] -\u003e [ | Player ]\\n}\\n\\nwin_conditions {\\nsome Goal\\nno down [ no Box | Goal ]\\n}\\n}\\n\\nlevels demo of depth {\\nlegend {\\n. = empty\\n, = Floor\\nG = Floor Goal\\nP = Player\\nB = Box\\n# = Wall\\n}\\n\\nlevel \\\"depth\\\" {\\n#####\\n#PB.#\\n#...#\\n#####\\n-\\n,,,,,\\n,,,,,\\n,,,G,\\n,,,,,\\n}\\n}\\n\",\"dataUrl\":\"\",\"contentLoaded\":true,\"declaresGameEntry\":true,\"previewHtml\":\"\",\"previewError\":\"\",\"gameCss\":\"\",\"importedBy\":[],\"parentGamePath\":\"starter/06-3d.puzzle3\"},{\"puzzlePath\":\"starter/07-meta-level.puzzle\",\"workspaceRoot\":\"\",\"encoding\":\"text\",\"mimeType\":\"text/plain\",\"source\":\"// META LEVEL\\n// EXPECT: Walk onto a portal in one puzzle to choose a level in another puzzle.\\n// TRY: Add a third main level and a matching portal to the selector puzzle.\\n\\ntitle = \\\"07 — Meta Level\\\"\\nsubtitle = \\\"Use one puzzle as a playable level selector for another\\\"\\n\\npuzzle level_select {\\ntags {\\nchoice = first second\\n}\\n\\nslots {\\nportal = Portal:choice\\nactor = Selector Wall\\n}\\n\\nwin_conditions {\\nsome Selector on Portal:*\\n}\\n\\nrules {\\ninput [ Selector | no Wall ] -\u003e [ | Selector ]\\n}\\n\\non_level_clear {\\nif some([ Selector Portal:first ]) {\\ngoto playing(\\\"first\\\")\\n}\\nif some([ Selector Portal:second ]) {\\ngoto playing(\\\"second\\\")\\n}\\n}\\n\\nlevels {\\nlegend {\\n. = empty\\n# = Wall\\nS = Selector\\n1 = Portal:first\\n2 = Portal:second\\n}\\n\\nlevel \\\"choose\\\"\\n#########\\n#1..S..2#\\n#########\\n}\\n}\\n\\npuzzle main {\\nslots {\\ngoal = Goal\\nactor = Player Box Wall\\n}\\n\\nrules {\\n}\\n\\nlevels {\\nlegend {\\n. = empty\\n# = Wall\\nP = Player\\nB = Box\\nG = Goal\\n}\\n\\nlevel \\\"first\\\" {\\nrules {\\ninput [ Player | Box | no Wall ] -\u003e [ | Player | Box ]\\ninput [ Player | no Box no Wall ] -\u003e [ | Player ]\\n}\\n#######\\n#.PBG.#\\n#######\\n}\\n\\nlevel \\\"second\\\" {\\nrules {\\ninput [ Player | Box | no Wall ] -\u003e [ | Player | Box ]\\ninput [ Player | no Box no Wall ] -\u003e [ | Player ]\\n}\\n########\\n#..P.BG#\\n########\\n}\\n}\\n}\\n\\nscene select {\\nlayout {\\nheading \\\"Walk onto a portal\\\"\\nlevel_select\\ncaption \\\"This board is a puzzle, not a level_menu component.\\\"\\n}\\nrules {\\nstep level_select\\n}\\n}\\n\\nscene playing(level) {\\nkeys {\\nEscape -\u003e goto select\\n}\\nlayout {\\nheading level.title\\nmain\\ncaption \\\"Escape returns to the playable selector.\\\"\\n}\\nrules {\\nstep main\\n}\\n}\\n\",\"dataUrl\":\"\",\"contentLoaded\":true,\"declaresGameEntry\":true,\"previewHtml\":\"\",\"previewError\":\"\",\"gameCss\":\"\",\"importedBy\":[],\"parentGamePath\":\"starter/07-meta-level.puzzle\"}]}");
+window.PuzzleEditorSeed = JSON.parse("{\"puzzlePath\":\"/Users/rintaromasaoka/Documents/Game/PuzzleBuilder/games/microban/game.puzzle\",\"workspaceRoot\":\"/Users/rintaromasaoka/Documents/Game/PuzzleBuilder/games/microban\",\"source\":\"title = \\\"Microban\\\"\\nauthor = \\\"Levels by David Skinner\\\"\\n\\ntheme = \\\"puzzlescript\\\"\\n\\npuzzle sokoban {\\nslots {\\nBackground\\nGoal\\nsolid = Player Box Wall\\n}\\n\\nwin_conditions {\\nall Goal on Box\\n}\\n\\non_level_start {\\nonce_all [ no Background ] -\u003e [ Background ]\\n}\\n\\nrules {\\ninput [ Player ] -\u003e [ \u003e Player ] \\n[ \u003e Player | Box ] -\u003e [ \u003e Player | \u003e Box ]\\n[ \u003e solid | no solid ] -\u003e [  | solid ]\\n}\\n\\non_level_clear {\\nwait 0.30s\\nnext_level\\n}\\n}\\n\\nvisuals {\\nBackground\\n#90ee90 #008000\\n11111\\n01111\\n11101\\n11111\\n10111\\n\\nWall\\n#a46322 #493c2b\\n00010\\n11111\\n01000\\n11111\\n00010\\n\\nGoal\\n#00008b\\n.....\\n.000.\\n.0.0.\\n.000.\\n.....\\n\\nBox\\n#ffa500 #ffff00\\n00000\\n0...0\\n0...0\\n0...0\\n00000\\n\\nPlayer\\n#000000 #ffa500 #ffffff #0000ff\\n.000.\\n.111.\\n22222\\n.333.\\n.3.3.\\n}\\n\\nlevels microban of sokoban {\\nlegend {\\n. = empty\\nG = Goal\\nP = Player\\nB = Box\\n# = Wall\\n* = Goal Box\\n+ = Goal Player\\n}\\n\\nlevel \\\"microban_01\\\"\\n####..\\n#.G#..\\n#..###\\n#*P..#\\n#..B.#\\n#..###\\n####..\\n\\nlevel \\\"microban_02\\\"\\n######\\n#....#\\n#.#P.#\\n#.B*.#\\n#.G*.#\\n#....#\\n######\\n\\nlevel \\\"microban_03\\\"\\n..####...\\n###..####\\n#.....B.#\\n#.#..#B.#\\n#.G.G#P.#\\n#########\\n\\nlevel \\\"microban_04\\\"\\n########\\n#......#\\n#.G**BP#\\n#......#\\n#####..#\\n....####\\n\\nlevel \\\"microban_05\\\"\\n.#######\\n.#.....#\\n.#.GBG.#\\n##.BPB.#\\n#..GBG.#\\n#......#\\n########\\n\\nlevel \\\"microban_06\\\"\\n######.#####\\n#....###...#\\n#.BB.....#P#\\n#.B.#GGG...#\\n#...########\\n#####.......\\n\\nlevel \\\"microban_07\\\"\\n#######\\n#.....#\\n#.GBG.#\\n#.BGB.#\\n#.GBG.#\\n#.BGB.#\\n#..P..#\\n#######\\n\\nlevel \\\"microban_08\\\"\\n..######\\n..#.GGP#\\n..#.BB.#\\n..##.###\\n...#.#..\\n...#.#..\\n####.#..\\n#....##.\\n#.#...#.\\n#...#.#.\\n###...#.\\n..#####.\\n\\nlevel \\\"microban_09\\\"\\n#####.\\n#G..##\\n#PBB.#\\n##...#\\n.##..#\\n..##G#\\n...###\\n\\nlevel \\\"microban_10\\\"\\n......#####\\n......#G..#\\n......#G#.#\\n#######G#.#\\n#.P.B.B.B.#\\n#.#.#.#.###\\n#.......#..\\n#########..\\n}\\n\\nscene title {\\nlayout {\\nheading \\\"Microban\\\"\\nsubheading \\\"Levels by David Skinner\\\"\\nchoice \\\"Continue\\\" -\u003e goto playing\\nchoice \\\"New Game\\\" -\u003e {\\nclear_game_progress\\nstart playing\\n}\\nchoice \\\"Level Select\\\" -\u003e goto level_select\\n}\\n}\\n\\nscene playing {\\nlayout {\\nrow {\\n\\theading \\\"Microban\\\"\\n\\tsubheading level.label\\n}\\nsokoban\\n}\\n\\nkeys {\\nq Escape -\u003e goto level_select\\n}\\n\\nrules {\\nstep sokoban\\n}\\n}\\n\\nscene level_select {\\nlayout {\\n\\ttext \\\"Select a level\\\"\\n\\tlevel_menu\\n\\tbutton \\\"Back\\\" -\u003e goto title\\n}\\n\\nkeys {\\nq Escape -\u003e goto title\\n}\\n}\\n\",\"previewHtml\":\"\",\"gameCss\":\"\",\"folders\":[],\"activeDocumentIndex\":0,\"documents\":[{\"puzzlePath\":\"/Users/rintaromasaoka/Documents/Game/PuzzleBuilder/games/microban/game.puzzle\",\"workspaceRoot\":\"/Users/rintaromasaoka/Documents/Game/PuzzleBuilder/games/microban\",\"encoding\":\"text\",\"mimeType\":\"text/plain\",\"source\":\"title = \\\"Microban\\\"\\nauthor = \\\"Levels by David Skinner\\\"\\n\\ntheme = \\\"puzzlescript\\\"\\n\\npuzzle sokoban {\\nslots {\\nBackground\\nGoal\\nsolid = Player Box Wall\\n}\\n\\nwin_conditions {\\nall Goal on Box\\n}\\n\\non_level_start {\\nonce_all [ no Background ] -\u003e [ Background ]\\n}\\n\\nrules {\\ninput [ Player ] -\u003e [ \u003e Player ] \\n[ \u003e Player | Box ] -\u003e [ \u003e Player | \u003e Box ]\\n[ \u003e solid | no solid ] -\u003e [  | solid ]\\n}\\n\\non_level_clear {\\nwait 0.30s\\nnext_level\\n}\\n}\\n\\nvisuals {\\nBackground\\n#90ee90 #008000\\n11111\\n01111\\n11101\\n11111\\n10111\\n\\nWall\\n#a46322 #493c2b\\n00010\\n11111\\n01000\\n11111\\n00010\\n\\nGoal\\n#00008b\\n.....\\n.000.\\n.0.0.\\n.000.\\n.....\\n\\nBox\\n#ffa500 #ffff00\\n00000\\n0...0\\n0...0\\n0...0\\n00000\\n\\nPlayer\\n#000000 #ffa500 #ffffff #0000ff\\n.000.\\n.111.\\n22222\\n.333.\\n.3.3.\\n}\\n\\nlevels microban of sokoban {\\nlegend {\\n. = empty\\nG = Goal\\nP = Player\\nB = Box\\n# = Wall\\n* = Goal Box\\n+ = Goal Player\\n}\\n\\nlevel \\\"microban_01\\\"\\n####..\\n#.G#..\\n#..###\\n#*P..#\\n#..B.#\\n#..###\\n####..\\n\\nlevel \\\"microban_02\\\"\\n######\\n#....#\\n#.#P.#\\n#.B*.#\\n#.G*.#\\n#....#\\n######\\n\\nlevel \\\"microban_03\\\"\\n..####...\\n###..####\\n#.....B.#\\n#.#..#B.#\\n#.G.G#P.#\\n#########\\n\\nlevel \\\"microban_04\\\"\\n########\\n#......#\\n#.G**BP#\\n#......#\\n#####..#\\n....####\\n\\nlevel \\\"microban_05\\\"\\n.#######\\n.#.....#\\n.#.GBG.#\\n##.BPB.#\\n#..GBG.#\\n#......#\\n########\\n\\nlevel \\\"microban_06\\\"\\n######.#####\\n#....###...#\\n#.BB.....#P#\\n#.B.#GGG...#\\n#...########\\n#####.......\\n\\nlevel \\\"microban_07\\\"\\n#######\\n#.....#\\n#.GBG.#\\n#.BGB.#\\n#.GBG.#\\n#.BGB.#\\n#..P..#\\n#######\\n\\nlevel \\\"microban_08\\\"\\n..######\\n..#.GGP#\\n..#.BB.#\\n..##.###\\n...#.#..\\n...#.#..\\n####.#..\\n#....##.\\n#.#...#.\\n#...#.#.\\n###...#.\\n..#####.\\n\\nlevel \\\"microban_09\\\"\\n#####.\\n#G..##\\n#PBB.#\\n##...#\\n.##..#\\n..##G#\\n...###\\n\\nlevel \\\"microban_10\\\"\\n......#####\\n......#G..#\\n......#G#.#\\n#######G#.#\\n#.P.B.B.B.#\\n#.#.#.#.###\\n#.......#..\\n#########..\\n}\\n\\nscene title {\\nlayout {\\nheading \\\"Microban\\\"\\nsubheading \\\"Levels by David Skinner\\\"\\nchoice \\\"Continue\\\" -\u003e goto playing\\nchoice \\\"New Game\\\" -\u003e {\\nclear_game_progress\\nstart playing\\n}\\nchoice \\\"Level Select\\\" -\u003e goto level_select\\n}\\n}\\n\\nscene playing {\\nlayout {\\nrow {\\n\\theading \\\"Microban\\\"\\n\\tsubheading level.label\\n}\\nsokoban\\n}\\n\\nkeys {\\nq Escape -\u003e goto level_select\\n}\\n\\nrules {\\nstep sokoban\\n}\\n}\\n\\nscene level_select {\\nlayout {\\n\\ttext \\\"Select a level\\\"\\n\\tlevel_menu\\n\\tbutton \\\"Back\\\" -\u003e goto title\\n}\\n\\nkeys {\\nq Escape -\u003e goto title\\n}\\n}\\n\",\"dataUrl\":\"\",\"contentLoaded\":true,\"declaresGameEntry\":true,\"previewHtml\":\"\",\"previewError\":\"\",\"gameCss\":\"\",\"importedBy\":[],\"parentGamePath\":\"/Users/rintaromasaoka/Documents/Game/PuzzleBuilder/games/microban/game.puzzle\"}]}");
 </script>
 <script src="editor_dom.js"></script>
     <script src="editor_workspace.js?v=outline-pane-layout"></script>
@@ -8057,9 +8058,9 @@ window.PuzzleEditorSeed = JSON.parse("{\"puzzlePath\":\"starter/01-basic.puzzle\
     <script src="editor_workbench.js"></script>
     <script src="editor_import_export.js?v=import-export-api"></script>
     <script src="editor.js?v=import-export-api"></script>
-    <script src="editor_sprite_document.js"></script>
-    <script src="editor_sprite.js"></script>
-    <script src="editor_sprite3d.js?v=sprite3d-preview-base-zoom"></script>
+    <script src="editor_visual_document.js"></script>
+    <script src="editor_visual.js"></script>
+    <script src="editor_visual3d.js?v=visual3d-preview-base-zoom"></script>
     <script src="editor_sounds.js"></script>
     <script src="editor_commands.js"></script>
   </body>

@@ -30,7 +30,7 @@ next_level
 }
 }
 
-sprites {
+visuals {
 Background
 #90ee90 #008000
 11111

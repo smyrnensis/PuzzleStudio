@@ -11,7 +11,7 @@ mod lib_authoring_parse_order;
 mod loaded;
 mod model_syntax;
 mod puzzle3_model;
-mod puzzle3_sprite;
+mod puzzle3_visual;
 mod puzzle3_visual_fixture;
 mod puzzlescript;
 mod rule_syntax;
@@ -22,16 +22,16 @@ mod source_analysis;
 mod source_folding;
 mod source_import;
 mod source_outline;
-mod source_sprite_edit;
 mod source_target;
+mod source_visual_edit;
 mod spatial_materialize2;
 mod spatial_materialize3;
 mod spatial_orientation;
-mod sprite_authoring;
-mod sprite_spatial;
 mod surface;
 mod surface_completion;
 mod syntax;
+mod visual_authoring;
+mod visual_spatial;
 mod workspace;
 
 use solver_surface::{SolverSurfacePatternArg, SolverSurfaceQueryArg};
@@ -60,26 +60,25 @@ pub use highlight::{
 };
 use level::{LevelBlock, parse_level};
 pub use loaded::{
-    AnimationDef, ArrowKey, AsciiLegend, AssetDef, AssetKind, AssetsDef, Controls, ForSource,
-    GoalClause, GoalClauseOf, GoalCondition, GoalConditionOf, GoalExpr, GoalExprOf, GoalValue,
-    GoalValueOf, GridQueryExpr, GridSolverStrategy, InputBufferDef, KeyBinding, KeyTrigger, Level,
-    LevelMenuDef, LevelMenuLocked, LevelRegionDef, LoadedDocument, LoadedDocumentModel, LoadedGame,
-    LoadedGridGame, LoadedGridLevel, ModelOperationSound, ModelOperationSoundDef, MusicSoundDef,
+    AnimationDef, ArrowKey, AsciiLegend, AssetDef, AssetKind, AssetsDef, Controls, GoalClause,
+    GoalClauseOf, GoalCondition, GoalConditionOf, GoalExpr, GoalExprOf, GoalValue, GoalValueOf,
+    GridQueryExpr, GridSolverStrategy, InputBufferDef, KeyBinding, KeyTrigger, Level, LevelId,
+    LevelRegionDef, LoadedDocument, LoadedDocumentModel, LoadedGame, LoadedGridGame,
+    LoadedGridLevel, ModelOperationSound, ModelOperationSoundDef, MusicSoundDef,
     PuzzleGridRenderDef, PuzzleRenderDef, PuzzleScreenDef, PuzzleViewDef, QueryExpr, QueryExprOf,
     ResourceSelection, RuleAnimation, RuleAnimationTrigger, RuleDebugInfo, RuleEffect,
     SceneAlignDef, SceneAspectRatioDef, SceneBinaryOp, SceneButtonDef, SceneComponent,
     SceneConditionalDef, SceneContainerDef, SceneDef, SceneDistributionDef, SceneEffect,
-    SceneEffectParam, SceneExpr, SceneForDef, SceneLayoutDef, SceneLevelKey, ScenePuzzleDef,
-    ScenePuzzleInitializer, ScenePuzzleRule, SceneResources, SceneRoutineDef, SceneSpaceDef,
-    SceneStateDef, SceneStateLifetime, SceneTextAlignDef, SceneTextContent, SceneTextDef,
-    SceneTextRoleDef, SceneTransition, SceneTransitionTrigger, SceneValue, SceneVarDef,
-    SceneVarKind, SfxSoundDef, SolverDeadendOf, SolverStrategy, SolverStrategyDirection,
-    SolverStrategyOf, SolverStrategyTerm, SolverStrategyTermOf, SoundsDef, ThemeDef,
-    ThemeVariableDef, TriggerAnimationDef, TriggerAnimationKind, TweenAnimationDef,
-    ViewportModeDef, ViewportProjectionDef, ViewportSizeDef, VisualAliasDef, VisualColorDef,
-    VisualOrderDef, VisualOrderPriorityDef, VisualSpriteDef, VisualSpriteFit, VisualSpriteFitMode,
-    VisualSpriteFrameDef, VisualSpriteKind, VisualSpritePixelsPerCell, VisualSpriteSampling,
-    VisualSpriteSpace, VisualSpriteTransform, VisualsDef,
+    SceneEffectParam, SceneExpr, SceneLayoutDef, ScenePuzzleDef, ScenePuzzleInitializer,
+    ScenePuzzleRule, SceneResources, SceneRoutineDef, SceneSpaceDef, SceneStateDef,
+    SceneStateLifetime, SceneTextAlignDef, SceneTextContent, SceneTextDef, SceneTextRoleDef,
+    SceneTransition, SceneTransitionTrigger, SceneValue, SceneVarDef, SceneVarKind, SfxSoundDef,
+    SolverDeadendOf, SolverStrategy, SolverStrategyDirection, SolverStrategyOf, SolverStrategyTerm,
+    SolverStrategyTermOf, SoundsDef, ThemeDef, ThemeVariableDef, TriggerAnimationDef,
+    TriggerAnimationKind, TweenAnimationDef, ViewportModeDef, ViewportProjectionDef,
+    ViewportSizeDef, VisualAliasDef, VisualColorDef, VisualDef, VisualFit, VisualFitMode,
+    VisualFrameDef, VisualKind, VisualOrderDef, VisualOrderPriorityDef, VisualPixelsPerCell,
+    VisualSampling, VisualSpace, VisualTransform, VisualsDef, scene_level_record_key,
 };
 pub use model_syntax::ModelDimension;
 
@@ -131,10 +130,10 @@ type CanonicalRuleCondition = GridRuleCondition<3>;
 type CanonicalRuleStep = GridRuleStep<3>;
 type CanonicalWriteOp = GridWriteOp<3>;
 pub use puzzle3_model::{
-    CameraSettings3, PixelateRenderSettings3, SpatialPresentation, SpriteRenderSettings3,
-    ViewportFollow3, ViewportFraming3, ViewportHeight3, ViewportMode3, ViewportSettings3,
+    CameraSettings3, PixelateRenderSettings3, SpatialPresentation, ViewportFollow3,
+    ViewportFraming3, ViewportHeight3, ViewportMode3, ViewportSettings3, VisualRenderSettings3,
 };
-pub use puzzle3_sprite::{VoxelColor, VoxelFrame, VoxelSprite, VoxelSpriteSet};
+pub use puzzle3_visual::{VoxelColor, VoxelFrame, VoxelVisual, VoxelVisualSet};
 pub use puzzle3_visual_fixture::{
     VisualFixtureExportError, export_visual_fixture_json, export_visual_fixture_json_with_title,
     export_visual_fixture_json_with_title_and_scenes,
@@ -145,7 +144,7 @@ use source::{
     SourceScope, SourceToken, logical_lines_with_locations, source_line_tokens,
     split_header_tokens, strip_line_comment,
 };
-pub use sprite_spatial::{SpatialSpriteAffine, evaluate_spatial_sprite_transforms};
+pub use visual_spatial::{SpatialVisualAffine, evaluate_spatial_visual_transforms};
 pub use workspace::{
     WorkspacePresentationManifest, WorkspaceSourceDocument, workspace_presentation_manifest,
 };
@@ -171,13 +170,13 @@ pub use source_analysis::{
 };
 pub use source_import::{SourceImportRange, SourceImportReference};
 pub use source_outline::{SourceOutlineItem, source_outline, source_outline_json};
-pub use source_sprite_edit::{SpriteEditMutationResult, mutate_sprite_source};
 pub use source_target::{
-    SoundSourceTargetKind, SourceSpriteColorAsset, SourceSpriteDocument, SourceSpritePaletteEntry,
-    SourceSpriteShapeAsset, SourceSpriteStatus, SourceSpriteTarget, SourceTarget, SourceTargetKind,
-    resolve_source_target, resolve_source_target_for_profile, source_entries_json,
-    source_target_json,
+    SoundSourceTargetKind, SourceTarget, SourceTargetKind, SourceVisualColorAsset,
+    SourceVisualDocument, SourceVisualPaletteEntry, SourceVisualShapeAsset, SourceVisualStatus,
+    SourceVisualTarget, resolve_source_target, resolve_source_target_for_profile,
+    source_entries_json, source_target_json,
 };
+pub use source_visual_edit::{VisualEditMutationResult, mutate_visual_source};
 use surface::{
     SourceSpan, SurfaceDisplayFact, SurfaceDocument, SurfaceHighlightRanges, SurfaceNodeKind,
     SurfaceOptionBlock, SurfaceOutlineBlock, SurfaceRewriteEffect, SurfaceSceneEffect,

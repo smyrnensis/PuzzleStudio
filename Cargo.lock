@@ -2354,6 +2354,7 @@ dependencies = [
  "puzzle-lang",
  "puzzle-play",
  "puzzle-runtime-contract",
+ "puzzle-scene",
  "serde_json",
 ]
 

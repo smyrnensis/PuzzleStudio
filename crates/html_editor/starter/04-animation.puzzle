@@ -16,7 +16,7 @@ Goal
 Player:directions Wall
 }
 
-sprites {
+visuals {
 Goal
 #f59e0b #fde68a
 frame_duration 180ms
@@ -32,7 +32,7 @@ frame_duration 180ms
 .010.
 ..0..
 
-sprite {
+visual {
 selector = Player:directions
 rotate directions from up
 colors #2563eb

@@ -138,7 +138,7 @@ puzzle board {
     camera {
     }
   }
-  sprites {
+  visuals {
     shapes {
       Box
       aaa
@@ -156,16 +156,16 @@ puzzle board {
                 (0, "puzzle board".to_string()),
                 (1, "render".to_string()),
                 (2, "camera".to_string()),
-                (1, "sprites".to_string()),
+                (1, "visuals".to_string()),
                 (2, "shapes".to_string()),
             ]
         );
     }
 
     #[test]
-    fn source_outline_uses_structural_tree_for_sprite_entries() {
+    fn source_outline_uses_structural_tree_for_visual_entries() {
         let source = r##"
-sprites {
+visuals {
 Player
 #fff
 000
@@ -190,11 +190,11 @@ Light
         assert_eq!(
             labels,
             vec![
-                (0, "sprites".to_string(), "sprites".to_string()),
-                (1, "sprite".to_string(), "Player".to_string()),
-                (1, "sprite".to_string(), "Wall".to_string()),
-                (1, "sprite".to_string(), "Crate".to_string()),
-                (1, "sprite".to_string(), "Light".to_string()),
+                (0, "visuals".to_string(), "visuals".to_string()),
+                (1, "visual".to_string(), "Player".to_string()),
+                (1, "visual".to_string(), "Wall".to_string()),
+                (1, "visual".to_string(), "Crate".to_string()),
+                (1, "visual".to_string(), "Light".to_string()),
             ]
         );
     }
@@ -228,14 +228,14 @@ shapes {
     }
 
     #[test]
-    fn source_outline_names_explicit_sprite_entries_by_selector() {
+    fn source_outline_names_explicit_visual_entries_by_selector() {
         let source = r#"
-sprites {
-  sprite {
+visuals {
+  visual {
     selector = Sugar:flavor
     colors = #f5f5f5
   }
-  sprite {
+  visual {
     selector Honey
     colors = #e3a018
   }
@@ -248,9 +248,9 @@ sprites {
         assert_eq!(
             items,
             vec![
-                (0, "sprites".to_string(), "sprites".to_string()),
-                (1, "sprite".to_string(), "Sugar:flavor".to_string()),
-                (1, "sprite".to_string(), "Honey".to_string()),
+                (0, "visuals".to_string(), "visuals".to_string()),
+                (1, "visual".to_string(), "Sugar:flavor".to_string()),
+                (1, "visual".to_string(), "Honey".to_string()),
             ]
         );
     }

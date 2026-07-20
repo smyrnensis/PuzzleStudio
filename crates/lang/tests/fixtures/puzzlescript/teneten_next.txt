@@ -8,7 +8,7 @@ level_select
 background_color #243
 again_interval 0.10
 key_repeat_interval 0.16
-sprite_size 14
+visual_size 14
 noaction
 
 =====

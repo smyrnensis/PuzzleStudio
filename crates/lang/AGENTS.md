@@ -98,10 +98,10 @@ renamed equivalent must be deleted when the common contract is introduced.
 Missing facts must remain visible until the accepting parser emits them; a
 temporary legacy projector is not an allowed migration bridge.
 
-Sprite body parsing must preserve the distinction between explicit properties and
+Visual body parsing must preserve the distinction between explicit properties and
 owner-resolved bare content. A bare row after colors may be inline ASCII or a
-declared shape reference; resolve that once through the shared sprite authoring
-resolver after the complete `sprites` owner scope is known. Compile, highlight,
+declared shape reference; resolve that once through the shared visual authoring
+resolver after the complete `visuals` owner scope is known. Compile, highlight,
 completion/source refs, and source-target projection must consume that shared
 decision instead of independently reclassifying the row. If a declared shape
 name is also valid ASCII for the active palette, fail visibly and require

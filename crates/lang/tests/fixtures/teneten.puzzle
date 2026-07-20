@@ -88,7 +88,7 @@ counts = Count:N
 targets = TargetYou TargetCrate TargetBall TargetFly TargetHeadlong
 }
 
-sprites {
+visuals {
 shapes {
 __ps_shape_Ball {
 ..............

@@ -18,10 +18,10 @@ pub(crate) enum AuthoringKind {
     InputBufferConfig,
     ThemeConfig,
     AssetsConfig,
-    SpritesConfig,
-    SpriteOrderConfig,
-    SpriteMergeConfig,
-    SpriteConfig,
+    VisualsConfig,
+    VisualOrderConfig,
+    VisualMergeConfig,
+    VisualConfig,
     LevelsConfig,
     LevelConfig,
 }
@@ -48,8 +48,8 @@ pub(crate) enum AuthoringBody {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AuthoringContentKind {
     AssetsEntries,
-    SpriteEntries,
-    SpriteOrderEntries,
+    VisualEntries,
+    VisualOrderEntries,
     LevelEntries,
     Level3Entries,
     RuleStatements,
@@ -58,7 +58,7 @@ pub(crate) enum AuthoringContentKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AuthoringContentRowKind {
     AssetPath,
-    SpriteOrderPriority,
+    VisualOrderPriority,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -82,7 +82,7 @@ pub(crate) enum ContentSyntax {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ContentAttachment {
-    SpriteEntries,
+    VisualEntries,
     Levels,
     Levels3,
     RuleStatements,
@@ -591,8 +591,8 @@ const ASSETS_ENTRY_ROWS: &[ContentRowSpec] = &[ContentRowSpec {
     parts: ASSETS_PATH_ROW_PARTS,
     usage: "<string>",
 }];
-const SPRITE_ORDER_ENTRY_ROWS: &[ContentRowSpec] = &[ContentRowSpec {
-    kind: AuthoringContentRowKind::SpriteOrderPriority,
+const VISUAL_ORDER_ENTRY_ROWS: &[ContentRowSpec] = &[ContentRowSpec {
+    kind: AuthoringContentRowKind::VisualOrderPriority,
     parts: &[row_rest("selectors", AuthoringSurfaceRole::Object)],
     usage: "<object-or-slot...>",
 }];
@@ -602,12 +602,12 @@ const CONTENT_SPECS: &[ContentSpec] = &[
         syntax: ContentSyntax::Rows(ASSETS_ENTRY_ROWS),
     },
     ContentSpec {
-        kind: AuthoringContentKind::SpriteEntries,
-        syntax: ContentSyntax::Attachment(ContentAttachment::SpriteEntries),
+        kind: AuthoringContentKind::VisualEntries,
+        syntax: ContentSyntax::Attachment(ContentAttachment::VisualEntries),
     },
     ContentSpec {
-        kind: AuthoringContentKind::SpriteOrderEntries,
-        syntax: ContentSyntax::Rows(SPRITE_ORDER_ENTRY_ROWS),
+        kind: AuthoringContentKind::VisualOrderEntries,
+        syntax: ContentSyntax::Rows(VISUAL_ORDER_ENTRY_ROWS),
     },
     ContentSpec {
         kind: AuthoringContentKind::LevelEntries,
@@ -624,23 +624,33 @@ const CONTENT_SPECS: &[ContentSpec] = &[
 ];
 const AUTHORING_SOURCE_BLOCK_SPECS: &[AuthoringSourceBlockSpec] = &[
     AuthoringSourceBlockSpec {
-        surface: "sprites",
-        content: Some(AuthoringContentKind::SpriteEntries),
+        surface: "visuals",
+        content: Some(AuthoringContentKind::VisualEntries),
         role: AuthoringBlockRole::Visuals,
     },
     AuthoringSourceBlockSpec {
-        surface: "sprite",
+        surface: "visual",
+        content: None,
+        role: AuthoringBlockRole::Visuals,
+    },
+    AuthoringSourceBlockSpec {
+        surface: "visuals",
+        content: Some(AuthoringContentKind::VisualEntries),
+        role: AuthoringBlockRole::Visuals,
+    },
+    AuthoringSourceBlockSpec {
+        surface: "visual",
         content: None,
         role: AuthoringBlockRole::Visuals,
     },
     AuthoringSourceBlockSpec {
         surface: "order",
-        content: Some(AuthoringContentKind::SpriteOrderEntries),
+        content: Some(AuthoringContentKind::VisualOrderEntries),
         role: AuthoringBlockRole::Visuals,
     },
     AuthoringSourceBlockSpec {
         surface: "merge",
-        content: Some(AuthoringContentKind::SpriteOrderEntries),
+        content: Some(AuthoringContentKind::VisualOrderEntries),
         role: AuthoringBlockRole::Visuals,
     },
     AuthoringSourceBlockSpec {
@@ -909,7 +919,7 @@ const THEME_CONFIG_DEFINITIONS: &[DefinitionSpec] = &[
         AuthoringSurfaceRole::Color,
     ),
 ];
-const SPRITE_CONFIG_DEFINITIONS: &[DefinitionSpec] = &[
+const VISUAL_CONFIG_DEFINITIONS: &[DefinitionSpec] = &[
     DefinitionSpec::keyed_value_role(
         "selector",
         DefinitionValueSpec::One,
@@ -1051,31 +1061,31 @@ const ASSETS_HEADER: HeaderSpec = HeaderSpec {
     usage: "assets",
     arg_roles: NO_HEADER_ARGS,
 };
-const SPRITES_HEADER: HeaderSpec = HeaderSpec {
+const VISUALS_HEADER: HeaderSpec = HeaderSpec {
     min_args: 0,
     max_args: 0,
-    usage: "sprites",
+    usage: "visuals",
     arg_roles: NO_HEADER_ARGS,
 };
-const SPRITE_ORDER_HEADER: HeaderSpec = HeaderSpec {
+const VISUAL_ORDER_HEADER: HeaderSpec = HeaderSpec {
     min_args: 0,
     max_args: 0,
     usage: "order",
     arg_roles: NO_HEADER_ARGS,
 };
-const SPRITE_MERGE_HEADER: HeaderSpec = HeaderSpec {
+const VISUAL_MERGE_HEADER: HeaderSpec = HeaderSpec {
     min_args: 0,
     max_args: 0,
     usage: "merge",
     arg_roles: NO_HEADER_ARGS,
 };
-const SPRITE_HEADER: HeaderSpec = HeaderSpec {
+const VISUAL_HEADER: HeaderSpec = HeaderSpec {
     min_args: 0,
-    max_args: 0,
-    usage: "sprite",
-    arg_roles: NO_HEADER_ARGS,
+    max_args: 1,
+    usage: "visual",
+    arg_roles: &[AuthoringSurfaceRole::Asset],
 };
-const SPRITE_ORDER_DEFINITIONS: &[DefinitionSpec] = &[DefinitionSpec::value_role(
+const VISUAL_ORDER_DEFINITIONS: &[DefinitionSpec] = &[DefinitionSpec::value_role(
     "priority",
     DefinitionValueSpec::Many,
     DefinitionValueSyntax::Any,
@@ -1240,23 +1250,23 @@ pub(crate) const KIND_SPECS: &[KindSpec] = &[
         missing_close_message: "assets missing closing brace",
     },
     KindSpec {
-        kind: AuthoringKind::SpritesConfig,
-        header: SPRITES_HEADER,
+        kind: AuthoringKind::VisualsConfig,
+        header: VISUALS_HEADER,
         definitions: NO_DEFINITIONS,
         rows: NO_ROWS,
-        body: AuthoringBody::Content(AuthoringContentKind::SpriteEntries),
+        body: AuthoringBody::Content(AuthoringContentKind::VisualEntries),
         symbol_exports: NO_SYMBOL_EXPORTS,
         block_role: Some(AuthoringBlockRole::Visuals),
         keyword_role: AuthoringSurfaceRole::Keyword,
         outline_policy: AuthoringOutlinePolicy::Visible,
-        missing_close_message: "sprites missing closing brace",
+        missing_close_message: "visuals missing closing brace",
     },
     KindSpec {
-        kind: AuthoringKind::SpriteOrderConfig,
-        header: SPRITE_ORDER_HEADER,
-        definitions: SPRITE_ORDER_DEFINITIONS,
+        kind: AuthoringKind::VisualOrderConfig,
+        header: VISUAL_ORDER_HEADER,
+        definitions: VISUAL_ORDER_DEFINITIONS,
         rows: NO_ROWS,
-        body: AuthoringBody::Content(AuthoringContentKind::SpriteOrderEntries),
+        body: AuthoringBody::Content(AuthoringContentKind::VisualOrderEntries),
         symbol_exports: NO_SYMBOL_EXPORTS,
         block_role: Some(AuthoringBlockRole::Visuals),
         keyword_role: AuthoringSurfaceRole::Keyword,
@@ -1264,11 +1274,11 @@ pub(crate) const KIND_SPECS: &[KindSpec] = &[
         missing_close_message: "order missing closing brace",
     },
     KindSpec {
-        kind: AuthoringKind::SpriteMergeConfig,
-        header: SPRITE_MERGE_HEADER,
+        kind: AuthoringKind::VisualMergeConfig,
+        header: VISUAL_MERGE_HEADER,
         definitions: NO_DEFINITIONS,
         rows: NO_ROWS,
-        body: AuthoringBody::Content(AuthoringContentKind::SpriteOrderEntries),
+        body: AuthoringBody::Content(AuthoringContentKind::VisualOrderEntries),
         symbol_exports: NO_SYMBOL_EXPORTS,
         block_role: Some(AuthoringBlockRole::Visuals),
         keyword_role: AuthoringSurfaceRole::Keyword,
@@ -1276,16 +1286,16 @@ pub(crate) const KIND_SPECS: &[KindSpec] = &[
         missing_close_message: "merge missing closing brace",
     },
     KindSpec {
-        kind: AuthoringKind::SpriteConfig,
-        header: SPRITE_HEADER,
-        definitions: SPRITE_CONFIG_DEFINITIONS,
+        kind: AuthoringKind::VisualConfig,
+        header: VISUAL_HEADER,
+        definitions: VISUAL_CONFIG_DEFINITIONS,
         rows: NO_ROWS,
         body: AuthoringBody::None,
         symbol_exports: NO_SYMBOL_EXPORTS,
         block_role: Some(AuthoringBlockRole::Visuals),
         keyword_role: AuthoringSurfaceRole::Keyword,
         outline_policy: AuthoringOutlinePolicy::Visible,
-        missing_close_message: "sprite missing closing brace",
+        missing_close_message: "visual missing closing brace",
     },
     KindSpec {
         kind: AuthoringKind::LevelsConfig,
@@ -1371,23 +1381,23 @@ pub(crate) const PLACEMENT_SPECS: &[PlacementSpec] = &[
     },
     PlacementSpec {
         parent: AuthoringKind::Root,
-        surface: "sprites",
-        child: AuthoringKind::SpritesConfig,
+        surface: "visuals",
+        child: AuthoringKind::VisualsConfig,
     },
     PlacementSpec {
-        parent: AuthoringKind::SpritesConfig,
+        parent: AuthoringKind::VisualsConfig,
         surface: "order",
-        child: AuthoringKind::SpriteOrderConfig,
+        child: AuthoringKind::VisualOrderConfig,
     },
     PlacementSpec {
-        parent: AuthoringKind::SpriteOrderConfig,
+        parent: AuthoringKind::VisualOrderConfig,
         surface: "merge",
-        child: AuthoringKind::SpriteMergeConfig,
+        child: AuthoringKind::VisualMergeConfig,
     },
     PlacementSpec {
-        parent: AuthoringKind::SpritesConfig,
-        surface: "sprite",
-        child: AuthoringKind::SpriteConfig,
+        parent: AuthoringKind::VisualsConfig,
+        surface: "visual",
+        child: AuthoringKind::VisualConfig,
     },
     PlacementSpec {
         parent: AuthoringKind::Root,
@@ -1514,6 +1524,14 @@ pub(crate) fn authoring_definition_surfaces(kind: AuthoringKind) -> Vec<&'static
         .iter()
         .map(|definition| definition.surface)
         .collect()
+}
+
+pub(crate) fn authoring_definition_completion_insert_text(
+    kind: AuthoringKind,
+    surface: &str,
+) -> Option<String> {
+    let definition = authoring_definition_spec(kind, surface)?;
+    Some(format!("{} = ", definition.surface))
 }
 
 pub(crate) fn authoring_row_surfaces(kind: AuthoringKind) -> Vec<&'static str> {
@@ -2653,12 +2671,12 @@ mod tests {
             Some(AuthoringKind::ThemeConfig)
         );
         assert_eq!(
-            placed_authoring_kind(AuthoringKind::Root, "sprites"),
-            Some(AuthoringKind::SpritesConfig)
+            placed_authoring_kind(AuthoringKind::Root, "visuals"),
+            Some(AuthoringKind::VisualsConfig)
         );
         assert_eq!(
-            placed_authoring_kind(AuthoringKind::SpritesConfig, "sprite"),
-            Some(AuthoringKind::SpriteConfig)
+            placed_authoring_kind(AuthoringKind::VisualsConfig, "visual"),
+            Some(AuthoringKind::VisualConfig)
         );
         assert_eq!(
             placed_authoring_kind(AuthoringKind::Root, "levels"),
@@ -2822,7 +2840,7 @@ mod tests {
             "assets {".to_string(),
             "\"game.css\"".to_string(),
             "\"visuals.js\"".to_string(),
-            "\"sprites/player.png\"".to_string(),
+            "\"visuals/player.png\"".to_string(),
             "}".to_string(),
         ];
         let lines = logical_test_lines(lines);
@@ -2874,21 +2892,21 @@ mod tests {
             Some(AuthoringContentKind::LevelEntries)
         );
         assert_eq!(
-            authoring_source_block("sprites").unwrap().content,
-            Some(AuthoringContentKind::SpriteEntries)
+            authoring_source_block("visuals").unwrap().content,
+            Some(AuthoringContentKind::VisualEntries)
         );
-        assert_eq!(authoring_source_block("sprite").unwrap().content, None);
+        assert_eq!(authoring_source_block("visual").unwrap().content, None);
         assert_eq!(
             authoring_source_block("rules").unwrap().content,
             Some(AuthoringContentKind::RuleStatements)
         );
         assert_eq!(
-            authoring_content_syntax(AuthoringContentKind::SpriteEntries),
-            ContentSyntax::Attachment(super::ContentAttachment::SpriteEntries)
+            authoring_content_syntax(AuthoringContentKind::VisualEntries),
+            ContentSyntax::Attachment(super::ContentAttachment::VisualEntries)
         );
         assert_eq!(
-            super::authoring_kind_content_attachment(AuthoringKind::SpritesConfig),
-            Some(super::ContentAttachment::SpriteEntries)
+            super::authoring_kind_content_attachment(AuthoringKind::VisualsConfig),
+            Some(super::ContentAttachment::VisualEntries)
         );
         assert_eq!(
             authoring_content_syntax(AuthoringContentKind::RuleStatements),
@@ -2897,9 +2915,9 @@ mod tests {
     }
 
     #[test]
-    fn sprite_properties_support_explicit_shape_ref() {
+    fn visual_properties_support_explicit_shape_ref() {
         let rows = parse_authoring_definition_body(
-            AuthoringKind::SpriteConfig,
+            AuthoringKind::VisualConfig,
             &[
                 "selector = Player".to_string(),
                 "colors = #fff #000".to_string(),
@@ -2916,9 +2934,9 @@ mod tests {
     }
 
     #[test]
-    fn sprite_body_rejects_implicit_property_slots() {
+    fn visual_body_rejects_implicit_property_slots() {
         let error = parse_authoring_definition_body(
-            AuthoringKind::SpriteConfig,
+            AuthoringKind::VisualConfig,
             &[
                 "Player".to_string(),
                 "#fff #000".to_string(),
@@ -2929,10 +2947,10 @@ mod tests {
         )
         .unwrap_err()
         .to_string();
-        assert!(error.contains("unknown sprite property"));
+        assert!(error.contains("unknown visual property"));
 
         let rows = parse_authoring_definition_body(
-            AuthoringKind::SpriteConfig,
+            AuthoringKind::VisualConfig,
             &[
                 "selector = Player".to_string(),
                 "shape = BoxShape".to_string(),

@@ -27,8 +27,17 @@ function validatePuzzle3ViewSnapshot(source, label = "Puzzle3 snapshot") {
   if (!source.objects || typeof source.objects !== "object" || Array.isArray(source.objects)) {
     throw new Error(`${label}.objects is missing or invalid.`);
   }
-  if (!source.sprites || typeof source.sprites !== "object" || Array.isArray(source.sprites)) {
-    throw new Error(`${label}.sprites is missing or invalid.`);
+  if (!source.visuals || typeof source.visuals !== "object" || Array.isArray(source.visuals)) {
+    throw new Error(`${label}.visuals is missing or invalid.`);
+  }
+  if (source.animationEvents !== undefined && !Array.isArray(source.animationEvents)) {
+    throw new Error(`${label}.animationEvents is invalid.`);
+  }
+  const tweenEvents = (source.animationEvents || [])
+    .filter((event) => event?.kind === "move" && event?.name === "tween");
+  if (tweenEvents.length > 0
+      && (!Number.isInteger(Number(source.animationBatchId)) || Number(source.animationBatchId) <= 0)) {
+    throw new Error(`${label}.animationBatchId must identify its Tween event batch.`);
   }
   return source;
 }
@@ -90,12 +99,9 @@ let snapshot = null;
 let snapshotLoaded = false;
 let initialCamera = null;
 let currentSceneName = "";
-let queuedSceneInputs = [];
-let queuedSceneInputFrame = 0;
-const heldSceneInputs = new Map();
 const SCENE_DEFAULT_WIDTH = 16;
 const SCENE_DEFAULT_HEIGHT = 12;
-const spriteVoxelTemplateCache = new WeakMap();
+const visualVoxelTemplateCache = new WeakMap();
 const renderGeometryCache = createRenderGeometryCache();
 const pixelateBuffer = document.createElement("canvas");
 let mountedPuzzle3Component = null;
@@ -248,38 +254,12 @@ function createPuzzle3Component() {
       resizeCanvas();
       draw();
     },
-    applyInput(input) {
-      return emitPuzzle3InputIntent(input);
-    },
     resetCamera() {
       resetCamera();
       draw();
       return true;
     },
-    handleKey(event) {
-      const input = inputForEvent(event);
-      if (!input) {
-        return false;
-      }
-      event.preventDefault();
-      return startHeldSceneInput(rawInputHoldId({ key: event.key, code: event.code }), input);
-    },
   };
-}
-
-function emitPuzzle3InputIntent(input) {
-  const name = String(input || "");
-  if (!name) {
-    return false;
-  }
-  if (typeof controllerOptions.onInput !== "function") {
-    throw new Error("Puzzle3 input requires a session host.");
-  }
-  observeHostIntent(controllerOptions.onInput(name, {
-    scene: currentSceneName,
-    source: mountedPuzzle3Component?.source || "board",
-  }));
-  return true;
 }
 
 function emitPuzzle3CommandIntent(command, payload = {}) {
@@ -632,7 +612,7 @@ function draw(options = {}) {
   }
   applyPixelatePostprocess();
   notifyPuzzle3View(width, height);
-  if (hasRuntimeSpriteAnimation()) {
+  if (hasRuntimeVisualAnimation()) {
     scheduleViewportAnimation();
   }
 }
@@ -656,9 +636,6 @@ function drawWithThree() {
   puzzle3ThreeViewPayload = result?.view || null;
   if (result?.rendered) {
     view.viewportSnapNext = false;
-  }
-  if (result?.animating) {
-    scheduleViewportAnimation();
   }
   notifyPuzzle3View(width, height);
 }
@@ -737,7 +714,7 @@ function puzzle3RenderContext(width = canvas.clientWidth, height = canvas.client
 function createRenderGeometryCache() {
   return {
     cellsSource: null,
-    spritesSource: null,
+    visualsSource: null,
     settingsKey: "",
     cells: new Map(),
     cellSignatures: new Map(),
@@ -749,7 +726,7 @@ function createRenderGeometryCache() {
 
 function resetRenderGeometryCache() {
   renderGeometryCache.cellsSource = null;
-  renderGeometryCache.spritesSource = null;
+  renderGeometryCache.visualsSource = null;
   renderGeometryCache.settingsKey = "";
   renderGeometryCache.cells.clear();
   renderGeometryCache.cellSignatures.clear();
@@ -941,7 +918,7 @@ function viewportObjectMatches(object, viewport, focusObjects) {
   return (
     (focusObjects.size > 0 && focusObjects.has(objectId))
     || object.name === viewport.focus
-    || object.sprite === viewport.focus
+    || object.visual === viewport.focus
   );
 }
 
@@ -1357,8 +1334,8 @@ function clamp01(value) {
   return Math.max(0, Math.min(1, number));
 }
 
-function spriteRenderSettings() {
-  const raw = snapshot.render.sprite;
+function visualRenderSettings() {
+  const raw = snapshot.render.visual;
   if (raw === false) {
     return { shade: false };
   }
@@ -1706,14 +1683,14 @@ function cellProjectsIntoFrame(position, frame) {
 }
 
 function cellHasRenderableVoxels(cell) {
-  return (cell.objects || []).some((object) => object.sprite && snapshot.sprites?.[object.sprite]);
+  return (cell.objects || []).some((object) => object.visual && snapshot.visuals?.[object.visual]);
 }
 
 function cellVisibleVoxels(cell) {
   const stacks = new Map();
   for (const [objectIndex, object] of cell.objects.entries()) {
     const sourceKey = `${cellKey(cell.position)}:${objectIndex}`;
-    const objectOrder = Puzzle3VisualCore.objectPriority(spriteOrder(), object, objectIndex);
+    const objectOrder = Puzzle3VisualCore.objectPriority(visualOrder(), object, objectIndex);
     for (const voxel of objectVoxels(cell.position, object, sourceKey, objectOrder)) {
       const key = voxelGeometryKey(voxel);
       const stack = stacks.get(key) || [];
@@ -1800,7 +1777,7 @@ function syncRenderGeometryCache(renderContext = null) {
   const cells = snapshot.cells || [];
   const settingsKey = renderGeometrySettingsKey();
   const sourcesUnchanged = renderGeometryCache.cellsSource === cells
-    && renderGeometryCache.spritesSource === snapshot.sprites
+    && renderGeometryCache.visualsSource === snapshot.visuals
     && renderGeometryCache.settingsKey === settingsKey
     && !renderGeometryCache.allDirty;
   if (sourcesUnchanged) {
@@ -1815,7 +1792,7 @@ function syncRenderGeometryCache(renderContext = null) {
   const cellsByKey = new Map();
   const dirtyCellKeys = new Set();
   const fullRebuild = renderGeometryCache.allDirty
-    || renderGeometryCache.spritesSource !== snapshot.sprites
+    || renderGeometryCache.visualsSource !== snapshot.visuals
     || renderGeometryCache.settingsKey !== settingsKey;
 
   for (const cell of cells) {
@@ -1858,7 +1835,7 @@ function syncRenderGeometryCache(renderContext = null) {
   }
 
   renderGeometryCache.cellsSource = cells;
-  renderGeometryCache.spritesSource = snapshot.sprites;
+  renderGeometryCache.visualsSource = snapshot.visuals;
   renderGeometryCache.settingsKey = settingsKey;
   renderGeometryCache.cellSignatures = nextSignatures;
   renderGeometryCache.allDirty = false;
@@ -1869,15 +1846,15 @@ function syncRenderGeometryCache(renderContext = null) {
 }
 
 function renderGeometrySettingsKey() {
-  return JSON.stringify(spriteRenderSettings());
+  return JSON.stringify(visualRenderSettings());
 }
 
 function renderCellSignature(cell) {
   const position = cell?.position || {};
   const objects = (cell?.objects || []).map((object) => [
     object?.id ?? "",
-    object?.sprite ?? "",
-    Puzzle3VisualCore.objectPriority(spriteOrder(), object),
+    object?.visual ?? "",
+    Puzzle3VisualCore.objectPriority(visualOrder(), object),
   ].join(":"));
   return `${cellKey(position)}|${objects.join(";")}`;
 }
@@ -1956,7 +1933,7 @@ function visibleVoxelStack(stack) {
     }
   }
   for (const group of priorities) {
-    const voxel = Puzzle3VisualCore.priorityDefinition(spriteOrder(), group.order).merge
+    const voxel = Puzzle3VisualCore.priorityDefinition(visualOrder(), group.order).merge
       ? Puzzle3VisualCore.averageMergedVoxels(group.voxels, parseColor, formatColor)
       : group.voxels[0];
     const source = voxel.color || parseColor(voxel.fill);
@@ -1978,10 +1955,10 @@ function visibleVoxelStack(stack) {
   return visible;
 }
 
-function spriteOrder() {
+function visualOrder() {
   const order = snapshot.order;
   if (!order || !Array.isArray(order.direction_priority) || !Array.isArray(order.priorities)) {
-    throw new Error("compiled sprite order contract is missing");
+    throw new Error("compiled visual order contract is missing");
   }
   return order;
 }
@@ -1992,44 +1969,44 @@ function objectVoxelOrder(voxel) {
 }
 
 function objectVoxels(position, object, sourceKey, objectOrder = 0) {
-  if (!object.sprite) {
+  if (!object.visual) {
     return [];
   }
-  const template = spriteVoxelTemplate(object.sprite);
+  const template = visualVoxelTemplate(object.visual);
   if (!template) {
     return [];
   }
-  return instantiateSpriteVoxelTemplate(position, template, sourceKey, objectOrder);
+  return instantiateVisualVoxelTemplate(position, template, sourceKey, objectOrder);
 }
 
-function spriteVoxelTemplate(spriteName) {
-  const sprite = snapshot.sprites?.[spriteName];
-  if (!sprite) {
+function visualVoxelTemplate(visualName) {
+  const visual = snapshot.visuals?.[visualName];
+  if (!visual) {
     return null;
   }
-  const animated = Array.isArray(sprite.frames) && sprite.frames.length > 1;
+  const animated = Array.isArray(visual.frames) && visual.frames.length > 1;
   if (!animated) {
-    const cached = spriteVoxelTemplateCache.get(sprite);
+    const cached = visualVoxelTemplateCache.get(visual);
     if (cached) {
       return cached;
     }
   }
-  const template = buildSpriteVoxelTemplate(sprite);
+  const template = buildVisualVoxelTemplate(visual);
   if (!animated) {
-    spriteVoxelTemplateCache.set(sprite, template);
+    visualVoxelTemplateCache.set(visual, template);
   }
   return template;
 }
 
-function buildSpriteVoxelTemplate(sprite) {
-  const blocks = currentRuntimeSpriteLayers(sprite);
+function buildVisualVoxelTemplate(visual) {
+  const blocks = currentRuntimeVisualLayers(visual);
   const height = Math.max(1, blocks.length);
   const depth = Math.max(1, ...blocks.map((rows) => rows.length));
   const width = Math.max(1, ...blocks.flatMap((rows) => rows.map((row) => row.length)));
   const scale = 1 / Math.max(width, depth, height);
-  const spatialAffine = Puzzle3VisualCore.evaluateSpatialSpriteAffine(sprite.spatialOps);
+  const spatialAffine = Puzzle3VisualCore.evaluateSpatialVisualAffine(visual.spatialOps);
   const voxels = [];
-  const palette = sprite.palette || {};
+  const palette = visual.palette || {};
 
   for (let z = 0; z < blocks.length; z += 1) {
     const rows = blocks[z];
@@ -2041,7 +2018,7 @@ function buildSpriteVoxelTemplate(sprite) {
         if (!fill || color?.a <= 0) {
           continue;
         }
-        const sourceGrid = standardSpriteGridPosition({ width, depth, height }, col, row, z);
+        const sourceGrid = standardVisualGridPosition({ width, depth, height }, col, row, z);
         const localPosition = Puzzle3VisualCore.transformSpatialPoint({
           x: (sourceGrid.x + 0.5 - width / 2) * scale,
           y: (sourceGrid.y + 0.5 - depth / 2) * scale,
@@ -2064,7 +2041,7 @@ function buildSpriteVoxelTemplate(sprite) {
   return { voxels };
 }
 
-function instantiateSpriteVoxelTemplate(position, template, sourceKey = null, objectOrder = 0) {
+function instantiateVisualVoxelTemplate(position, template, sourceKey = null, objectOrder = 0) {
   const x = Number(position?.x) || 0;
   const y = Number(position?.y) || 0;
   const z = Number(position?.z) || 0;
@@ -2093,12 +2070,12 @@ function instantiateSpriteVoxelTemplate(position, template, sourceKey = null, ob
 }
 
 function mergedVoxelFaces(voxels, occupied, ownerCell) {
-  const spriteSettings = spriteRenderSettings();
+  const visualSettings = visualRenderSettings();
   return Puzzle3VisualCore.mergeVoxelFaces(voxels, {
     faces: voxelFaces,
     isFaceVisible: (voxel, face) => !isVoxelFaceOccluded(voxel, face.offset, occupied),
     group: (voxel, face) => {
-      const fill = spriteSettings.shade ? shadeFill(voxel.fill, face.light) : voxel.fill;
+      const fill = visualSettings.shade ? shadeFill(voxel.fill, face.light) : voxel.fill;
       const info = voxelFaceGroupInfo(voxel, face.side);
       const groupKey = [
         ownerCell?.key || "",
@@ -2411,7 +2388,7 @@ function projectCellRenderOwner(ownerCell) {
 }
 
 function cellDirectionPriority(position) {
-  return spriteOrder().direction_priority.map((direction) => {
+  return visualOrder().direction_priority.map((direction) => {
     switch (direction) {
       case "right": return Number(position.x) || 0;
       case "left": return -(Number(position.x) || 0);
@@ -2419,33 +2396,33 @@ function cellDirectionPriority(position) {
       case "back": return -(Number(position.y) || 0);
       case "up": return Number(position.z) || 0;
       case "down": return -(Number(position.z) || 0);
-      default: throw new Error(`invalid 3D sprite order direction: ${direction}`);
+      default: throw new Error(`invalid 3D visual order direction: ${direction}`);
     }
   });
 }
 
-function currentRuntimeSpriteLayers(sprite, now = performance.now()) {
-  const frames = Array.isArray(sprite?.frames) ? sprite.frames : [];
+function currentRuntimeVisualLayers(visual, now = performance.now()) {
+  const frames = Array.isArray(visual?.frames) ? visual.frames : [];
   if (!frames.length) {
-    throw new Error("Puzzle3 runtime sprite frames are missing.");
+    throw new Error("Puzzle3 runtime visual frames are missing.");
   }
-  const frameDuration = Number(sprite.frameDurationMs)
-    || (Number(sprite.durationMs) > 0 ? Number(sprite.durationMs) / frames.length : 0);
+  const frameDuration = Number(visual.frameDurationMs)
+    || (Number(visual.durationMs) > 0 ? Number(visual.durationMs) / frames.length : 0);
   const index = frames.length > 1 && frameDuration > 0
     ? Math.floor(now / frameDuration) % frames.length
     : 0;
   const layers = frames[index]?.layers;
   if (!Array.isArray(layers) || !layers.length || layers.some((layer) => !Array.isArray(layer) || !layer.length)) {
-    throw new Error("Puzzle3 runtime sprite frame layers are missing or invalid.");
+    throw new Error("Puzzle3 runtime visual frame layers are missing or invalid.");
   }
   return layers;
 }
 
-function hasRuntimeSpriteAnimation() {
-  return Object.values(snapshot?.sprites || {}).some((sprite) => (
-    Array.isArray(sprite?.frames)
-    && sprite.frames.length > 1
-    && (Number(sprite.frameDurationMs) > 0 || Number(sprite.durationMs) > 0)
+function hasRuntimeVisualAnimation() {
+  return Object.values(snapshot?.visuals || {}).some((visual) => (
+    Array.isArray(visual?.frames)
+    && visual.frames.length > 1
+    && (Number(visual.frameDurationMs) > 0 || Number(visual.durationMs) > 0)
   ));
 }
 
@@ -2686,164 +2663,6 @@ if (window.ResizeObserver) {
   resizeObserver.observe(canvas);
 }
 
-window.addEventListener("blur", stopAllHeldSceneInputs);
-
-function inputForEvent(event) {
-  return inputForRawInput({ key: event.key, code: event.code });
-}
-
-function applyPuzzle3CommandKey(event) {
-  const input = puzzle3CommandInputForEvent(event);
-  if (!input) {
-    return false;
-  }
-  event.preventDefault?.();
-  return emitPuzzle3CommandIntent(input);
-}
-
-function puzzle3CommandInputForEvent(event) {
-  const key = String(event.key || "").toLowerCase();
-  if (key === "z") {
-    return "undo";
-  }
-  if (key === "r") {
-    return "restart";
-  }
-  return null;
-}
-
-function inputForRawInput(raw) {
-  const keys = rawKeyCandidates(raw);
-  for (const input of snapshot.inputs) {
-    if ((input.keys || []).some((binding) => keys.includes(normalizeRawKeyToken(binding)))) {
-      return input.name;
-    }
-  }
-  return null;
-}
-
-function rawKeyCandidates(raw) {
-  const key = normalizeRawKeyToken(raw?.key);
-  return key ? [key] : [];
-}
-
-function normalizeRawKeyToken(value) {
-  const raw = String(value || "");
-  if (raw === " ") {
-    return "Space";
-  }
-  const token = raw.trim();
-  if (!token) {
-    return "";
-  }
-  if (token.length === 1) {
-    return token.toLowerCase();
-  }
-  const lower = token.toLowerCase();
-  const aliases = {
-    arrow_up: "ArrowUp",
-    arrowup: "ArrowUp",
-    up_arrow: "ArrowUp",
-    arrow_down: "ArrowDown",
-    arrowdown: "ArrowDown",
-    down_arrow: "ArrowDown",
-    arrow_left: "ArrowLeft",
-    arrowleft: "ArrowLeft",
-    left_arrow: "ArrowLeft",
-    arrow_right: "ArrowRight",
-    arrowright: "ArrowRight",
-    right_arrow: "ArrowRight",
-    esc: "Escape",
-    escape: "Escape",
-    enter: "Enter",
-    return: "Enter",
-    " ": "Space",
-    space: "Space",
-    spacebar: "Space",
-  };
-  return aliases[lower] || token;
-}
-
-function applySceneInput(input) {
-  return puzzle3Component.applyInput(input);
-}
-
-function enqueueSceneInput(input) {
-  if (!input) {
-    return false;
-  }
-  queuedSceneInputs.push(input);
-  if (queuedSceneInputs.length > 4) {
-    queuedSceneInputs = queuedSceneInputs.slice(-4);
-  }
-  scheduleQueuedSceneInput();
-  return true;
-}
-
-function startHeldSceneInput(holdId, input) {
-  if (!holdId || !input) {
-    return false;
-  }
-  heldSceneInputs.set(holdId, input);
-  return enqueueSceneInput(input);
-}
-
-function stopHeldSceneInput(holdId) {
-  if (!heldSceneInputs.has(holdId)) {
-    return false;
-  }
-  heldSceneInputs.delete(holdId);
-  return true;
-}
-
-function stopAllHeldSceneInputs() {
-  for (const holdId of [...heldSceneInputs.keys()]) {
-    stopHeldSceneInput(holdId);
-  }
-}
-
-function enqueueSceneRawInput(raw) {
-  const input = inputForRawInput(raw);
-  if (!input) {
-    return false;
-  }
-  return startHeldSceneInput(rawInputHoldId(raw), input);
-}
-
-function stopSceneRawInput(raw) {
-  return stopHeldSceneInput(rawInputHoldId(raw));
-}
-
-function rawInputHoldId(raw) {
-  const code = String(raw?.code || "");
-  const key = String(raw?.key || "");
-  return code || key;
-}
-
-function scheduleQueuedSceneInput() {
-  if (queuedSceneInputFrame) {
-    return;
-  }
-  queuedSceneInputFrame = requestAnimationFrame(() => {
-    queuedSceneInputFrame = 0;
-    const input = queuedSceneInputs.shift();
-    if (input) {
-      applySceneInput(input);
-    }
-    if (queuedSceneInputs.length > 0) {
-      scheduleQueuedSceneInput();
-    }
-  });
-}
-
-function applySceneRawInput(raw) {
-  const input = inputForRawInput(raw);
-  if (!input) {
-    return false;
-  }
-  return applySceneInput(input);
-}
-
 const controllerApi = {
   element: puzzle3Frame,
   canvas,
@@ -2854,19 +2673,6 @@ const controllerApi = {
       preserveCamera: true,
     }));
     return this.ready;
-  },
-  applyKey(event) {
-    return puzzle3Component.handleKey(event || {}) || applyPuzzle3CommandKey(event || {});
-  },
-  releaseKey(event) {
-    stopSceneRawInput({
-      key: String(event?.key || ""),
-      code: String(event?.code || ""),
-    });
-    return true;
-  },
-  applyInput(input) {
-    return puzzle3Component.applyInput(String(input || ""));
   },
   command(command, payload = {}) {
     const name = String(command || "");
@@ -2898,7 +2704,8 @@ const controllerApi = {
   destroy() {
     viewListeners.clear();
     stateListeners.clear();
-    stopAllHeldSceneInputs();
+    puzzle3ThreeRenderer?.destroy();
+    puzzle3ThreeRenderer = null;
   },
 };
 
@@ -2912,7 +2719,7 @@ function normalizeSnapshot(source) {
   return clonePuzzle3ViewSnapshot(source);
 }
 
-function standardSpriteGridPosition(size, column, row, slice) {
+function standardVisualGridPosition(size, column, row, slice) {
   return {
     x: column,
     y: Math.max(0, Number(size.depth || 1) - 1 - row),

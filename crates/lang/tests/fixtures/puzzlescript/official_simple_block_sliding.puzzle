@@ -23,7 +23,7 @@ slidetag = slideleft slideup slideright slidedown
 obs = Wall crate
 }
 
-sprites {
+visuals {
 Background
 #90ee90 #008000
 11111

@@ -7,7 +7,7 @@ use crate::highlight::{
     highlight_source_with_document,
 };
 use crate::level_editor_source::{
-    level_editor_level_slots, level_editor_manifest_json, level_editor_sprite_payload_json,
+    level_editor_level_slots, level_editor_manifest_json, level_editor_visual_payload_json,
 };
 use crate::source_folding::{SourceFoldRange, source_fold_ranges_from_document};
 use crate::source_outline::SourceOutlineItem;
@@ -302,7 +302,7 @@ impl SourceAnalysis {
         })
     }
 
-    /// Emits level-editor metadata without transferring per-cell state or every sprite.
+    /// Emits level-editor metadata without transferring per-cell state or every visual.
     pub fn level_editor_manifest_json(&self) -> Result<String, String> {
         level_editor_manifest_json(self.level_editor_integration()?, self.entries())
     }
@@ -320,9 +320,9 @@ impl SourceAnalysis {
         )
     }
 
-    /// Returns one renderer-ready sprite payload on demand.
-    pub fn level_editor_sprite_payload_json(&self, object_id: u16) -> Result<String, String> {
-        level_editor_sprite_payload_json(self.level_editor_integration()?, object_id)
+    /// Returns one renderer-ready visual payload on demand.
+    pub fn level_editor_visual_payload_json(&self, object_id: u16) -> Result<String, String> {
+        level_editor_visual_payload_json(self.level_editor_integration()?, object_id)
     }
 }
 
@@ -594,7 +594,7 @@ ___
             highlighted.spans.iter().any(|span| {
                 span.start == separator
                     && span.end == separator + 1
-                    && span.kind == SourceHighlightKind::LevelCell
+                    && span.kind == SourceHighlightKind::LevelSeparator
             }),
             "{:?}",
             highlighted.spans
@@ -602,6 +602,45 @@ ___
         assert!(highlighted.spans.iter().all(|span| {
             span.start != separator || span.kind != SourceHighlightKind::InvalidLevelCell
         }));
+    }
+
+    #[test]
+    fn legend_char_highlighting_uses_the_parser_role_for_every_lexical_spelling() {
+        let source = r#"puzzle board {
+slots {
+alpha = Alpha
+numeric = Numeric
+dash = Dash
+}
+levels {
+legend {
+A = Alpha
+1 = Numeric
+- = Dash
+. = empty
+}
+level "one" {
+A1-.
+}
+}
+}
+"#;
+        let highlighted =
+            analyze_source_for_profile(source, PuzzleSourceProfile::Puzzle2d).highlight();
+
+        for row in ["A = Alpha", "1 = Numeric", "- = Dash", ". = empty"] {
+            let start = source.find(row).expect("legend row");
+            let end = start + row.chars().next().expect("legend char").len_utf8();
+            assert!(
+                highlighted.spans.iter().any(|span| {
+                    span.start == start
+                        && span.end == end
+                        && span.kind == SourceHighlightKind::Literal
+                }),
+                "row={row:?} spans={:?}",
+                highlighted.spans
+            );
+        }
     }
 
     #[test]
@@ -711,7 +750,7 @@ rules {
 move
 }
 }
-sprites {
+visuals {
 Box {
 #fff
 0
@@ -743,8 +782,8 @@ M
             "manifest must not transfer board cells: {json}"
         );
         assert!(
-            !json.contains("sprites"),
-            "manifest must not transfer sprite definitions: {json}"
+            !json.contains("visuals"),
+            "manifest must not transfer visual definitions: {json}"
         );
         assert_eq!(
             analysis.level_editor_level_slots(0, None).unwrap(),
@@ -758,10 +797,10 @@ M
             analysis.level_editor_level_slots(0, Some(1)).unwrap(),
             vec![0, 2]
         );
-        let sprite = analysis.level_editor_sprite_payload_json(1).unwrap();
+        let visual = analysis.level_editor_visual_payload_json(1).unwrap();
         assert!(
-            sprite.contains(r##""colors":{"0":"#fff"}"##),
-            "unexpected sprite: {sprite}"
+            visual.contains(r##""colors":{"0":"#fff"}"##),
+            "unexpected visual: {visual}"
         );
     }
 
@@ -779,7 +818,7 @@ M
     }
 
     #[test]
-    fn level_editor_manifest_keeps_levels_when_a_sprite_is_invalid() {
+    fn level_editor_manifest_keeps_levels_when_a_visual_is_invalid() {
         let source = r#"
 puzzle default {
 slots {
@@ -789,7 +828,7 @@ rules {
 move
 }
 }
-sprites {
+visuals {
 Box {
 unknown nope
 }
@@ -805,10 +844,10 @@ B
 "#;
         let manifest = analyze_source(source)
             .level_editor_manifest_json()
-            .expect("sprite diagnostics must not stop the level editor session");
+            .expect("visual diagnostics must not stop the level editor session");
 
         assert!(
-            manifest.contains("solid sprite requires exactly one color"),
+            manifest.contains("solid visual requires exactly one color"),
             "{manifest}"
         );
         assert!(manifest.contains(r#""name":"one""#), "{manifest}");

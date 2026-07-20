@@ -1,9 +1,9 @@
 (() => {
-  window.PuzzleSpriteRegistry = {
+  window.PuzzleVisualRegistry = {
     create(config = {}) {
       return {
         aliases: { ...(config.aliases || {}) },
-        sprites: { ...(config.sprites || {}) },
+        entries: { ...(config.entries || {}) },
         order: {
           direction_priority: [...(config.order?.direction_priority || [])],
           priorities: [...(config.order?.priorities || [])],
@@ -25,7 +25,7 @@
 
   function ensureVisuals() {
     if (!window.GameVisuals) {
-      window.GameVisuals = window.PuzzleSpriteRegistry.create();
+      window.GameVisuals = window.PuzzleVisualRegistry.create();
     }
     return window.GameVisuals;
   }

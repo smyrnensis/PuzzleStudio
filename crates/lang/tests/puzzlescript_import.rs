@@ -1,7 +1,7 @@
 use puzzle_core::{InputId, ObjectId, transition_program, transition_state};
 use puzzle_lang::{
-    LoadedGame, ModelOperationSound, ModelOperationSoundDef, SceneComponent, SceneEffect,
-    VisualSpriteKind, parse_game2d as parse_game, translate_puzzlescript_to_canonical,
+    LevelId, LoadedGame, ModelOperationSound, ModelOperationSoundDef, SceneComponent, SceneEffect,
+    SceneExpr, VisualKind, parse_game2d as parse_game, translate_puzzlescript_to_canonical,
 };
 
 fn find_choice_by_label<'a>(
@@ -27,11 +27,6 @@ fn find_choice_by_label<'a>(
                     return Some(choice);
                 }
                 if let Some(choice) = find_choice_by_label(&conditional.else_children, label) {
-                    return Some(choice);
-                }
-            }
-            SceneComponent::For(for_view) => {
-                if let Some(choice) = find_choice_by_label(&for_view.children, label) {
                     return Some(choice);
                 }
             }
@@ -73,7 +68,6 @@ fn assert_imported_output_uses_current_canonical_surface(source: &str) {
     }
     for forbidden in [
         "\nobjects {",
-        "\nsprite {",
         "\ncollisionlayers",
         "\ntransitions {",
         "\nmain {",
@@ -399,16 +393,16 @@ fn translated_basic_vanilla_puzzlescript_parses_as_loaded_game() {
     assert!(
         loaded
             .visuals
-            .sprites
+            .entries
             .iter()
-            .any(|sprite| sprite.name == "Player")
+            .any(|visual| visual.name == "Player")
     );
     assert!(
         loaded
             .visuals
-            .sprites
+            .entries
             .iter()
-            .any(|sprite| sprite.name == "Crate")
+            .any(|visual| visual.name == "Crate")
     );
     assert_eq!(
         loaded.goal.as_ref().map(|goal| goal.description.as_str()),
@@ -417,7 +411,7 @@ fn translated_basic_vanilla_puzzlescript_parses_as_loaded_game() {
 }
 
 #[test]
-fn puzzlescript_level_select_prelude_generates_level_menu_scene() {
+fn puzzlescript_level_select_uses_the_public_iterable_contract() {
     let source = r#"
 title Level Menu Import
 level_select
@@ -479,6 +473,12 @@ G
     assert_imported_output_uses_current_canonical_surface(&translated);
 
     let loaded = parse_game(&translated).unwrap();
+    let imported_levels = loaded
+        .levels
+        .iter()
+        .map(|level| (level.puzzle.clone(), level.name.clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(imported_levels.len(), 2);
     let title_scene = scene_by_name(&loaded, "title");
     let level_select_scene = scene_by_name(&loaded, "level_select");
     let level_select_choice = find_choice_by_label(&title_scene.components, "Level Select")
@@ -487,12 +487,44 @@ G
         &level_select_choice.effect,
         SceneEffect::Goto { scene, params } if scene == "level_select" && params.is_empty()
     ));
-    assert!(
-        level_select_scene
-            .components
-            .iter()
-            .any(|component| matches!(component, SceneComponent::LevelMenu(_)))
-    );
+
+    let [SceneComponent::Column(menu)] = level_select_scene.components.as_slice() else {
+        panic!("level_menu must lower through the common scrollable column contract");
+    };
+    assert!(menu.layout.scroll);
+    assert_eq!(menu.children.len(), 3);
+    for (choice, (puzzle_name, level_name)) in menu.children[..2].iter().zip(&imported_levels) {
+        let SceneComponent::Choice(choice) = choice else {
+            panic!("level_menu entries must lower to common choices");
+        };
+        let expected_progress_path = vec![
+            "levels".to_string(),
+            LevelId::new(puzzle_name, level_name).record_key(),
+            "progress".to_string(),
+            "cleared".to_string(),
+        ];
+        assert!(matches!(
+            &choice.label,
+            SceneExpr::If { condition, .. }
+                if matches!(condition.as_ref(), SceneExpr::Path(path) if path == &expected_progress_path)
+        ));
+        assert!(matches!(
+            &choice.effect,
+            SceneEffect::Goto { scene, params }
+                if scene == puzzle_name
+                    && matches!(
+                        params.as_slice(),
+                        [puzzle_lang::SceneEffectParam::Level(SceneExpr::Text(value))]
+                            if value == level_name
+                    )
+        ));
+    }
+    assert!(matches!(
+        &menu.children[2],
+        SceneComponent::Choice(choice)
+            if choice.label == SceneExpr::Text("Back".to_string())
+                && matches!(&choice.effect, SceneEffect::Goto { scene, params } if scene == "title" && params.is_empty())
+    ));
 }
 
 #[test]
@@ -589,7 +621,7 @@ rules {
 }
 
 #[test]
-fn puzzlescript_color_only_object_lowers_to_solid_sprite() {
+fn puzzlescript_color_only_object_lowers_to_solid_visual() {
     let source = r##"
 Color Only
 
@@ -630,20 +662,20 @@ P
     assert!(!translated.contains("= empty"));
 
     let loaded = parse_game(&translated).unwrap();
-    let background_sprite = loaded
+    let background_visual = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Background")
-        .expect("expected imported Background sprite");
+        .find(|visual| visual.name == "Background")
+        .expect("expected imported Background visual");
     assert!(matches!(
-        &background_sprite.kind,
-        VisualSpriteKind::Solid(color) if color == "#9CBD0F"
+        &background_visual.kind,
+        VisualKind::Solid(color) if color == "#9CBD0F"
     ));
 }
 
 #[test]
-fn puzzlescript_object_name_with_digit_after_sprite_is_not_imported_as_sprite_row() {
+fn puzzlescript_object_name_with_digit_after_visual_is_not_imported_as_visual_row() {
     let source = r##"
 title Digit Object Boundary
 
@@ -1449,6 +1481,21 @@ fn imports_puzzlescript_next_teneten_sample_as_current_canonical_syntax() {
             .scenes
             .iter()
             .any(|scene| scene.name == "level_select")
+    );
+}
+
+#[test]
+fn puzzlescript_import_preserves_homepage_url_schemes() {
+    let source = "title URL metadata\nhomepage https://example.com/games/puzzle\n";
+
+    let translated = translate_puzzlescript_to_canonical(source)
+        .expect("PuzzleScript homepage URLs should translate");
+
+    assert!(
+        translated
+            .lines()
+            .any(|line| line == r#"homepage = "https://example.com/games/puzzle""#),
+        "{translated}"
     );
 }
 

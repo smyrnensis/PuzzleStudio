@@ -274,7 +274,7 @@ fn runtime_transition_program_outcome_json(
         commands: transition_commands_contract(commands),
         effects: puzzle_play::runtime_effects_for_outcome(&loaded.rule_effects, commands, firings),
         firings: firings_contract_2d(firings),
-        animation_events: animation_events_contract_2d(loaded, &animation_events),
+        animation_events: animation_events_contract_2d(&animation_events),
     }
     .to_json_string()
     .map_err(|error| AppError::Config(error.to_string()))
@@ -303,7 +303,7 @@ fn runtime_transition_current_outcome_json(
         commands: transition_commands_contract(commands),
         effects: puzzle_play::runtime_effects_for_outcome(&loaded.rule_effects, commands, firings),
         firings: firings_contract_2d(firings),
-        animation_events: animation_events_contract_2d(loaded, &animation_events),
+        animation_events: animation_events_contract_2d(&animation_events),
         state_hash: state.hash(),
         state_hash_key: state.hash().to_string(),
         previous_state_handle,

@@ -46,8 +46,8 @@ if ! grep -q "export function active_source_analysis_level_editor_level_slots" c
   exit 1
 fi
 
-if ! grep -q "export function active_source_analysis_level_editor_sprite_json" crates/html_editor/static/wasm/puzzle_wasm.js; then
-  echo "generated WASM bindings are missing active_source_analysis_level_editor_sprite_json" >&2
+if ! grep -q "export function active_source_analysis_level_editor_visual_json" crates/html_editor/static/wasm/puzzle_wasm.js; then
+  echo "generated WASM bindings are missing active_source_analysis_level_editor_visual_json" >&2
   exit 1
 fi
 

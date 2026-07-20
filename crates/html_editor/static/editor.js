@@ -21,8 +21,8 @@ const WASM_SECTION_BLOCK_NAMES = Object.freeze({
   win_conditions: "win_conditions",
   lose_condition: "lose_conditions",
   lose_conditions: "lose_conditions",
-  sprite: "sprites",
-  sprites: "sprites",
+  visual: "visuals",
+  visuals: "visuals",
   asset: "assets",
   assets: "assets",
   screen: "screen",
@@ -47,7 +47,6 @@ const WASM_SECTION_BLOCK_NAMES = Object.freeze({
   row: "row",
   column: "column",
   box: "box",
-  level_menu: "level_menu",
 });
 const WASM_SECTION_BOUNDARY_BLOCKS = new Set([
   "map",
@@ -58,7 +57,7 @@ const WASM_SECTION_BOUNDARY_BLOCKS = new Set([
   "layers",
   "collision_layers",
   "legend",
-  "sprites",
+  "visuals",
   "assets",
   "screen",
   "layout",
@@ -86,7 +85,6 @@ const WASM_INLINE_BLOCKS = new Set([
   "column",
   "box",
   "for",
-  "level_menu",
   "fix",
   "repeat",
   "once",
@@ -100,13 +98,13 @@ let previewVirtualWidth = Math.round(previewVirtualHeight * previewViewportAspec
 const boardVirtualCellSize = 56;
 const levelEditorEdgeSize = 24;
 const levelEditorGap = 6;
-const SPRITE_COLOR_PRESETS = [
+const VISUAL_COLOR_PRESETS = [
   "#000000", "#1d2b53", "#7e2553", "#008751",
   "#ab5236", "#5f574f", "#c2c3c7", "#fff1e8",
   "#ff004d", "#ffa300", "#ffec27", "#00e436",
   "#29adff", "#83769c", "#ff77a8", "#ffccaa",
 ];
-const SPRITE_COLOR_TOKENS = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const VISUAL_COLOR_TOKENS = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
 const PREVIEW_THEME_PRESETS = {
   clean: {
     colorScheme: "light",
@@ -190,12 +188,12 @@ const PREVIEW_THEME_PRESETS = {
   },
 };
 
-function spriteEditorScaleFactor(scaleInput, maxSize) {
+function visualEditorScaleFactor(scaleInput, maxSize) {
   const factor = Math.trunc(Number(scaleInput?.value) || 2);
   return Math.max(2, Math.min(maxSize, factor));
 }
 
-function renderSpriteScaleControl({
+function renderVisualScaleControl({
   size,
   maxSize,
   scaleInput,
@@ -208,7 +206,7 @@ function renderSpriteScaleControl({
     return;
   }
   const maxScale = Math.floor(maxSize / size);
-  const factor = spriteEditorScaleFactor(scaleInput, maxSize);
+  const factor = visualEditorScaleFactor(scaleInput, maxSize);
   scaleInput.max = String(Math.max(2, size, maxScale));
   scaleInput.disabled = false;
   scaleUpButton.disabled = maxScale < 2 || factor > maxScale;
@@ -299,10 +297,10 @@ function editorTooltipTargetFromEventTarget(target) {
     return null;
   }
   const hasIconGlyph = element.querySelector("svg")
-    || element.classList.contains("sprite-brush-size-input");
+    || element.classList.contains("visual-brush-size-input");
   const hasHoverContent = element.dataset.tooltip || hasIconGlyph || element.dataset.shortcut;
   if (
-    element.classList.contains("sprite-cell")
+    element.classList.contains("visual-cell")
     || element.classList.contains("source-outline-row")
     || !hasHoverContent
   ) {
@@ -384,17 +382,17 @@ function compactEditorTooltipText(text) {
   if (unlinkTagMatch) {
     return "Unlink tag";
   }
-  const scopedEditMatch = cleaned.match(/^(Copy|Cut|Delete) (?:whole (?:3D )?sprite|current slice|selected (?:3D )?area)$/i);
+  const scopedEditMatch = cleaned.match(/^(Copy|Cut|Delete) (?:whole (?:3D )?visual|current slice|selected (?:3D )?area)$/i);
   if (scopedEditMatch) {
     return `${scopedEditMatch[1][0].toUpperCase()}${scopedEditMatch[1].slice(1).toLowerCase()}`;
   }
-  if (/^Paste into (?:whole (?:3D )?sprite|current slice|selected (?:3D )?area)$/i.test(cleaned)) {
+  if (/^Paste into (?:whole (?:3D )?visual|current slice|selected (?:3D )?area)$/i.test(cleaned)) {
     return "Paste";
   }
   if (/^(?:Select edit region in|Clear selected (?:3D )?edit region)/i.test(cleaned)) {
     return cleaned.startsWith("Clear") ? "Clear region" : "Select region";
   }
-  if (/^Stop translating (?:3D )?sprite$/i.test(cleaned)) {
+  if (/^Stop translating (?:3D )?visual$/i.test(cleaned)) {
     return "Stop translate";
   }
   const scopedTransformMatch = cleaned.match(/^(Translate|Fill connected (?:3D component|area)|Rotate|Flip)\b/i);
@@ -576,7 +574,6 @@ let wasmCompilerPromise = null;
 let surfaceEntriesCache = null;
 let surfaceEntriesRequest = null;
 let previewLogEntries = [];
-let pendingPreviewKeyStateSync = 0;
 let previewDebugEnabled = false;
 let previewDebugTrace = null;
 let previewDebugCursor = -1;
@@ -631,15 +628,15 @@ let levelSolveStartedAt = 0;
 let currentPreviewMode = "play";
 let currentEditorDimension = "2d";
 let currentLevelPaneMode = "edit";
-let currentSpritePaneMode = "sprite";
+let currentVisualPaneMode = "visual";
 let toolPaneSaveShortcutMode = "";
 let levelPaintDrag = null;
 let levelBucketActive = false;
 let levelResizeMode = null;
 let levelGridVisible = false;
 let levelPlaytestActive = false;
-let spritePaintDrag = null;
-let sprite3dPaintDrag = null;
+let visualPaintDrag = null;
+let visual3dPaintDrag = null;
 let level = {
   width: 9,
   height: 5,
@@ -649,7 +646,7 @@ let level = {
   editSourceBodyStart: null,
   editSourceBodyEnd: null,
   editSourceName: "",
-  sourceSpriteContract: null,
+  sourceVisualContract: null,
   selectedObjectId: 0,
   addPaletteOpen: false,
   activeLayer: 0,
@@ -664,7 +661,7 @@ let level = {
 let levelDisplayCells = null;
 let levelLayerInsertMode = false;
 let levelLayerRemoveMode = false;
-let sprite = {
+let visual = {
   width: 5,
   height: 5,
   sizeBound: true,
@@ -674,7 +671,7 @@ let sprite = {
   editSourceBodyStart: null,
   editSourceBodyEnd: null,
   editSourceName: "",
-  sourceSpriteContract: null,
+  sourceVisualContract: null,
   selectedColorIndex: 0,
   addPaletteOpen: false,
   editPaletteOpen: false,
@@ -698,7 +695,7 @@ let sprite = {
     { color: "#ff004d" },
   ],
 };
-let sprite3d = {
+let visual3d = {
   width: 5,
   height: 5,
   depth: 5,
@@ -755,8 +752,8 @@ const visualEditHistoryLimit = 200;
 const visualEditHistories = {
   level: { undo: [], redo: [] },
   level3d: { undo: [], redo: [] },
-  sprite: { undo: [], redo: [] },
-  sprite3d: { undo: [], redo: [] },
+  visual: { undo: [], redo: [] },
+  visual3d: { undo: [], redo: [] },
 };
 
 function cloneVisualEditValue(value) {
@@ -767,11 +764,11 @@ function visualEditDocumentForKind(kind) {
   if (kind === "level3d" && typeof level3dSourceDocument === "function") {
     return level3dSourceDocument();
   }
-  if (kind === "sprite" && typeof activeSpriteEditDocument === "function") {
-    return activeSpriteEditDocument();
+  if (kind === "visual" && typeof activeVisualEditDocument === "function") {
+    return activeVisualEditDocument();
   }
-  if (kind === "sprite3d" && typeof activeSprite3dEditDocument === "function") {
-    return activeSprite3dEditDocument();
+  if (kind === "visual3d" && typeof activeVisual3dEditDocument === "function") {
+    return activeVisual3dEditDocument();
   }
   if (kind === "level" && typeof activePreviewDocument === "function") {
     return activePreviewDocument();
@@ -781,7 +778,7 @@ function visualEditDocumentForKind(kind) {
 
 function visualEditSnapshot(kind) {
   const editDocument = visualEditDocumentForKind(kind);
-  const tracksSource = kind === "level3d" || kind === "sprite" || kind === "sprite3d";
+  const tracksSource = kind === "level3d" || kind === "visual" || kind === "visual3d";
   const base = {
     kind,
     documentId: tracksSource ? editDocument?.id || "" : "",
@@ -814,57 +811,57 @@ function visualEditSnapshot(kind) {
       },
     };
   }
-  if (kind === "sprite") {
+  if (kind === "visual") {
     return {
       ...base,
       state: {
-        width: sprite.width,
-        height: sprite.height,
-        palette: cloneVisualEditValue(sprite.palette || []),
-        cells: cloneVisualEditValue(sprite.cells || []),
-        paletteBind: cloneVisualEditValue(sprite.paletteBind || null),
-        shapeBind: cloneVisualEditValue(sprite.shapeBind || null),
-        solidSource: Boolean(sprite.solidSource),
-        sourcePreludeRows: cloneVisualEditValue(sprite.sourcePreludeRows || []),
-        sourceSpriteContract: cloneVisualEditValue(sprite.sourceSpriteContract || null),
-        animationMode: Boolean(sprite.animationMode),
-        animationFrameIndex: sprite.animationFrameIndex,
-        animationDurationMs: sprite.animationDurationMs,
-        animationFrameCount: sprite.animationFrameCount,
-        animationFrames: cloneVisualEditValue(sprite.animationFrames || []),
-        animationPlaybackIndex: sprite.animationPlaybackIndex,
+        width: visual.width,
+        height: visual.height,
+        palette: cloneVisualEditValue(visual.palette || []),
+        cells: cloneVisualEditValue(visual.cells || []),
+        paletteBind: cloneVisualEditValue(visual.paletteBind || null),
+        shapeBind: cloneVisualEditValue(visual.shapeBind || null),
+        solidSource: Boolean(visual.solidSource),
+        sourcePreludeRows: cloneVisualEditValue(visual.sourcePreludeRows || []),
+        sourceVisualContract: cloneVisualEditValue(visual.sourceVisualContract || null),
+        animationMode: Boolean(visual.animationMode),
+        animationFrameIndex: visual.animationFrameIndex,
+        animationDurationMs: visual.animationDurationMs,
+        animationFrameCount: visual.animationFrameCount,
+        animationFrames: cloneVisualEditValue(visual.animationFrames || []),
+        animationPlaybackIndex: visual.animationPlaybackIndex,
       },
     };
   }
-  if (kind === "sprite3d") {
+  if (kind === "visual3d") {
     return {
       ...base,
       state: {
-        width: sprite3d.width,
-        height: sprite3d.height,
-        depth: sprite3d.depth,
-        editDocumentId: sprite3d.editDocumentId,
-        editSourceStart: sprite3d.editSourceStart,
-        editSourceEnd: sprite3d.editSourceEnd,
-        editSourceBodyStart: sprite3d.editSourceBodyStart,
-        editSourceBodyEnd: sprite3d.editSourceBodyEnd,
-        editSourceName: sprite3d.editSourceName,
-        sourceSpriteContract: cloneVisualEditValue(sprite3d.sourceSpriteContract || null),
-        axis: sprite3d.axis,
-        slice: sprite3d.slice,
-        editScope: sprite3d.editScope,
-        palette: cloneVisualEditValue(sprite3d.palette || []),
-        cells: cloneVisualEditValue(sprite3d.cells || []),
-        frames: cloneVisualEditValue(sprite3d.frames || []),
-        animationMode: Boolean(sprite3d.animationMode),
-        animationFrameIndex: sprite3d.animationFrameIndex,
-        animationFrameCount: sprite3d.animationFrameCount,
-        animationPlaybackIndex: sprite3d.animationPlaybackIndex,
-        animationDurationMs: sprite3d.animationDurationMs,
-        frameDurationMs: sprite3d.frameDurationMs,
-        shapeBind: cloneVisualEditValue(sprite3d.shapeBind || null),
-        sourceSpatialOps: cloneVisualEditValue(sprite3d.sourceSpatialOps || []),
-        hoverSlice: sprite3d.hoverSlice,
+        width: visual3d.width,
+        height: visual3d.height,
+        depth: visual3d.depth,
+        editDocumentId: visual3d.editDocumentId,
+        editSourceStart: visual3d.editSourceStart,
+        editSourceEnd: visual3d.editSourceEnd,
+        editSourceBodyStart: visual3d.editSourceBodyStart,
+        editSourceBodyEnd: visual3d.editSourceBodyEnd,
+        editSourceName: visual3d.editSourceName,
+        sourceVisualContract: cloneVisualEditValue(visual3d.sourceVisualContract || null),
+        axis: visual3d.axis,
+        slice: visual3d.slice,
+        editScope: visual3d.editScope,
+        palette: cloneVisualEditValue(visual3d.palette || []),
+        cells: cloneVisualEditValue(visual3d.cells || []),
+        frames: cloneVisualEditValue(visual3d.frames || []),
+        animationMode: Boolean(visual3d.animationMode),
+        animationFrameIndex: visual3d.animationFrameIndex,
+        animationFrameCount: visual3d.animationFrameCount,
+        animationPlaybackIndex: visual3d.animationPlaybackIndex,
+        animationDurationMs: visual3d.animationDurationMs,
+        frameDurationMs: visual3d.frameDurationMs,
+        shapeBind: cloneVisualEditValue(visual3d.shapeBind || null),
+        sourceSpatialOps: cloneVisualEditValue(visual3d.sourceSpatialOps || []),
+        hoverSlice: visual3d.hoverSlice,
       },
     };
   }
@@ -946,73 +943,73 @@ function restoreVisualEditSnapshot(snapshot) {
     renderLevel3dBuilder();
     sendLevel3dSnapshotToRuntime();
     sendLevel3dLayerSnapshotToRuntime();
-  } else if (snapshot.kind === "sprite") {
-    sprite.width = clampSpriteSize(state.width);
-    sprite.height = clampSpriteSize(state.height);
-    sprite.palette = cloneVisualEditValue(state.palette || [{ color: "#ff004d" }]);
-    sprite.cells = cloneVisualEditValue(state.cells || []);
-    sprite.paletteBind = cloneVisualEditValue(state.paletteBind || null);
-    sprite.shapeBind = cloneVisualEditValue(state.shapeBind || null);
-    sprite.solidSource = Boolean(state.solidSource);
-    sprite.sourcePreludeRows = cloneVisualEditValue(state.sourcePreludeRows || []);
-    sprite.sourceSpriteContract = cloneVisualEditValue(state.sourceSpriteContract || null);
-    sprite.animationMode = Boolean(state.animationMode);
-    sprite.animationFrameIndex = Math.max(0, Math.trunc(Number(state.animationFrameIndex) || 0));
-    sprite.animationDurationMs = Number.isFinite(Number(state.animationDurationMs))
-      ? normalizedSpriteAnimationDuration(state.animationDurationMs)
-      : normalizedSpriteAnimationDuration();
-    sprite.animationFrameCount = normalizedSpriteAnimationFrameCount(state.animationFrameCount);
-    sprite.animationFrames = cloneVisualEditValue(state.animationFrames || []);
-    sprite.animationPlaybackIndex = Math.max(0, Math.trunc(Number(state.animationPlaybackIndex) || 0));
-    if (sprite.animationMode) {
-      if (typeof ensureSpriteAnimationFrames === "function") {
-        ensureSpriteAnimationFrames();
+  } else if (snapshot.kind === "visual") {
+    visual.width = clampVisualSize(state.width);
+    visual.height = clampVisualSize(state.height);
+    visual.palette = cloneVisualEditValue(state.palette || [{ color: "#ff004d" }]);
+    visual.cells = cloneVisualEditValue(state.cells || []);
+    visual.paletteBind = cloneVisualEditValue(state.paletteBind || null);
+    visual.shapeBind = cloneVisualEditValue(state.shapeBind || null);
+    visual.solidSource = Boolean(state.solidSource);
+    visual.sourcePreludeRows = cloneVisualEditValue(state.sourcePreludeRows || []);
+    visual.sourceVisualContract = cloneVisualEditValue(state.sourceVisualContract || null);
+    visual.animationMode = Boolean(state.animationMode);
+    visual.animationFrameIndex = Math.max(0, Math.trunc(Number(state.animationFrameIndex) || 0));
+    visual.animationDurationMs = Number.isFinite(Number(state.animationDurationMs))
+      ? normalizedVisualAnimationDuration(state.animationDurationMs)
+      : normalizedVisualAnimationDuration();
+    visual.animationFrameCount = normalizedVisualAnimationFrameCount(state.animationFrameCount);
+    visual.animationFrames = cloneVisualEditValue(state.animationFrames || []);
+    visual.animationPlaybackIndex = Math.max(0, Math.trunc(Number(state.animationPlaybackIndex) || 0));
+    if (visual.animationMode) {
+      if (typeof ensureVisualAnimationFrames === "function") {
+        ensureVisualAnimationFrames();
       }
-      if (sprite.animationFrames[sprite.animationFrameIndex]) {
-        sprite.cells = sprite.animationFrames[sprite.animationFrameIndex];
+      if (visual.animationFrames[visual.animationFrameIndex]) {
+        visual.cells = visual.animationFrames[visual.animationFrameIndex];
       }
-    } else if (typeof resetSpriteAnimationFramesFromCurrentCells === "function") {
-      resetSpriteAnimationFramesFromCurrentCells();
+    } else if (typeof resetVisualAnimationFramesFromCurrentCells === "function") {
+      resetVisualAnimationFramesFromCurrentCells();
     }
-    sprite.addPaletteOpen = false;
-    sprite.editPaletteOpen = false;
-    sprite.customColorOpen = false;
-    sprite.addDraftColorIndex = null;
-    renderSpriteBuilder();
-    if (typeof syncSpriteAnimationInputValues === "function") {
-      syncSpriteAnimationInputValues();
+    visual.addPaletteOpen = false;
+    visual.editPaletteOpen = false;
+    visual.customColorOpen = false;
+    visual.addDraftColorIndex = null;
+    renderVisualBuilder();
+    if (typeof syncVisualAnimationInputValues === "function") {
+      syncVisualAnimationInputValues();
     }
-  } else if (snapshot.kind === "sprite3d") {
-    sprite3d.width = clampSprite3dSize(state.width);
-    sprite3d.height = clampSprite3dSize(state.height);
-    sprite3d.depth = clampSprite3dSize(state.depth);
-    sprite3d.editDocumentId = state.editDocumentId || null;
-    sprite3d.editSourceStart = Number.isInteger(state.editSourceStart) ? state.editSourceStart : null;
-    sprite3d.editSourceEnd = Number.isInteger(state.editSourceEnd) ? state.editSourceEnd : null;
-    sprite3d.editSourceBodyStart = Number.isInteger(state.editSourceBodyStart) ? state.editSourceBodyStart : null;
-    sprite3d.editSourceBodyEnd = Number.isInteger(state.editSourceBodyEnd) ? state.editSourceBodyEnd : null;
-    sprite3d.editSourceName = state.editSourceName || "";
-    sprite3d.sourceSpriteContract = cloneVisualEditValue(state.sourceSpriteContract || null);
-    sprite3d.axis = ["x", "y", "z"].includes(state.axis) ? state.axis : "z";
-    sprite3d.slice = Math.max(0, Math.min(sprite3dAxisSize() - 1, Math.trunc(Number(state.slice) || 0)));
-    sprite3d.editScope = state.editScope === "all" ? "all" : "slice";
-    sprite3d.palette = cloneVisualEditValue(state.palette || [{ color: "#ff004d" }]);
-    sprite3d.cells = cloneVisualEditValue(state.cells || []);
-    sprite3d.frames = cloneVisualEditValue(state.frames || []);
-    sprite3d.animationMode = Boolean(state.animationMode);
-    sprite3d.animationFrameCount = Math.max(1, Math.trunc(Number(state.animationFrameCount) || sprite3d.frames.length || 1));
-    sprite3d.animationFrameIndex = Math.max(0, Math.min(sprite3d.animationFrameCount - 1, Math.trunc(Number(state.animationFrameIndex) || 0)));
-    sprite3d.animationPlaybackIndex = Math.max(0, Math.min(sprite3d.animationFrameCount - 1, Math.trunc(Number(state.animationPlaybackIndex) || 0)));
-    sprite3d.animationDurationMs = Number.isFinite(state.animationDurationMs) ? state.animationDurationMs : null;
-    sprite3d.frameDurationMs = Number.isFinite(state.frameDurationMs) ? state.frameDurationMs : null;
-    sprite3d.shapeBind = cloneVisualEditValue(state.shapeBind || null);
-    sprite3d.sourceSpatialOps = cloneVisualEditValue(state.sourceSpatialOps || []);
-    sprite3d.hoverSlice = Number.isInteger(state.hoverSlice) ? state.hoverSlice : null;
-    sprite3d.addPaletteOpen = false;
-    sprite3d.editPaletteOpen = false;
-    sprite3d.customColorOpen = false;
-    sprite3d.addDraftColorIndex = null;
-    renderSprite3dBuilder();
+  } else if (snapshot.kind === "visual3d") {
+    visual3d.width = clampVisual3dSize(state.width);
+    visual3d.height = clampVisual3dSize(state.height);
+    visual3d.depth = clampVisual3dSize(state.depth);
+    visual3d.editDocumentId = state.editDocumentId || null;
+    visual3d.editSourceStart = Number.isInteger(state.editSourceStart) ? state.editSourceStart : null;
+    visual3d.editSourceEnd = Number.isInteger(state.editSourceEnd) ? state.editSourceEnd : null;
+    visual3d.editSourceBodyStart = Number.isInteger(state.editSourceBodyStart) ? state.editSourceBodyStart : null;
+    visual3d.editSourceBodyEnd = Number.isInteger(state.editSourceBodyEnd) ? state.editSourceBodyEnd : null;
+    visual3d.editSourceName = state.editSourceName || "";
+    visual3d.sourceVisualContract = cloneVisualEditValue(state.sourceVisualContract || null);
+    visual3d.axis = ["x", "y", "z"].includes(state.axis) ? state.axis : "z";
+    visual3d.slice = Math.max(0, Math.min(visual3dAxisSize() - 1, Math.trunc(Number(state.slice) || 0)));
+    visual3d.editScope = state.editScope === "all" ? "all" : "slice";
+    visual3d.palette = cloneVisualEditValue(state.palette || [{ color: "#ff004d" }]);
+    visual3d.cells = cloneVisualEditValue(state.cells || []);
+    visual3d.frames = cloneVisualEditValue(state.frames || []);
+    visual3d.animationMode = Boolean(state.animationMode);
+    visual3d.animationFrameCount = Math.max(1, Math.trunc(Number(state.animationFrameCount) || visual3d.frames.length || 1));
+    visual3d.animationFrameIndex = Math.max(0, Math.min(visual3d.animationFrameCount - 1, Math.trunc(Number(state.animationFrameIndex) || 0)));
+    visual3d.animationPlaybackIndex = Math.max(0, Math.min(visual3d.animationFrameCount - 1, Math.trunc(Number(state.animationPlaybackIndex) || 0)));
+    visual3d.animationDurationMs = Number.isFinite(state.animationDurationMs) ? state.animationDurationMs : null;
+    visual3d.frameDurationMs = Number.isFinite(state.frameDurationMs) ? state.frameDurationMs : null;
+    visual3d.shapeBind = cloneVisualEditValue(state.shapeBind || null);
+    visual3d.sourceSpatialOps = cloneVisualEditValue(state.sourceSpatialOps || []);
+    visual3d.hoverSlice = Number.isInteger(state.hoverSlice) ? state.hoverSlice : null;
+    visual3d.addPaletteOpen = false;
+    visual3d.editPaletteOpen = false;
+    visual3d.customColorOpen = false;
+    visual3d.addDraftColorIndex = null;
+    renderVisual3dBuilder();
   } else {
     return false;
   }
@@ -1027,18 +1024,18 @@ function currentVisualEditKind() {
   if (currentPreviewMode === "level3d") {
     return "level3d";
   }
-  if (currentPreviewMode === "sprite") {
-    return "sprite";
+  if (currentPreviewMode === "visual") {
+    return "visual";
   }
-  if (currentPreviewMode === "sprite3d") {
-    return "sprite3d";
+  if (currentPreviewMode === "visual3d") {
+    return "visual3d";
   }
   return "";
 }
 
 function undoVisualEdit(kind = currentVisualEditKind()) {
-  if ((kind === "sprite" || kind === "sprite3d") && typeof commitSpriteColorEditHistory === "function") {
-    commitSpriteColorEditHistory(kind);
+  if ((kind === "visual" || kind === "visual3d") && typeof commitVisualColorEditHistory === "function") {
+    commitVisualColorEditHistory(kind);
   }
   const history = visualEditHistories[kind];
   const snapshot = history?.undo.pop();
@@ -1063,10 +1060,10 @@ function redoVisualEdit(kind = currentVisualEditKind()) {
 
 function isTextEntryTarget(target) {
   const tagName = target?.tagName || "";
-  if (target?.closest?.(".sprite-code-glyph")) {
+  if (target?.closest?.(".visual-code-glyph")) {
     return false;
   }
-  if (typeof isSpriteVisualEditUndoTarget === "function" && isSpriteVisualEditUndoTarget(target)) {
+  if (typeof isVisualEditUndoTarget === "function" && isVisualEditUndoTarget(target)) {
     return false;
   }
   return target?.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(tagName);
@@ -1105,11 +1102,11 @@ function toolPaneSaveShortcutModeIsActive(mode) {
   if (mode === "level3d") {
     return isPaneVisible("level") && level3dBuilder && !level3dBuilder.hidden;
   }
-  if (mode === "sprite") {
-    return isPaneVisible("sprite") && spriteBuilder && !spriteBuilder.hidden;
+  if (mode === "visual") {
+    return isPaneVisible("visual") && visualBuilder && !visualBuilder.hidden;
   }
-  if (mode === "sprite3d") {
-    return isPaneVisible("sprite") && sprite3dBuilder && !sprite3dBuilder.hidden;
+  if (mode === "visual3d") {
+    return isPaneVisible("visual") && visual3dBuilder && !visual3dBuilder.hidden;
   }
   if (mode === "sounds") {
     return isPaneVisible("sounds") && soundsBuilder && !soundsBuilder.hidden;
@@ -1130,12 +1127,12 @@ function toolPaneSaveShortcutModeForTarget(target) {
       return "level3d";
     }
   }
-  if (isPaneVisible("sprite")) {
-    if (spriteBuilder && !spriteBuilder.hidden && spriteBuilder.contains(element)) {
-      return "sprite";
+  if (isPaneVisible("visual")) {
+    if (visualBuilder && !visualBuilder.hidden && visualBuilder.contains(element)) {
+      return "visual";
     }
-    if (sprite3dBuilder && !sprite3dBuilder.hidden && sprite3dBuilder.contains(element)) {
-      return "sprite3d";
+    if (visual3dBuilder && !visual3dBuilder.hidden && visual3dBuilder.contains(element)) {
+      return "visual3d";
     }
   }
   if (isPaneVisible("sounds") && soundsBuilder && !soundsBuilder.hidden && soundsBuilder.contains(element)) {
@@ -1185,24 +1182,24 @@ function updateToolPaneSourceForMode(mode) {
     updateLevel3dInSource();
     return true;
   }
-  if (mode === "sprite") {
-    if (typeof updateSpriteInSource !== "function") {
-      return reportToolPaneSourceUpdateUnavailable("sprite", "Sprite source update unavailable");
+  if (mode === "visual") {
+    if (typeof updateVisualInSource !== "function") {
+      return reportToolPaneSourceUpdateUnavailable("visual", "Visual source update unavailable");
     }
-    const update = updateSpriteInSource();
+    const update = updateVisualInSource();
     if (update && typeof update.catch === "function") {
       update.catch((error) => {
         console.error(error);
-        reportToolPaneSourceUpdateUnavailable("sprite", "Sprite source update failed");
+        reportToolPaneSourceUpdateUnavailable("visual", "Visual source update failed");
       });
     }
     return true;
   }
-  if (mode === "sprite3d") {
-    if (typeof updateSprite3dInSource !== "function") {
-      return reportToolPaneSourceUpdateUnavailable("sprite", "3D sprite source update unavailable");
+  if (mode === "visual3d") {
+    if (typeof updateVisual3dInSource !== "function") {
+      return reportToolPaneSourceUpdateUnavailable("visual", "3D visual source update unavailable");
     }
-    updateSprite3dInSource();
+    updateVisual3dInSource();
     return true;
   }
   if (mode === "sounds") {
@@ -1249,8 +1246,8 @@ function applyEditorTheme(theme) {
   if (!previewDocumentLoaded) {
     applyUnloadedPreviewTheme();
   }
-  if (typeof renderSprite3dPreview === "function") {
-    window.requestAnimationFrame(renderSprite3dPreview);
+  if (typeof renderVisual3dPreview === "function") {
+    window.requestAnimationFrame(renderVisual3dPreview);
   }
 }
 
@@ -1469,7 +1466,6 @@ function stopPreviewRuntime() {
   previewFrameHasCurrentCompiledPreview = false;
   previewFrameHasEditorLevelState = false;
   previewSession = null;
-  pendingPreviewKeyStateSync = 0;
   setPreviewDocumentLoaded(false);
   setPreviewFrameHtml(emptyPreviewDocument());
   syncPreviewLevelActionButtons();
@@ -1584,12 +1580,12 @@ function safePreviewCssValue(value) {
 }
 
 function ensureGameVisualsRuntime() {
-  if (!window.PuzzleSpriteRegistry) {
-    window.PuzzleSpriteRegistry = {
+  if (!window.PuzzleVisualRegistry) {
+    window.PuzzleVisualRegistry = {
       create(config = {}) {
         return {
           aliases: { ...(config.aliases || {}) },
-          sprites: { ...(config.sprites || {}) },
+          entries: { ...(config.entries || {}) },
           order: {
             direction_priority: [...(config.order?.direction_priority || [])],
             priorities: [...(config.order?.priorities || [])],
@@ -1616,7 +1612,7 @@ function ensureGameVisualsRuntime() {
 
   function ensureVisuals() {
     if (!window.GameVisuals) {
-      window.GameVisuals = window.PuzzleSpriteRegistry.create();
+      window.GameVisuals = window.PuzzleVisualRegistry.create();
     }
     return window.GameVisuals;
   }
@@ -1685,7 +1681,7 @@ function ensureGameVisualsRuntime() {
 function applyGameVisuals(script) {
   ensureGameVisualsRuntime();
   window.PuzzleStudio.disposeAssetScripts();
-  window.GameVisuals = window.PuzzleSpriteRegistry.create();
+  window.GameVisuals = window.PuzzleVisualRegistry.create();
   if (!script) {
     return;
   }
@@ -1998,7 +1994,6 @@ function invalidateCompiledPreview(document = activePreviewDocument()) {
   solverPreparedByBuildId.clear();
   previewFrameHasCurrentCompiledPreview = false;
   previewFrameHasEditorLevelState = false;
-  pendingPreviewKeyStateSync = 0;
   if (document) {
     document.previewHtml = "";
     document.previewError = "";
@@ -2117,7 +2112,7 @@ function sectionBoundaryForWasm(block, tokens) {
   if (block === "legend") {
     return !isLegendRowForWasm(tokens);
   }
-  if (["marks", "group", "layers", "collision_layers", "win_conditions", "lose_conditions", "transitions", "levels", "sprites", "assets"].includes(block)) {
+  if (["marks", "group", "layers", "collision_layers", "win_conditions", "lose_conditions", "transitions", "levels", "visuals", "assets"].includes(block)) {
     return startsPuzzleSectionForWasm(tokens);
   }
   return false;
@@ -2406,8 +2401,16 @@ function diagnosticOrigin(diagnostic, location = null) {
 }
 
 function diagnosticSourceLocation(diagnostic, options = {}) {
-  const document = options.document || activePreviewDocument();
-  const sourceText = String(options.sourceText ?? options.source ?? document?.source ?? "");
+  const diagnosticFile = String(diagnostic?.file || "").trim();
+  const document = diagnosticFile
+    ? documentByPath(diagnosticFile)
+    : options.document || activePreviewDocument();
+  if (diagnosticFile && !document) {
+    return null;
+  }
+  const sourceText = document
+    ? currentSourceForDocument(document)
+    : String(options.sourceText ?? options.source ?? "");
   const line = positiveInteger(diagnostic?.line);
   const column = positiveInteger(diagnostic?.column) || 1;
   if (!line) {
@@ -3831,8 +3834,8 @@ function levelModeForEditorDimension(dimension = currentEditorDimension) {
   return normalizeEditorDimension(dimension) === "3d" ? "level3d" : "edit";
 }
 
-function spriteModeForEditorDimension(dimension = currentEditorDimension) {
-  return normalizeEditorDimension(dimension) === "3d" ? "sprite3d" : "sprite";
+function visualModeForEditorDimension(dimension = currentEditorDimension) {
+  return normalizeEditorDimension(dimension) === "3d" ? "visual3d" : "visual";
 }
 
 function focusedPuzzleSourceContext(document = activeDocument()) {
@@ -3900,8 +3903,8 @@ function modeForFocusedPuzzleEntry(kind, context = focusedPuzzleSourceContext())
   if (!dimension) {
     return null;
   }
-  return kind === "sprite"
-    ? spriteModeForEditorDimension(dimension)
+  return kind === "visual"
+    ? visualModeForEditorDimension(dimension)
     : levelModeForEditorDimension(dimension);
 }
 
@@ -3917,44 +3920,44 @@ async function syncPaneModesFromFocusedPuzzleSource(options = {}) {
     return null;
   }
   const firstLevel = firstFocusedPuzzleEntry("level", context);
-  const firstSprite = firstFocusedPuzzleEntry("sprite", context);
+  const firstVisual = firstFocusedPuzzleEntry("visual", context);
   const levelMode = modeForFocusedPuzzleEntry("level", context);
-  const spriteMode = modeForFocusedPuzzleEntry("sprite", context);
+  const visualMode = modeForFocusedPuzzleEntry("visual", context);
   if (levelMode) {
     currentLevelPaneMode = levelMode;
   } else if (currentPreviewMode === "edit" || currentPreviewMode === "level3d") {
     currentLevelPaneMode = "none";
   }
-  if (spriteMode) {
-    currentSpritePaneMode = spriteMode;
-  } else if (currentPreviewMode === "sprite" || currentPreviewMode === "sprite3d") {
-    currentSpritePaneMode = "none";
+  if (visualMode) {
+    currentVisualPaneMode = visualMode;
+  } else if (currentPreviewMode === "visual" || currentPreviewMode === "visual3d") {
+    currentVisualPaneMode = "none";
   }
 
   let nextMode = null;
   if (currentPreviewMode === "edit" || currentPreviewMode === "level3d") {
     nextMode = levelMode;
-  } else if (currentPreviewMode === "sprite" || currentPreviewMode === "sprite3d") {
-    nextMode = spriteMode;
+  } else if (currentPreviewMode === "visual" || currentPreviewMode === "visual3d") {
+    nextMode = visualMode;
   }
 
   if (nextMode && options.switchOpenPane !== false && nextMode !== currentPreviewMode) {
     setPreviewMode(nextMode);
   } else {
-    const inferredDimension = editorDimensionForPreviewMode(nextMode || levelMode || spriteMode || currentLevelPaneMode || currentSpritePaneMode);
+    const inferredDimension = editorDimensionForPreviewMode(nextMode || levelMode || visualMode || currentLevelPaneMode || currentVisualPaneMode);
     currentEditorDimension = normalizeEditorDimension(inferredDimension);
     syncPreviewModeButtonState();
   }
   if (options.loadFirst !== false) {
     if (currentPreviewMode === "edit" || currentPreviewMode === "level3d") {
       loadFocusedPuzzleEntry("level", firstLevel, { silent: true, recordHistory: false });
-    } else if (currentPreviewMode === "sprite" || currentPreviewMode === "sprite3d") {
-      loadFocusedPuzzleEntry("sprite", firstSprite, { silent: true, recordHistory: false });
+    } else if (currentPreviewMode === "visual" || currentPreviewMode === "visual3d") {
+      loadFocusedPuzzleEntry("visual", firstVisual, { silent: true, recordHistory: false });
     }
   }
   if (
     ((currentPreviewMode === "edit" || currentPreviewMode === "level3d") && !firstLevel)
-    || ((currentPreviewMode === "sprite" || currentPreviewMode === "sprite3d") && !firstSprite)
+    || ((currentPreviewMode === "visual" || currentPreviewMode === "visual3d") && !firstVisual)
   ) {
     applyPaneVisibility();
   }
@@ -4116,32 +4119,32 @@ function firstFocusedPuzzleLevel3dStart(source) {
   return firstFocusedPuzzleLevel3dEntry(source)?.start ?? null;
 }
 
-function firstFocusedPuzzleSprite2dEntry(source) {
-  return focusedPuzzleSprite2dEntries(source)[0] || null;
+function firstFocusedPuzzleVisual2dEntry(source) {
+  return focusedPuzzleVisual2dEntries(source)[0] || null;
 }
 
-function focusedPuzzleSprite2dEntries(source) {
+function focusedPuzzleVisual2dEntries(source) {
   return uniqueFocusedPuzzleEntries(
-    focusedPuzzleSurfaceEntriesByKind("sprite", { document: activeDocument(), source }, "2d")
+    focusedPuzzleSurfaceEntriesByKind("visual", { document: activeDocument(), source }, "2d")
   );
 }
 
-function firstFocusedPuzzleSprite2dStart(source) {
-  return firstFocusedPuzzleSprite2dEntry(source)?.start ?? null;
+function firstFocusedPuzzleVisual2dStart(source) {
+  return firstFocusedPuzzleVisual2dEntry(source)?.start ?? null;
 }
 
-function firstFocusedPuzzleSprite3dEntry(source) {
-  return focusedPuzzleSprite3dEntries(source)[0] || null;
+function firstFocusedPuzzleVisual3dEntry(source) {
+  return focusedPuzzleVisual3dEntries(source)[0] || null;
 }
 
-function focusedPuzzleSprite3dEntries(source) {
+function focusedPuzzleVisual3dEntries(source) {
   return uniqueFocusedPuzzleEntries(
-    focusedPuzzleSurfaceEntriesByKind("sprite", { document: activeDocument(), source }, "3d")
+    focusedPuzzleSurfaceEntriesByKind("visual", { document: activeDocument(), source }, "3d")
   );
 }
 
-function firstFocusedPuzzleSprite3dStart(source) {
-  return firstFocusedPuzzleSprite3dEntry(source)?.start ?? null;
+function firstFocusedPuzzleVisual3dStart(source) {
+  return firstFocusedPuzzleVisual3dEntry(source)?.start ?? null;
 }
 
 function loadFirstFocusedPuzzleEntry(kind, mode, context = focusedPuzzleSourceContext()) {
@@ -4220,13 +4223,13 @@ function loadFocusedPuzzleEntry(kind, entry, options = {}) {
   }
   const dimension = normalizeEditorDimension(entry.dimension);
   const target = entry.target;
-  const mode = kind === "sprite"
-    ? spriteModeForEditorDimension(dimension)
+  const mode = kind === "visual"
+    ? visualModeForEditorDimension(dimension)
     : levelModeForEditorDimension(dimension);
   if ((mode === "edit" || mode === "level3d") && kind !== "level") {
     return false;
   }
-  if ((mode === "sprite" || mode === "sprite3d") && kind !== "sprite") {
+  if ((mode === "visual" || mode === "visual3d") && kind !== "visual") {
     return false;
   }
   if (mode === "edit" && dimension === "2d") {
@@ -4245,13 +4248,13 @@ function loadFocusedPuzzleEntry(kind, entry, options = {}) {
       switchMode: options.openPane !== false,
     }));
   }
-  if (mode === "sprite" && dimension === "2d" && typeof loadSpriteSourceTarget === "function") {
-    currentSpritePaneMode = "sprite";
-    return finishFocusedPuzzleEntryLoad(loadSpriteSourceTarget(target, { silent: options.silent !== false, recordHistory: Boolean(options.recordHistory), switchMode: true }));
+  if (mode === "visual" && dimension === "2d" && typeof loadVisualSourceTarget === "function") {
+    currentVisualPaneMode = "visual";
+    return finishFocusedPuzzleEntryLoad(loadVisualSourceTarget(target, { silent: options.silent !== false, recordHistory: Boolean(options.recordHistory), switchMode: true }));
   }
-  if (mode === "sprite3d" && dimension === "3d" && typeof loadSprite3dSourceTarget === "function") {
-    currentSpritePaneMode = "sprite3d";
-    return finishFocusedPuzzleEntryLoad(loadSprite3dSourceTarget(target, { silent: options.silent !== false, recordHistory: Boolean(options.recordHistory), switchMode: true }));
+  if (mode === "visual3d" && dimension === "3d" && typeof loadVisual3dSourceTarget === "function") {
+    currentVisualPaneMode = "visual3d";
+    return finishFocusedPuzzleEntryLoad(loadVisual3dSourceTarget(target, { silent: options.silent !== false, recordHistory: Boolean(options.recordHistory), switchMode: true }));
   }
   return false;
 }
@@ -4465,24 +4468,24 @@ function openLevelPaneForCurrentDimension() {
   }
 }
 
-function openSpritePaneForCurrentDimension() {
+function openVisualPaneForCurrentDimension() {
   const context = focusedPuzzleSourceContext();
-  const first = firstFocusedPuzzleEntry("sprite", context);
+  const first = firstFocusedPuzzleEntry("visual", context);
   const mode = first
-    ? spriteModeForEditorDimension(first.dimension)
-    : spriteModeForEditorDimension(currentEditorDimension);
+    ? visualModeForEditorDimension(first.dimension)
+    : visualModeForEditorDimension(currentEditorDimension);
   openPreviewModePane(mode);
   if (first) {
-    loadFocusedPuzzleEntry("sprite", first, { silent: true, recordHistory: false });
+    loadFocusedPuzzleEntry("visual", first, { silent: true, recordHistory: false });
   }
   return mode;
 }
 
 function editorDimensionForPreviewMode(mode) {
-  if (mode === "level3d" || mode === "sprite3d") {
+  if (mode === "level3d" || mode === "visual3d") {
     return "3d";
   }
-  if (mode === "edit" || mode === "sprite") {
+  if (mode === "edit" || mode === "visual") {
     return "2d";
   }
   return currentEditorDimension;
@@ -4491,15 +4494,15 @@ function editorDimensionForPreviewMode(mode) {
 function setEditorDimensionMode(dimension) {
   currentEditorDimension = normalizeEditorDimension(dimension);
   currentLevelPaneMode = levelModeForEditorDimension(currentEditorDimension);
-  currentSpritePaneMode = spriteModeForEditorDimension(currentEditorDimension);
+  currentVisualPaneMode = visualModeForEditorDimension(currentEditorDimension);
 
   if (currentPreviewMode === "edit" || currentPreviewMode === "level3d") {
     setPreviewMode(currentLevelPaneMode);
     return currentLevelPaneMode;
   }
-  if (currentPreviewMode === "sprite" || currentPreviewMode === "sprite3d") {
-    setPreviewMode(currentSpritePaneMode);
-    return currentSpritePaneMode;
+  if (currentPreviewMode === "visual" || currentPreviewMode === "visual3d") {
+    setPreviewMode(currentVisualPaneMode);
+    return currentVisualPaneMode;
   }
   applyPaneVisibility();
   if (isPaneVisible("level")) {
@@ -4509,11 +4512,11 @@ function setEditorDimensionMode(dimension) {
       renderLevelBoard();
     }
   }
-  if (isPaneVisible("sprite")) {
-    if (currentSpritePaneMode === "sprite3d") {
-      renderSprite3dBuilder();
+  if (isPaneVisible("visual")) {
+    if (currentVisualPaneMode === "visual3d") {
+      renderVisual3dBuilder();
     } else {
-      renderSpriteBuilder();
+      renderVisualBuilder();
     }
   }
   return currentPreviewMode;
@@ -4538,22 +4541,22 @@ function syncPaneBindLabels() {
 function syncPreviewModeButtonState() {
   const previewMode = normalizePreviewMode(currentPreviewMode);
   const paneVisible = isPaneVisible(workPaneIdForPreviewMode(previewMode));
-  const spritePaneVisible = isPaneVisible("sprite");
+  const visualPaneVisible = isPaneVisible("visual");
   const dimensionLabel = editorDimensionLabel();
   playModeButton.classList.toggle("is-active", paneVisible && previewMode === "play");
   editModeButton.classList.toggle("is-active", isPaneVisible("level"));
   solverModeButton.classList.toggle("is-active", paneVisible && previewMode === "solver");
-  spriteModeButton.classList.toggle("is-active", spritePaneVisible && !sprite.animationMode);
-  sprite3dModeButton?.classList.toggle("is-active", spritePaneVisible && currentSpritePaneMode === "sprite3d");
+  visualModeButton.classList.toggle("is-active", visualPaneVisible && !visual.animationMode);
+  visual3dModeButton?.classList.toggle("is-active", visualPaneVisible && currentVisualPaneMode === "visual3d");
   editModeButton.title = `Open ${dimensionLabel} level editor`;
   editModeButton.setAttribute("aria-label", `Open ${dimensionLabel} level editor`);
-  spriteModeButton.title = `Open ${dimensionLabel} sprite editor`;
-  spriteModeButton.setAttribute("aria-label", `Open ${dimensionLabel} sprite editor`);
-  const spriteAnimationActive = currentSpritePaneMode === "sprite3d" ? Boolean(sprite3d.animationMode) : Boolean(sprite.animationMode);
-  spriteAnimateModeButton?.classList.toggle("is-active", spritePaneVisible && spriteAnimationActive);
-  spriteAnimateModeButton?.setAttribute("aria-pressed", String(spritePaneVisible && spriteAnimationActive));
-  for (const button of spriteDimensionButtons) {
-    const active = normalizeEditorDimension(button.dataset.spriteDimension) === currentEditorDimension;
+  visualModeButton.title = `Open ${dimensionLabel} visual editor`;
+  visualModeButton.setAttribute("aria-label", `Open ${dimensionLabel} visual editor`);
+  const visualAnimationActive = currentVisualPaneMode === "visual3d" ? Boolean(visual3d.animationMode) : Boolean(visual.animationMode);
+  visualAnimateModeButton?.classList.toggle("is-active", visualPaneVisible && visualAnimationActive);
+  visualAnimateModeButton?.setAttribute("aria-pressed", String(visualPaneVisible && visualAnimationActive));
+  for (const button of visualDimensionButtons) {
+    const active = normalizeEditorDimension(button.dataset.visualDimension) === currentEditorDimension;
     button.classList.toggle("is-active", active);
     button.setAttribute("aria-pressed", String(active));
   }
@@ -4571,8 +4574,8 @@ function syncPreviewModeButtonState() {
     button.classList.toggle("is-active", active);
     button.setAttribute("aria-pressed", String(active));
   }
-  for (const button of spritePaneModeButtons) {
-    const active = spritePaneVisible && button.dataset.spritePaneMode === currentSpritePaneMode;
+  for (const button of visualPaneModeButtons) {
+    const active = visualPaneVisible && button.dataset.visualPaneMode === currentVisualPaneMode;
     button.classList.toggle("is-active", active);
     button.setAttribute("aria-pressed", String(active));
   }
@@ -4583,7 +4586,7 @@ function syncPreviewModeButtonState() {
 
 function setPreviewMode(mode, options = {}) {
   const wasLevelMode = isPaneVisible("level") || isPaneVisible("solver");
-  const wasSpriteMode = currentPreviewMode === "sprite";
+  const wasVisualMode = currentPreviewMode === "visual";
   const previewMode = normalizePreviewMode(mode);
   if (currentPreviewMode === "solver" && previewMode !== "solver") {
     setEditorSolverDisplayedArtifact("");
@@ -4592,10 +4595,10 @@ function setPreviewMode(mode, options = {}) {
   if (previewMode !== "edit" && levelPlaytestActive) {
     stopLevelPlaytest({ syncPreview: false });
   }
-  if (wasSpriteMode && previewMode !== "sprite" && sprite) {
-    sprite.shapeTagPickerOpen = false;
-    if (typeof stopSpriteAnimationPlayback === "function") {
-      stopSpriteAnimationPlayback();
+  if (wasVisualMode && previewMode !== "visual" && visual) {
+    visual.shapeTagPickerOpen = false;
+    if (typeof stopVisualAnimationPlayback === "function") {
+      stopVisualAnimationPlayback();
     }
   }
   if (!options.skipPaneSync) {
@@ -4609,16 +4612,16 @@ function setPreviewMode(mode, options = {}) {
   const level3dMode = previewMode === "level3d";
   const solverMode = previewMode === "solver";
   const enteringLevelMode = (editMode || solverMode) && !wasLevelMode;
-  const spriteMode = previewMode === "sprite";
-  const sprite3dMode = previewMode === "sprite3d";
+  const visualMode = previewMode === "visual";
+  const visual3dMode = previewMode === "visual3d";
   const soundsMode = previewMode === "sounds";
   const psImportMode = previewMode === "psimport";
   if (editMode || level3dMode) {
     currentEditorDimension = editorDimensionForPreviewMode(previewMode);
     currentLevelPaneMode = levelModeForEditorDimension(currentEditorDimension);
-  } else if (spriteMode || sprite3dMode) {
+  } else if (visualMode || visual3dMode) {
     currentEditorDimension = editorDimensionForPreviewMode(previewMode);
-    currentSpritePaneMode = spriteModeForEditorDimension(currentEditorDimension);
+    currentVisualPaneMode = visualModeForEditorDimension(currentEditorDimension);
   }
   if (levelPaneModeSwitch) {
     levelPaneModeSwitch.hidden = !isPaneVisible("level");
@@ -4660,11 +4663,11 @@ function setPreviewMode(mode, options = {}) {
     renderSolverBoard();
     updateSolutionControls();
   }
-  if (spriteMode) {
-    renderSpriteBuilder();
+  if (visualMode) {
+    renderVisualBuilder();
   }
-  if (sprite3dMode) {
-    renderSprite3dBuilder();
+  if (visual3dMode) {
+    renderVisual3dBuilder();
   }
   if (level3dMode) {
     renderLevel3dBuilder();
@@ -4771,7 +4774,7 @@ function levelPaletteFromExport(source, exportData = currentLevelExportData()) {
   const placeableObjects = sourcePlaceableObjectNames(source, exportData);
   const objects = engineObjects(exportData).filter((object) => placeableObjects.has(object.name));
   return [
-    { id: 0, name: "Eraser", layer: null, sprite: "eraser" },
+    { id: 0, name: "Eraser", layer: null, visual: "eraser" },
     ...objects,
   ];
 }
@@ -5414,13 +5417,13 @@ function levelEditorSourceExportData(source) {
     id: Number(object.id),
     name: String(object.name || ""),
     layer: Math.max(0, Math.trunc(Number(object.layer) || 0)),
-    sprite: String(object.name || ""),
+    visual: String(object.name || ""),
   }));
   if (objects.some((object) => !object.name || !Number.isSafeInteger(object.id) || object.id <= 0)
     || new Set(objects.map((object) => object.id)).size !== objects.length) {
     throw new Error("Level editor source contract contains invalid object identities");
   }
-  applyLevelEditorContractSprites(session, objects);
+  applyLevelEditorContractVisuals(session, objects);
   return {
     __kind: "puzzle2d",
     source,
@@ -5458,21 +5461,21 @@ function levelEditorContractState(level, slots) {
   };
 }
 
-function applyLevelEditorContractSprites(session, objects) {
+function applyLevelEditorContractVisuals(session, objects) {
   ensureGameVisualsRuntime();
   const aliases = {};
-  const sprites = {};
+  const entries = {};
   for (const object of objects) {
-    const payload = session.sprite(object.id);
+    const payload = session.visual(object.id);
     if (!payload) {
       continue;
     }
-    const spriteName = `object:${object.id}`;
-    aliases[object.name] = spriteName;
-    sprites[spriteName] = payload;
+    const visualName = `object:${object.id}`;
+    aliases[object.name] = visualName;
+    entries[visualName] = payload;
   }
   window.PuzzleStudio.disposeAssetScripts();
-  window.GameVisuals = window.PuzzleSpriteRegistry.create({ aliases, sprites });
+  window.GameVisuals = window.PuzzleVisualRegistry.create({ aliases, entries });
 }
 
 function loadLevelSourceEntryWithExportData(source, entry, exportData, options = {}) {
@@ -5804,11 +5807,11 @@ function loadResolvedSourceTarget(target, options = {}) {
   if (sourceTargetMatches(target, "level", "2d")) {
     return loadLevelSourceTarget(target, options);
   }
-  if (sourceTargetMatches(target, "sprite", "2d") && typeof loadSpriteSourceTarget === "function") {
-    return loadSpriteSourceTarget(target, options);
+  if (sourceTargetMatches(target, "visual", "2d") && typeof loadVisualSourceTarget === "function") {
+    return loadVisualSourceTarget(target, options);
   }
-  if (sourceTargetMatches(target, "sprite", "3d") && typeof loadSprite3dSourceTarget === "function") {
-    return loadSprite3dSourceTarget(target, options);
+  if (sourceTargetMatches(target, "visual", "3d") && typeof loadVisual3dSourceTarget === "function") {
+    return loadVisual3dSourceTarget(target, options);
   }
   if (target.kind === "sounds" && typeof loadSoundSourceTarget === "function") {
     return loadSoundSourceTarget(target, options);
@@ -5819,7 +5822,7 @@ function loadResolvedSourceTarget(target, options = {}) {
 function previewModeForSourceTarget(target) {
   if (target?.kind === "sounds") return "sounds";
   if (target?.kind === "level") return levelModeForEditorDimension(target.dimension);
-  if (target?.kind === "sprite") return spriteModeForEditorDimension(target.dimension);
+  if (target?.kind === "visual") return visualModeForEditorDimension(target.dimension);
   return null;
 }
 
@@ -5857,7 +5860,7 @@ function syncPreviewModeFromSourceCursor(options = {}) {
     sourceCursorPreviewKey = "";
     return false;
   }
-  if (!options.allowInactiveMode && !["edit", "level3d", "sprite", "sprite3d", "sounds"].includes(currentPreviewMode)) {
+  if (!options.allowInactiveMode && !["edit", "level3d", "visual", "visual3d", "sounds"].includes(currentPreviewMode)) {
     sourceCursorPreviewKey = "";
     return false;
   }
@@ -5959,11 +5962,11 @@ function sourceLocationForPreviewPane(mode) {
   if (mode === "level3d") {
     return currentLevel3dSourceLocation();
   }
-  if (mode === "sprite") {
-    return currentSpriteSourceLocation();
+  if (mode === "visual") {
+    return currentVisualSourceLocation();
   }
-  if (mode === "sprite3d") {
-    return currentSprite3dSourceLocation();
+  if (mode === "visual3d") {
+    return currentVisual3dSourceLocation();
   }
   if (mode === "sounds") {
     return currentSoundSourceLocation();
@@ -6132,34 +6135,34 @@ function findLevelSourceEntries(source, document) {
   return entries;
 }
 
-function currentSpriteSourceLocation() {
-  if (!Number.isInteger(sprite.editSourceStart) || !Number.isInteger(sprite.editSourceEnd)) {
+function currentVisualSourceLocation() {
+  if (!Number.isInteger(visual.editSourceStart) || !Number.isInteger(visual.editSourceEnd)) {
     return null;
   }
   for (const document of puzzleTextDocuments()) {
-    if (document.id === sprite.editDocumentId) {
+    if (document.id === visual.editDocumentId) {
       return {
         document,
-        start: sprite.editSourceStart,
-        end: sprite.editSourceEnd,
-        key: `${document.id}:sprite:${sprite.editSourceName || ""}:${sprite.editSourceStart}`,
+        start: visual.editSourceStart,
+        end: visual.editSourceEnd,
+        key: `${document.id}:visual:${visual.editSourceName || ""}:${visual.editSourceStart}`,
       };
     }
   }
   return null;
 }
 
-function currentSprite3dSourceLocation() {
-  if (!Number.isInteger(sprite3d.editSourceStart) || !Number.isInteger(sprite3d.editSourceEnd)) {
+function currentVisual3dSourceLocation() {
+  if (!Number.isInteger(visual3d.editSourceStart) || !Number.isInteger(visual3d.editSourceEnd)) {
     return null;
   }
   for (const document of puzzleTextDocuments()) {
-    if (document.id === sprite3d.editDocumentId) {
+    if (document.id === visual3d.editDocumentId) {
       return {
         document,
-        start: sprite3d.editSourceStart,
-        end: sprite3d.editSourceEnd,
-        key: `${document.id}:sprite3d:${sprite3d.editSourceName || ""}:${sprite3d.editSourceStart}`,
+        start: visual3d.editSourceStart,
+        end: visual3d.editSourceEnd,
+        key: `${document.id}:visual3d:${visual3d.editSourceName || ""}:${visual3d.editSourceStart}`,
       };
     }
   }
@@ -6773,7 +6776,7 @@ function renderLevelPalette() {
   ensureLevelLayerMaps();
   const eraserButton = renderLevelEraserButton();
   levelPalette.replaceChildren(...[levelFillButton, eraserButton].filter(Boolean));
-  levelPalette.classList.add("is-sprite-only");
+  levelPalette.classList.add("is-visual-only");
   const objects = level.palette.filter((object) => object.id !== 0);
   renderLevelPaletteGroup("", objects);
   levelPalette.append(renderLevelAddLegendButton());
@@ -6801,7 +6804,7 @@ function renderLevelLayerControls() {
 function levelLayersModeButton() {
   const button = document.createElement("button");
   button.type = "button";
-  button.className = "icon-button sprite-icon-button level-layers-enable-button";
+  button.className = "icon-button visual-icon-button level-layers-enable-button";
   button.classList.toggle("is-enabled", level.layerMode);
   button.setAttribute("aria-label", "Toggle level layer mode");
   button.setAttribute("aria-pressed", String(level.layerMode));
@@ -6818,7 +6821,7 @@ function levelLayersModeButton() {
 function levelLayerAddButton() {
   const button = document.createElement("button");
   button.type = "button";
-  button.className = "icon-button sprite-icon-button level-layer-add-button";
+  button.className = "icon-button visual-icon-button level-layer-add-button";
   button.setAttribute("aria-label", "Add level layer");
   button.classList.toggle("is-selected", levelLayerInsertMode);
   button.setAttribute("aria-pressed", String(levelLayerInsertMode));
@@ -6833,7 +6836,7 @@ function levelLayerAddButton() {
 function levelLayerRemoveButton() {
   const button = document.createElement("button");
   button.type = "button";
-  button.className = "icon-button sprite-icon-button level-layer-remove-button";
+  button.className = "icon-button visual-icon-button level-layer-remove-button";
   button.setAttribute("aria-label", "Remove current level layer");
   button.classList.toggle("is-selected", levelLayerRemoveMode);
   button.setAttribute("aria-pressed", String(levelLayerRemoveMode));
@@ -6990,7 +6993,7 @@ function levelLayerInsertTargetButton(index) {
 function renderLevelEraserButton() {
   const button = document.createElement("button");
   button.type = "button";
-  button.className = "icon-button level-palette-tool-button sprite-icon-button level-eraser-button";
+  button.className = "icon-button level-palette-tool-button visual-icon-button level-eraser-button";
   button.classList.toggle("is-active", level.selectedObjectId === 0);
   button.setAttribute("aria-label", "Paint Eraser");
   button.setAttribute("aria-pressed", String(level.selectedObjectId === 0));
@@ -7048,7 +7051,7 @@ function renderLevelAddLegendButton() {
   const candidates = levelPaletteAddCandidates();
   const button = document.createElement("button");
   button.type = "button";
-  button.className = "icon-button level-palette-tool-button sprite-icon-button level-add-legend-button";
+  button.className = "icon-button level-palette-tool-button visual-icon-button level-add-legend-button";
   button.disabled = !candidates.length;
   button.setAttribute("aria-label", "Add tile legend");
   button.setAttribute("aria-expanded", String(level.addPaletteOpen && candidates.length > 0));
@@ -7279,10 +7282,10 @@ function editorPuzzleCellSize() {
 
 function editorPuzzleQuantum(board) {
   let quantum = 1;
-  for (const sprite of board.querySelectorAll(".visual-sprite")) {
-    const style = window.getComputedStyle(sprite);
-    const cols = Math.max(1, Math.trunc(Number(style.getPropertyValue("--sprite-cols")) || 1));
-    const rows = Math.max(1, Math.trunc(Number(style.getPropertyValue("--sprite-rows")) || 1));
+  for (const visual of board.querySelectorAll(".visual")) {
+    const style = window.getComputedStyle(visual);
+    const cols = Math.max(1, Math.trunc(Number(style.getPropertyValue("--visual-cols")) || 1));
+    const rows = Math.max(1, Math.trunc(Number(style.getPropertyValue("--visual-rows")) || 1));
     quantum = boundedLeastCommonMultiple(quantum, cols, 512);
     quantum = boundedLeastCommonMultiple(quantum, rows, 512);
   }
@@ -7409,7 +7412,7 @@ function sceneFromStateData(state, options = {}) {
             layer,
             objectId,
             object: object.name,
-            sprite: object.sprite,
+            visual: object.visual,
           });
         }
       }
@@ -7441,9 +7444,9 @@ function objectIdForLayer(layer, exportData = previewBuild?.exportData) {
     return explicit;
   }
   const name = layer?.object || "";
-  const sprite = layer?.sprite || "";
+  const visual = layer?.visual || "";
   const object = (exportData?.engine?.objects || []).find((entry) =>
-    (name && entry.name === name) || (sprite && entry.sprite === sprite)
+    (name && entry.name === name) || (visual && entry.visual === visual)
   );
   return object?.id || 0;
 }
@@ -7480,7 +7483,7 @@ function levelListFilterIconSvg() {
 function levelCompositeLayersButton() {
   const button = document.createElement("button");
   button.type = "button";
-  button.className = "icon-button sprite-icon-button level-composite-layers-button";
+  button.className = "icon-button visual-icon-button level-composite-layers-button";
   button.classList.toggle("is-selected", level.showCompositeLayers);
   button.setAttribute("aria-label", "Show composite level layers");
   button.setAttribute("aria-pressed", String(level.showCompositeLayers));
@@ -7616,7 +7619,7 @@ function layerForObject(object) {
     layer: object.layer,
     objectId: object.id,
     object: object.name,
-    sprite: object.sprite,
+    visual: object.visual,
   };
 }
 
@@ -8084,7 +8087,6 @@ async function startLevelPlaytest() {
   const levelIndex = currentEditableLevelIndex(exportData);
   levelPlaytestActive = true;
   levelDisplayCells = stateDataToLevelCells(stateData, exportData);
-  pendingPreviewKeyStateSync = 0;
   updateLevelPlaytestControls();
   renderLevelBoard();
   sendLevelStateToPreview(levelIndex, stateData, {
@@ -8104,7 +8106,6 @@ function stopLevelPlaytest(options = {}) {
   }
   levelPlaytestActive = false;
   levelDisplayCells = null;
-  pendingPreviewKeyStateSync = 0;
   if (levelPaintDrag && levelBoard.hasPointerCapture?.(levelPaintDrag.pointerId)) {
     levelBoard.releasePointerCapture(levelPaintDrag.pointerId);
   }
@@ -9074,56 +9075,16 @@ function formatSeconds(milliseconds) {
   return `${((Number(milliseconds) || 0) / 1000).toFixed(1)}s`;
 }
 
-function levelPlaytestCommandForKey(event) {
-  const key = String(event.key || "").toLowerCase();
-  if (key === "z") {
-    return "undo";
-  }
-  if (key === "y") {
-    return "redo";
-  }
-  if (key === "r") {
-    return "restart";
-  }
-  return "";
-}
-
-function levelPlaytestKeyTokens(event) {
-  const key = String(event.key || "");
-  const normalized = key === " " ? "Space" : (key.length === 1 ? key.toLowerCase() : key);
-  return new Set(normalized ? [normalized] : []);
-}
-
-function levelPlaytestInputForKey(event, exportData = currentLevelExportData()) {
-  const tokens = levelPlaytestKeyTokens(event);
-  const inputs = previewSession?.state?.inputs?.length
-    ? previewSession?.state.inputs
-    : exportData?.inputs || [];
-  const input = inputs.find((candidate) => {
-    const values = [
-      candidate?.key,
-      candidate?.arrow,
-      ...(Array.isArray(candidate?.keys) ? candidate.keys : []),
-    ].filter((value) => value !== null && value !== undefined).map(String);
-    return values.some((value) => tokens.has(value) || tokens.has(value.toLowerCase()));
-  });
-  return input?.name ? String(input.name) : "";
-}
-
 function sendPreviewKey(event) {
-  if (!levelBuilder.hidden && levelPlaytestActive) {
-    const command = levelPlaytestInputForKey(event) || levelPlaytestCommandForKey(event);
-    if (command) {
-      pendingPreviewKeyStateSync += 1;
-      previewFrame.contentWindow?.postMessage({ type: "PuzzleStudioCommand", command }, "*");
-      return;
-    }
-    return;
-  }
   previewFrame.contentWindow?.postMessage({
     type: "PuzzleStudioKey",
     key: event.key,
     code: event.code,
+    repeat: event.repeat,
+    altKey: event.altKey,
+    ctrlKey: event.ctrlKey,
+    metaKey: event.metaKey,
+    shiftKey: event.shiftKey,
   }, "*");
 }
 
@@ -11111,9 +11072,6 @@ window.addEventListener("message", (event) => {
       screenHasPuzzle,
     });
     if (inLevelMode) {
-      if (!levelBuilder.hidden && levelPlaytestActive && pendingPreviewKeyStateSync > 0) {
-        pendingPreviewKeyStateSync = Math.max(0, pendingPreviewKeyStateSync - 1);
-      }
       if (screenHasPuzzle && event.data.scene && (levelPlaytestActive || !solverPanel.hidden)) {
         const displayCells = sceneCellsToSlots(event.data.scene, []);
         levelDisplayCells = displayCells.length === level.cells.length ? displayCells : null;
@@ -11241,14 +11199,14 @@ for (const button of editorDimensionButtons) {
   button.addEventListener("click", () => {
     const context = focusedPuzzleSourceContext();
     const previousMode = currentPreviewMode;
-    const activeKind = previousMode === "sprite" || previousMode === "sprite3d" ? "sprite" : "level";
-    const first = ["edit", "level3d", "sprite", "sprite3d"].includes(previousMode)
+    const activeKind = previousMode === "visual" || previousMode === "visual3d" ? "visual" : "level";
+    const first = ["edit", "level3d", "visual", "visual3d"].includes(previousMode)
       ? firstFocusedPuzzleEntry(activeKind, context)
       : firstFocusedPuzzleEntry("level", context);
     if (first) {
       ensurePreviewTargetsActiveDocument();
-      openPreviewModePane(activeKind === "sprite"
-        ? spriteModeForEditorDimension(first.dimension)
+      openPreviewModePane(activeKind === "visual"
+        ? visualModeForEditorDimension(first.dimension)
         : levelModeForEditorDimension(first.dimension));
       loadFocusedPuzzleEntry(activeKind, first, { silent: true, recordHistory: false });
       return;
@@ -11268,49 +11226,49 @@ for (const button of levelPaneModeButtons) {
     }
   });
 }
-spriteModeButton.addEventListener("click", () => {
-  if (typeof setSpriteAnimationMode === "function") {
-    setSpriteAnimationMode(false, { render: false });
+visualModeButton.addEventListener("click", () => {
+  if (typeof setVisualAnimationMode === "function") {
+    setVisualAnimationMode(false, { render: false });
   }
-  openSpritePaneForCurrentDimension();
-  if (currentSpritePaneMode === "sprite" && typeof renderSpriteBuilder === "function") {
-    renderSpriteBuilder();
-  }
-});
-spriteAnimateModeButton?.addEventListener("click", () => {
-  if (currentSpritePaneMode === "sprite3d" && typeof setSprite3dAnimationMode === "function") {
-    setSprite3dAnimationMode(!sprite3d.animationMode);
-  } else if (typeof setSpriteAnimationMode === "function") {
-    setSpriteAnimationMode(!sprite.animationMode);
+  openVisualPaneForCurrentDimension();
+  if (currentVisualPaneMode === "visual" && typeof renderVisualBuilder === "function") {
+    renderVisualBuilder();
   }
 });
-for (const button of spriteDimensionButtons) {
+visualAnimateModeButton?.addEventListener("click", () => {
+  if (currentVisualPaneMode === "visual3d" && typeof setVisual3dAnimationMode === "function") {
+    setVisual3dAnimationMode(!visual3d.animationMode);
+  } else if (typeof setVisualAnimationMode === "function") {
+    setVisualAnimationMode(!visual.animationMode);
+  }
+});
+for (const button of visualDimensionButtons) {
   button.addEventListener("click", () => {
-    const dimension = normalizeEditorDimension(button.dataset.spriteDimension);
+    const dimension = normalizeEditorDimension(button.dataset.visualDimension);
     if (dimension === currentEditorDimension) {
       return;
     }
     setEditorDimensionMode(dimension);
   });
 }
-sprite3dModeButton?.addEventListener("click", () => {
-  if (typeof setSpriteAnimationMode === "function") {
-    setSpriteAnimationMode(false, { render: false });
+visual3dModeButton?.addEventListener("click", () => {
+  if (typeof setVisualAnimationMode === "function") {
+    setVisualAnimationMode(false, { render: false });
   }
-  openSpritePaneForCurrentDimension();
+  openVisualPaneForCurrentDimension();
 });
-for (const button of spritePaneModeButtons) {
+for (const button of visualPaneModeButtons) {
   button.addEventListener("click", () => {
     const context = focusedPuzzleSourceContext();
-    if (!["sprite", "sprite3d"].includes(button.dataset.spritePaneMode)) {
+    if (!["visual", "visual3d"].includes(button.dataset.visualPaneMode)) {
       return;
     }
-    const first = firstFocusedPuzzleEntry("sprite", context);
+    const first = firstFocusedPuzzleEntry("visual", context);
     if (!first) {
       return;
     }
-    openPreviewModePane(spriteModeForEditorDimension(first.dimension));
-    loadFocusedPuzzleEntry("sprite", first, { silent: true, recordHistory: false });
+    openPreviewModePane(visualModeForEditorDimension(first.dimension));
+    loadFocusedPuzzleEntry("visual", first, { silent: true, recordHistory: false });
   });
 }
 addEmptyLevel2dButton?.addEventListener("click", addEmptyLevel2dToFocusedSource);

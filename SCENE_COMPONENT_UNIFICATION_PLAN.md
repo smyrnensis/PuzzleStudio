@@ -39,14 +39,15 @@ Shared scene concepts must be represented once:
 - scene inputs
 - scene transitions/effects
 - component tree traversal
-- generic components such as `title`, `subtitle`, `text`, `button`, `row`,
-  `column`, `box`, `for`, and `level_menu`
+- generic runtime components such as `title`, `subtitle`, `text`, `button`,
+  `choice`, `row`, `column`, and `box`; `for` and `level_menu` are authoring
+  forms that lower into this tree
 - shared component layout metadata
 
 Model-specific concepts stay model-specific:
 
-- 2D puzzle model syntax, rules, levels, sprites, viewport, and renderer
-- 3D puzzle model syntax, rules, levels, sprites/voxels, camera, and renderer
+- 2D puzzle model syntax, rules, levels, visuals, viewport, and renderer
+- 3D puzzle model syntax, rules, levels, visuals/voxels, camera, and renderer
 - model-window components such as `puzzle` versus `puzzle3`
 - runtime model input interpretation and intrinsic model size
 
@@ -89,8 +90,6 @@ pub enum SceneComponent {
     Row(SceneContainer),
     Column(SceneContainer),
     Box(SceneContainer),
-    For(SceneFor),
-    LevelMenu(LevelMenuComponent),
     Menu(MenuInstance),
 }
 
@@ -121,9 +120,10 @@ Do not move these into the shared scene crate:
 - theme/sounds/asset adapter behavior unless it is already represented as a
   shared scene effect payload
 
-Do not solve component behavior by adding global scene shortcuts. For example,
-`level_menu` may own cursor and enter behavior, but `for level in levels` must
-remain a generic data loop.
+Do not solve component behavior by adding global scene shortcuts. `level_menu`
+is authoring sugar that must disappear into the same generic `for` projection,
+ordinary choices, typed effects, and a scrollable common container before the
+runtime scene tree is built.
 
 ## Work Packages
 
@@ -299,7 +299,7 @@ Tasks:
   - traverse component tree
   - apply `row` / `column` / `box` layout
   - apply root scene layout
-  - render generic title/text/button/level_menu
+  - render generic title/text/button/choice/container nodes
   - delegate `ModelWindow(Puzzle2d)` or `ModelWindow(Puzzle3d)`
 - Decide whether this becomes a shared JS module or whether both runtimes call a
   generated shared JSON contract first.
@@ -366,7 +366,8 @@ The unification is complete when:
 - Do not introduce a generic game engine scene graph with arbitrary transforms.
 - Do not move rendering into `puzzle-core`.
 - Do not widen canonical syntax just to preserve old tests.
-- Do not make `for level in levels` behave like `level_menu`.
+- Keep one `for` expansion contract in every owner; `level_menu` may only build
+  ordinary source nodes and invoke that contract.
 
 ## Suggested First Forks
 

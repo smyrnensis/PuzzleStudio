@@ -159,7 +159,7 @@ impl ServerState {
         out.push(',');
         push_export_animation(&mut out, &self.loaded);
         out.push(',');
-        push_presentation_events(&mut out, &self.loaded, &presentation_events);
+        push_presentation_events(&mut out, &presentation_events);
         out.push(',');
         push_level_context(
             &mut out,

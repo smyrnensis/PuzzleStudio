@@ -9,7 +9,7 @@ layer2 = Target
 layer3 = Player Wall Crate
 }
 
-sprites {
+visuals {
 Background
 #000000
 .....

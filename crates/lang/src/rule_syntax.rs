@@ -6,7 +6,7 @@
 pub(crate) fn substitute_rule_binding_line<E>(
     line: &str,
     binding: &str,
-    mut binding_value: impl FnMut(Option<&str>) -> Result<String, E>,
+    mut binding_value: impl FnMut(&[String]) -> Result<String, E>,
     mut call_value: impl FnMut(&str, &str) -> Result<Option<String>, E>,
 ) -> Result<String, E> {
     let mut out = String::with_capacity(line.len());
@@ -45,21 +45,20 @@ pub(crate) fn substitute_rule_binding_line<E>(
             }
             let name = chars[name_start..i].iter().collect::<String>();
             if name == binding {
-                if i < chars.len() && chars[i] == '.' {
-                    let attr_start = i + 1;
-                    let mut attr_end = attr_start;
-                    if attr_end < chars.len() && is_identifier_start(chars[attr_end]) {
-                        attr_end += 1;
-                        while attr_end < chars.len() && is_identifier_continue(chars[attr_end]) {
-                            attr_end += 1;
-                        }
-                        let attr = chars[attr_start..attr_end].iter().collect::<String>();
-                        out.push_str(&binding_value(Some(&attr))?);
-                        i = attr_end;
-                        continue;
+                let mut projection = Vec::new();
+                while i < chars.len() && chars[i] == '.' {
+                    let field_start = i + 1;
+                    if field_start >= chars.len() || !is_identifier_start(chars[field_start]) {
+                        break;
                     }
+                    let mut field_end = field_start + 1;
+                    while field_end < chars.len() && is_identifier_continue(chars[field_end]) {
+                        field_end += 1;
+                    }
+                    projection.push(chars[field_start..field_end].iter().collect::<String>());
+                    i = field_end;
                 }
-                out.push_str(&binding_value(None)?);
+                out.push_str(&binding_value(&projection)?);
                 continue;
             }
             out.extend(chars[name_start..i].iter());
@@ -107,7 +106,7 @@ mod tests {
             r#"TEN:h message \"h\" // h"#,
             "h",
             |projection| {
-                assert!(projection.is_none());
+                assert!(projection.is_empty());
                 Ok::<_, ()>("right".to_string())
             },
             |_, _| Ok(None),
@@ -115,5 +114,18 @@ mod tests {
         .unwrap();
 
         assert_eq!(expanded, r#"TEN:right message \"h\" // h"#);
+    }
+
+    #[test]
+    fn canonical_binding_substitution_passes_the_complete_projection_path() {
+        let expanded = substitute_rule_binding_line(
+            "if level.progress.cleared { text level.name }",
+            "level",
+            |projection| Ok::<_, ()>(format!("<{}>", projection.join("/"))),
+            |_, _| Ok(None),
+        )
+        .unwrap();
+
+        assert_eq!(expanded, "if <progress/cleared> { text <name> }");
     }
 }

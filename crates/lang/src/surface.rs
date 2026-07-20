@@ -19,11 +19,11 @@ pub(crate) struct ParserRecognition {
     pub(crate) token_dispositions: Vec<ParserTokenDisposition>,
     pub(crate) display_facts: Vec<SurfaceDisplayFact>,
     pub(crate) completion_symbols: SurfaceCompletionSymbols,
-    pub(crate) visual_sprite_refs: SurfaceVisualSpriteRefs,
+    pub(crate) visual_refs: SurfaceVisualRefs,
     pub(crate) sound_products: Vec<SurfaceSoundProduct>,
     pub(crate) level_products: Vec<SurfaceLevelProduct>,
-    pub(crate) sprite_resources: Vec<SurfaceSpriteResourceProduct>,
-    pub(crate) sprite_products: Vec<SurfaceSpriteProduct>,
+    pub(crate) visual_resources: Vec<SurfaceVisualResourceProduct>,
+    pub(crate) visual_products: Vec<SurfaceVisualProduct>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -52,7 +52,7 @@ pub(crate) struct SurfaceLevelProduct {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct SurfaceSpriteResourceProduct {
+pub(crate) struct SurfaceVisualResourceProduct {
     pub(crate) span: SourceSpan,
     pub(crate) open_brace: usize,
     pub(crate) close_brace: usize,
@@ -60,12 +60,12 @@ pub(crate) struct SurfaceSpriteResourceProduct {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct SurfaceSpriteProduct {
+pub(crate) struct SurfaceVisualProduct {
     pub(crate) span: SourceSpan,
     pub(crate) body_span: SourceSpan,
     pub(crate) name: String,
     pub(crate) dimension: crate::ModelDimension,
-    pub(crate) body: crate::sprite_authoring::SpriteBodyProduct,
+    pub(crate) body: crate::visual_authoring::VisualBodyProduct,
     pub(crate) shape_asset_name: Option<String>,
 }
 
@@ -99,56 +99,6 @@ impl ParserRecognition {
         self.nodes.push(SurfaceNode { kind, span });
     }
 
-    pub(crate) fn mark_assignment(
-        &mut self,
-        line: &LogicalLine,
-        name: &str,
-        name_kind: SurfaceSemanticKind,
-        value: &str,
-        value_kind: SurfaceSemanticKind,
-    ) {
-        for token in &line.tokens {
-            if token.text == name {
-                self.mark(
-                    SourceSpan {
-                        start: token.start,
-                        end: token.end,
-                    },
-                    name_kind,
-                );
-            }
-            if token.text == value {
-                self.mark(
-                    SourceSpan {
-                        start: token.start,
-                        end: token.end,
-                    },
-                    value_kind,
-                );
-            }
-            if let Some((token_name, token_value)) = token.text.split_once('=') {
-                if token_name == name {
-                    self.mark(
-                        SourceSpan {
-                            start: token.start,
-                            end: token.start + token_name.len(),
-                        },
-                        name_kind,
-                    );
-                }
-                if token_value == value {
-                    self.mark(
-                        SourceSpan {
-                            start: token.end - token_value.len(),
-                            end: token.end,
-                        },
-                        value_kind,
-                    );
-                }
-            }
-        }
-    }
-
     pub(crate) fn finish(mut self) -> Self {
         self.nodes
             .sort_by_key(|node| (node.span.start, node.span.end));
@@ -168,11 +118,11 @@ impl ParserRecognition {
         self.token_dispositions.extend(other.token_dispositions);
         self.display_facts.extend(other.display_facts);
         self.completion_symbols.merge(other.completion_symbols);
-        self.visual_sprite_refs.merge(other.visual_sprite_refs);
+        self.visual_refs.merge(other.visual_refs);
         self.sound_products.extend(other.sound_products);
         self.level_products.extend(other.level_products);
-        self.sprite_resources.extend(other.sprite_resources);
-        self.sprite_products.extend(other.sprite_products);
+        self.visual_resources.extend(other.visual_resources);
+        self.visual_products.extend(other.visual_products);
     }
 
     pub(crate) fn shift_offsets(&mut self, threshold: usize, delta: i64) {
@@ -185,15 +135,15 @@ impl ParserRecognition {
         for fact in &mut self.display_facts {
             match fact {
                 SurfaceDisplayFact::LevelCell { span, .. }
-                | SurfaceDisplayFact::SpritePixel { span, .. }
+                | SurfaceDisplayFact::VisualPixel { span, .. }
                 | SurfaceDisplayFact::Color { span, .. }
                 | SurfaceDisplayFact::LevelSeparator { span }
-                | SurfaceDisplayFact::SpriteSeparator { span } => {
+                | SurfaceDisplayFact::VisualSeparator { span } => {
                     shift_span(span, threshold, delta);
                 }
             }
         }
-        for product in &mut self.sprite_products {
+        for product in &mut self.visual_products {
             shift_span(&mut product.span, threshold, delta);
             shift_span(&mut product.body_span, threshold, delta);
         }
@@ -204,7 +154,7 @@ impl ParserRecognition {
         for product in &mut self.sound_products {
             shift_span(&mut product.span, threshold, delta);
         }
-        for resource in &mut self.sprite_resources {
+        for resource in &mut self.visual_resources {
             shift_span(&mut resource.span, threshold, delta);
             shift_offset(&mut resource.open_brace, threshold, delta);
             shift_offset(&mut resource.close_brace, threshold, delta);
@@ -320,11 +270,11 @@ pub(crate) struct SurfaceDocument {
     pub(crate) unmatched_open_braces: BTreeSet<usize>,
     pub(crate) completion_symbols: SurfaceCompletionSymbols,
     pub(crate) highlight_ranges: SurfaceHighlightRanges,
-    pub(crate) visual_sprite_refs: SurfaceVisualSpriteRefs,
+    pub(crate) visual_refs: SurfaceVisualRefs,
     pub(crate) sound_products: Vec<SurfaceSoundProduct>,
     pub(crate) level_products: Vec<SurfaceLevelProduct>,
-    pub(crate) sprite_resources: Vec<SurfaceSpriteResourceProduct>,
-    pub(crate) sprite_products: Vec<SurfaceSpriteProduct>,
+    pub(crate) visual_resources: Vec<SurfaceVisualResourceProduct>,
+    pub(crate) visual_products: Vec<SurfaceVisualProduct>,
     pub(crate) diagnostics: Vec<crate::Diagnostic>,
 }
 
@@ -383,7 +333,7 @@ pub(crate) enum SurfaceDisplayFact {
         span: SourceSpan,
         known: bool,
     },
-    SpritePixel {
+    VisualPixel {
         span: SourceSpan,
         color: Option<crate::highlight::SourceHighlightColor>,
         transparent: bool,
@@ -395,7 +345,7 @@ pub(crate) enum SurfaceDisplayFact {
     LevelSeparator {
         span: SourceSpan,
     },
-    SpriteSeparator {
+    VisualSeparator {
         span: SourceSpan,
     },
 }
@@ -404,35 +354,35 @@ impl SurfaceDisplayFact {
     pub(crate) fn span(&self) -> SourceSpan {
         match self {
             Self::LevelCell { span, .. }
-            | Self::SpritePixel { span, .. }
+            | Self::VisualPixel { span, .. }
             | Self::Color { span, .. }
             | Self::LevelSeparator { span }
-            | Self::SpriteSeparator { span } => *span,
+            | Self::VisualSeparator { span } => *span,
         }
     }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct SurfaceVisualSpriteRefs {
+pub(crate) struct SurfaceVisualRefs {
     pub(crate) color_names: BTreeSet<String>,
     pub(crate) shape_names: BTreeSet<String>,
     pub(crate) color_assets: BTreeMap<String, String>,
-    pub(crate) shape_assets: BTreeMap<String, SurfaceSpriteShapeAsset>,
+    pub(crate) shape_assets: BTreeMap<String, SurfaceVisualShapeAsset>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum SurfaceSpriteShapeAsset {
+pub(crate) enum SurfaceVisualShapeAsset {
     Plain {
-        frames: Vec<crate::sprite_authoring::SpriteFrameSyntax>,
+        frames: Vec<crate::visual_authoring::VisualFrameSyntax>,
     },
     Table {
         axis: String,
-        variants: BTreeMap<String, crate::sprite_authoring::SpriteFrameSyntax>,
+        variants: BTreeMap<String, crate::visual_authoring::VisualFrameSyntax>,
     },
 }
 
-impl SurfaceVisualSpriteRefs {
-    pub(crate) fn merge(&mut self, other: SurfaceVisualSpriteRefs) {
+impl SurfaceVisualRefs {
+    pub(crate) fn merge(&mut self, other: SurfaceVisualRefs) {
         self.color_names.extend(other.color_names);
         self.shape_names.extend(other.shape_names);
         self.color_assets.extend(other.color_assets);
@@ -444,7 +394,6 @@ impl SurfaceVisualSpriteRefs {
 pub(crate) enum SurfaceOptionBlock {
     Puzzle2,
     Authoring(crate::authoring_grammar::AuthoringKind),
-    LevelMenu,
     Other,
 }
 
@@ -453,7 +402,7 @@ impl SurfaceOptionBlock {
         match self {
             SurfaceOptionBlock::Puzzle2 => Some(crate::authoring_grammar::AuthoringKind::Root),
             SurfaceOptionBlock::Authoring(kind) => Some(kind),
-            SurfaceOptionBlock::LevelMenu | SurfaceOptionBlock::Other => None,
+            SurfaceOptionBlock::Other => None,
         }
     }
 }
@@ -481,7 +430,7 @@ pub(crate) struct SurfaceCompletionSymbols {
     pub(crate) levels: BTreeSet<String>,
     pub(crate) sfx: BTreeSet<String>,
     pub(crate) music: BTreeSet<String>,
-    pub(crate) sprites: BTreeSet<String>,
+    pub(crate) visuals: BTreeSet<String>,
     pub(crate) assets: BTreeSet<String>,
     pub(crate) shapes: BTreeSet<String>,
     pub(crate) colors: BTreeSet<String>,
@@ -521,8 +470,8 @@ impl SurfaceSink {
 
     pub(crate) fn project_parser_source_targets(&mut self, recognition: &ParserRecognition) {
         self.document
-            .visual_sprite_refs
-            .merge(recognition.visual_sprite_refs.clone());
+            .visual_refs
+            .merge(recognition.visual_refs.clone());
         self.document
             .sound_products
             .extend(recognition.sound_products.iter().cloned());
@@ -530,11 +479,11 @@ impl SurfaceSink {
             .level_products
             .extend(recognition.level_products.iter().cloned());
         self.document
-            .sprite_products
-            .extend(recognition.sprite_products.iter().cloned());
+            .visual_products
+            .extend(recognition.visual_products.iter().cloned());
         self.document
-            .sprite_resources
-            .extend(recognition.sprite_resources.iter().cloned());
+            .visual_resources
+            .extend(recognition.visual_resources.iter().cloned());
     }
 
     pub(crate) fn line(
@@ -630,7 +579,7 @@ impl SurfaceCompletionSymbols {
         self.levels.extend(other.levels);
         self.sfx.extend(other.sfx);
         self.music.extend(other.music);
-        self.sprites.extend(other.sprites);
+        self.visuals.extend(other.visuals);
         self.assets.extend(other.assets);
         self.shapes.extend(other.shapes);
         self.colors.extend(other.colors);

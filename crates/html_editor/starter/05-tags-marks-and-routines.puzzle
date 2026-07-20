@@ -35,7 +35,7 @@ input [ Player | no Wall no Door:* ] -> [ | Player ]
 find_matching_door
 }
 
-sprites {
+visuals {
 Floor
 #f8fafc
 

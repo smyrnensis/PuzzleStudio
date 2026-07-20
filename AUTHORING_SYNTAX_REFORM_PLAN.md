@@ -41,7 +41,7 @@ Visible symptoms include:
   expressions, even though calls and delimited argument lists are not inherently
   scene-specific.
 - block collection logic differs across levels, statement blocks, effects,
-  sprites, visual tables, and raw ASCII bodies.
+  visuals, visual tables, and raw ASCII bodies.
 - highlighting and completion often need to rediscover the same surface roles
   that parsing already knows.
 
@@ -119,7 +119,7 @@ Examples of owner-specific interpretation:
 - scene keys map key triggers to scene routines, scene effects, or model input
   dispatch.
 - a level body may treat rows as ASCII map content.
-- a sprite body may treat rows as pixel content.
+- a visual body may treat rows as pixel content.
 - a rule statement may treat `->` as rewrite syntax.
 
 ### 3. Owners Interpret, They Do Not Re-Parse Surface Rules
@@ -162,7 +162,7 @@ Some bodies should not be parsed as generic statement rows.
 Examples:
 
 - level ASCII rows
-- sprite pixel rows
+- visual pixel rows
 - visual shape tables
 
 These should be represented as explicit raw owner content, not accidental
@@ -395,7 +395,7 @@ Candidate bodies:
 - statement blocks
 - effect blocks
 - level bodies
-- sprite bodies
+- visual bodies
 - visual tables
 - scene component trees
 

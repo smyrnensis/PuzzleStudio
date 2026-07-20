@@ -16,7 +16,7 @@ level "stacked" {
 }
 }
 
-sprites basic of sokoban {
+visuals basic of sokoban {
 Floor {
 colors = #ffffff
 shape = {
@@ -33,9 +33,9 @@ fn source_analysis_profile_does_not_override_model_dimension() {
     let level_cursor = PROFILE_SENSITIVE_SOURCE
         .find(".\n-\n.")
         .expect("stacked level body");
-    let sprite_cursor = PROFILE_SENSITIVE_SOURCE
+    let visual_cursor = PROFILE_SENSITIVE_SOURCE
         .find("0\n-\n.")
-        .expect("stacked sprite body");
+        .expect("stacked visual body");
 
     let puzzle3 =
         analyze_source_for_profile(PROFILE_SENSITIVE_SOURCE, PuzzleSourceProfile::Puzzle3d);
@@ -47,9 +47,9 @@ fn source_analysis_profile_does_not_override_model_dimension() {
     );
     assert_eq!(
         puzzle3
-            .resolve_target(sprite_cursor)
+            .resolve_target(visual_cursor)
             .map(|target| target.kind),
-        Some(SourceTargetKind::Sprite),
+        Some(SourceTargetKind::Visual),
     );
 
     let puzzle2 =
@@ -62,9 +62,9 @@ fn source_analysis_profile_does_not_override_model_dimension() {
     );
     assert_eq!(
         puzzle2
-            .resolve_target(sprite_cursor)
+            .resolve_target(visual_cursor)
             .map(|target| target.kind),
-        Some(SourceTargetKind::Sprite),
+        Some(SourceTargetKind::Visual),
     );
     assert_eq!(
         puzzle2
@@ -74,7 +74,7 @@ fn source_analysis_profile_does_not_override_model_dimension() {
     );
     assert_eq!(
         puzzle2
-            .resolve_target(sprite_cursor)
+            .resolve_target(visual_cursor)
             .and_then(|target| target.dimension),
         Some(puzzle_lang::ModelDimension::Three),
     );

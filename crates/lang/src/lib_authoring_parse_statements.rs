@@ -430,7 +430,7 @@ fn value_expr_result_axis(
 fn expand_for_binding_syntax(
     syntax: &[puzzle_authoring::RuleStatementSyntax<source::LogicalLine>],
     binding: &str,
-    value: &ForExpansionValue,
+    value: &AuthoringValue,
     maps: &HashMap<String, ValueMap>,
 ) -> Result<Vec<puzzle_authoring::RuleStatementSyntax<source::LogicalLine>>, DiagnosticReport> {
     syntax
@@ -451,7 +451,7 @@ fn expand_for_binding_syntax(
 fn expand_for_binding_lines(
     lines: &[source::LogicalLine],
     binding: &str,
-    value: &ForExpansionValue,
+    value: &AuthoringValue,
     maps: &HashMap<String, ValueMap>,
 ) -> Result<Vec<source::LogicalLine>, DiagnosticReport> {
     lines
@@ -462,17 +462,84 @@ fn expand_for_binding_lines(
         .collect()
 }
 
+struct ExpandedForLines {
+    bodies: Vec<Vec<source::LogicalLine>>,
+    next: usize,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ForIterableCatalog {
+    collections: HashMap<String, Vec<AuthoringValue>>,
+}
+
+impl ForIterableCatalog {
+    pub(crate) fn insert(&mut self, name: impl Into<String>, values: Vec<AuthoringValue>) {
+        self.collections.insert(name.into(), values);
+    }
+
+    fn get(&self, name: &str) -> Option<&[AuthoringValue]> {
+        self.collections.get(name).map(Vec::as_slice)
+    }
+}
+
+trait ForIterableSource {
+    fn values(&self, name: &str) -> Option<Vec<AuthoringValue>>;
+}
+
+impl ForIterableSource for ForIterableCatalog {
+    fn values(&self, name: &str) -> Option<Vec<AuthoringValue>> {
+        self.get(name).map(<[_]>::to_vec)
+    }
+}
+
+impl ForIterableSource for HashMap<String, Vec<String>> {
+    fn values(&self, name: &str) -> Option<Vec<AuthoringValue>> {
+        self.get(name).map(|values| {
+            values
+                .iter()
+                .map(|value| AuthoringValue::variant(name, value.clone()))
+                .collect()
+        })
+    }
+}
+
+fn expand_for_block_lines<Iterables: ForIterableSource>(
+    lines: &[source::LogicalLine],
+    start: usize,
+    iterables: &Iterables,
+    numeric_variables: &HashMap<String, i64>,
+    maps: &HashMap<String, ValueMap>,
+) -> Result<ExpandedForLines, DiagnosticReport> {
+    let line = &lines[start];
+    let syntax = puzzle_authoring::for_surface(line)
+        .ok_or_else(|| parse_error(line, "for directive must be: for <binding> in <source...>"))?;
+    let sources = syntax
+        .sources
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let values = resolve_for_expansion_values(&sources, numeric_variables, line, |source| {
+        iterables.values(source)
+    })?;
+    let (body_lines, next) = collect_statement_block_lines(lines, start + 1, line)?;
+    let bodies = values
+        .iter()
+        .map(|value| expand_for_binding_lines(&body_lines, &syntax.binding, value, maps))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(ExpandedForLines { bodies, next })
+}
+
 fn expand_for_binding_line(
     line: &str,
     binding: &str,
-    value: &ForExpansionValue,
+    value: &AuthoringValue,
     maps: &HashMap<String, ValueMap>,
 ) -> Result<String, DiagnosticReport> {
     let mut env = ValueEnv::default();
-    if let Some(axis) = value.axis.as_deref() {
-        env.bind(binding, axis, &value.value);
-    } else {
-        env.bind_untyped(binding, &value.value);
+    if let Some((axis, variant)) = value.axis_binding() {
+        env.bind(binding, axis, variant);
+    } else if let Some(source) = value.scalar_source() {
+        env.bind_untyped(binding, &source);
     }
     replace_for_tokens(line, binding, value, &env, maps)
 }
@@ -480,18 +547,32 @@ fn expand_for_binding_line(
 fn replace_for_tokens(
     line: &str,
     binding: &str,
-    value: &ForExpansionValue,
+    value: &AuthoringValue,
     env: &ValueEnv,
     maps: &HashMap<String, ValueMap>,
 ) -> Result<String, DiagnosticReport> {
     crate::rule_syntax::substitute_rule_binding_line(
         line,
         binding,
-        |projection| match projection {
-            None => Ok(value.value.clone()),
-            Some(attr) => value.attrs.get(attr).cloned().ok_or_else(|| {
-                parse_error(line, &format!("unknown for projection `{binding}.{attr}`"))
-            }),
+        |projection| {
+            value.project(projection).map_err(|error| {
+                let reference = if projection.is_empty() {
+                    binding.to_string()
+                } else {
+                    format!("{binding}.{}", projection.join("."))
+                };
+                let message = match error {
+                    AuthoringProjectionError::MissingField { owner_type, field } => {
+                        format!(
+                            "{owner_type} has no field `{field}` while resolving `{reference}`"
+                        )
+                    }
+                    AuthoringProjectionError::FieldRequired { owner_type } => format!(
+                        "{owner_type} value requires an explicit field while resolving `{reference}`"
+                    ),
+                };
+                parse_error(line, &message)
+            })
         },
         |name, arg| {
             if !maps.contains_key(name) {
@@ -507,26 +588,107 @@ fn replace_for_tokens(
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct ForExpansionValue {
-    value: String,
-    axis: Option<String>,
-    attrs: HashMap<String, String>,
+pub(crate) enum AuthoringValue {
+    Symbol(String),
+    Text(String),
+    Integer(i64),
+    Variant {
+        axis: String,
+        value: String,
+    },
+    Record {
+        type_name: String,
+        fields: HashMap<String, AuthoringValue>,
+    },
 }
 
-impl ForExpansionValue {
-    fn atom(value: impl Into<String>) -> Self {
-        Self {
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum AuthoringProjectionError {
+    MissingField { owner_type: String, field: String },
+    FieldRequired { owner_type: String },
+}
+
+impl AuthoringValue {
+    pub(crate) fn symbol(value: impl Into<String>) -> Self {
+        Self::Symbol(value.into())
+    }
+
+    pub(crate) fn text(value: impl Into<String>) -> Self {
+        Self::Text(value.into())
+    }
+
+    pub(crate) fn integer(value: i64) -> Self {
+        Self::Integer(value)
+    }
+
+    fn variant(axis: impl Into<String>, value: impl Into<String>) -> Self {
+        Self::Variant {
+            axis: axis.into(),
             value: value.into(),
-            axis: None,
-            attrs: HashMap::new(),
         }
     }
 
-    fn axis_value(axis: impl Into<String>, value: impl Into<String>) -> Self {
-        Self {
-            value: value.into(),
-            axis: Some(axis.into()),
-            attrs: HashMap::new(),
+    pub(crate) fn record(
+        type_name: impl Into<String>,
+        fields: HashMap<String, AuthoringValue>,
+    ) -> Self {
+        Self::Record {
+            type_name: type_name.into(),
+            fields,
+        }
+    }
+
+    fn scalar_source(&self) -> Option<String> {
+        match self {
+            Self::Symbol(value) | Self::Variant { value, .. } => Some(value.clone()),
+            Self::Text(value) => Some(
+                serde_json::to_string(value).expect("authoring text should serialize"),
+            ),
+            Self::Integer(value) => Some(value.to_string()),
+            Self::Record { .. } => None,
+        }
+    }
+
+    fn axis_binding(&self) -> Option<(&str, &str)> {
+        match self {
+            Self::Variant { axis, value } => Some((axis, value)),
+            _ => None,
+        }
+    }
+
+    fn project(&self, path: &[String]) -> Result<String, AuthoringProjectionError> {
+        let Some((field, rest)) = path.split_first() else {
+            return self.scalar_source().ok_or_else(|| {
+                AuthoringProjectionError::FieldRequired {
+                    owner_type: self.type_name().to_string(),
+                }
+            });
+        };
+        let Self::Record {
+            type_name, fields, ..
+        } = self
+        else {
+            return Err(AuthoringProjectionError::MissingField {
+                owner_type: self.type_name().to_string(),
+                field: field.clone(),
+            });
+        };
+        let value = fields.get(field).ok_or_else(|| {
+            AuthoringProjectionError::MissingField {
+                owner_type: type_name.clone(),
+                field: field.clone(),
+            }
+        })?;
+        value.project(rest)
+    }
+
+    fn type_name(&self) -> &str {
+        match self {
+            Self::Symbol(_) => "Symbol",
+            Self::Text(_) => "Text",
+            Self::Integer(_) => "Int",
+            Self::Variant { .. } => "Variant",
+            Self::Record { type_name, .. } => type_name,
         }
     }
 }
@@ -536,23 +698,23 @@ pub(crate) fn for_expansion_values(
     value_sets: &HashMap<String, Vec<String>>,
     numeric_variables: &HashMap<String, i64>,
     line: &str,
-) -> Result<Vec<ForExpansionValue>, DiagnosticReport> {
-    for_expansion_values_with_sets(
-        sources,
-        value_sets,
-        numeric_variables,
-        &HashMap::new(),
-        line,
-    )
+) -> Result<Vec<AuthoringValue>, DiagnosticReport> {
+    resolve_for_expansion_values(sources, numeric_variables, line, |source| {
+        value_sets.get(source).map(|values| {
+            values
+                .iter()
+                .map(|value| AuthoringValue::variant(source, value.clone()))
+                .collect()
+        })
+    })
 }
 
-fn for_expansion_values_with_sets(
+fn resolve_for_expansion_values(
     sources: &[&str],
-    value_sets: &HashMap<String, Vec<String>>,
     numeric_variables: &HashMap<String, i64>,
-    expansion_sets: &HashMap<String, Vec<ForExpansionValue>>,
     line: &str,
-) -> Result<Vec<ForExpansionValue>, DiagnosticReport> {
+    mut resolve_collection: impl FnMut(&str) -> Option<Vec<AuthoringValue>>,
+) -> Result<Vec<AuthoringValue>, DiagnosticReport> {
     if sources.is_empty() {
         return Err(parse_error(
             line,
@@ -561,17 +723,20 @@ fn for_expansion_values_with_sets(
     }
     if sources.len() == 1 {
         let source = sources[0];
-        if let Some(values) = expansion_sets.get(source) {
-            return Ok(values.clone());
-        }
-        if let Some(values) = value_sets.get(source) {
-            return Ok(values
-                .iter()
-                .map(|value| ForExpansionValue::axis_value(source, value.clone()))
-                .collect());
+        if let Some(values) = resolve_collection(source) {
+            return Ok(values);
         }
         if let Some(values) = numeric_range_values(source, numeric_variables, line)? {
-            return Ok(values.into_iter().map(ForExpansionValue::atom).collect());
+            return Ok(values
+                .into_iter()
+                .map(|value| {
+                    AuthoringValue::integer(
+                        value
+                            .parse::<i64>()
+                            .expect("numeric range values must be integers"),
+                    )
+                })
+                .collect());
         }
         return Err(parse_error(
             line,
@@ -582,21 +747,21 @@ fn for_expansion_values_with_sets(
     sources
         .iter()
         .flat_map(|source| {
-            if let Some(values) = expansion_sets.get(*source) {
-                return values.iter().cloned().map(Ok).collect::<Vec<_>>();
-            }
-            if let Some(values) = value_sets.get(*source) {
-                return values
-                    .iter()
-                    .map(|value| Ok(ForExpansionValue::axis_value(*source, value.clone())))
-                    .collect::<Vec<_>>();
+            if let Some(values) = resolve_collection(source) {
+                return values.into_iter().map(Ok).collect::<Vec<_>>();
             }
             match numeric_range_values(source, numeric_variables, line) {
                 Ok(Some(values)) => values
                     .into_iter()
-                    .map(|value| Ok(ForExpansionValue::atom(value)))
+                    .map(|value| {
+                        Ok(AuthoringValue::integer(
+                            value
+                                .parse::<i64>()
+                                .expect("numeric range values must be integers"),
+                        ))
+                    })
                     .collect(),
-                Ok(None) => vec![Ok(ForExpansionValue::atom(*source))],
+                Ok(None) => vec![Ok(AuthoringValue::symbol(*source))],
                 Err(error) => vec![Err(error)],
             }
         })

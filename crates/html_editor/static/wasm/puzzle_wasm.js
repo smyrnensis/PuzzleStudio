@@ -266,7 +266,7 @@ export function active_source_analysis_level_editor_level_slots(revision, level_
 
 /**
  * Returns level-editor metadata for the active source snapshot. Board cells and
- * sprite payloads deliberately travel through their own on-demand exports.
+ * visual payloads deliberately travel through their own on-demand exports.
  * @param {number} revision
  * @returns {string}
  */
@@ -290,16 +290,16 @@ export function active_source_analysis_level_editor_manifest_json(revision) {
 }
 
 /**
- * Returns one renderer-ready sprite payload by canonical object ID.
+ * Returns one renderer-ready visual payload by canonical object ID.
  * @param {number} revision
  * @param {number} object_id
  * @returns {string}
  */
-export function active_source_analysis_level_editor_sprite_json(revision, object_id) {
+export function active_source_analysis_level_editor_visual_json(revision, object_id) {
     let deferred2_0;
     let deferred2_1;
     try {
-        const ret = wasm.active_source_analysis_level_editor_sprite_json(revision, object_id);
+        const ret = wasm.active_source_analysis_level_editor_visual_json(revision, object_id);
         var ptr1 = ret[0];
         var len1 = ret[1];
         if (ret[3]) {
@@ -319,13 +319,13 @@ export function active_source_analysis_level_editor_sprite_json(revision, object
  * @param {string} request_json
  * @returns {string}
  */
-export function active_source_analysis_mutate_sprite(revision, request_json) {
+export function active_source_analysis_mutate_visual(revision, request_json) {
     let deferred3_0;
     let deferred3_1;
     try {
         const ptr0 = passStringToWasm0(request_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.active_source_analysis_mutate_sprite(revision, ptr0, len0);
+        const ret = wasm.active_source_analysis_mutate_visual(revision, ptr0, len0);
         var ptr2 = ret[0];
         var len2 = ret[1];
         if (ret[3]) {

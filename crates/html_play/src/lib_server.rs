@@ -75,6 +75,7 @@ fn route_static_html(request: &HttpRequest, html: &str) -> String {
 struct HttpRequest {
     method: String,
     path: String,
+    body: Vec<u8>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -119,7 +120,14 @@ fn read_request(stream: &mut TcpStream) -> Result<Option<HttpRequest>, AppError>
         path.truncate(query_index);
     }
 
-    Ok(Some(HttpRequest { method, path }))
+    let body_start = end + 4;
+    let body_end = body_start + content_length;
+    let body = bytes
+        .get(body_start..body_end)
+        .ok_or_else(|| AppError::Config("incomplete HTTP request body".to_string()))?
+        .to_vec();
+
+    Ok(Some(HttpRequest { method, path, body }))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -163,6 +171,9 @@ fn route(request: &HttpRequest, state: Arc<Mutex<ServerState>>) -> String {
             http_ok("text/javascript; charset=utf-8", &script)
         }
         ("GET", "/app.js") => http_ok("text/javascript; charset=utf-8", APP_JS),
+        ("GET", "/visual_tween_core.js") => {
+            http_ok("text/javascript; charset=utf-8", VISUAL_TWEEN_CORE_JS)
+        }
         ("GET", "/renderer.js") => http_ok("text/javascript; charset=utf-8", RENDERER_JS),
         ("GET", "/api/scene") => {
             let state = state.lock().expect("server state poisoned");
@@ -175,6 +186,15 @@ fn route(request: &HttpRequest, state: Arc<Mutex<ServerState>>) -> String {
                 Ok(body) => http_ok("application/json; charset=utf-8", &body),
                 Err(error) => http_error(400, &error.to_string()),
             }
+        }
+        ("POST", "/api/action") => {
+            let action = match serde_json::from_slice::<puzzle_runtime_contract::SessionAction>(
+                &request.body,
+            ) {
+                Ok(action) => action,
+                Err(error) => return http_error(400, &format!("invalid session action: {error}")),
+            };
+            handle_session_action(state, action)
         }
         (method, path) => match session_action_from_http(method, path) {
             Ok(action) => handle_session_action(state, action),
@@ -270,12 +290,8 @@ fn handle_session_action(
                 Err(error) => http_error(409, &format!("{error:?}")),
             }
         }
-        SessionAction::Undo => {
-            mutate(state, |state| state.session.undo(&state.loaded))
-        }
-        SessionAction::Redo => {
-            mutate(state, |state| state.session.redo(&state.loaded))
-        }
+        SessionAction::Undo => mutate(state, |state| state.session.undo(&state.loaded)),
+        SessionAction::Redo => mutate(state, |state| state.session.redo(&state.loaded)),
         SessionAction::Restart => {
             let mut state = state.lock().expect("server state poisoned");
             let result = {
@@ -327,6 +343,19 @@ fn handle_session_action(
                 Err(error) => http_error(400, &error.to_string()),
             }
         }
+        SessionAction::SceneEffect { effect } => {
+            let mut state = state.lock().expect("server state poisoned");
+            let result = {
+                let ServerState {
+                    session, loaded, ..
+                } = &mut *state;
+                session.apply_scene_effect(loaded, &effect)
+            };
+            match result {
+                Ok(()) => http_ok("application/json; charset=utf-8", &state.snapshot_json()),
+                Err(error) => http_error(400, &format!("{error:?}")),
+            }
+        }
     }
 }
 
@@ -346,7 +375,6 @@ fn input_id_by_name(loaded: &LoadedGame, input_name: &str) -> Option<InputId> {
         .iter()
         .find_map(|(id, label)| (label == input_name).then_some(*id))
 }
-
 
 fn push_session_state(out: &mut String, loaded: &LoadedGame, session: &GameSession) {
     out.push_str("\"gameState\":{");
@@ -680,11 +708,6 @@ fn first_puzzle_component(components: &[SceneComponent]) -> Option<&str> {
                     return Some(name);
                 }
             }
-            SceneComponent::For(for_view) => {
-                if let Some(name) = first_puzzle_component(&for_view.children) {
-                    return Some(name);
-                }
-            }
             _ => {}
         }
     }
@@ -910,7 +933,7 @@ fn push_cells(out: &mut String, loaded: &LoadedGame, state: &puzzle_core::State)
                 out.push(',');
                 push_json_pair(out, "object", object_name);
                 out.push(',');
-                push_json_pair(out, "sprite", &sprite_name(object_name));
+                push_json_pair(out, "visual", &visual_name(object_name));
                 out.push('}');
             }
 
@@ -922,20 +945,20 @@ fn push_cells(out: &mut String, loaded: &LoadedGame, state: &puzzle_core::State)
     out.push(']');
 }
 
-fn sprite_name(object_name: &str) -> String {
-    let mut sprite = String::new();
+fn visual_name(object_name: &str) -> String {
+    let mut visual = String::new();
     for ch in object_name.chars() {
         if ch.is_ascii_alphanumeric() {
-            sprite.push(ch);
-        } else if !sprite.ends_with('-') {
-            sprite.push('-');
+            visual.push(ch);
+        } else if !visual.ends_with('-') {
+            visual.push('-');
         }
     }
-    let sprite = sprite.trim_matches('-').to_string();
-    if sprite.is_empty() {
+    let visual = visual.trim_matches('-').to_string();
+    if visual.is_empty() {
         "unknown".to_string()
     } else {
-        sprite
+        visual
     }
 }
 
@@ -1201,11 +1224,11 @@ fn push_scene_resources_object(out: &mut String, resources: &puzzle_lang::SceneR
     out.push(',');
     push_json_pair(
         out,
-        "spritesMode",
-        resource_selection_mode(&resources.sprites),
+        "visualsMode",
+        resource_selection_mode(&resources.visuals),
     );
     out.push(',');
-    push_resource_names(out, "sprites", &resources.sprites);
+    push_resource_names(out, "visuals", &resources.visuals);
 }
 
 fn resource_selection_mode(selection: &ResourceSelection) -> &'static str {
@@ -1325,10 +1348,6 @@ fn push_scene_component(out: &mut String, component: &SceneComponent) {
 fn push_json_effect(out: &mut String, effect: &SceneEffect) {
     out.push_str("\"effect\":");
     puzzle_scene::write_scene_effect_json(out, effect);
-}
-
-fn push_json_effect_fields(out: &mut String, effect: &SceneEffect) {
-    puzzle_scene::write_scene_effect_json_fields(out, effect);
 }
 
 fn push_json_expr_named(out: &mut String, name: &str, expr: &SceneExpr) {

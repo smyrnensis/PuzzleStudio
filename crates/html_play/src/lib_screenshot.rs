@@ -194,10 +194,6 @@ fn component_contains_puzzle3_frame(component: &SceneComponent) -> bool {
             .iter()
             .chain(conditional.else_children.iter())
             .any(component_contains_puzzle3_frame),
-        SceneComponent::For(component) => component
-            .children
-            .iter()
-            .any(component_contains_puzzle3_frame),
         _ => false,
     }
 }

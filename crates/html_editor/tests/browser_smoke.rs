@@ -9,8 +9,8 @@ fn editor_browser_smoke_flows() {
 }
 
 #[test]
-fn sprite_palette_mouse_click_preserves_pane_scroll() {
-    run_editor_browser_smoke(&["--sprite-palette-only"]);
+fn visual_palette_mouse_click_preserves_pane_scroll() {
+    run_editor_browser_smoke(&["--visual-palette-only"]);
 }
 
 fn run_editor_browser_smoke(extra_args: &[&str]) {

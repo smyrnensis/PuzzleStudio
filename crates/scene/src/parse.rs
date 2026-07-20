@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::{SceneBinaryOp, SceneEffect, SceneEffectParam, SceneExpr, SceneLevelKey};
+use crate::{SceneBinaryOp, SceneEffect, SceneEffectParam, SceneExpr};
 use puzzle_authoring::{
     CallSurface, find_top_level_char, is_identifier, is_qualified_identifier, matching_delimiter,
     parse_assignment_row, parse_call_argument_surfaces,
@@ -99,14 +99,6 @@ fn parse_scene_effect_value(value: &str, line: &str) -> Result<SceneEffect, Scen
         return Ok(SceneEffect::SetLevelCleared {
             level: None,
             cleared: parse_scene_effect_bool(rest.trim(), line)?,
-        });
-    }
-    if let Some((selector, cleared)) = value.split_once(".cleared = ")
-        && let Some(level) = parse_level_selector_expr(selector.trim(), line)?
-    {
-        return Ok(SceneEffect::SetLevelCleared {
-            level: Some(level),
-            cleared: parse_scene_effect_bool(cleared.trim(), line)?,
         });
     }
     if let Some((name, rhs)) = parse_scene_variable_assignment(value) {
@@ -601,9 +593,6 @@ pub fn parse_scene_effect_params(value: &str) -> Result<Vec<SceneEffectParam>, S
 }
 
 fn parse_scene_level_expr(value: &str, line: &str) -> Result<SceneExpr, SceneParseError> {
-    if let Some(expr) = parse_level_selector_expr(value, line)? {
-        return Ok(expr);
-    }
     parse_scene_expr(value, line)
 }
 
@@ -654,9 +643,6 @@ fn parse_scene_expr(value: &str, line: &str) -> Result<SceneExpr, SceneParseErro
     }
     if let Some(text) = parse_quoted_text(value) {
         return Ok(SceneExpr::Text(text));
-    }
-    if let Some(expr) = parse_level_selector_expr(value, line)? {
-        return Ok(expr);
     }
     if let Some((call, _)) =
         parse_optional_call_surface_with_suffix(value, line, "scene call must close with `)`")?
@@ -734,58 +720,6 @@ fn parse_scene_if_expr(value: &str, line: &str) -> Result<Option<SceneExpr>, Sce
         condition: Box::new(parse_scene_expr(condition, line)?),
         then_branch: Box::new(parse_scene_expr(then_branch, line)?),
         else_branch: Box::new(parse_scene_expr(else_branch, line)?),
-    }))
-}
-
-fn parse_level_selector_expr(
-    value: &str,
-    line: &str,
-) -> Result<Option<SceneExpr>, SceneParseError> {
-    let value = value.trim();
-    parse_pack_level_selector_expr(value, line)
-}
-
-fn parse_pack_level_selector_expr(
-    value: &str,
-    line: &str,
-) -> Result<Option<SceneExpr>, SceneParseError> {
-    let Some(open) = value.find('[') else {
-        return Ok(None);
-    };
-    let Some(close) = value[open + 1..].find(']').map(|offset| open + 1 + offset) else {
-        return Err(parse_error(line, "level pack selector must close with `]`"));
-    };
-    let pack = value[..open].trim();
-    if pack.is_empty() || !is_qualified_identifier(pack) {
-        return Ok(None);
-    }
-    let key = value[open + 1..close].trim();
-    let suffix = value[close + 1..].trim();
-    let key = if let Some(id) = parse_quoted_text(key) {
-        SceneLevelKey::Id(id)
-    } else if let Ok(index) = key.parse::<i64>() {
-        SceneLevelKey::Index(index)
-    } else {
-        return Err(parse_error(
-            line,
-            "level selector key must be a quoted id or integer index",
-        ));
-    };
-    let property = if suffix.is_empty() {
-        None
-    } else if let Some(field) = suffix.strip_prefix('.') {
-        validate_identifier(field, line, "level property")?;
-        Some(field.to_string())
-    } else {
-        return Err(parse_error(
-            line,
-            "level selector suffix must be empty or `.property`",
-        ));
-    };
-    Ok(Some(SceneExpr::LevelSelector {
-        collection: pack.to_string(),
-        key,
-        property,
     }))
 }
 

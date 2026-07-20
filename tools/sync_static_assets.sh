@@ -31,6 +31,7 @@ sync_asset() {
 status=0
 sync_asset crates/html_play/static/renderer.js crates/html_editor/static/renderer.js || status=1
 sync_asset crates/html_play/static/renderer.css crates/html_editor/static/renderer.css || status=1
+sync_asset crates/html_play/static/visual_tween_core.js crates/html_editor/static/visual_tween_core.js || status=1
 sync_asset crates/html_play/static/puzzle3_visual_core.js crates/html_editor/static/puzzle3_visual_core.js || status=1
 
 if [[ "$status" -ne 0 ]]; then

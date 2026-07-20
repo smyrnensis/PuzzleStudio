@@ -389,48 +389,7 @@ fn validate_moves<Size, ConditionDef, Rule, Condition, Frame, const D: usize>(
 where
     Size: GridSize<D>,
 {
-    let mut sources = Vec::new();
-    let mut destinations = Vec::new();
-    let mut moves = Vec::new();
-
-    for op in ops {
-        let PatchOp::Move { from, to, object } = *op else {
-            continue;
-        };
-        let layer = object_layer(game, object)?;
-        let found = state.get_layer_at(from, layer)?;
-        if found != object {
-            return Err(GridPatchError::ExpectedObject {
-                position: from,
-                layer,
-                expected: object,
-                found,
-            });
-        }
-        if destinations.contains(&(to, layer)) {
-            return Err(GridPatchError::LayerOccupied {
-                position: to,
-                layer,
-                existing: object,
-                attempted: object,
-            });
-        }
-        sources.push((from, layer));
-        destinations.push((to, layer));
-        moves.push((from, to, layer, object));
-    }
-
-    for (_, to, layer, object) in &moves {
-        let existing = state.get_layer_at(*to, *layer)?;
-        if !existing.is_empty() && !sources.contains(&(*to, *layer)) {
-            return Err(GridPatchError::LayerOccupied {
-                position: *to,
-                layer: *layer,
-                existing,
-                attempted: *object,
-            });
-        }
-    }
+    let moves = validated_moves(game, state, ops)?;
 
     for (from, _, layer, _) in &moves {
         slots.set(*from, *layer, ObjectId::EMPTY);
@@ -449,48 +408,7 @@ fn apply_moves<Size, ConditionDef, Rule, Condition, Frame, const D: usize>(
 where
     Size: GridSize<D>,
 {
-    let mut moves = Vec::new();
-    let mut sources = Vec::new();
-    let mut destinations = Vec::new();
-
-    for op in ops {
-        let PatchOp::Move { from, to, object } = *op else {
-            continue;
-        };
-        let layer = object_layer(game, object)?;
-        let found = state.get_layer_at(from, layer)?;
-        if found != object {
-            return Err(GridPatchError::ExpectedObject {
-                position: from,
-                layer,
-                expected: object,
-                found,
-            });
-        }
-        if destinations.contains(&(to, layer)) {
-            return Err(GridPatchError::LayerOccupied {
-                position: to,
-                layer,
-                existing: object,
-                attempted: object,
-            });
-        }
-        sources.push((from, layer));
-        destinations.push((to, layer));
-        moves.push((from, to, layer, object));
-    }
-
-    for (_, to, layer, object) in &moves {
-        let existing = state.get_layer_at(*to, *layer)?;
-        if !existing.is_empty() && !sources.contains(&(*to, *layer)) {
-            return Err(GridPatchError::LayerOccupied {
-                position: *to,
-                layer: *layer,
-                existing,
-                attempted: *object,
-            });
-        }
-    }
+    let moves = validated_moves(game, state, ops)?;
 
     let mut moved = Vec::with_capacity(moves.len());
     for (from, to, layer, object) in moves {
@@ -501,6 +419,37 @@ where
         state.place_moved_slot_unchecked(to, layer, object, mark);
     }
     Ok(())
+}
+
+fn validated_moves<Size, ConditionDef, Rule, Condition, Frame, const D: usize>(
+    game: &CompiledGameModel<ConditionDef, Rule, Condition, Frame>,
+    state: &GridState<D, Size>,
+    ops: &[PatchOp<D>],
+) -> Result<Vec<(GridCoord<D>, GridCoord<D>, LayerId, ObjectId)>, GridPatchError<D>>
+where
+    Size: GridSize<D>,
+{
+    ops.iter()
+        .filter_map(|op| {
+            let PatchOp::Move { from, to, object } = *op else {
+                return None;
+            };
+            Some((from, to, object))
+        })
+        .map(|(from, to, object)| {
+            let layer = object_layer(game, object)?;
+            let found = state.get_layer_at(from, layer)?;
+            if found != object {
+                return Err(GridPatchError::ExpectedObject {
+                    position: from,
+                    layer,
+                    expected: object,
+                    found,
+                });
+            }
+            Ok((from, to, layer, object))
+        })
+        .collect()
 }
 
 fn apply_set_mark<Size, ConditionDef, Rule, Condition, Frame, const D: usize>(
@@ -830,5 +779,136 @@ mod tests {
         let next = patch.apply(&game, &state).unwrap();
         assert_eq!(next.get_layer(0, 0, LayerId(0)).unwrap(), ObjectId::EMPTY);
         assert_eq!(next.get_layer(0, 0, LayerId(1)).unwrap(), added);
+    }
+
+    #[test]
+    fn move_overwrites_an_occupied_destination_and_transfers_only_the_moved_marks() {
+        let moved = ObjectId(1);
+        let displaced = ObjectId(2);
+        let mark = MarkId(0);
+        let game = CompiledGame::new(
+            1,
+            vec![
+                ObjectDef {
+                    id: moved,
+                    layer_id: LayerId(0),
+                },
+                ObjectDef {
+                    id: displaced,
+                    layer_id: LayerId(0),
+                },
+            ],
+            Vec::new(),
+        );
+        let mut state = State::empty(2, 1, 1, 2).unwrap();
+        state.place_object(&game, 0, 0, moved).unwrap();
+        state.place_object(&game, 1, 0, displaced).unwrap();
+        state.set_mark_unchecked(position(0, 0), LayerId(0), mark, Some(1));
+        state.set_mark_unchecked(position(1, 0), LayerId(0), mark, Some(2));
+
+        let patch = Patch::from_ops(vec![PatchOp::Move {
+            from: position(0, 0),
+            to: position(1, 0),
+            object: moved,
+        }]);
+        let next = patch.apply(&game, &state).unwrap();
+
+        assert_eq!(next.get_layer(0, 0, LayerId(0)).unwrap(), ObjectId::EMPTY);
+        assert_eq!(next.get_layer(1, 0, LayerId(0)).unwrap(), moved);
+        assert_eq!(next.object_count(moved), 1);
+        assert_eq!(next.object_count(displaced), 0);
+        assert!(next.has_mark(&game, 1, 0, moved, mark, Some(1)));
+        assert!(!next.has_mark(&game, 1, 0, moved, mark, Some(2)));
+    }
+
+    #[test]
+    fn ordered_moves_to_one_destination_keep_the_last_write() {
+        let first = ObjectId(1);
+        let second = ObjectId(2);
+        let displaced = ObjectId(3);
+        let game = CompiledGame::new(
+            1,
+            vec![
+                ObjectDef {
+                    id: first,
+                    layer_id: LayerId(0),
+                },
+                ObjectDef {
+                    id: second,
+                    layer_id: LayerId(0),
+                },
+                ObjectDef {
+                    id: displaced,
+                    layer_id: LayerId(0),
+                },
+            ],
+            Vec::new(),
+        );
+        let mut state = State::empty(3, 1, 1, 3).unwrap();
+        state.place_object(&game, 0, 0, first).unwrap();
+        state.place_object(&game, 1, 0, second).unwrap();
+        state.place_object(&game, 2, 0, displaced).unwrap();
+
+        let patch = Patch::from_ops(vec![
+            PatchOp::Move {
+                from: position(0, 0),
+                to: position(2, 0),
+                object: first,
+            },
+            PatchOp::Move {
+                from: position(1, 0),
+                to: position(2, 0),
+                object: second,
+            },
+        ]);
+        let next = patch.apply(&game, &state).unwrap();
+
+        assert_eq!(next.get_layer(0, 0, LayerId(0)).unwrap(), ObjectId::EMPTY);
+        assert_eq!(next.get_layer(1, 0, LayerId(0)).unwrap(), ObjectId::EMPTY);
+        assert_eq!(next.get_layer(2, 0, LayerId(0)).unwrap(), second);
+        assert_eq!(next.object_count(first), 0);
+        assert_eq!(next.object_count(second), 1);
+        assert_eq!(next.object_count(displaced), 0);
+    }
+
+    #[test]
+    fn chained_moves_read_all_sources_before_writing_destinations() {
+        let first = ObjectId(1);
+        let second = ObjectId(2);
+        let game = CompiledGame::new(
+            1,
+            vec![
+                ObjectDef {
+                    id: first,
+                    layer_id: LayerId(0),
+                },
+                ObjectDef {
+                    id: second,
+                    layer_id: LayerId(0),
+                },
+            ],
+            Vec::new(),
+        );
+        let mut state = State::empty(3, 1, 1, 2).unwrap();
+        state.place_object(&game, 0, 0, first).unwrap();
+        state.place_object(&game, 1, 0, second).unwrap();
+
+        let patch = Patch::from_ops(vec![
+            PatchOp::Move {
+                from: position(0, 0),
+                to: position(1, 0),
+                object: first,
+            },
+            PatchOp::Move {
+                from: position(1, 0),
+                to: position(2, 0),
+                object: second,
+            },
+        ]);
+        let next = patch.apply(&game, &state).unwrap();
+
+        assert_eq!(next.get_layer(0, 0, LayerId(0)).unwrap(), ObjectId::EMPTY);
+        assert_eq!(next.get_layer(1, 0, LayerId(0)).unwrap(), first);
+        assert_eq!(next.get_layer(2, 0, LayerId(0)).unwrap(), second);
     }
 }

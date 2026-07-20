@@ -29,7 +29,7 @@
             <button id="playModeButton" class="is-active" type="button">Preview</button>
             <button id="solverModeButton" type="button">Solve</button>
             <button id="editModeButton" type="button">Level</button>
-            <button id="spriteModeButton" type="button">Sprite</button>
+            <button id="visualModeButton" type="button">Visual</button>
             <button id="soundsTopbarButton" type="button">Sound</button>
             <button id="psImportTopbarButton" type="button">PS Import</button>
             <button id="docsTopbarButton" type="button">Documents</button>
@@ -263,33 +263,33 @@
                 </div>
               </div>
             </div>
-            <div class="level-toolbar sprite-toolbar" role="toolbar" aria-label="Level edit actions">
-              <button id="levelGridButton" class="icon-button sprite-icon-button level-grid-button" type="button" aria-label="Toggle level grid" aria-pressed="false" title="Toggle grid" data-tooltip="Toggle grid">
+            <div class="level-toolbar visual-toolbar" role="toolbar" aria-label="Level edit actions">
+              <button id="levelGridButton" class="icon-button visual-icon-button level-grid-button" type="button" aria-label="Toggle level grid" aria-pressed="false" title="Toggle grid" data-tooltip="Toggle grid">
                 <svg data-editor-icon="grid-2x2" class="level-grid-token-icon" aria-hidden="true"></svg>
               </button>
-              <button id="levelExpandButton" class="icon-button sprite-icon-button level-expand-button" type="button" aria-label="Toggle level expansion" aria-pressed="false" title="Expand" data-tooltip="Expand">
+              <button id="levelExpandButton" class="icon-button visual-icon-button level-expand-button" type="button" aria-label="Toggle level expansion" aria-pressed="false" title="Expand" data-tooltip="Expand">
                 <svg data-editor-icon="expand" aria-hidden="true"></svg>
               </button>
-              <button id="levelShrinkButton" class="icon-button sprite-icon-button level-shrink-button" type="button" aria-label="Toggle level shrinking" aria-pressed="false" title="Shrink" data-tooltip="Shrink">
+              <button id="levelShrinkButton" class="icon-button visual-icon-button level-shrink-button" type="button" aria-label="Toggle level shrinking" aria-pressed="false" title="Shrink" data-tooltip="Shrink">
                 <svg data-editor-icon="shrink" aria-hidden="true"></svg>
               </button>
-              <button id="levelRotateLeftButton" class="icon-button sprite-icon-button" type="button" aria-label="Rotate level left" title="Rotate left" data-tooltip="Rotate left">
+              <button id="levelRotateLeftButton" class="icon-button visual-icon-button" type="button" aria-label="Rotate level left" title="Rotate left" data-tooltip="Rotate left">
                 <svg data-editor-icon="rotate-ccw" aria-hidden="true"></svg>
               </button>
-              <button id="levelRotateRightButton" class="icon-button sprite-icon-button" type="button" aria-label="Rotate level right" title="Rotate right" data-tooltip="Rotate right">
+              <button id="levelRotateRightButton" class="icon-button visual-icon-button" type="button" aria-label="Rotate level right" title="Rotate right" data-tooltip="Rotate right">
                 <svg data-editor-icon="rotate-cw" aria-hidden="true"></svg>
               </button>
-              <button id="levelFlipHorizontalButton" class="icon-button sprite-icon-button" type="button" aria-label="Flip level horizontal" title="Flip horizontal" data-tooltip="Flip horizontal">
+              <button id="levelFlipHorizontalButton" class="icon-button visual-icon-button" type="button" aria-label="Flip level horizontal" title="Flip horizontal" data-tooltip="Flip horizontal">
                 <svg data-editor-icon="flip-horizontal" aria-hidden="true"></svg>
               </button>
-              <button id="levelFlipVerticalButton" class="icon-button sprite-icon-button" type="button" aria-label="Flip level vertical" title="Flip vertical" data-tooltip="Flip vertical">
+              <button id="levelFlipVerticalButton" class="icon-button visual-icon-button" type="button" aria-label="Flip level vertical" title="Flip vertical" data-tooltip="Flip vertical">
                 <svg data-editor-icon="flip-vertical" aria-hidden="true"></svg>
               </button>
               <div id="levelLayerControls" class="level-layer-controls" aria-label="Level layer controls"></div>
             </div>
             <div class="level-palette-toolbar" aria-label="Palette display controls" hidden></div>
             <div id="levelPalette" class="level-palette" aria-label="Level tile palette">
-              <button id="levelFillButton" class="icon-button level-palette-tool-button sprite-fill-button sprite-icon-button" type="button" aria-label="Fill" aria-pressed="false" title="Fill" data-tooltip="Fill">
+              <button id="levelFillButton" class="icon-button level-palette-tool-button visual-fill-button visual-icon-button" type="button" aria-label="Fill" aria-pressed="false" title="Fill" data-tooltip="Fill">
                 <svg data-editor-icon="paint-bucket" aria-hidden="true"></svg>
               </button>
             </div>
@@ -368,242 +368,242 @@
             </div>
             <span id="levelSolveStatus" class="level-solve-status tool-feedback-bar" aria-live="polite">Ready to solve</span>
           </div>
-          <div id="spriteBuilder" class="sprite-builder" hidden>
-            <div id="spritePaneHeaderActions" class="source-action-group source-preview-actions sprite-pane-header-actions" role="group" aria-label="Sprite pane actions">
-              <span class="sprite-dimension-toggle" role="group" aria-label="Sprite dimension">
-                <button id="spriteDimension2dButton" class="icon-button source-action-button is-active" type="button" data-sprite-dimension="2d" aria-label="Edit as 2D sprite" aria-pressed="true" title="2D sprite">2D</button>
-                <button id="spriteDimension3dButton" class="icon-button source-action-button" type="button" data-sprite-dimension="3d" aria-label="Edit as 3D sprite" aria-pressed="false" title="3D sprite">3D</button>
+          <div id="visualBuilder" class="visual-builder" hidden>
+            <div id="visualPaneHeaderActions" class="source-action-group source-preview-actions visual-pane-header-actions" role="group" aria-label="Visual pane actions">
+              <span class="visual-dimension-toggle" role="group" aria-label="Visual dimension">
+                <button id="visualDimension2dButton" class="icon-button source-action-button is-active" type="button" data-visual-dimension="2d" aria-label="Edit as 2D visual" aria-pressed="true" title="2D visual">2D</button>
+                <button id="visualDimension3dButton" class="icon-button source-action-button" type="button" data-visual-dimension="3d" aria-label="Edit as 3D visual" aria-pressed="false" title="3D visual">3D</button>
               </span>
-              <button id="spriteAnimateModeButton" class="icon-button source-action-button" type="button" aria-label="Animate sprite" aria-pressed="false" title="Animate sprite">
+              <button id="visualAnimateModeButton" class="icon-button source-action-button" type="button" aria-label="Animate visual" aria-pressed="false" title="Animate visual">
                 <svg data-editor-icon="film" aria-hidden="true"></svg>
               </button>
             </div>
             <div class="tool-pane-scroll">
-              <div class="sprite-controls">
-              <div class="sprite-source-fields" aria-label="Sprite ASCII source fields">
-                <label class="sprite-name-control sprite-source-field">
-                  <span>Sprite for</span>
-                  <input id="spriteNameInput" type="text" value="Sprite" spellcheck="false" autocomplete="off" autocapitalize="off">
+              <div class="visual-controls">
+              <div class="visual-source-fields" aria-label="Visual ASCII source fields">
+                <label class="visual-name-control visual-source-field">
+                  <span>Visual for</span>
+                  <input id="visualNameInput" type="text" value="Visual" spellcheck="false" autocomplete="off" autocapitalize="off">
                 </label>
-                <div class="sprite-transform-bar sprite-source-field" aria-label="Sprite transform settings">
-                <label class="sprite-size-control sprite-compact-control">
+                <div class="visual-transform-bar visual-source-field" aria-label="Visual transform settings">
+                <label class="visual-size-control visual-compact-control">
                   <span>Size</span>
-                  <span class="sprite-extent-inputs" aria-label="Sprite size">
-                    <input id="spriteWidthInput" type="number" min="1" max="64" value="5" inputmode="numeric" aria-label="Sprite width">
+                  <span class="visual-extent-inputs" aria-label="Visual size">
+                    <input id="visualWidthInput" type="number" min="1" max="64" value="5" inputmode="numeric" aria-label="Visual width">
                     <span aria-hidden="true">×</span>
-                    <input id="spriteHeightInput" type="number" min="1" max="64" value="5" inputmode="numeric" aria-label="Sprite height">
+                    <input id="visualHeightInput" type="number" min="1" max="64" value="5" inputmode="numeric" aria-label="Visual height">
                   </span>
                 </label>
-                <div class="sprite-scale-control sprite-compact-control" role="group" aria-label="Sprite scale">
-                  <div class="sprite-scale-group">
-                    <span class="sprite-scale-prefix" aria-hidden="true">×</span>
-                    <input id="spriteScaleInput" type="number" min="2" max="64" value="2" inputmode="numeric" aria-label="Scale multiplier">
-                    <button id="spriteScaleDownButton" class="icon-button sprite-scale-step-button" type="button" aria-label="Scale down" title="Scale down">
+                <div class="visual-scale-control visual-compact-control" role="group" aria-label="Visual scale">
+                  <div class="visual-scale-group">
+                    <span class="visual-scale-prefix" aria-hidden="true">×</span>
+                    <input id="visualScaleInput" type="number" min="2" max="64" value="2" inputmode="numeric" aria-label="Scale multiplier">
+                    <button id="visualScaleDownButton" class="icon-button visual-scale-step-button" type="button" aria-label="Scale down" title="Scale down">
                       <svg data-editor-icon="minimize-2" aria-hidden="true"></svg>
                     </button>
-                    <button id="spriteScaleUpButton" class="icon-button sprite-scale-step-button" type="button" aria-label="Scale up" title="Scale up">
+                    <button id="visualScaleUpButton" class="icon-button visual-scale-step-button" type="button" aria-label="Scale up" title="Scale up">
                       <svg data-editor-icon="maximize-2" aria-hidden="true"></svg>
                     </button>
                   </div>
                 </div>
-                <label class="sprite-duration-control sprite-compact-control">
+                <label class="visual-duration-control visual-compact-control">
                   <span>Duration</span>
-                  <span class="sprite-duration-input">
-                    <input id="spriteAnimationDurationInput" type="number" min="20" max="5000" step="10" value="120" inputmode="numeric" aria-label="Animation loop duration in milliseconds">
-                    <span class="sprite-duration-unit" aria-hidden="true">ms</span>
+                  <span class="visual-duration-input">
+                    <input id="visualAnimationDurationInput" type="number" min="20" max="5000" step="10" value="120" inputmode="numeric" aria-label="Animation loop duration in milliseconds">
+                    <span class="visual-duration-unit" aria-hidden="true">ms</span>
                   </span>
                 </label>
-                <label class="sprite-frame-count-control sprite-compact-control">
+                <label class="visual-frame-count-control visual-compact-control">
                   <span>Frames</span>
-                  <input id="spriteAnimationFrameCountInput" type="number" min="1" max="24" value="1" inputmode="numeric" aria-label="Animation frame count">
+                  <input id="visualAnimationFrameCountInput" type="number" min="1" max="24" value="1" inputmode="numeric" aria-label="Animation frame count">
                 </label>
                 </div>
-                <div id="spriteShapeField" class="sprite-source-field sprite-shape-field"></div>
+                <div id="visualShapeField" class="visual-source-field visual-shape-field"></div>
               </div>
               </div>
-              <span id="spriteTransformActionBank" hidden>
-              <button id="spriteRotateLeftButton" class="icon-button sprite-icon-button" type="button" aria-label="Rotate left" title="Rotate left">
+              <span id="visualTransformActionBank" hidden>
+              <button id="visualRotateLeftButton" class="icon-button visual-icon-button" type="button" aria-label="Rotate left" title="Rotate left">
                 <svg data-editor-icon="rotate-ccw" aria-hidden="true"></svg>
               </button>
-              <button id="spriteRotateRightButton" class="icon-button sprite-icon-button" type="button" aria-label="Rotate right" title="Rotate right">
+              <button id="visualRotateRightButton" class="icon-button visual-icon-button" type="button" aria-label="Rotate right" title="Rotate right">
                 <svg data-editor-icon="rotate-cw" aria-hidden="true"></svg>
               </button>
-              <button id="spriteFlipHorizontalButton" class="icon-button sprite-icon-button" type="button" aria-label="Flip horizontal" title="Flip horizontal">
+              <button id="visualFlipHorizontalButton" class="icon-button visual-icon-button" type="button" aria-label="Flip horizontal" title="Flip horizontal">
                 <svg data-editor-icon="flip-horizontal" aria-hidden="true"></svg>
               </button>
-              <button id="spriteFlipVerticalButton" class="icon-button sprite-icon-button" type="button" aria-label="Flip vertical" title="Flip vertical">
+              <button id="visualFlipVerticalButton" class="icon-button visual-icon-button" type="button" aria-label="Flip vertical" title="Flip vertical">
                 <svg data-editor-icon="flip-vertical" aria-hidden="true"></svg>
               </button>
               </span>
-              <div id="spritePalette" class="sprite-palette" aria-label="Sprite character palette">
-                <span id="spriteMarkerTool" class="sprite-marker-tool" role="group" aria-label="Brush size">
-                  <svg data-editor-icon="highlighter" class="sprite-marker-icon" aria-hidden="true"></svg>
-                  <input id="spriteBrushSizeInput" class="sprite-brush-size-input" type="number" min="1" max="64" step="1" inputmode="numeric" value="1" aria-label="Brush size in pixels">
+              <div id="visualPalette" class="visual-palette" aria-label="Visual character palette">
+                <span id="visualMarkerTool" class="visual-marker-tool" role="group" aria-label="Brush size">
+                  <svg data-editor-icon="highlighter" class="visual-marker-icon" aria-hidden="true"></svg>
+                  <input id="visualBrushSizeInput" class="visual-brush-size-input" type="number" min="1" max="64" step="1" inputmode="numeric" value="1" aria-label="Brush size in pixels">
                 </span>
-                <button id="spriteFillButton" class="icon-button sprite-token sprite-palette-fill-button sprite-fill-button sprite-icon-button sprite-paint-tool-button" type="button" aria-label="Bucket fill" aria-pressed="false" title="Bucket fill">
+                <button id="visualFillButton" class="icon-button visual-token visual-palette-fill-button visual-fill-button visual-icon-button visual-paint-tool-button" type="button" aria-label="Bucket fill" aria-pressed="false" title="Bucket fill">
                   <svg data-editor-icon="paint-bucket" aria-hidden="true"></svg>
                 </button>
-                <button id="spriteGridButton" class="icon-button sprite-grid-button sprite-icon-button sprite-paint-tool-button is-active" type="button" aria-label="Toggle sprite grid" aria-pressed="true" title="Toggle grid">
+                <button id="visualGridButton" class="icon-button visual-grid-button visual-icon-button visual-paint-tool-button is-active" type="button" aria-label="Toggle visual grid" aria-pressed="true" title="Toggle grid">
                   <svg data-editor-icon="grid-2x2" aria-hidden="true"></svg>
                 </button>
               </div>
-              <div id="spriteToolbarHost" class="sprite-toolbar-host"></div>
-              <span id="spriteSourceActionBank" hidden>
-                <button id="newSpriteButton" class="icon-button source-action-button" type="button" aria-label="New sprite" title="New sprite"><svg data-editor-icon="image-plus" aria-hidden="true"></svg></button>
-                <button id="spriteInsertButton" class="icon-button source-action-button" type="button" aria-label="Add sprite" title="Add sprite"><svg data-editor-icon="file-plus-corner" aria-hidden="true"></svg></button>
-                <button id="spriteUpdateButton" class="icon-button source-action-button sprite-update-source-button" type="button" aria-label="Save sprite" title="Save"><svg data-editor-icon="save" aria-hidden="true"></svg></button>
+              <div id="visualToolbarHost" class="visual-toolbar-host"></div>
+              <span id="visualSourceActionBank" hidden>
+                <button id="newVisualButton" class="icon-button source-action-button" type="button" aria-label="New visual" title="New visual"><svg data-editor-icon="image-plus" aria-hidden="true"></svg></button>
+                <button id="visualInsertButton" class="icon-button source-action-button" type="button" aria-label="Add visual" title="Add visual"><svg data-editor-icon="file-plus-corner" aria-hidden="true"></svg></button>
+                <button id="visualUpdateButton" class="icon-button source-action-button visual-update-source-button" type="button" aria-label="Save visual" title="Save"><svg data-editor-icon="save" aria-hidden="true"></svg></button>
               </span>
-              <div class="sprite-board-wrap">
-                <div class="sprite-animation-toolbar sprite3d-slice-axis-control" role="group" aria-label="Sprite animation frame controls">
-                  <span class="sprite3d-layer-axis-label">Frame</span>
-                  <button id="spriteAnimationPreviousFrameButton" class="icon-button sprite-icon-button" type="button" aria-label="Move to previous sprite frame" title="Previous frame">
+              <div class="visual-board-wrap">
+                <div class="visual-animation-toolbar visual3d-slice-axis-control" role="group" aria-label="Visual animation frame controls">
+                  <span class="visual3d-layer-axis-label">Frame</span>
+                  <button id="visualAnimationPreviousFrameButton" class="icon-button visual-icon-button" type="button" aria-label="Move to previous visual frame" title="Previous frame">
                     <svg data-editor-icon="chevron-left" aria-hidden="true"></svg>
                   </button>
-                  <span class="sprite3d-slice-value-wrap" title="Adjust frame">
-                    <input id="spriteAnimationFrameInput" class="sprite3d-layer-axis-value" type="number" min="1" max="1" value="1" inputmode="numeric" aria-label="Current sprite animation frame">
-                    <span class="sprite3d-slice-total-separator" aria-hidden="true">/</span>
-                    <span id="spriteAnimationFrameTotal" class="sprite3d-slice-total">1</span>
+                  <span class="visual3d-slice-value-wrap" title="Adjust frame">
+                    <input id="visualAnimationFrameInput" class="visual3d-layer-axis-value" type="number" min="1" max="1" value="1" inputmode="numeric" aria-label="Current visual animation frame">
+                    <span class="visual3d-slice-total-separator" aria-hidden="true">/</span>
+                    <span id="visualAnimationFrameTotal" class="visual3d-slice-total">1</span>
                   </span>
-                  <button id="spriteAnimationNextFrameButton" class="icon-button sprite-icon-button" type="button" aria-label="Move to next sprite frame" title="Next frame">
+                  <button id="visualAnimationNextFrameButton" class="icon-button visual-icon-button" type="button" aria-label="Move to next visual frame" title="Next frame">
                     <svg data-editor-icon="chevron-right" aria-hidden="true"></svg>
                   </button>
-                  <button id="spriteAnimationInsertFrameButton" class="icon-button sprite-animation-insert-frame-button sprite-icon-button" type="button" aria-label="Add animation frame" aria-pressed="false" title="Add frame" data-tooltip="Add frame">
+                  <button id="visualAnimationInsertFrameButton" class="icon-button visual-animation-insert-frame-button visual-icon-button" type="button" aria-label="Add animation frame" aria-pressed="false" title="Add frame" data-tooltip="Add frame">
                     <svg data-editor-icon="square-plus" aria-hidden="true"></svg>
                   </button>
-                  <button id="spriteAnimationRemoveFrameButton" class="icon-button sprite-animation-remove-frame-button sprite-icon-button" type="button" aria-label="Remove animation frame" aria-pressed="false" title="Remove frame" data-tooltip="Remove frame">
+                  <button id="visualAnimationRemoveFrameButton" class="icon-button visual-animation-remove-frame-button visual-icon-button" type="button" aria-label="Remove animation frame" aria-pressed="false" title="Remove frame" data-tooltip="Remove frame">
                     <svg data-editor-icon="square-minus" aria-hidden="true"></svg>
                   </button>
                 </div>
-                <div class="sprite-animation-workspace">
-                  <div id="spriteBoard" class="sprite-board" aria-label="Editable sprite puzzle"></div>
-                  <div class="sprite-animation-sidecar">
-                    <section class="sprite-animation-playback-panel" aria-label="Sprite animation playback preview">
-                      <span class="sprite-animation-playback-view-label">Preview</span>
-                      <div id="spriteAnimationPlaybackView" class="sprite-animation-playback-view" aria-label="Sprite animation playback preview"></div>
+                <div class="visual-animation-workspace">
+                  <div id="visualBoard" class="visual-board" aria-label="Editable visual puzzle"></div>
+                  <div class="visual-animation-sidecar">
+                    <section class="visual-animation-playback-panel" aria-label="Visual animation playback preview">
+                      <span class="visual-animation-playback-view-label">Preview</span>
+                      <div id="visualAnimationPlaybackView" class="visual-animation-playback-view" aria-label="Visual animation playback preview"></div>
                     </section>
-                    <aside id="spriteAnimationPanel" class="sprite-animation-panel" aria-label="Sprite animation frames">
-                      <div id="spriteAnimationFrameStrip" class="sprite-animation-frame-strip" aria-label="Sprite animation frames"></div>
+                    <aside id="visualAnimationPanel" class="visual-animation-panel" aria-label="Visual animation frames">
+                      <div id="visualAnimationFrameStrip" class="visual-animation-frame-strip" aria-label="Visual animation frames"></div>
                     </aside>
                   </div>
                 </div>
               </div>
             </div>
-            <span id="spriteActionStatus" class="sprite-action-status tool-feedback-bar" aria-live="polite"></span>
+            <span id="visualActionStatus" class="visual-action-status tool-feedback-bar" aria-live="polite"></span>
           </div>
-          <div id="sprite3dBuilder" class="sprite-builder sprite3d-builder" hidden>
+          <div id="visual3dBuilder" class="visual-builder visual3d-builder" hidden>
             <div class="tool-pane-scroll">
-              <div class="sprite-controls">
-              <div class="sprite-source-fields" aria-label="3D sprite source fields">
-                <label class="sprite-name-control sprite-source-field">
-                  <span>Sprite for</span>
-                  <input id="sprite3dNameInput" type="text" value="VoxelSprite" spellcheck="false" autocomplete="off" autocapitalize="off">
+              <div class="visual-controls">
+              <div class="visual-source-fields" aria-label="3D visual source fields">
+                <label class="visual-name-control visual-source-field">
+                  <span>Visual for</span>
+                  <input id="visual3dNameInput" type="text" value="VoxelVisual" spellcheck="false" autocomplete="off" autocapitalize="off">
                 </label>
-              <div class="sprite-transform-bar sprite-source-field sprite3d-transform-bar" aria-label="3D sprite transform settings">
-                <label class="sprite-size-control sprite-compact-control">
+              <div class="visual-transform-bar visual-source-field visual3d-transform-bar" aria-label="3D visual transform settings">
+                <label class="visual-size-control visual-compact-control">
                   <span>Size</span>
-                  <span class="sprite3d-extent-inputs" aria-label="3D sprite size">
-                    <input id="sprite3dWidthInput" type="number" min="1" max="64" value="5" inputmode="numeric" aria-label="3D sprite width">
+                  <span class="visual3d-extent-inputs" aria-label="3D visual size">
+                    <input id="visual3dWidthInput" type="number" min="1" max="64" value="5" inputmode="numeric" aria-label="3D visual width">
                     <span aria-hidden="true">×</span>
-                    <input id="sprite3dHeightInput" type="number" min="1" max="64" value="5" inputmode="numeric" aria-label="3D sprite height">
+                    <input id="visual3dHeightInput" type="number" min="1" max="64" value="5" inputmode="numeric" aria-label="3D visual height">
                     <span aria-hidden="true">×</span>
-                    <input id="sprite3dDepthInput" type="number" min="1" max="64" value="5" inputmode="numeric" aria-label="3D sprite depth">
+                    <input id="visual3dDepthInput" type="number" min="1" max="64" value="5" inputmode="numeric" aria-label="3D visual depth">
                   </span>
                 </label>
-                <div class="sprite-scale-control sprite3d-scale-control sprite-compact-control" role="group" aria-label="3D sprite scale">
-                  <div class="sprite-scale-group">
-                    <span class="sprite-scale-prefix" aria-hidden="true">×</span>
-                    <input id="sprite3dScaleInput" type="number" min="2" max="64" value="2" inputmode="numeric" aria-label="3D sprite scale multiplier">
-                    <button id="sprite3dScaleDownButton" class="icon-button sprite-scale-step-button" type="button" aria-label="Scale down" title="Scale down">
+                <div class="visual-scale-control visual3d-scale-control visual-compact-control" role="group" aria-label="3D visual scale">
+                  <div class="visual-scale-group">
+                    <span class="visual-scale-prefix" aria-hidden="true">×</span>
+                    <input id="visual3dScaleInput" type="number" min="2" max="64" value="2" inputmode="numeric" aria-label="3D visual scale multiplier">
+                    <button id="visual3dScaleDownButton" class="icon-button visual-scale-step-button" type="button" aria-label="Scale down" title="Scale down">
                       <svg data-editor-icon="minimize-2" aria-hidden="true"></svg>
                     </button>
-                    <button id="sprite3dScaleUpButton" class="icon-button sprite-scale-step-button" type="button" aria-label="Scale up" title="Scale up">
+                    <button id="visual3dScaleUpButton" class="icon-button visual-scale-step-button" type="button" aria-label="Scale up" title="Scale up">
                       <svg data-editor-icon="maximize-2" aria-hidden="true"></svg>
                     </button>
                   </div>
                 </div>
-                <label class="sprite-duration-control sprite-compact-control sprite3d-animation-control">
+                <label class="visual-duration-control visual-compact-control visual3d-animation-control">
                   <span>Duration</span>
-                  <span class="sprite-duration-input">
-                    <input id="sprite3dAnimationDurationInput" type="number" min="20" max="5000" step="10" value="120" inputmode="numeric" aria-label="3D sprite animation loop duration in milliseconds">
-                    <span class="sprite-duration-unit" aria-hidden="true">ms</span>
+                  <span class="visual-duration-input">
+                    <input id="visual3dAnimationDurationInput" type="number" min="20" max="5000" step="10" value="120" inputmode="numeric" aria-label="3D visual animation loop duration in milliseconds">
+                    <span class="visual-duration-unit" aria-hidden="true">ms</span>
                   </span>
                 </label>
-                <label class="sprite-frame-count-control sprite-compact-control sprite3d-animation-control">
+                <label class="visual-frame-count-control visual-compact-control visual3d-animation-control">
                   <span>Frames</span>
-                  <input id="sprite3dAnimationFrameCountInput" type="number" min="1" max="24" value="1" inputmode="numeric" aria-label="3D sprite animation frame count">
+                  <input id="visual3dAnimationFrameCountInput" type="number" min="1" max="24" value="1" inputmode="numeric" aria-label="3D visual animation frame count">
                 </label>
               </div>
-              <div id="sprite3dShapeField" class="sprite-source-field sprite-shape-field"></div>
+              <div id="visual3dShapeField" class="visual-source-field visual-shape-field"></div>
               </div>
               </div>
-              <div id="sprite3dPalette" class="sprite-palette sprite3d-palette" aria-label="3D sprite palette"></div>
-              <div id="sprite3dToolbarHost" class="sprite-toolbar-host"></div>
-              <span id="sprite3dSourceActionBank" hidden>
-                <button id="newSprite3dButton" class="icon-button source-action-button" type="button" aria-label="New 3D sprite" title="New sprite"><svg data-editor-icon="image-plus" aria-hidden="true"></svg></button>
-                <button id="sprite3dInsertButton" class="icon-button source-action-button" type="button" aria-label="Add 3D sprite" title="Add sprite"><svg data-editor-icon="file-plus-corner" aria-hidden="true"></svg></button>
-                <button id="sprite3dUpdateButton" class="icon-button source-action-button sprite-update-source-button" type="button" aria-label="Save 3D sprite" title="Save"><svg data-editor-icon="save" aria-hidden="true"></svg></button>
+              <div id="visual3dPalette" class="visual-palette visual3d-palette" aria-label="3D visual palette"></div>
+              <div id="visual3dToolbarHost" class="visual-toolbar-host"></div>
+              <span id="visual3dSourceActionBank" hidden>
+                <button id="newVisual3dButton" class="icon-button source-action-button" type="button" aria-label="New 3D visual" title="New visual"><svg data-editor-icon="image-plus" aria-hidden="true"></svg></button>
+                <button id="visual3dInsertButton" class="icon-button source-action-button" type="button" aria-label="Add 3D visual" title="Add visual"><svg data-editor-icon="file-plus-corner" aria-hidden="true"></svg></button>
+                <button id="visual3dUpdateButton" class="icon-button source-action-button visual-update-source-button" type="button" aria-label="Save 3D visual" title="Save"><svg data-editor-icon="save" aria-hidden="true"></svg></button>
               </span>
-              <div class="sprite3d-workspace">
-                <div class="sprite-board-wrap sprite3d-slice-wrap">
-                  <div id="sprite3dSliceBoard" class="sprite-board sprite3d-slice-board" aria-label="Editable 3D sprite slice"></div>
-                  <div class="sprite-toolbar sprite3d-edit-actions" role="toolbar" aria-label="3D sprite edit actions">
-                    <div class="sprite3d-scope-toggle" role="group" aria-label="3D sprite edit scope">
-                      <button id="sprite3dScopeSliceButton" class="icon-button sprite3d-scope-button sprite-icon-button is-active" type="button" data-sprite3d-scope-option="slice" aria-label="Scope 2D" aria-pressed="true" title="Scope 2D slice">
+              <div class="visual3d-workspace">
+                <div class="visual-board-wrap visual3d-slice-wrap">
+                  <div id="visual3dSliceBoard" class="visual-board visual3d-slice-board" aria-label="Editable 3D visual slice"></div>
+                  <div class="visual-toolbar visual3d-edit-actions" role="toolbar" aria-label="3D visual edit actions">
+                    <div class="visual3d-scope-toggle" role="group" aria-label="3D visual edit scope">
+                      <button id="visual3dScopeSliceButton" class="icon-button visual3d-scope-button visual-icon-button is-active" type="button" data-visual3d-scope-option="slice" aria-label="Scope 2D" aria-pressed="true" title="Scope 2D slice">
                         <svg data-editor-icon="square" aria-hidden="true"></svg>
                       </button>
-                      <button id="sprite3dScopeAllButton" class="icon-button sprite3d-scope-button sprite-icon-button" type="button" data-sprite3d-scope-option="all" aria-label="Scope 3D" aria-pressed="false" title="Scope 3D volume">
+                      <button id="visual3dScopeAllButton" class="icon-button visual3d-scope-button visual-icon-button" type="button" data-visual3d-scope-option="all" aria-label="Scope 3D" aria-pressed="false" title="Scope 3D volume">
                         <svg data-editor-icon="box" aria-hidden="true"></svg>
                       </button>
                     </div>
-                    <div class="sprite3d-action-row" role="group" aria-label="3D sprite edit commands">
-                    <button id="sprite3dTranslateButton" class="icon-button sprite-translate-button sprite-icon-button" type="button" aria-label="Translate current slice" aria-pressed="false" title="Translate current slice">
+                    <div class="visual3d-action-row" role="group" aria-label="3D visual edit commands">
+                    <button id="visual3dTranslateButton" class="icon-button visual-translate-button visual-icon-button" type="button" aria-label="Translate current slice" aria-pressed="false" title="Translate current slice">
                       <svg data-editor-icon="move" aria-hidden="true"></svg>
                     </button>
-                    <button id="sprite3dRotatePlaneLeftButton" class="icon-button sprite-icon-button" type="button" aria-label="Rotate CCW" title="Rotate CCW">
+                    <button id="visual3dRotatePlaneLeftButton" class="icon-button visual-icon-button" type="button" aria-label="Rotate CCW" title="Rotate CCW">
                       <svg data-editor-icon="rotate-ccw" aria-hidden="true"></svg>
                     </button>
-                    <button id="sprite3dRotatePlaneRightButton" class="icon-button sprite-icon-button" type="button" aria-label="Rotate CW" title="Rotate CW">
+                    <button id="visual3dRotatePlaneRightButton" class="icon-button visual-icon-button" type="button" aria-label="Rotate CW" title="Rotate CW">
                       <svg data-editor-icon="rotate-cw" aria-hidden="true"></svg>
                     </button>
-                    <button id="sprite3dFlipPlaneHorizontalButton" class="icon-button sprite-icon-button" type="button" aria-label="Flip horizontal" title="Flip horizontal">
+                    <button id="visual3dFlipPlaneHorizontalButton" class="icon-button visual-icon-button" type="button" aria-label="Flip horizontal" title="Flip horizontal">
                       <svg data-editor-icon="flip-horizontal" aria-hidden="true"></svg>
                     </button>
-                    <button id="sprite3dFlipPlaneVerticalButton" class="icon-button sprite-icon-button" type="button" aria-label="Flip vertical" title="Flip vertical">
+                    <button id="visual3dFlipPlaneVerticalButton" class="icon-button visual-icon-button" type="button" aria-label="Flip vertical" title="Flip vertical">
                       <svg data-editor-icon="flip-vertical" aria-hidden="true"></svg>
                     </button>
-                    <button id="sprite3dFillButton" class="icon-button sprite-fill-button sprite3d-fill-button sprite-icon-button" type="button" aria-label="Bucket fill" aria-pressed="false" title="Bucket fill">
+                    <button id="visual3dFillButton" class="icon-button visual-fill-button visual3d-fill-button visual-icon-button" type="button" aria-label="Bucket fill" aria-pressed="false" title="Bucket fill">
                       <svg data-editor-icon="paint-bucket" aria-hidden="true"></svg>
                     </button>
-                    <span id="sprite3dClipActions"></span>
+                    <span id="visual3dClipActions"></span>
                     </div>
                   </div>
                 </div>
-                <div class="sprite3d-preview-column">
-                  <div class="sprite3d-preview-stage">
-                    <div class="sprite3d-preview-wrap">
-                    <div class="sprite3d-slice-axis-control" role="group" aria-label="3D sprite slice and axis">
-                      <span class="sprite3d-layer-axis-label">Slices</span>
-                      <button id="sprite3dPreviousSliceButton" class="icon-button sprite-icon-button" type="button" aria-label="Move to lower slice" title="Lower slice"><svg data-editor-icon="chevron-left" aria-hidden="true"></svg></button>
-                      <span class="sprite3d-slice-value-wrap" data-sprite3d-slice-scrub title="Adjust slice"><input id="sprite3dSliceValue" class="sprite3d-layer-axis-value" type="number" min="1" max="5" value="1" inputmode="numeric" aria-label="Current 3D sprite slice"><span class="sprite3d-slice-total-separator" aria-hidden="true">/</span><span id="sprite3dSliceTotal" class="sprite3d-slice-total">5</span></span>
-                      <button id="sprite3dNextSliceButton" class="icon-button sprite-icon-button" type="button" aria-label="Move to higher slice" title="Higher slice"><svg data-editor-icon="chevron-right" aria-hidden="true"></svg></button>
-                      <span class="sprite3d-layer-axis-label">Axis</span>
-                      <div class="sprite3d-axis-control sprite3d-toolbar-axis" role="group" aria-label="3D sprite slice axis"><div class="sprite3d-axis-buttons"><button class="sprite3d-axis-button" type="button" data-sprite3d-axis="x" aria-pressed="false" title="Edit YZ slices">X</button><button class="sprite3d-axis-button" type="button" data-sprite3d-axis="y" aria-pressed="false" title="Edit XZ slices">Y</button><button class="sprite3d-axis-button is-active" type="button" data-sprite3d-axis="z" aria-pressed="true" title="Edit XY slices">Z</button></div></div>
+                <div class="visual3d-preview-column">
+                  <div class="visual3d-preview-stage">
+                    <div class="visual3d-preview-wrap">
+                    <div class="visual3d-slice-axis-control" role="group" aria-label="3D visual slice and axis">
+                      <span class="visual3d-layer-axis-label">Slices</span>
+                      <button id="visual3dPreviousSliceButton" class="icon-button visual-icon-button" type="button" aria-label="Move to lower slice" title="Lower slice"><svg data-editor-icon="chevron-left" aria-hidden="true"></svg></button>
+                      <span class="visual3d-slice-value-wrap" data-visual3d-slice-scrub title="Adjust slice"><input id="visual3dSliceValue" class="visual3d-layer-axis-value" type="number" min="1" max="5" value="1" inputmode="numeric" aria-label="Current 3D visual slice"><span class="visual3d-slice-total-separator" aria-hidden="true">/</span><span id="visual3dSliceTotal" class="visual3d-slice-total">5</span></span>
+                      <button id="visual3dNextSliceButton" class="icon-button visual-icon-button" type="button" aria-label="Move to higher slice" title="Higher slice"><svg data-editor-icon="chevron-right" aria-hidden="true"></svg></button>
+                      <span class="visual3d-layer-axis-label">Axis</span>
+                      <div class="visual3d-axis-control visual3d-toolbar-axis" role="group" aria-label="3D visual slice axis"><div class="visual3d-axis-buttons"><button class="visual3d-axis-button" type="button" data-visual3d-axis="x" aria-pressed="false" title="Edit YZ slices">X</button><button class="visual3d-axis-button" type="button" data-visual3d-axis="y" aria-pressed="false" title="Edit XZ slices">Y</button><button class="visual3d-axis-button is-active" type="button" data-visual3d-axis="z" aria-pressed="true" title="Edit XY slices">Z</button></div></div>
                     </div>
-                    <canvas id="sprite3dPreviewCanvas" class="sprite3d-preview-canvas" width="320" height="320" aria-label="3D sprite preview"></canvas>
-                    <div class="sprite3d-camera-controls" aria-label="3D preview camera controls">
+                    <canvas id="visual3dPreviewCanvas" class="visual3d-preview-canvas" width="320" height="320" aria-label="3D visual preview"></canvas>
+                    <div class="visual3d-camera-controls" aria-label="3D preview camera controls">
                       <label>
                         <span title="yaw">Y</span>
-                        <button id="sprite3dCameraYawScrub" class="sprite3d-camera-scrub" type="button" data-sprite3d-camera="yaw" aria-label="Adjust yaw" title="Yaw">340</button>
+                        <button id="visual3dCameraYawScrub" class="visual3d-camera-scrub" type="button" data-visual3d-camera="yaw" aria-label="Adjust yaw" title="Yaw">340</button>
                       </label>
                       <label>
                         <span title="pitch">P</span>
-                        <button id="sprite3dCameraPitchScrub" class="sprite3d-camera-scrub" type="button" data-sprite3d-camera="pitch" aria-label="Adjust pitch" title="Pitch">28</button>
+                        <button id="visual3dCameraPitchScrub" class="visual3d-camera-scrub" type="button" data-visual3d-camera="pitch" aria-label="Adjust pitch" title="Pitch">28</button>
                       </label>
                       <label>
                         <span title="zoom">Z</span>
-                        <button id="sprite3dCameraZoomScrub" class="sprite3d-camera-scrub" type="button" data-sprite3d-camera="zoom" aria-label="Adjust zoom" title="Zoom">1</button>
+                        <button id="visual3dCameraZoomScrub" class="visual3d-camera-scrub" type="button" data-visual3d-camera="zoom" aria-label="Adjust zoom" title="Zoom">1</button>
                       </label>
-                      <button id="sprite3dResetCameraButton" class="icon-button sprite3d-preview-reset-button sprite-icon-button" type="button" aria-label="Reset 3D preview camera" title="Reset camera">
+                      <button id="visual3dResetCameraButton" class="icon-button visual3d-preview-reset-button visual-icon-button" type="button" aria-label="Reset 3D preview camera" title="Reset camera">
                         <svg data-editor-icon="refresh-ccw" aria-hidden="true"></svg>
                       </button>
                     </div>
@@ -612,7 +612,7 @@
                 </div>
               </div>
             </div>
-            <span id="sprite3dActionStatus" class="sprite-action-status tool-feedback-bar" aria-live="polite"></span>
+            <span id="visual3dActionStatus" class="visual-action-status tool-feedback-bar" aria-live="polite"></span>
           </div>
           <div id="level3dBuilder" class="level-builder level3d-builder" hidden>
             <div class="tool-pane-scroll">
@@ -669,37 +669,37 @@
                         tabindex="0"
                         aria-label="3D level placement surface"
                       ></canvas>
-                      <div class="sprite3d-camera-controls level3d-preview-controls" aria-label="3D level preview controls">
+                      <div class="visual3d-camera-controls level3d-preview-controls" aria-label="3D level preview controls">
                         <label>
                           <span title="yaw">Y</span>
-                          <button id="level3dCameraYawScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="yaw" aria-label="Adjust yaw" title="Yaw">15</button>
+                          <button id="level3dCameraYawScrub" class="visual3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="yaw" aria-label="Adjust yaw" title="Yaw">15</button>
                         </label>
                         <label>
                           <span title="pitch">P</span>
-                          <button id="level3dCameraPitchScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="pitch" aria-label="Adjust pitch" title="Pitch">55</button>
+                          <button id="level3dCameraPitchScrub" class="visual3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="pitch" aria-label="Adjust pitch" title="Pitch">55</button>
                         </label>
                         <label>
                           <span title="roll">R</span>
-                          <button id="level3dCameraRollScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="roll" aria-label="Adjust roll" title="Roll">0</button>
+                          <button id="level3dCameraRollScrub" class="visual3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="roll" aria-label="Adjust roll" title="Roll">0</button>
                         </label>
                         <label>
                           <span title="zoom">Z</span>
-                          <button id="level3dCameraZoomScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="zoom" aria-label="Adjust zoom" title="Zoom">1</button>
+                          <button id="level3dCameraZoomScrub" class="visual3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="zoom" aria-label="Adjust zoom" title="Zoom">1</button>
                         </label>
                         <span class="level3d-preview-control-separator" aria-hidden="true"></span>
                         <label>
                           <span title="origin x">X</span>
-                          <button id="level3dOriginXScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="originX" aria-label="Adjust origin x" title="Origin X">0</button>
+                          <button id="level3dOriginXScrub" class="visual3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="originX" aria-label="Adjust origin x" title="Origin X">0</button>
                         </label>
                         <label>
                           <span title="origin y">Y</span>
-                          <button id="level3dOriginYScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="originY" aria-label="Adjust origin y" title="Origin Y">0</button>
+                          <button id="level3dOriginYScrub" class="visual3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="originY" aria-label="Adjust origin y" title="Origin Y">0</button>
                         </label>
                         <label>
                           <span title="origin z">Z</span>
-                          <button id="level3dOriginZScrub" class="sprite3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="originZ" aria-label="Adjust origin z" title="Origin Z">0</button>
+                          <button id="level3dOriginZScrub" class="visual3d-camera-scrub level3d-preview-scrub" type="button" data-level3d-preview="originZ" aria-label="Adjust origin z" title="Origin Z">0</button>
                         </label>
-                        <button id="level3dResetPreviewButton" class="icon-button sprite3d-preview-reset-button sprite-icon-button" type="button" aria-label="Reset view" title="Reset view">
+                        <button id="level3dResetPreviewButton" class="icon-button visual3d-preview-reset-button visual-icon-button" type="button" aria-label="Reset view" title="Reset view">
                           <svg data-editor-icon="refresh-ccw" aria-hidden="true"></svg>
                         </button>
                       </div>
@@ -710,23 +710,23 @@
               <div class="level3d-layer-editor" aria-label="Editable 3D level layer">
                 <div id="level3dLayerPalette" class="level-palette level3d-layer-palette" aria-label="Top-down 3D level palette"></div>
                 <div class="level3d-layer-frame-viewport level-board-wrap game-preview-scope">
-                  <div class="level3d-layer-toolbar sprite3d-slice-axis-control" role="group" aria-label="3D level slice controls">
-                    <span class="sprite3d-layer-axis-label">Slice</span>
-                    <button id="level3dAddSliceAboveButton" class="icon-button sprite-icon-button level3d-slice-add-button" type="button" aria-label="Add slice above current 3D level slice" title="Add slice above">
+                  <div class="level3d-layer-toolbar visual3d-slice-axis-control" role="group" aria-label="3D level slice controls">
+                    <span class="visual3d-layer-axis-label">Slice</span>
+                    <button id="level3dAddSliceAboveButton" class="icon-button visual-icon-button level3d-slice-add-button" type="button" aria-label="Add slice above current 3D level slice" title="Add slice above">
                       <span aria-hidden="true">+</span>
                     </button>
-                    <button id="level3dPreviousLayerButton" class="icon-button sprite-icon-button" type="button" aria-label="Move to lower 3D level slice" title="Lower slice">
+                    <button id="level3dPreviousLayerButton" class="icon-button visual-icon-button" type="button" aria-label="Move to lower 3D level slice" title="Lower slice">
                       <svg data-editor-icon="chevron-left" aria-hidden="true"></svg>
                     </button>
-                    <span class="sprite3d-slice-value-wrap" data-level3d-slice-scrub title="Adjust slice">
-                      <input id="level3dLayerInput" class="sprite3d-layer-axis-value" type="number" min="1" max="1" value="1" inputmode="numeric" aria-label="Current 3D level slice">
-                      <span class="sprite3d-slice-total-separator" aria-hidden="true">/</span>
-                      <span id="level3dLayerTotal" class="sprite3d-slice-total">1</span>
+                    <span class="visual3d-slice-value-wrap" data-level3d-slice-scrub title="Adjust slice">
+                      <input id="level3dLayerInput" class="visual3d-layer-axis-value" type="number" min="1" max="1" value="1" inputmode="numeric" aria-label="Current 3D level slice">
+                      <span class="visual3d-slice-total-separator" aria-hidden="true">/</span>
+                      <span id="level3dLayerTotal" class="visual3d-slice-total">1</span>
                     </span>
-                    <button id="level3dNextLayerButton" class="icon-button sprite-icon-button" type="button" aria-label="Move to higher 3D level slice" title="Higher slice">
+                    <button id="level3dNextLayerButton" class="icon-button visual-icon-button" type="button" aria-label="Move to higher 3D level slice" title="Higher slice">
                       <svg data-editor-icon="chevron-right" aria-hidden="true"></svg>
                     </button>
-                    <button id="level3dAddSliceBelowButton" class="icon-button sprite-icon-button level3d-slice-add-button" type="button" aria-label="Add slice below current 3D level slice" title="Add slice below">
+                    <button id="level3dAddSliceBelowButton" class="icon-button visual-icon-button level3d-slice-add-button" type="button" aria-label="Add slice below current 3D level slice" title="Add slice below">
                       <span aria-hidden="true">+</span>
                     </button>
                   </div>
@@ -756,11 +756,11 @@
                 </div>
               </div>
               <div class="level3d-source-panel">
-                <pre id="level3dSourcePreview" class="sprite-text-preview level3d-source-preview" aria-label="3D level source preview"></pre>
+                <pre id="level3dSourcePreview" class="visual-text-preview level3d-source-preview" aria-label="3D level source preview"></pre>
               </div>
               </div>
             </div>
-            <span id="level3dActionStatus" class="sprite-action-status tool-feedback-bar" aria-live="polite"></span>
+            <span id="level3dActionStatus" class="visual-action-status tool-feedback-bar" aria-live="polite"></span>
           </div>
           <div id="soundsBuilder" class="sounds-builder" hidden>
             <section id="soundsSfxPanel" class="sounds-panel sounds-section" aria-label="SFX generator">
@@ -887,6 +887,7 @@
     </main>
 
     <script src="editor_icons.js"></script>
+    <script src="visual_tween_core.js"></script>
     <script src="renderer.js?v=board-canvas-visuals"></script>
     <script src="sound-generator.js"></script>
     <script src="editor_codemirror.js"></script>
@@ -899,9 +900,9 @@
     <script src="editor_workbench.js"></script>
     <script src="editor_import_export.js?v=import-export-api"></script>
     <script src="editor.js?v=import-export-api"></script>
-    <script src="editor_sprite_document.js"></script>
-    <script src="editor_sprite.js"></script>
-    <script src="editor_sprite3d.js?v=sprite3d-preview-base-zoom"></script>
+    <script src="editor_visual_document.js"></script>
+    <script src="editor_visual.js"></script>
+    <script src="editor_visual3d.js?v=visual3d-preview-base-zoom"></script>
     <script src="editor_sounds.js"></script>
     <script src="editor_commands.js"></script>
   </body>

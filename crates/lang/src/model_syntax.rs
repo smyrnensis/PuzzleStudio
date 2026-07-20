@@ -63,7 +63,14 @@ pub(crate) struct PuzzleBodySyntax {
     pub(crate) screen: crate::PuzzleScreenDef,
     pub(crate) run_rules_on_level_start: bool,
     pub(crate) empty_char: Option<char>,
-    pub(crate) sprite_resources: Vec<PuzzleEntrySyntax>,
+    pub(crate) visual_resources: Vec<PuzzleEntrySyntax>,
+}
+
+struct ParsedPuzzleBodySyntax {
+    catalog_entries: Vec<PuzzleEntrySyntax>,
+    body: PuzzleBodySyntax,
+    dimension: Option<ModelDimension>,
+    diagnostics: Vec<DiagnosticReport>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -286,26 +293,15 @@ pub(crate) fn parse_puzzle_models_from_document_entries(
             if let Err(report) = validate_closed_entries(&all_entries, "puzzle") {
                 model_diagnostics.push(report);
             }
-            let diagnostic_recovery_entries = all_entries.clone();
-            let (catalog_entries, body, dimension) =
-                match parse_model_body_syntax(all_entries, declaration.name) {
-                    Ok(product) => product,
-                    Err(report) => {
-                        model_diagnostics.push(report);
-                        let catalog_entries = diagnostic_recovery_entries
-                            .into_iter()
-                            .filter(|entry| entry.directive.is_catalog_owned())
-                            .collect();
-                        (catalog_entries, PuzzleBodySyntax::default(), None)
-                    }
-                };
+            let parsed_body = parse_model_body_syntax(all_entries, declaration.name);
+            model_diagnostics.extend(parsed_body.diagnostics);
 
             models.push(PuzzleModelSyntax {
                 name: declaration.name.to_string(),
-                dimension: dimension.unwrap_or_default(),
-                dimension_is_explicit: dimension.is_some(),
-                catalog_entries,
-                body,
+                dimension: parsed_body.dimension.unwrap_or_default(),
+                dimension_is_explicit: parsed_body.dimension.is_some(),
+                catalog_entries: parsed_body.catalog_entries,
+                body: parsed_body.body,
                 diagnostics: model_diagnostics,
                 source_line: line.text.clone(),
                 source_line_number: line.line,
@@ -328,7 +324,7 @@ fn validate_document_entry(entry: &PuzzleEntrySyntax) -> Result<(), DiagnosticRe
         | Directive::Legend
         | Directive::Levels
         | Directive::Level
-        | Directive::Sprites
+        | Directive::Visuals
         | Directive::Scene => Ok(()),
         Directive::Model => {
             let tokens = crate::split_header_tokens(&entry.header.text);
@@ -395,17 +391,11 @@ fn unknown_top_level_entry(entry: &PuzzleEntrySyntax) -> DiagnosticReport {
 fn parse_model_body_syntax(
     entries: Vec<PuzzleEntrySyntax>,
     puzzle_name: &str,
-) -> Result<
-    (
-        Vec<PuzzleEntrySyntax>,
-        PuzzleBodySyntax,
-        Option<ModelDimension>,
-    ),
-    DiagnosticReport,
-> {
+) -> ParsedPuzzleBodySyntax {
     let mut catalog_entries = Vec::new();
     let mut body = PuzzleBodySyntax::default();
     let mut dimension = None;
+    let mut diagnostics = Vec::new();
     let mut query_names = std::collections::HashSet::new();
     let mut routine_names = std::collections::HashSet::new();
     let mut variable_names = std::collections::HashSet::new();
@@ -416,305 +406,307 @@ fn parse_model_body_syntax(
             continue;
         }
         body.semantics.merge(entry.semantics.clone());
-        match entry.directive {
-            puzzle_authoring::PuzzleDirectiveSurface::Dimension => {
-                if dimension.is_some() {
-                    return Err(error_at("duplicate puzzle dimension", &entry.header));
-                }
-                let Some((name, value)) =
-                    puzzle_authoring::parse_assignment_row(&entry.header.text)
-                else {
-                    return Err(error_at(
-                        "puzzle dimension must be `dimension = 2` or `dimension = 3`",
-                        &entry.header,
-                    ));
-                };
-                if name != "dimension" || !entry.body.is_empty() {
-                    return Err(error_at(
-                        "puzzle dimension must be `dimension = 2` or `dimension = 3`",
-                        &entry.header,
-                    ));
-                }
-                dimension = Some(match value.trim() {
-                    "2" => ModelDimension::Two,
-                    "3" => ModelDimension::Three,
-                    _ => {
+        let result = (|| -> Result<(), DiagnosticReport> {
+            match entry.directive {
+                puzzle_authoring::PuzzleDirectiveSurface::Dimension => {
+                    if dimension.is_some() {
+                        return Err(error_at("duplicate puzzle dimension", &entry.header));
+                    }
+                    let Some((name, value)) =
+                        puzzle_authoring::parse_assignment_row(&entry.header.text)
+                    else {
+                        return Err(error_at(
+                            "puzzle dimension must be `dimension = 2` or `dimension = 3`",
+                            &entry.header,
+                        ));
+                    };
+                    if name != "dimension" || !entry.body.is_empty() {
                         return Err(error_at(
                             "puzzle dimension must be `dimension = 2` or `dimension = 3`",
                             &entry.header,
                         ));
                     }
-                });
-            }
-            puzzle_authoring::PuzzleDirectiveSurface::Variable => {
-                let declaration = parse_variable_declaration(&entry)?;
-                if !variable_names.insert(declaration.name.clone()) {
-                    return Err(error_at("duplicate var or const", &entry.header));
-                }
-                body.variables.push(declaration);
-            }
-            puzzle_authoring::PuzzleDirectiveSurface::Assignment => {
-                let condition = parse_named_condition(&entry)?;
-                if !named_condition_names.insert(condition.name.clone()) {
-                    return Err(error_at("duplicate condition", &entry.header));
-                }
-                body.named_conditions.push(condition);
-            }
-            puzzle_authoring::PuzzleDirectiveSurface::RunRulesOnLevelStart => {
-                if crate::split_header_tokens(&entry.header.text).as_slice()
-                    != ["run_rules_on_level_start"]
-                {
-                    return Err(error_at(
-                        "run_rules_on_level_start takes no values",
-                        &entry.header,
-                    ));
-                }
-                body.run_rules_on_level_start = true;
-            }
-            puzzle_authoring::PuzzleDirectiveSurface::EmptyCell => {
-                let tokens = crate::split_header_tokens(&entry.header.text);
-                let ["empty", value] = tokens.as_slice() else {
-                    return Err(error_at("missing empty char", &entry.header));
-                };
-                let mut chars = value.chars();
-                let Some(character) = chars.next() else {
-                    return Err(error_at("missing empty char", &entry.header));
-                };
-                if chars.next().is_some() {
-                    return Err(error_at("expected single character", &entry.header));
-                }
-                if character != crate::syntax::DEFAULT_LEVEL_EMPTY_CHAR {
-                    return Err(error_at("levels use `.` for empty", &entry.header));
-                }
-                body.empty_char = Some(character);
-            }
-            puzzle_authoring::PuzzleDirectiveSurface::Input => {
-                body.inputs.push(parse_input_declaration(&entry)?);
-            }
-            puzzle_authoring::PuzzleDirectiveSurface::Direction => {
-                body.direction_aliases.push(parse_direction_alias(&entry)?);
-            }
-            puzzle_authoring::PuzzleDirectiveSurface::RenderOverlay => {
-                body.render_overlays
-                    .push(parse_render_overlay_syntax(&entry)?);
-            }
-            puzzle_authoring::PuzzleDirectiveSurface::LoseConditions => {
-                if !entry.header.text.trim_end().ends_with('{') {
-                    return Err(error_at("lose_conditions must be a block", &entry.header));
-                }
-                set_once(
-                    &mut body.lose_conditions,
-                    WinConditionsSyntax {
-                        semantics: win_condition_semantics(&entry.header, &entry.body),
-                        header: entry.header.clone(),
-                        rows: entry.body,
-                    },
-                    "duplicate lose_conditions block",
-                    &entry.header,
-                )?;
-            }
-            puzzle_authoring::PuzzleDirectiveSurface::DocumentShell
-                if entry.header.text.starts_with("sounds") =>
-            {
-                parse_model_sounds_syntax(&entry, &mut body.sounds)?;
-            }
-            puzzle_authoring::PuzzleDirectiveSurface::PuzzleScreen => {
-                if !entry.header.text.trim_end().ends_with('{') {
-                    return Err(error_at("puzzle screen must be a block", &entry.header));
-                }
-                for line in &entry.body {
-                    crate::parse_puzzle_screen_directive(line, &mut body.screen)?;
-                }
-                crate::validate_puzzle_screen(&body.screen, &entry.header)?;
-            }
-            puzzle_authoring::PuzzleDirectiveSurface::PuzzleScreenDirective => {
-                crate::parse_puzzle_screen_directive(&entry.header, &mut body.screen)?;
-            }
-            puzzle_authoring::PuzzleDirectiveSurface::Sprites => {
-                body.sprite_resources.push(entry);
-            }
-            puzzle_authoring::PuzzleDirectiveSurface::Legend
-            | puzzle_authoring::PuzzleDirectiveSurface::Level
-            | puzzle_authoring::PuzzleDirectiveSurface::Levels => {
-                let resource = crate::parse_level_resource_entry(
-                    &entry,
-                    body.levels.levels.len(),
-                    Some(puzzle_name),
-                )?;
-                body.semantics
-                    .fixed
-                    .merge(level_resource_header_semantics(&entry.header));
-                body.levels.legends.extend(resource.legends);
-                body.levels.levels.extend(resource.levels);
-            }
-            puzzle_authoring::PuzzleDirectiveSurface::Keys if entry.header.text == "keys {" => {
-                for row in &entry.body {
-                    if row.text.ends_with('{') {
-                        return Err(error_at("keys accepts rows, not nested blocks", row));
-                    }
-                    let binding = puzzle_authoring::key_binding_surface(&row.text)
-                        .map_err(|error| error_at(error.message(), row))?;
-                    let target_tokens = crate::split_header_tokens(binding.target);
-                    let [target] = target_tokens.as_slice() else {
-                        return Err(error_at("keys row must name one input target", row));
-                    };
-                    body.keys.push(ModelKeyBindingSyntax {
-                        keys: binding.keys.into_iter().map(str::to_string).collect(),
-                        target: (*target).to_string(),
-                        source: row.clone(),
+                    dimension = Some(match value.trim() {
+                        "2" => ModelDimension::Two,
+                        "3" => ModelDimension::Three,
+                        _ => {
+                            return Err(error_at(
+                                "puzzle dimension must be `dimension = 2` or `dimension = 3`",
+                                &entry.header,
+                            ));
+                        }
                     });
                 }
-            }
-            puzzle_authoring::PuzzleDirectiveSurface::RuleProgram => {
-                let block = puzzle_authoring::rule_program_block_surface(&entry.header.text)
-                    .ok_or_else(|| error_at("invalid rule program header", &entry.header))?;
-                let parsed = puzzle_authoring::collect_rule_program_entry_body(&entry.body, block)
-                    .map_err(|error| {
-                        let source = error
-                            .line_index()
-                            .and_then(|index| entry.body.get(index))
-                            .unwrap_or(&entry.header);
-                        error_at(error.message(), source)
-                    })?;
-                match (block, parsed) {
-                    (
-                        puzzle_authoring::RuleProgramBlockSurface::Rules { modifier },
-                        puzzle_authoring::RuleProgramBlockBody::RuleStatements(statements),
-                    ) => set_rule_statements(
-                        &mut body.rules,
-                        modifier,
-                        statements,
-                        "multiple puzzle rules blocks are not supported",
-                        &entry.header,
-                    )?,
-                    (
-                        puzzle_authoring::RuleProgramBlockSurface::OnLevelStart { modifier },
-                        puzzle_authoring::RuleProgramBlockBody::RuleStatements(statements),
-                    ) => set_rule_statements(
-                        &mut body.on_level_start,
-                        modifier,
-                        statements,
-                        "multiple level_start blocks are not supported",
-                        &entry.header,
-                    )?,
-                    (
-                        puzzle_authoring::RuleProgramBlockSurface::OnLevelClear,
-                        puzzle_authoring::RuleProgramBlockBody::RuleStatements(statements),
-                    ) => set_rule_statements(
-                        &mut body.on_level_clear,
-                        "",
-                        statements,
-                        "multiple level_clear blocks are not supported",
-                        &entry.header,
-                    )?,
-                    (
-                        puzzle_authoring::RuleProgramBlockSurface::OnLastLevelClear,
-                        puzzle_authoring::RuleProgramBlockBody::RuleStatements(statements),
-                    ) => set_rule_statements(
-                        &mut body.on_last_level_clear,
-                        "",
-                        statements,
-                        "multiple last_level_clear blocks are not supported",
-                        &entry.header,
-                    )?,
+                puzzle_authoring::PuzzleDirectiveSurface::Variable => {
+                    let declaration = parse_variable_declaration(&entry)?;
+                    if !variable_names.insert(declaration.name.clone()) {
+                        return Err(error_at("duplicate var or const", &entry.header));
+                    }
+                    body.variables.push(declaration);
                 }
-            }
-            puzzle_authoring::PuzzleDirectiveSurface::WinConditions
-                if entry.header.text.trim_end().ends_with('{') =>
-            {
-                set_once(
-                    &mut body.win_conditions,
-                    WinConditionsSyntax {
-                        semantics: win_condition_semantics(&entry.header, &entry.body),
-                        header: entry.header.clone(),
-                        rows: entry.body,
-                    },
-                    "duplicate win_conditions block",
-                    &entry.header,
-                )?;
-            }
-            puzzle_authoring::PuzzleDirectiveSurface::WinConditions => {
-                let condition = parse_named_condition(&entry)?;
-                if !named_condition_names.insert(condition.name.clone()) {
-                    return Err(error_at("duplicate condition", &entry.header));
+                puzzle_authoring::PuzzleDirectiveSurface::Assignment => {
+                    let condition = parse_named_condition(&entry)?;
+                    if !named_condition_names.insert(condition.name.clone()) {
+                        return Err(error_at("duplicate condition", &entry.header));
+                    }
+                    body.named_conditions.push(condition);
                 }
-                body.named_conditions.push(condition);
-            }
-            puzzle_authoring::PuzzleDirectiveSurface::Query => {
-                let query = crate::solver_surface::parse_query_definition(&entry.header.text)
-                    .map_err(|error| error_at(error.to_string(), &entry.header))?;
-                if !query_names.insert(query.name.clone()) {
-                    return Err(error_at("duplicate query", &entry.header));
+                puzzle_authoring::PuzzleDirectiveSurface::RunRulesOnLevelStart => {
+                    if crate::split_header_tokens(&entry.header.text).as_slice()
+                        != ["run_rules_on_level_start"]
+                    {
+                        return Err(error_at(
+                            "run_rules_on_level_start takes no values",
+                            &entry.header,
+                        ));
+                    }
+                    body.run_rules_on_level_start = true;
                 }
-                body.queries.push(QueryDefinitionSyntax {
-                    source: entry.header,
-                    definition: query,
-                });
-            }
-            puzzle_authoring::PuzzleDirectiveSurface::Solver => {
-                let lines = entry
-                    .body
-                    .iter()
-                    .map(|line| line.text.clone())
-                    .collect::<Vec<_>>();
-                let solver = crate::solver_surface::parse_solver_entry_body(&lines)
-                    .map_err(|error| error_at(error.to_string(), &entry.header))?;
-                set_once(
-                    &mut body.solver,
-                    solver,
-                    "duplicate solver block",
-                    &entry.header,
-                )?;
-            }
-            puzzle_authoring::PuzzleDirectiveSurface::Render => {
-                let mut lines = Vec::with_capacity(entry.body.len() + 2);
-                lines.push(entry.header.clone());
-                lines.extend(entry.body.iter().cloned());
-                lines.push(LogicalLine::new("}", entry.header.line));
-                let (render, next) = crate::authoring_grammar::parse_placed_authoring_node(
-                    &lines,
-                    0,
-                    crate::authoring_grammar::AuthoringKind::Root,
-                    "render block missing closing brace",
-                )?;
-                if next != lines.len() {
-                    return Err(error_at(
-                        "render block was not fully consumed",
+                puzzle_authoring::PuzzleDirectiveSurface::EmptyCell => {
+                    let tokens = crate::split_header_tokens(&entry.header.text);
+                    let ["empty", value] = tokens.as_slice() else {
+                        return Err(error_at("missing empty char", &entry.header));
+                    };
+                    let mut chars = value.chars();
+                    let Some(character) = chars.next() else {
+                        return Err(error_at("missing empty char", &entry.header));
+                    };
+                    if chars.next().is_some() {
+                        return Err(error_at("expected single character", &entry.header));
+                    }
+                    if character != crate::syntax::DEFAULT_LEVEL_EMPTY_CHAR {
+                        return Err(error_at("levels use `.` for empty", &entry.header));
+                    }
+                    body.empty_char = Some(character);
+                }
+                puzzle_authoring::PuzzleDirectiveSurface::Input => {
+                    body.inputs.push(parse_input_declaration(&entry)?);
+                }
+                puzzle_authoring::PuzzleDirectiveSurface::Direction => {
+                    body.direction_aliases.push(parse_direction_alias(&entry)?);
+                }
+                puzzle_authoring::PuzzleDirectiveSurface::RenderOverlay => {
+                    body.render_overlays
+                        .push(parse_render_overlay_syntax(&entry)?);
+                }
+                puzzle_authoring::PuzzleDirectiveSurface::LoseConditions => {
+                    if !entry.header.text.trim_end().ends_with('{') {
+                        return Err(error_at("lose_conditions must be a block", &entry.header));
+                    }
+                    set_once(
+                        &mut body.lose_conditions,
+                        WinConditionsSyntax {
+                            semantics: win_condition_semantics(&entry.header, &entry.body),
+                            header: entry.header.clone(),
+                            rows: entry.body,
+                        },
+                        "duplicate lose_conditions block",
                         &entry.header,
-                    ));
+                    )?;
                 }
-                let (render, animation) = crate::lower_puzzle_render_node(&render)?;
-                set_once(
-                    &mut body.render,
-                    PuzzleRenderProduct { render, animation },
-                    "duplicate render block",
-                    &entry.header,
-                )?;
-            }
-            puzzle_authoring::PuzzleDirectiveSurface::Routine => {
-                let parsed = puzzle_authoring::collect_rule_program_entry_body(
-                    &entry.body,
-                    puzzle_authoring::RuleProgramBlockSurface::Rules { modifier: "" },
-                )
-                .map_err(|error| error_at(error.message(), &entry.header))?;
-                let puzzle_authoring::RuleProgramBlockBody::RuleStatements(statements) = parsed;
-                let semantics = rule_program_semantics(&entry.header, &statements, true);
-                let statement_text = entry
-                    .header
-                    .text
-                    .strip_suffix('{')
-                    .unwrap_or(&entry.header.text)
-                    .trim_end()
-                    .to_string();
-                let statement = puzzle_authoring::RuleStatementSyntax::new_block(
-                    entry.header,
-                    statement_text,
-                    statements,
-                );
-                let name = match statement.tokens() {
-                    [keyword, name] if keyword == "routine" => name.clone(),
-                    [keyword, name, application] if keyword == "routine" => {
-                        puzzle_authoring::rule_application_surface(application).ok_or_else(
+                puzzle_authoring::PuzzleDirectiveSurface::DocumentShell
+                    if entry.header.text.starts_with("sounds") =>
+                {
+                    parse_model_sounds_syntax(&entry, &mut body.sounds)?;
+                }
+                puzzle_authoring::PuzzleDirectiveSurface::PuzzleScreen => {
+                    if !entry.header.text.trim_end().ends_with('{') {
+                        return Err(error_at("puzzle screen must be a block", &entry.header));
+                    }
+                    for line in &entry.body {
+                        crate::parse_puzzle_screen_directive(line, &mut body.screen)?;
+                    }
+                    crate::validate_puzzle_screen(&body.screen, &entry.header)?;
+                }
+                puzzle_authoring::PuzzleDirectiveSurface::PuzzleScreenDirective => {
+                    crate::parse_puzzle_screen_directive(&entry.header, &mut body.screen)?;
+                }
+                puzzle_authoring::PuzzleDirectiveSurface::Visuals => {
+                    body.visual_resources.push(entry);
+                }
+                puzzle_authoring::PuzzleDirectiveSurface::Legend
+                | puzzle_authoring::PuzzleDirectiveSurface::Level
+                | puzzle_authoring::PuzzleDirectiveSurface::Levels => {
+                    let resource = crate::parse_level_resource_entry(
+                        &entry,
+                        body.levels.levels.len(),
+                        Some(puzzle_name),
+                    )?;
+                    body.semantics
+                        .fixed
+                        .merge(level_resource_header_semantics(&entry.header));
+                    body.levels.legends.extend(resource.legends);
+                    body.levels.levels.extend(resource.levels);
+                }
+                puzzle_authoring::PuzzleDirectiveSurface::Keys if entry.header.text == "keys {" => {
+                    for row in &entry.body {
+                        if row.text.ends_with('{') {
+                            return Err(error_at("keys accepts rows, not nested blocks", row));
+                        }
+                        let binding = puzzle_authoring::key_binding_surface(&row.text)
+                            .map_err(|error| error_at(error.message(), row))?;
+                        let target_tokens = crate::split_header_tokens(binding.target);
+                        let [target] = target_tokens.as_slice() else {
+                            return Err(error_at("keys row must name one input target", row));
+                        };
+                        body.keys.push(ModelKeyBindingSyntax {
+                            keys: binding.keys.into_iter().map(str::to_string).collect(),
+                            target: (*target).to_string(),
+                            source: row.clone(),
+                        });
+                    }
+                }
+                puzzle_authoring::PuzzleDirectiveSurface::RuleProgram => {
+                    let block = puzzle_authoring::rule_program_block_surface(&entry.header.text)
+                        .ok_or_else(|| error_at("invalid rule program header", &entry.header))?;
+                    let parsed =
+                        puzzle_authoring::collect_rule_program_entry_body(&entry.body, block)
+                            .map_err(|error| {
+                                let source = error
+                                    .line_index()
+                                    .and_then(|index| entry.body.get(index))
+                                    .unwrap_or(&entry.header);
+                                error_at(error.message(), source)
+                            })?;
+                    match (block, parsed) {
+                        (
+                            puzzle_authoring::RuleProgramBlockSurface::Rules { modifier },
+                            puzzle_authoring::RuleProgramBlockBody::RuleStatements(statements),
+                        ) => set_rule_statements(
+                            &mut body.rules,
+                            modifier,
+                            statements,
+                            "multiple puzzle rules blocks are not supported",
+                            &entry.header,
+                        )?,
+                        (
+                            puzzle_authoring::RuleProgramBlockSurface::OnLevelStart { modifier },
+                            puzzle_authoring::RuleProgramBlockBody::RuleStatements(statements),
+                        ) => set_rule_statements(
+                            &mut body.on_level_start,
+                            modifier,
+                            statements,
+                            "multiple level_start blocks are not supported",
+                            &entry.header,
+                        )?,
+                        (
+                            puzzle_authoring::RuleProgramBlockSurface::OnLevelClear,
+                            puzzle_authoring::RuleProgramBlockBody::RuleStatements(statements),
+                        ) => set_rule_statements(
+                            &mut body.on_level_clear,
+                            "",
+                            statements,
+                            "multiple level_clear blocks are not supported",
+                            &entry.header,
+                        )?,
+                        (
+                            puzzle_authoring::RuleProgramBlockSurface::OnLastLevelClear,
+                            puzzle_authoring::RuleProgramBlockBody::RuleStatements(statements),
+                        ) => set_rule_statements(
+                            &mut body.on_last_level_clear,
+                            "",
+                            statements,
+                            "multiple last_level_clear blocks are not supported",
+                            &entry.header,
+                        )?,
+                    }
+                }
+                puzzle_authoring::PuzzleDirectiveSurface::WinConditions
+                    if entry.header.text.trim_end().ends_with('{') =>
+                {
+                    set_once(
+                        &mut body.win_conditions,
+                        WinConditionsSyntax {
+                            semantics: win_condition_semantics(&entry.header, &entry.body),
+                            header: entry.header.clone(),
+                            rows: entry.body,
+                        },
+                        "duplicate win_conditions block",
+                        &entry.header,
+                    )?;
+                }
+                puzzle_authoring::PuzzleDirectiveSurface::WinConditions => {
+                    let condition = parse_named_condition(&entry)?;
+                    if !named_condition_names.insert(condition.name.clone()) {
+                        return Err(error_at("duplicate condition", &entry.header));
+                    }
+                    body.named_conditions.push(condition);
+                }
+                puzzle_authoring::PuzzleDirectiveSurface::Query => {
+                    let query = crate::solver_surface::parse_query_definition(&entry.header.text)
+                        .map_err(|error| error_at(error.to_string(), &entry.header))?;
+                    if !query_names.insert(query.name.clone()) {
+                        return Err(error_at("duplicate query", &entry.header));
+                    }
+                    body.queries.push(QueryDefinitionSyntax {
+                        source: entry.header,
+                        definition: query,
+                    });
+                }
+                puzzle_authoring::PuzzleDirectiveSurface::Solver => {
+                    let lines = entry
+                        .body
+                        .iter()
+                        .map(|line| line.text.clone())
+                        .collect::<Vec<_>>();
+                    let solver = crate::solver_surface::parse_solver_entry_body(&lines)
+                        .map_err(|error| error_at(error.to_string(), &entry.header))?;
+                    set_once(
+                        &mut body.solver,
+                        solver,
+                        "duplicate solver block",
+                        &entry.header,
+                    )?;
+                }
+                puzzle_authoring::PuzzleDirectiveSurface::Render => {
+                    let mut lines = Vec::with_capacity(entry.body.len() + 2);
+                    lines.push(entry.header.clone());
+                    lines.extend(entry.body.iter().cloned());
+                    lines.push(LogicalLine::new("}", entry.header.line));
+                    let (render, next) = crate::authoring_grammar::parse_placed_authoring_node(
+                        &lines,
+                        0,
+                        crate::authoring_grammar::AuthoringKind::Root,
+                        "render block missing closing brace",
+                    )?;
+                    if next != lines.len() {
+                        return Err(error_at(
+                            "render block was not fully consumed",
+                            &entry.header,
+                        ));
+                    }
+                    let (render, animation) = crate::lower_puzzle_render_node(&render)?;
+                    set_once(
+                        &mut body.render,
+                        PuzzleRenderProduct { render, animation },
+                        "duplicate render block",
+                        &entry.header,
+                    )?;
+                }
+                puzzle_authoring::PuzzleDirectiveSurface::Routine => {
+                    let parsed = puzzle_authoring::collect_rule_program_entry_body(
+                        &entry.body,
+                        puzzle_authoring::RuleProgramBlockSurface::Rules { modifier: "" },
+                    )
+                    .map_err(|error| error_at(error.message(), &entry.header))?;
+                    let puzzle_authoring::RuleProgramBlockBody::RuleStatements(statements) = parsed;
+                    let semantics = rule_program_semantics(&entry.header, &statements, true);
+                    let statement_text = entry
+                        .header
+                        .text
+                        .strip_suffix('{')
+                        .unwrap_or(&entry.header.text)
+                        .trim_end()
+                        .to_string();
+                    let statement = puzzle_authoring::RuleStatementSyntax::new_block(
+                        entry.header,
+                        statement_text,
+                        statements,
+                    );
+                    let name = match statement.tokens() {
+                        [keyword, name] if keyword == "routine" => name.clone(),
+                        [keyword, name, application] if keyword == "routine" => {
+                            puzzle_authoring::rule_application_surface(application).ok_or_else(
                             || {
                                 error_at(
                                     "routine application must be once, once_all, once_per_level, random, or repeat",
@@ -722,83 +714,93 @@ fn parse_model_body_syntax(
                                 )
                             },
                         )?;
-                        name.clone()
+                            name.clone()
+                        }
+                        _ => {
+                            return Err(error_at(
+                                "routine header must be: routine <name> [once | once_all | once_per_level | random | repeat]",
+                                statement.source(),
+                            ));
+                        }
+                    };
+                    if !routine_names.insert(name.clone()) {
+                        return Err(error_at("duplicate routine definition", statement.source()));
                     }
-                    _ => {
-                        return Err(error_at(
-                            "routine header must be: routine <name> [once | once_all | once_per_level | random | repeat]",
-                            statement.source(),
-                        ));
-                    }
-                };
-                if !routine_names.insert(name.clone()) {
-                    return Err(error_at("duplicate routine definition", statement.source()));
+                    body.routines.push(RuleRoutineSyntax {
+                        statement,
+                        semantics,
+                    });
                 }
-                body.routines.push(RuleRoutineSyntax {
-                    statement,
-                    semantics,
-                });
+                puzzle_authoring::PuzzleDirectiveSurface::CollisionLayers => {
+                    return Err(error_at(
+                        "`collision_layers` was removed; use `slots { ... }`",
+                        &entry.header,
+                    ));
+                }
+                puzzle_authoring::PuzzleDirectiveSurface::Inputs => {
+                    return Err(error_at(
+                        "`inputs { ... }` was removed; use `keys { <key...> -> <input> }`",
+                        &entry.header,
+                    ));
+                }
+                puzzle_authoring::PuzzleDirectiveSurface::RemovedVariable => {
+                    return Err(error_at("`variable` was removed; use `var`", &entry.header));
+                }
+                puzzle_authoring::PuzzleDirectiveSurface::RemovedCondition => {
+                    return Err(error_at(
+                        "`condition` declarations were removed; use `query`",
+                        &entry.header,
+                    ));
+                }
+                puzzle_authoring::PuzzleDirectiveSurface::RemovedEffect => {
+                    return Err(error_at(
+                        "effect definitions are obsolete; use routine",
+                        &entry.header,
+                    ));
+                }
+                puzzle_authoring::PuzzleDirectiveSurface::SingularGroup => {
+                    let message = if crate::split_header_tokens(&entry.header.text).len() == 1 {
+                        "`group { ... }` was removed; use `groups { ... }`"
+                    } else {
+                        "`group <name> = ...` was removed; use `groups { <name> = ... }`"
+                    };
+                    return Err(error_at(message, &entry.header));
+                }
+                puzzle_authoring::PuzzleDirectiveSurface::RemovedFrameScreen => {
+                    return Err(error_at(
+                        "`frame_*` screen directives were removed; use `flickscreen`, `zoomscreen`, or `screen_focus`",
+                        &entry.header,
+                    ));
+                }
+                puzzle_authoring::PuzzleDirectiveSurface::RemovedRule => {
+                    return Err(error_at("`rule` was removed; use `routine`", &entry.header));
+                }
+                puzzle_authoring::PuzzleDirectiveSurface::RemovedMain => {
+                    return Err(error_at("`main` was removed; use `rules`", &entry.header));
+                }
+                other => {
+                    let directive = crate::split_header_tokens(&entry.header.text)
+                        .first()
+                        .copied()
+                        .unwrap_or("");
+                    return Err(error_at(
+                        format!("unknown puzzle directive {directive} ({other:?})"),
+                        &entry.header,
+                    ));
+                }
             }
-            puzzle_authoring::PuzzleDirectiveSurface::CollisionLayers => {
-                return Err(error_at(
-                    "`collision_layers` was removed; use `slots { ... }`",
-                    &entry.header,
-                ));
-            }
-            puzzle_authoring::PuzzleDirectiveSurface::Inputs => {
-                return Err(error_at(
-                    "`inputs { ... }` was removed; use `keys { <key...> -> <input> }`",
-                    &entry.header,
-                ));
-            }
-            puzzle_authoring::PuzzleDirectiveSurface::RemovedVariable => {
-                return Err(error_at("`variable` was removed; use `var`", &entry.header));
-            }
-            puzzle_authoring::PuzzleDirectiveSurface::RemovedCondition => {
-                return Err(error_at(
-                    "`condition` declarations were removed; use `query`",
-                    &entry.header,
-                ));
-            }
-            puzzle_authoring::PuzzleDirectiveSurface::RemovedEffect => {
-                return Err(error_at(
-                    "effect definitions are obsolete; use routine",
-                    &entry.header,
-                ));
-            }
-            puzzle_authoring::PuzzleDirectiveSurface::SingularGroup => {
-                let message = if crate::split_header_tokens(&entry.header.text).len() == 1 {
-                    "`group { ... }` was removed; use `groups { ... }`"
-                } else {
-                    "`group <name> = ...` was removed; use `groups { <name> = ... }`"
-                };
-                return Err(error_at(message, &entry.header));
-            }
-            puzzle_authoring::PuzzleDirectiveSurface::RemovedFrameScreen => {
-                return Err(error_at(
-                    "`frame_*` screen directives were removed; use `flickscreen`, `zoomscreen`, or `screen_focus`",
-                    &entry.header,
-                ));
-            }
-            puzzle_authoring::PuzzleDirectiveSurface::RemovedRule => {
-                return Err(error_at("`rule` was removed; use `routine`", &entry.header));
-            }
-            puzzle_authoring::PuzzleDirectiveSurface::RemovedMain => {
-                return Err(error_at("`main` was removed; use `rules`", &entry.header));
-            }
-            other => {
-                let directive = crate::split_header_tokens(&entry.header.text)
-                    .first()
-                    .copied()
-                    .unwrap_or("");
-                return Err(error_at(
-                    format!("unknown puzzle directive {directive} ({other:?})"),
-                    &entry.header,
-                ));
-            }
+            Ok(())
+        })();
+        if let Err(report) = result {
+            diagnostics.push(report);
         }
     }
-    Ok((catalog_entries, body, dimension))
+    ParsedPuzzleBodySyntax {
+        catalog_entries,
+        body,
+        dimension,
+        diagnostics,
+    }
 }
 
 fn parse_variable_declaration(
@@ -1374,13 +1376,18 @@ fn associate_model_resources(
             puzzle_authoring::PuzzleDirectiveSurface::Legend => "legend",
             puzzle_authoring::PuzzleDirectiveSurface::Level => "level",
             puzzle_authoring::PuzzleDirectiveSurface::Levels => "levels",
-            puzzle_authoring::PuzzleDirectiveSurface::Sprites => "sprites",
+            puzzle_authoring::PuzzleDirectiveSurface::Visuals => entry
+                .header
+                .tokens
+                .first()
+                .map(|token| token.text.as_str())
+                .unwrap_or("visuals"),
             _ => continue,
         };
         let owner = if matches!(
             entry.directive,
             puzzle_authoring::PuzzleDirectiveSurface::Levels
-                | puzzle_authoring::PuzzleDirectiveSurface::Sprites
+                | puzzle_authoring::PuzzleDirectiveSurface::Visuals
         ) {
             puzzle_authoring::resource_header_surface(&entry.header.text, keyword)
                 .map_err(|error| error_at(error.message(), &entry.header))?
@@ -1432,9 +1439,9 @@ fn associate_model_resources(
                     .levels
                     .extend(resource.levels);
             }
-            puzzle_authoring::PuzzleDirectiveSurface::Sprites => models[model_index]
+            puzzle_authoring::PuzzleDirectiveSurface::Visuals => models[model_index]
                 .body
-                .sprite_resources
+                .visual_resources
                 .push(entry.clone()),
             _ => unreachable!("resource entries were selected above"),
         }
@@ -1551,7 +1558,7 @@ fn entry_semantic_syntax(
                 SurfaceSemanticKind::State,
             );
         }
-        puzzle_authoring::PuzzleDirectiveSurface::Sprites => {
+        puzzle_authoring::PuzzleDirectiveSurface::Visuals => {
             mark_resource_header_semantics(
                 &mut semantics.fixed,
                 header,
@@ -1999,6 +2006,45 @@ rules {
     }
 
     #[test]
+    fn model_recovery_preserves_valid_siblings_and_dimension_after_local_error() {
+        let source = r#"
+puzzle space {
+dimension = 3
+unknown directive
+rules {
+}
+level "kept" {
+.
+}
+}
+"#;
+        let lines = crate::source::logical_lines_with_locations(source).unwrap();
+        let entries = parse_document_entries(&lines).unwrap();
+        let models = parse_puzzle_models_from_document_entries(&entries).unwrap();
+
+        let [model] = models.as_slice() else {
+            panic!("expected one recovered model")
+        };
+        assert_eq!(model.dimension, ModelDimension::Three);
+        assert!(model.dimension_is_explicit);
+        assert!(model.body.rules.is_some());
+        assert_eq!(model.body.levels.levels.len(), 1);
+        assert_eq!(model.body.levels.levels[0].name, "kept");
+        assert!(
+            validate_puzzle_model_diagnostics(&models)
+                .unwrap_err()
+                .to_string()
+                .contains("unknown puzzle directive unknown")
+        );
+        assert!(
+            parse(source)
+                .unwrap_err()
+                .to_string()
+                .contains("unknown puzzle directive unknown")
+        );
+    }
+
+    #[test]
     fn model_owner_contains_nested_2d_blocks() {
         let models = parse(
             r#"
@@ -2046,7 +2092,7 @@ level "empty" {
 .
 }
 }
-sprites art of space {
+visuals art of space {
 }
 "#,
         )
@@ -2057,6 +2103,6 @@ sprites art of space {
         };
         assert_eq!(model.catalog_entries.len(), 2);
         assert_eq!(model.body.levels.levels.len(), 1);
-        assert_eq!(model.body.sprite_resources.len(), 1);
+        assert_eq!(model.body.visual_resources.len(), 1);
     }
 }

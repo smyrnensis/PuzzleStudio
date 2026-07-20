@@ -25,6 +25,6 @@ goto playing
 Use target-qualified commands such as `playing.restart` or `board.restart` when a command should operate on a specific target.
 
 Use `choice` for items owned by the standard selection cursor and `button` for
-auxiliary click/tap or explicitly keyed actions. A `level_menu { ... }`
-component owns level-list cursor movement and selection; generic `for` and
-`column` blocks do not become menus.
+auxiliary click/tap or explicitly keyed actions. `level_menu { ... }` is
+authoring sugar for a `scroll=true` column containing a level projection made
+of ordinary choices and typed level transitions.

@@ -658,106 +658,12 @@ fn parse_scene_condition_expr(value: &str, line: &str) -> Result<SceneExpr, Diag
     parse_scene_expr(value, line)
 }
 
-fn parse_level_menu_component(
-    lines: &[source::LogicalLine],
-    start: usize,
-    recognition: &mut crate::surface::ParserRecognition,
-) -> Result<(LevelMenuDef, usize), DiagnosticReport> {
-    let next = start + 1;
-    if !lines[start].trim_end().ends_with('{') {
-        return Ok((LevelMenuDef::default(), next));
-    }
-
-    let mut menu = LevelMenuDef::default();
-    let mut i = next;
-    while i < lines.len() && !is_block_close_line(&lines[i]) {
-        let tokens = split_header_tokens(&lines[i]);
-        if matches!(tokens.as_slice(), ["button", ..]) {
-            let (button, next_i) = parse_button_def(lines, i)?;
-            recognize_scene_component_line(&lines[i], recognition);
-            recognize_scene_effect_body(lines, i + 1, next_i, recognition);
-            menu.buttons.push(button);
-            i = next_i;
-            continue;
-        }
-        let Some((name, value)) = parse_assignment_row(&lines[i]) else {
-            return Err(parse_error(
-                &lines[i],
-                "level_menu option must be: show_index = <true|false> | show_solved = <true|false> | show_current_level = <true|false> | layout = list | columns = <n> | wrap = <true|false> | locked = <disabled|hidden>",
-            ));
-        };
-        match (name, value) {
-            ("show_index", value) => menu.show_index = parse_boolean_option(value, &lines[i])?,
-            ("show_solved", value) => menu.show_cleared = parse_boolean_option(value, &lines[i])?,
-            ("show_current" | "show_current_level", _) => {
-                return Err(parse_error(
-                    &lines[i],
-                    "level_menu no longer supports show_current_level",
-                ));
-            }
-            ("layout", "list") => menu.columns = None,
-            ("columns", value) => menu.columns = Some(parse_level_menu_columns(value, &lines[i])?),
-            ("wrap", value) => menu.wrap = parse_boolean_option(value, &lines[i])?,
-            ("locked", "disabled") => menu.locked = LevelMenuLocked::Disabled,
-            ("locked", "hidden") => menu.locked = LevelMenuLocked::Hidden,
-            _ => {
-                return Err(parse_error(
-                    &lines[i],
-                    "level_menu option must be: show_index = <true|false> | show_solved = <true|false> | show_current_level = <true|false> | layout = list | columns = <n> | wrap = <true|false> | locked = <disabled|hidden>",
-                ));
-            }
-        }
-        let value_kind = match name {
-            "columns" => crate::surface::SurfaceSemanticKind::Number,
-            _ => crate::surface::SurfaceSemanticKind::Literal,
-        };
-        recognition.mark_assignment(
-            &lines[i],
-            name,
-            crate::surface::SurfaceSemanticKind::Setting,
-            value,
-            value_kind,
-        );
-        i += 1;
-    }
-    if i >= lines.len() {
-        return Err(parse_error(
-            &lines[start],
-            "level_menu missing closing brace",
-        ));
-    }
-
-    Ok((menu, i + 1))
-}
-
-pub(crate) const LEVEL_MENU_OPTIONS: &[&str] = &[
-    "show_index",
-    "show_solved",
-    "layout",
-    "columns",
-    "wrap",
-    "locked",
-];
-
 fn parse_boolean_option(value: &str, line: &str) -> Result<bool, DiagnosticReport> {
     match value {
         "true" => Ok(true),
         "false" => Ok(false),
         _ => Err(parse_error(line, "boolean option must be true or false")),
     }
-}
-
-fn parse_level_menu_columns(value: &str, line: &str) -> Result<u16, DiagnosticReport> {
-    let columns = value
-        .parse::<u16>()
-        .map_err(|_| parse_error(line, "columns must be an integer"))?;
-    if columns == 0 {
-        return Err(parse_error(
-            line,
-            "level_menu columns must be greater than 0",
-        ));
-    }
-    Ok(columns)
 }
 
 fn parse_key_trigger(token: &str, line: &str) -> Result<KeyTrigger, DiagnosticReport> {

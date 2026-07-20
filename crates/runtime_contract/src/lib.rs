@@ -118,6 +118,7 @@ pub enum SessionAction {
     NextLevel,
     PreviousLevel,
     GotoLevel { level: usize },
+    SceneEffect { effect: LifecycleCommand },
     Command { name: String },
 }
 
@@ -650,15 +651,62 @@ pub enum RuntimePatchOp {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeVisualSpace {
+    World,
+    Local,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RuntimeVisualTransform {
+    Rotate {
+        degrees: f64,
+        axis: [f64; 3],
+        space: RuntimeVisualSpace,
+    },
+    Translate {
+        value: [f64; 3],
+        space: RuntimeVisualSpace,
+    },
+    Scale {
+        value: [f64; 3],
+        space: RuntimeVisualSpace,
+    },
+    Flip {
+        enabled: bool,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeVisualState {
+    pub transforms: Vec<RuntimeVisualTransform>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opacity: Option<f64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeVisualTween {
+    pub from: RuntimeVisualState,
+    pub to: RuntimeVisualState,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RuntimeAnimationEvent {
+    Animation {
+        name: String,
+        position: RuntimeCoord,
+    },
     Move {
         name: String,
         #[serde(rename = "objectId")]
         object_id: u16,
-        #[serde(rename = "fromObject", skip_serializing_if = "Option::is_none")]
-        from_object: Option<String>,
+        #[serde(rename = "visualTween", skip_serializing_if = "Option::is_none")]
+        visual_tween: Option<RuntimeVisualTween>,
         from: RuntimeCoord,
         to: RuntimeCoord,
     },
@@ -670,7 +718,7 @@ pub enum RuntimeAnimationEvent {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimePresentationEvent {
     pub scene: String,
@@ -680,7 +728,7 @@ pub struct RuntimePresentationEvent {
     pub event: RuntimePresentationEventKind,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RuntimePresentationEventKind {
     PlaySfx { name: String },
@@ -842,6 +890,49 @@ impl std::error::Error for RuntimeJsonError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn visual_tween_contract_keeps_extensible_visual_state_endpoints() {
+        let tween = RuntimeVisualTween {
+            from: RuntimeVisualState {
+                transforms: vec![RuntimeVisualTransform::Scale {
+                    value: [1.0, 1.0, 1.0],
+                    space: RuntimeVisualSpace::Local,
+                }],
+                opacity: Some(0.0),
+            },
+            to: RuntimeVisualState {
+                transforms: vec![RuntimeVisualTransform::Scale {
+                    value: [2.0, 2.0, 1.0],
+                    space: RuntimeVisualSpace::Local,
+                }],
+                opacity: Some(1.0),
+            },
+        };
+
+        let value = serde_json::to_value(tween).unwrap();
+        assert_eq!(value["from"]["transforms"][0]["kind"], "scale");
+        assert_eq!(value["from"]["opacity"], 0.0);
+        assert_eq!(value["to"]["opacity"], 1.0);
+    }
+
+    #[test]
+    fn explicit_visual_animation_uses_the_renderer_animation_contract() {
+        let value = serde_json::to_value(RuntimeAnimationEvent::Animation {
+            name: "flash".to_string(),
+            position: RuntimeCoord {
+                x: 2,
+                y: 3,
+                z: None,
+            },
+        })
+        .unwrap();
+
+        assert_eq!(value["kind"], "animation");
+        assert_eq!(value["name"], "flash");
+        assert_eq!(value["position"]["x"], 2);
+        assert_eq!(value["position"]["y"], 3);
+    }
     use serde_json::json;
 
     #[test]
@@ -868,6 +959,27 @@ mod tests {
                 "url": "/api/input/front"
             }))
             .is_err()
+        );
+    }
+
+    #[test]
+    fn scene_effect_action_round_trips_typed_expression_without_text_conversion() {
+        let action = SessionAction::SceneEffect {
+            effect: LifecycleCommand::Goto {
+                scene: "sokoban".to_string(),
+                params: vec![puzzle_scene::SceneEffectParam::Level(
+                    puzzle_scene::SceneExpr::Path(vec!["selected_level".to_string()]),
+                )],
+            },
+        };
+
+        let value = serde_json::to_value(&action).unwrap();
+        assert_eq!(value["kind"], "scene_effect");
+        assert_eq!(value["effect"]["kind"], "goto");
+        assert_eq!(value["effect"]["params"][0]["value"]["kind"], "path");
+        assert_eq!(
+            serde_json::from_value::<SessionAction>(value).unwrap(),
+            action
         );
     }
 
@@ -934,7 +1046,7 @@ mod tests {
             animation_events: vec![RuntimeAnimationEvent::Move {
                 name: "tween".to_string(),
                 object_id: 1,
-                from_object: None,
+                visual_tween: None,
                 from: RuntimeCoord {
                     x: 0,
                     y: 0,

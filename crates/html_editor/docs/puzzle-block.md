@@ -35,7 +35,7 @@ level start
 }
 ```
 
-A puzzle usually contains layers, sprites, rules, win conditions, and levels.
+A puzzle usually contains layers, visuals, rules, win conditions, and levels.
 `rules { ... }` is the required gameplay entry point; the removed
 `transitions`, `main`, and `rule` forms are not alternatives.
 

@@ -434,7 +434,7 @@ level "level 12"
 // ######
 }
 
-sprites {
+visuals {
 
 shapes {
 Box
@@ -845,7 +845,6 @@ scene playing {
 scene level_select {
 			layout {
 				text "Select a level"
-				level_menu
 				choice "Title" -> goto title
 			}
 		keys {

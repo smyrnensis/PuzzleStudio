@@ -60,7 +60,7 @@ pub(crate) enum SemanticCompletionSlot {
     Puzzles,
     SfxAssets,
     MusicAssets,
-    Sprites,
+    Visuals,
     Assets,
     Shapes,
     Themes,
@@ -73,7 +73,6 @@ pub(crate) enum SemanticCompletionSlot {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SettingCompletionSet {
-    Static(&'static [&'static str]),
     AuthoringDefinitions(crate::authoring_grammar::AuthoringKind),
 }
 
@@ -837,7 +836,7 @@ kind = A B
 slots {
 actor = Block:kind
 }
-sprites {
+visuals {
 shapes {
 Block:kind {
 A {
@@ -883,16 +882,16 @@ shape Block:kind
     }
 
     #[test]
-    fn classifies_sprite_entry_properties_as_visual_keywords() {
+    fn classifies_visual_entry_properties_as_visual_keywords() {
         let source = r#"
-title = sprite_property_semantics
+title = visual_property_semantics
 
 puzzle board {
 slots {
 objects = Box
 }
-sprites {
-sprite {
+visuals {
+visual {
 selector = Box
 colors = #fff #000
 duration = 120ms
@@ -933,14 +932,14 @@ frame_duration = 60ms
     }
 
     #[test]
-    fn classifies_sprite_property_values_from_sprite_grammar() {
+    fn classifies_visual_property_values_from_visual_grammar() {
         let source = r#"
 puzzle board {
 slots {
 objects = Arrow
 }
-sprites {
-sprite {
+visuals {
+visual {
 selector = Arrow:horizontal
 colors = #fff ink
 shape = arrow_shape:horizontal

@@ -7,12 +7,11 @@ use puzzle_core::{
     TransitionCommand, VariableId, VariableUpdateOp,
 };
 use puzzle_lang::{
-    ArrowKey, KeyTrigger, Level, LoadedDocument, LoadedDocumentModel, LoadedGame, LoadedGridGame,
-    ResourceSelection, SceneAlignDef, SceneBinaryOp, SceneComponent, SceneDef,
-    SceneDistributionDef, SceneEffect, SceneEffectParam, SceneExpr, SceneLayoutDef, SceneLevelKey,
-    ScenePuzzleInitializer, SceneSpaceDef, SceneStateLifetime, SceneTextContent, SceneTextRoleDef,
-    SceneTransitionTrigger, SceneValue, ThemeDef, ViewportModeDef, ViewportProjectionDef,
-    ViewportSizeDef,
+    ArrowKey, KeyTrigger, Level, LevelId, LoadedDocument, LoadedDocumentModel, LoadedGame,
+    LoadedGridGame, ResourceSelection, SceneAlignDef, SceneComponent, SceneDef,
+    SceneDistributionDef, SceneEffect, SceneExpr, SceneLayoutDef, ScenePuzzleInitializer,
+    SceneSpaceDef, SceneStateLifetime, SceneTextContent, SceneTextRoleDef, SceneTransitionTrigger,
+    SceneValue, ThemeDef, ViewportModeDef, ViewportProjectionDef, ViewportSizeDef,
 };
 #[cfg(feature = "editor-debug")]
 use puzzle_play::GridTransitionTrace;
@@ -39,6 +38,7 @@ trait StandaloneSessionModel {
     #[cfg(feature = "editor-debug")]
     fn apply_debug_input_name_json(&mut self, input_name: &str) -> Result<String, String>;
     fn apply_command_name(&mut self, command_name: &str) -> Result<(), String>;
+    fn apply_scene_effect(&mut self, effect: &SceneEffect) -> Result<(), String>;
     fn undo(&mut self);
     fn redo(&mut self);
     fn restart(&mut self) -> Result<(), String>;
@@ -170,6 +170,10 @@ impl StandaloneSessionBridge {
                 self.apply_command_name(&name)?;
                 Ok(self.snapshot_json())
             }
+            SessionAction::SceneEffect { effect } => {
+                self.model.apply_scene_effect(&effect)?;
+                Ok(self.snapshot_json())
+            }
         }
     }
 
@@ -262,6 +266,7 @@ where
         let solver_state = self.projection.solver_state(self.session.state());
         let scene_state = scene_state_value(self.session.scene_state());
         let scene_puzzles = scene_puzzles_value(self.session.scene_state());
+        let levels = level_records_value(&self.loaded, &self.session);
         json!({
             "title": self.loaded.title,
             "subtitle": self.loaded.subtitle,
@@ -277,10 +282,10 @@ where
                 "minWaitMs": self.loaded.input_buffer.min_wait_ms,
             },
             "animation": animation_value(&self.loaded),
-            "presentationEvents": presentation_events_contract(&self.loaded, &presentation_events),
-            "level": level_context_value(&self.loaded, &self.session),
+            "presentationEvents": presentation_events_contract::<D>(&presentation_events),
             "levelIndex": self.session.active_level_index(),
             "levelCount": self.loaded.levels.len(),
+            "levels": levels,
             "scene": projected.scene,
             "currentScene": current_scene,
             "focusedScreen": current_scene,
@@ -298,7 +303,6 @@ where
             "canUndo": self.session.can_undo(),
             "canRedo": self.session.can_redo(),
             "inputs": inputs_value(&self.loaded),
-            "levels": levels_value(&self.loaded, self.session.cleared_levels()),
             "scenes": scenes_value(&self.loaded),
             "screens": scenes_value(&self.loaded),
         })
@@ -340,6 +344,12 @@ where
     fn apply_command_name(&mut self, command_name: &str) -> Result<(), String> {
         self.session
             .apply_command(&self.loaded, command_name)
+            .map_err(|error| format!("{error:?}"))
+    }
+
+    fn apply_scene_effect(&mut self, effect: &SceneEffect) -> Result<(), String> {
+        self.session
+            .apply_scene_effect(&self.loaded, effect)
             .map_err(|error| format!("{error:?}"))
     }
 
@@ -614,7 +624,7 @@ fn scene_value_for_materialized_state(
                         "layer": layer,
                         "objectId": object.0,
                         "object": name,
-                        "sprite": name,
+                        "visual": name,
                     }));
                 }
                 cells.push(json!({ "x": x, "y": y, "layers": layers }));
@@ -697,9 +707,10 @@ fn scene_puzzle_state_value(loaded: &LoadedGame, session: &GameSession) -> Value
         let Some(puzzle) = state.puzzles.get(name) else {
             continue;
         };
-        let level_index = puzzle.active_level_index;
-        let level = level_index.and_then(|index| loaded.levels.get(index));
-        let mut entry = match scene_value_for_state(
+        let level = puzzle
+            .active_level_index
+            .and_then(|index| loaded.levels.get(index));
+        let entry = match scene_value_for_state(
             loaded,
             &puzzle.state,
             level,
@@ -708,14 +719,6 @@ fn scene_puzzle_state_value(loaded: &LoadedGame, session: &GameSession) -> Value
             Value::Object(object) => object,
             _ => serde_json::Map::new(),
         };
-        entry.insert(
-            "level".to_string(),
-            level_index
-                .map(|level_index| {
-                    level_ref_value(loaded, session, session.focused_scene(), level_index)
-                })
-                .unwrap_or(Value::Null),
-        );
         entries.insert(name.clone(), Value::Object(entry));
     }
     Value::Object(entries)
@@ -770,8 +773,8 @@ fn scene_def_resources_value(scene: &SceneDef) -> Value {
     json!({
         "levelsMode": resource_selection_mode(&scene.resources.levels),
         "levels": resource_selection_names(&scene.resources.levels),
-        "spritesMode": resource_selection_mode(&scene.resources.sprites),
-        "sprites": resource_selection_names(&scene.resources.sprites),
+        "visualsMode": resource_selection_mode(&scene.resources.visuals),
+        "visuals": resource_selection_names(&scene.resources.visuals),
     })
 }
 
@@ -950,28 +953,9 @@ fn scene_component_value(component: &SceneComponent) -> Value {
         }),
         SceneComponent::Conditional(conditional) => json!({
             "kind": "conditional",
-            "condition": conditional.condition,
+            "condition": scene_expr_value(&conditional.condition),
             "children": scene_component_list_value(&conditional.children),
             "elseChildren": scene_component_list_value(&conditional.else_children),
-        }),
-        SceneComponent::For(for_view) => json!({
-            "kind": "for",
-            "binding": for_view.binding,
-            "source": for_view.source.as_str(),
-            "children": scene_component_list_value(&for_view.children),
-        }),
-        SceneComponent::LevelMenu(menu) => json!({
-            "kind": "level_menu",
-            "showIndex": menu.show_index,
-            "showCleared": menu.show_cleared,
-            "columns": menu.columns,
-            "wrap": menu.wrap,
-            "source": menu.source,
-            "action": menu.action.as_ref().map(scene_effect_value),
-            "buttons": menu.buttons.iter().map(|button| json!({
-                "label": scene_expr_value(&button.label),
-                "effect": scene_effect_value(&button.effect),
-            })).collect::<Vec<_>>(),
         }),
     }
 }
@@ -981,180 +965,11 @@ fn scene_component_list_value(components: &[SceneComponent]) -> Vec<Value> {
 }
 
 fn scene_effect_value(effect: &SceneEffect) -> Value {
-    match effect {
-        SceneEffect::Input(input) => json!({ "kind": "input", "name": input }),
-        SceneEffect::ComponentEffect(name) => json!({ "kind": "component_effect", "name": name }),
-        SceneEffect::RoutineCall(name) => json!({ "kind": "routine_call", "name": name }),
-        SceneEffect::Message { text } => {
-            json!({ "kind": "message", "text": scene_expr_value(text) })
-        }
-        SceneEffect::Wait { milliseconds } => {
-            json!({ "kind": "wait", "milliseconds": milliseconds.unwrap_or(200) })
-        }
-        SceneEffect::Conditional { condition, effect } => json!({
-            "kind": "conditional",
-            "condition": condition,
-            "effect": scene_effect_value(effect),
-        }),
-        SceneEffect::PlaySfx { name } => json!({ "kind": "play_sfx", "name": name }),
-        SceneEffect::PlayMusic { name } => json!({ "kind": "play_music", "name": name }),
-        SceneEffect::PauseMusic { name } => json!({ "kind": "pause_music", "name": name }),
-        SceneEffect::ResumeMusic { name } => json!({ "kind": "resume_music", "name": name }),
-        SceneEffect::StopMusic { name } => json!({ "kind": "stop_music", "name": name }),
-        SceneEffect::Goto { scene, params } => scene_target_effect_value("goto", scene, params),
-        SceneEffect::Enter { scene, params } => scene_target_effect_value("enter", scene, params),
-        SceneEffect::Back => json!({ "kind": "back" }),
-        SceneEffect::Create { scene } => scene_target_effect_value("create", scene, &[]),
-        SceneEffect::Reset { scene } => scene_target_effect_value("reset", scene, &[]),
-        SceneEffect::Delete { scene } => scene_target_effect_value("delete", scene, &[]),
-        SceneEffect::Show { scene } => scene_target_effect_value("show", scene, &[]),
-        SceneEffect::Hide { scene } => scene_target_effect_value("hide", scene, &[]),
-        SceneEffect::Toggle { scene } => scene_target_effect_value("toggle", scene, &[]),
-        SceneEffect::Focus { scene } => scene_target_effect_value("focus", scene, &[]),
-        SceneEffect::PuzzleNextLevel { target } => {
-            json!({ "kind": "puzzle_next_level", "target": target })
-        }
-        SceneEffect::PuzzlePreviousLevel { target } => {
-            json!({ "kind": "puzzle_previous_level", "target": target })
-        }
-        SceneEffect::GotoLevel { target, level } => json!({
-            "kind": "puzzle_goto_level",
-            "target": target,
-            "level": scene_expr_value(level),
-        }),
-        SceneEffect::ResetPuzzle { target } => json!({ "kind": "puzzle_reset", "target": target }),
-        SceneEffect::LoadPuzzle { target, source } => json!({
-            "kind": "puzzle_load",
-            "target": target,
-            "source": source,
-        }),
-        SceneEffect::Apply { rule, args, target } => {
-            let mut value = serde_json::Map::new();
-            value.insert("kind".to_string(), Value::String("apply".to_string()));
-            value.insert("rule".to_string(), Value::String(rule.clone()));
-            value.insert(
-                "args".to_string(),
-                Value::Array(args.iter().map(scene_expr_value).collect()),
-            );
-            if let Some(target) = target {
-                value.insert("target".to_string(), Value::String(target.clone()));
-            }
-            Value::Object(value)
-        }
-        SceneEffect::Copy { source, target } => json!({
-            "kind": "copy",
-            "source": source,
-            "target": target,
-        }),
-        SceneEffect::SetVariable { name, value } => json!({
-            "kind": "set_variable",
-            "name": name,
-            "value": scene_expr_value(value),
-        }),
-        SceneEffect::ClearUndoHistory => json!({ "kind": "clear_undo_history" }),
-        SceneEffect::ClearGameProgress => json!({ "kind": "clear_game_progress" }),
-        SceneEffect::SetCurrentLevel { level } => json!({
-            "kind": "set_current_level",
-            "level": scene_expr_value(level),
-        }),
-        SceneEffect::ClearCurrentLevel => json!({ "kind": "clear_current_level" }),
-        SceneEffect::SetLevelCleared { level, cleared } => {
-            let mut value = serde_json::Map::new();
-            value.insert(
-                "kind".to_string(),
-                Value::String("set_level_cleared".to_string()),
-            );
-            value.insert("cleared".to_string(), Value::Bool(*cleared));
-            if let Some(level) = level {
-                value.insert("level".to_string(), scene_expr_value(level));
-            }
-            Value::Object(value)
-        }
-        SceneEffect::ResetPersistentVars => json!({ "kind": "reset_persistent_vars" }),
-        SceneEffect::Sequence { effects } => json!({
-            "kind": "sequence",
-            "effects": effects.iter().map(scene_effect_value).collect::<Vec<_>>(),
-        }),
-    }
-}
-
-fn scene_target_effect_value(kind: &str, scene: &str, params: &[SceneEffectParam]) -> Value {
-    json!({
-        "kind": kind,
-        "screen": scene,
-        "scene": scene,
-        "params": params.iter().map(scene_effect_param_value).collect::<Vec<_>>(),
-    })
-}
-
-fn scene_effect_param_value(param: &SceneEffectParam) -> Value {
-    match param {
-        SceneEffectParam::Level(value) => json!({
-            "kind": "level",
-            "value": scene_expr_value(value),
-        }),
-        SceneEffectParam::Named { name, value } => json!({
-            "kind": "named",
-            "name": name,
-            "value": scene_expr_value(value),
-        }),
-    }
+    serde_json::to_value(effect).expect("validated scene effect should serialize")
 }
 
 fn scene_expr_value(expr: &SceneExpr) -> Value {
-    match expr {
-        SceneExpr::Bool(value) => json!({ "kind": "bool", "value": value }),
-        SceneExpr::Int(value) => json!({ "kind": "int", "value": value }),
-        SceneExpr::Text(value) => json!({ "kind": "text", "value": value }),
-        SceneExpr::Path(path) => json!({ "kind": "path", "path": path.join(".") }),
-        SceneExpr::LevelSelector {
-            collection,
-            key,
-            property,
-        } => json!({
-            "kind": "level_selector",
-            "collection": collection,
-            "key": scene_level_key_value(key),
-            "property": property,
-        }),
-        SceneExpr::Call { name, args } => json!({
-            "kind": "call",
-            "name": name,
-            "args": args.iter().map(scene_expr_value).collect::<Vec<_>>(),
-        }),
-        SceneExpr::Binary { op, left, right } => json!({
-            "kind": "binary",
-            "op": scene_binary_op_value(*op),
-            "left": scene_expr_value(left),
-            "right": scene_expr_value(right),
-        }),
-        SceneExpr::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => json!({
-            "kind": "if",
-            "condition": scene_expr_value(condition),
-            "then": scene_expr_value(then_branch),
-            "else": scene_expr_value(else_branch),
-        }),
-    }
-}
-
-fn scene_level_key_value(key: &SceneLevelKey) -> Value {
-    match key {
-        SceneLevelKey::Index(value) => json!({ "kind": "index", "value": value }),
-        SceneLevelKey::Id(value) => json!({ "kind": "id", "value": value }),
-    }
-}
-
-fn scene_binary_op_value(op: SceneBinaryOp) -> &'static str {
-    match op {
-        SceneBinaryOp::And => "and",
-        SceneBinaryOp::Eq => "eq",
-        SceneBinaryOp::In => "in",
-        SceneBinaryOp::NotEq => "neq",
-    }
+    puzzle_scene::scene_expr_json_value(expr)
 }
 
 fn key_trigger_name(key: &KeyTrigger) -> String {
@@ -1207,11 +1022,6 @@ fn first_puzzle_component(components: &[SceneComponent]) -> Option<&str> {
                     return Some(name);
                 }
                 if let Some(name) = first_puzzle_component(&conditional.else_children) {
-                    return Some(name);
-                }
-            }
-            SceneComponent::For(for_view) => {
-                if let Some(name) = first_puzzle_component(&for_view.children) {
                     return Some(name);
                 }
             }
@@ -1523,20 +1333,6 @@ fn screen_value(loaded: &LoadedGame) -> Value {
     })
 }
 
-fn level_context_value<const D: usize, Size: GridSize<D>>(
-    loaded: &LoadedGridGame<D, Size>,
-    session: &GridGameSession<D, Size>,
-) -> Value {
-    let level = session.current_level(loaded);
-    json!({
-        "index": session.level_index(),
-        "name": level.name,
-        "pack": level.pack,
-        "puzzle": level.puzzle,
-        "cleared": session.cleared_levels().get(session.level_index()).copied().unwrap_or(false),
-    })
-}
-
 fn inputs_value<const D: usize, Size: GridSize<D>>(loaded: &LoadedGridGame<D, Size>) -> Vec<Value> {
     let mut inputs = loaded.input_labels.iter().collect::<Vec<_>>();
     inputs.sort_by_key(|(id, _)| id.0);
@@ -1610,26 +1406,6 @@ fn arrow_name(arrow: ArrowKey) -> &'static str {
     }
 }
 
-fn levels_value<const D: usize, Size: GridSize<D>>(
-    loaded: &LoadedGridGame<D, Size>,
-    cleared_levels: &[bool],
-) -> Vec<Value> {
-    loaded
-        .levels
-        .iter()
-        .enumerate()
-        .map(|(index, level)| {
-            json!({
-                "index": index,
-                "name": level.name,
-                "pack": level.pack,
-                "puzzle": level.puzzle,
-                "cleared": cleared_levels.get(index).copied().unwrap_or(false),
-            })
-        })
-        .collect()
-}
-
 fn scene_values_value(values: &std::collections::HashMap<String, SceneValue>) -> Value {
     let entries = values
         .iter()
@@ -1655,30 +1431,6 @@ fn scene_value_atom(value: &SceneValue) -> Value {
     }
 }
 
-fn level_ref_value(
-    loaded: &LoadedGame,
-    session: &GameSession,
-    scene_name: &str,
-    level_index: usize,
-) -> Value {
-    let level = loaded.levels.get(level_index);
-    json!({
-        "kind": "level",
-        "index": level_index,
-        "num": level_index + 1,
-        "number": level_index + 1,
-        "name": level.map(|level| level.name.clone()),
-        "label": level.map(|level| level.name.clone()),
-        "title": level.map(|level| level.name.clone()),
-        "puzzle": level.map(|level| level.puzzle.clone()),
-        "pack": level.and_then(|level| level.pack.clone()),
-        "cleared": session.cleared_levels().get(level_index).copied().unwrap_or(false),
-        "solved": session.cleared_levels().get(level_index).copied().unwrap_or(false),
-        "has_next": level_has_next_in_scene(loaded, scene_name, level_index),
-        "last": !level_has_next_in_scene(loaded, scene_name, level_index),
-    })
-}
-
 fn scene_resources<'a>(
     loaded: &'a LoadedGame,
     scene_name: &str,
@@ -1699,59 +1451,58 @@ fn scene_resources_value(resources: Option<&puzzle_lang::SceneResources>) -> Val
             ResourceSelection::All => json!({"mode": "all", "names": []}),
             ResourceSelection::Named(names) => json!({"mode": "named", "names": names}),
         },
-        "sprites": match &resources.sprites {
+        "visuals": match &resources.visuals {
             ResourceSelection::All => json!({"mode": "all", "names": []}),
             ResourceSelection::Named(names) => json!({"mode": "named", "names": names}),
         },
     })
 }
 
-fn level_has_next_in_scene(loaded: &LoadedGame, scene_name: &str, level_index: usize) -> bool {
-    let indices = scene_level_indices(loaded, scene_name);
-    indices
-        .iter()
-        .position(|index| *index == level_index)
-        .is_some_and(|position| position + 1 < indices.len())
-}
-
-fn scene_level_indices(loaded: &LoadedGame, scene_name: &str) -> Vec<usize> {
-    let Some(scene) = loaded.scenes.iter().find(|scene| scene.name == scene_name) else {
-        return (0..loaded.levels.len()).collect();
-    };
-    match &scene.resources.levels {
-        ResourceSelection::All => (0..loaded.levels.len()).collect(),
-        ResourceSelection::Named(names) => loaded
-            .levels
-            .iter()
-            .enumerate()
-            .filter_map(|(index, level)| {
-                names
-                    .iter()
-                    .any(|name| level_resource_matches(name, &level.name))
-                    .then_some(index)
-            })
-            .collect(),
-    }
-}
-
-fn level_resource_matches(resource: &str, level_name: &str) -> bool {
-    level_name == resource
-        || level_name
-            .strip_prefix(resource)
-            .is_some_and(|rest| rest.starts_with('.'))
-}
-
 fn progress_save_data_value(save: &ProgressSaveData) -> Value {
     json!({
         "version": save.version,
         "levels": save.levels.iter().map(|level| {
-            json!({"name": level.name, "cleared": level.cleared})
+            json!({"id": level.id, "cleared": level.cleared})
         }).collect::<Vec<_>>(),
         "currentLevel": save.current_level,
         "persistentVars": save.persistent_vars.iter().map(|var| {
             json!({"name": var.name, "value": var.value})
         }).collect::<Vec<_>>(),
     })
+}
+
+fn level_records_value<const D: usize, Size: GridSize<D>>(
+    loaded: &LoadedGridGame<D, Size>,
+    session: &GridGameSession<D, Size>,
+) -> Value {
+    assert_eq!(
+        loaded.levels.len(),
+        session.cleared_levels().len(),
+        "loaded levels and session progress must have the same length"
+    );
+    Value::Object(
+        loaded
+            .levels
+            .iter()
+            .zip(session.cleared_levels())
+            .enumerate()
+            .map(|(index, (level, cleared))| {
+                let id = LevelId::new(&level.puzzle, &level.name);
+                let key = id.record_key();
+                (
+                    key.clone(),
+                    json!({
+                        "id": key,
+                        "name": level.name,
+                        "puzzle": level.puzzle,
+                        "pack": level.pack,
+                        "ordinal": index + 1,
+                        "progress": { "cleared": cleared },
+                    }),
+                )
+            })
+            .collect(),
+    )
 }
 
 fn progress_save_data_from_json(raw: &str) -> Result<ProgressSaveData, String> {
@@ -1767,47 +1518,51 @@ fn progress_save_data_from_json(raw: &str) -> Result<ProgressSaveData, String> {
         .iter()
         .map(|entry| {
             Ok(LevelProgressSaveData {
-                name: entry
-                    .get("name")
+                id: entry
+                    .get("id")
                     .and_then(Value::as_str)
-                    .ok_or_else(|| "progress save level is missing name".to_string())?
+                    .ok_or_else(|| "progress save level is missing id".to_string())?
                     .to_string(),
                 cleared: entry
                     .get("cleared")
                     .and_then(Value::as_bool)
-                    .unwrap_or(false),
+                    .ok_or_else(|| "progress save level is missing cleared".to_string())?,
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
     let persistent_vars = value
         .get("persistentVars")
         .and_then(Value::as_array)
-        .map(|entries| {
-            entries
-                .iter()
-                .map(|entry| {
-                    Ok(PersistentVarSaveData {
-                        name: entry
-                            .get("name")
-                            .and_then(Value::as_str)
-                            .ok_or_else(|| {
-                                "progress save persistent var is missing name".to_string()
-                            })?
-                            .to_string(),
-                        value: entry.get("value").and_then(Value::as_i64).unwrap_or(0),
-                    })
-                })
-                .collect::<Result<Vec<_>, String>>()
+        .ok_or_else(|| "progress save is missing persistentVars".to_string())?
+        .iter()
+        .map(|entry| {
+            Ok(PersistentVarSaveData {
+                name: entry
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "progress save persistent var is missing name".to_string())?
+                    .to_string(),
+                value: entry
+                    .get("value")
+                    .and_then(Value::as_i64)
+                    .ok_or_else(|| "progress save persistent var is missing value".to_string())?,
+            })
         })
-        .transpose()?
-        .unwrap_or_default();
+        .collect::<Result<Vec<_>, String>>()?;
+    let current_level = match value.get("currentLevel") {
+        Some(Value::Null) => None,
+        Some(value) => Some(
+            value
+                .as_str()
+                .ok_or_else(|| "progress save currentLevel must be a level id".to_string())?
+                .to_string(),
+        ),
+        None => return Err("progress save is missing currentLevel".to_string()),
+    };
     Ok(ProgressSaveData {
         version: u32::try_from(version).map_err(|_| "progress save version is too large")?,
         levels,
-        current_level: value
-            .get("currentLevel")
-            .and_then(Value::as_str)
-            .map(str::to_string),
+        current_level,
         persistent_vars,
     })
 }
@@ -1878,6 +1633,9 @@ scene title {
 layout {
 heading title
 choice "New Game" -> goto playing("microban.1")
+if has_progress_save {
+choice "Continue" -> goto playing
+}
 }
 }
 
@@ -2213,7 +1971,39 @@ levels main of main {
         assert_eq!(playing["levelIndex"], 0);
 
         let save: Value = serde_json::from_str(&bridge.progress_save_json()).unwrap();
-        assert_eq!(save["currentLevel"], "microban.1");
+        assert_eq!(
+            save["currentLevel"],
+            LevelId::new("board", "microban.1").record_key()
+        );
+    }
+
+    #[test]
+    fn snapshot_uses_scene_expression_contract_for_conditional_components() {
+        let mut bridge = StandaloneSessionBridge::from_source(
+            runtime_scene_fixture_source(),
+            "runtime_scene_fixture.puzzle",
+        )
+        .unwrap();
+
+        let snapshot: Value =
+            serde_json::from_str(&bridge.dispatch(SessionAction::Snapshot).unwrap()).unwrap();
+        let title = snapshot["scenes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|scene| scene["name"] == "title")
+            .unwrap();
+        let conditional = title["components"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|component| component["kind"] == "conditional")
+            .unwrap();
+
+        assert_eq!(
+            conditional["condition"],
+            json!({ "kind": "path", "path": "has_progress_save" })
+        );
     }
 
     #[test]
@@ -2251,7 +2041,7 @@ step board
 
 scene level_select {
 layout {
-level_menu
+text "Select"
 }
 }
 "#;
@@ -2379,9 +2169,10 @@ step board
         assert!(!playing_object.contains_key("visibleScreens"));
         assert!(!playing_object.contains_key("screenState"));
         assert!(!playing_object.contains_key("screenPuzzles"));
-        assert_eq!(
-            playing["scenePuzzleState"]["board"]["level"]["name"],
-            "microban.1"
+        assert!(
+            playing["scenePuzzleState"]["board"]
+                .as_object()
+                .is_some_and(|state| !state.contains_key("level"))
         );
         assert_eq!(playing["scene"]["cells"].as_array().unwrap().len(), 42);
         assert!(
@@ -2549,13 +2340,88 @@ scene playing {
     }
 
     #[test]
+    fn spatial_session_bridge_emits_dimensioned_tween_for_addressed_puzzle() {
+        let source = r#"
+title = "Spatial Tween Fixture"
+
+puzzle mover {
+  dimension = 3
+  render {
+    tween = true
+    tween_duration = 120ms
+  }
+  slots {
+    actor = Player
+  }
+  rules {
+    input right [ Player | no Player ] -> [ | Player ]
+  }
+}
+
+levels default of mover {
+  legend {
+    . = empty
+    P = Player
+  }
+  level "first" {
+    P.
+  }
+}
+"#;
+        let mut bridge =
+            StandaloneSessionBridge::from_source(source, "spatial_tween_fixture.puzzle3")
+                .expect("compile spatial tween fixture");
+
+        let moved: Value = serde_json::from_str(
+            &bridge
+                .dispatch(SessionAction::Input {
+                    name: "right".to_string(),
+                })
+                .expect("apply spatial model input"),
+        )
+        .unwrap();
+
+        assert_eq!(moved["animation"]["tween"]["intervalMs"], 120);
+        assert_eq!(
+            moved["presentationEvents"],
+            json!([{
+                "scene": "mover",
+                "puzzle": "mover",
+                "levelIndex": 0,
+                "kind": "animation",
+                "animation": {
+                    "kind": "move",
+                    "name": "tween",
+                    "objectId": 1,
+                    "from": { "x": 0, "y": 0, "z": 0 },
+                    "to": { "x": 1, "y": 0, "z": 0 }
+                }
+            }])
+        );
+        assert_eq!(
+            moved["scenePuzzleState"]["mover"]["cells"],
+            json!([{
+                "position": { "x": 1, "y": 0, "z": 0 },
+                "objects": [{ "id": 1, "layer": 0 }]
+            }])
+        );
+    }
+
+    #[test]
     fn standalone_session_bridge_restores_progress_save() {
         let source = runtime_scene_fixture_source();
         let mut bridge =
             StandaloneSessionBridge::from_source(source, "runtime_scene_fixture.puzzle").unwrap();
+        let restored_level_key = LevelId::new("board", "microban.2").record_key();
         bridge
             .restore_progress_save_json(
-                r#"{"version":1,"levels":[{"name":"microban.2","cleared":true}],"currentLevel":"microban.2","persistentVars":[]}"#,
+                &json!({
+                    "version": 2,
+                    "levels": [{"id": restored_level_key, "cleared": true}],
+                    "currentLevel": restored_level_key,
+                    "persistentVars": [],
+                })
+                .to_string(),
             )
             .unwrap();
 
@@ -2563,7 +2429,34 @@ scene playing {
             serde_json::from_str(&bridge.dispatch(SessionAction::Snapshot).unwrap()).unwrap();
         assert_eq!(snapshot["selectedLevelIndex"], 1);
         assert_eq!(snapshot["has_progress_save"], true);
-        assert_eq!(snapshot["levels"][1]["cleared"], true);
+        assert_eq!(
+            snapshot["levels"][&restored_level_key]["progress"]["cleared"],
+            true
+        );
+        let save: Value = serde_json::from_str(&bridge.progress_save_json()).unwrap();
+        assert!(save["levels"].as_array().is_some_and(|levels| {
+            levels
+                .iter()
+                .any(|level| level["id"] == restored_level_key && level["cleared"] == true)
+        }));
+    }
+
+    #[test]
+    fn standalone_session_bridge_rejects_name_only_progress_entries() {
+        let mut bridge = StandaloneSessionBridge::from_source(
+            runtime_scene_fixture_source(),
+            "runtime_scene_fixture.puzzle",
+        )
+        .unwrap();
+        let error = bridge
+            .restore_progress_save_json(
+                r#"{"version":2,"levels":[{"name":"microban.2","cleared":true}],"currentLevel":null,"persistentVars":[]}"#,
+            )
+            .unwrap_err();
+        assert!(
+            error.contains("progress save level is missing id"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -2585,7 +2478,7 @@ scene playing {
         );
         assert!(
             snapshot["scenePuzzleState"]["sokoban"]
-                .get("sprites")
+                .get("visuals")
                 .is_none()
         );
         let second: Value = serde_json::from_str(

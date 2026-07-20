@@ -137,8 +137,8 @@ fn asset_resolver_js(puzzle_path: &Path, loaded: &LoadedGame) -> Result<String, 
         .filter(|asset| asset.kind == AssetKind::File)
         .map(|asset| asset.path.clone())
         .collect::<Vec<_>>();
-    for sprite in &loaded.visuals.sprites {
-        if let VisualSpriteKind::Image { source } = &sprite.kind
+    for visual in &loaded.visuals.entries {
+        if let VisualKind::Image { source } = &visual.kind
             && !paths.iter().any(|path| path == source)
         {
             paths.push(source.clone());
@@ -264,7 +264,7 @@ fn base64_encode(bytes: &[u8]) -> String {
 
 fn generated_visuals_js(loaded: &LoadedGame) -> String {
     if loaded.visuals.aliases.is_empty()
-        && loaded.visuals.sprites.is_empty()
+        && loaded.visuals.entries.is_empty()
         && loaded.visuals.order.priorities.is_empty()
     {
         return String::new();
@@ -278,47 +278,47 @@ fn generated_visuals_js(loaded: &LoadedGame) -> String {
         }
         push_json_string(&mut aliases, &alias.object);
         aliases.push(':');
-        push_json_string(&mut aliases, &alias.sprite);
+        push_json_string(&mut aliases, &alias.visual);
     }
     aliases.push('}');
 
-    let mut sprites = String::new();
-    sprites.push('{');
-    for (index, sprite) in loaded.visuals.sprites.iter().enumerate() {
+    let mut entries = String::new();
+    entries.push('{');
+    for (index, visual) in loaded.visuals.entries.iter().enumerate() {
         if index > 0 {
-            sprites.push(',');
+            entries.push(',');
         }
-        push_json_string(&mut sprites, &sprite.name);
-        sprites.push(':');
-        push_visual_sprite(&mut sprites, sprite);
+        push_json_string(&mut entries, &visual.name);
+        entries.push(':');
+        push_visual(&mut entries, visual);
     }
-    sprites.push('}');
+    entries.push('}');
     let order = serde_json::to_string(&loaded.visuals.order)
-        .expect("compiled sprite order serialization must succeed");
+        .expect("compiled visual order serialization must succeed");
 
     format!(
-        "(() => {{\n  const previous = window.GameVisuals || {{}};\n  const createVisuals = window.PuzzleSpriteRegistry?.create || ((config = {{}}) => ({{\n    aliases: {{ ...(config.aliases || {{}}) }},\n    sprites: {{ ...(config.sprites || {{}}) }},\n    order: {{ direction_priority: [...(config.order?.direction_priority || [])], priorities: [...(config.order?.priorities || [])] }},\n    boardClass: config.boardClass || \"\",\n    themeClass: config.themeClass || \"\",\n    editorPuzzle: {{ ...(config.editorPuzzle || {{}}) }},\n    autoAdvanceDelayMs: config.autoAdvanceDelayMs,\n  }}));\n  window.GameVisuals = createVisuals({{\n    ...previous,\n    aliases: {{ ...(previous.aliases || {{}}), ...{aliases} }},\n    sprites: {{ ...(previous.sprites || {{}}), ...{sprites} }},\n    order: {order},\n  }});\n}})();"
+        "(() => {{\n  const previous = window.GameVisuals || {{}};\n  const createVisuals = window.PuzzleVisualRegistry?.create || ((config = {{}}) => ({{\n    aliases: {{ ...(config.aliases || {{}}) }},\n    entries: {{ ...(config.entries || {{}}) }},\n    order: {{ direction_priority: [...(config.order?.direction_priority || [])], priorities: [...(config.order?.priorities || [])] }},\n    boardClass: config.boardClass || \"\",\n    themeClass: config.themeClass || \"\",\n    editorPuzzle: {{ ...(config.editorPuzzle || {{}}) }},\n    autoAdvanceDelayMs: config.autoAdvanceDelayMs,\n  }}));\n  window.GameVisuals = createVisuals({{\n    ...previous,\n    aliases: {{ ...(previous.aliases || {{}}), ...{aliases} }},\n    entries: {{ ...(previous.entries || {{}}), ...{entries} }},\n    order: {order},\n  }});\n}})();"
     )
 }
 
-fn push_visual_sprite(out: &mut String, sprite: &VisualSpriteDef) {
-    match &sprite.kind {
-        VisualSpriteKind::Solid(color) => {
+fn push_visual(out: &mut String, visual: &VisualDef) {
+    match &visual.kind {
+        VisualKind::Solid(color) => {
             out.push_str("{\"colors\":{\"0\":");
             push_json_string(out, color);
             out.push_str("},\"pattern\":[\"0\"]}");
         }
-        VisualSpriteKind::Image { source } => {
+        VisualKind::Image { source } => {
             out.push_str("{\"source\":");
             push_json_string(out, source);
             out.push('}');
         }
-        VisualSpriteKind::Ascii { colors } => {
-            let pattern = sprite
+        VisualKind::Ascii { colors } => {
+            let pattern = visual
                 .frames
                 .first()
                 .and_then(|frame| frame.planes.first())
-                .expect("validated planar sprite has a first frame and plane");
+                .expect("validated planar visual has a first frame and plane");
             out.push_str("{\"colors\":{");
             for (index, color) in colors.iter().enumerate() {
                 if index > 0 {
@@ -338,21 +338,21 @@ fn push_visual_sprite(out: &mut String, sprite: &VisualSpriteDef) {
             out.push_str("]}");
         }
     }
-    if !sprite.transforms.is_empty()
-        || sprite.fit != Default::default()
-        || sprite.sampling.is_some()
-        || sprite.animation_duration_ms.is_some()
-        || sprite.pixels_per_cell.is_some()
+    if !visual.transforms.is_empty()
+        || visual.fit != Default::default()
+        || visual.sampling.is_some()
+        || visual.animation_duration_ms.is_some()
+        || visual.pixels_per_cell.is_some()
     {
         out.pop();
-        if !sprite.transforms.is_empty() {
+        if !visual.transforms.is_empty() {
             out.push_str(",\"transforms\":[");
-            for (index, transform) in sprite.transforms.iter().enumerate() {
+            for (index, transform) in visual.transforms.iter().enumerate() {
                 if index > 0 {
                     out.push(',');
                 }
                 match transform {
-                    VisualSpriteTransform::Rotate {
+                    VisualTransform::Rotate {
                         degrees,
                         axis,
                         space,
@@ -361,26 +361,26 @@ fn push_visual_sprite(out: &mut String, sprite: &VisualSpriteDef) {
                         out.push_str(&(degrees * axis[2]).to_string());
                         out.push_str(",\"space\":\"");
                         out.push_str(match space {
-                            puzzle_lang::VisualSpriteSpace::World => "world",
-                            puzzle_lang::VisualSpriteSpace::Local => "local",
+                            puzzle_lang::VisualSpace::World => "world",
+                            puzzle_lang::VisualSpace::Local => "local",
                         });
                         out.push('"');
                         out.push('}');
                     }
-                    VisualSpriteTransform::Translate { value, space } => {
+                    VisualTransform::Translate { value, space } => {
                         out.push_str("{\"kind\":\"translate\",\"x\":");
                         out.push_str(&value[0].to_string());
                         out.push_str(",\"y\":");
                         out.push_str(&value[1].to_string());
                         out.push_str(",\"space\":\"");
                         out.push_str(match space {
-                            puzzle_lang::VisualSpriteSpace::World => "world",
-                            puzzle_lang::VisualSpriteSpace::Local => "local",
+                            puzzle_lang::VisualSpace::World => "world",
+                            puzzle_lang::VisualSpace::Local => "local",
                         });
                         out.push('"');
                         out.push('}');
                     }
-                    VisualSpriteTransform::Flip { enabled } => {
+                    VisualTransform::Flip { enabled } => {
                         out.push_str("{\"kind\":\"flip\",\"enabled\":");
                         out.push_str(if *enabled { "true" } else { "false" });
                         out.push('}');
@@ -389,23 +389,23 @@ fn push_visual_sprite(out: &mut String, sprite: &VisualSpriteDef) {
             }
             out.push(']');
         }
-        if sprite.fit != Default::default() {
+        if visual.fit != Default::default() {
             out.push_str(",\"fit\":{\"mode\":");
-            push_json_string(out, visual_sprite_fit_mode_name(sprite.fit.mode));
+            push_json_string(out, visual_fit_mode_name(visual.fit.mode));
             out.push_str(",\"width\":");
-            out.push_str(&sprite.fit.width.to_string());
+            out.push_str(&visual.fit.width.to_string());
             out.push_str(",\"height\":");
-            out.push_str(&sprite.fit.height.to_string());
+            out.push_str(&visual.fit.height.to_string());
             out.push('}');
         }
-        if let Some(sampling) = sprite.sampling {
+        if let Some(sampling) = visual.sampling {
             out.push_str(",\"sampling\":");
-            push_json_string(out, visual_sprite_sampling_name(sampling));
+            push_json_string(out, visual_sampling_name(sampling));
         }
-        if let Some(duration_ms) = sprite.animation_duration_ms {
-            push_visual_sprite_loop(out, duration_ms, &sprite.frames);
+        if let Some(duration_ms) = visual.animation_duration_ms {
+            push_visual_loop(out, duration_ms, &visual.frames);
         }
-        if let Some(pixels_per_cell) = sprite.pixels_per_cell {
+        if let Some(pixels_per_cell) = visual.pixels_per_cell {
             out.push_str(",\"pixelsPerCell\":{\"width\":");
             out.push_str(&pixels_per_cell.width.to_string());
             out.push_str(",\"height\":");
@@ -416,10 +416,10 @@ fn push_visual_sprite(out: &mut String, sprite: &VisualSpriteDef) {
     }
 }
 
-fn push_visual_sprite_loop(
+fn push_visual_loop(
     out: &mut String,
     duration_ms: u64,
-    frames: &[puzzle_lang::VisualSpriteFrameDef],
+    frames: &[puzzle_lang::VisualFrameDef],
 ) {
     out.push_str(",\"durationMs\":");
     out.push_str(&duration_ms.to_string());
@@ -432,7 +432,7 @@ fn push_visual_sprite_loop(
         let plane = frame
             .planes
             .first()
-            .expect("validated planar sprite frame has one plane");
+            .expect("validated planar visual frame has one plane");
         for (row_index, row) in plane.iter().enumerate() {
             if row_index > 0 {
                 out.push(',');
@@ -444,17 +444,17 @@ fn push_visual_sprite_loop(
     out.push(']');
 }
 
-fn visual_sprite_fit_mode_name(mode: puzzle_lang::VisualSpriteFitMode) -> &'static str {
+fn visual_fit_mode_name(mode: puzzle_lang::VisualFitMode) -> &'static str {
     match mode {
-        puzzle_lang::VisualSpriteFitMode::Contain => "contain",
-        puzzle_lang::VisualSpriteFitMode::Cover => "cover",
-        puzzle_lang::VisualSpriteFitMode::Stretch => "stretch",
+        puzzle_lang::VisualFitMode::Contain => "contain",
+        puzzle_lang::VisualFitMode::Cover => "cover",
+        puzzle_lang::VisualFitMode::Stretch => "stretch",
     }
 }
 
-fn visual_sprite_sampling_name(sampling: puzzle_lang::VisualSpriteSampling) -> &'static str {
+fn visual_sampling_name(sampling: puzzle_lang::VisualSampling) -> &'static str {
     match sampling {
-        puzzle_lang::VisualSpriteSampling::Pixelated => "pixelated",
-        puzzle_lang::VisualSpriteSampling::Smooth => "smooth",
+        puzzle_lang::VisualSampling::Pixelated => "pixelated",
+        puzzle_lang::VisualSampling::Smooth => "smooth",
     }
 }

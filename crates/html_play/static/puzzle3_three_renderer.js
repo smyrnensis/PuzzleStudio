@@ -19,6 +19,9 @@ class Puzzle3ThreeRenderer {
     this.animationFrame = 0;
     this.animationKey = "";
     this.animationStartedAt = 0;
+    this.activeSnapshot = null;
+    this.frame = null;
+    this.faceMaterialCache = new Map();
   }
 
   render(snapshot, view = {}) {
@@ -32,6 +35,14 @@ class Puzzle3ThreeRenderer {
 
     const THREE = window.THREE;
     this.ensureRenderer(THREE);
+    if (snapshot !== this.activeSnapshot) {
+      if (this.animationFrame) {
+        cancelAnimationFrame(this.animationFrame);
+        this.animationFrame = 0;
+      }
+      this.activeSnapshot = snapshot;
+      this.frame = null;
+    }
     const animation = threeAnimationState(snapshot);
     if (animation.key !== this.animationKey) {
       this.animationKey = animation.key;
@@ -40,7 +51,14 @@ class Puzzle3ThreeRenderer {
     animation.progress = animation.events.length && this.animationStartedAt
       ? Math.min(1, Math.max(0, (performance.now() - this.animationStartedAt) / animation.durationMs))
       : 1;
-    const frame = buildPuzzleStudioThreeFrame(snapshot, { ...view, animationProgress: animation.progress });
+    const visualAnimating = hasLoopingVisualAnimation(snapshot);
+    const builtFrame = visualAnimating || !this.frame;
+    const frame = !builtFrame
+      ? updatePuzzleStudioThreeFrame(this.frame, snapshot, view, animation.progress)
+      : buildPuzzleStudioThreeFrame(snapshot, { ...view, animationProgress: animation.progress });
+    if (!visualAnimating && builtFrame) {
+      this.frame = frame;
+    }
     const scene = new THREE.Scene();
     scene.background = threeBackground(THREE, view.background);
     frame.rendererViewTarget = this.viewTarget;
@@ -52,34 +70,53 @@ class Puzzle3ThreeRenderer {
     this.configureShadowMap(THREE, shadow.enabled);
     addLights(THREE, scene, frame, visible.voxels, shadow);
     addGrid(THREE, scene, frame);
-    addMeshes(THREE, scene, visible, shadow);
+    addMeshes(THREE, scene, visible, shadow, this.faceMaterialCache);
     addShadowCatcher(THREE, scene, frame, shadow);
     this.renderer.setSize(this.canvas.clientWidth || this.canvas.width || 1, this.canvas.clientHeight || this.canvas.height || 1, false);
     this.renderer.setClearColor(0x000000, scene.background ? 1 : 0);
-    disposeScene(this.scene);
+    disposeScene(this.scene, this.faceMaterialCache);
     this.renderer.render(scene, camera);
     this.scene = scene;
     this.camera = camera;
     this.viewPayload = threeViewPayload(frame, camera, this.canvas);
     this.updateViewportMotion(frame);
-    const spriteAnimating = hasLoopingSpriteAnimation(snapshot);
-    this.scheduleAnimationFrame(snapshot, view, animation.progress, spriteAnimating);
+    this.scheduleAnimationFrame(
+      snapshot,
+      view,
+      animation.progress,
+      visualAnimating,
+      frame.viewport?.follow === "smooth" && frame.viewportAnimating === true,
+    );
     return {
       rendered: true,
       objectCount: frame.objectCount,
-      animating: animation.progress < 1 || spriteAnimating || (frame.viewport?.follow === "smooth" && frame.viewportAnimating === true),
+      animating: animation.progress < 1 || visualAnimating || (frame.viewport?.follow === "smooth" && frame.viewportAnimating === true),
       view: this.viewPayload,
     };
   }
 
-  scheduleAnimationFrame(snapshot, view, progress, spriteAnimating) {
-    if ((progress >= 1 && !spriteAnimating) || this.animationFrame) {
+  scheduleAnimationFrame(snapshot, view, progress, visualAnimating, viewportAnimating) {
+    if ((progress >= 1 && !visualAnimating && !viewportAnimating) || this.animationFrame) {
       return;
     }
     this.animationFrame = requestAnimationFrame(() => {
       this.animationFrame = 0;
       this.render(snapshot, view);
     });
+  }
+
+  destroy() {
+    if (this.animationFrame) {
+      cancelAnimationFrame(this.animationFrame);
+      this.animationFrame = 0;
+    }
+    disposeScene(this.scene);
+    this.faceMaterialCache.clear();
+    this.renderer?.dispose?.();
+    this.scene = null;
+    this.renderer = null;
+    this.frame = null;
+    this.activeSnapshot = null;
   }
 
   updateViewportMotion(frame) {
@@ -139,15 +176,25 @@ function threeBackground(THREE, value) {
   return new THREE.Color(value || "#111318");
 }
 
-function disposeScene(scene) {
+function disposeScene(scene, preservedMaterials = null) {
   if (!scene) {
     return;
   }
+  const disposedGeometries = new Set();
+  const disposedMaterials = new Set();
   scene.traverse((object) => {
-    object.geometry?.dispose?.();
+    if (object.geometry && !disposedGeometries.has(object.geometry)) {
+      disposedGeometries.add(object.geometry);
+      object.geometry.dispose?.();
+    }
     const materials = Array.isArray(object.material) ? object.material : [object.material];
     for (const material of materials) {
-      material?.dispose?.();
+      if (material
+          && !preservedMaterials?.has(material)
+          && !disposedMaterials.has(material)) {
+        disposedMaterials.add(material);
+        material.dispose?.();
+      }
     }
   });
 }
@@ -174,23 +221,28 @@ async function loadThree() {
 function buildPuzzleStudioThreeFrame(snapshot, view = {}) {
   const size = normalizeSize(snapshot.size);
   const objectCatalog = buildObjectCatalog(snapshot);
-  const sprites = snapshot.sprites || {};
+  const visuals = snapshot.visuals || {};
+  const visualCache = new Map();
+  const animationEvents = Array.isArray(snapshot.animationEvents) ? snapshot.animationEvents : [];
   const cells = (snapshot.cells || []).map((cell) => ({
     position: normalizePosition(cell.position),
     objects: (cell.objects || [])
-      .map((object) => resolveObject(object, objectCatalog, sprites))
+      .map((object) => resolveObject(object, objectCatalog, visuals, visualCache))
       .filter(Boolean),
   }));
   const frame = {
     size,
     cells,
     objectCatalog,
+    visuals,
+    visualCache,
     objectCount: cells.reduce((count, cell) => count + cell.objects.length, 0),
     camera: snapshot.render.camera,
     editorView: view.editorView || snapshot.view || {},
     settings: snapshot.render,
     order: snapshot.order,
-    animationEvents: Array.isArray(snapshot.animationEvents) ? snapshot.animationEvents : [],
+    animationEvents,
+    animationEventIndex: indexTweenAnimationEvents(animationEvents),
     animationProgress: Number.isFinite(Number(view.animationProgress)) ? Number(view.animationProgress) : 1,
     viewport: normalizeViewport(snapshot.render.viewport),
     viewportSnapNext: view.viewportSnapNext === true,
@@ -201,15 +253,49 @@ function buildPuzzleStudioThreeFrame(snapshot, view = {}) {
   return frame;
 }
 
+function updatePuzzleStudioThreeFrame(frame, snapshot, view, animationProgress) {
+  frame.camera = snapshot.render.camera;
+  frame.editorView = view.editorView || snapshot.view || {};
+  frame.settings = snapshot.render;
+  const animationEvents = Array.isArray(snapshot.animationEvents) ? snapshot.animationEvents : [];
+  if (animationEvents !== frame.animationEvents) {
+    frame.animationEvents = animationEvents;
+    frame.animationEventIndex = indexTweenAnimationEvents(animationEvents);
+  }
+  frame.animationProgress = animationProgress;
+  frame.viewport = normalizeViewport(snapshot.render.viewport);
+  frame.viewportSnapNext = view.viewportSnapNext === true;
+  frame.focusCell = frame.viewport ? viewportFocusCell(frame) : null;
+  frame.viewportRanges = viewportRanges(frame);
+  frame.renderCells = frame.cells;
+  return frame;
+}
+
 function threeAnimationState(snapshot) {
-  const events = Array.isArray(snapshot?.animationEvents) ? snapshot.animationEvents : [];
+  const events = tweenAnimationEvents(snapshot);
   const tween = snapshot.render.animation.tween;
+  if (events.length && tween.enabled !== true) {
+    throw new Error("Puzzle3 received Tween animation events while tween is disabled.");
+  }
+  const durationMs = Number(tween.intervalMs);
+  if (!Number.isFinite(durationMs) || durationMs <= 0) {
+    throw new Error("Puzzle3 Tween duration must be a positive number of milliseconds.");
+  }
+  const batchId = Number(snapshot.animationBatchId);
+  if (events.length && (!Number.isInteger(batchId) || batchId <= 0)) {
+    throw new Error("Puzzle3 Tween animation events require a positive animationBatchId.");
+  }
   return {
     events,
-    durationMs: Math.max(1, Number(tween.intervalMs || 250)),
-    key: JSON.stringify(events),
+    durationMs,
+    key: events.length ? `batch:${batchId}` : "idle",
     progress: 1,
   };
+}
+
+function tweenAnimationEvents(snapshot) {
+  return (Array.isArray(snapshot?.animationEvents) ? snapshot.animationEvents : [])
+    .filter((event) => event?.kind === "move" && event?.name === "tween");
 }
 
 function normalizeSize(size) {
@@ -275,32 +361,36 @@ function buildObjectCatalog(snapshot) {
   return catalog;
 }
 
-function resolveObject(object, catalog, sprites) {
+function resolveObject(object, catalog, visuals, visualCache = null) {
   const id = Number(object?.id);
   const base = Number.isFinite(id) ? catalog.get(id) || {} : {};
   const merged = { ...base, ...object, id: Number.isFinite(id) ? id : base.id };
-  const spriteName = merged.sprite || merged.name;
-  const name = merged.name || spriteName || (Number.isFinite(Number(merged.id)) ? `object_${merged.id}` : "");
-  const visual = spriteVisual(sprites[spriteName]);
-  if ((!Number.isFinite(Number(merged.id)) && !name && !spriteName) || !visual) {
+  const visualName = merged.visual || merged.name;
+  const name = merged.name || visualName || (Number.isFinite(Number(merged.id)) ? `object_${merged.id}` : "");
+  let resolvedVisual = visualCache?.get(visualName);
+  if (!resolvedVisual && !visualCache?.has(visualName)) {
+    resolvedVisual = visual(visuals[visualName]);
+    visualCache?.set(visualName, resolvedVisual);
+  }
+  if ((!Number.isFinite(Number(merged.id)) && !name && !visualName) || !resolvedVisual) {
     return null;
   }
   return {
     id: Number.isFinite(Number(merged.id)) ? Number(merged.id) : name,
     name,
-    sprite: spriteName,
+    visual: visualName,
     layer: Number(merged.layer ?? base.layer ?? 0) || 0,
-    visual,
+    visual: resolvedVisual,
   };
 }
 
-function spriteVisual(sprite) {
-  if (!sprite) {
+function visual(visual) {
+  if (!visual) {
     return null;
   }
-  const spatialAffine = Puzzle3VisualCore.evaluateSpatialSpriteAffine(sprite.spatialOps);
-  const palette = sprite.palette || {};
-  const blocks = currentSpriteLayers(sprite);
+  const spatialAffine = Puzzle3VisualCore.evaluateSpatialVisualAffine(visual.spatialOps);
+  const palette = visual.palette || {};
+  const blocks = currentVisualLayers(visual);
   const height = Math.max(1, blocks.length);
   const depth = Math.max(1, Math.max(...blocks.map((rows) => rows.length), 1));
   const width = Math.max(1, Math.max(...blocks.flat().map((row) => String(row).length), 1));
@@ -330,31 +420,37 @@ function spriteVisual(sprite) {
   if (!voxels.length) {
     return null;
   }
-  return { kind: "voxels", size: { width, depth, height }, spatialAffine, voxels };
+  return {
+    kind: "voxels",
+    size: { width, depth, height },
+    spatialOps: visual.spatialOps,
+    spatialAffine,
+    voxels,
+  };
 }
 
-function currentSpriteLayers(sprite, now = performance.now()) {
-  const frames = Array.isArray(sprite?.frames) ? sprite.frames : [];
+function currentVisualLayers(visual, now = performance.now()) {
+  const frames = Array.isArray(visual?.frames) ? visual.frames : [];
   if (!frames.length) {
-    throw new Error("Puzzle3 sprite frames are missing.");
+    throw new Error("Puzzle3 visual frames are missing.");
   }
-  const frameDuration = Number(sprite.frameDurationMs)
-    || (Number(sprite.durationMs) > 0 ? Number(sprite.durationMs) / frames.length : 0);
+  const frameDuration = Number(visual.frameDurationMs)
+    || (Number(visual.durationMs) > 0 ? Number(visual.durationMs) / frames.length : 0);
   const index = frames.length > 1 && frameDuration > 0
     ? Math.floor(now / frameDuration) % frames.length
     : 0;
   const layers = frames[index]?.layers;
   if (!Array.isArray(layers) || !layers.length || layers.some((layer) => !Array.isArray(layer) || !layer.length)) {
-    throw new Error("Puzzle3 sprite frame layers are missing or invalid.");
+    throw new Error("Puzzle3 visual frame layers are missing or invalid.");
   }
   return layers;
 }
 
-function hasLoopingSpriteAnimation(snapshot) {
-  return Object.values(snapshot?.sprites || {}).some((sprite) => (
-    Array.isArray(sprite?.frames)
-    && sprite.frames.length > 1
-    && (Number(sprite.frameDurationMs) > 0 || Number(sprite.durationMs) > 0)
+function hasLoopingVisualAnimation(snapshot) {
+  return Object.values(snapshot?.visuals || {}).some((visual) => (
+    Array.isArray(visual?.frames)
+    && visual.frames.length > 1
+    && (Number(visual.frameDurationMs) > 0 || Number(visual.durationMs) > 0)
   ));
 }
 
@@ -486,11 +582,10 @@ function addGrid(THREE, scene, frame) {
   scene.add(new THREE.LineSegments(geometry, material));
 }
 
-function addMeshes(THREE, scene, visible, shadow) {
+function addMeshes(THREE, scene, visible, shadow, materialCache) {
   const { voxels, occupied } = visible;
   const faces = mergedVoxelFaces(voxels, occupied);
   const opaqueGroups = new Map();
-  const materialCache = new Map();
   for (const face of faces) {
     const color = parseColor(face.fill);
     const alpha = color ? color.a : 1;
@@ -556,8 +651,18 @@ function applyProjectedRenderCulling(THREE, frame, camera, canvas) {
   const marginX = (marginPixels / width) * 2;
   const marginY = (marginPixels / height) * 2;
   const extent = conservativeCellRenderExtent(frame);
+  const boundsCache = frame.cellRenderBoundsCache || new Map();
+  frame.cellRenderBoundsCache = boundsCache;
   frame.renderCells = frame.cells.filter((cell) => {
-    const bounds = cellCoordinateRenderBounds(frame, cell, extent);
+    const key = cellKey(cell.position);
+    const animated = cellHasTweenAnimation(frame, cell);
+    let bounds = animated ? null : boundsCache.get(key);
+    if (!bounds) {
+      bounds = cellCoordinateRenderBounds(frame, cell, extent);
+      if (!animated) {
+        boundsCache.set(key, bounds);
+      }
+    }
     const projected = projectedRenderBounds(THREE, bounds, camera);
     return projected
       && projected.maxX >= -1 - marginX
@@ -574,14 +679,21 @@ function projectedRenderCullingEnabled(frame) {
 }
 
 function cellCoordinateRenderBounds(frame, cell, extent = conservativeCellRenderExtent(frame)) {
-  const base = renderPositionForCell(frame, cell.position || {});
+  const positions = [cell.position || {}];
+  for (const object of cell.objects || []) {
+    const animation = animationForObjectAtPosition(frame, object, cell.position || {});
+    if (animation) {
+      positions.push(animation.from);
+    }
+  }
+  const bases = positions.map((position) => renderPositionForCell(frame, position));
   return {
-    minX: base.x - extent.x,
-    maxX: base.x + extent.x,
-    minY: base.y - extent.yBelow,
-    maxY: base.y + extent.yAbove,
-    minZ: base.z - extent.z,
-    maxZ: base.z + extent.z,
+    minX: Math.min(...bases.map((base) => base.x)) - extent.x,
+    maxX: Math.max(...bases.map((base) => base.x)) + extent.x,
+    minY: Math.min(...bases.map((base) => base.y)) - extent.yBelow,
+    maxY: Math.max(...bases.map((base) => base.y)) + extent.yAbove,
+    minZ: Math.min(...bases.map((base) => base.z)) - extent.z,
+    maxZ: Math.max(...bases.map((base) => base.z)) + extent.z,
   };
 }
 
@@ -607,10 +719,11 @@ function emptyProjectedBounds() {
 
 function projectedRenderBounds(THREE, bounds, camera) {
   const projected = emptyProjectedBounds();
+  const point = new THREE.Vector3();
   for (const x of [bounds.minX, bounds.maxX]) {
     for (const y of [bounds.minY, bounds.maxY]) {
       for (const z of [bounds.minZ, bounds.maxZ]) {
-        const point = new THREE.Vector3(x, y, z).project(camera);
+        point.set(x, y, z).project(camera);
         if (!Number.isFinite(point.x) || !Number.isFinite(point.y) || !Number.isFinite(point.z)) {
           continue;
         }
@@ -629,8 +742,18 @@ function projectedRenderBounds(THREE, bounds, camera) {
 function frameVisibleVoxels(frame) {
   const voxels = [];
   const occupied = emptyVoxelOccupancy();
+  const staticCellCache = frame.staticCellVisibilityCache || new Map();
+  frame.staticCellVisibilityCache = staticCellCache;
   for (const cell of frame.renderCells || frame.cells) {
-    const visible = cellVisibleVoxels(frame, cell);
+    const key = cellKey(cell.position);
+    const animated = cellHasTweenAnimation(frame, cell);
+    let visible = animated ? null : staticCellCache.get(key);
+    if (!visible) {
+      visible = cellVisibleVoxels(frame, cell);
+      if (!animated) {
+        staticCellCache.set(key, visible);
+      }
+    }
     voxels.push(...visible.voxels);
     for (const key of visible.occupied.opaque) {
       occupied.opaque.add(key);
@@ -642,12 +765,18 @@ function frameVisibleVoxels(frame) {
   return { voxels, occupied };
 }
 
+function cellHasTweenAnimation(frame, cell) {
+  return (cell.objects || []).some((object) => (
+    Boolean(animationForObjectAtPosition(frame, object, cell.position || {}))
+  ));
+}
+
 function cellVisibleVoxels(frame, cell) {
   const stacks = new Map();
   for (const [objectIndex, object] of (cell.objects || []).entries()) {
     const sourceKey = `${cellKey(cell.position)}:${objectIndex}`;
-    const priority = Puzzle3VisualCore.objectPriority(spriteOrder(frame), object, objectIndex);
-    const objectOrder = (cellRenderIndex(frame, cell.position) * spriteOrder(frame).priorities.length) + priority;
+    const priority = Puzzle3VisualCore.objectPriority(visualOrder(frame), object, objectIndex);
+    const objectOrder = (cellRenderIndex(frame, cell.position) * visualOrder(frame).priorities.length) + priority;
     for (const voxel of objectVoxels(frame, cell.position, object, sourceKey, objectOrder)) {
       const key = voxelGeometryKeyAt(voxel.stackPosition, voxel.scale);
       const stack = stacks.get(key) || [];
@@ -718,10 +847,10 @@ function visibleVoxelStack(stack) {
   return visible;
 }
 
-function spriteOrder(frame) {
+function visualOrder(frame) {
   const order = frame?.order;
   if (!order || !Array.isArray(order.direction_priority) || !Array.isArray(order.priorities)) {
-    throw new Error("compiled sprite order contract is missing");
+    throw new Error("compiled visual order contract is missing");
   }
   return order;
 }
@@ -733,7 +862,7 @@ function cellRenderIndex(frame, position) {
     z: Math.max(1, Number(frame?.size?.height) || 1),
   };
   let index = 0;
-  for (const direction of spriteOrder(frame).direction_priority) {
+  for (const direction of visualOrder(frame).direction_priority) {
     let value;
     let span;
     switch (direction) {
@@ -743,7 +872,7 @@ function cellRenderIndex(frame, position) {
       case "back": value = spans.y - 1 - (Number(position.y) || 0); span = spans.y; break;
       case "up": value = Number(position.z) || 0; span = spans.z; break;
       case "down": value = spans.z - 1 - (Number(position.z) || 0); span = spans.z; break;
-      default: throw new Error(`invalid 3D sprite order direction: ${direction}`);
+      default: throw new Error(`invalid 3D visual order direction: ${direction}`);
     }
     index = (index * span) + value;
   }
@@ -773,13 +902,14 @@ function voxelInstances(frame, position, object, sourceKey, objectOrder = 0) {
   const base = renderPositionForCell(frame, position);
   const animation = animationForObjectAtPosition(frame, object, position);
   const offset = animationOffset3(frame, animation);
+  const spatialAffine = animationSpatialAffine(frame, object, animation);
   base.x += offset.x;
   base.y += offset.y;
   base.z += offset.z;
   return visual.voxels.map((voxel) => {
     const local = Puzzle3VisualCore.transformSpatialPoint(
-      spriteVoxelLocalPosition(voxel, size, step),
-      visual.spatialAffine,
+      visualVoxelLocalPosition(voxel, size, step),
+      spatialAffine,
     );
     const localGrid = Puzzle3VisualCore.spatialGridPoint(local, step);
     const renderPosition = {
@@ -813,13 +943,62 @@ function animationForObjectAtPosition(frame, object, position) {
   if (!Number.isFinite(objectId)) {
     return null;
   }
-  return (frame.animationEvents || []).find((event) =>
-    event.kind === "move"
-    && Number(event.objectId) === objectId
-    && Number(event.to?.x) === Number(position?.x)
-    && Number(event.to?.y) === Number(position?.y)
-    && Number(event.to?.z) === Number(position?.z)
-  ) || null;
+  return frame.animationEventIndex?.get(tweenAnimationEventKey(objectId, position)) || null;
+}
+
+function indexTweenAnimationEvents(events) {
+  if (!window.PuzzleVisualTweenCore) {
+    throw new Error("Visual tween core is unavailable.");
+  }
+  const index = new Map();
+  for (const event of window.PuzzleVisualTweenCore.resolveAnimationChannels(events || [])) {
+    if (event?.kind !== "move" || event?.name !== "tween") {
+      continue;
+    }
+    const objectId = Number(event.objectId);
+    if (!Number.isFinite(objectId)) {
+      throw new Error("Puzzle3 Tween animation event objectId must be finite.");
+    }
+    const key = tweenAnimationEventKey(objectId, event.to);
+    if (index.has(key)) {
+      throw new Error(`Puzzle3 Tween animation event target is duplicated: ${key}`);
+    }
+    index.set(key, event);
+  }
+  return index;
+}
+
+function tweenAnimationEventKey(objectId, position) {
+  return `${Number(objectId)}@${Number(position?.x)},${Number(position?.y)},${Number(position?.z)}`;
+}
+
+function animationSpatialAffine(frame, object, animation) {
+  if (!animation?.visualTween) {
+    return object.visual.spatialAffine;
+  }
+  if (!window.PuzzleVisualTweenCore) {
+    throw new Error("Visual tween core is unavailable.");
+  }
+  const state = window.PuzzleVisualTweenCore.interpolate(
+    animation.visualTween,
+    frame.animationProgress,
+  );
+  const operations = state.transforms.map((transform) => {
+    if (transform.kind === "rotate") {
+      return { ...transform, kind: "rotate3" };
+    }
+    if (transform.kind === "translate") {
+      return { ...transform, kind: "translate3" };
+    }
+    if (transform.kind === "scale") {
+      return { ...transform, kind: "scale3" };
+    }
+    if (transform.kind === "flip") {
+      return { ...transform, kind: "flip3" };
+    }
+    throw new Error(`Unknown Puzzle3 visual tween transform: ${String(transform.kind)}`);
+  });
+  return Puzzle3VisualCore.evaluateSpatialVisualAffine(operations);
 }
 
 function animationOffset3(frame, animation) {
@@ -1086,7 +1265,7 @@ function faceMaterialKey(fill) {
   return color ? `${formatRgbColor(color)}:${Math.max(0, Math.min(1, color.a))}` : `${fill}:1`;
 }
 
-function spriteVoxelLocalPosition(voxel, size, step) {
+function visualVoxelLocalPosition(voxel, size, step) {
   return {
     x: (voxel.x + 0.5 - size.width / 2) * step,
     y: (voxel.y + 0.5 - size.depth / 2) * step,
@@ -1219,7 +1398,7 @@ function viewportObjectMatches(object, viewport, focusObjects) {
   return (
     (focusObjects.size > 0 && focusObjects.has(objectId))
     || object.name === viewport.focus
-    || object.sprite === viewport.focus
+    || object.visual === viewport.focus
   );
 }
 
@@ -1459,8 +1638,8 @@ function viewportFocusVisualRenderBounds(frame) {
       continue;
     }
     const sourceKey = `${cellKey(frame.focusCell.position)}:${objectIndex}`;
-    const priority = Puzzle3VisualCore.objectPriority(spriteOrder(frame), object, objectIndex);
-    const objectOrder = (cellRenderIndex(frame, frame.focusCell.position || {}) * spriteOrder(frame).priorities.length) + priority;
+    const priority = Puzzle3VisualCore.objectPriority(visualOrder(frame), object, objectIndex);
+    const objectOrder = (cellRenderIndex(frame, frame.focusCell.position || {}) * visualOrder(frame).priorities.length) + priority;
     for (const voxel of objectVoxels(frame, frame.focusCell.position || {}, object, sourceKey, objectOrder)) {
       bounds.minX = Math.min(bounds.minX, voxel.bounds.x0);
       bounds.maxX = Math.max(bounds.maxX, voxel.bounds.x1);
@@ -1591,5 +1770,7 @@ window.Puzzle3ThreeRenderer = {
     return new Puzzle3ThreeRenderer(canvas, options);
   },
   buildPuzzleStudioThreeFrame,
+  updatePuzzleStudioThreeFrame,
+  animationOffset3,
 };
 })();

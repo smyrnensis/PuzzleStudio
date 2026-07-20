@@ -2,23 +2,6 @@ title = "Rings and Boxes"
 author = "smyrnensis"
 homepage = "https:"
 
-theme {
-preset = "puzzlescript"
-background_color = #654
-}
-
-sounds {
-sfx sfx1 { seed = 56594500; type = puzzlescript }
-sfx sfx2 { seed = 18946302; type = puzzlescript }
-sfx sfx4 { seed = 64260708; type = puzzlescript }
-sfx sfx5 { seed = 58821102; type = puzzlescript }
-sfx sfx6 { seed = 24018504; type = puzzlescript }
-sfx push_move { seed = 42952107; type = puzzlescript }
-sfx restart { seed = 24001300; type = puzzlescript }
-sfx undo { seed = 46965907; type = puzzlescript }
-sfx endlevel { seed = 98393900; type = puzzlescript }
-}
-
 scene title {
 layout {
 heading "Rings and Boxes"
@@ -34,6 +17,23 @@ start playing
 }
 choice "Level Select" -> goto level_select
 }
+}
+
+theme {
+preset = "puzzlescript"
+background_color = #654
+}
+
+sounds {
+sfx sfx1 { seed = 56594500; type = puzzlescript }
+sfx sfx2 { seed = 18946302; type = puzzlescript }
+sfx sfx4 { seed = 64260708; type = puzzlescript }
+sfx sfx5 { seed = 58821102; type = puzzlescript }
+sfx sfx6 { seed = 24018504; type = puzzlescript }
+sfx push_move { seed = 42952107; type = puzzlescript }
+sfx restart { seed = 24001300; type = puzzlescript }
+sfx undo { seed = 46965907; type = puzzlescript }
+sfx endlevel { seed = 98393900; type = puzzlescript }
 }
 
 puzzle main {
@@ -68,7 +68,6 @@ layer27 = UStack
 layer28 = DStack
 layer29 = Lose
 layer30 = Click
-layer31 = Quit
 }
 
 groups {
@@ -94,7 +93,7 @@ marker2 = BlackMarker2 OrangeMarker2 PurpleMarker2 GreenMarker2 BrownMarker2
 stack = LStack RStack DStack UStack
 }
 
-sprites {
+visuals {
 shapes {
 shape_BlackAboveEdge {
 ........................................
@@ -1315,9 +1314,6 @@ transparent
 
 Click
 transparent
-
-Quit
-transparent
 }
 
 sounds {
@@ -1332,7 +1328,7 @@ no ring
 
 routine move {
 repeat {
-for l in layer1 layer2 layer3 layer4 layer5 layer6 layer7 layer8 layer9 layer10 layer11 layer12 layer13 layer14 layer15 layer16 layer17 layer18 layer19 layer20 layer21 layer22 layer23 layer24 layer25 layer26 layer27 layer28 layer29 layer30 layer31 {
+for l in layer1 layer2 layer3 layer4 layer5 layer6 layer7 layer8 layer9 layer10 layer11 layer12 layer13 layer14 layer15 layer16 layer17 layer18 layer19 layer20 layer21 layer22 layer23 layer24 layer25 layer26 layer27 layer28 layer29 layer30 {
 once_all [ > l | | < l ] -> [ l | {__move_collision} | l ]
 once_all [ > l | ; | ^ l ] -> [ l | {__move_collision} ; | l ]
 [ > l | no l no {__move_collision} ] -> [ | l{no directions} ]
@@ -1342,7 +1338,7 @@ once_all [ {__move_collision} ] -> [ ]
 }
 }
 
-routine main {
+routine main once {
 up [ Start ] [ Ice | ] -> [ Start ] [ Ice | IceAboveEdge ]
 up [ Start ] [ OrangeBlock | ] -> [ Start ] [ OrangeBlock | OrangeAboveEdge ]
 up [ Start ] [ BlackBlock | ] -> [ Start ] [ BlackBlock | BlackAboveEdge ]
@@ -1399,11 +1395,11 @@ up [ BlackBox JointUTag | ] -> [ BlackBox BlackJointU | BlackJointAboveEdge ]
 [ > player box ] -> [ > player > box ]
 [ > player joint ] -> [ > player > joint ]
 [ > push no FallFlag | push ] -> [ > push | > push ] sfx sfx3
-left [ box jointL | directions box ] -> [ box jointL | box ]
-right [ box jointR | directions box ] -> [ box jointR | box ]
-up [ box jointU | directions box ] -> [ box jointU | box ]
-down [ box jointD | directions box ] -> [ box jointD | box ]
-up [ directions jointU | jointedge ] -> [ jointU | jointedge ]
+left [ box jointL | directions box ] -> [ directions box directions jointL | directions box ]
+right [ box jointR | directions box ] -> [ directions box directions jointR | directions box ]
+up [ box jointU | directions box ] -> [ directions box directions jointU | directions box ]
+down [ box jointD | directions box ] -> [ directions box directions jointD | directions box ]
+up [ directions jointU | jointedge ] -> [ directions jointU | directions jointedge ]
 [ > push | block ] -> [ > push StopFlag | block ]
 [ > push | StopFlag ] -> [ > push StopFlag | StopFlag ]
 [ StopFlag | > push no BlackRing ] -> [ StopFlag | > push StopFlag ]
@@ -1418,11 +1414,11 @@ down [ directions jointedge | StopFlag ] -> [ jointedge | StopFlag ]
 [ > box ring no StopFlag ] -> [ > box > ring ]
 [ > ring | ring box ] -> [ > ring | > ring box ]
 [ > ring | block ] -> [ ring | block ] sfx sfx6
-down [ edge | directions push ] -> [ edge | push ]
-up [ BoxShadow | directions box ] -> [ BoxShadow | box ]
-up [ IceShadow | directions Ice ] -> [ IceShadow | Ice ]
-[ directions ring RingShadow{no directions} ] -> [ ring RingShadow ]
-[ directions box WaterMarker ] -> [ box WaterMarker ]
+down [ edge | directions push ] -> [ directions edge | directions push ]
+up [ BoxShadow | directions box ] -> [ directions BoxShadow | directions box ]
+up [ IceShadow | directions Ice ] -> [ directions IceShadow | directions Ice ]
+[ directions ring RingShadow{no directions} ] -> [ directions ring directions RingShadow ]
+[ directions box WaterMarker ] -> [ directions box directions WaterMarker ]
 [ BlackBox BlackRing ] -> [ BlackBlock BlockFlag ]
 [ OrangeBox OrangeRing ] -> [ OrangeBlock BlockFlag ]
 [ PurpleBox PurpleRing ] -> [ PurpleBlock BlockFlag ]
@@ -1530,6 +1526,7 @@ main
 }
 
 on_level_clear {
+sfx endlevel
 wait 0.3s
 next_level
 }
@@ -1573,7 +1570,8 @@ $ = BlackRing WhiteBox
 - = PurpleButton
 × = GreenButton
 ⊕ = Ice BlackButton
-J = OrangeButton PurpleRing
+O = OrangeButton PurpleRing
+o = OrangeButton PurpleRing
 _ = WhiteFloor
 f = OrangeFloor
 w = BrownBlock
@@ -1584,13 +1582,13 @@ I = Ice Water
 @ = PurpleRing OrangeBox
 * = OrangeRing PurpleBox
 ` = OrangeRing BlackBox Start
-· = OrangeRing GreenBox
+J = OrangeRing GreenBox
 ~ = PurpleRing GreenBox
 : = GreenRing OrangeBox
-9 = GreenRing PurpleBox
+M = GreenRing PurpleBox
+m = GreenRing PurpleBox
 § = GreenRing WhiteBox
 ¶ = PurpleRing WhiteBox
-← = Quit
 }
 
 level "Tutorial-1"
@@ -1649,7 +1647,6 @@ wwwwwwww
 message "This is the end of the tutorial. There are still many things that haven't been explained, but discover them on your own."
 message "Remember you can skip any level."
 
-
 level "Basics-1"
 message "Basics"
 wwwwwww
@@ -1704,11 +1701,10 @@ wwwwwwwww
 w2wwwwwww
 w____wwww
 w_ww_wz3w
-w_*·!___w
+w_*J!___w
 wwwwaww_w
 wwwwa___w
 wwwwwwwww
-
 
 level "Parity-1"
 message "Parity"
@@ -1762,7 +1758,7 @@ level "Simultaneous-1"
 message "Simultaneous"
 wwwwwwwww
 wwwwwwwww
-wb__·__zw
+wb__J__zw
 www_w_www
 www_@_www
 www_#_www
@@ -1783,7 +1779,7 @@ wwwwwwwww
 wwwwwwzww
 w___b@#3w
 w__www_ww
-ww__:·_ww
+ww__:J_ww
 ww____www
 wwwwwwwww
 
@@ -1831,7 +1827,7 @@ wwwwwwwwww
 w2wwwwwwww
 w____awwww
 w_wwwaww3w
-w____!*·_w
+w____!*J_w
 wwwww_ww_w
 wwwwz____w
 wwwwwwwwww
@@ -1985,7 +1981,7 @@ level "Filled-A"
 wwwwwww
 wwddwww
 wwddwww
-wd~$9dw
+wd~$Mdw
 wdddddw
 wwddzww
 wwwwwww
@@ -1993,9 +1989,9 @@ wwwwwww
 level "Filled-B"
 wwwwwwww
 wddddddw
-wd~dd9dw
+wd~ddMdw
 wdwd$zdw
-wdw~d9dw
+wdw~dMdw
 wddddddw
 wwwwwwww
 
@@ -2004,7 +2000,7 @@ wwwwwwww
 wwwwwwww
 wwwwdddw
 w$§db~dw
-wd9zd¶dw
+wdMzd¶dw
 wdddcddw
 wwwwwwww
 wwwwwwww
@@ -2230,7 +2226,7 @@ wwwwwwwww
 level "Wall-3"
 wwwwwwww
 wwwwwwww
-w___9__w
+w___M__w
 w@w#_w_w
 w___bw_w
 w1_z×_-w
@@ -2380,7 +2376,7 @@ ww__r_w\\\\w
 wwww___Iw\\w
 w\\\\\__\\\w
 w\\\\\____\w
-w\\______J\w
+w\\______O\w
 w\\α\\\\__\w
 w\\z\\\\\\\w
 wwwwwwwwwwww
@@ -2492,6 +2488,7 @@ wwa!\\rrrw
 wwwwwww__w
 wwwwwwwwww
 
+
 level "Reshape-1"
 message "Reshape"
 wwwwwwwwwww
@@ -2593,7 +2590,7 @@ heading "Rings and Boxes"
 puzzle board = main
 }
 keys {
-Escape q -> goto title
+Escape q -> goto level_select
 }
 rules {
 step board

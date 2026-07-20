@@ -12,7 +12,7 @@ canonical な制御語は `if` に寄せる。
 
 - `if`: condition guard。routine statement list 内では block を guard し、scene `rules` 内では condition transition を表す。
 - lifecycle hook: `on_level_start { ... }` / `on_level_clear { ... }`。event handler だと読めるように `on_` prefix を使うが、scene transition arrow にはしない。
-- component behavior: component が入力の意味を所有する。`level_menu` は cursor 移動と enter を所有するため、author は `cursor.*` や `emit` を書かない。
+- component behavior: lowering 後の component が入力の意味を所有する。`choice` は cursor と confirm、scrollable container は scroll を所有する。`level_menu` は runtime component ではない。
 
 `when` と二語の `on <event>` はこの制御構文には使わない。
 
@@ -98,7 +98,7 @@ button "Title" -> goto title
 Blocks form an owner-scoped tree. A parent defines which child nodes, definition
 lines, and leaf-body forms it accepts. Unknown children, unsupported definitions,
 and invalid values are errors at that owner path. The containing owner, not the
-body's appearance, determines whether content is a sprite, grid, rule, or another
+body's appearance, determines whether content is a visual, grid, rule, or another
 leaf language.
 
 Definition lines have two structural forms:
@@ -123,7 +123,7 @@ A {
 ```
 
 Whitespace-only forms such as `A B <time>` or `A B=C D` are not generic inline
-nodes. Multiword directives such as `rotate from up`, ASCII sprites, rule
+nodes. Multiword directives such as `rotate from up`, ASCII visuals, rule
 patterns, level grids, and routine bodies are owner-specific leaf syntax rather
 than generic definitions. Only the owning grammar may interpret them.
 
@@ -425,7 +425,7 @@ solid = actor
 
 `slots` は位置を持つ object と state slot assignment をまとめる canonical authoring block。object / schema を生成できる owner は `slots` だけで、独立した object 宣言 block はない。
 
-`sprites` は object の見た目と描画順を所有する。state slot の宣言順は、`sprites { order { ... } }` を省略した場合の描画順生成にだけ使われる。
+`visuals` は object の見た目と描画順を所有する。state slot の宣言順は、`visuals { order { ... } }` を省略した場合の描画順生成にだけ使われる。
 
 `<name> = <object-or-selector...>` は「同じ cell に同居できない object 群」を表す。たとえば `actor = Player Box Wall` と書くと、`Player` / `Box` / `Wall` は同じ cell に同時に 1 つしか入れない。
 
@@ -457,10 +457,10 @@ semantic selector は slot declaration とは別責務なので、canonical で�
 
 同じセルの同じ slot には最大 1 object しか入れない。
 
-### `sprites.order`
+### `visuals.order`
 
 ```txt
-sprites {
+visuals {
 order {
 priority = down right
 Floor
@@ -474,7 +474,7 @@ order の各通常行は背面から前面への1つの描画 priority。slot �
 
 `A + B` は unordered merge の authoring sugar で、canonical universal tree は `merge { A; B }`。merge 内部には順序がなく、異なる slot の object や group を集められる。同じ pixel / voxel に色が存在するときは、透明な sample を除く各 RGBA channel の単純算術平均で合成する。operand の記述順は結果に影響しない。
 
-`priority = <direction...>` は、異なる cell に属するはみ出し sprite の座標比較順を定義する。左から辞書式に比較し、最初に差が出た `<direction>` 側の cell を前に描画する。2D は2軸を1回ずつ、3D は3軸を1回ずつ必須とする。省略時は2Dが `down right`、3Dが `down right front`。
+`priority = <direction...>` は、異なる cell に属するはみ出し visual の座標比較順を定義する。左から辞書式に比較し、最初に差が出た `<direction>` 側の cell を前に描画する。2D は2軸を1回ずつ、3D は3軸を1回ずつ必須とする。省略時は2Dが `down right`、3Dが `down right front`。
 
 order block 自体を省略した場合、object priority は slot 宣言順から生成される。order を明示して object 行を1つでも書いた場合は全 object をちょうど1回含めなければならず、未記載 object の暗黙追記はしない。
 
@@ -854,7 +854,7 @@ P = Player
 
 ゲーム folder の実行 entry は、top-level `puzzle` model を宣言する `.puzzle` / `.puzzle3`。model の次元は拡張子で決まり、`.puzzle3` でも `puzzle <name>` と書く。旧 `puzzle3` 宣言は error。`title` などの top-level metadata は表示情報であり、entry 資格ではない。folder を play / build / editor に渡すと、その folder 内の model-declaring source を entry として読む。複数ある場合は `game.puzzle`、`game.puzzle3`、`<folder>.puzzle`、`<folder>.puzzle3`、`main.puzzle`、`main.puzzle3`、その他の順で優先する。
 
-`levels.puzzle`、`sprites.puzzle`、`menus/title.puzzle` のような model を宣言しない分割 file は import fragment。直接開いた場合、preview / build / play は同じ folder から親 folder へ向かって最初の game entry を探す。entry から明示的に import する。
+`levels.puzzle`、`visuals.puzzle`、`menus/title.puzzle` のような model を宣言しない分割 file は import fragment。直接開いた場合、preview / build / play は同じ folder から親 folder へ向かって最初の game entry を探す。entry から明示的に import する。
 
 `parse_game_file` で読む file は、同じ場所へ別 file の内容を展開できる。
 
@@ -1286,6 +1286,8 @@ tween_duration = 160ms
 
 Puzzle rule の `wait animation` は、現在の rule segment を commit して turn を pause する。adapter はその segment が出した animation の最大 duration を待ち、完了時に同じ turn の残りの rules、win 判定、lifecycle を再開する。pause 中は別 input、undo、restart を受け付けない。animation が発生していなければ pause は作られず、そのまま後続 rule に進む。`wait tween` は互換 alias だが、canonical には `wait animation` を使う。
 
+一つの rule segment で同じ object occurrence に direction rotation と move が発生すると、visual tween と position move は独立した event として renderer に渡る。renderer は両 channel を同じ progress で評価するため、位置移動と回転は同時に進む。`Player:left -> Player:up` のような direction variant の rotation rewrite は tween 対象になる。任意 tag variant の置換は visual 差分だけでは tween 対象にならない。途中に `wait animation` または時間指定の `wait` を置くと event batch が分かれ、resume 後の更新は次の tween になる。
+
 時間を直接指定する `wait 300ms` / `wait 1s` も同じ rule segment の pause で、resume 条件だけが指定時間になる。resume 前に commit 済みの盤面は表示され、後続 rule の盤面変化はまだ発生しない。turn が複数 segment に分かれても undo は入力開始前まで戻る 1 回分のままになる。
 
 ```txt
@@ -1463,10 +1465,10 @@ k = A:k B:k
 
 これは `red = A:red B:red` / `blue = A:blue B:blue` と同じ。`A:k` のように concrete value へ展開する場合、schema は同じ `slots` block 内の展開後の右辺から生成される。
 
-### `sprites`
+### `visuals`
 
 ```txt
-sprites {
+visuals {
 Box
 #aaa
 
@@ -1481,7 +1483,7 @@ Crate
 00000
 00000
 
-Gem sprites/gem.png
+Gem visuals/gem.png
 
 Player {
 pixels_per_cell 5 5
@@ -1531,25 +1533,25 @@ shape player_shape
 }
 ```
 
-sprite のインライン ASCII shape を明示する場合は `shape = { ... }` を使う。
+visual のインライン ASCII shape を明示する場合は `shape = { ... }` を使う。
 `shape =` の次行から暗黙に row が続く形は使わない。shape 以外の設定から
 ASCII row を区別できる場合は、`shape = {}` 自体を省略して row だけを書ける。
 
-sprite shape は時間 × Z × Y × X の共通モデルを使う。`>` だけの行は次の animation frame、`-` だけの行は同じ frame 内の次の -Z layer を表す。shape 内に空行は書かない。2D model に属する `sprites` は Z depth 1 だけを受け付けるため `-` は使えず、3D model に属する `sprites` では複数 layer を書ける。2D/3D は `sprites` の綴りではなく、`of <model>` または所有 model の `puzzle` / `puzzle` から決まる。
+visual shape は時間 × Z × Y × X の共通モデルを使う。`>` だけの行は次の animation frame、`-` だけの行は同じ frame 内の次の -Z layer を表す。shape 内に空行は書かない。2D model に属する `visuals` は Z depth 1 だけを受け付けるため `-` は使えず、3D model に属する `visuals` では複数 layer を書ける。2D/3D は `visuals` の綴りではなく、`of <model>` または所有 model の `puzzle` / `puzzle` から決まる。
 
-sprite entry は、selector block の中に色行、空間操作、ASCII pattern の順で書ける。人間向けには `translate local (1, 0)` / `rotate local 90deg` の簡潔形を使え、world は既定なので省略できる。2D の `rotate directions from up` は `rotate (directions - up)` と同じで、selector が bind した angle expression から基準 angle を引く。`rotate local directions from up` のように space と合成できる。script/editor は `translate { space = world; value = (...) }` / `rotate { space = local; angle = ...; from = ...; axis = ... }` の明示blockを生成できる。色行は `colors` keyword を省略できる。`transparent` は通常のpalette色であり、`.` のempty cellとは異なる。
+visual entry は、selector block の中に色行、空間操作、ASCII pattern の順で書ける。人間向けには `translate local (1, 0)` / `rotate local 90deg` の簡潔形を使え、world は既定なので省略できる。2D の `rotate directions from up` は `rotate (directions - up)` と同じで、selector が bind した angle expression から基準 angle を引く。`rotate local directions from up` のように space と合成できる。script/editor は `translate { space = world; value = (...) }` / `rotate { space = local; angle = ...; from = ...; axis = ... }` の明示blockを生成できる。色行は `colors` keyword を省略できる。`transparent` は通常のpalette色であり、`.` のempty cellとは異なる。
 
-単純な sprite は block braces なしでも書ける。selector の次の行が色 1 つだけで pattern がなければ cell 全体の単色塗りつぶしになる。これは `Background` / `#9CBD0F` のような PuzzleScript 由来の色だけ sprite でも同じで、`00000` のようなダミー ASCII pattern は不要。pattern を続けると、その行数・列数が sprite pixel grid になる。`pixels_per_cell <w> <h>` を省略した場合は ASCII pattern の行数・列数が 1 cell の pixel grid になる。明示した場合は、pattern がその grid より大きくても描画は overflow できる。
+単純な visual は block braces なしでも書ける。selector の次の行が色 1 つだけで pattern がなければ cell 全体の単色塗りつぶしになる。これは `Background` / `#9CBD0F` のような PuzzleScript 由来の色だけ visual でも同じで、`00000` のようなダミー ASCII pattern は不要。pattern を続けると、その行数・列数が visual pixel grid になる。`pixels_per_cell <w> <h>` を省略した場合は ASCII pattern の行数・列数が 1 cell の pixel grid になる。明示した場合は、pattern がその grid より大きくても描画は overflow できる。
 
-外部画像は `Box sprites/box.png` のように selector と画像パスを 1 行に書ける。パスは game folder からの相対パスとして HTML renderer に渡される。
+外部画像は `Box visuals/box.png` のように selector と画像パスを 1 行に書ける。パスは game folder からの相対パスとして HTML renderer に渡される。
 
 shape lookup は value expression を読める。たとえば `edge:rotate(directions)` は、selector で bind された `directions` 値を `rotate` map で置換してから shape table を引く。再利用したい pattern は `shape` と object block 内の色行 + `shape <ref>` で分けて書く。
 
-2D translateはvec2、3D translateはvec3を要求する。2D rotateは`rotate [world|local] <angle> [from <angle>]`、3D rotateは`rotate [world|local] <angle> [from <angle>] [around <direction-or-vec3>]`を使う。`from`は主angleから基準angleを引くsugarなので、旧`rotate from <angle>`は受理しない。3Dでaxisを省略した2D形は+Z（`up`）axisとして扱う。4方向のvariant spriteは`Arrow:horizontal { rotate horizontal from front }`と書けば、frontを0度としてright/front/left/backが-90/0/90/-180度へ展開される。操作はsource順のaffine列で、world操作は左合成、local操作は右合成する。旧`offset`、`rotate using`、包括的な`transform` nodeは受理しない。
+2D translateはvec2、3D translateはvec3を要求する。2D rotateは`rotate [world|local] <angle> [from <angle>]`、3D rotateは`rotate [world|local] <angle> [from <angle>] [around <direction-or-vec3>]`を使う。`from`は主angleから基準angleを引くsugarなので、旧`rotate from <angle>`は受理しない。3Dでaxisを省略した2D形は+Z（`up`）axisとして扱う。4方向のvariant visualは`Arrow:horizontal { rotate horizontal from front }`と書けば、frontを0度としてright/front/left/backが-90/0/90/-180度へ展開される。操作はsource順のaffine列で、world操作は左合成、local操作は右合成する。旧`offset`、`rotate using`、包括的な`transform` nodeは受理しない。
 
-`sprites` はsprite alias、palette、shape、空間操作を定義する。`shapes`はvisual dataだけを所有し、rotation派生を所有しない。同じnamed shapeを異なる姿勢で使う場合は各sprite参照側へ`rotate`を書く。
+`visuals` はvisual alias、palette、shape、空間操作を定義する。`shapes`はvisual dataだけを所有し、rotation派生を所有しない。同じnamed shapeを異なる姿勢で使う場合は各visual参照側へ`rotate`を書く。
 
-HTML renderer が生成する sprite 名と CSS class は、object 名の大文字・小文字を保持する。CSS class として危ない区切り文字だけ `-` に置き換える。例: `Player` は `.sprite.Player`、`Box:A` は `.sprite.Box-A`。
+HTML renderer が生成する visual 名と CSS class は、object 名の大文字・小文字を保持する。CSS class として危ない区切り文字だけ `-` に置き換える。例: `Player` は `.visual.Player`、`Box:A` は `.visual.Box-A`。
 
 
 ### `legend`
@@ -1656,11 +1658,11 @@ UI の線、選択状態、panel、popup、盤面背景は preset がこの 3 �
 assets {
 css "game.css"
 script "visuals.js"
-file "sprites/player.png"
+file "visuals/player.png"
 }
 ```
 
-`css` は HTML adapter が stylesheet として読み込む。`script` は rendered scene snapshot から追加表示を作るための補助 JS で、puzzle state、transition、undo stack、level index を直接変更してはならない。`file` は script や visual sprite から `api.assetUrl("sprites/player.png")` / `source: "sprites/player.png"` として参照する静的 asset を standalone HTML export に埋め込む。script が盤面に追従する場合は `window.PuzzleStudio.registerAssetScript({ setup(api) { api.onRender(...) } })` を使う。
+`css` は HTML adapter が stylesheet として読み込む。`script` は rendered scene snapshot から追加表示を作るための補助 JS で、puzzle state、transition、undo stack、level index を直接変更してはならない。`file` は script や visual から `api.assetUrl("visuals/player.png")` / `source: "visuals/player.png"` として参照する静的 asset を standalone HTML export に埋め込む。script が盤面に追従する場合は `window.PuzzleStudio.registerAssetScript({ setup(api) { api.onRender(...) } })` を使う。
 
 scene では、scene が focus されたタイミングを `on_scene_start` lifecycle block として扱える。BGM の開始/停止など、puzzle 初期化ではなく presentation に属する処理に使う。`on_level_start` は puzzle lifecycle block なので scene には置けない。
 
@@ -1671,7 +1673,7 @@ play_music loop
 }
 ```
 
-scene / component RHS の canonical form は、`input <name>`、`component_effect <name>`、bare scene routine name、または direct scene effect。`input <name>` は focus 中の scene transition または puzzle transition に渡る semantic input で、1 回の遷移中に必ず 1 つだけ存在する原因として扱う。`component_effect <name>` は `level_menu` の cursor 移動や enter のように component が所有する操作に使う。scene / presentation / lifecycle effect は `effect` wrapper を付けずに直接書く。
+scene / component RHS の canonical form は、`input <name>`、`component_effect <name>`、bare scene routine name、または direct scene effect。`input <name>` は focus 中の scene transition または puzzle transition に渡る semantic input で、1 回の遷移中に必ず 1 つだけ存在する原因として扱う。`component_effect <name>` は model window など、lowering 後にも専用操作を持つ component に使う。scene / presentation / lifecycle effect は `effect` wrapper を付けずに直接書く。
 
 scene effect は `sfx <name>`、`play_music <name>`、`pause_music [name]`、`resume_music [name]`、`stop_music [name]`、`goto <scene>`、`goto <scene>(<level>)`、`start <scene>`、`start <scene>(<level>)`、`clear_undo_history`、`clear_game_progress`、`<target>.restart`、`<target>.next_level` など。scene navigation の canonical form は `goto` と `start` だけ。`goto` は固定 scene node へ切り替え、既存の scene state を保持する。`start` は target scene state を初期化してから `goto` する。level scene への入場も `goto sokoban`、`goto sokoban(level_name)`、`goto playing(level)` のように scene call として書く。level 指定なしの `goto <level scene>` は保存済みまたは選択中の `current_level` を使い、なければ最初の level に入る。`resume` / `continue` / `open` / `enter` / `back` / `close` は canonical scene navigation ではない。旧 `start levels ... in <scene>` / `continue levels ... in <scene>` は読まない。通常の clear / advance / restart は model window component と puzzle lifecycle の責務なので、scene からの target-qualified level effect は button、menu、debug、hub、分岐演出などの明示的な介入に限る。`play_sfx <name>` と `effect <effect>` wrapper は読まない。Effect は単体でも列でも同じ場所に書ける。列の分割は effect vocabulary が所有し、`button "New Game" -> goto playing play_music music` のように component 側は列を特別扱いしない。曖昧な引数を避けたい場合は `on_scene_start` / `if` block、または scene `rules` 内の block に 1 行ずつ書く。`then` による inline sequence は使わない。
 
@@ -1694,24 +1696,24 @@ message hint
 }
 ```
 
-scene condition は current level context を読める。level 固有の演出は `message` に level 指定を持たせず、scene / lifecycle 側の `if` で囲む。level 進行そのものを scene condition の標準責務にしない。
+level 固有の演出は `message` 自体に level 指定を持たせず、puzzle target が公開する condition または明示した scene state を scene / lifecycle 側の `if` で読む。layout の iterable binding を runtime global として参照しない。
 
 ```txt
 on_scene_start {
-if level.name == microban_01 {
+if selected_level == microban_01 {
 message hint
 }
 }
 
 rules {
-if level.name == microban_03 and sokoban.special_clear -> {
+if selected_level == microban_03 and sokoban.special_clear -> {
 message "Secret route"
 goto secret_clear
 }
 }
 ```
 
-authoring で推奨する level 指定は `level.name`。`level.label` は表示名として読めるが、現時点では `level.name` と同じ値を返す。`level.last` / `level.has_next` は真偽 condition として使える。
+`level.name` は `for level in levels` の binding 内でのみ level record の `name` field を表す。record 自体は text や level name に暗黙変換されないため、field を明示する。`level.label` や `level.title` の別名、`level.last` / `level.has_next` の暗黙 field はない。
 
 puzzle rule の rewrite effect としても `message "text"` / `message <path>` / `sfx <name>` を書ける。`message` は popup と既定の `default_wait_time` の wait を presentation event として adapter へ渡す。popup の待機中は同じ turn の後続 rule、win 判定、lifecycleを pause し、完了後に保存された continuation から再開する。wait 自体は board state には残らない。
 
@@ -1855,14 +1857,14 @@ Scene layout は `puzzle` を固定 4:3 display として扱う。`puzzle` は�
 
 `pixelate` / `pixelate scale=4` は 3D canvas の描画後 pixel 化 postprocess を有効にする。`scale` は一度縮小する倍率で、省略時は `4`。省略時は pixel 化しない。
 
-`render { shade }` は 3D sprite voxel の面ごとの明暗付けを有効にする表示設定。sprite data や puzzle state には影響しない。省略時も on。
+`render { shade }` は 3D visual voxel の面ごとの明暗付けを有効にする表示設定。visual data や puzzle state には影響しない。省略時も on。
 
-3D object は、その `puzzle` model に属する `sprites` に同名 sprite が定義されている場合だけ voxel sprite を描く。sprite 未指定の object に暗黙の cube や色は割り当てない。位置や占有を読みたい場合は `grid occupied_cells` などの debug 表示を使う。
+3D object は、その `puzzle` model に属する `visuals` に同名 visual が定義されている場合だけ voxel visual を描く。visual 未指定の object に暗黙の cube や色は割り当てない。位置や占有を読みたい場合は `grid occupied_cells` などの debug 表示を使う。
 
-3D sprite も2Dと同じ sprite entry、palette、shape、animation frame 文法を使う。`-` だけの行が次の -Z layer、`>` だけの行が次の frame であり、separator の前後に空行は入れない。色行だけなら 1x1x1 の filled cube sprite になる。再利用する voxel pattern は `shapes { <name> { ... } }` で定義し、sprite entry 側では `shape = <name>` と書く。
+3D visual も2Dと同じ visual entry、palette、shape、animation frame 文法を使う。`-` だけの行が次の -Z layer、`>` だけの行が次の frame であり、separator の前後に空行は入れない。色行だけなら 1x1x1 の filled cube visual になる。再利用する voxel pattern は `shapes { <name> { ... } }` で定義し、visual entry 側では `shape = <name>` と書く。
 
 ```txt
-sprites simple of world {
+visuals simple of world {
 Floor {
 colors = #90ee90
 shape = {
@@ -1876,7 +1878,7 @@ shape = {
 }
 ```
 
-Canonical な generic scene component は `heading`、`subheading`、`text`、`caption`、`choice`、`button`、`row`、`column`、`box`、`for`、`level_menu`、`menu`。4つの text keyword は一つの text component を異なる role で作る。Model window component は `puzzle` と `puzzle`。`layout` は component ではなく scene root layout block。`panel` は component keyword ではない。
+Canonical な scene layout form は `heading`、`subheading`、`text`、`caption`、`choice`、`button`、`row`、`column`、`box`、`for`、`level_menu`、`menu`。`for` と `level_menu` は authoring 時に消える。4つの text keyword は一つの text component を異なる role で作る。Model window component は `puzzle`。`layout` は component ではなく scene root layout block。`panel` は component keyword ではない。
 
 Text role は表示値と独立しており、同じ role を複数置ける。
 
@@ -1927,23 +1929,21 @@ update board
 }
 ```
 
-`scene level_menu [name]` の typed scene template は読まない。level list は通常 scene の `layout` 内に `level_menu` component として置く。`show_index = <true|false>`、`show_solved = <true|false>`、`layout = list`、`columns = <n>`、`wrap = <true|false>`、`locked = disabled|hidden`、`button ...` などの option は `level_menu { ... }` 内に書く。
+`scene level_menu [name]` の typed scene template は読まない。level list は通常 scene の `layout` 内に `level_menu` authoring sugar として置く。`show_index = <true|false>`、`layout = list`、`columns = <n>`、`button ...` は `level_menu { ... }` 内に書く。
 
 ```txt
 scene level_select {
 layout {
 level_menu {
 show_index = true
-show_solved = true
 columns = 4
-wrap = true
 button "Title" -> goto title
 }
 }
 }
 ```
 
-`columns = <n>` は level item を n 列の matrix として配置する。`layout = list` は通常の縦 list。matrix では `left` / `right` が隣の item、`up` / `down` が列数ぶん前後の item に移動する。`wrap = true` は cursor の端越えを循環させ、`wrap = false` で無効にする。
+`columns = <n>` は level item を通常の `row` に分割して n 列に配置する。`layout = list` は通常の縦 list。方向入力と決定は、生成された通常の `choice` と同じ規則に従う。
 
 ```txt
 scene play_level {
@@ -1990,7 +1990,7 @@ Bare `sokoban` は scene state の puzzle slot を表示する。明示名を付
 ```txt
 text "Paused"
 text message
-text level.label
+text level.name
 ```
 
 `choice` と `button` は押されたときに input、component effect、scene-local routine、または scene effect を発行する。`choice` は標準 cursor で選ばれる主選択肢、`button` は補助操作である。旧 `button "Label" = name` と `choice "Label" action name` は読まない。`-> input <name>`、`-> component_effect <name>`、bare routine name、または direct scene effect を使う。bare routine name は同じ scene 内の `routine <name> { ... }` を要求する。
@@ -2000,14 +2000,14 @@ choice "Resume" -> resume
 choice "Start" -> goto sokoban
 button "Restart" -> playing.restart
 button "Title" -> goto title
-button level.label -> playing.goto level
+button level.name -> goto level.puzzle(level.name)
 ```
 
 `box` / `row` / `column` は layout component を入れ子にする layout primitive。`box` は純粋な配置用の矩形で、背景・枠線・装飾をデフォルトでは持たない。renderer はこれを HTML 固有の DOM ではなく、構造化された layout tree として受け取る。`panel` は layout primitive ではなく、canonical syntax では使わない。`layout` 直下の改行並びは暗黙の `column` なので、縦積みだけなら `column { ... }` は省略してよい。space allocation は `space fit` または `space fill [weight]`、比率は `aspect <w> <h>`、cross-axis配置は `align start|center|end|stretch`、main-axis配置は `distribute start|center|end|between` として互いに独立して指定する。旧 `size <w> <h>` と `align <x> [y]` は読まない。
 
 `for` は collection の各 item から layout node を生成する projection primitive。固定 component を並べる場合も、collection を表示する場合も、最終的には `row` / `column` の children として扱われる。`for` 自体は cursor、enter、scroll を所有しない。
 
-level list の基本形は、通常の `scene` の `layout` に `level_menu { ... }` を置くこと。component が cursor 移動、enter、locked 表示、多すぎる項目の scroll を所有する。
+level list の基本形は、通常の `scene` の `layout` に `level_menu { ... }` を置くこと。これは `column scroll=true`、`for level in levels`、通常の `choice`、typed `goto` effect へ authoring 時に展開される。
 
 ```txt
 scene level_select {
@@ -2015,16 +2015,17 @@ layout {
 text "Select a level"
 level_menu {
 show_index = true
-show_solved = true
 button "Title" -> goto title
 }
 }
 }
 ```
 
-`level_menu` は level 選択用 component なので、`up` / `down` / `left` / `right` / `enter` の cursor 動作と、多すぎる項目の scroll を所有する。通常は key binding を書かなくてよい。既定では `w/a/s/d` と arrow keys が移動し、Enter/Space/x が選択 level を開始する。これは `level_menu` template の主動作なので、通常 `choose_level` transition のような中継は書かない。`level_menu` は inline source や `->` effect を取らない。表示する level の絞り込みは scene の `resources { levels ... }` で指定する。
+`level_menu` 自体に runtime controller はない。`up` / `down` / `left` / `right` / `enter` は展開後の通常の `choice` が処理し、scroll は展開後の通常の container layout が処理する。`level_menu` は inline source や `->` effect を取らない。表示する level の絞り込みは scene の `resources { levels ... }` で指定する。
 
-この構文では旧 `show index`、`columns <n>`、裸の `wrap`、`action <name>` は読まない。`level_menu` を選んだ時点で enter は選択 level 開始を意味する。
+level iterable の公開 record field は `id`、`name`、`puzzle`、`pack`、`ordinal`、`progress.cleared`。静的 metadata は language/model が供給し、`progress.cleared` は play session が同じ level identity に投影する。したがって通常の `for level in levels` の中で `if level.progress.cleared { ... } else { ... }` を使える。`show_solved = true` はこの式を含む通常の `choice` へ lowering され、level menu 専用の runtime 判定を作らない。`locked = ...` は公開 availability field が未定義なのでエラーになる。`wrap = true` は共通 choice navigation policy が未定義なのでエラーになる。旧 `show index`、`columns <n>`、裸の `wrap`、`action <name>` は読まない。
+
+progress save version 2 は level の表示名ではなく同じ `level.id` を保存する。`levels` の各 entry は `id` と `cleared`、`currentLevel` は同じ id を持つ。name-only の version 1 record は別の level を推測して復元しない。
 
 level の開始、読み込み、restart は level scene / puzzle slot に対する effect として書ける。ただし通常の clear / advance / restart は level scene 内の model window component と puzzle lifecycle が所有する。scene からの target effect は、title/menu から入る、button で明示 restart する、hub から特定 level に飛ぶ、通常 clear とは別の例外 flow に入る、などの介入だけに使う。canonical な開始は `goto sokoban` または `goto sokoban(level_name)`。level 指定なしの `goto <level scene>` は保存済みまたは選択中の `current_level` を使い、なければ最初の level に入る。独自 scene なら `scene playing(level) { state { sokoban(level) } layout { sokoban } rules { step sokoban } }` として `goto playing(level)` で入る。旧 `start levels ... in <scene>` / `continue levels ... in <scene>` は読まない。`playing.restart` は playing scene の現在 level を初期状態に戻し、`playing.next_level` は playing scene を次 level で開始し、`playing.previous_level` は前 level で開始する。`playing.goto <level>` は指定 level で playing scene に移る。`board.restart` のように puzzle slot を target にした場合は、その puzzle state を初期状態に戻す。`board.next_level` はその puzzle を所有する level scene を進める。
 

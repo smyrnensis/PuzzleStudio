@@ -14,7 +14,7 @@ layer1 = Background
 layer2 = Player Wall Sumo
 }
 
-sprites {
+visuals {
 Background
 #90ee90 #008000
 11111

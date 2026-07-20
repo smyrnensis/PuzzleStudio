@@ -2,7 +2,7 @@ use puzzle_core::ObjectId;
 use puzzle_kernel::LocalFrame;
 use puzzle_runtime_contract::CameraEffect;
 
-use crate::{VisualOrderDef, VoxelSpriteSet};
+use crate::{VisualOrderDef, VoxelVisualSet};
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SpatialPresentation {
@@ -10,7 +10,7 @@ pub struct SpatialPresentation {
     pub local_frame: Option<LocalFrame<ObjectId>>,
     pub rule_camera_effects: Vec<Vec<CameraEffect>>,
     pub on_level_start_camera_effects: Vec<Vec<CameraEffect>>,
-    pub sprite_set: Option<VoxelSpriteSet>,
+    pub visual_set: Option<VoxelVisualSet>,
     pub visual_order: VisualOrderDef,
 }
 
@@ -38,11 +38,11 @@ impl Default for CameraSettings3 {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct SpriteRenderSettings3 {
+pub struct VisualRenderSettings3 {
     pub shade: bool,
 }
 
-impl Default for SpriteRenderSettings3 {
+impl Default for VisualRenderSettings3 {
     fn default() -> Self {
         Self { shade: true }
     }

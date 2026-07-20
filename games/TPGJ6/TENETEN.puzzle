@@ -88,7 +88,7 @@ counts = Count:N
 targets = TargetYou TargetCrate TargetBall TargetFly TargetHeadlong
 }
 
-sprites {
+visuals {
 shapes {
 shape_Ball {
 ..............
@@ -188,35 +188,35 @@ shape_You_F {
 }
 }
 
-sprite {
+visual {
 selector = Background
 colors = #8fcf6f
 }
 
-sprite {
+visual {
 selector = Background2
 colors = #0000000a
 }
 
-sprite {
+visual {
 selector = You:F
 colors = #fff #000 #00000015
 shape = shape_You_F
 }
 
-sprite {
+visual {
 selector = You:B
 colors = #000 #fff #00000015
 shape = shape_You_F
 }
 
-sprite {
+visual {
 selector = TargetYou
 colors = #0003 #0003 #0000
 shape = shape_You_F
 }
 
-sprite {
+visual {
 selector = Crate
 colors = #b85 #a74 #00000015
 ..............
@@ -235,7 +235,7 @@ colors = #b85 #a74 #00000015
 ..2222222222..
 }
 
-sprite {
+visual {
 selector = CrateW
 colors = #88c
 ..............
@@ -254,7 +254,7 @@ colors = #88c
 ..............
 }
 
-sprite {
+visual {
 selector = TargetCrate
 colors = #0003
 ..............
@@ -273,19 +273,19 @@ colors = #0003
 ..............
 }
 
-sprite {
+visual {
 selector = Ball
 colors = #83d #a7f #00000015
 shape = shape_Ball
 }
 
-sprite {
+visual {
 selector = BallW
 colors = #43d #65d #0000
 shape = shape_Ball
 }
 
-sprite {
+visual {
 selector = TargetBall
 colors = #0003
 ..............
@@ -304,7 +304,7 @@ colors = #0003
 ..............
 }
 
-sprite {
+visual {
 selector = Fly
 colors = #fd0 #220 #6cf #00000015
 ..............
@@ -323,7 +323,7 @@ colors = #fd0 #220 #6cf #00000015
 ..............
 }
 
-sprite {
+visual {
 selector = TargetFly
 colors = #0003
 ..............
@@ -342,7 +342,7 @@ colors = #0003
 ..............
 }
 
-sprite {
+visual {
 selector = Headlong
 colors = #f82 #201a00 #00000015
 ..............
@@ -361,7 +361,7 @@ colors = #f82 #201a00 #00000015
 ....22..22....
 }
 
-sprite {
+visual {
 selector = TargetHeadlong
 colors = #0003
 ..............
@@ -380,7 +380,7 @@ colors = #0003
 ..............
 }
 
-sprite {
+visual {
 selector = NoGo
 colors = #b44
 ..............
@@ -399,7 +399,7 @@ colors = #b44
 ..............
 }
 
-sprite {
+visual {
 selector = Pond
 colors = #3373d3 #3575d5
 00000000000000
@@ -418,7 +418,7 @@ colors = #3373d3 #3575d5
 11111111111111
 }
 
-sprite {
+visual {
 selector = Crack
 colors = #037
 ..............
@@ -437,7 +437,7 @@ colors = #037
 ..............
 }
 
-sprite {
+visual {
 selector = Puddle
 colors = #3373d3 #3575d5 #8fcf6f
 22000000000022
@@ -456,12 +456,12 @@ colors = #3373d3 #3575d5 #8fcf6f
 22111111111122
 }
 
-sprite {
+visual {
 selector = CrackFlag
 colors = transparent
 }
 
-sprite {
+visual {
 selector = Hole
 colors = #332a11 #3a2f1a
 00000000000000
@@ -480,7 +480,7 @@ colors = #332a11 #3a2f1a
 00000000000000
 }
 
-sprite {
+visual {
 selector = Button
 colors = #777 #b44 #6a6a6a
 ..............
@@ -499,7 +499,7 @@ colors = #777 #b44 #6a6a6a
 ..............
 }
 
-sprite {
+visual {
 selector = GateC
 colors = #b44 #00000015
 ..............
@@ -518,7 +518,7 @@ colors = #b44 #00000015
 ......11......
 }
 
-sprite {
+visual {
 selector = GateO
 colors = #b443
 ..............
@@ -537,7 +537,7 @@ colors = #b443
 ..............
 }
 
-sprite {
+visual {
 selector = Wall
 colors = #224433 #234534
 00000000010000
@@ -556,21 +556,21 @@ colors = #224433 #234534
 00000000100000
 }
 
-sprite {
+visual {
 selector = Boundary:directions
 colors = #447755 #477a58
 rotate directions from up
 shape = shape_Boundary
 }
 
-sprite {
+visual {
 selector = Corner:directions
 colors = #475
 rotate directions from up
 shape = shape_Corner
 }
 
-sprite {
+visual {
 selector = WallShadow
 colors = #00000015
 00000000000000
@@ -589,12 +589,12 @@ colors = #00000015
 ..............
 }
 
-sprite {
+visual {
 selector = Count:0
 colors = transparent
 }
 
-sprite {
+visual {
 selector = Count:1
 colors = #000 #fff #888
 ..............
@@ -613,7 +613,7 @@ colors = #000 #fff #888
 ..............
 }
 
-sprite {
+visual {
 selector = Count:2
 colors = #000 #fff #888
 ..............
@@ -632,7 +632,7 @@ colors = #000 #fff #888
 ..............
 }
 
-sprite {
+visual {
 selector = Count:3
 colors = #000 #fff #888
 ..............
@@ -651,7 +651,7 @@ colors = #000 #fff #888
 ..............
 }
 
-sprite {
+visual {
 selector = Count:Inf
 colors = #000 #fff
 ..............
@@ -670,31 +670,31 @@ colors = #000 #fff
 ..............
 }
 
-sprite {
+visual {
 selector = Ink:F
 colors = #fff
 shape = shape_Ink_F
 }
 
-sprite {
+visual {
 selector = Ink:B
 colors = #000
 shape = shape_Ink_F
 }
 
-sprite {
+visual {
 selector = TimeMachine:F
 colors = #fff #888 #00000015
 shape = shape_TimeMachine_F
 }
 
-sprite {
+visual {
 selector = TimeMachine:B
 colors = #000 #888 #00000015
 shape = shape_TimeMachine_F
 }
 
-sprite {
+visual {
 selector = Star
 colors = #fff3 #000
 ..............
@@ -713,67 +713,67 @@ colors = #fff3 #000
 ..............
 }
 
-sprite {
+visual {
 selector = Satisfied
 colors = #ff04
 }
 
-sprite {
+visual {
 selector = Checked
 colors = transparent
 }
 
-sprite {
+visual {
 selector = Computer
 colors = transparent
 }
 
-sprite {
+visual {
 selector = Start
 colors = transparent
 }
 
-sprite {
+visual {
 selector = NotEdge:directions
 colors = transparent
 }
 
-sprite {
+visual {
 selector = Marker:directions
 colors = transparent
 }
 
-sprite {
+visual {
 selector = StopFlag
 colors = transparent
 }
 
-sprite {
+visual {
 selector = CancelTurn
 colors = transparent
 }
 
-sprite {
+visual {
 selector = OpenFlag
 colors = transparent
 }
 
-sprite {
+visual {
 selector = OnlyOneButton
 colors = transparent
 }
 
-sprite {
+visual {
 selector = Time:D
 colors = transparent
 }
 
-sprite {
+visual {
 selector = Moment:directions
 colors = transparent
 }
 
-sprite {
+visual {
 selector = FallFlag
 colors = transparent
 }

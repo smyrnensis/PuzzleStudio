@@ -3,37 +3,37 @@ use std::collections::BTreeMap;
 use puzzle_core::Size3;
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct VoxelSpriteSet {
+pub struct VoxelVisualSet {
     pub name: String,
     pub model: Option<String>,
-    pub sprites: Vec<VoxelSprite>,
+    pub visuals: Vec<VoxelVisual>,
 }
 
-impl VoxelSpriteSet {
-    pub fn new(name: impl Into<String>, model: Option<String>, sprites: Vec<VoxelSprite>) -> Self {
+impl VoxelVisualSet {
+    pub fn new(name: impl Into<String>, model: Option<String>, visuals: Vec<VoxelVisual>) -> Self {
         Self {
             name: name.into(),
             model,
-            sprites,
+            visuals,
         }
     }
 
-    pub fn sprite(&self, name: &str) -> Option<&VoxelSprite> {
-        self.sprites.iter().find(|sprite| sprite.name == name)
+    pub fn visual(&self, name: &str) -> Option<&VoxelVisual> {
+        self.visuals.iter().find(|visual| visual.name == name)
     }
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct VoxelSprite {
+pub struct VoxelVisual {
     pub name: String,
     pub palette: BTreeMap<char, VoxelColor>,
     pub frames: Vec<VoxelFrame>,
     pub duration_ms: Option<u64>,
     pub frame_duration_ms: Option<u64>,
-    pub transforms: Vec<crate::VisualSpriteTransform>,
+    pub transforms: Vec<crate::VisualTransform>,
 }
 
-impl VoxelSprite {
+impl VoxelVisual {
     pub fn new(
         name: impl Into<String>,
         palette: BTreeMap<char, VoxelColor>,
@@ -54,7 +54,7 @@ impl VoxelSprite {
     pub fn first_frame(&self) -> &VoxelFrame {
         self.frames
             .first()
-            .expect("checked sprite has at least one frame")
+            .expect("checked visual has at least one frame")
     }
 }
 

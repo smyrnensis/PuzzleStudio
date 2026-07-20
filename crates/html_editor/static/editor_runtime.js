@@ -326,8 +326,8 @@
       });
     },
 
-    async mutateSpriteSource(source, sprite) {
-      const raw = await querySynchronizedAnalysisWorker("mutateSprite", asString(source), { sprite });
+    async mutateVisualSource(source, visual) {
+      const raw = await querySynchronizedAnalysisWorker("mutateVisual", asString(source), { visual });
       return JSON.parse(raw || "null");
     },
 
@@ -389,11 +389,11 @@
           }
           return slots;
         },
-        sprite(objectId) {
+        visual(objectId) {
           const raw = querySourceAnalysis(
             wasmCompiler,
             analysis.revision,
-            "active_source_analysis_level_editor_sprite_json",
+            "active_source_analysis_level_editor_visual_json",
             Number(objectId),
           );
           return JSON.parse(raw || "null");

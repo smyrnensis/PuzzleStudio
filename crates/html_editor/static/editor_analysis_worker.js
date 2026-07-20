@@ -124,10 +124,10 @@ async function queryAnalysis(request) {
         revision,
         Number(request.cursorOffset),
       );
-    case "mutateSprite":
-      return requiredFunction(module, "active_source_analysis_mutate_sprite")(
+    case "mutateVisual":
+      return requiredFunction(module, "active_source_analysis_mutate_visual")(
         revision,
-        JSON.stringify(request.sprite || {}),
+        JSON.stringify(request.visual || {}),
       );
     default:
       throw new Error(`Unknown editor analysis worker method: ${request.method}`);

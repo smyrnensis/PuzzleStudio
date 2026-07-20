@@ -22,5 +22,5 @@ solid = Player Box Wall
 ```
 
 Then a rule can use `solid` to mean `Player Box Wall`. Use `groups` for selector
-aliases that should not also define storage-slot exclusion. Sprite drawing order is
-defined separately by `sprites { order { ... } }`.
+aliases that should not also define storage-slot exclusion. Visual drawing order is
+defined separately by `visuals { order { ... } }`.

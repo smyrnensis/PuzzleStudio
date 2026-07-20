@@ -20,7 +20,7 @@ keys {
 
 input action
 
-sprites {
+visuals {
   Player
     #ffffff
 }
@@ -117,7 +117,7 @@ puzzle main {
 slots {
   layer_1 = Player
 }
-sprites {
+visuals {
   Player
     #ffffff
 }
@@ -168,7 +168,7 @@ puzzle main {
 slots {
   layer_1 = Player
 }
-sprites {
+visuals {
   Player
     #ffffff
 }
@@ -226,7 +226,7 @@ puzzle main {
 slots {
   layer_1 = Player
 }
-sprites {
+visuals {
   Player
     #ffffff
 }
@@ -288,7 +288,7 @@ puzzle main {
 slots {
   layer_1 = Player
 }
-sprites {
+visuals {
   Player
     #ffffff
 }
@@ -329,7 +329,7 @@ puzzle sokoban {
 slots {
   layer_1 = Player
 }
-sprites {
+visuals {
   Player
     #ffffff
 }
@@ -396,7 +396,7 @@ puzzle main {
 slots {
   layer_1 = Player
 }
-sprites {
+visuals {
   Player
     #ffffff
 }

@@ -34,23 +34,23 @@ not patch generated HTML directly.
 
 ## 2D Raster Boundary
 
-Logical sprite patterns are resolution-independent presentation data until they
+Logical visual patterns are resolution-independent presentation data until they
 reach the final board canvas. The board renderer must paint those patterns
 directly into that canvas and snap shared edges only in final canvas backing
-pixels. Do not rasterize a pattern into a per-sprite or per-cell bitmap and then
+pixels. Do not rasterize a pattern into a per-visual or per-cell bitmap and then
 scale that bitmap into the board. That intermediate raster boundary can expose
 transparent texels at cell edges and makes adjacent layers quantize
 independently.
 
 Keep these cases distinct even though they consume the same logical pattern:
 
-- DOM sprite rendering may create a URL-backed bitmap because CSS requires an
+- DOM visual rendering may create a URL-backed bitmap because CSS requires an
   image resource. Name that path as DOM-only and do not reuse it in board canvas
   painting.
-- External image sprites are already raster resources and may use `drawImage`.
-- Logical pattern sprites in the board canvas must use direct shape painting;
+- External image visuals are already raster resources and may use `drawImage`.
+- Logical pattern visuals in the board canvas must use direct shape painting;
   they must not use `drawImage` with a generated pattern bitmap.
-- Level and sprite editor grids may use cell DOM because their cells are editing
+- Level and visual editor grids may use cell DOM because their cells are editing
   controls. This restriction applies to the composed play/preview image, not to
   editor interaction structure.
 

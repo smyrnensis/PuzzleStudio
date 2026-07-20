@@ -39,7 +39,7 @@ fn main() {
     println!("cargo:rerun-if-changed=docs/semantic-inputs.md");
     println!("cargo:rerun-if-changed=docs/menus.md");
     println!("cargo:rerun-if-changed=docs/lifecycle.md");
-    println!("cargo:rerun-if-changed=docs/sprites.md");
+    println!("cargo:rerun-if-changed=docs/visuals.md");
     println!("cargo:rerun-if-changed=docs/display.md");
     println!("cargo:rerun-if-changed=docs/theme.md");
     println!("cargo:rerun-if-changed=docs/sounds.md");
@@ -51,7 +51,7 @@ fn main() {
     println!("cargo:rerun-if-changed=docs/3d.md");
     println!("cargo:rerun-if-changed=docs/assets.md");
     println!("cargo:rerun-if-changed=docs/rule-effects.md");
-    println!("cargo:rerun-if-changed=docs/sprite-shapes.md");
+    println!("cargo:rerun-if-changed=docs/visual-shapes.md");
     println!("cargo:rerun-if-changed=docs/scene-state-effects.md");
     println!("cargo:rerun-if-changed=docs/maps-expansion.md");
     println!("cargo:rerun-if-changed=static/editor_boot.js");
@@ -66,9 +66,9 @@ fn main() {
     println!("cargo:rerun-if-changed=static/editor_workbench.js");
     println!("cargo:rerun-if-changed=static/editor_import_export.js");
     println!("cargo:rerun-if-changed=static/editor.js");
-    println!("cargo:rerun-if-changed=static/editor_sprite.js");
+    println!("cargo:rerun-if-changed=static/editor_visual.js");
     println!("cargo:rerun-if-changed=../html_play/static/puzzle3_visual_core.js");
-    println!("cargo:rerun-if-changed=static/editor_sprite3d.js");
+    println!("cargo:rerun-if-changed=static/editor_visual3d.js");
     println!("cargo:rerun-if-changed=static/editor_sounds.js");
     println!("cargo:rerun-if-changed=static/editor.css");
     println!("cargo:rerun-if-changed=static/wasm/puzzle_wasm.js");

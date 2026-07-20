@@ -64,3 +64,12 @@ fn active_highlight_path_projects_rust_spans_without_recognizing_source_syntax()
     assert!(!decorations.contains("source.split"));
     assert!(!decorations.contains("source.match"));
 }
+
+#[test]
+fn source_editor_registers_the_parser_owned_line_comment_token() {
+    assert!(
+        CODEMIRROR_SOURCE
+            .contains("EditorState.languageData.of(() => [{ commentTokens: { line: \"//\" } }])")
+    );
+    assert!(CODEMIRROR_SOURCE.contains("...defaultKeymap"));
+}

@@ -49,7 +49,14 @@ pub type ProgramContinuation = puzzle_kernel::ProgramContinuation;
 
 pub use puzzle_kernel::flattened_program_rules as flattened_rules;
 
-pub type GridRuleFiring<const D: usize> = RuleFiring<RuleId, GridPatch<D>>;
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GridRuleFiring<const D: usize> {
+    pub rule: RuleId,
+    pub patch: GridPatch<D>,
+    pub progressed: bool,
+    pub observable: bool,
+    pub placement: MatchPlacement<D, ObjectId>,
+}
 pub type GridRuleFiringSummary = RuleFiring<RuleId, ()>;
 
 #[derive(Clone, Default)]
@@ -100,7 +107,14 @@ impl<const D: usize> GridFiringCollector<D> {
         Self::Summary(Vec::new())
     }
 
-    fn record(&mut self, rule: RuleId, patch: GridPatch<D>, progressed: bool, observable: bool) {
+    fn record(
+        &mut self,
+        rule: RuleId,
+        patch: GridPatch<D>,
+        placement: MatchPlacement<D, ObjectId>,
+        progressed: bool,
+        observable: bool,
+    ) {
         match self {
             Self::Discard => {}
             Self::Summary(firings) => firings.push(GridRuleFiringSummary {
@@ -114,6 +128,7 @@ impl<const D: usize> GridFiringCollector<D> {
                 patch,
                 progressed,
                 observable,
+                placement,
             }),
         }
     }
@@ -173,6 +188,7 @@ impl<const D: usize> GridProgramContext<D> {
         &mut self,
         rule: &GridRule<D>,
         patch: GridPatch<D>,
+        placement: MatchPlacement<D, ObjectId>,
         progressed: bool,
     ) -> ProgramApplyOutcome {
         let outcome = ProgramApplyOutcome {
@@ -182,8 +198,13 @@ impl<const D: usize> GridProgramContext<D> {
             cancelled: rule_cancels(rule),
         };
         self.effects.apply(rule);
-        self.firings
-            .record(rule.id, patch, outcome.progressed, outcome.observable);
+        self.firings.record(
+            rule.id,
+            patch,
+            placement,
+            outcome.progressed,
+            outcome.observable,
+        );
         outcome
     }
 }
@@ -202,13 +223,16 @@ impl<State> GridRuleTransition<State> {
     }
 }
 
-pub type GridTransitionOutcome<const D: usize, Size> = KernelTransitionOutcome<
-    Option<InputId>,
-    GridState<D, Size>,
-    TransitionCommand,
-    RuleId,
-    GridPatch<D>,
->;
+#[derive(Clone, Debug)]
+pub struct GridTransitionOutcome<const D: usize, Size: GridSize<D>> {
+    pub input: Option<InputId>,
+    pub next_state: GridState<D, Size>,
+    pub progressed: bool,
+    pub observable: bool,
+    pub cancelled: bool,
+    pub commands: Vec<TransitionCommand>,
+    pub firings: Vec<GridRuleFiring<D>>,
+}
 pub type GridTransitionSummaryOutcome<const D: usize, Size> =
     KernelTransitionOutcome<Option<InputId>, GridState<D, Size>, TransitionCommand, RuleId, ()>;
 
@@ -384,7 +408,7 @@ fn finish_program_segment<const D: usize, Size: GridSize<D>>(
         (current, context.effects.commands)
     };
     Ok(GridProgramSegmentTrace {
-        trace: KernelTransitionOutcome {
+        trace: GridTransitionOutcome {
             input,
             next_state,
             progressed: !cancelled && segment.outcome.progressed,
@@ -613,7 +637,7 @@ fn transition_program_sequence_inner<const D: usize, Size: GridSize<D>>(
 fn detailed_outcome<const D: usize, Size: GridSize<D>>(
     outcome: GridInternalTransitionOutcome<D, Size>,
 ) -> GridTransitionOutcome<D, Size> {
-    KernelTransitionOutcome {
+    GridTransitionOutcome {
         input: outcome.input,
         next_state: outcome.next_state,
         progressed: outcome.progressed,
@@ -677,7 +701,7 @@ pub fn transition_program_sequence_without_input_outcome<const D: usize, Size: G
     state: &GridState<D, Size>,
     programs: &[&GridExecutableProgram<D>],
 ) -> Result<GridTransitionOutcome<D, Size>, GridTransitionError<D>> {
-    let mut outcome = KernelTransitionOutcome {
+    let mut outcome = GridTransitionOutcome {
         input: None,
         next_state: state.clone(),
         progressed: false,
@@ -930,7 +954,7 @@ fn transition_rule_once<const D: usize, Size: GridSize<D>>(
     let patch = build_patch(rule, &placement)?;
     if rule_cancels(rule) {
         patch.validate(game, state)?;
-        let outcome = context.commit(rule, patch, false);
+        let outcome = context.commit(rule, patch, placement, false);
         return Ok(GridRuleTransition {
             next_state: None,
             outcome,
@@ -938,7 +962,7 @@ fn transition_rule_once<const D: usize, Size: GridSize<D>>(
     }
     let mut next = state.clone();
     let progressed = patch.apply_in_place(game, &mut next)?;
-    let outcome = context.commit(rule, patch, progressed);
+    let outcome = context.commit(rule, patch, placement, progressed);
     Ok(GridRuleTransition {
         next_state: Some(next),
         outcome,
@@ -975,7 +999,7 @@ fn transition_rule_once_in_place<const D: usize, Size: GridSize<D>>(
     } else {
         patch.apply_in_place(game, state)?
     };
-    Ok(context.commit(rule, patch, progressed))
+    Ok(context.commit(rule, patch, placement, progressed))
 }
 
 fn transition_rule_random<const D: usize, Size: GridSize<D>>(
@@ -1001,7 +1025,7 @@ fn transition_rule_random<const D: usize, Size: GridSize<D>>(
     let patch = build_patch(rule, placement)?;
     if rule_cancels(rule) {
         patch.validate(game, state)?;
-        let outcome = context.commit(rule, patch, false);
+        let outcome = context.commit(rule, patch, placement.clone(), false);
         return Ok(GridRuleTransition {
             next_state: None,
             outcome,
@@ -1009,7 +1033,7 @@ fn transition_rule_random<const D: usize, Size: GridSize<D>>(
     }
     let mut next = state.clone();
     let progressed = patch.apply_in_place(game, &mut next)?;
-    let outcome = context.commit(rule, patch, progressed);
+    let outcome = context.commit(rule, patch, placement.clone(), progressed);
     Ok(GridRuleTransition {
         next_state: Some(next),
         outcome,
@@ -1080,7 +1104,7 @@ fn transition_rule_once_all<const D: usize, Size: GridSize<D>>(
         let patch = build_patch(rule, &placement)?;
         if rule_cancels(rule) {
             patch.validate(game, &current)?;
-            outcome.merge(context.commit(rule, patch, false));
+            outcome.merge(context.commit(rule, patch, placement, false));
             return Ok(GridRuleTransition {
                 next_state: None,
                 outcome,
@@ -1088,7 +1112,7 @@ fn transition_rule_once_all<const D: usize, Size: GridSize<D>>(
         }
         match patch.apply_in_place(game, &mut current) {
             Ok(changed) => {
-                outcome.merge(context.commit(rule, patch, changed));
+                outcome.merge(context.commit(rule, patch, placement, changed));
                 if changed {
                     current_scope = LocalFrameScope::new(&current, local_frame);
                 }
@@ -1129,11 +1153,11 @@ fn transition_rule_once_all_in_place<const D: usize, Size: GridSize<D>>(
         let patch = build_patch(rule, &placement)?;
         if rule_cancels(rule) {
             patch.validate(game, state)?;
-            outcome.merge(context.commit(rule, patch, false));
+            outcome.merge(context.commit(rule, patch, placement, false));
             return Ok(outcome);
         }
         let changed = patch.apply_in_place(game, state)?;
-        outcome.merge(context.commit(rule, patch, changed));
+        outcome.merge(context.commit(rule, patch, placement, changed));
         if changed {
             current_scope = LocalFrameScope::new(state, local_frame);
         }
@@ -1162,7 +1186,7 @@ fn transition_rule_once_per_level<const D: usize, Size: GridSize<D>>(
     let patch = build_patch(rule, &placement)?;
     if rule_cancels(rule) {
         patch.validate(game, state)?;
-        let outcome = context.commit(rule, patch, false);
+        let outcome = context.commit(rule, patch, placement, false);
         return Ok(GridRuleTransition {
             next_state: None,
             outcome,
@@ -1171,7 +1195,7 @@ fn transition_rule_once_per_level<const D: usize, Size: GridSize<D>>(
     let mut next = state.clone();
     patch.apply_in_place(game, &mut next)?;
     next.mark_level_rule_fired(rule.id);
-    let outcome = context.commit(rule, patch, true);
+    let outcome = context.commit(rule, patch, placement, true);
     Ok(GridRuleTransition {
         next_state: Some(next),
         outcome,

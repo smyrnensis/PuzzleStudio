@@ -88,7 +88,8 @@ pub enum SourceHighlightKind {
     InvalidBrace,
     LevelCell,
     InvalidLevelCell,
-    SpritePixel,
+    LevelSeparator,
+    VisualPixel,
 }
 
 impl SourceHighlightKind {
@@ -125,7 +126,8 @@ impl SourceHighlightKind {
             SourceHighlightKind::InvalidBrace => "brace-invalid",
             SourceHighlightKind::LevelCell => "level-cell",
             SourceHighlightKind::InvalidLevelCell => "level-cell-invalid",
-            SourceHighlightKind::SpritePixel => "sprite-pixel",
+            SourceHighlightKind::LevelSeparator => "level-separator",
+            SourceHighlightKind::VisualPixel => "visual-pixel",
         }
     }
 }

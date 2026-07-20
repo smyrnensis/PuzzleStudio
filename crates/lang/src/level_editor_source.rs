@@ -1,6 +1,4 @@
-use crate::{
-    LevelEditorIntegration, SourceTarget, SourceTargetKind, VisualSpriteDef, VisualSpriteKind,
-};
+use crate::{LevelEditorIntegration, SourceTarget, SourceTargetKind, VisualDef, VisualKind};
 use serde_json::{Value, json};
 
 const CONTRACT_VERSION: usize = 2;
@@ -95,8 +93,8 @@ pub(crate) fn level_editor_level_slots(
 }
 
 /// Returns the renderer-ready payload for one object. `null` means that the object
-/// has no sprite binding; it is not substituted with a guessed visual.
-pub(crate) fn level_editor_sprite_payload_json(
+/// has no visual binding; it is not substituted with a guessed visual.
+pub(crate) fn level_editor_visual_payload_json(
     parsed: &LevelEditorIntegration,
     object_id: u16,
 ) -> Result<String, String> {
@@ -109,19 +107,19 @@ pub(crate) fn level_editor_sprite_payload_json(
     else {
         return Ok("null".to_string());
     };
-    let sprite = parsed
+    let visual = parsed
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == alias.sprite)
+        .find(|visual| visual.name == alias.visual)
         .ok_or_else(|| {
             format!(
-                "level editor sprite binding for `{object_name}` references missing sprite `{}`",
-                alias.sprite
+                "level editor visual binding for `{object_name}` references missing visual `{}`",
+                alias.visual
             )
         })?;
-    serde_json::to_string(&renderer_sprite_value(sprite)).map_err(|error| {
-        format!("failed to serialize level editor sprite `{object_name}`: {error}")
+    serde_json::to_string(&renderer_visual_value(visual)).map_err(|error| {
+        format!("failed to serialize level editor visual `{object_name}`: {error}")
     })
 }
 
@@ -158,33 +156,33 @@ fn legend_value(
     Value::Array(entries)
 }
 
-fn renderer_sprite_value(sprite: &VisualSpriteDef) -> Value {
-    let mut value = match &sprite.kind {
-        VisualSpriteKind::Solid(color) => json!({ "colors": { "0": color }, "pattern": ["0"] }),
-        VisualSpriteKind::Image { source } => json!({ "source": source }),
-        VisualSpriteKind::Ascii { colors } => json!({
+fn renderer_visual_value(visual: &VisualDef) -> Value {
+    let mut value = match &visual.kind {
+        VisualKind::Solid(color) => json!({ "colors": { "0": color }, "pattern": ["0"] }),
+        VisualKind::Image { source } => json!({ "source": source }),
+        VisualKind::Ascii { colors } => json!({
             "colors": colors.iter().map(|color| (color.token.to_string(), Value::String(color.color.clone()))).collect::<serde_json::Map<_, _>>(),
-            "pattern": sprite.frames.first().and_then(|frame| frame.planes.first()).cloned().unwrap_or_default(),
+            "pattern": visual.frames.first().and_then(|frame| frame.planes.first()).cloned().unwrap_or_default(),
         }),
     };
     let object = value
         .as_object_mut()
-        .expect("renderer sprite payload must be an object");
-    if !sprite.transforms.is_empty() {
-        object.insert("transforms".to_string(), json!(sprite.transforms));
+        .expect("renderer visual payload must be an object");
+    if !visual.transforms.is_empty() {
+        object.insert("transforms".to_string(), json!(visual.transforms));
     }
-    if sprite.fit != Default::default() {
-        object.insert("fit".to_string(), json!(sprite.fit));
+    if visual.fit != Default::default() {
+        object.insert("fit".to_string(), json!(visual.fit));
     }
-    if let Some(sampling) = sprite.sampling {
+    if let Some(sampling) = visual.sampling {
         object.insert("sampling".to_string(), json!(sampling));
     }
-    if let Some(duration_ms) = sprite.animation_duration_ms {
+    if let Some(duration_ms) = visual.animation_duration_ms {
         object.insert("durationMs".to_string(), json!(duration_ms));
         object.insert(
             "frames".to_string(),
             json!(
-                sprite
+                visual
                     .frames
                     .iter()
                     .filter_map(|frame| frame.planes.first())
@@ -192,7 +190,7 @@ fn renderer_sprite_value(sprite: &VisualSpriteDef) -> Value {
             ),
         );
     }
-    if let Some(pixels_per_cell) = sprite.pixels_per_cell {
+    if let Some(pixels_per_cell) = visual.pixels_per_cell {
         object.insert(
             "pixelsPerCell".to_string(),
             json!({ "width": pixels_per_cell.width, "height": pixels_per_cell.height }),

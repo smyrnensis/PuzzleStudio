@@ -17,7 +17,7 @@ slots {
 Player Wall
 }
 
-sprites {
+visuals {
 Player
 #e85d75
 .000.

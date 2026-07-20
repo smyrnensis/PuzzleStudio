@@ -12,7 +12,7 @@ const WORK_PANE_IDS = [
   PREVIEW_WORK_PANE_ID,
   "level",
   "solver",
-  "sprite",
+  "visual",
   "sounds",
   "psimport",
   "docs",
@@ -21,15 +21,15 @@ const WORK_PANE_IDS = [
 const PANE_ID_ALIASES = {
   code: SOURCE_WORK_PANE_ID,
   level3d: "level",
-  sprite3d: "sprite",
+  visual3d: "visual",
 };
 const PREVIEW_MODE_TO_WORK_PANE_ID = {
   play: PREVIEW_WORK_PANE_ID,
   edit: "level",
   level3d: "level",
   solver: "solver",
-  sprite: "sprite",
-  sprite3d: "sprite",
+  visual: "visual",
+  visual3d: "visual",
   sounds: "sounds",
   psimport: "psimport",
   docs: "docs",
@@ -42,7 +42,7 @@ const WORK_PANE_DEFAULT_WIDTHS = {
   [PREVIEW_WORK_PANE_ID]: "420px",
   level: "420px",
   solver: "420px",
-  sprite: "520px",
+  visual: "520px",
   sounds: "420px",
   psimport: "520px",
   docs: "480px",
@@ -52,7 +52,7 @@ const WORK_PANE_MIN_WIDTHS = {
   [PREVIEW_WORK_PANE_ID]: 300,
   level: 300,
   solver: 300,
-  sprite: 320,
+  visual: 320,
   sounds: 300,
   psimport: 320,
   docs: 300,
@@ -149,7 +149,7 @@ function toolPaneTitle(paneId) {
     level: "Level",
     level3d: "3D Level",
     solver: "Solve",
-    sprite: "Sprite",
+    visual: "Visual",
     sounds: "Sound",
     psimport: "PuzzleScript import",
     docs: "Documents",
@@ -162,7 +162,7 @@ function toolPanePanelForPaneId(paneId) {
     level: levelBuilder,
     level3d: level3dBuilder,
     solver: solverPanel,
-    sprite: spriteBuilder,
+    visual: visualBuilder,
     sounds: soundsBuilder,
     psimport: psImportPanel,
     docs: docsPanel,
@@ -229,9 +229,9 @@ function toolPaneHeaderActionGroups(paneId) {
       document.querySelector("#level3dPlaytestButton")?.closest(".source-action-group"),
     ].filter(Boolean);
   }
-  if (paneId === "sprite") {
+  if (paneId === "visual") {
     return [
-      document.querySelector("#spritePaneHeaderActions"),
+      document.querySelector("#visualPaneHeaderActions"),
     ].filter(Boolean);
   }
   return [];
@@ -242,8 +242,8 @@ function syncToolPaneHeaderActionGroups() {
     const is3d = group.classList.contains("level3d-source-actions");
     group.hidden = !isPaneVisible("level") || (is3d ? currentLevelPaneMode !== "level3d" : currentLevelPaneMode !== "edit");
   }
-  for (const group of toolPaneHeaderActionGroups("sprite")) {
-    group.hidden = !isPaneVisible("sprite");
+  for (const group of toolPaneHeaderActionGroups("visual")) {
+    group.hidden = !isPaneVisible("visual");
   }
 }
 
@@ -286,8 +286,8 @@ function createToolPane(paneId, panel) {
   if (paneId === "level" && level3dBuilder) {
     pane.append(level3dBuilder);
   }
-  if (paneId === "sprite" && sprite3dBuilder) {
-    pane.append(sprite3dBuilder);
+  if (paneId === "visual" && visual3dBuilder) {
+    pane.append(visual3dBuilder);
   }
   pane.append(createPaneStatusFooter(paneId));
   return pane;
@@ -824,13 +824,13 @@ function applyPaneVisibility() {
       }
       continue;
     }
-    if (paneId === "sprite") {
-      const spriteUnbound = currentSpritePaneMode === "none";
-      if (spriteBuilder) {
-        spriteBuilder.hidden = !visible || spriteUnbound || currentSpritePaneMode !== "sprite";
+    if (paneId === "visual") {
+      const visualUnbound = currentVisualPaneMode === "none";
+      if (visualBuilder) {
+        visualBuilder.hidden = !visible || visualUnbound || currentVisualPaneMode !== "visual";
       }
-      if (sprite3dBuilder) {
-        sprite3dBuilder.hidden = !visible || spriteUnbound || currentSpritePaneMode !== "sprite3d";
+      if (visual3dBuilder) {
+        visual3dBuilder.hidden = !visible || visualUnbound || currentVisualPaneMode !== "visual3d";
       }
       continue;
     }

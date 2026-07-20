@@ -12,9 +12,7 @@ fn scene_entry_is_component(tokens: &[&str]) -> bool {
         | puzzle_scene::SceneComponentKind::Row
         | puzzle_scene::SceneComponentKind::Column
         | puzzle_scene::SceneComponentKind::Box
-        | puzzle_scene::SceneComponentKind::Conditional
-        | puzzle_scene::SceneComponentKind::For => true,
-        puzzle_scene::SceneComponentKind::LevelMenu => true,
+        | puzzle_scene::SceneComponentKind::Conditional => true,
         puzzle_scene::SceneComponentKind::Viewport | puzzle_scene::SceneComponentKind::Frame => {
             tokens.len() >= 2
         }
@@ -23,6 +21,7 @@ fn scene_entry_is_component(tokens: &[&str]) -> bool {
 
 #[derive(Clone, Copy)]
 enum AuthoringEntryOwner {
+    SceneDefinition,
     SceneLayoutCondition,
     SceneCondition,
     SceneLifecycle,
@@ -32,6 +31,7 @@ enum AuthoringEntryOwner {
 impl AuthoringEntryOwner {
     fn missing_close_message(self) -> &'static str {
         match self {
+            AuthoringEntryOwner::SceneDefinition => "scene missing closing brace",
             AuthoringEntryOwner::SceneLayoutCondition => {
                 "layout condition block missing closing brace"
             }
@@ -344,7 +344,7 @@ fn lower_puzzle_model(
     }
 
     *solver_strategy = model.body.solver.clone();
-    for entry in &model.body.sprite_resources {
+    for entry in &model.body.visual_resources {
         let parsed = parse_visuals_entry(entry, catalog, visuals);
         recognition.merge(parsed.recognition);
         if let Err(report) = parsed.value {

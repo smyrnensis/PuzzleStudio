@@ -319,8 +319,6 @@ pub enum SceneComponent<
     Column(SceneContainer<Effect, LabelExpr, TextExpr, ConditionExpr>),
     Box(SceneContainer<Effect, LabelExpr, TextExpr, ConditionExpr>),
     Conditional(SceneConditional<Effect, LabelExpr, TextExpr, ConditionExpr>),
-    For(SceneFor<Effect, LabelExpr, TextExpr, ConditionExpr>),
-    LevelMenu(LevelMenuComponent<Effect, LabelExpr>),
 }
 
 impl<Effect, LabelExpr, TextExpr, ConditionExpr>
@@ -337,8 +335,6 @@ impl<Effect, LabelExpr, TextExpr, ConditionExpr>
             Self::Column(_) => SceneComponentKind::Column,
             Self::Box(_) => SceneComponentKind::Box,
             Self::Conditional(_) => SceneComponentKind::Conditional,
-            Self::For(_) => SceneComponentKind::For,
-            Self::LevelMenu(_) => SceneComponentKind::LevelMenu,
         }
     }
 
@@ -348,7 +344,6 @@ impl<Effect, LabelExpr, TextExpr, ConditionExpr>
                 &container.children
             }
             Self::Conditional(conditional) => &conditional.children,
-            Self::For(for_component) => &for_component.children,
             _ => &[],
         }
     }
@@ -361,7 +356,6 @@ impl<Effect, LabelExpr, TextExpr, ConditionExpr>
                 Some(&mut container.children)
             }
             Self::Conditional(conditional) => Some(&mut conditional.children),
-            Self::For(for_component) => Some(&mut for_component.children),
             _ => None,
         }
     }
@@ -374,9 +368,8 @@ impl<Effect, LabelExpr, TextExpr, ConditionExpr>
             Self::Row(container) | Self::Column(container) | Self::Box(container) => {
                 Some(&container.layout)
             }
-            Self::LevelMenu(menu) => Some(&menu.layout),
             Self::Text(text) => Some(&text.layout),
-            Self::Conditional(_) | Self::For(_) => None,
+            Self::Conditional(_) => None,
         }
     }
 
@@ -388,9 +381,8 @@ impl<Effect, LabelExpr, TextExpr, ConditionExpr>
             Self::Row(container) | Self::Column(container) | Self::Box(container) => {
                 Some(&mut container.layout)
             }
-            Self::LevelMenu(menu) => Some(&mut menu.layout),
             Self::Text(text) => Some(&mut text.layout),
-            Self::Conditional(_) | Self::For(_) => None,
+            Self::Conditional(_) => None,
         }
     }
 }
@@ -406,8 +398,6 @@ pub enum SceneComponentKind {
     Column,
     Box,
     Conditional,
-    For,
-    LevelMenu,
 }
 
 impl SceneComponentKind {
@@ -422,8 +412,6 @@ impl SceneComponentKind {
             Self::Column => "column",
             Self::Box => "box",
             Self::Conditional => "if",
-            Self::For => "for",
-            Self::LevelMenu => "level_menu",
         }
     }
 
@@ -438,8 +426,6 @@ impl SceneComponentKind {
             "column" => Self::Column,
             "box" => Self::Box,
             "if" => Self::Conditional,
-            "for" => Self::For,
-            "level_menu" => Self::LevelMenu,
             _ => return None,
         })
     }
@@ -456,8 +442,6 @@ pub const GENERIC_SCENE_COMPONENT_KINDS: &[SceneComponentKind] = &[
     SceneComponentKind::Row,
     SceneComponentKind::Column,
     SceneComponentKind::Box,
-    SceneComponentKind::For,
-    SceneComponentKind::LevelMenu,
 ];
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -541,73 +525,6 @@ pub struct SceneConditional<
     pub condition: ConditionExpr,
     pub children: Vec<SceneComponent<Effect, LabelExpr, TextExpr, ConditionExpr>>,
     pub else_children: Vec<SceneComponent<Effect, LabelExpr, TextExpr, ConditionExpr>>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SceneFor<
-    Effect = SceneCommand,
-    LabelExpr = SceneTextExpr,
-    TextExpr = SceneTextExpr,
-    ConditionExpr = String,
-> {
-    pub binding: String,
-    pub source: SceneForSource,
-    pub children: Vec<SceneComponent<Effect, LabelExpr, TextExpr, ConditionExpr>>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum SceneForSource {
-    Levels,
-    State(String),
-}
-
-impl SceneForSource {
-    pub fn as_str(&self) -> &str {
-        match self {
-            Self::Levels => "levels",
-            Self::State(name) => name,
-        }
-    }
-
-    pub fn is_levels(&self) -> bool {
-        matches!(self, Self::Levels)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LevelMenuComponent<Effect = SceneCommand, Expr = SceneTextExpr> {
-    pub source: Option<String>,
-    pub action: Option<Effect>,
-    pub show_index: bool,
-    pub show_cleared: bool,
-    pub columns: Option<u16>,
-    pub wrap: bool,
-    pub locked: LevelMenuLocked,
-    pub buttons: Vec<SceneButton<Effect, Expr>>,
-    pub layout: SceneLayout,
-}
-
-impl<Effect, Expr> Default for LevelMenuComponent<Effect, Expr> {
-    fn default() -> Self {
-        Self {
-            source: None,
-            action: None,
-            show_index: false,
-            show_cleared: false,
-            columns: None,
-            wrap: false,
-            locked: LevelMenuLocked::default(),
-            buttons: Vec::new(),
-            layout: SceneLayout::default(),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum LevelMenuLocked {
-    #[default]
-    Disabled,
-    Hidden,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1090,11 +1007,6 @@ pub enum SceneExpr {
     Int(i64),
     Text(String),
     Path(Vec<String>),
-    LevelSelector {
-        collection: String,
-        key: SceneLevelKey,
-        property: Option<String>,
-    },
     Call {
         name: String,
         args: Vec<SceneExpr>,
@@ -1111,13 +1023,6 @@ pub enum SceneExpr {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
-pub enum SceneLevelKey {
-    Index(i64),
-    Id(String),
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SceneBinaryOp {
     And,
@@ -1127,15 +1032,14 @@ pub enum SceneBinaryOp {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
-pub struct SceneFixtureJsonOptions<'a> {
+pub struct SceneFixtureJsonOptions {
     pub viewport_projection: Option<ViewportProjection>,
-    pub default_level_menu_action: Option<&'a SceneEffect>,
 }
 
 pub fn write_scene_component_fixture_json<TextExpr, TextWriter, LevelSource>(
     out: &mut String,
     component: &SceneComponent<SceneEffect, SceneExpr, TextExpr, SceneExpr>,
-    options: SceneFixtureJsonOptions<'_>,
+    options: SceneFixtureJsonOptions,
     write_text_fields: TextWriter,
     note_level_source: &mut LevelSource,
 ) -> bool
@@ -1262,319 +1166,60 @@ where
             );
             out.push_str("] }");
         }
-        SceneComponent::For(for_view) => {
-            out.push_str("{ \"kind\": \"for\", \"binding\": ");
-            write_json_string(out, &for_view.binding);
-            out.push_str(", \"source\": ");
-            write_json_string(out, for_view.source.as_str());
-            out.push_str(", \"children\": [");
-            write_scene_component_list_fixture_json(
-                out,
-                &for_view.children,
-                options,
-                write_text_fields,
-                note_level_source,
-            );
-            out.push_str("] }");
-        }
-        SceneComponent::LevelMenu(menu) => {
-            let source = menu.source.as_deref().unwrap_or("levels");
-            note_level_source(source);
-            let action = menu.action.as_ref().or(options.default_level_menu_action);
-            out.push_str("{ \"kind\": \"level_menu\", \"source\": ");
-            write_json_string(out, source);
-            out.push_str(", \"levels\": ");
-            write_json_string(out, source);
-            out.push_str(", \"showIndex\": ");
-            out.push_str(if menu.show_index { "true" } else { "false" });
-            out.push_str(", \"showCleared\": ");
-            out.push_str(if menu.show_cleared { "true" } else { "false" });
-            out.push_str(", \"columns\": ");
-            if let Some(columns) = menu.columns {
-                out.push_str(&columns.to_string());
-            } else {
-                out.push_str("null");
-            }
-            out.push_str(", \"wrap\": ");
-            out.push_str(if menu.wrap { "true" } else { "false" });
-            out.push_str(", \"action\": ");
-            if let Some(action) = action {
-                write_scene_effect_json(out, action);
-            } else {
-                out.push_str("null");
-            }
-            out.push_str(", \"buttons\": [");
-            for (index, button) in menu.buttons.iter().enumerate() {
-                if index > 0 {
-                    out.push_str(", ");
-                }
-                out.push_str("{ \"label\": ");
-                write_scene_expr_json(out, &button.label);
-                out.push_str(", \"effect\": ");
-                write_scene_effect_json(out, &button.effect);
-                out.push_str(" }");
-            }
-            out.push(']');
-            push_inline_layout_json(out, &menu.layout);
-            out.push_str(" }");
-        }
     }
     true
 }
 
 pub fn write_scene_effect_json(out: &mut String, effect: &SceneEffect) {
-    out.push('{');
-    write_scene_effect_json_fields(out, effect);
-    out.push('}');
-}
-
-pub fn write_scene_effect_json_fields(out: &mut String, effect: &SceneEffect) {
-    match effect {
-        SceneEffect::Input(input) => {
-            write_json_pair(out, "kind", "input");
-            out.push_str(", ");
-            write_json_pair(out, "name", input);
-        }
-        SceneEffect::ComponentEffect(effect) => {
-            write_json_pair(out, "kind", "component_effect");
-            out.push_str(", ");
-            write_json_pair(out, "name", effect);
-        }
-        SceneEffect::RoutineCall(name) => {
-            write_json_pair(out, "kind", "routine_call");
-            out.push_str(", ");
-            write_json_pair(out, "name", name);
-        }
-        SceneEffect::Message { text } => {
-            write_json_pair(out, "kind", "message");
-            out.push_str(", \"text\": ");
-            write_scene_expr_json(out, text);
-        }
-        SceneEffect::Wait { milliseconds } => {
-            write_json_pair(out, "kind", "wait");
-            out.push_str(", \"milliseconds\": ");
-            out.push_str(&milliseconds.unwrap_or(200).to_string());
-        }
-        SceneEffect::Conditional { condition, effect } => {
-            write_json_pair(out, "kind", "conditional");
-            out.push_str(", \"condition\": ");
-            write_scene_expr_json(out, condition);
-            out.push_str(", \"effect\": ");
-            write_scene_effect_json(out, effect);
-        }
-        SceneEffect::PlaySfx { name } => {
-            write_json_pair(out, "kind", "play_sfx");
-            out.push_str(", ");
-            write_json_pair(out, "name", name);
-        }
-        SceneEffect::PlayMusic { name } => {
-            write_json_pair(out, "kind", "play_music");
-            out.push_str(", ");
-            write_json_pair(out, "name", name);
-        }
-        SceneEffect::PauseMusic { name } => {
-            write_optional_music_effect_json(out, "pause_music", name)
-        }
-        SceneEffect::ResumeMusic { name } => {
-            write_optional_music_effect_json(out, "resume_music", name)
-        }
-        SceneEffect::StopMusic { name } => {
-            write_optional_music_effect_json(out, "stop_music", name)
-        }
-        SceneEffect::Goto { scene, params } => {
-            write_scene_target_effect_json(out, "goto", scene, params)
-        }
-        SceneEffect::Enter { scene, params } => {
-            write_scene_target_effect_json(out, "enter", scene, params)
-        }
-        SceneEffect::Back => write_json_pair(out, "kind", "back"),
-        SceneEffect::Create { scene } => write_scene_target_effect_json(out, "create", scene, &[]),
-        SceneEffect::Reset { scene } => write_scene_target_effect_json(out, "reset", scene, &[]),
-        SceneEffect::Delete { scene } => write_scene_target_effect_json(out, "delete", scene, &[]),
-        SceneEffect::Show { scene } => write_scene_target_effect_json(out, "show", scene, &[]),
-        SceneEffect::Hide { scene } => write_scene_target_effect_json(out, "hide", scene, &[]),
-        SceneEffect::Toggle { scene } => write_scene_target_effect_json(out, "toggle", scene, &[]),
-        SceneEffect::Focus { scene } => write_scene_target_effect_json(out, "focus", scene, &[]),
-        SceneEffect::PuzzleNextLevel { target } => {
-            write_json_pair(out, "kind", "puzzle_next_level");
-            out.push_str(", ");
-            write_json_pair(out, "target", target);
-        }
-        SceneEffect::PuzzlePreviousLevel { target } => {
-            write_json_pair(out, "kind", "puzzle_previous_level");
-            out.push_str(", ");
-            write_json_pair(out, "target", target);
-        }
-        SceneEffect::GotoLevel { target, level } => {
-            write_json_pair(out, "kind", "puzzle_goto_level");
-            out.push_str(", ");
-            write_json_pair(out, "target", target);
-            out.push_str(", \"level\": ");
-            write_scene_expr_json(out, level);
-        }
-        SceneEffect::ResetPuzzle { target } => {
-            write_json_pair(out, "kind", "puzzle_reset");
-            out.push_str(", ");
-            write_json_pair(out, "target", target);
-        }
-        SceneEffect::LoadPuzzle { target, source } => {
-            write_json_pair(out, "kind", "puzzle_load");
-            out.push_str(", ");
-            write_json_pair(out, "target", target);
-            out.push_str(", ");
-            write_json_pair(out, "source", source);
-        }
-        SceneEffect::Apply { rule, args, target } => {
-            write_json_pair(out, "kind", "apply");
-            out.push_str(", ");
-            write_json_pair(out, "rule", rule);
-            out.push_str(", \"args\": [");
-            for (index, arg) in args.iter().enumerate() {
-                if index > 0 {
-                    out.push_str(", ");
-                }
-                write_scene_expr_json(out, arg);
-            }
-            out.push(']');
-            if let Some(target) = target {
-                out.push_str(", ");
-                write_json_pair(out, "target", target);
-            }
-        }
-        SceneEffect::Copy { source, target } => {
-            write_json_pair(out, "kind", "copy");
-            out.push_str(", ");
-            write_json_pair(out, "source", source);
-            out.push_str(", ");
-            write_json_pair(out, "target", target);
-        }
-        SceneEffect::SetVariable { name, value } => {
-            write_json_pair(out, "kind", "set_variable");
-            out.push_str(", ");
-            write_json_pair(out, "name", name);
-            out.push_str(", \"value\": ");
-            write_scene_expr_json(out, value);
-        }
-        SceneEffect::ClearUndoHistory => write_json_pair(out, "kind", "clear_undo_history"),
-        SceneEffect::ClearGameProgress => write_json_pair(out, "kind", "clear_game_progress"),
-        SceneEffect::SetCurrentLevel { level } => {
-            write_json_pair(out, "kind", "set_current_level");
-            out.push_str(", \"level\": ");
-            write_scene_expr_json(out, level);
-        }
-        SceneEffect::ClearCurrentLevel => write_json_pair(out, "kind", "clear_current_level"),
-        SceneEffect::SetLevelCleared { level, cleared } => {
-            write_json_pair(out, "kind", "set_level_cleared");
-            out.push_str(", \"cleared\": ");
-            out.push_str(if *cleared { "true" } else { "false" });
-            if let Some(level) = level {
-                out.push_str(", \"level\": ");
-                write_scene_expr_json(out, level);
-            }
-        }
-        SceneEffect::ResetPersistentVars => write_json_pair(out, "kind", "reset_persistent_vars"),
-        SceneEffect::Sequence { effects } => {
-            write_json_pair(out, "kind", "sequence");
-            out.push_str(", \"effects\": [");
-            for (index, effect) in effects.iter().enumerate() {
-                if index > 0 {
-                    out.push_str(", ");
-                }
-                write_scene_effect_json(out, effect);
-            }
-            out.push(']');
-        }
-    }
+    out.push_str(
+        &serde_json::to_string(effect).expect("validated scene effect should serialize to JSON"),
+    );
 }
 
 pub fn write_scene_expr_json(out: &mut String, expr: &SceneExpr) {
+    out.push_str(
+        &serde_json::to_string(&scene_expr_json_value(expr))
+            .expect("validated scene expression should serialize to JSON"),
+    );
+}
+
+pub fn scene_expr_json_value(expr: &SceneExpr) -> serde_json::Value {
     match expr {
-        SceneExpr::Bool(value) => {
-            out.push_str("{ \"kind\": \"bool\", \"value\": ");
-            out.push_str(if *value { "true" } else { "false" });
-            out.push_str(" }");
-        }
-        SceneExpr::Int(value) => {
-            out.push_str("{ \"kind\": \"int\", \"value\": ");
-            out.push_str(&value.to_string());
-            out.push_str(" }");
-        }
-        SceneExpr::Text(value) => {
-            out.push_str("{ \"kind\": \"text\", \"value\": ");
-            write_json_string(out, value);
-            out.push_str(" }");
-        }
+        SceneExpr::Bool(value) => serde_json::json!({ "kind": "bool", "value": value }),
+        SceneExpr::Int(value) => serde_json::json!({ "kind": "int", "value": value }),
+        SceneExpr::Text(value) => serde_json::json!({ "kind": "text", "value": value }),
         SceneExpr::Path(path) => {
-            out.push_str("{ \"kind\": \"path\", \"path\": ");
-            write_json_string(out, &path.join("."));
-            out.push_str(" }");
+            serde_json::json!({ "kind": "path", "path": path.join(".") })
         }
-        SceneExpr::LevelSelector {
-            collection,
-            key,
-            property,
-        } => {
-            out.push_str("{ \"kind\": \"level_selector\", \"collection\": ");
-            write_json_string(out, collection);
-            out.push_str(", \"key\": ");
-            match key {
-                SceneLevelKey::Index(index) => {
-                    out.push_str("{ \"kind\": \"index\", \"value\": ");
-                    out.push_str(&index.to_string());
-                    out.push_str(" }");
-                }
-                SceneLevelKey::Id(id) => {
-                    out.push_str("{ \"kind\": \"id\", \"value\": ");
-                    write_json_string(out, id);
-                    out.push_str(" }");
-                }
-            }
-            if let Some(property) = property {
-                out.push_str(", \"property\": ");
-                write_json_string(out, property);
-            }
-            out.push_str(" }");
-        }
-        SceneExpr::Call { name, args } => {
-            out.push_str("{ \"kind\": \"call\", \"name\": ");
-            write_json_string(out, name);
-            out.push_str(", \"args\": [");
-            for (index, arg) in args.iter().enumerate() {
-                if index > 0 {
-                    out.push_str(", ");
-                }
-                write_scene_expr_json(out, arg);
-            }
-            out.push_str("] }");
-        }
+        SceneExpr::Call { name, args } => serde_json::json!({
+            "kind": "call",
+            "name": name,
+            "args": args.iter().map(scene_expr_json_value).collect::<Vec<_>>(),
+        }),
         SceneExpr::Binary { op, left, right } => {
-            let op = match op {
+            let operator = match op {
                 SceneBinaryOp::And => "and",
                 SceneBinaryOp::Eq => "eq",
                 SceneBinaryOp::In => "in",
                 SceneBinaryOp::NotEq => "neq",
             };
-            out.push_str("{ \"kind\": \"binary\", \"op\": ");
-            write_json_string(out, op);
-            out.push_str(", \"left\": ");
-            write_scene_expr_json(out, left);
-            out.push_str(", \"right\": ");
-            write_scene_expr_json(out, right);
-            out.push_str(" }");
+            serde_json::json!({
+                "kind": "binary",
+                "op": operator,
+                "left": scene_expr_json_value(left),
+                "right": scene_expr_json_value(right),
+            })
         }
         SceneExpr::If {
             condition,
             then_branch,
             else_branch,
-        } => {
-            out.push_str("{ \"kind\": \"if\", \"condition\": ");
-            write_scene_expr_json(out, condition);
-            out.push_str(", \"then\": ");
-            write_scene_expr_json(out, then_branch);
-            out.push_str(", \"else\": ");
-            write_scene_expr_json(out, else_branch);
-            out.push_str(" }");
-        }
+        } => serde_json::json!({
+            "kind": "if",
+            "condition": scene_expr_json_value(condition),
+            "then": scene_expr_json_value(then_branch),
+            "else": scene_expr_json_value(else_branch),
+        }),
     }
 }
 
@@ -1583,7 +1228,7 @@ fn write_container_fixture_json<TextExpr, TextWriter, LevelSource>(
     kind: &str,
     children: &[SceneComponent<SceneEffect, SceneExpr, TextExpr, SceneExpr>],
     layout: &SceneLayout,
-    options: SceneFixtureJsonOptions<'_>,
+    options: SceneFixtureJsonOptions,
     write_text_fields: TextWriter,
     note_level_source: &mut LevelSource,
 ) where
@@ -1608,7 +1253,7 @@ fn write_container_fixture_json<TextExpr, TextWriter, LevelSource>(
 fn write_scene_component_list_fixture_json<TextExpr, TextWriter, LevelSource>(
     out: &mut String,
     components: &[SceneComponent<SceneEffect, SceneExpr, TextExpr, SceneExpr>],
-    options: SceneFixtureJsonOptions<'_>,
+    options: SceneFixtureJsonOptions,
     write_text_fields: TextWriter,
     note_level_source: &mut LevelSource,
 ) where
@@ -1635,66 +1280,12 @@ fn write_scene_component_list_fixture_json<TextExpr, TextWriter, LevelSource>(
     }
 }
 
-fn write_optional_music_effect_json(out: &mut String, kind: &str, name: &Option<String>) {
-    write_json_pair(out, "kind", kind);
-    out.push_str(", \"name\": ");
-    if let Some(name) = name {
-        write_json_string(out, name);
-    } else {
-        out.push_str("null");
-    }
-}
-
-fn write_scene_target_effect_json(
-    out: &mut String,
-    kind: &str,
-    scene: &str,
-    params: &[SceneEffectParam],
-) {
-    write_json_pair(out, "kind", kind);
-    out.push_str(", ");
-    write_json_pair(out, "screen", scene);
-    out.push_str(", ");
-    write_json_pair(out, "scene", scene);
-    out.push_str(", \"params\": [");
-    for (index, param) in params.iter().enumerate() {
-        if index > 0 {
-            out.push_str(", ");
-        }
-        write_scene_effect_param_json(out, param);
-    }
-    out.push(']');
-}
-
-fn write_scene_effect_param_json(out: &mut String, param: &SceneEffectParam) {
-    match param {
-        SceneEffectParam::Level(value) => {
-            out.push_str("{ \"kind\": \"level\", \"value\": ");
-            write_scene_expr_json(out, value);
-            out.push_str(" }");
-        }
-        SceneEffectParam::Named { name, value } => {
-            out.push_str("{ \"kind\": \"named\", \"name\": ");
-            write_json_string(out, name);
-            out.push_str(", \"value\": ");
-            write_scene_expr_json(out, value);
-            out.push_str(" }");
-        }
-    }
-}
-
 fn push_inline_layout_json(out: &mut String, layout: &SceneLayout) {
     if scene_layout_is_default(layout) {
         return;
     }
     out.push_str(", \"layout\": ");
     write_scene_layout_json(out, layout);
-}
-
-fn write_json_pair(out: &mut String, key: &str, value: &str) {
-    write_json_string(out, key);
-    out.push_str(": ");
-    write_json_string(out, value);
 }
 
 pub fn write_json_string(out: &mut String, value: &str) {
@@ -2145,6 +1736,23 @@ fn parse_scene_distribution(token: &str) -> Result<SceneDistribution, SceneLayou
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scene_expression_json_value_uses_public_path_shape() {
+        let expr = SceneExpr::Path(vec![
+            "level".to_string(),
+            "progress".to_string(),
+            "cleared".to_string(),
+        ]);
+
+        assert_eq!(
+            scene_expr_json_value(&expr),
+            serde_json::json!({
+                "kind": "path",
+                "path": "level.progress.cleared",
+            })
+        );
+    }
 
     #[test]
     fn component_kind_round_trips_keywords() {

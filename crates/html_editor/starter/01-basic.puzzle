@@ -1,9 +1,9 @@
 // BASIC
 // EXPECT: Push the box onto the goal to clear the level.
-// TRY: Change the level, a sprite color, or the win condition.
+// TRY: Change the level, a visual color, or the win condition.
 
 title = "01 — Basic"
-subtitle = "Rules, collision, winning, sprites, and levels"
+subtitle = "Rules, collision, winning, visuals, and levels"
 
 puzzle basic {
 slots {
@@ -12,7 +12,7 @@ Goal
 Player Box Wall
 }
 
-sprites {
+visuals {
 Floor
 #f4f0e6
 

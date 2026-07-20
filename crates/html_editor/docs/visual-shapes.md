@@ -1,5 +1,5 @@
-# Sprite Shapes And Animation
-Use `shapes` for reusable visual patterns and `sprites` to bind those patterns,
+# Visual Shapes And Animation
+Use `shapes` for reusable visual patterns and `visuals` to bind those patterns,
 colors, images, and transforms to object selectors.
 
 ## Reusable Shapes
@@ -14,7 +14,7 @@ arrow {
 }
 }
 
-sprites {
+visuals {
 Player {
 #2d6cdf
 shape = arrow
@@ -32,7 +32,7 @@ Inside a shape, a line containing only `>` starts the next animation frame. In a
 frame. Do not put blank lines around these separators.
 
 ```puzzle
-sprites {
+visuals {
 Beacon {
 duration 400ms
 #ffd166 #ef476f
@@ -47,12 +47,12 @@ duration 400ms
 }
 ```
 
-2D sprites must remain one voxel layer deep. Both 2D and 3D use the same
-`sprites`, palette, shape, and frame vocabulary.
+2D visuals must remain one voxel layer deep. Both 2D and 3D use the same
+`visuals`, palette, shape, and frame vocabulary.
 
 ## Spatial Operations
 ```puzzle
-sprites {
+visuals {
 Arrow:directions {
 #ffffff
 shape = arrow
@@ -64,8 +64,8 @@ translate local (0, -0.25)
 
 Rotation is `rotate [world|local] <angle> [from <angle>]`. In 3D, the same
 axis-less form rotates around +Z (`up`); append `around <axis>` to select
-another axis. Operations run in source order; put a transform on the sprite
+another axis. Operations run in source order; put a transform on the visual
 reference that needs it rather than deriving rotated shapes globally.
-For a four-way 3D sprite authored facing front,
+For a four-way 3D visual authored facing front,
 `Arrow:horizontal { rotate horizontal from front }` expands the variants around
 Z with front as the zero rotation.

@@ -148,7 +148,14 @@ fn expand_structural_source_line(
 }
 
 fn ascii_sensitive_block(block: &str) -> bool {
-    matches!(block, "levels" | "sprites" | "sprite" | "map")
+    crate::authoring_grammar::authoring_source_block(block).is_some_and(|spec| {
+        matches!(
+            spec.role,
+            crate::authoring_grammar::AuthoringBlockRole::Visuals
+                | crate::authoring_grammar::AuthoringBlockRole::LevelList
+                | crate::authoring_grammar::AuthoringBlockRole::LevelEntry
+        )
+    }) || block == "map"
 }
 
 fn ascii_row_contains_brace(line: &str) -> bool {
@@ -458,7 +465,6 @@ fn starts_inline_block(tokens: &[&str], line: &str) -> bool {
             | ["row"]
             | ["column"]
             | ["box"]
-            | ["level_menu"]
             | ["fix", ..]
             | ["once"]
             | ["once_all"]
@@ -533,7 +539,6 @@ pub(crate) enum SourceScope {
     SceneState,
     SceneKeys,
     SceneTransitions,
-    LevelMenu,
     Tags,
     Group,
     Slots,
@@ -651,12 +656,7 @@ fn active_source_option_block(stack: &[SourceBlockStackEntry]) -> Option<Surface
         .iter()
         .rev()
         .map(|entry| entry.option_block)
-        .find(|block| {
-            matches!(
-                block,
-                SurfaceOptionBlock::Authoring(_) | SurfaceOptionBlock::LevelMenu
-            )
-        })
+        .find(|block| matches!(block, SurfaceOptionBlock::Authoring(_)))
 }
 
 fn source_option_block_for_opening(
@@ -668,7 +668,6 @@ fn source_option_block_for_opening(
     };
     match first {
         "puzzle" => SurfaceOptionBlock::Puzzle2,
-        "level_menu" => SurfaceOptionBlock::LevelMenu,
         surface => {
             let parent = stack
                 .iter()
@@ -1469,9 +1468,9 @@ fn source_line_role(
             SourceLineRole::PlainFirstToken
         }
         Some(SourceScope::VisualShapeEntry)
-            if is_visual_sprite_directive_row(tokens)
-                || is_visual_sprite_palette_row(tokens)
-                || is_visual_sprite_duration_row(tokens) =>
+            if is_visual_directive_row(tokens)
+                || is_visual_palette_row(tokens)
+                || is_visual_duration_row(tokens) =>
         {
             SourceLineRole::Normal
         }
@@ -1481,22 +1480,22 @@ fn source_line_role(
     }
 }
 
-fn is_visual_sprite_directive_row(tokens: &[&str]) -> bool {
-    crate::sprite_authoring::is_sprite_property_tokens(tokens)
+fn is_visual_directive_row(tokens: &[&str]) -> bool {
+    crate::visual_authoring::is_visual_property_tokens(tokens)
 }
 
-fn is_visual_sprite_palette_row(tokens: &[&str]) -> bool {
+fn is_visual_palette_row(tokens: &[&str]) -> bool {
     !tokens.is_empty()
         && tokens
             .iter()
             .all(|token| *token == "transparent" || token.starts_with('#'))
 }
 
-fn is_visual_sprite_duration_row(tokens: &[&str]) -> bool {
+fn is_visual_duration_row(tokens: &[&str]) -> bool {
     let [value] = tokens else {
         return false;
     };
-    crate::sprite_authoring::is_sprite_duration_token(value)
+    crate::visual_authoring::is_visual_duration_token(value)
 }
 
 fn starts_unbraced_visual_entry(trimmed: &str, tokens: &[&str]) -> bool {
@@ -1507,7 +1506,7 @@ fn is_unbraced_visual_entry_header(tokens: &[&str]) -> bool {
     let Some(name) = tokens.first() else {
         return false;
     };
-    if !is_visual_sprite_selector_header_token(name) || is_visual_sprite_directive_row(tokens) {
+    if !is_visual_selector_header_token(name) || is_visual_directive_row(tokens) {
         return false;
     }
     tokens
@@ -1531,37 +1530,8 @@ fn next_unbraced_visual_shape_body(
     matches!(tokens, [name] if is_surface_source_identifier(name)) && !trimmed.ends_with('{')
 }
 
-fn is_visual_sprite_selector_header_token(value: &str) -> bool {
-    if matches!(
-        value,
-        "shape" | "shapes" | "palette" | "colors" | "ascii" | "sprites"
-    ) {
-        return false;
-    }
-    let mut parts = value.split(':');
-    let Some(first) = parts.next() else {
-        return false;
-    };
-    puzzle_authoring::is_symbol_name(first) && parts.all(is_visual_sprite_selector_part_token)
-}
-
-fn is_visual_sprite_selector_part_token(value: &str) -> bool {
-    value == "*"
-        || (!value.is_empty()
-            && value
-                .chars()
-                .all(|ch| ch == '_' || ch.is_ascii_alphanumeric()))
-        || is_visual_sprite_selector_map_call(value)
-}
-
-fn is_visual_sprite_selector_map_call(value: &str) -> bool {
-    let Some((name, rest)) = value.split_once('(') else {
-        return false;
-    };
-    let Some(arg) = rest.strip_suffix(')') else {
-        return false;
-    };
-    is_surface_source_identifier(name) && is_surface_source_identifier(arg)
+fn is_visual_selector_header_token(value: &str) -> bool {
+    puzzle_authoring::is_visual_definition_target(value)
 }
 
 fn is_surface_source_identifier(value: &str) -> bool {
@@ -1791,7 +1761,6 @@ fn opening_scope(line: &str, tokens: &[&str], current: Option<SourceScope>) -> O
             | ["if", ..] => {
                 return Some(SourceScope::SceneTransitions);
             }
-            ["level_menu", ..] => return Some(SourceScope::LevelMenu),
             _ => {}
         }
         if line.ends_with('{') {
@@ -1854,7 +1823,6 @@ fn is_scene_scope(scope: Option<SourceScope>) -> bool {
                 | SourceScope::SceneState
                 | SourceScope::SceneKeys
                 | SourceScope::SceneTransitions
-                | SourceScope::LevelMenu
         )
     )
 }
@@ -1947,7 +1915,7 @@ mod tests {
 title = "Demo"
 puzzle board {
 slots { objects = Box }
-sprites {
+visuals {
 Box {
 #fff #000
 01
@@ -1982,7 +1950,7 @@ B
                 "slots {",
                 "objects = Box",
                 "}",
-                "sprites {",
+                "visuals {",
                 "Box {",
                 "#fff #000",
                 "01",
@@ -2471,7 +2439,7 @@ title
     #[test]
     fn surface_source_scan_keeps_unbraced_visual_shape_rows_raw() {
         let source = r#"
-sprites {
+visuals {
 shapes {
 Box
 aaa

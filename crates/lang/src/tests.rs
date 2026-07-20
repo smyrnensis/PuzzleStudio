@@ -1,11 +1,11 @@
 use super::*;
 
-fn planar_sprite_pattern(sprite: &VisualSpriteDef) -> &Vec<String> {
-    sprite
+fn planar_visual_pattern(visual: &VisualDef) -> &Vec<String> {
+    visual
         .frames
         .first()
         .and_then(|frame| frame.planes.first())
-        .expect("ascii sprite has a first frame and plane")
+        .expect("ascii visual has a first frame and plane")
 }
 
 #[test]
@@ -24,6 +24,98 @@ fn virtual_workspace_imports_are_resolved_by_the_language_layer() {
         .expect("virtual import expansion");
     assert!(expanded.contains("title = imported"));
     assert!(!expanded.contains("import \"parts/model.puzzle\""));
+}
+
+fn remapped_workspace_line(
+    entry_path: &str,
+    documents: &[WorkspaceSourceDocument],
+    expanded_line: usize,
+) -> (Option<String>, Option<usize>) {
+    let expanded = expand_game_imports_from_documents_with_origins(entry_path, documents)
+        .expect("workspace import expansion");
+    let report = expanded.remap_diagnostic_report(DiagnosticReport::error_at_source_line_number(
+        "probe",
+        "probe",
+        expanded_line,
+    ));
+    let span = report.diagnostics()[0]
+        .primary_span
+        .as_ref()
+        .expect("remapped diagnostic span");
+    (span.file.clone(), span.line)
+}
+
+#[test]
+fn virtual_workspace_origin_map_accounts_for_empty_imports() {
+    let documents = vec![
+        WorkspaceSourceDocument {
+            path: "game.puzzle".to_string(),
+            source: "import \"empty.puzzle\"\nentry line\n".to_string(),
+        },
+        WorkspaceSourceDocument {
+            path: "empty.puzzle".to_string(),
+            source: String::new(),
+        },
+    ];
+
+    assert_eq!(
+        remapped_workspace_line("game.puzzle", &documents, 2),
+        (Some("game.puzzle".to_string()), Some(2))
+    );
+}
+
+#[test]
+fn virtual_workspace_origin_map_preserves_consecutive_unterminated_imports() {
+    let documents = vec![
+        WorkspaceSourceDocument {
+            path: "game.puzzle".to_string(),
+            source: "import \"first.puzzle\"\nimport \"second.puzzle\"\n".to_string(),
+        },
+        WorkspaceSourceDocument {
+            path: "first.puzzle".to_string(),
+            source: "first line".to_string(),
+        },
+        WorkspaceSourceDocument {
+            path: "second.puzzle".to_string(),
+            source: "second line".to_string(),
+        },
+    ];
+
+    assert_eq!(
+        remapped_workspace_line("game.puzzle", &documents, 1),
+        (Some("first.puzzle".to_string()), Some(1))
+    );
+    assert_eq!(
+        remapped_workspace_line("game.puzzle", &documents, 2),
+        (Some("second.puzzle".to_string()), Some(1))
+    );
+}
+
+#[test]
+fn virtual_workspace_origin_map_preserves_nested_imports() {
+    let documents = vec![
+        WorkspaceSourceDocument {
+            path: "game.puzzle".to_string(),
+            source: "import \"middle.puzzle\"\n".to_string(),
+        },
+        WorkspaceSourceDocument {
+            path: "middle.puzzle".to_string(),
+            source: "import \"leaf.puzzle\"\nmiddle line\n".to_string(),
+        },
+        WorkspaceSourceDocument {
+            path: "leaf.puzzle".to_string(),
+            source: "leaf line".to_string(),
+        },
+    ];
+
+    assert_eq!(
+        remapped_workspace_line("game.puzzle", &documents, 1),
+        (Some("leaf.puzzle".to_string()), Some(1))
+    );
+    assert_eq!(
+        remapped_workspace_line("game.puzzle", &documents, 2),
+        (Some("middle.puzzle".to_string()), Some(2))
+    );
 }
 
 #[test]
@@ -81,9 +173,9 @@ puzzle default {
 slots {
 Box
 }
-sprites {
+visuals {
 Box {
-image = "sprites/box.png"
+image = "visuals/box.png"
 }
 }
 rules {
@@ -109,7 +201,55 @@ B
     assert_eq!(manifest.css_paths, ["game.css"]);
     assert_eq!(manifest.script_paths, ["visuals.js"]);
     assert_eq!(manifest.file_paths, ["audio/click.wav"]);
-    assert_eq!(manifest.sprite_image_paths, ["sprites/box.png"]);
+    assert_eq!(manifest.visual_image_paths, ["visuals/box.png"]);
+}
+
+#[test]
+fn workspace_presentation_manifest_remaps_imported_diagnostics() {
+    let imported_source = r#"title = imported_error
+puzzle main {
+slots {
+base = Floor
+}
+visuals {
+}
+rules {
+unknown_imported_statement
+}
+levels {
+legend {
+. = empty
+}
+level "first"
+.
+}
+}
+"#;
+    let expected_line = imported_source
+        .lines()
+        .position(|line| line == "unknown_imported_statement")
+        .expect("invalid imported statement")
+        + 1;
+    let documents = vec![
+        WorkspaceSourceDocument {
+            path: "game.puzzle".to_string(),
+            source: "import \"parts/game.puzzle\"\n".to_string(),
+        },
+        WorkspaceSourceDocument {
+            path: "parts/game.puzzle".to_string(),
+            source: imported_source.to_string(),
+        },
+    ];
+
+    let report = workspace_presentation_manifest("game.puzzle", &documents)
+        .expect_err("invalid imported source should fail manifest parsing");
+    let span = report.diagnostics()[0]
+        .primary_span
+        .as_ref()
+        .expect("imported manifest diagnostic span");
+
+    assert_eq!(span.file.as_deref(), Some("parts/game.puzzle"));
+    assert_eq!(span.line, Some(expected_line));
 }
 
 #[test]
@@ -861,9 +1001,9 @@ P
 }
 
 #[test]
-fn layers_define_objects_even_when_sprites_are_omitted() {
+fn layers_define_objects_even_when_visuals_are_omitted() {
     let source = r#"
-title = sprite_omitted_is_transparent
+title = visual_omitted_is_transparent
 
 puzzle board {
 slots {
@@ -897,7 +1037,7 @@ rules {
             .initial_state
             .has_object(&loaded.game, 1, 0, hidden)
     );
-    assert!(loaded.visuals.sprites.is_empty());
+    assert!(loaded.visuals.entries.is_empty());
     assert!(loaded.visuals.aliases.is_empty());
 }
 
@@ -3541,435 +3681,6 @@ button "Resume" -> resume
 }
 
 #[test]
-fn layout_for_can_project_levels_into_scrollable_column() {
-    let source = r#"
-title = level_projection_view
-
-puzzle board {
-slots {
-actor = Player
-}
-legend {
-. = empty
-P = Player
-}
-rules {
-
-[ Player ] -> [ Player ]
-}
-levels {
-level "first" {
-P
-}
-level "second" {
-P
-}
-}
-}
-
-scene level_select {
-layout {
-column scroll=true {
-for level in levels {
-button join(level.num, ". ", level.title, " ", level.solved) -> goto playing(level)
-}
-}
-}
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let SceneComponent::Column(column) = &loaded
-        .scenes
-        .iter()
-        .find(|scene| scene.name == "level_select")
-        .unwrap()
-        .components[0]
-    else {
-        panic!("expected scrollable column");
-    };
-    assert!(column.layout.scroll);
-
-    assert_eq!(column.children.len(), 2);
-    let SceneComponent::Button(button) = &column.children[0] else {
-        panic!("expected level button");
-    };
-    assert!(matches!(&button.label, SceneExpr::Call { name, args }
-            if name == "join"
-                && args.iter().any(|arg| matches!(arg, SceneExpr::Int(1)))
-                && args.iter().any(|arg| matches!(arg, SceneExpr::LevelSelector { collection, key: SceneLevelKey::Index(0), property: Some(property) }
-                    if collection == "levels" && property == "title"))
-                && args.iter().any(|arg| matches!(arg, SceneExpr::LevelSelector { collection, key: SceneLevelKey::Index(0), property: Some(property) }
-                    if collection == "levels" && property == "solved"))));
-    assert!(matches!(
-        &button.effect,
-        SceneEffect::Goto { scene, params }
-            if scene == "playing"
-                && params.len() == 1
-                && matches!(&params[0], SceneEffectParam::Level(SceneExpr::LevelSelector { collection, key: SceneLevelKey::Index(0), property: None })
-                    if collection == "levels")
-    ));
-}
-
-#[test]
-fn layout_for_can_project_levels_with_author_chosen_binding_name() {
-    let source = r#"
-title = level_projection_binding
-
-puzzle board {
-slots {
-actor = Player
-}
-legend {
-. = empty
-P = Player
-}
-rules {
-[ Player ] -> [ Player ]
-}
-levels {
-level "first" {
-P
-}
-}
-}
-
-scene level_select {
-layout {
-for l in levels {
-button join(l.num, ". ", l.title) -> goto playing(l)
-}
-}
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let SceneComponent::Button(button) = &loaded
-        .scenes
-        .iter()
-        .find(|scene| scene.name == "level_select")
-        .unwrap()
-        .components[0]
-    else {
-        panic!("expected level button");
-    };
-    assert!(matches!(&button.label, SceneExpr::Call { name, args }
-            if name == "join"
-                && args.iter().any(|arg| matches!(arg, SceneExpr::Int(1)))
-                && args.iter().any(|arg| matches!(arg, SceneExpr::LevelSelector { collection, key: SceneLevelKey::Index(0), property: Some(property) }
-                    if collection == "levels" && property == "title"))));
-    assert!(matches!(
-        &button.effect,
-        SceneEffect::Goto { scene, params }
-            if scene == "playing"
-                && params.len() == 1
-                && matches!(&params[0], SceneEffectParam::Level(SceneExpr::LevelSelector { collection, key: SceneLevelKey::Index(0), property: None })
-                    if collection == "levels")
-    ));
-}
-
-#[test]
-fn layout_for_levels_respects_scene_resources_declared_after_layout() {
-    let source = r#"
-title = level_projection_resources
-
-puzzle board {
-slots {
-actor = Player
-}
-legend {
-. = empty
-P = Player
-}
-rules {
-[ Player ] -> [ Player ]
-}
-levels world of board {
-level "first" {
-P
-}
-level "second" {
-P
-}
-}
-}
-
-scene level_select {
-layout {
-for level in levels {
-button join(level.num, ". ", level.title) -> goto playing(level)
-}
-}
-resources {
-levels second
-}
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let level_select = loaded
-        .scenes
-        .iter()
-        .find(|scene| scene.name == "level_select")
-        .unwrap();
-    assert_eq!(level_select.components.len(), 1);
-    let SceneComponent::Button(button) = &level_select.components[0] else {
-        panic!("expected one expanded level button");
-    };
-    assert!(matches!(&button.label, SceneExpr::Call { name, args }
-        if name == "join"
-            && args.iter().any(|arg| matches!(arg, SceneExpr::Int(2)))
-            && args.iter().any(|arg| matches!(arg, SceneExpr::LevelSelector { collection, key: SceneLevelKey::Index(1), property: Some(property) }
-                if collection == "levels" && property == "title"))));
-}
-
-#[test]
-fn layout_for_does_not_replace_binding_inside_quoted_text() {
-    let source = r#"
-title = level_projection_quotes
-
-puzzle board {
-slots {
-actor = Player
-}
-legend {
-. = empty
-P = Player
-}
-rules {
-[ Player ] -> [ Player ]
-}
-level "first" {
-P
-}
-}
-
-scene level_select {
-layout {
-for level in levels {
-button "level.title" -> goto playing(level)
-}
-}
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let SceneComponent::Button(button) = &loaded
-        .scenes
-        .iter()
-        .find(|scene| scene.name == "level_select")
-        .unwrap()
-        .components[0]
-    else {
-        panic!("expected expanded level button");
-    };
-    assert!(matches!(&button.label, SceneExpr::Text(value) if value == "level.title"));
-    assert!(matches!(
-        &button.effect,
-        SceneEffect::Goto { params, .. }
-            if matches!(&params[0], SceneEffectParam::Level(SceneExpr::LevelSelector { collection, key: SceneLevelKey::Index(0), property: None })
-                if collection == "levels")
-    ));
-}
-
-#[test]
-fn level_menu_component_accepts_canonical_options() {
-    let source = r#"
-title = typed_level_menu
-
-puzzle board {
-slots {
-actor = Player
-}
-legend {
-. = empty
-P = Player
-}
-rules {
-
-[ Player ] -> [ Player ]
-}
-level "start" {
-P
-}
-}
-
-scene level_select {
-layout {
-level_menu {
-button "Title" -> goto title
-show_index = true
-show_solved = true
-columns = 4
-wrap = true
-}
-}
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let scene = loaded
-        .scenes
-        .iter()
-        .find(|scene| scene.name == "level_select")
-        .unwrap();
-    assert_eq!(scene.name, "level_select");
-    let SceneComponent::LevelMenu(menu) = &scene.components[0] else {
-        panic!("expected level menu component");
-    };
-    assert!(menu.show_index);
-    assert!(menu.show_cleared);
-    assert_eq!(menu.columns, Some(4));
-    assert!(menu.wrap);
-    assert!(matches!(
-        &menu.buttons[0].effect,
-        SceneEffect::Goto { scene, params } if scene == "title" && params.is_empty()
-    ));
-}
-
-#[test]
-fn bare_level_menu_does_not_capture_following_button() {
-    let source = r#"
-title = bare_level_menu_button_boundary
-
-puzzle board {
-slots {
-actor = Player
-}
-empty .
-legend {
-P = Player
-}
-rules {
-}
-level "start" {
-P
-}
-}
-
-scene level_select {
-layout {
-level_menu
-button "Back" -> goto title
-}
-}
-"#;
-    let loaded = parse_game(source).unwrap();
-    let scene = loaded
-        .scenes
-        .iter()
-        .find(|scene| scene.name == "level_select")
-        .unwrap();
-    let [
-        SceneComponent::LevelMenu(menu),
-        SceneComponent::Button(button),
-    ] = scene.components.as_slice()
-    else {
-        panic!("expected bare level_menu followed by top-level button");
-    };
-    assert!(menu.buttons.is_empty());
-    assert!(matches!(
-        &button.effect,
-        SceneEffect::Goto { scene, params } if scene == "title" && params.is_empty()
-    ));
-}
-
-#[test]
-fn typed_level_menu_scene_is_rejected() {
-    let source = r#"
-title = old_level_menu_scene
-
-puzzle board {
-slots {
-actor = Player
-}
-legend {
-. = empty
-P = Player
-}
-rules {
-
-[ Player ] -> [ Player ]
-}
-level "start" {
-P
-}
-}
-
-scene level_menu level_select {
-level_menu {
-}
-}
-"#;
-    let error = parse_game(source).unwrap_err().to_string();
-    assert!(error.contains("scene level_menu template is not supported"));
-}
-
-#[test]
-fn level_menu_rejects_on_off_option_aliases() {
-    let source = r#"
-title = old_level_menu_options
-
-puzzle board {
-slots {
-actor = Player
-}
-legend {
-. = empty
-P = Player
-}
-rules {
-
-[ Player ] -> [ Player ]
-}
-level "start" {
-P
-}
-}
-
-scene level_select {
-layout {
-level_menu {
-index on
-}
-}
-}
-"#;
-    let error = parse_game(source).unwrap_err().to_string();
-    assert!(error.contains("level_menu option must be"));
-}
-
-#[test]
-fn level_menu_rejects_inline_source_and_effect() {
-    let source = r#"
-title = old_level_menu_inline
-
-puzzle sokoban {
-slots {
-actor = Player
-}
-legend {
-. = empty
-P = Player
-}
-rules {
-
-[ Player ] -> [ Player ]
-}
-}
-
-levels microban of sokoban {
-level "start" {
-P
-}
-}
-
-scene level_select {
-layout {
-level_menu microban -> goto playing(level)
-}
-}
-"#;
-    let error = parse_game(source).unwrap_err().to_string();
-    assert!(error.contains("level_menu takes no inline source or effect"));
-}
-
-#[test]
 fn scene_root_rejects_layout_components() {
     let source = r#"
 title = title_scene
@@ -4159,6 +3870,267 @@ next_level
             "{error}"
         );
     }
+}
+
+#[test]
+fn level_menu_lowers_to_scrollable_common_choices() {
+    let source = r#"
+title = level_menu_lowering
+
+puzzle board {
+slots {
+actor = Player
+}
+rules {
+}
+levels {
+legend {
+P = Player
+}
+level "first" {
+P
+}
+level "second" {
+P
+}
+}
+}
+
+scene title {
+layout {
+button "Levels" -> goto level_select
+}
+}
+
+scene level_select {
+layout {
+level_menu {
+show_index = true
+button "Back" -> goto title
+}
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let scene = loaded
+        .scenes
+        .iter()
+        .find(|scene| scene.name == "level_select")
+        .unwrap();
+    let [SceneComponent::Column(menu)] = scene.components.as_slice() else {
+        panic!("level_menu must lower to one common column");
+    };
+    assert!(menu.layout.scroll);
+    assert_eq!(menu.children.len(), 3);
+    for (choice, level_name) in menu.children[..2].iter().zip(["first", "second"]) {
+        let SceneComponent::Choice(choice) = choice else {
+            panic!("generated level item must be a common choice");
+        };
+        assert!(matches!(
+            &choice.label,
+            SceneExpr::Call { name, .. } if name == "join"
+        ));
+        assert!(matches!(
+            &choice.effect,
+            SceneEffect::Goto { scene, params }
+                if scene == "board"
+                    && matches!(
+                        params.as_slice(),
+                        [SceneEffectParam::Level(SceneExpr::Text(value))]
+                            if value == level_name
+                    )
+        ));
+    }
+    assert!(matches!(
+        &menu.children[2],
+        SceneComponent::Choice(choice)
+            if matches!(&choice.effect, SceneEffect::Goto { scene, params } if scene == "title" && params.is_empty())
+    ));
+}
+
+#[test]
+fn level_menu_solved_marker_lowers_through_public_level_progress_path() {
+    let source = r#"
+title = level_menu_progress_contract
+
+puzzle board {
+slots {
+actor = Player
+}
+rules {
+}
+levels {
+legend {
+P = Player
+}
+level "first" {
+P
+}
+}
+}
+
+scene level_select {
+layout {
+level_menu {
+show_solved = true
+}
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let SceneComponent::Column(menu) = &loaded
+        .scenes
+        .iter()
+        .find(|scene| scene.name == "level_select")
+        .unwrap()
+        .components[0]
+    else {
+        panic!("level_menu must lower to one common column");
+    };
+    let [SceneComponent::Choice(choice)] = menu.children.as_slice() else {
+        panic!("level_menu must lower each level to a common choice");
+    };
+    let expected_path = vec![
+        "levels".to_string(),
+        LevelId::new("board", "first").record_key(),
+        "progress".to_string(),
+        "cleared".to_string(),
+    ];
+    assert!(matches!(
+        &choice.label,
+        SceneExpr::If {
+            condition,
+            then_branch,
+            else_branch,
+        } if matches!(condition.as_ref(), SceneExpr::Path(path) if path == &expected_path)
+            && matches!(then_branch.as_ref(), SceneExpr::Call { name, .. } if name == "join")
+            && matches!(else_branch.as_ref(), SceneExpr::Text(value) if value == "first")
+    ));
+}
+
+#[test]
+fn layout_for_projects_public_level_records() {
+    let source = r#"
+title = public_level_records
+
+puzzle board {
+slots {
+actor = Player
+}
+rules {
+}
+levels {
+legend {
+P = Player
+}
+level "first" {
+P
+}
+level "second" {
+P
+}
+}
+}
+
+scene level_select {
+layout {
+column scroll=true {
+for level in levels {
+choice level.name -> goto level.puzzle(level.name)
+}
+}
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let SceneComponent::Column(column) = &loaded
+        .scenes
+        .iter()
+        .find(|scene| scene.name == "level_select")
+        .unwrap()
+        .components[0]
+    else {
+        panic!("expected common column");
+    };
+    assert!(column.layout.scroll);
+    assert!(matches!(
+        column.children.as_slice(),
+        [SceneComponent::Choice(first), SceneComponent::Choice(second)]
+            if matches!(&first.label, SceneExpr::Text(value) if value == "first")
+                && matches!(&second.label, SceneExpr::Text(value) if value == "second")
+    ));
+}
+
+#[test]
+fn layout_for_level_records_do_not_restore_label_aliases() {
+    let source = r#"
+title = public_level_record_fields
+
+puzzle board {
+slots {
+actor = Player
+}
+rules {
+}
+levels {
+legend {
+P = Player
+}
+level "first" {
+P
+}
+}
+}
+
+scene level_select {
+layout {
+for level in levels {
+text level.title
+}
+}
+}
+"#;
+    let error = parse_game(source).unwrap_err().to_string();
+    assert!(
+        error.contains("Level has no field `title` while resolving `level.title`"),
+        "{error}"
+    );
+}
+
+#[test]
+fn layout_for_records_require_an_explicit_field() {
+    let source = r#"
+title = explicit_level_record_fields
+
+puzzle board {
+slots {
+actor = Player
+}
+rules {
+}
+levels {
+legend {
+P = Player
+}
+level "first" {
+P
+}
+}
+}
+
+scene level_select {
+layout {
+for level in levels {
+text level
+}
+}
+}
+"#;
+    let error = parse_game(source).unwrap_err().to_string();
+    assert!(
+        error.contains("Level value requires an explicit field while resolving `level`"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -6171,7 +6143,7 @@ title = assets_test
 assets {
 "game.css"
 "visuals.js"
-"sprites/player.png"
+"visuals/player.png"
 }
 
 puzzle sokoban {
@@ -6199,7 +6171,7 @@ P
     assert_eq!(loaded.assets.entries[1].kind, AssetKind::Script);
     assert_eq!(loaded.assets.entries[1].path, "visuals.js");
     assert_eq!(loaded.assets.entries[2].kind, AssetKind::File);
-    assert_eq!(loaded.assets.entries[2].path, "sprites/player.png");
+    assert_eq!(loaded.assets.entries[2].path, "visuals/player.png");
 }
 
 #[test]
@@ -6232,7 +6204,7 @@ P
 }
 
 #[test]
-fn top_level_levels_and_sprites_are_canonical_resources() {
+fn top_level_levels_and_visuals_are_canonical_resources() {
     let source = r##"
 title = top_resources
 
@@ -6247,8 +6219,8 @@ rules {
 }
 }
 
-sprites {
-sprite {
+visuals {
+visual {
 selector = Player
 colors = #fff
 }
@@ -6270,14 +6242,14 @@ P
     assert_eq!(loaded.levels[0].pack.as_deref(), Some("worldA"));
     assert_eq!(loaded.levels[0].puzzle, "default");
     assert_eq!(loaded.levels[1].name, "worldA.2");
-    assert_eq!(loaded.visuals.sprites.len(), 1);
+    assert_eq!(loaded.visuals.entries.len(), 1);
     assert_eq!(loaded.scenes[0].resources.levels, ResourceSelection::All);
 }
 
 #[test]
-fn top_level_sprites_with_nested_tables_do_not_leak_after_prior_model_error() {
+fn top_level_visuals_with_nested_tables_do_not_leak_after_prior_model_error() {
     let source = r##"
-title = recovered_sprites_scope
+title = recovered_visuals_scope
 
 puzzle default {
 slots {
@@ -6293,7 +6265,7 @@ rules {
 }
 }
 
-sprites {
+visuals {
 palette {
 white = #ffffff
 black = #000000
@@ -6379,11 +6351,11 @@ level "1"
 P
 }
 
-sprites {
+visuals {
 palette {
 white = #ffffff
 }
-sprite {
+visual {
 selector = Player
 colors = white
 shape = {
@@ -6412,7 +6384,7 @@ shape = {
 }
 
 #[test]
-fn scene_resources_can_select_level_and_sprite_sets() {
+fn scene_resources_can_select_level_and_visual_sets() {
     let source = r##"
 title = scene_resources
 
@@ -6427,12 +6399,12 @@ rules {
 }
 }
 
-sprites {
-sprite {
+visuals {
+visual {
 selector = Player
 colors = #fff
 }
-sprite {
+visual {
 selector = Box
 colors = #000
 }
@@ -6446,10 +6418,10 @@ P
 scene select {
 resources {
 levels worldA
-sprites Player
+visuals Player
 }
 layout {
-level_menu
+text "Select"
 }
 }
 "##;
@@ -6465,7 +6437,7 @@ level_menu
         ResourceSelection::Named(vec!["worldA".to_string()])
     );
     assert_eq!(
-        scene.resources.sprites,
+        scene.resources.visuals,
         ResourceSelection::Named(vec!["Player".to_string()])
     );
 }
@@ -6546,11 +6518,11 @@ rules {
 }
 }
 
-sprites {
+visuals {
 palette {
 white = #ffffff
 }
-sprite {
+visual {
 selector = Player
 colors = white
 shape = {
@@ -6578,14 +6550,14 @@ P
     let Some(LoadedDocumentModel::Puzzle2d { game, .. }) = parsed_from_source.single_model() else {
         panic!("expected 2D model");
     };
-    assert_eq!(game.visuals.sprites.len(), 1);
+    assert_eq!(game.visuals.entries.len(), 1);
 
     let document = super::parse_game_file(&game_path).unwrap();
 
     let Some(LoadedDocumentModel::Puzzle2d { game, .. }) = document.single_model() else {
         panic!("expected 2D model");
     };
-    assert_eq!(game.visuals.sprites.len(), 1);
+    assert_eq!(game.visuals.entries.len(), 1);
     assert_eq!(game.levels.len(), 1);
 }
 
@@ -6996,9 +6968,9 @@ fn folder_without_puzzle_model_is_not_auto_resolved() {
 }
 
 #[test]
-fn puzzle_sprites_expand_schema_tables() {
+fn puzzle_visuals_expand_schema_tables() {
     let source = r#"
-title = sprite_schema
+title = visual_schema
 
 puzzle default {
 tags {
@@ -7016,7 +6988,7 @@ legend # = Wall
 legend {
 . = empty
 }
-sprites {
+visuals {
 palette {
 piece_color:kind {
 A = #4a4
@@ -7035,12 +7007,12 @@ B {
 }
 }
 }
-sprite {
+visual {
 selector = Box:kind
 colors = piece_color:kind transparent
 shape = mark:kind
 }
-sprite {
+visual {
 selector = Wall
 colors = #444
 shape = {
@@ -7065,17 +7037,17 @@ A.
             .visuals
             .aliases
             .iter()
-            .any(|alias| { alias.object == "Box:A" && alias.sprite == "Box-A" })
+            .any(|alias| { alias.object == "Box:A" && alias.visual == "Box-A" })
     );
     let box_b = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Box-B")
+        .find(|visual| visual.name == "Box-B")
         .unwrap();
-    let pattern = planar_sprite_pattern(box_b);
+    let pattern = planar_visual_pattern(box_b);
     match &box_b.kind {
-        VisualSpriteKind::Ascii { colors } => {
+        VisualKind::Ascii { colors } => {
             assert_eq!(
                 pattern.as_slice(),
                 ["11".to_string(), "00".to_string()].as_slice()
@@ -7086,14 +7058,14 @@ A.
                     .any(|color| { color.token == '0' && color.color == "#a4a" })
             );
         }
-        _ => panic!("Box-B should be an ascii sprite"),
+        _ => panic!("Box-B should be an ascii visual"),
     }
 }
 
 #[test]
-fn puzzle_sprites_accept_braced_inline_ascii_sprite() {
+fn puzzle_visuals_accept_braced_inline_ascii_visual() {
     let source = r##"
-title = braced_inline_ascii_sprite
+title = braced_inline_ascii_visual
 
 puzzle default {
 slots {
@@ -7103,8 +7075,8 @@ legend P = Player
 legend {
 . = empty
 }
-sprites {
-sprite {
+visuals {
+visual {
 selector = Player
 colors = #e94f64 #2f80ed
 shape = {
@@ -7123,15 +7095,15 @@ P
 }
 "##;
     let loaded = parse_game(source).unwrap();
-    let sprite = loaded
+    let visual = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Player")
+        .find(|visual| visual.name == "Player")
         .unwrap();
-    let pattern = planar_sprite_pattern(sprite);
-    match &sprite.kind {
-        VisualSpriteKind::Ascii { colors } => {
+    let pattern = planar_visual_pattern(visual);
+    match &visual.kind {
+        VisualKind::Ascii { colors } => {
             assert_eq!(
                 pattern.as_slice(),
                 ["0.".to_string(), ".1".to_string()].as_slice()
@@ -7147,14 +7119,14 @@ P
                     .any(|color| { color.token == '1' && color.color == "#2f80ed" })
             );
         }
-        _ => panic!("Player should be an ascii sprite"),
+        _ => panic!("Player should be an ascii visual"),
     }
 }
 
 #[test]
-fn puzzle_sprites_accept_line_style_solid_sprite() {
+fn puzzle_visuals_accept_line_style_solid_visual() {
     let source = r##"
-title = line_style_solid_sprite
+title = line_style_solid_visual
 
 puzzle default {
 slots {
@@ -7164,8 +7136,8 @@ legend B = Box
 legend {
 . = empty
 }
-sprites {
-sprite {
+visuals {
+visual {
 selector = Box
 colors = #aaa
 }
@@ -7180,24 +7152,24 @@ B
 }
 "##;
     let loaded = parse_game(source).unwrap();
-    let sprite = loaded
+    let visual = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Box")
+        .find(|visual| visual.name == "Box")
         .unwrap();
-    match &sprite.kind {
-        VisualSpriteKind::Solid(color) => {
+    match &visual.kind {
+        VisualKind::Solid(color) => {
             assert_eq!(color, "#aaa");
         }
-        _ => panic!("Box should be a solid sprite"),
+        _ => panic!("Box should be a solid visual"),
     }
 }
 
 #[test]
-fn puzzle_sprites_accept_at_prefixed_object_single_color_solid_sprite() {
+fn puzzle_visuals_accept_at_prefixed_object_single_color_solid_visual() {
     let source = r##"
-title = at_prefixed_object_single_color_solid_sprite
+title = at_prefixed_object_single_color_solid_visual
 
 puzzle default {
 slots {
@@ -7206,8 +7178,8 @@ slots {
 legend {
 . = empty
 }
-sprites {
-sprite {
+visuals {
+visual {
 selector = @Floor
 colors = #eeeeee
 }
@@ -7222,24 +7194,24 @@ level "start"
 }
 "##;
     let loaded = parse_game(source).unwrap();
-    let sprite = loaded
+    let visual = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "@Floor")
+        .find(|visual| visual.name == "@Floor")
         .unwrap();
-    match &sprite.kind {
-        VisualSpriteKind::Solid(color) => {
+    match &visual.kind {
+        VisualKind::Solid(color) => {
             assert_eq!(color, "#eeeeee");
         }
-        _ => panic!("@Floor should be a solid sprite"),
+        _ => panic!("@Floor should be a solid visual"),
     }
 }
 
 #[test]
-fn prefixed_and_unprefixed_objects_keep_distinct_sprite_keys() {
+fn prefixed_and_unprefixed_objects_keep_distinct_visual_keys() {
     let source = r##"
-title = distinct_symbol_sprite_keys
+title = distinct_symbol_visual_keys
 
 puzzle default {
 slots {
@@ -7248,12 +7220,12 @@ floor = Floor @Floor
 legend {
 . = empty
 }
-sprites {
-sprite {
+visuals {
+visual {
 selector = Floor
 colors = #111111
 }
-sprite {
+visual {
 selector = @Floor
 colors = #eeeeee
 }
@@ -7269,27 +7241,27 @@ level "start"
 "##;
     let loaded = parse_game(source).unwrap();
     for (name, expected_color) in [("Floor", "#111111"), ("@Floor", "#eeeeee")] {
-        let sprite = loaded
+        let visual = loaded
             .visuals
-            .sprites
+            .entries
             .iter()
-            .find(|sprite| sprite.name == name)
+            .find(|visual| visual.name == name)
             .unwrap();
         assert!(matches!(
-            &sprite.kind,
-            VisualSpriteKind::Solid(color) if color == expected_color
+            &visual.kind,
+            VisualKind::Solid(color) if color == expected_color
         ));
     }
 }
 
 #[test]
-fn puzzle_sprites_can_reference_layers_declared_later() {
+fn puzzle_visuals_can_reference_layers_declared_later() {
     let source = r##"
-title = sprites_before_layers
+title = visuals_before_layers
 
 puzzle default {
-sprites {
-sprite {
+visuals {
+visual {
 selector = @Floor
 colors = #eeeeee
 }
@@ -7310,15 +7282,15 @@ level "start"
 }
 "##;
     let loaded = parse_game(source).unwrap();
-    let sprite = loaded
+    let visual = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "@Floor")
+        .find(|visual| visual.name == "@Floor")
         .unwrap();
-    match &sprite.kind {
-        VisualSpriteKind::Solid(color) => assert_eq!(color, "#eeeeee"),
-        _ => panic!("@Floor should be a solid sprite"),
+    match &visual.kind {
+        VisualKind::Solid(color) => assert_eq!(color, "#eeeeee"),
+        _ => panic!("@Floor should be a solid visual"),
     }
 }
 
@@ -7414,9 +7386,9 @@ rules {
 }
 
 #[test]
-fn puzzle_sprites_accept_at_prefixed_object_after_another_sprite() {
+fn puzzle_visuals_accept_at_prefixed_object_after_another_visual() {
     let source = r##"
-title = at_prefixed_object_after_sprite
+title = at_prefixed_object_after_visual
 
 puzzle default {
 slots {
@@ -7427,12 +7399,12 @@ legend P = Player
 legend {
 . = empty
 }
-sprites {
-sprite {
+visuals {
+visual {
 selector = Player
 colors = #ff0000
 }
-sprite {
+visual {
 selector = @Floor
 colors = #eeeeee
 }
@@ -7449,31 +7421,31 @@ P
     let loaded = parse_game(source).unwrap();
     let player = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Player")
+        .find(|visual| visual.name == "Player")
         .unwrap();
     let floor = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "@Floor")
+        .find(|visual| visual.name == "@Floor")
         .unwrap();
 
     match &player.kind {
-        VisualSpriteKind::Solid(color) => assert_eq!(color, "#ff0000"),
-        _ => panic!("Player should be a solid sprite"),
+        VisualKind::Solid(color) => assert_eq!(color, "#ff0000"),
+        _ => panic!("Player should be a solid visual"),
     }
     match &floor.kind {
-        VisualSpriteKind::Solid(color) => assert_eq!(color, "#eeeeee"),
-        _ => panic!("@Floor should be a solid sprite"),
+        VisualKind::Solid(color) => assert_eq!(color, "#eeeeee"),
+        _ => panic!("@Floor should be a solid visual"),
     }
 }
 
 #[test]
-fn puzzle_sprites_report_unknown_at_prefixed_selector_instead_of_shape_error() {
+fn puzzle_visuals_report_unknown_at_prefixed_selector_instead_of_shape_error() {
     let source = r##"
-title = unknown_at_prefixed_sprite_selector
+title = unknown_at_prefixed_visual_selector
 
 puzzle default {
 slots {
@@ -7483,12 +7455,12 @@ legend P = Player
 legend {
 . = empty
 }
-sprites {
-sprite {
+visuals {
+visual {
 selector = Player
 colors = #ff0000
 }
-sprite {
+visual {
 selector = @Floor
 colors = #eeeeee
 }
@@ -7504,7 +7476,7 @@ P
 "##;
     let error = parse_game(source).unwrap_err().to_string();
 
-    assert!(error.contains("unknown sprite object selector"), "{error}");
+    assert!(error.contains("unknown visual object selector"), "{error}");
     assert!(
         !error.contains("visual shape rows must be equal-width ascii"),
         "{error}"
@@ -7512,9 +7484,9 @@ P
 }
 
 #[test]
-fn puzzle_sprites_accept_sprite_names_that_are_css_color_names() {
+fn puzzle_visuals_accept_visual_names_that_are_css_color_names() {
     let source = r##"
-title = color_named_sprites
+title = color_named_visuals
 
 puzzle default {
 slots {
@@ -7525,12 +7497,12 @@ legend b = blue
 legend {
 . = empty
 }
-sprites {
-sprite {
+visuals {
+visual {
 selector = red
 colors = #ff0000
 }
-sprite {
+visual {
 selector = blue
 colors = #0000ff
 }
@@ -7547,31 +7519,31 @@ rb
     let loaded = parse_game(source).unwrap();
     let red = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "red")
+        .find(|visual| visual.name == "red")
         .unwrap();
     let blue = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "blue")
+        .find(|visual| visual.name == "blue")
         .unwrap();
 
     match &red.kind {
-        VisualSpriteKind::Solid(color) => assert_eq!(color, "#ff0000"),
-        _ => panic!("red should be a solid sprite"),
+        VisualKind::Solid(color) => assert_eq!(color, "#ff0000"),
+        _ => panic!("red should be a solid visual"),
     }
     match &blue.kind {
-        VisualSpriteKind::Solid(color) => assert_eq!(color, "#0000ff"),
-        _ => panic!("blue should be a solid sprite"),
+        VisualKind::Solid(color) => assert_eq!(color, "#0000ff"),
+        _ => panic!("blue should be a solid visual"),
     }
 }
 
 #[test]
-fn puzzle_sprites_accept_line_style_solid_color_table_sprite() {
+fn puzzle_visuals_accept_line_style_solid_color_table_visual() {
     let source = r##"
-title = line_style_solid_color_table_sprite
+title = line_style_solid_color_table_visual
 
 puzzle default {
 tags {
@@ -7584,14 +7556,14 @@ legend L = Light:kind
 legend {
 . = empty
 }
-sprites {
+visuals {
 palette {
 piece_color:kind {
 A = #4a4
 B = #a4a
 }
 }
-sprite {
+visual {
 selector = Light:kind
 colors = piece_color:kind
 }
@@ -7606,24 +7578,24 @@ level "start"
 }
 "##;
     let loaded = parse_game(source).unwrap();
-    let sprite = loaded
+    let visual = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Light-B")
+        .find(|visual| visual.name == "Light-B")
         .unwrap();
-    match &sprite.kind {
-        VisualSpriteKind::Solid(color) => {
+    match &visual.kind {
+        VisualKind::Solid(color) => {
             assert_eq!(color, "#a4a");
         }
-        _ => panic!("Light-B should be a solid sprite"),
+        _ => panic!("Light-B should be a solid visual"),
     }
 }
 
 #[test]
-fn puzzle_sprites_accept_line_style_ascii_sprite() {
+fn puzzle_visuals_accept_line_style_ascii_visual() {
     let source = r##"
-title = line_style_ascii_sprite
+title = line_style_ascii_visual
 
 puzzle default {
 slots {
@@ -7634,8 +7606,8 @@ legend W = Wall
 legend {
 . = empty
 }
-sprites {
-sprite {
+visuals {
+visual {
 selector = Box
 colors = #aaa
 shape = {
@@ -7646,7 +7618,7 @@ shape = {
 00000
 }
 }
-sprite {
+visual {
 selector = Wall
 colors = #444
 }
@@ -7661,15 +7633,15 @@ B
 }
 "##;
     let loaded = parse_game(source).unwrap();
-    let box_sprite = loaded
+    let box_visual = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Box")
+        .find(|visual| visual.name == "Box")
         .unwrap();
-    let pattern = planar_sprite_pattern(box_sprite);
-    match &box_sprite.kind {
-        VisualSpriteKind::Ascii { colors } => {
+    let pattern = planar_visual_pattern(box_visual);
+    match &box_visual.kind {
+        VisualKind::Ascii { colors } => {
             assert_eq!(
                 pattern.as_slice(),
                 [
@@ -7687,24 +7659,24 @@ B
                     .any(|color| { color.token == '0' && color.color == "#aaa" })
             );
         }
-        _ => panic!("Box should be an ascii sprite"),
+        _ => panic!("Box should be an ascii visual"),
     }
-    let wall_sprite = loaded
+    let wall_visual = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Wall")
+        .find(|visual| visual.name == "Wall")
         .unwrap();
-    match &wall_sprite.kind {
-        VisualSpriteKind::Solid(color) => assert_eq!(color, "#444"),
-        _ => panic!("Wall should be a solid sprite"),
+    match &wall_visual.kind {
+        VisualKind::Solid(color) => assert_eq!(color, "#444"),
+        _ => panic!("Wall should be a solid visual"),
     }
 }
 
 #[test]
-fn puzzle_sprites_keep_solid_entry_before_line_style_shape_sprite() {
+fn puzzle_visuals_keep_solid_entry_before_line_style_shape_visual() {
     let source = r##"
-title = solid_before_line_style_shape_sprite
+title = solid_before_line_style_shape_visual
 
 puzzle default {
 tags {
@@ -7718,7 +7690,7 @@ legend B = Box:open
 legend {
 . = empty
 }
-sprites {
+visuals {
 shapes {
 Box {
 01
@@ -7726,18 +7698,18 @@ Box {
 }
 }
 
-sprite {
+visual {
 selector = Hole
 colors = #000
 }
 
-sprite {
+visual {
 selector = Box:open
 colors = #45667d #2f485d
 shape = Box
 }
 
-sprite {
+visual {
 selector = Box:close
 colors = #34444e #262f38
 shape = Box
@@ -7754,26 +7726,26 @@ HB
 "##;
     let loaded = parse_game(source).unwrap();
 
-    let hole_sprite = loaded
+    let hole_visual = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Hole")
+        .find(|visual| visual.name == "Hole")
         .unwrap();
-    match &hole_sprite.kind {
-        VisualSpriteKind::Solid(color) => assert_eq!(color, "#000"),
-        _ => panic!("Hole should be a solid sprite"),
+    match &hole_visual.kind {
+        VisualKind::Solid(color) => assert_eq!(color, "#000"),
+        _ => panic!("Hole should be a solid visual"),
     }
 
-    let box_sprite = loaded
+    let box_visual = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Box-open")
+        .find(|visual| visual.name == "Box-open")
         .unwrap();
-    let pattern = planar_sprite_pattern(box_sprite);
-    match &box_sprite.kind {
-        VisualSpriteKind::Ascii { colors } => {
+    let pattern = planar_visual_pattern(box_visual);
+    match &box_visual.kind {
+        VisualKind::Ascii { colors } => {
             assert_eq!(pattern.as_slice(), ["01".to_string(), "10".to_string()]);
             assert!(
                 colors
@@ -7786,14 +7758,14 @@ HB
                     .any(|color| color.token == '1' && color.color == "#2f485d")
             );
         }
-        _ => panic!("Box:open should be an ascii sprite"),
+        _ => panic!("Box:open should be an ascii visual"),
     }
 }
 
 #[test]
-fn puzzle_sprites_warn_when_generated_sprite_key_is_overwritten() {
+fn puzzle_visuals_warn_when_generated_visual_key_is_overwritten() {
     let source = r##"
-title = duplicate_sprite_visual
+title = duplicate_visual
 
 puzzle default {
 slots {
@@ -7803,8 +7775,8 @@ legend C = Crack
 legend {
 . = empty
 }
-sprites {
-sprite {
+visuals {
+visual {
 selector = Crack
 colors = #2cc511
 shape = {
@@ -7816,7 +7788,7 @@ shape = {
 }
 }
 
-sprite {
+visual {
 selector = Crack
 colors = #000
 shape = {
@@ -7838,22 +7810,22 @@ C
     assert_eq!(
         loaded
             .visuals
-            .sprites
+            .entries
             .iter()
-            .filter(|sprite| sprite.name == "Crack")
+            .filter(|visual| visual.name == "Crack")
             .count(),
         2
     );
     assert!(loaded.warnings.iter().any(|warning| {
-        warning.contains("visual sprite `Crack` is defined more than once")
-            && warning.contains("later definition overwrites earlier sprite")
+        warning.contains("visual `Crack` is defined more than once")
+            && warning.contains("later definition overwrites earlier visual")
     }));
 }
 
 #[test]
-fn puzzle_sprites_warn_when_sprite_grid_does_not_divide_largest_grid() {
+fn puzzle_visuals_warn_when_visual_grid_does_not_divide_largest_grid() {
     let source = r##"
-title = sprite_grid_warning
+title = visual_grid_warning
 
 puzzle default {
 slots {
@@ -7863,8 +7835,8 @@ legend B = Box
 legend {
 . = empty
 }
-sprites {
-sprite {
+visuals {
+visual {
 selector = Box
 colors = #aaa
 shape = {
@@ -7875,7 +7847,7 @@ shape = {
 }
 }
 
-sprite {
+visual {
 selector = Pull
 colors = #bbb
 shape = {
@@ -7897,15 +7869,15 @@ B
     let loaded = parse_game(source).unwrap();
 
     assert!(loaded.warnings.iter().any(|warning| {
-        warning.contains("visual sprite `Pull` uses a 3x3 cell grid")
-            && warning.contains("does not divide the largest sprite grid 4")
+        warning.contains("visual `Pull` uses a 3x3 cell grid")
+            && warning.contains("does not divide the largest visual grid 4")
     }));
 }
 
 #[test]
-fn puzzle_sprites_do_not_warn_when_sprite_grid_divides_largest_grid() {
+fn puzzle_visuals_do_not_warn_when_visual_grid_divides_largest_grid() {
     let source = r##"
-title = sprite_grid_divides
+title = visual_grid_divides
 
 puzzle default {
 slots {
@@ -7915,8 +7887,8 @@ legend B = Box
 legend {
 . = empty
 }
-sprites {
-sprite {
+visuals {
+visual {
 selector = Box
 colors = #aaa
 shape = {
@@ -7927,7 +7899,7 @@ shape = {
 }
 }
 
-sprite {
+visual {
 selector = Pull
 colors = #bbb
 shape = {
@@ -7951,14 +7923,14 @@ B
         !loaded
             .warnings
             .iter()
-            .any(|warning| warning.contains("largest sprite grid"))
+            .any(|warning| warning.contains("largest visual grid"))
     );
 }
 
 #[test]
-fn puzzle_sprites_accept_line_style_tagged_ascii_sprite_after_pattern() {
+fn puzzle_visuals_accept_line_style_tagged_ascii_visual_after_pattern() {
     let source = r##"
-title = line_style_tagged_ascii_sprite
+title = line_style_tagged_ascii_visual
 
 puzzle default {
 tags {
@@ -7971,15 +7943,15 @@ legend B = Box:base
 legend {
 . = empty
 }
-sprites {
-sprite {
+visuals {
+visual {
 selector = Box:base
 colors = #aaa
 shape = {
 0
 }
 }
-sprite {
+visual {
 selector = Box:movable
 colors = #bbb
 shape = {
@@ -7999,13 +7971,13 @@ B
     let loaded = parse_game(source).unwrap();
     let box_movable = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Box-movable")
+        .find(|visual| visual.name == "Box-movable")
         .unwrap();
-    let pattern = planar_sprite_pattern(box_movable);
+    let pattern = planar_visual_pattern(box_movable);
     match &box_movable.kind {
-        VisualSpriteKind::Ascii { colors } => {
+        VisualKind::Ascii { colors } => {
             assert_eq!(pattern.as_slice(), ["0".to_string()].as_slice());
             assert!(
                 colors
@@ -8013,14 +7985,14 @@ B
                     .any(|color| { color.token == '0' && color.color == "#bbb" })
             );
         }
-        _ => panic!("Box:movable should be an ascii sprite"),
+        _ => panic!("Box:movable should be an ascii visual"),
     }
 }
 
 #[test]
-fn puzzle_sprites_accept_schema_sprite_with_color_alias_row() {
+fn puzzle_visuals_accept_schema_visual_with_color_alias_row() {
     let source = r##"
-title = schema_sprite_color_alias_row
+title = schema_visual_color_alias_row
 
 puzzle default {
 tags {
@@ -8033,12 +8005,12 @@ legend 1 = Gate:1
 legend {
 . = empty
 }
-sprites {
+visuals {
 palette {
 Gate_color_1 = #111111
 Gate_color_2 = #222222
 }
-sprite {
+visual {
 selector = Gate:num
 colors = Gate_color_1 Gate_color_2
 shape = {
@@ -8057,16 +8029,16 @@ level "start"
 }
 "##;
     let loaded = parse_game(source).unwrap();
-    let sprite = loaded
+    let visual = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Gate-1")
+        .find(|visual| visual.name == "Gate-1")
         .unwrap();
 
-    let pattern = planar_sprite_pattern(sprite);
-    match &sprite.kind {
-        VisualSpriteKind::Ascii { colors } => {
+    let pattern = planar_visual_pattern(visual);
+    match &visual.kind {
+        VisualKind::Ascii { colors } => {
             assert_eq!(pattern.as_slice(), ["01".to_string(), "10".to_string()]);
             assert!(
                 colors
@@ -8079,14 +8051,14 @@ level "start"
                     .any(|color| color.token == '1' && color.color == "#222222")
             );
         }
-        _ => panic!("Gate:1 should be an ascii sprite"),
+        _ => panic!("Gate:1 should be an ascii visual"),
     }
 }
 
 #[test]
-fn puzzle_sprites_do_not_parse_tagged_entry_header_as_transform() {
+fn puzzle_visuals_do_not_parse_tagged_entry_header_as_transform() {
     let source = r##"
-title = tagged_sprite_header_not_transform
+title = tagged_visual_header_not_transform
 
 puzzle default {
 tags {
@@ -8099,7 +8071,7 @@ legend B = Box:base
 legend {
 . = empty
 }
-sprites {
+visuals {
 Box:base
 #aaa
 0
@@ -8118,15 +8090,15 @@ B
 "##;
     let error = parse_game(source).unwrap_err().to_string();
     assert!(
-        !error.contains("translate sprite transforms were removed"),
+        !error.contains("translate visual transforms were removed"),
         "{error}"
     );
 }
 
 #[test]
-fn puzzle_sprites_reject_braces_in_ascii_rows() {
+fn puzzle_visuals_reject_braces_in_ascii_rows() {
     let source = r##"
-title = sprite_ascii_braces
+title = visual_ascii_braces
 
 puzzle default {
 slots {
@@ -8136,7 +8108,7 @@ legend B = Box
 legend {
 . = empty
 }
-sprites {
+visuals {
 Box
 #aaa
 00{00
@@ -8159,9 +8131,9 @@ B
 }
 
 #[test]
-fn puzzle_sprites_reject_translate_transform_offset() {
+fn puzzle_visuals_reject_translate_transform_offset() {
     let source = r##"
-title = translated_sprite_removed
+title = translated_visual_removed
 
 puzzle default {
 slots {
@@ -8171,8 +8143,8 @@ legend P = Player
 legend {
 . = empty
 }
-sprites {
-sprite {
+visuals {
+visual {
 selector = Player
 colors = #fff
 shape = {
@@ -8196,15 +8168,15 @@ P
 "##;
     let error = parse_game(source).unwrap_err().to_string();
     assert!(
-        error.contains("removed sprite translate syntax; use translate (<x>, <y>)"),
+        error.contains("removed visual translate syntax; use translate (<x>, <y>)"),
         "{error}"
     );
 }
 
 #[test]
-fn puzzle_sprites_reject_malformed_translate_transform() {
+fn puzzle_visuals_reject_malformed_translate_transform() {
     let source = r##"
-title = malformed_translated_sprite
+title = malformed_translated_visual
 
 puzzle default {
 slots {
@@ -8214,8 +8186,8 @@ legend P = Player
 legend {
 . = empty
 }
-sprites {
-sprite {
+visuals {
+visual {
 selector = Player
 colors = #fff
 shape = {
@@ -8235,13 +8207,13 @@ P
 "##;
     let error = parse_game(source).unwrap_err().to_string();
     assert!(
-        error.contains("removed sprite translate syntax; use translate (<x>, <y>)"),
+        error.contains("removed visual translate syntax; use translate (<x>, <y>)"),
         "{error}"
     );
 }
 
 #[test]
-fn puzzle_sprites_accept_line_style_color_and_shape_refs() {
+fn puzzle_visuals_accept_line_style_color_and_shape_refs() {
     let source = r##"
 title = line_style_color_shape_refs
 
@@ -8253,7 +8225,7 @@ legend B = Box
 legend {
 . = empty
 }
-sprites {
+visuals {
 shapes {
 box_shape {
 010
@@ -8261,7 +8233,7 @@ box_shape {
 010
 }
 }
-sprite {
+visual {
 selector = Box
 colors = #111 #eee
 shape = box_shape
@@ -8277,15 +8249,15 @@ B
 }
 "##;
     let loaded = parse_game(source).unwrap();
-    let box_sprite = loaded
+    let box_visual = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Box")
+        .find(|visual| visual.name == "Box")
         .unwrap();
-    let pattern = planar_sprite_pattern(box_sprite);
-    match &box_sprite.kind {
-        VisualSpriteKind::Ascii { colors } => {
+    let pattern = planar_visual_pattern(box_visual);
+    match &box_visual.kind {
+        VisualKind::Ascii { colors } => {
             assert_eq!(
                 pattern.as_slice(),
                 ["010".to_string(), "111".to_string(), "010".to_string()].as_slice()
@@ -8293,12 +8265,12 @@ B
             assert_eq!(colors[0].color, "#111");
             assert_eq!(colors[1].color, "#eee");
         }
-        _ => panic!("Box should be an ascii sprite"),
+        _ => panic!("Box should be an ascii visual"),
     }
 }
 
 #[test]
-fn puzzle_sprites_accept_bare_shape_reference_after_colors() {
+fn puzzle_visuals_accept_bare_shape_reference_after_colors() {
     let source = r##"
 title = bare_shape_reference
 
@@ -8306,14 +8278,14 @@ puzzle default {
 slots {
 __legacy_layer_0 = Box
 }
-sprites {
+visuals {
 shapes {
 box_shape {
 01
 10
 }
 }
-sprite {
+visual {
 selector = Box
 colors = #111 #eee
 shape = box_shape
@@ -8333,34 +8305,34 @@ B
 }
 "##;
     let loaded = parse_game(source).unwrap();
-    let box_sprite = loaded
+    let box_visual = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Box")
+        .find(|visual| visual.name == "Box")
         .unwrap();
-    let pattern = planar_sprite_pattern(box_sprite);
-    match &box_sprite.kind {
-        VisualSpriteKind::Ascii { .. } => {
+    let pattern = planar_visual_pattern(box_visual);
+    match &box_visual.kind {
+        VisualKind::Ascii { .. } => {
             assert_eq!(
                 pattern.as_slice(),
                 ["01".to_string(), "10".to_string()].as_slice()
             );
         }
-        _ => panic!("Box should be an ascii sprite"),
+        _ => panic!("Box should be an ascii visual"),
     }
 }
 
 #[test]
-fn unbraced_sprite_attachment_colors_property_does_not_enter_palette() {
+fn unbraced_visual_attachment_colors_property_does_not_enter_palette() {
     let source = r##"
-title = unbraced_sprite_colors_property
+title = unbraced_visual_colors_property
 
 puzzle default {
 slots {
 __legacy_layer_0 = Player
 }
-sprites {
+visuals {
 shapes {
 player_shape {
 00
@@ -8385,28 +8357,28 @@ P
 }
 "##;
     let loaded = parse_game(source).unwrap();
-    let sprite = loaded
+    let visual = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Player")
+        .find(|visual| visual.name == "Player")
         .unwrap();
-    let pattern = planar_sprite_pattern(sprite);
-    match &sprite.kind {
-        VisualSpriteKind::Ascii { colors } => {
+    let pattern = planar_visual_pattern(visual);
+    match &visual.kind {
+        VisualKind::Ascii { colors } => {
             assert_eq!(pattern.as_slice(), ["00".to_string(), "11".to_string()]);
             assert_eq!(colors[0].color, "#fff");
             assert_eq!(colors[1].color, "#000");
             assert!(!colors.iter().any(|color| color.color == "colors"));
         }
-        _ => panic!("Player should be an ascii sprite"),
+        _ => panic!("Player should be an ascii visual"),
     }
 }
 
 #[test]
-fn puzzle_sprites_accept_unbraced_shorthand_animation_body() {
+fn puzzle_visuals_accept_unbraced_shorthand_animation_body() {
     let source = r##"
-title = shorthand_animation_sprite
+title = shorthand_animation_visual
 
 puzzle default {
 slots {
@@ -8417,7 +8389,7 @@ legend {
 . = empty
 B = Background
 }
-sprites {
+visuals {
 Background
 #90ee90 #008000
 500ms
@@ -8448,27 +8420,27 @@ B
 }
 "##;
     let loaded = parse_game(source).unwrap();
-    let sprite = loaded
+    let visual = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Background")
+        .find(|visual| visual.name == "Background")
         .unwrap();
-    assert_eq!(sprite.animation_duration_ms, Some(500));
-    assert_eq!(sprite.frames.len(), 3);
-    let pattern = planar_sprite_pattern(sprite);
-    match &sprite.kind {
-        VisualSpriteKind::Ascii { colors } => {
+    assert_eq!(visual.animation_duration_ms, Some(500));
+    assert_eq!(visual.frames.len(), 3);
+    let pattern = planar_visual_pattern(visual);
+    match &visual.kind {
+        VisualKind::Ascii { colors } => {
             assert_eq!(pattern[0], "11111");
             assert_eq!(colors[0].color, "#90ee90");
             assert_eq!(colors[1].color, "#008000");
         }
-        _ => panic!("Background should be an ascii sprite"),
+        _ => panic!("Background should be an ascii visual"),
     }
 }
 
 #[test]
-fn puzzle_sprites_accept_explicit_braced_inline_shape() {
+fn puzzle_visuals_accept_explicit_braced_inline_shape() {
     let source = r##"
 title = explicit_braced_inline_shape
 
@@ -8476,8 +8448,8 @@ puzzle default {
 slots {
 __legacy_layer_0 = Player
 }
-sprites {
-sprite {
+visuals {
+visual {
 selector = Player
 colors = #fff #000
 shape = {
@@ -8500,23 +8472,23 @@ P
 }
 "##;
     let loaded = parse_game(source).unwrap();
-    let sprite = loaded
+    let visual = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Player")
+        .find(|visual| visual.name == "Player")
         .unwrap();
-    let pattern = planar_sprite_pattern(sprite);
-    match &sprite.kind {
-        VisualSpriteKind::Ascii { .. } => {
+    let pattern = planar_visual_pattern(visual);
+    match &visual.kind {
+        VisualKind::Ascii { .. } => {
             assert_eq!(pattern, &["000", "010", "000"]);
         }
-        _ => panic!("Player should be an ascii sprite"),
+        _ => panic!("Player should be an ascii visual"),
     }
 }
 
 #[test]
-fn puzzle_sprites_reject_legacy_unbraced_shape_marker() {
+fn puzzle_visuals_reject_legacy_unbraced_shape_marker() {
     let source = r##"
 title = reject_legacy_unbraced_shape_marker
 
@@ -8524,8 +8496,8 @@ puzzle default {
 slots {
 __legacy_layer_0 = Player
 }
-sprites {
-sprite {
+visuals {
+visual {
 selector = Player
 colors = #fff #000
 shape =
@@ -8548,15 +8520,15 @@ P
 "##;
     let error = parse_game(source).unwrap_err().to_string();
     assert!(
-        error.contains("inline sprite shape must be `shape = { ... }` or bare ASCII rows"),
+        error.contains("inline visual shape must be `shape = { ... }` or bare ASCII rows"),
         "{error}"
     );
 }
 
 #[test]
-fn puzzle_sprites_accept_frame_duration_for_animation_body() {
+fn puzzle_visuals_accept_frame_duration_for_animation_body() {
     let source = r##"
-title = frame_duration_animation_sprite
+title = frame_duration_animation_visual
 
 puzzle default {
 slots {
@@ -8566,7 +8538,7 @@ legend {
 . = empty
 B = Background
 }
-sprites {
+visuals {
 Background
 #90ee90 #008000
 frame_duration 100ms
@@ -8597,19 +8569,19 @@ B
 }
 "##;
     let loaded = parse_game(source).unwrap();
-    let sprite = loaded
+    let visual = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Background")
+        .find(|visual| visual.name == "Background")
         .unwrap();
-    assert_eq!(sprite.animation_duration_ms, Some(300));
+    assert_eq!(visual.animation_duration_ms, Some(300));
 }
 
 #[test]
-fn puzzle_sprites_reject_conflicting_duration_and_frame_duration() {
+fn puzzle_visuals_reject_conflicting_duration_and_frame_duration() {
     let source = r##"
-title = conflicting_duration_animation_sprite
+title = conflicting_duration_animation_visual
 
 puzzle default {
 slots {
@@ -8619,7 +8591,7 @@ legend {
 . = empty
 B = Background
 }
-sprites {
+visuals {
 Background
 #90ee90 #008000
 duration 500ms
@@ -8652,11 +8624,11 @@ B
 "##;
     let error = parse_game(source).unwrap_err().to_string();
 
-    assert!(error.contains("sprite duration must equal frame_duration multiplied by frame count"));
+    assert!(error.contains("visual duration must equal frame_duration multiplied by frame count"));
 }
 
 #[test]
-fn puzzle_sprites_accept_unbraced_shape_table_values_and_bare_refs() {
+fn puzzle_visuals_accept_unbraced_shape_table_values_and_bare_refs() {
     let source = r##"
 title = unbraced_shape_table_values
 
@@ -8672,7 +8644,7 @@ legend B = Box:B
 legend {
 . = empty
 }
-sprites {
+visuals {
 palette {
 piece_color:kind {
 A = #4a4
@@ -8691,12 +8663,12 @@ B
 floor
 0
 }
-sprite {
+visual {
 selector = Box:kind
 colors = piece_color:kind transparent
 shape = mark:kind
 }
-sprite {
+visual {
 selector = @Floor
 colors = #111 #eee
 shape = floor
@@ -8712,15 +8684,15 @@ B
 }
 "##;
     let loaded = parse_game(source).unwrap();
-    let box_sprite = loaded
+    let box_visual = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Box-B")
+        .find(|visual| visual.name == "Box-B")
         .unwrap();
-    let pattern = planar_sprite_pattern(box_sprite);
-    match &box_sprite.kind {
-        VisualSpriteKind::Ascii { colors } => {
+    let pattern = planar_visual_pattern(box_visual);
+    match &box_visual.kind {
+        VisualKind::Ascii { colors } => {
             assert_eq!(
                 pattern.as_slice(),
                 ["11".to_string(), "00".to_string()].as_slice()
@@ -8728,26 +8700,26 @@ B
             assert_eq!(colors[0].color, "#a4a");
             assert_eq!(colors[1].color, "transparent");
         }
-        _ => panic!("Box:B should be an ascii sprite"),
+        _ => panic!("Box:B should be an ascii visual"),
     }
 
-    let floor_sprite = loaded
+    let floor_visual = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "@Floor")
+        .find(|visual| visual.name == "@Floor")
         .unwrap();
-    let pattern = planar_sprite_pattern(floor_sprite);
-    match &floor_sprite.kind {
-        VisualSpriteKind::Ascii { .. } => {
+    let pattern = planar_visual_pattern(floor_visual);
+    match &floor_visual.kind {
+        VisualKind::Ascii { .. } => {
             assert_eq!(pattern.as_slice(), ["0".to_string()].as_slice());
         }
-        _ => panic!("@Floor should be an ascii sprite"),
+        _ => panic!("@Floor should be an ascii visual"),
     }
 }
 
 #[test]
-fn puzzle_sprites_accept_individual_shape_table_values() {
+fn puzzle_visuals_accept_individual_shape_table_values() {
     let source = r##"
 title = individual_shape_table_values
 
@@ -8762,7 +8734,7 @@ legend B = Box:B
 legend {
 . = empty
 }
-sprites {
+visuals {
 shapes {
 mark:A
 01
@@ -8772,7 +8744,7 @@ mark:B
 11
 00
 }
-sprite {
+visual {
 selector = Box:kind
 colors = #111 #eee
 shape = mark:kind
@@ -8788,26 +8760,26 @@ B
 }
 "##;
     let loaded = parse_game(source).unwrap();
-    let box_sprite = loaded
+    let box_visual = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Box-B")
+        .find(|visual| visual.name == "Box-B")
         .unwrap();
-    let pattern = planar_sprite_pattern(box_sprite);
-    match &box_sprite.kind {
-        VisualSpriteKind::Ascii { .. } => {
+    let pattern = planar_visual_pattern(box_visual);
+    match &box_visual.kind {
+        VisualKind::Ascii { .. } => {
             assert_eq!(
                 pattern.as_slice(),
                 ["11".to_string(), "00".to_string()].as_slice()
             );
         }
-        _ => panic!("Box:B should be an ascii sprite"),
+        _ => panic!("Box:B should be an ascii visual"),
     }
 }
 
 #[test]
-fn puzzle_sprites_accept_terminal_unbraced_shape_block_before_colors() {
+fn puzzle_visuals_accept_terminal_unbraced_shape_block_before_colors() {
     let source = r##"
 title = terminal_unbraced_shape_block_before_colors
 
@@ -8819,7 +8791,7 @@ legend B = Box
 legend {
 . = empty
 }
-sprites {
+visuals {
 shapes {
 box_shape
 010
@@ -8831,7 +8803,7 @@ palette {
 box_color = #eee
 }
 
-sprite {
+visual {
 selector = Box
 colors = box_color #111
 shape = box_shape
@@ -8847,15 +8819,15 @@ B
 }
 "##;
     let loaded = parse_game(source).unwrap();
-    let box_sprite = loaded
+    let box_visual = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Box")
+        .find(|visual| visual.name == "Box")
         .unwrap();
-    let pattern = planar_sprite_pattern(box_sprite);
-    match &box_sprite.kind {
-        VisualSpriteKind::Ascii { colors } => {
+    let pattern = planar_visual_pattern(box_visual);
+    match &box_visual.kind {
+        VisualKind::Ascii { colors } => {
             assert_eq!(
                 pattern.as_slice(),
                 ["010".to_string(), "111".to_string(), "010".to_string()].as_slice()
@@ -8871,12 +8843,12 @@ B
                     .any(|color| { color.token == '1' && color.color == "#111" })
             );
         }
-        _ => panic!("Box should be an ascii sprite"),
+        _ => panic!("Box should be an ascii visual"),
     }
 }
 
 #[test]
-fn puzzle_sprites_accept_multiple_unbraced_shapes_in_one_shapes_block() {
+fn puzzle_visuals_accept_multiple_unbraced_shapes_in_one_shapes_block() {
     let source = r##"
 title = multiple_unbraced_shapes
 
@@ -8889,7 +8861,7 @@ legend P = Pull
 legend {
 . = empty
 }
-sprites {
+visuals {
 shapes {
 Box
 010
@@ -8902,13 +8874,13 @@ Pull
 000
 }
 
-sprite {
+visual {
 selector = Box
 colors = #111 #eee
 shape = Box
 }
 
-sprite {
+visual {
 selector = Pull
 colors = #222 #0f0
 shape = Pull
@@ -8924,43 +8896,43 @@ BP
 }
 "##;
     let loaded = parse_game(source).unwrap();
-    let box_sprite = loaded
+    let box_visual = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Box")
+        .find(|visual| visual.name == "Box")
         .unwrap();
-    let pattern = planar_sprite_pattern(box_sprite);
-    match &box_sprite.kind {
-        VisualSpriteKind::Ascii { .. } => {
+    let pattern = planar_visual_pattern(box_visual);
+    match &box_visual.kind {
+        VisualKind::Ascii { .. } => {
             assert_eq!(
                 pattern.as_slice(),
                 ["010".to_string(), "111".to_string(), "010".to_string()].as_slice()
             );
         }
-        _ => panic!("Box should be an ascii sprite"),
+        _ => panic!("Box should be an ascii visual"),
     }
 
-    let pull_sprite = loaded
+    let pull_visual = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Pull")
+        .find(|visual| visual.name == "Pull")
         .unwrap();
-    let pattern = planar_sprite_pattern(pull_sprite);
-    match &pull_sprite.kind {
-        VisualSpriteKind::Ascii { .. } => {
+    let pattern = planar_visual_pattern(pull_visual);
+    match &pull_visual.kind {
+        VisualKind::Ascii { .. } => {
             assert_eq!(
                 pattern.as_slice(),
                 ["000".to_string(), "010".to_string(), "000".to_string()].as_slice()
             );
         }
-        _ => panic!("Pull should be an ascii sprite"),
+        _ => panic!("Pull should be an ascii visual"),
     }
 }
 
 #[test]
-fn puzzle_sprites_do_not_extend_unbraced_shape_by_row_width() {
+fn puzzle_visuals_do_not_extend_unbraced_shape_by_row_width() {
     let source = r##"
 title = unbraced_shape_boundary
 
@@ -8973,7 +8945,7 @@ legend P = Pad
 legend {
 . = empty
 }
-sprites {
+visuals {
 shapes {
 Box
 010
@@ -8984,13 +8956,13 @@ Pad
 0
 }
 
-sprite {
+visual {
 selector = Box
 colors = #111 #eee
 shape = Box
 }
 
-sprite {
+visual {
 selector = Pad
 colors = #222
 shape = Pad
@@ -9006,40 +8978,40 @@ BP
 }
 "##;
     let loaded = parse_game(source).unwrap();
-    let box_sprite = loaded
+    let box_visual = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Box")
+        .find(|visual| visual.name == "Box")
         .unwrap();
-    let pattern = planar_sprite_pattern(box_sprite);
-    match &box_sprite.kind {
-        VisualSpriteKind::Ascii { .. } => {
+    let pattern = planar_visual_pattern(box_visual);
+    match &box_visual.kind {
+        VisualKind::Ascii { .. } => {
             assert_eq!(
                 pattern.as_slice(),
                 ["010".to_string(), "111".to_string(), "010".to_string()].as_slice()
             );
         }
-        _ => panic!("Box should be an ascii sprite"),
+        _ => panic!("Box should be an ascii visual"),
     }
 
-    let pad_sprite = loaded
+    let pad_visual = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Pad")
+        .find(|visual| visual.name == "Pad")
         .unwrap();
-    let pattern = planar_sprite_pattern(pad_sprite);
-    match &pad_sprite.kind {
-        VisualSpriteKind::Ascii { .. } => {
+    let pattern = planar_visual_pattern(pad_visual);
+    match &pad_visual.kind {
+        VisualKind::Ascii { .. } => {
             assert_eq!(pattern.as_slice(), ["0".to_string()].as_slice());
         }
-        _ => panic!("Pad should be an ascii sprite"),
+        _ => panic!("Pad should be an ascii visual"),
     }
 }
 
 #[test]
-fn puzzle_sprites_allow_duplicate_color_refs() {
+fn puzzle_visuals_allow_duplicate_color_refs() {
     let source = r##"
 title = duplicate_color_refs
 
@@ -9054,7 +9026,7 @@ legend B = Box
 legend {
 . = empty
 }
-sprites {
+visuals {
 palette {
 shared = #123456
 tagged:kind {
@@ -9067,7 +9039,7 @@ box_shape {
 0123
 }
 }
-sprite {
+visual {
 selector = Box
 colors = shared shared tagged:A tagged:A
 shape = box_shape
@@ -9083,15 +9055,15 @@ B
 }
 "##;
     let loaded = parse_game(source).unwrap();
-    let box_sprite = loaded
+    let box_visual = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Box")
+        .find(|visual| visual.name == "Box")
         .unwrap();
-    let pattern = planar_sprite_pattern(box_sprite);
-    match &box_sprite.kind {
-        VisualSpriteKind::Ascii { colors } => {
+    let pattern = planar_visual_pattern(box_visual);
+    match &box_visual.kind {
+        VisualKind::Ascii { colors } => {
             assert_eq!(pattern.as_slice(), ["0123".to_string()].as_slice());
             assert_eq!(colors.len(), 4);
             assert_eq!(colors[0].token, '0');
@@ -9101,14 +9073,14 @@ B
             assert_eq!(colors[2].color, "#abcdef");
             assert_eq!(colors[3].color, "#abcdef");
         }
-        _ => panic!("Box should be an ascii sprite"),
+        _ => panic!("Box should be an ascii visual"),
     }
 }
 
 #[test]
-fn puzzle_sprites_accept_blank_separated_sprite_attachment() {
+fn puzzle_visuals_accept_blank_separated_visual_attachment() {
     let source = r##"
-title = blank_separated_sprite_attachment
+title = blank_separated_visual_attachment
 
 puzzle default {
 slots {
@@ -9118,7 +9090,7 @@ legend B = Box
 legend {
 . = empty
 }
-sprites {
+visuals {
 Box
 #123456
 }
@@ -9132,24 +9104,24 @@ B
 }
 "##;
     let loaded = parse_game(source).unwrap();
-    let sprite = loaded
+    let visual = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Box")
+        .find(|visual| visual.name == "Box")
         .unwrap();
-    match &sprite.kind {
-        VisualSpriteKind::Solid(color) => {
+    match &visual.kind {
+        VisualKind::Solid(color) => {
             assert_eq!(color, "#123456");
         }
-        _ => panic!("Box should be a solid sprite"),
+        _ => panic!("Box should be a solid visual"),
     }
 }
 
 #[test]
-fn puzzle_sprites_reject_same_line_sprite_attachment_body() {
+fn puzzle_visuals_reject_same_line_visual_attachment_body() {
     let source = r##"
-title = image_sprite_ref
+title = image_visual_ref
 
 puzzle default {
 slots {
@@ -9159,8 +9131,8 @@ legend B = Box
 legend {
 . = empty
 }
-sprites {
-Box sprites/box.png
+visuals {
+Box visuals/box.png
 }
 rules {
 
@@ -9172,13 +9144,13 @@ B
 }
 "##;
     let error = parse_game(source).unwrap_err().to_string();
-    assert!(error.contains("sprite entry missing selector"), "{error}");
+    assert!(error.contains("visual entry missing selector"), "{error}");
 }
 
 #[test]
-fn puzzle_sprites_accept_braced_sprite_attachment_properties() {
+fn puzzle_visuals_accept_braced_visual_attachment_properties() {
     let source = r##"
-title = braced_sprite_attachment
+title = braced_visual_attachment
 
 puzzle default {
 slots {
@@ -9188,9 +9160,9 @@ legend B = Box
 legend {
 . = empty
 }
-sprites {
+visuals {
 Box {
-image = "sprites/box.png"
+image = "visuals/box.png"
 translate (0, -1/4)
 sampling = smooth
 }
@@ -9205,32 +9177,32 @@ B
 }
 "##;
     let loaded = parse_game(source).unwrap();
-    let sprite = loaded
+    let visual = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Box")
+        .find(|visual| visual.name == "Box")
         .unwrap();
-    match &sprite.kind {
-        VisualSpriteKind::Image { source } => {
-            assert_eq!(source, "sprites/box.png");
+    match &visual.kind {
+        VisualKind::Image { source } => {
+            assert_eq!(source, "visuals/box.png");
         }
-        _ => panic!("Box should be an image sprite"),
+        _ => panic!("Box should be an image visual"),
     }
     assert_eq!(
-        sprite.transforms,
-        [VisualSpriteTransform::Translate {
+        visual.transforms,
+        [VisualTransform::Translate {
             value: [0.0, -0.25, 0.0],
-            space: VisualSpriteSpace::World
+            space: VisualSpace::World
         }]
     );
-    assert_eq!(sprite.sampling, Some(VisualSpriteSampling::Smooth));
+    assert_eq!(visual.sampling, Some(VisualSampling::Smooth));
 }
 
 #[test]
-fn puzzle_sprites_accept_sprite_node_image_properties() {
+fn puzzle_visuals_accept_visual_node_image_properties() {
     let source = r##"
-title = sprite_node_image_ref
+title = visual_node_image_ref
 
 puzzle default {
 slots {
@@ -9240,10 +9212,10 @@ legend B = Box
 legend {
 . = empty
 }
-sprites {
-sprite {
+visuals {
+visual {
 selector = Box
-image = "sprites/box.png"
+image = "visuals/box.png"
 translate (0, -1/4)
 sampling = smooth
 }
@@ -9258,41 +9230,41 @@ B
 }
 "##;
     let loaded = parse_game(source).unwrap();
-    let sprite = loaded
+    let visual = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Box")
+        .find(|visual| visual.name == "Box")
         .unwrap();
-    match &sprite.kind {
-        VisualSpriteKind::Image { source } => {
-            assert_eq!(source, "sprites/box.png");
+    match &visual.kind {
+        VisualKind::Image { source } => {
+            assert_eq!(source, "visuals/box.png");
         }
-        _ => panic!("Box should be an image sprite"),
+        _ => panic!("Box should be an image visual"),
     }
-    assert_eq!(sprite.fit, VisualSpriteFit::default());
+    assert_eq!(visual.fit, VisualFit::default());
     assert_eq!(
-        sprite.transforms,
-        [VisualSpriteTransform::Translate {
+        visual.transforms,
+        [VisualTransform::Translate {
             value: [0.0, -0.25, 0.0],
-            space: VisualSpriteSpace::World
+            space: VisualSpace::World
         }]
     );
-    assert_eq!(sprite.sampling, Some(VisualSpriteSampling::Smooth));
+    assert_eq!(visual.sampling, Some(VisualSampling::Smooth));
 }
 
 #[test]
-fn puzzle_sprites_reject_removed_offset_property() {
+fn puzzle_visuals_reject_removed_offset_property() {
     let source = r##"
-title = removed_sprite_offset
+title = removed_visual_offset
 
 puzzle default {
 slots {
 actor = Box
 }
-sprites {
+visuals {
 Box {
-image = "sprites/box.png"
+image = "visuals/box.png"
 offset 0.5 0
 }
 }
@@ -9305,13 +9277,13 @@ level "start" {
 "##;
     let error = parse_game(source).unwrap_err().to_string();
 
-    assert!(error.contains("sprite offset was replaced by translate (<x>, <y>)"));
+    assert!(error.contains("visual offset was replaced by translate (<x>, <y>)"));
 }
 
 #[test]
-fn puzzle_sprites_reject_gif_image_sprite_refs() {
+fn puzzle_visuals_reject_gif_image_visual_refs() {
     let source = r##"
-title = image_sprite_ref
+title = image_visual_ref
 
 puzzle default {
 slots {
@@ -9321,10 +9293,10 @@ legend B = Box
 legend {
 . = empty
 }
-sprites {
-sprite {
+visuals {
+visual {
 selector = Box
-image = "sprites/box.gif"
+image = "visuals/box.gif"
 }
 }
 rules {
@@ -9337,13 +9309,13 @@ B
 }
 "##;
     let error = parse_game(source).unwrap_err().to_string();
-    assert!(error.contains("sprite image must use .png, .jpg, .jpeg, or .svg"));
+    assert!(error.contains("visual image must use .png, .jpg, .jpeg, or .svg"));
 }
 
 #[test]
-fn puzzle_sprites_accept_more_than_ten_inline_colors() {
+fn puzzle_visuals_accept_more_than_ten_inline_colors() {
     let source = r##"
-title = inline_sprite_many_colors
+title = inline_visual_many_colors
 
 puzzle default {
 slots {
@@ -9353,8 +9325,8 @@ legend P = Player
 legend {
 . = empty
 }
-sprites {
-sprite {
+visuals {
+visual {
 selector = Player
 colors = #000000 #111111 #222222 #333333 #444444 #555555 #666666 #777777 #888888 #999999 #aaaaaa
 shape = {
@@ -9372,15 +9344,15 @@ P
 }
 "##;
     let loaded = parse_game(source).unwrap();
-    let sprite = loaded
+    let visual = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Player")
+        .find(|visual| visual.name == "Player")
         .unwrap();
-    let pattern = planar_sprite_pattern(sprite);
-    match &sprite.kind {
-        VisualSpriteKind::Ascii { colors } => {
+    let pattern = planar_visual_pattern(visual);
+    match &visual.kind {
+        VisualKind::Ascii { colors } => {
             assert_eq!(pattern.as_slice(), ["a".to_string()].as_slice());
             assert!(
                 colors
@@ -9388,14 +9360,14 @@ P
                     .any(|color| { color.token == 'a' && color.color == "#aaaaaa" })
             );
         }
-        _ => panic!("Player should be an ascii sprite"),
+        _ => panic!("Player should be an ascii visual"),
     }
 }
 
 #[test]
-fn puzzle_sprites_accept_alpha_hex_colors() {
+fn puzzle_visuals_accept_alpha_hex_colors() {
     let source = r##"
-title = inline_sprite_alpha_colors
+title = inline_visual_alpha_colors
 
 puzzle default {
 slots {
@@ -9405,8 +9377,8 @@ legend P = Player
 legend {
 . = empty
 }
-sprites {
-sprite {
+visuals {
+visual {
 selector = Player
 colors = #ff004d80 #00000000
 shape = {
@@ -9424,15 +9396,15 @@ P
 }
 "##;
     let loaded = parse_game(source).unwrap();
-    let sprite = loaded
+    let visual = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Player")
+        .find(|visual| visual.name == "Player")
         .unwrap();
-    let pattern = planar_sprite_pattern(sprite);
-    match &sprite.kind {
-        VisualSpriteKind::Ascii { colors } => {
+    let pattern = planar_visual_pattern(visual);
+    match &visual.kind {
+        VisualKind::Ascii { colors } => {
             assert_eq!(pattern.as_slice(), ["01".to_string()].as_slice());
             assert!(
                 colors
@@ -9445,12 +9417,12 @@ P
                     .any(|color| { color.token == '1' && color.color == "#00000000" })
             );
         }
-        _ => panic!("Player should be an ascii sprite"),
+        _ => panic!("Player should be an ascii visual"),
     }
 }
 
 #[test]
-fn puzzle_sprites_count_leading_alpha_hex_transparent_as_palette_color() {
+fn puzzle_visuals_count_leading_alpha_hex_transparent_as_palette_color() {
     let source = r##"
 title = leading_alpha_transparent_palette_color
 
@@ -9462,8 +9434,8 @@ legend P = Player
 legend {
 . = empty
 }
-sprites {
-sprite {
+visuals {
+visual {
 selector = Player
 colors = #00000000 #555555
 shape = {
@@ -9481,15 +9453,15 @@ P
 }
 "##;
     let loaded = parse_game(source).unwrap();
-    let sprite = loaded
+    let visual = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Player")
+        .find(|visual| visual.name == "Player")
         .unwrap();
-    let pattern = planar_sprite_pattern(sprite);
-    match &sprite.kind {
-        VisualSpriteKind::Ascii { colors } => {
+    let pattern = planar_visual_pattern(visual);
+    match &visual.kind {
+        VisualKind::Ascii { colors } => {
             assert_eq!(pattern.as_slice(), ["01.".to_string()].as_slice());
             assert_eq!(colors.len(), 2);
             assert!(
@@ -9503,12 +9475,12 @@ P
                     .any(|color| { color.token == '1' && color.color == "#555555" })
             );
         }
-        _ => panic!("Player should be an ascii sprite"),
+        _ => panic!("Player should be an ascii visual"),
     }
 }
 
 #[test]
-fn puzzle_sprites_count_transparent_as_palette_color() {
+fn puzzle_visuals_count_transparent_as_palette_color() {
     let source = r##"
 title = transparent_palette_color
 
@@ -9520,8 +9492,8 @@ legend P = Player
 legend {
 . = empty
 }
-sprites {
-sprite {
+visuals {
+visual {
 selector = Player
 colors = transparent #555
 shape = {
@@ -9539,15 +9511,15 @@ P
 }
 "##;
     let loaded = parse_game(source).unwrap();
-    let sprite = loaded
+    let visual = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Player")
+        .find(|visual| visual.name == "Player")
         .unwrap();
-    let pattern = planar_sprite_pattern(sprite);
-    match &sprite.kind {
-        VisualSpriteKind::Ascii { colors } => {
+    let pattern = planar_visual_pattern(visual);
+    match &visual.kind {
+        VisualKind::Ascii { colors } => {
             assert_eq!(pattern.as_slice(), ["01".to_string()].as_slice());
             assert_eq!(colors.len(), 2);
             assert!(
@@ -9561,14 +9533,14 @@ P
                     .any(|color| { color.token == '1' && color.color == "#555" })
             );
         }
-        _ => panic!("Player should be an ascii sprite"),
+        _ => panic!("Player should be an ascii visual"),
     }
 }
 
 #[test]
-fn puzzle_sprites_reject_pattern_colors_outside_palette() {
+fn puzzle_visuals_reject_pattern_colors_outside_palette() {
     let source = r##"
-title = sprite_palette_overflow
+title = visual_palette_overflow
 
 puzzle default {
 slots {
@@ -9578,8 +9550,8 @@ legend P = Player
 legend {
 . = empty
 }
-sprites {
-sprite {
+visuals {
+visual {
 selector = Player
 colors = transparent
 shape = {
@@ -9597,11 +9569,11 @@ P
 }
 "##;
     let error = parse_game(source).unwrap_err().to_string();
-    assert!(error.contains("sprite pattern references a color outside the color row"));
+    assert!(error.contains("visual pattern references a color outside the color row"));
 }
 
 #[test]
-fn puzzle_sprites_accept_bare_reusable_shape_ref() {
+fn puzzle_visuals_accept_bare_reusable_shape_ref() {
     let source = r##"
 title = bare_reusable_shape_ref
 
@@ -9613,7 +9585,7 @@ legend P = Player
 legend {
 . = empty
 }
-sprites {
+visuals {
 shapes {
 player_shape {
 0.
@@ -9621,7 +9593,7 @@ player_shape {
 }
 }
 
-sprite {
+visual {
 selector = Player
 colors = #e94f64 #2f80ed
 shape = player_shape
@@ -9637,28 +9609,28 @@ P
 }
 "##;
     let loaded = parse_game(source).unwrap();
-    let sprite = loaded
+    let visual = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Player")
+        .find(|visual| visual.name == "Player")
         .unwrap();
-    let pattern = planar_sprite_pattern(sprite);
-    match &sprite.kind {
-        VisualSpriteKind::Ascii { .. } => {
+    let pattern = planar_visual_pattern(visual);
+    match &visual.kind {
+        VisualKind::Ascii { .. } => {
             assert_eq!(
                 pattern.as_slice(),
                 ["0.".to_string(), ".1".to_string()].as_slice()
             );
         }
-        _ => panic!("Player should be an ascii sprite"),
+        _ => panic!("Player should be an ascii visual"),
     }
 }
 
 #[test]
-fn puzzle_sprites_reject_old_ascii_sprite_syntax() {
+fn puzzle_visuals_reject_old_ascii_visual_syntax() {
     let source = r##"
-title = old_sprite_syntax
+title = old_visual_syntax
 
 puzzle default {
 slots {
@@ -9668,7 +9640,7 @@ legend P = Player
 legend {
 . = empty
 }
-sprites {
+visuals {
 shapes {
 player_shape {
 0.
@@ -9692,13 +9664,13 @@ P
 "##;
     let error = parse_game(source).unwrap_err().to_string();
     assert!(
-        error.contains("sprite ASCII row must be a single token row"),
+        error.contains("visual ASCII row must be a single token row"),
         "{error}"
     );
 }
 
 #[test]
-fn puzzle_sprites_reject_legacy_palettes_block() {
+fn puzzle_visuals_reject_legacy_palettes_block() {
     let source = r##"
 title = legacy_palettes_block
 
@@ -9710,7 +9682,7 @@ legend P = Player
 legend {
 . = empty
 }
-sprites {
+visuals {
 palettes {
 player = #e94f64 #2f80ed
 }
@@ -9735,7 +9707,7 @@ P
 }
 
 #[test]
-fn puzzle_sprites_reject_legacy_colors_block_for_palette_defs() {
+fn puzzle_visuals_reject_legacy_colors_block_for_palette_defs() {
     let source = r##"
 title = legacy_colors_block
 
@@ -9747,7 +9719,7 @@ legend P = Player
 legend {
 . = empty
 }
-sprites {
+visuals {
 colors {
 player = #e94f64
 }
@@ -9766,13 +9738,13 @@ P
 "##;
     let error = parse_game(source).unwrap_err().to_string();
     assert!(
-        error.contains("colors block was renamed to palette; sprite color rows still use colors"),
+        error.contains("colors block was renamed to palette; visual color rows still use colors"),
         "{error}"
     );
 }
 
 #[test]
-fn directions_is_builtin_value_set_for_objects_sprites_and_for() {
+fn directions_is_builtin_value_set_for_objects_visuals_and_for() {
     let source = r#"
 title = directions_value_set
 
@@ -9785,7 +9757,7 @@ legend P = Player
 legend {
 . = empty
 }
-sprites {
+visuals {
 shapes {
 edge:directions {
 up {
@@ -9806,7 +9778,7 @@ right {
 }
 }
 }
-sprite {
+visual {
 selector = Boundary:directions
 colors = transparent #555
 shape = edge:directions
@@ -9840,19 +9812,19 @@ level "start"
     );
     let boundary_right = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Boundary-right")
+        .find(|visual| visual.name == "Boundary-right")
         .unwrap();
-    let pattern = planar_sprite_pattern(boundary_right);
+    let pattern = planar_visual_pattern(boundary_right);
     match &boundary_right.kind {
-        VisualSpriteKind::Ascii { .. } => {
+        VisualKind::Ascii { .. } => {
             assert_eq!(
                 pattern.as_slice(),
                 ["01".to_string(), "01".to_string()].as_slice()
             );
         }
-        _ => panic!("Boundary-right should be an ascii sprite"),
+        _ => panic!("Boundary-right should be an ascii visual"),
     }
 }
 
@@ -9899,9 +9871,9 @@ B
 }
 
 #[test]
-fn sprite_shape_table_can_define_direction_variants() {
+fn visual_shape_table_can_define_direction_variants() {
     let source = r#"
-title = rotated_sprites
+title = rotated_visuals
 
 puzzle default {
 map rotate directions {
@@ -9916,7 +9888,7 @@ __legacy_layer_0 = Boundary:directions
 legend {
 . = empty
 }
-sprites {
+visuals {
 shapes {
 edge:directions {
 up {
@@ -9941,7 +9913,7 @@ left {
 }
 }
 }
-sprite {
+visual {
 selector = Boundary:directions
 colors = transparent #555
 shape = edge:directions
@@ -9965,27 +9937,27 @@ level "start"
     ];
 
     for (name, pattern) in expected {
-        let sprite = loaded
+        let visual = loaded
             .visuals
-            .sprites
+            .entries
             .iter()
-            .find(|sprite| sprite.name == name)
+            .find(|visual| visual.name == name)
             .unwrap();
-        let actual = planar_sprite_pattern(sprite);
-        match &sprite.kind {
-            VisualSpriteKind::Ascii { .. } => {
+        let actual = planar_visual_pattern(visual);
+        match &visual.kind {
+            VisualKind::Ascii { .. } => {
                 let expected = pattern.into_iter().map(str::to_string).collect::<Vec<_>>();
                 assert_eq!(actual.as_slice(), expected.as_slice());
             }
-            _ => panic!("{name} should be an ascii sprite"),
+            _ => panic!("{name} should be an ascii visual"),
         }
     }
 }
 
 #[test]
-fn unbraced_sprite_entry_can_use_direction_shape_table() {
+fn unbraced_visual_entry_can_use_direction_shape_table() {
     let source = r#"
-title = unbraced_rotated_sprite
+title = unbraced_rotated_visual
 
 puzzle default {
 map rotate directions {
@@ -10000,7 +9972,7 @@ __legacy_layer_0 = Boundary:directions
 legend {
 . = empty
 }
-sprites {
+visuals {
 shapes {
 edge:directions {
 up {
@@ -10025,7 +9997,7 @@ left {
 }
 }
 }
-sprite {
+visual {
 selector = Boundary:directions
 colors = transparent #555
 shape = edge:directions
@@ -10049,33 +10021,33 @@ level "start"
     ];
 
     for (name, pattern) in expected {
-        let sprite = loaded
+        let visual = loaded
             .visuals
-            .sprites
+            .entries
             .iter()
-            .find(|sprite| sprite.name == name)
+            .find(|visual| visual.name == name)
             .unwrap();
-        let actual = planar_sprite_pattern(sprite);
-        match &sprite.kind {
-            VisualSpriteKind::Ascii { .. } => {
+        let actual = planar_visual_pattern(visual);
+        match &visual.kind {
+            VisualKind::Ascii { .. } => {
                 let expected = pattern.into_iter().map(str::to_string).collect::<Vec<_>>();
                 assert_eq!(actual.as_slice(), expected.as_slice());
             }
-            _ => panic!("{name} should be an ascii sprite"),
+            _ => panic!("{name} should be an ascii visual"),
         }
     }
 }
 
 #[test]
-fn unbraced_at_prefixed_sprite_entry_can_use_direction_shape_table() {
+fn unbraced_at_prefixed_visual_entry_can_use_direction_shape_table() {
     let source = r#"
-title = unbraced_at_prefixed_rotated_sprite_header
+title = unbraced_at_prefixed_rotated_visual_header
 
 puzzle default {
 slots {
 each @WallFrame:directions
 }
-sprites {
+visuals {
 shapes {
 wall_frame:directions {
 up {
@@ -10116,7 +10088,7 @@ left {
 }
 }
 }
-sprite {
+visual {
 selector = @WallFrame:directions
 colors = #585858
 shape = wall_frame:directions
@@ -10163,27 +10135,27 @@ level "start"
     ];
 
     for (name, pattern) in expected {
-        let sprite = loaded
+        let visual = loaded
             .visuals
-            .sprites
+            .entries
             .iter()
-            .find(|sprite| sprite.name == name)
+            .find(|visual| visual.name == name)
             .unwrap();
-        let actual = planar_sprite_pattern(sprite);
-        match &sprite.kind {
-            VisualSpriteKind::Ascii { .. } => {
+        let actual = planar_visual_pattern(visual);
+        match &visual.kind {
+            VisualKind::Ascii { .. } => {
                 let expected = pattern.into_iter().map(str::to_string).collect::<Vec<_>>();
                 assert_eq!(actual.as_slice(), expected.as_slice());
             }
-            _ => panic!("{name} should be an ascii sprite"),
+            _ => panic!("{name} should be an ascii visual"),
         }
     }
 }
 
 #[test]
-fn consecutive_unbraced_at_prefixed_sprite_entries_can_use_rotation_and_shape_metadata() {
+fn consecutive_unbraced_at_prefixed_visual_entries_can_use_rotation_and_shape_metadata() {
     let source = r#"
-title = unbraced_at_prefixed_rotated_sprites
+title = unbraced_at_prefixed_rotated_visuals
 
 puzzle default {
 map rotate directions {
@@ -10203,7 +10175,7 @@ actor = Goal:state
 legend {
 . = empty
 }
-sprites {
+visuals {
 shapes {
 Flag
 11
@@ -10254,17 +10226,17 @@ left {
 }
 }
 }
-sprite {
+visual {
 selector = @Boundary:directions
 colors = #000 #fff
 shape = boundary:directions
 }
-sprite {
+visual {
 selector = @Corner:directions
 colors = #111 #fff
 shape = corner:directions
 }
-sprite {
+visual {
 selector = Goal:state
 colors = #222 #333
 shape = Flag
@@ -10280,11 +10252,11 @@ level "start"
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let sprite_names = loaded
+    let visual_names = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .map(|sprite| sprite.name.as_str())
+        .map(|visual| visual.name.as_str())
         .collect::<Vec<_>>();
 
     for expected in [
@@ -10296,16 +10268,16 @@ level "start"
         "Goal-close",
     ] {
         assert!(
-            sprite_names.contains(&expected),
-            "missing sprite {expected}; got {sprite_names:?}"
+            visual_names.contains(&expected),
+            "missing visual {expected}; got {visual_names:?}"
         );
     }
 }
 
 #[test]
-fn unbraced_shape_sprite_entry_can_be_followed_by_braced_rotated_at_prefixed_sprite() {
+fn unbraced_shape_visual_entry_can_be_followed_by_braced_rotated_at_prefixed_visual() {
     let source = r#"
-title = shape_before_braced_rotated_at_prefixed_sprite
+title = shape_before_braced_rotated_at_prefixed_visual
 
 puzzle default {
 map rotate directions {
@@ -10324,7 +10296,7 @@ each @LockedFrame:directions
 legend {
 . = empty
 }
-sprites {
+visuals {
 shapes {
 Flag
 11
@@ -10353,12 +10325,12 @@ left {
 }
 }
 }
-sprite {
+visual {
 selector = Goal:state
 colors = #222 #333
 shape = Flag
 }
-sprite {
+visual {
 selector = @LockedFrame:directions
 colors = #000 #fff
 shape = locked_frame:directions
@@ -10374,25 +10346,25 @@ level "start"
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let sprite_names = loaded
+    let visual_names = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .map(|sprite| sprite.name.as_str())
+        .map(|visual| visual.name.as_str())
         .collect::<Vec<_>>();
 
     for expected in ["Goal-open", "@LockedFrame-up", "@LockedFrame-right"] {
         assert!(
-            sprite_names.contains(&expected),
-            "missing sprite {expected}; got {sprite_names:?}"
+            visual_names.contains(&expected),
+            "missing visual {expected}; got {visual_names:?}"
         );
     }
 }
 
 #[test]
-fn sprite_shape_lookup_can_use_named_map_directive() {
+fn visual_shape_lookup_can_use_named_map_directive() {
     let source = r#"
-title = rotated_sprites_named_map
+title = rotated_visuals_named_map
 
 puzzle default {
 map clockwise directions {
@@ -10407,7 +10379,7 @@ __legacy_layer_0 = Boundary:directions
 legend {
 . = empty
 }
-sprites {
+visuals {
 shapes {
 edge:directions {
 up {
@@ -10432,7 +10404,7 @@ left {
 }
 }
 }
-sprite {
+visual {
 selector = Boundary:directions
 colors = transparent #555
 shape = edge:clockwise(directions)
@@ -10450,27 +10422,27 @@ level "start"
     let loaded = parse_game(source).unwrap();
     let boundary_right = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Boundary-right")
+        .find(|visual| visual.name == "Boundary-right")
         .unwrap();
 
-    let pattern = planar_sprite_pattern(boundary_right);
+    let pattern = planar_visual_pattern(boundary_right);
     match &boundary_right.kind {
-        VisualSpriteKind::Ascii { .. } => {
+        VisualKind::Ascii { .. } => {
             assert_eq!(
                 pattern.as_slice(),
                 ["000".to_string(), "000".to_string(), "111".to_string()].as_slice()
             );
         }
-        _ => panic!("Boundary-right should be an ascii sprite"),
+        _ => panic!("Boundary-right should be an ascii visual"),
     }
 }
 
 #[test]
-fn sprite_entry_accepts_canonical_metadata_colors_and_ascii_order() {
+fn visual_entry_accepts_canonical_metadata_colors_and_ascii_order() {
     let source = r##"
-title = canonical_sprite_metadata
+title = canonical_visual_metadata
 
 puzzle default {
 slots {
@@ -10480,8 +10452,8 @@ legend P = Player
 legend {
 . = empty
 }
-sprites {
-sprite {
+visuals {
+visual {
 selector = Player
 translate (0.5, -1/4)
 sampling = smooth
@@ -10504,25 +10476,25 @@ P
 }
 "##;
     let loaded = parse_game(source).unwrap();
-    let sprite = loaded
+    let visual = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Player")
+        .find(|visual| visual.name == "Player")
         .unwrap();
     assert_eq!(
-        sprite.transforms,
-        [VisualSpriteTransform::Translate {
+        visual.transforms,
+        [VisualTransform::Translate {
             value: [0.5, -0.25, 0.0],
-            space: VisualSpriteSpace::World
+            space: VisualSpace::World
         }]
     );
-    assert_eq!(sprite.fit, VisualSpriteFit::default());
-    assert_eq!(sprite.sampling, Some(VisualSpriteSampling::Smooth));
-    assert!(sprite.pixels_per_cell.is_none());
-    let pattern = planar_sprite_pattern(sprite);
-    match &sprite.kind {
-        VisualSpriteKind::Ascii { colors } => {
+    assert_eq!(visual.fit, VisualFit::default());
+    assert_eq!(visual.sampling, Some(VisualSampling::Smooth));
+    assert!(visual.pixels_per_cell.is_none());
+    let pattern = planar_visual_pattern(visual);
+    match &visual.kind {
+        VisualKind::Ascii { colors } => {
             assert_eq!(
                 pattern.as_slice(),
                 [
@@ -10536,14 +10508,14 @@ P
             assert_eq!(colors[0].color, "#e94f64");
             assert_eq!(colors[1].color, "#2f80ed");
         }
-        _ => panic!("Player should be an ascii sprite"),
+        _ => panic!("Player should be an ascii visual"),
     }
 }
 
 #[test]
-fn sprite_entry_accepts_canonical_selector_block() {
+fn visual_entry_accepts_canonical_selector_block() {
     let source = r##"
-title = canonical_sprite_selector
+title = canonical_visual_selector
 
 puzzle default {
 slots {
@@ -10553,8 +10525,8 @@ legend P = Player
 legend {
 . = empty
 }
-sprites {
-sprite {
+visuals {
+visual {
 selector = Player
 colors = #e94f64 #2f80ed
 shape = {
@@ -10575,15 +10547,15 @@ P
 }
 "##;
     let loaded = parse_game(source).unwrap();
-    let sprite = loaded
+    let visual = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Player")
+        .find(|visual| visual.name == "Player")
         .unwrap();
-    let pattern = planar_sprite_pattern(sprite);
-    match &sprite.kind {
-        VisualSpriteKind::Ascii { colors } => {
+    let pattern = planar_visual_pattern(visual);
+    match &visual.kind {
+        VisualKind::Ascii { colors } => {
             assert_eq!(
                 pattern.as_slice(),
                 [
@@ -10597,14 +10569,14 @@ P
             assert_eq!(colors[0].color, "#e94f64");
             assert_eq!(colors[1].color, "#2f80ed");
         }
-        _ => panic!("Player should be an ascii sprite"),
+        _ => panic!("Player should be an ascii visual"),
     }
 }
 
 #[test]
-fn sprite_entry_accepts_canonical_property_shape_block() {
+fn visual_entry_accepts_canonical_property_shape_block() {
     let source = r##"
-title = canonical_sprite_property_shape
+title = canonical_visual_property_shape
 
 puzzle default {
 slots {
@@ -10614,8 +10586,8 @@ legend P = Player
 legend {
 . = empty
 }
-sprites {
-sprite {
+visuals {
+visual {
 selector = Player
 colors = #e94f64 #2f80ed
 shape = {
@@ -10636,15 +10608,15 @@ P
 }
 "##;
     let loaded = parse_game(source).unwrap();
-    let sprite = loaded
+    let visual = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Player")
+        .find(|visual| visual.name == "Player")
         .unwrap();
-    let pattern = planar_sprite_pattern(sprite);
-    match &sprite.kind {
-        VisualSpriteKind::Ascii { colors } => {
+    let pattern = planar_visual_pattern(visual);
+    match &visual.kind {
+        VisualKind::Ascii { colors } => {
             assert_eq!(
                 pattern.as_slice(),
                 [
@@ -10658,14 +10630,14 @@ P
             assert_eq!(colors[0].color, "#e94f64");
             assert_eq!(colors[1].color, "#2f80ed");
         }
-        _ => panic!("Player should be an ascii sprite"),
+        _ => panic!("Player should be an ascii visual"),
     }
 }
 
 #[test]
-fn sprite_entry_accepts_explicit_shape_reference_property() {
+fn visual_entry_accepts_explicit_shape_reference_property() {
     let source = r##"
-title = canonical_sprite_shape_ref
+title = canonical_visual_shape_ref
 
 puzzle default {
 slots {
@@ -10675,14 +10647,14 @@ legend P = Player
 legend {
 . = empty
 }
-sprites {
+visuals {
 shapes {
 BoxShape {
 00
 01
 }
 }
-sprite {
+visual {
 selector = Player
 colors = #e94f64 #2f80ed
 shape = BoxShape
@@ -10698,15 +10670,15 @@ P
 }
 "##;
     let loaded = parse_game(source).unwrap();
-    let sprite = loaded
+    let visual = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Player")
+        .find(|visual| visual.name == "Player")
         .unwrap();
-    let pattern = planar_sprite_pattern(sprite);
-    match &sprite.kind {
-        VisualSpriteKind::Ascii { colors } => {
+    let pattern = planar_visual_pattern(visual);
+    match &visual.kind {
+        VisualKind::Ascii { colors } => {
             assert_eq!(
                 pattern.as_slice(),
                 ["00".to_string(), "01".to_string()].as_slice()
@@ -10714,14 +10686,14 @@ P
             assert_eq!(colors[0].color, "#e94f64");
             assert_eq!(colors[1].color, "#2f80ed");
         }
-        _ => panic!("Player should be an ascii sprite"),
+        _ => panic!("Player should be an ascii visual"),
     }
 }
 
 #[test]
-fn sprite_entry_can_rotate_inline_ascii_from_selector_axis() {
+fn visual_entry_can_rotate_inline_ascii_from_selector_axis() {
     let source = r#"
-title = inline_rotated_sprite
+title = inline_rotated_visual
 
 puzzle default {
 slots {
@@ -10730,8 +10702,8 @@ __legacy_layer_0 = Boundary:directions
 legend {
 . = empty
 }
-sprites {
-sprite {
+visuals {
+visual {
 selector = Boundary:directions
 rotate directions from up
 colors = transparent #555
@@ -10758,34 +10730,34 @@ level "start"
     ];
 
     for (name, degrees) in expected {
-        let sprite = loaded
+        let visual = loaded
             .visuals
-            .sprites
+            .entries
             .iter()
-            .find(|sprite| sprite.name == name)
+            .find(|visual| visual.name == name)
             .unwrap();
-        let actual = planar_sprite_pattern(sprite);
-        match &sprite.kind {
-            VisualSpriteKind::Ascii { .. } => {
+        let actual = planar_visual_pattern(visual);
+        match &visual.kind {
+            VisualKind::Ascii { .. } => {
                 assert_eq!(actual, &["111", "000", "000"]);
             }
-            _ => panic!("{name} should be an ascii sprite"),
+            _ => panic!("{name} should be an ascii visual"),
         }
         assert_eq!(
-            sprite.transforms,
-            [VisualSpriteTransform::Rotate {
+            visual.transforms,
+            [VisualTransform::Rotate {
                 degrees,
                 axis: [0.0, 0.0, 1.0],
-                space: VisualSpriteSpace::World,
+                space: VisualSpace::World,
             }]
         );
     }
 }
 
 #[test]
-fn sprite_rotation_does_not_depend_on_user_map_named_rotate() {
+fn visual_rotation_does_not_depend_on_user_map_named_rotate() {
     let source = r#"
-title = inline_rotated_sprite_with_unrelated_rotate_map
+title = inline_rotated_visual_with_unrelated_rotate_map
 
 puzzle default {
 tags {
@@ -10801,8 +10773,8 @@ __legacy_layer_0 = Boundary:directions
 legend {
 . = empty
 }
-sprites {
-sprite {
+visuals {
+visual {
 selector = Boundary:directions
 rotate directions from up
 colors = transparent #555
@@ -10823,25 +10795,25 @@ level "start"
     let loaded = parse_game(source).unwrap();
     let boundary_right = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Boundary-right")
+        .find(|visual| visual.name == "Boundary-right")
         .unwrap();
 
     assert_eq!(
         boundary_right.transforms,
-        [VisualSpriteTransform::Rotate {
+        [VisualTransform::Rotate {
             degrees: -90.0,
             axis: [0.0, 0.0, 1.0],
-            space: VisualSpriteSpace::World,
+            space: VisualSpace::World,
         }]
     );
 }
 
 #[test]
-fn sprite_rotation_ignores_user_map_named_rotate_on_same_axis() {
+fn visual_rotation_ignores_user_map_named_rotate_on_same_axis() {
     let source = r#"
-title = inline_rotated_sprite_with_same_axis_rotate_map
+title = inline_rotated_visual_with_same_axis_rotate_map
 
 puzzle default {
 map rotate directions {
@@ -10856,8 +10828,8 @@ __legacy_layer_0 = Boundary:directions
 legend {
 . = empty
 }
-sprites {
-sprite {
+visuals {
+visual {
 selector = Boundary:directions
 rotate directions from up
 colors = transparent #555
@@ -10878,25 +10850,25 @@ level "start"
     let loaded = parse_game(source).unwrap();
     let boundary_right = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Boundary-right")
+        .find(|visual| visual.name == "Boundary-right")
         .unwrap();
 
     assert_eq!(
         boundary_right.transforms,
-        [VisualSpriteTransform::Rotate {
+        [VisualTransform::Rotate {
             degrees: -90.0,
             axis: [0.0, 0.0, 1.0],
-            space: VisualSpriteSpace::World,
+            space: VisualSpace::World,
         }]
     );
 }
 
 #[test]
-fn sprite_ascii_lookup_can_map_selector_axis_values() {
+fn visual_ascii_lookup_can_map_selector_axis_values() {
     let source = r#"
-title = mapped_sprite_lookup
+title = mapped_visual_lookup
 
 puzzle default {
 map rotate directions {
@@ -10911,7 +10883,7 @@ __legacy_layer_0 = Boundary:directions
 legend {
 . = empty
 }
-sprites {
+visuals {
 shapes {
 edge:directions {
 up {
@@ -10936,7 +10908,7 @@ left {
 }
 }
 }
-sprite {
+visual {
 selector = Boundary:directions
 colors = transparent #555
 shape = edge:rotate(directions)
@@ -10960,27 +10932,27 @@ level "start"
     ];
 
     for (name, pattern) in expected {
-        let sprite = loaded
+        let visual = loaded
             .visuals
-            .sprites
+            .entries
             .iter()
-            .find(|sprite| sprite.name == name)
+            .find(|visual| visual.name == name)
             .unwrap();
-        let actual = planar_sprite_pattern(sprite);
-        match &sprite.kind {
-            VisualSpriteKind::Ascii { .. } => {
+        let actual = planar_visual_pattern(visual);
+        match &visual.kind {
+            VisualKind::Ascii { .. } => {
                 let expected = pattern.into_iter().map(str::to_string).collect::<Vec<_>>();
                 assert_eq!(actual.as_slice(), expected.as_slice());
             }
-            _ => panic!("{name} should be an ascii sprite"),
+            _ => panic!("{name} should be an ascii visual"),
         }
     }
 }
 
 #[test]
-fn sprite_visual_selector_can_map_axis_values() {
+fn visual_selector_can_map_axis_values() {
     let source = r#"
-title = mapped_sprite_selector
+title = mapped_visual_selector
 
 puzzle default {
 map rotate directions {
@@ -10995,7 +10967,7 @@ __legacy_layer_0 = Boundary:directions
 legend {
 . = empty
 }
-sprites {
+visuals {
 shapes {
 edge:directions {
 up {
@@ -11020,7 +10992,7 @@ left {
 }
 }
 }
-sprite {
+visual {
 selector = Boundary:rotate(directions)
 colors = transparent #555
 shape = edge:directions
@@ -11044,19 +11016,19 @@ level "start"
     ];
 
     for (name, pattern) in expected {
-        let sprite = loaded
+        let visual = loaded
             .visuals
-            .sprites
+            .entries
             .iter()
-            .find(|sprite| sprite.name == name)
+            .find(|visual| visual.name == name)
             .unwrap();
-        let actual = planar_sprite_pattern(sprite);
-        match &sprite.kind {
-            VisualSpriteKind::Ascii { .. } => {
+        let actual = planar_visual_pattern(visual);
+        match &visual.kind {
+            VisualKind::Ascii { .. } => {
                 let expected = pattern.into_iter().map(str::to_string).collect::<Vec<_>>();
                 assert_eq!(actual.as_slice(), expected.as_slice());
             }
-            _ => panic!("{name} should be an ascii sprite"),
+            _ => panic!("{name} should be an ascii visual"),
         }
     }
 }
@@ -12572,30 +12544,18 @@ q -> level_select
 Escape -> menu
 }
 routine level_select {
-goto level_select
+goto playing
 }
 routine menu {
-goto level_select
-}
-}
-
-scene level_select {
-layout {
-level_menu {
-show_index = true
-show_solved = true
-}
+goto playing
 }
 }
 "#;
     let loaded = parse_game(source).unwrap();
 
-    assert!(
-        matches!(loaded.scenes.as_slice(), [default, playing, level_select]
+    assert!(matches!(loaded.scenes.as_slice(), [default, playing]
             if playing.name == "playing"
-                && level_select.name == "level_select"
-                && default.name == "default")
-    );
+                && default.name == "default"));
     let playing = loaded
         .scenes
         .iter()
@@ -12621,18 +12581,6 @@ show_solved = true
         loaded.controls.arrows.get(&ArrowKey::Right)
     );
     assert!(loaded.controls.keys.get(&b'q').is_none());
-
-    let SceneComponent::LevelMenu(menu) = &loaded
-        .scenes
-        .iter()
-        .find(|scene| scene.name == "level_select")
-        .unwrap()
-        .components[0]
-    else {
-        panic!("expected level menu component");
-    };
-    assert!(menu.show_index);
-    assert!(menu.show_cleared);
 }
 
 #[test]
@@ -12989,7 +12937,7 @@ fn scene_routine_call_parser_retains_semantic_token() {
 }
 
 #[test]
-fn scene_effect_level_call_accepts_quoted_id_and_selectors() {
+fn scene_effect_level_call_accepts_quoted_id_and_rejects_private_selectors() {
     let line = "goto playing(\"microban.1\")";
     let parsed = parse_scene_effect_with_semantic_tokens(line, line).unwrap();
     assert!(matches!(
@@ -13000,14 +12948,10 @@ fn scene_effect_level_call_accepts_quoted_id_and_selectors() {
     ));
 
     let line = "goto playing(levels[\"first state\"])";
-    let parsed = parse_scene_effect_with_semantic_tokens(line, line).unwrap();
-    assert!(matches!(
-        parsed.surface.effect,
-        SceneEffect::Goto { ref scene, ref params }
-            if scene == "playing"
-                && matches!(params.as_slice(), [SceneEffectParam::Level(SceneExpr::LevelSelector { collection, key, property: None })]
-                    if collection == "levels" && matches!(key, SceneLevelKey::Id(level) if level == "first state"))
-    ));
+    let error = parse_scene_effect_with_semantic_tokens(line, line)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("expression must be"), "{error}");
 
     let line = "goto playing(level(\"first state\"))";
     let error = parse_scene_effect_with_semantic_tokens(line, line)
@@ -13018,7 +12962,7 @@ fn scene_effect_level_call_accepts_quoted_id_and_selectors() {
 
 #[test]
 fn scene_call_surface_splits_nested_arguments_for_multiple_owners() {
-    let line = r#"goto playing(selected = levels["a,b"], label = join("x,y", levels[0].title))"#;
+    let line = r#"goto playing(selected = selected_level, label = join("x,y", selected_label))"#;
     let parsed = parse_scene_effect_with_semantic_tokens(line, line).unwrap();
     assert!(matches!(
         parsed.surface.effect,
@@ -13029,45 +12973,40 @@ fn scene_call_surface_splits_nested_arguments_for_multiple_owners() {
                     [
                         SceneEffectParam::Named {
                             name: selected,
-                            value: SceneExpr::LevelSelector { collection: selected_collection, key: selected_key, property: None }
+                            value: SceneExpr::Path(selected_path)
                         },
                         SceneEffectParam::Named {
                             name: label,
                             value: SceneExpr::Call { name: join_name, args: join_args }
                         },
                     ] if selected == "selected"
-                        && selected_collection == "levels"
-                        && matches!(selected_key, SceneLevelKey::Id(text) if text == "a,b")
+                        && selected_path == &["selected_level".to_string()]
                         && label == "label"
                         && join_name == "join"
                         && matches!(join_args.as_slice(), [
                             SceneExpr::Text(text),
-                            SceneExpr::LevelSelector { collection, key, property: Some(property) }
+                            SceneExpr::Path(path)
                         ] if text == "x,y"
-                            && collection == "levels"
-                            && matches!(key, SceneLevelKey::Index(0))
-                            && property == "title")
+                            && path == &["selected_label".to_string()])
                 )
     ));
 
-    let line = r#"apply sync(levels["a,b"],join("x,y",levels[0]))"#;
+    let line = r#"apply sync(selected_level,join("x,y",selected_level))"#;
     let parsed = parse_scene_effect_with_semantic_tokens(line, line).unwrap();
     assert!(matches!(
         parsed.surface.effect,
         SceneEffect::Apply { ref rule, ref args, target: None }
             if rule == "sync"
                 && matches!(args.as_slice(), [
-                    SceneExpr::LevelSelector { collection: level_collection, key: level_key, property: None },
+                    SceneExpr::Path(level_path),
                     SceneExpr::Call { name: join_name, args: join_args },
-                ] if level_collection == "levels"
-                    && matches!(level_key, SceneLevelKey::Id(text) if text == "a,b")
+                ] if level_path == &["selected_level".to_string()]
                     && join_name == "join"
                     && matches!(join_args.as_slice(), [
                         SceneExpr::Text(text),
-                        SceneExpr::LevelSelector { collection, key, property: None }
+                        SceneExpr::Path(path)
                     ] if text == "x,y"
-                        && collection == "levels"
-                        && matches!(key, SceneLevelKey::Index(0))))
+                        && path == &["selected_level".to_string()]))
     ));
 }
 
@@ -13253,17 +13192,13 @@ fn progress_scene_effects_parse() {
             cleared: true
         }
     ));
-    assert!(matches!(
+    assert!(
         parse_scene_effect(
             "levels[\"microban.2\"].cleared = false",
             "levels[\"microban.2\"].cleared = false"
         )
-        .unwrap(),
-        SceneEffect::SetLevelCleared {
-            level: Some(_),
-            cleared: false
-        }
-    ));
+        .is_err()
+    );
 }
 
 #[test]
@@ -15903,9 +15838,9 @@ fn vec2_domain_expansion_accepts_independent_component_domains_internally() {
 }
 
 #[test]
-fn sprite_transforms_bind_typed_slots_and_preserve_source_order() {
+fn visual_transforms_bind_typed_slots_and_preserve_source_order() {
     let source = r#"
-title = typed_sprite_transforms
+title = typed_visual_transforms
 
 puzzle default {
 empty .
@@ -15920,7 +15855,7 @@ actors = Player:directions:hor
 
 legend p = Player:right:0.5
 
-sprites {
+visuals {
 Player:directions:hor {
 colors = #fff
 translate (hor, 0)
@@ -15939,86 +15874,86 @@ p
 }
 "#;
     let loaded = parse_game(source).unwrap();
-    let sprite = loaded
+    let visual = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Player-right-1-2")
+        .find(|visual| visual.name == "Player-right-1-2")
         .unwrap();
 
     assert_eq!(
-        sprite.transforms,
+        visual.transforms,
         [
-            VisualSpriteTransform::Translate {
+            VisualTransform::Translate {
                 value: [0.5, 0.0, 0.0],
-                space: VisualSpriteSpace::World
+                space: VisualSpace::World
             },
-            VisualSpriteTransform::Rotate {
+            VisualTransform::Rotate {
                 degrees: -90.0,
                 axis: [0.0, 0.0, 1.0],
-                space: VisualSpriteSpace::World
+                space: VisualSpace::World
             },
         ]
     );
     let up = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Player-up-1-2")
+        .find(|visual| visual.name == "Player-up-1-2")
         .unwrap();
     assert_eq!(
         up.transforms,
         [
-            VisualSpriteTransform::Translate {
+            VisualTransform::Translate {
                 value: [0.5, 0.0, 0.0],
-                space: VisualSpriteSpace::World
+                space: VisualSpace::World
             },
-            VisualSpriteTransform::Rotate {
+            VisualTransform::Rotate {
                 degrees: 0.0,
                 axis: [0.0, 0.0, 1.0],
-                space: VisualSpriteSpace::World
+                space: VisualSpace::World
             },
         ]
     );
     let down = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Player-down-1-2")
+        .find(|visual| visual.name == "Player-down-1-2")
         .unwrap();
     assert_eq!(
         down.transforms,
         [
-            VisualSpriteTransform::Translate {
+            VisualTransform::Translate {
                 value: [0.5, 0.0, 0.0],
-                space: VisualSpriteSpace::World
+                space: VisualSpace::World
             },
-            VisualSpriteTransform::Rotate {
+            VisualTransform::Rotate {
                 degrees: -180.0,
                 axis: [0.0, 0.0, 1.0],
-                space: VisualSpriteSpace::World
+                space: VisualSpace::World
             },
         ]
     );
 }
 
 #[test]
-fn sprite_direction_minus_angle_matches_rotate_from_sugar() {
+fn visual_direction_minus_angle_matches_rotate_from_sugar() {
     let bindings = HashMap::from([("directions".to_string(), "up".to_string())]);
     let explicit =
-        eval_sprite_angle_expr("directions - 90deg", &bindings, "rotate expression").unwrap();
-    let from_sugar = eval_sprite_angle_expr("directions", &bindings, "rotate expression")
+        eval_visual_angle_expr("directions - 90deg", &bindings, "rotate expression").unwrap();
+    let from_sugar = eval_visual_angle_expr("directions", &bindings, "rotate expression")
         .unwrap()
-        .sub(eval_sprite_angle_expr("up", &bindings, "rotate expression").unwrap());
+        .sub(eval_visual_angle_expr("up", &bindings, "rotate expression").unwrap());
 
     assert_eq!(explicit, from_sugar);
     assert_eq!(explicit, Rational::ZERO);
 }
 
 #[test]
-fn sprite_flip_binds_boolean_tag_values() {
+fn visual_flip_binds_boolean_tag_values() {
     let source = r#"
-title = sprite_flip
+title = visual_flip
 
 puzzle default {
 empty .
@@ -16033,7 +15968,7 @@ actors = Player:reversed
 
 legend p = Player:true
 
-sprites {
+visuals {
 Player:reversed {
 colors = #fff
 flip reversed
@@ -16053,24 +15988,24 @@ p
     let loaded = parse_game(source).unwrap();
     let flipped = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Player-true")
+        .find(|visual| visual.name == "Player-true")
         .unwrap();
     let unflipped = loaded
         .visuals
-        .sprites
+        .entries
         .iter()
-        .find(|sprite| sprite.name == "Player-false")
+        .find(|visual| visual.name == "Player-false")
         .unwrap();
 
     assert_eq!(
         flipped.transforms,
-        [VisualSpriteTransform::Flip { enabled: true }]
+        [VisualTransform::Flip { enabled: true }]
     );
     assert_eq!(
         unflipped.transforms,
-        [VisualSpriteTransform::Flip { enabled: false }]
+        [VisualTransform::Flip { enabled: false }]
     );
 }
 
@@ -19258,6 +19193,55 @@ P
 }
 
 #[test]
+fn puzzle_model_layout_resolves_nested_bare_puzzle() {
+    let document = super::parse_game(
+        r#"
+title = Nested Inline Scene
+
+puzzle sokoban {
+slots {
+actor = Player
+}
+rules {
+}
+layout {
+row {
+puzzle
+}
+}
+}
+
+levels {
+legend {
+. = empty
+P = Player
+}
+level "first" {
+P
+}
+}
+"#,
+    )
+    .unwrap();
+
+    assert!(matches!(
+        document.scenes.as_slice(),
+        [scene]
+            if scene.name == "sokoban"
+                && matches!(scene.state.puzzles.as_slice(), [puzzle] if puzzle.name == "sokoban" && puzzle.model == "sokoban")
+                && matches!(
+                    scene.components.as_slice(),
+                    [SceneComponent::Row(row)]
+                        if matches!(
+                            row.children.as_slice(),
+                            [SceneComponent::Viewport(viewport)]
+                                if viewport.source == "sokoban"
+                        )
+                )
+    ));
+}
+
+#[test]
 fn parse_game_returns_document_for_3d_model() {
     let document = super::parse_game_for_path(
         r#"
@@ -19323,9 +19307,7 @@ scene level_select {
   layout {
     heading "Select Level"
     column scroll=true {
-      for level in levels {
-        button join(level.num, ". ", level.title) -> goto push3(level)
-      }
+      button "start" -> goto push3("start")
     }
   }
 }
@@ -19735,69 +19717,6 @@ cube
 }
 
 #[test]
-fn puzzle3_level_menu_fixture_uses_goto_level_action_not_start_levels() {
-    let document = super::parse_game_for_path(
-        r#"
-title = Level Menu 3D
-
-puzzle demo {
-dimension = 3
-slots {
-  floor = Floor
-  actor = Player
-}
-
-rules {
-}
-}
-
-scene title {
-  layout {
-    heading "Level Menu 3D"
-    button "Levels" -> goto level_select
-  }
-}
-
-scene level_select {
-  layout {
-    level_menu
-  }
-}
-
-scene playing {
-  layout {
-    puzzle board = demo
-  }
-}
-
-levels test of demo {
-legend {
-  . = empty
-  , = Floor
-  P = Player
-}
-
-level "first" {
-P
-
-,
-}
-}
-"#,
-        "test.puzzle3",
-    )
-    .unwrap();
-    let fixture_json = crate::export_loaded_document_visual_fixture_json(&document).unwrap();
-
-    assert!(fixture_json.contains("\"kind\": \"level_menu\""));
-    assert!(fixture_json.contains("\"kind\": \"goto\""));
-    assert!(fixture_json.contains("\"scene\": \"playing\""));
-    assert!(fixture_json.contains("\"kind\": \"level\""));
-    assert!(fixture_json.contains("\"path\": \"level\""));
-    assert!(!fixture_json.contains("start_levels"));
-}
-
-#[test]
 fn puzzle3_fixture_serializes_shared_scene_effects() {
     let document = super::parse_game_for_path(
         r#"
@@ -19836,12 +19755,12 @@ P
 
     assert!(fixture_json.contains("\"kind\": \"button\""));
     assert!(fixture_json.contains("\"effect\":"));
-    assert!(fixture_json.contains("\"kind\": \"sequence\""));
-    assert!(fixture_json.contains("\"kind\": \"play_sfx\""));
-    assert!(fixture_json.contains("\"name\": \"click\""));
-    assert!(fixture_json.contains("\"kind\": \"wait\""));
-    assert!(fixture_json.contains("\"milliseconds\": 100"));
-    assert!(fixture_json.contains("\"kind\": \"goto\""));
+    assert!(fixture_json.contains("\"kind\":\"sequence\""));
+    assert!(fixture_json.contains("\"kind\":\"play_sfx\""));
+    assert!(fixture_json.contains("\"name\":\"click\""));
+    assert!(fixture_json.contains("\"kind\":\"wait\""));
+    assert!(fixture_json.contains("\"milliseconds\":100"));
+    assert!(fixture_json.contains("\"kind\":\"goto\""));
     assert!(!fixture_json.contains("\"action\""));
 }
 
@@ -20026,7 +19945,7 @@ slots {
 base = Floor
 }
 
-sprites {
+visuals {
 }
 
 rules {

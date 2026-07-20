@@ -357,7 +357,7 @@ level "stacked" {
 }
 
 #[test]
-fn spatial_sprite_materialization_derives_from_shared_visuals() {
+fn spatial_visual_materialization_derives_from_shared_visuals() {
     let (game, presentation) = parse_spatial_body(
         r##"
 slots {
@@ -366,7 +366,7 @@ floor = Floor
 rules {
 }
 
-sprites basic {
+visuals basic {
 Floor {
 colors = #90ee90 #008000 transparent
 shape = {
@@ -383,15 +383,15 @@ shape = {
 "##,
     );
 
-    let sprites = presentation.sprite_set.as_ref().expect("sprite set exists");
-    let floor = sprites.sprite("Floor").expect("Floor sprite exists");
+    let visuals = presentation.visual_set.as_ref().expect("visual set exists");
+    let floor = visuals.visual("Floor").expect("Floor visual exists");
     assert_eq!(
         floor.palette.get(&'0'),
         Some(&VoxelColor::Hex("#90ee90".to_string()))
     );
     assert_eq!(floor.palette.get(&'2'), Some(&VoxelColor::Transparent));
     assert_eq!(floor.first_frame().size, Size3::new(5, 3, 2));
-    assert_eq!(game.visuals.sprites.len(), 1);
+    assert_eq!(game.visuals.entries.len(), 1);
 }
 
 #[test]

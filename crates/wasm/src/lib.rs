@@ -17,7 +17,7 @@ export interface WorkspacePresentationManifest {
     readonly cssPaths: string[];
     readonly scriptPaths: string[];
     readonly filePaths: string[];
-    readonly spriteImagePaths: string[];
+    readonly visualImagePaths: string[];
 }
 "#;
 
@@ -441,12 +441,12 @@ pub fn active_source_analysis_resolve_source_target(
 }
 
 #[wasm_bindgen]
-pub fn active_source_analysis_mutate_sprite(
+pub fn active_source_analysis_mutate_visual(
     revision: SourceAnalysisRevision,
     request_json: &str,
 ) -> Result<String, JsValue> {
     with_source_analysis(revision, |analysis| {
-        puzzle_lang::mutate_sprite_source(analysis.source(), request_json).map(|result| {
+        puzzle_lang::mutate_visual_source(analysis.source(), request_json).map(|result| {
             let start = utf16_offset_from_utf8(&result.source, result.start);
             let end = utf16_offset_from_utf8(&result.source, result.end);
             serde_json::json!({
@@ -501,7 +501,7 @@ pub fn active_source_analysis_entries_json(
 }
 
 /// Returns level-editor metadata for the active source snapshot. Board cells and
-/// sprite payloads deliberately travel through their own on-demand exports.
+/// visual payloads deliberately travel through their own on-demand exports.
 #[wasm_bindgen]
 pub fn active_source_analysis_level_editor_manifest_json(
     revision: SourceAnalysisRevision,
@@ -538,14 +538,14 @@ pub fn active_source_analysis_level_editor_level_slots(
     .map_err(source_analysis_error_js_value)
 }
 
-/// Returns one renderer-ready sprite payload by canonical object ID.
+/// Returns one renderer-ready visual payload by canonical object ID.
 #[wasm_bindgen]
-pub fn active_source_analysis_level_editor_sprite_json(
+pub fn active_source_analysis_level_editor_visual_json(
     revision: SourceAnalysisRevision,
     object_id: u16,
 ) -> Result<String, JsValue> {
     with_source_analysis(revision, |analysis| {
-        analysis.level_editor_sprite_payload_json(object_id)
+        analysis.level_editor_visual_payload_json(object_id)
     })
     .map_err(source_analysis_error_js_value)?
     .map_err(source_analysis_error_js_value)
@@ -601,14 +601,29 @@ pub fn compile_workspace_preview(
     game_css: &str,
     game_visuals_js: &str,
 ) -> Result<String, JsValue> {
-    let source = expand_workspace_entry(entry_path, documents)?;
+    let documents = decode_js_value::<Vec<puzzle_lang::WorkspaceSourceDocument>>(
+        documents.into(),
+        "workspace source documents",
+    )?;
+    compile_workspace_preview_from_documents(entry_path, &documents, game_css, game_visuals_js)
+        .map_err(|error| diagnostic_report_js_value(&error))
+}
+
+fn compile_workspace_preview_from_documents(
+    entry_path: &str,
+    documents: &[puzzle_lang::WorkspaceSourceDocument],
+    game_css: &str,
+    game_visuals_js: &str,
+) -> Result<String, puzzle_lang::DiagnosticReport> {
+    let expanded =
+        puzzle_lang::expand_game_imports_from_documents_with_origins(entry_path, documents)?;
     html_play::export_editor_preview_html_from_source(
-        &source,
+        &expanded.source,
         entry_path,
         game_css,
         game_visuals_js,
     )
-    .map_err(|error| diagnostic_report_js_value(&error))
+    .map_err(|error| expanded.remap_diagnostic_report(error))
 }
 
 #[wasm_bindgen]
@@ -817,12 +832,38 @@ mod tests {
         activate_source_analysis, active_source_analysis_entries_json,
         active_source_analysis_highlight_range_json, active_source_analysis_json,
         active_source_analysis_outline_json, active_source_analysis_suggest_source_completions,
-        apply_source_analysis_edit, compile_preview, diagnostic_report_json,
-        utf8_offset_from_utf16, utf16_offset_from_utf8, with_source_analysis,
+        apply_source_analysis_edit, compile_preview, compile_workspace_preview_from_documents,
+        diagnostic_report_json, utf8_offset_from_utf16, utf16_offset_from_utf8,
+        with_source_analysis,
     };
 
+    fn invalid_workspace_game(statement: &str) -> String {
+        format!(
+            r#"title = "Diagnostic origin"
+
+puzzle main {{
+slots {{
+base = Floor
+}}
+visuals {{
+}}
+rules {{
+{statement}
+}}
+levels {{
+legend {{
+. = empty
+}}
+level "first"
+.
+}}
+}}
+"#
+        )
+    }
+
     #[test]
-    fn compile_preview_accepts_at_prefixed_object_single_color_sprite() {
+    fn compile_preview_accepts_at_prefixed_object_single_color_visual() {
         let source = r##"
 title at_prefixed_object_single_color_preview
 
@@ -830,7 +871,7 @@ puzzle default {
 slots {
 @floor_slot = @Floor
 }
-sprites {
+visuals {
 @Floor
 #eeeeee
 }
@@ -871,6 +912,90 @@ level "start"
         assert!(json.contains(r#""line":9"#));
         assert!(json.contains(r#""sourceLine":"action jump""#));
         assert!(json.contains(r#""message":"`action` statements were removed""#));
+    }
+
+    #[test]
+    fn workspace_preview_diagnostic_points_to_imported_document_line() {
+        let imported_source = invalid_workspace_game("unknown_imported_statement");
+        let expected_line = imported_source
+            .lines()
+            .position(|line| line == "unknown_imported_statement")
+            .expect("invalid imported statement")
+            + 1;
+        let documents = vec![
+            puzzle_lang::WorkspaceSourceDocument {
+                path: "games/demo/game.puzzle".to_string(),
+                source: "import \"parts/game.puzzle\"\n".to_string(),
+            },
+            puzzle_lang::WorkspaceSourceDocument {
+                path: "games/demo/parts/game.puzzle".to_string(),
+                source: imported_source,
+            },
+        ];
+
+        let report =
+            compile_workspace_preview_from_documents("games/demo/game.puzzle", &documents, "", "")
+                .expect_err("invalid imported source should fail preview compile");
+        let span = report.diagnostics()[0]
+            .primary_span
+            .as_ref()
+            .expect("imported diagnostic span");
+
+        assert_eq!(span.file.as_deref(), Some("games/demo/parts/game.puzzle"));
+        assert_eq!(span.line, Some(expected_line));
+    }
+
+    #[test]
+    fn workspace_preview_diagnostic_remaps_entry_line_after_import_expansion() {
+        let game_source = invalid_workspace_game("unknown_entry_statement");
+        let source = format!("import \"padding.puzzle\"\n{game_source}");
+        let expected_line = source
+            .lines()
+            .position(|line| line == "unknown_entry_statement")
+            .expect("invalid entry statement")
+            + 1;
+        let documents = vec![
+            puzzle_lang::WorkspaceSourceDocument {
+                path: "game.puzzle".to_string(),
+                source,
+            },
+            puzzle_lang::WorkspaceSourceDocument {
+                path: "padding.puzzle".to_string(),
+                source: "// first imported line\n// second imported line\n".to_string(),
+            },
+        ];
+
+        let report = compile_workspace_preview_from_documents("game.puzzle", &documents, "", "")
+            .expect_err("invalid entry source should fail preview compile");
+        let span = report.diagnostics()[0]
+            .primary_span
+            .as_ref()
+            .expect("entry diagnostic span");
+
+        assert_eq!(span.file.as_deref(), Some("game.puzzle"));
+        assert_eq!(span.line, Some(expected_line));
+    }
+
+    #[test]
+    fn workspace_preview_import_error_points_to_import_statement() {
+        let documents = vec![puzzle_lang::WorkspaceSourceDocument {
+            path: "game.puzzle".to_string(),
+            source: "// heading\nimport \"missing.puzzle\"\n".to_string(),
+        }];
+
+        let report = compile_workspace_preview_from_documents("game.puzzle", &documents, "", "")
+            .expect_err("missing import should fail preview compile");
+        let span = report.diagnostics()[0]
+            .primary_span
+            .as_ref()
+            .expect("import diagnostic span");
+
+        assert_eq!(span.file.as_deref(), Some("game.puzzle"));
+        assert_eq!(span.line, Some(2));
+        assert_eq!(
+            span.source_line.as_deref(),
+            Some("import \"missing.puzzle\"")
+        );
     }
 
     #[test]

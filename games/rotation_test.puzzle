@@ -37,9 +37,9 @@ next_level
 }
 }
 
-sprites {
+visuals {
 
-sprite {
+visual {
 selector = Background
 colors = #90ee90 #008000
 duration = 500ms
@@ -50,7 +50,7 @@ duration = 500ms
 10111
 }
 
-sprite {
+visual {
 selector = Wall
 colors = #a46322 #493c2b
 duration = 500ms
@@ -77,7 +77,7 @@ Box
 0...0
 00000
 
-sprite {
+visual {
 selector = Player:directions
 rotate directions from up
 colors = #000000 #ffa500 #ffffff #0000ff

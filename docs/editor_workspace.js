@@ -801,7 +801,7 @@ async function workspacePresentationManifest(document) {
     puzzlePath: document?.puzzlePath,
     workspaceDocuments: workspaceCompilerDocuments(document),
   });
-  for (const field of ["cssPaths", "scriptPaths", "filePaths", "spriteImagePaths"]) {
+  for (const field of ["cssPaths", "scriptPaths", "filePaths", "visualImagePaths"]) {
     if (!Array.isArray(manifest?.[field])) {
       throw new Error(`Editor WASM workspace presentation manifest is missing ${field}.`);
     }
@@ -2543,7 +2543,7 @@ function assetResolverScript(document, manifest) {
 
 function declaredFileAssetPaths(manifest) {
   const paths = manifest.filePaths.slice();
-  for (const path of manifest.spriteImagePaths) {
+  for (const path of manifest.visualImagePaths) {
     if (!paths.includes(path)) {
       paths.push(path);
     }

@@ -1,4 +1,3 @@
-use crate::LEVEL_MENU_OPTIONS;
 use crate::authoring_grammar::AuthoringKind;
 use crate::semantic::{SemanticCompletionContext, SemanticCompletionSlot, SettingCompletionSet};
 use crate::source::SourceScope;
@@ -141,21 +140,11 @@ fn contextual_completion_slots(
     }
 
     if previous.as_deref() == Some("in") {
-        return Some(match scope {
-            Some(
-                SourceScope::Scene
-                | SourceScope::SceneLayout
-                | SourceScope::SceneTransitions
-                | SourceScope::LevelMenu,
-            ) => vec![
-                SemanticCompletionSlot::Keywords(SCENE_FOR_SOURCE_COMPLETION_KEYWORDS),
-                SemanticCompletionSlot::States,
-            ],
-            _ => vec![
-                SemanticCompletionSlot::ValueSets,
-                SemanticCompletionSlot::Groups,
-            ],
-        });
+        return Some(vec![
+            SemanticCompletionSlot::ValueSets,
+            SemanticCompletionSlot::Groups,
+            SemanticCompletionSlot::States,
+        ]);
     }
 
     if is_rule_like_scope(scope) && next_non_whitespace_starts_pattern(after) {
@@ -204,7 +193,7 @@ fn completion_slots_for_value_classes(
     let mut slots = Vec::new();
     for class in classes {
         match class {
-            ExpectedCompletionValue::Selector | ExpectedCompletionValue::SpriteSelector => {
+            ExpectedCompletionValue::Selector | ExpectedCompletionValue::VisualSelector => {
                 slots.push(SemanticCompletionSlot::Objects);
                 slots.push(SemanticCompletionSlot::Groups);
             }
@@ -242,15 +231,12 @@ fn arrow_rhs_completion_slots(scope: Option<SourceScope>) -> Vec<SemanticComplet
             SemanticCompletionSlot::SceneEffects,
             SemanticCompletionSlot::Routines,
         ],
-        Some(
-            SourceScope::Scene
-            | SourceScope::SceneLayout
-            | SourceScope::SceneTransitions
-            | SourceScope::LevelMenu,
-        ) => vec![
-            SemanticCompletionSlot::SceneEffects,
-            SemanticCompletionSlot::Routines,
-        ],
+        Some(SourceScope::Scene | SourceScope::SceneLayout | SourceScope::SceneTransitions) => {
+            vec![
+                SemanticCompletionSlot::SceneEffects,
+                SemanticCompletionSlot::Routines,
+            ]
+        }
         _ => vec![
             SemanticCompletionSlot::ModelEffects,
             SemanticCompletionSlot::Emissions,
@@ -272,7 +258,6 @@ fn line_head_completion_slots(
             | SourceScope::SceneState
             | SourceScope::SceneKeys
             | SourceScope::SceneTransitions
-            | SourceScope::LevelMenu
             | SourceScope::Tags
             | SourceScope::Group
             | SourceScope::Map
@@ -361,20 +346,15 @@ fn option_completion_slots(
         .collect::<Vec<_>>();
     let first = tokens_before.first().copied();
 
-    let option_names = match (block, first) {
+    match (block, first) {
         (Some(block), _) if block.authoring_parent_kind().is_some() => {
             let kind = block
                 .authoring_parent_kind()
                 .expect("checked authoring parent kind");
-            return authoring_option_completion_slots(kind, before, first);
+            authoring_option_completion_slots(kind, before, first)
         }
-        (Some(SurfaceOptionBlock::LevelMenu), _) => LEVEL_MENU_OPTIONS,
-        _ => return None,
-    };
-
-    Some(vec![SemanticCompletionSlot::Settings(
-        SettingCompletionSet::Static(option_names),
-    )])
+        _ => None,
+    }
 }
 
 fn authoring_option_completion_slots(
@@ -508,7 +488,7 @@ fn visual_completion_slots(
             match tokens.as_slice() {
                 ["colors", ..] => Some(vec![SemanticCompletionSlot::Colors]),
                 ["shape", ..] => Some(vec![SemanticCompletionSlot::Shapes]),
-                [first, ..] if !matches!(*first, "shape" | "sprite" | "palette" | "colors") => {
+                [first, ..] if !matches!(*first, "shape" | "visual" | "palette" | "colors") => {
                     Some(vec![
                         SemanticCompletionSlot::Colors,
                         SemanticCompletionSlot::Assets,
@@ -573,7 +553,6 @@ fn scene_effect_scope(scope: Option<SourceScope>) -> bool {
                 | SourceScope::SceneLayout
                 | SourceScope::SceneKeys
                 | SourceScope::SceneTransitions
-                | SourceScope::LevelMenu
         )
     )
 }
@@ -625,20 +604,17 @@ fn default_completion_slots_for_scope(scope: Option<SourceScope>) -> Vec<Semanti
             SemanticCompletionSlot::Conditions,
             SemanticCompletionSlot::States,
         ],
-        Some(
-            SourceScope::Scene
-            | SourceScope::SceneLayout
-            | SourceScope::SceneTransitions
-            | SourceScope::LevelMenu,
-        ) => vec![
-            SemanticCompletionSlot::Keywords(completion_keywords_for_scope(scope)),
-            SemanticCompletionSlot::Literals(COMPLETION_LITERALS),
-            SemanticCompletionSlot::States,
-            SemanticCompletionSlot::Routines,
-            SemanticCompletionSlot::Conditions,
-            SemanticCompletionSlot::Inputs,
-            SemanticCompletionSlot::SceneEffects,
-        ],
+        Some(SourceScope::Scene | SourceScope::SceneLayout | SourceScope::SceneTransitions) => {
+            vec![
+                SemanticCompletionSlot::Keywords(completion_keywords_for_scope(scope)),
+                SemanticCompletionSlot::Literals(COMPLETION_LITERALS),
+                SemanticCompletionSlot::States,
+                SemanticCompletionSlot::Routines,
+                SemanticCompletionSlot::Conditions,
+                SemanticCompletionSlot::Inputs,
+                SemanticCompletionSlot::SceneEffects,
+            ]
+        }
         Some(
             SourceScope::Legend
             | SourceScope::Levels
@@ -654,7 +630,7 @@ fn default_completion_slots_for_scope(scope: Option<SourceScope>) -> Vec<Semanti
             | SourceScope::VisualColorTable,
         ) => vec![
             SemanticCompletionSlot::Keywords(completion_keywords_for_scope(scope)),
-            SemanticCompletionSlot::Sprites,
+            SemanticCompletionSlot::Visuals,
             SemanticCompletionSlot::Assets,
             SemanticCompletionSlot::Shapes,
             SemanticCompletionSlot::Colors,
@@ -700,8 +676,7 @@ fn completion_keywords_for_scope(scope: Option<SourceScope>) -> &'static [&'stat
             SourceScope::Scene
             | SourceScope::SceneLayout
             | SourceScope::SceneState
-            | SourceScope::SceneTransitions
-            | SourceScope::LevelMenu,
+            | SourceScope::SceneTransitions,
         ) => SCENE_COMPLETION_KEYWORDS,
         Some(
             SourceScope::Visuals
@@ -810,8 +785,6 @@ const MARK_COMPLETION_KEYWORDS: &[&str] = &["const", "persistent", "var"];
 const KEY_COMPLETION_KEYWORDS: &[&str] = &["direction", "input"];
 const LEGEND_COMPLETION_KEYWORDS: &[&str] = &["empty"];
 const LEVEL_COMPLETION_KEYWORDS: &[&str] = &["legend", "level", "of"];
-const SCENE_FOR_SOURCE_COMPLETION_KEYWORDS: &[&str] = &["levels"];
-
 const SCENE_COMPLETION_KEYWORDS: &[&str] = &[
     "button",
     "column",
@@ -837,7 +810,7 @@ const SCENE_COMPLETION_KEYWORDS: &[&str] = &[
 
 const VISUAL_COMPLETION_KEYWORDS: &[&str] = &[
     "contain", "cover", "colors", "image", "offset", "palette", "rotate", "sampling", "shape",
-    "shapes", "sprite", "stretch",
+    "shapes", "visual", "stretch",
 ];
 const COMPLETION_LITERALS: &[&str] = &["false", "true"];
 
@@ -867,8 +840,8 @@ const COMPLETION_KEYWORDS: &[&str] = &[
     "slots",
     "legend",
     "level",
-    "level_menu",
     "levels",
+    "level_menu",
     "lose_conditions",
     "map",
     "music",
@@ -895,7 +868,7 @@ const COMPLETION_KEYWORDS: &[&str] = &[
     "shape",
     "show_index",
     "show_solved",
-    "sprite",
+    "visual",
     "state",
     "subtitle",
     "text",
