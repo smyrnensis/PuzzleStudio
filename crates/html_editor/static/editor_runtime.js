@@ -137,10 +137,8 @@
     if (expectedProfile && analysisWorkerSourceProfile !== expectedProfile) {
       throw runtimeUnavailable("Editor source analysis profile is not synchronized with the active document.");
     }
-    await analysisWorkerMutation;
-    if (analysisWorkerSource !== expected) {
-      throw runtimeUnavailable("Editor source analysis changed before the query started.");
-    }
+    const synchronizedMutation = analysisWorkerMutation;
+    await synchronizedMutation;
     return postAnalysisWorker(method, {
       ...payload,
       sourceLength: expected.length,

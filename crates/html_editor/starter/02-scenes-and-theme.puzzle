@@ -6,37 +6,48 @@ title = "02 — Scenes and Theme"
 subtitle = "Build the screens around a puzzle"
 
 theme {
-preset = "clean"
+preset = "puzzlescript"
 accent_color = #e85d75
 background_color = #fff7ed
 text_color = #292524
 }
 
-puzzle board {
-slots {
+scene title {
+layout {
+heading title
+subheading subtitle
+choice "Play" -> goto playing
+choice "Choose level" -> goto level_select
+}
+}
+
+puzzle main {
+layers {
 Player Wall
 }
 
 visuals {
-Player
-#e85d75
+visual Player {
+colors = #008751
+shape = {
+.000.
 .000.
 00000
 .000.
 .0.0.
-.0.0.
+}
+}
 
-Wall
-#57534e
-00000
-00000
-00000
-00000
-00000
+visual Wall {
+colors = #57534e
+shape = {
+0
+}
+}
 }
 
 rules {
-input [ Player | no Wall ] -> [ | Player ]
+once input [ Player | no Wall ] -> [ | Player ]
 }
 
 levels {
@@ -51,29 +62,27 @@ level "small room"
 #P..#
 #...#
 #####
-}
-}
 
-scene title {
-layout {
-heading title
-subheading subtitle
-choice "Play" -> goto playing
-choice "Choose level" -> goto level_select
+level "big room"
+#########
+#.......#
+#.......#
+#..P....#
+#.......#
+#.......#
+#.......#
+#########
 }
 }
 
 scene playing {
 keys {
-Escape -> goto title
+q Escape -> goto title
 }
 layout {
 heading "Playing"
-board
+main
 caption "Arrow keys move. Escape returns to the title."
-}
-rules {
-step board
 }
 }
 

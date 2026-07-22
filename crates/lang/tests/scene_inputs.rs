@@ -10,7 +10,7 @@ fn scene_and_model_inputs_are_owner_scoped() {
 title = "scene inputs"
 
 puzzle main {
-slots {
+layers {
   layer_1 = Player
 }
 
@@ -114,7 +114,7 @@ fn scene_choice_uses_arrow_effect_syntax() {
 title = "choices"
 
 puzzle main {
-slots {
+layers {
   layer_1 = Player
 }
 visuals {
@@ -155,7 +155,7 @@ scene title {
     assert!(matches!(
         title.components.get(1),
         Some(SceneComponent::Button(button))
-            if matches!(button.effect, SceneEffect::Message { .. })
+            if matches!(button.effect, SceneEffect::PresentComponent { .. })
     ));
 }
 
@@ -165,7 +165,7 @@ fn scene_layout_if_else_controls_components() {
 title = "conditional view"
 
 puzzle main {
-slots {
+layers {
   layer_1 = Player
 }
 visuals {
@@ -223,7 +223,7 @@ fn scene_if_is_runtime_value_and_fragment_syntax() {
 title = "conditional values"
 
 puzzle main {
-slots {
+layers {
   layer_1 = Player
 }
 visuals {
@@ -285,7 +285,7 @@ fn scene_if_value_uses_universal_balanced_brace_groups() {
 title = "nested conditional values"
 
 puzzle main {
-slots {
+layers {
   layer_1 = Player
 }
 visuals {
@@ -326,7 +326,7 @@ fn scene_level_entry_uses_goto_scene_call_syntax() {
 title = "level calls"
 
 puzzle sokoban {
-slots {
+layers {
   layer_1 = Player
 }
 visuals {
@@ -393,7 +393,7 @@ fn old_start_levels_syntax_reports_canonical_goto() {
 title = "old level start"
 
 puzzle main {
-slots {
+layers {
   layer_1 = Player
 }
 visuals {

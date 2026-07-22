@@ -1,11 +1,15 @@
 #[cfg(test)]
 mod tests {
     use crate::compiled_game::{
-        Effect, Guard, MarkDef, MarkKind, MatchCell, ObjectDef, Offset, Pattern, PatternComponent,
-        Rule, RuleApplication, VariableUpdateOp, WriteOp,
+        Effect, Guard, MarkDef, MarkKind, MarkPattern, MarkValueMatch, MatchCell, ObjectDef,
+        Offset, Pattern, PatternComponent, Rule, RuleApplication, VariableUpdateOp, WriteOp,
     };
     use crate::ids::{InputId, LayerId, MarkId, ObjectId, RuleId, VariableId};
-    use crate::{CompiledGame, RuleStep, State, transition_state, transition_trace};
+    use crate::state::GridExecutionState;
+    use crate::{
+        CompiledGame, RuleStep, State, transition_program_continuation_segment_trace,
+        transition_program_segment_trace, transition_state, transition_trace,
+    };
     use puzzle_kernel::GridCoord;
 
     const PLAYER: ObjectId = ObjectId(1);
@@ -285,8 +289,9 @@ mod tests {
     #[test]
     fn mark_position_cache_tracks_slot_mark_moves_and_clears() {
         let game = mark_anchor_game();
-        let mut state = State::empty(4, 1, game.layer_count, game.object_count()).unwrap();
-        state.place_object(&game, 1, 0, BOX).unwrap();
+        let mut committed = State::empty(4, 1, game.layer_count, game.object_count()).unwrap();
+        committed.place_object(&game, 1, 0, BOX).unwrap();
+        let mut state = GridExecutionState::new(committed);
 
         state.set_mark_unchecked(GridCoord::new([1, 0]), LayerId(2), MARK, Some(7));
         assert_eq!(
@@ -313,8 +318,97 @@ mod tests {
         assert!(state.mark_positions(BOX, MARK, Some(7)).is_empty());
 
         state.set_mark_unchecked(GridCoord::new([3, 0]), LayerId(2), MARK, Some(9));
-        state.clear_mark();
-        assert!(state.mark_positions(BOX, MARK, Some(9)).is_empty());
+        let resumed_without_scratch = GridExecutionState::new(state.into_committed());
+        assert!(
+            resumed_without_scratch
+                .mark_positions(BOX, MARK, Some(9))
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn program_continuation_keeps_scratch_marks_until_the_program_finishes() {
+        let objects = vec![
+            ObjectDef {
+                id: PLAYER,
+                layer_id: LayerId(1),
+            },
+            ObjectDef {
+                id: BOX,
+                layer_id: LayerId(1),
+            },
+        ];
+        let marks = vec![MarkDef {
+            id: MARK,
+            kind: MarkKind::Flag,
+            values: Vec::new(),
+        }];
+        let set_mark = Rule {
+            id: RuleId(40),
+            guards: Vec::new(),
+            application: RuleApplication::Once,
+            pattern: pattern(vec![cell(0, 0, vec![PLAYER], vec![])]),
+            writes: vec![WriteOp::SetMark {
+                component: 0,
+                offset: fixed(0, 0),
+                object: PLAYER,
+                mark: MARK,
+                value: None,
+            }],
+            effects: Vec::new(),
+        };
+        let mut marked_player = cell(0, 0, vec![PLAYER], vec![]);
+        marked_player.require_mark.push(MarkPattern {
+            object: PLAYER,
+            mark: MARK,
+            value: None,
+            match_value: MarkValueMatch::Exact,
+        });
+        let consume_mark = Rule {
+            id: RuleId(41),
+            guards: Vec::new(),
+            application: RuleApplication::Once,
+            pattern: pattern(vec![marked_player]),
+            writes: vec![replace(0, 0, PLAYER, BOX)],
+            effects: Vec::new(),
+        };
+        let game = CompiledGame::new_with_mark_condition_defs_and_program(
+            2,
+            objects,
+            marks,
+            Vec::new(),
+            vec![RuleStep::Rule(set_mark), RuleStep::Rule(consume_mark)],
+        );
+        let mut initial = State::empty(1, 1, game.layer_count, game.object_count()).unwrap();
+        initial.place_object(&game, 0, 0, PLAYER).unwrap();
+
+        let first = transition_program_segment_trace(
+            &game,
+            game.executable_program(),
+            &initial,
+            Some(RIGHT),
+            None,
+            |boundary| boundary.firings.len() == 1,
+        )
+        .unwrap();
+        assert_eq!(first.trace.next_state, initial);
+        let continuation = first
+            .remaining_program
+            .expect("program paused after mark rule");
+
+        let resumed = transition_program_continuation_segment_trace(
+            &game,
+            game.executable_program(),
+            &continuation,
+            &first.trace.next_state,
+            Some(RIGHT),
+            None,
+            |_| false,
+        )
+        .unwrap();
+        assert_eq!(resumed.trace.next_state.object_count(PLAYER), 0);
+        assert_eq!(resumed.trace.next_state.object_count(BOX), 1);
+        assert!(resumed.remaining_program.is_none());
     }
 
     #[test]

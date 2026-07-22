@@ -1194,7 +1194,8 @@ pub enum PuzzleDirectiveSurface {
     DocumentShell,
     InputBuffer,
     RemovedAnimation,
-    Slots,
+    Layers,
+    RemovedSlots,
     Marks,
     Tags,
     Map,
@@ -1240,7 +1241,7 @@ impl PuzzleDirectiveSurface {
     pub const fn is_catalog_owned(self) -> bool {
         matches!(
             self,
-            Self::Slots | Self::Marks | Self::Tags | Self::Map | Self::Groups
+            Self::Layers | Self::Marks | Self::Tags | Self::Map | Self::Groups
         )
     }
 }
@@ -1271,7 +1272,8 @@ pub fn puzzle_directive_surface(line: &str) -> PuzzleDirectiveSurface {
         "sounds" | "theme" | "assets" => PuzzleDirectiveSurface::DocumentShell,
         "input_buffer" => PuzzleDirectiveSurface::InputBuffer,
         "animation" => PuzzleDirectiveSurface::RemovedAnimation,
-        "slots" => PuzzleDirectiveSurface::Slots,
+        "layers" => PuzzleDirectiveSurface::Layers,
+        "slots" => PuzzleDirectiveSurface::RemovedSlots,
         "marks" => PuzzleDirectiveSurface::Marks,
         "tags" => PuzzleDirectiveSurface::Tags,
         "map" => PuzzleDirectiveSurface::Map,
@@ -4955,8 +4957,12 @@ mod tests {
             PuzzleDirectiveSurface::Unknown
         );
         assert_eq!(
+            puzzle_directive_surface("layers {"),
+            PuzzleDirectiveSurface::Layers
+        );
+        assert_eq!(
             puzzle_directive_surface("slots {"),
-            PuzzleDirectiveSurface::Slots
+            PuzzleDirectiveSurface::RemovedSlots
         );
         assert_eq!(
             puzzle_directive_surface("map turn axis {"),

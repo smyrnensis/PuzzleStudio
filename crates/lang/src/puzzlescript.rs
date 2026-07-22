@@ -22,27 +22,9 @@ enum PsSection {
     Levels,
 }
 
-impl PsSection {
-    fn source_name(self) -> &'static str {
-        match self {
-            Self::Prelude => "PRELUDE",
-            Self::Tags => "TAGS",
-            Self::Objects => "OBJECTS",
-            Self::Legend => "LEGEND",
-            Self::Mappings => "MAPPINGS",
-            Self::Sounds => "SOUNDS",
-            Self::CollisionLayers => "COLLISIONLAYERS",
-            Self::Rules => "RULES",
-            Self::WinConditions => "WINCONDITIONS",
-            Self::Levels => "LEVELS",
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PsComment {
     section: PsSection,
-    line: usize,
     text: String,
 }
 
@@ -210,22 +192,35 @@ pub fn translate_puzzlescript_to_canonical(source: &str) -> Result<String, Diagn
     if let Some(homepage) = &homepage {
         out.push(format!("homepage = {}", canonical_metadata_text(homepage)));
     }
-    push_imported_comments(&mut out, &sections.comments);
     out.push(String::new());
+    push_section_comments(&mut out, &sections.comments, PsSection::Prelude);
+    push_title_scene(
+        &mut out,
+        &title,
+        author.as_deref(),
+        startgame_sfx.as_deref(),
+        level_select,
+    );
     push_theme_colors(&mut out, &theme_colors);
+    push_section_comments(&mut out, &sections.comments, PsSection::Sounds);
     push_sounds(&mut out, &sounds);
     out.push("puzzle main {".to_string());
+    push_section_comments(&mut out, &sections.comments, PsSection::Tags);
     push_tags(&mut out, &tags);
+    push_section_comments(&mut out, &sections.comments, PsSection::Mappings);
     push_maps(&mut out, &maps);
     push_viewport_size(
         &mut out,
         viewport_size,
         ps_viewport_focus(&object_defs, &aliases, &tags, &maps, case_sensitive).as_deref(),
     );
+    push_section_comments(&mut out, &sections.comments, PsSection::CollisionLayers);
     push_layers(&mut out, &collision_layers);
     push_action_input(&mut out, uses_action_input);
     push_default_inputs(&mut out, uses_action_input);
+    push_section_comments(&mut out, &sections.comments, PsSection::Legend);
     push_groups(&mut out, &aliases);
+    push_section_comments(&mut out, &sections.comments, PsSection::Objects);
     push_visuals(&mut out, &object_defs);
     push_ps_model_sounds(
         &mut out,
@@ -236,6 +231,7 @@ pub fn translate_puzzlescript_to_canonical(source: &str) -> Result<String, Diagn
         &maps,
         case_sensitive,
     );
+    push_section_comments(&mut out, &sections.comments, PsSection::WinConditions);
     push_win_conditions(
         &mut out,
         &sections.win_conditions,
@@ -245,6 +241,7 @@ pub fn translate_puzzlescript_to_canonical(source: &str) -> Result<String, Diagn
         &maps,
         case_sensitive,
     );
+    push_section_comments(&mut out, &sections.comments, PsSection::Rules);
     push_ps_sound_mark(&mut out, &sounds);
     push_ps_sound_routines(
         &mut out,
@@ -269,6 +266,7 @@ pub fn translate_puzzlescript_to_canonical(source: &str) -> Result<String, Diagn
         &rule_sections,
     );
     push_ps_level_clear(&mut out, endlevel_sfx.as_deref());
+    push_section_comments(&mut out, &sections.comments, PsSection::Levels);
     push_levels(
         &mut out,
         &sections.levels,
@@ -282,14 +280,7 @@ pub fn translate_puzzlescript_to_canonical(source: &str) -> Result<String, Diagn
     );
     out.push("}".to_string());
     out.push(String::new());
-    push_playing_scene(
-        &mut out,
-        &title,
-        author.as_deref(),
-        startgame_sfx.as_deref(),
-        viewport_size,
-        level_select,
-    );
+    push_playing_scene(&mut out, &title, viewport_size, level_select);
     Ok(canonical_without_line_indents(&out.join("\n")))
 }
 
@@ -304,9 +295,8 @@ fn canonical_without_line_indents(source: &str) -> String {
 fn collect_sections(source: &str) -> PsSections {
     let mut sections = PsSections::default();
     let mut current = PsSection::Prelude;
-    let mut parenthetical_comment: Option<(PsSection, usize, String)> = None;
-    for (line_index, raw_line) in source.lines().enumerate() {
-        let line_number = line_index + 1;
+    let mut parenthetical_comment: Option<(PsSection, String)> = None;
+    for raw_line in source.lines() {
         let (without_line_comment, line_comment) = if current == PsSection::Prelude
             && strip_ps_prelude_key(raw_line.trim_start(), "homepage").is_some()
         {
@@ -317,14 +307,12 @@ fn collect_sections(source: &str) -> PsSections {
         if let Some(text) = line_comment.filter(|text| !text.trim().is_empty()) {
             sections.comments.push(PsComment {
                 section: current,
-                line: line_number,
                 text: text.trim().to_string(),
             });
         }
         let line = strip_ps_parenthetical_comments(
             without_line_comment,
             current,
-            line_number,
             &mut parenthetical_comment,
             &mut sections.comments,
         )
@@ -355,26 +343,23 @@ fn collect_sections(source: &str) -> PsSections {
     sections
 }
 
-fn push_imported_comments(out: &mut Vec<String>, comments: &[PsComment]) {
+fn push_section_comments(out: &mut Vec<String>, comments: &[PsComment], section: PsSection) {
+    let comments = comments
+        .iter()
+        .filter(|comment| comment.section == section)
+        .collect::<Vec<_>>();
     if comments.is_empty() {
         return;
     }
-    out.push(String::new());
-    out.push("// Comments preserved from the imported PuzzleScript source.".to_string());
+    if out.last().is_some_and(|line| !line.is_empty()) {
+        out.push(String::new());
+    }
     for comment in comments {
-        let prefix = format!(
-            "// [{} line {}]",
-            comment.section.source_name(),
-            comment.line
-        );
-        for (index, line) in comment.text.lines().enumerate() {
-            if index == 0 {
-                out.push(format!("{prefix} {}", line.trim()));
-            } else {
-                out.push(format!("// {}", line.trim()));
-            }
+        for line in comment.text.lines() {
+            out.push(format!("// {}", line.trim()));
         }
     }
+    out.push(String::new());
 }
 
 fn split_ps_line_comment(line: &str) -> (&str, Option<&str>) {
@@ -403,19 +388,17 @@ fn split_ps_line_comment(line: &str) -> (&str, Option<&str>) {
 fn strip_ps_parenthetical_comments(
     line: &str,
     section: PsSection,
-    line_number: usize,
-    active: &mut Option<(PsSection, usize, String)>,
+    active: &mut Option<(PsSection, String)>,
     comments: &mut Vec<PsComment>,
 ) -> String {
     let mut code = String::new();
     let mut in_string = false;
     let mut escaped = false;
     for ch in line.chars() {
-        if let Some((comment_section, start_line, text)) = active.as_mut() {
+        if let Some((comment_section, text)) = active.as_mut() {
             if ch == ')' {
                 comments.push(PsComment {
                     section: *comment_section,
-                    line: *start_line,
                     text: text.trim().to_string(),
                 });
                 *active = None;
@@ -437,12 +420,12 @@ fn strip_ps_parenthetical_comments(
             in_string = true;
             code.push(ch);
         } else if ch == '(' {
-            *active = Some((section, line_number, String::new()));
+            *active = Some((section, String::new()));
         } else {
             code.push(ch);
         }
     }
-    if let Some((_, _, text)) = active.as_mut() {
+    if let Some((_, text)) = active.as_mut() {
         text.push('\n');
     }
     code
@@ -1442,7 +1425,7 @@ fn ps_move_layer_names(layers: &[PsLayerDef]) -> Vec<String> {
 }
 
 fn push_layers(out: &mut Vec<String>, layers: &[PsLayerDef]) {
-    out.push("slots {".to_string());
+    out.push("layers {".to_string());
     for layer in layers {
         match layer {
             PsLayerDef::Named { name, selectors } => {
@@ -2884,12 +2867,11 @@ fn push_levels(
     out.push("}".to_string());
 }
 
-fn push_playing_scene(
+fn push_title_scene(
     out: &mut Vec<String>,
     title: &str,
     author: Option<&str>,
     startgame_sfx: Option<&str>,
-    viewport_size: Option<PsViewportSize>,
     level_select: bool,
 ) {
     out.push("scene title {".to_string());
@@ -2923,7 +2905,14 @@ fn push_playing_scene(
     out.push("  }".to_string());
     out.push("}".to_string());
     out.push(String::new());
+}
 
+fn push_playing_scene(
+    out: &mut Vec<String>,
+    title: &str,
+    viewport_size: Option<PsViewportSize>,
+    level_select: bool,
+) {
     out.push("scene playing {".to_string());
     if viewport_size.is_some() {
         out.push("  layout {".to_string());

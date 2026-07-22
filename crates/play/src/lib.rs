@@ -1,10 +1,10 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     ops::{Deref, DerefMut},
 };
 
 use puzzle_core::{
-    GridExecutableProgram, GridRuleFiring, GridRuleFiringSummary, GridSize, GridState,
+    GridCoord, GridExecutableProgram, GridRuleFiring, GridRuleFiringSummary, GridSize, GridState,
     GridTransitionError, InputId, LayerId, ObjectId, PatchOp, ProgramContinuation, RuleId, Size2,
     State as PuzzleState, TransitionCommand, transition_program_continuation_segment_trace,
     transition_program_segment_trace, transition_program_sequence_outcome,
@@ -12,9 +12,10 @@ use puzzle_core::{
     transition_program_sequence_without_input_summary_outcome,
 };
 use puzzle_lang::{
-    AsciiLegend, LevelId, LoadedDocument, LoadedDocumentModel, LoadedGame, LoadedGridGame,
-    LoadedGridLevel, ModelOperationSound, ResourceSelection, RuleAnimation, RuleAnimationTrigger,
-    RuleEffect, SceneBinaryOp, SceneEffect, SceneEffectParam, SceneExpr, ScenePuzzleInitializer,
+    AsciiLegend, ComponentOrder, ComponentPlacement, ComponentProperty, ComponentVisibility,
+    LevelId, LoadedDocument, LoadedDocumentModel, LoadedGame, LoadedGridGame, LoadedGridLevel,
+    ModelOperationSound, ResourceSelection, RuleAnimation, RuleAnimationTrigger, RuleEffect,
+    SceneBinaryOp, SceneEffect, SceneEffectParam, SceneExpr, ScenePuzzleInitializer,
     SceneTransitionTrigger, SceneValue, SceneVarKind, parse_scene_effect_params,
     parse_scene_expression,
 };
@@ -57,11 +58,6 @@ pub enum SoundEvent {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum MessageEvent {
-    Message { text: String },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WaitEvent {
     Wait { milliseconds: u64 },
 }
@@ -76,6 +72,7 @@ pub enum AnimationEvent {
     },
     Move {
         name: String,
+        occurrence_id: u64,
         object: ObjectId,
         visual_tween: Option<RuntimeVisualTween>,
         from_x: u16,
@@ -97,9 +94,8 @@ pub enum AnimationEvent {
 #[derive(Clone, Debug, PartialEq)]
 pub enum PresentationEventKind {
     Sound(SoundEvent),
-    Message(MessageEvent),
     Wait(WaitEvent),
-    Animation(AnimationEvent),
+    AnimationBatch(Vec<AnimationEvent>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -132,6 +128,7 @@ pub fn animation_events_contract<const D: usize>(
             },
             AnimationEvent::Move {
                 name,
+                occurrence_id,
                 object,
                 visual_tween,
                 from_x,
@@ -142,6 +139,7 @@ pub fn animation_events_contract<const D: usize>(
                 to_z,
             } => RuntimeAnimationEvent::Move {
                 name: name.clone(),
+                occurrence_id: *occurrence_id,
                 object_id: object.0,
                 visual_tween: visual_tween.clone(),
                 from: RuntimeCoord {
@@ -196,20 +194,14 @@ pub fn presentation_events_contract<const D: usize>(
                 PresentationEventKind::Sound(SoundEvent::StopMusic { name }) => {
                     RuntimePresentationEventKind::StopMusic { name: name.clone() }
                 }
-                PresentationEventKind::Message(MessageEvent::Message { text }) => {
-                    RuntimePresentationEventKind::Message { text: text.clone() }
-                }
                 PresentationEventKind::Wait(WaitEvent::Wait { milliseconds }) => {
                     RuntimePresentationEventKind::Wait {
                         milliseconds: *milliseconds,
                     }
                 }
-                PresentationEventKind::Animation(animation) => {
-                    RuntimePresentationEventKind::Animation {
-                        animation: animation_events_contract::<D>(std::slice::from_ref(animation))
-                            .into_iter()
-                            .next()
-                            .expect("one animation event must serialize as one runtime event"),
+                PresentationEventKind::AnimationBatch(animations) => {
+                    RuntimePresentationEventKind::AnimationBatch {
+                        animations: animation_events_contract::<D>(animations),
                     }
                 }
             };
@@ -243,6 +235,108 @@ impl<const D: usize, Size: GridSize<D>> Default for GridSceneRuntimeState<D, Siz
 }
 
 pub type SceneRuntimeState = GridSceneRuntimeState<2, Size2>;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SurfaceComponentInstance {
+    pub id: String,
+    pub definition: String,
+    pub placement: ComponentPlacement,
+    pub visibility: ComponentVisibility,
+    pub modal: bool,
+    pub properties: HashMap<String, SceneValue>,
+    pub awaited_event: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct SurfaceState {
+    focused_component: String,
+    components: Vec<SurfaceComponentInstance>,
+    navigation_history: Vec<String>,
+    next_instance_id: u64,
+}
+
+impl SurfaceState {
+    fn new(root: String) -> Self {
+        Self {
+            focused_component: root.clone(),
+            components: vec![SurfaceComponentInstance {
+                id: root.clone(),
+                definition: root,
+                placement: ComponentPlacement::Root,
+                visibility: ComponentVisibility::Visible,
+                modal: false,
+                properties: HashMap::new(),
+                awaited_event: None,
+            }],
+            navigation_history: Vec::new(),
+            next_instance_id: 1,
+        }
+    }
+
+    pub fn root(&self) -> Option<&str> {
+        self.components
+            .iter()
+            .find(|component| component.placement == ComponentPlacement::Root)
+            .map(|component| component.id.as_str())
+    }
+
+    pub fn focused_component(&self) -> &str {
+        &self.focused_component
+    }
+
+    pub fn components(&self) -> &[SurfaceComponentInstance] {
+        &self.components
+    }
+
+    pub fn visibility(&self, component: &str) -> ComponentVisibility {
+        self.components
+            .iter()
+            .find(|instance| instance.id == component)
+            .map(|instance| instance.visibility)
+            .unwrap_or(ComponentVisibility::Hidden)
+    }
+
+    fn is_visible(&self, component: &str) -> bool {
+        self.visibility(component) == ComponentVisibility::Visible
+    }
+
+    pub fn active_modal_component(&self) -> Option<&SurfaceComponentInstance> {
+        self.components.iter().rev().find(|component| {
+            component.visibility == ComponentVisibility::Visible && component.modal
+        })
+    }
+
+    fn present(
+        &mut self,
+        definition: String,
+        placement: ComponentPlacement,
+        properties: HashMap<String, SceneValue>,
+        awaited_event: Option<String>,
+    ) -> String {
+        let id = format!("component:{}", self.next_instance_id);
+        self.next_instance_id += 1;
+        self.components.push(SurfaceComponentInstance {
+            id: id.clone(),
+            modal: awaited_event.is_some(),
+            definition,
+            placement,
+            visibility: ComponentVisibility::Visible,
+            properties,
+            awaited_event,
+        });
+        id
+    }
+
+    fn dismiss(&mut self, id: &str, event: &str) -> bool {
+        let Some(index) = self.components.iter().position(|component| {
+            component.id == id && component.awaited_event.as_deref() == Some(event)
+        }) else {
+            return false;
+        };
+        self.components.remove(index);
+        true
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct WorldInstanceId {
@@ -372,7 +466,49 @@ struct GridPendingInput<const D: usize, Size: GridSize<D>> {
     again_count: usize,
     records_trace: bool,
     mode: InputExecutionMode,
+    animation_occurrences: AnimationOccurrenceTracker<D>,
     trace: GridTransitionTrace<D>,
+}
+
+#[derive(Clone, Debug)]
+struct AnimationOccurrenceTracker<const D: usize> {
+    active: HashMap<(GridCoord<D>, ObjectId), u64>,
+    next_id: u64,
+}
+
+impl<const D: usize> Default for AnimationOccurrenceTracker<D> {
+    fn default() -> Self {
+        Self {
+            active: HashMap::new(),
+            next_id: 1,
+        }
+    }
+}
+
+impl<const D: usize> AnimationOccurrenceTracker<D> {
+    fn assign_transitions(
+        &mut self,
+        transitions: &[((GridCoord<D>, ObjectId), (GridCoord<D>, ObjectId))],
+    ) -> Vec<u64> {
+        let ids = transitions
+            .iter()
+            .map(|(source, _)| {
+                self.active.remove(source).unwrap_or_else(|| {
+                    let id = self.next_id;
+                    self.next_id += 1;
+                    id
+                })
+            })
+            .collect::<Vec<_>>();
+        for ((_, target), id) in transitions.iter().zip(&ids) {
+            self.active.insert(*target, *id);
+        }
+        ids
+    }
+
+    fn forget(&mut self, key: (GridCoord<D>, ObjectId)) {
+        self.active.remove(&key);
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -451,9 +587,8 @@ pub enum ProgressSaveError {
 
 #[derive(Clone, Debug)]
 pub struct GridGameSession<const D: usize, Size: GridSize<D>> {
-    focused_scene: String,
-    visible_scenes: Vec<String>,
-    focus_history: Vec<String>,
+    surface: SurfaceState,
+    pending_surface_effects: VecDeque<(SceneEffect, HashMap<String, String>)>,
     scene_states: HashMap<String, GridSceneRuntimeState<D, Size>>,
     routed_world: WorldInstanceId,
     execution_world: Option<WorldInstanceId>,
@@ -634,9 +769,8 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         let routed_world = initial_world_instance(game, &focused_scene)
             .expect("loaded game must define at least one puzzle world instance");
         let mut session = Self {
-            focused_scene: focused_scene.clone(),
-            visible_scenes: vec![focused_scene.clone()],
-            focus_history: Vec::new(),
+            surface: SurfaceState::new(focused_scene.clone()),
+            pending_surface_effects: VecDeque::new(),
             scene_states: HashMap::new(),
             routed_world: routed_world.clone(),
             execution_world: None,
@@ -738,7 +872,6 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
             for object in state.slots() {
                 push_u64(out, u64::from(object.0));
             }
-            push_state_marks(out, state);
             push_u64(out, state.visible_variables().len() as u64);
             for value in state.visible_variables() {
                 push_u64(out, *value as u64);
@@ -746,25 +879,6 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
             push_u64(out, state.level_fired_rules().len() as u64);
             for rule in state.level_fired_rules() {
                 push_u64(out, u64::from(rule.0));
-            }
-        }
-
-        fn push_state_marks<const D: usize, Size: GridSize<D>>(
-            out: &mut Vec<u8>,
-            state: &GridState<D, Size>,
-        ) {
-            for marks in [state.cell_mark(), state.slot_mark()] {
-                push_u64(out, marks.len() as u64);
-                for cell in marks {
-                    push_u64(out, cell.len() as u64);
-                    for mark in cell {
-                        push_u64(out, u64::from(mark.mark.0));
-                        out.push(u8::from(mark.value.is_some()));
-                        if let Some(value) = mark.value {
-                            push_u64(out, value as u64);
-                        }
-                    }
-                }
             }
         }
 
@@ -782,13 +896,28 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         let current_world = self.current_world_id();
         push_u64(&mut out, tracked_level_index as u64);
         out.push(u8::from(completed));
-        push_text(&mut out, &self.focused_scene);
-        push_u64(&mut out, self.visible_scenes.len() as u64);
-        for scene in &self.visible_scenes {
-            push_text(&mut out, scene);
+        push_text(&mut out, &self.surface.focused_component);
+        push_u64(&mut out, self.surface.components.len() as u64);
+        for component in &self.surface.components {
+            push_text(&mut out, &component.id);
+            push_text(&mut out, &component.definition);
+            out.push(component.placement as u8);
+            out.push(component.visibility as u8);
+            out.push(u8::from(component.modal));
+            let mut properties = component.properties.iter().collect::<Vec<_>>();
+            properties.sort_by_key(|(name, _)| *name);
+            push_u64(&mut out, properties.len() as u64);
+            for (name, value) in properties {
+                push_text(&mut out, name);
+                push_value(&mut out, value);
+            }
+            out.push(u8::from(component.awaited_event.is_some()));
+            if let Some(event) = &component.awaited_event {
+                push_text(&mut out, event);
+            }
         }
-        push_u64(&mut out, self.focus_history.len() as u64);
-        for scene in &self.focus_history {
+        push_u64(&mut out, self.surface.navigation_history.len() as u64);
+        for scene in &self.surface.navigation_history {
             push_text(&mut out, scene);
         }
         let mut scene_names = self.scene_states.keys().cloned().collect::<Vec<_>>();
@@ -815,7 +944,6 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
                     // The solver key already owns this state's dimensions,
                     // slots, variables, and fired rules. Marks are the only
                     // remaining core state not represented there.
-                    push_state_marks(&mut out, &puzzle.state);
                 } else {
                     push_state(&mut out, &puzzle.state);
                 }
@@ -867,20 +995,31 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         out
     }
 
-    pub fn screen(&self) -> &str {
-        &self.focused_scene
+    pub fn surface_state(&self) -> &SurfaceState {
+        &self.surface
     }
 
-    pub fn scene(&self) -> &str {
-        &self.focused_scene
-    }
-
-    pub fn visible_scenes(&self) -> &[String] {
-        &self.visible_scenes
-    }
-
-    pub fn focused_scene(&self) -> &str {
-        &self.focused_scene
+    pub fn apply_component_event(
+        &mut self,
+        game: &LoadedGridGame<D, Size>,
+        instance: &str,
+        event: &str,
+    ) -> Result<(), GridTransitionError<D>> {
+        if !self.surface.dismiss(instance, event) {
+            return Err(GridTransitionError::<D>::InvalidCommand(format!(
+                "component `{instance}` is not awaiting event `{event}`"
+            )));
+        }
+        while self.surface.active_modal_component().is_none() {
+            let Some((effect, bindings)) = self.pending_surface_effects.pop_front() else {
+                break;
+            };
+            self.apply_screen_effect(game, &effect, &bindings)?;
+        }
+        if self.surface.active_modal_component().is_none() && self.pending_input.is_some() {
+            self.run_pending_input(game)?;
+        }
+        Ok(())
     }
 
     pub fn routed_world(&self) -> &WorldInstanceId {
@@ -936,7 +1075,7 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
     }
 
     pub fn scene_state(&self) -> Option<&GridSceneRuntimeState<D, Size>> {
-        self.scene_states.get(&self.focused_scene)
+        self.scene_states.get(&self.surface.focused_component)
     }
 
     pub fn scene_state_for(&self, name: &str) -> Option<&GridSceneRuntimeState<D, Size>> {
@@ -1070,6 +1209,35 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         });
     }
 
+    fn push_presentation_animation(&mut self, animation: AnimationEvent) {
+        if !self.input_execution_mode.materializes_presentation() {
+            return;
+        }
+        let context = PresentationContext {
+            scene: self.current_world_id().scene.clone(),
+            puzzle: self.current_world_id().puzzle.clone(),
+            level_index: self.active_level_index,
+        };
+        for index in (0..self.presentation_events.len()).rev() {
+            let event = &self.presentation_events[index];
+            match &event.kind {
+                PresentationEventKind::Wait(_) => break,
+                PresentationEventKind::AnimationBatch(_) if event.context != context => break,
+                PresentationEventKind::AnimationBatch(_) => {
+                    let PresentationEventKind::AnimationBatch(animations) =
+                        &mut self.presentation_events[index].kind
+                    else {
+                        unreachable!()
+                    };
+                    animations.push(animation);
+                    return;
+                }
+                PresentationEventKind::Sound(_) => {}
+            }
+        }
+        self.push_presentation_event(PresentationEventKind::AnimationBatch(vec![animation]));
+    }
+
     fn mark_current_level_cleared(&mut self) {
         let Some(level_index) = self.active_level_index else {
             return;
@@ -1176,7 +1344,7 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         let Some(level_index) = self.active_level_index else {
             return false;
         };
-        let indices = scene_level_indices(game, &self.focused_scene);
+        let indices = scene_level_indices(game, &self.surface.focused_component);
         indices
             .iter()
             .position(|index| *index == level_index)
@@ -1212,13 +1380,18 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
     }
 
     pub fn is_waiting(&self) -> bool {
-        self.pending_input.is_some()
+        self.pending_input.is_some() || self.surface.active_modal_component().is_some()
     }
 
     pub fn resume_wait(
         &mut self,
         game: &LoadedGridGame<D, Size>,
     ) -> Result<(), GridTransitionError<D>> {
+        if self.surface.active_modal_component().is_some() {
+            return Err(GridTransitionError::<D>::InvalidCommand(
+                "cannot resume a component event wait with a timeline resume".to_string(),
+            ));
+        }
         if self.pending_input.is_none() {
             return Err(GridTransitionError::<D>::InvalidCommand(
                 "cannot resume because no turn is waiting".to_string(),
@@ -1328,7 +1501,7 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         let target = game
             .scenes
             .iter()
-            .find(|scene| scene.name == self.focused_scene)
+            .find(|scene| scene.name == self.surface.focused_component)
             .and_then(|scene| scene.puzzle_rule.as_ref())
             .map(|rule| rule.target.clone());
         let world = if let Some(target) = target.as_deref() {
@@ -1424,6 +1597,7 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
                 again_count,
                 records_trace,
                 mode,
+                animation_occurrences: AnimationOccurrenceTracker::default(),
                 trace: GridTransitionTrace {
                     input,
                     target,
@@ -1505,7 +1679,7 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
             let trace = segment.trace;
             let next_state = trace.next_state.clone();
             let firings = GridCapturedFirings::Detailed(trace.firings.clone());
-            let items = queued_turn_items_for_outcome(
+            let items = queued_turn_items_for_outcome_with_occurrences(
                 game,
                 (pending.phase == GridPendingInputPhase::Rules)
                     .then_some(pending.target.as_deref())
@@ -1514,6 +1688,7 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
                 &firings,
                 &next_state,
                 pending.mode,
+                &mut pending.animation_occurrences,
             );
             match pending.phase {
                 GridPendingInputPhase::Rules => {
@@ -1528,7 +1703,8 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
                     self.replace_state_if_changed_without_undo(game, next_state);
                 }
             }
-            let (semantic_items, emitted_wait) = self.materialize_segment_presentation(game, items);
+            let (semantic_items, emitted_wait) =
+                self.materialize_segment_presentation(game, items)?;
             pending.semantic_items.extend(semantic_items);
 
             if trace.cancelled {
@@ -1680,6 +1856,7 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
                 pending.world.clone()
             };
             let same_world = world == pending.world;
+            let animation_occurrences = pending.animation_occurrences.clone();
             let previous_turn_sfx = self.begin_separate_turn_sfx_dedup();
             let restore_turn_sfx = previous_turn_sfx.clone();
             let next = match self.segmented_pending_for_input(
@@ -1701,12 +1878,15 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
                     return Err(error);
                 }
             };
-            let Some(next) = next else {
+            let Some(mut next) = next else {
                 self.end_separate_turn_sfx_dedup(restore_turn_sfx);
                 self.current_input = pending.previous_input;
                 self.end_turn_sfx_dedup(pending.owns_turn_sfx);
                 return Ok(());
             };
+            if same_world {
+                next.animation_occurrences = animation_occurrences;
+            }
             self.pending_input = Some(next);
             return self.run_pending_input(game);
         }
@@ -1717,9 +1897,9 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
 
     fn materialize_segment_presentation(
         &mut self,
-        game: &LoadedGridGame<D, Size>,
+        _game: &LoadedGridGame<D, Size>,
         items: Vec<QueuedTurnItem>,
-    ) -> (Vec<QueuedTurnItem>, bool) {
+    ) -> Result<(Vec<QueuedTurnItem>, bool), GridTransitionError<D>> {
         let mut semantic_items = Vec::new();
         let mut emitted_wait = false;
         for item in items {
@@ -1727,7 +1907,7 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
                 let QueuedTurnItem::Animation(animation) = item else {
                     unreachable!()
                 };
-                self.push_presentation_event(PresentationEventKind::Animation(animation));
+                self.push_presentation_animation(animation);
                 continue;
             };
             let QueuedRuleEffect { target, effect } = effect;
@@ -1760,26 +1940,37 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
                     }
                 }
                 RuleEffect::WaitAnimation | RuleEffect::EmitAnimation { .. } => {}
-                RuleEffect::Message { text, literal } => {
-                    let text = self.resolve_message_text(&text, literal);
-                    self.push_presentation_event(PresentationEventKind::Message(
-                        MessageEvent::Message { text },
-                    ));
-                    if game.default_wait_ms > 0 {
-                        emitted_wait = true;
-                        self.push_presentation_event(PresentationEventKind::Wait(
-                            WaitEvent::Wait {
-                                milliseconds: game.default_wait_ms,
-                            },
+                RuleEffect::PresentComponent {
+                    definition,
+                    properties,
+                    placement,
+                    await_event,
+                } => {
+                    if placement == ComponentPlacement::Root {
+                        return Err(GridTransitionError::<D>::InvalidCommand(
+                            "present_component cannot replace the surface root; use goto or enter"
+                                .to_string(),
                         ));
                     }
+                    let properties = properties
+                        .into_iter()
+                        .map(|property| {
+                            Ok((
+                                property.name,
+                                self.resolve_runtime_property(&property.value, property.literal)?,
+                            ))
+                        })
+                        .collect::<Result<HashMap<_, _>, GridTransitionError<D>>>()?;
+                    self.surface
+                        .present(definition, placement, properties, await_event.clone());
+                    emitted_wait |= await_event.is_some();
                 }
                 effect => {
                     semantic_items.push(QueuedTurnItem::Effect(QueuedRuleEffect { target, effect }))
                 }
             }
         }
-        (semantic_items, emitted_wait)
+        Ok((semantic_items, emitted_wait))
     }
 
     pub fn last_transition_trace(&self) -> Option<&GridTransitionTrace<D>> {
@@ -1795,7 +1986,7 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         let target = game
             .scenes
             .iter()
-            .find(|screen| screen.name == self.focused_scene)
+            .find(|screen| screen.name == self.surface.focused_component)
             .and_then(|screen| screen.puzzle_rule.as_ref())
             .map(|rule| rule.target.clone());
         if let Some(target) = target {
@@ -1943,7 +2134,7 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
                 let QueuedTurnItem::Animation(animation) = item else {
                     unreachable!()
                 };
-                self.push_presentation_event(PresentationEventKind::Animation(animation));
+                self.push_presentation_animation(animation);
                 index += 1;
                 continue;
             };
@@ -2012,14 +2203,36 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
                 }
                 RuleEffect::WaitAnimation => {}
                 RuleEffect::EmitAnimation { .. } => {}
-                RuleEffect::Message { text, literal } => {
-                    let text = self.resolve_message_text(&text, literal);
-                    self.push_presentation_event(PresentationEventKind::Message(
-                        MessageEvent::Message { text },
-                    ));
-                    self.push_presentation_event(PresentationEventKind::Wait(WaitEvent::Wait {
-                        milliseconds: game.default_wait_ms,
-                    }));
+                RuleEffect::PresentComponent {
+                    definition,
+                    properties,
+                    placement,
+                    await_event,
+                } => {
+                    if placement == ComponentPlacement::Root {
+                        return Err(GridTransitionError::<D>::InvalidCommand(
+                            "present_component cannot replace the surface root; use goto or enter"
+                                .to_string(),
+                        ));
+                    }
+                    if await_event.is_some()
+                        && !self.input_execution_mode.materializes_presentation()
+                    {
+                        return Err(GridTransitionError::<D>::InvalidCommand(
+                            "component presentation requires an interactive surface".to_string(),
+                        ));
+                    }
+                    let properties = properties
+                        .into_iter()
+                        .map(|property| {
+                            Ok((
+                                property.name,
+                                self.resolve_runtime_property(&property.value, property.literal)?,
+                            ))
+                        })
+                        .collect::<Result<HashMap<_, _>, GridTransitionError<D>>>()?;
+                    self.surface
+                        .present(definition, placement, properties, await_event);
                 }
                 RuleEffect::Scene { effect } => {
                     self.apply_screen_effect(game, &effect, &HashMap::new())?;
@@ -2268,7 +2481,7 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
     ) -> bool {
         game.scenes
             .iter()
-            .find(|screen| screen.name == self.focused_scene)
+            .find(|screen| screen.name == self.surface.focused_component)
             .is_some_and(|screen| {
                 screen.transitions.iter().any(|transition| {
                     transition_condition_mentions_input(&transition.trigger, input)
@@ -2315,7 +2528,7 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         let Some(screen) = game
             .scenes
             .iter()
-            .find(|screen| screen.name == self.focused_scene)
+            .find(|screen| screen.name == self.surface.focused_component)
         else {
             return None;
         };
@@ -2814,21 +3027,36 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
                 let effect = game
                     .scenes
                     .iter()
-                    .find(|scene| scene.name == self.focused_scene)
+                    .find(|scene| scene.name == self.surface.focused_component)
                     .and_then(|scene| scene.routines.iter().find(|routine| routine.name == *name))
                     .map(|routine| routine.effect.clone())
                     .expect("scene routine call was validated before runtime");
                 self.apply_screen_effect(game, &effect, bindings)
             }
-            SceneEffect::Message { text } => {
-                if let Some(text) = self.eval_effect_string(game, text, bindings) {
-                    self.push_presentation_event(PresentationEventKind::Message(
-                        MessageEvent::Message { text },
+            SceneEffect::PresentComponent {
+                definition,
+                properties,
+                placement,
+                await_event,
+            } => {
+                if *placement == ComponentPlacement::Root {
+                    return Err(GridTransitionError::<D>::InvalidCommand(
+                        "present_component cannot replace the surface root; use goto or enter"
+                            .to_string(),
                     ));
-                    self.push_presentation_event(PresentationEventKind::Wait(WaitEvent::Wait {
-                        milliseconds: game.default_wait_ms,
-                    }));
                 }
+                let mut resolved = HashMap::new();
+                for property in properties {
+                    if let Some(value) = self.eval_effect_value(game, &property.value, bindings) {
+                        resolved.insert(property.name.clone(), value);
+                    }
+                }
+                self.surface.present(
+                    definition.clone(),
+                    *placement,
+                    resolved,
+                    await_event.clone(),
+                );
                 Ok(())
             }
             SceneEffect::Wait { milliseconds } => {
@@ -2876,22 +3104,27 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
                 Ok(())
             }
             SceneEffect::Goto { scene, params } => {
+                self.require_component_target(game, scene)?;
                 self.apply_screen_params(game, scene, params, bindings)?;
-                self.goto_scene(game, scene);
-                Ok(())
+                self.goto_scene(game, scene)
             }
             SceneEffect::Enter { scene, params } => {
+                self.require_component_target(game, scene)?;
                 self.apply_screen_params(game, scene, params, bindings)?;
-                self.enter_scene(game, scene);
-                Ok(())
+                self.enter_scene(game, scene)
             }
             SceneEffect::Back => {
                 self.back_or_initial(game);
                 Ok(())
             }
             SceneEffect::Create { scene } => {
+                self.require_component_definition(game, scene)?;
                 self.create_scene(game, scene);
-                Ok(())
+                self.mount_scene(
+                    scene,
+                    ComponentPlacement::Overlay,
+                    ComponentVisibility::Hidden,
+                )
             }
             SceneEffect::Reset { scene } => {
                 if game.scenes.iter().any(|candidate| candidate.name == *scene) {
@@ -2903,25 +3136,26 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
                 Ok(())
             }
             SceneEffect::Delete { scene } => {
-                self.delete_scene(game, scene);
-                Ok(())
+                self.require_component_target(game, scene)?;
+                self.delete_scene(game, scene)
             }
             SceneEffect::Show { scene } => {
-                self.show_scene(game, scene);
-                Ok(())
+                self.require_component_target(game, scene)?;
+                self.show_scene(scene)
             }
             SceneEffect::Hide { scene } => {
-                self.hide_scene(game, scene);
-                Ok(())
+                self.require_component_target(game, scene)?;
+                self.hide_scene(scene)
             }
             SceneEffect::Toggle { scene } => {
-                self.toggle_scene(game, scene);
-                Ok(())
+                self.require_component_target(game, scene)?;
+                self.toggle_scene(scene)
             }
             SceneEffect::Focus { scene } => {
-                self.focus_scene(game, scene);
-                Ok(())
+                self.require_component_target(game, scene)?;
+                self.focus_scene(game, scene)
             }
+            SceneEffect::Move { component, order } => self.move_component(component, order),
             SceneEffect::PuzzleNextLevel { target } => {
                 self.advance_level_from_target(game, target);
                 Ok(())
@@ -2960,7 +3194,7 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
                 Ok(())
             }
             SceneEffect::SetVariable { name, value } => {
-                if self.scene_variable_kind(game, &self.focused_scene, name)
+                if self.scene_variable_kind(game, &self.surface.focused_component, name)
                     == Some(SceneVarKind::Signal)
                 {
                     return self.apply_signal_assignment(game, name, value, bindings);
@@ -2992,8 +3226,19 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
                 Ok(())
             }
             SceneEffect::Sequence { effects } => {
-                for effect in effects {
+                for (index, effect) in effects.iter().enumerate() {
                     self.apply_screen_effect(game, effect, bindings)?;
+                    if self.surface.active_modal_component().is_some() {
+                        if index + 1 < effects.len() {
+                            self.pending_surface_effects.push_back((
+                                SceneEffect::Sequence {
+                                    effects: effects[index + 1..].to_vec(),
+                                },
+                                bindings.clone(),
+                            ));
+                        }
+                        break;
+                    }
                 }
                 Ok(())
             }
@@ -3107,8 +3352,8 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
     }
 
     pub fn advance_level(&mut self, game: &LoadedGridGame<D, Size>) {
-        let scene = if scene_is_level_scene(game, &self.focused_scene) {
-            self.focused_scene.clone()
+        let scene = if scene_is_level_scene(game, &self.surface.focused_component) {
+            self.surface.focused_component.clone()
         } else {
             initial_level_scene_name(game).to_string()
         };
@@ -3116,8 +3361,8 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
     }
 
     pub fn previous_level(&mut self, game: &LoadedGridGame<D, Size>) {
-        let scene = if scene_is_level_scene(game, &self.focused_scene) {
-            self.focused_scene.clone()
+        let scene = if scene_is_level_scene(game, &self.surface.focused_component) {
+            self.surface.focused_component.clone()
         } else {
             initial_level_scene_name(game).to_string()
         };
@@ -3188,7 +3433,7 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         }
 
         let scene = initial_level_scene_name(game).to_string();
-        self.select_focused_scene(game, &scene);
+        let _ = self.goto_scene(game, &scene);
         let _ = self.activate_level(game, level_index, true);
         self.history.clear();
         let _ = self.apply_scene_start_transition(game);
@@ -3209,7 +3454,7 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         }
 
         let scene = initial_level_scene_name(game).to_string();
-        self.select_focused_scene(game, &scene);
+        self.goto_scene(game, &scene)?;
         self.active_level_index = Some(level_index);
         self.selected_level_index = level_index;
         self.checkpoint_state = None;
@@ -3255,8 +3500,7 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
                 let _ = session.activate_level(game, index, true);
                 session.history.clear();
             });
-            self.goto_scene(game, target);
-            return Ok(());
+            return self.goto_scene(game, target);
         }
         let value = game
             .levels
@@ -3341,31 +3585,89 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         true
     }
 
-    fn goto_scene(&mut self, game: &LoadedGridGame<D, Size>, name: &str) {
+    fn goto_scene(
+        &mut self,
+        game: &LoadedGridGame<D, Size>,
+        name: &str,
+    ) -> Result<(), GridTransitionError<D>> {
         self.create_scene(game, name);
-        self.visible_scenes.clear();
-        self.show_scene(game, name);
-        self.focus_history.clear();
-        self.focus_scene(game, name);
+        self.surface.components.clear();
+        self.mount_scene(
+            name,
+            ComponentPlacement::Root,
+            ComponentVisibility::Visible,
+        )?;
+        self.surface.navigation_history.clear();
+        self.focus_scene(game, name)
     }
 
-    fn enter_scene(&mut self, game: &LoadedGridGame<D, Size>, name: &str) {
-        self.create_scene(game, name);
-        if self.focused_scene != name {
-            self.focus_history.push(self.focused_scene.clone());
+    fn require_component_definition(
+        &self,
+        game: &LoadedGridGame<D, Size>,
+        name: &str,
+    ) -> Result<(), GridTransitionError<D>> {
+        if game.scenes.iter().any(|component| component.name == name) {
+            return Ok(());
         }
-        self.show_scene(game, name);
-        self.focus_scene(game, name);
+        Err(GridTransitionError::<D>::InvalidCommand(format!(
+            "unknown component definition `{name}`"
+        )))
+    }
+
+    fn require_component_target(
+        &self,
+        game: &LoadedGridGame<D, Size>,
+        name: &str,
+    ) -> Result<(), GridTransitionError<D>> {
+        if self
+            .surface
+            .components
+            .iter()
+            .any(|component| component.id == name)
+            || game.scenes.iter().any(|component| component.name == name)
+        {
+            return Ok(());
+        }
+        Err(GridTransitionError::<D>::InvalidCommand(format!(
+            "unknown component target `{name}`"
+        )))
+    }
+
+    fn enter_scene(
+        &mut self,
+        game: &LoadedGridGame<D, Size>,
+        name: &str,
+    ) -> Result<(), GridTransitionError<D>> {
+        self.create_scene(game, name);
+        if self.surface.focused_component != name {
+            self.surface
+                .navigation_history
+                .push(self.surface.focused_component.clone());
+        }
+        self.surface.components.clear();
+        self.mount_scene(
+            name,
+            ComponentPlacement::Root,
+            ComponentVisibility::Visible,
+        )?;
+        self.focus_scene(game, name)
     }
 
     fn back_or_initial(&mut self, game: &LoadedGridGame<D, Size>) {
-        let current = self.focused_scene.clone();
         let previous = self
-            .focus_history
+            .surface
+            .navigation_history
             .pop()
             .unwrap_or_else(|| initial_scene_name(game).to_string());
-        self.hide_scene_only(&current);
-        self.focus_scene(game, &previous);
+        self.surface.components.clear();
+        self.mount_scene(
+            &previous,
+            ComponentPlacement::Root,
+            ComponentVisibility::Visible,
+        )
+        .expect("navigation history only contains validated component definitions");
+        self.focus_scene(game, &previous)
+            .expect("newly mounted navigation root must be focusable");
     }
 
     fn create_scene(&mut self, game: &LoadedGridGame<D, Size>, name: &str) {
@@ -3374,75 +3676,218 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         }
     }
 
-    fn delete_scene(&mut self, game: &LoadedGridGame<D, Size>, name: &str) {
+    fn mount_scene(
+        &mut self,
+        name: &str,
+        placement: ComponentPlacement,
+        visibility: ComponentVisibility,
+    ) -> Result<(), GridTransitionError<D>> {
+        if self
+            .surface
+            .components
+            .iter()
+            .any(|component| component.id == name)
+        {
+            return Err(GridTransitionError::<D>::InvalidCommand(format!(
+                "component `{name}` is already mounted"
+            )));
+        }
+        if placement == ComponentPlacement::Root
+            && self
+                .surface
+                .components
+                .iter()
+                .any(|component| component.placement == ComponentPlacement::Root)
+        {
+            return Err(GridTransitionError::<D>::InvalidCommand(
+                "surface already has a root component".to_string(),
+            ));
+        }
+        self.surface.components.push(SurfaceComponentInstance {
+            id: name.to_string(),
+            definition: name.to_string(),
+            placement,
+            visibility,
+            modal: false,
+            properties: HashMap::new(),
+            awaited_event: None,
+        });
+        Ok(())
+    }
+
+    fn delete_scene(
+        &mut self,
+        _game: &LoadedGridGame<D, Size>,
+        name: &str,
+    ) -> Result<(), GridTransitionError<D>> {
+        if self.surface.root() == Some(name) {
+            return Err(GridTransitionError::<D>::InvalidCommand(format!(
+                "root component `{name}` cannot be deleted; replace it with goto or enter"
+            )));
+        }
+        if self.surface.focused_component == name {
+            return Err(GridTransitionError::<D>::InvalidCommand(format!(
+                "focused component `{name}` cannot be deleted before focus moves elsewhere"
+            )));
+        }
         self.scene_states.remove(name);
-        self.visible_scenes.retain(|screen| screen != name);
-        self.focus_history.retain(|screen| screen != name);
-        if self.focused_scene == name {
-            let previous = self
-                .focus_history
-                .pop()
-                .unwrap_or_else(|| initial_scene_name(game).to_string());
-            self.create_scene(game, &previous);
-            self.show_scene(game, &previous);
-            self.focused_scene = previous;
-            self.route_inputs_to_focused_scene(game);
+        let before = self.surface.components.len();
+        self.surface.components.retain(|component| component.id != name);
+        if before == self.surface.components.len() {
+            return Err(GridTransitionError::<D>::InvalidCommand(format!(
+                "component `{name}` is not mounted"
+            )));
         }
+        self.surface
+            .navigation_history
+            .retain(|screen| screen != name);
+        Ok(())
     }
 
-    fn show_scene(&mut self, game: &LoadedGridGame<D, Size>, name: &str) {
-        self.create_scene(game, name);
-        if !self.visible_scenes.iter().any(|screen| screen == name) {
-            self.visible_scenes.push(name.to_string());
+    fn show_scene(&mut self, name: &str) -> Result<(), GridTransitionError<D>> {
+        let Some(component) = self
+            .surface
+            .components
+            .iter_mut()
+            .find(|component| component.id == name)
+        else {
+            return Err(GridTransitionError::<D>::InvalidCommand(format!(
+                "component `{name}` is not mounted"
+            )));
+        };
+        component.visibility = ComponentVisibility::Visible;
+        Ok(())
+    }
+
+    fn hide_scene(&mut self, name: &str) -> Result<(), GridTransitionError<D>> {
+        if self.surface.focused_component == name {
+            return Err(GridTransitionError::<D>::InvalidCommand(format!(
+                "focused component `{name}` cannot be hidden before focus moves elsewhere"
+            )));
         }
+        self.hide_scene_only(name)
     }
 
-    fn hide_scene(&mut self, game: &LoadedGridGame<D, Size>, name: &str) {
-        self.hide_scene_only(name);
-        if self.focused_scene == name {
-            let previous = self
-                .visible_scenes
-                .last()
-                .cloned()
-                .or_else(|| self.focus_history.pop())
-                .unwrap_or_else(|| initial_scene_name(game).to_string());
-            self.create_scene(game, &previous);
-            self.show_scene(game, &previous);
-            self.focused_scene = previous;
-            self.route_inputs_to_focused_scene(game);
-        }
+    fn hide_scene_only(&mut self, name: &str) -> Result<(), GridTransitionError<D>> {
+        let Some(component) = self
+            .surface
+            .components
+            .iter_mut()
+            .find(|component| component.id == name)
+        else {
+            return Err(GridTransitionError::<D>::InvalidCommand(format!(
+                "component `{name}` is not mounted"
+            )));
+        };
+        component.visibility = ComponentVisibility::Hidden;
+        Ok(())
     }
 
-    fn hide_scene_only(&mut self, name: &str) {
-        self.visible_scenes.retain(|screen| screen != name);
-    }
-
-    fn toggle_scene(&mut self, game: &LoadedGridGame<D, Size>, name: &str) {
-        if self.visible_scenes.iter().any(|screen| screen == name) {
-            self.hide_scene(game, name);
+    fn toggle_scene(&mut self, name: &str) -> Result<(), GridTransitionError<D>> {
+        if self.surface.is_visible(name) {
+            self.hide_scene(name)
         } else {
-            self.show_scene(game, name);
+            self.show_scene(name)
         }
     }
 
-    fn focus_scene(&mut self, game: &LoadedGridGame<D, Size>, name: &str) {
-        self.select_focused_scene(game, name);
+    fn focus_scene(
+        &mut self,
+        game: &LoadedGridGame<D, Size>,
+        name: &str,
+    ) -> Result<(), GridTransitionError<D>> {
+        self.select_focused_scene(game, name)?;
         if self.routed_world.scene == name {
             let _ = self.start_current_world(game, true);
         }
         let _ = self.apply_scene_start_transition(game);
         let _ = self.apply_level_start_transition(game);
+        Ok(())
     }
 
-    fn select_focused_scene(&mut self, game: &LoadedGridGame<D, Size>, name: &str) {
-        self.create_scene(game, name);
-        self.show_scene(game, name);
-        self.focused_scene = name.to_string();
+    fn move_component(
+        &mut self,
+        component: &str,
+        order: &ComponentOrder,
+    ) -> Result<(), GridTransitionError<D>> {
+        let Some(source_index) = self
+            .surface
+            .components
+            .iter()
+            .position(|mounted| mounted.id == component)
+        else {
+            return Err(GridTransitionError::<D>::InvalidCommand(format!(
+                "component `{component}` is not mounted"
+            )));
+        };
+        if source_index == 0 {
+            return Err(GridTransitionError::<D>::InvalidCommand(format!(
+                "root component `{component}` cannot be reordered"
+            )));
+        }
+        if matches!(order, ComponentOrder::Before(anchor) | ComponentOrder::After(anchor) if anchor == component)
+        {
+            return Err(GridTransitionError::<D>::InvalidCommand(format!(
+                "component `{component}` cannot be ordered relative to itself"
+            )));
+        }
+
+        let component = self.surface.components.remove(source_index);
+        let target_index = match order {
+            ComponentOrder::First => 1,
+            ComponentOrder::Last => self.surface.components.len(),
+            ComponentOrder::Before(anchor) | ComponentOrder::After(anchor) => {
+                let Some(anchor_index) = self
+                    .surface
+                    .components
+                    .iter()
+                    .position(|mounted| mounted.id == *anchor)
+                else {
+                    self.surface.components.insert(source_index, component);
+                    return Err(GridTransitionError::<D>::InvalidCommand(format!(
+                        "component order anchor `{anchor}` is not mounted"
+                    )));
+                };
+                if anchor_index == 0 {
+                    self.surface.components.insert(source_index, component);
+                    return Err(GridTransitionError::<D>::InvalidCommand(format!(
+                        "component cannot be ordered before or after the root `{anchor}`"
+                    )));
+                }
+                anchor_index + usize::from(matches!(order, ComponentOrder::After(_)))
+            }
+        };
+        self.surface.components.insert(target_index, component);
+        Ok(())
+    }
+
+    fn select_focused_scene(
+        &mut self,
+        game: &LoadedGridGame<D, Size>,
+        name: &str,
+    ) -> Result<(), GridTransitionError<D>> {
+        let Some(component) = self
+            .surface
+            .components
+            .iter()
+            .find(|component| component.id == name)
+        else {
+            return Err(GridTransitionError::<D>::InvalidCommand(format!(
+                "component `{name}` is not mounted"
+            )));
+        };
+        if component.visibility != ComponentVisibility::Visible {
+            return Err(GridTransitionError::<D>::InvalidCommand(format!(
+                "hidden component `{name}` cannot receive focus"
+            )));
+        }
+        self.surface.focused_component = name.to_string();
         self.route_inputs_to_focused_scene(game);
+        Ok(())
     }
 
     fn route_inputs_to_focused_scene(&mut self, game: &LoadedGridGame<D, Size>) {
-        if let Some(world) = scene_input_world_instance(game, &self.focused_scene) {
+        if let Some(world) = scene_input_world_instance(game, &self.surface.focused_component) {
             self.routed_world = world;
         }
     }
@@ -3469,7 +3914,7 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         let Some(effect) = game
             .scenes
             .iter()
-            .find(|screen| screen.name == self.focused_scene)
+            .find(|screen| screen.name == self.surface.focused_component)
             .and_then(|screen| {
                 screen.transitions.iter().find_map(|transition| {
                     (transition.trigger == trigger).then(|| transition.effect.clone())
@@ -3578,12 +4023,19 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         }
     }
 
-    fn resolve_message_text(&self, text: &str, literal: bool) -> String {
+    fn resolve_runtime_property(
+        &self,
+        text: &str,
+        literal: bool,
+    ) -> Result<SceneValue, GridTransitionError<D>> {
         if literal {
-            return text.to_string();
+            return Ok(SceneValue::Text(text.to_string()));
         }
-        self.scene_value_string(text)
-            .unwrap_or_else(|| text.to_string())
+        self.scene_value(text).cloned().ok_or_else(|| {
+            GridTransitionError::<D>::InvalidCommand(format!(
+                "component property references unknown value `{text}`"
+            ))
+        })
     }
 
     fn scene_value_string(&self, name: &str) -> Option<String> {
@@ -3645,7 +4097,7 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         let Some(value) = self.eval_effect_value(game, expr, bindings) else {
             return Err(GridTransitionError::<D>::InvalidCommand(name.to_string()));
         };
-        let scene_name = self.focused_scene.clone();
+        let scene_name = self.surface.focused_component.clone();
         let previous_input = self.current_input.clone();
         let previous_value = self
             .scene_states
@@ -3684,7 +4136,7 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         let Some(value) = self.eval_effect_value(game, expr, bindings) else {
             return Err(GridTransitionError::<D>::InvalidCommand(name.to_string()));
         };
-        let scene_name = self.focused_scene.clone();
+        let scene_name = self.surface.focused_component.clone();
         if let Some(mutable) = scene_variable_mutability(game, &scene_name, name) {
             if !mutable {
                 return Err(GridTransitionError::<D>::InvalidCommand(name.to_string()));
@@ -3798,15 +4250,21 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
             [puzzle] => {
                 if self
                     .scene_states
-                    .get(&self.focused_scene)
+                    .get(&self.surface.focused_component)
                     .is_some_and(|scene| scene.puzzles.contains_key(*puzzle))
                 {
-                    return Some((self.focused_scene.clone(), (*puzzle).to_string()));
+                    return Some((
+                        self.surface.focused_component.clone(),
+                        (*puzzle).to_string(),
+                    ));
                 }
                 if let Some(primary) = scene_primary_puzzle_name(game, puzzle) {
                     return Some(((*puzzle).to_string(), primary));
                 }
-                Some((self.focused_scene.clone(), (*puzzle).to_string()))
+                Some((
+                    self.surface.focused_component.clone(),
+                    (*puzzle).to_string(),
+                ))
             }
             [screen, puzzle] => Some(((*screen).to_string(), (*puzzle).to_string())),
             _ => None,
@@ -3961,7 +4419,7 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         if game.scenes.is_empty() {
             return self.active_level_index.is_some();
         }
-        scene_is_level_scene(game, &self.focused_scene)
+        scene_is_level_scene(game, &self.surface.focused_component)
     }
 }
 
@@ -4286,8 +4744,14 @@ fn parse_runtime_command(command_text: &str, default_wait_ms: u64) -> Option<Sce
         });
     }
     if let Some(text) = command_text.strip_prefix("message ") {
-        return Some(SceneEffect::Message {
-            text: parse_runtime_expr(text.trim())?,
+        return Some(SceneEffect::PresentComponent {
+            definition: "standard.message".to_string(),
+            properties: vec![ComponentProperty {
+                name: "text".to_string(),
+                value: parse_runtime_expr(text.trim())?,
+            }],
+            placement: ComponentPlacement::Overlay,
+            await_event: Some("dismiss".to_string()),
         });
     }
     if command_text == "wait" {
@@ -4587,7 +5051,7 @@ fn rule_effect_is_presentation_only(effect: &RuleEffect) -> bool {
             | RuleEffect::Wait { .. }
             | RuleEffect::WaitAnimation
             | RuleEffect::EmitAnimation { .. }
-            | RuleEffect::Message { .. }
+            | RuleEffect::PresentComponent { .. }
     )
 }
 
@@ -4604,7 +5068,10 @@ fn rule_boundary_pauses<const D: usize, Size: GridSize<D>>(
                     effect,
                     RuleEffect::Wait { .. }
                         | RuleEffect::WaitAnimation
-                        | RuleEffect::Message { .. }
+                        | RuleEffect::PresentComponent {
+                            await_event: Some(_),
+                            ..
+                        }
                 )
             })
         })
@@ -4618,13 +5085,46 @@ fn queued_turn_items_for_outcome<const D: usize, Size: GridSize<D>>(
     next_state: &GridState<D, Size>,
     mode: InputExecutionMode,
 ) -> Vec<QueuedTurnItem> {
+    let mut animation_occurrences = AnimationOccurrenceTracker::default();
+    queued_turn_items_for_outcome_with_occurrences(
+        game,
+        target,
+        commands,
+        firings,
+        next_state,
+        mode,
+        &mut animation_occurrences,
+    )
+}
+
+fn queued_turn_items_for_outcome_with_occurrences<const D: usize, Size: GridSize<D>>(
+    game: &LoadedGridGame<D, Size>,
+    target: Option<&str>,
+    commands: &[TransitionCommand],
+    firings: &GridCapturedFirings<D>,
+    next_state: &GridState<D, Size>,
+    mode: InputExecutionMode,
+    animation_occurrences: &mut AnimationOccurrenceTracker<D>,
+) -> Vec<QueuedTurnItem> {
     match firings {
-        GridCapturedFirings::Summary(firings) => {
-            queued_turn_items_for_firings(game, target, commands, firings, next_state, mode)
-        }
-        GridCapturedFirings::Detailed(firings) => {
-            queued_turn_items_for_firings(game, target, commands, firings, next_state, mode)
-        }
+        GridCapturedFirings::Summary(firings) => queued_turn_items_for_firings(
+            game,
+            target,
+            commands,
+            firings,
+            next_state,
+            mode,
+            animation_occurrences,
+        ),
+        GridCapturedFirings::Detailed(firings) => queued_turn_items_for_firings(
+            game,
+            target,
+            commands,
+            firings,
+            next_state,
+            mode,
+            animation_occurrences,
+        ),
     }
 }
 
@@ -4635,6 +5135,7 @@ fn queued_turn_items_for_firings<const D: usize, Size: GridSize<D>, Firing: Grid
     firings: &[Firing],
     next_state: &GridState<D, Size>,
     mode: InputExecutionMode,
+    animation_occurrences: &mut AnimationOccurrenceTracker<D>,
 ) -> Vec<QueuedTurnItem> {
     if !mode.materializes_presentation() {
         let mut items = Vec::new();
@@ -4671,14 +5172,9 @@ fn queued_turn_items_for_firings<const D: usize, Size: GridSize<D>, Firing: Grid
     let mut animation_window = Vec::new();
     let mut has_rule_effects = false;
     for firing in firings {
-        let animations = if game.rule_animations.contains_key(&firing.rule()) {
-            let firing = firing
-                .detailed()
-                .expect("animated rule firing must retain its patch");
-            animation_events_for_trace(game, std::slice::from_ref(firing), next_state)
-        } else {
-            Vec::new()
-        };
+        let animations = firing.detailed().map_or_else(Vec::new, |firing| {
+            animation_events_for_firing(game, firing, next_state, animation_occurrences)
+        });
         for animation in animations {
             push_segment_animation(&mut animation_window, &mut items, animation);
         }
@@ -4809,121 +5305,304 @@ pub fn animation_events_for_trace<const D: usize, Size: GridSize<D>>(
     firings: &[GridRuleFiring<D>],
     next_state: &GridState<D, Size>,
 ) -> Vec<AnimationEvent> {
+    let mut tracker = AnimationOccurrenceTracker::default();
     let mut events = Vec::new();
     for firing in firings {
-        let Some(animations) = game.rule_animations.get(&firing.rule) else {
-            continue;
-        };
-        for RuleAnimation {
-            trigger,
-            name,
-            objects,
-        } in animations
-        {
-            match trigger {
-                RuleAnimationTrigger::Move => {
+        events.extend(animation_events_for_firing(
+            game,
+            firing,
+            next_state,
+            &mut tracker,
+        ));
+    }
+    events
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum AnimationTransition<const D: usize> {
+    Move {
+        from: GridCoord<D>,
+        to: GridCoord<D>,
+        object: ObjectId,
+    },
+    Rewrite {
+        position: GridCoord<D>,
+        remove: ObjectId,
+        add: ObjectId,
+    },
+}
+
+fn animation_events_for_firing<const D: usize, Size: GridSize<D>>(
+    game: &LoadedGridGame<D, Size>,
+    firing: &GridRuleFiring<D>,
+    next_state: &GridState<D, Size>,
+    tracker: &mut AnimationOccurrenceTracker<D>,
+) -> Vec<AnimationEvent> {
+    let animations = game.rule_animations.get(&firing.rule);
+    let visual_rewrite_pairs = animations
+        .into_iter()
+        .flatten()
+        .flat_map(|animation| &animation.visual_rewrites)
+        .map(|rewrite| (rewrite.remove, rewrite.add))
+        .collect::<HashSet<_>>();
+    let mut transitions = Vec::new();
+    for op in firing.patch.ops() {
+        match op {
+            PatchOp::Move { from, to, object } => transitions.push(AnimationTransition::Move {
+                from: *from,
+                to: *to,
+                object: *object,
+            }),
+            PatchOp::Replace {
+                position,
+                remove,
+                add,
+            } => transitions.push(AnimationTransition::Rewrite {
+                position: *position,
+                remove: *remove,
+                add: *add,
+            }),
+            PatchOp::Remove {
+                position,
+                object: remove,
+            } => {
+                for (_, add) in visual_rewrite_pairs
+                    .iter()
+                    .filter(|(candidate, _)| candidate == remove)
+                {
+                    if firing.patch.ops().iter().any(|candidate| {
+                        matches!(
+                            candidate,
+                            PatchOp::Add {
+                                position: add_position,
+                                object,
+                            } if add_position == position && object == add
+                        )
+                    }) {
+                        transitions.push(AnimationTransition::Rewrite {
+                            position: *position,
+                            remove: *remove,
+                            add: *add,
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut seen_transitions = HashSet::new();
+    transitions.retain(|transition| seen_transitions.insert(*transition));
+    let transition_endpoints = transitions
+        .iter()
+        .map(|transition| match transition {
+            AnimationTransition::Move { from, to, object } => ((*from, *object), (*to, *object)),
+            AnimationTransition::Rewrite {
+                position,
+                remove,
+                add,
+            } => ((*position, *remove), (*position, *add)),
+        })
+        .collect::<Vec<_>>();
+    let transition_ids = tracker.assign_transitions(&transition_endpoints);
+    let occurrence_ids = transitions
+        .iter()
+        .copied()
+        .zip(transition_ids)
+        .collect::<HashMap<_, _>>();
+    let transition_sources = transition_endpoints
+        .iter()
+        .map(|(source, _)| *source)
+        .collect::<HashSet<_>>();
+    let transition_targets = transition_endpoints
+        .iter()
+        .map(|(_, target)| *target)
+        .collect::<HashSet<_>>();
+    for op in firing.patch.ops() {
+        match op {
+            PatchOp::Remove { position, object }
+                if !transition_sources.contains(&(*position, *object)) =>
+            {
+                tracker.forget((*position, *object));
+            }
+            PatchOp::Add { position, object }
+                if !transition_targets.contains(&(*position, *object)) =>
+            {
+                tracker.forget((*position, *object));
+            }
+            _ => {}
+        }
+    }
+
+    let Some(animations) = animations else {
+        return Vec::new();
+    };
+    let mut events = Vec::new();
+    for RuleAnimation {
+        trigger,
+        name,
+        objects,
+        visual_rewrites,
+    } in animations
+    {
+        match trigger {
+            RuleAnimationTrigger::Move => {
+                for op in firing.patch.ops() {
+                    let PatchOp::Move { from, to, object } = op else {
+                        continue;
+                    };
+                    if !objects.contains(object) {
+                        continue;
+                    }
+                    let occurrence_id = occurrence_ids[&AnimationTransition::Move {
+                        from: *from,
+                        to: *to,
+                        object: *object,
+                    }];
+                    let (from_x, from_y, from_z) = spatial_axes(from.axes());
+                    let (to_x, to_y, to_z) = spatial_axes(to.axes());
+                    push_unique_animation(
+                        &mut events,
+                        AnimationEvent::Move {
+                            name: name.clone(),
+                            occurrence_id,
+                            object: *object,
+                            visual_tween: None,
+                            from_x,
+                            from_y,
+                            from_z,
+                            to_x,
+                            to_y,
+                            to_z,
+                        },
+                    );
+                }
+                for op in firing.patch.ops() {
+                    let PatchOp::Replace {
+                        position,
+                        remove,
+                        add,
+                    } = op
+                    else {
+                        continue;
+                    };
+                    if !objects.contains(add)
+                        || !visual_rewrites
+                            .iter()
+                            .any(|rewrite| rewrite.remove == *remove && rewrite.add == *add)
+                    {
+                        continue;
+                    }
+                    let Some(visual_tween) = visual_rotation_tween(game, *remove, *add) else {
+                        continue;
+                    };
+                    let occurrence_id = occurrence_ids[&AnimationTransition::Rewrite {
+                        position: *position,
+                        remove: *remove,
+                        add: *add,
+                    }];
+                    let (x, y, z) = spatial_axes(position.axes());
+                    push_unique_animation(
+                        &mut events,
+                        AnimationEvent::Move {
+                            name: name.clone(),
+                            occurrence_id,
+                            object: *add,
+                            visual_tween: Some(visual_tween),
+                            from_x: x,
+                            from_y: y,
+                            from_z: z,
+                            to_x: x,
+                            to_y: y,
+                            to_z: z,
+                        },
+                    );
+                }
+                for rewrite in visual_rewrites {
                     for op in firing.patch.ops() {
-                        let PatchOp::Move { from, to, object } = op else {
+                        let PatchOp::Remove {
+                            position,
+                            object: remove,
+                        } = op
+                        else {
                             continue;
                         };
-                        let from_axes = from.axes();
-                        let to_axes = to.axes();
-                        let (from_x, from_y, from_z) = spatial_axes(from_axes);
-                        let (to_x, to_y, to_z) = spatial_axes(to_axes);
+                        let transition = AnimationTransition::Rewrite {
+                            position: *position,
+                            remove: *remove,
+                            add: rewrite.add,
+                        };
+                        let Some(occurrence_id) = occurrence_ids.get(&transition).copied() else {
+                            continue;
+                        };
+                        if *remove != rewrite.remove {
+                            continue;
+                        }
+                        let Some(visual_tween) =
+                            visual_rotation_tween(game, rewrite.remove, rewrite.add)
+                        else {
+                            continue;
+                        };
+                        let (x, y, z) = spatial_axes(position.axes());
+                        push_unique_animation(
+                            &mut events,
+                            AnimationEvent::Move {
+                                name: name.clone(),
+                                occurrence_id,
+                                object: rewrite.add,
+                                visual_tween: Some(visual_tween),
+                                from_x: x,
+                                from_y: y,
+                                from_z: z,
+                                to_x: x,
+                                to_y: y,
+                                to_z: z,
+                            },
+                        );
+                    }
+                }
+            }
+            RuleAnimationTrigger::CantMove => {
+                for op in firing.patch.ops() {
+                    let PatchOp::RemoveMark {
+                        position,
+                        object,
+                        mark,
+                        ..
+                    } = op
+                    else {
+                        continue;
+                    };
+                    let (x, y, z) = spatial_axes(position.axes());
+                    if mark.0 != 0 {
+                        continue;
+                    }
+                    if object.0 != 0 {
                         if objects.contains(object) {
                             push_unique_animation(
                                 &mut events,
-                                AnimationEvent::Move {
+                                AnimationEvent::CantMove {
                                     name: name.clone(),
                                     object: *object,
-                                    visual_tween: None,
-                                    from_x,
-                                    from_y,
-                                    from_z,
-                                    to_x,
-                                    to_y,
-                                    to_z,
+                                    x,
+                                    y,
+                                    z,
                                 },
                             );
                         }
+                        continue;
                     }
-                    for op in firing.patch.ops() {
-                        let PatchOp::Replace {
-                            position,
-                            remove,
-                            add,
-                        } = op
-                        else {
-                            continue;
-                        };
-                        let axes = position.axes();
-                        let (x, y, z) = spatial_axes(axes);
-                        if let Some(visual_tween) = objects
-                            .contains(add)
-                            .then(|| visual_rotation_tween(game, *remove, *add))
-                            .flatten()
-                        {
+                    for candidate in objects {
+                        if next_state.has_object_at(&game.game, *position, *candidate) {
                             push_unique_animation(
                                 &mut events,
-                                AnimationEvent::Move {
+                                AnimationEvent::CantMove {
                                     name: name.clone(),
-                                    object: *add,
-                                    visual_tween: Some(visual_tween),
-                                    from_x: x,
-                                    from_y: y,
-                                    from_z: z,
-                                    to_x: x,
-                                    to_y: y,
-                                    to_z: z,
+                                    object: *candidate,
+                                    x,
+                                    y,
+                                    z,
                                 },
                             );
-                        }
-                    }
-                }
-                RuleAnimationTrigger::CantMove => {
-                    for op in firing.patch.ops() {
-                        let PatchOp::RemoveMark {
-                            position,
-                            object,
-                            mark,
-                            ..
-                        } = op
-                        else {
-                            continue;
-                        };
-                        let axes = position.axes();
-                        let (x, y, z) = spatial_axes(axes);
-                        if mark.0 != 0 {
-                            continue;
-                        }
-                        if object.0 != 0 {
-                            if objects.contains(object) {
-                                push_unique_animation(
-                                    &mut events,
-                                    AnimationEvent::CantMove {
-                                        name: name.clone(),
-                                        object: *object,
-                                        x,
-                                        y,
-                                        z,
-                                    },
-                                );
-                            }
-                            continue;
-                        }
-                        for candidate in objects {
-                            if next_state.has_object_at(&game.game, *position, *candidate) {
-                                push_unique_animation(
-                                    &mut events,
-                                    AnimationEvent::CantMove {
-                                        name: name.clone(),
-                                        object: *candidate,
-                                        x,
-                                        y,
-                                        z,
-                                    },
-                                );
-                            }
                         }
                     }
                 }
@@ -5304,14 +5983,45 @@ mod tests {
             .collect()
     }
 
-    fn message_events(events: &[PresentationEvent]) -> Vec<MessageEvent> {
-        events
+    fn presented_component_texts(session: &GameSession) -> Vec<String> {
+        session
+            .surface_state()
+            .components()
             .iter()
-            .filter_map(|event| match &event.kind {
-                PresentationEventKind::Message(event) => Some(event.clone()),
-                _ => None,
+            .filter_map(|component| {
+                (component.definition == "standard.message")
+                    .then(|| {
+                        component
+                            .properties
+                            .get("text")
+                            .cloned()
+                            .map(|value| scene_value_to_string(&value))
+                    })
+                    .flatten()
             })
             .collect()
+    }
+
+    fn surface_component_ids(session: &GameSession) -> Vec<String> {
+        session
+            .surface_state()
+            .components()
+            .iter()
+            .map(|component| component.id.clone())
+            .collect()
+    }
+
+    fn dismiss_top_component(session: &mut GameSession, game: &LoadedGame) {
+        let component = session
+            .surface_state()
+            .active_modal_component()
+            .expect("a modal component must be awaiting dismissal");
+        let id = component.id.clone();
+        let event = component
+            .awaited_event
+            .clone()
+            .expect("a modal component must name its awaited event");
+        session.apply_component_event(game, &id, &event).unwrap();
     }
 
     fn wait_events(events: &[PresentationEvent]) -> Vec<WaitEvent> {
@@ -5327,9 +6037,9 @@ mod tests {
     fn animation_events(events: &[PresentationEvent]) -> Vec<AnimationEvent> {
         events
             .iter()
-            .filter_map(|event| match &event.kind {
-                PresentationEventKind::Animation(event) => Some(event.clone()),
-                _ => None,
+            .flat_map(|event| match &event.kind {
+                PresentationEventKind::AnimationBatch(events) => events.clone(),
+                _ => Vec::new(),
             })
             .collect()
     }
@@ -5355,7 +6065,7 @@ mod tests {
         let source = r#"
 title = play_level_rules
 puzzle board {
-  slots {
+  layers {
     actor = Player
   }
   keys {
@@ -5401,7 +6111,7 @@ render {
 tween = true
 tween_duration = 75ms
 }
-slots {
+layers {
 actor = Player
 }
 rules {
@@ -5443,9 +6153,22 @@ puzzle board = board
         )
         .unwrap();
 
-        let SceneEffect::Message { text } = effect else {
-            panic!("expected message effect");
+        let SceneEffect::PresentComponent {
+            definition,
+            properties,
+            placement,
+            await_event,
+        } = effect
+        else {
+            panic!("expected component presentation effect");
         };
+        assert_eq!(definition, "standard.message");
+        assert_eq!(placement, ComponentPlacement::Overlay);
+        assert_eq!(await_event.as_deref(), Some("dismiss"));
+        let [ComponentProperty { name, value: text }] = properties.as_slice() else {
+            panic!("expected one text property");
+        };
+        assert_eq!(name, "text");
         assert!(matches!(&text, SceneExpr::Call { name, args }
             if name == "join"
                 && matches!(args.as_slice(), [SceneExpr::Text(_), SceneExpr::If { .. }])));
@@ -5479,7 +6202,7 @@ puzzle board = board
             r#"
 title = again_runtime
 puzzle default {
-slots {
+layers {
 __legacy_layer_0 = Before After
 }
 empty .
@@ -5521,7 +6244,7 @@ B
             r#"
 title = again_wait_segments
 puzzle default {
-slots {
+layers {
 __legacy_layer_0 = A B C
 }
 empty .
@@ -5578,7 +6301,7 @@ A
             r#"
 title = again_undo_boundary
 puzzle default {
-slots {
+layers {
 __legacy_layer_0 = A B C
 }
 empty .
@@ -5627,7 +6350,7 @@ A
             r#"
 title = again_effect
 puzzle default {
-slots {
+layers {
 __legacy_layer_0 = Before After
 }
 empty .
@@ -5658,7 +6381,7 @@ A
             r#"
 title = checkpoint_runtime
 puzzle default {
-slots {
+layers {
 __legacy_layer_0 = Player
 }
 empty .
@@ -5727,7 +6450,7 @@ P..
             r#"
 title = win_effect
 puzzle default {
-slots {
+layers {
 floor = Exit
 actor = Player
 }
@@ -5762,7 +6485,7 @@ render {
 tween = true
 tween_duration = 80ms
 }
-slots {
+layers {
 actor = Player
 }
 rules {
@@ -5800,6 +6523,7 @@ P.
             animation_events(&session.take_presentation_events()),
             vec![AnimationEvent::Move {
                 name: "tween".to_string(),
+                occurrence_id: 1,
                 object: player,
                 visual_tween: None,
                 from_x: 0,
@@ -5818,8 +6542,9 @@ P.
             r#"
 title = explicit_visual_emission
 puzzle default {
-slots {
+layers {
 actor = Player
+!flash
 }
 visuals {
 visual Player {
@@ -5886,7 +6611,7 @@ render {
 tween = true
 tween_duration = 80ms
 }
-slots {
+layers {
 actor = Player:directions
 }
 visuals {
@@ -5943,6 +6668,7 @@ P
             animation_events(&session.take_presentation_events()),
             vec![AnimationEvent::Move {
                 name: "tween".to_string(),
+                occurrence_id: 1,
                 object: to,
                 visual_tween: visual_rotation_tween(&loaded, from, to),
                 from_x: 0,
@@ -5961,7 +6687,7 @@ P
             r#"
 title = rotation_move_wait_segments
 puzzle default {
-slots {
+layers {
 actor = Player:directions
 }
 visuals {
@@ -5994,6 +6720,7 @@ P
         let up = object_named(&loaded, "Player:up");
         let rotation = AnimationEvent::Move {
             name: "tween".to_string(),
+            occurrence_id: 1,
             object: up,
             visual_tween: visual_rotation_tween(&loaded, left, up),
             from_x: 0,
@@ -6005,6 +6732,7 @@ P
         };
         let translation = AnimationEvent::Move {
             name: "tween".to_string(),
+            occurrence_id: 1,
             object: up,
             visual_tween: None,
             from_x: 0,
@@ -6061,7 +6789,7 @@ tween_duration = 80ms
 tags {
 pose = a b
 }
-slots {
+layers {
 actor = Player:pose
 }
 visuals {
@@ -6109,7 +6837,7 @@ render {
 tween = true
 tween_duration = 80ms
 }
-slots {
+layers {
 actor = A B
 }
 visuals {
@@ -6157,7 +6885,7 @@ puzzle default {
 tags {
 facing = 0deg 360deg
 }
-slots {
+layers {
 actor = Player:facing
 }
 visuals {
@@ -6197,7 +6925,7 @@ P
             r#"
 title = rotation_tween_contract
 puzzle default {
-slots {
+layers {
 actor = Player:directions
 }
 visuals {
@@ -6224,6 +6952,7 @@ P
         let to = object_named(&loaded, "Player:right");
         let events = animation_events_contract_2d(&[AnimationEvent::Move {
             name: "tween".to_string(),
+            occurrence_id: 1,
             object: to,
             visual_tween: visual_rotation_tween(&loaded, from, to),
             from_x: 0,
@@ -6239,6 +6968,7 @@ P
             serde_json::json!([{
                 "kind": "move",
                 "name": "tween",
+                "occurrenceId": 1,
                 "objectId": to.0,
                 "visualTween": {
                     "from": {
@@ -6270,7 +7000,7 @@ P
             r#"
 title = rotation_tween_missing_label
 puzzle default {
-slots {
+layers {
 actor = Player
 }
 rules {
@@ -6290,6 +7020,7 @@ P
 
         let events = animation_events_contract_2d(&[AnimationEvent::Move {
             name: "tween".to_string(),
+            occurrence_id: 1,
             object: player,
             visual_tween: None,
             from_x: 0,
@@ -6314,7 +7045,7 @@ P
             r#"
 title = win_effect_runtime
 puzzle default {
-slots {
+layers {
 floor = Exit
 marker = Cleared
 actor = Player
@@ -6357,7 +7088,7 @@ P
             r#"
 title = lose_blocks_clear
 puzzle default {
-slots {
+layers {
 actor = Player
 }
 win_conditions {
@@ -6393,7 +7124,7 @@ level "two" {
         session.apply_input(&loaded, InputId(0)).unwrap();
 
         assert_eq!(session.level_index(), 0);
-        assert_eq!(session.screen(), "default");
+        assert_eq!(session.surface_state().focused_component(), "default");
         assert!(!session.cleared_levels()[0]);
     }
 
@@ -6403,7 +7134,7 @@ level "two" {
             r#"
 title = lose_blocks_win_effect
 puzzle default {
-slots {
+layers {
 actor = Player
 }
 lose_conditions {
@@ -6445,7 +7176,7 @@ level "two" {
             r#"
 title = lose_allows_next_level
 puzzle default {
-slots {
+layers {
 actor = Player
 }
 win_conditions {
@@ -6487,7 +7218,7 @@ level "two" {
             r#"
 title = lose_blocks_scene_win_condition
 puzzle board {
-slots {
+layers {
 actor = Player
 }
 win_conditions {
@@ -6531,7 +7262,7 @@ text "clear"
 
         session.apply_input(&loaded, InputId(0)).unwrap();
 
-        assert_eq!(session.screen(), "playing");
+        assert_eq!(session.surface_state().focused_component(), "playing");
         assert!(!session.cleared_levels()[0]);
     }
 
@@ -6541,7 +7272,7 @@ text "clear"
             r#"
 title = conditional_win_effect_runtime
 puzzle default {
-slots {
+layers {
 floor = Exit
 marker = Cleared
 actor = Player
@@ -6585,7 +7316,7 @@ P
             r#"
 title = targeted_conditional_win_effect_runtime
 puzzle board {
-slots {
+layers {
 floor = Exit
 marker = Cleared
 actor = Player
@@ -6641,7 +7372,7 @@ step board
             r#"
 title = conditional_win_effect_scene_transition
 puzzle board {
-slots {
+layers {
 floor = Exit
 actor = Player
 }
@@ -6687,7 +7418,7 @@ text "clear"
             .apply_input(&loaded, input_named(&loaded, "clear"))
             .unwrap();
 
-        assert_eq!(session.screen(), "level_clear");
+        assert_eq!(session.surface_state().focused_component(), "level_clear");
         assert!(session.cleared_levels()[0]);
     }
 
@@ -6697,7 +7428,7 @@ text "clear"
             r#"
 title = puzzle_rule_goto_runtime
 puzzle default {
-slots {
+layers {
 actor = Player
 }
 input open
@@ -6732,13 +7463,13 @@ text "Menu"
         .unwrap();
         let mut session = GameSession::new(&loaded);
         session.apply_command(&loaded, "goto playing").unwrap();
-        assert_eq!(session.screen(), "playing");
+        assert_eq!(session.surface_state().focused_component(), "playing");
 
         session
             .apply_input(&loaded, input_named(&loaded, "open"))
             .unwrap();
 
-        assert_eq!(session.screen(), "menu");
+        assert_eq!(session.surface_state().focused_component(), "menu");
     }
 
     fn transition_fixture() -> LoadedGame {
@@ -6746,7 +7477,7 @@ text "Menu"
             r#"
 title = transition_fixture
 puzzle sokoban {
-slots {
+layers {
 floor = Goal
 actor = Player Box Wall
 }
@@ -6830,7 +7561,7 @@ title = scene_local_puzzle_fixture
 puzzle sokoban {
 var portal_entered = false
 
-slots {
+layers {
 trigger = Portal
 solid = Player Wall
 }
@@ -6902,7 +7633,7 @@ step spec_board
     fn enter_scene_local_hub(loaded: &LoadedGame, session: &mut GameSession) {
         session.apply_command(loaded, "goto hub").unwrap();
         load_named_scene_level(loaded, session, "hub.spec_board", "spec", "hub");
-        assert_eq!(session.screen(), "hub");
+        assert_eq!(session.surface_state().focused_component(), "hub");
     }
 
     #[test]
@@ -6912,7 +7643,7 @@ step spec_board
 title = scene_var_condition
 
 puzzle default {
-slots {
+layers {
 __legacy_layer_1 = Player
 }
 empty .
@@ -6958,7 +7689,7 @@ text "moved"
 
         session.apply_input(&loaded, tick).unwrap();
 
-        assert_eq!(session.screen(), "moved");
+        assert_eq!(session.surface_state().focused_component(), "moved");
     }
 
     #[test]
@@ -6969,7 +7700,7 @@ title = scene_start_fixture
 puzzle default {
 persistent var moves = 0
 
-slots {
+layers {
 __legacy_layer_0 = Player
 }
 empty .
@@ -7024,7 +7755,7 @@ sounds {
 sfx push { seed = push01; type = jump }
 }
 puzzle default {
-slots {
+layers {
 __legacy_layer_0 = Player
 }
 empty .
@@ -7071,7 +7802,7 @@ sounds {
 undo -> sfx undo_tick
 restart -> sfx restart_tick
 }
-slots {
+layers {
 __legacy_layer_0 = Player
 }
 empty .
@@ -7128,7 +7859,7 @@ puzzle default {
 sounds {
 restart -> sfx restart_tick
 }
-slots {
+layers {
 actor = Player
 marker = Started
 }
@@ -7285,7 +8016,7 @@ sounds {
 music locked_room { seed = room01 }
 }
 puzzle default {
-slots {
+layers {
 __legacy_layer_0 = Player
 }
 empty .
@@ -7327,7 +8058,7 @@ sounds {
 sfx push { seed = push01; type = jump }
 }
 puzzle default {
-slots {
+layers {
 actor = Player Box
 }
 sounds {
@@ -7372,7 +8103,7 @@ sounds {
 sfx bump { seed = bump01; type = hit }
 }
 puzzle default {
-slots {
+layers {
 actor = A
 }
 sounds {
@@ -7410,7 +8141,7 @@ sounds {
 sfx push { seed = push01; type = jump }
 }
 puzzle default {
-slots {
+layers {
 actor = Box
 }
 rules {
@@ -7451,7 +8182,7 @@ sounds {
 sfx push { seed = push01; type = jump }
 }
 puzzle default {
-slots {
+layers {
 actor = Box
 }
 rules {
@@ -7500,7 +8231,7 @@ sounds {
 sfx tick { seed = tick01; type = jump }
 }
 puzzle default {
-slots {
+layers {
 __legacy_layer_0 = Player
 }
 empty .
@@ -7540,7 +8271,7 @@ P
 title = rule_wait_fixture
 default_wait_time = 300ms
 puzzle default {
-slots {
+layers {
 __legacy_layer_0 = Player
 }
 empty .
@@ -7579,7 +8310,7 @@ P
                 r#"
 title = wait_duration_invariance
 puzzle default {{
-slots {{
+layers {{
 __legacy_layer_0 = A B C
 }}
 empty .
@@ -7638,7 +8369,7 @@ render {
 tween = true
 tween_duration = 80ms
 }
-slots {
+layers {
 actor = Player
 marker = Done
 }
@@ -7673,44 +8404,184 @@ P.
             .apply_input(&loaded, input_named(&loaded, "right"))
             .unwrap();
 
-        let mut events = Vec::new();
+        let mut timeline = Vec::new();
+        let mut presentation_contexts = Vec::new();
         loop {
-            events.extend(session.take_presentation_events());
+            let events = session.take_presentation_events();
+            presentation_contexts.extend(events.iter().map(|event| event.context.clone()));
+            timeline.extend(events.into_iter().map(|event| match event.kind {
+                PresentationEventKind::Wait(WaitEvent::Wait { milliseconds }) => {
+                    format!("wait:{milliseconds}")
+                }
+                PresentationEventKind::AnimationBatch(_) => "animation_batch".to_string(),
+                PresentationEventKind::Sound(SoundEvent::PlaySfx { .. }) => "sfx".to_string(),
+                PresentationEventKind::Sound(_) => "music".to_string(),
+            }));
             if !session.is_waiting() {
                 break;
             }
-            session.resume_wait(&loaded).unwrap();
+            if let Some(component) = session.surface_state().active_modal_component() {
+                timeline.push(format!("component:{}", component.definition));
+                dismiss_top_component(&mut session, &loaded);
+            } else {
+                session.resume_wait(&loaded).unwrap();
+            }
         }
         assert!(session.state().has_object(&loaded.game, 1, 0, done));
         assert_eq!(
-            events
-                .iter()
-                .map(|event| match &event.kind {
-                    PresentationEventKind::Wait(WaitEvent::Wait { milliseconds }) => {
-                        format!("wait:{milliseconds}")
-                    }
-                    PresentationEventKind::Message(_) => "message".to_string(),
-                    PresentationEventKind::Animation(_) => "animation".to_string(),
-                    PresentationEventKind::Sound(SoundEvent::PlaySfx { .. }) => {
-                        "sfx".to_string()
-                    }
-                    PresentationEventKind::Sound(_) => "music".to_string(),
-                })
-                .collect::<Vec<_>>(),
+            timeline,
             vec![
                 "wait:10",
-                "message",
-                "wait:40",
-                "animation",
+                "component:standard.message",
+                "animation_batch",
                 "sfx",
                 "wait:80"
             ]
         );
         assert!(
-            events
+            presentation_contexts
                 .iter()
-                .all(|event| event.context.level_index == Some(0))
+                .all(|context| context.level_index == Some(0))
         );
+    }
+
+    #[test]
+    fn presentation_segment_batches_animations_across_sfx() {
+        let loaded = parse_game(
+            r#"
+title = presentation_animation_batch
+sounds {
+sfx tick { seed = tick01; type = hit }
+}
+puzzle default {
+layers { actor = Player }
+empty .
+rules {}
+levels {
+legend {
+. = empty
+P = Player
+}
+level "first" { P }
+}
+}
+"#,
+        )
+        .unwrap();
+        let mut session = GameSession::new(&loaded);
+
+        let (semantic_items, emitted_wait) = session
+            .materialize_segment_presentation(
+                &loaded,
+                vec![
+                    QueuedTurnItem::Animation(AnimationEvent::Animation {
+                        name: "before".to_string(),
+                        x: 0,
+                        y: 0,
+                        z: 0,
+                    }),
+                    QueuedTurnItem::Effect(QueuedRuleEffect {
+                        target: None,
+                        effect: RuleEffect::PlaySfx {
+                            name: "tick".to_string(),
+                        },
+                    }),
+                    QueuedTurnItem::Animation(AnimationEvent::Animation {
+                        name: "after".to_string(),
+                        x: 1,
+                        y: 0,
+                        z: 0,
+                    }),
+                ],
+            )
+            .unwrap();
+
+        assert!(semantic_items.is_empty());
+        assert!(!emitted_wait);
+        let events = session.take_presentation_events();
+        assert_eq!(events.len(), 2);
+        assert!(matches!(
+            &events[0].kind,
+            PresentationEventKind::AnimationBatch(animations)
+                if animations.len() == 2
+                    && matches!(&animations[0], AnimationEvent::Animation { name, .. } if name == "before")
+                    && matches!(&animations[1], AnimationEvent::Animation { name, .. } if name == "after")
+        ));
+        assert_eq!(
+            events[1].kind,
+            PresentationEventKind::Sound(SoundEvent::PlaySfx {
+                name: "tick".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn presentation_animation_batch_spans_segments_until_wait() {
+        let loaded = parse_game(
+            r#"
+title = presentation_animation_occurrence
+puzzle default {
+layers { actor = Player }
+empty .
+rules {}
+levels {
+legend {
+. = empty
+P = Player
+}
+level "first" { P }
+}
+}
+"#,
+        )
+        .unwrap();
+        let mut session = GameSession::new(&loaded);
+        let animation = |name: &str, x| {
+            QueuedTurnItem::Animation(AnimationEvent::Animation {
+                name: name.to_string(),
+                x,
+                y: 0,
+                z: 0,
+            })
+        };
+
+        session
+            .materialize_segment_presentation(&loaded, vec![animation("first", 0)])
+            .unwrap();
+        session
+            .materialize_segment_presentation(&loaded, vec![animation("second", 1)])
+            .unwrap();
+        session
+            .materialize_segment_presentation(
+                &loaded,
+                vec![QueuedTurnItem::Effect(QueuedRuleEffect {
+                    target: None,
+                    effect: RuleEffect::Wait { milliseconds: 10 },
+                })],
+            )
+            .unwrap();
+        session
+            .materialize_segment_presentation(&loaded, vec![animation("third", 2)])
+            .unwrap();
+
+        let events = session.take_presentation_events();
+        assert_eq!(events.len(), 3);
+        assert!(matches!(
+            &events[0].kind,
+            PresentationEventKind::AnimationBatch(animations)
+                if animations.len() == 2
+                    && matches!(&animations[0], AnimationEvent::Animation { name, .. } if name == "first")
+                    && matches!(&animations[1], AnimationEvent::Animation { name, .. } if name == "second")
+        ));
+        assert_eq!(
+            events[1].kind,
+            PresentationEventKind::Wait(WaitEvent::Wait { milliseconds: 10 })
+        );
+        assert!(matches!(
+            &events[2].kind,
+            PresentationEventKind::AnimationBatch(animations)
+                if matches!(animations.as_slice(), [AnimationEvent::Animation { name, .. }] if name == "third")
+        ));
     }
 
     #[test]
@@ -7723,7 +8594,7 @@ render {
 tween = true
 tween_duration = 80ms
 }
-slots {
+layers {
 actor = Player
 marker = Marker
 }
@@ -7762,6 +8633,7 @@ P.
             animation_events(&presentation_events),
             vec![AnimationEvent::Move {
                 name: "tween".to_string(),
+                occurrence_id: 1,
                 object: player,
                 visual_tween: None,
                 from_x: 0,
@@ -7787,7 +8659,7 @@ render {
 tween = true
 tween_duration = 80ms
 }
-slots {
+layers {
 actor = Player
 marker = Marker
 }
@@ -7831,6 +8703,7 @@ P.
             animation_events(&presentation_events),
             vec![AnimationEvent::Move {
                 name: "tween".to_string(),
+                occurrence_id: 1,
                 object: player,
                 visual_tween: None,
                 from_x: 0,
@@ -7855,7 +8728,7 @@ render {
 tween = true
 tween_duration = 80ms
 }
-slots {
+layers {
 actor = Player
 marker = Marker
 }
@@ -7895,6 +8768,7 @@ P.
             animation_events(&presentation_events),
             vec![AnimationEvent::Move {
                 name: "tween".to_string(),
+                occurrence_id: 1,
                 object: player,
                 visual_tween: None,
                 from_x: 0,
@@ -7917,7 +8791,7 @@ render {
 tween = true
 tween_duration = 80ms
 }
-slots {
+layers {
 actor = Player Box
 marker = Marker
 }
@@ -7968,11 +8842,26 @@ PB.
                 object.0
             }
         });
+        let occurrence_ids = animation_events
+            .iter()
+            .filter_map(|event| match event {
+                AnimationEvent::Move { occurrence_id, .. } => Some(*occurrence_id),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(occurrence_ids.len(), 2);
+        assert_ne!(occurrence_ids[0], occurrence_ids[1]);
+        for event in &mut animation_events {
+            if let AnimationEvent::Move { occurrence_id, .. } = event {
+                *occurrence_id = 0;
+            }
+        }
         assert_eq!(
             animation_events,
             vec![
                 AnimationEvent::Move {
                     name: "tween".to_string(),
+                    occurrence_id: 0,
                     object: player,
                     visual_tween: None,
                     from_x: 0,
@@ -7984,6 +8873,7 @@ PB.
                 },
                 AnimationEvent::Move {
                     name: "tween".to_string(),
+                    occurrence_id: 0,
                     object: box_object,
                     visual_tween: None,
                     from_x: 1,
@@ -8009,7 +8899,7 @@ render {
 tween = true
 tween_duration = 80ms
 }
-slots {
+layers {
 actor = Player Box
 marker = Marker
 }
@@ -8058,7 +8948,7 @@ PB.
             r#"
 title = rewrite_suffix_wait_duration_fixture
 puzzle default {
-slots {
+layers {
 actor = A
 box_layer = B
 marker = Marker
@@ -8107,7 +8997,7 @@ AA
             r#"
 title = wait_animation_noop_fixture
 puzzle default {
-slots {
+layers {
 actor = Player
 marker = Marker
 }
@@ -8140,14 +9030,14 @@ P
     }
 
     #[test]
-    fn scene_message_effect_queues_popup_message() {
+    fn scene_message_sugar_presents_an_awaited_overlay_component() {
         let loaded = parse_game(
             r#"
 title = scene_message_fixture
 default_wait_time = 350ms
 var hint = "Push the box"
 puzzle default {
-slots {
+layers {
 __legacy_layer_0 = Player
 }
 empty .
@@ -8178,17 +9068,65 @@ message hint
         let mut session = GameSession::new(&loaded);
         session.apply_command(&loaded, "goto playing").unwrap();
 
-        let presentation_events = session.take_presentation_events();
         assert_eq!(
-            message_events(&presentation_events),
-            vec![MessageEvent::Message {
-                text: "Push the box".to_string()
-            }]
+            presented_component_texts(&session),
+            vec!["Push the box".to_string()]
+        );
+        let component = session.surface_state().active_modal_component().unwrap();
+        assert_eq!(component.definition, "standard.message");
+        assert_eq!(component.placement, ComponentPlacement::Overlay);
+        assert_eq!(component.awaited_event.as_deref(), Some("dismiss"));
+        assert!(session.is_waiting());
+        assert!(wait_events(&session.take_presentation_events()).is_empty());
+    }
+
+    #[test]
+    fn awaited_component_event_resumes_the_remaining_scene_effects() {
+        let loaded = parse_game(
+            r#"
+title = component_effect_continuation
+puzzle default {
+layers { actor = Player }
+empty .
+rules {}
+levels {
+legend { P = Player }
+level "one" { P }
+}
+}
+scene title {
+layout { text "Title" }
+}
+scene playing {
+layout { puzzle board = default }
+on_scene_start {
+present standard.message(text = "complete", count = 3) as overlay await dismiss
+goto title
+}
+}
+"#,
+        )
+        .unwrap();
+        let mut session = GameSession::new(&loaded);
+
+        session.apply_command(&loaded, "goto playing").unwrap();
+
+        assert_eq!(session.surface_state().focused_component(), "playing");
+        assert_eq!(
+            presented_component_texts(&session),
+            vec!["complete".to_string()]
         );
         assert_eq!(
-            wait_events(&presentation_events),
-            vec![WaitEvent::Wait { milliseconds: 350 }]
+            session
+                .surface_state()
+                .active_modal_component()
+                .and_then(|component| component.properties.get("count")),
+            Some(&SceneValue::Int(3))
         );
+        dismiss_top_component(&mut session, &loaded);
+        assert_eq!(session.surface_state().focused_component(), "title");
+        assert_eq!(surface_component_ids(&session), vec!["title".to_string()]);
+        assert!(!session.is_waiting());
     }
 
     #[test]
@@ -8198,7 +9136,7 @@ message hint
 title = level_name_condition_message
 var hint = "First level only"
 puzzle default {
-slots {
+layers {
 __legacy_layer_0 = Player
 }
 empty .
@@ -8233,10 +9171,10 @@ message hint
         let mut session = GameSession::new(&loaded);
         session.apply_command(&loaded, "goto playing").unwrap();
 
-        assert!(message_events(&session.take_presentation_events()).is_empty());
+        assert!(presented_component_texts(&session).is_empty());
 
         session.start_level(&loaded, 1);
-        assert!(message_events(&session.take_presentation_events()).is_empty());
+        assert!(presented_component_texts(&session).is_empty());
     }
 
     #[test]
@@ -8247,7 +9185,7 @@ title = puzzle_message_fixture
 default_wait_time = 400ms
 var hint = "Found"
 puzzle default {
-slots {
+layers {
 actor = Player
 floor = Goal
 }
@@ -8272,22 +9210,17 @@ level "start" {
         )
         .unwrap();
         let mut session = GameSession::new(&loaded);
-        message_events(&session.take_presentation_events());
+        assert!(presented_component_texts(&session).is_empty());
 
         let right = input_id_by_label(&loaded, "right").unwrap();
         session.apply_input(&loaded, right).unwrap();
 
-        let presentation_events = session.take_presentation_events();
         assert_eq!(
-            message_events(&presentation_events),
-            vec![MessageEvent::Message {
-                text: "Found".to_string()
-            }]
+            presented_component_texts(&session),
+            vec!["Found".to_string()]
         );
-        assert_eq!(
-            wait_events(&presentation_events),
-            vec![WaitEvent::Wait { milliseconds: 400 }]
-        );
+        assert!(session.is_waiting());
+        assert!(wait_events(&session.take_presentation_events()).is_empty());
     }
 
     #[test]
@@ -8297,7 +9230,7 @@ level "start" {
 title = message_rule_segment_wait
 default_wait_time = 450ms
 puzzle default {
-slots {
+layers {
 __legacy_layer_0 = A B C
 }
 empty .
@@ -8327,18 +9260,13 @@ A
 
         assert!(session.state().has_object(&loaded.game, 0, 0, b));
         assert!(!session.state().has_object(&loaded.game, 0, 0, c));
-        let presentation_events = session.take_presentation_events();
         assert_eq!(
-            message_events(&presentation_events),
-            vec![MessageEvent::Message {
-                text: "changed".to_string()
-            }]
+            presented_component_texts(&session),
+            vec!["changed".to_string()]
         );
-        assert_eq!(
-            wait_events(&presentation_events),
-            vec![WaitEvent::Wait { milliseconds: 450 }]
-        );
-        session.resume_wait(&loaded).unwrap();
+        assert!(session.is_waiting());
+        assert!(wait_events(&session.take_presentation_events()).is_empty());
+        dismiss_top_component(&mut session, &loaded);
         assert!(!session.state().has_object(&loaded.game, 0, 0, b));
         assert!(session.state().has_object(&loaded.game, 0, 0, c));
     }
@@ -8352,7 +9280,7 @@ sounds {
 sfx fall { seed = fall; type = hit }
 }
 puzzle default {
-slots {
+layers {
 __legacy_layer_0 = A B C
 }
 empty .
@@ -8418,7 +9346,7 @@ A
             r#"
 title = wait_anchor_segments
 puzzle default {
-slots {
+layers {
 __legacy_layer_0 = A B
 }
 empty .
@@ -8485,7 +9413,7 @@ A
             r#"
 title = overlap_render
 puzzle default {
-slots {
+layers {
 floor = Floor
 target = Goal
 solid = Box
@@ -8555,7 +9483,7 @@ B = Box
 title = editor_state_start
 
 puzzle board {
-slots {
+layers {
 actor = Player
 }
 empty .
@@ -8624,7 +9552,7 @@ title = progress_fixture
 puzzle default {
 persistent var moves = 0
 
-slots {
+layers {
 __legacy_layer_0 = Player
 }
 empty .
@@ -8729,7 +9657,7 @@ P
             .apply_command(&loaded, "goto playing(\"microban_01\")")
             .unwrap();
 
-        assert_eq!(session.screen(), "playing");
+        assert_eq!(session.surface_state().focused_component(), "playing");
         assert_eq!(session.level_index(), 0);
 
         let mut session = GameSession::new(&loaded);
@@ -8737,7 +9665,7 @@ P
         let restored_world = session.routed_world().clone();
         session.apply_command(&loaded, "goto playing").unwrap();
 
-        assert_eq!(session.screen(), "playing");
+        assert_eq!(session.surface_state().focused_component(), "playing");
         assert_eq!(session.level_index(), 0);
         assert_eq!(
             session
@@ -8754,7 +9682,7 @@ P
 title = dotted_level
 
 puzzle default {
-slots {
+layers {
 __legacy_layer_0 = Player
 }
 empty .
@@ -8788,7 +9716,7 @@ step board
             .apply_command(&loaded, "goto playing(\"test.chain\")")
             .unwrap();
 
-        assert_eq!(session.scene(), "playing");
+        assert_eq!(session.surface_state().focused_component(), "playing");
         assert_eq!(session.level_index(), 1);
     }
 
@@ -8799,7 +9727,7 @@ step board
 title = quoted_level
 
 puzzle default {
-slots {
+layers {
 __legacy_layer_0 = Player
 }
 empty .
@@ -8843,7 +9771,7 @@ step board
 title = omitted_level_collection
 
 puzzle default {
-slots {
+layers {
 __legacy_layer_0 = Player
 }
 empty .
@@ -8884,7 +9812,7 @@ puzzle board = default
 title = named_level_collection
 
 puzzle default {
-slots {
+layers {
 __legacy_layer_0 = Player
 }
 empty .
@@ -8930,7 +9858,7 @@ title = progress_effects
 puzzle default {
 persistent var score = 5
 
-slots {
+layers {
 __legacy_layer_0 = Player
 }
 empty .
@@ -8996,7 +9924,7 @@ var num = 0
 var num_run = 7
 
 puzzle default {
-slots {
+layers {
 actor = Player
 }
 empty .
@@ -9046,7 +9974,7 @@ P
 
         session.apply_command(&loaded, "playing.restart").unwrap();
         assert_eq!(session.state(), &initial);
-        assert_eq!(session.screen(), "playing");
+        assert_eq!(session.surface_state().focused_component(), "playing");
 
         session.apply_command(&loaded, "undo").unwrap();
         assert_eq!(session.state(), &moved);
@@ -9061,7 +9989,7 @@ title = explicit_target_error
 puzzle board {
 input right
 
-slots {
+layers {
 actor = Player
 }
 empty .
@@ -9115,7 +10043,7 @@ default_wait_time = 100ms
 puzzle board {
 input right
 
-slots {
+layers {
 actor = Player
 }
 empty .
@@ -9167,7 +10095,7 @@ title = signal_input_handler
 puzzle board {
 input right
 
-slots {
+layers {
 actor = Player Marker
 }
 empty .
@@ -9235,7 +10163,7 @@ step board
 title = next_level_target_scene
 
 puzzle board {
-slots {
+layers {
 floor = Goal
 actor = Box Player
 }
@@ -9295,7 +10223,7 @@ if board.win_conditions -> board.next_level
         session.apply_input(&loaded, tick).unwrap();
 
         assert_eq!(session.level_index(), 1);
-        assert_eq!(session.screen(), "playing");
+        assert_eq!(session.surface_state().focused_component(), "playing");
         assert_eq!(session.state(), &loaded.levels[1].initial_state);
     }
 
@@ -9308,7 +10236,7 @@ title = persistent_history
 puzzle default {
 persistent var cleared = false
 
-slots {
+layers {
 __legacy_layer_0 = Player
 }
 empty .
@@ -9367,7 +10295,7 @@ step board
 title = puzzle_load_reset
 
 puzzle default {
-slots {
+layers {
 __legacy_layer_1 = Player
 }
 empty .
@@ -9414,7 +10342,7 @@ step board
         let mut session = GameSession::new(&loaded);
         let player = object_named(&loaded, "Player");
 
-        assert_eq!(session.screen(), "default");
+        assert_eq!(session.surface_state().focused_component(), "default");
         assert_eq!(
             loaded
                 .scenes
@@ -9430,7 +10358,7 @@ step board
             .apply_command(&loaded, "load play.board from play.board.levels[1]")
             .unwrap();
         session.apply_command(&loaded, "goto play").unwrap();
-        assert_eq!(session.screen(), "play");
+        assert_eq!(session.surface_state().focused_component(), "play");
         assert_eq!(session.level_index(), 1);
 
         session.apply_command(&loaded, "right").unwrap();
@@ -9445,7 +10373,7 @@ step board
         );
 
         session.apply_command(&loaded, "board.restart").unwrap();
-        assert_eq!(session.screen(), "play");
+        assert_eq!(session.surface_state().focused_component(), "play");
         assert!(
             session
                 .scene_state()
@@ -9475,7 +10403,7 @@ step board
 title = cancel_screen_transition
 
 puzzle default {
-slots {
+layers {
 __legacy_layer_1 = A
 }
 empty .
@@ -9524,7 +10452,7 @@ text "clear"
 
         session.apply_input(&loaded, tick).unwrap();
 
-        assert_eq!(session.screen(), "playing");
+        assert_eq!(session.surface_state().focused_component(), "playing");
     }
 
     #[test]
@@ -9536,8 +10464,10 @@ text "clear"
         session.apply_command(&loaded, "goto playing").unwrap();
         let initial = session.state().clone();
 
-        session.apply_command(&loaded, "goto menu").unwrap();
-        assert_eq!(session.screen(), "menu");
+        session
+            .apply_command(&loaded, "goto level_select")
+            .unwrap();
+        assert_eq!(session.surface_state().focused_component(), "level_select");
 
         session.apply_command(&loaded, "right").unwrap();
         assert_eq!(session.state(), &initial);
@@ -9552,7 +10482,7 @@ sounds {
 sfx step { seed = step; type = jump }
 }
 puzzle default {
-slots {
+layers {
 actor = Player
 }
 empty .
@@ -9595,12 +10525,12 @@ text "Select"
         let initial = session.state().clone();
 
         session.apply_command(&loaded, "goto level_select").unwrap();
-        assert_eq!(session.screen(), "level_select");
+        assert_eq!(session.surface_state().focused_component(), "level_select");
         assert!(!session.accepts_model_input(&loaded));
 
         session.apply_input(&loaded, down).unwrap();
 
-        assert_eq!(session.screen(), "level_select");
+        assert_eq!(session.surface_state().focused_component(), "level_select");
         assert_eq!(session.state(), &initial);
         assert!(!session.can_undo());
         assert!(sound_events(&session.take_presentation_events()).is_empty());
@@ -9612,7 +10542,7 @@ text "Select"
             r#"
 title = scene_input_focus
 puzzle default {
-slots {
+layers {
 actor = Player
 }
 empty .
@@ -9654,7 +10584,7 @@ step board
             .apply_input(&loaded, input_named(&loaded, "open"))
             .unwrap();
 
-        assert_eq!(session.screen(), "playing");
+        assert_eq!(session.surface_state().focused_component(), "playing");
         assert!(session.accepts_model_input(&loaded));
         assert_eq!(session.active_level_index(), Some(0));
     }
@@ -9689,7 +10619,7 @@ step board
         );
 
         session.apply_command(&loaded, "goto child_1").unwrap();
-        assert_eq!(session.screen(), "child_1");
+        assert_eq!(session.surface_state().focused_component(), "child_1");
 
         session.apply_command(&loaded, "goto hub").unwrap();
         assert!(
@@ -9710,7 +10640,7 @@ step board
 title = independent_world_instances
 puzzle board {
 input right
-slots {
+layers {
 actor = Player
 }
 empty .
@@ -9782,7 +10712,7 @@ step board
         session
             .apply_input(&loaded, input_named(&loaded, "right"))
             .unwrap();
-        assert_eq!(session.screen(), "child_1");
+        assert_eq!(session.surface_state().focused_component(), "child_1");
     }
 
     #[test]
@@ -9842,7 +10772,7 @@ title = sequence_saved_puzzle
 puzzle default {
 var marks = 0
 
-slots {
+layers {
 actor = Player
 }
 
@@ -9908,11 +10838,11 @@ goto hub
         assert!(
             hub_scene.puzzles.contains_key("board"),
             "focused scene `{}` has puzzle instances {:?}",
-            session.screen(),
+            session.surface_state().focused_component(),
             hub_scene.puzzles.keys().collect::<Vec<_>>()
         );
         let hub_board = &hub_scene.puzzles["board"];
-        assert_eq!(session.screen(), "hub");
+        assert_eq!(session.surface_state().focused_component(), "hub");
         assert_eq!(hub_board.visible_variables(), &[1]);
     }
 
@@ -9930,7 +10860,7 @@ goto hub
 
         assert_eq!(session.level_index(), 1);
         assert_eq!(session.state(), &loaded.levels[1].initial_state);
-        assert_eq!(session.screen(), "playing");
+        assert_eq!(session.surface_state().focused_component(), "playing");
         assert!(!session.can_undo());
         assert!(!session.can_redo());
     }
@@ -9948,7 +10878,7 @@ goto hub
 
         assert_eq!(session.level_index(), 1);
         assert_eq!(session.state(), &loaded.levels[1].initial_state);
-        assert_eq!(session.screen(), "playing");
+        assert_eq!(session.surface_state().focused_component(), "playing");
     }
 
     #[test]
@@ -9966,7 +10896,7 @@ goto hub
 
         assert_eq!(session.level_index(), final_level);
         assert!(loaded.is_condition_true("win_conditions", session.state()));
-        assert_eq!(session.screen(), "playing");
+        assert_eq!(session.surface_state().focused_component(), "playing");
     }
 
     #[test]
@@ -9975,7 +10905,7 @@ goto hub
             r#"
 title = level_clear_hook
 puzzle sokoban {
-slots {
+layers {
 floor = Goal
 actor = Player Box Wall
 marker = ClearMark
@@ -10049,7 +10979,7 @@ text "done"
                 .state()
                 .has_object(&loaded.game, 3, 1, clear_visual)
         );
-        assert_eq!(session.screen(), "level_select");
+        assert_eq!(session.surface_state().focused_component(), "level_select");
         assert!(session.state().has_object(&loaded.game, 3, 1, clear_mark));
         assert!(session.state().has_object(&loaded.game, 3, 1, clear_visual));
     }
@@ -10060,7 +10990,7 @@ text "done"
             r#"
 title = wait_clear_snapshot
 puzzle sokoban {
-slots {
+layers {
 floor = Goal
 actor = Player Box Wall
 }
@@ -10146,7 +11076,7 @@ render {
 tween = true
 tween_duration = 80ms
 }
-slots {
+layers {
 actor = Player
 }
 empty .
@@ -10184,10 +11114,15 @@ P.
         assert!(session.is_waiting());
         let events = session.take_presentation_events();
         assert!(events.len() >= 2);
-        assert!(events[..events.len() - 1].iter().all(|event| matches!(
-            event.kind,
-            PresentationEventKind::Animation(AnimationEvent::Move { .. })
-        )));
+        assert_eq!(events.len(), 2);
+        assert!(matches!(
+            &events[0].kind,
+            PresentationEventKind::AnimationBatch(animations)
+                if !animations.is_empty()
+                    && animations
+                        .iter()
+                        .all(|animation| matches!(animation, AnimationEvent::Move { .. }))
+        ));
         assert_eq!(
             events.last().unwrap().kind,
             PresentationEventKind::Wait(WaitEvent::Wait { milliseconds: 80 })
@@ -10209,7 +11144,7 @@ P.
             r#"
 title = wait_statement_segments
 puzzle default {
-slots {
+layers {
 __legacy_layer_0 = A B C
 }
 empty .
@@ -10258,7 +11193,7 @@ A
         let source = r#"
 title = screen_history
 puzzle default {
-slots {
+layers {
 __legacy_layer_0 = Player
 }
 empty .
@@ -10302,14 +11237,14 @@ text "C"
         session
             .apply_command(&loaded, "goto b with mark = first")
             .unwrap();
-        assert_eq!(session.screen(), "b");
+        assert_eq!(session.surface_state().focused_component(), "b");
 
         session.apply_command(&loaded, "goto a").unwrap();
         session.apply_command(&loaded, "goto c").unwrap();
         session.apply_command(&loaded, "goto a").unwrap();
         session.apply_command(&loaded, "goto b").unwrap();
 
-        assert_eq!(session.screen(), "b");
+        assert_eq!(session.surface_state().focused_component(), "b");
         assert_eq!(
             session
                 .scene_state()
@@ -10323,7 +11258,7 @@ text "C"
         let source = r#"
 title = persistent_scene_var
 puzzle default {
-slots {
+layers {
 __legacy_layer_0 = Player
 }
 empty .
@@ -10382,7 +11317,7 @@ text tab
         let source = r#"
 title = scene_param_rejection
 puzzle default {
-slots {
+layers {
 __legacy_layer_0 = Player
 }
 empty .
@@ -10419,7 +11354,7 @@ text tab
         session
             .apply_command(&loaded, "goto menu with tab = settings")
             .unwrap();
-        assert_eq!(session.screen(), "menu");
+        assert_eq!(session.surface_state().focused_component(), "menu");
         assert_eq!(
             session
                 .scene_state()
@@ -10433,7 +11368,7 @@ text tab
         let source = r#"
 title = scene_state_words
 puzzle default {
-slots {
+layers {
 __legacy_layer_0 = Player
 }
 empty .
@@ -10476,7 +11411,7 @@ text "Menu"
         session
             .apply_command(&loaded, "goto playing with selected = first")
             .unwrap();
-        assert_eq!(session.screen(), "playing");
+        assert_eq!(session.surface_state().focused_component(), "playing");
         assert_eq!(
             session
                 .scene_state()
@@ -10487,7 +11422,7 @@ text "Menu"
         for old in ["resume playing", "open menu", "enter menu", "back", "close"] {
             session.apply_command(&loaded, old).unwrap();
             assert_eq!(
-                session.screen(),
+                session.surface_state().focused_component(),
                 "playing",
                 "{old} should not navigate scenes"
             );
@@ -10503,11 +11438,11 @@ text "Menu"
     }
 
     #[test]
-    fn scene_visibility_and_focus_are_separate() {
+    fn surface_keeps_component_order_visibility_and_focus_separate() {
         let source = r#"
 title = screen_focus
 puzzle default {
-slots {
+layers {
 __legacy_layer_0 = Player
 }
 empty .
@@ -10546,16 +11481,144 @@ text "Levels"
         let mut session = GameSession::new(&loaded);
         session.apply_command(&loaded, "goto playing").unwrap();
 
-        assert_eq!(session.screen(), "playing");
-        assert_eq!(session.visible_scenes(), &["playing".to_string()]);
+        assert_eq!(session.surface_state().root(), Some("playing"));
+        assert_eq!(session.surface_state().focused_component(), "playing");
+        assert_eq!(surface_component_ids(&session), vec!["playing".to_string()]);
 
-        session.apply_command(&loaded, "goto menu").unwrap();
-        assert_eq!(session.screen(), "menu");
-        assert_eq!(session.visible_scenes(), &["menu".to_string()]);
+        session
+            .apply_scene_effect(
+                &loaded,
+                &SceneEffect::Create {
+                    scene: "menu".into(),
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            session.surface_state().visibility("menu"),
+            ComponentVisibility::Hidden
+        );
+        session
+            .apply_scene_effect(
+                &loaded,
+                &SceneEffect::Show {
+                    scene: "menu".into(),
+                },
+            )
+            .unwrap();
+        assert_eq!(session.surface_state().focused_component(), "playing");
+        assert_eq!(
+            surface_component_ids(&session),
+            vec!["playing".to_string(), "menu".to_string()]
+        );
+        assert_eq!(
+            session.surface_state().visibility("menu"),
+            ComponentVisibility::Visible
+        );
+        session
+            .apply_scene_effect(
+                &loaded,
+                &SceneEffect::Create {
+                    scene: "level_select".into(),
+                },
+            )
+            .unwrap();
+        session
+            .apply_scene_effect(
+                &loaded,
+                &SceneEffect::Show {
+                    scene: "level_select".into(),
+                },
+            )
+            .unwrap();
+        session
+            .apply_scene_effect(
+                &loaded,
+                &SceneEffect::Move {
+                    component: "level_select".into(),
+                    order: ComponentOrder::First,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            surface_component_ids(&session),
+            vec![
+                "playing".to_string(),
+                "level_select".to_string(),
+                "menu".to_string()
+            ]
+        );
 
-        session.apply_command(&loaded, "goto level_select").unwrap();
-        assert_eq!(session.screen(), "level_select");
-        assert_eq!(session.visible_scenes(), &["level_select".to_string()]);
+        session
+            .apply_scene_effect(
+                &loaded,
+                &SceneEffect::Focus {
+                    scene: "menu".into(),
+                },
+            )
+            .unwrap();
+        assert_eq!(session.surface_state().focused_component(), "menu");
+        session
+            .apply_scene_effect(
+                &loaded,
+                &SceneEffect::Focus {
+                    scene: "level_select".into(),
+                },
+            )
+            .unwrap();
+        session
+            .apply_scene_effect(
+                &loaded,
+                &SceneEffect::Hide {
+                    scene: "menu".into(),
+                },
+            )
+            .unwrap();
+        assert_eq!(session.surface_state().focused_component(), "level_select");
+        assert_eq!(
+            surface_component_ids(&session),
+            vec![
+                "playing".to_string(),
+                "level_select".to_string(),
+                "menu".to_string()
+            ]
+        );
+        assert_eq!(
+            session.surface_state().visibility("menu"),
+            ComponentVisibility::Hidden
+        );
+
+        session
+            .apply_scene_effect(
+                &loaded,
+                &SceneEffect::Show {
+                    scene: "menu".into(),
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            surface_component_ids(&session),
+            vec![
+                "playing".to_string(),
+                "level_select".to_string(),
+                "menu".to_string()
+            ]
+        );
+
+        session
+            .apply_scene_effect(
+                &loaded,
+                &SceneEffect::Enter {
+                    scene: "level_select".into(),
+                    params: Vec::new(),
+                },
+            )
+            .unwrap();
+        assert_eq!(session.surface_state().root(), Some("level_select"));
+        assert_eq!(session.surface_state().focused_component(), "level_select");
+        assert_eq!(
+            surface_component_ids(&session),
+            vec!["level_select".to_string()]
+        );
     }
 
     #[test]
@@ -10563,7 +11626,7 @@ text "Levels"
         let source = r#"
 title = scene_state
 puzzle default {
-slots {
+layers {
 actor = Player
 }
 
@@ -10622,7 +11685,7 @@ Escape -> goto playing
         );
 
         session.apply_command(&loaded, "goto level_select").unwrap();
-        assert_eq!(session.screen(), "level_select");
+        assert_eq!(session.surface_state().focused_component(), "level_select");
         assert_eq!(
             session
                 .scene_state()
@@ -10631,7 +11694,7 @@ Escape -> goto playing
         );
 
         session.apply_command(&loaded, "goto playing").unwrap();
-        assert_eq!(session.screen(), "playing");
+        assert_eq!(session.surface_state().focused_component(), "playing");
         assert_eq!(
             session
                 .scene_state()
@@ -10647,7 +11710,7 @@ Escape -> goto playing
 title = rule_next_level
 
 puzzle board {
-slots {
+layers {
 floor = Goal
 actor = Box Player
 }
@@ -10694,7 +11757,7 @@ step board
         session.apply_input(&loaded, tick).unwrap();
 
         assert_eq!(session.level_index(), 1);
-        assert_eq!(session.screen(), "playing");
+        assert_eq!(session.surface_state().focused_component(), "playing");
         assert_eq!(session.state(), &loaded.levels[1].initial_state);
     }
 
@@ -10705,7 +11768,7 @@ step board
 title = condition_next_level
 
 puzzle board {
-slots {
+layers {
 floor = Goal
 actor = Box Player
 }
@@ -10757,7 +11820,7 @@ step board
         session.apply_input(&loaded, tick).unwrap();
 
         assert_eq!(session.level_index(), 1);
-        assert_eq!(session.screen(), "playing");
+        assert_eq!(session.surface_state().focused_component(), "playing");
         assert_eq!(session.state(), &loaded.levels[1].initial_state);
     }
 
@@ -10768,7 +11831,7 @@ step board
 title = runtime_level_start
 
 puzzle board {
-slots {
+layers {
 __legacy_layer_0 = Player
 __legacy_layer_1 = Started
 }
@@ -10816,14 +11879,12 @@ step board
                 .has_object(&loaded.game, 0, 0, started)
         );
 
-        let mut session = GameSession::new(&loaded);
+        let session = GameSession::new(&loaded);
 
         assert!(session.state().has_object(&loaded.game, 0, 0, started));
         assert_eq!(
-            message_events(&session.take_presentation_events()),
-            vec![MessageEvent::Message {
-                text: "started".to_string()
-            }]
+            presented_component_texts(&session),
+            vec!["started".to_string()]
         );
     }
 
@@ -10834,7 +11895,7 @@ step board
 title = level_message_sugar
 
 puzzle board {
-slots {
+layers {
 __legacy_layer_0 = Player
 }
 empty .
@@ -10879,20 +11940,17 @@ step board
 
         let mut session = GameSession::new(&loaded);
         assert_eq!(
-            message_events(&session.take_presentation_events()),
-            vec![MessageEvent::Message {
-                text: "enter one".to_string()
-            }]
+            presented_component_texts(&session),
+            vec!["enter one".to_string()]
         );
+        dismiss_top_component(&mut session, &loaded);
 
         let tick = input_named(&loaded, "tick");
         session.apply_input(&loaded, tick).unwrap();
 
         assert_eq!(
-            message_events(&session.take_presentation_events()),
-            vec![MessageEvent::Message {
-                text: "clear one".to_string()
-            }]
+            presented_component_texts(&session),
+            vec!["clear one".to_string()]
         );
     }
 
@@ -10909,7 +11967,7 @@ button "Play" -> goto playing
 }
 
 puzzle board {
-slots {
+layers {
 __legacy_layer_0 = Player
 }
 empty .
@@ -10945,18 +12003,16 @@ step board
         .unwrap();
 
         let mut session = GameSession::new(&loaded);
-        assert_eq!(session.scene(), "title");
+        assert_eq!(session.surface_state().focused_component(), "title");
         assert!(session.scene_state().unwrap().puzzles.is_empty());
-        assert!(message_events(&session.take_presentation_events()).is_empty());
+        assert!(presented_component_texts(&session).is_empty());
 
         session.apply_command(&loaded, "goto playing").unwrap();
-        assert_eq!(session.scene(), "playing");
+        assert_eq!(session.surface_state().focused_component(), "playing");
         assert_eq!(session.active_level_index(), Some(0));
         assert_eq!(
-            message_events(&session.take_presentation_events()),
-            vec![MessageEvent::Message {
-                text: "enter one".to_string()
-            }]
+            presented_component_texts(&session),
+            vec!["enter one".to_string()]
         );
     }
 
@@ -10969,7 +12025,7 @@ title = rule_next_level_turn_completion
 puzzle board {
 persistent var clear_seen = false
 
-slots {
+layers {
 floor = Goal
 actor = Box Player
 }
@@ -11025,14 +12081,13 @@ if board.win_conditions -> message "clear"
         session.apply_command(&loaded, "goto playing").unwrap();
         session.apply_input(&loaded, tick).unwrap();
 
+        assert_eq!(
+            presented_component_texts(&session),
+            vec!["clear".to_string()]
+        );
+        dismiss_top_component(&mut session, &loaded);
         assert_eq!(session.level_index(), 1);
         assert!(session.cleared_levels()[0]);
-        assert_eq!(
-            message_events(&session.take_presentation_events()),
-            vec![MessageEvent::Message {
-                text: "clear".to_string()
-            }]
-        );
         assert_eq!(session.state().visible_variables(), &[1]);
     }
 
@@ -11062,7 +12117,7 @@ sounds {
 sfx move { seed = move01; type = jump }
 }
 puzzle default {
-slots {
+layers {
 actor = Player
 }
 rules {
@@ -11149,7 +12204,7 @@ P.
             r#"
 title = headless_context_key
 puzzle default {
-slots { Player }
+layers { Player }
 input save
 rules {
 if input == save { checkpoint }

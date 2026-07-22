@@ -34,6 +34,7 @@ trait StandaloneSessionModel {
     fn snapshot_value(&mut self, has_progress_save: bool) -> Value;
     fn is_waiting(&self) -> bool;
     fn resume_wait(&mut self) -> Result<(), String>;
+    fn apply_component_event(&mut self, instance: &str, event: &str) -> Result<(), String>;
     fn apply_input_name(&mut self, input_name: &str) -> Result<(), String>;
     #[cfg(feature = "editor-debug")]
     fn apply_debug_input_name_json(&mut self, input_name: &str) -> Result<String, String>;
@@ -122,7 +123,12 @@ impl StandaloneSessionBridge {
 
     pub fn dispatch(&mut self, action: SessionAction) -> Result<String, String> {
         if self.model.is_waiting()
-            && !matches!(&action, SessionAction::Snapshot | SessionAction::Resume)
+            && !matches!(
+                &action,
+                SessionAction::Snapshot
+                    | SessionAction::Resume
+                    | SessionAction::ComponentEvent { .. }
+            )
         {
             return Err("session action is unavailable while a turn is waiting".to_string());
         }
@@ -130,6 +136,10 @@ impl StandaloneSessionBridge {
             SessionAction::Snapshot => Ok(self.snapshot_json()),
             SessionAction::Resume => {
                 self.model.resume_wait()?;
+                Ok(self.snapshot_json())
+            }
+            SessionAction::ComponentEvent { instance, event } => {
+                self.model.apply_component_event(&instance, &event)?;
                 Ok(self.snapshot_json())
             }
             SessionAction::Undo => {
@@ -261,8 +271,8 @@ where
     fn snapshot_value(&mut self, has_progress_save: bool) -> Value {
         let presentation_events = self.session.take_presentation_events();
         let busy = self.session.is_waiting();
-        let current_scene = self.session.focused_scene();
         let projected = self.projection.snapshot_grid(&self.loaded, &self.session);
+        let surface = surface_value(&self.session, projected.scene_layers.clone());
         let solver_state = self.projection.solver_state(self.session.state());
         let scene_state = scene_state_value(self.session.scene_state());
         let scene_puzzles = scene_puzzles_value(self.session.scene_state());
@@ -287,16 +297,12 @@ where
             "levelCount": self.loaded.levels.len(),
             "levels": levels,
             "scene": projected.scene,
-            "currentScene": current_scene,
-            "focusedScreen": current_scene,
-            "focusedScene": current_scene,
             "acceptsModelInput": self.session.accepts_model_input(&self.loaded),
-            "visibleScenes": self.session.visible_scenes(),
             "gameState": scene_values_value(self.session.session_values()),
             "sceneState": scene_state,
             "scenePuzzles": scene_puzzles,
             "scenePuzzleState": projected.scene_puzzle_state,
-            "sceneLayers": projected.scene_layers,
+            "surface": surface,
             "solverState": solver_state,
             "selectedLevelIndex": self.session.selected_level_index(),
             "busy": busy,
@@ -304,7 +310,6 @@ where
             "canRedo": self.session.can_redo(),
             "inputs": inputs_value(&self.loaded),
             "scenes": scenes_value(&self.loaded),
-            "screens": scenes_value(&self.loaded),
         })
     }
 
@@ -315,6 +320,12 @@ where
     fn resume_wait(&mut self) -> Result<(), String> {
         self.session
             .resume_wait(&self.loaded)
+            .map_err(|error| format!("{error:?}"))
+    }
+
+    fn apply_component_event(&mut self, instance: &str, event: &str) -> Result<(), String> {
+        self.session
+            .apply_component_event(&self.loaded, instance, event)
             .map_err(|error| format!("{error:?}"))
     }
 
@@ -457,16 +468,19 @@ impl GridSessionProjection<3, Size3> for SpatialProjection {
         session: &GridGameSession<3, Size3>,
     ) -> ProjectedGridSnapshot {
         let scene_puzzle_state = spatial_scene_puzzle_state_value(loaded, session);
-        let focused_scene = session.focused_scene();
+        let focused_scene = session.surface_state().focused_component();
         let scene = session
             .scene_state()
             .and_then(|state| state.puzzles.values().next())
             .map(|world| spatial_world_value(loaded, focused_scene, world))
             .unwrap_or(Value::Null);
         let scene_layers = session
-            .visible_scenes()
+            .surface_state()
+            .components()
             .iter()
-            .map(|name| {
+            .filter(|component| component.id == component.definition)
+            .map(|component| {
+                let name = &component.definition;
                 let state = session.scene_state_for(name);
                 let projected = state
                     .and_then(|state| state.puzzles.values().next())
@@ -505,7 +519,7 @@ fn spatial_scene_puzzle_state_value(
         .map(|(name, world)| {
             (
                 name.clone(),
-                spatial_world_value(loaded, session.focused_scene(), world),
+                spatial_world_value(loaded, session.surface_state().focused_component(), world),
             )
         })
         .collect();
@@ -521,7 +535,7 @@ fn spatial_world_value(
     let level = loaded.levels.get(level_index);
     let size = world.state.size;
     json!({
-        "currentScene": scene_name,
+        "component": scene_name,
         "levelIndex": level_index,
         "levelCount": loaded.levels.len(),
         "levelName": level.map(|level| &level.name),
@@ -571,12 +585,14 @@ fn compiled_state_value(state: &PuzzleState) -> Value {
 }
 
 fn focused_scene_value(loaded: &LoadedGame, session: &GameSession) -> Value {
-    if let Some((state, level)) = scene_puzzle_state(loaded, session, session.focused_scene()) {
+    if let Some((state, level)) =
+        scene_puzzle_state(loaded, session, session.surface_state().focused_component())
+    {
         return scene_value_for_state(
             loaded,
             state,
             level,
-            scene_resources(loaded, session.focused_scene()),
+            scene_resources(loaded, session.surface_state().focused_component()),
         );
     }
     if !loaded.scenes.is_empty() {
@@ -586,7 +602,7 @@ fn focused_scene_value(loaded: &LoadedGame, session: &GameSession) -> Value {
         loaded,
         session.state(),
         Some(session.current_level(loaded)),
-        scene_resources(loaded, session.focused_scene()),
+        scene_resources(loaded, session.surface_state().focused_component()),
     )
 }
 
@@ -664,22 +680,87 @@ fn scene_value_for_materialized_state(
 
 fn scene_layers_value(loaded: &LoadedGame, session: &GameSession) -> Vec<Value> {
     session
-        .visible_scenes()
+        .surface_state()
+        .components()
         .iter()
-        .map(|name| {
+        .filter(|component| component.id == component.definition)
+        .map(|component| {
+            let name = &component.definition;
             let state = session.scene_state_for(name);
             let scene = scene_puzzle_state(loaded, session, name).map(|(puzzle_state, level)| {
                 scene_value_for_state(loaded, puzzle_state, level, scene_resources(loaded, name))
             });
             json!({
                 "name": name,
-                "focused": name == session.focused_scene(),
+                "focused": name == session.surface_state().focused_component(),
                 "scene": scene,
                 "sceneState": scene_state_value(state),
                 "scenePuzzles": scene_puzzles_value(state),
             })
         })
         .collect()
+}
+
+fn surface_value<const D: usize, Size: GridSize<D>>(
+    session: &GridGameSession<D, Size>,
+    authored_components: Vec<Value>,
+) -> Value {
+    let components = session
+        .surface_state()
+        .components()
+        .iter()
+        .map(|component| {
+            let mut value = (component.id == component.definition)
+                .then(|| {
+                    authored_components.iter().find(|candidate| {
+                        candidate["name"].as_str() == Some(component.definition.as_str())
+                    })
+                })
+                .flatten()
+                .cloned()
+                .unwrap_or_else(|| json!({}));
+            let object = value
+                .as_object_mut()
+                .expect("surface component projection must be an object");
+            object.insert("id".to_string(), Value::String(component.id.clone()));
+            object.insert(
+                "definition".to_string(),
+                Value::String(component.definition.clone()),
+            );
+            object.insert(
+                "placement".to_string(),
+                serde_json::to_value(component.placement)
+                    .expect("component placement should serialize"),
+            );
+            object.insert(
+                "visibility".to_string(),
+                serde_json::to_value(component.visibility)
+                    .expect("component visibility should serialize"),
+            );
+            object.insert("modal".to_string(), Value::Bool(component.modal));
+            if !component.properties.is_empty() {
+                object.insert(
+                    "properties".to_string(),
+                    Value::Object(
+                        component
+                            .properties
+                            .iter()
+                            .map(|(name, value)| (name.clone(), scene_value_atom(value)))
+                            .collect(),
+                    ),
+                );
+            }
+            if let Some(event) = &component.awaited_event {
+                object.insert("awaitEvent".to_string(), Value::String(event.clone()));
+            }
+            value
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "root": session.surface_state().root(),
+        "focus": session.surface_state().focused_component(),
+        "components": components,
+    })
 }
 
 fn scene_puzzles_value<const D: usize, Size: GridSize<D>>(
@@ -714,7 +795,7 @@ fn scene_puzzle_state_value(loaded: &LoadedGame, session: &GameSession) -> Value
             loaded,
             &puzzle.state,
             level,
-            scene_resources(loaded, session.focused_scene()),
+            scene_resources(loaded, session.surface_state().focused_component()),
         ) {
             Value::Object(object) => object,
             _ => serde_json::Map::new(),
@@ -1588,7 +1669,7 @@ mod tests {
 title = "Runtime Scene Fixture"
 
 puzzle board {
-slots {
+layers {
 @Floor
 solid = Player Box Wall
 }
@@ -1669,7 +1750,7 @@ step board
         let source = r#"
 title = export_runtime_bundle
 puzzle default {
-slots {
+layers {
 __legacy_layer_0 = Player
 }
 empty .
@@ -1730,7 +1811,7 @@ P
         let source = r#"
 title = export_wait_segments
 puzzle default {
-slots {
+layers {
 __legacy_layer_0 = A B C
 }
 empty .
@@ -1819,7 +1900,7 @@ render {
 tween = true
 tween_duration = 80ms
 }
-slots {
+layers {
 actor = Player
 marker = Done
 }
@@ -1866,12 +1947,39 @@ P.
             if snapshot["busy"] != true {
                 break;
             }
-            snapshot =
-                serde_json::from_str(&bridge.dispatch(SessionAction::Resume).unwrap()).unwrap();
+            let modal = snapshot["surface"]["components"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .rev()
+                .find(|component| component["modal"] == true);
+            snapshot = if let Some(component) = modal {
+                event_kinds.push(format!(
+                    "component:{}",
+                    component["definition"].as_str().unwrap()
+                ));
+                serde_json::from_str(
+                    &bridge
+                        .dispatch(SessionAction::ComponentEvent {
+                            instance: component["id"].as_str().unwrap().to_string(),
+                            event: component["awaitEvent"].as_str().unwrap().to_string(),
+                        })
+                        .unwrap(),
+                )
+                .unwrap()
+            } else {
+                serde_json::from_str(&bridge.dispatch(SessionAction::Resume).unwrap()).unwrap()
+            };
         }
         assert_eq!(
             event_kinds,
-            vec!["wait", "message", "wait", "animation", "play_sfx", "wait"]
+            vec![
+                "wait",
+                "component:standard.message",
+                "animation_batch",
+                "play_sfx",
+                "wait"
+            ]
         );
         assert!(cell_has_object(&snapshot["scene"]["cells"][1], "Done"));
     }
@@ -1899,7 +2007,7 @@ P.
 title = "Debug Trace"
 
 puzzle main {
-  slots {
+  layers {
     actor = Player
   }
 
@@ -1930,7 +2038,7 @@ levels main of main {
         )
         .unwrap();
 
-        assert_eq!(body["snapshot"]["currentScene"], "main");
+        assert_eq!(body["snapshot"]["surface"]["focus"], "main");
         assert_eq!(body["debug"]["input"], "right");
         assert_eq!(body["debug"]["executions"].as_array().unwrap().len(), 1);
         assert_eq!(body["debug"]["executions"][0]["patch"][0]["kind"], "remove");
@@ -1944,12 +2052,12 @@ levels main of main {
 
         let initial: Value =
             serde_json::from_str(&bridge.dispatch(SessionAction::Snapshot).unwrap()).unwrap();
-        assert_eq!(initial["currentScene"], "board");
+        assert_eq!(initial["surface"]["focus"], "board");
         assert_eq!(initial["title"], "Runtime Scene Fixture");
         assert_eq!(initial["solverState"]["kind"], "2d");
         assert!(initial["solverState"]["slots"].is_array());
-        assert!(initial["solverState"]["slotMarks"].is_array());
-        assert!(initial["solverState"]["cellMarks"].is_array());
+        assert!(initial["solverState"].get("slotMarks").is_none());
+        assert!(initial["solverState"].get("cellMarks").is_none());
         let title = initial["scenes"]
             .as_array()
             .unwrap()
@@ -1967,7 +2075,7 @@ levels main of main {
                 .unwrap(),
         )
         .unwrap();
-        assert_eq!(playing["currentScene"], "playing");
+        assert_eq!(playing["surface"]["focus"], "playing");
         assert_eq!(playing["levelIndex"], 0);
 
         let save: Value = serde_json::from_str(&bridge.progress_save_json()).unwrap();
@@ -2011,7 +2119,7 @@ levels main of main {
         let source = r#"
 title = runtime_focus
 puzzle default {
-slots {
+layers {
 actor = Player
 }
 empty .
@@ -2056,9 +2164,9 @@ text "Select"
                 .unwrap(),
         )
         .unwrap();
-        assert_eq!(select["currentScene"], json!("level_select"));
+        assert_eq!(select["surface"]["focus"], json!("level_select"));
         assert!(select["scene"].is_null());
-        assert!(select["sceneLayers"][0]["scene"].is_null());
+        assert!(select["surface"]["components"][0]["scene"].is_null());
 
         let after_input: Value = serde_json::from_str(
             &bridge
@@ -2068,7 +2176,7 @@ text "Select"
                 .unwrap(),
         )
         .unwrap();
-        assert_eq!(after_input["currentScene"], json!("level_select"));
+        assert_eq!(after_input["surface"]["focus"], json!("level_select"));
         assert!(after_input["scene"].is_null());
         assert_eq!(after_input["presentationEvents"], json!([]));
     }
@@ -2079,7 +2187,7 @@ text "Select"
 title = editor_state_start
 
 puzzle board {
-slots {
+layers {
 actor = Player
 }
 empty .
@@ -2159,11 +2267,14 @@ step board
         );
 
         let playing = start_spec_2d_new_game(&mut bridge);
-        assert_eq!(playing["currentScene"], "playing");
+        assert_eq!(playing["surface"]["focus"], "playing");
         assert_eq!(playing["levelIndex"], 0);
         assert_eq!(playing["scenePuzzles"], json!(["board"]));
         let playing_object = playing.as_object().unwrap();
-        assert!(playing_object.contains_key("visibleScenes"));
+        assert!(playing_object.contains_key("surface"));
+        assert!(!playing_object.contains_key("visibleScenes"));
+        assert!(!playing_object.contains_key("sceneLayers"));
+        assert!(!playing_object.contains_key("currentScene"));
         assert!(playing_object.contains_key("sceneState"));
         assert!(playing_object.contains_key("scenePuzzles"));
         assert!(!playing_object.contains_key("visibleScreens"));
@@ -2277,7 +2388,7 @@ puzzle mover {
     tween = true
     tween_duration = 300ms
   }
-  slots {
+  layers {
     actor = Player
   }
   rules {
@@ -2315,7 +2426,7 @@ scene playing {
                 .unwrap(),
         )
         .unwrap();
-        assert_eq!(playing["currentScene"], "playing");
+        assert_eq!(playing["surface"]["focus"], "playing");
         assert_eq!(playing["levelIndex"], 0);
 
         let moved: Value = serde_json::from_str(
@@ -2326,11 +2437,13 @@ scene playing {
                 .unwrap(),
         )
         .unwrap();
+        assert_eq!(moved["presentationEvents"][0]["kind"], "animation_batch");
         assert_eq!(
-            moved["presentationEvents"][0]["animation"],
+            moved["presentationEvents"][0]["animations"][0],
             json!({
                 "kind": "move",
                 "name": "tween",
+                "occurrenceId": 1,
                 "objectId": 1,
                 "from": { "x": 0, "y": 0 },
                 "to": { "x": 1, "y": 0 }
@@ -2350,7 +2463,7 @@ puzzle mover {
     tween = true
     tween_duration = 120ms
   }
-  slots {
+  layers {
     actor = Player
   }
   rules {
@@ -2388,14 +2501,15 @@ levels default of mover {
                 "scene": "mover",
                 "puzzle": "mover",
                 "levelIndex": 0,
-                "kind": "animation",
-                "animation": {
+                "kind": "animation_batch",
+                "animations": [{
                     "kind": "move",
                     "name": "tween",
+                    "occurrenceId": 1,
                     "objectId": 1,
                     "from": { "x": 0, "y": 0, "z": 0 },
                     "to": { "x": 1, "y": 0, "z": 0 }
-                }
+                }]
             }])
         );
         assert_eq!(
@@ -2466,10 +2580,10 @@ levels default of mover {
             .expect("spatial document should use the shared grid session");
 
         let snapshot: Value = serde_json::from_str(&bridge.snapshot_json()).unwrap();
-        assert_eq!(snapshot["currentScene"], "sokoban");
+        assert_eq!(snapshot["surface"]["focus"], "sokoban");
         assert_eq!(snapshot["solverState"]["kind"], "puzzle3d");
-        assert!(snapshot["solverState"]["slotMarks"].is_array());
-        assert!(snapshot["solverState"]["cellMarks"].is_array());
+        assert!(snapshot["solverState"].get("slotMarks").is_none());
+        assert!(snapshot["solverState"].get("cellMarks").is_none());
         assert!(snapshot["scenePuzzleState"]["sokoban"]["cells"].is_array());
         assert!(
             snapshot["scenePuzzleState"]["sokoban"]
@@ -2547,7 +2661,7 @@ levels default of mover {
 title = Session parity
 puzzle board {{
   {dimension}
-  slots {{ actor = A B C D E }}
+  layers {{ actor = A B C D E }}
   rules {{ [ C ] -> [ D ] }}
 }}
 levels default of board {{

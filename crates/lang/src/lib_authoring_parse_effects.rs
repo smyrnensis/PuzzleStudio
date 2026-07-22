@@ -476,7 +476,7 @@ impl EffectAst {
             | EffectAst::Wait { .. }
             | EffectAst::WaitAnimation
             | EffectAst::EmitVisual { .. }
-            | EffectAst::Message { .. }
+            | EffectAst::PresentComponent { .. }
             | EffectAst::Scene(_) => RewriteEffectCommandSyntax::Emission,
             EffectAst::Cancel
             | EffectAst::Win
@@ -912,7 +912,7 @@ fn resolve_default_wait_in_effect(effect: &mut SceneEffect, default_wait_ms: u64
         SceneEffect::Input(_)
         | SceneEffect::ComponentEffect(_)
         | SceneEffect::RoutineCall(_)
-        | SceneEffect::Message { .. }
+        | SceneEffect::PresentComponent { .. }
         | SceneEffect::PlaySfx { .. }
         | SceneEffect::PlayMusic { .. }
         | SceneEffect::PauseMusic { .. }
@@ -928,6 +928,7 @@ fn resolve_default_wait_in_effect(effect: &mut SceneEffect, default_wait_ms: u64
         | SceneEffect::Hide { .. }
         | SceneEffect::Toggle { .. }
         | SceneEffect::Focus { .. }
+        | SceneEffect::Move { .. }
         | SceneEffect::PuzzleNextLevel { .. }
         | SceneEffect::PuzzlePreviousLevel { .. }
         | SceneEffect::GotoLevel { .. }

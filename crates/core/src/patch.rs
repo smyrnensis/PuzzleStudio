@@ -1,6 +1,6 @@
 use crate::compiled_game::{MarkValueMatch, VariableUpdateOp};
 use crate::ids::{LayerId, MarkId, ObjectId, VariableId};
-use crate::state::{GridSize, GridState, GridStateError};
+use crate::state::{GridExecutionState, GridSize, GridState, GridStateError};
 use puzzle_kernel::{CompiledGameModel, GridCoord, GridPatchOp};
 
 pub type PatchOp<const D: usize = 2> = GridPatchOp<GridCoord<D>, ObjectId, VariableId, MarkId>;
@@ -67,9 +67,9 @@ impl<const D: usize> GridPatch<D> {
     where
         Size: GridSize<D>,
     {
-        let mut next = state.clone();
-        self.apply_in_place(game, &mut next)?;
-        Ok(next)
+        let mut execution = GridExecutionState::new(state.clone());
+        self.apply_execution_in_place(game, &mut execution)?;
+        Ok(execution.into_committed())
     }
 
     pub fn apply_in_place<Size, ConditionDef, Rule, Condition, Frame>(
@@ -80,7 +80,21 @@ impl<const D: usize> GridPatch<D> {
     where
         Size: GridSize<D>,
     {
-        let changed = self.validate(game, state)?;
+        let mut execution = GridExecutionState::new(state.clone());
+        let changed = self.apply_execution_in_place(game, &mut execution)?;
+        *state = execution.into_committed();
+        Ok(changed)
+    }
+
+    pub(crate) fn apply_execution_in_place<Size, ConditionDef, Rule, Condition, Frame>(
+        &self,
+        game: &CompiledGameModel<ConditionDef, Rule, Condition, Frame>,
+        state: &mut GridExecutionState<D, Size>,
+    ) -> Result<bool, GridPatchError<D>>
+    where
+        Size: GridSize<D>,
+    {
+        let changed = self.validate_execution(game, state)?;
         apply_moves(game, state, &self.ops)?;
 
         for op in &self.ops {
@@ -127,6 +141,18 @@ impl<const D: usize> GridPatch<D> {
         &self,
         game: &CompiledGameModel<ConditionDef, Rule, Condition, Frame>,
         state: &GridState<D, Size>,
+    ) -> Result<bool, GridPatchError<D>>
+    where
+        Size: GridSize<D>,
+    {
+        let execution = GridExecutionState::new(state.clone());
+        self.validate_execution(game, &execution)
+    }
+
+    pub(crate) fn validate_execution<Size, ConditionDef, Rule, Condition, Frame>(
+        &self,
+        game: &CompiledGameModel<ConditionDef, Rule, Condition, Frame>,
+        state: &GridExecutionState<D, Size>,
     ) -> Result<bool, GridPatchError<D>>
     where
         Size: GridSize<D>,
@@ -287,7 +313,7 @@ impl<const D: usize> SlotOverlay<D> {
 
     fn get<Size: GridSize<D>>(
         &self,
-        state: &GridState<D, Size>,
+        state: &GridExecutionState<D, Size>,
         position: GridCoord<D>,
         layer: LayerId,
     ) -> Result<ObjectId, GridPatchError<D>> {
@@ -322,7 +348,7 @@ impl<const D: usize> SlotOverlay<D> {
 
     fn changed<Size: GridSize<D>>(
         &self,
-        state: &GridState<D, Size>,
+        state: &GridExecutionState<D, Size>,
     ) -> Result<bool, GridPatchError<D>> {
         self.slots
             .iter()
@@ -342,7 +368,7 @@ fn object_layer<ConditionDef, Rule, Condition, Frame, const D: usize>(
 
 fn apply_add<Size, ConditionDef, Rule, Condition, Frame, const D: usize>(
     game: &CompiledGameModel<ConditionDef, Rule, Condition, Frame>,
-    state: &mut GridState<D, Size>,
+    state: &mut GridExecutionState<D, Size>,
     position: GridCoord<D>,
     object: ObjectId,
 ) -> Result<(), GridPatchError<D>>
@@ -359,7 +385,7 @@ where
 
 fn apply_remove<Size, ConditionDef, Rule, Condition, Frame, const D: usize>(
     game: &CompiledGameModel<ConditionDef, Rule, Condition, Frame>,
-    state: &mut GridState<D, Size>,
+    state: &mut GridExecutionState<D, Size>,
     position: GridCoord<D>,
     object: ObjectId,
 ) -> Result<(), GridPatchError<D>>
@@ -382,7 +408,7 @@ where
 
 fn validate_moves<Size, ConditionDef, Rule, Condition, Frame, const D: usize>(
     game: &CompiledGameModel<ConditionDef, Rule, Condition, Frame>,
-    state: &GridState<D, Size>,
+    state: &GridExecutionState<D, Size>,
     ops: &[PatchOp<D>],
     slots: &mut SlotOverlay<D>,
 ) -> Result<(), GridPatchError<D>>
@@ -402,7 +428,7 @@ where
 
 fn apply_moves<Size, ConditionDef, Rule, Condition, Frame, const D: usize>(
     game: &CompiledGameModel<ConditionDef, Rule, Condition, Frame>,
-    state: &mut GridState<D, Size>,
+    state: &mut GridExecutionState<D, Size>,
     ops: &[PatchOp<D>],
 ) -> Result<(), GridPatchError<D>>
 where
@@ -423,7 +449,7 @@ where
 
 fn validated_moves<Size, ConditionDef, Rule, Condition, Frame, const D: usize>(
     game: &CompiledGameModel<ConditionDef, Rule, Condition, Frame>,
-    state: &GridState<D, Size>,
+    state: &GridExecutionState<D, Size>,
     ops: &[PatchOp<D>],
 ) -> Result<Vec<(GridCoord<D>, GridCoord<D>, LayerId, ObjectId)>, GridPatchError<D>>
 where
@@ -454,7 +480,7 @@ where
 
 fn apply_set_mark<Size, ConditionDef, Rule, Condition, Frame, const D: usize>(
     game: &CompiledGameModel<ConditionDef, Rule, Condition, Frame>,
-    state: &mut GridState<D, Size>,
+    state: &mut GridExecutionState<D, Size>,
     position: GridCoord<D>,
     object: ObjectId,
     mark: MarkId,
@@ -475,7 +501,7 @@ where
 #[allow(clippy::too_many_arguments)]
 fn apply_remove_mark<Size, ConditionDef, Rule, Condition, Frame, const D: usize>(
     game: &CompiledGameModel<ConditionDef, Rule, Condition, Frame>,
-    state: &mut GridState<D, Size>,
+    state: &mut GridExecutionState<D, Size>,
     position: GridCoord<D>,
     object: ObjectId,
     mark: MarkId,
@@ -502,7 +528,7 @@ where
 
 fn expect_object_at<Size, ConditionDef, Rule, Condition, Frame, const D: usize>(
     game: &CompiledGameModel<ConditionDef, Rule, Condition, Frame>,
-    state: &GridState<D, Size>,
+    state: &GridExecutionState<D, Size>,
     position: GridCoord<D>,
     object: ObjectId,
 ) -> Result<LayerId, GridPatchError<D>>
@@ -524,7 +550,7 @@ where
 
 fn expect_object_in_overlay<Size, ConditionDef, Rule, Condition, Frame, const D: usize>(
     game: &CompiledGameModel<ConditionDef, Rule, Condition, Frame>,
-    state: &GridState<D, Size>,
+    state: &GridExecutionState<D, Size>,
     slots: &SlotOverlay<D>,
     position: GridCoord<D>,
     object: ObjectId,
@@ -546,7 +572,7 @@ where
 }
 
 fn validate_variable_update<Size: GridSize<D>, const D: usize>(
-    state: &GridState<D, Size>,
+    state: &GridExecutionState<D, Size>,
     variable: VariableId,
     op: VariableUpdateOp,
     value: i64,
@@ -598,8 +624,9 @@ mod tests {
             }],
             Vec::new(),
         );
-        let mut state = State::empty(1, 1, 1, 1).unwrap();
-        state.place_object(&game, 0, 0, object).unwrap();
+        let mut committed = State::empty(1, 1, 1, 1).unwrap();
+        committed.place_object(&game, 0, 0, object).unwrap();
+        let mut state = GridExecutionState::new(committed);
         state.set_mark_unchecked(position(0, 0), LayerId(0), mark, Some(7));
 
         let patch = Patch::from_ops(vec![
@@ -616,9 +643,10 @@ mod tests {
             },
         ]);
 
-        let next = patch.apply(&game, &state).unwrap();
+        let mut next = state.clone();
+        patch.apply_execution_in_place(&game, &mut next).unwrap();
         assert_eq!(next.get_layer(0, 0, LayerId(0)).unwrap(), ObjectId::EMPTY);
-        assert!(next.slot_mark().iter().all(Vec::is_empty));
+        assert!(!next.has_mark_at(&game, position(0, 0), object, mark, Some(7)));
     }
 
     #[test]
@@ -671,20 +699,22 @@ mod tests {
             ],
             Vec::new(),
         );
-        let mut state = State::empty(1, 1, 1, 2).unwrap();
-        state.place_object(&game, 0, 0, existing).unwrap();
+        let mut committed = State::empty(1, 1, 1, 2).unwrap();
+        committed.place_object(&game, 0, 0, existing).unwrap();
+        let mut state = GridExecutionState::new(committed);
         state.set_mark_unchecked(position(0, 0), LayerId(0), mark, Some(7));
 
         let patch = Patch::from_ops(vec![PatchOp::Add {
             position: position(0, 0),
             object: added,
         }]);
-        let next = patch.apply(&game, &state).unwrap();
+        let mut next = state.clone();
+        patch.apply_execution_in_place(&game, &mut next).unwrap();
 
         assert_eq!(next.get_layer(0, 0, LayerId(0)).unwrap(), added);
         assert_eq!(next.object_count(existing), 0);
         assert_eq!(next.object_count(added), 1);
-        assert!(next.slot_mark().iter().all(Vec::is_empty));
+        assert!(!next.has_mark_at(&game, position(0, 0), added, mark, Some(7)));
     }
 
     #[test]
@@ -699,16 +729,18 @@ mod tests {
             }],
             Vec::new(),
         );
-        let mut state = State::empty(1, 1, 1, 1).unwrap();
-        state.place_object(&game, 0, 0, object).unwrap();
+        let mut committed = State::empty(1, 1, 1, 1).unwrap();
+        committed.place_object(&game, 0, 0, object).unwrap();
+        let mut state = GridExecutionState::new(committed);
         state.set_mark_unchecked(position(0, 0), LayerId(0), mark, Some(7));
 
         let patch = Patch::from_ops(vec![PatchOp::Add {
             position: position(0, 0),
             object,
         }]);
-        let next = patch.apply(&game, &state).unwrap();
-        assert!(next.has_mark(&game, 0, 0, object, mark, Some(7)));
+        let mut next = state.clone();
+        patch.apply_execution_in_place(&game, &mut next).unwrap();
+        assert!(next.has_mark_at(&game, position(0, 0), object, mark, Some(7)));
     }
 
     #[test]
@@ -800,9 +832,10 @@ mod tests {
             ],
             Vec::new(),
         );
-        let mut state = State::empty(2, 1, 1, 2).unwrap();
-        state.place_object(&game, 0, 0, moved).unwrap();
-        state.place_object(&game, 1, 0, displaced).unwrap();
+        let mut committed = State::empty(2, 1, 1, 2).unwrap();
+        committed.place_object(&game, 0, 0, moved).unwrap();
+        committed.place_object(&game, 1, 0, displaced).unwrap();
+        let mut state = GridExecutionState::new(committed);
         state.set_mark_unchecked(position(0, 0), LayerId(0), mark, Some(1));
         state.set_mark_unchecked(position(1, 0), LayerId(0), mark, Some(2));
 
@@ -811,14 +844,15 @@ mod tests {
             to: position(1, 0),
             object: moved,
         }]);
-        let next = patch.apply(&game, &state).unwrap();
+        let mut next = state.clone();
+        patch.apply_execution_in_place(&game, &mut next).unwrap();
 
         assert_eq!(next.get_layer(0, 0, LayerId(0)).unwrap(), ObjectId::EMPTY);
         assert_eq!(next.get_layer(1, 0, LayerId(0)).unwrap(), moved);
         assert_eq!(next.object_count(moved), 1);
         assert_eq!(next.object_count(displaced), 0);
-        assert!(next.has_mark(&game, 1, 0, moved, mark, Some(1)));
-        assert!(!next.has_mark(&game, 1, 0, moved, mark, Some(2)));
+        assert!(next.has_mark_at(&game, position(1, 0), moved, mark, Some(1)));
+        assert!(!next.has_mark_at(&game, position(1, 0), moved, mark, Some(2)));
     }
 
     #[test]

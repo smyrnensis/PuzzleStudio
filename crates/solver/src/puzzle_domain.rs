@@ -25,7 +25,7 @@ mod tests {
 title = solver_push_goal
 
 puzzle default {
-slots {
+layers {
 floor = Goal
 actor = Player Box Wall
 }
@@ -95,7 +95,7 @@ PBG
 title = solver_depth_budget
 
 puzzle default {
-slots {
+layers {
 floor = Goal
 actor = Player Box
 }
@@ -159,7 +159,7 @@ PBG
 title = mark_solver
 
 puzzle default {
-slots {
+layers {
 floor = Goal
 actor = Player Box Wall
 }
@@ -220,8 +220,6 @@ PBG
 
         let solved = domain.step(&initial, &right).unwrap();
         assert!(loaded.is_goal_complete(solved.state()));
-        assert!(solved.state().slot_mark().iter().all(Vec::is_empty));
-        assert!(solved.state().cell_mark().iter().all(Vec::is_empty));
     }
 
     #[test]
@@ -230,7 +228,7 @@ PBG
 title = solver_state_slicer
 
 puzzle default {
-slots {
+layers {
 actor = Player Floor
 }
 
@@ -289,7 +287,7 @@ PF
 title = win_solver
 
 puzzle board {
-slots {
+layers {
 actor = Player Exit
 }
 
@@ -343,7 +341,7 @@ PE
         let source = r#"
 title = completion_observation
 puzzle default {
-slots {
+layers {
 floor = Goal
 actor = Player Box Wall
 }
@@ -413,7 +411,7 @@ level "second" {
 title = random_solver
 
 puzzle default {
-slots {
+layers {
 actor = A B
 }
 empty .

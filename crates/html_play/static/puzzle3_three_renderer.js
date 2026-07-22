@@ -903,34 +903,30 @@ function voxelInstances(frame, position, object, sourceKey, objectOrder = 0) {
   const animation = animationForObjectAtPosition(frame, object, position);
   const offset = animationOffset3(frame, animation);
   const spatialAffine = animationSpatialAffine(frame, object, animation);
+  const mirrored = affineDeterminant3(spatialAffine) < 0;
   base.x += offset.x;
   base.y += offset.y;
   base.z += offset.z;
   return visual.voxels.map((voxel) => {
-    const local = Puzzle3VisualCore.transformSpatialPoint(
-      visualVoxelLocalPosition(voxel, size, step),
-      spatialAffine,
-    );
-    const localGrid = Puzzle3VisualCore.spatialGridPoint(local, step);
-    const renderPosition = {
-      x: base.x + local.x,
-      y: base.y + local.z,
-      z: base.z - local.y,
-    };
-    const stackPosition = {
-      x: base.x + local.x,
-      y: base.y + local.z,
-      z: base.z - local.y,
-    };
+    const visualLocalPosition = visualVoxelLocalPosition(voxel, size, step);
+    const visualLocalGrid = Puzzle3VisualCore.spatialGridPoint(visualLocalPosition, step);
+    const renderLocalPosition = visualPointToRenderPoint(visualLocalPosition);
+    const localBounds = voxelBounds(renderLocalPosition, step);
+    const renderPosition = transformRenderLocalPoint(renderLocalPosition, spatialAffine, base);
     return {
       fill: voxel.fill,
       color: voxel.color,
       opaque: voxel.opaque,
       scale: step,
-      grid: { x: localGrid.x, y: localGrid.z, z: -localGrid.y },
+      grid: { x: visualLocalGrid.x, y: visualLocalGrid.z, z: -visualLocalGrid.y },
+      localPosition: renderLocalPosition,
+      localBounds,
+      spatialAffine,
+      renderBase: base,
+      mirrored,
       position: renderPosition,
-      stackPosition,
-      bounds: voxelBounds(renderPosition, step),
+      stackPosition: renderPosition,
+      bounds: transformedVoxelBounds(renderPosition, step, spatialAffine),
       sourceKey,
       objectOrder,
       frameOrder: frame.order,
@@ -1043,15 +1039,30 @@ function mergedVoxelFaces(voxels, occupied) {
             scale: voxel.scale,
             planeIndex: info.planeIndex,
             fill: voxel.fill,
+            spatialAffine: voxel.spatialAffine,
+            renderBase: voxel.renderBase,
+            mirrored: voxel.mirrored === true,
           },
         };
       },
-      face: (group, rect) => faceGeometry(mergedVoxelFaceCorners(group, rect), group.fill, group.objectOrder, group.side),
+      face: (group, rect) => faceGeometry(
+        mergedVoxelFaceCorners(group, rect),
+        group.fill,
+        group.objectOrder,
+        group.side,
+        group.mirrored,
+      ),
     });
   }
   return voxels.flatMap((voxel) => voxelFaces(voxel)
     .filter((face) => !isVoxelFaceOccluded(voxel, face.offset, occupied))
-    .map((face) => faceGeometry(face.corners, voxel.fill, voxel.objectOrder, face.side)));
+    .map((face) => faceGeometry(
+      face.corners,
+      voxel.fill,
+      voxel.objectOrder,
+      face.side,
+      voxel.mirrored,
+    )));
 }
 
 function isVoxelFaceOccluded(voxel, offset, occupied) {
@@ -1068,8 +1079,9 @@ function isVoxelFaceOccluded(voxel, offset, occupied) {
 }
 
 function voxelFaces(voxel) {
-  const { x0, x1, y0, y1, z0, z1 } = voxel.bounds;
-  return [
+  const bounds = voxel.localBounds || voxel.bounds;
+  const { x0, x1, y0, y1, z0, z1 } = bounds;
+  const faces = [
     {
       side: "zNeg",
       offset: { x: 0, y: 0, z: -1 },
@@ -1101,13 +1113,25 @@ function voxelFaces(voxel) {
       corners: [{ x: x0, y: y0, z: z0 }, { x: x1, y: y0, z: z0 }, { x: x1, y: y0, z: z1 }, { x: x0, y: y0, z: z1 }],
     },
   ];
+  if (!voxel.spatialAffine || !voxel.renderBase) {
+    return faces;
+  }
+  return faces.map((face) => ({
+    ...face,
+    corners: face.corners.map((corner) => transformRenderLocalPoint(
+      corner,
+      voxel.spatialAffine,
+      voxel.renderBase,
+    )),
+  }));
 }
 
 function voxelFaceGroupInfo(voxel, side) {
+  const bounds = voxel.localBounds || voxel.bounds;
   const origin = {
-    x: voxel.bounds.x0 - voxel.grid.x * voxel.scale,
-    y: voxel.bounds.y0 - voxel.grid.y * voxel.scale,
-    z: voxel.bounds.z0 - voxel.grid.z * voxel.scale,
+    x: bounds.x0 - voxel.grid.x * voxel.scale,
+    y: bounds.y0 - voxel.grid.y * voxel.scale,
+    z: bounds.z0 - voxel.grid.z * voxel.scale,
   };
   if (side === "zNeg") {
     return { origin, planeIndex: voxel.grid.z, u: voxel.grid.x, v: voxel.grid.y };
@@ -1128,6 +1152,18 @@ function voxelFaceGroupInfo(voxel, side) {
 }
 
 function mergedVoxelFaceCorners(group, rect) {
+  const corners = mergedVoxelFaceLocalCorners(group, rect);
+  if (!group.spatialAffine || !group.renderBase) {
+    return corners;
+  }
+  return corners.map((corner) => transformRenderLocalPoint(
+    corner,
+    group.spatialAffine,
+    group.renderBase,
+  ));
+}
+
+function mergedVoxelFaceLocalCorners(group, rect) {
   const plane = axisValue(group.origin, group.side[0], group.planeIndex, group.scale);
   const a0 = rect.u0;
   const a1 = rect.u1 + 1;
@@ -1185,17 +1221,20 @@ function axisValue(origin, axis, index, scale) {
   return origin[axis] + index * scale;
 }
 
-function faceGeometry(corners, fill, objectOrder = 0, side = "") {
-  return { corners, fill, objectOrder, side };
+function faceGeometry(corners, fill, objectOrder = 0, side = "", mirrored = false) {
+  return { corners, fill, objectOrder, side, mirrored };
 }
 
 function faceBufferGeometry(THREE, faces) {
   const positions = [];
   const normals = [];
   for (const face of faces) {
-    const normal = faceNormal(face.side, face.corners);
+    const normal = faceNormal(face.corners, face.mirrored === true);
     const corners = face.corners || [];
-    for (const index of [0, 1, 2, 0, 2, 3]) {
+    const indices = face.mirrored
+      ? [0, 2, 1, 0, 3, 2]
+      : [0, 1, 2, 0, 2, 3];
+    for (const index of indices) {
       const point = corners[index];
       positions.push(point.x, point.y, point.z);
       normals.push(normal.x, normal.y, normal.z);
@@ -1207,25 +1246,7 @@ function faceBufferGeometry(THREE, faces) {
   return geometry;
 }
 
-function faceNormal(side, corners) {
-  if (side === "xNeg") {
-    return { x: -1, y: 0, z: 0 };
-  }
-  if (side === "xPos") {
-    return { x: 1, y: 0, z: 0 };
-  }
-  if (side === "yNeg") {
-    return { x: 0, y: -1, z: 0 };
-  }
-  if (side === "yPos") {
-    return { x: 0, y: 1, z: 0 };
-  }
-  if (side === "zNeg") {
-    return { x: 0, y: 0, z: -1 };
-  }
-  if (side === "zPos") {
-    return { x: 0, y: 0, z: 1 };
-  }
+function faceNormal(corners, mirrored = false) {
   const [a, b, c] = corners || [];
   if (!a || !b || !c) {
     return { x: 0, y: 1, z: 0 };
@@ -1240,7 +1261,12 @@ function faceNormal(side, corners) {
   const ny = uz * vx - ux * vz;
   const nz = ux * vy - uy * vx;
   const length = Math.hypot(nx, ny, nz) || 1;
-  return { x: nx / length, y: ny / length, z: nz / length };
+  const direction = mirrored ? -1 : 1;
+  return {
+    x: direction * nx / length,
+    y: direction * ny / length,
+    z: direction * nz / length,
+  };
 }
 
 function faceMaterial(THREE, fill, cache) {
@@ -1273,6 +1299,50 @@ function visualVoxelLocalPosition(voxel, size, step) {
   };
 }
 
+function visualPointToRenderPoint(point) {
+  return { x: point.x, y: point.z, z: -point.y };
+}
+
+function renderPointToVisualPoint(point) {
+  return { x: point.x, y: -point.z, z: point.y };
+}
+
+function transformRenderLocalPoint(point, spatialAffine, base) {
+  const transformed = Puzzle3VisualCore.transformSpatialPoint(
+    renderPointToVisualPoint(point),
+    spatialAffine,
+  );
+  const render = visualPointToRenderPoint(transformed);
+  return {
+    x: base.x + render.x,
+    y: base.y + render.y,
+    z: base.z + render.z,
+  };
+}
+
+function transformedVoxelBounds(center, scale, spatialAffine) {
+  const [a, b, c] = spatialAffine;
+  const half = scale / 2;
+  const extentX = half * (Math.abs(a[0]) + Math.abs(a[2]) + Math.abs(a[1]));
+  const extentY = half * (Math.abs(c[0]) + Math.abs(c[2]) + Math.abs(c[1]));
+  const extentZ = half * (Math.abs(b[0]) + Math.abs(b[2]) + Math.abs(b[1]));
+  return {
+    x0: center.x - extentX,
+    x1: center.x + extentX,
+    y0: center.y - extentY,
+    y1: center.y + extentY,
+    z0: center.z - extentZ,
+    z1: center.z + extentZ,
+  };
+}
+
+function affineDeterminant3(affine) {
+  const [a, b, c] = affine;
+  return a[0] * (b[1] * c[2] - b[2] * c[1])
+    - a[1] * (b[0] * c[2] - b[2] * c[0])
+    + a[2] * (b[0] * c[1] - b[1] * c[0]);
+}
+
 function voxelBounds(position, scale) {
   const half = scale / 2;
   return {
@@ -1290,6 +1360,13 @@ function voxelGeometryKey(voxel) {
 }
 
 function adjacentVoxelGeometryKey(voxel, offset) {
+  if (voxel.localPosition && voxel.spatialAffine && voxel.renderBase) {
+    return voxelGeometryKeyAt(transformRenderLocalPoint({
+      x: voxel.localPosition.x + offset.x * voxel.scale,
+      y: voxel.localPosition.y + offset.y * voxel.scale,
+      z: voxel.localPosition.z + offset.z * voxel.scale,
+    }, voxel.spatialAffine, voxel.renderBase), voxel.scale);
+  }
   return voxelGeometryKeyAt({
     x: voxel.position.x + offset.x * voxel.scale,
     y: voxel.position.y + offset.y * voxel.scale,
@@ -1441,7 +1518,7 @@ function buildCamera(THREE, frame, canvas) {
   const targetPoint = new THREE.Vector3(view.target.x, view.target.y, view.target.z);
   const distance = view.distance;
   const cameraFrame = cameraRenderFrame(cameraSettings);
-  const projection = String(cameraSettings.projection || "").toLowerCase();
+  const projection = cameraSettings.projection;
   const near = 0.1;
   const far = Math.max(1000, distance * 4);
   const camera = projection === "orthographic"
@@ -1482,8 +1559,8 @@ function threeViewPayload(frame, camera, canvas) {
       yawDegrees: Number(frame.camera?.yawDegrees ?? 0),
       pitchDegrees: Number(frame.camera?.pitchDegrees ?? 35),
       rollDegrees: Number(frame.camera?.rollDegrees ?? 0),
-      zoom: Number(frame.camera?.zoom ?? frame.editorView?.zoom ?? 1) || 1,
-      projection: String(frame.camera?.projection || "").toLowerCase() === "orthographic" ? "orthographic" : "",
+      zoom: Puzzle3VisualCore.normalizeZoom(frame.camera?.zoom ?? frame.editorView?.zoom),
+      projection: frame.camera.projection,
     },
     threeProjection: {
       size: { ...frame.size },
@@ -1605,8 +1682,8 @@ function smoothViewportMaxLag(frame) {
 
 function cameraZoom(frame) {
   const cameraSettings = frame.camera || {};
-  const cameraValue = Math.max(0.1, Number(cameraSettings.zoom ?? 1) || 1);
-  const viewValue = Math.max(0.1, Number(frame.editorView?.zoom ?? 1) || 1);
+  const cameraValue = Puzzle3VisualCore.normalizeZoom(cameraSettings.zoom);
+  const viewValue = Puzzle3VisualCore.normalizeZoom(frame.editorView?.zoom);
   return cameraValue * viewValue;
 }
 
@@ -1699,7 +1776,7 @@ function projectRenderPointForCamera(point, cameraSettings) {
 
 function cameraRenderFrame(cameraSettings) {
   const yaw = degreesToRadians(cameraSettings.yawDegrees ?? 0);
-  const pitch = degreesToRadians(clamp(Number(cameraSettings.pitchDegrees ?? 35) || 35, -90, 90));
+  const pitch = degreesToRadians(clamp(Number(cameraSettings.pitchDegrees ?? 35), -90, 90));
   const roll = degreesToRadians(cameraSettings.rollDegrees ?? 0);
   const horizontal = Math.cos(pitch);
   const baseRight = { x: Math.cos(yaw), y: 0, z: Math.sin(yaw) };
@@ -1772,5 +1849,8 @@ window.Puzzle3ThreeRenderer = {
   buildPuzzleStudioThreeFrame,
   updatePuzzleStudioThreeFrame,
   animationOffset3,
+  cameraRenderFrame,
+  frameVisibleVoxels,
+  mergedVoxelFaces,
 };
 })();

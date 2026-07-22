@@ -177,21 +177,11 @@ impl ServerState {
         out.push(',');
         push_json_number(&mut out, "levelCount", self.loaded.levels.len() as u64);
         out.push(',');
-        push_json_pair(&mut out, "scene", self.session.scene());
-        out.push(',');
-        push_json_pair(&mut out, "currentScene", self.session.scene());
-        out.push(',');
-        push_json_pair(&mut out, "focusedScreen", self.session.focused_scene());
-        out.push(',');
-        push_json_pair(&mut out, "focusedScene", self.session.focused_scene());
-        out.push(',');
         push_json_bool(
             &mut out,
             "acceptsModelInput",
             self.session.accepts_model_input(&self.loaded),
         );
-        out.push(',');
-        push_visible_scenes(&mut out, self.session.visible_scenes());
         out.push(',');
         push_session_state(&mut out, &self.loaded, &self.session);
         out.push(',');
@@ -218,7 +208,7 @@ impl ServerState {
             .loaded
             .scenes
             .iter()
-            .find(|scene| scene.name == self.session.focused_scene());
+            .find(|scene| scene.name == self.session.surface_state().focused_component());
         if let Some(scene_state) = scene_state {
             push_scene(
                 &mut out,
@@ -239,15 +229,13 @@ impl ServerState {
             out.push_str("\"scene\":null");
         }
         out.push(',');
-        push_scene_layers(&mut out, &self.loaded, &self.session);
+        push_surface(&mut out, &self.loaded, &self.session);
         out.push(',');
         push_inputs(&mut out, &self.loaded);
         out.push(',');
         push_levels(&mut out, &self.loaded, self.session.cleared_levels());
         out.push(',');
         push_scenes(&mut out, "scenes", &self.loaded);
-        out.push(',');
-        push_scenes(&mut out, "screens", &self.loaded);
         out.push('}');
         out
     }
@@ -260,7 +248,7 @@ impl ServerState {
             .loaded
             .scenes
             .iter()
-            .find(|scene| scene.name == self.session.focused_scene());
+            .find(|scene| scene.name == self.session.surface_state().focused_component());
         if let Some(scene_state) = scene_state {
             push_scene(
                 &mut out,

@@ -46,7 +46,7 @@ stretch 2 1
 }
 ```
 
-Use `slots` for collision and `legend` for level characters.
+Use `layers` for state exclusion and drawing order, and `legend` for level characters.
 
 Visual spatial operations use `translate [world|local] <vector>`. A 2D visual
 uses `rotate [world|local] <angle> [from <angle>]`, for example
@@ -60,21 +60,25 @@ For four-way 3D variants authored facing front, use
 Both model kinds use `visuals`. In a reusable ASCII shape, `>` starts the next
 animation frame and `-` starts the next -Z layer; 2D visuals must have depth 1.
 
-Drawing order belongs inside `visuals`:
+Drawing order belongs to `layers`:
 
 ```puzzle
-visuals {
-order {
+layers {
 priority = down right
-Floor
-Player + Goal
-Box
+floor = Floor
+merge {
+actor = Player
+goal = Goal
+effect = !Spark
 }
+box = Box !Box
 }
 ```
 
-Order rows run back to front and may name slots or objects. `A + B` is sugar
-for canonical `merge { A; B }`; merge has no internal order. Overlapping
-pixels or voxels average their non-transparent RGBA channels. Direction
-priority compares owner-cell coordinates lexicographically. Use two distinct
-axes in 2D and three in 3D (`priority = down right front`, for example).
+Rows run back to front. A normal name participates in both state storage and
+rendering; `!Visual` participates only as a transient animation visual. Rows
+inside `merge` remain separate state layers but share one unordered render
+priority. Overlapping pixels or voxels average their non-transparent RGBA
+channels. Direction priority compares owner-cell coordinates lexicographically.
+Use two distinct axes in 2D and three in 3D (`priority = down right front`, for
+example).

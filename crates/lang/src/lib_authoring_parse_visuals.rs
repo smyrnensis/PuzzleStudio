@@ -350,7 +350,6 @@ fn parse_visuals_block_inner(
         predeclare_visual_color_names(lines, resource.body_start, resource.body_end);
     let mut visual_entries =
         Vec::<crate::visual_authoring::VisualAttachmentSyntax<source::LogicalLine>>::new();
-    let mut order = None;
     let mut i = resource.body_start;
 
     while i < resource.body_end {
@@ -400,6 +399,11 @@ fn parse_visuals_block_inner(
                     }
                     let (pattern, next_i) = parse_visual_plain_shape(lines, i)?;
                     plain_shapes.insert((*table_ref).to_string(), pattern);
+                    if let Some(product) =
+                        visual_shape_definition_product(lines, i, next_i, table_ref)
+                    {
+                        recognition.visual_shape_definitions.push(product);
+                    }
                     i = next_i;
                     continue;
                 }
@@ -407,7 +411,8 @@ fn parse_visuals_block_inner(
                 if shapes.contains_key(&name) {
                     return Err(parse_error(line, "duplicate visual shape"));
                 }
-                let (table, next_i) = parse_visual_shape_table(lines, i, &axis, None, catalog)?;
+                let (table, next_i) =
+                    parse_visual_shape_table(lines, i, &name, &axis, None, catalog, recognition)?;
                 shapes.insert(name, table);
                 i = next_i;
             }
@@ -417,8 +422,15 @@ fn parse_visuals_block_inner(
                     return Err(parse_error(line, "duplicate visual shape"));
                 }
                 let rotation = VisualShapeRotation::intrinsic(from);
-                let (table, next_i) =
-                    parse_visual_shape_table(lines, i, &axis, Some(rotation), catalog)?;
+                let (table, next_i) = parse_visual_shape_table(
+                    lines,
+                    i,
+                    &name,
+                    &axis,
+                    Some(rotation),
+                    catalog,
+                    recognition,
+                )?;
                 shapes.insert(name, table);
                 i = next_i;
             }
@@ -428,8 +440,15 @@ fn parse_visuals_block_inner(
                     return Err(parse_error(line, "duplicate visual shape"));
                 }
                 let rotation = VisualShapeRotation::using(map, from);
-                let (table, next_i) =
-                    parse_visual_shape_table(lines, i, &axis, Some(rotation), catalog)?;
+                let (table, next_i) = parse_visual_shape_table(
+                    lines,
+                    i,
+                    &name,
+                    &axis,
+                    Some(rotation),
+                    catalog,
+                    recognition,
+                )?;
                 shapes.insert(name, table);
                 i = next_i;
             }
@@ -439,8 +458,15 @@ fn parse_visuals_block_inner(
                     return Err(parse_error(line, "duplicate visual shape"));
                 }
                 let rotation = VisualShapeRotation::using(map, from);
-                let (table, next_i) =
-                    parse_visual_shape_table(lines, i, &axis, Some(rotation), catalog)?;
+                let (table, next_i) = parse_visual_shape_table(
+                    lines,
+                    i,
+                    &name,
+                    &axis,
+                    Some(rotation),
+                    catalog,
+                    recognition,
+                )?;
                 shapes.insert(name, table);
                 i = next_i;
             }
@@ -451,7 +477,7 @@ fn parse_visuals_block_inner(
                 }
                 mark_visual_color_table_ref(recognition, line, table_ref);
                 let (table, next_i) =
-                    parse_visual_color_table(lines, i, &axis, catalog, recognition)?;
+                    parse_visual_color_table(lines, i, &name, &axis, catalog, recognition)?;
                 colors.insert(name, table);
                 i = next_i;
             }
@@ -460,19 +486,6 @@ fn parse_visuals_block_inner(
                     line,
                     "colors table was renamed to palette; visual color rows still use colors",
                 ));
-            }
-            ["order"] => {
-                if order.is_some() {
-                    return Err(parse_error(line, "duplicate visual order block"));
-                }
-                let (parsed, next) = authoring_grammar::parse_authoring_node_with_kind(
-                    lines,
-                    i,
-                    authoring_grammar::AuthoringKind::VisualOrderConfig,
-                    "order missing closing brace",
-                )?;
-                order = Some(parsed);
-                i = next;
             }
             ["visual"] | ["visual", _] if is_block_header_line(line) => {
                 let entry = collect_visual_attachment_entry(lines, i, &declared_color_names)?;
@@ -571,11 +584,7 @@ fn parse_visuals_block_inner(
             visuals,
         )?;
     }
-    visuals.order = crate::lib_authoring_parse_order::lower_visual_order(
-        order.as_ref(),
-        catalog,
-        &lines[start],
-    )?;
+    visuals.order = catalog.visual_order.clone();
     Ok(resource.next_index)
 }
 
@@ -610,6 +619,23 @@ fn parse_visual_palette_block(
                     Some(color_token),
                     crate::surface::SurfaceSemanticKind::Color,
                 );
+                if let Some(value_span) = line
+                    .tokens
+                    .iter()
+                    .rev()
+                    .find(|token| token.text == color_token)
+                    .map(|token| crate::surface::SourceSpan {
+                        start: token.start,
+                        end: token.end,
+                    })
+                {
+                    recognition.visual_color_definitions.push(
+                        crate::surface::SurfaceVisualColorDefinitionProduct {
+                            name: (*name).to_string(),
+                            value_span,
+                        },
+                    );
+                }
                 color_aliases.insert((*name).to_string(), color);
                 i += 1;
             }
@@ -620,7 +646,7 @@ fn parse_visual_palette_block(
                 }
                 mark_visual_color_table_ref(recognition, line, table_ref);
                 let (table, next_i) =
-                    parse_visual_color_table(lines, i, &axis, catalog, recognition)?;
+                    parse_visual_color_table(lines, i, &name, &axis, catalog, recognition)?;
                 colors.insert(name, table);
                 i = next_i;
             }
@@ -634,6 +660,14 @@ fn parse_visual_palette_block(
     }
     if i >= lines.len() {
         return Err(parse_error(&lines[start], "palette missing closing brace"));
+    }
+    if let Some(product) = visual_asset_block_product(
+        lines,
+        start,
+        i + 1,
+        crate::surface::SurfaceVisualAssetBlockKind::Palette,
+    ) {
+        recognition.visual_asset_blocks.push(product);
     }
     Ok(i + 1)
 }
@@ -662,19 +696,36 @@ fn parse_visual_shapes_block(
                 let (pattern, next_i) = parse_visual_plain_shape(lines, i)?;
                 plain_shapes.insert((*name).to_string(), pattern);
                 mark_visual_shape_ref(recognition, line, name, false);
+                if let Some(product) = visual_shape_definition_product(lines, i, next_i, name) {
+                    recognition.visual_shape_definitions.push(product);
+                }
                 i = next_i;
             }
             [table_ref] => {
                 if let Some((name, axis, value)) =
                     parse_visual_shape_value_ref(table_ref, line, catalog)?
                 {
+                    let asset_name = format!("{name}:{value}");
                     let (pattern, next_i) = parse_visual_shape_value_pattern(lines, i, &[], false)?;
                     insert_visual_shape_value(shapes, name, axis, value, pattern, line)?;
                     mark_visual_shape_ref(recognition, line, table_ref, true);
+                    if let Some(product) =
+                        visual_shape_definition_product(lines, i, next_i, &asset_name)
+                    {
+                        recognition.visual_shape_definitions.push(product);
+                    }
                     i = next_i;
                 } else {
                     let (name, axis) = parse_visual_table_ref(table_ref, line)?;
-                    let (table, next_i) = parse_visual_shape_table(lines, i, &axis, None, catalog)?;
+                    let (table, next_i) = parse_visual_shape_table(
+                        lines,
+                        i,
+                        &name,
+                        &axis,
+                        None,
+                        catalog,
+                        recognition,
+                    )?;
                     shapes.insert(name, table);
                     mark_visual_shape_ref(recognition, line, table_ref, false);
                     i = next_i;
@@ -683,24 +734,45 @@ fn parse_visual_shapes_block(
             [table_ref, "rotate", "from", from] => {
                 let (name, axis) = parse_visual_table_ref(table_ref, line)?;
                 let rotation = VisualShapeRotation::intrinsic(from);
-                let (table, next_i) =
-                    parse_visual_shape_table(lines, i, &axis, Some(rotation), catalog)?;
+                let (table, next_i) = parse_visual_shape_table(
+                    lines,
+                    i,
+                    &name,
+                    &axis,
+                    Some(rotation),
+                    catalog,
+                    recognition,
+                )?;
                 shapes.insert(name, table);
                 i = next_i;
             }
             [table_ref, "rotate", "using", map, "from", from] => {
                 let (name, axis) = parse_visual_table_ref(table_ref, line)?;
                 let rotation = VisualShapeRotation::using(map, from);
-                let (table, next_i) =
-                    parse_visual_shape_table(lines, i, &axis, Some(rotation), catalog)?;
+                let (table, next_i) = parse_visual_shape_table(
+                    lines,
+                    i,
+                    &name,
+                    &axis,
+                    Some(rotation),
+                    catalog,
+                    recognition,
+                )?;
                 shapes.insert(name, table);
                 i = next_i;
             }
             [table_ref, "rotate", map, "from", from] => {
                 let (name, axis) = parse_visual_table_ref(table_ref, line)?;
                 let rotation = VisualShapeRotation::using(map, from);
-                let (table, next_i) =
-                    parse_visual_shape_table(lines, i, &axis, Some(rotation), catalog)?;
+                let (table, next_i) = parse_visual_shape_table(
+                    lines,
+                    i,
+                    &name,
+                    &axis,
+                    Some(rotation),
+                    catalog,
+                    recognition,
+                )?;
                 shapes.insert(name, table);
                 i = next_i;
             }
@@ -714,6 +786,14 @@ fn parse_visual_shapes_block(
     }
     if i >= lines.len() {
         return Err(parse_error(&lines[start], "shapes missing closing brace"));
+    }
+    if let Some(product) = visual_asset_block_product(
+        lines,
+        start,
+        i + 1,
+        crate::surface::SurfaceVisualAssetBlockKind::Shapes,
+    ) {
+        recognition.visual_asset_blocks.push(product);
     }
     Ok(i + 1)
 }
@@ -1072,13 +1152,22 @@ fn visual_attachment_span(
 ) -> crate::surface::SourceSpan {
     let start = attachment
         .header_line
-        .tokens
-        .first()
-        .map_or(0, |token| token.start);
+        .source_start()
+        .or_else(|| {
+            attachment
+                .header_line
+                .tokens
+                .first()
+                .map(|token| token.start)
+        })
+        .unwrap_or(0);
     let end = attachment
         .closing_line
         .as_ref()
-        .and_then(|line| line.tokens.last().map(|token| token.end))
+        .and_then(|line| {
+            line.source_end()
+                .or_else(|| line.tokens.last().map(|token| token.end))
+        })
         .or_else(|| {
             attachment
                 .body_lines
@@ -1096,9 +1185,9 @@ fn visual_attachment_body_span(
 ) -> crate::surface::SourceSpan {
     let header_end = attachment
         .header_line
-        .tokens
-        .last()
-        .map_or(0, |token| token.end);
+        .source_end()
+        .or_else(|| attachment.header_line.tokens.last().map(|token| token.end))
+        .unwrap_or(0);
     let start = if attachment.closing_line.is_some() {
         header_end
     } else if attachment.body_lines.is_empty() {
@@ -1113,7 +1202,10 @@ fn visual_attachment_body_span(
     let end = attachment
         .closing_line
         .as_ref()
-        .and_then(|line| line.tokens.first().map(|token| token.start))
+        .and_then(|line| {
+            line.source_start()
+                .or_else(|| line.tokens.first().map(|token| token.start))
+        })
         .or_else(|| {
             attachment
                 .body_lines
@@ -1139,17 +1231,65 @@ fn visual_resource_product(
 ) -> Option<crate::surface::SurfaceVisualResourceProduct> {
     let header = lines.get(start)?;
     let closing = lines.get(next.checked_sub(1)?)?;
-    let first = header.tokens.first()?;
-    let open = header.tokens.iter().find(|token| token.text == "{")?;
-    let close = closing.tokens.iter().find(|token| token.text == "}")?;
+    let header_start = header.source_start()?;
+    let closing_start = closing.source_start()?;
+    let first = header_start + header.text.len() - header.text.trim_start().len();
+    let open = header_start + header.text.rfind('{')?;
+    let close = closing_start + closing.text.find('}')?;
     Some(crate::surface::SurfaceVisualResourceProduct {
         span: crate::surface::SourceSpan {
-            start: first.start,
-            end: close.end,
+            start: first,
+            end: close + 1,
         },
-        open_brace: open.start,
-        close_brace: close.start,
+        open_brace: open,
+        close_brace: close,
         dimension,
+    })
+}
+
+fn visual_asset_block_product(
+    lines: &[source::LogicalLine],
+    start: usize,
+    next: usize,
+    kind: crate::surface::SurfaceVisualAssetBlockKind,
+) -> Option<crate::surface::SurfaceVisualAssetBlockProduct> {
+    let header = lines.get(start)?;
+    let closing = lines.get(next.checked_sub(1)?)?;
+    let header_start = header.source_start()?;
+    let closing_start = closing.source_start()?;
+    let first = header_start + header.text.len() - header.text.trim_start().len();
+    let open = header_start + header.text.rfind('{')?;
+    let close = closing_start + closing.text.find('}')?;
+    Some(crate::surface::SurfaceVisualAssetBlockProduct {
+        span: crate::surface::SourceSpan {
+            start: first,
+            end: close + 1,
+        },
+        open_brace: open,
+        close_brace: close,
+        kind,
+    })
+}
+
+fn visual_shape_definition_product(
+    lines: &[source::LogicalLine],
+    start: usize,
+    next: usize,
+    name: &str,
+) -> Option<crate::surface::SurfaceVisualShapeDefinitionProduct> {
+    let header = lines.get(start)?;
+    let last = lines.get(next.checked_sub(1)?)?;
+    let start_offset = header.source_start()?;
+    let end_offset = last.source_end()?;
+    let braced = is_block_header_line(header);
+    Some(crate::surface::SurfaceVisualShapeDefinitionProduct {
+        name: name.to_string(),
+        span: crate::surface::SourceSpan {
+            start: start_offset,
+            end: end_offset,
+        },
+        header: block_header_text(header).trim().to_string(),
+        braced,
     })
 }
 
@@ -1707,9 +1847,11 @@ fn is_visual_shape_individual_value_header(line: &str) -> bool {
 fn parse_visual_shape_table(
     lines: &[source::LogicalLine],
     start: usize,
+    table_name: &str,
     axis: &str,
     rotation: Option<VisualShapeRotation>,
     catalog: &Catalog,
+    recognition: &mut crate::surface::ParserRecognition,
 ) -> Result<(VisualShapeTable, usize), DiagnosticReport> {
     let values = catalog_value_set(catalog, axis).ok_or_else(|| {
         parse_error(
@@ -1829,6 +1971,7 @@ fn parse_visual_shape_table(
             i += 1;
             continue;
         }
+        let value_start = i;
         let value = block_header_text(&lines[i]);
         if !values.iter().any(|candidate| candidate == value) {
             return Err(parse_error(
@@ -1839,6 +1982,14 @@ fn parse_visual_shape_table(
         let (pattern, next_i) = parse_visual_shape_value_pattern(lines, i, values, true)?;
         if entries.insert(value.to_string(), pattern).is_some() {
             return Err(parse_error(&lines[i], "duplicate visual shape value"));
+        }
+        if let Some(product) = visual_shape_definition_product(
+            lines,
+            value_start,
+            next_i,
+            &format!("{table_name}:{value}"),
+        ) {
+            recognition.visual_shape_definitions.push(product);
         }
         i = next_i;
     }
@@ -2033,6 +2184,7 @@ fn rotate_visual_pattern_clockwise(pattern: &[String]) -> Vec<String> {
 fn parse_visual_color_table(
     lines: &[source::LogicalLine],
     start: usize,
+    table_name: &str,
     axis: &str,
     catalog: &Catalog,
     recognition: &mut crate::surface::ParserRecognition,
@@ -2071,6 +2223,23 @@ fn parse_visual_color_table(
             Some(color),
             crate::surface::SurfaceSemanticKind::Color,
         );
+        if let Some(value_span) = lines[i]
+            .tokens
+            .iter()
+            .rev()
+            .find(|token| token.text == *color)
+            .map(|token| crate::surface::SourceSpan {
+                start: token.start,
+                end: token.end,
+            })
+        {
+            recognition.visual_color_definitions.push(
+                crate::surface::SurfaceVisualColorDefinitionProduct {
+                    name: format!("{table_name}:{value}"),
+                    value_span,
+                },
+            );
+        }
         let color = crate::syntax::canonical_visual_color_literal(color).ok_or_else(|| {
             parse_error(
                 &lines[i],
@@ -2689,6 +2858,14 @@ fn expand_visual_selector(
                 bind_object: true,
             })
             .collect());
+    }
+
+    if !selector.contains(':') && puzzle_authoring::is_qualified_identifier(selector) {
+        return Ok(vec![VisualSelectorTarget {
+            object_name: selector.to_string(),
+            bindings: HashMap::new(),
+            bind_object: false,
+        }]);
     }
 
     let parts = selector.split(':').collect::<Vec<_>>();

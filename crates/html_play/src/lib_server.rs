@@ -263,7 +263,12 @@ fn handle_session_action(
     action: puzzle_runtime_contract::SessionAction,
 ) -> String {
     use puzzle_runtime_contract::SessionAction;
-    if !matches!(&action, SessionAction::Snapshot | SessionAction::Resume)
+    if !matches!(
+        &action,
+        SessionAction::Snapshot
+            | SessionAction::Resume
+            | SessionAction::ComponentEvent { .. }
+    )
         && state
             .lock()
             .expect("server state poisoned")
@@ -284,6 +289,19 @@ fn handle_session_action(
                     session, loaded, ..
                 } = &mut *state;
                 session.resume_wait(loaded)
+            };
+            match result {
+                Ok(()) => http_ok("application/json; charset=utf-8", &state.snapshot_json()),
+                Err(error) => http_error(409, &format!("{error:?}")),
+            }
+        }
+        SessionAction::ComponentEvent { instance, event } => {
+            let mut state = state.lock().expect("server state poisoned");
+            let result = {
+                let ServerState {
+                    session, loaded, ..
+                } = &mut *state;
+                session.apply_component_event(loaded, &instance, &event)
             };
             match result {
                 Ok(()) => http_ok("application/json; charset=utf-8", &state.snapshot_json()),
@@ -387,7 +405,13 @@ fn push_session_state(out: &mut String, loaded: &LoadedGame, session: &GameSessi
         }
         push_json_string(out, name);
         out.push(':');
-        push_scene_value(out, loaded, session, session.focused_scene(), value);
+        push_scene_value(
+            out,
+            loaded,
+            session,
+            session.surface_state().focused_component(),
+            value,
+        );
     }
     out.push('}');
 }
@@ -397,7 +421,7 @@ fn push_scene_state(out: &mut String, loaded: &LoadedGame, session: &GameSession
         out,
         loaded,
         session,
-        session.focused_scene(),
+        session.surface_state().focused_component(),
         session.scene_state(),
     );
 }
@@ -468,7 +492,7 @@ fn push_scene_puzzle_state(out: &mut String, loaded: &LoadedGame, session: &Game
                 out,
                 loaded,
                 session.cleared_levels(),
-                session.focused_scene(),
+                session.surface_state().focused_component(),
                 level_index,
             );
         } else {
@@ -484,7 +508,7 @@ fn push_scene_puzzle_state(out: &mut String, loaded: &LoadedGame, session: &Game
                 loaded,
                 &puzzle.state,
                 level,
-                scene_resources(loaded, session.focused_scene()),
+                scene_resources(loaded, session.surface_state().focused_component()),
             );
         }
         out.push('}');
@@ -588,17 +612,6 @@ fn html_level_resource_matches(resource: &str, level_name: &str) -> bool {
             .is_some_and(|rest| rest.starts_with('.'))
 }
 
-fn push_visible_scenes(out: &mut String, scenes: &[String]) {
-    out.push_str("\"visibleScenes\":[");
-    for (index, scene) in scenes.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        push_json_string(out, scene);
-    }
-    out.push(']');
-}
-
 fn push_scene_value(
     out: &mut String,
     loaded: &LoadedGame,
@@ -616,45 +629,124 @@ fn push_scene_value(
     }
 }
 
-fn push_scene_layers(out: &mut String, loaded: &LoadedGame, session: &GameSession) {
-    out.push_str("\"sceneLayers\":[");
-    for (index, name) in session.visible_scenes().iter().enumerate() {
+fn push_surface(out: &mut String, loaded: &LoadedGame, session: &GameSession) {
+    out.push_str("\"surface\":{");
+    out.push_str("\"root\":");
+    if let Some(root) = session.surface_state().root() {
+        push_json_string(out, root);
+    } else {
+        out.push_str("null");
+    }
+    out.push(',');
+    push_json_pair(
+        out,
+        "focus",
+        session.surface_state().focused_component(),
+    );
+    out.push_str(",\"components\":[");
+    for (index, component) in session.surface_state().components().iter().enumerate() {
         if index > 0 {
             out.push(',');
         }
-        let state = session.scene_state_for(name);
         out.push('{');
-        push_json_pair(out, "name", name);
+        push_json_pair(out, "id", &component.id);
         out.push(',');
-        push_json_bool(out, "focused", name == session.focused_scene());
+        push_json_pair(out, "definition", &component.definition);
         out.push(',');
-        push_scene_state_for(out, loaded, session, name, state);
+        push_json_pair(
+            out,
+            "placement",
+            match component.placement {
+                puzzle_lang::ComponentPlacement::Root => "root",
+                puzzle_lang::ComponentPlacement::Content => "content",
+                puzzle_lang::ComponentPlacement::Overlay => "overlay",
+            },
+        );
         out.push(',');
-        push_scene_puzzles(out, state);
+        push_json_pair(
+            out,
+            "visibility",
+            match component.visibility {
+                puzzle_lang::ComponentVisibility::Visible => "visible",
+                puzzle_lang::ComponentVisibility::Hidden => "hidden",
+            },
+        );
         out.push(',');
-        out.push_str("\"scene\":");
-        if let Some((puzzle_state, level)) = scene_puzzle_state(loaded, session, name) {
-            let scene_def = loaded.scenes.iter().find(|scene| scene.name == *name);
-            push_scene_object(
+        push_json_bool(out, "modal", component.modal);
+        if component.id == component.definition
+            && loaded
+                .scenes
+                .iter()
+                .any(|scene| scene.name == component.definition)
+        {
+            let name = &component.definition;
+            let state = session.scene_state_for(name);
+            out.push(',');
+            push_json_bool(
                 out,
-                loaded,
-                puzzle_state,
-                level,
-                scene_def.map(|scene| &scene.resources),
+                "focused",
+                component.id == session.surface_state().focused_component(),
             );
-        } else {
-            out.push_str("null");
+            out.push(',');
+            push_json_pair(out, "name", name);
+            out.push(',');
+            push_scene_state_for(out, loaded, session, name, state);
+            out.push(',');
+            push_scene_puzzles(out, state);
+            out.push(',');
+            out.push_str("\"scene\":");
+            if let Some((puzzle_state, level)) = scene_puzzle_state(loaded, session, name) {
+                let definition = loaded.scenes.iter().find(|scene| scene.name == *name);
+                push_scene_object(
+                    out,
+                    loaded,
+                    puzzle_state,
+                    level,
+                    definition.map(|scene| &scene.resources),
+                );
+            } else {
+                out.push_str("null");
+            }
+        }
+        if !component.properties.is_empty() {
+            out.push_str(",\"properties\":{");
+            let mut properties = component.properties.iter().collect::<Vec<_>>();
+            properties.sort_by(|(left, _), (right, _)| left.cmp(right));
+            for (property_index, (name, value)) in properties.into_iter().enumerate() {
+                if property_index > 0 {
+                    out.push(',');
+                }
+                push_json_string(out, name);
+                out.push(':');
+                push_scene_value(
+                    out,
+                    loaded,
+                    session,
+                    session.surface_state().focused_component(),
+                    value,
+                );
+            }
+            out.push('}');
+        }
+        if let Some(event) = &component.awaited_event {
+            out.push(',');
+            push_json_pair(out, "awaitEvent", event);
         }
         out.push('}');
     }
-    out.push(']');
+    out.push_str("]}");
 }
 
 fn focused_scene_state<'a>(
     loaded: &'a LoadedGame,
     session: &'a GameSession,
 ) -> Option<&'a puzzle_core::State> {
-    scene_puzzle_state(loaded, session, session.focused_scene()).map(|(state, _)| state)
+    scene_puzzle_state(
+        loaded,
+        session,
+        session.surface_state().focused_component(),
+    )
+    .map(|(state, _)| state)
 }
 
 fn scene_puzzle_state<'a>(

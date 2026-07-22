@@ -567,6 +567,13 @@ fn apply_puzzle_render_camera_node(
     for definition in &node.definition_rows {
         let value = render_definition_value(definition)?;
         match definition.key.as_str() {
+            "orthographic" => {
+                camera.projection = if render_boolean_value(definition)? {
+                    CameraProjection3::Orthographic
+                } else {
+                    CameraProjection3::Perspective
+                };
+            }
             "yaw" => camera.yaw_degrees = render_degrees(value, definition)?,
             "pitch" => camera.pitch_degrees = render_degrees(value, definition)?,
             "roll" => camera.roll_degrees = render_degrees(value, definition)?,
@@ -1579,7 +1586,7 @@ fn parse_level_event_sugar(line: &str) -> Result<Option<StatementAst>, Diagnosti
             EffectAst::PlaySfx { .. }
                 | EffectAst::Wait { .. }
                 | EffectAst::WaitAnimation
-                | EffectAst::Message { .. }
+                | EffectAst::PresentComponent { .. }
         )
     }) {
         return Err(parse_error(

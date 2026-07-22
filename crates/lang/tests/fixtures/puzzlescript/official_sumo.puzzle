@@ -2,6 +2,22 @@ title = "Multiple Patterns"
 author = "increpare"
 homepage = "www.puzzlescript.net"
 
+scene title {
+layout {
+heading "Multiple Patterns"
+subheading "by increpare"
+if has_progress_save {
+choice "Continue" -> {
+goto playing
+}
+}
+choice "New Game" -> {
+clear_game_progress
+start playing
+}
+}
+}
+
 theme = "puzzlescript"
 
 sounds {
@@ -9,7 +25,7 @@ sfx sumo_move { seed = 48878907; type = puzzlescript }
 }
 
 puzzle main {
-slots {
+layers {
 layer1 = Background
 layer2 = Player Wall Sumo
 }
@@ -90,22 +106,6 @@ S = Sumo Background
 #AAAAAA#
 #AAAAAA#
 ########
-}
-}
-
-scene title {
-layout {
-heading "Multiple Patterns"
-subheading "by increpare"
-if has_progress_save {
-choice "Continue" -> {
-goto playing
-}
-}
-choice "New Game" -> {
-clear_game_progress
-start playing
-}
 }
 }
 

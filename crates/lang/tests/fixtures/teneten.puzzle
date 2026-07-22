@@ -42,7 +42,7 @@ F -> B
 B -> F
 }
 
-slots {
+layers {
 Background
 Pond Puddle Crack Hole
 Background2

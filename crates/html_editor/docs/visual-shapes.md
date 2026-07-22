@@ -23,7 +23,7 @@ shape = arrow
 ```
 
 `shapes` owns visual data only. Object identity and collision still come from
-`slots`. Use `shape = <name>` when a bare row could also be valid ASCII and
+`layers`. Use `shape = <name>` when a bare row could also be valid ASCII and
 would therefore be ambiguous.
 
 ## Frames And Voxel Layers

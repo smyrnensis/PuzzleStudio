@@ -29,7 +29,7 @@ fn parse_spatial_body(body: &str) -> (LoadedGridGame<3, Size3>, SpatialPresentat
 fn canonical_document_lowers_spatial_line_rules() {
     let (game, _) = parse_spatial_body(
         r#"
-slots {
+layers {
 Player Box Wall
 }
 
@@ -66,7 +66,7 @@ horizontal [ Player | no solid ] -> [ | Player ]
 fn direction_without_an_axis_set_expands_over_the_spatial_input_domain() {
     let (game, _) = parse_spatial_body(
         r#"
-slots {
+layers {
 actor = Player Wall
 }
 
@@ -107,7 +107,7 @@ tags {
 heading = left right front back
 }
 
-slots {
+layers {
 actor = TEN:heading
 }
 
@@ -154,7 +154,7 @@ input [ TEN:heading ] -> [ > TEN:> ]
 fn relative_selector_accepts_cartesian_axis_set() {
     let (game, _) = parse_spatial_body(
         r#"
-slots {
+layers {
 actor = TEN:x_axis
 }
 
@@ -175,7 +175,7 @@ input [ TEN:x_axis ] -> [ > TEN:> ]
 fn cartesian_plane_set_is_shared_by_schema_and_orientation_lowering() {
     let (game, _) = parse_spatial_body(
         r#"
-slots {
+layers {
 actor = Player
 marker = Marker:yz_plane
 }
@@ -212,7 +212,7 @@ fn unavailable_cartesian_direction_sets_fail_in_two_dimensions() {
         r#"
 puzzle test {
 dimension = 2
-slots {
+layers {
 actor = Player
 }
 rules {
@@ -237,7 +237,7 @@ dimension = 2
 tags {
 z_axis = left right
 }
-slots {
+layers {
 actor = Player
 }
 rules {
@@ -264,7 +264,7 @@ dimension = 3
 tags {
 mood = calm alert
 }
-slots {
+layers {
 actor = Token:mood
 }
 rules {
@@ -287,7 +287,7 @@ right [ Token:> ] -> [ Token:> ]
 fn comma_separates_frame_axes_and_colon_does_not() {
     let (game, _) = parse_spatial_body(
         r#"
-slots {
+layers {
 Player Box
 }
 
@@ -302,7 +302,7 @@ right, up [ Player | Box | ] -> [ | Player | Box ]
         r#"
 puzzle invalid {
 dimension = 3
-slots { Player }
+layers { Player }
 rules {
 right:up [ Player ] -> [ Player ]
 }
@@ -321,7 +321,7 @@ fn spatial_levels_use_the_shared_loaded_game_container() {
         r#"
 puzzle board {
 dimension = 3
-slots {
+layers {
 floor = Goal
 actor = Player Box Wall
 }
@@ -360,7 +360,7 @@ level "stacked" {
 fn spatial_visual_materialization_derives_from_shared_visuals() {
     let (game, presentation) = parse_spatial_body(
         r##"
-slots {
+layers {
 floor = Floor
 }
 rules {
@@ -400,7 +400,7 @@ fn visual_fixture_contains_no_session_runtime_model() {
         r#"
 puzzle board {
 dimension = 3
-slots { Player }
+layers { Player }
 rules {
 }
 }
@@ -429,7 +429,7 @@ fn inline_spatial_rows_can_span_multiple_cells_and_levels() {
         r#"
 puzzle board {
 dimension = 3
-slots { Player Goal }
+layers { Player Goal }
 rules {
 }
 }
@@ -447,4 +447,13 @@ level "two" { PG }
     assert_eq!(game.levels.len(), 2);
     assert_eq!(game.levels[0].initial_state.size, Size3::new(2, 1, 1));
     assert_eq!(game.levels[1].initial_state.size, Size3::new(2, 1, 1));
+}
+
+#[test]
+fn starter_06_3d_compiles_with_its_level_clear_surface_flow() {
+    parse_game_for_path(
+        include_str!("../../html_editor/starter/06-3d.puzzle3"),
+        "starter/06-3d.puzzle3",
+    )
+    .expect("06-3d starter should compile");
 }

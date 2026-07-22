@@ -175,7 +175,7 @@ pub(crate) fn highlight_source_range_with_document(
 
 #[cfg(test)]
 mod tests {
-    use crate::{SourceHighlightColor, SurfaceDocument};
+    use crate::{SourceHighlightColor, SourceHighlightKind, SurfaceDocument};
 
     use super::highlight_source_range_with_document;
 
@@ -188,6 +188,25 @@ mod tests {
                 .spans
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn range_highlight_keeps_at_prefixed_symbol_token_whole() {
+        let source =
+            "puzzle board {\nlayers {\nobjects = @Box\n}\nrules {\n[ @Box ] -> [ @Box ]\n}\n}\n";
+        let document = crate::parse_surface_document(source);
+        let symbol_start = source.find("@Box").expect("symbol");
+        let highlighted = highlight_source_range_with_document(
+            &document,
+            symbol_start + "@".len(),
+            symbol_start + "@Box".len(),
+        );
+
+        assert!(highlighted.spans.iter().any(|span| {
+            span.kind == SourceHighlightKind::Object
+                && span.start == symbol_start
+                && span.end == symbol_start + "@Box".len()
+        }));
     }
 
     #[test]

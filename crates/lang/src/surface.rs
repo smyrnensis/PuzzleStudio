@@ -23,6 +23,9 @@ pub(crate) struct ParserRecognition {
     pub(crate) sound_products: Vec<SurfaceSoundProduct>,
     pub(crate) level_products: Vec<SurfaceLevelProduct>,
     pub(crate) visual_resources: Vec<SurfaceVisualResourceProduct>,
+    pub(crate) visual_asset_blocks: Vec<SurfaceVisualAssetBlockProduct>,
+    pub(crate) visual_color_definitions: Vec<SurfaceVisualColorDefinitionProduct>,
+    pub(crate) visual_shape_definitions: Vec<SurfaceVisualShapeDefinitionProduct>,
     pub(crate) visual_products: Vec<SurfaceVisualProduct>,
 }
 
@@ -59,6 +62,34 @@ pub(crate) struct SurfaceVisualResourceProduct {
     pub(crate) dimension: crate::ModelDimension,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SurfaceVisualAssetBlockKind {
+    Palette,
+    Shapes,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SurfaceVisualAssetBlockProduct {
+    pub(crate) span: SourceSpan,
+    pub(crate) open_brace: usize,
+    pub(crate) close_brace: usize,
+    pub(crate) kind: SurfaceVisualAssetBlockKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SurfaceVisualColorDefinitionProduct {
+    pub(crate) name: String,
+    pub(crate) value_span: SourceSpan,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SurfaceVisualShapeDefinitionProduct {
+    pub(crate) name: String,
+    pub(crate) span: SourceSpan,
+    pub(crate) header: String,
+    pub(crate) braced: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SurfaceVisualProduct {
     pub(crate) span: SourceSpan,
@@ -74,7 +105,17 @@ impl ParserRecognition {
         if span.start < span.end {
             self.token_dispositions.push(ParserTokenDisposition {
                 span,
-                kind,
+                kind: ParserTokenDispositionKind::Semantic(kind),
+                resolution: None,
+            });
+        }
+    }
+
+    pub(crate) fn mark_invalid(&mut self, span: SourceSpan) {
+        if span.start < span.end {
+            self.token_dispositions.push(ParserTokenDisposition {
+                span,
+                kind: ParserTokenDispositionKind::InvalidSyntax,
                 resolution: None,
             });
         }
@@ -89,7 +130,7 @@ impl ParserRecognition {
         if span.start < span.end {
             self.token_dispositions.push(ParserTokenDisposition {
                 span,
-                kind,
+                kind: ParserTokenDispositionKind::Semantic(kind),
                 resolution: Some(resolution),
             });
         }
@@ -122,6 +163,11 @@ impl ParserRecognition {
         self.sound_products.extend(other.sound_products);
         self.level_products.extend(other.level_products);
         self.visual_resources.extend(other.visual_resources);
+        self.visual_asset_blocks.extend(other.visual_asset_blocks);
+        self.visual_color_definitions
+            .extend(other.visual_color_definitions);
+        self.visual_shape_definitions
+            .extend(other.visual_shape_definitions);
         self.visual_products.extend(other.visual_products);
     }
 
@@ -158,6 +204,17 @@ impl ParserRecognition {
             shift_span(&mut resource.span, threshold, delta);
             shift_offset(&mut resource.open_brace, threshold, delta);
             shift_offset(&mut resource.close_brace, threshold, delta);
+        }
+        for block in &mut self.visual_asset_blocks {
+            shift_span(&mut block.span, threshold, delta);
+            shift_offset(&mut block.open_brace, threshold, delta);
+            shift_offset(&mut block.close_brace, threshold, delta);
+        }
+        for definition in &mut self.visual_color_definitions {
+            shift_span(&mut definition.value_span, threshold, delta);
+        }
+        for definition in &mut self.visual_shape_definitions {
+            shift_span(&mut definition.span, threshold, delta);
         }
     }
 }
@@ -228,13 +285,19 @@ pub(crate) enum ParserTokenResolution {
     Binding(String),
 }
 
-/// Canonical parser-owned disposition for an accepted source token or token
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ParserTokenDispositionKind {
+    Semantic(SurfaceSemanticKind),
+    InvalidSyntax,
+}
+
+/// Canonical parser-owned terminal disposition for a source token or token
 /// component. Highlighting may project this fact, but does not own its span,
-/// semantic role, or resolved symbol target.
+/// semantic role, invalidity, or resolved symbol target.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ParserTokenDisposition {
     pub(crate) span: SourceSpan,
-    pub(crate) kind: SurfaceSemanticKind,
+    pub(crate) kind: ParserTokenDispositionKind,
     pub(crate) resolution: Option<ParserTokenResolution>,
 }
 
@@ -266,6 +329,7 @@ pub(crate) struct SurfaceDocument {
     pub(crate) structural_blocks: Vec<SurfaceStructuralBlock>,
     pub(crate) nodes: Vec<SurfaceNode>,
     pub(crate) semantic_tokens: Vec<SurfaceSemanticToken>,
+    pub(crate) invalid_syntax_spans: Vec<SourceSpan>,
     pub(crate) unclassified_highlight_spans: Vec<SourceSpan>,
     pub(crate) unmatched_open_braces: BTreeSet<usize>,
     pub(crate) completion_symbols: SurfaceCompletionSymbols,
@@ -274,6 +338,9 @@ pub(crate) struct SurfaceDocument {
     pub(crate) sound_products: Vec<SurfaceSoundProduct>,
     pub(crate) level_products: Vec<SurfaceLevelProduct>,
     pub(crate) visual_resources: Vec<SurfaceVisualResourceProduct>,
+    pub(crate) visual_asset_blocks: Vec<SurfaceVisualAssetBlockProduct>,
+    pub(crate) visual_color_definitions: Vec<SurfaceVisualColorDefinitionProduct>,
+    pub(crate) visual_shape_definitions: Vec<SurfaceVisualShapeDefinitionProduct>,
     pub(crate) visual_products: Vec<SurfaceVisualProduct>,
     pub(crate) diagnostics: Vec<crate::Diagnostic>,
 }
@@ -448,14 +515,19 @@ impl SurfaceSink {
         self.document
             .nodes
             .extend(recognition.nodes.iter().copied());
-        self.document
-            .semantic_tokens
-            .extend(recognition.token_dispositions.iter().map(|disposition| {
-                SurfaceSemanticToken {
-                    span: disposition.span,
-                    kind: disposition.kind,
+        for disposition in &recognition.token_dispositions {
+            match disposition.kind {
+                ParserTokenDispositionKind::Semantic(kind) => {
+                    self.document.semantic_tokens.push(SurfaceSemanticToken {
+                        span: disposition.span,
+                        kind,
+                    });
                 }
-            }));
+                ParserTokenDispositionKind::InvalidSyntax => {
+                    self.document.invalid_syntax_spans.push(disposition.span);
+                }
+            }
+        }
         self.document
             .highlight_ranges
             .display_facts
@@ -484,6 +556,15 @@ impl SurfaceSink {
         self.document
             .visual_resources
             .extend(recognition.visual_resources.iter().cloned());
+        self.document
+            .visual_asset_blocks
+            .extend(recognition.visual_asset_blocks.iter().cloned());
+        self.document
+            .visual_color_definitions
+            .extend(recognition.visual_color_definitions.iter().cloned());
+        self.document
+            .visual_shape_definitions
+            .extend(recognition.visual_shape_definitions.iter().cloned());
     }
 
     pub(crate) fn line(
@@ -529,6 +610,9 @@ impl SurfaceSink {
         self.document
             .semantic_tokens
             .sort_by_key(|token| (token.span.start, token.span.end));
+        self.document
+            .invalid_syntax_spans
+            .sort_by_key(|span| (span.start, span.end));
         self.document
             .unclassified_highlight_spans
             .sort_by_key(|span| (span.start, span.end));

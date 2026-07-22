@@ -12,8 +12,6 @@ let visualClipClipboard = null;
 let visualClipFloating = null;
 let visualAnimationPlaybackTimer = 0;
 let visualAnimationPlaybackDurationMs = 0;
-let visualAnimationInsertMode = false;
-let visualAnimationRemoveMode = false;
 const visualColorEditSessions = {
   visual: null,
   visual3d: null,
@@ -120,8 +118,6 @@ function resetVisualAnimationFramesFromCurrentCells() {
   visual.animationFrameCount = 1;
   visual.animationPlaybackIndex = 0;
   visual.animationFrames = [cloneVisualCells(visual.cells)];
-  visualAnimationInsertMode = false;
-  visualAnimationRemoveMode = false;
 }
 
 function cloneVisualCells(cells = visual.cells) {
@@ -213,8 +209,6 @@ function renderVisualAnimationControlsContent() {
   ensureVisualAnimationFrames();
   visualBuilder.classList.toggle("is-animation-mode", visual.animationMode);
   if (!visual.animationMode) {
-    visualAnimationInsertMode = false;
-    visualAnimationRemoveMode = false;
     return;
   }
   syncVisualAnimationInputValues({ preserveActive: true });
@@ -228,16 +222,10 @@ function syncSharedVisualAnimationToolbarState(frameCount, maxFrames) {
   if (visualAnimationPreviousFrameButton) visualAnimationPreviousFrameButton.disabled = frameCount <= 1;
   if (visualAnimationNextFrameButton) visualAnimationNextFrameButton.disabled = frameCount <= 1;
   if (visualAnimationInsertFrameButton) {
-    const active = visualAnimationInsertMode && frameCount < maxFrames;
     visualAnimationInsertFrameButton.disabled = frameCount >= maxFrames;
-    visualAnimationInsertFrameButton.classList.toggle("is-active", active);
-    visualAnimationInsertFrameButton.setAttribute("aria-pressed", active ? "true" : "false");
   }
   if (visualAnimationRemoveFrameButton) {
-    const active = visualAnimationRemoveMode && frameCount > 1;
     visualAnimationRemoveFrameButton.disabled = frameCount <= 1;
-    visualAnimationRemoveFrameButton.classList.toggle("is-active", active);
-    visualAnimationRemoveFrameButton.setAttribute("aria-pressed", active ? "true" : "false");
   }
 }
 
@@ -257,6 +245,7 @@ function mountSharedVisualAnimationUi(dimension) {
     }
     previewColumn.insertBefore(toolbar, previewStage);
     toolbar.classList.add("is-visual3d-shared");
+    panel.classList.add("visual3d-animation-panel");
     previewStage.append(sidecar);
     toolbar.setAttribute("aria-label", "3D visual animation frame controls");
     playbackPanel.setAttribute("aria-label", "3D visual animation playback preview");
@@ -271,6 +260,7 @@ function mountSharedVisualAnimationUi(dimension) {
   }
   boardWrap.insertBefore(toolbar, workspace);
   toolbar.classList.remove("is-visual3d-shared");
+  panel.classList.remove("visual3d-animation-panel");
   workspace.append(sidecar);
   toolbar.setAttribute("aria-label", "Visual animation frame controls");
   playbackPanel.setAttribute("aria-label", "Visual animation playback preview");
@@ -320,8 +310,6 @@ function renderVisualAnimationFrameStrip() {
   if (!visualAnimationFrameStrip) {
     return;
   }
-  const showInsertTargets = visualAnimationInsertMode && visual.animationFrameCount < VISUAL_ANIMATION_MAX_FRAMES;
-  const showRemoveTargets = visualAnimationRemoveMode && visual.animationFrameCount > 1;
   renderVisualAnimationFrameStripView({
     target: visualAnimationFrameStrip,
     frameCount: visual.animationFrameCount,
@@ -330,12 +318,8 @@ function renderVisualAnimationFrameStrip() {
     size: Math.max(visual.width, visual.height),
     columns: visual.width,
     rows: visual.height,
-    showInsertTargets,
-    showRemoveTargets,
     renderCells: (index) => visualAnimationFrameCells(visual.animationFrames[index]),
     onSelect: setVisualAnimationFrame,
-    onRemove: removeVisualAnimationFrameAt,
-    renderInsertTarget: visualAnimationInsertTargetButton,
     noun: "visual animation",
   });
 }
@@ -345,13 +329,8 @@ function renderVisualAnimationFrameStripView(options) {
   if (!target) {
     return;
   }
-  target.classList.toggle("is-insert-mode", Boolean(options.showInsertTargets));
-  target.classList.toggle("is-remove-mode", Boolean(options.showRemoveTargets));
   const fragment = document.createDocumentFragment();
   for (let index = 0; index < options.frameCount; index += 1) {
-    if (options.showInsertTargets) {
-      fragment.append(options.renderInsertTarget(index));
-    }
     const button = document.createElement("button");
     button.type = "button";
     button.className = "visual-animation-frame-button";
@@ -364,38 +343,17 @@ function renderVisualAnimationFrameStripView(options) {
     if (options.rows) {
       button.style.setProperty("--visual-preview-rows", options.rows);
     }
-    button.setAttribute("aria-label", options.showRemoveTargets
-      ? `Remove ${options.noun} frame ${index + 1}`
-      : `Edit ${options.noun} frame ${index + 1}`);
-    button.title = options.showRemoveTargets ? "Remove frame" : `Frame ${index + 1}`;
+    button.setAttribute("aria-label", `Edit ${options.noun} frame ${index + 1}`);
+    button.title = `Frame ${index + 1}`;
     button.append(...options.renderCells(index));
     const label = document.createElement("span");
     label.className = "visual-animation-frame-index";
     label.textContent = String(index + 1);
     button.append(label);
-    button.addEventListener("click", () => {
-      if (options.showRemoveTargets) {
-        options.onRemove(index);
-        return;
-      }
-      options.onSelect(index);
-    });
+    button.addEventListener("click", () => options.onSelect(index));
     fragment.append(button);
   }
-  if (options.showInsertTargets) {
-    fragment.append(options.renderInsertTarget(options.frameCount));
-  }
   target.replaceChildren(fragment);
-}
-
-function visualAnimationInsertTargetButton(index, onInsert = insertVisualAnimationFrameAt, noun = "visual animation") {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "visual-animation-insert-target";
-  button.setAttribute("aria-label", `Insert ${noun} frame at position ${index + 1}`);
-  button.title = "Add frame";
-  button.addEventListener("click", () => onInsert(index));
-  return button;
 }
 
 function sharedVisualAnimationController(dimension = currentVisualPaneMode) {
@@ -406,7 +364,9 @@ function sharedVisualAnimationController(dimension = currentVisualPaneMode) {
   return {
     dimension: is3d ? "visual3d" : "visual",
     state,
-    frames: is3d ? state.frames : state.animationFrames,
+    get frames() {
+      return is3d ? state.frames : state.animationFrames;
+    },
     maxFrames: is3d ? VISUAL3D_ANIMATION_MAX_FRAMES : VISUAL_ANIMATION_MAX_FRAMES,
     noun: is3d ? "3D visual animation" : "visual animation",
     durationMs: () => is3d ? normalizedVisual3dAnimationDuration() : normalizedVisualAnimationDuration(),
@@ -422,35 +382,9 @@ function sharedVisualAnimationController(dimension = currentVisualPaneMode) {
   };
 }
 
-function toggleSharedVisualAnimationEditMode(mode) {
-  const context = sharedVisualAnimationController();
-  const inserting = mode === "insert";
-  if (inserting && context.state.animationFrameCount >= context.maxFrames) {
-    visualAnimationInsertMode = false;
-    context.render();
-    setVisualActionStatus(`Maximum ${context.maxFrames} frames`, "is-error");
-    return;
-  }
-  if (!inserting && context.state.animationFrameCount <= 1) {
-    visualAnimationRemoveMode = false;
-    context.render();
-    setVisualActionStatus("At least 1 frame is required", "is-error");
-    return;
-  }
-  visualAnimationInsertMode = inserting ? !visualAnimationInsertMode : false;
-  visualAnimationRemoveMode = inserting ? false : !visualAnimationRemoveMode;
-  context.render();
-  const active = inserting ? visualAnimationInsertMode : visualAnimationRemoveMode;
-  setVisualActionStatus(active
-    ? (inserting ? "Click a frame gap" : "Click a frame to remove")
-    : (inserting ? "Add frame canceled" : "Remove frame canceled"), "is-ok");
-}
-
 function selectSharedVisualAnimationFrame(dimension, index) {
   const context = sharedVisualAnimationController(dimension);
   context.commit();
-  visualAnimationInsertMode = false;
-  visualAnimationRemoveMode = false;
   const nextIndex = Math.max(0, Math.min(context.state.animationFrameCount - 1, Math.trunc(Number(index) || 0)));
   context.state.animationFrameIndex = nextIndex;
   context.state.animationPlaybackIndex = nextIndex;
@@ -469,7 +403,6 @@ function moveSharedVisualAnimationFrame(dimension, delta) {
 function insertSharedVisualAnimationFrameAt(dimension, index) {
   const context = sharedVisualAnimationController(dimension);
   if (context.state.animationFrameCount >= context.maxFrames) {
-    visualAnimationInsertMode = false;
     context.render();
     setVisualActionStatus(`Maximum ${context.maxFrames} frames`, "is-error");
     return false;
@@ -484,8 +417,6 @@ function insertSharedVisualAnimationFrameAt(dimension, index) {
   context.state.animationFrameIndex = insertIndex;
   context.state.animationPlaybackIndex = insertIndex;
   context.state.cells = context.frames[insertIndex];
-  visualAnimationInsertMode = false;
-  visualAnimationRemoveMode = false;
   context.deactivateClip();
   context.render();
   setVisualActionStatus(`Added frame ${insertIndex + 1}`, "is-ok");
@@ -496,7 +427,6 @@ function insertSharedVisualAnimationFrameAt(dimension, index) {
 function removeSharedVisualAnimationFrameAt(dimension, index) {
   const context = sharedVisualAnimationController(dimension);
   if (context.state.animationFrameCount <= 1) {
-    visualAnimationRemoveMode = false;
     context.render();
     setVisualActionStatus("At least 1 frame is required", "is-error");
     return false;
@@ -510,13 +440,27 @@ function removeSharedVisualAnimationFrameAt(dimension, index) {
   context.state.animationFrameIndex = Math.min(removeIndex, context.frames.length - 1);
   context.state.animationPlaybackIndex = context.state.animationFrameIndex;
   context.state.cells = context.frames[context.state.animationFrameIndex];
-  visualAnimationInsertMode = false;
-  visualAnimationRemoveMode = false;
   context.deactivateClip();
   context.render();
   setVisualActionStatus(`Removed frame ${removeIndex + 1}`, "is-ok");
   pushVisualEditUndoSnapshot(context.dimension, before);
   return true;
+}
+
+function insertSharedVisualAnimationFrameAfterCurrent(dimension = currentVisualPaneMode) {
+  const context = sharedVisualAnimationController(dimension);
+  return insertSharedVisualAnimationFrameAt(
+    context.dimension,
+    context.state.animationFrameIndex + 1,
+  );
+}
+
+function removeSharedVisualAnimationCurrentFrame(dimension = currentVisualPaneMode) {
+  const context = sharedVisualAnimationController(dimension);
+  return removeSharedVisualAnimationFrameAt(
+    context.dimension,
+    context.state.animationFrameIndex,
+  );
 }
 
 function setVisualAnimationFrame(index) {
@@ -530,8 +474,6 @@ function moveVisualAnimationFrame(delta) {
 function updateVisualAnimationFrameCount(value) {
   const before = visualEditSnapshot("visual");
   visual.animationFrameCount = normalizedVisualAnimationFrameCount(value);
-  visualAnimationInsertMode = false;
-  visualAnimationRemoveMode = false;
   ensureVisualAnimationFrames();
   renderVisualBuilder();
   pushVisualEditUndoSnapshot("visual", before);
@@ -661,11 +603,6 @@ function renderVisualEditorUpperControls(target, controls) {
 
   const nameRow = document.createElement("div");
   nameRow.className = "visual-editor-name-row";
-  const sourceActions = document.createElement("span");
-  sourceActions.className = "visual-editor-source-actions";
-  sourceActions.setAttribute("role", "group");
-  sourceActions.setAttribute("aria-label", `${controls.dimension.toUpperCase()} visual source actions`);
-  sourceActions.append(controls.newButton, controls.addButton, controls.saveButton);
   const sizeControl = controls.extentInputs;
   const sizeEditor = document.createElement("span");
   sizeEditor.className = "visual-size-editor";
@@ -682,7 +619,6 @@ function renderVisualEditorUpperControls(target, controls) {
   nameRow.append(
     labeledControl("Visual for", controls.nameInput, "visual-name-control"),
     labeledControl("Size", sizeEditor, "visual-size-control"),
-    sourceActions,
   );
 
   const geometry = document.createElement("div");
@@ -739,9 +675,6 @@ function visualEditorUpperControls2d() {
     durationInput: visualAnimationDurationInput,
     frameCountInput: visualAnimationFrameCountInput,
     shapeField: visualShapeField,
-    newButton: newVisualButton,
-    addButton: visualInsertButton,
-    saveButton: visualUpdateButton,
   };
 }
 
@@ -758,9 +691,6 @@ function visualEditorUpperControls3d() {
     durationInput: visual3dAnimationDurationInput,
     frameCountInput: visual3dAnimationFrameCountInput,
     shapeField: visual3dShapeField,
-    newButton: newVisual3dButton,
-    addButton: visual3dInsertButton,
-    saveButton: visual3dUpdateButton,
   };
 }
 
@@ -798,7 +728,7 @@ function renderVisualControlsContent() {
         setVisualShapeSync(true, bind.name);
         return;
       }
-      rewriteCurrentVisualDefinitionFromBuilder("Updated shape tag");
+      void syncCurrentVisualDefinitionFromBuilder("Updated shape tag");
       renderVisualBuilder();
     },
   });
@@ -827,7 +757,6 @@ function syncVisualBucketButton() {
   visualFillButton.setAttribute("aria-label", "Fill");
   visualFillButton.title = "Fill";
   visualFillButton.dataset.tooltip = "Fill";
-  setEditorShortcutHint(visualFillButton, { key: "f" });
 }
 
 function toggleVisualBucketMode() {
@@ -1044,12 +973,12 @@ function renderVisualPaletteContent() {
     currentButton.style.setProperty("--visual-current-color", normalizeVisualColor(selected.color));
     currentButton.title = selectedIsTransparent
       ? "Transparent eraser cannot be edited"
-      : selectedDisplayName ? `Pick selected color ${selectedDisplayName}` : selectedBind.available ? `Pick selected color (${selectedBind.label})` : "Pick selected color";
+      : "Edit selected color";
     currentButton.setAttribute(
       "aria-label",
       selectedIsTransparent
         ? "Selected transparent eraser color #00000000, not editable"
-        : selectedDisplayName ? `Pick selected color ${selectedDisplayName}` : `Pick selected color ${selected.color}`,
+        : selectedDisplayName ? `Edit selected color ${selectedDisplayName}` : `Edit selected color ${selected.color}`,
     );
     currentButton.setAttribute("aria-disabled", String(selectedIsTransparent));
     currentButton.setAttribute("aria-expanded", String(!selectedIsTransparent && visual.editPaletteOpen));
@@ -1109,7 +1038,7 @@ function renderVisualPaletteContent() {
       selected.color = normalized;
       updateVisualBoundColorDefinition(selected, normalized);
       currentButton.style.setProperty("--visual-current-color", normalized);
-      currentButton.setAttribute("aria-label", selectedDisplayName ? `Pick selected color ${selectedDisplayName}` : `Pick selected color ${normalized}`);
+      currentButton.setAttribute("aria-label", selectedDisplayName ? `Edit selected color ${selectedDisplayName}` : `Edit selected color ${normalized}`);
       currentHexInput.value = selectedDisplayName || normalized;
       renderVisualColorSurfaces();
     };
@@ -1212,7 +1141,6 @@ function renderVisualPaletteContent() {
       const editMenu = renderVisualColorMenu({
         mode: "edit",
         customValue: selected.color,
-        customOnly: true,
       });
       editorPanel.append(editMenu);
       currentWrap.append(editorPanel);
@@ -1258,7 +1186,6 @@ const VISUAL_EDIT_COMMANDS = Object.freeze([
     group: "clipboard",
     icon: "copy",
     label: "Copy",
-    shortcut: Object.freeze({ key: "c", modifiers: Object.freeze(["primary"]) }),
     execute2d: () => copyVisualEditRegion(),
   }),
   Object.freeze({
@@ -1266,7 +1193,6 @@ const VISUAL_EDIT_COMMANDS = Object.freeze([
     group: "clipboard",
     icon: "scissors",
     label: "Cut",
-    shortcut: Object.freeze({ key: "x", modifiers: Object.freeze(["primary"]) }),
     execute2d: () => cutVisualEditRegion(),
   }),
   Object.freeze({
@@ -1274,7 +1200,6 @@ const VISUAL_EDIT_COMMANDS = Object.freeze([
     group: "clipboard",
     icon: "clipboard-paste",
     label: "Paste into",
-    shortcut: Object.freeze({ key: "v", modifiers: Object.freeze(["primary"]) }),
     execute2d: () => pasteVisualEditRegion(),
   }),
   Object.freeze({
@@ -1282,7 +1207,6 @@ const VISUAL_EDIT_COMMANDS = Object.freeze([
     group: "clipboard",
     icon: "trash-2",
     label: "Delete",
-    shortcut: Object.freeze({ keys: Object.freeze(["Delete", "Backspace"]) }),
     execute2d: () => deleteVisualEditRegion(),
   }),
 ]);
@@ -1293,10 +1217,6 @@ function visualEditCommandDefinition(command) {
     throw new Error(`Unknown visual edit command ${command}`);
   }
   return definition;
-}
-
-function visualEditCommandForShortcut(event) {
-  return VISUAL_EDIT_COMMANDS.find((command) => editorShortcutMatches(event, command.shortcut)) || null;
 }
 
 const VISUAL_EDITOR_TOOL_SCHEMA = Object.freeze([
@@ -1339,12 +1259,10 @@ function renderVisualEditCommandButton(dimension, command) {
     title: label,
     ariaLabel: label,
     danger: command === "delete",
-    onClick: () => runVisualEditCommand(dimension, command),
     icon: visualLucideIconSvg(definition.icon),
   });
   button.classList.add("visual-edit-command-button", `is-${command}`);
   button.dataset.visualEditCommand = command;
-  setEditorShortcutHint(button, definition.shortcut);
   return button;
 }
 
@@ -1422,12 +1340,10 @@ function renderVisualTranslateButton() {
     title: "Move",
     ariaLabel: "Move",
     active: visualTranslateActive,
-    onClick: toggleVisualTranslateMode,
     icon: visualLucideIconSvg("move"),
   });
   button.classList.add("visual-translate-button");
   button.dataset.tooltip = "Move";
-  setEditorShortcutHint(button, { key: "m" });
   return button;
 }
 
@@ -1438,11 +1354,9 @@ function renderVisualClipActions() {
     title: "Clip",
     ariaLabel: "Clip",
     active: visualClipActive,
-    onClick: toggleVisualClipMode,
     icon: visualLucideIconSvg("mouse-pointer-2"),
   });
   button.dataset.tooltip = "Clip";
-  setEditorShortcutHint(button, { key: "c" });
   clipActions.append(button);
   return clipActions;
 }
@@ -1764,12 +1678,12 @@ function toggleVisualPaletteEntryBinding(index) {
   }
   visual.selectedColorIndex = index;
   const bind = visualPaletteEntryBindInfo(entry);
-  rewriteCurrentVisualDefinitionFromBuilder(bind.linked ? "Linked color" : "Unlinked color");
+  void syncCurrentVisualDefinitionFromBuilder(bind.linked ? "Linked color" : "Unlinked color");
   renderVisualPalette();
   renderVisualColorSurfaces();
 }
 
-function linkVisualPaletteEntryToNewColor(index) {
+async function linkVisualPaletteEntryToNewColor(index) {
   const entry = visual.palette[index];
   if (!entry) {
     return;
@@ -1778,29 +1692,33 @@ function linkVisualPaletteEntryToNewColor(index) {
   if (!name) {
     return;
   }
-  const source = activeVisualEditSource();
-  const nextSource = ensureVisualColorDefinition(source, name, normalizeVisualColor(entry.color));
-  if (!nextSource) {
-    return;
-  }
+  const previousBind = entry.bind ?? null;
   entry.bind = { type: "color", name, linked: true };
-  const rewritten = replaceVisualDefinition(nextSource);
-  if (!rewritten) {
-    entry.bind = null;
-    setVisualActionStatus(`No visual named ${visualObjectName()}`, "is-error");
+  if (!await syncCurrentVisualDefinitionFromBuilder(`Linked color ${name}`)) {
+    entry.bind = previousBind;
+    renderVisualPalette();
     return;
   }
   visual.selectedColorIndex = index;
-  applyVisualSourceChange(rewritten.source, `Linked color ${name}`);
   renderVisualBuilder();
 }
 
-function rewriteCurrentVisualDefinitionFromBuilder(status) {
-  const result = replaceVisualDefinition(activeVisualEditSource());
-  if (!result) {
+async function syncCurrentVisualDefinitionFromBuilder(status = "") {
+  try {
+    await commitVisualEditorMutation({
+      state: visual,
+      request: () => visualEditMutationRequest("update"),
+    });
+  } catch (error) {
+    setVisualActionStatus(userFacingRuntimeError(error), "is-error");
+    setStatus(userFacingRuntimeError(error), "is-error");
     return false;
   }
-  applyVisualSourceChange(result.source, status);
+  if (status) {
+    setVisualActionStatus(status, "is-ok");
+    setStatus(status, "is-ok");
+  }
+  syncVisualSourceActionButtons();
   return true;
 }
 
@@ -1809,16 +1727,11 @@ function updateVisualBoundColorDefinition(entry, color) {
   if (!bind.linked || !bind.name) {
     return false;
   }
-  const source = activeVisualEditSource();
-  const nextSource = replaceVisualColorDefinition(source, bind.name, color);
-  if (!nextSource || nextSource === source) {
-    return false;
-  }
-  const applied = applyVisualSourceChange(nextSource);
-  if (applied) {
+  void syncCurrentVisualDefinitionFromBuilder().then((applied) => {
+    if (!applied) return;
     syncVisualPaletteEntriesForColorName(bind.name, color);
-  }
-  return applied;
+  });
+  return true;
 }
 
 function toggleVisualShapeBinding() {
@@ -1828,28 +1741,22 @@ function toggleVisualShapeBinding() {
     return;
   }
   visual.shapeBind = { type: "shape", name: info.name, linked: !info.linked };
-  rewriteCurrentVisualDefinitionFromBuilder(visual.shapeBind.linked ? "Linked shape" : "Unlinked shape");
+  void syncCurrentVisualDefinitionFromBuilder(visual.shapeBind.linked ? "Linked shape" : "Unlinked shape");
   renderVisualBuilder();
 }
 
-function linkVisualShapeToNewShape() {
+async function linkVisualShapeToNewShape() {
   const name = promptVisualShapeAssetName("Shape name", defaultVisualAssetName("shape"));
   if (!name) {
     return;
   }
-  const source = activeVisualEditSource();
-  const nextSource = ensureVisualShapeDefinition(source, name, visualAscii().split("\n"));
-  if (!nextSource) {
-    return;
-  }
+  const previousBind = visual.shapeBind;
   visual.shapeBind = { type: "shape", name, linked: true };
-  const rewritten = replaceVisualDefinition(nextSource);
-  if (!rewritten) {
-    visual.shapeBind = null;
-    setVisualActionStatus(`No visual named ${visualObjectName()}`, "is-error");
+  if (!await syncCurrentVisualDefinitionFromBuilder(`Linked shape ${name}`)) {
+    visual.shapeBind = previousBind;
+    renderVisualBuilder();
     return;
   }
-  applyVisualSourceChange(rewritten.source, `Linked shape ${name}`);
   renderVisualBuilder();
 }
 
@@ -1858,12 +1765,7 @@ function updateVisualBoundShapeDefinition() {
   if (!info.linked || !info.name) {
     return false;
   }
-  const source = activeVisualEditSource();
-  const nextSource = replaceVisualShapeDefinition(source, info.name, visualAscii().split("\n"));
-  if (!nextSource || nextSource === source) {
-    return false;
-  }
-  applyVisualSourceChange(nextSource);
+  void syncCurrentVisualDefinitionFromBuilder();
   return true;
 }
 
@@ -1972,26 +1874,6 @@ function syncVisualPaletteEntriesForColorName(name, color) {
   }
 }
 
-function applyVisualSourceChange(source, statusText = "") {
-  const document = activeVisualEditDocument();
-  if (!document || !isTextDocument(document)) {
-    setVisualActionStatus("No puzzle source", "is-error");
-    setStatus("No puzzle source for visual", "is-error");
-    return false;
-  }
-  document.source = source;
-  if (document.id === activeDocument()?.id) {
-    setSourceEditorValue(source, { resetUndo: false });
-  }
-  scheduleLocalSave();
-  schedulePreview();
-  if (statusText) {
-    setVisualActionStatus(statusText, "is-ok");
-    setStatus(statusText, "is-ok");
-  }
-  return true;
-}
-
 function activeVisualEditDocument() {
   return visualEditorOwnedDocument(visual, { allowActive: true }) || activePreviewDocument();
 }
@@ -2068,7 +1950,6 @@ function positionVisualColorMenu(menu, anchor, options = {}) {
 function renderVisualColorMenu({
   mode,
   customValue,
-  customOnly = false,
   inline = false,
   onPreset = null,
   onChange = null,
@@ -2079,35 +1960,32 @@ function renderVisualColorMenu({
   presetList.className = [
     "visual-color-menu",
     "is-adjuster",
-    customOnly ? "is-custom-only" : "",
     inline ? "is-inline-custom" : "",
   ].filter(Boolean).join(" ");
 
-  if (!customOnly) {
-    const presetGrid = document.createElement("span");
-    presetGrid.className = "visual-preset-grid";
-    for (const color of VISUAL_COLOR_PRESETS) {
-      const preset = document.createElement("button");
-      preset.type = "button";
-      preset.className = "visual-color-preset visual-color-swatch";
-      preset.classList.toggle("is-selected", normalizeVisualColor(color) === normalizeVisualColor(customValue));
-      preset.style.setProperty("--visual-swatch-color", normalizeVisualColor(color));
-      preset.title = mode === "add" ? `Start from ${color}` : `Use ${color}`;
-      preset.setAttribute("aria-label", mode === "add" ? `Start from color ${color}` : `Use color ${color}`);
-      preset.addEventListener("click", () => {
-        if (onPreset) {
-          onPreset(color, { deferHistory: true });
-        } else if (mode === "add") {
-          previewNewVisualColor(color, { deferHistory: true });
-        } else {
-          updateSelectedVisualColor(color, { deferHistory: true });
-        }
-        renderPalette();
-      });
-      presetGrid.append(preset);
-    }
-    presetList.append(presetGrid);
+  const presetGrid = document.createElement("span");
+  presetGrid.className = "visual-preset-grid";
+  for (const color of VISUAL_COLOR_PRESETS) {
+    const preset = document.createElement("button");
+    preset.type = "button";
+    preset.className = "visual-color-preset visual-color-swatch";
+    preset.classList.toggle("is-selected", normalizeVisualColor(color) === normalizeVisualColor(customValue));
+    preset.style.setProperty("--visual-swatch-color", normalizeVisualColor(color));
+    preset.title = mode === "add" ? `Start from ${color}` : `Use ${color}`;
+    preset.setAttribute("aria-label", mode === "add" ? `Start from color ${color}` : `Use color ${color}`);
+    preset.addEventListener("click", () => {
+      if (onPreset) {
+        onPreset(color, { deferHistory: true });
+      } else if (mode === "add") {
+        previewNewVisualColor(color, { deferHistory: true });
+      } else {
+        updateSelectedVisualColor(color, { deferHistory: true });
+      }
+      renderPalette();
+    });
+    presetGrid.append(preset);
   }
+  presetList.append(presetGrid);
   presetList.append(renderVisualColorAdjuster({
     color: customValue,
     ariaLabel: mode === "add" ? "New color" : "Selected color",
@@ -2258,7 +2136,9 @@ function renderVisualClipButton({ title, ariaLabel, icon, active = false, disabl
   button.setAttribute("aria-label", ariaLabel);
   button.setAttribute("aria-pressed", String(active));
   button.innerHTML = icon;
-  button.addEventListener("click", onClick);
+  if (typeof onClick === "function") {
+    button.addEventListener("click", onClick);
+  }
   return button;
 }
 
@@ -3068,7 +2948,7 @@ function syncVisualPaletteSwatches() {
     const normalized = normalizeVisualColor(selected.color);
     const displayName = visualPaletteEntryDisplayName(selected);
     currentButton.style.setProperty("--visual-current-color", normalized);
-    currentButton.setAttribute("aria-label", displayName ? `Pick selected color ${displayName}` : `Pick selected color ${normalized}`);
+    currentButton.setAttribute("aria-label", displayName ? `Edit selected color ${displayName}` : `Edit selected color ${normalized}`);
     const currentHexInput = visualPalette.querySelector(".visual-current-hex-input");
     if (currentHexInput && !currentHexInput.classList.contains("is-name-mode") && document.activeElement !== currentHexInput) {
       currentHexInput.value = normalized;
@@ -3740,31 +3620,19 @@ function moveVisualClipRangeBy(dx, dy) {
 }
 
 function handleVisualClipKeyboard(event) {
-  if (!visualClipShortcutsAreActive() || visualClipShortcutTargetIsText(event.target)) {
+  if (!visualClipShortcutsAreActive() || !visualClipActive || visualClipShortcutTargetIsText(event.target)) {
     return false;
   }
   const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
   const modifier = (event.metaKey && !event.ctrlKey) || (event.ctrlKey && !event.metaKey);
   let handled = false;
-  if (modifier && !event.altKey && !event.shiftKey && key === "c") {
-    handled = runVisualEditCommand("2d", "copy");
-  } else if (modifier && !event.altKey && !event.shiftKey && key === "x") {
-    handled = runVisualEditCommand("2d", "cut");
-  } else if (modifier && !event.altKey && !event.shiftKey && key === "v") {
-    handled = runVisualEditCommand("2d", "paste");
-  } else if (!modifier && !event.altKey && (key === "Backspace" || key === "Delete")) {
-    handled = runVisualEditCommand("2d", "delete");
-  } else if (visualClipActive && !modifier && !event.altKey && key === "Escape") {
-    deactivateVisualClipMode();
-    setVisualActionStatus(visualPaintToolStatusText(), "is-ok");
-    handled = true;
-  } else if (visualClipActive && !modifier && !event.altKey && key === "ArrowLeft") {
+  if (!modifier && !event.altKey && key === "ArrowLeft") {
     handled = moveVisualClipRangeBy(-1, 0);
-  } else if (visualClipActive && !modifier && !event.altKey && key === "ArrowRight") {
+  } else if (!modifier && !event.altKey && key === "ArrowRight") {
     handled = moveVisualClipRangeBy(1, 0);
-  } else if (visualClipActive && !modifier && !event.altKey && key === "ArrowUp") {
+  } else if (!modifier && !event.altKey && key === "ArrowUp") {
     handled = moveVisualClipRangeBy(0, -1);
-  } else if (visualClipActive && !modifier && !event.altKey && key === "ArrowDown") {
+  } else if (!modifier && !event.altKey && key === "ArrowDown") {
     handled = moveVisualClipRangeBy(0, 1);
   }
   if (!handled) {
@@ -3793,29 +3661,6 @@ function cancelVisualPaneToolShortcut(dimension) {
   else if (visualTranslateActive) deactivateVisualTranslateMode();
   else if (visualBucketActive) toggleVisualBucketMode();
   else return false;
-  return true;
-}
-
-function handleVisualPaneCommandShortcut(event) {
-  const dimension = visualPaneShortcutDimension();
-  if (!dimension || event.defaultPrevented || event.repeat
-    || visualClipShortcutTargetIsText(event.target)
-    || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) {
-    return false;
-  }
-  const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
-  let handled = true;
-  if (key === "f") dimension === "3d" ? toggleVisual3dBucketMode() : toggleVisualBucketMode();
-  else if (key === "m") dimension === "3d" ? toggleVisual3dTranslateMode() : toggleVisualTranslateMode();
-  else if (key === "c") dimension === "3d" ? toggleVisual3dClipMode() : toggleVisualClipMode();
-  else if (dimension === "3d" && ["x", "y", "z"].includes(key)) setVisual3dAxis(key);
-  else if (dimension === "3d" && key === "[") moveVisual3dSlice(-1);
-  else if (dimension === "3d" && key === "]") moveVisual3dSlice(1);
-  else if (key === "Escape") handled = cancelVisualPaneToolShortcut(dimension);
-  else handled = false;
-  if (!handled) return false;
-  event.preventDefault();
-  event.stopImmediatePropagation();
   return true;
 }
 
@@ -3924,14 +3769,6 @@ function visualAscii() {
     rows.push(row.join(""));
   }
   return rows.join("\n");
-}
-
-function visualClipboardText() {
-  return puzzleVisualText();
-}
-
-function puzzleVisualText() {
-  return visualObjectDefinitionText("");
 }
 
 function visualObjectName() {
@@ -4147,7 +3984,7 @@ function commitVisualShapeName(rawName, options = {}) {
   if (!name) {
     if (info.name) {
       visual.shapeBind = null;
-      rewriteCurrentVisualDefinitionFromBuilder("Shape sync off");
+      void syncCurrentVisualDefinitionFromBuilder("Shape sync off");
       renderVisualBuilder();
     } else if (options.reportError && options.sync) {
       setVisualActionStatus("Enter a shape name", "is-error");
@@ -4222,34 +4059,30 @@ function loadVisualSourceTarget(target, options = {}) {
   if (!Number.isInteger(target?.bodyStart) || !Number.isInteger(target?.bodyEnd)) {
     return null;
   }
+  if (options.recordHistory && typeof pushSourceNavigationHistory === "function") {
+    pushSourceNavigationHistory();
+  }
+  if (options.switchMode && currentPreviewMode !== "visual") {
+    setPreviewMode("visual");
+  }
   const targetName = target.name || visualObjectName();
   const loaded = parseVisualDefinitionSource(target.sourceVisual, targetName);
   if (!loaded) {
     const contractError = visualSourceContractError(target.sourceVisual);
-    if (contractError) {
-      if (!options.silent) {
-        setVisualActionStatus(contractError, "is-error");
-        setStatus(contractError, "is-error");
-      }
-      return null;
-    }
-    if (isIncompleteVisualSourceTarget(source, target)) {
+    if (target?.sourceVisual?.dimension === "2d") {
       applyIncompleteVisualSourceTarget(targetName, target);
       if (!options.silent) {
-        setVisualActionStatus(`Loaded unfinished ${visualNameInput.value || "visual"}`, "is-ok");
-        setStatus(`Loaded unfinished visual ${visualNameInput.value || ""}`.trim(), "is-ok");
+        const message = contractError
+          || `Loaded unfinished visual ${visualNameInput.value || ""}`.trim();
+        const status = contractError ? "is-error" : "is-ok";
+        setVisualActionStatus(message, status);
+        setStatus(message, status);
       }
       return `visual:${targetName}:${target.start ?? target.bodyStart}`;
     } else if (!options.silent) {
       setVisualActionStatus("No editable visual here", "is-error");
     }
     return null;
-  }
-  if (options.recordHistory && typeof pushSourceNavigationHistory === "function") {
-    pushSourceNavigationHistory();
-  }
-  if (options.switchMode && currentPreviewMode !== "visual") {
-    setPreviewMode("visual");
   }
   visualNameInput.value = targetName || "Visual";
   setVisualEditSource(target, activeDocument());
@@ -4282,16 +4115,12 @@ function loadVisualSourceTarget(target, options = {}) {
   visual.customColorOpen = false;
   visual.addDraftColorIndex = null;
   renderVisualBuilder();
+  syncPreviewModeButtonState();
   if (!options.silent) {
     setVisualActionStatus(`Loaded ${visualNameInput.value}`, "is-ok");
     setStatus(`Loaded visual ${visualNameInput.value}`, "is-ok");
   }
   return `visual:${targetName}:${target.start ?? target.bodyStart}`;
-}
-
-function isIncompleteVisualSourceTarget(_source, target) {
-  const paletteTokens = target?.sourceVisual?.paletteTokens;
-  return Array.isArray(paletteTokens) && paletteTokens.length === 0;
 }
 
 function applyIncompleteVisualSourceTarget(name, target) {
@@ -4315,6 +4144,7 @@ function applyIncompleteVisualSourceTarget(name, target) {
   visual.customColorOpen = false;
   visual.addDraftColorIndex = null;
   renderVisualBuilder();
+  syncPreviewModeButtonState();
 }
 
 function parseVisualDefinitionSource(contract, selectorName = "") {
@@ -4431,177 +4261,6 @@ function visualPaletteEntrySourceToken(entry) {
   return normalizeVisualColor(entry.color);
 }
 
-function collectVisualUnbracedShapeDefinitions(source, shapesBlock, callback) {
-  const body = source.slice(shapesBlock.bodyStart, shapesBlock.bodyEnd);
-  const lines = visualSourceBlockLines(body, shapesBlock.bodyStart);
-  let index = 0;
-  while (index < lines.length) {
-    const line = lines[index];
-    const bodyLineStart = line.start - shapesBlock.bodyStart;
-    const name = stripVisualAssetComment(line.text).trim();
-    const nameMatch = /^([A-Za-z_][A-Za-z0-9_+*()/-]*)$/.exec(name);
-    if (!nameMatch || topLevelDepthAt(body, bodyLineStart) !== 0) {
-      index += 1;
-      continue;
-    }
-
-    const rows = [];
-    let rowIndex = index + 1;
-    let bodyStart = null;
-    let bodyEnd = null;
-    while (rowIndex < lines.length) {
-      const rowLine = lines[rowIndex];
-      const rowLineStart = rowLine.start - shapesBlock.bodyStart;
-      const row = stripVisualAssetComment(rowLine.text).trim();
-      if (
-        !row
-        || topLevelDepthAt(body, rowLineStart) !== 0
-        || visualUnbracedShapeRowIsBoundary(lines, rowIndex, rows, body, shapesBlock)
-      ) {
-        break;
-      }
-      if (bodyStart === null) {
-        bodyStart = rowLine.start;
-      }
-      rows.push(row);
-      bodyEnd = rowLine.start + rowLine.text.length;
-      rowIndex += 1;
-    }
-    if (rows.length) {
-      callback(nameMatch[1], rows, {
-        indent: /^\s*/.exec(line.text)?.[0] || visualSourceChildIndent(shapesBlock.indent),
-        braced: false,
-        tableRow: false,
-        bodyStart,
-        bodyEnd,
-      });
-      index = rowIndex;
-    } else {
-      index += 1;
-    }
-  }
-}
-
-function visualUnbracedShapeRowIsBoundary(lines, rowIndex, rows, body, shapesBlock) {
-  const row = stripVisualAssetComment(lines[rowIndex]?.text || "").trim();
-  if (!row) {
-    return true;
-  }
-  if (row.includes("{") || row.includes("}")) {
-    return true;
-  }
-  if (!rows.length) {
-    return false;
-  }
-  const width = visualAsciiRowWidth(rows[0]);
-  const rowWidth = visualAsciiRowWidth(row);
-  if (!/^([A-Za-z_][A-Za-z0-9_+*()/-]*)$/.test(row)) {
-    return false;
-  }
-  if (rowWidth !== width) {
-    return true;
-  }
-  const next = visualNextTopLevelShapeLine(lines, rowIndex + 1, body, shapesBlock);
-  if (!next) {
-    return false;
-  }
-  return visualAsciiRowWidth(next) !== width;
-}
-
-function visualNextTopLevelShapeLine(lines, startIndex, body, shapesBlock) {
-  for (let index = startIndex; index < lines.length; index += 1) {
-    const line = lines[index];
-    const lineStart = line.start - shapesBlock.bodyStart;
-    const text = stripVisualAssetComment(line.text).trim();
-    if (!text) {
-      continue;
-    }
-    if (topLevelDepthAt(body, lineStart) !== 0) {
-      return "";
-    }
-    return text;
-  }
-  return "";
-}
-
-function visualAsciiRowWidth(row) {
-  return Array.from(String(row || "")).length;
-}
-
-function visualSourceBlockLines(text, absoluteStart) {
-  const lines = [];
-  let start = 0;
-  while (start <= text.length) {
-    const newline = text.indexOf("\n", start);
-    const end = newline < 0 ? text.length : newline;
-    const lineEnd = end > start && text[end - 1] === "\r" ? end - 1 : end;
-    lines.push({
-      text: text.slice(start, lineEnd),
-      start: absoluteStart + start,
-      end: absoluteStart + lineEnd,
-    });
-    if (newline < 0) {
-      break;
-    }
-    start = newline + 1;
-  }
-  return lines;
-}
-
-function visualSelectorSingleTagValue(selectorName, bindingName = "") {
-  const parts = String(selectorName || "").split(":").filter(Boolean);
-  if (parts.length !== 2) {
-    return "";
-  }
-  const value = parts[1];
-  return value && value !== bindingName ? value : "";
-}
-
-function collectVisualFlatAssetRows(source, block, callback) {
-  const body = source.slice(block.bodyStart, block.bodyEnd);
-  const pattern = /(^|\n)([\t ]*)([A-Za-z_][\w]*)\s*=\s*([^\n{}]+)/g;
-  let match = null;
-  while ((match = pattern.exec(body))) {
-    const bodyMatchStart = match.index + match[1].length;
-    if (topLevelDepthAt(body, bodyMatchStart) !== 0) {
-      continue;
-    }
-    callback(match[3], stripVisualAssetComment(match[4]).trim(), {
-      lineStart: block.bodyStart + bodyMatchStart,
-      valueStart: block.bodyStart + match.index + match[0].lastIndexOf(match[4]),
-      valueEnd: block.bodyStart + match.index + match[0].length,
-    });
-  }
-}
-
-function collectVisualAssetTables(source, block, callback) {
-  const body = source.slice(block.bodyStart, block.bodyEnd);
-  const pattern = /(^|\n)([\t ]*)([A-Za-z_][\w]*)(?::[A-Za-z_][\w]*)?\s*\{/g;
-  let match = null;
-  while ((match = pattern.exec(body))) {
-    const bodyMatchStart = match.index + match[1].length;
-    if (topLevelDepthAt(body, bodyMatchStart) !== 0) {
-      continue;
-    }
-    const openIndex = source.indexOf("{", block.bodyStart + bodyMatchStart);
-    const closeIndex = findMatchingBrace(source, openIndex);
-    if (openIndex < 0 || closeIndex < 0 || closeIndex > block.bodyEnd) {
-      continue;
-    }
-    const tableBlock = {
-      bodyStart: openIndex + 1,
-      bodyEnd: closeIndex,
-    };
-    collectVisualFlatAssetRows(source, tableBlock, (rowName, value, range) => {
-      callback(match[3], rowName, value, range);
-    });
-  }
-}
-
-function stripVisualAssetComment(value) {
-  return String(value || "").replace(/\s+\/\/.*$/, "");
-}
-
 function visualColorIndexForPaletteChar(char, paletteLength) {
   if (char === ".") {
     return null;
@@ -4705,31 +4364,6 @@ async function updateVisualInSource() {
   syncVisualSourceActionButtons();
 }
 
-function sourceWithStagedVisualAssetDefinitions(source) {
-  let nextSource = source;
-  for (const entry of visual.palette) {
-    const bind = visualPaletteEntryBindInfo(entry);
-    if (!bind.linked || !bind.name || findVisualColorDefinitionRange(nextSource, bind.name)) {
-      continue;
-    }
-    const withColor = ensureVisualColorDefinition(nextSource, bind.name, normalizeVisualColor(entry.color));
-    if (!withColor) {
-      return null;
-    }
-    nextSource = withColor;
-  }
-
-  const shape = visualAssetBindInfo(visual.shapeBind, "shape");
-  if (shape.linked && shape.name && !findVisualShapeDefinitionRange(nextSource, shape.name)) {
-    const withShape = ensureVisualShapeDefinition(nextSource, shape.name, visualAscii().split("\n"));
-    if (!withShape) {
-      return null;
-    }
-    nextSource = withShape;
-  }
-  return nextSource;
-}
-
 function deleteWholeVisualRegion() {
   const before = visualEditSnapshot("visual");
   if (visual.animationMode) {
@@ -4772,36 +4406,6 @@ function clearVisualActionError() {
   setVisualActionStatus("");
 }
 
-function insertVisualDefinition(source) {
-  const block = findVisualsBlock(source);
-  if (!block) {
-    const puzzleBlock = findPuzzleBlock(source);
-    if (puzzleBlock) {
-      const blockIndent = visualSourceChildIndent(puzzleBlock.indent);
-      const insertStart = source.slice(0, puzzleBlock.bodyEnd).trimEnd().length + 2 + blockIndent.length + "visuals {\n".length;
-      return {
-        source: `${source.slice(0, puzzleBlock.bodyEnd).trimEnd()}\n\n${blockIndent}visuals {\n${visualObjectDefinitionText(visualSourceChildIndent(blockIndent))}\n${blockIndent}}\n${source.slice(puzzleBlock.bodyEnd)}`,
-        start: insertStart,
-        updated: false,
-      };
-    }
-
-    const prefix = source.trimEnd() ? `${source.trimEnd()}\n\n` : "";
-    return {
-      source: `${prefix}visuals {\n${visualObjectDefinitionText(VISUAL_SOURCE_INDENT)}\n}\n`,
-      start: `${prefix}visuals {\n`.length,
-      updated: false,
-    };
-  }
-
-  const indent = visualSourceChildIndent(block.indent);
-  const before = source.slice(0, block.bodyEnd).trimEnd();
-  return {
-    source: `${before}\n\n${visualObjectDefinitionText(indent)}\n${source.slice(block.bodyEnd)}`,
-    start: before.length + 2,
-  };
-}
-
 function visualSourceCursorPosition(source, document = activeDocument()) {
   if (document?.id === activeDocument()?.id && sourceEditor) {
     return Math.max(
@@ -4810,143 +4414,6 @@ function visualSourceCursorPosition(source, document = activeDocument()) {
     );
   }
   return String(source || "").length;
-}
-
-async function visualSourceTargetAtCursor(source, cursor) {
-  if (typeof resolveSourceTargetFromWasm !== "function") {
-    return null;
-  }
-  return resolveSourceTargetFromWasm(source, cursor);
-}
-
-async function visualSourceTargetByName(source, name) {
-  const targetName = String(name || "").trim();
-  if (!targetName) {
-    return null;
-  }
-  const text = String(source || "");
-  const candidates = [];
-  let index = text.indexOf(targetName);
-  while (index >= 0) {
-    candidates.push(index);
-    index = text.indexOf(targetName, index + Math.max(1, targetName.length));
-  }
-  const unique = new Map();
-  for (const candidate of candidates) {
-    const target = await visualSourceTargetAtCursor(text, candidate);
-    if (!sourceTargetMatches(target, "visual", "2d") || target.name !== targetName) {
-      continue;
-    }
-    const key = `${target.start}:${target.end}`;
-    if (!unique.has(key)) {
-      unique.set(key, target);
-    }
-  }
-  return unique.size === 1 ? [...unique.values()][0] : null;
-}
-
-async function replaceCurrentVisualDefinitionFromParser(source, name = visual.editSourceName || visualObjectName()) {
-  const target = await visualSourceTargetByName(source, name);
-  if (!target || !Number.isInteger(target.start) || !Number.isInteger(target.end)) {
-    return null;
-  }
-  const range = {
-    ...target,
-    indent: visualSourceIndent(source.slice(source.lastIndexOf("\n", target.start - 1) + 1, target.start)),
-  };
-  const replaced = replaceVisualDefinition(source, range);
-  return replaced ? { ...replaced, target } : null;
-}
-
-function visualSourceInsertionLineEnd(source, position) {
-  const text = String(source || "");
-  const safePosition = Math.max(0, Math.min(text.length, Math.trunc(Number(position) || 0)));
-  const newline = text.indexOf("\n", safePosition);
-  return newline < 0 ? text.length : newline + 1;
-}
-
-function insertVisualSourceTextAt(source, position, text, innerOffset = 0) {
-  const original = String(source || "");
-  const safePosition = Math.max(0, Math.min(original.length, Math.trunc(Number(position) || 0)));
-  const before = original.slice(0, safePosition).trimEnd();
-  const after = original.slice(safePosition).replace(/^[\t ]*\n?/, "");
-  const snippet = String(text || "").trimEnd();
-  let next = before;
-  if (next) {
-    next += "\n\n";
-  }
-  const start = next.length + Math.max(0, Math.min(snippet.length, innerOffset));
-  next += snippet;
-  const end = next.length;
-  if (after) {
-    next += `${snippet ? "\n\n" : "\n"}${after}`;
-  } else {
-    next += "\n";
-  }
-  return { source: next, start, end };
-}
-
-function replaceVisualDefinition(source, sourceRange = currentVisualEditSourceRange(source)) {
-  const entry = sourceRange;
-  if (!entry) {
-    return null;
-  }
-  const replacement = visualObjectDefinitionText(visualSourceIndent(entry.indent));
-  return {
-    source: replaceEditorSourceRangePreservingLineBoundary(source, entry.start, entry.end, replacement),
-    start: entry.start,
-    end: entry.start + replacement.length,
-  };
-}
-
-function duplicateCurrentVisualDefinition(source) {
-  const entry = currentVisualEditSourceRange(source);
-  const block = findVisualsBlock(source);
-  if (!entry || !block || entry.start < block.bodyStart || entry.start > block.bodyEnd) {
-    return null;
-  }
-  const originalName = visualObjectName();
-  if (!originalName) {
-    return null;
-  }
-  const name = uniqueVisualDuplicateName(source, originalName);
-  if (!name) {
-    return null;
-  }
-  const duplicateText = visualObjectDefinitionText(visualSourceIndent(entry.indent), name);
-  const inserted = insertVisualSourceTextAt(
-    source,
-    visualSourceInsertionLineEnd(source, entry.end),
-    duplicateText,
-    0,
-  );
-  return {
-    source: inserted.source,
-    start: inserted.start,
-    end: inserted.end,
-    name,
-  };
-}
-
-function uniqueVisualDuplicateName(source, originalName) {
-  const base = String(originalName || "Visual").trim().replace(/_copy(?:_\d+)?$/, "") || "Visual";
-  const existing = visualSourceDefinitionNames(source);
-  for (let index = 1; index <= 10000; index += 1) {
-    const suffix = index === 1 ? "_copy" : `_copy_${index}`;
-    const candidate = `${base}${suffix}`;
-    if (!existing.has(candidate)) {
-      return candidate;
-    }
-  }
-  return "";
-}
-
-function visualSourceDefinitionNames(source) {
-  const names = new Set();
-  for (const entry of surfaceEntriesForSource(source).filter((entry) => sourceTargetMatches(entry, "visual", "2d"))) {
-    names.add(entry.name);
-  }
-  return names;
 }
 
 function canReplaceCurrentVisualDefinition(source) {
@@ -4964,7 +4431,7 @@ function syncVisualSourceActionButtons() {
 }
 
 function currentVisualEditSourceRange(source) {
-  return visualEditorSourceRange(visual, source, visualSourceIndent);
+  return visualEditorSourceRange(visual, source, () => "");
 }
 
 function revealVisualSourceResult(document, result) {
@@ -4981,452 +4448,8 @@ function revealVisualSourceResult(document, result) {
   });
 }
 
-function findVisualsBlock(source) {
-  const pattern = /(^|\n)([\t ]*)visuals(?:\s+[^\n{]+)?\s*\{/m;
-  const match = pattern.exec(source);
-  if (!match) {
-    return null;
-  }
-  const start = match.index + match[1].length;
-  const openIndex = source.indexOf("{", start);
-  const closeIndex = findMatchingBrace(source, openIndex);
-  if (openIndex < 0 || closeIndex < 0) {
-    return null;
-  }
-  return {
-    start,
-    openIndex,
-    closeIndex,
-    indent: match[2] || "",
-    bodyStart: openIndex + 1,
-    bodyEnd: closeIndex,
-  };
-}
-
-function findVisualAssetBlock(source, visualsBlock, name) {
-  const body = source.slice(visualsBlock.bodyStart, visualsBlock.bodyEnd);
-  const pattern = new RegExp(`(^|\\n)([\\t ]*)${escapeRegExp(name)}\\s*\\{`, "g");
-  let match = null;
-  while ((match = pattern.exec(body))) {
-    const bodyMatchStart = match.index + match[1].length;
-    if (topLevelDepthAt(body, bodyMatchStart) !== 0) {
-      continue;
-    }
-    const start = visualsBlock.bodyStart + bodyMatchStart;
-    const openIndex = source.indexOf("{", start);
-    const closeIndex = findMatchingBrace(source, openIndex);
-    if (openIndex < 0 || closeIndex < 0 || closeIndex > visualsBlock.bodyEnd) {
-      continue;
-    }
-    return {
-      start,
-      openIndex,
-      closeIndex,
-      indent: match[2] || "",
-      bodyStart: openIndex + 1,
-      bodyEnd: closeIndex,
-    };
-  }
-  return null;
-}
-
-function escapeRegExp(value) {
-  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function ensureVisualColorDefinition(source, name, color) {
-  const visualsBlock = findVisualsBlock(source);
-  if (!visualsBlock) {
-    setVisualActionStatus("No visuals block", "is-error");
-    return null;
-  }
-  if (findVisualColorDefinitionRange(source, name)) {
-    setVisualActionStatus(`${name} already exists`, "is-error");
-    return null;
-  }
-  const normalized = normalizeVisualColor(color);
-  const paletteBlock = findVisualAssetBlock(source, visualsBlock, "palette");
-  if (paletteBlock) {
-    const rowIndent = visualSourceChildIndent(paletteBlock.indent);
-    return `${source.slice(0, paletteBlock.bodyEnd).trimEnd()}\n${rowIndent}${name} = ${normalized}\n${source.slice(paletteBlock.bodyEnd)}`;
-  }
-  const blockIndent = visualSourceChildIndent(visualsBlock.indent);
-  const rowIndent = visualSourceChildIndent(blockIndent);
-  const paletteText = `\n${blockIndent}palette {\n${rowIndent}${name} = ${normalized}\n${blockIndent}}\n`;
-  return `${source.slice(0, visualsBlock.bodyStart)}${paletteText}${source.slice(visualsBlock.bodyStart)}`;
-}
-
-function replaceVisualColorDefinition(source, name, color) {
-  const range = findVisualColorDefinitionRange(source, name);
-  if (!range) {
-    return null;
-  }
-  return `${source.slice(0, range.valueStart)} ${normalizeVisualColor(color)}${source.slice(range.valueEnd)}`;
-}
-
-function ensureVisualShapeDefinition(source, name, rows) {
-  const shapeRows = visualShapeDefinitionRows(rows);
-  if (!shapeRows) {
-    setVisualActionStatus("Draw shape pixels before registering shape", "is-error");
-    return null;
-  }
-  const visualsBlock = findVisualsBlock(source);
-  if (!visualsBlock) {
-    setVisualActionStatus("No visuals block", "is-error");
-    return null;
-  }
-  if (findVisualShapeDefinitionRange(source, name)) {
-    setVisualActionStatus(`${name} already exists`, "is-error");
-    return null;
-  }
-  const shapesBlock = findVisualAssetBlock(source, visualsBlock, "shapes");
-  if (shapesBlock) {
-    const indent = visualSourceChildIndent(shapesBlock.indent);
-    const bodyHasContent = source.slice(shapesBlock.bodyStart, shapesBlock.bodyEnd).trim().length > 0;
-    const text = `${bodyHasContent ? "\n\n" : "\n"}${visualPlainShapeDefinitionText(indent, name, shapeRows)}\n`;
-    return `${source.slice(0, shapesBlock.bodyEnd).trimEnd()}${text}${source.slice(shapesBlock.bodyEnd)}`;
-  }
-  const blockIndent = visualSourceChildIndent(visualsBlock.indent);
-  const shapeIndent = visualSourceChildIndent(blockIndent);
-  const text = `\n${blockIndent}shapes {\n${visualPlainShapeDefinitionText(shapeIndent, name, shapeRows)}\n${blockIndent}}\n`;
-  return `${source.slice(0, visualsBlock.bodyStart)}${text}${source.slice(visualsBlock.bodyStart)}`;
-}
-
-function replaceVisualShapeDefinition(source, name, rows) {
-  const shapeRows = visualShapeDefinitionRows(rows);
-  if (!shapeRows) {
-    setVisualActionStatus("Draw shape pixels before updating shape", "is-error");
-    return null;
-  }
-  const range = findVisualShapeDefinitionRange(source, name);
-  if (!range) {
-    return null;
-  }
-  if (range.braced && !range.tableRow) {
-    const replacement = visualPlainShapeDefinitionText(range.indent, name, shapeRows);
-    const boundary = visualPlainShapeDefinitionTrailingBoundary(source, range.declarationEnd);
-    return `${source.slice(0, range.declarationStart)}${replacement}${boundary}${source.slice(range.declarationEnd)}`;
-  }
-  if (!range.braced) {
-    const indent = visualSourceChildIndent(range.indent);
-    const body = shapeRows.map((row) => `${indent}${row}`).join("\n");
-    return `${source.slice(0, range.bodyStart)}${body}${source.slice(range.bodyEnd)}`;
-  }
-  const rangeIndent = visualSourceIndent(range.indent);
-  const indent = visualSourceChildIndent(rangeIndent);
-  const body = `\n${shapeRows.map((row) => `${indent}${row}`).join("\n")}\n${rangeIndent}`;
-  return `${source.slice(0, range.bodyStart)}${body}${source.slice(range.bodyEnd)}`;
-}
-
-function visualPlainShapeDefinitionText(indent, name, rows) {
-  const rowIndent = visualSourceChildIndent(indent);
-  return `${indent}${name}\n${rows.map((row) => `${rowIndent}${row}`).join("\n")}`;
-}
-
-function visualPlainShapeDefinitionTrailingBoundary(source, position) {
-  const suffix = String(source || "").slice(position);
-  if (!suffix) {
-    return "";
-  }
-  if (/^\r?\n[\t ]*\r?\n/.test(suffix) || /^\r?\n[\t ]*\}/.test(suffix)) {
-    return "";
-  }
-  return "\n";
-}
-
-function visualShapeDefinitionRows(rows) {
-  const normalized = Array.isArray(rows)
-    ? rows.map((row) => String(row || "").trim()).filter(Boolean)
-    : [];
-  if (!normalized.length || !normalized.some((row) => /[0-9A-Za-z]/.test(row))) {
-    return null;
-  }
-  return normalized;
-}
-
-function findVisualShapeDefinitionRange(source, name) {
-  const visualsBlock = findVisualsBlock(source);
-  const shapesBlock = visualsBlock ? findVisualAssetBlock(source, visualsBlock, "shapes") : null;
-  if (!shapesBlock) {
-    return null;
-  }
-  const body = source.slice(shapesBlock.bodyStart, shapesBlock.bodyEnd);
-  const pattern = new RegExp(`(^|\\n)([\\t ]*)${escapeRegExp(name)}\\s*\\{`, "g");
-  let match = null;
-  while ((match = pattern.exec(body))) {
-    const bodyMatchStart = match.index + match[1].length;
-    if (topLevelDepthAt(body, bodyMatchStart) !== 0) {
-      continue;
-    }
-    const openIndex = source.indexOf("{", shapesBlock.bodyStart + bodyMatchStart);
-    const closeIndex = findMatchingBrace(source, openIndex);
-    if (openIndex < 0 || closeIndex < 0 || closeIndex > shapesBlock.bodyEnd) {
-      continue;
-    }
-    return {
-      name,
-      indent: match[2] || visualSourceChildIndent(shapesBlock.indent),
-      braced: true,
-      tableRow: false,
-      declarationStart: shapesBlock.bodyStart + bodyMatchStart,
-      declarationEnd: closeIndex + 1,
-      bodyStart: openIndex + 1,
-      bodyEnd: closeIndex,
-    };
-  }
-  let unbracedRange = null;
-  collectVisualUnbracedShapeDefinitions(source, shapesBlock, (shapeName, _rows, range) => {
-    if (!unbracedRange && shapeName === name) {
-      unbracedRange = range;
-    }
-  });
-  if (unbracedRange) {
-    return unbracedRange;
-  }
-  const tableSeparator = name.indexOf(":");
-  if (tableSeparator > 0) {
-    const tableName = name.slice(0, tableSeparator);
-    const value = visualSelectorSingleTagValue(visualObjectName(), name.slice(tableSeparator + 1));
-    return findVisualShapeTableRowRange(source, shapesBlock, tableName, value);
-  }
-  return null;
-}
-
-function findVisualShapeTableRowRange(source, shapesBlock, tableName, value = "") {
-  const body = source.slice(shapesBlock.bodyStart, shapesBlock.bodyEnd);
-  const tablePattern = new RegExp(`(^|\\n)([\\t ]*)${escapeRegExp(tableName)}:[A-Za-z_][\\w]*\\s*\\{`, "g");
-  let tableMatch = null;
-  while ((tableMatch = tablePattern.exec(body))) {
-    const tableMatchStart = tableMatch.index + tableMatch[1].length;
-    if (topLevelDepthAt(body, tableMatchStart) !== 0) {
-      continue;
-    }
-    const tableOpenIndex = source.indexOf("{", shapesBlock.bodyStart + tableMatchStart);
-    const tableCloseIndex = findMatchingBrace(source, tableOpenIndex);
-    if (tableOpenIndex < 0 || tableCloseIndex < 0 || tableCloseIndex > shapesBlock.bodyEnd) {
-      continue;
-    }
-    const tableBodyStart = tableOpenIndex + 1;
-    const tableBody = source.slice(tableBodyStart, tableCloseIndex);
-    const rowPattern = /(^|\n)([\t ]*)([A-Za-z_][\w]*)\s*\{/g;
-    let firstRange = null;
-    let rowMatch = null;
-    while ((rowMatch = rowPattern.exec(tableBody))) {
-      const rowMatchStart = rowMatch.index + rowMatch[1].length;
-      if (topLevelDepthAt(tableBody, rowMatchStart) !== 0) {
-        continue;
-      }
-      const openIndex = source.indexOf("{", tableBodyStart + rowMatchStart);
-      const closeIndex = findMatchingBrace(source, openIndex);
-      if (openIndex < 0 || closeIndex < 0 || closeIndex > tableCloseIndex) {
-        continue;
-      }
-      const range = {
-        indent: rowMatch[2] || visualSourceChildIndent(tableMatch[2]),
-        braced: true,
-        tableRow: true,
-        bodyStart: openIndex + 1,
-        bodyEnd: closeIndex,
-      };
-      if (!firstRange) {
-        firstRange = range;
-      }
-      if (value && rowMatch[3] === value) {
-        return range;
-      }
-    }
-    return firstRange;
-  }
-  return null;
-}
-
-function findVisualColorDefinitionRange(source, name) {
-  const visualsBlock = findVisualsBlock(source);
-  const paletteBlock = visualsBlock ? findVisualAssetBlock(source, visualsBlock, "palette") : null;
-  if (!paletteBlock) {
-    return null;
-  }
-  const tableSeparator = name.indexOf(":");
-  if (tableSeparator > 0) {
-    return findVisualColorTableRowRange(source, paletteBlock, name.slice(0, tableSeparator), name.slice(tableSeparator + 1));
-  }
-  return findVisualFlatAssetRowRange(source, paletteBlock, name);
-}
-
-function findVisualColorTableRowRange(source, paletteBlock, tableName, rowName) {
-  const body = source.slice(paletteBlock.bodyStart, paletteBlock.bodyEnd);
-  const pattern = new RegExp(`(^|\\n)([\\t ]*)${escapeRegExp(tableName)}(?::[A-Za-z_][\\w]*)?\\s*\\{`, "g");
-  let match = null;
-  while ((match = pattern.exec(body))) {
-    const bodyMatchStart = match.index + match[1].length;
-    if (topLevelDepthAt(body, bodyMatchStart) !== 0) {
-      continue;
-    }
-    const openIndex = source.indexOf("{", paletteBlock.bodyStart + bodyMatchStart);
-    const closeIndex = findMatchingBrace(source, openIndex);
-    if (openIndex < 0 || closeIndex < 0 || closeIndex > paletteBlock.bodyEnd) {
-      continue;
-    }
-    const rowRange = findVisualFlatAssetRowRange(source, { bodyStart: openIndex + 1, bodyEnd: closeIndex }, rowName);
-    if (rowRange) {
-      return rowRange;
-    }
-  }
-  return null;
-}
-
-function findVisualFlatAssetRowRange(source, block, name) {
-  const body = source.slice(block.bodyStart, block.bodyEnd);
-  const pattern = new RegExp(`(^|\\n)([\\t ]*)${escapeRegExp(name)}\\s*=\\s*([^\\n{}]+)`, "g");
-  let match = null;
-  while ((match = pattern.exec(body))) {
-    const bodyMatchStart = match.index + match[1].length;
-    if (topLevelDepthAt(body, bodyMatchStart) !== 0) {
-      continue;
-    }
-    const lineStart = block.bodyStart + bodyMatchStart;
-    const lineEndIndex = source.indexOf("\n", lineStart);
-    const lineEnd = lineEndIndex < 0 || lineEndIndex > block.bodyEnd ? block.bodyEnd : lineEndIndex;
-    const equalsIndex = source.indexOf("=", lineStart);
-    if (equalsIndex < 0 || equalsIndex > lineEnd) {
-      continue;
-    }
-    return {
-      lineStart,
-      lineEnd,
-      valueStart: equalsIndex + 1,
-      valueEnd: lineEnd,
-    };
-  }
-  return null;
-}
-
-function findPuzzleBlock(source) {
-  const pattern = /(^|\n)([\t ]*)puzzle(?:\s+[^\s{]+)?\s*\{/m;
-  const match = pattern.exec(source);
-  if (!match) {
-    return null;
-  }
-  const openIndex = source.indexOf("{", match.index + match[0].lastIndexOf("puzzle"));
-  const closeIndex = findMatchingBrace(source, openIndex);
-  if (closeIndex < 0) {
-    return null;
-  }
-  return {
-    indent: match[2] || "",
-    bodyStart: openIndex + 1,
-    bodyEnd: closeIndex,
-  };
-}
-
-const VISUAL_SOURCE_INDENT = "";
-
-function visualSourceIndent(indent = "") {
-  return String(indent || "").replace(/\t/g, VISUAL_SOURCE_INDENT);
-}
-
-function visualSourceChildIndent(indent = "") {
-  return `${visualSourceIndent(indent)}${VISUAL_SOURCE_INDENT}`;
-}
-
-function visualObjectDefinitionText(indent, name = visualObjectName()) {
-  const normalizedIndent = visualSourceIndent(indent);
-  const rowIndent = visualSourceChildIndent(normalizedIndent);
-  const shapeInfo = visualAssetBindInfo(visual.shapeBind, "shape");
-  const colorRow = visualPaletteSourceTokens().join(" ");
-  const solidRow = visual.solidSource ? visualSolidDefinitionRow(shapeInfo) : null;
-  const animationSource = visualAnimationSourceFrames();
-  const preludeRows = visualSourcePreludeRows({ omitDuration: Boolean(animationSource) }).map((row) => `${rowIndent}${row}`);
-  if (solidRow) {
-    return [
-      `${normalizedIndent}${name}`,
-      ...preludeRows,
-      `${rowIndent}${solidRow}`,
-    ].join("\n");
-  }
-  const lines = [
-    `${normalizedIndent}${name}`,
-    ...preludeRows,
-    `${rowIndent}${colorRow}`,
-  ];
-  if (shapeInfo.linked && shapeInfo.name) {
-    lines.push(`${rowIndent}shape ${shapeInfo.name}`);
-  } else if (animationSource) {
-    lines.splice(lines.length - 1, 0, `${rowIndent}duration ${visual.animationDurationMs}ms`);
-    animationSource.forEach((frame, index) => {
-      if (index > 0) {
-        lines.push(`${rowIndent}>`);
-      }
-      lines.push(...frame.map((row) => `${rowIndent}${row}`));
-    });
-  } else {
-    lines.push(...visualAscii().split("\n").map((row) => `${rowIndent}${row}`));
-  }
-  return lines.join("\n");
-}
-
-function visualAnimationSourceFrames() {
-  if (!visual.animationMode) {
-    return null;
-  }
-  ensureVisualAnimationFrames();
-  if (visual.animationFrameCount < 2 || visual.solidSource) {
-    return null;
-  }
-  return visual.animationFrames
-    .slice(0, visual.animationFrameCount)
-    .map((frame) => visualAsciiFromCells(frame));
-}
-
-function visualAsciiFromCells(cells) {
-  return Array.from({ length: visual.height }, (_, y) => (
-    Array.from({ length: visual.width }, (_, x) => {
-      const cell = Array.isArray(cells) ? cells[y * visual.width + x] : null;
-      return visualExportCharForColorIndex(cell);
-    }).join("")
-  )).join("\n");
-}
-
-function visualSourcePreludeRows(options = {}) {
-  return (Array.isArray(visual.sourcePreludeRows) ? visual.sourcePreludeRows : [])
-    .map((row) => String(row || "").trim())
-    .filter((row) => !isVisualSelectorPreludeRow(row))
-    .filter((row) => !(options.omitDuration && isVisualTimingPreludeRow(row)))
-    .filter(Boolean);
-}
-
-function isVisualSelectorPreludeRow(row) {
-  return /^selector(?:\s*=)?\s+\S+$/i.test(String(row || "").trim());
-}
-
-function isVisualTimingPreludeRow(row) {
-  return /^(?:duration|frame_duration)(?:\s*=)?\s+\S+$/i.test(String(row || "").trim());
-}
-
-function visualSolidDefinitionRow(shapeInfo) {
-  if (shapeInfo.linked || visual.palette.length !== 1 || !visual.cells.length) {
-    return null;
-  }
-  if (!visual.cells.every((cell) => cell === 0)) {
-    return null;
-  }
-  return visualPaletteSourceTokens()[0] || null;
-}
-
 function visualPaletteSourceTokens() {
   return visual.palette.map((entry) => visualPaletteEntrySourceToken(entry));
-}
-
-function topLevelDepthAt(text, endIndex) {
-  let depth = 0;
-  for (let index = 0; index < endIndex; index += 1) {
-    if (text[index] === "{") {
-      depth += 1;
-    } else if (text[index] === "}") {
-      depth = Math.max(0, depth - 1);
-    }
-  }
-  return depth;
 }
 
 for (const input of [
@@ -5496,10 +4519,8 @@ visualAnimationFrameInput?.addEventListener("keydown", (event) => {
   if (currentVisualPaneMode === "visual3d") setVisual3dAnimationFrame(Number(visualAnimationFrameInput.value) - 1);
   else setVisualAnimationFrame(Number(visualAnimationFrameInput.value) - 1);
 });
-visualAnimationPreviousFrameButton?.addEventListener("click", () => currentVisualPaneMode === "visual3d" ? moveVisual3dAnimationFrame(-1) : moveVisualAnimationFrame(-1));
-visualAnimationNextFrameButton?.addEventListener("click", () => currentVisualPaneMode === "visual3d" ? moveVisual3dAnimationFrame(1) : moveVisualAnimationFrame(1));
-visualAnimationInsertFrameButton?.addEventListener("click", () => toggleSharedVisualAnimationEditMode("insert"));
-visualAnimationRemoveFrameButton?.addEventListener("click", () => toggleSharedVisualAnimationEditMode("remove"));
+visualAnimationInsertFrameButton?.addEventListener("click", () => insertSharedVisualAnimationFrameAfterCurrent());
+visualAnimationRemoveFrameButton?.addEventListener("click", () => removeSharedVisualAnimationCurrentFrame());
 visualBrushSizeInput.addEventListener("change", () => {
   if (currentVisualPaneMode === "visual3d" && typeof selectVisual3dBrushSize === "function") {
     selectVisual3dBrushSize(visualBrushSizeInput.value);
@@ -5567,31 +4588,14 @@ document.addEventListener("click", (event) => {
   }
   deactivateVisualTranslateMode();
 });
-document.addEventListener("keydown", (event) => {
-  if (visualTranslateActive && event.key === "Escape") {
-    event.preventDefault();
-    deactivateVisualTranslateMode();
-  }
-});
-document.addEventListener("keydown", handleVisualPaneCommandShortcut);
 document.addEventListener("keydown", handleVisualClipKeyboard);
 document.addEventListener("pointerdown", closeVisualColorEditorFromOutside);
-visualUpdateButton.addEventListener("click", () => {
-  updateVisualInSource().catch((error) => {
-    console.error(error);
-    setVisualActionStatus("Visual source update failed", "is-error");
-    setStatus("Visual source update failed", "is-error");
-  });
-});
-newVisualButton?.addEventListener("click", newVisualDraft);
-visualInsertButton?.addEventListener("click", addVisualToSource);
 visualScaleDownButton.addEventListener("click", scaleDownVisual);
 visualScaleUpButton.addEventListener("click", scaleUpVisual);
 visualRotateLeftButton.addEventListener("click", rotateVisualLeft);
 visualRotateRightButton.addEventListener("click", rotateVisualRight);
 visualFlipHorizontalButton.addEventListener("click", flipVisualHorizontal);
 visualFlipVerticalButton.addEventListener("click", flipVisualVertical);
-visualFillButton.addEventListener("click", toggleVisualBucketMode);
 visualGridButton?.addEventListener("click", () => {
   if (currentVisualPaneMode === "visual3d" && typeof toggleVisual3dGrid === "function") {
     toggleVisual3dGrid();

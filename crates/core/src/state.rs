@@ -143,7 +143,6 @@ pub struct GridState<const D: usize, Size: GridSize<D>> {
     pub size: Size,
     pub layer_count: u16,
     slots: Vec<ObjectId>,
-    mark: MarkSpace<MarkId>,
     visible_variables: VisibleVariables<VariableId>,
     level_fired_rules: Vec<RuleId>,
     #[serde(skip)]
@@ -170,9 +169,6 @@ struct DerivedCache {
     object_counts: Vec<u32>,
     object_positions: Vec<Vec<usize>>,
     cell_object_masks: Vec<ObjectCellMask>,
-    mark_positions: BTreeMap<MarkPositionKey, Vec<usize>>,
-    slot_mark_positions: BTreeMap<MarkKey, Vec<usize>>,
-    program_state_key: puzzle_kernel::ProgramStateKey,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -188,6 +184,439 @@ struct MarkKey {
     value: Option<i64>,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct GridMarkScratch {
+    mark: MarkSpace<MarkId>,
+    mark_positions: BTreeMap<MarkPositionKey, Vec<usize>>,
+    slot_mark_positions: BTreeMap<MarkKey, Vec<usize>>,
+}
+
+impl GridMarkScratch {
+    fn empty(cell_count: usize, slot_count: usize) -> Self {
+        Self {
+            mark: MarkSpace::new(cell_count, slot_count),
+            mark_positions: BTreeMap::new(),
+            slot_mark_positions: BTreeMap::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct GridExecutionState<const D: usize, Size: GridSize<D>> {
+    committed: GridState<D, Size>,
+    scratch: GridMarkScratch,
+    hash: u64,
+    program_state_key: puzzle_kernel::ProgramStateKey,
+}
+
+impl<const D: usize, Size: GridSize<D>> GridExecutionState<D, Size> {
+    pub(crate) fn new(committed: GridState<D, Size>) -> Self {
+        let shape = committed.shape();
+        let scratch = GridMarkScratch::empty(
+            shape
+                .cell_count()
+                .expect("state dimensions are validated at construction"),
+            shape
+                .slot_count()
+                .expect("state dimensions are validated at construction"),
+        );
+        Self::with_scratch(committed, scratch)
+            .expect("scratch dimensions are derived from the committed state")
+    }
+
+    pub(crate) fn with_scratch(
+        committed: GridState<D, Size>,
+        scratch: GridMarkScratch,
+    ) -> Result<Self, GridStateError<D>> {
+        let shape = committed.shape();
+        if scratch.mark.cell_count() != shape.cell_count().unwrap_or(0)
+            || scratch.mark.slot_count() != shape.slot_count().unwrap_or(0)
+        {
+            return Err(GridStateError::InvalidDimensions);
+        }
+        let mut state = Self {
+            committed,
+            scratch,
+            hash: 0,
+            program_state_key: puzzle_kernel::ProgramStateKey::default(),
+        };
+        state.recompute_hash();
+        Ok(state)
+    }
+
+    pub(crate) fn committed(&self) -> &GridState<D, Size> {
+        &self.committed
+    }
+
+    pub(crate) fn into_committed(self) -> GridState<D, Size> {
+        self.committed
+    }
+
+    pub(crate) fn scratch(&self) -> &GridMarkScratch {
+        &self.scratch
+    }
+
+    pub(crate) fn program_state_key(&self) -> puzzle_kernel::ProgramStateKey {
+        self.program_state_key.clone()
+    }
+
+    pub(crate) fn mark_positions(
+        &self,
+        object: ObjectId,
+        mark: MarkId,
+        value: Option<i64>,
+    ) -> &[usize] {
+        self.scratch
+            .mark_positions
+            .get(&MarkPositionKey {
+                object,
+                mark,
+                value,
+            })
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    pub(crate) fn slot_mark_positions(&self, mark: MarkId, value: Option<i64>) -> &[usize] {
+        self.scratch
+            .slot_mark_positions
+            .get(&MarkKey { mark, value })
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    pub(crate) fn has_mark_at<ConditionDef, Rule, Condition, Frame>(
+        &self,
+        game: &CompiledGameModel<ConditionDef, Rule, Condition, Frame>,
+        position: impl Into<GridCoord<D>>,
+        object: ObjectId,
+        mark: MarkId,
+        value: Option<i64>,
+    ) -> bool {
+        let position = position.into();
+        if object.is_empty() {
+            return self.has_cell_mark_at(position, mark, value);
+        }
+        let Some(layer) = game.object_layer(object) else {
+            return false;
+        };
+        let Ok(index) = self.slot_index(position, layer) else {
+            return false;
+        };
+        self.slots[index] == object && self.scratch.mark.has_slot(index, mark, value)
+    }
+
+    pub(crate) fn has_mark_key_at<ConditionDef, Rule, Condition, Frame>(
+        &self,
+        game: &CompiledGameModel<ConditionDef, Rule, Condition, Frame>,
+        position: impl Into<GridCoord<D>>,
+        object: ObjectId,
+        mark: MarkId,
+    ) -> bool {
+        let position = position.into();
+        if object.is_empty() {
+            return self.has_cell_mark_key_at(position, mark);
+        }
+        let Some(layer) = game.object_layer(object) else {
+            return false;
+        };
+        let Ok(index) = self.slot_index(position, layer) else {
+            return false;
+        };
+        self.slots[index] == object && self.scratch.mark.has_slot_key(index, mark)
+    }
+
+    pub(crate) fn has_cell_mark_at(
+        &self,
+        position: impl Into<GridCoord<D>>,
+        mark: MarkId,
+        value: Option<i64>,
+    ) -> bool {
+        self.cell_index(position.into())
+            .is_ok_and(|index| self.scratch.mark.has_cell(index, mark, value))
+    }
+
+    pub(crate) fn has_cell_mark_key_at(
+        &self,
+        position: impl Into<GridCoord<D>>,
+        mark: MarkId,
+    ) -> bool {
+        self.cell_index(position.into())
+            .is_ok_and(|index| self.scratch.mark.has_cell_key(index, mark))
+    }
+
+    pub(crate) fn set_slot_unchecked(
+        &mut self,
+        position: GridCoord<D>,
+        layer: LayerId,
+        object: ObjectId,
+    ) {
+        let index = self.slot_index_unchecked(position, layer);
+        let existing = self.slots[index];
+        if existing != object {
+            self.clear_slot_mark_positions(index, existing);
+            self.scratch.mark.clear_slot(index);
+        }
+        self.committed.set_slot_index_unchecked(index, object);
+    }
+
+    pub(crate) fn take_slot_for_move_unchecked(
+        &mut self,
+        position: GridCoord<D>,
+        layer: LayerId,
+    ) -> Vec<SlotMark> {
+        let index = self.slot_index_unchecked(position, layer);
+        let object = self.slots[index];
+        self.clear_slot_mark_positions(index, object);
+        self.committed
+            .set_slot_index_unchecked(index, ObjectId::EMPTY);
+        self.scratch.mark.take_slot(index)
+    }
+
+    pub(crate) fn place_moved_slot_unchecked(
+        &mut self,
+        position: GridCoord<D>,
+        layer: LayerId,
+        object: ObjectId,
+        mark: Vec<SlotMark>,
+    ) {
+        let index = self.slot_index_unchecked(position, layer);
+        let existing = self.slots[index];
+        self.clear_slot_mark_positions(index, existing);
+        self.committed.set_slot_index_unchecked(index, object);
+        self.scratch.mark.replace_slot(index, mark);
+        self.add_slot_mark_positions(index, object);
+    }
+
+    pub(crate) fn set_mark_unchecked(
+        &mut self,
+        position: GridCoord<D>,
+        layer: LayerId,
+        mark: MarkId,
+        value: Option<i64>,
+    ) {
+        let index = self.slot_index_unchecked(position, layer);
+        let object = self.slots[index];
+        self.remove_slot_mark_key_positions(index, object, mark);
+        self.scratch.mark.set_slot(index, mark, value);
+        self.add_mark_position(object, mark, value, index);
+    }
+
+    pub(crate) fn set_cell_mark_unchecked(
+        &mut self,
+        position: GridCoord<D>,
+        mark: MarkId,
+        value: Option<i64>,
+    ) {
+        let index = self.cell_index_unchecked(position);
+        self.remove_cell_mark_key_positions(index, mark);
+        self.scratch.mark.set_cell(index, mark, value);
+        self.add_mark_position(ObjectId::EMPTY, mark, value, index);
+    }
+
+    pub(crate) fn remove_mark_unchecked(
+        &mut self,
+        position: GridCoord<D>,
+        layer: LayerId,
+        mark: MarkId,
+        value: Option<i64>,
+    ) {
+        let index = self.slot_index_unchecked(position, layer);
+        let object = self.slots[index];
+        self.remove_matching_slot_mark_positions(index, object, mark, value);
+        self.scratch.mark.remove_slot(index, mark, value);
+    }
+
+    pub(crate) fn remove_cell_mark_unchecked(
+        &mut self,
+        position: GridCoord<D>,
+        mark: MarkId,
+        value: Option<i64>,
+    ) {
+        let index = self.cell_index_unchecked(position);
+        self.remove_matching_cell_mark_positions(index, mark, value);
+        self.scratch.mark.remove_cell(index, mark, value);
+    }
+
+    pub(crate) fn mark_level_rule_fired(&mut self, rule: RuleId) {
+        self.committed.mark_level_rule_fired(rule);
+        self.recompute_hash();
+    }
+
+    pub(crate) fn update_visible_variable(
+        &mut self,
+        variable: VariableId,
+        op: VariableUpdateOp,
+        value: i64,
+    ) -> Result<(), GridStateError<D>> {
+        self.committed
+            .update_visible_variable(variable, op, value)?;
+        self.recompute_hash();
+        Ok(())
+    }
+
+    pub(crate) fn recompute_hash(&mut self) {
+        self.committed.recompute_hash();
+        self.hash = self
+            .scratch
+            .mark
+            .hash_into(self.committed.hash(), |mark| u64::from(mark.0));
+        let mut words = self.committed.build_program_state_key_words();
+        self.scratch
+            .mark
+            .append_key_words(&mut words, |mark| u64::from(mark.0));
+        self.program_state_key =
+            puzzle_kernel::ProgramStateKey::from_words_and_hash(words, self.hash);
+    }
+
+    fn add_slot_mark_positions(&mut self, index: usize, object: ObjectId) {
+        if object.is_empty() {
+            return;
+        }
+        for entry in self.scratch.mark.slot_at(index).collect::<Vec<_>>() {
+            self.add_mark_position(object, entry.mark, entry.value, index);
+        }
+    }
+
+    fn clear_slot_mark_positions(&mut self, index: usize, object: ObjectId) {
+        if object.is_empty() {
+            return;
+        }
+        for entry in self.scratch.mark.slot_at(index).collect::<Vec<_>>() {
+            self.remove_mark_position(object, entry.mark, entry.value, index);
+        }
+    }
+
+    fn remove_slot_mark_key_positions(&mut self, index: usize, object: ObjectId, mark: MarkId) {
+        if object.is_empty() {
+            return;
+        }
+        for entry in self.scratch.mark.slot_at(index).collect::<Vec<_>>() {
+            if entry.mark == mark {
+                self.remove_mark_position(object, entry.mark, entry.value, index);
+            }
+        }
+    }
+
+    fn remove_matching_slot_mark_positions(
+        &mut self,
+        index: usize,
+        object: ObjectId,
+        mark: MarkId,
+        value: Option<i64>,
+    ) {
+        if object.is_empty() {
+            return;
+        }
+        for entry in self.scratch.mark.slot_at(index).collect::<Vec<_>>() {
+            if entry.mark == mark && (value.is_none() || entry.value == value) {
+                self.remove_mark_position(object, entry.mark, entry.value, index);
+            }
+        }
+    }
+
+    fn remove_cell_mark_key_positions(&mut self, index: usize, mark: MarkId) {
+        for entry in self.scratch.mark.cell_at(index).collect::<Vec<_>>() {
+            if entry.mark == mark {
+                self.remove_mark_position(ObjectId::EMPTY, entry.mark, entry.value, index);
+            }
+        }
+    }
+
+    fn remove_matching_cell_mark_positions(
+        &mut self,
+        index: usize,
+        mark: MarkId,
+        value: Option<i64>,
+    ) {
+        for entry in self.scratch.mark.cell_at(index).collect::<Vec<_>>() {
+            if entry.mark == mark && (value.is_none() || entry.value == value) {
+                self.remove_mark_position(ObjectId::EMPTY, entry.mark, entry.value, index);
+            }
+        }
+    }
+
+    fn add_mark_position(
+        &mut self,
+        object: ObjectId,
+        mark: MarkId,
+        value: Option<i64>,
+        index: usize,
+    ) {
+        let positions = self
+            .scratch
+            .mark_positions
+            .entry(MarkPositionKey {
+                object,
+                mark,
+                value,
+            })
+            .or_default();
+        if let Err(insert_at) = positions.binary_search(&index) {
+            positions.insert(insert_at, index);
+        }
+        if !object.is_empty() {
+            let positions = self
+                .scratch
+                .slot_mark_positions
+                .entry(MarkKey { mark, value })
+                .or_default();
+            if let Err(insert_at) = positions.binary_search(&index) {
+                positions.insert(insert_at, index);
+            }
+        }
+    }
+
+    fn remove_mark_position(
+        &mut self,
+        object: ObjectId,
+        mark: MarkId,
+        value: Option<i64>,
+        index: usize,
+    ) {
+        let key = MarkPositionKey {
+            object,
+            mark,
+            value,
+        };
+        if let Some(positions) = self.scratch.mark_positions.get_mut(&key) {
+            if let Ok(position_index) = positions.binary_search(&index) {
+                positions.remove(position_index);
+            }
+            if positions.is_empty() {
+                self.scratch.mark_positions.remove(&key);
+            }
+        }
+        if !object.is_empty() {
+            let key = MarkKey { mark, value };
+            if let Some(positions) = self.scratch.slot_mark_positions.get_mut(&key) {
+                if let Ok(position_index) = positions.binary_search(&index) {
+                    positions.remove(position_index);
+                }
+                if positions.is_empty() {
+                    self.scratch.slot_mark_positions.remove(&key);
+                }
+            }
+        }
+    }
+}
+
+impl<const D: usize, Size: GridSize<D>> Deref for GridExecutionState<D, Size> {
+    type Target = GridState<D, Size>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.committed
+    }
+}
+
+impl<const D: usize, Size: GridSize<D>> PartialEq for GridExecutionState<D, Size> {
+    fn eq(&self, other: &Self) -> bool {
+        self.committed == other.committed && self.scratch.mark == other.scratch.mark
+    }
+}
+
+impl<const D: usize, Size: GridSize<D>> Eq for GridExecutionState<D, Size> {}
+
 impl<'de, const D: usize, Size> Deserialize<'de> for GridState<D, Size>
 where
     Size: GridSize<D> + Deserialize<'de>,
@@ -202,7 +631,6 @@ where
             size: Size,
             layer_count: u16,
             slots: Vec<ObjectId>,
-            mark: MarkSpace<MarkId>,
             visible_variables: VisibleVariables<VariableId>,
             level_fired_rules: Vec<RuleId>,
         }
@@ -212,7 +640,6 @@ where
             size: data.size,
             layer_count: data.layer_count,
             slots: data.slots,
-            mark: data.mark,
             visible_variables: data.visible_variables,
             level_fired_rules: data.level_fired_rules,
             derived_cache: DerivedCache::default(),
@@ -292,16 +719,12 @@ impl<const D: usize, Size: GridSize<D>> GridState<D, Size> {
             size,
             layer_count,
             slots: vec![ObjectId::EMPTY; slot_count],
-            mark: MarkSpace::new(cell_count, slot_count),
             visible_variables: VisibleVariables::new(visible_variables),
             level_fired_rules: Vec::new(),
             derived_cache: DerivedCache {
                 object_counts: vec![0; object_count + 1],
                 object_positions: vec![Vec::new(); object_count + 1],
                 cell_object_masks: vec![ObjectCellMask::default(); cell_count],
-                mark_positions: BTreeMap::new(),
-                slot_mark_positions: BTreeMap::new(),
-                program_state_key: puzzle_kernel::ProgramStateKey::default(),
             },
             hash: 0,
         };
@@ -314,10 +737,6 @@ impl<const D: usize, Size: GridSize<D>> GridState<D, Size> {
         self.hash
     }
 
-    pub(crate) fn program_state_key(&self) -> puzzle_kernel::ProgramStateKey {
-        self.derived_cache.program_state_key.clone()
-    }
-
     fn build_program_state_key_words(&self) -> Vec<u64> {
         let mut words =
             Vec::with_capacity(self.slots.len() + self.visible_variables.as_slice().len() + 16);
@@ -325,8 +744,6 @@ impl<const D: usize, Size: GridSize<D>> GridState<D, Size> {
         words.push(u64::from(self.layer_count));
         words.push(self.slots.len() as u64);
         words.extend(self.slots.iter().map(|object| u64::from(object.0)));
-        self.mark
-            .append_key_words(&mut words, |mark| u64::from(mark.0));
         words.push(self.visible_variables.as_slice().len() as u64);
         words.extend(
             self.visible_variables
@@ -342,24 +759,6 @@ impl<const D: usize, Size: GridSize<D>> GridState<D, Size> {
     #[inline]
     pub fn slots(&self) -> &[ObjectId] {
         &self.slots
-    }
-
-    pub fn slot_mark(&self) -> Vec<Vec<SlotMark>> {
-        self.mark.slot_values()
-    }
-
-    pub fn cell_mark(&self) -> Vec<Vec<SlotMark>> {
-        self.mark.cell_values()
-    }
-
-    #[inline]
-    pub fn cell_mark_at(&self, index: usize) -> SlotMarkIter<'_> {
-        self.mark.cell_at(index)
-    }
-
-    #[inline]
-    pub fn slot_mark_at(&self, index: usize) -> SlotMarkIter<'_> {
-        self.mark.slot_at(index)
     }
 
     #[inline]
@@ -385,33 +784,6 @@ impl<const D: usize, Size: GridSize<D>> GridState<D, Size> {
         self.recompute_hash();
     }
 
-    pub fn set_slot_mark_at(
-        &mut self,
-        position: impl Into<GridCoord<D>>,
-        layer: LayerId,
-        mark: MarkId,
-        value: Option<i64>,
-    ) -> Result<(), GridStateError<D>> {
-        let position = position.into();
-        self.slot_index(position, layer)?;
-        self.set_mark_unchecked(position, layer, mark, value);
-        self.recompute_hash();
-        Ok(())
-    }
-
-    pub fn set_cell_mark_at(
-        &mut self,
-        position: impl Into<GridCoord<D>>,
-        mark: MarkId,
-        value: Option<i64>,
-    ) -> Result<(), GridStateError<D>> {
-        let position = position.into();
-        self.cell_index(position)?;
-        self.set_cell_mark_unchecked(position, mark, value);
-        self.recompute_hash();
-        Ok(())
-    }
-
     pub fn without_objects(&self, objects: &[ObjectId]) -> Self {
         if objects.is_empty() {
             return self.clone();
@@ -431,7 +803,6 @@ impl<const D: usize, Size: GridSize<D>> GridState<D, Size> {
                 continue;
             }
             next.set_slot_index_unchecked(index, ObjectId::EMPTY);
-            next.mark.clear_slot(index);
         }
         next.recompute_hash();
         next
@@ -503,29 +874,6 @@ impl<const D: usize, Size: GridSize<D>> GridState<D, Size> {
         self.coord_from_cell_index(index)
     }
 
-    #[inline]
-    pub fn mark_positions(&self, object: ObjectId, mark: MarkId, value: Option<i64>) -> &[usize] {
-        let key = MarkPositionKey {
-            object,
-            mark,
-            value,
-        };
-        self.derived_cache
-            .mark_positions
-            .get(&key)
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
-    }
-
-    #[inline]
-    pub fn slot_mark_positions(&self, mark: MarkId, value: Option<i64>) -> &[usize] {
-        self.derived_cache
-            .slot_mark_positions
-            .get(&MarkKey { mark, value })
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
-    }
-
     pub fn cell_view_at(
         &self,
         position: impl Into<GridCoord<D>>,
@@ -583,66 +931,6 @@ impl<const D: usize, Size: GridSize<D>> GridState<D, Size> {
             .copied()
     }
 
-    pub fn has_mark_at<ConditionDef, Rule, Condition, Frame>(
-        &self,
-        game: &CompiledGameModel<ConditionDef, Rule, Condition, Frame>,
-        position: impl Into<GridCoord<D>>,
-        object: ObjectId,
-        mark: MarkId,
-        value: Option<i64>,
-    ) -> bool {
-        let position = position.into();
-        if object.is_empty() {
-            return self.has_cell_mark_at(position, mark, value);
-        }
-        let Some(layer) = game.object_layer(object) else {
-            return false;
-        };
-        let Ok(index) = self.slot_index(position, layer) else {
-            return false;
-        };
-        self.slots[index] == object && self.mark.has_slot(index, mark, value)
-    }
-
-    pub fn has_mark_key_at<ConditionDef, Rule, Condition, Frame>(
-        &self,
-        game: &CompiledGameModel<ConditionDef, Rule, Condition, Frame>,
-        position: impl Into<GridCoord<D>>,
-        object: ObjectId,
-        mark: MarkId,
-    ) -> bool {
-        let position = position.into();
-        if object.is_empty() {
-            return self.has_cell_mark_key_at(position, mark);
-        }
-        let Some(layer) = game.object_layer(object) else {
-            return false;
-        };
-        let Ok(index) = self.slot_index(position, layer) else {
-            return false;
-        };
-        self.slots[index] == object && self.mark.has_slot_key(index, mark)
-    }
-
-    pub fn has_cell_mark_at(
-        &self,
-        position: impl Into<GridCoord<D>>,
-        mark: MarkId,
-        value: Option<i64>,
-    ) -> bool {
-        let Ok(index) = self.cell_index(position.into()) else {
-            return false;
-        };
-        self.mark.has_cell(index, mark, value)
-    }
-
-    pub fn has_cell_mark_key_at(&self, position: impl Into<GridCoord<D>>, mark: MarkId) -> bool {
-        let Ok(index) = self.cell_index(position.into()) else {
-            return false;
-        };
-        self.mark.has_cell_key(index, mark)
-    }
-
     pub fn place_object_at<ConditionDef, Rule, Condition, Frame>(
         &mut self,
         game: &CompiledGameModel<ConditionDef, Rule, Condition, Frame>,
@@ -665,8 +953,6 @@ impl<const D: usize, Size: GridSize<D>> GridState<D, Size> {
         }
 
         self.set_slot_index_unchecked(index, object);
-        self.clear_slot_mark_positions(index, existing);
-        self.mark.clear_slot(index);
         self.recompute_hash();
         Ok(())
     }
@@ -686,112 +972,8 @@ impl<const D: usize, Size: GridSize<D>> GridState<D, Size> {
             return Err(GridStateError::ObjectNotPresent { position, object });
         }
         self.set_slot_index_unchecked(index, ObjectId::EMPTY);
-        self.clear_slot_mark_positions(index, object);
-        self.mark.clear_slot(index);
         self.recompute_hash();
         Ok(())
-    }
-
-    pub(crate) fn set_slot_unchecked(
-        &mut self,
-        position: GridCoord<D>,
-        layer: LayerId,
-        object: ObjectId,
-    ) {
-        let index = self.slot_index_unchecked(position, layer);
-        let existing = self.slots[index];
-        if existing != object {
-            self.clear_slot_mark_positions(index, existing);
-            self.mark.clear_slot(index);
-        }
-        self.set_slot_index_unchecked(index, object);
-    }
-
-    pub(crate) fn take_slot_for_move_unchecked(
-        &mut self,
-        position: GridCoord<D>,
-        layer: LayerId,
-    ) -> Vec<SlotMark> {
-        let index = self.slot_index_unchecked(position, layer);
-        let object = self.slots[index];
-        self.clear_slot_mark_positions(index, object);
-        self.set_slot_index_unchecked(index, ObjectId::EMPTY);
-        self.mark.take_slot(index)
-    }
-
-    pub(crate) fn place_moved_slot_unchecked(
-        &mut self,
-        position: GridCoord<D>,
-        layer: LayerId,
-        object: ObjectId,
-        mark: Vec<SlotMark>,
-    ) {
-        let index = self.slot_index_unchecked(position, layer);
-        let existing = self.slots[index];
-        self.clear_slot_mark_positions(index, existing);
-        self.set_slot_index_unchecked(index, object);
-        self.mark.replace_slot(index, mark);
-        self.add_slot_mark_positions(index, object);
-    }
-
-    pub(crate) fn set_mark_unchecked(
-        &mut self,
-        position: GridCoord<D>,
-        layer: LayerId,
-        mark: MarkId,
-        value: Option<i64>,
-    ) {
-        let index = self.slot_index_unchecked(position, layer);
-        let object = self.slots[index];
-        self.remove_slot_mark_key_positions(index, object, mark);
-        self.mark.set_slot(index, mark, value);
-        self.add_mark_position(object, mark, value, index);
-    }
-
-    pub(crate) fn set_cell_mark_unchecked(
-        &mut self,
-        position: GridCoord<D>,
-        mark: MarkId,
-        value: Option<i64>,
-    ) {
-        let index = self.cell_index_unchecked(position);
-        self.remove_cell_mark_key_positions(index, mark);
-        self.mark.set_cell(index, mark, value);
-        self.add_mark_position(ObjectId::EMPTY, mark, value, index);
-    }
-
-    pub(crate) fn remove_mark_unchecked(
-        &mut self,
-        position: GridCoord<D>,
-        layer: LayerId,
-        mark: MarkId,
-        value: Option<i64>,
-    ) {
-        let index = self.slot_index_unchecked(position, layer);
-        let object = self.slots[index];
-        self.remove_matching_slot_mark_positions(index, object, mark, value);
-        self.mark.remove_slot(index, mark, value);
-    }
-
-    pub(crate) fn remove_cell_mark_unchecked(
-        &mut self,
-        position: GridCoord<D>,
-        mark: MarkId,
-        value: Option<i64>,
-    ) {
-        let index = self.cell_index_unchecked(position);
-        self.remove_matching_cell_mark_positions(index, mark, value);
-        self.mark.remove_cell(index, mark, value);
-    }
-
-    pub(crate) fn clear_mark(&mut self) {
-        if self.mark.is_empty() {
-            return;
-        }
-        self.mark.clear_all();
-        self.derived_cache.mark_positions.clear();
-        self.derived_cache.slot_mark_positions.clear();
-        self.recompute_hash();
     }
 
     fn set_slot_index_unchecked(&mut self, index: usize, object: ObjectId) {
@@ -840,9 +1022,6 @@ impl<const D: usize, Size: GridSize<D>> GridState<D, Size> {
             object_counts: vec![0; object_count + 1],
             object_positions: vec![Vec::new(); object_count + 1],
             cell_object_masks: vec![ObjectCellMask::default(); cell_count],
-            mark_positions: BTreeMap::new(),
-            slot_mark_positions: BTreeMap::new(),
-            program_state_key: puzzle_kernel::ProgramStateKey::default(),
         };
         let mut index = 0;
         while index < self.slots.len() {
@@ -851,14 +1030,7 @@ impl<const D: usize, Size: GridSize<D>> GridState<D, Size> {
             if !object.is_empty() {
                 self.set_cell_object_mask(index, object);
             }
-            self.add_slot_mark_positions(index, object);
             index += 1;
-        }
-        for cell_index in 0..cell_count {
-            let entries = self.cell_mark_at(cell_index).collect::<Vec<_>>();
-            for entry in entries {
-                self.add_mark_position(ObjectId::EMPTY, entry.mark, entry.value, cell_index);
-            }
         }
     }
 
@@ -887,140 +1059,6 @@ impl<const D: usize, Size: GridSize<D>> GridState<D, Size> {
         self.derived_cache.cell_object_masks[cell_index].remove_raw(object.0);
     }
 
-    fn add_slot_mark_positions(&mut self, index: usize, object: ObjectId) {
-        if object.is_empty() {
-            return;
-        }
-        let mark = self.slot_mark_at(index).collect::<Vec<_>>();
-        for entry in mark {
-            self.add_mark_position(object, entry.mark, entry.value, index);
-        }
-    }
-
-    fn clear_slot_mark_positions(&mut self, index: usize, object: ObjectId) {
-        if object.is_empty() {
-            return;
-        }
-        let mark = self.slot_mark_at(index).collect::<Vec<_>>();
-        for entry in mark {
-            self.remove_mark_position(object, entry.mark, entry.value, index);
-        }
-    }
-
-    fn remove_slot_mark_key_positions(&mut self, index: usize, object: ObjectId, mark: MarkId) {
-        if object.is_empty() {
-            return;
-        }
-        let mark_entries = self.slot_mark_at(index).collect::<Vec<_>>();
-        for entry in mark_entries {
-            if entry.mark == mark {
-                self.remove_mark_position(object, entry.mark, entry.value, index);
-            }
-        }
-    }
-
-    fn remove_matching_slot_mark_positions(
-        &mut self,
-        index: usize,
-        object: ObjectId,
-        mark: MarkId,
-        value: Option<i64>,
-    ) {
-        if object.is_empty() {
-            return;
-        }
-        let mark_entries = self.slot_mark_at(index).collect::<Vec<_>>();
-        for entry in mark_entries {
-            if entry.mark == mark && (value.is_none() || entry.value == value) {
-                self.remove_mark_position(object, entry.mark, entry.value, index);
-            }
-        }
-    }
-
-    fn remove_cell_mark_key_positions(&mut self, index: usize, mark: MarkId) {
-        let mark_entries = self.cell_mark_at(index).collect::<Vec<_>>();
-        for entry in mark_entries {
-            if entry.mark == mark {
-                self.remove_mark_position(ObjectId::EMPTY, entry.mark, entry.value, index);
-            }
-        }
-    }
-
-    fn remove_matching_cell_mark_positions(
-        &mut self,
-        index: usize,
-        mark: MarkId,
-        value: Option<i64>,
-    ) {
-        let mark_entries = self.cell_mark_at(index).collect::<Vec<_>>();
-        for entry in mark_entries {
-            if entry.mark == mark && (value.is_none() || entry.value == value) {
-                self.remove_mark_position(ObjectId::EMPTY, entry.mark, entry.value, index);
-            }
-        }
-    }
-
-    fn add_mark_position(
-        &mut self,
-        object: ObjectId,
-        mark: MarkId,
-        value: Option<i64>,
-        index: usize,
-    ) {
-        let key = MarkPositionKey {
-            object,
-            mark,
-            value,
-        };
-        let positions = self.derived_cache.mark_positions.entry(key).or_default();
-        if let Err(insert_at) = positions.binary_search(&index) {
-            positions.insert(insert_at, index);
-        }
-        if !object.is_empty() {
-            let positions = self
-                .derived_cache
-                .slot_mark_positions
-                .entry(MarkKey { mark, value })
-                .or_default();
-            if let Err(insert_at) = positions.binary_search(&index) {
-                positions.insert(insert_at, index);
-            }
-        }
-    }
-
-    fn remove_mark_position(
-        &mut self,
-        object: ObjectId,
-        mark: MarkId,
-        value: Option<i64>,
-        index: usize,
-    ) {
-        let key = MarkPositionKey {
-            object,
-            mark,
-            value,
-        };
-        if let Some(positions) = self.derived_cache.mark_positions.get_mut(&key) {
-            if let Ok(position_index) = positions.binary_search(&index) {
-                positions.remove(position_index);
-            }
-            if positions.is_empty() {
-                self.derived_cache.mark_positions.remove(&key);
-            }
-        }
-        if !object.is_empty() {
-            let key = MarkKey { mark, value };
-            if let Some(positions) = self.derived_cache.slot_mark_positions.get_mut(&key) {
-                if let Ok(position_index) = positions.binary_search(&index) {
-                    positions.remove(position_index);
-                }
-                if positions.is_empty() {
-                    self.derived_cache.slot_mark_positions.remove(&key);
-                }
-            }
-        }
-    }
-
     pub(crate) fn recompute_hash(&mut self) {
         let mut hash = puzzle_kernel::FnvBuilder::OFFSET;
         for axis in self.size.axes() {
@@ -1030,7 +1068,6 @@ impl<const D: usize, Size: GridSize<D>> GridState<D, Size> {
         for object in &self.slots {
             hash = fnv_mix(hash, u64::from(object.0));
         }
-        hash = self.mark.hash_into(hash, |mark| u64::from(mark.0));
         for value in self.visible_variables.as_slice() {
             hash = fnv_mix(hash, *value as u64);
         }
@@ -1039,10 +1076,6 @@ impl<const D: usize, Size: GridSize<D>> GridState<D, Size> {
             hash = fnv_mix(hash, u64::from(rule.0));
         }
         self.hash = hash;
-        self.derived_cache.program_state_key = puzzle_kernel::ProgramStateKey::from_words_and_hash(
-            self.build_program_state_key_words(),
-            hash,
-        );
     }
 
     pub(crate) fn check_pos(&self, position: GridCoord<D>) -> Result<(), GridStateError<D>> {
@@ -1149,37 +1182,6 @@ impl GridState<2, Size2> {
         self.has_object_at(game, GridCoord::new([x, y]), object)
     }
 
-    pub fn has_mark(
-        &self,
-        game: &CompiledGame,
-        x: u16,
-        y: u16,
-        object: ObjectId,
-        mark: MarkId,
-        value: Option<i64>,
-    ) -> bool {
-        self.has_mark_at(game, GridCoord::new([x, y]), object, mark, value)
-    }
-
-    pub fn has_mark_key(
-        &self,
-        game: &CompiledGame,
-        x: u16,
-        y: u16,
-        object: ObjectId,
-        mark: MarkId,
-    ) -> bool {
-        self.has_mark_key_at(game, GridCoord::new([x, y]), object, mark)
-    }
-
-    pub fn has_cell_mark(&self, x: u16, y: u16, mark: MarkId, value: Option<i64>) -> bool {
-        self.has_cell_mark_at(GridCoord::new([x, y]), mark, value)
-    }
-
-    pub fn has_cell_mark_key(&self, x: u16, y: u16, mark: MarkId) -> bool {
-        self.has_cell_mark_key_at(GridCoord::new([x, y]), mark)
-    }
-
     pub fn place_object(
         &mut self,
         game: &CompiledGame,
@@ -1222,7 +1224,6 @@ impl<const D: usize, Size: GridSize<D>> PartialEq for GridState<D, Size> {
         self.size == other.size
             && self.layer_count == other.layer_count
             && self.slots == other.slots
-            && self.mark == other.mark
             && self.visible_variables == other.visible_variables
             && self.level_fired_rules == other.level_fired_rules
     }

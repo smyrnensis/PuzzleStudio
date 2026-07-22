@@ -575,28 +575,24 @@ fn source_visual3d_for_target(
 ) -> Option<SourceVisualTarget> {
     let product = visual_product_for_target(document, target)?;
     let analyzed = &product.body;
+    let syntax = &analyzed.syntax;
+    let (prelude_rows, transforms) = source_visual_editor_properties(syntax, &target.name);
     if analyzed.error.is_some() {
         return Some(SourceVisualTarget {
             dimension: crate::ModelDimension::Three,
             status: SourceVisualStatus::Invalid,
+            prelude_rows,
+            transforms,
             ..SourceVisualTarget::default()
         });
     }
-    let syntax = &analyzed.syntax;
-    let Ok(transforms) =
-        crate::eval_visual_transforms(&syntax.properties, &HashMap::new(), &target.name)
-    else {
-        return Some(SourceVisualTarget {
-            dimension: crate::ModelDimension::Three,
-            status: SourceVisualStatus::Invalid,
-            ..SourceVisualTarget::default()
-        });
-    };
     let palette_tokens = syntax.colors.clone().unwrap_or_default();
     if palette_tokens.is_empty() {
         return Some(SourceVisualTarget {
             dimension: crate::ModelDimension::Three,
             status: SourceVisualStatus::Incomplete,
+            prelude_rows,
+            transforms,
             ..SourceVisualTarget::default()
         });
     }
@@ -606,7 +602,9 @@ fn source_visual3d_for_target(
         return Some(SourceVisualTarget {
             dimension: crate::ModelDimension::Three,
             status: SourceVisualStatus::Invalid,
+            prelude_rows,
             palette_tokens,
+            transforms,
             ..SourceVisualTarget::default()
         });
     }
@@ -614,7 +612,9 @@ fn source_visual3d_for_target(
         return Some(SourceVisualTarget {
             dimension: crate::ModelDimension::Three,
             status: SourceVisualStatus::Invalid,
+            prelude_rows,
             palette_tokens,
+            transforms,
             ..SourceVisualTarget::default()
         });
     };
@@ -636,6 +636,7 @@ fn source_visual3d_for_target(
                         palette_tokens,
                         resolved_palette,
                         reference.clone(),
+                        prelude_rows,
                         transforms,
                     ));
                 }
@@ -657,7 +658,9 @@ fn source_visual3d_for_target(
             return Some(SourceVisualTarget {
                 dimension: crate::ModelDimension::Three,
                 status: SourceVisualStatus::Invalid,
+                prelude_rows,
                 palette_tokens,
+                transforms,
                 ..SourceVisualTarget::default()
             });
         }
@@ -667,7 +670,9 @@ fn source_visual3d_for_target(
         return Some(SourceVisualTarget {
             dimension: crate::ModelDimension::Three,
             status: SourceVisualStatus::Invalid,
+            prelude_rows,
             palette_tokens,
+            transforms,
             ..SourceVisualTarget::default()
         });
     };
@@ -678,7 +683,9 @@ fn source_visual3d_for_target(
             return Some(SourceVisualTarget {
                 dimension: crate::ModelDimension::Three,
                 status: SourceVisualStatus::Invalid,
+                prelude_rows,
                 palette_tokens,
+                transforms,
                 ..SourceVisualTarget::default()
             });
         };
@@ -686,7 +693,9 @@ fn source_visual3d_for_target(
             return Some(SourceVisualTarget {
                 dimension: crate::ModelDimension::Three,
                 status: SourceVisualStatus::Invalid,
+                prelude_rows,
                 palette_tokens,
+                transforms,
                 ..SourceVisualTarget::default()
             });
         }
@@ -722,6 +731,7 @@ fn source_visual3d_for_target(
     Some(SourceVisualTarget {
         dimension: crate::ModelDimension::Three,
         status: SourceVisualStatus::Complete,
+        prelude_rows,
         palette_tokens,
         resolved_palette,
         palette,
@@ -809,11 +819,13 @@ fn source_visual3d_unresolved_table_target(
     palette_tokens: Vec<String>,
     resolved_palette: Vec<SourceVisualPaletteEntry>,
     shape_ref: String,
+    prelude_rows: Vec<String>,
     transforms: Vec<crate::VisualTransform>,
 ) -> SourceVisualTarget {
     SourceVisualTarget {
         dimension: crate::ModelDimension::Three,
         status: SourceVisualStatus::Incomplete,
+        prelude_rows,
         palette: resolved_palette
             .iter()
             .map(|entry| visual_editor_color(&entry.color))
@@ -878,7 +890,8 @@ fn source_visual_target(
     let product_invalid = analyzed.error.is_some();
     let syntax = &analyzed.syntax;
     target.palette_tokens = syntax.colors.clone().unwrap_or_default();
-    target.prelude_rows = syntax.prelude_rows.clone();
+    (target.prelude_rows, target.transforms) =
+        source_visual_editor_properties(syntax, syntax.selector.as_deref().unwrap_or("visual"));
     if let Some(value) = &syntax.duration {
         target.duration_ms = puzzle_scene::parse_wait_duration_ms_at(&value, &value).ok();
     }
@@ -921,17 +934,6 @@ fn source_visual_target(
         .sort_by(|left, right| left.name().cmp(right.name()));
     target.resolved_palette =
         source_visual_palette_from_refs(&target.palette_tokens, &visual_refs.color_assets);
-    target.transforms = match crate::eval_visual_transforms(
-        &syntax.properties,
-        &HashMap::new(),
-        syntax.selector.as_deref().unwrap_or("visual"),
-    ) {
-        Ok(transforms) => transforms,
-        Err(_) => {
-            target.status = SourceVisualStatus::Invalid;
-            return Some(target);
-        }
-    };
     if target.resolved_shape_rows.is_empty() {
         if let Some(shape_ref) = &target.shape_ref {
             if let Some(rows) = target
@@ -949,6 +951,29 @@ fn source_visual_target(
         target.status = SourceVisualStatus::Invalid;
     }
     Some(target)
+}
+
+fn source_visual_editor_properties(
+    syntax: &crate::visual_authoring::VisualNodeSyntax,
+    line: &str,
+) -> (Vec<String>, Vec<crate::VisualTransform>) {
+    match crate::eval_visual_transforms(&syntax.properties, &HashMap::new(), line) {
+        Ok(transforms) => {
+            let prelude_rows = syntax
+                .prelude_rows
+                .iter()
+                .filter(|row| {
+                    !syntax
+                        .properties
+                        .iter()
+                        .any(|(_, property_row)| property_row == *row)
+                })
+                .cloned()
+                .collect();
+            (prelude_rows, transforms)
+        }
+        Err(_) => (syntax.prelude_rows.clone(), Vec::new()),
+    }
 }
 
 fn populate_source_visual_edit_frames(target: &mut SourceVisualTarget) {
@@ -1100,51 +1125,6 @@ fn is_hex_color(value: &str) -> bool {
     matches!(hex.len(), 3 | 4 | 6 | 8) && hex.chars().all(|ch| ch.is_ascii_hexdigit())
 }
 
-pub(crate) fn find_matching_brace(source: &str, open_index: usize) -> Option<usize> {
-    let mut depth = 0usize;
-    let mut quote = None::<char>;
-    let mut escaped = false;
-    let mut in_comment = false;
-    let mut iter = source[open_index..].char_indices().peekable();
-    while let Some((relative, ch)) = iter.next() {
-        let index = open_index + relative;
-        if in_comment {
-            if ch == '\n' {
-                in_comment = false;
-            }
-            continue;
-        }
-        if let Some(quote_ch) = quote {
-            if escaped {
-                escaped = false;
-            } else if ch == '\\' {
-                escaped = true;
-            } else if ch == quote_ch {
-                quote = None;
-            }
-            continue;
-        }
-        if ch == '/' && iter.peek().is_some_and(|(_, next)| *next == '/') {
-            in_comment = true;
-            iter.next();
-            continue;
-        }
-        if ch == '"' || ch == '\'' {
-            quote = Some(ch);
-            continue;
-        }
-        if ch == '{' {
-            depth += 1;
-        } else if ch == '}' {
-            depth = depth.saturating_sub(1);
-            if depth == 0 {
-                return Some(index);
-            }
-        }
-    }
-    None
-}
-
 fn push_json_number(out: &mut String, key: &str, value: usize) {
     out.push('"');
     out.push_str(key);
@@ -1260,7 +1240,7 @@ mod tests {
 title = source_entries
 
 puzzle board {
-slots {
+layers {
 Player
 }
 visuals {
@@ -1375,7 +1355,7 @@ PP
         let source = r#"
 puzzle push3d {
 dimension = 3
-slots {
+layers {
 Player
 }
 rules {
@@ -1763,7 +1743,7 @@ GoalCount
     fn visual_source_contract_resolves_palette_from_parser_visuals() {
         let source = r##"
 puzzle main {
-slots {
+layers {
 Player
 }
 
@@ -1815,7 +1795,7 @@ shape = {
     #[test]
     fn visual_edit_contract_distinguishes_transparent_color_from_empty_cell() {
         let source = r#"
-puzzle world { slots { actor = Player } }
+puzzle world { layers { actor = Player } }
 visuals art of world {
 Player {
 colors = transparent red
@@ -1836,7 +1816,7 @@ shape = {
     fn visual_source_contract_preserves_selector_and_duration_rows() {
         let source = r##"
 puzzle main {
-slots {
+layers {
 Player
 }
 
@@ -1886,7 +1866,7 @@ colors accent
     fn visual_source_contract_exposes_animation_frames() {
         let source = r##"
 puzzle main {
-slots {
+layers {
 Player
 }
 
@@ -2272,7 +2252,7 @@ puzzle board {
 tags {
 kind = A B
 }
-slots {
+layers {
 actor = Box:kind
 }
 visuals {
@@ -2343,10 +2323,12 @@ rotate directions from up
             .source_visual
             .as_ref()
             .expect("source visual contract");
+        assert_eq!(source_visual.status, SourceVisualStatus::Complete);
         assert_eq!(
             source_visual.prelude_rows,
             vec!["rotate directions from up".to_string()]
         );
+        assert!(source_visual.transforms.is_empty());
         assert_eq!(source_visual.palette_tokens, vec!["#000000".to_string()]);
         assert_eq!(
             source_visual.pixel_rows,
@@ -2358,6 +2340,38 @@ rotate directions from up
         let body = &source[target.body_start.unwrap()..target.body_end.unwrap()];
         assert!(body.contains("rotate directions from up"));
         assert!(body.contains(".000..000..000..000."));
+    }
+
+    #[test]
+    fn tag_parameterized_3d_visual_target_preserves_authored_transform() {
+        let source = r##"
+visuals {
+TEN:horizontal {
+colors = #ffffff #282828
+rotate horizontal from back
+shape = {
+0
+}
+}
+}
+"##;
+        let cursor = source.find("TEN:horizontal").unwrap();
+        let target =
+            resolve_source_target_for_profile(source, cursor, PuzzleSourceProfile::Puzzle3d)
+                .expect("3D visual target");
+        let source_visual = target.source_visual.expect("source visual contract");
+
+        assert_eq!(target.kind, SourceTargetKind::Visual);
+        assert_eq!(target.name, "TEN:horizontal");
+        assert_eq!(source_visual.status, SourceVisualStatus::Complete);
+        assert_eq!(source_visual.dimension, crate::ModelDimension::Three);
+        assert_eq!(
+            source_visual.prelude_rows,
+            vec!["rotate horizontal from back".to_string()]
+        );
+        assert!(source_visual.transforms.is_empty());
+        assert_eq!(source_visual.size, Some(1));
+        assert_eq!(source_visual.cells, vec![Some(0)]);
     }
 
     #[test]

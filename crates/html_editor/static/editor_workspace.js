@@ -3505,29 +3505,6 @@ function uniqueChildNameExcept(folder, name, ignoredId) {
   }
   return `${base}-${Date.now()}${ext}`;
 }
-function handleSaveShortcut(event) {
-  if (
-    event.defaultPrevented
-    || typeof editorCommandMatches !== "function"
-    || !editorCommandMatches("workspace.save", event)
-  ) {
-    return false;
-  }
-  if (typeof handleToolPaneSaveShortcut === "function" && handleToolPaneSaveShortcut(event)) {
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    return true;
-  }
-  event.preventDefault();
-  event.stopImmediatePropagation();
-  saveCurrentDocument(true).catch((error) => {
-    console.error(error);
-    setEditorStatus("Save failed", "is-error");
-    saveButton.disabled = false;
-  });
-  return true;
-}
-
 function setFileActionsMenuOpen(open) {
   if (!fileActionsButton || !fileActionsMenu) {
     return;
@@ -3542,19 +3519,23 @@ function installDesktopExitGuards() {
   if (!isDesktopHost()) {
     return;
   }
-  window.PuzzleStudioHost.listenDesktopCloseRequested(async (event) => {
+  window.PuzzleStudioHost.listenDesktopExitRequested(async (request) => {
     if (desktopExitConfirmationOpen) {
-      event.preventDefault();
       return;
     }
     desktopExitConfirmationOpen = true;
     try {
-      if (!confirmDesktopExitWithUnsavedChanges("Close this window")) {
-        event.preventDefault();
-        setEditorStatus("Close canceled: unsaved changes", "is-error");
+      const kind = request?.kind;
+      if (kind !== "window" && kind !== "app") {
+        throw new Error(`Unsupported desktop exit request: ${String(kind || "missing kind")}`);
       }
+      const actionLabel = kind === "app" ? "Quit PuzzleStudio" : "Close this window";
+      if (!confirmDesktopExitWithUnsavedChanges(actionLabel)) {
+        setEditorStatus(`${kind === "app" ? "Quit" : "Close"} canceled: unsaved changes`, "is-error");
+        return;
+      }
+      await window.PuzzleStudioHost.completeDesktopExit({ kind });
     } catch (error) {
-      event.preventDefault();
       console.error(error);
       setEditorStatus("Close blocked: unsaved state unavailable", "is-error");
     } finally {

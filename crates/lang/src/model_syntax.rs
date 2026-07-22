@@ -733,7 +733,13 @@ fn parse_model_body_syntax(
                 }
                 puzzle_authoring::PuzzleDirectiveSurface::CollisionLayers => {
                     return Err(error_at(
-                        "`collision_layers` was removed; use `slots { ... }`",
+                        "`collision_layers` was removed; use `layers { ... }`",
+                        &entry.header,
+                    ));
+                }
+                puzzle_authoring::PuzzleDirectiveSurface::RemovedSlots => {
+                    return Err(error_at(
+                        "`slots` was removed; use `layers { ... }`",
                         &entry.header,
                     ));
                 }
@@ -1543,11 +1549,24 @@ fn entry_semantic_syntax(
     directive: puzzle_authoring::PuzzleDirectiveSurface,
 ) -> SyntaxSemantics {
     let mut semantics = SyntaxSemantics::default();
-    mark_token(
-        &mut semantics.fixed,
-        header.tokens.first(),
-        SurfaceSemanticKind::Keyword,
-    );
+    if directive == puzzle_authoring::PuzzleDirectiveSurface::Unknown {
+        for token in header
+            .tokens
+            .iter()
+            .filter(|token| !matches!(token.text.as_str(), "{" | "}"))
+        {
+            semantics.fixed.mark_invalid(SourceSpan {
+                start: token.start,
+                end: token.end,
+            });
+        }
+    } else {
+        mark_token(
+            &mut semantics.fixed,
+            header.tokens.first(),
+            SurfaceSemanticKind::Keyword,
+        );
+    }
     match directive {
         puzzle_authoring::PuzzleDirectiveSurface::Legend
         | puzzle_authoring::PuzzleDirectiveSurface::Level
@@ -1631,24 +1650,57 @@ fn entry_semantic_syntax(
                 }
             }
         }
-        puzzle_authoring::PuzzleDirectiveSurface::Slots => {
+        puzzle_authoring::PuzzleDirectiveSurface::Layers => {
             for line in body {
+                let tokens = crate::split_header_tokens(&line.text);
+                if matches!(tokens.as_slice(), ["merge"] | ["}"]) {
+                    mark_text(
+                        &mut semantics.fixed,
+                        line,
+                        "merge",
+                        SurfaceSemanticKind::Keyword,
+                    );
+                    continue;
+                }
+                if let ["priority", "=", directions @ ..] = tokens.as_slice() {
+                    mark_text(
+                        &mut semantics.fixed,
+                        line,
+                        "priority",
+                        SurfaceSemanticKind::Keyword,
+                    );
+                    for direction in directions {
+                        mark_text(
+                            &mut semantics.fixed,
+                            line,
+                            direction,
+                            SurfaceSemanticKind::Variant,
+                        );
+                    }
+                    continue;
+                }
                 let Some(row) = puzzle_authoring::slot_row_surface(&line.text) else {
                     continue;
                 };
                 let selectors = match row {
                     puzzle_authoring::SlotRowSurface::Named(assignment) => {
-                        semantics
-                            .fixed
-                            .completion_symbols
-                            .groups
-                            .insert(assignment.name.to_string());
-                        mark_text(
-                            &mut semantics.fixed,
-                            line,
-                            assignment.name,
-                            SurfaceSemanticKind::Group,
-                        );
+                        if assignment
+                            .selectors
+                            .iter()
+                            .any(|selector| !selector.starts_with('!'))
+                        {
+                            semantics
+                                .fixed
+                                .completion_symbols
+                                .groups
+                                .insert(assignment.name.to_string());
+                            mark_text(
+                                &mut semantics.fixed,
+                                line,
+                                assignment.name,
+                                SurfaceSemanticKind::Group,
+                            );
+                        }
                         assignment.selectors
                     }
                     puzzle_authoring::SlotRowSurface::Each { selectors } => {
@@ -1663,6 +1715,20 @@ fn entry_semantic_syntax(
                     puzzle_authoring::SlotRowSurface::Anonymous { selectors } => selectors,
                 };
                 for selector in selectors {
+                    if let Some(animation) = selector.strip_prefix('!') {
+                        mark_text(
+                            &mut semantics.fixed,
+                            line,
+                            selector,
+                            SurfaceSemanticKind::Asset,
+                        );
+                        semantics
+                            .fixed
+                            .completion_symbols
+                            .visuals
+                            .insert(animation.to_string());
+                        continue;
+                    }
                     register_slot_completion_selector(&mut semantics.fixed, selector);
                     push_selector(&mut semantics, line, selector);
                 }
@@ -2045,13 +2111,102 @@ level "kept" {
     }
 
     #[test]
+    fn unknown_directive_owns_an_invalid_disposition_and_preserves_valid_siblings() {
+        let source = r#"
+puzzle board {
+__unknown_block__ {
+}
+rules {
+}
+}
+"#;
+        let lines = crate::source::logical_lines_with_locations(source).unwrap();
+        let entries = parse_document_entries(&lines).unwrap();
+        let models = parse_puzzle_models_from_document_entries(&entries).unwrap();
+        let [model] = models.as_slice() else {
+            panic!("expected one recovered model")
+        };
+        let unknown = source.find("__unknown_block__").unwrap();
+        let rules = source.find("rules").unwrap();
+
+        assert!(model.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .to_string()
+                .contains("unknown puzzle directive __unknown_block__")
+        }));
+        assert!(
+            model
+                .body
+                .semantics
+                .fixed
+                .token_dispositions
+                .iter()
+                .any(|disposition| {
+                    disposition.span.start == unknown
+                        && disposition.kind
+                            == crate::surface::ParserTokenDispositionKind::InvalidSyntax
+                })
+        );
+        assert!(
+            model
+                .body
+                .semantics
+                .fixed
+                .token_dispositions
+                .iter()
+                .any(|disposition| {
+                    disposition.span.start == rules
+                        && disposition.kind
+                            == crate::surface::ParserTokenDispositionKind::Semantic(
+                                SurfaceSemanticKind::Keyword,
+                            )
+                })
+        );
+        assert!(model.body.rules.is_some());
+    }
+
+    #[test]
+    fn known_directive_with_an_invalid_value_retains_its_keyword_disposition() {
+        let source = "puzzle board {\ndimension = 4\nrules {\n}\n}\n";
+        let lines = crate::source::logical_lines_with_locations(source).unwrap();
+        let entries = parse_document_entries(&lines).unwrap();
+        let models = parse_puzzle_models_from_document_entries(&entries).unwrap();
+        let [model] = models.as_slice() else {
+            panic!("expected one recovered model")
+        };
+        let dimension = source.find("dimension").unwrap();
+
+        assert!(
+            model
+                .diagnostics
+                .iter()
+                .any(|diagnostic| { diagnostic.to_string().contains("puzzle dimension must be") })
+        );
+        assert!(
+            model
+                .body
+                .semantics
+                .fixed
+                .token_dispositions
+                .iter()
+                .any(|disposition| {
+                    disposition.span.start == dimension
+                        && disposition.kind
+                            == crate::surface::ParserTokenDispositionKind::Semantic(
+                                SurfaceSemanticKind::Keyword,
+                            )
+                })
+        );
+    }
+
+    #[test]
     fn model_owner_contains_nested_2d_blocks() {
         let models = parse(
             r#"
 title = render_model
 
 puzzle default {
-slots 1
+layers 1
 empty .
 
 render {
@@ -2080,7 +2235,7 @@ level "start" {
             r#"
 puzzle space {
 dimension = 3
-slots 1
+layers 1
 map turn axis {
 }
 rules {

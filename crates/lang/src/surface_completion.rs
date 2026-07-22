@@ -181,7 +181,7 @@ fn grammar_completion_value_classes(
             crate::syntax::level_legend_directive_syntax(tokens, false)
         }
         Some(SourceScope::Group) => crate::syntax::named_selector_assignment_syntax(tokens, false),
-        Some(SourceScope::Slots) => crate::syntax::named_selector_assignment_syntax(tokens, false),
+        Some(SourceScope::Layers) => crate::syntax::named_selector_assignment_syntax(tokens, false),
         _ => None,
     }?;
     Some(syntax.expected_completion_values)
@@ -261,7 +261,7 @@ fn line_head_completion_slots(
             | SourceScope::Tags
             | SourceScope::Group
             | SourceScope::Map
-            | SourceScope::Slots
+            | SourceScope::Layers
             | SourceScope::Mark
             | SourceScope::Keys
             | SourceScope::Legend
@@ -535,7 +535,7 @@ fn symbol_definition_scope(scope: Option<SourceScope>) -> bool {
         scope,
         Some(
             SourceScope::Group
-                | SourceScope::Slots
+                | SourceScope::Layers
                 | SourceScope::Tags
                 | SourceScope::Mark
                 | SourceScope::Keys
@@ -561,7 +561,7 @@ fn default_completion_slots_for_scope(scope: Option<SourceScope>) -> Vec<Semanti
     match scope {
         None => authoring_root_line_head_completion_slots(),
         Some(SourceScope::Tags | SourceScope::Map) => vec![],
-        Some(SourceScope::Group | SourceScope::Slots) => vec![
+        Some(SourceScope::Group | SourceScope::Layers) => vec![
             SemanticCompletionSlot::Keywords(completion_keywords_for_scope(scope)),
             SemanticCompletionSlot::Objects,
             SemanticCompletionSlot::Groups,
@@ -665,7 +665,7 @@ fn completion_keywords_for_scope(scope: Option<SourceScope>) -> &'static [&'stat
         Some(SourceScope::Tags) => TAG_COMPLETION_KEYWORDS,
         Some(SourceScope::Group) => GROUP_COMPLETION_KEYWORDS,
         Some(SourceScope::Map) => &[],
-        Some(SourceScope::Slots) => LAYER_COMPLETION_KEYWORDS,
+        Some(SourceScope::Layers) => LAYER_COMPLETION_KEYWORDS,
         Some(SourceScope::Mark) => MARK_COMPLETION_KEYWORDS,
         Some(SourceScope::Keys) | Some(SourceScope::SceneKeys) => KEY_COMPLETION_KEYWORDS,
         Some(SourceScope::Legend) => LEGEND_COMPLETION_KEYWORDS,
@@ -837,7 +837,7 @@ const COMPLETION_KEYWORDS: &[&str] = &[
     "interactive_look",
     "interactive_zoom",
     "keys",
-    "slots",
+    "layers",
     "legend",
     "level",
     "levels",
@@ -1035,7 +1035,7 @@ puzzle board {
 tags {
 facing = left right
 }
-slots {
+layers {
 actor = Player:facing
 }
 }

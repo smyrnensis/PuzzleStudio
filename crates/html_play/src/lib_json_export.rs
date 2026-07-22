@@ -66,8 +66,6 @@ fn push_editor_preview_data(out: &mut String, state: &ServerState) {
     out.push(',');
     push_scenes(out, "scenes", &state.loaded);
     out.push(',');
-    push_scenes(out, "screens", &state.loaded);
-    out.push(',');
     push_export_sounds(out, &state.loaded.sounds);
     out.push(',');
     push_export_theme(out, &state.loaded.theme);
@@ -406,12 +404,43 @@ fn push_ordered_rule_effect(out: &mut String, effect: &RuleEffect) {
             push_json_number(out, "y", offset.y as u64);
             out.push('}');
         }
-        RuleEffect::Message { text, literal } => {
-            push_json_pair(out, "kind", "message");
+        RuleEffect::PresentComponent {
+            definition,
+            properties,
+            placement,
+            await_event,
+        } => {
+            push_json_pair(out, "kind", "present_component");
             out.push(',');
-            push_json_pair(out, "text", text);
+            push_json_pair(out, "definition", definition);
             out.push(',');
-            push_json_bool(out, "literal", *literal);
+            push_json_pair(
+                out,
+                "placement",
+                match placement {
+                    puzzle_runtime_contract::ComponentPlacement::Root => "root",
+                    puzzle_runtime_contract::ComponentPlacement::Content => "content",
+                    puzzle_runtime_contract::ComponentPlacement::Overlay => "overlay",
+                },
+            );
+            out.push_str(",\"properties\":[");
+            for (index, property) in properties.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                out.push('{');
+                push_json_pair(out, "name", &property.name);
+                out.push(',');
+                push_json_pair(out, "value", &property.value);
+                out.push(',');
+                push_json_bool(out, "literal", property.literal);
+                out.push('}');
+            }
+            out.push(']');
+            if let Some(event) = await_event {
+                out.push(',');
+                push_json_pair(out, "awaitEvent", event);
+            }
         }
         RuleEffect::Scene { effect } => {
             puzzle_scene::write_scene_effect_json(out, effect);

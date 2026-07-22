@@ -1,69 +1,85 @@
-// BASIC
-// EXPECT: Push the box onto the goal to clear the level.
-// TRY: Change the level, a visual color, or the win condition.
-
-title = "01 — Basic"
-subtitle = "Rules, collision, winning, visuals, and levels"
-
 puzzle basic {
-slots {
-Floor
+
+layers {
+Background
 Goal
-Player Box Wall
+Player Crate Wall
 }
 
 visuals {
-Floor
-#f4f0e6
-
-Goal
-#ffd166
-.....
-.000.
-.0.0.
-.000.
-.....
-
-Player
-#2563eb
-.000.
-00000
-.000.
-.0.0.
-.0.0.
-
-Box
-#b5651d #f4a261
-00000
-01110
-01110
-01110
-00000
-
-Wall
-#334155
-00000
-00000
-00000
-00000
-00000
+visual Background {
+colors = #90ee90 #008000
+shape = {
+11111
+01111
+11101
+11111
+10111
+}
 }
 
-win_conditions {
-all Goal on Box
+visual Wall {
+colors = #a46322 #493c2b
+shape = {
+00010
+11111
+01000
+11111
+00010
+}
+}
+
+visual Goal {
+colors = #00008b
+shape = {
+.....
+.000.
+.0.0.
+.000.
+.....
+}
+}
+
+visual Crate {
+colors = #ffa500 #ffff00
+shape = {
+00000
+0...0
+0...0
+0...0
+00000
+}
+}
+
+visual Player {
+colors = #000000 #ffa500 #ffffff #0000ff
+shape = {
+.000.
+.111.
+22222
+.333.
+.3.3.
+}
+}
+
 }
 
 on_level_start {
-[ no Floor ] -> [ Floor ]
+[  ] -> [ Background ]
 }
 
 rules {
-input [ Player | Box | no Wall ] -> [ | Player | Box ]
-input [ Player | no Box no Wall ] -> [ | Player ]
+once input [ Player | Crate | no Wall ] -> [ | Player | Crate ]
+once input [ Player | no Crate no Wall ] -> [ | Player ]
+}
+
+win_conditions {
+all Goal on Crate
 }
 
 on_level_clear {
 message "Cleared!"
+restart
 }
 
 levels {
@@ -71,16 +87,18 @@ legend {
 . = empty
 # = Wall
 P = Player
-B = Box
+B = Crate
 G = Goal
-* = Box Goal
+* = Crate Goal
 }
 
-level "push the box"
-#######
-#.....#
-#.PB.G#
-#.....#
-#######
+level "microban 1"
+####..
+#.G#..
+#..###
+#*P..#
+#..B.#
+#..###
+####..
 }
 }

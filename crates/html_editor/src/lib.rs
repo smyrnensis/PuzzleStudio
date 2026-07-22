@@ -26,7 +26,7 @@ const EDITOR_DOCS_METADATA_MARKDOWN: &str = include_str!("../docs/metadata.md");
 #[cfg(feature = "editor-docs")]
 const EDITOR_DOCS_PUZZLE_BLOCK_MARKDOWN: &str = include_str!("../docs/puzzle-block.md");
 #[cfg(feature = "editor-docs")]
-const EDITOR_DOCS_SLOTS_MARKDOWN: &str = include_str!("../docs/slots.md");
+const EDITOR_DOCS_LAYERS_MARKDOWN: &str = include_str!("../docs/layers.md");
 #[cfg(feature = "editor-docs")]
 const EDITOR_DOCS_GROUPS_MARKDOWN: &str = include_str!("../docs/groups.md");
 #[cfg(feature = "editor-docs")]
@@ -2255,9 +2255,9 @@ const EDITOR_DOCS_PAGES: &[EditorDocsPage] = &[
         markdown: EDITOR_DOCS_PUZZLE_BLOCK_MARKDOWN,
     },
     EditorDocsPage {
-        id: "slots",
-        title: "Slots",
-        markdown: EDITOR_DOCS_SLOTS_MARKDOWN,
+        id: "layers",
+        title: "Layers",
+        markdown: EDITOR_DOCS_LAYERS_MARKDOWN,
     },
     EditorDocsPage {
         id: "legend",
@@ -2440,8 +2440,8 @@ const EDITOR_DOCS_PAGES: &[EditorDocsPage] = &[
 #[cfg(feature = "editor-docs")]
 fn editor_docs_level(page: &EditorDocsPage) -> &'static str {
     match page.id {
-        "start" | "metadata" | "puzzle-block" | "slots" | "legend" | "levels" | "rewrite-rules"
-        | "input-rules" | "movement" | "win-conditions" | "visuals" => "Basic",
+        "start" | "metadata" | "puzzle-block" | "layers" | "legend" | "levels"
+        | "rewrite-rules" | "input-rules" | "movement" | "win-conditions" | "visuals" => "Basic",
         _ => "Advanced",
     }
 }
@@ -3401,7 +3401,7 @@ mod tests {
             r#"title = "{title}"
 
 puzzle default {{
-slots {{
+layers {{
 actor = Player
 }}
 
@@ -4074,7 +4074,7 @@ step board
 title = at_prefixed_object_single_color_preview
 
 puzzle default {
-slots {
+layers {
 @floor_slot = @Floor
 }
 visuals {
@@ -4118,7 +4118,7 @@ puzzle default {
 tags {
 state = base movable
 }
-slots {
+layers {
 actor = Box:state
 }
 visuals {
@@ -4164,7 +4164,7 @@ B
 title = "Multi Error Probe"
 
 puzzle main {
-slots {
+layers {
 base = Floor
 }
 
@@ -4231,10 +4231,10 @@ level "first"
 title = "Multi Lifecycle Error Probe"
 
 puzzle main {
-slots {
+layers {
 actor = Player
 }
-slots {
+layers {
 base = Player actor
 }
 
@@ -4318,7 +4318,7 @@ P.
 title = "Multi Statement Parse Error Probe"
 
 puzzle main {
-slots {
+layers {
 base = Player
 }
 
@@ -4379,7 +4379,7 @@ P
 title = "Sibling Statement Block Error Probe"
 
 puzzle main {
-slots {
+layers {
 base = Player
 }
 
@@ -4490,7 +4490,7 @@ title = "Bare 3D Input"
 puzzle push3 {
   dimension = 3
 
-  slots {
+  layers {
     actor = Player
   }
 
@@ -4613,38 +4613,24 @@ levels demo of push3 {
             "window.parent.postMessage({ type: \"PuzzleStudioEditorSaveShortcut\" }, \"*\");"
         ));
         assert!(EDITOR_JS.contains("event.data?.type === \"PuzzleStudioEditorSaveShortcut\""));
-        assert!(EDITOR_JS.contains("saveCurrentDocument(true).catch((error) => {"));
+        assert!(EDITOR_JS.contains("\"workspace.save\","));
+        assert!(EDITOR_JS.contains("editorCommandContext(null, previewFrame, \"button\")"));
     }
 
     #[test]
-    fn tool_pane_save_shortcut_updates_source_before_file_save() {
-        let tool_pane_hook = EDITOR_WORKSPACE_JS
-            .find("handleToolPaneSaveShortcut(event)")
-            .expect("save shortcut delegates to tool panes");
-        let normal_save = EDITOR_WORKSPACE_JS[tool_pane_hook..]
-            .find("saveCurrentDocument(true)")
-            .expect("document save remains the non-tool-pane path");
-        assert!(normal_save > 0);
-        assert!(EDITOR_WORKSPACE_JS.contains(
-            "if (typeof handleToolPaneSaveShortcut === \"function\" && handleToolPaneSaveShortcut(event)) {\n    event.preventDefault();\n    event.stopImmediatePropagation();\n    return true;\n  }"
-        ));
-        assert!(EDITOR_JS.contains("function handleToolPaneSaveShortcut(event)"));
-        assert!(EDITOR_JS.contains("function currentToolPaneSaveShortcutMode(event)"));
-        assert!(EDITOR_JS.contains("rememberToolPaneSaveShortcutContext(event.target);"));
-        assert!(EDITOR_JS.contains("updateLevelInSource();"));
-        assert!(EDITOR_JS.contains("updateLevel3dInSource();"));
-        assert!(EDITOR_JS.contains("updateVisualInSource();"));
-        assert!(EDITOR_JS.contains("updateVisual3dInSource();"));
+    fn pane_save_shortcuts_route_through_workbench_command_context() {
         assert!(
-            EDITOR_JS.contains(
-                "updateSoundsDefinition(sounds.mode === \"music\" ? \"music\" : \"sfx\");"
-            )
+            EDITOR_WORKBENCH_JS
+                .contains("function workbenchCommandContext(source = \"keyboard\", target = null)")
         );
-        assert!(EDITOR_JS.contains("Level source update unavailable"));
-        assert!(EDITOR_JS.contains("3D level source update unavailable"));
-        assert!(EDITOR_JS.contains("Visual source update unavailable"));
-        assert!(EDITOR_JS.contains("3D visual source update unavailable"));
-        assert!(EDITOR_JS.contains("Sound source update unavailable"));
+        assert!(
+            EDITOR_COMMANDS_JS.contains("const route = workbenchCommandContext(source, target);")
+        );
+        for id in ["workspace.save", "level.save", "visual.save", "sounds.save"] {
+            assert!(EDITOR_COMMANDS_JS.contains(&format!("id: \"{id}\"")));
+        }
+        assert!(!EDITOR_COMMANDS_JS.contains("id: \"editor.save\""));
+        assert!(!EDITOR_JS.contains("function handleToolPaneSaveShortcut(event)"));
     }
 
     #[test]
@@ -5638,7 +5624,7 @@ levels demo of push3 {
         );
         assert!(EDITOR_ANALYSIS_WORKER_JS.contains("active_source_analysis_resolve_source_target"));
         assert!(EDITOR_ANALYSIS_WORKER_JS.contains("apply_source_analysis_edit"));
-        assert!(EDITOR_SOURCE_JS.contains("applySourceAnalysisEditorChanges(sourceChanges"));
+        assert!(EDITOR_SOURCE_JS.contains("syncSourceAnalysisEditorChanges(sourceChanges"));
         assert!(EDITOR_CODEMIRROR_JS.contains("sourceanalysisreset"));
         assert!(EDITOR_RUNTIME_JS.contains("async sourceEntries(source)"));
         assert!(EDITOR_RUNTIME_JS.contains("async sourceEntryInfo(source)"));
@@ -5819,10 +5805,29 @@ levels demo of push3 {
             EDITOR_CODEMIRROR_SOURCE_JS.contains("class SourceAddLineWidget extends WidgetType")
         );
         assert!(EDITOR_CODEMIRROR_SOURCE_JS.contains("Decoration.widget({"));
-        assert!(EDITOR_CODEMIRROR_SOURCE_JS.contains("position: \"absolute\""));
-        assert!(EDITOR_CODEMIRROR_SOURCE_JS.contains("left: \"0\""));
+        assert!(EDITOR_CODEMIRROR_SOURCE_JS.contains("button.innerHTML = editorIconSvg(\"plus\")"));
+        assert!(EDITOR_CODEMIRROR_SOURCE_JS.contains("anchor.append(button);"));
+        assert!(EDITOR_CODEMIRROR_SOURCE_JS.contains("width: \"0\""));
+        assert!(EDITOR_CODEMIRROR_SOURCE_JS.contains("verticalAlign: \"top\""));
+        assert!(EDITOR_CODEMIRROR_SOURCE_JS.contains("lineHeight: \"inherit\""));
+        assert!(EDITOR_CODEMIRROR_SOURCE_JS.contains("width: \"1lh\""));
+        assert!(EDITOR_CODEMIRROR_SOURCE_JS.contains("height: \"1lh\""));
+        assert!(EDITOR_CODEMIRROR_SOURCE_JS.contains("height: \"100%\""));
+        assert!(EDITOR_CODEMIRROR_SOURCE_JS.contains("minHeight: \"0\""));
+        assert!(EDITOR_CODEMIRROR_SOURCE_JS.contains("flex: \"none\""));
+        assert!(EDITOR_CODEMIRROR_SOURCE_JS.contains("width: \"1em\""));
+        assert!(EDITOR_CODEMIRROR_SOURCE_JS.contains("opacity: \"0.55\""));
         assert!(!EDITOR_CODEMIRROR_SOURCE_JS.contains("cm-source-add-gutter"));
         assert!(EDITOR_SOURCE_JS.contains("source.slice(lineStart, lineEnd).trim() === \"\""));
+        assert!(EDITOR_SOURCE_JS.contains("document.activeElement !== sourceEditor"));
+        assert!(
+            EDITOR_SOURCE_JS.contains("setSourceLineAddVisible(source, cursor, items.length > 0);")
+        );
+        assert!(
+            EDITOR_SOURCE_JS
+                .contains("sourceEditor.addEventListener(\"sourceselectionchange\", () => {")
+        );
+        assert!(EDITOR_CODEMIRROR_SOURCE_JS.contains("if (update.selectionSet) {"));
         assert!(EDITOR_SOURCE_JS.contains("sourceEditor.sourceEditorPort.setAddLineOverlay("));
         assert!(
             EDITOR_SOURCE_JS.contains("sourceEditor.addEventListener(\"sourcelineaddrequest\"")
@@ -6041,6 +6046,14 @@ levels demo of push3 {
         let solver_request_source = &EDITOR_JS[solver_request..solver_request_end];
         assert!(solver_request_source.contains("maxNodes: 5_000_000,"));
         assert!(!solver_request_source.contains("maxNodes: 1000,"));
+    }
+
+    #[test]
+    fn editor_solver_state_omits_transition_scratch_marks() {
+        assert!(!EDITOR_SOLVER_WORKER_JS.contains("slotMarks"));
+        assert!(!EDITOR_SOLVER_WORKER_JS.contains("cellMarks"));
+        assert!(!EDITOR_JS.contains("slotMarks:"));
+        assert!(!EDITOR_JS.contains("cellMarks:"));
     }
 
     #[test]
@@ -6361,7 +6374,7 @@ levels demo of push3 {
             EDITOR_DOCS_MARKDOWN,
             EDITOR_DOCS_METADATA_MARKDOWN,
             EDITOR_DOCS_PUZZLE_BLOCK_MARKDOWN,
-            EDITOR_DOCS_SLOTS_MARKDOWN,
+            EDITOR_DOCS_LAYERS_MARKDOWN,
             EDITOR_DOCS_GROUPS_MARKDOWN,
             EDITOR_DOCS_TAGS_MARKDOWN,
             EDITOR_DOCS_LEGEND_MARKDOWN,
@@ -6415,7 +6428,7 @@ levels demo of push3 {
 title = "Outline 2D"
 
 puzzle outline {
-slots {
+layers {
 actor = Player
 }
 
@@ -6694,7 +6707,8 @@ move
                 .contains("window.PuzzleStudioModelComponentPreviewFixture = function")
         );
         assert!(EDITOR_LEVEL3D_JS.contains("Object.defineProperty(window, \"Puzzle3DFixture\""));
-        assert!(EDITOR_LEVEL3D_JS.contains("next.currentScene = sceneName;"));
+        assert!(EDITOR_LEVEL3D_JS.contains("focus: sceneName,"));
+        assert!(!EDITOR_LEVEL3D_JS.contains("next.currentScene = sceneName;"));
         assert!(EDITOR_LEVEL3D_JS.contains("puzzle-studio-initial-model-preview-boot"));
         assert!(
             EDITOR_LEVEL3D_JS.contains("window.PuzzleStudioInitialPreviewSurfaceConsumed === true")
@@ -6805,7 +6819,7 @@ move
         assert!(fixture_json.contains("\"visuals\": {"));
         assert!(
             fixture_json.contains(
-                "\"camera\": { \"yawDegrees\": 10, \"pitchDegrees\": 55, \"rollDegrees\": 20, \"zoom\": 1.1, \"interactiveLook\": false, \"interactiveZoom\": false }"
+                "\"camera\": { \"projection\": \"orthographic\", \"yawDegrees\": 10, \"pitchDegrees\": 55, \"rollDegrees\": 20, \"zoom\": 1.1, \"interactiveLook\": false, \"interactiveZoom\": false }"
             )
         );
         assert!(fixture_json.contains("\"render\": {"));
@@ -6816,6 +6830,7 @@ move
         assert!(EDITOR_LEVEL3D_JS.contains("level: {"));
         assert!(EDITOR_LEVEL3D_JS.contains("resources: level3dRuntimePreviewResources(snapshot)"));
         assert!(EDITOR_LEVEL3D_JS.contains("camera: level3dRuntimePreviewCamera(snapshot)"));
+        assert!(EDITOR_LEVEL3D_JS.contains("projection: camera.projection,"));
         assert!(EDITOR_LEVEL3D_JS.contains("view: level3dRuntimePreviewView(snapshot)"));
         assert!(
             EDITOR_LEVEL3D_JS.contains("settings: level3dPreviewSettings(snapshot.render || {})")
@@ -6912,7 +6927,7 @@ move
     }
 
     #[test]
-    fn visual_name_row_owns_new_add_and_save_lifecycle() {
+    fn visual_pane_top_bar_owns_new_add_and_save_lifecycle() {
         assert!(EDITOR_HTML.contains(r#"id="newVisualButton""#));
         assert!(EDITOR_HTML.contains(r#"id="visualInsertButton""#));
         assert!(EDITOR_HTML.contains(r#"id="visualUpdateButton""#));
@@ -6930,12 +6945,22 @@ move
             EDITOR_VISUAL_JS
                 .contains("canReplaceCurrentVisualDefinition(source) ? \"duplicate\" : \"insert\"")
         );
-        assert!(EDITOR_VISUAL_JS.contains(
-            "labeledControl(\"Visual for\", controls.nameInput, \"visual-name-control\"),\n    labeledControl(\"Size\", sizeEditor, \"visual-size-control\"),\n    sourceActions,"
-        ));
-        assert!(EDITOR_VISUAL_JS.contains(
-            "sourceActions.append(controls.newButton, controls.addButton, controls.saveButton);"
-        ));
+        let visual_header = EDITOR_HTML
+            .split_once(r#"id="visualPaneHeaderActions""#)
+            .and_then(|(_, tail)| tail.split_once(r#"<div class="tool-pane-scroll">"#))
+            .map(|(header, _)| header)
+            .expect("visual pane top bar");
+        for id in [
+            "newVisualButton",
+            "visualInsertButton",
+            "visualUpdateButton",
+            "newVisual3dButton",
+            "visual3dInsertButton",
+            "visual3dUpdateButton",
+        ] {
+            assert!(visual_header.contains(&format!(r#"id="{id}""#)));
+        }
+        assert!(!EDITOR_VISUAL_JS.contains("sourceActions.append("));
         assert!(EDITOR_VISUAL_DOCUMENT_JS.contains(
             "setVisualEditorSourceTarget(state, { start: result.start, end: result.end, name: result.name }, document);"
         ));
@@ -6948,7 +6973,10 @@ move
         assert!(!EDITOR_VISUAL3D_JS.contains("function findVisuals3dBlocks(source)"));
         assert!(!EDITOR_VISUAL3D_JS.contains("pattern.exec(source)"));
         assert!(EDITOR_VISUAL_DOCUMENT_JS.contains("function projectVisualDocumentContract"));
-        assert!(EDITOR_VISUAL_DOCUMENT_JS.contains("async function commitVisualEditorMutation"));
+        assert!(EDITOR_VISUAL_DOCUMENT_JS.contains("function commitVisualEditorMutation(options)"));
+        assert!(EDITOR_VISUAL_DOCUMENT_JS.contains(
+            "async function commitVisualEditorMutationNow({ state, request, allowActiveDocument = false })"
+        ));
         assert!(!EDITOR_VISUAL3D_JS.contains("function findVisual3dDefinitionByName"));
         assert!(!EDITOR_VISUAL3D_JS.contains("function findVisual3dDefinitionAtPosition"));
         assert!(!EDITOR_VISUAL3D_JS.contains("function findVisual3dDefinitions"));
@@ -7101,13 +7129,15 @@ move
     fn visual_palette_uses_dot_for_eraser_and_zero_through_nine_for_colors() {
         assert!(
             EDITOR_COMMANDS_JS
-                .contains(r#"shortcut: { key: visualExportCharForColorIndex(null) },"#)
+                .contains(r#"shortcuts: [{ key: visualExportCharForColorIndex(null) }],"#)
         );
         assert!(EDITOR_COMMANDS_JS.contains(r#"for (let index = 0; index < 10; index += 1) {"#));
-        assert!(EDITOR_COMMANDS_JS.contains(r#"shortcut: { key: VISUAL_COLOR_TOKENS[index] },"#));
+        assert!(
+            EDITOR_COMMANDS_JS.contains(r#"shortcuts: [{ key: VISUAL_COLOR_TOKENS[index] }],"#)
+        );
         assert!(EDITOR_COMMANDS_JS.contains("shortcutOnly: true,"));
         assert!(EDITOR_JS.contains(r#"if (element?.dataset?.shortcutOnly === "true") {"#));
-        assert!(EDITOR_JS.contains("if (!text && !shortcut) {"));
+        assert!(EDITOR_JS.contains("if (!text && !shortcuts.length) {"));
         assert!(
             !EDITOR_VISUAL_JS.contains(r#"setEditorShortcutHint(leadingControl, { key: "b" });"#)
         );
@@ -7384,13 +7414,29 @@ move
     }
 
     #[test]
-    fn visual_source_actions_move_into_the_responsive_name_row() {
-        assert!(EDITOR_HTML.contains(r#"id="visualSourceActionBank" hidden"#));
-        assert!(EDITOR_HTML.contains(r#"id="visual3dSourceActionBank" hidden"#));
+    fn visual_source_actions_live_in_the_visual_pane_top_bar() {
+        assert!(EDITOR_HTML.contains(
+            r#"id="visualSourceActionBank" class="visual-pane-source-actions" role="group" aria-label="2D visual source actions""#
+        ));
+        assert!(EDITOR_HTML.contains(
+            r#"id="visual3dSourceActionBank" class="visual-pane-source-actions" role="group" aria-label="3D visual source actions" hidden"#
+        ));
         assert!(EDITOR_HTML.contains(r#"id="visualPaneHeaderActions""#));
         assert!(
             EDITOR_WORKBENCH_JS.contains("document.querySelector(\"#visualPaneHeaderActions\")")
         );
+        assert!(EDITOR_DOM_JS.contains(
+            "const visualSourceActionBank = document.querySelector(\"#visualSourceActionBank\");"
+        ));
+        assert!(EDITOR_DOM_JS.contains(
+            "const visual3dSourceActionBank = document.querySelector(\"#visual3dSourceActionBank\");"
+        ));
+        assert!(EDITOR_JS.contains(
+            "visualSourceActionBank.hidden = !visualPaneVisible || currentVisualPaneMode !== \"visual\";"
+        ));
+        assert!(EDITOR_JS.contains(
+            "visual3dSourceActionBank.hidden = !visualPaneVisible || currentVisualPaneMode !== \"visual3d\";"
+        ));
         assert!(EDITOR_VISUAL_JS.contains("root.append(nameRow, geometry, animation);"));
         assert!(EDITOR_VISUAL_JS.contains("currentWrap.append(visualShapeField);"));
         assert!(EDITOR_VISUAL3D_JS.contains("currentWrap.append(visual3dShapeField);"));
@@ -7678,12 +7724,14 @@ move
         assert!(width_input_3d < height_input_3d);
         assert!(height_input_3d < depth_input_3d);
         assert!(depth_input_3d < palette_3d);
-        assert!(toolbar_2d < source_2d);
-        assert!(toolbar_3d < source_3d);
+        assert!(source_2d < toolbar_2d);
+        assert!(source_3d < toolbar_3d);
         assert!(EDITOR_HTML.contains(
             r#"id="visual3dUpdateButton" class="icon-button source-action-button visual-update-source-button""#
         ));
-        assert!(EDITOR_CSS.contains(".visual-editor-source-actions .source-action-button {\n  width: var(--icon-button-size);"));
+        assert!(EDITOR_CSS.contains(
+            ".visual-pane-source-actions {\n  display: inline-flex;\n  align-items: center;"
+        ));
         assert!(EDITOR_CSS.contains(".visual-builder .visual-shape-name-input {"));
         assert!(EDITOR_CSS.contains("font: inherit;\n  font-size: 13px;\n  font-weight: 800;"));
         let board_3d = EDITOR_HTML
@@ -7872,8 +7920,8 @@ move
     }
 
     #[test]
-    fn source_setting_gutter_uses_rust_completion_items_without_syntax_vocabulary() {
-        assert!(EDITOR_SOURCE_JS.contains("function refreshSourceGutterAdd()"));
+    fn source_setting_line_add_uses_current_rust_completion_items() {
+        assert!(EDITOR_SOURCE_JS.contains("async function refreshSourceLineAdd()"));
         assert!(
             EDITOR_SOURCE_JS
                 .contains("const list = await suggestSourceCompletionsWithWasm(source, cursor);")
@@ -7884,40 +7932,71 @@ move
         );
         assert!(
             EDITOR_SOURCE_JS
-                .contains("sourceEditor.addEventListener(\"sourcegutteraddrequest\", (event) => {")
+                .contains("sourceEditor.addEventListener(\"sourcelineaddrequest\", (event) => {")
         );
-        let gutter_flow = EDITOR_SOURCE_JS
-            .split("async function refreshSourceGutterAdd()")
+        let line_add_flow = EDITOR_SOURCE_JS
+            .split("async function refreshSourceLineAdd()")
             .nth(1)
             .and_then(|source| source.split("\n}").next())
-            .expect("source gutter refresh flow");
+            .expect("source line add refresh flow");
+        assert!(line_add_flow.contains("suggestSourceCompletionsWithWasm(source, cursor)"));
+        assert!(
+            line_add_flow.contains("setSourceLineAddVisible(source, cursor, items.length > 0);")
+        );
         for forbidden in ["camera", "yaw", "pitch", "zoom", "render"] {
             assert!(
-                !gutter_flow.contains(forbidden),
-                "source gutter must not own the authoring word {forbidden}"
+                !line_add_flow.contains(forbidden),
+                "source line add must not own the authoring word {forbidden}"
             );
         }
     }
 
     #[test]
-    fn codemirror_setting_gutter_owns_only_marker_mechanics() {
+    fn codemirror_setting_line_add_owns_only_widget_mechanics() {
         assert!(
-            EDITOR_CODEMIRROR_SOURCE_JS
-                .contains("class SourceAddGutterMarker extends GutterMarker")
+            EDITOR_CODEMIRROR_SOURCE_JS.contains("class SourceAddLineWidget extends WidgetType")
         );
         assert!(
             EDITOR_CODEMIRROR_SOURCE_JS.contains("button.innerHTML = editorIconSvg(\"plus\");")
         );
-        assert!(EDITOR_CODEMIRROR_SOURCE_JS.contains("new CustomEvent(\"sourcegutteraddrequest\""));
         assert!(
-            EDITOR_CODEMIRROR_SOURCE_JS.contains("setAddGutter(source, cursorOffset, visible)")
+            EDITOR_CODEMIRROR_SOURCE_JS.contains("anchor.className = \"cm-source-add-anchor\"")
+        );
+        assert!(EDITOR_CODEMIRROR_SOURCE_JS.contains("new CustomEvent(\"sourcelineaddrequest\""));
+        assert!(
+            EDITOR_CODEMIRROR_SOURCE_JS
+                .contains("setAddLineOverlay(source, cursorOffset, visible)")
         );
         for forbidden in ["camera", "yaw", "pitch", "zoom", "render"] {
             assert!(
                 !EDITOR_CODEMIRROR_SOURCE_JS.contains(forbidden),
-                "CodeMirror gutter must not own the authoring word {forbidden}"
+                "CodeMirror line add must not own the authoring word {forbidden}"
             );
         }
+    }
+
+    #[test]
+    fn source_entry_refresh_waits_for_the_matching_analysis_edit() {
+        assert!(EDITOR_SOURCE_JS.contains("function syncSourceAnalysisEditorChanges("));
+        assert!(
+            EDITOR_SOURCE_JS
+                .contains("const entriesRefreshRequestId = ++sourceEntriesRefreshRequestId;")
+        );
+        assert!(EDITOR_SOURCE_JS.contains("void analysisEdit.then(() => {"));
+        assert!(EDITOR_SOURCE_JS.contains(
+            "entriesRefreshRequestId !== sourceEntriesRefreshRequestId\n      || editedSource !== sourceEditorDocumentValue()"
+        ));
+        assert!(EDITOR_JS.contains("const currentRequest = surfaceEntriesRequest === request;"));
+        assert!(EDITOR_JS.contains("&& activeContext?.source === text"));
+    }
+
+    #[test]
+    fn source_analysis_queries_follow_the_mutation_captured_for_their_source() {
+        assert!(EDITOR_RUNTIME_JS.contains("const synchronizedMutation = analysisWorkerMutation;"));
+        assert!(EDITOR_RUNTIME_JS.contains("await synchronizedMutation;"));
+        assert!(
+            !EDITOR_RUNTIME_JS.contains("Editor source analysis changed before the query started.")
+        );
     }
 
     #[test]
@@ -8439,16 +8518,7 @@ move
     }
 
     #[test]
-    fn visual_source_generation_does_not_add_indents() {
-        assert!(EDITOR_VISUAL_JS.contains("const VISUAL_SOURCE_INDENT = \"\";"));
-        assert!(EDITOR_VISUAL_JS.contains("function visualSourceChildIndent(indent = \"\")"));
-        assert!(
-            EDITOR_VISUAL_JS
-                .contains("visualObjectDefinitionText(visualSourceIndent(entry.indent))")
-        );
-        assert!(!EDITOR_VISUAL_JS.contains("visualObjectDefinitionText(\"\\t\")"));
-        assert!(!EDITOR_VISUAL_JS.contains("const rowIndent = `${indent}\\t`;"));
-
+    fn visual3d_source_generation_does_not_add_indents() {
         assert!(EDITOR_VISUAL3D_JS.contains("const VISUAL3D_SOURCE_INDENT = \"\";"));
         assert!(!EDITOR_VISUAL3D_JS.contains("function visual3dSourceChildIndent"));
         assert!(!EDITOR_VISUAL3D_JS.contains("replaceVisual3dDefinition"));
@@ -8474,59 +8544,28 @@ move
     }
 
     #[test]
-    fn visual_shape_registration_rejects_empty_shape_rows() {
-        assert!(EDITOR_VISUAL_JS.contains("function visualShapeDefinitionRows(rows)"));
-        assert!(EDITOR_VISUAL_JS.contains("const shapeRows = visualShapeDefinitionRows(rows);"));
-        assert!(EDITOR_VISUAL_JS.contains("/[0-9A-Za-z]/.test(row)"));
-        assert!(EDITOR_VISUAL_JS.contains("Draw shape pixels before registering shape"));
-        assert!(EDITOR_VISUAL_JS.contains("Draw shape pixels before updating shape"));
-    }
+    fn visual_source_mutation_is_owned_by_the_lang_contract() {
+        assert!(EDITOR_VISUAL_JS.contains("function syncCurrentVisualDefinitionFromBuilder("));
+        assert!(EDITOR_VISUAL_JS.contains("await commitVisualEditorMutation({"));
+        assert!(EDITOR_VISUAL_JS.contains("request: () => visualEditMutationRequest(\"update\")"));
 
-    #[test]
-    fn visual_shape_sync_stages_missing_plain_shape_names() {
-        assert!(EDITOR_VISUAL_JS.contains("status = `Tagged shape ${name}`;"));
-        assert!(EDITOR_VISUAL_JS.contains("function sanitizeVisualShapeRef(value)"));
-        assert!(
-            EDITOR_VISUAL_JS
-                .contains("return isVisualShapeTableRef(parts[0], parts[1]) ? raw : \"\";")
-        );
-        assert!(EDITOR_VISUAL_JS.contains("function isVisualPlainShapeName(value)"));
-        assert!(EDITOR_VISUAL_JS.contains("shape:tag"));
-        assert!(EDITOR_VISUAL_JS.contains("const tableSeparator = name.indexOf(\":\");"));
-        assert!(EDITOR_VISUAL_JS.contains(
-            "const withShape = ensureVisualShapeDefinition(nextSource, shape.name, visualAscii().split(\"\\n\"));"
-        ));
-        assert!(EDITOR_VISUAL_JS.contains(
-            "if (shape.linked && shape.name && !findVisualShapeDefinitionRange(nextSource, shape.name))"
-        ));
-    }
-
-    #[test]
-    fn visual_shape_registration_uses_unbraced_plain_shapes() {
-        assert!(
-            EDITOR_VISUAL_JS
-                .contains("function visualPlainShapeDefinitionText(indent, name, rows)")
-        );
-        assert!(
-            EDITOR_VISUAL_JS.contains("visualPlainShapeDefinitionText(indent, name, shapeRows)")
-        );
-        assert!(
-            EDITOR_VISUAL_JS
-                .contains("visualPlainShapeDefinitionText(shapeIndent, name, shapeRows)")
-        );
-        assert!(EDITOR_VISUAL_JS.contains("range.braced && !range.tableRow"));
-        assert!(!EDITOR_VISUAL_JS.contains("${name} {\\n${shapeRows.map"));
-    }
-
-    #[test]
-    fn visual_shape_update_preserves_following_shape_header_boundary() {
-        assert!(EDITOR_VISUAL_JS.contains("function visualUnbracedShapeRowIsBoundary("));
-        assert!(EDITOR_VISUAL_JS.contains("row.includes(\"{\") || row.includes(\"}\")"));
-        assert!(EDITOR_VISUAL_JS.contains("visualAsciiRowWidth(next) !== width"));
-        assert!(EDITOR_VISUAL_JS.contains("function visualPlainShapeDefinitionTrailingBoundary("));
-        assert!(EDITOR_VISUAL_JS.contains(
-            "const boundary = visualPlainShapeDefinitionTrailingBoundary(source, range.declarationEnd);"
-        ));
+        for forbidden in [
+            "findVisualsBlock",
+            "findVisualAssetBlock",
+            "findVisualColorDefinitionRange",
+            "findVisualShapeDefinitionRange",
+            "ensureVisualColorDefinition",
+            "ensureVisualShapeDefinition",
+            "replaceVisualColorDefinition",
+            "replaceVisualShapeDefinition",
+            "visualObjectDefinitionText",
+            "topLevelDepthAt",
+        ] {
+            assert!(
+                !EDITOR_VISUAL_JS.contains(forbidden),
+                "{forbidden} must remain owned by puzzle-lang"
+            );
+        }
     }
 
     #[test]
@@ -8542,20 +8581,6 @@ move
             EDITOR_VISUAL_JS
                 .contains("paletteEntry.bind = { type: \"color\", name: source, linked: true };")
         );
-    }
-
-    #[test]
-    fn visual_source_color_staging_uses_palette_block() {
-        assert!(EDITOR_VISUAL_JS.contains(
-            "const paletteBlock = findVisualAssetBlock(source, visualsBlock, \"palette\");"
-        ));
-        assert!(EDITOR_VISUAL_JS.contains(
-            "const paletteText = `\\n${blockIndent}palette {\\n${rowIndent}${name} = ${normalized}\\n${blockIndent}}\\n`;"
-        ));
-        assert!(
-            !EDITOR_VISUAL_JS.contains("findVisualAssetBlock(source, visualsBlock, \"colors\")")
-        );
-        assert!(!EDITOR_VISUAL_JS.contains("${blockIndent}colors {"));
     }
 
     #[test]
@@ -8596,7 +8621,7 @@ move
             .find("function loadVisualSourceTarget(target, options = {})")
             .expect("visual source target loader");
         let loader_end = EDITOR_VISUAL_JS[loader_start..]
-            .find("function isIncompleteVisualSourceTarget")
+            .find("function visualSourceContractError")
             .map(|offset| loader_start + offset)
             .expect("visual source target loader end");
         let loader = &EDITOR_VISUAL_JS[loader_start..loader_end];
@@ -8604,8 +8629,9 @@ move
             loader
                 .contains("const contractError = visualSourceContractError(target.sourceVisual);")
         );
-        assert!(loader.contains("setVisualActionStatus(contractError, \"is-error\");"));
-        assert!(loader.contains("setStatus(contractError, \"is-error\");"));
+        assert!(loader.contains("const message = contractError"));
+        assert!(loader.contains("setVisualActionStatus(message, status);"));
+        assert!(loader.contains("setStatus(message, status);"));
     }
 
     #[test]
@@ -8635,10 +8661,7 @@ move
             EDITOR_VISUAL_JS.contains("const shapeName = typeof contract.shapeRef === \"string\"")
         );
         assert!(EDITOR_VISUAL_JS.contains("sourcePreludeRows,"));
-        assert!(EDITOR_VISUAL_JS.contains(
-            "const preludeRows = visualSourcePreludeRows({ omitDuration: Boolean(animationSource) }).map((row) => `${rowIndent}${row}`);"
-        ));
-        assert!(EDITOR_VISUAL_JS.contains("...preludeRows,"));
+        assert!(EDITOR_VISUAL_JS.contains("preludeRows: visual.sourcePreludeRows || [],"));
     }
 
     #[test]
@@ -8655,16 +8678,11 @@ move
         assert!(EDITOR_VISUAL_JS.contains("frameDurationMs * parsedFrames.length"));
         assert!(EDITOR_VISUAL_JS.contains("animationDurationMs: durationMs,"));
         assert!(EDITOR_VISUAL_JS.contains("animationFrames: parsedFrames,"));
-        assert!(
-            EDITOR_VISUAL_JS.contains("const animationSource = visualAnimationSourceFrames();")
-        );
-        assert!(EDITOR_VISUAL_JS.contains("lines.push(`${rowIndent}>`);"));
+        assert!(EDITOR_VISUAL_JS.contains("frames: visualEditFrames(),"));
         assert!(
             EDITOR_VISUAL_JS
-                .contains("visualSourcePreludeRows({ omitDuration: Boolean(animationSource) })")
+                .contains("durationMs: visual.animationMode ? visual.animationDurationMs : null,")
         );
-        assert!(EDITOR_VISUAL_JS.contains("function isVisualTimingPreludeRow(row)"));
-        assert!(EDITOR_VISUAL_JS.contains("duration|frame_duration"));
     }
 
     #[test]
@@ -8758,7 +8776,14 @@ move
         assert!(EDITOR_JS.contains("editSourceBodyStart: null"));
         assert!(EDITOR_JS.contains("editSourceBodyEnd: null"));
         assert!(EDITOR_VISUAL_JS.contains("function revealVisualSourceResult"));
-        assert!(EDITOR_VISUAL_DOCUMENT_JS.contains("async function commitVisualEditorMutation"));
+        assert!(EDITOR_VISUAL_DOCUMENT_JS.contains("function commitVisualEditorMutation(options)"));
+        assert!(
+            EDITOR_VISUAL_DOCUMENT_JS.contains("const visualEditorMutationQueues = new WeakMap();")
+        );
+        assert!(
+            EDITOR_VISUAL_DOCUMENT_JS
+                .contains(".then(() => commitVisualEditorMutationNow(options));")
+        );
         assert!(EDITOR_VISUAL_DOCUMENT_JS.contains("revealVisualSourceResult(document, result);"));
         assert!(EDITOR_VISUAL_DOCUMENT_JS.contains("sourceEditor.focus({ preventScroll: true });"));
         assert!(EDITOR_VISUAL_DOCUMENT_JS.contains("function visualEditorSourceRange"));

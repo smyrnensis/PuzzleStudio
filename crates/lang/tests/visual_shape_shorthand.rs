@@ -20,7 +20,7 @@ fn source_with_visual_body(visual_body: &str, shapes: &str) -> String {
 title = visual shape resolution
 
 puzzle default {{
-slots {{
+layers {{
 actors = You
 }}
 visuals {{

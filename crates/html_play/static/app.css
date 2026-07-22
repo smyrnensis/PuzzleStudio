@@ -240,7 +240,7 @@ button:disabled {
   min-height: 0;
 }
 
-.message-popup-backdrop {
+.scene-layer.is-modal {
   position: fixed;
   inset: 0;
   z-index: 100;
@@ -250,17 +250,17 @@ button:disabled {
   background: var(--background);
 }
 
-.message-popup-backdrop:focus {
+.scene-layer.is-modal:focus {
   outline: none;
 }
 
-.message-popup {
+.surface-modal-panel {
   width: min(680px, 100%);
   padding: 24px;
   text-align: center;
 }
 
-.message-popup-text {
+.surface-modal-panel > .view-text {
   margin: 0;
   color: var(--text);
   font-size: 22px;

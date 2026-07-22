@@ -22,44 +22,56 @@
     if (!Array.isArray(events)) {
       throw new Error("Animation events must be an array.");
     }
-    const usedVisualEvents = new Set();
-    const resolved = [];
+    const occurrences = new Map();
+    const ordered = [];
     for (const event of events) {
-      if (!isPositionMove(event)) {
+      if (!isTweenMove(event)) {
+        ordered.push({ event });
         continue;
       }
-      const visualEvent = event.visualTween
-        ? event
-        : events.find((candidate) => !usedVisualEvents.has(candidate)
-          && candidate !== event
-          && isVisualTween(candidate)
-          && Number(candidate.objectId) === Number(event.objectId)
-          && (sameCoord(candidate.to, event.from) || sameCoord(candidate.to, event.to)));
-      if (visualEvent) {
-        usedVisualEvents.add(visualEvent);
+      const occurrenceId = Number(event.occurrenceId);
+      if (!Number.isSafeInteger(occurrenceId) || occurrenceId <= 0) {
+        throw new Error("Tween move occurrenceId must be a positive safe integer.");
       }
-      resolved.push(visualEvent && visualEvent !== event
-        ? { ...event, visualTween: visualEvent.visualTween }
-        : event);
-    }
-    for (const event of events) {
-      if (!isPositionMove(event) && !usedVisualEvents.has(event)) {
-        resolved.push(event);
+      let occurrence = occurrences.get(occurrenceId);
+      if (!occurrence) {
+        occurrence = { occurrenceId, events: [] };
+        occurrences.set(occurrenceId, occurrence);
+        ordered.push({ occurrence });
       }
+      occurrence.events.push(event);
     }
-    return resolved;
+    return ordered.map((entry) => entry.event || composeOccurrence(entry.occurrence));
   }
 
-  function isPositionMove(event) {
-    return event?.kind === "move"
-      && event?.name === "tween"
-      && !sameCoord(event.from, event.to);
+  function composeOccurrence(occurrence) {
+    const positionEvents = occurrence.events.filter((event) => !sameCoord(event.from, event.to));
+    const visualEvents = occurrence.events.filter((event) => Boolean(event.visualTween));
+    const finalEvent = occurrence.events[occurrence.events.length - 1];
+    const base = positionEvents[positionEvents.length - 1] || finalEvent;
+    const result = {
+      ...base,
+      occurrenceId: occurrence.occurrenceId,
+      objectId: finalEvent.objectId,
+    };
+    if (positionEvents.length > 0) {
+      result.from = positionEvents[0].from;
+      result.to = positionEvents[positionEvents.length - 1].to;
+    }
+    if (visualEvents.length > 0) {
+      result.visualTween = {
+        from: visualEvents[0].visualTween.from,
+        to: visualEvents[visualEvents.length - 1].visualTween.to,
+      };
+    } else {
+      delete result.visualTween;
+    }
+    return result;
   }
 
-  function isVisualTween(event) {
+  function isTweenMove(event) {
     return event?.kind === "move"
-      && event?.name === "tween"
-      && Boolean(event.visualTween);
+      && event?.name === "tween";
   }
 
   function sameCoord(left, right) {

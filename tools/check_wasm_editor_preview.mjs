@@ -48,7 +48,7 @@ const source = `
 title = "Editor Preview Contract"
 
 puzzle board {
-  slots {
+  layers {
     actor = Player
   }
   keys {
@@ -184,8 +184,6 @@ const solverSearch = solverService.start(preparedSolver.artifactId, {
     height: 1,
     layerCount: 1,
     slots: [1, 0],
-    slotMarks: [[], []],
-    cellMarks: [[], []],
     variables: [],
     levelFiredRules: [],
   },
@@ -199,11 +197,14 @@ if (solverAdvance.status !== "solved" || solverAdvance.result?.result !== "solve
 }
 const solvedState = solverAdvance.result.steps[0]?.state;
 if (
-  !Array.isArray(solvedState?.slotMarks)
-  || !Array.isArray(solvedState?.cellMarks)
+  !Array.isArray(solvedState?.slots)
+  || !Array.isArray(solvedState?.variables)
+  || !Array.isArray(solvedState?.levelFiredRules)
+  || Object.hasOwn(solvedState, "slotMarks")
+  || Object.hasOwn(solvedState, "cellMarks")
   || Object.hasOwn(solvedState, "mark")
 ) {
-  throw new Error(`typed solver state lost mark ownership: ${JSON.stringify(solvedState)}`);
+  throw new Error(`typed solver state violated the committed-state contract: ${JSON.stringify(solvedState)}`);
 }
 const required = [
   'editorPreview\\":true',
@@ -225,7 +226,7 @@ title = "3D Editor Preview Contract"
 
 puzzle preview {
   dimension = 3
-  slots {
+  layers {
     Player
   }
   rules {
@@ -266,7 +267,7 @@ for (const token of [
 
 const editorSource = `
 puzzle default {
-slots {
+layers {
 Player Box Wall
 }
 rules {

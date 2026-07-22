@@ -1,91 +1,122 @@
-// TAGS, MARKS, AND ROUTINES
-// EXPECT: A key opens only the door with the same color tag.
-// TRY: Add green to the tag and level without copying the opening rules.
-
 title = "05 — Tags, Marks, and Routines"
 subtitle = "Describe variants and split a transition into named stages"
 
 puzzle keys_and_doors {
+
 tags {
 color = red blue
 }
 
-marks {
-opening
+groups {
+pushable = Key:*
+solid = Key:* Player
+stop = Wall Door:*
 }
 
-slots {
+layers {
 Floor
+Flag
 Key:color
 Player Door:color Wall
 }
 
-routine find_matching_door {
-for c in color {
-[ Player Key:c ] -> [ Player Key:c{opening} ]
-if some([ Key:c{opening} ]) {
-[ Door:c ] -> [ ]
-[ Key:c{opening} ] -> [ ]
-}
-}
+rules {
+input [ Player ] -> [ Player{>} ]
+[ Player{>} | pushable ] -> [ Player{>} | pushable{>} ]
+[ Key:color{>} | Door:color ] -> [  |  ]
+[ solid{>} | no solid no stop ] -> [  | solid ]
 }
 
-rules {
-input [ Player | no Wall no Door:* ] -> [ | Player ]
-find_matching_door
+win_conditions {
+all Player on Flag
+}
+
+on_level_clear {
+wait 0.1s
+message "win"
+next_level
 }
 
 visuals {
 Floor
 #f8fafc
 
-Player
-#111827
+visual Player {
+colors = #1d2b53
+shape = {
+.000.
 .000.
 00000
 .000.
 .0.0.
-.0.0.
+}
+}
 
-Key:red
-#ef4444
-..0..
-0000.
-..0..
-..00.
+visual Key:red {
+colors = #ef4444
+shape = {
 .....
-
-Key:blue
-#3b82f6
-..0..
-0000.
-..0..
-..00.
+.00..
+.0000
+.00.0
 .....
+}
+}
 
-Door:red
-#ef4444
-.000.
-.0.0.
-.0.0.
-.0.0.
-.000.
+visual Key:blue {
+colors = #3b82f6
+shape = {
+.....
+.00..
+.0000
+.00.0
+.....
+}
+}
 
-Door:blue
-#3b82f6
+visual Door:red {
+colors = #ef4444
+shape = {
 .000.
 .0.0.
 .0.0.
 .0.0.
 .000.
+}
+}
 
-Wall
-#64748b
+visual Door:blue {
+colors = #3b82f6
+shape = {
+.000.
+.0.0.
+.0.0.
+.0.0.
+.000.
+}
+}
+
+visual Wall {
+colors = #64748b
+shape = {
 00000
 00000
 00000
 00000
 00000
+}
+}
+
+visual Flag {
+colors = #ab5236 #ffec27
+shape = {
+01111
+01111
+01111
+0....
+0....
+}
+}
 }
 
 on_level_start {
@@ -101,12 +132,13 @@ r = Key:red
 b = Key:blue
 R = Door:red
 B = Door:blue
+F = Flag
 }
 
 level "matching colors"
 #########
 #P.r.R..#
-#..b.B..#
+#..b.B.F#
 #########
 }
 }

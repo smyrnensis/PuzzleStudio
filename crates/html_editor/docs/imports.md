@@ -4,7 +4,7 @@ Use imports to split one game into files without changing ownership or scope.
 ```puzzle
 // game.puzzle
 puzzle sokoban {
-slots {
+layers {
 Goal
 Player Box Wall
 }

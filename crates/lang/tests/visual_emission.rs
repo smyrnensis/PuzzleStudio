@@ -8,8 +8,9 @@ fn visual_emission_source(effect: &str) -> String {
 title = visual_emission
 
 puzzle default {{
-slots {{
+layers {{
 actor = Player
+!flash
 }}
 visuals {{
 visual Player {{
@@ -79,6 +80,23 @@ fn visuals_use_one_asset_shape_for_object_bindings_and_explicit_emissions() {
             )
         })
     }));
+}
+
+#[test]
+fn explicit_visual_emission_must_be_declared_in_layers() {
+    let source = visual_emission_source("!flash wait animation").replacen(
+        "actor = Player\n!flash",
+        "actor = Player",
+        1,
+    );
+    let error = parse_game2d(&source).expect_err("undeclared animation priority must fail");
+
+    assert!(
+        error
+            .to_string()
+            .contains("visual animation is not declared in layers: !flash"),
+        "{error}"
+    );
 }
 
 #[test]

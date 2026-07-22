@@ -842,7 +842,7 @@ mod tests {
             r#"title = "Diagnostic origin"
 
 puzzle main {{
-slots {{
+layers {{
 base = Floor
 }}
 visuals {{
@@ -868,7 +868,7 @@ level "first"
 title at_prefixed_object_single_color_preview
 
 puzzle default {
-slots {
+layers {
 @floor_slot = @Floor
 }
 visuals {

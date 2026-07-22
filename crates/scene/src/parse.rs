@@ -1,6 +1,9 @@
 use std::fmt;
 
-use crate::{SceneBinaryOp, SceneEffect, SceneEffectParam, SceneExpr};
+use crate::{
+    ComponentOrder, ComponentPlacement, ComponentProperty, SceneBinaryOp, SceneEffect,
+    SceneEffectParam, SceneExpr,
+};
 use puzzle_authoring::{
     CallSurface, find_top_level_char, is_identifier, is_qualified_identifier, matching_delimiter,
     parse_assignment_row, parse_call_argument_surfaces,
@@ -85,9 +88,18 @@ fn parse_scene_effect_value(value: &str, line: &str) -> Result<SceneEffect, Scen
         };
     }
 
+    if let Some(rest) = value.strip_prefix("present ") {
+        return parse_present_component(rest.trim(), line);
+    }
     if let Some(text) = value.strip_prefix("message ") {
-        return Ok(SceneEffect::Message {
-            text: parse_scene_expr(text.trim(), line)?,
+        return Ok(SceneEffect::PresentComponent {
+            definition: "standard.message".to_string(),
+            properties: vec![ComponentProperty {
+                name: "text".to_string(),
+                value: parse_scene_expr(text.trim(), line)?,
+            }],
+            placement: ComponentPlacement::Overlay,
+            await_event: Some("dismiss".to_string()),
         });
     }
     if let Some(rest) = value.strip_prefix("current_level = ") {
@@ -110,6 +122,10 @@ fn parse_scene_effect_value(value: &str, line: &str) -> Result<SceneEffect, Scen
     if let Some(rest) = value.strip_prefix("goto ") {
         let (scene, params) = parse_scene_target_params(rest, line)?;
         return Ok(SceneEffect::Goto { scene, params });
+    }
+    if let Some(rest) = value.strip_prefix("enter ") {
+        let (scene, params) = parse_scene_target_params(rest, line)?;
+        return Ok(SceneEffect::Enter { scene, params });
     }
     if let Some(rest) = value.strip_prefix("start ") {
         if rest.starts_with("levels ") || rest.contains(" in ") {
@@ -177,6 +193,41 @@ fn parse_scene_effect_value(value: &str, line: &str) -> Result<SceneEffect, Scen
         ["wait"] => Ok(SceneEffect::Wait { milliseconds: None }),
         ["wait", duration] => Ok(SceneEffect::Wait {
             milliseconds: Some(parse_wait_duration_ms_at(duration, line)?),
+        }),
+        ["back"] => Ok(SceneEffect::Back),
+        ["create", component] => Ok(SceneEffect::Create {
+            scene: parse_component_name(component, line)?.to_string(),
+        }),
+        ["delete", component] => Ok(SceneEffect::Delete {
+            scene: parse_component_name(component, line)?.to_string(),
+        }),
+        ["show", component] => Ok(SceneEffect::Show {
+            scene: parse_component_name(component, line)?.to_string(),
+        }),
+        ["hide", component] => Ok(SceneEffect::Hide {
+            scene: parse_component_name(component, line)?.to_string(),
+        }),
+        ["toggle", component] => Ok(SceneEffect::Toggle {
+            scene: parse_component_name(component, line)?.to_string(),
+        }),
+        ["focus", component] => Ok(SceneEffect::Focus {
+            scene: parse_component_name(component, line)?.to_string(),
+        }),
+        ["move", component, "first"] => Ok(SceneEffect::Move {
+            component: parse_component_name(component, line)?.to_string(),
+            order: ComponentOrder::First,
+        }),
+        ["move", component, "last"] => Ok(SceneEffect::Move {
+            component: parse_component_name(component, line)?.to_string(),
+            order: ComponentOrder::Last,
+        }),
+        ["move", component, "before", anchor] => Ok(SceneEffect::Move {
+            component: parse_component_name(component, line)?.to_string(),
+            order: ComponentOrder::Before(parse_component_name(anchor, line)?.to_string()),
+        }),
+        ["move", component, "after", anchor] => Ok(SceneEffect::Move {
+            component: parse_component_name(component, line)?.to_string(),
+            order: ComponentOrder::After(parse_component_name(anchor, line)?.to_string()),
         }),
         ["clear_undo_history"] | ["clear_history"] => Ok(SceneEffect::ClearUndoHistory),
         ["clear_game_progress"] => Ok(SceneEffect::ClearGameProgress),
@@ -273,8 +324,89 @@ fn parse_scene_effect_value(value: &str, line: &str) -> Result<SceneEffect, Scen
     }
 }
 
-const SCENE_EFFECT_USAGE_WITH_TARGET_COMMAND: &str = "effect must be: input <name> | component_effect <name> | goto <scene> | goto <scene>(<level>) | start <scene> | start <scene>(<level>) | clear_undo_history | clear_game_progress | message <text> | wait <duration> | sfx <name> | play_music <name> | pause_music [name] | resume_music [name] | stop_music [name] | <scene>.goto <level> | copy <puzzle> to <puzzle>";
-const SCENE_EFFECT_USAGE: &str = "effect must be: input <name> | component_effect <name> | goto <scene> | goto <scene>(<level>) | start <scene> | start <scene>(<level>) | clear_undo_history | clear_game_progress | message <text> | wait <duration> | sfx <name> | play_music <name> | pause_music [name] | resume_music [name] | stop_music [name] | copy <puzzle> to <puzzle>";
+fn parse_present_component(value: &str, line: &str) -> Result<SceneEffect, SceneParseError> {
+    let Some((call, suffix)) = parse_optional_call_surface_with_suffix(
+        value,
+        line,
+        "component properties must close with `)`",
+    )?
+    else {
+        return Err(parse_error(
+            line,
+            "present must be `present <component>(<property> = <expr>, ...) [as content|overlay] [await <event>]`",
+        ));
+    };
+    if !call.name.split('.').all(is_qualified_identifier) {
+        return Err(parse_error(
+            line,
+            "component definition must be a dot-separated qualified identifier",
+        ));
+    }
+    let mut properties = Vec::new();
+    for property in call.args {
+        let (name, value) = require_assignment_row(
+            property,
+            "component properties must be named `<name> = <expr>`",
+        )?;
+        validate_identifier(name, line, "component property name")?;
+        properties.push(ComponentProperty {
+            name: name.to_string(),
+            value: parse_scene_expr(value, line)?,
+        });
+    }
+    let tokens = split_header_tokens(suffix);
+    let (placement, await_event) = match tokens.as_slice() {
+        [] => (ComponentPlacement::Content, None),
+        ["as", placement] => (parse_component_placement(placement, line)?, None),
+        ["await", event] => (
+            ComponentPlacement::Content,
+            Some(parse_component_event_name(event, line)?.to_string()),
+        ),
+        ["as", placement, "await", event] => (
+            parse_component_placement(placement, line)?,
+            Some(parse_component_event_name(event, line)?.to_string()),
+        ),
+        _ => {
+            return Err(parse_error(
+                line,
+                "present suffix must be `[as content|overlay] [await <event>]`",
+            ));
+        }
+    };
+    Ok(SceneEffect::PresentComponent {
+        definition: call.name.to_string(),
+        properties,
+        placement,
+        await_event,
+    })
+}
+
+fn parse_component_placement(
+    value: &str,
+    line: &str,
+) -> Result<ComponentPlacement, SceneParseError> {
+    match value {
+        "content" => Ok(ComponentPlacement::Content),
+        "overlay" => Ok(ComponentPlacement::Overlay),
+        _ => Err(parse_error(
+            line,
+            "presented component placement must be content or overlay; replace the root with goto or enter",
+        )),
+    }
+}
+
+fn parse_component_name<'a>(value: &'a str, line: &str) -> Result<&'a str, SceneParseError> {
+    validate_qualified_identifier(value, line, "component name")?;
+    Ok(value)
+}
+
+fn parse_component_event_name<'a>(value: &'a str, line: &str) -> Result<&'a str, SceneParseError> {
+    validate_identifier(value, line, "component event")?;
+    Ok(value)
+}
+
+const SCENE_EFFECT_USAGE_WITH_TARGET_COMMAND: &str = "effect must be: input <name> | component_effect <name> | present <component>(...) [as content|overlay] [await <event>] | message <text> | goto|enter <component> | back | create|delete|show|hide|toggle|focus <component> | move <component> first|last|before|after ... | start <component> | clear_undo_history | clear_game_progress | wait <duration> | sfx <name> | play_music <name> | pause_music [name] | resume_music [name] | stop_music [name] | <scene>.goto <level> | copy <puzzle> to <puzzle>";
+const SCENE_EFFECT_USAGE: &str = "effect must be: input <name> | component_effect <name> | present <component>(...) [as content|overlay] [await <event>] | message <text> | goto|enter <component> | back | create|delete|show|hide|toggle|focus <component> | move <component> first|last|before|after ... | start <component> | clear_undo_history | clear_game_progress | wait <duration> | sfx <name> | play_music <name> | pause_music [name] | resume_music [name] | stop_music [name] | copy <puzzle> to <puzzle>";
 
 fn parse_scene_variable_assignment(value: &str) -> Option<(&str, &str)> {
     let (name, value) = parse_assignment_row(value)?;
@@ -325,7 +457,18 @@ fn scene_effect_token_length(tokens: &[SourceToken]) -> Option<usize> {
                 Some(1)
             }
         }
-        "clear_undo_history" | "clear_history" | "clear_game_progress" => Some(1),
+        "back" | "clear_undo_history" | "clear_history" | "clear_game_progress" => Some(1),
+        "create" | "delete" | "show" | "hide" | "toggle" | "focus" => {
+            (tokens.len() >= 2).then_some(2)
+        }
+        "move"
+            if tokens
+                .get(2)
+                .is_some_and(|token| matches!(token.text.as_str(), "first" | "last")) =>
+        {
+            (tokens.len() >= 3).then_some(3)
+        }
+        "move" => (tokens.len() >= 4).then_some(4),
         "clear" => (tokens.get(1)?.text == "current_level").then_some(2),
         "reset"
             if tokens
@@ -335,7 +478,7 @@ fn scene_effect_token_length(tokens: &[SourceToken]) -> Option<usize> {
             Some(2)
         }
         "reset" if tokens.get(1).is_some_and(|token| token.text.contains('.')) => Some(2),
-        "goto" | "start" => {
+        "goto" | "enter" | "start" => {
             if tokens.get(2).is_some_and(|token| token.text == "with") {
                 None
             } else {
@@ -359,7 +502,17 @@ fn is_scene_effect_command_start(token: &str) -> bool {
         token,
         "input"
             | "component_effect"
+            | "present"
             | "goto"
+            | "enter"
+            | "back"
+            | "create"
+            | "delete"
+            | "show"
+            | "hide"
+            | "toggle"
+            | "focus"
+            | "move"
             | "start"
             | "sfx"
             | "play_music"
@@ -927,23 +1080,66 @@ mod tests {
         );
         assert_eq!(
             parse_scene_effect("message \"END\"").unwrap(),
-            SceneEffect::Message {
-                text: SceneExpr::Text("END".to_string())
+            SceneEffect::PresentComponent {
+                definition: "standard.message".to_string(),
+                properties: vec![ComponentProperty {
+                    name: "text".to_string(),
+                    value: SceneExpr::Text("END".to_string()),
+                }],
+                placement: ComponentPlacement::Overlay,
+                await_event: Some("dismiss".to_string()),
             }
+        );
+        assert_eq!(
+            parse_scene_effect(
+                "present standard.message(text = join(\"A\", hint)) as overlay await dismiss"
+            )
+            .unwrap(),
+            SceneEffect::PresentComponent {
+                definition: "standard.message".to_string(),
+                properties: vec![ComponentProperty {
+                    name: "text".to_string(),
+                    value: SceneExpr::Call {
+                        name: "join".to_string(),
+                        args: vec![
+                            SceneExpr::Text("A".to_string()),
+                            SceneExpr::Path(vec!["hint".to_string()]),
+                        ],
+                    },
+                }],
+                placement: ComponentPlacement::Overlay,
+                await_event: Some("dismiss".to_string()),
+            }
+        );
+        assert_eq!(
+            parse_scene_effect("hide menu").unwrap(),
+            SceneEffect::Hide {
+                scene: "menu".to_string(),
+            }
+        );
+        assert_eq!(
+            parse_scene_effect("focus menu").unwrap(),
+            SceneEffect::Focus {
+                scene: "menu".to_string(),
+            }
+        );
+        assert_eq!(
+            parse_scene_effect("move menu before dialog").unwrap(),
+            SceneEffect::Move {
+                component: "menu".to_string(),
+                order: ComponentOrder::Before("dialog".to_string()),
+            }
+        );
+        assert!(
+            parse_scene_effect("present standard.message(text = \"x\") as root")
+                .unwrap_err()
+                .message()
+                .contains("replace the root with goto or enter")
         );
     }
 
     #[test]
-    fn scene_expression_parser_handles_level_selectors() {
-        assert_eq!(
-            parse_scene_expression(r#"packs["one"].cleared"#).unwrap(),
-            SceneExpr::Call {
-                name: "level_in.cleared".to_string(),
-                args: vec![
-                    SceneExpr::Path(vec!["packs".to_string()]),
-                    SceneExpr::Text("one".to_string())
-                ],
-            }
-        );
+    fn scene_expression_parser_rejects_private_collection_selectors() {
+        assert!(parse_scene_expression(r#"packs["one"].cleared"#).is_err());
     }
 }

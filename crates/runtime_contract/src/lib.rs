@@ -1,8 +1,7 @@
 use puzzle_core::{
-    GridCompiledGame, GridCoord, GridSize, GridState, LayerId, MarkId, ObjectId, RuleId, Size2,
-    Size3,
+    GridCompiledGame, GridCoord, GridSize, GridState, ObjectId, RuleId, Size2, Size3,
 };
-pub use puzzle_scene::SceneEffect as LifecycleCommand;
+pub use puzzle_scene::{ComponentPlacement, SceneEffect as LifecycleCommand};
 use serde::{
     Deserialize, Deserializer, Serialize,
     de::{self, MapAccess, Visitor},
@@ -111,6 +110,7 @@ pub enum SessionAction {
     Snapshot,
     Input { name: String },
     Resume,
+    ComponentEvent { instance: String, event: String },
     DebugInput { name: String },
     Undo,
     Redo,
@@ -140,14 +140,6 @@ pub struct RuntimeCoord {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RuntimeMarkValue {
-    pub mark: u16,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub value: Option<i64>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum RuntimeStateSnapshot {
     TwoD(RuntimeStateSnapshot2d),
@@ -162,8 +154,6 @@ pub struct RuntimeStateSnapshot2d {
     pub height: u16,
     pub layer_count: u16,
     pub slots: Vec<u16>,
-    pub slot_marks: Vec<Vec<RuntimeMarkValue>>,
-    pub cell_marks: Vec<Vec<RuntimeMarkValue>>,
     pub variables: Vec<i64>,
     pub level_fired_rules: Vec<u16>,
 }
@@ -177,8 +167,6 @@ pub struct RuntimeStateSnapshot3d {
     pub height: u16,
     pub layer_count: u16,
     pub slots: Vec<u16>,
-    pub slot_marks: Vec<Vec<RuntimeMarkValue>>,
-    pub cell_marks: Vec<Vec<RuntimeMarkValue>>,
     pub variables: Vec<i64>,
     pub level_fired_rules: Vec<u16>,
 }
@@ -192,8 +180,6 @@ pub enum SolverStateSnapshot {
         height: u16,
         layer_count: u16,
         slots: Vec<u16>,
-        slot_marks: Vec<Vec<RuntimeMarkValue>>,
-        cell_marks: Vec<Vec<RuntimeMarkValue>>,
         variables: Vec<i64>,
         level_fired_rules: Vec<u16>,
     },
@@ -204,8 +190,6 @@ pub enum SolverStateSnapshot {
         height: u16,
         layer_count: u16,
         slots: Vec<u16>,
-        slot_marks: Vec<Vec<RuntimeMarkValue>>,
-        cell_marks: Vec<Vec<RuntimeMarkValue>>,
         variables: Vec<i64>,
         level_fired_rules: Vec<u16>,
     },
@@ -313,8 +297,6 @@ impl RuntimeStateSnapshot2d {
             height: state.size.height,
             layer_count: state.layer_count,
             slots: state.slots().iter().map(|object| object.0).collect(),
-            slot_marks: runtime_marks(state.slot_mark()),
-            cell_marks: runtime_marks(state.cell_mark()),
             variables: state.visible_variables().to_vec(),
             level_fired_rules: state
                 .level_fired_rules()
@@ -333,8 +315,6 @@ impl RuntimeStateSnapshot2d {
             Size2::new(self.width, self.height),
             self.layer_count,
             self.slots,
-            self.slot_marks,
-            self.cell_marks,
             self.variables,
             self.level_fired_rules,
         )
@@ -348,8 +328,6 @@ impl SolverStateSnapshot {
             height: state.size.height,
             layer_count: state.layer_count,
             slots: state.slots().iter().map(|object| object.0).collect(),
-            slot_marks: runtime_marks(state.slot_mark()),
-            cell_marks: runtime_marks(state.cell_mark()),
             variables: state.visible_variables().to_vec(),
             level_fired_rules: state
                 .level_fired_rules()
@@ -366,8 +344,6 @@ impl SolverStateSnapshot {
             height: state.size.height,
             layer_count: state.layer_count,
             slots: state.slots().iter().map(|object| object.0).collect(),
-            slot_marks: runtime_marks(state.slot_mark()),
-            cell_marks: runtime_marks(state.cell_mark()),
             variables: state.visible_variables().to_vec(),
             level_fired_rules: state
                 .level_fired_rules()
@@ -383,8 +359,6 @@ impl SolverStateSnapshot {
             height,
             layer_count,
             slots,
-            slot_marks,
-            cell_marks,
             variables,
             level_fired_rules,
         } = self
@@ -396,8 +370,6 @@ impl SolverStateSnapshot {
             Size2::new(width, height),
             layer_count,
             slots,
-            slot_marks,
-            cell_marks,
             variables,
             level_fired_rules,
         )
@@ -410,8 +382,6 @@ impl SolverStateSnapshot {
             height,
             layer_count,
             slots,
-            slot_marks,
-            cell_marks,
             variables,
             level_fired_rules,
         } = self
@@ -423,8 +393,6 @@ impl SolverStateSnapshot {
             Size3::new(width, depth, height),
             layer_count,
             slots,
-            slot_marks,
-            cell_marks,
             variables,
             level_fired_rules,
         )
@@ -440,8 +408,6 @@ impl RuntimeStateSnapshot3d {
             height: state.size.height,
             layer_count: state.layer_count,
             slots: state.slots().iter().map(|object| object.0).collect(),
-            slot_marks: runtime_marks(state.slot_mark()),
-            cell_marks: runtime_marks(state.cell_mark()),
             variables: state.visible_variables().to_vec(),
             level_fired_rules: state
                 .level_fired_rules()
@@ -460,27 +426,10 @@ impl RuntimeStateSnapshot3d {
             Size3::new(self.width, self.depth, self.height),
             self.layer_count,
             self.slots,
-            self.slot_marks,
-            self.cell_marks,
             self.variables,
             self.level_fired_rules,
         )
     }
-}
-
-fn runtime_marks(marks: Vec<Vec<puzzle_core::SlotMark>>) -> Vec<Vec<RuntimeMarkValue>> {
-    marks
-        .into_iter()
-        .map(|entries| {
-            entries
-                .into_iter()
-                .map(|entry| RuntimeMarkValue {
-                    mark: entry.mark.0,
-                    value: entry.value,
-                })
-                .collect()
-        })
-        .collect()
 }
 
 fn decode_runtime_state<const D: usize, Size: GridSize<D>>(
@@ -488,8 +437,6 @@ fn decode_runtime_state<const D: usize, Size: GridSize<D>>(
     size: Size,
     layer_count: u16,
     slots: Vec<u16>,
-    slot_marks: Vec<Vec<RuntimeMarkValue>>,
-    cell_marks: Vec<Vec<RuntimeMarkValue>>,
     variables: Vec<i64>,
     level_fired_rules: Vec<u16>,
 ) -> Result<GridState<D, Size>, String> {
@@ -514,19 +461,6 @@ fn decode_runtime_state<const D: usize, Size: GridSize<D>>(
             slots.len()
         ));
     }
-    if slot_marks.len() != slot_count {
-        return Err(format!(
-            "runtime state slotMarks length mismatch: expected {slot_count}, got {}",
-            slot_marks.len()
-        ));
-    }
-    if cell_marks.len() != cell_count {
-        return Err(format!(
-            "runtime state cellMarks length mismatch: expected {cell_count}, got {}",
-            cell_marks.len()
-        ));
-    }
-
     let mut state = GridState::<D, Size>::empty_sized_with_variables(
         size,
         layer_count,
@@ -551,24 +485,6 @@ fn decode_runtime_state<const D: usize, Size: GridSize<D>>(
             }
             state
                 .place_object_at(game, position, object)
-                .map_err(|error| format!("{error:?}"))?;
-        }
-        for mark in &slot_marks[slot] {
-            state
-                .set_slot_mark_at(
-                    position,
-                    LayerId(layer as u16),
-                    MarkId(mark.mark),
-                    mark.value,
-                )
-                .map_err(|error| format!("{error:?}"))?;
-        }
-    }
-    for (cell, marks) in cell_marks.into_iter().enumerate() {
-        let position = runtime_cell_position::<D>(&axes, cell)?;
-        for mark in marks {
-            state
-                .set_cell_mark_at(position, MarkId(mark.mark), mark.value)
                 .map_err(|error| format!("{error:?}"))?;
         }
     }
@@ -703,6 +619,8 @@ pub enum RuntimeAnimationEvent {
     },
     Move {
         name: String,
+        #[serde(rename = "occurrenceId")]
+        occurrence_id: u64,
         #[serde(rename = "objectId")]
         object_id: u16,
         #[serde(rename = "visualTween", skip_serializing_if = "Option::is_none")]
@@ -731,14 +649,27 @@ pub struct RuntimePresentationEvent {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RuntimePresentationEventKind {
-    PlaySfx { name: String },
-    PlayMusic { name: String },
-    PauseMusic { name: Option<String> },
-    ResumeMusic { name: Option<String> },
-    StopMusic { name: Option<String> },
-    Message { text: String },
-    Wait { milliseconds: u64 },
-    Animation { animation: RuntimeAnimationEvent },
+    PlaySfx {
+        name: String,
+    },
+    PlayMusic {
+        name: String,
+    },
+    PauseMusic {
+        name: Option<String>,
+    },
+    ResumeMusic {
+        name: Option<String>,
+    },
+    StopMusic {
+        name: Option<String>,
+    },
+    Wait {
+        milliseconds: u64,
+    },
+    AnimationBatch {
+        animations: Vec<RuntimeAnimationEvent>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -795,13 +726,24 @@ pub enum RuntimeEffect {
         component: u16,
         offset: RuntimeAnimationOffset,
     },
-    Message {
-        text: String,
-        literal: bool,
+    PresentComponent {
+        definition: String,
+        properties: Vec<RuntimeComponentProperty>,
+        placement: ComponentPlacement,
+        #[serde(rename = "awaitEvent")]
+        await_event: Option<String>,
     },
     Scene {
         effect: LifecycleCommand,
     },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeComponentProperty {
+    pub name: String,
+    pub value: String,
+    pub literal: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -984,28 +926,19 @@ mod tests {
     }
 
     #[test]
-    fn solver_state_snapshot_preserves_slot_and_cell_marks() {
+    fn solver_state_snapshot_contains_only_committed_state() {
         let snapshot = SolverStateSnapshot::TwoD {
             width: 1,
             height: 1,
             layer_count: 1,
             slots: vec![7],
-            slot_marks: vec![vec![RuntimeMarkValue {
-                mark: 2,
-                value: Some(11),
-            }]],
-            cell_marks: vec![vec![RuntimeMarkValue {
-                mark: 3,
-                value: None,
-            }]],
             variables: vec![5],
             level_fired_rules: vec![13],
         };
         let value = serde_json::to_value(&snapshot).unwrap();
         assert_eq!(value["kind"], "2d");
-        assert_eq!(value["slotMarks"][0][0], json!({"mark": 2, "value": 11}));
-        assert_eq!(value["cellMarks"][0][0], json!({"mark": 3}));
-        assert!(value.get("mark").is_none());
+        assert!(value.get("slotMarks").is_none());
+        assert!(value.get("cellMarks").is_none());
         assert_eq!(
             serde_json::from_value::<SolverStateSnapshot>(value).unwrap(),
             snapshot
@@ -1021,8 +954,6 @@ mod tests {
                 height: 1,
                 layer_count: 1,
                 slots: vec![0, 1],
-                slot_marks: vec![Vec::new(), Vec::new()],
-                cell_marks: vec![Vec::new(), Vec::new()],
                 variables: Vec::new(),
                 level_fired_rules: Vec::new(),
             }),
@@ -1045,6 +976,7 @@ mod tests {
             }],
             animation_events: vec![RuntimeAnimationEvent::Move {
                 name: "tween".to_string(),
+                occurrence_id: 1,
                 object_id: 1,
                 visual_tween: None,
                 from: RuntimeCoord {
@@ -1155,6 +1087,51 @@ fn presentation_timeline_event_round_trips_with_origin_context() {
     let value = serde_json::to_value(&event).unwrap();
     assert_eq!(value["kind"], "wait");
     assert_eq!(value["levelIndex"], 3);
+    assert_eq!(
+        serde_json::from_value::<RuntimePresentationEvent>(value).unwrap(),
+        event
+    );
+}
+
+#[test]
+fn presentation_animation_batch_round_trips_as_one_runtime_occurrence() {
+    let event = RuntimePresentationEvent {
+        scene: "playing".to_string(),
+        puzzle: "board".to_string(),
+        level_index: Some(0),
+        event: RuntimePresentationEventKind::AnimationBatch {
+            animations: vec![
+                RuntimeAnimationEvent::Move {
+                    name: "tween".to_string(),
+                    occurrence_id: 1,
+                    object_id: 1,
+                    visual_tween: None,
+                    from: RuntimeCoord {
+                        x: 0,
+                        y: 0,
+                        z: None,
+                    },
+                    to: RuntimeCoord {
+                        x: 1,
+                        y: 0,
+                        z: None,
+                    },
+                },
+                RuntimeAnimationEvent::Animation {
+                    name: "flash".to_string(),
+                    position: RuntimeCoord {
+                        x: 1,
+                        y: 0,
+                        z: None,
+                    },
+                },
+            ],
+        },
+    };
+
+    let value = serde_json::to_value(&event).unwrap();
+    assert_eq!(value["kind"], "animation_batch");
+    assert_eq!(value["animations"].as_array().unwrap().len(), 2);
     assert_eq!(
         serde_json::from_value::<RuntimePresentationEvent>(value).unwrap(),
         event

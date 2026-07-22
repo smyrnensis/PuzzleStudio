@@ -10,7 +10,7 @@ tags {
 choice = first second
 }
 
-slots {
+layers {
 portal = Portal:choice
 actor = Selector Wall
 }
@@ -49,7 +49,7 @@ level "choose"
 }
 
 puzzle main {
-slots {
+layers {
 goal = Goal
 actor = Player Box Wall
 }

@@ -75,7 +75,24 @@ function visualEditorSourceRange(state, source, indentForSource) {
   };
 }
 
-async function commitVisualEditorMutation({ state, request, allowActiveDocument = false }) {
+const visualEditorMutationQueues = new WeakMap();
+
+function commitVisualEditorMutation(options) {
+  const { state } = options;
+  const previous = visualEditorMutationQueues.get(state) || Promise.resolve();
+  const pending = previous
+    .catch(() => {})
+    .then(() => commitVisualEditorMutationNow(options));
+  visualEditorMutationQueues.set(state, pending);
+  void pending.finally(() => {
+    if (visualEditorMutationQueues.get(state) === pending) {
+      visualEditorMutationQueues.delete(state);
+    }
+  }).catch(() => {});
+  return pending;
+}
+
+async function commitVisualEditorMutationNow({ state, request, allowActiveDocument = false }) {
   const { document, source } = visualEditorSourceSnapshot(state, { allowActive: allowActiveDocument });
   if (!document) throw new Error("No puzzle source document is owned by this visual editor.");
   const result = await mutateVisualSourceFromRust(source, request(source, document));
@@ -122,6 +139,7 @@ function projectVisualDocumentContract(contract) {
   return {
     dimension,
     extent: { width, height, depth },
+    preludeRows: Array.isArray(contract.preludeRows) ? contract.preludeRows : [],
     paletteTokens: Array.isArray(contract.paletteTokens) ? contract.paletteTokens : [],
     resolvedPalette,
     shapeRef: typeof contract.shapeRef === "string" ? contract.shapeRef : null,

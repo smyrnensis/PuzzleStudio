@@ -87,7 +87,8 @@ fn write_render(
     let pixelate = &game.render.pixelate;
     let _ = write!(
         out,
-        "  \"render\": {{ \"camera\": {{ \"yawDegrees\": {}, \"pitchDegrees\": {}, \"rollDegrees\": {}, \"zoom\": {}, \"interactiveLook\": {}, \"interactiveZoom\": {} }}, ",
+        "  \"render\": {{ \"camera\": {{ \"projection\": \"{}\", \"yawDegrees\": {}, \"pitchDegrees\": {}, \"rollDegrees\": {}, \"zoom\": {}, \"interactiveLook\": {}, \"interactiveZoom\": {} }}, ",
+        camera.projection.as_str(),
         camera.yaw_degrees,
         camera.pitch_degrees,
         camera.roll_degrees,
@@ -317,7 +318,7 @@ fn write_scenes(out: &mut String, scene_fields_json: Option<&str>) {
         }
         return;
     }
-    write_json_string_field(out, 1, "currentScene", "playing", true);
+    out.push_str("  \"surface\": { \"root\": \"playing\", \"focus\": \"playing\", \"components\": [{ \"id\": \"playing\", \"definition\": \"playing\", \"placement\": \"root\", \"visibility\": \"visible\", \"modal\": false }] },\n");
     out.push_str("  \"scenes\": [\n");
     out.push_str("    {\n");
     out.push_str("      \"name\": \"playing\",\n");

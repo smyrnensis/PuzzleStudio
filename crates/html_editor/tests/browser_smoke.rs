@@ -13,6 +13,16 @@ fn visual_palette_mouse_click_preserves_pane_scroll() {
     run_editor_browser_smoke(&["--visual-palette-only"]);
 }
 
+#[test]
+fn compact_index_controls_stay_vertically_centered() {
+    run_editor_browser_smoke(&["--index-control-layout-only"]);
+}
+
+#[test]
+fn level_selection_waits_for_current_revision_entries() {
+    run_editor_browser_smoke(&["--level-selection-revision-only"]);
+}
+
 fn run_editor_browser_smoke(extra_args: &[&str]) {
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()

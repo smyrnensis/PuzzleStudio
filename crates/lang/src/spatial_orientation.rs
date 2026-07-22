@@ -89,6 +89,10 @@ pub(crate) struct OrientationEnvironment {
 }
 
 impl OrientationEnvironment {
+    pub(crate) fn dimension(self) -> ModelDimension {
+        self.dimension
+    }
+
     pub(crate) fn expand_selector(
         self,
         selector: &str,

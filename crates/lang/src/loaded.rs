@@ -9,6 +9,7 @@ use puzzle_core::{
 pub use puzzle_core::{GoalClauseOf, GoalConditionOf, GoalExprOf, GoalValueOf};
 pub use puzzle_runtime_contract::RuntimeEffect as RuleEffect;
 pub use puzzle_scene::{
+    ComponentOrder, ComponentPlacement, ComponentProperty, ComponentVisibility,
     SceneAlign as SceneAlignDef, SceneAspectRatio as SceneAspectRatioDef, SceneBinaryOp,
     SceneButton as SharedSceneButton, SceneComponent as SharedSceneComponent,
     SceneConditional as SharedSceneConditional, SceneContainer as SharedSceneContainer,
@@ -238,6 +239,14 @@ pub struct RuleAnimation {
     pub trigger: RuleAnimationTrigger,
     pub name: String,
     pub objects: Vec<ObjectId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub visual_rewrites: Vec<RuleVisualRewrite>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuleVisualRewrite {
+    pub remove: ObjectId,
+    pub add: ObjectId,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -378,7 +387,7 @@ pub struct ThemeVariableDef {
 pub struct VisualsDef {
     pub aliases: Vec<VisualAliasDef>,
     pub entries: Vec<VisualDef>,
-    /// Presentation ordering is compiled independently from state slots.
+    /// Presentation ordering is compiled from the unified layer declarations.
     #[serde(default)]
     pub order: VisualOrderDef,
 }
@@ -396,6 +405,9 @@ pub struct VisualOrderDef {
 pub struct VisualOrderPriorityDef {
     /// Canonically sorted for merge nodes; authored order for non-merge nodes.
     pub objects: Vec<String>,
+    /// Visual resources emitted as transient animations into this priority.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub animations: Vec<String>,
     /// Merge is unordered same-priority composition, never ordered alpha-over.
     pub merge: bool,
 }
@@ -765,7 +777,7 @@ impl<Object: Clone, Value, Variable: Clone> QueryExprOf<Object, Value, Variable>
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct SceneDef {
+pub struct ComponentDef {
     pub name: String,
     pub layout: SceneLayoutDef,
     pub resources: SceneResources,
@@ -776,6 +788,10 @@ pub struct SceneDef {
     pub transitions: Vec<SceneTransition>,
     pub puzzle_rule: Option<ScenePuzzleRule>,
 }
+
+/// `scene` is retained as the authoring term for a component definition that
+/// can occupy the surface root. It has no distinct compiled runtime type.
+pub type SceneDef = ComponentDef;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SceneRoutineDef {

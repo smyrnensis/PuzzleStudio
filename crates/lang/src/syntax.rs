@@ -83,7 +83,7 @@ pub(crate) const PUZZLE_COMPLETION_KEYWORDS: &[&str] = &[
     "if",
     "input",
     "keys",
-    "slots",
+    "layers",
     "legend",
     "level",
     "levels",
