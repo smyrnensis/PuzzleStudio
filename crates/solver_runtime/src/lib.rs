@@ -991,7 +991,7 @@ mod tests {
 title = solver_push_goal
 
 puzzle default {
-slots {
+layers {
 floor = Goal
 actor = Player Box Wall
 }
@@ -1084,7 +1084,7 @@ PBG
 title = logical_search_real_observation
 
 puzzle default {
-slots {
+layers {
 floor = Goal
 actor = Player
 decor = Dust

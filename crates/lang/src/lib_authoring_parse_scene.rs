@@ -201,7 +201,7 @@ fn resolve_scene_actions(
     input_labels: &HashMap<InputId, String>,
 ) -> Result<(), DiagnosticReport> {
     let input_names = input_labels.values().cloned().collect::<HashSet<_>>();
-    for scene in scenes {
+    for scene in scenes.iter_mut() {
         ensure_scene_default_signals(scene);
         validate_scene_puzzle_slots(scene)?;
         validate_scene_signal_handlers(scene)?;
@@ -209,7 +209,112 @@ fn resolve_scene_actions(
         validate_scene_routines(scene)?;
         validate_scene_puzzle_rule(scene)?;
     }
+    let component_names = scenes
+        .iter()
+        .map(|scene| scene.name.as_str())
+        .collect::<HashSet<_>>();
+    for scene in scenes.iter() {
+        validate_component_targets(scene, &component_names)?;
+    }
     Ok(())
+}
+
+fn validate_component_targets(
+    component: &SceneDef,
+    component_names: &HashSet<&str>,
+) -> Result<(), DiagnosticReport> {
+    for binding in &component.key_bindings {
+        validate_component_effect_targets(&binding.effect, component_names)?;
+    }
+    for transition in &component.transitions {
+        validate_component_effect_targets(&transition.effect, component_names)?;
+    }
+    for routine in &component.routines {
+        validate_component_effect_targets(&routine.effect, component_names)?;
+    }
+    for node in &component.components {
+        validate_component_node_targets(node, component_names)?;
+    }
+    Ok(())
+}
+
+fn validate_component_node_targets(
+    node: &SceneComponent,
+    component_names: &HashSet<&str>,
+) -> Result<(), DiagnosticReport> {
+    match node {
+        SceneComponent::Button(button) | SceneComponent::Choice(button) => {
+            validate_component_effect_targets(&button.effect, component_names)
+        }
+        SceneComponent::Row(container)
+        | SceneComponent::Column(container)
+        | SceneComponent::Box(container) => {
+            for child in &container.children {
+                validate_component_node_targets(child, component_names)?;
+            }
+            Ok(())
+        }
+        SceneComponent::Conditional(conditional) => {
+            for child in conditional
+                .children
+                .iter()
+                .chain(&conditional.else_children)
+            {
+                validate_component_node_targets(child, component_names)?;
+            }
+            Ok(())
+        }
+        SceneComponent::Viewport(_) | SceneComponent::Frame(_) | SceneComponent::Text(_) => Ok(()),
+    }
+}
+
+fn validate_component_effect_targets(
+    effect: &SceneEffect,
+    component_names: &HashSet<&str>,
+) -> Result<(), DiagnosticReport> {
+    if let SceneEffect::Move { component, order } = effect {
+        validate_component_target(component, component_names)?;
+        if let ComponentOrder::Before(anchor) | ComponentOrder::After(anchor) = order {
+            validate_component_target(anchor, component_names)?;
+        }
+        return Ok(());
+    }
+    let target = match effect {
+        SceneEffect::Goto { scene, .. }
+        | SceneEffect::Enter { scene, .. }
+        | SceneEffect::Create { scene }
+        | SceneEffect::Delete { scene }
+        | SceneEffect::Show { scene }
+        | SceneEffect::Hide { scene }
+        | SceneEffect::Toggle { scene }
+        | SceneEffect::Focus { scene } => Some(scene.as_str()),
+        SceneEffect::Conditional { effect, .. } => {
+            return validate_component_effect_targets(effect, component_names);
+        }
+        SceneEffect::Sequence { effects } => {
+            for effect in effects {
+                validate_component_effect_targets(effect, component_names)?;
+            }
+            return Ok(());
+        }
+        _ => None,
+    };
+    if let Some(target) = target {
+        validate_component_target(target, component_names)?;
+    }
+    Ok(())
+}
+
+fn validate_component_target(
+    target: &str,
+    component_names: &HashSet<&str>,
+) -> Result<(), DiagnosticReport> {
+    if component_names.contains(target) {
+        return Ok(());
+    }
+    Err(DiagnosticReport::error(format!(
+        "unknown component target `{target}`"
+    )))
 }
 
 fn ensure_scene_default_signals(scene: &mut SceneDef) {
@@ -300,7 +405,9 @@ fn scene_effect_uses_signal_name(effect: &SceneEffect, name: &str) -> bool {
         SceneEffect::Sequence { effects } => effects
             .iter()
             .any(|effect| scene_effect_uses_signal_name(effect, name)),
-        SceneEffect::Message { text } => scene_expr_uses_path_name(text, name),
+        SceneEffect::PresentComponent { properties, .. } => properties
+            .iter()
+            .any(|property| scene_expr_uses_path_name(&property.value, name)),
         SceneEffect::GotoLevel { level, .. } | SceneEffect::SetCurrentLevel { level } => {
             scene_expr_uses_path_name(level, name)
         }
@@ -328,6 +435,7 @@ fn scene_effect_uses_signal_name(effect: &SceneEffect, name: &str) -> bool {
         | SceneEffect::Hide { .. }
         | SceneEffect::Toggle { .. }
         | SceneEffect::Focus { .. }
+        | SceneEffect::Move { .. }
         | SceneEffect::PuzzleNextLevel { .. }
         | SceneEffect::PuzzlePreviousLevel { .. }
         | SceneEffect::ResetPuzzle { .. }
@@ -536,7 +644,7 @@ fn resolve_scene_effect_action(
         }
         SceneEffect::Input(_)
         | SceneEffect::ComponentEffect(_)
-        | SceneEffect::Message { .. }
+        | SceneEffect::PresentComponent { .. }
         | SceneEffect::Wait { .. }
         | SceneEffect::PlaySfx { .. }
         | SceneEffect::PlayMusic { .. }
@@ -553,6 +661,7 @@ fn resolve_scene_effect_action(
         | SceneEffect::Hide { .. }
         | SceneEffect::Toggle { .. }
         | SceneEffect::Focus { .. }
+        | SceneEffect::Move { .. }
         | SceneEffect::PuzzleNextLevel { .. }
         | SceneEffect::PuzzlePreviousLevel { .. }
         | SceneEffect::GotoLevel { .. }
@@ -702,7 +811,7 @@ fn validate_scene_effect_routine_calls(
         }
         SceneEffect::Input(_)
         | SceneEffect::ComponentEffect(_)
-        | SceneEffect::Message { .. }
+        | SceneEffect::PresentComponent { .. }
         | SceneEffect::Wait { .. }
         | SceneEffect::PlaySfx { .. }
         | SceneEffect::PlayMusic { .. }
@@ -719,6 +828,7 @@ fn validate_scene_effect_routine_calls(
         | SceneEffect::Hide { .. }
         | SceneEffect::Toggle { .. }
         | SceneEffect::Focus { .. }
+        | SceneEffect::Move { .. }
         | SceneEffect::PuzzleNextLevel { .. }
         | SceneEffect::PuzzlePreviousLevel { .. }
         | SceneEffect::GotoLevel { .. }

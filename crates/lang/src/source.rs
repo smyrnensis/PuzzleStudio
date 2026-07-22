@@ -27,6 +27,7 @@ pub(crate) struct LogicalLine {
     pub(crate) text: String,
     pub(crate) line: usize,
     pub(crate) tokens: Vec<SourceToken>,
+    source_span: Option<(usize, usize)>,
     structural_brace_delta: i8,
 }
 
@@ -38,6 +39,7 @@ impl LogicalLine {
             text,
             line,
             tokens: Vec::new(),
+            source_span: None,
         }
     }
 
@@ -46,21 +48,37 @@ impl LogicalLine {
         self
     }
 
+    fn with_source_span(mut self, source_span: Option<(usize, usize)>) -> Self {
+        self.source_span = source_span;
+        self
+    }
+
     pub(crate) fn with_text(&self, text: impl Into<String>) -> Self {
         Self {
             text: text.into(),
             line: self.line,
             tokens: self.tokens.clone(),
+            source_span: self.source_span,
             structural_brace_delta: self.structural_brace_delta,
         }
     }
 
     fn with_normalized_text(&self, text: impl Into<String>) -> Self {
-        Self::new(text, self.line).with_tokens(self.tokens.clone())
+        Self::new(text, self.line)
+            .with_tokens(self.tokens.clone())
+            .with_source_span(self.source_span)
     }
 
     pub(crate) fn structural_brace_delta(&self) -> i32 {
         i32::from(self.structural_brace_delta)
+    }
+
+    pub(crate) fn source_start(&self) -> Option<usize> {
+        self.source_span.map(|(start, _)| start)
+    }
+
+    pub(crate) fn source_end(&self) -> Option<usize> {
+        self.source_span.map(|(_, end)| end)
     }
 }
 
@@ -432,8 +450,10 @@ fn starts_inline_block(tokens: &[&str], line: &str) -> bool {
         tokens,
         ["map", ..]
             | ["marks"]
+            | ["tags"]
             | ["groups"]
-            | ["slots"]
+            | ["layers"]
+            | ["merge"]
             | ["collision_layers"]
             | ["legend"]
             | ["win_conditions", ..]
@@ -541,7 +561,7 @@ pub(crate) enum SourceScope {
     SceneTransitions,
     Tags,
     Group,
-    Slots,
+    Layers,
     Mark,
     Map,
     Keys,
@@ -576,6 +596,7 @@ pub(crate) struct SourceToken {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SourceStructuralPiece {
     pub(crate) authoring_parent: Option<crate::authoring_grammar::AuthoringKind>,
+    pub(crate) source_span: Option<(usize, usize)>,
     pub(crate) product: crate::surface::ParseProduct<Vec<SourceToken>>,
 }
 
@@ -770,12 +791,12 @@ impl SurfaceSourceScan {
                 line.structural_lines
                     .iter()
                     .cloned()
-                    .zip(
-                        line.structural_pieces
-                            .iter()
-                            .map(|piece| piece.product.value.clone()),
-                    )
-                    .map(|(text, tokens)| LogicalLine::new(text, line.line).with_tokens(tokens)),
+                    .zip(line.structural_pieces.iter())
+                    .map(|(text, piece)| {
+                        LogicalLine::new(text, line.line)
+                            .with_tokens(piece.product.value.clone())
+                            .with_source_span(piece.source_span)
+                    }),
             );
         }
         logical_lines
@@ -945,6 +966,10 @@ fn shift_surface_source_line(
         token.end = shift_offset(token.end, offset_delta);
     }
     for piece in &mut line.structural_pieces {
+        if let Some((start, end)) = &mut piece.source_span {
+            *start = shift_offset(*start, offset_delta);
+            *end = shift_offset(*end, offset_delta);
+        }
         for token in &mut piece.product.value {
             token.start = shift_offset(token.start, offset_delta);
             token.end = shift_offset(token.end, offset_delta);
@@ -1093,7 +1118,7 @@ fn scan_surface_source_line(
             .iter()
             .rev()
             .find_map(|entry| entry.option_block.authoring_parent_kind());
-        let piece_tokens = source_tokens_for_structural_piece(
+        let (piece_tokens, source_span) = source_tokens_for_structural_piece(
             raw,
             offset,
             stack_line,
@@ -1169,6 +1194,7 @@ fn scan_surface_source_line(
         recognize_owner_line(current, &piece_tokens, &mut recognition);
         structural_pieces.push(SourceStructuralPiece {
             authoring_parent,
+            source_span,
             product: crate::surface::ParseProduct::new(piece_tokens, recognition),
         });
         if stack_line == "}" {
@@ -1559,13 +1585,17 @@ fn source_tokens_for_structural_piece(
     line_start: usize,
     piece: &str,
     cursor: &mut usize,
-) -> Option<Vec<SourceToken>> {
+) -> Option<(Vec<SourceToken>, Option<(usize, usize)>)> {
     let mut tokens = Vec::new();
+    let mut span_start = None;
+    let mut span_end = None;
     for text in surface_source_tokens(piece) {
         let search = source_line.get(*cursor..)?;
         let relative = search.find(text)?;
         let start = *cursor + relative;
         let end = start + text.len();
+        span_start.get_or_insert(line_start + start);
+        span_end = Some(line_start + end);
         tokens.push(SourceToken {
             text: text.to_string(),
             start: line_start + start,
@@ -1573,7 +1603,23 @@ fn source_tokens_for_structural_piece(
         });
         *cursor = end;
     }
-    Some(tokens)
+    let delimiter = if piece.trim() == "}" {
+        Some('}')
+    } else if piece.trim_end().ends_with('{') {
+        Some('{')
+    } else {
+        None
+    };
+    if let Some(delimiter) = delimiter {
+        let search = source_line.get(*cursor..)?;
+        let relative = search.find(delimiter)?;
+        let start = *cursor + relative;
+        let end = start + delimiter.len_utf8();
+        span_start.get_or_insert(line_start + start);
+        span_end = Some(line_start + end);
+        *cursor = end;
+    }
+    Some((tokens, span_start.zip(span_end)))
 }
 
 fn surface_source_token_spans(line: &str, line_offset: usize) -> Vec<SourceToken> {
@@ -1834,7 +1880,7 @@ fn source_scope_for_name(name: &str) -> Option<SourceScope> {
     match name {
         "puzzle" => Some(SourceScope::Puzzle),
         "tags" => Some(SourceScope::Tags),
-        "slots" => Some(SourceScope::Slots),
+        "layers" => Some(SourceScope::Layers),
         "groups" => Some(SourceScope::Group),
         "marks" => Some(SourceScope::Mark),
         "map" => Some(SourceScope::Map),
@@ -1914,7 +1960,7 @@ mod tests {
         let source = r#"
 title = "Demo"
 puzzle board {
-slots { objects = Box }
+layers { objects = Box }
 visuals {
 Box {
 #fff #000
@@ -1947,7 +1993,7 @@ B
             vec![
                 "title = \"Demo\"",
                 "puzzle board {",
-                "slots {",
+                "layers {",
                 "objects = Box",
                 "}",
                 "visuals {",
@@ -1987,6 +2033,31 @@ B
     }
 
     #[test]
+    fn structural_logical_lines_retain_delimiter_source_spans() {
+        let source = "puzzle demo {\nvisuals {\nvisual Goal {\nshape = {\n0\n}\n}\n}\n}\n";
+        let actual = scan_surface_source(source).strict_logical_lines().unwrap();
+        let source_slices = actual
+            .iter()
+            .map(|line| &source[line.source_start().unwrap()..line.source_end().unwrap()])
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            source_slices,
+            vec![
+                "puzzle demo {",
+                "visuals {",
+                "visual Goal {",
+                "shape = {",
+                "0",
+                "}",
+                "}",
+                "}",
+                "}",
+            ]
+        );
+    }
+
+    #[test]
     fn canonical_scan_preserves_structural_recovery_for_strict_rejection() {
         let source = "title = \"unfinished\npuzzle board {\n}\n";
         let actual = scan_surface_source(source)
@@ -1997,6 +2068,31 @@ B
             actual
                 .to_string()
                 .contains("string literal is missing closing quote")
+        );
+    }
+
+    #[test]
+    fn inline_tags_are_scanned_as_an_owner_block() {
+        let source = "puzzle board { tags { kind = 1...3 } rules { for value in kind { } } }\n";
+        let actual = scan_surface_source(source).strict_logical_lines().unwrap();
+        let texts = actual
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            texts,
+            vec![
+                "puzzle board {",
+                "tags {",
+                "kind = 1...3",
+                "}",
+                "rules {",
+                "for value in kind {",
+                "}",
+                "}",
+                "}",
+            ]
         );
     }
 

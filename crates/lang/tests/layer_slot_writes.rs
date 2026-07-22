@@ -8,7 +8,7 @@ fn rhs_add_sets_an_occupied_collision_layer_slot() {
 title = layer_slot_write
 
 puzzle default {
-slots {
+layers {
 state = StateA StateB
 control = Control
 }
@@ -53,7 +53,7 @@ map D_rev D {
 F -> B
 B -> F
 }
-slots {
+layers {
 actor = You:D
 ink = Ink:D
 time = Time:D

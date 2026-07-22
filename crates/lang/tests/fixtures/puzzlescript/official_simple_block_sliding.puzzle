@@ -2,6 +2,22 @@ title = "Simple Block Sliding Game"
 author = "increpare"
 homepage = "www.increpare.com"
 
+scene title {
+layout {
+heading "Simple Block Sliding Game"
+subheading "by increpare"
+if has_progress_save {
+choice "Continue" -> {
+goto playing
+}
+}
+choice "New Game" -> {
+clear_game_progress
+start playing
+}
+}
+}
+
 theme = "puzzlescript"
 
 sounds {
@@ -9,7 +25,7 @@ sfx crate_move { seed = 36772507; type = puzzlescript }
 }
 
 puzzle main {
-slots {
+layers {
 layer1 = Background
 layer2 = Target
 layer3 = Player Wall Crate1 Crate2 Crate3
@@ -490,22 +506,6 @@ o = Target nospawn Background
 #..........####
 #..........####
 ###############
-}
-}
-
-scene title {
-layout {
-heading "Simple Block Sliding Game"
-subheading "by increpare"
-if has_progress_save {
-choice "Continue" -> {
-goto playing
-}
-}
-choice "New Game" -> {
-clear_game_progress
-start playing
-}
 }
 }
 

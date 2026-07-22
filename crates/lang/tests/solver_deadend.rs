@@ -8,7 +8,7 @@ fn deadend_queries_lower_from_the_solver_block() {
 title = solver_deadend
 
 puzzle default {
-slots {
+layers {
 floor = Goal
 actor = Box
 }
@@ -58,7 +58,7 @@ fn deadend_queries_lower_for_puzzle3d() {
 puzzle default {
 dimension = 3
 
-slots {
+layers {
 floor = Goal
 actor = Box
 }

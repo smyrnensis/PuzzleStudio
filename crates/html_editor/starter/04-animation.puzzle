@@ -1,73 +1,187 @@
-// ANIMATION
-// EXPECT: The player faces its movement direction, the goal loops, and movement tweens.
-// TRY: Change tween_duration or frame_duration.
+title = "Microban"
+author = "Levels by David Skinner"
 
-title = "04 — Animation"
-subtitle = "Animate presentation without changing turn-based rules"
+theme = "puzzlescript"
 
-puzzle animation {
-render {
-tween = true
-tween_duration = 180ms
-}
-
-slots {
+puzzle sokoban {
+layers {
+Background
 Goal
-Player:directions Wall
+solid = Player Box Wall
 }
 
-visuals {
-Goal
-#f59e0b #fde68a
-frame_duration 180ms
-.....
-.000.
-.010.
-.000.
-.....
->
-..0..
-.010.
-01010
-.010.
-..0..
-
-visual {
-selector = Player:directions
-rotate directions from up
-colors #2563eb
-.000.
-00000
-.000.
-.0.0.
-.0.0.
-}
-
-Wall
-#334155
-00000
-00000
-00000
-00000
-00000
+on_level_start {
+once_all [ no Background ] -> [ Background ]
 }
 
 rules {
-input [ Player:* | no Wall ] -> [ | Player:> ]
+input [ Player ] -> [ > Player ] 
+[ > Player | Box ] -> [ > Player | > Box ]
+[ > solid | no solid ] -> [  | solid ] 
+[ > solid ] -> [ solid ]
+}
 }
 
-levels {
+visuals {
+
+visual {
+selector = Background
+colors = #90ee90 #008000
+duration = 1000ms
+11111
+01111
+11101
+11111
+10111
+>
+10111
+11111
+01111
+11101
+11111
+>
+11111
+10111
+11111
+01111
+11101
+>
+11101
+11111
+10111
+11111
+01111
+> 
+01111
+11101
+11111
+10111
+11111
+}
+
+visual {
+selector = Wall
+colors = #a46322 #493c2b
+duration = 1000ms
+00010
+11111
+01000
+11111
+00010
+>
+00010
+00010
+11111
+01000
+11111
+>
+11111
+00010
+00010
+11111
+01000
+>
+01000
+11111
+00010
+00010
+11111
+>
+11111
+01000
+11111
+00010
+00010
+}
+
+visual Goal {
+duration = 1000ms
+colors = #00008b #3f81a1
+shape = {
+.....
+..00.
+.0.0.
+.000.
+.....
+>
+.....
+.000.
+...0.
+.000.
+.....
+>
+.....
+.000.
+.0.0.
+..00.
+.....
+>
+.....
+.000.
+.0.0.
+.0.0.
+.....
+>
+.....
+.000.
+.0.0.
+.00..
+.....
+>
+.....
+.000.
+.0...
+.000.
+.....
+>
+.....
+.00..
+.0.0.
+.000.
+.....
+>
+.....
+.0.0.
+.0.0.
+.000.
+.....
+}
+}
+
+Box
+#ffa500 #ffff00
+00000
+0...0
+0...0
+0...0
+00000
+
+Player
+#000000 #ffa500 #ffffff #0000ff
+.000.
+.111.
+22222
+.333.
+.3.3.
+}
+
+levels microban of sokoban {
 legend {
 . = empty
-# = Wall
-P = Player:up
 G = Goal
+P = Player
+B = Box
+# = Wall
+* = Goal Box
++ = Goal Player
 }
 
-level "three kinds of animation"
-#######
-#P...G#
-#.....#
-#######
-}
+level "microban 1"
+####..
+#.G#..
+#..###
+#*P..#
+#..B.#
+#..###
+####..
 }

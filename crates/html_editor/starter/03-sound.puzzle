@@ -12,7 +12,7 @@ music theme { seed = starter-theme; bpm = 105; volume = 0.35 }
 }
 
 puzzle sound_board {
-slots {
+layers {
 Goal
 Player Wall
 }
@@ -26,7 +26,7 @@ all Player on Goal
 }
 
 rules {
-input [ Player | no Wall ] -> [ | Player ]
+input once [ Player | no Wall ] -> [ | Player ]
 }
 
 on_level_clear {

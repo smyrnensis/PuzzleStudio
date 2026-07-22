@@ -2,61 +2,22 @@ title = "TENETEN"
 author = "smyrnensis"
 homepage = "smyrnensis.itch.io"
 
-// Comments preserved from the imported PuzzleScript source.
-// [OBJECTS line 27] #9f9f9f
-// [OBJECTS line 31] #a8a8a8
-// [OBJECTS line 51] ..............
-// [OBJECTS line 52] ...11000011...
-// [OBJECTS line 53] ...10000001...
-// [OBJECTS line 54] ...01100110...
-// [OBJECTS line 55] ..0010000100..
-// [OBJECTS line 56] ..0000110000..
-// [OBJECTS line 57] ..1000000001..
-// [OBJECTS line 58] .111111111111.
-// [OBJECTS line 59] .110000000011.
-// [OBJECTS line 60] .110000000011.
-// [OBJECTS line 61] ...00000000...
-// [OBJECTS line 62] ...11111111...
-// [OBJECTS line 63] ...11....11...
-// [OBJECTS line 64] ..............
-// [SOUNDS line 664] reverse
-// [SOUNDS line 665] ball
-// [SOUNDS line 666] generate wall
-// [SOUNDS line 667] cancel
-// [SOUNDS line 668] collapse
-// [SOUNDS line 669] fall
-// [SOUNDS line 670] open
-// [SOUNDS line 671] sfx? 32904102(death
-// [SOUNDS line 673] for debag
-// [SOUNDS line 674] 95062707
-// [SOUNDS line 680] 95289108
-// [RULES line 721] Stop conditions
-// [RULES line 734] Crate
-// [RULES line 741] Fly
-// [RULES line 753] Gate penetration
-// [RULES line 766] TimeMachine
-// [RULES line 770] Stop conditions 2
-// [RULES line 774] Crack
-// [RULES line 778] Water
-// [RULES line 782] --- late rules ---
-// [RULES line 784] Headlong go away
-// [RULES line 789] FlipTimeDirection
-// [RULES line 793] Fall
-// [RULES line 801] Button
-// [RULES line 807] CheckWinCondition
-// [RULES line 823] --- subroutine ---
-// [RULES line 833] Normal case
-// [RULES line 843] Exceptional case: GateOpen work as  a stopper if Ball activates Button
-// [RULES line 874] Edge detection
-// [RULES line 878] Place computer at upper left corner
-// [RULES line 883] Checkerboard background
-// [RULES line 888] Generate boundary
-// [RULES line 889] boundary initialization
-// [RULES line 892] generate boundary
-// [RULES line 894] generate corner
-// [RULES line 898] generate shadow
-// [RULES line 901] set time direction
-// [RULES line 904] remove start marker
+scene title {
+layout {
+heading "TENETEN"
+subheading "by smyrnensis"
+if has_progress_save {
+choice "Continue" -> {
+goto playing
+}
+}
+choice "New Game" -> {
+clear_game_progress
+start playing
+}
+choice "Level Select" -> goto level_select
+}
+}
 
 theme {
 preset = "puzzlescript"
@@ -98,7 +59,7 @@ F -> B
 B -> F
 }
 
-slots {
+layers {
 layer1 = Background
 layer2 = Pond Puddle Crack Hole
 layer3 = Background2
@@ -1322,23 +1283,6 @@ level "1-4"
 #.C##χ#
 #..####
 #######
-}
-}
-
-scene title {
-layout {
-heading "TENETEN"
-subheading "by smyrnensis"
-if has_progress_save {
-choice "Continue" -> {
-goto playing
-}
-}
-choice "New Game" -> {
-clear_game_progress
-start playing
-}
-choice "Level Select" -> goto level_select
 }
 }
 

@@ -19,8 +19,6 @@ pub(crate) enum AuthoringKind {
     ThemeConfig,
     AssetsConfig,
     VisualsConfig,
-    VisualOrderConfig,
-    VisualMergeConfig,
     VisualConfig,
     LevelsConfig,
     LevelConfig,
@@ -49,7 +47,6 @@ pub(crate) enum AuthoringBody {
 pub(crate) enum AuthoringContentKind {
     AssetsEntries,
     VisualEntries,
-    VisualOrderEntries,
     LevelEntries,
     Level3Entries,
     RuleStatements,
@@ -58,7 +55,6 @@ pub(crate) enum AuthoringContentKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AuthoringContentRowKind {
     AssetPath,
-    VisualOrderPriority,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -591,11 +587,6 @@ const ASSETS_ENTRY_ROWS: &[ContentRowSpec] = &[ContentRowSpec {
     parts: ASSETS_PATH_ROW_PARTS,
     usage: "<string>",
 }];
-const VISUAL_ORDER_ENTRY_ROWS: &[ContentRowSpec] = &[ContentRowSpec {
-    kind: AuthoringContentRowKind::VisualOrderPriority,
-    parts: &[row_rest("selectors", AuthoringSurfaceRole::Object)],
-    usage: "<object-or-slot...>",
-}];
 const CONTENT_SPECS: &[ContentSpec] = &[
     ContentSpec {
         kind: AuthoringContentKind::AssetsEntries,
@@ -604,10 +595,6 @@ const CONTENT_SPECS: &[ContentSpec] = &[
     ContentSpec {
         kind: AuthoringContentKind::VisualEntries,
         syntax: ContentSyntax::Attachment(ContentAttachment::VisualEntries),
-    },
-    ContentSpec {
-        kind: AuthoringContentKind::VisualOrderEntries,
-        syntax: ContentSyntax::Rows(VISUAL_ORDER_ENTRY_ROWS),
     },
     ContentSpec {
         kind: AuthoringContentKind::LevelEntries,
@@ -641,16 +628,6 @@ const AUTHORING_SOURCE_BLOCK_SPECS: &[AuthoringSourceBlockSpec] = &[
     AuthoringSourceBlockSpec {
         surface: "visual",
         content: None,
-        role: AuthoringBlockRole::Visuals,
-    },
-    AuthoringSourceBlockSpec {
-        surface: "order",
-        content: Some(AuthoringContentKind::VisualOrderEntries),
-        role: AuthoringBlockRole::Visuals,
-    },
-    AuthoringSourceBlockSpec {
-        surface: "merge",
-        content: Some(AuthoringContentKind::VisualOrderEntries),
         role: AuthoringBlockRole::Visuals,
     },
     AuthoringSourceBlockSpec {
@@ -746,6 +723,12 @@ const PUZZLE_RENDER_GRID_CONFIG_DEFINITIONS: &[DefinitionSpec] = &[DefinitionSpe
     AuthoringSurfaceRole::Literal,
 )];
 const PUZZLE_RENDER_CAMERA_CONFIG_DEFINITIONS: &[DefinitionSpec] = &[
+    DefinitionSpec::value_role(
+        "orthographic",
+        DefinitionValueSpec::One,
+        DefinitionValueSyntax::Boolean,
+        AuthoringSurfaceRole::Literal,
+    ),
     DefinitionSpec::value_role(
         "yaw",
         DefinitionValueSpec::One,
@@ -1067,30 +1050,12 @@ const VISUALS_HEADER: HeaderSpec = HeaderSpec {
     usage: "visuals",
     arg_roles: NO_HEADER_ARGS,
 };
-const VISUAL_ORDER_HEADER: HeaderSpec = HeaderSpec {
-    min_args: 0,
-    max_args: 0,
-    usage: "order",
-    arg_roles: NO_HEADER_ARGS,
-};
-const VISUAL_MERGE_HEADER: HeaderSpec = HeaderSpec {
-    min_args: 0,
-    max_args: 0,
-    usage: "merge",
-    arg_roles: NO_HEADER_ARGS,
-};
 const VISUAL_HEADER: HeaderSpec = HeaderSpec {
     min_args: 0,
     max_args: 1,
     usage: "visual",
     arg_roles: &[AuthoringSurfaceRole::Asset],
 };
-const VISUAL_ORDER_DEFINITIONS: &[DefinitionSpec] = &[DefinitionSpec::value_role(
-    "priority",
-    DefinitionValueSpec::Many,
-    DefinitionValueSyntax::Any,
-    AuthoringSurfaceRole::Literal,
-)];
 const LEVELS_HEADER: HeaderSpec = HeaderSpec {
     min_args: 0,
     max_args: 0,
@@ -1262,30 +1227,6 @@ pub(crate) const KIND_SPECS: &[KindSpec] = &[
         missing_close_message: "visuals missing closing brace",
     },
     KindSpec {
-        kind: AuthoringKind::VisualOrderConfig,
-        header: VISUAL_ORDER_HEADER,
-        definitions: VISUAL_ORDER_DEFINITIONS,
-        rows: NO_ROWS,
-        body: AuthoringBody::Content(AuthoringContentKind::VisualOrderEntries),
-        symbol_exports: NO_SYMBOL_EXPORTS,
-        block_role: Some(AuthoringBlockRole::Visuals),
-        keyword_role: AuthoringSurfaceRole::Keyword,
-        outline_policy: AuthoringOutlinePolicy::Visible,
-        missing_close_message: "order missing closing brace",
-    },
-    KindSpec {
-        kind: AuthoringKind::VisualMergeConfig,
-        header: VISUAL_MERGE_HEADER,
-        definitions: NO_DEFINITIONS,
-        rows: NO_ROWS,
-        body: AuthoringBody::Content(AuthoringContentKind::VisualOrderEntries),
-        symbol_exports: NO_SYMBOL_EXPORTS,
-        block_role: Some(AuthoringBlockRole::Visuals),
-        keyword_role: AuthoringSurfaceRole::Keyword,
-        outline_policy: AuthoringOutlinePolicy::Visible,
-        missing_close_message: "merge missing closing brace",
-    },
-    KindSpec {
         kind: AuthoringKind::VisualConfig,
         header: VISUAL_HEADER,
         definitions: VISUAL_CONFIG_DEFINITIONS,
@@ -1383,16 +1324,6 @@ pub(crate) const PLACEMENT_SPECS: &[PlacementSpec] = &[
         parent: AuthoringKind::Root,
         surface: "visuals",
         child: AuthoringKind::VisualsConfig,
-    },
-    PlacementSpec {
-        parent: AuthoringKind::VisualsConfig,
-        surface: "order",
-        child: AuthoringKind::VisualOrderConfig,
-    },
-    PlacementSpec {
-        parent: AuthoringKind::VisualOrderConfig,
-        surface: "merge",
-        child: AuthoringKind::VisualMergeConfig,
     },
     PlacementSpec {
         parent: AuthoringKind::VisualsConfig,

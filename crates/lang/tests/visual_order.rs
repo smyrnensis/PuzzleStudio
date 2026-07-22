@@ -1,33 +1,28 @@
 use puzzle_lang::{LoadedDocumentModel, VisualOrderPriorityDef, parse_game_for_path, parse_game2d};
 
-fn game_with_slots(visuals_body: &str) -> String {
+fn game_with_layers(layers_body: &str, visuals_extra: &str) -> String {
     format!(
         r#"
 title = visual_order
 
 puzzle default {{
-slots {{
-background = Floor Goal
-actor = Player Box
+layers {{
+{layers_body}
 }}
 visuals {{
-{visuals_body}
-visual {{
-selector = Floor
+visual Floor {{
 colors = #111111
 }}
-visual {{
-selector = Goal
+visual Goal {{
 colors = #222222
 }}
-visual {{
-selector = Player
+visual Player {{
 colors = #333333
 }}
-visual {{
-selector = Box
+visual Box {{
 colors = #444444
 }}
+{visuals_extra}
 }}
 rules {{
 }}
@@ -45,62 +40,34 @@ P
 }
 
 #[test]
-fn explicit_order_can_split_slots_and_normalizes_plus_to_merge() {
-    let source = game_with_slots(
-        r#"order {
-priority = down right
-Floor
-Player + Goal
-Box
-}"#,
-    );
-
-    let loaded = parse_game2d(&source).expect("explicit visual order");
-    let canonical = parse_game2d(&game_with_slots(
-        r#"order {
-priority = down right
-Floor
-merge { Player; Goal }
-Box
-}"#,
+fn layers_own_state_storage_render_order_animations_and_directional_priority() {
+    let loaded = parse_game2d(&game_with_layers(
+        r#"priority = down right
+background = Floor Goal
+actor = Player Box !Box
+!Burst"#,
+        "visual !Burst {\nduration = 90ms\ncolors = #ffffff\n0\n}",
     ))
-    .expect("canonical merge node");
+    .expect("unified layers");
 
-    assert_eq!(loaded.visuals.order.direction_priority, ["down", "right"]);
-    assert_eq!(loaded.visuals.order, canonical.visuals.order);
-    assert_eq!(
-        loaded.visuals.order.priorities,
-        [
-            VisualOrderPriorityDef {
-                objects: vec!["Floor".to_string()],
-                merge: false,
-            },
-            VisualOrderPriorityDef {
-                objects: vec!["Goal".to_string(), "Player".to_string()],
-                merge: true,
-            },
-            VisualOrderPriorityDef {
-                objects: vec!["Box".to_string()],
-                merge: false,
-            },
-        ]
-    );
-}
-
-#[test]
-fn omitted_order_is_generated_from_slot_declaration_order() {
-    let loaded = parse_game2d(&game_with_slots("")).expect("generated visual order");
-
+    assert_eq!(loaded.game.layer_count, 2);
     assert_eq!(loaded.visuals.order.direction_priority, ["down", "right"]);
     assert_eq!(
         loaded.visuals.order.priorities,
         [
             VisualOrderPriorityDef {
                 objects: vec!["Floor".to_string(), "Goal".to_string()],
+                animations: Vec::new(),
                 merge: false,
             },
             VisualOrderPriorityDef {
                 objects: vec!["Player".to_string(), "Box".to_string()],
+                animations: vec!["Box".to_string()],
+                merge: false,
+            },
+            VisualOrderPriorityDef {
+                objects: Vec::new(),
+                animations: vec!["Burst".to_string()],
                 merge: false,
             },
         ]
@@ -108,60 +75,81 @@ fn omitted_order_is_generated_from_slot_declaration_order() {
 }
 
 #[test]
-fn direction_priority_requires_each_2d_axis_once() {
-    let source = game_with_slots(
-        r#"order {
-priority = up down
+fn merge_keeps_separate_state_layers_and_builds_one_unordered_render_priority() {
+    let loaded = parse_game2d(&game_with_layers(
+        r#"background = Floor
+merge {
+actor = Player Box
+goal = Goal
+effect = !Burst
 }"#,
+        "visual !Burst {\nduration = 90ms\ncolors = #ffffff\n0\n}",
+    ))
+    .expect("merged layers");
+
+    assert_eq!(loaded.game.layer_count, 3);
+    assert_eq!(
+        loaded.visuals.order.priorities,
+        [
+            VisualOrderPriorityDef {
+                objects: vec!["Floor".to_string()],
+                animations: Vec::new(),
+                merge: false,
+            },
+            VisualOrderPriorityDef {
+                objects: vec!["Box".to_string(), "Goal".to_string(), "Player".to_string()],
+                animations: vec!["Burst".to_string()],
+                merge: true,
+            },
+        ]
+    );
+}
+
+#[test]
+fn visuals_order_is_rejected() {
+    let source = game_with_layers(
+        "background = Floor Goal\nactor = Player Box",
+        "order { Floor; Player; Goal; Box }",
     );
 
-    let error = parse_game2d(&source).expect_err("duplicate axis must fail");
+    let error = parse_game2d(&source).expect_err("visuals order must fail");
+    assert!(!error.to_string().is_empty(), "{error}");
+}
 
+#[test]
+fn slots_spelling_is_rejected() {
+    let source = game_with_layers("background = Floor Goal\nactor = Player Box", "")
+        .replacen("layers {", "slots {", 1);
+
+    let error = parse_game2d(&source).expect_err("removed spelling must fail");
     assert!(
         error
             .to_string()
-            .contains("must name each coordinate axis exactly once"),
+            .contains("`slots` was removed; use `layers { ... }`"),
         "{error}"
     );
 }
 
 #[test]
-fn old_layers_spelling_is_not_a_slots_compatibility_path() {
-    let source = game_with_slots("").replacen("slots {", "layers {", 1);
-
-    let error = parse_game2d(&source).expect_err("old spelling must fail");
-
-    assert!(!error.to_string().is_empty());
-}
-
-#[test]
-fn three_dimensional_direction_priority_requires_and_preserves_three_axes() {
+fn three_dimensional_layers_require_and_preserve_three_direction_axes() {
     let source = r#"
-visuals {
-order {
-priority = down right front
-Floor
-Player
-}
-}
-
 puzzle board {
 dimension = 3
-slots {
+layers {
+priority = down right front
 Floor
 Player
 }
 rules {
 }
-}
-
-levels demo of board {
+levels {
 legend {
 . = empty
 P = Player
 }
 level "start" {
 P
+}
 }
 }
 "#;
@@ -183,5 +171,37 @@ P
     assert_eq!(
         fixture["order"]["direction_priority"],
         serde_json::json!(["down", "right", "front"])
+    );
+}
+
+#[test]
+fn directional_priority_rejects_repeating_one_axis() {
+    let error = parse_game2d(&game_with_layers(
+        "priority = up down\nbackground = Floor Goal\nactor = Player Box",
+        "",
+    ))
+    .expect_err("duplicate direction axis must fail");
+
+    assert!(
+        error
+            .to_string()
+            .contains("must name each coordinate axis exactly once"),
+        "{error}"
+    );
+}
+
+#[test]
+fn animation_layer_reference_requires_a_visual_resource() {
+    let error = parse_game2d(&game_with_layers(
+        "background = Floor Goal\nactor = Player Box\n!Missing",
+        "",
+    ))
+    .expect_err("unknown animation visual must fail");
+
+    assert!(
+        error
+            .to_string()
+            .contains("unknown animation visual in layers: !Missing"),
+        "{error}"
     );
 }

@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::marker::PhantomData;
 use std::num::NonZeroU32;
 
@@ -166,6 +166,10 @@ pub enum ProgramCondition<Pattern, Guard> {
     AnyInputMatches(Vec<(InputId, Pattern)>),
     NoInputMatches(Vec<(InputId, Pattern)>),
     GuardBranches(Vec<Vec<Guard>>),
+    RuleMatches {
+        guards: Vec<Guard>,
+        pattern: Pattern,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -1636,8 +1640,10 @@ impl<MarkId: Copy> Iterator for MarkIter<'_, MarkId> {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MarkSpace<MarkId> {
-    cell_heads: Vec<Option<NonZeroU32>>,
-    slot_heads: Vec<Option<NonZeroU32>>,
+    cell_count: usize,
+    slot_count: usize,
+    cell_heads: BTreeMap<usize, NonZeroU32>,
+    slot_heads: BTreeMap<usize, NonZeroU32>,
     entries: Vec<MarkEntry<MarkId>>,
     free_entries: Vec<NonZeroU32>,
 }
@@ -1645,8 +1651,10 @@ pub struct MarkSpace<MarkId> {
 impl<MarkId> MarkSpace<MarkId> {
     pub fn new(cell_count: usize, slot_count: usize) -> Self {
         Self {
-            cell_heads: vec![None; cell_count],
-            slot_heads: vec![None; slot_count],
+            cell_count,
+            slot_count,
+            cell_heads: BTreeMap::new(),
+            slot_heads: BTreeMap::new(),
             entries: Vec::new(),
             free_entries: Vec::new(),
         }
@@ -1654,29 +1662,29 @@ impl<MarkId> MarkSpace<MarkId> {
 
     #[inline]
     pub fn cell_count(&self) -> usize {
-        self.cell_heads.len()
+        self.cell_count
     }
 
     #[inline]
     pub fn slot_count(&self) -> usize {
-        self.slot_heads.len()
+        self.slot_count
     }
 
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.slot_heads.iter().all(Option::is_none) && self.cell_heads.iter().all(Option::is_none)
+        self.slot_heads.is_empty() && self.cell_heads.is_empty()
     }
 }
 
 impl<MarkId: Copy> MarkSpace<MarkId> {
     pub fn cell_values(&self) -> Vec<Vec<MarkValue<MarkId>>> {
-        (0..self.cell_heads.len())
+        (0..self.cell_count)
             .map(|index| self.cell_at(index).collect())
             .collect()
     }
 
     pub fn slot_values(&self) -> Vec<Vec<MarkValue<MarkId>>> {
-        (0..self.slot_heads.len())
+        (0..self.slot_count)
             .map(|index| self.slot_at(index).collect())
             .collect()
     }
@@ -1685,7 +1693,7 @@ impl<MarkId: Copy> MarkSpace<MarkId> {
     pub fn cell_at(&self, index: usize) -> MarkIter<'_, MarkId> {
         MarkIter {
             entries: &self.entries,
-            next: self.cell_heads.get(index).copied().flatten(),
+            next: self.cell_heads.get(&index).copied(),
         }
     }
 
@@ -1693,7 +1701,7 @@ impl<MarkId: Copy> MarkSpace<MarkId> {
     pub fn slot_at(&self, index: usize) -> MarkIter<'_, MarkId> {
         MarkIter {
             entries: &self.entries,
-            next: self.slot_heads.get(index).copied().flatten(),
+            next: self.slot_heads.get(&index).copied(),
         }
     }
 
@@ -1733,6 +1741,7 @@ impl<MarkId: Copy> MarkSpace<MarkId> {
     {
         set_mark(
             &mut self.cell_heads,
+            self.cell_count,
             &mut self.entries,
             &mut self.free_entries,
             index,
@@ -1747,6 +1756,7 @@ impl<MarkId: Copy> MarkSpace<MarkId> {
     {
         set_mark(
             &mut self.slot_heads,
+            self.slot_count,
             &mut self.entries,
             &mut self.free_entries,
             index,
@@ -1818,8 +1828,8 @@ impl<MarkId: Copy> MarkSpace<MarkId> {
     }
 
     pub fn clear_all(&mut self) {
-        self.slot_heads.fill(None);
-        self.cell_heads.fill(None);
+        self.slot_heads.clear();
+        self.cell_heads.clear();
         self.entries.clear();
         self.free_entries.clear();
     }
@@ -1828,10 +1838,14 @@ impl<MarkId: Copy> MarkSpace<MarkId> {
     where
         F: FnMut(MarkId) -> u64,
     {
-        for index in 0..self.cell_heads.len() {
+        hash = fnv_mix(hash, self.cell_heads.len() as u64);
+        for &index in self.cell_heads.keys() {
+            hash = fnv_mix(hash, index as u64);
             hash = hash_mark_iter(hash, self.cell_at(index), &mut mark_raw);
         }
-        for index in 0..self.slot_heads.len() {
+        hash = fnv_mix(hash, self.slot_heads.len() as u64);
+        for &index in self.slot_heads.keys() {
+            hash = fnv_mix(hash, index as u64);
             hash = hash_mark_iter(hash, self.slot_at(index), &mut mark_raw);
         }
         hash
@@ -1842,11 +1856,13 @@ impl<MarkId: Copy> MarkSpace<MarkId> {
         F: FnMut(MarkId) -> u64,
     {
         words.push(self.cell_heads.len() as u64);
-        for index in 0..self.cell_heads.len() {
+        for &index in self.cell_heads.keys() {
+            words.push(index as u64);
             append_mark_words(words, self.cell_at(index), &mut mark_raw);
         }
         words.push(self.slot_heads.len() as u64);
-        for index in 0..self.slot_heads.len() {
+        for &index in self.slot_heads.keys() {
+            words.push(index as u64);
             append_mark_words(words, self.slot_at(index), &mut mark_raw);
         }
     }
@@ -1854,6 +1870,7 @@ impl<MarkId: Copy> MarkSpace<MarkId> {
     fn push_cell(&mut self, index: usize, mark: MarkValue<MarkId>) {
         push_mark(
             &mut self.cell_heads,
+            self.cell_count,
             &mut self.entries,
             &mut self.free_entries,
             index,
@@ -1864,6 +1881,7 @@ impl<MarkId: Copy> MarkSpace<MarkId> {
     fn push_slot(&mut self, index: usize, mark: MarkValue<MarkId>) {
         push_mark(
             &mut self.slot_heads,
+            self.slot_count,
             &mut self.entries,
             &mut self.free_entries,
             index,
@@ -1895,24 +1913,34 @@ fn append_mark_words<MarkId: Copy, F>(
 
 impl<MarkId: Copy + PartialEq> PartialEq for MarkSpace<MarkId> {
     fn eq(&self, other: &Self) -> bool {
-        self.cell_heads.len() == other.cell_heads.len()
-            && self.slot_heads.len() == other.slot_heads.len()
-            && (0..self.cell_heads.len()).all(|index| self.cell_at(index).eq(other.cell_at(index)))
-            && (0..self.slot_heads.len()).all(|index| self.slot_at(index).eq(other.slot_at(index)))
+        self.cell_count == other.cell_count
+            && self.slot_count == other.slot_count
+            && self.cell_heads.keys().eq(other.cell_heads.keys())
+            && self.slot_heads.keys().eq(other.slot_heads.keys())
+            && self
+                .cell_heads
+                .keys()
+                .all(|&index| self.cell_at(index).eq(other.cell_at(index)))
+            && self
+                .slot_heads
+                .keys()
+                .all(|&index| self.slot_at(index).eq(other.slot_at(index)))
     }
 }
 
 impl<MarkId: Copy + Eq> Eq for MarkSpace<MarkId> {}
 
 fn set_mark<MarkId: Copy + PartialEq>(
-    heads: &mut [Option<NonZeroU32>],
+    heads: &mut BTreeMap<usize, NonZeroU32>,
+    location_count: usize,
     entries: &mut Vec<MarkEntry<MarkId>>,
     free_entries: &mut Vec<NonZeroU32>,
     index: usize,
     mark: MarkId,
     value: Option<i64>,
 ) {
-    let mut current = heads[index];
+    assert!(index < location_count, "mark location index out of bounds");
+    let mut current = heads.get(&index).copied();
     while let Some(id) = current {
         let entry_index = mark_entry_index(id);
         let entry = &mut entries[entry_index];
@@ -1924,6 +1952,7 @@ fn set_mark<MarkId: Copy + PartialEq>(
     }
     push_mark(
         heads,
+        location_count,
         entries,
         free_entries,
         index,
@@ -1945,15 +1974,17 @@ fn retain_mark<MarkId: PartialEq>(
 }
 
 fn push_mark<MarkId: Copy>(
-    heads: &mut [Option<NonZeroU32>],
+    heads: &mut BTreeMap<usize, NonZeroU32>,
+    location_count: usize,
     entries: &mut Vec<MarkEntry<MarkId>>,
     free_entries: &mut Vec<NonZeroU32>,
     index: usize,
     mark: MarkValue<MarkId>,
 ) {
+    assert!(index < location_count, "mark location index out of bounds");
     let new_id = allocate_mark_entry(entries, free_entries, mark);
-    let Some(mut current) = heads[index] else {
-        heads[index] = Some(new_id);
+    let Some(mut current) = heads.get(&index).copied() else {
+        heads.insert(index, new_id);
         return;
     };
 
@@ -1968,12 +1999,12 @@ fn push_mark<MarkId: Copy>(
 }
 
 fn clear_head<MarkId>(
-    heads: &mut [Option<NonZeroU32>],
+    heads: &mut BTreeMap<usize, NonZeroU32>,
     entries: &mut [MarkEntry<MarkId>],
     free_entries: &mut Vec<NonZeroU32>,
     index: usize,
 ) {
-    let mut current = heads[index].take();
+    let mut current = heads.remove(&index);
     while let Some(id) = current {
         let entry_index = mark_entry_index(id);
         current = entries[entry_index].next;
@@ -2461,5 +2492,18 @@ mod tests {
 
         assert_eq!(mark, expected);
         assert!(mark.has_slot(1, TestId(1), Some(9)));
+    }
+
+    #[test]
+    fn empty_mark_space_key_size_does_not_scale_with_board_size() {
+        let mut mark: MarkSpace<TestId> = MarkSpace::new(10_000, 100_000);
+        let mut words = Vec::new();
+        mark.append_key_words(&mut words, |id| u64::from(id.0));
+        assert_eq!(words, vec![0, 0]);
+
+        mark.set_slot(99_999, TestId(1), None);
+        words.clear();
+        mark.append_key_words(&mut words, |id| u64::from(id.0));
+        assert_eq!(words, vec![0, 1, 99_999, 1, 1, 0]);
     }
 }

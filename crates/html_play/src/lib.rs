@@ -317,7 +317,7 @@ assets {
 }
 
 puzzle default {
-slots {
+layers {
 actor = Player
 }
 rules {
@@ -360,7 +360,7 @@ puzzle board {
   render {
     tween = true
   }
-  slots {
+  layers {
     actor = Player
   }
   empty .
@@ -406,6 +406,7 @@ levels default of board {
                 {
                     "kind": "move",
                     "name": "tween",
+                    "occurrenceId": 1,
                     "objectId": 1,
                     "from": { "x": 0, "y": 0 },
                     "to": { "x": 1, "y": 0 }
@@ -467,6 +468,7 @@ levels default of board {
         let display_list = evaluate_renderer(
             r#"
 const renderer = Object.create(window.PuzzleRenderer.prototype);
+renderer.activeTriggerAnimations = [];
 renderer.visuals = () => ({
   order: {
     direction_priority: ["down", "right"],
@@ -491,6 +493,7 @@ const scene = {
 const animations = [{
   kind: "move",
   name: "tween",
+  occurrenceId: 1,
   objectId: 1,
   from: { x: -1, y: 0 },
   to: { x: 0, y: 0 },
@@ -527,8 +530,9 @@ return renderer.canvasDisplayList(scene, { x: 0, y: 0, width: 1, height: 1 }, 1,
         assert!(RENDERER_JS.contains("return 3;"));
         assert!(RENDERER_JS.contains("requestAnimationFrame(draw);"));
         assert!(
-            RENDERER_JS
-                .contains("canvasDisplayList(scene, frame, unit, animations = [], progress = 1)")
+            RENDERER_JS.contains(
+                "canvasDisplayList(scene, frame, unit, animations = [], progress = 1, now = performance.now())"
+            )
         );
         assert!(!RENDERER_JS.contains("const staticSurfaces = new Map();"));
         assert!(RENDERER_JS.contains("const items = [];"));
@@ -536,7 +540,7 @@ return renderer.canvasDisplayList(scene, { x: 0, y: 0, width: 1, height: 1 }, 1,
         assert!(RENDERER_JS.contains("layerOrder: this.visualRenderPriority(layer),"));
         assert!(!RENDERER_JS.contains("canvasSurfaceItemForLayer("));
         assert!(RENDERER_JS.contains(
-            "const compare = (a, b) => a.cellOrder - b.cellOrder || a.layerOrder - b.layerOrder || a.order - b.order;"
+            "const compare = (a, b) => a.cellOrder - b.cellOrder\n      || a.layerOrder - b.layerOrder\n      || a.sourceCellOrder - b.sourceCellOrder\n      || a.order - b.order;"
         ));
         assert!(RENDERER_JS.contains("return items.sort(compare);"));
         assert!(!RENDERER_JS.contains("paintCanvasSurface("));
@@ -544,7 +548,7 @@ return renderer.canvasDisplayList(scene, { x: 0, y: 0, width: 1, height: 1 }, 1,
         assert!(!RENDERER_JS.contains("mergedCanvasRects("));
         assert!(RENDERER_JS.contains("animation: animation && progress < 1 ? animation : null"));
         assert!(RENDERER_JS.contains(
-            "for (const item of this.canvasDisplayList(scene, frame, unit, animations, progress))"
+            "for (const item of this.canvasDisplayList(scene, frame, unit, animations, progress, now))"
         ));
         assert!(RENDERER_JS.contains(
             "paintCanvasItem(context, item, unit, progress = 1, now = performance.now())"
@@ -578,6 +582,116 @@ return renderer.canvasDisplayList(scene, { x: 0, y: 0, width: 1, height: 1 }, 1,
         assert!(RENDERER_JS.contains("y += transform.y;"));
         assert!(!RENDERER_JS.contains("x = Math.round(x + transform.x);"));
         assert!(!RENDERER_JS.contains("y = Math.round(y + transform.y);"));
+    }
+
+    #[test]
+    fn renderer_places_transient_animations_in_the_compiled_display_list_priority() {
+        let display_list = evaluate_renderer(
+            r#"
+const renderer = Object.create(window.PuzzleRenderer.prototype);
+renderer.activeTriggerAnimations = [{
+  id: "flash:0",
+  name: "Flash",
+  x: 0,
+  y: 0,
+  startedAtMs: 0,
+  durationMs: 100,
+}];
+renderer.visuals = () => ({
+  order: {
+    direction_priority: ["down", "right"],
+    priorities: [
+      { objects: ["Floor"], animations: [], merge: false },
+      { objects: [], animations: ["Flash"], merge: false },
+      { objects: ["Foreground"], animations: [], merge: false },
+    ],
+  },
+});
+const scene = {
+  width: 1,
+  height: 1,
+  cells: [{
+    x: 0,
+    y: 0,
+    layers: [
+      { object: "Foreground", objectId: 2, layer: 1 },
+      { object: "Floor", objectId: 1, layer: 0 },
+    ],
+  }],
+};
+return renderer.canvasDisplayList(
+  scene,
+  { x: 0, y: 0, width: 1, height: 1 },
+  1,
+  [],
+  1,
+  50,
+).map((item) => item.kind === "trigger" ? `!${item.instance.name}` : item.layer.object);
+"#,
+        );
+
+        assert_eq!(display_list, json!(["Floor", "!Flash", "Foreground"]));
+        assert!(!RENDERER_JS.contains("paintTriggerAnimations("));
+    }
+
+    #[test]
+    fn renderer_tween_composites_every_swept_cell_by_visual_priority() {
+        let display_orders = evaluate_renderer(
+            r#"
+const renderer = Object.create(window.PuzzleRenderer.prototype);
+renderer.activeTriggerAnimations = [];
+renderer.visuals = () => ({
+  order: {
+    direction_priority: ["down", "right"],
+    priorities: [
+      { objects: ["Floor"] },
+      { objects: ["Player"] },
+      { objects: ["Foreground"] },
+    ],
+  },
+});
+function displayOrder(from, to) {
+  const width = from.x === to.x ? 1 : 2;
+  const height = from.y === to.y ? 1 : 2;
+  const cells = [];
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const layers = [
+        { object: "Floor", objectId: 1, layer: 0 },
+        { object: "Foreground", objectId: 3, layer: 2 },
+      ];
+      if (x === to.x && y === to.y) {
+        layers.push({ object: "Player", objectId: 2, layer: 1 });
+      }
+      cells.push({ x, y, layers });
+    }
+  }
+  const scene = { width, height, cells };
+  const animations = [{
+    kind: "move", name: "tween", occurrenceId: 1, objectId: 2, from, to,
+  }];
+  return renderer.canvasDisplayList(
+    scene,
+    { x: 0, y: 0, width, height },
+    1,
+    animations,
+    0.5,
+  ).map((item) => item.layer.object);
+}
+return {
+  left: displayOrder({ x: 1, y: 0 }, { x: 0, y: 0 }),
+  right: displayOrder({ x: 0, y: 0 }, { x: 1, y: 0 }),
+  up: displayOrder({ x: 0, y: 1 }, { x: 0, y: 0 }),
+  down: displayOrder({ x: 0, y: 0 }, { x: 0, y: 1 }),
+};
+"#,
+        );
+
+        let expected = json!(["Floor", "Floor", "Player", "Foreground", "Foreground"]);
+        assert_eq!(display_orders["left"], expected);
+        assert_eq!(display_orders["right"], expected);
+        assert_eq!(display_orders["up"], expected);
+        assert_eq!(display_orders["down"], expected);
     }
 
     #[test]
@@ -627,7 +741,7 @@ return renderer.tweenedVisualState({}, {
         let state = evaluate_renderer(
             r#"
 const visual = {
-  kind: "move", name: "tween", objectId: 7,
+  kind: "move", name: "tween", occurrenceId: 1, objectId: 7,
   from: { x: 2, y: 3 }, to: { x: 2, y: 3 },
   visualTween: {
     from: { transforms: [{ kind: "rotate", space: "world", axis: [0, 0, 1], degrees: 0 }] },
@@ -635,7 +749,7 @@ const visual = {
   },
 };
 const position = {
-  kind: "move", name: "tween", objectId: 7,
+  kind: "move", name: "tween", occurrenceId: 1, objectId: 7,
   from: { x: 2, y: 3 }, to: { x: 3, y: 3 },
 };
 const source = [visual, position];
@@ -661,6 +775,34 @@ return {
     }
 
     #[test]
+    fn renderer_composes_chained_channels_by_occurrence_identity() {
+        let state = evaluate_renderer(
+            r#"
+const events = [
+  { kind: "move", name: "tween", occurrenceId: 1, objectId: 7,
+    from: { x: 0, y: 0 }, to: { x: 1, y: 0 } },
+  { kind: "move", name: "tween", occurrenceId: 2, objectId: 7,
+    from: { x: 1, y: 0 }, to: { x: 2, y: 0 } },
+  { kind: "move", name: "tween", occurrenceId: 2, objectId: 8,
+    from: { x: 2, y: 0 }, to: { x: 2, y: 0 },
+    visualTween: {
+      from: { transforms: [{ kind: "rotate", space: "world", axis: [0, 0, 1], degrees: 0 }] },
+      to: { transforms: [{ kind: "rotate", space: "world", axis: [0, 0, 1], degrees: 90 }] },
+    } },
+];
+return window.PuzzleVisualTweenCore.resolveAnimationChannels(events);
+"#,
+        );
+
+        assert_eq!(state.as_array().unwrap().len(), 2);
+        assert!(state[0].get("visualTween").is_none());
+        assert_eq!(state[1]["occurrenceId"], json!(2));
+        assert_eq!(state[1]["from"], json!({"x": 1, "y": 0}));
+        assert_eq!(state[1]["to"], json!({"x": 2, "y": 0}));
+        assert!(state[1].get("visualTween").is_some());
+    }
+
+    #[test]
     fn renderer_does_not_draw_fallback_visuals() {
         assert!(RENDERER_JS.contains("return null;"));
         assert!(RENDERER_JS.contains("const visual = this.renderLayerVisual(layer);"));
@@ -678,7 +820,7 @@ return {
         let source = r#"
 title = visual_translate
 puzzle default {
-slots {
+layers {
 actor = Player
 }
 visuals {
@@ -755,6 +897,45 @@ P
     }
 
     #[test]
+    fn generated_visuals_carry_animation_layer_priorities_and_resources() {
+        let loaded = parse_game(
+            r#"
+puzzle default {
+layers {
+Player !flash
+}
+visuals {
+visual Player {
+colors = #ffffff
+0
+}
+visual !flash {
+duration = 120ms
+colors = #ff0000
+0
+}
+}
+rules {
+[ Player ] -> [ Player ] !flash
+}
+levels {
+legend {
+P = Player
+}
+level "start"
+P
+}
+}
+"#,
+        )
+        .expect("animation visual priority should compile");
+        let visuals = generated_visuals_js(&loaded);
+
+        assert!(visuals.contains("\"animations\":[\"flash\"]"));
+        assert!(visuals.contains("\"flash\":{"));
+    }
+
+    #[test]
     fn canvas_patterns_do_not_cross_a_per_visual_raster_boundary() {
         assert!(!RENDERER_JS.contains("cachedPatternBitmap"));
         assert!(!RENDERER_JS.contains("cachedDomPatternBitmap"));
@@ -787,7 +968,7 @@ P
         let source = r#"
 title = grid_render
 puzzle default {
-slots {
+layers {
 actor = Player
 }
 render {
@@ -955,11 +1136,8 @@ P
         assert!(APP_JS.contains("window.setTimeout(() => {\n    if (waitTimer.done)"));
         assert!(APP_JS.contains("while (pendingPresentationEvents.length > 0)"));
         assert!(APP_JS.contains("startPresentationWait(event);\n      return;"));
-        assert!(APP_JS.contains("applyMessageEvents([event]);"));
-        assert!(APP_JS.contains("function samePresentationContext(left, right)"));
-        assert!(APP_JS.contains("const animations = [event.animation];"));
-        assert!(APP_JS.contains("animations.push(pendingPresentationEvents.shift().animation);"));
-        assert!(APP_JS.contains("applyPresentationAnimations(event, animations);"));
+        assert!(APP_JS.contains("event.kind === \"animation_batch\""));
+        assert!(APP_JS.contains("applyPresentationAnimations(event, event.animations);"));
         assert!(APP_JS.contains("soundRuntime.applyEvents([event]);"));
         assert!(APP_JS.contains("currentState.levelIndex !== event.levelIndex"));
         assert!(APP_JS.contains("!currentPuzzles.includes(event.puzzle)"));
@@ -982,13 +1160,14 @@ P
     }
 
     #[test]
-    fn presentation_dispatch_batches_consecutive_animations_per_context() {
-        assert!(APP_JS.contains(
-            "while (pendingPresentationEvents[0]?.kind === \"animation\"\n        && samePresentationContext(event, pendingPresentationEvents[0]))"
-        ));
-        assert!(APP_JS.contains(
-            "return left.scene === right.scene\n    && left.puzzle === right.puzzle\n    && left.levelIndex === right.levelIndex;"
-        ));
+    fn presentation_dispatch_consumes_explicit_animation_batches() {
+        assert!(APP_JS.contains("event.kind === \"animation_batch\""));
+        assert!(
+            APP_JS
+                .contains("if (!Array.isArray(event.animations) || event.animations.length === 0)")
+        );
+        assert!(APP_JS.contains("applyPresentationAnimations(event, event.animations);"));
+        assert!(!APP_JS.contains("samePresentationContext"));
         let start = APP_JS
             .find("function applyPresentationAnimations(event, animations)")
             .unwrap();
@@ -1008,7 +1187,7 @@ P
         assert!(body.contains("puzzleSnapshot.animationBatchId = batchId;"));
         assert!(body.contains("currentState.scene.animationEvents = animations;"));
         assert!(body.contains("layer.scene.animationEvents = animations;"));
-        assert_eq!(body.matches("renderSceneStack(currentState);").count(), 1);
+        assert_eq!(body.matches("renderSurface(currentState);").count(), 1);
     }
 
     #[test]
@@ -1195,7 +1374,7 @@ P
     fn html_play_commits_snapshot_before_dispatching_presentation_events() {
         let render_start = APP_JS.find("function render(state) {").unwrap();
         let render_body = &APP_JS[render_start..];
-        let scene_index = render_body.find("renderSceneStack(state);").unwrap();
+        let scene_index = render_body.find("renderSurface(state);").unwrap();
         let presentation_index = render_body
             .find("applyPresentationEvents(presentationEvents);")
             .unwrap();
@@ -1229,19 +1408,28 @@ P
     }
 
     #[test]
-    fn html_play_message_popup_accepts_default_and_game_input_dismiss_keys() {
-        assert!(APP_JS.contains("function isMessageDismissKey(event)"));
+    fn html_play_modal_component_routes_dismiss_input_to_its_instance() {
+        assert!(APP_JS.contains("function isModalDismissKey(event)"));
         assert!(APP_JS.contains("rawKey === \"Enter\""));
         assert!(APP_JS.contains("key === \"Space\""));
         assert!(APP_JS.contains("key === \"x\""));
         assert!(APP_JS.contains("return effectsForKey(event).length > 0;"));
-        assert!(APP_JS.contains("if (messagePopup) {\n    if (isMessageDismissKey(event)) {\n      closeMessagePopup();\n    }\n    return true;\n  }"));
+        assert!(APP_JS.contains("const modal = activeModalComponent(currentState);"));
+        assert!(APP_JS.contains("sendComponentEvent(modal.id, eventName);"));
+        assert!(
+            APP_JS.contains(
+                "await postSessionAction({ kind: \"component_event\", instance, event });"
+            )
+        );
         assert!(APP_JS.contains("dispatchKeyboardInput(keyEvent);"));
-        assert!(!APP_JS.contains("backdrop.addEventListener(\"click\", closeMessagePopup);"));
+        assert!(APP_JS.contains("function bindAwaitedComponentEvent(root, instance, definition)"));
+        assert!(APP_JS.contains("const STANDARD_COMPONENT_DEFINITIONS"));
+        assert!(APP_JS.contains("definition.events?.[eventName]"));
+        assert!(!APP_JS.contains("function renderPresentedComponent("));
         assert!(!APP_JS.contains("ShowMessage"));
         assert!(!APP_JS.contains("CloseMessage"));
         assert!(!APP_JS.contains("hasSfx"));
-        assert!(APP_CSS.contains(".message-popup-backdrop:focus {\n  outline: none;\n}"));
+        assert!(APP_CSS.contains(".scene-layer.is-modal:focus {\n  outline: none;\n}"));
     }
 
     #[test]
@@ -1417,7 +1605,7 @@ sounds {
 }
 
 puzzle board {
-  slots {
+  layers {
     tiles = Player
   }
   empty .
@@ -1449,9 +1637,7 @@ scene playing {
 
     #[test]
     fn html_play_does_not_fallback_scene_definitions_to_variable_export() {
-        assert!(APP_JS.contains(
-            "return nonEmptyArray(source?.scenes) || nonEmptyArray(source?.screens) || [];"
-        ));
+        assert!(APP_JS.contains("return nonEmptyArray(source?.scenes) || [];"));
         assert!(!APP_JS.contains("window.PuzzleExport?.scenes"));
         assert!(!APP_JS.contains("window.PuzzleExport?.screens"));
     }
@@ -1504,7 +1690,7 @@ title = "Runtime boundary"
 
 puzzle cube {
   dimension = 3
-  slots {
+  layers {
     actor = Player
   }
   rules {
@@ -1749,8 +1935,9 @@ scene playing {
         assert!(PUZZLE3_COMPONENT_JS.contains("bounds.minY <= frame.height"));
         assert!(PUZZLE3_COMPONENT_JS.contains("cellHasRenderableVoxels(cell)"));
         assert!(
-            PUZZLE3_COMPONENT_JS
-                .contains("const effectiveScale = baseScale * Math.max(0.1, Number(zoom) || 1);")
+            PUZZLE3_COMPONENT_JS.contains(
+                "const effectiveScale = baseScale * Puzzle3VisualCore.normalizeZoom(zoom);"
+            )
         );
         assert!(PUZZLE3_COMPONENT_JS.contains("cellScale: baseScale"));
     }
@@ -1828,9 +2015,12 @@ scene playing {
         assert!(PUZZLE3_COMPONENT_JS.contains("visualVoxelTemplateCache.get(visual)"));
         assert!(PUZZLE3_COMPONENT_JS.contains("visualVoxelTemplateCache.set(visual, template)"));
         assert!(PUZZLE3_COMPONENT_JS.contains("localBounds: voxelBounds(localPosition, scale)"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("x: (grid.x + 0.5 - width / 2) * scale"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("y: (grid.y + 0.5 - depth / 2) * scale"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("z: (grid.z + 0.5 - height / 2) * scale"));
+        assert!(PUZZLE3_COMPONENT_JS.contains(
+            "const sourceGrid = standardVisualGridPosition({ width, depth, height }, col, row, z);"
+        ));
+        assert!(PUZZLE3_COMPONENT_JS.contains("x: (sourceGrid.x + 0.5 - width / 2) * scale"));
+        assert!(PUZZLE3_COMPONENT_JS.contains("y: (sourceGrid.y + 0.5 - depth / 2) * scale"));
+        assert!(PUZZLE3_COMPONENT_JS.contains("z: (sourceGrid.z + 0.5 - height / 2) * scale"));
         assert!(
             PUZZLE3_COMPONENT_JS.contains("const source = voxel.color || parseColor(voxel.fill);")
         );
@@ -1880,7 +2070,7 @@ scene playing {
 title = Mixed Game
 
 puzzle flat {
-slots {
+layers {
 actor = Player
 }
 rules {
@@ -1900,7 +2090,7 @@ P
 
 puzzle cube {
   dimension = 3
-  slots {
+  layers {
     actor = Player Box Wall
   }
 
@@ -1972,7 +2162,7 @@ scene mixed_play {
 title = Mixed Microban
 
 puzzle microban2d {
-slots {
+layers {
 actor = Player
 }
 rules {
@@ -1997,7 +2187,7 @@ level "microban_02" {
 
 puzzle microban3d {
 dimension = 3
-slots {
+layers {
 actor = Player
 }
 rules {
@@ -2243,7 +2433,7 @@ text level.title
 title = once_all_overlap
 
 puzzle board {
-  slots {
+  layers {
     tiles = A B
   }
   empty .
@@ -2286,7 +2476,7 @@ scene playing {
 	 title = Wasm Export
 
 puzzle board {
-  slots {
+  layers {
     tiles = Player
   }
   empty .
@@ -2415,7 +2605,7 @@ scene playing {
             r#"
 title = Shared Program Size Gate
 puzzle board {{
-  slots {{ item = A }}
+  layers {{ item = A }}
   rules {{
 {rules}
   }}
@@ -2458,7 +2648,7 @@ levels default of board {{
 title = Scene Input Runtime Bundle
 
 puzzle board {
-  slots {
+  layers {
     tiles = Player
   }
   empty .
@@ -2509,7 +2699,7 @@ scene playing {
 title = Browser Supplied Runtime
 
 puzzle board {
-  slots {
+  layers {
     tiles = Player
   }
   empty .
@@ -2557,7 +2747,7 @@ scene playing {
 title = Editor Preview Export
 
 puzzle board {
-  slots {
+  layers {
     tiles = Player
   }
   empty .
@@ -2661,7 +2851,7 @@ scene playing {
 title = Export Test
 
 puzzle default {
-slots {
+layers {
 actor = Player
 }
 
@@ -2704,7 +2894,7 @@ scene playing {
         let export: serde_json::Value =
             serde_json::from_str(&data).expect("export data should be JSON");
         assert!(export.get("scenes").is_some());
-        assert!(export.get("screens").is_some());
+        assert!(export.get("screens").is_none());
         assert!(
             export
                 .get("engine")
@@ -2721,7 +2911,7 @@ title = Progress Export
 puzzle default {
 persistent var bonus = 0
 
-slots {
+layers {
 actor = Player
 }
 
@@ -2826,10 +3016,13 @@ rules {
 
         let initial = bridge.dispatch(SessionAction::Snapshot).unwrap();
         let initial: serde_json::Value = serde_json::from_str(&initial).unwrap();
-        assert_eq!(initial["currentScene"], "sokoban");
+        assert_eq!(initial["surface"]["focus"], "sokoban");
         assert_eq!(initial["title"], "Microban");
         let initial = initial.as_object().unwrap();
-        assert!(initial.contains_key("visibleScenes"));
+        assert!(initial.contains_key("surface"));
+        assert!(!initial.contains_key("visibleScenes"));
+        assert!(!initial.contains_key("sceneLayers"));
+        assert!(!initial.contains_key("currentScene"));
         assert!(initial.contains_key("sceneState"));
         assert!(initial.contains_key("scenePuzzles"));
         assert!(!initial.contains_key("visibleScreens"));
@@ -2842,7 +3035,7 @@ rules {
             })
             .unwrap();
         let playing: serde_json::Value = serde_json::from_str(&playing).unwrap();
-        assert_eq!(playing["currentScene"], "playing");
+        assert_eq!(playing["surface"]["focus"], "playing");
         assert_eq!(playing["levelIndex"], 0);
 
         let save: serde_json::Value = serde_json::from_str(&bridge.progress_save_json()).unwrap();
@@ -2858,7 +3051,7 @@ rules {
 title = "Debug Trace"
 
 puzzle main {
-  slots {
+  layers {
     actor = Player
   }
 
@@ -2887,7 +3080,7 @@ levels main of main {
             .unwrap();
         let body: serde_json::Value = serde_json::from_str(&body).unwrap();
 
-        assert_eq!(body["snapshot"]["currentScene"], "main");
+        assert_eq!(body["snapshot"]["surface"]["focus"], "main");
         assert_eq!(body["debug"]["input"], "right");
         assert_eq!(body["debug"]["executions"].as_array().unwrap().len(), 1);
         assert_eq!(
@@ -2914,7 +3107,7 @@ levels main of main {
             .unwrap();
         let playing: serde_json::Value = serde_json::from_str(&playing).unwrap();
 
-        assert_eq!(playing["currentScene"], "playing");
+        assert_eq!(playing["surface"]["focus"], "playing");
         assert_eq!(
             playing["scene"]["settings"]["render"],
             serde_json::json!({})
@@ -2975,7 +3168,7 @@ levels main of main {
                 serde_json::from_str(&bridge.dispatch(SessionAction::Resume).unwrap()).unwrap();
         }
         assert_eq!(snapshot["levelIndex"], level_index);
-        assert_eq!(snapshot["currentScene"], "playing");
+        assert_eq!(snapshot["surface"]["focus"], "playing");
         assert!(cell_has_object(&snapshot["scene"]["cells"][68], "Player"));
     }
 
@@ -2985,7 +3178,7 @@ levels main of main {
 title = level_select_input_contract
 
 puzzle default {
-slots {
+layers {
 actor = Player
 }
 empty .
@@ -3022,7 +3215,7 @@ text "Select"
         let mut bridge = StandaloneSessionBridge::from_source(source, "contract.puzzle").unwrap();
 
         let playing: Value = serde_json::from_str(&bridge.snapshot_json()).unwrap();
-        assert_eq!(playing["currentScene"], json!("default"));
+        assert_eq!(playing["surface"]["focus"], json!("default"));
         assert_eq!(playing["acceptsModelInput"], json!(true));
 
         let select: Value = serde_json::from_str(
@@ -3033,7 +3226,7 @@ text "Select"
                 .unwrap(),
         )
         .unwrap();
-        assert_eq!(select["currentScene"], json!("level_select"));
+        assert_eq!(select["surface"]["focus"], json!("level_select"));
         assert_eq!(select["acceptsModelInput"], json!(false));
 
         let after_input: Value = serde_json::from_str(
@@ -3044,7 +3237,7 @@ text "Select"
                 .unwrap(),
         )
         .unwrap();
-        assert_eq!(after_input["currentScene"], json!("level_select"));
+        assert_eq!(after_input["surface"]["focus"], json!("level_select"));
         assert_eq!(after_input["acceptsModelInput"], json!(false));
         assert_eq!(after_input["canUndo"], json!(false));
     }
@@ -3059,7 +3252,7 @@ puzzle board {
     tween = true
     tween_duration = 300ms
   }
-  slots {
+  layers {
     actor = Player
   }
   rules {
@@ -3096,7 +3289,7 @@ scene playing {
             })
             .unwrap();
         let playing: serde_json::Value = serde_json::from_str(&playing).unwrap();
-        assert_eq!(playing["currentScene"], "playing");
+        assert_eq!(playing["surface"]["focus"], "playing");
         assert_eq!(playing["levelIndex"], 0);
 
         let moved = bridge
@@ -3105,16 +3298,69 @@ scene playing {
             })
             .unwrap();
         let moved: serde_json::Value = serde_json::from_str(&moved).unwrap();
+        assert_eq!(moved["presentationEvents"][0]["kind"], "animation_batch");
         assert_eq!(
-            moved["presentationEvents"][0]["animation"],
+            moved["presentationEvents"][0]["animations"][0],
             json!({
                 "kind": "move",
                 "name": "tween",
+                "occurrenceId": 1,
                 "objectId": 1,
                 "from": { "x": 0, "y": 0 },
                 "to": { "x": 1, "y": 0 }
             })
         );
+    }
+
+    #[test]
+    fn teneten3d_direction_change_and_move_share_one_renderer_occurrence() {
+        let source = include_str!("../../../games/TENETEN3D.puzzle3");
+        let mut bridge = StandaloneSessionBridge::from_source(source, "games/TENETEN3D.puzzle3")
+            .expect("load TENETEN3D");
+
+        let moved: Value = serde_json::from_str(
+            &bridge
+                .dispatch(SessionAction::Input {
+                    name: "right".to_string(),
+                })
+                .expect("move TEN right"),
+        )
+        .unwrap();
+        let batches = moved["presentationEvents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["kind"] == "animation_batch")
+            .collect::<Vec<_>>();
+        let animations = batches
+            .iter()
+            .find_map(|event| {
+                let animations = event["animations"].as_array().unwrap();
+                (animations
+                    .iter()
+                    .any(|animation| animation.get("visualTween").is_some())
+                    && animations
+                        .iter()
+                        .any(|animation| animation["from"] != animation["to"]))
+                .then_some(animations)
+            })
+            .unwrap_or_else(|| {
+                panic!("one animation batch must contain rotation and position: {batches:#?}")
+            });
+        let visual = animations
+            .iter()
+            .find(|event| event.get("visualTween").is_some())
+            .unwrap_or_else(|| {
+                panic!("direction change must emit a visual tween event: {animations:#?}")
+            });
+        let position = animations
+            .iter()
+            .find(|event| event["from"] != event["to"])
+            .expect("move must emit a position tween event");
+
+        assert_eq!(visual["objectId"], position["objectId"]);
+        assert_eq!(visual["occurrenceId"], position["occurrenceId"]);
+        assert_eq!(visual["to"], position["from"]);
     }
 
     #[test]
@@ -3133,7 +3379,7 @@ puzzle board {
     tween = true
     tween_duration = 80ms
   }
-  slots {
+  layers {
     solid = Player
     marker = Done
   }
@@ -3245,7 +3491,7 @@ scene playing {
 title = Flickscreen Focus
 
 puzzle default {
-slots {
+layers {
   floor = Background
   actor = Player1 Player2
 }
@@ -3298,7 +3544,7 @@ theme {
 }
 
 puzzle default {
-slots {
+layers {
 actor = Player
 }
 
@@ -3371,7 +3617,7 @@ rules {
         let mut bridge = StandaloneSessionBridge::from_source(source, "games/spec_3d.puzzle3")
             .expect("single puzzle3 document should have a scene host game runtime");
         let snapshot: Value = serde_json::from_str(&bridge.snapshot_json()).unwrap();
-        assert_eq!(snapshot["currentScene"], json!("sokoban"));
+        assert_eq!(snapshot["surface"]["focus"], json!("sokoban"));
     }
 
     #[test]
@@ -3380,7 +3626,7 @@ rules {
 
 puzzle cube {
   dimension = 3
-  slots {
+  layers {
     actor = Player
   }
 
@@ -3422,6 +3668,43 @@ levels default of cube {
         assert!(
             !PUZZLE3_THREE_RENDERER_JS
                 .contains("camera.up.set(0, 0, -Math.sign(Math.sin(pitch)) || -1);")
+        );
+    }
+
+    #[test]
+    fn puzzle3_three_camera_frame_preserves_explicit_zero_pitch() {
+        let value = evaluate_puzzle3_render_math(
+            r#"
+const zero = window.Puzzle3ThreeRenderer.cameraRenderFrame({ pitchDegrees: 0 });
+const omitted = window.Puzzle3ThreeRenderer.cameraRenderFrame({});
+return { zero, omitted };
+"#,
+        );
+
+        assert_eq!(value["zero"]["forward"], json!({ "x": 0, "y": 0, "z": -1 }));
+        assert_eq!(value["zero"]["up"], json!({ "x": 0, "y": 1, "z": 0 }));
+        assert_ne!(value["zero"]["forward"], value["omitted"]["forward"]);
+    }
+
+    #[test]
+    fn puzzle3_zoom_clamps_non_positive_values_to_minimum() {
+        let value = evaluate_puzzle3_render_math(
+            r#"
+return [undefined, 0, -2, 0.05, 2].map((zoom) => (
+  window.Puzzle3VisualCore.normalizeZoom(zoom)
+));
+"#,
+        );
+
+        assert_eq!(value, json!([1, 0.1, 0.1, 0.1, 2]));
+        assert!(
+            PUZZLE3_COMPONENT_JS
+                .contains("const cameraZoom = Puzzle3VisualCore.normalizeZoom(camera?.zoom);")
+        );
+        assert!(
+            PUZZLE3_THREE_RENDERER_JS.contains(
+                "const cameraValue = Puzzle3VisualCore.normalizeZoom(cameraSettings.zoom);"
+            )
         );
     }
 
@@ -3544,8 +3827,8 @@ const snapshot = {
     { position: { x: 1, y: 0, z: 0 }, objects: [{ id: 2 }] },
   ],
   animationEvents: [
-    { kind: "move", name: "tween", objectId: 1, from: { x: -1, y: 0, z: 0 }, to: { x: 0, y: 0, z: 0 } },
-    { kind: "move", name: "tween", objectId: 2, from: { x: 0, y: 0, z: 0 }, to: { x: 1, y: 0, z: 0 } },
+    { kind: "move", name: "tween", occurrenceId: 1, objectId: 1, from: { x: -1, y: 0, z: 0 }, to: { x: 0, y: 0, z: 0 } },
+    { kind: "move", name: "tween", occurrenceId: 2, objectId: 2, from: { x: 0, y: 0, z: 0 }, to: { x: 1, y: 0, z: 0 } },
   ],
   order: { direction_priority: ["down", "right", "front"], priorities: [{}] },
 };
@@ -3586,12 +3869,72 @@ return {
     }
 
     #[test]
+    fn puzzle3_three_rotation_tween_keeps_adjacent_voxels_as_one_rigid_mesh() {
+        let value = evaluate_puzzle3_render_math(
+            r##"
+const snapshot = {
+  size: { width: 1, depth: 1, height: 1 },
+  render: {
+    camera: {},
+    animation: { tween: { enabled: true, intervalMs: 100 } },
+    viewport: null,
+  },
+  objects: { A: { id: 1, name: "A", visual: "bar" } },
+  visuals: {
+    bar: {
+      palette: { "0": "#fff" },
+      spatialOps: [{ kind: "rotate3", space: "local", axis: [0, 0, 1], degrees: 90 }],
+      frames: [{ layers: [["00"]] }],
+    },
+  },
+  cells: [{ position: { x: 0, y: 0, z: 0 }, objects: [{ id: 1 }] }],
+  animationEvents: [{
+    kind: "move",
+    name: "tween",
+    occurrenceId: 1,
+    objectId: 1,
+    from: { x: 0, y: 0, z: 0 },
+    to: { x: 0, y: 0, z: 0 },
+    visualTween: {
+      from: { transforms: [{ kind: "rotate", space: "local", axis: [0, 0, 1], degrees: 0 }] },
+      to: { transforms: [{ kind: "rotate", space: "local", axis: [0, 0, 1], degrees: 90 }] },
+    },
+  }],
+  order: { direction_priority: ["down", "right", "front"], priorities: [{ objects: ["A"] }] },
+};
+const frame = window.Puzzle3ThreeRenderer.buildPuzzleStudioThreeFrame(
+  snapshot,
+  { animationProgress: 0.5 },
+);
+const visible = window.Puzzle3ThreeRenderer.frameVisibleVoxels(frame);
+const faces = window.Puzzle3ThreeRenderer.mergedVoxelFaces(visible.voxels, visible.occupied);
+return {
+  voxels: visible.voxels.length,
+  faces: faces.length,
+  diagonalFace: faces.some((face) => face.corners.some((corner) => (
+    Math.abs(corner.x) > 0.001 && Math.abs(corner.z) > 0.001
+  ))),
+};
+"##,
+        );
+
+        assert_eq!(
+            value,
+            json!({
+                "voxels": 2,
+                "faces": 6,
+                "diagonalFace": true,
+            })
+        );
+    }
+
+    #[test]
     fn puzzle3_export_embeds_source_free_frame_fixture_and_path() {
         let source = r#"title = "Tiny"
 
 puzzle cube {
   dimension = 3
-  slots {
+  layers {
     actor = Player
   }
   rules {
@@ -3661,7 +4004,11 @@ levels default of cube {
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("input: [\"snapshot\", \"view\"]"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("contract: PUZZLE3_THREE_RENDERER_CONTRACT"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("buildPuzzleStudioThreeFrame"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("next.projection = \"orthographic\";"));
+        assert!(PUZZLE3_COMPONENT_JS.contains("projection: camera.projection,"));
+        assert!(
+            PUZZLE3_COMPONENT_JS
+                .contains(".render.camera.projection must be perspective or orthographic.")
+        );
         assert!(!PUZZLE3_COMPONENT_JS.contains("debugAsymmetricVisuals"));
         assert!(!PUZZLE3_THREE_RENDERER_JS.contains("debugAsymmetric"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("new THREE.PerspectiveCamera"));
@@ -3671,7 +4018,7 @@ levels default of cube {
             PUZZLE3_THREE_RENDERER_JS
                 .contains("const yaw = degreesToRadians(cameraSettings.yawDegrees ?? 0);")
         );
-        assert!(PUZZLE3_THREE_RENDERER_JS.contains("const pitch = degreesToRadians(clamp(Number(cameraSettings.pitchDegrees ?? 35) || 35, -90, 90));"));
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("const pitch = degreesToRadians(clamp(Number(cameraSettings.pitchDegrees ?? 35), -90, 90));"));
         assert!(
             PUZZLE3_THREE_RENDERER_JS
                 .contains("camera.up.set(cameraFrame.up.x, cameraFrame.up.y, cameraFrame.up.z);")
@@ -3864,7 +4211,7 @@ theme {
 
 puzzle cube {
   dimension = 3
-  slots {
+  layers {
     actor = Player
   }
   rules {
@@ -3920,7 +4267,7 @@ title = "Screenshot"
 
 puzzle cube {
   dimension = 3
-  slots {
+  layers {
     actor = Player
   }
   rules {
@@ -3964,7 +4311,7 @@ levels basic of cube {
 title = shared_native_solver
 
 puzzle default {
-slots {
+layers {
 floor = Goal
 actor = Player Box
 }

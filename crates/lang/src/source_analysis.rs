@@ -571,7 +571,7 @@ mod tests {
     fn puzzle3_analysis_highlights_level_slice_separator_as_valid_structure() {
         let source = r#"puzzle board {
 dimension = 3
-slots {
+layers {
 ground = Floor
 }
 levels {
@@ -607,7 +607,7 @@ ___
     #[test]
     fn legend_char_highlighting_uses_the_parser_role_for_every_lexical_spelling() {
         let source = r#"puzzle board {
-slots {
+layers {
 alpha = Alpha
 numeric = Numeric
 dash = Dash
@@ -646,7 +646,7 @@ A1-.
     #[test]
     fn puzzle2d_analysis_keeps_undeclared_dash_level_cell_invalid() {
         let source =
-            "puzzle default {\nslots {\nactor = Box\n}\n}\nlevels {\nlevel \"dash\" {\n-\n}\n}\n";
+            "puzzle default {\nlayers {\nactor = Box\n}\n}\nlevels {\nlevel \"dash\" {\n-\n}\n}\n";
         let separator = source.find('-').expect("dash cell");
         let highlighted =
             analyze_source_for_profile(source, PuzzleSourceProfile::Puzzle2d).highlight();
@@ -742,7 +742,7 @@ A1-.
 title = move_requires_explicit_routine
 
 puzzle default {
-slots {
+layers {
 actor = Box
 marker = Marker
 }
@@ -806,7 +806,7 @@ M
 
     #[test]
     fn level_editor_manifest_keeps_parser_legend_diagnostics_without_failing_the_session() {
-        let source = "puzzle default {\nslots {\nactor = Box\n}\n}\nlevels {\nlegend {\nX = Missing\n. = empty\n}\nlevel \"one\"\nX\n}\n";
+        let source = "puzzle default {\nlayers {\nactor = Box\n}\n}\nlevels {\nlegend {\nX = Missing\n. = empty\n}\nlevel \"one\"\nX\n}\n";
         let manifest = analyze_source(source)
             .level_editor_manifest_json()
             .expect("invalid legend must remain visible to the level editor");
@@ -821,7 +821,7 @@ M
     fn level_editor_manifest_keeps_levels_when_a_visual_is_invalid() {
         let source = r#"
 puzzle default {
-slots {
+layers {
 actor = Box
 }
 rules {
@@ -918,7 +918,7 @@ B
     #[test]
     fn source_analysis_trivia_edit_keeps_parser_spans_on_the_current_revision() {
         let source =
-            "puzzle board {\n  input right\n  slots { actors = Player }\n  rules {\n  }\n}\n";
+            "puzzle board {\n  input right\n  layers { actors = Player }\n  rules {\n  }\n}\n";
         let mut analysis = analyze_source(source);
         let _ = analysis.highlight_json(true);
 

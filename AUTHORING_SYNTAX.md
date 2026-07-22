@@ -25,7 +25,7 @@ author = "Puzzle Author"
 homepage = "https://example.com"
 
 puzzle sokoban {
-slots {
+layers {
 floor = Goal Button
 actor = Player Box Wall
 }
@@ -177,9 +177,9 @@ tag value list の中の `<start>...<end>` は inclusive numeric range として
 
 `up down left right front back` の部分集合だけからなる author-defined tag set も、名前に依存せず方向型として扱う。方向型の schema tag slot では、oriented rule の相対 selector tag `>` / `<` / `^` / `v` を使える。相対方向がその tag set の domain 外になる orientation は rule alternative を生成しない。
 
-`slots` は object 定義から作られる組み込み tag set。名前付き layer はその名前、匿名 layer は内部名で展開される。各 layer 名は同じ layer に属する object group としても登録される。
+`layers` は object 定義から作られる組み込み tag set。名前付き state layer はその名前、匿名 state layer は内部名で展開される。各 layer 名は同じ state layer に属する object group としても登録される。
 
-tag set を使った object schema は、`slots` の右辺で concrete object に展開される。たとえば `Box:color` は `Box:red` / `Box:blue` のような object identity を作る。
+tag set を使った object schema は、`layers` の右辺で concrete object に展開される。たとえば `Box:color` は `Box:red` / `Box:blue` のような object identity を作る。
 
 tag set の値が object family 名を表す場合、tag set 名に suffix を付けた selector は各 object-name atom に同じ suffix を機械的に付けて解決する。
 
@@ -188,7 +188,7 @@ tags {
 kind = a b
 pair = A B
 }
-slots {
+layers {
 actor = A:kind B:kind C:kind
 }
 
@@ -198,7 +198,7 @@ win_conditions = count(pair:a) == 2
 この `pair:a` は `A:a B:a` と同じ selector 集合として扱われる。`pair:a` の展開先に存在しない selector が含まれる場合は error になる。
 
 ```txt
-slots {
+layers {
 actor = player:color box:color
 marker = marker:directions
 }
@@ -228,7 +228,7 @@ tags {
 num = 1 2 3
 }
 
-slots {
+layers {
 actor = Box:num
 }
 
@@ -410,12 +410,14 @@ once [ box:red ] -> [ box:blue ]
 once [ box:blue ] -> [ box:red ]
 ```
 
-### `slots`
+### `layers`
 
 ```txt
-slots {
+layers {
+priority = down right
 floor = Goal Button
-actor = Player Box Wall
+actor = Player Box Wall !Push
+!Burst
 }
 
 groups {
@@ -423,24 +425,22 @@ solid = actor
 }
 ```
 
-`slots` は位置を持つ object と state slot assignment をまとめる canonical authoring block。object / schema を生成できる owner は `slots` だけで、独立した object 宣言 block はない。
-
-`visuals` は object の見た目と描画順を所有する。state slot の宣言順は、`visuals { order { ... } }` を省略した場合の描画順生成にだけ使われる。
+`layers` は位置を持つ object の state layer と、背面から前面への render priority を同じ順序付き宣言から作る canonical authoring block。object / schema を生成できる owner は `layers` だけで、独立した object 宣言 block はない。`visuals` は見た目の resource と object binding だけを所有し、描画順は所有しない。
 
 `<name> = <object-or-selector...>` は「同じ cell に同居できない object 群」を表す。たとえば `actor = Player Box Wall` と書くと、`Player` / `Box` / `Wall` は同じ cell に同時に 1 つしか入れない。
 
-slot 名はそのまま tag selector として使える。たとえば `floor = Goal Button` と書いた後は、rule や legend や condition で `floor` が `Goal Button` の selector として解決される。
+名前付き state layer はそのまま tag selector として使える。たとえば `floor = Goal Button` と書いた後は、rule や legend や condition で `floor` が `Goal Button` の selector として解決される。
 
-右辺は、未知の名前なら新しい object / schema として作られ、既存の object / schema / group / slot tag ならその selector をその slot に割り当てる。
+右辺の通常名は、未知なら新しい object / schema として作られ、既存の object / schema / group / layer tag ならその selector をその state layer に割り当てる。`!<visual>` は transient animation visual の render source であり、object を作らず state layer にも入らない。同じ priority に通常 object と animation visual を並べられるため、`Box !Box` も有効である。`Box` と `!Box` は別の名前空間を参照する。
 
 schema family の base 名と同じ単体 object は定義できる。たとえば `Room Room:state` と書いた場合、`Room` は単体 object、`Room:open` / `Room:close` は family variant を指す。`Room` は family 全体の省略形にはならない。family 全体を選ぶときは `Room:*`、特定 variant を選ぶときは `Room:open` のように明示する。`Room` という単体 object が定義されていない場合、裸の `Room` selector は error。
 
-puzzle 直下の declaration/use block は同じ puzzle scope の catalog に対して解決される。したがって `sounds`、`rules`、`win_conditions`、`legend` などの object selector は、同じ puzzle 内の `slots` が作る最終 catalog を見る。block のテキスト順は、statement list や layout child のように順序そのものを表す構文でだけ意味を持つ。
+puzzle 直下の declaration/use block は同じ puzzle scope の catalog に対して解決される。したがって `sounds`、`rules`、`win_conditions`、`legend` などの object selector は、同じ puzzle 内の `layers` が作る最終 catalog を見る。
 
 ```txt
 color = red blue
 
-slots {
+layers {
 floor = Goal Button
 actor = Player Box Wall
 paint = Blob:color
@@ -451,32 +451,27 @@ solid = actor
 }
 ```
 
-level 文字と表示文字は `levels { legend { ... } }` に書く。`slots` は object identity と storage slot を作るだけで、level 文字や描画順は作らない。
+level 文字と表示文字は `levels { legend { ... } }` に書く。
 
-semantic selector は slot declaration とは別責務なので、canonical では group row を `groups { ... }` の中に集める。
+semantic selector は state layer declaration とは別責務なので、canonical では group row を `groups { ... }` の中に集める。
 
-同じセルの同じ slot には最大 1 object しか入れない。
-
-### `visuals.order`
+同じセルの同じ state layer には最大 1 object しか入れない。各通常行は一つの state layer と一つの render priority を同時に作る。`!Visual` だけの行は state layer を作らず、animation visual の render priority だけを作る。
 
 ```txt
-visuals {
-order {
-priority = down right
-Floor
-Player + Goal
-Box
+layers {
+floor = Floor Goal
+merge {
+actor = Player Box
+marker = Target
+effect = !Spark
 }
+overlay = Label !Burst
 }
 ```
 
-order の各通常行は背面から前面への1つの描画 priority。slot 名、object 名、group を参照できる。通常行に複数 object が展開される場合、それらは同じ state slot に属していなければならない。同じ slot の object を複数行へ分け、その間に別 slot の object を挟める。
+`merge { ... }` 内の各行は別々の state layer を作るが、描画時には一つの unordered merge priority へ合流する。同じ pixel / voxel に色が存在するときは、透明な sample を除く各 RGBA channel の単純算術平均で合成する。merge 内の行順は合成結果に影響しない。merge は入れ子にできない。
 
-`A + B` は unordered merge の authoring sugar で、canonical universal tree は `merge { A; B }`。merge 内部には順序がなく、異なる slot の object や group を集められる。同じ pixel / voxel に色が存在するときは、透明な sample を除く各 RGBA channel の単純算術平均で合成する。operand の記述順は結果に影響しない。
-
-`priority = <direction...>` は、異なる cell に属するはみ出し visual の座標比較順を定義する。左から辞書式に比較し、最初に差が出た `<direction>` 側の cell を前に描画する。2D は2軸を1回ずつ、3D は3軸を1回ずつ必須とする。省略時は2Dが `down right`、3Dが `down right front`。
-
-order block 自体を省略した場合、object priority は slot 宣言順から生成される。order を明示して object 行を1つでも書いた場合は全 object をちょうど1回含めなければならず、未記載 object の暗黙追記はしない。
+`priority = <direction...>` は `layers` 直下で、異なる cell に属するはみ出し visual の座標比較順を定義する。左から辞書式に比較し、最初に差が出た `<direction>` 側の cell を前に描画する。2D は2軸を1回ずつ、3D は3軸を1回ずつ必須とする。省略時は2Dが `down right`、3Dが `down right front`。
 
 ### `groups`
 
@@ -515,7 +510,7 @@ armed = bool
 }
 ```
 
-`marks` は rule chain の中だけで使う transition-local な一時 fact を宣言する block。mark は `State` に保存されず、level / undo / solver key / renderer には残らない。通常 transition と lifecycle program の各実行が終わるとすべて消える。
+`marks` は rule chain の中だけで使う transition-local な一時 fact を宣言する block。mark は `State` に保存されず、level / undo / solver key / renderer には残らない。`wait` で同じ program が中断・再開される間だけ continuation が保持し、transition または lifecycle program の実行が終わるとすべて消える。
 
 mark は宣言時に cell 用 / object 用を分けない。書いた位置が anchor を決める。
 
@@ -848,7 +843,7 @@ P = Player
 }
 ```
 
-見出し名は英数字、空白、`_`、`-` からなる名前を lowercase snake_case に正規化し、既存 block 名に対応する場合だけ section として扱う。たとえば `RULES` は `rules`、`ON LEVEL START` は `on_level_start`、`LAYERS` は `slots`、`LEGENDS` は `legend` になる。`TRANSITIONS` は canonical section ではない。未知の見出しは section sugar ではなく通常行として扱われる。
+見出し名は英数字、空白、`_`、`-` からなる名前を lowercase snake_case に正規化し、既存 block 名に対応する場合だけ section として扱う。たとえば `RULES` は `rules`、`ON LEVEL START` は `on_level_start`、`LAYERS` は `layers`、`LEGENDS` は `legend` になる。`TRANSITIONS` は canonical section ではない。未知の見出しは section sugar ではなく通常行として扱われる。
 
 ### Imports
 
@@ -860,7 +855,7 @@ P = Player
 
 ```txt
 puzzle sokoban {
-slots { ... }
+layers { ... }
 rules { ... }
 import "levels.puzzle"
 }
@@ -932,6 +927,8 @@ once input [ Fire | Grass ] -> [ Fire | Fire ]
 この例は「各行は1回適用、block 全体は変化しなくなるまで反復」。`repeat` を書かない routine では、block 全体は1回だけ実行される。一方で plain rewrite にすると、その rewrite 行自体は変化しなくなるまで適用される。
 
 rewrite-level `once` は row-major order の最初の LHS match に1回適用する。その patch が solver-visible state を変えなくても後続 match へ移らず、match した rule は発火として扱う。
+
+方向や selector の内部展開が複数の concrete rule を生成しても、1つの rewrite 行は1つの `once` application boundary のまま。`for d in directions { ... }` は body を方向ごとの別 statement へ展開するため、各 statement がそれぞれの `once` boundary を持つ。
 
 rewrite-level `repeat` は、solver-visible state を変える最初の match を row-major order で選びながら固定点まで繰り返す。progress 可能な match がなくなった pass では最初の match が発火しても反復を終了する。実装は単純な単一 component / fixed offset rule では dirty-origin delta を使い、それ以外の矩形 pattern、可変 gap、離散 pattern では全 origin を再検査する。
 
@@ -1135,7 +1132,7 @@ input yz_plane [ Cursor | ] -> [ | Cursor ]
 
 ### Direction Expansion Trigger
 
-`for <binding> in <source...>` は、有限で順序を持つ source の各 item へ statement list を展開する。source には組み込み方向set、`slots`、author-defined tag set、numeric range、または inline value list を使える。
+`for <binding> in <source...>` は、有限で順序を持つ source の各 item へ statement list を展開する。source には組み込み方向set、`layers`、author-defined tag set、numeric range、または inline value list を使える。
 
 よく使う軸:
 
@@ -1145,7 +1142,7 @@ for h in horizontal
 for v in vertical
 for z in z_axis
 for p in yz_plane
-for s in slots
+for s in layers
 for i in 1...3
 for i in 1...L
 for object in Box Wall Player
@@ -1168,7 +1165,7 @@ d [ B | ] -> [ | B ]
 }
 ```
 
-`slots` は layer group 名へ展開されるため、`no s` は展開後のその layer group 全体の不存在条件になる。他の layer の object は禁止しない。
+`layers` は state layer group 名へ展開されるため、`no s` は展開後のその layer group 全体の不存在条件になる。他の layer の object は禁止しない。animation-only layer は object selector を持たないため、この tag set には入らない。
 
 標準 rule `move` はユーザーが同名 rule を定義していない場合に用意される。概念的には次の rule と同じ。
 
@@ -1223,7 +1220,7 @@ once [ A ] -> [ APrime ]
 [ Button Box ] -> set count += 1
 ```
 
-prefix なしでも、複数セル、複数行、ellipsis、または `>` / `<` / `^` / `v` のような相対方向属性を含む pattern は PuzzleScript 互換の cardinal pattern として扱う。rewrite、pattern condition、condition pattern のすべてで同じ規則を使う。
+prefix なしでも、複数セル、複数行、ellipsis、または `>` / `<` / `^` / `v` のような相対方向属性を含む pattern は空間方向へ暗黙展開する。rewrite、pattern condition、condition pattern のすべてで同じ規則を使う。
 
 ```txt
 [ A | ] -> [ | A ]
@@ -1231,7 +1228,7 @@ some([ Player | Wall ])
 count([ Button | Box ])
 ```
 
-これらは `up` / `down` / `left` / `right` の4方向 variant へ lower される。
+2Dでは `up` / `down` / `left` / `right`、3Dでは `horizontal`、つまり `left` / `right` / `front` / `back` の4方向 variant へ lower される。3Dで上下方向も必要な場合は `directions [ ... ]` のように明示する。
 
 rewrite 末尾には effect を書ける。
 
@@ -1448,22 +1445,22 @@ move
 
 描画順は layer の宣言順で決まる。
 
-`slots` の `each <selector...>` 行は、selector の concrete alternatives をそれぞれ別の通常 layer に展開する。これは collision しない特殊 layer ではない。作られた各 layer は通常どおり collision layer であり、宣言順の表示順も持つ。
+`layers` の `each <selector...>` 行は、selector の concrete alternatives をそれぞれ別の通常 layer に展開する。これは collision しない特殊 layer ではない。作られた各 layer は通常どおり state layer であり、宣言順の表示順も持つ。`each` 行に animation visual は書けない。
 
-`slots` 内でも `for <binding> in <tag_set> { ... }` を使える。これは layer row を parse する前に token 展開される sugar なので、selector 側だけでなく layer 名側にも効く。
+`layers` 内でも `for <binding> in <tag_set> { ... }` を使える。これは layer row を parse する前に token 展開される sugar なので、selector 側だけでなく layer 名側にも効く。
 
 ```txt
 tags {
 kind = red blue
 }
-slots {
+layers {
 for k in kind {
 k = A:k B:k
 }
 }
 ```
 
-これは `red = A:red B:red` / `blue = A:blue B:blue` と同じ。`A:k` のように concrete value へ展開する場合、schema は同じ `slots` block 内の展開後の右辺から生成される。
+これは `red = A:red B:red` / `blue = A:blue B:blue` と同じ。`A:k` のように concrete value へ展開する場合、schema は同じ `layers` block 内の展開後の右辺から生成される。
 
 ### `visuals`
 
@@ -1675,13 +1672,13 @@ play_music loop
 
 scene / component RHS の canonical form は、`input <name>`、`component_effect <name>`、bare scene routine name、または direct scene effect。`input <name>` は focus 中の scene transition または puzzle transition に渡る semantic input で、1 回の遷移中に必ず 1 つだけ存在する原因として扱う。`component_effect <name>` は model window など、lowering 後にも専用操作を持つ component に使う。scene / presentation / lifecycle effect は `effect` wrapper を付けずに直接書く。
 
-scene effect は `sfx <name>`、`play_music <name>`、`pause_music [name]`、`resume_music [name]`、`stop_music [name]`、`goto <scene>`、`goto <scene>(<level>)`、`start <scene>`、`start <scene>(<level>)`、`clear_undo_history`、`clear_game_progress`、`<target>.restart`、`<target>.next_level` など。scene navigation の canonical form は `goto` と `start` だけ。`goto` は固定 scene node へ切り替え、既存の scene state を保持する。`start` は target scene state を初期化してから `goto` する。level scene への入場も `goto sokoban`、`goto sokoban(level_name)`、`goto playing(level)` のように scene call として書く。level 指定なしの `goto <level scene>` は保存済みまたは選択中の `current_level` を使い、なければ最初の level に入る。`resume` / `continue` / `open` / `enter` / `back` / `close` は canonical scene navigation ではない。旧 `start levels ... in <scene>` / `continue levels ... in <scene>` は読まない。通常の clear / advance / restart は model window component と puzzle lifecycle の責務なので、scene からの target-qualified level effect は button、menu、debug、hub、分岐演出などの明示的な介入に限る。`play_sfx <name>` と `effect <effect>` wrapper は読まない。Effect は単体でも列でも同じ場所に書ける。列の分割は effect vocabulary が所有し、`button "New Game" -> goto playing play_music music` のように component 側は列を特別扱いしない。曖昧な引数を避けたい場合は `on_scene_start` / `if` block、または scene `rules` 内の block に 1 行ずつ書く。`then` による inline sequence は使わない。
+scene は component definition の authoring 名であり、runtime では一つの surface に component instance が順序付きで mount される。先頭 instance が root、残りが content / overlay である。`goto <component>` は root を置換して履歴を破棄し、`enter <component>` は現在の focus を履歴へ積んで root を置換し、`back` は履歴から root を復元する。`show` / `hide` / `toggle` は mount と visibility、`focus` は input routing、`move <component> first|last|before <anchor>|after <anchor>` は root より上の表示順序を操作する。`start <component>` は対象 instance state を初期化してから `goto` する。level component への入場は `goto sokoban`、`goto sokoban(level_name)`、`goto playing(level)` のように書く。通常の clear / advance / restart は model window component と puzzle lifecycle が所有し、scene から明示的に介入するときは `<target>.restart`、`<target>.next_level` のように target を指定する。複数 effect は block に一行ずつ書く。
 
 game progress は scene effect から明示的に操作できる。`clear_game_progress` は `level.cleared` を全 level で false にし、`current_level` を初期状態に戻し、`persistent var` を既定値に戻す。細かく操作する場合は `set current_level = <level>`、`clear current_level`、`set level.cleared = true|false`、`set level(<level>).cleared = true|false`、`reset persistent_vars`、`reset <persistent var>` を使う。undo/redo 履歴だけを捨てる場合は `clear_undo_history` を使う。
 
-`message <expr>` は scene / component effect として popup message を表示し、既定で `default_wait_time` だけ待つ。`expr` は quoted text、scene `var`、top-level `var`、または effect binding を参照できる。
+`present <definition>(<property> = <expr>, ...) [as content|overlay] [await <event>]` は component instance を root の上へ追加する primitive。root の置換には `goto` / `enter` を使う。`await` がある instance は modal input target となり、指定 event を受け取るまで後続 effect を停止する。`message <expr>` は `present standard.message(text = <expr>) as overlay await dismiss` の sugar。`expr` は quoted text、scene `var`、top-level `var`、または effect binding を参照できる。
 
-`wait [duration]` は scene / component effect sequence の presentation wait。`duration` は `wait 0.1s`、`wait 1s`、`wait 100ms` のように秒またはミリ秒で書く。`wait` 単体は既定で `0.2s` 待つ。top-level に `default_wait_time = 500ms` のように書くと、bare `wait` と message の既定待ち時間を変更できる。
+`wait [duration]` は scene / component effect sequence の presentation wait。`duration` は `wait 0.1s`、`wait 1s`、`wait 100ms` のように秒またはミリ秒で書く。`wait` 単体は既定で `0.2s` 待つ。top-level に `default_wait_time = 500ms` のように書くと bare `wait` の既定待ち時間を変更できる。`message` は時間ではなく `dismiss` component event を待つ。
 
 ```txt
 var hint = "Push the box onto the goal"
@@ -1715,7 +1712,7 @@ goto secret_clear
 
 `level.name` は `for level in levels` の binding 内でのみ level record の `name` field を表す。record 自体は text や level name に暗黙変換されないため、field を明示する。`level.label` や `level.title` の別名、`level.last` / `level.has_next` の暗黙 field はない。
 
-puzzle rule の rewrite effect としても `message "text"` / `message <path>` / `sfx <name>` を書ける。`message` は popup と既定の `default_wait_time` の wait を presentation event として adapter へ渡す。popup の待機中は同じ turn の後続 rule、win 判定、lifecycleを pause し、完了後に保存された continuation から再開する。wait 自体は board state には残らない。
+puzzle rule の rewrite effect としても `message "text"` / `message <path>` / `sfx <name>` を書ける。`message` は `standard.message` overlay instance を surface に追加し、`dismiss` component event まで同じ turn の後続 rule、win 判定、lifecycle を停止する。dismiss 後は保存された continuation から再開する。時間待ちが必要な場合は独立した `wait <duration>` を使う。
 
 ```txt
 [ Player Goal ] -> message "You found the goal"
@@ -1735,13 +1732,13 @@ undo -> sfx back
 restart -> sfx reset
 }
 
-slots {
+layers {
 actor = Player Box
 }
 }
 ```
 
-`move <selector> -> sfx <name>` の `<selector>` は通常の object selector / group / schema selector。`sounds` が `slots` より前にあっても、同じ puzzle scope の最終 catalog に対して解決する。これは runtime event watcher ではなく lowering sugar で、rewrite alternative が対象 object の lower-level `Move` write を持つときだけ、その rule に `sfx` emission を付ける。remove+add として書かれた変化は move ではないので対象外。canonical syntax は blocked move を推測する `cantmove` sound trigger を持たない。
+`move <selector> -> sfx <name>` の `<selector>` は通常の object selector / group / schema selector。`sounds` が `layers` より前にあっても、同じ puzzle scope の最終 catalog に対して解決する。これは runtime event watcher ではなく lowering sugar で、rewrite alternative が対象 object の lower-level `Move` write を持つときだけ、その rule に `sfx` emission を付ける。remove+add として書かれた変化は move ではないので対象外。canonical syntax は blocked move を推測する `cantmove` sound trigger を持たない。
 
 `undo -> sfx <name>` / `restart -> sfx <name>` は、同じ model の session 操作が成功したときに one-shot SFX を鳴らす。これは rule input ではなく play/session 操作の presentation event なので、undo stack が空の undo では鳴らず、active puzzle がない restart でも鳴らない。top-level `sounds` は音源定義だけを持つため、これらの操作割り当ては puzzle 内の `sounds` に書く。
 
@@ -1845,7 +1842,7 @@ shade
 }
 ```
 
-`camera yaw=34 pitch=38 interactive_look` のような inline group は、`camera { yaw = 34; pitch = 38; interactive_look }` と同じ意味である。bare option は有効化、値を持つ option は `key=value` で書く。`interactive_look` は pointer drag で視線方向を変える設定、`interactive_zoom` は wheel/pinch 系の zoom 操作を許す設定である。これは `input` 名ではなく、`puzzle` component が自分の表示 box 内で始まった raw pointer gesture を camera view state に使ってよいという許可である。`zoom = 1` が `zoomscreen` / `smoothscreen` の通常倍率で、`zoom` や interactive zoom はその framing に対する上書き倍率として扱う。model `rules` の `if input == ...` には渡らず、undo/restart/transition state にも入らない。旧 `debug_camera` や `camera_yaw` 系、`interactive_look = true` のような boolean assignment は受け付けない。
+`camera yaw=34 pitch=38 interactive_look` のような inline group は、`camera { yaw = 34; pitch = 38; interactive_look }` と同じ意味である。`orthographic = true` にすると正投影になり、省略時または `false` は透視投影になる。bare option は有効化、値を持つ option は `key=value` で書く。`interactive_look` は pointer drag で視線方向を変える設定、`interactive_zoom` は wheel/pinch 系の zoom 操作を許す設定である。これは `input` 名ではなく、`puzzle` component が自分の表示 box 内で始まった raw pointer gesture を camera view state に使ってよいという許可である。`zoom = 1` が `zoomscreen` / `smoothscreen` の通常倍率で、`zoom` や interactive zoom はその framing に対する上書き倍率として扱う。model `rules` の `if input == ...` には渡らず、undo/restart/transition state にも入らない。旧 `debug_camera` や `camera_yaw` 系、`interactive_look = true` のような boolean assignment は受け付けない。
 
 `viewport { zoomscreen 7 7 }` は、親 scene から渡された display の `W x H` 枠に対して、focus object を中心にした `7 x 7 x full` の仮想 world-space box をどう描くかを決める。3D visual はその box を現在の camera yaw/pitch で投影し、与えられた display に収まる最大倍率にする。`full` は現在 level の全 height。`zoomscreen 7 7 3` と書くと高さも focus 周りの 3 cell として扱う。`smoothscreen` は同じ framing を目標にするが、描画用 view が遅れて追従する。`focus Player` は追従対象を指定する。これは描画 framing であり、外側 object の culling ではない。
 
@@ -1905,7 +1902,7 @@ frame inventory space fill 1 aspect 1 1
 
 `align` は container の cross axis、`distribute` は main axis にだけ作用する。文字列自体の揃えは text role/theme の責任であり、container alignment と混同しない。
 
-`scene puzzle [name]` は puzzle state を主モデルに持つ playable scene を定義する。`name` を省略すると `playing` になる。中の `slots` は board/object layer、`layout` は画面配置を意味する。scene-local な puzzle slot を明示しない場合は、`<name>` state slot が暗黙に `puzzle <name>` として用意される。`board` は予約 slot 名ではない。明示した slot がある場合はそれが primary puzzle slot になり、`update <slot>` で現在 input をその puzzle transition に渡せる。
+`scene puzzle [name]` は puzzle state を主モデルに持つ playable scene を定義する。`name` を省略すると `playing` になる。scene-local な state slot は puzzle instance を保持し、`layout` は画面配置を意味する。scene-local な puzzle slot を明示しない場合は、`<name>` state slot が暗黙に `puzzle <name>` として用意される。`board` は予約 slot 名ではない。明示した slot がある場合はそれが primary puzzle slot になり、`update <slot>` で現在 input をその puzzle transition に渡せる。
 
 ```txt
 scene puzzle {
@@ -1913,7 +1910,7 @@ layout {
 puzzle playing
 }
 
-slots {
+layers {
 actor = Player Box Wall
 floor = Goal
 }

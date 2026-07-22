@@ -377,6 +377,16 @@
               <button id="visualAnimateModeButton" class="icon-button source-action-button" type="button" aria-label="Animate visual" aria-pressed="false" title="Animate visual">
                 <svg data-editor-icon="film" aria-hidden="true"></svg>
               </button>
+              <span id="visualSourceActionBank" class="visual-pane-source-actions" role="group" aria-label="2D visual source actions">
+                <button id="newVisualButton" class="icon-button source-action-button" type="button" aria-label="New visual" title="New visual"><svg data-editor-icon="image-plus" aria-hidden="true"></svg></button>
+                <button id="visualInsertButton" class="icon-button source-action-button" type="button" aria-label="Add visual" title="Add visual"><svg data-editor-icon="file-plus-corner" aria-hidden="true"></svg></button>
+                <button id="visualUpdateButton" class="icon-button source-action-button visual-update-source-button" type="button" aria-label="Save visual" title="Save"><svg data-editor-icon="save" aria-hidden="true"></svg></button>
+              </span>
+              <span id="visual3dSourceActionBank" class="visual-pane-source-actions" role="group" aria-label="3D visual source actions" hidden>
+                <button id="newVisual3dButton" class="icon-button source-action-button" type="button" aria-label="New 3D visual" title="New visual"><svg data-editor-icon="image-plus" aria-hidden="true"></svg></button>
+                <button id="visual3dInsertButton" class="icon-button source-action-button" type="button" aria-label="Add 3D visual" title="Add visual"><svg data-editor-icon="file-plus-corner" aria-hidden="true"></svg></button>
+                <button id="visual3dUpdateButton" class="icon-button source-action-button visual-update-source-button" type="button" aria-label="Save 3D visual" title="Save"><svg data-editor-icon="save" aria-hidden="true"></svg></button>
+              </span>
             </div>
             <div class="tool-pane-scroll">
               <div class="visual-controls">
@@ -448,29 +458,24 @@
                 </button>
               </div>
               <div id="visualToolbarHost" class="visual-toolbar-host"></div>
-              <span id="visualSourceActionBank" hidden>
-                <button id="newVisualButton" class="icon-button source-action-button" type="button" aria-label="New visual" title="New visual"><svg data-editor-icon="image-plus" aria-hidden="true"></svg></button>
-                <button id="visualInsertButton" class="icon-button source-action-button" type="button" aria-label="Add visual" title="Add visual"><svg data-editor-icon="file-plus-corner" aria-hidden="true"></svg></button>
-                <button id="visualUpdateButton" class="icon-button source-action-button visual-update-source-button" type="button" aria-label="Save visual" title="Save"><svg data-editor-icon="save" aria-hidden="true"></svg></button>
-              </span>
               <div class="visual-board-wrap">
-                <div class="visual-animation-toolbar visual3d-slice-axis-control" role="group" aria-label="Visual animation frame controls">
-                  <span class="visual3d-layer-axis-label">Frame</span>
-                  <button id="visualAnimationPreviousFrameButton" class="icon-button visual-icon-button" type="button" aria-label="Move to previous visual frame" title="Previous frame">
+                <div class="visual-animation-toolbar visual3d-slice-axis-control compact-control-strip" role="group" aria-label="Visual animation frame controls">
+                  <span class="visual3d-layer-axis-label compact-control-strip__label">Frame</span>
+                  <button id="visualAnimationPreviousFrameButton" class="icon-button visual-icon-button compact-control-strip__button" type="button" aria-label="Move to previous visual frame" title="Previous frame">
                     <svg data-editor-icon="chevron-left" aria-hidden="true"></svg>
                   </button>
-                  <span class="visual3d-slice-value-wrap" title="Adjust frame">
-                    <input id="visualAnimationFrameInput" class="visual3d-layer-axis-value" type="number" min="1" max="1" value="1" inputmode="numeric" aria-label="Current visual animation frame">
-                    <span class="visual3d-slice-total-separator" aria-hidden="true">/</span>
-                    <span id="visualAnimationFrameTotal" class="visual3d-slice-total">1</span>
+                  <span class="index-control" title="Adjust frame">
+                    <input id="visualAnimationFrameInput" class="index-control__current" type="number" min="1" max="1" value="1" inputmode="numeric" aria-label="Current visual animation frame">
+                    <span class="index-control__separator" aria-hidden="true">/</span>
+                    <span id="visualAnimationFrameTotal" class="index-control__total">1</span>
                   </span>
-                  <button id="visualAnimationNextFrameButton" class="icon-button visual-icon-button" type="button" aria-label="Move to next visual frame" title="Next frame">
+                  <button id="visualAnimationNextFrameButton" class="icon-button visual-icon-button compact-control-strip__button" type="button" aria-label="Move to next visual frame" title="Next frame">
                     <svg data-editor-icon="chevron-right" aria-hidden="true"></svg>
                   </button>
-                  <button id="visualAnimationInsertFrameButton" class="icon-button visual-animation-insert-frame-button visual-icon-button" type="button" aria-label="Add animation frame" aria-pressed="false" title="Add frame" data-tooltip="Add frame">
+                  <button id="visualAnimationInsertFrameButton" class="icon-button visual-animation-insert-frame-button visual-icon-button compact-control-strip__button" type="button" aria-label="Add animation frame after current frame" title="Add frame after current" data-tooltip="Add frame after current">
                     <svg data-editor-icon="square-plus" aria-hidden="true"></svg>
                   </button>
-                  <button id="visualAnimationRemoveFrameButton" class="icon-button visual-animation-remove-frame-button visual-icon-button" type="button" aria-label="Remove animation frame" aria-pressed="false" title="Remove frame" data-tooltip="Remove frame">
+                  <button id="visualAnimationRemoveFrameButton" class="icon-button visual-animation-remove-frame-button visual-icon-button compact-control-strip__button" type="button" aria-label="Remove current animation frame" title="Remove current frame" data-tooltip="Remove current frame">
                     <svg data-editor-icon="square-minus" aria-hidden="true"></svg>
                   </button>
                 </div>
@@ -538,11 +543,6 @@
               </div>
               <div id="visual3dPalette" class="visual-palette visual3d-palette" aria-label="3D visual palette"></div>
               <div id="visual3dToolbarHost" class="visual-toolbar-host"></div>
-              <span id="visual3dSourceActionBank" hidden>
-                <button id="newVisual3dButton" class="icon-button source-action-button" type="button" aria-label="New 3D visual" title="New visual"><svg data-editor-icon="image-plus" aria-hidden="true"></svg></button>
-                <button id="visual3dInsertButton" class="icon-button source-action-button" type="button" aria-label="Add 3D visual" title="Add visual"><svg data-editor-icon="file-plus-corner" aria-hidden="true"></svg></button>
-                <button id="visual3dUpdateButton" class="icon-button source-action-button visual-update-source-button" type="button" aria-label="Save 3D visual" title="Save"><svg data-editor-icon="save" aria-hidden="true"></svg></button>
-              </span>
               <div class="visual3d-workspace">
                 <div class="visual-board-wrap visual3d-slice-wrap">
                   <div id="visual3dSliceBoard" class="visual-board visual3d-slice-board" aria-label="Editable 3D visual slice"></div>
@@ -581,12 +581,12 @@
                 <div class="visual3d-preview-column">
                   <div class="visual3d-preview-stage">
                     <div class="visual3d-preview-wrap">
-                    <div class="visual3d-slice-axis-control" role="group" aria-label="3D visual slice and axis">
-                      <span class="visual3d-layer-axis-label">Slices</span>
-                      <button id="visual3dPreviousSliceButton" class="icon-button visual-icon-button" type="button" aria-label="Move to lower slice" title="Lower slice"><svg data-editor-icon="chevron-left" aria-hidden="true"></svg></button>
-                      <span class="visual3d-slice-value-wrap" data-visual3d-slice-scrub title="Adjust slice"><input id="visual3dSliceValue" class="visual3d-layer-axis-value" type="number" min="1" max="5" value="1" inputmode="numeric" aria-label="Current 3D visual slice"><span class="visual3d-slice-total-separator" aria-hidden="true">/</span><span id="visual3dSliceTotal" class="visual3d-slice-total">5</span></span>
-                      <button id="visual3dNextSliceButton" class="icon-button visual-icon-button" type="button" aria-label="Move to higher slice" title="Higher slice"><svg data-editor-icon="chevron-right" aria-hidden="true"></svg></button>
-                      <span class="visual3d-layer-axis-label">Axis</span>
+                    <div class="visual3d-slice-axis-control compact-control-strip" role="group" aria-label="3D visual slice and axis">
+                      <span class="visual3d-layer-axis-label compact-control-strip__label">Slices</span>
+                      <button id="visual3dPreviousSliceButton" class="icon-button visual-icon-button compact-control-strip__button" type="button" aria-label="Move to lower slice" title="Lower slice"><svg data-editor-icon="chevron-left" aria-hidden="true"></svg></button>
+                      <span class="index-control" data-visual3d-slice-scrub title="Adjust slice"><input id="visual3dSliceValue" class="index-control__current" type="number" min="1" max="5" value="1" inputmode="numeric" aria-label="Current 3D visual slice"><span class="index-control__separator" aria-hidden="true">/</span><span id="visual3dSliceTotal" class="index-control__total">5</span></span>
+                      <button id="visual3dNextSliceButton" class="icon-button visual-icon-button compact-control-strip__button" type="button" aria-label="Move to higher slice" title="Higher slice"><svg data-editor-icon="chevron-right" aria-hidden="true"></svg></button>
+                      <span class="visual3d-layer-axis-label compact-control-strip__label">Axis</span>
                       <div class="visual3d-axis-control visual3d-toolbar-axis" role="group" aria-label="3D visual slice axis"><div class="visual3d-axis-buttons"><button class="visual3d-axis-button" type="button" data-visual3d-axis="x" aria-pressed="false" title="Edit YZ slices">X</button><button class="visual3d-axis-button" type="button" data-visual3d-axis="y" aria-pressed="false" title="Edit XZ slices">Y</button><button class="visual3d-axis-button is-active" type="button" data-visual3d-axis="z" aria-pressed="true" title="Edit XY slices">Z</button></div></div>
                     </div>
                     <canvas id="visual3dPreviewCanvas" class="visual3d-preview-canvas" width="320" height="320" aria-label="3D visual preview"></canvas>
@@ -710,24 +710,24 @@
               <div class="level3d-layer-editor" aria-label="Editable 3D level layer">
                 <div id="level3dLayerPalette" class="level-palette level3d-layer-palette" aria-label="Top-down 3D level palette"></div>
                 <div class="level3d-layer-frame-viewport level-board-wrap game-preview-scope">
-                  <div class="level3d-layer-toolbar visual3d-slice-axis-control" role="group" aria-label="3D level slice controls">
-                    <span class="visual3d-layer-axis-label">Slice</span>
-                    <button id="level3dAddSliceAboveButton" class="icon-button visual-icon-button level3d-slice-add-button" type="button" aria-label="Add slice above current 3D level slice" title="Add slice above">
-                      <span aria-hidden="true">+</span>
+                  <div class="level3d-layer-toolbar visual3d-slice-axis-control compact-control-strip" role="group" aria-label="3D level slice controls">
+                    <span class="visual3d-layer-axis-label compact-control-strip__label">Slice</span>
+                    <button id="level3dAddSliceAboveButton" class="icon-button visual-icon-button compact-control-strip__button level3d-slice-add-button" type="button" aria-label="Add slice above current 3D level slice" title="Add slice above">
+                      <svg data-editor-icon="plus" aria-hidden="true"></svg>
                     </button>
-                    <button id="level3dPreviousLayerButton" class="icon-button visual-icon-button" type="button" aria-label="Move to lower 3D level slice" title="Lower slice">
+                    <button id="level3dPreviousLayerButton" class="icon-button visual-icon-button compact-control-strip__button" type="button" aria-label="Move to lower 3D level slice" title="Lower slice">
                       <svg data-editor-icon="chevron-left" aria-hidden="true"></svg>
                     </button>
-                    <span class="visual3d-slice-value-wrap" data-level3d-slice-scrub title="Adjust slice">
-                      <input id="level3dLayerInput" class="visual3d-layer-axis-value" type="number" min="1" max="1" value="1" inputmode="numeric" aria-label="Current 3D level slice">
-                      <span class="visual3d-slice-total-separator" aria-hidden="true">/</span>
-                      <span id="level3dLayerTotal" class="visual3d-slice-total">1</span>
+                    <span class="index-control" data-level3d-slice-scrub title="Adjust slice">
+                      <input id="level3dLayerInput" class="index-control__current" type="number" min="1" max="1" value="1" inputmode="numeric" aria-label="Current 3D level slice">
+                      <span class="index-control__separator" aria-hidden="true">/</span>
+                      <span id="level3dLayerTotal" class="index-control__total">1</span>
                     </span>
-                    <button id="level3dNextLayerButton" class="icon-button visual-icon-button" type="button" aria-label="Move to higher 3D level slice" title="Higher slice">
+                    <button id="level3dNextLayerButton" class="icon-button visual-icon-button compact-control-strip__button" type="button" aria-label="Move to higher 3D level slice" title="Higher slice">
                       <svg data-editor-icon="chevron-right" aria-hidden="true"></svg>
                     </button>
-                    <button id="level3dAddSliceBelowButton" class="icon-button visual-icon-button level3d-slice-add-button" type="button" aria-label="Add slice below current 3D level slice" title="Add slice below">
-                      <span aria-hidden="true">+</span>
+                    <button id="level3dAddSliceBelowButton" class="icon-button visual-icon-button compact-control-strip__button level3d-slice-add-button" type="button" aria-label="Add slice below current 3D level slice" title="Add slice below">
+                      <svg data-editor-icon="plus" aria-hidden="true"></svg>
                     </button>
                   </div>
                   <div class="level-board-editor level3d-layer-board-editor" aria-label="Editable top-down 3D level layer">

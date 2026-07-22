@@ -1,7 +1,7 @@
 title = again_atomic
 
 puzzle board {
-slots {
+layers {
 actor = Player Ready Done
 }
 

@@ -19,6 +19,10 @@ const headless = !args.headed;
 const sourceInputOnly = Boolean(args.sourceInputOnly);
 const visualPaletteOnly = Boolean(args.visualPaletteOnly);
 const sourceEditingCommandsOnly = Boolean(args.sourceEditingCommandsOnly);
+const sourceSelectionOnly = Boolean(args.sourceSelectionOnly);
+const sourceOptionDragOnly = Boolean(args.sourceOptionDragOnly);
+const levelSelectionRevisionOnly = Boolean(args.levelSelectionRevisionOnly);
+const indexControlLayoutOnly = Boolean(args.indexControlLayoutOnly);
 
 const failures = [];
 
@@ -30,17 +34,40 @@ async function main() {
     await withEditorServer(fixture2d, async (server) => {
       await page.navigate(server.url);
       await editorLoads(page);
+      if (indexControlLayoutOnly) {
+        await visualAnimationIndexControlStaysCentered(page);
+        return;
+      }
+      if (levelSelectionRevisionOnly) {
+        await levelSelectionWaitsForCurrentEntries(page);
+        return;
+      }
+      if (sourceOptionDragOnly) {
+        await sourceOptionDragCreatesMultipleCursors(page);
+        return;
+      }
+      if (sourceSelectionOnly) {
+        await sourceMultiLineSelectionStartsAtTextColumn(page);
+        await sourceOptionDragCreatesMultipleCursors(page);
+        return;
+      }
       if (importFileOnly) {
         await fileInputImportAddsExternalPuzzleDocument(page, importFileOnly);
         return;
       }
       await visualPaletteMouseClickPreservesPaneScroll(page);
+      await visualColorEditorOffersPresetPalette(page);
+      await visualAnimationIndexControlStaysCentered(page);
       if (visualPaletteOnly) {
         return;
       }
       if (sourceEditingCommandsOnly) {
         await sourceCodeMirrorEditingCommandsReachWorkflow(page);
+        await sourceOutlineNavigationCentersCursor(page);
         await sourceAddControlOverlaysEmptyLineWithoutChangingEditorWidth(page);
+        await sourceMultiLineSelectionStartsAtTextColumn(page);
+        await sourceOptionDragCreatesMultipleCursors(page);
+        await sourceEntryRefreshIgnoresSupersededEdits(page);
         await sourceCompletionPopoverStaysInsideEditor(page);
         return;
       }
@@ -52,7 +79,11 @@ async function main() {
       await sourceCompletionKeepsKeyboardSelectionAcrossRefresh(page);
       await sourceCompletionPopoverStaysInsideEditor(page);
       await sourceCodeMirrorEditingCommandsReachWorkflow(page);
+      await sourceOutlineNavigationCentersCursor(page);
       await sourceAddControlOverlaysEmptyLineWithoutChangingEditorWidth(page);
+      await sourceMultiLineSelectionStartsAtTextColumn(page);
+      await sourceOptionDragCreatesMultipleCursors(page);
+      await sourceEntryRefreshIgnoresSupersededEdits(page);
       await sourceRewritePatternTabCopiesLhsToEmptyRhs(page);
       await fileInputImportAddsPuzzleDocument(page);
       if (sourceInputOnly) {
@@ -64,10 +95,16 @@ async function main() {
       await sourceLevelAsciiClickOpensLevelEditor(page);
     });
 
-    if (!sourceInputOnly && !sourceEditingCommandsOnly && !visualPaletteOnly && !importFileOnly) {
+    if (!sourceInputOnly && !sourceEditingCommandsOnly && !sourceSelectionOnly && !sourceOptionDragOnly && !levelSelectionRevisionOnly && !visualPaletteOnly && !importFileOnly) {
       await withEditorServer(fixture3d, async (server) => {
         await page.navigate(server.url);
         await editorLoads(page);
+        if (indexControlLayoutOnly) {
+          await visual3dIndexControlStaysCentered(page);
+          await level3dPreviewUpdateReachesRuntime(page, { layoutOnly: true });
+          return;
+        }
+        await visual3dIndexControlStaysCentered(page);
         await level3dPreviewUpdateReachesRuntime(page);
       });
     }
@@ -161,6 +198,150 @@ async function visualPaletteMouseClickPreservesPaneScroll(page) {
     await clickTop(page, "#playModeButton").catch(() => {});
   }
   await page.assertNoErrors("visual palette mouse focus");
+}
+
+async function visualColorEditorOffersPresetPalette(page) {
+  await clickTop(page, "#visualModeButton");
+  await page.waitForTop(
+    `Boolean(document.querySelector("#visualBuilder") && !document.querySelector("#visualBuilder").hidden)`,
+    "2D visual pane"
+  );
+  const before = await page.evaluateTop(`(() => {
+    const button = document.querySelector("#visualPalette .visual-current-color-button");
+    if (!button || button.getAttribute("aria-disabled") === "true") {
+      throw new Error("missing editable current visual color");
+    }
+    return {
+      title: button.title,
+      ariaLabel: button.getAttribute("aria-label"),
+      tooltip: compactEditorTooltipText(button.title),
+    };
+  })()`);
+  assert.equal(before.title, "Edit selected color");
+  assert.match(before.ariaLabel || "", /^Edit selected color /);
+  assert.equal(before.tooltip, "Edit color");
+
+  await clickTop(page, "#visualPalette .visual-current-color-button");
+  const opened = await page.evaluateTop(`(() => {
+    const menu = document.querySelector("#visualPalette .visual-current-editor-panel .visual-color-menu");
+    const presets = menu?.querySelectorAll(".visual-preset-grid .visual-color-preset") || [];
+    return {
+      expanded: document.querySelector("#visualPalette .visual-current-color-button")?.getAttribute("aria-expanded"),
+      menuVisible: Boolean(menu && !menu.hidden),
+      presetCount: presets.length,
+    };
+  })()`);
+  assert.deepEqual(opened, {
+    expanded: "true",
+    menuVisible: true,
+    presetCount: 16,
+  });
+  await clickTop(page, '#visualPalette .visual-current-editor-panel [aria-label="Use color #00e436"]');
+  const selectedPreset = await page.evaluateTop(`(() => {
+    const preset = document.querySelector(
+      '#visualPalette .visual-current-editor-panel [aria-label="Use color #00e436"]'
+    );
+    return {
+      selected: Boolean(preset?.classList.contains("is-selected")),
+      color: normalizeVisualColor(visual.palette[visual.selectedColorIndex]?.color),
+    };
+  })()`);
+  assert.deepEqual(selectedPreset, {
+    selected: true,
+    color: "#00e436",
+  });
+  await clickTop(page, "#playModeButton");
+  await page.assertNoErrors("visual color edit presets");
+}
+
+async function visualAnimationIndexControlStaysCentered(page) {
+  await clickTop(page, "#visualModeButton");
+  await page.waitForTop(
+    `Boolean(document.querySelector("#visualBuilder") && !document.querySelector("#visualBuilder").hidden)`,
+    "2D visual pane"
+  );
+  const animationMode = await page.evaluateTop(
+    `document.querySelector("#visualBuilder")?.classList.contains("is-animation-mode") === true`
+  );
+  if (!animationMode) {
+    await clickTop(page, "#visualAnimateModeButton");
+  }
+  await page.waitForTop(
+    `document.querySelector("#visualBuilder .visual-animation-toolbar")?.getClientRects().length > 0`,
+    "visual animation index control"
+  );
+  await assertIndexControlLayout(page, "#visualBuilder .visual-animation-toolbar", "visual animation frames");
+  await clickTop(page, "#playModeButton");
+  await page.assertNoErrors("visual animation index control layout");
+}
+
+async function visual3dIndexControlStaysCentered(page) {
+  await clickTop(page, "#visualModeButton");
+  await page.waitForTop(
+    `Boolean(
+      document.querySelector("#visual3dBuilder")
+      && !document.querySelector("#visual3dBuilder").hidden
+      && document.querySelector("#visual3dBuilder .visual3d-preview-wrap > .compact-control-strip")?.getClientRects().length
+    )`,
+    "3D visual index control"
+  );
+  await assertIndexControlLayout(
+    page,
+    "#visual3dBuilder .visual3d-preview-wrap > .compact-control-strip",
+    "3D visual slices"
+  );
+  await clickTop(page, "#playModeButton");
+  await page.assertNoErrors("3D visual index control layout");
+}
+
+async function assertIndexControlLayout(page, stripSelector, label) {
+  const result = await page.evaluateTop(`(() => {
+    const strip = document.querySelector(${JSON.stringify(stripSelector)});
+    if (!strip || !strip.getClientRects().length) {
+      throw new Error("missing visible compact control strip");
+    }
+    const indexControl = strip.querySelector(":scope > .index-control");
+    const current = indexControl?.querySelector(":scope > .index-control__current");
+    const separator = indexControl?.querySelector(":scope > .index-control__separator");
+    const total = indexControl?.querySelector(":scope > .index-control__total");
+    if (!indexControl || !current || !separator || !total) {
+      throw new Error("incomplete index control structure");
+    }
+    const centerY = (element) => {
+      const rect = element.getBoundingClientRect();
+      return rect.top + rect.height / 2;
+    };
+    const stripCenter = centerY(strip);
+    const deltas = {};
+    for (const [name, element] of [
+      ["index", indexControl],
+      ["current", current],
+      ["separator", separator],
+      ["total", total],
+    ]) {
+      deltas[name] = Math.abs(centerY(element) - stripCenter);
+    }
+    for (const [index, element] of Array.from(strip.children).entries()) {
+      if (element.matches(".compact-control-strip__label, .compact-control-strip__button")) {
+        deltas["item-" + index] = Math.abs(centerY(element) - stripCenter);
+      }
+      if (element.matches(".compact-control-strip__button")) {
+        const icon = element.querySelector(":scope > svg");
+        if (!icon) {
+          throw new Error("compact control strip button has no direct SVG icon");
+        }
+        deltas["icon-" + index] = Math.abs(centerY(icon) - centerY(element));
+      }
+    }
+    return {
+      deltas,
+      indexControlCount: strip.querySelectorAll(":scope > .index-control").length,
+    };
+  })()`);
+  assert.equal(result.indexControlCount, 1, `${label} should have one shared index control`);
+  for (const [part, delta] of Object.entries(result.deltas)) {
+    assert.ok(delta <= 0.5, `${label} ${part} is vertically misaligned by ${delta}px`);
+  }
 }
 
 async function editorLoads(page) {
@@ -915,8 +1096,9 @@ async function sourceAddControlOverlaysEmptyLineWithoutChangingEditorWidth(page)
       };
       port.setAddLineOverlay(source, cursor, true);
       const marker = document.querySelector("#sourceEditorMount .cm-source-add-marker");
+      const anchor = marker?.closest(".cm-source-add-anchor");
       const line = marker?.closest(".cm-line");
-      if (!marker || !line) {
+      if (!marker || !anchor || !line) {
         throw new Error("source add control was not rendered on its line");
       }
       const after = {
@@ -925,20 +1107,41 @@ async function sourceAddControlOverlaysEmptyLineWithoutChangingEditorWidth(page)
         guttersWidth: gutters.getBoundingClientRect().width,
       };
       const markerRect = marker.getBoundingClientRect();
+      const iconRect = marker.querySelector("svg")?.getBoundingClientRect();
+      const anchorRect = anchor.getBoundingClientRect();
       const lineRect = line.getBoundingClientRect();
+      const lineHeight = parseFloat(getComputedStyle(line).lineHeight);
+      const markerFontSize = parseFloat(getComputedStyle(marker).fontSize);
       if (
         before.contentLeft !== after.contentLeft
         || before.contentWidth !== after.contentWidth
         || before.guttersWidth !== after.guttersWidth
         || document.querySelector("#sourceEditorMount .cm-source-add-gutter")
         || getComputedStyle(marker).position !== "absolute"
+        || anchorRect.width !== 0
+        || Math.abs(anchorRect.height - lineHeight) > 1
+        || Math.abs(markerRect.top - lineRect.top) > 1
         || Math.abs(markerRect.left - lineRect.left) > 1
+        || Math.abs(markerRect.width - lineHeight) > 1
+        || Math.abs(markerRect.height - lineHeight) > 1
+        || !iconRect
+        || Math.abs(iconRect.width - markerFontSize) > 1
+        || Math.abs(iconRect.height - markerFontSize) > 1
       ) {
         throw new Error("source add control changed editor layout: " + JSON.stringify({
           before,
           after,
           markerLeft: markerRect.left,
+          markerTop: markerRect.top,
+          markerWidth: markerRect.width,
+          iconWidth: iconRect?.width,
+          iconHeight: iconRect?.height,
+          anchorWidth: anchorRect.width,
+          anchorHeight: anchorRect.height,
           lineLeft: lineRect.left,
+          lineTop: lineRect.top,
+          lineHeight,
+          markerFontSize,
           position: getComputedStyle(marker).position,
         }));
       }
@@ -952,6 +1155,361 @@ async function sourceAddControlOverlaysEmptyLineWithoutChangingEditorWidth(page)
     return true;
   })()`);
   await page.assertNoErrors("source add line overlay layout");
+}
+
+async function sourceMultiLineSelectionStartsAtTextColumn(page) {
+  await page.evaluateTop(`(() => {
+    const editor = document.querySelector("#sourceEditor");
+    if (!editor?.sourceEditorPort || editor.sourceEditorPort.kind !== "codemirror") {
+      throw new Error("missing CodeMirror source editor");
+    }
+    window.__sourceSelectionOriginal = {
+      source: editor.value || "",
+      start: editor.selectionStart,
+      end: editor.selectionEnd,
+    };
+    const source = "first line\\nmiddle line\\nlast line";
+    setSourceEditorValue(source, { resetUndo: true });
+    editor.focus();
+    editor.setSelectionRange(2, source.length - 2);
+    return true;
+  })()`);
+  try {
+    await page.waitForTop(
+      `document.querySelectorAll("#sourceEditorMount .cm-selectionBackground").length >= 3`,
+      "multiline source selection"
+    );
+    const result = await page.evaluateTop(`(() => {
+      const lines = Array.from(document.querySelectorAll("#sourceEditorMount .cm-line"));
+      const backgrounds = Array.from(document.querySelectorAll(
+        "#sourceEditorMount .cm-selectionLayer .cm-selectionBackground"
+      ));
+      const middleLine = lines[1];
+      const middleLineRect = middleLine?.getBoundingClientRect();
+      const middleLineStyle = middleLine ? getComputedStyle(middleLine) : null;
+      const middleY = middleLineRect ? middleLineRect.top + middleLineRect.height / 2 : undefined;
+      const middleBackground = backgrounds.find((background) => {
+        const rect = background.getBoundingClientRect();
+        return middleY !== undefined && rect.top <= middleY && rect.bottom >= middleY;
+      });
+      if (!middleLineRect || !middleLineStyle || !middleBackground) {
+        throw new Error("missing multiline selection layout surfaces");
+      }
+      const backgroundRect = middleBackground.getBoundingClientRect();
+      return {
+        backgroundLeft: backgroundRect.left,
+        textLeft: middleLineRect.left + parseFloat(middleLineStyle.paddingLeft),
+      };
+    })()`);
+    assert.ok(
+      Math.abs(result.backgroundLeft - result.textLeft) <= 1,
+      `multiline selection starts outside the text column: ${JSON.stringify(result)}`
+    );
+  } finally {
+    await page.evaluateTop(`(() => {
+      const editor = document.querySelector("#sourceEditor");
+      const original = window.__sourceSelectionOriginal;
+      setSourceEditorValue(original?.source || "", { resetUndo: true });
+      editor.setSelectionRange(original?.start || 0, original?.end || 0);
+      delete window.__sourceSelectionOriginal;
+      return true;
+    })()`);
+  }
+  await page.assertNoErrors("source multiline selection layout");
+}
+
+async function sourceOptionDragCreatesMultipleCursors(page) {
+  const drag = await page.evaluateTop(`(async () => {
+    const editor = document.querySelector("#sourceEditor");
+    const view = editor?.sourceEditorPort?.view;
+    if (!editor || !view) {
+      throw new Error("missing CodeMirror source editor");
+    }
+    window.__sourceOptionDragOriginal = {
+      source: editor.value || "",
+      start: editor.selectionStart,
+      end: editor.selectionEnd,
+    };
+    const source = "alpha\\nbravo\\ncharl";
+    setSourceEditorValue(source, { resetUndo: true });
+    editor.focus();
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const start = view.coordsAtPos(1);
+    const end = view.coordsAtPos(15);
+    if (!start || !end) {
+      throw new Error("missing CodeMirror drag coordinates");
+    }
+    return {
+      start: { x: start.left, y: (start.top + start.bottom) / 2 },
+      end: { x: end.left, y: (end.top + end.bottom) / 2 },
+    };
+  })()`);
+  try {
+    await page.send("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      button: "left",
+      buttons: 1,
+      clickCount: 1,
+      modifiers: 1,
+      ...drag.start,
+    });
+    await page.send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      button: "left",
+      buttons: 1,
+      modifiers: 1,
+      ...drag.end,
+    });
+    await page.send("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      button: "left",
+      buttons: 0,
+      clickCount: 1,
+      modifiers: 1,
+      ...drag.end,
+    });
+    const selections = await page.evaluateTop(`(() => {
+      const view = document.querySelector("#sourceEditor")?.sourceEditorPort?.view;
+      return view?.state.selection.ranges.map((range) => ({
+        from: range.from,
+        to: range.to,
+        text: view.state.sliceDoc(range.from, range.to),
+      })) || [];
+    })()`);
+    assert.deepEqual(
+      selections.map((selection) => selection.text),
+      ["lp", "ra", "ha"],
+      "Option+drag should create one rectangular selection per line"
+    );
+
+    await page.send("Input.insertText", { text: "X" });
+    assert.equal(
+      await page.evaluateTop(`document.querySelector("#sourceEditor")?.value || ""`),
+      "aXha\nbXvo\ncXrl",
+      "typing should replace every Option+drag selection"
+    );
+  } finally {
+    await page.evaluateTop(`(() => {
+      const editor = document.querySelector("#sourceEditor");
+      const original = window.__sourceOptionDragOriginal;
+      setSourceEditorValue(original?.source || "", { resetUndo: true });
+      editor.setSelectionRange(original?.start || 0, original?.end || 0);
+      delete window.__sourceOptionDragOriginal;
+      return true;
+    })()`);
+  }
+  await page.assertNoErrors("source Option drag multiple cursors");
+}
+
+async function sourceOutlineNavigationCentersCursor(page) {
+  const result = await page.evaluateTop(`(() => {
+    const editor = document.querySelector("#sourceEditor");
+    const originalItems = sourceOutlineItems;
+    const originalScrollIntoView = editor?.sourceEditorPort?.scrollIntoView;
+    const document = activeDocument();
+    if (!editor || typeof originalScrollIntoView !== "function" || !document) {
+      throw new Error("missing source outline navigation test surfaces");
+    }
+    const start = Math.min(editor.value.length, Math.max(0, editor.value.indexOf("\\n") + 1));
+    const item = {
+      id: "browser-smoke-outline-target",
+      kind: "rules",
+      label: "Browser smoke outline target",
+      start,
+      end: start,
+      depth: 0,
+      parent: "",
+    };
+    let scrollRequest = null;
+    try {
+      sourceOutlineItems = [item];
+      renderSourceOutline();
+      editor.sourceEditorPort.scrollIntoView = (offset, alignment) => {
+        scrollRequest = { offset, alignment };
+      };
+      document.querySelector('[data-source-outline-id="browser-smoke-outline-target"]')?.click();
+      return {
+        cursor: editor.selectionStart,
+        expectedCursor: start,
+        scrollRequest,
+      };
+    } finally {
+      editor.sourceEditorPort.scrollIntoView = originalScrollIntoView;
+      sourceOutlineItems = originalItems;
+      renderSourceOutline();
+      syncSourceOutlineActiveItem();
+    }
+  })()`);
+  assert.deepEqual(result, {
+    cursor: result.expectedCursor,
+    expectedCursor: result.expectedCursor,
+    scrollRequest: {
+      offset: result.expectedCursor,
+      alignment: "center",
+    },
+  });
+  await page.assertNoErrors("source outline centered navigation");
+}
+
+async function sourceEntryRefreshIgnoresSupersededEdits(page) {
+  await page.evaluateTop(`(() => {
+    const editor = document.querySelector("#sourceEditor");
+    const status = document.querySelector("#editorStatusLabel");
+    if (!editor || !status || typeof sourceEditorContentChanged !== "function") {
+      throw new Error("missing source entry refresh test surfaces");
+    }
+    window.__sourceEntriesRaceOriginal = editor.value || "";
+    window.__sourceEntriesRaceStatus = {
+      text: status.textContent || "",
+      className: status.className,
+    };
+    setEditorStatus("", "");
+    const insertAt = Math.max(0, editor.value.indexOf("\\n"));
+    editor.setSelectionRange(insertAt, insertAt);
+    for (const text of ["a", "b"]) {
+      const cursor = editor.selectionStart;
+      editor.setRangeText(text, cursor, cursor, "end");
+      sourceEditorContentChanged();
+    }
+    return editor.value;
+  })()`);
+  try {
+    await page.waitForTop(
+      `Boolean(surfaceEntriesCache?.source === document.querySelector("#sourceEditor")?.value)`,
+      "latest source entries after superseded edits",
+      { timeoutMs: 10_000 }
+    );
+    const status = await page.evaluateTop(`document.querySelector("#editorStatusLabel")?.textContent || ""`);
+    assert.equal(
+      status.includes("Editor source analysis changed before the query started."),
+      false,
+      `superseded source entry query leaked into editor status: ${status}`
+    );
+  } finally {
+    await page.evaluateTop(`(() => {
+      const original = window.__sourceEntriesRaceOriginal;
+      setSourceEditorValue(typeof original === "string" ? original : "", { resetUndo: true });
+      if (documents[currentDocumentIndex]) {
+        documents[currentDocumentIndex].source = sourceEditor.value;
+      }
+      const status = window.__sourceEntriesRaceStatus;
+      if (status) {
+        const element = document.querySelector("#editorStatusLabel");
+        element.textContent = status.text;
+        element.className = status.className;
+      }
+      delete window.__sourceEntriesRaceOriginal;
+      delete window.__sourceEntriesRaceStatus;
+      return true;
+    })()`);
+  }
+  await page.assertNoErrors("superseded source entry refresh");
+}
+
+async function levelSelectionWaitsForCurrentEntries(page) {
+  await page.waitForTop(
+    `Boolean(surfaceEntriesCache?.source === document.querySelector("#sourceEditor")?.value)`,
+    "initial source entries",
+    { timeoutMs: 10_000 }
+  );
+  await page.evaluateTop(`(() => {
+    const editor = document.querySelector("#sourceEditor");
+    const status = document.querySelector("#editorStatusLabel");
+    const runtime = window.PuzzleStudioRuntime;
+    if (!editor || !status || typeof runtime?.sourceEntryInfo !== "function") {
+      throw new Error("missing source target revision test surfaces");
+    }
+    window.__sourceTargetRevisionOriginal = {
+      source: editor.value || "",
+      sourceEntryInfo: runtime.sourceEntryInfo,
+      statusText: status.textContent || "",
+      statusClassName: status.className,
+      previewMode: currentPreviewMode,
+    };
+    window.__sourceTargetRevisionRelease = null;
+    window.__sourceTargetRevisionBlocked = false;
+    const levelEntry = surfaceEntriesCache.entries.find((entry) => entry?.kind === "level");
+    if (!levelEntry) {
+      throw new Error("source target revision fixture has no parsed level entry");
+    }
+    openPreviewModePane("play");
+    runtime.sourceEntryInfo = async (...args) => {
+      await new Promise((resolve) => {
+        window.__sourceTargetRevisionRelease = resolve;
+        window.__sourceTargetRevisionBlocked = true;
+      });
+      return window.__sourceTargetRevisionOriginal.sourceEntryInfo.apply(runtime, args);
+    };
+    setEditorStatus("", "");
+    const insertAt = Math.max(0, editor.value.indexOf("\\n"));
+    editor.setSelectionRange(insertAt, insertAt);
+    editor.setRangeText(" ", insertAt, insertAt, "end");
+    sourceEditorContentChanged();
+    return true;
+  })()`);
+  try {
+    await page.waitForTop(
+      `window.__sourceTargetRevisionBlocked === true`,
+      "blocked current-revision source entries",
+      { timeoutMs: 10_000 }
+    );
+    await page.evaluateTop(`(() => {
+      const button = document.querySelector("#editModeButton");
+      if (!button) {
+        throw new Error("source target revision fixture has no level editor button");
+      }
+      button.click();
+      return true;
+    })()`);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const pending = await page.evaluateTop(`(() => ({
+      status: document.querySelector("#editorStatusLabel")?.textContent || "",
+      target: sourceCursorResolveRegion,
+      cacheSource: surfaceEntriesCache?.source ?? null,
+    }))()`);
+    assert.equal(pending.cacheSource, null, `source entry cache unexpectedly became ready: ${JSON.stringify(pending)}`);
+    assert.equal(
+      pending.status.includes("Source entries are not ready for the active editor revision."),
+      false,
+      `source target consumed entries before its revision was ready: ${pending.status}`
+    );
+    await page.evaluateTop(`(() => {
+      window.__sourceTargetRevisionRelease?.();
+      return true;
+    })()`);
+    await page.waitForTop(
+      `Boolean(surfaceEntriesCache?.source === document.querySelector("#sourceEditor")?.value)`,
+      "current-revision source target entries",
+      { timeoutMs: 10_000 }
+    );
+    await page.waitForTop(
+      `currentPreviewMode === "edit"`,
+      "level editor after current-revision entries",
+      { timeoutMs: 10_000 }
+    );
+  } finally {
+    await page.evaluateTop(`(() => {
+      const original = window.__sourceTargetRevisionOriginal;
+      const editor = document.querySelector("#sourceEditor");
+      window.__sourceTargetRevisionRelease?.();
+      if (original) {
+        window.PuzzleStudioRuntime.sourceEntryInfo = original.sourceEntryInfo;
+        setSourceEditorValue(original.source, { resetUndo: true });
+        if (documents[currentDocumentIndex]) {
+          documents[currentDocumentIndex].source = editor.value;
+        }
+        const status = document.querySelector("#editorStatusLabel");
+        status.textContent = original.statusText;
+        status.className = original.statusClassName;
+        openPreviewModePane(original.previewMode);
+      }
+      delete window.__sourceTargetRevisionOriginal;
+      delete window.__sourceTargetRevisionRelease;
+      delete window.__sourceTargetRevisionBlocked;
+      return true;
+    })()`);
+  }
+  await page.assertNoErrors("source target revision synchronization");
 }
 
 async function sourceCompletionPopoverStaysInsideEditor(page) {
@@ -1489,7 +2047,7 @@ levels main of main {
   await page.assertNoErrors("2D level playtest");
 }
 
-async function level3dPreviewUpdateReachesRuntime(page) {
+async function level3dPreviewUpdateReachesRuntime(page, { layoutOnly = false } = {}) {
   await clickTop(page, "#runButton");
   await waitForTopWithDiagnostics(
     page,
@@ -1515,6 +2073,12 @@ async function level3dPreviewUpdateReachesRuntime(page) {
     "3D level editor runtime frame",
     { timeoutMs: 20_000 }
   );
+
+  await assertIndexControlLayout(page, ".level3d-layer-toolbar", "3D level slices");
+  if (layoutOnly) {
+    await page.assertNoErrors("3D level index control layout");
+    return;
+  }
 
   await page.waitForTop(
     `Boolean(
@@ -1691,7 +2255,7 @@ class EditorServer {
       }
       const match = this.output.match(/html-editor serving (http:\/\/127\.0\.0\.1:\d+\/editor)/);
       return match?.[1] || null;
-    }, `html-editor server for ${path.relative(repoRoot, this.fixture)}`, { timeoutMs: 20_000 });
+    }, `html-editor server for ${path.relative(repoRoot, this.fixture)}`, { timeoutMs: 60_000 });
     await waitForFetch(this.url, `html-editor response for ${this.url}`);
   }
 
@@ -2166,6 +2730,22 @@ function parseArgs(argv) {
     }
     if (arg === "--source-editing-commands-only") {
       parsed.sourceEditingCommandsOnly = true;
+      continue;
+    }
+    if (arg === "--source-selection-only") {
+      parsed.sourceSelectionOnly = true;
+      continue;
+    }
+    if (arg === "--source-option-drag-only") {
+      parsed.sourceOptionDragOnly = true;
+      continue;
+    }
+    if (arg === "--level-selection-revision-only") {
+      parsed.levelSelectionRevisionOnly = true;
+      continue;
+    }
+    if (arg === "--index-control-layout-only") {
+      parsed.indexControlLayoutOnly = true;
       continue;
     }
     if (arg === "--visual-palette-only") {

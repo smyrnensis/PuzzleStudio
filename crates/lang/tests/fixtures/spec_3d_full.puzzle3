@@ -13,7 +13,7 @@ camera {
 }
 }
 
-slots {
+layers {
 floor = Floor
 target = Goal
 Player Box Wall

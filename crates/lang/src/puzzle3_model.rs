@@ -16,6 +16,7 @@ pub struct SpatialPresentation {
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CameraSettings3 {
+    pub projection: CameraProjection3,
     pub yaw_degrees: i16,
     pub pitch_degrees: i16,
     pub roll_degrees: i16,
@@ -27,12 +28,29 @@ pub struct CameraSettings3 {
 impl Default for CameraSettings3 {
     fn default() -> Self {
         Self {
+            projection: CameraProjection3::Perspective,
             yaw_degrees: 0,
             pitch_degrees: 90,
             roll_degrees: 0,
             zoom_milli: 1000,
             interactive_look: false,
             interactive_zoom: false,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CameraProjection3 {
+    Perspective,
+    Orthographic,
+}
+
+impl CameraProjection3 {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Perspective => "perspective",
+            Self::Orthographic => "orthographic",
         }
     }
 }

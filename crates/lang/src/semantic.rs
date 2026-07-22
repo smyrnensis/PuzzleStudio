@@ -218,7 +218,7 @@ score = 1
         let source = r#"
 title = rewrite_selector_semantics
 puzzle board {
-slots {
+layers {
 actor = Player Box
 }
 rules {
@@ -248,7 +248,7 @@ rules {
 title = implicit_level_event_semantics
 
 puzzle board {
-slots {
+layers {
 actor = Player
 }
 legend P = Player
@@ -286,7 +286,7 @@ P
 title = standard_move_semantics
 
 puzzle board {
-slots {
+layers {
 actor = Player
 }
 rules {
@@ -310,7 +310,7 @@ move
 title = routine_call_semantics
 
 puzzle board {
-slots {
+layers {
 actor = Player Wall
 }
 routine push_player once {
@@ -439,7 +439,7 @@ P
 title = rewrite_prefix_semantics
 
 puzzle board {
-slots {
+layers {
 actor = Player Wall
 }
 rules {
@@ -505,7 +505,7 @@ routine push_player {
 title = surface_semantic_projection
 
 puzzle board {
-slots {
+layers {
 actor = Player Wall
 }
 rules {
@@ -547,7 +547,7 @@ routine push_player {
 title = anonymous_layer_semantics
 
 puzzle board {
-slots {
+layers {
 Floor
 Goal
 solid = Player Box Wall
@@ -683,7 +683,7 @@ assets {
 }
 
 puzzle board {
-slots {
+layers {
 actor = Player
 }
 render {
@@ -833,7 +833,7 @@ puzzle board {
 tags {
 kind = A B
 }
-slots {
+layers {
 actor = Block:kind
 }
 visuals {
@@ -887,7 +887,7 @@ shape Block:kind
 title = visual_property_semantics
 
 puzzle board {
-slots {
+layers {
 objects = Box
 }
 visuals {
@@ -935,7 +935,7 @@ frame_duration = 60ms
     fn classifies_visual_property_values_from_visual_grammar() {
         let source = r#"
 puzzle board {
-slots {
+layers {
 objects = Arrow
 }
 visuals {
@@ -1069,7 +1069,7 @@ flip mirrored
 title = selector_parser_resolved_surface_tokens
 
 puzzle board {
-slots {
+layers {
 each A:directions
 }
 groups {
@@ -1133,7 +1133,7 @@ level "start" {
     fn classifies_rule_for_expansion_header_from_parser_resolved_surface_tokens() {
         let source = r#"
 puzzle board {
-slots {
+layers {
 layer1 = Background
 layer2 = Wall
 each Boundary:directions
@@ -1201,7 +1201,7 @@ map D_rev D {
 F -> B
 B -> F
 }
-slots {
+layers {
 You:D Count:N
 }
 rules {
@@ -1241,7 +1241,7 @@ puzzle board {
 tags {
 D = F B
 }
-slots {
+layers {
 You:D Crate
 }
 groups {
@@ -1296,7 +1296,7 @@ puzzle board {
 tags {
 D = F B
 }
-slots {
+layers {
 You:D Crate
 }
 groups {
@@ -1388,7 +1388,7 @@ puzzle board {
 tags {
 T = A
 }
-slots {
+layers {
 Player
 }
 groups {
@@ -1422,7 +1422,7 @@ heading "Title"
         for (needle, text) in [
             ("puzzle board", "puzzle"),
             ("tags {", "tags"),
-            ("slots {", "slots"),
+            ("layers {", "layers"),
             ("groups {", "groups"),
             ("rules {", "rules"),
             ("on_level_start {", "on_level_start"),
@@ -1451,7 +1451,7 @@ marks {
 flag = bool
 tint = color
 }
-slots {
+layers {
 actor = Player
 }
 rules {
@@ -1510,7 +1510,7 @@ puzzle board {
 marks {
 mark = bool
 }
-slots {
+layers {
 actor = Player
 }
 rules {
@@ -1561,7 +1561,7 @@ map flip kind {
 a -> b
 b -> a
 }
-slots {
+layers {
 Background
 Background2
 Count:kind Ink:kind

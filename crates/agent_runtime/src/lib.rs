@@ -132,7 +132,7 @@ mod tests {
 title = agent_session
 
 puzzle board {
-slots {
+layers {
 floor = Goal Trail
 actor = Player
 }
@@ -358,7 +358,7 @@ P.G
             r#"
 title = semantic_completion_observation
 puzzle board {
-slots {
+layers {
 floor = Goal
 actor = Player Box Wall
 }

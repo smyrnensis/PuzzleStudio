@@ -8,7 +8,9 @@ struct ProgramLowerer<'a> {
     mark_names: &'a HashMap<String, MarkDef>,
     model_sound_triggers: &'a [ModelSoundTrigger],
     visual_names: &'a HashSet<String>,
+    animation_visual_names: &'a HashSet<String>,
     animation: &'a AnimationDef,
+    direction_variant_pairs: &'a HashSet<(ObjectId, ObjectId)>,
     value_sets: &'a HashMap<String, Vec<String>>,
     maps: &'a HashMap<String, ValueMap>,
     directions: &'a [OrientationEnvironment],
@@ -95,7 +97,9 @@ fn lower_programs(
     mark_names: &HashMap<String, MarkDef>,
     model_sound_triggers: &[ModelSoundTrigger],
     visual_names: &HashSet<String>,
+    animation_visual_names: &HashSet<String>,
     animation: &AnimationDef,
+    direction_variant_pairs: &HashSet<(ObjectId, ObjectId)>,
     value_sets: &HashMap<String, Vec<String>>,
     maps: &HashMap<String, ValueMap>,
     directions: &[OrientationEnvironment],
@@ -137,7 +141,9 @@ fn lower_programs(
         mark_names,
         model_sound_triggers,
         visual_names,
+        animation_visual_names,
         animation,
+        direction_variant_pairs,
         value_sets,
         maps,
         directions,
@@ -693,13 +699,15 @@ fn lower_condition_patterns(
     match &condition_pattern.orientation {
         OrientationExpr::Neutral => {
             if pattern_block_requires_implicit_cardinal_expansion(block, value_sets) {
+                let implicit_directions =
+                    implicit_spatial_directions(input_names, value_sets, directions)?;
                 return lower_condition_patterns_for_directions(
                     block,
                     object_layers,
                     mark_names,
                     value_sets,
                     maps,
-                    directions,
+                    &implicit_directions,
                     true,
                 );
             }
@@ -876,6 +884,26 @@ fn directions_for_orientation_name(
         expanded.extend(variants);
     }
     Ok(Some(expanded))
+}
+
+fn implicit_spatial_directions(
+    input_names: &HashMap<String, InputId>,
+    value_sets: &HashMap<String, Vec<String>>,
+    directions: &[OrientationEnvironment],
+) -> Result<Vec<OrientationEnvironment>, DiagnosticReport> {
+    if !directions
+        .first()
+        .is_some_and(|direction| direction.dimension() == ModelDimension::Three)
+    {
+        return Ok(directions.to_vec());
+    }
+    directions_for_orientation_name("horizontal", input_names, value_sets, directions)?.ok_or_else(
+        || {
+            DiagnosticReport::error(
+                "3D implicit spatial orientation requires horizontal".to_string(),
+            )
+        },
+    )
 }
 
 fn patterns_from_alternatives(
@@ -1715,9 +1743,14 @@ impl<'a> ProgramLowerer<'a> {
                     &condition.pattern,
                     self.value_sets,
                 ) {
+                    let implicit_directions = implicit_spatial_directions(
+                        self.input_names,
+                        self.value_sets,
+                        self.directions,
+                    )?;
                     self.condition_patterns_for_directions(
                         &condition.pattern,
-                        self.directions,
+                        &implicit_directions,
                         true,
                         "implicit directional pattern condition",
                     )?
@@ -2226,11 +2259,17 @@ impl<'a> ProgramLowerer<'a> {
         } else {
             &rewrite.orientation
         };
+        let preserve_once_group = pattern_block_preserves_once_group(&rewrite.after);
         match orientation {
             OrientationExpr::Neutral => {
                 if rewrite_requires_implicit_cardinal_expansion(rewrite, self.value_sets) {
                     let mut rules = Vec::new();
-                    for direction in self.directions {
+                    let implicit_directions = implicit_spatial_directions(
+                        self.input_names,
+                        self.value_sets,
+                        self.directions,
+                    )?;
+                    for direction in &implicit_directions {
                         rules.extend(self.lower_rewrite_rules_for_direction(
                             rewrite,
                             context,
@@ -2242,7 +2281,11 @@ impl<'a> ProgramLowerer<'a> {
                         )?);
                     }
                     self.dedup_orientation_rules(&mut rules);
-                    return Ok(wrap_rewrite_steps(application, rules));
+                    return Ok(wrap_rewrite_steps(
+                        application,
+                        rules,
+                        preserve_once_group,
+                    ));
                 }
                 self.lower_rewrite_rules_for_direction(
                     rewrite,
@@ -2253,7 +2296,7 @@ impl<'a> ProgramLowerer<'a> {
                     false,
                     context.guards.clone(),
                 )
-                .map(|rules| wrap_rewrite_steps(application, rules))
+                .map(|rules| wrap_rewrite_steps(application, rules, preserve_once_group))
             }
             OrientationExpr::Input => {
                 if !context.input_allowed {
@@ -2278,7 +2321,11 @@ impl<'a> ProgramLowerer<'a> {
                     )?);
                 }
                 self.dedup_orientation_rules(&mut rules);
-                Ok(wrap_rewrite_steps(application, rules))
+                Ok(wrap_rewrite_steps(
+                    application,
+                    rules,
+                    preserve_once_group,
+                ))
             }
             OrientationExpr::InputSet(axis) => {
                 if !context.input_allowed {
@@ -2310,7 +2357,11 @@ impl<'a> ProgramLowerer<'a> {
                     )?);
                 }
                 self.dedup_orientation_rules(&mut rules);
-                Ok(wrap_rewrite_steps(application, rules))
+                Ok(wrap_rewrite_steps(
+                    application,
+                    rules,
+                    preserve_once_group,
+                ))
             }
             OrientationExpr::Fixed(direction_name) => {
                 let directions = self
@@ -2335,7 +2386,11 @@ impl<'a> ProgramLowerer<'a> {
                     )?);
                 }
                 self.dedup_orientation_rules(&mut rules);
-                Ok(wrap_rewrite_steps(application, rules))
+                Ok(wrap_rewrite_steps(
+                    application,
+                    rules,
+                    preserve_once_group,
+                ))
             }
         }
     }
@@ -2515,16 +2570,29 @@ impl<'a> ProgramLowerer<'a> {
                             "unknown visual animation: !{name}"
                         )));
                     }
+                    if !self.animation_visual_names.contains(name) {
+                        return Err(DiagnosticReport::error(format!(
+                            "visual animation is not declared in layers: !{name}"
+                        )));
+                    }
                     lowered.ordered.push(RuleEffect::EmitAnimation {
                         name: name.clone(),
                         component: 0,
                         offset: puzzle_runtime_contract::RuntimeAnimationOffset { x: 0, y: 0 },
                     });
                 }
-                EffectAst::Message { text, literal } => {
-                    lowered.ordered.push(RuleEffect::Message {
-                        text: text.clone(),
-                        literal: *literal,
+                EffectAst::PresentComponent { text, literal } => {
+                    lowered.ordered.push(RuleEffect::PresentComponent {
+                        definition: "standard.message".to_string(),
+                        properties: vec![
+                            puzzle_runtime_contract::RuntimeComponentProperty {
+                                name: "text".to_string(),
+                                value: text.clone(),
+                                literal: *literal,
+                            },
+                        ],
+                        placement: puzzle_runtime_contract::ComponentPlacement::Overlay,
+                        await_event: Some("dismiss".to_string()),
                     });
                 }
                 EffectAst::Scene(effect) => {
@@ -2575,32 +2643,6 @@ impl<'a> ProgramLowerer<'a> {
         source_line_number: Option<usize>,
         context: &StatementLoweringContext,
     ) -> Result<Vec<CanonicalRuleStep>, DiagnosticReport> {
-        let preserve_once_group = application == RuleApplication::Once
-            && alternatives.len() > 1
-            && guards.is_empty()
-            && alternatives
-                .iter()
-                .any(|alternative| alternative.preserves_once_group)
-            && alternatives
-                .iter()
-                .all(|alternative| alternative.guards.is_empty());
-        let condition_patterns = if preserve_once_group {
-            Some(
-                alternatives
-                    .iter()
-                    .map(|alternative| {
-                        pattern_from_alternative(
-                            alternative,
-                            direction,
-                            direction_expanded,
-                            "statement",
-                        )
-                    })
-                    .collect::<Result<Vec<_>, DiagnosticReport>>()?,
-            )
-        } else {
-            None
-        };
         let mut rules = Vec::with_capacity(alternatives.len());
         for alternative in alternatives {
             let lowered_effects =
@@ -2614,7 +2656,12 @@ impl<'a> ProgramLowerer<'a> {
                 &mut rule_effects,
             );
             let mut rule_animations = Vec::new();
-            append_tween_rule_animations(&alternative.writes, self.animation, &mut rule_animations);
+            append_tween_rule_animations(
+                &alternative.writes,
+                self.animation,
+                self.direction_variant_pairs,
+                &mut rule_animations,
+            );
             let compiled_components = alternative
                 .components
                 .iter()
@@ -2692,27 +2739,6 @@ impl<'a> ProgramLowerer<'a> {
                 effects: lowered_effects.core,
             }));
         }
-        if let Some(condition_patterns) = condition_patterns {
-            return Ok(vec![once_alternative_chain(condition_patterns, rules)]);
-        }
         Ok(rules)
     }
-}
-
-fn once_alternative_chain(
-    patterns: Vec<CanonicalPattern>,
-    rules: Vec<CanonicalRuleStep>,
-) -> CanonicalRuleStep {
-    let alternatives = patterns
-        .into_iter()
-        .zip(rules)
-        .map(|(pattern, step)| {
-            let CanonicalRuleStep::Rule(rule) = step else {
-                unreachable!("lowered rewrite alternatives must be rule steps");
-            };
-            (CanonicalRuleCondition::AnyMatches(vec![pattern]), rule)
-        })
-        .collect();
-    puzzle_kernel::first_matching_program_alternative(alternatives)
-        .expect("once alternative chain requires at least one rule")
 }

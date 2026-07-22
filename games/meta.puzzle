@@ -1,0 +1,293 @@
+title = "Microban"
+author = "Levels by David Skinner"
+
+theme = "puzzlescript"
+
+scene level_select {
+layout {
+sokoban
+}
+}
+
+scene main {
+layout {
+sokoban
+}
+}
+
+puzzle sokoban {
+layers {
+Background
+Goal Portal:int
+solid = Player Box Wall
+}
+
+tags {
+int = 1...10
+}
+
+win_conditions {
+all Box on Goal
+}
+
+on_level_start {
+once_all [ no Background ] -> [ Background ]
+}
+
+rules {
+input [ Player ] -> [ > Player ] 
+[ > Player | Box ] -> [ > Player | > Box ]
+[ > solid | no solid ] -> [  | solid ] 
+[ > solid ] -> [ solid ]
+
+[ Player Portal:int ] -> goto playing(int)
+}
+
+on_level_clear {
+wait 0.30s
+next_level
+}
+}
+
+visuals {
+
+visual Background {
+colors = #90ee90 #008000
+shape = {
+11111
+01111
+11101
+11111
+10111
+}
+}
+
+visual Wall {
+colors = #a46322 #493c2b
+shape = {
+00010
+11111
+01000
+11111
+00010
+}
+}
+
+visual Goal {
+colors = #00008b
+shape = {
+.....
+.000.
+.0.0.
+.000.
+.....
+}
+}
+
+visual Box {
+colors = #ffa500 #ffff00
+shape = {
+00000
+0...0
+0...0
+0...0
+00000
+}
+}
+
+visual Player {
+colors = #000000 #ffa500 #ffffff #0000ff
+shape = {
+.000.
+.111.
+22222
+.333.
+.3.3.
+}
+}
+
+visual Portal:int {
+colors = #008751
+shape = {
+.....
+.0.0.
+..0..
+.0.0.
+.....
+}
+}
+
+}
+
+levels level {
+legend {
+. = empty
+G = Goal
+P = Player
+B = Box
+# = Wall
+* = Goal Box
++ = Goal Player
+@ = Portal
+}
+
+level "level select"
+####..
+#..#..
+#..###
+#.P..#
+#..@.#
+#..###
+####..
+}
+
+levels microban {
+legend {
+. = empty
+G = Goal
+P = Player
+B = Box
+# = Wall
+* = Goal Box
++ = Goal Player
+}
+
+level "microban 1"
+####..
+#.G#..
+#..###
+#*P..#
+#..B.#
+#..###
+####..
+
+level "microban 2"
+######
+#....#
+#.#P.#
+#.B*.#
+#.G*.#
+#....#
+######
+
+level "microban 3"
+..####...
+###..####
+#.....B.#
+#.#..#B.#
+#.G.G#P.#
+#########
+
+level "microban 4"
+########
+#......#
+#.G**BP#
+#......#
+#####..#
+....####
+
+level "microban 5"
+.#######
+.#.....#
+.#.GBG.#
+##.BPB.#
+#..GBG.#
+#......#
+########
+
+level "microban 6"
+######.#####
+#....###...#
+#.BB.....#P#
+#.B.#GGG...#
+#...########
+#####.......
+
+level "microban 7"
+#######
+#.....#
+#.GBG.#
+#.BGB.#
+#.GBG.#
+#.BGB.#
+#..P..#
+#######
+
+level "microban 8"
+..######
+..#.GGP#
+..#.BB.#
+..##.###
+...#.#..
+...#.#..
+####.#..
+#....##.
+#.#...#.
+#...#.#.
+###...#.
+..#####.
+
+level "microban 9"
+#####.
+#G..##
+#PBB.#
+##...#
+.##..#
+..##G#
+...###
+
+level "microban 10"
+......#####
+......#G..#
+......#G#.#
+#######G#.#
+#.P.B.B.B.#
+#.#.#.#.###
+#.......#..
+#########..
+message "END"
+
+}
+
+// scene title {
+// layout {
+// heading "Microban"
+// subheading "Levels by David Skinner"
+// choice "Continue" -> goto playing
+// choice "New Game" -> {
+// clear_game_progress
+// start playing
+// }
+// choice "Level Select" -> goto level_select
+// }
+// }
+
+// scene playing {
+// layout {
+// row {
+	// heading "Microban"
+	// subheading level.label
+// }
+// sokoban
+// }
+
+// keys {
+// q Escape -> goto level_select
+// }
+
+// rules {
+// step sokoban
+// }
+// }
+
+// scene level_select {
+// layout {
+	// text "Select a level"
+	// level_menu
+	// button "Back" -> goto title
+// }
+
+// keys {
+// q Escape -> goto title
+// }
+// }

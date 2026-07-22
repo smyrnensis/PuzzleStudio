@@ -351,6 +351,7 @@ fn lower_puzzle_model(
             diagnostics.extend(report.into_diagnostics());
         }
     }
+    visuals.order = catalog.visual_order.clone();
     if !diagnostics.is_empty() {
         return Err(DiagnosticReport::from_diagnostics(diagnostics));
     }

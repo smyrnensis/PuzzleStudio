@@ -31,6 +31,10 @@ import {
   foldedRanges,
   unfoldEffect,
 } from "@codemirror/language";
+import {
+  selectNextOccurrence,
+  selectSelectionMatches,
+} from "@codemirror/search";
 
 const sourceEditorProgrammatic = Annotation.define();
 // CodeMirror owns physical key arbitration, but the source workflow owns the
@@ -54,6 +58,10 @@ const sourceEditingKeymap = [
   { key: "Tab", run: (view) => dispatchSourceEditingCommand(view, "tab") },
   { key: "Shift-Tab", run: (view) => dispatchSourceEditingCommand(view, "shift-tab") },
   { key: "Enter", run: (view) => dispatchSourceEditingCommand(view, "enter") },
+];
+const sourceOccurrenceSelectionKeymap = [
+  { key: "Mod-d", run: selectNextOccurrence, preventDefault: true },
+  { key: "Mod-Shift-l", run: selectSelectionMatches },
 ];
 const sourceHighlightClasses = Object.freeze({
   keyword: "syntax-keyword",
@@ -165,6 +173,8 @@ class SourceAddLineWidget extends WidgetType {
   }
 
   toDOM(view) {
+    const anchor = document.createElement("span");
+    anchor.className = "cm-source-add-anchor";
     const button = document.createElement("button");
     button.className = "cm-source-add-marker";
     button.type = "button";
@@ -184,7 +194,8 @@ class SourceAddLineWidget extends WidgetType {
         detail: { cursorOffset: this.cursorOffset },
       }));
     });
-    return button;
+    anchor.append(button);
+    return anchor;
   }
 }
 
@@ -359,6 +370,7 @@ function createState(text, readOnlyCompartment, readOnly, inputListeners) {
       keymap.of([
         ...sourceCompletionKeymap,
         ...sourceEditingKeymap,
+        ...sourceOccurrenceSelectionKeymap,
         ...foldKeymap,
         indentWithTab,
         ...defaultKeymap,
@@ -428,38 +440,48 @@ function createState(text, readOnlyCompartment, readOnly, inputListeners) {
           strokeLinecap: "round",
           strokeLinejoin: "round",
         },
-        ".cm-line": {
+        ".cm-source-add-anchor": {
+          display: "inline-block",
           position: "relative",
+          width: "0",
+          height: "1lh",
+          verticalAlign: "top",
+          overflow: "visible",
         },
         ".cm-source-add-marker": {
           display: "inline-flex",
           position: "absolute",
           left: "0",
           top: "0",
-          zIndex: "1",
           alignItems: "center",
           justifyContent: "center",
-          width: "20px",
-          height: "20px",
+          font: "inherit",
+          lineHeight: "inherit",
+          width: "1lh",
+          height: "100%",
+          minHeight: "0",
           margin: "0",
           padding: "0",
           border: "0",
           borderRadius: "4px",
           background: "transparent",
           color: "var(--muted)",
+          opacity: "0.55",
           cursor: "pointer",
         },
         ".cm-source-add-marker:hover": {
           background: "var(--hover-bg)",
           color: "var(--code-ink)",
+          opacity: "1",
         },
         ".cm-source-add-marker:focus-visible": {
           outline: "2px solid var(--accent)",
           outlineOffset: "-2px",
         },
         ".cm-source-add-marker svg": {
-          width: "14px",
-          height: "14px",
+          flex: "none",
+          width: "1em",
+          height: "1em",
           fill: "none",
           stroke: "currentColor",
           strokeWidth: "2",

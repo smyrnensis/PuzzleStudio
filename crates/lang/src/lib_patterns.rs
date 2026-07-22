@@ -1,7 +1,11 @@
 fn wrap_rewrite_steps(
     application: RuleApplication,
     steps: Vec<CanonicalRuleStep>,
+    preserve_once_group: bool,
 ) -> Vec<CanonicalRuleStep> {
+    if application == RuleApplication::Once && preserve_once_group && steps.len() > 1 {
+        return vec![once_rule_alternative_chain(steps)];
+    }
     if matches!(
         application,
         RuleApplication::Random | RuleApplication::UntilStable
@@ -22,6 +26,26 @@ fn wrap_rewrite_steps(
     } else {
         steps
     }
+}
+
+fn once_rule_alternative_chain(steps: Vec<CanonicalRuleStep>) -> CanonicalRuleStep {
+    let alternatives = steps
+        .into_iter()
+        .map(|step| {
+            let CanonicalRuleStep::Rule(rule) = step else {
+                unreachable!("lowered rewrite alternatives must be rule steps");
+            };
+            (
+                CanonicalRuleCondition::RuleMatches {
+                    guards: rule.guards.clone(),
+                    pattern: rule.pattern.clone(),
+                },
+                rule,
+            )
+        })
+        .collect();
+    puzzle_kernel::first_matching_program_alternative(alternatives)
+        .expect("once alternative chain requires at least one rule")
 }
 
 fn rewrite_step_with_application(
@@ -67,7 +91,6 @@ struct RuleBodyAlternative {
     components: Vec<PatternComponentTemplate>,
     writes: Vec<WriteOpTemplate>,
     tag_captures: TagCaptureValues,
-    preserves_once_group: bool,
 }
 
 fn append_move_sound_effects(
@@ -105,12 +128,14 @@ fn append_move_sound_effects(
 fn append_tween_rule_animations(
     writes: &[WriteOpTemplate],
     animation: &AnimationDef,
+    direction_variant_pairs: &HashSet<(ObjectId, ObjectId)>,
     animations: &mut Vec<RuleAnimation>,
 ) {
     if !animation.tween.enabled {
         return;
     }
     let mut objects = Vec::new();
+    let mut visual_rewrites = Vec::new();
     for write in writes {
         match write {
             WriteOpTemplate::Move { object, .. } => {
@@ -128,9 +153,53 @@ fn append_tween_rule_animations(
                     }
                 }
             }
-            WriteOpTemplate::Replace { add: object, .. } => {
+            WriteOpTemplate::Replace {
+                remove,
+                add: object,
+                ..
+            } => {
                 if !objects.contains(object) {
                     objects.push(*object);
+                }
+                if direction_variant_pairs.contains(&(*remove, *object)) {
+                    visual_rewrites.push(RuleVisualRewrite {
+                        remove: *remove,
+                        add: *object,
+                    });
+                }
+            }
+            WriteOpTemplate::Add {
+                component,
+                offset,
+                object: add,
+            } => {
+                let removed_objects = writes.iter().flat_map(|candidate| match candidate {
+                    WriteOpTemplate::Remove {
+                        component: remove_component,
+                        offset: remove_offset,
+                        object,
+                    } if remove_component == component && remove_offset == offset => vec![*object],
+                    WriteOpTemplate::RemoveObjectSet {
+                        component: remove_component,
+                        offset: remove_offset,
+                        objects,
+                        ..
+                    } if remove_component == component && remove_offset == offset => {
+                        objects.clone()
+                    }
+                    _ => Vec::new(),
+                });
+                for remove in removed_objects {
+                    if direction_variant_pairs.contains(&(remove, *add))
+                        && !visual_rewrites.iter().any(|rewrite: &RuleVisualRewrite| {
+                            rewrite.remove == remove && rewrite.add == *add
+                        })
+                    {
+                        visual_rewrites.push(RuleVisualRewrite { remove, add: *add });
+                    }
+                }
+                if !visual_rewrites.is_empty() && !objects.contains(add) {
+                    objects.push(*add);
                 }
             }
             _ => {}
@@ -150,6 +219,7 @@ fn append_tween_rule_animations(
         trigger: RuleAnimationTrigger::Move,
         name: "tween".to_string(),
         objects,
+        visual_rewrites,
     });
 }
 
@@ -296,13 +366,13 @@ fn parse_rewrite_effect_value(
     if let Some(text) = suffix.strip_prefix("message ") {
         let text = text.trim();
         if let Some(text) = parse_quoted_text(text) {
-            return Ok(vec![EffectAst::Message {
+            return Ok(vec![EffectAst::PresentComponent {
                 text,
                 literal: true,
             }]);
         }
         if parse_view_path(text).is_some() {
-            return Ok(vec![EffectAst::Message {
+            return Ok(vec![EffectAst::PresentComponent {
                 text: text.to_string(),
                 literal: false,
             }]);
@@ -839,6 +909,7 @@ enum WriteOpTemplate {
         component: u16,
         offset: OffsetTemplate,
         binding: u16,
+        objects: Vec<ObjectId>,
     },
     Replace {
         component: u16,
@@ -2922,7 +2993,6 @@ fn compile_before_after_blocks(
     for (before, after) in expanded_blocks {
         let dynamic_blocks = expand_dynamic_selector_blocks(&before, &after);
         for (dynamic_guards, before, after) in dynamic_blocks {
-            let preserves_once_group = pattern_block_preserves_once_group(&after);
             let before_occurrences = collect_before_occurrences(&before);
             reject_duplicate_labeled_occurrences(&before_occurrences, line)?;
             let mut assignments =
@@ -3311,7 +3381,6 @@ fn compile_before_after_blocks(
                     components,
                     writes,
                     tag_captures,
-                    preserves_once_group,
                 });
             }
         }
@@ -3328,10 +3397,11 @@ fn pattern_block_preserves_once_group(block: &PatternBlock) -> bool {
                     return false;
                 };
                 cell.require.iter().any(|selector| {
-                    selector
-                        .transform
-                        .as_ref()
-                        .is_some_and(|transform| transform.preserves_once_group)
+                    !selector.relative_constraints.is_empty()
+                        || selector
+                            .transform
+                            .as_ref()
+                            .is_some_and(|transform| transform.preserves_once_group)
                 })
             })
         })
@@ -5359,6 +5429,7 @@ fn append_object_set_presence_writes(
             component,
             offset: offset.clone(),
             binding: *binding,
+            objects: before.matched.possible_objects(),
         });
     }
     for after in after_occurrences {

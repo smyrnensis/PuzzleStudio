@@ -60,25 +60,27 @@ pub use highlight::{
 };
 use level::{LevelBlock, parse_level};
 pub use loaded::{
-    AnimationDef, ArrowKey, AsciiLegend, AssetDef, AssetKind, AssetsDef, Controls, GoalClause,
-    GoalClauseOf, GoalCondition, GoalConditionOf, GoalExpr, GoalExprOf, GoalValue, GoalValueOf,
-    GridQueryExpr, GridSolverStrategy, InputBufferDef, KeyBinding, KeyTrigger, Level, LevelId,
-    LevelRegionDef, LoadedDocument, LoadedDocumentModel, LoadedGame, LoadedGridGame,
+    AnimationDef, ArrowKey, AsciiLegend, AssetDef, AssetKind, AssetsDef, ComponentDef,
+    ComponentOrder, ComponentPlacement, ComponentProperty, ComponentVisibility, Controls,
+    GoalClause, GoalClauseOf, GoalCondition, GoalConditionOf, GoalExpr, GoalExprOf, GoalValue,
+    GoalValueOf, GridQueryExpr, GridSolverStrategy, InputBufferDef, KeyBinding, KeyTrigger, Level,
+    LevelId, LevelRegionDef, LoadedDocument, LoadedDocumentModel, LoadedGame, LoadedGridGame,
     LoadedGridLevel, ModelOperationSound, ModelOperationSoundDef, MusicSoundDef,
     PuzzleGridRenderDef, PuzzleRenderDef, PuzzleScreenDef, PuzzleViewDef, QueryExpr, QueryExprOf,
     ResourceSelection, RuleAnimation, RuleAnimationTrigger, RuleDebugInfo, RuleEffect,
-    SceneAlignDef, SceneAspectRatioDef, SceneBinaryOp, SceneButtonDef, SceneComponent,
-    SceneConditionalDef, SceneContainerDef, SceneDef, SceneDistributionDef, SceneEffect,
-    SceneEffectParam, SceneExpr, SceneLayoutDef, ScenePuzzleDef, ScenePuzzleInitializer,
-    ScenePuzzleRule, SceneResources, SceneRoutineDef, SceneSpaceDef, SceneStateDef,
-    SceneStateLifetime, SceneTextAlignDef, SceneTextContent, SceneTextDef, SceneTextRoleDef,
-    SceneTransition, SceneTransitionTrigger, SceneValue, SceneVarDef, SceneVarKind, SfxSoundDef,
-    SolverDeadendOf, SolverStrategy, SolverStrategyDirection, SolverStrategyOf, SolverStrategyTerm,
-    SolverStrategyTermOf, SoundsDef, ThemeDef, ThemeVariableDef, TriggerAnimationDef,
-    TriggerAnimationKind, TweenAnimationDef, ViewportModeDef, ViewportProjectionDef,
-    ViewportSizeDef, VisualAliasDef, VisualColorDef, VisualDef, VisualFit, VisualFitMode,
-    VisualFrameDef, VisualKind, VisualOrderDef, VisualOrderPriorityDef, VisualPixelsPerCell,
-    VisualSampling, VisualSpace, VisualTransform, VisualsDef, scene_level_record_key,
+    RuleVisualRewrite, SceneAlignDef, SceneAspectRatioDef, SceneBinaryOp, SceneButtonDef,
+    SceneComponent, SceneConditionalDef, SceneContainerDef, SceneDef, SceneDistributionDef,
+    SceneEffect, SceneEffectParam, SceneExpr, SceneLayoutDef, ScenePuzzleDef,
+    ScenePuzzleInitializer, ScenePuzzleRule, SceneResources, SceneRoutineDef, SceneSpaceDef,
+    SceneStateDef, SceneStateLifetime, SceneTextAlignDef, SceneTextContent, SceneTextDef,
+    SceneTextRoleDef, SceneTransition, SceneTransitionTrigger, SceneValue, SceneVarDef,
+    SceneVarKind, SfxSoundDef, SolverDeadendOf, SolverStrategy, SolverStrategyDirection,
+    SolverStrategyOf, SolverStrategyTerm, SolverStrategyTermOf, SoundsDef, ThemeDef,
+    ThemeVariableDef, TriggerAnimationDef, TriggerAnimationKind, TweenAnimationDef,
+    ViewportModeDef, ViewportProjectionDef, ViewportSizeDef, VisualAliasDef, VisualColorDef,
+    VisualDef, VisualFit, VisualFitMode, VisualFrameDef, VisualKind, VisualOrderDef,
+    VisualOrderPriorityDef, VisualPixelsPerCell, VisualSampling, VisualSpace, VisualTransform,
+    VisualsDef, scene_level_record_key,
 };
 pub use model_syntax::ModelDimension;
 
@@ -130,8 +132,9 @@ type CanonicalRuleCondition = GridRuleCondition<3>;
 type CanonicalRuleStep = GridRuleStep<3>;
 type CanonicalWriteOp = GridWriteOp<3>;
 pub use puzzle3_model::{
-    CameraSettings3, PixelateRenderSettings3, SpatialPresentation, ViewportFollow3,
-    ViewportFraming3, ViewportHeight3, ViewportMode3, ViewportSettings3, VisualRenderSettings3,
+    CameraProjection3, CameraSettings3, PixelateRenderSettings3, SpatialPresentation,
+    ViewportFollow3, ViewportFraming3, ViewportHeight3, ViewportMode3, ViewportSettings3,
+    VisualRenderSettings3,
 };
 pub use puzzle3_visual::{VoxelColor, VoxelFrame, VoxelVisual, VoxelVisualSet};
 pub use puzzle3_visual_fixture::{

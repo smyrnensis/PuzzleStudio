@@ -9,6 +9,9 @@ function validatePuzzle3ViewSnapshot(source, label = "Puzzle3 snapshot") {
   if (!source.render.camera || !source.render.animation?.tween) {
     throw new Error(`${label}.render is missing camera or animation data.`);
   }
+  if (!["perspective", "orthographic"].includes(source.render.camera.projection)) {
+    throw new Error(`${label}.render.camera.projection must be perspective or orthographic.`);
+  }
   const size = source.size;
   if (!size || typeof size !== "object" || Array.isArray(size)) {
     throw new Error(`${label}.size is missing or invalid.`);
@@ -291,7 +294,8 @@ function resetProjection(rect = canvasLayoutFrame()) {
 }
 
 function initialSceneName(source) {
-  return source.currentScene
+  return source.component
+    || source.surface?.focus
     || source.scenes?.[0]?.name
     || "default";
 }
@@ -413,8 +417,8 @@ function projectionFitKey(size, camera) {
 }
 
 function projectionZoom(camera, previewView = puzzle3PreviewView()) {
-  const cameraZoom = Math.max(0.1, Number(camera?.zoom ?? 1) || 1);
-  const viewZoom = Math.max(0.1, Number(previewView?.zoom ?? 1) || 1);
+  const cameraZoom = Puzzle3VisualCore.normalizeZoom(camera?.zoom);
+  const viewZoom = Puzzle3VisualCore.normalizeZoom(previewView?.zoom);
   return cameraZoom * viewZoom;
 }
 
@@ -426,7 +430,7 @@ function puzzle3PreviewView(source = snapshot) {
 function clonePuzzle3PreviewView(source, size = requireLoadedPuzzle3Snapshot().size) {
   const target = source?.target || source?.origin || modelCenterForSize(size);
   return {
-    zoom: Math.max(0.1, Number(source?.zoom ?? 1) || 1),
+    zoom: Puzzle3VisualCore.normalizeZoom(source?.zoom),
     target: {
       x: Number(target.x ?? 0) || 0,
       y: Number(target.y ?? 0) || 0,
@@ -499,14 +503,12 @@ function projectScenePointUnit(position, size, camera) {
 
 function cloneCamera(camera) {
   const next = {
+    projection: camera.projection,
     yawDegrees: Number(camera.yawDegrees),
     pitchDegrees: Number(camera.pitchDegrees),
     rollDegrees: Number(camera.rollDegrees),
     zoom: Number(camera.zoom),
   };
-  if (String(camera?.projection || "").toLowerCase() === "orthographic") {
-    next.projection = "orthographic";
-  }
   return next;
 }
 
@@ -855,7 +857,7 @@ function viewportFitForFrame(frame, viewportBounds, centerPoint = null, zoom = 1
   const halfWidth = Math.max(0.001, Math.max(Math.abs(minX - anchorX), Math.abs(maxX - anchorX)));
   const halfHeight = Math.max(0.001, Math.max(Math.abs(minY - anchorY), Math.abs(maxY - anchorY)));
   const baseScale = Math.max(0.0001, Math.min(frameWidth / (halfWidth * 2), frameHeight / (halfHeight * 2)));
-  const effectiveScale = baseScale * Math.max(0.1, Number(zoom) || 1);
+  const effectiveScale = baseScale * Puzzle3VisualCore.normalizeZoom(zoom);
   return {
     follow,
     cellScale: baseScale,
@@ -2669,7 +2671,7 @@ const controllerApi = {
   ready: null,
   replaceSnapshot(nextSnapshot) {
     this.ready = Promise.resolve(this.ready).then(() => loadSnapshotData(nextSnapshot, {
-      scene: nextSnapshot?.currentScene,
+      scene: nextSnapshot?.component || controllerOptions.scene,
       preserveCamera: true,
     }));
     return this.ready;

@@ -1,7 +1,7 @@
 puzzle ten_horizontal {
 dimension = 3
 
-slots {
+layers {
 solid = TEN:horizontal
 }
 

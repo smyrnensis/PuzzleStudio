@@ -219,6 +219,11 @@ fn is_number_start(line: &str, index: usize, ch: char) -> bool {
 fn is_word_start_at(line: &str, index: usize, ch: char) -> bool {
     ch == '_'
         || ch.is_ascii_alphabetic()
+        || (ch == '@'
+            && line[index + ch.len_utf8()..]
+                .chars()
+                .next()
+                .is_some_and(|next| next == '_' || next.is_ascii_alphabetic()))
         || (ch == '*' && line[index + ch.len_utf8()..].starts_with(':'))
 }
 
@@ -231,7 +236,8 @@ fn consume_word(line: &str, start: usize) -> usize {
         }
         let qualified_glyph =
             matches!(ch, '>' | '<' | '^' | 'v') && line[start..index].ends_with(':');
-        if !(ch == '_'
+        if !((ch == '@' && index == start)
+            || ch == '_'
             || matches!(ch, ':' | '.' | '#' | '-' | '*')
             || ch.is_ascii_alphanumeric()
             || qualified_glyph)
@@ -299,6 +305,22 @@ fn shift_offset(value: usize, delta: i64) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use super::{SourceLexicalKind, scan_source_line_lexical_facts};
+
+    #[test]
+    fn at_prefixed_symbol_is_one_word_fact() {
+        let facts = scan_source_line_lexical_facts("@Box", 0);
+
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0].start, 0);
+        assert_eq!(facts[0].end, "@Box".len());
+        assert_eq!(facts[0].kind, SourceLexicalKind::Word);
+
+        let lone_at = scan_source_line_lexical_facts("@", 0);
+        assert_eq!(lone_at.len(), 1);
+        assert_eq!(lone_at[0].kind, SourceLexicalKind::Plain);
+    }
+
     #[test]
     fn only_the_incremental_source_scanner_may_create_lexical_facts() {
         let source_scanner = include_str!("source.rs");

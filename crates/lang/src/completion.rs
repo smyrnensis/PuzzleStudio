@@ -609,7 +609,7 @@ fn remove_current_token_symbols(symbols: &mut SurfaceCompletionSymbols, token: &
 
 fn keyword_insert_text(keyword: &str) -> &str {
     match keyword {
-        "slots"
+        "layers"
         | "groups"
         | "marks"
         | "legend"
@@ -682,7 +682,7 @@ puzzle board {
 tags {
 kind = A B
 }
-slots {
+layers {
 __legacy_layer_0 = Player
 __legacy_layer_1 = Box:kind
 }
@@ -702,7 +702,7 @@ rules {
         let source = r#"
 title = complete_selector_rhs
 puzzle board {
-slots {
+layers {
 __legacy_layer_0 = Player
 __legacy_layer_1 = Box
 }
@@ -768,7 +768,7 @@ B = Pl
         let source = r#"
 title = complete_at_prefixed_objects
 puzzle board {
-slots {
+layers {
 @Count
 @Badge
 each @Spark @Flash
@@ -798,7 +798,7 @@ rules {
         let source = r#"
 title = complete_group_objects
 puzzle board {
-slots {
+layers {
 __legacy_layer_0 = Player
 }
 groups {
@@ -823,7 +823,7 @@ Actors = Pl
         let source = r#"
 title = complete_object_definitions
 puzzle board {
-slots {
+layers {
 __legacy_layer_0 = Player
 __legacy_layer_1 = Pl
 }
@@ -846,7 +846,7 @@ __legacy_layer_1 = Pl
         let source = r#"
 title = complete_layer_definitions
 puzzle board {
-slots {
+layers {
 actor = Player
 Pl
 }
@@ -872,7 +872,7 @@ puzzle board {
 tags {
 kind = A B
 }
-slots {
+layers {
 actor = Box:kind
 }
 legend {
@@ -912,7 +912,7 @@ puzzle board {
 tags {
 kind = Alpha Beta
 }
-slots {
+layers {
 __legacy_layer_0 = Box:kind
 }
 rules {
@@ -938,7 +938,7 @@ puzzle board {
 tags {
 kind = tag other
 }
-slots {
+layers {
 base = object:kind
 }
 rules {
@@ -972,7 +972,7 @@ rules {
         let source = r#"
 title = complete_current_variant
 puzzle board {
-slots {
+layers {
 actor = Box:state
 }
 tags {
@@ -1038,7 +1038,7 @@ rules {
         let source = r#"
 title = complete_current_axis
 puzzle board {
-slots {
+layers {
 actor = obj:dir
 }
 rules {
@@ -1068,7 +1068,7 @@ puzzle board {
 tags {
 color = red blue
 }
-slots {
+layers {
 __legacy_layer_0 = Box:color
 }
 rules {
@@ -1107,7 +1107,7 @@ for c in co
         let source = r#"
 title = complete_contextual_axes
 puzzle board {
-slots {
+layers {
 __legacy_layer_0 = Player
 __legacy_layer_1 = Box:directions
 }
@@ -1241,7 +1241,7 @@ button "New Game" -> go
         let source = r#"
 title = complete_line_head
 puzzle board {
-slots {
+layers {
 __legacy_layer_0 = Player
 }
 routine refresh once {
@@ -1367,7 +1367,7 @@ once_
         let source = r#"
 title = complete_arrow_position
 puzzle board {
-slots {
+layers {
 __legacy_layer_0 = Player
 }
 rules {
@@ -1418,7 +1418,7 @@ for item in
         let source = r#"
 title = complete_effect_scope
 puzzle board {
-slots {
+layers {
 __legacy_layer_0 = Player
 }
 keys {
@@ -1543,10 +1543,10 @@ sfx c
         let source = r#"
 title = complete_3d_render_options
 puzzle board {
-slots {
+layers {
 actor
 }
-slots {
+layers {
 __legacy_layer_0 = Player actor
 }
 render {
@@ -1761,7 +1761,7 @@ preset = "clean"
         let source = r#"
 title = complete_visual_colors
 puzzle board {
-slots {
+layers {
 __legacy_layer_0 = Box
 }
 }
@@ -1792,7 +1792,7 @@ puzzle board {
 tags {
 kind = A B
 }
-slots {
+layers {
 __legacy_layer_0 = Box:kind
 }
 }
@@ -1825,7 +1825,7 @@ assets {
 "visuals/box.png"
 }
 puzzle board {
-slots {
+layers {
 __legacy_layer_0 = Box
 }
 }
@@ -1851,7 +1851,7 @@ puzzle board {
 tags {
 kind = Red Blue
 }
-slots {
+layers {
 __legacy_layer_0 = Player
 __legacy_layer_1 = Box:kind
 }
@@ -1908,7 +1908,7 @@ visuals {
         let source = r#"
 title = complete_canonical_visual_selector
 puzzle board {
-slots {
+layers {
 __legacy_layer_0 = Player
 }
 }
@@ -2011,7 +2011,7 @@ win -> s
         let source = r#"
 title = complete_effects
 puzzle board {
-slots {
+layers {
 __legacy_layer_0 = Player
 }
 rules {
@@ -2112,7 +2112,7 @@ g
         let source = r#"
 title = complete_layer_object
 puzzle board {
-slots {
+layers {
 floor = layer
 }
 rules {
@@ -2241,7 +2241,7 @@ puzzle sokoban {
 tags {
 kind = A B
 }
-slots {
+layers {
 __legacy_layer_0 = Box:kind
 }
 rules {
@@ -2274,11 +2274,31 @@ puzzle board = so
     }
 
     #[test]
+    fn suggests_numeric_range_tag_sets_as_for_sources() {
+        let source = r#"
+puzzle board {
+tags { kind = 1...3 }
+rules {
+for value in ki
+}
+}
+"#;
+        let cursor = source.find("in ki").unwrap() + "in ki".len();
+        let list = crate::analyze_source(source).completion_list(cursor);
+
+        assert!(
+            list.items
+                .iter()
+                .any(|item| { item.label == "kind" && item.kind == CompletionKind::ValueSet })
+        );
+    }
+
+    #[test]
     fn layer_names_are_single_selector_completions() {
         let source = r#"
 title = complete_layer_selectors
 puzzle board {
-slots {
+layers {
 floor = Goal
 actor = Player
 }

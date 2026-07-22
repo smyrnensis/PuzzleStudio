@@ -7,7 +7,7 @@ color = red blue
 }
 
 puzzle color_boxes {
-slots {
+layers {
 Player Box:color Wall
 }
 }

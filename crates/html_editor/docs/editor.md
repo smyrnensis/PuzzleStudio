@@ -6,7 +6,7 @@ levels, rules, lifecycle, and presentation.
 ## Smallest Shape
 ```puzzle
 puzzle my_game {
-slots {
+layers {
 Goal
 Player Wall
 }
@@ -63,7 +63,7 @@ level start
 }
 ```
 
-`slots` is the only place that declares board objects. `legend` only maps
+`layers` is the only place that declares board objects. `legend` only maps
 level characters to objects that already exist. `rules` is the required
 gameplay entry point.
 

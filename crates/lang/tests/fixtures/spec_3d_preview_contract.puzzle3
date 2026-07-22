@@ -4,6 +4,7 @@ puzzle sokoban {
 dimension = 3
 render {
   camera {
+    orthographic = true
     yaw = 10
     pitch = 55
     roll = 20
@@ -11,7 +12,7 @@ render {
   }
 }
 
-slots {
+layers {
   floor = Floor
   target = Goal
   Player Box Wall

@@ -1,22 +1,30 @@
-// 3D
-// EXPECT: Push the box through a level that has visible depth.
-// TRY: Change camera yaw, pitch, or add a third Z layer after another `-`.
+title = "Microban 3D"
+author = "Levels by David Skinner"
 
-title = "06 — 3D"
-subtitle = "A turn-based puzzle on a three-dimensional grid"
+theme {
+preset = "puzzlescript"
+background_color = #fffffff
+text_color = #000
+}
 
-puzzle depth {
+scene title {
+layout {
+  heading "Microban 3D"
+  choice "Start" -> start playing
+}
+}
+
+puzzle sokoban {
 dimension = 3
 render {
 camera {
-yaw = 35
-pitch = 55
-zoom = 1
+	yaw = 0
+	pitch = 5
+	zoom = 1
 }
-shadow = true
 }
 
-slots {
+layers {
 floor = Floor
 target = Goal
 Player Box Wall
@@ -27,19 +35,38 @@ solid = Player Box Wall
 }
 
 rules {
-input horizontal [ Player | Box | no solid ] -> [ | Player | Box ]
-input horizontal [ Player | no solid ] -> [ | Player ]
+once input horizontal [ Player | Box | no solid ] -> [ | Player | Box ]
+once input horizontal [ Player | no solid ] -> [ | Player ]
 }
 
 win_conditions {
 some Goal
 no down [ no Box | Goal ]
 }
+
+on_level_clear {
+wait 0.3s
+message "WIN"
+goto title
+}
 }
 
-levels demo of depth {
+
+scene playing {
+keys {
+q Escape -> goto title
+}
+layout {
+heading "Microban 3D"
+sokoban
+}
+rules {
+step sokoban
+}
+}
+
+levels microban of sokoban {
 legend {
-. = empty
 , = Floor
 G = Floor Goal
 P = Player
@@ -47,15 +74,194 @@ B = Box
 # = Wall
 }
 
-level "depth" {
-#####
-#PB.#
-#...#
-#####
+level "microban 1" {
+####..
+#..#..
+#..###
+#BP..#
+#..B.#
+#..###
+####..
 -
-,,,,,
-,,,,,
-,,,G,
-,,,,,
+,,,,,,
+,,G,,,
+,,,,,,
+,G,,,,
+,,,,,,
+,,,,,,
+,,,,,,
+}
+}
+
+visuals basic of sokoban {
+Floor {
+colors = #90ee90 #008000
+shape = {
+11111
+01111
+11101
+11111
+10111
+-
+.....
+.....
+.....
+.....
+.....
+-
+.....
+.....
+.....
+.....
+.....
+-
+.....
+.....
+.....
+.....
+.....
+-
+.....
+.....
+.....
+.....
+.....
+}
+}
+Goal {
+colors = #00008b
+shape = {
+.....
+.000.
+.0.0.
+.000.
+.....
+-
+.....
+.....
+.....
+.....
+.....
+-
+.....
+.....
+.....
+.....
+.....
+-
+.....
+.....
+.....
+.....
+.....
+-
+.....
+.....
+.....
+.....
+.....
+}
+}
+Player {
+colors = #000000 #ffa500 #ffffff #0000ff
+shape = {
+.....
+.....
+.000.
+.....
+.....
+-
+.....
+.....
+.111.
+.....
+.....
+-
+.....
+.....
+22222
+.....
+.....
+-
+.....
+.....
+.333.
+.....
+.....
+-
+.....
+.....
+.3.3.
+.....
+.....
+}
+}
+Box {
+colors = #ffa500
+shape = {
+00000
+0...0
+0...0
+0...0
+00000
+-
+0...0
+.....
+.....
+.....
+0...0
+-
+0...0
+.....
+.....
+.....
+0...0
+-
+0...0
+.....
+.....
+.....
+0...0
+-
+00000
+0...0
+0...0
+0...0
+00000
+}
+}
+Wall {
+colors = #a46322 #493c2b
+shape = {
+.....
+.....
+.....
+.....
+.....
+-
+.....
+.....
+.....
+.....
+.....
+-
+00010
+11111
+01000
+11111
+00010
+-
+11111
+11111
+11111
+11111
+11111
+-
+00010
+11111
+01000
+11111
+00010
+}
 }
 }

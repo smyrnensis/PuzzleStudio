@@ -2,9 +2,7 @@ pub fn export_loaded_document_visual_fixture_json(
     document: &LoadedDocument,
 ) -> Result<String, DiagnosticReport> {
     let Some(LoadedDocumentModel::Puzzle3d {
-        game,
-        presentation,
-        ..
+        game, presentation, ..
     }) = document.single_model()
     else {
         return Err(DiagnosticReport::error(
@@ -188,10 +186,8 @@ fn parse_loaded_document_parts(
         &mut scenes,
         model_kinds.iter().map(|(kind, name)| (*kind, name)),
     )?;
-    scenes = add_implicit_model_scenes(
-        scenes,
-        model_kinds.iter().map(|(kind, name)| (*kind, name)),
-    );
+    scenes =
+        add_implicit_model_scenes(scenes, model_kinds.iter().map(|(kind, name)| (*kind, name)));
     resolve_default_wait_in_scenes(&mut scenes, shell.default_wait_ms);
 
     let mut lowered = Vec::with_capacity(models.len());
@@ -405,7 +401,7 @@ fn puzzle3_document_fixture_fields(
     if let Some(scene_fields) = scene_fields {
         out.push_str(&scene_fields);
     } else {
-        out.push_str("  \"currentScene\": \"playing\",\n");
+        push_puzzle3_fixture_surface(&mut out, "playing");
         out.push_str("  \"scenes\": [\n");
         out.push_str("    {\n");
         out.push_str("      \"name\": \"playing\",\n");
@@ -428,9 +424,8 @@ fn puzzle3_scene_fixture_fields(document: &LoadedDocument) -> (Option<String>, V
         .map(|scene| scene.name.as_str())
         .unwrap_or("playing");
     let mut out = String::new();
-    out.push_str("  \"currentScene\": ");
-    out.push_str(&json_string(current_scene));
-    out.push_str(",\n  \"scenes\": [\n");
+    push_puzzle3_fixture_surface(&mut out, current_scene);
+    out.push_str("  \"scenes\": [\n");
     for (index, scene) in document.scenes.iter().enumerate() {
         if index > 0 {
             out.push_str(",\n");
@@ -439,6 +434,19 @@ fn puzzle3_scene_fixture_fields(document: &LoadedDocument) -> (Option<String>, V
     }
     out.push_str("\n  ],");
     (Some(out), level_bundle_names)
+}
+
+fn push_puzzle3_fixture_surface(out: &mut String, root: &str) {
+    let root = json_string(root);
+    out.push_str("  \"surface\": { \"root\": ");
+    out.push_str(&root);
+    out.push_str(", \"focus\": ");
+    out.push_str(&root);
+    out.push_str(", \"components\": [{ \"id\": ");
+    out.push_str(&root);
+    out.push_str(", \"definition\": ");
+    out.push_str(&root);
+    out.push_str(", \"placement\": \"root\", \"visibility\": \"visible\", \"modal\": false }] },\n");
 }
 
 fn push_puzzle3_scene_json(
@@ -683,37 +691,36 @@ fn parse_document_shell_entries(
         let tokens = split_header_tokens(&entry.header.text);
         match entry.directive {
             puzzle_authoring::PuzzleDirectiveSurface::Metadata => match tokens.as_slice() {
-            ["title", ..] => {
-                shell.title = parse_metadata_text(&entry.header, "title")?;
-            }
-            ["subtitle", ..] => {
-                shell.subtitle = Some(parse_metadata_text(&entry.header, "subtitle")?);
-            }
-            ["author", ..] => {
-                shell.author = Some(parse_metadata_text(&entry.header, "author")?);
-            }
-            ["homepage", ..] => {
-                shell.homepage = Some(parse_metadata_text(&entry.header, "homepage")?);
-            }
-            ["default_wait_time", ..] => {
-                shell.default_wait_ms = parse_default_wait_time_directive(&entry.header)?;
-            }
-            ["theme", ..] => {
-                let lines = document_entry_lines(entry);
-                parse_theme_statement(&lines, 0, &mut shell.theme)?;
-            }
-            _ => {
-                return Err(parse_error(
-                    &entry.header,
-                    "unknown document metadata directive",
-                ));
-            }
-        },
+                ["title", ..] => {
+                    shell.title = parse_metadata_text(&entry.header, "title")?;
+                }
+                ["subtitle", ..] => {
+                    shell.subtitle = Some(parse_metadata_text(&entry.header, "subtitle")?);
+                }
+                ["author", ..] => {
+                    shell.author = Some(parse_metadata_text(&entry.header, "author")?);
+                }
+                ["homepage", ..] => {
+                    shell.homepage = Some(parse_metadata_text(&entry.header, "homepage")?);
+                }
+                ["default_wait_time", ..] => {
+                    shell.default_wait_ms = parse_default_wait_time_directive(&entry.header)?;
+                }
+                ["theme", ..] => {
+                    let lines = document_entry_lines(entry);
+                    parse_theme_statement(&lines, 0, &mut shell.theme)?;
+                }
+                _ => {
+                    return Err(parse_error(
+                        &entry.header,
+                        "unknown document metadata directive",
+                    ));
+                }
+            },
             puzzle_authoring::PuzzleDirectiveSurface::Variable => {
-                shell.variables.push(parse_top_level_var_directive(
-                    &tokens,
-                    &entry.header,
-                )?);
+                shell
+                    .variables
+                    .push(parse_top_level_var_directive(&tokens, &entry.header)?);
             }
             puzzle_authoring::PuzzleDirectiveSurface::InputBuffer => {
                 let lines = document_entry_lines(entry);
@@ -751,9 +758,7 @@ fn parse_document_shell_entries(
     Ok(shell)
 }
 
-fn document_entry_lines(
-    entry: &model_syntax::PuzzleEntrySyntax,
-) -> Vec<source::LogicalLine> {
+fn document_entry_lines(entry: &model_syntax::PuzzleEntrySyntax) -> Vec<source::LogicalLine> {
     let mut lines = Vec::with_capacity(entry.body.len() + 2);
     lines.push(entry.header.clone());
     lines.extend(entry.body.iter().cloned());
@@ -783,11 +788,8 @@ fn split_document_scene_sources(
                     )
                 })?;
             let (name, _) = parse_scene_name_and_params(declaration.name, &logical_lines[i])?;
-            let (lines, next_i) = collect_authoring_entry(
-                &logical_lines,
-                i,
-                AuthoringEntryOwner::SceneDefinition,
-            )?;
+            let (lines, next_i) =
+                collect_authoring_entry(&logical_lines, i, AuthoringEntryOwner::SceneDefinition)?;
             let scene = PendingSceneSource::Explicit {
                 name: name.clone(),
                 lines,
@@ -799,8 +801,7 @@ fn split_document_scene_sources(
             }
             i = next_i;
         } else if let Some((kind, name)) = model_header_name(tokens.as_slice()) {
-            let (entry, layout, next_i) =
-                extract_default_model_scene_source(&logical_lines, i)?;
+            let (entry, layout, next_i) = extract_default_model_scene_source(&logical_lines, i)?;
             model_lines.extend(entry);
             if !scenes.iter().any(|scene| scene.name() == name) {
                 let scene = PendingSceneSource::Model {
@@ -828,14 +829,16 @@ fn parse_pending_scene_sources(
     let levels = models
         .iter()
         .flat_map(|model| {
-            model.body.levels.levels.iter().map(|level| LevelProjectionEntry {
-                name: level.name.clone(),
-                pack: level.pack.clone(),
-                puzzle: level
-                    .puzzle
-                    .clone()
-                    .unwrap_or_else(|| model.name.clone()),
-            })
+            model
+                .body
+                .levels
+                .levels
+                .iter()
+                .map(|level| LevelProjectionEntry {
+                    name: level.name.clone(),
+                    pack: level.pack.clone(),
+                    puzzle: level.puzzle.clone().unwrap_or_else(|| model.name.clone()),
+                })
         })
         .collect::<Vec<_>>();
     pending
@@ -1096,7 +1099,7 @@ mod document_surface_flow_tests {
             r#"
 puzzle space {
 dimension = 3
-slots {
+layers {
 actor = Player
 }
 rules {
@@ -1118,7 +1121,7 @@ rules {
         let error = parse_game_for_path(
             r#"
 puzzle space {
-slots {
+layers {
 actor = Player
 }
 rules {
@@ -1726,7 +1729,7 @@ fn lower_model_with_shell_inner(
 
     refresh_layer_tags_and_value_sets(&mut named_layers, &mut catalog);
     let layer_count =
-        layer_count.ok_or_else(|| DiagnosticReport::error("missing slots".to_string()))?;
+        layer_count.ok_or_else(|| DiagnosticReport::error("missing layers".to_string()))?;
     resolve_level_block_puzzles(&mut level_blocks, &puzzle_models)?;
     let prepared_level_bodies = level_blocks
         .into_iter()
@@ -1885,6 +1888,48 @@ fn lower_model_with_shell_inner(
         .iter()
         .map(|visual| visual.name.clone())
         .collect::<HashSet<_>>();
+    for name in visuals
+        .order
+        .priorities
+        .iter()
+        .flat_map(|priority| &priority.animations)
+    {
+        if !visual_names.contains(name) {
+            return Err(DiagnosticReport::error(format!(
+                "unknown animation visual in layers: !{name}"
+            )));
+        }
+    }
+    let animation_visual_names = visuals
+        .order
+        .priorities
+        .iter()
+        .flat_map(|priority| priority.animations.iter().cloned())
+        .collect::<HashSet<_>>();
+    let direction_variant_pairs = catalog
+        .object_schemas
+        .values()
+        .flat_map(|schema| {
+            schema.variants.iter().flat_map(move |from| {
+                schema.variants.iter().filter_map(move |to| {
+                    if from.object == to.object || from.values.len() != to.values.len() {
+                        return None;
+                    }
+                    let changed_axes = from
+                        .values
+                        .iter()
+                        .zip(&to.values)
+                        .enumerate()
+                        .filter_map(|(index, (left, right))| (left != right).then_some(index))
+                        .collect::<Vec<_>>();
+                    (changed_axes.len() == 1
+                        && schema.axis_types.get(changed_axes[0]).copied().flatten()
+                            == Some(ValueType::Direction))
+                    .then_some((from.object, to.object))
+                })
+            })
+        })
+        .collect::<HashSet<_>>();
     let mut programs = lower_programs(
         rule_definitions,
         main_statements,
@@ -1904,7 +1949,9 @@ fn lower_model_with_shell_inner(
         &catalog.mark_names,
         &model_sound_triggers,
         &visual_names,
+        &animation_visual_names,
         &animation,
+        &direction_variant_pairs,
         &value_sets,
         &catalog.maps,
         &effective_directions,

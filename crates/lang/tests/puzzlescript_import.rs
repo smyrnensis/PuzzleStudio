@@ -563,7 +563,7 @@ fn group_selector_intersection_filters_impossible_same_layer_tuples() {
 title = "Group Intersection"
 
 puzzle main {
-slots {
+layers {
   floor = Background
   actor = A B
   payload = C
@@ -759,7 +759,7 @@ P
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
 
     assert!(
-        translated.contains("puzzle main {\nflickscreen 13 13\nscreen_focus Player\n\nslots {")
+        translated.contains("puzzle main {\nflickscreen 13 13\nscreen_focus Player\n\nlayers {")
     );
     assert!(translated.contains("layout {\npuzzle board = main\n}"));
     assert!(translated.contains("rules {\nstep board\n}"));
@@ -1311,19 +1311,42 @@ choose 1 [ ] -> [ Player ]
 
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
 
+    let rules_comment = translated.find("// ordinary movement").unwrap();
+    let generated_rules = translated.find("routine move {").unwrap();
+    let level_comment = translated.find("// choose 1 [ ] -> [ Player ]").unwrap();
+    let generated_levels = translated.find("levels {").unwrap();
+
+    assert!(translated.find("puzzle main {").unwrap() < rules_comment);
+    assert!(rules_comment < generated_rules, "{translated}");
     assert!(
-        translated.contains("// [RULES line 32] ordinary movement"),
+        translated.contains("// [ Player ] -> cancel"),
         "{translated}"
     );
-    assert!(
-        translated.contains("// [RULES line 33] [ Player ] -> cancel"),
-        "{translated}"
-    );
-    assert!(
-        translated.contains("// [LEVELS line 41] choose 1 [ ] -> [ Player ]"),
-        "{translated}"
-    );
+    assert!(generated_rules < level_comment);
+    assert!(level_comment < generated_levels, "{translated}");
+    assert!(!translated.contains("Comments preserved from the imported PuzzleScript source"));
+    assert!(!translated.contains("[RULES line"));
+    assert!(!translated.contains("[LEVELS line"));
     assert!(!translated.contains("( [ Player ] -> cancel )"));
+    parse_game(&translated).unwrap();
+}
+
+#[test]
+fn puzzlescript_title_scene_precedes_generated_game_content() {
+    let source = include_str!("fixtures/puzzlescript/basic_sokoban.ps");
+
+    let translated = translate_puzzlescript_to_canonical(source).unwrap();
+    let title_scene = translated.find("scene title {").unwrap();
+
+    assert!(translated.find("title = ").unwrap() < title_scene);
+    assert!(
+        title_scene < translated.find("theme = ").unwrap(),
+        "{translated}"
+    );
+    assert!(title_scene < translated.find("puzzle main {").unwrap());
+    assert!(
+        translated.find("puzzle main {").unwrap() < translated.find("scene playing {").unwrap()
+    );
     parse_game(&translated).unwrap();
 }
 
@@ -1450,7 +1473,7 @@ fn imports_puzzlescript_next_teneten_sample_as_current_canonical_syntax() {
         .expect("TENETEN should import from PuzzleScript Next syntax");
 
     assert!(translated.contains("title = \"TENETEN\""));
-    assert!(translated.contains("slots {\nlayer1 = Background\n"));
+    assert!(translated.contains("layers {\nlayer1 = Background\n"));
     assert!(translated.contains("all TargetCrate on crate"));
     assert!(translated.contains("level \"1\""));
     assert!(translated.lines().any(|line| line == "message \"1\""));

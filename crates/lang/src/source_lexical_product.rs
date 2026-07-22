@@ -25,11 +25,8 @@ pub(crate) fn build_surface_highlight_spans_in_range(
     let mut spans = Vec::<SourceHighlightSpan>::new();
     let display_facts = display_facts_in_range(document, range_start, range_end);
     let semantic_tokens = semantic_tokens_in_range(document, range_start, range_end);
-    let unclassified_highlight_spans = source_spans_in_range(
-        &document.unclassified_highlight_spans,
-        range_start,
-        range_end,
-    );
+    let invalid_syntax_spans =
+        source_spans_in_range(&document.invalid_syntax_spans, range_start, range_end);
     let raw_ranges = source_spans_in_range(
         &document.highlight_ranges.raw_ranges,
         range_start,
@@ -72,7 +69,7 @@ pub(crate) fn build_surface_highlight_spans_in_range(
         map_lexical_fact(
             document,
             semantic_tokens,
-            unclassified_highlight_spans,
+            invalid_syntax_spans,
             fact,
             &mut spans,
         );
@@ -86,10 +83,19 @@ pub(crate) fn build_surface_highlight_spans_in_range(
 fn map_lexical_fact(
     document: &SurfaceDocument,
     semantic_tokens: &[crate::surface::SurfaceSemanticToken],
-    unclassified_highlight_spans: &[SourceSpan],
+    invalid_syntax_spans: &[SourceSpan],
     fact: &SourceLexicalFact,
     spans: &mut Vec<SourceHighlightSpan>,
 ) {
+    if is_contained_by(fact.start, fact.end, invalid_syntax_spans) {
+        push_span(
+            spans,
+            fact.start,
+            fact.end,
+            SourceHighlightKind::InvalidSyntax,
+        );
+        return;
+    }
     if let Some(kind) = semantic_kind_exact(semantic_tokens, fact.start, fact.end)
         && !matches!(
             (&fact.kind, kind),
@@ -104,13 +110,6 @@ fn map_lexical_fact(
         SourceLexicalKind::Word => {
             if let Some(kind) = semantic_kind_at(semantic_tokens, fact.start, fact.end) {
                 push_span(spans, fact.start, fact.end, highlight_kind(kind));
-            } else if is_contained_by(fact.start, fact.end, unclassified_highlight_spans) {
-                push_span(
-                    spans,
-                    fact.start,
-                    fact.end,
-                    SourceHighlightKind::InvalidSyntax,
-                );
             }
         }
         SourceLexicalKind::Number => {
@@ -484,7 +483,7 @@ mod tests {
 
     #[test]
     fn parser_fact_boundaries_preserve_names_selectors_and_invalid_braces() {
-        let source = "puzzle board {\nslots {\nobjects = @Box\n}\nrules {\n[ Box:1{checked} ] -> [ @Box ]\n}\n}\n}\n";
+        let source = "puzzle board {\nlayers {\nobjects = @Box\n}\nrules {\n[ Box:1{checked} ] -> [ @Box ]\n}\n}\n}\n";
         let highlighted = highlight_source(source);
         for (start, _) in source.match_indices("@Box") {
             assert!(highlighted.spans.iter().any(|span| {
@@ -508,8 +507,8 @@ mod tests {
     }
 
     #[test]
-    fn missing_parser_disposition_is_explicit_invalid_syntax() {
-        let source = "__unowned_syntax__\n";
+    fn parser_owned_invalid_disposition_is_explicit_invalid_syntax() {
+        let source = "puzzle board {\n__unowned_syntax__ {\n}\nrules {\n}\n}\n";
         let highlighted = highlight_source(source);
         assert!(has_span(
             source,
@@ -517,12 +516,24 @@ mod tests {
             SourceHighlightKind::InvalidSyntax,
             "__unowned_syntax__"
         ));
+        assert!(!has_span(
+            source,
+            &highlighted,
+            SourceHighlightKind::Keyword,
+            "__unowned_syntax__"
+        ));
+        assert!(has_span(
+            source,
+            &highlighted,
+            SourceHighlightKind::Keyword,
+            "rules"
+        ));
     }
 
     #[test]
     fn accepted_authoring_rows_have_terminal_semantic_dispositions() {
         let source = r#"puzzle board {
-slots {
+layers {
 actor = Player
 }
 sounds {
@@ -584,7 +595,7 @@ Enter -> goto playing
 
     #[test]
     fn owner_ranges_override_lexical_facts_with_pixel_data() {
-        let source = "puzzle board {\nslots { objects = Box }\nvisuals {\nBox {\n#fff #000\n01\n}\n}\nrules {\n}\n}\n";
+        let source = "puzzle board {\nlayers { objects = Box }\nvisuals {\nBox {\n#fff #000\n01\n}\n}\nrules {\n}\n}\n";
         let highlighted = highlight_source(source);
         let pixels = highlighted
             .spans

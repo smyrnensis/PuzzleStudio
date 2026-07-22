@@ -1,4 +1,10 @@
 (function attachPuzzle3VisualCore(root) {
+  const MIN_ZOOM = 0.1;
+
+  function normalizeZoom(value) {
+    return Math.max(MIN_ZOOM, Number(value ?? 1));
+  }
+
   function cameraModelFrame(camera = {}) {
     const yaw = degreesToRadians(camera.yawDegrees ?? 0);
     const pitch = degreesToRadians(camera.pitchDegrees ?? 35);
@@ -37,7 +43,7 @@
 
   function projectOrthographic(position, view) {
     const frame = cameraModelFrame(view.camera);
-    const zoom = view.camera?.zoom ?? 1;
+    const zoom = normalizeZoom(view.camera?.zoom);
     const center = view.center || { x: 0, y: 0, z: 0 };
     const x = position.x - center.x;
     const y = position.y - center.y;
@@ -560,6 +566,7 @@
     faceGridOrder,
     gridOrder,
     mergeVoxelFaces,
+    normalizeZoom,
     objectPriority,
     priorityDefinition,
     projectOrthographic,

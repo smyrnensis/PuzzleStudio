@@ -83,6 +83,36 @@ pub fn scene_layout_is_default(layout: &SceneLayout) -> bool {
         && !layout.scroll
 }
 
+/// Layout metadata shared by every authored component. `SceneLayout` remains
+/// an authoring spelling; the runtime contract is component-oriented.
+pub type ComponentLayout = SceneLayout;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ComponentPlacement {
+    Root,
+    #[default]
+    Content,
+    Overlay,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ComponentVisibility {
+    #[default]
+    Visible,
+    Hidden,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "component", rename_all = "snake_case")]
+pub enum ComponentOrder {
+    First,
+    Last,
+    Before(String),
+    After(String),
+}
+
 pub fn write_scene_layout_json(out: &mut String, layout: &SceneLayout) {
     out.push('{');
     let mut wrote = false;
@@ -169,7 +199,7 @@ fn scene_distribution_name(value: SceneDistribution) -> &'static str {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Scene<
+pub struct ComponentDefinition<
     State = (),
     Component = SceneComponent<SceneCommand, SceneTextExpr, SceneTextExpr>,
     Action = SceneCommand,
@@ -186,7 +216,14 @@ pub struct Scene<
     pub transitions: Vec<SceneTransition<Action>>,
 }
 
-impl<State, Component, Action, Rule> Scene<State, Component, Action, Rule> {
+pub type Scene<
+    State = (),
+    Component = SceneComponent<SceneCommand, SceneTextExpr, SceneTextExpr>,
+    Action = SceneCommand,
+    Rule = (),
+> = ComponentDefinition<State, Component, Action, Rule>;
+
+impl<State, Component, Action, Rule> ComponentDefinition<State, Component, Action, Rule> {
     pub fn new(
         name: impl Into<String>,
         state: Vec<State>,
@@ -304,7 +341,7 @@ pub enum SceneTransitionTrigger<ConditionExpr = String> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum SceneComponent<
+pub enum ComponentNode<
     Effect = SceneCommand,
     LabelExpr = SceneTextExpr,
     TextExpr = SceneTextExpr,
@@ -321,8 +358,15 @@ pub enum SceneComponent<
     Conditional(SceneConditional<Effect, LabelExpr, TextExpr, ConditionExpr>),
 }
 
+pub type SceneComponent<
+    Effect = SceneCommand,
+    LabelExpr = SceneTextExpr,
+    TextExpr = SceneTextExpr,
+    ConditionExpr = String,
+> = ComponentNode<Effect, LabelExpr, TextExpr, ConditionExpr>;
+
 impl<Effect, LabelExpr, TextExpr, ConditionExpr>
-    SceneComponent<Effect, LabelExpr, TextExpr, ConditionExpr>
+    ComponentNode<Effect, LabelExpr, TextExpr, ConditionExpr>
 {
     pub fn kind(&self) -> SceneComponentKind {
         match self {
@@ -543,8 +587,11 @@ pub enum SceneEffect {
     Input(String),
     ComponentEffect(String),
     RoutineCall(String),
-    Message {
-        text: SceneExpr,
+    PresentComponent {
+        definition: String,
+        properties: Vec<ComponentProperty>,
+        placement: ComponentPlacement,
+        await_event: Option<String>,
     },
     Wait {
         milliseconds: Option<u64>,
@@ -598,6 +645,10 @@ pub enum SceneEffect {
     Focus {
         scene: String,
     },
+    Move {
+        component: String,
+        order: ComponentOrder,
+    },
     PuzzleNextLevel {
         target: String,
     },
@@ -644,6 +695,12 @@ pub enum SceneEffect {
     },
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ComponentProperty {
+    pub name: String,
+    pub value: SceneExpr,
+}
+
 #[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum SceneEffectSerialize<'a> {
@@ -656,8 +713,11 @@ enum SceneEffectSerialize<'a> {
     RoutineCall {
         name: &'a str,
     },
-    Message {
-        text: &'a SceneExpr,
+    PresentComponent {
+        definition: &'a str,
+        properties: &'a [ComponentProperty],
+        placement: ComponentPlacement,
+        await_event: &'a Option<String>,
     },
     Wait {
         milliseconds: &'a Option<u64>,
@@ -711,6 +771,10 @@ enum SceneEffectSerialize<'a> {
     Focus {
         scene: &'a str,
     },
+    Move {
+        component: &'a str,
+        order: &'a ComponentOrder,
+    },
     PuzzleNextLevel {
         target: &'a str,
     },
@@ -763,7 +827,17 @@ impl<'a> From<&'a SceneEffect> for SceneEffectSerialize<'a> {
             SceneEffect::Input(name) => Self::Input { name },
             SceneEffect::ComponentEffect(name) => Self::ComponentEffect { name },
             SceneEffect::RoutineCall(name) => Self::RoutineCall { name },
-            SceneEffect::Message { text } => Self::Message { text },
+            SceneEffect::PresentComponent {
+                definition,
+                properties,
+                placement,
+                await_event,
+            } => Self::PresentComponent {
+                definition,
+                properties,
+                placement: *placement,
+                await_event,
+            },
             SceneEffect::Wait { milliseconds } => Self::Wait { milliseconds },
             SceneEffect::Conditional { condition, effect } => {
                 Self::Conditional { condition, effect }
@@ -783,6 +857,7 @@ impl<'a> From<&'a SceneEffect> for SceneEffectSerialize<'a> {
             SceneEffect::Hide { scene } => Self::Hide { scene },
             SceneEffect::Toggle { scene } => Self::Toggle { scene },
             SceneEffect::Focus { scene } => Self::Focus { scene },
+            SceneEffect::Move { component, order } => Self::Move { component, order },
             SceneEffect::PuzzleNextLevel { target } => Self::PuzzleNextLevel { target },
             SceneEffect::PuzzlePreviousLevel { target } => Self::PuzzlePreviousLevel { target },
             SceneEffect::GotoLevel { target, level } => Self::GotoLevel { target, level },
@@ -826,8 +901,11 @@ enum SceneEffectDeserialize {
     RoutineCall {
         name: String,
     },
-    Message {
-        text: SceneExpr,
+    PresentComponent {
+        definition: String,
+        properties: Vec<ComponentProperty>,
+        placement: ComponentPlacement,
+        await_event: Option<String>,
     },
     Wait {
         milliseconds: Option<u64>,
@@ -881,6 +959,10 @@ enum SceneEffectDeserialize {
     Focus {
         scene: String,
     },
+    Move {
+        component: String,
+        order: ComponentOrder,
+    },
     PuzzleNextLevel {
         target: String,
     },
@@ -933,7 +1015,17 @@ impl From<SceneEffectDeserialize> for SceneEffect {
             SceneEffectDeserialize::Input { name } => Self::Input(name),
             SceneEffectDeserialize::ComponentEffect { name } => Self::ComponentEffect(name),
             SceneEffectDeserialize::RoutineCall { name } => Self::RoutineCall(name),
-            SceneEffectDeserialize::Message { text } => Self::Message { text },
+            SceneEffectDeserialize::PresentComponent {
+                definition,
+                properties,
+                placement,
+                await_event,
+            } => Self::PresentComponent {
+                definition,
+                properties,
+                placement,
+                await_event,
+            },
             SceneEffectDeserialize::Wait { milliseconds } => Self::Wait { milliseconds },
             SceneEffectDeserialize::Conditional { condition, effect } => {
                 Self::Conditional { condition, effect }
@@ -953,6 +1045,7 @@ impl From<SceneEffectDeserialize> for SceneEffect {
             SceneEffectDeserialize::Hide { scene } => Self::Hide { scene },
             SceneEffectDeserialize::Toggle { scene } => Self::Toggle { scene },
             SceneEffectDeserialize::Focus { scene } => Self::Focus { scene },
+            SceneEffectDeserialize::Move { component, order } => Self::Move { component, order },
             SceneEffectDeserialize::PuzzleNextLevel { target } => Self::PuzzleNextLevel { target },
             SceneEffectDeserialize::PuzzlePreviousLevel { target } => {
                 Self::PuzzlePreviousLevel { target }

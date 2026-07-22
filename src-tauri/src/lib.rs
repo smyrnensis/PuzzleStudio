@@ -19,6 +19,7 @@ use tauri::{Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
 
 const WORKSPACE_CHANGED_EVENT: &str = "puzzlestudio-workspace-changed";
+const DESKTOP_EXIT_REQUESTED_EVENT: &str = "puzzlestudio-exit-requested";
 const WORKSPACE_WATCH_INTERVAL: Duration = Duration::from_millis(700);
 const WORKSPACE_WATCH_DEBOUNCE: Duration = Duration::from_millis(150);
 const LOADED_WORKSPACES_FILE: &str = "loaded-workspaces.json";
@@ -146,6 +147,18 @@ struct RemoveWorkspaceCommandRequest {
     workspace_root: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CompleteDesktopExitCommandRequest {
+    kind: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopExitRequestedPayload {
+    kind: &'static str,
+}
+
 #[tauri::command]
 fn load_source(
     app: tauri::AppHandle,
@@ -179,6 +192,63 @@ fn load_source(
     }
 
     workspaces_source_value_with_recent(&app, Vec::new(), restore_errors)
+}
+
+#[tauri::command]
+fn complete_desktop_exit(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    request: CompleteDesktopExitCommandRequest,
+) -> Result<(), String> {
+    match request.kind.as_str() {
+        "window" => close_desktop_window(&window),
+        "app" => {
+            app.exit(0);
+            Ok(())
+        }
+        kind => Err(format!("unsupported desktop exit kind: {kind}")),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn close_desktop_window(window: &tauri::WebviewWindow) -> Result<(), String> {
+    window
+        .eval("window.location.reload()")
+        .map_err(|error| format!("failed to reset the desktop window before closing: {error}"))?;
+    window
+        .hide()
+        .map_err(|error| format!("failed to close the desktop window: {error}"))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn close_desktop_window(window: &tauri::WebviewWindow) -> Result<(), String> {
+    window
+        .destroy()
+        .map_err(|error| format!("failed to close the desktop window: {error}"))
+}
+
+fn should_guard_app_exit(code: Option<i32>, has_webview_windows: bool) -> bool {
+    code.is_none() && has_webview_windows
+}
+
+fn should_reopen_desktop_window(has_visible_windows: bool) -> bool {
+    !has_visible_windows
+}
+
+#[cfg(target_os = "macos")]
+fn reopen_desktop_window(app: &tauri::AppHandle, has_visible_windows: bool) -> Result<(), String> {
+    if !should_reopen_desktop_window(has_visible_windows) {
+        return Ok(());
+    }
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "desktop main window is unavailable during reopen".to_string())?;
+    window
+        .show()
+        .map_err(|error| format!("failed to reopen the desktop window: {error}"))?;
+    window
+        .set_focus()
+        .map_err(|error| format!("failed to focus the reopened desktop window: {error}"))
 }
 
 #[tauri::command]
@@ -1371,10 +1441,44 @@ pub fn run() {
             create_source_folder,
             rename_workspace_entry,
             delete_workspace_entry,
+            complete_desktop_exit,
         ])
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                if let Err(error) = window.emit(
+                    DESKTOP_EXIT_REQUESTED_EVENT,
+                    DesktopExitRequestedPayload { kind: "window" },
+                ) {
+                    eprintln!("failed to request desktop window close confirmation: {error}");
+                }
+            }
+        })
         .build(tauri::generate_context!())
         .expect("error while building PuzzleStudio desktop app")
-        .run(|_app, _event| {});
+        .run(|app, event| match event {
+            tauri::RunEvent::ExitRequested { code, api, .. } => {
+                if should_guard_app_exit(code, !app.webview_windows().is_empty()) {
+                    api.prevent_exit();
+                    if let Err(error) = app.emit(
+                        DESKTOP_EXIT_REQUESTED_EVENT,
+                        DesktopExitRequestedPayload { kind: "app" },
+                    ) {
+                        eprintln!("failed to request desktop app exit confirmation: {error}");
+                    }
+                }
+            }
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen {
+                has_visible_windows,
+                ..
+            } => {
+                if let Err(error) = reopen_desktop_window(app, has_visible_windows) {
+                    eprintln!("{error}");
+                }
+            }
+            _ => {}
+        });
 }
 
 #[cfg(test)]
@@ -1596,21 +1700,16 @@ mod tests {
     }
 
     #[test]
-    fn desktop_capabilities_allow_confirmed_window_close() {
-        let capabilities: serde_json::Value =
-            serde_json::from_str(include_str!("../capabilities/default.json"))
-                .expect("desktop capabilities should be valid JSON");
-        let permissions = capabilities
-            .get("permissions")
-            .and_then(|value| value.as_array())
-            .expect("desktop capabilities should declare permissions");
+    fn desktop_app_exit_guard_intercepts_only_user_exit_with_a_live_editor() {
+        assert!(should_guard_app_exit(None, true));
+        assert!(!should_guard_app_exit(Some(0), true));
+        assert!(!should_guard_app_exit(None, false));
+    }
 
-        assert!(
-            permissions
-                .iter()
-                .any(|permission| permission.as_str() == Some("core:window:allow-destroy")),
-            "desktop close guard calls Tauri window.destroy() after unsaved-change confirmation"
-        );
+    #[test]
+    fn desktop_reopen_shows_the_window_only_when_none_are_visible() {
+        assert!(should_reopen_desktop_window(false));
+        assert!(!should_reopen_desktop_window(true));
     }
 
     #[test]

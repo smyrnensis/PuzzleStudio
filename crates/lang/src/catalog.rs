@@ -33,6 +33,7 @@ pub(crate) struct Catalog {
     pub(crate) constant_variables: Vec<VariableId>,
     pub(crate) condition_names: HashMap<String, ConditionId>,
     pub(crate) condition_labels: HashMap<ConditionId, String>,
+    pub(crate) visual_order: crate::VisualOrderDef,
 }
 
 impl Catalog {
@@ -133,6 +134,7 @@ impl Catalog {
             constant_variables: Vec::new(),
             condition_names: HashMap::new(),
             condition_labels: HashMap::new(),
+            visual_order: crate::VisualOrderDef::default(),
         }
     }
 }

@@ -367,6 +367,7 @@ fn unclassified_highlight_spans(document: &SurfaceDocument) -> Vec<SourceSpan> {
         .semantic_tokens
         .iter()
         .map(|token| token.span)
+        .chain(document.invalid_syntax_spans.iter().copied())
         .chain(document.highlight_ranges.raw_ranges.iter().copied())
         .chain(
             document
@@ -640,12 +641,13 @@ mod surface_document_flow_tests {
         validate_source_highlight_projection,
     };
     use crate::surface::SurfaceSemanticKind;
+    use crate::{PuzzleSourceProfile, SourceHighlightKind, highlight_source};
 
     #[test]
     fn bare_shape_reference_is_not_highlighted_as_inline_pixels() {
         let source = r##"
 puzzle board {
-slots {
+layers {
 actors = Box
 }
 visuals {
@@ -677,12 +679,7 @@ B
         let reference_end = reference_start + "box_shape".len();
         let document = parse_surface_document(source);
 
-        assert!(
-            document
-                .visual_refs
-                .shape_names
-                .contains("box_shape")
-        );
+        assert!(document.visual_refs.shape_names.contains("box_shape"));
         assert!(
             document.highlight_ranges.display_facts.iter().all(|fact| {
                 !matches!(fact, crate::SurfaceDisplayFact::VisualPixel { span, .. }
@@ -696,7 +693,7 @@ B
     fn canonical_visual_parser_projects_palette_and_pixel_facts() {
         let source = r##"
 puzzle board {
-slots {
+layers {
 actors = Box
 }
 visuals {
@@ -751,7 +748,7 @@ Box
     fn visual_palette_alias_display_facts_use_the_resolved_color_literal() {
         let source = r##"
 puzzle board {
-slots {
+layers {
 actors = GoalCount
 }
 visuals {
@@ -810,7 +807,7 @@ puzzle board {
 tags {
 kind = A B
 }
-slots {
+layers {
 actors = Box:kind
 }
 visuals {
@@ -851,7 +848,7 @@ shape = {
 
     #[test]
     fn canonical_level_parser_projects_cell_display_facts() {
-        let source = "puzzle default {\nslots {\nactor = Box\n}\n}\nlevels {\nlegend {\nB = Box\n. = empty\n}\nlevel \"one\"\nB?\n}\n";
+        let source = "puzzle default {\nlayers {\nactor = Box\n}\n}\nlevels {\nlegend {\nB = Box\n. = empty\n}\nlevel \"one\"\nB?\n}\n";
         let document = parse_surface_document(source);
         let row_start = source.find("B?\n").unwrap();
 
@@ -1246,21 +1243,30 @@ text "Ready"
     }
 
     #[test]
-    fn unowned_source_tree_header_reports_highlight_projection_error() {
+    fn invalid_source_tree_header_has_an_owned_highlight_projection() {
         let source = r#"
 puzzle board {
 __invalid_unowned_surface_node__ {
 }
 }
 "#;
-        let error = validate_source_highlight_projection(source)
-            .expect_err("unowned header should fail highlight validation");
+        validate_source_highlight_projection(source)
+            .expect("invalid syntax should still have a complete highlight projection");
+        let highlighted = highlight_source(source, PuzzleSourceProfile::Puzzle2d);
 
         assert!(
-            error
-                .to_string()
-                .contains("without a parser-owned display classification"),
-            "{error}"
+            highlighted.spans.iter().any(|span| {
+                span.kind == SourceHighlightKind::InvalidSyntax
+                    && &source[span.start..span.end] == "__invalid_unowned_surface_node__"
+            }),
+            "invalid block header should retain a parser-owned invalid disposition"
+        );
+        assert!(
+            !highlighted.spans.iter().any(|span| {
+                span.kind == SourceHighlightKind::Keyword
+                    && &source[span.start..span.end] == "__invalid_unowned_surface_node__"
+            }),
+            "invalid block header must not be presented as a keyword"
         );
     }
 
@@ -1286,20 +1292,28 @@ __invalid_unowned_surface_node__ {
 
     #[test]
     fn strict_parser_result_does_not_depend_on_highlight_projection_completeness() {
-        let source = "puzzle board {\nslots {\nactor = Player\n}\nrules {\n}\n}\n";
+        let source = "puzzle board {\nlayers {\nactor = Player\n}\nrules {\n}\n}\n";
         let mut snapshot = super::ParseSnapshot::parse(source, None);
         snapshot.document.semantic_tokens.clear();
         snapshot.document.unclassified_highlight_spans =
             super::unclassified_highlight_spans(&snapshot.document);
 
         assert!(super::validate_highlight_projection_completeness(&snapshot.document).is_err());
+        let highlighted = crate::highlight::highlight_source_with_document(&snapshot.document);
+        assert!(
+            highlighted
+                .spans
+                .iter()
+                .all(|span| span.kind != SourceHighlightKind::InvalidSyntax),
+            "missing parser dispositions must not be presented as authored invalid syntax"
+        );
         assert!(snapshot.into_strict_document_parts().is_ok());
     }
 
     #[test]
     fn canonical_parser_product_owns_prefixed_selector_boundary_and_role() {
         let source =
-            "puzzle board {\nslots {\nobjects = @Box\n}\nrules {\n[ @Box ] -> [ @Box ]\n}\n}\n";
+            "puzzle board {\nlayers {\nobjects = @Box\n}\nrules {\n[ @Box ] -> [ @Box ]\n}\n}\n";
         let snapshot = super::ParseSnapshot::parse(source, None);
         let recognition = &snapshot
             .parser_catalog
@@ -1309,7 +1323,10 @@ __invalid_unowned_surface_node__ {
 
         for (start, _) in source.match_indices("@Box") {
             assert!(recognition.token_dispositions.iter().any(|disposition| {
-                disposition.kind == crate::surface::SurfaceSemanticKind::Object
+                disposition.kind
+                    == crate::surface::ParserTokenDispositionKind::Semantic(
+                        crate::surface::SurfaceSemanticKind::Object,
+                    )
                     && disposition.span.start == start
                     && &source[disposition.span.start..disposition.span.end] == "@Box"
                     && matches!(

@@ -339,6 +339,8 @@ fn build_puzzle_catalog(
         let mut catalog = Catalog::for_dimension(model.dimension);
         let mut named_layers = HashMap::<String, u16>::new();
         let mut layer_count = None::<u16>;
+        let mut direction_priority = None::<Vec<String>>;
+        let mut visual_priorities = Vec::<VisualOrderPriorityDef>::new();
 
         for entry in &model.catalog_entries {
             let tokens = split_header_tokens(&entry.header.text);
@@ -387,7 +389,7 @@ fn build_puzzle_catalog(
         for entry in &model.catalog_entries {
             let tokens = split_header_tokens(&entry.header.text);
             match tokens.as_slice() {
-                ["slots"] => {
+                ["layers"] => {
                     let mut lines = entry.body.clone();
                     lines.push(source::LogicalLine::new(BLOCK_CLOSE, entry.header.line));
                     let next = parse_layers_block(
@@ -398,24 +400,27 @@ fn build_puzzle_catalog(
                         &mut catalog,
                         &pending_groups,
                         &mut resolved_groups,
+                        &mut direction_priority,
+                        &mut visual_priorities,
+                        true,
                     )?;
                     if next != lines.len() {
                         return Err(parse_error(
                             &entry.header.text,
-                            "slots block was not fully consumed",
+                            "layers block was not fully consumed",
                         ));
                     }
                     refresh_layer_tags_and_value_sets(&named_layers, &mut catalog);
                 }
-                ["slots", count] => {
+                ["layers", count] => {
                     layer_count = Some(parse_u16(
                         Some(count),
                         &entry.header.text,
                         "missing layer count",
                     )?);
                 }
-                ["slots", ..] => {
-                    return Err(parse_error(&entry.header.text, "slots header is malformed"));
+                ["layers", ..] => {
+                    return Err(parse_error(&entry.header.text, "layers header is malformed"));
                 }
                 _ => {}
             }
@@ -443,6 +448,26 @@ fn build_puzzle_catalog(
 
         catalog.layer_count = layer_count;
         catalog.named_layers = named_layers;
+        let direction_priority = direction_priority.unwrap_or_else(|| {
+            crate::lib_authoring_parse_order::default_direction_priority(&catalog)
+        });
+        crate::lib_authoring_parse_order::validate_direction_priority(
+            &direction_priority,
+            &catalog,
+            "layers",
+        )?;
+        visual_priorities.retain(|priority| {
+            !priority.objects.is_empty() || !priority.animations.is_empty()
+        });
+        crate::lib_authoring_parse_order::validate_layer_priorities(
+            &visual_priorities,
+            &catalog,
+            "layers",
+        )?;
+        catalog.visual_order = VisualOrderDef {
+            direction_priority,
+            priorities: visual_priorities,
+        };
         for entry in &model.catalog_entries {
             for selector in &entry.semantics.selectors {
                 project_selector_occurrence(selector, &catalog, &mut recognition);
@@ -1616,7 +1641,7 @@ fn catalog_value_set<'a>(catalog: &'a Catalog, name: &str) -> Option<&'a Vec<Str
 }
 
 fn is_builtin_value_set(name: &str) -> bool {
-    puzzle_authoring::is_absolute_direction_set(name) || name == "slots"
+    puzzle_authoring::is_absolute_direction_set(name) || name == "layers"
 }
 
 fn looks_like_condition_expr(expr: &str) -> bool {
@@ -1795,6 +1820,9 @@ fn parse_layers_block(
     catalog: &mut Catalog,
     pending_groups: &[PendingGroupDefinition],
     resolved_groups: &mut HashSet<String>,
+    direction_priority: &mut Option<Vec<String>>,
+    visual_priorities: &mut Vec<VisualOrderPriorityDef>,
+    allow_merge: bool,
 ) -> Result<usize, DiagnosticReport> {
     let used_groups = predeclare_layer_block_objects(lines, start, pending_groups, catalog)?;
     resolve_pending_group_definitions(
@@ -1812,6 +1840,65 @@ fn parse_layers_block(
             continue;
         }
         match tokens.as_slice() {
+            ["priority", "=", directions @ ..] => {
+                if !allow_merge {
+                    return Err(parse_error(
+                        &lines[i],
+                        "directional priority belongs directly to layers, not merge",
+                    ));
+                }
+                if directions.is_empty() {
+                    return Err(parse_error(
+                        &lines[i],
+                        "layers priority requires direction names",
+                    ));
+                }
+                if direction_priority
+                    .replace(directions.iter().map(|value| (*value).to_string()).collect())
+                    .is_some()
+                {
+                    return Err(parse_error(
+                        &lines[i],
+                        "layers may declare directional priority only once",
+                    ));
+                }
+            }
+            ["merge"] if is_block_header_line(&lines[i]) => {
+                if !allow_merge {
+                    return Err(parse_error(&lines[i], "layers merge cannot be nested"));
+                }
+                let mut merged_rows = Vec::new();
+                let next = parse_layers_block(
+                    lines,
+                    i + 1,
+                    named_layers,
+                    layer_count,
+                    catalog,
+                    pending_groups,
+                    resolved_groups,
+                    direction_priority,
+                    &mut merged_rows,
+                    false,
+                )?;
+                if merged_rows.is_empty() {
+                    return Err(parse_error(&lines[i], "layers merge must not be empty"));
+                }
+                let mut objects = Vec::new();
+                let mut animations = Vec::new();
+                for row in merged_rows {
+                    objects.extend(row.objects);
+                    animations.extend(row.animations);
+                }
+                objects.sort();
+                animations.sort();
+                push_visual_priority(visual_priorities, VisualOrderPriorityDef {
+                    objects,
+                    animations,
+                    merge: true,
+                });
+                i = next;
+                continue;
+            }
             ["for", ..] => {
                 let value_sets = catalog_value_sets(catalog);
                 let expansion = expand_for_block_lines(
@@ -1831,6 +1918,9 @@ fn parse_layers_block(
                         catalog,
                         pending_groups,
                         resolved_groups,
+                        direction_priority,
+                        visual_priorities,
+                        allow_merge,
                     )?;
                     if parsed_i != expanded_lines.len() {
                         return Err(parse_error(&lines[i], "for expansion failed"));
@@ -1839,50 +1929,100 @@ fn parse_layers_block(
                 i = expansion.next;
                 continue;
             }
-            _ => match puzzle_authoring::slot_row_surface(&lines[i]) {
-                Some(puzzle_authoring::SlotRowSurface::Each { selectors }) => {
+            _ => {
+                let row = parse_layer_row(&lines[i])?;
+                if row.each {
+                    if !row.animations.is_empty() {
+                        return Err(parse_error(
+                            &lines[i],
+                            "each layer row cannot contain animation references",
+                        ));
+                    }
+                    let first_layer = layer_count.unwrap_or(0);
                     assign_selectors_to_separate_layers(
-                        &selectors,
+                        &row.state_selectors,
                         &lines[i],
                         named_layers,
                         layer_count,
                         catalog,
                     )?;
+                    let next_layer = layer_count.unwrap_or(first_layer);
+                    for layer in first_layer..next_layer {
+                        let priority = visual_priority_for_state_layer(
+                            layer,
+                            Vec::new(),
+                            false,
+                            catalog,
+                        )?;
+                        push_visual_priority(visual_priorities, priority);
+                    }
+                } else if let Some(name) = row.name {
+                    let objects = if row.state_selectors.is_empty() {
+                        Vec::new()
+                    } else {
+                        let layer = layer_id_for_name(
+                            name,
+                            &lines[i],
+                            named_layers,
+                            layer_count,
+                            catalog,
+                        )?;
+                        define_or_assign_terms_to_layer(
+                            &row.state_selectors,
+                            &lines[i],
+                            layer,
+                            catalog,
+                        )?;
+                        register_layer_tag_from_layer(name, layer, catalog);
+                        visual_priority_for_state_layer(
+                            layer,
+                            Vec::new(),
+                            false,
+                            catalog,
+                        )?
+                        .objects
+                    };
+                    push_visual_priority(visual_priorities, VisualOrderPriorityDef {
+                        objects,
+                        animations: row.animations,
+                        merge: false,
+                    });
+                } else {
+                    let objects = if row.state_selectors.is_empty() {
+                        Vec::new()
+                    } else {
+                        let layer = anonymous_layer_id(named_layers, layer_count);
+                        define_or_assign_terms_to_layer(
+                            &row.state_selectors,
+                            &lines[i],
+                            layer,
+                            catalog,
+                        )?;
+                        visual_priority_for_state_layer(
+                            layer,
+                            Vec::new(),
+                            false,
+                            catalog,
+                        )?
+                        .objects
+                    };
+                    if objects.is_empty() && row.animations.is_empty() {
+                        return Err(parse_error(&lines[i], "layer row must not be empty"));
+                    }
+                    push_visual_priority(visual_priorities, VisualOrderPriorityDef {
+                        objects,
+                        animations: row.animations,
+                        merge: false,
+                    });
                 }
-                Some(puzzle_authoring::SlotRowSurface::Named(assignment)) => {
-                    let layer = layer_id_for_name(
-                        assignment.name,
-                        &lines[i],
-                        named_layers,
-                        layer_count,
-                        catalog,
-                    )?;
-                    define_or_assign_terms_to_layer(
-                        &assignment.selectors,
-                        &lines[i],
-                        layer,
-                        catalog,
-                    )?;
-                    register_layer_tag_from_layer(assignment.name, layer, catalog);
-                }
-                Some(puzzle_authoring::SlotRowSurface::Anonymous { selectors }) => {
-                    assign_selectors_to_anonymous_layer(
-                        &selectors,
-                        &lines[i],
-                        named_layers,
-                        layer_count,
-                        catalog,
-                    )?;
-                }
-                None => return Err(parse_error(&lines[i], "invalid layer row")),
-            },
+            }
         }
         i += 1;
     }
     if i >= lines.len() {
         return Err(parse_error(
             &lines[start - 1],
-            "slots missing closing brace",
+            "layers missing closing brace",
         ));
     }
     Ok(i + 1)
@@ -1925,6 +2065,22 @@ fn collect_layer_block_terms(
             continue;
         }
         match tokens.as_slice() {
+            ["priority", "=", ..] => {
+                i += 1;
+                continue;
+            }
+            ["merge"] if is_block_header_line(&lines[i]) => {
+                let next = collect_layer_block_terms(
+                    lines,
+                    i + 1,
+                    pending_groups,
+                    catalog,
+                    terms,
+                    used_groups,
+                )?;
+                i = next;
+                continue;
+            }
             ["for", ..] => {
                 let value_sets = catalog_value_sets(catalog);
                 let expansion = expand_for_block_lines(
@@ -1952,15 +2108,14 @@ fn collect_layer_block_terms(
                 continue;
             }
             _ => {
-                let selectors = match puzzle_authoring::slot_row_surface(&lines[i]) {
-                    Some(puzzle_authoring::SlotRowSurface::Each { selectors })
-                    | Some(puzzle_authoring::SlotRowSurface::Anonymous { selectors }) => selectors,
-                    Some(puzzle_authoring::SlotRowSurface::Named(assignment)) => {
-                        assignment.selectors
-                    }
-                    None => return Err(parse_error(&lines[i], "invalid layer row")),
-                };
-                collect_layer_terms(&selectors, &lines[i], pending_groups, terms, used_groups)?;
+                let row = parse_layer_row(&lines[i])?;
+                collect_layer_terms(
+                    &row.state_selectors,
+                    &lines[i],
+                    pending_groups,
+                    terms,
+                    used_groups,
+                )?;
             }
         }
         i += 1;
@@ -1968,10 +2123,95 @@ fn collect_layer_block_terms(
     if i >= lines.len() {
         return Err(parse_error(
             &lines[start - 1],
-            "slots missing closing brace",
+            "layers missing closing brace",
         ));
     }
     Ok(i + 1)
+}
+
+struct ParsedLayerRow<'a> {
+    name: Option<&'a str>,
+    each: bool,
+    state_selectors: Vec<&'a str>,
+    animations: Vec<String>,
+}
+
+fn parse_layer_row(line: &str) -> Result<ParsedLayerRow<'_>, DiagnosticReport> {
+    let row = puzzle_authoring::slot_row_surface(line)
+        .ok_or_else(|| parse_error(line, "invalid layer row"))?;
+    let (name, each, selectors) = match row {
+        puzzle_authoring::SlotRowSurface::Each { selectors } => (None, true, selectors),
+        puzzle_authoring::SlotRowSurface::Named(assignment) => {
+            (Some(assignment.name), false, assignment.selectors)
+        }
+        puzzle_authoring::SlotRowSurface::Anonymous { selectors } => (None, false, selectors),
+    };
+    let mut state_selectors = Vec::new();
+    let mut animations = Vec::new();
+    for selector in selectors {
+        if let Some(animation) = selector.strip_prefix('!') {
+            if animation.is_empty() || animation.starts_with('!') {
+                return Err(parse_error(
+                    line,
+                    "animation layer reference must be !<visual>",
+                ));
+            }
+            animations.push(animation.to_string());
+        } else {
+            state_selectors.push(selector);
+        }
+    }
+    Ok(ParsedLayerRow {
+        name,
+        each,
+        state_selectors,
+        animations,
+    })
+}
+
+fn visual_priority_for_state_layer(
+    layer: u16,
+    animations: Vec<String>,
+    merge: bool,
+    catalog: &Catalog,
+) -> Result<VisualOrderPriorityDef, DiagnosticReport> {
+    let layer = LayerId(layer);
+    let mut objects = catalog
+        .object_defs
+        .iter()
+        .filter_map(|object| (object.layer_id == layer).then_some(object.id))
+        .collect::<Vec<_>>();
+    objects.sort_by_key(|object| object.0);
+    let objects = objects
+        .into_iter()
+        .map(|object| {
+            catalog
+                .object_labels
+                .get(&object)
+                .cloned()
+                .ok_or_else(|| DiagnosticReport::error("layer object is missing its name"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(VisualOrderPriorityDef {
+        objects,
+        animations,
+        merge,
+    })
+}
+
+fn push_visual_priority(
+    priorities: &mut Vec<VisualOrderPriorityDef>,
+    priority: VisualOrderPriorityDef,
+) {
+    for previous in priorities.iter_mut() {
+        previous
+            .objects
+            .retain(|object| !priority.objects.contains(object));
+    }
+    priorities.retain(|previous| {
+        !previous.objects.is_empty() || !previous.animations.is_empty()
+    });
+    priorities.push(priority);
 }
 
 fn collect_layer_terms(
@@ -2275,17 +2515,6 @@ fn resolve_or_declare_layer_selector(
     Ok(declared)
 }
 
-fn assign_selectors_to_anonymous_layer(
-    selectors: &[&str],
-    line: &str,
-    named_layers: &mut HashMap<String, u16>,
-    layer_count: &mut Option<u16>,
-    catalog: &mut Catalog,
-) -> Result<Vec<ObjectId>, DiagnosticReport> {
-    let layer = anonymous_layer_id(named_layers, layer_count);
-    define_or_assign_terms_to_layer(selectors, line, layer, catalog)
-}
-
 fn push_unique_object(objects: &mut Vec<ObjectId>, object: ObjectId) {
     if !objects.contains(&object) {
         objects.push(object);
@@ -2349,7 +2578,7 @@ fn refresh_layer_tags_and_value_sets(named_layers: &HashMap<String, u16>, catalo
     }
     catalog
         .value_sets
-        .insert("slots".to_string(), values.clone());
+        .insert("layers".to_string(), values.clone());
 }
 
 fn internal_layer_group_name(layer: u16) -> String {

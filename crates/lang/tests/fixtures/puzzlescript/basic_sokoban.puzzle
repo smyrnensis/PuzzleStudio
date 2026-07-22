@@ -1,9 +1,24 @@
 title = "Basic PS Sokoban"
 
+scene title {
+layout {
+heading "Basic PS Sokoban"
+if has_progress_save {
+choice "Continue" -> {
+goto playing
+}
+}
+choice "New Game" -> {
+clear_game_progress
+start playing
+}
+}
+}
+
 theme = "puzzlescript"
 
 puzzle main {
-slots {
+layers {
 layer1 = Background
 layer2 = Target
 layer3 = Player Wall Crate
@@ -92,21 +107,6 @@ T = Target Background
 #PABTA#
 #AA*AA#
 #######
-}
-}
-
-scene title {
-layout {
-heading "Basic PS Sokoban"
-if has_progress_save {
-choice "Continue" -> {
-goto playing
-}
-}
-choice "New Game" -> {
-clear_game_progress
-start playing
-}
 }
 }
 

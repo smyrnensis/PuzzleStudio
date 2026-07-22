@@ -272,6 +272,13 @@ fn project_rule_condition<const FROM: usize, const TO: usize, Error>(
                 })
                 .collect::<Result<_, _>>()?,
         ),
+        GridRuleCondition::RuleMatches { guards, pattern } => GridRuleCondition::RuleMatches {
+            guards: guards
+                .iter()
+                .map(|guard| project_guard(guard, project_vector))
+                .collect::<Result<_, _>>()?,
+            pattern: project_pattern(pattern, project_vector)?,
+        },
     })
 }
 

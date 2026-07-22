@@ -20,12 +20,23 @@ if (initialPuzzle3PreviewSurface) {
 /* puzzle-host:optional:puzzle3:end */
 document.documentElement.classList.toggle("is-component-embed", componentEmbedMode || Boolean(initialPuzzle3PreviewSurface));
 document.body.classList.toggle("is-component-embed", componentEmbedMode || Boolean(initialPuzzle3PreviewSurface));
-const messageQueue = [];
-let messagePopup = null;
 let clientPendingWaits = 0;
 let activeThemeClass = "";
 const activeThemeVariables = new Set();
 const activationConfirmDelayMs = 160;
+const STANDARD_COMPONENT_DEFINITIONS = Object.freeze([Object.freeze({
+  name: "standard.message",
+  layout: {},
+  events: Object.freeze({
+    dismiss: Object.freeze({ pointer: true, keys: "input" }),
+  }),
+  components: Object.freeze([Object.freeze({
+    kind: "text",
+    role: "body",
+    source: "path",
+    path: Object.freeze(["text"]),
+  })]),
+})]);
 
 class PuzzleSoundRuntime {
   constructor() {
@@ -404,7 +415,7 @@ function render(state) {
     state.busy = state.busy === true || clientPendingWaits > 0;
     state.presentationEvents = [];
   }
-  renderSceneStack(state);
+  renderSurface(state);
   scheduleScreenScaleSync(3);
   notifyPreviewState(state);
   applyPresentationEvents(presentationEvents);
@@ -414,7 +425,7 @@ function firstDisplayError(state) {
   if (state?.scene?.displayError) {
     return String(state.scene.displayError);
   }
-  for (const layer of state?.sceneLayers || []) {
+  for (const layer of state?.surface?.components || []) {
     if (layer?.scene?.displayError) {
       return String(layer.scene.displayError);
     }
@@ -625,53 +636,6 @@ function themeClassName(name) {
   return normalized ? `theme-${normalized}` : "";
 }
 
-function applyMessageEvents(events) {
-  for (const event of events || []) {
-    if (event.kind === "message") {
-      messageQueue.push(String(event.text || ""));
-    }
-  }
-  showNextMessage();
-}
-
-function showNextMessage() {
-  if (messagePopup || messageQueue.length === 0) {
-    return;
-  }
-  const text = messageQueue.shift();
-  const backdrop = document.createElement("div");
-  backdrop.className = "message-popup-backdrop";
-  backdrop.setAttribute("role", "dialog");
-  backdrop.setAttribute("aria-modal", "true");
-
-  const panel = document.createElement("div");
-  panel.className = "message-popup";
-  const body = document.createElement("p");
-  body.className = "message-popup-text";
-  body.textContent = text;
-  panel.append(body);
-  backdrop.append(panel);
-  backdrop.tabIndex = -1;
-  backdrop.addEventListener("pointerdown", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    backdrop.focus({ preventScroll: true });
-  });
-  shell.append(backdrop);
-  messagePopup = backdrop;
-  backdrop.focus();
-}
-
-function closeMessagePopup() {
-  if (!messagePopup) {
-    return;
-  }
-  messagePopup.remove();
-  messagePopup = null;
-  focusShell();
-  showNextMessage();
-}
-
 function notifyPreviewState(_state) {
 }
 
@@ -699,7 +663,7 @@ function notifyPreviewState(state) {
     rawScene: state.rawScene,
     scene: state.scene,
     inputs: state.inputs,
-    screen: state.currentScene || state.screen,
+    screen: focusedComponentName(state),
     screenHasPuzzle: currentSceneAcceptsModelInput() || Boolean(state.scene),
     theme: state.theme || puzzleBoot.theme || null,
   }, "*");
@@ -709,7 +673,7 @@ function notifySceneEditorPreview(requestId = sceneEditorPreview?.requestId || "
   if (window.parent === window || !sceneEditorPreview) {
     return;
   }
-  const sceneName = sceneEditorPreview.sceneName || currentState?.currentScene || currentState?.screen || "";
+  const sceneName = sceneEditorPreview.sceneName || focusedComponentName(currentState);
   const sceneDef = sceneDefByName(sceneName);
   const layout = mergedScenePreviewLayout(sceneDef, sceneEditorPreview.layout);
   window.parent.postMessage({
@@ -729,7 +693,7 @@ function notifySceneEditorPreview(requestId = sceneEditorPreview?.requestId || "
 }
 
 function renderSceneEditorPreview(config = {}) {
-  const sceneName = String(config.scene?.name || config.sceneName || currentState?.currentScene || currentState?.screen || "").trim();
+  const sceneName = String(config.scene?.name || config.sceneName || focusedComponentName(currentState)).trim();
   const sceneDef = sceneDefByName(sceneName);
   sceneEditorPreview = {
     requestId: String(config.requestId || ""),
@@ -747,17 +711,24 @@ function renderSceneEditorPreview(config = {}) {
   const existingLayer = sceneLayers(baseState).find((layer) => layer.name === sceneName);
   const previewState = {
     ...baseState,
-    currentScene: sceneName,
-    screen: sceneName,
     theme: sceneEditorPreview.theme,
     sceneState: sceneEditorPreview.state || existingLayer?.sceneState || existingLayer?.state || baseState.sceneState || {},
-    sceneLayers: [{
-      name: sceneName,
-      focused: true,
-      scene: existingLayer?.scene || baseState.scene || null,
-      sceneState: sceneEditorPreview.state || existingLayer?.sceneState || existingLayer?.state || baseState.sceneState || {},
-      scenePuzzles: existingLayer?.scenePuzzles || baseState.scenePuzzles || [],
-    }],
+    surface: {
+      root: sceneName,
+      focus: sceneName,
+      components: [{
+        id: sceneName,
+        definition: sceneName,
+        placement: "root",
+        visibility: "visible",
+        modal: false,
+        name: sceneName,
+        focused: true,
+        scene: existingLayer?.scene || baseState.scene || null,
+        sceneState: sceneEditorPreview.state || existingLayer?.sceneState || existingLayer?.state || baseState.sceneState || {},
+        scenePuzzles: existingLayer?.scenePuzzles || baseState.scenePuzzles || [],
+      }],
+    },
   };
   currentState = previewState;
   window.__PuzzleCurrentState = previewState;
@@ -769,7 +740,7 @@ function renderSceneEditorPreview(config = {}) {
 
 function renderSceneEditorLayer(sceneDef, state) {
   screenView.replaceChildren();
-  const layer = state.sceneLayers[0];
+  const layer = sceneLayers(state)[0];
   const components = sceneDef?.components || [];
   const scope = {
     __sceneLayer: layer,
@@ -902,7 +873,7 @@ function sceneEditorComponentMeta(component, path, scope = {}) {
 }
 /* puzzle-host:optional:scene-editor:end */
 
-function renderSceneStack(state) {
+function renderSurface(state) {
   screenView.replaceChildren();
 
   const layers = sceneLayers(state);
@@ -917,28 +888,68 @@ function renderSceneStack(state) {
   /* puzzle-host:optional:puzzle3:end */
   screenView.classList.toggle("has-scene-stack", layers.length > 1);
   for (const [index, layer] of layers.entries()) {
-    const sceneDef = sceneDefByName(layer.name);
+    if (layer.visibility === "hidden") {
+      continue;
+    }
+    const sceneDef = componentDefinitionByName(layer.definition || layer.name);
+    if (!sceneDef) {
+      throw new Error(`Unsupported presented component definition: ${String(layer.definition || layer.name || "")}`);
+    }
     const components = sceneDef?.components || [];
     const scope = {
       __sceneLayer: layer,
       __sceneDef: sceneDef,
       __sceneState: layer.sceneState || layer.state || {},
+      __componentProperties: layer.properties || {},
       __standardChoiceCounter: { value: 0 },
     };
 
     const layerEl = document.createElement("div");
     layerEl.className = "scene-layer";
     layerEl.classList.toggle("is-focused", layer.focused === true);
+    layerEl.classList.toggle("is-modal", layer.modal === true);
     layerEl.classList.toggle("has-ratio-content", components.some((component) => componentContainsSizingKind(component, "ratio")));
     layerEl.style.zIndex = String(10 + index);
+    if (layer.modal === true) {
+      layerEl.setAttribute("role", "dialog");
+      layerEl.setAttribute("aria-modal", "true");
+      layerEl.tabIndex = -1;
+    }
     applySceneLayout(layerEl, sceneDef?.layout, { root: true });
-    renderSurfaceComponents(components, layerEl, scope);
+    const contentRoot = layer.modal === true ? document.createElement("div") : layerEl;
+    if (contentRoot !== layerEl) {
+      contentRoot.className = "surface-modal-panel";
+      layerEl.append(contentRoot);
+    }
+    renderSurfaceComponents(components, contentRoot, scope);
+    bindAwaitedComponentEvent(layerEl, layer, sceneDef);
     markSingleFrameComponentLayer(layerEl);
     screenView.append(layerEl);
+    if (layer.modal === true) {
+      queueMicrotask(() => layerEl.focus({ preventScroll: true }));
+    }
   }
   syncCleanControlGroupWidths(screenView);
   fitPuzzleFrameComponents(screenView);
   scrollSelectedChoiceIntoView(screenView);
+}
+
+function bindAwaitedComponentEvent(root, instance, definition) {
+  const eventName = instance.awaitEvent;
+  if (!eventName) {
+    return;
+  }
+  const binding = definition.events?.[eventName];
+  if (!binding) {
+    throw new Error(`Component definition ${definition.name} does not declare awaited event ${eventName}`);
+  }
+  if (binding.pointer === true) {
+    root.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      sendComponentEvent(instance.id, eventName);
+    });
+  }
 }
 
 function markSingleFrameComponentLayer(layerEl) {
@@ -1063,17 +1074,18 @@ function syncVisualThemeForSceneStack(layers) {
 }
 
 function sceneLayers(state) {
-  if (Array.isArray(state?.sceneLayers) && state.sceneLayers.length > 0) {
-    return state.sceneLayers;
+  if (!state?.surface || !Array.isArray(state.surface.components)) {
+    throw new Error("Runtime snapshot is missing the required surface component contract");
   }
-  const name = state?.currentScene || state?.screen || "playing";
-  return [{
-    name,
-    focused: true,
-    scene: state?.scene || null,
-    sceneState: state?.sceneState || {},
-    scenePuzzles: state?.scenePuzzles || [],
-  }];
+  return state.surface.components;
+}
+
+function focusedComponentName(state = currentState) {
+  const focus = state?.surface?.focus;
+  if (typeof focus !== "string" || focus.length === 0) {
+    throw new Error("Runtime snapshot is missing the required surface focus");
+  }
+  return focus;
 }
 
 function sceneHasComponent(scene, kind) {
@@ -1247,7 +1259,7 @@ function renderPuzzle(component, scope = {}) {
   root.className = "board";
   root.dataset.frameComponent = "true";
   root.dataset.source = component.source || "";
-  root.dataset.scene = layer?.name || currentState?.currentScene || currentState?.screen || "";
+  root.dataset.scene = layer?.name || focusedComponentName(currentState);
   const key = `${root.dataset.scene}:${root.dataset.source}`;
   const renderer = new window.PuzzleRenderer(root, {
     renderMode: "canvas",
@@ -1263,7 +1275,7 @@ function renderPuzzle3Frame(component, scope = {}) {
   if (!window.Puzzle3DFrameFixture || !window.Puzzle3DFrameAssets || !window.Puzzle3Component) {
     throw new Error("Puzzle3 component assets are unavailable.");
   }
-  const sceneName = scope.__sceneDef?.name || scope.__sceneLayer?.name || currentState?.currentScene || currentState?.screen || "playing";
+  const sceneName = scope.__sceneDef?.name || scope.__sceneLayer?.name || focusedComponentName(currentState);
   const source = component.source || "board";
   const key = `${sceneName}:${source}`;
   let entry = puzzle3Controllers.get(key);
@@ -1417,7 +1429,7 @@ function setPuzzle3PreviewSurface(update = null) {
   document.documentElement.classList.toggle("is-component-embed", embed);
   document.body.classList.toggle("is-component-embed", embed);
   if (currentState) {
-    renderSceneStack(currentState);
+    renderSurface(currentState);
   }
 }
 
@@ -1520,7 +1532,22 @@ function puzzle3PreviewSurfaceFixture(source, sceneName) {
     name: previewSceneName,
     components: [surface.component || { kind: "puzzle3", source: "__editor_model_preview__" }],
   }];
-  next.currentScene = previewSceneName;
+  next.surface = {
+    root: previewSceneName,
+    focus: previewSceneName,
+    components: [{
+      id: previewSceneName,
+      definition: previewSceneName,
+      name: previewSceneName,
+      placement: "root",
+      visibility: "visible",
+      modal: false,
+      focused: true,
+      scene: null,
+      sceneState: {},
+      scenePuzzles: [],
+    }],
+  };
   return next;
 }
 
@@ -1894,6 +1921,9 @@ function resolveViewPath(path, scope = {}) {
     ? scope[parts[0]]
     : currentState?.[parts[0]];
   if (value === undefined) {
+    value = scope.__componentProperties?.[parts[0]];
+  }
+  if (value === undefined) {
     value = (scope.__sceneState || currentState?.sceneState)?.[parts[0]];
   }
   if (value === undefined) {
@@ -1993,7 +2023,7 @@ function focusShell() {
   shell.focus({ preventScroll: true });
 }
 
-function isMessageDismissKey(event) {
+function isModalDismissKey(event) {
   const rawKey = String(event.key || "");
   const key = normalizedKeyName(rawKey);
   if (rawKey === "Enter"
@@ -2005,6 +2035,17 @@ function isMessageDismissKey(event) {
     return false;
   }
   return effectsForKey(event).length > 0;
+}
+
+function componentEventAcceptsKey(binding, event) {
+  if (binding?.keys === "input") {
+    return isModalDismissKey(event);
+  }
+  if (Array.isArray(binding?.keys)) {
+    const key = normalizedKeyName(String(event.key || ""));
+    return binding.keys.includes(key);
+  }
+  return false;
 }
 
 function standardSessionActionForKey(key) {
@@ -2101,19 +2142,22 @@ function inputByName(name) {
 
 function currentSceneDef() {
   const source = currentState || puzzleBoot || {};
-  const name = source.currentScene || source.screen || "playing";
-  const scenes = sceneDefinitionsForSource(source);
-  return scenes.find((scene) => scene.name === name) || null;
+  const name = focusedComponentName(source);
+  return componentDefinitionByName(name, source);
+}
+
+function componentDefinitionByName(name, source = currentState || puzzleBoot || {}) {
+  const definitions = componentDefinitionsForSource(source);
+  return definitions.find((definition) => definition.name === name) || null;
 }
 
 function sceneDefByName(name) {
   const source = currentState || puzzleBoot || {};
-  const scenes = sceneDefinitionsForSource(source);
-  return scenes.find((scene) => scene.name === name) || null;
+  return componentDefinitionByName(name, source);
 }
 
-function sceneDefinitionsForSource(source) {
-  return nonEmptyArray(source?.scenes) || nonEmptyArray(source?.screens) || [];
+function componentDefinitionsForSource(source) {
+  return [...(nonEmptyArray(source?.scenes) || []), ...STANDARD_COMPONENT_DEFINITIONS];
 }
 
 function nonEmptyArray(value) {
@@ -2154,6 +2198,10 @@ async function sendSceneEffect(effect) {
   await postSessionAction({ kind: "scene_effect", effect });
 }
 
+async function sendComponentEvent(instance, event) {
+  await postSessionAction({ kind: "component_event", instance, event });
+}
+
 function applyPresentationEvents(events) {
   for (const event of events || []) {
     if (event.kind === "wait") {
@@ -2179,15 +2227,11 @@ function dispatchNextPresentationEvent() {
       startPresentationWait(event);
       return;
     }
-    if (event.kind === "message") {
-      applyMessageEvents([event]);
-    } else if (event.kind === "animation") {
-      const animations = [event.animation];
-      while (pendingPresentationEvents[0]?.kind === "animation"
-        && samePresentationContext(event, pendingPresentationEvents[0])) {
-        animations.push(pendingPresentationEvents.shift().animation);
+    if (event.kind === "animation_batch") {
+      if (!Array.isArray(event.animations) || event.animations.length === 0) {
+        throw new Error("Animation batch must contain at least one animation event.");
       }
-      applyPresentationAnimations(event, animations);
+      applyPresentationAnimations(event, event.animations);
     } else {
       soundRuntime.applyEvents([event]);
     }
@@ -2222,16 +2266,10 @@ async function resumePendingSessionTurn() {
   }
 }
 
-function samePresentationContext(left, right) {
-  return left.scene === right.scene
-    && left.puzzle === right.puzzle
-    && left.levelIndex === right.levelIndex;
-}
-
 function applyPresentationAnimations(event, animations) {
   const currentPuzzles = currentState?.scenePuzzles || [];
   if (!currentState
-    || currentState.currentScene !== event.scene
+    || focusedComponentName(currentState) !== event.scene
     || currentState.levelIndex !== event.levelIndex
     || !currentPuzzles.includes(event.puzzle)) {
     return;
@@ -2247,7 +2285,7 @@ function applyPresentationAnimations(event, animations) {
     currentState.scene.animationEvents = animations;
     currentState.scene.animationBatchId = batchId;
   }
-  const layer = (currentState.sceneLayers || []).find((candidate) =>
+  const layer = sceneLayers(currentState).find((candidate) =>
     (candidate?.name === event.scene || candidate?.scene?.name === event.scene)
       && (candidate?.scenePuzzles || []).includes(event.puzzle)
   );
@@ -2255,7 +2293,7 @@ function applyPresentationAnimations(event, animations) {
     layer.scene.animationEvents = animations;
     layer.scene.animationBatchId = batchId;
   }
-  renderSceneStack(currentState);
+  renderSurface(currentState);
 }
 
 function startPresentationWait(event) {
@@ -2657,9 +2695,19 @@ function commandPayload(value) {
 }
 
 function dispatchKeyboardInput(event) {
-  if (messagePopup) {
-    if (isMessageDismissKey(event)) {
-      closeMessagePopup();
+  const modal = activeModalComponent(currentState);
+  if (modal) {
+    const definition = componentDefinitionByName(modal.definition || modal.name);
+    const eventName = modal.awaitEvent;
+    if (!definition || !eventName) {
+      throw new Error("Active modal component is missing its definition or awaited event");
+    }
+    const binding = definition.events?.[eventName];
+    if (!binding) {
+      throw new Error(`Component definition ${definition.name} does not declare awaited event ${eventName}`);
+    }
+    if (componentEventAcceptsKey(binding, event)) {
+      sendComponentEvent(modal.id, eventName);
     }
     return true;
   }
@@ -2679,6 +2727,16 @@ function dispatchKeyboardInput(event) {
     sendResolvedInput(effect);
   }
   return true;
+}
+
+function activeModalComponent(state) {
+  const components = state?.surface?.components;
+  if (!Array.isArray(components)) {
+    return null;
+  }
+  return [...components]
+    .reverse()
+    .find((component) => component.modal === true && component.visibility !== "hidden") || null;
 }
 
 document.addEventListener("keydown", (event) => {
@@ -2710,7 +2768,7 @@ function notifyPreviewDebugTrace(debug, snapshot) {
     debug: debug || null,
     snapshot: snapshot || null,
     levelIndex: snapshot?.levelIndex ?? null,
-    scene: snapshot?.scene || snapshot?.currentScene || "",
+    scene: snapshot ? focusedComponentName(snapshot) : "",
   }, "*");
 }
 

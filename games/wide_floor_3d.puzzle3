@@ -20,7 +20,7 @@ dimension = 3
     }
   }
 
-  slots {
+  layers {
     floor = FloorA FloorB
     actor = Player
   }

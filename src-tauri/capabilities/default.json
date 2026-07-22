@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Default desktop capability for the PuzzleStudio editor window.",
   "windows": ["main"],
-  "permissions": ["core:default", "core:window:allow-destroy"]
+  "permissions": ["core:default"]
 }

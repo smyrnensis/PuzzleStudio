@@ -6,7 +6,7 @@ fn game_with_rule(rule: &str) -> Result<puzzle_lang::LoadedGame, puzzle_lang::Di
 title = set_binding_contract
 
 puzzle default {{
-slots {{
+layers {{
 a = A
 b = B
 c = C
