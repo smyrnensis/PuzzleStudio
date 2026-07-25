@@ -10,6 +10,7 @@ pub(crate) enum AuthoringKind {
     PuzzleRenderConfig,
     PuzzleRenderGridConfig,
     PuzzleRenderCameraConfig,
+    PuzzleRenderLightingConfig,
     PuzzleRenderPixelateConfig,
     PuzzleRenderViewportConfig,
     SoundsConfig,
@@ -766,6 +767,38 @@ const PUZZLE_RENDER_CAMERA_CONFIG_DEFINITIONS: &[DefinitionSpec] = &[
         AuthoringSurfaceRole::Literal,
     ),
 ];
+const PUZZLE_RENDER_LIGHTING_CONFIG_DEFINITIONS: &[DefinitionSpec] = &[
+    DefinitionSpec::value_role(
+        "intensity",
+        DefinitionValueSpec::One,
+        DefinitionValueSyntax::Number,
+        AuthoringSurfaceRole::Number,
+    ),
+    DefinitionSpec::value_role(
+        "ambient",
+        DefinitionValueSpec::One,
+        DefinitionValueSyntax::Number,
+        AuthoringSurfaceRole::Number,
+    ),
+    DefinitionSpec::value_role(
+        "yaw",
+        DefinitionValueSpec::One,
+        DefinitionValueSyntax::Number,
+        AuthoringSurfaceRole::Number,
+    ),
+    DefinitionSpec::value_role(
+        "pitch",
+        DefinitionValueSpec::One,
+        DefinitionValueSyntax::Number,
+        AuthoringSurfaceRole::Number,
+    ),
+    DefinitionSpec::value_role(
+        "color",
+        DefinitionValueSpec::One,
+        DefinitionValueSyntax::Color,
+        AuthoringSurfaceRole::Color,
+    ),
+];
 const PUZZLE_RENDER_PIXELATE_CONFIG_DEFINITIONS: &[DefinitionSpec] = &[
     DefinitionSpec::value_role(
         "enabled",
@@ -996,6 +1029,12 @@ const PUZZLE_RENDER_CAMERA_HEADER: HeaderSpec = HeaderSpec {
     usage: "camera",
     arg_roles: NO_HEADER_ARGS,
 };
+const PUZZLE_RENDER_LIGHTING_HEADER: HeaderSpec = HeaderSpec {
+    min_args: 0,
+    max_args: 0,
+    usage: "lighting",
+    arg_roles: NO_HEADER_ARGS,
+};
 const PUZZLE_RENDER_PIXELATE_HEADER: HeaderSpec = HeaderSpec {
     min_args: 0,
     max_args: 0,
@@ -1117,6 +1156,18 @@ pub(crate) const KIND_SPECS: &[KindSpec] = &[
         keyword_role: AuthoringSurfaceRole::Keyword,
         outline_policy: AuthoringOutlinePolicy::Visible,
         missing_close_message: "camera block missing closing brace",
+    },
+    KindSpec {
+        kind: AuthoringKind::PuzzleRenderLightingConfig,
+        header: PUZZLE_RENDER_LIGHTING_HEADER,
+        definitions: PUZZLE_RENDER_LIGHTING_CONFIG_DEFINITIONS,
+        rows: NO_ROWS,
+        body: AuthoringBody::None,
+        symbol_exports: NO_SYMBOL_EXPORTS,
+        block_role: None,
+        keyword_role: AuthoringSurfaceRole::Keyword,
+        outline_policy: AuthoringOutlinePolicy::Visible,
+        missing_close_message: "lighting block missing closing brace",
     },
     KindSpec {
         kind: AuthoringKind::PuzzleRenderPixelateConfig,
@@ -1279,6 +1330,11 @@ pub(crate) const PLACEMENT_SPECS: &[PlacementSpec] = &[
         parent: AuthoringKind::PuzzleRenderConfig,
         surface: "camera",
         child: AuthoringKind::PuzzleRenderCameraConfig,
+    },
+    PlacementSpec {
+        parent: AuthoringKind::PuzzleRenderConfig,
+        surface: "lighting",
+        child: AuthoringKind::PuzzleRenderLightingConfig,
     },
     PlacementSpec {
         parent: AuthoringKind::PuzzleRenderConfig,
@@ -2563,7 +2619,7 @@ mod tests {
         );
         assert_eq!(
             authoring_child_surfaces(AuthoringKind::PuzzleRenderConfig),
-            vec!["grid", "camera", "pixelate", "viewport"]
+            vec!["grid", "camera", "lighting", "pixelate", "viewport"]
         );
         assert_eq!(
             authoring_definition_surfaces(AuthoringKind::PuzzleRenderConfig),
@@ -2572,6 +2628,10 @@ mod tests {
         assert_eq!(
             placed_authoring_kind(AuthoringKind::PuzzleRenderConfig, "camera"),
             Some(AuthoringKind::PuzzleRenderCameraConfig)
+        );
+        assert_eq!(
+            placed_authoring_kind(AuthoringKind::PuzzleRenderConfig, "lighting"),
+            Some(AuthoringKind::PuzzleRenderLightingConfig)
         );
         assert_eq!(
             placed_authoring_kind(AuthoringKind::PuzzleRenderConfig, "pixelate"),

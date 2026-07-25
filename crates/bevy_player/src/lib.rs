@@ -1,0 +1,3047 @@
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
+    error::Error,
+    fmt,
+    sync::Arc,
+};
+
+#[cfg(not(target_arch = "wasm32"))]
+mod audio;
+#[cfg(target_arch = "wasm32")]
+mod web_audio;
+
+use bevy::prelude::*;
+use bevy::{
+    camera::{ClearColorConfig, visibility::RenderLayers},
+    ecs::message::MessageReader,
+    input::{
+        ButtonState,
+        keyboard::{Key, KeyboardInput},
+        mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit},
+    },
+    text::LineHeight,
+};
+use puzzle_assets::DecodedVisualImageCatalog;
+use puzzle_audio::{
+    AudioCapabilityState, AudioDeviceCommand, AudioDiagnostic, AudioRuntime, AudioVoiceId,
+    CANONICAL_AUDIO_SAMPLE_RATE,
+};
+use puzzle_bevy_renderer::{
+    BevyRenderError, BevyResolvedFrameQueue, BevyResolvedFrameQueue2d, PuzzleBevy2dPlugin,
+    PuzzleBevy2dView, PuzzleBevy3dPlugin, PuzzleBevy3dRenderSettings, PuzzleBevy3dView,
+    PuzzleBevyCamera, PuzzleBevyFramebufferRect, PuzzleBevyLighting, PuzzleBevyPixelate,
+    PuzzleBevyRendererSystems, PuzzleBevyViewId, PuzzleCameraProjection,
+};
+use puzzle_game_runtime::RuntimeSession;
+use puzzle_player_bootstrap::{PlayerBootstrapError, decode_standalone_player_export};
+#[cfg(test)]
+use puzzle_runtime_contract::RuntimeProgressPersistenceOperation;
+use puzzle_runtime_contract::{
+    RuntimeAnimationEvent, RuntimeKeyTrigger, RuntimeLinearRgba, RuntimePresentationEvent,
+    RuntimeProgressSaveRequest, RuntimePuzzle3CameraProjection, RuntimeResolvedRenderFrame,
+    RuntimeResolvedRenderMoment, RuntimeSceneActionToken, RuntimeTheme, RuntimeUiTextStyle,
+    RuntimeViewportSourceId, SessionAction, StandaloneProgressStorage,
+};
+use puzzle_scene::SceneTextRole;
+use puzzle_session_contract::{
+    RuntimeComponentPresentation, RuntimeRendererState, RuntimeResolvedSceneComponent,
+    RuntimeSessionSnapshot,
+};
+
+fn audio_frame(now_seconds: f64) -> u64 {
+    (now_seconds.max(0.0) * f64::from(CANONICAL_AUDIO_SAMPLE_RATE))
+        .floor()
+        .min(u64::MAX as f64) as u64
+}
+
+fn initial_audio_capability() -> AudioCapabilityState {
+    #[cfg(target_arch = "wasm32")]
+    {
+        AudioCapabilityState::Locked
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        AudioCapabilityState::Ready
+    }
+}
+
+#[derive(Debug)]
+pub enum BevyPlayerError {
+    Bootstrap(PlayerBootstrapError),
+    Runtime(String),
+    MissingViewportSource(RuntimeViewportSourceId),
+    MissingViewportLayout(RuntimeViewportSourceId),
+    MissingPresentationTarget(RuntimeViewportSourceId),
+    MissingPrimaryWindow,
+    DuplicateViewportLeaf(RuntimeViewportSourceId),
+    UnsupportedFrameComponent {
+        kind: String,
+        source: String,
+    },
+    ViewportOrderOverflow {
+        count: usize,
+    },
+    ViewportDimensionMismatch {
+        source: RuntimeViewportSourceId,
+        surface: puzzle_session_contract::RuntimeViewportDimension,
+        renderer: &'static str,
+    },
+    TwoDimensionalDisplay {
+        source: RuntimeViewportSourceId,
+        error: String,
+    },
+    Presentation {
+        source: RuntimeViewportSourceId,
+        error: String,
+    },
+    ComponentPresentation {
+        component: String,
+        error: String,
+    },
+    MissingAwaitedEvent {
+        component: String,
+        event: String,
+    },
+    MissingAwaitedEventAction {
+        component: String,
+        event: String,
+    },
+    InvalidCameraZoom {
+        source: RuntimeViewportSourceId,
+        zoom: f64,
+    },
+    Renderer(BevyRenderError),
+}
+
+impl fmt::Display for BevyPlayerError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Bootstrap(error) => error.fmt(formatter),
+            Self::Runtime(error) => write!(formatter, "game runtime failed: {error}"),
+            Self::MissingViewportSource(source) => write!(
+                formatter,
+                "resolved viewport {}.{} has no runtime viewport source",
+                source.component, source.source
+            ),
+            Self::MissingViewportLayout(source) => write!(
+                formatter,
+                "resolved viewport {}.{} has no non-empty Bevy UI layout rectangle",
+                source.component, source.source
+            ),
+            Self::MissingPresentationTarget(source) => write!(
+                formatter,
+                "presentation event targets missing viewport source {}.{}",
+                source.component, source.source
+            ),
+            Self::MissingPrimaryWindow => {
+                write!(
+                    formatter,
+                    "Bevy viewport rendering requires a primary window"
+                )
+            }
+            Self::DuplicateViewportLeaf(source) => write!(
+                formatter,
+                "viewport source {}.{} is mounted by more than one resolved UI leaf",
+                source.component, source.source
+            ),
+            Self::UnsupportedFrameComponent { kind, source } => write!(
+                formatter,
+                "resolved `{kind}` frame component `{source}` is unsupported by the Bevy player; use a typed viewport component"
+            ),
+            Self::ViewportOrderOverflow { count } => write!(
+                formatter,
+                "resolved surface has {count} viewport leaves, exceeding Bevy camera order capacity"
+            ),
+            Self::ViewportDimensionMismatch {
+                source,
+                surface,
+                renderer,
+            } => write!(
+                formatter,
+                "viewport {}.{} declares {surface:?} on the surface but resolves to {renderer}",
+                source.component, source.source
+            ),
+            Self::TwoDimensionalDisplay { source, error } => write!(
+                formatter,
+                "2D presentation for {}.{} failed: {error}",
+                source.component, source.source
+            ),
+            Self::Presentation { source, error } => write!(
+                formatter,
+                "presentation for {}.{} failed: {error}",
+                source.component, source.source
+            ),
+            Self::ComponentPresentation { component, error } => {
+                write!(
+                    formatter,
+                    "component {component} presentation failed: {error}"
+                )
+            }
+            Self::MissingAwaitedEvent { component, event } => write!(
+                formatter,
+                "component {component} awaits undeclared presentation event {event}"
+            ),
+            Self::MissingAwaitedEventAction { component, event } => write!(
+                formatter,
+                "component {component} awaited event {event} has no typed scene action token"
+            ),
+            Self::InvalidCameraZoom { source, zoom } => write!(
+                formatter,
+                "3D viewport {}.{} camera zoom must be finite and greater than zero, got {zoom}",
+                source.component, source.source
+            ),
+            Self::Renderer(error) => write!(formatter, "Bevy renderer failed: {error}"),
+        }
+    }
+}
+
+impl Error for BevyPlayerError {}
+
+impl From<BevyRenderError> for BevyPlayerError {
+    fn from(error: BevyRenderError) -> Self {
+        Self::Renderer(error)
+    }
+}
+
+pub struct LoadedStandaloneBevyPlayer {
+    pub host: PuzzleBevyPlayerHost,
+    pub progress_storage: StandaloneProgressStorage,
+}
+
+pub fn load_standalone_bevy_player(
+    export_json: &str,
+) -> Result<LoadedStandaloneBevyPlayer, BevyPlayerError> {
+    let (runtime, visual_images, progress_storage) = decode_standalone_player_export(export_json)
+        .map_err(BevyPlayerError::Bootstrap)?
+        .into_parts();
+    let host = PuzzleBevyPlayerHost::from_runtime_with_visual_images(runtime, visual_images)?;
+    Ok(LoadedStandaloneBevyPlayer {
+        host,
+        progress_storage,
+    })
+}
+
+#[derive(Clone)]
+struct QueuedPresentationEvent {
+    event: RuntimePresentationEvent,
+}
+
+#[derive(Clone)]
+struct HostViewport {
+    source: RuntimeViewportSourceId,
+    order: isize,
+    renderer: RuntimeRendererState,
+    active_animations: Vec<RuntimeAnimationEvent>,
+    animation_epoch_seconds: f64,
+    continue_animation: bool,
+    needs_frame: bool,
+}
+
+pub struct ResolvedBevyViewportFrame {
+    pub source: RuntimeViewportSourceId,
+    pub renderer: RuntimeRendererState,
+    pub frame: RuntimeResolvedRenderFrame,
+}
+
+pub struct PuzzleBevyPlayerHost {
+    runtime: RuntimeSession,
+    visual_images: Arc<DecodedVisualImageCatalog>,
+    snapshot: RuntimeSessionSnapshot,
+    viewports: BTreeMap<RuntimeViewportSourceId, HostViewport>,
+    pending_presentation: VecDeque<QueuedPresentationEvent>,
+    audio_runtime: AudioRuntime,
+    pending_audio: Vec<AudioDeviceCommand>,
+    resume_after_events: bool,
+    wait_until_seconds: Option<f64>,
+    clip_epoch_seconds: f64,
+    fatal_error: Option<String>,
+}
+
+enum AudioDeviceFeedback {
+    #[cfg(target_arch = "wasm32")]
+    Capability(AudioCapabilityState),
+    VoiceEnded(AudioVoiceId),
+    VoiceFailure {
+        voice: AudioVoiceId,
+        error: String,
+    },
+    #[cfg(target_arch = "wasm32")]
+    DeviceFailure(String),
+}
+
+impl PuzzleBevyPlayerHost {
+    pub fn from_image_free_source(
+        source: &str,
+        puzzle_path: &str,
+    ) -> Result<Self, BevyPlayerError> {
+        Self::from_source_with_visual_images(
+            source,
+            puzzle_path,
+            Arc::new(DecodedVisualImageCatalog::default()),
+        )
+    }
+
+    pub fn from_source_with_visual_images(
+        source: &str,
+        puzzle_path: &str,
+        visual_images: Arc<DecodedVisualImageCatalog>,
+    ) -> Result<Self, BevyPlayerError> {
+        let runtime =
+            RuntimeSession::from_source(source, puzzle_path).map_err(BevyPlayerError::Runtime)?;
+        Self::from_runtime_with_visual_images(runtime, visual_images)
+    }
+
+    pub fn from_image_free_runtime(runtime: RuntimeSession) -> Result<Self, BevyPlayerError> {
+        Self::from_runtime_with_visual_images(
+            runtime,
+            Arc::new(DecodedVisualImageCatalog::default()),
+        )
+    }
+
+    pub fn from_runtime_with_visual_images(
+        mut runtime: RuntimeSession,
+        visual_images: Arc<DecodedVisualImageCatalog>,
+    ) -> Result<Self, BevyPlayerError> {
+        let audio_catalog = runtime.audio_catalog();
+        let snapshot = runtime
+            .dispatch_typed(SessionAction::Initialize)
+            .map_err(BevyPlayerError::Runtime)?;
+        let viewports = projected_viewports(&snapshot, 0.0)?;
+        let mut host = Self {
+            runtime,
+            visual_images,
+            snapshot,
+            viewports,
+            pending_presentation: VecDeque::new(),
+            audio_runtime: AudioRuntime::new(audio_catalog, initial_audio_capability()),
+            pending_audio: Vec::new(),
+            resume_after_events: false,
+            wait_until_seconds: None,
+            clip_epoch_seconds: 0.0,
+            fatal_error: None,
+        };
+        host.replace_presentation_events();
+        Ok(host)
+    }
+
+    pub fn snapshot(&self) -> &RuntimeSessionSnapshot {
+        &self.snapshot
+    }
+
+    pub fn fatal_error(&self) -> Option<&str> {
+        self.fatal_error.as_deref()
+    }
+
+    pub fn viewport_count(&self) -> usize {
+        self.viewports.len()
+    }
+
+    pub fn take_audio_commands(&mut self) -> Vec<AudioDeviceCommand> {
+        std::mem::take(&mut self.pending_audio)
+    }
+
+    pub fn set_audio_capability(&mut self, capability: AudioCapabilityState, now_seconds: f64) {
+        self.pending_audio.extend(
+            self.audio_runtime
+                .set_capability(capability, audio_frame(now_seconds)),
+        );
+    }
+
+    pub fn take_audio_diagnostics(&mut self) -> Vec<AudioDiagnostic> {
+        self.audio_runtime.take_diagnostics()
+    }
+
+    fn audio_catalog(&self) -> Arc<puzzle_audio::AudioAssetCatalog> {
+        std::sync::Arc::clone(self.audio_runtime.catalog())
+    }
+
+    fn apply_audio_device_feedback(&mut self, feedback: AudioDeviceFeedback, now_seconds: f64) {
+        let now_frame = audio_frame(now_seconds);
+        match feedback {
+            #[cfg(target_arch = "wasm32")]
+            AudioDeviceFeedback::Capability(capability) => {
+                self.pending_audio
+                    .extend(self.audio_runtime.set_capability(capability, now_frame));
+            }
+            AudioDeviceFeedback::VoiceEnded(voice) => self.audio_runtime.voice_ended(voice),
+            AudioDeviceFeedback::VoiceFailure { voice, error } => {
+                self.audio_runtime
+                    .report_voice_failure(voice, error, now_frame);
+            }
+            #[cfg(target_arch = "wasm32")]
+            AudioDeviceFeedback::DeviceFailure(error) => {
+                self.pending_audio
+                    .extend(self.audio_runtime.report_device_failure(error, now_frame));
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn audio_voice_ended(&mut self, voice: AudioVoiceId) {
+        self.apply_audio_device_feedback(AudioDeviceFeedback::VoiceEnded(voice), 0.0);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn audio_voice_failed(&mut self, voice: AudioVoiceId, error: String, now_seconds: f64) {
+        self.apply_audio_device_feedback(
+            AudioDeviceFeedback::VoiceFailure { voice, error },
+            now_seconds,
+        );
+    }
+
+    pub fn dispatch_action(
+        &mut self,
+        action: SessionAction,
+        now_seconds: f64,
+    ) -> Result<(), BevyPlayerError> {
+        if let Some(error) = &self.fatal_error {
+            return Err(BevyPlayerError::Runtime(error.clone()));
+        }
+        let wait_was_active = self.wait_until_seconds.is_some();
+        let snapshot = self
+            .runtime
+            .dispatch_typed(action)
+            .map_err(BevyPlayerError::Runtime)?;
+        let preserve_event_queue = preserve_wait_event_queue(wait_was_active, &snapshot);
+        self.apply_snapshot(snapshot, now_seconds, preserve_event_queue)
+    }
+
+    pub fn restore_progress_save(
+        &mut self,
+        save_json: &str,
+        now_seconds: f64,
+    ) -> Result<(), BevyPlayerError> {
+        self.runtime
+            .restore_progress_save_json(save_json)
+            .map_err(BevyPlayerError::Runtime)?;
+        self.refresh_runtime_snapshot(now_seconds)
+    }
+
+    pub fn pending_progress_save(&self) -> Option<RuntimeProgressSaveRequest> {
+        self.runtime.progress_save_request()
+    }
+
+    pub fn confirm_progress_persistence_applied(
+        &mut self,
+        request_id: u32,
+        now_seconds: f64,
+    ) -> Result<(), BevyPlayerError> {
+        self.confirm_progress_persistence_applied_with(
+            request_id,
+            now_seconds,
+            Self::refresh_runtime_snapshot,
+        )
+    }
+
+    fn confirm_progress_persistence_applied_with(
+        &mut self,
+        request_id: u32,
+        now_seconds: f64,
+        refresh: impl FnOnce(&mut Self, f64) -> Result<(), BevyPlayerError>,
+    ) -> Result<(), BevyPlayerError> {
+        self.runtime
+            .confirm_progress_persistence_applied(request_id)
+            .map_err(BevyPlayerError::Runtime)?;
+        // The runtime acknowledgement above is the commit point: the browser
+        // adapter has already written this exact request. A subsequent Bevy
+        // projection failure must stop the player, but must not be returned as
+        // an acknowledgement failure that asks the adapter to retry a request
+        // the runtime has consumed.
+        if let Err(error) = refresh(self, now_seconds) {
+            self.fail(error);
+        }
+        Ok(())
+    }
+
+    pub fn process_presentation(&mut self, now_seconds: f64) -> Result<(), BevyPlayerError> {
+        if self
+            .wait_until_seconds
+            .is_some_and(|deadline| now_seconds < deadline)
+        {
+            return Ok(());
+        }
+        self.wait_until_seconds = None;
+        while let Some(queued) = self.pending_presentation.pop_front() {
+            match queued.event {
+                RuntimePresentationEvent::AnimationBatch {
+                    source, animations, ..
+                } => {
+                    let Some(viewport) = self.viewports.get_mut(&source) else {
+                        return Err(BevyPlayerError::MissingPresentationTarget(source));
+                    };
+                    viewport.active_animations = animations;
+                    viewport.animation_epoch_seconds = now_seconds;
+                    viewport.needs_frame = true;
+                }
+                RuntimePresentationEvent::Wait { milliseconds } => {
+                    self.wait_until_seconds = Some(now_seconds + milliseconds as f64 / 1_000.0);
+                    return Ok(());
+                }
+                RuntimePresentationEvent::Audio { command } => {
+                    self.pending_audio
+                        .extend(self.audio_runtime.apply(command, audio_frame(now_seconds)));
+                }
+            }
+        }
+        if self.resume_after_events && self.snapshot.busy {
+            self.resume_after_events = false;
+            let snapshot = self
+                .runtime
+                .dispatch_typed(SessionAction::Resume)
+                .map_err(BevyPlayerError::Runtime)?;
+            self.apply_snapshot(snapshot, now_seconds, false)?;
+        }
+        Ok(())
+    }
+
+    pub fn resolve_frames(
+        &mut self,
+        now_seconds: f64,
+    ) -> Result<Vec<ResolvedBevyViewportFrame>, BevyPlayerError> {
+        let milliseconds = |seconds: f64| {
+            ((now_seconds - seconds).max(0.0) * 1_000.0)
+                .floor()
+                .min(u64::MAX as f64) as u64
+        };
+        let mut frames = Vec::new();
+        for viewport in self.viewports.values_mut() {
+            if !viewport.needs_frame && !viewport.continue_animation {
+                continue;
+            }
+            let render_scene = match &viewport.renderer {
+                RuntimeRendererState::TwoD(scene) => &scene.render_scene,
+                RuntimeRendererState::ThreeD(scene) => &scene.render_scene,
+            };
+            let frame = puzzle_presentation::resolve_render_moment(
+                render_scene,
+                &self.visual_images,
+                &RuntimeResolvedRenderMoment {
+                    clip_elapsed_ms: milliseconds(self.clip_epoch_seconds),
+                    animation_elapsed_ms: milliseconds(viewport.animation_epoch_seconds),
+                    animations: viewport.active_animations.clone(),
+                },
+            )
+            .map_err(|error| BevyPlayerError::Presentation {
+                source: viewport.source.clone(),
+                error: format!("{error:?}"),
+            })?;
+            viewport.needs_frame = false;
+            viewport.continue_animation = frame.continue_animation;
+            frames.push(ResolvedBevyViewportFrame {
+                source: viewport.source.clone(),
+                renderer: viewport.renderer.clone(),
+                frame,
+            });
+        }
+        Ok(frames)
+    }
+
+    fn refresh_runtime_snapshot(&mut self, now_seconds: f64) -> Result<(), BevyPlayerError> {
+        let snapshot = self.runtime.snapshot();
+        self.apply_snapshot(snapshot, now_seconds, false)
+    }
+
+    fn apply_snapshot(
+        &mut self,
+        snapshot: RuntimeSessionSnapshot,
+        now_seconds: f64,
+        preserve_event_queue: bool,
+    ) -> Result<(), BevyPlayerError> {
+        let mut next = projected_viewports(&snapshot, now_seconds)?;
+        for (source, viewport) in &mut next {
+            if let Some(previous) = self.viewports.get(source) {
+                viewport.active_animations = previous.active_animations.clone();
+                viewport.animation_epoch_seconds = previous.animation_epoch_seconds;
+            }
+        }
+        self.viewports = next;
+        self.snapshot = snapshot;
+        if !preserve_event_queue {
+            for viewport in self.viewports.values_mut() {
+                viewport.active_animations.clear();
+                viewport.animation_epoch_seconds = now_seconds;
+            }
+            self.replace_presentation_events();
+        }
+        Ok(())
+    }
+
+    fn replace_presentation_events(&mut self) {
+        self.pending_presentation = self
+            .snapshot
+            .presentation_events
+            .iter()
+            .map(|event| QueuedPresentationEvent {
+                event: event.clone(),
+            })
+            .collect();
+        self.resume_after_events = self.snapshot.busy;
+        self.wait_until_seconds = None;
+    }
+
+    fn fail(&mut self, error: BevyPlayerError) {
+        let message = error.to_string();
+        error!("{message}");
+        self.fatal_error = Some(message);
+        for viewport in self.viewports.values_mut() {
+            viewport.continue_animation = false;
+            viewport.needs_frame = false;
+        }
+    }
+}
+
+fn projected_viewports(
+    snapshot: &RuntimeSessionSnapshot,
+    now_seconds: f64,
+) -> Result<BTreeMap<RuntimeViewportSourceId, HostViewport>, BevyPlayerError> {
+    for component in &snapshot.surface.components {
+        match &component.presentation {
+            RuntimeComponentPresentation::Ready(scene) => {
+                if let Some(event_name) = &component.await_event {
+                    let binding = scene
+                        .events
+                        .as_ref()
+                        .and_then(|events| events.get(event_name));
+                    let Some(binding) = binding else {
+                        return Err(BevyPlayerError::MissingAwaitedEvent {
+                            component: component.id.clone(),
+                            event: event_name.clone(),
+                        });
+                    };
+                    if binding.action.is_none() {
+                        return Err(BevyPlayerError::MissingAwaitedEventAction {
+                            component: component.id.clone(),
+                            event: event_name.clone(),
+                        });
+                    }
+                }
+            }
+            RuntimeComponentPresentation::Error { error } => {
+                return Err(BevyPlayerError::ComponentPresentation {
+                    component: component.id.clone(),
+                    error: error.clone(),
+                });
+            }
+        }
+    }
+    let mut referenced = Vec::new();
+    let mut seen = BTreeSet::new();
+    for stack in PuzzleBevyUiSurfaceStack::ORDERED {
+        for component in &snapshot.surface.components {
+            if component.visibility != puzzle_scene::ComponentVisibility::Visible
+                || ui_surface_stack(component.placement, component.modal) != stack
+            {
+                continue;
+            }
+            let RuntimeComponentPresentation::Ready(scene) = &component.presentation else {
+                continue;
+            };
+            collect_viewport_sources(&scene.components, &mut referenced, &mut seen)?;
+        }
+    }
+    let viewport_count = referenced.len();
+    let viewports = referenced
+        .into_iter()
+        .enumerate()
+        .map(
+            |(index, (source, dimension))| -> Result<_, BevyPlayerError> {
+                let order =
+                    isize::try_from(index).map_err(|_| BevyPlayerError::ViewportOrderOverflow {
+                        count: viewport_count,
+                    })?;
+                let renderer = snapshot
+                    .viewport_sources
+                    .get(&source)
+                    .cloned()
+                    .ok_or_else(|| BevyPlayerError::MissingViewportSource(source.clone()))?;
+                let matches_dimension = matches!(
+                    (dimension, &renderer),
+                    (
+                        puzzle_session_contract::RuntimeViewportDimension::TwoD,
+                        RuntimeRendererState::TwoD(_)
+                    ) | (
+                        puzzle_session_contract::RuntimeViewportDimension::ThreeD,
+                        RuntimeRendererState::ThreeD(_)
+                    )
+                );
+                if !matches_dimension {
+                    return Err(BevyPlayerError::ViewportDimensionMismatch {
+                        source,
+                        surface: dimension,
+                        renderer: match renderer {
+                            RuntimeRendererState::TwoD(_) => "2D",
+                            RuntimeRendererState::ThreeD(_) => "3D",
+                        },
+                    });
+                }
+                validate_renderer_source(&source, &renderer)?;
+                Ok((
+                    source.clone(),
+                    HostViewport {
+                        source,
+                        order,
+                        renderer,
+                        active_animations: Vec::new(),
+                        animation_epoch_seconds: now_seconds,
+                        continue_animation: false,
+                        needs_frame: true,
+                    },
+                ))
+            },
+        )
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
+    Ok(viewports)
+}
+
+fn collect_viewport_sources(
+    components: &[RuntimeResolvedSceneComponent],
+    sources: &mut Vec<(
+        RuntimeViewportSourceId,
+        puzzle_session_contract::RuntimeViewportDimension,
+    )>,
+    seen: &mut BTreeSet<RuntimeViewportSourceId>,
+) -> Result<(), BevyPlayerError> {
+    for component in components {
+        match component {
+            RuntimeResolvedSceneComponent::Viewport {
+                source, dimension, ..
+            } => {
+                if !seen.insert(source.clone()) {
+                    return Err(BevyPlayerError::DuplicateViewportLeaf(source.clone()));
+                }
+                sources.push((source.clone(), *dimension));
+            }
+            RuntimeResolvedSceneComponent::Row { children, .. }
+            | RuntimeResolvedSceneComponent::Column { children, .. }
+            | RuntimeResolvedSceneComponent::Box { children, .. } => {
+                collect_viewport_sources(children, sources, seen)?;
+            }
+            RuntimeResolvedSceneComponent::Frame { kind, source, .. } => {
+                return Err(BevyPlayerError::UnsupportedFrameComponent {
+                    kind: kind.clone(),
+                    source: source.clone(),
+                });
+            }
+            RuntimeResolvedSceneComponent::Text { .. }
+            | RuntimeResolvedSceneComponent::Button { .. }
+            | RuntimeResolvedSceneComponent::Choice { .. } => {}
+        }
+    }
+    Ok(())
+}
+
+fn validate_renderer_source(
+    source: &RuntimeViewportSourceId,
+    renderer: &RuntimeRendererState,
+) -> Result<(), BevyPlayerError> {
+    if let RuntimeRendererState::TwoD(scene) = renderer {
+        if let Some(error) = &scene.display_error {
+            return Err(BevyPlayerError::TwoDimensionalDisplay {
+                source: source.clone(),
+                error: error.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
+#[derive(Component, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PuzzleBevyUiIdentity {
+    pub component: String,
+    pub tree_path: Vec<usize>,
+}
+
+#[derive(Component, Clone)]
+struct PuzzleBevyUiAction(RuntimeSceneActionToken);
+
+#[derive(Component, Clone)]
+struct PuzzleBevyUiViewport(RuntimeViewportSourceId);
+
+#[derive(Component)]
+struct PuzzleBevyUiSelectedChoice;
+
+#[derive(Component)]
+struct PuzzleBevyUiRoot;
+
+#[derive(Component)]
+struct PuzzleBevyBackgroundCamera;
+
+#[derive(Component)]
+struct PuzzleBevyUiCamera;
+
+#[derive(Component)]
+struct PuzzleBevyUiRootLayer;
+
+#[derive(Component)]
+struct PuzzleBevyUiContentLayer;
+
+#[derive(Component)]
+struct PuzzleBevyUiOverlayLayer;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PuzzleBevyUiSurfaceLayer {
+    Root,
+    Content,
+    Overlay,
+}
+
+impl PuzzleBevyUiSurfaceLayer {
+    fn z_index(self) -> i32 {
+        match self {
+            Self::Root => 0,
+            Self::Content => 10,
+            Self::Overlay => 20,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PuzzleBevyUiSurfaceStack {
+    Root,
+    Content,
+    Overlay,
+    Modal,
+}
+
+impl PuzzleBevyUiSurfaceStack {
+    const ORDERED: [Self; 4] = [Self::Root, Self::Content, Self::Overlay, Self::Modal];
+
+    fn layer(self) -> PuzzleBevyUiSurfaceLayer {
+        match self {
+            Self::Root => PuzzleBevyUiSurfaceLayer::Root,
+            Self::Content => PuzzleBevyUiSurfaceLayer::Content,
+            Self::Overlay | Self::Modal => PuzzleBevyUiSurfaceLayer::Overlay,
+        }
+    }
+
+    fn root_z_index(self) -> i32 {
+        match self {
+            Self::Modal => 100,
+            Self::Root | Self::Content | Self::Overlay => 0,
+        }
+    }
+}
+
+fn ui_surface_stack(
+    placement: puzzle_scene::ComponentPlacement,
+    modal: bool,
+) -> PuzzleBevyUiSurfaceStack {
+    if modal {
+        return PuzzleBevyUiSurfaceStack::Modal;
+    }
+    match placement {
+        puzzle_scene::ComponentPlacement::Root => PuzzleBevyUiSurfaceStack::Root,
+        puzzle_scene::ComponentPlacement::Content => PuzzleBevyUiSurfaceStack::Content,
+        puzzle_scene::ComponentPlacement::Overlay => PuzzleBevyUiSurfaceStack::Overlay,
+    }
+}
+
+#[derive(Resource, Default)]
+struct SubmittedViewportIds(BTreeSet<PuzzleBevyViewId>);
+
+#[derive(Resource, Default)]
+struct SubmittedViewportRects(BTreeMap<RuntimeViewportSourceId, PuzzleBevyFramebufferRect>);
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct InteractiveCameraOffset {
+    yaw_degrees: f32,
+    pitch_degrees: f32,
+    zoom_factor: f32,
+}
+
+impl Default for InteractiveCameraOffset {
+    fn default() -> Self {
+        Self {
+            yaw_degrees: 0.0,
+            pitch_degrees: 0.0,
+            zoom_factor: 1.0,
+        }
+    }
+}
+
+#[derive(Resource, Default)]
+struct InteractiveCameraState {
+    active_look: Option<RuntimeViewportSourceId>,
+    offsets: BTreeMap<RuntimeViewportSourceId, InteractiveCameraOffset>,
+}
+
+#[derive(Resource, Default)]
+struct TouchScrollTargets(HashMap<u64, Entity>);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PuzzleBevyPlayerObservation {
+    pub sequence: u64,
+    pub revision: u64,
+    pub surface_focus: String,
+    pub viewport_count: usize,
+}
+
+#[derive(Resource, Default)]
+pub struct PuzzleBevyPlayerObservationState {
+    latest: Option<PuzzleBevyPlayerObservation>,
+}
+
+#[derive(Resource, Default)]
+struct PendingPuzzleBevyPlayerObservation {
+    revision: u64,
+    surface_focus: String,
+    viewport_count: usize,
+    present: bool,
+}
+
+impl PuzzleBevyPlayerObservationState {
+    pub fn latest(&self) -> Option<&PuzzleBevyPlayerObservation> {
+        self.latest.as_ref()
+    }
+
+    fn record_submission(&mut self, revision: u64, surface_focus: &str, viewport_count: usize) {
+        let changed = self.latest.as_ref().is_none_or(|latest| {
+            latest.revision != revision
+                || latest.surface_focus != surface_focus
+                || latest.viewport_count != viewport_count
+        });
+        if !changed {
+            return;
+        }
+        let sequence = self
+            .latest
+            .as_ref()
+            .map_or(1, |latest| latest.sequence.saturating_add(1));
+        self.latest = Some(PuzzleBevyPlayerObservation {
+            sequence,
+            revision,
+            surface_focus: surface_focus.to_string(),
+            viewport_count,
+        });
+    }
+}
+
+#[derive(SystemSet, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum PuzzleBevyPlayerSystems {
+    SubmitResolvedFrames,
+    CommitObservation,
+    ObservationReady,
+}
+
+pub struct PuzzleBevyPlayerPlugin;
+
+impl Plugin for PuzzleBevyPlayerPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<SubmittedViewportIds>()
+            .init_resource::<SubmittedViewportRects>()
+            .init_resource::<InteractiveCameraState>()
+            .init_resource::<TouchScrollTargets>()
+            .init_resource::<PuzzleBevyPlayerObservationState>()
+            .init_resource::<PendingPuzzleBevyPlayerObservation>()
+            .configure_sets(
+                PostUpdate,
+                (
+                    PuzzleBevyPlayerSystems::CommitObservation
+                        .after(PuzzleBevyRendererSystems::ApplySubmittedFrames),
+                    PuzzleBevyPlayerSystems::ObservationReady
+                        .after(PuzzleBevyPlayerSystems::CommitObservation),
+                ),
+            )
+            .add_systems(Startup, spawn_ui_root)
+            .add_systems(
+                Update,
+                (
+                    dispatch_pointer_actions,
+                    update_interactive_camera,
+                    dispatch_keyboard_input,
+                    advance_presentation,
+                    sync_resolved_ui,
+                    update_ui_scroll,
+                )
+                    .chain(),
+            )
+            .add_systems(
+                PostUpdate,
+                (
+                    scroll_selected_choice_into_view
+                        .after(bevy::ui::UiSystems::Layout)
+                        .before(PuzzleBevyPlayerSystems::SubmitResolvedFrames),
+                    submit_resolved_frames
+                        .in_set(PuzzleBevyPlayerSystems::SubmitResolvedFrames)
+                        .after(bevy::ui::UiSystems::Layout)
+                        .before(PuzzleBevyRendererSystems::ApplySubmittedFrames),
+                    commit_player_observation.in_set(PuzzleBevyPlayerSystems::CommitObservation),
+                ),
+            );
+        #[cfg(not(target_arch = "wasm32"))]
+        app.add_systems(
+            Update,
+            audio::process_native_audio.after(advance_presentation),
+        );
+    }
+}
+
+pub fn install_puzzle_bevy_player(app: &mut App, host: PuzzleBevyPlayerHost) -> &mut App {
+    #[cfg(not(target_arch = "wasm32"))]
+    audio::install_native_audio_backend(app);
+    #[cfg(target_arch = "wasm32")]
+    let web_audio_catalog = host.audio_catalog();
+    app.add_plugins(PuzzleBevy2dPlugin::default())
+        .add_plugins(PuzzleBevy3dPlugin)
+        .add_plugins(PuzzleBevyPlayerPlugin)
+        .insert_non_send(host);
+    #[cfg(target_arch = "wasm32")]
+    app.add_plugins(web_audio::PuzzleBevyWebAudioPlugin::new(web_audio_catalog));
+    app
+}
+
+fn spawn_ui_root(mut commands: Commands) {
+    commands.spawn((
+        Camera2d,
+        Camera {
+            order: -1,
+            clear_color: ClearColorConfig::Custom(Color::BLACK),
+            ..default()
+        },
+        RenderLayers::none(),
+        PuzzleBevyBackgroundCamera,
+    ));
+    commands.spawn((
+        Camera2d,
+        Camera {
+            order: isize::MAX,
+            clear_color: ClearColorConfig::None,
+            ..default()
+        },
+        RenderLayers::none(),
+        IsDefaultUiCamera,
+        PuzzleBevyUiCamera,
+    ));
+    let root = commands
+        .spawn((
+            PuzzleBevyUiRoot,
+            Node {
+                width: percent(100),
+                height: percent(100),
+                position_type: PositionType::Relative,
+                ..default()
+            },
+        ))
+        .id();
+    let layer_node = || Node {
+        position_type: PositionType::Absolute,
+        left: px(0),
+        right: px(0),
+        top: px(0),
+        bottom: px(0),
+        flex_direction: FlexDirection::Column,
+        ..default()
+    };
+    let root_layer = commands
+        .spawn((
+            PuzzleBevyUiRootLayer,
+            layer_node(),
+            ZIndex(PuzzleBevyUiSurfaceLayer::Root.z_index()),
+        ))
+        .id();
+    let content_layer = commands
+        .spawn((
+            PuzzleBevyUiContentLayer,
+            layer_node(),
+            ZIndex(PuzzleBevyUiSurfaceLayer::Content.z_index()),
+        ))
+        .id();
+    let overlay_layer = commands
+        .spawn((
+            PuzzleBevyUiOverlayLayer,
+            layer_node(),
+            ZIndex(PuzzleBevyUiSurfaceLayer::Overlay.z_index()),
+        ))
+        .id();
+    commands
+        .entity(root)
+        .add_children(&[root_layer, content_layer, overlay_layer]);
+}
+
+fn sync_resolved_ui(
+    mut commands: Commands,
+    host: NonSend<PuzzleBevyPlayerHost>,
+    roots: Query<Entity, With<PuzzleBevyUiRoot>>,
+    root_layers: Query<Entity, With<PuzzleBevyUiRootLayer>>,
+    content_layers: Query<Entity, With<PuzzleBevyUiContentLayer>>,
+    overlay_layers: Query<Entity, With<PuzzleBevyUiOverlayLayer>>,
+    mut background_cameras: Query<&mut Camera, With<PuzzleBevyBackgroundCamera>>,
+    existing: Query<(Entity, &PuzzleBevyUiIdentity)>,
+) {
+    if roots.single().is_err() {
+        return;
+    }
+    let (Ok(root_layer), Ok(content_layer), Ok(overlay_layer)) = (
+        root_layers.single(),
+        content_layers.single(),
+        overlay_layers.single(),
+    ) else {
+        return;
+    };
+    let Ok(mut background_camera) = background_cameras.single_mut() else {
+        return;
+    };
+    background_camera.clear_color =
+        ClearColorConfig::Custom(bevy_color(host.snapshot.theme.background));
+    let old = existing
+        .iter()
+        .map(|(entity, id)| (id.clone(), entity))
+        .collect::<HashMap<_, _>>();
+    let mut retained = BTreeSet::new();
+    let mut root_components = Vec::new();
+    let mut content_components = Vec::new();
+    let mut overlay_components = Vec::new();
+    for surface_component in &host.snapshot.surface.components {
+        if surface_component.visibility != puzzle_scene::ComponentVisibility::Visible {
+            continue;
+        }
+        let RuntimeComponentPresentation::Ready(scene) = &surface_component.presentation else {
+            continue;
+        };
+        let focused = host.snapshot.surface.focus == surface_component.id;
+        let scene_root_id = PuzzleBevyUiIdentity {
+            component: surface_component.id.clone(),
+            tree_path: Vec::new(),
+        };
+        let scene_root = old
+            .get(&scene_root_id)
+            .copied()
+            .unwrap_or_else(|| commands.spawn_empty().id());
+        retained.insert(scene_root_id.clone());
+        let mut root_node = node_from_layout(&scene.layout, Some(FlexDirection::Column));
+        root_node.width = percent(100);
+        root_node.height = percent(100);
+        if matches!(
+            surface_component.placement,
+            puzzle_scene::ComponentPlacement::Overlay
+        ) || surface_component.modal
+        {
+            root_node.position_type = PositionType::Absolute;
+            root_node.left = px(0);
+            root_node.right = px(0);
+            root_node.top = px(0);
+            root_node.bottom = px(0);
+        }
+        let surface_stack = ui_surface_stack(surface_component.placement, surface_component.modal);
+        commands.entity(scene_root).insert((
+            scene_root_id,
+            root_node,
+            ZIndex(surface_stack.root_z_index()),
+        ));
+        commands
+            .entity(scene_root)
+            .remove::<(PuzzleBevyUiAction, Button, BackgroundColor)>();
+        if let Some(action) = awaited_pointer_action(surface_component, scene) {
+            commands
+                .entity(scene_root)
+                .insert((Button, PuzzleBevyUiAction(action.clone())));
+        }
+        let mut scene_children = Vec::new();
+        for (index, component) in scene.components.iter().enumerate() {
+            let id = PuzzleBevyUiIdentity {
+                component: surface_component.id.clone(),
+                tree_path: vec![index],
+            };
+            scene_children.push(sync_ui_component(
+                &mut commands,
+                &old,
+                &mut retained,
+                id,
+                component,
+                focused,
+                &host.snapshot.theme,
+            ));
+        }
+        if surface_component.modal {
+            commands
+                .entity(scene_root)
+                .insert(BackgroundColor(bevy_color(host.snapshot.theme.background)));
+            let panel_id = PuzzleBevyUiIdentity {
+                component: surface_component.id.clone(),
+                tree_path: vec![usize::MAX],
+            };
+            let panel = old
+                .get(&panel_id)
+                .copied()
+                .unwrap_or_else(|| commands.spawn_empty().id());
+            retained.insert(panel_id.clone());
+            commands.entity(panel).insert((
+                panel_id,
+                Node {
+                    width: percent(100),
+                    max_width: px(680),
+                    padding: UiRect::all(px(24)),
+                    flex_direction: FlexDirection::Column,
+                    align_self: AlignSelf::Center,
+                    ..default()
+                },
+                BackgroundColor(bevy_color(host.snapshot.theme.panel)),
+            ));
+            commands.entity(panel).replace_children(&scene_children);
+            commands.entity(scene_root).replace_children(&[panel]);
+        } else {
+            commands
+                .entity(scene_root)
+                .replace_children(&scene_children);
+        }
+        match surface_stack.layer() {
+            PuzzleBevyUiSurfaceLayer::Root => root_components.push(scene_root),
+            PuzzleBevyUiSurfaceLayer::Content => content_components.push(scene_root),
+            PuzzleBevyUiSurfaceLayer::Overlay => overlay_components.push(scene_root),
+        }
+    }
+    commands
+        .entity(root_layer)
+        .replace_children(&root_components);
+    commands
+        .entity(content_layer)
+        .replace_children(&content_components);
+    commands
+        .entity(overlay_layer)
+        .replace_children(&overlay_components);
+    for (id, entity) in old {
+        if !retained.contains(&id) {
+            commands.entity(entity).despawn();
+        }
+    }
+}
+
+fn awaited_pointer_action<'a>(
+    component: &'a puzzle_session_contract::RuntimeSurfaceComponent,
+    scene: &'a puzzle_session_contract::RuntimeResolvedScene,
+) -> Option<&'a RuntimeSceneActionToken> {
+    let event_name = component.await_event.as_ref()?;
+    let binding = scene.events.as_ref()?.get(event_name)?;
+    binding.pointer.then_some(())?;
+    binding.action.as_ref()
+}
+
+fn sync_ui_component(
+    commands: &mut Commands,
+    existing: &HashMap<PuzzleBevyUiIdentity, Entity>,
+    retained: &mut BTreeSet<PuzzleBevyUiIdentity>,
+    id: PuzzleBevyUiIdentity,
+    component: &RuntimeResolvedSceneComponent,
+    focused: bool,
+    theme: &RuntimeTheme,
+) -> Entity {
+    let entity = existing
+        .get(&id)
+        .copied()
+        .unwrap_or_else(|| commands.spawn_empty().id());
+    retained.insert(id.clone());
+    let mut entity_commands = commands.entity(entity);
+    entity_commands.insert(id.clone());
+    entity_commands.replace_children(&[]);
+    entity_commands.remove::<(
+        PuzzleBevyUiAction,
+        PuzzleBevyUiViewport,
+        Button,
+        Text,
+        TextFont,
+        TextColor,
+        TextLayout,
+        LineHeight,
+        BorderColor,
+        BackgroundColor,
+        PuzzleBevyUiSelectedChoice,
+    )>();
+    let layout = match component {
+        RuntimeResolvedSceneComponent::Viewport { layout, .. }
+        | RuntimeResolvedSceneComponent::Frame { layout, .. }
+        | RuntimeResolvedSceneComponent::Text { layout, .. }
+        | RuntimeResolvedSceneComponent::Button { layout, .. }
+        | RuntimeResolvedSceneComponent::Choice { layout, .. }
+        | RuntimeResolvedSceneComponent::Row { layout, .. }
+        | RuntimeResolvedSceneComponent::Column { layout, .. }
+        | RuntimeResolvedSceneComponent::Box { layout, .. } => layout,
+    };
+    if layout.scroll {
+        entity_commands
+            .entry::<ScrollPosition>()
+            .or_insert(ScrollPosition::default());
+    } else {
+        entity_commands.remove::<ScrollPosition>();
+    }
+    match component {
+        RuntimeResolvedSceneComponent::Text {
+            role,
+            value,
+            text_align,
+            layout,
+        } => {
+            let style = text_style(theme, *role);
+            entity_commands.insert((
+                node_from_layout(layout, None),
+                Text::new(value.clone()),
+                TextFont {
+                    font_size: FontSize::Px(style.font_size_px),
+                    ..default()
+                },
+                TextColor(if focused {
+                    bevy_color(theme.text)
+                } else {
+                    bevy_color(theme.muted_text)
+                }),
+                LineHeight::RelativeToFont(style.line_height),
+                TextLayout::justify(text_justify(*text_align)),
+            ));
+        }
+        RuntimeResolvedSceneComponent::Button {
+            label,
+            action,
+            layout,
+        }
+        | RuntimeResolvedSceneComponent::Choice {
+            label,
+            action,
+            selected: false,
+            layout,
+        } => {
+            entity_commands.insert((
+                Button,
+                Node {
+                    padding: UiRect::axes(
+                        px(theme.control_layout.padding_horizontal_px),
+                        px(theme.control_layout.padding_vertical_px),
+                    ),
+                    margin: UiRect::all(px(theme.control_layout.margin_px)),
+                    border_radius: BorderRadius::all(px(theme.control_layout.corner_radius_px)),
+                    ..node_from_layout(layout, None)
+                },
+                BackgroundColor(bevy_color(if focused {
+                    theme.control_focused
+                } else {
+                    theme.control
+                })),
+            ));
+            if let Some(action) = action {
+                entity_commands.insert(PuzzleBevyUiAction(action.clone()));
+            }
+            entity_commands.insert((
+                Text::new(label.clone()),
+                TextFont {
+                    font_size: FontSize::Px(theme.typography.body.font_size_px),
+                    ..default()
+                },
+                LineHeight::RelativeToFont(theme.typography.body.line_height),
+                TextColor(bevy_color(theme.text)),
+            ));
+        }
+        RuntimeResolvedSceneComponent::Choice {
+            label,
+            action,
+            selected: true,
+            layout,
+        } => {
+            entity_commands.insert((
+                Button,
+                PuzzleBevyUiSelectedChoice,
+                Node {
+                    padding: UiRect::axes(
+                        px(theme.control_layout.padding_horizontal_px),
+                        px(theme.control_layout.padding_vertical_px),
+                    ),
+                    margin: UiRect::all(px(theme.control_layout.margin_px)),
+                    border: UiRect::all(px(theme.control_layout.border_width_px)),
+                    border_radius: BorderRadius::all(px(theme.control_layout.corner_radius_px)),
+                    ..node_from_layout(layout, None)
+                },
+                BorderColor::all(bevy_color(theme.control_selected_border)),
+                BackgroundColor(bevy_color(theme.control_selected)),
+            ));
+            if let Some(action) = action {
+                entity_commands.insert(PuzzleBevyUiAction(action.clone()));
+            }
+            entity_commands.insert((
+                Text::new(label.clone()),
+                TextFont {
+                    font_size: FontSize::Px(theme.typography.body.font_size_px),
+                    ..default()
+                },
+                LineHeight::RelativeToFont(theme.typography.body.line_height),
+                TextColor(bevy_color(theme.text)),
+            ));
+        }
+        RuntimeResolvedSceneComponent::Row {
+            layout, children, ..
+        }
+        | RuntimeResolvedSceneComponent::Column {
+            layout, children, ..
+        }
+        | RuntimeResolvedSceneComponent::Box {
+            layout, children, ..
+        } => {
+            let direction = if matches!(component, RuntimeResolvedSceneComponent::Row { .. }) {
+                FlexDirection::Row
+            } else {
+                FlexDirection::Column
+            };
+            entity_commands.insert(node_from_layout(layout, Some(direction)));
+            let child_entities = children
+                .iter()
+                .enumerate()
+                .map(|(index, child)| {
+                    let mut child_id = id.clone();
+                    child_id.tree_path.push(index);
+                    sync_ui_component(
+                        commands, existing, retained, child_id, child, focused, theme,
+                    )
+                })
+                .collect::<Vec<_>>();
+            commands.entity(entity).replace_children(&child_entities);
+        }
+        RuntimeResolvedSceneComponent::Viewport { source, layout, .. } => {
+            entity_commands.insert((
+                node_from_layout(layout, None),
+                PuzzleBevyUiViewport(source.clone()),
+            ));
+        }
+        RuntimeResolvedSceneComponent::Frame { .. } => {
+            unreachable!("unsupported frame components reject at the snapshot boundary")
+        }
+    }
+    entity
+}
+
+fn text_justify(text_align: Option<puzzle_scene::SceneTextAlign>) -> Justify {
+    match text_align {
+        None | Some(puzzle_scene::SceneTextAlign::Start) => Justify::Start,
+        Some(puzzle_scene::SceneTextAlign::Center) => Justify::Center,
+        Some(puzzle_scene::SceneTextAlign::End) => Justify::End,
+    }
+}
+
+fn text_style(theme: &RuntimeTheme, role: SceneTextRole) -> RuntimeUiTextStyle {
+    match role {
+        SceneTextRole::Heading => theme.typography.heading,
+        SceneTextRole::Subheading => theme.typography.subheading,
+        SceneTextRole::Body => theme.typography.body,
+        SceneTextRole::Caption => theme.typography.caption,
+    }
+}
+
+fn bevy_color(color: RuntimeLinearRgba) -> Color {
+    Color::linear_rgba(
+        color.red as f32,
+        color.green as f32,
+        color.blue as f32,
+        color.alpha as f32,
+    )
+}
+
+fn node_from_layout(layout: &puzzle_scene::SceneLayout, direction: Option<FlexDirection>) -> Node {
+    use puzzle_scene::{SceneAlign, SceneDistribution, SceneSpace};
+
+    let mut node = Node {
+        flex_direction: direction.unwrap_or(FlexDirection::Column),
+        align_self: layout
+            .align_self
+            .map(|align| match align {
+                SceneAlign::Start => AlignSelf::FlexStart,
+                SceneAlign::Center => AlignSelf::Center,
+                SceneAlign::End => AlignSelf::FlexEnd,
+                SceneAlign::Stretch => AlignSelf::Stretch,
+            })
+            .unwrap_or(AlignSelf::Auto),
+        align_items: match layout.align {
+            SceneAlign::Start => AlignItems::FlexStart,
+            SceneAlign::Center => AlignItems::Center,
+            SceneAlign::End => AlignItems::FlexEnd,
+            SceneAlign::Stretch => AlignItems::Stretch,
+        },
+        justify_content: match layout.distribute {
+            SceneDistribution::Start => JustifyContent::FlexStart,
+            SceneDistribution::Center => JustifyContent::Center,
+            SceneDistribution::End => JustifyContent::FlexEnd,
+            SceneDistribution::Between => JustifyContent::SpaceBetween,
+        },
+        aspect_ratio: layout
+            .aspect_ratio
+            .map(|ratio| f32::from(ratio.width) / f32::from(ratio.height)),
+        overflow: if layout.scroll {
+            Overflow::scroll()
+        } else {
+            Overflow::visible()
+        },
+        ..default()
+    };
+    if let Some(gap) = layout.gap {
+        node.row_gap = px(gap);
+        node.column_gap = px(gap);
+    }
+    if let SceneSpace::Fill { weight } = layout.space {
+        node.flex_grow = f32::from(weight);
+        node.flex_basis = px(0);
+    }
+    node
+}
+
+fn dispatch_pointer_actions(
+    interactions: Query<(&Interaction, &PuzzleBevyUiAction), Changed<Interaction>>,
+    time: Res<Time>,
+    mut host: NonSendMut<PuzzleBevyPlayerHost>,
+) {
+    if host.fatal_error.is_some() {
+        return;
+    }
+    for (interaction, action) in &interactions {
+        if *interaction == Interaction::Pressed
+            && let Err(error) = host.dispatch_action(
+                SessionAction::SceneAction {
+                    token: action.0.clone(),
+                },
+                time.elapsed_secs_f64(),
+            )
+        {
+            host.fail(error);
+            return;
+        }
+    }
+}
+
+fn update_interactive_camera(
+    primary_window: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    mouse_buttons: Res<ButtonInput<MouseButton>>,
+    mouse_motion: Res<AccumulatedMouseMotion>,
+    mouse_scroll: Res<AccumulatedMouseScroll>,
+    submitted_rects: Res<SubmittedViewportRects>,
+    mut interaction: ResMut<InteractiveCameraState>,
+    mut host: NonSendMut<PuzzleBevyPlayerHost>,
+) {
+    if host.fatal_error.is_some() {
+        return;
+    }
+    let Ok(window) = primary_window.single() else {
+        return;
+    };
+    interaction.offsets.retain(|source, _| {
+        matches!(
+            host.viewports
+                .get(source)
+                .map(|viewport| &viewport.renderer),
+            Some(RuntimeRendererState::ThreeD(_))
+        )
+    });
+
+    let cursor = window.physical_cursor_position();
+    if mouse_buttons.just_pressed(MouseButton::Left) {
+        interaction.active_look = cursor.and_then(|cursor| {
+            interactive_camera_source_at(
+                cursor,
+                window.physical_height(),
+                &submitted_rects.0,
+                &host.viewports,
+                |camera| camera.interactive_look,
+            )
+        });
+    }
+    if mouse_buttons.just_released(MouseButton::Left) {
+        interaction.active_look = None;
+    }
+
+    if mouse_buttons.pressed(MouseButton::Left)
+        && mouse_motion.delta != Vec2::ZERO
+        && let Some(source) = interaction.active_look.clone()
+        && let Some(viewport) = host.viewports.get_mut(&source)
+        && let RuntimeRendererState::ThreeD(scene) = &viewport.renderer
+    {
+        let offset = interaction.offsets.entry(source).or_default();
+        offset.yaw_degrees += mouse_motion.delta.x * 0.25;
+        let base_pitch = f32::from(scene.render.camera.pitch_degrees);
+        let next_pitch =
+            (base_pitch + offset.pitch_degrees - mouse_motion.delta.y * 0.25).clamp(-88.0, 88.0);
+        offset.pitch_degrees = next_pitch - base_pitch;
+        viewport.needs_frame = true;
+    }
+
+    if mouse_scroll.delta.y != 0.0
+        && let Some(cursor) = cursor
+        && let Some(source) = interactive_camera_source_at(
+            cursor,
+            window.physical_height(),
+            &submitted_rects.0,
+            &host.viewports,
+            |camera| camera.interactive_zoom,
+        )
+        && let Some(viewport) = host.viewports.get_mut(&source)
+    {
+        let exponent = match mouse_scroll.unit {
+            MouseScrollUnit::Line => mouse_scroll.delta.y * 0.12,
+            MouseScrollUnit::Pixel => mouse_scroll.delta.y * 0.002,
+        };
+        let offset = interaction.offsets.entry(source).or_default();
+        offset.zoom_factor = (offset.zoom_factor * exponent.exp()).clamp(0.2, 5.0);
+        viewport.needs_frame = true;
+    }
+}
+
+fn interactive_camera_source_at(
+    cursor_from_top: Vec2,
+    window_height: u32,
+    rects: &BTreeMap<RuntimeViewportSourceId, PuzzleBevyFramebufferRect>,
+    viewports: &BTreeMap<RuntimeViewportSourceId, HostViewport>,
+    enabled: impl Fn(&puzzle_runtime_contract::RuntimePuzzle3Camera) -> bool,
+) -> Option<RuntimeViewportSourceId> {
+    let cursor_from_bottom = Vec2::new(cursor_from_top.x, window_height as f32 - cursor_from_top.y);
+    viewports
+        .values()
+        .filter_map(|viewport| {
+            let RuntimeRendererState::ThreeD(scene) = &viewport.renderer else {
+                return None;
+            };
+            if !enabled(&scene.render.camera) {
+                return None;
+            }
+            let rect = rects.get(&viewport.source)?;
+            let min = rect.physical_position.as_vec2();
+            let max = min + rect.physical_size.as_vec2();
+            (cursor_from_bottom.cmpge(min).all() && cursor_from_bottom.cmplt(max).all())
+                .then_some((viewport.order, viewport.source.clone()))
+        })
+        .max_by_key(|(order, _)| *order)
+        .map(|(_, source)| source)
+}
+
+fn update_ui_scroll(
+    primary_window: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    mouse_scroll: Res<AccumulatedMouseScroll>,
+    touches: Res<Touches>,
+    submitted_rects: Res<SubmittedViewportRects>,
+    host: NonSend<PuzzleBevyPlayerHost>,
+    mut touch_targets: ResMut<TouchScrollTargets>,
+    mut scroll_nodes: Query<
+        (
+            Entity,
+            &ComputedNode,
+            &UiGlobalTransform,
+            &mut ScrollPosition,
+        ),
+        Without<PuzzleBevyUiSelectedChoice>,
+    >,
+) {
+    let Ok(window) = primary_window.single() else {
+        return;
+    };
+    let wheel_is_camera_input = window.physical_cursor_position().is_some_and(|cursor| {
+        interactive_camera_source_at(
+            cursor,
+            window.physical_height(),
+            &submitted_rects.0,
+            &host.viewports,
+            |camera| camera.interactive_zoom,
+        )
+        .is_some()
+    });
+    if !wheel_is_camera_input
+        && mouse_scroll.delta != Vec2::ZERO
+        && let Some(cursor) = window.cursor_position()
+        && let Some(target) = scroll_container_at(cursor, &mut scroll_nodes)
+        && let Ok((_, _, _, mut position)) = scroll_nodes.get_mut(target)
+    {
+        let scale = match mouse_scroll.unit {
+            MouseScrollUnit::Line => 32.0,
+            MouseScrollUnit::Pixel => 1.0,
+        };
+        position.0 -= mouse_scroll.delta * scale;
+        position.0 = position.0.max(Vec2::ZERO);
+    }
+
+    for touch in touches.iter_just_pressed() {
+        if let Some(target) = scroll_container_at(touch.position(), &mut scroll_nodes) {
+            touch_targets.0.insert(touch.id(), target);
+        }
+    }
+    for touch in touches.iter() {
+        let Some(target) = touch_targets.0.get(&touch.id()).copied() else {
+            continue;
+        };
+        let delta = touch.position() - touch.previous_position();
+        if delta != Vec2::ZERO
+            && let Ok((_, _, _, mut position)) = scroll_nodes.get_mut(target)
+        {
+            position.0 -= delta;
+            position.0 = position.0.max(Vec2::ZERO);
+        }
+    }
+    for touch in touches
+        .iter_just_released()
+        .chain(touches.iter_just_canceled())
+    {
+        touch_targets.0.remove(&touch.id());
+    }
+}
+
+fn scroll_container_at(
+    cursor: Vec2,
+    scroll_nodes: &mut Query<
+        (
+            Entity,
+            &ComputedNode,
+            &UiGlobalTransform,
+            &mut ScrollPosition,
+        ),
+        Without<PuzzleBevyUiSelectedChoice>,
+    >,
+) -> Option<Entity> {
+    scroll_nodes
+        .iter_mut()
+        .filter_map(|(entity, node, transform, _)| {
+            let size = node.size();
+            let (_, _, center) = transform.to_scale_angle_translation();
+            let min = center - size / 2.0;
+            let max = center + size / 2.0;
+            (cursor.cmpge(min).all() && cursor.cmplt(max).all())
+                .then_some((size.x * size.y, entity))
+        })
+        .min_by(|(left, _), (right, _)| left.total_cmp(right))
+        .map(|(_, entity)| entity)
+}
+
+fn dispatch_keyboard_input(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut keyboard_events: MessageReader<KeyboardInput>,
+    time: Res<Time>,
+    mut host: NonSendMut<PuzzleBevyPlayerHost>,
+) {
+    if host.fatal_error.is_some() {
+        return;
+    }
+    if keyboard.any_pressed([
+        KeyCode::ControlLeft,
+        KeyCode::ControlRight,
+        KeyCode::AltLeft,
+        KeyCode::AltRight,
+        KeyCode::SuperLeft,
+        KeyCode::SuperRight,
+    ]) {
+        return;
+    }
+    let trigger = keyboard_events
+        .read()
+        .find(|event| event.state == ButtonState::Pressed)
+        .and_then(|event| runtime_key_trigger(&event.logical_key));
+    if let Some(trigger) = trigger
+        && let Err(error) =
+            host.dispatch_action(SessionAction::Key { trigger }, time.elapsed_secs_f64())
+    {
+        host.fail(error);
+    }
+}
+
+fn advance_presentation(time: Res<Time>, mut host: NonSendMut<PuzzleBevyPlayerHost>) {
+    if host.fatal_error.is_none()
+        && let Err(error) = host.process_presentation(time.elapsed_secs_f64())
+    {
+        host.fail(error);
+    }
+}
+
+fn scroll_selected_choice_into_view(
+    selected_choices: Query<
+        (Entity, &ComputedNode, &UiGlobalTransform),
+        (
+            With<PuzzleBevyUiSelectedChoice>,
+            Changed<PuzzleBevyUiSelectedChoice>,
+        ),
+    >,
+    parents: Query<&ChildOf>,
+    mut scroll_nodes: Query<
+        (&ComputedNode, &UiGlobalTransform, &mut ScrollPosition),
+        Without<PuzzleBevyUiSelectedChoice>,
+    >,
+) {
+    for (selected, selected_node, selected_transform) in &selected_choices {
+        let (_, _, selected_center) = selected_transform.to_scale_angle_translation();
+        let mut ancestor = parents.get(selected).ok().map(ChildOf::parent);
+        while let Some(entity) = ancestor {
+            if let Ok((container_node, container_transform, mut scroll_position)) =
+                scroll_nodes.get_mut(entity)
+            {
+                let (_, _, container_center) = container_transform.to_scale_angle_translation();
+                scroll_position.0 += scroll_delta_to_reveal(
+                    container_center,
+                    container_node.size(),
+                    selected_center,
+                    selected_node.size(),
+                );
+                scroll_position.0 = scroll_position.0.max(Vec2::ZERO);
+            }
+            ancestor = parents.get(entity).ok().map(ChildOf::parent);
+        }
+    }
+}
+
+fn scroll_delta_to_reveal(
+    container_center: Vec2,
+    container_size: Vec2,
+    child_center: Vec2,
+    child_size: Vec2,
+) -> Vec2 {
+    let container_min = container_center - container_size / 2.0;
+    let container_max = container_center + container_size / 2.0;
+    let child_min = child_center - child_size / 2.0;
+    let child_max = child_center + child_size / 2.0;
+    let axis = |container_min: f32, container_max: f32, child_min: f32, child_max: f32| {
+        if child_min < container_min {
+            child_min - container_min
+        } else if child_max > container_max {
+            child_max - container_max
+        } else {
+            0.0
+        }
+    };
+    Vec2::new(
+        axis(container_min.x, container_max.x, child_min.x, child_max.x),
+        axis(container_min.y, container_max.y, child_min.y, child_max.y),
+    )
+}
+
+fn submit_resolved_frames(
+    time: Res<Time>,
+    primary_window: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    viewport_nodes: Query<(&PuzzleBevyUiViewport, &ComputedNode, &UiGlobalTransform)>,
+    mut queue_2d: ResMut<BevyResolvedFrameQueue2d>,
+    mut queue_3d: ResMut<BevyResolvedFrameQueue>,
+    mut submitted_ids: ResMut<SubmittedViewportIds>,
+    mut submitted_rects: ResMut<SubmittedViewportRects>,
+    interactive_camera: Res<InteractiveCameraState>,
+    mut pending_observation: ResMut<PendingPuzzleBevyPlayerObservation>,
+    mut host: NonSendMut<PuzzleBevyPlayerHost>,
+) {
+    let Ok(window) = primary_window.single() else {
+        if !host.viewports.is_empty() {
+            host.fail(BevyPlayerError::MissingPrimaryWindow);
+        }
+        return;
+    };
+    let framebuffer_by_source = viewport_nodes
+        .iter()
+        .filter_map(|(viewport, node, transform)| {
+            framebuffer_rect(
+                node,
+                transform,
+                UVec2::new(window.physical_width(), window.physical_height()),
+            )
+            .map(|framebuffer| (viewport.0.clone(), framebuffer))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let missing_layout = host
+        .viewports
+        .values()
+        .find(|viewport| !framebuffer_by_source.contains_key(&viewport.source))
+        .map(|viewport| viewport.source.clone());
+    if let Some(source) = missing_layout {
+        host.fail(BevyPlayerError::MissingViewportLayout(source));
+        return;
+    }
+    for viewport in host.viewports.values_mut() {
+        match framebuffer_by_source.get(&viewport.source) {
+            Some(rect) if submitted_rects.0.get(&viewport.source) != Some(rect) => {
+                viewport.needs_frame = true;
+            }
+            _ => {}
+        }
+    }
+    let active = host
+        .viewports
+        .values()
+        .map(|viewport| view_id(&viewport.source, &viewport.renderer))
+        .collect::<BTreeSet<_>>();
+    let result = host.resolve_frames(time.elapsed_secs_f64());
+    let frames = match result {
+        Ok(frames) => frames,
+        Err(error) => {
+            host.fail(error);
+            return;
+        }
+    };
+    let submitted = submitted_ids.0.clone();
+    for removed in submitted.difference(&active) {
+        let result = match removed.dimension {
+            puzzle_bevy_renderer::PuzzleBevyViewDimension::TwoD => queue_2d.remove(removed),
+            puzzle_bevy_renderer::PuzzleBevyViewDimension::ThreeD => queue_3d.remove(removed),
+        };
+        if let Err(error) = result {
+            host.fail(error.into());
+            return;
+        }
+    }
+    let order_by_id = host
+        .viewports
+        .values()
+        .map(|viewport| {
+            (
+                view_id(&viewport.source, &viewport.renderer),
+                viewport.order,
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let clear_color = bevy_color(host.snapshot.theme.background);
+    for resolved in frames {
+        let Some(framebuffer) = framebuffer_by_source.get(&resolved.source).copied() else {
+            host.fail(BevyPlayerError::MissingViewportLayout(resolved.source));
+            return;
+        };
+        let id = view_id(&resolved.source, &resolved.renderer);
+        let order = order_by_id[&id];
+        let result = match &resolved.renderer {
+            RuntimeRendererState::TwoD(scene) => queue_2d.submit(
+                PuzzleBevyViewId::two_d(&resolved.source.component, &resolved.source.source),
+                bevy_2d_view(scene, framebuffer, order, clear_color.clone()),
+                host.visual_images.clone(),
+                &resolved.frame,
+            ),
+            RuntimeRendererState::ThreeD(scene) => {
+                let camera = match bevy_camera(
+                    &resolved.source,
+                    scene,
+                    interactive_camera.offsets.get(&resolved.source),
+                ) {
+                    Ok(camera) => camera,
+                    Err(error) => {
+                        host.fail(error);
+                        return;
+                    }
+                };
+                queue_3d.submit(
+                    PuzzleBevyViewId::three_d(&resolved.source.component, &resolved.source.source),
+                    PuzzleBevy3dView {
+                        active: true,
+                        order,
+                        framebuffer,
+                        clear_color,
+                        camera,
+                        lighting: bevy_lighting(scene),
+                        shadows_enabled: scene.render.shadow,
+                        render_settings: bevy_render_settings(scene),
+                    },
+                    &resolved.frame,
+                )
+            }
+        };
+        if let Err(error) = result {
+            host.fail(error.into());
+            return;
+        }
+    }
+    submitted_ids.0 = active;
+    submitted_rects.0 = framebuffer_by_source;
+    pending_observation.revision = host.snapshot.revision;
+    pending_observation.surface_focus = host.snapshot.surface.focus.clone();
+    pending_observation.viewport_count = host.viewports.len();
+    pending_observation.present = true;
+}
+
+fn commit_player_observation(
+    pending: Res<PendingPuzzleBevyPlayerObservation>,
+    mut observations: ResMut<PuzzleBevyPlayerObservationState>,
+) {
+    if !pending.present {
+        return;
+    }
+    observations.record_submission(
+        pending.revision,
+        &pending.surface_focus,
+        pending.viewport_count,
+    );
+}
+
+fn bevy_2d_view(
+    scene: &puzzle_session_contract::RuntimePuzzle2Snapshot,
+    framebuffer: PuzzleBevyFramebufferRect,
+    order: isize,
+    clear_color: Color,
+) -> PuzzleBevy2dView {
+    PuzzleBevy2dView {
+        active: true,
+        order,
+        framebuffer,
+        clear_color,
+        origin: Vec2::new(scene.view.origin[0] as f32, scene.view.origin[1] as f32),
+        size: Vec2::new(f32::from(scene.view.size[0]), f32::from(scene.view.size[1])),
+    }
+}
+
+fn framebuffer_rect(
+    node: &ComputedNode,
+    transform: &UiGlobalTransform,
+    window_size: UVec2,
+) -> Option<PuzzleBevyFramebufferRect> {
+    let size = node.size();
+    if !size.is_finite() || size.x < 1.0 || size.y < 1.0 {
+        return None;
+    }
+    let (_, _, center) = transform.to_scale_angle_translation();
+    let top_left = center - size / 2.0;
+    let left = top_left.x.floor().clamp(0.0, window_size.x as f32) as u32;
+    let right = (top_left.x + size.x)
+        .ceil()
+        .clamp(0.0, window_size.x as f32) as u32;
+    let top = top_left.y.floor().clamp(0.0, window_size.y as f32) as u32;
+    let bottom_from_top = (top_left.y + size.y)
+        .ceil()
+        .clamp(0.0, window_size.y as f32) as u32;
+    if right <= left || bottom_from_top <= top {
+        return None;
+    }
+    let width = right - left;
+    let height = bottom_from_top - top;
+    let bottom = window_size.y - bottom_from_top;
+    Some(PuzzleBevyFramebufferRect {
+        physical_position: UVec2::new(left, bottom),
+        physical_size: UVec2::new(width, height),
+    })
+}
+
+fn view_id(source: &RuntimeViewportSourceId, renderer: &RuntimeRendererState) -> PuzzleBevyViewId {
+    match renderer {
+        RuntimeRendererState::TwoD(_) => PuzzleBevyViewId::two_d(&source.component, &source.source),
+        RuntimeRendererState::ThreeD(_) => {
+            PuzzleBevyViewId::three_d(&source.component, &source.source)
+        }
+    }
+}
+
+fn bevy_camera(
+    viewport_source: &RuntimeViewportSourceId,
+    scene: &puzzle_runtime_contract::RuntimePuzzle3Snapshot,
+    interaction: Option<&InteractiveCameraOffset>,
+) -> Result<PuzzleBevyCamera, BevyPlayerError> {
+    let source = &scene.render.camera;
+    if !source.zoom.is_finite() || source.zoom <= 0.0 {
+        return Err(BevyPlayerError::InvalidCameraZoom {
+            source: viewport_source.clone(),
+            zoom: source.zoom,
+        });
+    }
+    let interaction = interaction.copied().unwrap_or_default();
+    Ok(PuzzleBevyCamera {
+        projection: match source.projection {
+            RuntimePuzzle3CameraProjection::Perspective => PuzzleCameraProjection::Perspective,
+            RuntimePuzzle3CameraProjection::Orthographic => PuzzleCameraProjection::Orthographic,
+        },
+        yaw_degrees: f32::from(source.yaw_degrees) + interaction.yaw_degrees,
+        pitch_degrees: f32::from(source.pitch_degrees) + interaction.pitch_degrees,
+        roll_degrees: f32::from(source.roll_degrees),
+        distance_scale: 2.8 / (source.zoom as f32 * interaction.zoom_factor),
+    })
+}
+
+fn bevy_lighting(scene: &puzzle_runtime_contract::RuntimePuzzle3Snapshot) -> PuzzleBevyLighting {
+    let source = &scene.render.lighting;
+    PuzzleBevyLighting {
+        intensity: source.intensity as f32,
+        ambient: source.ambient as f32,
+        yaw_degrees: f32::from(source.yaw_degrees),
+        pitch_degrees: f32::from(source.pitch_degrees),
+        color: Color::linear_rgba(
+            source.color.red as f32,
+            source.color.green as f32,
+            source.color.blue as f32,
+            source.color.alpha as f32,
+        ),
+    }
+}
+
+fn bevy_render_settings(
+    scene: &puzzle_runtime_contract::RuntimePuzzle3Snapshot,
+) -> PuzzleBevy3dRenderSettings {
+    PuzzleBevy3dRenderSettings {
+        shade: scene.render.visual.shade,
+        pixelate: PuzzleBevyPixelate {
+            enabled: scene.render.pixelate.enabled,
+            scale: scene.render.pixelate.scale,
+            smoothing: scene.render.pixelate.smoothing,
+        },
+    }
+}
+
+fn preserve_wait_event_queue(wait_was_active: bool, snapshot: &RuntimeSessionSnapshot) -> bool {
+    wait_was_active && snapshot.busy
+}
+
+fn runtime_key_trigger(key: &Key) -> Option<RuntimeKeyTrigger> {
+    match key {
+        Key::Character(value) => {
+            let mut characters = value.chars();
+            let value = characters.next()?;
+            characters
+                .next()
+                .is_none()
+                .then_some(RuntimeKeyTrigger::Character { value })
+        }
+        Key::ArrowUp => Some(RuntimeKeyTrigger::ArrowUp),
+        Key::ArrowDown => Some(RuntimeKeyTrigger::ArrowDown),
+        Key::ArrowLeft => Some(RuntimeKeyTrigger::ArrowLeft),
+        Key::ArrowRight => Some(RuntimeKeyTrigger::ArrowRight),
+        Key::Enter => Some(RuntimeKeyTrigger::Enter),
+        Key::Space => Some(RuntimeKeyTrigger::Space),
+        Key::Escape => Some(RuntimeKeyTrigger::Escape),
+        Key::Tab => Some(RuntimeKeyTrigger::Tab),
+        Key::Backspace => Some(RuntimeKeyTrigger::Backspace),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use puzzle_bevy_renderer::{prepare_resolved_frame, prepare_resolved_frame_2d};
+    use puzzle_scene::{SceneAlign, SceneAspectRatio, SceneDistribution, SceneLayout, SceneSpace};
+
+    use super::*;
+    use puzzle_runtime_contract::StandaloneRuntimeExport;
+
+    const TENETEN: &str = include_str!("../../../games/TENETEN.puzzle");
+    const TENETEN3D: &str = include_str!("../../../games/TENETEN3D.puzzle3");
+    const ANIMATION_TEST_2D: &str = include_str!("../../../games/animation_test.puzzle");
+
+    #[test]
+    fn player_separates_theme_clear_and_ui_composition_from_renderer_views() {
+        let mut app = App::new();
+        app.add_systems(Startup, spawn_ui_root);
+        app.update();
+
+        let mut background_cameras = app.world_mut().query_filtered::<
+            (&Camera, &Projection, &RenderLayers),
+            With<PuzzleBevyBackgroundCamera>,
+        >();
+        let background = background_cameras.iter(app.world()).collect::<Vec<_>>();
+        assert_eq!(background.len(), 1);
+        assert_eq!(background[0].0.order, -1);
+        assert!(matches!(
+            background[0].0.clear_color,
+            ClearColorConfig::Custom(_)
+        ));
+        assert!(matches!(background[0].1, Projection::Orthographic(_)));
+        assert_eq!(background[0].2, &RenderLayers::none());
+
+        let mut ui_cameras = app.world_mut().query_filtered::<
+            (&Camera, &Projection, &RenderLayers),
+            (With<PuzzleBevyUiCamera>, With<IsDefaultUiCamera>),
+        >();
+        let ui = ui_cameras.iter(app.world()).collect::<Vec<_>>();
+        assert_eq!(ui.len(), 1);
+        assert_eq!(ui[0].0.order, isize::MAX);
+        assert!(matches!(ui[0].0.clear_color, ClearColorConfig::None));
+        assert!(matches!(ui[0].1, Projection::Orthographic(_)));
+        assert_eq!(ui[0].2, &RenderLayers::none());
+
+        let mut roots = app
+            .world_mut()
+            .query_filtered::<Option<&BackgroundColor>, With<PuzzleBevyUiRoot>>();
+        let root_background = roots.single(app.world()).unwrap().unwrap();
+        assert_eq!(root_background.0.alpha(), 0.0);
+    }
+
+    #[test]
+    fn player_observation_advances_only_after_semantic_submission_changes() {
+        let mut state = PuzzleBevyPlayerObservationState::default();
+        state.record_submission(4, "title", 0);
+        assert_eq!(
+            state.latest(),
+            Some(&PuzzleBevyPlayerObservation {
+                sequence: 1,
+                revision: 4,
+                surface_focus: "title".to_string(),
+                viewport_count: 0,
+            })
+        );
+
+        state.record_submission(4, "title", 0);
+        assert_eq!(state.latest().unwrap().sequence, 1);
+        state.record_submission(5, "playing", 1);
+        assert_eq!(
+            state.latest(),
+            Some(&PuzzleBevyPlayerObservation {
+                sequence: 2,
+                revision: 5,
+                surface_focus: "playing".to_string(),
+                viewport_count: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn standalone_export_constructs_the_final_host_with_typed_storage() {
+        let document = puzzle_lang::parse_game_for_path(TENETEN, "games/TENETEN.puzzle").unwrap();
+        let export = StandaloneRuntimeExport::new(
+            document,
+            puzzle_assets::EncodedVisualImageBundle::default(),
+            StandaloneProgressStorage {
+                key: "TENETEN:revision".to_string(),
+                save_version: 2,
+            },
+        );
+        let loaded = load_standalone_bevy_player(&serde_json::to_string(&export).unwrap()).unwrap();
+
+        assert_eq!(loaded.progress_storage.key, "TENETEN:revision");
+        assert_eq!(loaded.progress_storage.save_version, 2);
+        assert!(loaded.host.fatal_error().is_none());
+        assert!(loaded.host.snapshot().surface.root.is_some());
+        assert!(!loaded.host.snapshot().surface.components.is_empty());
+    }
+
+    #[test]
+    fn standalone_export_rejects_an_unreferenced_visual_image() {
+        let document = puzzle_lang::parse_game_for_path(TENETEN, "games/TENETEN.puzzle").unwrap();
+        let export = StandaloneRuntimeExport::new(
+            document,
+            puzzle_assets::EncodedVisualImageBundle {
+                assets: vec![puzzle_assets::EncodedVisualImageAsset {
+                    manifest: puzzle_assets::VisualImageAssetManifestEntry::from_path(
+                        "visuals/tile.png",
+                    )
+                    .unwrap(),
+                    revision: puzzle_assets::VisualImageAssetRevision(
+                        "declared-revision".to_string(),
+                    ),
+                    bytes: vec![0, 1, 2, 3],
+                }],
+            },
+            StandaloneProgressStorage {
+                key: "TENETEN:revision".to_string(),
+                save_version: 2,
+            },
+        );
+
+        let error = match load_standalone_bevy_player(&serde_json::to_string(&export).unwrap()) {
+            Ok(_) => panic!("unreferenced visual image must reject the standalone player export"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("visual image set does not match runtime references"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn host_persistence_operations_refresh_the_typed_snapshot_and_viewports() {
+        let mut clear_source =
+            PuzzleBevyPlayerHost::from_image_free_source(TENETEN, "games/TENETEN.puzzle").unwrap();
+        clear_source
+            .dispatch_action(
+                SessionAction::Key {
+                    trigger: RuntimeKeyTrigger::Enter,
+                },
+                0.0,
+            )
+            .unwrap();
+        let clear = clear_source
+            .pending_progress_save()
+            .expect("entering the game must request persistence");
+        assert_eq!(clear.operation, RuntimeProgressPersistenceOperation::Delete);
+        clear_source
+            .confirm_progress_persistence_applied(clear.request_id, 0.5)
+            .unwrap();
+        assert!(!clear_source.snapshot().has_progress_save);
+
+        let mut source =
+            PuzzleBevyPlayerHost::from_image_free_source(TENETEN, "games/TENETEN.puzzle").unwrap();
+        source
+            .dispatch_action(SessionAction::Restart, 0.75)
+            .unwrap();
+        let save = source
+            .pending_progress_save()
+            .expect("a non-clear mutation must request a progress write");
+        let RuntimeProgressPersistenceOperation::Write { save_json } = &save.operation else {
+            panic!("gameplay mutation must produce a typed write operation");
+        };
+
+        let mut restored =
+            PuzzleBevyPlayerHost::from_image_free_source(TENETEN, "games/TENETEN.puzzle").unwrap();
+        let initial_surface = restored.snapshot().surface.clone();
+        restored.restore_progress_save(save_json, 1.0).unwrap();
+
+        assert!(restored.snapshot().has_progress_save);
+        assert_ne!(restored.snapshot().surface, initial_surface);
+        assert!(restored.pending_progress_save().is_none());
+        restored
+            .dispatch_action(
+                SessionAction::Key {
+                    trigger: RuntimeKeyTrigger::Enter,
+                },
+                2.0,
+            )
+            .expect("the restored selected Continue token must remain executable");
+        assert_eq!(restored.snapshot().surface.root.as_deref(), Some("playing"));
+
+        let pending = source
+            .pending_progress_save()
+            .expect("the persisted action must keep exposing its typed request");
+        let stale_error = source
+            .confirm_progress_persistence_applied(pending.request_id + 1, 3.0)
+            .unwrap_err();
+        assert!(stale_error.to_string().contains("is stale"));
+        assert_eq!(source.pending_progress_save(), Some(pending.clone()));
+
+        source
+            .confirm_progress_persistence_applied(pending.request_id, 4.0)
+            .unwrap();
+        assert!(source.pending_progress_save().is_none());
+        assert!(source.snapshot().has_progress_save);
+    }
+
+    #[test]
+    fn committed_progress_ack_is_not_reported_as_retryable_when_projection_fails() {
+        let mut host =
+            PuzzleBevyPlayerHost::from_image_free_source(TENETEN, "games/TENETEN.puzzle").unwrap();
+        host.dispatch_action(
+            SessionAction::Key {
+                trigger: RuntimeKeyTrigger::Enter,
+            },
+            0.0,
+        )
+        .unwrap();
+        let request = host
+            .pending_progress_save()
+            .expect("the action must request persistence");
+
+        let result = host.confirm_progress_persistence_applied_with(
+            request.request_id,
+            1.0,
+            |_host, _now_seconds| {
+                Err(BevyPlayerError::Runtime(
+                    "post-ack projection failed".to_string(),
+                ))
+            },
+        );
+
+        assert!(
+            result.is_ok(),
+            "a committed acknowledgement must not be exposed as retryable"
+        );
+        assert!(
+            host.pending_progress_save().is_none(),
+            "the exact runtime request was consumed at the commit point"
+        );
+        assert_eq!(
+            host.fatal_error(),
+            Some("game runtime failed: post-ack projection failed"),
+            "post-commit projection failure belongs to the player fatal channel"
+        );
+    }
+
+    #[test]
+    fn bevy_ui_consumes_resolved_linear_theme_values() {
+        let host =
+            PuzzleBevyPlayerHost::from_image_free_source(TENETEN3D, "games/TENETEN3D.puzzle3")
+                .unwrap();
+        let theme = host.snapshot().theme;
+        assert_eq!(
+            theme.background,
+            puzzle_presentation::resolve_palette_color("#8fcf6f").unwrap()
+        );
+        assert_eq!(
+            bevy_color(theme.background),
+            Color::linear_rgba(
+                theme.background.red as f32,
+                theme.background.green as f32,
+                theme.background.blue as f32,
+                theme.background.alpha as f32,
+            )
+        );
+        assert_eq!(
+            text_style(&theme, SceneTextRole::Heading).font_size_px,
+            theme.typography.heading.font_size_px
+        );
+        assert_eq!(
+            LineHeight::RelativeToFont(theme.typography.heading.line_height),
+            LineHeight::RelativeToFont(text_style(&theme, SceneTextRole::Heading).line_height)
+        );
+        assert_eq!(
+            text_justify(Some(puzzle_scene::SceneTextAlign::Center)),
+            Justify::Center
+        );
+        assert_eq!(
+            text_justify(Some(puzzle_scene::SceneTextAlign::End)),
+            Justify::End
+        );
+    }
+
+    #[test]
+    fn placement_and_modal_state_select_one_shared_surface_stack() {
+        assert_eq!(
+            PuzzleBevyUiSurfaceStack::ORDERED,
+            [
+                PuzzleBevyUiSurfaceStack::Root,
+                PuzzleBevyUiSurfaceStack::Content,
+                PuzzleBevyUiSurfaceStack::Overlay,
+                PuzzleBevyUiSurfaceStack::Modal,
+            ]
+        );
+        assert_eq!(
+            ui_surface_stack(puzzle_scene::ComponentPlacement::Root, false).layer(),
+            PuzzleBevyUiSurfaceLayer::Root
+        );
+        assert_eq!(
+            ui_surface_stack(puzzle_scene::ComponentPlacement::Content, false).layer(),
+            PuzzleBevyUiSurfaceLayer::Content
+        );
+        assert_eq!(
+            ui_surface_stack(puzzle_scene::ComponentPlacement::Overlay, false).layer(),
+            PuzzleBevyUiSurfaceLayer::Overlay
+        );
+        assert_eq!(
+            ui_surface_stack(puzzle_scene::ComponentPlacement::Content, true).layer(),
+            PuzzleBevyUiSurfaceLayer::Overlay,
+            "modal content must compose in the overlay layer"
+        );
+        assert_eq!(
+            ui_surface_stack(puzzle_scene::ComponentPlacement::Content, true).root_z_index(),
+            100,
+            "the same modal tier must own viewport order and UI root z-index"
+        );
+    }
+
+    #[test]
+    fn awaited_pointer_event_attaches_only_its_typed_action() {
+        let host =
+            PuzzleBevyPlayerHost::from_image_free_source(TENETEN, "games/TENETEN.puzzle").unwrap();
+        let mut component = host.snapshot().surface.components[0].clone();
+        let RuntimeComponentPresentation::Ready(mut scene) = component.presentation.clone() else {
+            panic!("fixture root presentation must resolve");
+        };
+        let token = RuntimeSceneActionToken {
+            component: component.id.clone(),
+            action: puzzle_runtime_contract::RuntimeSceneActionId::Event {
+                name: "dismiss".to_string(),
+            },
+        };
+        component.await_event = Some("dismiss".to_string());
+        scene.events = Some(BTreeMap::from([(
+            "dismiss".to_string(),
+            puzzle_session_contract::RuntimeResolvedEventBinding {
+                pointer: false,
+                keys: Vec::new(),
+                action: Some(token.clone()),
+            },
+        )]));
+        assert!(awaited_pointer_action(&component, &scene).is_none());
+        scene
+            .events
+            .as_mut()
+            .unwrap()
+            .get_mut("dismiss")
+            .unwrap()
+            .pointer = true;
+        assert_eq!(awaited_pointer_action(&component, &scene), Some(&token));
+    }
+
+    #[test]
+    fn invalid_camera_zoom_fails_at_the_native_adapter_boundary() {
+        let host =
+            PuzzleBevyPlayerHost::from_image_free_source(TENETEN3D, "games/TENETEN3D.puzzle3")
+                .unwrap();
+        let (source, scene) = host
+            .snapshot()
+            .viewport_sources
+            .iter()
+            .find_map(|(source, renderer)| match renderer {
+                RuntimeRendererState::ThreeD(scene) => Some((source.clone(), scene.clone())),
+                RuntimeRendererState::TwoD(_) => None,
+            })
+            .expect("fixture must expose one 3D viewport");
+        let mut invalid = scene;
+        invalid.render.camera.zoom = 0.0;
+        assert!(matches!(
+            bevy_camera(&source, &invalid, None),
+            Err(BevyPlayerError::InvalidCameraZoom {
+                source: failed_source,
+                zoom: 0.0
+            }) if failed_source == source
+        ));
+    }
+
+    #[test]
+    fn interactive_camera_offset_changes_only_the_host_camera_projection() {
+        let host =
+            PuzzleBevyPlayerHost::from_image_free_source(TENETEN3D, "games/TENETEN3D.puzzle3")
+                .unwrap();
+        let (source, scene) = host
+            .snapshot()
+            .viewport_sources
+            .iter()
+            .find_map(|(source, renderer)| match renderer {
+                RuntimeRendererState::ThreeD(scene) => Some((source, scene)),
+                RuntimeRendererState::TwoD(_) => None,
+            })
+            .expect("fixture must expose a typed 3D viewport");
+        let authored = bevy_camera(source, scene, None).unwrap();
+        let interactive = bevy_camera(
+            source,
+            scene,
+            Some(&InteractiveCameraOffset {
+                yaw_degrees: 12.0,
+                pitch_degrees: -7.0,
+                zoom_factor: 2.0,
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(interactive.yaw_degrees, authored.yaw_degrees + 12.0);
+        assert_eq!(interactive.pitch_degrees, authored.pitch_degrees - 7.0);
+        assert_eq!(interactive.distance_scale, authored.distance_scale / 2.0);
+        assert_eq!(interactive.roll_degrees, authored.roll_degrees);
+        assert_eq!(interactive.projection, authored.projection);
+    }
+
+    #[test]
+    fn three_dimensional_render_settings_cross_the_player_boundary_without_defaults() {
+        let host =
+            PuzzleBevyPlayerHost::from_image_free_source(TENETEN3D, "games/TENETEN3D.puzzle3")
+                .unwrap();
+        let mut scene = host
+            .snapshot()
+            .viewport_sources
+            .values()
+            .find_map(|renderer| match renderer {
+                RuntimeRendererState::ThreeD(scene) => Some(scene.clone()),
+                RuntimeRendererState::TwoD(_) => None,
+            })
+            .expect("fixture must expose a typed 3D viewport");
+        scene.render.visual.shade = false;
+        scene.render.pixelate.enabled = true;
+        scene.render.pixelate.scale = 5;
+        scene.render.pixelate.smoothing = true;
+
+        let settings = bevy_render_settings(&scene);
+        assert!(!settings.shade);
+        assert!(settings.pixelate.enabled);
+        assert_eq!(settings.pixelate.scale, 5);
+        assert!(settings.pixelate.smoothing);
+    }
+
+    #[test]
+    fn unresolved_authored_theme_color_fails_at_session_initialization() {
+        let source = TENETEN3D.replacen(
+            "background_color = #8fcf6f",
+            "background_color = not-a-color",
+            1,
+        );
+        let error = match PuzzleBevyPlayerHost::from_image_free_source(
+            &source,
+            "games/invalid_theme.puzzle3",
+        ) {
+            Ok(_) => panic!("unresolved authored theme color must fail"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("InvalidColor"));
+        assert!(error.to_string().contains("not-a-color"));
+    }
+
+    #[test]
+    fn teneten_title_boots_without_a_viewport_and_selected_menu_token_activates() {
+        let mut host =
+            PuzzleBevyPlayerHost::from_image_free_source(TENETEN, "games/TENETEN.puzzle").unwrap();
+        assert_eq!(host.viewport_count(), 0);
+        host.dispatch_action(
+            SessionAction::Key {
+                trigger: RuntimeKeyTrigger::Enter,
+            },
+            0.0,
+        )
+        .unwrap();
+        assert!(host.snapshot().revision > 0);
+    }
+
+    #[test]
+    fn teneten3d_uses_the_component_scoped_viewport_source() {
+        let mut host =
+            PuzzleBevyPlayerHost::from_image_free_source(TENETEN3D, "games/TENETEN3D.puzzle3")
+                .unwrap();
+        host.process_presentation(0.0).unwrap();
+        let frames = host.resolve_frames(0.0).unwrap();
+        assert_eq!(frames.len(), 1);
+        assert!(
+            !prepare_resolved_frame(&frames[0].frame)
+                .unwrap()
+                .voxels
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn two_d_game_uses_the_component_scoped_viewport_source() {
+        let mut host = PuzzleBevyPlayerHost::from_image_free_source(
+            ANIMATION_TEST_2D,
+            "games/animation_test.puzzle",
+        )
+        .unwrap();
+        host.process_presentation(0.0).unwrap();
+        let frames = host.resolve_frames(0.0).unwrap();
+        assert_eq!(frames.len(), 1);
+        let RuntimeRendererState::TwoD(scene) = &frames[0].renderer else {
+            panic!("fixture must resolve a 2D viewport")
+        };
+        let view = bevy_2d_view(
+            scene,
+            PuzzleBevyFramebufferRect {
+                physical_position: UVec2::ZERO,
+                physical_size: UVec2::new(320, 240),
+            },
+            0,
+            Color::BLACK,
+        );
+        assert!(
+            !prepare_resolved_frame_2d(&frames[0].frame, host.visual_images.as_ref(), &view)
+                .unwrap()
+                .meshes
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn bevy_2d_view_consumes_the_runtime_resolved_window() {
+        let host = PuzzleBevyPlayerHost::from_image_free_source(
+            ANIMATION_TEST_2D,
+            "games/animation_test.puzzle",
+        )
+        .unwrap();
+        let RuntimeRendererState::TwoD(mut scene) =
+            host.viewports.values().next().unwrap().renderer.clone()
+        else {
+            panic!("fixture must resolve a 2D viewport")
+        };
+        scene.view.origin = [3, 5];
+        scene.view.size = [7, 4];
+        let view = bevy_2d_view(
+            &scene,
+            PuzzleBevyFramebufferRect {
+                physical_position: UVec2::new(11, 13),
+                physical_size: UVec2::new(280, 160),
+            },
+            2,
+            Color::BLACK,
+        );
+        assert_eq!(view.origin, Vec2::new(3.0, 5.0));
+        assert_eq!(view.size, Vec2::new(7.0, 4.0));
+        assert_eq!(view.framebuffer.physical_position, UVec2::new(11, 13));
+        assert_eq!(view.order, 2);
+    }
+
+    #[test]
+    fn keyboard_mapping_only_converts_logical_keys_to_runtime_triggers() {
+        assert_eq!(
+            runtime_key_trigger(&Key::ArrowRight),
+            Some(RuntimeKeyTrigger::ArrowRight)
+        );
+        assert_eq!(
+            runtime_key_trigger(&Key::Character("。".into())),
+            Some(RuntimeKeyTrigger::Character { value: '。' })
+        );
+        assert_eq!(runtime_key_trigger(&Key::F1), None);
+    }
+
+    #[test]
+    fn wait_queue_retention_depends_on_the_post_dispatch_busy_state() {
+        let host =
+            PuzzleBevyPlayerHost::from_image_free_source(TENETEN3D, "games/TENETEN3D.puzzle3")
+                .unwrap();
+        let mut snapshot = host.snapshot().clone();
+        snapshot.busy = true;
+        assert!(preserve_wait_event_queue(true, &snapshot));
+        snapshot.busy = false;
+        assert!(!preserve_wait_event_queue(true, &snapshot));
+        snapshot.busy = true;
+        assert!(!preserve_wait_event_queue(false, &snapshot));
+    }
+
+    #[test]
+    fn authored_lighting_reaches_the_bevy_player_contract() {
+        let source = TENETEN3D.replacen(
+            "render {\n",
+            "render {\nlighting {\nintensity = 0.75\nambient = 1.25\nyaw = -20\npitch = 60\ncolor = #ffd7aa\n}\n",
+            1,
+        );
+        let host =
+            PuzzleBevyPlayerHost::from_image_free_source(&source, "games/typed_lighting.puzzle3")
+                .expect("authored lighting should initialize the typed Bevy host");
+        let lighting = host
+            .viewports
+            .values()
+            .find_map(|viewport| match &viewport.renderer {
+                RuntimeRendererState::ThreeD(scene) => Some(bevy_lighting(scene)),
+                RuntimeRendererState::TwoD(_) => None,
+            })
+            .expect("the 3D viewport owns authored lighting");
+        assert_eq!(lighting.intensity, 0.75);
+        assert_eq!(lighting.ambient, 1.25);
+        assert_eq!(lighting.yaw_degrees, -20.0);
+        assert_eq!(lighting.pitch_degrees, 60.0);
+        assert_eq!(
+            lighting.color,
+            Color::linear_rgba(1.0, 0.6795425, 0.40197778, 1.0)
+        );
+    }
+
+    #[test]
+    fn scene_layout_contract_lowers_to_bevy_node_without_adapter_defaults() {
+        let node = node_from_layout(
+            &SceneLayout {
+                space: SceneSpace::Fill { weight: 3 },
+                align_self: Some(SceneAlign::End),
+                aspect_ratio: Some(SceneAspectRatio::new(16, 9)),
+                gap: Some(7),
+                align: SceneAlign::Stretch,
+                distribute: SceneDistribution::Between,
+                scroll: true,
+            },
+            Some(FlexDirection::Row),
+        );
+        assert_eq!(node.flex_direction, FlexDirection::Row);
+        assert_eq!(node.flex_grow, 3.0);
+        assert_eq!(node.align_self, AlignSelf::FlexEnd);
+        assert_eq!(node.align_items, AlignItems::Stretch);
+        assert_eq!(node.justify_content, JustifyContent::SpaceBetween);
+        assert_eq!(node.aspect_ratio, Some(16.0 / 9.0));
+        assert_eq!(node.row_gap, px(7));
+        assert_eq!(node.column_gap, px(7));
+        assert_eq!(node.overflow, Overflow::scroll());
+    }
+
+    #[test]
+    fn selected_choice_scroll_delta_reveals_only_clipped_axes() {
+        assert_eq!(
+            scroll_delta_to_reveal(
+                Vec2::new(50.0, 50.0),
+                Vec2::new(100.0, 100.0),
+                Vec2::new(50.0, 125.0),
+                Vec2::new(40.0, 30.0),
+            ),
+            Vec2::new(0.0, 40.0)
+        );
+        assert_eq!(
+            scroll_delta_to_reveal(
+                Vec2::new(50.0, 50.0),
+                Vec2::new(100.0, 100.0),
+                Vec2::new(20.0, 20.0),
+                Vec2::new(20.0, 20.0),
+            ),
+            Vec2::ZERO
+        );
+    }
+
+    #[test]
+    fn viewport_framebuffer_comes_from_each_ui_leaf_identity() {
+        let mut left = ComputedNode::default();
+        left.size = Vec2::new(320.0, 240.0);
+        let mut right = ComputedNode::default();
+        right.size = Vec2::new(640.0, 360.0);
+        let left_rect = framebuffer_rect(
+            &left,
+            &UiGlobalTransform::from_xy(160.0, 120.0),
+            UVec2::new(1280, 720),
+        )
+        .unwrap();
+        let right_rect = framebuffer_rect(
+            &right,
+            &UiGlobalTransform::from_xy(960.0, 180.0),
+            UVec2::new(1280, 720),
+        )
+        .unwrap();
+        assert_eq!(left_rect.physical_position, UVec2::new(0, 480));
+        assert_eq!(left_rect.physical_size, UVec2::new(320, 240));
+        assert_eq!(right_rect.physical_position, UVec2::new(640, 360));
+        assert_eq!(right_rect.physical_size, UVec2::new(640, 360));
+    }
+
+    #[test]
+    fn animation_batch_routes_to_exact_component_and_source() {
+        let mut host =
+            PuzzleBevyPlayerHost::from_image_free_source(TENETEN3D, "games/TENETEN3D.puzzle3")
+                .unwrap();
+        let original_source = host.viewports.keys().next().unwrap().clone();
+        let sibling_source = RuntimeViewportSourceId {
+            component: original_source.component.clone(),
+            source: format!("{}_sibling", original_source.source),
+        };
+        let mut sibling = host.viewports[&original_source].clone();
+        sibling.source = sibling_source.clone();
+        host.viewports.insert(sibling_source.clone(), sibling);
+        let animation = RuntimeAnimationEvent::Animation {
+            name: "pulse".to_string(),
+            position: puzzle_runtime_contract::RuntimeCoord {
+                x: 0,
+                y: 0,
+                z: Some(0),
+            },
+            resolved_visual: None,
+        };
+        host.pending_presentation = VecDeque::from([QueuedPresentationEvent {
+            event: RuntimePresentationEvent::AnimationBatch {
+                source: sibling_source.clone(),
+                level_index: Some(0),
+                animations: vec![animation.clone()],
+            },
+        }]);
+        host.process_presentation(1.0).unwrap();
+        assert!(
+            host.viewports[&original_source]
+                .active_animations
+                .is_empty()
+        );
+        assert_eq!(
+            host.viewports[&sibling_source].active_animations,
+            vec![animation]
+        );
+    }
+
+    #[test]
+    fn surface_and_renderer_viewport_dimensions_must_match() {
+        fn flip_first_viewport(components: &mut [RuntimeResolvedSceneComponent]) -> bool {
+            for component in components {
+                match component {
+                    RuntimeResolvedSceneComponent::Viewport { dimension, .. } => {
+                        *dimension = match dimension {
+                            puzzle_session_contract::RuntimeViewportDimension::TwoD => {
+                                puzzle_session_contract::RuntimeViewportDimension::ThreeD
+                            }
+                            puzzle_session_contract::RuntimeViewportDimension::ThreeD => {
+                                puzzle_session_contract::RuntimeViewportDimension::TwoD
+                            }
+                        };
+                        return true;
+                    }
+                    RuntimeResolvedSceneComponent::Row { children, .. }
+                    | RuntimeResolvedSceneComponent::Column { children, .. }
+                    | RuntimeResolvedSceneComponent::Box { children, .. } => {
+                        if flip_first_viewport(children) {
+                            return true;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            false
+        }
+
+        let host =
+            PuzzleBevyPlayerHost::from_image_free_source(TENETEN3D, "games/TENETEN3D.puzzle3")
+                .unwrap();
+        let mut snapshot = host.snapshot().clone();
+        let flipped =
+            snapshot.surface.components.iter_mut().any(|component| {
+                match &mut component.presentation {
+                    RuntimeComponentPresentation::Ready(scene) => {
+                        flip_first_viewport(&mut scene.components)
+                    }
+                    RuntimeComponentPresentation::Error { .. } => false,
+                }
+            });
+        assert!(flipped);
+        assert!(matches!(
+            projected_viewports(&snapshot, 0.0),
+            Err(BevyPlayerError::ViewportDimensionMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn component_presentation_errors_fail_at_the_snapshot_boundary() {
+        let host =
+            PuzzleBevyPlayerHost::from_image_free_source(TENETEN, "games/TENETEN.puzzle").unwrap();
+        let mut snapshot = host.snapshot().clone();
+        let component = snapshot.surface.components.first_mut().unwrap();
+        let component_id = component.id.clone();
+        component.presentation = RuntimeComponentPresentation::Error {
+            error: "unresolved title".to_string(),
+        };
+        assert!(matches!(
+            projected_viewports(&snapshot, 0.0),
+            Err(BevyPlayerError::ComponentPresentation { component, error })
+                if component == component_id && error == "unresolved title"
+        ));
+    }
+
+    #[test]
+    fn unsupported_frame_components_fail_at_the_snapshot_boundary() {
+        let host =
+            PuzzleBevyPlayerHost::from_image_free_source(TENETEN, "games/TENETEN.puzzle").unwrap();
+        let mut snapshot = host.snapshot().clone();
+        let component = snapshot.surface.components.first_mut().unwrap();
+        let RuntimeComponentPresentation::Ready(scene) = &mut component.presentation else {
+            panic!("fixture component must have a resolved presentation");
+        };
+        scene.components.push(RuntimeResolvedSceneComponent::Frame {
+            kind: "frame".to_string(),
+            source: "board".to_string(),
+            layout: Default::default(),
+        });
+
+        assert!(matches!(
+            projected_viewports(&snapshot, 0.0),
+            Err(BevyPlayerError::UnsupportedFrameComponent { kind, source })
+                if kind == "frame" && source == "board"
+        ));
+    }
+
+    #[test]
+    fn one_viewport_source_cannot_back_multiple_ui_leaf_rectangles() {
+        fn first_viewport(
+            components: &[RuntimeResolvedSceneComponent],
+        ) -> Option<RuntimeResolvedSceneComponent> {
+            components.iter().find_map(|component| match component {
+                RuntimeResolvedSceneComponent::Viewport { .. } => Some(component.clone()),
+                RuntimeResolvedSceneComponent::Row { children, .. }
+                | RuntimeResolvedSceneComponent::Column { children, .. }
+                | RuntimeResolvedSceneComponent::Box { children, .. } => first_viewport(children),
+                _ => None,
+            })
+        }
+
+        let host =
+            PuzzleBevyPlayerHost::from_image_free_source(TENETEN3D, "games/TENETEN3D.puzzle3")
+                .unwrap();
+        let mut snapshot = host.snapshot().clone();
+        let duplicated = snapshot.surface.components.iter_mut().any(|component| {
+            let RuntimeComponentPresentation::Ready(scene) = &mut component.presentation else {
+                return false;
+            };
+            let Some(viewport) = first_viewport(&scene.components) else {
+                return false;
+            };
+            scene.components.push(viewport);
+            true
+        });
+        assert!(duplicated);
+        assert!(matches!(
+            projected_viewports(&snapshot, 0.0),
+            Err(BevyPlayerError::DuplicateViewportLeaf(_))
+        ));
+    }
+
+    #[test]
+    fn viewport_camera_order_follows_surface_stack_before_source_ids() {
+        fn replace_viewport_source(
+            components: &mut [RuntimeResolvedSceneComponent],
+            replacement: &RuntimeViewportSourceId,
+        ) -> bool {
+            for component in components {
+                match component {
+                    RuntimeResolvedSceneComponent::Viewport { source, .. } => {
+                        *source = replacement.clone();
+                        return true;
+                    }
+                    RuntimeResolvedSceneComponent::Row { children, .. }
+                    | RuntimeResolvedSceneComponent::Column { children, .. }
+                    | RuntimeResolvedSceneComponent::Box { children, .. } => {
+                        if replace_viewport_source(children, replacement) {
+                            return true;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            false
+        }
+
+        let host =
+            PuzzleBevyPlayerHost::from_image_free_source(TENETEN3D, "games/TENETEN3D.puzzle3")
+                .unwrap();
+        let mut snapshot = host.snapshot().clone();
+        let original_source = snapshot.viewport_sources.keys().next().unwrap().clone();
+        let renderer = snapshot.viewport_sources[&original_source].clone();
+        let original_component = snapshot
+            .surface
+            .components
+            .iter()
+            .find(|component| {
+                matches!(
+                    &component.presentation,
+                    RuntimeComponentPresentation::Ready(_)
+                )
+            })
+            .unwrap()
+            .clone();
+        let root_source = RuntimeViewportSourceId {
+            component: "root_component".to_string(),
+            source: "zzz_root".to_string(),
+        };
+        let overlay_source = RuntimeViewportSourceId {
+            component: "overlay_component".to_string(),
+            source: "zzz_overlay_first".to_string(),
+        };
+        let overlay_second_source = RuntimeViewportSourceId {
+            component: "overlay_second_component".to_string(),
+            source: "aaa_overlay_second".to_string(),
+        };
+        let modal_source = RuntimeViewportSourceId {
+            component: "modal_component".to_string(),
+            source: "000_modal".to_string(),
+        };
+        let mut root_component = original_component.clone();
+        root_component.id = root_source.component.clone();
+        root_component.placement = puzzle_scene::ComponentPlacement::Root;
+        let RuntimeComponentPresentation::Ready(root_scene) = &mut root_component.presentation
+        else {
+            unreachable!()
+        };
+        assert!(replace_viewport_source(
+            &mut root_scene.components,
+            &root_source
+        ));
+        let mut overlay_component = original_component.clone();
+        overlay_component.id = overlay_source.component.clone();
+        overlay_component.placement = puzzle_scene::ComponentPlacement::Overlay;
+        let RuntimeComponentPresentation::Ready(overlay_scene) =
+            &mut overlay_component.presentation
+        else {
+            unreachable!()
+        };
+        assert!(replace_viewport_source(
+            &mut overlay_scene.components,
+            &overlay_source
+        ));
+        let mut overlay_second_component = original_component.clone();
+        overlay_second_component.id = overlay_second_source.component.clone();
+        overlay_second_component.placement = puzzle_scene::ComponentPlacement::Overlay;
+        let RuntimeComponentPresentation::Ready(overlay_second_scene) =
+            &mut overlay_second_component.presentation
+        else {
+            unreachable!()
+        };
+        assert!(replace_viewport_source(
+            &mut overlay_second_scene.components,
+            &overlay_second_source
+        ));
+        let mut modal_component = original_component;
+        modal_component.id = modal_source.component.clone();
+        modal_component.placement = puzzle_scene::ComponentPlacement::Content;
+        modal_component.modal = true;
+        let RuntimeComponentPresentation::Ready(modal_scene) = &mut modal_component.presentation
+        else {
+            unreachable!()
+        };
+        assert!(replace_viewport_source(
+            &mut modal_scene.components,
+            &modal_source
+        ));
+        snapshot.surface.components = vec![
+            modal_component,
+            overlay_component,
+            root_component,
+            overlay_second_component,
+        ];
+        snapshot.viewport_sources.clear();
+        snapshot
+            .viewport_sources
+            .insert(root_source.clone(), renderer.clone());
+        snapshot
+            .viewport_sources
+            .insert(overlay_source.clone(), renderer.clone());
+        snapshot
+            .viewport_sources
+            .insert(overlay_second_source.clone(), renderer.clone());
+        snapshot
+            .viewport_sources
+            .insert(modal_source.clone(), renderer);
+
+        let projected = projected_viewports(&snapshot, 0.0).unwrap();
+        assert_eq!(projected[&root_source].order, 0);
+        assert_eq!(projected[&overlay_source].order, 1);
+        assert_eq!(projected[&overlay_second_source].order, 2);
+        assert_eq!(projected[&modal_source].order, 3);
+    }
+}

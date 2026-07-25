@@ -1,13 +1,14 @@
 use std::collections::HashMap;
 
 use crate::SpatialPresentation;
+use puzzle_assets::VisualImageAssetManifestEntry;
 use puzzle_core::{
     ComparisonOp, ConditionId, ConditionValueKind, GridCompiledGame, GridConditionValueKind,
     GridExecutableProgram, GridGoalCondition, GridInput, GridProgramCatalog, GridProgramRef,
     GridRuleStep, GridSize, GridState, InputId, MarkId, ObjectId, RuleId, Size2, Size3, VariableId,
 };
 pub use puzzle_core::{GoalClauseOf, GoalConditionOf, GoalExprOf, GoalValueOf};
-pub use puzzle_runtime_contract::RuntimeEffect as RuleEffect;
+pub use puzzle_runtime_contract::RuntimeEffect;
 pub use puzzle_scene::{
     ComponentOrder, ComponentPlacement, ComponentProperty, ComponentVisibility,
     SceneAlign as SceneAlignDef, SceneAspectRatio as SceneAspectRatioDef, SceneBinaryOp,
@@ -19,6 +20,40 @@ pub use puzzle_scene::{
     SceneTextRole as SceneTextRoleDef, ViewportProjection as ViewportProjectionDef,
 };
 use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "owner", content = "effect", rename_all = "snake_case")]
+/// Ordered effects attached to a lowered rule.
+///
+/// Runtime effects are source-free commands that may cross the public runtime
+/// boundary. Lifecycle effects retain language-owned scene expressions and are
+/// executed only by the session owner.
+pub enum RuleEffect {
+    Runtime(RuntimeEffect),
+    Lifecycle(SceneEffect),
+}
+
+impl From<RuntimeEffect> for RuleEffect {
+    fn from(effect: RuntimeEffect) -> Self {
+        Self::Runtime(effect)
+    }
+}
+
+impl RuleEffect {
+    pub fn runtime(&self) -> Option<&RuntimeEffect> {
+        match self {
+            Self::Runtime(effect) => Some(effect),
+            Self::Lifecycle(_) => None,
+        }
+    }
+
+    pub fn into_runtime(self) -> Result<RuntimeEffect, SceneEffect> {
+        match self {
+            Self::Runtime(effect) => Ok(effect),
+            Self::Lifecycle(effect) => Err(effect),
+        }
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LoadedDocument {
@@ -508,8 +543,12 @@ pub struct VisualPixelsPerCell {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum VisualKind {
     Solid(String),
-    Image { source: String },
-    Ascii { colors: Vec<VisualColorDef> },
+    Image {
+        asset: VisualImageAssetManifestEntry,
+    },
+    Ascii {
+        colors: Vec<VisualColorDef>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -520,18 +559,21 @@ pub struct VisualColorDef {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PuzzleRenderDef {
-    pub grid: PuzzleGridRenderDef,
+    pub grid: PuzzleGridMode,
     pub camera: crate::CameraSettings3,
+    pub lighting: crate::LightingSettings3,
     pub visual: crate::VisualRenderSettings3,
     pub shadow: bool,
     pub viewport: crate::ViewportSettings3,
     pub pixelate: crate::PixelateRenderSettings3,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PuzzleGridRenderDef {
-    pub occupied_cells: bool,
-    pub all_cells: bool,
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PuzzleGridMode {
+    #[default]
+    Hidden,
+    OccupiedCells,
+    AllCells,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

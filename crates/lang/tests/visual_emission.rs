@@ -76,7 +76,11 @@ fn visuals_use_one_asset_shape_for_object_bindings_and_explicit_emissions() {
         effects.iter().any(|effect| {
             matches!(
                 effect,
-                RuleEffect::EmitAnimation { name, component: 0, .. } if name == "flash"
+                RuleEffect::Runtime(puzzle_lang::RuntimeEffect::EmitAnimation {
+                    name,
+                    component: 0,
+                    ..
+                }) if name == "flash"
             )
         })
     }));

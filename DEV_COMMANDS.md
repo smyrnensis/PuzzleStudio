@@ -7,21 +7,21 @@ Run these commands from the repository root unless noted otherwise.
 Serve a game in the browser player:
 
 ```bash
-cargo run -p html-play -- games/spec_2d.puzzle --serve
+cargo run -p html-play -- games/animation_test.puzzle --serve
 ```
 
 Serve the browser editor with a local preview server:
 
 ```bash
-cargo run -p html-editor -- games/spec_2d.puzzle --serve
+cargo run -p html-editor -- games/animation_test.puzzle --serve
 ```
 
 Use the installed CLI facade when you want the product command instead of a
 crate-local development command:
 
 ```bash
-puzzlestudio preview games/spec_2d.puzzle
-puzzlestudio editor games/spec_2d.puzzle
+puzzlestudio preview games/animation_test.puzzle
+puzzlestudio editor games/animation_test.puzzle
 ```
 
 The server command prints the local `http://127.0.0.1:<port>` URL after it
@@ -39,7 +39,7 @@ tools/dev_export_html.sh games/fixban_tween.puzzle -o games/fixban_tween.html
 Direct crate command, useful when you intentionally do not want the wrapper:
 
 ```bash
-cargo run -p html-play -- games/spec_2d.puzzle -o /tmp/spec_2d.html
+cargo run -p html-play -- games/animation_test.puzzle -o /tmp/animation_test.html
 ```
 
 ## Generate Web Editor
@@ -49,7 +49,8 @@ standalone `editor.html` artifact. Regenerate the Pages entry and adjacent
 static assets through the wrapper:
 
 ```bash
-tools/generate_web_editor.sh games/spec_2d.puzzle -o docs/index.html
+tools/install_editor_frontend_deps.sh
+tools/generate_web_editor.sh -o docs/index.html
 ```
 
 ## Tauri Desktop Shell
@@ -82,11 +83,11 @@ Signing, notarization, and installer packaging are separate release steps.
 Check a `.puzzle` file through the CLI facade:
 
 ```bash
-puzzlestudio check games/spec_2d.puzzle
+puzzlestudio check games/animation_test.puzzle
 ```
 
 Check through Cargo without relying on an installed CLI binary:
 
 ```bash
-cargo run -p puzzlestudio -- check games/spec_2d.puzzle
+cargo run -p puzzlestudio -- check games/animation_test.puzzle
 ```

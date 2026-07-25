@@ -529,6 +529,13 @@ occupied_cells
 puzzle push3d {
 render {
 camera yaw=34 pitch=38 zoom=1 interactive_look interactive_zoom
+lighting {
+intensity = 1
+ambient = 1
+yaw = 53
+pitch = 56
+color = #ffffff
+}
 grid occupied_cells
 viewport {
 zoomscreen 7 7
@@ -541,6 +548,8 @@ shade
 ```
 
 `orthographic = true` は正投影を選び、省略時または `false` は透視投影になる。`yaw` / `pitch` / `zoom` は初期 camera view、`interactive_look` は pointer drag による yaw/pitch 変更、`interactive_zoom` は wheel/pinch 系の zoom 変更を許す設定である。`zoom = 1` が `zoomscreen` / `smoothscreen` の通常倍率で、`zoom` や interactive zoom はその framing に対する上書き倍率として扱う。旧 `debug_camera` / `camera_yaw` / `camera_pitch` / `camera_zoom` や `interactive_look = true` のような boolean assignment は受け付けない。
+
+`lighting` は 3D model の初期照明を指定する。`intensity` と `ambient` は backend 固有の lux などではなく、標準照明に対する比率であり、`1` が標準、`0` が消灯である。`ambient` は方向を持たず、光源の反対側を含む全体へ加わる明るさである。`yaw` / `pitch` は主光源が盤面へ入る方向を度数で指定し、`color` は ambient と方向光の共通色を指定する。省略時は上例の値を使う。
 
 3D `zoomscreen` / `smoothscreen` は `render { viewport { ... } }` が所有する focus-follow framing 設定である。`zoomscreen <w> <d>` は focus object を中心に `w x d x full` の仮想 world-space box を置き、その box を現在の camera yaw/pitch で投影して画面に収まる最大倍率にする。`full` は occupied height ではなく `level.size.height` を使う。`zoomscreen <w> <d> <h>` は高さも focus 周りの `h` cell として扱う。`smoothscreen` は同じ desired framing を作るが、描画用 view target / scale だけが遅れて追従する。どちらも culling ではなく framing であり、外側 object を消さない。`focus <selector>` は追従対象で、省略時は `Player`。
 
@@ -590,7 +599,9 @@ button "Title" -> goto title
 }
 ```
 
-`puzzle sokoban` は scene-local puzzle state slot を model と同じ名前で定義する標準形。runtime snapshot は scalar state を `sceneState`、puzzle slot 名を `scenePuzzles` として出す。複数 instance が必要な場合だけ `sokoban1 = puzzle sokoban` のように明示名を付ける。
+`puzzle sokoban` は scene-local puzzle state slot を model と同じ名前で定義する標準形。runtime snapshot は session / scene-local scalar state、authored component definition / properties、puzzle slot 一覧を公開せず、それらを評価済み component presentation と component instance 単位の viewport source registry に投影する。viewport leaf は `{ component, source }` の typed identity を持ち、renderer state は同じ identity の registry entry から取得する。viewport上の変化を表すanimation batchだけが同じtyped source identityを持つ。waitはsession timeline上の遅延、audioは解決済みasset IDに対するtyped commandであり、scene名・puzzle名・viewport identity・sound名・seed・recipeを持たない。adapterがこれらのtargetや音声意味論を再構成してはならない。editor/debug が raw state を必要とする場合は player snapshot に field を戻さず、editor feature が所有する別の typed debug projection を使う。複数 slot が必要な場合だけ `sokoban1 = puzzle sokoban` のように明示名を付ける。
+
+platform keyboard event は adapter が `RuntimeKeyTrigger` へ変換し、`SessionAction::Key` として Rust session へ渡す。modal/awaited event、focused scene shortcut、selected choice の confirm / move、model input、未使用 key に対する system action の優先順位は session owner が一度だけ解決する。HTML / Bevy adapter は `z`、`y`、WASD、arrow、confirm などの game semantics を解釈しない。runtime theme も preset 名や CSS token map を公開せず、linear RGBA、typography、control metrics まで Rust presentation owner が解決した typed contract として渡す。
 
 現在の標準 component:
 
@@ -776,6 +787,8 @@ solid = actor
 ```
 
 `layers` は位置を持つ object の state layer と render priority を同じ順序付き宣言から作る canonical block。
+
+runtime presentation は authoring visual を backend-neutral な `ResolvedVisualClip`、盤面上の `ResolvedRenderInstance`、同一 priority の `ResolvedCompositionGroup` へ materialize する。rendererへ渡す `ResolvedRenderFrame` ではpalette token、visual名、frame timing、animation channel、priority、merge規則はすでに解決済みで、pixel / voxel とlinear RGBA、cell、affine、opacity、object IDだけを持つ。Bevy 3D backendはこのRust型をJSON変換なしで直接消費し、voxel entity、shared mesh/material、camera、light、shadow、culling、batching、GPU bufferを所有する。pixel / external image batchは3D backendで別表現へ推測変換せず、対応する2D backendが存在するまで明示的に拒否する。
 
 `visuals [name] [of namespace]` は object と animation の見た目を補完する resource block。state storage と layer order の所有者は `layers`。
 

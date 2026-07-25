@@ -1,7 +1,11 @@
-use std::cell::RefCell;
+use std::{cell::RefCell, collections::VecDeque, rc::Rc, sync::Arc};
 
 use serde::{Serialize, de::DeserializeOwned};
 use wasm_bindgen::prelude::*;
+
+use puzzle_audio::{
+    AudioAssetCatalog, AudioVoiceId, MusicAssetId, MusicRecipe, SFX_TYPES, SfxAssetId, SfxRecipe,
+};
 
 type SourceAnalysisRevision = u32;
 
@@ -17,7 +21,11 @@ export interface WorkspacePresentationManifest {
     readonly cssPaths: string[];
     readonly scriptPaths: string[];
     readonly filePaths: string[];
-    readonly visualImagePaths: string[];
+    readonly visualImageAssets: ReadonlyArray<{
+        readonly id: string;
+        readonly path: string;
+        readonly format: "png" | "jpeg";
+    }>;
 }
 "#;
 
@@ -169,6 +177,481 @@ impl Default for WasmSolverService {
     }
 }
 
+/// Editor-owned sound audition session.
+///
+/// Authoring recipes cross this editor-only contract directly into Rust
+/// synthesis. Only resolved assets and device commands reach WebAudio.
+#[wasm_bindgen]
+pub struct WasmEditorAudio {
+    runtime: puzzle_audio::AudioRuntime,
+    backend: puzzle_web_audio::BrowserAudioBackend,
+}
+
+#[wasm_bindgen]
+impl WasmEditorAudio {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Result<WasmEditorAudio, JsValue> {
+        let catalog = Arc::new(
+            AudioAssetCatalog::compile(Vec::new(), Vec::new())
+                .map_err(|error| JsValue::from_str(&error.to_string()))?,
+        );
+        let backend = puzzle_web_audio::BrowserAudioBackend::new(catalog.clone());
+        if let Some(error) = backend.initialization_error() {
+            return Err(JsValue::from_str(&format!(
+                "editor audio output is unavailable: {error}"
+            )));
+        }
+        Ok(Self {
+            runtime: puzzle_audio::AudioRuntime::new(catalog, backend.capability()),
+            backend,
+        })
+    }
+
+    pub async fn unlock(&mut self, now_ms: f64) -> Result<(), JsValue> {
+        let now_frame = editor_audio_frame(now_ms)?;
+        let capability = self.backend.unlock().await.map_err(editor_audio_error)?;
+        let commands = self.runtime.set_capability(capability, now_frame);
+        self.consume(commands, now_frame)
+    }
+
+    /// Connects asynchronous Web Audio events to this Rust-owned audition
+    /// session. The callback is a wakeup only; typed feedback remains owned by
+    /// `BrowserAudioBackend` until `audio_feedback_event` drains it.
+    pub fn set_audio_feedback_wakeup(&self, callback: js_sys::Function) {
+        self.backend.set_feedback_wakeup(Rc::new(move || {
+            callback
+                .call0(&JsValue::UNDEFINED)
+                .expect("registered editor audio feedback wakeup failed");
+        }));
+    }
+
+    /// Drains every queued browser audio event in arrival order.
+    ///
+    /// Voice failures are contained to their voice by `AudioRuntime`; a
+    /// device-scoped failure alone may change output capability. Diagnostics
+    /// are returned as JSON so the editor can present every settled failure
+    /// without interpreting browser audio state.
+    pub fn audio_feedback_event(&mut self, now_ms: f64) -> Result<String, JsValue> {
+        let now_frame = editor_audio_frame(now_ms)?;
+        let mut commands = Vec::new();
+        for voice in self.backend.take_ended_voices() {
+            self.runtime.voice_ended(voice);
+        }
+        for error in self.backend.take_feedback_errors() {
+            if let Some(voice) = error.voice_id() {
+                self.runtime
+                    .report_voice_failure(voice, error.to_string(), now_frame);
+            } else {
+                commands.extend(
+                    self.runtime
+                        .report_device_failure(error.to_string(), now_frame),
+                );
+            }
+        }
+        commands.extend(
+            self.runtime
+                .set_capability(self.backend.capability(), now_frame),
+        );
+        self.consume_device_commands(commands, now_frame);
+        Ok(editor_audio_diagnostic_json(
+            self.runtime
+                .take_diagnostics()
+                .into_iter()
+                .map(|diagnostic| format!("{diagnostic:?}")),
+        ))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn configure(
+        &mut self,
+        sfx_seed: &str,
+        sfx_type: &str,
+        sfx_volume: f64,
+        music_seed: &str,
+        music_height: f64,
+        music_bars: u16,
+        music_bpm: u16,
+        music_volume: f64,
+        now_ms: f64,
+    ) -> Result<(), JsValue> {
+        let now_frame = editor_audio_frame(now_ms)?;
+        let stop_commands = self.runtime.stop_all();
+        self.consume(stop_commands, now_frame)?;
+        let catalog = Arc::new(
+            AudioAssetCatalog::compile(
+                vec![(
+                    "editor_sfx".to_string(),
+                    SfxRecipe {
+                        seed: sfx_seed.to_string(),
+                        type_target: sfx_type.to_string(),
+                        volume: sfx_volume,
+                    },
+                )],
+                vec![(
+                    "editor_music".to_string(),
+                    MusicRecipe {
+                        seed: music_seed.to_string(),
+                        height: music_height,
+                        bars: music_bars,
+                        bpm: music_bpm,
+                        volume: music_volume,
+                    },
+                )],
+            )
+            .map_err(|error| {
+                JsValue::from_str(&format!("editor audio recipe is invalid: {error}"))
+            })?,
+        );
+        self.backend
+            .replace_catalog(catalog.clone())
+            .map_err(editor_audio_error)?;
+        self.runtime = puzzle_audio::AudioRuntime::new(catalog, self.backend.capability());
+        Ok(())
+    }
+
+    pub fn play_sfx(&mut self, now_ms: f64) -> Result<(), JsValue> {
+        let now_frame = editor_audio_frame(now_ms)?;
+        self.require_ready()?;
+        let commands = self.runtime.apply(
+            puzzle_audio::AudioCommand::PlaySfx {
+                asset: SfxAssetId(0),
+            },
+            now_frame,
+        );
+        self.consume(commands, now_frame)
+    }
+
+    pub fn play_music(&mut self, progress: f64, now_ms: f64) -> Result<(), JsValue> {
+        if !progress.is_finite() || !(0.0..1.0).contains(&progress) {
+            return Err(JsValue::from_str(
+                "editor music progress must be finite and in [0, 1)",
+            ));
+        }
+        self.require_ready()?;
+        let track = self
+            .runtime
+            .catalog()
+            .music(MusicAssetId(0))
+            .ok_or_else(|| JsValue::from_str("editor music asset is not configured"))?;
+        let start_frame = (progress * track.loop_frames() as f64).floor() as u64;
+        let now_frame = editor_audio_frame(now_ms)?;
+        let mut commands = self.runtime.apply(
+            puzzle_audio::AudioCommand::PlayMusic {
+                asset: MusicAssetId(0),
+            },
+            now_frame,
+        );
+        if start_frame != 0 {
+            commands.extend(self.runtime.seek_music(
+                puzzle_audio::MusicTarget::All,
+                start_frame,
+                now_frame,
+            ));
+        }
+        self.consume(commands, now_frame)
+    }
+
+    pub fn pause_music(&mut self, now_ms: f64) -> Result<(), JsValue> {
+        let now_frame = editor_audio_frame(now_ms)?;
+        let commands = self.runtime.apply(
+            puzzle_audio::AudioCommand::PauseMusic {
+                target: puzzle_audio::MusicTarget::All,
+            },
+            now_frame,
+        );
+        self.consume(commands, now_frame)
+    }
+
+    pub fn resume_music(&mut self, now_ms: f64) -> Result<(), JsValue> {
+        let now_frame = editor_audio_frame(now_ms)?;
+        let commands = self.runtime.apply(
+            puzzle_audio::AudioCommand::ResumeMusic {
+                target: puzzle_audio::MusicTarget::All,
+            },
+            now_frame,
+        );
+        self.consume(commands, now_frame)
+    }
+
+    pub fn stop_music(&mut self, now_ms: f64) -> Result<(), JsValue> {
+        let now_frame = editor_audio_frame(now_ms)?;
+        let commands = self.runtime.apply(
+            puzzle_audio::AudioCommand::StopMusic {
+                target: puzzle_audio::MusicTarget::All,
+            },
+            now_frame,
+        );
+        self.consume(commands, now_frame)
+    }
+
+    pub fn music_progress(&self, now_ms: f64) -> Result<f64, JsValue> {
+        let now_frame = editor_audio_frame(now_ms)?;
+        let Some(playback) = self.runtime.music_playback(now_frame) else {
+            return Ok(0.0);
+        };
+        let track = self
+            .runtime
+            .catalog()
+            .music(playback.asset)
+            .ok_or_else(|| JsValue::from_str("editor music playback references a missing asset"))?;
+        if track.loop_frames() == 0 {
+            return Ok(0.0);
+        }
+        Ok((playback.cursor_frame % track.loop_frames()) as f64 / track.loop_frames() as f64)
+    }
+
+    pub fn export_sfx_wav(&self) -> Result<Vec<u8>, JsValue> {
+        let id = SfxAssetId(0);
+        let clip = self
+            .runtime
+            .catalog()
+            .sfx(id)
+            .ok_or_else(|| JsValue::from_str("editor SFX asset is not configured"))?;
+        let gain = self
+            .runtime
+            .catalog()
+            .sfx_gain(id)
+            .ok_or_else(|| JsValue::from_str("editor SFX gain is not configured"))?;
+        encode_wav(clip.sample_rate, 1, clip.samples.len(), |frame, _| {
+            clip.samples[frame] * gain
+        })
+        .map_err(|error| JsValue::from_str(&error))
+    }
+
+    pub fn export_music_wav(&self) -> Result<Vec<u8>, JsValue> {
+        let id = MusicAssetId(0);
+        let track = self
+            .runtime
+            .catalog()
+            .music(id)
+            .ok_or_else(|| JsValue::from_str("editor music asset is not configured"))?;
+        let gain = self
+            .runtime
+            .catalog()
+            .music_gain(id)
+            .ok_or_else(|| JsValue::from_str("editor music gain is not configured"))?;
+        let channels = usize::from(track.channels());
+        let frames = usize::try_from(track.loop_frames())
+            .map_err(|_| JsValue::from_str("editor music loop is too large to export"))?;
+        let sample_count = frames
+            .checked_mul(channels)
+            .ok_or_else(|| JsValue::from_str("editor music WAV sample count overflowed"))?;
+        let mut wav = wav_header(track.sample_rate(), track.channels(), sample_count)
+            .map_err(|error| JsValue::from_str(&error))?;
+        const BLOCK_FRAMES: usize = 1_024;
+        let mut samples = vec![0.0_f32; BLOCK_FRAMES * channels];
+        let mut scratch = vec![0.0_f64; BLOCK_FRAMES * channels];
+        let mut frame = 0_usize;
+        while frame < frames {
+            let block_frames = (frames - frame).min(BLOCK_FRAMES);
+            let block_samples = block_frames * channels;
+            track
+                .render_interleaved(
+                    frame as u64,
+                    &mut samples[..block_samples],
+                    &mut scratch[..block_samples],
+                )
+                .map_err(|error| {
+                    JsValue::from_str(&format!("editor music export failed: {error}"))
+                })?;
+            for sample in &samples[..block_samples] {
+                push_pcm16(&mut wav, *sample * gain);
+            }
+            frame += block_frames;
+        }
+        Ok(wav)
+    }
+
+    pub fn stop(&mut self, now_ms: f64) -> Result<(), JsValue> {
+        let now_frame = editor_audio_frame(now_ms)?;
+        let commands = self.runtime.stop_all();
+        self.consume(commands, now_frame)
+    }
+
+    pub fn set_visible(&mut self, visible: bool, now_ms: f64) -> Result<(), JsValue> {
+        let now_frame = editor_audio_frame(now_ms)?;
+        let capability = self.backend.set_visible(visible);
+        let commands = self.runtime.set_capability(capability, now_frame);
+        self.consume(commands, now_frame)
+    }
+}
+
+impl WasmEditorAudio {
+    fn require_ready(&self) -> Result<(), JsValue> {
+        let capability = self.backend.capability();
+        if capability == puzzle_audio::AudioCapabilityState::Ready {
+            Ok(())
+        } else {
+            Err(JsValue::from_str(&format!(
+                "editor audio output is not ready ({capability:?}); unlock it from a user gesture"
+            )))
+        }
+    }
+
+    fn consume(
+        &mut self,
+        commands: Vec<puzzle_audio::AudioDeviceCommand>,
+        now_frame: u64,
+    ) -> Result<(), JsValue> {
+        self.consume_device_commands(commands, now_frame);
+        let diagnostics = self.runtime.take_diagnostics();
+        if diagnostics.is_empty() {
+            Ok(())
+        } else {
+            Err(JsValue::from_str(&format!(
+                "editor audio diagnostics: {diagnostics:?}"
+            )))
+        }
+    }
+
+    fn consume_device_commands(
+        &mut self,
+        commands: Vec<puzzle_audio::AudioDeviceCommand>,
+        now_frame: u64,
+    ) {
+        let mut commands = VecDeque::from(commands);
+        while let Some(command) = commands.pop_front() {
+            if let Err(error) = self.backend.consume(command) {
+                if let Some(voice) = audio_command_voice(command).or_else(|| error.voice_id()) {
+                    self.runtime
+                        .report_voice_failure(voice, error.to_string(), now_frame);
+                } else {
+                    commands.extend(
+                        self.runtime
+                            .report_device_failure(error.to_string(), now_frame),
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn editor_audio_frame(now_ms: f64) -> Result<u64, JsValue> {
+    if !now_ms.is_finite() || now_ms < 0.0 {
+        return Err(JsValue::from_str("editor audio timestamp is invalid"));
+    }
+    Ok((now_ms * 48.0).floor() as u64)
+}
+
+fn editor_audio_error(error: puzzle_web_audio::BrowserAudioError) -> JsValue {
+    JsValue::from_str(&format!("editor audio output failed: {error}"))
+}
+
+fn editor_audio_diagnostic_json(diagnostics: impl IntoIterator<Item = String>) -> String {
+    serde_json::to_string(&diagnostics.into_iter().collect::<Vec<_>>())
+        .expect("editor audio diagnostic strings should serialize")
+}
+
+fn audio_command_voice(command: puzzle_audio::AudioDeviceCommand) -> Option<AudioVoiceId> {
+    match command {
+        puzzle_audio::AudioDeviceCommand::StartSfx { voice, .. }
+        | puzzle_audio::AudioDeviceCommand::StartMusic { voice, .. }
+        | puzzle_audio::AudioDeviceCommand::PauseVoice { voice, .. }
+        | puzzle_audio::AudioDeviceCommand::ResumeVoice { voice, .. }
+        | puzzle_audio::AudioDeviceCommand::StopVoice { voice } => Some(voice),
+    }
+}
+
+#[wasm_bindgen]
+pub fn editor_audio_sfx_types() -> js_sys::Array {
+    SFX_TYPES
+        .into_iter()
+        .chain(["wild", "puzzlescript"])
+        .map(JsValue::from_str)
+        .collect()
+}
+
+#[wasm_bindgen]
+pub fn editor_audio_random_sfx_preset(seed: &str, type_target: &str) -> Result<JsValue, JsValue> {
+    if type_target != "random"
+        && type_target != "wild"
+        && type_target != "puzzlescript"
+        && !SFX_TYPES.contains(&type_target)
+    {
+        return Err(JsValue::from_str("editor SFX preset type is unsupported"));
+    }
+    encode_js_value(
+        &serde_json::json!({
+            "seed": puzzle_audio::random_audio_preset_seed(seed),
+            "type": type_target,
+        }),
+        "editor SFX preset",
+    )
+}
+
+#[wasm_bindgen]
+pub fn editor_audio_random_music_preset(seed: &str) -> Result<JsValue, JsValue> {
+    encode_js_value(
+        &serde_json::json!({
+            "seed": puzzle_audio::random_audio_preset_seed(seed),
+            "height": 0.5,
+            "bars": 8,
+            "bpm": 110,
+        }),
+        "editor music preset",
+    )
+}
+
+fn encode_wav(
+    sample_rate: u32,
+    channels: u16,
+    sample_count: usize,
+    mut sample_at: impl FnMut(usize, usize) -> f32,
+) -> Result<Vec<u8>, String> {
+    if channels == 0 || sample_count % usize::from(channels) != 0 {
+        return Err("editor WAV export has invalid channel alignment".to_string());
+    }
+    let mut wav = wav_header(sample_rate, channels, sample_count)?;
+    let channel_count = usize::from(channels);
+    for index in 0..sample_count {
+        let frame = index / channel_count;
+        let channel = index % channel_count;
+        push_pcm16(&mut wav, sample_at(frame, channel));
+    }
+    Ok(wav)
+}
+
+fn wav_header(sample_rate: u32, channels: u16, sample_count: usize) -> Result<Vec<u8>, String> {
+    if channels == 0 || sample_count % usize::from(channels) != 0 {
+        return Err("editor WAV export has invalid channel alignment".to_string());
+    }
+    let data_len = sample_count
+        .checked_mul(2)
+        .and_then(|length| u32::try_from(length).ok())
+        .ok_or_else(|| "editor WAV export exceeds the RIFF size limit".to_string())?;
+    let riff_len = 36_u32
+        .checked_add(data_len)
+        .ok_or_else(|| "editor WAV export exceeds the RIFF size limit".to_string())?;
+    let byte_rate = sample_rate
+        .checked_mul(u32::from(channels))
+        .and_then(|rate| rate.checked_mul(2))
+        .ok_or_else(|| "editor WAV export byte rate overflowed".to_string())?;
+    let mut wav = Vec::with_capacity(44 + data_len as usize);
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&riff_len.to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16_u32.to_le_bytes());
+    wav.extend_from_slice(&1_u16.to_le_bytes());
+    wav.extend_from_slice(&channels.to_le_bytes());
+    wav.extend_from_slice(&sample_rate.to_le_bytes());
+    wav.extend_from_slice(&byte_rate.to_le_bytes());
+    wav.extend_from_slice(&(channels * 2).to_le_bytes());
+    wav.extend_from_slice(&16_u16.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&data_len.to_le_bytes());
+    Ok(wav)
+}
+
+fn push_pcm16(wav: &mut Vec<u8>, sample: f32) {
+    let sample = sample.clamp(-1.0, 1.0);
+    let pcm = if sample < 0.0 {
+        (sample * 32_768.0).round() as i16
+    } else {
+        (sample * 32_767.0).round() as i16
+    };
+    wav.extend_from_slice(&pcm.to_le_bytes());
+}
+
 fn solver_now_ms(value: f64) -> Result<u64, JsValue> {
     if !value.is_finite() || value < 0.0 || value > u64::MAX as f64 {
         return Err(JsValue::from_str("solver timestamp is invalid"));
@@ -209,11 +692,11 @@ impl SourceAnalysisStore {
     fn activate(
         &mut self,
         source: &str,
-        source_profile: Option<puzzle_lang::PuzzleSourceProfile>,
+        source_profile: puzzle_lang::PuzzleSourceProfile,
     ) -> SourceAnalysisRevision {
         if let Some(active) = &self.active {
             if active.analysis.source() == source
-                && active.analysis.source_profile() == source_profile
+                && active.analysis.source_profile() == Some(source_profile)
             {
                 return active.revision;
             }
@@ -221,7 +704,7 @@ impl SourceAnalysisStore {
         let revision = self.allocate_revision();
         self.active = Some(ActiveSourceAnalysis {
             revision,
-            analysis: puzzle_lang::SourceAnalysis::new_for_profile(source, source_profile),
+            analysis: puzzle_lang::SourceAnalysis::new_for_profile(source, Some(source_profile)),
         });
         revision
     }
@@ -331,11 +814,6 @@ fn source_target_with_utf16_offsets(
 }
 
 #[wasm_bindgen]
-pub fn activate_source_analysis(source: &str) -> SourceAnalysisRevision {
-    SOURCE_ANALYSES.with(|store| store.borrow_mut().activate(source, None))
-}
-
-#[wasm_bindgen]
 pub fn activate_source_analysis_with_profile(
     source: &str,
     source_profile: &str,
@@ -349,7 +827,7 @@ pub fn activate_source_analysis_with_profile(
             ));
         }
     };
-    Ok(SOURCE_ANALYSES.with(|store| store.borrow_mut().activate(source, Some(profile))))
+    Ok(SOURCE_ANALYSES.with(|store| store.borrow_mut().activate(source, profile)))
 }
 
 #[wasm_bindgen]
@@ -456,6 +934,121 @@ pub fn active_source_analysis_mutate_visual(
                 "name": result.name,
             })
             .to_string()
+        })
+    })
+    .map_err(source_analysis_error_js_value)?
+    .map_err(source_analysis_error_js_value)
+}
+
+#[wasm_bindgen]
+pub fn active_source_analysis_sound_request(
+    revision: SourceAnalysisRevision,
+    request_json: &str,
+) -> Result<String, JsValue> {
+    with_source_analysis(revision, |analysis| {
+        let source = analysis.source();
+        let request: puzzle_lang::SoundSourceRequest = serde_json::from_str(request_json)
+            .map_err(|error| format!("invalid sound source request: {error}"))?;
+        let request = match request {
+            puzzle_lang::SoundSourceRequest::Inspect { cursor } => {
+                puzzle_lang::SoundSourceRequest::Inspect {
+                    cursor: utf8_offset_from_utf16(source, cursor),
+                }
+            }
+            puzzle_lang::SoundSourceRequest::Update {
+                target_start,
+                original_name,
+                definition,
+            } => puzzle_lang::SoundSourceRequest::Update {
+                target_start: utf8_offset_from_utf16(source, target_start),
+                original_name,
+                definition,
+            },
+            request => request,
+        };
+        analysis.sound_source_request(request).and_then(|response| {
+            let value = match response {
+                puzzle_lang::SoundSourceResponse::Inspection { definition } => {
+                    let definition = definition.map(|mut definition| {
+                        definition.start = utf16_offset_from_utf8(source, definition.start);
+                        definition.end = utf16_offset_from_utf8(source, definition.end);
+                        definition
+                    });
+                    serde_json::json!({ "kind": "inspection", "definition": definition })
+                }
+                puzzle_lang::SoundSourceResponse::Formatted { line, definition } => {
+                    serde_json::json!({
+                        "kind": "formatted",
+                        "line": line,
+                        "definition": definition,
+                    })
+                }
+                puzzle_lang::SoundSourceResponse::Mutation { mut result } => {
+                    result.selection_start =
+                        utf16_offset_from_utf8(&result.source, result.selection_start);
+                    result.selection_end =
+                        utf16_offset_from_utf8(&result.source, result.selection_end);
+                    result.definition_start =
+                        utf16_offset_from_utf8(&result.source, result.definition_start);
+                    result.definition_end =
+                        utf16_offset_from_utf8(&result.source, result.definition_end);
+                    serde_json::json!({ "kind": "mutation", "result": result })
+                }
+            };
+            serde_json::to_string(&value)
+                .map_err(|error| format!("could not encode sound source response: {error}"))
+        })
+    })
+    .map_err(source_analysis_error_js_value)?
+    .map_err(source_analysis_error_js_value)
+}
+
+#[wasm_bindgen]
+pub fn active_source_analysis_level_source_request(
+    revision: SourceAnalysisRevision,
+    request_json: &str,
+) -> Result<String, JsValue> {
+    with_source_analysis(revision, |analysis| {
+        let source = analysis.source();
+        let request: puzzle_lang::LevelSourceRequest = serde_json::from_str(request_json)
+            .map_err(|error| format!("invalid level source request: {error}"))?;
+        let request = match request {
+            puzzle_lang::LevelSourceRequest::Insert {
+                name,
+                namespace,
+                rows,
+                local_legends,
+                cursor,
+                create_container,
+            } => puzzle_lang::LevelSourceRequest::Insert {
+                name,
+                namespace,
+                rows,
+                local_legends,
+                cursor: cursor.map(|offset| utf8_offset_from_utf16(source, offset)),
+                create_container,
+            },
+            puzzle_lang::LevelSourceRequest::Update {
+                target_start,
+                name,
+                rows,
+                local_legends,
+            } => puzzle_lang::LevelSourceRequest::Update {
+                target_start: utf8_offset_from_utf16(source, target_start),
+                name,
+                rows,
+                local_legends,
+            },
+            request => request,
+        };
+        analysis.level_source_request(request).and_then(|response| {
+            serde_json::to_string(&serde_json::json!({
+                "source": response.source,
+                "start": utf16_offset_from_utf8(&response.source, response.start),
+                "end": utf16_offset_from_utf8(&response.source, response.end),
+                "text": response.text,
+            }))
+            .map_err(|error| format!("could not encode level source response: {error}"))
         })
     })
     .map_err(source_analysis_error_js_value)?
@@ -829,13 +1422,41 @@ fn set_js_optional_string(payload: &js_sys::Object, key: &str, value: Option<&st
 #[cfg(test)]
 mod tests {
     use super::{
-        activate_source_analysis, active_source_analysis_entries_json,
-        active_source_analysis_highlight_range_json, active_source_analysis_json,
-        active_source_analysis_outline_json, active_source_analysis_suggest_source_completions,
-        apply_source_analysis_edit, compile_preview, compile_workspace_preview_from_documents,
-        diagnostic_report_json, utf8_offset_from_utf16, utf16_offset_from_utf8,
+        SourceAnalysisRevision, activate_source_analysis_with_profile,
+        active_source_analysis_entries_json, active_source_analysis_highlight_range_json,
+        active_source_analysis_json, active_source_analysis_outline_json,
+        active_source_analysis_suggest_source_completions, apply_source_analysis_edit,
+        compile_preview, compile_workspace_preview_from_documents, diagnostic_report_json,
+        editor_audio_diagnostic_json, encode_wav, utf8_offset_from_utf16, utf16_offset_from_utf8,
         with_source_analysis,
     };
+
+    fn activate_puzzle2d_source_analysis(source: &str) -> SourceAnalysisRevision {
+        activate_source_analysis_with_profile(source, "puzzle2d")
+            .expect("activate profile-aware source analysis")
+    }
+
+    #[test]
+    fn editor_audio_feedback_diagnostics_preserve_arrival_order() {
+        assert_eq!(
+            editor_audio_diagnostic_json([
+                "voice 4 failed".to_string(),
+                "voice 7 failed".to_string()
+            ]),
+            r#"["voice 4 failed","voice 7 failed"]"#
+        );
+    }
+
+    #[test]
+    fn editor_wav_export_has_canonical_header_and_sample_count() {
+        let wav =
+            encode_wav(48_000, 1, 3, |frame, _| [0.0, 1.0, -1.0][frame]).expect("small editor WAV");
+        assert_eq!(&wav[0..4], b"RIFF");
+        assert_eq!(&wav[8..12], b"WAVE");
+        assert_eq!(&wav[36..40], b"data");
+        assert_eq!(u32::from_le_bytes(wav[40..44].try_into().unwrap()), 6);
+        assert_eq!(wav.len(), 50);
+    }
 
     fn invalid_workspace_game(statement: &str) -> String {
         format!(
@@ -1002,8 +1623,13 @@ level "start"
     fn active_source_analysis_reuses_exact_source_and_rejects_stale_revisions() {
         let source = "puzzle Demo {\n  sounds {\n    \n  }\n}\n";
         let cursor = source.find("    ").unwrap() + 4;
-        let revision = activate_source_analysis(source);
-        assert_eq!(activate_source_analysis(source), revision);
+        let revision = activate_puzzle2d_source_analysis(source);
+        assert_eq!(activate_puzzle2d_source_analysis(source), revision);
+        let puzzle3_revision = activate_source_analysis_with_profile(source, "puzzle3d")
+            .expect("activate 3D source profile");
+        assert_ne!(puzzle3_revision, revision);
+        let revision = activate_puzzle2d_source_analysis(source);
+        assert_ne!(revision, puzzle3_revision);
 
         let analysis = active_source_analysis_json(revision).expect("analysis json");
         assert!(analysis.contains(r#""version":2"#));
@@ -1033,7 +1659,7 @@ level "start"
         let outline = active_source_analysis_outline_json(revision).expect("outline");
         assert!(outline.contains(r#""items":"#));
 
-        let next_revision = activate_source_analysis("puzzle Other {}\n");
+        let next_revision = activate_puzzle2d_source_analysis("puzzle Other {}\n");
         assert_ne!(next_revision, revision);
         assert!(
             with_source_analysis(revision, puzzle_lang::SourceAnalysis::analysis_json).is_err()
@@ -1045,7 +1671,7 @@ level "start"
         let source = "title = \"😀\"\npuzzle Demo {\n  sounds {\n    \n  }\n}\n";
         let cursor_byte = source.find("    ").unwrap() + 4;
         let cursor_utf16 = source[..cursor_byte].encode_utf16().count();
-        let revision = activate_source_analysis(source);
+        let revision = activate_puzzle2d_source_analysis(source);
 
         assert_eq!(utf8_offset_from_utf16(source, cursor_utf16), cursor_byte);
         assert_eq!(utf16_offset_from_utf8(source, cursor_byte), cursor_utf16);
@@ -1058,7 +1684,7 @@ level "start"
     #[test]
     fn active_source_analysis_applies_utf16_edits_to_the_existing_session() {
         let source = "puzzle Demo {\n}\n// note\n";
-        let revision = activate_source_analysis(source);
+        let revision = activate_puzzle2d_source_analysis(source);
         let cursor_byte = source.find("note").unwrap() + "note".len();
         let cursor_utf16 = source[..cursor_byte].encode_utf16().count();
 

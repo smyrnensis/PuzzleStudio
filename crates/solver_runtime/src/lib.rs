@@ -236,8 +236,8 @@ impl SolverService {
         request: SolverSearchRequest,
         now_ms: u64,
     ) -> Result<u32, String> {
-        if request.max_depth == 0 || request.max_nodes == 0 {
-            return Err("solver maxDepth and maxNodes must be positive".to_string());
+        if request.max_depth == 0 || request.max_stored_nodes == 0 {
+            return Err("solver maxDepth and maxStoredNodes must be positive".to_string());
         }
         let search = {
             let artifact = self.artifacts.get_mut(artifact_id).ok_or_else(|| {
@@ -297,12 +297,12 @@ impl SolverService {
         level_index: usize,
         session: GameSession,
         max_depth: u32,
-        max_nodes: usize,
+        max_stored_nodes: usize,
         max_duration: Duration,
         now_ms: u64,
     ) -> Result<SolverResult, String> {
-        if max_depth == 0 || max_nodes == 0 {
-            return Err("solver maxDepth and maxNodes must be positive".to_string());
+        if max_depth == 0 || max_stored_nodes == 0 {
+            return Err("solver maxDepth and maxStoredNodes must be positive".to_string());
         }
         let search = {
             let artifact = self.artifacts.get_mut(artifact_id).ok_or_else(|| {
@@ -317,7 +317,7 @@ impl SolverService {
                 level_index,
                 session,
                 max_depth,
-                max_nodes,
+                max_stored_nodes,
             )?)
         };
         let search_id = self.store_search(artifact_id, search)?;
@@ -564,7 +564,7 @@ fn start_grid_search<const D: usize, Size: GridSize<D>>(
         state,
         materialize_level_start,
         max_depth,
-        max_nodes,
+        max_stored_nodes,
     } = request;
     if level_index >= loaded.levels.len() {
         return Err(format!("solver level index out of range: {}", level_index));
@@ -574,7 +574,13 @@ fn start_grid_search<const D: usize, Size: GridSize<D>>(
     initial_session
         .start_level_from_state(&loaded, level_index, state, materialize_level_start)
         .map_err(|error| format!("{error:?}"))?;
-    start_grid_search_from_session(loaded, level_index, initial_session, max_depth, max_nodes)
+    start_grid_search_from_session(
+        loaded,
+        level_index,
+        initial_session,
+        max_depth,
+        max_stored_nodes,
+    )
 }
 
 fn start_grid_search_from_session<const D: usize, Size: GridSize<D>>(
@@ -582,7 +588,7 @@ fn start_grid_search_from_session<const D: usize, Size: GridSize<D>>(
     level_index: usize,
     initial_session: GridGameSession<D, Size>,
     max_depth: u32,
-    max_nodes: usize,
+    max_stored_nodes: usize,
 ) -> Result<ActiveGridSearch<D, Size>, String> {
     if level_index >= loaded.levels.len() {
         return Err(format!("solver level index out of range: {level_index}"));
@@ -618,7 +624,7 @@ fn start_grid_search_from_session<const D: usize, Size: GridSize<D>>(
         initial_score,
         ResumableSearchLimits {
             max_depth,
-            max_stored_nodes: max_nodes,
+            max_stored_nodes,
         },
     );
     Ok(ActiveGridSearch {
@@ -901,11 +907,7 @@ fn collect_inputs<const D: usize>(program: &[GridRuleStep<D>], inputs: &mut BTre
     for step in program {
         match step {
             GridRuleStep::Rule(rule) => {
-                for guard in &rule.guards {
-                    if let GridGuard::InputIs(input) = guard {
-                        inputs.insert(*input);
-                    }
-                }
+                collect_guard_inputs(&rule.guards, inputs);
             }
             GridRuleStep::ConditionalBlock { condition, steps } => {
                 collect_condition_inputs(condition, inputs);
@@ -950,14 +952,19 @@ fn collect_condition_inputs<const D: usize>(
         }
         GridRuleCondition::GuardBranches(branches) => {
             for branch in branches {
-                for guard in branch {
-                    if let GridGuard::InputIs(input) = guard {
-                        inputs.insert(*input);
-                    }
-                }
+                collect_guard_inputs(branch, inputs);
             }
         }
+        GridRuleCondition::RuleMatches { guards, .. } => collect_guard_inputs(guards, inputs),
         GridRuleCondition::AnyMatches(_) | GridRuleCondition::NoMatches(_) => {}
+    }
+}
+
+fn collect_guard_inputs<const D: usize>(guards: &[GridGuard<D>], inputs: &mut BTreeSet<InputId>) {
+    for guard in guards {
+        if let GridGuard::InputIs(input) = guard {
+            inputs.insert(*input);
+        }
     }
 }
 
@@ -984,6 +991,46 @@ fn hash_bytes(hash: &mut u64, bytes: &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn search_request_requires_a_positive_stored_node_limit() {
+        let mut service = SolverService::new();
+        let error = service
+            .start(
+                "missing",
+                SolverSearchRequest {
+                    level_index: 0,
+                    state: SolverStateSnapshot::TwoD {
+                        width: 1,
+                        height: 1,
+                        layer_count: 1,
+                        slots: vec![0],
+                        variables: Vec::new(),
+                        level_fired_rules: Vec::new(),
+                    },
+                    materialize_level_start: false,
+                    max_depth: 8,
+                    max_stored_nodes: 0,
+                },
+                0,
+            )
+            .unwrap_err();
+
+        assert_eq!(error, "solver maxDepth and maxStoredNodes must be positive");
+    }
+
+    #[test]
+    fn rule_matches_guard_inputs_are_solver_inputs() {
+        let condition = GridRuleCondition::<2>::RuleMatches {
+            guards: vec![GridGuard::InputIs(InputId(7))],
+            pattern: puzzle_core::GridPattern::from_components(Vec::new()),
+        };
+        let mut inputs = BTreeSet::new();
+
+        collect_condition_inputs(&condition, &mut inputs);
+
+        assert_eq!(inputs, BTreeSet::from([InputId(7)]));
+    }
 
     #[test]
     fn prepared_artifact_owns_compiled_rules_and_search_state() {
@@ -1045,7 +1092,7 @@ PBG
                     state: initial_state,
                     materialize_level_start: true,
                     max_depth: 8,
-                    max_nodes: 32,
+                    max_stored_nodes: 32,
                 },
                 0,
             )
@@ -1142,7 +1189,7 @@ P.....DG
                     state: initial_state,
                     materialize_level_start: true,
                     max_depth: 8,
-                    max_nodes: 32,
+                    max_stored_nodes: 32,
                 },
                 0,
             )

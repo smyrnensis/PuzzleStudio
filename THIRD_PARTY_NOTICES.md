@@ -2,7 +2,7 @@
 
 ## PuzzleScript
 
-The PuzzleScript-compatible SFX generator in `tools/music_generator/seeded_sfx.mjs`
+The PuzzleScript-compatible SFX implementation in `crates/audio/src/sfx.rs`
 is adapted from PuzzleScript's `src/js/sfxr.js`.
 
 Repository: https://github.com/increpare/PuzzleScript

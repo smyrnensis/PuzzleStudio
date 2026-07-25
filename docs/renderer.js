@@ -162,9 +162,7 @@ class PuzzleRenderer {
     for (const layer of layers) {
       const visual = this.renderLayerVisual(layer);
       if (visual) {
-        const cellOrder = this.cellRenderIndex(cellData, scene);
-        const priority = this.visualRenderPriority(layer);
-        visual.style.zIndex = String((cellOrder * this.visualPriorityCount()) + priority + 1);
+        visual.style.zIndex = String(this.layerRenderOrder(layer) + 1);
         cell.append(visual);
       }
     }
@@ -363,34 +361,40 @@ class PuzzleRenderer {
     context.rect(0, 0, frame.width * unit, frame.height * unit);
     context.clip();
 
-    for (const item of this.canvasDisplayList(scene, frame, unit, animations, progress)) {
+    for (const item of this.canvasDisplayList(scene, frame, unit, animations, progress, now)) {
       this.paintCanvasItem(context, item, unit, progress, now);
     }
-    this.paintTriggerAnimations(context, frame, unit, now);
     this.paintCanvasGrid(context, scene, frame, unit);
     context.restore();
   }
 
-  canvasDisplayList(scene, frame, unit, animations = [], progress = 1) {
+  canvasDisplayList(scene, frame, unit, animations = [], progress = 1, now = performance.now()) {
     const items = [];
+    const animationPaintOrder = this.animationPaintOrderByCell(scene, frame, animations, progress);
     let order = 0;
     for (const cell of this.frameCells(scene, frame)) {
       const x = (cell.x - frame.x) * unit;
       const y = (cell.y - frame.y) * unit;
+      const sourceCellOrder = this.cellRenderOrder(cell);
+      const cellOrder = animationPaintOrder.get(`${cell.x},${cell.y}`) ?? sourceCellOrder;
       const layers = this.sortedLayers(cell.layers);
       for (let index = 0; index < layers.length;) {
-        const priority = this.visualRenderPriority(layers[index]);
-        const priorityDef = this.visualOrder().priorities[priority];
+        const priority = this.layerRenderPriority(layers[index]);
+        const composition = this.layerComposition(layers[index]);
         const priorityLayers = [];
-        while (index < layers.length && this.visualRenderPriority(layers[index]) === priority) {
+        while (index < layers.length && this.layerRenderPriority(layers[index]) === priority) {
+          if (this.layerComposition(layers[index]) !== composition) {
+            throw new Error(`resolved visual composition conflicts at priority ${priority}`);
+          }
           priorityLayers.push(layers[index]);
           index += 1;
         }
-        if (priorityDef.merge) {
+        if (composition === "average") {
           items.push({
             kind: "merge",
             layers: priorityLayers,
-            cellOrder: this.cellRenderIndex(cell, scene),
+            cellOrder,
+            sourceCellOrder,
             layerOrder: priority,
             order: order++,
             x,
@@ -404,8 +408,9 @@ class PuzzleRenderer {
           const item = {
             kind: "layer",
             layer,
-            cellOrder: this.cellRenderIndex(cell, scene),
-            layerOrder: this.visualRenderPriority(layer),
+            cellOrder,
+            sourceCellOrder,
+            layerOrder: this.layerRenderPriority(layer),
             order: order++,
             x,
             y,
@@ -415,8 +420,112 @@ class PuzzleRenderer {
         }
       }
     }
-    const compare = (a, b) => a.cellOrder - b.cellOrder || a.layerOrder - b.layerOrder || a.order - b.order;
+    for (const instance of this.activeTriggerAnimations) {
+      const elapsedMs = now - instance.startedAtMs;
+      if (elapsedMs < 0 || elapsedMs >= instance.durationMs) {
+        continue;
+      }
+      const layerOrder = instance.renderPriority;
+      const sourceCell = (scene.cells || []).find((cell) =>
+        Number(cell.x) === instance.x && Number(cell.y) === instance.y);
+      if (!sourceCell) {
+        throw new Error("animation event references a cell outside the resolved scene");
+      }
+      const sourceCellOrder = this.cellRenderOrder(sourceCell);
+      const x = (instance.x - frame.x) * unit;
+      const y = (instance.y - frame.y) * unit;
+      if (instance.composition === "average") {
+        const merged = items.find((item) => item.kind === "merge"
+          && item.layerOrder === layerOrder
+          && item.x === x
+          && item.y === y);
+        if (merged) {
+          merged.triggerInstances ||= [];
+          merged.triggerInstances.push(instance);
+        } else {
+          items.push({
+            kind: "merge",
+            layers: [],
+            triggerInstances: [instance],
+            cellOrder: sourceCellOrder,
+            sourceCellOrder,
+            layerOrder,
+            order: order++,
+            x,
+            y,
+            animations: [],
+          });
+        }
+        continue;
+      }
+      items.push({
+        kind: "trigger",
+        instance,
+        cellOrder: sourceCellOrder,
+        sourceCellOrder,
+        layerOrder,
+        order: order++,
+        x,
+        y,
+      });
+    }
+    const compare = (a, b) => a.cellOrder - b.cellOrder
+      || a.layerOrder - b.layerOrder
+      || a.sourceCellOrder - b.sourceCellOrder
+      || a.order - b.order;
     return items.sort(compare);
+  }
+
+  animationPaintOrderByCell(scene, frame, animations, progress) {
+    if (progress >= 1) {
+      return new Map();
+    }
+    const cells = this.frameCells(scene, frame);
+    const cellsByKey = new Map(cells.map((cell) => [`${cell.x},${cell.y}`, cell]));
+    const groups = [];
+    for (const animation of animations) {
+      if (animation?.kind !== "move") {
+        continue;
+      }
+      const fromX = Number(animation.from?.x);
+      const fromY = Number(animation.from?.y);
+      const toX = Number(animation.to?.x);
+      const toY = Number(animation.to?.y);
+      if (![fromX, fromY, toX, toY].every(Number.isFinite)
+        || (fromX === toX && fromY === toY)) {
+        continue;
+      }
+      const minX = Math.min(fromX, toX);
+      const maxX = Math.max(fromX, toX);
+      const minY = Math.min(fromY, toY);
+      const maxY = Math.max(fromY, toY);
+      const group = new Set(cells
+        .filter((cell) => cell.x >= minX && cell.x <= maxX && cell.y >= minY && cell.y <= maxY)
+        .map((cell) => `${cell.x},${cell.y}`));
+      if (group.size === 0) {
+        continue;
+      }
+      for (let index = groups.length - 1; index >= 0; index -= 1) {
+        if (![...group].some((key) => groups[index].has(key))) {
+          continue;
+        }
+        for (const key of groups[index]) {
+          group.add(key);
+        }
+        groups.splice(index, 1);
+      }
+      groups.push(group);
+    }
+
+    const paintOrder = new Map();
+    for (const group of groups) {
+      const groupOrder = Math.max(...[...group].map((key) =>
+        this.cellRenderOrder(cellsByKey.get(key))));
+      for (const key of group) {
+        paintOrder.set(key, groupOrder);
+      }
+    }
+    return paintOrder;
   }
 
   paintCanvasGrid(context, scene, frame, unit) {
@@ -440,10 +549,7 @@ class PuzzleRenderer {
   }
 
   prepareAnimations(events, frame) {
-    if (!window.PuzzleVisualTweenCore) {
-      throw new Error("Visual tween core is unavailable.");
-    }
-    return window.PuzzleVisualTweenCore.resolveAnimationChannels(events || [])
+    return (events || [])
       .map((event) => ({ ...event, objectId: Number(event.objectId) }))
       .filter((event) => {
         if (this.isTriggerAnimationEvent(event)) {
@@ -495,6 +601,10 @@ class PuzzleRenderer {
       this.paintCanvasMergedLayers(context, item, unit, progress, now);
       return;
     }
+    if (item.kind === "trigger") {
+      this.paintTriggerAnimationInstance(context, item.instance, item.x, item.y, unit, now);
+      return;
+    }
     this.paintCanvasLayer(context, item.layer, item.x, item.y, unit, item.animation, progress, now);
   }
 
@@ -509,6 +619,16 @@ class PuzzleRenderer {
       this.paintCanvasLayer(sample, layer, item.x, item.y, unit, item.animations[index], progress, now);
       return sample.getImageData(0, 0, canvas.width, canvas.height);
     });
+    for (const instance of item.triggerInstances || []) {
+      const canvas = document.createElement("canvas");
+      canvas.width = context.canvas.width;
+      canvas.height = context.canvas.height;
+      const sample = canvas.getContext("2d");
+      sample.setTransform(context.getTransform());
+      sample.imageSmoothingEnabled = context.imageSmoothingEnabled;
+      this.paintTriggerAnimationInstance(sample, instance, item.x, item.y, unit, now);
+      samples.push(sample.getImageData(0, 0, canvas.width, canvas.height));
+    }
     const merged = context.createImageData(context.canvas.width, context.canvas.height);
     for (let offset = 0; offset < merged.data.length; offset += 4) {
       let count = 0;
@@ -660,10 +780,18 @@ class PuzzleRenderer {
       if (!(x >= frame.x && y >= frame.y && x < frame.x + frame.width && y < frame.y + frame.height)) {
         continue;
       }
-      const name = String(event.name || event.animation || event.visual || "");
+      const name = String(event.name || "");
+      if (!name) {
+        throw new Error("animation event is missing its visual name");
+      }
       const definition = this.resolveAnimationDefinition(name);
-      if (!definition) {
-        continue;
+      const renderPriority = Number(event.resolvedVisual?.renderPriority);
+      const composition = String(event.resolvedVisual?.composition || "");
+      if (!Number.isSafeInteger(renderPriority) || renderPriority < 0) {
+        throw new Error(`animation event is missing resolved render priority: !${name}`);
+      }
+      if (composition !== "ordered" && composition !== "average") {
+        throw new Error(`animation event has invalid resolved composition: !${name}`);
       }
       const durationMs = this.animationDefinitionDurationMs(definition, event.durationMs ?? event.duration);
       const id = this.triggerAnimationEventId(event, name, x, y);
@@ -676,6 +804,8 @@ class PuzzleRenderer {
         definition,
         x,
         y,
+        renderPriority,
+        composition,
         startedAtMs: now,
         durationMs,
       });
@@ -683,14 +813,11 @@ class PuzzleRenderer {
   }
 
   isTriggerAnimationEvent(event) {
-    return event?.kind === "visual_animation"
-      || event?.kind === "trigger_animation"
-      || event?.kind === "trigger"
-      || event?.kind === "animation";
+    return event?.kind === "animation";
   }
 
   triggerAnimationPosition(event) {
-    return event.position || event.at || event.cell || event.to || null;
+    return event.position || null;
   }
 
   triggerAnimationEventId(event, name, x, y) {
@@ -714,20 +841,16 @@ class PuzzleRenderer {
     );
   }
 
-  paintTriggerAnimations(context, frame, unit, now) {
-    for (const instance of this.activeTriggerAnimations) {
-      const elapsedMs = now - instance.startedAtMs;
-      if (elapsedMs < 0 || elapsedMs >= instance.durationMs) {
-        continue;
-      }
-      const visualFrame = this.resolveVisualFrame(instance.definition, elapsedMs, {
-        playback: "once",
-        durationMs: instance.durationMs,
-      });
-      const x = (instance.x - frame.x) * unit;
-      const y = (instance.y - frame.y) * unit;
-      this.paintResolvedCanvasFrame(context, visualFrame, x, y, unit);
+  paintTriggerAnimationInstance(context, instance, x, y, unit, now) {
+    const elapsedMs = now - instance.startedAtMs;
+    if (elapsedMs < 0 || elapsedMs >= instance.durationMs) {
+      return;
     }
+    const visualFrame = this.resolveVisualFrame(instance.definition, elapsedMs, {
+      playback: "once",
+      durationMs: instance.durationMs,
+    });
+    this.paintResolvedCanvasFrame(context, visualFrame, x, y, unit);
   }
 
   paintResolvedCanvasFrame(context, definition, x, y, unit) {
@@ -779,10 +902,11 @@ class PuzzleRenderer {
 
   resolveAnimationDefinition(name) {
     const visuals = this.visuals();
-    return visuals.animations?.[name]
-      || visuals.triggers?.[name]
-      || visuals.entries?.[name]
-      || null;
+    const definition = visuals.entries?.[name];
+    if (!definition) {
+      throw new Error(`compiled animation visual is missing: !${name}`);
+    }
+    return definition;
   }
 
   sceneUsesTimeVaryingVisuals(scene, frame) {
@@ -1205,56 +1329,45 @@ class PuzzleRenderer {
 
   sortedLayers(layers) {
     return [...layers].sort((a, b) =>
-      this.visualRenderPriority(a) - this.visualRenderPriority(b)
+      this.layerRenderPriority(a) - this.layerRenderPriority(b)
       || Number(a.objectId) - Number(b.objectId)
     );
   }
 
-  visualOrder() {
-    const order = this.visuals().order;
-    if (!order || !Array.isArray(order.direction_priority) || !Array.isArray(order.priorities)) {
-      throw new Error("compiled visual order contract is missing");
-    }
-    return order;
-  }
-
-  visualPriorityCount() {
-    return Math.max(1, this.visualOrder().priorities.length);
-  }
-
   layersUseMerge(layers) {
-    return layers.some((layer) => this.visualOrder().priorities[this.visualRenderPriority(layer)]?.merge);
+    return layers.some((layer) => this.layerComposition(layer) === "average");
   }
 
-  visualRenderPriority(layer) {
-    const name = String(layer.object || "");
-    const priority = this.visualOrder().priorities.findIndex((entry) =>
-      Array.isArray(entry.objects) && entry.objects.includes(name)
-    );
-    if (priority < 0) {
-      throw new Error(`compiled visual order does not cover object: ${name}`);
+  layerRenderPriority(layer) {
+    const priority = Number(layer?.renderPriority);
+    if (!Number.isSafeInteger(priority) || priority < 0) {
+      throw new Error("resolved visual layer is missing renderPriority");
     }
     return priority;
   }
 
-  cellRenderIndex(cell, scene) {
-    const width = Math.max(1, Number(scene?.width) || 1);
-    const height = Math.max(1, Number(scene?.height) || 1);
-    const coordinates = {
-      right: [Number(cell.x), width],
-      left: [width - 1 - Number(cell.x), width],
-      down: [Number(cell.y), height],
-      up: [height - 1 - Number(cell.y), height],
-    };
-    let index = 0;
-    for (const direction of this.visualOrder().direction_priority) {
-      const coordinate = coordinates[direction];
-      if (!coordinate) {
-        throw new Error(`invalid 2D visual order direction: ${direction}`);
-      }
-      index = (index * coordinate[1]) + coordinate[0];
+  layerRenderOrder(layer) {
+    const order = Number(layer?.renderOrder);
+    if (!Number.isSafeInteger(order) || order < 0) {
+      throw new Error("resolved visual layer is missing renderOrder");
     }
-    return index;
+    return order;
+  }
+
+  layerComposition(layer) {
+    const composition = String(layer?.composition || "");
+    if (composition !== "ordered" && composition !== "average") {
+      throw new Error("resolved visual layer has invalid composition");
+    }
+    return composition;
+  }
+
+  cellRenderOrder(cell) {
+    const order = Number(cell?.renderOrder);
+    if (!Number.isSafeInteger(order) || order < 0) {
+      throw new Error("resolved visual cell is missing renderOrder");
+    }
+    return order;
   }
 
   usesVisuals(scene, visuals) {
@@ -1329,7 +1442,11 @@ class PuzzleRenderer {
   }
 
   visuals() {
-    return window.GameVisuals || {};
+    const visuals = this.lastScene?.visuals;
+    if (!visuals || typeof visuals !== "object" || !visuals.entries || !visuals.aliases) {
+      throw new Error("runtime scene is missing its typed 2D visual catalog");
+    }
+    return visuals;
   }
 
   gridSettings(scene) {

@@ -13,11 +13,18 @@ name = "html-play"
 path = "src/main.rs"
 
 [dependencies]
+puzzle-assets = { path = "../assets" }
 puzzle-core = { path = "../core" }
 puzzle-game-runtime = { path = "../game_runtime", default-features = false, features = ["editor-debug"] }
 puzzle-lang = { path = "../lang" }
 puzzle-runtime-contract = { path = "../runtime_contract" }
 puzzle-scene = { path = "../scene" }
+puzzle-session-contract = { path = "../session_contract" }
 puzzle-play = { path = "../play" }
+puzzle-presentation-json = { path = "../presentation_json" }
 puzzle-solver-runtime = { path = "../solver_runtime", optional = true }
 serde_json = "1"
+
+[dev-dependencies]
+puzzle-audio-contract = { path = "../audio_contract" }
+puzzle-player-bootstrap = { path = "../player_bootstrap" }

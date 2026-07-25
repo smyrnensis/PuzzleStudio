@@ -2,7 +2,7 @@ use std::fmt;
 
 use crate::{
     ComponentOrder, ComponentPlacement, ComponentProperty, SceneBinaryOp, SceneEffect,
-    SceneEffectParam, SceneExpr,
+    SceneEffectParam, SceneExpr, standard_message_effect,
 };
 use puzzle_authoring::{
     CallSurface, find_top_level_char, is_identifier, is_qualified_identifier, matching_delimiter,
@@ -92,15 +92,10 @@ fn parse_scene_effect_value(value: &str, line: &str) -> Result<SceneEffect, Scen
         return parse_present_component(rest.trim(), line);
     }
     if let Some(text) = value.strip_prefix("message ") {
-        return Ok(SceneEffect::PresentComponent {
-            definition: "standard.message".to_string(),
-            properties: vec![ComponentProperty {
-                name: "text".to_string(),
-                value: parse_scene_expr(text.trim(), line)?,
-            }],
-            placement: ComponentPlacement::Overlay,
-            await_event: Some("dismiss".to_string()),
-        });
+        return Ok(standard_message_effect(parse_scene_expr(
+            text.trim(),
+            line,
+        )?));
     }
     if let Some(rest) = value.strip_prefix("current_level = ") {
         return Ok(SceneEffect::SetCurrentLevel {

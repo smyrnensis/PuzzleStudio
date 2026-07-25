@@ -1601,12 +1601,22 @@ render_overlay <selector> <selector> [selector...] <char>
 
 ```txt
 sounds {
-sfx click seed=746670 type=jump volume=1.2
-music loop seed=123456 tone=0.62 bpm=104 volume=1.4
+sfx click {
+seed = 746670
+type = jump
+volume = 1.2
+}
+music loop {
+seed = 123456
+height = 0.62
+bars = 8
+bpm = 104
+volume = 1.4
+}
 }
 ```
 
-`sfx` は one-shot sound effect、`music` は loop 用の background track。`seed` は必須。`sfx type` は省略時 `random`。標準の seeded SFX type は `jump`、`step`、`pickup`、`hit`、`drag`、`water`、`lock`、`explosion`、`laser`、`powerup`、`select`、`error`。`type=puzzlescript` は PuzzleScript の numeric sound seed 互換 generator を選ぶための import 用 type。`music tone` / `bpm` / `volume` は省略時 `0.62` / `104` / `0.8`。`volume` は 0 以上の gain multiplier で、1 より大きい値は増幅として扱われる。
+`sfx` は one-shot sound effect、`music` は loop 用の background track。各 named entry は設定 block を持ち、`seed` は必須。`sfx` の `type` は省略時 `random`、`volume` は省略時 `1`。標準の seeded SFX type は `jump`、`step`、`pickup`、`hit`、`drag`、`water`、`lock`、`explosion`、`laser`、`powerup`、`select`、`error`。`type = puzzlescript` は PuzzleScript の numeric sound seed 互換 generator を選ぶための import 用 type。`music` の `height` / `bars` / `bpm` / `volume` は省略時 `0.5` / `8` / `110` / `0.5`。`bars` は `8`、`16`、`32`、`64` のいずれか。`volume` は 0 以上の gain multiplier で、1 より大きい値は増幅として扱われる。
 
 presentation として明示的に鳴らす音は scene / component の effect が所有する。
 
@@ -1831,6 +1841,13 @@ grid occupied_cells
 puzzle push3d {
 render {
 camera yaw=34 pitch=38 zoom=1 interactive_look interactive_zoom
+lighting {
+intensity = 1
+ambient = 1
+yaw = 53
+pitch = 56
+color = #ffffff
+}
 grid occupied_cells
 viewport {
 smoothscreen 7 7
@@ -1843,6 +1860,8 @@ shade
 ```
 
 `camera yaw=34 pitch=38 interactive_look` のような inline group は、`camera { yaw = 34; pitch = 38; interactive_look }` と同じ意味である。`orthographic = true` にすると正投影になり、省略時または `false` は透視投影になる。bare option は有効化、値を持つ option は `key=value` で書く。`interactive_look` は pointer drag で視線方向を変える設定、`interactive_zoom` は wheel/pinch 系の zoom 操作を許す設定である。これは `input` 名ではなく、`puzzle` component が自分の表示 box 内で始まった raw pointer gesture を camera view state に使ってよいという許可である。`zoom = 1` が `zoomscreen` / `smoothscreen` の通常倍率で、`zoom` や interactive zoom はその framing に対する上書き倍率として扱う。model `rules` の `if input == ...` には渡らず、undo/restart/transition state にも入らない。旧 `debug_camera` や `camera_yaw` 系、`interactive_look = true` のような boolean assignment は受け付けない。
+
+`lighting` は 3D model の初期照明。`intensity` と `ambient` は renderer の生の単位ではなく標準照明に対する比率で、`1` が標準、`0` が消灯。`ambient` は方向を持たず、陰側を含む全体へ加わる明るさである。`yaw` / `pitch` は主光源が盤面へ入る方向を度数で指定し、`color` は ambient と方向光の共通色を指定する。省略時は `intensity = 1`、`ambient = 1`、`yaw = 53`、`pitch = 56`、`color = #ffffff`。
 
 `viewport { zoomscreen 7 7 }` は、親 scene から渡された display の `W x H` 枠に対して、focus object を中心にした `7 x 7 x full` の仮想 world-space box をどう描くかを決める。3D visual はその box を現在の camera yaw/pitch で投影し、与えられた display に収まる最大倍率にする。`full` は現在 level の全 height。`zoomscreen 7 7 3` と書くと高さも focus 周りの 3 cell として扱う。`smoothscreen` は同じ framing を目標にするが、描画用 view が遅れて追従する。`focus Player` は追従対象を指定する。これは描画 framing であり、外側 object の culling ではない。
 

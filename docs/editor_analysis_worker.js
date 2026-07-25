@@ -114,6 +114,12 @@ async function queryAnalysis(request) {
       return requiredFunction(module, "active_source_analysis_outline_json")(revision);
     case "entries":
       return requiredFunction(module, "active_source_analysis_entries_json")(revision);
+    case "importReference":
+      return requiredFunction(module, "active_source_analysis_import_at_json")(
+        revision,
+        String(request.documentPath || "game.puzzle"),
+        Number(request.cursorOffset),
+      );
     case "completion":
       return requiredFunction(module, "active_source_analysis_suggest_source_completions")(
         revision,
@@ -129,6 +135,49 @@ async function queryAnalysis(request) {
         revision,
         JSON.stringify(request.visual || {}),
       );
+    case "soundSource":
+      return requiredFunction(module, "active_source_analysis_sound_request")(
+        revision,
+        JSON.stringify(request.soundRequest || {}),
+      );
+    case "levelSource":
+      return requiredFunction(module, "active_source_analysis_level_source_request")(
+        revision,
+        JSON.stringify(request.levelRequest || {}),
+      );
+    case "levelEditorBundle": {
+      const manifest = JSON.parse(
+        requiredFunction(module, "active_source_analysis_level_editor_manifest_json")(revision)
+          || "{}",
+      );
+      const levels = Array.isArray(manifest.levels) ? manifest.levels : [];
+      const objects = Array.isArray(manifest.objects) ? manifest.objects : [];
+      const slots = levels.map((level, levelIndex) => {
+        const authoredLayerCount = Math.max(
+          0,
+          Math.trunc(Number(level?.authoredLayerCount) || 0),
+        );
+        return {
+          integrated: requiredFunction(
+            module,
+            "active_source_analysis_level_editor_level_slots",
+          )(revision, levelIndex, -1),
+          authored: Array.from({ length: authoredLayerCount }, (_, authoredLayer) => (
+            requiredFunction(
+              module,
+              "active_source_analysis_level_editor_level_slots",
+            )(revision, levelIndex, authoredLayer)
+          )),
+        };
+      });
+      const visuals = objects.map((object) => JSON.parse(
+        requiredFunction(module, "active_source_analysis_level_editor_visual_json")(
+          revision,
+          Number(object?.id),
+        ) || "null",
+      ));
+      return { revision, manifest, slots, visuals };
+    }
     default:
       throw new Error(`Unknown editor analysis worker method: ${request.method}`);
   }

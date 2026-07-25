@@ -363,11 +363,6 @@ fn remove_workspace(
 }
 
 #[tauri::command]
-fn sound_tools() -> String {
-    html_editor::sound_tools_script()
-}
-
-#[tauri::command]
 fn editor_docs() -> String {
     html_editor::editor_docs_html()
 }
@@ -1430,7 +1425,6 @@ pub fn run() {
             recent_workspaces,
             open_recent_workspace,
             remove_workspace,
-            sound_tools,
             editor_docs,
             new_puzzle_source,
             save_source,

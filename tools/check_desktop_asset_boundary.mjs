@@ -29,7 +29,7 @@ if (htmlEditor) {
   );
   if (!defaultFeaturesDisabled || forbiddenFeatures.length > 0) {
     const message = [
-      "src-tauri may depend on html-editor only as a service/docs/sound-tools dependency:",
+      "src-tauri may depend on html-editor only as a service/docs dependency:",
       "set default-features = false and do not enable embedded-assets or native-preview",
     ].join(" ");
     (enforce ? failures : warnings).push(message);

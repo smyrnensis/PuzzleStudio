@@ -431,6 +431,171 @@ impl<Effect, LabelExpr, TextExpr, ConditionExpr>
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ComponentChoiceCell<'a, Effect> {
+    pub x: usize,
+    pub y: usize,
+    pub effect: &'a Effect,
+}
+
+pub fn component_choice_cells<'a, Effect, LabelExpr, TextExpr, ConditionExpr>(
+    components: &'a [SceneComponent<Effect, LabelExpr, TextExpr, ConditionExpr>],
+    mut condition_is_true: impl FnMut(&ConditionExpr) -> bool,
+) -> Vec<ComponentChoiceCell<'a, Effect>> {
+    component_column_footprint(components, &mut condition_is_true).cells
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ComponentActionCell<'a, Effect> {
+    pub ordinal: u32,
+    pub effect: &'a Effect,
+    pub active: bool,
+}
+
+pub fn component_action_cells<'a, Effect, LabelExpr, TextExpr, ConditionExpr>(
+    components: &'a [SceneComponent<Effect, LabelExpr, TextExpr, ConditionExpr>],
+    mut condition_is_true: impl FnMut(&ConditionExpr) -> bool,
+) -> Vec<ComponentActionCell<'a, Effect>> {
+    let mut cells = Vec::new();
+    collect_component_action_cells(components, &mut condition_is_true, true, &mut cells);
+    cells
+}
+
+fn collect_component_action_cells<'a, Effect, LabelExpr, TextExpr, ConditionExpr>(
+    components: &'a [SceneComponent<Effect, LabelExpr, TextExpr, ConditionExpr>],
+    condition_is_true: &mut impl FnMut(&ConditionExpr) -> bool,
+    active: bool,
+    cells: &mut Vec<ComponentActionCell<'a, Effect>>,
+) {
+    for component in components {
+        match component {
+            ComponentNode::Button(button) | ComponentNode::Choice(button) => {
+                cells.push(ComponentActionCell {
+                    ordinal: u32::try_from(cells.len())
+                        .expect("authored scene action count must fit in u32"),
+                    effect: &button.effect,
+                    active,
+                });
+            }
+            ComponentNode::Row(container)
+            | ComponentNode::Column(container)
+            | ComponentNode::Box(container) => collect_component_action_cells(
+                &container.children,
+                condition_is_true,
+                active,
+                cells,
+            ),
+            ComponentNode::Conditional(conditional) => {
+                let condition = condition_is_true(&conditional.condition);
+                collect_component_action_cells(
+                    &conditional.children,
+                    condition_is_true,
+                    active && condition,
+                    cells,
+                );
+                collect_component_action_cells(
+                    &conditional.else_children,
+                    condition_is_true,
+                    active && !condition,
+                    cells,
+                );
+            }
+            ComponentNode::Viewport(_) | ComponentNode::Frame(_) | ComponentNode::Text(_) => {}
+        }
+    }
+}
+
+struct ComponentChoiceFootprint<'a, Effect> {
+    width: usize,
+    height: usize,
+    cells: Vec<ComponentChoiceCell<'a, Effect>>,
+}
+
+fn component_choice_footprint<'a, Effect, LabelExpr, TextExpr, ConditionExpr>(
+    component: &'a SceneComponent<Effect, LabelExpr, TextExpr, ConditionExpr>,
+    condition_is_true: &mut impl FnMut(&ConditionExpr) -> bool,
+) -> ComponentChoiceFootprint<'a, Effect> {
+    match component {
+        ComponentNode::Choice(choice) => ComponentChoiceFootprint {
+            width: 1,
+            height: 1,
+            cells: vec![ComponentChoiceCell {
+                x: 0,
+                y: 0,
+                effect: &choice.effect,
+            }],
+        },
+        ComponentNode::Row(container) => {
+            component_row_footprint(&container.children, condition_is_true)
+        }
+        ComponentNode::Column(container) | ComponentNode::Box(container) => {
+            component_column_footprint(&container.children, condition_is_true)
+        }
+        ComponentNode::Conditional(conditional) => component_column_footprint(
+            if condition_is_true(&conditional.condition) {
+                &conditional.children
+            } else {
+                &conditional.else_children
+            },
+            condition_is_true,
+        ),
+        ComponentNode::Viewport(_)
+        | ComponentNode::Frame(_)
+        | ComponentNode::Text(_)
+        | ComponentNode::Button(_) => ComponentChoiceFootprint {
+            width: 1,
+            height: 1,
+            cells: Vec::new(),
+        },
+    }
+}
+
+fn component_row_footprint<'a, Effect, LabelExpr, TextExpr, ConditionExpr>(
+    components: &'a [SceneComponent<Effect, LabelExpr, TextExpr, ConditionExpr>],
+    condition_is_true: &mut impl FnMut(&ConditionExpr) -> bool,
+) -> ComponentChoiceFootprint<'a, Effect> {
+    let mut width = 0;
+    let mut height = 0;
+    let mut cells = Vec::new();
+    for component in components {
+        let child = component_choice_footprint(component, condition_is_true);
+        cells.extend(child.cells.into_iter().map(|cell| ComponentChoiceCell {
+            x: cell.x + width,
+            ..cell
+        }));
+        width += child.width;
+        height = height.max(child.height);
+    }
+    ComponentChoiceFootprint {
+        width: width.max(1),
+        height: height.max(1),
+        cells,
+    }
+}
+
+fn component_column_footprint<'a, Effect, LabelExpr, TextExpr, ConditionExpr>(
+    components: &'a [SceneComponent<Effect, LabelExpr, TextExpr, ConditionExpr>],
+    condition_is_true: &mut impl FnMut(&ConditionExpr) -> bool,
+) -> ComponentChoiceFootprint<'a, Effect> {
+    let mut width = 0;
+    let mut height = 0;
+    let mut cells = Vec::new();
+    for component in components {
+        let child = component_choice_footprint(component, condition_is_true);
+        cells.extend(child.cells.into_iter().map(|cell| ComponentChoiceCell {
+            y: cell.y + height,
+            ..cell
+        }));
+        width = width.max(child.width);
+        height += child.height;
+    }
+    ComponentChoiceFootprint {
+        width: width.max(1),
+        height: height.max(1),
+        cells,
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SceneComponentKind {
     Viewport,
@@ -582,6 +747,22 @@ pub enum SceneAction {
     Goto { scene: String },
 }
 
+pub const STANDARD_MESSAGE_COMPONENT: &str = "standard.message";
+pub const STANDARD_MESSAGE_TEXT_PROPERTY: &str = "text";
+pub const STANDARD_MESSAGE_DISMISS_EVENT: &str = "dismiss";
+
+pub fn standard_message_effect(text: SceneExpr) -> SceneEffect {
+    SceneEffect::PresentComponent {
+        definition: STANDARD_MESSAGE_COMPONENT.to_string(),
+        properties: vec![ComponentProperty {
+            name: STANDARD_MESSAGE_TEXT_PROPERTY.to_string(),
+            value: text,
+        }],
+        placement: ComponentPlacement::Overlay,
+        await_event: Some(STANDARD_MESSAGE_DISMISS_EVENT.to_string()),
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SceneEffect {
     Input(String),
@@ -693,6 +874,62 @@ pub enum SceneEffect {
     Sequence {
         effects: Vec<SceneEffect>,
     },
+}
+
+impl SceneEffect {
+    pub fn try_map_scene_references<Error>(
+        &mut self,
+        map: &mut impl FnMut(&str) -> Result<String, Error>,
+    ) -> Result<(), Error> {
+        match self {
+            Self::Goto { scene, .. }
+            | Self::Enter { scene, .. }
+            | Self::Create { scene }
+            | Self::Reset { scene }
+            | Self::Delete { scene }
+            | Self::Show { scene }
+            | Self::Hide { scene }
+            | Self::Toggle { scene }
+            | Self::Focus { scene } => {
+                *scene = map(scene)?;
+            }
+            Self::Conditional { effect, .. } => {
+                effect.try_map_scene_references(map)?;
+            }
+            Self::Sequence { effects } => {
+                for effect in effects {
+                    effect.try_map_scene_references(map)?;
+                }
+            }
+            Self::Input(_)
+            | Self::ComponentEffect(_)
+            | Self::RoutineCall(_)
+            | Self::PresentComponent { .. }
+            | Self::Wait { .. }
+            | Self::PlaySfx { .. }
+            | Self::PlayMusic { .. }
+            | Self::PauseMusic { .. }
+            | Self::ResumeMusic { .. }
+            | Self::StopMusic { .. }
+            | Self::Back
+            | Self::Move { .. }
+            | Self::PuzzleNextLevel { .. }
+            | Self::PuzzlePreviousLevel { .. }
+            | Self::GotoLevel { .. }
+            | Self::ResetPuzzle { .. }
+            | Self::LoadPuzzle { .. }
+            | Self::Apply { .. }
+            | Self::Copy { .. }
+            | Self::SetVariable { .. }
+            | Self::ClearUndoHistory
+            | Self::ClearGameProgress
+            | Self::SetCurrentLevel { .. }
+            | Self::ClearCurrentLevel
+            | Self::SetLevelCleared { .. }
+            | Self::ResetPersistentVars => {}
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1901,6 +2138,100 @@ mod tests {
         });
         assert!(button.children().is_empty());
         assert!(button.children_mut().is_none());
+    }
+
+    #[test]
+    fn choice_cells_preserve_container_geometry_and_resolve_conditional_branch() {
+        fn choice(name: &str) -> SceneComponent {
+            SceneComponent::Choice(SceneButton {
+                label: SceneTextExpr::Literal(name.to_string()),
+                effect: SceneCommand {
+                    name: name.to_string(),
+                    args: Vec::new(),
+                },
+                layout: SceneLayout::default(),
+            })
+        }
+
+        let components = vec![
+            SceneComponent::Row(SceneContainer {
+                children: vec![choice("top_left"), choice("top_right")],
+                layout: SceneLayout::default(),
+            }),
+            SceneComponent::Conditional(SceneConditional {
+                condition: "visible".to_string(),
+                children: vec![SceneComponent::Row(SceneContainer {
+                    children: vec![choice("bottom_left"), choice("bottom_right")],
+                    layout: SceneLayout::default(),
+                })],
+                else_children: vec![choice("hidden")],
+            }),
+        ];
+
+        let cells = component_choice_cells(&components, |condition| condition == "visible");
+        assert_eq!(
+            cells
+                .iter()
+                .map(|cell| { (cell.x, cell.y, cell.effect.name.as_str()) })
+                .collect::<Vec<_>>(),
+            vec![
+                (0, 0, "top_left"),
+                (1, 0, "top_right"),
+                (0, 1, "bottom_left"),
+                (1, 1, "bottom_right"),
+            ]
+        );
+    }
+
+    #[test]
+    fn action_ordinals_are_stable_when_the_active_conditional_branch_changes() {
+        fn choice(name: &str) -> SceneComponent {
+            SceneComponent::Choice(SceneButton {
+                label: SceneTextExpr::Literal(name.to_string()),
+                effect: SceneCommand {
+                    name: name.to_string(),
+                    args: Vec::new(),
+                },
+                layout: SceneLayout::default(),
+            })
+        }
+
+        let components = vec![
+            choice("before"),
+            SceneComponent::Conditional(SceneConditional {
+                condition: "enabled".to_string(),
+                children: vec![choice("then")],
+                else_children: vec![choice("else")],
+            }),
+            choice("after"),
+        ];
+
+        let enabled = component_action_cells(&components, |condition| condition == "enabled");
+        let disabled = component_action_cells(&components, |_| false);
+        let project = |cells: &[ComponentActionCell<'_, SceneCommand>]| {
+            cells
+                .iter()
+                .map(|cell| (cell.ordinal, cell.effect.name.clone(), cell.active))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            project(&enabled),
+            vec![
+                (0, "before".to_string(), true),
+                (1, "then".to_string(), true),
+                (2, "else".to_string(), false),
+                (3, "after".to_string(), true),
+            ]
+        );
+        assert_eq!(
+            project(&disabled),
+            vec![
+                (0, "before".to_string(), true),
+                (1, "then".to_string(), false),
+                (2, "else".to_string(), true),
+                (3, "after".to_string(), true),
+            ]
+        );
     }
 
     #[test]

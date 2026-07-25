@@ -7,22 +7,44 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+export const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-const args = parseArgs(process.argv.slice(2));
-const editorBin = requiredPath(args.editorBin, "--editor-bin");
-const fixture2d = path.resolve(repoRoot, args.fixture || "crates/lang/tests/fixtures/spec_2d_microban_basic.puzzle");
-const fixture3d = path.resolve(repoRoot, args.fixture3d || "games/spec_3d.puzzle3");
-const importFileOnly = args.importFileOnly ? path.resolve(repoRoot, args.importFileOnly) : "";
-const chromePath = resolveChrome(args.chrome);
-const headless = !args.headed;
-const sourceInputOnly = Boolean(args.sourceInputOnly);
-const visualPaletteOnly = Boolean(args.visualPaletteOnly);
-const sourceEditingCommandsOnly = Boolean(args.sourceEditingCommandsOnly);
-const sourceSelectionOnly = Boolean(args.sourceSelectionOnly);
-const sourceOptionDragOnly = Boolean(args.sourceOptionDragOnly);
-const levelSelectionRevisionOnly = Boolean(args.levelSelectionRevisionOnly);
-const indexControlLayoutOnly = Boolean(args.indexControlLayoutOnly);
+const isDirectInvocation =
+  process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+let args = {};
+let editorBin = "";
+let fixture2d = "";
+let fixture3d = "";
+let importFileOnly = "";
+let chromePath = "";
+let headless = true;
+let sourceInputOnly = false;
+let visualPaletteOnly = false;
+let sourceEditingCommandsOnly = false;
+let sourceSelectionOnly = false;
+let sourceOptionDragOnly = false;
+let levelSelectionRevisionOnly = false;
+let indexControlLayoutOnly = false;
+
+if (isDirectInvocation) {
+  args = parseArgs(process.argv.slice(2));
+  editorBin = requiredPath(args.editorBin, "--editor-bin");
+  fixture2d = path.resolve(
+    repoRoot,
+    args.fixture || "crates/lang/tests/fixtures/spec_2d_microban_basic.puzzle",
+  );
+  fixture3d = path.resolve(repoRoot, args.fixture3d || "games/spec_3d.puzzle3");
+  importFileOnly = args.importFileOnly ? path.resolve(repoRoot, args.importFileOnly) : "";
+  chromePath = resolveChrome(args.chrome);
+  headless = !args.headed;
+  sourceInputOnly = Boolean(args.sourceInputOnly);
+  visualPaletteOnly = Boolean(args.visualPaletteOnly);
+  sourceEditingCommandsOnly = Boolean(args.sourceEditingCommandsOnly);
+  sourceSelectionOnly = Boolean(args.sourceSelectionOnly);
+  sourceOptionDragOnly = Boolean(args.sourceOptionDragOnly);
+  levelSelectionRevisionOnly = Boolean(args.levelSelectionRevisionOnly);
+  indexControlLayoutOnly = Boolean(args.indexControlLayoutOnly);
+}
 
 const failures = [];
 
@@ -2276,7 +2298,7 @@ class EditorServer {
   }
 }
 
-class Browser {
+export class Browser {
   constructor(bin, options) {
     this.bin = bin;
     this.options = options;
@@ -2299,7 +2321,20 @@ class Browser {
       "about:blank",
     ];
     if (this.options.headless) {
-      launchArgs.unshift("--headless=new", "--disable-gpu");
+      launchArgs.unshift("--headless=new");
+      if (!this.options.enableGpu) {
+        launchArgs.unshift("--disable-gpu");
+      }
+    }
+    if (this.options.swiftShader) {
+      launchArgs.unshift(
+        "--use-gl=angle",
+        "--use-angle=swiftshader",
+        "--enable-unsafe-swiftshader",
+      );
+    }
+    if (this.options.width && this.options.height) {
+      launchArgs.unshift(`--window-size=${this.options.width},${this.options.height}`);
     }
     this.child = spawn(this.bin, launchArgs, {
       cwd: repoRoot,
@@ -2342,7 +2377,7 @@ class Browser {
   }
 }
 
-class CdpPage {
+export class CdpPage {
   constructor(webSocketUrl) {
     this.webSocketUrl = webSocketUrl;
     this.ws = null;
@@ -2682,7 +2717,7 @@ function requiredPath(value, label) {
   return resolved;
 }
 
-function resolveChrome(explicit) {
+export function resolveChrome(explicit) {
   if (explicit) {
     return requiredPath(explicit, "--chrome");
   }
@@ -2777,7 +2812,9 @@ function parseArgs(argv) {
   return parsed;
 }
 
-main().catch((error) => {
-  console.error(error.stack || error.message || String(error));
-  process.exit(1);
-});
+if (isDirectInvocation) {
+  main().catch((error) => {
+    console.error(error.stack || error.message || String(error));
+    process.exit(1);
+  });
+}

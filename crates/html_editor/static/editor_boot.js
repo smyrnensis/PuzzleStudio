@@ -200,16 +200,6 @@
       }
       return editorRuntime().sourceOutline(payload);
     },
-    async soundTools() {
-      const invoke = tauriInvoke();
-      if (invoke) {
-        return invoke("sound_tools");
-      }
-      if (!serverBackendAvailable()) {
-        throw backendUnavailableError();
-      }
-      return fetchText("/sound-tools.js");
-    },
     async editorDocsHtml() {
       const invoke = tauriInvoke();
       if (invoke) {

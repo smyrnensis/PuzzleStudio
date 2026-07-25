@@ -4,12 +4,17 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
-cargo build --target wasm32-unknown-unknown --release -p puzzle-wasm-game
+game_target_dir="${CARGO_TARGET_DIR:-/private/tmp/puzzlebuilder-bevy-target}"
+cargo build \
+  --target wasm32-unknown-unknown \
+  --target-dir "$game_target_dir" \
+  --release \
+  -p puzzle-wasm-game
 mkdir -p crates/html_play/static/wasm_game
 wasm-bindgen \
   --target web \
   --out-dir crates/html_play/static/wasm_game \
-  target/wasm32-unknown-unknown/release/puzzle_wasm_game.wasm
+  "$game_target_dir/wasm32-unknown-unknown/release/puzzle_wasm_game.wasm"
 
 if ! grep -q "export class WasmStandaloneSession" crates/html_play/static/wasm_game/puzzle_wasm_game.js; then
   echo "generated game WASM bindings are missing WasmStandaloneSession" >&2
@@ -18,6 +23,16 @@ fi
 
 if ! grep -q "dispatch(action_json)" crates/html_play/static/wasm_game/puzzle_wasm_game.js; then
   echo "generated game WASM bindings are missing typed session dispatch" >&2
+  exit 1
+fi
+
+if ! grep -q "apply_debug_input_name(input_name)" crates/html_play/static/wasm_game/puzzle_wasm_game.js; then
+  echo "generated editor game WASM bindings are missing the editor debug ingress" >&2
+  exit 1
+fi
+
+if grep -Eq "apply_command_name|apply_input_name" crates/html_play/static/wasm_game/puzzle_wasm_game.js; then
+  echo "generated game WASM bindings expose an untyped session ingress" >&2
   exit 1
 fi
 

@@ -60,6 +60,27 @@ pub struct VisualRenderSettings3 {
     pub shade: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct LightingSettings3 {
+    pub intensity_milli: u16,
+    pub ambient_milli: u16,
+    pub yaw_degrees: i16,
+    pub pitch_degrees: i16,
+    pub color: String,
+}
+
+impl Default for LightingSettings3 {
+    fn default() -> Self {
+        Self {
+            intensity_milli: 1000,
+            ambient_milli: 1000,
+            yaw_degrees: 53,
+            pitch_degrees: 56,
+            color: "#ffffff".to_string(),
+        }
+    }
+}
+
 impl Default for VisualRenderSettings3 {
     fn default() -> Self {
         Self { shade: true }

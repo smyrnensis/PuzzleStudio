@@ -26,8 +26,6 @@ function solverState(modelKind, source) {
       height: state.height,
       layerCount: state.layerCount,
       slots: state.slots,
-      slotMarks: state.slotMarks,
-      cellMarks: state.cellMarks,
       variables: state.variables,
       levelFiredRules: state.levelFiredRules,
     };
@@ -40,8 +38,6 @@ function solverState(modelKind, source) {
       height: state.height,
       layerCount: state.layerCount,
       slots: state.slots,
-      slotMarks: state.slotMarks,
-      cellMarks: state.cellMarks,
       variables: state.variables,
       levelFiredRules: state.levelFiredRules,
     };
@@ -159,7 +155,7 @@ self.onmessage = async (event) => {
         state: solverState(String(data.modelKind || ""), request.state),
         materializeLevelStart: request.materializeLevelStart === true,
         maxDepth: Number(request.maxDepth),
-        maxNodes: Number(request.maxNodes),
+        maxStoredNodes: Number(request.maxStoredNodes),
       },
       Date.now(),
     );

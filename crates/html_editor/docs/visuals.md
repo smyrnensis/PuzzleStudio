@@ -29,7 +29,7 @@ Visuals are drawn into one cell by default. Use `contain`, `cover`, or
 ```puzzle
 visuals {
 Gate {
-image "visuals/gate.svg"
+image "visuals/gate.png"
 contain 2 2
 translate (0, -0.25)
 }

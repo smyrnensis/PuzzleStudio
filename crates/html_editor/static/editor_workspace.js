@@ -801,7 +801,7 @@ async function workspacePresentationManifest(document) {
     puzzlePath: document?.puzzlePath,
     workspaceDocuments: workspaceCompilerDocuments(document),
   });
-  for (const field of ["cssPaths", "scriptPaths", "filePaths", "visualImagePaths"]) {
+  for (const field of ["cssPaths", "scriptPaths", "filePaths", "visualImageAssets"]) {
     if (!Array.isArray(manifest?.[field])) {
       throw new Error(`Editor WASM workspace presentation manifest is missing ${field}.`);
     }
@@ -2543,7 +2543,13 @@ function assetResolverScript(document, manifest) {
 
 function declaredFileAssetPaths(manifest) {
   const paths = manifest.filePaths.slice();
-  for (const path of manifest.visualImagePaths) {
+  for (const asset of manifest.visualImageAssets) {
+    if (!asset || typeof asset.path !== "string"
+      || typeof asset.id !== "string"
+      || !["png", "jpeg"].includes(asset.format)) {
+      throw new Error("Editor WASM workspace presentation manifest contains an invalid visual image asset.");
+    }
+    const path = asset.path;
     if (!paths.includes(path)) {
       paths.push(path);
     }

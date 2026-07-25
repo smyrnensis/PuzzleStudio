@@ -13,21 +13,16 @@ enum StandaloneRuntimeWasm<'a> {
     },
 }
 
-fn export_html(state: &ServerState) -> String {
-    export_html_with_host_mode(state, StandaloneHostMode::Export)
-}
-
-fn export_html_with_host_mode(state: &ServerState, host_mode: StandaloneHostMode) -> String {
-    export_html_with_runtime_wasm(state, host_mode, StandaloneRuntimeWasm::HostDefault)
-}
-
 fn export_html_with_runtime_wasm(
     state: &ServerState,
     host_mode: StandaloneHostMode,
     runtime_wasm: StandaloneRuntimeWasm<'_>,
 ) -> String {
-    let runtime_export = runtime_export_json(&state.document)
+    let runtime_export = runtime_export_json(&state.standalone_export)
         .expect("standalone runtime document should serialize");
+    if host_mode == StandaloneHostMode::Export {
+        return bevy_export_html(&runtime_export, runtime_wasm);
+    }
     let editor_preview_data = (host_mode == StandaloneHostMode::EditorPreview).then(|| {
         let mut data = String::new();
         push_editor_preview_data(&mut data, state);
@@ -40,12 +35,10 @@ fn export_html_with_runtime_wasm(
         host_mode == StandaloneHostMode::EditorPreview,
         host_mode == StandaloneHostMode::EditorPreview,
     );
-    let body_theme_attributes = preview_body_theme_attributes(&state.loaded.theme);
     standalone_html(
         &boot_data,
         &runtime_export,
         editor_preview_data.as_deref(),
-        &body_theme_attributes,
         &state.game_css,
         &state.game_visuals_js,
         loaded_uses_puzzle3_frames(&state.loaded),
@@ -54,11 +47,80 @@ fn export_html_with_runtime_wasm(
     )
 }
 
+fn bevy_export_html(runtime_export: &str, runtime_wasm: StandaloneRuntimeWasm<'_>) -> String {
+    let runtime_export = escape_script_json(runtime_export);
+    let runtime_wasm_js = standalone_runtime_wasm_script(StandaloneHostMode::Export, runtime_wasm);
+    format!(
+        r##"<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>PuzzleStudio HTML Export</title>
+    <style>
+      html, body {{
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: #000;
+      }}
+      #puzzle-bevy {{
+        display: block;
+        width: 100%;
+        height: 100%;
+      }}
+      #puzzle-bevy-fatal {{
+        position: fixed;
+        inset: 0;
+        display: none;
+        box-sizing: border-box;
+        padding: 2rem;
+        overflow: auto;
+        white-space: pre-wrap;
+        color: #fff;
+        background: #280b0b;
+        font: 16px/1.5 system-ui, sans-serif;
+      }}
+    </style>
+  </head>
+  <body>
+    <canvas id="puzzle-bevy" aria-label="Puzzle game"></canvas>
+    <pre id="puzzle-bevy-fatal" role="alert"></pre>
+    <output id="puzzle-bevy-status" hidden data-state="starting"></output>
+    <script>
+window.PuzzleRuntimeExportJson = "{runtime_export}";
+{runtime_wasm_js}
+    </script>
+    <script>
+      (async () => {{
+        const fatal = document.getElementById("puzzle-bevy-fatal");
+        const status = document.getElementById("puzzle-bevy-status");
+        try {{
+          const player = await window.PuzzleRuntimeWasmLoader.load("bevy-player");
+          if (typeof player.startStandalonePlayer !== "function") {{
+            throw new Error("Standalone player WASM is missing startStandalonePlayer.");
+          }}
+          await player.startStandalonePlayer(window.PuzzleRuntimeExportJson, "#puzzle-bevy");
+        }} catch (error) {{
+          const message = error?.stack || error?.message || String(error);
+          fatal.textContent = `PuzzleStudio standalone player failed:\n${{message}}`;
+          fatal.style.display = "block";
+          status.dataset.state = "fatal";
+          console.error(message);
+        }}
+      }})();
+    </script>
+  </body>
+</html>
+"##
+    )
+}
+
 fn standalone_html(
     boot_data: &str,
     runtime_export: &str,
     editor_preview_data: Option<&str>,
-    body_theme_attributes: &str,
     game_css: &str,
     game_visuals_js: &str,
     uses_puzzle3_frames: bool,
@@ -72,15 +134,14 @@ fn standalone_html(
         format!("window.PuzzleEditorPreviewExportJson = \"{data}\";\n")
     });
     let app_css = escape_style(APP_CSS);
-    let theme_presets_css = escape_style(THEME_PRESETS_CSS);
     let renderer_css = escape_style(RENDERER_CSS);
     let game_css = escape_style(game_css);
     let game_visuals_js = escape_script(game_visuals_js);
     let visual_tween_core_js = escape_script(VISUAL_TWEEN_CORE_JS);
     let renderer_js = escape_script(RENDERER_JS);
-    let standalone_js = escape_script(STANDALONE_JS);
+    let standalone_js_source = standalone_runtime_js(host_mode);
+    let standalone_js = escape_script(&standalone_js_source);
     let runtime_wasm_js = standalone_runtime_wasm_script(host_mode, runtime_wasm);
-    let sound_tools_js = escape_script(&sound_tools_js());
     let app_js_source = standalone_host_js(uses_puzzle3_frames, host_mode);
     let app_js = escape_script(&app_js_source);
 
@@ -92,10 +153,6 @@ fn standalone_html(
         .replace(
             r#"<link rel="stylesheet" href="/app.css">"#,
             &format!("<style>\n{app_css}\n</style>"),
-        )
-        .replace(
-            r#"<link rel="stylesheet" href="/theme-presets.css">"#,
-            &format!("<style>\n{theme_presets_css}\n</style>"),
         )
         .replace(
             r#"<link rel="stylesheet" href="/renderer.css">"#,
@@ -110,14 +167,9 @@ fn standalone_html(
             &format!("<script>\n{game_visuals_js}\n</script>"),
         )
         .replace(
-            r#"<script src="/sound-generator.js"></script>"#,
-            &format!("<script>\n{sound_tools_js}\n</script>"),
-        )
-        .replace(
             r#"<script src="/app.js"></script>"#,
             &format!("<script>\n{app_js}\n</script>"),
-        )
-        .replace("<body>", &format!("<body{body_theme_attributes}>"));
+        );
     let html = replace_required_script_asset(
         html,
         "/visual_tween_core.js",
@@ -164,6 +216,14 @@ fn standalone_host_js(uses_puzzle3_frames: bool, host_mode: StandaloneHostMode) 
     remove_optional_host_markers(&script)
 }
 
+fn standalone_runtime_js(host_mode: StandaloneHostMode) -> String {
+    let mut script = STANDALONE_JS.to_string();
+    if host_mode == StandaloneHostMode::Export {
+        script = strip_optional_host_blocks(&script, "editor-preview");
+    }
+    remove_optional_host_markers(&script)
+}
+
 fn loaded_uses_puzzle3_frames(loaded: &LoadedGame) -> bool {
     loaded.scenes.iter().any(|scene| {
         scene
@@ -173,6 +233,26 @@ fn loaded_uses_puzzle3_frames(loaded: &LoadedGame) -> bool {
     })
 }
 
+fn component_contains_puzzle3_frame(component: &SceneComponent) -> bool {
+    match component {
+        SceneComponent::Viewport(viewport) => {
+            viewport.projection == puzzle_lang::ViewportProjectionDef::ThreeD
+        }
+        SceneComponent::Row(container)
+        | SceneComponent::Column(container)
+        | SceneComponent::Box(container) => container
+            .children
+            .iter()
+            .any(component_contains_puzzle3_frame),
+        SceneComponent::Conditional(conditional) => conditional
+            .children
+            .iter()
+            .chain(conditional.else_children.iter())
+            .any(component_contains_puzzle3_frame),
+        _ => false,
+    }
+}
+
 fn strip_optional_host_blocks(source: &str, name: &str) -> String {
     let start_marker = format!("/* puzzle-host:optional:{name}:start */");
     let end_marker = format!("/* puzzle-host:optional:{name}:end */");
@@ -180,12 +260,24 @@ fn strip_optional_host_blocks(source: &str, name: &str) -> String {
     let mut rest = source;
 
     while let Some(start) = rest.find(&start_marker) {
-        output.push_str(&rest[..start]);
+        let line_start = rest[..start].rfind('\n').map_or(0, |index| index + 1);
+        let block_start = rest[line_start..start]
+            .chars()
+            .all(char::is_whitespace)
+            .then_some(line_start)
+            .unwrap_or(start);
+        output.push_str(&rest[..block_start]);
         let after_start = &rest[start + start_marker.len()..];
         let Some(end) = after_start.find(&end_marker) else {
             panic!("missing optional host end marker for {name}");
         };
-        rest = &after_start[end + end_marker.len()..];
+        let after_end = &after_start[end + end_marker.len()..];
+        let line_end = after_end.find('\n').map_or(after_end.len(), |index| index + 1);
+        rest = if after_end[..line_end].chars().all(char::is_whitespace) {
+            &after_end[line_end..]
+        } else {
+            after_end
+        };
     }
 
     if rest.contains(&end_marker) {
@@ -198,7 +290,13 @@ fn strip_optional_host_blocks(source: &str, name: &str) -> String {
 
 fn remove_optional_host_markers(source: &str) -> String {
     let mut script = source.to_string();
-    for name in ["solver", "studio-bridge", "scene-editor", "puzzle3"] {
+    for name in [
+        "solver",
+        "studio-bridge",
+        "scene-editor",
+        "puzzle3",
+        "editor-preview",
+    ] {
         script = script.replace(&format!("/* puzzle-host:optional:{name}:start */"), "");
         script = script.replace(&format!("/* puzzle-host:optional:{name}:end */"), "");
     }
@@ -380,90 +478,19 @@ fn editor_preview_parent_wasm_loader_script() -> String {
 })();"#.to_string()
 }
 
-fn preview_body_theme_attributes(theme: &ThemeDef) -> String {
-    let class_name = theme_class_name(theme.name.as_deref().unwrap_or("clean"));
-    let mut attributes = String::new();
-    if !class_name.is_empty() {
-        let _ = write!(attributes, " class=\"{class_name}\"");
-    }
-    if !theme.variables.is_empty() {
-        attributes.push_str(" style=\"");
-        for variable in &theme.variables {
-            attributes.push_str("--");
-            attributes.push_str(&escape_html_attr(&variable.name));
-            attributes.push(':');
-            attributes.push_str(&escape_html_attr(&variable.value));
-            attributes.push(';');
-        }
-        attributes.push('"');
-    }
-    attributes
-}
-
-fn theme_class_name(name: &str) -> String {
-    let mut normalized = String::new();
-    let mut previous_dash = false;
-    for ch in name.chars() {
-        let next = if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
-            ch.to_ascii_lowercase()
-        } else {
-            '-'
-        };
-        if next == '-' {
-            if normalized.is_empty() || previous_dash {
-                previous_dash = true;
-                continue;
-            }
-            previous_dash = true;
-        } else {
-            previous_dash = false;
-        }
-        normalized.push(next);
-    }
-    while normalized.ends_with('-') {
-        normalized.pop();
-    }
-    if normalized.is_empty() {
-        String::new()
-    } else {
-        format!("theme-{normalized}")
-    }
-}
-
-fn escape_html_attr(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('"', "&quot;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-}
-
-fn export_puzzle3_document_html(
-    document: &puzzle_lang::LoadedDocument,
-    puzzle_path: &str,
-    game_css: &str,
-    game_visuals_js: &str,
-) -> Result<String, String> {
-    export_puzzle3_document_html_with_runtime_wasm(
-        document,
-        puzzle_path,
-        game_css,
-        game_visuals_js,
-        None,
-        StandaloneHostMode::Export,
-        StandaloneRuntimeWasm::HostDefault,
-    )
-}
-
-fn export_puzzle3_document_html_with_runtime_wasm(
+fn export_puzzle3_editor_preview_html_with_runtime_wasm(
     document: &puzzle_lang::LoadedDocument,
     puzzle_path: &str,
     game_css: &str,
     game_visuals_js: &str,
     source: Option<&str>,
-    host_mode: StandaloneHostMode,
     runtime_wasm: StandaloneRuntimeWasm<'_>,
 ) -> Result<String, String> {
+    let visual_images = load_visual_image_bundle_for_export(document, puzzle_path)
+        .map_err(|error| error.to_string())?;
+    let progress_storage = standalone_progress_storage(document, puzzle_path);
+    let standalone_export =
+        StandaloneRuntimeExport::new(document.clone(), visual_images, progress_storage);
     let fixture_json = puzzle_lang::export_loaded_document_visual_fixture_json(document)
         .map_err(|error| error.to_string())?;
     let mut boot: serde_json::Value =
@@ -471,6 +498,7 @@ fn export_puzzle3_document_html_with_runtime_wasm(
     let boot_object = boot
         .as_object_mut()
         .ok_or_else(|| "spatial fixture root must be an object".to_string())?;
+    boot_object.remove("theme");
     boot_object.insert(
         "engineVersion".to_string(),
         serde_json::Value::String(env!("CARGO_PKG_VERSION").to_string()),
@@ -479,30 +507,7 @@ fn export_puzzle3_document_html_with_runtime_wasm(
         "puzzlePath".to_string(),
         serde_json::Value::String(puzzle_path.to_string()),
     );
-    boot_object.insert(
-        "saveKey".to_string(),
-        serde_json::Value::String(format!("{}:{puzzle_path}", document.title)),
-    );
-    boot_object.insert(
-        "progressSaveVersion".to_string(),
-        serde_json::json!(puzzle_play::PROGRESS_SAVE_VERSION),
-    );
-    boot_object.insert(
-        "editorPreview".to_string(),
-        serde_json::Value::Bool(host_mode == StandaloneHostMode::EditorPreview),
-    );
-    boot_object.insert(
-        "theme".to_string(),
-        serde_json::json!({
-            "name": document.theme.name,
-            "variables": document
-                .theme
-                .variables
-                .iter()
-                .map(|variable| (variable.name.clone(), serde_json::Value::String(variable.value.clone())))
-                .collect::<serde_json::Map<_, _>>(),
-        }),
-    );
+    boot_object.insert("editorPreview".to_string(), serde_json::Value::Bool(true));
     if let Some(source) = source {
         boot_object.insert(
             "source".to_string(),
@@ -510,17 +515,17 @@ fn export_puzzle3_document_html_with_runtime_wasm(
         );
     }
     let boot_data = serde_json::to_string(&boot).unwrap();
-    let runtime_export = runtime_export_json(document).map_err(|error| error.to_string())?;
-    let body_theme_attributes = preview_body_theme_attributes(&document.theme);
+    let fixture_json = boot_data.clone();
+    let runtime_export =
+        runtime_export_json(&standalone_export).map_err(|error| error.to_string())?;
     let html = standalone_html(
         &boot_data,
         &runtime_export,
         None,
-        &body_theme_attributes,
         game_css,
         game_visuals_js,
         true,
-        host_mode,
+        StandaloneHostMode::EditorPreview,
         runtime_wasm,
     );
     Ok(inject_puzzle3_frame_assets(
@@ -531,7 +536,7 @@ fn export_puzzle3_document_html_with_runtime_wasm(
     ))
 }
 
-fn export_mixed_document_html(
+fn export_mixed_document_editor_preview_html(
     document: &puzzle_lang::LoadedDocument,
     loaded: LoadedGame,
     source: String,
@@ -539,32 +544,45 @@ fn export_mixed_document_html(
     game_css: String,
     game_visuals_js: String,
     solver: SolverConfig,
-    host_mode: StandaloneHostMode,
     runtime_wasm: StandaloneRuntimeWasm<'_>,
 ) -> Result<String, String> {
     let fixture_json = mixed_document_puzzle3_fixture_json(document)?;
     let puzzle3_path = puzzle_path.clone();
-    let state_source = if host_mode == StandaloneHostMode::EditorPreview {
-        source
-    } else {
-        String::new()
-    };
+    let visual_images = load_visual_image_bundle_for_export(document, &puzzle_path)
+        .map_err(|error| error.to_string())?;
     let state = ServerState::new(
         document.clone(),
         loaded,
-        state_source,
+        source,
         puzzle_path,
+        visual_images,
         game_css,
         game_visuals_js,
         solver,
     );
-    let html = export_html_with_runtime_wasm(&state, host_mode, runtime_wasm);
+    let html =
+        export_html_with_runtime_wasm(&state, StandaloneHostMode::EditorPreview, runtime_wasm);
     Ok(inject_puzzle3_frame_assets(
         html,
         &fixture_json,
         None,
         Some(&puzzle3_path),
     ))
+}
+
+fn export_bevy_document_html(
+    document: &puzzle_lang::LoadedDocument,
+    puzzle_path: &str,
+    runtime_wasm: StandaloneRuntimeWasm<'_>,
+) -> Result<String, String> {
+    let visual_images = load_visual_image_bundle_for_export(document, puzzle_path)
+        .map_err(|error| error.to_string())?;
+    let progress_storage = standalone_progress_storage(document, puzzle_path);
+    let standalone_export =
+        StandaloneRuntimeExport::new(document.clone(), visual_images, progress_storage);
+    let runtime_export =
+        runtime_export_json(&standalone_export).map_err(|error| error.to_string())?;
+    Ok(bevy_export_html(&runtime_export, runtime_wasm))
 }
 
 fn mixed_document_puzzle3_fixture_json(
@@ -656,57 +674,6 @@ fn inject_puzzle3_frame_assets(
     )
 }
 
-fn sound_tools_js() -> String {
-    fn module_body(source: &str) -> String {
-        source
-            .lines()
-            .filter(|line| !line.trim_start().starts_with("import "))
-            .collect::<Vec<_>>()
-            .join("\n")
-            .replace("export const ", "const ")
-            .replace("export async function ", "async function ")
-            .replace("export function ", "function ")
-    }
-
-    fn expose_module(source: &str, exports: &[&str]) -> String {
-        let body = module_body(source);
-        format!("{body}\nreturn {{{}}};", exports.join(","))
-    }
-
-    format!(
-        "(() => {{
-  const sfx = (() => {{
-{}
-  }})();
-  const musicPlayer = (() => {{
-{}
-  }})();
-  const musicGenerator = (() => {{
-{}
-{}
-  }})();
-  const music = {{ createPlayer: musicPlayer.createPlayer, generateSong: musicGenerator.generateSong, randomPreset: musicGenerator.randomPreset }};
-  window.PuzzleSoundTools = {{ ...(window.PuzzleSoundTools || {{}}), ...sfx, ...music }};
-  window.PuzzleSoundGenerator = window.PuzzleSoundTools;
-  window.dispatchEvent(new CustomEvent(\"PuzzleSoundToolsReady\"));
-}})();",
-        expose_module(
-            SEEDED_SFX_JS,
-            &[
-                "SFX_TYPE_OPTIONS",
-                "createSfxPlayer",
-                "createPuzzleScriptSfxPlayer",
-                "generateSoundEffect",
-                "generatePuzzleScriptSoundEffect",
-                "randomSfxPreset",
-            ],
-        ),
-        expose_module(SEEDED_MUSIC_PLAYER_JS, &["createPlayer"]),
-        module_body(SEEDED_TIMBRE_FIELDS_JS),
-        expose_module(SEEDED_MUSIC_JS, &["generateSong", "randomPreset"]),
-    )
-}
-
 pub fn export_html_from_source(
     source: &str,
     puzzle_path: &str,
@@ -794,50 +761,48 @@ fn export_html_from_source_with_runtime_wasm(
     runtime_wasm: StandaloneRuntimeWasm<'_>,
 ) -> Result<String, DiagnosticReport> {
     let document = puzzle_lang::parse_game_for_path(source, puzzle_path)?;
+    if host_mode == StandaloneHostMode::Export {
+        return export_bevy_document_html(&document, puzzle_path, runtime_wasm)
+            .map_err(DiagnosticReport::error);
+    }
     if matches!(
         document.single_model(),
         Some(LoadedDocumentModel::Puzzle3d { .. })
     ) {
-        return export_puzzle3_document_html_with_runtime_wasm(
+        return export_puzzle3_editor_preview_html_with_runtime_wasm(
             &document,
             puzzle_path,
             game_css,
             game_visuals_js,
             Some(source),
-            host_mode,
             runtime_wasm,
         )
         .map_err(DiagnosticReport::error);
     }
     let loaded =
         loaded_document_scene_host_loaded_game(&document).map_err(DiagnosticReport::error)?;
-    runtime_export_json(&document).map_err(|error| {
-        DiagnosticReport::error(format!(
-            "runtime loaded document bundle failed to serialize: {error}"
-        ))
-    })?;
-    let game_visuals_js = join_visuals_js(game_visuals_js, &generated_visuals_js(&loaded));
     if document_uses_puzzle3_renderer(&document) {
-        export_mixed_document_html(
+        export_mixed_document_editor_preview_html(
             &document,
             loaded,
             source.to_string(),
             puzzle_path.to_string(),
             game_css.to_string(),
-            game_visuals_js,
+            game_visuals_js.to_string(),
             SolverConfig::default(),
-            host_mode,
             runtime_wasm,
         )
         .map_err(DiagnosticReport::error)
     } else {
+        let visual_images = load_visual_image_bundle_for_export(&document, puzzle_path)?;
         let state = ServerState::new(
             document.clone(),
             loaded,
             source.to_string(),
             puzzle_path.to_string(),
+            visual_images,
             game_css.to_string(),
-            game_visuals_js,
+            game_visuals_js.to_string(),
             SolverConfig::default(),
         );
         Ok(export_html_with_runtime_wasm(
@@ -861,65 +826,17 @@ pub fn export_html_file(path: impl AsRef<Path>) -> Result<String, String> {
     };
     let document = puzzle_lang::parse_game_for_path(&source, &puzzle_path)
         .map_err(|error| error.to_string())?;
-    let game_css =
-        load_asset_css(&puzzle_path, &document.assets).map_err(|error| error.to_string())?;
-
-    if matches!(
-        document.single_model(),
-        Some(LoadedDocumentModel::Puzzle3d { .. })
-    ) {
-        return export_puzzle3_document_html(
-            &document,
-            &puzzle_path.display().to_string(),
-            &game_css,
-            VISUALS_JS,
-        );
-    }
-
-    let loaded = loaded_document_scene_host_loaded_game(&document)?;
-    let game_visuals_js =
-        load_game_visuals_js(&puzzle_path, &loaded).map_err(|error| error.to_string())?;
-    if document_uses_puzzle3_renderer(&document) {
-        export_mixed_document_html(
-            &document,
-            loaded,
-            source,
-            puzzle_path.display().to_string(),
-            game_css,
-            game_visuals_js,
-            SolverConfig::default(),
-            StandaloneHostMode::Export,
-            StandaloneRuntimeWasm::HostDefault,
-        )
-    } else {
-        let state = ServerState::new(
-            document.clone(),
-            loaded,
-            source,
-            puzzle_path.display().to_string(),
-            game_css,
-            game_visuals_js,
-            SolverConfig::default(),
-        );
-        Ok(export_html(&state))
-    }
+    export_bevy_document_html(
+        &document,
+        &puzzle_path.display().to_string(),
+        StandaloneRuntimeWasm::HostDefault,
+    )
 }
 
 pub fn export_visuals_js_from_source(
     source: &str,
     base_visuals_js: &str,
 ) -> Result<String, String> {
-    let document = puzzle_lang::parse_game(source).map_err(|error| error.to_string())?;
-    if matches!(
-        document.single_model(),
-        Some(LoadedDocumentModel::Puzzle3d { .. })
-    ) {
-        Ok(base_visuals_js.to_string())
-    } else {
-        let loaded = loaded_document_scene_host_loaded_game(&document)?;
-        Ok(join_visuals_js(
-            base_visuals_js,
-            &generated_visuals_js(&loaded),
-        ))
-    }
+    puzzle_lang::parse_game(source).map_err(|error| error.to_string())?;
+    Ok(base_visuals_js.to_string())
 }

@@ -9,89 +9,6 @@ const solverObservationPlaybackMaxMs = 1600;
 const solverObservationPlaybackMinStepMs = 20;
 const solverObservationPlaybackMaxStepMs = 80;
 const solutionPlaybackBaseIntervalMs = 350;
-const WASM_SECTION_BLOCK_NAMES = Object.freeze({
-  marks: "marks",
-  group: "group",
-  groups: "group",
-  layer: "layers",
-  layers: "layers",
-  legend: "legend",
-  legends: "legend",
-  win_condition: "win_conditions",
-  win_conditions: "win_conditions",
-  lose_condition: "lose_conditions",
-  lose_conditions: "lose_conditions",
-  visual: "visuals",
-  visuals: "visuals",
-  asset: "assets",
-  assets: "assets",
-  screen: "screen",
-  view: "layout",
-  layout: "layout",
-  main: "main",
-  rule: "rules",
-  rules: "rules",
-  transition: "transitions",
-  transitions: "transitions",
-  level: "levels",
-  levels: "levels",
-  level_start: "on_level_start",
-  on_level_start: "on_level_start",
-  level_clear: "on_level_clear",
-  on_level_clear: "on_level_clear",
-  scene_start: "on_scene_start",
-  on_scene_start: "on_scene_start",
-  state: "state",
-  keys: "keys",
-  resources: "resources",
-  row: "row",
-  column: "column",
-  box: "box",
-});
-const WASM_SECTION_BOUNDARY_BLOCKS = new Set([
-  "map",
-  "on_level_start",
-  "on_level_clear",
-  "marks",
-  "group",
-  "layers",
-  "collision_layers",
-  "legend",
-  "visuals",
-  "assets",
-  "screen",
-  "layout",
-  "effect",
-  "rules",
-  "main",
-  "transitions",
-  "levels",
-  "level",
-  "resources",
-  "win_conditions",
-  "lose_conditions",
-]);
-const WASM_INLINE_BLOCKS = new Set([
-  ...WASM_SECTION_BOUNDARY_BLOCKS,
-  "state",
-  "keys",
-  "on_scene_start",
-  "transition",
-  "input",
-  "component_effect",
-  "action",
-  "if",
-  "row",
-  "column",
-  "box",
-  "for",
-  "fix",
-  "repeat",
-  "once",
-  "once_all",
-  "once_per_level",
-  "display",
-]);
 let previewVirtualHeight = previewMinimumHeight;
 let previewViewportAspect = previewDefaultLogicalWidth / previewDefaultLogicalHeight;
 let previewVirtualWidth = Math.round(previewVirtualHeight * previewViewportAspect);
@@ -105,88 +22,6 @@ const VISUAL_COLOR_PRESETS = [
   "#29adff", "#83769c", "#ff77a8", "#ffccaa",
 ];
 const VISUAL_COLOR_TOKENS = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
-const PREVIEW_THEME_PRESETS = {
-  clean: {
-    colorScheme: "light",
-    bg: "#f5f3ef",
-    ink: "#1f2428",
-    muted: "#66727c",
-    line: "#d7dde2",
-    accent: "var(--preview-game-ink)",
-    panelBg: "rgba(255, 255, 255, 0.94)",
-    background: "var(--preview-game-bg)",
-  },
-  terminal: {
-    colorScheme: "dark",
-    bg: "#000000",
-    ink: "#ffffff",
-    muted: "#ffffff",
-    line: "#ffffff",
-    accent: "#ffffff",
-    panelBg: "#000000",
-    background: "var(--preview-game-bg)",
-  },
-  paper: {
-    colorScheme: "light",
-    bg: "#f4ecd9",
-    ink: "#2b2419",
-    muted: "#756852",
-    line: "#cdbd9a",
-    accent: "#8d5d2a",
-    panelBg: "rgba(255, 250, 240, 0.96)",
-    background: "linear-gradient(rgba(255, 255, 255, 0.26), rgba(255, 255, 255, 0.26)), repeating-linear-gradient(0deg, transparent 0 23px, rgba(141, 93, 42, 0.08) 23px 24px), var(--preview-game-bg)",
-  },
-  pixel: {
-    colorScheme: "dark",
-    bg: "#08080c",
-    ink: "#f8f8f8",
-    muted: "#d8d8d8",
-    line: "#f8f8f8",
-    accent: "#f8f8f8",
-    panelBg: "#08080c",
-    background: "var(--preview-game-bg)",
-  },
-  puzzlescript: {
-    colorScheme: "dark",
-    bg: "#000000",
-    ink: "#ffffff",
-    muted: "#ffffff",
-    line: "#ffffff",
-    accent: "#ffffff",
-    panelBg: "#000000",
-    background: "var(--preview-game-bg)",
-  },
-  candy: {
-    colorScheme: "light",
-    bg: "#fff7fb",
-    ink: "#33404a",
-    muted: "#7a8790",
-    line: "#efbfd3",
-    accent: "#d76f97",
-    panelBg: "rgba(255, 255, 255, 0.96)",
-    background: "repeating-linear-gradient(135deg, rgba(215, 111, 151, 0.045) 0 14px, transparent 14px 28px), var(--preview-game-bg)",
-  },
-  blueprint: {
-    colorScheme: "dark",
-    bg: "#0d334e",
-    ink: "#e9f8ff",
-    muted: "#aad0e0",
-    line: "#78c7e8",
-    accent: "#ffd166",
-    panelBg: "rgba(11, 42, 64, 0.94)",
-    background: "repeating-linear-gradient(0deg, rgba(120, 199, 232, 0.11) 0 1px, transparent 1px 24px), repeating-linear-gradient(90deg, rgba(120, 199, 232, 0.11) 0 1px, transparent 1px 24px), var(--preview-game-bg)",
-  },
-  noir: {
-    colorScheme: "dark",
-    bg: "#101010",
-    ink: "#f4f1e8",
-    muted: "#a9a097",
-    line: "#59544e",
-    accent: "#f2c14e",
-    panelBg: "rgba(24, 24, 24, 0.96)",
-    background: "linear-gradient(90deg, rgba(242, 193, 78, 0.055), transparent 38%, transparent 62%, rgba(242, 193, 78, 0.035)), var(--preview-game-bg)",
-  },
-};
 
 function visualEditorScaleFactor(scaleInput, maxSize) {
   const factor = Math.trunc(Number(scaleInput?.value) || 2);
@@ -234,7 +69,7 @@ function normalizeEditorShortcut(shortcut) {
     throw new Error("Editor shortcut requires at least one key.");
   }
   const modifiers = Array.isArray(shortcut.modifiers) ? shortcut.modifiers : [];
-  if (modifiers.some((modifier) => modifier !== "primary")) {
+  if (modifiers.some((modifier) => !["primary", "shift"].includes(modifier))) {
     throw new Error(`Unsupported editor shortcut modifier: ${modifiers.join(", ")}`);
   }
   return {
@@ -247,14 +82,25 @@ function setEditorShortcutHint(element, shortcut) {
   if (!element) {
     throw new Error("Editor shortcut hint requires an element.");
   }
-  element.dataset.shortcut = JSON.stringify(normalizeEditorShortcut(shortcut));
+  setEditorShortcutHints(element, [shortcut]);
+}
+
+function setEditorShortcutHints(element, shortcuts) {
+  if (!element) {
+    throw new Error("Editor shortcut hint requires an element.");
+  }
+  if (!Array.isArray(shortcuts) || !shortcuts.length) {
+    throw new Error("Editor shortcut hints require at least one shortcut.");
+  }
+  element.dataset.shortcuts = JSON.stringify(shortcuts.map(normalizeEditorShortcut));
 }
 
 function editorShortcutMatches(event, shortcut) {
   const normalized = normalizeEditorShortcut(shortcut);
   const expectsPrimary = normalized.modifiers.includes("primary");
+  const expectsShift = normalized.modifiers.includes("shift");
   const hasPrimary = (event.metaKey && !event.ctrlKey) || (event.ctrlKey && !event.metaKey);
-  if (hasPrimary !== expectsPrimary || event.altKey || event.shiftKey) {
+  if (hasPrimary !== expectsPrimary || event.altKey || event.shiftKey !== expectsShift) {
     return false;
   }
   const eventKey = event.key.length === 1 ? event.key.toLowerCase() : event.key;
@@ -285,6 +131,11 @@ function createEditorShortcutHint(shortcut) {
   if (normalized.modifiers.includes("primary")) {
     keycap.append(editorIconElement("command"));
   }
+  if (normalized.modifiers.includes("shift")) {
+    const shift = document.createElement("span");
+    shift.textContent = "⇧";
+    keycap.append(shift);
+  }
   const key = document.createElement("span");
   key.textContent = editorShortcutKeyLabel(normalized.keys[0]);
   keycap.append(key);
@@ -298,7 +149,7 @@ function editorTooltipTargetFromEventTarget(target) {
   }
   const hasIconGlyph = element.querySelector("svg")
     || element.classList.contains("visual-brush-size-input");
-  const hasHoverContent = element.dataset.tooltip || hasIconGlyph || element.dataset.shortcut;
+  const hasHoverContent = element.dataset.tooltip || hasIconGlyph || element.dataset.shortcuts;
   if (
     element.classList.contains("visual-cell")
     || element.classList.contains("source-outline-row")
@@ -331,7 +182,7 @@ function compactEditorTooltipText(text) {
     ["Paint empty voxel", "Eraser"],
     ["Paint transparent", "Eraser"],
     ["Pick color from screen", "Pick color"],
-    ["Pick selected color", "Pick color"],
+    ["Edit selected color", "Edit color"],
     ["Remove selected color", "Remove color"],
     ["Reset 3D preview camera", "Reset camera"],
     ["Reset solution preview", "Reset"],
@@ -432,7 +283,7 @@ function ensureEditorHoverTooltip() {
   return editorHoverTooltip;
 }
 
-function renderEditorHoverTooltip(text, shortcut) {
+function renderEditorHoverTooltip(text, shortcuts) {
   const tooltip = ensureEditorHoverTooltip();
   tooltip.replaceChildren();
   if (text) {
@@ -441,7 +292,7 @@ function renderEditorHoverTooltip(text, shortcut) {
     label.textContent = text;
     tooltip.append(label);
   }
-  if (shortcut) {
+  for (const shortcut of shortcuts || []) {
     tooltip.append(createEditorShortcutHint(shortcut));
   }
   return tooltip;
@@ -485,9 +336,9 @@ function positionEditorHoverTooltip() {
 
 function showEditorHoverTooltip(element) {
   const text = editorTooltipText(element);
-  const shortcutJson = String(element.dataset.shortcut || "").trim();
-  const shortcut = shortcutJson ? JSON.parse(shortcutJson) : null;
-  if (!text && !shortcut) {
+  const shortcutsJson = String(element.dataset.shortcuts || "").trim();
+  const shortcuts = shortcutsJson ? JSON.parse(shortcutsJson) : [];
+  if (!text && !shortcuts.length) {
     hideEditorHoverTooltip(element);
     return;
   }
@@ -496,7 +347,7 @@ function showEditorHoverTooltip(element) {
     element.dataset.hoverTitle = element.getAttribute("title") || "";
     element.removeAttribute("title");
   }
-  const tooltip = renderEditorHoverTooltip(text, shortcut);
+  const tooltip = renderEditorHoverTooltip(text, shortcuts);
   tooltip.hidden = false;
   positionEditorHoverTooltip();
 }
@@ -629,7 +480,6 @@ let currentPreviewMode = "play";
 let currentEditorDimension = "2d";
 let currentLevelPaneMode = "edit";
 let currentVisualPaneMode = "visual";
-let toolPaneSaveShortcutMode = "";
 let levelPaintDrag = null;
 let levelBucketActive = false;
 let levelResizeMode = null;
@@ -735,13 +585,13 @@ let visual3d = {
   animationDurationMs: null,
   frameDurationMs: null,
   shapeBind: null,
+  sourcePreludeRows: [],
   sourceSpatialOps: [],
 };
 let sounds = {
   mode: "sfx",
-  context: null,
-  sfxPlayer: null,
-  musicPlayer: null,
+  audio: null,
+  audioPromise: null,
   musicPlaying: false,
   musicProgress: 0,
   musicRestartTimer: 0,
@@ -860,6 +710,7 @@ function visualEditSnapshot(kind) {
         animationDurationMs: visual3d.animationDurationMs,
         frameDurationMs: visual3d.frameDurationMs,
         shapeBind: cloneVisualEditValue(visual3d.shapeBind || null),
+        sourcePreludeRows: cloneVisualEditValue(visual3d.sourcePreludeRows || []),
         sourceSpatialOps: cloneVisualEditValue(visual3d.sourceSpatialOps || []),
         hoverSlice: visual3d.hoverSlice,
       },
@@ -1003,6 +854,7 @@ function restoreVisualEditSnapshot(snapshot) {
     visual3d.animationDurationMs = Number.isFinite(state.animationDurationMs) ? state.animationDurationMs : null;
     visual3d.frameDurationMs = Number.isFinite(state.frameDurationMs) ? state.frameDurationMs : null;
     visual3d.shapeBind = cloneVisualEditValue(state.shapeBind || null);
+    visual3d.sourcePreludeRows = cloneVisualEditValue(state.sourcePreludeRows || []);
     visual3d.sourceSpatialOps = cloneVisualEditValue(state.sourceSpatialOps || []);
     visual3d.hoverSlice = Number.isInteger(state.hoverSlice) ? state.hoverSlice : null;
     visual3d.addPaletteOpen = false;
@@ -1067,157 +919,6 @@ function isTextEntryTarget(target) {
     return false;
   }
   return target?.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(tagName);
-}
-
-function handleVisualEditUndoShortcut(event) {
-  if (event.altKey || isTextEntryTarget(event.target)) {
-    return false;
-  }
-  const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
-  const modifier = (event.metaKey && !event.ctrlKey) || (event.ctrlKey && !event.metaKey);
-  if (!modifier) {
-    return false;
-  }
-  const redo = (key === "z" && event.shiftKey) || (!event.metaKey && key === "y");
-  if (!redo && (event.shiftKey || key !== "z")) {
-    return false;
-  }
-  const kind = currentVisualEditKind();
-  if (!kind) {
-    return false;
-  }
-  const handled = redo ? redoVisualEdit(kind) : undoVisualEdit(kind);
-  if (!handled) {
-    return false;
-  }
-  event.preventDefault();
-  event.stopPropagation();
-  return true;
-}
-
-function toolPaneSaveShortcutModeIsActive(mode) {
-  if (mode === "edit") {
-    return isPaneVisible("level") && levelBuilder && !levelBuilder.hidden;
-  }
-  if (mode === "level3d") {
-    return isPaneVisible("level") && level3dBuilder && !level3dBuilder.hidden;
-  }
-  if (mode === "visual") {
-    return isPaneVisible("visual") && visualBuilder && !visualBuilder.hidden;
-  }
-  if (mode === "visual3d") {
-    return isPaneVisible("visual") && visual3dBuilder && !visual3dBuilder.hidden;
-  }
-  if (mode === "sounds") {
-    return isPaneVisible("sounds") && soundsBuilder && !soundsBuilder.hidden;
-  }
-  return false;
-}
-
-function toolPaneSaveShortcutModeForTarget(target) {
-  const element = target instanceof Element ? target : null;
-  if (!element || sourceEditorWrap?.contains(element)) {
-    return "";
-  }
-  if (isPaneVisible("level")) {
-    if (levelBuilder && !levelBuilder.hidden && levelBuilder.contains(element)) {
-      return "edit";
-    }
-    if (level3dBuilder && !level3dBuilder.hidden && level3dBuilder.contains(element)) {
-      return "level3d";
-    }
-  }
-  if (isPaneVisible("visual")) {
-    if (visualBuilder && !visualBuilder.hidden && visualBuilder.contains(element)) {
-      return "visual";
-    }
-    if (visual3dBuilder && !visual3dBuilder.hidden && visual3dBuilder.contains(element)) {
-      return "visual3d";
-    }
-  }
-  if (isPaneVisible("sounds") && soundsBuilder && !soundsBuilder.hidden && soundsBuilder.contains(element)) {
-    return "sounds";
-  }
-  return "";
-}
-
-function rememberToolPaneSaveShortcutContext(target) {
-  toolPaneSaveShortcutMode = toolPaneSaveShortcutModeForTarget(target);
-}
-
-function currentToolPaneSaveShortcutMode(event) {
-  for (const mode of [
-    toolPaneSaveShortcutModeForTarget(event?.target),
-    toolPaneSaveShortcutModeForTarget(document.activeElement),
-    toolPaneSaveShortcutMode,
-  ]) {
-    if (mode && toolPaneSaveShortcutModeIsActive(mode)) {
-      return mode;
-    }
-  }
-  return "";
-}
-
-function reportToolPaneSourceUpdateUnavailable(paneId, message) {
-  setPaneStatus(paneId, message, "is-error");
-  setStatus(message, "is-error");
-  return true;
-}
-
-function updateToolPaneSourceForMode(mode) {
-  if (!toolPaneSaveShortcutModeIsActive(mode)) {
-    return false;
-  }
-  if (mode === "edit") {
-    if (typeof updateLevelInSource !== "function") {
-      return reportToolPaneSourceUpdateUnavailable("level", "Level source update unavailable");
-    }
-    updateLevelInSource();
-    return true;
-  }
-  if (mode === "level3d") {
-    if (typeof updateLevel3dInSource !== "function") {
-      return reportToolPaneSourceUpdateUnavailable("level", "3D level source update unavailable");
-    }
-    updateLevel3dInSource();
-    return true;
-  }
-  if (mode === "visual") {
-    if (typeof updateVisualInSource !== "function") {
-      return reportToolPaneSourceUpdateUnavailable("visual", "Visual source update unavailable");
-    }
-    const update = updateVisualInSource();
-    if (update && typeof update.catch === "function") {
-      update.catch((error) => {
-        console.error(error);
-        reportToolPaneSourceUpdateUnavailable("visual", "Visual source update failed");
-      });
-    }
-    return true;
-  }
-  if (mode === "visual3d") {
-    if (typeof updateVisual3dInSource !== "function") {
-      return reportToolPaneSourceUpdateUnavailable("visual", "3D visual source update unavailable");
-    }
-    updateVisual3dInSource();
-    return true;
-  }
-  if (mode === "sounds") {
-    if (typeof updateSoundsDefinition !== "function") {
-      return reportToolPaneSourceUpdateUnavailable("sounds", "Sound source update unavailable");
-    }
-    updateSoundsDefinition(sounds.mode === "music" ? "music" : "sfx");
-    return true;
-  }
-  return false;
-}
-
-function handleToolPaneSaveShortcut(event) {
-  const mode = currentToolPaneSaveShortcutMode(event);
-  if (mode) {
-    return updateToolPaneSourceForMode(mode);
-  }
-  return false;
 }
 
 initializeEditorTheme();
@@ -1426,10 +1127,10 @@ function applyPreviewTheme(theme) {
   if (!root) {
     return;
   }
-  const resolved = resolvePreviewTheme(theme);
-  currentPreviewTheme = resolved;
+  const normalized = normalizeRuntimePreviewTheme(theme);
+  currentPreviewTheme = normalized;
   for (const target of previewThemeRoots(root)) {
-    setPreviewThemeProperties(target, resolved);
+    setRuntimePreviewThemeProperties(target, normalized);
   }
 }
 
@@ -1479,6 +1180,7 @@ function applyUnloadedPreviewTheme() {
   currentPreviewTheme = editorPreviewTheme();
   for (const target of previewThemeRoots(root)) {
     setPreviewThemeProperties(target, currentPreviewTheme);
+    target.style.colorScheme = currentPreviewTheme.colorScheme;
   }
 }
 
@@ -1497,10 +1199,40 @@ function setPreviewThemeProperties(root, theme) {
   root.style.setProperty("--preview-game-ink", theme.ink);
   root.style.setProperty("--preview-game-muted", theme.muted);
   root.style.setProperty("--preview-game-line", theme.line);
-  root.style.setProperty("--preview-game-accent", theme.accent || theme.ink);
+  root.style.setProperty("--preview-game-accent", theme.accent);
   root.style.setProperty("--preview-game-panel-bg", theme.panelBg);
   root.style.setProperty("--preview-game-background", theme.background);
-  root.style.colorScheme = theme.colorScheme;
+}
+
+function setRuntimePreviewThemeProperties(root, theme) {
+  setPreviewThemeProperties(root, {
+    bg: runtimeLinearRgbaCss(theme.background),
+    ink: runtimeLinearRgbaCss(theme.text),
+    muted: runtimeLinearRgbaCss(theme.mutedText),
+    line: runtimeLinearRgbaCss(theme.controlSelectedBorder),
+    accent: runtimeLinearRgbaCss(theme.accent),
+    panelBg: runtimeLinearRgbaCss(theme.panel),
+    background: "var(--preview-game-bg)",
+  });
+  root.style.setProperty("--preview-game-control", runtimeLinearRgbaCss(theme.control));
+  root.style.setProperty("--preview-game-control-focused", runtimeLinearRgbaCss(theme.controlFocused));
+  root.style.setProperty("--preview-game-control-selected", runtimeLinearRgbaCss(theme.controlSelected));
+  root.style.setProperty(
+    "--preview-game-control-selected-border",
+    runtimeLinearRgbaCss(theme.controlSelectedBorder),
+  );
+  root.style.colorScheme = "";
+  for (const name of ["heading", "subheading", "body", "caption"]) {
+    const style = theme.typography[name];
+    root.style.setProperty(`--preview-game-text-${name}-size`, `${style.fontSizePx}px`);
+    root.style.setProperty(`--preview-game-text-${name}-line-height`, String(style.lineHeight));
+  }
+  const layout = theme.controlLayout;
+  root.style.setProperty("--preview-game-control-padding-horizontal", `${layout.paddingHorizontalPx}px`);
+  root.style.setProperty("--preview-game-control-padding-vertical", `${layout.paddingVerticalPx}px`);
+  root.style.setProperty("--preview-game-control-margin", `${layout.marginPx}px`);
+  root.style.setProperty("--preview-game-control-border-width", `${layout.borderWidthPx}px`);
+  root.style.setProperty("--preview-game-control-corner-radius", `${layout.cornerRadiusPx}px`);
 }
 
 function editorPreviewTheme() {
@@ -1526,57 +1258,66 @@ function editorCssVariable(name) {
   return value;
 }
 
-function resolvePreviewTheme(theme) {
-  const name = previewThemePresetName(theme?.name);
-  const preset = PREVIEW_THEME_PRESETS[name] || PREVIEW_THEME_PRESETS.clean;
-  const resolved = { ...preset };
-  for (const [rawName, rawValue] of Object.entries(theme?.variables || {})) {
-    const name = previewThemeVariableName(rawName);
-    const value = safePreviewCssValue(rawValue);
-    if (!value) {
-      continue;
-    }
-    if (name === "bg" || name === "background") {
-      resolved.bg = value;
-      resolved.background = "var(--preview-game-bg)";
-    } else if (name === "ink" || name === "text") {
-      resolved.ink = value;
-      if (resolved.accent === "var(--preview-game-ink)") {
-        resolved.accent = value;
-      }
-    } else if (name === "accent") {
-      resolved.accent = value;
-      resolved.line = value;
-    } else if (name === "muted") {
-      resolved.muted = value;
-    } else if (name === "line") {
-      resolved.line = value;
-    } else if (name === "panel-bg") {
-      resolved.panelBg = value;
-    }
+function normalizeRuntimePreviewTheme(theme) {
+  if (!theme || typeof theme !== "object" || Array.isArray(theme)) {
+    throw new Error("Editor preview is missing the required typed runtime theme contract.");
   }
-  return resolved;
+  const normalized = {};
+  for (const name of [
+    "background",
+    "text",
+    "mutedText",
+    "accent",
+    "panel",
+    "control",
+    "controlFocused",
+    "controlSelected",
+    "controlSelectedBorder",
+  ]) {
+    normalized[name] = normalizeRuntimePreviewLinearRgba(theme[name], `theme.${name}`);
+  }
+  normalized.typography = {};
+  for (const name of ["heading", "subheading", "body", "caption"]) {
+    const style = theme.typography?.[name];
+    const fontSizePx = style?.fontSizePx;
+    const lineHeight = style?.lineHeight;
+    if (typeof fontSizePx !== "number" || !Number.isFinite(fontSizePx) || fontSizePx <= 0
+      || typeof lineHeight !== "number" || !Number.isFinite(lineHeight) || lineHeight <= 0) {
+      throw new Error(`Editor preview theme has an invalid typography.${name} contract.`);
+    }
+    normalized.typography[name] = { fontSizePx, lineHeight };
+  }
+  normalized.controlLayout = {};
+  for (const name of [
+    "paddingHorizontalPx",
+    "paddingVerticalPx",
+    "marginPx",
+    "borderWidthPx",
+    "cornerRadiusPx",
+  ]) {
+    const value = theme.controlLayout?.[name];
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+      throw new Error(`Editor preview theme has an invalid controlLayout.${name} contract.`);
+    }
+    normalized.controlLayout[name] = value;
+  }
+  return normalized;
 }
 
-function previewThemePresetName(name) {
-  const normalized = String(name || "clean")
-    .replace(/[^a-zA-Z0-9_-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .toLowerCase();
-  return normalized || "clean";
+function normalizeRuntimePreviewLinearRgba(color, label) {
+  const normalized = {};
+  for (const name of ["red", "green", "blue", "alpha"]) {
+    const value = color?.[name];
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) {
+      throw new Error(`Editor preview theme has an invalid ${label}.${name} channel.`);
+    }
+    normalized[name] = value;
+  }
+  return normalized;
 }
 
-function previewThemeVariableName(name) {
-  const normalized = String(name || "")
-    .replace(/^--/, "")
-    .replace(/_/g, "-")
-    .toLowerCase();
-  return /^[a-z0-9-]*[a-z][a-z0-9-]*$/.test(normalized) ? normalized : "";
-}
-
-function safePreviewCssValue(value) {
-  const text = String(value || "").trim();
-  return /^[a-zA-Z0-9#.,%()+_/: -]+$/.test(text) ? text : "";
+function runtimeLinearRgbaCss(color) {
+  return `color(srgb-linear ${color.red} ${color.green} ${color.blue} / ${color.alpha})`;
 }
 
 function ensureGameVisualsRuntime() {
@@ -1955,7 +1696,7 @@ function applyCompiledPreviewHtml(html, document, buildInput) {
   };
   previewFrameHasCurrentCompiledPreview = true;
   syncPreviewViewportAspect();
-  applyPreviewTheme(exportData?.theme || null);
+  applyPreviewTheme(exportData.theme);
   setActiveLevelIndex(previousLevelIndex ?? exportData?.initialLevelIndex ?? 0, exportData);
   clearSolverTask();
   previewFrameHasEditorLevelState = false;
@@ -2008,162 +1749,6 @@ function invalidateCompiledPreview(document = activePreviewDocument()) {
 
 function workspaceCompilerDocuments(entryDocument) {
   return compilerDocumentsForSnapshot(workspaceSourceSnapshot(entryDocument));
-}
-
-function expandPuzzleSectionHeadersForWasm(source) {
-  const lines = String(source || "").split("\n");
-  const out = [];
-  let openSection = null;
-  let i = 0;
-  while (i < lines.length) {
-    const section = sectionHeaderAtForWasm(lines, i);
-    if (section) {
-      if (openSection) {
-        out.push("end");
-      }
-      out.push(section.block);
-      openSection = section;
-      i += 3;
-      continue;
-    }
-
-    const line = lines[i];
-    const trimmed = stripLineCommentForWasm(line).trim();
-    if (openSection && trimmed) {
-      const normalizedLine = braceNormalizedLineForSectionForWasm(trimmed);
-      if (normalizedLine === "end") {
-        if (openSection.nestedDepth === 0) {
-          out.push("end");
-          openSection = null;
-        } else {
-          openSection.nestedDepth -= 1;
-        }
-      } else {
-        const tokens = normalizedLine.split(/\s+/).filter(Boolean);
-        if (openSection.nestedDepth === 0 && sectionBoundaryForWasm(openSection.block, tokens)) {
-          out.push("end");
-          openSection = null;
-          continue;
-        }
-        if (startsNestedBlockForWasm(openSection.block, tokens, normalizedLine)) {
-          openSection.nestedDepth += 1;
-        }
-      }
-    }
-
-    out.push(line);
-    i += 1;
-  }
-  if (openSection) {
-    out.push("end");
-  }
-  return out.join("\n");
-}
-
-function sectionHeaderAtForWasm(lines, start) {
-  if (start + 2 >= lines.length) {
-    return null;
-  }
-  const first = stripLineCommentForWasm(lines[start]).trim();
-  const title = stripLineCommentForWasm(lines[start + 1]).trim();
-  const last = stripLineCommentForWasm(lines[start + 2]).trim();
-  if (!isSectionSeparatorForWasm(first) || !isSectionSeparatorForWasm(last)) {
-    return null;
-  }
-  const block = sectionBlockNameForWasm(title);
-  return block ? { block, nestedDepth: 0 } : null;
-}
-
-function isSectionSeparatorForWasm(line) {
-  return line.length >= 3 && /^=+$/.test(line);
-}
-
-function sectionBlockNameForWasm(title) {
-  const normalized = normalizeSectionTitleForWasm(title);
-  if (!normalized) {
-    return "";
-  }
-  return WASM_SECTION_BLOCK_NAMES[normalized] || "";
-}
-
-function normalizeSectionTitleForWasm(title) {
-  let normalized = "";
-  let previousSeparator = false;
-  for (const ch of String(title || "").trim()) {
-    if (/^[A-Za-z0-9]$/.test(ch)) {
-      normalized += ch.toLowerCase();
-      previousSeparator = false;
-    } else if (/^\s$/.test(ch) || ch === "_" || ch === "-") {
-      if (normalized && !previousSeparator) {
-        normalized += "_";
-        previousSeparator = true;
-      }
-    } else {
-      return "";
-    }
-  }
-  return previousSeparator ? normalized.slice(0, -1) : normalized;
-}
-
-function sectionBoundaryForWasm(block, tokens) {
-  if (!tokens.length) {
-    return false;
-  }
-  if (block === "legend") {
-    return !isLegendRowForWasm(tokens);
-  }
-  if (["marks", "group", "layers", "collision_layers", "win_conditions", "lose_conditions", "transitions", "levels", "visuals", "assets"].includes(block)) {
-    return startsPuzzleSectionForWasm(tokens);
-  }
-  return false;
-}
-
-function isLegendRowForWasm(tokens) {
-  return tokens.length >= 3 && tokens[1] === "=";
-}
-
-function startsPuzzleSectionForWasm(tokens) {
-  const first = tokens[0] || "";
-  return WASM_SECTION_BOUNDARY_BLOCKS.has(sectionBlockNameForWasm(first) || first);
-}
-
-function startsNestedBlockForWasm(block, tokens, line) {
-  if (block === "legend") {
-    return false;
-  }
-  if (block === "levels") {
-    return tokens[0] === "level" || (tokens.length === 1 && isIdentifierForWasm(tokens[0])) || startsInlineBlockForWasm(tokens, line);
-  }
-  return startsInlineBlockForWasm(tokens, line);
-}
-
-function startsInlineBlockForWasm(tokens, line) {
-  const first = tokens[0] || "";
-  const block = sectionBlockNameForWasm(first) || first;
-  return WASM_INLINE_BLOCKS.has(block)
-    || (tokens[0] === "menu" && (tokens.length === 2 || (tokens.length === 5 && tokens[2] === "=" && tokens[4] === "with")))
-    || (tokens[0] === "button" && line.trimEnd().endsWith(" with"));
-}
-
-function braceNormalizedLineForSectionForWasm(line) {
-  if (line === "}") {
-    return "end";
-  }
-  if (line === "else {" || line === "else{") {
-    return "else";
-  }
-  if (line.endsWith("{")) {
-    return line.slice(0, -1).trimEnd();
-  }
-  return line;
-}
-
-function stripLineCommentForWasm(line) {
-  return String(line || "").split("//", 1)[0];
-}
-
-function isIdentifierForWasm(value) {
-  return /^[_A-Za-z][_A-Za-z0-9]*$/.test(value || "");
 }
 
 function resolveWasmImportPath(baseDir, importPath) {
@@ -3159,8 +2744,6 @@ function stateDataFromSceneCells(scene, levelIndex = currentEditableLevelIndex(p
     height,
     layerCount,
     slots,
-    slotMarks: Array.from({ length: slots.length }, () => []),
-    cellMarks: Array.from({ length: width * height }, () => []),
     variables: Array.isArray(previewDebugSnapshot?.gameState?.variables)
       ? cloneJson(previewDebugSnapshot.gameState.variables)
       : Array.from({ length: variablesLength }, () => 0),
@@ -3729,12 +3312,12 @@ function syncPreviewVirtualSize() {
 }
 
 function previewAspectForScene(exportData = previewBuild?.exportData, sceneName = "") {
-  const scenes = exportData?.scenes || exportData?.screens || [];
+  const scenes = exportData?.scenes || [];
   let scene = sceneName
     ? scenes.find((candidate) => candidate?.name === sceneName)
     : null;
   if (!scene) {
-    const initialName = exportData?.currentScene || exportData?.screen || scenes[0]?.name || "";
+    const initialName = exportData?.surface?.focus || scenes[0]?.name || "";
     scene = initialName
       ? scenes.find((candidate) => candidate?.name === initialName)
       : null;
@@ -3844,6 +3427,23 @@ function focusedPuzzleSourceContext(document = activeDocument()) {
   }
   const source = sourceForDocument(document);
   return { document, source };
+}
+
+async function focusedPuzzleSourceContextWithEntries(context = focusedPuzzleSourceContext()) {
+  if (!context?.document) {
+    return null;
+  }
+  const documentId = context.document.id || "";
+  await loadSurfaceEntriesForSource(context.source, { reportUnavailable: true });
+  const current = focusedPuzzleSourceContext();
+  if (
+    !current?.document
+    || (current.document.id || "") !== documentId
+    || current.source !== context.source
+  ) {
+    return null;
+  }
+  return current;
 }
 
 function firstFocusedPuzzleEntry(kind, context = focusedPuzzleSourceContext()) {
@@ -4015,11 +3615,17 @@ async function loadSurfaceEntriesForSource(source, options = {}) {
       return entries;
     })
     .catch((error) => {
-      if (surfaceEntriesRequest === request) {
+      const currentRequest = surfaceEntriesRequest === request;
+      if (currentRequest) {
         surfaceEntriesRequest = null;
       }
       const message = `Source entries unavailable: ${userFacingRuntimeError(error)}`;
-      if (options.reportUnavailable !== false) {
+      const activeContext = focusedPuzzleSourceContext();
+      if (
+        options.reportUnavailable !== false
+        && currentRequest
+        && activeContext?.source === text
+      ) {
         setStatus(message, "is-error");
       }
       throw new Error(message);
@@ -4050,26 +3656,11 @@ function surfaceEntriesForSource(source, options = {}) {
     }
     throw new Error(message);
   }
-  if (typeof window.PuzzleStudioRuntime?.workspaceSourceEntries !== "function") {
-    const message = "Workspace source entries are unavailable.";
-    if (options.reportUnavailable !== false) {
-      setStatus(message, "is-error");
-    }
-    throw new Error(message);
+  const message = "Source entries are available only for the active analyzed revision.";
+  if (options.reportUnavailable !== false) {
+    setStatus(message, "is-error");
   }
-  let rawEntries;
-  try {
-    rawEntries = window.PuzzleStudioRuntime.workspaceSourceEntries(text);
-  } catch (error) {
-    const message = `Source entries unavailable: ${userFacingRuntimeError(error)}`;
-    if (options.reportUnavailable !== false) {
-      setStatus(message, "is-error");
-    }
-    throw new Error(message);
-  }
-  const entries = normalizeResolvedSourceTargets(text, rawEntries);
-  surfaceEntriesCache = { source: text, entries };
-  return entries;
+  throw new Error(message);
 }
 
 function focusedPuzzleSurfaceEntries(context = focusedPuzzleSourceContext()) {
@@ -4260,6 +3851,9 @@ function loadFocusedPuzzleEntry(kind, entry, options = {}) {
 }
 
 function finishFocusedPuzzleEntryLoad(result) {
+  if (result && typeof result.then === "function") {
+    return result.then((loaded) => finishFocusedPuzzleEntryLoad(loaded));
+  }
   const loaded = Boolean(result);
   if (loaded) {
     hideEditorHoverTooltip();
@@ -4292,18 +3886,27 @@ function defaultEmptyLevel2dSourceData() {
   return { rows, localLegends: [] };
 }
 
-function insertLevelWithDefaultBlock(source, name, levelData, namespace = "") {
-  const inserted = insertLevel(source, name, levelData, namespace);
-  if (inserted) {
-    return inserted;
+async function levelSourceRequest(source, request) {
+  const runtime = window.PuzzleStudioRuntime;
+  if (typeof runtime?.levelSourceRequest !== "function") {
+    throw new Error("Rust level source editing is unavailable.");
   }
-  const levelSource = levelDefinitionSource(name, levelData, "", { leadingBlank: false, bodyIndent: "" }).trimEnd();
-  const prefix = source.trimEnd() ? `${source.trimEnd()}\n\n` : "";
-  const namespaceSuffix = sanitizeLevelNamespace(namespace) ? ` ${sanitizeLevelNamespace(namespace)}` : "";
-  return `${prefix}levels${namespaceSuffix} {\n${levelSource}\n}\n`;
+  return runtime.levelSourceRequest(source, request);
 }
 
-function addEmptyLevel2dToFocusedSource() {
+async function insertLevelWithDefaultBlock(source, name, levelData, namespace = "") {
+  return levelSourceRequest(source, {
+    operation: "insert",
+    name,
+    namespace: sanitizeLevelNamespace(namespace),
+    rows: levelData?.rows || [],
+    localLegends: levelSourceLegendDrafts(levelData?.localLegends),
+    cursor: sourceEditor.selectionStart,
+    createContainer: true,
+  });
+}
+
+async function addEmptyLevel2dToFocusedSource() {
   const document = focusedPuzzleTextDocument();
   if (!document) {
     setStatus("No puzzle source for level", "is-error");
@@ -4311,8 +3914,13 @@ function addEmptyLevel2dToFocusedSource() {
   }
   const name = "";
   const sourceData = defaultEmptyLevel2dSourceData();
-  const nextSource = insertLevelWithDefaultBlock(focusedPuzzleTextSource(document), name, sourceData, "");
-  applyFocusedPuzzleSourceChange(document, nextSource);
+  try {
+    const result = await insertLevelWithDefaultBlock(focusedPuzzleTextSource(document), name, sourceData, "");
+    applyFocusedPuzzleSourceChange(document, result.source);
+  } catch (error) {
+    setStatus(`Could not add 2D level: ${error?.message || error}`, "is-error");
+    return false;
+  }
   currentLevelPaneMode = "edit";
   openPreviewModePane("edit");
   setLevelNameInputs(name);
@@ -4384,7 +3992,7 @@ function addEmptyLevel3dToFocusedSource() {
   return true;
 }
 
-function openLevelPaneForCurrentPreviewLevel() {
+async function openLevelPaneForCurrentPreviewLevel() {
   const build = previewBuild;
   const exportData = currentPreviewExportData();
   if (!build || previewSession?.buildId !== build.id || !Array.isArray(exportData?.levels) || !exportData.levels.length) {
@@ -4424,7 +4032,7 @@ function openLevelPaneForCurrentPreviewLevel() {
       return false;
     }
   }
-  const loaded = loadResolvedSourceTarget({
+  const loaded = await loadResolvedSourceTarget({
     ...target,
     kind: "level",
     dimension: targetMode === "level3d" ? "3d" : "2d",
@@ -4445,11 +4053,16 @@ function openLevelPaneForCurrentPreviewLevel() {
   return true;
 }
 
-function openLevelPaneForCurrentDimension() {
-  const context = focusedPuzzleSourceContext();
+async function openLevelPaneForCurrentDimension(options = {}) {
+  const context = await focusedPuzzleSourceContextWithEntries();
+  if (!context) {
+    return false;
+  }
   ensurePreviewTargetsActiveDocument();
-  const mode = levelModeForEditorDimension(currentEditorDimension);
-  const loaded = loadAvailableLevelPaneEntry(context, {
+  const mode = ["edit", "level3d"].includes(options.mode)
+    ? options.mode
+    : levelModeForEditorDimension(currentEditorDimension);
+  const loaded = await loadAvailableLevelPaneEntry(context, {
     mode,
     silent: true,
     recordHistory: false,
@@ -4466,6 +4079,7 @@ function openLevelPaneForCurrentDimension() {
     applyPaneVisibility();
     hideEditorHoverTooltip();
   }
+  return Boolean(loaded);
 }
 
 function openVisualPaneForCurrentDimension() {
@@ -4555,6 +4169,12 @@ function syncPreviewModeButtonState() {
   const visualAnimationActive = currentVisualPaneMode === "visual3d" ? Boolean(visual3d.animationMode) : Boolean(visual.animationMode);
   visualAnimateModeButton?.classList.toggle("is-active", visualPaneVisible && visualAnimationActive);
   visualAnimateModeButton?.setAttribute("aria-pressed", String(visualPaneVisible && visualAnimationActive));
+  if (visualSourceActionBank) {
+    visualSourceActionBank.hidden = !visualPaneVisible || currentVisualPaneMode !== "visual";
+  }
+  if (visual3dSourceActionBank) {
+    visual3dSourceActionBank.hidden = !visualPaneVisible || currentVisualPaneMode !== "visual3d";
+  }
   for (const button of visualDimensionButtons) {
     const active = normalizeEditorDimension(button.dataset.visualDimension) === currentEditorDimension;
     button.classList.toggle("is-active", active);
@@ -4752,14 +4372,6 @@ function resetLevelBuilderFromPreviewSource() {
   if (!loadLevelFromPreviewState()) {
     resetLevelBuilderFromSource(true);
   }
-}
-
-function blockLines(source, name) {
-  const block = findNamedBlock(source, name);
-  if (!block) {
-    return [];
-  }
-  return source.slice(block.bodyStart, block.bodyEnd).split("\n");
 }
 
 function titleLabel(value) {
@@ -5269,18 +4881,6 @@ async function solvePreviewPaneCurrentLevel() {
   await solveLevel();
 }
 
-function levelRows(source) {
-  const block = findNamedBlock(source, "levels");
-  if (!block) {
-    return [];
-  }
-  return source
-    .slice(block.bodyStart, block.bodyEnd)
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line && !line.includes("{") && !line.includes("}") && !line.includes("="));
-}
-
 async function loadLevelFromSourcePosition(position, options = {}) {
   if (!isPuzzleDocument(activeDocument()) || !isTextDocument(activeDocument())) {
     return null;
@@ -5363,7 +4963,7 @@ function normalizeResolvedSourceTargets(source, targets) {
   }).filter(Boolean);
 }
 
-function loadLevelSourceTarget(target, options = {}) {
+async function loadLevelSourceTarget(target, options = {}) {
   if (!isPuzzleDocument(activeDocument()) || !isTextDocument(activeDocument())) {
     return null;
   }
@@ -5374,7 +4974,7 @@ function loadLevelSourceTarget(target, options = {}) {
   return loadLevelSourceEntry(source, sourceEntry, { ...options, document });
 }
 
-function loadLevelSourceEntry(source, entry, options = {}) {
+async function loadLevelSourceEntry(source, entry, options = {}) {
   ensurePreviewTargetsActiveDocument();
   const document = options.document || activeDocument();
   if (!isPuzzleDocument(document) || !isTextDocument(document)) {
@@ -5390,7 +4990,7 @@ function loadLevelSourceEntry(source, entry, options = {}) {
   }
   let exportData = null;
   try {
-    exportData = levelEditorSourceExportData(source);
+    exportData = await levelEditorSourceExportData(source);
   } catch (error) {
     reportLevelSourceLoadFailure(
       `Could not load level editor source contract: ${userFacingRuntimeError(error)}`,
@@ -5401,11 +5001,11 @@ function loadLevelSourceEntry(source, entry, options = {}) {
   return loadLevelSourceEntryWithExportData(source, entry, exportData, loadOptions);
 }
 
-function levelEditorSourceExportData(source) {
+async function levelEditorSourceExportData(source) {
   if (typeof window.PuzzleStudioRuntime?.levelEditorSourceSession !== "function") {
     throw new Error("Editor WASM function is missing: levelEditorSourceSession");
   }
-  const session = window.PuzzleStudioRuntime.levelEditorSourceSession(source);
+  const session = await window.PuzzleStudioRuntime.levelEditorSourceSession(source);
   const contract = session.manifest();
   if (contract?.version !== 2 || contract?.kind !== "puzzle2d-level-editor") {
     throw new Error(`Unsupported level editor source contract version: ${contract?.version ?? "missing"}`);
@@ -5554,109 +5154,36 @@ function loadLevelFromSourceEntry(source, entry, options = {}) {
   return true;
 }
 
-function sourceLevelStateFromEntry(source, entry, exportData = currentLevelExportData(), options = {}) {
+function sourceLevelStateFromEntry(_source, entry, exportData = currentLevelExportData(), _options = {}) {
   if (!entry || !exportData?.engine?.objects?.length) {
     return null;
   }
-  if (exportData.editorSourceContract) {
-    const levelIndex = previewLevelIndexForSourceEntry(entry, exportData);
-    const integrated = exportData.levels?.[levelIndex];
-    const session = exportData.editorSourceSession;
-    if (!integrated || !session) {
-      return null;
-    }
-    if (!integrated.initialState) {
-      integrated.initialState = levelEditorContractState(integrated, session.levelSlots(levelIndex));
-    }
-    if (!integrated.authoringLayers) {
-      integrated.authoringLayers = Array.from({ length: integrated.authoredLayerCount }, (_, authoredLayer) => (
-        levelEditorContractState(integrated, session.levelSlots(levelIndex, authoredLayer))
-      ));
-    }
-    const layers = integrated.authoringLayers.map((state) => (
-      stateDataToEditorCells(state, exportData)
+  if (!exportData.editorSourceContract) {
+    throw new Error("Compiled level editor source contract is unavailable.");
+  }
+  const levelIndex = previewLevelIndexForSourceEntry(entry, exportData);
+  const integrated = exportData.levels?.[levelIndex];
+  const session = exportData.editorSourceSession;
+  if (!integrated || !session) {
+    return null;
+  }
+  if (!integrated.initialState) {
+    integrated.initialState = levelEditorContractState(integrated, session.levelSlots(levelIndex));
+  }
+  if (!integrated.authoringLayers) {
+    integrated.authoringLayers = Array.from({ length: integrated.authoredLayerCount }, (_, authoredLayer) => (
+      levelEditorContractState(integrated, session.levelSlots(levelIndex, authoredLayer))
     ));
-    return {
-      width: integrated.initialState.width,
-      height: integrated.initialState.height,
-      regions: normalizedLevelRegions(integrated.regions || [], integrated.initialState.width, integrated.initialState.height),
-      layers,
-      cells: stateDataToEditorCells(integrated.initialState, exportData),
-    };
   }
-  const parsed = sourceLevelRowsAndLocalLegends(source, entry);
-  if (!parsed.rows.length) {
-    return null;
-  }
-  const referenceSource = options.referenceSource || levelReferenceSource(exportData);
-  const charEntries = [
-    ...sourceCharEntries(referenceSource, exportData),
-    ...parsed.localLegends.map((row) => legendEntryFromRow(row, new Set(engineObjects(exportData).map((object) => object.name)))).filter(Boolean),
-  ];
-  const charMap = new Map(charEntries.map((charEntry) => [charEntry.char, charEntry.objects]));
-  const regionGroups = sourceLevelRegionGroups(parsed.rows);
-  if (!regionGroups?.length) {
-    return null;
-  }
-  const regions = [];
-  let width = 0;
-  let height = 0;
-  let asciiLayerCount = 1;
-  for (const regionLayers of regionGroups) {
-    asciiLayerCount = Math.max(asciiLayerCount, regionLayers.length);
-    const baseLayer = regionLayers[0] || [];
-    const regionWidth = Math.max(1, ...baseLayer.map((row) => [...row].length));
-    const regionHeight = Math.max(1, baseLayer.length);
-    if (regionLayers.some((layerRows) => layerRows.length !== regionHeight || layerRows.some((row) => [...row].length !== regionWidth))) {
-      return null;
-    }
-    regions.push({ index: regions.length, x: width, y: 0, width: regionWidth, height: regionHeight });
-    width += regionWidth;
-    height = Math.max(height, regionHeight);
-  }
-  const previousWidth = level.width;
-  const previousHeight = level.height;
-  level.width = width;
-  level.height = height;
-  const layers = Array.from({ length: asciiLayerCount }, () => makeEmptyCells(width, height, exportData));
-  const objectIdsByName = new Map(engineObjects(exportData).map((object) => [object.name, object.id]));
-  for (const [regionIndex, regionLayers] of regionGroups.entries()) {
-    const region = regions[regionIndex];
-    for (const [asciiLayerIndex, group] of regionLayers.entries()) {
-      for (let y = 0; y < group.length; y += 1) {
-        const chars = [...group[y]];
-        for (let x = 0; x < region.width; x += 1) {
-          const char = chars[x] ?? ".";
-          const objects = /\s/.test(char) ? [] : charMap.get(char);
-          if (!objects) {
-            return null;
-          }
-          const slots = makeEmptyCell(exportData);
-          for (const objectName of objects) {
-            const objectId = objectIdsByName.get(objectName) || 0;
-            const object = engineObjectById(objectId, exportData);
-            if (!object) {
-              return null;
-            }
-            slots[object.layer] = object.id;
-          }
-          layers[asciiLayerIndex][((region.y + y) * width) + region.x + x] = slots;
-        }
-      }
-    }
-  }
-  const previousLayers = level.layers;
-  level.layers = layers;
-  const cells = levelCompositeCells({ includeHidden: true, exportData });
-  level.layers = previousLayers;
-  level.width = previousWidth;
-  level.height = previousHeight;
+  const layers = integrated.authoringLayers.map((state) => (
+    stateDataToEditorCells(state, exportData)
+  ));
   return {
-    width,
-    height,
-    regions: normalizedLevelRegions(regions, width, height),
+    width: integrated.initialState.width,
+    height: integrated.initialState.height,
+    regions: normalizedLevelRegions(integrated.regions || [], integrated.initialState.width, integrated.initialState.height),
     layers,
-    cells,
+    cells: stateDataToEditorCells(integrated.initialState, exportData),
   };
 }
 
@@ -5674,106 +5201,6 @@ function stateDataToEditorCells(state, exportData) {
     }
     return slots;
   });
-}
-
-function sourceLevelRowsAndLocalLegends(source, entry) {
-  const lines = sourceLinesWithOffsets(String(source || "").slice(entry.start, entry.end));
-  const rows = [];
-  const localLegends = [];
-  let sawMapRow = false;
-  const firstTokens = splitLevelTokens(levelScannerCode(lines[0]?.raw || ""));
-  let index = sourceLevelEntryHasHeader(firstTokens) ? 1 : 0;
-  while (index < lines.length) {
-    const code = levelScannerCode(lines[index].raw);
-    if (!code) {
-      if (sawMapRow && rows.at(-1) !== "") {
-        rows.push("");
-      }
-      index += 1;
-      continue;
-    }
-    const normalized = braceNormalizedLineForSectionForWasm(code);
-    const tokens = splitLevelTokens(normalized);
-    if (tokens[0] === "legend") {
-      if (tokens.length > 1) {
-        localLegends.push(code.slice("legend".length).trim());
-        index += 1;
-      } else {
-        const result = collectLegendBlockRows(lines, index + 1, []);
-        localLegends.push(...result.rows);
-        index = Math.max(index + 1, result.endIndex + 1);
-      }
-      continue;
-    }
-    if (isLevelLifecycleHeader(tokens) || startsLevelBodyBlock(tokens, normalized)) {
-      index = skipLevelBodySourceBlock(lines, index);
-      continue;
-    }
-    if (isLevelEventSugarCode(code) || normalized === "}" || normalized === "end") {
-      index += 1;
-      continue;
-    }
-    rows.push(code);
-    sawMapRow = true;
-    index += 1;
-  }
-  while (rows.at(-1) === "") {
-    rows.pop();
-  }
-  return { rows, localLegends };
-}
-
-function sourceLevelEntryHasHeader(tokens) {
-  return tokens[0] === "level"
-    || (tokens.length === 1 && tokens[0] === "{")
-    || (tokens.at(-1) === "{" && tokens[0] !== "legend");
-}
-
-function sourceLevelRegionGroups(rows) {
-  const regions = [];
-  let currentLayers = [];
-  let currentRows = [];
-  let expectsLayerRows = false;
-  const flushLayer = () => {
-    if (!currentRows.length) {
-      return !expectsLayerRows;
-    }
-    currentLayers.push(currentRows);
-    currentRows = [];
-    expectsLayerRows = false;
-    return true;
-  };
-  const flushRegion = () => {
-    if (!flushLayer()) {
-      return false;
-    }
-    if (currentLayers.length) {
-      regions.push(currentLayers);
-      currentLayers = [];
-    }
-    return true;
-  };
-  for (const row of rows) {
-    const text = String(row || "");
-    if (!text.trim()) {
-      if (!flushRegion()) {
-        return null;
-      }
-      continue;
-    }
-    if (text === "+") {
-      if (!flushLayer()) {
-        return null;
-      }
-      expectsLayerRows = true;
-      continue;
-    }
-    currentRows.push(text);
-  }
-  if (!flushRegion()) {
-    return null;
-  }
-  return regions;
 }
 
 function previewLevelIndexForSourceEntry(entry, exportData = previewBuild?.exportData) {
@@ -5878,8 +5305,8 @@ function syncPreviewModeFromSourceCursor(options = {}) {
   // The source structure (which block the caret sits in) only changes when the
   // text changes. While the text is unchanged and the caret is still inside the
   // last resolved target's range, the target is identical and the preview is
-  // already in sync, so skip the full-source scan entirely. This covers cursor
-  // navigation (arrows / click / selectionchange) without re-parsing.
+  // already in sync, so skip the revision-local target query. This covers
+  // cursor navigation (arrows / click / selectionchange) without worker traffic.
   if (
     options.force !== true
     && sourceCursorResolveRegion
@@ -5891,10 +5318,8 @@ function syncPreviewModeFromSourceCursor(options = {}) {
   ) {
     return false;
   }
-  // input + selectionchange + arrow keyup each fire this for the same edit, and
-  // resolve_source_target is a synchronous full-source WASM parse. Skip the
-  // parse when the source and caret are unchanged from the last resolve so a
-  // single keystroke costs one parse instead of two or three.
+  // input + selectionchange + arrow keyup each fire this for the same edit.
+  // Coalesce identical target queries against the worker's active revision.
   const activePaneSignature = `${currentPreviewMode}:${isPaneVisible(workPaneIdForPreviewMode(currentPreviewMode))}`;
   const resolveSignature = `${position}\u0000${activePaneSignature}\u0000${source}`;
   if (options.force !== true && resolveSignature === sourceCursorResolveSignature) {
@@ -5907,7 +5332,7 @@ function syncPreviewModeFromSourceCursor(options = {}) {
     recordHistory: options.recordHistory === true,
   };
   resolveSourceTargetFromWasm(source, position)
-    .then((target) => {
+    .then(async (target) => {
       if (
         requestId !== sourceTargetRequestId
         || documentId !== (activeDocument()?.id || "")
@@ -5918,7 +5343,7 @@ function syncPreviewModeFromSourceCursor(options = {}) {
       sourceCursorResolveRegion = target && Number.isInteger(target.start) && Number.isInteger(target.end)
         ? { source, kind: target.kind, dimension: target.dimension, start: target.start, end: target.end }
         : null;
-      const key = target ? loadResolvedSourceTarget(target, loadOptions) || "" : "";
+      const key = target ? await loadResolvedSourceTarget(target, loadOptions) || "" : "";
       return finishSourceTargetSync(key, options);
     })
     .catch((error) => {
@@ -6259,441 +5684,6 @@ function firstEditorSourceCodeIndex(line) {
   return (line?.start || 0) + Math.max(0, offset);
 }
 
-function findLevelDefinitionAtPosition(source, position) {
-  const levelsRange = findLevelsRangeAtPosition(source, position);
-  if (levelsRange) {
-    const entry = findLevelDefinitions(source, levelsRange)
-      .find((entry) => position >= entry.start && position <= entry.end) || null;
-    return entry || findLevelHeaderAtPosition(source, position);
-  }
-  return findStandaloneLevelDefinitionAtPosition(source, position)
-    || findLevelHeaderAtPosition(source, position);
-}
-
-function findLevelHeaderAtPosition(source, position) {
-  const lines = sourceLinesWithOffsets(source);
-  const lineIndex = sourceLineIndexAtOffset(lines, position);
-  const line = lines[lineIndex];
-  if (!line || position < line.start || position > line.end) {
-    return null;
-  }
-  const code = levelScannerCode(line.raw);
-  const tokens = splitLevelTokens(code);
-  if (tokens[0] !== "level") {
-    return null;
-  }
-  const name = sourcePuzzleLevelHeaderName(code);
-  if (name === null) {
-    return null;
-  }
-  let levelIndex = 0;
-  for (const previous of lines.slice(0, lineIndex)) {
-    if (sourcePuzzleLevelHeaderName(levelScannerCode(previous.raw)) !== null) {
-      levelIndex += 1;
-    }
-  }
-  return {
-    name,
-    start: firstCodeIndex(line),
-    end: line.absoluteEnd,
-    nextIndex: lineIndex + 1,
-    levelIndex,
-  };
-}
-
-function findLevelsRangeAtPosition(source, position) {
-  const ranges = findLevelsRanges(source);
-  return ranges.find((range) => position >= range.bodyStart && position <= range.bodyEnd) || null;
-}
-
-function findLevelsRanges(source) {
-  const lines = sourceLinesWithOffsets(source);
-  const rawLines = lines.map((line) => line.raw);
-  const ranges = [];
-
-  for (let index = 0; index < lines.length; index += 1) {
-    const section = sectionHeaderAtForWasm(rawLines, index);
-    if (section?.block === "levels") {
-      ranges.push({
-        headerStart: lines[index].start,
-        bodyStart: lines[index + 2].end + (lines[index + 2].hasNewline ? 1 : 0),
-        bodyEnd: findSectionLevelsEnd(lines, rawLines, index + 3),
-        indent: "",
-        namespace: "",
-      });
-      index += 2;
-      continue;
-    }
-
-    const code = levelScannerCode(lines[index].raw);
-    const tokens = splitLevelTokens(code);
-    if (tokens[0] === "levels" && tokens.at(-1) === "{") {
-      const openIndex = source.indexOf("{", lines[index].start);
-      const closeIndex = findMatchingBrace(source, openIndex);
-      if (openIndex >= 0 && closeIndex >= 0) {
-        ranges.push({
-          headerStart: lines[index].start,
-          bodyStart: openIndex + 1,
-          bodyEnd: closeIndex,
-          indent: lineIndent(lines[index].raw),
-          namespace: levelsNamespaceFromTokens(tokens),
-        });
-      }
-      continue;
-    }
-
-    if (
-      tokens.length >= 1
-      && tokens.length <= 2
-      && tokens[0] === "levels"
-      && !isSectionTitleLine(rawLines, index)
-    ) {
-      ranges.push({
-        headerStart: lines[index].start,
-        bodyStart: lines[index].end + (lines[index].hasNewline ? 1 : 0),
-        bodyEnd: findEndDelimitedLevelsEnd(lines, index + 1),
-        indent: lineIndent(lines[index].raw),
-        namespace: levelsNamespaceFromTokens(tokens),
-      });
-      continue;
-    }
-  }
-  return ranges;
-}
-
-function findSectionLevelsEnd(lines, rawLines, startIndex) {
-  let nestedDepth = 0;
-  for (let index = startIndex; index < lines.length; index += 1) {
-    if (nestedDepth === 0 && sectionHeaderAtForWasm(rawLines, index)) {
-      return lines[index].start;
-    }
-    const code = levelScannerCode(lines[index].raw);
-    if (!code) {
-      continue;
-    }
-    const normalized = braceNormalizedLineForSectionForWasm(code);
-    const tokens = splitLevelTokens(normalized);
-    if (nestedDepth === 0) {
-      if (normalized === "}") {
-        return lines[index].start;
-      }
-    }
-    if (normalized === "end" || normalized === "}") {
-      nestedDepth = Math.max(0, nestedDepth - 1);
-    } else if (startsLevelNestedBlock(tokens, normalized)) {
-      nestedDepth += 1;
-    }
-  }
-  return lines.at(-1)?.absoluteEnd ?? 0;
-}
-
-function findEndDelimitedLevelsEnd(lines, startIndex) {
-  let nestedDepth = 0;
-  for (let index = startIndex; index < lines.length; index += 1) {
-    const code = levelScannerCode(lines[index].raw);
-    if (!code) {
-      continue;
-    }
-    const normalized = braceNormalizedLineForSectionForWasm(code);
-    const tokens = splitLevelTokens(normalized);
-    if (normalized === "end") {
-      if (nestedDepth === 0) {
-        return lines[index].start;
-      }
-      nestedDepth -= 1;
-    } else if (startsLevelNestedBlock(tokens, normalized)) {
-      nestedDepth += 1;
-    }
-  }
-  return lines.at(-1)?.absoluteEnd ?? 0;
-}
-
-function findLevelDefinitions(source, levelsRange) {
-  const lines = sourceLinesWithOffsets(source);
-  const entries = [];
-  let index = lines.findIndex((line) => line.absoluteEnd >= levelsRange.bodyStart);
-  if (index < 0) {
-    return entries;
-  }
-
-  while (index < lines.length && lines[index].start <= levelsRange.bodyEnd) {
-    const line = lines[index];
-    if (line.start < levelsRange.bodyStart) {
-      index += 1;
-      continue;
-    }
-    const code = levelScannerCode(line.raw);
-    if (!code) {
-      index += 1;
-      continue;
-    }
-    const tokens = splitLevelTokens(code);
-    if (tokens[0] === "legend") {
-      const result = collectLegendBlockRows(lines, index + 1, []);
-      index = Math.max(index + 1, result.endIndex + 1);
-      continue;
-    }
-    if (isLevelsSectionBoundary(tokens) || code === "}" || code === "end") {
-      break;
-    }
-
-    let entry = null;
-    let sourceName = "";
-    const ordinal = entries.length + 1;
-    if (tokens[0] === "level") {
-      sourceName = sourcePuzzleLevelHeaderName(code);
-      if (sourceName === null) {
-        break;
-      }
-      const name = levelDefinitionName(levelsRange, sourceName, ordinal);
-      entry = code.endsWith("{")
-        ? bracedLevelEntry(source, lines, index, name, levelsRange.bodyEnd)
-        : unbracedLevelEntry(lines, index, index + 1, name, levelsRange.bodyEnd);
-    } else if (tokens.length === 1 && tokens[0] === "{") {
-      entry = bracedLevelEntry(source, lines, index, levelDefinitionName(levelsRange, "", ordinal), levelsRange.bodyEnd);
-    } else {
-      entry = unbracedLevelEntry(lines, index, index, levelDefinitionName(levelsRange, "", ordinal), levelsRange.bodyEnd);
-    }
-
-    if (!entry) {
-      index += 1;
-      continue;
-    }
-    entry.sourceName = sourceName;
-    entry.namespace = levelsRange.namespace || "";
-    entries.push(entry);
-    index = Math.max(index + 1, entry.nextIndex);
-  }
-  return assignLevelLevelIndexes(entries);
-}
-
-function findStandaloneLevelDefinitionAtPosition(source, position) {
-  const lines = sourceLinesWithOffsets(source);
-  for (let index = 0; index < lines.length; index += 1) {
-    const code = levelScannerCode(lines[index].raw);
-    const tokens = splitLevelTokens(code);
-    if (tokens[0] !== "level") {
-      continue;
-    }
-    const name = sourcePuzzleLevelHeaderName(code);
-    if (name === null) {
-      continue;
-    }
-    const entry = code.endsWith("{")
-      ? bracedLevelEntry(source, lines, index, name, source.length)
-      : endDelimitedStandaloneLevelEntry(lines, index, name);
-    if (entry && position >= entry.start && position <= entry.end) {
-      return assignLevelLevelIndexes([entry])[0] || null;
-    }
-  }
-  return null;
-}
-
-function endDelimitedStandaloneLevelEntry(lines, headerIndex, name) {
-  let index = headerIndex + 1;
-  let nestedDepth = 0;
-  let lastContentEnd = lines[headerIndex].end;
-  while (index < lines.length) {
-    const line = lines[index];
-    const code = levelScannerCode(line.raw);
-    if (code) {
-      const normalized = braceNormalizedLineForSectionForWasm(code);
-      const tokens = splitLevelTokens(normalized);
-      if (normalized === "end") {
-        if (nestedDepth === 0) {
-          return {
-            name,
-            start: firstCodeIndex(lines[headerIndex]),
-            end: line.start,
-            nextIndex: index + 1,
-          };
-        }
-        nestedDepth -= 1;
-      } else if (startsLevelBodyBlock(tokens, normalized)) {
-        nestedDepth += 1;
-      }
-    }
-    lastContentEnd = line.end;
-    index += 1;
-  }
-  return {
-    name,
-    start: firstCodeIndex(lines[headerIndex]),
-    end: lastContentEnd,
-    nextIndex: lines.length,
-  };
-}
-
-function bracedLevelEntry(source, lines, lineIndex, name, rangeEnd) {
-  const line = lines[lineIndex];
-  const openIndex = source.indexOf("{", line.start);
-  const closeIndex = findMatchingBrace(source, openIndex);
-  if (openIndex < 0 || closeIndex < 0 || closeIndex > rangeEnd) {
-    return null;
-  }
-  return {
-    name,
-    start: firstCodeIndex(line),
-    end: closeIndex,
-    nextIndex: nextLineIndexAfterPosition(lines, closeIndex),
-  };
-}
-
-function unbracedLevelEntry(lines, headerIndex, contentIndex, name, rangeEnd) {
-  let index = contentIndex;
-  let nestedDepth = 0;
-  let lastContentEnd = lines[headerIndex].end;
-  while (index < lines.length && lines[index].start <= rangeEnd) {
-    const line = lines[index];
-    const code = levelScannerCode(line.raw);
-    if (nestedDepth === 0 && (!code || code === "end" || code === "}" || isLevelHeaderCode(code) || isLevelsSectionBoundary(splitLevelTokens(code)))) {
-      break;
-    }
-    if (code) {
-      const normalized = braceNormalizedLineForSectionForWasm(code);
-      const tokens = splitLevelTokens(normalized);
-      if (normalized === "end" || normalized === "}") {
-        nestedDepth = Math.max(0, nestedDepth - 1);
-      } else if (startsLevelBodyBlock(tokens, normalized)) {
-        nestedDepth += 1;
-      }
-    }
-    lastContentEnd = Math.min(line.end, rangeEnd);
-    index += 1;
-  }
-  return {
-    name,
-    start: firstCodeIndex(lines[headerIndex]),
-    end: lastContentEnd,
-    nextIndex: index,
-  };
-}
-
-function isLevelHeaderCode(code) {
-  const tokens = splitLevelTokens(code);
-  return tokens[0] === "level"
-    || (tokens.length === 1 && tokens[0] === "{")
-    || (tokens.at(-1) === "{" && tokens[0] !== "legend");
-}
-
-function startsLevelBodyBlock(tokens, line) {
-  return (tokens.length === 1 && tokens[0] === "legend") || isLevelLifecycleHeader(tokens);
-}
-
-function startsLevelNestedBlock(tokens, line) {
-  return (tokens[0] === "level" && sourcePuzzleLevelHeaderName(line) !== null && String(line || "").trim().endsWith("{"))
-    || (tokens.length === 1 && tokens[0] === "{")
-    || (tokens[0] !== "level" && startsInlineBlockForWasm(tokens, line));
-}
-
-function isLevelsSectionBoundary(tokens) {
-  return startsPuzzleSectionForWasm(tokens) && !["level"].includes(tokens[0] || "");
-}
-
-function levelsNamespaceFromTokens(tokens) {
-  const parts = tokens.at(-1) === "{" ? tokens.slice(1, -1) : tokens.slice(1);
-  if (!parts.length) {
-    return "";
-  }
-  const ofIndex = parts.indexOf("of");
-  const namespaceParts = ofIndex >= 0 ? parts.slice(0, ofIndex) : parts;
-  return namespaceParts.length === 1 ? namespaceParts[0] : "";
-}
-
-function levelDefinitionName(levelsRange, name, ordinal) {
-  const namespace = String(levelsRange?.namespace || "").trim();
-  const rawName = String(name || "").trim();
-  if (!rawName) {
-    return namespace ? `${namespace}.${ordinal}` : "";
-  }
-  if (namespace && !rawName.startsWith(`${namespace}.`)) {
-    return `${namespace}.${rawName}`;
-  }
-  return rawName;
-}
-
-function levelScannerCode(line) {
-  return stripLineCommentForWasm(line).trim();
-}
-
-function splitLevelTokens(line) {
-  return String(line || "").split(/\s+/).filter(Boolean);
-}
-
-function sourceLinesWithOffsets(source) {
-  const lines = [];
-  let start = 0;
-  const text = String(source || "");
-  for (const raw of text.split("\n")) {
-    const end = start + raw.length;
-    const hasNewline = end < text.length;
-    lines.push({
-      raw,
-      start,
-      end,
-      absoluteEnd: end + (hasNewline ? 1 : 0),
-      hasNewline,
-    });
-    start = end + 1;
-  }
-  return lines;
-}
-
-function firstCodeIndex(line) {
-  const offset = line.raw.search(/\S/);
-  return line.start + Math.max(0, offset);
-}
-
-function nextLineIndexAfterPosition(lines, position) {
-  const index = lines.findIndex((line) => line.start > position);
-  return index < 0 ? lines.length : index;
-}
-
-function isSectionTitleLine(rawLines, index) {
-  return index > 0
-    && index + 1 < rawLines.length
-    && isSectionSeparatorForWasm(stripLineCommentForWasm(rawLines[index - 1]).trim())
-    && isSectionSeparatorForWasm(stripLineCommentForWasm(rawLines[index + 1]).trim());
-}
-
-function assignLevelLevelIndexes(entries) {
-  const levels = previewBuild?.exportData?.levels || [];
-  const usedIndexes = new Set();
-  return entries.map((entry, ordinal) => {
-    const sourceName = Object.prototype.hasOwnProperty.call(entry, "sourceName")
-      ? entry.sourceName
-      : entry.name || "";
-    let levelIndex = -1;
-    if (entry.name) {
-      levelIndex = levels.findIndex((levelData, index) => (
-        !usedIndexes.has(index) && levelData?.name === entry.name
-      ));
-    }
-    if (levelIndex < 0 && ordinal < levels.length && !usedIndexes.has(ordinal)) {
-      levelIndex = ordinal;
-    }
-    if (levelIndex < 0) {
-      levelIndex = Math.max(0, Math.min(levels.length - 1, ordinal));
-    }
-    usedIndexes.add(levelIndex);
-    const levelName = levels[levelIndex]?.name || unnamedLevelEntryName(entry, ordinal);
-    return {
-      ...entry,
-      sourceName,
-      name: entry.name || levelName,
-      levelIndex,
-    };
-  });
-}
-
-function unnamedLevelEntryName(entry, ordinal) {
-  if (String(entry?.name || "").trim()) {
-    return "";
-  }
-  const index = Number.isInteger(entry?.levelIndex) ? entry.levelIndex : ordinal;
-  return `level ${Math.max(0, index) + 1}`;
-}
-
 function makeEmptyCells(width, height, exportData = currentLevelExportData()) {
   return Array.from({ length: width * height }, () => makeEmptyCell(exportData));
 }
@@ -7000,12 +5990,16 @@ function renderLevelEraserButton() {
   button.title = "Eraser";
   button.dataset.tooltip = "Eraser";
   button.append(renderLevelEraserIcon());
-  button.addEventListener("click", () => {
-    level.selectedObjectId = 0;
-    setLevelActiveLayerForObject(0);
-    renderLevelPalette();
-  });
+  button.addEventListener("click", selectLevelEraser);
   return button;
+}
+
+function selectLevelEraser() {
+  if (levelPlaytestActive) return false;
+  level.selectedObjectId = 0;
+  setLevelActiveLayerForObject(0);
+  renderLevelPalette();
+  return true;
 }
 
 function renderLevelPaletteGroup(label, objects) {
@@ -7035,14 +6029,25 @@ function renderLevelPaletteGroup(label, objects) {
     label.textContent = object.name;
     button.append(label);
 
-    button.addEventListener("click", () => {
-      level.selectedObjectId = object.id;
-      setLevelActiveLayerForObject(object.id);
-      renderLevelPalette();
-    });
+    button.addEventListener("click", () => selectLevelPaletteObject(object.id));
     group.append(button);
   }
   levelPalette.append(group);
+}
+
+function selectLevelPaletteObject(objectId) {
+  const object = level.palette.find((candidate) => candidate.id === objectId && candidate.id !== 0);
+  if (!object || levelPlaytestActive) return false;
+  level.selectedObjectId = object.id;
+  setLevelActiveLayerForObject(object.id);
+  renderLevelPalette();
+  return true;
+}
+
+function selectLevelPaletteIndex(index) {
+  const objects = level.palette.filter((object) => object.id !== 0);
+  const object = objects[index];
+  return object ? selectLevelPaletteObject(object.id) : false;
 }
 
 function renderLevelAddLegendButton() {
@@ -8364,7 +7369,7 @@ function solverRequestForTask(task) {
     state: task.state.data,
     materializeLevelStart: task.state.lifecycle === "playable-start",
     maxDepth: 512,
-    maxNodes: 5_000_000,
+    maxStoredNodes: 5_000_000,
   };
 }
 
@@ -9090,21 +8095,23 @@ function sendPreviewKey(event) {
 
 async function copyLevelToClipboard() {
   const levelName = sanitizeLevelName(levelNameInput.value);
-  const source = levelSourceText();
   try {
-    await copyTextToClipboard(source);
+    const source = currentLevelAuthoringSource();
+    const sourceData = levelSourceData(source);
+    const result = await levelSourceRequest(source, {
+      operation: "format",
+      name: levelName,
+      rows: sourceData.rows,
+      localLegends: levelSourceLegendDrafts(sourceData.localLegends),
+    });
+    await copyTextToClipboard(result.text);
     setStatus(levelName ? `Copied level ${levelName}` : "Copied unnamed level", "is-ok");
   } catch (error) {
     setStatus(`Could not copy level: ${error?.message || error}`, "is-error");
   }
 }
 
-function levelSourceText() {
-  const levelName = sanitizeLevelName(levelNameInput.value);
-  return levelDefinitionSource(levelName, levelSourceData(currentLevelAuthoringSource()), "", { leadingBlank: false, bodyIndent: "" });
-}
-
-function addLevelToSource() {
+async function addLevelToSource() {
   ensurePreviewTargetsActiveDocument();
   const previewDocument = activePreviewDocument();
   if (!previewDocument) {
@@ -9121,35 +8128,29 @@ function addLevelToSource() {
     setStatus(`Could not create level source: ${error?.message || error}`, "is-error");
     return;
   }
-  const nextSource = insertLevel(source, levelName, sourceData, levelNamespace);
-  if (!nextSource) {
-    setStatus(levelNamespace ? `No levels named ${levelNamespace}` : "No levels block", "is-error");
+  let result;
+  try {
+    result = await levelSourceRequest(source, {
+      operation: "insert",
+      name: levelName,
+      namespace: levelNamespace,
+      rows: sourceData.rows,
+      localLegends: levelSourceLegendDrafts(sourceData.localLegends),
+      cursor: sourceEditor.selectionStart,
+      createContainer: false,
+    });
+  } catch (error) {
+    setStatus(`Could not add level: ${error?.message || error}`, "is-error");
     return;
   }
-  previewDocument.source = nextSource;
+  previewDocument.source = result.source;
   if (previewDocument.id === activeDocument()?.id) {
-    setSourceEditorValue(nextSource, { resetUndo: false });
+    setSourceEditorValue(result.source, { resetUndo: false });
   }
   levelNameInput.value = nextLevelName(levelName);
   syncLevelNameOptions();
   scheduleLocalSave();
   schedulePreview();
-}
-
-function replaceLevelSourceEntry(source, entry, name, levelData) {
-  if (!entry) {
-    return null;
-  }
-  const indent = levelDefinitionIndent(source, entry);
-  const bodyIndent = levelDefinitionBodyIndent(source, entry, indent);
-  const lifecycle = levelLifecycleSourceData(source, entry);
-  const replacement = levelDefinitionSource(name, levelData, indent, { leadingBlank: false, lifecycle, bodyIndent });
-  const replacementEnd = source[entry.end] === "}" ? entry.end + 1 : entry.end;
-  return {
-    source: replaceEditorSourceRangePreservingLineBoundary(source, entry.start, replacementEnd, replacement),
-    start: entry.start,
-    end: entry.start + replacement.length,
-  };
 }
 
 function setLevelEditSource(entry, document = activeDocument()) {
@@ -9215,7 +8216,7 @@ function currentLevelEditSourceRange(source) {
   return entry && Number.isInteger(entry.start) && Number.isInteger(entry.end) ? entry : null;
 }
 
-function updateLevelInSource() {
+async function updateLevelInSource() {
   const editDocument = activeLevelEditDocument();
   if (!editDocument || !isPuzzleDocument(editDocument) || !isTextDocument(editDocument)) {
     setStatus("No editable level source loaded", "is-error");
@@ -9231,9 +8232,17 @@ function updateLevelInSource() {
     return;
   }
   const entry = currentLevelEditSourceRange(source);
-  const result = replaceLevelSourceEntry(source, entry, levelName, sourceData);
-  if (!result) {
-    setStatus("No editable level source loaded", "is-error");
+  let result;
+  try {
+    result = await levelSourceRequest(source, {
+      operation: "update",
+      targetStart: entry.start,
+      name: levelName,
+      rows: sourceData.rows,
+      localLegends: levelSourceLegendDrafts(sourceData.localLegends),
+    });
+  } catch (error) {
+    setStatus(`Could not update level: ${error?.message || error}`, "is-error");
     return;
   }
   editDocument.source = result.source;
@@ -9280,8 +8289,6 @@ function levelStateData(exportData) {
     layerCount,
     levelIndex,
     slots,
-    slotMarks: Array.from({ length: slots.length }, () => []),
-    cellMarks: Array.from({ length: width * height }, () => []),
     variables: Array.from({ length: variablesLength }, () => 0),
   };
 }
@@ -9320,8 +8327,6 @@ function stateDataFromScene(scene, exportData, levelIndex = currentEditableLevel
     layerCount,
     levelIndex,
     slots,
-    slotMarks: Array.from({ length: slots.length }, () => []),
-    cellMarks: Array.from({ length: width * height }, () => []),
     variables: Array.from({ length: variablesLength }, () => 0),
   };
 }
@@ -9405,8 +8410,6 @@ function puzzle3dStateDataFromSnapshot(snapshot, exportData = previewBuild?.expo
     layerCount,
     levelIndex,
     slots,
-    slotMarks: Array.from({ length: slots.length }, () => []),
-    cellMarks: Array.from({ length: width * depth * height }, () => []),
     variables: Array.isArray(levelEntry?.initialState?.variables)
       ? cloneJson(levelEntry.initialState.variables)
       : [],
@@ -9739,7 +8742,7 @@ function currentLevelAuthoringSource(exportData = currentLevelExportData()) {
 function levelSourceData(source = currentLevelAuthoringSource(), exportData = currentLevelExportData()) {
   ensureLevelLayerMaps(exportData);
   const charEntries = sourceCharEntries(source, exportData);
-  const allocator = createLevelLegendAllocator(charEntries, sourceReservedLegendChars(source));
+  const allocator = createLevelLegendAllocator(charEntries, sourceReservedLegendChars(exportData));
   const rows = [];
   const regions = levelRegions();
   for (const [regionIndex, region] of regions.entries()) {
@@ -9851,7 +8854,7 @@ function objectSetKey(objects) {
   return [...objects].sort().join("\u0000");
 }
 
-function addLevelPaletteObjectToLegend(object) {
+async function addLevelPaletteObjectToLegend(object) {
   ensurePreviewTargetsActiveDocument();
   const exportData = currentLevelExportData();
   const objectName = String(object?.name || "").trim();
@@ -9879,18 +8882,25 @@ function addLevelPaletteObjectToLegend(object) {
   }
   let legendEntry = null;
   try {
-    const allocator = createLevelLegendAllocator(sourceCharEntries(source, exportData), sourceReservedLegendChars(source));
+    const allocator = createLevelLegendAllocator(sourceCharEntries(source, exportData), sourceReservedLegendChars(exportData));
     const char = allocator.charForObjects([objectName]);
     legendEntry = allocator.localLegends.find((entry) => entry.char === char) || { char, objects: [objectName] };
   } catch (error) {
     setStatus(`Could not add tile legend: ${error?.message || error}`, "is-error");
     return false;
   }
-  const nextSource = insertCommonLegendEntry(source, legendEntry);
-  if (!nextSource) {
-    setStatus("Could not find a source location for tile legend", "is-error");
+  let result;
+  try {
+    result = await levelSourceRequest(source, {
+      operation: "insertLegend",
+      symbol: legendEntry.char,
+      objects: legendEntry.objects,
+    });
+  } catch (error) {
+    setStatus(`Could not add tile legend: ${error?.message || error}`, "is-error");
     return false;
   }
+  const nextSource = result.source;
   editDocument.source = nextSource;
   if (editDocument.id === activeDocument()?.id) {
     setSourceEditorValue(nextSource, { resetUndo: false });
@@ -9905,57 +8915,6 @@ function addLevelPaletteObjectToLegend(object) {
   schedulePreview();
   setStatus(`Added legend ${legendEntry.char} = ${objectName}`, "is-ok");
   return true;
-}
-
-function insertCommonLegendEntry(source, entry) {
-  const sourceText = String(source || "");
-  const objectName = String(entry?.objects?.[0] || "").trim();
-  const char = String(entry?.char || "");
-  if (char.length !== 1 || !objectName) {
-    return "";
-  }
-  const lines = sourceLinesWithOffsets(sourceText);
-  const levelRanges = sourceLevelLocalRanges(sourceText);
-  for (let index = 0; index < lines.length; index += 1) {
-    if (isOffsetInRanges(lines[index].start, levelRanges)) {
-      continue;
-    }
-    const code = levelScannerCode(lines[index].raw);
-    if (!/^legend(?:\s*\{)?\s*$/.test(code)) {
-      continue;
-    }
-    const result = collectLegendBlockRows(lines, index + 1, levelRanges);
-    const closeLine = lines[result.endIndex];
-    if (!closeLine || levelScannerCode(closeLine.raw) !== "}") {
-      continue;
-    }
-    const bodyIndent = legendBlockInsertionIndent(lines, index + 1, result.endIndex, levelRanges, `${lineIndent(lines[index].raw)}  `);
-    const insertion = `${bodyIndent}${char} = ${objectName}\n`;
-    return `${sourceText.slice(0, closeLine.start)}${insertion}${sourceText.slice(closeLine.start)}`;
-  }
-  const block = `legend {\n  ${char} = ${objectName}\n}\n\n`;
-  const firstLevels = findLevelsRanges(sourceText)[0] || null;
-  const offset = Number.isInteger(firstLevels?.start) ? firstLevels.start : sourceText.length;
-  const before = sourceText.slice(0, offset).trimEnd();
-  const after = sourceText.slice(offset).trimStart();
-  return `${before}${before ? "\n\n" : ""}${block}${after}`;
-}
-
-function legendBlockInsertionIndent(lines, startIndex, endIndex, levelRanges, emptyBlockIndent) {
-  for (let index = endIndex - 1; index >= startIndex; index -= 1) {
-    if (isOffsetInRanges(lines[index].start, levelRanges)) {
-      continue;
-    }
-    const code = levelScannerCode(lines[index].raw);
-    if (!code) {
-      continue;
-    }
-    const tokens = splitLevelTokens(code);
-    if (isLegendRowForWasm(tokens)) {
-      return lineIndent(lines[index].raw);
-    }
-  }
-  return emptyBlockIndent;
 }
 
 function levelRegions() {
@@ -10028,454 +8987,41 @@ function resizeLevelRegions(regions, edge, width, height, delta = 1) {
   return normalizedLevelRegions(normalized, width, height);
 }
 
-function sourceCharEntries(source, exportData = currentLevelExportData()) {
-  if (exportData?.editorSourceContract) {
-    const integratedLegend = exportData.levels?.[currentEditableLevelIndex(exportData)]?.editorLegend;
-    const objectNames = new Map(engineObjects(exportData).map((object) => [object.id, object.name]));
-    const entries = (integratedLegend || exportData.editorSourceContract.legend || []).map((entry) => ({
-      char: String(entry?.symbol || ""),
-      objects: Array.isArray(entry?.objectIds)
-        ? entry.objectIds.map((id) => objectNames.get(Number(id))).filter(Boolean)
-        : [],
-    }));
-    if (!entries.some((entry) => entry.objects.length === 0)) {
-      entries.unshift({ char: ".", objects: [] });
-    }
-    return entries
-      .filter((entry) => entry.char.length === 1)
-      .sort((left, right) => right.objects.length - left.objects.length);
+function sourceCharEntries(_source, exportData = currentLevelExportData()) {
+  if (!exportData?.editorSourceContract) {
+    throw new Error("Compiled level editor source contract is unavailable.");
   }
-  const entries = [];
-  const knownObjects = new Set(engineObjects(exportData).map((object) => object.name));
-
-  for (const row of sourceCommonLegendRows(source)) {
-    const entry = legendEntryFromRow(row, knownObjects);
-    if (entry) {
-      entries.push(entry);
-    }
-  }
-
+  const integratedLegend = exportData.levels?.[currentEditableLevelIndex(exportData)]?.editorLegend;
+  const objectNames = new Map(engineObjects(exportData).map((object) => [object.id, object.name]));
+  const entries = (integratedLegend || exportData.editorSourceContract.legend || []).map((entry) => ({
+    char: String(entry?.symbol || ""),
+    objects: Array.isArray(entry?.objectIds)
+      ? entry.objectIds.map((id) => objectNames.get(Number(id))).filter(Boolean)
+      : [],
+  }));
   if (!entries.some((entry) => entry.objects.length === 0)) {
     entries.unshift({ char: ".", objects: [] });
   }
-
   return entries
     .filter((entry) => entry.char.length === 1)
     .sort((left, right) => right.objects.length - left.objects.length);
 }
 
-function sourceCommonLegendRows(source) {
-  const lines = sourceLinesWithOffsets(source);
-  const rawLines = lines.map((line) => line.raw);
-  const levelRanges = sourceLevelLocalRanges(source);
-  const rows = [];
-
-  for (let index = 0; index < lines.length; index += 1) {
-    if (isOffsetInRanges(lines[index].start, levelRanges)) {
-      continue;
-    }
-
-    const section = sectionHeaderAtForWasm(rawLines, index);
-    if (section?.block === "legend") {
-      const result = collectSectionLegendRows(lines, rawLines, index + 3, levelRanges);
-      rows.push(...result.rows);
-      index = result.endIndex;
-      continue;
-    }
-
-    const code = levelScannerCode(lines[index].raw);
-    if (!code) {
-      continue;
-    }
-    if (/^legend(?:\s*\{)?\s*$/.test(code)) {
-      const result = collectLegendBlockRows(lines, index + 1, levelRanges);
-      rows.push(...result.rows);
-      index = result.endIndex;
-      continue;
-    }
-
-    const directive = code.match(/^legend\s+(.+)$/);
-    if (directive) {
-      rows.push(directive[1]);
-    }
+function sourceReservedLegendChars(exportData = currentLevelExportData()) {
+  if (!exportData?.editorSourceContract) {
+    throw new Error("Compiled level editor source contract is unavailable.");
   }
-
-  return rows;
+  return new Set([
+    ...(exportData.editorSourceContract.legend || []),
+    ...(exportData.levels || []).flatMap((levelEntry) => levelEntry?.editorLegend || []),
+  ].map((entry) => String(entry?.symbol || "")).filter((symbol) => [...symbol].length === 1));
 }
 
-function sourceReservedLegendChars(source) {
-  const chars = new Set();
-  for (const row of sourceAllLegendRows(source)) {
-    const match = String(row || "").match(/^\s*(\S)\s*=/);
-    if (match) {
-      chars.add(match[1]);
-    }
-  }
-  return chars;
-}
-
-function sourceAllLegendRows(source) {
-  const lines = sourceLinesWithOffsets(source);
-  const rawLines = lines.map((line) => line.raw);
-  const rows = [];
-
-  for (let index = 0; index < lines.length; index += 1) {
-    const section = sectionHeaderAtForWasm(rawLines, index);
-    if (section?.block === "legend") {
-      const result = collectSectionLegendRows(lines, rawLines, index + 3, []);
-      rows.push(...result.rows);
-      index = result.endIndex;
-      continue;
-    }
-
-    const code = levelScannerCode(lines[index].raw);
-    if (!code) {
-      continue;
-    }
-    if (/^legend(?:\s*\{)?\s*$/.test(code)) {
-      const result = collectLegendBlockRows(lines, index + 1, []);
-      rows.push(...result.rows);
-      index = result.endIndex;
-      continue;
-    }
-
-    const directive = code.match(/^legend\s+(.+)$/);
-    if (directive) {
-      rows.push(directive[1]);
-    }
-  }
-
-  return rows;
-}
-
-function collectSectionLegendRows(lines, rawLines, startIndex, levelRanges) {
-  const rows = [];
-  let endIndex = startIndex - 1;
-  for (let index = startIndex; index < lines.length; index += 1) {
-    if (sectionHeaderAtForWasm(rawLines, index)) {
-      break;
-    }
-    if (isOffsetInRanges(lines[index].start, levelRanges)) {
-      continue;
-    }
-    const code = levelScannerCode(lines[index].raw);
-    const tokens = splitLevelTokens(code);
-    if (code && sectionBoundaryForWasm("legend", tokens)) {
-      break;
-    }
-    if (isLegendRowForWasm(tokens)) {
-      rows.push(code);
-    }
-    endIndex = index;
-  }
-  return { rows, endIndex };
-}
-
-function collectLegendBlockRows(lines, startIndex, levelRanges) {
-  const rows = [];
-  let endIndex = startIndex - 1;
-  for (let index = startIndex; index < lines.length; index += 1) {
-    const code = levelScannerCode(lines[index].raw);
-    if (code === "}" || code === "end") {
-      endIndex = index;
-      break;
-    }
-    if (!isOffsetInRanges(lines[index].start, levelRanges)) {
-      rows.push(code);
-    }
-    endIndex = index;
-  }
-  return { rows, endIndex };
-}
-
-function sourceLevelLocalRanges(source) {
-  const lines = sourceLinesWithOffsets(source);
-  const ranges = [];
-  for (const levelsRange of findLevelsRanges(source)) {
-    let index = lines.findIndex((line) => line.absoluteEnd >= levelsRange.bodyStart);
-    if (index < 0) {
-      continue;
-    }
-    while (index < lines.length && lines[index].start <= levelsRange.bodyEnd) {
-      if (lines[index].start < levelsRange.bodyStart) {
-        index += 1;
-        continue;
-      }
-      const code = levelScannerCode(lines[index].raw);
-      const tokens = splitLevelTokens(code);
-      if (!code) {
-        index += 1;
-        continue;
-      }
-      if (tokens[0] === "legend") {
-        const result = collectLegendBlockRows(lines, index + 1, []);
-        index = Math.max(index + 1, result.endIndex + 1);
-        continue;
-      }
-      if (isLevelsSectionBoundary(tokens) || code === "}" || code === "end") {
-        break;
-      }
-
-      let entry = null;
-      if (tokens[0] === "level") {
-        const name = sourcePuzzleLevelHeaderName(code);
-        if (name === null) {
-          break;
-        }
-        entry = code.endsWith("{")
-          ? bracedLevelEntry(source, lines, index, name, levelsRange.bodyEnd)
-          : unbracedLevelEntry(lines, index, index + 1, name, levelsRange.bodyEnd);
-      } else if (tokens.length === 1 && tokens[0] === "{") {
-        entry = bracedLevelEntry(source, lines, index, "", levelsRange.bodyEnd);
-      }
-
-      if (!entry) {
-        index += 1;
-        continue;
-      }
-      ranges.push({ start: entry.start, end: entry.end });
-      index = Math.max(index + 1, entry.nextIndex);
-    }
-  }
-  return ranges;
-}
-
-function isOffsetInRanges(offset, ranges) {
-  return ranges.some((range) => offset >= range.start && offset <= range.end);
-}
-
-function legendEntryFromRow(row, knownObjects) {
-  const legendMatch = String(row || "").match(/^\s*(\S)\s*=\s*(.+?)\s*$/);
-  if (!legendMatch) {
-    return null;
-  }
-  const [, char, expression] = legendMatch;
-  const trimmed = expression.trim();
-  const parts = trimmed.split(/\s+/);
-  const objects = trimmed === "empty"
-    ? []
-    : parts.filter((part) => knownObjects.has(part));
-  return { char, objects };
-}
-
-function schemaDomains(source) {
-  const domains = new Map();
-  for (const line of source.split("\n")) {
-    const match = line.match(/^\s*([A-Za-z][\w]*)\s*=\s+([A-Za-z][\w]*(?:\s+[A-Za-z][\w]*)*)\s*$/);
-    if (match) {
-      domains.set(match[1], match[2].trim().split(/\s+/));
-    }
-  }
-  return domains;
-}
-
-function insertLevel(source, name, levelData, namespace = "") {
-  const range = findLevelsInsertionRange(source, namespace);
-  if (!range) {
-    return "";
-  }
-  const levelIndent = levelInsertionIndent(source, range);
-  const bodyIndent = levelInsertionBodyIndent(source, range, levelIndent);
-  const levelSource = levelDefinitionSource(name, levelData, levelIndent, { leadingBlank: true, bodyIndent });
-  return `${source.slice(0, range.bodyEnd).trimEnd()}\n${levelSource}\n${source.slice(range.bodyEnd)}`;
-}
-
-function replaceLevelByName(source, name, levelData, namespace = "") {
-  const ranges = findLevelsRanges(source);
-  const requestedName = qualifiedLevelName(namespace, name);
-  const requestedNamespace = sanitizeLevelNamespace(namespace);
-  for (const range of ranges) {
-    if (requestedNamespace && sanitizeLevelNamespace(range.namespace) !== requestedNamespace) {
-      continue;
-    }
-    const entry = findLevelDefinitions(source, range)
-      .find((candidate) => sourceTitleMatches(candidate.name, requestedName, range.namespace));
-    if (!entry) {
-      continue;
-    }
-    const indent = levelDefinitionIndent(source, entry);
-    const bodyIndent = levelDefinitionBodyIndent(source, entry, indent);
-    const lifecycle = levelLifecycleSourceData(source, entry);
-    const replacement = levelDefinitionSource(name, levelData, indent, { leadingBlank: false, lifecycle, bodyIndent });
-    const replacementEnd = source[entry.end] === "}" ? entry.end + 1 : entry.end;
-    return {
-      source: replaceEditorSourceRangePreservingLineBoundary(source, entry.start, replacementEnd, replacement),
-    };
-  }
-  return null;
-}
-
-function levelDefinitionSource(name, levelData, levelIndent, options = {}) {
-  const { rows, localLegends } = normalizeLevelSourceData(levelData);
-  const levelName = sourcePuzzleLevelName(name);
-  const lifecycle = options.lifecycle || {};
-  const startLifecycleLines = Array.isArray(lifecycle.start) ? lifecycle.start : [];
-  const clearLifecycleLines = Array.isArray(lifecycle.clear) ? lifecycle.clear : [];
-  const rowIndent = Object.prototype.hasOwnProperty.call(options, "bodyIndent") ? options.bodyIndent : levelIndent;
-  const hasRegionBreak = rows.some((row) => row.trim() === "");
-  const hasLocalLegends = localLegends.length > 0;
-  const hasLifecycle = startLifecycleLines.length > 0 || clearLifecycleLines.length > 0;
-  const lines = hasRegionBreak || hasLocalLegends || hasLifecycle
-    ? [
-      levelName ? sourcePuzzleLevelHeaderSource(levelName, levelIndent, { openBlock: true }) : `${levelIndent}{`,
-      ...levelBodyBlockSourceLines(startLifecycleLines, rowIndent),
-      ...levelLegendSourceLines(localLegends, rowIndent),
-      ...rows.map((row) => levelMapRowSourceLine(row, rowIndent)),
-      ...levelBodyBlockSourceLines(clearLifecycleLines, rowIndent),
-      `${levelIndent}}`,
-    ]
-    : levelName
-      ? [
-        sourcePuzzleLevelHeaderSource(levelName, levelIndent),
-        ...rows.map((row) => levelMapRowSourceLine(row, rowIndent)),
-      ]
-      : rows.map((row) => levelMapRowSourceLine(row, rowIndent));
-  return `${options.leadingBlank ? "\n" : ""}${lines.join("\n")}`;
-}
-
-function levelMapRowSourceLine(row, indent) {
-  return String(row || "").length ? `${indent}${row}` : "";
-}
-
-function levelBodyBlockSourceLines(lines, indent) {
-  const out = [];
-  let depth = 0;
-  for (const rawLine of lines || []) {
-    const line = String(rawLine || "").trim();
-    if (!line) {
-      out.push("");
-      continue;
-    }
-    const normalized = braceNormalizedLineForSectionForWasm(line);
-    const isClose = normalized === "}" || normalized === "end";
-    const lineDepth = Math.max(0, depth - (isClose ? 1 : 0));
-    out.push(`${indent}${line}`);
-    depth = lineDepth + (startsInlineBlockForWasm(splitLevelTokens(normalized), normalized) ? 1 : 0);
-  }
-  return out;
-}
-
-function levelLifecycleSourceData(source, entry) {
-  const lines = sourceLinesWithOffsets(source.slice(entry.start, entry.end)).map((line) => line.raw);
-  if (lines.length <= 1) {
-    return { start: [], clear: [] };
-  }
-  const start = [];
-  const clear = [];
-  let sawMapRow = false;
-  let index = 1;
-  while (index < lines.length) {
-    const code = levelScannerCode(lines[index]);
-    if (!code) {
-      index += 1;
-      continue;
-    }
-    const normalized = braceNormalizedLineForSectionForWasm(code);
-    const tokens = splitLevelTokens(normalized);
-    if (isLevelLifecycleHeader(tokens)) {
-      const block = collectLevelBodySourceBlock(lines, index);
-      (tokens[0] === "on_level_start" ? start : clear).push(...block.lines);
-      index = block.nextIndex;
-      continue;
-    }
-    if (isLevelEventSugarCode(code)) {
-      (sawMapRow ? clear : start).push(code);
-      index += 1;
-      continue;
-    }
-    if (startsLevelBodyBlock(tokens, normalized)) {
-      index = skipLevelBodySourceBlock(lines, index);
-      continue;
-    }
-    sawMapRow = true;
-    index += 1;
-  }
-  return { start, clear };
-}
-
-function isLevelLifecycleHeader(tokens) {
-  return tokens.length === 1 && (tokens[0] === "on_level_start" || tokens[0] === "on_level_clear");
-}
-
-function isLevelEventSugarCode(code) {
-  const tokens = splitLevelTokens(code);
-  return code.startsWith("message ")
-    || tokens[0] === "wait"
-    || (tokens[0] === "sfx" && tokens.length === 2);
-}
-
-function collectLevelBodySourceBlock(lines, startIndex) {
-  const blockLines = [levelScannerCode(lines[startIndex])];
-  let nestedDepth = 0;
-  let index = startIndex + 1;
-  while (index < lines.length) {
-    const code = levelScannerCode(lines[index]);
-    if (code) {
-      const normalized = braceNormalizedLineForSectionForWasm(code);
-      const tokens = splitLevelTokens(normalized);
-      blockLines.push(code);
-      if (normalized === "end" || normalized === "}") {
-        if (nestedDepth === 0) {
-          return { lines: blockLines, nextIndex: index + 1 };
-        }
-        nestedDepth -= 1;
-      } else if (startsInlineBlockForWasm(tokens, normalized)) {
-        nestedDepth += 1;
-      }
-    }
-    index += 1;
-  }
-  return { lines: blockLines, nextIndex: index };
-}
-
-function skipLevelBodySourceBlock(lines, startIndex) {
-  let nestedDepth = 0;
-  let index = startIndex + 1;
-  while (index < lines.length) {
-    const code = levelScannerCode(lines[index]);
-    if (code) {
-      const normalized = braceNormalizedLineForSectionForWasm(code);
-      const tokens = splitLevelTokens(normalized);
-      if (normalized === "end" || normalized === "}") {
-        if (nestedDepth === 0) {
-          return index + 1;
-        }
-        nestedDepth -= 1;
-      } else if (startsInlineBlockForWasm(tokens, normalized)) {
-        nestedDepth += 1;
-      }
-    }
-    index += 1;
-  }
-  return index;
-}
-
-function normalizeLevelSourceData(levelData) {
-  if (Array.isArray(levelData)) {
-    return { rows: levelData, localLegends: [] };
-  }
-  return {
-    rows: Array.isArray(levelData?.rows) ? levelData.rows : [],
-    localLegends: Array.isArray(levelData?.localLegends) ? levelData.localLegends : [],
-  };
-}
-
-function levelLegendSourceLines(localLegends, indent) {
-  if (!localLegends.length) {
-    return [];
-  }
-  const bodyIndent = indent;
-  return [
-    `${indent}legend {`,
-    ...localLegends.map((entry) => `${bodyIndent}${entry.char} = ${entry.objects.join(" ")}`),
-    `${indent}}`,
-  ];
-}
-
-function levelDefinitionIndent(source, entry) {
-  const lines = sourceLinesWithOffsets(source);
-  const line = lines.find((candidate) => entry.start >= candidate.start && entry.start <= candidate.end);
-  return line ? lineIndent(line.raw) : "";
+function levelSourceLegendDrafts(localLegends) {
+  return (Array.isArray(localLegends) ? localLegends : []).map((entry) => ({
+    symbol: String(entry?.char || ""),
+    objects: Array.isArray(entry?.objects) ? entry.objects.map(String) : [],
+  }));
 }
 
 function sourceTitleMatches(existing, title, namespace = "") {
@@ -10493,101 +9039,8 @@ function sourceTitleMatches(existing, title, namespace = "") {
     );
 }
 
-function findLevelsInsertionRange(source, namespace = "") {
-  const ranges = findLevelsRanges(source);
-  if (!ranges.length) {
-    return null;
-  }
-  const requestedNamespace = sanitizeLevelNamespace(namespace);
-  const matchingRanges = requestedNamespace
-    ? ranges.filter((range) => sanitizeLevelNamespace(range.namespace) === requestedNamespace)
-    : ranges;
-  if (requestedNamespace && !matchingRanges.length) {
-    return null;
-  }
-  const activePosition = activeDocument()?.id === activePreviewDocument()?.id
-    ? sourceEditor.selectionStart
-    : -1;
-  return matchingRanges.find((range) => activePosition >= range.bodyStart && activePosition <= range.bodyEnd)
-    || matchingRanges.at(-1)
-    || ranges.at(-1);
-}
-
-function levelInsertionIndent(source, range) {
-  const existing = findLevelDefinitions(source, range)[0];
-  if (existing) {
-    const lines = sourceLinesWithOffsets(source);
-    const line = lines.find((candidate) => existing.start >= candidate.start && existing.start <= candidate.end);
-    if (line) {
-      return lineIndent(line.raw);
-    }
-  }
-  return range.indent || "";
-}
-
-function levelInsertionBodyIndent(source, range, levelIndent) {
-  const existing = findLevelDefinitions(source, range)[0];
-  return existing ? levelDefinitionBodyIndent(source, existing, levelIndent) : levelIndent;
-}
-
-function levelDefinitionBodyIndent(source, entry, levelIndent) {
-  const lines = sourceLinesWithOffsets(source);
-  const headerIndex = lines.findIndex((line) => entry.start >= line.start && entry.start <= line.end);
-  if (headerIndex >= 0) {
-    for (let index = headerIndex + 1; index < lines.length; index += 1) {
-      const line = lines[index];
-      if (line.start > entry.end) {
-        break;
-      }
-      const code = levelScannerCode(line.raw);
-      if (!code || code === "}") {
-        continue;
-      }
-      const indent = lineIndent(line.raw);
-      if (indent.startsWith(levelIndent) && indent.length > levelIndent.length) {
-        return indent;
-      }
-      break;
-    }
-  }
-  return levelIndent;
-}
-
 function lineIndent(line) {
   return String(line || "").match(/^[\t ]*/)?.[0] || "";
-}
-
-function findNamedBlock(source, name) {
-  const pattern = new RegExp(`(^|\\n)([\\t ]*)${name}\\s*\\{`, "m");
-  const match = pattern.exec(source);
-  if (!match) {
-    return null;
-  }
-  const openIndex = source.indexOf("{", match.index + match[0].lastIndexOf(name));
-  const closeIndex = findMatchingBrace(source, openIndex);
-  if (closeIndex < 0) {
-    return null;
-  }
-  return {
-    indent: match[2] || "",
-    bodyStart: openIndex + 1,
-    bodyEnd: closeIndex,
-  };
-}
-
-function findMatchingBrace(source, openIndex) {
-  let depth = 0;
-  for (let index = openIndex; index < source.length; index += 1) {
-    if (source[index] === "{") {
-      depth += 1;
-    } else if (source[index] === "}") {
-      depth -= 1;
-      if (depth === 0) {
-        return index;
-      }
-    }
-  }
-  return -1;
 }
 
 runButton.addEventListener("click", () => {
@@ -10607,22 +9060,6 @@ previewLogOutput?.addEventListener("keydown", (event) => {
     return;
   }
   activatePreviewLogLocationFromEvent(event);
-});
-saveButton.addEventListener("click", () => {
-  saveCurrentDocument(true).catch((error) => {
-    console.error(error);
-    setEditorStatus("Save failed", "is-error");
-    saveButton.disabled = false;
-  });
-});
-document.addEventListener("keydown", handleSaveShortcut);
-document.addEventListener("keydown", handleExplorerToggleShortcut);
-document.addEventListener("keydown", handleVisualEditUndoShortcut);
-document.addEventListener("pointerdown", (event) => {
-  rememberToolPaneSaveShortcutContext(event.target);
-}, true);
-document.addEventListener("focusin", (event) => {
-  rememberToolPaneSaveShortcutContext(event.target);
 });
 document.addEventListener("click", (event) => {
   if (fileActionsMenu?.hidden) {
@@ -11009,11 +9446,10 @@ window.addEventListener("message", (event) => {
     if (event.source && previewFrame?.contentWindow && event.source !== previewFrame.contentWindow) {
       return;
     }
-    saveCurrentDocument(true).catch((error) => {
-      console.error(error);
-      setEditorStatus("Save failed", "is-error");
-      saveButton.disabled = false;
-    });
+    invokeEditorCommand(
+      "workspace.save",
+      editorCommandContext(null, previewFrame, "button")
+    );
     return;
   }
   if (event.data?.type === "PuzzleStudioPreviewLayout") {
@@ -11054,7 +9490,7 @@ window.addEventListener("message", (event) => {
     return;
   }
   if (event.data?.type === "PuzzleStudioPreviewState") {
-    applyPreviewTheme(event.data.theme || previewBuild?.exportData?.theme || null);
+    applyPreviewTheme(event.data.theme);
     syncPreviewViewportAspect(event.data.screen || "");
     const inLevelMode = !levelBuilder.hidden || !solverPanel.hidden;
     const screenHasPuzzle = event.data.screenHasPuzzle !== false;
@@ -11175,7 +9611,9 @@ previewSolveButton?.addEventListener("click", () => {
   });
 });
 previewEditButton?.addEventListener("click", () => {
-  openLevelPaneForCurrentPreviewLevel();
+  void openLevelPaneForCurrentPreviewLevel().catch((error) => {
+    setStatus(`Level selection failed: ${userFacingRuntimeError(error)}`, "is-error");
+  });
 });
 solverLevelSelect?.addEventListener("change", () => {
   if (solverLevelSelect.value === "") {
@@ -11188,7 +9626,9 @@ playModeButton.addEventListener("click", () => {
   openPreviewModePane("play");
 });
 editModeButton.addEventListener("click", () => {
-  openLevelPaneForCurrentDimension();
+  void openLevelPaneForCurrentDimension().catch((error) => {
+    setStatus(`Level selection failed: ${userFacingRuntimeError(error)}`, "is-error");
+  });
 });
 solverModeButton.addEventListener("click", () => {
   openSolverPaneForCurrentLevel().catch((error) => {
@@ -11216,14 +9656,12 @@ for (const button of editorDimensionButtons) {
 }
 for (const button of levelPaneModeButtons) {
   button.addEventListener("click", () => {
-    const context = focusedPuzzleSourceContext();
     if (!["edit", "level3d"].includes(button.dataset.levelPaneMode)) {
       return;
     }
-    ensurePreviewTargetsActiveDocument();
-    if (!loadLevelPaneEntryForMode(button.dataset.levelPaneMode, context, { silent: true, recordHistory: false })) {
-      return;
-    }
+    void openLevelPaneForCurrentDimension({ mode: button.dataset.levelPaneMode }).catch((error) => {
+      setStatus(`Level selection failed: ${userFacingRuntimeError(error)}`, "is-error");
+    });
   });
 }
 visualModeButton.addEventListener("click", () => {
@@ -11363,29 +9801,6 @@ psImportSourceInput?.addEventListener("input", () => {
     setEditorStatus("PuzzleScript import is unavailable", "is-error");
   }
 });
-psImportCopyButton?.addEventListener("click", () => {
-  const api = window.PuzzleStudioImportExport;
-  if (typeof api?.copyPuzzleScriptImportOutput !== "function") {
-    setEditorStatus("PuzzleScript import is unavailable", "is-error");
-    return;
-  }
-  api.copyPuzzleScriptImportOutput().catch((error) => {
-    console.error(error);
-    api.setPuzzleScriptImportStatus?.("Copy failed", "is-error");
-  });
-});
-psImportAddFileButton?.addEventListener("click", () => {
-  const api = window.PuzzleStudioImportExport;
-  if (typeof api?.addPuzzleScriptImportFile !== "function") {
-    setEditorStatus("PuzzleScript import is unavailable", "is-error");
-    return;
-  }
-  api.addPuzzleScriptImportFile().catch((error) => {
-    console.error(error);
-    api.setPuzzleScriptImportStatus?.(error.message || String(error), "is-error");
-  });
-});
-levelPlaytestButton?.addEventListener("click", toggleLevelPlaytest);
 levelBoard.addEventListener("pointerdown", startLevelPaint);
 levelBoard.addEventListener("pointermove", continueLevelPaint);
 levelBoard.addEventListener("pointerup", stopLevelPaint);
@@ -11439,7 +9854,6 @@ levelEdgeButtons.forEach((button) => {
 });
 levelExpandButton?.addEventListener("click", () => toggleLevelResizeMode("expand"));
 levelShrinkButton?.addEventListener("click", () => toggleLevelResizeMode("shrink"));
-levelGridButton?.addEventListener("click", toggleLevelGrid);
 document.addEventListener("pointerdown", (event) => {
   if (!level.addPaletteOpen || event.target?.closest?.(".level-palette-add-wrap")) {
     return;
@@ -11451,7 +9865,6 @@ levelRotateLeftButton?.addEventListener("click", rotateLevelLeft);
 levelRotateRightButton?.addEventListener("click", rotateLevelRight);
 levelFlipHorizontalButton?.addEventListener("click", flipLevelHorizontal);
 levelFlipVerticalButton?.addEventListener("click", flipLevelVertical);
-levelFillButton?.addEventListener("click", toggleLevelBucketMode);
 syncLevelResizeControls();
 levelNamespaceInput.addEventListener("input", () => {
   syncLevelNameOptions();
@@ -11474,30 +9887,12 @@ levelNameInput.addEventListener("keydown", (event) => {
 levelNameInput.addEventListener("change", () => {
   loadSelectedLevelNameFromInput();
 });
-copyLevelButton.addEventListener("click", copyLevelToClipboard);
-addLevelButton.addEventListener("click", addLevelToSource);
-updateLevelButton.addEventListener("click", updateLevelInSource);
 solveLevelButton.addEventListener("click", () => {
   solveLevel().catch((error) => {
     setLevelSolveStatus(`Solve failed: ${userFacingRuntimeError(error)}`, "is-error");
   });
 });
-levelSolveShortcutButton?.addEventListener("click", () => {
-  solveEditedLevelFromEditor().catch((error) => {
-    setLevelSolveStatus(`Solve failed: ${userFacingRuntimeError(error)}`, "is-error");
-  });
-});
-level3dSolveShortcutButton?.addEventListener("click", () => {
-  solveEditedLevelFromEditor().catch((error) => {
-    setLevelSolveStatus(`Solve failed: ${userFacingRuntimeError(error)}`, "is-error");
-  });
-});
-solutionPrevButton.addEventListener("click", () => setSolutionStep((levelSolutionPreview?.index || 0) - 1));
-solutionNextButton.addEventListener("click", () => setSolutionStep((levelSolutionPreview?.index || 0) + 1));
-solutionPlayButton.addEventListener("click", toggleSolutionPlayback);
 solutionSpeedSelect.addEventListener("change", changeSolutionPlaybackSpeed);
-solutionResetButton.addEventListener("click", resetSolutionPreview);
-solutionExportButton.addEventListener("click", exportSolution);
 solutionSeekInput.addEventListener("input", seekSolutionStep);
 solutionSeekInput.addEventListener("change", seekSolutionStep);
 

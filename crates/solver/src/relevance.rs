@@ -392,6 +392,13 @@ impl SolverRelevance<ObjectId> {
                 }
                 changed
             }
+            ProgramCondition::RuleMatches { guards, pattern } => {
+                let mut changed = self.insert_pattern_objects(pattern);
+                for guard in guards {
+                    changed |= self.insert_guard_objects(game, guard);
+                }
+                changed
+            }
         }
     }
 
@@ -785,6 +792,64 @@ P
                     vec![KEY],
                     Vec::new(),
                 )])]),
+                then_steps: vec![RuleStep::Rule(relevant_branch)],
+                else_steps: vec![RuleStep::Rule(dead_branch)],
+            }],
+        );
+
+        let relevance = SolverRelevance::from_root_objects(&game, [GATE]);
+
+        assert_relevant(&relevance, GATE);
+        assert_relevant(&relevance, SWITCH);
+        assert_relevant(&relevance, KEY);
+        assert_relevant(&relevance, BATTERY);
+        assert_pruned(&relevance, SPARKLE);
+        assert_pruned(&relevance, DECOY);
+    }
+
+    #[test]
+    fn rule_matches_propagates_pattern_and_guard_control_dependencies() {
+        const KEY: ObjectId = ObjectId(1);
+        const SWITCH: ObjectId = ObjectId(2);
+        const BATTERY: ObjectId = ObjectId(3);
+        const GATE: ObjectId = ObjectId(4);
+        const SPARKLE: ObjectId = ObjectId(5);
+        const DECOY: ObjectId = ObjectId(6);
+
+        let condition_defs = vec![ConditionDef {
+            id: ConditionId(0),
+            kind: ConditionValueKind::ExistsObjects(vec![BATTERY]),
+        }];
+        let relevant_branch = rule(
+            1,
+            pattern(vec![cell(vec![SWITCH], Vec::new())]),
+            Vec::new(),
+            vec![add(GATE)],
+            Vec::new(),
+        );
+        let dead_branch = rule(
+            2,
+            pattern(vec![cell(vec![SPARKLE], Vec::new())]),
+            Vec::new(),
+            vec![add(DECOY)],
+            Vec::new(),
+        );
+        let game = CompiledGame::new_with_condition_defs_and_program(
+            2,
+            vec![
+                object(1, ITEM),
+                object(2, ACTOR),
+                object(3, ITEM),
+                object(4, ITEM),
+                object(5, ITEM),
+                object(6, ITEM),
+            ],
+            condition_defs,
+            vec![RuleStep::ConditionalBranch {
+                condition: RuleCondition::RuleMatches {
+                    guards: vec![Guard::ConditionNonZero(ConditionId(0))],
+                    pattern: pattern(vec![cell(vec![KEY], Vec::new())]),
+                },
                 then_steps: vec![RuleStep::Rule(relevant_branch)],
                 else_steps: vec![RuleStep::Rule(dead_branch)],
             }],

@@ -3,11 +3,11 @@ Use `sounds` to name sound effects and music.
 
 ```puzzle
 sounds {
-sfx step seed=step type=step volume=0.45
-sfx splash seed=splash type=water volume=0.7
-sfx box_drag seed=box-drag type=drag volume=0.75
-sfx clear seed=clear type=jump volume=1
-music theme seed=main bpm=105 volume=0.5
+sfx step { seed = step; type = step; volume = 0.45 }
+sfx splash { seed = splash; type = water; volume = 0.7 }
+sfx box_drag { seed = box-drag; type = drag; volume = 0.75 }
+sfx clear { seed = clear; type = jump; volume = 1 }
+music theme { seed = main; height = 0.5; bars = 8; bpm = 105; volume = 0.5 }
 }
 
 puzzle sokoban {

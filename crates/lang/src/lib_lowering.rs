@@ -2281,11 +2281,7 @@ impl<'a> ProgramLowerer<'a> {
                         )?);
                     }
                     self.dedup_orientation_rules(&mut rules);
-                    return Ok(wrap_rewrite_steps(
-                        application,
-                        rules,
-                        preserve_once_group,
-                    ));
+                    return Ok(wrap_rewrite_steps(application, rules, preserve_once_group));
                 }
                 self.lower_rewrite_rules_for_direction(
                     rewrite,
@@ -2321,11 +2317,7 @@ impl<'a> ProgramLowerer<'a> {
                     )?);
                 }
                 self.dedup_orientation_rules(&mut rules);
-                Ok(wrap_rewrite_steps(
-                    application,
-                    rules,
-                    preserve_once_group,
-                ))
+                Ok(wrap_rewrite_steps(application, rules, preserve_once_group))
             }
             OrientationExpr::InputSet(axis) => {
                 if !context.input_allowed {
@@ -2357,11 +2349,7 @@ impl<'a> ProgramLowerer<'a> {
                     )?);
                 }
                 self.dedup_orientation_rules(&mut rules);
-                Ok(wrap_rewrite_steps(
-                    application,
-                    rules,
-                    preserve_once_group,
-                ))
+                Ok(wrap_rewrite_steps(application, rules, preserve_once_group))
             }
             OrientationExpr::Fixed(direction_name) => {
                 let directions = self
@@ -2386,11 +2374,7 @@ impl<'a> ProgramLowerer<'a> {
                     )?);
                 }
                 self.dedup_orientation_rules(&mut rules);
-                Ok(wrap_rewrite_steps(
-                    application,
-                    rules,
-                    preserve_once_group,
-                ))
+                Ok(wrap_rewrite_steps(application, rules, preserve_once_group))
             }
         }
     }
@@ -2509,60 +2493,63 @@ impl<'a> ProgramLowerer<'a> {
                 EffectAst::Cancel => lowered.core.push(Effect::Cancel),
                 EffectAst::Win => {
                     lowered.core.push(Effect::Win);
-                    lowered.ordered.push(RuleEffect::Win);
+                    lowered.ordered.push(RuntimeEffect::Win.into());
                 }
                 EffectAst::Restart => {
                     lowered.core.push(Effect::Restart);
-                    lowered.ordered.push(RuleEffect::Restart);
+                    lowered.ordered.push(RuntimeEffect::Restart.into());
                 }
                 EffectAst::NextLevel => {
                     lowered.core.push(Effect::NextLevel);
-                    lowered.ordered.push(RuleEffect::NextLevel);
+                    lowered.ordered.push(RuntimeEffect::NextLevel.into());
                 }
                 EffectAst::Again => {
                     lowered.core.push(Effect::Again);
-                    lowered.ordered.push(RuleEffect::Again);
+                    lowered.ordered.push(RuntimeEffect::Again.into());
                 }
                 EffectAst::Checkpoint => {
                     lowered.core.push(Effect::Checkpoint);
-                    lowered.ordered.push(RuleEffect::Checkpoint);
+                    lowered.ordered.push(RuntimeEffect::Checkpoint.into());
                 }
                 EffectAst::ClearCheckpoint => {
                     lowered.core.push(Effect::ClearCheckpoint);
-                    lowered.ordered.push(RuleEffect::ClearCheckpoint);
+                    lowered.ordered.push(RuntimeEffect::ClearCheckpoint.into());
                 }
                 EffectAst::PlaySfx { name } => {
                     lowered
                         .ordered
-                        .push(RuleEffect::PlaySfx { name: name.clone() });
+                        .push(RuntimeEffect::PlaySfx { name: name.clone() }.into());
                 }
                 EffectAst::PlayMusic { name } => {
                     lowered
                         .ordered
-                        .push(RuleEffect::PlayMusic { name: name.clone() });
+                        .push(RuntimeEffect::PlayMusic { name: name.clone() }.into());
                 }
                 EffectAst::PauseMusic { name } => {
                     lowered
                         .ordered
-                        .push(RuleEffect::PauseMusic { name: name.clone() });
+                        .push(RuntimeEffect::PauseMusic { name: name.clone() }.into());
                 }
                 EffectAst::ResumeMusic { name } => {
                     lowered
                         .ordered
-                        .push(RuleEffect::ResumeMusic { name: name.clone() });
+                        .push(RuntimeEffect::ResumeMusic { name: name.clone() }.into());
                 }
                 EffectAst::StopMusic { name } => {
                     lowered
                         .ordered
-                        .push(RuleEffect::StopMusic { name: name.clone() });
+                        .push(RuntimeEffect::StopMusic { name: name.clone() }.into());
                 }
                 EffectAst::Wait { milliseconds } => {
-                    lowered.ordered.push(RuleEffect::Wait {
-                        milliseconds: *milliseconds,
-                    });
+                    lowered.ordered.push(
+                        RuntimeEffect::Wait {
+                            milliseconds: *milliseconds,
+                        }
+                        .into(),
+                    );
                 }
                 EffectAst::WaitAnimation => {
-                    lowered.ordered.push(RuleEffect::WaitAnimation);
+                    lowered.ordered.push(RuntimeEffect::WaitAnimation.into());
                 }
                 EffectAst::EmitVisual { name } => {
                     if !self.visual_names.contains(name) {
@@ -2575,30 +2562,32 @@ impl<'a> ProgramLowerer<'a> {
                             "visual animation is not declared in layers: !{name}"
                         )));
                     }
-                    lowered.ordered.push(RuleEffect::EmitAnimation {
-                        name: name.clone(),
-                        component: 0,
-                        offset: puzzle_runtime_contract::RuntimeAnimationOffset { x: 0, y: 0 },
-                    });
+                    lowered.ordered.push(
+                        RuntimeEffect::EmitAnimation {
+                            name: name.clone(),
+                            component: 0,
+                            offset: puzzle_runtime_contract::RuntimeAnimationOffset { x: 0, y: 0 },
+                        }
+                        .into(),
+                    );
                 }
                 EffectAst::PresentComponent { text, literal } => {
-                    lowered.ordered.push(RuleEffect::PresentComponent {
-                        definition: "standard.message".to_string(),
-                        properties: vec![
-                            puzzle_runtime_contract::RuntimeComponentProperty {
+                    lowered.ordered.push(
+                        RuntimeEffect::PresentComponent {
+                            definition: "standard.message".to_string(),
+                            properties: vec![puzzle_runtime_contract::RuntimeComponentProperty {
                                 name: "text".to_string(),
                                 value: text.clone(),
                                 literal: *literal,
-                            },
-                        ],
-                        placement: puzzle_runtime_contract::ComponentPlacement::Overlay,
-                        await_event: Some("dismiss".to_string()),
-                    });
+                            }],
+                            placement: puzzle_runtime_contract::ComponentPlacement::Overlay,
+                            await_event: Some("dismiss".to_string()),
+                        }
+                        .into(),
+                    );
                 }
                 EffectAst::Scene(effect) => {
-                    lowered.ordered.push(RuleEffect::Scene {
-                        effect: effect.clone(),
-                    });
+                    lowered.ordered.push(RuleEffect::Lifecycle(effect.clone()));
                 }
                 EffectAst::UpdateVariable { name, op, value } => {
                     let variable = *self.variable_names.get(name).ok_or_else(|| {

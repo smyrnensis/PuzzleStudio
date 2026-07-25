@@ -4,17 +4,17 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
-cargo build --target wasm32-unknown-unknown --release -p puzzle-wasm
+editor_target_dir="${CARGO_TARGET_DIR:-/private/tmp/puzzlebuilder-bevy-target}"
+cargo build \
+  --target wasm32-unknown-unknown \
+  --target-dir "$editor_target_dir" \
+  --release \
+  -p puzzle-wasm
 mkdir -p crates/html_editor/static/wasm
 wasm-bindgen \
   --target web \
   --out-dir crates/html_editor/static/wasm \
-  target/wasm32-unknown-unknown/release/puzzle_wasm.wasm
-
-if ! grep -q "export function activate_source_analysis" crates/html_editor/static/wasm/puzzle_wasm.js; then
-  echo "generated WASM bindings are missing activate_source_analysis" >&2
-  exit 1
-fi
+  "$editor_target_dir/wasm32-unknown-unknown/release/puzzle_wasm.wasm"
 
 if ! grep -q "export function activate_source_analysis_with_profile" crates/html_editor/static/wasm/puzzle_wasm.js; then
   echo "generated WASM bindings are missing activate_source_analysis_with_profile" >&2
@@ -56,6 +56,32 @@ if ! grep -q "export class WasmSolverService" crates/html_editor/static/wasm/puz
   exit 1
 fi
 
+if ! grep -q "export class WasmEditorAudio" crates/html_editor/static/wasm/puzzle_wasm.js; then
+  echo "generated editor WASM bindings are missing WasmEditorAudio" >&2
+  exit 1
+fi
+
+if ! grep -q "export function editor_audio_sfx_types" crates/html_editor/static/wasm/puzzle_wasm.js; then
+  echo "generated editor WASM bindings are missing editor audio authoring types" >&2
+  exit 1
+fi
+
+if ! grep -q "export function editor_audio_random_music_preset" crates/html_editor/static/wasm/puzzle_wasm.js; then
+  echo "generated editor WASM bindings are missing deterministic audio presets" >&2
+  exit 1
+fi
+
+if ! grep -q "export_sfx_wav" crates/html_editor/static/wasm/puzzle_wasm.js \
+  || ! grep -q "export_music_wav" crates/html_editor/static/wasm/puzzle_wasm.js; then
+  echo "generated editor WASM bindings are missing Rust WAV export" >&2
+  exit 1
+fi
+
+if grep -q "WasmEditorAudioPreview" crates/html_editor/static/wasm/puzzle_wasm.js; then
+  echo "generated editor WASM bindings include removed player-owned audio preview" >&2
+  exit 1
+fi
+
 if ! grep -q "export function workspace_presentation_manifest" crates/html_editor/static/wasm/puzzle_wasm.js; then
   echo "generated WASM bindings are missing workspace_presentation_manifest" >&2
   exit 1
@@ -81,7 +107,7 @@ if grep -Eq "compile_solver_rules_json|compile_workspace_solver_rules_json|edito
   exit 1
 fi
 
-if grep -Eq "export class WasmSourceAnalysis|export function analyze_source|export function highlight_source_html|export function highlight_source_json|export function active_source_analysis_highlight_json|export function source_outline_json|export function suggest_source_completions|export function resolve_source_target|export function source_entries_json" crates/html_editor/static/wasm/puzzle_wasm.js; then
+if grep -Eq "export class WasmSourceAnalysis|export function activate_source_analysis\\(|export function analyze_source|export function highlight_source_html|export function highlight_source_json|export function active_source_analysis_highlight_json|export function source_outline_json|export function suggest_source_completions|export function resolve_source_target|export function source_entries_json" crates/html_editor/static/wasm/puzzle_wasm.js; then
   echo "generated editor WASM bindings include old source analysis exports" >&2
   exit 1
 fi

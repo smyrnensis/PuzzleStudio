@@ -15,9 +15,13 @@ script; freshness and desktop-boundary checks consume the script's check mode.
 
 `static/editor_codemirror.js` is generated from `web/src/editor_codemirror.js`
 and the locked npm dependencies under `web/`. Do not edit the bundle directly.
-Install dependencies with `npm ci` in `crates/html_editor/web`, then regenerate
-it with `tools/build_editor_frontend.sh`. A missing bundle is an error; do not
-load CodeMirror from a CDN or fall back to the old textarea editor.
+Install dependencies outside the repository with
+`tools/install_editor_frontend_deps.sh`, then regenerate it with
+`tools/build_editor_frontend.sh`. The installer keeps `node_modules` under
+`/private/tmp` (or `PUZZLE_EDITOR_FRONTEND_CACHE`) and places only a symlink in
+the worktree, so disposable dependencies are not synchronized through iCloud.
+A missing bundle is an error; do not load CodeMirror from a CDN or fall back to
+the old textarea editor.
 
 The web release surface is the GitHub Pages site under `docs/`, not a root
 single-file `editor.html`. Patch this crate's source owner, such as `src/` or

@@ -21,248 +21,55 @@ if (initialPuzzle3PreviewSurface) {
 document.documentElement.classList.toggle("is-component-embed", componentEmbedMode || Boolean(initialPuzzle3PreviewSurface));
 document.body.classList.toggle("is-component-embed", componentEmbedMode || Boolean(initialPuzzle3PreviewSurface));
 let clientPendingWaits = 0;
-let activeThemeClass = "";
-const activeThemeVariables = new Set();
-const activationConfirmDelayMs = 160;
-const STANDARD_COMPONENT_DEFINITIONS = Object.freeze([Object.freeze({
-  name: "standard.message",
-  layout: {},
-  events: Object.freeze({
-    dismiss: Object.freeze({ pointer: true, keys: "input" }),
-  }),
-  components: Object.freeze([Object.freeze({
-    kind: "text",
-    role: "body",
-    source: "path",
-    path: Object.freeze(["text"]),
-  })]),
-})]);
-
-class PuzzleSoundRuntime {
-  constructor() {
-    this.sounds = { sfx: [], music: [] };
-    this.context = null;
-    this.activeMusic = new Map();
-    this.pausedMusic = new Map();
-    this.visibilityPausedMusic = new Map();
-    this.activeSfx = new Map();
-    this.sfxEffectCache = new Map();
-    this.sfxEffectApi = null;
-    this.soundWarnings = new Set();
-  }
-
-  configure(sounds) {
-    this.sounds = sounds || { sfx: [], music: [] };
-  }
-
-  applyEvents(events) {
-    for (const event of events || []) {
-      if (event.kind === "play_sfx") {
-        this.playSfx(event.name);
-      } else if (event.kind === "play_music") {
-        this.playMusic(event.name);
-      } else if (event.kind === "pause_music") {
-        this.pauseMusic(event.name || null);
-      } else if (event.kind === "resume_music") {
-        this.resumeMusic(event.name || null);
-      } else if (event.kind === "stop_music") {
-        this.stopMusic(event.name || null);
-      }
-    }
-  }
-
-  ensureContext() {
-    const AudioContext = window.AudioContext || window.webkitAudioContext;
-    if (!AudioContext) {
-      return null;
-    }
-    if (!this.context) {
-      this.context = new AudioContext();
-    }
-    if (this.context.state === "suspended") {
-      this.context.resume();
-    }
-    return this.context;
-  }
-
-  primePlayback() {
-    this.ensureContext();
-  }
-
-  playSfx(name) {
-    if (this.shouldSuppressPlayback()) {
-      return;
-    }
-    const def = this.sfxDef(name);
-    const context = this.ensureContext();
-    if (!def || !context) {
-      return;
-    }
-    const api = window.PuzzleSoundGenerator || window.PuzzleSoundTools || null;
-    const volume = Number(def.volume ?? 1);
-    if (api?.generateSoundEffect && api?.createSfxPlayer) {
-      try {
-        const effect = this.sfxEffect(api, def);
-        const player = api.createSfxPlayer(context, effect, { volume });
-        this.replaceActiveSfx(name, player);
-        player.start(context.currentTime);
-      } catch (error) {
-        this.warnSoundIssue(`sfx:${name}:${def.type || "random"}`, `Sound effect "${name}" was skipped: ${error?.message || error}`);
-      }
-      return;
-    }
-    this.warnSoundIssue(`sfx:${name}`, `Sound effect "${name}" was skipped because the sound generator is unavailable.`);
-  }
-
-  replaceActiveSfx(name, player) {
-    this.activeSfx.get(name)?.stop();
-    this.activeSfx.set(name, player);
-  }
-
-  sfxDef(name) {
-    return (this.sounds.sfx || []).find((entry) => entry.name === name);
-  }
-
-  sfxEffect(api, def) {
-    if (this.sfxEffectApi !== api) {
-      this.sfxEffectApi = api;
-      this.sfxEffectCache.clear();
-    }
-    const type = def.type || "random";
-    const key = `${String(def.seed)}\u0000${type}`;
-    let effect = this.sfxEffectCache.get(key);
-    if (!effect) {
-      effect = api.generateSoundEffect(def.seed, { type });
-      this.sfxEffectCache.set(key, effect);
-    }
-    return effect;
-  }
-
-  playMusic(name, resume = {}) {
-    if (this.shouldSuppressPlayback()) {
-      return;
-    }
-    const def = (this.sounds.music || []).find((entry) => entry.name === name);
-    const context = this.ensureContext();
-    if (!def || !context) {
-      return;
-    }
-    if (this.activeMusic.has(name)) {
-      return;
-    }
-    this.stopMusic();
-    this.pausedMusic.delete(name);
-    const api = window.PuzzleSoundGenerator || window.PuzzleSoundTools || null;
-    if (api?.generateSong && api?.createPlayer) {
-      const progress = typeof resume === "number" ? 0 : Number(resume.progress || 0);
-      const song = api.generateSong(def.seed, {
-        height: Number(def.height ?? def.tone ?? 0.5),
-        bars: Number(def.bars || 8),
-        bpm: Number(def.bpm || 110),
-        volume: Number(def.volume ?? 0.5),
-      });
-      const player = api.createPlayer(context, song.playbackScore);
-      const handle = { player, progress };
-      this.activeMusic.set(name, handle);
-      player.start(progress);
-      return;
-    }
-    this.warnSoundIssue(`music:${name}`, `Music "${name}" was skipped because the sound generator is unavailable.`);
-  }
-
-  stopMusic(name = null) {
-    for (const [key, handle] of [...this.activeMusic.entries()]) {
-      if (name && key !== name) {
-        continue;
-      }
-      this.stopMusicHandle(handle);
-      this.activeMusic.delete(key);
-    }
-    for (const key of [...this.pausedMusic.keys()]) {
-      if (!name || key === name) {
-        this.pausedMusic.delete(key);
-      }
-    }
-  }
-
-  pauseMusic(name = null) {
-    for (const [key, handle] of [...this.activeMusic.entries()]) {
-      if (name && key !== name) {
-        continue;
-      }
-      this.stopMusicHandle(handle);
-      this.activeMusic.delete(key);
-      this.pausedMusic.set(key, {
-        index: handle.index || 0,
-        progress: handle.player?.loopProgress?.() ?? handle.progress ?? 0,
-      });
-    }
-  }
-
-  resumeMusic(name = null) {
-    const entries = [...this.pausedMusic.entries()].filter(([key]) => !name || key === name);
-    for (const [key, paused] of entries) {
-      this.playMusic(key, paused);
-      this.pausedMusic.delete(key);
-    }
-  }
-
-  pauseForHiddenDocument() {
-    for (const [key, handle] of [...this.activeMusic.entries()]) {
-      const progress = handle.player?.loopProgress?.() ?? handle.progress ?? 0;
-      this.stopMusicHandle(handle);
-      this.activeMusic.delete(key);
-      this.visibilityPausedMusic.set(key, {
-        progress,
-      });
-    }
-  }
-
-  resumeAfterVisibleDocument() {
-    if (this.shouldSuppressPlayback()) {
-      return;
-    }
-    const entries = [...this.visibilityPausedMusic.entries()];
-    this.visibilityPausedMusic.clear();
-    for (const [key, paused] of entries) {
-      if (!this.pausedMusic.has(key)) {
-        this.playMusic(key, paused);
-      }
-    }
-  }
-
-  shouldSuppressPlayback() {
-    return typeof document !== "undefined" && document.visibilityState === "hidden";
-  }
-
-  stopMusicHandle(handle) {
-    if (handle.player) {
-      try {
-        handle.progress = handle.player.loopProgress?.() ?? handle.progress ?? 0;
-        handle.player.stop();
-      } catch (_) {
-      }
-    }
-  }
-
-  warnSoundIssue(key, message) {
-    if (this.soundWarnings.has(key)) {
-      return;
-    }
-    this.soundWarnings.add(key);
-    console.warn(message);
-  }
-
-}
-
 const puzzleBoot = window.PuzzleBoot || {};
 const standaloneRuntime = window.PuzzleStandaloneRuntime
   ? new window.PuzzleStandaloneRuntime(puzzleBoot, window.PuzzleRuntimeExportJson)
   : null;
-const soundRuntime = new PuzzleSoundRuntime();
+const reportedAudioConsumerErrors = new Set();
 
-document.addEventListener("keydown", () => soundRuntime.primePlayback(), { capture: true });
-document.addEventListener("pointerdown", () => soundRuntime.primePlayback(), { capture: true });
+function reportAudioConsumerError(error) {
+  const message = String(error?.message || error || "Unknown audio consumer error");
+  if (reportedAudioConsumerErrors.has(message)) {
+    return;
+  }
+  reportedAudioConsumerErrors.add(message);
+  console.error(`Audio consumer: ${message}`);
+}
+
+async function unlockAudioFromGesture() {
+  try {
+    if (!standaloneRuntime) {
+      throw new Error("Rust browser audio backend is unavailable.");
+    }
+    await standaloneRuntime.unlockAudio();
+  } catch (error) {
+    reportAudioConsumerError(error);
+  }
+}
+
+function reportPresentationEventConsumed() {
+  if (standaloneRuntime) {
+    standaloneRuntime.presentationEventConsumed();
+  }
+}
+
+async function setAudioVisible(visible) {
+  try {
+    if (!standaloneRuntime) {
+      throw new Error("Rust browser audio backend is unavailable.");
+    }
+    await standaloneRuntime.setAudioVisible(visible);
+  } catch (error) {
+    reportAudioConsumerError(error);
+  }
+}
+
+document.addEventListener("keydown", async () => {
+  await unlockAudioFromGesture();
+}, { capture: true });
+document.addEventListener("pointerdown", async () => {
+  await unlockAudioFromGesture();
+}, { capture: true });
 
 let currentState = null;
 let swipeStart = null;
@@ -275,7 +82,6 @@ let puzzle3PreviewSurface = initialPuzzle3PreviewSurface;
 const activeSolveRequests = new Map();
 let wasmSolverServicePromise = null;
 /* puzzle-host:optional:solver:end */
-const standardChoiceCursors = new Map();
 let screenScaleSyncFrame = 0;
 let screenScaleSyncPasses = 0;
 let pendingModelInput = null;
@@ -379,7 +185,11 @@ async function solveStandaloneCurrentState(options = {}, control = null) {
 /* puzzle-host:optional:solver:end */
 
 async function loadState() {
-  render(await requestJson("/api/state"));
+  try {
+    render(await requestJson("/api/state"));
+  } catch (error) {
+    showError(error);
+  }
 }
 
 async function post(url, options = {}) {
@@ -402,8 +212,7 @@ function render(state) {
   currentState = state;
   sessionWaiting = state?.busy === true;
   window.__PuzzleCurrentState = state;
-  applyTheme(state?.theme || puzzleBoot.theme || null);
-  soundRuntime.configure(state?.sounds || puzzleBoot.sounds || { sfx: [], music: [] });
+  applyTheme(state?.theme);
   const displayError = firstDisplayError(state);
   if (displayError) {
     showError(new Error(displayError));
@@ -418,16 +227,21 @@ function render(state) {
   renderSurface(state);
   scheduleScreenScaleSync(3);
   notifyPreviewState(state);
+  if (standaloneRuntime) {
+    standaloneRuntime.presentationFrame();
+  }
   applyPresentationEvents(presentationEvents);
 }
 
 function firstDisplayError(state) {
-  if (state?.scene?.displayError) {
-    return String(state.scene.displayError);
+  for (const source of state?.viewportSources || []) {
+    if (source?.state?.displayError) {
+      return String(source.state.displayError);
+    }
   }
   for (const layer of state?.surface?.components || []) {
-    if (layer?.scene?.displayError) {
-      return String(layer.scene.displayError);
+    if (layer?.presentation?.error) {
+      return String(layer.presentation.error);
     }
   }
   return "";
@@ -517,7 +331,6 @@ function syncScreenScale() {
   screenFrame.dataset.screenScale = "1";
   screenFrame.dataset.screenVirtualWidth = String(viewport.width);
   screenFrame.dataset.screenVirtualHeight = String(viewport.height);
-  syncCleanControlGroupWidths(screenView);
   fitPuzzleFrameComponents(screenView);
 }
 
@@ -526,9 +339,8 @@ function currentSceneAspectRatio() {
     return normalizedAspectRatio(sceneEditorPreview.layout.aspectRatio);
   }
   const layers = sceneLayers(currentState);
-  const layer = layers.find((candidate) => candidate.focused === true) || layers[0];
-  const sceneDef = sceneDefByName(layer?.name) || currentSceneDef();
-  return normalizedAspectRatio(sceneDef?.layout?.aspectRatio);
+  const layer = layers.find((candidate) => candidate.id === currentState?.surface?.focus) || layers[0];
+  return normalizedAspectRatio(layer?.presentation?.layout?.aspectRatio);
 }
 
 function normalizedAspectRatio(ratio) {
@@ -588,52 +400,102 @@ function visibleViewportSize() {
 }
 
 function applyTheme(theme) {
+  const normalized = normalizeRuntimeTheme(theme);
   const root = document.body;
-  for (const name of activeThemeVariables) {
-    root.style.removeProperty(`--${name}`);
+  const variables = {
+    background: linearRgbaCss(normalized.background),
+    text: linearRgbaCss(normalized.text),
+    muted: linearRgbaCss(normalized.mutedText),
+    accent: linearRgbaCss(normalized.accent),
+    "panel-bg": linearRgbaCss(normalized.panel),
+    "popup-bg": linearRgbaCss(normalized.panel),
+    "button-bg": linearRgbaCss(normalized.control),
+    "button-bg-hover": linearRgbaCss(normalized.controlFocused),
+    "button-bg-active": linearRgbaCss(normalized.controlSelected),
+    "menu-item-bg": linearRgbaCss(normalized.control),
+    "menu-item-bg-selected": linearRgbaCss(normalized.controlSelected),
+    "menu-item-ring": linearRgbaCss(normalized.controlSelectedBorder),
+    "control-selected-border": linearRgbaCss(normalized.controlSelectedBorder),
+    "text-heading-size": `${normalized.typography.heading.fontSizePx}px`,
+    "text-heading-line-height": String(normalized.typography.heading.lineHeight),
+    "text-subheading-size": `${normalized.typography.subheading.fontSizePx}px`,
+    "text-subheading-line-height": String(normalized.typography.subheading.lineHeight),
+    "text-body-size": `${normalized.typography.body.fontSizePx}px`,
+    "text-body-line-height": String(normalized.typography.body.lineHeight),
+    "text-caption-size": `${normalized.typography.caption.fontSizePx}px`,
+    "text-caption-line-height": String(normalized.typography.caption.lineHeight),
+    "control-padding-horizontal": `${normalized.controlLayout.paddingHorizontalPx}px`,
+    "control-padding-vertical": `${normalized.controlLayout.paddingVerticalPx}px`,
+    "control-margin": `${normalized.controlLayout.marginPx}px`,
+    "control-border-width": `${normalized.controlLayout.borderWidthPx}px`,
+    "radius-control": `${normalized.controlLayout.cornerRadiusPx}px`,
+  };
+  for (const [name, value] of Object.entries(variables)) {
+    root.style.setProperty(`--${name}`, value);
   }
-  activeThemeVariables.clear();
+}
 
-  for (const [name, value] of Object.entries(theme?.variables || {})) {
-    const variableName = normalizeThemeVariableName(name);
-    if (!variableName) {
-      continue;
+function normalizeRuntimeTheme(theme) {
+  if (!theme || typeof theme !== "object" || Array.isArray(theme)) {
+    throw new Error("Runtime snapshot is missing the required typed theme contract");
+  }
+  const colors = [
+    "background",
+    "text",
+    "mutedText",
+    "accent",
+    "panel",
+    "control",
+    "controlFocused",
+    "controlSelected",
+    "controlSelectedBorder",
+  ];
+  const normalized = {};
+  for (const name of colors) {
+    normalized[name] = normalizeLinearRgba(theme[name], `theme.${name}`);
+  }
+  normalized.typography = {};
+  for (const name of ["heading", "subheading", "body", "caption"]) {
+    const style = theme.typography?.[name];
+    const fontSizePx = Number(style?.fontSizePx);
+    const lineHeight = Number(style?.lineHeight);
+    if (!(fontSizePx > 0) || !Number.isFinite(lineHeight) || lineHeight <= 0) {
+      throw new Error(`Runtime theme has an invalid typography.${name} contract`);
     }
-    root.style.setProperty(`--${variableName}`, String(value));
-    activeThemeVariables.add(variableName);
+    normalized.typography[name] = { fontSizePx, lineHeight };
   }
-
-  if (activeThemeClass) {
-    document.body.classList.remove(activeThemeClass);
-    activeThemeClass = "";
+  const layout = theme.controlLayout;
+  normalized.controlLayout = {};
+  for (const name of [
+    "paddingHorizontalPx",
+    "paddingVerticalPx",
+    "marginPx",
+    "borderWidthPx",
+    "cornerRadiusPx",
+  ]) {
+    const value = Number(layout?.[name]);
+    if (!Number.isFinite(value) || value < 0) {
+      throw new Error(`Runtime theme has an invalid controlLayout.${name} contract`);
+    }
+    normalized.controlLayout[name] = value;
   }
-  const className = themeClassName(theme?.name);
-  if (className) {
-    document.body.classList.add(className);
-    activeThemeClass = className;
-  }
+  return normalized;
 }
 
-function normalizeThemeVariableName(name) {
-  const normalized = String(name || "")
-    .replace(/^--/, "")
-    .replace(/_/g, "-")
-    .toLowerCase();
-  if (normalized === "bg") {
-    return "background";
+function normalizeLinearRgba(color, label) {
+  const normalized = {};
+  for (const name of ["red", "green", "blue", "alpha"]) {
+    const value = Number(color?.[name]);
+    if (!Number.isFinite(value) || value < 0 || value > 1) {
+      throw new Error(`Runtime theme has an invalid ${label}.${name} channel`);
+    }
+    normalized[name] = value;
   }
-  if (normalized === "ink") {
-    return "text";
-  }
-  return /^(background|text|accent)$/.test(normalized) ? normalized : "";
+  return normalized;
 }
 
-function themeClassName(name) {
-  const normalized = String(name || "")
-    .replace(/[^a-zA-Z0-9_-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .toLowerCase();
-  return normalized ? `theme-${normalized}` : "";
+function linearRgbaCss(color) {
+  return `color(srgb-linear ${color.red} ${color.green} ${color.blue} / ${color.alpha})`;
 }
 
 function notifyPreviewState(_state) {
@@ -660,12 +522,11 @@ function notifyPreviewState(state) {
   window.parent.postMessage({
     type: "PuzzleStudioPreviewState",
     levelIndex: state.levelIndex,
-    rawScene: state.rawScene,
-    scene: state.scene,
     inputs: state.inputs,
     screen: focusedComponentName(state),
-    screenHasPuzzle: currentSceneAcceptsModelInput() || Boolean(state.scene),
-    theme: state.theme || puzzleBoot.theme || null,
+    screenHasPuzzle: currentSceneAcceptsModelInput()
+      || (state.viewportSources || []).some((source) => source?.id?.component === state.surface?.focus),
+    theme: state.theme,
   }, "*");
 }
 
@@ -680,13 +541,11 @@ function notifySceneEditorPreview(requestId = sceneEditorPreview?.requestId || "
     type: "PuzzleStudioScenePreview",
     requestId,
     scene: sceneName,
-    theme: sceneEditorPreview.theme || currentState?.theme || puzzleBoot.theme || null,
+    theme: sceneEditorPreview.theme,
     layout,
     aspectRatio: normalizedAspectRatio(layout?.aspectRatio),
     components: sceneEditorComponentMetadata(sceneDef?.components || [], {
       __sceneDef: sceneDef,
-      __sceneState: sceneEditorPreview.state || currentState?.sceneState || {},
-      __standardChoiceCounter: { value: 0 },
     }),
     error: sceneDef ? null : `Unknown scene: ${sceneName}`,
   }, "*");
@@ -694,39 +553,41 @@ function notifySceneEditorPreview(requestId = sceneEditorPreview?.requestId || "
 
 function renderSceneEditorPreview(config = {}) {
   const sceneName = String(config.scene?.name || config.sceneName || focusedComponentName(currentState)).trim();
-  const sceneDef = sceneDefByName(sceneName);
+  const sceneDef = config.presentation || sceneDefByName(sceneName);
   sceneEditorPreview = {
     requestId: String(config.requestId || ""),
     sceneName,
-    theme: normalizeScenePreviewTheme(config.theme) || currentState?.theme || puzzleBoot.theme || null,
+    theme: normalizeScenePreviewTheme(config.theme ?? currentState?.theme),
     layout: normalizeScenePreviewLayout(config.layout),
     state: normalizeScenePreviewState(config.state),
     inspect: config.inspect || {},
   };
+  if (sceneEditorPreview.state && !config.presentation) {
+    showError(new Error(
+      `Scene preview ${sceneName} requires a Rust-resolved presentation for the requested state.`
+    ));
+    return;
+  }
   if (!sceneDef) {
     notifySceneEditorPreview(sceneEditorPreview.requestId);
     return;
   }
-  const baseState = currentState || puzzleBoot || {};
-  const existingLayer = sceneLayers(baseState).find((layer) => layer.name === sceneName);
+  if (!currentState) {
+    throw new Error("Scene preview requires an initialized runtime snapshot");
+  }
+  const baseState = currentState;
   const previewState = {
     ...baseState,
     theme: sceneEditorPreview.theme,
-    sceneState: sceneEditorPreview.state || existingLayer?.sceneState || existingLayer?.state || baseState.sceneState || {},
     surface: {
       root: sceneName,
       focus: sceneName,
       components: [{
         id: sceneName,
-        definition: sceneName,
         placement: "root",
         visibility: "visible",
         modal: false,
-        name: sceneName,
-        focused: true,
-        scene: existingLayer?.scene || baseState.scene || null,
-        sceneState: sceneEditorPreview.state || existingLayer?.sceneState || existingLayer?.state || baseState.sceneState || {},
-        scenePuzzles: existingLayer?.scenePuzzles || baseState.scenePuzzles || [],
+        presentation: sceneDef,
       }],
     },
   };
@@ -745,8 +606,6 @@ function renderSceneEditorLayer(sceneDef, state) {
   const scope = {
     __sceneLayer: layer,
     __sceneDef: sceneDef,
-    __sceneState: layer.sceneState || layer.state || {},
-    __standardChoiceCounter: { value: 0 },
     __componentPath: ["components"],
   };
   const layerEl = document.createElement("div");
@@ -757,7 +616,6 @@ function renderSceneEditorLayer(sceneDef, state) {
   renderSurfaceComponents(components, layerEl, scope);
   markSingleFrameComponentLayer(layerEl);
   screenView.append(layerEl);
-  syncCleanControlGroupWidths(screenView);
   fitPuzzleFrameComponents(screenView);
 }
 
@@ -771,21 +629,7 @@ function mergedScenePreviewLayout(sceneDef, override) {
 }
 
 function normalizeScenePreviewTheme(theme) {
-  if (!theme) {
-    return null;
-  }
-  if (typeof theme === "string") {
-    return { name: theme, variables: {} };
-  }
-  const name = String(theme.name || "").trim();
-  const variables = {};
-  for (const [key, value] of Object.entries(theme.variables || {})) {
-    const normalized = normalizeThemeVariableName(key);
-    if (normalized) {
-      variables[normalized] = String(value);
-    }
-  }
-  return { name, variables };
+  return normalizeRuntimeTheme(theme);
 }
 
 function normalizeScenePreviewLayout(layout) {
@@ -841,15 +685,6 @@ function sceneEditorComponentMetadata(components, scope = {}) {
         ...scope,
         __componentPath: [...path, "children"],
       }));
-    } else if (component.kind === "conditional") {
-      result.push(...sceneEditorComponentMetadata(component.children || [], {
-        ...scope,
-        __componentPath: [...path, "children"],
-      }));
-      result.push(...sceneEditorComponentMetadata(component.elseChildren || [], {
-        ...scope,
-        __componentPath: [...path, "elseChildren"],
-      }));
     }
   }
   return result;
@@ -862,10 +697,9 @@ function sceneEditorComponentMeta(component, path, scope = {}) {
     layout: component.layout || null,
   };
   if (component.kind === "button" || component.kind === "choice") {
-    meta.label = resolveLabel(component.label, scope) || sceneTitle(effectLabel(component.effect));
-    meta.effect = component.effect || null;
+    meta.label = component.label || "";
   } else if (component.kind === "text") {
-    meta.label = resolveLabel(component.content || component, scope);
+    meta.label = component.value || "";
   } else if (component.source) {
     meta.source = component.source;
   }
@@ -877,7 +711,6 @@ function renderSurface(state) {
   screenView.replaceChildren();
 
   const layers = sceneLayers(state);
-  syncVisualThemeForSceneStack(layers);
   if (componentEmbedMode && renderEmbeddedPuzzleComponent(layers)) {
     return;
   }
@@ -891,22 +724,22 @@ function renderSurface(state) {
     if (layer.visibility === "hidden") {
       continue;
     }
-    const sceneDef = componentDefinitionByName(layer.definition || layer.name);
-    if (!sceneDef) {
-      throw new Error(`Unsupported presented component definition: ${String(layer.definition || layer.name || "")}`);
+    const presentation = layer.presentation;
+    if (!presentation || typeof presentation !== "object") {
+      throw new Error(`Presented component ${String(layer.id || "")} is missing its resolved presentation.`);
     }
-    const components = sceneDef?.components || [];
+    if (presentation.error) {
+      throw new Error(`Presented component ${String(layer.id || "")} failed to resolve: ${presentation.error}`);
+    }
+    const components = presentation.components || [];
     const scope = {
       __sceneLayer: layer,
-      __sceneDef: sceneDef,
-      __sceneState: layer.sceneState || layer.state || {},
-      __componentProperties: layer.properties || {},
-      __standardChoiceCounter: { value: 0 },
+      __sceneDef: presentation,
     };
 
     const layerEl = document.createElement("div");
     layerEl.className = "scene-layer";
-    layerEl.classList.toggle("is-focused", layer.focused === true);
+    layerEl.classList.toggle("is-focused", layer.id === state.surface.focus);
     layerEl.classList.toggle("is-modal", layer.modal === true);
     layerEl.classList.toggle("has-ratio-content", components.some((component) => componentContainsSizingKind(component, "ratio")));
     layerEl.style.zIndex = String(10 + index);
@@ -915,39 +748,41 @@ function renderSurface(state) {
       layerEl.setAttribute("aria-modal", "true");
       layerEl.tabIndex = -1;
     }
-    applySceneLayout(layerEl, sceneDef?.layout, { root: true });
+    applySceneLayout(layerEl, presentation.layout, { root: true });
     const contentRoot = layer.modal === true ? document.createElement("div") : layerEl;
     if (contentRoot !== layerEl) {
       contentRoot.className = "surface-modal-panel";
       layerEl.append(contentRoot);
     }
     renderSurfaceComponents(components, contentRoot, scope);
-    bindAwaitedComponentEvent(layerEl, layer, sceneDef);
+    bindAwaitedComponentEvent(layerEl, layer, presentation);
     markSingleFrameComponentLayer(layerEl);
     screenView.append(layerEl);
     if (layer.modal === true) {
       queueMicrotask(() => layerEl.focus({ preventScroll: true }));
     }
   }
-  syncCleanControlGroupWidths(screenView);
   fitPuzzleFrameComponents(screenView);
   scrollSelectedChoiceIntoView(screenView);
 }
 
-function bindAwaitedComponentEvent(root, instance, definition) {
+function bindAwaitedComponentEvent(root, instance, presentation) {
   const eventName = instance.awaitEvent;
   if (!eventName) {
     return;
   }
-  const binding = definition.events?.[eventName];
+  const binding = presentation.events?.[eventName];
   if (!binding) {
-    throw new Error(`Component definition ${definition.name} does not declare awaited event ${eventName}`);
+    throw new Error(`Presented component ${instance.id} does not declare awaited event ${eventName}`);
+  }
+  if (!binding.actionToken) {
+    throw new Error(`Presented component ${instance.id} event ${eventName} is missing its action token`);
   }
   if (binding.pointer === true) {
     root.addEventListener("pointerdown", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      sendComponentEvent(instance.id, eventName);
+      sendSceneActionToken(binding.actionToken);
     });
   }
 }
@@ -957,52 +792,6 @@ function markSingleFrameComponentLayer(layerEl) {
   const singleFrameComponent =
     visibleChildren.length === 1 && visibleChildren[0]?.dataset.frameComponent === "true";
   layerEl.classList.toggle("has-single-frame-component", singleFrameComponent);
-}
-
-function syncCleanControlGroupWidths(root = screenView) {
-  if (!root?.querySelectorAll) {
-    return;
-  }
-  const groups = cleanControlGroups(root);
-  for (const group of groups) {
-    group.style.removeProperty("--clean-control-width");
-  }
-  if (!document.body.classList.contains("theme-clean")) {
-    return;
-  }
-  for (const group of groups) {
-    const controls = directCleanControlChildren(group);
-    if (controls.length < 2) {
-      continue;
-    }
-    const maxWidth = Math.ceil(controls.reduce((max, control) => (
-      Math.max(max, cleanControlNaturalWidth(control))
-    ), 0));
-    if (maxWidth > 0) {
-      group.style.setProperty("--clean-control-width", `${maxWidth}px`);
-    }
-  }
-}
-
-function cleanControlGroups(root = screenView) {
-  const groups = [];
-  if (root?.matches?.(".scene-layer, .view-column, .view-box")) {
-    groups.push(root);
-  }
-  groups.push(...root.querySelectorAll(".scene-layer, .view-column, .view-box"));
-  return groups;
-}
-
-function directCleanControlChildren(group) {
-  return [...group.children].filter((child) => (
-    !child.hidden
-      && child.matches("button")
-      && child.getClientRects().length > 0
-  ));
-}
-
-function cleanControlNaturalWidth(control) {
-  return Math.max(control.scrollWidth, control.offsetWidth);
 }
 
 function fitPuzzleFrameComponents(root = screenView) {
@@ -1033,17 +822,15 @@ function renderEmbeddedPuzzleComponent(layers) {
     const sceneName = puzzle3PreviewSurface.sceneName;
     const scope = {
       __sceneLayer: { name: sceneName, focused: true },
-      __sceneDef: { name: sceneName, components: [puzzle3PreviewSurface.component] },
-      __sceneState: {},
-      __standardChoiceCounter: { value: 0 },
+      __sceneDef: { components: [puzzle3PreviewSurface.component] },
     };
     screenView.classList.remove("has-scene-stack");
     screenView.append(renderPuzzle3Frame(puzzle3PreviewSurface.component, scope));
     return true;
   }
   /* puzzle-host:optional:puzzle3:end */
-  const layer = layers.find((candidate) => candidate.focused === true) || layers[0];
-  const sceneDef = sceneDefByName(layer?.name);
+  const layer = layers.find((candidate) => candidate.id === currentState?.surface?.focus) || layers[0];
+  const sceneDef = layer?.presentation;
   const component = findComponentByKind(sceneDef?.components || [], "puzzle");
   if (!layer || !sceneDef || !component) {
     return false;
@@ -1051,26 +838,10 @@ function renderEmbeddedPuzzleComponent(layers) {
   const scope = {
     __sceneLayer: layer,
     __sceneDef: sceneDef,
-    __sceneState: layer.sceneState || layer.state || {},
-    __standardChoiceCounter: { value: 0 },
   };
   screenView.classList.remove("has-scene-stack");
   screenView.append(renderPuzzle(component, scope));
   return true;
-}
-
-function syncVisualThemeForSceneStack(layers) {
-  const visualThemeClass = window.GameVisuals?.themeClass || "";
-  if (!visualThemeClass || visualThemeClass === activeThemeClass) {
-    return;
-  }
-  const hasPuzzleLayer = layers.some((layer) => {
-    const scene = sceneDefByName(layer.name);
-    return sceneHasComponent(scene, "puzzle") || sceneHasComponent(scene, "frame");
-  });
-  if (!hasPuzzleLayer) {
-    document.body.classList.remove(visualThemeClass);
-  }
 }
 
 function sceneLayers(state) {
@@ -1078,6 +849,29 @@ function sceneLayers(state) {
     throw new Error("Runtime snapshot is missing the required surface component contract");
   }
   return state.surface.components;
+}
+
+function runtimeViewportSourceId(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || typeof value.component !== "string" || value.component.length === 0
+    || typeof value.source !== "string" || value.source.length === 0) {
+    throw new Error("Resolved viewport is missing its typed component/source identity");
+  }
+  return value;
+}
+
+function runtimeViewportSourceState(sourceId, state = currentState) {
+  const id = runtimeViewportSourceId(sourceId);
+  if (!Array.isArray(state?.viewportSources)) {
+    throw new Error("Runtime snapshot is missing the typed viewport source registry");
+  }
+  const entry = state.viewportSources.find((candidate) =>
+    candidate?.id?.component === id.component && candidate?.id?.source === id.source
+  );
+  if (!entry || !entry.state || typeof entry.state !== "object" || Array.isArray(entry.state)) {
+    throw new Error(`Viewport source is missing from the runtime registry: ${id.component}/${id.source}`);
+  }
+  return entry.state;
 }
 
 function focusedComponentName(state = currentState) {
@@ -1096,8 +890,7 @@ function componentHasKind(component, kind) {
   if (component.kind === kind) {
     return true;
   }
-  return Boolean(component.children?.some((child) => componentHasKind(child, kind))
-    || component.elseChildren?.some((child) => componentHasKind(child, kind)));
+  return Boolean(component.children?.some((child) => componentHasKind(child, kind)));
 }
 
 function componentSizingKind(component) {
@@ -1123,8 +916,7 @@ function componentContainsSizingKind(component, sizing) {
   if (componentSizingKind(component) === sizing) {
     return true;
   }
-  return Boolean(component?.children?.some((child) => componentContainsSizingKind(child, sizing))
-    || component?.elseChildren?.some((child) => componentContainsSizingKind(child, sizing)));
+  return Boolean(component?.children?.some((child) => componentContainsSizingKind(child, sizing)));
 }
 
 function applySizingKind(element, component) {
@@ -1164,10 +956,6 @@ function findComponentByKind(components, kind) {
     if (found) {
       return found;
     }
-    const elseFound = findComponentByKind(component.elseChildren || [], kind);
-    if (elseFound) {
-      return elseFound;
-    }
   }
   return null;
 }
@@ -1177,7 +965,7 @@ function currentSceneHasPuzzle() {
 }
 
 function currentSceneAcceptsModelInput() {
-  return stateAcceptsModelInput(currentState || puzzleBoot || {});
+  return stateAcceptsModelInput(currentState);
 }
 
 function isControlPointerTarget(target) {
@@ -1186,22 +974,24 @@ function isControlPointerTarget(target) {
 
 function sceneInteractionProfile(scene = currentSceneDef(), options = {}) {
   const state = options.state || currentState || {};
-  const standardChoices = scene ? standardChoiceFocusCells(scene) : [];
+  const standardChoices = resolvedChoiceNodes(scene?.components || []);
   return {
     acceptsModelInput: stateAcceptsModelInput(state),
     standardChoices,
   };
 }
 
-function currentSceneLayer(state = currentState, scene = currentSceneDef()) {
-  const layers = sceneLayers(state || {});
-  return layers.find((layer) => scene?.name && layer.name === scene.name)
-    || layers.find((layer) => layer.focused === true)
-    || layers[0]
-    || null;
+function resolvedChoiceNodes(components, choices = []) {
+  for (const component of components || []) {
+    if (component.kind === "choice") {
+      choices.push(component);
+    }
+    resolvedChoiceNodes(component.children || [], choices);
+  }
+  return choices;
 }
 
-function stateAcceptsModelInput(state = currentState || puzzleBoot || {}) {
+function stateAcceptsModelInput(state = currentState) {
   return state?.acceptsModelInput === true
     || standaloneRuntime?.editorPreviewInputEnabled === true;
 }
@@ -1240,27 +1030,20 @@ function renderComponent(component, scope = {}) {
     case "row":
     case "column":
       return renderContainer(component, scope);
-    case "conditional":
-      return renderConditional(component, scope);
     default:
       throw new Error(`Unsupported scene component: ${String(component.kind || "unknown")}`);
   }
 }
 
 function renderPuzzle(component, scope = {}) {
-  const layer = scope.__sceneLayer;
-  const scene = layer?.scene || currentState.scene;
-  if (!scene) {
-    const empty = document.createElement("div");
-    empty.hidden = true;
-    return empty;
-  }
+  const sourceId = runtimeViewportSourceId(component.source);
+  const scene = runtimeViewportSourceState(sourceId);
   const root = document.createElement("div");
   root.className = "board";
   root.dataset.frameComponent = "true";
-  root.dataset.source = component.source || "";
-  root.dataset.scene = layer?.name || focusedComponentName(currentState);
-  const key = `${root.dataset.scene}:${root.dataset.source}`;
+  root.dataset.source = sourceId.source;
+  root.dataset.scene = sourceId.component;
+  const key = `${sourceId.component}:${sourceId.source}`;
   const renderer = new window.PuzzleRenderer(root, {
     renderMode: "canvas",
   });
@@ -1275,8 +1058,9 @@ function renderPuzzle3Frame(component, scope = {}) {
   if (!window.Puzzle3DFrameFixture || !window.Puzzle3DFrameAssets || !window.Puzzle3Component) {
     throw new Error("Puzzle3 component assets are unavailable.");
   }
-  const sceneName = scope.__sceneDef?.name || scope.__sceneLayer?.name || focusedComponentName(currentState);
-  const source = component.source || "board";
+  const sourceId = runtimeViewportSourceId(component.source);
+  const sceneName = sourceId.component;
+  const source = sourceId.source;
   const key = `${sceneName}:${source}`;
   let entry = puzzle3Controllers.get(key);
   if (!entry) {
@@ -1351,15 +1135,15 @@ function reportPuzzle3ComponentError(failure = {}) {
 }
 
 function puzzle3FrameFixture(sceneName, source = "board") {
-  const sessionSnapshot = currentState?.scenePuzzleState?.[source];
-  if (sessionSnapshot && typeof sessionSnapshot === "object") {
-    return mergePuzzle3SessionSnapshot(window.Puzzle3DFrameFixture, sessionSnapshot);
-  }
   const fixture = JSON.parse(JSON.stringify(window.Puzzle3DFrameFixture));
   if (puzzle3PreviewSurface) {
     return puzzle3PreviewSurfaceFixture(fixture, sceneName);
   }
-  throw new Error(`Puzzle3 session snapshot is missing for component source: ${source}`);
+  const sessionSnapshot = runtimeViewportSourceState({
+    component: sceneName,
+    source,
+  });
+  return mergePuzzle3SessionSnapshot(window.Puzzle3DFrameFixture, sessionSnapshot);
 }
 
 function mergePuzzle3SessionSnapshot(fixture, sessionSnapshot) {
@@ -1399,14 +1183,23 @@ function normalizePuzzle3PreviewSurface(update = null) {
   const payload = update.type === PREVIEW_SURFACE_UPDATE_MESSAGE
     ? update.payload || {}
     : legacyPuzzle3LevelPreviewPayload(update);
-  const component = update.component || update.modelComponent || {};
+  const component = update.component || update.modelComponent;
+  if (!component || typeof component !== "object" || component.kind !== "puzzle3") {
+    throw new Error("Puzzle3 preview update is missing its typed component");
+  }
+  const source = runtimeViewportSourceId(component.source);
+  if (update.scene !== undefined && update.scene !== source.component) {
+    throw new Error(
+      `Puzzle3 preview scene ${String(update.scene)} does not match source component ${source.component}`,
+    );
+  }
   return {
     update,
-    sceneName: update.scene || "__editor_model_preview__",
+    sceneName: source.component,
     payload,
     component: {
       kind: "puzzle3",
-      source: component.source || update.source || "__editor_model_preview__",
+      source,
       layout: component.layout || update.layout || {},
     },
   };
@@ -1527,11 +1320,10 @@ function puzzle3PreviewSurfaceFixture(source, sceneName) {
       };
     }
   }
-  const previewSceneName = sceneName || surface.sceneName || "__editor_model_preview__";
-  next.scenes = [{
-    name: previewSceneName,
-    components: [surface.component || { kind: "puzzle3", source: "__editor_model_preview__" }],
-  }];
+  const previewSceneName = sceneName || surface.sceneName;
+  if (!previewSceneName || !surface.component) {
+    throw new Error("Puzzle3 preview surface is missing its typed component identity");
+  }
   next.surface = {
     root: previewSceneName,
     focus: previewSceneName,
@@ -1542,10 +1334,11 @@ function puzzle3PreviewSurfaceFixture(source, sceneName) {
       placement: "root",
       visibility: "visible",
       modal: false,
-      focused: true,
-      scene: null,
-      sceneState: {},
-      scenePuzzles: [],
+      presentation: {
+        name: previewSceneName,
+        layout: {},
+        components: [surface.component],
+      },
     }],
   };
   return next;
@@ -1560,7 +1353,10 @@ function syncPuzzle3ComponentLevel(entry) {
     return;
   }
   const sceneName = entry.root.dataset.scene;
-  const source = entry.root.dataset.source || "board";
+  const source = entry.root.dataset.source;
+  if (!sceneName || !source) {
+    throw new Error("Puzzle3 viewport controller is missing its typed source identity");
+  }
   const snapshot = puzzle3FrameFixture(sceneName, source);
   entry.controller.replaceSnapshot(snapshot);
 }
@@ -1590,13 +1386,7 @@ function renderText(component, scope = {}) {
   const text = document.createElement("p");
   text.className = "view-text";
   text.dataset.textRole = component.role || "body";
-  if (component.source === "expr") {
-    text.textContent = resolveLabel(component.content, scope);
-  } else if (component.source === "path") {
-    text.textContent = String(resolveViewPath(component.path, scope) ?? "");
-  } else {
-    text.textContent = component.value || "";
-  }
+  text.textContent = component.value || "";
   if (component.textAlign) {
     text.style.textAlign = sceneTextAlignCss(component.textAlign);
   }
@@ -1610,15 +1400,16 @@ function renderButton(component, scope = {}) {
   button.type = "button";
   setControlLabel(
     button,
-    resolveLabel(component.label, scope) || sceneTitle(effectLabel(component.effect)),
+    component.label,
   );
   annotateSceneEditorComponent(button, component, scope);
   button.addEventListener("click", () => {
     if (selectSceneEditorComponent(component, scope)) {
       return;
     }
-    runEffectActivationConfirm(button, component.effect);
+    sendSceneActionToken(component.actionToken);
   });
+  button.disabled = !component.actionToken;
   applySizingKind(button, component);
   applySceneLayout(button, component.layout);
   return button;
@@ -1629,35 +1420,21 @@ function renderChoice(component, scope = {}) {
   choice.type = "button";
   setControlLabel(
     choice,
-    resolveLabel(component.label, scope),
+    component.label,
   );
   choice.classList.add("standard-choice");
   annotateSceneEditorComponent(choice, component, scope);
-  const counter = scope.__standardChoiceCounter || { value: 0 };
-  scope.__standardChoiceCounter = counter;
-  const index = counter.value;
-  counter.value += 1;
-  choice.dataset.standardChoiceIndex = String(index);
-  choice.classList.toggle("is-selected", index === standardChoiceCursor(scope.__sceneDef));
+  choice.classList.toggle("is-selected", component.selected === true);
   choice.addEventListener("click", () => {
     if (selectSceneEditorComponent(component, scope)) {
       return;
     }
-    standardChoiceCursors.set(scope.__sceneDef.name, index);
-    syncStandardChoiceSelection(choice, index);
-    runEffectActivationConfirm(choice, component.effect);
+    sendSceneActionToken(component.actionToken);
   });
+  choice.disabled = !component.actionToken;
   applySizingKind(choice, component);
   applySceneLayout(choice, component.layout);
   return choice;
-}
-
-function syncStandardChoiceSelection(choice, selectedIndex) {
-  const root = choice.closest(".scene-layer") || choice.parentElement || document;
-  root.querySelectorAll(".standard-choice").forEach((item) => {
-    item.classList.toggle("is-selected", Number(item.dataset.standardChoiceIndex) === selectedIndex);
-  });
-  scrollSelectedChoiceIntoView(root);
 }
 
 function scrollSelectedChoiceIntoView(root = screenView) {
@@ -1681,20 +1458,7 @@ function scrollSelectedChoiceIntoView(root = screenView) {
 }
 
 function setControlLabel(control, label) {
-  control.replaceChildren(...controlLabelNodes(label));
-}
-
-function controlLabelNodes(label) {
-  const left = document.createElement("span");
-  left.className = "ps-control-edge is-left";
-  left.setAttribute("aria-hidden", "true");
-  const text = document.createElement("span");
-  text.className = "ps-control-label";
-  text.textContent = label;
-  const right = document.createElement("span");
-  right.className = "ps-control-edge is-right";
-  right.setAttribute("aria-hidden", "true");
-  return [left, text, right];
+  control.textContent = label;
 }
 
 /* puzzle-host:optional:scene-editor:start */
@@ -1736,81 +1500,6 @@ function sameSceneEditorPath(left, right) {
 }
 /* puzzle-host:optional:scene-editor:end */
 
-function runEffectActivationConfirm(control, effect) {
-  if (!shouldDelayActivationConfirm()) {
-    return sendSceneEffect(effect);
-  }
-  return runActivationConfirm(control, () => sendSceneEffect(effect));
-}
-
-function runActivationConfirm(control, run) {
-  if (!shouldDelayActivationConfirm()) {
-    return run();
-  }
-  const target = control;
-  if (!target) {
-    return run();
-  }
-  if (target.dataset.confirming === "true") {
-    return undefined;
-  }
-  target.dataset.confirming = "true";
-  applyActivationConfirmGlyphs(target);
-  target.classList.add("is-confirming");
-  window.setTimeout(() => {
-    Promise.resolve(run())
-      .finally(() => {
-        target.classList.remove("is-confirming");
-        clearActivationConfirmGlyphs(target);
-        delete target.dataset.confirming;
-      })
-      .catch((error) => showError(error));
-  }, activationConfirmDelayMs);
-  return undefined;
-}
-
-function shouldDelayActivationConfirm() {
-  return document.body.classList.contains("theme-puzzlescript");
-}
-
-function applyActivationConfirmGlyphs(target) {
-  if (!document.body.classList.contains("theme-puzzlescript")) {
-    return;
-  }
-  clearActivationConfirmGlyphs(target);
-  target.style.setProperty("--ps-confirm-fill", JSON.stringify(puzzlescriptConfirmFill(target)));
-}
-
-function clearActivationConfirmGlyphs(target) {
-  target.style.removeProperty("--ps-confirm-fill");
-}
-
-function puzzlescriptConfirmFill(target) {
-  const rect = target.getBoundingClientRect();
-  const charWidth = puzzlescriptControlCharWidth(target);
-  const count = Math.max(1, Math.ceil(rect.width / charWidth));
-  return "#".repeat(count);
-}
-
-function puzzlescriptControlCharWidth(target) {
-  const probe = document.createElement("span");
-  probe.textContent = "#";
-  probe.style.position = "absolute";
-  probe.style.visibility = "hidden";
-  probe.style.pointerEvents = "none";
-  probe.style.whiteSpace = "nowrap";
-  probe.style.font = window.getComputedStyle(target).font;
-  document.body.append(probe);
-  const width = probe.getBoundingClientRect().width;
-  probe.remove();
-  return Number.isFinite(width) && width > 0 ? width : 1;
-}
-
-function activationConfirmLabel(target) {
-  const labelNode = target.querySelector?.(".ps-control-label");
-  return (labelNode?.textContent || target.textContent || "").trim();
-}
-
 function renderContainer(component, scope = {}) {
   const container = document.createElement("div");
   container.className = `view-${component.kind}`;
@@ -1825,19 +1514,6 @@ function renderContainer(component, scope = {}) {
     __componentPath: [...(scope.__componentPath || []), "children"],
   });
   return container;
-}
-
-function renderConditional(component, scope = {}) {
-  const fragment = document.createDocumentFragment();
-  const conditionTrue = isSceneConditionTrue(component.condition, scope);
-  const children = conditionTrue
-    ? component.children || []
-    : component.elseChildren || [];
-  renderSurfaceComponents(children, fragment, {
-    ...scope,
-    __componentPath: [...(scope.__componentPath || []), conditionTrue ? "children" : "elseChildren"],
-  });
-  return fragment;
 }
 
 function applySceneLayout(element, layout, options = {}) {
@@ -1892,128 +1568,8 @@ function findComponent(components, predicate) {
     if (found) {
       return found;
     }
-    const elseFound = findComponent(component.elseChildren || [], predicate);
-    if (elseFound) {
-      return elseFound;
-    }
   }
   return null;
-}
-
-function resolveViewPath(path, scope = {}) {
-  const parts = Array.isArray(path)
-    ? path.map(String).filter(Boolean)
-    : String(path || "").split(".").filter(Boolean);
-  if (parts.length === 0) {
-    return "";
-  }
-  if (parts.length === 1) {
-    if (Object.prototype.hasOwnProperty.call(scope, parts[0])) {
-      return scope[parts[0]];
-    }
-    if (currentState && Object.prototype.hasOwnProperty.call(currentState, parts[0])) {
-      return currentState[parts[0]];
-    }
-    return (scope.__sceneState || currentState?.sceneState)?.[parts[0]]
-      ?? currentState?.gameState?.[parts[0]];
-  }
-  let value = Object.prototype.hasOwnProperty.call(scope, parts[0])
-    ? scope[parts[0]]
-    : currentState?.[parts[0]];
-  if (value === undefined) {
-    value = scope.__componentProperties?.[parts[0]];
-  }
-  if (value === undefined) {
-    value = (scope.__sceneState || currentState?.sceneState)?.[parts[0]];
-  }
-  if (value === undefined) {
-    value = currentState?.gameState?.[parts[0]];
-  }
-  for (const part of parts.slice(1)) {
-    value = value?.[part];
-  }
-  return value;
-}
-
-function resolveLabel(label, scope = {}) {
-  if (!label) {
-    return "";
-  }
-  if (typeof label === "string") {
-    return label;
-  }
-  if (label.kind === "text") {
-    return label.value || "";
-  }
-  if (label.kind === "int" || label.kind === "bool") {
-    return String(label.value);
-  }
-  if (label.kind === "path") {
-    return String(resolveViewPath(label.path, scope) ?? "");
-  }
-  if (label.kind === "call") {
-    if (label.name === "join") {
-      return (label.args || []).map((arg) => resolveLabel(arg, scope)).join("");
-    }
-    return displayExprText(label, scope);
-  }
-  if (label.kind === "binary") {
-    const value = resolveExprValue(label, scope);
-    return value === undefined || value === null ? "" : String(value);
-  }
-  if (label.kind === "if") {
-    return resolveLabel(resolveBoolExpr(label.condition, scope) ? label.then : label.else, scope);
-  }
-  throw new Error(`Unsupported scene label expression: ${String(label.kind || "unknown")}`);
-}
-
-function resolveBoolExpr(expr, scope = {}) {
-  const value = resolveExprValue(expr, scope);
-  if (typeof value !== "boolean") {
-    throw new Error(`Scene boolean expression resolved to ${value === undefined ? "undefined" : typeof value}`);
-  }
-  return value;
-}
-
-function resolveExprValue(expr, scope = {}) {
-  if (!expr) {
-    throw new Error(`Unsupported scene expression call: ${String(expr.name || "unknown")}`);
-  }
-  if (typeof expr === "string") {
-    return expr;
-  }
-  if (expr.kind === "bool" || expr.kind === "int" || expr.kind === "text") {
-    return expr.value;
-  }
-  if (expr.kind === "path") {
-    return resolveViewPath(expr.path, scope);
-  }
-  if (expr.kind === "call") {
-    if (expr.name === "join") {
-      return (expr.args || []).map((arg) => resolveLabel(arg, scope)).join("");
-    }
-    return undefined;
-  }
-  if (expr.kind === "binary") {
-    if (expr.op === "and") {
-      return resolveBoolExpr(expr.left, scope) && resolveBoolExpr(expr.right, scope);
-    }
-    const left = resolveExprValue(expr.left, scope);
-    const right = resolveExprValue(expr.right, scope);
-    if (left === undefined || right === undefined) {
-      return undefined;
-    }
-    if (expr.op === "eq") {
-      return left === right;
-    }
-    if (expr.op === "neq") {
-      return left !== right;
-    }
-  }
-  if (expr.kind === "if") {
-    return resolveExprValue(resolveBoolExpr(expr.condition, scope) ? expr.then : expr.else, scope);
-  }
-  throw new Error(`Unsupported scene expression: ${String(expr.kind || "unknown")}`);
 }
 
 function focusShell() {
@@ -2023,114 +1579,26 @@ function focusShell() {
   shell.focus({ preventScroll: true });
 }
 
-function isModalDismissKey(event) {
-  const rawKey = String(event.key || "");
-  const key = normalizedKeyName(rawKey);
-  if (rawKey === "Enter"
-    || key === "Space"
-    || key === "x") {
-    return true;
-  }
+function runtimeKeyTriggerFromEvent(event) {
   if (event.altKey || event.ctrlKey || event.metaKey) {
-    return false;
+    return null;
   }
-  return effectsForKey(event).length > 0;
-}
-
-function componentEventAcceptsKey(binding, event) {
-  if (binding?.keys === "input") {
-    return isModalDismissKey(event);
+  const key = String(event.key || "");
+  const named = {
+    ArrowUp: "arrow_up",
+    ArrowDown: "arrow_down",
+    ArrowLeft: "arrow_left",
+    ArrowRight: "arrow_right",
+    Enter: "enter",
+    " ": "space",
+    Escape: "escape",
+    Tab: "tab",
+    Backspace: "backspace",
+  };
+  if (named[key]) {
+    return { kind: named[key] };
   }
-  if (Array.isArray(binding?.keys)) {
-    const key = normalizedKeyName(String(event.key || ""));
-    return binding.keys.includes(key);
-  }
-  return false;
-}
-
-function standardSessionActionForKey(key) {
-  if (key === "z") {
-    return { kind: "undo" };
-  }
-  if (key === "y") {
-    return { kind: "redo" };
-  }
-  return null;
-}
-
-function effectsForKey(event) {
-  if (!currentState) {
-    return [];
-  }
-  if (event.altKey || event.ctrlKey || event.metaKey) {
-    return [];
-  }
-  const rawKey = String(event.key || "");
-  const key = normalizedKeyName(rawKey);
-  const sessionAction = standardSessionActionForKey(key);
-  if (sessionAction) {
-    return [{ kind: "session_action", action: sessionAction }];
-  }
-  const keyTokens = logicalKeyTokens(rawKey);
-  const scene = currentSceneDef();
-  const profile = sceneInteractionProfile(scene);
-  const binding = scene?.keys?.find((binding) => binding.keys.some((candidate) => keyTokens.includes(candidate)));
-  if (binding) {
-    return [{ kind: "scene_effect", effect: binding.effect }];
-  }
-
-  const input = (currentState.inputs || []).find((input) =>
-    keyTokens.includes(input.key)
-    || keyTokens.includes(input.arrow)
-    || (input.keys || []).some((candidate) => keyTokens.includes(candidate))
-  );
-  const standardInput = standardChoiceInputForKey(key);
-  if (standardInput && profile.standardChoices.length > 0) {
-    return [{ kind: "standard_choice", input: standardInput }];
-  }
-  if (input && profile.acceptsModelInput) {
-    return [{ kind: "model_input", name: input.name }];
-  }
-
-  return [];
-}
-
-function normalizedKeyName(key) {
-  if (key === " ") {
-    return "Space";
-  }
-  if (key.length === 1) {
-    return key.toLowerCase();
-  }
-  return key;
-}
-
-function logicalKeyTokens(key) {
-  const normalized = normalizedKeyName(key);
-  return normalized ? [normalized] : [];
-}
-
-function standardChoiceInputForKey(key) {
-  if (key === "w" || key === "ArrowUp") {
-    return "up";
-  }
-  if (key === "s" || key === "ArrowDown") {
-    return "down";
-  }
-  if (key === "a" || key === "ArrowLeft") {
-    return "left";
-  }
-  if (key === "d" || key === "ArrowRight") {
-    return "right";
-  }
-  if (isStandardChoiceConfirmKey(key)) {
-    return "enter";
-  }
-  return null;
-}
-
-function isStandardChoiceConfirmKey(key) {
-  return key === "Enter" || key === "Space" || key === "x";
+  return [...key].length === 1 ? { kind: "character", value: key } : null;
 }
 
 function inputByName(name) {
@@ -2141,47 +1609,28 @@ function inputByName(name) {
 }
 
 function currentSceneDef() {
-  const source = currentState || puzzleBoot || {};
+  const source = currentState;
   const name = focusedComponentName(source);
   return componentDefinitionByName(name, source);
 }
 
-function componentDefinitionByName(name, source = currentState || puzzleBoot || {}) {
-  const definitions = componentDefinitionsForSource(source);
-  return definitions.find((definition) => definition.name === name) || null;
+function componentDefinitionByName(name, source = currentState) {
+  const layer = sceneLayers(source).find((candidate) => candidate.id === name);
+  return layer?.presentation || null;
 }
 
 function sceneDefByName(name) {
-  const source = currentState || puzzleBoot || {};
+  const source = currentState;
   return componentDefinitionByName(name, source);
-}
-
-function componentDefinitionsForSource(source) {
-  return [...(nonEmptyArray(source?.scenes) || []), ...STANDARD_COMPONENT_DEFINITIONS];
 }
 
 function nonEmptyArray(value) {
   return Array.isArray(value) && value.length > 0 ? value : null;
 }
 
-function isSceneConditionTrue(condition, scope = {}) {
-  if (!condition || typeof condition !== "object") {
-    throw new Error("Scene condition must be an expression object");
-  }
-  return resolveBoolExpr(condition, scope);
-}
-
 async function sendResolvedInput(input) {
-  if (input?.kind === "standard_choice") {
-    handleStandardChoiceInput(input.input);
-    return;
-  }
   if (input?.kind === "model_input") {
     await sendModelInput(input.name);
-    return;
-  }
-  if (input?.kind === "scene_effect") {
-    await sendSceneEffect(input.effect);
     return;
   }
   if (input?.kind === "session_action") {
@@ -2191,15 +1640,11 @@ async function sendResolvedInput(input) {
   throw new Error(`Unsupported resolved input: ${String(input?.kind || "unknown")}`);
 }
 
-async function sendSceneEffect(effect) {
-  if (!effect || typeof effect !== "object" || Array.isArray(effect)) {
-    throw new Error("Scene effect must be an object.");
+async function sendSceneActionToken(token) {
+  if (!token || typeof token !== "object" || Array.isArray(token)) {
+    throw new Error("Resolved scene action token is unavailable.");
   }
-  await postSessionAction({ kind: "scene_effect", effect });
-}
-
-async function sendComponentEvent(instance, event) {
-  await postSessionAction({ kind: "component_event", instance, event });
+  await postSessionAction({ kind: "scene_action", token });
 }
 
 function applyPresentationEvents(events) {
@@ -2232,8 +1677,9 @@ function dispatchNextPresentationEvent() {
         throw new Error("Animation batch must contain at least one animation event.");
       }
       applyPresentationAnimations(event, event.animations);
+      reportPresentationEventConsumed();
     } else {
-      soundRuntime.applyEvents([event]);
+      throw new Error(`Unsupported presentation event: ${String(event.kind || "unknown")}`);
     }
   }
   dispatchingPresentationEvents = false;
@@ -2254,7 +1700,7 @@ async function resumePendingSessionTurn() {
     currentState.busy = true;
   }
   try {
-    render(await requestJson("/api/resume", { method: "POST" }));
+    await postSessionAction({ kind: "resume" });
   } catch (error) {
     if (currentState) {
       currentState.busy = false;
@@ -2267,32 +1713,13 @@ async function resumePendingSessionTurn() {
 }
 
 function applyPresentationAnimations(event, animations) {
-  const currentPuzzles = currentState?.scenePuzzles || [];
-  if (!currentState
-    || focusedComponentName(currentState) !== event.scene
-    || currentState.levelIndex !== event.levelIndex
-    || !currentPuzzles.includes(event.puzzle)) {
+  if (!currentState || currentState.levelIndex !== event.levelIndex) {
     return;
   }
-  const puzzleSnapshot = currentState.scenePuzzleState?.[event.puzzle];
-  if (!puzzleSnapshot || typeof puzzleSnapshot !== "object" || Array.isArray(puzzleSnapshot)) {
-    throw new Error(`Animation target puzzle snapshot is missing: ${event.puzzle}`);
-  }
+  const puzzleSnapshot = runtimeViewportSourceState(event.source);
   const batchId = ++presentationAnimationBatchId;
   puzzleSnapshot.animationEvents = animations;
   puzzleSnapshot.animationBatchId = batchId;
-  if (currentState.scene) {
-    currentState.scene.animationEvents = animations;
-    currentState.scene.animationBatchId = batchId;
-  }
-  const layer = sceneLayers(currentState).find((candidate) =>
-    (candidate?.name === event.scene || candidate?.scene?.name === event.scene)
-      && (candidate?.scenePuzzles || []).includes(event.puzzle)
-  );
-  if (layer?.scene) {
-    layer.scene.animationEvents = animations;
-    layer.scene.animationBatchId = batchId;
-  }
   renderSurface(currentState);
 }
 
@@ -2314,6 +1741,7 @@ function startPresentationWait(event) {
       return;
     }
     waitTimer.done = true;
+    reportPresentationEventConsumed();
     activeWaitTimers.delete(waitTimer);
     clientPendingWaits = Math.max(0, clientPendingWaits - 1);
     pendingSessionResume = pendingSessionResume || waitTimer.resumesSession;
@@ -2339,15 +1767,20 @@ function startPresentationWait(event) {
 }
 
 function inputBufferConfig() {
-  const source =
-    currentState?.inputBuffer ||
-    currentState?.scene?.settings?.inputBuffer ||
-    puzzleBoot.inputBuffer ||
-    {};
+  const source = currentState?.inputBuffer;
+  if (
+    !source
+    || typeof source.queueDuringWait !== "boolean"
+    || typeof source.fastForwardWait !== "boolean"
+    || !Number.isFinite(source.minWaitMs)
+    || source.minWaitMs < 0
+  ) {
+    throw new Error("Runtime snapshot is missing the required inputBuffer contract");
+  }
   return {
-    queueDuringWait: source.queueDuringWait !== false,
-    fastForwardWait: source.fastForwardWait !== false,
-    minWaitMs: Math.max(0, Number(source.minWaitMs ?? 50)),
+    queueDuringWait: source.queueDuringWait,
+    fastForwardWait: source.fastForwardWait,
+    minWaitMs: source.minWaitMs,
   };
 }
 
@@ -2395,7 +1828,7 @@ function sendModelInputNow(input) {
   if (sendHostModelInput(input)) {
     return undefined;
   }
-  return post(`/api/input/${encodeURIComponent(input)}`);
+  return postSessionAction({ kind: "input", name: input });
 }
 
 async function drainQueuedModelInput() {
@@ -2412,331 +1845,16 @@ async function drainQueuedModelInput() {
   }
 }
 
-function standardChoiceFocusCells(scene = currentSceneDef()) {
-  if (!scene) {
-    return [];
-  }
-  const footprint = componentColumnFootprint(scene.components || [], {
-    focusKind: "choice",
-    scope: {
-      __sceneDef: scene,
-      __sceneState: currentState?.sceneState || {},
-    },
-  });
-  return footprint.cells.map((cell, index) => ({ ...cell, index }));
-}
-
-function componentFootprint(component, context = {}) {
-  if (!component) {
-    return emptyFootprint();
-  }
-  const focusKind = context.focusKind || "choice";
-  if (focusKind === "choice" && component.kind === "choice") {
-    return {
-      width: 1,
-      height: 1,
-      cells: [{ x: 0, y: 0, kind: "component", component, scope: context.scope || {} }],
-    };
-  }
-  if (["text", "frame", "puzzle", "puzzle3"].includes(component.kind)) {
-    return emptyCellFootprint();
-  }
-  if (component.kind === "row") {
-    return componentRowFootprint(component.children || [], context);
-  }
-  if (component.kind === "column" || component.kind === "box") {
-    return componentColumnFootprint(component.children || [], context);
-  }
-  if (component.kind === "conditional") {
-    return componentColumnFootprint(
-      isSceneConditionTrue(component.condition, context.scope || {})
-        ? component.children || []
-        : component.elseChildren || [],
-      context,
-    );
-  }
-  return emptyCellFootprint();
-}
-
-function stackColumnFootprints(footprints) {
-  let width = 0;
-  let height = 0;
-  const cells = [];
-  for (const child of footprints || []) {
-    for (const cell of child.cells) {
-      cells.push({ ...cell, y: cell.y + height });
-    }
-    width = Math.max(width, child.width);
-    height += child.height;
-  }
-  return {
-    width: Math.max(1, width),
-    height: Math.max(1, height),
-    cells,
-  };
-}
-
-function componentRowFootprint(components, context = {}) {
-  let width = 0;
-  let height = 0;
-  const cells = [];
-  for (const component of components || []) {
-    const child = componentFootprint(component, context);
-    for (const cell of child.cells) {
-      cells.push({ ...cell, x: cell.x + width });
-    }
-    width += child.width;
-    height = Math.max(height, child.height);
-  }
-  return {
-    width: Math.max(1, width),
-    height: Math.max(1, height),
-    cells,
-  };
-}
-
-function componentColumnFootprint(components, context = {}) {
-  let width = 0;
-  let height = 0;
-  const cells = [];
-  for (const component of components || []) {
-    const child = componentFootprint(component, context);
-    for (const cell of child.cells) {
-      cells.push({ ...cell, y: cell.y + height });
-    }
-    width = Math.max(width, child.width);
-    height += child.height;
-  }
-  return {
-    width: Math.max(1, width),
-    height: Math.max(1, height),
-    cells,
-  };
-}
-
-function emptyFootprint() {
-  return { width: 0, height: 0, cells: [] };
-}
-
-function emptyCellFootprint() {
-  return { width: 1, height: 1, cells: [] };
-}
-
-function standardChoiceCursor(scene = currentSceneDef()) {
-  const cells = standardChoiceFocusCells(scene);
-  const max = Math.max(0, cells.length - 1);
-  const cursor = Number(standardChoiceCursors.get(scene?.name) || 0);
-  return Math.max(0, Math.min(max, cursor));
-}
-
-function handleStandardChoiceInput(input) {
-  const scene = currentSceneDef();
-  const cells = standardChoiceFocusCells(scene);
-  if (!scene || cells.length === 0) {
-    return;
-  }
-  const cursor = standardChoiceCursor(scene);
-  if (["up", "down", "left", "right"].includes(input)) {
-    const next = standardChoiceDirectionalTarget(cells, cursor, input);
-    if (next !== null) {
-      standardChoiceCursors.set(scene.name, next);
-      render(currentState);
-    }
-    return;
-  }
-  if (input === "enter") {
-    const selectedChoice = document.querySelector(".standard-choice.is-selected");
-    const cell = cells[cursor];
-    runEffectActivationConfirm(selectedChoice, cell?.component?.effect || null);
-  }
-}
-
-function standardChoiceDirectionalTarget(cells, cursor, direction) {
-  const current = cells[cursor];
-  if (!current) {
-    return null;
-  }
-  const candidates = cells.filter((cell) => {
-    if (direction === "left") {
-      return cell.y === current.y && cell.x < current.x;
-    }
-    if (direction === "right") {
-      return cell.y === current.y && cell.x > current.x;
-    }
-    if (direction === "up") {
-      return cell.x === current.x && cell.y < current.y;
-    }
-    if (direction === "down") {
-      return cell.x === current.x && cell.y > current.y;
-    }
-    return false;
-  });
-  if (candidates.length === 0) {
-    return null;
-  }
-  candidates.sort((left, right) => {
-    if (direction === "left") {
-      return right.x - left.x;
-    }
-    if (direction === "right") {
-      return left.x - right.x;
-    }
-    if (direction === "up") {
-      return right.y - left.y;
-    }
-    return left.y - right.y;
-  });
-  return candidates[0].index;
-}
-
-function effectLabel(effect) {
-  if (!effect) {
-    return "";
-  }
-  if (typeof effect === "string") {
-    return effect;
-  }
-  if (effect.kind === "command" || effect.kind === "input" || effect.kind === "component_effect" || effect.kind === "routine_call") {
-    return effect.name;
-  }
-  if (effect.kind === "message") {
-    return "message";
-  }
-  if (effect.kind === "wait") {
-    return "wait";
-  }
-  if (effect.kind === "conditional") {
-    return effectLabel(effect.effect?.effect || effect.effect);
-  }
-  if (effect.kind === "play_sfx" || effect.kind === "play_music" || effect.kind === "pause_music" || effect.kind === "resume_music") {
-    return effect.name;
-  }
-  if (effect.kind === "stop_music") {
-    return "stop music";
-  }
-  if (["goto", "enter", "create", "reset", "delete", "show", "hide", "toggle", "focus"].includes(effect.kind)) {
-    return effectCommandName(effect);
-  }
-  if (effect.kind === "start_level") {
-    return `goto ${effect.scene}`;
-  }
-  if (effect.kind === "continue_level") {
-    return `goto ${effect.scene}`;
-  }
-  if (effect.kind === "puzzle_next_level") {
-    return effect.target ? `${effect.target}.next_level` : "next_level";
-  }
-  if (effect.kind === "puzzle_previous_level") {
-    return effect.target ? `${effect.target}.previous_level` : "previous_level";
-  }
-  if (effect.kind === "puzzle_reset") {
-    return effect.target ? `${effect.target}.restart` : "restart";
-  }
-  if (effect.kind === "puzzle_goto_level") {
-    return effect.target ? `${effect.target}.goto` : "goto";
-  }
-  if (effect.kind === "back") {
-    return "back";
-  }
-  return "";
-}
-
-function effectCommandName(effect) {
-  return effect?.scene || effect?.screen || "";
-}
-
-function displayExprText(expr, scope = {}) {
-  if (!expr) {
-    return "";
-  }
-  if (expr.kind === "text") {
-    return JSON.stringify(expr.value || "");
-  }
-  if (expr.kind === "int" || expr.kind === "bool") {
-    return String(expr.value);
-  }
-  if (expr.kind === "path") {
-    const resolved = resolveViewPath(expr.path, scope);
-    return resolved === undefined || resolved === null ? expr.path : displayExprValueText(resolved);
-  }
-  if (expr.kind === "call") {
-    return `${expr.name}(${(expr.args || []).map((arg) => displayExprText(arg, scope)).join(", ")})`;
-  }
-  if (expr.kind === "binary") {
-    const op = expr.op === "and" ? "and" : expr.op === "eq" ? "==" : "!=";
-    return `${displayExprText(expr.left, scope)} ${op} ${displayExprText(expr.right, scope)}`;
-  }
-  if (expr.kind === "if") {
-    return `if ${displayExprText(expr.condition, scope)} { ${displayExprText(expr.then, scope)} } else { ${displayExprText(expr.else, scope)} }`;
-  }
-  return "";
-}
-
-function displayExprValueText(value) {
-  if (typeof value === "object" && value?.kind === "level" && value.name !== undefined) {
-    return JSON.stringify(String(value.name));
-  }
-  return commandPayload(value);
-}
-
-function commandPayload(value) {
-  if (typeof value === "object") {
-    if (value.index !== undefined) {
-      return String(value.index);
-    }
-    if (value.name !== undefined) {
-      return String(value.name);
-    }
-    if (value.label !== undefined) {
-      return String(value.label);
-    }
-  }
-  return String(value);
-}
-
 function dispatchKeyboardInput(event) {
-  const modal = activeModalComponent(currentState);
-  if (modal) {
-    const definition = componentDefinitionByName(modal.definition || modal.name);
-    const eventName = modal.awaitEvent;
-    if (!definition || !eventName) {
-      throw new Error("Active modal component is missing its definition or awaited event");
-    }
-    const binding = definition.events?.[eventName];
-    if (!binding) {
-      throw new Error(`Component definition ${definition.name} does not declare awaited event ${eventName}`);
-    }
-    if (componentEventAcceptsKey(binding, event)) {
-      sendComponentEvent(modal.id, eventName);
-    }
-    return true;
-  }
-
   if (!currentState) {
     return false;
   }
-
-  const effects = effectsForKey(event);
-  if (effects.length === 0) {
+  const trigger = runtimeKeyTriggerFromEvent(event);
+  if (!trigger) {
     return false;
   }
-  const dispatchEffects = event.repeat && (currentState?.busy || clientPendingWaits > 0)
-    ? effects.filter((effect) => effect?.kind !== "model_input")
-    : effects;
-  for (const effect of dispatchEffects) {
-    sendResolvedInput(effect);
-  }
+  postSessionAction({ kind: "key", trigger });
   return true;
-}
-
-function activeModalComponent(state) {
-  const components = state?.surface?.components;
-  if (!Array.isArray(components)) {
-    return null;
-  }
-  return [...components]
-    .reverse()
-    .find((component) => component.modal === true && component.visibility !== "hidden") || null;
 }
 
 document.addEventListener("keydown", (event) => {
@@ -2904,7 +2022,6 @@ window.addEventListener("message", async (event) => {
   /* puzzle-host:optional:solver:end */
 
   if (event.data?.type === "PuzzleStudioKey") {
-    soundRuntime.primePlayback();
     const keyEvent = {
       key: String(event.data.key || ""),
       code: String(event.data.code || ""),
@@ -2958,19 +2075,20 @@ playSurface.addEventListener("pointercancel", () => {
   swipeStart = null;
 });
 
-loadState().catch((error) => {
-  showError(error);
+loadState()
+  .then(async () => {
+    await setAudioVisible(document.visibilityState !== "hidden");
+  })
+  .catch((error) => {
+    showError(error);
+  });
+
+document.addEventListener("visibilitychange", async () => {
+  await setAudioVisible(document.visibilityState !== "hidden");
 });
 
 if (!componentEmbedMode) {
   document.addEventListener("pointerdown", focusShell);
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") {
-      soundRuntime.pauseForHiddenDocument();
-    } else {
-      soundRuntime.resumeAfterVisibleDocument();
-    }
-  });
   installScreenScaleResizeHooks();
 }
 

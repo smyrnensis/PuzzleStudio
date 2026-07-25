@@ -159,23 +159,10 @@ const PUZZLE_GAME_WASM_JS: &str =
 const PUZZLE_GAME_WASM_BG: &[u8] =
     include_bytes!("../../html_play/static/wasm_game/puzzle_wasm_game_bg.wasm");
 #[cfg(feature = "embedded-assets")]
-const PUZZLE_PLAYER_WASM_JS: &str =
-    include_str!("../../html_play/static/wasm_player/puzzle_wasm_player.js");
+const PUZZLE_PLAYER_WASM_JS: &str = include_str!("../static/wasm_player/puzzle_wasm_player.js");
 #[cfg(feature = "embedded-assets")]
 const PUZZLE_PLAYER_WASM_BG: &[u8] =
-    include_bytes!("../../html_play/static/wasm_player/puzzle_wasm_player_bg.wasm");
-#[cfg(feature = "sound-tools")]
-const SEEDED_SFX_JS: &str = include_str!("../../../tools/music_generator/seeded_sfx.mjs");
-#[cfg(feature = "sound-tools")]
-const SEEDED_MUSIC_JS: &str = include_str!("../../../tools/music_generator/seeded_music.mjs");
-#[cfg(feature = "sound-tools")]
-const SEEDED_MUSIC_PLAYER_JS: &str =
-    include_str!("../../../tools/music_generator/seeded_music_player.mjs");
-#[cfg(feature = "sound-tools")]
-const SEEDED_TIMBRE_FIELDS_JS: &str =
-    include_str!("../../../tools/music_generator/seeded_timbre_fields.mjs");
-#[cfg(feature = "sound-tools")]
-const SOUND_EXPORT_JS: &str = include_str!("../../../tools/music_generator/audio_export.mjs");
+    include_bytes!("../static/wasm_player/puzzle_wasm_player_bg.wasm");
 #[cfg(feature = "embedded-assets")]
 const RENDERER_CSS: &str = include_str!("../../html_play/static/renderer.css");
 #[cfg(all(test, feature = "embedded-assets"))]
@@ -586,11 +573,6 @@ impl EditorService {
     }
 }
 
-#[cfg(feature = "sound-tools")]
-pub fn sound_tools_script() -> String {
-    sound_tools_js()
-}
-
 pub fn new_puzzle_source(title: &str) -> String {
     puzzle_authoring::new_puzzle_source(title)
 }
@@ -660,7 +642,23 @@ fn load_base_game_visuals_js(
     source: &str,
 ) -> Result<String, AppError> {
     let assets = puzzle_lang::parse_document_assets(source).map_err(AppError::Diagnostics)?;
-    let image_paths = visual_image_asset_paths(source);
+    let expanded_source = expand_preview_source_under_root(source, puzzle_path, workspace_root)?;
+    let entry_path = puzzle_path
+        .to_str()
+        .ok_or_else(|| AppError::Config("puzzle path is not valid UTF-8".to_string()))?;
+    let manifest = puzzle_lang::workspace_presentation_manifest(
+        entry_path,
+        &[puzzle_lang::WorkspaceSourceDocument {
+            path: entry_path.to_string(),
+            source: expanded_source,
+        }],
+    )
+    .map_err(AppError::Diagnostics)?;
+    let image_paths = manifest
+        .visual_image_assets
+        .iter()
+        .map(|asset| asset.path.clone())
+        .collect::<Vec<_>>();
     let mut scripts = vec![asset_resolver_js(
         puzzle_path,
         workspace_root,
@@ -747,28 +745,6 @@ fn asset_resolver_js(
     Ok(format!(
         "window.PuzzleAssets = {{ files: {files}, url(path) {{ const key = String(path || '').replaceAll('\\\\\\\\', '/'); if (Object.prototype.hasOwnProperty.call(this.files, key)) return this.files[key]; if (/^(?:data:|https?:|#)/.test(key)) return key; throw new Error(`Puzzle asset is not embedded: ${{key}}. Declare it with file \\\"${{key}}\\\" in assets.`); }} }};"
     ))
-}
-
-#[cfg(any(feature = "native-preview", feature = "embedded-assets"))]
-fn visual_image_asset_paths(source: &str) -> Vec<String> {
-    let mut paths = Vec::new();
-    for line in source.lines() {
-        let trimmed = line.trim();
-        let Some(rest) = trimmed.strip_prefix("image ") else {
-            continue;
-        };
-        let rest = rest.trim();
-        let Some(path) = rest
-            .strip_prefix('"')
-            .and_then(|value| value.split_once('"').map(|(path, _)| path))
-        else {
-            continue;
-        };
-        if !paths.iter().any(|existing| existing == path) {
-            paths.push(path.to_string());
-        }
-    }
-    paths
 }
 
 #[cfg(any(feature = "native-preview", feature = "embedded-assets"))]
@@ -1428,9 +1404,6 @@ fn route(request: &HttpRequest, service: &EditorService) -> Vec<u8> {
         }
         ("GET", "/favicon.svg") => http_ok("image/svg+xml", FAVICON_SVG),
         ("GET", "/editor.css") => http_ok("text/css; charset=utf-8", EDITOR_CSS),
-        ("GET", "/sound-tools.js") | ("GET", "/sound-generator.js") => {
-            http_ok("text/javascript; charset=utf-8", &sound_tools_js())
-        }
         ("GET", "/renderer.css") => http_ok("text/css; charset=utf-8", RENDERER_CSS),
         ("GET", "/game.css") => http_ok("text/css; charset=utf-8", &service.state().game_css),
         ("GET", "/editor_boot.js") => http_ok("text/javascript; charset=utf-8", EDITOR_BOOT_JS),
@@ -2110,15 +2083,9 @@ fn export_pages_editor_html(state: &EditorState) -> Result<String, AppError> {
     let mut data = String::new();
     editor_seed_json(&mut data, state);
     let data = escape_script_json(&data);
-    let sound_tools_js = escape_script(&sound_tools_js());
-
     let editor_html = editor_html_with_docs();
 
     Ok(editor_html
-        .replace(
-            r#"<script src="sound-generator.js"></script>"#,
-            &format!("<script>\n{sound_tools_js}\n</script>"),
-        )
         .replace(
             r#"<script src="editor_dom.js"></script>"#,
             &format!(
@@ -2759,62 +2726,6 @@ fn render_docs_inline(value: &str) -> String {
     out
 }
 
-#[cfg(feature = "sound-tools")]
-fn sound_tools_js() -> String {
-    fn module_body(source: &str) -> String {
-        source
-            .lines()
-            .filter(|line| !line.trim_start().starts_with("import "))
-            .collect::<Vec<_>>()
-            .join("\n")
-            .replace("export const ", "const ")
-            .replace("export async function ", "async function ")
-            .replace("export function ", "function ")
-    }
-
-    fn expose_module(source: &str, exports: &[&str]) -> String {
-        let body = module_body(source);
-        format!("{body}\nreturn {{{}}};", exports.join(","))
-    }
-
-    format!(
-        "(() => {{
-  const sfx = (() => {{
-{}
-  }})();
-  const musicPlayer = (() => {{
-{}
-  }})();
-  const musicGenerator = (() => {{
-{}
-{}
-  }})();
-  const music = {{ createPlayer: musicPlayer.createPlayer, generateSong: musicGenerator.generateSong, randomPreset: musicGenerator.randomPreset }};
-  const soundExport = (() => {{
-{}
-  }})();
-  window.PuzzleSoundTools = {{ ...sfx, ...music, ...soundExport }};
-  window.PuzzleSoundGenerator = window.PuzzleSoundTools;
-  window.dispatchEvent(new CustomEvent(\"PuzzleSoundToolsReady\"));
-}})();",
-        expose_module(
-            SEEDED_SFX_JS,
-            &[
-                "SFX_TYPE_OPTIONS",
-                "createSfxPlayer",
-                "createPuzzleScriptSfxPlayer",
-                "generateSoundEffect",
-                "generatePuzzleScriptSoundEffect",
-                "randomSfxPreset",
-            ]
-        ),
-        expose_module(SEEDED_MUSIC_PLAYER_JS, &["createPlayer"]),
-        module_body(SEEDED_TIMBRE_FIELDS_JS),
-        expose_module(SEEDED_MUSIC_JS, &["generateSong", "randomPreset"]),
-        expose_module(SOUND_EXPORT_JS, &["exportMusicLoop", "exportSoundEffect",]),
-    )
-}
-
 fn source_json(state: &EditorState) -> Result<String, AppError> {
     source_json_for_payload(state, false)
 }
@@ -3188,6 +3099,14 @@ mod tests {
     use std::collections::BTreeSet;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn native_visual_asset_discovery_uses_the_language_manifest() {
+        let source = include_str!("lib.rs");
+        assert!(source.contains("workspace_presentation_manifest("));
+        assert!(!source.contains("fn visual_image_asset_paths("));
+        assert!(!source.contains("strip_prefix(\"image \")"));
+    }
 
     static WORKSPACE_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -5493,15 +5412,17 @@ levels demo of push3 {
             EDITOR_JS
                 .contains("const sourceEntry = sourceEditableEntryFromTarget(source, target, {")
         );
-        assert!(EDITOR_JS.contains("function sourceLevelStateFromEntry(source, entry, exportData = currentLevelExportData(), options = {})"));
+        assert!(EDITOR_JS.contains("function sourceLevelStateFromEntry(_source, entry, exportData = currentLevelExportData(), _options = {})"));
         assert!(
             !EDITOR_JS
                 .contains("const sourceExportData = levelEditorSourceExportData(source, entry);")
         );
-        assert!(EDITOR_JS.contains("function sourceLevelRowsAndLocalLegends(source, entry)"));
-        assert!(EDITOR_JS.contains("function sourceLevelEntryHasHeader(tokens)"));
-        assert!(EDITOR_JS.contains("sourceLevelRegionGroups(parsed.rows)"));
-        assert!(EDITOR_JS.contains("if (text === \"+\")"));
+        assert!(!EDITOR_JS.contains("function sourceLevelRowsAndLocalLegends("));
+        assert!(!EDITOR_JS.contains("function sourceLevelEntryHasHeader("));
+        assert!(!EDITOR_JS.contains("function sourceLevelRegionGroups("));
+        assert!(EDITOR_JS.contains(
+            "throw new Error(\"Compiled level editor source contract is unavailable.\");"
+        ));
         assert!(EDITOR_JS.contains(
             "if (!loadLevelFromSourceEntry(source, entry, { ...options, exportData, levelIndex, levelName }))"
         ));
@@ -5515,15 +5436,11 @@ levels demo of push3 {
 
     #[test]
     fn level_source_previews_do_not_indent_map_rows() {
-        assert!(EDITOR_JS.contains(
-            "levelDefinitionSource(levelName, levelSourceData(currentLevelAuthoringSource()), \"\", { leadingBlank: false, bodyIndent: \"\" })"
-        ));
+        assert!(EDITOR_JS.contains("operation: \"format\","));
+        assert!(EDITOR_JS.contains("rows: sourceData.rows,"));
+        assert!(!EDITOR_JS.contains("function levelDefinitionSource("));
         assert!(EDITOR_SOURCE_JS.contains("function sourcePuzzleLevelHeaderSource("));
-        assert!(EDITOR_JS.contains("sourcePuzzleLevelHeaderSource(levelName, levelIndent"));
         assert!(EDITOR_LEVEL3D_JS.contains("sourcePuzzleLevelHeaderSource(levelName, indent"));
-        assert!(EDITOR_JS.contains(
-            "const rowIndent = Object.prototype.hasOwnProperty.call(options, \"bodyIndent\") ? options.bodyIndent : levelIndent;"
-        ));
         assert!(EDITOR_LEVEL3D_JS.contains(
             "level3dSourcePreview.textContent = level3dSnippetSource(levelName, sourceData, \"\", { bodyIndent: \"\" });"
         ));
@@ -5536,10 +5453,8 @@ levels demo of push3 {
     fn level_source_previews_use_canonical_quoted_level_headers() {
         assert!(EDITOR_SOURCE_JS.contains("function sourcePuzzleQuotedText("));
         assert!(EDITOR_SOURCE_JS.contains("function sourcePuzzleLevelHeaderName("));
-        assert!(EDITOR_JS.contains(
-            "sourcePuzzleLevelHeaderSource(levelName, levelIndent, { openBlock: true })"
-        ));
-        assert!(EDITOR_JS.contains("sourcePuzzleLevelHeaderSource(levelName, levelIndent)"));
+        assert!(EDITOR_JS.contains("name: levelName,"));
+        assert!(!EDITOR_JS.contains("sourcePuzzleLevelHeaderSource(levelName, levelIndent"));
         assert!(EDITOR_LEVEL3D_JS.contains(
             "sourcePuzzleLevelHeaderSource(levelName, indent, { defaultName: \"level 1\", openBlock: true })"
         ));
@@ -5572,11 +5487,8 @@ levels demo of push3 {
                 "const name = \"\";\n  const sourceData = defaultEmptyLevel2dSourceData();"
             )
         );
-        assert!(EDITOR_JS.contains("return sourcePuzzleLevelName(editableLevelName(value));"));
-        assert!(
-            EDITOR_JS
-                .contains("levelName ? sourcePuzzleLevelHeaderSource(levelName, levelIndent, { openBlock: true }) : `${levelIndent}{`")
-        );
+        assert!(EDITOR_JS.contains("name,\n    namespace: sanitizeLevelNamespace(namespace),"));
+        assert!(!EDITOR_JS.contains("function levelDefinitionSource("));
         assert!(EDITOR_JS.contains("setStatus(levelName ? `Updated level ${levelName}` : \"Updated unnamed level\", \"is-ok\");"));
     }
 
@@ -5598,10 +5510,8 @@ levels demo of push3 {
     #[test]
     fn focused_puzzle_entries_consume_wasm_surface_entries() {
         assert!(EDITOR_JS.contains("function focusedPuzzleSurfaceEntries("));
-        assert!(EDITOR_RUNTIME_JS.contains("let activeSourceAnalysis = null;"));
-        assert!(EDITOR_RUNTIME_JS.contains(
-            "const activate = requireSourceAnalysisFunction(module, \"activate_source_analysis\");"
-        ));
+        assert!(!EDITOR_RUNTIME_JS.contains("let activeSourceAnalysis = null;"));
+        assert!(!EDITOR_RUNTIME_JS.contains("\"activate_source_analysis\""));
         assert!(!EDITOR_RUNTIME_JS.contains("free_source_analysis_handle"));
         assert!(!EDITOR_RUNTIME_JS.contains("analysis.handle"));
         assert!(EDITOR_RUNTIME_JS.contains("return querySynchronizedAnalysisWorker(\"outline\""));
@@ -5623,6 +5533,12 @@ levels demo of push3 {
             EDITOR_ANALYSIS_WORKER_JS.contains("active_source_analysis_suggest_source_completions")
         );
         assert!(EDITOR_ANALYSIS_WORKER_JS.contains("active_source_analysis_resolve_source_target"));
+        assert!(EDITOR_ANALYSIS_WORKER_JS.contains("active_source_analysis_import_at_json"));
+        assert!(
+            EDITOR_ANALYSIS_WORKER_JS.contains("active_source_analysis_level_editor_manifest_json")
+        );
+        assert!(EDITOR_ANALYSIS_WORKER_JS.contains("active_source_analysis_sound_request"));
+        assert!(EDITOR_ANALYSIS_WORKER_JS.contains("active_source_analysis_level_source_request"));
         assert!(EDITOR_ANALYSIS_WORKER_JS.contains("apply_source_analysis_edit"));
         assert!(EDITOR_SOURCE_JS.contains("syncSourceAnalysisEditorChanges(sourceChanges"));
         assert!(EDITOR_CODEMIRROR_JS.contains("sourceanalysisreset"));
@@ -5632,7 +5548,8 @@ levels demo of push3 {
             EDITOR_RUNTIME_JS
                 .contains("await querySynchronizedAnalysisWorker(\"entries\", asString(source))")
         );
-        assert!(EDITOR_RUNTIME_JS.contains("payload: null,"));
+        assert!(!EDITOR_RUNTIME_JS.contains("workspaceSourceEntries(source)"));
+        assert!(EDITOR_RUNTIME_JS.contains("async levelEditorSourceSession(source)"));
         assert!(!EDITOR_RUNTIME_JS.contains(
             "const raw = querySourceAnalysis(module, revision, \"active_source_analysis_json\");"
         ));
@@ -5722,14 +5639,19 @@ levels demo of push3 {
     #[test]
     fn level_source_preview_generated_legends_reserve_existing_legend_chars() {
         assert!(EDITOR_JS.contains(
-            "createLevelLegendAllocator(charEntries, sourceReservedLegendChars(source))"
+            "createLevelLegendAllocator(charEntries, sourceReservedLegendChars(exportData))"
         ));
         assert!(EDITOR_JS.contains("const candidates = levelLegendCandidateChars();"));
         assert!(EDITOR_JS.contains("function levelLegendCandidateChars()"));
         assert!(EDITOR_JS.contains("[0x2500, 0x257F]"));
         assert!(EDITOR_JS.contains("[0x2600, 0x26FF]"));
-        assert!(EDITOR_JS.contains("function sourceReservedLegendChars(source)"));
-        assert!(EDITOR_JS.contains("function sourceAllLegendRows(source)"));
+        assert!(
+            EDITOR_JS.contains(
+                "function sourceReservedLegendChars(exportData = currentLevelExportData())"
+            )
+        );
+        assert!(EDITOR_JS.contains("...(exportData.editorSourceContract.legend || [])"));
+        assert!(!EDITOR_JS.contains("function sourceAllLegendRows("));
         assert!(EDITOR_JS.contains("No unused single-character legend symbol is available"));
         assert!(!EDITOR_JS.contains("return \".\";\n      }\n      usedChars.add(ch);"));
     }
@@ -5739,13 +5661,13 @@ levels demo of push3 {
         assert!(EDITOR_JS.contains("addPaletteOpen: false"));
         assert!(EDITOR_JS.contains("function renderLevelAddLegendButton()"));
         assert!(EDITOR_JS.contains("function levelPaletteAddCandidates("));
-        assert!(EDITOR_JS.contains("function addLevelPaletteObjectToLegend(object)"));
-        assert!(EDITOR_JS.contains("function insertCommonLegendEntry(source, entry)"));
+        assert!(EDITOR_JS.contains("async function addLevelPaletteObjectToLegend(object)"));
+        assert!(EDITOR_JS.contains("operation: \"insertLegend\","));
+        assert!(!EDITOR_JS.contains("function insertCommonLegendEntry("));
         assert!(EDITOR_JS.contains("levelPalette.append(renderLevelAddLegendButton());"));
         assert!(EDITOR_JS.contains("sourcePlaceableObjectNames(source, exportData)"));
         assert!(EDITOR_JS.contains("!String(object.name || \"\").startsWith(\"@\")"));
-        assert!(EDITOR_JS.contains("function legendBlockInsertionIndent("));
-        assert!(EDITOR_JS.contains("return lineIndent(lines[index].raw);"));
+        assert!(!EDITOR_JS.contains("function legendBlockInsertionIndent("));
         assert!(EDITOR_JS.contains("schedulePreview();"));
         assert!(EDITOR_JS.contains("No editable puzzle source for tile legend"));
         assert!(EDITOR_CSS.contains(".level-palette-add-menu"));
@@ -6044,8 +5966,8 @@ levels demo of push3 {
             .map(|index| solver_request + index)
             .expect("solver request builder end");
         let solver_request_source = &EDITOR_JS[solver_request..solver_request_end];
-        assert!(solver_request_source.contains("maxNodes: 5_000_000,"));
-        assert!(!solver_request_source.contains("maxNodes: 1000,"));
+        assert!(solver_request_source.contains("maxStoredNodes: 5_000_000,"));
+        assert!(!solver_request_source.contains("maxStoredNodes: 1000,"));
     }
 
     #[test]
@@ -8420,23 +8342,26 @@ move
     }
 
     #[test]
-    fn editor_preview_theme_resolver_accepts_canonical_theme_variables() {
-        assert!(EDITOR_JS.contains("accent: \"var(--preview-game-ink)\","));
-        assert!(EDITOR_JS.contains(
-            "root.style.setProperty(\"--preview-game-accent\", theme.accent || theme.ink);"
-        ));
+    fn editor_preview_consumes_only_typed_runtime_theme() {
+        assert!(EDITOR_JS.contains("function normalizeRuntimePreviewTheme(theme)"));
+        assert!(EDITOR_JS.contains("normalizeRuntimePreviewLinearRgba"));
+        assert!(EDITOR_JS.contains("runtimeLinearRgbaCss(theme.background)"));
+        assert!(EDITOR_JS.contains("--preview-game-text-${name}-size"));
+        assert!(EDITOR_JS.contains("--preview-game-control-padding-horizontal"));
+        assert!(EDITOR_JS.contains("applyPreviewTheme(exportData.theme);"));
         assert!(
             EDITOR_CSS.contains(
                 "--accent: var(--preview-game-accent, var(--preview-game-ink, #1f2428));"
             )
         );
-        assert!(EDITOR_JS.contains("if (name === \"bg\" || name === \"background\") {"));
-        assert!(EDITOR_JS.contains("} else if (name === \"ink\" || name === \"text\") {"));
-        assert!(
-            EDITOR_JS.contains(
-                "} else if (name === \"accent\") {\n      resolved.accent = value;\n      resolved.line = value;"
-            )
-        );
+        assert!(!EDITOR_JS.contains("PREVIEW_THEME_PRESETS"));
+        assert!(!EDITOR_JS.contains("resolvePreviewTheme"));
+        assert!(!EDITOR_JS.contains("previewThemePresetName"));
+        assert!(!EDITOR_JS.contains("previewThemeVariableName"));
+        assert!(!EDITOR_JS.contains("safePreviewCssValue"));
+        assert!(!EDITOR_JS.contains("theme?.variables"));
+        assert!(!EDITOR_JS.contains("previewBuild?.exportData?.theme"));
+        assert!(!EDITOR_JS.contains("event.data.theme ||"));
     }
 
     #[test]
@@ -8839,9 +8764,11 @@ move
         assert!(EDITOR_JS.contains("function currentLevelEditSourceRange(source)"));
         assert!(EDITOR_JS.contains("const editDocument = activeLevelEditDocument();"));
         assert!(EDITOR_JS.contains("const entry = currentLevelEditSourceRange(source);"));
-        assert!(EDITOR_JS.contains(
-            "const result = replaceLevelSourceEntry(source, entry, levelName, sourceData);"
-        ));
+        assert!(
+            EDITOR_JS.contains(
+                "result = await levelSourceRequest(source, {\n      operation: \"update\","
+            )
+        );
         assert!(EDITOR_JS.contains("editDocument.source = result.source;"));
         assert!(EDITOR_JS.contains("setLevelEditSource({"));
         assert!(
@@ -8851,6 +8778,65 @@ move
             "sourceEditor.addEventListener(\"input\", () => {\n  invalidateLevelEditSourceForDocument(activeDocument());\n});"
         ));
         assert!(!EDITOR_JS.contains("levelName\n    ? replaceLevelByName"));
+    }
+
+    #[test]
+    fn level_source_edits_use_only_the_typed_analysis_worker_contract() {
+        assert!(EDITOR_JS.contains("async function levelSourceRequest(source, request)"));
+        assert!(EDITOR_RUNTIME_JS.contains(
+            "querySynchronizedAnalysisWorker(\"levelSource\", asString(source), { levelRequest })"
+        ));
+        assert!(
+            EDITOR_ANALYSIS_WORKER_JS.contains(
+                "requiredFunction(module, \"active_source_analysis_level_source_request\")"
+            )
+        );
+        for forbidden in [
+            "findLevelsRanges",
+            "findLevelDefinitions",
+            "levelScannerCode",
+            "splitLevelTokens",
+            "sourceLevelRowsAndLocalLegends",
+            "sourceCommonLegendRows",
+            "sourceAllLegendRows",
+            "sourceLevelLocalRanges",
+            "levelDefinitionSource",
+            "levelLifecycleSourceData",
+            "findNamedBlock",
+            "findMatchingBrace",
+        ] {
+            assert!(
+                !EDITOR_JS.contains(forbidden),
+                "editor JavaScript must not own PuzzleStudio source syntax through {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn editor_javascript_does_not_normalize_noncanonical_section_headers() {
+        for forbidden in [
+            "WASM_SECTION_BLOCK_NAMES",
+            "WASM_SECTION_BOUNDARY_BLOCKS",
+            "WASM_INLINE_BLOCKS",
+            "expandPuzzleSectionHeadersForWasm",
+            "sectionHeaderAtForWasm",
+            "isSectionSeparatorForWasm",
+            "sectionBlockNameForWasm",
+            "normalizeSectionTitleForWasm",
+            "sectionBoundaryForWasm",
+            "isLegendRowForWasm",
+            "startsPuzzleSectionForWasm",
+            "startsNestedBlockForWasm",
+            "startsInlineBlockForWasm",
+            "braceNormalizedLineForSectionForWasm",
+            "stripLineCommentForWasm",
+            "isIdentifierForWasm",
+        ] {
+            assert!(
+                !EDITOR_JS.contains(forbidden),
+                "editor JavaScript must pass exact source to the Rust parser; found {forbidden}"
+            );
+        }
     }
 
     #[test]
@@ -9408,61 +9394,60 @@ move
     }
 
     #[test]
-    fn sound_tools_script_exposes_editor_sound_api() {
-        let script = sound_tools_script();
-        assert!(script.contains("window.PuzzleSoundGenerator"));
-        assert!(script.contains("generateSoundEffect"));
-        assert!(script.contains("generatePuzzleScriptSoundEffect"));
-        assert!(script.contains("createPuzzleScriptSfxPlayer"));
-        assert!(script.contains("generateSong"));
-        assert!(script.contains("exportSoundEffect"));
-        assert!(script.contains("PuzzleSoundToolsReady"));
-        assert!(script.contains("ui-tap"));
-        assert!(script.contains("buildSelectLayers"));
+    fn sound_preview_glue_uses_editor_only_rust_wasm_surface() {
+        assert!(PUZZLE_WASM_JS.contains("export class WasmEditorAudio"));
+        assert!(PUZZLE_WASM_JS.contains("export function editor_audio_sfx_types"));
+        assert!(PUZZLE_WASM_JS.contains("export_sfx_wav"));
+        assert!(PUZZLE_WASM_JS.contains("export_music_wav"));
+        assert!(EDITOR_RUNTIME_JS.contains("new module.WasmEditorAudio()"));
+        assert!(EDITOR_RUNTIME_JS.contains("session.play_sfx(now)"));
+        assert!(EDITOR_RUNTIME_JS.contains("session.play_music("));
+        assert!(EDITOR_RUNTIME_JS.contains("session.set_audio_feedback_wakeup("));
+        assert!(EDITOR_RUNTIME_JS.contains("session.audio_feedback_event(performance.now())"));
+        assert!(EDITOR_RUNTIME_JS.contains("setFeedbackHandler(callback)"));
+        assert!(EDITOR_SOUNDS_JS.contains("api.setFeedbackHandler((diagnostic) =>"));
+        assert!(!EDITOR_SOUNDS_JS.contains("soundsApi()?.tick()"));
+        assert!(!EDITOR_HTML.contains("sound-generator.js"));
+        assert!(!EDITOR_RUNTIME_JS.contains("PuzzleSoundGenerator"));
+        assert!(!EDITOR_SOUNDS_JS.contains("PuzzleSoundTools"));
+        assert!(!EDITOR_SOUNDS_JS.contains("AudioContext"));
+        assert!(!PUZZLE_PLAYER_WASM_JS.contains("WasmEditorAudioPreview"));
     }
 
     #[test]
     fn sound_builder_exposes_sfx_volume() {
         assert!(EDITOR_HTML.contains(r#"id="soundsSfxVolumeInput""#));
         assert!(EDITOR_SOUNDS_JS.contains("function soundSfxVolume()"));
-        assert!(EDITOR_SOUNDS_JS.contains("volume=${soundSfxVolume().toFixed(2)}"));
+        assert!(EDITOR_SOUNDS_JS.contains("volume: soundSfxVolume()"));
         assert!(EDITOR_SOUNDS_JS.contains("function soundSfxType()"));
-        assert!(
-            EDITOR_SOUNDS_JS.contains(
-                "generateSoundEffect(soundsSfxSeedInput.value, { type: soundSfxType() })"
-            )
-        );
-        assert!(!EDITOR_SOUNDS_JS.contains("generatePuzzleScriptSoundEffect"));
-        assert!(!EDITOR_SOUNDS_JS.contains("createPuzzleScriptSfxPlayer"));
-        assert!(EDITOR_SOUNDS_JS.contains(
-            "createSfxPlayer(sounds.context, soundSfxEffect(), { volume: soundSfxVolume() })"
-        ));
-        assert!(EDITOR_SOUNDS_JS.contains("sounds.sfxPlayer.start(sounds.context.currentTime);"));
+        assert!(EDITOR_SOUNDS_JS.contains("await api.playSfx({"));
+        assert!(!EDITOR_SOUNDS_JS.contains("generateSoundEffect"));
+        assert!(!EDITOR_SOUNDS_JS.contains("createSfxPlayer"));
+        assert!(!EDITOR_SOUNDS_JS.contains("createPlayer"));
+        assert!(!EDITOR_SOUNDS_JS.contains("AudioContext"));
     }
 
     #[test]
-    fn sound_source_sync_scans_nested_sounds_blocks() {
-        assert!(EDITOR_SOUNDS_JS.contains("function findSoundsBlocks(lines)"));
-        assert!(
-            EDITOR_SOUNDS_JS
-                .contains("const soundsBlock = findSoundsBlockAtPosition(lines, position);")
-        );
-        assert!(EDITOR_SOUNDS_JS.contains("for (const soundsBlock of findSoundsBlocks(lines))"));
-        assert!(!EDITOR_SOUNDS_JS.contains("function findTopLevelSoundsBlock"));
+    fn sound_source_sync_uses_only_the_typed_rust_authoring_contract() {
+        assert!(EDITOR_SOUNDS_JS.contains("soundSourceRequest(source, request)"));
+        assert!(EDITOR_RUNTIME_JS.contains("async soundSourceRequest(source, soundRequest)"));
+        assert!(EDITOR_ANALYSIS_WORKER_JS.contains("active_source_analysis_sound_request"));
+        assert!(!EDITOR_SOUNDS_JS.contains("function findSoundsBlocks"));
+        assert!(!EDITOR_SOUNDS_JS.contains("function parseSoundsDefinitionLine"));
+        assert!(!EDITOR_SOUNDS_JS.contains("function braceDelta"));
+        assert!(!EDITOR_SOUNDS_JS.contains("new RegExp"));
+        assert!(!EDITOR_SOUNDS_JS.contains("matchAll("));
     }
 
     #[test]
-    fn sound_source_edits_generate_unindented_definition_lines() {
-        assert!(EDITOR_SOUNDS_JS.contains("const insertText = `${line}\\n`;"));
-        assert!(EDITOR_SOUNDS_JS.contains("const block = `sounds {\\n${line}\\n}\\n`;"));
-        assert!(
-            EDITOR_SOUNDS_JS.contains(
-                "const replacement = `${definition.line}${hasNewline ? \"\\n\" : \"\"}`;"
-            )
-        );
-        assert!(!EDITOR_SOUNDS_JS.contains("`sounds {\\n\\t${line}\\n}\\n`"));
-        assert!(!EDITOR_SOUNDS_JS.contains("`${soundsBlock.indent}\\t`"));
-        assert!(!EDITOR_SOUNDS_JS.contains("function soundDefinitionIndent("));
+    fn sound_source_edits_send_typed_intents_without_emitting_puzzle_syntax() {
+        assert!(EDITOR_SOUNDS_JS.contains("operation: \"format\""));
+        assert!(EDITOR_SOUNDS_JS.contains("operation: \"insert\""));
+        assert!(EDITOR_SOUNDS_JS.contains("operation: \"update\""));
+        assert!(EDITOR_SOUNDS_JS.contains("operation: \"inspect\""));
+        assert!(!EDITOR_SOUNDS_JS.contains("`sounds {"));
+        assert!(!EDITOR_SOUNDS_JS.contains("`sfx ${"));
+        assert!(!EDITOR_SOUNDS_JS.contains("`music ${"));
     }
 
     #[test]

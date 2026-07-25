@@ -216,7 +216,10 @@ function runVisualSaveCommand(context) {
 }
 
 function runSoundsSaveCommand(context) {
-  updateSoundsDefinition(soundCommandKind(context));
+  updateSoundsDefinition(soundCommandKind(context)).catch((error) => {
+    console.error(error);
+    setStatus(`Could not update sounds: ${error?.message || error}`, "is-error");
+  });
   return true;
 }
 

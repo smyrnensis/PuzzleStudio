@@ -1,12 +1,3 @@
-fn join_visuals_js(base: &str, generated: &str) -> String {
-    match (base.trim().is_empty(), generated.is_empty()) {
-        (true, true) => String::new(),
-        (true, false) => generated.to_string(),
-        (false, true) => base.to_string(),
-        (false, false) => format!("{base}\n{generated}"),
-    }
-}
-
 fn push_editor_preview_data(out: &mut String, state: &ServerState) {
     out.push('{');
     push_json_pair(out, "title", &state.loaded.title);
@@ -36,22 +27,10 @@ fn push_editor_preview_data(out: &mut String, state: &ServerState) {
     out.push(',');
     push_json_pair(out, "puzzlePath", &state.puzzle_path);
     out.push(',');
-    push_json_pair(
-        out,
-        "saveKey",
-        &progress_save_key(&state.loaded, &state.puzzle_path),
-    );
-    out.push(',');
-    push_json_number(
-        out,
-        "progressSaveVersion",
-        u64::from(puzzle_play::PROGRESS_SAVE_VERSION),
-    );
-    out.push(',');
     push_json_bool(
         out,
         "acceptsModelInput",
-        state.session.accepts_model_input(&state.loaded),
+        state.runtime.accepts_model_input(),
     );
     out.push(',');
     push_export_engine(out, &state.loaded);
@@ -60,15 +39,11 @@ fn push_editor_preview_data(out: &mut String, state: &ServerState) {
     out.push(',');
     push_export_levels(out, &state.loaded);
     out.push(',');
-    push_inputs(out, &state.loaded);
+    push_runtime_inputs(out, state);
+    out.push(',');
+    push_runtime_theme(out, state);
     out.push(',');
     push_export_variables(out, &state.loaded.variables);
-    out.push(',');
-    push_scenes(out, "scenes", &state.loaded);
-    out.push(',');
-    push_export_sounds(out, &state.loaded.sounds);
-    out.push(',');
-    push_export_theme(out, &state.loaded.theme);
     out.push(',');
     push_export_assets(out, &state.loaded);
     out.push(',');
@@ -124,29 +99,13 @@ fn push_export_boot_data(
     out.push(',');
     push_json_bool(out, "editorPreview", editor_preview);
     out.push(',');
-    push_json_pair(
-        out,
-        "saveKey",
-        &progress_save_key(&state.loaded, &state.puzzle_path),
-    );
-    out.push(',');
-    push_json_number(
-        out,
-        "progressSaveVersion",
-        u64::from(puzzle_play::PROGRESS_SAVE_VERSION),
-    );
-    out.push(',');
     push_json_bool(
         out,
         "acceptsModelInput",
-        state.session.accepts_model_input(&state.loaded),
+        state.runtime.accepts_model_input(),
     );
     out.push(',');
-    push_inputs(out, &state.loaded);
-    out.push(',');
-    push_export_sounds(out, &state.loaded.sounds);
-    out.push(',');
-    push_export_theme(out, &state.loaded.theme);
+    push_runtime_inputs(out, state);
     out.push(',');
     push_json_number(out, "defaultWaitMs", state.loaded.default_wait_ms);
     out.push(',');
@@ -156,17 +115,71 @@ fn push_export_boot_data(
     out.push('}');
 }
 
-fn progress_save_key(loaded: &LoadedGame, puzzle_path: &str) -> String {
+fn push_runtime_inputs(out: &mut String, state: &ServerState) {
+    push_runtime_snapshot_field(out, state, "inputs");
+}
+
+fn push_runtime_theme(out: &mut String, state: &ServerState) {
+    push_runtime_snapshot_field(out, state, "theme");
+}
+
+fn push_runtime_snapshot_field(out: &mut String, state: &ServerState, field: &str) {
+    let snapshot: serde_json::Value = serde_json::from_str(&state.runtime.snapshot_json())
+        .expect("runtime snapshot JSON should parse");
+    let value = snapshot
+        .get(field)
+        .unwrap_or_else(|| panic!("runtime snapshot should contain {field}"));
+    push_json_string(out, field);
+    out.push(':');
+    out.push_str(
+        &serde_json::to_string(value)
+            .unwrap_or_else(|_| panic!("runtime {field} should serialize")),
+    );
+}
+
+fn standalone_progress_storage(
+    document: &puzzle_lang::LoadedDocument,
+    puzzle_path: &str,
+) -> StandaloneProgressStorage {
     let mut hash = 0xcbf29ce484222325_u64;
     progress_hash_str(&mut hash, puzzle_path);
-    progress_hash_str(&mut hash, &loaded.title);
-    for level in &loaded.levels {
-        progress_hash_str(&mut hash, &level.name);
-        hash = progress_hash_mix(hash, u64::from(level.initial_state.width));
-        hash = progress_hash_mix(hash, u64::from(level.initial_state.height));
-        hash = progress_hash_mix(hash, level.initial_state.hash());
+    progress_hash_str(&mut hash, &document.title);
+    hash = progress_hash_mix(hash, document.models.len() as u64);
+    for model in &document.models {
+        match model {
+            LoadedDocumentModel::Puzzle2d { name, game } => {
+                progress_hash_str(&mut hash, name);
+                progress_hash_levels(&mut hash, &game.levels);
+            }
+            LoadedDocumentModel::Puzzle3d { name, game, .. } => {
+                progress_hash_str(&mut hash, name);
+                progress_hash_levels(&mut hash, &game.levels);
+            }
+        }
     }
-    format!("{}:{hash:016x}", loaded.title)
+    let save_version = puzzle_play::PROGRESS_SAVE_VERSION;
+    StandaloneProgressStorage {
+        key: format!(
+            "PuzzleStudio.progress.v{save_version}:{}:{hash:016x}",
+            document.title
+        ),
+        save_version,
+    }
+}
+
+fn progress_hash_levels<const D: usize, Size: GridSize<D>>(
+    hash: &mut u64,
+    levels: &[puzzle_lang::LoadedGridLevel<D, Size>],
+) {
+    *hash = progress_hash_mix(*hash, levels.len() as u64);
+    for level in levels {
+        progress_hash_str(hash, &level.puzzle);
+        progress_hash_str(hash, &level.name);
+        for axis in level.initial_state.size.axes() {
+            *hash = progress_hash_mix(*hash, u64::from(axis));
+        }
+        *hash = progress_hash_mix(*hash, level.initial_state.hash());
+    }
 }
 
 fn progress_hash_str(hash: &mut u64, value: &str) {
@@ -203,34 +216,6 @@ fn push_export_assets(out: &mut String, loaded: &LoadedGame) {
     out.push(']');
 }
 
-fn push_export_theme(out: &mut String, theme: &ThemeDef) {
-    out.push_str("\"theme\":{");
-    out.push_str("\"name\":");
-    if let Some(name) = &theme.name {
-        push_json_string(out, name);
-    } else {
-        out.push_str("null");
-    }
-    out.push(',');
-    out.push_str("\"variables\":{");
-    for (index, variable) in theme.variables.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        push_json_string(out, &variable.name);
-        out.push(':');
-        push_json_string(out, &variable.value);
-    }
-    out.push_str("}}");
-}
-
-fn push_export_sounds(out: &mut String, sounds: &SoundsDef) {
-    out.push_str("\"sounds\":");
-    let sounds_json = serde_json::to_string(&runtime_sounds_def(sounds))
-        .expect("runtime sounds contract should serialize");
-    out.push_str(&sounds_json);
-}
-
 fn push_export_animation(out: &mut String, loaded: &LoadedGame) {
     out.push_str("\"animation\":{");
     out.push_str("\"tween\":{");
@@ -257,13 +242,6 @@ fn push_export_input_buffer(out: &mut String, loaded: &LoadedGame) {
     out.push(',');
     push_json_number(out, "minWaitMs", loaded.input_buffer.min_wait_ms);
     out.push('}');
-}
-
-fn push_presentation_events(out: &mut String, events: &[PresentationEvent]) {
-    out.push_str("\"presentationEvents\":");
-    let events_json = serde_json::to_string(&presentation_events_contract::<2>(events))
-        .expect("runtime presentation event contract should serialize");
-    out.push_str(&events_json);
 }
 
 fn push_export_variables(out: &mut String, variables: &[puzzle_lang::SceneVarDef]) {
@@ -298,8 +276,6 @@ fn push_export_engine(out: &mut String, loaded: &LoadedGame) {
     out.push(',');
     push_rule_animations(out, loaded);
     out.push(',');
-    push_rule_effects(out, loaded);
-    out.push(',');
     out.push_str("\"program\":[]");
     out.push(',');
     out.push_str("\"levelStartProgram\":");
@@ -315,140 +291,6 @@ fn push_export_engine(out: &mut String, loaded: &LoadedGame) {
     out.push_str("\"levelClearProgram\":");
     push_empty_rule_program(out);
     out.push('}');
-}
-
-fn push_rule_effects(out: &mut String, loaded: &LoadedGame) {
-    out.push_str("\"ruleEffects\":{");
-    let mut entries = loaded.rule_effects.iter().collect::<Vec<_>>();
-    entries.sort_by_key(|(rule, _)| rule.0);
-    for (index, (rule, effects)) in entries.into_iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        push_json_string(out, &rule.0.to_string());
-        out.push(':');
-        out.push('[');
-        for (effect_index, effect) in effects.iter().enumerate() {
-            if effect_index > 0 {
-                out.push(',');
-            }
-            push_ordered_rule_effect(out, effect);
-        }
-        out.push(']');
-    }
-    out.push('}');
-}
-
-fn push_ordered_rule_effect(out: &mut String, effect: &RuleEffect) {
-    let writes_complete_object = matches!(effect, RuleEffect::Scene { .. });
-    if !writes_complete_object {
-        out.push('{');
-    }
-    match effect {
-        RuleEffect::Win => push_json_pair(out, "kind", "win"),
-        RuleEffect::Restart => push_json_pair(out, "kind", "restart"),
-        RuleEffect::NextLevel => push_json_pair(out, "kind", "next_level"),
-        RuleEffect::Again => push_json_pair(out, "kind", "again"),
-        RuleEffect::Checkpoint => push_json_pair(out, "kind", "checkpoint"),
-        RuleEffect::ClearCheckpoint => push_json_pair(out, "kind", "clear_checkpoint"),
-        RuleEffect::PlaySfx { name } => {
-            push_json_pair(out, "kind", "play_sfx");
-            out.push(',');
-            push_json_pair(out, "name", name);
-        }
-        RuleEffect::PlayMusic { name } => {
-            push_json_pair(out, "kind", "play_music");
-            out.push(',');
-            push_json_pair(out, "name", name);
-        }
-        RuleEffect::PauseMusic { name } => {
-            push_json_pair(out, "kind", "pause_music");
-            if let Some(name) = name {
-                out.push(',');
-                push_json_pair(out, "name", name);
-            }
-        }
-        RuleEffect::ResumeMusic { name } => {
-            push_json_pair(out, "kind", "resume_music");
-            if let Some(name) = name {
-                out.push(',');
-                push_json_pair(out, "name", name);
-            }
-        }
-        RuleEffect::StopMusic { name } => {
-            push_json_pair(out, "kind", "stop_music");
-            if let Some(name) = name {
-                out.push(',');
-                push_json_pair(out, "name", name);
-            }
-        }
-        RuleEffect::Wait { milliseconds } => {
-            push_json_pair(out, "kind", "wait");
-            out.push(',');
-            push_json_number(out, "milliseconds", *milliseconds);
-        }
-        RuleEffect::WaitAnimation => push_json_pair(out, "kind", "wait_animation"),
-        RuleEffect::EmitAnimation {
-            name,
-            component,
-            offset,
-        } => {
-            push_json_pair(out, "kind", "emit_animation");
-            out.push(',');
-            push_json_pair(out, "name", name);
-            out.push(',');
-            push_json_number(out, "component", *component as u64);
-            out.push_str(",\"offset\":{");
-            push_json_number(out, "x", offset.x as u64);
-            out.push(',');
-            push_json_number(out, "y", offset.y as u64);
-            out.push('}');
-        }
-        RuleEffect::PresentComponent {
-            definition,
-            properties,
-            placement,
-            await_event,
-        } => {
-            push_json_pair(out, "kind", "present_component");
-            out.push(',');
-            push_json_pair(out, "definition", definition);
-            out.push(',');
-            push_json_pair(
-                out,
-                "placement",
-                match placement {
-                    puzzle_runtime_contract::ComponentPlacement::Root => "root",
-                    puzzle_runtime_contract::ComponentPlacement::Content => "content",
-                    puzzle_runtime_contract::ComponentPlacement::Overlay => "overlay",
-                },
-            );
-            out.push_str(",\"properties\":[");
-            for (index, property) in properties.iter().enumerate() {
-                if index > 0 {
-                    out.push(',');
-                }
-                out.push('{');
-                push_json_pair(out, "name", &property.name);
-                out.push(',');
-                push_json_pair(out, "value", &property.value);
-                out.push(',');
-                push_json_bool(out, "literal", property.literal);
-                out.push('}');
-            }
-            out.push(']');
-            if let Some(event) = await_event {
-                out.push(',');
-                push_json_pair(out, "awaitEvent", event);
-            }
-        }
-        RuleEffect::Scene { effect } => {
-            puzzle_scene::write_scene_effect_json(out, effect);
-        }
-    }
-    if !writes_complete_object {
-        out.push('}');
-    }
 }
 
 fn push_rule_animations(out: &mut String, loaded: &LoadedGame) {
@@ -500,11 +342,9 @@ fn push_rule_animation(out: &mut String, animation: &RuleAnimation) {
 }
 
 fn runtime_export_json(
-    document: &puzzle_lang::LoadedDocument,
+    export: &StandaloneRuntimeExport<puzzle_lang::LoadedDocument>,
 ) -> Result<String, serde_json::Error> {
-    serde_json::to_string(&puzzle_runtime_contract::StandaloneRuntimeExport::new(
-        document,
-    ))
+    serde_json::to_string(export)
 }
 
 fn push_export_model_variables(out: &mut String, loaded: &LoadedGame) {

@@ -171,11 +171,14 @@ assets {
 
 puzzle default {
 layers {
-Box
+Box Other
 }
 visuals {
 Box {
 image = "visuals/box.png"
+}
+Other {
+image = "./visuals/box.png"
 }
 }
 rules {
@@ -201,7 +204,11 @@ B
     assert_eq!(manifest.css_paths, ["game.css"]);
     assert_eq!(manifest.script_paths, ["visuals.js"]);
     assert_eq!(manifest.file_paths, ["audio/click.wav"]);
-    assert_eq!(manifest.visual_image_paths, ["visuals/box.png"]);
+    assert_eq!(
+        manifest.visual_image_assets,
+        [puzzle_assets::VisualImageAssetManifestEntry::from_path("visuals/box.png").unwrap()]
+    );
+    assert_eq!(manifest.visual_image_assets[0].path, "visuals/box.png");
 }
 
 #[test]
@@ -2042,14 +2049,14 @@ P
         .collect::<Vec<_>>();
     assert!(effects.iter().any(|effect| matches!(
         effect,
-        RuleEffect::PresentComponent { definition, properties, .. }
+        RuleEffect::Runtime(RuntimeEffect::PresentComponent { definition, properties, .. })
             if definition == "standard.message"
                 && matches!(properties.as_slice(), [puzzle_runtime_contract::RuntimeComponentProperty { name, value, literal: true }]
                     if name == "text" && value == "Found")
     )));
     assert!(effects.iter().any(|effect| matches!(
         effect,
-        RuleEffect::PresentComponent { definition, properties, .. }
+        RuleEffect::Runtime(RuntimeEffect::PresentComponent { definition, properties, .. })
             if definition == "standard.message"
                 && matches!(properties.as_slice(), [puzzle_runtime_contract::RuntimeComponentProperty { name, value, literal: false }]
                     if name == "text" && value == "hint")
@@ -2089,18 +2096,22 @@ P
         .values()
         .flat_map(|effects| effects.iter())
         .collect::<Vec<_>>();
+    assert!(effects.iter().any(|effect| {
+        matches!(
+            effect,
+            RuleEffect::Runtime(RuntimeEffect::PlaySfx { name }) if name == "pushed"
+        )
+    }));
     assert!(
         effects
             .iter()
-            .any(|effect| { matches!(effect, RuleEffect::PlaySfx { name } if name == "pushed") })
-    );
-    assert!(
-        effects
-            .iter()
-            .any(|effect| matches!(effect, RuleEffect::WaitAnimation))
+            .any(|effect| { matches!(effect, RuleEffect::Runtime(RuntimeEffect::WaitAnimation)) })
     );
     assert!(effects.iter().any(|effect| {
-        matches!(effect, RuleEffect::Wait { milliseconds } if *milliseconds == 25)
+        matches!(
+            effect,
+            RuleEffect::Runtime(RuntimeEffect::Wait { milliseconds }) if *milliseconds == 25
+        )
     }));
 }
 
@@ -2140,7 +2151,10 @@ P
                                 .rule_effects
                                 .get(&rule.id)
                                 .is_some_and(|effects| effects.iter().any(|effect| {
-                                    matches!(effect, RuleEffect::WaitAnimation)
+                                    matches!(
+                                        effect,
+                                        RuleEffect::Runtime(RuntimeEffect::WaitAnimation)
+                                    )
                                 }))
                     )
                 })
@@ -2183,7 +2197,7 @@ P
     assert!(
         effects
             .iter()
-            .any(|effect| matches!(effect, RuleEffect::Win))
+            .any(|effect| { matches!(effect, RuleEffect::Runtime(RuntimeEffect::Win)) })
     );
 }
 
@@ -2226,9 +2240,8 @@ text "Menu"
         .collect::<Vec<_>>();
     assert!(effects.iter().any(|effect| matches!(
         effect,
-        RuleEffect::Scene {
-            effect: SceneEffect::Goto { scene, params },
-        } if scene == "menu" && params.is_empty()
+        RuleEffect::Lifecycle(SceneEffect::Goto { scene, params })
+            if scene == "menu" && params.is_empty()
     )));
 }
 
@@ -2259,7 +2272,7 @@ P
     assert!(loaded.rule_effects.values().any(|effects| {
         effects
             .iter()
-            .any(|effect| matches!(effect, RuleEffect::WaitAnimation))
+            .any(|effect| matches!(effect, RuleEffect::Runtime(RuntimeEffect::WaitAnimation)))
     }));
 }
 
@@ -2388,7 +2401,12 @@ P
     assert!(
         ordered_effects
             .iter()
-            .filter(|effect| matches!(effect, RuleEffect::PlaySfx { name } if name == "tick"))
+            .filter(|effect| {
+                matches!(
+                    effect,
+                    RuleEffect::Runtime(RuntimeEffect::PlaySfx { name }) if name == "tick"
+                )
+            })
             .count()
             >= 2
     );
@@ -2396,7 +2414,7 @@ P
         ordered_effects
             .iter()
             .filter(|effect| matches!(effect,
-                RuleEffect::PresentComponent { definition, properties, .. }
+                RuleEffect::Runtime(RuntimeEffect::PresentComponent { definition, properties, .. })
                     if definition == "standard.message"
                         && matches!(properties.as_slice(), [puzzle_runtime_contract::RuntimeComponentProperty { name, value, literal: true }]
                             if name == "text" && value == "Ready")
@@ -9345,8 +9363,8 @@ B
         .find(|visual| visual.name == "Box")
         .unwrap();
     match &visual.kind {
-        VisualKind::Image { source } => {
-            assert_eq!(source, "visuals/box.png");
+        VisualKind::Image { asset } => {
+            assert_eq!(asset.path, "visuals/box.png");
         }
         _ => panic!("Box should be an image visual"),
     }
@@ -9398,8 +9416,8 @@ B
         .find(|visual| visual.name == "Box")
         .unwrap();
     match &visual.kind {
-        VisualKind::Image { source } => {
-            assert_eq!(source, "visuals/box.png");
+        VisualKind::Image { asset } => {
+            assert_eq!(asset.path, "visuals/box.png");
         }
         _ => panic!("Box should be an image visual"),
     }
@@ -9470,7 +9488,32 @@ B
 }
 "##;
     let error = parse_game(source).unwrap_err().to_string();
-    assert!(error.contains("visual image must use .png, .jpg, .jpeg, or .svg"));
+    assert!(error.contains("visual image must use .png, .jpg, or .jpeg"));
+}
+
+#[test]
+fn puzzle_visuals_reject_svg_image_visual_refs() {
+    let source = r##"
+title = svg_image_visual_ref
+
+puzzle default {
+layers {
+actor = Box
+}
+visuals {
+Box {
+image = "visuals/box.svg"
+}
+}
+rules {
+}
+level "start" {
+.
+}
+}
+"##;
+    let error = parse_game(source).unwrap_err().to_string();
+    assert!(error.contains("visual image must use .png, .jpg, or .jpeg"));
 }
 
 #[test]
@@ -17543,8 +17586,7 @@ level "start" {
 "#;
     let loaded = parse_game(source).unwrap();
 
-    assert!(!loaded.render.grid.occupied_cells);
-    assert!(loaded.render.grid.all_cells);
+    assert_eq!(loaded.render.grid, PuzzleGridMode::AllCells);
 }
 
 #[test]
@@ -17573,8 +17615,7 @@ level "start" {
 "#;
     let loaded = parse_game(source).unwrap();
 
-    assert!(loaded.render.grid.occupied_cells);
-    assert!(!loaded.render.grid.all_cells);
+    assert_eq!(loaded.render.grid, PuzzleGridMode::OccupiedCells);
 }
 
 #[test]
@@ -18389,16 +18430,18 @@ P
         .flat_map(|effects| effects.iter())
         .collect::<Vec<_>>();
 
-    assert!(
-        effects
-            .iter()
-            .any(|effect| matches!(effect, RuleEffect::PlaySfx { name } if name == "x"))
-    );
-    assert!(
-        effects
-            .iter()
-            .any(|effect| matches!(effect, RuleEffect::PlaySfx { name } if name == "y"))
-    );
+    assert!(effects.iter().any(|effect| {
+        matches!(
+            effect,
+            RuleEffect::Runtime(RuntimeEffect::PlaySfx { name }) if name == "x"
+        )
+    }));
+    assert!(effects.iter().any(|effect| {
+        matches!(
+            effect,
+            RuleEffect::Runtime(RuntimeEffect::PlaySfx { name }) if name == "y"
+        )
+    }));
 }
 
 #[test]
@@ -19807,6 +19850,78 @@ fn puzzle3_camera_projection_is_typed_and_exported() {
 }
 
 #[test]
+fn puzzle3_lighting_is_typed_and_exported_as_normalized_settings() {
+    let source = include_str!("../tests/fixtures/spec_3d_preview_contract.puzzle3").replace(
+        "  camera {",
+        "  lighting {\n    intensity = 0.75\n    ambient = 1.25\n    yaw = -20\n    pitch = 60\n    color = #ffd7aa\n  }\n  camera {",
+    );
+    let document = super::parse_game_for_path(&source, "typed_lighting.puzzle3").unwrap();
+    let LoadedDocumentModel::Puzzle3d { game, .. } = &document.models[0] else {
+        panic!("expected a 3D puzzle model")
+    };
+
+    assert_eq!(game.render.lighting.intensity_milli, 750);
+    assert_eq!(game.render.lighting.ambient_milli, 1_250);
+    assert_eq!(game.render.lighting.yaw_degrees, -20);
+    assert_eq!(game.render.lighting.pitch_degrees, 60);
+    assert_eq!(game.render.lighting.color, "#ffd7aa");
+
+    let fixture_json = crate::export_loaded_document_visual_fixture_json(&document).unwrap();
+    assert!(fixture_json.contains("\"lighting\": {"));
+    assert!(fixture_json.contains("\"intensity\": 0.75"));
+    assert!(fixture_json.contains("\"ambient\": 1.25"));
+    assert!(fixture_json.contains("\"yawDegrees\": -20"));
+    assert!(fixture_json.contains("\"pitchDegrees\": 60"));
+    assert!(fixture_json.contains("\"color\": {"));
+}
+
+#[test]
+fn puzzle3_lighting_defaults_to_the_tuned_profile() {
+    let document = super::parse_game_for_path(
+        include_str!("../tests/fixtures/spec_3d_preview_contract.puzzle3"),
+        "default_lighting.puzzle3",
+    )
+    .unwrap();
+    let LoadedDocumentModel::Puzzle3d { game, .. } = &document.models[0] else {
+        panic!("expected a 3D puzzle model")
+    };
+
+    assert_eq!(game.render.lighting.intensity_milli, 1_000);
+    assert_eq!(game.render.lighting.ambient_milli, 1_000);
+    assert_eq!(game.render.lighting.yaw_degrees, 53);
+    assert_eq!(game.render.lighting.pitch_degrees, 56);
+    assert_eq!(game.render.lighting.color, "#ffffff");
+}
+
+#[test]
+fn puzzle3_lighting_rejects_negative_ratios_and_transparent_colors() {
+    let fixture = include_str!("../tests/fixtures/spec_3d_preview_contract.puzzle3");
+    let negative = fixture.replace(
+        "  camera {",
+        "  lighting {\n    ambient = -1\n  }\n  camera {",
+    );
+    let error = super::parse_game_for_path(&negative, "negative_lighting.puzzle3")
+        .expect_err("negative lighting ratios must be rejected");
+    assert!(
+        error
+            .to_string()
+            .contains("ambient must be a non-negative number")
+    );
+
+    let transparent = fixture.replace(
+        "  camera {",
+        "  lighting {\n    color = #ffffff80\n  }\n  camera {",
+    );
+    let error = super::parse_game_for_path(&transparent, "transparent_lighting.puzzle3")
+        .expect_err("lighting colors with alpha must be rejected");
+    assert!(
+        error
+            .to_string()
+            .contains("lighting color must be an opaque color")
+    );
+}
+
+#[test]
 fn puzzle3_lifecycle_diagnostic_uses_shared_source_line_mapping() {
     let source = r#"title = = "Line Probe"
 
@@ -20161,7 +20276,8 @@ P
             .values()
             .any(|effects| effects.iter().any(|effect| matches!(
                 effect,
-                RuleEffect::StopMusic { name } if name.as_deref() == Some("locked_room")
+                RuleEffect::Runtime(RuntimeEffect::StopMusic { name })
+                    if name.as_deref() == Some("locked_room")
             )))
     );
 }

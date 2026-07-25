@@ -164,13 +164,13 @@ fn scene_effect_parser_recognition(tokens: &[SourceToken]) -> crate::surface::Pa
             let kind = scene_effect_command_kind(&first.text);
             add_scene_effect_token_range(&mut recognition, first, kind);
             if let Some(asset) = tokens.get(1) {
-                add_scene_effect_token_range(&mut recognition, asset, SurfaceSemanticKind::Asset);
+                add_sound_asset_token(&mut recognition, &first.text, asset);
             }
         }
         Some(SceneEffectCommandSyntax::OptionalAssetTarget) => {
             add_scene_effect_token_range(&mut recognition, first, SurfaceSemanticKind::Effect);
             if let Some(asset) = tokens.get(1) {
-                add_scene_effect_token_range(&mut recognition, asset, SurfaceSemanticKind::Asset);
+                add_sound_asset_token(&mut recognition, &first.text, asset);
             }
         }
         Some(SceneEffectCommandSyntax::Plain) => {
@@ -206,6 +206,26 @@ fn scene_effect_parser_recognition(tokens: &[SourceToken]) -> crate::surface::Pa
     }
 
     parser_recognition_with_node(recognition, SurfaceNodeKind::SceneEffect, effect_span)
+}
+
+fn add_sound_asset_token(
+    recognition: &mut crate::surface::ParserRecognition,
+    command: &str,
+    token: &SourceToken,
+) {
+    let Some((start, end)) = scene_effect_identifier_bounds(token) else {
+        return;
+    };
+    let resolution = if command == "sfx" {
+        crate::surface::ParserTokenResolution::Sfx(token.text.clone())
+    } else {
+        crate::surface::ParserTokenResolution::Music(token.text.clone())
+    };
+    recognition.mark_resolved(
+        SourceSpan { start, end },
+        SurfaceSemanticKind::Asset,
+        resolution,
+    );
 }
 
 fn source_tokens_span(tokens: &[SourceToken]) -> Option<SourceSpan> {
@@ -539,7 +559,7 @@ fn rewrite_effect_parser_recognition(tokens: &[SourceToken]) -> crate::surface::
 
 fn add_rewrite_effect_surface_tokens(
     tokens: &[SourceToken],
-    sink: &mut impl SemanticDispositionSink,
+    sink: &mut crate::surface::ParserRecognition,
 ) -> bool {
     let Some(first) = tokens.first() else {
         return false;
@@ -605,7 +625,7 @@ fn add_rewrite_effect_surface_tokens(
         }
         [command, asset] if command.text == "sfx" => {
             add_scene_effect_token_range(sink, command, SurfaceSemanticKind::Effect);
-            add_scene_effect_token_range(sink, asset, SurfaceSemanticKind::Asset);
+            add_sound_asset_token(sink, "sfx", asset);
             true
         }
         [name, op, value] if is_variable_update_operator(&op.text) => {
@@ -619,7 +639,7 @@ fn add_rewrite_effect_surface_tokens(
 
 fn add_simple_rewrite_effect_surface_tokens(
     tokens: &[SourceToken],
-    sink: &mut impl SemanticDispositionSink,
+    sink: &mut crate::surface::ParserRecognition,
 ) -> bool {
     let mut index = 0usize;
     let mut parsed_any = false;
@@ -656,7 +676,7 @@ fn add_simple_rewrite_effect_surface_tokens(
             "sfx" => {
                 add_scene_effect_token_range(sink, &tokens[index], SurfaceSemanticKind::Effect);
                 if let Some(asset) = tokens.get(index + 1) {
-                    add_scene_effect_token_range(sink, asset, SurfaceSemanticKind::Asset);
+                    add_sound_asset_token(sink, "sfx", asset);
                     index += 2;
                 } else {
                     index += 1;
