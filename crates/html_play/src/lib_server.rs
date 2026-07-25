@@ -156,7 +156,6 @@ fn route(request: &HttpRequest, state: Arc<Mutex<ServerState>>) -> String {
     match (method, path) {
         ("GET", "/") | ("GET", "/index.html") => http_ok("text/html; charset=utf-8", INDEX_HTML),
         ("GET", "/app.css") => http_ok("text/css; charset=utf-8", APP_CSS),
-        ("GET", "/theme-presets.css") => http_ok("text/css; charset=utf-8", THEME_PRESETS_CSS),
         ("GET", "/renderer.css") => http_ok("text/css; charset=utf-8", RENDERER_CSS),
         ("GET", "/game.css") => {
             let state = state.lock().expect("server state poisoned");
@@ -166,19 +165,11 @@ fn route(request: &HttpRequest, state: Arc<Mutex<ServerState>>) -> String {
             let state = state.lock().expect("server state poisoned");
             http_ok("text/javascript; charset=utf-8", &state.game_visuals_js)
         }
-        ("GET", "/sound-generator.js") => {
-            let script = sound_tools_js();
-            http_ok("text/javascript; charset=utf-8", &script)
-        }
         ("GET", "/app.js") => http_ok("text/javascript; charset=utf-8", APP_JS),
         ("GET", "/visual_tween_core.js") => {
             http_ok("text/javascript; charset=utf-8", VISUAL_TWEEN_CORE_JS)
         }
         ("GET", "/renderer.js") => http_ok("text/javascript; charset=utf-8", RENDERER_JS),
-        ("GET", "/api/scene") => {
-            let state = state.lock().expect("server state poisoned");
-            http_ok("application/json; charset=utf-8", &state.scene_json())
-        }
         #[cfg(feature = "solver")]
         ("POST", "/api/solve") => {
             let mut state = state.lock().expect("server state poisoned");
@@ -196,65 +187,18 @@ fn route(request: &HttpRequest, state: Arc<Mutex<ServerState>>) -> String {
             };
             handle_session_action(state, action)
         }
-        (method, path) => match session_action_from_http(method, path) {
-            Ok(action) => handle_session_action(state, action),
-            Err(_) => http_error(404, "not found"),
-        },
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn session_action_from_http(
-    method: &str,
-    path: &str,
-) -> Result<puzzle_runtime_contract::SessionAction, String> {
-    use puzzle_runtime_contract::SessionAction;
-    match (method, path) {
-        ("GET", "/api/state") => Ok(SessionAction::Snapshot),
-        ("POST", "/api/resume") => Ok(SessionAction::Resume),
-        ("POST", "/api/command/undo") => Ok(SessionAction::Undo),
-        ("POST", "/api/command/redo") => Ok(SessionAction::Redo),
-        ("POST", "/api/command/restart") => Ok(SessionAction::Restart),
-        ("POST", "/api/command/next") | ("POST", "/api/command/next_level") => {
-            Ok(SessionAction::NextLevel)
+        ("GET", "/api/state") => {
+            let state = state.lock().expect("server state poisoned");
+            match state.snapshot_json() {
+                Ok((body, rejected_audio)) => {
+                    report_live_server_audio_rejection(rejected_audio);
+                    http_ok("application/json; charset=utf-8", &body)
+                }
+                Err(error) => http_error(500, &error),
+            }
         }
-        ("POST", "/api/command/previous_level") => Ok(SessionAction::PreviousLevel),
-        ("POST", path) if path.starts_with("/api/debug/input/") => Ok(SessionAction::DebugInput {
-            name: percent_decode(&path["/api/debug/input/".len()..])?,
-        }),
-        ("POST", path) if path.starts_with("/api/input/") => Ok(SessionAction::Input {
-            name: percent_decode(&path["/api/input/".len()..])?,
-        }),
-        ("POST", path) if path.starts_with("/api/command/") => Ok(SessionAction::Command {
-            name: percent_decode(&path["/api/command/".len()..])?,
-        }),
-        _ => Err(format!("unsupported session request: {method} {path}")),
+        _ => http_error(404, "not found"),
     }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn percent_decode(value: &str) -> Result<String, String> {
-    let bytes = value.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%' {
-            let hex = bytes
-                .get(index + 1..index + 3)
-                .ok_or_else(|| format!("invalid percent encoding in session path: {value}"))?;
-            let hex = std::str::from_utf8(hex)
-                .map_err(|_| format!("invalid percent encoding in session path: {value}"))?;
-            let byte = u8::from_str_radix(hex, 16)
-                .map_err(|_| format!("invalid percent encoding in session path: {value}"))?;
-            decoded.push(byte);
-            index += 3;
-            continue;
-        }
-        decoded.push(bytes[index]);
-        index += 1;
-    }
-    String::from_utf8(decoded)
-        .map_err(|_| format!("session path is not valid UTF-8 after percent decoding: {value}"))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -262,642 +206,70 @@ fn handle_session_action(
     state: Arc<Mutex<ServerState>>,
     action: puzzle_runtime_contract::SessionAction,
 ) -> String {
-    use puzzle_runtime_contract::SessionAction;
-    if !matches!(
-        &action,
-        SessionAction::Snapshot
-            | SessionAction::Resume
-            | SessionAction::ComponentEvent { .. }
-    )
-        && state
-            .lock()
-            .expect("server state poisoned")
-            .session
-            .is_waiting()
-    {
-        return http_error(409, "session action is unavailable while a turn is waiting");
-    }
-    match action {
-        SessionAction::Snapshot => {
-            let mut state = state.lock().expect("server state poisoned");
-            http_ok("application/json; charset=utf-8", &state.snapshot_json())
-        }
-        SessionAction::Resume => {
-            let mut state = state.lock().expect("server state poisoned");
-            let result = {
-                let ServerState {
-                    session, loaded, ..
-                } = &mut *state;
-                session.resume_wait(loaded)
-            };
-            match result {
-                Ok(()) => http_ok("application/json; charset=utf-8", &state.snapshot_json()),
-                Err(error) => http_error(409, &format!("{error:?}")),
+    let mut state = state.lock().expect("server state poisoned");
+    match state.runtime.dispatch_development_typed(action) {
+        Ok(snapshot) => match live_server_snapshot_json(snapshot) {
+            Ok((body, rejected_audio)) => {
+                report_live_server_audio_rejection(rejected_audio);
+                http_ok("application/json; charset=utf-8", &body)
             }
-        }
-        SessionAction::ComponentEvent { instance, event } => {
-            let mut state = state.lock().expect("server state poisoned");
-            let result = {
-                let ServerState {
-                    session, loaded, ..
-                } = &mut *state;
-                session.apply_component_event(loaded, &instance, &event)
-            };
-            match result {
-                Ok(()) => http_ok("application/json; charset=utf-8", &state.snapshot_json()),
-                Err(error) => http_error(409, &format!("{error:?}")),
-            }
-        }
-        SessionAction::Undo => mutate(state, |state| state.session.undo(&state.loaded)),
-        SessionAction::Redo => mutate(state, |state| state.session.redo(&state.loaded)),
-        SessionAction::Restart => {
-            let mut state = state.lock().expect("server state poisoned");
-            let result = {
-                let ServerState {
-                    session, loaded, ..
-                } = &mut *state;
-                session.restart_level(loaded)
-            };
-            match result {
-                Ok(()) => http_ok("application/json; charset=utf-8", &state.snapshot_json()),
-                Err(error) => http_error(400, &format!("{error:?}")),
-            }
-        }
-        SessionAction::NextLevel => {
-            mutate(state, |state| state.session.advance_level(&state.loaded))
-        }
-        SessionAction::PreviousLevel => {
-            mutate(state, |state| state.session.previous_level(&state.loaded))
-        }
-        SessionAction::GotoLevel { level } => {
-            let mut state = state.lock().expect("server state poisoned");
-            if level >= state.loaded.levels.len() {
-                return http_error(400, &format!("level index out of range: {level}"));
-            }
-            let ServerState {
-                session, loaded, ..
-            } = &mut *state;
-            session.start_level(loaded, level);
-            http_ok("application/json; charset=utf-8", &state.snapshot_json())
-        }
-        SessionAction::Input { name: input_name } => {
-            let mut state = state.lock().expect("server state poisoned");
-            match state.apply_input_name(&input_name) {
-                Ok(()) => http_ok("application/json; charset=utf-8", &state.snapshot_json()),
-                Err(error) => http_error(400, &error.to_string()),
-            }
-        }
-        SessionAction::DebugInput { name: input_name } => {
-            let mut state = state.lock().expect("server state poisoned");
-            match state.apply_debug_input_name_json(&input_name) {
-                Ok(body) => http_ok("application/json; charset=utf-8", &body),
-                Err(error) => http_error(400, &error.to_string()),
-            }
-        }
-        SessionAction::Command { name: command_name } => {
-            let mut state = state.lock().expect("server state poisoned");
-            match state.apply_command_name(&command_name) {
-                Ok(()) => http_ok("application/json; charset=utf-8", &state.snapshot_json()),
-                Err(error) => http_error(400, &error.to_string()),
-            }
-        }
-        SessionAction::SceneEffect { effect } => {
-            let mut state = state.lock().expect("server state poisoned");
-            let result = {
-                let ServerState {
-                    session, loaded, ..
-                } = &mut *state;
-                session.apply_scene_effect(loaded, &effect)
-            };
-            match result {
-                Ok(()) => http_ok("application/json; charset=utf-8", &state.snapshot_json()),
-                Err(error) => http_error(400, &format!("{error:?}")),
-            }
-        }
+            Err(error) => http_error(500, &error),
+        },
+        Err(error) => http_error(400, &error),
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn mutate<F>(state: Arc<Mutex<ServerState>>, update: F) -> String
-where
-    F: FnOnce(&mut ServerState),
-{
-    let mut state = state.lock().expect("server state poisoned");
-    update(&mut state);
-    http_ok("application/json; charset=utf-8", &state.snapshot_json())
+fn live_server_snapshot_json(
+    snapshot: puzzle_session_contract::RuntimeDevelopmentSessionSnapshot,
+) -> Result<(String, usize), String> {
+    let (snapshot, rejected_audio) = project_live_server_presentation(snapshot);
+    puzzle_presentation_json::to_string(&snapshot)
+        .map(|body| (body, rejected_audio))
+        .map_err(|error| format!("snapshot JSON could not be serialized: {error}"))
 }
 
-fn input_id_by_name(loaded: &LoadedGame, input_name: &str) -> Option<InputId> {
-    loaded
-        .input_labels
-        .iter()
-        .find_map(|(id, label)| (label == input_name).then_some(*id))
-}
-
-fn push_session_state(out: &mut String, loaded: &LoadedGame, session: &GameSession) {
-    out.push_str("\"gameState\":{");
-    let values = session.session_values();
-    let mut entries = values.iter().collect::<Vec<_>>();
-    entries.sort_by(|(left, _), (right, _)| left.cmp(right));
-    for (index, (name, value)) in entries.into_iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        push_json_string(out, name);
-        out.push(':');
-        push_scene_value(
-            out,
-            loaded,
-            session,
-            session.surface_state().focused_component(),
-            value,
+#[cfg(not(target_arch = "wasm32"))]
+fn report_live_server_audio_rejection(rejected_audio: usize) {
+    if rejected_audio > 0 {
+        eprintln!(
+            "audio consumer: live server has no browser audio device; rejected {rejected_audio} typed audio presentation event(s)"
         );
     }
-    out.push('}');
 }
 
-fn push_scene_state(out: &mut String, loaded: &LoadedGame, session: &GameSession) {
-    push_scene_state_for(
-        out,
-        loaded,
-        session,
-        session.surface_state().focused_component(),
-        session.scene_state(),
-    );
-}
-
-fn push_scene_state_for(
-    out: &mut String,
-    loaded: &LoadedGame,
-    session: &GameSession,
-    scene_name: &str,
-    state: Option<&puzzle_play::SceneRuntimeState>,
+#[cfg(not(target_arch = "wasm32"))]
+fn project_live_server_presentation(
+    mut snapshot: puzzle_session_contract::RuntimeDevelopmentSessionSnapshot,
+) -> (
+    puzzle_session_contract::RuntimeDevelopmentSessionSnapshot,
+    usize,
 ) {
-    out.push_str("\"sceneState\":{");
-    let Some(state) = state else {
-        out.push('}');
-        return;
-    };
-    let mut entries = state.values.iter().collect::<Vec<_>>();
-    entries.sort_by(|(left, _), (right, _)| left.cmp(right));
-    for (index, (name, value)) in entries.into_iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        push_json_string(out, name);
-        out.push(':');
-        push_scene_value(out, loaded, session, scene_name, value);
-    }
-    out.push('}');
+    let (events, rejected_audio) =
+        project_live_server_events(std::mem::take(&mut snapshot.player.presentation_events));
+    snapshot.player.presentation_events = events;
+    (snapshot, rejected_audio)
 }
 
-fn push_scene_puzzles(out: &mut String, state: Option<&puzzle_play::SceneRuntimeState>) {
-    out.push_str("\"scenePuzzles\":[");
-    let Some(state) = state else {
-        out.push(']');
-        return;
-    };
-    let mut names = state.puzzles.keys().collect::<Vec<_>>();
-    names.sort();
-    for (index, name) in names.into_iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        push_json_string(out, name);
-    }
-    out.push(']');
-}
-
-fn push_scene_puzzle_state(out: &mut String, loaded: &LoadedGame, session: &GameSession) {
-    out.push_str("\"scenePuzzleState\":{");
-    let Some(state) = session.scene_state() else {
-        out.push('}');
-        return;
-    };
-    let mut names = state.puzzles.keys().collect::<Vec<_>>();
-    names.sort();
-    for (index, name) in names.into_iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        push_json_string(out, name);
-        out.push_str(":{");
-        if let Some(level_index) = state
-            .puzzles
-            .get(name)
-            .and_then(|puzzle| puzzle.active_level_index)
-        {
-            out.push_str("\"level\":");
-            push_level_ref(
-                out,
-                loaded,
-                session.cleared_levels(),
-                session.surface_state().focused_component(),
-                level_index,
-            );
-        } else {
-            out.push_str("\"level\":null");
-        }
-        if let Some(puzzle) = state.puzzles.get(name) {
-            out.push(',');
-            let level = puzzle
-                .active_level_index
-                .and_then(|index| loaded.levels.get(index));
-            push_scene_object_body(
-                out,
-                loaded,
-                &puzzle.state,
-                level,
-                scene_resources(loaded, session.surface_state().focused_component()),
-            );
-        }
-        out.push('}');
-    }
-    out.push('}');
-}
-
-fn scene_resources<'a>(
-    loaded: &'a LoadedGame,
-    scene_name: &str,
-) -> Option<&'a puzzle_lang::SceneResources> {
-    loaded
-        .scenes
-        .iter()
-        .find(|scene| scene.name == scene_name)
-        .map(|scene| &scene.resources)
-}
-
-fn push_level_ref(
-    out: &mut String,
-    loaded: &LoadedGame,
-    cleared_levels: &[bool],
-    scene_name: &str,
-    level_index: usize,
+#[cfg(not(target_arch = "wasm32"))]
+fn project_live_server_events(
+    events: Vec<puzzle_runtime_contract::RuntimePresentationEvent>,
+) -> (
+    Vec<puzzle_runtime_contract::RuntimePresentationEvent>,
+    usize,
 ) {
-    out.push('{');
-    push_json_number(out, "index", level_index as u64);
-    if let Some(level) = loaded.levels.get(level_index) {
-        out.push(',');
-        push_json_pair(out, "name", &level.name);
-        out.push(',');
-        push_json_pair(out, "label", &level.name);
-        out.push(',');
-        push_json_pair(out, "puzzle", &level.puzzle);
-        out.push(',');
-        if let Some(pack) = &level.pack {
-            push_json_pair(out, "pack", pack);
-        } else {
-            out.push_str("\"pack\":null");
-        }
-    }
-    out.push(',');
-    push_json_bool(
-        out,
-        "cleared",
-        cleared_levels.get(level_index).copied().unwrap_or(false),
-    );
-    out.push(',');
-    push_json_bool(
-        out,
-        "solved",
-        cleared_levels.get(level_index).copied().unwrap_or(false),
-    );
-    out.push(',');
-    push_json_bool(
-        out,
-        "has_next",
-        level_has_next_in_scene(loaded, scene_name, level_index),
-    );
-    out.push(',');
-    push_json_bool(
-        out,
-        "last",
-        !level_has_next_in_scene(loaded, scene_name, level_index),
-    );
-    out.push('}');
-}
-
-fn level_has_next_in_scene(loaded: &LoadedGame, scene_name: &str, level_index: usize) -> bool {
-    let indices = html_scene_level_indices(loaded, scene_name);
-    indices
-        .iter()
-        .position(|index| *index == level_index)
-        .is_some_and(|position| position + 1 < indices.len())
-}
-
-fn html_scene_level_indices(loaded: &LoadedGame, scene_name: &str) -> Vec<usize> {
-    let Some(scene) = loaded.scenes.iter().find(|scene| scene.name == scene_name) else {
-        return (0..loaded.levels.len()).collect();
-    };
-    match &scene.resources.levels {
-        ResourceSelection::All => (0..loaded.levels.len()).collect(),
-        ResourceSelection::Named(names) => loaded
-            .levels
-            .iter()
-            .enumerate()
-            .filter_map(|(index, level)| {
-                names
-                    .iter()
-                    .any(|name| html_level_resource_matches(name, &level.name))
-                    .then_some(index)
-            })
-            .collect(),
-    }
-}
-
-fn html_level_resource_matches(resource: &str, level_name: &str) -> bool {
-    level_name == resource
-        || level_name
-            .strip_prefix(resource)
-            .is_some_and(|rest| rest.starts_with('.'))
-}
-
-fn push_scene_value(
-    out: &mut String,
-    loaded: &LoadedGame,
-    session: &GameSession,
-    scene_name: &str,
-    value: &SceneValue,
-) {
-    match value {
-        SceneValue::Bool(value) => out.push_str(if *value { "true" } else { "false" }),
-        SceneValue::Int(value) => out.push_str(&value.to_string()),
-        SceneValue::Text(value) | SceneValue::Symbol(value) => push_json_string(out, value),
-        SceneValue::LevelRef(index) => {
-            push_level_ref(out, loaded, session.cleared_levels(), scene_name, *index)
-        }
-    }
-}
-
-fn push_surface(out: &mut String, loaded: &LoadedGame, session: &GameSession) {
-    out.push_str("\"surface\":{");
-    out.push_str("\"root\":");
-    if let Some(root) = session.surface_state().root() {
-        push_json_string(out, root);
-    } else {
-        out.push_str("null");
-    }
-    out.push(',');
-    push_json_pair(
-        out,
-        "focus",
-        session.surface_state().focused_component(),
-    );
-    out.push_str(",\"components\":[");
-    for (index, component) in session.surface_state().components().iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        out.push('{');
-        push_json_pair(out, "id", &component.id);
-        out.push(',');
-        push_json_pair(out, "definition", &component.definition);
-        out.push(',');
-        push_json_pair(
-            out,
-            "placement",
-            match component.placement {
-                puzzle_lang::ComponentPlacement::Root => "root",
-                puzzle_lang::ComponentPlacement::Content => "content",
-                puzzle_lang::ComponentPlacement::Overlay => "overlay",
-            },
-        );
-        out.push(',');
-        push_json_pair(
-            out,
-            "visibility",
-            match component.visibility {
-                puzzle_lang::ComponentVisibility::Visible => "visible",
-                puzzle_lang::ComponentVisibility::Hidden => "hidden",
-            },
-        );
-        out.push(',');
-        push_json_bool(out, "modal", component.modal);
-        if component.id == component.definition
-            && loaded
-                .scenes
-                .iter()
-                .any(|scene| scene.name == component.definition)
-        {
-            let name = &component.definition;
-            let state = session.scene_state_for(name);
-            out.push(',');
-            push_json_bool(
-                out,
-                "focused",
-                component.id == session.surface_state().focused_component(),
-            );
-            out.push(',');
-            push_json_pair(out, "name", name);
-            out.push(',');
-            push_scene_state_for(out, loaded, session, name, state);
-            out.push(',');
-            push_scene_puzzles(out, state);
-            out.push(',');
-            out.push_str("\"scene\":");
-            if let Some((puzzle_state, level)) = scene_puzzle_state(loaded, session, name) {
-                let definition = loaded.scenes.iter().find(|scene| scene.name == *name);
-                push_scene_object(
-                    out,
-                    loaded,
-                    puzzle_state,
-                    level,
-                    definition.map(|scene| &scene.resources),
-                );
-            } else {
-                out.push_str("null");
-            }
-        }
-        if !component.properties.is_empty() {
-            out.push_str(",\"properties\":{");
-            let mut properties = component.properties.iter().collect::<Vec<_>>();
-            properties.sort_by(|(left, _), (right, _)| left.cmp(right));
-            for (property_index, (name, value)) in properties.into_iter().enumerate() {
-                if property_index > 0 {
-                    out.push(',');
-                }
-                push_json_string(out, name);
-                out.push(':');
-                push_scene_value(
-                    out,
-                    loaded,
-                    session,
-                    session.surface_state().focused_component(),
-                    value,
-                );
-            }
-            out.push('}');
-        }
-        if let Some(event) = &component.awaited_event {
-            out.push(',');
-            push_json_pair(out, "awaitEvent", event);
-        }
-        out.push('}');
-    }
-    out.push_str("]}");
-}
-
-fn focused_scene_state<'a>(
-    loaded: &'a LoadedGame,
-    session: &'a GameSession,
-) -> Option<&'a puzzle_core::State> {
-    scene_puzzle_state(
-        loaded,
-        session,
-        session.surface_state().focused_component(),
-    )
-    .map(|(state, _)| state)
-}
-
-fn scene_puzzle_state<'a>(
-    loaded: &'a LoadedGame,
-    session: &'a GameSession,
-    scene_name: &str,
-) -> Option<(&'a puzzle_core::State, Option<&'a Level>)> {
-    let scene = loaded
-        .scenes
-        .iter()
-        .find(|scene| scene.name == scene_name)?;
-    let state = session.scene_state_for(scene_name)?;
-    let puzzle = if let Some(rule) = &scene.puzzle_rule {
-        if let Some(puzzle_name) = rule.target.split('.').next_back() {
-            if let Some(puzzle) = state.puzzles.get(puzzle_name) {
-                Some(puzzle)
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    } else {
-        first_puzzle_component(&scene.components)
-            .and_then(|puzzle_name| state.puzzles.get(puzzle_name))
-    }?;
-    let level = puzzle
-        .active_level_index
-        .and_then(|index| loaded.levels.get(index));
-    Some((&puzzle.state, level))
-}
-
-fn first_puzzle_component(components: &[SceneComponent]) -> Option<&str> {
-    for component in components {
-        match component {
-            SceneComponent::Viewport(viewport) => {
-                return Some(viewport.source.as_str());
-            }
-            SceneComponent::Row(container)
-            | SceneComponent::Column(container)
-            | SceneComponent::Box(container) => {
-                if let Some(name) = first_puzzle_component(&container.children) {
-                    return Some(name);
-                }
-            }
-            SceneComponent::Conditional(conditional) => {
-                if let Some(name) = first_puzzle_component(&conditional.children) {
-                    return Some(name);
-                }
-                if let Some(name) = first_puzzle_component(&conditional.else_children) {
-                    return Some(name);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-fn push_scene(
-    out: &mut String,
-    loaded: &LoadedGame,
-    state: &puzzle_core::State,
-    level: Option<&Level>,
-    resources: Option<&puzzle_lang::SceneResources>,
-) {
-    out.push_str("\"scene\":");
-    push_scene_object(out, loaded, state, level, resources);
-}
-
-fn push_scene_object(
-    out: &mut String,
-    loaded: &LoadedGame,
-    state: &puzzle_core::State,
-    level: Option<&Level>,
-    resources: Option<&puzzle_lang::SceneResources>,
-) {
-    out.push('{');
-    push_scene_object_body(out, loaded, state, level, resources);
-    out.push('}');
-}
-
-fn push_scene_object_body(
-    out: &mut String,
-    loaded: &LoadedGame,
-    state: &puzzle_core::State,
-    level: Option<&Level>,
-    resources: Option<&puzzle_lang::SceneResources>,
-) {
-    push_json_number(out, "width", state.width as u64);
-    out.push(',');
-    push_json_number(out, "height", state.height as u64);
-    out.push(',');
-    push_json_number(out, "layerCount", state.layer_count as u64);
-    out.push(',');
-    push_puzzle_settings(out, loaded);
-    out.push(',');
-    push_puzzle_screen(out, loaded);
-    out.push(',');
-    out.push_str("\"resources\":");
-    if let Some(resources) = resources {
-        out.push('{');
-        push_scene_resources_object(out, resources);
-        out.push('}');
-    } else {
-        out.push_str("null");
-    }
-    out.push(',');
-    push_scene_regions(out, level);
-    out.push(',');
-    push_cells(out, loaded, state);
-}
-
-fn push_puzzle_settings(out: &mut String, loaded: &LoadedGame) {
-    out.push_str("\"settings\":{");
-    out.push_str("\"render\":{}");
-    out.push(',');
-    out.push_str("\"grid\":{");
-    let occupied_cells = loaded.render.grid.occupied_cells;
-    let all_cells = loaded.render.grid.all_cells;
-    push_json_number(out, "visibility", u64::from(occupied_cells || all_cells));
-    out.push(',');
-    push_json_bool(out, "occupied_cells", occupied_cells);
-    out.push(',');
-    push_json_bool(out, "all_cells", all_cells);
-    out.push('}');
-    out.push(',');
-    out.push_str("\"inputBuffer\":{");
-    push_json_bool(
-        out,
-        "queueDuringWait",
-        loaded.input_buffer.queue_during_wait,
-    );
-    out.push(',');
-    push_json_bool(
-        out,
-        "fastForwardWait",
-        loaded.input_buffer.fast_forward_wait,
-    );
-    out.push(',');
-    push_json_number(out, "minWaitMs", loaded.input_buffer.min_wait_ms);
-    out.push('}');
-    out.push(',');
-    out.push_str("\"animation\":{");
-    out.push_str("\"tween\":{");
-    push_json_bool(out, "enabled", loaded.animation.tween.enabled);
-    out.push(',');
-    push_json_number(out, "intervalMs", loaded.animation.tween.interval_ms);
-    out.push('}');
-    out.push('}');
-    out.push('}');
+    let original_len = events.len();
+    let events = events
+        .into_iter()
+        .filter(|event| {
+            !matches!(
+                event,
+                puzzle_runtime_contract::RuntimePresentationEvent::Audio { .. }
+            )
+        })
+        .collect::<Vec<_>>();
+    let rejected_audio = original_len - events.len();
+    (events, rejected_audio)
 }
 
 fn push_puzzle_screen(out: &mut String, loaded: &LoadedGame) {
@@ -986,57 +358,6 @@ fn push_scene_regions(out: &mut String, level: Option<&Level>) {
     out.push(']');
 }
 
-fn push_cells(out: &mut String, loaded: &LoadedGame, state: &puzzle_core::State) {
-    out.push_str("\"cells\":[");
-    let mut first_cell = true;
-
-    for y in 0..state.height {
-        for x in 0..state.width {
-            if !first_cell {
-                out.push(',');
-            }
-            first_cell = false;
-
-            out.push('{');
-            push_json_number(out, "x", x as u64);
-            out.push(',');
-            push_json_number(out, "y", y as u64);
-            out.push(',');
-            out.push_str("\"layers\":[");
-
-            let mut first_layer = true;
-            for layer in 0..state.layer_count {
-                let layer_id = LayerId(layer);
-                let object = state.get_layer(x, y, layer_id).unwrap_or(ObjectId::EMPTY);
-                if object.is_empty() {
-                    continue;
-                }
-
-                if !first_layer {
-                    out.push(',');
-                }
-                first_layer = false;
-
-                let object_name = loaded.object_name(object);
-                out.push('{');
-                push_json_number(out, "layer", layer as u64);
-                out.push(',');
-                push_json_number(out, "objectId", object.0 as u64);
-                out.push(',');
-                push_json_pair(out, "object", object_name);
-                out.push(',');
-                push_json_pair(out, "visual", &visual_name(object_name));
-                out.push('}');
-            }
-
-            out.push(']');
-            out.push('}');
-        }
-    }
-
-    out.push(']');
-}
-
 fn visual_name(object_name: &str) -> String {
     let mut visual = String::new();
     for ch in object_name.chars() {
@@ -1052,334 +373,6 @@ fn visual_name(object_name: &str) -> String {
     } else {
         visual
     }
-}
-
-fn push_inputs(out: &mut String, loaded: &LoadedGame) {
-    let mut inputs = loaded
-        .input_labels
-        .iter()
-        .map(|(id, name)| (*id, name.as_str()))
-        .collect::<Vec<_>>();
-    inputs.sort_by_key(|(id, _)| *id);
-
-    out.push_str("\"inputs\":[");
-    for (index, (id, name)) in inputs.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        out.push('{');
-        push_json_number(out, "id", id.0 as u64);
-        out.push(',');
-        push_json_pair(out, "name", name);
-        out.push(',');
-        if let Some(key) = key_for_input(loaded, *id) {
-            push_json_pair(out, "key", &key);
-        } else {
-            out.push_str("\"key\":null");
-        }
-        out.push(',');
-        if let Some(arrow) = arrow_for_input(loaded, *id) {
-            push_json_pair(out, "arrow", &arrow);
-        } else {
-            out.push_str("\"arrow\":null");
-        }
-        out.push(',');
-        out.push_str("\"keys\":[");
-        for (key_index, key) in key_triggers_for_input(loaded, *id).iter().enumerate() {
-            if key_index > 0 {
-                out.push(',');
-            }
-            push_json_string(out, key);
-        }
-        out.push(']');
-        out.push('}');
-    }
-    out.push(']');
-}
-
-fn push_levels(out: &mut String, loaded: &LoadedGame, cleared_levels: &[bool]) {
-    out.push_str("\"levels\":[");
-    for (index, level) in loaded.levels.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        out.push('{');
-        push_json_number(out, "index", index as u64);
-        out.push(',');
-        push_json_pair(out, "name", &level.name);
-        out.push(',');
-        push_json_pair(out, "puzzle", &level.puzzle);
-        out.push(',');
-        if let Some(pack) = &level.pack {
-            push_json_pair(out, "pack", pack);
-        } else {
-            out.push_str("\"pack\":null");
-        }
-        out.push(',');
-        push_json_bool(
-            out,
-            "cleared",
-            cleared_levels.get(index).copied().unwrap_or(false),
-        );
-        out.push('}');
-    }
-    out.push(']');
-}
-
-fn push_top_scope_context(out: &mut String, loaded: &LoadedGame, has_progress_save: bool) {
-    push_json_pair(out, "title", &loaded.title);
-    out.push(',');
-    out.push_str("\"subtitle\":");
-    if let Some(subtitle) = &loaded.subtitle {
-        push_json_string(out, subtitle);
-    } else {
-        out.push_str("null");
-    }
-    out.push(',');
-    out.push_str("\"author\":");
-    if let Some(author) = &loaded.author {
-        push_json_string(out, author);
-    } else {
-        out.push_str("null");
-    }
-    out.push(',');
-    out.push_str("\"homepage\":");
-    if let Some(homepage) = &loaded.homepage {
-        push_json_string(out, homepage);
-    } else {
-        out.push_str("null");
-    }
-    out.push(',');
-    push_json_bool(out, "has_progress_save", has_progress_save);
-}
-
-fn push_level_context(
-    out: &mut String,
-    loaded: &LoadedGame,
-    cleared_levels: &[bool],
-    level_index: Option<usize>,
-) {
-    let Some(level_index) = level_index else {
-        out.push_str("\"level\":null");
-        return;
-    };
-    let Some(level) = loaded.levels.get(level_index) else {
-        out.push_str("\"level\":null");
-        return;
-    };
-    out.push_str("\"level\":{");
-    push_json_number(out, "index", level_index as u64);
-    out.push(',');
-    push_json_number(out, "number", level_index as u64 + 1);
-    out.push(',');
-    push_json_number(out, "count", loaded.levels.len() as u64);
-    out.push(',');
-    push_json_pair(out, "name", &level.name);
-    out.push(',');
-    push_json_pair(out, "label", &level.name);
-    out.push(',');
-    push_json_pair(out, "puzzle", &level.puzzle);
-    out.push(',');
-    if let Some(pack) = &level.pack {
-        push_json_pair(out, "pack", pack);
-    } else {
-        out.push_str("\"pack\":null");
-    }
-    out.push(',');
-    push_json_bool(
-        out,
-        "cleared",
-        cleared_levels.get(level_index).copied().unwrap_or(false),
-    );
-    out.push(',');
-    push_json_bool(
-        out,
-        "solved",
-        cleared_levels.get(level_index).copied().unwrap_or(false),
-    );
-    out.push('}');
-}
-
-fn push_scenes(out: &mut String, key: &str, loaded: &LoadedGame) {
-    push_json_string(out, key);
-    out.push_str(":[");
-    for (screen_index, scene) in loaded.scenes.iter().enumerate() {
-        if screen_index > 0 {
-            out.push(',');
-        }
-        out.push('{');
-        push_json_pair(out, "name", &scene.name);
-        out.push(',');
-        push_scene_layout(out, &scene.layout);
-        out.push(',');
-        push_scene_resources(out, scene);
-        out.push(',');
-        push_scene_state_def(out, scene);
-        out.push(',');
-        out.push_str("\"puzzleRule\":");
-        if let Some(rule) = &scene.puzzle_rule {
-            out.push('{');
-            push_json_pair(out, "target", &rule.target);
-            out.push(',');
-            push_json_pair(out, "rule", &rule.rule);
-            out.push('}');
-        } else {
-            out.push_str("null");
-        }
-        out.push(',');
-        out.push_str("\"components\":[");
-        for (component_index, component) in scene.components.iter().enumerate() {
-            if component_index > 0 {
-                out.push(',');
-            }
-            push_scene_component(out, component);
-        }
-        out.push(']');
-        out.push(',');
-        out.push_str("\"keys\":[");
-        for (binding_index, binding) in scene.key_bindings.iter().enumerate() {
-            if binding_index > 0 {
-                out.push(',');
-            }
-            out.push('{');
-            push_json_effect(out, &binding.effect);
-            out.push(',');
-            out.push_str("\"keys\":[");
-            for (key_index, key) in binding.keys.iter().enumerate() {
-                if key_index > 0 {
-                    out.push(',');
-                }
-                push_json_string(out, &key_trigger_name(key));
-            }
-            out.push(']');
-            out.push('}');
-        }
-        out.push(']');
-        out.push(',');
-        out.push_str("\"routines\":[");
-        for (routine_index, routine) in scene.routines.iter().enumerate() {
-            if routine_index > 0 {
-                out.push(',');
-            }
-            out.push('{');
-            push_json_pair(out, "name", &routine.name);
-            out.push(',');
-            push_json_effect(out, &routine.effect);
-            out.push('}');
-        }
-        out.push(']');
-        out.push(',');
-        out.push_str("\"transitions\":[");
-        for (transition_index, transition) in scene.transitions.iter().enumerate() {
-            if transition_index > 0 {
-                out.push(',');
-            }
-            out.push('{');
-            match &transition.trigger {
-                SceneTransitionTrigger::Condition(condition) => {
-                    push_json_expr_named(out, "condition", condition);
-                }
-                SceneTransitionTrigger::Signal(condition) => {
-                    push_json_expr_named(out, "signal", condition);
-                }
-                SceneTransitionTrigger::SceneStart => {
-                    push_json_pair(out, "lifecycle", "scene_start");
-                }
-                SceneTransitionTrigger::LevelStart => {
-                    push_json_pair(out, "lifecycle", "level_start");
-                }
-            }
-            out.push(',');
-            push_json_effect(out, &transition.effect);
-            out.push('}');
-        }
-        out.push(']');
-        out.push('}');
-    }
-    out.push(']');
-}
-
-fn push_scene_resources(out: &mut String, scene: &puzzle_lang::SceneDef) {
-    out.push_str("\"resources\":{");
-    push_scene_resources_object(out, &scene.resources);
-    out.push('}');
-}
-
-fn push_scene_resources_object(out: &mut String, resources: &puzzle_lang::SceneResources) {
-    push_json_pair(
-        out,
-        "levelsMode",
-        resource_selection_mode(&resources.levels),
-    );
-    out.push(',');
-    push_resource_names(out, "levels", &resources.levels);
-    out.push(',');
-    push_json_pair(
-        out,
-        "visualsMode",
-        resource_selection_mode(&resources.visuals),
-    );
-    out.push(',');
-    push_resource_names(out, "visuals", &resources.visuals);
-}
-
-fn resource_selection_mode(selection: &ResourceSelection) -> &'static str {
-    match selection {
-        ResourceSelection::All => "all",
-        ResourceSelection::Named(_) => "named",
-    }
-}
-
-fn push_resource_names(out: &mut String, name: &str, selection: &ResourceSelection) {
-    out.push('"');
-    out.push_str(name);
-    out.push_str("\":[");
-    if let ResourceSelection::Named(names) = selection {
-        for (index, value) in names.iter().enumerate() {
-            if index > 0 {
-                out.push(',');
-            }
-            push_json_string(out, value);
-        }
-    }
-    out.push(']');
-}
-
-fn push_scene_state_def(out: &mut String, scene: &puzzle_lang::SceneDef) {
-    out.push_str("\"state\":{");
-    out.push_str("\"variables\":[");
-    for (index, variable) in scene.state.variables.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        push_scene_var_def(out, variable);
-    }
-    out.push(']');
-    out.push(',');
-    out.push_str("\"puzzles\":[");
-    for (index, puzzle) in scene.state.puzzles.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        out.push('{');
-        push_json_pair(out, "name", &puzzle.name);
-        out.push(',');
-        push_json_pair(out, "model", &puzzle.model);
-        out.push(',');
-        match &puzzle.initializer {
-            ScenePuzzleInitializer::CurrentLevel => {
-                push_json_pair(out, "initializer", "current_level")
-            }
-            ScenePuzzleInitializer::Level(level_name) => {
-                push_json_pair(out, "initializer", "level");
-                out.push(',');
-                push_json_pair(out, "level", level_name);
-            }
-        }
-        out.push('}');
-    }
-    out.push(']');
-    out.push('}');
 }
 
 fn push_scene_var_def(out: &mut String, variable: &puzzle_lang::SceneVarDef) {
@@ -1418,106 +411,6 @@ fn push_scene_default_value(out: &mut String, value: &SceneValue) {
         SceneValue::Int(value) => out.push_str(&value.to_string()),
         SceneValue::Text(value) | SceneValue::Symbol(value) => push_json_string(out, value),
         SceneValue::LevelRef(index) => out.push_str(&index.to_string()),
-    }
-}
-
-fn push_scene_layout(out: &mut String, layout: &SceneLayoutDef) {
-    out.push_str("\"layout\":");
-    puzzle_scene::write_scene_layout_json(out, layout);
-}
-
-fn push_scene_component(out: &mut String, component: &SceneComponent) {
-    let mut note_level_source: fn(&str) = ignore_scene_level_source;
-    puzzle_scene::write_scene_component_fixture_json(
-        out,
-        component,
-        puzzle_scene::SceneFixtureJsonOptions::default(),
-        push_scene_text_content_fields,
-        &mut note_level_source,
-    );
-}
-
-fn push_json_effect(out: &mut String, effect: &SceneEffect) {
-    out.push_str("\"effect\":");
-    puzzle_scene::write_scene_effect_json(out, effect);
-}
-
-fn push_json_expr_named(out: &mut String, name: &str, expr: &SceneExpr) {
-    push_json_string(out, name);
-    out.push(':');
-    puzzle_scene::write_scene_expr_json(out, expr);
-}
-
-fn ignore_scene_level_source(_: &str) {}
-
-fn push_scene_text_content_fields(out: &mut String, content: &SceneTextContent) {
-    match content {
-        SceneTextContent::Literal(value) => {
-            out.push_str("\"source\": \"literal\", \"value\": ");
-            push_json_string(out, value);
-        }
-        SceneTextContent::Path(path) => {
-            out.push_str("\"source\": \"path\", \"path\": ");
-            push_json_string(out, &path.join("."));
-        }
-        SceneTextContent::Expr(expr) => {
-            out.push_str("\"source\": \"expr\", \"content\": ");
-            puzzle_scene::write_scene_expr_json(out, expr);
-        }
-    }
-}
-
-fn key_trigger_name(key: &KeyTrigger) -> String {
-    match key {
-        KeyTrigger::Char(ch) => ch.to_string(),
-        KeyTrigger::Named(name) => name.clone(),
-    }
-}
-
-fn key_for_input(loaded: &LoadedGame, input: InputId) -> Option<String> {
-    loaded
-        .controls
-        .keys
-        .iter()
-        .find_map(|(key, id)| (*id == input).then_some(char::from(*key).to_string()))
-}
-
-fn arrow_for_input(loaded: &LoadedGame, input: InputId) -> Option<String> {
-    loaded
-        .controls
-        .arrows
-        .iter()
-        .find_map(|(arrow, id)| (*id == input).then_some(arrow_name(*arrow).to_string()))
-}
-
-fn key_triggers_for_input(loaded: &LoadedGame, input: InputId) -> Vec<String> {
-    let mut keys = Vec::new();
-    for (key, id) in &loaded.controls.keys {
-        if *id == input {
-            keys.push(char::from(*key).to_string());
-        }
-    }
-    for (arrow, id) in &loaded.controls.arrows {
-        if *id == input {
-            keys.push(arrow_name(*arrow).to_string());
-        }
-    }
-    for (name, id) in &loaded.controls.named {
-        if *id == input {
-            keys.push(name.clone());
-        }
-    }
-    keys.sort();
-    keys.dedup();
-    keys
-}
-
-fn arrow_name(arrow: ArrowKey) -> &'static str {
-    match arrow {
-        ArrowKey::Up => "ArrowUp",
-        ArrowKey::Down => "ArrowDown",
-        ArrowKey::Left => "ArrowLeft",
-        ArrowKey::Right => "ArrowRight",
     }
 }
 

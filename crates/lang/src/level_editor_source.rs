@@ -159,7 +159,7 @@ fn legend_value(
 fn renderer_visual_value(visual: &VisualDef) -> Value {
     let mut value = match &visual.kind {
         VisualKind::Solid(color) => json!({ "colors": { "0": color }, "pattern": ["0"] }),
-        VisualKind::Image { source } => json!({ "source": source }),
+        VisualKind::Image { asset } => json!({ "source": asset.path }),
         VisualKind::Ascii { colors } => json!({
             "colors": colors.iter().map(|color| (color.token.to_string(), Value::String(color.color.clone()))).collect::<serde_json::Map<_, _>>(),
             "pattern": visual.frames.first().and_then(|frame| frame.planes.first()).cloned().unwrap_or_default(),

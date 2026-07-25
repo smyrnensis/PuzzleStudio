@@ -233,7 +233,6 @@ done < <(workspace_dependency_sources puzzle-wasm-player)
 html_play_preview_sources=(
   crates/html_play/static/index.html
   crates/html_play/static/app.css
-  crates/html_play/static/theme_presets.css
   crates/html_play/static/renderer.css
   crates/html_play/static/visuals.js
   crates/html_play/static/app.js
@@ -244,10 +243,6 @@ html_play_preview_sources=(
   crates/html_play/static/puzzle3_three_renderer.js
   crates/html_play/static/puzzle3_component.js
   crates/html_play/static/vendor/three/three.module.min.js
-  tools/music_generator/seeded_sfx.mjs
-  tools/music_generator/seeded_music.mjs
-  tools/music_generator/seeded_music_player.mjs
-  tools/music_generator/seeded_timbre_fields.mjs
 )
 
 ensure_target_current \
@@ -264,6 +259,7 @@ ensure_target_current \
 ensure_target_current \
   puzzle_wasm_player \
   tools/build_wasm_player.sh \
+  crates/web_audio/generated/puzzle_audio_worklet.js \
   crates/html_play/static/wasm_player/puzzle_wasm_player.js \
   crates/html_play/static/wasm_player/puzzle_wasm_player_bg.wasm \
   crates/html_editor/static/wasm_player/puzzle_wasm_player.js \
@@ -271,6 +267,10 @@ ensure_target_current \
   -- \
   "${workspace_sources[@]}" \
   tools/build_wasm_player.sh \
+  tools/build_audio_worklet_bundle.mjs \
+  crates/audio_worklet/Cargo.toml \
+  crates/audio_worklet/src \
+  crates/audio_worklet/worklet.js \
   "${wasm_player_rust_sources[@]}"
 
 ensure_target_current \

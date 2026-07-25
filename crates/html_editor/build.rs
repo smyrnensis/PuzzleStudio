@@ -4,13 +4,6 @@ fn main() {
     let embedded_assets = env::var_os("CARGO_FEATURE_EMBEDDED_ASSETS").is_some();
     if !embedded_assets {
         println!("cargo:rerun-if-changed=build.rs");
-        if env::var_os("CARGO_FEATURE_SOUND_TOOLS").is_some() {
-            println!("cargo:rerun-if-changed=../../tools/music_generator/seeded_sfx.mjs");
-            println!("cargo:rerun-if-changed=../../tools/music_generator/seeded_music.mjs");
-            println!("cargo:rerun-if-changed=../../tools/music_generator/seeded_music_player.mjs");
-            println!("cargo:rerun-if-changed=../../tools/music_generator/seeded_timbre_fields.mjs");
-            println!("cargo:rerun-if-changed=../../tools/music_generator/audio_export.mjs");
-        }
         return;
     }
 
@@ -75,8 +68,8 @@ fn main() {
     println!("cargo:rerun-if-changed=static/wasm/puzzle_wasm_bg.wasm");
     println!("cargo:rerun-if-changed=../html_play/static/wasm_game/puzzle_wasm_game.js");
     println!("cargo:rerun-if-changed=../html_play/static/wasm_game/puzzle_wasm_game_bg.wasm");
-    println!("cargo:rerun-if-changed=../html_play/static/wasm_player/puzzle_wasm_player.js");
-    println!("cargo:rerun-if-changed=../html_play/static/wasm_player/puzzle_wasm_player_bg.wasm");
+    println!("cargo:rerun-if-changed=static/wasm_player/puzzle_wasm_player.js");
+    println!("cargo:rerun-if-changed=static/wasm_player/puzzle_wasm_player_bg.wasm");
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let editor_js =
         fs::read_to_string(manifest_dir.join("static/editor.js")).expect("read static/editor.js");

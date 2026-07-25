@@ -245,7 +245,7 @@ struct VisualEntrySpec {
     sampling: Option<VisualSampling>,
     loop_duration_ms: Option<u64>,
     loop_frame_duration_ms: Option<u64>,
-    image_source: Option<String>,
+    image_source: Option<puzzle_assets::VisualImageAssetManifestEntry>,
     shape_ref: Option<(String, ValueExpr)>,
     frames: Option<Vec<VisualFrameDef>>,
     animation_duration_ms: Option<u64>,
@@ -1484,31 +1484,16 @@ fn parse_visual_sampling(
     }
 }
 
-fn parse_visual_image_path(value: &str, line: &str) -> Result<String, DiagnosticReport> {
+fn parse_visual_image_path(
+    value: &str,
+    line: &str,
+) -> Result<puzzle_assets::VisualImageAssetManifestEntry, DiagnosticReport> {
     let path = value
         .strip_prefix('"')
         .and_then(|value| value.strip_suffix('"'))
         .ok_or_else(|| parse_error(line, "visual image path must be quoted"))?;
-    if path.is_empty() {
-        return Err(parse_error(line, "visual image path must not be empty"));
-    }
-    if path.starts_with('/')
-        || path.contains('\\')
-        || path.split('/').any(|part| part == "..")
-        || path.contains("://")
-    {
-        return Err(parse_error(
-            line,
-            "visual image path must be a game-folder relative path",
-        ));
-    }
-    if !is_visual_image_source(path) {
-        return Err(parse_error(
-            line,
-            "visual image must use .png, .jpg, .jpeg, or .svg",
-        ));
-    }
-    Ok(path.to_string())
+    puzzle_assets::VisualImageAssetManifestEntry::from_path(path)
+        .map_err(|error| parse_error(line, &error.to_string()))
 }
 
 fn visual_rotation_axis_for_targets(
@@ -1659,14 +1644,6 @@ fn validate_visual_pattern_palette(
         }
     }
     Ok(())
-}
-
-fn is_visual_image_source(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
-    lower.ends_with(".png")
-        || lower.ends_with(".jpg")
-        || lower.ends_with(".jpeg")
-        || lower.ends_with(".svg")
 }
 
 pub(crate) fn visual_color_token_for_index(index: usize) -> Option<char> {
@@ -2733,7 +2710,7 @@ fn add_solid_visuals(
 fn add_image_visuals(
     selector: &str,
     line: &str,
-    source: &str,
+    asset: &puzzle_assets::VisualImageAssetManifestEntry,
     transform_exprs: &[(crate::visual_authoring::VisualPropertySyntax, String)],
     sampling: Option<VisualSampling>,
     catalog: &Catalog,
@@ -2757,7 +2734,7 @@ fn add_image_visuals(
             animation_duration_ms: None,
             pixels_per_cell: None,
             kind: VisualKind::Image {
-                source: source.to_string(),
+                asset: asset.clone(),
             },
         });
     }

@@ -29,21 +29,14 @@ fn run(args: impl IntoIterator<Item = String>) -> Result<(), AppError> {
 
     let document =
         puzzle_lang::parse_game_for_path(&source, &config.puzzle_path).map_err(AppError::Lang)?;
-    if matches!(
-        document.single_model(),
-        Some(LoadedDocumentModel::Puzzle3d { .. })
-    ) {
-        let game_css = load_asset_css(&config.puzzle_path, &document.assets)?;
+    if !config.serve || document_uses_puzzle3_renderer(&document) {
         let output_path = config.output_path();
         let puzzle_path = config.puzzle_path.display().to_string();
-        let html = export_puzzle3_document_html(&document, &puzzle_path, &game_css, VISUALS_JS)
-            .map_err(AppError::Config)?;
+        let html =
+            export_bevy_document_html(&document, &puzzle_path, StandaloneRuntimeWasm::HostDefault)
+                .map_err(AppError::Config)?;
         if let Some(screenshot) = &config.screenshot {
-            let scene = screenshot
-                .scene
-                .clone()
-                .or_else(|| default_puzzle3_screenshot_scene(&document));
-            capture_html_screenshot(&html, &screenshot.output_path, scene.as_deref(), screenshot)?;
+            capture_html_screenshot(&html, &screenshot.output_path, screenshot)?;
             println!("screenshot {}", screenshot.output_path.display());
             return Ok(());
         }
@@ -60,69 +53,15 @@ fn run(args: impl IntoIterator<Item = String>) -> Result<(), AppError> {
     print_warnings(&loaded);
     let game_visuals_js = load_game_visuals_js(&config.puzzle_path, &loaded)?;
 
-    if document_uses_puzzle3_renderer(&document) {
-        let html = export_mixed_document_html(
-            &document,
-            loaded,
-            source,
-            config.puzzle_path.display().to_string(),
-            game_css,
-            game_visuals_js,
-            config.solver,
-            StandaloneHostMode::Export,
-            StandaloneRuntimeWasm::HostDefault,
-        )
-        .map_err(AppError::Config)?;
-        if let Some(screenshot) = &config.screenshot {
-            capture_html_screenshot(
-                &html,
-                &screenshot.output_path,
-                screenshot.scene.as_deref(),
-                screenshot,
-            )?;
-            println!("screenshot {}", screenshot.output_path.display());
-            return Ok(());
-        }
-        if !config.serve {
-            let output_path = config.output_path();
-            fs::write(&output_path, html)?;
-            println!("exported {}", output_path.display());
-            return Ok(());
-        }
-        return serve_static_html(html, &config.puzzle_path, config.port);
-    }
-
-    if !config.serve {
-        let state = ServerState::new(
-            document.clone(),
-            loaded,
-            source,
-            config.puzzle_path.display().to_string(),
-            game_css,
-            game_visuals_js,
-            config.solver,
-        );
-        if let Some(screenshot) = &config.screenshot {
-            capture_html_screenshot(
-                &export_html(&state),
-                &screenshot.output_path,
-                screenshot.scene.as_deref(),
-                screenshot,
-            )?;
-            println!("screenshot {}", screenshot.output_path.display());
-            return Ok(());
-        }
-        let output_path = config.output_path();
-        fs::write(&output_path, export_html(&state))?;
-        println!("exported {}", output_path.display());
-        return Ok(());
-    }
+    let visual_images =
+        load_visual_image_bundle_for_export(&document, &config.puzzle_path.display().to_string())?;
 
     let state = Arc::new(Mutex::new(ServerState::new(
         document,
         loaded,
         source,
         config.puzzle_path.display().to_string(),
+        visual_images,
         game_css,
         game_visuals_js,
         config.solver,
@@ -161,6 +100,10 @@ fn print_wasm_freshness_status() {
         &[
             Path::new("crates/wasm_player/src"),
             Path::new("crates/wasm_player/Cargo.toml"),
+            Path::new("crates/player_bootstrap/src"),
+            Path::new("crates/player_bootstrap/Cargo.toml"),
+            Path::new("crates/assets/src"),
+            Path::new("crates/assets/Cargo.toml"),
             Path::new("crates/game_runtime/src"),
             Path::new("crates/core/src"),
             Path::new("crates/lang/src"),
@@ -278,7 +221,6 @@ struct Config {
 #[derive(Clone, Debug)]
 struct ScreenshotConfig {
     output_path: PathBuf,
-    scene: Option<String>,
     width: u32,
     height: u32,
     timeout_ms: u64,
@@ -294,7 +236,6 @@ impl Config {
         let mut port = 7878;
         let mut solver = SolverConfig::default();
         let mut screenshot = None::<ScreenshotConfig>;
-        let mut screenshot_scene = None::<String>;
         let mut screenshot_width = 1280_u32;
         let mut screenshot_height = 720_u32;
         let mut screenshot_timeout_ms = 5000_u64;
@@ -338,20 +279,11 @@ impl Config {
                     };
                     screenshot = Some(ScreenshotConfig {
                         output_path: PathBuf::from(value),
-                        scene: None,
                         width: screenshot_width,
                         height: screenshot_height,
                         timeout_ms: screenshot_timeout_ms,
                         browser_path: screenshot_browser_path.clone(),
                     });
-                }
-                "--scene" => {
-                    let Some(value) = args.next() else {
-                        return Err(AppError::Config(
-                            "--scene requires a scene name".to_string(),
-                        ));
-                    };
-                    screenshot_scene = Some(value);
                 }
                 "--width" => {
                     screenshot_width = parse_arg(&mut args, "--width")?;
@@ -372,8 +304,11 @@ impl Config {
                 }
                 "--help" | "-h" => {
                     return Err(AppError::Config(
-                        "usage: html-play [path/to/game-folder-or-game.puzzle-or-game.puzzle3] [-o game.html] [--serve] [--port 7878] [--screenshot out.png] [--scene name] [--width 1280] [--height 720] [--browser path] [--solver-depth 128] [--solver-nodes 1000000] [--solver-ms N]".to_string(),
+                        "usage: html-play [path/to/game-folder-or-game.puzzle-or-game.puzzle3] [-o game.html] [--serve] [--port 7878] [--screenshot out.png] [--width 1280] [--height 720] [--browser path] [--solver-depth 128] [--solver-nodes 1000000] [--solver-ms N]".to_string(),
                     ));
+                }
+                value if value.starts_with('-') => {
+                    return Err(AppError::Config(format!("unknown option: {value}")));
                 }
                 value => puzzle_path = Some(PathBuf::from(value)),
             }
@@ -390,15 +325,14 @@ impl Config {
             ));
         }
         if let Some(config) = screenshot.as_mut() {
-            config.scene = screenshot_scene;
             config.width = screenshot_width;
             config.height = screenshot_height;
             config.timeout_ms = screenshot_timeout_ms;
             config.browser_path = screenshot_browser_path;
             serve = false;
-        } else if screenshot_scene.is_some() || screenshot_browser_path.is_some() {
+        } else if screenshot_browser_path.is_some() {
             return Err(AppError::Config(
-                "--scene and --browser are only valid with --screenshot".to_string(),
+                "--browser is only valid with --screenshot".to_string(),
             ));
         }
 

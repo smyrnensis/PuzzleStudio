@@ -136,7 +136,6 @@ impl CoreRuntimeBridge {
     }
 }
 
-
 struct SavedStateStore<T> {
     states: Vec<Option<T>>,
 }
@@ -190,12 +189,8 @@ fn transition_program_outcome_json_inner(
 ) -> Result<String, AppError> {
     let state = state_from_json(loaded, state_json)?;
     let programs = selected_rule_programs(loaded, program_key, level_index)?;
-    let outcome = puzzle_core::transition_program_sequence_outcome(
-        &loaded.game,
-        &state,
-        &programs,
-        input,
-    )?;
+    let outcome =
+        puzzle_core::transition_program_sequence_outcome(&loaded.game, &state, &programs, input)?;
     runtime_transition_program_outcome_json(
         loaded,
         &outcome.next_state,
@@ -221,12 +216,16 @@ fn selected_rule_programs<'a>(
                 AppError::Config(format!("main program level index out of range: {index}"))
             })
         }
-        "level_start" => loaded.level_start_program.as_ref().map(|program| vec![program]).ok_or_else(
-            || AppError::Config("level_start program is not declared".to_string()),
-        ),
-        "level_clear" => loaded.level_clear_program.as_ref().map(|program| vec![program]).ok_or_else(
-            || AppError::Config("level_clear program is not declared".to_string()),
-        ),
+        "level_start" => loaded
+            .level_start_program
+            .as_ref()
+            .map(|program| vec![program])
+            .ok_or_else(|| AppError::Config("level_start program is not declared".to_string())),
+        "level_clear" => loaded
+            .level_clear_program
+            .as_ref()
+            .map(|program| vec![program])
+            .ok_or_else(|| AppError::Config("level_clear program is not declared".to_string())),
         "level_start_local" => {
             let index = usize::try_from(level_index).map_err(|_| {
                 AppError::Config("level_start_local requires a level index".to_string())
@@ -272,7 +271,8 @@ fn runtime_transition_program_outcome_json(
         cancelled,
         completed: loaded.is_goal_complete(state),
         commands: transition_commands_contract(commands),
-        effects: puzzle_play::runtime_effects_for_outcome(&loaded.rule_effects, commands, firings),
+        effects: puzzle_play::runtime_effects_for_outcome(&loaded.rule_effects, commands, firings)
+            .map_err(|error| AppError::Config(error.to_string()))?,
         firings: firings_contract_2d(firings),
         animation_events: animation_events_contract_2d(&animation_events),
     }
@@ -301,7 +301,8 @@ fn runtime_transition_current_outcome_json(
             None
         },
         commands: transition_commands_contract(commands),
-        effects: puzzle_play::runtime_effects_for_outcome(&loaded.rule_effects, commands, firings),
+        effects: puzzle_play::runtime_effects_for_outcome(&loaded.rule_effects, commands, firings)
+            .map_err(|error| AppError::Config(error.to_string()))?,
         firings: firings_contract_2d(firings),
         animation_events: animation_events_contract_2d(&animation_events),
         state_hash: state.hash(),
@@ -368,18 +369,16 @@ fn changed_cells_contract_2d(state: &State, before: Option<&State>) -> Vec<Runti
 fn firings_contract_2d(firings: &[RuleFiring]) -> Vec<RuntimeRuleFiring> {
     firings
         .iter()
-        .map(|firing| {
-            RuntimeRuleFiring {
-                rule_id: firing.rule.0,
-                patch: firing
-                    .patch
-                    .ops()
-                    .iter()
-                    .map(patch_op_contract_2d)
-                    .collect(),
-                progressed: firing.progressed,
-                observable: firing.observable,
-            }
+        .map(|firing| RuntimeRuleFiring {
+            rule_id: firing.rule.0,
+            patch: firing
+                .patch
+                .ops()
+                .iter()
+                .map(patch_op_contract_2d)
+                .collect(),
+            progressed: firing.progressed,
+            observable: firing.observable,
         })
         .collect()
 }
@@ -451,7 +450,5 @@ fn runtime_mark_value_match(match_value: MarkValueMatch) -> RuntimeMarkValueMatc
 fn state_from_json(loaded: &LoadedGame, state_json: &str) -> Result<State, AppError> {
     let snapshot: RuntimeStateSnapshot2d = serde_json::from_str(state_json)
         .map_err(|error| AppError::Config(format!("runtime state contract is invalid: {error}")))?;
-    snapshot
-        .into_state(&loaded.game)
-        .map_err(AppError::Config)
+    snapshot.into_state(&loaded.game).map_err(AppError::Config)
 }

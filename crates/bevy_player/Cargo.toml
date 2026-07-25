@@ -1,0 +1,36 @@
+[package]
+name = "puzzle-bevy-player"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bevy = { version = "0.19", default-features = false, features = ["2d", "3d", "ui"] }
+puzzle-assets = { path = "../assets" }
+puzzle-bevy-renderer = { path = "../bevy_renderer" }
+puzzle-audio = { path = "../audio" }
+puzzle-game-runtime = { path = "../game_runtime" }
+puzzle-lang = { path = "../lang" }
+puzzle-player-bootstrap = { path = "../player_bootstrap" }
+puzzle-presentation = { path = "../presentation" }
+puzzle-runtime-contract = { path = "../runtime_contract" }
+puzzle-scene = { path = "../scene" }
+puzzle-session-contract = { path = "../session_contract" }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+bevy = { version = "0.19", default-features = false, features = ["bevy_audio"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+puzzle-web-audio = { path = "../web_audio" }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = [
+    "Document",
+    "Event",
+    "EventTarget",
+    "VisibilityState",
+    "Window",
+] }
+
+[dev-dependencies]
+serde_json = "1"

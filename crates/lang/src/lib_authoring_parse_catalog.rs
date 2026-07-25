@@ -420,7 +420,10 @@ fn build_puzzle_catalog(
                     )?);
                 }
                 ["layers", ..] => {
-                    return Err(parse_error(&entry.header.text, "layers header is malformed"));
+                    return Err(parse_error(
+                        &entry.header.text,
+                        "layers header is malformed",
+                    ));
                 }
                 _ => {}
             }
@@ -456,9 +459,8 @@ fn build_puzzle_catalog(
             &catalog,
             "layers",
         )?;
-        visual_priorities.retain(|priority| {
-            !priority.objects.is_empty() || !priority.animations.is_empty()
-        });
+        visual_priorities
+            .retain(|priority| !priority.objects.is_empty() || !priority.animations.is_empty());
         crate::lib_authoring_parse_order::validate_layer_priorities(
             &visual_priorities,
             &catalog,
@@ -754,10 +756,16 @@ fn surface_sound_product(
         .first()
         .map(|token| token.start)?;
     let end = lines
-        .get(node.source_index..=node.closing_index)?
-        .iter()
-        .rev()
-        .find_map(|line| line.tokens.last().map(|token| token.end))?;
+        .get(node.closing_index)?
+        .source_span()
+        .map(|(_, end)| end)
+        .or_else(|| {
+            lines
+                .get(node.source_index..=node.closing_index)?
+                .iter()
+                .rev()
+                .find_map(|line| line.tokens.last().map(|token| token.end))
+        })?;
     Some(crate::surface::SurfaceSoundProduct {
         span: crate::surface::SourceSpan { start, end },
         kind,
@@ -1854,7 +1862,12 @@ fn parse_layers_block(
                     ));
                 }
                 if direction_priority
-                    .replace(directions.iter().map(|value| (*value).to_string()).collect())
+                    .replace(
+                        directions
+                            .iter()
+                            .map(|value| (*value).to_string())
+                            .collect(),
+                    )
                     .is_some()
                 {
                     return Err(parse_error(
@@ -1891,11 +1904,14 @@ fn parse_layers_block(
                 }
                 objects.sort();
                 animations.sort();
-                push_visual_priority(visual_priorities, VisualOrderPriorityDef {
-                    objects,
-                    animations,
-                    merge: true,
-                });
+                push_visual_priority(
+                    visual_priorities,
+                    VisualOrderPriorityDef {
+                        objects,
+                        animations,
+                        merge: true,
+                    },
+                );
                 i = next;
                 continue;
             }
@@ -1948,25 +1964,16 @@ fn parse_layers_block(
                     )?;
                     let next_layer = layer_count.unwrap_or(first_layer);
                     for layer in first_layer..next_layer {
-                        let priority = visual_priority_for_state_layer(
-                            layer,
-                            Vec::new(),
-                            false,
-                            catalog,
-                        )?;
+                        let priority =
+                            visual_priority_for_state_layer(layer, Vec::new(), false, catalog)?;
                         push_visual_priority(visual_priorities, priority);
                     }
                 } else if let Some(name) = row.name {
                     let objects = if row.state_selectors.is_empty() {
                         Vec::new()
                     } else {
-                        let layer = layer_id_for_name(
-                            name,
-                            &lines[i],
-                            named_layers,
-                            layer_count,
-                            catalog,
-                        )?;
+                        let layer =
+                            layer_id_for_name(name, &lines[i], named_layers, layer_count, catalog)?;
                         define_or_assign_terms_to_layer(
                             &row.state_selectors,
                             &lines[i],
@@ -1974,19 +1981,16 @@ fn parse_layers_block(
                             catalog,
                         )?;
                         register_layer_tag_from_layer(name, layer, catalog);
-                        visual_priority_for_state_layer(
-                            layer,
-                            Vec::new(),
-                            false,
-                            catalog,
-                        )?
-                        .objects
+                        visual_priority_for_state_layer(layer, Vec::new(), false, catalog)?.objects
                     };
-                    push_visual_priority(visual_priorities, VisualOrderPriorityDef {
-                        objects,
-                        animations: row.animations,
-                        merge: false,
-                    });
+                    push_visual_priority(
+                        visual_priorities,
+                        VisualOrderPriorityDef {
+                            objects,
+                            animations: row.animations,
+                            merge: false,
+                        },
+                    );
                 } else {
                     let objects = if row.state_selectors.is_empty() {
                         Vec::new()
@@ -1998,22 +2002,19 @@ fn parse_layers_block(
                             layer,
                             catalog,
                         )?;
-                        visual_priority_for_state_layer(
-                            layer,
-                            Vec::new(),
-                            false,
-                            catalog,
-                        )?
-                        .objects
+                        visual_priority_for_state_layer(layer, Vec::new(), false, catalog)?.objects
                     };
                     if objects.is_empty() && row.animations.is_empty() {
                         return Err(parse_error(&lines[i], "layer row must not be empty"));
                     }
-                    push_visual_priority(visual_priorities, VisualOrderPriorityDef {
-                        objects,
-                        animations: row.animations,
-                        merge: false,
-                    });
+                    push_visual_priority(
+                        visual_priorities,
+                        VisualOrderPriorityDef {
+                            objects,
+                            animations: row.animations,
+                            merge: false,
+                        },
+                    );
                 }
             }
         }
@@ -2208,9 +2209,7 @@ fn push_visual_priority(
             .objects
             .retain(|object| !priority.objects.contains(object));
     }
-    priorities.retain(|previous| {
-        !previous.objects.is_empty() || !previous.animations.is_empty()
-    });
+    priorities.retain(|previous| !previous.objects.is_empty() || !previous.animations.is_empty());
     priorities.push(priority);
 }
 

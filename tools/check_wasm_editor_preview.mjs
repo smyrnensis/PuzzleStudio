@@ -2,7 +2,6 @@ import { readFile } from "node:fs/promises";
 
 import init, {
   WasmSolverService,
-  activate_source_analysis,
   activate_source_analysis_with_profile,
   active_source_analysis_highlight_range_json,
   active_source_analysis_level_editor_level_slots,
@@ -108,7 +107,7 @@ if (
   || !Array.isArray(workspaceManifest.cssPaths)
   || !Array.isArray(workspaceManifest.scriptPaths)
   || !Array.isArray(workspaceManifest.filePaths)
-  || !Array.isArray(workspaceManifest.visualImagePaths)
+  || !Array.isArray(workspaceManifest.visualImageAssets)
 ) {
   throw new Error(`typed workspace manifest is invalid: ${JSON.stringify(workspaceManifest)}`);
 }
@@ -189,7 +188,7 @@ const solverSearch = solverService.start(preparedSolver.artifactId, {
   },
   materializeLevelStart: true,
   maxDepth: 4,
-  maxNodes: 16,
+  maxStoredNodes: 16,
 }, Date.now());
 const solverAdvance = solverService.advance(solverSearch, 4, Date.now());
 if (solverAdvance.status !== "solved" || solverAdvance.result?.result !== "solved") {
@@ -290,7 +289,7 @@ level "start"
 P
 }
 `;
-const revision = activate_source_analysis(editorSource);
+const revision = activate_source_analysis_with_profile(editorSource, "puzzle2d");
 const manifest = active_source_analysis_level_editor_manifest_json(revision);
 if (manifest.includes("slots") || manifest.includes("\"visuals\"")) {
   throw new Error("level editor manifest must not transfer level cells or full visual definitions");

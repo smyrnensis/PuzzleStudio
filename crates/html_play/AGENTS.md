@@ -16,8 +16,11 @@ or environment variable only when auto-discovery is not enough.
 
 ## Runtime Boundaries
 
-Browser adapters play presentation commands such as messages, waits, sounds, and
-music. Core remains sound-playback-free, timer-free, and message-state-free.
+Browser adapters forward resolved presentation commands. Audio synthesis,
+asset identity, deduplication, cursor state, and play/pause/resume/stop policy
+belong to `puzzle-audio`; the browser adapter owns only WebAudio capability and
+device submission. Core remains sound-playback-free, timer-free, and
+message-state-free.
 
 Standalone exports embed the `puzzle-wasm-player` artifact. Editor previews use
 `puzzle-wasm-game`, whose runtime dependency enables the editor debug surface.
@@ -26,8 +29,9 @@ to the player artifact.
 
 Themes lower to HTML/CSS presentation only; they are not core state.
 
-When behavior is duplicated between Rust/session runtime and standalone
-JavaScript, update both or document why one side intentionally differs.
+Do not duplicate Rust session, presentation, or audio behavior in standalone
+JavaScript. Handwritten browser code may initialize generated bindings, forward
+platform events, and report consumer diagnostics only.
 
 Generated standalone exports belong to output paths such as `games/*.html`; do
 not patch generated HTML directly.

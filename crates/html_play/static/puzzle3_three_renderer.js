@@ -456,29 +456,72 @@ function hasLoopingVisualAnimation(snapshot) {
 
 function shadowSettings(frame) {
   const raw = frame.settings?.shadow;
-  if (raw === undefined) {
-    return { enabled: false };
-  }
   if (typeof raw !== "boolean") {
     throw new Error("Puzzle3 render setting `shadow` must be boolean.");
   }
   return { enabled: raw };
 }
 
+function lightingSettings(THREE, frame) {
+  const raw = frame.settings?.lighting;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("Puzzle3 render setting `lighting` is missing or invalid.");
+  }
+  const intensity = Number(raw.intensity);
+  const ambient = Number(raw.ambient);
+  const yawDegrees = Number(raw.yawDegrees);
+  const pitchDegrees = Number(raw.pitchDegrees);
+  const color = raw.color;
+  if (!Number.isFinite(intensity) || intensity < 0) {
+    throw new Error("Puzzle3 lighting intensity must be a non-negative number.");
+  }
+  if (!Number.isFinite(ambient) || ambient < 0) {
+    throw new Error("Puzzle3 lighting ambient must be a non-negative number.");
+  }
+  if (!Number.isFinite(yawDegrees) || !Number.isFinite(pitchDegrees)) {
+    throw new Error("Puzzle3 lighting direction must contain finite yawDegrees and pitchDegrees.");
+  }
+  if (!color || [color.red, color.green, color.blue, color.alpha].some((channel) => (
+    !Number.isFinite(channel) || channel < 0 || channel > 1
+  ))) {
+    throw new Error("Puzzle3 lighting color must be a linear RGBA color.");
+  }
+  return {
+    intensity,
+    ambient,
+    yawDegrees,
+    pitchDegrees,
+    color: new THREE.Color().setRGB(color.red, color.green, color.blue),
+  };
+}
+
 function addLights(THREE, scene, frame, voxels, shadow) {
   const bounds = shadowFrameBounds(frame, voxels);
   const center = boundsCenter(bounds);
   const size = Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY, bounds.maxZ - bounds.minZ, 1);
-  scene.add(new THREE.AmbientLight("#ffffff", 1.35));
-  const key = new THREE.DirectionalLight("#ffffff", 0.72);
-  key.position.set(center.x + size * 1.2, center.y + size * 2.2, center.z + size * 0.9);
+  const lighting = lightingSettings(THREE, frame);
+  const yaw = degreesToRadians(lighting.yawDegrees);
+  const pitch = degreesToRadians(lighting.pitchDegrees);
+  const horizontal = Math.cos(pitch);
+  const direction = {
+    x: Math.sin(yaw) * horizontal,
+    y: Math.sin(pitch),
+    z: Math.cos(yaw) * horizontal,
+  };
+  scene.add(new THREE.AmbientLight(lighting.color, 1.35 * lighting.ambient));
+  const key = new THREE.DirectionalLight(lighting.color, 0.72 * lighting.intensity);
+  key.position.set(
+    center.x + size * direction.x * 2.66,
+    center.y + size * direction.y * 2.66,
+    center.z + size * direction.z * 2.66,
+  );
   key.target.position.set(center.x, center.y, center.z);
   key.castShadow = shadow.enabled;
   if (shadow.enabled) {
     configureDirectionalShadow(key, bounds, voxels);
   }
   scene.add(key, key.target);
-  const fill = new THREE.DirectionalLight("#dbeafe", 0.42);
+  const fill = new THREE.DirectionalLight(lighting.color, 0.42 * lighting.intensity);
   fill.position.set(center.x - size * 1.5, center.y + size, center.z - size * 1.1);
   fill.target.position.set(center.x, center.y, center.z);
   fill.castShadow = false;

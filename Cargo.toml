@@ -3,19 +3,30 @@ members = [
     "crates/kernel",
     "crates/authoring",
     "crates/core",
+    "crates/assets",
+    "crates/audio",
+    "crates/audio_worklet",
+    "crates/audio_contract",
     "crates/runtime_contract",
+    "crates/presentation",
+    "crates/bevy_renderer",
+    "crates/bevy_player",
+    "crates/session_contract",
+    "crates/presentation_json",
     "crates/scene",
     "crates/lang",
     "crates/solver",
     "crates/solver_runtime",
     "crates/play",
     "crates/game_runtime",
+    "crates/player_bootstrap",
     "crates/html_play",
     "crates/html_editor",
     "crates/cli",
     "crates/wasm",
     "crates/wasm_game",
     "crates/wasm_player",
+    "crates/web_audio",
     "crates/agent_runtime",
     "src-tauri",
 ]
@@ -36,3 +47,11 @@ debug = "line-tables-only"
 
 [profile.test.package."*"]
 debug = 0
+
+[profile.wasm-player-release]
+inherits = "release"
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"

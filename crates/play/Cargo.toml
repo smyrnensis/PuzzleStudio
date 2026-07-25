@@ -7,7 +7,9 @@ license.workspace = true
 [dependencies]
 puzzle-core = { path = "../core" }
 puzzle-lang = { path = "../lang" }
+puzzle-presentation = { path = "../presentation" }
 puzzle-runtime-contract = { path = "../runtime_contract" }
+puzzle-scene = { path = "../scene" }
 serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]

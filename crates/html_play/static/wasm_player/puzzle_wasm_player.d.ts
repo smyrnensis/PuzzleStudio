@@ -1,43 +1,35 @@
 /* tslint:disable */
 /* eslint-disable */
 
-export class WasmStandaloneSession {
-    private constructor();
-    free(): void;
-    [Symbol.dispose](): void;
-    apply_command_name(command_name: string): void;
-    apply_input_name(input_name: string): void;
-    clear_progress_save(): void;
-    dispatch(action_json: string): string;
-    static fromExport(export_json: string): WasmStandaloneSession;
-    mark_progress_save_written(): void;
-    progress_save(): string;
-    restore_progress_save(save_json: string): void;
-    set_current_state(state_json: string, level_index: number, materialize_level_start: boolean): void;
-    snapshot(): string;
-}
+export function startStandalonePlayer(export_json: string, canvas_selector: string): void;
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
-    readonly __wbg_wasmstandalonesession_free: (a: number, b: number) => void;
-    readonly wasmstandalonesession_apply_command_name: (a: number, b: number, c: number) => [number, number];
-    readonly wasmstandalonesession_apply_input_name: (a: number, b: number, c: number) => [number, number];
-    readonly wasmstandalonesession_clear_progress_save: (a: number) => void;
-    readonly wasmstandalonesession_dispatch: (a: number, b: number, c: number) => [number, number, number, number];
-    readonly wasmstandalonesession_fromExport: (a: number, b: number) => [number, number, number];
-    readonly wasmstandalonesession_mark_progress_save_written: (a: number) => void;
-    readonly wasmstandalonesession_progress_save: (a: number) => [number, number];
-    readonly wasmstandalonesession_restore_progress_save: (a: number, b: number, c: number) => [number, number];
-    readonly wasmstandalonesession_set_current_state: (a: number, b: number, c: number, d: number, e: number) => [number, number];
-    readonly wasmstandalonesession_snapshot: (a: number) => [number, number];
-    readonly __wbindgen_externrefs: WebAssembly.Table;
-    readonly __wbindgen_malloc: (a: number, b: number) => number;
-    readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
-    readonly __externref_table_dealloc: (a: number) => void;
-    readonly __wbindgen_free: (a: number, b: number, c: number) => void;
-    readonly __wbindgen_start: () => void;
+    readonly startStandalonePlayer: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly __wasm_bindgen_func_elem_169658: (a: number, b: number, c: number, d: number) => void;
+    readonly __wasm_bindgen_func_elem_12782: (a: number, b: number, c: number, d: number) => void;
+    readonly __wasm_bindgen_func_elem_12780: (a: number, b: number, c: number) => void;
+    readonly __wasm_bindgen_func_elem_157446: (a: number, b: number, c: number) => void;
+    readonly __wasm_bindgen_func_elem_12780_4: (a: number, b: number, c: number) => void;
+    readonly __wasm_bindgen_func_elem_12780_5: (a: number, b: number, c: number) => void;
+    readonly __wasm_bindgen_func_elem_2767: (a: number, b: number, c: number) => void;
+    readonly __wasm_bindgen_func_elem_12780_7: (a: number, b: number, c: number) => void;
+    readonly __wasm_bindgen_func_elem_12780_8: (a: number, b: number, c: number) => void;
+    readonly __wasm_bindgen_func_elem_2767_9: (a: number, b: number, c: number) => void;
+    readonly __wasm_bindgen_func_elem_12780_10: (a: number, b: number, c: number) => void;
+    readonly __wasm_bindgen_func_elem_12780_11: (a: number, b: number, c: number) => void;
+    readonly __wasm_bindgen_func_elem_12780_12: (a: number, b: number, c: number) => void;
+    readonly __wasm_bindgen_func_elem_12781: (a: number, b: number, c: number) => void;
+    readonly __wasm_bindgen_func_elem_12779: (a: number, b: number) => void;
+    readonly __wasm_bindgen_func_elem_2766: (a: number, b: number) => void;
+    readonly __wbindgen_export: (a: number, b: number) => number;
+    readonly __wbindgen_export2: (a: number, b: number, c: number, d: number) => number;
+    readonly __wbindgen_export3: (a: number) => void;
+    readonly __wbindgen_export4: (a: number, b: number, c: number) => void;
+    readonly __wbindgen_export5: (a: number, b: number) => void;
+    readonly __wbindgen_add_to_stack_pointer: (a: number) => number;
 }
 
 export type SyncInitInput = BufferSource | WebAssembly.Module;

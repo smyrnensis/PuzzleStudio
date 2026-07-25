@@ -510,6 +510,9 @@ fn apply_puzzle_render_node(
             authoring_grammar::AuthoringKind::PuzzleRenderCameraConfig => {
                 apply_puzzle_render_camera_node(child, &mut parsed.camera)?;
             }
+            authoring_grammar::AuthoringKind::PuzzleRenderLightingConfig => {
+                apply_puzzle_render_lighting_node(child, &mut parsed.lighting)?;
+            }
             authoring_grammar::AuthoringKind::PuzzleRenderPixelateConfig => {
                 apply_puzzle_render_pixelate_node(child, &mut parsed.pixelate)?;
             }
@@ -584,6 +587,47 @@ fn apply_puzzle_render_camera_node(
                 return Err(parse_error(
                     &definition.source_line,
                     &format!("unknown camera setting: {other}"),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn apply_puzzle_render_lighting_node(
+    node: &authoring_grammar::AuthoringNode,
+    lighting: &mut crate::LightingSettings3,
+) -> Result<(), DiagnosticReport> {
+    for definition in &node.definition_rows {
+        let value = render_definition_value(definition)?;
+        match definition.key.as_str() {
+            "intensity" => {
+                lighting.intensity_milli = render_ratio_milli(value, definition)?;
+            }
+            "ambient" => {
+                lighting.ambient_milli = render_ratio_milli(value, definition)?;
+            }
+            "yaw" => lighting.yaw_degrees = render_degrees(value, definition)?,
+            "pitch" => lighting.pitch_degrees = render_degrees(value, definition)?,
+            "color" => {
+                let canonical = crate::syntax::canonical_visual_color_literal(value).ok_or_else(
+                    || parse_error(&definition.source_line, "lighting color must be a color"),
+                )?;
+                let opaque = canonical
+                    .strip_prefix('#')
+                    .is_some_and(|hex| matches!(hex.len(), 3 | 6));
+                if !opaque {
+                    return Err(parse_error(
+                        &definition.source_line,
+                        "lighting color must be an opaque color",
+                    ));
+                }
+                lighting.color = canonical;
+            }
+            other => {
+                return Err(parse_error(
+                    &definition.source_line,
+                    &format!("unknown lighting setting: {other}"),
                 ));
             }
         }
@@ -698,6 +742,14 @@ fn render_zoom_milli(
         .map_err(|error| parse_error(&definition.source_line, &error))
 }
 
+fn render_ratio_milli(
+    value: &str,
+    definition: &authoring_grammar::AuthoringDefinitionRow,
+) -> Result<u16, DiagnosticReport> {
+    parse_render_ratio_milli(value, &definition.key)
+        .map_err(|error| parse_error(&definition.source_line, &error))
+}
+
 pub(crate) fn parse_render_degrees(value: &str, name: &str) -> Result<i16, String> {
     value
         .parse::<i16>()
@@ -705,6 +757,23 @@ pub(crate) fn parse_render_degrees(value: &str, name: &str) -> Result<i16, Strin
 }
 
 pub(crate) fn parse_render_zoom_milli(value: &str, name: &str) -> Result<u16, String> {
+    parse_render_decimal_milli(value, name, false)
+}
+
+pub(crate) fn parse_render_ratio_milli(value: &str, name: &str) -> Result<u16, String> {
+    parse_render_decimal_milli(value, name, true)
+}
+
+fn parse_render_decimal_milli(
+    value: &str,
+    name: &str,
+    allow_zero: bool,
+) -> Result<u16, String> {
+    let sign_requirement = if allow_zero {
+        "a non-negative"
+    } else {
+        "a positive"
+    };
     let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
     if whole.is_empty()
         || !whole.chars().all(|ch| ch.is_ascii_digit())
@@ -712,28 +781,32 @@ pub(crate) fn parse_render_zoom_milli(value: &str, name: &str) -> Result<u16, St
         || fraction.len() > 3
     {
         return Err(format!(
-            "{name} must be a positive number with at most three decimal places"
+            "{name} must be {sign_requirement} number with at most three decimal places"
         ));
     }
     let whole = whole
         .parse::<u32>()
-        .map_err(|_| format!("{name} must be positive"))?;
+        .map_err(|_| format!("{name} must be {sign_requirement} number"))?;
     let fraction = format!("{fraction:0<3}")
         .parse::<u32>()
-        .map_err(|_| format!("{name} must be positive"))?;
+        .map_err(|_| format!("{name} must be {sign_requirement} number"))?;
     let milli = whole
         .checked_mul(1000)
         .and_then(|value| value.checked_add(fraction))
         .ok_or_else(|| format!("{name} is too large"))?;
-    if milli == 0 || milli > u32::from(u16::MAX) {
-        return Err(format!("{name} must be greater than 0 and not too large"));
+    if (!allow_zero && milli == 0) || milli > u32::from(u16::MAX) {
+        return Err(if allow_zero {
+            format!("{name} must not be too large")
+        } else {
+            format!("{name} must be greater than 0 and not too large")
+        });
     }
     Ok(milli as u16)
 }
 
 fn apply_puzzle_render_grid_node(
     node: &authoring_grammar::AuthoringNode,
-    grid: &mut PuzzleGridRenderDef,
+    grid: &mut PuzzleGridMode,
 ) -> Result<(), DiagnosticReport> {
     for definition in &node.definition_rows {
         match definition.key.as_str() {
@@ -766,7 +839,7 @@ fn apply_puzzle_render_grid_node(
 fn apply_puzzle_render_grid_type(
     value: &str,
     line: &str,
-    grid: &mut PuzzleGridRenderDef,
+    grid: &mut PuzzleGridMode,
 ) -> Result<(), DiagnosticReport> {
     let spec = authoring_grammar::authoring_definition_spec(
         authoring_grammar::AuthoringKind::PuzzleRenderGridConfig,
@@ -775,12 +848,10 @@ fn apply_puzzle_render_grid_type(
     .expect("grid type definition exists");
     match authoring_grammar::definition_value_literal(spec, value, line)? {
         "occupied_cells" => {
-            grid.occupied_cells = true;
-            grid.all_cells = false;
+            *grid = PuzzleGridMode::OccupiedCells;
         }
         "all_cells" => {
-            grid.occupied_cells = false;
-            grid.all_cells = true;
+            *grid = PuzzleGridMode::AllCells;
         }
         other => {
             return Err(parse_error(

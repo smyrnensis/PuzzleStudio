@@ -499,6 +499,34 @@ function focusWorkPane(paneId) {
   return true;
 }
 
+function commandPaneIdForTarget(target) {
+  const element = target instanceof Element ? target : null;
+  if (element?.closest(".explorer-pane")) {
+    return EXPLORER_PANE_ID;
+  }
+  return workPaneIdForElement(element?.closest(".code-pane, .preview-pane[data-work-pane]"));
+}
+
+function commandModeForPaneId(paneId) {
+  const normalized = normalizePaneId(paneId);
+  if (normalized === "level") return currentLevelPaneMode;
+  if (normalized === "visual") return currentVisualPaneMode;
+  return normalized;
+}
+
+function workbenchCommandContext(source = "keyboard", target = null) {
+  const targetPaneId = commandPaneIdForTarget(target);
+  const paneId = source === "button" && targetPaneId
+    ? targetPaneId
+    : targetPaneId === EXPLORER_PANE_ID
+      ? EXPLORER_PANE_ID
+      : focusedWorkPaneId;
+  return Object.freeze({
+    pane: paneId,
+    mode: commandModeForPaneId(paneId),
+  });
+}
+
 function setVisibleWorkPanes(nextPaneIds) {
   const next = normalizeVisibleWorkPaneList(nextPaneIds);
   if (!next.length) {
@@ -944,16 +972,6 @@ function stopActiveResize(event) {
   stopPaneResize(event);
   stopExplorerResize(event);
   stopPreviewLogResize(event);
-}
-
-function handleExplorerToggleShortcut(event) {
-  if (!(event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "b")) {
-    return false;
-  }
-  event.preventDefault();
-  event.stopImmediatePropagation();
-  togglePaneVisibility("explorer");
-  return true;
 }
 
 function startPaneResize(event) {

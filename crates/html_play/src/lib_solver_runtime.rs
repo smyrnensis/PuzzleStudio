@@ -93,9 +93,9 @@ fn parse_solver_ms_arg(
 }
 
 struct ServerState {
-    document: puzzle_lang::LoadedDocument,
+    standalone_export: StandaloneRuntimeExport<puzzle_lang::LoadedDocument>,
     loaded: Arc<LoadedGame>,
-    session: GameSession,
+    runtime: puzzle_game_runtime::RuntimeSession,
     source: String,
     puzzle_path: String,
     game_css: String,
@@ -105,7 +105,6 @@ struct ServerState {
     solver_service: puzzle_solver_runtime::SolverService,
     #[cfg(feature = "solver")]
     solver_artifact_id: String,
-    has_progress_save: bool,
 }
 
 impl ServerState {
@@ -114,12 +113,18 @@ impl ServerState {
         loaded: LoadedGame,
         source: String,
         puzzle_path: String,
+        visual_images: EncodedVisualImageBundle,
         game_css: String,
         game_visuals_js: String,
         solver: SolverConfig,
     ) -> Self {
+        let mut runtime = puzzle_game_runtime::RuntimeSession::from_document(document.clone())
+            .expect("parsed HTML host document must construct its runtime session");
+        runtime.set_progress_persistence_enabled(false);
+        let progress_storage = standalone_progress_storage(&document, &puzzle_path);
+        let standalone_export =
+            StandaloneRuntimeExport::new(document, visual_images, progress_storage);
         let loaded = Arc::new(loaded);
-        let session = GameSession::new(&loaded);
         #[cfg(feature = "solver")]
         let (solver_service, solver_artifact_id) = {
             let mut service = puzzle_solver_runtime::SolverService::new();
@@ -127,9 +132,9 @@ impl ServerState {
             (service, prepared.artifact_id)
         };
         Self {
-            document,
+            standalone_export,
             loaded,
-            session,
+            runtime,
             source,
             puzzle_path,
             game_css,
@@ -139,173 +144,20 @@ impl ServerState {
             solver_service,
             #[cfg(feature = "solver")]
             solver_artifact_id,
-            has_progress_save: false,
         }
     }
 
-    fn snapshot_json(&mut self) -> String {
-        let presentation_events = self.session.take_presentation_events();
-        let mut out = String::new();
-        out.push('{');
-        push_top_scope_context(&mut out, &self.loaded, self.has_progress_save);
-        out.push(',');
-        push_export_sounds(&mut out, &self.loaded.sounds);
-        out.push(',');
-        push_export_theme(&mut out, &self.loaded.theme);
-        out.push(',');
-        push_json_number(&mut out, "defaultWaitMs", self.loaded.default_wait_ms);
-        out.push(',');
-        push_export_input_buffer(&mut out, &self.loaded);
-        out.push(',');
-        push_export_animation(&mut out, &self.loaded);
-        out.push(',');
-        push_presentation_events(&mut out, &presentation_events);
-        out.push(',');
-        push_level_context(
-            &mut out,
-            &self.loaded,
-            self.session.cleared_levels(),
-            self.session.active_level_index(),
-        );
-        out.push(',');
-        out.push_str("\"levelIndex\":");
-        if let Some(level_index) = self.session.active_level_index() {
-            out.push_str(&(level_index as u64).to_string());
-        } else {
-            out.push_str("null");
-        }
-        out.push(',');
-        push_json_number(&mut out, "levelCount", self.loaded.levels.len() as u64);
-        out.push(',');
-        push_json_bool(
-            &mut out,
-            "acceptsModelInput",
-            self.session.accepts_model_input(&self.loaded),
-        );
-        out.push(',');
-        push_session_state(&mut out, &self.loaded, &self.session);
-        out.push(',');
-        push_scene_state(&mut out, &self.loaded, &self.session);
-        out.push(',');
-        push_scene_puzzles(&mut out, self.session.scene_state());
-        out.push(',');
-        push_scene_puzzle_state(&mut out, &self.loaded, &self.session);
-        out.push(',');
-        push_json_number(
-            &mut out,
-            "selectedLevelIndex",
-            self.session.selected_level_index() as u64,
-        );
-        out.push(',');
-        push_json_bool(&mut out, "busy", self.session.is_waiting());
-        out.push(',');
-        push_json_bool(&mut out, "canUndo", self.session.can_undo());
-        out.push(',');
-        push_json_bool(&mut out, "canRedo", self.session.can_redo());
-        out.push(',');
-        let scene_state = focused_scene_state(&self.loaded, &self.session);
-        let focused_scene = self
-            .loaded
-            .scenes
-            .iter()
-            .find(|scene| scene.name == self.session.surface_state().focused_component());
-        if let Some(scene_state) = scene_state {
-            push_scene(
-                &mut out,
-                &self.loaded,
-                scene_state,
-                Some(self.session.current_level(&self.loaded)),
-                focused_scene.map(|scene| &scene.resources),
-            );
-        } else if self.loaded.scenes.is_empty() {
-            push_scene(
-                &mut out,
-                &self.loaded,
-                self.session.state(),
-                Some(self.session.current_level(&self.loaded)),
-                focused_scene.map(|scene| &scene.resources),
-            );
-        } else {
-            out.push_str("\"scene\":null");
-        }
-        out.push(',');
-        push_surface(&mut out, &self.loaded, &self.session);
-        out.push(',');
-        push_inputs(&mut out, &self.loaded);
-        out.push(',');
-        push_levels(&mut out, &self.loaded, self.session.cleared_levels());
-        out.push(',');
-        push_scenes(&mut out, "scenes", &self.loaded);
-        out.push('}');
-        out
-    }
-
-    fn scene_json(&self) -> String {
-        let mut out = String::new();
-        out.push('{');
-        let scene_state = focused_scene_state(&self.loaded, &self.session);
-        let focused_scene = self
-            .loaded
-            .scenes
-            .iter()
-            .find(|scene| scene.name == self.session.surface_state().focused_component());
-        if let Some(scene_state) = scene_state {
-            push_scene(
-                &mut out,
-                &self.loaded,
-                scene_state,
-                Some(self.session.current_level(&self.loaded)),
-                focused_scene.map(|scene| &scene.resources),
-            );
-        } else if self.loaded.scenes.is_empty() {
-            push_scene(
-                &mut out,
-                &self.loaded,
-                self.session.state(),
-                Some(self.session.current_level(&self.loaded)),
-                focused_scene.map(|scene| &scene.resources),
-            );
-        } else {
-            out.push_str("\"scene\":null");
-        }
-        out.push('}');
-        out
-    }
-
-    fn apply_input_name(&mut self, input_name: &str) -> Result<(), AppError> {
-        let input = input_id_by_name(&self.loaded, input_name)
-            .ok_or_else(|| AppError::Config(format!("unknown input: {input_name}")))?;
-        self.session.apply_input(&self.loaded, input)?;
-        Ok(())
-    }
-
-    fn apply_debug_input_name_json(&mut self, input_name: &str) -> Result<String, AppError> {
-        let input = input_id_by_name(&self.loaded, input_name)
-            .ok_or_else(|| AppError::Config(format!("unknown input: {input_name}")))?;
-        self.session.apply_traced_input(&self.loaded, input)?;
-        let debug = self.session.last_transition_trace().cloned();
-        let snapshot = self.snapshot_json();
-        let mut out = String::new();
-        out.push('{');
-        out.push_str("\"snapshot\":");
-        out.push_str(&snapshot);
-        out.push_str(",\"debug\":");
-        out.push_str(
-            &puzzle_game_runtime::debug_transition_value(&self.loaded, debug.as_ref()).to_string(),
-        );
-        out.push('}');
-        Ok(out)
-    }
-
-    fn apply_command_name(&mut self, command_name: &str) -> Result<(), AppError> {
-        self.session.apply_command(&self.loaded, command_name)?;
-        Ok(())
+    #[cfg(not(target_arch = "wasm32"))]
+    fn snapshot_json(&self) -> Result<(String, usize), String> {
+        live_server_snapshot_json(self.runtime.development_snapshot())
     }
 
     #[cfg(all(feature = "solver", not(target_arch = "wasm32")))]
     fn solve_json(&mut self) -> Result<String, AppError> {
-        let level_index = self
-            .session
+        let (_, session) = self.runtime.solver_session_2d().ok_or_else(|| {
+            AppError::Config("solver requires a two-dimensional runtime session".to_string())
+        })?;
+        let level_index = session
             .active_level_index()
             .ok_or_else(|| AppError::Config("solver requires an active level".to_string()))?;
         let response = self
@@ -313,7 +165,7 @@ impl ServerState {
             .solve_game_session_to_completion(
                 &self.solver_artifact_id,
                 level_index,
-                self.session.clone(),
+                session,
                 self.solver.max_depth,
                 self.solver.max_nodes,
                 self.solver.max_duration,

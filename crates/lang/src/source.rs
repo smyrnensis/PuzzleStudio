@@ -53,6 +53,10 @@ impl LogicalLine {
         self
     }
 
+    pub(crate) fn source_span(&self) -> Option<(usize, usize)> {
+        self.source_span
+    }
+
     pub(crate) fn with_text(&self, text: impl Into<String>) -> Self {
         Self {
             text: text.into(),

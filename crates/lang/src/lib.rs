@@ -21,7 +21,9 @@ mod source;
 mod source_analysis;
 mod source_folding;
 mod source_import;
+mod source_level_edit;
 mod source_outline;
+mod source_sound_edit;
 mod source_target;
 mod source_visual_edit;
 mod spatial_materialize2;
@@ -41,6 +43,10 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use puzzle_authoring::{SelectorMark, is_variable_update_operator};
+pub use puzzle_scene::{
+    STANDARD_MESSAGE_COMPONENT, STANDARD_MESSAGE_DISMISS_EVENT, STANDARD_MESSAGE_TEXT_PROPERTY,
+    standard_message_effect,
+};
 
 use ast::{
     ConditionAst, ConditionDefinitionAst, ConditionPatternAst, ConditionValueAst, DirectionName,
@@ -65,10 +71,10 @@ pub use loaded::{
     GoalClause, GoalClauseOf, GoalCondition, GoalConditionOf, GoalExpr, GoalExprOf, GoalValue,
     GoalValueOf, GridQueryExpr, GridSolverStrategy, InputBufferDef, KeyBinding, KeyTrigger, Level,
     LevelId, LevelRegionDef, LoadedDocument, LoadedDocumentModel, LoadedGame, LoadedGridGame,
-    LoadedGridLevel, ModelOperationSound, ModelOperationSoundDef, MusicSoundDef,
-    PuzzleGridRenderDef, PuzzleRenderDef, PuzzleScreenDef, PuzzleViewDef, QueryExpr, QueryExprOf,
-    ResourceSelection, RuleAnimation, RuleAnimationTrigger, RuleDebugInfo, RuleEffect,
-    RuleVisualRewrite, SceneAlignDef, SceneAspectRatioDef, SceneBinaryOp, SceneButtonDef,
+    LoadedGridLevel, ModelOperationSound, ModelOperationSoundDef, MusicSoundDef, PuzzleGridMode,
+    PuzzleRenderDef, PuzzleScreenDef, PuzzleViewDef, QueryExpr, QueryExprOf, ResourceSelection,
+    RuleAnimation, RuleAnimationTrigger, RuleDebugInfo, RuleEffect, RuleVisualRewrite,
+    RuntimeEffect, SceneAlignDef, SceneAspectRatioDef, SceneBinaryOp, SceneButtonDef,
     SceneComponent, SceneConditionalDef, SceneContainerDef, SceneDef, SceneDistributionDef,
     SceneEffect, SceneEffectParam, SceneExpr, SceneLayoutDef, ScenePuzzleDef,
     ScenePuzzleInitializer, ScenePuzzleRule, SceneResources, SceneRoutineDef, SceneSpaceDef,
@@ -132,14 +138,15 @@ type CanonicalRuleCondition = GridRuleCondition<3>;
 type CanonicalRuleStep = GridRuleStep<3>;
 type CanonicalWriteOp = GridWriteOp<3>;
 pub use puzzle3_model::{
-    CameraProjection3, CameraSettings3, PixelateRenderSettings3, SpatialPresentation,
-    ViewportFollow3, ViewportFraming3, ViewportHeight3, ViewportMode3, ViewportSettings3,
-    VisualRenderSettings3,
+    CameraProjection3, CameraSettings3, LightingSettings3, PixelateRenderSettings3,
+    SpatialPresentation, ViewportFollow3, ViewportFraming3, ViewportHeight3, ViewportMode3,
+    ViewportSettings3, VisualRenderSettings3,
 };
 pub use puzzle3_visual::{VoxelColor, VoxelFrame, VoxelVisual, VoxelVisualSet};
 pub use puzzle3_visual_fixture::{
-    VisualFixtureExportError, export_visual_fixture_json, export_visual_fixture_json_with_title,
-    export_visual_fixture_json_with_title_and_scenes,
+    VisualFixtureExportError, export_visual_fixture_json, export_visual_fixture_json_with_scenes,
+    export_visual_fixture_json_with_title, export_visual_fixture_json_with_title_and_scenes,
+    runtime_puzzle3_cells, runtime_puzzle3_resources, runtime_puzzle3_size,
 };
 pub use puzzlescript::translate_puzzlescript_to_canonical;
 pub use semantic::{SemanticKind, SemanticToken, semantic_tokens};
@@ -149,7 +156,8 @@ use source::{
 };
 pub use visual_spatial::{SpatialVisualAffine, evaluate_spatial_visual_transforms};
 pub use workspace::{
-    WorkspacePresentationManifest, WorkspaceSourceDocument, workspace_presentation_manifest,
+    WorkspacePresentationManifest, WorkspaceSourceDocument, loaded_document_presentation_manifest,
+    workspace_presentation_manifest,
 };
 
 pub fn parse_level_ascii_state(
@@ -172,7 +180,12 @@ pub use source_analysis::{
     analyze_source_for_profile, analyze_source_json,
 };
 pub use source_import::{SourceImportRange, SourceImportReference};
+pub use source_level_edit::{LevelLegendDraft, LevelSourceRequest, LevelSourceResponse};
 pub use source_outline::{SourceOutlineItem, source_outline, source_outline_json};
+pub use source_sound_edit::{
+    SoundDefinitionDraft, SoundDefinitionInspection, SoundDefinitionKind,
+    SoundSourceMutationResult, SoundSourceRequest, SoundSourceResponse,
+};
 pub use source_target::{
     SoundSourceTargetKind, SourceTarget, SourceTargetKind, SourceVisualColorAsset,
     SourceVisualDocument, SourceVisualPaletteEntry, SourceVisualShapeAsset, SourceVisualStatus,

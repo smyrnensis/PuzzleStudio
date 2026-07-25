@@ -9,9 +9,14 @@ default = []
 editor-debug = []
 
 [dependencies]
+puzzle-audio = { path = "../audio" }
 puzzle-core = { path = "../core" }
+puzzle-assets = { path = "../assets" }
 puzzle-lang = { path = "../lang" }
 puzzle-play = { path = "../play" }
+puzzle-presentation = { path = "../presentation" }
+puzzle-presentation-json = { path = "../presentation_json" }
 puzzle-runtime-contract = { path = "../runtime_contract" }
 puzzle-scene = { path = "../scene" }
+puzzle-session-contract = { path = "../session_contract" }
 serde_json = "1"

@@ -12,6 +12,21 @@ read the more specific crate `AGENTS.md` when present.
   imports, semantic surface data, and lowering into compiled model structures.
 - `play`: loaded-game session mechanics such as undo, redo, restart, level
   advance, screen flow, progress save data, and display helpers.
+- `presentation`: renderer-neutral visual ordering, composition, and animation
+  planning over compiled, source-free contracts. No browser, GPU, scene graph,
+  file IO, or parser behavior.
+- `session_contract`: the complete typed runtime snapshot consumed by native
+  presentation backends.
+- `presentation_json`: the browser JSON transport adapter for that snapshot;
+  it owns wire conversion but no game or renderer semantics.
+- `audio_contract`: typed audio asset, voice, capability, and device-command
+  contracts. It owns no synthesis or platform API.
+- `audio`: deterministic seeded SFX/music generation, canonical block
+  rendering, catalog resolution, and playback lifecycle.
+- `audio_worklet`: the dedicated browser audio-thread Rust renderer. Its
+  adjacent JavaScript is generated binding/processor transport only.
+- `web_audio`: WebAudio device submission and capability feedback over resolved
+  audio assets and typed commands.
 - `scene`: shared presentation/flow metadata and layout/component contracts.
 - `html_play`, `html_editor`, `cli`, `wasm`: adapters or facades.
   They should not own parser/compiler semantics.

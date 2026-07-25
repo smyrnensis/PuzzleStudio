@@ -117,10 +117,14 @@ fn append_move_sound_effects(
             continue;
         }
         let name = &trigger.sfx_name;
-        if !ordered_effects.iter().any(
-            |effect| matches!(effect, RuleEffect::PlaySfx { name: existing } if existing == name),
-        ) {
-            ordered_effects.push(RuleEffect::PlaySfx { name: name.clone() });
+        if !ordered_effects.iter().any(|effect| {
+            matches!(
+                effect,
+                RuleEffect::Runtime(RuntimeEffect::PlaySfx { name: existing })
+                    if existing == name
+            )
+        }) {
+            ordered_effects.push(RuntimeEffect::PlaySfx { name: name.clone() }.into());
         }
     }
 }

@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+puzzle-audio-contract = { path = "../audio_contract" }
+puzzle-assets = { path = "../assets" }
 puzzle-core = { path = "../core" }
 puzzle-scene = { path = "../scene" }
 serde = { version = "1", features = ["derive"] }

@@ -283,6 +283,8 @@ pub(crate) enum ParserTokenResolution {
     Variant(String),
     ValueMap(String),
     Binding(String),
+    Sfx(String),
+    Music(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

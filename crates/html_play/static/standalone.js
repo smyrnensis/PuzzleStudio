@@ -13,7 +13,6 @@
       this.editorPreviewSceneEnabled = false;
       this.editorPreviewInputEnabled = false;
       this.editorPreviewDebugAvailable = bootData.editorPreview === true;
-      this.inputIdsByName = new Map((bootData.inputs || []).map((input) => [input.name, input.id]));
       this.initializationPromise = this.initializeRuntime();
     }
 
@@ -47,6 +46,17 @@
         return false;
       }
       this.sessionRuntime = this.wasmModule.WasmStandaloneSession.fromExport(this.exportJson);
+      this.audioFeedbackWakeup = () => {
+        try {
+          this.reportAudioDiagnostics(
+            this.sessionRuntime.audio_feedback_event(this.audioClockSeconds()),
+          );
+        } catch (error) {
+          console.error(`Audio consumer: ${String(error?.message || error)}`);
+        }
+      };
+      this.sessionRuntime.set_audio_feedback_wakeup(this.audioFeedbackWakeup);
+      this.sessionRuntime.set_progress_persistence_enabled(this.sessionProgressEnabled());
       this.releaseWasmOwnedExportPayload();
       this.restoreSessionProgressSave();
       this.usesRustSession = true;
@@ -81,33 +91,13 @@
       if (method !== "POST") {
         throw new Error(`Unsupported standalone session request: ${method} ${url}`);
       }
-      if (url === "/api/resume") {
-        return { kind: "resume" };
-      }
       if (url === "/api/action") {
         if (typeof options.body !== "string" || options.body.trim() === "") {
           throw new Error("Standalone session action requires a JSON request body.");
         }
         return JSON.parse(options.body);
       }
-      const inputPrefix = "/api/input/";
-      if (url.startsWith(inputPrefix)) {
-        return { kind: "input", name: decodeURIComponent(url.slice(inputPrefix.length)) };
-      }
-      const commandPrefix = "/api/command/";
-      if (!url.startsWith(commandPrefix)) {
-        throw new Error(`Unsupported standalone session request: ${method} ${url}`);
-      }
-      const name = decodeURIComponent(url.slice(commandPrefix.length));
-      const directActions = {
-        undo: "undo",
-        redo: "redo",
-        restart: "restart",
-        next: "next_level",
-        next_level: "next_level",
-        previous_level: "previous_level",
-      };
-      return directActions[name] ? { kind: directActions[name] } : { kind: "command", name };
+      throw new Error(`Unsupported standalone session request: ${method} ${url}`);
     }
 
     snapshot() {
@@ -117,32 +107,63 @@
       return JSON.parse(this.sessionRuntime.snapshot());
     }
 
-    applyInputName(inputName) {
-      if (!this.sessionRuntime) {
-        throw new Error("Puzzle game WASM runtime is unavailable.");
+    async unlockAudio() {
+      await this.ensureInitialized();
+      if (typeof this.sessionRuntime?.unlock_audio !== "function") {
+        throw new Error("Rust browser audio backend is unavailable.");
       }
-      this.sessionRuntime.apply_input_name(inputName);
-      this.writeSessionProgressSave();
-      window.dispatchEvent(new CustomEvent("PuzzleStandaloneStateChanged"));
+      this.reportAudioDiagnostics(
+        await this.sessionRuntime.unlock_audio(this.audioClockSeconds()),
+      );
     }
 
+    async setAudioVisible(visible) {
+      await this.ensureInitialized();
+      if (typeof this.sessionRuntime?.set_audio_visible !== "function") {
+        throw new Error("Rust browser audio backend is unavailable.");
+      }
+      this.reportAudioDiagnostics(
+        this.sessionRuntime.set_audio_visible(visible, this.audioClockSeconds()),
+      );
+    }
+
+    presentationEventConsumed() {
+      if (typeof this.sessionRuntime?.presentation_event_consumed !== "function") {
+        throw new Error("Rust presentation timeline is unavailable.");
+      }
+      this.reportAudioDiagnostics(
+        this.sessionRuntime.presentation_event_consumed(this.audioClockSeconds()),
+      );
+    }
+
+    presentationFrame() {
+      if (typeof this.sessionRuntime?.presentation_frame !== "function") {
+        throw new Error("Rust presentation timeline is unavailable.");
+      }
+      this.reportAudioDiagnostics(
+        this.sessionRuntime.presentation_frame(this.audioClockSeconds()),
+      );
+    }
+
+    audioClockSeconds() {
+      return performance.now() / 1000;
+    }
+
+    reportAudioDiagnostics(raw) {
+      const diagnostics = JSON.parse(raw || "[]");
+      for (const diagnostic of diagnostics) {
+        console.error(`Audio consumer: ${diagnostic}`);
+      }
+    }
+
+    /* puzzle-host:optional:editor-preview:start */
     applyDebugInputName(inputName) {
       if (!this.sessionRuntime || !this.editorPreviewDebugAvailable) {
         throw new Error("Debug input is unavailable in this standalone runtime.");
       }
-      return JSON.parse(this.sessionRuntime.dispatch(JSON.stringify({
-        kind: "debug_input",
-        name: String(inputName || ""),
-      })));
-    }
-
-    applyCommandName(commandName) {
-      if (!this.sessionRuntime) {
-        throw new Error("Puzzle game WASM runtime is unavailable.");
-      }
-      this.sessionRuntime.apply_command_name(commandName);
-      this.writeSessionProgressSave();
-      window.dispatchEvent(new CustomEvent("PuzzleStandaloneStateChanged"));
+      return JSON.parse(
+        this.sessionRuntime.apply_debug_input_name(String(inputName || "")),
+      );
     }
 
     async setCurrentState(state, options = {}) {
@@ -165,20 +186,22 @@
       this.editorPreviewInputEnabled = options.acceptModelInput === true;
       this.editorPreviewSceneEnabled = options.acceptSceneInput === true;
     }
+    /* puzzle-host:optional:editor-preview:end */
 
     progressSaveVersion() {
-      const version = Number(this.data.progressSaveVersion);
+      const version = Number(this.sessionRuntime?.progress_storage_save_version?.());
       if (!Number.isInteger(version) || version < 1) {
-        throw new Error("Standalone runtime requires a positive progressSaveVersion.");
+        throw new Error("Rust player export requires a positive progress storage save version.");
       }
       return version;
     }
 
     progressSaveStorageKey() {
-      if (typeof this.data.saveKey !== "string" || this.data.saveKey.length === 0) {
-        throw new Error("Standalone runtime requires saveKey for progress persistence.");
+      const key = this.sessionRuntime?.progress_storage_key?.();
+      if (typeof key !== "string" || key.length === 0) {
+        throw new Error("Rust player export requires a progress storage key.");
       }
-      return `PuzzleStudio.progress.v${this.progressSaveVersion()}:${this.data.saveKey}`;
+      return `PuzzleStudio.progress.v${this.progressSaveVersion()}:${key}`;
     }
 
     editorPreviewProgressSave() {
@@ -206,16 +229,23 @@
         return;
       }
       let raw = this.editorPreviewProgressSave();
-      try {
-        raw = raw || window.localStorage?.getItem(this.progressSaveStorageKey());
-      } catch (_error) {
+      if (!raw) {
+        try {
+          if (!window.localStorage) {
+            throw new Error("localStorage is unavailable");
+          }
+          raw = window.localStorage.getItem(this.progressSaveStorageKey());
+        } catch (error) {
+          throw new Error(
+            `Progress save could not be read for ${this.progressSaveStorageKey()}. The saved progress was not modified. ${error?.message || error}`,
+          );
+        }
       }
       if (!raw) {
         return;
       }
       try {
         this.sessionRuntime.restore_progress_save(raw);
-        this.sessionRuntime.mark_progress_save_written();
       } catch (error) {
         throw new Error(
           `Progress save could not be restored for ${this.progressSaveStorageKey()}. The saved progress was kept and was not overwritten. Clear progress to start a fresh save. ${error?.message || error}`,
@@ -227,30 +257,43 @@
       if (!this.sessionRuntime || !this.sessionProgressEnabled()) {
         return false;
       }
-      const saveJson = this.sessionRuntime.progress_save();
-      this.notifyEditorPreviewProgressSave("PuzzleStudioPreviewProgressSave", saveJson);
-      try {
-        window.localStorage?.setItem(this.progressSaveStorageKey(), saveJson);
-      } catch (_error) {
-        // Browsers can deny storage for local files, private windows, or quota limits.
+      const request = JSON.parse(this.sessionRuntime.progress_save_request());
+      if (!request) {
+        return false;
       }
-      this.sessionRuntime.mark_progress_save_written();
+      if (!Number.isInteger(request.requestId) || request.requestId < 1
+          || typeof request.saveJson !== "string" || request.saveJson.length === 0) {
+        throw new Error("Runtime returned an invalid progress save request.");
+      }
+      try {
+        if (!window.localStorage) {
+          throw new Error("localStorage is unavailable");
+        }
+        window.localStorage.setItem(this.progressSaveStorageKey(), request.saveJson);
+      } catch (error) {
+        console.warn(`Progress save remains pending because storage failed: ${error?.message || error}`);
+        return false;
+      }
+      this.notifyEditorPreviewProgressSave("PuzzleStudioPreviewProgressSave", request.saveJson);
+      this.sessionRuntime.confirm_progress_save_written(request.requestId);
       return true;
     }
 
     clearSessionProgressSave() {
-      if (this.sessionRuntime) {
-        this.sessionRuntime.clear_progress_save();
+      if (!this.sessionRuntime || !this.sessionProgressEnabled()) {
+        return;
       }
-      if (!this.sessionProgressEnabled()) {
+      try {
+        if (!window.localStorage) {
+          throw new Error("localStorage is unavailable");
+        }
+        window.localStorage.removeItem(this.progressSaveStorageKey());
+      } catch (error) {
+        console.warn(`Progress clear was not confirmed because storage failed: ${error?.message || error}`);
         return;
       }
       this.notifyEditorPreviewProgressSave("PuzzleStudioPreviewProgressSaveClear");
-      try {
-        window.localStorage?.removeItem(this.progressSaveStorageKey());
-      } catch (_error) {
-        // Ignore storage failures; the in-memory progress was already cleared.
-      }
+      this.sessionRuntime.confirm_progress_save_cleared();
     }
 
     sessionProgressEnabled() {

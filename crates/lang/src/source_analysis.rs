@@ -107,6 +107,25 @@ impl SourceAnalysis {
         self.snapshot().document()
     }
 
+    pub fn sound_source_request(
+        &self,
+        request: crate::SoundSourceRequest,
+    ) -> Result<crate::SoundSourceResponse, String> {
+        crate::source_sound_edit::sound_source_request(
+            &self.source,
+            self.document(),
+            self.snapshot().parser_recognition(),
+            request,
+        )
+    }
+
+    pub fn level_source_request(
+        &self,
+        request: crate::LevelSourceRequest,
+    ) -> Result<crate::LevelSourceResponse, String> {
+        crate::source_level_edit::level_source_request(&self.source, self.document(), request)
+    }
+
     fn highlighted_source(&self) -> &HighlightedSource {
         self.highlighted_source
             .get_or_init(|| highlight_source_with_document(self.document()))

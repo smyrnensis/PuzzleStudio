@@ -2,7 +2,6 @@
 fn capture_html_screenshot(
     html: &str,
     output_path: &Path,
-    scene: Option<&str>,
     config: &ScreenshotConfig,
 ) -> Result<(), AppError> {
     let browser_path = resolve_screenshot_browser(config.browser_path.as_deref())?;
@@ -12,93 +11,45 @@ fn capture_html_screenshot(
     {
         fs::create_dir_all(parent)?;
     }
-    if output_path.exists() {
-        fs::remove_file(output_path)?;
-    }
-
     let temp_root = env::temp_dir();
     let stem = format!("puzzlestudio-screenshot-{}", std::process::id());
     let html_path = temp_root.join(format!("{stem}.html"));
-    let profile_path = temp_root.join(format!("{stem}-chrome-profile"));
-    if profile_path.exists() {
-        let _ = fs::remove_dir_all(&profile_path);
-    }
-    fs::create_dir_all(&profile_path)?;
     fs::write(&html_path, html)?;
 
-    let mut url = file_url(&html_path);
-    if let Some(scene) = scene.filter(|scene| !scene.is_empty()) {
-        url.push_str("?scene=");
-        url.push_str(&url_condition_value(scene));
-    }
-
-    let screenshot_arg = format!("--screenshot={}", output_path.display());
-    let user_data_arg = format!("--user-data-dir={}", profile_path.display());
-    let window_size_arg = format!("--window-size={},{}", config.width, config.height);
-    let timeout_arg = format!("--timeout={}", config.timeout_ms);
-    let mut child = Command::new(&browser_path)
-        .arg("--headless=new")
-        .arg("--use-gl=angle")
-        .arg("--use-angle=swiftshader")
-        .arg("--enable-unsafe-swiftshader")
-        .arg("--no-first-run")
-        .arg("--no-default-browser-check")
-        .arg("--disable-background-networking")
-        .arg("--disable-component-update")
-        .arg("--disable-sync")
-        .arg("--disable-extensions")
-        .arg("--disable-features=MediaRouter,OptimizationHints")
-        .arg(user_data_arg)
-        .arg(window_size_arg)
-        .arg(timeout_arg)
-        .arg(screenshot_arg)
-        .arg(url)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
+    let browser_harness = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tools/standalone_player_browser_smoke.mjs");
+    let output = Command::new("node")
+        .arg(&browser_harness)
+        .arg("--html")
+        .arg(&html_path)
+        .arg("--output")
+        .arg(output_path)
+        .arg("--chrome")
+        .arg(&browser_path)
+        .arg("--width")
+        .arg(config.width.to_string())
+        .arg("--height")
+        .arg(config.height.to_string())
+        .arg("--timeout")
+        .arg(config.timeout_ms.to_string())
+        .output()
         .map_err(|error| {
             AppError::Config(format!(
-                "failed to launch screenshot browser {}: {error}",
-                browser_path.display()
+                "failed to launch standalone browser harness {}: {error}",
+                browser_harness.display()
             ))
         })?;
 
-    let deadline = Instant::now() + Duration::from_millis(config.timeout_ms + 10_000);
-    let mut result = Err(AppError::Config(format!(
-        "screenshot timed out before writing {}",
-        output_path.display()
-    )));
-    loop {
-        if output_path
-            .metadata()
-            .map(|metadata| metadata.len() > 0)
-            .unwrap_or(false)
-        {
-            std::thread::sleep(Duration::from_millis(200));
-            result = Ok(());
-            break;
-        }
-        if let Some(status) = child.try_wait()? {
-            result = Err(AppError::Config(format!(
-                "screenshot browser exited with {status} before writing {}",
-                output_path.display()
-            )));
-            break;
-        }
-        if Instant::now() >= deadline {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-
-    if child.try_wait()?.is_none() {
-        let _ = child.kill();
-        let _ = child.wait();
-    }
     let _ = fs::remove_file(&html_path);
-    let _ = fs::remove_dir_all(&profile_path);
-    result
+    if !output.status.success() {
+        return Err(AppError::Config(format!(
+            "standalone browser screenshot failed with {}\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -144,56 +95,4 @@ fn find_command_on_path(command: &str) -> Option<PathBuf> {
     env::split_paths(&paths)
         .map(|path| path.join(command))
         .find(|path| path.is_file())
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn file_url(path: &Path) -> String {
-    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    let mut out = String::from("file://");
-    for byte in path.to_string_lossy().as_bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(*byte, b'/' | b'-' | b'_' | b'.' | b'~') {
-            out.push(*byte as char);
-        } else {
-            out.push_str(&format!("%{byte:02X}"));
-        }
-    }
-    out
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn url_condition_value(value: &str) -> String {
-    let mut out = String::new();
-    for byte in value.bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
-            out.push(byte as char);
-        } else {
-            out.push_str(&format!("%{byte:02X}"));
-        }
-    }
-    out
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn default_puzzle3_screenshot_scene(document: &puzzle_lang::LoadedDocument) -> Option<String> {
-    document.scenes.first().map(|scene| scene.name.clone())
-}
-
-fn component_contains_puzzle3_frame(component: &SceneComponent) -> bool {
-    match component {
-        SceneComponent::Viewport(viewport) => {
-            viewport.projection == puzzle_lang::ViewportProjectionDef::ThreeD
-        }
-        SceneComponent::Row(container)
-        | SceneComponent::Column(container)
-        | SceneComponent::Box(container) => container
-            .children
-            .iter()
-            .any(component_contains_puzzle3_frame),
-        SceneComponent::Conditional(conditional) => conditional
-            .children
-            .iter()
-            .chain(conditional.else_children.iter())
-            .any(component_contains_puzzle3_frame),
-        _ => false,
-    }
 }

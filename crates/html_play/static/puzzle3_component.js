@@ -206,16 +206,32 @@ function normalizePuzzle3RendererMode(value) {
   return text === "canvas" ? "canvas" : "three";
 }
 
+function puzzle3ComponentSourceIdentity(component, sceneName) {
+  const source = component?.source;
+  if (!source || typeof source !== "object" || Array.isArray(source)
+      || typeof source.component !== "string" || source.component.length === 0
+      || typeof source.source !== "string" || source.source.length === 0) {
+    throw new Error("Puzzle3 component is missing its typed component/source identity.");
+  }
+  if (source.component !== sceneName) {
+    throw new Error(
+      `Puzzle3 component source ${source.component}/${source.source} does not belong to scene ${sceneName}.`,
+    );
+  }
+  return source;
+}
+
 function applySceneComponentMetadata(component, sceneName) {
+  const source = puzzle3ComponentSourceIdentity(component, sceneName);
   mountedPuzzle3Component = component || null;
   canvas.dataset.component = component?.kind || "puzzle3";
-  canvas.dataset.source = component?.source || "board";
-  canvas.dataset.scene = sceneName;
+  canvas.dataset.source = source.source;
+  canvas.dataset.scene = source.component;
   canvas.setAttribute("aria-label", `${snapshot.title || "Puzzle3"} ${canvas.dataset.source}`);
 }
 
 function renderScene() {
-  const sceneName = currentSceneName || initialSceneName(snapshot) || "default";
+  const sceneName = currentSceneName || initialSceneName(snapshot);
   const component = controllerOptions.component;
   if (!component || typeof component !== "object" || component.kind !== "puzzle3") {
     throw new Error("Puzzle3 component metadata is missing or invalid.");
@@ -273,12 +289,13 @@ function emitPuzzle3CommandIntent(command, payload = {}) {
   if (typeof controllerOptions.onCommand !== "function") {
     throw new Error("Puzzle3 command requires a session host.");
   }
+  const source = puzzle3ComponentSourceIdentity(mountedPuzzle3Component, currentSceneName);
   observeHostIntent(controllerOptions.onCommand({
     kind: name,
     ...payload,
   }, {
-    scene: currentSceneName,
-    source: mountedPuzzle3Component?.source || "board",
+    scene: source.component,
+    source: source.source,
   }));
   return true;
 }
@@ -294,10 +311,11 @@ function resetProjection(rect = canvasLayoutFrame()) {
 }
 
 function initialSceneName(source) {
-  return source.component
-    || source.surface?.focus
-    || source.scenes?.[0]?.name
-    || "default";
+  const name = source.component || source.surface?.focus;
+  if (!name) {
+    throw new Error("Puzzle3 preview source is missing its typed component identity.");
+  }
+  return name;
 }
 
 function resizeCanvas() {

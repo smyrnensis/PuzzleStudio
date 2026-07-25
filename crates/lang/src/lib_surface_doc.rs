@@ -124,6 +124,14 @@ impl ParseSnapshot {
         &self.document
     }
 
+    pub(crate) fn parser_recognition(&self) -> &crate::surface::ParserRecognition {
+        &self
+            .parser_catalog
+            .as_ref()
+            .expect("source analysis snapshot requires parser product")
+            .recognition
+    }
+
     pub(crate) fn level_editor_integration(&self) -> Result<&LevelEditorIntegration, String> {
         self.parser_catalog
             .as_ref()

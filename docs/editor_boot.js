@@ -139,21 +139,25 @@
       }
       return invoke("remove_workspace", { request: payload });
     },
-    async listenDesktopCloseRequested(handler) {
+    async listenDesktopExitRequested(handler) {
       const invoke = tauriInvoke();
       if (!invoke) {
         return () => {};
       }
-      const getCurrentWindow = window.__TAURI__?.window?.getCurrentWindow
-        || window.__TAURI__?.window?.Window?.getCurrent;
-      if (!getCurrentWindow) {
-        throw new Error("Desktop close events are unavailable.");
+      const listen = tauriListen("puzzlestudio-exit-requested", (event) => {
+        handler(event?.payload || {});
+      });
+      if (!listen) {
+        throw new Error("Desktop exit events are unavailable.");
       }
-      const currentWindow = getCurrentWindow();
-      if (!currentWindow?.onCloseRequested) {
-        throw new Error("Desktop close events are unavailable.");
+      return listen;
+    },
+    async completeDesktopExit(payload) {
+      const invoke = tauriInvoke();
+      if (!invoke) {
+        throw new Error("Desktop exit is only available in the desktop app.");
       }
-      return currentWindow.onCloseRequested(handler);
+      return invoke("complete_desktop_exit", { request: payload });
     },
     async listenWorkspaceChanged(handler) {
       const listen = tauriListen("puzzlestudio-workspace-changed", (event) => {
@@ -195,16 +199,6 @@
         throw new DOMException("Outline request was aborted.", "AbortError");
       }
       return editorRuntime().sourceOutline(payload);
-    },
-    async soundTools() {
-      const invoke = tauriInvoke();
-      if (invoke) {
-        return invoke("sound_tools");
-      }
-      if (!serverBackendAvailable()) {
-        throw backendUnavailableError();
-      }
-      return fetchText("/sound-tools.js");
     },
     async editorDocsHtml() {
       const invoke = tauriInvoke();

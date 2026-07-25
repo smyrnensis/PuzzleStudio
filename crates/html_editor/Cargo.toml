@@ -6,11 +6,10 @@ license.workspace = true
 build = "build.rs"
 
 [features]
-default = ["embedded-assets", "native-preview", "sound-tools"]
-embedded-assets = ["editor-docs", "native-preview", "sound-tools"]
+default = ["embedded-assets", "native-preview"]
+embedded-assets = ["editor-docs", "native-preview"]
 editor-docs = []
 native-preview = ["dep:html-play"]
-sound-tools = []
 
 [[bin]]
 name = "html-editor"

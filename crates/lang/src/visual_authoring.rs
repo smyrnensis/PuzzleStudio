@@ -505,13 +505,8 @@ fn is_visual_definition_name_token(value: &str) -> bool {
 }
 
 fn is_visual_image_source(value: &str) -> bool {
-    let lower = value
-        .trim_matches(|ch| matches!(ch, '"' | '\''))
-        .to_ascii_lowercase();
-    lower.ends_with(".png")
-        || lower.ends_with(".jpg")
-        || lower.ends_with(".jpeg")
-        || lower.ends_with(".svg")
+    puzzle_assets::VisualImageFormat::from_path(value.trim_matches(|ch| matches!(ch, '"' | '\'')))
+        .is_ok()
 }
 
 pub(crate) fn parse_visual_node(

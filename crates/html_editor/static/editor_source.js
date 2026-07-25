@@ -3378,13 +3378,13 @@ sourceEditor.addEventListener("compositionend", () => {
     }
   });
 });
-sourceEditor.addEventListener("click", (event) => {
+sourceEditor.addEventListener("click", async (event) => {
   sourceEditorPreferredCaretX = null;
   const interaction = sourceInteractionFromPointer(event);
   if (!interaction) {
     return;
   }
-  if (openSourceImportLinkFromPointer(event, interaction.position)) {
+  if (await openSourceImportLinkFromPointer(event, interaction.position)) {
     return;
   }
   if (sourceDocumentSupportsEditableTargets()) {
@@ -4740,12 +4740,12 @@ function insertSourceLineAroundSelection(direction) {
   replaceSourceValue(rawLines.join("\n"), offset, offset);
 }
 
-function updateSourceImportLinkFromPointer(event) {
+async function updateSourceImportLinkFromPointer(event) {
   if (!sourceImportLinkFrame || !sourceDocumentSupportsEditableTargets()) {
     hideSourceImportLinkFrame();
     return;
   }
-  const link = sourceImportLinkAtPointer(event);
+  const link = await sourceImportLinkAtPointer(event);
   if (link) {
     sourceImportLinkState = link;
     renderSourceImportLinkFrame();
@@ -4754,7 +4754,7 @@ function updateSourceImportLinkFromPointer(event) {
   hideSourceImportLinkFrame();
 }
 
-function sourceImportLinkAtPointer(event, resolvedPosition = null) {
+async function sourceImportLinkAtPointer(event, resolvedPosition = null) {
   const position = resolvedPosition || sourceEditorPositionFromPoint(event.clientX, event.clientY);
   if (!position) {
     return null;
@@ -4874,8 +4874,8 @@ function sourceImportLinesWithOffsets(source) {
   return lines;
 }
 
-function sourceImportLinkAtOffset(source, offset, lines = sourceImportLinesWithOffsets(source)) {
-  const reference = window.PuzzleStudioRuntime?.sourceImportReference?.(
+async function sourceImportLinkAtOffset(source, offset, lines = sourceImportLinesWithOffsets(source)) {
+  const reference = await window.PuzzleStudioRuntime?.sourceImportReference?.(
     source,
     activeDocument()?.puzzlePath || "game.puzzle",
     offset,
@@ -4998,11 +4998,11 @@ function sourceEditableEntryFromTarget(source, target, options = {}) {
   return body && typeof body === "object" ? { ...entry, ...body } : entry;
 }
 
-function openSourceImportLinkFromPointer(event, position = null) {
+async function openSourceImportLinkFromPointer(event, position = null) {
   if (!sourceDocumentSupportsEditableTargets()) {
     return false;
   }
-  const link = sourceImportLinkAtPointer(event, position);
+  const link = await sourceImportLinkAtPointer(event, position);
   if (!link) {
     return false;
   }
